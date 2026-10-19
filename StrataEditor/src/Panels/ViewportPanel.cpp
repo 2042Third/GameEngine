@@ -357,6 +357,13 @@ namespace Strata
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.Gizmos", Icons::Shapes, "Gizmos", &settings.ShowSceneGizmos, "Light, camera and collider shapes");
 		ImGui::SameLine();
+		// While a world is open: its cells' squares around the camera.
+		if (context.GetWorld())
+		{
+			UI::ToggleChip("Viewport.CellBounds", Icons::Grid2X2, "Cells", &settings.CellBounds,
+				"The squares of the world's cells around the camera: loading (Sulfur), loaded (Ochre) and unloading (gray)");
+			ImGui::SameLine();
+		}
 		DrawStatsChip(settings);
 		// View settings of the editor camera outside play mode only: the game always looks the way it will ship.
 		ImGui::SameLine();

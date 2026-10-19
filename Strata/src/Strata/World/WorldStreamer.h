@@ -60,6 +60,13 @@ namespace Strata
 		std::string Error;
 	};
 
+	// A cell the streamer holds: loading, loaded or unloading (WorldStreamer::GetActiveCells).
+	struct WorldActiveCell
+	{
+		WorldCellKey Key;
+		WorldCellStatus Status = WorldCellStatus::Loading;
+	};
+
 	// What an update decided (WorldStreamer::GetLastDecisions): tools and tests compare drives through them.
 	struct WorldStreamingDecision
 	{
@@ -142,6 +149,9 @@ namespace Strata
 		WorldStreamingStats GetStats() const;
 		// Every cell of the world with its state (empty before the world is loaded).
 		void GetCellStates(std::vector<WorldCellState>& outStates) const;
+		// The cells that are loading, loaded or unloading, by key: as many as the sources keep, whatever the world's size
+		// (the viewport's cell bounds).
+		void GetActiveCells(std::vector<WorldActiveCell>& outCells) const;
 		// The sub-scene of a cell, 0 when it has none (unloaded, failed).
 		SubSceneID GetCellSubScene(const WorldCellKey& key) const;
 		// A cell's state (Unloaded for a key the streamer does not hold), and the reason of a failed load.

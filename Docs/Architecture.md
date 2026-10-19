@@ -2283,7 +2283,12 @@ Hierarchy names the world, counts its loaded, loading and unsaved cells, picks t
 `world.edit {editLayer}`) and leads to the cell map. The Hierarchy's search takes `l:<layer>` (`l:persistent`) and
 `cell:<x>,<z>` (see the hierarchy model in [Editor](#editor)), resolved through `EditorWorld::FindCellKey`, and the
 Inspector's header names the primary selection's cell ("Cell: Props (3, -1)", "Persistent scene"), read through its
-top-level ancestor's sub-scene: O(depth), for that entity only.
+top-level ancestor's sub-scene: O(depth), for that entity only. The viewport's cell bounds (`ViewportSettings::CellBounds`,
+saved, `viewport.setSettings {cellBounds}`, a "Cells" chip while a world is open; `Editor/CellBoundsOverlay.h`, drawn in
+`ViewportRenderer::DrawCellBounds` only while on) outline the cells loading, loaded and unloading around the camera
+(`WorldStreamer::GetActiveCells`: as many as the sources keep, whatever the world's size) as debug lines over the scene,
+at the bottom of their cooked bounds (y = 0 without an index), in the cell map's colors; the squares are worked out again
+only when the streamer's state version or World asset changed.
 
 ## Scripting
 

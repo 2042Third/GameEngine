@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Editor/CellBoundsOverlay.h"
 #include "Editor/StreamingView.h"
 
 #include <Strata/Core/Base.h>
@@ -84,7 +85,12 @@ namespace Strata
 		// Frees the render targets until the next Render, once the GPU has finished the work submitted with them
 		// (Renderer::ReleaseDeferred).
 		void ReleaseTargets() { m_Renderer->SetViewportSize(0, 0); }
+		// The cell bounds of the last Render (ViewportSettings::CellBounds).
+		const CellBoundsOverlay& GetCellBounds() const { return m_CellBounds; }
 	private:
+		// The world's cell squares around the camera (ViewportSettings::CellBounds): the running game's streamer while it
+		// plays, the editor's world otherwise. Called only while the setting is on.
+		void DrawCellBounds(EditorContext& context, const ViewportView& view);
 		// The selected entities and their descendants (outlined, and whose colliders are drawn), collected again only when
 		// the selection, the scene or its hierarchy changed.
 		void UpdateSelectionSubtrees(EditorContext& context, const Ref<Scene>& scene);
@@ -92,6 +98,7 @@ namespace Strata
 		Scope<SceneRenderer> m_Renderer;
 		DebugDraw m_DebugDraw;
 		StreamingView m_StreamingView;
+		CellBoundsOverlay m_CellBounds;
 		std::vector<Entity> m_Outlined;
 		std::vector<UUID> m_OutlinedSelection;
 		std::weak_ptr<Scene> m_OutlinedScene;

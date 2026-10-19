@@ -97,7 +97,8 @@ namespace Strata
 			{ "translateSnap", "TranslateSnap" },
 			{ "rotateSnap", "RotateSnap" },
 			{ "scaleSnap", "ScaleSnap" },
-			{ "debugView", "DebugView" }
+			{ "debugView", "DebugView" },
+			{ "cellBounds", "CellBounds" }
 		};
 
 		nlohmann::json DebugViewSchema(std::string description)
@@ -526,7 +527,9 @@ namespace Strata
 				{ "debugView", DebugViewSchema("Color every view of the viewport: \"streaming\" tints entities whose mesh, material or textures are still "
 					"loading (Sulfur; failed ones Cinnabar; entities whose mesh is not there are drawn as boxes), \"lod\" tints entities by the level of "
 					"detail they are drawn at (0 to 3+), \"mip\" tints entities with textures by the mip levels their worst texture lacks against what "
-					"their view needs (none Malachite, 1 Azurite, 2 Sulfur, 3 or more or still loading Cinnabar), \"none\" shows the image as rendered") } }),
+					"their view needs (none Malachite, 1 Azurite, 2 Sulfur, 3 or more or still loading Cinnabar), \"none\" shows the image as rendered") },
+				{ "cellBounds", BoolSchema("While a world is open (or the game streams one), draw the squares of its cells loading (Sulfur), loaded (Ochre) "
+					"and unloading (gray) around the camera") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				nlohmann::json changes = nlohmann::json::object();

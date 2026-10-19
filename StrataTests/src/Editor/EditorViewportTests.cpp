@@ -629,12 +629,13 @@ TEST_SUITE("Editor.Viewport")
 			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
 			nlohmann::json settings = harness.Run("viewport.getSettings");
 			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "allColliders", "stats", "previewLighting", "gameUI", "gizmo", "space",
-				"snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView" })
+				"snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView", "cellBounds" })
 			{
 				CAPTURE(key);
 				CHECK(settings.contains(key));
 			}
-			CHECK(settings.size() == 14);
+			CHECK(settings.size() == 15);
+			CHECK(settings["cellBounds"] == false);
 			CHECK(settings["allColliders"] == false);
 			CHECK(settings["previewLighting"] == true);
 			CHECK(settings["gameUI"] == false);
@@ -642,7 +643,8 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(settings["debugView"] == "none");
 
 			settings = harness.Run("viewport.setSettings", { { "grid", false }, { "gameUI", true }, { "previewLighting", false }, { "gizmo", "Rotate" },
-				{ "space", "Local" }, { "snap", true }, { "rotateSnap", 45 }, { "allColliders", true }, { "debugView", "streaming" } });
+				{ "space", "Local" }, { "snap", true }, { "rotateSnap", 45 }, { "allColliders", true }, { "debugView", "streaming" }, { "cellBounds", true } });
+			CHECK(settings["cellBounds"] == true);
 			CHECK(settings["grid"] == false);
 			CHECK(settings["allColliders"] == true);
 			CHECK(settings["gameUI"] == true);
@@ -662,6 +664,7 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(harness.Error("viewport.setSettings", { { "previewLighting", "yes" } }).find("'previewLighting'") != std::string::npos);
 			CHECK(harness.Error("viewport.setSettings", { { "gizmo", "Move" } }).find("'gizmo'") != std::string::npos);
 			CHECK(harness.Error("viewport.setSettings", { { "debugView", "mips" } }).find("'debugView'") != std::string::npos);
+			CHECK(harness.Error("viewport.setSettings", { { "cellBounds", 1 } }).find("'cellBounds'") != std::string::npos);
 			CHECK(harness.Error("viewport.setSettings", { { "lighting", true } }).find("Unknown parameter") != std::string::npos);
 			CHECK(harness.Run("viewport.getSettings") == settings);
 			CHECK(harness.Context.GetUndoStack().GetHistory().empty());
@@ -674,6 +677,7 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(harness.Context.GetViewport().GetSettings().ShowGameUI);
 		CHECK_FALSE(harness.Context.GetViewport().GetSettings().ShowGrid);
 		CHECK(harness.Context.GetViewport().GetSettings().AllColliders);
+		CHECK(harness.Context.GetViewport().GetSettings().CellBounds);
 	}
 
 	TEST_CASE("Every scene keeps its own editor camera, and a scene seen for the first time is framed")

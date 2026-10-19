@@ -64,6 +64,9 @@ namespace Strata
 		ViewportDebugView DebugView = ViewportDebugView::None;
 		// The debug views' colors. Not saved: the editor's theme sets them.
 		ViewportDebugColors DebugColors;
+		// While the edited scene is a world (or the game streams one): the squares of the cells loading, loaded and unloading
+		// around the camera, colored by state (CellBoundsOverlay).
+		bool CellBounds = false;
 
 		nlohmann::json ToJson() const;
 		// Applies a ToJson document; absent values keep their current value. Fails (changing nothing) on invalid values.

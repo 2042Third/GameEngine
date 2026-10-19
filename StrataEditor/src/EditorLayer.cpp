@@ -337,6 +337,10 @@ namespace Strata
 			viewportSettings.DebugColors.LOD[level] = ToVec4(UI::WithAlpha(*lodColors[level], c_DebugTintAlpha));
 		for (size_t level = 0; level < viewportSettings.DebugColors.Mip.size(); level++)
 			viewportSettings.DebugColors.Mip[level] = ToVec4(UI::WithAlpha(*lodColors[level], c_DebugTintAlpha));
+		// The cell bounds in the cell map's colors: loading Sulfur, loaded Ochre, unloading the secondary text.
+		viewportSettings.DebugColors.CellLoading = ToVec4(themeColors.Warning);
+		viewportSettings.DebugColors.CellLoaded = ToVec4(themeColors.Accent);
+		viewportSettings.DebugColors.CellUnloading = ToVec4(themeColors.TextSecondary);
 		// Startup counts as activity: the layout settles at the full rate.
 		m_LastInputTime = m_Host->GetTime();
 

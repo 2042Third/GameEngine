@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CellBoundsOverlay.h"
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/EditorWorld.h"
@@ -283,6 +284,47 @@ TEST_SUITE("Editor.World")
 		CHECK_FALSE(project.Try("world.edit", { { "radiusScale", 20.0 } }).Success);
 		CHECK(project.Run("world.edit", { { "editLayer", "Ground" } })["editLayer"] == "Ground");
 		CHECK(project.Context.GetWorld()->GetRadiusScale() == 2.0f);
+	}
+
+	TEST_CASE("The viewport's cell bounds outline the cells in reach, by state, and are worked out again only when cells change")
+	{
+		WorldProject project("EditorWorldCellBounds", 5);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		const glm::vec3 start(14.0f, 10.0f, 14.0f);
+		LookFrom(project, start);
+		Settle(project);
+		const EditorWorld& world = *project.Context.GetWorld();
+		ViewportDebugColors colors;
+		colors.CellLoaded = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+		CellBoundsOverlay overlay;
+		DebugDraw lines;
+		overlay.Draw(world.GetStreamer(), start, world.GetRadiusScale(), colors, lines);
+		const size_t loaded = GroundCellsWithin(5, start, 48.0f).size();
+		CHECK(overlay.GetDrawnCellCount() == loaded);
+		// Four lines (eight vertices) per cell, over the scene, in the loaded color, at y = 0 (no cooked index).
+		REQUIRE(lines.GetLines(DebugDrawDepth::OnTop).size() == 8 * loaded);
+		CHECK(lines.GetLines(DebugDrawDepth::Tested).empty());
+		CHECK(lines.GetLines(DebugDrawDepth::OnTop)[0].Color == 0xFF0000FFu);
+		CHECK(lines.GetLines(DebugDrawDepth::OnTop)[0].Position.y == 0.0f);
+		CHECK(overlay.GetBuildCount() == 1);
+
+		// A still world draws them again without working them out; a camera far from them draws none.
+		lines.Clear();
+		overlay.Draw(world.GetStreamer(), start, world.GetRadiusScale(), colors, lines);
+		CHECK(overlay.GetBuildCount() == 1);
+		CHECK(lines.GetLines(DebugDrawDepth::OnTop).size() == 8 * loaded);
+		lines.Clear();
+		overlay.Draw(world.GetStreamer(), glm::vec3(1000.0f, 0.0f, 1000.0f), world.GetRadiusScale(), colors, lines);
+		CHECK(overlay.GetDrawnCellCount() == 0);
+		CHECK(lines.IsEmpty());
+
+		// Cells that load and unload are outlined anew.
+		LookFrom(project, glm::vec3(140.0f, 10.0f, 140.0f));
+		Settle(project);
+		lines.Clear();
+		overlay.Draw(world.GetStreamer(), glm::vec3(140.0f, 10.0f, 140.0f), world.GetRadiusScale(), colors, lines);
+		CHECK(overlay.GetBuildCount() > 1);
+		CHECK(overlay.GetDrawnCellCount() == GroundCellsWithin(5, glm::vec3(140.0f, 10.0f, 140.0f), 48.0f).size());
 	}
 
 	TEST_CASE("world.loadCells loads cells anywhere and keeps them until they are let go")

@@ -737,6 +737,17 @@ namespace Strata
 		}
 	}
 
+	void WorldStreamer::GetActiveCells(std::vector<WorldActiveCell>& outCells) const
+	{
+		outCells.clear();
+		for (const auto& [key, record] : m_Cells)
+		{
+			if (record.Status == WorldCellStatus::Loading || record.Status == WorldCellStatus::Loaded || record.Status == WorldCellStatus::Unloading)
+				outCells.push_back({ WorldCellKey::Unpack(key), record.Status });
+		}
+		std::sort(outCells.begin(), outCells.end(), [](const WorldActiveCell& a, const WorldActiveCell& b) { return a.Key < b.Key; });
+	}
+
 	SubSceneID WorldStreamer::GetCellSubScene(const WorldCellKey& key) const
 	{
 		if (std::abs(key.X) > WorldCellKey::c_MaxCoordinate || std::abs(key.Z) > WorldCellKey::c_MaxCoordinate)

@@ -46,7 +46,8 @@ namespace Strata
 			{ "TranslateSnap", TranslateSnap },
 			{ "RotateSnap", RotateSnap },
 			{ "ScaleSnap", ScaleSnap },
-			{ "DebugView", ViewportDebugViewToString(DebugView) }
+			{ "DebugView", ViewportDebugViewToString(DebugView) },
+			{ "CellBounds", CellBounds }
 		};
 	}
 
@@ -65,7 +66,7 @@ namespace Strata
 		for (const auto& [key, flag] : { std::pair<const char*, bool*> { "ShowGrid", &result.ShowGrid }, { "ShowSelectionOutline", &result.ShowSelectionOutline },
 			{ "ShowSceneGizmos", &result.ShowSceneGizmos }, { "AllColliders", &result.AllColliders }, { "ShowStats", &result.ShowStats },
 			{ "PreviewLighting", &result.PreviewLighting },
-			{ "ShowGameUI", &result.ShowGameUI }, { "Snap", &result.Snap } })
+			{ "ShowGameUI", &result.ShowGameUI }, { "Snap", &result.Snap }, { "CellBounds", &result.CellBounds } })
 		{
 			if (const auto it = json.find(key); it != json.end())
 			{
