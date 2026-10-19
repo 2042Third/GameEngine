@@ -25,6 +25,7 @@
 #endif
 
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -346,9 +347,16 @@ TEST_SUITE("Runtime.Game")
 		const std::vector<double>& values = table->Rows[0];
 		CHECK(values[0] >= 4.0); // Wanted
 		CHECK(values[2] >= 4.0); // Loaded
+#if ST_WITH_PHYSICS
 		CHECK(values[4] >= static_cast<double>(4 * world.BodiesPerGroundCell)); // Bodies
 		CHECK(values[5] == 0.0); // Waiting
 		CHECK(values[6] >= values[4]); // Capacity
+#else
+		// An engine without physics leaves the physics columns empty.
+		CHECK(std::isnan(values[4]));
+		CHECK(std::isnan(values[5]));
+		CHECK(std::isnan(values[6]));
+#endif
 	}
 
 	TEST_CASE("A scene the running scene asks for in every update loads once and replaces it")
