@@ -2241,7 +2241,9 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   `DeferredProxies`; the editor's single pictures, `viewport.capture`, the project's picture and thumbnails, render again
   until none waits); a destroyed proxy's record is cleared at once. Buffers grow by a GPU copy into larger ones (the
   old ones released deferred), so growth uploads nothing again. `PrepareLoadedScene` fills a loaded scene's mirror too,
-  within `c_PrepareUploadBytes` a frame, so the frame that shows the scene uploads no proxy. A render scene's
+  within `c_PrepareUploadBytes` a frame, so the frame that shows the scene uploads no proxy; both draw from the frame's
+  `SceneWorkBudget` (the proxies get the time left, at least a chunk; the mirror waits for a frame whose budget still has
+  time, so a frame other loads spent goes no further). A render scene's
   destructor posts its id (any thread) and `Renderer::BeginFrame` releases its mirror; mirrors no renderer updated for
   `RenderSceneGPUCache::c_UnusedFrames` (300) frames go too, and a later frame of their scene uploads it again.
   The mirror also holds the scene's asset tables, by slot: the mesh table (per mesh slot the `GeometryHandle` of the
