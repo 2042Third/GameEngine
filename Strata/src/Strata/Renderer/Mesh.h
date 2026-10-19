@@ -59,7 +59,14 @@ namespace Strata
 	{
 		uint32_t IndexOffset = 0; // Into the mesh's indices (GeometryAllocation::FirstIndex adds to it on the GPU)
 		uint32_t IndexCount = 0;
+		// How far, in the mesh's own units, the level's surface departs from full detail (MeshUtils::GenerateLODs: the
+		// simplifier's error, its attributes' included): what its projected size on screen is measured by
+		// (LODSelection::SelectLOD). 0 for full detail, and for levels whose error is unknown (meshes cooked before version 3,
+		// levels made by other means): a submesh with such a level chooses by halving its screen fraction instead. Finite and
+		// not negative.
+		float Error = 0.0f;
 	};
+	static_assert(sizeof(MeshLOD) == 12, "MeshLOD layout is part of the cooked mesh format");
 
 	struct Submesh
 	{
@@ -96,11 +103,12 @@ namespace Strata
 		static Ref<Mesh> CreateSkinned(std::vector<glm::vec3> positions, std::vector<MeshVertexAttributes> attributes, std::vector<uint32_t> indices,
 			std::vector<Submesh> submeshes, std::vector<MeshSkinVertex> skinVertices, MeshSkinBinding binding, std::string* outError = nullptr);
 
-		// Cooked format: "STMH" header (version, submesh count, flags), vertex streams, indices, submesh table, and for
-		// skinned meshes (flag bit 0) the skin stream, the skin's joints and their inverse bind matrices. Version 1 (without
-		// flags or skins) still loads. Serialize only meshes that were not uploaded (importers' and tools' meshes): the upload
-		// releases the vertex attributes and the skin stream.
-		static constexpr uint32_t c_CookedVersion = 2;
+		// Cooked format: "STMH" header (version, submesh count, flags), vertex streams, indices, submesh table (with each
+		// level's MeshLOD, its error included), and for skinned meshes (flag bit 0) the skin stream, the skin's joints and their
+		// inverse bind matrices. Versions 1 (without flags or skins) and 2 (levels without errors: they load with Error 0)
+		// still load. Serialize only meshes that were not uploaded (importers' and tools' meshes): the upload releases the
+		// vertex attributes and the skin stream.
+		static constexpr uint32_t c_CookedVersion = 3;
 		std::vector<uint8_t> Serialize() const;
 		static Ref<Mesh> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
 
@@ -179,9 +187,23 @@ namespace Strata
 			std::vector<MeshSkinVertex>* skinVertices = nullptr);
 		// Reorders triangles for the post-transform vertex cache (indices relative to the given vertex count).
 		void OptimizeIndices(std::vector<uint32_t>& indices, size_t vertexCount);
-		// Simplified index lists for LOD 1..maxLevels (each about half the previous triangle count), stopping early
-		// when simplification can no longer reduce the mesh within the error tolerance.
-		std::vector<std::vector<uint32_t>> GenerateLODs(std::span<const glm::vec3> positions, std::span<const uint32_t> indices, uint32_t maxLevels);
+		// A level of detail GenerateLODs made: its indices (relative to the given vertices) and MeshLOD::Error.
+		struct GeneratedLOD
+		{
+			std::vector<uint32_t> Indices;
+			float Error = 0.0f;
+		};
+		// Simplified levels for LOD 1..maxLevels (each about half the previous triangle count), stopping early when
+		// simplification can no longer reduce the mesh within c_MaxLODError. The simplifier weighs normals and texture
+		// coordinates with the positions, so UV and normal seams (vertices split along them) stay closed, and keeps the
+		// submesh's open borders in place, so submeshes that meet do not part. Each level's Error is the simplifier's,
+		// in the mesh's units: at least the previous level's, and positive (the smallest normal float where nothing moved), so
+		// that 0 keeps meaning "unknown". Empty for invalid input (attributes not one per position, indices out of range).
+		constexpr float c_MaxLODError = 0.02f; // Relative to the mesh's extent (meshopt_simplifyScale)
+		constexpr float c_LODNormalWeight = 0.5f;
+		constexpr float c_LODTexCoordWeight = 1.0f;
+		std::vector<GeneratedLOD> GenerateLODs(std::span<const glm::vec3> positions, std::span<const MeshVertexAttributes> attributes, std::span<const uint32_t> indices,
+			uint32_t maxLevels);
 		AABB ComputeBounds(std::span<const glm::vec3> positions);
 		// Submesh::UVDensity of indexed triangles (indices relative to the given vertices): per axis, the square root of the
 		// texture coordinate area over the area of the triangles whose normals point along it most. An axis whose triangles

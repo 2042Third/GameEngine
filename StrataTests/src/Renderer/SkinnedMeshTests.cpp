@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Animation/SkinnedMeshTestUtils.h"
+#include "Renderer/MeshTestUtils.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
 
@@ -51,10 +52,8 @@ TEST_SUITE("Renderer.Mesh")
 	TEST_CASE("Cooked meshes of version 1 still load")
 	{
 		Ref<Mesh> cube = MeshFactory::CreateSphere(0.5f, 16, 8);
-		std::vector<uint8_t> cooked = cube->Serialize();
-		// Version 1 had the same layout without flags (its reserved word was 0).
-		const uint32_t version = 1;
-		std::memcpy(cooked.data() + 4, &version, sizeof(version));
+		// Version 1 had version 2's layout without flags (its reserved word was 0).
+		std::vector<uint8_t> cooked = Tests::SerializeMeshVersion2(*cube, 1);
 		std::string error;
 		Ref<Mesh> loaded = Mesh::Deserialize(cooked, &error);
 		REQUIRE_MESSAGE(loaded, error);

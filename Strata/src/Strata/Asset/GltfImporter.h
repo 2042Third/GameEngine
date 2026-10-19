@@ -31,8 +31,9 @@ namespace Strata
 	public:
 		AssetType GetType() const override { return AssetType::Model; }
 		std::vector<std::string> GetExtensions() const override { return { ".gltf", ".glb" }; }
-		// 6: skins, animations and skinned meshes; 7: buffer views compressed with EXT_meshopt_compression too.
-		uint32_t GetVersion() const override { return 7; }
+		// 6: skins, animations and skinned meshes; 7: buffer views compressed with EXT_meshopt_compression too; 8: levels of
+		// detail simplified with their normals and texture coordinates, with their errors (cooked meshes version 3).
+		uint32_t GetVersion() const override { return 8; }
 		bool ReadsExternalFiles() const override { return true; }
 		// The URIs of the model's buffers and images that name files (data URIs and buffers in a .glb are no files); fails for
 		// URLs and absolute paths.

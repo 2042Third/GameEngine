@@ -8,9 +8,11 @@
 #include <meshoptimizer.h>
 #include <mikktspace.h>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
+#include <limits>
 
 namespace Strata
 {
@@ -58,6 +60,14 @@ namespace Strata
 			glm::vec3 BoundsMin;
 			glm::vec3 BoundsMax;
 		};
+
+		// A level of detail as versions 1 and 2 wrote it (without MeshLOD::Error).
+		struct CookedLODVersion2
+		{
+			uint32_t IndexOffset;
+			uint32_t IndexCount;
+		};
+		static_assert(sizeof(CookedLODVersion2) == 8);
 
 		// A stream of the geometry and where in the pool's buffer it uploads to.
 		struct UploadRange
@@ -118,6 +128,8 @@ namespace Strata
 
 			for (const MeshLOD& lod : submesh.LODs)
 			{
+				if (!std::isfinite(lod.Error) || lod.Error < 0.0f)
+					return fail(fmt::format("Submesh {} has a level of detail with an invalid error", submeshIndex));
 				if (lod.IndexCount == 0 || lod.IndexCount % 3 != 0 || static_cast<uint64_t>(lod.IndexOffset) + lod.IndexCount > indices.size())
 					return fail(fmt::format("Submesh {} has an invalid index range", submeshIndex));
 				for (uint32_t index = lod.IndexOffset; index < lod.IndexOffset + lod.IndexCount; index++)
@@ -242,8 +254,9 @@ namespace Strata
 		const CookedMeshHeader header = reader.Read<CookedMeshHeader>();
 		if (!reader.IsValid() || header.Magic != c_MeshMagic)
 			return fail("Not a cooked Strata mesh");
-		// Version 1 is version 2 without flags (its reserved word was always 0).
-		if (header.Version != 1 && header.Version != c_CookedVersion)
+		// Version 1 is version 2 without flags (its reserved word was always 0); version 2 is version 3 without the levels'
+		// errors.
+		if (header.Version < 1 || header.Version > c_CookedVersion)
 			return fail(fmt::format("Unsupported cooked mesh version {}", header.Version));
 		if (header.SubmeshCount == 0 || header.SubmeshCount > 65536 || (header.Flags & ~c_CookedMeshSkinned) != 0 || (header.Version == 1 && header.Flags != 0))
 			return fail("Cooked mesh header is corrupt");
@@ -259,7 +272,19 @@ namespace Strata
 		{
 			const CookedSubmesh cooked = reader.Read<CookedSubmesh>();
 			submesh.Name = reader.ReadString(4096);
-			if (!reader.IsValid() || cooked.LODCount == 0 || cooked.LODCount > 16 || !reader.ReadArray(submesh.LODs, 16) || submesh.LODs.size() != cooked.LODCount)
+			bool lodsRead = false;
+			if (header.Version >= 3)
+			{
+				lodsRead = reader.ReadArray(submesh.LODs, 16);
+			}
+			else
+			{
+				std::vector<CookedLODVersion2> lods;
+				lodsRead = reader.ReadArray(lods, 16);
+				for (const CookedLODVersion2& lod : lods)
+					submesh.LODs.push_back(MeshLOD { lod.IndexOffset, lod.IndexCount, 0.0f });
+			}
+			if (!reader.IsValid() || cooked.LODCount == 0 || cooked.LODCount > 16 || !lodsRead || submesh.LODs.size() != cooked.LODCount)
 				return fail("Cooked mesh submesh table is corrupt");
 			submesh.BaseVertex = cooked.BaseVertex;
 			submesh.VertexCount = cooked.VertexCount;
@@ -638,18 +663,32 @@ namespace Strata
 			meshopt_optimizeVertexCache(indices.data(), indices.data(), indices.size(), vertexCount);
 		}
 
-		std::vector<std::vector<uint32_t>> GenerateLODs(std::span<const glm::vec3> positions, std::span<const uint32_t> indices, uint32_t maxLevels)
+		std::vector<GeneratedLOD> GenerateLODs(std::span<const glm::vec3> positions, std::span<const MeshVertexAttributes> attributes, std::span<const uint32_t> indices,
+			uint32_t maxLevels)
 		{
-			std::vector<std::vector<uint32_t>> lods;
-			if (positions.empty() || indices.size() < 3 || indices.size() % 3 != 0)
+			std::vector<GeneratedLOD> lods;
+			if (positions.empty() || attributes.size() != positions.size() || indices.size() < 3 || indices.size() % 3 != 0)
 				return lods;
 			for (uint32_t index : indices)
 			{
 				if (index >= positions.size())
 					return lods;
 			}
+			// The attributes the simplifier weighs, packed: normal, then texture coordinates. Non-finite values would poison its
+			// metric: they weigh as 0.
+			constexpr size_t c_AttributeCount = 5;
+			std::vector<float> packed;
+			packed.reserve(positions.size() * c_AttributeCount);
+			for (const MeshVertexAttributes& attribute : attributes)
+			{
+				for (const float value : { attribute.Normal.x, attribute.Normal.y, attribute.Normal.z, attribute.TexCoord.x, attribute.TexCoord.y })
+					packed.push_back(std::isfinite(value) ? value : 0.0f);
+			}
+			constexpr std::array<float, c_AttributeCount> weights = { c_LODNormalWeight, c_LODNormalWeight, c_LODNormalWeight, c_LODTexCoordWeight, c_LODTexCoordWeight };
+			const float scale = meshopt_simplifyScale(&positions[0].x, positions.size(), sizeof(glm::vec3));
+
 			size_t currentCount = indices.size();
-			constexpr float targetError = 0.02f; // Relative to the mesh extent
+			float previousError = 0.0f;
 			for (uint32_t level = 0; level < maxLevels; level++)
 			{
 				const size_t targetCount = (currentCount / 2) / 3 * 3;
@@ -658,8 +697,9 @@ namespace Strata
 
 				std::vector<uint32_t> simplified(indices.size());
 				float resultError = 0.0f;
-				const size_t count = meshopt_simplify(simplified.data(), indices.data(), indices.size(), &positions[0].x, positions.size(),
-					sizeof(glm::vec3), targetCount, targetError, 0, &resultError);
+				const size_t count = meshopt_simplifyWithAttributes(simplified.data(), indices.data(), indices.size(), &positions[0].x, positions.size(),
+					sizeof(glm::vec3), packed.data(), c_AttributeCount * sizeof(float), weights.data(), c_AttributeCount, nullptr, targetCount, c_MaxLODError,
+					meshopt_SimplifyLockBorder, &resultError);
 				// Stop when simplification no longer makes meaningful progress.
 				if (count == 0 || count > currentCount * 3 / 4)
 					break;
@@ -667,7 +707,9 @@ namespace Strata
 				simplified.resize(count);
 				meshopt_optimizeVertexCache(simplified.data(), simplified.data(), simplified.size(), positions.size());
 				currentCount = count;
-				lods.push_back(std::move(simplified));
+				const float absoluteError = std::isfinite(resultError) && std::isfinite(scale) ? std::max(resultError, 0.0f) * scale : 0.0f;
+				previousError = std::max({ absoluteError, previousError, std::numeric_limits<float>::min() });
+				lods.push_back(GeneratedLOD { std::move(simplified), previousError });
 			}
 			return lods;
 		}

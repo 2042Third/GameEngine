@@ -140,12 +140,14 @@ namespace
 		Ref<Mesh> source = MeshFactory::CreateSphere(0.5f, 48, 24);
 		REQUIRE(source);
 		std::vector<uint32_t> indices = source->GetIndices();
-		const std::vector<std::vector<uint32_t>> levels = MeshUtils::GenerateLODs(source->GetPositions(), indices, 2);
+		const std::vector<MeshUtils::GeneratedLOD> levels = MeshUtils::GenerateLODs(source->GetPositions(), source->GetAttributes(), indices, 2);
 		REQUIRE(levels.size() == 2);
 		Submesh submesh = source->GetSubmeshes()[0];
 		submesh.LODs = { MeshLOD { 0, static_cast<uint32_t>(indices.size()) } };
-		for (const std::vector<uint32_t>& level : levels)
+		for (const MeshUtils::GeneratedLOD& generated : levels)
 		{
+			// Without the errors: these levels are chosen by halving the screen fraction.
+			const std::vector<uint32_t>& level = generated.Indices;
 			submesh.LODs.push_back(MeshLOD { static_cast<uint32_t>(indices.size()), static_cast<uint32_t>(level.size()) });
 			indices.insert(indices.end(), level.begin(), level.end());
 		}
