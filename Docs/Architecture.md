@@ -1282,6 +1282,23 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   frame) applies imports as they finish (`WaitForImportProgress`), since loads that wait for a first import resume only
   when it is applied. The editor's export polls
   `HasPendingImports` between frames instead (`GameExport`, "Waiting for asset imports to finish").
+- **Import memory admission.** Decoding takes many times a source's size (a 4096x4096 PNG decodes to 64 MiB, and its
+  float levels and compressed blocks take about 256 MiB more), so imports start only while their estimates fit a budget
+  (`EditorAssetManager::SetImportMemoryBudget`; by default a quarter of physical memory clamped to 1-4 GiB,
+  `GetDefaultImportMemoryBudget` with `Platform::GetPhysicalMemorySize`, so that it binds on large machines too). An
+  import job first reads the source's head (`c_AssetPrefixHeadBytes`) and asks its importer for an estimate
+  (`AssetImporter::EstimateImportMemory`: four times the source's size by default; textures 20 bytes per pixel from the
+  image header, `stbi_info_from_memory`; glTF twice its buffers and eight times its embedded images, from the document in
+  the head). It runs at once on its thread when nothing waits before it and its estimate fits beside the imports admitted,
+  or when nothing else is admitted, however large it is (`BackgroundWork::AdmitOrWait`); otherwise it joins the work's
+  queue of waiting imports, in arrival order, and its thread is free for other work. An admitted import that ends
+  (finished, failed or cancelled) releases its estimate and submits, as background jobs, the waiting imports that now fit,
+  front first; cancelled ones leave the queue then. A larger budget starts what fits at once. Blocking imports (scans that
+  wait, `ReimportAsset`, `ImportExternalFile`: tools and tests) are admitted the same way but wait on their own thread;
+  since they hold it, they wait only while an admitted import runs, never for admitted imports still queued for a thread,
+  which may need theirs (they then run beyond the budget rather than deadlock). The budget replaced the one-at-a-time lock
+  for sources above 64 MB. `asset.stats` and `editor.status` report `importMemoryMB` (`admitted`, `budget`, `queued`), and
+  `asset.setBudget {importMB}` changes the budget for the open project (`reset` restores the default).
 - **References and bounds** (`Asset/AssetDependencies.h`). What an asset references is recorded with its import:
   importers add what their stored form does not show as a document (`ImportResult::References`; a glTF mesh's default
   materials) and the local bounds of meshes (`Bounds`), and `AssetDependencies::Scan` reads the documents (scenes,

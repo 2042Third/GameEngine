@@ -338,6 +338,20 @@ namespace Strata
 		return properties;
 	}
 
+	uint64_t TextureImporter::EstimateImportMemory(std::span<const uint8_t> head, uint64_t sourceSize, const nlohmann::json& settings) const
+	{
+		int width = 0;
+		int height = 0;
+		int channels = 0;
+		if (head.empty() || head.size() > static_cast<size_t>(INT_MAX)
+			|| !stbi_info_from_memory(head.data(), static_cast<int>(head.size()), &width, &height, &channels) || width <= 0 || height <= 0)
+			return AssetImporter::EstimateImportMemory(head, sourceSize, settings);
+		// Below 2^62 (both sides are below 2^31), so the factor of 20 saturates rather than wrapping around.
+		const uint64_t pixels = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+		constexpr uint64_t c_BytesPerPixel = 4 + 16;
+		return pixels > UINT64_MAX / c_BytesPerPixel ? UINT64_MAX : pixels * c_BytesPerPixel;
+	}
+
 	bool TextureImporter::Import(const ImportContext& context, ImportResult& result, std::string* outError) const
 	{
 		std::optional<std::vector<uint8_t>> encoded = ReadImportSource(context);

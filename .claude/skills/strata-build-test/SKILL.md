@@ -106,6 +106,8 @@ ctest --preset macos-debug -LE perf
   `RefuseOverCap1M` loads a 1,100,445-entity document (both through `SceneLoader`); `Perf.Runtime.World1MStart`,
   `World1MTransientMemory` (a helper process: `--strata-test-helper=start-world-game <manifest> <result file>`) and
   `QuitDuringLoad1M` start and quit the realistic 1M world exported as a game (cooked, and with its JSON);
+  `Perf.Editor.ImportFolder24x4kPeakPrivate` imports 24 textures of 4096x4096 with a 1 GiB import memory budget (a
+  helper process: `--strata-test-helper=import-folder <project> <folder> <budget MB> <result file>`);
   `Perf.EditorPanels` and `PerfGPU.Editor` time the Content Browser
   with 10,001 assets (icons; thumbnails); and `PerfGPU.Editor` the longest frames of `scene.open` of the 100,000- and
   1,000,000-entity scenes (and of the 100,000 over the million, and of 100,000 cubes over the 100,000, whose render

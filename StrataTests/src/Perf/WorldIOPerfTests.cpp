@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
+#include "Perf/ImportMemoryMeasurement.h"
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
 #include "Perf/WorldFixture.h"
@@ -228,5 +229,32 @@ TEST_SUITE("Perf.Scene")
 		});
 		const double undeclared = TimeRefusedLoad(MakeLargeDocument(c_OverCapEntities, false));
 		MESSAGE(fmt::format("Without EntityCount the load failed after {:.1f} ms", undeclared));
+	}
+}
+
+TEST_SUITE("Perf.Editor")
+{
+	TEST_CASE("Importing 24 textures of 4096x4096 stays within the import memory budget")
+	{
+		// The budget given (the default, a quarter of physical memory, would not bind on a large machine), plus 256 MB for the
+		// cache's writes and the manager's own work.
+		constexpr uint64_t c_Budget = 1024ull << 20;
+		const std::filesystem::path root = CreateTemporaryDirectory("PerfImportFolder24x4k");
+		std::string error;
+		{
+			const Perf::ScopedApplicationJobSystem jobs;
+			REQUIRE_MESSAGE(WriteTextureFolder(root / "Outside" / "Textures", 24, 4096, 1, error).has_value(), error);
+		}
+		uint32_t attempt = 0;
+		Perf::CheckBudgetConfirmed("Perf.Editor.ImportFolder24x4kPeakPrivate", [&]()
+		{
+			const std::optional<ImportMemoryMeasurement> measurement = MeasureFolderImportInHelper(root / fmt::format("Project{}", attempt++),
+				root / "Outside" / "Textures", c_Budget, error);
+			REQUIRE_MESSAGE(measurement.has_value(), error);
+			CHECK(measurement->Imported == 24);
+			MESSAGE(fmt::format("24 textures of 4096x4096 imported in {:.1f} s, peak {:.0f} MB over the {:.0f} MB before", measurement->Seconds,
+				measurement->PeakPrivateIncreaseMB, measurement->PrivateMBBefore));
+			return measurement->PeakPrivateIncreaseMB;
+		}, 1);
 	}
 }

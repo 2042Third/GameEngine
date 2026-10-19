@@ -80,6 +80,9 @@ namespace Strata
 		// Compression has no effect on HDR textures (they stay RGBA16F), Quality none but on color that is compressed.
 		std::string GetInactiveReason(std::string_view setting, const nlohmann::json& settings) const override;
 		bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const override;
+		// From the image's header: its pixels decoded (4 bytes each) and their working copies (16 bytes each: the float mip
+		// chain and the compressor's blocks).
+		uint64_t EstimateImportMemory(std::span<const uint8_t> head, uint64_t sourceSize, const nlohmann::json& settings) const override;
 
 		// Decodes an encoded image and cooks it into a texture: resized to MaxSize, each mip filtered from the previous level
 		// (a Mitchell filter; sRGB color in linear space with alpha weighting, normal maps renormalized per level) and every

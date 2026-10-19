@@ -25,6 +25,7 @@ namespace Strata
 	class Scene;
 	struct AssetManagerStats;
 	struct FrameProfileSummary;
+	struct ImportMemoryStats;
 	struct JobSystemStats;
 
 	// Helpers shared by the built-in editor commands.
@@ -69,6 +70,8 @@ namespace Strata
 
 		// The totals of AssetManagerBase::GetStats as asset.stats and editor.status report them (EditorStreamingCommands.cpp).
 		nlohmann::json DescribeAssetStats(const AssetManagerStats& stats);
+		// The imports' memory estimates as asset.stats and editor.status report them: {admitted, budget, queued} in MB.
+		nlohmann::json DescribeImportMemory(const ImportMemoryStats& stats);
 
 		// Statistics of frame times in milliseconds (at least one), as editor.wait and project.export report them: {count,
 		// medianMs (the mean of the two middle ones for an even count), meanMs, p95Ms (nearest rank), maxMs}.

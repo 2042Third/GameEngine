@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Core/FileSystem.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <fstream>
@@ -43,6 +44,25 @@ namespace Strata
 		if (size > 0 && !stream.read(reinterpret_cast<char*>(data.data()), size))
 			return std::nullopt;
 
+		return data;
+	}
+
+	std::optional<std::vector<uint8_t>> FileSystem::ReadBytesPrefix(const std::filesystem::path& path, uint64_t maxBytes)
+	{
+		CountThreadOperation();
+		if (!IsRegularFile(path))
+			return std::nullopt;
+		std::ifstream stream(path, std::ios::binary | std::ios::ate);
+		if (!stream)
+			return std::nullopt;
+		const std::streamoff size = stream.tellg();
+		if (size < 0)
+			return std::nullopt;
+		const uint64_t count = std::min<uint64_t>(static_cast<uint64_t>(size), maxBytes);
+		std::vector<uint8_t> data(static_cast<size_t>(count));
+		stream.seekg(0, std::ios::beg);
+		if (count > 0 && !stream.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(count)))
+			return std::nullopt;
 		return data;
 	}
 

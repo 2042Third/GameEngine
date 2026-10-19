@@ -112,6 +112,12 @@ namespace Strata
 		virtual bool FindExternalFiles(std::span<const uint8_t> data, std::vector<std::string>& outRelativePaths, std::string* outError) const;
 
 		virtual bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const = 0;
+
+		// About the memory an import of the source takes at its peak, in bytes, from its first bytes (`head`: up to
+		// c_AssetPrefixHeadBytes, all of a smaller file), its size and its settings: background imports start only while the
+		// estimates of those that run fit the import memory budget (EditorAssetManager::SetImportMemoryBudget). The default:
+		// four times the source's size.
+		virtual uint64_t EstimateImportMemory(std::span<const uint8_t> head, uint64_t sourceSize, const nlohmann::json& settings) const;
 	};
 
 	// Builds the properties of AssetImporter::GetSettingsProperties: one entry per setting (its type, the value it takes

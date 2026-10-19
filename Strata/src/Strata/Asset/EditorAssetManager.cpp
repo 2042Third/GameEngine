@@ -11,6 +11,7 @@
 #include "Strata/Core/Hash.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/Platform.h"
 #include "Strata/Core/StringUtils.h"
 #include "Strata/Reflection/PropertyJson.h"
 
@@ -19,6 +20,7 @@
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <iterator>
 #include <mutex>
@@ -670,6 +672,190 @@ namespace Strata
 			return Specification.CacheDirectory / (handle.ToString() + ".bin");
 		}
 
+		// Import memory admission (EditorAssetManager::SetImportMemoryBudget): imports run while the estimates of those
+		// admitted (AssetImporter::EstimateImportMemory) fit the budget together; one runs alone even when it exceeds the
+		// budget by itself. A background import that does not fit waits here, in the order it came, without holding a
+		// thread, until finishing imports make room; a blocking import (tools, tests) waits on AdmissionCondition.
+		struct WaitingImport
+		{
+			Ref<BackgroundJob> Job;
+			ImportRequest Request;
+			uint64_t Estimate = 0;
+		};
+		mutable std::mutex AdmissionMutex;
+		std::condition_variable AdmissionCondition;
+		uint64_t ImportBudget = 0;
+		uint64_t AdmittedBytes = 0;
+		uint32_t AdmittedImports = 0; // Running, or admitted and queued for a background thread
+		uint32_t RunningImports = 0;  // Admitted and running on a thread
+		std::deque<WaitingImport> WaitingImports;
+
+		bool FitsLocked(uint64_t estimate) const
+		{
+			return AdmittedImports == 0 || (AdmittedBytes + estimate >= AdmittedBytes && AdmittedBytes + estimate <= ImportBudget);
+		}
+
+		void AdmitLocked(uint64_t estimate, bool running)
+		{
+			AdmittedBytes += estimate;
+			AdmittedImports++;
+			RunningImports += running ? 1 : 0;
+		}
+
+		// Admits a background import to run on the calling thread at once when it fits and nothing waits before it;
+		// otherwise it waits in order (false) and the calling thread is free.
+		bool AdmitOrWait(const Ref<BackgroundJob>& job, const ImportRequest& request, uint64_t estimate)
+		{
+			std::scoped_lock<std::mutex> lock(AdmissionMutex);
+			if (WaitingImports.empty() && FitsLocked(estimate))
+			{
+				AdmitLocked(estimate, true);
+				return true;
+			}
+			WaitingImports.push_back(WaitingImport { job, request, estimate });
+			return false;
+		}
+
+		// Admits a blocking import, waiting until it fits or nothing runs (false once it is cancelled). It holds its thread
+		// while it waits, so it never waits for admitted imports that have no thread yet: they may need the one it holds
+		// (a background import queued behind it), and only running imports are sure to release their estimates.
+		bool AdmitBlocking(uint64_t estimate, const std::atomic<bool>* cancel)
+		{
+			std::unique_lock<std::mutex> lock(AdmissionMutex);
+			while (!FitsLocked(estimate) && RunningImports > 0)
+			{
+				if (IsCancelled(cancel))
+					return false;
+				AdmissionCondition.wait_for(lock, std::chrono::milliseconds(10));
+			}
+			if (IsCancelled(cancel))
+				return false;
+			AdmitLocked(estimate, true);
+			return true;
+		}
+
+		// An admitted background import that waited got its thread.
+		void BeginRunning()
+		{
+			std::scoped_lock<std::mutex> lock(AdmissionMutex);
+			RunningImports++;
+		}
+
+		// An admitted import ended (`ran`: it ran on a thread, not cancelled before it started): its estimate leaves, and
+		// the waiting imports that fit now are admitted, in order (cancelled ones are dropped), for the caller to start.
+		std::vector<WaitingImport> Release(uint64_t estimate, bool ran)
+		{
+			std::vector<WaitingImport> admitted;
+			{
+				std::scoped_lock<std::mutex> lock(AdmissionMutex);
+				AdmittedBytes -= std::min(estimate, AdmittedBytes);
+				AdmittedImports -= AdmittedImports > 0 ? 1 : 0;
+				if (ran)
+					RunningImports -= RunningImports > 0 ? 1 : 0;
+				AdmitWaitingLocked(admitted);
+			}
+			AdmissionCondition.notify_all();
+			return admitted;
+		}
+
+		void AdmitWaitingLocked(std::vector<WaitingImport>& outAdmitted)
+		{
+			while (!WaitingImports.empty())
+			{
+				WaitingImport& next = WaitingImports.front();
+				if (next.Job->Cancel.load())
+				{
+					WaitingImports.pop_front();
+					continue;
+				}
+				if (!FitsLocked(next.Estimate))
+					break;
+				AdmitLocked(next.Estimate, false);
+				outAdmitted.push_back(std::move(next));
+				WaitingImports.pop_front();
+			}
+		}
+
+		// A new budget: what waits and fits it now is admitted, for the caller to start.
+		std::vector<WaitingImport> SetImportBudget(uint64_t bytes)
+		{
+			std::vector<WaitingImport> admitted;
+			{
+				std::scoped_lock<std::mutex> lock(AdmissionMutex);
+				ImportBudget = bytes;
+				AdmitWaitingLocked(admitted);
+			}
+			AdmissionCondition.notify_all();
+			return admitted;
+		}
+
+		ImportMemoryStats GetImportMemoryStats() const
+		{
+			std::scoped_lock<std::mutex> lock(AdmissionMutex);
+			ImportMemoryStats stats;
+			stats.Admitted = AdmittedBytes;
+			stats.Budget = ImportBudget;
+			stats.Running = AdmittedImports;
+			for (const WaitingImport& waiting : WaitingImports)
+			{
+				if (waiting.Job->Cancel.load())
+					continue;
+				stats.Queued += waiting.Estimate;
+				stats.Waiting++;
+			}
+			return stats;
+		}
+
+		// The import's estimate from the source's first bytes (AssetImporter::EstimateImportMemory), under the shared file
+		// lock.
+		uint64_t EstimateImport(const ImportRequest& request) const
+		{
+			const std::filesystem::path sourcePath = ToAbsolute(request.Path);
+			std::shared_lock<std::shared_mutex> fileLock(FileMutex);
+			const uint64_t size = FileSystem::GetFileSize(sourcePath).value_or(0);
+			const std::vector<uint8_t> head = FileSystem::ReadBytesPrefix(sourcePath, c_AssetPrefixHeadBytes).value_or(std::vector<uint8_t>());
+			return request.Importer->EstimateImportMemory(head, size, request.Settings);
+		}
+
+		// An import for code that waits for it (scans and imports that block: tools, tests), admitted like background ones.
+		ImportOutcome RunImportBlocking(const ImportRequest& request, const std::atomic<bool>* cancel = nullptr)
+		{
+			const uint64_t estimate = EstimateImport(request);
+			if (!AdmitBlocking(estimate, cancel))
+			{
+				ImportOutcome outcome;
+				outcome.Handle = request.Handle;
+				outcome.Cancelled = true;
+				outcome.Error = "The import was cancelled";
+				return outcome;
+			}
+			ImportOutcome outcome;
+			try
+			{
+				outcome = RunImport(request, cancel);
+			}
+			catch (...)
+			{
+				StartAll(Release(estimate, true));
+				throw;
+			}
+			StartAll(Release(estimate, true));
+			return outcome;
+		}
+
+		// Starts admitted imports that waited, on the background threads.
+		void StartAll(std::vector<WaitingImport> admitted)
+		{
+			for (WaitingImport& next : admitted)
+				StartAdmitted(std::move(next));
+		}
+		void StartAdmitted(WaitingImport waiting);
+		// Runs an admitted import on the calling thread (counted as running) and ends its job, then starts what the release
+		// of its estimate admits.
+		static void RunAdmitted(const Ref<BackgroundWork>& work, const Ref<BackgroundJob>& job, const ImportRequest& request, uint64_t estimate);
+		// The work itself, for the jobs it starts.
+		std::weak_ptr<BackgroundWork> Self;
+
 		void Add(const Ref<BackgroundJob>& job)
 		{
 			std::scoped_lock<std::mutex> lock(Mutex);
@@ -849,6 +1035,8 @@ namespace Strata
 		FileSystem::CreateDirectories(m_Specification.AssetDirectory);
 		FileSystem::CreateDirectories(m_Specification.CacheDirectory);
 		m_Work = CreateRef<BackgroundWork>(m_Specification);
+		m_Work->Self = m_Work;
+		m_Work->SetImportBudget(GetDefaultImportMemoryBudget());
 		m_Work->Owner = this;
 	}
 
@@ -1484,7 +1672,7 @@ namespace Strata
 				for (uint32_t index = begin; index < end; index++)
 				{
 					if (!m_Work->LoadCurrentImport(requests[index], outcomes[index]))
-						outcomes[index] = m_Work->RunImport(requests[index]);
+						outcomes[index] = m_Work->RunImportBlocking(requests[index]);
 				}
 			}, JobPriority::Background);
 			for (ImportOutcome& outcome : outcomes)
@@ -1510,6 +1698,23 @@ namespace Strata
 			? (shared.Read.load(std::memory_order_relaxed) + shared.Checked.load(std::memory_order_relaxed)) / 2 : shared.Done.load(std::memory_order_relaxed);
 		progress.Total = shared.Total.load(std::memory_order_relaxed);
 		return progress;
+	}
+
+	uint64_t EditorAssetManager::GetDefaultImportMemoryBudget()
+	{
+		constexpr uint64_t c_Gigabyte = 1ull << 30;
+		const uint64_t physical = Platform::GetPhysicalMemorySize().value_or(8 * c_Gigabyte);
+		return std::clamp<uint64_t>(physical / 4, c_Gigabyte, 4 * c_Gigabyte);
+	}
+
+	void EditorAssetManager::SetImportMemoryBudget(uint64_t bytes)
+	{
+		m_Work->StartAll(m_Work->SetImportBudget(std::max<uint64_t>(bytes, 1)));
+	}
+
+	ImportMemoryStats EditorAssetManager::GetImportMemoryStats() const
+	{
+		return m_Work->GetImportMemoryStats();
 	}
 
 	void EditorAssetManager::SetRegistrationOptions(AssetRegistrationOptions options)
@@ -1670,7 +1875,7 @@ namespace Strata
 				{
 					try
 					{
-						outcomes[index] = m_Work->RunImport(scan.Stale[index]);
+						outcomes[index] = m_Work->RunImportBlocking(scan.Stale[index]);
 					}
 					catch (const std::exception& exception)
 					{
@@ -1828,17 +2033,7 @@ namespace Strata
 			return outcome;
 		};
 
-		// Large sources import one at a time: decoded data is many times the file size. A cancelled import stops waiting.
-		static std::timed_mutex s_LargeImportMutex;
-		std::unique_lock<std::timed_mutex> largeImportLock(s_LargeImportMutex, std::defer_lock);
-		if (FileSystem::GetFileSize(sourcePath).value_or(0) > c_LargeImportSize)
-		{
-			while (!largeImportLock.try_lock_for(std::chrono::milliseconds(10)))
-			{
-				if (IsCancelled(cancel))
-					return stopped();
-			}
-		}
+		// Admission (EstimateImport, AdmitOrWait, AdmitBlocking) bounds what imports take together before they get here.
 		if (IsCancelled(cancel))
 			return stopped();
 
@@ -1880,8 +2075,6 @@ namespace Strata
 			error = "the importer failed with an unknown exception";
 			result = ImportResult();
 		}
-		if (largeImportLock.owns_lock())
-			largeImportLock.unlock();
 		// Whatever the importer returned: it may have failed because it was cancelled, or read a file that moved meanwhile.
 		if (IsCancelled(cancel))
 			return stopped();
@@ -2150,6 +2343,54 @@ namespace Strata
 		SubmitImport(job, request);
 	}
 
+	void EditorAssetManager::BackgroundWork::RunAdmitted(const Ref<BackgroundWork>& work, const Ref<BackgroundJob>& job, const ImportRequest& request,
+		uint64_t estimate)
+	{
+		ImportOutcome outcome;
+		try
+		{
+			outcome = work->RunImport(request, &job->Cancel);
+		}
+		catch (const std::exception& exception)
+		{
+			outcome = ImportOutcome();
+			outcome.Handle = request.Handle;
+			outcome.Error = fmt::format("Import failed: {}", exception.what());
+		}
+		work->Finish(job, std::move(outcome));
+		work->StartAll(work->Release(estimate, true));
+	}
+
+	void EditorAssetManager::BackgroundWork::StartAdmitted(WaitingImport waiting)
+	{
+		// Callers hold a reference to the work, so Self is alive.
+		Ref<BackgroundWork> work = Self.lock();
+		auto import = [work, waiting]()
+		{
+			if (waiting.Job->Cancel.load())
+			{
+				// Cancelled while it waited: its room goes to the next.
+				work->StartAll(work->Release(waiting.Estimate, false));
+				return;
+			}
+			work->BeginRunning();
+			RunAdmitted(work, waiting.Job, waiting.Request, waiting.Estimate);
+		};
+		try
+		{
+			JobSystem::Submit(std::move(import), JobPriority::Background);
+		}
+		catch (const std::exception& exception)
+		{
+			ST_CORE_ERROR("Could not start the import of '{}': {}", waiting.Request.Path, exception.what());
+			ImportOutcome failed;
+			failed.Handle = waiting.Request.Handle;
+			failed.Error = fmt::format("The import could not start: {}", exception.what());
+			Finish(waiting.Job, std::move(failed));
+			StartAll(Release(waiting.Estimate, false));
+		}
+	}
+
 	void EditorAssetManager::SubmitImport(const Ref<BackgroundJob>& job, const ImportRequest& request)
 	{
 		// The job uses only the work it shares with the manager, so that the manager never waits for it (see BackgroundWork).
@@ -2162,8 +2403,14 @@ namespace Strata
 			try
 			{
 				if (request.Force || !work->LoadCurrentImport(request, outcome, &job->Cancel))
-					outcome = work->RunImport(request, &job->Cancel);
-				else if (request.Replaced)
+				{
+					// The import itself waits for room in the import memory budget, without holding this thread.
+					const uint64_t estimate = work->EstimateImport(request);
+					if (work->AdmitOrWait(job, request, estimate))
+						BackgroundWork::RunAdmitted(work, job, request, estimate);
+					return;
+				}
+				if (request.Replaced)
 					outcome.FromCache = false; // The current cache may hold what the replaced import stored and nothing loaded
 			}
 			catch (const std::exception& exception)
@@ -3043,7 +3290,7 @@ namespace Strata
 			return true;
 		}
 
-		ImportOutcome outcome = m_Work->RunImport(request);
+		ImportOutcome outcome = m_Work->RunImportBlocking(request);
 		const bool success = outcome.Success;
 		if (!success && outError)
 			*outError = outcome.Error;

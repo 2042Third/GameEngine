@@ -168,6 +168,16 @@ namespace Strata
 		std::string Error;
 	};
 
+	// The imports' memory estimates against their budget (EditorAssetManager::SetImportMemoryBudget), in bytes.
+	struct ImportMemoryStats
+	{
+		uint64_t Admitted = 0; // The estimates of the imports admitted: running, or about to start
+		uint64_t Budget = 0;
+		uint64_t Queued = 0;   // The estimates of the imports that wait for room
+		uint32_t Running = 0;  // Imports admitted
+		uint32_t Waiting = 0;  // Imports that wait for room
+	};
+
 	// Asset manager of the editor. Every file with a known importer under the asset directory is an asset; its handle
 	// and import settings live in a "<file>.meta" sidecar (commit it with the file). Imported data is cached per
 	// handle in the cache directory and redone automatically when the source, its settings, the importer or another
@@ -214,6 +224,18 @@ namespace Strata
 		std::optional<AssetScanProgress> GetScanProgress() const;
 		// How scans prepare and insert (tests pass a clock of their own). Before BeginScan.
 		void SetRegistrationOptions(AssetRegistrationOptions options);
+
+		// The memory imports may take together, in bytes, by their estimates (AssetImporter::EstimateImportMemory, read from
+		// the source's first bytes): an import that does not fit beside those admitted waits until they finish, and one runs
+		// alone even when it exceeds the budget by itself. A background import waits in order, without holding a thread; a
+		// blocking one (Scan that waits, ReimportAsset) waits on its thread, and only while an admitted import runs (never for
+		// one still queued for a thread, which may need the one it holds). Default: GetDefaultImportMemoryBudget, for the
+		// manager's life (a project that opens again starts from it). A larger budget starts what waits and fits it at once.
+		void SetImportMemoryBudget(uint64_t bytes);
+		// A quarter of the machine's physical memory, clamped to 1-4 GiB (so that it binds on large machines too: 24
+		// textures of 4096x4096 estimate about 8 GB).
+		static uint64_t GetDefaultImportMemoryBudget();
+		ImportMemoryStats GetImportMemoryStats() const;
 		// Ends the manager's background work for good and returns at once, without waiting for any of it: stops the file
 		// watcher and cancels every import and search of references (queued ones never start; running ones stop at their next
 		// cancellation check on their own and store nothing). Nothing is imported in the background afterwards and results
@@ -441,8 +463,6 @@ namespace Strata
 			AssetPackBuildPlan* outPlan = nullptr, AssetPackWriteStats* outStats = nullptr);
 
 		static constexpr std::string_view c_MetaExtension = ".meta";
-		// Imports of sources larger than this run one at a time, bounding peak memory (decoded images are large).
-		static constexpr uint64_t c_LargeImportSize = 64ull * 1024 * 1024;
 	protected:
 		bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError) override;
 		// Assets of a source whose first import has not been applied (Scan in the background, a file added since).

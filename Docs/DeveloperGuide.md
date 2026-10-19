@@ -796,6 +796,12 @@ short. Their full wording:
   are removed by an I/O job (`RemoveCacheFilesLater`). New code on these paths keeps it so: the main thread reads no
   `.meta`, stats no cache file and writes no record (records go through `ImportRecordStore`, whose writer is an I/O job);
   tests check with `FileSystem::GetThreadOperationCount`.
+  **Imports take memory by their estimates.** Background imports start only while their estimates fit the import memory
+  budget (Docs/Architecture.md, "Import memory admission"). An importer whose imports take much more (or much less) than
+  four times their source's size overrides `AssetImporter::EstimateImportMemory`, which sees the source's first
+  `c_AssetPrefixHeadBytes`, its size and its settings: decode only headers there, never the source. An estimate changes no
+  import output, so it bumps no `GetVersion()`. Editor code imports through the background forms, which wait for room
+  without holding a thread; the blocking forms wait on theirs (tools and tests).
 
 ### Engine-native assets, sub-assets and built-in assets
 
@@ -1663,9 +1669,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   cancellations, staging releases, dependency prefetches started and dropped, and `mipStreaming`: partial loads, range
   reads, mip levels raised and dropped, bytes read for them, textures below their wanted level) and, with `assets: true`,
   the assets that are resident, loading, failed or pinned (`GetResidencyInfo`; textures streaming their mips add
-  `residentMip`, `wantedMip`, `mipCount` and `residentBytes`); `asset.setBudget {gpuTexturesMB?, gpuBuffersMB?, cpuMB?,
-  inFlightMB?, uploadMBPerFrame?, finalizeMsPerFrame?, uploadMsPerFrame?, stagingMB?, reset?}` changes the budgets of the open project's
-  manager until the project closes (it fails without a project; values greater than 0; MB are 2^20 bytes; no undo, as
+  `residentMip`, `wantedMip`, `mipCount` and `residentBytes`), plus `importMemoryMB {admitted, budget, queued}` for the
+  open project's imports; `asset.setBudget {gpuTexturesMB?, gpuBuffersMB?, cpuMB?, inFlightMB?, uploadMBPerFrame?,
+  finalizeMsPerFrame?, uploadMsPerFrame?, stagingMB?, importMB?, reset?}` changes the budgets of the open project's
+  manager (`importMB`: the import memory budget, answered as `importBytes`) until the project closes (it fails without a project; values greater than 0; MB are 2^20 bytes; no undo, as
   nothing in the project changes).
   Opening a scene, and a scene switch the game asks for in play mode, schedule the release of what only the previous
   scene used (`EditorContext::OpenScene`, `SwitchRuntimeScene`). The Streaming panel (`Panels/StreamingPanel`) shows the

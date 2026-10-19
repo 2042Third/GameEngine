@@ -69,6 +69,11 @@ namespace Strata
 		return true;
 	}
 
+	uint64_t AssetImporter::EstimateImportMemory(std::span<const uint8_t>, uint64_t sourceSize, const nlohmann::json&) const
+	{
+		return sourceSize > UINT64_MAX / 4 ? UINT64_MAX : sourceSize * 4;
+	}
+
 	////////////////////////////////////////////////////////////////////////////////
 	// Import settings
 	////////////////////////////////////////////////////////////////////////////////

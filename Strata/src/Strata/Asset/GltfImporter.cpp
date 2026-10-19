@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <memory>
@@ -2006,6 +2007,52 @@ namespace Strata
 	{
 		GltfImport import(context, result);
 		return import.Run(outError);
+	}
+
+	uint64_t GltfImporter::EstimateImportMemory(std::span<const uint8_t> head, uint64_t sourceSize, const nlohmann::json& settings) const
+	{
+		const uint64_t fallback = AssetImporter::EstimateImportMemory(head, sourceSize, settings);
+		// A .glb's head holds its JSON chunk (12 bytes of header, then the chunk's length and type); its binary chunk is cut
+		// off, so only the JSON is parsed.
+		std::span<const uint8_t> document = head;
+		if (head.size() >= 20 && std::memcmp(head.data(), "glTF", 4) == 0)
+		{
+			uint32_t jsonLength = 0;
+			std::memcpy(&jsonLength, head.data() + 12, sizeof(jsonLength));
+			if (std::memcmp(head.data() + 16, "JSON", 4) != 0 || jsonLength > head.size() - 20)
+				return fallback;
+			document = head.subspan(20, jsonLength);
+		}
+		else if (head.size() < sourceSize)
+		{
+			return fallback; // A .gltf larger than its head
+		}
+		const std::optional<nlohmann::json> json = JsonUtils::Parse(std::string_view(reinterpret_cast<const char*>(document.data()), document.size()));
+		if (!json || !json->is_object())
+			return fallback;
+		// The document is the file's word: lengths a crafted file makes huge saturate instead of wrapping around.
+		uint64_t estimate = 0;
+		const auto add = [&estimate](uint64_t length, uint64_t factor)
+		{
+			const uint64_t bytes = length > UINT64_MAX / factor ? UINT64_MAX : length * factor;
+			estimate = bytes > UINT64_MAX - estimate ? UINT64_MAX : estimate + bytes;
+		};
+		if (const nlohmann::json* buffers = JsonUtils::Find(*json, "buffers"); buffers && buffers->is_array())
+		{
+			for (const nlohmann::json& buffer : *buffers)
+				add(JsonUtils::GetUInt(buffer, "byteLength", 0), 2);
+		}
+		const nlohmann::json* views = JsonUtils::Find(*json, "bufferViews");
+		if (const nlohmann::json* images = JsonUtils::Find(*json, "images"); images && images->is_array() && views && views->is_array())
+		{
+			for (const nlohmann::json& image : *images)
+			{
+				const uint64_t view = JsonUtils::GetUInt(image, "bufferView", UINT64_MAX);
+				if (view < views->size())
+					add(JsonUtils::GetUInt((*views)[static_cast<size_t>(view)], "byteLength", 0), 8);
+			}
+		}
+		return std::max(estimate, fallback);
 	}
 
 	bool GltfImporter::FindExternalFiles(std::span<const uint8_t> data, std::vector<std::string>& outRelativePaths, std::string* outError) const
