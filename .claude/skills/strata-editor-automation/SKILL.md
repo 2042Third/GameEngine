@@ -230,7 +230,8 @@ editor started with `--no-gpu` (use `--headless`):
 - **Saves run in the background**: `scene.save` and `scene.saveAs` take a snapshot of the scene in the frame and write the
   file on a background thread, so even a million-entity scene never holds the editor. By default (`wait: true`) they answer
   once the file is written: `{scene, path, bytes, entities, seconds, frames, frameTimes, memory}`. With
-  `{"wait": false}` they answer at once with `{scene, path, saveId, state}`; `editor.status`'s `saving` lists the saves in
+  `{"wait": false}` they answer at once with `{scene, path, saveId, state}`; either way they answer later than other
+  edits, so `editor.batch` refuses them (save after the batch). `editor.status`'s `saving` (in its compact answer) lists the saves in
   flight (`saveId`, `label`, `documents`, `state`, `progress`; empty when none writes). Edits made while a save writes
   are not in it and stay unsaved. Commands that replace the scene, close the project or quit (`scene.open`, `scene.new`,
   `scene.recover`, `project.*`, `editor.quit`) wait for saves in flight before they decide, also with `force` (a save is
@@ -331,7 +332,7 @@ Many edits in one call and one undo step: `editor.batch {"steps": [{"command": "
 "bind": {"wall": "/id"}}, {"command": "component.add", "parameters": {"entity": {"$ref": "wall"}, "component": "BoxCollider"}}]}`
 (steps as a command script writes them, at most 1,000; it answers `{steps: [{command, result | error}], bindings}`; a
 failed step undoes the ones before it unless `"atomic": false`; commands that take frames, such as `scene.open`,
-`play.step` or `viewport.capture`, are refused: run them on their own).
+`scene.save`, `play.step` or `viewport.capture`, are refused: run them on their own).
 `prefab.create {"entities": ["<id>"], "path": "Prefabs/Block.stprefab"}` (the entities become an instance of it; `"link":
 false` leaves them alone), then
 `prefab.instantiate {"prefab": "Prefabs/Block.stprefab", "components": {"Transform": {"Translation": [2, 0, 0]}}}`

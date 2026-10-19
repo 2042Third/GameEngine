@@ -684,7 +684,7 @@ namespace Strata
 				return EditorCommandResult::Ok();
 			}, EditorCommandKind::Session });
 
-		registry.Register({ "editor.quit",
+		registry.Register(MayDefer({ "editor.quit",
 			"Closes the editor after answering (pending commands are cancelled). Fails while the scene has unsaved changes unless force is "
 			"true; save first with scene.save or scene.saveAs. Waits for saves in flight first, also with force: a save is never lost.",
 			ObjectSchema({ { "force", ForceSchema() } }),
@@ -699,7 +699,7 @@ namespace Strata
 				const bool modified = context.IsSceneModified();
 				context.RequestQuit();
 				return EditorCommandResult::Ok({ { "quitting", true }, { "discardedChanges", modified } });
-			}), EditorCommandKind::Session });
+			}), EditorCommandKind::Session }));
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Frames

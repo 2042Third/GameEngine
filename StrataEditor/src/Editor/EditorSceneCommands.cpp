@@ -431,7 +431,7 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "entities", std::move(entities) } });
 			}, EditorCommandKind::Query });
 
-		registry.Register({ "scene.new",
+		registry.Register(MayDefer({ "scene.new",
 			"Replaces the edited scene with a new, unsaved one: empty by default, or with a template's content, e.g. \"basic3d\" (a lit start: camera, "
 			"sun, procedural sky, ground, post-processing; the editor camera then looks through the scene's camera; the ground's material "
 			"Materials/Ground.stmat is added to a project that lacks it). Fails while the edited scene has unsaved changes unless force is true (save "
@@ -458,7 +458,7 @@ namespace Strata
 				if (!context.NewScene(name, templateId))
 					return EditorCommandResult::Fail(fmt::format("The template '{}' could not be applied", templateId));
 				return EditorCommandResult::Ok({ { "discardedChanges", discarded } });
-			}) });
+			}) }));
 
 		registry.Register(MayDefer({ "scene.open",
 			"Opens a scene asset for editing. Fails while the edited scene has unsaved changes unless force is true (save first); waits for saves in "
@@ -552,7 +552,7 @@ namespace Strata
 				return result;
 			} });
 
-		registry.Register({ "scene.save",
+		registry.Register(MayDefer({ "scene.save",
 			"Saves the edited scene to its asset in the background: the frame only takes a snapshot of the scene, the document is written on a "
 			"background thread, and edits made meanwhile stay unsaved (the save holds the scene as it was when the command ran). With wait "
 			"(default true) the command answers once the file is written and published: {scene, path, bytes, entities, seconds, frames, "
@@ -567,9 +567,9 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				return StartSceneSave(context, wait, [](EditorContext& context, std::string* outError) { return context.BeginSaveScene(outError); });
-			} });
+			} }));
 
-		registry.Register({ "scene.saveAs",
+		registry.Register(MayDefer({ "scene.saveAs",
 			"Saves the edited scene as a new .stscene asset and continues editing it: the scene takes the file's name and the new asset at once (a "
 			"following scene.save writes it), and gets the previous ones back when the save fails. The save runs in the background like scene.save's "
 			"and answers like it (wait, default true: once written; false: at once with its saveId).",
@@ -583,7 +583,7 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				return StartSceneSave(context, wait, [path](EditorContext& context, std::string* outError) { return context.BeginSaveSceneAs(path, outError); });
-			} });
+			} }));
 
 		nlohmann::json capacitySchema = ObjectSchema({
 			{ "maxBodies", IntegerSchema("Most bodies the physics world holds (each reserves about 80 bytes); 0 sizes it from the bodies the scene "

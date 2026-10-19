@@ -164,12 +164,12 @@ namespace
 	constexpr std::string_view c_DeferringCommands[] = {
 		"animation.preview",
 		"asset.import", "asset.info", "asset.reimport", "asset.setImportSettings",
-		"editor.wait",
+		"editor.quit", "editor.wait",
 		"input.click", "input.gamepadAxis", "input.gamepadButton", "input.key", "input.mouseButton", "input.mouseMove", "input.releaseAll", "input.scroll",
 		"input.sequence", "input.type",
 		"play.start", "play.step",
-		"project.export", "project.open", "project.openSample",
-		"scene.loadAdditive", "scene.loadStatus", "scene.open", "scene.recover", "scene.recoveryStatus",
+		"project.close", "project.create", "project.export", "project.open", "project.openSample",
+		"scene.loadAdditive", "scene.loadStatus", "scene.new", "scene.open", "scene.recover", "scene.recoveryStatus", "scene.save", "scene.saveAs",
 		"script.build",
 		"viewport.capture",
 	};

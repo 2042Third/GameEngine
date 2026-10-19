@@ -1559,7 +1559,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (`EditorAssetManager::BeginScan`), and its start scene opens after the scan. Until both are done
   (`EditorContext::IsWaitingForAssets`), `EditorCommandRegistry::Execute` defers every Edit command and every command
   marked `EditorCommand::WaitsForAssets` before its handler runs: a new command that answers from the whole asset
-  registry (asset, material, prefab and animation queries, the export, recovery) sets the flag. Session queries
+  registry (asset, material, prefab and animation queries, the export, recovery) sets the flag. This deferral is the
+  registry's, so it needs no `MayDefer` (and `editor.batch`, an Edit command, is deferred whole). Session queries
   (`editor.status`, `editor.wait`, `editor.perf`, `log.read`, `scene.loadStatus`) answer at once; `editor.status`'s
   `assets.scanning` reports `{phase, done, total}` (null when no scan runs). UI code that runs a command at once
   (`RunEditorCommand`) refuses it meanwhile with `EditorCommandRegistry::DescribeAssetScanWait`'s reason; the assets pill
@@ -1584,7 +1585,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   start scene). `scene.save` and `scene.saveAs` take `wait` (default true: they answer once the file is published; false:
   at once, with `saveId`), and `editor.status` lists `saving`. The commands that replace the edited scene, close the
   project or quit wrap their handlers in `CommandUtils::AfterSaves`, so they defer while saves are in flight and then
-  decide as above (`force` never discards a save in flight); a new command of that kind does the same. UI code saves
+  decide as above (`force` never discards a save in flight); a new command of that kind does the same and, like
+  `scene.save` and `scene.saveAs`, is registered with `MayDefer` (`editor.batch` refuses it). UI code saves
   through the command runner (the result comes in a later frame), `RequestDiscardChanges` waits for saves in a saving
   dialog, and `EditorContext::ReleaseProject` finishes every save before the project goes.
 

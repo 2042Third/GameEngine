@@ -245,7 +245,7 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "templates", std::move(templates) }, { "default", ProjectTemplates::c_Empty } });
 			}, EditorCommandKind::Query });
 
-		registry.Register({ "project.create",
+		registry.Register(MayDefer({ "project.create",
 			"Creates a project in a directory and opens it. With template \"basic3d\" it starts with a saved, lit start scene (Scenes/Main.stscene: Main "
 			"Camera, Sun, Sky, Ground, Post Process); the default \"empty\" has no scene (see project.templates). Fails while the edited scene has "
 			"unsaved changes unless force is true (save first), before anything is created; waits for saves in flight (scene.save) first. Returns "
@@ -283,7 +283,7 @@ namespace Strata
 					{ "template", templateId },
 					{ "startScene", startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr) },
 					{ "discardedChanges", discarded } });
-			}), EditorCommandKind::Session });
+			}), EditorCommandKind::Session }));
 
 		registry.Register(MayDefer({ "project.open",
 			"Opens a project file or the project in a directory. Fails while the edited scene has unsaved changes unless force is true (save first); "
@@ -311,7 +311,7 @@ namespace Strata
 					{ "discardedChanges", modified } });
 			}), EditorCommandKind::Session }));
 
-		registry.Register({ "project.close",
+		registry.Register(MayDefer({ "project.close",
 			"Closes the open project; the editor shows its launcher. Without a project it does nothing. Fails while the edited scene has unsaved "
 			"changes unless force is true (save first). Waits for saves in flight (scene.save) first, also with force: a save is never lost. Returns "
 			"closed and discardedChanges (whether unsaved changes were discarded).",
@@ -330,7 +330,7 @@ namespace Strata
 				const bool discarded = context.IsSceneModified();
 				context.CloseProject();
 				return EditorCommandResult::Ok({ { "closed", true }, { "discardedChanges", discarded } });
-			}), EditorCommandKind::Session });
+			}), EditorCommandKind::Session }));
 
 		registry.Register({ "project.samples",
 			"The sample projects that come with the editor (finished games to learn from, e.g. Tetris): id, name, description. Open one with "
