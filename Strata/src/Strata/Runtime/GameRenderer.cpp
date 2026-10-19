@@ -123,4 +123,28 @@ namespace Strata
 		text.FontSize = std::clamp(static_cast<float>(size.y) / 24.0f, 12.0f, 64.0f);
 	}
 
+	FramePerfColumnGroup GameRenderer::MakePerfLogColumns(const GameRenderer* renderer)
+	{
+		FramePerfColumnGroup group;
+		group.Names = { "DrawCalls", "Instances", "Triangles", "VisibleProxies", "OccludedProxies", "InstanceUploadMB" };
+		group.Write = [renderer, count = group.Names.size()](FramePerfRow& row)
+		{
+			if (!renderer || !renderer->GetStats().Rendered)
+			{
+				for (size_t column = 0; column < count; column++)
+					row.AddEmpty();
+				return;
+			}
+			const SceneRenderer& scene = renderer->GetSceneRenderer();
+			const SceneRendererStats stats = AddGPUCounts(scene.GetStats(), scene.GetGPUStats());
+			row.Add(static_cast<double>(stats.DrawCalls), 0);
+			row.Add(static_cast<double>(stats.Instances), 0);
+			row.Add(static_cast<double>(stats.Triangles), 0);
+			row.Add(static_cast<double>(stats.VisibleProxies), 0);
+			row.Add(static_cast<double>(stats.OccludedProxies), 0);
+			row.Add(static_cast<double>(stats.InstanceBytesUploaded + stats.ProxyBytesUploaded) / (1024.0 * 1024.0), 3);
+		};
+		return group;
+	}
+
 }

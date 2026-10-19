@@ -3936,11 +3936,15 @@ resident MB per pool, evictions), the texture streamer's (`StreamedMB`: bytes re
 the resident pools they tell what render targets and the swapchain take) and the process's private memory with its peak
 so far (`PrivateMB`, `PeakPrivateMB`). Programs add columns of their own after every built-in one through column
 groups (`FramePerfLogSpecification::Columns`: each `FramePerfColumnGroup` names its columns and writes a row's values
-through `FramePerfRow::Add(value, decimals)` and `AddEmpty`, read when the row is written; a group that writes another
-number of values than it names fails the log like a write error). StrataRuntime adds the running scene's world
+through `FramePerfRow::Add(value, decimals)` and `AddEmpty`, read when the frame is captured, so that a row written
+once its GPU times arrived holds its own frame's values; they follow `GPUFrame` and `GPUBusyMs`; a group that writes
+another number of values than it names fails the log like a write error). StrataRuntime adds the running scene's world
 streaming and physics capacity (`GameRuntime::MakePerfLogColumns`: `WorldCellsWanted`, `WorldCellsLoading`,
 `WorldCellsLoaded`, `WorldCellsUnloading` from `IWorldStreaming`, `PhysicsBodies`, `PhysicsBodiesWaiting` and
-`PhysicsMaxBodies` from `IPhysicsCapacity`; empty while no scene plays), and the `World.Streaming` stage has its column
+`PhysicsMaxBodies` from `IPhysicsCapacity`; empty while no scene plays), then what its renderer drew
+(`GameRenderer::MakePerfLogColumns`: `DrawCalls`, `Instances`, `Triangles`, `VisibleProxies`, `OccludedProxies`,
+`InstanceUploadMB`, with the GPU-driven path's counts as far as the GPU reported them, `AddGPUCounts`; empty headless),
+and the `World.Streaming` stage has its column
 with the other stages. A log that cannot be written fails the run (exit code 1).
 the resident pools they tell what render targets and the swapchain take), the process's private memory with its peak
 so far (`PrivateMB`, `PeakPrivateMB`) and the GPU: each GPU stage's column (`GPU.Shadows`...), `GPUFrame` (1 when the frame's GPU

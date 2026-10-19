@@ -194,6 +194,8 @@ namespace Strata
 			};
 			FramePerfLogSpecification specification;
 			specification.Columns.push_back(std::move(columns));
+			// What the game's renderer drew, after them (empty in headless runs, which render nothing).
+			specification.Columns.push_back(GameRenderer::MakePerfLogColumns(m_Renderer.get()));
 			m_PerfLog = FramePerfLog::Create(m_Options.PerfLogPath, FrameProfiler::Get(), specification, &error);
 			if (!m_PerfLog)
 			{

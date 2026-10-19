@@ -4,6 +4,8 @@
 #include "Strata/Runtime/GameRenderer.h"
 
 #include <functional>
+#include <sstream>
+#include <string>
 #include <vector>
 
 using namespace Strata;
@@ -113,6 +115,57 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 		camera.SetActive(true);
 		REQUIRE(renderer.Render(scene, target.Framebuffer, size));
 		CHECK_FALSE(renderer.IsShowingMessage());
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The perf log's Render columns hold what the game's frame drew, with the GPU's counts")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		WindowTarget target(gpu.GetNvrhiDevice());
+		Ref<Scene> scene = CreateRef<Scene>("Level");
+		AddNeutralPostProcess(*scene);
+		for (int index = 0; index < 3; index++)
+			AddMesh(*scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(static_cast<float>(index) - 1.0f, 0.0f, 0.0f), "Cube");
+		// And a thousand out of view behind the camera, so that the first frame's upload shows in megabytes.
+		for (int index = 0; index < 1000; index++)
+			AddMesh(*scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(static_cast<float>(index % 40), static_cast<float>(index / 40), 40.0f), "Behind");
+		Entity camera = scene->CreateEntity("Camera");
+		camera.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, 6.0f);
+		camera.AddComponent<CameraComponent>();
+
+		const auto writeRow = [](const FramePerfColumnGroup& group)
+		{
+			std::string line;
+			FramePerfRow row(line);
+			group.Write(row);
+			CHECK(row.GetCount() == group.Names.size());
+			return line;
+		};
+		// Without a renderer (a headless game), or before its first frame: empty fields.
+		const FramePerfColumnGroup headless = GameRenderer::MakePerfLogColumns(nullptr);
+		CHECK(headless.Names == std::vector<std::string> { "DrawCalls", "Instances", "Triangles", "VisibleProxies", "OccludedProxies", "InstanceUploadMB" });
+		CHECK(writeRow(headless) == ",,,,,,");
+		GameRenderer renderer;
+		const FramePerfColumnGroup columns = GameRenderer::MakePerfLogColumns(&renderer);
+		CHECK(writeRow(columns) == ",,,,,,");
+
+		REQUIRE(renderer.Render(scene, target.Framebuffer, glm::uvec2(c_Size)));
+		renderer.GetSceneRenderer().ResolveGPUStats(true);
+		const DrawnCounts drawn = GetDrawnCounts(renderer.GetSceneRenderer());
+		REQUIRE(drawn.Instances == 3);
+		std::vector<double> values;
+		std::stringstream fields(writeRow(columns).substr(1));
+		for (std::string field; std::getline(fields, field, ',');)
+			values.push_back(std::stod(field));
+		REQUIRE(values.size() == 6);
+		CHECK(values[0] == static_cast<double>(drawn.Draws));
+		CHECK(values[1] == 3.0);
+		CHECK(values[2] == static_cast<double>(drawn.Triangles));
+		CHECK(values[3] == static_cast<double>(drawn.VisibleProxies));
+		CHECK(values[4] == 0.0);
+		CHECK(values[5] > 0.0); // The first frame uploads the instances
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
