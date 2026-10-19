@@ -405,8 +405,9 @@ TEST_SUITE("Editor.Saves")
 		std::vector<uint64_t> first;
 		std::vector<uint64_t> second;
 		std::vector<uint64_t> third;
+		// A writes from its Submit on, and stays the running save until an Update publishes it (here: RunUntilEnded), however
+		// soon its job ends; an Update before b's submission could publish it and let b start at once.
 		const uint64_t a = submit(first, 1);
-		saver.Update(); // A writes
 		const uint64_t b = submit(second, 2);
 		const uint64_t c = submit(third, 3);
 		CHECK(saver.GetStatus(b)->State == DocumentSaveState::Queued);
@@ -440,9 +441,10 @@ TEST_SUITE("Editor.Saves")
 		request.Snapshot = Scene::Copy(groups.Edited, SceneCopyOptions { true });
 		request.Items.push_back(SubsetItem(scene, groups.Roots[0]));
 		std::string error;
+		// The save writes from its Submit on; no Update runs until the check below, since one would publish a write that ended
+		// already (and the save would be Done, never seen Publishing).
 		const uint64_t id = saver.Submit(std::move(request), {}, &error);
 		REQUIRE(id != 0);
-		saver.Update();
 		REQUIRE(WaitUntil([&]() { return saver.GetStatus(id)->State == DocumentSaveState::Publishing; }, std::chrono::seconds(30)));
 
 		// The file was replaced but not published yet: the watcher reports it meanwhile. A folder made after it shows when
