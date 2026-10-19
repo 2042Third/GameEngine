@@ -137,11 +137,13 @@ TEST_SUITE("Asset.ImportSettings")
 		CheckDescribesDefaults(models, "Helmet.glb");
 		CheckDescribesDefaults(GetImporter(".gltf"), "Helmet.gltf");
 
+#if ST_WITH_AUDIO
 		const AssetImporter& audio = GetImporter(".wav");
 		const std::vector<PropertyInfo> audioProperties = audio.GetSettingsProperties();
 		CHECK(GetNames(audioProperties) == std::vector<std::string> { "LoadMode" });
 		CHECK(GetOptions(audioProperties.front()) == std::vector<std::string> { "Decompressed", "Streamed" });
 		CheckDescribesDefaults(audio, "Missing.wav"); // A file that cannot be measured starts decompressed
+#endif
 
 		// Fonts and the engine's own documents are stored as they are: nothing to set.
 		for (const char* extension : { ".ttf", ".otf", ".stmat", ".stscene", ".stprefab" })
@@ -190,7 +192,10 @@ TEST_SUITE("Asset.ImportSettings")
 		CHECK(models.GetInactiveReason("MaxTextureSize", uncompressed).empty());
 
 		// Importers without such settings report none.
+		CHECK(GetImporter(".ttf").GetInactiveReason("LoadMode", nlohmann::json::object()).empty());
+#if ST_WITH_AUDIO
 		CHECK(GetImporter(".wav").GetInactiveReason("LoadMode", nlohmann::json::object()).empty());
+#endif
 	}
 
 	TEST_CASE("Settings to change are checked against the schema and written in canonical form")

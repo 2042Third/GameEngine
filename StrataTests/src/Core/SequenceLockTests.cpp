@@ -3,6 +3,7 @@
 #include "Strata/Core/SequenceLock.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <thread>
 
@@ -60,10 +61,21 @@ TEST_SUITE("Core.SequenceLock")
 		constexpr uint64_t c_SampleCount = 2'000'000;
 		SequenceLockedValue<Sample> value;
 		std::atomic<bool> published = false;
+		std::atomic<uint64_t> takenSoFar = 0;
 		std::thread writer([&]()
 		{
 			for (uint64_t index = 1; index <= c_SampleCount; index++)
+			{
 				value.Publish(MakeSample(index));
+				// Halfway, until the reader took a sample: on a busy machine (parallel tests) the writer could otherwise publish
+				// everything before the reader first runs, and the reader would see only the last sample.
+				if (index == c_SampleCount / 2)
+				{
+					const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+					while (takenSoFar.load() == 0 && std::chrono::steady_clock::now() < deadline)
+						std::this_thread::yield();
+				}
+			}
 			published = true;
 		});
 
@@ -79,6 +91,7 @@ TEST_SUITE("Core.SequenceLock")
 			if (value.TakeNew(sample))
 			{
 				takenCount++;
+				takenSoFar.store(takenCount);
 				if (!IsConsistent(sample))
 					tornCount++;
 				if (sample.Index <= last)

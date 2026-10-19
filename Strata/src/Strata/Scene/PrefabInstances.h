@@ -3,7 +3,7 @@
 #include "Strata/Asset/Asset.h"
 #include "Strata/Scene/Entity.h"
 
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include <cstdint>
 #include <string>

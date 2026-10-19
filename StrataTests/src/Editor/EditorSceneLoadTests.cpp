@@ -226,7 +226,10 @@ TEST_SUITE("Editor.SceneLoad")
 		const std::weak_ptr<Scene> before = context.GetActiveScene();
 		context.GetActiveScene()->RequestSceneLoad(project.One);
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-		while (context.GetActiveScene() == before.lock())
+		// Compared by owner, without locking the weak pointer: a reference taken here could be the last one when the release
+		// job lets go of the replaced scene, which would then be destroyed on this thread.
+		const auto isBefore = [&before](const Ref<Scene>& scene) { return !before.owner_before(scene) && !scene.owner_before(before); };
+		while (isBefore(context.GetActiveScene()))
 		{
 			REQUIRE(std::chrono::steady_clock::now() < deadline);
 			context.Update(Timestep(1.0f / 60.0f));

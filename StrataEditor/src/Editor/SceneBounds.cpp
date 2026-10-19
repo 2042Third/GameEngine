@@ -2,8 +2,11 @@
 
 #include "Editor/SceneEdit.h"
 
+#include <Strata/Animation/AnimationComponents.h>
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Physics/PhysicsComponents.h>
 #include <Strata/Renderer/Mesh.h>
+#include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneServices.h>

@@ -3,6 +3,7 @@
 #include "Scene/SceneTestUtils.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/ComponentRegistry.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/EntityPrototype.h"
@@ -10,6 +11,7 @@
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/UnknownComponents.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 

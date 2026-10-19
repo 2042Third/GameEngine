@@ -13,7 +13,11 @@
 #include "UI/ProjectDialogs.h"
 #include "UI/RecoveryDialog.h"
 
-#include <Strata.h>
+#include <Strata/Core/Base.h>
+#include <Strata/Core/Layer.h>
+#include <Strata/Core/Timestep.h>
+#include <Strata/Core/UUID.h>
+#include <Strata/Events/Event.h>
 
 #include <array>
 #include <chrono>

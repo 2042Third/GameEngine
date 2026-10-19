@@ -27,15 +27,37 @@ means `Strata/src/Strata/Scene/Scene.h`.
 The root `CMakeLists.txt` adds `Strata/vendor`, `StrataScriptCore` and `Strata`, then the optional targets
 (`STRATA_BUILD_EDITOR`, `STRATA_BUILD_RUNTIME`, `STRATA_BUILD_CLI`, `STRATA_BUILD_TESTS`). An arrow means "links".
 
+**The layer table is the build.** `Strata/CMakeLists.txt` calls `strata_add_layer_libraries` (`CMake/StrataLayers.cmake`)
+with `StrataTests/Architecture/Layers.json`: it globs the engine's sources once (the extensions `LayeringAnalyzer` reads,
+other operating systems' `Platform/<OS>/` folders left out), gives each file to the one layer whose `Paths` match it and
+whose `Exclude` does not (the same glob semantics as `MatchesGlob`; a file in no layer or in two fails the configure,
+naming it), and makes one static library per layer, `Strata_<Layer>` (alias `Strata::<Layer>`), that links `PUBLIC`
+exactly the built layers of its `MayInclude`: a library can only link what its layer may include. Every layer library
+gets `strata_configure_target`, the precompiled header `stpch.h` and `StrataEngineCodegen` (`PRIVATE`: the instruction
+sets Jolt requires of its users and its definitions, the code generation every engine object had while the engine was one
+library that linked Jolt; `strata_engine_cpu_options` gives builds without the physics module the same instruction sets,
+and the configure checks them against Jolt's whenever Jolt is built). Layers the table marks `"Tooling": true`
+(AssetPipeline, Network, ImGui) are `EXCLUDE_FROM_ALL`; a layer with `"Option"` is built only when that CMake option is
+on: Physics, Audio and Animation (`STRATA_WITH_PHYSICS`, `_AUDIO`,
+`_ANIMATION`, with their vendor libraries; `ST_WITH_*` definitions tell code which it has, Docs/DeveloperGuide.md,
+"Optional modules"). `Strata` is an `INTERFACE` library of every built layer a
+game contains, `StrataTooling` one of the tooling layers. CMake writes `<build>/Strata/LayerLibraries.json` at the end of
+the configure (each layer's target, whether it is built, its sources and the layers its library really links, read from
+the target once every directory added its links), which `Architecture.Libraries` checks against the table. A new layer is a `Layers.json` entry only.
+
 ```mermaid
 graph TD
   Editor[StrataEditor exe] --> EditorUI[StrataEditorUI static]
   EditorUI --> EditorCore[StrataEditorCore static]
-  EditorCore --> Strata[Strata static]
+  EditorUI --> ImGuiLayer[Strata::ImGui]
+  EditorCore --> Strata[Strata interface: the runtime layers]
+  EditorCore --> Pipeline[Strata::AssetPipeline]
+  EditorCore --> Network[Strata::Network]
   Runtime[StrataRuntime exe] --> Strata
   CLI[StrataCLI exe] --> CLILib[StrataCLILib static]
-  CLILib --> Strata
+  CLILib --> Network
   Tests[StrataTests exe] --> Strata
+  Tests --> Tooling[StrataTooling interface: the tooling layers]
   Tests --> EditorUI
   Tests --> CLILib
   Tests --> ScriptCore
@@ -43,6 +65,37 @@ graph TD
   Module[script modules] --> ScriptCore
   Strata --> Vendor[Strata/vendor]
 ```
+
+The layer libraries link each other along the layer table (Core at the bottom, Engine at the top: the composition root
+and the entry point), so static-library order follows the layer DAG on every linker; registration is explicit (the
+composition root calls every module's registration function), so no object depends on self-registration surviving the
+linker. Vendor and system libraries attach to the layers that use them (`strata_layer_link` in `Strata/CMakeLists.txt`):
+
+| Layer | Links |
+| --- | --- |
+| Core | `PUBLIC` glm, EnTT, spdlog, nlohmann_json, Tracy when enabled; `PRIVATE` shell32, ole32, bcrypt, dbghelp (Windows), CoreFoundation (Apple), Threads and dl (Linux); the generated `Version.h` and `VersionCommit.h` (`StrataVersionCommit`) |
+| App | `PRIVATE` glfw, Vulkan headers (`VulkanLoader`), stb (window icon) |
+| Asset | `PRIVATE` zstd_decompress |
+| Renderer | `PUBLIC` nvrhi; `PRIVATE` nvrhi_vk, Vulkan headers, glfw, stb, MikkTSpace, meshoptimizer; the shaders (`strata_add_shaders(Strata_Renderer ...)`) and the default font |
+| Physics | `PRIVATE` Jolt |
+| Audio | `PRIVATE` miniaudio |
+| Scripting | `PRIVATE` StrataScriptCore (`ScriptABI.h` only) |
+| Network | `PRIVATE` ws2_32 (Windows) |
+| ImGui | `PUBLIC` imgui |
+| AssetPipeline | `PRIVATE` stb, cgltf, meshoptimizer, zstd_compress |
+
+The vendor libraries only tools use (imgui, ImGuizmo, cgltf, zstd_compress, nfd) are `EXCLUDE_FROM_ALL`, and stb has one
+object per header (`Strata/vendor/Implementations/Stb*.c`; rect_pack and truetype share one), so the linker leaves out
+what a program never calls. **Games link no tooling**, proven twice: at configure time `strata_check_link_closure`
+walks what `StrataRuntime` links (`LINK_LIBRARIES` and `INTERFACE_LINK_LIBRARIES`, transitively, at the end of the
+configure, once every directory has defined its targets) and fails on a tooling layer, imgui, ImGuizmo, nfd, cgltf,
+zstd_compress, the editor's or the CLI's libraries or doctest, naming the path; and the CTest `StrataRuntime.NoTooling`
+reads the linker map StrataRuntime is linked with (`StrataRuntime.map` next to it: `/MAP`, `-Map=`, `-map,`; exports copy
+the executable only), requires the objects every runtime contains (`RuntimeApplication`, `Application`: a map without
+them proves nothing) and fails when it names an object or a library of Dear ImGui, the ImGui layer, ImGuizmo, the asset
+pipeline, the network layer or zstd's compressor
+(`StrataTests/Architecture/CheckNoTooling.cmake`). Dist builds also leave NVRHI's validation layer out
+(`VulkanGraphicsDevice.cpp`: a validation request logs a warning and makes the plain device).
 
 Each target is defined in the `CMakeLists.txt` of its directory; script modules by `strata_add_script_module()` in
 `StrataScriptCore/CMake/StrataScriptModule.cmake`. The brand assets (the strata mark as PNGs, raw RGBA and `.ico`, in
@@ -53,18 +106,22 @@ when the commit does).
 
 | Target | Kind | What it is |
 | --- | --- | --- |
-| `Strata` | static library | Engine modules, platform code, embedded shaders and default font (`Strata/src/`). |
+| `Strata_<Layer>` (`Strata::<Layer>`) | static libraries | One per layer of `Layers.json`: the engine modules, platform code, embedded shaders and default font (`Strata/src/`). |
+| `Strata`, `StrataTooling` | interface libraries | Every built layer a game contains; the tooling layers (AssetPipeline, Network, ImGui). |
+| `StrataEngineCodegen` | interface library | The compile options and definitions every engine object shares: Jolt's instruction sets, also without the physics module (`strata_engine_cpu_options`), and with it Jolt's definitions. |
 | `StrataScriptCore` | interface library | Script C ABI and header-only C++ SDK; links glm only (`StrataScriptCore/`). |
-| `StrataEditorCore` | static library | The editor without UI (`StrataEditor/src/Editor/`). |
-| `StrataEditorUI` | static library | The ImGui interface on the core: `EditorLayer`, panels, widget kit, theme, embedded fonts; links `nfd` (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer.*`). |
+| `StrataEditorCore` | static library | The editor without UI (`StrataEditor/src/Editor/`); links `Strata`, `Strata::AssetPipeline` and `Strata::Network`. |
+| `StrataEditorUI` | static library | The ImGui interface on the core: `EditorLayer`, panels, widget kit, theme, embedded fonts; links `Strata::ImGui`, and `ImGuizmo` and `nfd` privately (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer.*`). |
 | `StrataEditor` | executable | Runs the UI: `EditorApplication` (options, theme and fonts, `EditorHost`) (`StrataEditor/src/EditorApplication.cpp`). Embeds the window icon (`EditorIcon.h`); on Windows `StrataEditor.rc.in` adds the `.ico` and version information. |
-| `StrataRuntime` | executable | Plays exported games (`StrataRuntime/src/RuntimeApplication.cpp`); on Windows `StrataRuntime.rc.in` gives it (and every exported game) the `.ico`. |
-| `StrataCLILib`, `StrataCLI` | static library, executable | Automation client and MCP server (`StrataCLI/src/`). |
+| `StrataRuntime` | executable | Plays exported games (`StrataRuntime/src/RuntimeApplication.cpp`); links `Strata` only; on Windows `StrataRuntime.rc.in` gives it (and every exported game) the `.ico`. |
+| `StrataCLILib`, `StrataCLI` | static library, executable | Automation client and MCP server (`StrataCLI/src/`); links `Strata::Network` only (Core comes with it). |
 | `StrataTests` | executable | doctest suites; builds the test script modules as dependencies (`StrataTests/`). |
 | script modules | `MODULE` libraries | Game code: the tests' modules and every game project's `Scripts/`. |
 
 CTest runs the `StrataTests` suites in groups selected by suite name (`StrataTests/CMakeLists.txt`; the groups and
-labels are listed in DeveloperGuide.md, "Testing"). The perf lab is one of them: suites `Perf.*` and `PerfGPU.*`
+labels are listed in DeveloperGuide.md, "Testing"): the suites without a CTest of their own in the shards of
+`StrataTests/CoreShards.json` (`StrataTests.Core.<Shard>`, label `core`), which `ctest -j` runs side by side, and the
+corruption sweeps again in full in `StrataTests.Fuzz` (Release and Dist). The perf lab is one of them: suites `Perf.*` and `PerfGPU.*`
 (`StrataTests/src/Perf/`) measure metrics against the budgets in `StrataTests/Perf/Budgets.json`, in Release and Dist
 only, confirm a metric over its budget by measuring it again before failing (`Perf::CheckBudgetsConfirmed`), and write
 `<build>/PerfResults/<config>.json` with every attempt; `Tools/PerfStability.py` runs them repeatedly and reports how
@@ -76,11 +133,11 @@ point lights); `Perf.Editor` (editor commands), `PerfGPU.Editor` (the real `Stra
 
 What may depend on what:
 
-- `Strata` knows nothing about the editor, the runtime executable, the CLI or the tests. It links `StrataScriptCore`
-  privately and only for `StrataScript/ScriptABI.h`; it never includes the C++ SDK (comment in
-  `Strata/CMakeLists.txt`). Its public dependencies are glm, EnTT, spdlog, nlohmann_json, NVRHI, Dear ImGui and
-  ImGuizmo; Vulkan, GLFW, Jolt, miniaudio, stb, cgltf, MikkTSpace and meshoptimizer are private, so dependents do not
-  see their headers.
+- The engine's libraries know nothing about the editor, the runtime executable, the CLI or the tests. The Scripting
+  layer links `StrataScriptCore` privately and only for `StrataScript/ScriptABI.h`; it never includes the C++ SDK. The
+  public dependencies are glm, EnTT, spdlog and nlohmann_json (Core), NVRHI (Renderer) and Dear ImGui (the ImGui layer,
+  tooling); everything else is private to the layer that uses it (the table above), so dependents do not see its
+  headers. ImGuizmo is the editor UI's own.
 - Script modules link `StrataScriptCore` only and never the engine; only two entry points are exported
   (`StrataScriptModule.cmake`). See [Scripting](#scripting).
 - `StrataEditorCore` holds the editor's state and commands; `StrataEditorUI` only draws that state and calls the
@@ -89,12 +146,15 @@ What may depend on what:
 - StrataCLI's logic lives in `StrataCLILib` so that `StrataTests` can link it (`STRATA_TESTS_HAVE_CLI`). Editor and
   CLI tests compile only when those targets exist (`StrataTests/CMakeLists.txt`).
 - Platform code is in `Strata/src/Platform/` (`Windows`, `Posix`, `GLFW`, `Vulkan`), filtered per OS by
-  `Strata/CMakeLists.txt`; engine modules reach it through interfaces such as `Core/Platform.h`, `Core/Window.h`,
+  `strata_add_layer_libraries`; engine modules reach it through interfaces such as `Core/Platform.h`, `Core/Window.h`,
   `Core/CrashGuard.h`, `Core/Process.h`, `Core/DynamicLibrary.h`, `Core/FileChangeNotifier.h` and
   `Renderer/GraphicsDevice.h`. Engine code outside `src/Platform/` includes no OS headers.
 
-Applications built on `Application` (editor, runtime) get `main` from `Core/EntryPoint.h`, which calls the client's
-`CreateApplication`, runs it and returns its exit code. `StrataCLI` has its own `main` and no `Application`. On Windows
+Applications built on `Application` (editor, runtime) get `main` from `Engine/EntryPoint.h`, which calls the program's
+`CreateApplication` (`Engine/ApplicationLaunch.h`), runs the composition root with the options it returned
+(`ApplicationLaunch::Registration`), makes the application (`ApplicationLaunch::Create`), runs it and returns its exit
+code (see [Composition root and registries](#composition-root-and-registries)). `StrataCLI` has its own `main` and no
+`Application`. On Windows
 the editor and the runtime (and so every exported game) are GUI-subsystem programs, so that no console window opens with
 them; they keep `main` (`/ENTRY:mainCRTStartup`, `StrataEditor/CMakeLists.txt`, `StrataRuntime/CMakeLists.txt`). Before
 anything prints or the log opens its console sink, `main` asks the client what kind of run the command line is
@@ -113,8 +173,9 @@ process. Failures that end a program before it could do anything go through `App
 critical and, where nobody would read that (`Platform::ShouldShowErrorDialogs`: an Interactive run whose stderr is no
 terminal, pipe or file), shown in a native dialog with the advice and the log's path (`Platform::ShowErrorDialog`:
 MessageBoxW on Windows, osascript on macOS, zenity or kdialog on Linux, without new dependencies; nothing else is left
-when none can show). The Application constructor reports a missing graphics device this way (after closing its window),
-with the driver advice of `GraphicsDevice::GetDriverInstallAdvice`; the runtime reports a missing manifest and a game
+when none can show). The Application constructor reports an engine module that could not start this way, once the
+modules that started ended and its window closed (`EngineModule::GetStartFailure`): the Graphics module says that no
+usable graphics device was found, with the driver advice of `GraphicsDevice::GetDriverInstallAdvice`; the runtime reports a missing manifest and a game
 that cannot start. Console runs never show dialogs, so tools and servers are never stopped by one;
 `STRATA_ERROR_DIALOG_FILE` makes `ReportFatalError` write the dialog's title and text to that file instead (tests).
 `EndToEnd.StandardStreams` checks pipes, the terminal (through a helper with a hidden console, `Tests::RunInConsole`,
@@ -124,8 +185,10 @@ subsystems.
 
 ## Engine modules
 
-**Core** (`Core/`). `Application` owns the window, the graphics device, the layer stack and the main-thread queue and
-runs the frame loop; `Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
+**Core** (`Core/`). `Application` owns the window, the layer stack, the program's engine modules
+(`Core/EngineModule.h`: the graphics device, audio, ImGui, the project; see
+[Application and frame loop](#application-and-frame-loop)) and the main-thread queue and runs the frame loop;
+`Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
 `Platform/GLFW/GLFWWindow` (`SetIcon` takes RGBA images of several sizes; macOS and Wayland windows have no icon of
 their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`; the console and
 the log file are written by the `BackgroundLogSink`'s thread, so a log call waits for them only for warnings and errors,
@@ -178,10 +241,18 @@ go through it, mostly via `Scene/ComponentAccess`.
 
 **Scene** (`Scene/`). `Scene` owns the EnTT registry, the UUID map, the hierarchy and the cached world transforms,
 and while it runs its scene systems (see [Scene runtime lifecycle](#scene-runtime-lifecycle)). `Entity` is a
-non-owning handle. Components are plain structs in `Components.h`, registered with stable names in
-`ComponentRegistration.cpp` (ID, Name, Transform, Relationship, Tag, Inactive, PrefabInstance, Camera, MeshRenderer,
-DirectionalLight, PointLight, SpotLight, SkyLight, PostProcess, Text, RigidBody, BoxCollider, SphereCollider,
-CapsuleCollider, MeshCollider, CharacterController, AudioSource, AudioListener, Skin, Animator, AttachToJoint, Script).
+non-owning handle. Components are plain structs, each declared and registered with a stable name by the module that
+owns it (`<Module>/<Module>Components.h`, registered from `Register<Module>Module`): Scene's `Components.h` holds ID,
+Name, Transform, Relationship, Tag, Inactive, PrefabInstance and Camera (registered in `ComponentRegistration.cpp`) and
+the types of two components other modules register because sibling layers read them (`MeshRendererComponent`, registered
+by the renderer: physics' mesh colliders and animation read it; `SkinComponent`, registered by animation: the renderer,
+which may not include Animation, makes skinned proxies from it); `Renderer/RendererComponents.h` the lights, SkyLight,
+PostProcess and Text; `Physics/PhysicsComponents.h` RigidBody, the colliders and CharacterController;
+`Audio/AudioComponents.h` AudioSource and AudioListener; `Animation/AnimationComponents.h` Animator and AttachToJoint;
+`Scripting/ScriptingComponents.h` Script. The composition root's module order keeps `ComponentRegistry::GetAll` in one
+order (Scene's, the renderer's, physics', audio's, animation's, then Script), so the Inspector, Add Component and
+`component.list` list them as before (`Reflection.ComponentSchema` checks names, metadata and order against
+`StrataTests/Architecture/ComponentSchema.json`).
 `ComponentAccess`
 reads and writes them with validation and change signals, `SceneSerializer` writes versioned JSON (keeping components
 it cannot read, see
@@ -239,7 +310,9 @@ DeveloperGuide.md, "Rendering".
 **Physics** (`Physics/`). `PhysicsSystem` is the "Physics" scene system (Play and Simulate). `PhysicsWorld` builds a
 Jolt world from RigidBody and collider components and steps it; `PhysicsRuntime` reference-counts Jolt's global
 state; `PhysicsJobSystem` runs Jolt's jobs on the engine's worker pool; `PhysicsMeshShapes` cooks mesh collider shapes
-on jobs and caches them process-wide; `AssetMeshProvider` supplies mesh data from the active asset manager.
+on jobs and caches them process-wide; `AssetMeshProvider` supplies mesh data from the active asset manager, reading
+the triangles through `MeshGeometryRegistry` (`Asset/MeshGeometry.h`: the renderer registers the reader of its `Mesh`,
+the full-detail level of every submesh with indices offset by its base vertex), so physics never depends on the renderer.
 `PhysicsTypes.h` has the settings and statistics. Collision layers are the scene's (`SceneSettings::PhysicsLayers`,
 `Scene/PhysicsLayerSettings.h`: names for up to 32 layers and a symmetric matrix of which collide, everything by
 default); `PhysicsSystem` gives its world that matrix, restricted by the default settings' (`GetDefaultSettings`), when
@@ -375,30 +448,32 @@ runtime module (tooling, the asset pipeline, is handed in by the programs that u
 
 ### Layers
 
-The modules form a stack of layers, defined by path patterns in `StrataTests/Architecture/Layers.json` (the patterns
-stand in for the library split of wave 4, so the rules apply before files move). A file may include files of its own
-layer and of the layers it lists, which are always lower ones:
+The modules form a stack of layers, defined by path patterns in `StrataTests/Architecture/Layers.json`, and each layer
+is a library of its own (`Strata_<Layer>`, made from the table: see [Targets and dependencies](#targets-and-dependencies)).
+A file may include files of its own layer and of the layers it lists, which are always lower ones; layers marked
+`Tooling` (AssetPipeline, Network, ImGui) are never part of a game:
 
 | Layer | Files (under `Strata/src`) | May include |
 | --- | --- | --- |
 | Core | `Core/**` except the application shell, `Math/**`, `stpch.h`, `Platform/Windows`, `Platform/Posix` (not the sockets) | nothing |
 | Input | `Events/**`, `Input/**` | Core |
-| App | `Core/Application.*`, `Layer.*`, `LayerStack.*`, `Window.h`, `EntryPoint.h`, `Platform/GLFW/**`, `Platform/Vulkan/VulkanLoader.*` | Core, Input |
+| App | `Core/Application.*`, `EngineModule.*`, `Layer.*`, `LayerStack.*`, `Window.h`, `Platform/GLFW/**`, `Platform/Vulkan/VulkanLoader.*` | Core, Input |
 | Asset | `Asset/**` except the pipeline files | Core (and no NVRHI or Vulkan header) |
 | Reflection | `Reflection/**` | Core, Asset |
 | Scene | `Scene/**` | Core, Asset, Reflection |
 | Renderer | `Renderer/**`, `Platform/Vulkan/**` | Core, Input, App, Asset, Reflection, Scene |
-| Physics, Audio | `Physics/**`, `Audio/**` | Core, Asset, Reflection, Scene |
+| Physics | `Physics/**` | Core, Asset, Reflection, Scene |
+| Audio | `Audio/**` | Core, App (its engine module), Asset, Reflection, Scene |
 | Animation | `Animation/**` | Core, Asset, Reflection, Scene |
 | Scripting | `Scripting/**` | Core, Input, Asset, Reflection, Scene |
-| Project | `Project/**` | Core, Asset, Reflection |
+| Project | `Project/**` | Core, App (its engine module), Asset, Reflection |
 | Runtime | `Runtime/**` | Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Scripting, Project |
-| Network | `Network/**`, `Platform/*/*Socket.cpp` | Core |
-| ImGui | `ImGui/**` | Core, Input, App, Renderer |
-| AssetPipeline | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `TextureCooker.*`, `BC7Encoder.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio, Animation (the glTF importer writes skeletons and clips) |
-| Engine | `Engine/**`, `Strata.h` | everything but AssetPipeline (shipped games link the composition root too; see below) |
+| Network (tooling) | `Network/**`, `Platform/*/*Socket.cpp` | Core |
+| ImGui (tooling) | `ImGui/**` | Core, Input, App, Renderer |
+| AssetPipeline (tooling) | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `TextureCooker.*`, `BC7Encoder.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio, Animation (the glTF importer writes skeletons and clips) |
+| Engine | `Engine/**` | the layers a game contains: Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Animation, Scripting (shipped games link the composition root and the entry point too; see below) |
 
-`Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in `StrataTests.Core`) reads every C, C++ and
+`Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in the shard `StrataTests.Core.Core`) reads every C, C++ and
 Objective-C(++) source and header under `Strata/src` (`STRATA_SOURCE_DIR`; `.h`, `.hpp`, `.inl`, `.c`, `.cpp`, `.m`, `.mm`,
 so the macOS platform code too), parses its `#include`s, quoted and angle-bracketed (`Strata/src` is a public include
 directory, so `<Strata/...>` reaches engine headers too; `LayeringAnalyzer`: comments, literals and `#if 0` blocks
@@ -408,7 +483,10 @@ and third-party headers match no layer and are checked only against the prefixes
 layers and fails on every file that is in no layer or in several, on every forbidden include that is not in
 `StrataTests/Architecture/LayeringAllowlist.txt`, and on every allowlist line that matches nothing. Each allowlist line
 names the include, the roadmap workstream that removes it and the reason; the list holds exactly `MaxAllowlistEntries`
-lines (8: the application shell wiring services and physics reading renderer meshes), so it can only shrink. Scripting
+lines, so it can only shrink; it is empty (`MaxAllowlistEntries` 0). The application shell, which used to start the
+renderer, audio and ImGui and release the project itself, runs engine modules instead (`Core/EngineModule.h`, in App:
+Audio and Project implement it, a downward dependency their `Notes` record), and physics, which used to read the
+renderer's `Mesh`, reads mesh geometry through the registry the renderer fills (`Asset/MeshGeometry.h`). Scripting
 and Audio, which used to include the physics and audio systems, reach them through scene services (see
 [Scene services](#scene-services)); the asset layer, which used to record uploads on the renderer's command list, records
 them into the `AssetUploadContext` the renderer provides through the engine service `IAssetGraphics`
@@ -419,36 +497,65 @@ them into the `AssetUploadContext` the renderer provides through the engine serv
 The engine is extended through registries rather than through code that knows its modules: `ComponentRegistry`
 (components), `AssetLoaderRegistry` (stored bytes to asset objects, and the prefixes partial loads read),
 `AssetImporterRegistry` (source files to stored bytes), `AssetManagerExtensionRegistry` (work modules do for every asset
-manager: the texture streamer), `BuiltinAssets` (objects of the built-in assets) and `SceneSystemRegistry` (runtime
-systems of playing scenes).
+manager: the texture streamer), `BuiltinAssets` (objects of the built-in assets), `MeshGeometryRegistry` (the triangles of
+mesh assets for modules that do not draw them: physics) and `SceneSystemRegistry` (runtime systems of playing scenes).
 `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`) fills them, once per process, before anything reads
-them:
+them. Its modules are a table (`c_BuiltinModules`: a name and a registration function each, lower layers first), run in
+order but for those `ModuleRegistrationOptions::Exclude` names; `Engine::GetBuiltinModuleNames` lists the table and
+`Engine::GetRegisteredModules` what registered:
 
 ```text
 open the registries (BeginRegistration; not the importers')
-RegisterSceneModule        Scene/SceneRegistration.cpp         components (ComponentRegistration.cpp); Scene, Prefab, Model loaders
-RegisterRendererModule     Renderer/RendererRegistration.cpp   Texture (with its prefix), Mesh, Material, Font loaders; built-in
-                                                               meshes and material; the texture streamer of every manager
-RegisterScriptingModule    Scripting/ScriptingRegistration.cpp "Scripting" system
-RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     "Physics" system
-RegisterAudioModule        Audio/AudioRegistration.cpp         AudioClip loader, "Audio" system
-RegisterAnimationModule    Animation/AnimationRegistration.cpp Skeleton, AnimationClip, AnimationController loaders, "Animation" system
+RegisterSceneModule        Scene/SceneRegistration.cpp         its components (ComponentRegistration.cpp); Scene, Prefab, Model
+                                                               loaders
+RegisterRendererModule     Renderer/RendererRegistration.cpp   its components (RendererComponents.cpp: MeshRenderer, lights, sky,
+                                                               post-processing, text); Texture (with its prefix), Mesh, Material,
+                                                               Font loaders; built-in meshes and material; the texture streamer
+                                                               of every manager; the Mesh geometry reader
+RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     its components (PhysicsComponents.cpp, with collider gizmos);
+                                                               "Physics" system
+RegisterAudioModule        Audio/AudioRegistration.cpp         its components (AudioComponents.cpp); AudioClip loader, "Audio"
+                                                               system
+RegisterAnimationModule    Animation/AnimationRegistration.cpp its components (AnimationComponents.cpp: Skin, Animator,
+                                                               AttachToJoint); Skeleton, AnimationClip, AnimationController loaders,
+                                                               "Animation" system
+RegisterScriptingModule    Scripting/ScriptingRegistration.cpp the Script component (ScriptingComponents.cpp); "Scripting" system
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
 ComponentRegistry::Freeze
+log the registered modules, the scene systems' update order and the soft constraints naming absent systems
 ```
 
-- **Callers.** The `Application` constructor calls it first thing, without options, so every application is covered;
-  a client that needs options calls it earlier. The editor does, in `CreateApplication`, to hand in the asset pipeline
-  (`ModuleRegistrationOptions::AssetPipeline = RegisterAssetPipeline`); `StrataTests` does in `main`, before doctest
-  runs and the helper modes start. StrataRuntime keeps the constructor's call: games read cooked packs, and since the
-  composition root never names the importers (the Engine layer may not include AssetPipeline), the linker leaves them
-  out of the runtime. A second call is a no-op (with an error when it carries an asset pipeline or `Extra`
-  registrations, which would be lost).
+- **Leaving modules out.** A build without an optional module has no row for it in the table (`#if ST_WITH_<MODULE>`, the
+  only place outside the asset pipeline, the runtime program and tests that tests one). In a full build,
+  `ModuleRegistrationOptions::Exclude` registers the engine without some of its modules, as a game without them would run
+  (tests: `--strata-test-helper=register-without`). Scene and Renderer are part of every
+  engine: excluding them is refused with an error, as is a name the table does not hold. Nothing else changes for the
+  absent modules: their components load as unknown components and save back unchanged, the other modules' soft
+  constraints ignore their systems, and scripts calling into their services are told that the scene plays without them
+  ("the scene plays without physics (the engine has no physics module)") and get their calls' failure values.
+
+- **Callers.** The entry point calls it (`Engine/EntryPoint.h`), after the program's `CreateApplication` returned its
+  `ApplicationLaunch` and before `ApplicationLaunch::Create` makes the application, with the options the program put in
+  `ApplicationLaunch::Registration`: the editor hands in the asset pipeline
+  (`ModuleRegistrationOptions::AssetPipeline = RegisterAssetPipeline`), StrataRuntime nothing (games read cooked packs,
+  and since the composition root never names the importers, the Engine layer may not include AssetPipeline, the linker
+  leaves them out of the runtime). `StrataTests` calls it in `main`, before doctest runs and the helper modes start.
+  `Application` never calls it: a program that forgot it stops at the first registry it uses (below). A second call is
+  a no-op (with an error when it carries an asset pipeline or `Extra` registrations, which would be lost).
 - **Use before registration** fails `ST_CORE_VERIFY` with a message naming `Engine::RegisterBuiltinModules`, in every
   registry: a program that forgot the composition root stops at its first lookup instead of running without
   components or loaders. The importer registry stays closed in programs without the asset pipeline, so a game that
   reached for an importer stops there too.
+- **Extra data and its references.** A component may keep data its properties cannot express (the Script component's
+  scripts and field values), which it serializes itself (`ComponentInfoBuilder::Extra`), and describes the entity and
+  asset references in it (`ComponentInfoBuilder::ExtraReferences`, `ComponentExtraReferences`: `Visit` reports each with
+  a slot and subslot the component chooses, `Set` writes one, `Equals` compares two components' extra data with the
+  first one's entity references mapped, `VisitJson` reads them from the serialized form). Code that works on every
+  component uses these and never names the type: `SceneSerializer`'s entity remapping (copies, duplicates, pastes),
+  `EntityPrototype`'s reference list and the instantiation that writes the copies' references, `EntityTemplate::CompareInstance`
+  (prefab status) and `AssetDependencies::ScanEntities` (the assets a document references). The `custom-component` helper
+  mode checks them with a game's component.
 - **Component lifecycle.** `ComponentRegistry` is closed, then open (`BeginRegistration`: `Register<T>` is valid from
   any registering code), then frozen (`Freeze`): the set of components never changes afterwards, so reads take no lock
   and are safe from any thread (asset loads deserialize scenes on workers). `Register<T>` after `Freeze`, for a type
@@ -469,37 +576,98 @@ ComponentRegistry::Freeze
 
 ## Application and frame loop
 
-Startup (`Application::Application`, `Core/Application.cpp`): `Engine::RegisterBuiltinModules` (a no-op when the client
-registered the modules already), opt the process out of execution-speed power throttling
+`Application` (`Core/Application.cpp`) creates the window and runs the loop; every engine service a program uses runs
+as an **engine module** (`Core/EngineModule.h`, App layer) that the program lists in
+`ApplicationSpecification::Modules` (factories). `Application` includes no module's header and calls no module's code:
+it calls the modules' hooks.
+
+- **The interface.** `EngineModule`: `GetName`, `GetDependencies` (`EngineModuleDependency { Name, Required }`; a
+  dependency that is not required only orders, if the module is there), `OnInit(EngineContext&)` (the application, its
+  window or null, the modules), `GetStartFailure` (what a person is told when `OnInit` failed), `OnBeginFrame`
+  (returns `EngineFrameAction::Continue`, `Skip` or `Close`), `OnUpdate`, `OnRenderUI`, `OnEndFrame`, `OnEvent`,
+  `OnStop`, `OnRelease`, `OnShutdown`. The frame hooks get an `EngineFrame` (the timestep, `WaitSeconds`, the layer
+  stack).
+- **The registry.** `EngineModuleRegistry` (same files; `Application::GetModules`) makes the modules and sorts them
+  topologically, keeping the program's listing order where the dependencies leave a choice (Kahn's algorithm taking the
+  first ready module). It refuses to start a program, naming the modules, for a factory that makes none, two modules of
+  one name, a missing required dependency or a cycle (the message leaves out modules that only wait for the cycle).
+  `Find<T>()` finds a module by `T::c_Name` (no RTTI); `GetAll()` lists them in order.
+- **The built-in modules**, each in its own module's folder:
+
+  | Module | `c_Name`, specification | What it does |
+  | --- | --- | --- |
+  | `Renderer/GraphicsModule` | `"Graphics"`, `GraphicsModuleSpecification { Validation, TransferQueueUploads }` | The device (a swapchain only with a window), `Renderer::Init`/`Shutdown`, the frame's begin and present, back-buffer captures (`RequestBackBufferCapture`), `GetDevice` |
+  | `Audio/AudioModule` | `"Audio"`, `AudioModuleSpecification { NullDevice }` | `AudioEngine::Init` (a failure is logged, "Audio is unavailable; continuing without sound", and the program runs on), the null device's mix, `AudioEngine::Update`, `Shutdown` |
+  | `ImGui/ImGuiModule` | `"ImGui"`, requires Graphics, `ImGuiModuleSpecification { LayoutFile }` | Pushes the `ImGuiLayer` overlay (`GetLayer`: theme, fonts, UI scale) and draws the UI; fails without a window |
+  | `Project/ProjectModule` | `"Project"` | Lets the active asset manager and project go (`AssetManager::SetActive(nullptr)`, `Project::SetActive(nullptr)`) |
+
+- **The programs' lists:**
+
+  | Program | Modules |
+  | --- | --- |
+  | StrataEditor, windowed | Graphics, Audio, ImGui (`--layout` or the user's layout file), Project |
+  | StrataEditor `--headless` | Graphics (offscreen), Audio (null device), Project |
+  | StrataEditor `--no-gpu` | Audio (null device), Project |
+  | StrataRuntime, windowed | Graphics, Audio, Project: no ImGui |
+  | StrataRuntime `--headless` | Audio (null device), Project: no window, no Graphics |
+  | `Core.Application` tests | none, or Audio (null device) |
+
+  Code that needs a module finds it: the editor's `ApplicationEditorHost` reaches the device, the UI scale and
+  screenshots through `GetModules().Find<GraphicsModule>()` and `Find<ImGuiModule>()`; without the Graphics module a
+  screenshot is answered with an empty image on the next frame (`SubmitToMainThread`), or, when it was asked for on the
+  last frame, once the loop ends, while the layers that asked still exist.
+- **Job threads per program.** Each program sets its `JobSystemSpecification`: StrataRuntime runs the default workers,
+  2 I/O and 2 background threads (a game's only background work is `Scene::ReleaseInBackground`); the editor and the
+  tests keep the defaults, whose background pool imports and compresses.
+
+Startup (`Application::Application`): opt the process out of execution-speed power throttling
 (`Platform::DisableExecutionSpeedThrottling`: Windows 11 otherwise runs processes whose windows are in the background or
 covered at a lower quality of service, on hybrid processors on the efficiency cores, where an editor frame takes 1.3 to
 1.9 times as long; the test runner does the same, so perf suites measure what applications get), set the working
-directory, `JobSystem::Init`, create
-the window unless headless, `Input::Reset`, create the graphics device, swapchain and `Renderer` when
-`EnableRenderer` is set (no usable device: exit code 1), `AudioEngine::Init` (the null device when headless), and push
-the `ImGuiLayer` overlay. The client's constructor then pushes its layer (`EditorLayer`, `RuntimeLayer`).
+directory, `JobSystem::Init`, create the window unless headless, `Input::Reset`, then make, order and start the modules
+(`OnInit` in dependency order). A module whose `OnInit` fails is logged as "Engine module '<name>' could not start; the
+application cannot run"; the layers the modules that started pushed (ImGui's overlay) detach, those modules get
+`OnRelease`, the job system stops, they get `OnShutdown`, the window closes, then `Application::ReportFatalError` tells
+the person what the module described (`GetStartFailure`), and the application does not run (exit code 1). The program's constructor then pushes its layer (`EditorLayer`,
+`RuntimeLayer`) when `IsRunning()`.
 
-One frame (`Application::Run` and `RunFrame`):
+The hooks, in the order of the program's frame:
+
+| Hook | Order | When, and what the built-in modules do there |
+| --- | --- | --- |
+| `OnInit` | dependency | Application constructor, after `JobSystem::Init`, the window and `Input` |
+| `OnEvent` | dependency | Each event, after the application's own bookkeeping (minimized), **before** the layers. A handled event stops there. |
+| `OnBeginFrame` | dependency | After the Input stage. Graphics: vsync, `GraphicsDevice::BeginFrame` (its wait added to `frame.WaitSeconds`), `Renderer::BeginFrame`. `Skip`: the frame is not counted and the loop waits 16 ms; `Close`: device lost. The modules after one that skipped or closed get no `OnBeginFrame`, and no module the frame's other hooks. |
+| `OnUpdate` | dependency | After the layers' `OnUpdate`. Audio: `AdvanceNullDevice` on the null device, `AudioEngine::Update`. |
+| `OnRenderUI` | dependency | ImGui: the `Editor.UI` stage, `ImGuiLayer::Begin`, every layer's `OnImGuiRender`, `Renderer::PrepareBackBuffer`, `End(backBuffer)`. The frame's work time ends after this hook. |
+| `OnEndFrame` | **reverse** | Rendered frames only. Graphics, last because everything depends on it: `PrepareBackBuffer`, back-buffer captures, the `Present` stage, `EndFrame`. |
+| `OnStop` | reverse | Once, when `Run`'s loop ends. Graphics answers outstanding captures with an empty image and waits for the device to idle. |
+| `OnRelease` | reverse | In `~Application`, after the layers are cleared. Project: `AssetManager::SetActive(nullptr)`, `Project::SetActive(nullptr)`. |
+| `OnShutdown` | reverse | After the main-thread queue, `JobSystem::Shutdown` and the queue again. Audio: `AudioEngine::Shutdown`; Graphics: `Renderer::Shutdown`, then the device. |
+
+Modules that never started get no hook after `OnInit`. One frame (`Application::Run` and `RunFrame`) with the editor's
+and the runtime's modules:
 
 ```text
  1  ExecuteMainThreadQueue           functions queued with Application::SubmitToMainThread
  2  Input::BeginFrame                new input frame; queued simulated input applies
- 3  Window::ProcessEvents            glfwPollEvents: Input::Process*, events through the layers
+ 3  Window::ProcessEvents            glfwPollEvents: Input::Process*, events through the modules and the layers
                                      window minimized: sleep 16 ms, frame skipped (not counted)
- 4  GraphicsDevice::BeginFrame       cannot begin (e.g. mid-resize): sleep 16 ms, skipped; device lost: close
-    Renderer::BeginFrame
+ 4  EngineModule::OnBeginFrame       Graphics: vsync, GraphicsDevice::BeginFrame (cannot begin, e.g. mid-resize: Skip,
+                                     sleep 16 ms; device lost: Close), Renderer::BeginFrame
  5  Layer::OnUpdate(timestep)        every layer in stack order: the editor's or the game's work, below
- 6  AudioEngine::AdvanceNullDevice   only while mixing without an output device
-    AudioEngine::Update              reclaims finished one-shots
- 7  RenderImGui                      ImGuiLayer::Begin, every Layer::OnImGuiRender, Renderer::PrepareBackBuffer (the GPU
-                                     waits for the swapchain image from here on), ImGuiLayer::End
- 8  Renderer::PrepareBackBuffer (frames without UI), back-buffer captures, GraphicsDevice::EndFrame (present)
+ 6  EngineModule::OnUpdate           Audio: AudioEngine::AdvanceNullDevice (only while mixing without an output device),
+                                     AudioEngine::Update (reclaims finished one-shots)
+ 7  EngineModule::OnRenderUI         ImGui: ImGuiLayer::Begin, every Layer::OnImGuiRender, Renderer::PrepareBackBuffer (the
+                                     GPU waits for the swapchain image from here on), ImGuiLayer::End
+ 8  EngineModule::OnEndFrame         reverse; Graphics: Renderer::PrepareBackBuffer (frames without UI), back-buffer
+                                     captures, GraphicsDevice::EndFrame (present)
     frame counted; MaxFrames (--frames) closes the application; the frame pacer waits (frame rate cap)
 ```
 
-`Application::GetLastFrameWorkTime` is the CPU time of the last frame: steps 1 to 7 without the wait inside
-`GraphicsDevice::BeginFrame` (for the GPU's earlier frames and the swapchain image), so it measures what a frame costs
-whatever the display's refresh rate. The editor records it every frame (`EditorContext::RecordFrameTime`) and
+`Application::GetLastFrameWorkTime` is the CPU time of the last frame: steps 1 to 7 without what the modules report
+waiting for (`EngineFrame::WaitSeconds`: the wait inside `GraphicsDevice::BeginFrame` for the GPU's earlier frames and
+the swapchain image), so it measures what a frame costs whatever the display's refresh rate. The editor records it every frame (`EditorContext::RecordFrameTime`) and
 `editor.wait` reports statistics of the frames it waited through (`frameTimes`), which is how command scripts and the
 `PerfGPU.Editor` perf test measure editor frames.
 
@@ -531,11 +699,14 @@ there through `ViewportRenderer`. Last, idle throttling picks the frame rate cap
 The runtime's layer update (`RuntimeLayer::OnUpdate`, `StrataRuntime/src/RuntimeApplication.cpp`):
 `GameRuntime::Update` (asset finalization and eviction, `Scene::OnUpdateRuntime`, script-fault check, scene requests),
 then the headless script-crash and quit checks, then `GameRenderer::Render` into the back buffer (windowed only) and the
-`--screenshot` request on the last frame. The runtime has no ImGui.
+`--screenshot` request on the last frame. The runtime runs no ImGui: its programs list no ImGui module.
 
-Shutdown (`Application::~Application`): layers detach and are deleted top-down, the active asset manager and project
-are released, the main-thread queue drains, `JobSystem::Shutdown` runs the queued jobs and joins the threads, then
-audio, the renderer, the device and the window go.
+Shutdown: when `Run`'s loop ends, the main-thread queue drains (what the last frame posted runs as the next frame would
+have run it, before `main` reads the exit code), then the program's `OnShutdown` and the modules' `OnStop` run (reverse). In
+`Application::~Application` the layers detach and are deleted top-down, the modules get `OnRelease` (reverse: the
+Project module releases the active asset manager and project), the main-thread queue drains, `JobSystem::Shutdown` runs
+the queued jobs and joins the threads, the queue drains again, the modules get `OnShutdown` (reverse: audio, then the
+renderer and the device) and are destroyed, and the window goes.
 
 ### Frame profiler
 
@@ -558,8 +729,8 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
-| `Editor.UI` | `Application::RenderImGui`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
-| `Present` | `GraphicsDevice::EndFrame`, after the work time is measured (outside the frame time) |
+| `Editor.UI` | `ImGuiModule::OnRenderUI`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
+| `Present` | `GraphicsDevice::EndFrame` (`GraphicsModule::OnEndFrame`), after the work time is measured (outside the frame time) |
 
 Modules and games register more (`RegisterStage`, up to 64); a scene system names its stage in its descriptor. Each frame
 also records how busy the job system's worker, I/O and background threads were since the previous frame
@@ -580,9 +751,9 @@ are, in update order:
 | System | Class | Modes | Order | Role |
 | --- | --- | --- | --- | --- |
 | Scripting | `ScriptSystem` | Play | | Script instances of the active `ScriptEngine` (null engine: no scripts). |
-| Animation | `AnimationSystem` | Play | After Scripting, Before Physics | Animators in `OnUpdate`: poses, root motion, attachments, events (see [Animation](#animation)). |
-| Physics | `PhysicsSystem` | Play, Simulate | After Scripting | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
-| Audio | `AudioSystem` | Play | After Physics | Sources and listener, in `OnLateUpdate` after scripts and physics. |
+| Animation | `AnimationSystem` | Play | After Scripting, Before Physics (soft) | Animators in `OnUpdate`: poses, root motion, attachments, events (see [Animation](#animation)). |
+| Physics | `PhysicsSystem` | Play, Simulate | After Scripting (soft) | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
+| Audio | `AudioSystem` | Play | After Scripting, Animation, Physics (soft) | Sources and listener, in `OnLateUpdate` after everything that moves them. |
 
 - **Update order.** A `SceneSystemDescriptor` names the systems it runs `After` and `Before`. The registry keeps the
   order of these constraints that follows registration order as far as they allow: the first registered system runs as
@@ -591,9 +762,15 @@ are, in update order:
   system that runs ahead of them, and a system no constraint involves runs after every system registered before it: a
   later "Wind" that runs `Before` Physics does not pull an unconstrained "CameraFollow" registered between them ahead of
   Physics. The order is recomputed on every `Register` and `Unregister` (`Scene/SceneSystem.cpp`).
-  A constraint that names an unregistered system or the system itself, or that closes a cycle, makes `Register` return
-  false with an error naming the systems (e.g. `TestA -> TestB -> TestA`) and leaves the registry unchanged; so does
-  unregistering a system others name. Changes are refused while any scene runs (`Scene::GetRunningSceneCount`): the
+  Constraints are hard (`After`, `Before`: the named system must be registered) or soft (`AfterIfPresent`,
+  `BeforeIfPresent`: they order the system against the named one when it is registered, are ignored while it is not, and
+  apply as soon as it registers, the order being recomputed over every registered system). Constraints toward another
+  module's system are soft, so that a build without that module runs (the built-ins' are); hard ones are for systems of
+  one module or of a module it cannot work without. A hard constraint that names an unregistered system, a constraint
+  that names the system itself, or one (hard or soft) that closes a cycle makes `Register` return false with an error
+  naming the systems (e.g. `TestA -> TestB -> TestA`) and leaves the registry unchanged; so does unregistering a system
+  others name in a hard constraint (soft ones never keep a system from going). `GetAbsentSoftConstraints` lists the soft
+  constraints that name absent systems, which the composition root logs with the update order. Changes are refused while any scene runs (`Scene::GetRunningSceneCount`): the
   running scenes created their systems from the registry.
 - **Lookup.** `MakeSceneSystemDescriptor<T>` records the class (`SceneSystemDescriptor::Type`); `OnRuntimeStart` maps
   it to the created system, so `Scene::GetSystem<T>` is a hash lookup of the exact class (null for a class that is not
@@ -675,8 +852,8 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   the loading worker), into an `EntityPrototype` (`Scene/EntityPrototype.h`): the entities in hierarchy order, with
   each entity's ID and parent index, its registered components (real objects of their types, kept in one compact array
   per type, `ComponentValueArray`: an EnTT storage allocates a page of 1,024 elements at a time, which made a small
-  prefab's private registry cost about 400 KiB) and the entity references among them (entity properties and script
-  fields). The JSON is not kept (`GetSnapshot` and `Serialize`
+  prefab's private registry cost about 400 KiB) and the entity references among them (entity properties, and entity
+  references in components' extra data: script fields, through `ComponentInfo::ExtraReferences`). The JSON is not kept (`GetSnapshot` and `Serialize`
   write it from the prototype). Instantiating copies the prototype (`Scene::BeginInstantiation`,
   `ContinueInstantiation`, `Instantiate`; `Scene/SceneInstantiation.cpp`): the scene's capacity is checked first, the
   components are copied with `ComponentInfo::EmplaceCopy` (on_construct), the entities are linked parents first, references
@@ -763,7 +940,9 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
 ### Scene services
 
 Systems of different modules use each other through interfaces in the Scene layer (`Scene/SceneServices.h`), so that
-Scripting and Audio never include Physics or Audio headers (the layers above). A system registers each interface it offers
+Scripting and Audio never include Physics or Audio headers (the layers above) and never read another module's components:
+the services answer what the consumer would have read (which body moves an entity, whether a body is dynamic, whether
+an entity has an audio source or an animator). A system registers each interface it offers
 with its scene for as long as it exists (`Scene::RegisterService<T>` in its constructor, `UnregisterService` in its
 destructor; one provider per interface, a second one is refused with an error), so a service is available from the first
 `OnRuntimeStart` of any system to the last `OnRuntimeStop`; consumers look it up (`Scene::GetService<T>`) and handle null,
@@ -772,13 +951,13 @@ which means the module is not in the build or its system does not run in this mo
 | Service | Provider | Consumers |
 | --- | --- | --- |
 | `ICollisionEventSource`: collision listeners (all entities, or only watched ones) and watched entities | `PhysicsSystem` | `ScriptSystem` (contact callbacks), tools and tests |
-| `IBodyMotionQuery`: bodies, velocities, the velocity of a point moving with a body | `PhysicsSystem` | script host (`RigidBody`), `AudioSystem` (Doppler) |
+| `IBodyMotionQuery`: bodies, velocities, the velocity of a point moving with a body, the body that moves an entity (`GetSimulatingBody`: its own or its nearest ancestor's), whether a body is dynamic | `PhysicsSystem` | script host (`RigidBody`), `AudioSystem` (Doppler) |
 | `IBodyControl`: velocities, forces, impulses, gravity scale, wake-up, teleport | `PhysicsSystem` | script host (`RigidBody`) |
 | `IPhysicsQueries`: raycasts and overlaps | `PhysicsSystem` | script host (`Physics`) |
 | `ICharacterControl`: character controllers' walk velocity, jumps, teleports, root motion and state | `PhysicsSystem` | script host (`CharacterController`), animation's root motion |
-| `IAudioPlayback`: sources and one-shots | `AudioSystem` (an adapter object) | script host (`AudioSource`, `Audio`) |
+| `IAudioPlayback`: sources (and whether an entity has one, `HasSource`) and one-shots | `AudioSystem` (an adapter object) | script host (`AudioSource`, `Audio`) |
 | `ISkinningPoses`: each animator's pose (model-space joint matrices with a version), and which animators renderers drew | `AnimationSystem`; the editor's pose preview for edited scenes | `RenderScene` (palettes of skinned meshes), `SceneRenderer` (reports the animators of what it drew) |
-| `IAnimatorControl`: play, cross-fade, parameters, speed, state queries, joint transforms | `AnimationSystem` | script host (`Animator`), tools and tests |
+| `IAnimatorControl`: play, cross-fade, parameters, speed, state queries, joint transforms, whether an entity has an animator (`HasAnimator`) | `AnimationSystem` | script host (`Animator`), tools and tests |
 | `IAnimationEventSource`: listeners of the events controller states fire | `AnimationSystem` | `ScriptSystem` (`OnAnimationEvent`), tools and tests |
 
 What outlives scenes is an engine service (`Core/EngineServices.h`): a module registers it in its registration function
@@ -894,7 +1073,7 @@ Results come back to the main thread by polling, never through callbacks into en
 | Job-based commands | `JobHandle` | deferred command polls, e.g. `viewport.capture` (`EditorViewportCommands.cpp`) |
 | Game export | `GameExport`'s shared state (atomics, outcome under a mutex) | `GameExport::Update` from `EditorContext::Update`; `project.export`'s poll |
 | Child processes | captured output | `ScriptBuilder::Update` |
-| Any thread | `Application::SubmitToMainThread` | start of the next frame |
+| Any thread | `Application::SubmitToMainThread` | start of the next frame (after the last frame: when `Run`'s loop ends) |
 
 `RpcResponder::Respond` is thread-safe, so an answer may be produced on any thread; in the editor, answers are given by
 the runner's completions on the main thread.
@@ -1099,7 +1278,7 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   about as fast as from version 1: PerfGPU.Pack). The reading thread never waits in the job system, which would make it
   run unrelated queued jobs (a texture's decoding, a mesh cook) while the reads behind it stall: it decodes blocks of its
   own read, or sleeps until the blocks its helpers claimed are done (`AssetPack::BlockDecoding`). zstd is built with
-  its BMI2 bit readers (MSVC: `/arch:AVX2`, which Jolt requires already). The writer runs on any thread, compresses each
+  its BMI2 bit readers (MSVC: `/arch:AVX2`, which the engine's instruction sets require already). The writer runs on any thread, compresses each
   batch of 64 blocks in parallel on the background threads, reports progress and stops when cancelled; zstd's
   compressor is linked only by it, so shipped games contain the decompressor only.
 - **Pack layout** (`EditorAssetManager::PlanAssetPack`, then `WriteAssetPack`; `BuildAssetPack` does both, blocking). Packs
@@ -1775,7 +1954,7 @@ system, not to entities: a character's joints add no entities and no transform c
   clip). Skinned mesh entities sit under it with a `SkinComponent` naming it. Joints are no entities, except joints with
   content (a rigid mesh, an imported camera or light, or a child outside the skeleton), which become entities under the
   root with an `AttachToJointComponent` at the joint's rest pose, so rigid parts and node animation follow the pose.
-- **Components** (`Scene/Components.h`, category Animation). `AnimatorComponent`: `Skeleton`, `Controller` (none: the
+- **Components** (`Animation/AnimationComponents.h`; `SkinComponent`'s type in `Scene/Components.h`; category Animation). `AnimatorComponent`: `Skeleton`, `Controller` (none: the
   simple mode, which plays `Clip`), `Clip`, `Speed` (negative plays backwards), `Loop` (the clip without a controller,
   and clips scripts play directly), `PlayOnStart`, `ApplyRootMotion` and `CullingMode` (`AlwaysAnimate`, `WhenVisible`).
   `SkinComponent {Animator}` makes a mesh renderer skinned by an animator's pose; the skeleton belongs to the animator,
@@ -2510,8 +2689,8 @@ is the `strata-scripting` skill. The layers:
     before: 12.9 ms; `Perf.Editor`).
   - The **Inspector** shows the components every selected entity has. `GetSharedProperty` gives each widget its value and
     which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as mixed; `GetSharedInactiveReason`
-    whether the property has no effect on every entity (`PropertyInfo::InactiveReason`, the built-in rows in
-    `Scene/ComponentInactiveReasons.cpp`), which draws its row disabled with the reason; an edit goes through the
+    whether the property has no effect on every entity (`PropertyInfo::InactiveReason`, set next to each component's
+    registration in its module), which draws its row disabled with the reason; an edit goes through the
     multi-entity `SetPropertyComponentsWithUndo` with the components the widget changed (one step; each entity keeps its
     other components), or `SetPropertyWithUndo` for other types. Rotations of several entities go through a
     `RotationAnglesEdit` with the Euler angles the widget edited, kept by the Inspector until the widget reports the edit

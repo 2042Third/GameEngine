@@ -4,6 +4,7 @@
 #include "Editor/GameExport.h"
 #include "Editor/ProjectSamples.h"
 #include "Editor/ProjectTemplates.h"
+#include "Editor/SceneRecovery.h"
 #include "Panels/ActivityPanel.h"
 #include "Panels/AssetInspectorPanel.h"
 #include "Panels/ConsolePanel.h"
@@ -26,6 +27,12 @@
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
+#include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Log.h>
+#include <Strata/Core/Platform.h>
+#include <Strata/Events/ApplicationEvent.h>
+#include <Strata/Events/KeyEvent.h>
+#include <Strata/Events/MouseEvent.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/ImageWriter.h>
 

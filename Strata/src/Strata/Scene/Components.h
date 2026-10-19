@@ -3,7 +3,6 @@
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/UUID.h"
 #include "Strata/Math/Math.h"
-#include "Strata/Reflection/Property.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -14,9 +13,13 @@
 namespace Strata
 {
 
-	// Built-in components. Components hold authored data only and are reflected (see
-	// ComponentRegistration.cpp), which gives them serialization, inspector UI, automation and undo for free.
+	// The scene's own components, and the types of components other modules register that sibling layers read. Components
+	// hold authored data only and are reflected (registered by the module that owns them, see
+	// ComponentRegistration.cpp for these), which gives them serialization, inspector UI, automation and undo for free.
 	// Runtime state owned by engine systems lives in separate, unregistered components (e.g. WorldTransformComponent).
+	// Every other component lives in its module: Renderer/RendererComponents.h (lights, sky, post-processing, text),
+	// Physics/PhysicsComponents.h, Audio/AudioComponents.h, Animation/AnimationComponents.h and
+	// Scripting/ScriptingComponents.h.
 
 	////////////////////////////////////////////////////////////////////////////////
 	// Core
@@ -143,6 +146,8 @@ namespace Strata
 		float GetFarClip() const { return Projection == ProjectionType::Perspective ? PerspectiveFar : OrthographicFar; }
 	};
 
+	// Registered by the renderer module (RegisterRendererComponents): physics' mesh colliders default to its mesh, the
+	// animation module's preview and pose bounds read it, and render proxies follow its signals.
 	struct MeshRendererComponent
 	{
 		AssetHandle Mesh = UUID::Null();
@@ -150,221 +155,13 @@ namespace Strata
 		bool CastShadows = true;
 	};
 
-	struct DirectionalLightComponent
-	{
-		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };
-		float Intensity = 3.0f;
-		bool CastShadows = true;
-		float ShadowDistance = 80.0f;   // Shadows are rendered up to this distance from the camera
-		float ShadowSoftness = 1.0f;    // Angular diameter of the light in degrees (the sun is about 0.5): penumbra size
-		float ShadowBias = 1.0f;        // Depth offset toward the light, in shadow map texels
-		float ShadowNormalBias = 1.5f;  // Offset along the surface normal, in shadow map texels
-	};
-
-	// Point and spot lights cast no shadows (only the directional light does).
-	struct PointLightComponent
-	{
-		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };
-		float Intensity = 10.0f;
-		float Range = 10.0f; // Light fades to zero at this distance
-	};
-
-	// Shines along the entity's forward (-Z) direction.
-	struct SpotLightComponent
-	{
-		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };
-		float Intensity = 20.0f;
-		float Range = 15.0f;
-		float InnerConeAngle = 20.0f; // Degrees, half angle: full intensity inside
-		float OuterConeAngle = 30.0f; // Degrees, half angle: no light outside
-	};
-
-	enum class SkyLightSource : uint8_t
-	{
-		EnvironmentMap = 0, // An equirectangular HDR texture
-		Procedural          // A sky gradient with the sun's disk, computed from the colors below and the directional light
-	};
-
-	// Image-based lighting and sky background, from an HDR environment map (equirectangular texture) or a procedural
-	// sky. Both go through the same filtering, so they light the scene the same way.
-	struct SkyLightComponent
-	{
-		AssetHandle EnvironmentMap = UUID::Null();
-		float Intensity = 1.0f;
-		float Rotation = 0.0f; // Degrees around +Y (environment maps only: the procedural sun follows the light)
-		bool ShowBackground = true;
-		float BackgroundBlur = 0.0f; // 0 = sharp, 1 = fully blurred
-		glm::vec3 AmbientColor = { 0.03f, 0.03f, 0.04f }; // Used when there is no environment (no map assigned)
-		SkyLightSource Source = SkyLightSource::EnvironmentMap;
-		// Procedural sky: linear radiance straight up, at the horizon and below it. The sun's disk sits where the scene's
-		// directional light comes from (45 degrees above the horizon without one), SunSize degrees across, with the light's
-		// color times SunIntensity as its radiance.
-		glm::vec3 ZenithColor = { 0.18f, 0.32f, 0.62f };
-		glm::vec3 HorizonColor = { 0.66f, 0.74f, 0.84f };
-		glm::vec3 GroundColor = { 0.22f, 0.20f, 0.18f };
-		float SunSize = 0.53f;
-		float SunIntensity = 20.0f;
-	};
-
-	enum class TonemapOperator : uint8_t
-	{
-		None = 0,
-		Reinhard,
-		ACES,
-		AgX,
-		KhronosNeutral
-	};
-
-	// Post-processing of the camera image. The first active entity with this component in a scene applies; scenes
-	// without one use the defaults.
-	struct PostProcessComponent
-	{
-		TonemapOperator Tonemapper = TonemapOperator::ACES;
-		float Exposure = 0.0f; // Exposure compensation in EV (stops); the only exposure without AutoExposure
-		// Automatic exposure maps the average luminance of the image's non-black pixels to middle gray. The average is
-		// clamped to [2^MinEV, 2^MaxEV] and approached at AutoExposureSpeed per second (0 = instantly).
-		bool AutoExposure = true;
-		float AutoExposureMinEV = -4.0f;
-		float AutoExposureMaxEV = 12.0f;
-		float AutoExposureSpeed = 1.5f;
-		bool Bloom = true;
-		float BloomIntensity = 0.04f; // Fraction of the light scattered into the glow
-		float BloomThreshold = 0.0f;  // Only light brighter than this (after exposure) blooms; 0 = all light
-		bool AmbientOcclusion = true;
-		float AmbientOcclusionRadius = 0.6f; // World units
-		float AmbientOcclusionIntensity = 1.0f;
-		bool AntiAliasing = true; // FXAA
-		float Vignette = 0.2f;
-		float Saturation = 1.0f;
-		float Contrast = 1.0f; // Around middle gray; 1 = unchanged
-	};
-
-	enum class TextAlignment : uint8_t
-	{
-		Left = 0,
-		Center,
-		Right
-	};
-
-	// UTF-8 text, '\n' starts a new line. Screen-space text is a HUD drawn over everything: the anchor point is also the
-	// text block's vertical pivot (anchor y 0 hangs the block below the point, 1 stands it above it, 0.5 centers it) and
-	// Alignment places each line horizontally (Left starts at the point, Right ends at it). World-space text lies in the
-	// entity's XY plane facing +Z, vertically centered on its origin and aligned the same way, hidden behind geometry.
-	struct TextComponent
-	{
-		std::string Text = "Text";
-		AssetHandle Font = UUID::Null(); // Default engine font when unset (or while the font loads)
-		glm::vec4 Color = { 1.0f, 1.0f, 1.0f, 1.0f }; // Display (sRGB) color; alpha blends
-		float FontSize = 32.0f; // Pixels per em in screen space, world units per em in world space
-		bool ScreenSpace = true;
-		glm::vec2 ScreenAnchor = { 0.5f, 0.5f }; // Normalized viewport position (0,0 = top-left)
-		glm::vec2 ScreenOffset = { 0.0f, 0.0f }; // Pixels added to the anchor (+Y down)
-		TextAlignment Alignment = TextAlignment::Center;
-	};
-
-	////////////////////////////////////////////////////////////////////////////////
-	// Physics
-	////////////////////////////////////////////////////////////////////////////////
-
-	// Bodies: an entity with a RigidBodyComponent is one body, made of its own colliders and the colliders of descendants
-	// without a RigidBodyComponent of their own (placed by their transform relative to it). Collider entities without a
-	// RigidBodyComponent on themselves or any ancestor are static bodies of their own. Collision events and queries report the
-	// entity that owns the body.
-
-	enum class RigidBodyType : uint8_t
-	{
-		Static = 0,
-		Dynamic,
-		Kinematic
-	};
-
-	struct RigidBodyComponent
-	{
-		RigidBodyType Type = RigidBodyType::Dynamic;
-		float Mass = 1.0f;
-		float LinearDamping = 0.05f;
-		float AngularDamping = 0.05f;
-		float GravityScale = 1.0f;
-		float Friction = 0.5f;
-		float Restitution = 0.0f;
-		bool IsTrigger = false; // Reports overlaps without colliding
-		bool ContinuousCollision = false;
-		bool LockRotationX = false;
-		bool LockRotationY = false;
-		bool LockRotationZ = false;
-		uint32_t Layer = 0; // Collision layer (0-31)
-	};
-
-	struct BoxColliderComponent
-	{
-		glm::vec3 HalfExtents = { 0.5f, 0.5f, 0.5f };
-		glm::vec3 Offset = { 0.0f, 0.0f, 0.0f };
-	};
-
-	struct SphereColliderComponent
-	{
-		float Radius = 0.5f;
-		glm::vec3 Offset = { 0.0f, 0.0f, 0.0f };
-	};
-
-	// Capsule aligned with the entity's local Y axis.
-	struct CapsuleColliderComponent
-	{
-		float Radius = 0.5f;
-		float HalfHeight = 0.5f; // Half height of the cylindrical section
-		glm::vec3 Offset = { 0.0f, 0.0f, 0.0f };
-	};
-
-	struct MeshColliderComponent
-	{
-		AssetHandle Mesh = UUID::Null(); // Uses the MeshRenderer's mesh when unset
-		bool Convex = true; // Non-convex meshes are only supported on static bodies
-	};
-
-	// A character that gameplay moves (the scripts' CharacterController, root motion) instead of forces: an upright capsule
-	// whose bottom is the entity's origin; the entity's rotation and scale do not change its shape. Each fixed step it moves
-	// with the velocity it was given, falls with gravity, slides along walls, walks up steps and walkable slopes, sticks to
-	// the ground walking down, pushes dynamic bodies and stops at everything else on the layers its layer collides with. It
-	// replaces a RigidBody: an entity with both is simulated as the rigid body (see PhysicsWorld).
-	struct CharacterControllerComponent
-	{
-		float Height = 1.8f;           // Total height of the capsule in world units (a sphere when below twice the radius)
-		float Radius = 0.3f;           // World units
-		float StepHeight = 0.35f;      // Highest step it walks up, and how far it follows the ground down, in world units
-		float MaxSlopeDegrees = 45.0f; // Steepest slope it walks up, in degrees from the horizontal
-		uint32_t Layer = 0;            // Collision layer (0-31)
-		float GravityScale = 1.0f;     // Times the scene's gravity
-		float PushStrength = 200.0f;   // Largest force with which it pushes dynamic bodies, in newtons
-		bool Enabled = true;           // A disabled controller neither moves nor collides; its entity moves freely
-	};
-
-	////////////////////////////////////////////////////////////////////////////////
-	// Audio
-	////////////////////////////////////////////////////////////////////////////////
-
-	struct AudioSourceComponent
-	{
-		AssetHandle Clip = UUID::Null();
-		float Volume = 1.0f;
-		float Pitch = 1.0f;
-		bool Loop = false;
-		bool PlayOnStart = true;
-		bool Spatial = true;
-		float MinDistance = 1.0f;
-		float MaxDistance = 50.0f;
-		float Rolloff = 1.0f;
-	};
-
-	// The active listener; falls back to the primary camera when no listener exists.
-	struct AudioListenerComponent
-	{
-		bool Active = true;
-	};
-
 	////////////////////////////////////////////////////////////////////////////////
 	// Animation
 	////////////////////////////////////////////////////////////////////////////////
 
+	// Registered by the animation module (RegisterAnimationComponents): the renderer, which may not include Animation, makes
+	// skinned proxies from it.
+	//
 	// Makes the entity's MeshRendererComponent a skinned mesh posed by an animator: the mesh's joints follow the pose of
 	// the entity named by Animator (an entity with an AnimatorComponent, whose skeleton the mesh was bound to). The pose
 	// places the skinned vertices relative to the animator's entity, so the mesh follows the animator wherever this entity
@@ -373,68 +170,6 @@ namespace Strata
 	struct SkinComponent
 	{
 		UUID Animator = UUID::Null();
-	};
-
-	enum class AnimatorCullingMode : uint8_t
-	{
-		AlwaysAnimate = 0, // Posed every frame
-		// Posed only while a renderer draws (or would draw, wherever its clips take it) a mesh it skins or that mesh's shadow
-		// in view; time, events and root motion go on. An animator that skins no mesh but places attachments poses every frame.
-		WhenVisible
-	};
-
-	// Plays animations on a skeleton (the Animation module's system, in Play mode): the states of an animation controller,
-	// with their transitions and cross-fades, or without a controller one clip. The pose lives in the animation system, not
-	// in entities: skinned meshes (SkinComponent) and attachments (AttachToJointComponent) name this entity to follow it.
-	// Scripts control it through the SDK's Animator (Entity::GetAnimator).
-	struct AnimatorComponent
-	{
-		AssetHandle Skeleton = UUID::Null();   // The joints the animations move (a model's Skeleton sub-asset)
-		AssetHandle Controller = UUID::Null(); // States, transitions and parameters; none: Clip plays
-		AssetHandle Clip = UUID::Null();       // The clip played without a controller
-		float Speed = 1.0f;                    // Playback rate of everything the animator plays (negative: backwards)
-		bool Loop = true;                      // Whether Clip (and clips scripts play directly) repeat
-		bool PlayOnStart = true;               // Starts the controller's default state (or Clip) when the scene starts
-		bool ApplyRootMotion = false;          // Moves the entity by the root joint's horizontal motion and turn
-		AnimatorCullingMode CullingMode = AnimatorCullingMode::AlwaysAnimate;
-	};
-
-	// Places the entity at a joint of an animator's pose every frame (a sword in a hand, a rigid part of a model): its
-	// world transform becomes the animator's world transform times the joint's transform in the pose. Children keep their
-	// offsets from it. Without a pose (edit mode, nothing playing) the entity keeps its transform.
-	struct AttachToJointComponent
-	{
-		UUID Animator = UUID::Null(); // The entity with the AnimatorComponent
-		std::string Joint;            // The joint's name in the animator's skeleton
-	};
-
-	////////////////////////////////////////////////////////////////////////////////
-	// Scripting
-	////////////////////////////////////////////////////////////////////////////////
-
-	struct ScriptFieldValue
-	{
-		std::string Name;
-		PropertyType Type = PropertyType::Float;
-		PropertyValue Value = 0.0f;
-	};
-
-	struct ScriptEntry
-	{
-		std::string ClassName;
-		std::vector<ScriptFieldValue> Fields; // Overrides of the script's default field values
-
-		ScriptFieldValue* FindField(std::string_view name);
-		const ScriptFieldValue* FindField(std::string_view name) const;
-	};
-
-	// Native C++ behaviours from the project's script module attached to this entity.
-	struct ScriptComponent
-	{
-		std::vector<ScriptEntry> Scripts;
-
-		ScriptEntry* FindScript(std::string_view className);
-		const ScriptEntry* FindScript(std::string_view className) const;
 	};
 
 }

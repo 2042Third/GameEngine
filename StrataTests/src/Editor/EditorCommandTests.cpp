@@ -20,6 +20,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/Mesh.h>
+#include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Runtime/GameRuntime.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneSerializer.h>

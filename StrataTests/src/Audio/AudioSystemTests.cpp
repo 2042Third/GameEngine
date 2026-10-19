@@ -1,8 +1,8 @@
 #include <doctest/doctest.h>
 
 #include "Audio/AudioTestUtils.h"
-#include "Physics/PhysicsTestUtils.h"
 #include "Strata/Audio/AudioClip.h"
+#include "Strata/Audio/AudioComponents.h"
 #include "Strata/Audio/AudioEngine.h"
 #include "Strata/Audio/AudioSource.h"
 #include "Strata/Audio/AudioSystem.h"
@@ -13,6 +13,10 @@
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "TestHelpers.h"
+
+#if ST_WITH_PHYSICS
+	#include "Physics/PhysicsTestUtils.h"
+#endif
 
 #include <glm/gtc/quaternion.hpp>
 
@@ -478,6 +482,7 @@ TEST_SUITE("Audio.System")
 		CHECK(source->GetPosition() == glm::vec3(1010.0f, 0.0f, 0.0f));
 	}
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("Doppler velocities stay steady when frames and fixed steps differ")
 	{
 		ScopedAudioEngine engine;
@@ -530,6 +535,7 @@ TEST_SUITE("Audio.System")
 			scene.OnUpdateRuntime(frameTime);
 		CHECK(moverSource->GetVelocity() == glm::vec3(0.0f));
 	}
+#endif
 
 	TEST_CASE("Level listeners keep +Y as their up vector; rolled and vertical ones pass their own")
 	{

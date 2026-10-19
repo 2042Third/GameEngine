@@ -12,6 +12,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Scene/Components.h>
 
 #include <nlohmann/json.hpp>

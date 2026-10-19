@@ -13,8 +13,10 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Math/Math.h>
+#include <Strata/Physics/PhysicsComponents.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/RenderScene.h>
+#include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneSerializer.h>
 

@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Asset/MeshGeometry.h"
+#include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
 
@@ -383,5 +385,34 @@ TEST_SUITE("Renderer.Mesh")
 		const Ref<Mesh> loaded = Mesh::Deserialize(cube->Serialize());
 		REQUIRE(loaded);
 		CHECK(loaded->GetSubmeshes().front().UVDensity == cube->GetSubmeshes().front().UVDensity);
+	}
+
+	TEST_CASE("The renderer's meshes give their full-detail triangles to modules that read mesh geometry")
+	{
+		// Two submeshes in one vertex list: the second's indices count from its base vertex, and only each submesh's first
+		// level of detail is read.
+		const std::vector<glm::vec3> positions = { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 2, 0, 0 }, { 3, 0, 0 }, { 2, 1, 0 }, { 3, 1, 0 } };
+		Submesh first;
+		first.VertexCount = 3;
+		first.LODs = { MeshLOD { 0, 3 } };
+		Submesh second;
+		second.BaseVertex = 3;
+		second.VertexCount = 4;
+		second.LODs = { MeshLOD { 3, 6 }, MeshLOD { 9, 3 } };
+		std::string error;
+		const Ref<Mesh> mesh = Mesh::Create(positions, std::vector<MeshVertexAttributes>(positions.size()), { 0, 1, 2, 0, 1, 2, 1, 3, 2, 0, 1, 2 },
+			{ first, second }, &error);
+		REQUIRE_MESSAGE(mesh, error);
+
+		MeshGeometry geometry;
+		REQUIRE(MeshGeometryRegistry::Read(*mesh, geometry));
+		CHECK(geometry.Positions == positions);
+		CHECK(geometry.Indices == std::vector<uint32_t> { 0, 1, 2, 3, 4, 5, 4, 6, 5 });
+
+		// Assets of types no module reads geometry from have none, and leave nothing behind.
+		const Ref<Material> material = Material::Create();
+		CHECK_FALSE(MeshGeometryRegistry::Read(*material, geometry));
+		CHECK(geometry.Positions.empty());
+		CHECK(geometry.Indices.empty());
 	}
 }

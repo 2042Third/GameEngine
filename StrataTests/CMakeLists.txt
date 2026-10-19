@@ -68,6 +68,32 @@ if(NOT TARGET StrataEditorUI)
 	list(REMOVE_ITEM STRATA_TEST_SOURCES ${STRATA_EDITOR_TEST_SOURCES})
 endif()
 
+# Tests of the optional modules (STRATA_WITH_*): a build without one leaves out its test folder, the other files that test
+# little else (below), and the feature test (src/FeatureTest: the feature scene holds every component). Test cases elsewhere
+# that need a module are guarded with #if ST_WITH_<MODULE>.
+set(STRATA_TESTS_OF_PHYSICS "src/Physics/" "src/Perf/PhysicsPerfTests.cpp" "src/Scripting/ScriptPhysicsTests.cpp"
+	"src/Scripting/ScriptCollisionTests.cpp")
+set(STRATA_TESTS_OF_AUDIO "src/Audio/" "src/Core/ApplicationAudioTests.cpp" "src/Scripting/ScriptAudioTests.cpp")
+set(STRATA_TESTS_OF_ANIMATION "src/Animation/" "src/Asset/GltfSkinImportTests.cpp" "src/Perf/AnimationPerfTests.cpp"
+	"src/Renderer/GPUAnimationTests.cpp" "src/Renderer/RenderSceneSkinTests.cpp" "src/Scripting/ScriptAnimationTests.cpp")
+set(STRATA_TESTS_HAVE_EVERY_MODULE ON)
+foreach(module IN ITEMS PHYSICS AUDIO ANIMATION)
+	if(NOT STRATA_WITH_${module})
+		set(STRATA_TESTS_HAVE_EVERY_MODULE OFF)
+		list(APPEND STRATA_TESTS_LEFT_OUT ${STRATA_TESTS_OF_${module}})
+	endif()
+endforeach()
+if(NOT STRATA_TESTS_HAVE_EVERY_MODULE)
+	list(APPEND STRATA_TESTS_LEFT_OUT "src/FeatureTest/")
+endif()
+foreach(leftOut IN LISTS STRATA_TESTS_LEFT_OUT)
+	if(leftOut MATCHES "/$")
+		list(FILTER STRATA_TEST_SOURCES EXCLUDE REGEX "^${CMAKE_CURRENT_SOURCE_DIR}/${leftOut}")
+	else()
+		list(REMOVE_ITEM STRATA_TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${leftOut}")
+	endif()
+endforeach()
+
 # The perf tests (src/Perf, see Docs/DeveloperGuide.md, "Perf tests") write their results here, one file per
 # configuration.
 set(STRATA_PERF_RESULTS_DIR "${CMAKE_BINARY_DIR}/PerfResults")
@@ -75,17 +101,24 @@ set(STRATA_PERF_RESULTS_DIR "${CMAKE_BINARY_DIR}/PerfResults")
 add_executable(StrataTests ${STRATA_TEST_SOURCES})
 strata_configure_target(StrataTests)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_TEST_SOURCES})
+# The engine with its tooling (the asset pipeline: importers; the network: the RPC tests; ImGui: the UI tests).
 # StrataScriptCore: the scripting tests call the script C ABI directly.
-target_link_libraries(StrataTests PRIVATE Strata StrataScriptCore doctest stb)
+target_link_libraries(StrataTests PRIVATE Strata StrataTooling StrataScriptCore doctest stb)
 # The glTF tests compress models with meshoptimizer's encoders (EXT_meshopt_compression), which the engine only decodes.
 target_link_libraries(StrataTests PRIVATE meshoptimizer)
 # The editor's UI library brings the editor core; the UI tests draw it headless (src/Editor/ImGuiHarness.h).
 if(TARGET StrataEditorUI)
 	target_link_libraries(StrataTests PRIVATE StrataEditorUI)
+	# One UI test checks the viewport's gizmo (ImGuizmo), which the editor's UI library links privately.
+	target_link_libraries(StrataTests PRIVATE ImGuizmo)
 	# The samples the editor offers are copied next to the executables; the tests check that copy.
 	add_dependencies(StrataTests StrataSamples)
 endif()
 target_include_directories(StrataTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# Its own precompiled header rather than one reused from the editor's libraries: reuse needs identical definitions, and
+# the tests define their own (below). TestMain.cpp defines DOCTEST_CONFIG_IMPLEMENT before including doctest.
+strata_precompile_headers(StrataTests "${CMAKE_CURRENT_SOURCE_DIR}/src/TestsPch.h")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/TestMain.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # DOCTEST_CONFIG_NO_POSIX_SIGNALS: CrashGuard owns the fault signals (and the alternate signal stack) of the process.
 # doctest would install its own handlers around every test case and then restore the ones from before, removing the
 # guard's handlers and leaving crashes in scripts uncontained (or reported as test failures).
@@ -95,7 +128,12 @@ target_compile_definitions(StrataTests PRIVATE
 	"STRATA_TEST_SCRIPT_DEPENDENCY=\"$<TARGET_FILE:StrataTestScriptDependency>\""
 	"STRATA_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\""
 	"STRATA_FEATURE_TEST_DIR=\"${STRATA_FEATURE_TEST_DIR}\""
+	"STRATA_LAYER_LIBRARIES_FILE=\"${PROJECT_BINARY_DIR}/Strata/LayerLibraries.json\""
 	"STRATA_PERF_RESULTS_FILE=\"${STRATA_PERF_RESULTS_DIR}/$<CONFIG>.json\"")
+# Test cases that need the engine's full set of systems or components (their order, their count, a scene with all of
+# them) are guarded with #if ST_TESTS_HAVE_EVERY_MODULE, 1 or 0: a definition, like ST_WITH_*, so that a file that misses
+# an include can never read it as 0 and compile its cases out of every build.
+target_compile_definitions(StrataTests PRIVATE "ST_TESTS_HAVE_EVERY_MODULE=$<BOOL:${STRATA_TESTS_HAVE_EVERY_MODULE}>")
 foreach(module IN LISTS STRATA_TEST_SCRIPT_MODULES)
 	string(REPLACE "StrataTestScripts" "" moduleKind "${module}")
 	string(TOUPPER "${moduleKind}" moduleKind)
@@ -121,9 +159,69 @@ endif()
 # with the GPU tests.
 set(STRATA_FEATURE_TEST_SUITES "FeatureTest,Editor.FeatureTest")
 
-add_test(NAME StrataTests.Core
-	COMMAND StrataTests "--test-suite-exclude=GPU*,EndToEnd*,Package*,Perf.*,PerfGPU.*,${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
+# The suites without a CTest of their own run in shards, StrataTests.Core.<Shard> (label core; ctest -R StrataTests.Core
+# selects them all), so that ctest -j runs them side by side: CoreShards.json lists the shards and the suites that have
+# their own CTests, and Testing.Shards checks that every suite runs in exactly one. Suites ending in .Sweep run a sample of
+# their corruption sweep in their shard and all of it in StrataTests.Fuzz.
+set(STRATA_CORE_SHARDS_FILE "${CMAKE_CURRENT_SOURCE_DIR}/CoreShards.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${STRATA_CORE_SHARDS_FILE}")
+file(READ "${STRATA_CORE_SHARDS_FILE}" STRATA_CORE_SHARDS)
+set(STRATA_OWN_TEST_SUITES "")
+string(JSON STRATA_OWN_TEST_COUNT LENGTH "${STRATA_CORE_SHARDS}" OwnTests)
+math(EXPR STRATA_LAST_OWN_TEST "${STRATA_OWN_TEST_COUNT} - 1")
+foreach(index RANGE ${STRATA_LAST_OWN_TEST})
+	string(JSON suiteCount LENGTH "${STRATA_CORE_SHARDS}" OwnTests ${index} Suites)
+	math(EXPR lastSuite "${suiteCount} - 1")
+	foreach(suiteIndex RANGE ${lastSuite})
+		string(JSON suite GET "${STRATA_CORE_SHARDS}" OwnTests ${index} Suites ${suiteIndex})
+		list(APPEND STRATA_OWN_TEST_SUITES "${suite}")
+	endforeach()
+endforeach()
+string(JSON STRATA_SHARD_COUNT LENGTH "${STRATA_CORE_SHARDS}" Shards)
+math(EXPR STRATA_LAST_SHARD "${STRATA_SHARD_COUNT} - 1")
+foreach(index RANGE ${STRATA_LAST_SHARD})
+	string(JSON shardName GET "${STRATA_CORE_SHARDS}" Shards ${index} Name)
+	set(shardSuites "")
+	string(JSON suiteCount LENGTH "${STRATA_CORE_SHARDS}" Shards ${index} Suites)
+	math(EXPR lastSuite "${suiteCount} - 1")
+	foreach(suiteIndex RANGE ${lastSuite})
+		string(JSON suite GET "${STRATA_CORE_SHARDS}" Shards ${index} Suites ${suiteIndex})
+		list(APPEND shardSuites "${suite}")
+	endforeach()
+	# The suites of the own CTests never run in a shard, whatever its filters say.
+	set(shardExcludes ${STRATA_OWN_TEST_SUITES})
+	string(JSON excludeType ERROR_VARIABLE excludeError TYPE "${STRATA_CORE_SHARDS}" Shards ${index} Exclude)
+	if(NOT excludeError)
+		string(JSON excludeCount LENGTH "${STRATA_CORE_SHARDS}" Shards ${index} Exclude)
+		math(EXPR lastExclude "${excludeCount} - 1")
+		foreach(excludeIndex RANGE ${lastExclude})
+			string(JSON exclude GET "${STRATA_CORE_SHARDS}" Shards ${index} Exclude ${excludeIndex})
+			list(APPEND shardExcludes "${exclude}")
+		endforeach()
+	endif()
+	string(REPLACE ";" "," shardSuites "${shardSuites}")
+	string(REPLACE ";" "," shardExcludes "${shardExcludes}")
+	add_test(NAME StrataTests.Core.${shardName}
+		COMMAND StrataTests "--test-suite=${shardSuites}" "--test-suite-exclude=${shardExcludes}" --no-intro=true
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+	set_tests_properties(StrataTests.Core.${shardName} PROPERTIES LABELS "core")
+endforeach()
+
+# Every corruption sweep in full (STRATA_TEST_SWEEP=full: Tests::SelectSweepOffsets), in the optimized configurations,
+# which every Release ctest -LE perf (CI's included) runs: the Core shards' samples leave nothing unchecked.
+string(JSON STRATA_FUZZ_SUITE_COUNT LENGTH "${STRATA_CORE_SHARDS}" FuzzSuites)
+math(EXPR STRATA_LAST_FUZZ_SUITE "${STRATA_FUZZ_SUITE_COUNT} - 1")
+set(STRATA_FUZZ_SUITES "")
+foreach(index RANGE ${STRATA_LAST_FUZZ_SUITE})
+	string(JSON suite GET "${STRATA_CORE_SHARDS}" FuzzSuites ${index})
+	list(APPEND STRATA_FUZZ_SUITES "${suite}")
+endforeach()
+string(REPLACE ";" "," STRATA_FUZZ_SUITES "${STRATA_FUZZ_SUITES}")
+add_test(NAME StrataTests.Fuzz
+	COMMAND StrataTests "--test-suite=${STRATA_FUZZ_SUITES}" --no-intro=true
+	CONFIGURATIONS Release Dist
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+set_tests_properties(StrataTests.Fuzz PROPERTIES LABELS "fuzz" ENVIRONMENT "STRATA_TEST_SWEEP=full")
 
 # Perf tests: suites Perf.* (CPU) and PerfGPU.* (GPU) measure metrics against the budgets in Perf/Budgets.json, so they
 # exist only in optimized configurations. They run serially (other tests running beside them would skew the numbers) and
@@ -159,21 +257,33 @@ set_tests_properties(StrataTests.PerfGPU PROPERTIES
 	FIXTURES_REQUIRED StrataPerfResults
 	ENVIRONMENT "${STRATA_PERF_GPU_ENVIRONMENT}")
 
-# Suites whose names start with "Package" build script modules with the real toolchain (CMake and the compiler).
+# Suites whose names start with "Package" build script modules with the real toolchain (CMake and the compiler). Every
+# test of the package label holds the "toolchain" lock: concurrent builds through one toolchain are a known source of
+# flaky failures (MSBuild's and mspdbsrv's C1090 and LNK errors), so ctest -j runs them one at a time.
 add_test(NAME StrataTests.Package
 	COMMAND StrataTests "--test-suite=Package*" --no-intro=true
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
-set_tests_properties(StrataTests.Package PROPERTIES LABELS "package" TIMEOUT 1800)
+set_tests_properties(StrataTests.Package PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
 
-add_test(NAME StrataTests.FeatureTest
-	COMMAND StrataTests "--test-suite=${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
-	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
-set_tests_properties(StrataTests.FeatureTest PROPERTIES LABELS "feature")
+if(STRATA_TESTS_HAVE_EVERY_MODULE)
+	add_test(NAME StrataTests.FeatureTest
+		COMMAND StrataTests "--test-suite=${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+	set_tests_properties(StrataTests.FeatureTest PROPERTIES LABELS "feature")
+endif()
 
 add_test(NAME StrataTests.GPU
 	COMMAND StrataTests --test-suite=GPU* --no-intro=true
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
 set_tests_properties(StrataTests.GPU PROPERTIES LABELS "gpu")
+
+# Games contain no tooling: the runtime's linker map names no object or library of Dear ImGui, ImGuizmo, the asset
+# pipeline, the network or zstd's compressor (Architecture/CheckNoTooling.cmake; the configure checks what it links).
+if(TARGET StrataRuntime)
+	add_test(NAME StrataRuntime.NoTooling
+		COMMAND "${CMAKE_COMMAND}" "-DMAP=$<TARGET_FILE_DIR:StrataRuntime>/StrataRuntime.map"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Architecture/CheckNoTooling.cmake")
+endif()
 
 # Builds a game project's scripts through the StrataScriptCore package (outside this build, as game projects do) and
 # checks that the engine loads the result. The package must give scripts the same glm definitions as the engine's glm
@@ -191,7 +301,7 @@ add_test(NAME StrataScriptCore.Package
 		"-DCONFIG=$<CONFIG>"
 		"-DTEST_EXECUTABLE=$<TARGET_FILE:StrataTests>"
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/PackageProject/BuildPackageProject.cmake")
-set_tests_properties(StrataScriptCore.Package PROPERTIES LABELS "package")
+set_tests_properties(StrataScriptCore.Package PROPERTIES LABELS "package" RESOURCE_LOCK toolchain)
 
 # The same in the Dist configuration, whatever this build's configuration: CMake does not define Dist, so the package
 # must for the scripts of a Dist engine to build.
@@ -208,7 +318,7 @@ add_test(NAME StrataScriptCore.PackageDist
 		"-DCONFIG=Dist"
 		"-DTEST_EXECUTABLE=$<TARGET_FILE:StrataTests>"
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/PackageProject/BuildPackageProject.cmake")
-set_tests_properties(StrataScriptCore.PackageDist PROPERTIES LABELS "package")
+set_tests_properties(StrataScriptCore.PackageDist PROPERTIES LABELS "package" RESOURCE_LOCK toolchain)
 
 # The real editor in a window, driven by a command script: catches startup, UI and shutdown failures.
 if(TARGET StrataEditor)
@@ -271,6 +381,14 @@ if(TARGET StrataEditor)
 		COMMAND "${CMAKE_COMMAND}"
 			"-DCOMMAND=$<TARGET_FILE:StrataEditor>;--no-gpu;--no-automation;--frames;2;--commands;${CMAKE_CURRENT_SOURCE_DIR}/Editor/NoGpuCaptureCommands.json"
 			"-DEXPECTED_OUTPUT=viewport[.]capture failed: viewport[.]capture needs a GPU"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake"
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	# So does --screenshot: the last frame's capture is answered with an empty image while the editor still runs (after
+	# the last frame, before its layers go), so the run says why and exits with 1, neither crashing nor losing the code.
+	add_test(NAME StrataEditor.ScreenshotWithoutGPU
+		COMMAND "${CMAKE_COMMAND}"
+			"-DCOMMAND=$<TARGET_FILE:StrataEditor>;--no-gpu;--no-automation;--frames;3;--screenshot;${CMAKE_CURRENT_BINARY_DIR}/ScreenshotWithoutGPU.png"
+			"-DEXPECTED_OUTPUT=Screenshot failed: Image is empty"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	# Without --frames a headless editor runs until editor.quit (here at the end of its script); a quit that does not
@@ -478,7 +596,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
 			"-DMODULE_SUFFIX=${STRATA_SCRIPT_MODULE_SUFFIX}"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/ScriptsEndToEnd.cmake")
-	set_tests_properties(StrataEditor.Scripts PROPERTIES LABELS "package" TIMEOUT 1800)
+	set_tests_properties(StrataEditor.Scripts PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
 
 	# The installed layout a release archive holds (CMake/StrataPackaging.cmake): installed into a fresh prefix, its editor
 	# creates a project, builds its scripts with the installed SDK and the toolchain it finds on this machine, plays and
@@ -496,7 +614,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 				"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
 				"-DMODULE_SUFFIX=${STRATA_SCRIPT_MODULE_SUFFIX}"
 				-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/InstallEndToEnd.cmake")
-		set_tests_properties(StrataEditor.Install PROPERTIES LABELS "package" TIMEOUT 1800)
+		set_tests_properties(StrataEditor.Install PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
 	endif()
 
 	# The Tetris sample (Samples/Tetris), played through the real editor with simulated input: its scripts are built, moves
@@ -510,7 +628,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/TetrisSample/$<CONFIG>"
 			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/TetrisSample.cmake")
-	set_tests_properties(StrataEditor.Tetris PROPERTIES LABELS "package" TIMEOUT 1800)
+	set_tests_properties(StrataEditor.Tetris PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
 endif()
 
 # input.sequence through the real editor (Editor/InputSequenceCommands.json.in, on a copy of the feature project): the same

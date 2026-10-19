@@ -188,14 +188,15 @@ TEST_SUITE("Core")
 		CHECK(measure(200) < std::chrono::milliseconds(50));
 
 		// Setting the current rate again keeps the schedule: a frame that already waited past its slot is not followed by
-		// a full period, as a restarted schedule would do.
-		pacer.SetMaxFrameRate(20);
+		// a full period, as a restarted schedule would do. At 4 frames a second the next slot is about 50 ms away and a
+		// restarted schedule's 250 ms: far enough apart for the scheduling delays of a busy machine (parallel tests).
+		pacer.SetMaxFrameRate(4);
 		pacer.WaitForNextFrame();
-		std::this_thread::sleep_for(std::chrono::milliseconds(30));
-		pacer.SetMaxFrameRate(20);
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+		pacer.SetMaxFrameRate(4);
 		const auto start = std::chrono::steady_clock::now();
 		pacer.WaitForNextFrame();
-		CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(45));
+		CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(200));
 	}
 
 	TEST_CASE("CommandLine parses flags and options")

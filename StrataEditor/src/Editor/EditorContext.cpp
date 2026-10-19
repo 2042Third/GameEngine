@@ -1,8 +1,15 @@
 #include "Editor/EditorContext.h"
 
+#include "Editor/CommandJournal.h"
 #include "Editor/CommandUtils.h"
+#include "Editor/ExternalEditor.h"
+#include "Editor/GameExport.h"
+#include "Editor/InputSequence.h"
 #include "Editor/ProjectSamples.h"
+#include "Editor/ProjectThumbnail.h"
+#include "Editor/SceneRecovery.h"
 #include "Editor/ScriptProject.h"
+#include "Editor/ThumbnailCache.h"
 
 #include <Strata/Asset/AssetDependencies.h>
 #include <Strata/Asset/AssetManager.h>
@@ -25,6 +32,7 @@
 #include <Strata/Scene/PrefabOverrides.h>
 #include <Strata/Scene/SceneLoader.h>
 #include <Strata/Scene/SceneSerializer.h>
+#include <Strata/Scripting/ScriptingComponents.h>
 
 #include <algorithm>
 #include <unordered_set>
@@ -118,7 +126,9 @@ namespace Strata
 	}
 
 	EditorContext::EditorContext(const EditorContextSpecification& specification)
-		: m_Specification(specification), m_EditScene(CreateRef<Scene>()), m_ExternalEditor(specification.EditorSettingsFile),
+		: m_Specification(specification), m_EditScene(CreateRef<Scene>()), m_Journal(CreateRef<CommandJournal>()),
+		  m_Recovery(CreateScope<SceneRecovery>()), m_ProjectThumbnail(CreateScope<ProjectThumbnail>()),
+		  m_ExternalEditor(CreateScope<ExternalEditorLauncher>(specification.EditorSettingsFile)),
 		  m_RecentProjects(specification.RecentProjectsFile, specification.RecentProjectsReadOnly)
 	{
 		ActivateBuiltinAssets();
@@ -137,10 +147,10 @@ namespace Strata
 		});
 		// The recovery journal follows every step the undo stack applies; recovery files apply only to scenes the project
 		// still has, which scans find by their handles wherever they moved.
-		m_UndoStack.SetObserver(&m_Recovery);
-		m_Recovery.BeginScene(*m_EditScene, UUID::Null(), {}, {});
+		m_UndoStack.SetObserver(m_Recovery.get());
+		m_Recovery->BeginScene(*m_EditScene, UUID::Null(), {}, {});
 		CreateAnimationPreview();
-		m_Recovery.SetEntryValidator([this](const RecoveryEntry& entry) -> std::string
+		m_Recovery->SetEntryValidator([this](const RecoveryEntry& entry) -> std::string
 		{
 			if (!entry.Scene.IsValid())
 				return {};
@@ -148,7 +158,7 @@ namespace Strata
 				return fmt::format("The scene {} ('{}') is no longer in the project", entry.Scene.ToString(), entry.ScenePath);
 			return {};
 		});
-		m_Recovery.SetSceneLocator([this]()
+		m_Recovery->SetSceneLocator([this]()
 		{
 			SceneRecovery::ScenePaths scenes;
 			if (m_AssetManager)
@@ -158,7 +168,7 @@ namespace Strata
 			}
 			return scenes;
 		});
-		SetStatusProvider("recovery", [this]() { return m_Recovery.DescribeStatus(); });
+		SetStatusProvider("recovery", [this]() { return m_Recovery->DescribeStatus(); });
 		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details). Imports
 		// still running (a project opened with assets to import, re-imports) deliver their assets when they finish; scanning
 		// is the scan of the project's files while it registers them (null: none runs).
@@ -304,8 +314,8 @@ namespace Strata
 		OpenThumbnails();
 		ST_INFO("Opened project '{}' ({})", m_Project->GetConfig().Name, FileSystem::ToUTF8(m_Project->GetProjectDirectory()));
 		// Unsaved changes an editor left behind (a crash) or discarded are offered once the scan has read them.
-		m_Recovery.SetProject(m_Project->GetIntermediateDirectory() / SceneRecovery::c_DirectoryName, m_Project->GetAssetDirectory());
-		m_Recovery.Scan();
+		m_Recovery->SetProject(m_Project->GetIntermediateDirectory() / SceneRecovery::c_DirectoryName, m_Project->GetAssetDirectory());
+		m_Recovery->Scan();
 		OpenScriptEngine(created);
 		StartScriptUsageScan();
 
@@ -373,7 +383,7 @@ namespace Strata
 		// assets to fall back to, the editor itself goes away, and nobody is left to tell.
 		ResetScene(CreateRef<Scene>(), UUID::Null(), activateBuiltinAssets ? DiscardNotice::ProjectCloses : DiscardNotice::None);
 		if (hadProject)
-			m_Recovery.SetProject({}, {});
+			m_Recovery->SetProject({}, {});
 		InspectEntities(); // The project's assets go with it
 		// After the scene went: the next project starts from the default view, with none of this project's scene cameras.
 		if (hadProject)
@@ -381,7 +391,7 @@ namespace Strata
 		CloseScriptEngine();
 		// Before the asset manager: its reads use the manager.
 		m_Thumbnails.reset();
-		m_ProjectThumbnail.Cancel();
+		m_ProjectThumbnail->Cancel();
 		if (m_AssetManager)
 		{
 			// Cancels the project's imports without waiting for them (also while something else still holds the manager).
@@ -415,7 +425,7 @@ namespace Strata
 		// Unsaved changes of the scene that goes are written as recovery data first, so nothing is lost whatever replaced
 		// it (a forced command, the unsaved-changes dialog's Don't Save, closing the editor).
 		std::string lostReason;
-		const DiscardOutcome discarded = m_Recovery.EndScene(*m_EditScene, IsSceneModified(), &lostReason);
+		const DiscardOutcome discarded = m_Recovery->EndScene(*m_EditScene, IsSceneModified(), &lostReason);
 		if (discarded != DiscardOutcome::Unmodified && notice != DiscardNotice::None)
 			NotifyDiscardedChanges(m_EditScene->GetName(), discarded, lostReason, notice);
 		// The scene that goes keeps its view for when it opens again.
@@ -430,7 +440,7 @@ namespace Strata
 		// The scene that goes is destroyed off the frame (a million entities take tens of milliseconds).
 		Scene::ReleaseInBackground(std::move(previous));
 		const auto [sceneFile, scenePath] = GetSceneFile(handle);
-		m_Recovery.BeginScene(*m_EditScene, handle, sceneFile, scenePath);
+		m_Recovery->BeginScene(*m_EditScene, handle, sceneFile, scenePath);
 	}
 
 	std::pair<std::filesystem::path, std::string> EditorContext::GetSceneFile(AssetHandle scene) const
@@ -703,7 +713,7 @@ namespace Strata
 		OnSceneSaved();
 		// The changes are on disk now: the recovery journal starts again from this document.
 		const auto [sceneFile, scenePath] = GetSceneFile(m_SceneHandle);
-		m_Recovery.OnSaved(m_SceneHandle, sceneFile, scenePath, std::move(document));
+		m_Recovery->OnSaved(m_SceneHandle, sceneFile, scenePath, std::move(document));
 		return true;
 	}
 
@@ -734,13 +744,13 @@ namespace Strata
 		m_UndoStack.MarkSaved();
 		OnSceneSaved();
 		const auto [sceneFile, scenePath] = GetSceneFile(handle);
-		m_Recovery.OnSaved(handle, sceneFile, scenePath, std::move(document));
+		m_Recovery->OnSaved(handle, sceneFile, scenePath, std::move(document));
 		return true;
 	}
 
 	void EditorContext::OnSceneSaved()
 	{
-		m_ProjectThumbnail.Request();
+		m_ProjectThumbnail->Request();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -1342,7 +1352,7 @@ namespace Strata
 		m_UndoStack.Record(CreateScope<SceneRecoveryAction>(scene, std::move(before), std::move(after), settingsBefore, settingsAfter));
 		PruneSelection();
 		// The journal of the edited scene holds these changes from now on: once it is written, the file that held them goes.
-		m_Recovery.Replace(scene, IsSceneModified(), entry.Id);
+		m_Recovery->Replace(scene, IsSceneModified(), entry.Id);
 		if (outApplied)
 			*outApplied = ids.size();
 		ST_INFO("Recovered the unsaved changes of '{}' ({} entities); undo returns to the saved scene", entry.SceneName, ids.size());
@@ -1577,7 +1587,7 @@ namespace Strata
 		{
 			if (!FileSystem::IsDirectory(scripts))
 				return fail(fmt::format("The project has no script directory '{}' yet (script.init or script.create makes it)", FileSystem::ToUTF8(scripts)));
-			return m_ExternalEditor.Open(scripts, 0, 0, scripts, outHow, outError);
+			return m_ExternalEditor->Open(scripts, 0, 0, scripts, outHow, outError);
 		}
 
 		// Only files of the project and the engine, and only code, CMake and text: the default application of other types
@@ -1602,7 +1612,7 @@ namespace Strata
 		const std::string extension = StringUtils::ToLower(FileSystem::ToUTF8(absolute.extension()));
 		if (std::find(std::begin(c_Extensions), std::end(c_Extensions), extension) == std::end(c_Extensions))
 			return fail(fmt::format("'{}' is not a source file: only code, CMake and text files open in the external editor", FileSystem::ToUTF8(absolute)));
-		return m_ExternalEditor.Open(absolute, line, column, scripts, outHow, outError);
+		return m_ExternalEditor->Open(absolute, line, column, scripts, outHow, outError);
 	}
 
 	void EditorContext::CloseScriptEngine()
@@ -1977,10 +1987,10 @@ namespace Strata
 		UpdatePendingFrame();
 		if (m_Thumbnails)
 			m_Thumbnails->Update();
-		m_ProjectThumbnail.Update(*this);
+		m_ProjectThumbnail->Update(*this);
 		FollowSceneMoves();
 		// The recovery journal hands what changed to an I/O job when it is due.
-		m_Recovery.Update(*m_EditScene, IsSceneModified());
+		m_Recovery->Update(*m_EditScene, IsSceneModified());
 	}
 
 	void EditorContext::FollowSceneMoves()
@@ -1992,16 +2002,16 @@ namespace Strata
 			return;
 		m_SceneMetadataVersion = version;
 		const auto [sceneFile, scenePath] = GetSceneFile(m_SceneHandle);
-		m_Recovery.OnSceneMoved(sceneFile, scenePath);
+		m_Recovery->OnSceneMoved(sceneFile, scenePath);
 		// A scan in progress compares the scenes' places when it finishes (SceneRecovery::FinishScan).
-		for (const RecoveryEntry& entry : m_Recovery.GetEntries())
+		for (const RecoveryEntry& entry : m_Recovery->GetEntries())
 		{
 			if (!entry.Scene.IsValid())
 				continue;
 			const std::string path = GetSceneFile(entry.Scene).second;
 			if (!path.empty() && path != entry.ScenePath)
 			{
-				m_Recovery.RequestScan();
+				m_Recovery->RequestScan();
 				break;
 			}
 		}

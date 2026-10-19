@@ -19,6 +19,7 @@
 #include <Strata/Core/Timestep.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
+#include <Strata/Scripting/ScriptingComponents.h>
 
 #include <imgui.h>
 

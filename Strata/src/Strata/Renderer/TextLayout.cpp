@@ -2,6 +2,7 @@
 #include "Strata/Renderer/TextLayout.h"
 
 #include "Strata/Renderer/FontAtlas.h"
+#include "Strata/Renderer/RendererComponents.h"
 
 #include <algorithm>
 #include <limits>

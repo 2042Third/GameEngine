@@ -11,7 +11,6 @@ namespace Strata
 	void RegisterSceneModule()
 	{
 		RegisterSceneComponents();
-		RegisterComponentInactiveReasons();
 
 		// Prefabs and scenes are stored as their JSON source, models in their cooked JSON form.
 		AssetLoaderRegistry::Register(AssetType::Prefab, [](const AssetMetadata&, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>

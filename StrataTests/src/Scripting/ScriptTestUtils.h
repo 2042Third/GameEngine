@@ -10,6 +10,7 @@
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scripting/ScriptEngine.h"
 #include "Strata/Scripting/ScriptSystem.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 
 #include <filesystem>
 #include <optional>

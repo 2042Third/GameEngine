@@ -3,6 +3,7 @@
 #include "Editor/EditorCamera.h"
 #include "Editor/SceneBounds.h"
 
+#include <Strata/Animation/AnimationComponents.h>
 #include <Strata/Animation/AnimationPreview.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Renderer/Mesh.h>

@@ -2,10 +2,20 @@
 
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Reflection/PropertyJson.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/ComponentAccess.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
+
+#if ST_WITH_ANIMATION
+	#include "Strata/Animation/AnimationComponents.h"
+#endif
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+#endif
+
+#include <nlohmann/json.hpp>
 
 using namespace Strata;
 
@@ -26,8 +36,13 @@ TEST_SUITE("Reflection")
 	{
 		const char* expected[] = {
 			"ID", "Name", "Transform", "Relationship", "Tag", "Inactive", "PrefabInstance", "Camera", "MeshRenderer",
-			"DirectionalLight", "PointLight", "SpotLight", "SkyLight", "PostProcess", "Text", "RigidBody",
-			"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "CharacterController", "AudioSource", "AudioListener",
+			"DirectionalLight", "PointLight", "SpotLight", "SkyLight", "PostProcess", "Text",
+#if ST_WITH_PHYSICS
+			"RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "CharacterController",
+#endif
+#if ST_WITH_AUDIO
+			"AudioSource", "AudioListener",
+#endif
 			"Script"
 		};
 		for (const char* name : expected)
@@ -143,6 +158,7 @@ TEST_SUITE("Reflection")
 		CHECK_FALSE(PropertyValueFromJson(boolean, "yes").has_value());
 	}
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("Property descriptions expose metadata for tooling")
 	{
 		const PropertyInfo* type = ComponentRegistry::Find<RigidBodyComponent>()->FindProperty("Type");
@@ -153,6 +169,7 @@ TEST_SUITE("Reflection")
 		const PropertyInfo* mesh = ComponentRegistry::Find<MeshRendererComponent>()->FindProperty("Mesh");
 		CHECK(DescribeProperty(*mesh)["AssetType"] == "Mesh");
 	}
+#endif
 
 	TEST_CASE("Components added by the engine cannot be added directly")
 	{
@@ -230,10 +247,12 @@ TEST_SUITE("Scene.InactiveProperties")
 		camera.Projection = ProjectionType::Orthographic;
 		CHECK_FALSE(reason("Camera", "PerspectiveNear").empty());
 		CHECK(reason("Camera", "OrthographicFar").empty());
+#if ST_WITH_ANIMATION
 		AnimatorComponent& animator = entity.AddComponent<AnimatorComponent>();
 		CHECK(reason("Animator", "Clip").empty());
 		animator.Controller = AssetHandle(0xC0);
 		CHECK_FALSE(reason("Animator", "Clip").empty());
+#endif
 
 		// An entity without the component has nothing inactive.
 		Entity plain = scene.CreateEntity("Plain");

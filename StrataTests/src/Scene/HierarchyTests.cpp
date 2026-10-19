@@ -8,6 +8,7 @@
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/UnknownComponents.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include <algorithm>

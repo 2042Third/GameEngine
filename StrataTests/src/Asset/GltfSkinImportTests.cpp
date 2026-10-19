@@ -2,6 +2,7 @@
 
 #include "Animation/SkinnedGltf.h"
 #include "Strata/Animation/AnimationClip.h"
+#include "Strata/Animation/AnimationComponents.h"
 #include "Strata/Animation/RestPose.h"
 #include "Strata/Animation/Skeleton.h"
 #include "Strata/Asset/AssetDependencies.h"

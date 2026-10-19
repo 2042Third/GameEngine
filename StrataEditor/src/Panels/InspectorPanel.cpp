@@ -15,6 +15,7 @@
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
+#include <Strata/Animation/AnimationComponents.h>
 #include <Strata/Animation/AnimationSystem.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/FileSystem.h>
@@ -23,12 +24,14 @@
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Scene/ComponentAccess.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/PrefabInstances.h>
 #include <Strata/Scene/PrefabOverrides.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scripting/ScriptSystem.h>
+#include <Strata/Scripting/ScriptingComponents.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>

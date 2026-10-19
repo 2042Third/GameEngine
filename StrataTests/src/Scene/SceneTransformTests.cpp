@@ -6,6 +6,7 @@
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
+#include "TestHelpers.h"
 
 #include <algorithm>
 #include <cmath>
@@ -270,79 +271,6 @@ TEST_SUITE("Scene.Transforms")
 		CheckSceneCaches(scene);
 	}
 
-	TEST_CASE("Random edits keep every cached transform equal to a full recomputation")
-	{
-		// Reparenting, moving, (de)activating and destroying, checked against a full recomputation of the hierarchy links and
-		// of the transforms after every operation.
-		// Unoptimized Debug builds compute each full recomputation about ten times slower, so they run a shorter sequence
-		// on fewer entities; optimized builds run 10,000 operations on 5,000 entities.
-#ifdef ST_DEBUG
-		constexpr size_t c_Entities = 1000;
-		constexpr int c_Operations = 1000;
-#else
-		constexpr size_t c_Entities = 5000;
-		constexpr int c_Operations = 10000;
-#endif
-		std::mt19937 random(2024);
-		Scene scene;
-		std::vector<Entity> entities = CreateRandomHierarchy(scene, c_Entities, random);
-		scene.UpdateWorldTransforms();
-
-		const auto pick = [&]() -> Entity
-		{
-			while (true)
-			{
-				Entity entity = entities[std::uniform_int_distribution<size_t>(0, entities.size() - 1)(random)];
-				if (entity.IsValid())
-					return entity;
-			}
-		};
-
-		size_t destroyed = 0;
-		for (int operation = 0; operation < c_Operations; operation++)
-		{
-			const int kind = std::uniform_int_distribution<int>(0, 99)(random);
-			if (kind < 30)
-			{
-				scene.SetParent(pick(), std::uniform_int_distribution<int>(0, 9)(random) == 0 ? Entity() : pick(), std::uniform_int_distribution<int>(0, 1)(random) == 0);
-			}
-			else if (kind < 75)
-			{
-				RandomizeTransform(pick(), random);
-			}
-			else if (kind < 95)
-			{
-				Entity entity = pick();
-				entity.SetActive(!entity.IsActive());
-			}
-			else if (scene.GetEntityCount() > c_Entities / 2)
-			{
-				// Mostly leaves and small subtrees: the scene keeps most of its entities.
-				Entity entity = pick();
-				while (!entity.GetChildren().empty())
-					entity = entity.GetChildren().front();
-				scene.DestroyEntity(entity);
-				destroyed++;
-			}
-
-			// The hierarchy links first: the transform validation walks them.
-			std::string error;
-			if (!scene.ValidateHierarchy(&error))
-			{
-				FAIL_CHECK("Operation ", operation, ": ", error);
-				break;
-			}
-			scene.UpdateWorldTransforms();
-			if (!scene.ValidateWorldTransforms(&error))
-			{
-				FAIL_CHECK("Operation ", operation, ": ", error);
-				break;
-			}
-		}
-		CHECK(destroyed > 0);
-		CheckSceneCaches(scene);
-	}
-
 	TEST_CASE("Activity in the hierarchy is exact at once")
 	{
 		Scene scene;
@@ -528,6 +456,79 @@ TEST_SUITE("Scene.Transforms")
 			const Entity barrel = turret.GetChildren().front();
 			CHECK(barrel.GetComponent<WorldTransformComponent>().Matrix[3] == glm::vec4(10.0f, 1.0f, 2.0f, 1.0f));
 		}
+		CheckSceneCaches(scene);
+	}
+}
+
+// The randomized cache sweep: a sample in the Core shard, the full sequence in StrataTests.Fuzz (Tests::IsFullSweep).
+TEST_SUITE("Scene.Transforms.Sweep")
+{
+	TEST_CASE("Random edits keep every cached transform equal to a full recomputation")
+	{
+		// Reparenting, moving, (de)activating and destroying, checked against a full recomputation of the hierarchy links and
+		// of the transforms after every operation: 1,000 operations on 1,000 entities in the Core shard, 10,000 operations
+		// on 5,000 entities in StrataTests.Fuzz (a full recomputation costs ten times as much unoptimized, so Debug builds
+		// only sample).
+		const bool full = Tests::IsFullSweep();
+		const size_t entityCount = full ? 5000 : 1000;
+		const int operationCount = full ? 10000 : 1000;
+		std::mt19937 random(2024);
+		Scene scene;
+		std::vector<Entity> entities = CreateRandomHierarchy(scene, entityCount, random);
+		scene.UpdateWorldTransforms();
+
+		const auto pick = [&]() -> Entity
+		{
+			while (true)
+			{
+				Entity entity = entities[std::uniform_int_distribution<size_t>(0, entities.size() - 1)(random)];
+				if (entity.IsValid())
+					return entity;
+			}
+		};
+
+		size_t destroyed = 0;
+		for (int operation = 0; operation < operationCount; operation++)
+		{
+			const int kind = std::uniform_int_distribution<int>(0, 99)(random);
+			if (kind < 30)
+			{
+				scene.SetParent(pick(), std::uniform_int_distribution<int>(0, 9)(random) == 0 ? Entity() : pick(), std::uniform_int_distribution<int>(0, 1)(random) == 0);
+			}
+			else if (kind < 75)
+			{
+				RandomizeTransform(pick(), random);
+			}
+			else if (kind < 95)
+			{
+				Entity entity = pick();
+				entity.SetActive(!entity.IsActive());
+			}
+			else if (scene.GetEntityCount() > entityCount / 2)
+			{
+				// Mostly leaves and small subtrees: the scene keeps most of its entities.
+				Entity entity = pick();
+				while (!entity.GetChildren().empty())
+					entity = entity.GetChildren().front();
+				scene.DestroyEntity(entity);
+				destroyed++;
+			}
+
+			// The hierarchy links first: the transform validation walks them.
+			std::string error;
+			if (!scene.ValidateHierarchy(&error))
+			{
+				FAIL_CHECK("Operation ", operation, ": ", error);
+				break;
+			}
+			scene.UpdateWorldTransforms();
+			if (!scene.ValidateWorldTransforms(&error))
+			{
+				FAIL_CHECK("Operation ", operation, ": ", error);
+				break;
+			}
+		}
+		CHECK(destroyed > 0);
 		CheckSceneCaches(scene);
 	}
 }

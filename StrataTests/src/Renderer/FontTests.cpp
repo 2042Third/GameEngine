@@ -5,7 +5,9 @@
 #include "Strata/Renderer/Font.h"
 #include "Strata/Renderer/FontAtlas.h"
 #include "Strata/Renderer/FontValidation.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/TextLayout.h"
+#include "TestHelpers.h"
 
 #include <algorithm>
 #include <cmath>
@@ -854,7 +856,11 @@ TEST_SUITE("Renderer.Font")
 			CHECK_FALSE(error.empty());
 		}
 	}
+}
 
+// Corrupted fonts: a sample in the Core shard, every corruption in StrataTests.Fuzz (Tests::SelectSweepIterations).
+TEST_SUITE("Renderer.Font.Sweep")
+{
 	TEST_CASE("Randomly corrupted fonts are rejected or render without crashing")
 	{
 		// Deterministic fuzzing: a few bytes of the default font are overwritten, mostly inside the structures stb_truetype
@@ -864,8 +870,9 @@ TEST_SUITE("Renderer.Font")
 		std::mt19937 random(0x5EED2026u);
 		QuietLog quiet;
 		uint32_t accepted = 0;
-		constexpr uint32_t c_Iterations = 1500;
-		for (uint32_t iteration = 0; iteration < c_Iterations; iteration++)
+		// A sample of the corruptions in the Core shard, all of them in StrataTests.Fuzz.
+		const uint32_t iterations = Tests::SelectSweepIterations(300, 1500);
+		for (uint32_t iteration = 0; iteration < iterations; iteration++)
 		{
 			std::vector<uint8_t> data = original.Data;
 			const uint32_t corruptions = 1 + random() % 6;
@@ -907,7 +914,7 @@ TEST_SUITE("Renderer.Font")
 			CHECK(std::isfinite(atlas->GetMetrics().LineHeight));
 		}
 		CAPTURE(accepted);
-		CHECK(accepted > c_Iterations / 10);   // Many corruptions are harmless...
-		CHECK(accepted < c_Iterations);        // ...and some are caught
+		CHECK(accepted > iterations / 10);   // Many corruptions are harmless...
+		CHECK(accepted < iterations);        // ...and some are caught
 	}
 }
