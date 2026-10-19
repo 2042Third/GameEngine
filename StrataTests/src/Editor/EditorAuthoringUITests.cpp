@@ -1000,6 +1000,15 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(label("Inspector.SkyLight.EnvironmentMap").Enabled);
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.SkyLight.EnvironmentMap.Inactive").has_value());
 		CHECK_FALSE(label("Inspector.PostProcess.AutoExposureMinEV").Enabled);
+
+		// The game UI's rows too: a canvas that scales with the screen has no use for the constant modes' factor.
+		const UUID canvas = editor.Create("Canvas", { { "components", { { "UIRect", nlohmann::json::object() }, { "UICanvas", { { "ScaleMode", "ScaleWithScreen" } } } } } });
+		editor.Context().Select(canvas);
+		editor.Frames(3);
+		CHECK_FALSE(label("Inspector.UICanvas.ScaleFactor").Enabled);
+		REQUIRE(UI::ItemProbe::Find("Inspector.UICanvas.ScaleFactor.Inactive").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.UICanvas.ScaleFactor.Inactive")->Text == "Only the constant scale modes use it (Scale Mode is Scale With Screen)");
+		CHECK(label("Inspector.UICanvas.ReferenceResolution").Enabled);
 	}
 
 	TEST_CASE("Clicking the X-axis label resets only X")

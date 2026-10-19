@@ -49,6 +49,167 @@ namespace Strata
 				{ "BottomToTop", 3, "Bottom To Top" } };
 		}
 
+		// Inactive reasons (PropertyInfo::InactiveReason) of the UI's properties, each following the code that reads the
+		// property: the canvas's scale (GameUIScene::ComputeScale, the world-space plane), the image's quads (GameUIQuads), a
+		// text's outline, a selectable's transition (GameUISystem) and navigation, and a layout group's grid (GameUILayout).
+		template<typename T>
+		void SetInactiveReasons(std::initializer_list<const char*> properties, std::string (*reason)(const T&))
+		{
+			for (const char* property : properties)
+				ComponentRegistry::SetInactiveReason<T>(property, reason);
+		}
+
+		const char* GetScaleModeName(UICanvasScaleMode mode)
+		{
+			switch (mode)
+			{
+				case UICanvasScaleMode::ConstantPixelSize: return "Constant Pixel Size";
+				case UICanvasScaleMode::ScaleWithScreen: return "Scale With Screen";
+				case UICanvasScaleMode::ConstantPhysicalSize: return "Constant Physical Size";
+			}
+			return "Constant Pixel Size";
+		}
+
+		const char* GetImageTypeName(UIImageType type)
+		{
+			switch (type)
+			{
+				case UIImageType::Simple: return "Simple";
+				case UIImageType::Sliced: return "Sliced";
+				case UIImageType::Filled: return "Filled";
+			}
+			return "Simple";
+		}
+
+		const char* GetTransitionName(UISelectableTransition transition)
+		{
+			switch (transition)
+			{
+				case UISelectableTransition::None: return "None";
+				case UISelectableTransition::ColorTint: return "Color Tint";
+				case UISelectableTransition::ImageSwap: return "Image Swap";
+			}
+			return "None";
+		}
+
+		// A canvas in the world is a plane of Reference Resolution units: the screen's scale plays no part.
+		std::string ScreenSpaceOnly(const UICanvasComponent& canvas)
+		{
+			return canvas.RenderMode == UICanvasRenderMode::WorldSpace ? "A canvas in the world is laid out at its Reference Resolution, not for the screen" : std::string();
+		}
+
+		std::string ScaleWithScreenOnly(const UICanvasComponent& canvas)
+		{
+			if (canvas.RenderMode == UICanvasRenderMode::WorldSpace)
+				return ScreenSpaceOnly(canvas);
+			return canvas.ScaleMode == UICanvasScaleMode::ScaleWithScreen ? std::string()
+				: fmt::format("Only Scale With Screen uses it (Scale Mode is {})", GetScaleModeName(canvas.ScaleMode));
+		}
+
+		// The reference size is the plane's size in the world, and what Scale With Screen keeps the proportions of.
+		std::string ReferenceResolutionUsed(const UICanvasComponent& canvas)
+		{
+			if (canvas.RenderMode == UICanvasRenderMode::WorldSpace || canvas.ScaleMode == UICanvasScaleMode::ScaleWithScreen)
+				return {};
+			return fmt::format("Only Scale With Screen and canvases in the world use it (Scale Mode is {})", GetScaleModeName(canvas.ScaleMode));
+		}
+
+		std::string ConstantModesOnly(const UICanvasComponent& canvas)
+		{
+			if (canvas.RenderMode == UICanvasRenderMode::WorldSpace)
+				return ScreenSpaceOnly(canvas);
+			return canvas.ScaleMode != UICanvasScaleMode::ScaleWithScreen ? std::string() : "Only the constant scale modes use it (Scale Mode is Scale With Screen)";
+		}
+
+		std::string WorldSpaceOnly(const UICanvasComponent& canvas)
+		{
+			return canvas.RenderMode == UICanvasRenderMode::WorldSpace ? std::string() : "Only a canvas in the world uses it (Render Mode is Screen Space)";
+		}
+
+		std::string ScreenPixelsOnly(const UICanvasComponent& canvas)
+		{
+			return canvas.RenderMode == UICanvasRenderMode::WorldSpace ? "A canvas in the world has no screen pixels to snap to" : std::string();
+		}
+
+		std::string WithTexture(const UIImageComponent& image)
+		{
+			return image.Texture.IsValid() ? std::string() : "Only a texture uses it (Texture is None: a solid color)";
+		}
+
+		std::string SlicedOnly(const UIImageComponent& image)
+		{
+			if (image.Type != UIImageType::Sliced)
+				return fmt::format("Only Sliced images use it (Type is {})", GetImageTypeName(image.Type));
+			return image.Texture.IsValid() ? std::string() : "Nine-slicing needs a texture (Texture is None)";
+		}
+
+		std::string FilledOnly(const UIImageComponent& image)
+		{
+			return image.Type == UIImageType::Filled ? std::string() : fmt::format("Only Filled images use it (Type is {})", GetImageTypeName(image.Type));
+		}
+
+		// A nine-sliced texture is drawn as nine plain pieces.
+		std::string NotSlicedTexture(const UIImageComponent& image)
+		{
+			return image.Type == UIImageType::Sliced && image.Texture.IsValid() ? "Sliced images draw no rounded corners or border" : std::string();
+		}
+
+		std::string KeepsAspect(const UIImageComponent& image)
+		{
+			if (!image.Texture.IsValid())
+				return "Only a texture has an aspect ratio to keep (Texture is None)";
+			return image.Type == UIImageType::Sliced ? "Sliced images stretch their edges and center to the rect" : std::string();
+		}
+
+		std::string WithBorder(const UIImageComponent& image)
+		{
+			if (std::string sliced = NotSlicedTexture(image); !sliced.empty())
+				return sliced;
+			return image.BorderWidth > 0.0f ? std::string() : "Only a border uses it (Border Width is 0)";
+		}
+
+		std::string WithOutline(const UITextComponent& text)
+		{
+			return text.OutlineWidth > 0.0f ? std::string() : "Only an outline uses it (Outline Width is 0)";
+		}
+
+		std::string ColorTintOnly(const UISelectableComponent& selectable)
+		{
+			return selectable.Transition == UISelectableTransition::ColorTint ? std::string()
+				: fmt::format("Only the Color Tint transition uses it (Transition is {})", GetTransitionName(selectable.Transition));
+		}
+
+		std::string ImageSwapOnly(const UISelectableComponent& selectable)
+		{
+			return selectable.Transition == UISelectableTransition::ImageSwap ? std::string()
+				: fmt::format("Only the Image Swap transition uses it (Transition is {})", GetTransitionName(selectable.Transition));
+		}
+
+		std::string WithTransition(const UISelectableComponent& selectable)
+		{
+			return selectable.Transition != UISelectableTransition::None ? std::string() : "The states show nothing (Transition is None)";
+		}
+
+		std::string ExplicitNavigationOnly(const UISelectableComponent& selectable)
+		{
+			if (selectable.Navigation == UINavigation::Explicit)
+				return {};
+			return selectable.Navigation == UINavigation::None ? "Navigation is None: navigation never reaches or leaves it"
+				: "Only Explicit navigation uses it (Navigation is Automatic: the nearest selectable in the direction)";
+		}
+
+		std::string GridOnly(const UILayoutComponent& layout)
+		{
+			return layout.Type == UILayoutType::Grid ? std::string()
+				: fmt::format("Only a Grid uses it (Type is {})", layout.Type == UILayoutType::Horizontal ? "Horizontal" : "Vertical");
+		}
+
+		// A grid's cells all have Cell Size.
+		std::string StackOnly(const UILayoutComponent& layout)
+		{
+			return layout.Type != UILayoutType::Grid ? std::string() : "A Grid gives every child its Cell Size";
+		}
+
 	}
 
 	void RegisterGameUIComponents()
@@ -79,6 +240,12 @@ namespace Strata
 					"Reference Resolution canvas units wide and high, depth-tested like world text" })
 			.Property("WorldUnitsPerUnit", &UICanvasComponent::WorldUnitsPerUnit,
 				WithTooltip(Range(1.0e-5f, 100.0f, 0.0001f), "World Space: world units per canvas unit (0.01: a canvas 100 units wide is a meter)"));
+		SetInactiveReasons<UICanvasComponent>({ "ScaleMode" }, &ScreenSpaceOnly);
+		SetInactiveReasons<UICanvasComponent>({ "ReferenceResolution" }, &ReferenceResolutionUsed);
+		SetInactiveReasons<UICanvasComponent>({ "MatchWidthOrHeight" }, &ScaleWithScreenOnly);
+		SetInactiveReasons<UICanvasComponent>({ "ScaleFactor" }, &ConstantModesOnly);
+		SetInactiveReasons<UICanvasComponent>({ "PixelSnap" }, &ScreenPixelsOnly);
+		SetInactiveReasons<UICanvasComponent>({ "WorldUnitsPerUnit" }, &WorldSpaceOnly);
 
 		ComponentRegistry::Register<UIRectComponent>(c_RectName)
 			.DisplayName("UI Rect")
@@ -112,6 +279,12 @@ namespace Strata
 			.Property("BorderWidth", &UIImageComponent::BorderWidth, WithTooltip(Range(0.0f, c_Unbounded, 0.5f), "Canvas units, inside the rect"))
 			.Property("BorderColor", &UIImageComponent::BorderColor, Color())
 			.Property("RaycastTarget", &UIImageComponent::RaycastTarget, WithTooltip({}, "Hit by the pointer, so the game does not get clicks on it"));
+		SetInactiveReasons<UIImageComponent>({ "UVRect" }, &WithTexture);
+		SetInactiveReasons<UIImageComponent>({ "SliceBorders", "SliceScale" }, &SlicedOnly);
+		SetInactiveReasons<UIImageComponent>({ "FillAmount", "FillDirection" }, &FilledOnly);
+		SetInactiveReasons<UIImageComponent>({ "PreserveAspect" }, &KeepsAspect);
+		SetInactiveReasons<UIImageComponent>({ "CornerRadius", "BorderWidth" }, &NotSlicedTexture);
+		SetInactiveReasons<UIImageComponent>({ "BorderColor" }, &WithBorder);
 
 		ComponentRegistry::Register<UITextComponent>("UIText")
 			.DisplayName("UI Text")
@@ -131,6 +304,7 @@ namespace Strata
 			.Property("OutlineWidth", &UITextComponent::OutlineWidth, WithTooltip(Range(0.0f, 0.1f, 0.001f), "Em"))
 			.Property("OutlineColor", &UITextComponent::OutlineColor, Color())
 			.Property("RaycastTarget", &UITextComponent::RaycastTarget, WithTooltip({}, "Hit by the pointer, so the game does not get clicks on it"));
+		SetInactiveReasons<UITextComponent>({ "OutlineColor" }, &WithOutline);
 
 		ComponentRegistry::Register<UISelectableComponent>("UISelectable")
 			.DisplayName("UI Selectable")
@@ -157,6 +331,11 @@ namespace Strata
 			.EntityProperty("NavigateDown", &UISelectableComponent::NavigateDown, { .Tooltip = "Explicit navigation" })
 			.EntityProperty("NavigateLeft", &UISelectableComponent::NavigateLeft, { .Tooltip = "Explicit navigation" })
 			.EntityProperty("NavigateRight", &UISelectableComponent::NavigateRight, { .Tooltip = "Explicit navigation" });
+		SetInactiveReasons<UISelectableComponent>({ "NormalColor", "HoverColor", "PressedColor", "FocusedColor", "DisabledColor", "FadeDuration" },
+			&ColorTintOnly);
+		SetInactiveReasons<UISelectableComponent>({ "HoverImage", "PressedImage", "FocusedImage", "DisabledImage" }, &ImageSwapOnly);
+		SetInactiveReasons<UISelectableComponent>({ "TargetImage" }, &WithTransition);
+		SetInactiveReasons<UISelectableComponent>({ "NavigateUp", "NavigateDown", "NavigateLeft", "NavigateRight" }, &ExplicitNavigationOnly);
 
 		ComponentRegistry::Register<UIButtonComponent>("UIButton")
 			.DisplayName("UI Button")
@@ -206,6 +385,8 @@ namespace Strata
 			.Property("StretchChildren", &UILayoutComponent::StretchChildren, WithTooltip({}, "Children fill the cross axis"))
 			.Property("CellSize", &UILayoutComponent::CellSize, WithTooltip(Range(1.0f, c_Unbounded, 1.0f), "Grid: the size of a cell, in canvas units"))
 			.Property("Columns", &UILayoutComponent::Columns, WithTooltip(Range(0.0f, 4096.0f), "Grid: 0 fits as many columns as the width holds"));
+		SetInactiveReasons<UILayoutComponent>({ "CellSize", "Columns" }, &GridOnly);
+		SetInactiveReasons<UILayoutComponent>({ "StretchChildren" }, &StackOnly);
 
 		ComponentRegistry::Register<UIInputFieldComponent>("UIInputField")
 			.DisplayName("UI Input Field")

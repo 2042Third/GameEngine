@@ -1746,8 +1746,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   selected, only when that holds on every one (`GetSharedInactiveReason`). A component property that can be inactive
   gets a `PropertyInfo::InactiveReason`, set with `ComponentRegistry::SetInactiveReason<T>(property, reason)` while
   registration is open, next to the component's registration in its module (the built-in rows in
-  `Scene/ComponentRegistration.cpp`, `Renderer/RendererComponents.cpp` and `Animation/AnimationComponents.cpp`, each
-  following the code that reads the property); `component.get` and `entity.get` list them as `inactive`. It shows the scene's settings (gravity, the fixed step, the physics
+  `Scene/ComponentRegistration.cpp`, `Renderer/RendererComponents.cpp`, `Animation/AnimationComponents.cpp` and
+  `GameUI/GameUIComponents.cpp`: the canvas's scale settings by scale and render mode, an image's slices, fill, texture
+  part and border, a text's outline color, a selectable's transition states and explicit navigation, a layout's grid;
+  each following the code that reads the property); `component.get` and `entity.get` list them as `inactive`. It shows the scene's settings (gravity, the fixed step, the physics
   world's capacities and the collision layers: names and a compact matrix, long names elided; bodies and controllers
   choose their layer among layer 0 and the named ones; how many entities sub-scenes create per frame) and sky with
   nothing selected, in sections that start closed with a summary on their headers
