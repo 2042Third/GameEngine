@@ -8,6 +8,7 @@
 #include "TestHelpers.h"
 
 #include <algorithm>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -439,6 +440,36 @@ TEST_SUITE("Network.EditorSession")
 		CHECK_FALSE(error.empty());
 		CHECK_FALSE(FileSystem::Exists(EditorSession::GetProjectSessionFilePath(projectDirectory)));
 		CHECK_FALSE(EditorSession::ReadProjectSession(projectDirectory).has_value());
+	}
+
+	TEST_CASE("The project's pointer is written before the session file")
+	{
+		// A client that finds the session (StrataCLI's launch waits for its file) must find the pointer too: it is written
+		// first. Both writes fail here, so the order shows in the log: the pointer's warning, then the session's error.
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("EditorSessionsOrder") / "Sessions";
+		const std::filesystem::path projectDirectory = Tests::CreateTemporaryDirectory("EditorSessionOrderProject");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+		Tests::LiveProcess editorProcess;
+		REQUIRE(EditorSession::GetSessionDirectory());
+		REQUIRE(FileSystem::WriteText(projectDirectory / ".strata", "not a directory"));
+		REQUIRE(FileSystem::CreateDirectories(EditorSession::GetSessionFilePath(sessionDirectory, editorProcess.GetProcessId())));
+
+		const EditorSessionInfo session = MakeSession(editorProcess.GetProcessId(), 47003, "2026-01-01T10:00:00Z", FileSystem::ToUTF8(projectDirectory));
+		const Tests::LogCapture log;
+		CHECK_FALSE(EditorSession::WriteSessionFiles(session));
+		std::optional<size_t> pointerWarning;
+		std::optional<size_t> sessionError;
+		const std::vector<LogEntry> entries = log.GetEntries();
+		for (size_t index = 0; index < entries.size(); index++)
+		{
+			if (entries[index].Message.find("session pointer cannot be written") != std::string::npos)
+				pointerWarning = pointerWarning.value_or(index);
+			else if (entries[index].Level == LogLevel::Error && entries[index].Message.find("EditorSession:") != std::string::npos)
+				sessionError = sessionError.value_or(index);
+		}
+		REQUIRE(pointerWarning.has_value());
+		REQUIRE(sessionError.has_value());
+		CHECK(*pointerWarning < *sessionError);
 	}
 
 	TEST_CASE("Removing a session keeps a project pointer that another editor took over")
