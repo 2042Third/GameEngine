@@ -362,11 +362,9 @@ Open items and deferrals later waves own:
 - Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
   `GameRuntime`, the editor and many tests use the script engine directly; physics, audio and animation can be left
   out (`STRATA_WITH_PHYSICS`, `STRATA_WITH_AUDIO`, `STRATA_WITH_ANIMATION`, wave 4's `engine-modules`).
-- Physics: what an overflowing world needed is remembered per scene for the process, not saved with the scene;
-  automatic capacities reserve Jolt's buffers generously (70,000 bodies reserve about a million body pairs), and a world
-  at the largest capacities still reserves about 940 MiB at play start; dynamic bodies below other dynamic bodies are
-  still written back one by one; a collider built from a mesh that is reimported while evicted keeps the old data until
-  the mesh loads again (the source revisions render-scene uses would tell).
+- Physics: dynamic bodies below other dynamic bodies are still written back one by one; a collider built from a mesh
+  that is reimported while evicted keeps the old data until the mesh loads again (the source revisions render-scene uses
+  would tell).
 - Textures: HDR textures stay RGBA16F until a BC6H encoder exists.
 - `GetResidencyInfo` and `GetResidencySamples` walk every registered asset (`GetStats` keeps counts instead), which a world of many
   registered assets will feel (`world-partition`). Two caches keep assets between frames: `SceneRenderer`'s environment

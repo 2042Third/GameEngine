@@ -51,6 +51,7 @@ characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together
   - [Crash locations and containment](#crash-locations-and-containment)
 - [Audio](#audio)
 - [Animation](#animation)
+- [World partition](#world-partition)
 - [Editor](#editor)
   - [Editor UI rules](#editor-ui-rules)
   - [Changes go through commands](#changes-go-through-commands)
@@ -1197,6 +1198,41 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `SceneRendererStats::StalePoses`), and the system poses such an animator for the next frame, also while the scene is
   paused (`SceneSystem::OnPausedUpdate`, which paused frames call instead of the updates): `viewport.capture` renders
   again until it shows the pose of the moment.
+
+## World partition
+
+`Strata/src/Strata/World/` holds the World asset (`.stworld`: layers, cells, the cooked index), the grid math, the
+components `World` and `StreamingSource`, the streaming core `WorldStreamer` and the "World" scene system (Play and
+Simulate); the editor's world is `StrataEditor/src/Editor/EditorWorld.h`, the cook `Editor/WorldCook.h`. How it all
+works: Docs/Architecture.md, "World partition"; for people: Docs/Manual/Worlds.md.
+
+- **Never copy a whole world.** The edited scene is the persistent scene plus the cells the editor has loaded around its
+  camera (and the pinned, selected and dirty ones); `EditorContext::StartRuntime` copies exactly that and
+  `EditorWorld::PrepareRuntimeCopy` adopts the copied cells, so play never holds more than the edit radius. Code that
+  needs another cell loads it (`world.loadCells`, `EditorWorld::PinCell`) instead of reading the world's files.
+- **Membership.** A loaded cell is a sub-scene whose top-level entities carry its `SubSceneComponent` (runtime only:
+  never serialized, never registered). It changes only through `Scene::SetSubSceneOf` (`AdoptSubScene` for a new cell)
+  and, in the editor, `EditorWorld` (`Recell`, `MoveEntities`), so undo steps record it (`EntityState::Cell`) and
+  `SceneEdit::CheckCells` can refuse a step whose cell is not loaded. Only `EditorWorld::Save` writes cell documents,
+  through the `Editor/WorldCellIO` seam (world-io's writer replaces it); a cell's scene handle is derived from the
+  world's (`DeriveSubAssetHandle(world, "Cell/<layer>/<x>/<z>")`), so steps name cells before their files exist.
+- **Precision.** Scenes and physics are float32: worlds stay within `WorldData::c_SupportedExtent` (20 km) of the
+  origin, where positions resolve to about 2 mm; `world.cook` warns about cells beyond it and `World.Coordinates` tests
+  streaming, physics and rays there.
+- **Prepared starts and budgets.** A scene that will run (games' start and switches, play-mode switches) loads with
+  `SceneLoadOptions::PrepareSystems`: the systems' `SceneSystemDescriptor::PrepareLoadedScene` hooks run while it is
+  `Preparing` (World loads the `LoadBeforeStart` cells around its sources, Physics builds their bodies in slices), so
+  the swap frame creates nothing. Loading work (sub-scene slices, preparation, the streamer) draws from the frame's
+  `SceneWorkBudget` (`SceneWorkBudget::ForFrame`, made once per frame by `GameRuntime::Update` and
+  `EditorContext::Update`); unloads are sliced (`SubSceneState::Unloading`, `SceneSettings::MaxEntitiesDestroyedPerFrame`).
+- **Physics never drops collision.** Bodies that find the world full wait in a FIFO (`BuildFailure::WaitingForSlot`)
+  that no step polls; the world grows by migration between steps (`PhysicsWorld::Grow`, keeping every body ID, velocity,
+  sleep state and contact), before streamed cells arrive (`IPhysicsCapacity::Reserve` with the cooked counts), up to
+  `PhysicsSettings::GrowthLimit`; only a world at that limit leaves bodies waiting, and the editor shows it (`physics.stats`,
+  the Streaming panel's Physics section, a status pill).
+- **Idle cost.** A scene without a `WorldComponent` costs the World system one storage-size check per update, an editor
+  without a world nothing, and a still world an update of O(sources); UI that shows cells (the cell map, the cell bounds)
+  works them out again only when `WorldStreamingStats::StateVersion` changed.
 
 ## Editor
 
