@@ -173,6 +173,14 @@ TEST_SUITE("Editor.Scripts")
 		const nlohmann::json* animator = FindClass(status, "AnimatorAPI");
 		REQUIRE(animator);
 		CHECK(std::find((*animator)["callbacks"].begin(), (*animator)["callbacks"].end(), "OnAnimationEvent") != (*animator)["callbacks"].end());
+		// And the game UI's, the last ones of the enum.
+		const nlohmann::json* ui = FindClass(status, "UIEventRecorder");
+		REQUIRE(ui);
+		for (const char* callback : { "OnUIClick", "OnUIValueChanged", "OnUIFocusChanged", "OnUISubmit" })
+		{
+			CAPTURE(callback);
+			CHECK(std::find((*ui)["callbacks"].begin(), (*ui)["callbacks"].end(), callback) != (*ui)["callbacks"].end());
+		}
 		bool sawInt = false;
 		for (const nlohmann::json& field : (*fieldTypes)["fields"])
 		{
