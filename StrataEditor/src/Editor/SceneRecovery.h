@@ -214,9 +214,13 @@ namespace Strata
 		// Starts listing the project's recovery files (after the file operations asked for before). The entries are there
 		// once IsScanning is false.
 		void Scan();
+		// The project's files are listed later, by a Scan that waits for something first (the asset registry, which a scan in
+		// the background fills): until that Scan, IsScanning is true, so that nothing takes the empty entries for the project's
+		// (the offer as the project opens), and Update starts no scan of its own. SetProject and Scan end it.
+		void ExpectScan() { m_ScanExpected = IsActive(); }
 		// Lists them again as soon as no scan runs (Update starts it), e.g. because a scene of an entry moved.
 		void RequestScan() { m_RescanDue = true; }
-		bool IsScanning() const { return m_Scan != nullptr; }
+		bool IsScanning() const { return m_Scan != nullptr || m_ScanExpected; }
 		// The recovery files of the last scan, newest first (applicable or not). The version changes with every scan and
 		// discard.
 		const std::vector<RecoveryEntry>& GetEntries() const { return m_Entries; }
@@ -350,7 +354,8 @@ namespace Strata
 		std::deque<Operation> m_Operations;
 		JobHandle m_Running;
 
-		Ref<ScanResult> m_Scan; // The scan in progress
+		Ref<ScanResult> m_Scan;      // The scan in progress
+		bool m_ScanExpected = false; // A scan follows once something it waits for is done (ExpectScan)
 		std::vector<RecoveryEntry> m_Entries;
 		uint64_t m_EntriesVersion = 0;
 		std::unordered_set<std::string> m_DiscardedHere; // Entries EndScene wrote marked discarded since SetProject
