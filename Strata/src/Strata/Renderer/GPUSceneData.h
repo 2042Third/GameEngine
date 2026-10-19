@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 
+#include <cstddef>
 #include <cstdint>
 
 // GPU data layouts of the GPU-driven path (GPU culling and indirect draws), shared with its shaders. Every struct is std430
@@ -171,8 +172,12 @@ namespace Strata::RenderData
 		uint32_t SizeCulled = 0;       // Proxies in the frustum smaller than SceneRendererSpecification::MinProjectedPixels
 		uint32_t InstancesPerLOD[8] = {}; // View instances per level of detail, the last counting all higher levels
 		uint32_t Occluded = 0;         // Proxies in the frustum hidden behind what the view draws (the second phase's test)
-		uint32_t Reserved[11] = {};
+		uint32_t VisibleLights = 0;    // Point and spot lights in the view (Scene/LightCompact.comp: the GPU-driven path's lights)
+		uint32_t DrawnLights = 0;      // Point and spot lights that are drawn somewhere (in the view or not)
+		uint32_t Reserved[9] = {};
 	};
 	static_assert(sizeof(CullCounters) == 128);
+	// Include/Lights.glsl's ST_COUNTER_VISIBLE_LIGHTS and ST_COUNTER_DRAWN_LIGHTS.
+	static_assert(offsetof(CullCounters, VisibleLights) == 21 * sizeof(uint32_t) && offsetof(CullCounters, DrawnLights) == 22 * sizeof(uint32_t));
 
 }

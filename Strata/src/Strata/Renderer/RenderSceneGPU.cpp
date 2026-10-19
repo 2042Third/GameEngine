@@ -66,7 +66,7 @@ namespace Strata
 		clone->m_CommandList->open();
 		bool created = true;
 		for (GrowingBuffer* buffer : { &clone->m_Instances, &clone->m_Proxies, &clone->m_Palette, &clone->m_MeshTableBuffer, &clone->m_MaterialBuffer,
-			&clone->m_MaterialFlagBuffer })
+			&clone->m_MaterialFlagBuffer, &clone->m_LightRecords })
 		{
 			if (!buffer->Buffer)
 				continue;
@@ -96,13 +96,13 @@ namespace Strata
 	bool RenderSceneGPU::HoldsVersions(const RenderScene::ChangeVersions& versions) const
 	{
 		return m_Initialized && !m_UploadAllTables && m_ProxyVersion == versions.Proxy && m_InstanceVersion == versions.Instance
-			&& m_PaletteVersion == versions.Palette;
+			&& m_PaletteVersion == versions.Palette && m_LightVersion == versions.Light;
 	}
 
 	uint64_t RenderSceneGPU::GetBufferBytes() const
 	{
 		uint64_t bytes = 0;
-		for (const GrowingBuffer* buffer : { &m_Instances, &m_Proxies, &m_Palette, &m_MeshTableBuffer, &m_MaterialBuffer, &m_MaterialFlagBuffer })
+		for (const GrowingBuffer* buffer : { &m_Instances, &m_Proxies, &m_Palette, &m_MeshTableBuffer, &m_MaterialBuffer, &m_MaterialFlagBuffer, &m_LightRecords })
 			bytes += buffer->Buffer ? buffer->Buffer->getDesc().byteSize : 0;
 		return bytes;
 	}
@@ -488,8 +488,9 @@ namespace Strata
 			m_BudgetLeft = newProxyBytesPerFrame;
 			m_FrameNewProxies = 0;
 		}
+		const RenderLights& lights = renderScene.GetLights();
 		const bool changed = !m_Initialized || renderScene.GetProxyVersion() != m_ProxyVersion || renderScene.GetInstanceVersion() != m_InstanceVersion
-			|| renderScene.GetPaletteVersion() != m_PaletteVersion;
+			|| renderScene.GetPaletteVersion() != m_PaletteVersion || lights.GetVersion() != m_LightVersion;
 		const bool pendingRoom = m_PendingHead < m_Pending.size() && (m_BudgetLeft > 0 || m_FrameNewProxies == 0);
 		const bool tablesChanged = AssetTablesChanged(renderScene, assets);
 		if (!changed && !pendingRoom && !tablesChanged)
@@ -510,7 +511,8 @@ namespace Strata
 			&& EnsureCapacity(m_Palette, palette.size(), sizeof(RenderData::AffineTransform), "Palette", false)
 			&& EnsureCapacity(m_MeshTableBuffer, renderScene.GetMeshSlotCapacity(), sizeof(uint32_t), "MeshTable", true)
 			&& EnsureCapacity(m_MaterialBuffer, renderScene.GetMaterialSlotCapacity(), sizeof(RenderData::MaterialData), "Materials", true)
-			&& EnsureCapacity(m_MaterialFlagBuffer, renderScene.GetMaterialSlotCapacity(), sizeof(uint32_t), "MaterialFlags", true);
+			&& EnsureCapacity(m_MaterialFlagBuffer, renderScene.GetMaterialSlotCapacity(), sizeof(uint32_t), "MaterialFlags", true)
+			&& EnsureCapacity(m_LightRecords, lights.GetCapacity(), sizeof(RenderData::LightRecord), "LightRecords", true);
 		if (!buffersReady)
 		{
 			// The copies of the buffers made so far keep what they held.
@@ -677,6 +679,23 @@ namespace Strata
 			flush();
 		}
 
+		// Light records: those that changed (all of them when the log does not reach back far enough).
+		if (lights.GetCapacity() > 0 && (!m_Initialized || lights.GetVersion() != m_LightVersion))
+		{
+			m_LightMarks.clear();
+			if (!m_Initialized || !lights.GetChanges(m_LightVersion, m_LightMarks))
+			{
+				m_LightMarks.resize(lights.GetCapacity());
+				for (uint32_t record = 0; record < lights.GetCapacity(); record++)
+					m_LightMarks[record] = record;
+			}
+			const size_t lightRegions = m_Regions.size();
+			AddRuns(m_LightMarks, m_LightRecords.Buffer, reinterpret_cast<const uint8_t*>(lights.GetRecords().data()), sizeof(RenderData::LightRecord),
+				c_RecordRunGap, nullptr);
+			for (size_t index = lightRegions; index < m_Regions.size(); index++)
+				update.LightBytes += m_Regions[index].Size;
+		}
+
 		// The asset tables: what the scene's mesh and material slots hold now.
 		if (tablesChanged)
 		{
@@ -728,6 +747,8 @@ namespace Strata
 		m_ProxyVersion = renderScene.GetProxyVersion();
 		m_InstanceVersion = renderScene.GetInstanceVersion();
 		m_PaletteVersion = renderScene.GetPaletteVersion();
+		m_LightVersion = lights.GetVersion();
+		m_LightCapacity = lights.GetCapacity();
 		if (outUpdate)
 			*outUpdate = update;
 		return true;

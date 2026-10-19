@@ -3,6 +3,7 @@
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
 #include "Strata/Math/AABB.h"
+#include "Strata/Renderer/RenderLights.h"
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Renderer/SpatialIndex.h"
 
@@ -134,6 +135,7 @@ namespace Strata
 			uint64_t Proxy = 0;
 			uint64_t Instance = 0;
 			uint64_t Palette = 0;
+			uint64_t Light = 0;
 		};
 		const ChangeVersions& GetCloneVersions() const { return m_CloneVersions; }
 
@@ -196,6 +198,10 @@ namespace Strata
 		uint32_t GetInstanceCount(uint32_t proxy) const { return m_InstanceCounts[proxy]; }
 
 		const SpatialIndex& GetSpatialIndex() const { return m_Index; }
+
+		// The scene's point and spot lights (synced with the proxies): what the GPU-driven path culls into the light clusters,
+		// and the CPU path walks.
+		const RenderLights& GetLights() const { return m_Lights; }
 
 		//////////////////////////////////////////////////////////////////////////
 		// Meshes and materials
@@ -522,6 +528,7 @@ namespace Strata
 		uint32_t m_SyncUpdates = 0;
 		std::vector<entt::entity> m_ChangeScratch;
 		std::vector<entt::entity> m_PendingScratch;
+		RenderLights m_Lights;
 
 		// Clones (CopyIntoScene): the source, its change logs' versions then, and whether the next sync reads every transform.
 		uint64_t m_CloneSource = 0;

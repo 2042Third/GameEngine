@@ -157,6 +157,32 @@ namespace Strata
 		};
 		static_assert(sizeof(LightData) == 64);
 
+		// A point or spot light of a scene's render lights (RenderLights; mirrored by RenderSceneGPU), in world space: the GPU
+		// culls the records into the light buffer (Scene/LightCull.comp and LightCompact.comp: LightData, camera-relative,
+		// and LightBounds).
+		struct LightRecord
+		{
+			glm::vec4 PositionRange = glm::vec4(0.0f); // xyz: world position, w: range
+			glm::vec4 Color = glm::vec4(0.0f);         // rgb: color * intensity, w: 1 / range^2
+			glm::vec4 DirectionType = glm::vec4(0.0f); // xyz: direction the light travels, w: type
+			glm::vec4 SpotAngles = glm::vec4(0.0f);    // x: cos(inner), y: cos(outer), z: c_LightRecordDrawn or 0
+			glm::vec4 Bounds = glm::vec4(0.0f);        // xyz: world center, w: radius of the region it reaches
+		};
+		static_assert(sizeof(LightRecord) == 80);
+		// LightRecord::SpotAngles.z of a light that is drawn (active, lit, with a range).
+		constexpr float c_LightRecordDrawn = 1.0f;
+
+		// The push constants of the GPU's light culling passes (Include/Lights.glsl).
+		struct LightCullParameters
+		{
+			glm::vec4 Planes[6] = {};   // The view frustum in camera-relative space, inward (Frustum::GetPlanes)
+			uint32_t RecordCount = 0;   // Light records of the scene's GPU copy
+			uint32_t GroupCount = 0;    // Work groups of c_LightGroupSize records
+			uint32_t Padding[2] = {};
+		};
+		static_assert(sizeof(LightCullParameters) == 112);
+		constexpr uint32_t c_LightGroupSize = 64; // ST_LIGHT_GROUP_SIZE
+
 		// Bounding sphere of a light's influence in view space, input of the light cluster assignment.
 		struct LightBounds
 		{

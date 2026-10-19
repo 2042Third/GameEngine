@@ -339,7 +339,7 @@ TEST_SUITE("GPU.ProceduralSky")
 		const ReadbackImage torchOnly = render({});
 		CHECK(MaxDifference(render(preview), torchOnly) == 0);
 		CHECK_FALSE(renderer.GetStats().PreviewLighting);
-		CHECK(renderer.GetStats().Lights == 1);
+		CHECK(GetLightCounts(renderer).Lights == 1);
 		scene.DestroyEntity(torch);
 		CHECK(SceneRenderer::NeedsPreviewLighting(scene));
 		Entity spot = scene.CreateEntity("Spot");

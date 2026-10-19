@@ -265,7 +265,8 @@ namespace Strata
 		uint64_t Triangles = 0;
 		// Drawn submesh instances per selected level of detail; the last entry also counts all higher levels.
 		std::array<uint32_t, c_LODStatCount> InstancesPerLOD = {};
-		uint32_t Lights = 0;          // Rendered lights: the directional light plus the point and spot lights
+		uint32_t Lights = 0;          // Rendered lights: the directional light plus the point and spot lights (the GPU-driven path's
+		                              // point and spot lights are counted on the GPU: SceneRendererGPUStats::Lights, AddGPUCounts)
 		uint32_t CulledLights = 0;    // Point and spot lights outside the view frustum
 		uint32_t DroppedLights = 0;   // Visible point and spot lights beyond SceneRendererSpecification::MaxLights
 		uint32_t Materials = 0;       // Distinct materials drawn
@@ -341,6 +342,8 @@ namespace Strata
 		uint32_t OccludedProxies = 0;  // In the frustum, hidden behind what the view draws (SceneRendererSpecification::OcclusionCulling)
 		uint32_t SubTexelCasters = 0;
 		uint32_t SkinnedInstances = 0;
+		uint32_t Lights = 0;           // Point and spot lights in the view (all of them: no SceneRendererSpecification::MaxLights)
+		uint32_t CulledLights = 0;     // Point and spot lights outside the view
 		uint64_t Triangles = 0;        // Of the view's instances
 		uint32_t DrawListEntries = 0;  // Instances in the draw list (view and cascades)
 		uint32_t Overflow = 0;         // Instances there was no room for (not drawn): 0 unless the buffers could not grow
@@ -688,7 +691,9 @@ namespace Strata
 			BufferKind kind = BufferKind::Structured);
 
 		// The directional light (the preview sun with `preview`), ambient light and the visible point and spot lights.
-		void CollectLights(Scene& scene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame);
+		// The directional light, the sky's ambient and, on the CPU path (or without GPU light culling), the point and spot
+		// lights of the render scene's records in view, ranked and capped at MaxLights.
+		void CollectLights(Scene& scene, const RenderScene& renderScene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame);
 
 		// The GPU timer record of this frame (see m_GPURecords).
 		GPUTimerRecord& BeginGPURecord();
@@ -806,6 +811,11 @@ namespace Strata
 		// Counts, builds the draws and writes the draw list (Scene/Cull.comp, CullBuild.comp) of the cascades and of the view's
 		// first phase (all of the view without occlusion culling).
 		void RunGPUCulling(nvrhi::ICommandList* commandList, bool shadows);
+		// The GPU-driven path's point and spot lights: culls the scene's light records into the light buffer (every light in
+		// view, in record order) and its count (Scene/LightCull.comp, LightCompact.comp), before the light clusters.
+		void CreateLightCullResources();
+		bool EnsureLightCullBindingSets();
+		void RunGPULightCulling(nvrhi::ICommandList* commandList, const SceneCamera& camera);
 		// After the first phase's prepass: the depth pyramid, the view's second phase (what the first did not draw that is
 		// visible against it) and its prepass draws; then copies the counters for the statistics.
 		void RunOcclusionPhase(nvrhi::ICommandList* commandList);
@@ -934,6 +944,7 @@ namespace Strata
 		uint64_t m_BoundSceneGPUVersion = 0;
 		uint64_t m_BoundTextureTableVersion = 0; // TextureTable::GetBufferVersion the binding sets were made for
 		nvrhi::BufferHandle m_LightBuffer;
+		nvrhi::BufferHandle m_LightCountBuffer; // The lights in m_LightBuffer where the GPU culled them (LightCounts.y)
 		// The shadow cascades' projections (RenderData::CascadeData), fitted on the GPU every frame with shadows
 		// (Scene/CascadeFit.comp) from m_CascadeFit and, on the GPU-driven path, the nearest casters its culling found.
 		nvrhi::BufferHandle m_CascadeBuffer;
@@ -1091,6 +1102,19 @@ namespace Strata
 		nvrhi::BufferHandle m_CullArgumentBuffer;    // Per dense bucket: ArgumentsPerBucket indirect draws
 		nvrhi::BufferHandle m_CullBucketCountBuffer; // Per dense bucket: its draws (the count of drawIndexedIndirectCount)
 		nvrhi::BufferHandle m_CullCounterBuffer;     // RenderData::CullCounters
+
+		// GPU light culling (RunGPULightCulling)
+		nvrhi::BindingLayoutHandle m_LightCullLayout;
+		nvrhi::BindingLayoutHandle m_LightCompactLayout;
+		nvrhi::ComputePipelineHandle m_LightCullPipeline;
+		nvrhi::ComputePipelineHandle m_LightCompactPipeline;
+		nvrhi::BindingSetHandle m_LightCullBindingSet;
+		nvrhi::BindingSetHandle m_LightCompactBindingSet;
+		nvrhi::BufferHandle m_LightVisibleBuffer;    // Per light record: whether it is in view
+		nvrhi::BufferHandle m_LightGroupCountBuffer; // Per work group of records: its lights in view
+		std::array<const nvrhi::IBuffer*, 6> m_LightCullBound = {}; // The buffers the binding sets name
+		bool m_GPULightsFrame = false;               // The frame's point and spot lights are culled on the GPU
+		uint32_t m_GPULightRecords = 0;              // The light records the frame's culling reads
 		nvrhi::BufferHandle m_GPUDrawListBuffer;     // The draw list culling writes (view and cascades)
 		nvrhi::BindingSetHandle m_CullBindingSet;
 		nvrhi::BindingSetHandle m_GPUSceneBindingSet;  // The scene bindings with the GPU's draw list

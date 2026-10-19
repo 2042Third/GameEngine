@@ -129,19 +129,6 @@ namespace Strata
 			return device->createTexture(desc);
 		}
 
-		// Smallest sphere around the region a spot light reaches: the part of its range sphere inside the cone.
-		glm::vec4 SpotLightBounds(const glm::vec3& position, const glm::vec3& direction, float range, float cosOuter, float sinOuter)
-		{
-			if (cosOuter >= 0.70710678f)
-			{
-				// Up to 45 degrees the apex and the rim of the spherical cap lie on the bounding sphere.
-				const float radius = range / (2.0f * cosOuter);
-				return glm::vec4(position + direction * radius, radius);
-			}
-			// Wider cones are bounded by the sphere through the rim of the cap.
-			return glm::vec4(position + direction * (range * cosOuter), range * sinOuter);
-		}
-
 		template<typename Component>
 		bool HasActiveComponent(Scene& scene)
 		{
@@ -151,19 +138,6 @@ namespace Strata
 					return true;
 			}
 			return false;
-		}
-
-		bool IsFinite(const glm::mat4& matrix)
-		{
-			for (int column = 0; column < 4; column++)
-			{
-				for (int row = 0; row < 4; row++)
-				{
-					if (!std::isfinite(matrix[column][row]))
-						return false;
-				}
-			}
-			return true;
 		}
 
 	}
@@ -372,8 +346,9 @@ namespace Strata
 
 		bool recreated = false;
 		const bool buffersCreated = EnsureBufferCapacity(m_DrawListBuffer, 1024, sizeof(uint32_t), "DrawList", recreated)
-			&& EnsureBufferCapacity(m_LightBuffer, 64, sizeof(RenderData::LightData), "Lights", recreated)
-			&& EnsureBufferCapacity(m_LightBoundsBuffer, 64, sizeof(RenderData::LightBounds), "LightBounds", recreated)
+			&& EnsureBufferCapacity(m_LightBuffer, 64, sizeof(RenderData::LightData), "Lights", recreated, BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_LightBoundsBuffer, 64, sizeof(RenderData::LightBounds), "LightBounds", recreated, BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_LightCountBuffer, 1, sizeof(uint32_t), "LightCount", recreated, BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, 1024, sizeof(uint32_t), "ShadowDrawList", recreated);
 		ST_CORE_VERIFY(buffersCreated, "SceneRenderer: failed to create the scene buffers");
 
@@ -389,6 +364,7 @@ namespace Strata
 		clusterLayout.bindings = {
 			nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(13),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(21),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0)
 		};
 		m_ClusterBindingLayout = m_Device->createBindingLayout(clusterLayout);
@@ -460,6 +436,7 @@ namespace Strata
 		ST_CORE_VERIFY(m_CascadeBuffer && m_CasterDepthBuffer && m_CascadeFitConstantBuffer && m_CascadeFitPipeline && m_CascadeFitBindingSet,
 			"SceneRenderer: failed to create the shadow cascades' resources");
 		CreateCullResources();
+		CreateLightCullResources();
 
 		nvrhi::BindingLayoutDesc exposureLayout;
 		exposureLayout.visibility = nvrhi::ShaderType::Compute;
@@ -898,6 +875,7 @@ namespace Strata
 		clusterSet.bindings = {
 			nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_SRV(13, m_LightBoundsBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_SRV(21, m_LightCountBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_ClusterBuffer)
 		};
 		m_ClusterBindingSet = m_Device->createBindingSet(clusterSet, m_ClusterBindingLayout);
@@ -1572,7 +1550,7 @@ namespace Strata
 		return pipeline;
 	}
 
-	void SceneRenderer::CollectLights(Scene& scene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame)
+	void SceneRenderer::CollectLights(Scene& scene, const RenderScene& renderScene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame)
 	{
 		ST_PROFILE_STAGE("Render.Extract");
 		entt::registry& registry = scene.GetRegistry();
@@ -1619,34 +1597,48 @@ namespace Strata
 			break;
 		}
 
+		// Exponential depth slices between the near and far distance; the first slice also holds everything closer, the
+		// last everything further away.
+		const glm::uvec3 grid = m_Specification.LightClusterGrid;
+		const float sliceNear = std::max(camera.Near, 0.01f);
+		const float sliceFar = std::isfinite(camera.Far) ? std::clamp(camera.Far, sliceNear * 2.0f, 1.0e6f) : 1.0e6f;
+		const float scale = static_cast<float>(grid.z) / std::log(sliceFar / sliceNear);
+		frame.ClusterGrid = glm::uvec4(grid, m_Specification.MaxLightsPerCluster);
+		frame.ClusterDepth = glm::vec4(scale, -scale * std::log(sliceNear), std::min(camera.Near, 0.0f), c_ClusterDepthEnd);
+
+		m_LightCandidates.clear();
+		m_Lights.clear();
+		m_LightBounds.clear();
+		const RenderLights& lights = renderScene.GetLights();
+		m_GPULightsFrame = m_GPUDrivenFrame && m_LightCullPipeline && m_LightCompactPipeline;
+		if (m_GPULightsFrame)
+		{
+			// The GPU culls every light record into the light buffer (RunGPULightCulling): all lights in view, uncapped.
+			m_GPULightRecords = m_SceneGPU->GetLightCapacity();
+			frame.LightCounts = glm::uvec4(lights.GetCount() > 0 && m_GPULightRecords > 0 ? 1u : 0u, 1u, 0u, 0u);
+			return;
+		}
+
 		// Point and spot lights: frustum culled by the bounding sphere of the region they reach, then ranked by
 		// relevance (lights containing the camera first, then by the projected size of that sphere).
 		const Frustum frustum(camera.Projection * camera.View);
-		m_LightCandidates.clear();
-		auto addLight = [&](const glm::mat4& matrix, const glm::vec3& color, float intensity, float range, uint32_t type, float innerDegrees, float outerDegrees)
+		const std::span<const RenderData::LightRecord> records = lights.GetRecords();
+		for (uint32_t index = 0; index < records.size(); index++)
 		{
-			if (!(intensity > 0.0f) || !(range > 0.0f) || !std::isfinite(intensity) || !std::isfinite(range) || !IsFinite(matrix))
-				return;
-			const glm::vec3 position = glm::vec3(matrix[3]);
-			glm::vec3 direction = glm::vec3(matrix * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
-			const float length = glm::length(direction);
-			direction = length > 1e-6f ? direction / length : glm::vec3(0.0f, 0.0f, -1.0f);
-			const float cosInner = std::cos(glm::radians(innerDegrees));
-			const float cosOuter = std::cos(glm::radians(outerDegrees));
-
+			const RenderData::LightRecord& record = records[index];
+			if (record.SpotAngles.z == 0.0f)
+				continue;
 			LightCandidate candidate;
-			candidate.Bounds = type == RenderData::c_LightSpot ? SpotLightBounds(position, direction, range, cosOuter, std::sin(glm::radians(outerDegrees)))
-				: glm::vec4(position, range);
+			candidate.Bounds = record.Bounds;
 			if (!frustum.IsSphereVisible(glm::vec3(candidate.Bounds), candidate.Bounds.w))
 			{
 				m_Stats.CulledLights++;
-				return;
+				continue;
 			}
-
-			candidate.Data.PositionRange = glm::vec4(position, range);
-			candidate.Data.Color = glm::vec4(color * intensity, 1.0f / (range * range));
-			candidate.Data.DirectionType = glm::vec4(direction, static_cast<float>(type));
-			candidate.Data.SpotAngles = glm::vec4(cosInner, cosOuter, 0.0f, 0.0f);
+			candidate.Data.PositionRange = record.PositionRange;
+			candidate.Data.Color = record.Color;
+			candidate.Data.DirectionType = record.DirectionType;
+			candidate.Data.SpotAngles = glm::vec4(record.SpotAngles.x, record.SpotAngles.y, 0.0f, 0.0f);
 			const float distance = glm::length(glm::vec3(candidate.Bounds) - camera.Position);
 			if (camera.Orthographic)
 				candidate.Relevance = candidate.Bounds.w; // The projected size does not depend on the distance
@@ -1654,22 +1646,8 @@ namespace Strata
 				candidate.Relevance = std::numeric_limits<float>::max();
 			else
 				candidate.Relevance = candidate.Bounds.w / (distance - candidate.Bounds.w);
-			candidate.Order = static_cast<uint32_t>(m_LightCandidates.size());
+			candidate.Order = index;
 			m_LightCandidates.push_back(candidate);
-		};
-
-		for (auto [entity, light, world] : registry.view<PointLightComponent, WorldTransformComponent>().each())
-		{
-			if (world.ActiveInHierarchy)
-				addLight(world.Matrix, light.Color, light.Intensity, light.Range, RenderData::c_LightPoint, 0.0f, 0.0f);
-		}
-		for (auto [entity, light, world] : registry.view<SpotLightComponent, WorldTransformComponent>().each())
-		{
-			if (!world.ActiveInHierarchy)
-				continue;
-			const float outer = std::clamp(light.OuterConeAngle, 0.1f, 89.9f);
-			const float inner = std::clamp(light.InnerConeAngle, 0.0f, outer);
-			addLight(world.Matrix, light.Color, light.Intensity, light.Range, RenderData::c_LightSpot, inner, outer);
 		}
 
 		// The order also decides which lights a full cluster keeps.
@@ -1691,8 +1669,6 @@ namespace Strata
 
 		// Uploaded camera-relative (the shaders' positions are), the subtraction in double so lights near a camera far from
 		// the origin keep their precision; the clusters' bounds are in view space.
-		m_Lights.clear();
-		m_LightBounds.clear();
 		const glm::mat3 viewRotation(camera.View);
 		const glm::dvec3 cameraPosition(camera.Position);
 		for (const LightCandidate& candidate : m_LightCandidates)
@@ -1704,15 +1680,6 @@ namespace Strata
 			m_LightBounds.push_back(RenderData::LightBounds { glm::vec4(viewRotation * relativeCenter, candidate.Bounds.w) });
 		}
 		frame.LightCounts = glm::uvec4(static_cast<uint32_t>(m_Lights.size()), 0, 0, 0);
-
-		// Exponential depth slices between the near and far distance; the first slice also holds everything closer, the
-		// last everything further away.
-		const glm::uvec3 grid = m_Specification.LightClusterGrid;
-		const float sliceNear = std::max(camera.Near, 0.01f);
-		const float sliceFar = std::isfinite(camera.Far) ? std::clamp(camera.Far, sliceNear * 2.0f, 1.0e6f) : 1.0e6f;
-		const float scale = static_cast<float>(grid.z) / std::log(sliceFar / sliceNear);
-		frame.ClusterGrid = glm::uvec4(grid, m_Specification.MaxLightsPerCluster);
-		frame.ClusterDepth = glm::vec4(scale, -scale * std::log(sliceNear), std::min(camera.Near, 0.0f), c_ClusterDepthEnd);
 	}
 
 	void SceneRenderer::DrawBatches(nvrhi::ICommandList* commandList, Pass pass, bool transparent)
@@ -1942,12 +1909,11 @@ namespace Strata
 		// Preview lighting only stands in for lighting the scene does not have at all.
 		const bool preview = options.PreviewEnvironment && NeedsPreviewLighting(scene);
 		m_Stats.PreviewLighting = preview;
-		CollectLights(scene, camera, preview, frame);
-
-		// The GPU-driven path culls and builds the opaque and shadow draws on the GPU; the CPU still resolves the frame's assets
-		// and fits the cascades, and draws transparent surfaces.
+		// The GPU-driven path culls and builds the opaque and shadow draws on the GPU, and culls the point and spot lights; the
+		// CPU still resolves the frame's assets and fits the cascades, and draws transparent surfaces.
 		m_GPUDrivenFrame = IsGPUDriven();
 		m_Stats.GPUDriven = m_GPUDrivenFrame;
+		CollectLights(scene, renderScene, camera, preview, frame);
 		const auto extractionStart = std::chrono::steady_clock::now();
 		// The CPU's culling works in world space (the spatial index holds world bounds).
 		const Frustum frustum(camera.Projection * camera.View);
@@ -1996,8 +1962,10 @@ namespace Strata
 		const bool buffersReady = (!m_GPUDrivenFrame || EnsureCullBuffers(cullRecreated))
 			&& EnsureBufferCapacity(m_DrawListBuffer, m_DrawInstancesBuild.size(), sizeof(uint32_t), "DrawList", drawListsRecreated)
 			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, m_ShadowDrawInstancesBuild.size(), sizeof(uint32_t), "ShadowDrawList", drawListsRecreated)
-			&& EnsureBufferCapacity(m_LightBuffer, m_Lights.size(), sizeof(RenderData::LightData), "Lights", buffersRecreated)
-			&& EnsureBufferCapacity(m_LightBoundsBuffer, m_LightBounds.size(), sizeof(RenderData::LightBounds), "LightBounds", buffersRecreated)
+			&& EnsureBufferCapacity(m_LightBuffer, m_GPULightsFrame ? m_GPULightRecords : m_Lights.size(), sizeof(RenderData::LightData), "Lights", buffersRecreated,
+				BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_LightBoundsBuffer, m_GPULightsFrame ? m_GPULightRecords : m_LightBounds.size(), sizeof(RenderData::LightBounds), "LightBounds",
+				buffersRecreated, BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_DrawArgumentBuffer, m_DrawArgumentsBuild.size(), sizeof(nvrhi::DrawIndexedIndirectArguments), "DrawArguments", drawListsRecreated,
 				BufferKind::IndirectArguments);
 		buffersRecreated = buffersRecreated || drawListsRecreated || cullRecreated;
@@ -2067,7 +2035,13 @@ namespace Strata
 			commandList->endMarker();
 		}
 
-		if (!m_Lights.empty())
+		if (m_GPULightsFrame && frame.LightCounts.x > 0)
+		{
+			commandList->beginMarker("LightCull");
+			RunGPULightCulling(commandList, camera);
+			commandList->endMarker();
+		}
+		if (frame.LightCounts.x > 0)
 		{
 			commandList->beginMarker("LightClusters");
 			BuildLightClusters(commandList);

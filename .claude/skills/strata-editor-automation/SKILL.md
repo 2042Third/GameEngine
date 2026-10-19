@@ -391,7 +391,7 @@ frame 2-3 frames older: the CPU walks the view itself only on first frames, came
 `drawCommands` (draw calls the CPU recorded: a few per pass however large the scene
 on the GPU-driven path), `draws` (instanced draws of the view), `opaqueDraws`, `shadowDraws`, `instances`,
 `shadowCasters`, `triangles`, `visibleProxies`, `culledProxies`, `sizeCulledProxies` (in view but below half a pixel),
-`occludedProxies` (in the frustum but hidden behind what the view draws: the GPU-driven path leaves them out), `instancesPerLod`, `lights`, `droppedLights`, `materials`, `pendingAssets`, `extractMs`, `sortMs`,
+`occludedProxies` (in the frustum but hidden behind what the view draws: the GPU-driven path leaves them out), `instancesPerLod`, `lights` (the GPU-driven path counts every point and spot light in view), `droppedLights` (the CPU path's lights beyond its 4,096), `materials`, `pendingAssets`, `extractMs`, `sortMs`,
 `proxyUpdates`, `instanceBytesUploaded`, `deferredInstanceBytes` (new mesh renderers still waiting for their upload to
 the GPU: drawn in a frame or two), `sceneMirrorMB` (GPU memory of the scenes' GPU copies: playing doubles the scene's) and `gpuMs` (the GPU's ms per stage of frame `gpuStatsFrame`). Gate it like the stages: `{"expect": {"/gpu/stages/GPU.Shadows/p50Ms": {"max": 2}}}`. On macOS a
 stage that begins inside a render pass shows its time in the stage before it (`GPU.Transparent` in `GPU.Opaque`). The

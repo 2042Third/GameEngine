@@ -1834,7 +1834,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   It listens to the component's signals: created and signaled (`on_update`: `ComponentAccess`, `MarkModified`) mesh
   renderers are read at the next `Sync`, destroyed ones lose their proxy at once; world transforms and activity come
   from `Scene::GetWorldTransformChanges` (every proxy is compared when the scene no longer knows). Writes to
-  `MeshRendererComponent` fields must therefore signal, like transform writes (AGENTS.md, "Architecture rules"); Debug
+  `MeshRendererComponent` (and light component) fields must therefore signal, like transform writes (AGENTS.md,
+  "Architecture rules"); Debug
   builds compare the proxies with the scene after every `Sync` (`RenderScene::Validate`). Signaled entities wait for the
   next `Sync` in a queue that holds each entity once (destroyed ones leave it), so a scene that changes while nothing
   renders it (a hidden view, an agent capturing now and then) queues no more than its entities. A scene's first sync
@@ -1845,6 +1846,18 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   swaps the scene in then builds no proxy (the longest frame of opening 20,000 prefab instances of five cubes in the
   editor: 51-52 ms before, 15.5-17 ms with it, most of it the first frame's upload of every instance and the
   Hierarchy's rows).
+- **Lights** (`Renderer/RenderLights.h`, `RenderScene::GetLights`). Point and spot lights are records too: one per light
+  component (`RenderData::LightRecord`: world position and range, color, direction, cone and the bounding sphere of the
+  region it reaches; inactive or unlit lights keep a record marked not drawn), kept like the proxies from the
+  components' signals and the world transform changes, with a change log the GPU copy follows (`RenderSceneGPU`'s light
+  record buffer, `RenderSceneGPUUpdate::LightBytes`). The GPU-driven path culls them on the GPU in the `GPU.Cull` stage:
+  `Scene/LightCull.comp` tests each record against the camera-relative frustum and counts each work group's lights in
+  view, `Scene/LightCompact.comp` packs those, in record order, into the light buffer (camera-relative, with view-space
+  bounds) and writes their count, which `Scene/LightClusters.comp` reads (`FrameConstants::LightCounts.y`). Nothing caps
+  them (10,000 lights in view draw 10,000; `MaxLights` caps only the CPU path), and a cluster that more lights reach than
+  `MaxLightsPerCluster` keeps the most relevant by finding the relevance of its last kept light bit by bit (the CPU path
+  sorts its lights by relevance instead). The CPU path walks the records instead of the registry. The counts come back
+  with the culling's (`CullCounters::VisibleLights`, `DrawnLights`).
 - **Clones** (`RenderScene::CopyIntoScene`, the Renderer module's `Scene::SceneContextCopier`). `Scene::Copy` of a scene
   with a render scene (play start) clones it into the copy: the copy's entities keep the source's EnTT identifiers, so
   every proxy, instance, mesh and material slot and palette index stays the same, and the clone is the source's arrays

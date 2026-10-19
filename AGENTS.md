@@ -272,14 +272,14 @@ The threading model, frame loop and pipelines these rules protect are described 
   tag indexes, recomputing only what changed. So **code that writes `TransformComponent` fields directly must signal the
   change**: `Entity::MarkModified<TransformComponent>()` or `registry.patch` (`ComponentAccess`,
   `Scene::SetWorldTransform`, the script API and `TransformEdit` do), or `Scene::MarkTransformChanged` where listeners
-  must not hear an `on_update` (physics writing poses back). Writes to `NameComponent::Name`, `TagComponent::Tag` and
-  `MeshRendererComponent` fields (render proxies and mesh colliders follow its `on_update`) signal the same way; values
-  written right after `AddComponent` need none. Hierarchy changes go through `Scene` (`SetParent`, `SetSiblingIndex`,
-  `PlaceEntities`, `DestroyEntities`...), never by editing `RelationshipComponent` or `HierarchyComponent`. Debug builds
-  assert after every update that the caches, and after every `RenderScene::Sync` that the render proxies, match a full
-  recomputation (the caches' assertion names the entity whose write was not signaled). Read sibling positions with
-  `Scene::GetSiblingIndex`, remove many entities with one `DestroyEntities` call, and stay within `Scene::c_MaxEntities`
-  (1,048,575) live entities.
+  must not hear an `on_update` (physics writing poses back). Writes to `NameComponent::Name`, `TagComponent::Tag`,
+  `MeshRendererComponent` and light component fields (render proxies, light records and mesh colliders follow their
+  `on_update`) signal the same way; values written right after `AddComponent` need none. Hierarchy changes go through
+  `Scene` (`SetParent`, `SetSiblingIndex`, `PlaceEntities`, `DestroyEntities`...), never by editing `RelationshipComponent`
+  or `HierarchyComponent`. Debug builds assert after every update that the caches, and after every `RenderScene::Sync`
+  that the render proxies, match a full recomputation (the caches' assertion names the entity whose write was not
+  signaled). Read sibling positions with `Scene::GetSiblingIndex`, remove many entities with one `DestroyEntities` call,
+  and stay within `Scene::c_MaxEntities` (1,048,575) live entities.
 
 The threading, NVRHI, layer, registration, engine module and transform rules in full:
 [Architecture rules](Docs/DeveloperGuide.md#architecture-rules).

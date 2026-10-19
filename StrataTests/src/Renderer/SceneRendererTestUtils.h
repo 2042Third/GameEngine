@@ -213,6 +213,41 @@ namespace Strata::Tests
 		return counts;
 	}
 
+	// A point light entity at `position`.
+	inline Entity AddPointLight(Scene& scene, const glm::vec3& position, const glm::vec3& color, float intensity, float range)
+	{
+		Entity lamp = scene.CreateEntity("Lamp");
+		lamp.GetComponent<TransformComponent>().Translation = position;
+		PointLightComponent& light = lamp.AddComponent<PointLightComponent>();
+		light.Color = color;
+		light.Intensity = intensity;
+		light.Range = range;
+		return lamp;
+	}
+
+	// The lights the renderer's latest frame drew, culled and dropped (the GPU-driven path counts its point and spot lights on
+	// the GPU, frames later: waits for that frame's counts).
+	struct LightCounts
+	{
+		uint32_t Lights = 0;        // The directional light plus the point and spot lights in view
+		uint32_t CulledLights = 0;  // Point and spot lights outside the view
+		uint32_t DroppedLights = 0; // Beyond SceneRendererSpecification::MaxLights (the CPU path's cap)
+	};
+
+	inline LightCounts GetLightCounts(SceneRenderer& renderer)
+	{
+		SceneRendererStats stats = renderer.GetStats();
+		if (stats.GPUDriven)
+		{
+			renderer.ResolveGPUStats(true);
+			const SceneRendererGPUStats& gpu = renderer.GetGPUStats();
+			REQUIRE(gpu.HasCounters);
+			REQUIRE(gpu.CountersRender == renderer.GetRenderCount());
+			stats = AddGPUCounts(stats, gpu);
+		}
+		return LightCounts { stats.Lights, stats.CulledLights, stats.DroppedLights };
+	}
+
 	inline MaterialProperties UnlitColor(const glm::vec4& color)
 	{
 		MaterialProperties properties;

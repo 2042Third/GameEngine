@@ -120,9 +120,10 @@ namespace Strata
 	{
 		entt::registry& registry = scene.GetRegistry();
 		ConnectListeners(registry);
-		// Every mesh renderer the scene already has gets its proxy at the first sync.
+		// Every mesh renderer and light the scene already has gets its proxy at the first sync.
 		for (const entt::entity entity : registry.view<MeshRendererComponent>())
 			QueuePending(entity);
+		m_Lights.QueueAll(registry);
 	}
 
 	void RenderScene::ConnectListeners(entt::registry& registry)
@@ -134,6 +135,7 @@ namespace Strata
 		registry.on_construct<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
 		registry.on_update<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
 		registry.on_destroy<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
+		m_Lights.Connect(registry);
 	}
 
 	void RenderScene::CopyIntoScene(const Scene& source, Scene& destination)
@@ -157,7 +159,7 @@ namespace Strata
 		clone->m_Id = s_NextRenderSceneId.fetch_add(1, std::memory_order_relaxed);
 		clone->m_Scene = &destination;
 		clone->m_CloneSource = from->m_Id;
-		clone->m_CloneVersions = ChangeVersions { from->m_ProxyVersion, from->m_InstanceVersion, from->m_PaletteVersion };
+		clone->m_CloneVersions = ChangeVersions { from->m_ProxyVersion, from->m_InstanceVersion, from->m_PaletteVersion, from->m_Lights.GetVersion() };
 		// The copy's transform log starts afresh: changes the source had not read yet are read by comparing every proxy.
 		clone->m_RefreshTransforms = from->m_RefreshTransforms || from->m_TransformsVersion != source.GetTransformsVersion();
 		clone->m_TransformsVersion = destination.GetTransformsVersion();
@@ -321,7 +323,8 @@ namespace Strata
 			UpdateProxyFromEntity(entity);
 
 		m_ChangeScratch.clear();
-		if (!m_RefreshTransforms && m_Scene->GetWorldTransformChanges(m_TransformsVersion, m_ChangeScratch))
+		const bool transformsLogged = !m_RefreshTransforms && m_Scene->GetWorldTransformChanges(m_TransformsVersion, m_ChangeScratch);
+		if (transformsLogged)
 		{
 			for (const entt::entity entity : m_ChangeScratch)
 			{
@@ -338,6 +341,7 @@ namespace Strata
 			m_RefreshTransforms = false;
 		}
 		m_TransformsVersion = m_Scene->GetTransformsVersion();
+		m_Lights.Sync(registry, m_ChangeScratch, !transformsLogged);
 		UpdateMeshLayouts(assets);
 		UpdateSkinnedPoses();
 		m_Index.Refresh();
@@ -1585,6 +1589,10 @@ namespace Strata
 				return fail(fmt::format("material slot {} lists {} override users and {} meshes instead of {} and {}", slot, m_Materials[slot].OverrideUsers.size(),
 					m_Materials[slot].Meshes.size(), overrideUsers[slot], materialMeshes[slot]));
 		}
+		// The lights, once every signaled light was read (a partial sync reads them all, so after any sync).
+		std::string lightError;
+		if (!m_Lights.Validate(registry, &lightError))
+			return fail(lightError);
 		return true;
 	}
 

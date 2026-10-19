@@ -83,6 +83,18 @@ namespace
 				REQUIRE(std::memcmp(&gpuInstances[instance], &instances[instance], sizeof(RenderData::InstanceData)) == 0);
 			}
 		}
+		// The light records, as the render scene keeps them.
+		const std::span<const RenderData::LightRecord> lights = renderScene.GetLights().GetRecords();
+		REQUIRE(mirror.GetLightCapacity() == lights.size());
+		if (!lights.empty())
+		{
+			const std::vector<RenderData::LightRecord> gpuLights = ReadRecords<RenderData::LightRecord>(gpu, mirror.GetLightRecordBuffer(), lights.size());
+			for (size_t record = 0; record < lights.size(); record++)
+			{
+				CAPTURE(record);
+				REQUIRE(std::memcmp(&gpuLights[record], &lights[record], sizeof(RenderData::LightRecord)) == 0);
+			}
+		}
 	}
 
 	// A device frame around `work` (the renderer's frame begins with it: budgets start again, released copies go).
@@ -587,6 +599,49 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		CHECK(renderer.GetStats().ProxyBytesUploaded == sizeof(RenderData::GPUProxy));
 		CheckMirror(gpu, RenderScene::Get(*copy), *cloneMirror);
 		CheckMirror(gpu, RenderScene::Get(*source), *sourceMirror);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The GPU copy follows the scene's light records: created, changed, moved and destroyed lights upload only themselves")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadBuiltinAssets(assets);
+		Scene scene("Lights");
+		std::vector<Entity> lights;
+		for (uint32_t index = 0; index < 40; index++)
+			lights.push_back(AddPointLight(scene, glm::vec3(static_cast<float>(index), 1.0f, 0.0f), glm::vec3(1.0f), 2.0f, 3.0f));
+		Entity spot = scene.CreateEntity("Spot");
+		spot.AddComponent<SpotLightComponent>().Range = 6.0f;
+		RenderScene& renderScene = RenderScene::Get(scene);
+		RenderSceneGPU mirror(gpu.GetNvrhiDevice(), renderScene.GetId());
+		RenderSceneGPUUpdate update;
+		Frame(gpu, [&]()
+		{
+			renderScene.Sync(nullptr);
+			mirror.BeginFrame(1);
+			REQUIRE(mirror.Update(renderScene, nullptr, 16ull << 20, &update));
+		});
+		CHECK(update.LightBytes == 41 * sizeof(RenderData::LightRecord));
+		CheckMirror(gpu, renderScene, mirror);
+
+		// One light moved, one changed (signaled), one destroyed, one created: the changed records alone go up.
+		lights[3].GetComponent<TransformComponent>().Translation.y = 4.0f;
+		lights[3].MarkModified<TransformComponent>();
+		scene.GetRegistry().patch<PointLightComponent>(lights[5].GetHandle(), [](PointLightComponent& light) { light.Color = glm::vec3(1.0f, 0.0f, 0.0f); });
+		scene.DestroyEntity(lights[7]);
+		AddPointLight(scene, glm::vec3(0.0f, 9.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), 1.0f, 2.0f);
+		Frame(gpu, [&]()
+		{
+			renderScene.Sync(nullptr);
+			mirror.BeginFrame(2);
+			REQUIRE(mirror.Update(renderScene, nullptr, 16ull << 20, &update));
+		});
+		// Records 3 to 7 (the new light took the destroyed one's record): nearby changes go up in one run.
+		CHECK(update.LightBytes > 0);
+		CHECK(update.LightBytes <= 5 * sizeof(RenderData::LightRecord));
+		CheckMirror(gpu, renderScene, mirror);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

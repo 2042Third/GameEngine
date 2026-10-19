@@ -7,7 +7,9 @@
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
+#include "Strata/Renderer/RenderLights.h"
 #include "Strata/Renderer/RenderScene.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 
@@ -1018,6 +1020,91 @@ TEST_SUITE("Renderer.RenderScene")
 		CheckProxies(*secondClone);
 		CHECK(secondClone->Sync(nullptr) == 0);
 		CheckProxies(*secondClone);
+	}
+
+	TEST_CASE("Point and spot lights are render scene records kept from their components and transforms")
+	{
+		Scene scene("Lights");
+		Entity point = scene.CreateEntity("Point");
+		point.AddComponent<PointLightComponent>().Range = 4.0f;
+		Entity spot = scene.CreateEntity("Spot");
+		spot.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 3.0f, 0.0f);
+		spot.AddComponent<SpotLightComponent>();
+		// An entity with both has a record of each.
+		Entity both = scene.CreateEntity("Both");
+		both.AddComponent<PointLightComponent>();
+		both.AddComponent<SpotLightComponent>();
+		RenderScene& renderScene = RenderScene::Get(scene);
+		renderScene.Sync(nullptr);
+		const RenderLights& lights = renderScene.GetLights();
+		CHECK(lights.GetCount() == 4);
+		const uint32_t pointRecord = lights.Find(point.GetHandle(), RenderData::c_LightPoint);
+		const uint32_t spotRecord = lights.Find(spot.GetHandle(), RenderData::c_LightSpot);
+		REQUIRE(pointRecord != RenderLights::c_InvalidIndex);
+		REQUIRE(spotRecord != RenderLights::c_InvalidIndex);
+		CHECK(lights.Find(point.GetHandle(), RenderData::c_LightSpot) == RenderLights::c_InvalidIndex);
+		CHECK(lights.Find(both.GetHandle(), RenderData::c_LightPoint) != lights.Find(both.GetHandle(), RenderData::c_LightSpot));
+		const RenderData::LightRecord& pointLight = lights.GetRecords()[pointRecord];
+		CHECK(pointLight.PositionRange == glm::vec4(0.0f, 0.0f, 0.0f, 4.0f));
+		CHECK(pointLight.Bounds == glm::vec4(0.0f, 0.0f, 0.0f, 4.0f));
+		CHECK(pointLight.SpotAngles.z == RenderData::c_LightRecordDrawn);
+		const SpotLightComponent defaults;
+		const RenderData::LightRecord& spotLight = lights.GetRecords()[spotRecord];
+		CHECK(spotLight.DirectionType == glm::vec4(0.0f, 0.0f, -1.0f, static_cast<float>(RenderData::c_LightSpot)));
+		CHECK(spotLight.Bounds == RenderLights::GetSpotBounds(glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f), defaults.Range,
+			std::cos(glm::radians(defaults.OuterConeAngle)), std::sin(glm::radians(defaults.OuterConeAngle))));
+		std::string error;
+		CHECK_MESSAGE(renderScene.Validate(&error), error);
+
+		// A move and a signaled change follow at the next sync, logged for the GPU copy: those records alone.
+		const uint64_t version = lights.GetVersion();
+		point.GetComponent<TransformComponent>().Translation = glm::vec3(5.0f, 0.0f, 0.0f);
+		point.MarkModified<TransformComponent>();
+		scene.GetRegistry().patch<SpotLightComponent>(spot.GetHandle(), [](SpotLightComponent& light) { light.Intensity = 0.0f; });
+		renderScene.Sync(nullptr);
+		CHECK(lights.GetRecords()[pointRecord].PositionRange == glm::vec4(5.0f, 0.0f, 0.0f, 4.0f));
+		CHECK(lights.GetRecords()[spotRecord].SpotAngles.z == 0.0f); // Unlit: kept, not drawn
+		std::vector<uint32_t> changes;
+		REQUIRE(lights.GetChanges(version, changes));
+		std::sort(changes.begin(), changes.end());
+		changes.erase(std::unique(changes.begin(), changes.end()), changes.end());
+		CHECK(changes == (pointRecord < spotRecord ? std::vector<uint32_t> { pointRecord, spotRecord } : std::vector<uint32_t> { spotRecord, pointRecord }));
+
+		// Inactive entities' lights are not drawn; removed components and destroyed entities free their records.
+		point.SetActive(false);
+		both.RemoveComponent<SpotLightComponent>();
+		renderScene.Sync(nullptr);
+		CHECK(lights.GetRecords()[pointRecord].SpotAngles.z == 0.0f);
+		CHECK(lights.GetCount() == 3);
+		CHECK(lights.Find(both.GetHandle(), RenderData::c_LightSpot) == RenderLights::c_InvalidIndex);
+		scene.DestroyEntity(spot);
+		renderScene.Sync(nullptr);
+		CHECK(lights.GetCount() == 2);
+		CHECK_MESSAGE(renderScene.Validate(&error), error);
+
+		// A write without a signal is a difference Validate names (Debug syncs assert on it).
+		both.GetComponent<PointLightComponent>().Range = 9.0f;
+		CHECK_FALSE(renderScene.Validate(&error));
+		CHECK(error.find("light record") != std::string::npos);
+		both.MarkModified<PointLightComponent>();
+		renderScene.Sync(nullptr);
+		CHECK_MESSAGE(renderScene.Validate(&error), error);
+
+		// A copied scene's clone has the same records, and each follows its own scene.
+		Ref<Scene> source = CreateRef<Scene>("Source");
+		Entity lamp = source->CreateEntity("Lamp");
+		lamp.AddComponent<PointLightComponent>();
+		RenderScene::Get(*source).Sync(nullptr);
+		Ref<Scene> copy = Scene::Copy(source);
+		RenderScene* clone = RenderScene::Find(*copy);
+		REQUIRE(clone);
+		CHECK(clone->GetLights().GetCount() == 1);
+		CHECK(clone->GetCloneVersions().Light == RenderScene::Get(*source).GetLights().GetVersion());
+		Entity copiedLamp = copy->GetEntityByUUID(lamp.GetUUID());
+		copy->GetRegistry().patch<PointLightComponent>(copiedLamp.GetHandle(), [](PointLightComponent& light) { light.Range = 2.0f; });
+		clone->Sync(nullptr);
+		CHECK(clone->GetLights().GetRecords()[0].PositionRange.w == 2.0f);
+		CHECK(RenderScene::Get(*source).GetLights().GetRecords()[0].PositionRange.w == PointLightComponent().Range);
 	}
 
 	TEST_CASE("Renderers that fall behind the bounded change log upload everything")

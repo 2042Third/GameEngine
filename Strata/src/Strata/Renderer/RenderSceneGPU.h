@@ -35,6 +35,7 @@ namespace Strata
 		uint32_t MaterialsBuilt = 0; // Material slots whose data was built again
 		uint64_t MaterialBytes = 0;  // Material data uploaded (RenderData::MaterialData)
 		uint64_t TableBytes = 0;     // Mesh table entries and material flags uploaded
+		uint64_t LightBytes = 0;     // Light records (RenderData::LightRecord)
 	};
 
 	// The GPU's copy of a render scene (RenderScene), shared by every renderer of the scene: its instance data, a culling
@@ -102,6 +103,9 @@ namespace Strata
 		nvrhi::IBuffer* GetMeshTableBuffer() const { return m_MeshTableBuffer.Buffer; }
 		nvrhi::IBuffer* GetMaterialBuffer() const { return m_MaterialBuffer.Buffer; }
 		nvrhi::IBuffer* GetMaterialFlagBuffer() const { return m_MaterialFlagBuffer.Buffer; }
+		// The render scene's light records (RenderLights) as of the latest update: GetLightCapacity of them (null without any).
+		nvrhi::IBuffer* GetLightRecordBuffer() const { return m_LightRecords.Buffer; }
+		uint32_t GetLightCapacity() const { return m_LightCapacity; }
 
 		// Changes whenever an update built a mesh or material slot again: what was culled with an earlier version of the tables
 		// (visibility feedback) may be out of date.
@@ -167,6 +171,10 @@ namespace Strata
 		uint64_t m_ProxyVersion = 0;
 		uint64_t m_InstanceVersion = 0;
 		uint64_t m_PaletteVersion = 0;
+		uint64_t m_LightVersion = 0;
+		uint32_t m_LightCapacity = 0; // Records the light buffer holds as of the latest update
+		GrowingBuffer m_LightRecords;
+		std::vector<uint32_t> m_LightMarks;
 
 		// Per proxy: its record as uploaded (or to be uploaded this update), whether it is resident, whether it waits in
 		// m_Pending, and the update that last looked at it (each proxy once per update).

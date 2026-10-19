@@ -105,6 +105,8 @@ strata_add_shaders(Strata_Renderer
 		Scene/ShadowMesh.vert
 		Scene/ShadowMask.frag
 		Scene/LightClusters.comp
+		Scene/LightCull.comp
+		Scene/LightCompact.comp
 		Scene/Cull.comp
 		Scene/CullBuild.comp
 		Scene/CullFeedback.comp

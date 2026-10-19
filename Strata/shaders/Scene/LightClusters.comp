@@ -3,11 +3,15 @@
 
 #include "Include/Scene.glsl"
 #include "Include/Clusters.glsl"
+#include "Include/OrderedFloat.glsl"
 
 // Clustered light assignment: one thread per cluster tests the bounding sphere of every visible light against the
-// cluster's view-space bounding box and lists the lights that reach it (see Include/Clusters.glsl for the layout).
-// Lights are tested in buffer order, which is sorted by relevance: when a cluster is full, the least relevant lights
-// are the ones left out. Workgroups stage the light bounds through shared memory.
+// cluster's view-space bounding box and lists the lights that reach it (see Include/Clusters.glsl for the layout), in
+// buffer order. When more reach a cluster than it holds, it keeps the most relevant ones (GetLightRelevance): the CPU path
+// sorts its light buffer by relevance, so its first lights are those; the GPU-driven path's buffer is in record order
+// (Scene/LightCompact.comp), so a full cluster finds the relevance its last kept light has by bisection and keeps those
+// at least that relevant, the lower buffer positions first among equals. Workgroups stage the light bounds through shared
+// memory.
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -20,8 +24,14 @@ layout(set = 0, binding = ST_UAV(0), std430) writeonly buffer ClusterOutputBuffe
 {
 	uint o_ClusterLights[];
 };
+// The visible lights' count where the GPU culled them (LightCounts.y), written by Scene/LightCompact.comp.
+layout(set = 0, binding = ST_SRV(21), std430) readonly buffer LightCountBuffer
+{
+	uint u_LightCount[];
+};
 
 shared vec4 s_LightBounds[64];
+shared uint s_Overflow;
 
 // View-space point on the ray through `ndc` at a view depth (distance along the view axis); valid for perspective and
 // orthographic projections alike.
@@ -72,8 +82,11 @@ void main()
 
 	uint capacity = u_Frame.ClusterGrid.w;
 	uint base = cluster * (capacity + 1u);
+	uint lightCount = u_Frame.LightCounts.y != 0u ? u_LightCount[0] : u_Frame.LightCounts.x;
+
+	// Every light reaching the cluster, the first `capacity` of them listed.
 	uint count = 0u;
-	uint lightCount = u_Frame.LightCounts.x;
+	uint reaching = 0u;
 	for (uint first = 0u; first < lightCount; first += 64u)
 	{
 		uint light = first + gl_LocalInvocationIndex;
@@ -83,16 +96,108 @@ void main()
 		if (valid)
 		{
 			uint batch = min(64u, lightCount - first);
-			for (uint index = 0u; index < batch && count < capacity; index++)
+			for (uint index = 0u; index < batch; index++)
 			{
 				if (SphereIntersectsBox(s_LightBounds[index], boxMin, boxMax))
 				{
-					o_ClusterLights[base + 1u + count] = first + index;
-					count++;
+					if (count < capacity)
+					{
+						o_ClusterLights[base + 1u + count] = first + index;
+						count++;
+					}
+					reaching++;
 				}
 			}
 		}
 		barrier();
+	}
+
+	// Full clusters of a buffer not sorted by relevance keep the most relevant lights. The passes stage bounds for the whole
+	// work group, so every thread runs them when any cluster of the group overflowed.
+	if (gl_LocalInvocationIndex == 0u)
+		s_Overflow = 0u;
+	barrier();
+	bool overflow = valid && reaching > capacity && u_Frame.LightCounts.y != 0u;
+	if (overflow)
+		atomicOr(s_Overflow, 1u);
+	barrier();
+	if (s_Overflow != 0u)
+	{
+		// The largest relevance (as ordered bits) that at least `capacity` of the cluster's lights reach, bit by bit.
+		uint threshold = 0u;
+		for (int bit = 31; bit >= 0; bit--)
+		{
+			uint candidate = threshold | (1u << uint(bit));
+			uint atLeast = 0u;
+			for (uint first = 0u; first < lightCount; first += 64u)
+			{
+				uint light = first + gl_LocalInvocationIndex;
+				s_LightBounds[gl_LocalInvocationIndex] = light < lightCount ? u_LightBounds[light] : vec4(0.0, 0.0, 0.0, -1.0);
+				barrier();
+				if (overflow)
+				{
+					uint batch = min(64u, lightCount - first);
+					for (uint index = 0u; index < batch; index++)
+					{
+						if (SphereIntersectsBox(s_LightBounds[index], boxMin, boxMax) && EncodeOrderedFloat(GetLightRelevance(s_LightBounds[index])) >= candidate)
+							atLeast++;
+					}
+				}
+				barrier();
+			}
+			if (overflow && atLeast >= capacity)
+				threshold = candidate;
+		}
+		// The lights above it, then those at it in buffer order until the cluster is full, all in buffer order.
+		uint above = 0u;
+		for (uint first = 0u; first < lightCount; first += 64u)
+		{
+			uint light = first + gl_LocalInvocationIndex;
+			s_LightBounds[gl_LocalInvocationIndex] = light < lightCount ? u_LightBounds[light] : vec4(0.0, 0.0, 0.0, -1.0);
+			barrier();
+			if (overflow)
+			{
+				uint batch = min(64u, lightCount - first);
+				for (uint index = 0u; index < batch; index++)
+				{
+					if (SphereIntersectsBox(s_LightBounds[index], boxMin, boxMax) && EncodeOrderedFloat(GetLightRelevance(s_LightBounds[index])) > threshold)
+						above++;
+				}
+			}
+			barrier();
+		}
+		uint equalRoom = capacity - min(above, capacity);
+		uint kept = 0u;
+		for (uint first = 0u; first < lightCount; first += 64u)
+		{
+			uint light = first + gl_LocalInvocationIndex;
+			s_LightBounds[gl_LocalInvocationIndex] = light < lightCount ? u_LightBounds[light] : vec4(0.0, 0.0, 0.0, -1.0);
+			barrier();
+			if (overflow)
+			{
+				uint batch = min(64u, lightCount - first);
+				for (uint index = 0u; index < batch && kept < capacity; index++)
+				{
+					if (!SphereIntersectsBox(s_LightBounds[index], boxMin, boxMax))
+						continue;
+					uint bits = EncodeOrderedFloat(GetLightRelevance(s_LightBounds[index]));
+					bool keep = bits > threshold;
+					if (!keep && bits == threshold && equalRoom > 0u)
+					{
+						keep = true;
+						equalRoom--;
+					}
+					if (keep)
+					{
+						o_ClusterLights[base + 1u + kept] = first + index;
+						kept++;
+					}
+				}
+			}
+			barrier();
+		}
+		if (overflow)
+			count = kept;
 	}
 
 	if (valid)

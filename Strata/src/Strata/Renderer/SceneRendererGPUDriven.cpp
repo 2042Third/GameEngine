@@ -105,6 +105,8 @@ namespace Strata
 		combined.SubTexelCasters = gpu.SubTexelCasters;
 		combined.SkinnedInstances += gpu.SkinnedInstances;
 		combined.Triangles += gpu.Triangles;
+		combined.Lights += gpu.Lights;
+		combined.CulledLights += gpu.CulledLights;
 		// The CPU counts every indexed proxy as visible or culled (on feedback frames only those it looked at as visible).
 		const uint32_t indexed = stats.VisibleProxies + stats.CulledInstances;
 		combined.VisibleProxies = gpu.VisibleProxies + gpu.SizeCulledProxies;
@@ -234,6 +236,129 @@ namespace Strata
 			m_CullBuildPipeline = nullptr;
 			return;
 		}
+	}
+
+	void SceneRenderer::CreateLightCullResources()
+	{
+		if (!m_CullViewPipeline)
+			return; // No GPU-driven path: the CPU collects the lights
+		ShaderLibrary& shaders = Renderer::GetShaderLibrary();
+		// The frame's constants at b0 and the passes' parameters at b1, a slot no constant buffer of the layouts uses.
+		nvrhi::BindingLayoutDesc cullLayout;
+		cullLayout.visibility = nvrhi::ShaderType::Compute;
+		cullLayout.bindings = {
+			nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+			nvrhi::BindingLayoutItem::PushConstants(1, sizeof(RenderData::LightCullParameters)),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(18),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(6)
+		};
+		m_LightCullLayout = m_Device->createBindingLayout(cullLayout);
+		nvrhi::BindingLayoutDesc compactLayout;
+		compactLayout.visibility = nvrhi::ShaderType::Compute;
+		compactLayout.bindings = {
+			nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+			nvrhi::BindingLayoutItem::PushConstants(1, sizeof(RenderData::LightCullParameters)),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(18),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(19),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(20),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(3),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(4),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(5),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(6)
+		};
+		m_LightCompactLayout = m_Device->createBindingLayout(compactLayout);
+		auto createPipeline = [&](const char* name, nvrhi::IBindingLayout* layout) -> nvrhi::ComputePipelineHandle
+		{
+			nvrhi::ComputePipelineDesc desc;
+			desc.CS = shaders.Get(name);
+			desc.bindingLayouts = { layout };
+			if (!desc.CS || !layout)
+				return nullptr;
+			return m_Device->createComputePipeline(desc);
+		};
+		m_LightCullPipeline = createPipeline("Scene/LightCull.comp", m_LightCullLayout);
+		m_LightCompactPipeline = createPipeline("Scene/LightCompact.comp", m_LightCompactLayout);
+		if (!m_LightCullPipeline || !m_LightCompactPipeline)
+		{
+			// The CPU collects the lights instead (capped at MaxLights).
+			ST_CORE_ERROR("{}: GPU light culling is unavailable (its pipelines could not be created); the CPU collects the lights", m_Specification.DebugName);
+			m_LightCullPipeline = nullptr;
+			m_LightCompactPipeline = nullptr;
+		}
+	}
+
+	bool SceneRenderer::EnsureLightCullBindingSets()
+	{
+		const uint32_t groups = (m_GPULightRecords + RenderData::c_LightGroupSize - 1) / RenderData::c_LightGroupSize;
+		bool recreated = false;
+		if (!EnsureBufferCapacity(m_LightVisibleBuffer, m_GPULightRecords, sizeof(uint32_t), "LightVisible", recreated, BufferKind::StructuredUAV)
+			|| !EnsureBufferCapacity(m_LightGroupCountBuffer, groups, sizeof(uint32_t), "LightGroupCounts", recreated, BufferKind::StructuredUAV))
+			return false;
+		nvrhi::IBuffer* records = m_SceneGPU->GetLightRecordBuffer();
+		if (!records)
+			return false;
+		const std::array<const nvrhi::IBuffer*, 6> bound = { records, m_LightVisibleBuffer.Get(), m_LightGroupCountBuffer.Get(), m_LightBuffer.Get(),
+			m_LightBoundsBuffer.Get(), m_LightCountBuffer.Get() };
+		if (m_LightCullBindingSet && m_LightCompactBindingSet && bound == m_LightCullBound)
+			return true;
+		nvrhi::BindingSetDesc cullSet;
+		cullSet.bindings = {
+			nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
+			nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::LightCullParameters)),
+			nvrhi::BindingSetItem::StructuredBuffer_SRV(18, records),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_LightVisibleBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_LightGroupCountBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(6, m_CullCounterBuffer)
+		};
+		nvrhi::BindingSetDesc compactSet;
+		compactSet.bindings = {
+			nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
+			nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::LightCullParameters)),
+			nvrhi::BindingSetItem::StructuredBuffer_SRV(18, records),
+			nvrhi::BindingSetItem::StructuredBuffer_SRV(19, m_LightVisibleBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_SRV(20, m_LightGroupCountBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_LightBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(4, m_LightBoundsBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(5, m_LightCountBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(6, m_CullCounterBuffer)
+		};
+		m_LightCullBindingSet = m_Device->createBindingSet(cullSet, m_LightCullLayout);
+		m_LightCompactBindingSet = m_Device->createBindingSet(compactSet, m_LightCompactLayout);
+		m_LightCullBound = bound;
+		return m_LightCullBindingSet && m_LightCompactBindingSet;
+	}
+
+	void SceneRenderer::RunGPULightCulling(nvrhi::ICommandList* commandList, const SceneCamera& camera)
+	{
+		ST_PROFILE_FUNCTION();
+		if (!EnsureLightCullBindingSets())
+		{
+			// Nothing in view this frame: the clusters read a count of 0.
+			m_Errors.Report("the GPU's light culling buffers could not be created; no point or spot light is drawn");
+			commandList->clearBufferUInt(m_LightCountBuffer, 0);
+			return;
+		}
+		RenderData::LightCullParameters parameters;
+		// The view in camera-relative space, as the light records are tested (their positions minus the camera's).
+		const Frustum relativeFrustum(camera.Projection * GetRelativeView(camera));
+		for (size_t plane = 0; plane < 6; plane++)
+			parameters.Planes[plane] = relativeFrustum.GetPlanes()[plane];
+		parameters.RecordCount = m_GPULightRecords;
+		parameters.GroupCount = (m_GPULightRecords + RenderData::c_LightGroupSize - 1) / RenderData::c_LightGroupSize;
+
+		nvrhi::ComputeState state;
+		state.pipeline = m_LightCullPipeline;
+		state.bindings = { m_LightCullBindingSet };
+		commandList->setComputeState(state);
+		commandList->setPushConstants(&parameters, sizeof(parameters));
+		commandList->dispatch(parameters.GroupCount, 1, 1);
+		state.pipeline = m_LightCompactPipeline;
+		state.bindings = { m_LightCompactBindingSet };
+		commandList->setComputeState(state);
+		commandList->setPushConstants(&parameters, sizeof(parameters));
+		commandList->dispatch(parameters.GroupCount, 1, 1);
 	}
 
 	uint32_t SceneRenderer::GetBucketSlots(uint32_t bucket) const
@@ -822,6 +947,8 @@ namespace Strata
 		stats.SizeCulledProxies = counters.SizeCulled;
 		stats.SubTexelCasters = counters.SubTexelCasters;
 		stats.SkinnedInstances = counters.SkinnedInstances;
+		stats.Lights = counters.VisibleLights;
+		stats.CulledLights = counters.DrawnLights > counters.VisibleLights ? counters.DrawnLights - counters.VisibleLights : 0u;
 		stats.Triangles = (static_cast<uint64_t>(counters.TrianglesHigh) << 32) | counters.TrianglesLow;
 		stats.DrawListEntries = counters.DrawListUsed;
 		stats.Overflow = counters.Overflow;

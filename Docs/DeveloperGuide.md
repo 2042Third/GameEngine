@@ -714,7 +714,8 @@ short. Their full wording:
   `Scene::MarkTransformChanged` where listeners must not hear an `on_update` (physics writing simulated poses back).
   Writes to `NameComponent::Name` and `TagComponent::Tag` must signal the same way, and so must writes to
   `MeshRendererComponent` fields (the renderer's proxies, `RenderScene`, and physics' mesh colliders follow the
-  component's `on_update`). Entities created since the last `UpdateWorldTransforms` (or the last frame rendered) are
+  component's `on_update`) and to `PointLightComponent` and `SpotLightComponent` fields (the render scene's light records,
+  `RenderLights`). Entities created since the last `UpdateWorldTransforms` (or the last frame rendered) are
   read anyway, so values written right after `AddComponent` need no signal. Hierarchy changes go through `Scene`
   (`SetParent`, `SetSiblingIndex`, `PlaceEntities`, `DestroyEntities`...); never edit `RelationshipComponent` or
   `HierarchyComponent` directly. Debug builds assert after every `OnUpdateRuntime` and `OnUpdateEditor` that the caches
@@ -1992,10 +1993,15 @@ and `AudioSystem`, the built-in "Audio" scene system.
 
 ### Lights, shadows and HDR
 
-- Point and spot lights are frustum culled on the CPU, ranked by relevance (projected size of their
-  range) and capped at `MaxLights`; `Scene/LightClusters.comp` then lists the lights reaching each
-  cluster of a 16x9x24 froxel grid (exponential depth slices) and `Forward.frag` loops only over its
-  pixel's cluster. Only the directional light casts shadows.
+- Point and spot lights are records of the render scene (`RenderLights`, kept from their components' signals and the
+  world transform changes, mirrored by `RenderSceneGPU`). The GPU-driven path culls every record on the GPU
+  (`Scene/LightCull.comp`, then `LightCompact.comp` packs the lights in view in record order) without a cap; the CPU path
+  frustum culls the records, ranks them by relevance (projected size of their range) and caps them at `MaxLights`.
+  `Scene/LightClusters.comp` then lists the lights reaching each cluster of a 16x9x24 froxel grid (exponential depth
+  slices), a full cluster keeping its most relevant ones (on the GPU-driven path ranked in the shader:
+  `GetLightRelevance`, `Include/Clusters.glsl`), and `Forward.frag` loops only over its pixel's cluster. The GPU's light
+  counts come back with its other counts (`SceneRendererGPUStats::Lights`, `CulledLights`; `Tests::GetLightCounts`).
+  Only the directional light casts shadows.
 - Shadows: cascade depth ranges are fitted to the casters toward the light (casters beyond
   `c_MaxShadowCasterDistance` are pancaked onto the near plane), on the GPU on both paths (`Scene/CascadeFit.comp` writes
   `u_Cascades`, which the shadow and forward shaders read: never put cascade projections back into `FrameConstants`; the

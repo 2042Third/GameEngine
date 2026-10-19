@@ -1,4 +1,5 @@
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RendererComponents.h"
 
 #include <cmath>
@@ -15,17 +16,6 @@ namespace
 	{
 		const float encoded = static_cast<float>(value) / 255.0f;
 		return encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
-	}
-
-	Entity AddPointLight(Scene& scene, const glm::vec3& position, const glm::vec3& color, float intensity, float range)
-	{
-		Entity lamp = scene.CreateEntity("Lamp");
-		lamp.GetComponent<TransformComponent>().Translation = position;
-		PointLightComponent& light = lamp.AddComponent<PointLightComponent>();
-		light.Color = color;
-		light.Intensity = intensity;
-		light.Range = range;
-		return lamp;
 	}
 
 	// A large matte floor (facing +Y) at the origin.
@@ -60,7 +50,7 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 		AddPointLight(scene, glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(1.0f), 2.0f, 5.0f);
 		const glm::u8vec4 lit = GetPixelRGBA8(RenderToImage(renderer, scene, camera), c_Size / 2, c_Size / 2);
 		CHECK(lit.r > dark.r + 50);
-		CHECK(renderer.GetStats().Lights == 1);
+		CHECK(GetLightCounts(renderer).Lights == 1);
 
 		// Every operator maps the same scene into the displayable range.
 		for (TonemapOperator tonemapper : { TonemapOperator::Reinhard, TonemapOperator::ACES, TonemapOperator::AgX, TonemapOperator::KhronosNeutral })
@@ -105,7 +95,7 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 		renderer.SetViewportSize(size, size);
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 9.0f, 0.0f), glm::vec3(0.0f));
 		const ReadbackImage image = RenderToImage(renderer, scene, camera);
-		CHECK(renderer.GetStats().Lights == 1);
+		CHECK(GetLightCounts(renderer).Lights == 1);
 		spot.SetActive(false);
 		const ReadbackImage unlit = RenderToImage(renderer, scene, camera);
 		spot.SetActive(true);
@@ -171,19 +161,30 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 		SceneRenderer bruteForce(bruteForceSpecification);
 		bruteForce.SetViewportSize(160, 90);
 
+		// The CPU path, which collects the lights itself (sorted by relevance), shades the same.
+		SceneRendererSpecification cpuSpecification;
+		cpuSpecification.GPUDriven = GPUDrivenMode::Off;
+		SceneRenderer cpuPath(cpuSpecification);
+		cpuPath.SetViewportSize(160, 90);
+
 		const ReadbackImage clusteredImage = RenderToImage(clustered, scene, camera);
 		const ReadbackImage referenceImage = RenderToImage(bruteForce, scene, camera);
+		const ReadbackImage cpuImage = RenderToImage(cpuPath, scene, camera);
 		CHECK(MaxDifference(clusteredImage, referenceImage) <= 2);
-		const SceneRendererStats& stats = clustered.GetStats();
-		CHECK(stats.Lights > 300);
-		CHECK(stats.CulledLights > 0); // Lights beside and behind the view
-		CHECK(stats.Lights + stats.CulledLights == c_LightCount + 4);
-		CHECK(stats.DroppedLights == 0);
-		CHECK(bruteForce.GetStats().Lights == stats.Lights);
+		CHECK(MaxDifference(clusteredImage, cpuImage) <= 1);
+		const LightCounts counts = GetLightCounts(clustered);
+		CHECK(counts.Lights > 300);
+		CHECK(counts.CulledLights > 0); // Lights beside and behind the view
+		CHECK(counts.Lights + counts.CulledLights == c_LightCount + 4);
+		CHECK(counts.DroppedLights == 0);
+		CHECK(GetLightCounts(bruteForce).Lights == counts.Lights);
+		const LightCounts cpuCounts = GetLightCounts(cpuPath);
+		CHECK(cpuCounts.Lights == counts.Lights);
+		CHECK(cpuCounts.CulledLights == counts.CulledLights);
 
-		// The lights matter: without them the image is much darker.
+		// The lights matter: without them the image is much darker (the writes signaled, as lights are render proxies).
 		for (auto [entity, light] : scene.GetAllEntitiesWith<PointLightComponent>().each())
-			light.Intensity = 0.0f;
+			scene.GetRegistry().patch<PointLightComponent>(entity, [](PointLightComponent& patched) { patched.Intensity = 0.0f; });
 		const ReadbackImage dark = RenderToImage(clustered, scene, camera);
 		CHECK(MaxDifference(dark, clusteredImage) > 60);
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -206,20 +207,25 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 		behindSpot.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 3.0f, 9.0f);
 		behindSpot.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::vec3(0.0f, 0.0f, 1.0f)); // Pointing away
 		behindSpot.AddComponent<SpotLightComponent>().Range = 4.0f;
-		// Visible: a near light and a far one.
-		AddPointLight(scene, glm::vec3(-1.5f, 0.5f, 0.0f), glm::vec3(1.0f), 2.0f, 2.0f);
+		// Visible: a far light and a near one. The far one's light record comes first (the render scene reads it before the
+		// near light exists), so that the order of the records is not that of relevance.
 		AddPointLight(scene, glm::vec3(1.5f, 0.5f, -10.0f), glm::vec3(1.0f), 2.0f, 2.0f);
+		RenderScene::Get(scene).Sync(nullptr);
+		AddPointLight(scene, glm::vec3(-1.5f, 0.5f, 0.0f), glm::vec3(1.0f), 2.0f, 2.0f);
 
 		constexpr uint32_t size = 128;
 		SceneRenderer renderer;
 		renderer.SetViewportSize(size, size);
 		const ReadbackImage allLights = RenderToImage(renderer, scene, camera);
-		CHECK(renderer.GetStats().Lights == 2);
-		CHECK(renderer.GetStats().CulledLights == 3);
-		CHECK(renderer.GetStats().DroppedLights == 0);
+		const LightCounts counts = GetLightCounts(renderer);
+		CHECK(counts.Lights == 2);
+		CHECK(counts.CulledLights == 3);
+		CHECK(counts.DroppedLights == 0);
 
-		// With room for one light only, the one with the largest projected size (the near one) stays.
+		// With room for one light only (the CPU path's cap: the GPU-driven path draws every light in view), the one with the
+		// largest projected size (the near one) stays.
 		SceneRendererSpecification specification;
+		specification.GPUDriven = GPUDrivenMode::Off;
 		specification.MaxLights = 1;
 		SceneRenderer limited(specification);
 		limited.SetViewportSize(size, size);
@@ -231,15 +237,70 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 		CHECK(Red(oneLight, nearPixel) == Red(allLights, nearPixel));
 		CHECK(Red(oneLight, farPixel) < Red(allLights, farPixel) - 20);
 
-		// Full clusters keep their most relevant lights the same way.
-		SceneRendererSpecification tightClusters;
-		tightClusters.LightClusterGrid = glm::uvec3(1);
-		tightClusters.MaxLightsPerCluster = 1;
-		SceneRenderer tight(tightClusters);
-		tight.SetViewportSize(size, size);
-		const ReadbackImage oneLightPerCluster = RenderToImage(tight, scene, camera);
-		CHECK(tight.GetStats().Lights == 2);
-		CHECK(MaxDifference(oneLightPerCluster, oneLight) <= 1);
+		// Full clusters keep their most relevant lights the same way, on the GPU-driven path (which ranks the lights of a full
+		// cluster on the GPU) and the CPU path (which sorts its lights).
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Auto, GPUDrivenMode::Off })
+		{
+			CAPTURE(static_cast<int>(mode));
+			SceneRendererSpecification tightClusters;
+			tightClusters.GPUDriven = mode;
+			tightClusters.LightClusterGrid = glm::uvec3(1);
+			tightClusters.MaxLightsPerCluster = 1;
+			SceneRenderer tight(tightClusters);
+			tight.SetViewportSize(size, size);
+			const ReadbackImage oneLightPerCluster = RenderToImage(tight, scene, camera);
+			CHECK(GetLightCounts(tight).Lights == 2);
+			CHECK(MaxDifference(oneLightPerCluster, oneLight) <= 1);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The GPU-driven path draws every light in view, beyond the CPU path's MaxLights")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddFloor(scene, assets, 80.0f);
+		// 10,000 small lights over the floor, all in view from above.
+		constexpr uint32_t c_Side = 100;
+		for (uint32_t index = 0; index < c_Side * c_Side; index++)
+		{
+			const glm::vec3 position(static_cast<float>(index % c_Side) * 0.6f - 29.7f, 0.2f, static_cast<float>(index / c_Side) * 0.6f - 29.7f);
+			AddPointLight(scene, position, glm::vec3(1.0f), 1.0f, 0.5f);
+		}
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 70.0f, 0.0f), glm::vec3(0.0f));
+		constexpr uint32_t c_ViewSize = 128;
+		SceneRenderer gpuPath;
+		gpuPath.SetViewportSize(c_ViewSize, c_ViewSize);
+		REQUIRE(gpuPath.GetSpecification().MaxLights == 4096);
+		SceneRendererSpecification cpuSpecification;
+		cpuSpecification.GPUDriven = GPUDrivenMode::Off;
+		SceneRenderer cpuPath(cpuSpecification);
+		cpuPath.SetViewportSize(c_ViewSize, c_ViewSize);
+
+		const ReadbackImage gpuImage = RenderToImage(gpuPath, scene, camera);
+		const ReadbackImage cpuImage = RenderToImage(cpuPath, scene, camera);
+		const LightCounts gpuCounts = GetLightCounts(gpuPath);
+		CHECK(gpuCounts.Lights == c_Side * c_Side);
+		CHECK(gpuCounts.CulledLights == 0);
+		CHECK(gpuCounts.DroppedLights == 0);
+		const LightCounts cpuCounts = GetLightCounts(cpuPath);
+		CHECK(cpuCounts.Lights == 4096);
+		CHECK(cpuCounts.DroppedLights == c_Side * c_Side - 4096);
+		// The lights the CPU path left out light the floor on the GPU-driven path: it is brighter.
+		uint64_t gpuSum = 0;
+		uint64_t cpuSum = 0;
+		for (uint32_t y = 0; y < c_ViewSize; y++)
+		{
+			for (uint32_t x = 0; x < c_ViewSize; x++)
+			{
+				gpuSum += static_cast<uint64_t>(Red(gpuImage, x, y));
+				cpuSum += static_cast<uint64_t>(Red(cpuImage, x, y));
+			}
+		}
+		CHECK(gpuSum > cpuSum + cpuSum / 10);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
