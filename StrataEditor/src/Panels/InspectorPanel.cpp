@@ -2,6 +2,7 @@
 
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorWorld.h"
 #include "Editor/PropertyEdit.h"
 #include "Editor/ScriptEdit.h"
 #include "UI/EditorActions.h"
@@ -443,6 +444,28 @@ namespace Strata
 	// Header
 	////////////////////////////////////////////////////////////////////////////////
 
+	void InspectorPanel::DrawCellLine(EditorContext& context, const Scene& scene, Entity entity)
+	{
+		// In a world: the cell of the entity's top-level ancestor (O(depth), for the primary selection only).
+		const EditorWorld* world = context.GetWorld();
+		if (!world)
+			return;
+		const SubSceneID subScene = scene.GetSubSceneOf(entity);
+		const SubSceneStatus* status = subScene != 0 ? scene.GetSubSceneStatus(subScene) : nullptr;
+		const std::optional<WorldCellKey> key = status ? world->FindCellKey(status->Scene) : std::nullopt;
+		const std::string text = key ? "Cell: " + world->DescribeKey(*key) : subScene != 0 ? std::string("Additive scene") : std::string("Persistent scene");
+		UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Caption);
+		ImGui::TextColored(UI::GetThemeColors().TextSecondary, "%s", text.c_str());
+		ImGui::PopFont();
+		UI::ItemProbe::Record("Inspector.Cell", true, 0, text);
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+		{
+			ImGui::SetTooltip("%s", key ? "The world cell the entity belongs to (through its top-level ancestor): it streams in and out with the cell"
+				: subScene != 0 ? "The entity belongs to a scene loaded additively, not to a cell of the world"
+				: "The entity is in the world's persistent scene, which never streams out");
+		}
+	}
+
 	void InspectorPanel::DrawHeader(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities)
 	{
 		const UI::ThemeColors& colors = UI::GetThemeColors();
@@ -526,6 +549,7 @@ namespace Strata
 				UI::Pill("Inspector.Prefab", Icons::Package, name, colors.Info, "An instance of this prefab or model");
 				ImGui::PopFont();
 			}
+			DrawCellLine(context, scene, primary);
 		}
 		ImGui::Spacing();
 	}

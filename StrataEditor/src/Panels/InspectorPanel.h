@@ -45,6 +45,8 @@ namespace Strata
 		// The selected entities' components, or the scene's settings with nothing selected.
 		void DrawSelection(EditorContext& context, const EditorCommandRegistry& commands);
 		void DrawHeader(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
+		// The world cell (or the persistent scene) the entity belongs to, while the edited scene is a world.
+		static void DrawCellLine(EditorContext& context, const Scene& scene, Entity entity);
 		void DrawComponent(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
 		void DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
 		void DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info);

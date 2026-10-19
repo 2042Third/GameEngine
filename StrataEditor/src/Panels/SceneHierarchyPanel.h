@@ -69,7 +69,15 @@ namespace Strata
 			Outdated  // Modified, and made from an older version of the prefab (PrefabSync::IsOutdated)
 		};
 		PrefabBadge FindPrefabBadge(UUID entity) const;
+
+		// What the world strip's map button does (the editor shows the Streaming panel's cell map).
+		void SetShowCellMapHandler(std::function<void()> handler) { m_ShowCellMap = std::move(handler); }
 	private:
+		// While the edited scene is a world (edit mode): its name, the cells loaded and unsaved, the edit layer new top-level
+		// entities go into (world.edit) and a button to the cell map.
+		void DrawWorldStrip(EditorContext& context, const EditorCommandRegistry& commands);
+		// Gives the view the world's cells for its "l:" and "cell:" terms, and has it look again when the world changes.
+		void UpdateCellResolver(EditorContext& context);
 		void DrawHeader(EditorContext& context, const EditorCommandRegistry& commands);
 		void DrawEmptyScene(EditorContext& context, const EditorCommandRegistry& commands);
 		void DrawRows(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene);
@@ -92,6 +100,10 @@ namespace Strata
 	private:
 		HierarchyView m_View;
 		std::string m_FilterText;
+		bool m_CellResolverSet = false;
+		const void* m_ResolvedWorld = nullptr;      // The EditorWorld the view's cell answers came from
+		const void* m_ResolvedWorldAsset = nullptr; // Its World asset object then (a reload renames layers)
+		std::function<void()> m_ShowCellMap;
 		// Actions chosen while the rows are drawn run after them, so the scene never changes while they are drawn.
 		std::vector<std::function<void()>> m_Deferred;
 

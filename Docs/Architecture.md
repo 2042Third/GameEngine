@@ -2278,6 +2278,13 @@ StateVersion`, the World asset object or `EditorWorld::GetDirtyVersion` changed,
 or the cells, whichever are fewer, as draw-list rectangles. Its height follows the space left in the panel (4 to 18
 font sizes), so a short bottom dock shows it whole.
 
+**A world in the Hierarchy and the Inspector.** While the edited scene is a world (edit mode), a strip at the top of the
+Hierarchy names the world, counts its loaded, loading and unsaved cells, picks the edit layer (a combo running
+`world.edit {editLayer}`) and leads to the cell map. The Hierarchy's search takes `l:<layer>` (`l:persistent`) and
+`cell:<x>,<z>` (see the hierarchy model in [Editor](#editor)), resolved through `EditorWorld::FindCellKey`, and the
+Inspector's header names the primary selection's cell ("Cell: Props (3, -1)", "Persistent scene"), read through its
+top-level ancestor's sub-scene: O(depth), for that entity only.
+
 ## Scripting
 
 Rules for the ABI, host functions and the SDK are in AGENTS.md and DeveloperGuide.md, "Scripting"; writing scripts

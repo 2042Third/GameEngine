@@ -5,6 +5,7 @@
 #include "Editor/HarnessEditor.h"
 #include "Editor/WorldProjectUtils.h"
 #include "EditorLayer.h"
+#include "Panels/SceneHierarchyPanel.h"
 #include "Panels/StreamingPanel.h"
 #include "UI/CellMap.h"
 #include "UI/ItemProbe.h"
@@ -80,6 +81,71 @@ namespace
 
 TEST_SUITE("Editor.UI.World")
 {
+	TEST_CASE("The Hierarchy's world strip names the world, its combo runs world.edit and its button opens the cell map")
+	{
+		WorldEditor editor("WorldUIStrip");
+		CHECK(editor.ProbeText("Hierarchy.WorldName") == "Gen");
+		CHECK(editor.ProbeText("Hierarchy.EditLayer") == "Persistent");
+		CHECK(ImGuiHarness::CountFallbackGlyphs(editor.FindPanelWindow(EditorPanels::c_Hierarchy)) == 0);
+
+		REQUIRE(editor.Click("Hierarchy.EditLayer"));
+		editor.Frames(2);
+		REQUIRE(editor.Click("Hierarchy.EditLayer.Ground"));
+		CHECK(editor.World().GetEditLayer() == "Ground");
+		editor.Frames(1);
+		CHECK(editor.ProbeText("Hierarchy.EditLayer") == "Ground");
+
+		CHECK_FALSE(editor.Layer->GetPanels().IsOpen(EditorPanels::c_Streaming));
+		REQUIRE(editor.Click("Hierarchy.CellMap"));
+		editor.Frames(3);
+		CHECK(editor.Layer->GetPanels().IsOpen(EditorPanels::c_Streaming));
+		CHECK(UI::ItemProbe::Find("Streaming.CellMap").has_value());
+
+		// Playing hides the strip: the edit layer is for editing.
+		editor.Run("play.start");
+		editor.Frames(3);
+		CHECK_FALSE(UI::ItemProbe::Find("Hierarchy.WorldName").has_value());
+		editor.Run("play.stop");
+		editor.Frames(2);
+		CHECK(UI::ItemProbe::Find("Hierarchy.WorldName").has_value());
+	}
+
+	TEST_CASE("The Hierarchy's l: and cell: terms find a cell's entities, and the Inspector names the cell")
+	{
+		WorldEditor editor("WorldUIFilter");
+		const SceneHierarchyPanel* hierarchy = editor.Layer->GetPanels().Get<SceneHierarchyPanel>(EditorPanels::c_Hierarchy);
+		REQUIRE(hierarchy);
+		// Cell (0, 0) holds Box 0 to Box 6 (7 entities).
+		REQUIRE(editor.ReplaceText("Hierarchy.Search", "cell:0,0"));
+		editor.Frames(2);
+		CHECK(hierarchy->GetView().GetRows().size() == 7);
+		REQUIRE(editor.ReplaceText("Hierarchy.Search", "l:persistent"));
+		editor.Frames(2);
+		std::set<std::string> persistent;
+		for (const HierarchyRow& row : hierarchy->GetView().GetRows())
+			persistent.insert(editor.Context().GetEditScene()->GetEntityByUUID(row.ID).GetName());
+		CHECK(persistent == std::set<std::string> { "World", "Source", "Floor" });
+		REQUIRE(editor.ReplaceText("Hierarchy.Search", "l:ground box"));
+		editor.Frames(2);
+		CHECK(hierarchy->GetView().GetRows().size() > 7);
+
+		// The Inspector's header names the selected entity's cell, or the persistent scene.
+		const Scene& scene = *editor.Context().GetEditScene();
+		Entity box;
+		for (const SubSceneStatus& status : scene.GetSubScenes())
+		{
+			if (status.Scene == DeriveSubAssetHandle(UUID(c_GenWorldHandle), "Cell/1/0/0"))
+				box = scene.GetSubSceneRoots(status.ID).front();
+		}
+		REQUIRE(box);
+		editor.Run("selection.set", { { "entities", { UUIDToJson(box.GetUUID()) } } });
+		editor.Frames(2);
+		CHECK(editor.ProbeText("Inspector.Cell") == "Cell: Ground (0, 0)");
+		editor.Run("selection.set", { { "entities", { UUIDToJson(scene.FindEntityByName("Source").GetUUID()) } } });
+		editor.Frames(2);
+		CHECK(editor.ProbeText("Inspector.Cell") == "Persistent scene");
+	}
+
 	TEST_CASE("The cell map draws the world's cells by state, names them on hover and pins them from its menu")
 	{
 		WorldEditor editor("WorldUICellMap");

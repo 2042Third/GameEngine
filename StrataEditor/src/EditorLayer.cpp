@@ -295,6 +295,17 @@ namespace Strata
 					m_Panels.Focus(EditorPanels::c_ContentBrowser);
 			});
 		}
+		if (SceneHierarchyPanel* hierarchy = m_Panels.Get<SceneHierarchyPanel>(EditorPanels::c_Hierarchy))
+		{
+			hierarchy->SetShowCellMapHandler([this]()
+			{
+				if (StreamingPanel* streaming = m_Panels.Get<StreamingPanel>(EditorPanels::c_Streaming))
+				{
+					streaming->RevealWorld();
+					m_Panels.Focus(EditorPanels::c_Streaming);
+				}
+			});
+		}
 	}
 
 	void EditorLayer::OnAttach()
