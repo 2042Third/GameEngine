@@ -514,8 +514,9 @@ namespace Strata
 			"(a snapshot of every entity), applicable, problem (why it cannot be applied, e.g. the scene was saved since)}, and the journal of the "
 			"edited scene {active, file, writes, lastWrite, pending (changes not written yet: they are written about 2 s after edits stop), "
 			"pendingSteps (undo steps waiting for that write), busy, "
-			"skipped (why its changes are not journaled)}. Reads the directory again, after the journal writes already asked for. Apply or "
-			"discard an entry with scene.recover. Fails without a project.",
+			"skipped (why its changes are not journaled)}. Reads the directory again, after the journal writes already asked for; while the "
+			"project's assets are scanned it answers once they are (entries are judged against them). Apply or discard an entry with "
+			"scene.recover. Fails without a project.",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
@@ -534,7 +535,7 @@ namespace Strata
 					result["entries"] = std::move(entries);
 					return EditorCommandResult::Ok(std::move(result));
 				});
-			}, EditorCommandKind::Query, EditorCommandResults::Session }));
+			}, EditorCommandKind::Query, EditorCommandResults::Session, true }));
 
 		registry.Register(MayDefer({ "scene.recover",
 			"Applies or discards recovery data (scene.recoveryStatus). apply: opens the scene the changes were made to in the background as "

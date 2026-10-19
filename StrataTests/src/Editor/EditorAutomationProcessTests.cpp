@@ -681,6 +681,12 @@ TEST_SUITE("EndToEnd.Recovery")
 		EditorProcess editor;
 		REQUIRE(editor.Start({ "--no-gpu", "--project", FileSystem::ToUTF8(projectDirectory) }));
 		REQUIRE(editor.WaitForSession(environment.SessionDirectory).has_value());
+		// The session comes while the project still opens: its assets are scanned, then its start scene opens.
+		REQUIRE(Tests::WaitUntil([]()
+		{
+			const nlohmann::json opening = Call("editor.status", { { "sections", { "sceneLoad" } } });
+			return opening["assets"]["scanning"].is_null() && opening["sceneLoad"].is_null();
+		}, std::chrono::minutes(2)));
 		const nlohmann::json status = Call("scene.recoveryStatus");
 		REQUIRE(status["entries"].size() == 1);
 		const nlohmann::json entry = status["entries"][0];

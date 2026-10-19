@@ -179,6 +179,7 @@ namespace
 	// another file keeps its flag.
 	constexpr std::string_view c_AssetScanCommands[] = {
 		"animation.info", "asset.findReferences", "asset.info", "asset.list", "material.get", "prefab.status", "project.export", "scene.recover",
+		"scene.recoveryStatus",
 	};
 
 	template<size_t N>

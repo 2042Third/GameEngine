@@ -1620,7 +1620,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   opens by itself only for what an editor left behind, `RecoveryDialog::HasOffer(context, true)`, while earlier discards
   get one toast with Recover,
   `scene.recoveryStatus`, `scene.recover {scene, action: "apply" | "discard", force}`: one undo step back to the saved
-  scene). Entries find their scene by its handle, so a moved or renamed scene keeps its changes recoverable, and the
+  scene). Entries find their scene by its handle, so a moved or renamed scene keeps its changes recoverable (they are
+  read and judged once the project's assets are registered: a background scan starts the recovery scan when it ends,
+  and `scene.recoveryStatus` waits for it), and the
   journal follows the edited scene when it moves (`EditorContext::FollowSceneMoves`); the merges of a drag replace the
   states its step left waiting for the next write (`UndoStackObserver::OnApplied`'s `merged`). An undo action that
   changes the scene describes its effect as entity states (`GetSceneChange`,
