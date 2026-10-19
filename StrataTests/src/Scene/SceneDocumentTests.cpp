@@ -54,7 +54,6 @@ namespace
 		REQUIRE(scene);
 		return scene;
 	}
-#endif
 
 	// Kept components of a module this build lacks, named to sort before, between and after the registered ones.
 	void AddUnknownComponents(Scene& scene, Entity entity)
@@ -64,6 +63,7 @@ namespace
 			{ "Zz.Last", nlohmann::json::object() } };
 		scene.GetRegistry().emplace<UnknownComponentsComponent>(entity.GetHandle(), std::move(unknown));
 	}
+#endif
 
 	struct WrittenText
 	{
@@ -82,6 +82,7 @@ namespace
 		return document;
 	}
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	// The document's lines: the header line, one line per entity (without its comma), the closing line.
 	std::vector<std::string> SplitLines(const std::string& text)
 	{
@@ -103,6 +104,7 @@ namespace
 		const nlohmann::json snapshot = { { "Entities", nlohmann::json::array({ { { "Components", { { info.Name, component } } } } }) } };
 		AssetDependencies::ScanEntities(snapshot, outReferences);
 	}
+#endif
 
 	// Checks the fast formatting of one float against FloatToJson's dump; counts mismatches (one CHECK per float would make
 	// the run report hundreds of thousands of assertions).
@@ -264,9 +266,7 @@ TEST_SUITE("Scene.Documents")
 			CHECK(*parsed == withCount);
 		}
 	}
-#endif
 
-#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("The references the writer collects are those a scan of the written bytes finds, in order")
 	{
 		const Ref<Scene> feature = LoadFeatureScene();
@@ -482,9 +482,7 @@ TEST_SUITE("Scene.Documents")
 		REQUIRE(loaded);
 		CHECK(SceneSerializer::Serialize(*loaded) == SceneSerializer::Serialize(*feature));
 	}
-#endif
 
-#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("A snapshot to save holds what the scene's document holds and writes the same bytes, without world transforms")
 	{
 		ScopedJobSystem jobs(4, 1);
@@ -827,6 +825,7 @@ TEST_SUITE("Scene.Documents")
 namespace
 {
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	// The scene's document with each entity's ID replaced by its place in hierarchy order: scenes instantiated from equal
 	// prototypes with fresh IDs compare equal, references between their entities (properties and script fields) included.
 	std::string DescribeByPlace(const Scene& scene)
@@ -899,6 +898,7 @@ namespace
 	{
 		return std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(text.data()), text.size());
 	}
+#endif
 
 }
 
@@ -950,9 +950,7 @@ TEST_SUITE("Scene.Documents")
 			CHECK(builtError == compiledError);
 		}
 	}
-#endif
 
-#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("Prefab and model documents round trip through the streamed writer and reader, in old layouts too")
 	{
 		const Ref<Scene> feature = LoadFeatureScene();
@@ -1027,6 +1025,7 @@ namespace
 		return options;
 	}
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	// The parallel read and the stream read load the text to the same scene, with the same reports; the parallel one took
 	// the parallel path.
 	void CheckSameParallelRead(const std::string& text, uint32_t chunk)
@@ -1045,6 +1044,7 @@ namespace
 		CHECK(parallel.Loaded->GetRootEntities() == streamed.Loaded->GetRootEntities());
 		CHECK(parallel.Warnings == streamed.Warnings);
 	}
+#endif
 
 }
 
