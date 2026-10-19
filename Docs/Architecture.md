@@ -961,9 +961,11 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   to destroy, made once per frame by the scenes' owner, `GameRuntime::Update` and `EditorContext::Update`, with
   `SceneWorkBudget::ForFrame`: 4 ms; without one the scene makes its own): in slices of at most
   `SceneSettings::MaxEntitiesInstantiatedPerFrame` entities per update for all sub-scenes together (default 5,000; saved with
-  the scene, `scene.setSettings`, the Inspector's Streaming section), cut in chunks of 512 and stopped once
+  the scene, `scene.setSettings`, the Inspector's Streaming section), cut in chunks and stopped once
   `Scene::c_MaxSubSceneMillisecondsPerFrame` (2 ms, for creation and destruction together; `SceneWorkBudget::SubSceneMilliseconds`)
-  went by. Each slice's entities are complete
+  went by. A chunk holds what fits in the time left at the cost per entity the scene measured lately, from 32 to 512
+  entities, so that a slice ends close to its limit: entities untouched for a while (an unloading cell's) cost several
+  times what warm ones do. Each slice's entities are complete
   when it returns (`ContinueInstantiation`), so systems treat them like any other: their component signals give scripts
   `OnCreate` at the next sync point, physics its bodies in its batches, audio its voices and the render scene its proxies.
   An entity whose parent an earlier slice created and gameplay or the editor destroyed since is not created, nor are its
@@ -976,7 +978,7 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   one batch, and audio in that frame); the sub-scene is then `Unloading`, and each `UpdateSubScenes` destroys a slice first
   (before creating), within `SceneSettings::MaxEntitiesDestroyedPerFrame` (default 5,000) and the shared time limit: the
   first entities of a post-order walk from its top-level entities as they are then (children before parents, so the
-  slice's topmost ones are destroyed with their descendants in one `DestroyEntities` per chunk of 512; systems hear
+  slice's topmost ones are destroyed with their descendants in one `DestroyEntities` per chunk; systems hear
   `OnEntityDestroying`, scripts get `OnDestroy`). What the game moved out of its subtrees meanwhile survives. Its ID is
   known until its last entity is gone (`SubSceneStatus::DestroyedEntities`); a second unload changes nothing; the same
   scene loaded again meanwhile waits in `Loading` until it is gone (its entities keep the IDs the new ones take);

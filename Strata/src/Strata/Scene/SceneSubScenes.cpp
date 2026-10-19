@@ -22,10 +22,37 @@ namespace Strata
 	namespace
 	{
 
-		// Entities created or destroyed between two looks at the clock: a few hundred microseconds of work in Release builds,
-		// so a slice stops close to the time limit.
+		// The most entities created or destroyed between two looks at the clock. A chunk holds what fits in the time left at
+		// the cost per entity measured so far (SliceCost), so that a slice ends close to its deadline: entities that have not
+		// been touched for a while (an unloading cell's, in a frame of other work) cost several times what warm ones do.
 		constexpr size_t c_InstantiationChunk = 512;
 		constexpr uint32_t c_UnloadChunk = 512;
+		// The fewest a chunk holds, however little time is left: each chunk has fixed costs (the walk that collects it, the
+		// sibling lists it compacts).
+		constexpr size_t c_MinSliceChunk = 32;
+
+		// The entities of the next chunk: those that fit before the deadline at the estimated cost, within the chunk sizes.
+		size_t GetChunkWithin(std::chrono::steady_clock::time_point deadline, double nanosecondsPerEntity, size_t largest)
+		{
+			const auto now = std::chrono::steady_clock::now();
+			if (deadline <= now)
+				return std::min(c_MinSliceChunk, largest);
+			const double remaining = std::chrono::duration<double, std::nano>(deadline - now).count();
+			const double fitting = remaining / std::max(nanosecondsPerEntity, 1.0);
+			if (fitting >= static_cast<double>(largest))
+				return largest;
+			return std::min(largest, std::max(c_MinSliceChunk, static_cast<size_t>(fitting)));
+		}
+
+		// Folds a chunk's cost into the estimate: a dearer chunk raises it at once (the next chunk must not overrun), a
+		// cheaper one lowers it halfway.
+		void RecordChunk(double& nanosecondsPerEntity, std::chrono::steady_clock::duration elapsed, size_t entities)
+		{
+			if (entities == 0)
+				return;
+			const double measured = std::chrono::duration<double, std::nano>(elapsed).count() / static_cast<double>(entities);
+			nanosecondsPerEntity = std::max(measured, 0.5 * (nanosecondsPerEntity + measured));
+		}
 
 	}
 
@@ -154,10 +181,13 @@ namespace Strata
 		std::vector<Entity> tops;
 		while (budget > 0 && std::chrono::steady_clock::now() < deadline)
 		{
-			const size_t count = CollectUnloadSlice(load, std::min(budget, c_UnloadChunk), tops);
+			const auto chunkStart = std::chrono::steady_clock::now();
+			const size_t chunk = GetChunkWithin(deadline, m_DestroyNanosecondsPerEntity, std::min(budget, c_UnloadChunk));
+			const size_t count = CollectUnloadSlice(load, chunk, tops);
 			if (count == 0)
 				break;
 			DestroyEntities(tops);
+			RecordChunk(m_DestroyNanosecondsPerEntity, std::chrono::steady_clock::now() - chunkStart, count);
 			load.Status.DestroyedEntities += count;
 			budget -= static_cast<uint32_t>(count);
 		}
@@ -393,7 +423,9 @@ namespace Strata
 		while (budget > 0 && !instantiation.IsComplete() && std::chrono::steady_clock::now() < deadline)
 		{
 			std::string error;
-			const size_t count = ContinueInstantiation(instantiation, std::min<size_t>(budget, c_InstantiationChunk), &error);
+			const auto chunkStart = std::chrono::steady_clock::now();
+			const size_t chunk = GetChunkWithin(deadline, m_CreateNanosecondsPerEntity, std::min<size_t>(budget, c_InstantiationChunk));
+			const size_t count = ContinueInstantiation(instantiation, chunk, &error);
 			if (count == 0)
 			{
 				FailSubScene(load, error.empty() ? std::string("No entity could be created") : std::move(error));
@@ -409,6 +441,7 @@ namespace Strata
 				load.Roots.push_back(roots[index]);
 			}
 			load.TaggedRoots = roots.size();
+			RecordChunk(m_CreateNanosecondsPerEntity, std::chrono::steady_clock::now() - chunkStart, count);
 		}
 		if (created > 0)
 			status.Slices++;

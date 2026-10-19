@@ -10,6 +10,7 @@
 #include "Strata/Scene/SubScene.h"
 #include "TestHelpers.h"
 
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -109,6 +110,55 @@ TEST_SUITE("Scene.SubScenes")
 		CHECK(scene.GetEntityCount() == 1);
 		CHECK(scene.GetEntityByUUID(resident.GetUUID()));
 		CHECK_FALSE(scene.HasPendingSubScenes());
+	}
+
+	TEST_CASE("Slices cut their chunks to the time left, so that they end close to the time limit")
+	{
+		// A twentieth of a millisecond per update: a chunk of 512 entities would overrun it many times over. Chunks hold what
+		// fits in the time left at the cost measured so far, and at least 32 entities.
+		ScopedJobSystem jobs(2, 1);
+		Scene scene("Level");
+		const SubSceneID id = scene.BeginAdditiveLoad(MakeNestedScene(3000));
+		const auto shortBudget = [&]()
+		{
+			SceneWorkBudget budget = CountedBudget(scene);
+			budget.SubSceneMilliseconds = 0.05;
+			return budget;
+		};
+
+		std::vector<size_t> created;
+		REQUIRE(WaitUntil([&]()
+		{
+			const size_t before = scene.GetSubSceneStatus(id)->CreatedEntities;
+			SceneWorkBudget budget = shortBudget();
+			scene.OnUpdateRuntime(c_FrameTime, &budget);
+			const SubSceneStatus* status = scene.GetSubSceneStatus(id);
+			REQUIRE(status);
+			REQUIRE(status->State != SubSceneState::Failed);
+			if (status->CreatedEntities > before)
+				created.push_back(status->CreatedEntities - before);
+			return status->State == SubSceneState::Loaded;
+		}, std::chrono::seconds(60)));
+		REQUIRE(created.size() > 1);
+		CHECK(*std::max_element(created.begin(), created.end()) < 512);
+		// The last slice creates what was left.
+		CHECK(*std::min_element(created.begin(), created.end() - 1) >= 32);
+
+		REQUIRE(scene.UnloadSubScene(id));
+		std::vector<size_t> destroyed;
+		REQUIRE(WaitUntil([&]()
+		{
+			const size_t before = scene.GetEntityCount();
+			SceneWorkBudget budget = shortBudget();
+			scene.OnUpdateRuntime(c_FrameTime, &budget);
+			if (scene.GetEntityCount() < before)
+				destroyed.push_back(before - scene.GetEntityCount());
+			return scene.GetSubSceneStatus(id) == nullptr;
+		}, std::chrono::seconds(60)));
+		REQUIRE(destroyed.size() > 1);
+		CHECK(*std::max_element(destroyed.begin(), destroyed.end()) < 512);
+		CHECK(*std::min_element(destroyed.begin(), destroyed.end() - 1) >= 32);
+		CHECK(scene.GetEntityCount() == 0);
 	}
 
 	TEST_CASE("Creating and destroying share one update's budget")
