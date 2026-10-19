@@ -749,7 +749,10 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Editor.UI` | `ImGuiModule::OnRenderUI`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
 | `Present` | `GraphicsDevice::EndFrame` (`GraphicsModule::OnEndFrame`), after the work time is measured (outside the frame time) |
 
-Modules and games register more (`RegisterStage`, up to 64); a scene system names its stage in its descriptor. Each frame
+Modules and games register more (`RegisterStage`, up to 64); a scene system names its stage in its descriptor, and the
+editor times its commands as `Editor.Commands` (`EditorCommandRegistry::Execute` and `PollCommandResult`: a `scene.save`
+or an `entity.create` shows there instead of as untimed time; the stages of what a command runs, a capture's render,
+nest in it). Each frame
 also records how busy the job system's worker, I/O and background threads were since the previous frame
 (`JobSystem::GetStats`: per-thread busy time and completed jobs, written by each pool thread under a sequence lock and
 read without stopping it).
@@ -1034,6 +1037,88 @@ A frame of a scene where nothing changed costs (almost) nothing, however many en
   `GetHierarchyOrderBuildCount`, `GetLookupVisitCount` and `GetLookupIndexBuildCount` (tests use them to prove that
   lookups and clean updates traverse nothing).
 
+### Scene documents
+
+Scenes, prefabs and models are JSON documents (`{"Strata": {"Format", "Version": 1}, "<Kind>": {...}}`). Small ones
+(undo snapshots, the clipboard, commands) go through `SceneSerializer::Serialize`/`SerializeEntities` as DOMs; documents
+of whole scenes never become one:
+
+- **Writer** (`Scene/SceneDocumentWriter`): writes into a `DocumentOutput` (`Core/DocumentOutput.h`: a file through
+  `Core/AtomicFileWriter`, which streams into `<path>.tmp<n>` through a 1 MiB buffer and renames it over the file on
+  `Commit`, or a string). The header comes first, then `"Name"`, `"Settings"`, `"EntityCount"` (new and optional: readers
+  that know it refuse an over-cap document at once) and `"Entities"` with **one entity per line**, in hierarchy order. Each
+  line is byte for byte `JsonUtils::Dump` of the entity object `SceneSerializer` builds (components and properties sorted
+  by name, floats in `FloatToJson`'s form, which `AppendFloatJson` writes without parsing a number: fmt's shortest digits
+  read back as nlohmann does, exactly, through one IEEE operation where the significand and the power of ten are exact,
+  and through nlohmann's reader otherwise), so a re-save of an old file differs only in whitespace, files diff entity by
+  entity and take about half of the old tab-indented size. Entities are serialized in parallel chunks of
+  `SceneWriteOptions::ChunkEntities` (4,096) on the job system (`JobPriority::Background` by default) and written in
+  order by a job of their own while the next batch is serialized, so the bytes never depend on the thread count. While
+  writing it collects the references (asset properties in order, and extra data such as script fields through
+  `SceneWriteOptions::ExtraReferences`: exactly what `AssetDependencies::Scan` finds in the bytes), counts entities and
+  bytes and hashes them (SHA-256 for the recovery journal, FNV-1a for the import records). Options: the document kind,
+  entity subsets by root ID (`Roots`: each root with its descendants, parents written only within the subset; world
+  cells), `WriteSettings`, `Name`, `Cancel` (checked between chunks), `Progress` and `LeaveOut` (components not written).
+  `SceneSerializer::SaveToFile` writes through it. `WritePrototype` writes an `EntityPrototype`'s entities in the same
+  layout, line for line what `Write` writes of a scene holding them (`Prefab::WriteDocument`, without the prefab links:
+  `prefab.create`), and `WriteJson` lays a parsed prefab or model document out the same way (`prefab.apply`, which edits
+  the document as JSON).
+- **Reader** (`Scene/SceneDocumentReader`): runs nlohmann's event parser (`Core/JsonEvents.h`: `ParseJsonEvents`, the
+  handler called directly, over the progress input `JsonUtils::Parse` uses too) and hands the content to an
+  **`EntitySink`** (`Scene/EntitySink.h`) one value at a time: the header and the content's small fields (`"Name"`,
+  `"Settings"`) as DOMs of their own, each value of the entity list as the DOM of that entity only; unknown keys are
+  skipped without building anything. Any key order and whitespace read: the header of old files (keys sorted, so it
+  follows the entities) is checked when it arrives, and a document without a valid one fails after its entities. Errors
+  are the DOM readers' before it (`SceneSerializer::Deserialize`, `Prefab`, `Model`). `SceneReadOptions`: `IsCancelled`
+  (asked every `CancelCheckEntities`, 256), `MaxEntities` (a declared `EntityCount` above it is refused before the first
+  entity, an undeclared document at the first entity beyond it), `Progress` (the share of the text parsed). Sinks:
+  - `SceneBuilder` creates each entity and its components in the scene's registry as it arrives
+    (`ComponentAccess::Deserialize`, as `DeserializeEntities` does) and keeps only its entity and parent ID; `Finish`
+    links the hierarchy (union-find over document indices refuses cycles; invalid and missing parents attach at the top
+    level), signals every component and reports what it could not read in the DOM reader's order (settings, entities,
+    unknown components with one warning per name, parents). `SceneSerializer::DeserializeText` reads a scene's text
+    with it (`SceneAsset::Deserialize`, `LoadFromFile`).
+  - `EntityPrototypeBuilder` reads entities into `EntityColumns` (per entity its ID, parent and components, each value
+    appended to a `ComponentValueArray` of its type and filled in place) and builds an `EntityPrototype` without a scene:
+    the entities in hierarchy order as `EntityPrototype::Compile` orders a scene's, the value arrays moved over whole.
+    `Prefab::Deserialize`, `Model::Deserialize` and `EntityPrototype::FromSnapshot` use it.
+  - `AssetDependencies`' reference sink scans each entity's references as it arrives: the reference search of a large
+    scene holds its text and its references, never its DOM.
+- **Parallel read.** A sink that takes prepared entities (`EntitySink::ReadPrepared`: `SceneBuilder`) gets documents of
+  at least `ParallelMinEntities` (16,384) entities read on the job system: the entities are found by the document's lines
+  when it is in the writer's layout, else by a structure scan that matches brackets and skips strings without building
+  values (any layout: compact files of tools, indented old files); every entity and the document without them (the
+  skeleton) are checked to parse alone (in parallel, before the sink hears of anything: a document they do not split is
+  read as a stream), the skeleton goes through the stream handler, and then jobs parse chunks of
+  `ParallelChunkEntities` (2,048) into `EntityColumns` while the reading thread hands the finished chunks to the sink in
+  order, at most twice the worker count of chunks in memory. The scene and its reports do not depend on the path. A
+  cancel is noticed after every chunk; an over-limit document is refused before any check.
+- **Cooked scenes** (`Scene/CookedScene`): the binary form exports put into packs (`AssetPackCook`'s `CookForPack`, called
+  by `EditorAssetManager::WriteAssetPack` with `AssetPackWriteOptions::CookDocuments`; `GameExportOptions::CookDocuments`,
+  `project.export`'s `cookDocuments`, defaults to true). "STSC" version 1: a 64-byte header with its own CRC-32C and a
+  table of 16-byte aligned sections with a CRC-32C each (strings; a scene's name and settings as compact JSON; entity IDs;
+  parent indices, each before its entity; the component types with their properties' names and types; one column per
+  type, a dense flag or strictly increasing entity indices, then each property's values together through
+  `Reflection/PropertyBinary` and each value's extra data, binary (`ComponentInfo::SerializeExtraBinary`: scripts) or the
+  JSON extra as MessagePack; the unknown components as MessagePack). Entity references are recomputed from the values on
+  load, never stored. `CookedSceneWriter::Write` writes a prototype; `CookedSceneReader::Read` validates the header, the
+  table and every checksum and bounds every count and index before it allocates, decodes the columns in parallel (a job
+  per type, values through `PropertyInfo::SetValue`, properties mapped by name: unknown ones skipped with a warning, a
+  changed type refused, types this build lacks kept as unknown components) into an `EntityPrototype`, and `ReadScene`
+  instantiates it keeping the IDs. The scene, prefab and model loaders take documents that start with the magic
+  (`CookedScene::IsCooked`) to it; the editor only ever has JSON in projects. The export cooks with the same streamed read
+  that finds a document's references for the pack's reference check, and applies
+  `AssetPackCookOptions::AdjustSceneSettings` (the export's scene transform) to cooked and JSON output alike. The
+  realistic 1M world starts in a game in 0.5 s cooked against 2.2 s with its JSON (`Perf.Runtime.World1MStart`).
+- **Cancellation.** `AssetLoadData::IsCancelled` turns true once a load is given up (cancelled, superseded, or the
+  manager closing: `WaitForInFlightLoads` sets its load state's `Closing` before it waits); the scene, prefab and model
+  loaders pass it to the reader, so a cancelled `SceneLoadRequest`, another scene opened or the editor quitting ends a
+  read within milliseconds (`Perf.Scene.CancelLoad1M`).
+- **Snapshots.** A background save writes a copy of the edited scene that nothing changes:
+  `Scene::Copy(scene, SceneCopyOptions { .SerializedOnly = true })` copies, storage by storage on the job system like a
+  play copy, the IDs, the hierarchy, the kept unknown components and every serializable registered component (also those
+  play copies leave out, `NoCopy`), and none of the cached world transforms; it is only ever read.
+
 ## Threading model
 
 The main thread owns the scene, input, scripts, editor state and rendering submission (AGENTS.md, "Architecture
@@ -1112,7 +1197,7 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
  AssetImporter (by extension) -- ReadImportDependency --> other files under Assets/
    | stored bytes; sub-assets with DeriveSubAssetHandle
    v
- .strata/Cache/<handle>.bin + <handle>.import  -- PlanAssetPack + WriteAssetPack -->  <Game>.stpak (+ patch packs)
+ .strata/Cache/<handle>.bin + ImportRecords.log -- PlanAssetPack + WriteAssetPack -->  <Game>.stpak (+ patch packs)
  (JSON assets and fonts: the source file itself)                         | RuntimeAssetManager (mounted packs)
    |                                                                     |
    +-------------------------- ReadAssetData (I/O thread) ---------------+
@@ -1124,26 +1209,60 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
                                          pools over budget
 ```
 
-- **Importing** (`Asset/EditorAssetManager.h`). `Scan` registers every file with a known importer, creates missing
-  `.meta` files, takes current imports from the cache and imports stale assets: in parallel before it returns
-  (`ScanImports::Wait`: tools, tests, scripted editor runs), or as background jobs that `Update` applies
+- **Importing** (`Asset/EditorAssetManager.h`). A scan registers every file with a known importer, creates missing
+  `.meta` files, takes current imports from the cache and imports stale assets. `BeginScan` returns at once: a job
+  loads the import records, walks the asset directory and prepares every file on the background threads in batches of
+  256 (`Asset/AssetRegistration.h`: its `.meta`, read once; its importer and settings; handles several files claim,
+  resolved as before, and new ones written into the `.meta` by the job; its cached import checked against its record, or
+  what a document references), then removes cached data nothing uses. `Update` inserts what the job prepared, a slice of
+  about a millisecond per call (`AssetRegistrationOptions`: the clock is read every 64 entries;
+  `AssetManagerBase::RegisterAssets` takes a batch under one lock), and applies the current imports, whose outcomes carry
+  their cache files' sizes: no file is touched on the main thread (`FileSystem::GetThreadOperationCount` lets tests
+  check). `GetScanProgress` reports the phase (`Walking`, `Registering`, `Applying`) with done and total; the file watcher
+  starts before the walk, so a file added meanwhile is reported once the scan is applied. `Scan` begins and waits
+  (tools, tests, scripted editor runs); called again later, it registers the files added since. Stale assets import in
+  parallel once the scan is applied (`ScanImports::Wait`), or as background jobs that `Update` applies
   (`ScanImports::InBackground`: the editor, so a project with textures to compress opens at once and its frames go on).
   Until an asset's first import is applied, a load of it waits, `Loading`, instead of failing (the manager does not
   dispatch it while `IsAwaitingImport` says so, and `ResumeLoadsAwaitingImport` starts it with the import's data or
   error); its sub-assets are registered once the import is. Afterwards the file watcher
   reports changes; `Update` re-registers files and queues re-imports as background jobs, and applies finished imports
   through `ReloadAsset`: loaded assets load again, and every reloaded asset gets a new source revision
-  (`GetSourceRevisions`), announced as a content change at once when no object of it is loaded. The cache record
-  (`<handle>.import`) remembers the source state, settings, importer version and dependencies, so a current import is
-  reused. Editor commands take the same background path: `SetImportSettingsInBackground` saves the `.meta` and queues
+  (`GetSourceRevisions`), announced as a content change at once when no object of it is loaded. The import record remembers the source state,
+  settings, importer version and dependencies, so a current import is reused. The editor opens projects this way (`EditorContextSpecification::ImportInBackground`): the
+  project is open at once, the automation session is published within the startup, commands that need the whole
+  registry wait (`EditorContext::IsWaitingForAssets`, `EditorCommand::WaitsForAssets`), and the start scene and the
+  script usage scan follow the scan (`EditorContext::FinishAssetScan`).
+- **Import records** (`Asset/ImportRecordStore.h`). Every asset's record (and, for assets stored as their source, what
+  they reference) and the path of every handle (which resolves duplicated `.meta` files the same way on every scan) live
+  in one append-only file, `.strata/Cache/ImportRecords.log`: a header line, then one entry per line, the CRC-32C of
+  its JSON and the JSON (`{"Handle", "Record"}`, `{"Handle", "Path"}` or `{"Handle", "Removed": true}`), the latest of a
+  handle winning. The scan reads it once into memory, and imports, reference searches and saves read and set records
+  there; one writer at a time (an I/O job; callers only queue) appends whole lines, flushed per batch. A crash can tear
+  only the last line, which the next load skips and cuts off, and cache files are renamed into place before their record
+  is set (under the exclusive file lock, so a cancelled import never brings a removed record back): a record never names
+  a missing cache file, and a lost one only means an import or a search again. When dead entries outnumber live ones and
+  the file passes 1 MiB, the writer rewrites it from memory (`AtomicFileWriter`). The earlier layout (a
+  `<handle>.import` file per asset and `AssetIndex.json`) is taken over by the first load and removed once written, so an
+  upgraded project imports nothing again. Trashed assets keep their records as files in the trash folder, and a restore
+  sets them again; the scan drops records and paths of handles no asset has any more. Editor commands take the same background path: `SetImportSettingsInBackground` saves the `.meta` and queues
   the import, `ReimportAssetInBackground` queues one even when the cached import is current (`ImportRequest::Force`;
   assets stored as-is reload at once and their references are searched again), and `IsImportPending` tells a deferred
   command (`asset.setImportSettings`, `asset.reimport`) when `Update` applied it; `SetImportSettings` and
   `ReimportAsset` import on the calling thread (tools, tests).
+- **Searches of what documents reference** (`EditorAssetManager::QueueNativeReferences`). A document changed on disk
+  (the watcher's report, `asset.reimport`) is searched on an I/O job once it has not changed for
+  `c_ReferenceSearchDelay` (500 ms: a file written over seconds is searched once), and a newer search cancels the one
+  before (one per document at a time; a save records its references itself and cancels the search). Searches are no
+  imports: `HasPendingImports` counts imports only, `HasPendingReferenceSearches` and `GetPendingReferenceSearches` the
+  searches (`editor.status`'s `assets.referenceSearches`). An export waits for imports and saves only; the documents
+  whose search has not run yet it scans itself on a job before it plans (`FindDocumentReferences`,
+  `RecordScannedReferences`), so its plan holds what they use now.
 - **Importing external files** (`EditorAssetManager::ImportExternal`, `asset.import`). Nothing of it runs in a frame: an
-  I/O job copies the files (`ExternalCopy`, which uses no manager state) and `Update` registers what it copied
-  (`RegisterAddedFile`, with the copied `.meta` files' handles where they are free) and queues their imports as
-  background jobs like re-imports; the import is `Finished` once every asset it brought is imported, and the command,
+  I/O job copies the files (`ExternalCopy`, which uses no manager state) and prepares what it copied for registration
+  as a scan does (`PrepareAddedFiles`: the copied `.meta` files' handles where they are free, new ones written by the
+  job, cached imports checked, documents' references found), `Update` only inserts it (`InsertPrepared`, touching no
+  file) and queues the imports as background jobs like re-imports; the import is `Finished` once every asset it brought is imported, and the command,
   deferred, answers then. Copies run one at a time in the order of the calls (`StartNextExternalCopy`), so two never pick
   the same free name, and a copy never writes over a file (`std::filesystem::copy_options::none`; what a failed copy left
   is removed). The file watcher leaves the files of a copy alone until `Update` registers them complete: the copy names
@@ -1189,6 +1308,26 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   frame) applies imports as they finish (`WaitForImportProgress`), since loads that wait for a first import resume only
   when it is applied. The editor's export polls
   `HasPendingImports` between frames instead (`GameExport`, "Waiting for asset imports to finish").
+- **Import memory admission.** Decoding takes many times a source's size (a 4096x4096 PNG decodes to 64 MiB, and its
+  float levels and compressed blocks take about 256 MiB more), so imports start only while their estimates fit a budget
+  (`EditorAssetManager::SetImportMemoryBudget`; by default a quarter of physical memory clamped to 1-4 GiB,
+  `GetDefaultImportMemoryBudget` with `Platform::GetPhysicalMemorySize`, so that it binds on large machines too). An
+  import job first reads the source's head (`c_AssetPrefixHeadBytes`) and asks its importer for an estimate
+  (`AssetImporter::EstimateImportMemory` with an `ImportEstimateSource`, through which it reads more of the source or of
+  the files it names, `ReadEstimateBytes`, under the shared file lock: four times the source's size by default; textures
+  20 bytes per pixel from the image header, `stbi_info_from_memory`, reading prefixes eight times larger until it shows,
+  since a JPEG's frame header follows its metadata segments, and 50 times its size for an image whose header never shows;
+  glTF twice its buffers and its images by their headers like textures, whether embedded in the `.glb`, in buffer files
+  or files beside it, with the document read past the head up to 64 MiB). It runs at once on its thread when nothing waits before it and its estimate fits beside the imports admitted,
+  or when nothing else is admitted, however large it is (`BackgroundWork::AdmitOrWait`); otherwise it joins the work's
+  queue of waiting imports, in arrival order, and its thread is free for other work. An admitted import that ends
+  (finished, failed or cancelled) releases its estimate and submits, as background jobs, the waiting imports that now fit,
+  front first; cancelled ones leave the queue then. A larger budget starts what fits at once. Blocking imports (scans that
+  wait, `ReimportAsset`, `ImportExternalFile`: tools and tests) are admitted the same way but wait on their own thread;
+  since they hold it, they wait only while an admitted import runs, never for admitted imports still queued for a thread,
+  which may need theirs (they then run beyond the budget rather than deadlock). The budget replaced the one-at-a-time lock
+  for sources above 64 MB. `asset.stats` and `editor.status` report `importMemoryMB` (`admitted`, `budget`, `queued`), and
+  `asset.setBudget {importMB}` changes the budget for the open project (`reset` restores the default).
 - **References and bounds** (`Asset/AssetDependencies.h`). What an asset references is recorded with its import:
   importers add what their stored form does not show as a document (`ImportResult::References`; a glTF mesh's default
   materials) and the local bounds of meshes (`Bounds`), and `AssetDependencies::Scan` reads the documents (scenes,
@@ -1734,7 +1873,12 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   wanted, count, resident bytes). `GetStats` costs the same with any number of assets: the
   counts of assets per state and of pinned assets change with the entries (`SetStateLocked`, `AddEntryLocked`,
   `RemoveEntryLocked`, `Pin`, `Unpin`; every change of an entry's state goes through them), so the editor reads them
-  every frame. `GetResidencySamples` gives the per-asset part without names into a vector the caller reuses, and
+  every frame. `GetResidencySamples` (like `GetResidencyInfo`) costs what is listed, not what is registered: the base keeps
+  the listed entries (not unloaded, loaded or pinned) with every change of state, loaded object or pin
+  (`UpdateListedLocked`; tests check it against a look at every entry, `ValidateResidencyIndex`) and walks them, or all
+  entries once at least a quarter of them are listed, which then costs less than looking each listed one up
+  (`ForEachListedLocked`: the Streaming panel with every asset resident costs what it did before the index), gives the
+  per-asset part without names into a vector the caller reuses, and
   `GetMetadataVersion` changes with every registration and metadata change, so a view of tens of thousands of assets
   reads names only when they change.
   The editor reports them, apart from the `GetAsset` calls, through `asset.stats` (`mipStreaming`; the rows of streaming
@@ -2608,6 +2752,39 @@ is the `strata-scripting` skill. The layers:
   windowed sessions that are not scripted; scripted runs, headless editors and tests wait in `OpenProject`, so their first
   command finds the scene). With a 1,000,000-entity start scene the window's first frame comes after 1.0 s instead of 6.8 s
   (Release; the scene follows about 7 s later, while frames go on).
+- **Background saves** (`Editor/DocumentSaver.h`). The one path that saves engine-native documents without holding a
+  frame: the main thread takes a snapshot (`Scene::Copy` with `SerializedOnly`) and submits a `DocumentSaveRequest` (the
+  snapshot, its undo `SavePoint`, a label and its items); a background job writes each item through `SceneDocumentWriter`
+  (a `SceneWriteOptions` per item: kind, entity subset, settings) or, for an item with ready `Document` bytes (a small
+  document made on the main thread), checks them with the type's loader and writes them as they are; `Update` publishes
+  the request on the main thread in one step and calls its completion. Each item goes through `AtomicFileWriter` next to
+  its target and replaces it under the asset manager's exclusive file lock (`EditorAssetManager::ClaimDocumentWrite`,
+  `DocumentWriteClaim::Commit`, which also writes a new asset's `.meta` and the import record with the references and
+  the hash the writer collected); `PublishWrittenDocument` then makes the result the asset's state without reading the
+  disk or parsing the document again (new assets are registered with the handle `ReserveNativeAsset` reserved for their
+  path, given or new; existing ones take the file's size and time, so the watcher's report of the write is no news, and
+  their recorded references). While the claim lives the file watcher leaves the path alone, so a save never triggers its
+  own reference search or reload; the claim keeps the manager's background work alive, and `MoveAsset`, `MoveFolder` and
+  `MoveToTrash` refuse, with the reason, to move a claimed or reserved path or a folder holding one, which the save would
+  write at its old place (`FindDocumentWriteLocked`). Items fail independently (each file
+  is atomic, a failed new item gives its reservation back) and the request fails naming them. One request writes at a time;
+  a queued request for the same documents is replaced by a newer one, whose snapshot is written for both (repeated saves
+  never hold two snapshots), and both completions get its status (`WrittenID`, `SavePoint`). Replaced snapshots and the
+  written one are destroyed on background threads.
+  The edited scene saves through it (`EditorContext::BeginSaveScene`, `BeginSaveSceneAs`; `SaveScene` and `SaveSceneAs`
+  wait for them, for tools, tests and a template's start scene): the frame breaks the undo merge, takes
+  `UndoStack::GetSavePoint` and the snapshot, and the recovery journal's `BeginSave` token; the completion marks that point
+  saved (`UndoStack::MarkSaved(SavePoint)`: edits made meanwhile stay unsaved), gives the recovery journal the written
+  document's SHA-256 (`SceneRecovery::OnSaved`, which starts the new journal with the steps applied since the snapshot and
+  writes it before the old file goes, so nothing edited during a save is ever out of a journal), and makes the project's
+  picture; a failed save posts an error notification and gives a scene saved as a new asset its previous handle and name
+  back (the save as's own completion does, also when a newer save of the new asset replaced it while it was queued). A save whose edited scene was replaced meanwhile writes its file and marks nothing (the undo history's generation
+  and the journal's epoch tell). `scene.save` and `scene.saveAs` answer once the save is published (`wait`, default) or
+  at once with its `saveId`; the commands that replace the scene, close the project or quit run their handlers through
+  `CommandUtils::AfterSaves`, which defers them while saves are in flight; the UI's save (Ctrl+S, File > Save, the question's
+  Save) goes through the command runner, `RequestDiscardChanges` waits for saves in a saving dialog (Cancel gives up the
+  action, never the save), and a status pill shows them. `GameExport` plans once no save is in flight, and starts while
+  the scene's current state is being saved (`FindSaveOfCurrentState`): it fails if that save fails. Closing the project (`ReleaseProject`) and the editor finish every save first.
 - **Undo** (`SceneEdit.h`, `UndoStack.h`). A `SceneEditTransaction` snapshots the entities an edit touches as
   `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
   `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs
@@ -3114,12 +3291,18 @@ is the `strata-scripting` skill. The layers:
 ## Export and the runtime
 
 `project.export` (`StrataEditor/src/Editor/GameExport.cpp`) exports without blocking a frame. `GameExport::Start` checks
-at once what it can and fails without side effects: a saved, stopped scene, a start scene (or the open scene), no
+at once what it can and fails without side effects: a saved, stopped scene (a scene whose current state is being saved
+counts as saved: the export keeps that save's ID, `EditorContext::FindSaveOfCurrentState`, and fails with its error if it
+fails), a start scene (or the open scene), no
 running script build, a loaded script module that is still the file that was loaded (scenes or prefabs that use scripts
 need one), what `Export.AlwaysInclude` names (with `prune`; `EditorAssetManager::CheckAlwaysInclude` matches the entries
 without planning), and a usable output directory (`CheckExportDirectory`: absolute, local, outside the project, not a
-file, no reserved device names; each refusal says what to do instead). It then waits for background imports (polling
-`HasPendingImports` once per frame, `WaitingForImports`; the frames go on), plans the pack once on the main thread (`EditorAssetManager::PlanAssetPack`) and writes everything on an I/O thread (failing, with
+file, no reserved device names; each refusal says what to do instead). It then waits, polling once per frame
+(`WaitingForImports`; the frames go on), for background imports (`HasPendingImports`) and the editor's saves
+(`DocumentSaver::IsBusy`), and runs the reference searches of documents that have not had theirs yet
+(`GetPendingReferenceSearches`, searched on an I/O job by `FindDocumentReferences` and recorded with
+`RecordScannedReferences`, since searches are no imports); then it plans the pack once on the main thread
+(`EditorAssetManager::PlanAssetPack`) and writes everything on an I/O thread (failing, with
 the document named, when a document saved meanwhile references what the plan does not hold), reporting its progress in
 bytes and stage (`GetProgress`, `GetStage`; `project.exportStatus`); one export runs at a time
 (`EditorContext::StartGameExport`), `project.cancelExport` stops it between blocks, and closing the project or the
@@ -3136,7 +3319,7 @@ It writes:
 
 | File | Source |
 | --- | --- |
-| `<Game>.stpak` | `EditorAssetManager::WriteAssetPack` of the plan: every project asset, or with `prune` what the scenes and `Export.AlwaysInclude` use, ordered by first use |
+| `<Game>.stpak` | `EditorAssetManager::WriteAssetPack` of the plan: every project asset, or with `prune` what the scenes and `Export.AlwaysInclude` use, ordered by first use; scenes, prefabs and models cooked (`cookDocuments`, default true: `AssetPackCook`, binary documents that load without parsing JSON, [Scene documents](#scene-documents)) |
 | script module (and its PDB) | `EditorContext::ReadRunningScriptModule`: the loaded module, checked by digest |
 | `<Game>.stgame` | `GameManifest` (version 4): name, pack, start scene, loading scene (`Export.LoadingScene`, optional), module, window settings |
 | `<Game>[.exe]`, `ThirdPartyNotices.md` | `StrataRuntime` from the editor's directory, renamed (`includeRuntime`) |

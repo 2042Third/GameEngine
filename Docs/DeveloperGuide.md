@@ -231,7 +231,8 @@ miniaudio) are not built, and nothing links them. The editor is a tool with ever
   `StrataTests/CMakeLists.txt` (`STRATA_TESTS_OF_<MODULE>`: files that test little else) and the feature test (its scene
   holds every component). Test cases elsewhere that need a module are guarded with `#if ST_WITH_<MODULE>`, those that need
   every system or component (their order, their count) with `ST_TESTS_HAVE_EVERY_MODULE` (a definition of `StrataTests`,
-  never a header's, for the same reason). In a full build, `ModuleRegistrationOptions::Exclude` registers the engine
+  never a header's, for the same reason); code outside `src/Editor` that calls the editor tests' helpers (TestMain's helper
+  modes) with `ST_TESTS_HAVE_EDITOR`, since builds without the editor leave that folder out. In a full build, `ModuleRegistrationOptions::Exclude` registers the engine
   without some of its modules (the `--strata-test-helper=register-without` mode).
 - **CI** builds and tests a game configuration without audio and physics ("Linux (no Audio, no Physics)":
   `ctest -LE "gpu|perf|package"`).
@@ -477,7 +478,20 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   versions 2 and 1 of the stress project (the size with its textures uncompressed, opening, streaming all of the world's
   bytes as it ships, whole textures without mip streaming; the acceptance limits, 0.8 of version 1's size and 110% of
   its time, are the budgets of `ratio` metrics, so they are checked like any budget). Time calls that take nanoseconds
-  in batches (the clock's resolution is about 0.1 microseconds).
+  in batches (the clock's resolution is about 0.1 microseconds). World-scale gates build on `Perf/WorldFixture.h`, the
+  scale audit's generators made deterministic (fixed handles and entity IDs, the same bytes on every run and thread
+  count; add to its API, never change it, as other streams' gates use it): `WriteWorldProject` writes realistic worlds
+  (a camera at walking height near the centre, a sun, a procedural sky, a ground plane, and cubes 4 units apart in
+  districts of 2,500, each with one of the project's materials and every 10th a static body; `c_World250k` and
+  `c_World1M` are the audit's 250,104 and 1,000,404 entities) compact, as tools write them, an entity at a time on the
+  job system, and `BuildWorldScene` builds the same world in a scene in memory (a test checks that saving it compact
+  gives the file's bytes); `WriteManyAssetsProject` writes tens of thousands of materials in folders of 1,000 with a
+  scene that uses each once (optionally without `.meta` files); `WriteTextureFolder` and `WriteSmallTextureFolder` write
+  folders of noisy PNGs to import; `WriteWorldGame` (in builds with the editor, `src/Editor/WorldGameExport.cpp`)
+  exports a world project through `GameExport` without a GPU. `StrataTests --strata-test-helper=write-world-project
+  <new directory> <name>:<cubes>[:colliders]...`, `write-many-assets-project <new directory> <materials>` and
+  `write-texture-folder <new directory> <count> <size>` write them for manual runs and screenshots (`PerfLab.WorldFixture`
+  tests the fixtures).
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
   runs its camera sweeps over the stress project (`src/Perf/StressProject.h`, also usable by other suites;
@@ -769,6 +783,19 @@ short. Their full wording:
   editor deletes through `MoveToTrash`/`RestoreFromTrash`. Code that lists folders or asks what uses an asset reads the
   manager's indexes (`GetFolders`, `GetAssetsInFolder`, `GetReferencers`), rebuilt views only when `GetChangeVersion`
   changed; never walk the disk or parse documents per frame.
+- Scene, prefab and model documents stream (Architecture.md, "Scene documents"): code that writes one goes through
+  `SceneDocumentWriter` (`Write` for scenes, `WritePrototype` for prototypes, `WriteJson` to lay out a document edited as
+  JSON), and code that reads one goes through `SceneDocumentReader` with an `EntitySink`: `SceneBuilder` into a scene
+  (`SceneSerializer::DeserializeText`), `EntityPrototypeBuilder` into a prototype, or a sink of its own that keeps what
+  it needs of each entity. Never parse a whole document into a DOM (a million entities' DOM takes gigabytes and blocks
+  cancellation); `SceneSerializer::Serialize`/`Deserialize` and snapshots are for small documents (undo, the clipboard,
+  commands). A sink that can take entities prepared in parallel implements `ReadPrepared`; the reader's results must not
+  depend on the path, which `Scene.Documents` checks for every sink. Exports put the documents into packs cooked
+  (`CookedScene`, Architecture.md "Scene documents"): a component whose extra data is not JSON-only gives it a binary
+  form (`ComponentInfoBuilder::ExtraBinary`, read back as its JSON form reads), every change of the cooked format extends
+  the corruption tests of `CookedSceneTests.cpp` (truncation at every byte, bit flips of the header and table, huge counts
+  with the checksums rewritten), and a `PropertyType` added gets its binary form in `Reflection/PropertyBinary` (a
+  `static_assert` fails the build until it has one).
 
 ### Importers
 
@@ -803,6 +830,22 @@ short. Their full wording:
   failed items, logs a failure once); an importer whose files name others (a glTF's buffers and images) lists them in
   `FindExternalFiles` (with `ReadsExternalFiles`), so the copy brings them along, and messages that can quote file bytes
   are made valid UTF-8 (`StringUtils::MakeValidUTF8`).
+  **Registering and applying touch no file on the main thread.** A scan prepares every file on jobs
+  (`EditorAssetManager::BeginScan`: `.meta` files read once and written by the job when missing or given a new handle,
+  cached imports checked against the records store, documents' references found, unused cache files removed), and
+  `Update` only inserts what was prepared, in slices of about a millisecond (`AssetRegistrationOptions`). Import outcomes
+  carry what applying them needs (`ImportOutcome::StoredSize`, `SubAssetStoredSizes`), and cache files that become unused
+  are removed by an I/O job (`RemoveCacheFilesLater`). New code on these paths keeps it so: the main thread reads no
+  `.meta`, stats no cache file and writes no record (records go through `ImportRecordStore`, whose writer is an I/O job);
+  tests check with `FileSystem::GetThreadOperationCount`.
+  **Imports take memory by their estimates.** Background imports start only while their estimates fit the import memory
+  budget (Docs/Architecture.md, "Import memory admission"). An importer whose imports take much more (or much less) than
+  four times their source's size overrides `AssetImporter::EstimateImportMemory`, which sees the source's first
+  `c_AssetPrefixHeadBytes`, its size and its settings (`ImportEstimateSource`), and reads more of the source or of the
+  files it names through `ReadEstimateBytes` (files inside the asset directory only) where the head does not tell: decode
+  only headers, never the source, and read the files a source names (a model's images) by their headers too. An estimate changes no
+  import output, so it bumps no `GetVersion()`. Editor code imports through the background forms, which wait for room
+  without holding a thread; the blocking forms wait on theirs (tools and tests).
 
 ### Engine-native assets, sub-assets and built-in assets
 
@@ -883,7 +926,10 @@ short. Their full wording:
   with `AssetLoadData::TakeBytes` when the asset keeps them, instead of copying them), an importer if it comes from
   external files (`RegisterAssetPipeline`), `GetMemoryUsage` reporting what it holds in each pool once finalized (and
   `GetFinalizedMemoryUsage` when finalizing moves data between pools), and tests for round trips and corrupt data
-  (every loader must reject truncated or garbage bytes without crashing). GPU uploads in `FinalizeOnMainThread` go in
+  (every loader must reject truncated or garbage bytes without crashing). A loader whose decoding takes long (documents of
+  many entities) asks `AssetLoadData::IsCancelled` every few milliseconds of work and gives up, returning no asset, once
+  it is true: the load was cancelled or replaced, or the manager is closing (scene loads pass it to
+  `SceneReadOptions::IsCancelled`, so a cancelled `SceneLoadRequest` or a closing editor ends the read at once). GPU uploads in `FinalizeOnMainThread` go in
   steps of at most `c_AssetUploadStepBytes` within the context's budget (`AssetFinalizeContext`,
   `AssetFinalizeResult::Pending`) and report their bytes; never upload an unbounded amount in one call. They record into
   `AssetFinalizeContext::Upload` (the renderer's assets downcast it with `RendererUploadContext::From`): the asset layer
@@ -1508,6 +1554,18 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   mistyped parameter, a reference to nothing) is `InvalidParameters` (`CommandArguments::Fail`,
   `EditorCommandResult::InvalidParameters`); a valid request that cannot be carried out in the current
   state is `Failed` (`EditorCommandResult::Fail`). Automation reports them with different error codes.
+- **Commands wait for the asset scan.** A project opened in the background (the editor's interactive and automation
+  runs: `EditorContextSpecification::ImportInBackground`) is open at once while its assets are scanned
+  (`EditorAssetManager::BeginScan`), and its start scene opens after the scan. Until both are done
+  (`EditorContext::IsWaitingForAssets`), `EditorCommandRegistry::Execute` defers every Edit command and every command
+  marked `EditorCommand::WaitsForAssets` before its handler runs: a new command that answers from the whole asset
+  registry (asset, material, prefab and animation queries, the export, recovery) sets the flag, and joins
+  `CommandJournalTests.cpp`'s `c_AssetScanCommands` (checked like the kind lists, so a move keeps it). This deferral is the
+  registry's, so it needs no `MayDefer` (and `editor.batch`, an Edit command, is deferred whole). Session queries
+  (`editor.status`, `editor.wait`, `editor.perf`, `log.read`, `scene.loadStatus`) answer at once; `editor.status`'s
+  `assets.scanning` reports `{phase, done, total}` (null when no scan runs). UI code that runs a command at once
+  (`RunEditorCommand`) refuses it meanwhile with `EditorCommandRegistry::DescribeAssetScanWait`'s reason; the assets pill
+  and the Content Browser show the scan (`FormatAssetScan`).
 
 ### No silent data loss
 
@@ -1521,6 +1579,17 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   command later asks again when the scene changed since (`UndoStack::GetVersion`), a modal dialog asks over itself
   (`EditorShell::DrawDiscardQuestion` between its `BeginModal` and `EndModal`), and a recorded `force` is never repeated
   for the person (the Activity panel's Re-run asks).
+- **Saves are never lost and never hold a frame:** the edited scene and every engine-native document a command or a
+  panel writes as a whole go through `Editor/DocumentSaver` (`EditorContext::BeginSaveScene`, `BeginSaveSceneAs`; world
+  cells too), which serializes, scans and writes on a background job and publishes on the main thread; never serialize a
+  document on the main thread for a save (the blocking `SaveScene`/`SaveSceneAs` are for tools, tests and a template's
+  start scene). `scene.save` and `scene.saveAs` take `wait` (default true: they answer once the file is published; false:
+  at once, with `saveId`), and `editor.status` lists `saving`. The commands that replace the edited scene, close the
+  project or quit wrap their handlers in `CommandUtils::AfterSaves`, so they defer while saves are in flight and then
+  decide as above (`force` never discards a save in flight); a new command of that kind does the same and, like
+  `scene.save` and `scene.saveAs`, is registered with `MayDefer` (`editor.batch` refuses it). UI code saves
+  through the command runner (the result comes in a later frame), `RequestDiscardChanges` waits for saves in a saving
+  dialog, and `EditorContext::ReleaseProject` finishes every save before the project goes.
 
 ### Autosave and recovery
 
@@ -1563,6 +1632,12 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `DescribeEntities`), which `edit.history` and the Activity panel show. The inspector edits a
   multi-selection through `PropertyEdit` (`GetSharedProperty`, multi-entity `SetPropertyWithUndo`, `RotationAnglesEdit`
   for rotations edited as Euler angles, `GetDefaultComponentValues` for Reset).
+- Saves run in the background, so the history moves on while one writes: a save breaks the merge (`BreakMerge`, so a drag
+  that goes on starts a step of its own) and takes `UndoStack::GetSavePoint()` (the serial of the latest applied step and
+  the history's generation) with its snapshot; once the file is written, `MarkSaved(SavePoint)` marks that point, wherever
+  edits, undos and redos have moved the history since (edits made meanwhile stay unsaved; undoing them reaches the saved
+  state). A point the history no longer holds (undone past and edited, trimmed, dropped by a failed redo) leaves the
+  scene modified; a point of a history cleared since (another scene) marks nothing.
 - **Batches** (`editor.batch {steps, atomic?}`, `Commands/BatchCommands.cpp`): the steps, parsed as a command script
   (`EditorCommandScript::FromJson`: `bind`, `{"$ref"}`, `expect`; an outer script leaves a batch's own references to it),
   run in the frame the batch arrives through `EditorCommandRegistry::Execute` (`EditorCommandScript::RunStepNow`), so
@@ -1805,8 +1880,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   pendingSteps, running}`, `selection {count, primary}`, `undo {undo, redo}`, `errors` (`unread`: errors and criticals
   logged after the latest message a `log.read` from level Error or below returned, `EditorContext::MarkLogRead`;
   `scriptBuild {failed, errors}`; `scriptFault`, the current fault in one line; `importFailures`, the open project's
-  imports that failed with nobody waiting for them), `assets {ready, loading, importing, scanning, failed}`, `saving` and
-  `editor {launcher}`. `sections: [...]` adds `engine` (`engineCommit`, `platform`), `project`, `selection` and `undo` in
+  imports that failed with nobody waiting for them), `assets {ready, loading, importing, scanning, failed}` (`scanning`:
+  the background scan's `{phase, done, total}`, `CommandUtils::DescribeAssetScan`), `saving` (the saves in flight,
+  `CommandUtils::DescribeSaves`) and `editor {launcher}`. `sections: [...]` adds `engine` (`engineCommit`, `platform`), `project`, `selection` and `undo` in
   full, `sceneLoad`, `memory` and the sections of other editor parts, which add them through
   `EditorContext::SetStatusProvider(section, full, compact)`: `automation`, `assets` (the totals of `asset.stats`),
   `game` (the window requests of the running game, `null` without any, its cursor mode and its save directory),
@@ -1824,9 +1900,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   cancellations, staging releases, dependency prefetches started and dropped, and `mipStreaming`: partial loads, range
   reads, mip levels raised and dropped, bytes read for them, textures below their wanted level) and, with `assets: true`,
   the assets that are resident, loading, failed or pinned (`GetResidencyInfo`; textures streaming their mips add
-  `residentMip`, `wantedMip`, `mipCount` and `residentBytes`); `asset.setBudget {gpuTexturesMB?, gpuBuffersMB?, cpuMB?,
-  inFlightMB?, uploadMBPerFrame?, finalizeMsPerFrame?, uploadMsPerFrame?, stagingMB?, reset?}` changes the budgets of the open project's
-  manager until the project closes (it fails without a project; values greater than 0; MB are 2^20 bytes; no undo, as
+  `residentMip`, `wantedMip`, `mipCount` and `residentBytes`), plus `importMemoryMB {admitted, budget, queued}` for the
+  open project's imports; `asset.setBudget {gpuTexturesMB?, gpuBuffersMB?, cpuMB?, inFlightMB?, uploadMBPerFrame?,
+  finalizeMsPerFrame?, uploadMsPerFrame?, stagingMB?, importMB?, reset?}` changes the budgets of the open project's
+  manager (`importMB`: the import memory budget, answered as `importBytes`) until the project closes (it fails without a project; values greater than 0; MB are 2^20 bytes; no undo, as
   nothing in the project changes).
   Opening a scene, and a scene switch the game asks for in play mode, schedule the release of what only the previous
   scene used (`EditorContext::OpenScene`, `SwitchRuntimeScene`). The Streaming panel (`Panels/StreamingPanel`) shows the
@@ -2344,6 +2421,17 @@ The editor exposes its features to tools and AI agents through `RpcServer` (`Str
 JSON-RPC 2.0, one compact JSON message per line, over TCP on loopback. `StrataCLI` is the client (`call`,
 `list`, `status`, `launch`) and an MCP server on stdio (`StrataCLI mcp`). How an agent drives the editor is
 described in `.claude/skills/strata-editor-automation/SKILL.md`.
+
+- **Launching waits for progress, not a fixed time.** The editor publishes its session within its startup (its
+  project's assets are scanned in the background). `StrataCLI launch` (`CLI::LaunchEditor`) bounds only the wait for the
+  session (`--wait-timeout`); with a project it then polls `editor.status {sections: ["sceneLoad"]}` every 250 ms until
+  `assets.scanning` and `sceneLoad` are null (an editor that refuses `sections` is asked without them), reporting the
+  progress (stderr; `strata_launch_editor` sends MCP `notifications/progress`, growing only, when the call names a
+  `progressToken`), and fails, stopping the editor, only when the editor exits or nothing progressed for
+  `--stall-timeout` (60 s). `--no-wait-scan` returns at the session. The test executable's fake editor
+  (`STRATA_TEST_FAKE_EDITOR`) reports a scan as `STRATA_TEST_FAKE_SCAN` says (`<milliseconds>` or `stall`) and, in its
+  `sceneLoad` section only (like the real compact answer), a start scene's load as `STRATA_TEST_FAKE_SCENE_LOAD` says;
+  with `STRATA_TEST_FAKE_STATUS=no-sections` it refuses `sections` and reports the load in its plain answer.
 
 ### Commands and requests
 

@@ -30,7 +30,7 @@ namespace
 
 		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{
-			EditorCommandResult result = Commands.Execute(Context, name, parameters);
+			const EditorCommandResult result = Tests::CompleteCommand(Context, Commands.Execute(Context, name, parameters));
 			INFO(name, ": ", result.Error);
 			REQUIRE(result.Success);
 			return result.Value;
@@ -255,6 +255,14 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(set["budgets"]["stagingBytes"] == 24 * c_MiB);
 		CHECK(harness.Run("asset.stats")["pools"]["gpuTextures"]["budgetBytes"] == 64 * c_MiB);
 		CHECK(harness.Run("asset.stats")["finalization"]["stagingBudgetBytes"] == 24 * c_MiB);
+		// The memory imports may take together (EditorAssetManager::SetImportMemoryBudget), reported with their estimates.
+		CHECK(set["budgets"]["importBytes"] == EditorAssetManager::GetDefaultImportMemoryBudget());
+		const nlohmann::json importSet = harness.Run("asset.setBudget", { { "importMB", 512 } });
+		CHECK(importSet["budgets"]["importBytes"] == 512 * c_MiB);
+		CHECK(harness.Context.GetAssetManager()->GetImportMemoryStats().Budget == 512 * c_MiB);
+		CHECK(harness.Run("asset.stats")["importMemoryMB"]["budget"].get<double>() == doctest::Approx(512.0));
+		CHECK(harness.Run("editor.status", { { "sections", { "assets" } } })["assets"]["importMemoryMB"]["budget"].get<double>() == doctest::Approx(512.0));
+		CHECK_FALSE(harness.Execute("asset.setBudget", { { "importMB", 0 } }).Success);
 
 		// Values that are not positive numbers change nothing.
 		for (const nlohmann::json& parameters : { nlohmann::json { { "gpuTexturesMB", 0 } }, nlohmann::json { { "cpuMB", -1 } },
@@ -271,6 +279,7 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(manager->GetResidencyBudgets().GpuTextures == 64 * c_MiB);
 		CHECK(manager->GetResidencyBudgets().Cpu == 2 * c_MiB);
 		const nlohmann::json reset = harness.Run("asset.setBudget", { { "reset", true }, { "uploadMBPerFrame", 4 } });
+		CHECK(reset["budgets"]["importBytes"] == EditorAssetManager::GetDefaultImportMemoryBudget());
 		budgets = manager->GetResidencyBudgets();
 		CHECK(budgets.GpuTextures == defaults.GpuTextures);
 		CHECK(budgets.Cpu == defaults.Cpu);

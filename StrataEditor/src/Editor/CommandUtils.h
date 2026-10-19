@@ -29,6 +29,7 @@ namespace Strata
 	class SceneEditTransaction;
 	struct AssetManagerStats;
 	struct FrameProfileSummary;
+	struct ImportMemoryStats;
 	struct JobSystemStats;
 
 	// Helpers shared by the built-in editor commands.
@@ -80,6 +81,8 @@ namespace Strata
 
 		// The totals of AssetManagerBase::GetStats as asset.stats and editor.status report them (EditorStreamingCommands.cpp).
 		nlohmann::json DescribeAssetStats(const AssetManagerStats& stats);
+		// The imports' memory estimates as asset.stats and editor.status report them: {admitted, budget, queued} in MB.
+		nlohmann::json DescribeImportMemory(const ImportMemoryStats& stats);
 
 		// Statistics of frame times in milliseconds (at least one), as editor.wait and project.export report them: {count,
 		// medianMs (the mean of the two middle ones for an even count), meanMs, p95Ms (nearest rank), maxMs}.
@@ -127,6 +130,12 @@ namespace Strata
 		// command would do, e.g. "opening the scene 'Level2'". Returns the failure (naming the scene and how to proceed), or
 		// nullopt when the command may go on. A forced discard keeps the changes as recovery data (EditorContext::ResetScene).
 		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action);
+		// A command handler that runs `handler` once no save is in flight (EditorContext::HasSavesInFlight): at once when none
+		// is, otherwise deferred until the saves are published (then it runs as the command's poll and decides as it would
+		// have, CheckUnsavedChanges included). The commands that replace the edited scene, close the project or quit the editor
+		// use it, so that a save that runs is never lost and `force` never discards one, and scene.save {wait: false} followed
+		// by scene.open needs no force.
+		EditorCommandHandler AfterSaves(EditorCommandHandler handler);
 
 		// The play state the play.* commands report: {state, paused}.
 		nlohmann::json DescribePlayState(const EditorContext& context);
@@ -135,6 +144,12 @@ namespace Strata
 		// subScenes: [{id, scene, name, state, entities}], switching: {scene, progress} or null (a scene the game asked for
 		// loads)}.
 		nlohmann::json DescribeRunningScene(const EditorContext& context);
+		// The saves in flight (DocumentSaver), for editor.status's saving, compact answer included: [{saveId, label, documents,
+		// state, progress}], empty when none writes.
+		nlohmann::json DescribeSaves(const EditorContext& context);
+		// The background scan of the project's assets, for editor.status's assets.scanning, compact answer included: {phase,
+		// done, total}, null when none runs.
+		nlohmann::json DescribeAssetScan(const EditorContext& context);
 
 		// What mutating commands report while the scene is running.
 		std::string GetRunningCopyWarning(const EditorContext& context);

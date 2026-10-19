@@ -103,6 +103,15 @@ TEST_SUITE("CLI.Commands")
 		CHECK(error.find("--idle-timeout") != std::string::npos);
 		CHECK_FALSE(ParseCliArguments({ "launch", "--idle-timeout", "soon" }, error).has_value());
 
+		std::optional<CliArguments> scan = ParseCliArguments({ "launch", "--stall-timeout", "90", "--no-wait-scan" }, error);
+		REQUIRE_MESSAGE(scan.has_value(), error);
+		CHECK(scan->StallTimeoutSeconds.value() == 90);
+		CHECK(scan->NoWaitScan);
+		CHECK_FALSE(ParseCliArguments({ "launch" }, error)->NoWaitScan);
+		CHECK_FALSE(ParseCliArguments({ "launch", "--stall-timeout", "0" }, error).has_value());
+		CHECK(error.find("--stall-timeout") != std::string::npos);
+		CHECK_FALSE(ParseCliArguments({ "launch", "--no-wait-scan=yes" }, error).has_value());
+
 		std::optional<CliArguments> toolsets = ParseCliArguments({ "mcp", "--toolsets", "core,scene" }, error);
 		REQUIRE_MESSAGE(toolsets.has_value(), error);
 		CHECK(toolsets->Toolsets.value() == std::vector<std::string> { "core", "scene" });

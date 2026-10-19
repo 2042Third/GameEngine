@@ -380,8 +380,7 @@ Open items and deferrals later waves own:
   still written back one by one; a collider built from a mesh that is reimported while evicted keeps the old data until
   the mesh loads again (the source revisions render-scene uses would tell).
 - Textures: HDR textures stay RGBA16F until a BC6H encoder exists.
-- `GetResidencyInfo` and `GetResidencySamples` walk every registered asset (`GetStats` keeps counts instead), which a world of many
-  registered assets will feel (`world-partition`). Two caches keep assets between frames: `SceneRenderer`'s environment
+- Two caches keep assets between frames: `SceneRenderer`'s environment
   cache (the sky's map) and `TextRenderer`'s glyph atlases (their fonts). Streaming the stress world from pack version 2
   takes 1.03-1.09 times version 1's time (zstd blocks and their checksums; `PerfGPU.Pack` reads whole textures, without
   mip streaming), close to the 1.1 acceptance limit, which needs a confirmation in about one run in five.
@@ -390,8 +389,6 @@ Open items and deferrals later waves own:
   cancelled import frees its thread. Moving or deleting a file that another asset's import reads as a dependency does
   not cancel that import (the file watcher's change event replaces it). A project whose large scenes have no reference
   records yet spends seconds of its scan in the reference search (4 s for `PerfGPU.Editor`'s 1,000,000-entity scene).
-  While an import is applied, one frame still writes the asset's `.meta` file and the asset index on the main thread
-  (about 2 ms).
 - Scene loads (wave 3): a load's progress weighs a partly loaded texture by its whole stored size, so the bar jumps when
   a large texture's tail arrives; `AssetManagerBase::EstimateFirstLoadBytes` counts a partial load as up to 64 KiB, more
   than a small tail, so a very tight texture budget can leave textures to the view that would have fitted; a sub-scene

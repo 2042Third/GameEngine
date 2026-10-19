@@ -243,7 +243,9 @@ first run and after files were added or removed; answers with compiler diagnosti
 Build it with `entity.create` (with `components`), `component.set`, `script.add`; then `scene.save` (the template's
 start scene), or for a scene of your own `scene.saveAs {"path": "Scenes/Main.stscene"}` and `project.setStartScene`.
 Save before switching to another scene or project: `scene.open`, `scene.new` and the `project.*` commands refuse while
-the scene has unsaved changes (pass `"force": true` only to throw away edits you made yourself).
+the scene has unsaved changes (pass `"force": true` only to throw away edits you made yourself). Saves write in the
+background: `scene.save` answers once the file is written (with `bytes`, `entities` and `seconds`); for a large scene
+you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the scene-replacing commands wait for it).
 
 - Things that appear many times (blocks, enemies, pickups): build one, `prefab.create` it and `prefab.instantiate` the
   rest. Instances stay linked, so a change to one instance followed by `prefab.apply {"entity"}` updates the prefab and

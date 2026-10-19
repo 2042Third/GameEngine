@@ -47,6 +47,8 @@ namespace Strata::CLI
 			{ "--wait-timeout", true },
 			{ "--save-image", true },
 			{ "--idle-timeout", true },
+			{ "--stall-timeout", true },
+			{ "--no-wait-scan", false },
 			{ "--toolsets", true },
 			{ "--headless", false },
 			{ "--no-gpu", false },
@@ -297,6 +299,15 @@ namespace Strata::CLI
 				specification.IdleTimeout = std::chrono::seconds(*arguments.IdleTimeoutSeconds);
 			if (arguments.WaitTimeoutMilliseconds)
 				specification.WaitTimeout = std::chrono::milliseconds(*arguments.WaitTimeoutMilliseconds);
+			if (arguments.StallTimeoutSeconds)
+				specification.StallTimeout = std::chrono::seconds(*arguments.StallTimeoutSeconds);
+			specification.WaitForProject = !arguments.NoWaitScan;
+			// How far the project is, for the person waiting (stdout stays the session's description).
+			specification.OnProgress = [&errorOutput](const EditorStartupProgress& progress)
+			{
+				errorOutput << progress.Message << "\n";
+				errorOutput.flush();
+			};
 
 			const EditorLaunchResult result = LaunchEditor(specification);
 			if (!result.Success)
@@ -331,6 +342,8 @@ namespace Strata::CLI
 				specification.LaunchTimeout = std::chrono::milliseconds(*arguments.WaitTimeoutMilliseconds);
 			if (arguments.IdleTimeoutSeconds)
 				specification.LaunchIdleTimeout = std::chrono::seconds(*arguments.IdleTimeoutSeconds);
+			if (arguments.StallTimeoutSeconds)
+				specification.LaunchStallTimeout = std::chrono::seconds(*arguments.StallTimeoutSeconds);
 			if (arguments.Toolsets)
 				specification.Toolsets = *arguments.Toolsets;
 
@@ -455,6 +468,18 @@ namespace Strata::CLI
 				}
 				result.IdleTimeoutSeconds = seconds;
 			}
+			else if (name == "--stall-timeout")
+			{
+				const std::optional<int64_t> seconds = ParseInteger(value);
+				if (!seconds || *seconds <= 0 || *seconds > c_MaxIdleTimeoutSeconds)
+				{
+					error = fmt::format("--stall-timeout expects a number of seconds from 1 to {}, got '{}'", c_MaxIdleTimeoutSeconds, value);
+					return std::nullopt;
+				}
+				result.StallTimeoutSeconds = seconds;
+			}
+			else if (name == "--no-wait-scan")
+				result.NoWaitScan = true;
 			else if (name == "--toolsets")
 			{
 				// A comma-separated list of toolset names, or "all".
@@ -549,8 +574,8 @@ namespace Strata::CLI
 			"  StrataCLI list [connection options] [--json]\n"
 			"  StrataCLI status [connection options]\n"
 			"  StrataCLI launch [--project <dir>] [--headless | --no-gpu] [--idle-timeout <s>] [--editor <path>]\n"
-			"                   [--wait-timeout <ms>]\n"
-			"  StrataCLI mcp [connection options] [--editor <path>] [--timeout <ms>] [--idle-timeout <s>]\n"
+			"                   [--wait-timeout <ms>] [--stall-timeout <s>] [--no-wait-scan]\n"
+			"  StrataCLI mcp [connection options] [--editor <path>] [--timeout <ms>] [--idle-timeout <s>] [--stall-timeout <s>]\n"
 			"                [--toolsets <name,...> | all]\n"
 			"  StrataCLI --help | --version\n"
 			"\n"
@@ -561,9 +586,13 @@ namespace Strata::CLI
 			"           result ({{\"Image\": {{\"MimeType\", \"Data\"}}}}) to a file and prints its path instead of the data\n"
 			"  list     List the editor's methods and their descriptions (--json: with parameter schemas)\n"
 			"  status   Show whether an editor is reachable, and the known editor sessions\n"
-			"  launch   Start an editor (for a project, if given) and wait until it accepts connections. It keeps\n"
-			"           running until 'call editor.quit', or until no client has been connected for --idle-timeout\n"
-			"           seconds. --headless runs without a window, --no-gpu also without a graphics device\n"
+			"  launch   Start an editor (for a project, if given) and wait until it accepts connections (at most\n"
+			"           --wait-timeout, default 60000 ms), then until the project is ready: its assets scanned and its\n"
+			"           start scene open, printing the progress to stderr, for as long as it progresses (it fails when\n"
+			"           nothing progressed for --stall-timeout seconds, default 60). --no-wait-scan returns once it\n"
+			"           accepts connections. It keeps running until 'call editor.quit', or until no client has been\n"
+			"           connected for --idle-timeout seconds. --headless runs without a window, --no-gpu also without\n"
+			"           a graphics device\n"
 			"  mcp      Serve the Model Context Protocol on stdin/stdout (for AI agents). Editors it starts close\n"
 			"           themselves after --idle-timeout seconds without a client (default 600, 0: never). Only the\n"
 			"           commands of --toolsets are tools (default core: about 30; all: every command); the tools\n"

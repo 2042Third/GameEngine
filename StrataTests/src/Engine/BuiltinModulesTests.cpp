@@ -138,6 +138,7 @@ TEST_SUITE("Engine.Modules")
 		CHECK(result.Output.find("registered: TestVehicle") != std::string::npos);
 		CHECK(result.Output.find("requirements: TestVehicle") != std::string::npos);
 		CHECK(result.Output.find("reloaded: Speed 12.50, Label Rover One") != std::string::npos);
+		CHECK(result.Output.find("snapshot keeps: TestCache") != std::string::npos);
 		// Its extra data's references are remapped in copies, compared with prefabs and scanned (ComponentInfo::ExtraReferences).
 		CHECK(result.Output.find("extra references: remapped, compared, scanned") != std::string::npos);
 		// The renderer draws its gizmo with the colliders (ComponentInfo::Gizmo).

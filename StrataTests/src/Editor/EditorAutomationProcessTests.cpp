@@ -4,6 +4,7 @@
 
 #include "CLI/EditorLauncher.h"
 #include "Network/NetworkTestHelpers.h"
+#include "Perf/WorldFixture.h"
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
@@ -156,13 +157,13 @@ namespace
 		nlohmann::json Error; // The parsed error output (null unless it is JSON)
 	};
 
-	CliResult RunCli(const std::vector<std::string>& arguments)
+	CliResult RunCli(const std::vector<std::string>& arguments, std::chrono::milliseconds timeout = c_ProcessTimeout)
 	{
 		ProcessSpecification specification;
 		specification.Executable = GetCliPath();
 		specification.Arguments = arguments;
 		specification.Output = ProcessOutputMode::CaptureSeparate;
-		const Process::RunResult run = Process::Run(specification, c_ProcessTimeout);
+		const Process::RunResult run = Process::Run(specification, timeout);
 		CHECK_MESSAGE(run.Started, run.Error);
 		CHECK_FALSE(run.TimedOut);
 
@@ -179,6 +180,16 @@ namespace
 	nlohmann::json Call(const std::string& method, const nlohmann::json& params = nlohmann::json::object())
 	{
 		const CliResult result = RunCli({ "call", method, params.dump() });
+		INFO(method, " ", params.dump(), "\nstdout: ", result.Output, "\nstderr: ", result.ErrorOutput);
+		CHECK(result.ExitCode == 0);
+		return result.Json;
+	}
+
+	// Call, for a command that answers only once the editor is ready (an edit while a scan runs): the CLI waits for the
+	// answer up to `timeout` instead of its default 30 s.
+	nlohmann::json CallWaiting(const std::string& method, const nlohmann::json& params, std::chrono::milliseconds timeout)
+	{
+		const CliResult result = RunCli({ "call", method, params.dump(), "--timeout", std::to_string(timeout.count()) }, timeout + c_ProcessTimeout);
 		INFO(method, " ", params.dump(), "\nstdout: ", result.Output, "\nstderr: ", result.ErrorOutput);
 		CHECK(result.ExitCode == 0);
 		return result.Json;
@@ -587,6 +598,44 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 			CHECK(*exitCode == 1);
 			CHECK(editor.OutputContains("needs automation"));
 		}
+	}
+
+	TEST_CASE("An editor opening a project of 10,000 assets publishes its session and answers while it still scans them")
+	{
+		if (!HasBuiltExecutables())
+			return;
+		EndToEndEnvironment environment("EndToEndScan");
+		std::string error;
+		const std::optional<Tests::ManyAssetsProject> project = Tests::WriteManyAssetsProject(environment.Root / "Many", 10'000, error);
+		REQUIRE_MESSAGE(project.has_value(), error);
+
+		EditorProcess editor;
+		REQUIRE(editor.Start({ "--no-gpu", "--project", FileSystem::ToUTF8(project->Directory) }));
+		const std::optional<EditorSessionInfo> session = editor.WaitForSession(environment.SessionDirectory);
+		REQUIRE(session.has_value());
+		// The first answer comes while the project is not ready: its assets are scanned (or, on a fast machine where the scan
+		// just ended, its start scene is still opening; the log below proves the order either way).
+		const nlohmann::json first = Call("editor.status", { { "sections", { "sceneLoad" } } });
+		REQUIRE(first.contains("sceneLoad"));
+		CHECK((!first["assets"]["scanning"].is_null() || !first["sceneLoad"].is_null()));
+		// Edits wait for it (they answer once it is ready: in CI's Windows Debug build, more than the CLI's default 30 s).
+		const nlohmann::json created = CallWaiting("entity.create", { { "name", "After The Scan" } }, std::chrono::minutes(5));
+		CHECK(created.contains("id"));
+		const nlohmann::json ready = Call("editor.status", { { "sections", { "sceneLoad" } } });
+		CHECK(ready["assets"]["scanning"].is_null());
+		REQUIRE(ready.contains("sceneLoad"));
+		CHECK(ready["sceneLoad"].is_null());
+		CHECK(Call("entity.find", { { "name", "Cube 9999" } })["entities"].size() == 1);
+		CHECK(Call("asset.list", { { "type", "Material" }, { "includeBuiltin", false } })["assets"].size() == 10'000);
+		// The session was published while the scan ran: the editor said it listens before it logged the scan's end (one log
+		// writer keeps the order).
+		REQUIRE(editor.OutputContains("Asset scan: "));
+		const std::string output = editor.TakeOutput();
+		const size_t listening = output.find("Automation: listening");
+		REQUIRE_MESSAGE(listening != std::string::npos, output);
+		CHECK_MESSAGE(listening < output.find("Asset scan: "), output);
+		Call("editor.quit", { { "force", true } });
+		REQUIRE(editor.Wait().has_value());
 	}
 }
 

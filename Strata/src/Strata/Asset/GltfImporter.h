@@ -43,6 +43,12 @@ namespace Strata
 		// LODCount needs GenerateLODs, the texture settings ImportMaterials, TextureQuality compressed textures.
 		std::string GetInactiveReason(std::string_view setting, const nlohmann::json& settings) const override;
 		bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const override;
+		// From the document (a .glb's JSON chunk, a .gltf; read past the head up to c_MaxEstimatedDocumentBytes): its buffers,
+		// twice (read and converted), and its images, embedded or files beside it, by their headers as textures count
+		// (TextureImporter::EstimateImageMemory); four times the source's size when the document cannot be read, or more.
+		uint64_t EstimateImportMemory(const ImportEstimateSource& source, const nlohmann::json& settings) const override;
+		// The longest JSON document (a .gltf, a .glb's JSON chunk) an estimate reads; a longer one counts by its file's size.
+		static constexpr uint64_t c_MaxEstimatedDocumentBytes = 64ull << 20;
 	};
 
 }

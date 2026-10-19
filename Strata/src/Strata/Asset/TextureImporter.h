@@ -4,6 +4,8 @@
 #include "Strata/Renderer/Texture.h"
 
 #include <atomic>
+#include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
@@ -88,6 +90,18 @@ namespace Strata
 		// Compression has no effect on HDR textures (they stay RGBA16F), Quality none but on color that is compressed.
 		std::string GetInactiveReason(std::string_view setting, const nlohmann::json& settings) const override;
 		bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const override;
+		// From the image's header: its pixels decoded (4 bytes each) and their working copies (16 bytes each: the float mip
+		// chain and the compressor's blocks). See EstimateImageMemory.
+		uint64_t EstimateImportMemory(const ImportEstimateSource& source, const nlohmann::json& settings) const override;
+		// What an import of an image takes by EstimateImportMemory's count: the `size` bytes at `offset` of `path` (the source
+		// or a file it names, read through ReadEstimateBytes), of which `head` holds the first ones already read (or none).
+		// A JPEG's frame header follows its metadata segments (EXIF thumbnails, XMP, ICC profiles: up to 64 KiB each), so
+		// prefixes eight times larger are read until the header shows, up to the whole image. One whose header never shows
+		// (it does not decode either) counts c_UnknownImageFactor times its size: what a compressed image of that size
+		// decodes to at a ratio of 10:1, with the working copies.
+		static uint64_t EstimateImageMemory(const ImportEstimateSource& source, const std::filesystem::path& path, uint64_t offset, uint64_t size,
+			std::span<const uint8_t> head = {});
+		static constexpr uint64_t c_UnknownImageFactor = 50;
 
 		// Decodes an encoded image and cooks it into a texture: resized to MaxSize, each mip filtered from the previous level
 		// (a Mitchell filter; sRGB color in linear space with alpha weighting, normal maps renormalized per level) and every

@@ -443,7 +443,8 @@ namespace Strata
 			"scene.open does (a scene never saved: a new scene of its name) and, once it is in, turns it into what the edits left, as one undo "
 			"step back to the saved scene; the scene stays modified (save it to keep the changes). It refuses when the scene file changed since "
 			"the changes were made (applicable false), while playing, while a scene is being opened (scene.loadStatus), and while the edited "
-			"scene has unsaved changes it would discard unless force is true. discard: moves the data to "
+			"scene has unsaved changes it would discard unless force is true; it waits for saves in flight (scene.save) first. discard: moves "
+			"the data to "
 			".strata/Recovery/Discarded, where it is not offered again. Returns {recovered | discarded: id, ...}; apply also scene, sceneName, "
 			"entities (how many it restored or removed) and discardedChanges.",
 			ObjectSchema({
@@ -451,7 +452,7 @@ namespace Strata
 				{ "action", { { "type", "string" }, { "enum", { "apply", "discard" } }, { "description", "\"apply\" the changes or \"discard\" them" } } },
 				{ "force", ForceSchema() } },
 				{ "scene", "action" }),
-			[](EditorContext& context, const nlohmann::json& parameters)
+			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string reference = arguments.GetString("scene");
@@ -558,7 +559,7 @@ namespace Strata
 					progress->Load = recovery.Read(entry->Id, context.GetSceneFile(entry->Scene).first);
 					return std::nullopt;
 				});
-			}, EditorCommandKind::Session }));
+			}), EditorCommandKind::Session, EditorCommandResults::Content, true }));
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Editor
@@ -631,8 +632,8 @@ namespace Strata
 					status["undo"]["count"] = undo.GetHistory().size();
 				}
 				status["errors"] = DescribeErrors(context);
-				// Saves running in the background (none: scene.save writes before it answers).
-				status["saving"] = nlohmann::json::array();
+				// Saves running in the background (scene.save, scene.saveAs), so that agents see a save they started without waiting.
+				status["saving"] = DescribeSaves(context);
 				if (wants("sceneLoad"))
 					status["sceneLoad"] = DescribeSceneLoad(context);
 				if (wants("memory"))
@@ -683,11 +684,11 @@ namespace Strata
 				return EditorCommandResult::Ok();
 			}, EditorCommandKind::Session });
 
-		registry.Register({ "editor.quit",
+		registry.Register(MayDefer({ "editor.quit",
 			"Closes the editor after answering (pending commands are cancelled). Fails while the scene has unsaved changes unless force is "
-			"true; save first with scene.save or scene.saveAs.",
+			"true; save first with scene.save or scene.saveAs. Waits for saves in flight first, also with force: a save is never lost.",
 			ObjectSchema({ { "force", ForceSchema() } }),
-			[](EditorContext& context, const nlohmann::json& parameters)
+			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const bool force = arguments.GetBool("force", false);
@@ -698,7 +699,7 @@ namespace Strata
 				const bool modified = context.IsSceneModified();
 				context.RequestQuit();
 				return EditorCommandResult::Ok({ { "quitting", true }, { "discardedChanges", modified } });
-			}, EditorCommandKind::Session });
+			}), EditorCommandKind::Session }));
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Frames

@@ -34,6 +34,8 @@ namespace Strata::CLI
 		// Editors started by strata_launch_editor close themselves after this long without a connected client (the MCP
 		// server stays connected while it runs), so they do not outlive the agent session. Zero: never.
 		std::chrono::seconds LaunchIdleTimeout = std::chrono::seconds(600);
+		// How long a launched editor's project may go without progress before strata_launch_editor fails (--stall-timeout).
+		std::chrono::milliseconds LaunchStallTimeout = std::chrono::milliseconds(60000);
 		// The toolsets whose editor commands are listed as tools (McpToolsets: "core" by default, "all" for every command);
 		// strata_toolsets changes them while the server runs.
 		std::vector<std::string> Toolsets = { "core" };
@@ -79,7 +81,8 @@ namespace Strata::CLI
 		nlohmann::json HandleToolsCall(const nlohmann::json& params);
 
 		nlohmann::json CallStatusTool();
-		nlohmann::json CallLaunchEditorTool(const nlohmann::json& arguments);
+		// progressToken: the client's (tools/call's _meta.progressToken), for notifications/progress while the project opens.
+		nlohmann::json CallLaunchEditorTool(const nlohmann::json& arguments, const nlohmann::json& progressToken);
 		nlohmann::json CallListMethodsTool();
 		nlohmann::json CallGenericCallTool(const nlohmann::json& arguments);
 		nlohmann::json CallDescribeTool(const nlohmann::json& arguments);

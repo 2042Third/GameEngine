@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <memory>
@@ -2026,6 +2027,123 @@ namespace Strata
 	{
 		GltfImport import(context, result);
 		return import.Run(outError);
+	}
+
+	uint64_t GltfImporter::EstimateImportMemory(const ImportEstimateSource& source, const nlohmann::json& settings) const
+	{
+		const uint64_t fallback = AssetImporter::EstimateImportMemory(source, settings);
+		// The document: a .glb's JSON chunk (after 12 bytes of header and the chunk's length and type; its binary chunk
+		// follows), or all of a .gltf, read beyond the head when it is longer.
+		const std::span<const uint8_t> head = source.Head;
+		std::span<const uint8_t> document = head;
+		std::optional<std::vector<uint8_t>> read;
+		const auto readDocument = [&](uint64_t offset, uint64_t length)
+		{
+			if (length > c_MaxEstimatedDocumentBytes)
+				return false;
+			read = ReadEstimateBytes(source, source.Path, offset, length);
+			if (!read || read->size() != length)
+				return false;
+			document = *read;
+			return true;
+		};
+		std::optional<uint64_t> binaryChunk; // Where a .glb's binary chunk's bytes start
+		if (head.size() >= 20 && std::memcmp(head.data(), "glTF", 4) == 0)
+		{
+			uint32_t jsonLength = 0;
+			std::memcpy(&jsonLength, head.data() + 12, sizeof(jsonLength));
+			if (std::memcmp(head.data() + 16, "JSON", 4) != 0)
+				return fallback;
+			binaryChunk = 20ull + jsonLength + 8;
+			if (jsonLength <= head.size() - 20)
+				document = head.subspan(20, jsonLength);
+			else if (!readDocument(20, jsonLength))
+				return fallback;
+		}
+		else if (head.size() < source.Size && !readDocument(0, source.Size))
+		{
+			return fallback;
+		}
+		const std::optional<nlohmann::json> json = JsonUtils::Parse(std::string_view(reinterpret_cast<const char*>(document.data()), document.size()));
+		if (!json || !json->is_object())
+			return fallback;
+		// The document is the file's word: lengths a crafted file makes huge saturate instead of wrapping around.
+		uint64_t estimate = 0;
+		const auto add = [&estimate](uint64_t length, uint64_t factor)
+		{
+			const uint64_t bytes = length > UINT64_MAX / factor ? UINT64_MAX : length * factor;
+			estimate = bytes > UINT64_MAX - estimate ? UINT64_MAX : estimate + bytes;
+		};
+		const nlohmann::json* buffers = JsonUtils::Find(*json, "buffers");
+		if (buffers && buffers->is_array())
+		{
+			for (const nlohmann::json& buffer : *buffers)
+				add(JsonUtils::GetUInt(buffer, "byteLength", 0), 2);
+		}
+
+		// Images by their headers (TextureImporter::EstimateImageMemory: they are cooked like textures), wherever they are:
+		// files beside the model, or buffer views of the .glb's binary chunk or of a buffer file. Images in data URIs and
+		// those whose bytes cannot be read count by their size (their import reads them, or fails).
+		const std::filesystem::path folder = source.Path.parent_path();
+		// The file a relative URI names; null for data and other URIs.
+		const auto findFile = [&folder](const nlohmann::json& object) -> std::optional<std::filesystem::path>
+		{
+			const nlohmann::json* uri = JsonUtils::Find(object, "uri");
+			if (!uri || !uri->is_string())
+				return std::nullopt;
+			std::string decoded = uri->get<std::string>();
+			if (decoded.starts_with("data:") || decoded.find("://") != std::string::npos)
+				return std::nullopt;
+			decoded.resize(cgltf_decode_uri(decoded.data()));
+			return folder / FileSystem::FromUTF8(decoded);
+		};
+		const nlohmann::json* views = JsonUtils::Find(*json, "bufferViews");
+		const nlohmann::json* images = JsonUtils::Find(*json, "images");
+		if (!images || !images->is_array())
+			return std::max(estimate, fallback);
+		for (const nlohmann::json& image : *images)
+		{
+			if (!image.is_object())
+				continue;
+			const uint64_t viewIndex = JsonUtils::GetUInt(image, "bufferView", UINT64_MAX);
+			if (views && views->is_array() && viewIndex < views->size())
+			{
+				const nlohmann::json& view = (*views)[static_cast<size_t>(viewIndex)];
+				const uint64_t length = JsonUtils::GetUInt(view, "byteLength", 0);
+				const uint64_t offset = JsonUtils::GetUInt(view, "byteOffset", 0);
+				const uint64_t bufferIndex = JsonUtils::GetUInt(view, "buffer", UINT64_MAX);
+				std::optional<std::filesystem::path> file;
+				uint64_t start = 0;
+				if (buffers && buffers->is_array() && bufferIndex < buffers->size())
+				{
+					const nlohmann::json& buffer = (*buffers)[static_cast<size_t>(bufferIndex)];
+					if (buffer.is_object() && !buffer.contains("uri") && bufferIndex == 0 && binaryChunk)
+					{
+						file = source.Path;
+						start = *binaryChunk;
+					}
+					else if (buffer.is_object())
+					{
+						file = findFile(buffer);
+					}
+				}
+				if (file && offset <= UINT64_MAX - start)
+					add(TextureImporter::EstimateImageMemory(source, *file, start + offset, length), 1);
+				else
+					add(length, TextureImporter::c_UnknownImageFactor);
+				continue;
+			}
+			if (const std::optional<std::filesystem::path> file = findFile(image))
+			{
+				if (const std::optional<uint64_t> size = GetEstimateFileSize(source, *file))
+					add(TextureImporter::EstimateImageMemory(source, *file, 0, *size), 1);
+				continue; // A missing image fails the import
+			}
+			// A data URI holds its bytes in base64: three for every four characters.
+			if (const nlohmann::json* uri = JsonUtils::Find(image, "uri"); uri && uri->is_string())
+				add(uri->get_ref<const std::string&>().size() / 4 * 3, TextureImporter::c_UnknownImageFactor);
+		}
+		return std::max(estimate, fallback);
 	}
 
 	bool GltfImporter::FindExternalFiles(std::span<const uint8_t> data, std::vector<std::string>& outRelativePaths, std::string* outError) const

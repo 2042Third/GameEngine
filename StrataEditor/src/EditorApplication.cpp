@@ -315,8 +315,10 @@ namespace Strata
 			specification.MaxFrames = static_cast<uint64_t>(*frames);
 		options.MaxFrames = specification.MaxFrames;
 		options.Headless = specification.Headless;
-		// A person's window shows the start scene loading; scripted runs and headless editors (driven by tools) start with it open.
-		options.OpenStartSceneInBackground = !options.Headless && !options.MaxFrames && options.CommandScript.empty();
+		// The project opens at once and its assets are scanned in the background, so that the automation session is published
+		// within the startup (StrataCLI launch waits for the scan and the start scene); a person's window shows the start scene
+		// loading. Scripted runs start with it open.
+		options.OpenStartSceneInBackground = !options.MaxFrames && options.CommandScript.empty();
 
 		// The editor imports assets: the composition root registers the modules with the asset pipeline.
 		ApplicationLaunch launch;

@@ -78,4 +78,19 @@ TEST_SUITE("Core.Json")
 		REQUIRE(parsed.has_value());
 		CHECK((*parsed)["a"].size() == 2);
 	}
+
+	TEST_CASE("Strings are appended as Dump writes them, escapes and invalid UTF-8 included")
+	{
+		const std::string texts[] = { "", "plain text 123", "Cube 999999", "quote \" and backslash \\", "tab\tnew line\ncarriage\r",
+			"control \x01\x1f and delete \x7f", "UTF-8: \xC3\xA9t\xC3\xA9 \xE2\x82\xAC \xF0\x9F\x98\x80",
+			"invalid: \xC3 \xFF\xFE end", "truncated \xE2\x82", "/slash" };
+		for (const std::string& text : texts)
+		{
+			CAPTURE(text);
+			std::string appended = "prefix";
+			JsonUtils::AppendString(appended, text);
+			CHECK(appended == "prefix" + JsonUtils::Dump(nlohmann::json(text)));
+		}
+	}
 }
+

@@ -402,6 +402,11 @@ TEST_SUITE("Editor.Commands")
 		for (const nlohmann::json& refused : {
 			nlohmann::json::array({ { { "command", "entity.create" } }, { { "command", "viewport.capture" } } }),
 			nlohmann::json::array({ { { "command", "entity.create" } }, { { "command", "play.step" } } }),
+			// Saves write in the background and the commands that replace the scene or quit wait for them.
+			nlohmann::json::array({ { { "command", "entity.create" } }, { { "command", "scene.save" } } }),
+			nlohmann::json::array({ { { "command", "entity.create" } }, { { "command", "scene.saveAs" }, { "parameters", { { "path", "Batch.stscene" } } } } }),
+			nlohmann::json::array({ { { "command", "entity.create" } }, { { "command", "scene.new" }, { "parameters", { { "force", true } } } } }),
+			nlohmann::json::array({ { { "command", "entity.create" } }, { { "command", "editor.quit" }, { "parameters", { { "force", true } } } } }),
 			nlohmann::json::array({ { { "command", "entity.create" } }, { { "command", "no.such" } } }),
 			nlohmann::json::array({ { { "command", "entity.create" } }, { { "command", "editor.batch" }, { "parameters", { { "steps", nlohmann::json::array() } } } } }),
 			nlohmann::json::array({ { { "command", "entity.create" }, { "parameters", { { "parent", { { "$ref", "missing" } } } } } } }) })

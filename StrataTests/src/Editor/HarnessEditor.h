@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
 #include "FeatureTest/FeatureTestUtils.h"
@@ -33,13 +34,16 @@ namespace Strata::Tests
 		Scope<EditorLayer> Layer;
 
 		// iniSettings: imgui.ini contents loaded before the first frame (the editor's saved layout and panel states).
+		// importInBackground: the project's assets are scanned and imported in the background, as in the editor (tests that
+		// look at a scan in progress); otherwise everything is registered and imported once the editor started.
 		explicit HarnessEditor(const ImGuiHarness::Specification& specification = {}, EditorOptions options = {}, const std::string& iniSettings = {},
-			bool automation = false)
+			bool automation = false, bool importInBackground = false)
 			: Harness(specification)
 		{
 			options.EnableAutomation = automation;
 			options.WatchFiles = false;
-			options.ImportInBackground = false;
+			options.ImportInBackground = importInBackground;
+			options.OpenStartSceneInBackground = options.OpenStartSceneInBackground || importInBackground;
 			Host->UIScale = specification.ContentScale;
 			Log::GetBuffer().Clear();
 			Layer = CreateScope<EditorLayer>(options, CreateScope<FakeEditorHost>(Host));
@@ -124,10 +128,10 @@ namespace Strata::Tests
 			return (*completed)->Value;
 		}
 
-		// Runs frames (with a little sleep, for work on other threads) until the condition holds or ten seconds passed.
-		bool FramesUntil(const std::function<bool()>& condition)
+		// Runs frames (with a little sleep, for work on other threads) until the condition holds or `timeout` passed.
+		bool FramesUntil(const std::function<bool()>& condition, std::chrono::milliseconds timeout = std::chrono::seconds(10))
 		{
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+			const auto deadline = std::chrono::steady_clock::now() + timeout;
 			while (!condition())
 			{
 				if (std::chrono::steady_clock::now() > deadline)
@@ -140,9 +144,11 @@ namespace Strata::Tests
 
 		EditorContext& Context() { return Layer->GetContext(); }
 
+		// Runs a command to its end (CompleteCommand: deferred ones, a save among them, over editor updates) and REQUIREs that it
+		// succeeded.
 		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{
-			const EditorCommandResult result = Layer->GetCommands().Execute(Context(), name, parameters);
+			const EditorCommandResult result = Tests::CompleteCommand(Context(), Layer->GetCommands().Execute(Context(), name, parameters));
 			INFO(std::string(name), ": ", result.Error);
 			REQUIRE(result.Success);
 			return result.Value;

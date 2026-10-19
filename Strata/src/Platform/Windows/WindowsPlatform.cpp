@@ -459,6 +459,15 @@ namespace Strata
 		return std::nullopt;
 	}
 
+	std::optional<uint64_t> Platform::GetPhysicalMemorySize()
+	{
+		MEMORYSTATUSEX status = {};
+		status.dwLength = sizeof(status);
+		if (!GlobalMemoryStatusEx(&status) || status.ullTotalPhys == 0)
+			return std::nullopt;
+		return static_cast<uint64_t>(status.ullTotalPhys);
+	}
+
 	std::optional<ProcessMemoryInfo> Platform::GetProcessMemory()
 	{
 		// The kernel32 export: the psapi.dll entry point needs an import library and only forwards to it.

@@ -6,6 +6,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Core/Profiling.h>
 
 #include <algorithm>
 #include <cmath>
@@ -230,6 +231,8 @@ namespace Strata
 		if (!result.IsPending())
 			return true;
 
+		// The frame profiler's stage of command work, as in EditorCommandRegistry::Execute.
+		ST_PROFILE_STAGE("Editor.Commands");
 		const uint64_t journalId = result.JournalId;
 		CommandJournal& journal = context.GetJournal();
 		journal.NoteEditsOutsideCommands(context.GetUndoStack());

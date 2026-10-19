@@ -18,6 +18,10 @@ namespace Strata
 	{
 	public:
 		static std::optional<std::vector<uint8_t>> ReadBytes(const std::filesystem::path& path);
+		// The file's first bytes, at most `maxBytes` (all of a smaller file).
+		static std::optional<std::vector<uint8_t>> ReadBytesPrefix(const std::filesystem::path& path, uint64_t maxBytes);
+		// At most `maxBytes` from `offset` on (fewer at the file's end; none from beyond it).
+		static std::optional<std::vector<uint8_t>> ReadBytesRange(const std::filesystem::path& path, uint64_t offset, uint64_t maxBytes);
 		static std::optional<std::string> ReadText(const std::filesystem::path& path);
 
 		// Writes are atomic: data goes to a temporary file that then replaces the destination,
@@ -63,6 +67,13 @@ namespace Strata
 
 		// Returns a path that does not exist yet by appending " (n)" before the extension if needed.
 		static std::filesystem::path GetUniquePath(const std::filesystem::path& desiredPath);
+
+		// How many file system operations (the functions above that touch the disk, and AtomicFileWriter's opening, writes and
+		// commit) the calling thread has made: tests check with it that work meant for other threads never touches files on
+		// the main thread.
+		static uint64_t GetThreadOperationCount();
+		// Counts an operation on the calling thread, for engine file code that does not go through these functions.
+		static void CountThreadOperation();
 	};
 
 }

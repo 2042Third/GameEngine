@@ -150,6 +150,14 @@ namespace Strata
 		uint64_t GetStoredSize() const { return m_StoredSize; }
 		bool IsPartial() const { return m_StoredSize > m_ReadSize; }
 
+		// Whether the load was given up meanwhile: cancelled (AssetManagerBase::CancelLoad, a SceneLoadRequest cancelled or
+		// replaced), superseded by a newer load, or its manager shuts down. Loaders of large documents ask between pieces of
+		// their work (SceneReadOptions::IsCancelled) and give up, returning no asset: nobody takes what they would make. Any
+		// thread; costs a lock of the manager, so ask every few hundred entities rather than every one.
+		bool IsCancelled() const { return m_IsCancelled && m_IsCancelled(); }
+		// What IsCancelled asks (the manager sets it for every load; without it a load is never cancelled).
+		void SetCancelCheck(std::function<bool()> check) { m_IsCancelled = std::move(check); }
+
 		// The bytes as a vector of the caller's own: moved out when they were handed over (GetBytes is empty afterwards),
 		// copied otherwise.
 		std::vector<uint8_t> TakeBytes()
@@ -167,6 +175,7 @@ namespace Strata
 		std::vector<uint8_t>* m_Owner = nullptr;
 		uint64_t m_ReadSize = 0;
 		uint64_t m_StoredSize = 0;
+		std::function<bool()> m_IsCancelled;
 	};
 
 	// The first bytes of an asset's stored form a partial load reads to find out how much it needs (AssetPrefixFunction):
@@ -470,12 +479,17 @@ namespace Strata
 		AssetManagerStats GetStats() const;
 		// What the resident assets hold per pool (AssetManagerStats::Resident), without the rest of the statistics.
 		AssetMemoryUsage GetResidentMemory() const;
-		// The assets that are resident, loading, failed or pinned (unloaded, unpinned ones are left out), in no order.
+		// The assets that are resident, loading, failed or pinned (unloaded, unpinned ones are left out), in no order. Costs what
+		// is listed, not what is registered: the listed entries are kept as their states change.
 		std::vector<AssetResidencyInfo> GetResidencyInfo() const;
 		// The same without names, into a vector the caller keeps (its capacity is reused): cheap enough to call several times
 		// a second with tens of thousands of assets (the editor's Streaming panel); names come from GetMetadata, which change
 		// only with GetMetadataVersion.
 		void GetResidencySamples(std::vector<AssetResidencySample>& outAssets) const;
+		// Entries GetResidencyInfo and GetResidencySamples looked at so far (tests: they visit what is listed only).
+		uint64_t GetResidencyVisitCount() const;
+		// Whether the listed entries are exactly those a look at every entry finds (tests; with the reason when not).
+		bool ValidateResidencyIndex(std::string* outError = nullptr) const;
 		// Changes whenever an asset is registered (or registered again), unregistered or gets other metadata (a move), so
 		// caches of names and paths revalidate cheaply.
 		uint64_t GetMetadataVersion() const { return m_MetadataVersion.load(std::memory_order_acquire); }
@@ -591,6 +605,8 @@ namespace Strata
 
 		// Registers an asset (or updates the metadata of a registered one, keeping its loaded state).
 		void RegisterAsset(const AssetMetadata& metadata);
+		// RegisterAsset of many, under one lock (a scan inserts thousands of assets in slices).
+		void RegisterAssets(std::span<const AssetMetadata> metadata);
 		void UnregisterAsset(AssetHandle handle);
 		void UpdateAssetMetadata(const AssetMetadata& metadata);
 		// Records how many bytes loading the asset reads (AssetMetadata::StoredSize).
@@ -609,6 +625,7 @@ namespace Strata
 
 		struct AssetEntry
 		{
+			AssetHandle Handle = UUID::Null(); // Its key in m_Entries
 			AssetMetadata Metadata;
 			Ref<Asset> Loaded;
 			AssetState State = AssetState::Unloaded;
@@ -736,6 +753,15 @@ namespace Strata
 		// entries.
 		void SetStateLocked(AssetEntry& entry, AssetState state);
 		AssetEntry& AddEntryLocked(AssetHandle handle, bool& outInserted);
+		// Keeps m_Listed in step with what the entry is: listed while it is not unloaded, holds a loaded object or is pinned
+		// (IsListed). Called wherever one of those changes (SetStateLocked, SetLoadedLocked, Pin, Unpin, RemoveEntryLocked).
+		void UpdateListedLocked(const AssetEntry& entry);
+		static bool IsListed(const AssetEntry& entry);
+		// Calls `visit` with each listed entry (GetResidencyInfo, GetResidencySamples), counting the entries it looks at.
+		template<typename Visit>
+		void ForEachListedLocked(Visit&& visit) const;
+		// RegisterAsset's work for one asset (requires m_Mutex; the caller bumps the metadata version).
+		void RegisterAssetLocked(const AssetMetadata& metadata);
 		void RemoveEntryLocked(std::unordered_map<AssetHandle, AssetEntry>::iterator it);
 		// Replaces the loaded object (null drops it), keeping the pool totals and the recency orders. Returns the previous
 		// object, to be released after the lock (destroying assets may be slow).
@@ -812,6 +838,10 @@ namespace Strata
 		// The entries per state (indexed by AssetState) and the pinned ones, kept with every change (SetStateLocked,
 		// AddEntryLocked, RemoveEntryLocked, Pin, Unpin), so GetStats costs the same with any number of assets.
 		std::array<uint32_t, 4> m_StateCounts = {};
+		// The entries GetResidencyInfo lists (not unloaded, loaded or pinned), kept with every change (UpdateListedLocked), and
+		// how many entries those functions visited.
+		std::unordered_set<AssetHandle> m_Listed;
+		mutable uint64_t m_ResidencyVisits = 0;
 		uint32_t m_PinnedAssets = 0;
 		uint64_t m_Evictions = 0;
 		uint64_t m_EvictionChecks = 0;

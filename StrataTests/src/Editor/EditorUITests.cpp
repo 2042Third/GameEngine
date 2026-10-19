@@ -636,9 +636,13 @@ TEST_SUITE("Editor.UI")
 		editor.Run("play.pause", { { "paused", true } });
 		editor.Frames(1, 1.0f);
 		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
-		editor.Run("play.step", { { "frames", 5 } });
+		// play.step answers once its steps ran (Run would wait for that): the runner keeps it pending while the frames step.
+		bool stepped = false;
+		editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "play.step", { { "frames", 5 } },
+			[&stepped](const EditorCommandResult& result) { stepped = result.Success; });
 		editor.Frames(1, 1.0f);
 		CHECK(editor.Host->MaxFrameRate == 0);
+		REQUIRE(editor.FramesUntil([&stepped]() { return stepped; }));
 		editor.Run("play.stop");
 		editor.Frames(1, 1.0f);
 		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);

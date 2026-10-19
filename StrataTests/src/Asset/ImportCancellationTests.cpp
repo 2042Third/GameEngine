@@ -301,10 +301,9 @@ namespace
 		}, std::chrono::seconds(30));
 	}
 
-	std::string ReadRecordSource(const HeldProject& project, AssetHandle handle)
+	std::string ReadRecordSource(const EditorAssetManager& manager, AssetHandle handle)
 	{
-		const std::optional<std::string> text = FileSystem::ReadText(project.Cache / (handle.ToString() + ".import"));
-		const std::optional<nlohmann::json> record = text ? JsonUtils::Parse(*text) : std::nullopt;
+		const std::optional<nlohmann::json> record = manager.GetImportRecord(handle);
 		return record ? JsonUtils::GetString(*record, "Source") : std::string();
 	}
 
@@ -449,7 +448,7 @@ TEST_SUITE("Asset.ImportCancellation")
 				CHECK(manager->GetImportInfo(handle).Error.empty());
 			}
 			// The import that stored A's data read it at its new place.
-			CHECK(ReadRecordSource(project, a) == "Moved/A.stheld");
+			CHECK(ReadRecordSource(*manager, a) == "Moved/A.stheld");
 			const std::optional<AssetMetadata> copy = manager->GetMetadata(DeriveSubAssetHandle(a, "Copy"));
 			REQUIRE(copy);
 			CHECK(copy->Path == "Moved/A.stheld");
@@ -546,8 +545,7 @@ TEST_SUITE("Asset.ImportCancellation")
 			const uint32_t finished = HeldImporter::GetCounters().Finished;
 			auto readSettingsHash = [&]()
 			{
-				const std::optional<std::string> text = FileSystem::ReadText(project.Cache / (a.ToString() + ".import"));
-				const std::optional<nlohmann::json> record = text ? JsonUtils::Parse(*text) : std::nullopt;
+				const std::optional<nlohmann::json> record = manager->GetImportRecord(a);
 				return record ? JsonUtils::GetString(*record, "SettingsHash") : std::string();
 			};
 			const std::string settingsHash = readSettingsHash();

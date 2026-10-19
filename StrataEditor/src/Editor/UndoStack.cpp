@@ -83,6 +83,8 @@ namespace Strata
 			// A save point before the dropped step stays at the front when that step did not change the scene (a material
 			// edit): the scene there is the saved one. After a dropped scene edit, the saved scene can no longer be reached.
 			const bool dropsSceneChange = m_Entries.front().Action->ChangesScene();
+			if (dropsSceneChange)
+				m_SceneTrims++;
 			m_Entries.pop_front();
 			m_Position--;
 			if (m_SavedPosition == 0)
@@ -262,6 +264,26 @@ namespace Strata
 		m_Version++;
 	}
 
+	UndoStack::SavePoint UndoStack::GetSavePoint() const
+	{
+		return SavePoint { m_Position, GetLatestSerial(), m_Generation, m_SceneTrims };
+	}
+
+	void UndoStack::MarkSaved(const SavePoint& point)
+	{
+		if (point.Generation != m_Generation)
+			return;
+		m_Version++;
+		if (point.Serial == 0)
+		{
+			// The state before every action: still the front of the history unless a scene change was trimmed off it since.
+			m_SavedPosition = point.SceneTrims == m_SceneTrims ? 0 : c_NoSavePoint;
+			return;
+		}
+		const std::optional<size_t> index = FindSerial(point.Serial);
+		m_SavedPosition = index ? *index + 1 : c_NoSavePoint;
+	}
+
 	bool UndoStack::IsModified() const
 	{
 		// A save point that was trimmed or discarded can no longer be reached: whatever lies between is unknown.
@@ -287,6 +309,8 @@ namespace Strata
 		m_SavedPosition = 0;
 		m_MergeBroken = true;
 		m_Version++;
+		m_Generation++;
+		m_SceneTrims = 0;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

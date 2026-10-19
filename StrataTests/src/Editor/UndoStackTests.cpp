@@ -276,6 +276,124 @@ TEST_SUITE("Editor.Undo")
 		CHECK(stack.IsModified());
 	}
 
+	TEST_CASE("A save point taken before edits is marked saved once its save finished, and later edits stay unsaved")
+	{
+		int value = 0;
+		UndoStack stack;
+		stack.Execute(CreateScope<AddAction>(value, 1));
+		// A save takes its point (breaking the merge first), edits go on while it writes, then it finishes.
+		stack.Execute(CreateScope<AddAction>(value, 2, true));
+		stack.BreakMerge();
+		const UndoStack::SavePoint point = stack.GetSavePoint();
+		CHECK(point.Position == 2);
+		CHECK(point.Serial == stack.GetLatestSerial());
+		// A continuous edit does not merge into the saved step: it starts one of its own.
+		stack.Execute(CreateScope<AddAction>(value, 3, true));
+		stack.Execute(CreateScope<AddAction>(value, 4, true));
+		CHECK(stack.GetCount() == 3);
+		stack.MarkSaved(point);
+		CHECK(stack.IsModified());
+		// Undoing what came after the point reaches the saved state.
+		REQUIRE(stack.Undo());
+		CHECK_FALSE(stack.IsModified());
+		REQUIRE(stack.Redo());
+		CHECK(stack.IsModified());
+
+		// Undone past the point while the save ran: the point is still in the history (redo reaches it).
+		const UndoStack::SavePoint second = stack.GetSavePoint();
+		REQUIRE(stack.Undo());
+		REQUIRE(stack.Undo());
+		stack.MarkSaved(second);
+		CHECK(stack.IsModified());
+		REQUIRE(stack.Redo());
+		REQUIRE(stack.Redo());
+		CHECK_FALSE(stack.IsModified());
+
+		// Undone past the point and edited: the saved state is gone from the history, the scene stays modified.
+		const UndoStack::SavePoint third = stack.GetSavePoint();
+		REQUIRE(stack.Undo());
+		stack.Execute(CreateScope<AddAction>(value, 5));
+		stack.MarkSaved(third);
+		CHECK(stack.IsModified());
+		while (stack.Undo())
+		{
+		}
+		CHECK(stack.IsModified());
+	}
+
+	TEST_CASE("A group recorded while a save writes stays unsaved once the save marks its point, and a cancelled one changes nothing")
+	{
+		int value = 0;
+		UndoStack stack;
+		stack.Execute(CreateScope<AddAction>(value, 1, true));
+		// A save takes its point, then a batch (editor.batch) records its steps as one group while the save writes.
+		stack.BreakMerge();
+		const UndoStack::SavePoint point = stack.GetSavePoint();
+		REQUIRE(stack.BeginGroup("Batch of 2 commands"));
+		CHECK(stack.Execute(CreateScope<AddAction>(value, 10, true)));
+		CHECK(stack.Execute(CreateScope<AddAction>(value, 100, true)));
+		REQUIRE(stack.EndGroup());
+		stack.MarkSaved(point);
+		CHECK(stack.IsModified());
+		// Undoing the group reaches the saved state; redoing it leaves it again.
+		REQUIRE(stack.Undo());
+		CHECK(value == 1);
+		CHECK_FALSE(stack.IsModified());
+		REQUIRE(stack.Redo());
+		CHECK(value == 111);
+		CHECK(stack.IsModified());
+
+		// A group cancelled while a save writes records nothing: the scene is the saved one again once the save marks it.
+		stack.BreakMerge();
+		const UndoStack::SavePoint second = stack.GetSavePoint();
+		REQUIRE(stack.BeginGroup("Cancelled"));
+		CHECK(stack.Execute(CreateScope<AddAction>(value, 1000)));
+		REQUIRE(stack.CancelGroup());
+		CHECK(value == 111);
+		stack.MarkSaved(second);
+		CHECK_FALSE(stack.IsModified());
+		CHECK(stack.GetHistory() == std::vector<std::string> { "Add 1", "Batch of 2 commands" });
+	}
+
+	TEST_CASE("A save point before every action holds until a scene change is trimmed off, and a cleared history marks nothing")
+	{
+		int value = 0;
+		int outside = 0;
+		UndoStack stack(2);
+		const UndoStack::SavePoint start = stack.GetSavePoint();
+		CHECK(start.Serial == 0);
+		stack.Execute(CreateScope<AddAction>(value, 1));
+		stack.MarkSaved(start);
+		CHECK(stack.IsModified());
+		REQUIRE(stack.Undo());
+		CHECK_FALSE(stack.IsModified());
+
+		// Material edits trimmed off the front keep the state before every action; a trimmed scene change does not.
+		stack.Execute(CreateScope<OutsideAction>(outside));
+		stack.Execute(CreateScope<OutsideAction>(outside));
+		stack.Execute(CreateScope<OutsideAction>(outside));
+		stack.MarkSaved(start);
+		CHECK_FALSE(stack.IsModified());
+		const UndoStack::SavePoint beforeTrim = UndoStack::SavePoint { 0, 0, start.Generation, start.SceneTrims };
+		stack.Execute(CreateScope<AddAction>(value, 2));
+		stack.Execute(CreateScope<AddAction>(value, 3));
+		stack.Execute(CreateScope<AddAction>(value, 4)); // Trims the edit of 2
+		stack.MarkSaved(beforeTrim);
+		CHECK(stack.IsModified());
+
+		// Another history (another scene): its points name nothing of this one, and the saved state stays.
+		const UndoStack::SavePoint old = stack.GetSavePoint();
+		stack.Clear();
+		stack.Execute(CreateScope<AddAction>(value, 1));
+		REQUIRE(stack.Undo());
+		CHECK_FALSE(stack.IsModified());
+		REQUIRE(stack.Redo());
+		stack.MarkSaved(old);
+		CHECK(stack.IsModified());
+		REQUIRE(stack.Undo());
+		CHECK_FALSE(stack.IsModified());
+	}
+
 	TEST_CASE("Steps that do not change the scene never make it unsaved")
 	{
 		int value = 0;

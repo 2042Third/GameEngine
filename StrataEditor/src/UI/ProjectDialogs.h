@@ -83,8 +83,9 @@ namespace Strata
 		std::filesystem::path GetTarget(const std::string& folderName, std::string& outProblem);
 		// Notes that the person has answered the question about the edited scene's unsaved changes as they are now.
 		void NoteAnswer(EditorContext& context);
-		// Whether the dialog may replace the edited scene now: without unsaved changes, or with only those the person chose to
-		// discard (none made since). Otherwise asks again; the answer submits the dialog once more.
+		// Whether the dialog may replace the edited scene now: no save in flight, and without unsaved changes or with only those
+		// the person chose to discard (none made since). Otherwise waits for the saves (the saving dialog) and asks again; the
+		// answer submits the dialog once more.
 		bool MayReplaceScene(EditorPanelContext& context);
 
 		static void* SettingsReadOpen(ImGuiContext* context, ImGuiSettingsHandler* handler, const char* name);

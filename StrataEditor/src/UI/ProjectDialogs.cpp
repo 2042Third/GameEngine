@@ -226,10 +226,15 @@ namespace Strata
 	bool ProjectDialogs::MayReplaceScene(EditorPanelContext& context)
 	{
 		EditorContext& editor = context.Context;
-		if (!editor.IsSceneModified() || editor.GetUndoStack().GetVersion() == m_AnsweredVersion || !context.Shell)
+		const bool answered = !editor.IsSceneModified() || editor.GetUndoStack().GetVersion() == m_AnsweredVersion;
+		// A save in flight (an agent's scene.save while the dialog is open) is never lost: the project waits for it, as the
+		// commands that replace the scene do, so that they run at once once it is written.
+		if (!context.Shell)
+			return !editor.HasSavesInFlight();
+		if (answered && !editor.HasSavesInFlight())
 			return true;
-		// The scene changed since the answer: the person decides about these changes too, over the dialog
-		// (DrawDiscardQuestion). The answer may come in a later frame; the dialog submits once it came.
+		// The scene changed since the answer, or a save writes: the person decides about these changes too (after the saving
+		// dialog), over the dialog (DrawDiscardQuestion). The answer may come in a later frame; the dialog submits once it came.
 		const UndoStack* undo = &editor.GetUndoStack();
 		context.Shell->RequestDiscardChanges([this, undo]()
 		{

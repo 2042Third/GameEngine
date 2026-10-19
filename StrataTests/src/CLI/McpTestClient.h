@@ -80,9 +80,13 @@ namespace Strata::Tests
 			Notify("notifications/initialized");
 		}
 
-		nlohmann::json CallTool(const std::string& name, nlohmann::json arguments = nlohmann::json::object())
+		// progressToken (optional): asks for progress notifications (tools/call's _meta).
+		nlohmann::json CallTool(const std::string& name, nlohmann::json arguments = nlohmann::json::object(), nlohmann::json progressToken = nullptr)
 		{
-			nlohmann::json response = Request("tools/call", nlohmann::json { { "name", name }, { "arguments", std::move(arguments) } });
+			nlohmann::json params = { { "name", name }, { "arguments", std::move(arguments) } };
+			if (!progressToken.is_null())
+				params["_meta"] = { { "progressToken", std::move(progressToken) } };
+			nlohmann::json response = Request("tools/call", std::move(params));
 			REQUIRE(response.contains("result"));
 			return response["result"];
 		}

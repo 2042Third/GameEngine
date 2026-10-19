@@ -266,12 +266,16 @@ Details: [Asset pipeline](Docs/DeveloperGuide.md#asset-pipeline).
   `GetSettingsProperties` and derive sub-asset handles with `DeriveSubAssetHandle`
   ([Importers](Docs/DeveloperGuide.md#importers)).
 - Nothing in the editor waits for a background import: imports are cancelled instead, and editor code re-imports in
-  the background (the blocking forms are for tools and tests).
+  the background (the blocking forms are for tools and tests). Registering and applying touch no file on the main
+  thread: jobs prepare (`BeginScan`, outcomes carry cache sizes), `Update` inserts in time slices.
 - A new document type, or a stored form that references assets, records its references (`AssetDependencies::Scan` or
   `ImportResult::References`; each valid handle once, never itself: `NormalizeReferences`): pruned exports, delete
   checks and prefetches follow them ([References and bounds](Docs/DeveloperGuide.md#references-and-bounds)).
-- Loaders reject truncated or garbage bytes without crashing; a pack format change extends the corruption tests of
-  `AssetPackTests.cpp`.
+- Scene, prefab and model documents stream: write them with `SceneDocumentWriter`, read them with `SceneDocumentReader`
+  and an `EntitySink`, never through a DOM of a whole document (DOMs are for snapshots and small documents).
+- Loaders reject truncated or garbage bytes without crashing, and those of large documents ask
+  `AssetLoadData::IsCancelled` as they go; a pack format change extends the corruption tests of `AssetPackTests.cpp`, a
+  cooked scene format change those of `CookedSceneTests.cpp`.
 - Texture sizes come from `GetMipByteSize`, never from bytes per pixel; cooked textures are read through
   `ParseCookedTexture`.
 - Hold `AssetHandle`s across frames, not `Ref`s, request what you use every frame,
@@ -355,6 +359,10 @@ reaches the application only through `EditorHost`. Every command family, panel a
   ([Output paths](Docs/DeveloperGuide.md#output-paths)).
 - A command that replaces the edited scene starts with `CommandUtils::CheckUnsavedChanges` (fails unless `force`); UI
   code passes `force` only once the person answered `EditorShell::RequestDiscardChanges`, for the changes asked about.
+- Saves never serialize on the main thread: documents go through `Editor/DocumentSaver` (a snapshot in the frame, the
+  writing on a background job), commands that replace the scene, close the project or quit wrap their handler in
+  `CommandUtils::AfterSaves`, and UI code saves through the command runner
+  ([No silent data loss](Docs/DeveloperGuide.md#no-silent-data-loss)).
 - Asset deletes go to the trash and refuse while something uses the asset; steps that change files check them first
   and fail with the reason when they no longer fit (never overwriting), and asset steps never mark the scene unsaved.
 - A scene being opened is read-only: code that edits the scene outside `CommitEdit` checks
@@ -366,7 +374,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Projects never choose what runs: the external editor is the user's setting (or `STRATA_EXTERNAL_EDITOR`), started
   without a shell, and `script.open` opens only code, CMake and text files of the project or engine.
 - Commands never block a frame: one that waits returns `EditorCommandResult::Defer(poll)`, whose poll owns its data and
-  allocates nothing per frame, and is registered with `MayDefer`.
+  allocates nothing per frame, and is registered with `MayDefer`. A command that answers from the whole asset registry sets
+  `WaitsForAssets` (it waits for a background scan, as Edit commands do).
 - Tools count game time in fixed steps (`Scene::GetFixedStepCount`), never frames
   ([Stepping a paused game](Docs/DeveloperGuide.md#stepping-a-paused-game)).
 - A component property another property can turn off gets an `InactiveReason` (`ComponentRegistry::SetInactiveReason`,

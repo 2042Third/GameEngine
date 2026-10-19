@@ -3,6 +3,8 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorContext.h"
 
+#include <Strata/Core/Profiling.h>
+#include <Strata/Core/StringUtils.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Scene.h>
 
@@ -96,6 +98,9 @@ namespace Strata
 	EditorCommandResult EditorCommandRegistry::Execute(EditorContext& context, std::string_view name, const nlohmann::json& parameters,
 		const CommandOrigin& origin) const
 	{
+		// Command work shows in the frame profiler (editor.perf) instead of as untimed time; the stages of what a command runs
+		// (a scene load's, the renderer's of a capture) nest in it and count for themselves.
+		ST_PROFILE_STAGE("Editor.Commands");
 		const EditorCommand* command = Find(name);
 		CommandJournal& journal = context.GetJournal();
 		const UndoStack& undo = context.GetUndoStack();
@@ -103,9 +108,27 @@ namespace Strata
 		const uint64_t entry = journal.Begin(origin, name, command ? command->Kind : EditorCommandKind::Query,
 			command ? command->Results : EditorCommandResults::Content, parameters, context.IsPlaying());
 		const uint64_t records = undo.GetRecordCount();
-		EditorCommandResult result = Run(context, command, name, parameters);
-		// The flag keeps editor.batch from starting what cannot finish in its frame: it must be right.
-		ST_ASSERT(!result.IsPending() || !command || command->MayDefer, "Command '{}' answered later (Defer) but is not registered with MayDefer", name);
+		EditorCommandResult result;
+		if (command && context.IsWaitingForAssets() && WaitsForAssetScan(*command))
+		{
+			// The registry is still filling: the command runs once the scan ended (and goes on from there if it defers itself).
+			// This deferral is the registry's, not the handler's, so it needs no MayDefer; what the handler answers then does.
+			result = EditorCommandResult::Defer([this, command, name = std::string(name), parameters = nlohmann::json(parameters)](EditorContext& context)
+				-> std::optional<EditorCommandResult>
+			{
+				if (context.IsWaitingForAssets())
+					return std::nullopt;
+				EditorCommandResult deferred = Run(context, command, name, parameters);
+				ST_ASSERT(!deferred.IsPending() || command->MayDefer, "Command '{}' answered later (Defer) but is not registered with MayDefer", name);
+				return deferred;
+			});
+		}
+		else
+		{
+			result = Run(context, command, name, parameters);
+			// The flag keeps editor.batch from starting what cannot finish in its frame: it must be right.
+			ST_ASSERT(!result.IsPending() || !command || command->MayDefer, "Command '{}' answered later (Defer) but is not registered with MayDefer", name);
+		}
 		// A step the handler recorded (or extended) is the command's.
 		journal.NoteUndo(entry, undo, records);
 		result.JournalId = entry;
@@ -118,6 +141,25 @@ namespace Strata
 			journal.Complete(entry, result);
 		}
 		return result;
+	}
+
+	bool EditorCommandRegistry::WaitsForAssetScan(const EditorCommand& command)
+	{
+		return command.Kind == EditorCommandKind::Edit || command.WaitsForAssets;
+	}
+
+	std::optional<std::string> EditorCommandRegistry::DescribeAssetScanWait(const EditorContext& context, std::string_view name) const
+	{
+		const EditorCommand* command = Find(name);
+		if (!command || !context.IsWaitingForAssets() || !WaitsForAssetScan(*command))
+			return std::nullopt;
+		const std::optional<AssetScanProgress> progress = context.GetAssetScanProgress();
+		if (!progress)
+			return std::string("the project's start scene is still being opened");
+		if (progress->Total == 0)
+			return std::string("the project's assets are still being scanned");
+		return fmt::format("the project's assets are still being scanned ({} of {})", StringUtils::FormatThousands(progress->Done),
+			StringUtils::FormatThousands(progress->Total));
 	}
 
 	EditorCommandResult EditorCommandRegistry::Run(EditorContext& context, const EditorCommand* command, std::string_view name, const nlohmann::json& parameters) const

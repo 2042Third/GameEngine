@@ -25,6 +25,13 @@ StrataCLI launch --no-gpu             # start one without window and GPU, no pro
 StrataCLI launch --headless --project <dir>   # existing project; no window, but rendering works (captures)
 ```
 
+- With a project, `launch` returns once the project is ready (its assets scanned and its start scene open), printing
+  the progress to stderr ("Scanning the project's assets: 12,345 / 30,000"); a large project takes as long as it takes
+  while it progresses, and `launch` fails only when nothing progressed for `--stall-timeout` seconds (default 60).
+  `--no-wait-scan` returns as soon as the editor answers: edits and asset queries then wait until the project is
+  ready, `editor.status` answers at once (`assets.scanning`). `strata_launch_editor` (MCP) waits the same way and sends
+  `notifications/progress` when the call has a `progressToken`.
+
 - `--no-gpu`: no graphics device at all (any machine, CI). `--headless`: no window but rendering works.
   Without either, the editor opens its window (a human can watch).
 - Started by hand: `StrataEditor --no-gpu [--project <dir>]` (keep it running in the background). It serves
@@ -93,6 +100,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Question | Call |
 | --- | --- |
 | What is open, is it playing, unsaved changes? | `editor.status` |
+| Are the project's assets still being scanned? | `editor.status`'s `assets.scanning` (`{phase, done, total}`, null once done): until the scan and the start scene after it are done, edits and asset queries wait (they answer once the project is ready); `editor.status`, `editor.wait`, `log.read` answer at once |
 | Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress` and whether it is the project's `startScene`, `lastOpen` with how it ended, `play` for a switch a running game asked for, `subScenes` of the running game; `{"wait": true}` answers once nothing is opening); also `editor.status {"sections": ["sceneLoad"]}` |
 | What did the person, other agents or I just do? | `editor.activity {since, limit, source, command}` (every command run: source UI / Automation with the client's name / CommandScript / Internal, a one-line summary such as "Rename 'Crate' to 'Box'", parameters, result or error, undo step, entities touched); page with `since` = the returned `latest`, or the latest first with `{"newest": true}` and `before` = the returned `oldest` |
 | Are there unsaved changes a crashed (or discarding) editor left? | `scene.recoveryStatus` (entries with `id`, `sceneName`, `applicable`; the edited scene's `journal`), then `scene.recover {scene: <id or scene>, action: "apply" \| "discard"}` |
@@ -113,7 +121,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What does the person have selected, what does the inspector show? | `selection.get` (`entities`, the last is the primary one; `inspectedAsset` while the inspector shows an asset); `selection.set {entities?, asset?}` changes them |
 | What does the game play (sound)? | `audio.state` (play mode): `voices` (entity or null for one-shots, clip, playing, looping, position...), `oneShots` (`playing`, `played`, `dropped`), `listener`, `masterVolume` |
 | What happened (errors, script output)? | `log.read` (`{"newest": true, "limit": 20}` for the latest first, paging with `before` = the returned `oldest`; oldest first with `after` = the previous `latest`; `minLevel`; `logger`: `Strata` engine, `App` editor, `Script` scripts) |
-| How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`); `asset.setBudget` changes the open project's budgets (MB of memory, staging and uploads per frame; ms of finalization and of upload steps per frame) |
+| How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`; `importMemoryMB`: the imports' memory estimates against their budget); `asset.setBudget` changes the open project's budgets (MB of memory, staging and uploads per frame; ms of finalization and of upload steps per frame; `importMB`, the memory imports may take together: imports beyond it wait their turn) |
 | Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %) |
 
 Commands added at run time (for example `script.*`, `viewport.*`, `camera.*` when those features are present)
@@ -219,6 +227,18 @@ editor started with `--no-gpu` (use `--headless`):
   `scene.saveAs` for a scene never saved), or pass `"force": true` when discarding them is what you want; their results
   report `discardedChanges`. A person may be editing beside you: never force away work you did not make. The person sees
   a toast naming your client ("Claude Code discarded unsaved changes") with a Recover button.
+- **Saves run in the background**: `scene.save` and `scene.saveAs` take a snapshot of the scene in the frame and write the
+  file on a background thread, so even a million-entity scene never holds the editor. By default (`wait: true`) they answer
+  once the file is written: `{scene, path, bytes, entities, seconds, frames, frameTimes, memory}`. With
+  `{"wait": false}` they answer at once with `{scene, path, saveId, state}`; either way they answer later than other
+  edits, so `editor.batch` refuses them (save after the batch). `editor.status`'s `saving` (in its compact answer) lists the saves in
+  flight (`saveId`, `label`, `documents`, `state`, `progress`; empty when none writes). Edits made while a save writes
+  are not in it and stay unsaved. Commands that replace the scene, close the project or quit (`scene.open`, `scene.new`,
+  `scene.recover`, `project.*`, `editor.quit`) wait for saves in flight before they decide, also with `force` (a save is
+  never lost), so `scene.save {"wait": false}` followed by `scene.open` needs no force. While a save writes a document,
+  `asset.move`, `asset.moveFolder`, `asset.delete` and `asset.deleteFolder` of it (or of a folder holding it, or onto a
+  Save As's new path) fail with "is being saved": try again once `saving` is empty. `project.export` may start during a
+  save of the scene as it is; it fails if that save fails.
 - **Recovery**: the editor journals the edited scene's unsaved changes in `.strata/Recovery` (written about 2 s after
   edits stop; `editor.status {"sections": ["recovery"]}` `recovery.journal` has `lastWrite` and `pending`), and even forced discards are kept
   there and listed at once (the newest 8 discards stay on offer, older ones move to `Recovery/Discarded`; what a crash
@@ -312,7 +332,7 @@ Many edits in one call and one undo step: `editor.batch {"steps": [{"command": "
 "bind": {"wall": "/id"}}, {"command": "component.add", "parameters": {"entity": {"$ref": "wall"}, "component": "BoxCollider"}}]}`
 (steps as a command script writes them, at most 1,000; it answers `{steps: [{command, result | error}], bindings}`; a
 failed step undoes the ones before it unless `"atomic": false`; commands that take frames, such as `scene.open`,
-`play.step` or `viewport.capture`, are refused: run them on their own).
+`scene.save`, `play.step` or `viewport.capture`, are refused: run them on their own).
 `prefab.create {"entities": ["<id>"], "path": "Prefabs/Block.stprefab"}` (the entities become an instance of it; `"link":
 false` leaves them alone), then
 `prefab.instantiate {"prefab": "Prefabs/Block.stprefab", "components": {"Transform": {"Translation": [2, 0, 0]}}}`
@@ -417,7 +437,8 @@ with a window, not `--no-gpu`, to include rendering). A command script can gate 
 `editor.perf {"frames": 120}` then says where the time went, per stage of the main thread (self times in ms:
 `Input`, `Assets.Update`, `Assets.Finalize` (GPU uploads of arriving assets), `Scene.Load` (swapping in a scene that
 finished loading, creating sub-scenes' entities), `Scene.UI` (the game UI's input), `Scene.Scripts`, `Scene.Animation` (animators: poses, root motion,
-attachments, events), `Scene.Physics`, `Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Render.UI` (the game UI pass), `Editor.UI`, and `Present` outside the frame
+attachments, events), `Scene.Physics`, `Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Render.UI` (the game UI pass), `Editor.UI`,
+`Editor.Commands` (the work of the commands that ran in the frame, yours included), and `Present` outside the frame
 time), with `stageSum` (at most the frame), `untimed` (the rest of each frame) and `jobs` (`workerBusyPercent`,
 `ioBusyPercent`, `backgroundBusyPercent` (imports, exports), `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage. The
 person at the editor sees the same in the Performance panel (click the frame pill) and the streaming numbers of

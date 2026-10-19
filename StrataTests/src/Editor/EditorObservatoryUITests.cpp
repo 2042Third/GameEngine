@@ -197,7 +197,12 @@ TEST_SUITE("Editor.UI")
 		nlohmann::json command;
 		editor.FrameWith([&]() { command = editor.Run("asset.stats"); });
 		REQUIRE(panel->GetStats());
-		CHECK(CommandUtils::DescribeAssetStats(*panel->GetStats()) == command);
+		// asset.stats adds the imports' memory estimates of the project's manager (EditorAssetManager), which the panel's
+		// statistics, those of any asset manager, do not hold.
+		REQUIRE(command.contains("importMemoryMB"));
+		nlohmann::json managerStats = command;
+		managerStats.erase("importMemoryMB");
+		CHECK(CommandUtils::DescribeAssetStats(*panel->GetStats()) == managerStats);
 		CHECK(command["registered"].get<uint32_t>() > 10);
 
 		// Nothing was uploaded (no renderer): the sparkline says so instead of showing an empty box.

@@ -225,6 +225,8 @@ namespace Strata
 		// Current and peak memory of this process (see ProcessMemoryInfo); nullopt if the system does not report it. (Not
 		// named GetProcessMemoryInfo: <psapi.h> defines that name as a macro.)
 		static std::optional<ProcessMemoryInfo> GetProcessMemory();
+		// The machine's physical memory in bytes; nullopt if the system does not report it.
+		static std::optional<uint64_t> GetPhysicalMemorySize();
 	};
 
 }

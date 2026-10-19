@@ -660,9 +660,9 @@ TEST_SUITE("Asset.Pack")
 				}
 			}
 		});
-		// The reads start once the feeder has filled the queue: on a slow machine the thread may not run before they end.
-		while (submitted < c_ForeignJobsBeforeReads)
-			std::this_thread::yield();
+		// The reads start once the queue holds other work (on CI's runners of three hardware threads the feeder could
+		// otherwise start only after the reads ended, and the test would check nothing).
+		REQUIRE(WaitUntil([&]() { return submitted.load() >= c_ForeignJobsBeforeReads; }, std::chrono::seconds(30)));
 		std::vector<uint8_t> data;
 		for (int read = 0; read < 6; read++)
 		{

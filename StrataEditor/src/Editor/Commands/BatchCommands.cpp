@@ -35,7 +35,7 @@ namespace Strata
 			"Runs several commands in this frame, one after another, as one undo step: steps [{command, parameters?, bind?, expect?}] as a command "
 			"script writes them (bind names values of a step's result, {\"crate\": \"/id\"}, and later parameters use them as {\"$ref\": \"crate\"} or "
 			"{\"$ref\": \"crate\", \"pointer\": \"/entities/0\"}; expect checks a result like a failure). At most 1,000 steps; commands that can take "
-			"frames (loads, builds, imports, captures, play.step, input with wait: MayDefer) and editor.batch itself are refused before anything runs. "
+			"frames (loads, builds, imports, captures, saves, play.step, input with wait: MayDefer) and editor.batch itself are refused before anything runs. "
 			"atomic (default true): a failed step undoes the steps before it, records no undo step and fails the batch naming the step's index; "
 			"atomic false runs every step and keeps what succeeded. Returns {steps: [{command, result} or {command, error: {kind, message}}], "
 			"bindings}.",

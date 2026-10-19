@@ -134,6 +134,9 @@ target_compile_definitions(StrataTests PRIVATE
 # them) are guarded with #if ST_TESTS_HAVE_EVERY_MODULE, 1 or 0: a definition, like ST_WITH_*, so that a file that misses
 # an include can never read it as 0 and compile its cases out of every build.
 target_compile_definitions(StrataTests PRIVATE "ST_TESTS_HAVE_EVERY_MODULE=$<BOOL:${STRATA_TESTS_HAVE_EVERY_MODULE}>")
+# Code outside src/Editor that calls the editor tests' helpers (TestMain's helper modes) is guarded with
+# #if ST_TESTS_HAVE_EDITOR, 1 or 0 the same way: builds without the editor leave src/Editor out.
+target_compile_definitions(StrataTests PRIVATE "ST_TESTS_HAVE_EDITOR=$<TARGET_EXISTS:StrataEditorUI>")
 foreach(module IN LISTS STRATA_TEST_SCRIPT_MODULES)
 	string(REPLACE "StrataTestScripts" "" moduleKind "${module}")
 	string(TOUPPER "${moduleKind}" moduleKind)

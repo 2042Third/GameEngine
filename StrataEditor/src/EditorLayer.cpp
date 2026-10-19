@@ -51,6 +51,7 @@ namespace Strata
 
 		constexpr const char* c_EditorStatusSection = "editor";
 		constexpr const char* c_UnsavedChangesModal = "Unsaved Changes";
+		constexpr const char* c_SavingModal = "Saving";
 		// Between the parts of a pill's text.
 		constexpr const char* c_Separator = " \xC2\xB7 ";
 
@@ -665,9 +666,9 @@ namespace Strata
 		EventDispatcher dispatcher(event);
 		dispatcher.Dispatch<WindowCloseEvent>([this](WindowCloseEvent&)
 		{
-			if (!m_Context.IsSceneModified())
+			if (!m_Context.IsSceneModified() && !m_Context.HasSavesInFlight())
 				return false;
-			// Keep running and ask first; closing happens from the dialog.
+			// Keep running and ask first (after the saving dialog while saves write); closing happens from the dialog.
 			RequestDiscardChanges([this]() { m_Host->Close(); });
 			return true;
 		});
@@ -831,6 +832,13 @@ namespace Strata
 
 	void EditorLayer::RequestDiscardChanges(std::function<void()> action)
 	{
+		// A save in flight is never lost: the action waits for it in the saving dialog, then asks about what is still unsaved.
+		if (m_Context.HasSavesInFlight())
+		{
+			m_ActionAfterSaves = std::move(action);
+			m_OpenSavingModal = true;
+			return;
+		}
 		if (m_Context.IsSceneModified())
 		{
 			m_PendingDiscardAction = std::move(action);
@@ -947,7 +955,7 @@ namespace Strata
 		return state;
 	}
 
-	bool EditorLayer::SaveScene()
+	bool EditorLayer::SaveScene(std::function<void(bool saved)> then)
 	{
 		if (m_Context.IsPlaying())
 		{
@@ -955,11 +963,17 @@ namespace Strata
 			return false;
 		}
 		if (!m_Context.GetSceneHandle().IsValid())
-			return SaveSceneAs();
-		return !RunEditorCommand(m_Context, m_Commands, "scene.save").is_null();
+			return SaveSceneAs(std::move(then));
+		// The save writes in the background: its outcome comes in a later frame (failures as a notification of their own).
+		m_CommandRunner.Run(m_Context, m_Commands, "scene.save", nlohmann::json::object(), [then = std::move(then)](const EditorCommandResult& result)
+		{
+			if (then)
+				then(result.Success);
+		}, CommandOrigin { CommandSource::UI });
+		return true;
 	}
 
-	bool EditorLayer::SaveSceneAs()
+	bool EditorLayer::SaveSceneAs(std::function<void(bool saved)> then)
 	{
 		if (!m_Context.HasProject())
 		{
@@ -976,7 +990,12 @@ namespace Strata
 			ST_ERROR("Scenes must be saved inside the project's asset directory ({})", FileSystem::ToUTF8(assetDirectory));
 			return false;
 		}
-		return !RunEditorCommand(m_Context, m_Commands, "scene.saveAs", { { "path", FileSystem::ToUTF8(relative) } }).is_null();
+		m_CommandRunner.Run(m_Context, m_Commands, "scene.saveAs", { { "path", FileSystem::ToUTF8(relative) } }, [then = std::move(then)](const EditorCommandResult& result)
+		{
+			if (then)
+				then(result.Success);
+		}, CommandOrigin { CommandSource::UI });
+		return true;
 	}
 
 	bool EditorLayer::ShowOpenSceneDialog()
@@ -1273,6 +1292,7 @@ namespace Strata
 				UI::ItemProbe::Record("Menu.File.OpenScene", canOpenScene);
 				if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, !m_Context.IsPlaying()))
 					SaveScene();
+				UI::ItemProbe::Record("Menu.File.SaveScene", !m_Context.IsPlaying());
 				if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S", false, m_Context.HasProject() && !m_Context.IsPlaying()))
 					SaveSceneAs();
 				const bool recoverable = RecoveryDialog::HasOffer(m_Context);
@@ -1659,6 +1679,7 @@ namespace Strata
 		ImGui::SameLine();
 		DrawFramePill();
 		DrawAssetsPill();
+		DrawSavingPill();
 
 		ImGui::SameLine();
 		bool showConsole = DrawAutomationPill();
@@ -1762,8 +1783,12 @@ namespace Strata
 			compact = fmt::format("{} importing{}{}", importing, c_Separator, compact);
 		// A scene being opened (scene.open, a project's start scene) loads with everything it uses: the largest load while it
 		// lasts. Its progress counts its document as it is read, then what it uses in bytes.
-		if (m_Context.IsSceneLoading())
+		if (m_Context.IsSceneLoading() && !m_Context.IsScanningAssets())
 			compact = fmt::format("Opening scene {:.0f}%{}{}", std::floor(m_Context.GetSceneLoadStatus().Progress * 100.0f), c_Separator, compact);
+		// The project's assets being scanned in the background come first: what needs them waits for it.
+		const std::optional<AssetScanProgress> scan = m_Context.GetAssetScanProgress();
+		if (scan)
+			compact = FormatAssetScan(*scan) + c_Separator + compact;
 		const std::string text = compact + c_Separator + memory;
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		// Failures matter most; then how full the budgets are (a comfortable budget is no news).
@@ -1776,6 +1801,11 @@ namespace Strata
 		{
 			std::string tooltip = stats.FailedAssets > 0 ? fmt::format("{} assets failed to load (see the Console or the Streaming panel).", stats.FailedAssets)
 				: fmt::format("Assets ready and streaming in; {} are registered.", stats.RegisteredAssets);
+			if (scan)
+			{
+				tooltip += " The project's assets are being scanned: edits, asset commands and the start scene wait until every asset is "
+					"registered.";
+			}
 			if (importing > 0)
 			{
 				tooltip += fmt::format(" {} {} importing in the background: {} once imported.", importing, importing == 1 ? "asset is" : "assets are",
@@ -1809,6 +1839,28 @@ namespace Strata
 		}
 		if (clicked)
 			m_Panels.Focus(EditorPanels::c_Streaming);
+	}
+
+	void EditorLayer::DrawSavingPill()
+	{
+		if (!m_Context.HasSavesInFlight())
+			return;
+		const std::vector<DocumentSaveStatus> saves = m_Context.GetSaveStatuses();
+		const DocumentSaveStatus& first = saves.front();
+		const std::string percent = fmt::format("{:.0f}%", std::floor(first.Progress * 100.0f));
+		std::string text = fmt::format("Saving '{}' {}", first.Label, percent);
+		if (saves.size() > 1)
+			text += fmt::format("{}{} more queued", c_Separator, saves.size() - 1);
+		const std::string compact = "Saving " + percent;
+		ImGui::SameLine();
+		const bool clicked = UI::Pill("Status.Saving", Icons::Save, StatusPillText(Icons::Save, text, compact), UI::GetThemeColors().Info);
+		if (UI::IsTooltipDue())
+		{
+			ImGui::SetTooltip("Saving in the background: the editor goes on while the files are written; edits made meanwhile stay unsaved. "
+				"Closing the project or the editor waits for the save. Click to see it in the Activity panel.");
+		}
+		if (clicked)
+			m_Panels.Focus(EditorPanels::c_Activity);
 	}
 
 	void EditorLayer::DockNewToolPanels()
@@ -1986,6 +2038,40 @@ namespace Strata
 			UI::OpenModal(c_UnsavedChangesModal);
 			m_OpenUnsavedChangesModal = false;
 		}
+		// While saves are in flight, the action that waits for them (RequestDiscardChanges) shows their progress.
+		if (m_OpenSavingModal)
+		{
+			UI::OpenModal(c_SavingModal);
+			m_OpenSavingModal = false;
+		}
+		if (UI::BeginModal(c_SavingModal, "Saving"))
+		{
+			if (!m_Context.HasSavesInFlight())
+			{
+				ImGui::CloseCurrentPopup();
+				UI::EndModal();
+				// Written: what replaces the scene now asks about the changes made since, if there are any.
+				if (std::function<void()> action = std::exchange(m_ActionAfterSaves, nullptr))
+					RequestDiscardChanges(std::move(action));
+				return;
+			}
+			ImGui::TextUnformatted("Waiting for the saves to finish before going on:");
+			for (const DocumentSaveStatus& save : m_Context.GetSaveStatuses())
+			{
+				const std::string label = fmt::format("Saving '{}'... {:.0f}%", save.Label, std::floor(save.Progress * 100.0f));
+				UI::StrataProgressBar(fmt::format("Saving.Progress.{}", save.ID).c_str(), save.Progress, label);
+			}
+			UI::ItemProbe::Record("Saving.Dialog");
+			ImGui::Spacing();
+			// Cancel gives up what was to happen next, never a save.
+			if (UI::DialogButton("Saving.Cancel", "Cancel"))
+			{
+				ImGui::CloseCurrentPopup();
+				m_ActionAfterSaves = nullptr;
+			}
+			UI::EndModal();
+			return;
+		}
 		if (!UI::BeginModal(c_UnsavedChangesModal, "Unsaved Changes"))
 			return;
 		ImGui::Text("Save changes to '%s'?", m_Context.GetEditScene()->GetName().c_str());
@@ -1999,9 +2085,12 @@ namespace Strata
 		if (UI::DialogButton("UnsavedChanges.Save", "Save", true))
 		{
 			ImGui::CloseCurrentPopup();
-			if (SaveScene() && m_PendingDiscardAction)
-				m_PendingDiscardAction();
-			m_PendingDiscardAction = nullptr;
+			// The pending action runs once the save is written; it asks again about changes made meanwhile.
+			SaveScene([this, action = std::exchange(m_PendingDiscardAction, nullptr)](bool saved)
+			{
+				if (saved && action)
+					RequestDiscardChanges(action);
+			});
 		}
 		ImGui::SameLine();
 		if (UI::DialogButton("UnsavedChanges.DontSave", "Don't Save"))

@@ -65,8 +65,9 @@ namespace Strata
 		// scripted runs (--frames, --commands). UI tests turn it off: they expect every asset imported once a project is open.
 		bool ImportInBackground = true;
 		// Open ProjectPath's start scene in the background (EditorContext::BeginOpenProject: the window shows its load in the
-		// viewport) instead of before the first frame. The editor application turns it on for windowed sessions that are not
-		// scripted (--frames, --commands): those, headless editors and tests expect the project's scene once the editor started.
+		// viewport; with ImportInBackground the assets are scanned in the background first) instead of before the first frame,
+		// so that automation starts at once. The editor application turns it on for sessions that are not scripted (--frames,
+		// --commands): those and tests expect the project's scene once the editor started.
 		bool OpenStartSceneInBackground = false;
 		// The toolchain script builds use instead of the engine's (EditorContextSpecification::ScriptBuild); UI tests build
 		// with a stand-in for CMake.
@@ -229,8 +230,13 @@ namespace Strata
 		// c_ScriptBuildCheckSeconds.
 		bool HasScriptBuild();
 
-		bool SaveScene();
-		bool SaveSceneAs();
+		// File > Save, Ctrl+S and the unsaved-changes question's Save: scene.save (or, for a scene never saved, scene.saveAs with
+		// the path the file dialog gives) through the command runner, since the save writes in the background. `then` runs
+		// once the save ended, with whether it succeeded. Returns whether a save started.
+		bool SaveScene(std::function<void(bool saved)> then = {});
+		bool SaveSceneAs(std::function<void(bool saved)> then = {});
+		// The status bar's pill of saves in flight ("Saving 'World1M' 45%"); clicking it opens the Activity panel.
+		void DrawSavingPill();
 		// File > Open Scene...: the file dialog in the project's asset directory, then OpenSceneFile.
 		bool ShowOpenSceneDialog();
 		// Opens a project file (project.open) once unsaved changes are dealt with; failures go to ReportError.
@@ -278,6 +284,10 @@ namespace Strata
 		float m_StatusBarFullWidth = 0.0f;    // What the pills' full texts take side by side, summed as they are drawn
 
 		std::function<void()> m_PendingDiscardAction;
+		// An action that replaces the edited scene (RequestDiscardChanges) waiting for the saves in flight, while the saving
+		// dialog shows their progress; it asks about what is still unsaved once they are written.
+		std::function<void()> m_ActionAfterSaves;
+		bool m_OpenSavingModal = false;
 		// The undo stack's version (UndoStack::GetVersion) the question was asked for: Don't Save discards those changes
 		// only, so the question stays when the scene changed meanwhile (an agent or a script edited it).
 		uint64_t m_DiscardQuestionVersion = 0;

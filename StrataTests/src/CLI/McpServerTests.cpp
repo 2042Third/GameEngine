@@ -54,7 +54,11 @@ TEST_SUITE("CLI.Mcp")
 		CHECK(result["serverInfo"]["name"] == "strata");
 		CHECK(result["serverInfo"]["version"] == c_EngineVersion);
 		CHECK(result["capabilities"]["tools"]["listChanged"] == true);
-		CHECK(result["instructions"].is_string());
+		REQUIRE(result["instructions"].is_string());
+		// Saves answer later: agents must not expect the file at once, nor batch them.
+		const std::string instructions = result["instructions"].get<std::string>();
+		CHECK(instructions.find("scene_save and scene_saveAs write in the background and answer once the file is written") != std::string::npos);
+		CHECK(instructions.find("editor_batch refuses saves") != std::string::npos);
 
 		CHECK_FALSE(client.GetServer().IsInitialized());
 		const size_t outputBefore = client.GetOutput().size();
@@ -392,7 +396,7 @@ TEST_SUITE("CLI.Mcp")
 		CHECK(launched["structuredContent"]["launched"] == true);
 		CHECK(launched["structuredContent"]["session"]["Headless"] == true);
 		CHECK_FALSE(launched["structuredContent"]["session"].contains("Token"));
-		CHECK(launched["structuredContent"]["editorTools"] == 2);
+		CHECK(launched["structuredContent"]["editorTools"] == 3); // editor.info, editor.status, editor.quit
 		CHECK(client.CountNotifications("notifications/tools/list_changed") == 1);
 
 		const std::vector<std::string> tools = client.ListToolNames();
@@ -409,6 +413,44 @@ TEST_SUITE("CLI.Mcp")
 			return client.CountNotifications("notifications/tools/list_changed") == 2;
 		}, std::chrono::milliseconds(10000)));
 		CHECK(client.ListToolNames() == Tests::c_GenericMcpTools);
+	}
+
+	TEST_CASE("Launching answers once the project's assets are scanned, with progress notifications when asked for")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("McpLaunchScan") / "Sessions";
+		const std::filesystem::path projectDirectory = Tests::CreateTemporaryDirectory("McpLaunchScanProject");
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
+		Tests::ScopedEnvironmentVariable fakeScan("STRATA_TEST_FAKE_SCAN", "2500");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+
+		McpServerSpecification specification = Tests::MakeMcpSpecification(sessionDirectory);
+		specification.EditorPath = FileSystem::ToUTF8(Tests::GetTestExecutablePath());
+		specification.LaunchTimeout = std::chrono::milliseconds(20000);
+		// The fake editor's editor.quit is in the editor toolset.
+		specification.Toolsets = { "core", "editor" };
+		Tests::McpTestClient client(specification);
+		client.Initialize();
+		nlohmann::json launched = client.CallTool("strata_launch_editor", nlohmann::json { { "project", FileSystem::ToUTF8(projectDirectory) }, { "noGpu", true } },
+			"launch-1");
+		REQUIRE_MESSAGE(launched["isError"] == false, GetText(launched));
+		// The scan was reported as it went: one token, progress that only grows, below 100 (the scan is the first part).
+		double previous = -1.0;
+		size_t notifications = 0;
+		for (const std::string& line : client.GetOutput())
+		{
+			const std::optional<nlohmann::json> message = JsonRpc::Parse(line);
+			if (!message || message->value("method", "") != "notifications/progress")
+				continue;
+			notifications++;
+			const nlohmann::json& params = (*message)["params"];
+			CHECK(params["progressToken"] == "launch-1");
+			CHECK(params["total"] == 100);
+			CHECK(params["progress"].get<double>() > previous);
+			CHECK(params["message"].get<std::string>().find("Scanning the project's assets") != std::string::npos);
+			previous = params["progress"].get<double>();
+		}
+		CHECK(notifications >= 2);
+		CHECK(client.CallTool("editor_quit")["isError"] == false);
 	}
 
 	TEST_CASE("Launching without a project starts an editor without one")

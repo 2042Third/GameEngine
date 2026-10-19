@@ -18,6 +18,9 @@
 namespace Strata
 {
 
+	class BinaryReader;
+	class BinaryWriter;
+
 	enum class ComponentFlags : uint32_t
 	{
 		None = 0,
@@ -51,6 +54,12 @@ namespace Strata
 		// Appends a copy of a component of the type (as ComponentInfo::Get returns it; tag components may pass null) and
 		// returns the copy's address (a shared instance for tag components, which carry no data).
 		virtual const void* Append(const void* component) = 0;
+		// Appends a value as the type constructs it by default, for readers that fill values in place (At), and returns its
+		// index. The addresses of the values may change with later appends beyond the room Reserve made: readers take them
+		// once every value is appended.
+		virtual size_t AppendDefault() = 0;
+		// The value at `index` (the shared instance for tag components).
+		virtual void* At(size_t index) = 0;
 		// The bytes the values occupy (not what they own on the heap).
 		virtual uint64_t GetMemoryUsage() const = 0;
 	};
@@ -71,14 +80,30 @@ namespace Strata
 			const void* Append([[maybe_unused]] const void* component) override
 			{
 				if constexpr (std::is_empty_v<T>)
+					return &GetTagInstance();
+				else
+					return &m_Values.emplace_back(*static_cast<const T*>(component));
+			}
+
+			size_t AppendDefault() override
+			{
+				if constexpr (std::is_empty_v<T>)
 				{
-					static T s_Instance;
-					return &s_Instance;
+					return 0;
 				}
 				else
 				{
-					return &m_Values.emplace_back(*static_cast<const T*>(component));
+					m_Values.emplace_back();
+					return m_Values.size() - 1;
 				}
+			}
+
+			void* At([[maybe_unused]] size_t index) override
+			{
+				if constexpr (std::is_empty_v<T>)
+					return &GetTagInstance();
+				else
+					return &m_Values[index];
 			}
 
 			uint64_t GetMemoryUsage() const override
@@ -87,6 +112,12 @@ namespace Strata
 					return 0;
 				else
 					return m_Values.capacity() * sizeof(T);
+			}
+		private:
+			static T& GetTagInstance()
+			{
+				static T s_Instance;
+				return s_Instance;
 			}
 		private:
 			// Unused for tag components.
@@ -163,6 +194,11 @@ namespace Strata
 		ComponentGizmoGroup GizmoGroup = ComponentGizmoGroup::None;
 		ComponentGizmoFunction Gizmo = nullptr;
 
+		// Its binary form (cooked scenes), written after the properties and read back as the JSON form reads (what it cannot
+		// read as written is skipped; data that ends early fails). Optional: cooked scenes keep the JSON extra of a component
+		// without it as MessagePack.
+		std::function<bool(const void* component, BinaryWriter& out, std::string* outError)> SerializeExtraBinary;
+		std::function<bool(void* component, BinaryReader& in, std::string* outError)> DeserializeExtraBinary;
 		// Names of the components this one needs on its entity (a UI image needs its UIRect). The paths that add components by
 		// name (ComponentAccess::AddComponent: component.add, entity.create, the inspector's Add Component, scripts) add the
 		// missing ones first, in the same edit. Removing a required component is allowed: the dependent one then has no effect.
@@ -324,6 +360,21 @@ namespace Strata
 				return equals(*static_cast<const T*>(a), *static_cast<const T*>(b), remap);
 			};
 			references.VisitJson = std::move(visitJson);
+			return *this;
+		}
+
+		// The binary form of the extra data (ComponentInfo::SerializeExtraBinary).
+		ComponentInfoBuilder& ExtraBinary(std::function<bool(const T&, BinaryWriter&, std::string*)> serialize, std::function<bool(T&, BinaryReader&, std::string*)> deserialize)
+		{
+			ComponentInfo& info = GetTarget();
+			info.SerializeExtraBinary = [serialize](const void* component, BinaryWriter& out, std::string* outError)
+			{
+				return serialize(*static_cast<const T*>(component), out, outError);
+			};
+			info.DeserializeExtraBinary = [deserialize](void* component, BinaryReader& in, std::string* outError)
+			{
+				return deserialize(*static_cast<T*>(component), in, outError);
+			};
 			return *this;
 		}
 	};

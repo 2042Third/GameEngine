@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Asset/Asset.h"
+#include "Strata/Core/DocumentOutput.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/EntityPrototype.h"
 
@@ -68,6 +69,10 @@ namespace Strata
 		// Compiles the snapshot into the prototype (EntityPrototype::FromSnapshot). False, with the error, when its entity
 		// data is invalid.
 		bool Compile(const nlohmann::json& snapshot, std::string* outError);
+		// Reads a document's text into the prototype as a stream (SceneDocumentReader, EntityPrototypeBuilder): never a DOM of
+		// the whole document; a cooked document (CookedScene::IsCooked: exported packs hold them) with CookedSceneReader. `isCancelled` (when given) stops the read (AssetLoadData::IsCancelled). False, with the error,
+		// when the text is no such document or its entity data is invalid.
+		bool Read(std::span<const uint8_t> data, const std::function<bool()>& isCancelled, std::string* outError);
 	private:
 		void LogWarnings() const;
 	private:
@@ -89,10 +94,14 @@ namespace Strata
 		// Compiles a snapshot ({"Entities": [...]}); null, with the error, when its entity data is invalid.
 		static Ref<Prefab> CreateFromSnapshot(const nlohmann::json& snapshot, std::string* outError = nullptr);
 
-		// Document: { "Strata": { "Format": "Prefab", "Version": 1 }, "Prefab": { "Entities": [...] } }
+		// Document: { "Strata": { "Format": "Prefab", "Version": 1 }, "Prefab": { "Entities": [...] } }. Deserialize reads it
+		// as a stream (EntityTemplate::Read).
 		nlohmann::json Serialize() const;
-		static Ref<Prefab> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
+		static Ref<Prefab> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr, const std::function<bool()>& isCancelled = {});
 		static Ref<Prefab> FromJson(const nlohmann::json& json, std::string* outError = nullptr);
+		// Writes the document as a stream from the prototype (SceneDocumentWriter::WritePrototype: an entity per line, the
+		// layout scenes are saved in), without the prefab links of its entities: a prefab stores none, its instances do.
+		bool WriteDocument(DocumentOutput& output, std::string* outError = nullptr) const;
 	};
 
 	class Model : public EntityTemplate
@@ -105,9 +114,10 @@ namespace Strata
 
 		// Compiles a snapshot ({"Entities": [...]}); null, with the error, when its entity data is invalid.
 		static Ref<Model> CreateFromSnapshot(const nlohmann::json& snapshot, std::string* outError = nullptr);
-		// Cooked document: { "Strata": { "Format": "Model", "Version": 1 }, "Model": { "Entities": [...] } }
+		// Cooked document: { "Strata": { "Format": "Model", "Version": 1 }, "Model": { "Entities": [...] } }. Deserialize reads
+		// it as a stream (EntityTemplate::Read).
 		nlohmann::json Serialize() const;
-		static Ref<Model> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
+		static Ref<Model> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr, const std::function<bool()>& isCancelled = {});
 	};
 
 	// A scene document loaded as an asset (SceneLoader, the editor's scenes, exported games). The loader reads the document
@@ -120,10 +130,14 @@ namespace Strata
 		static AssetType GetStaticType() { return AssetType::Scene; }
 		AssetType GetType() const override { return GetStaticType(); }
 
-		// Reads the document into the prepared scene. `progress` (when given) receives the share of the read done so far, in
-		// [0, 1], as it goes: about every megabyte parsed and every few thousand entities read, and 1 at the end (the asset
-		// loader passes it on to SceneReadProgress, which scene loads show).
-		static Ref<SceneAsset> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr, const std::function<void(float share)>& progress = {});
+		// Reads the document into the prepared scene, as a stream (SceneSerializer::DeserializeText), or a cooked scene
+		// (CookedScene::IsCooked: exported packs hold them) with CookedSceneReader. `progress` (when given)
+		// receives the share of the read done so far, in [0, 1], as it goes: about every megabyte parsed and every few thousand
+		// entities linked, and 1 at the end (the asset loader passes it on to SceneReadProgress, which scene loads show).
+		// `isCancelled` (when given) is asked every few hundred entities: once it is true the read stops and fails
+		// (AssetLoadData::IsCancelled, so that a cancelled load of a large scene ends at once).
+		static Ref<SceneAsset> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr, const std::function<void(float share)>& progress = {},
+			const std::function<bool()>& isCancelled = {});
 
 		// Main thread. Hands the prepared scene over without copying it; its source asset (Scene::GetSourceAsset) is this
 		// asset. The first call takes it: the asset holds no scene afterwards (IsTaken; it reports no memory), and a later call

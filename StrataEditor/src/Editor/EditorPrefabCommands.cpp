@@ -16,6 +16,7 @@
 #include <Strata/Scene/PrefabInstances.h>
 #include <Strata/Scene/PrefabOverrides.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/Scene/SceneDocumentWriter.h>
 
 #include <glm/glm.hpp>
 
@@ -414,7 +415,7 @@ namespace Strata
 					{ "added", ToJson(difference.Added) },
 					{ "removed", ToJson(difference.Removed) },
 					{ "overrides", DescribeOverrides(scene, root, overrides) } });
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Content, true });
 
 		registry.Register({ "prefab.apply",
 			"Writes a prefab instance (the instance the entity belongs to: its root's subtree, also entities added to it) back into its prefab, keeping "
@@ -494,7 +495,11 @@ namespace Strata
 				(*document)["Prefab"] = newSnapshot;
 				if (!Prefab::FromJson(*document, &error))
 					return EditorCommandResult::Fail(fmt::format("The instance cannot be stored as '{}': {}", metadata->Path, error));
-				const std::string text = JsonUtils::Dump(*document, 1, '\t') + "\n";
+				// Laid out as prefab.create writes prefabs: an entity per line.
+				StringDocumentOutput output;
+				if (!SceneDocumentWriter::WriteJson(*document, SceneDocumentKind::Prefab, output, &error))
+					return EditorCommandResult::Fail(fmt::format("The instance cannot be stored as '{}': {}", metadata->Path, error));
+				const std::string text = output.TakeText();
 				std::vector<uint8_t> after(text.begin(), text.end());
 
 				// The scene: what was added to the instance is linked, and every other instance takes the new values except where it

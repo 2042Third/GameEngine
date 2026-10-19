@@ -7,12 +7,14 @@
 #include "Editor/EditorNotifications.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/PropertyEdit.h"
+#include "Editor/SaveTestUtils.h"
 #include "Editor/SceneRecovery.h"
 #include "Perf/SceneGenerators.h"
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
 #include "UI/RecoveryDialog.h"
 
+#include <Strata/Core/Crypto.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/JsonUtils.h>
@@ -246,6 +248,64 @@ TEST_SUITE("Editor.Recovery")
 		harness.Run("scene.save");
 		harness.Context.GetRecovery().Wait();
 		CHECK(ListRecoveryFiles(harness.GetRecoveryDirectory()).empty());
+	}
+
+	TEST_CASE("Edits made while a save writes are in the journal that follows the saved document, and a crash after it recovers them")
+	{
+		Tests::GatedJobSystem jobs;
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryBackgroundSave") / "Game";
+		std::filesystem::path file;
+		nlohmann::json header;
+		std::string body;
+		{
+			RecoveryHarness harness(project);
+			harness.Run("entity.create", { { "name", "Before" } });
+			harness.FlushJournal();
+			{
+				Tests::BackgroundGate gate;
+				REQUIRE(harness.Commands.Execute(harness.Context, "scene.save", { { "wait", false } }).Success);
+				harness.Run("entity.create", { { "name", "During" } });
+				// The journal goes on meanwhile, over the file the save replaces.
+				harness.FlushJournal();
+			}
+			REQUIRE(Tests::WaitUntil([&]()
+			{
+				harness.Context.Update(Timestep(1.0f / 60.0f));
+				return !harness.Context.HasSavesInFlight();
+			}, std::chrono::minutes(1)));
+			harness.Context.GetRecovery().Wait();
+			CHECK(harness.Context.IsSceneModified());
+
+			// Right after the save the journal follows the saved document and holds the edit made while it was written.
+			const std::filesystem::path sceneFile = harness.Context.GetSceneFile(harness.Context.GetSceneHandle()).first;
+			const std::optional<std::vector<uint8_t>> saved = FileSystem::ReadBytes(sceneFile);
+			REQUIRE(saved.has_value());
+			const std::vector<std::filesystem::path> files = ListRecoveryFiles(harness.GetRecoveryDirectory());
+			REQUIRE(files.size() == 1);
+			file = files[0];
+			header = ReadRecoveryHeader(file);
+			CHECK(header["BaseHash"] == Crypto::ToHex(Sha256::Hash(std::span<const uint8_t>(*saved))));
+			const std::optional<std::string> text = FileSystem::ReadText(file);
+			REQUIRE(text.has_value());
+			body = text->substr(text->find('\n') + 1);
+			CHECK(body.find("During") != std::string::npos);
+			CHECK(body.find("Before") == std::string::npos);
+			// Back to the saved scene: this editor leaves nothing behind.
+			harness.Run("edit.undo");
+			harness.FlushJournal();
+			REQUIRE(ListRecoveryFiles(harness.GetRecoveryDirectory()).empty());
+		}
+
+		// The editor crashed with the journal on disk (an earlier process: another start time): the edit comes back.
+		header["Owner"]["ProcessStartTime"] = header["Owner"]["ProcessStartTime"].get<uint64_t>() + 1;
+		REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(header) + "\n" + body));
+		RecoveryHarness harness(project, false);
+		const nlohmann::json entries = harness.Run("scene.recoveryStatus")["entries"];
+		REQUIRE(entries.size() == 1);
+		CHECK(entries[0]["applicable"] == true);
+		harness.Run("scene.recover", { { "scene", entries[0]["id"] }, { "action", "apply" } });
+		CHECK(harness.Context.GetEditScene()->FindEntityByName("Before"));
+		CHECK(harness.Context.GetEditScene()->FindEntityByName("During"));
 	}
 
 	TEST_CASE("The journal is written a few seconds after edits stop")

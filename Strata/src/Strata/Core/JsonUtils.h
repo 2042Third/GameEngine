@@ -32,6 +32,9 @@ namespace Strata
 		static std::optional<nlohmann::json> Parse(std::string_view text, const JsonParseProgress& progress, std::string* outError = nullptr);
 		// Serializes with invalid UTF-8 replaced by U+FFFD. indent < 0 produces compact single-line output.
 		static std::string Dump(const nlohmann::json& json, int indent = -1, char indentCharacter = ' ');
+		// Appends a string as a JSON string, exactly as Dump writes one (escapes, invalid UTF-8 replaced by U+FFFD), without
+		// building a JSON value for text that needs no escaping (writers of large documents).
+		static void AppendString(std::string& out, std::string_view text);
 
 		// Typed member access: return the fallback when the key is missing or holds a different type.
 		static std::string GetString(const nlohmann::json& object, std::string_view key, std::string fallback = {});

@@ -4,6 +4,7 @@
 #include "Editor/SceneEdit.h"
 
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Asset/AssetRegistration.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
@@ -268,6 +269,21 @@ namespace Strata
 				"force: true to discard them (they are kept as recovery data, scene.recoveryStatus)", scene, action, save));
 		}
 
+		EditorCommandHandler AfterSaves(EditorCommandHandler handler)
+		{
+			return [handler = std::move(handler)](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
+			{
+				if (!context.HasSavesInFlight())
+					return handler(context, parameters);
+				return EditorCommandResult::Defer([handler, parameters = nlohmann::json(parameters)](EditorContext& context) -> std::optional<EditorCommandResult>
+				{
+					if (context.HasSavesInFlight())
+						return std::nullopt;
+					return handler(context, parameters);
+				});
+			};
+		}
+
 		nlohmann::json DescribePlayState(const EditorContext& context)
 		{
 			return { { "state", SceneStateToString(context.GetSceneState()) }, { "paused", context.IsPaused() } };
@@ -306,6 +322,25 @@ namespace Strata
 				{ "entityCount", scene.GetEntityCount() },
 				{ "subScenes", std::move(subScenes) },
 				{ "switching", std::move(switching) } };
+		}
+
+		nlohmann::json DescribeSaves(const EditorContext& context)
+		{
+			nlohmann::json saves = nlohmann::json::array();
+			for (const DocumentSaveStatus& status : context.GetSaveStatuses())
+			{
+				saves.push_back({ { "saveId", status.ID }, { "label", status.Label }, { "documents", status.Documents },
+					{ "state", DocumentSaveStateToString(status.State) }, { "progress", status.Progress } });
+			}
+			return saves;
+		}
+
+		nlohmann::json DescribeAssetScan(const EditorContext& context)
+		{
+			const std::optional<AssetScanProgress> scan = context.GetAssetScanProgress();
+			if (!scan)
+				return nullptr;
+			return { { "phase", AssetScanPhaseToString(scan->Phase) }, { "done", scan->Done }, { "total", scan->Total } };
 		}
 
 		std::string GetRunningCopyWarning(const EditorContext& context)

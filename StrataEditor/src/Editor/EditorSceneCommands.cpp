@@ -4,6 +4,10 @@
 #include "Editor/ProjectTemplates.h"
 #include "Editor/SceneEdit.h"
 
+#include <Strata/Asset/AssetManager.h>
+#include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Core/JsonUtils.h>
+#include <Strata/Core/Platform.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
@@ -12,6 +16,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <limits>
@@ -225,6 +230,66 @@ namespace Strata
 			});
 		}
 
+		// Starts a save of the edited scene (`begin`: EditorContext::BeginSaveScene or BeginSaveSceneAs) for scene.save and
+		// scene.saveAs: answered at once without `wait`, else once the save ended, with what it wrote and the frames meanwhile.
+		EditorCommandResult StartSceneSave(EditorContext& context, bool wait, const std::function<uint64_t(EditorContext&, std::string*)>& begin)
+		{
+			const std::optional<ProcessMemoryInfo> before = Platform::GetProcessMemory();
+			const auto started = std::chrono::steady_clock::now();
+			std::string error;
+			const uint64_t id = begin(context, &error);
+			if (id == 0)
+				return EditorCommandResult::Fail(error);
+			const AssetHandle scene = context.GetSceneHandle();
+			std::string path = context.GetSceneFile(scene).second;
+			if (path.empty() && context.GetAssetManager())
+				path = context.GetAssetManager()->GetReservedPath(scene);
+			if (!wait)
+			{
+				const std::optional<DocumentSaveStatus> status = context.GetDocumentSaver().GetStatus(id);
+				return EditorCommandResult::Ok({ { "scene", UUIDToJson(scene) }, { "path", path }, { "saveId", id },
+					{ "state", status ? DocumentSaveStateToString(status->State) : "Done" } });
+			}
+			// Frames are measured from the one that started the save (its snapshot), which the editor records at the start of the
+			// next frame.
+			const uint64_t privateBefore = before ? before->PrivateBytes : 0;
+			const uint64_t firstMeasured = context.GetRecordedFrameCount() + 1;
+			return EditorCommandResult::Defer([id, scene, path, started, privateBefore, peakPrivate = privateBefore, frames = uint64_t(0),
+				frameTimes = FrameTimeRecorder(firstMeasured, c_FrameTimeReserve)](EditorContext& context) mutable -> std::optional<EditorCommandResult>
+			{
+				frames++;
+				frameTimes.Update(context);
+				if (const std::optional<ProcessMemoryInfo> memory = Platform::GetProcessMemory())
+					peakPrivate = std::max(peakPrivate, memory->PrivateBytes);
+				const std::optional<DocumentSaveStatus> status = context.GetDocumentSaver().GetStatus(id);
+				if (!status)
+					return EditorCommandResult::Fail("The save's outcome is no longer known");
+				if (!status->IsFinished())
+					return std::nullopt;
+				if (status->State == DocumentSaveState::Failed)
+				{
+					// The editor told the person already (EditorContext posts a notification of a failed save).
+					EditorCommandResult failed = EditorCommandResult::Fail(status->Error);
+					failed.Announced = true;
+					return failed;
+				}
+				constexpr double c_Megabyte = 1024.0 * 1024.0;
+				const DocumentSaveItemResult* written = status->Items.empty() ? nullptr : &status->Items.front();
+				nlohmann::json value = {
+					{ "scene", UUIDToJson(scene) },
+					{ "path", written ? written->Path : path },
+					{ "bytes", written ? written->Bytes : 0 },
+					{ "entities", written ? written->Entities : 0 },
+					{ "seconds", std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() },
+					{ "frames", frames },
+					{ "memory", { { "privateMBBefore", static_cast<double>(privateBefore) / c_Megabyte },
+						{ "peakPrivateMBDuring", static_cast<double>(peakPrivate) / c_Megabyte } } } };
+				if (!frameTimes.IsEmpty())
+					value["frameTimes"] = frameTimes.Describe();
+				return EditorCommandResult::Ok(std::move(value));
+			});
+		}
+
 		nlohmann::json DescribeSubScene(const SubSceneStatus& status)
 		{
 			return {
@@ -366,17 +431,18 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "entities", std::move(entities) } });
 			}, EditorCommandKind::Query });
 
-		registry.Register({ "scene.new",
+		registry.Register(MayDefer({ "scene.new",
 			"Replaces the edited scene with a new, unsaved one: empty by default, or with a template's content, e.g. \"basic3d\" (a lit start: camera, "
 			"sun, procedural sky, ground, post-processing; the editor camera then looks through the scene's camera; the ground's material "
 			"Materials/Ground.stmat is added to a project that lacks it). Fails while the edited scene has unsaved changes unless force is true (save "
-			"first). Save the new scene with scene.saveAs. Returns discardedChanges (whether unsaved changes were discarded).",
+			"first). Save the new scene with scene.saveAs. Waits for saves in flight (scene.save) first. Returns discardedChanges (whether unsaved "
+			"changes were discarded).",
 			ObjectSchema({
 				{ "name", StringSchema("Scene name") },
 				{ "template", { { "type", "string" }, { "enum", { ProjectTemplates::c_Empty, ProjectTemplates::c_Basic3D } },
 					{ "description", "What the scene starts with (default \"empty\"; see project.templates)" } } },
 				{ "force", ForceSchema() } }),
-			[](EditorContext& context, const nlohmann::json& parameters)
+			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string name = arguments.GetString("name", "Untitled");
@@ -392,17 +458,18 @@ namespace Strata
 				if (!context.NewScene(name, templateId))
 					return EditorCommandResult::Fail(fmt::format("The template '{}' could not be applied", templateId));
 				return EditorCommandResult::Ok({ { "discardedChanges", discarded } });
-			} });
+			}) }));
 
 		registry.Register(MayDefer({ "scene.open",
-			"Opens a scene asset for editing. Fails while the edited scene has unsaved changes unless force is true (save first). The scene is "
+			"Opens a scene asset for editing. Fails while the edited scene has unsaved changes unless force is true (save first); waits for saves in "
+			"flight (scene.save) before it decides. The scene is "
 			"read and loaded with everything it uses in the background while the editor goes on showing the edited scene, which stays read-only "
 			"meanwhile (edits and play.start fail); the command answers once the opened scene replaced it: {scene, name, entities, "
 			"discardedChanges (whether unsaved changes were discarded), seconds, frames, frameTimes (the CPU time of the frames that ran "
 			"meanwhile: count, medianMs, meanMs, p95Ms, maxMs)}. Opening another scene, scene.new or closing the project cancels it. "
 			"scene.loadStatus (and editor.status's sceneLoad) report its progress.",
 			ObjectSchema({ { "scene", AssetSchema("Scene to open") }, { "force", ForceSchema() } }, { "scene" }),
-			[](EditorContext& context, const nlohmann::json& parameters)
+			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const AssetHandle handle = ResolveAsset(context, arguments, "scene", AssetType::Scene);
@@ -412,7 +479,7 @@ namespace Strata
 				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the scene {}", parameters["scene"].dump())))
 					return std::move(*refused);
 				return OpenSceneAndWait(context, handle, context.IsSceneModified());
-			} }));
+			}) }));
 
 		registry.Register(MayDefer({ "scene.loadStatus",
 			"The scene loads under way: open (the scene scene.open, or project.open for the project's start scene, is opening: {scene, startScene, "
@@ -485,28 +552,39 @@ namespace Strata
 				return result;
 			} });
 
-		registry.Register({ "scene.save", "Saves the edited scene to its asset. New scenes need scene.saveAs first.", ObjectSchema({}),
-			[](EditorContext& context, const nlohmann::json&)
+		registry.Register(MayDefer({ "scene.save",
+			"Saves the edited scene to its asset in the background and answers once the file is written (wait false: at once). The frame "
+			"only takes a snapshot of the scene, the document is written on a background thread, and edits made meanwhile stay unsaved (the "
+			"save holds the scene as it was when the command ran). With wait (default true) the answer comes once the file is written and "
+			"published: {scene, path, bytes, entities, seconds, frames, "
+			"frameTimes (the editor's frames meanwhile: count, medianMs, meanMs, p95Ms, maxMs), memory {privateMBBefore, peakPrivateMBDuring}}. "
+			"With wait false it answers at once with {scene, path, saveId, state: Writing | Queued}; editor.status's saving lists the saves "
+			"in flight. A save queues behind one that writes. New scenes need scene.saveAs first.",
+			ObjectSchema({ { "wait", BoolSchema("Answer once the document is written (default true); false answers at once with the save's saveId") } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
 			{
-				std::string error;
-				if (!context.SaveScene(&error))
-					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok({ { "scene", UUIDToJson(context.GetSceneHandle()) } });
-			} });
+				CommandArguments arguments(parameters);
+				const bool wait = arguments.GetBool("wait", true);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				return StartSceneSave(context, wait, [](EditorContext& context, std::string* outError) { return context.BeginSaveScene(outError); });
+			} }));
 
-		registry.Register({ "scene.saveAs", "Saves the edited scene as a new .stscene asset and continues editing it.",
-			ObjectSchema({ { "path", StringSchema("Path relative to the asset directory, e.g. \"Scenes/Level1.stscene\"") } }, { "path" }),
+		registry.Register(MayDefer({ "scene.saveAs",
+			"Saves the edited scene as a new .stscene asset and continues editing it: the scene takes the file's name and the new asset at once (a "
+			"following scene.save writes it), and gets the previous ones back when the save fails. The save runs in the background like scene.save's "
+			"and answers like it (wait, default true: once written; false: at once with its saveId).",
+			ObjectSchema({ { "path", StringSchema("Path relative to the asset directory, e.g. \"Scenes/Level1.stscene\"") },
+				{ "wait", BoolSchema("Answer once the document is written (default true); false answers at once with the save's saveId") } }, { "path" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string path = arguments.GetString("path");
+				const bool wait = arguments.GetBool("wait", true);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				std::string error;
-				if (!context.SaveSceneAs(path, &error))
-					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok({ { "scene", UUIDToJson(context.GetSceneHandle()) } });
-			} });
+				return StartSceneSave(context, wait, [path](EditorContext& context, std::string* outError) { return context.BeginSaveSceneAs(path, outError); });
+			} }));
 
 		nlohmann::json capacitySchema = ObjectSchema({
 			{ "maxBodies", IntegerSchema("Most bodies the physics world holds (each reserves about 80 bytes); 0 sizes it from the bodies the scene "
