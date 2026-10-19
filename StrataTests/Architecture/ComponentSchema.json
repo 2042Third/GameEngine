@@ -147,7 +147,7 @@
 			"Category": "Core",
 			"Description": "Links this entity to the prefab it was created from",
 			"DisplayName": "Prefab Instance",
-			"Extra": false,
+			"Extra": true,
 			"Flags": 16,
 			"Name": "PrefabInstance",
 			"Properties": [
