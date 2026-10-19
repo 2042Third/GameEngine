@@ -144,8 +144,9 @@ TEST_SUITE("Core.Application")
 		specification.Jobs.IOThreadCount = 1;
 		specification.MaxFrames = 3;
 
-		// Each update works for c_FrameWork, then waits 40 ms for the display in the Present stage.
-		constexpr std::chrono::milliseconds c_DisplayWait(40);
+		// Each update works for c_FrameWork, then waits 150 ms for the display in the Present stage: far above the work time's
+		// limit (the one the test above allows), so a work time that counted the wait could not pass.
+		constexpr std::chrono::milliseconds c_DisplayWait(150);
 		FrameProfiler& profiler = FrameProfiler::Get();
 		std::vector<float> presentMs;
 		const uint32_t listener = profiler.AddFrameListener([&](const FrameSample& frame)
@@ -170,7 +171,7 @@ TEST_SUITE("Core.Application")
 		{
 			CAPTURE(frame);
 			CHECK(workTimes[frame] >= minimum);
-			CHECK(workTimes[frame] < 0.03);
+			CHECK(workTimes[frame] < 0.06);
 			CHECK(presentMs[frame] >= static_cast<float>(c_DisplayWait.count()));
 		}
 	}

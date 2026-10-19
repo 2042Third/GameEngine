@@ -2,6 +2,7 @@
 
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Core/FrameProfiler.h"
+#include "Strata/Core/Profiling.h"
 #include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/Renderer.h"
 
@@ -296,6 +297,44 @@ TEST_SUITE("GPU.Renderer.Timers")
 		// NVRHI frees a command list's buffer only once it was executed: it runs now, into timestamps that were reset and
 		// never written, before the profiler goes.
 		REQUIRE(gpu.ExecuteAndWait(commandList));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The back buffer's first preparation in a frame is timed as the Present stage, outside the work time")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		FrameProfiler& profiler = FrameProfiler::Get();
+		profiler.Reset();
+		const FrameStageID present = profiler.FindStage("Present");
+		REQUIRE(present != c_InvalidFrameStage);
+		CHECK_FALSE(profiler.IsStageInWorkTime(present));
+		const FrameStageID ui = profiler.RegisterStage("Test.UI");
+		REQUIRE(ui != c_InvalidFrameStage);
+		float presentMs = 0.0f;
+		const uint32_t listener = profiler.AddFrameListener([&](const FrameSample& frame) { presentMs += frame.StageMs[present]; });
+
+		// The editor's first use of the back buffer is inside its UI stage (where MoltenVK waits for the display's image).
+		// Headless, the device has no image and returns at once: a short time, so many frames, as one frame's can be below
+		// the clock's resolution.
+		double outOfWorkSeconds = 0.0;
+		for (int frame = 0; frame < 200; frame++)
+		{
+			profiler.BeginFrame();
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			{
+				ST_PROFILE_STAGE("Test.UI");
+				CHECK(Renderer::PrepareBackBuffer() == nullptr);
+				CHECK(Renderer::PrepareBackBuffer() == nullptr); // Prepared already: no second wait
+				outOfWorkSeconds += profiler.GetOutOfWorkSeconds();
+			}
+			gpu.GetDevice().EndFrame();
+			profiler.EndFrame(0.001);
+		}
+		profiler.RemoveFrameListener(listener);
+		CHECK(presentMs > 0.0f);
+		CHECK(outOfWorkSeconds > 0.0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
