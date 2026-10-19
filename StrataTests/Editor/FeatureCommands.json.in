@@ -42,7 +42,7 @@
 			"/elements/0/text": { "equals": "Strata!" } } },
 	{ "command": "input.sequence", "parameters": { "steps": 4,
 			"events": [ { "step": 1, "command": "input.click", "parameters": { "entity": "F7E0000000000072" } } ],
-			"observe": [ { "entity": "F7E0000000000066", "script": "UIFeatures", "field": "LastWidget" } ] },
+			"observe": [ { "entity": "F7E0000000000083", "script": "UIFeatures", "field": "LastWidget" } ] },
 		"expect": {
 			"/seen/0/step": { "equals": 1 },
 			"/samples/0/values/0/value": { "equals": "Play Button" } } },
