@@ -2265,6 +2265,19 @@ a layer's cell at their positions, or into the persistent scene. `world.status` 
 cell list), `world.edit` sets the edit layer, visible layers and radius scale for the session, and `world.loadCells`
 loads cells by key or region, pinned until let go (`wait` answers once they are in).
 
+**The cell map** (`StrataEditor/src/UI/CellMap.h`, the Streaming panel's World section, first while a world streams: the
+running game's `WorldStreamingSystem` streamer while playing, the editor's otherwise). It draws a world's cells as
+squares on the ground plane (+X right, -Z up), one layer or all overlaid (finer cells on top), colored with the theme's
+meanings (unloaded, wanted, loading Sulfur, loaded Ochre, unloading, failed Cinnabar), outlined in the warning color when
+unsaved, with a pin on pinned cells, and the sources as dots with their radius circles and facing; a legend counts the
+cells per state. Drag pans, the wheel zooms around the mouse and a double click frames the sources; hovering names a
+cell (state, entities, cooked bodies, error), a click selects it, and its context menu runs `world.loadCells` (Load and
+pin, Unpin) or reveals the cell's scene. Its cells are copied from the streamer only when `WorldStreamingStats::
+StateVersion`, the World asset object or `EditorWorld::GetDirtyVersion` changed, and only while the section is drawn
+(a closed panel copies nothing, `Editor.UI.World`); only the cells in view are drawn, walking the grid squares in view
+or the cells, whichever are fewer, as draw-list rectangles. Its height follows the space left in the panel (4 to 18
+font sizes), so a short bottom dock shows it whole.
+
 ## Scripting
 
 Rules for the ABI, host functions and the SDK are in AGENTS.md and DeveloperGuide.md, "Scripting"; writing scripts

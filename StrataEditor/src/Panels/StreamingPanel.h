@@ -1,5 +1,6 @@
 #pragma once
 
+#include "UI/CellMap.h"
 #include "UI/EditorPanelRegistry.h"
 
 #include <Strata/Asset/AssetManager.h>
@@ -59,6 +60,9 @@ namespace Strata
 	// While a game runs, its physics capacity (IPhysicsCapacity, constant time) is read there too, for the Physics section
 	// (bodies against the capacity, waiting bodies, the last frame's builds and destructions, growths, reserved memory) and
 	// the status bar's pill of bodies without collision.
+	// While the editor has a world open, or the running game streams one, the World section shows its cells on a map
+	// (UI/CellMap: the game's streamer while playing, the editor's otherwise), copied only when a cell's state changed and
+	// only while the section is drawn.
 	// The table is read at most every c_TableRefreshSeconds while the panel is visible (and when its sort or filter
 	// changes): the main thread only copies the residency (GetResidencySamples) and, when GetMetadataVersion changed, the
 	// metadata; a job names, sorts and filters the rows (BuildTable), and the table shows them once it finished. So no frame
@@ -88,6 +92,9 @@ namespace Strata
 		const std::optional<PhysicsCapacityInfo>& GetPhysics() const { return m_Physics; }
 		// Opens the Physics section at the next draw (the status bar's pill of bodies without collision leads there).
 		void RevealPhysics() { m_RevealPhysics = true; }
+		// Opens the World section, with its cell map, at the next draw (the Hierarchy's world strip leads there).
+		void RevealWorld() { m_RevealWorld = true; }
+		const CellMap& GetCellMap() const { return m_CellMap; }
 		// The asset table as last built, for tests and tools: its rows (every listed asset, unfiltered), the labels of the
 		// rows it shows (filtered, in their order), whether a build is running and how many builds started.
 		size_t GetTableRowCount() const;
@@ -142,6 +149,8 @@ namespace Strata
 		void DrawStreaming(const AssetManagerStats& stats);
 		void DrawUploads(const AssetManagerStats& stats);
 		void DrawPhysics(const PhysicsCapacityInfo& physics);
+		// The World section: the streaming world's statistics and its cell map.
+		void DrawWorld(EditorPanelContext& context, const WorldStreamer& streamer, bool editable);
 		void DrawTable();
 		// Measures the fixed columns' widths (again only when the text size changed).
 		void UpdateColumnWidths();
@@ -160,6 +169,8 @@ namespace Strata
 		std::optional<AssetManagerStats> m_Stats;
 		std::optional<PhysicsCapacityInfo> m_Physics;
 		bool m_RevealPhysics = false;
+		bool m_RevealWorld = false;
+		CellMap m_CellMap;
 		std::array<float, c_UploadHistoryFrames> m_UploadHistory = {}; // MB per frame, a ring
 		uint32_t m_UploadCursor = 0;
 		uint32_t m_UploadSamples = 0;

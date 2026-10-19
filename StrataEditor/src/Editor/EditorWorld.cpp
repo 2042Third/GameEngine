@@ -424,7 +424,8 @@ namespace Strata
 
 	void EditorWorld::MarkCellDirty(AssetHandle cell)
 	{
-		m_DirtyCells.insert(cell);
+		if (m_DirtyCells.insert(cell).second)
+			m_DirtyVersion++;
 	}
 
 	void EditorWorld::MarkStates(const std::vector<EntityState>& states)
@@ -625,6 +626,7 @@ namespace Strata
 			}
 			outResult.Documents.push_back({ path, "cell", *bytes, document["Scene"]["Entities"].size() });
 			m_DirtyCells.erase(cell);
+			m_DirtyVersion++;
 
 			// Its index entry, from what was just written.
 			Scene saved("Cell");

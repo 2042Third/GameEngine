@@ -1,6 +1,8 @@
 #include "Panels/StreamingPanel.h"
 
 #include "Editor/EditorContext.h"
+#include "Editor/EditorWorld.h"
+#include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/ItemProbe.h"
 #include "UI/Theme.h"
@@ -8,12 +10,16 @@
 
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/World/WorldAsset.h>
+#include <Strata/World/WorldStreamingSystem.h>
 
 #include <imgui.h>
+#include <nlohmann/json.hpp>
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <initializer_list>
 #include <limits>
 #include <numeric>
@@ -272,7 +278,7 @@ namespace Strata
 		WaitForTableBuild();
 	}
 
-	void StreamingPanel::OnImGuiRender(EditorPanelContext&)
+	void StreamingPanel::OnImGuiRender(EditorPanelContext& context)
 	{
 		if (!m_Stats)
 		{
@@ -306,6 +312,34 @@ namespace Strata
 			&& available * (1.0f - c_OverviewShare) - ImGui::GetStyle().ItemSpacing.x >= GetTableWidth(0);
 		if (sideBySide)
 			ImGui::BeginChild("Overview", ImVec2(available * c_OverviewShare, 0.0f), ImGuiChildFlags_None);
+		// The world first while one streams (the game's while playing, the editor's otherwise): the cells are what streams then.
+		const WorldStreamer* streamer = nullptr;
+		bool editable = false;
+		if (context.Context.IsPlaying())
+		{
+			const Ref<Scene>& scene = context.Context.GetActiveScene();
+			const WorldStreamingSystem* system = scene && scene->IsRunning() ? scene->GetSystem<WorldStreamingSystem>() : nullptr;
+			streamer = system && system->GetStreamer() && system->GetStreamer()->GetWorld().IsValid() ? system->GetStreamer() : nullptr;
+		}
+		else if (const EditorWorld* world = context.Context.GetWorld())
+		{
+			streamer = &world->GetStreamer();
+			editable = true;
+		}
+		if (streamer)
+		{
+			if (m_RevealWorld)
+				ImGui::SetNextItemOpen(true);
+			// Formatted into a buffer: an open world's frames allocate nothing for it.
+			const WorldStreamingStats stats = streamer->GetStats();
+			const Ref<WorldAsset> asset = streamer->GetWorldAsset();
+			std::array<char, 160> summary {};
+			std::snprintf(summary.data(), summary.size(), "%s \xC2\xB7 %u loaded \xC2\xB7 %u loading%s", asset ? asset->GetData().Name.c_str() : "World",
+				stats.CellsLoaded, stats.CellsLoading, stats.CellsFailed > 0 ? " \xC2\xB7 failures" : "");
+			if (UI::SectionHeader("Streaming.World", "World", ImGuiTreeNodeFlags_DefaultOpen, summary.data()))
+				DrawWorld(context, *streamer, editable);
+		}
+		m_RevealWorld = false;
 		if (UI::SectionHeader("Streaming.Memory", "Memory"))
 			DrawPools(stats);
 		if (UI::SectionHeader("Streaming.Loads", "Loads and uploads"))
@@ -332,6 +366,31 @@ namespace Strata
 		else if (UI::SectionHeader("Streaming.Assets", "Assets"))
 		{
 			DrawTable();
+		}
+	}
+
+	void StreamingPanel::DrawWorld(EditorPanelContext& context, const WorldStreamer& streamer, bool editable)
+	{
+		// The cells in each state are the legend's counts; the header's summary has the world's name and its loaded cells.
+		m_CellMap.Update(streamer, editable ? context.Context.GetWorld() : nullptr);
+		const std::optional<CellMap::Request> request = m_CellMap.Draw(streamer, ImGui::GetFontSize() * CellMap::c_HeightInFontSizes, editable);
+		if (!request)
+			return;
+		const Ref<WorldAsset> world = streamer.GetWorldAsset();
+		const WorldLayer* layer = world ? world->GetData().FindLayer(request->Key.Layer) : nullptr;
+		const nlohmann::json cell = { { "layer", layer ? nlohmann::json(layer->Name) : nlohmann::json(request->Key.Layer) }, { "x", request->Key.X }, { "z", request->Key.Z } };
+		switch (request->Action)
+		{
+			case CellMap::Request::Kind::LoadAndPin:
+				RunEditorCommand(context.Context, context.Commands, "world.loadCells", { { "cells", nlohmann::json::array({ cell }) } });
+				break;
+			case CellMap::Request::Kind::Unpin:
+				RunEditorCommand(context.Context, context.Commands, "world.loadCells", { { "unpin", nlohmann::json::array({ cell }) } });
+				break;
+			case CellMap::Request::Kind::Show:
+				if (m_RevealAsset)
+					m_RevealAsset(request->Scene);
+				break;
 		}
 	}
 

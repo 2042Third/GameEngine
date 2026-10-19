@@ -89,6 +89,8 @@ namespace Strata
 		bool IsPersistentDirty() const { return m_PersistentDirty; }
 		const std::unordered_set<AssetHandle>& GetDirtyCells() const { return m_DirtyCells; }
 		bool IsCellDirty(AssetHandle cell) const { return m_DirtyCells.contains(cell); }
+		// Changes whenever a cell becomes dirty or is saved (the cell map redraws its outlines then).
+		uint64_t GetDirtyVersion() const { return m_DirtyVersion; }
 
 		// Puts the top-level entities an edit tracks into the cells their positions lie in, within the edit (so one undo step
 		// reverses it): an entity of a cell moves to the cell of its layer at its world position (a gizmo drag or a translation
@@ -181,6 +183,7 @@ namespace Strata
 		std::set<WorldCellKey> m_SelectionPins;       // Cells of the selected entities
 		std::set<WorldCellKey> m_RequestedPins;       // Undo steps' cells, until the next save
 		std::unordered_set<AssetHandle> m_DirtyCells; // Pinned too
+		uint64_t m_DirtyVersion = 0;
 		std::set<WorldCellKey> m_StreamerPins;        // What the streamer has pinned now
 		bool m_PersistentDirty = false;
 		SceneSettings m_SavedSettings;                // The persistent scene's settings as saved: any step that changes them marks it
