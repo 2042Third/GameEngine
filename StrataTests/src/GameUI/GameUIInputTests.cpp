@@ -1073,6 +1073,50 @@ TEST_SUITE("GameUI.InputField")
 		CHECK_MESSAGE(GameUIScene::Get(scene.Target).Validate(&error), error);
 	}
 
+	TEST_CASE("Stopping play or losing the last canvas gives the keyboard back, also in the frame Escape ended editing")
+	{
+		SUBCASE("Play stops while a field is edited")
+		{
+			UIInputScene scene;
+			AddField(scene, "Name");
+			scene.Play();
+			scene.Frame();
+			scene.Click({ 200.0f, 120.0f });
+			REQUIRE(Input::IsKeyboardCaptured());
+			scene.Target.OnRuntimeStop();
+			CHECK_FALSE(Input::IsKeyboardCaptured()); // Before the scene's destructor resets input
+		}
+		SUBCASE("Play stops in the frame Escape ended editing, which keeps the keyboard to that frame's end")
+		{
+			UIInputScene scene;
+			AddField(scene, "Name");
+			scene.Play();
+			scene.Frame();
+			scene.Click({ 200.0f, 120.0f });
+			Input::SimulateKey(Key::Escape, true);
+			scene.Frame();
+			REQUIRE(scene.Focused().empty());
+			REQUIRE(Input::IsKeyboardCaptured());
+			scene.Target.OnRuntimeStop();
+			CHECK_FALSE(Input::IsKeyboardCaptured());
+			Input::SimulateKey(Key::Escape, false);
+		}
+		SUBCASE("The last canvas goes while a field is edited")
+		{
+			// The field stays (a script turns the menu's canvas into a plain entity): only the scene's UI went.
+			UIInputScene scene;
+			AddField(scene, "Name");
+			scene.Play();
+			scene.Frame();
+			scene.Click({ 200.0f, 120.0f });
+			REQUIRE(Input::IsKeyboardCaptured());
+			scene.Canvas.RemoveComponent<UICanvasComponent>();
+			scene.Frame();
+			CHECK_FALSE(Input::IsKeyboardCaptured());
+			CHECK_FALSE(Input::IsPointerCaptured());
+		}
+	}
+
 	TEST_CASE("The character limit cuts typed and set text, and line breaks never enter a field")
 	{
 		UIInputScene scene;
