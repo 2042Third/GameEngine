@@ -15,6 +15,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace Strata
@@ -151,6 +152,9 @@ namespace Strata
 		uint64_t m_AwaitedSave = 0;
 		Ref<WorldCookCache> m_WorldCookCache; // The editor's (EditorContext::GetWorldCookCache), shared with the cooks
 		std::vector<Scope<WorldCook>> m_Cooks;
+		// The physics capacity each cooked world's persistent scene needs (WorldCookReport::RecommendedMaxBodies): the packed
+		// scene gets it when it saved less (AssetPackWriteOptions::AdjustSceneSettings).
+		std::unordered_map<AssetHandle, uint32_t> m_WorldCapacities;
 		AssetPackBuildOptions m_PackOptions;
 		GameManifest m_Manifest;
 		std::string m_FileName; // Of the pack, manifest and executable, without extension

@@ -14,6 +14,7 @@
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Runtime/GameRuntime.h>
+#include <Strata/Scene/CookedScene.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/SceneSerializer.h>
@@ -298,5 +299,20 @@ TEST_SUITE("Editor.WorldCook")
 		const IPhysicsCapacity* capacity = game->GetScene()->GetService<IPhysicsCapacity>();
 		REQUIRE(capacity);
 		CHECK(capacity->GetCapacityInfo().MaxBodies >= recommended);
+
+		// The packed persistent scene carries the cooked capacity (the export's scene transform), and every document, the
+		// cells too, is in the cooked binary form.
+		std::vector<uint8_t> bytes;
+		REQUIRE(game->GetAssetManager()->ReadStoredData(project.Persistent, bytes, &error));
+		REQUIRE(CookedScene::IsCooked(bytes));
+		const std::optional<CookedSceneContents> persistent = CookedSceneReader::Read(bytes, {}, &error);
+		REQUIRE_MESSAGE(persistent, error);
+		CHECK(persistent->Settings["PhysicsCapacity"]["MaxBodies"] == recommended);
+		for (const WorldCell& cell : packed->GetData().Cells)
+		{
+			std::vector<uint8_t> cellBytes;
+			REQUIRE(game->GetAssetManager()->ReadStoredData(cell.Scene, cellBytes, &error));
+			CHECK(CookedScene::IsCooked(cellBytes));
+		}
 	}
 }

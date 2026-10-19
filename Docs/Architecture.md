@@ -2677,8 +2677,10 @@ with `SceneLoadOptions::PrepareSystems` is `Preparing`) loads, around the scene'
 `LoadBeforeStart`, advancing them with `Scene::UpdateSubScenes` within the frame's budget, and returns once they are
 loaded or failed; physics' hook then builds their bodies and the renderer's preparation their proxies. Before that, it
 raises the scene's `PhysicsCapacity.MaxBodies` to the cooked index's recommendation when it is lower, so a game never
-starts with less room than its world needs (what an export transform of the persistent scene's settings would save into
-the pack once world-io's `AssetPackCookOptions` lands). The game thus
+starts with less room than its world needs; exports also save that capacity into the packed persistent scene
+(`GameExport` passes the cooks' `RecommendedMaxBodies` as `AssetPackWriteOptions::AdjustSceneSettings`, raising a lower
+`PhysicsCapacity.MaxBodies`), so loads without preparation get it too, and the cells are packed in the cooked binary form
+like every scene. The game thus
 swaps in a world whose ground exists and has collision, while its loading scene plays. A world started without
 preparation (tools and tests calling `OnRuntimeStart`) streams its start cells over its first frames;
 `WorldStreamingSystem::WaitForStartCells` waits for them.

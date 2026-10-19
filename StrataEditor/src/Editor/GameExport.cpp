@@ -8,12 +8,14 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/StringUtils.h>
+#include <Strata/Scene/Scene.h>
 #include <Strata/World/WorldAsset.h>
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cctype>
+#include <unordered_map>
 
 namespace Strata
 {
@@ -427,6 +429,11 @@ namespace Strata
 			const std::vector<uint8_t> after(text.begin(), text.end());
 			if (before != after && !AssetEdit::ApplyDocument(*m_Assets, cook->GetWorld(), after, &error))
 				return fail(fmt::format("The cooked index of the world '{}' cannot be written: {}", path, error));
+			if (const AssetHandle persistent = cook->GetCookedData().PersistentScene; persistent.IsValid())
+			{
+				uint32_t& capacity = m_WorldCapacities[persistent];
+				capacity = std::max(capacity, cook->GetReport().RecommendedMaxBodies);
+			}
 		}
 		m_Cooks.clear();
 		return true;
@@ -467,9 +474,10 @@ namespace Strata
 			std::filesystem::path ScriptModulePath;
 			std::vector<uint8_t> ScriptModuleBytes;
 			uint64_t PackBytes = 0;
+			std::unordered_map<AssetHandle, uint32_t> WorldCapacities;
 		};
 		Ref<JobData> data = CreateRef<JobData>(JobData { std::move(plan), m_Options, m_Manifest, m_FileName, m_Runtime, m_ScriptModulePath,
-			std::move(m_ScriptModuleBytes), packBytes });
+			std::move(m_ScriptModuleBytes), packBytes, m_WorldCapacities });
 		Ref<Shared> shared = m_Shared;
 		EditorAssetManager* assets = m_Assets.get();
 
@@ -503,6 +511,17 @@ namespace Strata
 				writeOptions.CookDocuments = options.CookDocuments;
 				writeOptions.Cancel = &shared->Cancel;
 				writeOptions.Progress = [&shared](uint64_t done, uint64_t) { shared->DoneBytes = done; };
+				// A world's game never starts with less physics room than its cook found it needs: the packed persistent scene gets
+				// the cooked capacity when it saved less (0, automatic, counts its own bodies only).
+				if (!data->WorldCapacities.empty())
+				{
+					writeOptions.AdjustSceneSettings = [capacities = data->WorldCapacities](AssetHandle scene, SceneSettings& settings)
+					{
+						const auto found = capacities.find(scene);
+						if (found != capacities.end() && settings.PhysicsCapacity.MaxBodies < found->second)
+							settings.PhysicsCapacity.MaxBodies = found->second;
+					};
+				}
 				std::string error;
 				if (!assets->WriteAssetPack(result.AssetPack, data->Plan, writeOptions, &result.Pack, &error))
 				{
