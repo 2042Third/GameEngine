@@ -5,6 +5,7 @@
 #include "Editor/HarnessEditor.h"
 #include "Editor/WorldProjectUtils.h"
 #include "EditorLayer.h"
+#include "Panels/ContentBrowserPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
 #include "Panels/StreamingPanel.h"
 #include "UI/CellMap.h"
@@ -13,12 +14,14 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/World/WorldAsset.h>
 
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
 #include <set>
 #include <string>
+#include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -230,5 +233,60 @@ TEST_SUITE("Editor.UI.World")
 		editor.LookFrom(glm::vec3(140.0f, 10.0f, 140.0f));
 		editor.Settle();
 		CHECK(map.GetRebuildCount() == rebuilds);
+	}
+
+	TEST_CASE("The Asset panel shows a World asset's layers, cooks it and opens it")
+	{
+		WorldEditor editor("WorldUIAsset");
+		const AssetHandle world = UUID(c_GenWorldHandle);
+		REQUIRE(editor.Context().SetInspectedAsset(world));
+		editor.Layer->GetPanels().Focus(EditorPanels::c_AssetInspector);
+		REQUIRE(editor.FramesUntil([]() { return UI::ItemProbe::Find("AssetInspector.WorldLayers").has_value(); }));
+		CHECK(UI::ItemProbe::Find("AssetInspector.WorldIndex").has_value());
+		CHECK(ImGuiHarness::CountFallbackGlyphs(editor.FindPanelWindow(EditorPanels::c_AssetInspector)) == 0);
+		// The world is open: Open has nothing to do.
+		REQUIRE(UI::ItemProbe::Find("AssetInspector.OpenWorld"));
+		CHECK_FALSE(UI::ItemProbe::Find("AssetInspector.OpenWorld")->Enabled);
+
+		// Cook measures every cell into the world's index, off the frame.
+		REQUIRE(editor.Click("AssetInspector.CookWorld"));
+		REQUIRE(editor.FramesUntil([]()
+		{
+			const std::optional<UI::ItemProbe::Item> cook = UI::ItemProbe::Find("AssetInspector.WorldCook");
+			return cook && cook->Text.rfind("Cooked 25 cells", 0) == 0;
+		}));
+		std::vector<uint8_t> bytes;
+		REQUIRE(editor.Context().GetAssetManager()->ReadStoredData(world, bytes));
+		const Ref<WorldAsset> cooked = WorldAsset::Deserialize(bytes);
+		REQUIRE(cooked);
+		REQUIRE(cooked->GetData().Index.has_value());
+		CHECK(cooked->GetData().Index->Cells.size() == 25);
+
+		// Away from the world, Open opens it again.
+		editor.RunToCompletion("scene.new", { { "name", "Elsewhere" }, { "force", true } });
+		REQUIRE_FALSE(editor.Context().GetWorld());
+		editor.Frames(2);
+		REQUIRE(editor.Click("AssetInspector.OpenWorld"));
+		CHECK(editor.FramesUntil([&]() { return editor.Context().GetWorld() != nullptr; }));
+	}
+
+	TEST_CASE("New > World in the Content Browser makes a world in the open folder and opens it")
+	{
+		WorldEditor editor("WorldUINew");
+		ContentBrowserPanel* browser = editor.Layer->GetPanels().Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser);
+		REQUIRE(browser);
+		editor.Layer->GetPanels().Focus(EditorPanels::c_ContentBrowser);
+		browser->SetCurrentDirectory("Worlds");
+		editor.Frames(3);
+		REQUIRE(editor.Click("ContentBrowser.New"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("ContentBrowser.New.World"));
+		REQUIRE(editor.FramesUntil([&]()
+		{
+			const EditorWorld* world = editor.Context().GetWorld();
+			return world && world->GetWorld() == editor.Context().GetAssetManager()->FindAssetByPath("Worlds/World.stworld");
+		}));
+		CHECK(editor.Context().GetAssetManager()->FindAssetByPath("Worlds/World.stscene") == editor.Context().GetSceneHandle());
+		CHECK(editor.ProbeText("Hierarchy.WorldName") == "World");
 	}
 }

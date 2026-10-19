@@ -359,6 +359,22 @@ namespace Strata
 		BeginRename(folder);
 	}
 
+	void ContentBrowserPanel::CreateWorld(EditorPanelContext& panelContext, EditorAssetManager& assets)
+	{
+		// "World", "World 2", ... in this folder, with a persistent scene of the same name; it replaces the edited scene, so
+		// the person is asked about unsaved changes first.
+		std::string path = CommandUtils::MakeUniqueAssetPath(assets, m_View.GetFolder(), "World", ".stworld", "World");
+		path.resize(path.size() - std::string_view(".stworld").size());
+		auto create = [&runner = panelContext.Runner, &context = panelContext.Context, &commands = panelContext.Commands, path](bool force)
+		{
+			RunEditorCommandDeferred(runner, context, commands, "world.create", { { "path", path }, { "force", force } });
+		};
+		if (panelContext.Shell)
+			panelContext.Shell->RequestDiscardChanges([create]() { create(true); });
+		else
+			create(false);
+	}
+
 	void ContentBrowserPanel::CreateMaterial(EditorPanelContext& panelContext, EditorAssetManager& assets)
 	{
 		// "Material", "Material 2", ...: made, selected (the Asset tab shows it) and renamed in place, like a new folder.
@@ -544,6 +560,10 @@ namespace Strata
 			UI::ItemProbe::Record("ContentBrowser.New.Folder");
 			const bool material = ImGui::MenuItem((std::string(Icons::Palette) + "  Material").c_str());
 			UI::ItemProbe::Record("ContentBrowser.New.Material");
+			const bool world = ImGui::MenuItem((std::string(Icons::Earth) + "  World").c_str());
+			UI::ItemProbe::Record("ContentBrowser.New.World");
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+				ImGui::SetTooltip("A world of streamed cells and its persistent scene, opened for editing (world.create)");
 			// Scripts live in the project's script directory, not among the assets: the editor's New Script dialog writes them.
 			const bool canWriteScript = panelContext.Shell != nullptr;
 			const bool script = ImGui::MenuItem((std::string(Icons::FileCode) + "  Script...").c_str(), nullptr, false, canWriteScript);
@@ -552,6 +572,8 @@ namespace Strata
 				CreateFolder(panelContext);
 			if (material)
 				CreateMaterial(panelContext, assets);
+			if (world)
+				CreateWorld(panelContext, assets);
 			if (script)
 				panelContext.Shell->ShowNewScriptDialog();
 			ImGui::EndPopup();
@@ -1158,6 +1180,11 @@ namespace Strata
 		{
 			if (EditorAssetManager* assets = context.GetAssetManager())
 				CreateMaterial(panelContext, *assets);
+		}
+		if (ImGui::MenuItem((std::string(Icons::Earth) + "  New World").c_str()))
+		{
+			if (EditorAssetManager* assets = context.GetAssetManager())
+				CreateWorld(panelContext, *assets);
 		}
 		if (ImGui::MenuItem((std::string(Icons::FileCode) + "  New Script...").c_str(), nullptr, false, panelContext.Shell != nullptr))
 			panelContext.Shell->ShowNewScriptDialog();

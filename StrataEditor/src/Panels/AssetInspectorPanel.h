@@ -50,6 +50,8 @@ namespace Strata
 		void DrawModelSummary(EditorAssetManager& assets, const AssetMetadata& metadata);
 		void DrawAudioPreview(AssetHandle handle);
 		void DrawDetails(EditorAssetManager& assets, const AssetMetadata& metadata);
+		// A World asset: its layers, its cells and what its cook measured.
+		void DrawWorldSummary(EditorAssetManager& assets, const AssetMetadata& metadata);
 	private:
 		MaterialEditor m_MaterialEditor;
 		AnimationAssetViews m_AnimationViews;
@@ -71,6 +73,15 @@ namespace Strata
 			std::string Error;
 		};
 		Ref<ApplyState> m_Apply = CreateRef<ApplyState>();
+		// The last world.cook the Cook button started, shared with its completion.
+		struct CookState
+		{
+			bool Running = false;
+			AssetHandle World = UUID::Null();
+			std::string Outcome; // What it found, or why it failed
+			bool Failed = false;
+		};
+		Ref<CookState> m_Cook = CreateRef<CookState>();
 	};
 
 }
