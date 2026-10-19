@@ -11,6 +11,7 @@
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scene/SceneWorkBudget.h"
 #include "Strata/Scene/SubScene.h"
 #include "TestHelpers.h"
 
@@ -265,6 +266,106 @@ TEST_SUITE("Scene.Streaming")
 		CHECK(CountOccurrences(GetLog(scene), ".Lifecycle.Destroy;") == c_Streamed);
 		CHECK(GetLog(scene).find("Resident.Lifecycle.Destroy") == std::string::npos);
 		CHECK(scene.GetEntityByUUID(resident.GetUUID()));
+		std::string error;
+		CHECK_MESSAGE(renderScene.Validate(&error), error);
+		CheckSceneCaches(scene);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("An unloading sub-scene leaves scripts' updates, physics, audio and rendering in the request's frame, before its entities go")
+	{
+		ScopedJobSystem jobs(2, 1);
+		ScopedAudioEngine audio;
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		// A cell: 300 static boxes as top-level leaves (a cell's usual entities), a root whose children are static boxes, and
+		// an entity with a script and a sound.
+		Ref<Scene> sub = CreateRef<Scene>("Cell");
+		for (int index = 0; index < 300; index++)
+		{
+			Entity box = sub->CreateEntity("Box");
+			box.GetComponent<TransformComponent>().Translation = glm::vec3(static_cast<float>(index % 20) * 3.0f, 0.0f, static_cast<float>(index / 20) * 3.0f);
+			box.AddComponent<BoxColliderComponent>();
+			box.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		}
+		Entity group = sub->CreateEntity("Group");
+		group.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, -20.0f);
+		for (int index = 0; index < 10; index++)
+		{
+			Entity part = sub->CreateChildEntity(group, "Part");
+			part.GetComponent<TransformComponent>().Translation = glm::vec3(static_cast<float>(index) * 3.0f, 0.0f, 0.0f);
+			part.AddComponent<BoxColliderComponent>();
+		}
+		Entity actor = sub->CreateEntity("Actor");
+		AddScriptEntry(actor, "Lifecycle");
+		actor.AddComponent<AudioSourceComponent>();
+		sub->UpdateWorldTransforms();
+
+		Scene scene("Level");
+		CreateLogEntity(scene);
+		Entity resident = scene.CreateEntity("Resident");
+		resident.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, 200.0f);
+		resident.AddComponent<BoxColliderComponent>();
+		resident.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		AddScriptEntry(resident, "Lifecycle");
+		resident.AddComponent<AudioSourceComponent>();
+		scene.OnRuntimeStart();
+		RenderScene& renderScene = RenderScene::Get(scene);
+		auto countActiveProxies = [&]()
+		{
+			uint32_t count = 0;
+			for (uint32_t proxy = 0; proxy < renderScene.GetProxyCapacity(); proxy++)
+			{
+				if (renderScene.GetEntity(proxy) != entt::null && (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Active) != 0)
+					count++;
+			}
+			return count;
+		};
+		const SubSceneID id = scene.BeginAdditiveLoad(sub);
+		UpdateUntilSettled(scene, id, [&]() { renderScene.Sync(nullptr); });
+		REQUIRE(scene.IsSubSceneLoaded(id));
+		scene.OnUpdateRuntime(c_FrameTime);
+		renderScene.Sync(nullptr);
+		PhysicsSystem& physics = *scene.GetSystem<PhysicsSystem>();
+		AudioSystem& sounds = *scene.GetSystem<AudioSystem>();
+		const glm::vec3 down(0.0f, -1.0f, 0.0f);
+		const glm::vec3 overBox(6.0f, 5.0f, 3.0f);
+		const glm::vec3 overPart(6.0f, 5.0f, -20.0f);
+		REQUIRE(physics.GetStats().StaticBodyCount == 311);
+		REQUIRE(physics.Raycast(overBox, down, 10.0f).has_value());
+		REQUIRE(physics.Raycast(overPart, down, 10.0f).has_value());
+		REQUIRE(sounds.GetStats().SourceCount == 2);
+		REQUIRE(countActiveProxies() == 301);
+
+		// The request's frame has no time left to destroy anything: every entity stays, yet none of them is in the game.
+		ClearLog(scene);
+		REQUIRE(scene.UnloadSubScene(id));
+		const size_t entities = scene.GetEntityCount();
+		SceneWorkBudget spent = SceneWorkBudget::ForFrame(scene.GetSettings());
+		spent.EntitiesToCreate = 0;
+		spent.EntitiesToDestroy = 0;
+		spent.Deadline = std::chrono::steady_clock::now();
+		scene.OnUpdateRuntime(c_FrameTime, &spent);
+		renderScene.Sync(nullptr);
+		CHECK(scene.GetEntityCount() == entities);
+		CHECK(physics.GetStats().StaticBodyCount == 1);
+		CHECK_FALSE(physics.Raycast(overBox, down, 10.0f).has_value());
+		CHECK_FALSE(physics.Raycast(overPart, down, 10.0f).has_value());
+		CHECK(sounds.GetStats().SourceCount == 1);
+		CHECK(countActiveProxies() == 1);
+		const std::string log = GetLog(scene);
+		CHECK(log.find("Resident.Lifecycle.Update;") != std::string::npos);
+		CHECK(log.find("Actor.Lifecycle.Update;") == std::string::npos);
+		CHECK(log.find("Actor.Lifecycle.Destroy;") == std::string::npos);
+
+		// The unload then destroys them, and nothing comes back.
+		scene.FlushSubSceneUnloads();
+		scene.OnUpdateRuntime(c_FrameTime);
+		renderScene.Sync(nullptr);
+		CHECK(scene.GetEntityCount() == entities - 312);
+		CHECK(physics.GetStats().StaticBodyCount == 1);
+		CHECK(sounds.GetStats().SourceCount == 1);
+		CHECK(countActiveProxies() == 1);
+		CHECK(GetLog(scene).find("Actor.Lifecycle.Destroy;") != std::string::npos);
 		std::string error;
 		CHECK_MESSAGE(renderScene.Validate(&error), error);
 		CheckSceneCaches(scene);
