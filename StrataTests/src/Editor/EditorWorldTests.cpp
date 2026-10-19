@@ -3,6 +3,7 @@
 #include "Editor/CellBoundsOverlay.h"
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
+#include "Editor/SaveTestUtils.h"
 #include "Editor/EditorWorld.h"
 #include "Editor/SceneRaycast.h"
 #include "Editor/WorldProjectUtils.h"
@@ -690,6 +691,30 @@ TEST_SUITE("Editor.World")
 		CHECK_FALSE(project.Try("world.create", { { "path", "Worlds/Bad" }, { "layers", { "A", "A" } }, { "open", false } }).Success);
 		CHECK_FALSE(project.Try("world.create", { { "path", "../Outside" }, { "open", false } }).Success);
 		CHECK_FALSE(FileSystem::Exists(assets / "Worlds" / "Bad.stworld"));
+	}
+
+	TEST_CASE("world.create waits for a save in flight before it opens the new world, which then needs no force")
+	{
+		GatedJobSystem jobs;
+		GridWorldProject project("EditorWorldCreateAfterSave", 2);
+		REQUIRE_FALSE(project.Context.GetWorld());
+		project.Run("scene.saveAs", { { "path", "Scenes/Plain.stscene" } });
+		project.Run("entity.create", { { "name", "Before The World" } });
+		REQUIRE(project.Context.IsSceneModified());
+		{
+			BackgroundGate gate;
+			REQUIRE(project.Commands.Execute(project.Context, "scene.save", { { "wait", false } }).Success);
+			EditorCommandResult created = project.Commands.Execute(project.Context, "world.create", { { "path", "Worlds/Later" } });
+			REQUIRE(created.IsPending());
+			project.Context.Update(Timestep(1.0f / 60.0f));
+			CHECK_FALSE(project.Context.GetWorld());
+			gate.Open();
+			created = CompleteCommand(project.Context, std::move(created));
+			INFO(created.Error);
+			REQUIRE(created.Success);
+		}
+		REQUIRE(project.Context.GetWorld());
+		CHECK(project.Context.GetEditScene()->FindEntityByName("World").HasComponent<WorldComponent>());
 	}
 }
 

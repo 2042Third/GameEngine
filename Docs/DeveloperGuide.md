@@ -2012,7 +2012,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   many cells its index misses.
 - **`world.create`** makes `<path>.stworld` and its persistent scene `<path>.stscene` (basic3d content and the
   `WorldComponent`; default layers Terrain, Buildings, Props, Gameplay of `cellSize` with four cells of streaming
-  distance), opened (unsaved-changes guard, a new history) or as one undo step that removes the files.
+  distance), opened (unsaved-changes guard, a new history, after the saves in flight: `CommandUtils::AfterSaves`) or as
+  one undo step that removes the files. `world.cook`, `world.create` and `world.loadCells` defer (`MayDefer`), and
+  `world.info`, which reads the World asset by path, waits for a background asset scan (`WaitsForAssets`).
 - **`world.setLayers`** replaces a world's layer list (matched by id or name; a rename moves the layer's cell folder,
   handles kept); removing or re-gridding a layer with cells needs `deleteCells` (cells to the trash, never loaded ones).
   One undo step.

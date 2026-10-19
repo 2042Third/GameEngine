@@ -368,7 +368,7 @@ namespace Strata
 
 	void RegisterWorldCommands(EditorCommandRegistry& registry)
 	{
-		registry.Register({ "world.cook",
+		registry.Register(MayDefer({ "world.cook",
 			"Measures a world's cells for its index, off the frame: per cell its entities, physics bodies, bounds and the stored bytes it loads, and "
 			"the most bodies the persistent scene's streaming sources can keep loaded anywhere (maxBodiesInRadius); writes them into the world "
 			"document. Only cells whose files changed since the last cook are read again (cellsRead; cellsReused). Fails, writing nothing, when "
@@ -482,20 +482,21 @@ namespace Strata
 						{ "seconds", std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() },
 						{ "warnings", std::move(warnings) } });
 				});
-			}, EditorCommandKind::Edit });
+			}, EditorCommandKind::Edit }));
 
-		registry.Register({ "world.create",
+		registry.Register(MayDefer({ "world.create",
 			"Makes a new world: <path>.stworld and its persistent scene <path>.stscene (the basic3d content, a \"World\" entity with its "
 			"WorldComponent; the primary camera streams the cells). Layers default to Terrain, Buildings, Props and Gameplay, each of cellSize "
 			"meters with a streaming distance of four cells (the first loads before a game starts); give names, or objects {name, cellSize, "
 			"streamingDistance, enabledByDefault, loadBeforeStart}. open (default true) opens it (failing on unsaved changes unless force; a new "
-			"history starts, like scene.open); without open, one undo step that removes the files. Returns {world, persistentScene, layers}.",
+			"history starts, like scene.open; saves in flight are waited for first); without open, one undo step that removes the files. Returns {world, "
+			"persistentScene, layers}.",
 			ObjectSchema({ { "path", StringSchema("Path relative to the asset directory without extension, e.g. \"Worlds/Island\"") },
 				{ "cellSize", NumberSchema("Side of the layers' cells in meters (1-65536, default 64)") },
 				{ "layers", { { "type", "array" }, { "description", "Layer names, or {name, cellSize, streamingDistance, enabledByDefault, loadBeforeStart}" } } },
 				{ "open", BoolSchema("Open the new world (default true)") },
 				{ "force", ForceSchema() } }, { "path" }),
-			[](EditorContext& context, const nlohmann::json& parameters)
+			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{
 				EditorAssetManager* assets = context.GetAssetManager();
 				if (!assets)
@@ -574,7 +575,7 @@ namespace Strata
 						return EditorCommandResult::Fail("The new world's persistent scene could not be opened (scene.loadStatus says why)");
 					return EditorCommandResult::Ok(result);
 				});
-			} });
+			}) }));
 
 		registry.Register({ "world.setLayers",
 			"Replaces a world's layer list: adds, renames, reorders and retunes layers (streaming distance, enabledByDefault, loadBeforeStart). "
@@ -793,7 +794,7 @@ namespace Strata
 				return EditorCommandResult::Ok(DescribeWorldStatus(context, false, 0));
 			}, EditorCommandKind::Session });
 
-		registry.Register({ "world.loadCells",
+		registry.Register(MayDefer({ "world.loadCells",
 			"Loads cells of the open world and keeps them (pinned) until unpinned: cells by key ([{layer, x, z}], layer by name or ID) or in a "
 			"region ({center: [x, y, z], radius} or {min: [x, z], max: [x, z]}, of the given layers or all). pin (default true): false loads them "
 			"without keeping them (they go when the camera leaves). unpin: cells to let go; unpinAll: let every pinned cell go. wait: answer once "
@@ -854,7 +855,7 @@ namespace Strata
 					}
 					return EditorCommandResult::Ok({ { "cells", DescribeCells(*current, cells) } });
 				});
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
 		registry.Register({ "world.moveEntities",
 			"Moves top-level entities of the open world into the cell of a layer at their positions (made when it does not exist yet, "
@@ -939,7 +940,7 @@ namespace Strata
 					{ "layers", DescribeLayers(data) },
 					{ "cells", data.Cells.size() },
 					{ "index", std::move(index) } });
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Content, true });
 
 		registry.Register({ "physics.stats",
 			"The physics of the running game (play or simulate): bodies in the simulation (total, static, dynamic, kinematic, awake, character "

@@ -176,6 +176,7 @@ namespace
 		"scene.loadAdditive", "scene.loadStatus", "scene.new", "scene.open", "scene.recover", "scene.recoveryStatus", "scene.save", "scene.saveAs",
 		"script.build",
 		"viewport.capture",
+		"world.cook", "world.create", "world.loadCells",
 	};
 
 	// Commands besides the Edit ones that answer from the whole asset registry (EditorCommand::WaitsForAssets): while the
@@ -183,7 +184,7 @@ namespace
 	// another file keeps its flag.
 	constexpr std::string_view c_AssetScanCommands[] = {
 		"animation.info", "asset.findReferences", "asset.info", "asset.list", "material.get", "prefab.status", "project.export", "scene.recover",
-		"scene.recoveryStatus",
+		"scene.recoveryStatus", "world.info",
 	};
 
 	template<size_t N>
