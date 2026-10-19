@@ -15,7 +15,8 @@ namespace Strata
 	class EditorContext;
 
 	// The Game view: the active scene through its primary camera as the game shows it (the edited scene's in edit mode, the
-	// running scene's in play mode), with its HUD and without the editor's overlays, preview lighting, picking or gizmos.
+	// running scene's in play mode), with its HUD and without the editor's overlays, preview lighting, picking or gizmos; a
+	// scene without a camera that has screen-space UI shows that UI over black (ResolveGameView), as the game does.
 	// Its toolbar strip holds the resolution menu (ViewportSettings::GameView: the panel's size, an aspect ratio letterboxed
 	// in the panel, a fixed size rendered at its pixels and scaled to fit, or the resolution the game asked for) and the
 	// stats toggle. While the game plays and the view has the keyboard focus it feeds the game's Input (positions in the
@@ -52,7 +53,7 @@ namespace Strata
 		void DrawOverlays(EditorContext& context, ImDrawList* drawList);
 		// What the game asked of its window (EditorGameWindow), at the bottom of the image: play mode does not apply it.
 		void DrawGameWindowNotice(EditorContext& context, ImDrawList* drawList);
-		// What the view shows without a primary camera: the message the game shows then (GameRenderer).
+		// What the view shows without a primary camera or screen-space UI: the message the game shows then (GameRenderer).
 		void DrawNoCamera(EditorContext& context, ImDrawList* drawList, const ImVec2& areaMin, const ImVec2& areaSize);
 	private:
 		bool m_Shown = false;

@@ -1254,7 +1254,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - Screen-space canvases follow `SceneRenderOptions::DrawScreenSpaceText` (the game's screen-space UI): editor views hide
   them unless the viewport's Game UI setting is on, captures follow the viewport, thumbnails hide them; hidden canvases
   are counted, not laid out. `SceneRenderOptions::OverlayScene` draws another scene's UI: `GameRenderer` shows a scene
-  without a camera that has screen-space UI (`SceneRenderer::HasOverlayContent`) as its UI over black.
+  without a camera that has screen-space UI (`SceneRenderer::HasOverlayContent`) as its UI over black, and so does the
+  editor's Game view (`ResolveGameView` gives it an `OverlayOnly` view, which `ViewportRenderer` renders as an empty scene
+  with the active scene's UI over it); only a scene with neither shows the missing-camera message.
 - World-space canvases (`UICanvasComponent::RenderMode`) belong to the scene: every view draws them, also with the HUD
   hidden, but only when the overlay scene is the rendered one (`SceneOverlayFrame::HasCamera`: another scene's camera
   would misplace them). Their transforms (`GameUIScene::GetCanvasWorldMatrix`, times the frame's view-projection) are

@@ -18,7 +18,8 @@ view back. Drag a tab beside the other to see both at once. To look through the 
 overlays), press **F8** or the toolbar's **Game camera** chip.
 
 A scene without a primary camera shows a notice in the Game view, as an exported game does: add a Camera component and
-tick **Primary**.
+tick **Primary**. A scene without a camera that has a UI canvas (a main menu) shows its UI over black instead, as the game
+does.
 
 While you edit, animated characters stand in their skeleton's rest pose, as the game shows them before their first
 animation. The Scene view's **Camera** chip can show them at the first frame of what they play on start instead

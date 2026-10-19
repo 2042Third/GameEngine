@@ -109,13 +109,16 @@ namespace Strata
 		drawList->AddRectFilled(layout.ImageMin, ImVec2(layout.ImageMin.x + layout.ImageSize.x, layout.ImageMin.y + layout.ImageSize.y),
 			ImGui::GetColorU32(colors.Chrome));
 
+		// The scene's primary camera; without one, a scene with UI (a main menu) shows its UI over black, as the game does.
+		ViewportRenderer* renderer = renderSize.x > 0 && renderSize.y > 0 ? viewport.GetGameRenderer() : nullptr;
 		std::optional<ViewportView> view;
-		if (renderSize.x > 0 && renderSize.y > 0)
+		if (renderer)
+			view = ResolveGameView(context, *renderer, static_cast<float>(renderSize.x) / static_cast<float>(renderSize.y));
+		else if (renderSize.x > 0 && renderSize.y > 0)
 			view = ResolveViewportView(context, ViewportCameraSource::Scene, static_cast<float>(renderSize.x) / static_cast<float>(renderSize.y));
 		bool rendered = false;
 		if (view)
 		{
-			ViewportRenderer* renderer = viewport.GetGameRenderer();
 			rendered = renderer && renderer->Render(context, renderSize, *view, settings, false);
 			if (rendered)
 				drawList->AddImage(ViewportToolbar::ToTextureID(renderer->GetOutputTexture()), imageMin, imageMax);

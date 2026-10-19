@@ -927,6 +927,61 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The Game view shows a scene without a camera that has UI as the game does: its UI over black")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		EditorContext& context = harness.Context;
+		EditorViewport& viewport = context.GetViewport();
+		ViewportRenderer* game = viewport.GetGameRenderer();
+		REQUIRE(game);
+		const glm::uvec2 size(320, 180);
+		const float aspectRatio = static_cast<float>(size.x) / static_cast<float>(size.y);
+
+		// Neither a camera nor UI: nothing to show (the panel shows the missing-camera message, like the game).
+		std::string error;
+		CHECK_FALSE(ResolveGameView(context, *game, aspectRatio, &error));
+		CHECK(error.find("Primary") != std::string::npos);
+
+		// A menu without a camera: a red image over the canvas's left half.
+		const nlohmann::json canvas = harness.Run("ui.create", { { "type", "canvas" } });
+		const nlohmann::json image = harness.Run("ui.create", { { "type", "image" }, { "parent", canvas["entity"] } });
+		harness.Run("component.set", { { "entity", image["entity"] }, { "component", "UIRect" }, { "values", { { "AnchorMin", { 0, 0 } },
+			{ "AnchorMax", { 0.5, 1 } }, { "Pivot", { 0, 0 } }, { "Position", { 0, 0 } }, { "Size", { 0, 0 } } } } });
+		harness.Run("component.set", { { "entity", image["entity"] }, { "component", "UIImage" }, { "values", { { "Color", { 1, 0, 0, 1 } } } } });
+		const std::optional<ViewportView> view = ResolveGameView(context, *game, aspectRatio);
+		REQUIRE(view);
+		CHECK(view->OverlayOnly);
+		REQUIRE(game->Render(context, size, *view, viewport.GetSettings(), false));
+		ReadbackImage readback;
+		REQUIRE(Renderer::ReadTexture(game->GetOutputTexture(), readback));
+		REQUIRE(readback.BytesPerPixel == 4);
+		REQUIRE(readback.Width == size.x);
+		const auto pixel = [&readback](uint32_t x, uint32_t y)
+		{
+			const uint8_t* bytes = readback.Pixels.data() + (static_cast<size_t>(y) * readback.Width + x) * 4;
+			return glm::ivec3(bytes[0], bytes[1], bytes[2]);
+		};
+		const glm::ivec3 left = pixel(size.x / 4, size.y / 2);
+		const glm::ivec3 right = pixel(size.x * 3 / 4, size.y / 2);
+		INFO("left ", left.r, " ", left.g, " ", left.b, ", right ", right.r, " ", right.g, " ", right.b);
+		CHECK(left.r > 200);
+		CHECK(left.g < 30);
+		CHECK(left.b < 30);
+		CHECK(right.r < 10);
+		CHECK(right.g < 10);
+		CHECK(right.b < 10);
+
+		// With a camera the scene shows through it again.
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", { { "Primary", true } } } } } });
+		const std::optional<ViewportView> camera = ResolveGameView(context, *game, aspectRatio);
+		REQUIRE(camera);
+		CHECK_FALSE(camera->OverlayOnly);
+		CHECK(camera->FromScene);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A new project made from the basic3d template captures lit")
 	{
 		Tests::GPUContext gpu;
