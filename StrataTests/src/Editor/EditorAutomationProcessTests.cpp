@@ -157,13 +157,13 @@ namespace
 		nlohmann::json Error; // The parsed error output (null unless it is JSON)
 	};
 
-	CliResult RunCli(const std::vector<std::string>& arguments)
+	CliResult RunCli(const std::vector<std::string>& arguments, std::chrono::milliseconds timeout = c_ProcessTimeout)
 	{
 		ProcessSpecification specification;
 		specification.Executable = GetCliPath();
 		specification.Arguments = arguments;
 		specification.Output = ProcessOutputMode::CaptureSeparate;
-		const Process::RunResult run = Process::Run(specification, c_ProcessTimeout);
+		const Process::RunResult run = Process::Run(specification, timeout);
 		CHECK_MESSAGE(run.Started, run.Error);
 		CHECK_FALSE(run.TimedOut);
 
@@ -180,6 +180,16 @@ namespace
 	nlohmann::json Call(const std::string& method, const nlohmann::json& params = nlohmann::json::object())
 	{
 		const CliResult result = RunCli({ "call", method, params.dump() });
+		INFO(method, " ", params.dump(), "\nstdout: ", result.Output, "\nstderr: ", result.ErrorOutput);
+		CHECK(result.ExitCode == 0);
+		return result.Json;
+	}
+
+	// Call, for a command that answers only once the editor is ready (an edit while a scan runs): the CLI waits for the
+	// answer up to `timeout` instead of its default 30 s.
+	nlohmann::json CallWaiting(const std::string& method, const nlohmann::json& params, std::chrono::milliseconds timeout)
+	{
+		const CliResult result = RunCli({ "call", method, params.dump(), "--timeout", std::to_string(timeout.count()) }, timeout + c_ProcessTimeout);
 		INFO(method, " ", params.dump(), "\nstdout: ", result.Output, "\nstderr: ", result.ErrorOutput);
 		CHECK(result.ExitCode == 0);
 		return result.Json;
@@ -601,8 +611,8 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 		// scene is still opening).
 		const nlohmann::json first = Call("editor.status");
 		CHECK((!first["assets"]["scanning"].is_null() || !first["sceneLoad"].is_null()));
-		// Edits wait for it (they answer once it is ready).
-		const nlohmann::json created = Call("entity.create", { { "name", "After The Scan" } });
+		// Edits wait for it (they answer once it is ready: in CI's Windows Debug build, more than the CLI's default 30 s).
+		const nlohmann::json created = CallWaiting("entity.create", { { "name", "After The Scan" } }, std::chrono::minutes(5));
 		CHECK(created.contains("id"));
 		const nlohmann::json ready = Call("editor.status");
 		CHECK(ready["assets"]["scanning"].is_null());

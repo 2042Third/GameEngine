@@ -37,6 +37,9 @@ using namespace Strata::Tests;
 namespace
 {
 
+	// How long a save may take before a test gives up on it (a hang, never a slow machine: see FinishSaves).
+	constexpr std::chrono::minutes c_SaveTimeout { 5 };
+
 	struct SaverJobSystem
 	{
 		SaverJobSystem()
@@ -148,7 +151,7 @@ namespace
 	// Updates the saver (as frames do) until the request ended.
 	DocumentSaveStatus RunUntilEnded(DocumentSaver& saver, uint64_t id)
 	{
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(1);
+		const auto deadline = std::chrono::steady_clock::now() + c_SaveTimeout;
 		while (true)
 		{
 			saver.Update();
@@ -189,14 +192,15 @@ namespace
 			return RunCommandToCompletion(Context, Commands, name, parameters);
 		}
 
-		// Updates the editor until no save is in flight.
+		// Updates the editor until no save is in flight. The limit only ends a hang: CI's Windows Debug build, on runners of
+		// three hardware threads, takes more than a minute to write the 50,000 entities of the largest test.
 		void FinishSaves()
 		{
 			REQUIRE(WaitUntil([&]()
 			{
 				Context.Update(Timestep(1.0f / 60.0f));
 				return !Context.HasSavesInFlight();
-			}, std::chrono::minutes(1)));
+			}, c_SaveTimeout));
 		}
 
 		std::filesystem::path GetSceneFile() const { return Context.GetSceneFile(Context.GetSceneHandle()).first; }
