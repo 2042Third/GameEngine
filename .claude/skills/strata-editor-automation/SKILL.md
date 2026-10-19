@@ -214,7 +214,10 @@ editor started with `--no-gpu` (use `--headless`):
   flight (`saveId`, `label`, `documents`, `state`, `progress`; empty when none writes). Edits made while a save writes
   are not in it and stay unsaved. Commands that replace the scene, close the project or quit (`scene.open`, `scene.new`,
   `scene.recover`, `project.*`, `editor.quit`) wait for saves in flight before they decide, also with `force` (a save is
-  never lost), so `scene.save {"wait": false}` followed by `scene.open` needs no force.
+  never lost), so `scene.save {"wait": false}` followed by `scene.open` needs no force. While a save writes a document,
+  `asset.move`, `asset.moveFolder`, `asset.delete` and `asset.deleteFolder` of it (or of a folder holding it, or onto a
+  Save As's new path) fail with "is being saved": try again once `saving` is empty. `project.export` may start during a
+  save of the scene as it is; it fails if that save fails.
 - **Recovery**: the editor journals the edited scene's unsaved changes in `.strata/Recovery` (written about 2 s after
   edits stop; `editor.status` `recovery.journal` has `lastWrite` and `pending`), and even forced discards are kept
   there and listed at once (the newest 8 discards stay on offer, older ones move to `Recovery/Discarded`; what a crash
