@@ -293,7 +293,9 @@ TEST_SUITE("Editor.World")
 		GridWorldProject project("EditorWorldOpen", 5);
 		CHECK(project.Run("world.status")["world"].is_null());
 		CHECK(project.Run("scene.loadStatus")["world"].is_null());
-		CHECK(project.Run("editor.status")["world"].is_null());
+		CHECK(project.Run("editor.status", { { "sections", { "world" } } })["world"].is_null());
+		// The compact answer leaves the world out: it is asked for.
+		CHECK_FALSE(project.Run("editor.status").contains("world"));
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		REQUIRE(project.Context.GetWorld());
 		const glm::vec3 start(14.0f, 10.0f, 14.0f); // Off every cell's edge at 48 m
@@ -313,7 +315,7 @@ TEST_SUITE("Editor.World")
 		CHECK(loads["editor"]["cellsWanted"] == status["cells"]["wanted"]);
 		CHECK(loads["editor"]["cellsLoading"] == 0);
 		CHECK(loads["game"].is_null());
-		const nlohmann::json summary = project.Run("editor.status")["world"];
+		const nlohmann::json summary = project.Run("editor.status", { { "sections", { "world" } } })["world"];
 		CHECK(summary["name"] == "Gen");
 		CHECK(summary["cellsLoaded"] == status["cells"]["loaded"]);
 		CHECK(summary["cellsDirty"] == 0);
