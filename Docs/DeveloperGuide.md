@@ -3,11 +3,11 @@
 This guide holds the details of how to work on Strata: how each area works, how it is tested and extended, and the
 conventions its code follows. [AGENTS.md](../AGENTS.md) has the rules every change follows (Claude Code loads it into
 every session) and, for each area, a digest of its hard rules that links the sections here. Read the section of the area
-you work on before changing it. A rule AGENTS.md shortens (in a digest, or one of the building steps, architecture rules
-and third-party rules it states in short) is stated in full here, and a change to it changes both files; the rules
-AGENTS.md keeps whole (the golden rules, the code style, the review checklist and the rest of its building steps,
-architecture rules and third-party rules) are only there. Details go only here, so that AGENTS.md stays under 40,000
-characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together is described in
+you work on before changing it. A rule AGENTS.md shortens (in a digest, or one of the building steps, code style
+conventions, architecture rules and third-party rules it states in short) is stated in full here, and a change to it
+changes both files; the rules AGENTS.md keeps whole (the golden rules, the review checklist and the rest of its building
+steps, code style, architecture rules and third-party rules) are only there. Details go only here, so that AGENTS.md
+stays under 40,000 characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together is described in
 [Architecture.md](Architecture.md).
 
 ## Contents
@@ -29,6 +29,7 @@ characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together
   - [Test rules and helper processes](#test-rules-and-helper-processes)
   - [Feature test](#feature-test)
   - [Script modules and package tests](#script-modules-and-package-tests)
+- [Code style](#code-style)
 - [Architecture rules](#architecture-rules)
 - [Asset pipeline](#asset-pipeline)
   - [Asset files](#asset-files)
@@ -132,8 +133,8 @@ composition root that registers every module).
 
 ## Building
 
-The commands, configurations and CI rules are in AGENTS.md, [Building](../AGENTS.md#building). The requirements and
-the CMake options:
+The commands, configurations and CI rules are in AGENTS.md, [Building](../AGENTS.md#building). The requirements, the
+CMake options and CI's jobs:
 
 Requirements: CMake 3.25+, a C++20 compiler (MSVC 19.40+, GCC 13+, Clang 17+/Apple Clang 15+),
 a Vulkan 1.2+ driver. The Vulkan SDK is **not** required to build (headers and the shader compiler
@@ -155,6 +156,10 @@ Useful CMake options: `-DSTRATA_BUILD_EDITOR=OFF`, `-DSTRATA_BUILD_RUNTIME=OFF`,
 `-DSTRATA_WITH_PHYSICS=OFF`, `-DSTRATA_WITH_AUDIO=OFF`, `-DSTRATA_WITH_ANIMATION=OFF` (games without a module:
 [Optional modules](#optional-modules)).
 
+**Sources** are collected with `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)`: re-run the configure step (`cmake --preset
+<preset>`) after adding or removing source files, because the Visual Studio generator re-globs during the build but
+compiles that build with the stale project, so new files would only appear in the next build.
+
 **Compiler cache.** `-DSTRATA_COMPILER_CACHE=ON` compiles every C and C++ source, the vendor libraries' too, through
 `ccache` or `sccache` (found on `PATH`, or named by `STRATA_COMPILER_CACHE_PROGRAM`), as CI does. It turns precompiled
 headers off by default (the caches do not cache MSVC's precompiled header builds; `-DSTRATA_PRECOMPILED_HEADERS=ON` still
@@ -163,14 +168,19 @@ ignore compiler launchers, so the configure refuses them: on Windows, configure 
 Multi-Config with `cl`) from a developer environment (the Developer PowerShell, or `vcvars64.bat`), which brings `cl`,
 the Windows SDK and Ninja.
 
-**CI** (`.github/workflows/ci.yml`): Windows (`windows-ninja` with sccache), Linux (GCC 14 with ccache) and macOS (Apple
+**CI** (`.github/workflows/ci.yml`) runs on pushes to `main`, on pull requests and on pushes to branches named
+`ci/<name>`: Windows (`windows-ninja` with sccache, MSVC), Linux (GCC 14 with ccache) and macOS (Apple
 Clang 15 with ccache) build and test Release, and Windows also Debug (`ctest -LE "gpu|perf" -j 4`, the only Debug
 build CI makes). Each job keeps its compiler cache in the GitHub Actions cache (keyed per job and commit, restored from
 the newest of its branch or main, saved even when tests fail; at most 250 MB for ccache and 1 GB for sccache per job).
 Each ref keeps one entry per job: after the save, the job deletes its ref's older entries, so that main's set and the
 active branches' stay below GitHub's 10 GB, beyond which GitHub evicts the least recently used (main's first). A
 Dist build of every target on Windows uses the Visual Studio generator people build with, without a cache, and runs the
-`package` tests, so that the Visual Studio generator's script builds stay tested.
+`package` tests, so that the Visual Studio generator's script builds stay tested. Older compilers and other standard
+libraries reject code that the local ones accept (Apple Clang 15's libc++ has no floating-point `std::from_chars`;
+`size_t` and `uint64_t` are different types on macOS; GCC 14 warns where newer GCCs do not), so a branch that lands many
+changes (a wave's integration) is pushed as `ci/<name>` and waits for green CI before it moves `main`
+(`Tools/CompatLint.py` catches much of it before the push).
 
 ### Precompiled headers
 
@@ -297,8 +307,9 @@ fixes get patch versions):
 2. Write `Docs/Releases/<version>.md` for the people who download it (what Strata can do, requirements, known issues,
    reporting problems), link it from `Docs/README.md`, and bring `Docs/Releases/PackageReadme.md` up to date.
 3. Run `ctest --preset <platform>-dist -LE "gpu|perf"` locally: CI tests Release, the release workflow tests the Dist
-   build it ships, where asserts are compiled out and `ST_DIST` code paths differ (a test whose expectations depend on
-   the configuration says so with `#if defined(ST_DIST)`). Then push a tag `v<version>-rc1` for a dry run: the workflow
+   build it ships, where asserts are compiled out and `ST_DIST` code paths differ (a test whose expectations differ in
+   Dist, such as asserts compiled out or host calls not counted, says so with `#if defined(ST_DIST)`: CI tests Release,
+   and only the release steps run the tests in Dist). Then push a tag `v<version>-rc1` for a dry run: the workflow
    builds Dist on CI's runners, runs the tests CI runs (`-LE "gpu|perf"`, with `StrataEditor.Install`) in Dist, packs
    the archives, unpacks each and runs its executables, and uploads them with SHA256 checksums as workflow artifacts
    without publishing. Download and try them.
@@ -627,21 +638,35 @@ exercised by it.
   build in the system temp directory, where MSBuild does not track files (MSB8029) and may relink unchanged modules: do
   not rely on a build leaving the module unchanged there (use the fake CMake instead).
 
+## Code style
+
+AGENTS.md, [Code style](../AGENTS.md#code-style-hazel-conventions), states the code style, the precompiled headers' rule
+in short ([Precompiled headers](#precompiled-headers) has it in full) and three conventions whose details are these:
+
+- **Logging:** the console and the log file are written by a thread of their own (`Core/BackgroundLogSink`): a log call
+  waits for them only for warnings and errors (flushed before the call returns) and while 65,536 messages are queued (a
+  burst the writer cannot keep up with); what is queued is written at exit and by `Log::Shutdown`.
+- **Private files:** Windows security descriptors and their checks live in `Platform/Windows/WindowsFileSecurity`.
+- **Frame stages:** `ST_PROFILE_STAGE("Stage.Name")` scopes feed the always-on `FrameProfiler`
+  ([Frame profiler](Architecture.md#frame-profiler); `editor.perf` and `--perf-log` report it). A stage records its self
+  time, so put it around a unit of the frame's work, not around calls that take nanoseconds
+  (`Scene::UpdateWorldTransforms` times only updates that recompute something).
+
 ## Architecture rules
 
-AGENTS.md, [Architecture rules](../AGENTS.md#architecture-rules), states every architecture rule, six of them in
+AGENTS.md, [Architecture rules](../AGENTS.md#architecture-rules), states every architecture rule, seven of them in
 short. Their full wording:
 
 - **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background work goes through
   `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O, `JobPriority::Background` for long work no frame
   waits for, such as an import's texture compression or an export's pack compression: it runs on background threads
-  below the normal thread priority, which leave four hardware threads to the frame but keep at least half of them
-  (`JobSystem::GetDefaultBackgroundThreadCount`), so it never takes the processors from the frame, whose own work runs
-  on the normal-priority workers). A thread that waits for a job runs that job itself if it has not started, and never
-  other jobs. What a job captures is released on the thread that runs it (`Submit` keeps no copy of the function: libc++
-  copies a small one when it moves it), so a job may hold the last reference to what it destroys off the frame
-  (`Scene::ReleaseInBackground`). Results return to the main thread through `Application::SubmitToMainThread` or polled queues — never
-  callbacks that touch engine state from worker threads.
+  below the normal thread priority, which leave four hardware threads to the main thread, the driver and the frame's
+  helpers but keep at least half of them (`JobSystem::GetDefaultBackgroundThreadCount`), so it never takes the
+  processors from the frame, whose own work runs on the normal-priority workers). A thread that waits for a job runs
+  that job itself if it has not started, and never other jobs. What a job captures is released on the thread that runs
+  it (`Submit` keeps no copy of the function: libc++ copies a small one when it moves it), so a job may hold the last
+  reference to what it destroys off the frame (`Scene::ReleaseInBackground`). Results return to the main thread through
+  `Application::SubmitToMainThread` or polled queues — never callbacks that touch engine state from worker threads.
 - **NVRHI pitfalls:** never take the address of a handle (`&m_Pipeline`): `RefCountPtr::operator&`
   releases the reference and returns the raw pointer's address, so assigning through it leaves a
   dangling object. NVRHI places automatic barriers only when the binding sets change; consecutive
@@ -654,6 +679,12 @@ short. Their full wording:
   `Renderer::ReleaseDeferred` (`DeferredReleaseQueue`: held until the GPU finished the work submitted
   before, never waiting, then destroyed within a frame's budget, `c_FrameDestroyBudget`, since a texture costs the
   driver about 0.1 ms), as `SceneRenderer` does when it is resized.
+- **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous; code must handle
+  "not loaded yet" every frame instead of blocking (see [Asset pipeline](#asset-pipeline)). New code that works for a
+  scene (scene systems, loading into it, rendering it) reaches the asset manager through `Scene::GetAssetManager()`
+  (typed: `GetAsset<T>`, `PeekLoadedAsset<T>`), never through `AssetManager`'s static functions (`GetActive`,
+  `GetAsset<T>`, `PeekLoadedAsset<T>`, `LoadAssetSync<T>`, `GetAssetState`, `GetAssetType`, `IsHandleValid`,
+  `HasActive`), which all use the process's active manager (per-scene managers replace it later).
 - **Layers:** every file under `Strata/src` belongs to one layer of `StrataTests/Architecture/Layers.json`, and an
   include that crosses layers must be allowed there (a layer includes only itself and the lower layers it lists).
   `Architecture.Layering` (in the shard `StrataTests.Core.Core`) fails on any other include, on files in no layer (new folders and
