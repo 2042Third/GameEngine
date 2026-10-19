@@ -753,9 +753,13 @@ namespace Strata
 		// entries.
 		void SetStateLocked(AssetEntry& entry, AssetState state);
 		AssetEntry& AddEntryLocked(AssetHandle handle, bool& outInserted);
-		// Keeps m_Listed in step with what the entry is: listed while it is not unloaded, holds a loaded object or is pinned.
-		// Called wherever one of those changes (SetStateLocked, SetLoadedLocked, Pin, Unpin, RemoveEntryLocked).
+		// Keeps m_Listed in step with what the entry is: listed while it is not unloaded, holds a loaded object or is pinned
+		// (IsListed). Called wherever one of those changes (SetStateLocked, SetLoadedLocked, Pin, Unpin, RemoveEntryLocked).
 		void UpdateListedLocked(const AssetEntry& entry);
+		static bool IsListed(const AssetEntry& entry);
+		// Calls `visit` with each listed entry (GetResidencyInfo, GetResidencySamples), counting the entries it looks at.
+		template<typename Visit>
+		void ForEachListedLocked(Visit&& visit) const;
 		// RegisterAsset's work for one asset (requires m_Mutex; the caller bumps the metadata version).
 		void RegisterAssetLocked(const AssetMetadata& metadata);
 		void RemoveEntryLocked(std::unordered_map<AssetHandle, AssetEntry>::iterator it);
