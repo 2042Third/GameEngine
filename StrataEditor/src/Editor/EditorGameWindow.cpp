@@ -77,10 +77,12 @@ namespace Strata
 		GameWindowState state;
 		state.Mode = m_Mode.value_or(GameWindowMode::Windowed);
 		state.VSync = m_VSync.value_or(true);
-		// The game renders into the game view: its size is the game's window size.
-		const glm::vec2 size = Input::GetViewportSize();
+		// The game renders into the game view: its size is the game's window size (the pixels of the image it renders,
+		// more than the input viewport's units on displays with a content scale).
+		const glm::vec2 size = m_ViewSize.x > 0 && m_ViewSize.y > 0 ? glm::vec2(m_ViewSize) : Input::GetViewportSize();
 		state.Width = static_cast<uint32_t>(std::max(size.x, 0.0f));
 		state.Height = static_cast<uint32_t>(std::max(size.y, 0.0f));
+		state.ContentScale = m_ContentScale;
 		return state;
 	}
 

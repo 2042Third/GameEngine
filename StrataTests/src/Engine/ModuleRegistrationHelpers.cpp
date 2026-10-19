@@ -14,6 +14,7 @@
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/SceneGizmos.h"
+#include "Strata/Scene/ComponentAccess.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
@@ -155,6 +156,12 @@ namespace Strata::Tests
 			int32_t Value = 0;
 		};
 
+		// Requires the vehicle (registered before it), a component that does not exist and itself.
+		struct TestTrailerComponent
+		{
+			float Load = 0.0f;
+		};
+
 		int Fail(const std::string& message)
 		{
 			std::printf("FAILED: %s\n", message.c_str());
@@ -199,7 +206,14 @@ namespace Strata::Tests
 				// The type is registered and the name is taken (ignoring case): both are refused, without aborting.
 				duplicateTypeRefused = !ComponentRegistry::Register<TestVehicleComponent>("TestVehicleAgain").Property("Speed", &TestVehicleComponent::Speed);
 				duplicateNameRefused = !ComponentRegistry::Register<LateComponent>("testvehicle");
+				ComponentRegistry::Register<TestTrailerComponent>("TestTrailer")
+					.Category("Tests")
+					.Requires("TestVehicle")
+					.Requires("NoSuchComponent")
+					.Requires("TestTrailer")
+					.Property("Load", &TestTrailerComponent::Load);
 			});
+			const uint64_t beforeRegistration = Log::GetBuffer().GetLatestSequence();
 			Engine::RegisterBuiltinModules(options);
 
 			if (!Engine::AreBuiltinModulesRegistered() || !ComponentRegistry::IsFrozen())
@@ -214,6 +228,24 @@ namespace Strata::Tests
 			if (!duplicateTypeRefused || !duplicateNameRefused || ComponentRegistry::Find("TestVehicleAgain"))
 				return Fail("a component type or name was registered twice");
 			std::printf("registered: TestVehicle\n");
+
+			// Freezing the registry keeps the requirements that name other registered components and drops the rest, with errors;
+			// adding the trailer by name then adds the vehicle first.
+			const ComponentInfo* trailerInfo = ComponentRegistry::Find("TestTrailer");
+			if (!trailerInfo || trailerInfo->Requires != std::vector<std::string> { "TestVehicle" })
+				return Fail("the trailer's requirements are not the vehicle alone");
+			if (FindLoggedError(beforeRegistration, "requires 'NoSuchComponent', which is not a registered component").empty()
+				|| FindLoggedError(beforeRegistration, "requires 'TestTrailer', which is the component itself").empty())
+				return Fail("the dropped requirements logged no errors");
+			{
+				Scene scene("Yard");
+				Entity hitch = scene.CreateEntity("Hitch");
+				std::string error;
+				if (!ComponentAccess::AddComponent(hitch, *trailerInfo, &error) || !hitch.HasComponent<TestTrailerComponent>()
+					|| !hitch.HasComponent<TestVehicleComponent>())
+					return Fail("adding the trailer did not add the vehicle it requires: " + error);
+			}
+			std::printf("requirements: TestVehicle\n");
 
 			const std::filesystem::path path = directory / "Garage.stscene";
 			{

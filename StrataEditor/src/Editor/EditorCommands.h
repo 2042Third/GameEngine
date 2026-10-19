@@ -176,5 +176,7 @@ namespace Strata
 	void RegisterInputCommands(EditorCommandRegistry& registry);
 	void RegisterStreamingCommands(EditorCommandRegistry& registry);
 	void RegisterAnimationCommands(EditorCommandRegistry& registry);
+	void RegisterUICommands(EditorCommandRegistry& registry);      // ui.create, ui.layout, ui.hitTest (EditorUICommands.cpp)
+	void RegisterUIInputCommands(EditorCommandRegistry& registry); // input.click, input.type (EditorInputCommands.cpp)
 
 }

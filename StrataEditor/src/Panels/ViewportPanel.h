@@ -2,6 +2,7 @@
 
 #include "Editor/EditorViewport.h"
 #include "Editor/TransformEdit.h"
+#include "Panels/CanvasModeView.h"
 #include "UI/EditorPanelRegistry.h"
 
 #include <Strata/Math/AABB.h>
@@ -88,6 +89,8 @@ namespace Strata
 		// What the colors of the debug view mean, with how many entities in view have each, at the image's bottom left.
 		void DrawDebugViewLegend(EditorContext& context);
 		void HandleShortcuts(EditorPanelContext& context);
+		// Delete, Ctrl+D, Ctrl+C/X/V, Ctrl+A and F2 on the selection (also in the 2D canvas mode).
+		void HandleSelectionShortcuts(EditorPanelContext& context);
 		void UpdateCamera(EditorContext& context, bool hovered);
 		void UpdateGizmo(EditorContext& context, const ViewportView& view);
 		void DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom, const EditorFrameStats& frame);
@@ -117,6 +120,7 @@ namespace Strata
 		bool m_GameView = false;   // Playing through the scene's camera
 		bool m_OverGizmo = false;  // The mouse was over the gizmo in the last frame (asked before the window begins)
 		ViewportImageArea m_Image;
+		CanvasModeView m_CanvasMode; // The 2D canvas mode (ViewportSettings::CanvasMode)
 		CameraDrag m_CameraDrag = CameraDrag::None;
 		bool m_CursorLocked = false; // By fly mode
 		bool m_GameInputEnabled = false;

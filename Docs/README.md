@@ -21,6 +21,8 @@ Guides for people making games in the editor:
 - [Manual/Scripting.md](Manual/Scripting.md): creating, building, debugging and hot-reloading scripts, the Problems
   panel, crash reports with file and line, opening scripts in an IDE (CMake presets for IntelliSense) and attaching a
   debugger.
+- [Manual/GameUI.md](Manual/GameUI.md): menus and HUDs: canvases, anchors and scale modes, the look of images, texts and
+  widgets, buttons and sliders in scripts, keyboard and gamepad navigation, testing UI with commands.
 
 ## Releases
 

@@ -3,6 +3,9 @@
 
 #include "Strata/Scene/Entity.h"
 
+#include <algorithm>
+#include <vector>
+
 namespace Strata
 {
 
@@ -134,6 +137,54 @@ namespace Strata
 		return true;
 	}
 
+	namespace
+	{
+
+		// AddComponent, with the components being added further up the chain of requirements (`adding`), which a cycle of
+		// requirements ends at.
+		bool AddWithRequirements(Entity entity, const ComponentInfo& info, std::vector<const ComponentInfo*>& adding, std::string* outError)
+		{
+			if (info.IsHidden())
+			{
+				if (outError)
+					*outError = fmt::format("Component '{}' is internal and cannot be added directly", info.Name);
+				return false;
+			}
+			entt::registry& registry = entity.GetScene()->GetRegistry();
+			// Already present: nothing to add, even for components only the engine adds.
+			if (info.Has(registry, entity.GetHandle()))
+				return true;
+			if (HasFlag(info.Flags, ComponentFlags::EngineAdded))
+			{
+				if (outError)
+					*outError = fmt::format("Component '{}' is added by the engine (e.g. when instantiating a prefab) and cannot be added directly", info.Name);
+				return false;
+			}
+
+			// The components it needs first (ComponentInfo::Requires: names of other registered components, which the registry
+			// checked when it froze), so that systems hearing of it find them.
+			adding.push_back(&info);
+			for (const std::string& requiredName : info.Requires)
+			{
+				const ComponentInfo* required = ComponentRegistry::Find(requiredName);
+				if (!required || std::find(adding.begin(), adding.end(), required) != adding.end())
+					continue;
+				std::string error;
+				if (!AddWithRequirements(entity, *required, adding, &error))
+				{
+					if (outError)
+						*outError = fmt::format("Component '{}' needs '{}', which cannot be added: {}", info.Name, required->Name, error);
+					adding.pop_back();
+					return false;
+				}
+			}
+			adding.pop_back();
+			info.Add(registry, entity.GetHandle());
+			return true;
+		}
+
+	}
+
 	bool ComponentAccess::AddComponent(Entity entity, const ComponentInfo& info, std::string* outError)
 	{
 		if (!entity.IsValid())
@@ -142,24 +193,8 @@ namespace Strata
 				*outError = "Invalid entity";
 			return false;
 		}
-		if (info.IsHidden())
-		{
-			if (outError)
-				*outError = fmt::format("Component '{}' is internal and cannot be added directly", info.Name);
-			return false;
-		}
-		// Already present: nothing to add, even for components only the engine adds.
-		if (info.Has(entity.GetScene()->GetRegistry(), entity.GetHandle()))
-			return true;
-		if (HasFlag(info.Flags, ComponentFlags::EngineAdded))
-		{
-			if (outError)
-				*outError = fmt::format("Component '{}' is added by the engine (e.g. when instantiating a prefab) and cannot be added directly", info.Name);
-			return false;
-		}
-
-		info.Add(entity.GetScene()->GetRegistry(), entity.GetHandle());
-		return true;
+		std::vector<const ComponentInfo*> adding;
+		return AddWithRequirements(entity, info, adding, outError);
 	}
 
 	bool ComponentAccess::RemoveComponent(Entity entity, const ComponentInfo& info, std::string* outError)

@@ -5,6 +5,7 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Math/Frustum.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Renderer/FontAtlasCache.h"
 #include "Strata/Renderer/LODSelection.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
@@ -470,7 +471,14 @@ namespace Strata
 			"SceneRenderer: failed to create GPU resources");
 		CreateIBLResources();
 		CreateOverlayResources();
-		m_TextRenderer = CreateScope<TextRenderer>(m_Specification.DebugName, m_FrameConstantBuffer);
+		m_FontAtlases = CreateScope<FontAtlasCache>();
+		m_TextRenderer = CreateScope<TextRenderer>(m_Specification.DebugName, m_FrameConstantBuffer, *m_FontAtlases);
+		// Modules above the renderer (the game UI) draw their screen-space overlays through passes they register.
+		for (const SceneOverlayRegistry::Entry& entry : SceneOverlayRegistry::GetAll())
+		{
+			if (Scope<ISceneOverlayPass> pass = entry.Factory(SceneOverlayPassContext { m_Specification.DebugName }))
+				m_OverlayPasses.push_back(std::move(pass));
+		}
 	}
 
 	void SceneRenderer::CreateIBLResources()
@@ -1874,15 +1882,17 @@ namespace Strata
 		tonemap.BloomAdditive = postProcess.BloomThreshold > 0.0f ? 1u : 0u;
 
 		TextRenderStats textStats;
-		const bool text = m_TextRenderer->Prepare(scene, m_ViewportSize, options.DrawScreenSpaceText, commandList, textStats);
+		m_FontAtlases->BeginFrame(TextRenderer::c_FrameRasterBudget);
+		const bool text = m_TextRenderer->Prepare(scene, m_ViewportSize, options.DrawScreenSpaceText, commandList, textStats, options.ScreenView);
 		m_Stats.Texts = textStats.Texts;
 		m_Stats.ScreenSpaceTexts = textStats.ScreenSpaceTexts;
 		m_Stats.HiddenScreenSpaceTexts = textStats.HiddenScreenSpaceTexts;
 		m_Stats.TextGlyphs = textStats.Glyphs;
 		m_Stats.PendingTextGlyphs = textStats.PendingGlyphs;
 		m_Stats.RasterizedTextGlyphs = textStats.RasterizedGlyphs;
+		const bool overlayPasses = PrepareOverlayPasses(scene, camera, options, commandList);
 		const AssetResolveStats& assetStats = m_Assets.GetStats();
-		m_Stats.PendingAssets = assetStats.Pending + textStats.PendingFonts;
+		m_Stats.PendingAssets = assetStats.Pending + textStats.PendingFonts + m_Stats.Overlays.PendingAssets;
 		m_Stats.RequestsByVisibility = assetStats.Requested;
 		m_Stats.PrefetchRequests = assetStats.Prefetched;
 		m_Stats.GetAssetCalls = assetStats.GetAssetCalls;
@@ -1890,7 +1900,7 @@ namespace Strata
 		// Overlays (and text) are composed in the output texture, which is then copied into the target. Without a target or
 		// anything to compose, the frame needs no output texture: renderers that only render into targets (games without
 		// text) never allocate one.
-		const bool overlays = HasOverlays(options) || text;
+		const bool overlays = HasOverlays(options) || text || overlayPasses;
 		if ((!target || overlays) && !EnsureOutputTarget())
 		{
 			commandList->endMarker();
@@ -1929,7 +1939,7 @@ namespace Strata
 		if (overlays)
 		{
 			commandList->beginMarker("Overlays");
-			const bool overlaysDrawn = RenderOverlays(commandList, scene, options, text);
+			const bool overlaysDrawn = RenderOverlays(commandList, scene, options, text, overlayPasses);
 			commandList->endMarker();
 			if (!overlaysDrawn)
 				degraded = true; // The image is complete without them; RenderOverlays reported why
@@ -2081,7 +2091,36 @@ namespace Strata
 		commandList->draw(nvrhi::DrawArguments().setVertexCount(vertexCount).setStartVertexLocation(firstVertex));
 	}
 
-	bool SceneRenderer::RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneRenderOptions& options, bool drawText)
+	bool SceneRenderer::PrepareOverlayPasses(Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, nvrhi::ICommandList* commandList)
+	{
+		SceneOverlayFrame frame;
+		frame.OverlayScene = options.OverlayScene ? options.OverlayScene : &scene;
+		frame.ViewProjection = camera.Projection * camera.View;
+		frame.HasCamera = frame.OverlayScene == &scene;
+		frame.ViewportSize = m_ViewportSize;
+		frame.ScreenView = options.ScreenView;
+		frame.DrawScreenSpace = options.DrawScreenSpaceText;
+		frame.CommandList = commandList;
+		frame.Atlases = m_FontAtlases.get();
+		frame.VisibleTextures = &m_VisibleTextures;
+		frame.Stats = &m_Stats.Overlays;
+		bool draws = false;
+		for (const Scope<ISceneOverlayPass>& pass : m_OverlayPasses)
+			draws = pass->Prepare(frame) || draws;
+		return draws;
+	}
+
+	bool SceneRenderer::HasOverlayContent(Scene& scene) const
+	{
+		for (const Scope<ISceneOverlayPass>& pass : m_OverlayPasses)
+		{
+			if (pass->HasScreenContent(scene))
+				return true;
+		}
+		return false;
+	}
+
+	bool SceneRenderer::RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneRenderOptions& options, bool drawText, bool drawOverlayPasses)
 	{
 		if (!m_GridPipeline)
 		{
@@ -2181,6 +2220,12 @@ namespace Strata
 			DrawDebugLines(commandList, DebugDrawDepth::Tested, 0, testedVertices);
 		if (drawText)
 			m_TextRenderer->Draw(commandList, m_OverlayFramebuffer, false);
+		// The game UI placed in the scene, with the world-space text.
+		if (drawOverlayPasses)
+		{
+			for (const Scope<ISceneOverlayPass>& pass : m_OverlayPasses)
+				pass->DrawWorld(commandList, m_OverlayFramebuffer);
+		}
 
 		// Selection outline from the entity-ID buffer (ids + 1, sorted for the shader's binary search). The sorted list and its
 		// upload are kept while the same entities of the same scene stay selected and no entity was created or destroyed
@@ -2247,6 +2292,12 @@ namespace Strata
 			DrawDebugLines(commandList, DebugDrawDepth::OnTop, testedVertices, onTopVertices);
 		if (drawText)
 			m_TextRenderer->Draw(commandList, m_OverlayFramebuffer, true); // The HUD goes over everything
+		// The game UI over the HUD text.
+		if (drawOverlayPasses)
+		{
+			for (const Scope<ISceneOverlayPass>& pass : m_OverlayPasses)
+				pass->Draw(commandList, m_OverlayFramebuffer);
+		}
 		return complete;
 	}
 

@@ -489,6 +489,8 @@ namespace Strata
 			if (m_StartupSeconds)
 				ST_INFO("Started in {:.2f} s", *m_StartupSeconds);
 		}
+		// The game's content scale in play mode is the editor's (UI scaled to a physical size matches the editor's UI).
+		m_Context.GetGameWindow().SetContentScale(m_Host->GetUIScale());
 		m_Context.Update(timestep);
 		// Between frames: the system's fonts for Chinese, Japanese and Korean text join the editor's once read.
 		if (!m_Options.Headless)

@@ -109,7 +109,7 @@ editor started with `--no-gpu` (use `--headless`):
 - `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?, fov?, overlays?, debugView?,
   waitForAssets?, path?}` returns `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, view, waitedFrames,
   overlays, pendingAssets, texturesBelowWanted, stalePoses, pendingTextGlyphs, previewLighting, screenSpaceTexts,
-  hiddenScreenSpaceTexts, debugView, notice?, path?}`. Text is complete in the picture, and so are the view's meshes,
+  hiddenScreenSpaceTexts, ui: {canvases, hiddenCanvases, elements, drawCalls, pendingGlyphs}, debugView, notice?, path?}`. Text is complete in the picture, and so are the view's meshes,
   materials and textures: the capture renders again for up to about five seconds of frames while they load, up to about
   two more while textures still lack the finer mip levels the view wants, and a few while animated characters that
   animate only while seen (`CullingMode: WhenVisible`) still show an older pose, also while paused (`waitForAssets: false`
@@ -137,8 +137,9 @@ editor started with `--no-gpu` (use `--headless`):
   coarser than needed, 0 once the view is complete).
 - **Editor views are not the game's view.** With the editor camera outside play mode, a scene without any light (no
   directional, point, spot or sky light) is lit by *preview lighting* (a sun and a procedural sky that the game will not
-  have: the result says `"previewLighting": true`), and the game's screen-space text (its HUD) is hidden
-  (`hiddenScreenSpaceTexts` counts it). To see what a player sees, capture with `{"camera": "scene"}` (or while playing).
+  have: the result says `"previewLighting": true`), and the game's screen-space UI (its HUD text and UI canvases) is
+  hidden (`hiddenScreenSpaceTexts` and `ui.hiddenCanvases` count it; `gameUI` shows it, and a click then selects a UI
+  element). To see what a player sees, capture with `{"camera": "scene"}` (or while playing).
   `viewport.getSettings` / `viewport.setSettings {previewLighting?, gameUI?, grid?, selectionOutline?, sceneGizmos?,
   allColliders?, stats?, gizmo?, space?, debugView?, ...}` change these view settings (no undo step; saved with the
   project's editor state). Collider shapes show for the selection only unless `allColliders` is on; far away lights and
@@ -373,8 +374,8 @@ with a window, not `--no-gpu`, to include rendering). A command script can gate 
 `{"command": "editor.wait", "parameters": {"frames": 120}, "expect": {"/frameTimes/medianMs": {"max": 5}}}`.
 `editor.perf {"frames": 120}` then says where the time went, per stage of the main thread (self times in ms:
 `Input`, `Assets.Update`, `Assets.Finalize` (GPU uploads of arriving assets), `Scene.Load` (swapping in a scene that
-finished loading, creating sub-scenes' entities), `Scene.Scripts`, `Scene.Animation` (animators: poses, root motion,
-attachments, events), `Scene.Physics`, `Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Editor.UI`, and `Present` outside the frame
+finished loading, creating sub-scenes' entities), `Scene.UI` (the game UI's input), `Scene.Scripts`, `Scene.Animation` (animators: poses, root motion,
+attachments, events), `Scene.Physics`, `Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Render.UI` (the game UI pass), `Editor.UI`, and `Present` outside the frame
 time), with `stageSum` (at most the frame), `untimed` (the rest of each frame) and `jobs` (`workerBusyPercent`,
 `ioBusyPercent`, `backgroundBusyPercent` (imports, exports), `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage. The
 person at the editor sees the same in the Performance panel (click the frame pill) and the streaming numbers of
@@ -401,6 +402,8 @@ input.gamepadButton {"button": "A"}                       # gamepad 0 unless "ga
 input.gamepadAxis {"axis": "LeftY", "value": 1}           # stick up, held until replaced, "value": null or play.stop
 input.gamepadAxis {"axis": "RightTrigger", "value": 1, "frames": 30} # half a second, then back to rest
 input.state       {}                                      # what simulated input holds; input.releaseAll lets go of it
+input.click       {"entity": "<button id>"}               # a UI element where the player sees it: clicked, events
+input.type        {"text": "Player 1"}                    # typed text (Input::GetTypedText), UTF-8, at most 1,024 bytes
 ```
 
 Keys are named like the SDK's `Key::` constants (`Left`, `Up`, `Space`, `Enter`, `Escape`, `A`, `D1`, `F5`, `LeftShift`;
@@ -419,6 +422,51 @@ and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
   lists them in a pill that releases them when a person clicks it.
 - A tap of 1 frame is one key press for games that act on `IsKeyPressed` or `KeyRepeat`; use `frames` (or press/release) to
   hold a key for repeats.
+- Menus: `input.click {"entity": ...}` moves the pointer to the center of a UI element's rect at the game view's size and taps
+  the button there. It fails, changing nothing, when the element is hidden, on a canvas that does not receive input, or
+  covered (the error names what a click would hit, `errorData.cover`); the answer says whether the button clicked or the
+  toggle or slider changed (`clicked`) and lists the UI events (`click`, `valueChanged`, `focusChanged`). The UI's own
+  keyboard and gamepad navigation answers `input.key` (arrows, `Enter`, `Escape`) and `input.gamepadButton` (`DPadUp`, `A`,
+  `B`) like a player's.
+
+**Build the game UI** (menus, HUDs, health bars): UI elements are entities with a `UIRect` under an entity with a
+`UICanvas`; `ui.create` makes them ready to use in one undo step and lays them out at once:
+
+```text
+ui.create {"type": "canvas"}                                            # ScaleWithScreen, reference 1920x1080
+ui.create {"type": "panel", "parent": "<canvas>", "anchor": "topLeft", "position": [24, 24], "size": [360, 120]}
+ui.create {"type": "verticalLayout", "parent": "<panel>", "anchor": "stretch"}   # stacks its children
+ui.create {"type": "text", "parent": "<layout>", "text": "Score: 0"}            # -> entity, canvas, created, parts, rect
+ui.create {"type": "button", "parent": "<menu>", "text": "Play"}                # parts.label: its text
+ui.create {"type": "toggle", "parent": "<menu>", "text": "Sound"}               # parts: background, checkmark, label
+ui.create {"type": "slider", "parent": "<menu>"}                                # parts: background, fill, handle
+ui.create {"type": "inputField", "parent": "<menu>", "text": "Your name"}       # parts: label, placeholder
+ui.layout {"screen": [1280, 720]}                                        # rects in pixels at a screen, without rendering
+ui.hitTest {"position": [960, 540]}                                      # what a click there would hit ("all": everything)
+```
+
+- Types: `canvas`, `panel`, `image`, `text`, `button`, `toggle`, `slider`, `inputField`, `horizontalLayout`,
+  `verticalLayout`, `gridLayout`. Type into an input field while playing: `input.click` it (it takes the focus and the
+  keyboard), `input.type` the text, `input.key {"key": "Enter"}` submits (`OnUISubmit`); `ui.layout` reports its `text`
+  and whether it is `editing`. An element whose parent is outside every canvas gets a new top-level canvas first.
+- `anchor` is one of `topLeft`, `topCenter`, `topRight`, `topStretch`, `middleLeft`, `middleCenter`, `middleRight`,
+  `middleStretch`, `bottomLeft`, ..., `stretchLeft`, `stretchCenter`, `stretchRight`, `stretch`; it sets the pivot too.
+  `position` is the pivot's offset in canvas units (+y down); along a stretched axis `size` is added to the parent's span
+  (`[-40, 60]` on `bottomStretch`: a 60-high bar with 20 units of margin each side).
+- Tune with `component.set` on `UIRect`, `UIImage` (`Color`, `CornerRadius`, `BorderWidth`, `Texture`), `UIText`
+  (`Text`, `FontSize`, `Alignment`), `UICanvas` (`ScaleMode`, `ReferenceResolution`, `MatchWidthOrHeight`, `SortOrder`,
+  `ReceivesInput`: false for HUDs that never block clicks), `UIButton`/`UIToggle`/`UISlider` (`EventTarget`: the entity
+  whose scripts get `OnUIClick`/`OnUIValueChanged`), `UISelectable` (colors, `Navigation`). `component.add` of `UIMask`
+  (`Padding`, `Softness`) keeps an element's children inside its rect: `ui.layout` then reports `visibleRect` for them,
+  and `input.click` aims at what the mask leaves.
+- Check proportions without rendering: `ui.layout` at two screens of the same aspect gives the same fractions under
+  `ScaleWithScreen`. `ui.layout {"entity": ...}` lists one subtree (state, focused, text and value too).
+- UI in the scene (a sign, a name tag): `component.set` on the canvas's `UICanvas` with `"RenderMode": "WorldSpace"` and
+  `WorldUnitsPerUnit` (0.01: 100 canvas units are a meter); move it with its transform (it faces +Z). `ui.layout` marks
+  it `worldSpace`, its elements' `rect` are canvas units and `screenRect` is where the primary camera shows them (null
+  without one); `ui.hitTest` and `input.click` reach it through that camera.
+- For the person: `viewport.setSettings {"canvasMode": true}` shows the selection's canvas in 2D at its reference aspect
+  with handles (the "2D" chip); `{"gameUI": true}` draws the UI over the editor view, where a click selects an element.
 
 **Look at it** (needs rendering, not `--no-gpu`): `camera.focus` or `camera.set`, then
 `StrataCLI call viewport.capture '{"camera": "scene"}' --save-image shot.png` and open `shot.png`; with MCP the
@@ -474,7 +522,7 @@ the scene has unsaved changes; `{"force": true}` discards them. The editor answe
 | The editor went away on its own | It was started with `--idle-timeout` (MCP: 10 minutes) and no client stayed connected; start it again. |
 | `viewport.*` / `camera.*` fail or are missing | The editor runs with `--no-gpu` (restart it with `--headless`), or this build has no viewport commands (check `editor.commands`). |
 | The capture is lit, but the game is dark | The capture says `"previewLighting": true`: the scene has no light of its own. Add a directional light and a sky light (or start from the `basic3d` template); check with `{"camera": "scene"}`. |
-| The HUD is missing from a capture | Editor views hide screen-space text (`hiddenScreenSpaceTexts`); capture with `{"camera": "scene"}`, while playing, or turn on `viewport.setSettings {"gameUI": true}`. |
+| The HUD is missing from a capture | Editor views hide screen-space text and UI canvases (`hiddenScreenSpaceTexts`, `ui.hiddenCanvases`); capture with `{"camera": "scene"}`, while playing, or turn on `viewport.setSettings {"gameUI": true}`. |
 | Script or import errors | `log.read {"minLevel": "Warn"}`, `asset.info`. |
 
 Session files of editors that exited are removed by the clients automatically; never edit or copy them (they

@@ -4,6 +4,7 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/Font.h"
+#include "Strata/Renderer/FontAtlasCache.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/SceneRenderData.h"
@@ -20,8 +21,8 @@ namespace Strata
 	// A glyph may overdraw the frame budget by its own cost: keep that within a few budgets.
 	static_assert(FontAtlas::c_MaxGlyphRasterCost <= 4 * TextRenderer::c_FrameRasterBudget.Cost);
 
-	TextRenderer::TextRenderer(const std::string& debugName, nvrhi::IBuffer* frameConstants)
-		: m_DebugName(debugName), m_Errors("TextRenderer '" + debugName + "'"), m_FrameConstants(frameConstants)
+	TextRenderer::TextRenderer(const std::string& debugName, nvrhi::IBuffer* frameConstants, FontAtlasCache& atlases)
+		: m_DebugName(debugName), m_Errors("TextRenderer '" + debugName + "'"), m_FrameConstants(frameConstants), m_Atlases(atlases)
 	{
 		ST_CORE_VERIFY(Renderer::IsInitialized() && frameConstants, "TextRenderer requires an initialized renderer and frame constants");
 		m_Device = Renderer::GetDevice();
@@ -58,23 +59,15 @@ namespace Strata
 
 	TextRenderer::~TextRenderer() = default;
 
-	TextRenderer::CachedAtlas* TextRenderer::GetAtlas(const Ref<Font>& font)
+	TextRenderer::AtlasBinding& TextRenderer::GetBinding(FontAtlas& atlas)
 	{
-		auto it = m_Atlases.find(font.get());
-		if (it == m_Atlases.end())
-		{
-			std::string error;
-			CachedAtlas cached;
-			cached.Atlas = FontAtlas::Create(font, &error);
-			if (!cached.Atlas)
-				m_Errors.Report(fmt::format("cannot use a font: {}", error)); // Cached as unusable, so not retried every frame
-			it = m_Atlases.emplace(font.get(), std::move(cached)).first;
-		}
-		it->second.Used = true;
-		return it->second.Atlas ? &it->second : nullptr;
+		AtlasBinding& binding = m_Bindings[atlas.GetId()];
+		binding.Atlas = &atlas;
+		binding.Used = true;
+		return binding;
 	}
 
-	void TextRenderer::AppendQuads(CachedAtlas& atlas, const glm::mat4& transform, const glm::vec4& color, bool screenSpace)
+	void TextRenderer::AppendQuads(AtlasBinding& binding, const glm::mat4& transform, const glm::vec4& color, bool screenSpace)
 	{
 		std::vector<DrawRange>& ranges = screenSpace ? m_ScreenRanges : m_WorldRanges;
 		const uint32_t firstVertex = static_cast<uint32_t>(m_Vertices.size());
@@ -99,26 +92,28 @@ namespace Strata
 		}
 
 		const uint32_t vertexCount = static_cast<uint32_t>(m_Vertices.size()) - firstVertex;
-		if (!ranges.empty() && ranges.back().Atlas == &atlas && ranges.back().FirstVertex + ranges.back().VertexCount == firstVertex)
+		if (!ranges.empty() && ranges.back().Binding == &binding && ranges.back().FirstVertex + ranges.back().VertexCount == firstVertex)
 			ranges.back().VertexCount += vertexCount;
 		else
-			ranges.push_back(DrawRange { &atlas, firstVertex, vertexCount });
+			ranges.push_back(DrawRange { &binding, firstVertex, vertexCount });
 	}
 
-	bool TextRenderer::Prepare(Scene& scene, const glm::uvec2& viewportSize, bool drawScreenSpace, nvrhi::ICommandList* commandList, TextRenderStats& outStats)
+	bool TextRenderer::Prepare(Scene& scene, const glm::uvec2& viewportSize, bool drawScreenSpace, nvrhi::ICommandList* commandList, TextRenderStats& outStats,
+		const SceneScreenView& screenView)
 	{
 		m_Vertices.clear();
 		m_WorldRanges.clear();
 		m_ScreenRanges.clear();
 		m_ViewportSize = glm::max(glm::vec2(viewportSize), glm::vec2(1.0f));
-		for (auto& [font, cached] : m_Atlases)
-		{
-			cached.Used = false;
-			if (cached.Atlas)
-				cached.Atlas->BeginFrame();
-		}
-		// One budget for every font: each atlas receives what the previous ones left.
-		GlyphRasterBudget budget = c_FrameRasterBudget;
+		// Screen-space text is placed on the game's screen, which lies in the image where the screen view puts it.
+		const glm::vec2 screenSize = glm::max(screenView.GetScreenSize(viewportSize), glm::vec2(1.0f));
+		const float screenZoom = screenView.GetZoom();
+		const glm::vec2 screenOffset = screenView.GetOffset();
+		for (auto& [id, binding] : m_Bindings)
+			binding.Used = false;
+		// One budget for every font and pass: each atlas receives what the previous ones left (FontAtlasCache).
+		const GlyphRasterBudget startBudget = m_Atlases.GetBudget();
+		GlyphRasterBudget budget = startBudget;
 
 		for (auto [entity, text, world] : scene.GetRegistry().view<TextComponent, WorldTransformComponent>().each())
 		{
@@ -139,12 +134,12 @@ namespace Strata
 				if (!font && AssetManager::IsHandleValid(text.Font) && state != AssetState::Failed && state != AssetState::Ready)
 					outStats.PendingFonts++;
 			}
-			CachedAtlas* atlas = GetAtlas(font ? font : Font::GetDefault());
+			FontAtlas* atlas = m_Atlases.Get(font ? font : Font::GetDefault());
 			if (!atlas)
 				continue;
-			atlas->Atlas->SetRasterBudget(budget);
-			LayoutText(*atlas->Atlas, text.Text, text.Alignment, m_Layout);
-			budget = atlas->Atlas->GetRasterBudget();
+			atlas->SetRasterBudget(budget);
+			LayoutText(*atlas, text.Text, text.Alignment, m_Layout);
+			budget = atlas->GetRasterBudget();
 			outStats.PendingGlyphs += m_Layout.PendingGlyphs;
 			if (m_Layout.Quads.empty())
 				continue;
@@ -155,31 +150,30 @@ namespace Strata
 			{
 				// The anchor is also the pivot: (0, 0) puts the block's top-left corner on it, (1, 1) its bottom-right
 				// (horizontally the alignment decides). Whole pixels keep the glyphs crisp.
-				const glm::vec2 anchor = text.ScreenAnchor * m_ViewportSize + text.ScreenOffset;
+				const glm::vec2 anchor = text.ScreenAnchor * screenSize + text.ScreenOffset;
 				const float blockHeight = (m_Layout.Max.y - m_Layout.Min.y) * size;
-				const glm::vec2 origin(std::round(anchor.x), std::round(anchor.y - text.ScreenAnchor.y * blockHeight));
-				transform = glm::translate(glm::mat4(1.0f), glm::vec3(origin, 0.0f)) * glm::scale(glm::mat4(1.0f), glm::vec3(size, -size, 1.0f));
+				const glm::vec2 placed = screenOffset + screenZoom * glm::vec2(anchor.x, anchor.y - text.ScreenAnchor.y * blockHeight);
+				const glm::vec2 origin(std::round(placed.x), std::round(placed.y));
+				const float scaled = size * screenZoom;
+				transform = glm::translate(glm::mat4(1.0f), glm::vec3(origin, 0.0f)) * glm::scale(glm::mat4(1.0f), glm::vec3(scaled, -scaled, 1.0f));
 			}
 			else
 			{
 				// In the entity's XY plane (facing +Z), vertically centered on its origin, FontSize world units per em.
 				transform = world.Matrix * glm::scale(glm::mat4(1.0f), glm::vec3(size)) * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -m_Layout.Min.y * 0.5f, 0.0f));
 			}
-			AppendQuads(*atlas, transform, text.Color, text.ScreenSpace);
+			AppendQuads(GetBinding(*atlas), transform, text.Color, text.ScreenSpace);
 			outStats.Texts++;
 			if (text.ScreenSpace)
 				outStats.ScreenSpaceTexts++;
 			outStats.Glyphs += static_cast<uint32_t>(m_Layout.Quads.size());
 		}
-		outStats.RasterizedGlyphs += c_FrameRasterBudget.Glyphs - budget.Glyphs;
+		outStats.RasterizedGlyphs += startBudget.Glyphs - budget.Glyphs;
+		m_Atlases.SetBudget(budget);
 
-		// Atlases live as long as their font asset: once only the cache still holds a font, it is gone from the scene's
-		// asset manager (unloaded or replaced by a reload) and its atlas is dropped.
-		for (auto it = m_Atlases.begin(); it != m_Atlases.end();)
-		{
-			const bool orphaned = !it->second.Used && (!it->second.Atlas || it->second.Atlas->GetFont().use_count() == 1) && it->first != Font::GetDefault().get();
-			it = orphaned ? m_Atlases.erase(it) : std::next(it);
-		}
+		// Bindings of atlases this frame does not draw with are let go (the cache may drop the atlases).
+		for (auto it = m_Bindings.begin(); it != m_Bindings.end();)
+			it = it->second.Used ? std::next(it) : m_Bindings.erase(it);
 		if (m_Vertices.empty())
 			return false;
 
@@ -187,28 +181,28 @@ namespace Strata
 		{
 			for (const DrawRange& range : *ranges)
 			{
-				CachedAtlas& cached = *range.Atlas;
-				if (!cached.Atlas->Upload(m_Device, commandList))
+				AtlasBinding& binding = *range.Binding;
+				if (!binding.Atlas->Upload(m_Device, commandList))
 				{
 					m_Errors.Report("failed to create a glyph atlas texture");
 					return false;
 				}
-				if (cached.BoundTexture != cached.Atlas->GetTexture())
+				if (binding.BoundTexture != binding.Atlas->GetTexture())
 				{
 					nvrhi::BindingSetDesc desc;
 					desc.bindings = {
 						nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstants),
-						nvrhi::BindingSetItem::Texture_SRV(15, cached.Atlas->GetTexture()),
+						nvrhi::BindingSetItem::Texture_SRV(15, binding.Atlas->GetTexture()),
 						nvrhi::BindingSetItem::Sampler(15, m_Sampler),
 						nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::TextParameters))
 					};
-					cached.BindingSet = m_Device->createBindingSet(desc, m_BindingLayout);
-					if (!cached.BindingSet)
+					binding.BindingSet = m_Device->createBindingSet(desc, m_BindingLayout);
+					if (!binding.BindingSet)
 					{
 						m_Errors.Report("failed to create a glyph atlas binding set");
 						return false;
 					}
-					cached.BoundTexture = cached.Atlas->GetTexture();
+					binding.BoundTexture = binding.Atlas->GetTexture();
 				}
 			}
 		}
@@ -284,7 +278,7 @@ namespace Strata
 		state.vertexBuffers = { nvrhi::VertexBufferBinding { m_VertexBuffer, 0, 0 } };
 		for (const DrawRange& range : ranges)
 		{
-			state.bindings = { range.Atlas->BindingSet };
+			state.bindings = { range.Binding->BindingSet };
 			commandList->setGraphicsState(state);
 			commandList->setPushConstants(&parameters, sizeof(parameters));
 			commandList->draw(nvrhi::DrawArguments().setVertexCount(range.VertexCount).setStartVertexLocation(range.FirstVertex));

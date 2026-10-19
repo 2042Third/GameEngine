@@ -163,6 +163,11 @@ namespace Strata
 		ComponentGizmoGroup GizmoGroup = ComponentGizmoGroup::None;
 		ComponentGizmoFunction Gizmo = nullptr;
 
+		// Names of the components this one needs on its entity (a UI image needs its UIRect). The paths that add components by
+		// name (ComponentAccess::AddComponent: component.add, entity.create, the inspector's Add Component, scripts) add the
+		// missing ones first, in the same edit. Removing a required component is allowed: the dependent one then has no effect.
+		std::vector<std::string> Requires;
+
 		bool IsHidden() const { return HasFlag(Flags, ComponentFlags::Hidden); }
 		bool IsRemovable() const { return !HasFlag(Flags, ComponentFlags::NotRemovable); }
 		bool IsAddable() const { return !IsHidden() && !HasFlag(Flags, ComponentFlags::EngineAdded) && !HasFlag(Flags, ComponentFlags::NoSerialize); }
@@ -266,6 +271,13 @@ namespace Strata
 		ComponentInfoBuilder& Flags(ComponentFlags flags)
 		{
 			GetTarget().Flags = flags;
+			return *this;
+		}
+
+		// A component the entity needs for this one to work (see ComponentInfo::Requires), by its registered name.
+		ComponentInfoBuilder& Requires(std::string componentName)
+		{
+			GetTarget().Requires.push_back(std::move(componentName));
 			return *this;
 		}
 

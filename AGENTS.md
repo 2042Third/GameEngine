@@ -354,6 +354,23 @@ Skeletons, clips, controllers and the "Animation" scene system live in `Strata/s
   the main thread afterwards (a test compares thread counts bit for bit).
 - Root motion moves entities only in `AnimationSystem::ApplyRootMotion`.
 
+## Game UI
+
+Canvases, rects, images, texts, widgets and layout groups live in `Strata/src/Strata/GameUI/`; only the composition root
+includes the module ([Game UI](Docs/DeveloperGuide.md#game-ui)).
+
+- The UI contract: code that writes UI component fields directly signals the change (`MarkModified`, `registry.patch`);
+  `GameUIScene` recomputes only what changed, and Debug builds assert after every `EnsureLayout` that its layout equals a
+  full recomputation (`GameUIScene::Validate` names the entity).
+- UI components live in GameUI (`Requires("UIRect")`, category "UI"), never in `Scene/Components.h`. The renderer reaches
+  the UI only through `SceneOverlayRegistry`; the UI pass requests each distinct UI texture and font once per frame through
+  `Scene::GetAssetManager()`, never per element.
+- UI input belongs to the "UI" scene system: gameplay keeps reading `Input` (pointer capture hides the UI's clicks and
+  scrolling from it, keyboard capture an edited input field's keys and text), UI code reads `Input::GetPointerState` and
+  `GetKeyState`, and widgets write their values with `registry.patch` and report them through `IUIEvents`. Elements of
+  world-space canvases are placed on the screen by projection and hit through the camera's ray (`GameUIPointer`), never
+  by dividing pixels by a canvas's scale ([UI input](Docs/DeveloperGuide.md#ui-input)).
+
 ## Editor
 
 `StrataEditorCore` (`EditorContext`, `EditorCommandRegistry`) is the editor without UI; `StrataEditorUI` draws it and
@@ -409,7 +426,8 @@ lights, overlays and text: [Rendering](Docs/DeveloperGuide.md#rendering).
 - Shaders writing HDR targets clamp with `SanitizeHDR`; normal maps are read as X and Y with Z reconstructed.
 - Skinning costs unskinned scenes nothing (`RenderScene::HasSkinProxies`).
 - Font files are untrusted input: extend `Renderer/FontValidation.h`, with crafted-font tests, before calling another
-  stb_truetype function.
+  stb_truetype function. Text is measured with `ShapeText` on the font's `FontFace`, never by rasterizing; passes that
+  draw glyphs share the renderer's `FontAtlasCache` and its frame budget.
 - Read GPU data back with `TextureReadback`, polled per frame; `Renderer::ReadTexture` blocks (tests and tools only).
 
 ## Automation (editor RPC + MCP)

@@ -4,10 +4,17 @@
 #include "Editor/SimulatedInput.h"
 
 #include <Strata/Core/Log.h>
+#include <Strata/GameUI/GameUIComponents.h>
+#include <Strata/GameUI/GameUIHitTest.h>
+#include <Strata/GameUI/GameUIScene.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Input/InputNames.h>
+#include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Scene/Scene.h>
+#include <Strata/Scene/SceneServices.h>
 
 #include <cmath>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -513,6 +520,228 @@ namespace Strata
 				state["gamepads"] = std::move(gamepads);
 				return EditorCommandResult::Ok(std::move(state));
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
+	}
+
+
+	namespace
+	{
+
+		// Whether `entity` is `ancestor` or below it.
+		bool IsWithin(Entity entity, Entity ancestor)
+		{
+			for (Entity current = entity; current; current = current.GetParent())
+			{
+				if (current == ancestor)
+					return true;
+			}
+			return false;
+		}
+
+		// The selectable a click on `entity` presses: itself or its nearest ancestor with a UISelectable, within its canvas.
+		Entity FindSelectable(Entity entity)
+		{
+			for (Entity current = entity; current; current = current.GetParent())
+			{
+				if (current.HasComponent<UISelectableComponent>())
+					return current;
+				if (current.HasComponent<UICanvasComponent>())
+					break;
+			}
+			return {};
+		}
+
+		const char* GetEventTypeName(UIEventType type)
+		{
+			switch (type)
+			{
+				case UIEventType::Click: return "click";
+				case UIEventType::ValueChanged: return "valueChanged";
+				case UIEventType::FocusChanged: return "focusChanged";
+				case UIEventType::Submit: return "submit";
+			}
+			return "click";
+		}
+
+		nlohmann::json DescribeEvent(const UIEventInfo& event)
+		{
+			nlohmann::json described = { { "type", GetEventTypeName(event.Type) }, { "widget", UUIDToJson(event.WidgetID) },
+				{ "name", event.Widget ? nlohmann::json(event.Widget.GetName()) : nlohmann::json(nullptr) } };
+			if (event.Type == UIEventType::ValueChanged)
+				described["value"] = event.Value;
+			if (event.Type == UIEventType::FocusChanged)
+				described["focused"] = event.Focused;
+			return described;
+		}
+
+		// "Canvas/Menu/Play": the entity's names from its canvas down.
+		std::string GetUIPath(Entity entity)
+		{
+			std::string path = entity.GetName();
+			for (Entity current = entity.GetParent(); current; current = current.GetParent())
+			{
+				path = current.GetName() + "/" + path;
+				if (current.HasComponent<UICanvasComponent>())
+					break;
+			}
+			return path;
+		}
+
+	}
+
+	void RegisterUIInputCommands(EditorCommandRegistry& registry)
+	{
+		registry.Register({ "input.click",
+			"Clicks a game UI element of the running game (play mode) as a player would: moves the simulated pointer to the center of its "
+			"rect (at the game view's size) and taps a mouse button there. Fails, changing nothing, when the element is not shown on a canvas "
+			"that receives input, or when something else is on top of its center (the error names what a click would hit: the menu is "
+			"covered). Answers once the game has seen the release, with entity, position (in the game view, as input.mouseMove takes it), "
+			"clicked (a button clicked or a toggle or slider changed: the selectable the click pressed raised its event) and events (every UI "
+			"event of the click: type click, valueChanged or focusChanged, widget, name, value, focused); with wait false at once, without "
+			"clicked and events.",
+			ObjectSchema({
+				{ "entity", EntitySchema("The UI element to click (a button, toggle, slider, or any element whose center is a raycast target)") },
+				{ "button", StringSchema("The mouse button (default Left; case does not matter)") },
+				{ "frames", IntegerSchema("Game frames the button stays down (default 1)", 1, c_MaxHoldFrames) },
+				{ "wait", WaitSchema() } }, { "entity" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				Scene& scene = *context.GetActiveScene();
+				CommandArguments arguments(parameters);
+				const Entity target = arguments.GetEntity(scene, "entity");
+				const std::string buttonName = arguments.GetString("button", "Left");
+				const int64_t frames = arguments.GetInt("frames", 1, 1, c_MaxHoldFrames);
+				const bool wait = ReadWait(arguments);
+				const std::optional<MouseCode> button = InputNames::FindMouseButton(buttonName);
+				if (arguments.IsValid() && !button)
+					arguments.SetError(fmt::format("Unknown mouse button '{}': use Left, Right, Middle or Button3 to Button7", buttonName));
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!IsGameRunning(context))
+					return NoGameError();
+				if (!GameUIScene::HasCanvases(scene))
+					return EditorCommandResult::Fail(fmt::format("'{}' is not on a UI canvas: the running scene has none", target.GetName()));
+
+				// Where the player sees it: the layout of the game view (the UI's input screen).
+				GameUIScene& ui = GameUIScene::Get(scene);
+				const UIInputScreen screen = GameUIScene::GetInputScreen();
+				const std::span<const UICanvasView> laidOut = ui.EnsureLayout(screen.Screen);
+				const std::vector<UICanvasView> views(laidOut.begin(), laidOut.end());
+				UICanvasView view;
+				uint32_t element = 0;
+				if (!ui.FindElement(target.GetHandle(), screen.Screen, view, element))
+					return EditorCommandResult::Fail(fmt::format("'{}' is not an element of a UI canvas (it needs a UIRect under a UICanvas)", target.GetName()));
+				if (!view.ReceivesInput)
+					return EditorCommandResult::Fail(fmt::format("'{}' is on the canvas '{}', which does not receive input", target.GetName(),
+						Entity(view.Canvas, &scene).GetName()));
+				if (!ui.IsElementVisible(view, element))
+					return EditorCommandResult::Fail(fmt::format("'{}' is not shown (it is inactive, or inside the checkmark of a toggle that is off)", target.GetName()));
+				const UIBox box = ui.GetVisibleBox(view, element);
+				if (!(box.Size.x > 0.0f && box.Size.y > 0.0f))
+				{
+					return EditorCommandResult::Fail(ui.GetElementClip(view, element)
+						? fmt::format("'{}' is outside the clip rect of a UI Mask above it: nothing of it is shown", target.GetName())
+						: fmt::format("'{}' has an empty rect", target.GetName()));
+				}
+				// A canvas in the scene shows the element where the game camera projects its center.
+				const std::optional<glm::mat4> viewProjection = GameUIPointer::GetGameViewProjection(scene, screen.Screen);
+				glm::vec2 pixel = box.GetCenter() * view.Scale;
+				if (view.WorldSpace)
+				{
+					const std::optional<glm::vec2> projected = viewProjection
+						? GameUIPointer::ProjectCanvasPoint(*viewProjection, ui.GetCanvasWorldMatrix(view), screen.Screen.Size, box.GetCenter())
+						: std::nullopt;
+					if (!projected)
+						return EditorCommandResult::Fail(fmt::format("'{}' is on a canvas in the scene that the game's camera does not see", target.GetName()));
+					pixel = *projected;
+				}
+				const std::optional<UIPointerRay> ray = viewProjection ? GameUIPointer::MakeRay(*viewProjection, screen.Screen.Size, pixel) : std::nullopt;
+				GameUIHitTester tester;
+				tester.Update(ui, views);
+				const std::optional<UIHitResult> hit = tester.HitTest(pixel, false, ray ? &*ray : nullptr);
+				if (!hit)
+					return EditorCommandResult::Fail(fmt::format("Nothing at the center of '{}' takes clicks: it is no raycast target (an image or text that "
+						"is one, or a selectable)", target.GetName()));
+				const Entity hitEntity(hit->Entity, &scene);
+				if (!IsWithin(hitEntity, target))
+				{
+					return EditorCommandResult::Fail(fmt::format("'{}' is covered: a click at its center would hit '{}'", target.GetName(), GetUIPath(hitEntity)),
+						nlohmann::json { { "cover", UUIDToJson(hitEntity.GetUUID()) }, { "path", GetUIPath(hitEntity) } });
+				}
+
+				const glm::vec2 position = pixel / screen.InputToPixels;
+				const Entity pressed = FindSelectable(hitEntity);
+				nlohmann::json result = { { "entity", UUIDToJson(target.GetUUID()) }, { "position", { position.x, position.y } },
+					{ "button", InputNames::GetMouseButtonName(*button) } };
+				Input::SimulateMouseMove(position);
+				if (!wait)
+				{
+					context.GetSimulatedInput().Press(SimulatedControlType::MouseButton, *button, static_cast<uint32_t>(frames));
+					return AnswerNow(context, std::move(result));
+				}
+
+				// The click's events, collected until the game has seen the release.
+				const Ref<std::vector<UIEventInfo>> events = CreateRef<std::vector<UIEventInfo>>();
+				IUIEvents* source = scene.GetService<IUIEvents>();
+				const UIEventListenerID listener = source ? source->AddUIEventListener([events](const UIEventInfo& event) { events->push_back(event); }) : 0;
+				const std::weak_ptr<Scene> playing = context.GetActiveScene();
+				Ref<const SimulatedHold> hold = context.GetSimulatedInput().Press(SimulatedControlType::MouseButton, *button, static_cast<uint32_t>(frames));
+				const UUID pressedID = pressed ? pressed.GetUUID() : UUID::Null();
+				return EditorCommandResult::Defer([hold, events, listener, playing, pressedID, result = std::move(result)](EditorContext& pollContext)
+					-> std::optional<EditorCommandResult>
+				{
+					const Ref<Scene> scene = playing.lock();
+					auto stopListening = [&]()
+					{
+						if (scene && listener != 0)
+						{
+							if (IUIEvents* source = scene->GetService<IUIEvents>())
+								source->RemoveUIEventListener(listener);
+						}
+					};
+					if (!IsGameRunning(pollContext) || scene != pollContext.GetActiveScene())
+					{
+						stopListening();
+						return EditorCommandResult::Fail("Play mode stopped before the game saw the click");
+					}
+					if (!hold->Ended || Input::GetFrameIndex() < hold->EndFrame)
+						return std::nullopt;
+					stopListening();
+					nlohmann::json answer = result;
+					answer["seen"] = true;
+					answer["interrupted"] = hold->Interrupted;
+					bool clicked = false;
+					nlohmann::json described = nlohmann::json::array();
+					for (const UIEventInfo& event : *events)
+					{
+						clicked |= pressedID.IsValid() && event.WidgetID == pressedID && event.Type != UIEventType::FocusChanged;
+						described.push_back(DescribeEvent(event));
+					}
+					answer["clicked"] = clicked;
+					answer["events"] = std::move(described);
+					answer["held"] = DescribeSimulatedInput(pollContext);
+					return EditorCommandResult::Ok(std::move(answer));
+				});
+			}, EditorCommandKind::Session });
+
+		registry.Register({ "input.type",
+			"Types text into the running game (play mode), as a keyboard with its layout and input method would: scripts read it with "
+			"Input::GetTypedText in the next game frame (UTF-8, at most 1,024 bytes a frame; malformed UTF-8 arrives as U+FFFD). Answers once "
+			"the game has seen it, or at once with wait false (the default while paused).",
+			ObjectSchema({ { "text", StringSchema("The text to type (UTF-8, 1 to 1,024 bytes)") }, { "wait", WaitSchema() } }, { "text" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const std::string text = arguments.GetString("text");
+				const bool wait = ReadWait(arguments);
+				if (arguments.IsValid() && (text.empty() || text.size() > Input::c_MaxTypedTextBytes))
+					arguments.SetError(fmt::format("Parameter 'text' must hold 1 to {} bytes, not {}", Input::c_MaxTypedTextBytes, text.size()));
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!IsGameRunning(context))
+					return NoGameError();
+				Input::SimulateText(text);
+				return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, { { "text", text } }, "text");
+			}, EditorCommandKind::Session });
 	}
 
 }

@@ -628,13 +628,14 @@ TEST_SUITE("Editor.Viewport")
 			ViewportHarness harness;
 			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
 			nlohmann::json settings = harness.Run("viewport.getSettings");
-			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "allColliders", "stats", "previewLighting", "gameUI", "gizmo", "space",
-				"snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView" })
+			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "allColliders", "stats", "previewLighting", "gameUI", "canvasMode", "gizmo",
+				"space", "snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView" })
 			{
 				CAPTURE(key);
 				CHECK(settings.contains(key));
 			}
-			CHECK(settings.size() == 14);
+			CHECK(settings.size() == 15);
+			CHECK(settings["canvasMode"] == false);
 			CHECK(settings["allColliders"] == false);
 			CHECK(settings["previewLighting"] == true);
 			CHECK(settings["gameUI"] == false);
@@ -642,8 +643,9 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(settings["debugView"] == "none");
 
 			settings = harness.Run("viewport.setSettings", { { "grid", false }, { "gameUI", true }, { "previewLighting", false }, { "gizmo", "Rotate" },
-				{ "space", "Local" }, { "snap", true }, { "rotateSnap", 45 }, { "allColliders", true }, { "debugView", "streaming" } });
+				{ "space", "Local" }, { "snap", true }, { "rotateSnap", 45 }, { "allColliders", true }, { "debugView", "streaming" }, { "canvasMode", true } });
 			CHECK(settings["grid"] == false);
+			CHECK(settings["canvasMode"] == true);
 			CHECK(settings["allColliders"] == true);
 			CHECK(settings["gameUI"] == true);
 			CHECK(settings["previewLighting"] == false);
@@ -674,6 +676,7 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(harness.Context.GetViewport().GetSettings().ShowGameUI);
 		CHECK_FALSE(harness.Context.GetViewport().GetSettings().ShowGrid);
 		CHECK(harness.Context.GetViewport().GetSettings().AllColliders);
+		CHECK(harness.Context.GetViewport().GetSettings().CanvasMode);
 	}
 
 	TEST_CASE("Every scene keeps its own editor camera, and a scene seen for the first time is framed")

@@ -2577,6 +2577,2609 @@
 			},
 			{
 				"Components": {
+					"Name": {
+						"Name": "UI Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "UIFeatures",
+								"Fields": {
+									"ClickFrame": {
+										"Type": "Int",
+										"Value": 30
+									},
+									"Texture": {
+										"Type": "Asset",
+										"Value": "F7A0000000000005"
+									}
+								}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000083"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Feature UI"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UICanvas": {
+						"FirstSelected": "F7E0000000000072",
+						"MatchWidthOrHeight": 1,
+						"PixelSnap": true,
+						"ReceivesInput": true,
+						"ReferenceResolution": [
+							1280,
+							720
+						],
+						"SafeAreaPadding": [
+							8,
+							8,
+							8,
+							8
+						],
+						"ScaleFactor": 1,
+						"ScaleMode": "ScaleWithScreen",
+						"SortOrder": 0,
+						"RenderMode": "ScreenSpace",
+						"WorldUnitsPerUnit": 0.01
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							100,
+							100
+						]
+					}
+				},
+				"ID": "F7E0000000000070"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Menu Panel"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							0.4,
+							0.5,
+							0.9,
+							1
+						],
+						"BorderWidth": 2,
+						"Color": [
+							0.1,
+							0.12,
+							0.2,
+							0.9
+						],
+						"CornerRadius": 12,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UILayout": {
+						"CellSize": [
+							100,
+							100
+						],
+						"ChildAlignment": "TopCenter",
+						"Columns": 0,
+						"Padding": [
+							16,
+							16,
+							16,
+							16
+						],
+						"Spacing": [
+							0,
+							8
+						],
+						"StretchChildren": true,
+						"Type": "Vertical"
+					},
+					"UIMask": {
+						"Padding": [
+							2,
+							2,
+							2,
+							2
+						],
+						"Softness": 1
+					},
+					"UIRect": {
+						"AnchorMax": [
+							1,
+							0
+						],
+						"AnchorMin": [
+							1,
+							0
+						],
+						"FitContent": "Height",
+						"IgnoreLayout": false,
+						"Pivot": [
+							1,
+							0
+						],
+						"Position": [
+							-16,
+							16
+						],
+						"Size": [
+							320,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000071",
+				"Parent": "F7E0000000000070"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Play Button"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIButton": {
+						"EventTarget": "F7E0000000000083"
+					},
+					"UIImage": {
+						"BorderColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"BorderWidth": 0,
+						"Color": [
+							0.3,
+							0.6,
+							1,
+							1
+						],
+						"CornerRadius": 6,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							8,
+							8,
+							8,
+							8
+						],
+						"SliceScale": 0.5,
+						"Texture": "F7A0000000000005",
+						"Type": "Sliced",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							48
+						]
+					},
+					"UISelectable": {
+						"DisabledColor": [
+							0.5,
+							0.5,
+							0.5,
+							0.6
+						],
+						"DisabledImage": "0000000000000000",
+						"FadeDuration": 0.05,
+						"FocusedColor": [
+							1,
+							1,
+							0.8,
+							1
+						],
+						"FocusedImage": "0000000000000000",
+						"HoverColor": [
+							0.8,
+							0.9,
+							1,
+							1
+						],
+						"HoverImage": "0000000000000000",
+						"Interactable": true,
+						"NavigateDown": "F7E0000000000074",
+						"NavigateLeft": "0000000000000000",
+						"NavigateRight": "0000000000000000",
+						"NavigateUp": "F7E0000000000080",
+						"Navigation": "Explicit",
+						"NormalColor": [
+							0.95,
+							0.95,
+							1,
+							1
+						],
+						"PressedColor": [
+							0.6,
+							0.7,
+							0.9,
+							1
+						],
+						"PressedImage": "0000000000000000",
+						"TargetImage": "0000000000000000",
+						"Transition": "ColorTint"
+					}
+				},
+				"ID": "F7E0000000000072",
+				"Parent": "F7E0000000000071"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Play Label"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							1,
+							1
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							0
+						]
+					},
+					"UIText": {
+						"Alignment": "Center",
+						"Color": [
+							0.05,
+							0.05,
+							0.1,
+							1
+						],
+						"Font": "F7A0000000000008",
+						"FontSize": 24,
+						"LineSpacing": 1,
+						"OutlineColor": [
+							1,
+							1,
+							1,
+							1
+						],
+						"OutlineWidth": 0.05,
+						"Overflow": "Overflow",
+						"RaycastTarget": true,
+						"Text": "Play",
+						"VerticalAlignment": "Middle",
+						"Wrap": true
+					}
+				},
+				"ID": "F7E0000000000073",
+				"Parent": "F7E0000000000072"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Sound Toggle"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"BorderWidth": 0,
+						"Color": [
+							0.2,
+							0.25,
+							0.4,
+							1
+						],
+						"CornerRadius": 0,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							40
+						]
+					},
+					"UISelectable": {
+						"DisabledColor": [
+							0.75,
+							0.75,
+							0.75,
+							0.5
+						],
+						"DisabledImage": "F7A0000000000006",
+						"FadeDuration": 0.1,
+						"FocusedColor": [
+							0.95,
+							0.95,
+							0.95,
+							1
+						],
+						"FocusedImage": "F7A0000000000005",
+						"HoverColor": [
+							0.9,
+							0.9,
+							0.9,
+							1
+						],
+						"HoverImage": "F7A0000000000005",
+						"Interactable": true,
+						"NavigateDown": "0000000000000000",
+						"NavigateLeft": "0000000000000000",
+						"NavigateRight": "0000000000000000",
+						"NavigateUp": "0000000000000000",
+						"Navigation": "Automatic",
+						"NormalColor": [
+							1,
+							1,
+							1,
+							1
+						],
+						"PressedColor": [
+							0.75,
+							0.75,
+							0.75,
+							1
+						],
+						"PressedImage": "F7A0000000000006",
+						"TargetImage": "F7E0000000000075",
+						"Transition": "ImageSwap"
+					},
+					"UIToggle": {
+						"Checkmark": "F7E0000000000076",
+						"EventTarget": "F7E0000000000083",
+						"Group": "0000000000000000",
+						"IsOn": true
+					}
+				},
+				"ID": "F7E0000000000074",
+				"Parent": "F7E0000000000071"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Sound Box"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"BorderWidth": 0,
+						"Color": [
+							0.9,
+							0.9,
+							0.95,
+							1
+						],
+						"CornerRadius": 4,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0,
+							0.5
+						],
+						"AnchorMin": [
+							0,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0,
+							0.5
+						],
+						"Position": [
+							8,
+							0
+						],
+						"Size": [
+							28,
+							28
+						]
+					}
+				},
+				"ID": "F7E0000000000075",
+				"Parent": "F7E0000000000074"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Sound Check"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"BorderWidth": 0,
+						"Color": [
+							0.2,
+							0.7,
+							0.3,
+							1
+						],
+						"CornerRadius": 2,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": false,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							1,
+							1
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							-8,
+							-8
+						]
+					}
+				},
+				"ID": "F7E0000000000076",
+				"Parent": "F7E0000000000075"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Sound Label"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							1,
+							1
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0,
+							0.5
+						],
+						"Position": [
+							40,
+							0
+						],
+						"Size": [
+							-48,
+							0
+						]
+					},
+					"UIText": {
+						"Alignment": "Left",
+						"Color": [
+							1,
+							1,
+							1,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 20,
+						"LineSpacing": 1.2,
+						"OutlineColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"OutlineWidth": 0,
+						"Overflow": "Ellipsis",
+						"RaycastTarget": false,
+						"Text": "Sound",
+						"VerticalAlignment": "Top",
+						"Wrap": false
+					}
+				},
+				"ID": "F7E0000000000077",
+				"Parent": "F7E0000000000074"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Volume Slider"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"BorderWidth": 0,
+						"Color": [
+							0.15,
+							0.15,
+							0.2,
+							1
+						],
+						"CornerRadius": 4,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							24
+						]
+					},
+					"UISelectable": {
+						"DisabledColor": [
+							0.75,
+							0.75,
+							0.75,
+							0.5
+						],
+						"DisabledImage": "0000000000000000",
+						"FadeDuration": 0.1,
+						"FocusedColor": [
+							0.95,
+							0.95,
+							0.95,
+							1
+						],
+						"FocusedImage": "0000000000000000",
+						"HoverColor": [
+							0.9,
+							0.9,
+							0.9,
+							1
+						],
+						"HoverImage": "0000000000000000",
+						"Interactable": true,
+						"NavigateDown": "0000000000000000",
+						"NavigateLeft": "0000000000000000",
+						"NavigateRight": "0000000000000000",
+						"NavigateUp": "0000000000000000",
+						"Navigation": "Automatic",
+						"NormalColor": [
+							1,
+							1,
+							1,
+							1
+						],
+						"PressedColor": [
+							0.75,
+							0.75,
+							0.75,
+							1
+						],
+						"PressedImage": "0000000000000000",
+						"TargetImage": "0000000000000000",
+						"Transition": "ColorTint"
+					},
+					"UISlider": {
+						"Direction": "LeftToRight",
+						"EventTarget": "F7E0000000000083",
+						"Fill": "F7E0000000000079",
+						"Handle": "F7E000000000007A",
+						"KeyboardStep": 1,
+						"MaxValue": 10,
+						"MinValue": 0,
+						"Value": 4,
+						"WholeNumbers": true
+					}
+				},
+				"ID": "F7E0000000000078",
+				"Parent": "F7E0000000000071"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Volume Fill"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"BorderWidth": 0,
+						"Color": [
+							0.3,
+							0.8,
+							0.5,
+							1
+						],
+						"CornerRadius": 0,
+						"FillAmount": 0.5,
+						"FillDirection": "BottomToTop",
+						"PreserveAspect": false,
+						"RaycastTarget": false,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Filled",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							1,
+							1
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000079",
+				"Parent": "F7E0000000000078"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Volume Handle"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"BorderWidth": 0,
+						"Color": [
+							1,
+							1,
+							1,
+							1
+						],
+						"CornerRadius": 0,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": true,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "F7A0000000000005",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							0.5,
+							0.5
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							16,
+							28
+						]
+					}
+				},
+				"ID": "F7E000000000007A",
+				"Parent": "F7E0000000000078"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Item Grid"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UILayout": {
+						"CellSize": [
+							40,
+							40
+						],
+						"ChildAlignment": "MiddleCenter",
+						"Columns": 3,
+						"Padding": [
+							0,
+							0,
+							0,
+							0
+						],
+						"Spacing": [
+							4,
+							4
+						],
+						"StretchChildren": false,
+						"Type": "Grid"
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "Height",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E000000000007B",
+				"Parent": "F7E0000000000071"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Cell A"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"BorderWidth": 0,
+						"Color": [
+							0.9,
+							0.3,
+							0.3,
+							1
+						],
+						"CornerRadius": 0,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "F7A0000000000006",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							100,
+							100
+						]
+					}
+				},
+				"ID": "F7E000000000007C",
+				"Parent": "F7E000000000007B"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Cell B"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"BorderWidth": 0,
+						"Color": [
+							0.3,
+							0.9,
+							0.3,
+							1
+						],
+						"CornerRadius": 0,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							100,
+							100
+						]
+					}
+				},
+				"ID": "F7E000000000007D",
+				"Parent": "F7E000000000007B"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Cell C"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"BorderWidth": 0,
+						"Color": [
+							0.3,
+							0.3,
+							0.9,
+							1
+						],
+						"CornerRadius": 0,
+						"FillAmount": 1,
+						"FillDirection": "RightToLeft",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0,
+							0
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "None",
+						"IgnoreLayout": true,
+						"Pivot": [
+							0,
+							0
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							10,
+							10
+						]
+					}
+				},
+				"ID": "F7E000000000007E",
+				"Parent": "F7E000000000007B"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Status Row"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UILayout": {
+						"CellSize": [
+							100,
+							100
+						],
+						"ChildAlignment": "BottomRight",
+						"Columns": 0,
+						"Padding": [
+							2,
+							2,
+							2,
+							2
+						],
+						"Spacing": [
+							6,
+							0
+						],
+						"StretchChildren": false,
+						"Type": "Horizontal"
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "Both",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E000000000007F",
+				"Parent": "F7E0000000000071"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Quit Button"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIButton": {
+						"EventTarget": "0000000000000000"
+					},
+					"UIImage": {
+						"BorderColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"BorderWidth": 0,
+						"Color": [
+							0.7,
+							0.2,
+							0.2,
+							1
+						],
+						"CornerRadius": 6,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							96,
+							32
+						]
+					},
+					"UISelectable": {
+						"DisabledColor": [
+							0.75,
+							0.75,
+							0.75,
+							0.5
+						],
+						"DisabledImage": "0000000000000000",
+						"FadeDuration": 0.1,
+						"FocusedColor": [
+							0.95,
+							0.95,
+							0.95,
+							1
+						],
+						"FocusedImage": "0000000000000000",
+						"HoverColor": [
+							0.9,
+							0.9,
+							0.9,
+							1
+						],
+						"HoverImage": "0000000000000000",
+						"Interactable": true,
+						"NavigateDown": "F7E0000000000072",
+						"NavigateLeft": "F7E0000000000084",
+						"NavigateRight": "F7E0000000000084",
+						"NavigateUp": "0000000000000000",
+						"Navigation": "Explicit",
+						"NormalColor": [
+							1,
+							1,
+							1,
+							1
+						],
+						"PressedColor": [
+							0.75,
+							0.75,
+							0.75,
+							1
+						],
+						"PressedImage": "0000000000000000",
+						"TargetImage": "0000000000000000",
+						"Transition": "ColorTint"
+					}
+				},
+				"ID": "F7E0000000000080",
+				"Parent": "F7E000000000007F"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Disabled Button"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIButton": {
+						"EventTarget": "0000000000000000"
+					},
+					"UIImage": {
+						"BorderColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"BorderWidth": 0,
+						"Color": [
+							0.5,
+							0.5,
+							0.5,
+							1
+						],
+						"CornerRadius": 6,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							96,
+							32
+						]
+					},
+					"UISelectable": {
+						"DisabledColor": [
+							0.75,
+							0.75,
+							0.75,
+							0.5
+						],
+						"DisabledImage": "0000000000000000",
+						"FadeDuration": 0.1,
+						"FocusedColor": [
+							0.95,
+							0.95,
+							0.95,
+							1
+						],
+						"FocusedImage": "0000000000000000",
+						"HoverColor": [
+							0.9,
+							0.9,
+							0.9,
+							1
+						],
+						"HoverImage": "0000000000000000",
+						"Interactable": false,
+						"NavigateDown": "0000000000000000",
+						"NavigateLeft": "0000000000000000",
+						"NavigateRight": "0000000000000000",
+						"NavigateUp": "0000000000000000",
+						"Navigation": "None",
+						"NormalColor": [
+							1,
+							1,
+							1,
+							1
+						],
+						"PressedColor": [
+							0.75,
+							0.75,
+							0.75,
+							1
+						],
+						"PressedImage": "0000000000000000",
+						"TargetImage": "0000000000000000",
+						"Transition": "ColorTint"
+					}
+				},
+				"ID": "F7E0000000000084",
+				"Parent": "F7E000000000007F"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Overlay Canvas"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UICanvas": {
+						"FirstSelected": "0000000000000000",
+						"MatchWidthOrHeight": 0.5,
+						"PixelSnap": false,
+						"ReceivesInput": false,
+						"ReferenceResolution": [
+							1920,
+							1080
+						],
+						"SafeAreaPadding": [
+							0,
+							0,
+							0,
+							0
+						],
+						"ScaleFactor": 1.25,
+						"ScaleMode": "ConstantPhysicalSize",
+						"SortOrder": 2,
+						"RenderMode": "ScreenSpace",
+						"WorldUnitsPerUnit": 0.01
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							100,
+							100
+						]
+					}
+				},
+				"ID": "F7E0000000000081"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Overlay Text"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							1,
+							1
+						],
+						"AnchorMin": [
+							1,
+							1
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							1,
+							1
+						],
+						"Position": [
+							-8,
+							-8
+						],
+						"Size": [
+							200,
+							24
+						]
+					},
+					"UIText": {
+						"Alignment": "Right",
+						"Color": [
+							1,
+							1,
+							1,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 14,
+						"LineSpacing": 1,
+						"OutlineColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"OutlineWidth": 0,
+						"Overflow": "Truncate",
+						"RaycastTarget": false,
+						"Text": "v1",
+						"VerticalAlignment": "Bottom",
+						"Wrap": true
+					}
+				},
+				"ID": "F7E0000000000082",
+				"Parent": "F7E0000000000081"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "World Sign"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							-1,
+							1.5,
+							-5
+						]
+					},
+					"UICanvas": {
+						"FirstSelected": "0000000000000000",
+						"MatchWidthOrHeight": 0.5,
+						"PixelSnap": true,
+						"ReceivesInput": true,
+						"ReferenceResolution": [
+							400,
+							200
+						],
+						"SafeAreaPadding": [
+							0,
+							0,
+							0,
+							0
+						],
+						"ScaleFactor": 1,
+						"ScaleMode": "ScaleWithScreen",
+						"SortOrder": 0,
+						"RenderMode": "WorldSpace",
+						"WorldUnitsPerUnit": 0.005
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							100,
+							100
+						]
+					}
+				},
+				"ID": "F7E000000000008A"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "World Panel"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							0.4,
+							0.5,
+							0.9,
+							1
+						],
+						"BorderWidth": 2,
+						"Color": [
+							0.1,
+							0.3,
+							0.6,
+							0.9
+						],
+						"CornerRadius": 12,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							1,
+							1
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E000000000008B",
+				"Parent": "F7E000000000008A"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "World Label"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							1,
+							1
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							-20,
+							-20
+						]
+					},
+					"UIText": {
+						"Alignment": "Center",
+						"Color": [
+							1,
+							1,
+							1,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 48,
+						"LineSpacing": 1,
+						"OutlineColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"OutlineWidth": 0,
+						"Overflow": "Overflow",
+						"RaycastTarget": false,
+						"Text": "World UI",
+						"VerticalAlignment": "Middle",
+						"Wrap": true
+					}
+				},
+				"ID": "F7E000000000008C",
+				"Parent": "F7E000000000008B"
+			},
+			{
+				"Components": {
+					"Inactive": {},
+					"Name": {
+						"Name": "Mute Toggle"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							100,
+							100
+						]
+					},
+					"UIToggle": {
+						"Checkmark": "0000000000000000",
+						"EventTarget": "0000000000000000",
+						"Group": "F7E0000000000071",
+						"IsOn": false
+					}
+				},
+				"ID": "F7E0000000000085",
+				"Parent": "F7E0000000000071"
+			},
+			{
+				"Components": {
+					"Inactive": {},
+					"Name": {
+						"Name": "Spare Slider"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							100,
+							100
+						]
+					},
+					"UISlider": {
+						"Direction": "TopToBottom",
+						"EventTarget": "0000000000000000",
+						"Fill": "0000000000000000",
+						"Handle": "0000000000000000",
+						"KeyboardStep": 0,
+						"MaxValue": 1,
+						"MinValue": -1,
+						"Value": 0.5,
+						"WholeNumbers": false
+					}
+				},
+				"ID": "F7E0000000000086",
+				"Parent": "F7E0000000000071"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Name Field"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							0.4,
+							0.5,
+							0.9,
+							1
+						],
+						"BorderWidth": 1,
+						"Color": [
+							0.06,
+							0.07,
+							0.12,
+							1
+						],
+						"CornerRadius": 6,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							40
+						]
+					},
+					"UISelectable": {
+						"DisabledColor": [
+							0.5,
+							0.5,
+							0.5,
+							0.6
+						],
+						"DisabledImage": "0000000000000000",
+						"FadeDuration": 0.05,
+						"FocusedColor": [
+							1,
+							1,
+							0.8,
+							1
+						],
+						"FocusedImage": "0000000000000000",
+						"HoverColor": [
+							0.8,
+							0.9,
+							1,
+							1
+						],
+						"HoverImage": "0000000000000000",
+						"Interactable": true,
+						"NavigateDown": "0000000000000000",
+						"NavigateLeft": "0000000000000000",
+						"NavigateRight": "0000000000000000",
+						"NavigateUp": "0000000000000000",
+						"Navigation": "Automatic",
+						"NormalColor": [
+							0.95,
+							0.95,
+							1,
+							1
+						],
+						"PressedColor": [
+							0.6,
+							0.7,
+							0.9,
+							1
+						],
+						"PressedImage": "0000000000000000",
+						"TargetImage": "0000000000000000",
+						"Transition": "ColorTint"
+					},
+					"UIInputField": {
+						"CaretColor": [
+							1,
+							0.8,
+							0.2,
+							1
+						],
+						"CharacterLimit": 12,
+						"EventTarget": "F7E0000000000083",
+						"Placeholder": "F7E0000000000089",
+						"SelectionColor": [
+							0.2,
+							0.8,
+							0.4,
+							0.5
+						],
+						"Text": "Strata",
+						"TextElement": "F7E0000000000088"
+					}
+				},
+				"ID": "F7E0000000000087",
+				"Parent": "F7E0000000000071"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Name Text"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							1,
+							1
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							-16,
+							-8
+						]
+					},
+					"UIText": {
+						"Alignment": "Left",
+						"Color": [
+							0.95,
+							0.96,
+							1,
+							1
+						],
+						"Font": "F7A0000000000008",
+						"FontSize": 20,
+						"LineSpacing": 1,
+						"OutlineColor": [
+							1,
+							1,
+							1,
+							1
+						],
+						"OutlineWidth": 0,
+						"Overflow": "Overflow",
+						"RaycastTarget": false,
+						"Text": "",
+						"VerticalAlignment": "Middle",
+						"Wrap": false
+					}
+				},
+				"ID": "F7E0000000000088",
+				"Parent": "F7E0000000000087"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Name Hint"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							1,
+							1
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							-16,
+							-8
+						]
+					},
+					"UIText": {
+						"Alignment": "Left",
+						"Color": [
+							0.6,
+							0.62,
+							0.7,
+							1
+						],
+						"Font": "F7A0000000000008",
+						"FontSize": 20,
+						"LineSpacing": 1,
+						"OutlineColor": [
+							1,
+							1,
+							1,
+							1
+						],
+						"OutlineWidth": 0,
+						"Overflow": "Overflow",
+						"RaycastTarget": false,
+						"Text": "Your name",
+						"VerticalAlignment": "Middle",
+						"Wrap": false
+					}
+				},
+				"ID": "F7E0000000000089",
+				"Parent": "F7E0000000000087"
+			},
+			{
+				"Components": {
 					"Inactive": {},
 					"Name": {
 						"Name": "Journal"

@@ -259,6 +259,23 @@ TEST_SUITE("Scripting.Game")
 		Input::SetViewport({ 0.0f, 0.0f }, { 0.0f, 0.0f });
 	}
 
+	TEST_CASE("The game's window is the game view's image in pixels, else the input viewport")
+	{
+		Input::Reset();
+		EditorGameWindow window;
+		window.SetContentScale(2.0f);
+		Input::SetViewport({ 0.0f, 0.0f }, { 512.0f, 288.0f }); // Points
+		CHECK(window.GetState().Width == 512);
+		window.SetViewSize({ 1024, 576 }); // The game view's image in pixels
+		const GameWindowState state = window.GetState();
+		CHECK(state.Width == 1024);
+		CHECK(state.Height == 576);
+		CHECK(state.ContentScale == 2.0f);
+		window.SetViewSize({ 0, 0 });
+		CHECK(window.GetState().Height == 288);
+		Input::Reset();
+	}
+
 	TEST_CASE("A game that asks for the same display options every frame is reported once")
 	{
 		ShellHarness harness;
