@@ -77,13 +77,13 @@ TEST_SUITE("Core.Input")
 		// A 1920 x 1080 image shown in 960 x 540 window pixels: every window pixel is two of the game's.
 		Input::SetViewport({ 40.0f, 30.0f }, { 960.0f, 540.0f }, { 1920.0f, 1080.0f });
 		CHECK(Input::GetMousePosition() == glm::vec2(120.0f, 40.0f));
-		CHECK(Input::GetViewportSize() == glm::vec2(960.0f, 540.0f));
-		CHECK(Input::GetViewportResolution() == glm::vec2(1920.0f, 1080.0f));
+		// The game's screen is the resolution: what UI hit tests against, in the pixels the mouse is in.
+		CHECK(Input::GetViewportSize() == glm::vec2(1920.0f, 1080.0f));
 		Input::ProcessMouseMove({ 110.0f, 45.0f });
 		CHECK(Input::GetMouseDelta() == glm::vec2(20.0f, -10.0f));
 		// Without a resolution, the region's size.
 		Input::SetViewport({ 40.0f, 30.0f }, { 960.0f, 540.0f });
-		CHECK(Input::GetViewportResolution() == glm::vec2(960.0f, 540.0f));
+		CHECK(Input::GetViewportSize() == glm::vec2(960.0f, 540.0f));
 		CHECK(Input::GetMousePosition() == glm::vec2(70.0f, 15.0f));
 		Input::SetViewport({ 0.0f, 0.0f }, { 0.0f, 0.0f });
 	}

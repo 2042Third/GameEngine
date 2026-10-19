@@ -314,15 +314,10 @@ namespace Strata
 		return s_State.GameCursor;
 	}
 
-	glm::vec2 Input::GetViewportResolution()
+	glm::vec2 Input::GetViewportSize()
 	{
 		if (s_State.ViewportResolution.x > 0.0f && s_State.ViewportResolution.y > 0.0f)
 			return s_State.ViewportResolution;
-		return GetViewportSize();
-	}
-
-	glm::vec2 Input::GetViewportSize()
-	{
 		if (s_State.ViewportSize.x > 0.0f && s_State.ViewportSize.y > 0.0f)
 			return s_State.ViewportSize;
 		if (s_State.TargetWindow)

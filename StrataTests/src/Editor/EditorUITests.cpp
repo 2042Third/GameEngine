@@ -1311,6 +1311,36 @@ TEST_SUITE("Editor.UI")
 		CHECK(UI::ItemProbe::Find("GameView.Resolution")->Text == "640 x 480");
 	}
 
+	TEST_CASE("While the game plays, the Game view gives it its screen at the rendered resolution, focused or not")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIGameViewScreen"));
+		editor.Frames(2);
+		EditorPanelRegistry& panels = editor.Layer->GetPanels();
+		const GameViewPanel* game = panels.Get<GameViewPanel>(EditorPanels::c_Game);
+		REQUIRE(game);
+		editor.Run("viewport.setSettings", { { "gameView", { { "mode", "1920x1080" } } } });
+		REQUIRE(editor.Click("Toolbar.Play"));
+		editor.Frames(3);
+		REQUIRE(editor.Context().IsPlaying());
+		REQUIRE(game->IsShown());
+		REQUIRE(editor.Context().IsGameInputActive());
+		CHECK(Input::GetViewportSize() == glm::vec2(1920.0f, 1080.0f));
+
+		// Another panel takes the keyboard; the Game view still shows the game, and its screen follows a new resolution.
+		panels.Focus(EditorPanels::c_Hierarchy);
+		editor.Frames(2);
+		REQUIRE(game->IsShown());
+		REQUIRE_FALSE(editor.Context().IsGameInputActive());
+		editor.Run("viewport.setSettings", { { "gameView", { { "mode", "custom" }, { "width", 640 }, { "height", 480 } } } });
+		editor.Frames(2);
+		CHECK(game->GetRenderSize() == glm::uvec2(640, 480));
+		CHECK(Input::GetViewportSize() == glm::vec2(640.0f, 480.0f));
+		// The game's window is that screen.
+		CHECK(editor.Context().GetGameWindow().GetState().Width == 640);
+		CHECK(editor.Context().GetGameWindow().GetState().Height == 480);
+		editor.Run("play.stop");
+	}
+
 	TEST_CASE("The Scene view keeps the editor camera while playing, and the Game camera toggle (F8) looks through the scene's")
 	{
 		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIGameCamera"));

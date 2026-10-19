@@ -267,7 +267,9 @@ namespace Strata
 			if (gameOwnsMouse)
 				m_MouseHintUntil = ImGui::GetTime() + c_MouseHintSeconds;
 		}
-		if (enabled)
+		// The game's screen is the image the view shows, in every frame it shows play, focused or not: the game's window size,
+		// UI hit tests and simulated mouse positions all read it (Input::GetViewportSize, at the rendered resolution).
+		if (shown && context.GetSceneState() == SceneState::Play && m_Image.Size.x > 0.0f && m_Image.Size.y > 0.0f)
 		{
 			const ImVec2 origin = ImGui::GetMainViewport()->Pos;
 			Input::SetViewport(glm::vec2(m_Image.Min.x - origin.x, m_Image.Min.y - origin.y), m_Image.Size, glm::vec2(m_RenderSize));

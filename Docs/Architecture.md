@@ -2779,8 +2779,9 @@ is the `strata-scripting` skill. The layers:
   gizmos and overlays work on the running copy while playing), or `Scene` with "Game camera" (F8); the Game view
   (`GameViewPanel`) passes `Scene`, the primary camera as the game shows it, at the size of `ViewportSettings::GameView`
   (`ComputeGameViewFrame`: the panel's, an aspect ratio letterboxed, a fixed size rendered at its pixels and scaled to fit,
-  or what the game asked for), and feeds `Input` while it is focused in play mode (`Input::SetViewport` with its render
-  resolution, so positions reach scripts in the game's pixels; `EditorGameWindow::GetState` reports that resolution).
+  or what the game asked for), and feeds `Input` while it is focused in play mode. In every play frame it shows it sets the
+  game's screen (`Input::SetViewport` with its render resolution, so positions reach scripts in the game's pixels and
+  `Input::GetViewportSize`, which `EditorGameWindow::GetState` and UI hit testing read, is that resolution).
   Play from the UI brings the Game view's tab forward and Stop the Scene view's back. `ResolveViewportView`'s `Automatic`
   source (captures) picks the scene's primary camera while playing and the editor camera otherwise, and
   `GetViewportRenderOptions` gives editor views (the editor camera, except `Automatic`'s fallback while playing) preview

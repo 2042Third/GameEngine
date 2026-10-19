@@ -54,6 +54,9 @@ namespace Strata
 		static void SetGameCursorMode(CursorMode mode);
 		static CursorMode GetGameCursorMode();
 
+		// The size of the game's screen, in the pixels mouse positions are given in: the viewport's resolution when one was
+		// given (SetViewport: the image a Game view renders), else the viewport's size, else the window's. UI hit testing
+		// takes its screen from it, so that it matches what is drawn.
 		static glm::vec2 GetViewportSize();
 
 		//////////////////////////////////////////////////////////////////////////
@@ -80,8 +83,6 @@ namespace Strata
 		// the region's size). Mouse positions and movements reach the game in pixels of that resolution (an editor's Game view
 		// that shows a 1920 x 1080 image in a smaller panel).
 		static void SetViewport(const glm::vec2& origin, const glm::vec2& size, const glm::vec2& resolution = glm::vec2(0.0f));
-		// The resolution of SetViewport (its size when none was given).
-		static glm::vec2 GetViewportResolution();
 
 		static void ProcessKey(KeyCode key, bool down);
 		static void ProcessMouseButton(MouseCode button, bool down);

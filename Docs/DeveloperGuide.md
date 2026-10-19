@@ -1801,8 +1801,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   are recomputed under their parent (`TransformEdit::WorldToLocal`), writes emit the transform's update signal so
   physics follows, and a drag is one undo step (while playing: the running scene, no undo). ImGuizmo only starts a drag
   while no ImGui item is hovered, so the image is a plain `Dummy` while the mouse is over the gizmo.
-- **Game input:** `Input` is enabled only while the Game view is focused in play mode (`GameViewPanel::UpdateGameInput`,
-  with `Input::SetViewport(origin, size, renderResolution)`); Shift+F1 leaves it and frees a cursor the game locked; while
+- **Game input:** `Input` is enabled only while the Game view is focused in play mode (`GameViewPanel::UpdateGameInput`);
+  in every play frame it shows, focused or not, the view sets the game's screen (`Input::SetViewport(origin, size,
+  renderResolution)`: `Input::GetViewportSize` is then the rendered resolution, which mouse positions, the game's window
+  size and UI hit tests use); Shift+F1 leaves it and frees a cursor the game locked; while
   the game holds a locked cursor the editor's UI ignores the mouse, and the view says so for a few seconds after each time
   the game took it (`c_MouseHint`).
 

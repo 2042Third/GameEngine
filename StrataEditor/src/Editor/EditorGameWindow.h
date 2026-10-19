@@ -16,7 +16,7 @@ namespace Strata
 	// so what it asks of its window (fullscreen, a resolution, vsync) is recorded and reported instead of applied to the
 	// editor's window (editor.status, a notice over the Game view); the Game view's "Game's request" mode renders at the
 	// resolution it asked for. The game's view of its window is the Game view: GetState reports the resolution it renders
-	// at (Input::GetViewportResolution), with the mode and vsync the game asked for. A request equal to the last one of
+	// at (Input::GetViewportSize), with the mode and vsync the game asked for. A request equal to the last one of
 	// its kind changes nothing and is not logged again (games that apply their options every frame). Requests are forgotten
 	// when play starts and stops (Clear). Main thread only.
 	class EditorGameWindow final : public IGameWindow
