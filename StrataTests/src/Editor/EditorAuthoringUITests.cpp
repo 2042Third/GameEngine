@@ -6,6 +6,7 @@
 #include "EditorLayer.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/ContentBrowserPanel.h"
+#include "Panels/InspectorPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
@@ -711,6 +712,48 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		editor.Run("selection.set", { { "entities", { UUIDToJson(editor.Create("Plain")) } } });
 		editor.Frames(2);
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Prefab.Overrides").has_value());
+	}
+
+	TEST_CASE("The Overrides menu lists each override under its entity, and Revert All remakes the instance in the frame it is clicked")
+	{
+		AuthoringEditor editor;
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory("InspectorOverridesMenu") / "Game") }, { "name", "Game" } });
+		const UUID lamp = editor.Create("Lamp", { { "components", { { "PointLight", { { "Intensity", 2.0 } } } } } });
+		editor.Create("Bulb", { { "parent", UUIDToJson(lamp) }, { "components", { { "PointLight", { { "Intensity", 3.0 } } } } } });
+		editor.Run("prefab.create", { { "entities", { UUIDToJson(lamp) } }, { "path", "Prefabs/Lamp.stprefab" } });
+		const UUID instance = *UUIDFromJson(editor.Run("prefab.instantiate", { { "prefab", "Prefabs/Lamp.stprefab" } })["id"]);
+		const UUID bulb = editor.Get(instance).GetChildren().front().GetUUID();
+		editor.Run("component.set", { { "entity", UUIDToJson(instance) }, { "component", "PointLight" }, { "values", { { "Intensity", 7.0 } } } });
+		editor.Run("component.set", { { "entity", UUIDToJson(bulb) }, { "component", "PointLight" }, { "values", { { "Intensity", 8.0 } } } });
+		editor.Run("selection.set", { { "entities", { UUIDToJson(bulb) } } });
+		editor.Frames(3);
+		REQUIRE(UI::ItemProbe::Find("Inspector.Prefab.Overrides").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Overrides")->Text == "Overrides (2)");
+
+		// Each override is listed under the entity it is on.
+		editor.Pause();
+		REQUIRE(editor.Click("Inspector.Prefab.Overrides"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("Inspector.Prefab.Override.0").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Override.0")->Text == editor.Get(instance).GetName() + " \xC2\xB7 PointLight.Intensity");
+		REQUIRE(UI::ItemProbe::Find("Inspector.Prefab.Override.1").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Override.1")->Text == "Bulb \xC2\xB7 PointLight.Intensity");
+		// The rows are found once for the list, not in every frame the menu is open.
+		InspectorPanel* inspector = editor.Layer->GetPanels().Get<InspectorPanel>(EditorPanels::c_Inspector);
+		REQUIRE(inspector);
+		const uint64_t builds = inspector->GetOverrideRowsBuildCount();
+		editor.Frames(10);
+		REQUIRE(UI::ItemProbe::Find("Inspector.Prefab.Override.1").has_value());
+		CHECK(inspector->GetOverrideRowsBuildCount() == builds);
+
+		// Revert All remakes the instance's entities (their UUIDs kept): the rest of the frame draws what is there now.
+		REQUIRE(editor.Click("Inspector.Prefab.RevertAll"));
+		editor.Frames(2);
+		CHECK(editor.Get(instance).GetComponent<PointLightComponent>().Intensity == 2.0f);
+		CHECK(editor.Get(bulb).GetComponent<PointLightComponent>().Intensity == 3.0f);
+		REQUIRE(UI::ItemProbe::Find("Inspector.Prefab.Overrides").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Overrides")->Text == "Overrides (0)");
+		CHECK(UI::ItemProbe::Find("Inspector.PointLight.Intensity.Label")->Color == 0);
 	}
 
 	TEST_CASE("An instance's overridden script fields are marked, and revert from their label's menu")

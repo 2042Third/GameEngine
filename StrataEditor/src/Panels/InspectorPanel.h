@@ -7,8 +7,12 @@
 
 #include <Strata/Core/UUID.h>
 #include <Strata/Reflection/Property.h>
+#include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 
+#include <nlohmann/json.hpp>
+
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
@@ -41,22 +45,28 @@ namespace Strata
 	public:
 		void OnImGuiRender(EditorPanelContext& context) override;
 		void OnHidden(EditorPanelContext& context) override;
+		// How often the Overrides menu walked an instance for its rows (tests): once per list, not per frame.
+		uint64_t GetOverrideRowsBuildCount() const { return m_OverrideRowsBuilds; }
 	private:
 		// The selected entities' components, or the scene's settings with nothing selected.
 		// A single selected entity of a prefab instance: its prefab entity id, its instance's overrides and whether the prefab is
 		// an imported model (which is never applied to).
+		// Copies: commands the Inspector runs while it draws may move or remake the instance's components.
 		struct PrefabView
 		{
-			Entity Root;
+			UUID Root = UUID::Null();
 			UUID SceneEntity = UUID::Null();
 			UUID PrefabEntity = UUID::Null();
 			AssetHandle Prefab = UUID::Null();
-			const std::vector<PrefabOverride>* Overrides = nullptr;
+			std::vector<PrefabOverride> Overrides;
 			bool Model = false;
 
 			bool IsOverridden(std::string_view component, std::string_view property = {}) const;
 		};
 		std::optional<PrefabView> FindPrefabView(std::span<const Entity> entities) const;
+		// prefab.apply and prefab.revert chosen in the Inspector's menus run once the selection is drawn: they can remake the
+		// instance's entities, which the rest of the frame's drawing still reads.
+		void SchedulePrefabCommand(std::string name, nlohmann::json parameters);
 
 		void DrawSelection(EditorPanelContext& panelContext);
 		void DrawHeader(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
@@ -67,7 +77,7 @@ namespace Strata
 		void DrawComponent(EditorPanelContext& panelContext, std::span<const Entity> entities, const ComponentInfo& info, const PrefabView* prefab);
 		void DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
 			const PrefabView* prefab);
-		void DrawProperties(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
+		void DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info,
 			const PrefabView* prefab);
 		// An edit of a rotation shared by several entities: continues the edit in progress, or begins one from the angles the
 		// widget showed (RotationAnglesEdit keeps each entity's own angles through a drag).
@@ -126,6 +136,32 @@ namespace Strata
 		MaterialEditor m_MaterialEditor;
 		// The rotation of several entities being edited, until the widget reports the edit finished.
 		std::optional<RotationAnglesEdit> m_RotationEdit;
+		struct PendingCommand
+		{
+			std::string Name;
+			nlohmann::json Parameters;
+		};
+		std::optional<PendingCommand> m_PendingPrefabCommand;
+		// The Overrides menu's rows: each override's entity in the scene and label, found by walking the instance once for
+		// the list they were made from, and again only when the history, the hierarchy or the instance change.
+		struct OverrideRow
+		{
+			UUID Target = UUID::Null(); // Null: the instance removed the entity
+			std::string Label;
+			nlohmann::json Parameters;  // prefab.apply and prefab.revert of the override alone
+		};
+		struct OverrideRows
+		{
+			const Scene* ForScene = nullptr;
+			UUID Root = UUID::Null();
+			uint64_t UndoVersion = UINT64_MAX;
+			uint64_t HierarchyVersion = UINT64_MAX;
+			std::vector<PrefabOverride> Overrides;
+			std::vector<OverrideRow> Rows;
+		};
+		OverrideRows m_OverrideRows;
+		uint64_t m_OverrideRowsBuilds = 0;
+		const std::vector<OverrideRow>& GetOverrideRows(EditorContext& context, const PrefabView& view);
 	};
 
 }
