@@ -267,18 +267,18 @@ TEST_SUITE("World.Streaming")
 		CHECK(drive.Streamer.SetLayerEnabled("Ground", true));
 
 		// A pinned cell far away loads, and goes once unpinned.
-		const WorldCellKey far { 1, 3, 3 };
-		drive.Streamer.PinCell(far);
-		drive.Streamer.PinCell(far);
-		CHECK(drive.Streamer.IsPinned(far));
-		drive.FramesUntil(both, [&]() { return LoadedCells(drive.Streamer).contains(far); });
+		const WorldCellKey farCell { 1, 3, 3 };
+		drive.Streamer.PinCell(farCell);
+		drive.Streamer.PinCell(farCell);
+		CHECK(drive.Streamer.IsPinned(farCell));
+		drive.FramesUntil(both, [&]() { return LoadedCells(drive.Streamer).contains(farCell); });
 		CHECK(drive.Streamer.GetStats().CellsPinned == 1);
-		drive.Streamer.UnpinCell(far);
+		drive.Streamer.UnpinCell(farCell);
 		drive.Frame(both);
 		drive.SettleLoads();
-		CHECK(LoadedCells(drive.Streamer).contains(far)); // Pinned twice
-		drive.Streamer.UnpinCell(far);
-		drive.FramesUntil(both, [&]() { return !LoadedCells(drive.Streamer).contains(far); });
+		CHECK(LoadedCells(drive.Streamer).contains(farCell)); // Pinned twice
+		drive.Streamer.UnpinCell(farCell);
+		drive.FramesUntil(both, [&]() { return !LoadedCells(drive.Streamer).contains(farCell); });
 
 		// Of two sources far apart, the one of higher priority has its cells start first.
 		Scene other("Priorities");

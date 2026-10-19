@@ -1007,12 +1007,12 @@ TEST_SUITE("Asset.Pack.Sweep")
 
 	TEST_CASE("A pack with any single changed byte fails with an error or reads right, never crashes")
 	{
-		std::vector<PackSource> small;
-		small.push_back(MakeSource(0x7100, MakeContent(3000, ContentKind::Compressible, 4), AssetType::Material));
-		small.push_back(MakeSource(0x7101, MakeContent(700, ContentKind::Incompressible, 5)));
-		small[0].Source.Dependencies = { UUID(0x7101) };
+		std::vector<PackSource> smallSources;
+		smallSources.push_back(MakeSource(0x7100, MakeContent(3000, ContentKind::Compressible, 4), AssetType::Material));
+		smallSources.push_back(MakeSource(0x7101, MakeContent(700, ContentKind::Incompressible, 5)));
+		smallSources[0].Source.Dependencies = { UUID(0x7101) };
 		const std::filesystem::path directory = CreateTemporaryDirectory("PackChangedByte");
-		const std::filesystem::path smallPath = WritePack(directory / "Small.stpak", small);
+		const std::filesystem::path smallPath = WritePack(directory / "Small.stpak", smallSources);
 		const std::optional<std::vector<uint8_t>> smallBytes = FileSystem::ReadBytes(smallPath);
 		REQUIRE(smallBytes);
 		const PackImage image = PackImage::Read(smallPath);

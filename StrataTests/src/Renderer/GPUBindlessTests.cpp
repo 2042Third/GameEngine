@@ -81,10 +81,10 @@ TEST_SUITE("GPU.Renderer")
 		CHECK(large.GetCapacity() > initialCapacity);
 		CHECK(large.GetCapacity() <= 4096);
 
-		BindlessTextureTable small(device, 8, 2);
+		BindlessTextureTable smallTable(device, 8, 2);
 		for (uint32_t index = BindlessTextureTable::c_ReservedSlots; index < 8; index++)
-			CHECK(small.Allocate(texture) == index);
-		CHECK(small.Allocate(texture) == BindlessTextureTable::c_InvalidSlot);
+			CHECK(smallTable.Allocate(texture) == index);
+		CHECK(smallTable.Allocate(texture) == BindlessTextureTable::c_InvalidSlot);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

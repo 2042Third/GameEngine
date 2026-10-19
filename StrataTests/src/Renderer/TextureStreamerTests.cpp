@@ -340,14 +340,14 @@ TEST_SUITE("Renderer.TextureStreamer")
 
 	TEST_CASE("Reads of levels rank by missing levels times coverage, behind the loads of whole assets")
 	{
-		const TextureStreamingPolicy::Rank small = TextureStreamingPolicy::RankRaise(1, 0.05f, false);
+		const TextureStreamingPolicy::Rank smallRank = TextureStreamingPolicy::RankRaise(1, 0.05f, false);
 		const TextureStreamingPolicy::Rank nearer = TextureStreamingPolicy::RankRaise(1, 0.5f, false);
 		const TextureStreamingPolicy::Rank deeper = TextureStreamingPolicy::RankRaise(4, 0.05f, false);
 		const TextureStreamingPolicy::Rank both = TextureStreamingPolicy::RankRaise(4, 0.5f, false);
-		CHECK(small.Priority == AssetPriority::Low);
+		CHECK(smallRank.Priority == AssetPriority::Low);
 		CHECK(both.Priority == AssetPriority::Low);
-		CHECK(nearer.Score > small.Score);
-		CHECK(deeper.Score > small.Score);
+		CHECK(nearer.Score > smallRank.Score);
+		CHECK(deeper.Score > smallRank.Score);
 		CHECK(both.Score > nearer.Score);
 		CHECK(both.Score > deeper.Score);
 		CHECK(both.Score == doctest::Approx(4.0f * 0.5f));
@@ -369,7 +369,7 @@ TEST_SUITE("Renderer.TextureStreamer")
 			dispatched.push_back(request.RangeId);
 			return true;
 		});
-		queue.EnqueueRange(1, AssetHandle(0x9301), small.Priority, small.Score, 1024);
+		queue.EnqueueRange(1, AssetHandle(0x9301), smallRank.Priority, smallRank.Score, 1024);
 		queue.EnqueueRange(2, AssetHandle(0x9302), both.Priority, both.Score, 1024);
 		queue.EnqueueRange(3, AssetHandle(0x9303), nearer.Priority, nearer.Score, 1024);
 		queue.EnqueueRange(4, AssetHandle(0x9304), deeper.Priority, deeper.Score, 1024);

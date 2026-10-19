@@ -805,13 +805,13 @@ TEST_SUITE("GPU.RenderScene")
 		SceneTestAssets assets;
 		MaterialProperties tiled = UnlitColor({ 1.0f, 0.0f, 0.0f, 1.0f });
 		tiled.UVTiling = glm::vec2(3.0f, -2.0f);
-		const AssetHandle near = assets.AddMaterial(tiled);
-		const AssetHandle far = assets.AddMaterial(UnlitColor({ 0.0f, 1.0f, 0.0f, 1.0f }));
+		const AssetHandle nearMaterial = assets.AddMaterial(tiled);
+		const AssetHandle farMaterial = assets.AddMaterial(UnlitColor({ 0.0f, 1.0f, 0.0f, 1.0f }));
 		const AssetHandle hidden = assets.AddMaterial(UnlitColor({ 0.0f, 0.0f, 1.0f, 1.0f }));
 		Scene scene;
 		AddNeutralPostProcess(scene);
-		AddMesh(scene, BuiltinAssets::CubeMesh, near, glm::vec3(-1.0f, 0.0f, 0.0f), "Near");
-		AddMesh(scene, BuiltinAssets::CubeMesh, far, glm::vec3(2.0f, 0.0f, -10.0f), "Far");
+		AddMesh(scene, BuiltinAssets::CubeMesh, nearMaterial, glm::vec3(-1.0f, 0.0f, 0.0f), "Near");
+		AddMesh(scene, BuiltinAssets::CubeMesh, farMaterial, glm::vec3(2.0f, 0.0f, -10.0f), "Far");
 		AddMesh(scene, BuiltinAssets::CubeMesh, hidden, glm::vec3(0.0f, 0.0f, 10.0f), "Behind");
 
 		SceneRenderer renderer;
@@ -820,10 +820,10 @@ TEST_SUITE("GPU.RenderScene")
 		REQUIRE(renderer.Render(scene, camera));
 		const std::span<const VisibleMaterialUse> uses = renderer.GetVisibleMaterials();
 		REQUIRE(uses.size() == 2);
-		const VisibleMaterialUse& nearUse = uses[0].Material == near ? uses[0] : uses[1];
-		const VisibleMaterialUse& farUse = uses[0].Material == near ? uses[1] : uses[0];
-		CHECK(nearUse.Material == near);
-		CHECK(farUse.Material == far);
+		const VisibleMaterialUse& nearUse = uses[0].Material == nearMaterial ? uses[0] : uses[1];
+		const VisibleMaterialUse& farUse = uses[0].Material == nearMaterial ? uses[1] : uses[0];
+		CHECK(nearUse.Material == nearMaterial);
+		CHECK(farUse.Material == farMaterial);
 		CHECK(nearUse.MaxUVScale == doctest::Approx(3.0f));
 		CHECK(farUse.MaxUVScale == doctest::Approx(1.0f));
 		CHECK(nearUse.PixelSize > farUse.PixelSize * 2.0f);
@@ -844,11 +844,11 @@ TEST_SUITE("GPU.RenderScene")
 		MaterialProperties textured = UnlitColor({ 1.0f, 1.0f, 1.0f, 1.0f });
 		textured.BaseColorMap = texture;
 		textured.UVTiling = glm::vec2(2.0f, 1.0f);
-		const AssetHandle near = assets.AddMaterial(textured);
+		const AssetHandle texturedMaterial = assets.AddMaterial(textured);
 		const AssetHandle plain = assets.AddMaterial(UnlitColor({ 0.0f, 1.0f, 0.0f, 1.0f }));
 		Scene scene;
 		AddNeutralPostProcess(scene);
-		AddMesh(scene, BuiltinAssets::CubeMesh, near, glm::vec3(-1.0f, 0.0f, 0.0f), "Textured");
+		AddMesh(scene, BuiltinAssets::CubeMesh, texturedMaterial, glm::vec3(-1.0f, 0.0f, 0.0f), "Textured");
 		AddMesh(scene, BuiltinAssets::CubeMesh, plain, glm::vec3(1.5f, 0.0f, 0.0f), "Plain");
 
 		SceneRenderer renderer;
@@ -857,9 +857,9 @@ TEST_SUITE("GPU.RenderScene")
 		REQUIRE(renderer.Render(scene, camera));
 		const std::span<const VisibleMaterialUse> materials = renderer.GetVisibleMaterials();
 		REQUIRE(materials.size() == 2);
-		const VisibleMaterialUse& texturedUse = materials[0].Material == near ? materials[0] : materials[1];
-		const VisibleMaterialUse& plainUse = materials[0].Material == near ? materials[1] : materials[0];
-		REQUIRE(texturedUse.Material == near);
+		const VisibleMaterialUse& texturedUse = materials[0].Material == texturedMaterial ? materials[0] : materials[1];
+		const VisibleMaterialUse& plainUse = materials[0].Material == texturedMaterial ? materials[1] : materials[0];
+		REQUIRE(texturedUse.Material == texturedMaterial);
 		REQUIRE(plainUse.Material == plain);
 		CHECK(texturedUse.UVPixels > 0.0f);
 		CHECK(plainUse.UVPixels == 0.0f);
@@ -920,8 +920,8 @@ TEST_SUITE("GPU.RenderScene")
 		{
 			const AABB bounds = AABB(glm::vec3(-0.5f), glm::vec3(0.5f)).Transformed(world.Matrix);
 			const bool visible = frustum.IsAABBVisible(bounds);
-			const bool near = SpatialIndex::IntersectsSphere(bounds, outward.Position, specification.PrefetchDistance);
-			if ((visible || near) && meshRenderer.Mesh != project->GridMesh)
+			const bool nearby = SpatialIndex::IntersectsSphere(bounds, outward.Position, specification.PrefetchDistance);
+			if ((visible || nearby) && meshRenderer.Mesh != project->GridMesh)
 			{
 				allowed.insert(meshRenderer.Material);
 				nearObjects++;

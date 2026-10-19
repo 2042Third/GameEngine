@@ -212,14 +212,14 @@ TEST_SUITE("Scene.Prefab")
 			REQUIRE_MESSAGE(asset, error);
 			return asset;
 		};
-		const Ref<SceneAsset> small = makeAsset(10);
+		const Ref<SceneAsset> smallScene = makeAsset(10);
 		const Ref<SceneAsset> large = makeAsset(10'000);
 		// At least the components every entity has, and the names, which do not fit in the string objects.
 		const uint64_t perEntity = sizeof(IDComponent) + sizeof(NameComponent) + sizeof(TransformComponent) + sizeof(RelationshipComponent)
 			+ sizeof(WorldTransformComponent) + 56;
 		CHECK(large->GetMemoryUsage().Cpu > 10'000 * perEntity);
-		CHECK(small->GetMemoryUsage().Cpu > 10 * perEntity);
-		CHECK(large->GetMemoryUsage().Cpu > small->GetMemoryUsage().Cpu + 9'990 * perEntity);
+		CHECK(smallScene->GetMemoryUsage().Cpu > 10 * perEntity);
+		CHECK(large->GetMemoryUsage().Cpu > smallScene->GetMemoryUsage().Cpu + 9'990 * perEntity);
 		CHECK(large->GetMemoryUsage().GetGpu() == 0);
 	}
 

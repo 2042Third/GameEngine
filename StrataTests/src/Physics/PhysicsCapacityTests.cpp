@@ -160,11 +160,11 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(automatic.TempAllocatorSize == 0);
 
 		// Small scenes get the minimums.
-		const PhysicsSettings small = PhysicsWorld::ResolveCapacities(automatic, 10);
-		CHECK(small.MaxBodies == 65536);
-		CHECK(small.MaxBodyPairs == 4 * 65536);
-		CHECK(small.MaxContactConstraints == 10240);
-		CHECK(small.TempAllocatorSize >= 10 * c_MiB);
+		const PhysicsSettings smallSettings = PhysicsWorld::ResolveCapacities(automatic, 10);
+		CHECK(smallSettings.MaxBodies == 65536);
+		CHECK(smallSettings.MaxBodyPairs == 4 * 65536);
+		CHECK(smallSettings.MaxContactConstraints == 10240);
+		CHECK(smallSettings.TempAllocatorSize >= 10 * c_MiB);
 
 		// Large ones: the next power of two of twice the bodies, four pairs per body slot, two contacts per body, and the
 		// scratch memory for them.
@@ -172,7 +172,7 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(large.MaxBodies == 262'144);
 		CHECK(large.MaxBodyPairs == 4 * 262'144);
 		CHECK(large.MaxContactConstraints == 140'000);
-		CHECK(large.TempAllocatorSize > small.TempAllocatorSize);
+		CHECK(large.TempAllocatorSize > smallSettings.TempAllocatorSize);
 
 		// Given capacities stay.
 		PhysicsSettings given;
@@ -666,9 +666,9 @@ TEST_SUITE("Physics.Capacity")
 
 	TEST_CASE("The reserved bytes of a world follow its capacities")
 	{
-		PhysicsSettings small = PhysicsWorld::ResolveCapacities(PhysicsSettings(), 10);
+		PhysicsSettings smallSettings = PhysicsWorld::ResolveCapacities(PhysicsSettings(), 10);
 		PhysicsSettings large = PhysicsWorld::ResolveCapacities(PhysicsSettings(), 100'000);
-		CHECK(PhysicsWorld::EstimateReservedBytes(large) > PhysicsWorld::EstimateReservedBytes(small));
+		CHECK(PhysicsWorld::EstimateReservedBytes(large) > PhysicsWorld::EstimateReservedBytes(smallSettings));
 		// The reference machine's world at the most bodies (Perf.Physics.MostBodies.ReservedMemory) reserved 554.96 MB, and one at
 		// the largest capacities (LargestCapacities.ReservedMemory) 984.2 MB: the estimate is within 15% of both.
 		PhysicsSettings mostBodies;

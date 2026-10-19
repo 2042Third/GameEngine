@@ -330,10 +330,10 @@ TEST_SUITE("Renderer.Texture")
 
 		TextureImportSettings limited;
 		limited.MaxSize = 2;
-		Ref<Texture> small = TextureImporter::Decode(png, limited, "TwoRows.png");
-		REQUIRE(small);
-		CHECK(small->GetWidth() == 2);
-		CHECK(small->GetHeight() == 1);
+		Ref<Texture> smallTexture = TextureImporter::Decode(png, limited, "TwoRows.png");
+		REQUIRE(smallTexture);
+		CHECK(smallTexture->GetWidth() == 2);
+		CHECK(smallTexture->GetHeight() == 1);
 
 		CHECK_FALSE(TextureImporter::Decode({}, color, "Empty.png", &error));
 		const std::vector<uint8_t> garbage = { 1, 2, 3, 4, 5, 6, 7, 8 };

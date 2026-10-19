@@ -63,11 +63,11 @@ TEST_SUITE("Scripting.World")
 		const WorldStreamingSystem* world = scene.GetSystem<WorldStreamingSystem>();
 		REQUIRE(world);
 		REQUIRE(world->GetStreamer());
-		const WorldCellKey far { 1, 3, 3 };
+		const WorldCellKey farCell { 1, 3, 3 };
 		REQUIRE(WaitUntil([&]()
 		{
 			RunWorldFrame(mounted, scene);
-			return world->GetStreamer()->GetCellStatus(far) == WorldCellStatus::Unloaded;
+			return world->GetStreamer()->GetCellStatus(farCell) == WorldCellStatus::Unloaded;
 		}, std::chrono::seconds(60)));
 		CHECK_FALSE(engine->IsFaulted());
 		scene.OnRuntimeStop();
