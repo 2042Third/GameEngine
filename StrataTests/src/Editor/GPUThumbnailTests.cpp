@@ -9,6 +9,8 @@
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/WelcomePanel.h"
 #include "Renderer/GPUTestUtils.h"
+#include "Renderer/MeshTestUtils.h"
+#include "Renderer/SceneRendererTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/EditorAssetManager.h>
@@ -502,6 +504,83 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(picture->getDesc().width == ProjectThumbnail::c_Width);
 		// A project without a picture has none.
 		CHECK(welcome.GetCardImage(directory.parent_path() / "Missing" / "Missing.stproj") == nullptr);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The project's picture and prefab thumbnails wait until their mesh renderers reached the GPU")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUThumbnailBacklog") / "Game";
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		const auto run = [&](std::string_view name, const nlohmann::json& parameters)
+		{
+			return Tests::RunCommandToCompletion(context, commands, name, parameters);
+		};
+		const auto frameUntil = [&](const std::function<bool()>& condition)
+		{
+			for (int frame = 0; frame < 3000 && !condition(); frame++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				context.Update(Timestep(1.0f / 60.0f));
+				gpu.GetDevice().EndFrame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return condition();
+		};
+		run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+
+		// A group of an unlit red cube in the middle, a cube on the right and, on the left, more mesh renderers than a scene's
+		// GPU copy takes in two frames, which it takes first (the newest entities are the first the render scene meets); too
+		// small to be drawn, they keep the GPU's work small.
+		constexpr uint32_t c_Parts = 4096;
+		AssetMetadata metadata;
+		metadata.Type = AssetType::Mesh;
+		metadata.Name = "Parts";
+		const AssetHandle parts = context.GetAssetManager()->AddMemoryAsset(Tests::CreateCubeOfParts(1.0f, c_Parts, BuiltinAssets::DefaultMaterial), metadata);
+		const std::optional<UUID> red = UUIDFromJson(run("material.create", { { "path", "Materials/Red.stmat" },
+			{ "properties", { { "BaseColor", { 1.0, 0.0, 0.0, 1.0 } }, { "Unlit", true } } } })["asset"]);
+		REQUIRE(red);
+		Scene& scene = *context.GetActiveScene();
+		Tests::AddNeutralPostProcess(scene);
+		Tests::AddSun(scene, glm::vec3(-0.3f, -1.0f, -0.4f), 3.0f, false);
+		Entity group = scene.CreateEntity("Group");
+		std::vector<Entity> members = { Tests::AddMesh(scene, BuiltinAssets::CubeMesh, *red, glm::vec3(0.0f), "Red"),
+			Tests::AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(2.0f, 0.0f, 0.0f), "Right") };
+		const std::vector<Entity> backlog = Tests::AddUploadBacklog(scene, parts, c_Parts, glm::vec3(-2.0f, 0.0f, 0.0f), 1.0e-3f);
+		members.insert(members.end(), backlog.begin(), backlog.end());
+		for (Entity member : members)
+			REQUIRE(scene.SetParent(member, group));
+		const auto isRed = [](const glm::u8vec4& pixel) { return pixel.r > 150 && pixel.g < 80 && pixel.b < 80; };
+
+		// The project's picture, from the editor camera (the scene has none) looking at the red cube.
+		run("camera.set", { { "position", { 0.0, 0.0, 8.0 } }, { "target", { 0.0, 0.0, 0.0 } } });
+		run("scene.saveAs", { { "path", "Scenes/Group.stscene" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+		const std::optional<std::vector<uint8_t>> png = FileSystem::ReadBytes(ProjectThumbnail::GetFile(directory));
+		REQUIRE(png);
+		const std::optional<ReadbackImage> picture = ImageReader::DecodeRGBA8(*png);
+		REQUIRE(picture);
+		CHECK(isRed(Tests::GetPixelRGBA8(*picture, picture->Width / 2, picture->Height / 2)));
+
+		// The group as a prefab: its thumbnail frames all of it, the red cube in the middle.
+		const std::optional<UUID> prefabHandle = UUIDFromJson(run("prefab.create", { { "entities", { UUIDToJson(group.GetUUID()) } }, { "path", "Prefabs/Group.stprefab" } })["asset"]);
+		REQUIRE(prefabHandle);
+		const AssetHandle prefab = *prefabHandle;
+		ThumbnailCache& thumbnails = *context.GetThumbnails();
+		REQUIRE(frameUntil([&]()
+		{
+			thumbnails.Request(prefab);
+			return thumbnails.GetState(prefab) == ThumbnailState::Ready || thumbnails.GetState(prefab) == ThumbnailState::Unavailable;
+		}));
+		CHECK(thumbnails.GetState(prefab) == ThumbnailState::Ready);
+		nvrhi::ITexture* thumbnail = thumbnails.Request(prefab);
+		REQUIRE(thumbnail);
+		CHECK(isRed(ReadCenterAndCorner(thumbnail).first));
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

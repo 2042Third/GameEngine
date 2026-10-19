@@ -870,7 +870,8 @@ namespace Strata
 			return;
 		}
 		const SceneRendererStats& stats = m_Renderer->GetStats();
-		if (stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || !loadingMeshes.empty())
+		// Large prefabs and models reach the GPU over several frames (SceneRendererSpecification::NewInstanceBytesPerFrame).
+		if (stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || stats.DeferredProxies > 0 || !loadingMeshes.empty())
 		{
 			job.QuietFrames = 0;
 			return;

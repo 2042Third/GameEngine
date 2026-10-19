@@ -47,6 +47,10 @@ namespace Strata
 		// animator that animates only while seen (WhenVisible) and that no renderer drew before skipped its poses, and the
 		// capture's report poses it in the next frame (also while the game is paused).
 		constexpr uint32_t c_MaxCapturePoseFrames = 8;
+		// Frames a capture may render again (waitForAssets) while mesh renderers new to the scene wait for their upload to its
+		// GPU copy, which takes SceneRendererSpecification::NewInstanceBytesPerFrame (16 MiB) of them a frame: a scene of a
+		// million cubes opened a moment ago arrives in about eight frames.
+		constexpr uint32_t c_MaxCaptureInstanceFrames = 120;
 		// Polls a finished capture waits for its frame's GPU times (they are resolved 1-3 frames after the GPU finished it).
 		constexpr uint32_t c_MaxCaptureGPUStatsPolls = 8;
 
@@ -226,8 +230,10 @@ namespace Strata
 			uint32_t AssetFrames = 0; // Renders repeated so far while assets of the view were loading
 			uint32_t MipFrames = 0;   // Renders repeated so far while textures were coarser than the view wants
 			uint32_t PoseFrames = 0;  // Renders repeated so far while animators showed poses older than their time
+			uint32_t InstanceFrames = 0; // Renders repeated so far while new mesh renderers waited for their upload to the GPU
 			uint32_t TexturesBelowWanted = 0;
 			uint32_t StalePoses = 0;
+			uint32_t DeferredProxies = 0;
 			SceneRendererStats Stats;     // The captured frame's
 			uint64_t RenderFrame = 0;     // The frame profiler's frame that rendered it
 			uint64_t RenderCount = 0;     // The capture renderer's frame (SceneRenderer::GetRenderCount), whose GPU counts it waits for
@@ -261,9 +267,10 @@ namespace Strata
 		}
 
 		// First poll (the frame after the command): renders the image and starts reading it back. While glyphs of the
-		// scene's text are still being rasterized, or (waitForAssets) assets of the view are still loading or textures it draws
-		// lack the levels the view wants, the image would lack them: the next polls render again until it is complete, or
-		// c_MaxCaptureTextFrames, c_MaxCaptureAssetFrames and c_MaxCaptureMipFrames ran out.
+		// scene's text are still being rasterized, or (waitForAssets) assets of the view are still loading, textures it draws
+		// lack the levels the view wants or new mesh renderers wait for their upload to the GPU, the image would lack them: the
+		// next polls render again until it is complete, or c_MaxCaptureTextFrames, c_MaxCaptureAssetFrames,
+		// c_MaxCaptureMipFrames and c_MaxCaptureInstanceFrames ran out.
 		std::optional<EditorCommandResult> StartCapture(EditorContext& context, const CaptureRequest& request, CaptureProgress& progress)
 		{
 			EditorViewport& viewport = context.GetViewport();
@@ -305,16 +312,19 @@ namespace Strata
 			progress.HiddenScreenSpaceTexts = stats.HiddenScreenSpaceTexts;
 			progress.TexturesBelowWanted = renderer->CountTexturesBelowWanted();
 			progress.StalePoses = stats.StalePoses;
+			progress.DeferredProxies = stats.DeferredProxies;
 			const bool textPending = progress.PendingTextGlyphs > 0 && progress.TextFrames < c_MaxCaptureTextFrames;
 			const bool assetsPending = request.WaitForAssets && progress.PendingAssets > 0 && progress.AssetFrames < c_MaxCaptureAssetFrames;
 			const bool mipsPending = request.WaitForAssets && progress.TexturesBelowWanted > 0 && progress.MipFrames < c_MaxCaptureMipFrames;
 			const bool posesPending = request.WaitForAssets && progress.StalePoses > 0 && progress.PoseFrames < c_MaxCapturePoseFrames;
-			if (textPending || assetsPending || mipsPending || posesPending)
+			const bool instancesPending = request.WaitForAssets && progress.DeferredProxies > 0 && progress.InstanceFrames < c_MaxCaptureInstanceFrames;
+			if (textPending || assetsPending || mipsPending || posesPending || instancesPending)
 			{
 				progress.TextFrames += textPending ? 1 : 0;
 				progress.AssetFrames += assetsPending ? 1 : 0;
 				progress.MipFrames += mipsPending ? 1 : 0;
 				progress.PoseFrames += posesPending ? 1 : 0;
+				progress.InstanceFrames += instancesPending ? 1 : 0;
 				return std::nullopt;
 			}
 			progress.Readback = TextureReadback::Create(renderer->GetOutputTexture(), {}, &error);
@@ -411,7 +421,7 @@ namespace Strata
 				{ "height", encoded.Image.Height },
 				{ "camera", request.OwnCamera.IsSet() ? "custom" : (progress.View.FromScene ? "scene" : "editor") },
 				{ "view", DescribeView(progress.View.Camera) },
-				{ "waitedFrames", std::max({ progress.TextFrames, progress.AssetFrames, progress.MipFrames, progress.PoseFrames }) },
+				{ "waitedFrames", std::max({ progress.TextFrames, progress.AssetFrames, progress.MipFrames, progress.PoseFrames, progress.InstanceFrames }) },
 				{ "overlays", progress.Overlays },
 				{ "pendingAssets", progress.PendingAssets },
 				{ "texturesBelowWanted", progress.TexturesBelowWanted },
@@ -606,7 +616,8 @@ namespace Strata
 			"prepared delays the picture by a few frames, so it is complete, and so do meshes, materials and textures of the view that are still loading "
 			"(waitForAssets, default true: up to about five seconds of frames; waitedFrames counts the extra renders), and textures it draws that still "
 			"lack the finer mip levels the view wants (up to about two seconds, as a texture budget may keep them out), and animators that animate only "
-			"while seen (WhenVisible) until they show the pose of their time (a few frames, also while paused). Reports what was still "
+			"while seen (WhenVisible) until they show the pose of their time (a few frames, also while paused), and mesh renderers the scene just "
+			"gained until they reached the GPU (a few frames for a million; renderStats.deferredInstanceBytes says what still waited). Reports what was still "
 			"loading when the picture was taken (pendingAssets), the textures drawn coarser than the view wants (texturesBelowWanted), animators "
 			"drawn with an older pose (stalePoses) and glyphs that could not be prepared in time (pendingTextGlyphs). debugView colors the picture "
 			"by streaming state, level of detail or mip levels (default: the viewport's, viewport.setSettings) and the result's debugView says what it "
@@ -626,7 +637,8 @@ namespace Strata
 				{ "target", Vec3Schema("Look at this point (a camera of the capture's own; the editor camera does not move)") },
 				{ "fov", RangeSchema("Vertical field of view in degrees of the capture's own camera", EditorCamera::c_MinFOV, EditorCamera::c_MaxFOV) },
 				{ "waitForAssets", BoolSchema("Render again on the following frames while assets of the view are still loading, up to about five seconds, "
-					"and while textures lack the mip levels the view wants, up to about two (default true); false takes the picture at once") },
+					"while textures lack the mip levels the view wants, up to about two, and while new mesh renderers are on their way to the GPU (default "
+					"true); false takes the picture at once") },
 				{ "debugView", DebugViewSchema("\"streaming\" tints entities by streaming state (pending Sulfur, failed Cinnabar, missing meshes as boxes), "
 					"\"lod\" by level of detail, \"mip\" by the mip levels their textures lack, \"none\" not at all (default: the viewport's debug view)") },
 				{ "path", StringSchema("Also save the PNG to this .png file: relative to the project directory (needs an open project) or absolute; folders are "

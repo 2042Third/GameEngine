@@ -9,6 +9,8 @@
 #include "Editor/ViewportRenderer.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Renderer/GPUTestUtils.h"
+#include "Renderer/MeshTestUtils.h"
+#include "Renderer/SceneRendererTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetManager.h>
@@ -370,6 +372,37 @@ TEST_SUITE("GPU.Editor.Viewport")
 		const std::optional<std::vector<uint8_t>> png = Base64::Decode(first.Value["Image"]["Data"].get<std::string>());
 		REQUIRE(png);
 		CHECK(harness.CountDifferences(DecodePNG(*png), complete) == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture waits until mesh renderers new to the scene reached the GPU")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu; // Each render is a frame of its own, with a new upload budget
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(Tests::CreateTemporaryDirectory("ViewportCaptureBacklog") / "Game") }, { "name", "Game" } });
+		harness.Run("entity.create", { { "name", "PostProcess" }, { "components", { { "PostProcess", { { "Tonemapper", "None" }, { "AutoExposure", false },
+			{ "Vignette", 0.0 }, { "Bloom", false }, { "AmbientOcclusion", false }, { "AntiAliasing", false } } } } } });
+		harness.Run("entity.create", { { "name", "Sun" }, { "components", { { "DirectionalLight", { { "Intensity", 3.0 } } } } } });
+		// A scene that just gained a cube in front of the camera and, behind it, more mesh renderers than its GPU copy takes in
+		// two frames, which it takes first (the newest entities are the first the render scene meets).
+		harness.Run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } });
+		constexpr uint32_t c_Parts = 4096;
+		AssetMetadata metadata;
+		metadata.Type = AssetType::Mesh;
+		metadata.Name = "Parts";
+		const AssetHandle parts = harness.Context.GetAssetManager()->AddMemoryAsset(Tests::CreateCubeOfParts(1.0f, c_Parts, BuiltinAssets::DefaultMaterial), metadata);
+		Tests::AddUploadBacklog(*harness.Context.GetActiveScene(), parts, c_Parts, glm::vec3(0.0f, 0.0f, 40.0f));
+		harness.Run("camera.set", { { "position", { 0, 0, 4 } }, { "target", { 0, 0, 0 } } });
+
+		nlohmann::json result;
+		const DecodedImage image = harness.Capture({ { "width", 64 }, { "height", 48 } }, &result);
+		CHECK(result["renderStats"]["deferredInstanceBytes"] == 0);
+		CHECK(result["waitedFrames"].get<uint32_t>() >= 2);
+		// The lit cube fills the center.
+		CHECK(image.At(32, 24).r > 100);
+		CHECK(image.At(1, 1).r < 40);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

@@ -32,6 +32,20 @@ namespace Strata::Tests
 		return mesh;
 	}
 
+	// A cube of `size` units drawn as `parts` submeshes of one material: a mesh renderer of `parts` instances, whose
+	// upload to a scene's GPU copy takes that many instances' bytes (SceneRendererSpecification::NewInstanceBytesPerFrame).
+	inline Ref<Mesh> CreateCubeOfParts(float size, uint32_t parts, AssetHandle material)
+	{
+		const Ref<Mesh> cube = MeshFactory::CreateCube(size);
+		REQUIRE(cube);
+		std::vector<Submesh> submeshes(parts, cube->GetSubmeshes()[0]);
+		for (Submesh& submesh : submeshes)
+			submesh.Material = material;
+		const Ref<Mesh> mesh = Mesh::Create(cube->GetPositions(), cube->GetAttributes(), cube->GetIndices(), std::move(submeshes));
+		REQUIRE(mesh);
+		return mesh;
+	}
+
 	// An unskinned mesh as cooked mesh versions 1 and 2 wrote it (the levels without their errors, version 1 without the
 	// header's flags): what earlier builds left in projects, for the loader's compatibility. Written here as those versions
 	// laid it out, not through Mesh::Serialize, so changes of the current format do not change it.

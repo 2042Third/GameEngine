@@ -1966,7 +1966,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   update): changes of resident proxies upload at once; new proxies (a scene's first frame, new entities, a reused proxy
   index) upload oldest first within `SceneRendererSpecification::NewInstanceBytesPerFrame` (16 MiB) per device frame, at
   least one a frame, and wait meanwhile with a record of zeros (`SceneRendererStats::DeferredInstanceBytes`,
-  `DeferredProxies`); a destroyed proxy's record is cleared at once. Buffers grow by a GPU copy into larger ones (the
+  `DeferredProxies`; the editor's single pictures, `viewport.capture`, the project's picture and thumbnails, render again
+  until none waits); a destroyed proxy's record is cleared at once. Buffers grow by a GPU copy into larger ones (the
   old ones released deferred), so growth uploads nothing again. `PrepareLoadedScene` fills a loaded scene's mirror too,
   within `c_PrepareUploadBytes` a frame, so the frame that shows the scene uploads no proxy. A render scene's
   destructor posts its id (any thread) and `Renderer::BeginFrame` releases its mirror; mirrors no renderer updated for

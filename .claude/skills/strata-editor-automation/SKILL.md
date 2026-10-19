@@ -112,8 +112,10 @@ editor started with `--no-gpu` (use `--headless`):
   hiddenScreenSpaceTexts, debugView, notice?, path?}`. Text is complete in the picture, and so are the view's meshes,
   materials and textures: the capture renders again for up to about five seconds of frames while they load, up to about
   two more while textures still lack the finer mip levels the view wants, and a few while animated characters that
-  animate only while seen (`CullingMode: WhenVisible`) still show an older pose, also while paused (`waitForAssets: false`
-  takes it at once; `pendingAssets` says what was still loading, `texturesBelowWanted` what was still blurrier than
+  animate only while seen (`CullingMode: WhenVisible`) still show an older pose, also while paused, and while mesh renderers
+  the scene just gained are still on their way to the GPU (a few frames for a million; `waitForAssets: false` takes it
+  at once, `renderStats.deferredInstanceBytes` says what still waited; `pendingAssets` says what was still loading,
+  `texturesBelowWanted` what was still blurrier than
   wanted, e.g. under a texture budget, `stalePoses` the animators drawn in an older pose). `position` +
   `target` (and `fov`) look from your own camera: the
   person's view (`camera.get`) does not move, and the result's `camera` is `"custom"`.

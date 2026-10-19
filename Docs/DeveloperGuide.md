@@ -1881,7 +1881,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   scene's change logs (`GetInstanceChanges`, `GetPaletteChanges`, `GetProxyChanges`) through staging
   (`GPUUploadQueue::RecordSceneUpload`), never `writeBuffer`. Renderers draw only resident proxies
   (`RenderSceneGPU::IsResident`): new proxies upload within `SceneRendererSpecification::NewInstanceBytesPerFrame` per
-  device frame and wait undrawn meanwhile (`SceneRendererStats::DeferredInstanceBytes`); changes of resident ones upload
+  device frame and wait undrawn meanwhile (`SceneRendererStats::DeferredInstanceBytes`, `DeferredProxies`: code that
+  renders a single picture renders again until none waits, as captures and thumbnails do); changes of resident ones upload
   at once. A reader of the proxy log that takes `GetProxyVersion` reads every change after it. Mirrors go with their
   render scenes (at the next `Renderer::BeginFrame`) or after 300 frames unused.
 - The mirror also keeps the mesh table and the material data and flags by slot (both paths read materials from it;

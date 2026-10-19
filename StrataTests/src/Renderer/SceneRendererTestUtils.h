@@ -7,8 +7,10 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Renderer/GPUSceneData.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/RendererComponents.h"
+#include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Scene/Components.h"
@@ -142,6 +144,23 @@ namespace Strata::Tests
 		renderer.Mesh = mesh;
 		renderer.Material = material;
 		return entity;
+	}
+
+	// Mesh renderers of `mesh`, a mesh of `parts` submeshes (CreateCubeOfParts), at `position`, `scale` times its size and
+	// casting no shadows: more than a scene's GPU copy takes in two frames (SceneRendererSpecification::NewInstanceBytesPerFrame),
+	// so some of the scene's new mesh renderers reach the GPU only three or more frames later.
+	inline std::vector<Entity> AddUploadBacklog(Scene& scene, AssetHandle mesh, uint32_t parts, const glm::vec3& position, float scale = 1.0f)
+	{
+		const uint64_t proxyBytes = sizeof(RenderData::GPUProxy) + static_cast<uint64_t>(parts) * sizeof(RenderData::InstanceData);
+		const uint64_t count = 2 * SceneRendererSpecification {}.NewInstanceBytesPerFrame / proxyBytes + 1;
+		std::vector<Entity> entities;
+		for (uint64_t index = 0; index < count; index++)
+		{
+			entities.push_back(AddMesh(scene, mesh, UUID::Null(), position, "Backlog"));
+			entities.back().GetComponent<TransformComponent>().Scale = glm::vec3(scale);
+			entities.back().GetComponent<MeshRendererComponent>().CastShadows = false;
+		}
+		return entities;
 	}
 
 	// A directional light travelling along `direction`.
