@@ -813,6 +813,13 @@ namespace Strata
 			BodyRecord* Record = nullptr;
 		};
 
+		// An entry of PhysicsWorldData::RecordIndex: the entity recorded at an index (its version included) and its record.
+		struct RecordSlot
+		{
+			entt::entity Handle = entt::null;
+			BodyRecord* Record = nullptr;
+		};
+
 		// A dynamic body whose simulated pose is written to its entity in parallel with the others: one without a dynamic
 		// ancestor written in the same step, so its parent's world transform is known before the writes start (see
 		// WriteBackDynamicBodies). Each item touches only its own record and transform.
@@ -989,6 +996,12 @@ namespace Strata
 		std::vector<ContactReport> CharacterReports;                  // The step's contacts of character controllers (see StepCharacters)
 
 		std::map<entt::entity, BodyRecord> Bodies;                    // Ordered: per-step processing is deterministic
+		// The records by entity index, for lookups (FindRecord): the map's ordered search costs a cache miss per level, and a
+		// cell that loads or unloads looks up tens of thousands of records in a frame. Its nodes keep their addresses. A new
+		// entity can take the index of a destroyed one whose record the same changes have not removed yet: the newer record
+		// then waits in the overflow (rare, and only until it is removed).
+		std::vector<RecordSlot> RecordIndex;
+		std::unordered_map<entt::entity, BodyRecord*> RecordOverflow;
 		std::unordered_map<entt::entity, entt::entity> MergedOwners;  // Collider entity -> rigid body entity owning its body
 		// Records that need attention at the next step besides the awake bodies (see NeedsPolling). Entries are dropped
 		// lazily, so the list may hold records that no longer need it (or no longer exist).
@@ -1177,8 +1190,48 @@ namespace Strata
 		template<typename Data>
 		auto FindRecord(Data& data, entt::entity handle) -> decltype(&data.Bodies.begin()->second)
 		{
-			auto it = data.Bodies.find(handle);
-			return it != data.Bodies.end() ? &it->second : nullptr;
+			if (handle == entt::null)
+				return nullptr;
+			const size_t index = static_cast<size_t>(entt::to_entity(handle));
+			if (index >= data.RecordIndex.size())
+				return nullptr;
+			const RecordSlot& slot = data.RecordIndex[index];
+			if (slot.Handle == handle)
+				return slot.Record;
+			if (data.RecordOverflow.empty())
+				return nullptr;
+			const auto overflow = data.RecordOverflow.find(handle);
+			return overflow != data.RecordOverflow.end() ? overflow->second : nullptr;
+		}
+
+		// Creates the record of an entity (or finds the one it has) and indexes it for FindRecord.
+		std::pair<BodyRecord*, bool> EmplaceRecord(PhysicsWorldData& data, entt::entity handle)
+		{
+			auto [it, created] = data.Bodies.try_emplace(handle);
+			if (created)
+			{
+				const size_t index = static_cast<size_t>(entt::to_entity(handle));
+				// Doubling, but never past the largest entity index (2^20 slots, 16 MiB).
+				if (index >= data.RecordIndex.size())
+					data.RecordIndex.resize(std::max(index + 1, std::min(data.RecordIndex.size() * 2, static_cast<size_t>(entt::to_entity(entt::entity(entt::null))) + 1)));
+				RecordSlot& slot = data.RecordIndex[index];
+				if (slot.Handle == entt::null)
+					slot = RecordSlot { handle, &it->second };
+				else
+					data.RecordOverflow.emplace(handle, &it->second);
+			}
+			return { &it->second, created };
+		}
+
+		void EraseRecord(PhysicsWorldData& data, std::map<entt::entity, BodyRecord>::iterator it)
+		{
+			const entt::entity handle = it->first;
+			const size_t index = static_cast<size_t>(entt::to_entity(handle));
+			if (index < data.RecordIndex.size() && data.RecordIndex[index].Handle == handle)
+				data.RecordIndex[index] = RecordSlot();
+			else
+				data.RecordOverflow.erase(handle);
+			data.Bodies.erase(it);
 		}
 
 		// The record of an entity whose body is part of the simulation, or nullptr.
@@ -1215,8 +1268,8 @@ namespace Strata
 
 		bool IsSlotWaiter(const PhysicsWorldData& data, const std::pair<entt::entity, uint64_t>& entry)
 		{
-			const auto it = data.Bodies.find(entry.first);
-			return it != data.Bodies.end() && it->second.Failure == BuildFailure::WaitingForSlot && it->second.SlotTicket == entry.second;
+			const BodyRecord* record = FindRecord(data, entry.first);
+			return record && record->Failure == BuildFailure::WaitingForSlot && record->SlotTicket == entry.second;
 		}
 
 		// Drops the entries of records that stopped waiting from the queue once they are most of it, so that entities that wait
@@ -1779,6 +1832,8 @@ namespace Strata
 				bodies.DestroyBodies(all.data(), static_cast<int>(all.size()));
 
 			data.Bodies.clear();
+			data.RecordIndex.clear();
+			data.RecordOverflow.clear();
 			data.SlotWaiterCount = 0;
 			data.FailureCounts.fill(0);
 			data.SlotWaiters.clear();
@@ -2230,7 +2285,7 @@ namespace Strata
 			const UUID entityID = record.EntityID;
 			SetMeshSources(data, handle, record, {});
 			SetFailure(data, handle, record, BuildFailure::None);
-			data.Bodies.erase(it); // A PolledBodies entry is dropped by the next step
+			EraseRecord(data, it); // A PolledBodies entry is dropped by the next step
 			EndContactsOf(data, entityID);
 		}
 
@@ -2256,7 +2311,7 @@ namespace Strata
 				if (it != data.MergedOwners.end() && it->second != owner)
 					data.OwnerRefreshes.Add(it->second); // Taken from another body
 				data.MergedOwners[entity] = owner;
-				if (data.Bodies.find(entity) != data.Bodies.end())
+				if (FindRecord(data, entity))
 					DestroyRecord(data, entity); // Was a static body of its own
 			}
 
@@ -2298,8 +2353,8 @@ namespace Strata
 			start.Owner = entity;
 			start.RigidBody = entity.TryGetComponent<RigidBodyComponent>();
 			const entt::entity handle = entity.GetHandle();
-			auto [recordIt, created] = data.Bodies.try_emplace(handle);
-			start.Record = &recordIt->second;
+			auto [record, created] = EmplaceRecord(data, handle);
+			start.Record = record;
 			if (created)
 				start.Record->EntityID = entity.GetUUID();
 
@@ -2958,7 +3013,7 @@ namespace Strata
 				// The bodies an entity was part of, and the one it is part of now.
 				for (entt::entity handle : data.StructureChanges.TakeInto(data.ChangeScratch))
 				{
-					if (data.Bodies.find(handle) != data.Bodies.end())
+					if (FindRecord(data, handle))
 						data.OwnerRefreshes.Add(handle);
 					auto merged = data.MergedOwners.find(handle);
 					if (merged != data.MergedOwners.end())
@@ -4292,7 +4347,7 @@ namespace Strata
 		{
 			if (!entity.IsValid() || entity.GetScene() != data.OwnerScene)
 				return {};
-			if (data.Bodies.find(entity.GetHandle()) != data.Bodies.end())
+			if (FindRecord(data, entity.GetHandle()))
 				return entity;
 			auto merged = data.MergedOwners.find(entity.GetHandle());
 			return merged != data.MergedOwners.end() ? Entity(merged->second, data.OwnerScene) : Entity();

@@ -8,7 +8,10 @@
 #include "Strata/Scene/ComponentAccess.h"
 #include "TestHelpers.h"
 
+#include <algorithm>
 #include <limits>
+#include <optional>
+#include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -214,6 +217,50 @@ TEST_SUITE("Physics.Lifecycle")
 		CHECK(physics.HasBody(second));
 		CHECK(physics.GetStats().BodyCount == 2);
 		CHECK(GetWorldPosition(scene, second).x == doctest::Approx(8.0f));
+	}
+
+	TEST_CASE("Hundreds of entities made in the places of ones destroyed in the same frame get bodies of their own")
+	{
+		// Enough to build on the job threads, whose records exist before the destroyed entities' records go: physics finds
+		// records by entity index, and the new records wait beside the old ones until those are removed.
+		ScopedJobSystem jobs(2);
+		Scene scene;
+		CreateGround(scene);
+		std::vector<Entity> first;
+		for (int index = 0; index < 400; index++)
+			first.push_back(CreateStaticBox(scene, "First", glm::vec3(static_cast<float>(index) * 3.0f, 0.5f, 10.0f), glm::vec3(0.5f)));
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 1);
+		REQUIRE(physics.GetStats().BodyCount == 401);
+		std::vector<entt::entity> indices;
+		for (const Entity entity : first)
+			indices.push_back(entity.GetHandle());
+		scene.DestroyEntities(first);
+		std::vector<Entity> second;
+		for (int index = 0; index < 400; index++)
+			second.push_back(CreateStaticBox(scene, "Second", glm::vec3(static_cast<float>(index) * 3.0f, 0.5f, -10.0f), glm::vec3(0.5f)));
+		size_t reused = 0;
+		for (const Entity entity : second)
+		{
+			reused += std::count_if(indices.begin(), indices.end(), [&](entt::entity old)
+			{
+				return entt::to_entity(old) == entt::to_entity(entity.GetHandle());
+			});
+		}
+		REQUIRE(reused == 400);
+		StepScene(scene, 1);
+		CHECK(physics.GetStats().BodyCount == 401);
+		for (const Entity entity : second)
+			CHECK(physics.HasBody(entity));
+		// The new bodies are where their entities are, and nothing is left where the old ones were.
+		CHECK(physics.Raycast(glm::vec3(30.0f, 5.0f, -10.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f).has_value());
+		const std::optional<RaycastHit> old = physics.Raycast(glm::vec3(30.0f, 5.0f, 10.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+		REQUIRE(old.has_value());
+		CHECK(old->Distance > 4.5f); // The ground, not a box
+		scene.DestroyEntities(second);
+		StepScene(scene, 1);
+		CHECK(physics.GetStats().BodyCount == 1);
 	}
 
 	TEST_CASE("Property edits rebuild the body and keep its motion")
