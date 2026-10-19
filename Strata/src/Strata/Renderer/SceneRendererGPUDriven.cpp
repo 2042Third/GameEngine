@@ -267,11 +267,29 @@ namespace Strata
 			// The CPU path draws instead.
 			ST_CORE_ERROR("{}: the GPU-driven path is unavailable (its pipelines or buffers could not be created); the CPU culls and draws",
 				m_Specification.DebugName);
-			m_CullViewPipeline = nullptr;
-			m_CullShadowPipeline = nullptr;
-			m_CullBuildPipeline = nullptr;
-			return;
+			ReleaseCullResources();
 		}
+	}
+
+	void SceneRenderer::ReleaseCullResources()
+	{
+		// None of the path stays, so nothing sized with the viewport (the depth pyramid) or the shadow map follows it either.
+		m_CullBindingLayout = nullptr;
+		m_CullViewPipeline = nullptr;
+		m_CullShadowPipeline = nullptr;
+		m_CullBuildPipeline = nullptr;
+		m_CullFeedbackPipeline = nullptr;
+		m_DepthPyramidLayout = nullptr;
+		m_DepthPyramidPipeline = nullptr;
+		m_ShadowPyramidPipeline = nullptr;
+		m_DepthPyramidSampler = nullptr;
+		m_DummyShadowPyramid = nullptr;
+		m_BucketTableBuffer = nullptr;
+		m_CullBucketCountBuffer = nullptr;
+		m_CullCounterBuffer = nullptr;
+		m_CullConstantBuffer = nullptr;
+		for (CounterReadback& entry : m_CounterReadbacks)
+			entry.Readback.reset();
 	}
 
 	void SceneRenderer::CreateLightCullResources()
@@ -642,7 +660,7 @@ namespace Strata
 
 	bool SceneRenderer::CreateDepthPyramid()
 	{
-		if (!m_DepthPyramidPipeline)
+		if (!m_CullViewPipeline)
 			return true; // No GPU-driven path: nothing to cull with it
 		// Level 0 is half the depth buffer (rounded up), down to one texel.
 		m_DepthPyramidSize = glm::uvec2((m_ViewportSize.x + 1) / 2, (m_ViewportSize.y + 1) / 2);

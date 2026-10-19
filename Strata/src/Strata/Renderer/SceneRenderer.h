@@ -466,6 +466,8 @@ namespace Strata
 		nvrhi::ITexture* GetBRDFLut() const { return m_BRDFLut; }
 
 		nvrhi::ITexture* GetBloomTexture() const { return m_BloomTexture; } // Level 0 of the bloom chain (half resolution)
+		// The view's depth pyramid occlusion culling tests against (R32_FLOAT, every level): null without the GPU-driven path.
+		nvrhi::ITexture* GetDepthPyramid() const { return m_DepthPyramid; }
 
 		// Entity visible at a pixel of the last rendered frame (invalid when none, when no frame was rendered since the last
 		// resize, or without an entity-ID buffer). Blocks until the GPU is done; meant for tests and tools (editors use
@@ -840,6 +842,8 @@ namespace Strata
 		GPUIndirectPath GetGPUIndirectPath() const;
 		// The culling pipelines and the buffers of fixed size; leaves the path unavailable (logged) when they fail.
 		void CreateCullResources();
+		// Lets go of everything CreateCullResources made (the path is unavailable then).
+		void ReleaseCullResources();
 		// The frame's culling inputs: the mesh and material tables, the buckets the frame can have and their draw slots, and
 		// the constants (after the extraction resolved the frame's assets and the cascades).
 		void PrepareGPUCulling(const RenderScene& renderScene, const SceneCamera& camera);

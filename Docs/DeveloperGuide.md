@@ -1942,7 +1942,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `ST_CULL_SHADOW` for the cascades) and `CullBuild.comp` over the render scene's GPU copy (with its mesh and material
   tables) and the geometry pool's tables; the passes draw each bucket indirectly (`IndirectMode`: Auto uses
   `drawIndexedIndirectCount` where the device has `drawIndirectCount`, else `NoCount`; `PerDraw` draws slot by slot).
-  The CPU path is the reference and the fallback (`GPUDriven` Off, devices without `drawIndirectFirstInstance`).
+  The CPU path is the reference and the fallback (`GPUDriven` Off, devices without `drawIndirectFirstInstance`, and
+  renderers whose path cannot be set up: `ReleaseCullResources` keeps none of it, so nothing sized with the viewport or
+  the shadow map follows; `GPU.SceneRenderer.GPUDrivenFallback` takes shaders away with `ShaderLibrary::SetUnavailable`).
 - The rules that decide what is drawn exist twice: on the CPU (`SceneRendererExtraction.cpp`: frustum, screen size
   `MinProjectedPixels`, cascades and sub-texel casters, materials, levels of detail through `LODSelection`) and in
   `Cull.comp` (`Include/LODSelection.glsl`, `Include/Culling.glsl`). Change both together; `GPU.SceneRenderer.GPUDriven`

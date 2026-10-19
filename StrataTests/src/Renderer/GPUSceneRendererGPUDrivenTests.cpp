@@ -7,6 +7,7 @@
 #include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
+#include "Strata/Renderer/ShaderLibrary.h"
 #include "Strata/Renderer/TextureStreamer.h"
 
 #include <algorithm>
@@ -518,6 +519,58 @@ TEST_SUITE("GPU.SceneRenderer.GPUDriven")
 		const PathFrame allFrame = Comparison::Capture(all, scene, camera);
 		CHECK(allFrame.Counts.Instances == culled.Counts.Instances + sizeCulled);
 		CHECK(all.GetGPUStats().SizeCulledProxies == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+}
+
+TEST_SUITE("GPU.SceneRenderer.GPUDrivenFallback")
+{
+	TEST_CASE("A renderer whose GPU-driven path cannot be set up draws through the CPU path and keeps none of the path's resources")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::DefaultMaterial));
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f)), 3.0f);
+		const AssetHandle material = LitMaterial(assets, glm::vec4(0.6f, 0.4f, 0.3f, 1.0f));
+		for (uint32_t index = 0; index < 6; index++)
+			AddMesh(scene, BuiltinAssets::CubeMesh, material, glm::vec3(static_cast<float>(index) * 1.5f - 3.75f, 0.0f, 0.0f), "Cube");
+		const SceneCamera camera = View(glm::vec3(0.0f, 6.0f, 9.0f), glm::vec3(0.0f));
+		SceneRenderer reference(Comparison::Specification(GPUDrivenMode::Off, IndirectDrawMode::Auto, 1.0f));
+		reference.SetViewportSize(c_Size, c_Size);
+		const PathFrame expected = Comparison::Capture(reference, scene, camera);
+
+		// One of the path's shaders missing at a time: the culling's, its feedback's, or the cascades' depth pyramid's. The
+		// view's depth pyramid (sized with the viewport) is the path's too, and must not be made either.
+		ShaderLibrary& shaders = Renderer::GetShaderLibrary();
+		for (const std::string shader : { "Scene/Cull.comp", "Scene/CullFeedback.comp", "Scene/HZBBuildArray.comp" })
+		{
+			CAPTURE(shader);
+			shaders.SetUnavailable(shader, true);
+			SceneRenderer renderer(Comparison::Specification(GPUDrivenMode::Auto, IndirectDrawMode::Auto, 1.0f));
+			shaders.SetUnavailable(shader, false);
+			CHECK_FALSE(renderer.IsGPUDriven());
+			renderer.SetViewportSize(c_Size, c_Size);
+			const PathFrame frame = Comparison::Capture(renderer, scene, camera);
+			CHECK_FALSE(frame.GPUDriven);
+			CHECK(renderer.GetDepthPyramid() == nullptr);
+			CHECK(MaxDifference(expected.Color, frame.Color) == 0);
+			CHECK(CountDifferentIDs(expected.IDs, frame.IDs) == 0);
+			// A resize builds the render targets again, still without the pyramid.
+			renderer.SetViewportSize(c_Size / 2, c_Size);
+			RenderToImage(renderer, scene, camera);
+			CHECK(renderer.GetStats().Rendered);
+			CHECK(renderer.GetDepthPyramid() == nullptr);
+		}
+		// The library hands the shaders out again.
+		CHECK(shaders.Get("Scene/Cull.comp") != nullptr);
+		SceneRenderer restored(Comparison::Specification(GPUDrivenMode::Auto, IndirectDrawMode::Auto, 1.0f));
+		CHECK(restored.IsGPUDriven());
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
