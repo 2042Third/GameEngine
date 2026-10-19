@@ -376,9 +376,7 @@ Open items and deferrals later waves own:
   one mip level's filtering, meshoptimizer simplifying one primitive); they never hold a frame, but delay when a
   cancelled import frees its thread. Moving or deleting a file that another asset's import reads as a dependency does
   not cancel that import (the file watcher's change event replaces it). A project whose large scenes have no reference
-  records yet spends seconds of its scan in the reference search (about 3 s on the Mac for the realistic 1M world): the
-  search streams the document (its memory is the text and the references), but on one thread; the parallel read's
-  chunks could serve it as they serve `SceneBuilder`.
+  records yet spends seconds of its scan in the reference search (4 s for `PerfGPU.Editor`'s 1,000,000-entity scene).
 - Scene loads (wave 3): a load's progress weighs a partly loaded texture by its whole stored size, so the bar jumps when
   a large texture's tail arrives; `AssetManagerBase::EstimateFirstLoadBytes` counts a partial load as up to 64 KiB, more
   than a small tail, so a very tight texture budget can leave textures to the view that would have fitted; a sub-scene
@@ -531,18 +529,6 @@ Open items and deferrals later waves own:
     perf findings for it: `RuntimeMaxFinalizeStage` (its budget lies below the engine's designed frame-0 cost),
     `ThumbnailsMaxFrame` (redefined with a cold first attempt, its `Measured` not taken again) and
     `SceneOpenOver1MMaxFrame` (still over its budget in some runs).
-  - Provisional metrics (`"Provisional": true` in `Budgets.json`: measured and recorded, never checked) that wave 4 added
-    on the Mac, for the reference machine to measure and give their `Measured` and `Budget`: world-io's background
-    saves, `Perf.Editor.SaveMaxFrame250k` (Mac 5-16 ms on a shared machine, target 16), `SaveMaxFrame1M` (18-52 ms,
-    target 60), `SaveSeconds1M` (2.4-6.1 s, target 3,000 ms) and `SavePeakPrivateIncrease1M` (374-382 MB, target 600);
-    its streamed reads, `Perf.Scene.CancelLoad1M` (13.6-38 ms, target 100), `RefuseOverCap1M` (25-27 ms, target 100),
-    `PerfGPU.Editor.WorldOpen1MPeakPrivate` (1,093 MB, target 2,048), `WorldOpen1MMaxFrame` (32.5 ms: the scene's swap,
-    about 30 ms in main's build on the Mac too; target `SceneOpen1MMaxFrame`'s budget), `WorldOpen1MSeconds` (2.4 s,
-    target 4,000 ms), `WorldOpen1MSavedPeakPrivate` (1,109 MB) and `WorldOpen1MSavedSeconds` (2.6 s); its cooked scenes,
-    `Perf.Runtime.World1MStart` (526 ms, target 1,500), `World1MTransientMemory` (97 MB, target 300) and
-    `QuitDuringLoad1M` (13 ms, target 500); and its
-    registration, `Perf.Asset.FirstScan10k`, `WarmScan10k`, `Perf.Editor.ImportFolder600MaxFrame` and
-    `PerfGPU.Editor.Launch30kStatus`.
   - GPU tests on Windows and NVIDIA: CI runs no test of the `gpu` label, so renderer changes are validated on the Mac
     alone until `ctest --preset windows-debug` runs under the validation layer there again (drivers differ: NVIDIA has
     `drawIndirectCount`, a transfer queue and min/max samplers, which MoltenVK lacks).
