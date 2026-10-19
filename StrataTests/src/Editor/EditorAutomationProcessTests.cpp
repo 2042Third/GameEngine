@@ -607,8 +607,8 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 		REQUIRE(editor.Start({ "--no-gpu", "--project", FileSystem::ToUTF8(project->Directory) }));
 		const std::optional<EditorSessionInfo> session = editor.WaitForSession(environment.SessionDirectory);
 		REQUIRE(session.has_value());
-		// The first answer comes while the project is not ready: its assets are scanned (or, the scan just done, its start
-		// scene is still opening).
+		// The first answer comes while the project is not ready: its assets are scanned (or, on a fast machine where the scan
+		// just ended, its start scene is still opening; the log below proves the order either way).
 		const nlohmann::json first = Call("editor.status");
 		CHECK((!first["assets"]["scanning"].is_null() || !first["sceneLoad"].is_null()));
 		// Edits wait for it (they answer once it is ready: in CI's Windows Debug build, more than the CLI's default 30 s).
@@ -619,6 +619,13 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 		CHECK(ready["sceneLoad"].is_null());
 		CHECK(Call("entity.find", { { "name", "Cube 9999" } })["entities"].size() == 1);
 		CHECK(Call("asset.list", { { "type", "Material" }, { "includeBuiltin", false } })["assets"].size() == 10'000);
+		// The session was published while the scan ran: the editor said it listens before it logged the scan's end (one log
+		// writer keeps the order).
+		REQUIRE(editor.OutputContains("Asset scan: "));
+		const std::string output = editor.TakeOutput();
+		const size_t listening = output.find("Automation: listening");
+		REQUIRE_MESSAGE(listening != std::string::npos, output);
+		CHECK_MESSAGE(listening < output.find("Asset scan: "), output);
 		Call("editor.quit", { { "force", true } });
 		REQUIRE(editor.Wait().has_value());
 	}
