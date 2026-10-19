@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <thread>
 #include <vector>
 
@@ -30,9 +31,10 @@ namespace
 	}
 
 	// One frame of a running scene that streams: the asset manager, the sub-scenes' slices within the frame's budget (timed:
-	// Scene.Load), the streamer (timed: World.Streaming) and the scene's update with physics (whose ChangeTime counts).
-	// Returns the frame's loading work: the two timed parts plus physics' change time.
-	double StreamFrame(AssetManagerBase* assets, Scene& scene, WorldStreamer* streamer, std::span<const WorldStreamingSource> sources)
+	// Scene.Load), the streamer and `streaming`, work done in its place (timed: World.Streaming), and the scene's update with
+	// physics (whose ChangeTime counts). Returns the frame's loading work: the two timed parts plus physics' change time.
+	double StreamFrame(AssetManagerBase* assets, Scene& scene, WorldStreamer* streamer, std::span<const WorldStreamingSource> sources,
+		const std::function<void()>& streaming = {})
 	{
 		if (assets)
 			assets->Update();
@@ -40,11 +42,16 @@ namespace
 		const auto loadStart = std::chrono::steady_clock::now();
 		scene.UpdateSubScenes(budget);
 		double work = MillisecondsSince(loadStart);
-		if (streamer)
+		if (streamer || streaming)
 		{
 			const auto streamStart = std::chrono::steady_clock::now();
-			streamer->SetSources(sources);
-			streamer->Update();
+			if (streamer)
+			{
+				streamer->SetSources(sources);
+				streamer->Update();
+			}
+			if (streaming)
+				streaming();
 			work += MillisecondsSince(streamStart);
 		}
 		scene.OnUpdateRuntime(Timestep(1.0f / 60.0f), &budget);
@@ -58,8 +65,9 @@ TEST_SUITE("Perf.World")
 {
 	TEST_CASE("Unloading a cell of 25,000 entities with bodies spreads its work over frames")
 	{
-		// The scale audit's cell: 25,000 static boxes. Before the sliced unload its frame took 51-56 ms; the frame's work is
-		// now bounded by the frame's budget (Scene::UpdateSubScenes) and physics' batched removals (ChangeTime).
+		// The scale audit's cell: 25,000 static boxes. Before the sliced unload its frame took 51-56 ms; now the request's frame
+		// takes the cell out of the game (its roots inactive, its bodies out of the simulation in one batch) and the later
+		// frames destroy it within the frame's budget (Scene::UpdateSubScenes) with physics' batched removals (ChangeTime).
 		Perf::ScopedApplicationJobSystem jobs;
 		Perf::CheckBudgetConfirmed("Perf.World.CellUnloadMaxFrame", [&]
 		{
@@ -81,9 +89,11 @@ TEST_SUITE("Perf.World")
 			// A frame first: building the bodies is the start's work, not the unload's (the counters roll per update).
 			scene.OnUpdateRuntime(Timestep(1.0f / 60.0f));
 
-			REQUIRE(scene.UnloadSubScene(cell));
-			double longest = 0.0;
-			uint32_t frames = 0;
+			// The request's frame, as the World system makes it: the sub-scenes' slices (none of this cell's yet), the request in
+			// the streamer's place, then the scene's update, where physics takes the cell's bodies out.
+			double longest = StreamFrame(AssetManager::GetActive().get(), scene, nullptr, {}, [&]() { REQUIRE(scene.UnloadSubScene(cell)); });
+			const double requestFrame = longest;
+			uint32_t frames = 1;
 			while (scene.GetSubSceneStatus(cell) != nullptr)
 			{
 				REQUIRE(frames++ < 1000);
@@ -92,7 +102,7 @@ TEST_SUITE("Perf.World")
 			// The bodies left with the entities.
 			scene.OnUpdateRuntime(Timestep(1.0f / 60.0f));
 			CHECK(scene.GetSystem<PhysicsSystem>()->GetStats().BodyCount == 1);
-			MESSAGE("Unloading 25,000 entities with bodies: ", frames, " frames, the longest's work ", longest, " ms");
+			MESSAGE("Unloading 25,000 entities with bodies: ", frames, " frames, the request's work ", requestFrame, " ms, the longest's ", longest, " ms");
 			scene.OnRuntimeStop();
 			return longest;
 		});
