@@ -128,10 +128,10 @@ namespace Strata::Tests
 			return (*completed)->Value;
 		}
 
-		// Runs frames (with a little sleep, for work on other threads) until the condition holds or ten seconds passed.
-		bool FramesUntil(const std::function<bool()>& condition)
+		// Runs frames (with a little sleep, for work on other threads) until the condition holds or `timeout` passed.
+		bool FramesUntil(const std::function<bool()>& condition, std::chrono::milliseconds timeout = std::chrono::seconds(10))
 		{
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+			const auto deadline = std::chrono::steady_clock::now() + timeout;
 			while (!condition())
 			{
 				if (std::chrono::steady_clock::now() > deadline)

@@ -659,6 +659,9 @@ TEST_SUITE("Asset.Pack")
 				}
 			}
 		});
+		// The reads start once the queue holds other work (on CI's runners of three hardware threads the feeder could
+		// otherwise start only after the reads ended, and the test would check nothing).
+		REQUIRE(WaitUntil([&]() { return submitted.load() >= 16; }, std::chrono::seconds(30)));
 		std::vector<uint8_t> data;
 		for (int read = 0; read < 6; read++)
 		{

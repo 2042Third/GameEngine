@@ -171,7 +171,8 @@ TEST_SUITE("Editor.UI.Scan")
 			CHECK(editor->GetPillText("Status.Assets").find("Scanning") != std::string::npos);
 			CHECK(UI::ItemProbe::Find("ContentBrowser.Scanning").has_value());
 		}
-		REQUIRE(editor->FramesUntil([&]() { return !editor->Context().IsWaitingForAssets(); }));
+		// The scan and the start scene take more than the usual ten seconds in CI's Windows Debug build.
+		REQUIRE(editor->FramesUntil([&]() { return !editor->Context().IsWaitingForAssets(); }, std::chrono::minutes(2)));
 		editor->Frames(2);
 		CHECK(editor->GetPillText("Status.Assets").find("Scanning") == std::string::npos);
 		CHECK_FALSE(UI::ItemProbe::Find("ContentBrowser.Scanning").has_value());
