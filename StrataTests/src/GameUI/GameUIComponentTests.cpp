@@ -136,18 +136,20 @@ TEST_SUITE("GameUI.Components")
 			CHECK(reason(canvas, property).empty());
 		}
 
-		// The image's quads: a texture's part, slices, fill, aspect, and the border a nine-sliced texture does not draw.
+		// The image's quads: slices, fill, aspect, and the border a nine-sliced texture does not draw. A Texture of None turns
+		// none of the texture's settings off: an Image Swap selectable draws its state images with them ("A button with
+		// a solid color at rest draws its Image Swap states with the image's UV rect").
 		UIImageComponent image;
-		CHECK(reason(image, "UVRect") == "Only a texture uses it (Texture is None: a solid color)");
+		CHECK(reason(image, "UVRect").empty());
 		CHECK(reason(image, "SliceBorders") == "Only Sliced images use it (Type is Simple)");
 		CHECK(reason(image, "FillAmount") == "Only Filled images use it (Type is Simple)");
-		CHECK_FALSE(reason(image, "PreserveAspect").empty());
+		CHECK(reason(image, "PreserveAspect").empty());
 		CHECK(reason(image, "CornerRadius").empty());
 		CHECK(reason(image, "BorderColor") == "Only a border uses it (Border Width is 0)");
 		image.BorderWidth = 2.0f;
 		CHECK(reason(image, "BorderColor").empty());
 		image.Type = UIImageType::Sliced;
-		CHECK(reason(image, "SliceScale") == "Nine-slicing needs a texture (Texture is None)");
+		CHECK(reason(image, "SliceScale").empty());
 		CHECK(reason(image, "BorderWidth").empty()); // Without a texture a sliced image draws as a simple one
 		image.Texture = UUID(42);
 		CHECK(reason(image, "SliceBorders").empty());

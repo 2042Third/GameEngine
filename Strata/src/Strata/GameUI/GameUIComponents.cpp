@@ -131,16 +131,12 @@ namespace Strata
 			return canvas.RenderMode == UICanvasRenderMode::WorldSpace ? "A canvas in the world has no screen pixels to snap to" : std::string();
 		}
 
-		std::string WithTexture(const UIImageComponent& image)
-		{
-			return image.Texture.IsValid() ? std::string() : "Only a texture uses it (Texture is None: a solid color)";
-		}
-
+		// The texture-dependent settings (UVRect, the slices, PreserveAspect) are never turned off by a Texture of None: an
+		// Image Swap selectable (on this entity, or one whose TargetImage is it) draws its state images with them, and
+		// a reason sees only the component.
 		std::string SlicedOnly(const UIImageComponent& image)
 		{
-			if (image.Type != UIImageType::Sliced)
-				return fmt::format("Only Sliced images use it (Type is {})", GetImageTypeName(image.Type));
-			return image.Texture.IsValid() ? std::string() : "Nine-slicing needs a texture (Texture is None)";
+			return image.Type == UIImageType::Sliced ? std::string() : fmt::format("Only Sliced images use it (Type is {})", GetImageTypeName(image.Type));
 		}
 
 		std::string FilledOnly(const UIImageComponent& image)
@@ -156,8 +152,6 @@ namespace Strata
 
 		std::string KeepsAspect(const UIImageComponent& image)
 		{
-			if (!image.Texture.IsValid())
-				return "Only a texture has an aspect ratio to keep (Texture is None)";
 			return image.Type == UIImageType::Sliced ? "Sliced images stretch their edges and center to the rect" : std::string();
 		}
 
@@ -279,7 +273,6 @@ namespace Strata
 			.Property("BorderWidth", &UIImageComponent::BorderWidth, WithTooltip(Range(0.0f, c_Unbounded, 0.5f), "Canvas units, inside the rect"))
 			.Property("BorderColor", &UIImageComponent::BorderColor, Color())
 			.Property("RaycastTarget", &UIImageComponent::RaycastTarget, WithTooltip({}, "Hit by the pointer, so the game does not get clicks on it"));
-		SetInactiveReasons<UIImageComponent>({ "UVRect" }, &WithTexture);
 		SetInactiveReasons<UIImageComponent>({ "SliceBorders", "SliceScale" }, &SlicedOnly);
 		SetInactiveReasons<UIImageComponent>({ "FillAmount", "FillDirection" }, &FilledOnly);
 		SetInactiveReasons<UIImageComponent>({ "PreserveAspect" }, &KeepsAspect);
