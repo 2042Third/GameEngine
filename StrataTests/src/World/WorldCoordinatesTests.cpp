@@ -92,11 +92,21 @@ TEST_SUITE("World.Coordinates")
 		const WorldStreamingSystem* world = scene.GetSystem<WorldStreamingSystem>();
 		REQUIRE(world);
 
-		// At the origin the source wants nothing: the world is 20 km away.
+		// At the origin the source wants nothing: the world is 20 km away. Once the world is in and the source evaluated, the
+		// streamer's decisions show it whatever the speed of the loads: no cell is wanted and no load started.
+		REQUIRE(WaitUntil([&]()
+		{
+			RunFrame(mounted, scene);
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			return world->GetStreamer() && world->GetStreamer()->HasEvaluated();
+		}, std::chrono::seconds(30)));
 		for (int frame = 0; frame < 10; frame++)
 			RunFrame(mounted, scene);
-		REQUIRE(world->GetStreamer());
-		CHECK(world->GetStreamer()->GetStats().CellsLoaded == 0);
+		const WorldStreamingStats idle = world->GetStreamer()->GetStats();
+		CHECK(idle.CellsWanted == 0);
+		CHECK(idle.LoadsStarted == 0);
+		CHECK(idle.CellsLoading == 0);
+		CHECK(idle.CellsLoaded == 0);
 
 		// Driven there, it streams exactly the cells within its radius.
 		const glm::vec3 there(static_cast<float>(c_FarX) + 16.0f, 1.0f, 16.0f);

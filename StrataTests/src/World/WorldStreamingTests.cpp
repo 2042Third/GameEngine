@@ -164,9 +164,17 @@ TEST_SUITE("World.Streaming")
 		CHECK(streaming->IsLayerEnabled("Props") == false);
 		CHECK_FALSE(streaming->SetLayerEnabled("Rivers", true));
 		CHECK_FALSE(streaming->IsLayerEnabled("Rivers").has_value());
+		// A request where the Ground's loaded cell is wants only that cell: Props are off, so none of theirs is wanted or loads
+		// (the streamer's decisions, whatever the speed of the loads).
+		const WorldStreamingStats beforeRequest = streaming->GetStats();
+		REQUIRE(beforeRequest.CellsWanted == 1);
 		const uint64_t props = streaming->RequestCellsAround(glm::vec3(8.0f, 0.0f, 8.0f), 1.0f);
 		for (uint32_t frame = 0; frame < 10; frame++)
 			RunFrame(mounted, *scene);
+		const WorldStreamingStats afterRequest = streaming->GetStats();
+		CHECK(afterRequest.CellsWanted == 1);
+		CHECK(afterRequest.LoadsStarted == beforeRequest.LoadsStarted);
+		CHECK(afterRequest.CellsLoading == 0);
 		CHECK(streaming->IsLoadedAround(glm::vec3(8.0f, 0.0f, 8.0f), 1.0f)); // Only the Ground's cell: Props are off
 		streaming->ReleaseCells(props);
 		scene->OnRuntimeStop();

@@ -159,7 +159,19 @@ TEST_SUITE("GPU.World")
 			prepared += preparedThisFrame;
 			unloads += unloadsStarted;
 			mostVisible = std::max(mostVisible, stats.VisibleProxies);
-			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+			// The loads started so far read and compile their cells before the source moves on, creating nothing outside a
+			// frame: how far the drive streams then depends on its decisions, not on how fast the machine reads.
+			REQUIRE(Tests::WaitUntil([&]()
+			{
+				mounted.Manager->Update();
+				SceneWorkBudget settle = SceneWorkBudget::ForFrame(scene.GetSettings());
+				settle.EntitiesToCreate = 0;
+				settle.EntitiesToDestroy = 0;
+				scene.UpdateSubScenes(settle);
+				const std::vector<SubSceneStatus> statuses = scene.GetSubScenes();
+				return std::none_of(statuses.begin(), statuses.end(), [](const SubSceneStatus& status) { return status.State == SubSceneState::Loading; });
+			}, std::chrono::seconds(30)));
 		}
 		MESSAGE("Most proxies prepared in a frame: ", mostPrepared, ", in all: ", prepared, "; ", unloads, " unloads");
 		// The drive streamed: cells came and went, and their cubes were drawn.
