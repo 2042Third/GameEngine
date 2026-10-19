@@ -129,16 +129,21 @@ namespace Strata
 			"stage), Problems (the last script build's errors and warnings, the scripts' crash with where it happened), Activity (every "
 			"command the person, agents and scripts ran: editor.activity), Console, ContentBrowser, Hierarchy, Inspector, AssetInspector (the "
 			"Asset tab: the inspected asset, its settings and preview) or Viewport; for the ContentBrowser, scripts: true shows its Scripts root "
-			"(the project's script files with their classes, as script.list lists them) and false its asset folders. Changes no scene data and "
-			"records no undo; fails in an editor without a window (--no-gpu or headless) and while the launcher shows (no project is open).",
+			"(the project's script files with their classes, as script.list lists them) and false its asset folders; for the Hierarchy, search "
+			"replaces the text of its search field as if the person typed it (a name, c:Light, t:Enemy, and in a world l:Props or cell:3,-1; "
+			"\"\" clears it). Changes no scene data and records no undo; fails in an editor without a window (--no-gpu or headless) and while "
+			"the launcher shows (no project is open).",
 			CommandUtils::ObjectSchema({ { "panel", { { "type", "string" }, { "enum", panels }, { "description", "The panel to show" } } },
 				{ "scripts", CommandUtils::BoolSchema("ContentBrowser only: show its Scripts root (true) or its asset folders (false); "
-					"without it, the browser shows what it showed") } }, { "panel" }),
+					"without it, the browser shows what it showed") },
+				{ "search", CommandUtils::StringSchema("Hierarchy only: the search field's new text (\"\" clears it); without it, the search stays") } },
+				{ "panel" }),
 			[this](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
 			{
 				CommandArguments arguments(parameters);
 				const std::string panel = arguments.GetString("panel");
 				const std::optional<bool> scripts = arguments.Has("scripts") ? std::optional<bool>(arguments.GetBool("scripts", false)) : std::nullopt;
+				const std::optional<std::string> search = arguments.Has("search") ? std::optional<std::string>(arguments.GetString("search", "")) : std::nullopt;
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				const EditorPanelDescriptor* descriptor = m_Panels.FindDescriptor(panel);
@@ -146,6 +151,8 @@ namespace Strata
 					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'panel': the editor has no panel '{}'", panel));
 				if (scripts && panel != EditorPanels::c_ContentBrowser)
 					return EditorCommandResult::InvalidParameters("Parameter 'scripts': only the ContentBrowser has a Scripts root");
+				if (search && panel != EditorPanels::c_Hierarchy)
+					return EditorCommandResult::InvalidParameters("Parameter 'search': only the Hierarchy has a search field this command fills");
 				if (m_Options.Headless)
 					return EditorCommandResult::Fail("This editor runs without a window: it has no panels to show");
 				if (IsLauncherShown())
@@ -157,6 +164,12 @@ namespace Strata
 					if (ContentBrowserPanel* browser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
 						browser->ShowScripts(context, *scripts);
 					result["scripts"] = *scripts;
+				}
+				if (search)
+				{
+					if (SceneHierarchyPanel* hierarchy = m_Panels.Get<SceneHierarchyPanel>(EditorPanels::c_Hierarchy))
+						hierarchy->SetSearch(*search);
+					result["search"] = *search;
 				}
 				return EditorCommandResult::Ok(std::move(result));
 			}, EditorCommandKind::Session });

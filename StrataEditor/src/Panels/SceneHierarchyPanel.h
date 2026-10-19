@@ -10,6 +10,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Strata
@@ -33,8 +34,9 @@ namespace Strata
 	//   instances), a badge on a prefab instance's root (a click shows the prefab in the Asset tab) and an eye that toggles
 	//   the entity (entity.setActive). F2 or a double click renames in place (Enter commits, Escape cancels, clicking
 	//   elsewhere commits).
-	// - A '+' button and right clicks create entities; the search box filters by name, "c:<component>" and "t:<tag>"; an
-	//   empty scene shows a hint with Cube, Light and Camera buttons; a banner says when play mode discards changes.
+	// - A '+' button and right clicks create entities; the search box filters by name, "c:<component>", "t:<tag>" and, in a
+	//   world, "l:<layer>" and "cell:<x>,<z>"; an empty scene shows a hint with Cube, Light and Camera buttons; a banner says
+	//   when play mode discards changes.
 	// - Delete, Ctrl+D, Ctrl+C, Ctrl+X and Ctrl+V act on the selection while the panel has the keyboard focus
 	//   (EditorActions::HandleSelectionShortcuts).
 	class SceneHierarchyPanel : public EditorPanel
@@ -52,6 +54,8 @@ namespace Strata
 		void BeginRename(UUID entity);
 		bool IsRenaming() const { return m_Rename.Entity.IsValid(); }
 		const HierarchyView& GetView() const { return m_View; }
+		// Replaces the search field's text and filters by it, as if typed (editor.showPanel's search); empty clears it.
+		void SetSearch(std::string_view text);
 
 		// Where a row was drawn in the last frame (screen coordinates), when it was in view: for tests.
 		struct RowRect
@@ -100,6 +104,7 @@ namespace Strata
 	private:
 		HierarchyView m_View;
 		std::string m_FilterText;
+		bool m_ReloadSearch = false; // SetSearch replaced the text: the field shows it even while being typed in
 		bool m_CellResolverSet = false;
 		const void* m_ResolvedWorld = nullptr;      // The EditorWorld the view's cell answers came from
 		const void* m_ResolvedWorldAsset = nullptr; // Its World asset object then (a reload renames layers)

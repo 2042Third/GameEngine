@@ -132,6 +132,17 @@ TEST_SUITE("Editor.UI.World")
 		editor.Frames(2);
 		CHECK(hierarchy->GetView().GetRows().size() > 7);
 
+		// Agents fill the search for the person (editor.showPanel's search), as if typed; only the Hierarchy takes one.
+		CHECK(editor.Run("editor.showPanel", { { "panel", "Hierarchy" }, { "search", "cell:0,0" } })["search"] == "cell:0,0");
+		editor.Frames(2);
+		CHECK(hierarchy->GetView().GetFilterText() == "cell:0,0");
+		CHECK(hierarchy->GetView().GetRows().size() == 7);
+		const EditorCommandResult refused = editor.Layer->GetCommands().Execute(editor.Context(), "editor.showPanel", { { "panel", "Console" }, { "search", "x" } });
+		CHECK(refused.ErrorKind == EditorCommandError::InvalidParameters);
+		editor.Run("editor.showPanel", { { "panel", "Hierarchy" }, { "search", "" } });
+		editor.Frames(2);
+		CHECK_FALSE(hierarchy->GetView().IsFiltering());
+
 		// The Inspector's header names the selected entity's cell, or the persistent scene.
 		const Scene& scene = *editor.Context().GetEditScene();
 		Entity box;

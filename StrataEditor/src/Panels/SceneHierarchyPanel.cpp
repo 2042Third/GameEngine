@@ -432,6 +432,13 @@ namespace Strata
 		ImGui::Spacing();
 	}
 
+	void SceneHierarchyPanel::SetSearch(std::string_view text)
+	{
+		m_FilterText = std::string(text);
+		m_View.SetFilter(m_FilterText);
+		m_ReloadSearch = true;
+	}
+
 	void SceneHierarchyPanel::DrawHeader(EditorContext& context, const EditorCommandRegistry& commands)
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
@@ -445,10 +452,12 @@ namespace Strata
 		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 		const float collapseWidth = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x;
 		if (UI::SearchField("Hierarchy.Search", m_FilterText, "Search", std::max(ImGui::GetContentRegionAvail().x - collapseWidth, ImGui::GetFrameHeight()),
-			"Search by name; \"c:Light\" finds entities with a component, \"t:Enemy\" with a tag. Terms combine."))
+			"Search by name; \"c:Light\" finds entities with a component, \"t:Enemy\" with a tag; in a world, \"l:Props\" those of a layer's "
+			"cells (\"l:persistent\" the persistent scene's) and \"cell:3,-1\" one cell's. Terms combine.", m_ReloadSearch))
 		{
 			m_View.SetFilter(m_FilterText);
 		}
+		m_ReloadSearch = false;
 		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 		if (UI::IconButton("Hierarchy.CollapseAll", Icons::ChevronsDownUp, "Collapse all", !m_View.IsFiltering()))
 			m_View.CollapseAll();

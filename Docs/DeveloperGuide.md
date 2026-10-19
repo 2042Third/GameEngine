@@ -1328,11 +1328,12 @@ works: Docs/Architecture.md, "World partition"; for people: Docs/Manual/Worlds.m
     without the module, how many controls are held, no memory or jobs; the tooltips keep the details): a new pill passes
     its texts through it. Panels collect what the status bar shows about them in `OnUpdate`, which runs while they are
     closed. Widgets drawn every frame write tooltips that take work (formatted statistics) only while they show
-    (`UI::IsTooltipDue`). `editor.showPanel {panel, scripts?}` (registered by
+    (`UI::IsTooltipDue`). `editor.showPanel {panel, scripts?, search?}` (registered by
     `EditorLayer`, like `editor.showDialog {dialog: "export" | "newProject" | "openSample" | "recovery" | "newScript" |
     "externalEditor" | "about"}`, the commands of the window itself) opens a docked panel and brings it to the front, so
-    agents can show the person what they look at (`scripts`: the Content Browser's Scripts root or its asset folders); it
-    fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
+    agents can show the person what they look at (`scripts`: the Content Browser's Scripts root or its asset folders;
+    `search`: the Hierarchy's search text, as if typed, e.g. a world's `l:Props`; `UI::SearchField`'s `reload` makes a
+    field being typed in show it); it fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
     stays open through a layout reset and the saved open states read at the first frame, and is asked for again until its
     tab shows; while a modal dialog waits for the person it opens behind it (focusing it would close the dialog). Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
     icons), and check panels with `ImGuiHarness::CountFallbackGlyphs`.
