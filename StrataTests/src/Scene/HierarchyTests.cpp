@@ -239,6 +239,62 @@ TEST_SUITE("Scene.Hierarchy")
 		CHECK(scene.GetHierarchyVersion() == version + 1);
 	}
 
+	TEST_CASE("Batches destroyed from and moved out of long sibling lists leave the others in order")
+	{
+		// The top-level entities of a streaming world: thousands of siblings, which lose a batch at a time (an unload's
+		// slices). IDs are random and sequential, so that kept entries share bitmap slots with removed ones.
+		Scene scene;
+		Entity parent = scene.CreateEntity("Parent");
+		std::vector<Entity> roots;
+		std::vector<Entity> children;
+		for (uint64_t index = 0; index < 6'000; index++)
+		{
+			roots.push_back(index % 2 == 0 ? scene.CreateEntity("Root") : scene.CreateEntityWithUUID(UUID(0x5000'0000 + index), "Root"));
+			children.push_back(scene.CreateChildEntity(parent, "Child"));
+		}
+
+		std::vector<UUID> expectedRoots = { parent.GetUUID() };
+		std::vector<Entity> expectedChildren;
+		for (size_t batch = 0; batch < 6; batch++)
+		{
+			// Every third root of this batch's thousand, and every third child moved to the top level.
+			std::vector<Entity> doomed;
+			std::vector<Scene::EntityPlacement> moves;
+			for (size_t index = batch * 1'000; index < (batch + 1) * 1'000; index++)
+			{
+				if (index % 3 == 1)
+				{
+					doomed.push_back(roots[index]);
+					moves.push_back({ children[index].GetUUID(), UUID::Null(), 1 + moves.size() });
+				}
+			}
+			scene.DestroyEntities(doomed);
+			CHECK(scene.PlaceEntities(moves));
+		}
+		for (size_t index = 0; index < roots.size(); index++)
+		{
+			if (index % 3 != 1)
+			{
+				expectedRoots.push_back(roots[index].GetUUID());
+				expectedChildren.push_back(children[index]);
+			}
+		}
+		// Each batch of moved children went to the top level after the parent, in its order, before the earlier batches.
+		std::vector<UUID> moved;
+		for (size_t batch = 6; batch-- > 0;)
+		{
+			for (size_t index = batch * 1'000; index < (batch + 1) * 1'000; index++)
+			{
+				if (index % 3 == 1)
+					moved.push_back(children[index].GetUUID());
+			}
+		}
+		expectedRoots.insert(expectedRoots.begin() + 1, moved.begin(), moved.end());
+		CHECK(scene.GetRootEntities() == expectedRoots);
+		CHECK(parent.GetChildren() == expectedChildren);
+		CheckSceneCaches(scene);
+	}
+
 	TEST_CASE("Running systems hear about every subtree of a batch before any is destroyed")
 	{
 		DestroyOrderSystem::Announced.clear();

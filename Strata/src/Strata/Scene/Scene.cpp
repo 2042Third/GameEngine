@@ -11,6 +11,7 @@
 #include "Strata/Scene/UnknownComponents.h"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <functional>
@@ -33,6 +34,32 @@ namespace Strata
 		uint64_t HashLookupValue(std::string_view value)
 		{
 			return static_cast<uint64_t>(std::hash<std::string_view>()(value));
+		}
+
+		// Removes the IDs of `removed` from a sibling list, keeping the order of the others. Sibling lists can be long (the
+		// top-level entities of a streaming world's cells: tens of thousands) and lose entities a batch at a time (each slice
+		// of a cell's unload): a bitmap of the removed IDs rejects nearly every kept entry before the exact lookup, so a pass
+		// costs little more than reading the list.
+		void EraseIds(std::vector<UUID>& list, std::span<const UUID> removed)
+		{
+			if (removed.empty() || list.empty())
+				return;
+			// About 64 bits per removed ID (one in 64 kept entries reaches the exact lookup), at most 4 Mi bits (512 KiB).
+			const uint32_t bits = std::clamp<uint32_t>(static_cast<uint32_t>(std::bit_width(removed.size() * 64 - 1)), 6, 22);
+			// Fibonacci hashing: the top bits of the product spread sequential IDs as well as random ones.
+			const auto bitIndex = [bits](UUID id) { return (static_cast<uint64_t>(id) * 0x9E3779B97F4A7C15ull) >> (64 - bits); };
+			std::vector<uint64_t> bitmap(size_t(1) << (bits - 6), 0);
+			for (const UUID id : removed)
+			{
+				const uint64_t index = bitIndex(id);
+				bitmap[index >> 6] |= uint64_t(1) << (index & 63);
+			}
+			const std::unordered_set<UUID> exact(removed.begin(), removed.end());
+			std::erase_if(list, [&](UUID id)
+			{
+				const uint64_t index = bitIndex(id);
+				return ((bitmap[index >> 6] >> (index & 63)) & 1) != 0 && exact.contains(id);
+			});
 		}
 
 		// Equal values (matching infinities included) and two NaNs agree: transforms that overflow compute the same
@@ -494,9 +521,7 @@ namespace Strata
 			// The parent may have gone with a later root of the batch.
 			if (parent != entt::null && !m_Registry.valid(parent))
 				continue;
-			std::vector<UUID>& siblings = GetChildIds(parent);
-			const std::unordered_set<UUID> removed(ids.begin(), ids.end());
-			std::erase_if(siblings, [&removed](UUID id) { return removed.contains(id); });
+			EraseIds(GetChildIds(parent), ids);
 		}
 
 		if (destroyedAny)
@@ -1187,10 +1212,7 @@ namespace Strata
 			Unlink(move.Target, false);
 		}
 		for (const auto& [parent, ids] : detachedIds)
-		{
-			const std::unordered_set<UUID> removed(ids.begin(), ids.end());
-			std::erase_if(GetChildIds(parent), [&removed](UUID id) { return removed.contains(id); });
-		}
+			EraseIds(GetChildIds(parent), ids);
 
 		// Attached in ascending position order. The parent links are set first, one entity at a time, so that each cycle
 		// check sees the entities attached before it.
