@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Strata/Asset/AssetTypes.h>
 #include <Strata/Core/Base.h>
 #include <Strata/Core/UUID.h>
 #include <Strata/Reflection/ComponentRegistry.h>
@@ -8,6 +9,7 @@
 #include <entt/entt.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -15,6 +17,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace Strata
@@ -45,16 +48,36 @@ namespace Strata
 
 	// What the hierarchy's search box asks for: whitespace-separated terms that must all hold (case-insensitive). A plain
 	// word is part of the name, "c:<text>" part of the name of a component the entity has (its registered or display name:
-	// "c:light" finds every kind of light), "t:<text>" part of its tag.
+	// "c:light" finds every kind of light), "t:<text>" part of its tag. In a world, "l:<text>" is part of the name of the
+	// layer whose cell holds the entity ("l:persistent": the persistent scene, the entities of no cell) and "cell:<x>,<z>"
+	// the cell's coordinates; an entity belongs to the cell of its top-level ancestor.
 	struct HierarchyFilter
 	{
 		std::vector<std::string> Words;      // Lower case
 		std::vector<std::string> Components; // Lower case
 		std::vector<std::string> Tags;       // Lower case
+		std::vector<std::string> Layers;     // Lower case; c_PersistentLayerTerm names the persistent scene
+		std::vector<std::pair<int32_t, int32_t>> Cells; // X, Z
+		std::vector<std::string> InvalidCells; // "cell:" terms that are no "<x>,<z>": the filter then matches nothing
+
+		static constexpr std::string_view c_PersistentLayerTerm = "persistent";
 
 		static HierarchyFilter Parse(std::string_view text);
-		bool IsEmpty() const { return Words.empty() && Components.empty() && Tags.empty(); }
+		bool IsEmpty() const { return Words.empty() && Components.empty() && Tags.empty() && !ReadsCells(); }
+		// Whether a term asks for the entities' cells.
+		bool ReadsCells() const { return !Layers.empty() || !Cells.empty() || !InvalidCells.empty(); }
 	};
+
+	// A world's cell as the hierarchy's "l:" and "cell:" terms see it.
+	struct HierarchyCell
+	{
+		std::string Layer; // The layer's name
+		int32_t X = 0;
+		int32_t Z = 0;
+	};
+	// The cell whose scene a sub-scene was loaded from (SubSceneComponent::Source of its top-level entities), nullopt for a
+	// scene that is no cell of the edited world (an additive scene a game loaded).
+	using HierarchyCellResolver = std::function<std::optional<HierarchyCell>(AssetHandle scene)>;
 
 	// Where on a row a dragged entity is dropped: the top quarter puts it before the row's entity, the bottom quarter after
 	// it, the middle inside it (as its last child).
@@ -114,6 +137,12 @@ namespace Strata
 		bool IsFiltering() const { return !m_Filter.IsEmpty(); }
 		// Terms of "c:" that name no registered component (the filter then matches nothing): for a hint under the box.
 		const std::vector<std::string>& GetUnknownComponents() const { return m_UnknownComponents; }
+		// How "l:" and "cell:" terms find the cells of sub-scenes (the editor's world). Without one, no sub-scene is a cell:
+		// "l:persistent" matches the entities of no sub-scene and the other cell terms nothing. A filter reading cells rebuilds
+		// its rows when an entity's sub-scene changes; InvalidateCells rebuilds them when the resolver's answers change (another
+		// world, renamed layers).
+		void SetCellResolver(HierarchyCellResolver resolver);
+		void InvalidateCells();
 
 		// Makes an entity's row visible: expands its collapsed ancestors (outside filtering), updates the rows and returns
 		// the ancestors it expanded (top-down) and the row to scroll to. No row when the entity does not exist or the filter
@@ -147,6 +176,7 @@ namespace Strata
 		void BuildTree(const Scene& scene);
 		void BuildFiltered(const Scene& scene);
 		bool Matches(const entt::registry& registry, entt::entity entity) const;
+		bool MatchesCell(const entt::registry& registry, entt::entity entity) const;
 	private:
 		std::weak_ptr<Scene> m_Scene;
 		uint64_t m_HierarchyVersion = 0;
@@ -166,6 +196,9 @@ namespace Strata
 		std::vector<std::string> m_UnknownComponents;
 		std::vector<entt::connection> m_Connections; // To m_Scene's registry
 		std::vector<uint8_t> m_Marks; // Scratch of BuildFiltered, by entity index
+		HierarchyCellResolver m_CellResolver;
+		// The resolver's answers of one rebuild, by cell scene (layer names lower case).
+		mutable std::unordered_map<AssetHandle, std::optional<HierarchyCell>> m_ResolvedCells;
 	};
 
 }

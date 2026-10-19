@@ -2703,10 +2703,13 @@ is the `strata-scripting` skill. The layers:
 - **Hierarchy model** (`HierarchyView.h`). The hierarchy panel's rows without UI: the visible entities of the active
   scene as a flat depth-first list (`HierarchyRow`: handle, ID, depth, has-children, expanded, match), walked along the
   scene's sibling links into expanded entities only, or, with a filter (`HierarchyFilter`: name words, `c:` component,
-  `t:` tag, all case-insensitive substrings), the matches with their ancestors. `Update` rebuilds only when the scene
+  `t:` tag, all case-insensitive substrings; in a world `l:` layer, `l:persistent` for the persistent scene, and
+  `cell:<x>,<z>`, read from the top-level ancestor's `SubSceneComponent` through the panel's `HierarchyCellResolver`,
+  asked once per cell scene and rebuild), the matches with their ancestors. `Update` rebuilds only when the scene
   (a weak reference, so a new scene at the same address is noticed), its hierarchy version, the expansion or the filter
-  changed, or, while filtering, a name, tag or filtered component did: it connects to those types' signals through
-  `ComponentInfo::Observe` only while a filter is on. An unchanged frame costs about 10 ns and rebuilding 100,000
+  changed, or, while filtering, a name, tag, filtered component or (for cell terms) sub-scene membership did: it
+  connects to those types' signals through `ComponentInfo::Observe` (`SubSceneComponent`'s directly) only while a
+  filter is on. An unchanged frame costs about 10 ns and rebuilding 100,000
   top-level rows about 0.6 ms (`Perf.Editor`). `Reveal` expands an entity's collapsed ancestors and returns its row,
   `GetDropTarget` maps a drop at a fraction of a row's height (top quarter before, bottom quarter after, the middle
   inside) to `entity.setParent`'s parent and final index, and `GetTopmostInHierarchyOrder` orders a selection for
