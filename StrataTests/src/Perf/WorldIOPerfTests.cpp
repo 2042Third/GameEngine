@@ -255,6 +255,6 @@ TEST_SUITE("Perf.Editor")
 			MESSAGE(fmt::format("24 textures of 4096x4096 imported in {:.1f} s, peak {:.0f} MB over the {:.0f} MB before", measurement->Seconds,
 				measurement->PeakPrivateIncreaseMB, measurement->PrivateMBBefore));
 			return measurement->PeakPrivateIncreaseMB;
-		}, 1);
+		});
 	}
 }
