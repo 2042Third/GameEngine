@@ -687,8 +687,11 @@ namespace Strata
 				}
 			}
 
-			// Entities the prefab removed go, with what lies below them.
+			// Entities the prefab removed go. What the instance keeps below them (entities it added, and linked ones the prefab
+			// still has) moves up to the nearest entity that stays, keeping its place in the world: a weapon the instance put in
+			// a hand the model no longer has stays in the instance.
 			std::vector<Entity> removed;
+			std::unordered_set<UUID> removedIds;
 			for (const auto& [id, entity] : previous)
 			{
 				if (next.contains(id) || id == templateRoot)
@@ -696,16 +699,29 @@ namespace Strata
 				const auto instance = linked.find(id);
 				if (instance == linked.end())
 					continue;
-				std::vector<Entity> stack = { instance->second };
-				while (!stack.empty())
-				{
-					const Entity current = stack.back();
-					stack.pop_back();
-					change(current);
-					const std::vector<Entity> children = current.GetChildren();
-					stack.insert(stack.end(), children.begin(), children.end());
-				}
 				removed.push_back(instance->second);
+				removedIds.insert(instance->second.GetUUID());
+			}
+			std::vector<std::pair<Entity, Entity>> kept; // An entity that stays and its new parent
+			for (const Entity entity : removed)
+			{
+				change(entity);
+				// The root is never removed, so an ancestor that stays is always found.
+				Entity parent = entity.GetParent();
+				while (parent && removedIds.contains(parent.GetUUID()))
+					parent = parent.GetParent();
+				// A child that stays takes its own subtree along; a removed child is one of `removed`, with what it keeps.
+				for (const Entity child : entity.GetChildren())
+				{
+					if (!removedIds.contains(child.GetUUID()))
+						kept.emplace_back(child, parent ? parent : root);
+				}
+			}
+			for (const auto& [entity, parent] : kept)
+			{
+				change(entity);
+				if (!scene.SetParent(entity, parent, true))
+					return Fail(outError, fmt::format("'{}' could not be kept: moving it out of what the prefab removed failed", entity.GetName()));
 			}
 			if (!removed.empty())
 				scene.DestroyEntities(removed);

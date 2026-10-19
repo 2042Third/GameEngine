@@ -80,7 +80,8 @@ namespace Strata
 		// Gives the instance at `root` what changed in its part of the prefab from `previousPart` to `nextPart`, except where it
 		// overrides it: properties take their new values (set through reflection, signaled like any edit), components and
 		// entities the prefab added are made unless a Removed override says otherwise, ones it removed go unless the instance
-		// added them. The overrides are its recorded list, or (none recorded) how it differs from `previousPart`; afterwards
+		// added them (what the instance keeps below a removed entity moves up to the nearest one that stays, keeping its place
+		// in the world). The overrides are its recorded list, or (none recorded) how it differs from `previousPart`; afterwards
 		// the list is worked out against `nextPart`. `beforeChange` is called with each entity before it changes or goes (undo
 		// tracking). The root's transform and name stay. The instance is serialized at most twice (before, when no list is
 		// recorded, and after, when something changed): callers mark it synced with outResult.ContentHash instead of hashing

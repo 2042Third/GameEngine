@@ -2666,7 +2666,8 @@ is the `strata-scripting` skill. The layers:
   modified in the Hierarchy without comparing it; `prefab.status` lists the overrides. `PrefabOverrides::Propagate` gives
   an instance what changed between two versions of its part except what it overrides (properties set through reflection
   and signaled, components and entities the prefab added made unless a removal is overridden, ones it removed gone unless
-  the instance added them; the root's transform and name stay), calling back before each entity changes so the undo step
+  the instance added them, what the instance keeps below a removed entity moving up to the nearest one that stays; the
+  root's transform and name stay), calling back before each entity changes so the undo step
   tracks only those, then works the list out against the new part. `prefab.apply` (the whole instance, or one override:
   `PrefabOverrides::ApplyToPart`) and `PrefabSync`'s propagation run it for every instance; the catch-up runs it for
   outdated instances with a list (the instance itself standing for the previous part), keeps the whole replace for

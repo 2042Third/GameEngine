@@ -13,6 +13,8 @@
 #include <Strata/Scene/SceneSerializer.h>
 #include <Strata/Scripting/ScriptingComponents.h>
 
+#include <glm/gtc/epsilon.hpp>
+
 #include <algorithm>
 #include <string>
 #include <vector>
@@ -269,6 +271,48 @@ TEST_SUITE("Scene.PrefabOverrides")
 			== std::vector<PrefabOverride> { { handle, "", "", PrefabOverrideKind::RemovedEntity } });
 		// A part without the instance's root is refused.
 		CHECK_FALSE(PrefabOverrides::Propagate(*crate.World, crate.Root, crate.Part, nlohmann::json { { "Entities", nlohmann::json::array() } }, result, {}, &error));
+	}
+
+	TEST_CASE("Propagate keeps what the instance added below an entity the prefab removed, in its place in the world")
+	{
+		Crate crate;
+		// The instance put a sticker on the handle (an entity of its own); the prefab then removes the lid and the handle.
+		crate.Lid.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 2.0f, 0.0f);
+		crate.Lid.MarkModified<TransformComponent>();
+		Entity sticker = crate.World->CreateChildEntity(crate.Handle, "Sticker");
+		sticker.GetComponent<TransformComponent>().Translation = glm::vec3(1.0f, 0.0f, 0.0f);
+		sticker.MarkModified<TransformComponent>();
+		crate.World->UpdateWorldTransforms();
+		const glm::vec3 stickerWorld = glm::vec3(crate.World->GetWorldTransform(sticker)[3]);
+		REQUIRE(stickerWorld == glm::vec3(1.0f, 2.0f, 0.0f));
+		crate.Root.GetComponent<PrefabInstanceComponent>().Overrides = crate.Compute();
+		REQUIRE(crate.Root.GetComponent<PrefabInstanceComponent>().Overrides
+			== std::vector<PrefabOverride> { { crate.Lid.GetUUID(), "Transform", "Translation", PrefabOverrideKind::Property } });
+
+		// The prefab's part is its root alone now.
+		nlohmann::json next = { { "Entities", nlohmann::json::array({ crate.Part["Entities"][0] }) } };
+		REQUIRE(next["Entities"][0]["ID"] == UUIDToJson(crate.Root.GetUUID()));
+		const UUID lid = crate.Lid.GetUUID();
+		const UUID handle = crate.Handle.GetUUID();
+		const UUID stickerId = sticker.GetUUID();
+		std::vector<UUID> tracked;
+		PrefabOverrides::PropagateResult result;
+		std::string error;
+		REQUIRE_MESSAGE(PrefabOverrides::Propagate(*crate.World, crate.Root, crate.Part, next, result, [&](UUID id) { tracked.push_back(id); }, &error),
+			error);
+		CHECK_FALSE(crate.World->GetEntityByUUID(lid));
+		CHECK_FALSE(crate.World->GetEntityByUUID(handle));
+		// The sticker stays in the instance, below its nearest entity that stays, where it was in the world; undo can put it
+		// back (it was tracked before it moved).
+		REQUIRE(crate.World->GetEntityByUUID(stickerId));
+		CHECK(sticker.GetParent() == crate.Root);
+		crate.World->UpdateWorldTransforms();
+		const glm::vec3 after = glm::vec3(crate.World->GetWorldTransform(sticker)[3]);
+		CHECK(glm::all(glm::epsilonEqual(after, stickerWorld, 1e-5f)));
+		CHECK(std::ranges::find(tracked, stickerId) != tracked.end());
+		CHECK(std::ranges::find(result.Changed, stickerId) != result.Changed.end());
+		// The lid's override went with the lid.
+		CHECK(crate.Root.GetComponent<PrefabInstanceComponent>().Overrides.empty());
 	}
 
 	TEST_CASE("Propagate works out an unrecorded list from the instance, and an instance that overrides every change keeps its values")
