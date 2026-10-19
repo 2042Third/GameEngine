@@ -191,6 +191,31 @@ TEST_SUITE("Physics.Lifecycle")
 		CHECK(physics.GetStats().BodyCount == 1);
 	}
 
+	TEST_CASE("An entity made in the place of one destroyed in the same frame gets a body of its own")
+	{
+		// Physics records changes in a slot per entity index: an entity that takes a destroyed entity's index before the
+		// changes apply is recorded beside it, and both changes apply.
+		Scene scene;
+		CreateGround(scene);
+		Entity first = CreateDynamicBox(scene, "First", glm::vec3(0.0f, 2.0f, 0.0f));
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 1);
+		REQUIRE(physics.HasBody(first));
+		const entt::entity firstHandle = first.GetHandle();
+		first.GetComponent<TransformComponent>().Translation.x = 2.0f;
+		first.MarkModified<TransformComponent>();
+		scene.DestroyEntity(first);
+		Entity second = CreateDynamicBox(scene, "Second", glm::vec3(6.0f, 2.0f, 0.0f));
+		REQUIRE(entt::to_entity(second.GetHandle()) == entt::to_entity(firstHandle));
+		second.GetComponent<TransformComponent>().Translation.x = 8.0f;
+		second.MarkModified<TransformComponent>();
+		StepScene(scene, 1);
+		CHECK(physics.HasBody(second));
+		CHECK(physics.GetStats().BodyCount == 2);
+		CHECK(GetWorldPosition(scene, second).x == doctest::Approx(8.0f));
+	}
+
 	TEST_CASE("Property edits rebuild the body and keep its motion")
 	{
 		Scene scene;

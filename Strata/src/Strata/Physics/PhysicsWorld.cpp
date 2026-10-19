@@ -880,14 +880,24 @@ namespace Strata
 			JPH::RefConst<JPH::Shape> Shape;
 		};
 
-		// Entities whose changes are applied by the next ApplyPendingChanges, in the order they were recorded.
+		// Entities whose changes are applied by the next ApplyPendingChanges, in the order they were recorded, each once.
+		// Membership is a slot per entity index holding the entity recorded there (a cell's unload records tens of thousands
+		// at once, where a hash set's inserts and clearing cost milliseconds); an index reused by a new entity in the same
+		// batch takes the slot over, so both are recorded.
 		class ChangeList
 		{
 		public:
 			void Add(entt::entity handle)
 			{
-				if (m_Set.insert(handle).second)
-					m_List.push_back(handle);
+				if (handle == entt::null)
+					return;
+				const size_t index = static_cast<size_t>(entt::to_entity(handle));
+				if (index >= m_Recorded.size())
+					m_Recorded.resize(std::max(index + 1, m_Recorded.size() * 2), entt::null);
+				if (m_Recorded[index] == handle)
+					return;
+				m_Recorded[index] = handle;
+				m_List.push_back(handle);
 			}
 
 			bool IsEmpty() const { return m_List.empty(); }
@@ -896,20 +906,26 @@ namespace Strata
 			// changes, so applying changes does not allocate once the buffers have grown.
 			const std::vector<entt::entity>& TakeInto(std::vector<entt::entity>& list)
 			{
+				ForgetRecorded();
 				list.clear();
 				m_List.swap(list);
-				m_Set.clear();
 				return list;
 			}
 
 			void Clear()
 			{
+				ForgetRecorded();
 				m_List.clear();
-				m_Set.clear();
 			}
 		private:
+			void ForgetRecorded()
+			{
+				for (const entt::entity handle : m_List)
+					m_Recorded[static_cast<size_t>(entt::to_entity(handle))] = entt::null;
+			}
+
 			std::vector<entt::entity> m_List;
-			std::unordered_set<entt::entity> m_Set;
+			std::vector<entt::entity> m_Recorded; // By entity index: the entity recorded there, or null
 		};
 
 		struct MeshProviderStorage
