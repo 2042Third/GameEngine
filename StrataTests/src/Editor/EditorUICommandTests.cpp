@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CanvasEdit.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
@@ -392,6 +393,77 @@ TEST_SUITE("Editor.UICommands")
 		CHECK_FALSE(unseen.Success);
 		CHECK(unseen.Error.find("camera") != std::string::npos);
 		CHECK(harness.Run("ui.layout", { { "entity", button["entity"] } })["elements"][0]["screenRect"].is_null());
+	}
+
+	TEST_CASE("Under a mask, ui.layout, ui.hitTest, input.click and the editor's picking see only what the mask leaves")
+	{
+		PlayingUIHarness harness;
+		const nlohmann::json canvas = harness.Run("ui.create", { { "type", "canvas" } });
+		const nlohmann::json panel = harness.Run("ui.create", { { "type", "panel" }, { "parent", canvas["entity"] }, { "name", "Mask Panel" } });
+		const nlohmann::json spill = harness.Run("ui.create", { { "type", "button" }, { "parent", panel["entity"] }, { "name", "Spill" } });
+		const nlohmann::json hidden = harness.Run("ui.create", { { "type", "image" }, { "parent", panel["entity"] }, { "name", "Hidden" } });
+		// In screen pixels (the canvas's unit is one at 1920x1080): the panel at (100, 100) 200 x 100, masking the button that
+		// spills over its right edge (250-350) and an image entirely right of it.
+		auto place = [&harness](const nlohmann::json& element, const glm::vec2& position, const glm::vec2& size)
+		{
+			harness.Run("component.set", { { "entity", element["entity"] }, { "component", "UIRect" }, { "values", { { "AnchorMin", { 0, 0 } },
+				{ "AnchorMax", { 0, 0 } }, { "Pivot", { 0, 0 } }, { "Position", { position.x, position.y } }, { "Size", { size.x, size.y } } } } });
+		};
+		place(panel, { 100.0f, 100.0f }, { 200.0f, 100.0f });
+		place(spill, { 150.0f, 20.0f }, { 100.0f, 40.0f });
+		place(hidden, { 300.0f, 20.0f }, { 50.0f, 40.0f });
+		harness.Run("component.add", { { "entity", panel["entity"] }, { "component", "UIMask" } });
+		const nlohmann::json screen = { 1920, 1080 };
+
+		// ui.layout: the rect, and the part the mask leaves.
+		const nlohmann::json layout = harness.Run("ui.layout", { { "entity", panel["entity"] }, { "screen", screen } });
+		auto findElement = [&layout](const nlohmann::json& id) -> nlohmann::json
+		{
+			for (const nlohmann::json& element : layout["elements"])
+			{
+				if (element["entity"] == id)
+					return element;
+			}
+			FAIL("The element is not listed");
+			return nullptr;
+		};
+		const nlohmann::json spilled = findElement(spill["entity"]);
+		CHECK(ToRect(spilled["rect"]) == glm::vec4(250.0f, 120.0f, 100.0f, 40.0f));
+		CHECK(ToRect(spilled["visibleRect"]) == glm::vec4(250.0f, 120.0f, 50.0f, 40.0f));
+		CHECK(ToRect(findElement(hidden["entity"])["visibleRect"])[2] == 0.0f);
+		CHECK_FALSE(findElement(panel["entity"]).contains("visibleRect")); // The mask clips its descendants, not itself
+
+		// ui.hitTest: the clipped part is not there.
+		const nlohmann::json inside = harness.Run("ui.hitTest", { { "position", { 275, 140 } }, { "screen", screen } });
+		CHECK(inside["selectable"] == spill["entity"]);
+		const nlohmann::json clipped = harness.Run("ui.hitTest", { { "position", { 325, 140 } }, { "screen", screen } });
+		CHECK(clipped["entity"] != spill["entity"]);
+		CHECK(clipped["entity"] != spill["parts"]["label"]);
+
+		// The editor's picking (the viewport's with Game UI shown, the canvas mode's) picks only what is drawn.
+		Scene& scene = *harness.Context.GetActiveScene();
+		const UIScreen pickScreen { glm::vec2(1920.0f, 1080.0f), 1.0f };
+		const Entity spillEntity = harness.Find(spill["entity"]);
+		auto isSpill = [&spillEntity](Entity picked) { return picked && (picked == spillEntity || picked.GetParent() == spillEntity); };
+		CHECK(isSpill(UIRectEdit::PickElement(scene, pickScreen, { 275.0f, 140.0f })));
+		CHECK_FALSE(isSpill(UIRectEdit::PickElement(scene, pickScreen, { 325.0f, 140.0f })));
+		CHECK_FALSE(UIRectEdit::PickElement(scene, pickScreen, { 325.0f, 140.0f }) == harness.Find(hidden["entity"]));
+		const Entity canvasEntity = harness.Find(canvas["entity"]);
+		CHECK(isSpill(CanvasEdit::PickElement(scene, canvasEntity, pickScreen, { 275.0f, 140.0f })));
+		CHECK_FALSE(isSpill(CanvasEdit::PickElement(scene, canvasEntity, pickScreen, { 325.0f, 140.0f })));
+
+		// input.click presses the middle of what is shown, and refuses an element the mask hides whole.
+		harness.Run("play.start");
+		harness.Frame();
+		const EditorCommandResult clicked = harness.RunFrames("input.click", { { "entity", spill["entity"] } });
+		INFO(clicked.Error);
+		REQUIRE(clicked.Success);
+		CHECK(clicked.Value["clicked"] == true);
+		CHECK(clicked.Value["position"] == nlohmann::json { 275.0f, 140.0f });
+		const EditorCommandResult refused = harness.Commands.Execute(harness.Context, "input.click", { { "entity", hidden["entity"] } });
+		REQUIRE_FALSE(refused.IsPending());
+		CHECK_FALSE(refused.Success);
+		CHECK(refused.Error == "'Hidden' is outside the clip rect of a UI Mask above it: nothing of it is shown");
 	}
 
 	TEST_CASE("input.type types text the game reads in its next frame")
