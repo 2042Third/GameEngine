@@ -101,8 +101,13 @@ ctest --preset macos-debug -LE perf
   GPU's busy time of each, `Perf::MeasureGPU` its median, which fails when a device that writes timestamps delivered none;
   without timestamps the GPU metrics are left out, `Perf::MeasuresGPU`): `Render100kCubesGPU` is the GPU's median busy time
   of the 100,000 cubes, `Render1MCubes` and `Render1MCubesGPU` the CPU's and the GPU's for a million (the GPU-driven path's
-  CPU cost does not grow with instances: target 1.5 ms) and `GPUTimerCost` the GPU profiler's own CPU time in the median
-  frame (target 0.05 ms);
+  CPU cost does not grow with instances: target 1.5 ms), `GPUTimerCost` the GPU profiler's own CPU time in the median
+  frame (target 0.05 ms), `Render100kCubesShadowed` and `Render300kCubesShadowed` the CPU's median Render of the 100,000
+  and 300,000 cube grids under the sun's shadows, every cube a caster (targets 1.5 and 3 ms), `Render10kUniqueMeshes` the
+  CPU's median Render (extraction, recording and submitting) of 10,000 distinct meshes (target 2 ms) with
+  `Render10kUniqueMeshes.DrawCommands` the draw calls it recorded, and `PlayStartRender1MCubes` what starting play on a
+  million rendered cubes costs: the render scene's clone in `Scene::Copy` plus the copy's first Render beyond the
+  source's median (target 5 ms);
   `Perf.Editor` adds `FindReferences10k`, `JournalPerCommand`, the recovery journal's write (the frames and the I/O
   threads' time, `RecoveryWriteIOTime100k`) and snapshot, and the longest frame while `scene.open` opens 10,000 prefab
   instances (`SceneOpen10kPrefabInstancesMaxFrame`); `Perf.EditorPanels` and `PerfGPU.Editor` time the Content Browser
