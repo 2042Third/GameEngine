@@ -567,7 +567,9 @@ log the registered modules, the scene systems' update order and the soft constra
   `ModuleRegistrationOptions::Extra`. A component may name components it needs (`ComponentInfo::Requires`, set with
   `ComponentInfoBuilder::Requires`): `ComponentAccess::AddComponent`, which every path that adds components by name goes
   through (`component.add`, `entity.create`, the inspector, scripts), adds the missing ones first, so an editor or agent
-  that adds a UI image to a plain entity gets its rect in the same undo step. `Freeze` drops, with an error, a
+  that adds a UI image to a plain entity gets its rect in the same undo step. Removing a required component is allowed (the
+  dependent one then has no effect): the Inspector's section of each dependent component says so, with a button that adds
+  it back (`component.add`). `Freeze` drops, with an error, a
   requirement that names no registered component or the component itself. New components live in the module that owns
   them (`<Module>/<Module>Components.h`, registered by its registration function), not in `Scene/Components.h`.
 - The loader, importer, built-in asset, manager extension and scene system registries stay open: tools and tests register

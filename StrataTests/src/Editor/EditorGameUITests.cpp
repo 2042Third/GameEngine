@@ -314,6 +314,37 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(units->Text == "860, 490   200 x 100 units"); // Centered on the 1920 x 1080 canvas
 	}
 
+	TEST_CASE("A UI component without its UI Rect says it has no effect, and its button adds the rect back")
+	{
+		GameUIEditor editor;
+		const nlohmann::json canvas = editor.Run("ui.create", { { "type", "canvas" } });
+		const nlohmann::json button = editor.Run("ui.create", { { "type", "button" }, { "parent", canvas["entity"] } });
+		const Entity element = editor.Find(button["entity"]);
+		editor.Context().Select(element.GetUUID());
+		editor.Frames(3);
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIImage.NeedsUIRect").has_value());
+
+		// Removing a required component is allowed: every section that needs it says so.
+		editor.Run("component.remove", { { "entity", button["entity"] }, { "component", "UIRect" } });
+		editor.Frames(3);
+		const std::optional<UI::ItemProbe::Item> notice = UI::ItemProbe::Find("Inspector.UIImage.NeedsUIRect");
+		REQUIRE(notice.has_value());
+		CHECK(notice->Text == "Needs a UI Rect: without it this component has no effect.");
+		CHECK(UI::ItemProbe::Find("Inspector.UISelectable.NeedsUIRect").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.UIButton.NeedsUIRect").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Transform.NeedsUIRect").has_value());
+
+		// The button adds it back, one undo step.
+		REQUIRE(editor.Click("Inspector.UIImage.NeedsUIRect.Add"));
+		editor.Frames(2);
+		CHECK(element.HasComponent<UIRectComponent>());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIImage.NeedsUIRect").has_value());
+		editor.Run("edit.undo");
+		editor.Frames(2);
+		CHECK_FALSE(element.HasComponent<UIRectComponent>());
+		CHECK(UI::ItemProbe::Find("Inspector.UIImage.NeedsUIRect").has_value());
+	}
+
 	TEST_CASE("The UI Rect drawer's anchor grid keeps the rect in place, and stretched axes show margins")
 	{
 		GameUIEditor editor;

@@ -52,6 +52,9 @@ namespace Strata
 		void DrawHeader(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
 		void DrawComponent(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
 		void DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
+		// A notice and an Add button for each component the shown one requires that some of the entities lack.
+		void DrawMissingRequirements(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities,
+			const ComponentInfo& info);
 		// The generic rows of a component's properties, without those a component drawer showed (`drawn`).
 		void DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const UI::ComponentDrawResult* drawn = nullptr);
 		// An edit of a rotation shared by several entities: continues the edit in progress, or begins one from the angles the

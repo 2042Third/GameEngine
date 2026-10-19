@@ -55,7 +55,8 @@ ComponentRegistry::Register<WindZoneComponent>("WindZone")
 - `Requires("UIRect")` names a component the entity needs for this one to work (every UI component but the rect needs
   the rect). The paths that add components by name (`ComponentAccess::AddComponent`: `component.add`, `entity.create`,
   the inspector's Add Component, scripts' `AddComponent`) add the missing ones first, in the same undo step; the registry
-  drops (with an error) a requirement that names no registered component.
+  drops (with an error) a requirement that names no registered component. Removing the required one is allowed: the
+  Inspector then shows a notice and an Add button in the dependent component's section.
 - Data properties cannot express (lists, per-instance tables such as the Script component's fields) is written by the
   component itself: `.Extra(serialize, deserialize)`. When it holds entity or asset references, also describe them with
   `.ExtraReferences(visit, set, equals, visitJson)` (`ComponentExtraReferences`): copies and prefab instances remap
