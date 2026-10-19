@@ -25,6 +25,7 @@
 
 #if ST_TESTS_HAVE_EVERY_MODULE
 	#include "FeatureTest/FeatureTestUtils.h"
+	#include "Strata/Scripting/ScriptingComponents.h"
 #endif
 
 #include <algorithm>
@@ -280,12 +281,33 @@ TEST_SUITE("Scene.Documents")
 		REQUIRE(AssetDependencies::Scan(AssetType::Scene, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(document.Text.data()),
 			document.Text.size()), scanned, &error));
 		CHECK(document.Result.References == scanned);
-		// Script fields of asset type are among them.
-		CHECK(std::find(scanned.begin(), scanned.end(), UUID(0xF7A0000000000005ull)) != scanned.end());
 
-		// Without the extra-data scanner only asset properties count.
+		// Script fields of asset type are among them. Without the extra-data scanner only asset properties count: the fields'
+		// assets no property references are missing then (the feature scene has some, whatever its components reference).
 		const WrittenText plain = WriteDocument(*feature);
-		CHECK(std::find(plain.Result.References.begin(), plain.Result.References.end(), UUID(0xF7A0000000000005ull)) == plain.Result.References.end());
+		auto contains = [](const std::vector<AssetHandle>& handles, AssetHandle handle)
+		{
+			return std::find(handles.begin(), handles.end(), handle) != handles.end();
+		};
+		size_t onlyInFields = 0;
+		for (const auto [handle, script] : feature->GetRegistry().view<ScriptComponent>().each())
+		{
+			for (const ScriptEntry& entry : script.Scripts)
+			{
+				for (const ScriptFieldValue& field : entry.Fields)
+				{
+					if (field.Type != PropertyType::Asset || !std::get<UUID>(field.Value).IsValid())
+						continue;
+					const AssetHandle asset = std::get<UUID>(field.Value);
+					CHECK(contains(scanned, asset));
+					if (!contains(plain.Result.References, asset))
+						onlyInFields++;
+				}
+			}
+		}
+		CHECK(onlyInFields > 0);
+		for (const AssetHandle handle : plain.Result.References)
+			CHECK(contains(scanned, handle));
 
 		// The scan reads the document as a stream: the old layout (the header after the entities) finds the same references,
 		// and so does a scan of the parsed document; a document of another kind is no scene.
