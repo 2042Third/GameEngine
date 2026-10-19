@@ -1,8 +1,10 @@
 #include "Animation/AnimationTestUtils.h"
+#include "Animation/SkinnedArmModel.h"
 #include "Animation/SkinnedMeshTestUtils.h"
 #include "Animation/TestSkinningPoses.h"
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Animation/AnimationComponents.h"
+#include "Strata/Animation/AnimationPreview.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RendererComponents.h"
 
@@ -75,6 +77,26 @@ namespace
 	};
 
 	// A lit floor and the arm at `position`, posed through `poses` (Animator: the arm's own entity) or drawing `mesh`.
+	// The imported arm model in a scene of its own, lit, with a floor below it; the animator plays nothing on start.
+	Entity BuildModelScene(Scene& scene, const ImportedArm& arm, AssetHandle floorMaterial)
+	{
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::normalize(glm::vec3(0.3f, -1.0f, -0.4f)), 3.0f);
+		Entity floor = AddMesh(scene, BuiltinAssets::PlaneMesh, floorMaterial, glm::vec3(0.0f, -0.01f, 0.0f), "Floor");
+		floor.GetComponent<TransformComponent>().Scale = glm::vec3(8.0f);
+		const std::vector<Entity> roots = arm.ArmModel->Instantiate(scene);
+		REQUIRE(roots.size() == 1);
+		Entity root = roots[0];
+		root.GetComponent<AnimatorComponent>().PlayOnStart = false;
+		for (Entity child : root.GetChildren())
+		{
+			if (child.HasComponent<SkinComponent>())
+				return child;
+		}
+		FAIL("the arm model has no skinned mesh");
+		return {};
+	}
+
 	void BuildArmScene(ArmScene& arm, AssetHandle mesh, AssetHandle material, const glm::vec3& position, bool skinned)
 	{
 		Scene& scene = arm.SceneData;
@@ -473,6 +495,65 @@ TEST_SUITE("GPU.Animation")
 		CHECK(skinnedUse.UVPixels > 0.0f);
 		CHECK(skinnedUse.UVPixels == doctest::Approx(referenceUse.UVPixels).epsilon(0.1));
 		CHECK(skinnedUse.PixelSize == doctest::Approx(referenceUse.PixelSize).epsilon(0.1));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Skinned models stand in their rest pose in edited scenes as they do in play before their first animation")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		MaterialProperties floorSurface;
+		floorSurface.BaseColor = glm::vec4(0.4f, 0.4f, 0.45f, 1.0f);
+		const AssetHandle floorMaterial = assets.AddMaterial(floorSurface);
+		constexpr uint32_t size = 128;
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.0f, 5.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+
+		const struct
+		{
+			const char* Name;
+			SkinnedArmOptions Options;
+		} arms[] = { { "Z-up", ZUpArmOptions() }, { "Mixamo-like", MixamoArmOptions() } };
+		uint64_t handle = 0xA7A7'0000ull;
+		for (const auto& armFile : arms)
+		{
+			CAPTURE(armFile.Name);
+			const ImportedArm arm = ImportSkinnedArm(*assets.Manager, armFile.Options, ++handle);
+
+			// Edit mode: the editor's preview gives the scene its animators' rest poses.
+			Scene edited("Edited");
+			const Entity editedMesh = BuildModelScene(edited, arm, floorMaterial);
+			AnimationPreviewSpecification specification;
+			specification.RestPoses = true;
+			AnimationPreview preview(edited, specification);
+			preview.Update();
+			REQUIRE_FALSE(preview.HasWaitingRestPoses());
+			SceneRenderer editedRenderer;
+			editedRenderer.SetViewportSize(size, size);
+			const ReadbackImage editedImage = RenderToImage(editedRenderer, edited, camera);
+			CHECK(editedRenderer.GetStats().SkinnedInstances == 1);
+			const std::vector<uint8_t> editedMask = EntityMask(editedRenderer, editedMesh);
+
+			// Play mode, nothing playing: the animation system's pose with no clip.
+			Scene played("Played");
+			BuildModelScene(played, arm, floorMaterial);
+			played.OnRuntimeStart(SceneRuntimeMode::Play);
+			played.OnUpdateRuntime(1.0f / 60.0f);
+			SceneRenderer playedRenderer;
+			playedRenderer.SetViewportSize(size, size);
+			const ReadbackImage playedImage = RenderToImage(playedRenderer, played, camera);
+			CHECK(MaxDifference(editedImage, playedImage) <= 1);
+			played.OnRuntimeStop();
+
+			// The arm stands along +Y over the origin: the column x = 0 from y = 0.1 to 1.9 is the arm (in its bind pose it lies
+			// along an axis of the ground).
+			for (float y = 0.1f; y < 1.95f; y += 0.2f)
+			{
+				CAPTURE(y);
+				const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(0.0f, y, 0.0f), size);
+				CHECK(editedMask[static_cast<size_t>(pixel.y) * size + pixel.x] == 1);
+			}
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

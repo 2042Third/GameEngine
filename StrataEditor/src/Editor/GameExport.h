@@ -18,6 +18,7 @@
 namespace Strata
 {
 
+	class DocumentSaver;
 	class EditorContext;
 
 	struct GameExportOptions
@@ -38,6 +39,9 @@ namespace Strata
 		// Pack only what the scenes use and what the project's Export.AlwaysInclude names, with what that uses
 		// (AssetPackBuildOptions::Prune). Off by default: scripts can find assets by path, which no scene shows.
 		bool Prune = false;
+		// Put scenes, prefabs and models into the pack cooked (CookedScene: loads read them without parsing JSON); false keeps
+		// their JSON.
+		bool CookDocuments = true;
 	};
 
 	struct GameExportResult
@@ -54,7 +58,8 @@ namespace Strata
 
 	enum class GameExportState : uint8_t
 	{
-		WaitingForImports = 0, // Background imports finish first, so that the pack holds their results
+		WaitingForImports = 0, // Background imports and saves finish first, so that the pack holds their results (and documents
+		                       // whose reference search has not run are scanned)
 		Packing,               // Writing the asset pack
 		Copying,               // Writing the script module, the manifest and the runtime
 		Succeeded,
@@ -130,6 +135,12 @@ namespace Strata
 
 		GameExportOptions m_Options;
 		Ref<EditorAssetManager> m_Assets; // Kept alive while the I/O job reads from it
+		// The editor's saves: the pack is planned once none is in flight, so that it holds what they write (the context
+		// outlives its export).
+		const DocumentSaver* m_Saver = nullptr;
+		// The save of the modified scene the export started during (EditorContext::FindSaveOfCurrentState), or 0: the pack is
+		// planned only once it succeeded, or it would hold the file from before.
+		uint64_t m_AwaitedSave = 0;
 		AssetPackBuildOptions m_PackOptions;
 		GameManifest m_Manifest;
 		std::string m_FileName; // Of the pack, manifest and executable, without extension
@@ -140,6 +151,18 @@ namespace Strata
 
 		Ref<Shared> m_Shared;
 		JobHandle m_Job;
+		// Documents whose search of what they reference had not run when the imports were done (changed on disk meanwhile):
+		// scanned by a job of the export before it plans, rather than waiting for searches that wait for their documents to
+		// settle.
+		struct DocumentScan
+		{
+			std::vector<AssetHandle> Documents;
+			std::vector<std::optional<std::vector<AssetHandle>>> References; // Per document, once Done
+			std::atomic<bool> Done = false;
+		};
+		Ref<DocumentScan> m_DocumentScan;
+		JobHandle m_DocumentScanJob;
+		bool m_DocumentsScanned = false;
 		uint32_t m_AssetCount = 0; // Planned
 		bool m_Collected = false;
 		GameExportResult m_Result;

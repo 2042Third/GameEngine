@@ -8,6 +8,17 @@ using namespace Strata;
 
 TEST_SUITE("Core.StringUtils")
 {
+	TEST_CASE("Counts are formatted with their thousands separated")
+	{
+		CHECK(StringUtils::FormatThousands(0) == "0");
+		CHECK(StringUtils::FormatThousands(999) == "999");
+		CHECK(StringUtils::FormatThousands(1000) == "1,000");
+		CHECK(StringUtils::FormatThousands(12345) == "12,345");
+		CHECK(StringUtils::FormatThousands(123456) == "123,456");
+		CHECK(StringUtils::FormatThousands(1000000) == "1,000,000");
+		CHECK(StringUtils::FormatThousands(UINT64_MAX) == "18,446,744,073,709,551,615");
+	}
+
 	TEST_CASE("Text that is no valid UTF-8 gets replacement characters, valid text stays as it is")
 	{
 		const std::string replacement = "\xEF\xBF\xBD";

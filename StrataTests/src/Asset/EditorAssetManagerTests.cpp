@@ -2,6 +2,7 @@
 
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/EditorAssetManager.h"
+#include "Strata/Asset/ImportRecordStore.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JobSystem.h"
@@ -11,7 +12,12 @@
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Renderer/Texture.h"
+#include "Strata/Scene/Components.h"
+#include "Strata/Scripting/ScriptingComponents.h"
+#include "Strata/Scene/CookedScene.h"
 #include "Strata/Scene/Prefab.h"
+#include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneSerializer.h"
 #include "TestHelpers.h"
 
 #if ST_WITH_AUDIO
@@ -456,6 +462,40 @@ TEST_SUITE("Asset.Editor")
 		}, std::chrono::milliseconds(15000)));
 		CHECK_FALSE(manager->HasFolder(".hidden"));
 		CHECK(manager->GetAssetsBelowFolder("").empty());
+	}
+
+	TEST_CASE("A cache written before the records store is taken over: nothing is imported again, and the old files go")
+	{
+		ScopedJobSystem jobs;
+		RegisterTestModelImporter();
+		TestProject project("EditorRecordsMigration");
+		project.Write("Models/Robot.sttestmodel", { 'r' });
+		AssetHandle robot;
+		nlohmann::json record;
+		{
+			Ref<EditorAssetManager> manager = project.Open();
+			robot = manager->FindAssetByPath("Models/Robot.sttestmodel");
+			REQUIRE(robot.IsValid());
+			const std::optional<nlohmann::json> stored = manager->GetImportRecord(robot);
+			REQUIRE(stored.has_value());
+			record = *stored;
+		}
+
+		// The earlier layout: a record file per asset and the asset index, no records file.
+		REQUIRE(FileSystem::Remove(project.Cache / FileSystem::FromUTF8(ImportRecordStore::c_FileName)));
+		REQUIRE(FileSystem::WriteText(project.Cache / (robot.ToString() + ".import"), JsonUtils::Dump(record, 1, '\t')));
+		REQUIRE(FileSystem::WriteText(project.Cache / "AssetIndex.json",
+			JsonUtils::Dump(nlohmann::json { { "Format", "AssetIndex" }, { "Version", 1 }, { "Assets", { { robot.ToString(), "Models/Robot.sttestmodel" } } } })));
+		const uint32_t imports = TestModelImporter::s_ImportCount;
+		Ref<EditorAssetManager> manager = project.Open();
+		CHECK(TestModelImporter::s_ImportCount == imports);
+		CHECK(manager->GetImportInfo(robot).Imported);
+		CHECK(manager->GetImportInfo(robot).SubAssets.size() == 3);
+		CHECK(manager->GetImportRecord(robot) == std::optional<nlohmann::json>(record));
+		REQUIRE(manager->FlushImportRecords());
+		CHECK_FALSE(FileSystem::Exists(project.Cache / (robot.ToString() + ".import")));
+		CHECK_FALSE(FileSystem::Exists(project.Cache / "AssetIndex.json"));
+		CHECK(FileSystem::IsRegularFile(project.Cache / FileSystem::FromUTF8(ImportRecordStore::c_FileName)));
 	}
 
 	TEST_CASE("Assets and folders go to the trash and come back with their handles")
@@ -1202,11 +1242,12 @@ TEST_SUITE("Asset.Editor")
 		REQUIRE(FileSystem::WriteText(project.Cache / (brick.ToString() + ".bin.staged"), "partial"));
 		Ref<EditorAssetManager> manager = project.Open();
 		CHECK(FileSystem::Exists(project.Cache / (brick.ToString() + ".bin")));
-		CHECK(FileSystem::Exists(project.Cache / (brick.ToString() + ".import")));
+		CHECK(manager->GetImportRecord(brick).has_value());
 		CHECK_FALSE(FileSystem::Exists(project.Cache / (brick.ToString() + ".bin.staged")));
 		CHECK_FALSE(FileSystem::Exists(project.Cache / (stone.ToString() + ".bin")));
-		CHECK_FALSE(FileSystem::Exists(project.Cache / (stone.ToString() + ".import")));
-		CHECK(FileSystem::Exists(project.Cache / "AssetIndex.json"));
+		CHECK_FALSE(manager->GetImportRecord(stone).has_value());
+		REQUIRE(manager->FlushImportRecords());
+		CHECK(FileSystem::Exists(project.Cache / FileSystem::FromUTF8(ImportRecordStore::c_FileName)));
 		CHECK(LoadTexture(*manager, brick));
 	}
 
@@ -1264,5 +1305,106 @@ TEST_SUITE("Asset.Editor")
 		CHECK(runtime->LoadAssetSync(DeriveSubAssetHandle(robot, "Mesh/0")) != nullptr);
 		CHECK(runtime->GetMetadata(DeriveSubAssetHandle(robot, "Mesh/0"))->Parent == robot);
 		CHECK(runtime->FindAssetByPath("Brick.png") == brick);
+	}
+}
+
+namespace
+{
+
+	// A scene document of entities with a hierarchy, a prefab link, a script with fields and settings other than the defaults.
+	Ref<Scene> MakePackedScene(AssetHandle prefab)
+	{
+		Ref<Scene> scene = CreateRef<Scene>("Packed");
+		scene->GetSettings().Gravity = glm::vec3(0.0f, -2.0f, 0.0f);
+		Entity root = scene->CreateEntity("Root");
+		Entity child = scene->CreateChildEntity(root, "Child");
+		child.GetComponent<TransformComponent>().Translation = glm::vec3(1.0f, 2.0f, 3.0f);
+		ScriptEntry& script = child.AddComponent<ScriptComponent>().Scripts.emplace_back();
+		script.ClassName = "Mover";
+		script.Fields.push_back(ScriptFieldValue { "Target", PropertyType::Entity, PropertyValue(root.GetUUID()) });
+		script.Fields.push_back(ScriptFieldValue { "Spawn", PropertyType::Asset, PropertyValue(prefab) });
+		scene->CreateEntity("Instance").AddComponent<PrefabInstanceComponent>(PrefabInstanceComponent { prefab, UUID(7) });
+		return scene;
+	}
+
+	std::vector<uint8_t> DocumentBytes(const nlohmann::json& document)
+	{
+		const std::string text = JsonUtils::Dump(document, 1, '\t');
+		return std::vector<uint8_t>(text.begin(), text.end());
+	}
+
+}
+
+TEST_SUITE("Asset.Pack")
+{
+	TEST_CASE("Exported packs hold cooked scenes and prefabs, which load equal to their JSON; packs without cooking still load")
+	{
+		ScopedJobSystem jobs;
+		TestProject project("PackCooked");
+		Scene prefabSource("Crate");
+		Entity crate = prefabSource.CreateEntity("Crate");
+		prefabSource.CreateChildEntity(crate, "Lid");
+		const Ref<Prefab> prefabAsset = Prefab::CreateFromEntities(prefabSource, { crate });
+		REQUIRE(prefabAsset);
+		project.Write("Prefabs/Crate.stprefab", DocumentBytes(prefabAsset->Serialize()));
+		AssetHandle prefab;
+		{
+			Ref<EditorAssetManager> manager = project.Open();
+			prefab = manager->FindAssetByPath("Prefabs/Crate.stprefab");
+			REQUIRE(prefab.IsValid());
+		}
+		const Ref<Scene> source = MakePackedScene(prefab);
+		project.Write("Scenes/Level.stscene", DocumentBytes(SceneSerializer::Serialize(*source)));
+		Ref<EditorAssetManager> manager = project.Open();
+		const AssetHandle scene = manager->FindAssetByPath("Scenes/Level.stscene");
+		REQUIRE(scene.IsValid());
+		AssetPackBuildPlan plan;
+		std::string error;
+		REQUIRE_MESSAGE(manager->PlanAssetPack({}, plan, &error), error);
+
+		for (const bool cook : { true, false })
+		{
+			for (const bool adjust : { false, true })
+			{
+				CAPTURE(cook);
+				CAPTURE(adjust);
+				const std::filesystem::path packPath = project.Root / fmt::format("Game{}{}.stpak", cook, adjust);
+				AssetPackWriteOptions options;
+				options.CookDocuments = cook;
+				if (adjust)
+				{
+					options.AdjustSceneSettings = [scene](AssetHandle handle, SceneSettings& settings)
+					{
+						CHECK(handle == scene);
+						settings.PhysicsCapacity.MaxBodies = 4096;
+					};
+				}
+				REQUIRE_MESSAGE(manager->WriteAssetPack(packPath, plan, options, nullptr, &error), error);
+
+				const Ref<RuntimeAssetManager> runtime = RuntimeAssetManager::Create(packPath, &error);
+				REQUIRE_MESSAGE(runtime, error);
+				for (const AssetPackEntry& entry : runtime->GetPack().GetEntries())
+				{
+					if (entry.Metadata.Handle != scene && entry.Metadata.Handle != prefab)
+						continue;
+					std::vector<uint8_t> data;
+					REQUIRE(runtime->GetPack().ReadData(entry, data, &error));
+					CHECK(CookedScene::IsCooked(data) == cook);
+				}
+				const Ref<SceneAsset> loaded = std::dynamic_pointer_cast<SceneAsset>(runtime->LoadAssetSync(scene));
+				REQUIRE(loaded);
+				const Ref<Scene> read = loaded->CreateScene();
+				REQUIRE(read);
+				nlohmann::json expected = SceneSerializer::Serialize(*source);
+				if (adjust)
+					expected["Scene"]["Settings"]["PhysicsCapacity"]["MaxBodies"] = 4096;
+				CHECK(SceneSerializer::Serialize(*read) == expected);
+				const Ref<Prefab> loadedPrefab = std::dynamic_pointer_cast<Prefab>(runtime->LoadAssetSync(prefab));
+				REQUIRE(loadedPrefab);
+				CHECK(loadedPrefab->GetSnapshot() == prefabAsset->GetSnapshot());
+				// The pack's dependency table is the plan's, cooked or not.
+				CHECK(runtime->GetDependencies(scene) == manager->GetDependencies(scene));
+			}
+		}
 	}
 }

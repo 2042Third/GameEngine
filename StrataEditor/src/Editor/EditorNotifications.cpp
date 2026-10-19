@@ -47,6 +47,19 @@ namespace Strata
 		return m_Active.back().Id;
 	}
 
+	uint64_t EditorNotifications::Replace(uint64_t id, EditorNotification notification)
+	{
+		const auto active = std::find_if(m_Active.begin(), m_Active.end(), [id](const EditorNotification& candidate) { return candidate.Id == id; });
+		if (id == 0 || active == m_Active.end())
+			return Post(std::move(notification));
+		notification.Id = id;
+		notification.Count = std::max<uint32_t>(notification.Count, 1);
+		notification.Expires = std::chrono::steady_clock::now() + GetLifetime(notification.Level);
+		*active = std::move(notification);
+		m_Version++;
+		return id;
+	}
+
 	void EditorNotifications::Dismiss(uint64_t id)
 	{
 		const size_t before = m_Active.size();

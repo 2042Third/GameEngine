@@ -11,6 +11,7 @@
 #include "Strata/Renderer/GeometryPool.h"
 #include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/GPUSceneData.h"
+#include "Strata/Renderer/SceneOverlay.h"
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Renderer/TextureReadback.h"
 #include "Strata/Scene/Components.h"
@@ -32,6 +33,7 @@
 namespace Strata
 {
 
+	class FontAtlasCache;
 	class Material;
 	class Mesh;
 	class RenderScene;
@@ -233,9 +235,15 @@ namespace Strata
 		// content shows its shape. Scenes with any lighting of their own, also a dark one lit by a torch, render unchanged.
 		// Never part of the scene (not saved, not in games).
 		bool PreviewEnvironment = false;
-		// Screen-space text (the game's HUD). Editor views turn it off so the HUD does not cover the scene being edited;
-		// world-space text is always drawn.
+		// The game's screen-space UI: the HUD text and screen-space canvases (the overlay passes, SceneOverlayRegistry). Editor
+		// views turn it off so the HUD does not cover the scene being edited; world-space text and canvases are always drawn.
 		bool DrawScreenSpaceText = true;
+		// Where the game's screen lies in the image, for that screen-space UI: by default the whole image. The editor's 2D
+		// canvas mode zooms and pans it (SceneScreenView).
+		SceneScreenView ScreenView;
+		// The scene whose overlay passes (the game UI) are drawn, when not the rendered scene's: GameRenderer shows a scene
+		// without a camera as its UI over an empty frame. Must stay valid during Render.
+		Scene* OverlayScene = nullptr;
 
 		// The overlays below are drawn over the finished image (after tone mapping and anti-aliasing) with exact display
 		// colors; all of them are off by default.
@@ -359,6 +367,7 @@ namespace Strata
 		uint32_t TextGlyphs = 0;
 		uint32_t PendingTextGlyphs = 0;   // Glyphs waiting for rasterization (budgeted per frame), drawn on a later frame
 		uint32_t RasterizedTextGlyphs = 0; // Glyphs added to font atlases this frame (see TextRenderer::c_FrameRasterBudget)
+		SceneOverlayStats Overlays;       // The overlay passes (the game UI); their PendingAssets count in PendingAssets too
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -486,6 +495,10 @@ namespace Strata
 		Scope<TextureReadback> ReadEntityIDAsync(uint32_t x, uint32_t y);
 		// The entity an entity-ID buffer value refers to; invalid for 0 (nothing drawn) or entities that no longer exist.
 		static Entity GetEntityFromID(Scene& scene, uint32_t id);
+
+		// Whether an overlay pass would draw screen-space content of the scene (its game UI). GameRenderer asks it of scenes
+		// without a camera.
+		bool HasOverlayContent(Scene& scene) const;
 
 		// Automatic exposure adapts gradually; this makes the next frame jump to the scene's brightness (camera cuts,
 		// scene loads).
@@ -916,7 +929,10 @@ namespace Strata
 		void CreateOverlayResources();
 		static bool HasOverlays(const SceneRenderOptions& options);
 		// Draws the overlays into the output texture (which must hold the finished image); false when GPU resources failed.
-		bool RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, bool drawText);
+		bool RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, bool drawText,
+			bool drawOverlayPasses);
+		// Prepare of every overlay pass (SceneOverlayRegistry); whether any draws.
+		bool PrepareOverlayPasses(Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, nvrhi::ICommandList* commandList);
 		void DrawDebugLines(nvrhi::ICommandList* commandList, DebugDrawDepth depth, uint32_t firstVertex, uint32_t vertexCount);
 		// The tints of SceneRenderOptions::EntityTints (StatusTint.frag); false when GPU resources failed.
 		bool DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport);
@@ -1108,7 +1124,9 @@ namespace Strata
 		nvrhi::FramebufferHandle m_OverlayFramebuffer; // Output texture with the scene depth (read-only)
 		nvrhi::BindingSetHandle m_CopyBindingSet;      // Output texture, copied into external targets
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_CopyPipelines;
+		Scope<FontAtlasCache> m_FontAtlases; // Glyph atlases of the text and the overlay passes (one per font)
 		Scope<TextRenderer> m_TextRenderer; // TextComponents, drawn with the overlays
+		std::vector<Scope<ISceneOverlayPass>> m_OverlayPasses; // One per SceneOverlayRegistry factory, drawn after the text
 
 		// Lights gathered per frame (kept between frames to reuse the allocations)
 		std::vector<RenderData::LightData> m_Lights;

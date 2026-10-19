@@ -2,6 +2,7 @@
 
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/JobSystem.h"
+#include "Strata/GameUI/GameUIComponents.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scripting/ScriptingComponents.h"
@@ -195,6 +196,67 @@ namespace Strata::Tests::Perf
 	ScopedApplicationJobSystem::~ScopedApplicationJobSystem()
 	{
 		JobSystem::Shutdown();
+	}
+
+
+	UIWidgets CreateUIWidgets(Scene& scene, uint32_t panels, uint32_t buttons, bool fitContent)
+	{
+		UIWidgets widgets;
+		widgets.Canvas = scene.CreateEntity("Widgets");
+		widgets.Canvas.AddComponent<UIRectComponent>();
+		UICanvasComponent& canvas = widgets.Canvas.AddComponent<UICanvasComponent>();
+		canvas.ScaleMode = UICanvasScaleMode::ScaleWithScreen;
+		canvas.ReferenceResolution = { 1920.0f, 1080.0f };
+
+		const uint32_t columns = std::max(1u, static_cast<uint32_t>(std::ceil(std::sqrt(static_cast<double>(panels)))));
+		const uint32_t rows = (panels + columns - 1) / columns;
+		widgets.Panels.reserve(panels);
+		widgets.Buttons.reserve(static_cast<size_t>(panels) * buttons);
+		widgets.Labels.reserve(static_cast<size_t>(panels) * buttons);
+		for (uint32_t panelIndex = 0; panelIndex < panels; panelIndex++)
+		{
+			Entity panel = scene.CreateChildEntity(widgets.Canvas, "Panel");
+			UIRectComponent& rect = panel.AddComponent<UIRectComponent>();
+			const glm::vec2 anchor((static_cast<float>(panelIndex % columns) + 0.5f) / static_cast<float>(columns),
+				(static_cast<float>(panelIndex / columns) + 0.5f) / static_cast<float>(rows));
+			rect.AnchorMin = anchor;
+			rect.AnchorMax = anchor;
+			rect.Size = { 1920.0f / static_cast<float>(columns) - 4.0f, 1080.0f / static_cast<float>(rows) - 4.0f };
+			panel.AddComponent<UIImageComponent>().Color = { 0.1f, 0.12f, 0.2f, 0.9f };
+			UILayoutComponent& layout = panel.AddComponent<UILayoutComponent>();
+			layout.Type = UILayoutType::Vertical;
+			layout.Padding = glm::vec4(2.0f);
+			layout.Spacing = { 0.0f, 1.0f };
+			layout.StretchChildren = true;
+			widgets.Panels.push_back(panel);
+
+			for (uint32_t buttonIndex = 0; buttonIndex < buttons; buttonIndex++)
+			{
+				Entity button = scene.CreateChildEntity(panel, "Button");
+				UIRectComponent& buttonRect = button.AddComponent<UIRectComponent>();
+				buttonRect.Size = { 80.0f, 3.0f };
+				buttonRect.FitContent = fitContent ? UIFitContent::Both : UIFitContent::None;
+				button.AddComponent<UIImageComponent>().Color = { 0.3f, 0.5f, 0.9f, 1.0f };
+				button.AddComponent<UISelectableComponent>();
+				button.AddComponent<UIButtonComponent>();
+				widgets.Buttons.push_back(button);
+
+				Entity label = scene.CreateChildEntity(button, "Label");
+				UIRectComponent& labelRect = label.AddComponent<UIRectComponent>();
+				labelRect.AnchorMin = { 0.0f, 0.0f };
+				labelRect.AnchorMax = { 1.0f, 1.0f };
+				labelRect.Size = { 0.0f, 0.0f };
+				labelRect.FitContent = fitContent ? UIFitContent::Both : UIFitContent::None;
+				UITextComponent& text = label.AddComponent<UITextComponent>();
+				// 8 to 12 characters.
+				const uint32_t index = panelIndex * buttons + buttonIndex;
+				text.Text = "Item " + std::to_string(index % 10000000);
+				text.Text.resize(8 + index % 5, '!');
+				text.FontSize = 3.0f;
+				widgets.Labels.push_back(label);
+			}
+		}
+		return widgets;
 	}
 
 }

@@ -1,8 +1,14 @@
 #include "Editor/EditorPlacement.h"
 
+#include "Editor/AssetBounds.h"
 #include "Editor/EditorCamera.h"
+#include "Editor/EditorContext.h"
+#include "Editor/SceneBounds.h"
 
+#include <Strata/Animation/AnimationComponents.h>
+#include <Strata/Animation/AnimationPreview.h>
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Renderer/Mesh.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
@@ -46,7 +52,10 @@ namespace Strata
 				pending.pop_back();
 				if (const MeshRendererComponent* renderer = current.TryGetComponent<MeshRendererComponent>())
 				{
-					const AABB mesh = EditorPlacement::GetMeshBounds(renderer->Mesh);
+					// A skinned mesh in its animator's pose (the rest pose GetTemplateBounds gives the scene), as it is drawn.
+					const Ref<Mesh> loaded = current.HasComponent<SkinComponent>() ? AssetManager::GetAsset<Mesh>(renderer->Mesh) : nullptr;
+					const AABB posed = loaded ? SceneBounds::GetPosedMeshBounds(scene, current, *loaded) : AABB();
+					const AABB mesh = posed.IsValid() ? posed : EditorPlacement::GetMeshBounds(renderer->Mesh);
 					if (mesh.IsValid())
 						bounds.Expand(mesh.Transformed(scene.GetWorldTransform(current)));
 				}
@@ -116,11 +125,17 @@ namespace Strata
 			const Ref<EntityTemplate> asset = std::static_pointer_cast<EntityTemplate>(AssetManager::GetActive()->LoadAssetSync(prefab));
 			if (!asset)
 				return AABB();
-			// Made as prefab.instantiate makes it, in a scene of its own: its transforms as they will be, around the origin.
+			// Made as prefab.instantiate makes it, in a scene of its own: its transforms as they will be, around the origin, and
+			// its skinned meshes in their skeleton's rest pose, as the edited scene shows them.
 			Scene scene;
 			const std::vector<Entity> roots = asset->Instantiate(scene);
 			if (roots.empty())
 				return AABB();
+			// The preview requests the animators' skeletons (never waiting for them: a frame is never held on an asset).
+			AnimationPreviewSpecification specification;
+			specification.RestPoses = true;
+			AnimationPreview poses(scene, specification);
+			poses.Update();
 			scene.UpdateWorldTransforms();
 			AABB bounds;
 			AddSubtreeBounds(scene, roots.front(), bounds);
@@ -129,6 +144,17 @@ namespace Strata
 			// Around the root's origin: the translation the root is given replaces its own.
 			const glm::vec3 origin(scene.GetWorldTransform(roots.front())[3]);
 			return AABB(bounds.Min - origin, bounds.Max - origin);
+		}
+
+		AABB GetPlacementBounds(EditorContext& context, AssetHandle prefab)
+		{
+			if (EditorAssetManager* assets = context.GetAssetManager())
+			{
+				const AssetBounds::Result measured = context.GetAssetBounds().Measure(*assets, prefab);
+				if (!measured.Pending)
+					return measured.Bounds;
+			}
+			return GetTemplateBounds(prefab);
 		}
 
 	}

@@ -603,6 +603,15 @@ namespace Strata
 		return std::nullopt;
 	}
 
+	std::optional<uint64_t> Platform::GetPhysicalMemorySize()
+	{
+		const long pages = sysconf(_SC_PHYS_PAGES);
+		const long pageSize = sysconf(_SC_PAGE_SIZE);
+		if (pages <= 0 || pageSize <= 0)
+			return std::nullopt;
+		return static_cast<uint64_t>(pages) * static_cast<uint64_t>(pageSize);
+	}
+
 	std::optional<ProcessMemoryInfo> Platform::GetProcessMemory()
 	{
 		ProcessMemoryInfo memory;

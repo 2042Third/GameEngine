@@ -3,6 +3,7 @@
 
 #include "Strata/Core/StringUtils.h"
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 
@@ -62,6 +63,20 @@ namespace Strata
 		RegistryData& data = GetData();
 		std::scoped_lock<std::mutex> lock(data.Mutex);
 		ST_CORE_VERIFY(data.State.load(std::memory_order_acquire) != RegistryState::Closed, "ComponentRegistry::Freeze() is called before BeginRegistration()");
+		// Requirements name registered components (in any order of registration): one that names no component, or the
+		// component itself, is dropped with an error, so adding a component never fails over it.
+		for (const Scope<ComponentInfo>& info : data.Storage)
+		{
+			std::erase_if(info->Requires, [&](const std::string& required)
+			{
+				const auto match = std::find_if(data.All.begin(), data.All.end(), [&](const ComponentInfo* other) { return StringUtils::EqualsIgnoreCase(other->Name, required); });
+				if (match != data.All.end() && *match != info.get())
+					return false;
+				ST_CORE_ERROR("Component '{}' requires '{}', which is {}: the requirement is ignored", info->Name, required,
+					match == data.All.end() ? "not a registered component" : "the component itself");
+				return true;
+			});
+		}
 		data.State.store(RegistryState::Frozen, std::memory_order_release);
 	}
 
@@ -73,6 +88,34 @@ namespace Strata
 	bool ComponentRegistry::IsFrozen()
 	{
 		return GetData().State.load(std::memory_order_acquire) == RegistryState::Frozen;
+	}
+
+	bool ComponentRegistry::SetInactiveReason(entt::id_type typeId, std::string_view property, std::function<std::string(const void* component)> reason)
+	{
+		RegistryData& data = GetData();
+		std::scoped_lock<std::mutex> lock(data.Mutex);
+		if (data.State.load(std::memory_order_acquire) != RegistryState::Open)
+		{
+			ST_CORE_ERROR("The inactive reason of '{}' is not set: the component registry is not open", property);
+			return false;
+		}
+		for (Scope<ComponentInfo>& info : data.Storage)
+		{
+			if (info->TypeId != typeId)
+				continue;
+			for (PropertyInfo& candidate : info->Properties)
+			{
+				if (candidate.Name == property)
+				{
+					candidate.InactiveReason = std::move(reason);
+					return true;
+				}
+			}
+			ST_CORE_ERROR("The inactive reason of '{}' is not set: component '{}' has no such property", property, info->Name);
+			return false;
+		}
+		ST_CORE_ERROR("The inactive reason of '{}' is not set: its component is not registered", property);
+		return false;
 	}
 
 	ComponentInfo* ComponentRegistry::CreateInfo(std::string name, entt::id_type typeId)

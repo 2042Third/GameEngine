@@ -390,6 +390,10 @@
 										"Type": "Asset",
 										"Value": "62D9729FD5AB916A"
 									},
+									"MessagePanel": {
+										"Type": "Entity",
+										"Value": "7A51C0DE5E4B1002"
+									},
 									"MessageText": {
 										"Type": "Entity",
 										"Value": "3AB0E777DCA23EC4"
@@ -449,6 +453,49 @@
 							0,
 							0
 						]
+					},
+					"UICanvas": {
+						"FirstSelected": "0000000000000000",
+						"MatchWidthOrHeight": 1,
+						"PixelSnap": true,
+						"ReceivesInput": false,
+						"ReferenceResolution": [
+							1280,
+							720
+						],
+						"SafeAreaPadding": [
+							0,
+							0,
+							0,
+							0
+						],
+						"ScaleFactor": 1,
+						"ScaleMode": "ScaleWithScreen",
+						"SortOrder": 0
+					},
+					"UIRect": {
+						"AnchorMax": [
+							1,
+							1
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							0
+						]
 					}
 				},
 				"ID": "3AB1E47E2C8DEEFD"
@@ -456,28 +503,7 @@
 			{
 				"Components": {
 					"Name": {
-						"Name": "ScoreText"
-					},
-					"Text": {
-						"Alignment": "Left",
-						"Color": [
-							1,
-							1,
-							1,
-							1
-						],
-						"Font": "0000000000000000",
-						"FontSize": 40,
-						"ScreenAnchor": [
-							0.05,
-							0.1
-						],
-						"ScreenOffset": [
-							0,
-							0
-						],
-						"ScreenSpace": true,
-						"Text": "Score: 0"
+						"Name": "StatsPanel"
 					},
 					"Transform": {
 						"Rotation": [
@@ -496,37 +522,170 @@
 							0,
 							0
 						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							0.45,
+							0.55,
+							0.85,
+							0.5
+						],
+						"BorderWidth": 1.5,
+						"Color": [
+							0.04,
+							0.05,
+							0.09,
+							0.72
+						],
+						"CornerRadius": 14,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UILayout": {
+						"CellSize": [
+							100,
+							100
+						],
+						"ChildAlignment": "TopLeft",
+						"Columns": 0,
+						"Padding": [
+							22,
+							14,
+							22,
+							14
+						],
+						"Spacing": [
+							0,
+							4
+						],
+						"StretchChildren": false,
+						"Type": "Vertical"
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0,
+							0
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "Both",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0,
+							0
+						],
+						"Position": [
+							48,
+							56
+						],
+						"Size": [
+							0,
+							0
+						]
+					}
+				},
+				"ID": "7A51C0DE5E4B1001",
+				"Parent": "3AB1E47E2C8DEEFD"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "ScoreText"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0,
+							0
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "Both",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0,
+							0
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							0
+						]
+					},
+					"UIText": {
+						"Alignment": "Left",
+						"Color": [
+							1,
+							1,
+							1,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 36,
+						"LineSpacing": 1.0,
+						"OutlineColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"OutlineWidth": 0,
+						"Overflow": "Overflow",
+						"RaycastTarget": false,
+						"Text": "Score: 0",
+						"VerticalAlignment": "Middle",
+						"Wrap": false
 					}
 				},
 				"ID": "893AE784EA121440",
-				"Parent": "3AB1E47E2C8DEEFD"
+				"Parent": "7A51C0DE5E4B1001"
 			},
 			{
 				"Components": {
 					"Name": {
 						"Name": "LevelText"
 					},
-					"Text": {
-						"Alignment": "Left",
-						"Color": [
-							0.85,
-							0.9,
-							1,
-							1
-						],
-						"Font": "0000000000000000",
-						"FontSize": 40,
-						"ScreenAnchor": [
-							0.05,
-							0.1
-						],
-						"ScreenOffset": [
-							0,
-							56
-						],
-						"ScreenSpace": true,
-						"Text": "Level: 1"
-					},
 					"Transform": {
 						"Rotation": [
 							0,
@@ -544,17 +703,107 @@
 							0,
 							0
 						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0,
+							0
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "Both",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0,
+							0
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							0
+						]
+					},
+					"UIText": {
+						"Alignment": "Left",
+						"Color": [
+							0.85,
+							0.9,
+							1,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 30,
+						"LineSpacing": 1.0,
+						"OutlineColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"OutlineWidth": 0,
+						"Overflow": "Overflow",
+						"RaycastTarget": false,
+						"Text": "Level: 1",
+						"VerticalAlignment": "Middle",
+						"Wrap": false
 					}
 				},
 				"ID": "25892A97AD67432E",
-				"Parent": "3AB1E47E2C8DEEFD"
+				"Parent": "7A51C0DE5E4B1001"
 			},
 			{
 				"Components": {
 					"Name": {
 						"Name": "LinesText"
 					},
-					"Text": {
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0,
+							0
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "Both",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0,
+							0
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							0
+						]
+					},
+					"UIText": {
 						"Alignment": "Left",
 						"Color": [
 							0.85,
@@ -563,94 +812,73 @@
 							1
 						],
 						"Font": "0000000000000000",
-						"FontSize": 40,
-						"ScreenAnchor": [
-							0.05,
-							0.1
-						],
-						"ScreenOffset": [
-							0,
-							112
-						],
-						"ScreenSpace": true,
-						"Text": "Lines: 0"
-					},
-					"Transform": {
-						"Rotation": [
+						"FontSize": 30,
+						"LineSpacing": 1.0,
+						"OutlineColor": [
 							0,
 							0,
 							0,
 							1
 						],
-						"Scale": [
-							1,
-							1,
-							1
-						],
-						"Translation": [
-							0,
-							0,
-							0
-						]
+						"OutlineWidth": 0,
+						"Overflow": "Overflow",
+						"RaycastTarget": false,
+						"Text": "Lines: 0",
+						"VerticalAlignment": "Middle",
+						"Wrap": false
 					}
 				},
 				"ID": "479A9674867A5955",
-				"Parent": "3AB1E47E2C8DEEFD"
-			},
-			{
-				"Components": {
-					"Name": {
-						"Name": "MessageText"
-					},
-					"Text": {
-						"Alignment": "Center",
-						"Color": [
-							1,
-							0.9,
-							0.3,
-							1
-						],
-						"Font": "0000000000000000",
-						"FontSize": 56,
-						"ScreenAnchor": [
-							0.5,
-							0.42
-						],
-						"ScreenOffset": [
-							0,
-							0
-						],
-						"ScreenSpace": true,
-						"Text": ""
-					},
-					"Transform": {
-						"Rotation": [
-							0,
-							0,
-							0,
-							1
-						],
-						"Scale": [
-							1,
-							1,
-							1
-						],
-						"Translation": [
-							0,
-							0,
-							0
-						]
-					}
-				},
-				"ID": "3AB0E777DCA23EC4",
-				"Parent": "3AB1E47E2C8DEEFD"
+				"Parent": "7A51C0DE5E4B1001"
 			},
 			{
 				"Components": {
 					"Name": {
 						"Name": "ControlsText"
 					},
-					"Text": {
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0,
+							1
+						],
+						"AnchorMin": [
+							0,
+							1
+						],
+						"FitContent": "Both",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0,
+							1
+						],
+						"Position": [
+							48,
+							-36
+						],
+						"Size": [
+							0,
+							0
+						]
+					},
+					"UIText": {
 						"Alignment": "Left",
 						"Color": [
 							0.6,
@@ -659,17 +887,30 @@
 							1
 						],
 						"Font": "0000000000000000",
-						"FontSize": 20,
-						"ScreenAnchor": [
-							0.05,
-							0.8
-						],
-						"ScreenOffset": [
+						"FontSize": 18,
+						"LineSpacing": 1.2,
+						"OutlineColor": [
 							0,
-							0
+							0,
+							0,
+							1
 						],
-						"ScreenSpace": true,
-						"Text": "Left/Right: move   Up/X, Z: rotate\nDown: soft drop   Space: hard drop\nP: pause   R: restart   Esc: quit"
+						"OutlineWidth": 0,
+						"Overflow": "Overflow",
+						"RaycastTarget": false,
+						"Text": "Left/Right: move   Up/X, Z: rotate\nDown: soft drop   Space: hard drop\nP: pause   R: restart   Esc: quit",
+						"VerticalAlignment": "Middle",
+						"Wrap": false
+					}
+				},
+				"ID": "F8F4019443CE5826",
+				"Parent": "3AB1E47E2C8DEEFD"
+			},
+			{
+				"Components": {
+					"Inactive": {},
+					"Name": {
+						"Name": "MessagePanel"
 					},
 					"Transform": {
 						"Rotation": [
@@ -688,10 +929,164 @@
 							0,
 							0
 						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							1,
+							0.9,
+							0.3,
+							0.6
+						],
+						"BorderWidth": 2,
+						"Color": [
+							0.02,
+							0.02,
+							0.05,
+							0.8
+						],
+						"CornerRadius": 18,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UILayout": {
+						"CellSize": [
+							100,
+							100
+						],
+						"ChildAlignment": "MiddleCenter",
+						"Columns": 0,
+						"Padding": [
+							44,
+							26,
+							44,
+							26
+						],
+						"Spacing": [
+							0,
+							0
+						],
+						"StretchChildren": false,
+						"Type": "Vertical"
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.42
+						],
+						"AnchorMin": [
+							0.5,
+							0.42
+						],
+						"FitContent": "Both",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							0
+						]
 					}
 				},
-				"ID": "F8F4019443CE5826",
+				"ID": "7A51C0DE5E4B1002",
 				"Parent": "3AB1E47E2C8DEEFD"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "MessageText"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "Both",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							0
+						]
+					},
+					"UIText": {
+						"Alignment": "Center",
+						"Color": [
+							1,
+							0.9,
+							0.3,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 44,
+						"LineSpacing": 1.15,
+						"OutlineColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"OutlineWidth": 0,
+						"Overflow": "Overflow",
+						"RaycastTarget": false,
+						"Text": "",
+						"VerticalAlignment": "Middle",
+						"Wrap": false
+					}
+				},
+				"ID": "3AB0E777DCA23EC4",
+				"Parent": "7A51C0DE5E4B1002"
 			},
 			{
 				"Components": {

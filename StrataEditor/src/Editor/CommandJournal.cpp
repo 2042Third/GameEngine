@@ -570,7 +570,9 @@ namespace Strata
 		entry->Bytes += added;
 		m_Bytes += added;
 		m_Version++;
-		if (entry->Source == CommandSource::Automation && entry->Parent == 0)
+		// What an agent changed, not what it looked at: a query after an edit leaves the chip naming the edit.
+		const bool mutating = entry->Kind == EditorCommandKind::Edit || entry->RunningCopy;
+		if (entry->Source == CommandSource::Automation && entry->Parent == 0 && mutating)
 		{
 			m_LatestAutomation.Id = entry->Id;
 			m_LatestAutomation.Command = entry->Command;
@@ -615,6 +617,35 @@ namespace Strata
 		m_Version++;
 	}
 
+	uint64_t CommandJournal::RecordEvent(std::string_view name, const nlohmann::json& details, bool playing)
+	{
+		const uint64_t id = Begin(CommandOrigin {}, name, EditorCommandKind::Session, EditorCommandResults::Session, details, playing);
+		if (CommandJournalEntry* entry = FindMutable(id))
+			entry->Event = true;
+		Complete(id, EditorCommandResult::Ok());
+		return id;
+	}
+
+	std::string CommandJournal::Summarize(const CommandJournalEntry& entry)
+	{
+		if (entry.Status == CommandStatus::Pending)
+			return "running";
+		if (entry.Status == CommandStatus::Failed)
+		{
+			const std::string_view error = entry.Error;
+			return std::string(error.substr(0, error.find('\n')));
+		}
+		if (!entry.Warning.empty())
+			return entry.Warning;
+		// A command that replaced the edited scene with force threw away unsaved changes (kept as recovery data). The result
+		// summary is compact JSON this journal wrote, so the member reads exactly so.
+		if (entry.ResultSummary.find("\"discardedChanges\":true") != std::string::npos)
+			return "discarded changes";
+		if (!entry.UndoStep.empty())
+			return entry.UndoStep;
+		return "done";
+	}
+
 	nlohmann::json CommandJournal::Describe(const CommandJournalEntry& entry)
 	{
 		nlohmann::json entities = nlohmann::json::array();
@@ -626,7 +657,8 @@ namespace Strata
 			{ "source", CommandSourceToString(entry.Source) },
 			{ "command", entry.Command },
 			{ "kind", EditorCommandKindToString(entry.Kind) },
-			{ "mutating", entry.Kind == EditorCommandKind::Edit },
+			{ "summary", Summarize(entry) },
+			{ "mutating", entry.Kind == EditorCommandKind::Edit || entry.RunningCopy },
 			{ "parameters", entry.Parameters },
 			{ "status", CommandStatusToString(entry.Status) },
 			{ "durationMs", entry.DurationMs },
@@ -640,6 +672,8 @@ namespace Strata
 			description["parametersTruncated"] = true;
 		if (entry.Playing)
 			description["playing"] = true;
+		if (entry.Event)
+			description["event"] = true;
 		if (entry.RunningCopy)
 			description["runningCopy"] = true;
 		if (entry.Status == CommandStatus::Failed)
@@ -676,11 +710,18 @@ namespace Strata
 				since + 1, m_Entries.front().Id - 1));
 		}
 
-		// The commands of the session that succeeded, at the top level (what commands ran inside them repeats with them).
+		// The commands of the session that succeeded, at the top level (what commands ran inside them repeats with them). A
+		// batch (editor.batch) repeats as its steps, which ran with the values its references stood for: never the batch and
+		// its steps both.
 		std::vector<const CommandJournalEntry*> entries;
+		std::unordered_set<uint64_t> batches;
 		for (const CommandJournalEntry& entry : m_Entries)
 		{
-			if (entry.Id > since && entry.Parent == 0 && entry.Status == CommandStatus::Succeeded)
+			if (entry.Id <= since || entry.Status != CommandStatus::Succeeded)
+				continue;
+			if (entry.Parent == 0 && entry.Command == "editor.batch")
+				batches.insert(entry.Id);
+			else if (entry.Parent == 0 || batches.contains(entry.Parent))
 				entries.push_back(&entry);
 		}
 		std::vector<uint64_t> entryIds;

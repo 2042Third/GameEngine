@@ -1,12 +1,15 @@
 #include "Editor/CommandUtils.h"
 
 #include "Editor/EditorContext.h"
+#include "Editor/SceneEdit.h"
 
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Asset/AssetRegistration.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/StringUtils.h>
+#include <Strata/Math/Math.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -15,6 +18,7 @@
 #include <Strata/Scene/Scene.h>
 
 #include <algorithm>
+#include <cmath>
 #include <system_error>
 
 namespace Strata
@@ -147,6 +151,49 @@ namespace Strata
 			};
 		}
 
+		nlohmann::json DescribeWorldTransform(const glm::mat4& world)
+		{
+			glm::vec3 position(0.0f);
+			glm::quat rotation(1.0f, 0.0f, 0.0f, 0.0f);
+			glm::vec3 scale(1.0f);
+			Math::DecomposeTransform(world, position, rotation, scale);
+			const glm::vec3 euler = Math::QuatToEulerDegrees(rotation);
+			return {
+				{ "position", { position.x, position.y, position.z } },
+				{ "rotation", { { "euler", { euler.x, euler.y, euler.z } }, { "quaternion", { rotation.x, rotation.y, rotation.z, rotation.w } } } },
+				{ "scale", { scale.x, scale.y, scale.z } } };
+		}
+
+		nlohmann::json DescribeBounds(const AABB& bounds, bool pending)
+		{
+			if (!bounds.IsValid())
+				return nullptr;
+			const glm::vec3 size = bounds.Max - bounds.Min;
+			const glm::vec3 center = bounds.GetCenter();
+			return {
+				{ "min", { bounds.Min.x, bounds.Min.y, bounds.Min.z } },
+				{ "max", { bounds.Max.x, bounds.Max.y, bounds.Max.z } },
+				{ "size", { size.x, size.y, size.z } },
+				{ "center", { center.x, center.y, center.z } },
+				{ "pending", pending } };
+		}
+
+		std::optional<glm::vec3> ReadVec3(const nlohmann::json& value)
+		{
+			if (!value.is_array() || value.size() != 3)
+				return std::nullopt;
+			glm::vec3 result(0.0f);
+			for (int axis = 0; axis < 3; axis++)
+			{
+				if (!value[axis].is_number())
+					return std::nullopt;
+				result[axis] = value[axis].get<float>();
+				if (!std::isfinite(result[axis]))
+					return std::nullopt;
+			}
+			return result;
+		}
+
 		nlohmann::json DescribeProject(const EditorContext& context)
 		{
 			const Ref<Project>& project = context.GetProject();
@@ -156,6 +203,7 @@ namespace Strata
 			return {
 				{ "open", true },
 				{ "name", config.Name },
+				{ "path", FileSystem::ToUTF8(project->GetProjectFile()) },
 				{ "directory", FileSystem::ToUTF8(project->GetProjectDirectory()) },
 				{ "assetDirectory", FileSystem::ToUTF8(project->GetAssetDirectory()) },
 				{ "startScene", config.StartScene.IsValid() ? UUIDToJson(config.StartScene) : nlohmann::json(nullptr) },
@@ -219,6 +267,110 @@ namespace Strata
 			const char* save = context.GetSceneHandle().IsValid() ? "scene.save" : "scene.saveAs, as the scene was never saved";
 			return EditorCommandResult::Fail(fmt::format("The scene '{}' has unsaved changes, which {} would discard: save them first ({}) or pass "
 				"force: true to discard them (they are kept as recovery data, scene.recoveryStatus)", scene, action, save));
+		}
+
+		EditorCommandHandler AfterSaves(EditorCommandHandler handler)
+		{
+			return [handler = std::move(handler)](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
+			{
+				if (!context.HasSavesInFlight())
+					return handler(context, parameters);
+				return EditorCommandResult::Defer([handler, parameters = nlohmann::json(parameters)](EditorContext& context) -> std::optional<EditorCommandResult>
+				{
+					if (context.HasSavesInFlight())
+						return std::nullopt;
+					return handler(context, parameters);
+				});
+			};
+		}
+
+		nlohmann::json DescribePlayState(const EditorContext& context)
+		{
+			return { { "state", SceneStateToString(context.GetSceneState()) }, { "paused", context.IsPaused() } };
+		}
+
+		nlohmann::json DescribeRunningScene(const EditorContext& context)
+		{
+			if (!context.IsPlaying())
+				return nullptr;
+			const EditorAssetManager* assets = context.GetAssetManager();
+			auto metadataOf = [assets](AssetHandle asset)
+			{
+				return asset.IsValid() && assets ? assets->GetMetadata(asset) : std::nullopt;
+			};
+			Scene& scene = *context.GetActiveScene();
+			const AssetHandle asset = context.GetRuntimeSceneAsset();
+			const std::optional<AssetMetadata> metadata = metadataOf(asset);
+			nlohmann::json subScenes = nlohmann::json::array();
+			for (const SubSceneStatus& subScene : scene.GetSubScenes())
+			{
+				const std::optional<AssetMetadata> subSceneMetadata = metadataOf(subScene.Scene);
+				subScenes.push_back({
+					{ "id", subScene.ID },
+					{ "scene", subScene.Scene.IsValid() ? UUIDToJson(subScene.Scene) : nlohmann::json(nullptr) },
+					{ "name", subSceneMetadata ? nlohmann::json(subSceneMetadata->Name) : nlohmann::json(nullptr) },
+					{ "state", SubSceneStateToString(subScene.State) },
+					{ "entities", subScene.CreatedEntities } });
+			}
+			nlohmann::json switching = nullptr;
+			if (context.IsRuntimeSceneLoading())
+				switching = { { "scene", UUIDToJson(context.GetRuntimeSceneLoadTarget()) }, { "progress", context.GetRuntimeSceneLoadProgress() } };
+			return {
+				{ "scene", asset.IsValid() ? UUIDToJson(asset) : nlohmann::json(nullptr) },
+				{ "name", scene.GetName() },
+				{ "path", metadata ? nlohmann::json(metadata->Path) : nlohmann::json(nullptr) },
+				{ "entityCount", scene.GetEntityCount() },
+				{ "subScenes", std::move(subScenes) },
+				{ "switching", std::move(switching) } };
+		}
+
+		nlohmann::json DescribeSaves(const EditorContext& context)
+		{
+			nlohmann::json saves = nlohmann::json::array();
+			for (const DocumentSaveStatus& status : context.GetSaveStatuses())
+			{
+				saves.push_back({ { "saveId", status.ID }, { "label", status.Label }, { "documents", status.Documents },
+					{ "state", DocumentSaveStateToString(status.State) }, { "progress", status.Progress } });
+			}
+			return saves;
+		}
+
+		nlohmann::json DescribeAssetScan(const EditorContext& context)
+		{
+			const std::optional<AssetScanProgress> scan = context.GetAssetScanProgress();
+			if (!scan)
+				return nullptr;
+			return { { "phase", AssetScanPhaseToString(scan->Phase) }, { "done", scan->Done }, { "total", scan->Total } };
+		}
+
+		std::string GetRunningCopyWarning(const EditorContext& context)
+		{
+			return fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
+				SceneStateToString(context.GetSceneState()));
+		}
+
+		EditorCommandResult FinishEdit(EditorContext& context, SceneEditTransaction& transaction, nlohmann::json value)
+		{
+			if (std::string error; !context.CheckSceneEditable(&error))
+			{
+				transaction.Rollback();
+				return EditorCommandResult::Fail(std::move(error));
+			}
+			context.CommitEdit(transaction);
+			if (!context.IsPlaying())
+				return EditorCommandResult::Ok(std::move(value));
+			if (!value.is_object())
+				value = nlohmann::json::object();
+			value["warning"] = GetRunningCopyWarning(context);
+			EditorCommandResult result = EditorCommandResult::Ok(std::move(value));
+			result.RunningCopy = true;
+			return result;
+		}
+
+		EditorCommandResult RollBackEdit(SceneEditTransaction& transaction, std::string error, EditorCommandError kind)
+		{
+			transaction.Rollback();
+			return EditorCommandResult::Fail(std::move(error), kind);
 		}
 
 		std::optional<std::filesystem::path> ResolveOutputPath(const EditorContext& context, std::string_view path, std::string_view extension, bool overwrite,

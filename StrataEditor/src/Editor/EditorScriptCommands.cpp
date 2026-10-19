@@ -222,15 +222,13 @@ namespace Strata
 			return { { "class", entry.ClassName }, { "live", live }, { "known", info != nullptr }, { "fields", std::move(fields) } };
 		}
 
-		// Ends a script edit: while playing the change applied to the running copy, which play.stop discards.
+		// Ends a script edit: while playing the change applied to the running copy, which play.stop discards. Changing the live
+		// scripts is what such an edit is for (trying a value in the running game), so no warning says so; the journal marks it
+		// an edit of the running copy, which replays leave out.
 		EditorCommandResult FinishScriptEdit(EditorContext& context, nlohmann::json value)
 		{
-			if (!context.IsPlaying())
-				return EditorCommandResult::Ok(std::move(value));
-			value["warning"] = fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
-				SceneStateToString(context.GetSceneState()));
 			EditorCommandResult result = EditorCommandResult::Ok(std::move(value));
-			result.RunningCopy = true;
+			result.RunningCopy = context.IsPlaying();
 			return result;
 		}
 
@@ -313,7 +311,7 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "entity", UUIDToJson(entity.GetUUID()) }, { "scripts", std::move(scripts) } });
 			}, EditorCommandKind::Query });
 
-		registry.Register({ "script.build",
+		registry.Register(MayDefer({ "script.build",
 			"Builds the project's scripts (the CMakeLists.txt in its Scripts directory) with the engine's compiler and configuration, then loads "
 			"the module, or hot-reloads it when it changed (playing scenes keep their script state and get OnReload). One build runs at a time; "
 			"a second request fails while one runs. Fails with the first compiler errors; the result and script.status list all diagnostics "
@@ -352,7 +350,7 @@ namespace Strata
 					failed.Announced = true;
 					return failed;
 				});
-			} });
+			} }));
 
 		registry.Register({ "script.reload",
 			"Loads the script module's file again (hot reload: playing scenes keep their script state and get OnReload), or the project's built "

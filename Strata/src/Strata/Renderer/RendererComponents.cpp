@@ -6,8 +6,60 @@
 #include "Strata/Renderer/RendererRegistration.h"
 #include "Strata/Scene/Components.h"
 
+#include <string>
+
 namespace Strata
 {
+
+	namespace
+	{
+
+		// Inactive reasons (PropertyInfo::InactiveReason) of the sky's and post-processing's properties, each following the code
+		// that reads the property in SceneRenderer: the sky and its environment, the ambient light, automatic exposure, bloom
+		// and ambient occlusion.
+		template<typename T>
+		void SetInactiveReasons(std::initializer_list<const char*> properties, std::string (*reason)(const T&))
+		{
+			for (const char* property : properties)
+				ComponentRegistry::SetInactiveReason<T>(property, reason);
+		}
+
+		std::string ProceduralSkyOnly(const SkyLightComponent& sky)
+		{
+			return sky.Source == SkyLightSource::Procedural ? std::string() : "Only the procedural sky uses it (Source is Environment Map)";
+		}
+
+		std::string EnvironmentMapOnly(const SkyLightComponent& sky)
+		{
+			return sky.Source == SkyLightSource::EnvironmentMap ? std::string() : "Only an environment map uses it (Source is Procedural)";
+		}
+
+		// The renderer lights with the environment once there is one: the procedural sky, or a map that is set.
+		std::string WithoutEnvironmentOnly(const SkyLightComponent& sky)
+		{
+			if (sky.Source == SkyLightSource::Procedural)
+				return "The procedural sky lights the scene: the ambient color applies only without an environment";
+			if (sky.EnvironmentMap.IsValid())
+				return "The environment map lights the scene: the ambient color applies only without one";
+			return {};
+		}
+
+		std::string WithAutoExposure(const PostProcessComponent& post)
+		{
+			return post.AutoExposure ? std::string() : "Auto Exposure is off";
+		}
+
+		std::string WithBloom(const PostProcessComponent& post)
+		{
+			return post.Bloom ? std::string() : "Bloom is off";
+		}
+
+		std::string WithAmbientOcclusion(const PostProcessComponent& post)
+		{
+			return post.AmbientOcclusion ? std::string() : "Ambient Occlusion is off";
+		}
+
+	}
 
 	void RegisterRendererComponents()
 	{
@@ -66,6 +118,9 @@ namespace Strata
 			.Property("SunSize", &SkyLightComponent::SunSize, WithTooltip(Range(0.0f, 20.0f, 0.01f), "Procedural sky: angular diameter of the sun's disk in degrees (0 hides it)"))
 			.Property("SunIntensity", &SkyLightComponent::SunIntensity,
 				WithTooltip(Range(0.0f, 60000.0f, 0.1f), "Procedural sky: radiance of the sun's disk, times the directional light's color"));
+		SetInactiveReasons<SkyLightComponent>({ "EnvironmentMap", "Rotation" }, &EnvironmentMapOnly);
+		SetInactiveReasons<SkyLightComponent>({ "ZenithColor", "HorizonColor", "GroundColor", "SunSize", "SunIntensity" }, &ProceduralSkyOnly);
+		SetInactiveReasons<SkyLightComponent>({ "AmbientColor" }, &WithoutEnvironmentOnly);
 
 		ComponentRegistry::Register<PostProcessComponent>("PostProcess")
 			.DisplayName("Post Process")
@@ -91,6 +146,10 @@ namespace Strata
 			.Property("Vignette", &PostProcessComponent::Vignette, Slider(0.0f, 1.0f))
 			.Property("Saturation", &PostProcessComponent::Saturation, Slider(0.0f, 2.0f))
 			.Property("Contrast", &PostProcessComponent::Contrast, WithTooltip(Slider(0.5f, 2.0f), "Around middle gray; 1 = unchanged"));
+		// Exposure is the compensation SceneRenderer applies with automatic exposure too: always active.
+		SetInactiveReasons<PostProcessComponent>({ "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed" }, &WithAutoExposure);
+		SetInactiveReasons<PostProcessComponent>({ "BloomIntensity", "BloomThreshold" }, &WithBloom);
+		SetInactiveReasons<PostProcessComponent>({ "AmbientOcclusionRadius", "AmbientOcclusionIntensity" }, &WithAmbientOcclusion);
 
 		ComponentRegistry::Register<TextComponent>("Text")
 			.Category("UI")

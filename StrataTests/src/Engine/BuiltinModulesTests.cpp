@@ -136,7 +136,9 @@ TEST_SUITE("Engine.Modules")
 		CHECK_FALSE(result.TimedOut);
 		CHECK(result.ExitCode == 0);
 		CHECK(result.Output.find("registered: TestVehicle") != std::string::npos);
+		CHECK(result.Output.find("requirements: TestVehicle") != std::string::npos);
 		CHECK(result.Output.find("reloaded: Speed 12.50, Label Rover One") != std::string::npos);
+		CHECK(result.Output.find("snapshot keeps: TestCache") != std::string::npos);
 		// Its extra data's references are remapped in copies, compared with prefabs and scanned (ComponentInfo::ExtraReferences).
 		CHECK(result.Output.find("extra references: remapped, compared, scanned") != std::string::npos);
 		// The renderer draws its gizmo with the colliders (ComponentInfo::Gizmo).
@@ -194,9 +196,9 @@ TEST_SUITE("Engine.Modules")
 		INFO("Output: ", result.Output);
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
-		// The loaders and systems of the modules the build has: 11 and four in a full build.
+		// The loaders and systems of the modules the build has: 11 and five in a full build.
 		const int loaders = 7 + (ST_WITH_AUDIO ? 1 : 0) + (ST_WITH_ANIMATION ? 3 : 0);
-		std::string systems = " Scripting";
+		std::string systems = " UI Scripting";
 		systems += ST_WITH_ANIMATION ? " Animation" : "";
 		systems += ST_WITH_PHYSICS ? " Physics" : "";
 		systems += ST_WITH_AUDIO ? " Audio" : "";
@@ -218,6 +220,7 @@ TEST_SUITE("Engine.Modules")
 		expected.push_back("Animation");
 #endif
 		expected.push_back("Scripting");
+		expected.push_back("GameUI");
 		CHECK(Engine::GetBuiltinModuleNames() == expected);
 		CHECK(Engine::GetRegisteredModules() == expected);
 	}
@@ -232,9 +235,9 @@ TEST_SUITE("Engine.Modules")
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
 		CHECK(result.ExitCode == 0);
-		CHECK(result.Output.find("modules: Scene Renderer Audio Animation Scripting\n") != std::string::npos);
+		CHECK(result.Output.find("modules: Scene Renderer Audio Animation Scripting GameUI\n") != std::string::npos);
 		// The others' soft constraints order them as in a full engine.
-		CHECK(result.Output.find("systems: Scripting Animation Audio\n") != std::string::npos);
+		CHECK(result.Output.find("systems: UI Scripting Animation Audio\n") != std::string::npos);
 		// The feature scene's physics components stay unknown components and save back unchanged.
 		const size_t unknown = result.Output.find("unknown components: ");
 		REQUIRE(unknown != std::string::npos);
@@ -272,8 +275,49 @@ TEST_SUITE("Engine.Modules")
 		CHECK(result.Output.find("the Scene module cannot be excluded (every engine has it); it is registered") != std::string::npos);
 		CHECK(result.Output.find("the Renderer module cannot be excluded (every engine has it); it is registered") != std::string::npos);
 		CHECK(result.Output.find("'Teleportation' is no engine module of this build and cannot be excluded") != std::string::npos);
-		CHECK(result.Output.find("modules: Scene Renderer Physics Animation Scripting\n") != std::string::npos);
-		CHECK(result.Output.find("systems: Scripting Animation Physics\n") != std::string::npos);
+		CHECK(result.Output.find("modules: Scene Renderer Physics Animation Scripting GameUI\n") != std::string::npos);
+		CHECK(result.Output.find("systems: UI Scripting Animation Physics\n") != std::string::npos);
+	}
+#endif
+
+#if ST_TESTS_HAVE_EVERY_MODULE
+	TEST_CASE("Without the scripting module the game UI module registers and orders its system")
+	{
+		// The UI system runs before the scripts only when the engine has them (BeforeIfPresent): the game UI works without.
+		const std::filesystem::path scene = FileSystem::FromUTF8(STRATA_FEATURE_TEST_DIR) / "Assets" / "Scenes" / "FeatureSub.stscene";
+		const Process::RunResult result = RunHelper({ "--strata-test-helper=register-without", "Scripting", FileSystem::ToUTF8(scene) });
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
+		CHECK(result.Output.find("modules: Scene Renderer Physics Audio Animation GameUI\n") != std::string::npos);
+		CHECK(result.Output.find("systems: Animation Physics Audio UI\n") != std::string::npos);
+	}
+#endif
+
+#if ST_TESTS_HAVE_EVERY_MODULE
+	TEST_CASE("Without the game UI module the others register and the UI components stay unknown, saved back unchanged")
+	{
+		// The feature scene's canvases and widgets, with their entity references and colors, in a build without GameUI.
+		const std::filesystem::path scene = FileSystem::FromUTF8(STRATA_FEATURE_TEST_DIR) / "Assets" / "Scenes" / "Feature.stscene";
+		const Process::RunResult result = RunHelper({ "--strata-test-helper=register-without", "GameUI", FileSystem::ToUTF8(scene) });
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
+		CHECK(result.Output.find("modules: Scene Renderer Physics Audio Animation Scripting\n") != std::string::npos);
+		CHECK(result.Output.find("systems: Scripting Animation Physics Audio\n") != std::string::npos);
+		const size_t unknown = result.Output.find("unknown components: ");
+		REQUIRE(unknown != std::string::npos);
+		const std::string names = result.Output.substr(unknown, result.Output.find('\n', unknown) - unknown);
+		CHECK(names == "unknown components: UIButton UICanvas UIImage UIInputField UILayout UIMask UIRect UISelectable UISlider UIText UIToggle");
+		const size_t saved = result.Output.find("saved unchanged: ");
+		REQUIRE(saved != std::string::npos);
+		size_t unchanged = 0;
+		size_t total = 0;
+		REQUIRE(std::sscanf(result.Output.c_str() + saved, "saved unchanged: %zu of %zu", &unchanged, &total) == 2);
+		CHECK(total >= 28); // Every UI entity of the scene at least
+		CHECK(unchanged == total);
 	}
 #endif
 

@@ -76,6 +76,7 @@ namespace Strata
 
 		// Null actions are left out.
 		void Add(Scope<EditorAction> action);
+		bool IsEmpty() const { return m_Actions.empty(); }
 
 		const std::string& GetName() const override { return m_Name; }
 		bool Execute(std::string* outError) override;
@@ -150,10 +151,45 @@ namespace Strata
 
 		// The next recorded action starts a new undo step even if it could merge (e.g. the mouse was released).
 		void BreakMerge() { m_MergeBroken = true; }
+
+		// Collects what is recorded from now on (Execute, Record) into one step, an EditorActionGroup named `name`, which
+		// EndGroup records: editor.batch makes its steps one undo step. The collected actions are applied as they come (the
+		// observer hears each), never merge with steps before them, and do not count as records (GetRecordCount) until the
+		// group is recorded. Undo, redo and GoTo are refused meanwhile, and Clear empties the group with the history. Groups do
+		// not nest: false when one is open.
+		bool BeginGroup(std::string name);
+		// Records the open group as one step (nothing when it collected nothing). False without an open group, or when it
+		// recorded nothing.
+		bool EndGroup();
+		// Reverts what the open group collected (latest first) and records nothing: an atomic batch whose step failed. False,
+		// with the reason, when the actions cannot be reverted (they then stay applied, recorded as the group's step).
+		bool CancelGroup(std::string* outError = nullptr);
+		bool IsGrouping() const { return m_Group != nullptr; }
 		// Save point: IsModified reports whether the applied actions differ from those at the last MarkSaved by an action
 		// that changes the scene (EditorAction::ChangesScene). Costs the number of actions between the two positions.
 		void MarkSaved();
 		bool IsModified() const;
+
+		// A state of the history, as a save that writes the scene in the background took it (GetSavePoint): the state after
+		// the action with Serial was applied (0: before every action the history holds), which stays the same state for as
+		// long as the history holds that action, wherever later edits, undos and redos move the history. The edits that
+		// continue an action (a drag merging frames) change its state, so whoever takes a point breaks merging first
+		// (BreakMerge), and the next edit starts a step of its own.
+		struct SavePoint
+		{
+			size_t Position = 0;        // Applied actions when it was taken
+			uint64_t Serial = 0;        // Of the latest of them (0: none)
+			uint64_t Generation = 0;    // Of the history (Clear starts another)
+			uint64_t SceneTrims = 0;    // Scene changes trimmed from the front of the history before it was taken
+
+			bool operator==(const SavePoint& other) const = default;
+		};
+		SavePoint GetSavePoint() const;
+		// Marks a point saved once what was saved there is on disk (a background save finished): IsModified then compares with
+		// it. When the history no longer holds it (undone past and edited since, trimmed, dropped by a failed redo), no point of
+		// the history is the saved one and the scene stays modified. A point of a history that was cleared since (another
+		// scene) marks nothing.
+		void MarkSaved(const SavePoint& point);
 
 		void Clear();
 
@@ -180,7 +216,11 @@ namespace Strata
 		uint64_t m_RecordCount = 0;
 		uint64_t m_LastRecordedSerial = 0;
 		uint64_t m_Version = 0;
+		uint64_t m_Generation = 0;  // Changes with Clear (SavePoint)
+		uint64_t m_SceneTrims = 0;  // Steps that change the scene trimmed from the front (SavePoint)
 		UndoStackObserver* m_Observer = nullptr;
+		Scope<EditorActionGroup> m_Group; // The group BeginGroup opened, until EndGroup or CancelGroup
+		std::string m_GroupName;
 	};
 
 }

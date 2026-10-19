@@ -183,14 +183,18 @@ TEST_SUITE("Editor.Animation")
 		const Ref<Scene> scene = harness.Context.GetEditScene();
 		const Entity rig = scene->GetEntityByUUID(*UUIDFromJson(nlohmann::json(c_ArmRig)));
 		REQUIRE(rig);
-		CHECK(scene->GetService<ISkinningPoses>() == nullptr);
-
-		const nlohmann::json posed = harness.Run("animation.preview", { { "entity", c_ArmRig }, { "state", "Wave" }, { "time", 0.5 } });
-		CHECK(posed["posed"] == true);
+		// Until a preview asks for another pose, the animators of the edited scene stand in their skeleton's rest pose.
 		const ISkinningPoses* poses = scene->GetService<ISkinningPoses>();
 		REQUIRE(poses);
 		SkeletonPose pose;
 		REQUIRE(poses->GetPose(rig.GetHandle(), pose));
+		const uint64_t restPose = pose.Version;
+
+		const nlohmann::json posed = harness.Run("animation.preview", { { "entity", c_ArmRig }, { "state", "Wave" }, { "time", 0.5 } });
+		CHECK(posed["posed"] == true);
+		CHECK(scene->GetService<ISkinningPoses>() == poses);
+		REQUIRE(poses->GetPose(rig.GetHandle(), pose));
+		CHECK(pose.Version != restPose);
 		REQUIRE(pose.Joints.size() == 4);
 		// Half a second into the wave the elbow is bent 90 degrees: the wrist is beside it.
 		const glm::vec3 wrist = glm::vec3(pose.Joints[3][3]);
@@ -239,20 +243,23 @@ TEST_SUITE("Editor.Animation")
 		CHECK(harness.Fail("animation.preview", { { "entity", ground } }).ErrorKind == EditorCommandError::InvalidParameters);
 		CHECK(harness.Fail("animation.preview", { { "entity", c_ArmRig }, { "time", -1.0 } }).ErrorKind == EditorCommandError::InvalidParameters);
 
-		// Playing poses the running copy, not previews; stopping a preview takes its pose away.
+		// Playing poses the running copy, not previews; stopping a preview gives the animator its rest pose back.
 		harness.Run("play.start");
 		CHECK_FALSE(harness.Fail("animation.preview", { { "entity", c_ArmRig } }).Success);
 		harness.Run("play.stop");
 		harness.Run("animation.preview", { { "entity", c_ArmRig }, { "state", "Wave" }, { "time", 0.25 } });
-		CHECK(poses->GetPose(rig.GetHandle(), pose));
+		REQUIRE(poses->GetPose(rig.GetHandle(), pose));
+		CHECK(pose.Version != restPose);
 		harness.Run("animation.preview", { { "stop", true } });
-		CHECK_FALSE(poses->GetPose(rig.GetHandle(), pose));
+		REQUIRE(poses->GetPose(rig.GetHandle(), pose));
+		CHECK(pose.Version == restPose);
 		renderScene.Sync(nullptr);
 		CHECK(glm::vec3(renderScene.GetWorldTransform(markerProxy)[3]) == glm::vec3(scene->GetWorldTransform(tipMarker)[3]));
 		CHECK_MESSAGE(renderScene.Validate(&validation), validation);
 
-		// Another scene starts without previews.
+		// Another scene starts without previews (its animators show their rest poses).
 		harness.Run("scene.new");
-		CHECK(harness.Context.FindAnimationPreview() == nullptr);
+		REQUIRE(harness.Context.FindAnimationPreview() != nullptr);
+		CHECK(harness.Context.FindAnimationPreview()->GetCount() == 0);
 	}
 }

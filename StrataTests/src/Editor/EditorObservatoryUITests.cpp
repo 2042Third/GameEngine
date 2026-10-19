@@ -198,10 +198,14 @@ TEST_SUITE("Editor.UI")
 		nlohmann::json command;
 		editor.FrameWith([&]() { command = editor.Run("asset.stats"); });
 		REQUIRE(panel->GetStats());
-		// asset.stats adds the renderer's geometry pool (null here: no renderer) to the asset manager's statistics.
+		// asset.stats adds the renderer's geometry pool (null here: no renderer) and the imports' memory estimates of the
+		// project's manager (EditorAssetManager), which the panel's statistics, those of any asset manager, do not hold.
+		REQUIRE(command.contains("importMemoryMB"));
+		nlohmann::json managerStats = command;
+		managerStats.erase("importMemoryMB");
 		nlohmann::json expected = CommandUtils::DescribeAssetStats(*panel->GetStats());
 		expected["geometryPool"] = CommandUtils::DescribeGeometryPool();
-		CHECK(expected == command);
+		CHECK(expected == managerStats);
 		CHECK(command["registered"].get<uint32_t>() > 10);
 
 		// Nothing was uploaded (no renderer): the sparkline says so instead of showing an empty box.

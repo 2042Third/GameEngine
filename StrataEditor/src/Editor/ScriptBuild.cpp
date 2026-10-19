@@ -1261,6 +1261,12 @@ namespace Strata
 		Finish(false, "The script build was cancelled", true);
 	}
 
+	size_t CountScriptBuildErrors(const ScriptBuildResult& result)
+	{
+		return static_cast<size_t>(std::count_if(result.Diagnostics.begin(), result.Diagnostics.end(),
+			[](const ScriptDiagnostic& diagnostic) { return diagnostic.Severity != "warning"; }));
+	}
+
 	void ScriptBuilder::Finish(bool success, std::string error, bool cancelled, std::optional<ScriptDiagnostic> diagnostic)
 	{
 		ScriptBuildResult result;
@@ -1288,7 +1294,18 @@ namespace Strata
 		{
 			// The first errors make the message actionable on its own; the full list is in Diagnostics.
 			result.Error = DescribeScriptBuildFailure(error, result.Diagnostics, m_Log);
-			ST_ERROR("Script build {} failed: {}", result.ID, result.Error);
+			const uint64_t before = Log::GetBuffer().GetLatestSequence();
+			const std::string message = fmt::format("Script build {} failed: {}", result.ID, result.Error);
+			ST_ERROR("{}", message);
+			// The entry just logged (other threads may log meanwhile): found by its text among the ones after it.
+			for (const LogEntry& entry : Log::GetBuffer().GetEntries(before))
+			{
+				if (entry.Level == LogLevel::Error && entry.Message == message)
+				{
+					result.LoggedError = entry.Sequence;
+					break;
+				}
+			}
 		}
 		else
 		{

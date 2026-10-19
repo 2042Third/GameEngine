@@ -3,6 +3,7 @@
 #include "Strata/Core/Base.h"
 #include "Strata/Core/ErrorThrottle.h"
 #include "Strata/Renderer/FontAtlas.h"
+#include "Strata/Renderer/SceneOverlay.h"
 #include "Strata/Renderer/TextLayout.h"
 
 #include <glm/glm.hpp>
@@ -16,6 +17,7 @@ namespace Strata
 {
 
 	class Font;
+	class FontAtlasCache;
 	class Scene;
 
 	struct TextRenderStats
@@ -29,20 +31,22 @@ namespace Strata
 		uint32_t RasterizedGlyphs = 0; // Glyphs added to atlases this frame
 	};
 
-	// Draws the TextComponents of a scene with signed distance field glyph atlases (one per font, see FontAtlas):
-	// screen-space text as a HUD over everything, world-space text in the entity's XY plane, hidden behind scene
-	// geometry. Text without a font, or whose font is still loading, uses the engine's default font. SceneRenderer owns
-	// one; main thread only.
+	// Draws the TextComponents of a scene with signed distance field glyph atlases (one per font, see FontAtlas, from the
+	// renderer's FontAtlasCache): screen-space text as a HUD over everything, world-space text in the entity's XY plane,
+	// hidden behind scene geometry. Text without a font, or whose font is still loading, uses the engine's default font.
+	// SceneRenderer owns one; main thread only.
 	class TextRenderer
 	{
 	public:
-		// Glyph rasterization per frame, shared by all fonts, so new text never stalls a frame for long (the cost allows
+		// Glyph rasterization per frame, shared by all fonts and by every pass of a renderer that draws glyphs (the text first,
+		// then the game UI with what it left; FontAtlasCache), so new text never stalls a frame for long (the cost allows
 		// about 2 ms of rasterization in an optimized build on a desktop CPU: about ten Latin letters or one emoji).
 		// Glyphs over it are drawn on the following frames (see TextRenderStats::PendingGlyphs).
 		static constexpr GlyphRasterBudget c_FrameRasterBudget = { 32, 512 * 1024 };
 
-		// frameConstants: the frame constant buffer of the owning SceneRenderer (view-projection of world-space text).
-		TextRenderer(const std::string& debugName, nvrhi::IBuffer* frameConstants);
+		// frameConstants: the frame constant buffer of the owning SceneRenderer (view-projection of world-space text);
+		// atlases: the owning SceneRenderer's, started (FontAtlasCache::BeginFrame) before each Prepare.
+		TextRenderer(const std::string& debugName, nvrhi::IBuffer* frameConstants, FontAtlasCache& atlases);
 		~TextRenderer();
 
 		TextRenderer(const TextRenderer&) = delete;
@@ -50,10 +54,11 @@ namespace Strata
 
 		// Lays out the scene's active text and uploads glyphs and vertices with the command list. Without drawScreenSpace
 		// only world-space text is prepared (screen-space text is counted as hidden, and its glyphs are not rasterized).
-		// World-space text is placed relative to `cameraPosition` (the scene shaders' camera-relative space). Returns false
-		// when there is nothing to draw (or the upload failed, which is logged).
+		// World-space text is placed relative to `cameraPosition` (the scene shaders' camera-relative space), screen-space text
+		// on the screen `screenView` puts in the image (the whole image by default). Returns false when there is nothing to
+		// draw (or the upload failed, which is logged).
 		bool Prepare(Scene& scene, const glm::uvec2& viewportSize, bool drawScreenSpace, const glm::vec3& cameraPosition, nvrhi::ICommandList* commandList,
-			TextRenderStats& outStats);
+			TextRenderStats& outStats, const SceneScreenView& screenView = {});
 		// Draws the prepared world-space or screen-space text into a framebuffer whose depth attachment holds the scene
 		// depth (world-space text is hidden behind it).
 		void Draw(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer, bool screenSpace);
@@ -65,9 +70,10 @@ namespace Strata
 			uint32_t Color;     // RGBA8, display colors
 		};
 
-		struct CachedAtlas
+		// The bindings of an atlas the frame draws with, kept while frames draw with it.
+		struct AtlasBinding
 		{
-			Scope<FontAtlas> Atlas;
+			FontAtlas* Atlas = nullptr;
 			nvrhi::BindingSetHandle BindingSet;
 			nvrhi::ITexture* BoundTexture = nullptr;
 			bool Used = false;
@@ -76,13 +82,13 @@ namespace Strata
 		// A run of vertices drawn with one atlas.
 		struct DrawRange
 		{
-			CachedAtlas* Atlas = nullptr;
+			AtlasBinding* Binding = nullptr;
 			uint32_t FirstVertex = 0;
 			uint32_t VertexCount = 0;
 		};
 
-		CachedAtlas* GetAtlas(const Ref<Font>& font);
-		void AppendQuads(CachedAtlas& atlas, const glm::mat4& transform, const glm::vec4& color, bool screenSpace);
+		AtlasBinding& GetBinding(FontAtlas& atlas);
+		void AppendQuads(AtlasBinding& binding, const glm::mat4& transform, const glm::vec4& color, bool screenSpace);
 		nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo, bool screenSpace);
 	private:
 		std::string m_DebugName;
@@ -97,7 +103,9 @@ namespace Strata
 		nvrhi::BufferHandle m_VertexBuffer;
 		std::vector<std::pair<nvrhi::FramebufferInfo, std::pair<nvrhi::GraphicsPipelineHandle, nvrhi::GraphicsPipelineHandle>>> m_Pipelines;
 
-		std::unordered_map<const Font*, CachedAtlas> m_Atlases;
+		FontAtlasCache& m_Atlases;
+		// By atlas identity (FontAtlas::GetId): an atlas the cache dropped is never confused with a later one at its address.
+		std::unordered_map<uint64_t, AtlasBinding> m_Bindings;
 		TextLayout m_Layout; // Scratch, kept to reuse its allocation
 		std::vector<TextVertex> m_Vertices;
 		std::vector<DrawRange> m_WorldRanges;

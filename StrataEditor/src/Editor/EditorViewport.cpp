@@ -40,13 +40,17 @@ namespace Strata
 			{ "ShowStats", ShowStats },
 			{ "PreviewLighting", PreviewLighting },
 			{ "ShowGameUI", ShowGameUI },
+			{ "CanvasMode", CanvasMode },
 			{ "Gizmo", GizmoOperationToString(Gizmo) },
 			{ "Space", GizmoSpaceToString(Space) },
 			{ "Snap", Snap },
 			{ "TranslateSnap", TranslateSnap },
 			{ "RotateSnap", RotateSnap },
 			{ "ScaleSnap", ScaleSnap },
-			{ "DebugView", ViewportDebugViewToString(DebugView) }
+			{ "DebugView", ViewportDebugViewToString(DebugView) },
+			{ "GameView", { { "Mode", GameViewModeToString(GameView.Mode) }, { "Width", GameView.Width }, { "Height", GameView.Height } } },
+			{ "PilotGameCamera", PilotGameCamera },
+			{ "EditPose", AnimationEditPoseToString(EditPose) }
 		};
 	}
 
@@ -65,7 +69,7 @@ namespace Strata
 		for (const auto& [key, flag] : { std::pair<const char*, bool*> { "ShowGrid", &result.ShowGrid }, { "ShowSelectionOutline", &result.ShowSelectionOutline },
 			{ "ShowSceneGizmos", &result.ShowSceneGizmos }, { "AllColliders", &result.AllColliders }, { "ShowStats", &result.ShowStats },
 			{ "PreviewLighting", &result.PreviewLighting },
-			{ "ShowGameUI", &result.ShowGameUI }, { "Snap", &result.Snap } })
+			{ "ShowGameUI", &result.ShowGameUI }, { "CanvasMode", &result.CanvasMode }, { "Snap", &result.Snap }, { "PilotGameCamera", &result.PilotGameCamera } })
 		{
 			if (const auto it = json.find(key); it != json.end())
 			{
@@ -95,6 +99,39 @@ namespace Strata
 				return fail("'DebugView' must be \"none\", \"streaming\", \"lod\" or \"mip\"");
 			result.DebugView = *view;
 		}
+		if (const auto it = json.find("GameView"); it != json.end())
+		{
+			if (!it->is_object())
+				return fail("'GameView' must be an object {Mode, Width, Height}");
+			if (const auto mode = it->find("Mode"); mode != it->end())
+			{
+				const std::optional<GameViewMode> parsed = mode->is_string() ? GameViewModeFromString(mode->get<std::string>()) : std::nullopt;
+				if (!parsed)
+					return fail("'GameView.Mode' must be \"free\", \"16:9\", \"16:10\", \"4:3\", \"21:9\", \"1920x1080\", \"1280x720\", \"custom\" or \"game\"");
+				result.GameView.Mode = *parsed;
+			}
+			for (const auto& [key, value] : { std::pair<const char*, uint32_t*> { "Width", &result.GameView.Width }, { "Height", &result.GameView.Height } })
+			{
+				if (const auto size = it->find(key); size != it->end())
+				{
+					if (!size->is_number_integer() || size->get<int64_t>() < GameViewSettings::c_MinSize || size->get<int64_t>() > GameViewSettings::c_MaxSize)
+						return fail(fmt::format("'GameView.{}' must be an integer from {} to {}", key, GameViewSettings::c_MinSize, GameViewSettings::c_MaxSize));
+					*value = static_cast<uint32_t>(size->get<int64_t>());
+				}
+			}
+			for (const auto& [key, unused] : it->items())
+			{
+				if (key != "Mode" && key != "Width" && key != "Height")
+					return fail(fmt::format("'GameView' has no '{}' (Mode, Width, Height)", key));
+			}
+		}
+		if (const auto it = json.find("EditPose"); it != json.end())
+		{
+			const std::optional<AnimationEditPose> pose = it->is_string() ? AnimationEditPoseFromString(it->get<std::string>()) : std::nullopt;
+			if (!pose)
+				return fail("'EditPose' must be \"rest\" or \"clipStart\"");
+			result.EditPose = *pose;
+		}
 		for (const auto& [key, value, maximum] : { std::tuple<const char*, float*, float> { "TranslateSnap", &result.TranslateSnap, c_MaxTranslateSnap },
 			{ "RotateSnap", &result.RotateSnap, c_MaxRotateSnap }, { "ScaleSnap", &result.ScaleSnap, c_MaxScaleSnap } })
 		{
@@ -109,6 +146,128 @@ namespace Strata
 		}
 		*this = result;
 		return true;
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Game view
+	////////////////////////////////////////////////////////////////////////////////
+
+	namespace
+	{
+
+		constexpr std::pair<GameViewMode, const char*> c_GameViewModeNames[] = {
+			{ GameViewMode::Free, "free" },
+			{ GameViewMode::Aspect16x9, "16:9" },
+			{ GameViewMode::Aspect16x10, "16:10" },
+			{ GameViewMode::Aspect4x3, "4:3" },
+			{ GameViewMode::Aspect21x9, "21:9" },
+			{ GameViewMode::Fixed1920x1080, "1920x1080" },
+			{ GameViewMode::Fixed1280x720, "1280x720" },
+			{ GameViewMode::Custom, "custom" },
+			{ GameViewMode::GameRequest, "game" } };
+
+	}
+
+	const char* GameViewModeToString(GameViewMode mode)
+	{
+		for (const auto& [value, name] : c_GameViewModeNames)
+		{
+			if (value == mode)
+				return name;
+		}
+		return "free";
+	}
+
+	std::optional<GameViewMode> GameViewModeFromString(std::string_view text)
+	{
+		for (const auto& [value, name] : c_GameViewModeNames)
+		{
+			if (text == name)
+				return value;
+		}
+		return std::nullopt;
+	}
+
+	const char* AnimationEditPoseToString(AnimationEditPose pose)
+	{
+		return pose == AnimationEditPose::ClipStart ? "clipStart" : "rest";
+	}
+
+	std::optional<AnimationEditPose> AnimationEditPoseFromString(std::string_view text)
+	{
+		if (text == "rest")
+			return AnimationEditPose::Rest;
+		if (text == "clipStart")
+			return AnimationEditPose::ClipStart;
+		return std::nullopt;
+	}
+
+	std::optional<glm::uvec2> GetGameViewFixedSize(const GameViewSettings& settings, const std::optional<glm::uvec2>& gameRequest)
+	{
+		switch (settings.Mode)
+		{
+			case GameViewMode::Fixed1920x1080: return glm::uvec2(1920, 1080);
+			case GameViewMode::Fixed1280x720:  return glm::uvec2(1280, 720);
+			case GameViewMode::Custom:         return glm::uvec2(settings.Width, settings.Height);
+			case GameViewMode::GameRequest:
+				if (gameRequest && gameRequest->x > 0 && gameRequest->y > 0)
+					return *gameRequest;
+				return std::nullopt;
+			default:
+				return std::nullopt;
+		}
+	}
+
+	std::optional<float> GetGameViewAspectRatio(const GameViewSettings& settings, const std::optional<glm::uvec2>& gameRequest)
+	{
+		switch (settings.Mode)
+		{
+			case GameViewMode::Aspect16x9:  return 16.0f / 9.0f;
+			case GameViewMode::Aspect16x10: return 16.0f / 10.0f;
+			case GameViewMode::Aspect4x3:   return 4.0f / 3.0f;
+			case GameViewMode::Aspect21x9:  return 21.0f / 9.0f;
+			default:
+				break;
+		}
+		if (const std::optional<glm::uvec2> size = GetGameViewFixedSize(settings, gameRequest))
+			return static_cast<float>(size->x) / static_cast<float>(size->y);
+		return std::nullopt;
+	}
+
+	GameViewFrame ComputeGameViewFrame(const GameViewSettings& settings, const glm::vec2& areaSize, const glm::vec2& pixelScale,
+		const std::optional<glm::uvec2>& gameRequest)
+	{
+		GameViewFrame frame;
+		if (!(areaSize.x >= 1.0f && areaSize.y >= 1.0f) || !std::isfinite(areaSize.x) || !std::isfinite(areaSize.y))
+			return frame;
+		const std::optional<float> aspect = GetGameViewAspectRatio(settings, gameRequest);
+		if (!aspect)
+		{
+			frame.Size = areaSize;
+			ViewportImageArea area;
+			area.Size = areaSize;
+			area.PixelScale = pixelScale;
+			frame.RenderSize = area.GetPixelSize();
+			return frame;
+		}
+		// The largest rectangle of the aspect ratio inside the area, centered on whole units (bars around it).
+		glm::vec2 size(areaSize.x, areaSize.x / *aspect);
+		if (size.y > areaSize.y)
+			size = glm::vec2(areaSize.y * *aspect, areaSize.y);
+		size = glm::max(glm::floor(size), glm::vec2(1.0f));
+		frame.Size = size;
+		frame.Offset = glm::floor((areaSize - size) * 0.5f);
+		if (const std::optional<glm::uvec2> fixed = GetGameViewFixedSize(settings, gameRequest))
+		{
+			frame.RenderSize = *fixed;
+			return frame;
+		}
+		// The rectangle's pixels, its height from its width so the image keeps the aspect ratio to the pixel.
+		const glm::vec2 scale = ViewportImageArea::ChoosePixelScale(pixelScale, glm::vec2(1.0f));
+		const uint32_t width = std::max(1u, static_cast<uint32_t>(std::lround(size.x * scale.x)));
+		const uint32_t height = std::max(1u, static_cast<uint32_t>(std::lround(static_cast<float>(width) / *aspect)));
+		frame.RenderSize = glm::uvec2(width, height);
+		return frame;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -161,6 +320,13 @@ namespace Strata
 		if (!m_Renderer && Renderer::IsInitialized())
 			m_Renderer = CreateScope<ViewportRenderer>("Viewport");
 		return m_Renderer.get();
+	}
+
+	ViewportRenderer* EditorViewport::GetGameRenderer()
+	{
+		if (!m_GameRenderer && Renderer::IsInitialized())
+			m_GameRenderer = CreateScope<ViewportRenderer>("GameView");
+		return m_GameRenderer.get();
 	}
 
 	ViewportRenderer* EditorViewport::GetCaptureRenderer()

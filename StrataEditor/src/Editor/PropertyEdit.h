@@ -40,6 +40,9 @@ namespace Strata
 	};
 	// Nullopt when the entities are empty or one of them lacks the component.
 	std::optional<SharedPropertyValue> GetSharedProperty(std::span<const Entity> entities, const ComponentInfo& component, const PropertyInfo& property);
+	// Why the property has no effect on any of the entities (the first entity's PropertyInfo::InactiveReason), or "" when it
+	// has an effect on one of them: a multi-selection shows a property inactive only when it is inactive on every entity.
+	std::string GetSharedInactiveReason(std::span<const Entity> entities, const ComponentInfo& component, const PropertyInfo& property);
 
 	// Sets a property on several entities as one undoable edit (one SceneEditTransaction), merging with the previous edit of
 	// the same property of the same entities like the single-entity form. `shown` is what the widget started from: for

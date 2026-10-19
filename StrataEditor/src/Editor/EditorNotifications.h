@@ -58,6 +58,9 @@ namespace Strata
 
 		// Shows a notification (its Id and Expires are set here, its Count added to one it merges with); returns its id.
 		uint64_t Post(EditorNotification notification);
+		// Shows `notification` in the place of the one with `id` (e.g. "Building scripts" becoming "Scripts built"): it keeps
+		// that id and place, and its lifetime starts again. Posted (Post) when that one is gone. Returns the id it shows under.
+		uint64_t Replace(uint64_t id, EditorNotification notification);
 		void Dismiss(uint64_t id);
 		// The person looks at it: it stays at least `extra` from now.
 		void KeepAlive(uint64_t id, std::chrono::steady_clock::duration extra = std::chrono::seconds(2));

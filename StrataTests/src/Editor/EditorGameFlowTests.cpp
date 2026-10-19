@@ -12,6 +12,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Runtime/GameRuntime.h>
 #include <Strata/Scene/Entity.h>
+#include <Strata/Scene/CookedScene.h>
 #include <Strata/Scene/SceneSerializer.h>
 
 #include <nlohmann/json.hpp>
@@ -54,7 +55,7 @@ namespace
 
 		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{
-			EditorCommandResult result = Commands.Execute(Context, name, parameters);
+			const EditorCommandResult result = Tests::CompleteCommand(Context, Commands.Execute(Context, name, parameters));
 			INFO(std::string(name), ": ", result.Error);
 			REQUIRE(result.Success);
 			return result.Value;
@@ -212,6 +213,151 @@ TEST_SUITE("Editor.GameFlow")
 		CHECK(context.IsPaused());
 		project.Run("play.stop");
 	}
+	TEST_CASE("play.step answers once its steps ran, and steps a resume dropped never run at a later pause")
+	{
+		GameFlowProject project(CreateTemporaryDirectory("EditorGameFlowStep") / "Flow");
+		EditorContext& context = project.Context;
+		project.Run("play.start");
+		project.Run("play.pause", { { "paused", true } });
+		const float fixedStep = context.GetActiveScene()->GetSettings().FixedTimestep;
+
+		// It answers after its 120 steps, one per frame: the game's time is exactly 120 fixed steps then.
+		const nlohmann::json stepped = RunCommandToCompletion(context, project.Commands, "play.step", { { "steps", 120 } });
+		CHECK(stepped["stepsRun"] == 120);
+		CHECK(stepped["fixedSteps"] == 120);
+		CHECK(stepped["paused"] == true);
+		CHECK(stepped["time"].get<double>() == doctest::Approx(120.0 * fixedStep));
+		CHECK(context.GetFixedStepCount() == 120);
+		CHECK(context.GetActiveScene()->GetTime() == doctest::Approx(120.0 * fixedStep));
+		CHECK_FALSE(context.HasPendingSteps());
+
+		// wait: false answers at once; resuming drops the steps that did not run, so none runs at the next pause.
+		const nlohmann::json queued = project.Run("play.step", { { "steps", 100 }, { "wait", false } });
+		CHECK(queued["pendingSteps"] == 100);
+		project.Run("play.pause", { { "paused", false } });
+		project.Run("play.pause", { { "paused", true } });
+		CHECK_FALSE(context.HasPendingSteps());
+		const uint64_t paused = context.GetFixedStepCount();
+		for (int frame = 0; frame < 10; frame++)
+			project.Update();
+		CHECK(context.GetFixedStepCount() == paused);
+
+		// Resumed while it waits, play.step fails with the steps that ran.
+		EditorCommandResult waiting = project.Commands.Execute(context, "play.step", { { "steps", 50 } });
+		REQUIRE(waiting.IsPending());
+		for (int frame = 0; frame < 5; frame++)
+		{
+			project.Update();
+			PollCommandResult(waiting, context);
+		}
+		REQUIRE(waiting.IsPending());
+		project.Run("play.pause", { { "paused", false } });
+		REQUIRE(PollCommandResult(waiting, context));
+		CHECK_FALSE(waiting.Success);
+		CHECK(waiting.Error.find("resumed after 5 of 50 steps") != std::string::npos);
+		CHECK(waiting.ErrorData["stepsRun"] == 5);
+
+		// Also when it is paused again in the same frame (two requests, or one editor.batch): the steps were dropped, and a
+		// later play.step that passes its last step does not answer for it.
+		project.Run("play.pause", { { "paused", true } });
+		waiting = project.Commands.Execute(context, "play.step", { { "steps", 50 } });
+		REQUIRE(waiting.IsPending());
+		for (int frame = 0; frame < 3; frame++)
+		{
+			project.Update();
+			PollCommandResult(waiting, context);
+		}
+		project.Run("editor.batch", { { "steps", { { { "command", "play.pause" }, { "parameters", { { "paused", false } } } },
+			{ { "command", "play.pause" }, { "parameters", { { "paused", true } } } } } } });
+		const nlohmann::json later = project.Run("play.step", { { "steps", 60 }, { "wait", false } });
+		CHECK(later["pendingSteps"] == 60);
+		for (int frame = 0; frame < 2 && waiting.IsPending(); frame++)
+		{
+			project.Update();
+			PollCommandResult(waiting, context);
+		}
+		REQUIRE_FALSE(waiting.IsPending());
+		CHECK_FALSE(waiting.Success);
+		CHECK(waiting.Error.find("resumed after 3 of 50 steps") != std::string::npos);
+		CHECK(waiting.ErrorData["stepsRun"] == 3);
+		project.Run("play.pause", { { "paused", false } });
+
+		// Two waiting play.steps: the second's steps run after the first's, and each answers when its own last step ran.
+		project.Run("play.pause", { { "paused", true } });
+		const uint64_t start = context.GetFixedStepCount();
+		EditorCommandResult first = project.Commands.Execute(context, "play.step", { { "steps", 3 } });
+		EditorCommandResult second = project.Commands.Execute(context, "play.step", { { "frames", 2 } });
+		for (int frame = 0; frame < 3; frame++)
+		{
+			project.Update();
+			PollCommandResult(first, context);
+			PollCommandResult(second, context);
+		}
+		REQUIRE_FALSE(first.IsPending());
+		CHECK(first.Value["fixedSteps"] == start + 3);
+		CHECK(second.IsPending());
+		for (int frame = 0; frame < 2; frame++)
+		{
+			project.Update();
+			PollCommandResult(second, context);
+		}
+		REQUIRE_FALSE(second.IsPending());
+		CHECK(second.Value["stepsRun"] == 2);
+		CHECK(second.Value["fixedSteps"] == start + 5);
+
+		// Stopped while it waits: it fails, naming the steps that ran.
+		EditorCommandResult stopped = project.Commands.Execute(context, "play.step", { { "steps", 10 } });
+		project.Update();
+		PollCommandResult(stopped, context);
+		project.Run("play.stop");
+		REQUIRE(PollCommandResult(stopped, context));
+		CHECK_FALSE(stopped.Success);
+		CHECK(stopped.ErrorData["stepsRun"] == 1);
+	}
+
+	TEST_CASE("After a scene switch the game asked for, play.state names the running scene, and the journal records the switch")
+	{
+		GameFlowProject project(CreateTemporaryDirectory("EditorGameFlowRunning") / "Flow");
+		EditorContext& context = project.Context;
+		CHECK(project.Run("play.state")["running"].is_null());
+		project.Run("play.start");
+		const nlohmann::json copy = project.Run("play.state")["running"];
+		CHECK(copy["scene"].is_null()); // The edited scene's copy runs
+		CHECK(copy["name"] == "One");
+
+		const Ref<Scene> previous = context.GetActiveScene();
+		previous->RequestSceneLoad(project.LevelTwo);
+		UpdateUntil([&] { project.Update(); }, [&] { return context.GetActiveScene() != previous; });
+		const nlohmann::json running = project.Run("play.state")["running"];
+		CHECK(running["scene"] == UUIDToJson(project.LevelTwo));
+		CHECK(running["name"] == "Two");
+		CHECK(running["path"] == "Levels/Two.stscene");
+		CHECK(running["entityCount"] == context.GetActiveScene()->GetEntityCount());
+		CHECK(running["subScenes"].empty());
+		CHECK(running["switching"].is_null());
+		// scene.info names the edited scene, and what runs.
+		const nlohmann::json info = project.Run("scene.info");
+		CHECK(info["name"] == "One");
+		CHECK(info["running"]["name"] == "Two");
+		CHECK(project.Run("editor.status")["play"]["running"]["path"] == "Levels/Two.stscene");
+
+		// The journal has the switch as an event (not a command a replay would repeat).
+		const CommandJournalEntry* event = nullptr;
+		for (const CommandJournalEntry& entry : context.GetJournal().GetEntries())
+		{
+			if (entry.Command == "play.sceneSwitched")
+				event = &entry;
+		}
+		REQUIRE(event);
+		CHECK(event->Event);
+		CHECK(event->Kind == EditorCommandKind::Session);
+		CHECK(event->Parameters["from"]["name"] == "One");
+		CHECK(event->Parameters["to"]["path"] == "Levels/Two.stscene");
+		CHECK(CommandJournal::Describe(*event)["event"] == true);
+		project.Run("play.stop");
+		CHECK(project.Run("play.state")["running"].is_null());
+	}
+
 	TEST_CASE("Exported games quit with an exit code and switch scenes when their scene asks")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("GameRuntimeFlow");
@@ -276,40 +422,44 @@ TEST_SUITE("Editor.GameFlow")
 		const std::filesystem::path directory = CreateTemporaryDirectory("SceneLoadReads");
 		GameFlowProject project(directory / "Flow");
 		EditorContext& context = project.Context;
+		// Scene documents read in either form: JSON in the editor, cooked in exported games (whose packs cook scenes).
+		const auto documentReads = []() { return SceneSerializer::GetDeserializeCount() + CookedSceneReader::GetReadCount(); };
 
 		// Opening a scene for editing.
-		uint64_t reads = SceneSerializer::GetDeserializeCount();
+		uint64_t reads = documentReads();
 		Tests::RunCommandToCompletion(context, project.Commands, "scene.open", { { "scene", UUIDToJson(project.LevelTwo) } });
-		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		CHECK(documentReads() - reads == 1);
 		REQUIRE(context.GetEditScene()->FindEntityByName("Boss").IsValid());
 		// Opening it again reads the file again (once), not a copy kept from before.
-		reads = SceneSerializer::GetDeserializeCount();
+		reads = documentReads();
 		Tests::RunCommandToCompletion(context, project.Commands, "scene.open", { { "scene", UUIDToJson(project.LevelOne) } });
-		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		CHECK(documentReads() - reads == 1);
 
 		// A switch the game asks for in play mode.
 		project.Run("play.start");
-		reads = SceneSerializer::GetDeserializeCount();
+		reads = documentReads();
 		context.GetActiveScene()->RequestSceneLoad(project.LevelTwo);
 		UpdateUntil([&] { project.Update(); }, [&] { return context.GetActiveScene()->FindEntityByName("Boss").IsValid(); });
-		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		CHECK(documentReads() - reads == 1);
 		project.Run("play.stop");
 
 		// The exported game's start scene, and a switch.
 		project.Run("project.setStartScene", { { "scene", UUIDToJson(project.LevelOne) } });
 		const nlohmann::json exported = Tests::RunCommandToCompletion(context, project.Commands, "project.export",
 			{ { "directory", FileSystem::ToUTF8(directory / "Build") }, { "includeRuntime", false } });
-		reads = SceneSerializer::GetDeserializeCount();
+		reads = documentReads();
+		const uint64_t cookedReads = CookedSceneReader::GetReadCount();
 		std::string error;
 		Scope<GameRuntime> game = GameRuntime::Create(FileSystem::FromUTF8(exported["manifest"].get<std::string>()), &error);
 		REQUIRE_MESSAGE(game, error);
 		const Timestep frame(1.0f / 60.0f);
 		UpdateUntil([&] { game->Update(frame); }, [&] { return game->GetScene() && game->GetSceneHandle() == project.LevelOne; });
-		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
-		reads = SceneSerializer::GetDeserializeCount();
+		CHECK(documentReads() - reads == 1);
+		CHECK(CookedSceneReader::GetReadCount() - cookedReads == 1);
+		reads = documentReads();
 		game->GetScene()->RequestSceneLoad(project.LevelTwo);
 		UpdateUntil([&] { game->Update(frame); }, [&] { return game->GetSceneHandle() == project.LevelTwo; });
-		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		CHECK(documentReads() - reads == 1);
 		CHECK(game->GetScene()->FindEntityByName("Boss").IsValid());
 	}
 

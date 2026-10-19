@@ -22,7 +22,7 @@
 	{ "command": "editor.wait", "parameters": { "frames": 2 } },
 	{ "command": "viewport.capture", "parameters": { "width": 160, "height": 90 } },
 	{ "command": "play.pause", "parameters": { "paused": true } },
-	{ "command": "play.step", "parameters": { "frames": 2 } },
+	{ "command": "play.step", "parameters": { "steps": 2 }, "expect": { "/stepsRun": { "equals": 2 } } },
 	{ "command": "play.stop" },
 	{ "command": "entity.get", "parameters": { "entity": { "$ref": "crate" } }, "expect": { "/name": { "equals": "Crate" } } },
 	{ "command": "scene.hierarchy" },

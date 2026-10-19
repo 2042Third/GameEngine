@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Animation/SkinnedGltf.h"
 #include "Asset/AssetTestUtils.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
@@ -265,7 +266,7 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("A skinned model and its skinned mesh show in their bind pose")
+	TEST_CASE("A skinned model shows in its rest pose, and its skinned mesh in its bind pose")
 	{
 		Tests::GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -471,7 +472,7 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
 		const uint64_t written = context.GetProjectThumbnail().GetWrittenCount();
 		CHECK(written >= 1);
-		const EditorCommandResult saved = commands.Execute(context, "scene.save", nlohmann::json::object());
+		const EditorCommandResult saved = Tests::CompleteCommand(context, commands.Execute(context, "scene.save", nlohmann::json::object()));
 		REQUIRE(saved.Success);
 		CHECK(context.GetProjectThumbnail().IsPending());
 		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
@@ -698,6 +699,72 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		release->store(true);
 		CHECK_MESSAGE(seconds < 2.0, "Closing the project took ", seconds, " s");
 		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A model whose skeleton stands it up shows upright in its thumbnail and the Asset tab's preview")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path project = Tests::CopyFeatureProject(Tests::CreateTemporaryDirectory("GPUThumbnailRestPose") / "Project").parent_path();
+		ThumbnailHarness harness(gpu, project);
+		// A Z-up file: in its bind pose the arm lies along +Z, its skeleton's Z_UP-like armature stands it along +Y.
+		const std::filesystem::path source = Tests::CreateTemporaryDirectory("GPUThumbnailRestPoseSource") / "StandingArm.gltf";
+		REQUIRE(FileSystem::WriteBytes(source, Tests::CreateSkinnedArmGltf(Tests::ZUpArmOptions())));
+		const nlohmann::json imported = harness.Run("asset.import", { { "file", FileSystem::ToUTF8(source) }, { "directory", "Models" } });
+		const AssetHandle model = *UUIDFromJson(imported["asset"]);
+
+		// The bounding box of the pixels that are not the sky (the color of their row's left edge: the preview sky changes
+		// with the height only): taller than wide when the arm stands.
+		auto standing = [](nvrhi::ITexture* texture)
+		{
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(texture, image));
+			uint32_t left = image.Width;
+			uint32_t right = 0;
+			uint32_t top = image.Height;
+			uint32_t bottom = 0;
+			for (uint32_t y = 0; y < image.Height; y++)
+			{
+				const glm::u8vec4 sky = Tests::GetPixelRGBA8(image, 1, y);
+				for (uint32_t x = 0; x < image.Width; x++)
+				{
+					const glm::u8vec4 pixel = Tests::GetPixelRGBA8(image, x, y);
+					int difference = 0;
+					for (int channel = 0; channel < 3; channel++)
+						difference += std::abs(static_cast<int>(pixel[channel]) - static_cast<int>(sky[channel]));
+					if (difference <= 24)
+						continue;
+					left = std::min(left, x);
+					right = std::max(right, x);
+					top = std::min(top, y);
+					bottom = std::max(bottom, y);
+				}
+			}
+			REQUIRE(left <= right);
+			INFO("the arm covers (", left, ", ", top, ") to (", right, ", ", bottom, ") of ", image.Width, "x", image.Height);
+			return bottom - top > 2 * (right - left);
+		};
+
+		harness.RequestUntilIdle({ model });
+		REQUIRE(harness.Thumbnails().GetState(model) == ThumbnailState::Ready);
+		CHECK(standing(harness.Thumbnails().Request(model)));
+
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+		nvrhi::ITexture* preview = nullptr;
+		do
+		{
+			preview = harness.Thumbnails().RequestPreview(model, 256);
+			harness.Frame();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		while ((harness.Thumbnails().IsBusy() || harness.Thumbnails().GetStats().PreviewsRendered == 0) && std::chrono::steady_clock::now() < deadline);
+		preview = harness.Thumbnails().RequestPreview(model, 256);
+		REQUIRE(harness.Thumbnails().GetStats().PreviewsRendered == 1);
+		REQUIRE(preview);
+		CHECK(preview->getDesc().width == 256);
+		CHECK(standing(preview));
+		CHECK(harness.Thumbnails().GetStats().Failed == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

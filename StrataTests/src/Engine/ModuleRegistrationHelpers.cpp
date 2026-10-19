@@ -14,6 +14,7 @@
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/SceneGizmos.h"
+#include "Strata/Scene/ComponentAccess.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
@@ -170,6 +171,18 @@ namespace Strata::Tests
 			int32_t Value = 0;
 		};
 
+		// Saved with the scene but left out of the copies play mode runs (ComponentFlags::NoCopy), like an editor-only cache.
+		struct TestCacheComponent
+		{
+			int32_t Value = 0;
+		};
+
+		// Requires the vehicle (registered before it), a component that does not exist and itself.
+		struct TestTrailerComponent
+		{
+			float Load = 0.0f;
+		};
+
 		int Fail(const std::string& message)
 		{
 			std::printf("FAILED: %s\n", message.c_str());
@@ -216,7 +229,18 @@ namespace Strata::Tests
 				duplicateTypeRefused = !ComponentRegistry::Register<TestVehicleComponent>("TestVehicleAgain").Property("Speed", &TestVehicleComponent::Speed);
 				duplicateNameRefused = !ComponentRegistry::Register<LateComponent>("testvehicle");
 				copierRegistered = Scene::RegisterContextCopier(&CopyGarageContext);
+				ComponentRegistry::Register<TestCacheComponent>("TestCache")
+					.Category("Tests")
+					.Flags(ComponentFlags::NoCopy)
+					.Property("Value", &TestCacheComponent::Value);
+				ComponentRegistry::Register<TestTrailerComponent>("TestTrailer")
+					.Category("Tests")
+					.Requires("TestVehicle")
+					.Requires("NoSuchComponent")
+					.Requires("TestTrailer")
+					.Property("Load", &TestTrailerComponent::Load);
 			});
+			const uint64_t beforeRegistration = Log::GetBuffer().GetLatestSequence();
 			Engine::RegisterBuiltinModules(options);
 
 			if (!Engine::AreBuiltinModulesRegistered() || !ComponentRegistry::IsFrozen())
@@ -231,6 +255,24 @@ namespace Strata::Tests
 			if (!duplicateTypeRefused || !duplicateNameRefused || ComponentRegistry::Find("TestVehicleAgain"))
 				return Fail("a component type or name was registered twice");
 			std::printf("registered: TestVehicle\n");
+
+			// Freezing the registry keeps the requirements that name other registered components and drops the rest, with errors;
+			// adding the trailer by name then adds the vehicle first.
+			const ComponentInfo* trailerInfo = ComponentRegistry::Find("TestTrailer");
+			if (!trailerInfo || trailerInfo->Requires != std::vector<std::string> { "TestVehicle" })
+				return Fail("the trailer's requirements are not the vehicle alone");
+			if (FindLoggedError(beforeRegistration, "requires 'NoSuchComponent', which is not a registered component").empty()
+				|| FindLoggedError(beforeRegistration, "requires 'TestTrailer', which is the component itself").empty())
+				return Fail("the dropped requirements logged no errors");
+			{
+				Scene scene("Yard");
+				Entity hitch = scene.CreateEntity("Hitch");
+				std::string error;
+				if (!ComponentAccess::AddComponent(hitch, *trailerInfo, &error) || !hitch.HasComponent<TestTrailerComponent>()
+					|| !hitch.HasComponent<TestVehicleComponent>())
+					return Fail("adding the trailer did not add the vehicle it requires: " + error);
+			}
+			std::printf("requirements: TestVehicle\n");
 
 			const std::filesystem::path path = directory / "Garage.stscene";
 			{
@@ -252,6 +294,23 @@ namespace Strata::Tests
 			if (vehicle->Speed != 12.5f || vehicle->Label != "Rover One" || vehicle->Cargo != AssetHandle(0xCA460) || !RidesWithItsChild(rover))
 				return Fail("the reloaded TestVehicle has other values");
 
+			// A play copy leaves the NoCopy component out; the snapshot a save writes keeps every serialized component.
+			{
+				const Ref<Scene> source = CreateRef<Scene>("Snapshot");
+				Entity cached = source->CreateEntity("Cached");
+				cached.AddComponent<TestCacheComponent>(TestCacheComponent { 7 });
+				cached.AddComponent<TestVehicleComponent>(TestVehicleComponent { 3.0f, "Kept" });
+				const Ref<Scene> play = Scene::Copy(source);
+				const Ref<Scene> snapshot = Scene::Copy(source, SceneCopyOptions { true });
+				if (play->FindEntityByName("Cached").HasComponent<TestCacheComponent>())
+					return Fail("a play copy has the NoCopy component");
+				const TestCacheComponent* kept = snapshot->FindEntityByName("Cached").TryGetComponent<TestCacheComponent>();
+				if (!kept || kept->Value != 7)
+					return Fail("the snapshot to save lacks the NoCopy component");
+				if (SceneSerializer::Serialize(*snapshot) != SceneSerializer::Serialize(*source))
+					return Fail("the snapshot to save serializes differently from its scene");
+				std::printf("snapshot keeps: TestCache\n");
+			}
 			// The extra data's references, through ComponentInfo::ExtraReferences: copies ride with their own drivers...
 			Scene& garage = *loaded;
 			const Entity duplicate = garage.DuplicateEntity(rover);

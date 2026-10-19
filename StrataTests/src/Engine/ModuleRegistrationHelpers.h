@@ -9,8 +9,9 @@ namespace Strata::Tests
 	// Helper modes of the test executable (--strata-test-helper=<mode>) that register the engine's modules themselves, or
 	// show what happens when nothing registers them; TestMain runs them before it registers the modules:
 	//   custom-component <directory>    registers the asset pipeline and a component through ModuleRegistrationOptions, saves
-	//                                   and reloads a scene with the component there and tries registrations the registry
-	//                                   must refuse; prints what it found and exits with 0 when everything behaved
+	//                                   and reloads a scene with the component there, checks that a snapshot to save keeps a
+	//                                   NoCopy component a play copy leaves out, and tries registrations the registry must
+	//                                   refuse; prints what it found and exits with 0 when everything behaved
 	//   unregistered-registry <name>    uses a registry ("components", "loaders", "importers", "builtin-assets",
 	//                                   "systems" or "mesh-geometry") without registering the modules: prints the failed
 	//                                   verify's message and exits with c_VerifyExitCode

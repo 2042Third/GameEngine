@@ -374,6 +374,145 @@ TEST_SUITE("CLI.Discovery")
 		CHECK_FALSE(FileSystem::Exists(EditorSession::GetProjectSessionFilePath(project)));
 	}
 
+	TEST_CASE("Launching waits for the project's asset scan for as long as it progresses, longer than the session's wait")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("LaunchScanSessions") / "Sessions";
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("LaunchScanProject");
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
+		// The scan takes longer than the session may: only the session's wait has a timeout.
+		Tests::ScopedEnvironmentVariable fakeScan("STRATA_TEST_FAKE_SCAN", "7000");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+
+		EditorLaunchSpecification specification;
+		specification.EditorPath = Tests::GetTestExecutablePath();
+		specification.ProjectDirectory = project;
+		specification.NoGpu = true;
+		specification.WaitTimeout = std::chrono::milliseconds(5000);
+		specification.StallTimeout = std::chrono::milliseconds(3000);
+		std::vector<EditorStartupProgress> progress;
+		specification.OnProgress = [&progress](const EditorStartupProgress& step) { progress.push_back(step); };
+		const auto start = std::chrono::steady_clock::now();
+		EditorLaunchResult result = LaunchEditor(specification);
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		CHECK(std::chrono::steady_clock::now() - start >= std::chrono::milliseconds(5000));
+		REQUIRE(progress.size() >= 2);
+		for (size_t index = 1; index < progress.size(); index++)
+			CHECK(progress[index].Done > progress[index - 1].Done);
+		CHECK(progress.front().Total == 1000);
+		CHECK(progress.front().Message.find("Scanning the project's assets") != std::string::npos);
+
+		RpcClient client;
+		REQUIRE_MESSAGE(client.Connect("127.0.0.1", result.Session.Port, result.Session.Token, std::chrono::milliseconds(3000)), client.GetLastError());
+		CHECK(client.Call("editor.quit", nlohmann::json::object(), std::chrono::milliseconds(5000)).IsSuccess());
+		client.Close();
+		REQUIRE(result.EditorProcess->Wait(std::chrono::milliseconds(10000)).has_value());
+	}
+
+	TEST_CASE("Launching waits for the start scene's load, which editor.status reports only in its sceneLoad section")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("LaunchSceneSessions") / "Sessions";
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("LaunchSceneProject");
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
+		Tests::ScopedEnvironmentVariable fakeSceneLoad("STRATA_TEST_FAKE_SCENE_LOAD", "4000");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+
+		EditorLaunchSpecification specification;
+		specification.EditorPath = Tests::GetTestExecutablePath();
+		specification.ProjectDirectory = project;
+		specification.NoGpu = true;
+		std::vector<EditorStartupProgress> progress;
+		specification.OnProgress = [&progress](const EditorStartupProgress& step) { progress.push_back(step); };
+		EditorLaunchResult result = LaunchEditor(specification);
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		REQUIRE_FALSE(progress.empty());
+		CHECK(progress.front().Phase == "OpeningScene");
+		CHECK(progress.front().Message.find("Opening the start scene") != std::string::npos);
+
+		// The launch answered once the scene was open: the status says so too.
+		RpcClient client;
+		REQUIRE_MESSAGE(client.Connect("127.0.0.1", result.Session.Port, result.Session.Token, std::chrono::milliseconds(3000)), client.GetLastError());
+		const RpcResult status = client.Call("editor.status", { { "sections", nlohmann::json::array({ "sceneLoad" }) } }, std::chrono::milliseconds(5000));
+		REQUIRE(status.IsSuccess());
+		CHECK(status.GetValue()["sceneLoad"].is_null());
+		CHECK(client.Call("editor.quit", nlohmann::json::object(), std::chrono::milliseconds(5000)).IsSuccess());
+		client.Close();
+		REQUIRE(result.EditorProcess->Wait(std::chrono::milliseconds(10000)).has_value());
+	}
+
+	TEST_CASE("Launching an editor that refuses editor.status's sections waits for the start scene its plain answer reports")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("LaunchOldStatusSessions") / "Sessions";
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("LaunchOldStatusProject");
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
+		Tests::ScopedEnvironmentVariable fakeStatus("STRATA_TEST_FAKE_STATUS", "no-sections");
+		Tests::ScopedEnvironmentVariable fakeSceneLoad("STRATA_TEST_FAKE_SCENE_LOAD", "4000");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+
+		EditorLaunchSpecification specification;
+		specification.EditorPath = Tests::GetTestExecutablePath();
+		specification.ProjectDirectory = project;
+		specification.NoGpu = true;
+		// A launch that kept asking with the refused parameter would never see progress: it fails at the stall.
+		specification.StallTimeout = std::chrono::milliseconds(5000);
+		std::vector<EditorStartupProgress> progress;
+		specification.OnProgress = [&progress](const EditorStartupProgress& step) { progress.push_back(step); };
+		EditorLaunchResult result = LaunchEditor(specification);
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		REQUIRE_FALSE(progress.empty());
+		CHECK(progress.front().Phase == "OpeningScene");
+		CHECK(progress.front().Message.find("Opening the start scene") != std::string::npos);
+
+		RpcClient client;
+		REQUIRE_MESSAGE(client.Connect("127.0.0.1", result.Session.Port, result.Session.Token, std::chrono::milliseconds(3000)), client.GetLastError());
+		const RpcResult refused = client.Call("editor.status", { { "sections", nlohmann::json::array({ "sceneLoad" }) } }, std::chrono::milliseconds(5000));
+		REQUIRE(refused.IsError());
+		CHECK(refused.GetError().Code == static_cast<int>(JsonRpc::ErrorCode::InvalidParams));
+		// The launch answered once the scene was open.
+		const RpcResult status = client.Call("editor.status", nlohmann::json::object(), std::chrono::milliseconds(5000));
+		REQUIRE(status.IsSuccess());
+		CHECK(status.GetValue().contains("sceneLoad"));
+		CHECK(status.GetValue()["sceneLoad"].is_null());
+		CHECK(client.Call("editor.quit", nlohmann::json::object(), std::chrono::milliseconds(5000)).IsSuccess());
+		client.Close();
+		REQUIRE(result.EditorProcess->Wait(std::chrono::milliseconds(10000)).has_value());
+	}
+
+	TEST_CASE("A launch whose project stops progressing fails naming the stall and stops the editor; without waiting it returns at the session")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("LaunchStallSessions") / "Sessions";
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("LaunchStallProject");
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
+		Tests::ScopedEnvironmentVariable fakeScan("STRATA_TEST_FAKE_SCAN", "stall");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+
+		EditorLaunchSpecification specification;
+		specification.EditorPath = Tests::GetTestExecutablePath();
+		specification.ProjectDirectory = project;
+		specification.NoGpu = true;
+		specification.WaitTimeout = std::chrono::milliseconds(20000);
+		specification.StallTimeout = std::chrono::milliseconds(1000);
+		EditorLaunchResult stalled = LaunchEditor(specification);
+		CHECK_FALSE(stalled.Success);
+		CHECK(stalled.Error.find("stopped progressing") != std::string::npos);
+		CHECK(stalled.Error.find("5 / 1,000") != std::string::npos);
+		CHECK(stalled.Error.find("the editor was stopped") != std::string::npos);
+		REQUIRE(stalled.EditorProcess != nullptr);
+		CHECK_FALSE(stalled.EditorProcess->IsRunning());
+
+		// --no-wait-scan: the session is enough.
+		specification.WaitForProject = false;
+		EditorLaunchResult started = LaunchEditor(specification);
+		REQUIRE_MESSAGE(started.Success, started.Error);
+		RpcClient client;
+		REQUIRE_MESSAGE(client.Connect("127.0.0.1", started.Session.Port, started.Session.Token, std::chrono::milliseconds(3000)), client.GetLastError());
+		const RpcResult status = client.Call("editor.status", nlohmann::json::object(), std::chrono::milliseconds(5000));
+		REQUIRE(status.IsSuccess());
+		CHECK(status.GetValue()["assets"]["scanning"]["done"] == 5);
+		CHECK(client.Call("editor.quit", nlohmann::json::object(), std::chrono::milliseconds(5000)).IsSuccess());
+		client.Close();
+		REQUIRE(started.EditorProcess->Wait(std::chrono::milliseconds(10000)).has_value());
+	}
+
 	TEST_CASE("Launching stops an editor that never becomes reachable")
 	{
 		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("LaunchSilentSessions") / "Sessions";

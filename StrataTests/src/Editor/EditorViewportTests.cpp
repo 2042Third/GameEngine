@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Animation/SkinnedArmModel.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
@@ -8,12 +9,14 @@
 #include "Editor/SceneBounds.h"
 #include "TestHelpers.h"
 
+#include <Strata/Animation/AnimationPreview.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Math/Math.h>
 #include <Strata/Physics/PhysicsComponents.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneSerializer.h>
@@ -33,10 +36,9 @@ namespace
 
 		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{
-			EditorCommandResult result = Commands.Execute(Context, name, parameters);
+			const EditorCommandResult result = Tests::CompleteCommand(Context, Commands.Execute(Context, name, parameters));
 			INFO(name, ": ", result.Error);
 			REQUIRE(result.Success);
-			REQUIRE_FALSE(result.IsPending());
 			return result.Value;
 		}
 
@@ -604,6 +606,11 @@ TEST_SUITE("Editor.Viewport")
 		CHECK_FALSE(fallback.EditorView);
 		CHECK_FALSE(fallbackOptions.PreviewEnvironment);
 		CHECK(fallbackOptions.DrawScreenSpaceText);
+		// The Scene view asks for the editor camera: an editor view also while the game plays.
+		auto [sceneWhilePlaying, sceneWhilePlayingOptions] = optionsFor(ViewportCameraSource::Editor);
+		CHECK(sceneWhilePlaying.EditorView);
+		CHECK(sceneWhilePlayingOptions.PreviewEnvironment);
+		CHECK_FALSE(sceneWhilePlayingOptions.DrawScreenSpaceText);
 		context.Stop();
 
 		// Simulating is still working on the scene in the editor camera.
@@ -628,13 +635,17 @@ TEST_SUITE("Editor.Viewport")
 			ViewportHarness harness;
 			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
 			nlohmann::json settings = harness.Run("viewport.getSettings");
-			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "allColliders", "stats", "previewLighting", "gameUI", "gizmo", "space",
-				"snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView" })
+			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "allColliders", "stats", "previewLighting", "gameUI", "canvasMode", "gizmo",
+				"space", "snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView", "gameView", "pilotGameCamera", "editPose" })
 			{
 				CAPTURE(key);
 				CHECK(settings.contains(key));
 			}
-			CHECK(settings.size() == 14);
+			CHECK(settings.size() == 18);
+			CHECK(settings["canvasMode"] == false);
+			CHECK(settings["editPose"] == "rest");
+			CHECK(settings["gameView"] == nlohmann::json { { "mode", "free" }, { "width", 1280 }, { "height", 720 } });
+			CHECK(settings["pilotGameCamera"] == false);
 			CHECK(settings["allColliders"] == false);
 			CHECK(settings["previewLighting"] == true);
 			CHECK(settings["gameUI"] == false);
@@ -642,8 +653,9 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(settings["debugView"] == "none");
 
 			settings = harness.Run("viewport.setSettings", { { "grid", false }, { "gameUI", true }, { "previewLighting", false }, { "gizmo", "Rotate" },
-				{ "space", "Local" }, { "snap", true }, { "rotateSnap", 45 }, { "allColliders", true }, { "debugView", "streaming" } });
+				{ "space", "Local" }, { "snap", true }, { "rotateSnap", 45 }, { "allColliders", true }, { "debugView", "streaming" }, { "canvasMode", true } });
 			CHECK(settings["grid"] == false);
+			CHECK(settings["canvasMode"] == true);
 			CHECK(settings["allColliders"] == true);
 			CHECK(settings["gameUI"] == true);
 			CHECK(settings["previewLighting"] == false);
@@ -655,6 +667,30 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(settings["debugView"] == "streaming");
 			CHECK(harness.Context.GetViewport().GetSettings().DebugView == ViewportDebugView::Streaming);
 			CHECK(harness.Run("viewport.getSettings") == settings);
+
+			// The Game view's size and the Scene view's game camera.
+			settings = harness.Run("viewport.setSettings", { { "gameView", { { "mode", "custom" }, { "width", 800 }, { "height", 600 } } },
+				{ "pilotGameCamera", true } });
+			CHECK(settings["gameView"] == nlohmann::json { { "mode", "custom" }, { "width", 800 }, { "height", 600 } });
+			CHECK(settings["pilotGameCamera"] == true);
+			CHECK(harness.Context.GetViewport().GetSettings().GameView.Mode == GameViewMode::Custom);
+			// Only the parts given change.
+			settings = harness.Run("viewport.setSettings", { { "gameView", { { "mode", "16:9" } } }, { "pilotGameCamera", false } });
+			CHECK(settings["gameView"] == nlohmann::json { { "mode", "16:9" }, { "width", 800 }, { "height", 600 } });
+			CHECK(harness.Error("viewport.setSettings", { { "gameView", { { "mode", "16:7" } } } }).find("'gameView.mode'") != std::string::npos);
+			CHECK(harness.Error("viewport.setSettings", { { "gameView", { { "width", 8 } } } }).find("'gameView.width'") != std::string::npos);
+			CHECK(harness.Error("viewport.setSettings", { { "gameView", { { "depth", 8 } } } }).find("'depth'") != std::string::npos);
+			CHECK(harness.Error("viewport.setSettings", { { "gameView", "16:9" } }).find("'gameView'") != std::string::npos);
+			CHECK(harness.Run("viewport.getSettings") == settings);
+
+			// Skinned characters of the edited scene show the first frame of what they play on start: the scene's preview
+			// follows the setting from the next frame on.
+			CHECK(harness.Context.GetAnimationPreview().GetEditPose() == AnimationEditPose::Rest);
+			settings = harness.Run("viewport.setSettings", { { "editPose", "clipStart" } });
+			CHECK(settings["editPose"] == "clipStart");
+			harness.Context.Update(Timestep(1.0f / 60.0f));
+			CHECK(harness.Context.GetAnimationPreview().GetEditPose() == AnimationEditPose::ClipStart);
+			CHECK(harness.Error("viewport.setSettings", { { "editPose", "firstFrame" } }).find("'editPose'") != std::string::npos);
 
 			// An invalid value names the parameter and changes nothing, not even the valid values next to it.
 			const std::string error = harness.Error("viewport.setSettings", { { "grid", true }, { "scaleSnap", 0 } });
@@ -674,6 +710,69 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(harness.Context.GetViewport().GetSettings().ShowGameUI);
 		CHECK_FALSE(harness.Context.GetViewport().GetSettings().ShowGrid);
 		CHECK(harness.Context.GetViewport().GetSettings().AllColliders);
+		CHECK(harness.Context.GetViewport().GetSettings().GameView.Mode == GameViewMode::Aspect16x9);
+		CHECK(harness.Context.GetViewport().GetSettings().CanvasMode);
+		CHECK(harness.Context.GetViewport().GetSettings().GameView.Width == 800);
+		CHECK(harness.Context.GetViewport().GetSettings().EditPose == AnimationEditPose::ClipStart);
+	}
+
+	TEST_CASE("The Game view's image: the panel, the largest rectangle of an aspect ratio, or a fixed size scaled to fit")
+	{
+		GameViewSettings settings;
+		// Free fills the area at its pixels.
+		GameViewFrame frame = ComputeGameViewFrame(settings, glm::vec2(400.0f, 300.0f), glm::vec2(2.0f), std::nullopt);
+		CHECK(frame.Offset == glm::vec2(0.0f));
+		CHECK(frame.Size == glm::vec2(400.0f, 300.0f));
+		CHECK(frame.RenderSize == glm::uvec2(800, 600));
+
+		// 16:9 in a 4:3 area: the full width, bars above and below, an image of 16:9 within a pixel.
+		settings.Mode = GameViewMode::Aspect16x9;
+		frame = ComputeGameViewFrame(settings, glm::vec2(400.0f, 300.0f), glm::vec2(2.0f), std::nullopt);
+		CHECK(frame.Size.x == 400.0f);
+		CHECK(std::abs(frame.Size.y - 225.0f) <= 1.0f);
+		CHECK(frame.Offset.x == 0.0f);
+		CHECK(std::abs(frame.Offset.y - 37.0f) <= 1.0f);
+		CHECK(std::abs(static_cast<float>(frame.RenderSize.x) / (16.0f / 9.0f) - static_cast<float>(frame.RenderSize.y)) <= 1.0f);
+		CHECK(frame.RenderSize.x == 800);
+		// 4:3 in a 16:9 area: the full height, bars left and right.
+		settings.Mode = GameViewMode::Aspect4x3;
+		frame = ComputeGameViewFrame(settings, glm::vec2(640.0f, 360.0f), glm::vec2(1.0f), std::nullopt);
+		CHECK(frame.Size.y == 360.0f);
+		CHECK(frame.Size.x == 480.0f);
+		CHECK(frame.Offset == glm::vec2(80.0f, 0.0f));
+		CHECK(frame.RenderSize == glm::uvec2(480, 360));
+		// 4:3 in a 4:3 area fills it.
+		frame = ComputeGameViewFrame(settings, glm::vec2(400.0f, 300.0f), glm::vec2(1.0f), std::nullopt);
+		CHECK(frame.Size == glm::vec2(400.0f, 300.0f));
+
+		// Fixed sizes render at their pixels, shown scaled to fit (down or up).
+		settings.Mode = GameViewMode::Fixed1920x1080;
+		frame = ComputeGameViewFrame(settings, glm::vec2(400.0f, 300.0f), glm::vec2(1.0f), std::nullopt);
+		CHECK(frame.RenderSize == glm::uvec2(1920, 1080));
+		CHECK(frame.Size.x == 400.0f);
+		settings.Mode = GameViewMode::Custom;
+		settings.Width = 100;
+		settings.Height = 100;
+		frame = ComputeGameViewFrame(settings, glm::vec2(400.0f, 300.0f), glm::vec2(1.0f), std::nullopt);
+		CHECK(frame.RenderSize == glm::uvec2(100, 100));
+		CHECK(frame.Size == glm::vec2(300.0f, 300.0f));
+		CHECK(frame.Offset == glm::vec2(50.0f, 0.0f));
+
+		// The game's request, or the whole area without one.
+		settings.Mode = GameViewMode::GameRequest;
+		CHECK(ComputeGameViewFrame(settings, glm::vec2(400.0f, 300.0f), glm::vec2(1.0f), glm::uvec2(1280, 720)).RenderSize == glm::uvec2(1280, 720));
+		CHECK(ComputeGameViewFrame(settings, glm::vec2(400.0f, 300.0f), glm::vec2(1.0f), std::nullopt).RenderSize == glm::uvec2(400, 300));
+		// An empty area renders nothing.
+		CHECK(ComputeGameViewFrame(settings, glm::vec2(0.0f, 300.0f), glm::vec2(1.0f), std::nullopt).RenderSize == glm::uvec2(0));
+
+		for (const char* name : { "free", "16:9", "16:10", "4:3", "21:9", "1920x1080", "1280x720", "custom", "game" })
+		{
+			CAPTURE(name);
+			const std::optional<GameViewMode> mode = GameViewModeFromString(name);
+			REQUIRE(mode);
+			CHECK(std::string(GameViewModeToString(*mode)) == name);
+		}
+		CHECK_FALSE(GameViewModeFromString("16:7"));
 	}
 
 	TEST_CASE("Every scene keeps its own editor camera, and a scene seen for the first time is framed")
@@ -795,5 +894,56 @@ TEST_SUITE("Editor.Viewport")
 		// Seen from where the game's camera looks: straight along -Z.
 		CHECK(camera.GetYaw() == doctest::Approx(0.0f));
 		CHECK(camera.GetPitch() == doctest::Approx(0.0f));
+	}
+
+	TEST_CASE("Skinned models are measured standing in their rest pose: bounds, dropping to the ground and framing")
+	{
+		ViewportHarness harness;
+		// The Z-up arm: in its bind pose it lies along +Z; its skeleton stands it up along +Y from 0 to 2.
+		AssetManagerBase& manager = *AssetManager::GetActive();
+		const Tests::ImportedArm arm = Tests::ImportSkinnedArm(manager, Tests::ZUpArmOptions(), 0xB0B0'0001ull);
+		AssetMetadata metadata;
+		metadata.Handle = arm.Handle;
+		metadata.Name = "Arm";
+		manager.AddMemoryAsset(arm.ArmModel, metadata);
+		const std::string id = harness.Run("prefab.instantiate", { { "prefab", UUIDToJson(arm.Handle) } })["id"].get<std::string>();
+		// The edited scene's preview poses the new animator in the next frame.
+		harness.Context.Update(Timestep(1.0f / 60.0f));
+		Scene& scene = *harness.Context.GetEditScene();
+		const Entity root = scene.GetEntityByUUID(*UUIDFromJson(nlohmann::json(id)));
+		REQUIRE(root);
+		Entity mesh;
+		for (Entity child : root.GetChildren())
+		{
+			if (child.HasComponent<SkinComponent>())
+				mesh = child;
+		}
+		REQUIRE(mesh);
+
+		const AABB bounds = SceneBounds::GetEntityBounds(scene, root);
+		REQUIRE(bounds.IsValid());
+		CHECK(Near(bounds.Min, glm::vec3(-0.1f, 0.0f, -0.1f), 1e-4f));
+		CHECK(Near(bounds.Max, glm::vec3(0.1f, 2.0f, 0.1f), 1e-4f));
+		// The renderer bounds the posed proxy the same way.
+		RenderScene& renderScene = RenderScene::Get(scene);
+		renderScene.Sync(AssetManager::GetActive());
+		const uint32_t proxy = renderScene.FindProxy(mesh.GetHandle());
+		REQUIRE(proxy != RenderScene::c_InvalidIndex);
+		CHECK((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0);
+		CHECK(Near(renderScene.GetWorldBounds(proxy).Min, bounds.Min, 1e-4f));
+		CHECK(Near(renderScene.GetWorldBounds(proxy).Max, bounds.Max, 1e-4f));
+
+		// Lifted above a floor whose top is y = 0, it drops onto its lowest point.
+		harness.Run("entity.create", { { "name", "Floor" }, { "components", {
+			{ "Transform", { { "Translation", { 0, -0.5, 0 } }, { "Scale", { 20, 1, 20 } } } },
+			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } });
+		harness.Run("component.set", { { "entity", id }, { "component", "Transform" }, { "values", { { "Translation", { 0, 3, 0 } } } } });
+		harness.Run("entity.dropToGround", { { "entities", { id } } });
+		CHECK(root.GetComponent<TransformComponent>().Translation.y == doctest::Approx(0.0f).epsilon(1e-4));
+		CHECK(SceneBounds::GetEntityBounds(scene, root).Min.y == doctest::Approx(0.0f).epsilon(1e-4));
+
+		// Framed upright: the view's target is the arm's middle, a unit above the floor.
+		const nlohmann::json camera = harness.Run("camera.focus", { { "entities", { id } } });
+		CHECK(Near(ToVec3(camera["target"]), glm::vec3(0.0f, 1.0f, 0.0f), 1e-3f));
 	}
 }

@@ -225,7 +225,8 @@ TEST_SUITE("Editor.UI.Scripts")
 		REQUIRE(editor.Click("Toolbar.BuildScripts"));
 		REQUIRE(editor.FramesUntil([&builder]() { return !builder.IsRunning() && builder.GetLastResult().ID != 0; }));
 		editor.Frames(2);
-		CHECK(editor.GetPillText("Status.Scripts") == "Build failed");
+		// Its errors, as the Problems panel counts them (the warning is no error).
+		CHECK(editor.GetPillText("Status.Scripts") == "Build failed \xC2\xB7 1 error");
 
 		// The pill leads to the Problems panel, which lists the error and the warning with their places.
 		REQUIRE(editor.Click("Status.Scripts"));
@@ -420,6 +421,12 @@ TEST_SUITE("Editor.UI.Scripts")
 		std::vector<std::string> titles = GetToastTitles();
 		CHECK(std::count(titles.begin(), titles.end(), "Script build failed") == 1);
 		CHECK(std::count(titles.begin(), titles.end(), "script.build failed") == 0);
+		// The status bar's pill counts the build's errors as the Problems panel does; the error the build logged is its news,
+		// not an unread error besides.
+		const std::optional<UI::ItemProbe::Item> pill = UI::ItemProbe::Find("Status.Scripts");
+		REQUIRE(pill.has_value());
+		CHECK(pill->Text.find("Build failed \xC2\xB7 1 error") != std::string::npos);
+		CHECK_FALSE(UI::ItemProbe::Find("Status.Errors").has_value());
 		std::string toast = FindToast("Script build failed");
 		REQUIRE_FALSE(toast.empty());
 		CHECK(UI::ItemProbe::Find(toast)->Text.find("Broken.cpp:7: ") != std::string::npos);
@@ -487,7 +494,7 @@ TEST_SUITE("Editor.UI.Scripts")
 		REQUIRE_FALSE(toast.empty());
 		CHECK(UI::ItemProbe::Find(toast)->Text.find("Script build failed\nBuilding scripts needs ") != std::string::npos);
 		CHECK(UI::ItemProbe::Find(toast)->Text.find(install) != std::string::npos);
-		CHECK(editor.GetPillText("Status.Scripts") == "Build failed");
+		CHECK(editor.GetPillText("Status.Scripts") == "Build failed \xC2\xB7 1 error");
 		REQUIRE(editor.Click(toast + ".Problems"));
 		editor.Frames(3);
 		ProblemsPanel* problems = editor.Layer->GetPanels().Get<ProblemsPanel>(EditorPanels::c_Problems);

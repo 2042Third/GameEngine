@@ -2,6 +2,7 @@
 
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorNotifications.h"
 #include "Editor/SceneRecovery.h"
 #include "UI/EditorFonts.h"
 #include "UI/EditorShell.h"
@@ -18,6 +19,7 @@
 #include <algorithm>
 #include <chrono>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Strata
@@ -46,7 +48,17 @@ namespace Strata
 		const std::vector<RecoveryEntry>& entries = recovery.GetEntries();
 		return context.HasProject() && std::any_of(entries.begin(), entries.end(), [&recovery, leftBefore](const RecoveryEntry& entry)
 		{
-			return entry.Applicable && (!leftBefore || !recovery.WasDiscardedHere(entry.Id));
+			return entry.Applicable && (!leftBefore || (!entry.Discarded && !recovery.WasDiscardedHere(entry.Id)));
+		});
+	}
+
+	bool RecoveryDialog::HasEarlierDiscards(const EditorContext& context)
+	{
+		const SceneRecovery& recovery = context.GetRecovery();
+		const std::vector<RecoveryEntry>& entries = recovery.GetEntries();
+		return context.HasProject() && std::any_of(entries.begin(), entries.end(), [&recovery](const RecoveryEntry& entry)
+		{
+			return entry.Applicable && entry.Discarded && !recovery.WasDiscardedHere(entry.Id);
 		});
 	}
 
@@ -67,14 +79,25 @@ namespace Strata
 	void RecoveryDialog::Draw(EditorPanelContext& context)
 	{
 		const SceneRecovery& recovery = context.Context.GetRecovery();
-		// Once per opened project, when its scan has found changes that still apply and that this editor did not discard itself
-		// (a command script that discards changes in the editor's first frames: its toast offers them already).
+		// Once per opened project, when its scan has found changes that still apply: the dialog for what editors left behind,
+		// a toast for what was discarded on purpose before (what this editor discarded, e.g. a command script in its first
+		// frames, has its own toast already).
 		const Ref<Project>& project = context.Context.GetProject();
 		if (project != m_OfferedFor.lock() && !recovery.IsScanning())
 		{
 			m_OfferedFor = project;
 			if (HasOffer(context.Context, true))
+			{
 				m_OpenRequested = true;
+			}
+			else if (HasEarlierDiscards(context.Context))
+			{
+				EditorNotification notification;
+				notification.Title = "Discarded scene changes can be recovered";
+				notification.Message = "File > Recover Unsaved Changes, until they are recovered or discarded for good";
+				notification.ShowRecovery = true;
+				context.Context.GetNotifications().Post(std::move(notification));
+			}
 		}
 		// Opened once a scan running (e.g. after a discard just now) has read the directory: the dialog appears with its entries,
 		// centered for its full size, instead of growing from "nothing yet" past where it was placed.

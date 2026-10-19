@@ -40,6 +40,9 @@ namespace Strata
 	//   OnAnimationEvent
 	//                   when the playhead of the entity's animator passes an event of its controller's current state, with
 	//                   the event's name (after the animators were evaluated, in the order the events happened)
+	//   OnUIClick / OnUIValueChanged / OnUIFocusChanged / OnUISubmit
+	//                   when the player clicks a button, changes a slider or toggle, moves the focus, or submits an input
+	//                   field's text (see below)
 	// Instances update in entity hierarchy order (parents first), then in the order of the scripts on the entity.
 	// Inactive entities receive no updates. Overrides may be public, protected or private.
 	//
@@ -54,6 +57,13 @@ namespace Strata
 	// collision callbacks all others. Both entities' scripts are called. Every Enter a script got is followed by one Exit,
 	// also when the entity was deactivated meanwhile (pooled objects end their contacts that way); a script added during a
 	// contact gets neither. Destroying entities in these callbacks is safe: destruction happens at the end of the frame.
+	//
+	// Game UI: the widget callbacks reach the scripts on the widget's entity, then those on its event target (the
+	// EventTarget of its UIButton, UIToggle, UISlider or UIInputField, when it names another entity), with the widget. They
+	// report the player's input (values set by scripts raise none) and run before the frame's OnUpdate, in the order the
+	// inputs happened. OnUIValueChanged has a slider's new value or a toggle's 0 or 1; OnUIFocusChanged whether the widget
+	// gained the focus (an input field is edited while it has it); OnUISubmit comes when the player presses Enter in an input
+	// field (read its text with GetUI().GetText()).
 	//
 	// Script classes must be default constructible; the module constructs one instance when it loads to read the field
 	// defaults. Do gameplay initialization in OnCreate, not in the constructor.
@@ -81,6 +91,10 @@ namespace Strata
 		virtual void OnTriggerEnter([[maybe_unused]] const Collision& collision) {}
 		virtual void OnTriggerExit([[maybe_unused]] const Collision& collision) {}
 		virtual void OnAnimationEvent([[maybe_unused]] std::string_view name) {}
+		virtual void OnUIClick([[maybe_unused]] Entity widget) {}
+		virtual void OnUIValueChanged([[maybe_unused]] Entity widget, [[maybe_unused]] float value) {}
+		virtual void OnUIFocusChanged([[maybe_unused]] Entity widget, [[maybe_unused]] bool focused) {}
+		virtual void OnUISubmit([[maybe_unused]] Entity widget) {}
 
 		// The entity this script is attached to.
 		Entity GetEntity() const { return m_Entity; }
@@ -290,6 +304,38 @@ namespace Strata
 			return InvokeScript(ScriptAccess::GetInstanceContext(*script), [&]() { script->OnAnimationEvent(text); });
 		}
 
+		inline uint32_t UIClickThunk(StrataScriptInstance instance, StrataScriptEntityID widget)
+		{
+			Script* script = ToScript(instance);
+			if (!script)
+				return StrataScriptResult_InvalidArgument;
+			return InvokeScript(ScriptAccess::GetInstanceContext(*script), [&]() { script->OnUIClick(Entity(widget)); });
+		}
+
+		inline uint32_t UIValueChangedThunk(StrataScriptInstance instance, StrataScriptEntityID widget, float value)
+		{
+			Script* script = ToScript(instance);
+			if (!script)
+				return StrataScriptResult_InvalidArgument;
+			return InvokeScript(ScriptAccess::GetInstanceContext(*script), [&]() { script->OnUIValueChanged(Entity(widget), value); });
+		}
+
+		inline uint32_t UIFocusChangedThunk(StrataScriptInstance instance, StrataScriptEntityID widget, bool focused)
+		{
+			Script* script = ToScript(instance);
+			if (!script)
+				return StrataScriptResult_InvalidArgument;
+			return InvokeScript(ScriptAccess::GetInstanceContext(*script), [&]() { script->OnUIFocusChanged(Entity(widget), focused); });
+		}
+
+		inline uint32_t UISubmitThunk(StrataScriptInstance instance, StrataScriptEntityID widget)
+		{
+			Script* script = ToScript(instance);
+			if (!script)
+				return StrataScriptResult_InvalidArgument;
+			return InvokeScript(ScriptAccess::GetInstanceContext(*script), [&]() { script->OnUISubmit(Entity(widget)); });
+		}
+
 		// Per script class: its registered name and, while the module is loaded, its record.
 		template<typename T>
 		struct ClassSlot
@@ -312,7 +358,11 @@ namespace Strata
 			CallbackFlag_OnCollisionExit = 1u << 7,
 			CallbackFlag_OnTriggerEnter = 1u << 8,
 			CallbackFlag_OnTriggerExit = 1u << 9,
-			CallbackFlag_OnAnimationEvent = 1u << 10
+			CallbackFlag_OnAnimationEvent = 1u << 10,
+			CallbackFlag_OnUIClick = 1u << 11,
+			CallbackFlag_OnUIValueChanged = 1u << 12,
+			CallbackFlag_OnUIFocusChanged = 1u << 13,
+			CallbackFlag_OnUISubmit = 1u << 14
 		};
 
 		// Whether T overrides a callback. `&T::OnUpdate` names Script::OnUpdate (type `void (Script::*)(float)`) unless T,
@@ -418,6 +468,42 @@ namespace Strata
 		}
 
 		template<typename T>
+		constexpr bool OverridesOnUIClick()
+		{
+			if constexpr (requires { &T::OnUIClick; })
+				return !std::is_same_v<decltype(&T::OnUIClick), void (Script::*)(Entity)>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnUIValueChanged()
+		{
+			if constexpr (requires { &T::OnUIValueChanged; })
+				return !std::is_same_v<decltype(&T::OnUIValueChanged), void (Script::*)(Entity, float)>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnUIFocusChanged()
+		{
+			if constexpr (requires { &T::OnUIFocusChanged; })
+				return !std::is_same_v<decltype(&T::OnUIFocusChanged), void (Script::*)(Entity, bool)>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnUISubmit()
+		{
+			if constexpr (requires { &T::OnUISubmit; })
+				return !std::is_same_v<decltype(&T::OnUISubmit), void (Script::*)(Entity)>;
+			else
+				return true;
+		}
+
+		template<typename T>
 		constexpr uint32_t GetCallbackFlags()
 		{
 			uint32_t flags = 0;
@@ -443,6 +529,14 @@ namespace Strata
 				flags |= CallbackFlag_OnTriggerExit;
 			if constexpr (OverridesOnAnimationEvent<T>())
 				flags |= CallbackFlag_OnAnimationEvent;
+			if constexpr (OverridesOnUIClick<T>())
+				flags |= CallbackFlag_OnUIClick;
+			if constexpr (OverridesOnUIValueChanged<T>())
+				flags |= CallbackFlag_OnUIValueChanged;
+			if constexpr (OverridesOnUIFocusChanged<T>())
+				flags |= CallbackFlag_OnUIFocusChanged;
+			if constexpr (OverridesOnUISubmit<T>())
+				flags |= CallbackFlag_OnUISubmit;
 			return flags;
 		}
 
@@ -588,6 +682,10 @@ namespace Strata
 			desc.OnTriggerEnter = (flags & CallbackFlag_OnTriggerEnter) ? &ContactThunk<&Script::OnTriggerEnter> : nullptr;
 			desc.OnTriggerExit = (flags & CallbackFlag_OnTriggerExit) ? &ContactThunk<&Script::OnTriggerExit> : nullptr;
 			desc.OnAnimationEvent = (flags & CallbackFlag_OnAnimationEvent) ? &AnimationEventThunk : nullptr;
+			desc.OnUIClick = (flags & CallbackFlag_OnUIClick) ? &UIClickThunk : nullptr;
+			desc.OnUIValueChanged = (flags & CallbackFlag_OnUIValueChanged) ? &UIValueChangedThunk : nullptr;
+			desc.OnUIFocusChanged = (flags & CallbackFlag_OnUIFocusChanged) ? &UIFocusChangedThunk : nullptr;
+			desc.OnUISubmit = (flags & CallbackFlag_OnUISubmit) ? &UISubmitThunk : nullptr;
 			return record;
 		}
 

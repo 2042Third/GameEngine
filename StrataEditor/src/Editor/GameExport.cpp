@@ -163,7 +163,9 @@ namespace Strata
 			return fail("No project is open");
 		if (context.IsPlaying())
 			return fail("Stop playing before exporting");
-		if (context.IsSceneModified())
+		// A save in flight of the scene as it is now counts as saved: the export plans once it is written, and fails if it fails.
+		const uint64_t awaitedSave = context.IsSceneModified() ? context.FindSaveOfCurrentState() : 0;
+		if (context.IsSceneModified() && awaitedSave == 0)
 			return fail("The open scene has unsaved changes; save it first (the export uses the saved files)");
 		const Project& project = *context.GetProject();
 		if (std::optional<std::string> problem = CheckExportDirectory(options.Directory, project.GetProjectDirectory()))
@@ -233,6 +235,8 @@ namespace Strata
 		Ref<GameExport> exporter(new GameExport());
 		exporter->m_Options = options;
 		exporter->m_Assets = std::static_pointer_cast<EditorAssetManager>(assets->shared_from_this());
+		exporter->m_Saver = &context.GetDocumentSaver();
+		exporter->m_AwaitedSave = awaitedSave;
 		exporter->m_PackOptions = std::move(packOptions);
 		exporter->m_FileName = ToFileName(project.GetConfig().Name);
 		exporter->m_Runtime = runtime;
@@ -258,6 +262,8 @@ namespace Strata
 		// The I/O job reads from the asset manager this export keeps: it ends first.
 		if (m_Shared)
 			m_Shared->Cancel = true;
+		if (m_DocumentScanJob.IsValid())
+			m_DocumentScanJob.Wait();
 		if (m_Job.IsValid())
 			m_Job.Wait();
 	}
@@ -280,8 +286,59 @@ namespace Strata
 				return;
 			}
 			// Finished imports are applied by the asset manager's update, which runs every frame.
-			if (m_Assets->HasPendingImports())
+			if (m_Assets->HasPendingImports() || (m_Saver && m_Saver->IsBusy()))
 				return;
+			if (m_AwaitedSave != 0)
+			{
+				// Kept statuses outlast the saves an export waits for, unless dozens more ended meanwhile: then it is unknown.
+				const std::optional<DocumentSaveStatus> save = m_Saver->GetStatus(m_AwaitedSave);
+				if (!save || save->State != DocumentSaveState::Done)
+				{
+					{
+						std::scoped_lock<std::mutex> lock(m_Shared->Mutex);
+						m_Shared->Ended = true;
+						m_Shared->Outcome = GameExportState::Failed;
+						m_Shared->Error = fmt::format("The scene's save failed, so the export would hold the file from before it ({})",
+							save ? save->Error : std::string("its outcome is no longer known"));
+					}
+					Collect();
+					return;
+				}
+				m_AwaitedSave = 0;
+			}
+			// Searches of what documents reference are no imports: those that have not run yet are done here, by a job.
+			if (!m_DocumentsScanned && !m_DocumentScan)
+			{
+				std::vector<AssetHandle> documents = m_Assets->GetPendingReferenceSearches();
+				if (documents.empty())
+				{
+					m_DocumentsScanned = true;
+				}
+				else
+				{
+					m_DocumentScan = CreateRef<DocumentScan>();
+					m_DocumentScan->Documents = std::move(documents);
+					m_DocumentScanJob = JobSystem::SubmitIO([scan = m_DocumentScan, assets = m_Assets, shared = m_Shared]()
+					{
+						scan->References.resize(scan->Documents.size());
+						for (size_t index = 0; index < scan->Documents.size() && !shared->Cancel; index++)
+							scan->References[index] = assets->FindDocumentReferences(scan->Documents[index]);
+						scan->Done.store(true, std::memory_order_release);
+					});
+				}
+			}
+			if (m_DocumentScan)
+			{
+				if (!m_DocumentScan->Done.load(std::memory_order_acquire))
+					return;
+				for (size_t index = 0; index < m_DocumentScan->Documents.size(); index++)
+				{
+					if (m_DocumentScan->References[index])
+						m_Assets->RecordScannedReferences(m_DocumentScan->Documents[index], *m_DocumentScan->References[index]);
+				}
+				m_DocumentScan.reset();
+				m_DocumentsScanned = true;
+			}
 			Begin();
 		}
 		Collect();
@@ -355,6 +412,7 @@ namespace Strata
 				GameExportResult result;
 				result.AssetPack = options.Directory / FileSystem::FromUTF8(data->Manifest.AssetPack);
 				AssetPackWriteOptions writeOptions;
+				writeOptions.CookDocuments = options.CookDocuments;
 				writeOptions.Cancel = &shared->Cancel;
 				writeOptions.Progress = [&shared](uint64_t done, uint64_t) { shared->DoneBytes = done; };
 				std::string error;
@@ -472,6 +530,9 @@ namespace Strata
 	{
 		if (m_Collected)
 			return;
+		// A scan of documents stops at its next document once cancelled.
+		if (m_DocumentScanJob.IsValid())
+			m_DocumentScanJob.Wait();
 		if (m_Job.IsValid())
 			m_Job.Wait();
 		else if (m_Shared->State == GameExportState::WaitingForImports && m_Shared->Cancel)

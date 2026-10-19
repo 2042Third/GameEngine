@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <bitset>
 #include <cmath>
+#include <string>
 #include <vector>
 
 namespace Strata
@@ -61,7 +62,22 @@ namespace Strata
 			Scroll,
 			GamepadButton,
 			GamepadAxis,
-			GamepadAxisRelease
+			GamepadAxisRelease,
+			Text
+		};
+
+		// The text typed during an input frame: whole characters up to Input::c_MaxTypedTextBytes; once one does not fit, the
+		// rest of the frame's text is dropped too, so what is kept is what was typed first.
+		struct FrameText
+		{
+			std::string Bytes;
+			bool Full = false;
+
+			void Clear()
+			{
+				Bytes.clear();
+				Full = false;
+			}
 		};
 
 		struct SimulatedEvent
@@ -71,6 +87,7 @@ namespace Strata
 			bool Down = false;
 			glm::vec2 Value = { 0.0f, 0.0f }; // Pointer position, scroll offset, or (x) gamepad axis value
 			uint8_t Gamepad = 0;
+			std::string Text; // Typed text (UTF-8)
 		};
 
 		struct SimulatedState
@@ -81,6 +98,7 @@ namespace Strata
 			glm::vec2 MouseDelta = { 0.0f, 0.0f };
 			glm::vec2 ScrollDelta = { 0.0f, 0.0f };
 			SimulatedGamepad Gamepads[c_MaxGamepads];
+			FrameText TypedText;               // Of the current input frame
 			std::vector<SimulatedEvent> Queue; // Applied by the next BeginFrame
 		};
 
@@ -95,8 +113,11 @@ namespace Strata
 			bool HasMousePosition = false;
 
 			GamepadState Gamepads[c_MaxGamepads];
+			FrameText TypedText; // The devices' text of the current input frame
 
 			SimulatedState Simulated;
+			bool PointerCaptured = false;
+			bool KeyboardCaptured = false;
 
 			bool Suspended = false;
 			bool FrameSeen = true; // Whether the game has had the current transitions (false once suspended frames collect them)
@@ -104,12 +125,23 @@ namespace Strata
 			bool Enabled = true;
 			glm::vec2 ViewportOrigin = { 0.0f, 0.0f };
 			glm::vec2 ViewportSize = { 0.0f, 0.0f };
+			glm::vec2 ViewportResolution = { 0.0f, 0.0f }; // Zero: ViewportSize
 			CursorMode Cursor = CursorMode::Normal;     // Last set on the window
 			CursorMode GameCursor = CursorMode::Normal; // What the game asks for (SetGameCursorMode)
 			InputWindow* TargetWindow = nullptr;
 		};
 
 		InputState s_State;
+
+		// Game pixels per window pixel of the viewport (1 without a resolution of its own).
+		glm::vec2 GetViewportPixelScale()
+		{
+			const glm::vec2 size = s_State.ViewportSize;
+			const glm::vec2 resolution = s_State.ViewportResolution;
+			if (!(size.x > 0.0f && size.y > 0.0f && resolution.x > 0.0f && resolution.y > 0.0f))
+				return glm::vec2(1.0f);
+			return resolution / size;
+		}
 
 		// Whether a source held a button through the whole input frame (down, without a transition).
 		template<size_t Count>
@@ -144,6 +176,107 @@ namespace Strata
 		bool IsFinite(const glm::vec2& value)
 		{
 			return std::isfinite(value.x) && std::isfinite(value.y);
+		}
+
+		// Appends a code point's UTF-8 to a frame's text while it fits within Input::c_MaxTypedTextBytes.
+		void AppendCodepoint(FrameText& text, uint32_t codepoint)
+		{
+			if (text.Full)
+				return;
+			char bytes[4];
+			size_t length = 0;
+			if (codepoint < 0x80)
+			{
+				bytes[length++] = static_cast<char>(codepoint);
+			}
+			else if (codepoint < 0x800)
+			{
+				bytes[length++] = static_cast<char>(0xC0 | (codepoint >> 6));
+				bytes[length++] = static_cast<char>(0x80 | (codepoint & 0x3F));
+			}
+			else if (codepoint < 0x10000)
+			{
+				bytes[length++] = static_cast<char>(0xE0 | (codepoint >> 12));
+				bytes[length++] = static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+				bytes[length++] = static_cast<char>(0x80 | (codepoint & 0x3F));
+			}
+			else
+			{
+				bytes[length++] = static_cast<char>(0xF0 | (codepoint >> 18));
+				bytes[length++] = static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F));
+				bytes[length++] = static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+				bytes[length++] = static_cast<char>(0x80 | (codepoint & 0x3F));
+			}
+			if (text.Bytes.size() + length <= Input::c_MaxTypedTextBytes)
+				text.Bytes.append(bytes, length);
+			else
+				text.Full = true;
+		}
+
+		// Whether a code point is typed text: not a control character, a surrogate or beyond Unicode.
+		bool IsTextCodepoint(uint32_t codepoint)
+		{
+			return codepoint >= 0x20 && codepoint != 0x7F && !(codepoint >= 0x80 && codepoint < 0xA0) && !(codepoint >= 0xD800 && codepoint <= 0xDFFF)
+				&& codepoint <= 0x10FFFF;
+		}
+
+		// Decodes UTF-8 (malformed sequences, overlong encodings and surrogates as U+FFFD) and appends the text's characters.
+		void AppendUTF8(FrameText& text, std::string_view utf8)
+		{
+			size_t index = 0;
+			while (index < utf8.size())
+			{
+				const uint8_t lead = static_cast<uint8_t>(utf8[index]);
+				uint32_t length = 0;
+				uint32_t codepoint = 0;
+				uint32_t minimum = 0;
+				if (lead < 0x80)
+				{
+					length = 1;
+					codepoint = lead;
+				}
+				else if ((lead & 0xE0) == 0xC0)
+				{
+					length = 2;
+					codepoint = lead & 0x1F;
+					minimum = 0x80;
+				}
+				else if ((lead & 0xF0) == 0xE0)
+				{
+					length = 3;
+					codepoint = lead & 0x0F;
+					minimum = 0x800;
+				}
+				else if ((lead & 0xF8) == 0xF0)
+				{
+					length = 4;
+					codepoint = lead & 0x07;
+					minimum = 0x10000;
+				}
+				else
+				{
+					AppendCodepoint(text, 0xFFFD); // A continuation byte or an invalid lead
+					index++;
+					continue;
+				}
+				// A truncated sequence replaces only the bytes that belong to it.
+				uint32_t consumed = 1;
+				bool valid = true;
+				for (; consumed < length; consumed++)
+				{
+					if (index + consumed >= utf8.size() || (static_cast<uint8_t>(utf8[index + consumed]) & 0xC0) != 0x80)
+					{
+						valid = false;
+						break;
+					}
+					codepoint = (codepoint << 6) | (static_cast<uint8_t>(utf8[index + consumed]) & 0x3F);
+				}
+				if (!valid || codepoint < minimum || codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF))
+					codepoint = 0xFFFD;
+				if (IsTextCodepoint(codepoint))
+					AppendCodepoint(text, codepoint);
+				index += consumed;
+			}
 		}
 
 		void ApplyCursorMode(CursorMode mode)
@@ -189,6 +322,9 @@ namespace Strata
 				case SimulatedEventType::Scroll:
 					state.ScrollDelta += event.Value;
 					break;
+				case SimulatedEventType::Text:
+					AppendUTF8(state.TypedText, event.Text);
+					break;
 			}
 		}
 
@@ -196,49 +332,122 @@ namespace Strata
 
 	bool Input::IsKeyDown(KeyCode key)
 	{
-		return IsMergedDown(s_State.Keys, s_State.Simulated.Keys, key);
+		return !s_State.KeyboardCaptured && IsMergedDown(s_State.Keys, s_State.Simulated.Keys, key);
 	}
 
 	bool Input::IsKeyPressed(KeyCode key)
 	{
-		return IsMergedTransition(&ButtonStates<c_MaxKeyCode>::Pressed, s_State.Keys, s_State.Simulated.Keys, key);
+		return !s_State.KeyboardCaptured && IsMergedTransition(&ButtonStates<c_MaxKeyCode>::Pressed, s_State.Keys, s_State.Simulated.Keys, key);
 	}
 
 	bool Input::IsKeyReleased(KeyCode key)
 	{
-		return IsMergedTransition(&ButtonStates<c_MaxKeyCode>::Released, s_State.Keys, s_State.Simulated.Keys, key);
+		return !s_State.KeyboardCaptured && IsMergedTransition(&ButtonStates<c_MaxKeyCode>::Released, s_State.Keys, s_State.Simulated.Keys, key);
 	}
 
 	bool Input::IsMouseButtonDown(MouseCode button)
 	{
-		return IsMergedDown(s_State.MouseButtons, s_State.Simulated.MouseButtons, button);
+		return !s_State.PointerCaptured && IsMergedDown(s_State.MouseButtons, s_State.Simulated.MouseButtons, button);
 	}
 
 	bool Input::IsMouseButtonPressed(MouseCode button)
 	{
-		return IsMergedTransition(&ButtonStates<c_MaxMouseButtons>::Pressed, s_State.MouseButtons, s_State.Simulated.MouseButtons, button);
+		return !s_State.PointerCaptured && IsMergedTransition(&ButtonStates<c_MaxMouseButtons>::Pressed, s_State.MouseButtons, s_State.Simulated.MouseButtons, button);
 	}
 
 	bool Input::IsMouseButtonReleased(MouseCode button)
 	{
-		return IsMergedTransition(&ButtonStates<c_MaxMouseButtons>::Released, s_State.MouseButtons, s_State.Simulated.MouseButtons, button);
+		return !s_State.PointerCaptured && IsMergedTransition(&ButtonStates<c_MaxMouseButtons>::Released, s_State.MouseButtons, s_State.Simulated.MouseButtons, button);
 	}
 
 	glm::vec2 Input::GetMousePosition()
 	{
 		if (s_State.Simulated.MousePosition)
 			return *s_State.Simulated.MousePosition;
-		return s_State.MousePosition - s_State.ViewportOrigin;
+		return (s_State.MousePosition - s_State.ViewportOrigin) * GetViewportPixelScale();
 	}
 
 	glm::vec2 Input::GetMouseDelta()
 	{
-		return (s_State.Enabled ? s_State.MouseDelta : glm::vec2(0.0f)) + s_State.Simulated.MouseDelta;
+		// Simulated movements are given in the game's pixels already.
+		return (s_State.Enabled ? s_State.MouseDelta * GetViewportPixelScale() : glm::vec2(0.0f)) + s_State.Simulated.MouseDelta;
 	}
 
 	glm::vec2 Input::GetScrollDelta()
 	{
+		if (s_State.PointerCaptured)
+			return glm::vec2(0.0f);
 		return (s_State.Enabled ? s_State.ScrollDelta : glm::vec2(0.0f)) + s_State.Simulated.ScrollDelta;
+	}
+
+	std::string Input::GetTypedText()
+	{
+		return s_State.KeyboardCaptured ? std::string() : GetUncapturedTypedText();
+	}
+
+	std::string Input::GetUncapturedTypedText()
+	{
+		std::string text = s_State.Enabled ? s_State.TypedText.Bytes : std::string();
+		// Together within the frame's limit: simulated text after the devices', whole characters only.
+		const std::string& simulated = s_State.Simulated.TypedText.Bytes;
+		size_t index = 0;
+		while (index < simulated.size())
+		{
+			const uint8_t lead = static_cast<uint8_t>(simulated[index]);
+			const size_t length = lead < 0x80 ? 1 : ((lead & 0xE0) == 0xC0 ? 2 : ((lead & 0xF0) == 0xE0 ? 3 : 4));
+			if (text.size() + length > c_MaxTypedTextBytes)
+				break;
+			text.append(simulated, index, length);
+			index += length;
+		}
+		return text;
+	}
+
+	void Input::SetPointerCapture(bool captured)
+	{
+		s_State.PointerCaptured = captured;
+	}
+
+	bool Input::IsPointerCaptured()
+	{
+		return s_State.PointerCaptured;
+	}
+
+	void Input::SetKeyboardCapture(bool captured)
+	{
+		s_State.KeyboardCaptured = captured;
+	}
+
+	bool Input::IsKeyboardCaptured()
+	{
+		return s_State.KeyboardCaptured;
+	}
+
+	KeyState Input::GetKeyState(KeyCode key)
+	{
+		KeyState state;
+		state.Down = IsMergedDown(s_State.Keys, s_State.Simulated.Keys, key);
+		state.Pressed = IsMergedTransition(&ButtonStates<c_MaxKeyCode>::Pressed, s_State.Keys, s_State.Simulated.Keys, key);
+		state.Released = IsMergedTransition(&ButtonStates<c_MaxKeyCode>::Released, s_State.Keys, s_State.Simulated.Keys, key);
+		return state;
+	}
+
+	PointerState Input::GetPointerState()
+	{
+		PointerState state;
+		state.Position = GetMousePosition();
+		state.ScrollDelta = (s_State.Enabled ? s_State.ScrollDelta : glm::vec2(0.0f)) + s_State.Simulated.ScrollDelta;
+		for (MouseCode button = 0; button < c_MaxMouseButtons; button++)
+		{
+			const uint32_t bit = 1u << button;
+			if (IsMergedDown(s_State.MouseButtons, s_State.Simulated.MouseButtons, button))
+				state.Down |= bit;
+			if (IsMergedTransition(&ButtonStates<c_MaxMouseButtons>::Pressed, s_State.MouseButtons, s_State.Simulated.MouseButtons, button))
+				state.Pressed |= bit;
+			if (IsMergedTransition(&ButtonStates<c_MaxMouseButtons>::Released, s_State.MouseButtons, s_State.Simulated.MouseButtons, button))
+				state.Released |= bit;
+		}
+		return state;
 	}
 
 	bool Input::IsGamepadConnected(uint32_t gamepad)
@@ -304,6 +513,8 @@ namespace Strata
 
 	glm::vec2 Input::GetViewportSize()
 	{
+		if (s_State.ViewportResolution.x > 0.0f && s_State.ViewportResolution.y > 0.0f)
+			return s_State.ViewportResolution;
 		if (s_State.ViewportSize.x > 0.0f && s_State.ViewportSize.y > 0.0f)
 			return s_State.ViewportSize;
 		if (s_State.TargetWindow)
@@ -321,6 +532,7 @@ namespace Strata
 			s_State.MouseButtons.ClearTransitions();
 			s_State.MouseDelta = glm::vec2(0.0f);
 			s_State.ScrollDelta = glm::vec2(0.0f);
+			s_State.TypedText.Clear();
 			for (GamepadState& gamepad : s_State.Gamepads)
 				gamepad.Buttons.ClearTransitions();
 
@@ -331,6 +543,7 @@ namespace Strata
 				gamepad.Buttons.ClearTransitions();
 			simulated.MouseDelta = glm::vec2(0.0f);
 			simulated.ScrollDelta = glm::vec2(0.0f);
+			simulated.TypedText.Clear();
 			s_State.FrameSeen = false;
 		}
 		if (s_State.Suspended)
@@ -386,10 +599,11 @@ namespace Strata
 		s_State.TargetWindow = window;
 	}
 
-	void Input::SetViewport(const glm::vec2& origin, const glm::vec2& size)
+	void Input::SetViewport(const glm::vec2& origin, const glm::vec2& size, const glm::vec2& resolution)
 	{
 		s_State.ViewportOrigin = origin;
 		s_State.ViewportSize = size;
+		s_State.ViewportResolution = resolution;
 	}
 
 	void Input::ProcessKey(KeyCode key, bool down)
@@ -435,6 +649,12 @@ namespace Strata
 			state.Buttons.Set(index, connected && buttons ? buttons[index] : false);
 	}
 
+	void Input::ProcessText(uint32_t codepoint)
+	{
+		if (IsTextCodepoint(codepoint))
+			AppendCodepoint(s_State.TypedText, codepoint);
+	}
+
 	void Input::SimulateKey(KeyCode key, bool down)
 	{
 		if (key < c_MaxKeyCode)
@@ -457,6 +677,16 @@ namespace Strata
 	{
 		if (IsFinite(offset))
 			s_State.Simulated.Queue.push_back({ SimulatedEventType::Scroll, 0, false, offset });
+	}
+
+	void Input::SimulateText(std::string_view utf8)
+	{
+		if (utf8.empty())
+			return;
+		SimulatedEvent event;
+		event.Type = SimulatedEventType::Text;
+		event.Text = std::string(utf8);
+		s_State.Simulated.Queue.push_back(std::move(event));
 	}
 
 	void Input::SimulateGamepadButton(uint32_t gamepad, GamepadButton button, bool down)

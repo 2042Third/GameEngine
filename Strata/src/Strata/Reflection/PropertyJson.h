@@ -28,6 +28,12 @@ namespace Strata
 	// Non-finite values (not representable in JSON) are written as 0.
 	nlohmann::json FloatToJson(float value);
 
+	// The text JsonUtils::Dump writes for FloatToJson(value), byte for byte, appended without building a JSON value or parsing
+	// one (writers of large documents format millions of floats).
+	void AppendFloatJson(std::string& out, float value);
+	// The text JsonUtils::Dump writes for PropertyValueToJson(property, value), byte for byte, appended the same way.
+	void AppendPropertyValueJson(std::string& out, const PropertyInfo& property, const PropertyValue& value);
+
 	// JSON value <-> UUID (used for asset and entity references everywhere in JSON files).
 	nlohmann::json UUIDToJson(UUID uuid);
 	std::optional<UUID> UUIDFromJson(const nlohmann::json& json);

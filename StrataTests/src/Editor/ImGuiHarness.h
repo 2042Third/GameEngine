@@ -123,6 +123,8 @@ namespace Strata::Tests
 		// Input for the next frame.
 		void MoveMouse(const ImVec2& position);
 		void SetMouseButton(ImGuiMouseButton button, bool down);
+		// Turns the mouse wheel: notches up (positive) or down.
+		void ScrollMouse(float wheel);
 		// Keys are ImGui's keys as widgets see them: ImGuiMod_Ctrl is the shortcut modifier, which macOS users press as Cmd
 		// (the harness reports the physical key ImGui's macOS behaviors turn into it).
 		void SetKey(ImGuiKey key, bool down);

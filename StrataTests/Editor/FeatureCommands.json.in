@@ -5,17 +5,47 @@
 		"expect": { "/classes": { "min": 1 } } },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "RigidBody" },
 		"expect": { "/values/Type": { "equals": "Dynamic" } } },
+	{ "command": "prefab.status", "parameters": { "entity": "F7E0000000000031" }, "expect": { "/overrides": { "equals":
+		[ { "entity": "F7E0000000000030", "prefabEntity": "F7C0000000000001", "component": "Script", "property": "CrateScript.Value", "kind": "Property" },
+			{ "entity": "F7E0000000000031", "prefabEntity": "F7C0000000000002", "component": "MeshRenderer", "property": "CastShadows", "kind": "Property" } ] } } },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "Transform" },
 		"expect": { "/values/Translation": { "equals": [ -4, 4, 0 ] } } },
+	{ "command": "ui.layout", "parameters": { "entity": "F7E0000000000072", "screen": [ 1280, 720 ] },
+		"expect": {
+			"/elements/0/name": { "equals": "Play Button" },
+			"/elements/0/rect": { "equals": [ 952, 40, 288, 48 ] },
+			"/elements/0/visible": { "equals": true } } },
+	{ "command": "ui.hitTest", "parameters": { "position": [ 1096, 64 ], "screen": [ 1280, 720 ] },
+		"expect": {
+			"/entity": { "equals": "F7E0000000000073" },
+			"/selectable": { "equals": "F7E0000000000072" } } },
 	{ "command": "play.start" },
 	{ "command": "play.pause", "parameters": { "paused": true } },
-	{ "command": "play.step", "parameters": { "frames": 150 } },
-	{ "command": "editor.wait", "parameters": { "frames": 160 } },
+	{ "command": "play.step", "parameters": { "steps": 150 }, "expect": { "/stepsRun": { "equals": 150 } } },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "Transform" },
 		"expect": {
 			"/values/Translation/0": { "min": -4.05, "max": -3.95 },
 			"/values/Translation/1": { "min": 1.6, "max": 1.7 },
 			"/values/Translation/2": { "min": -0.05, "max": 0.05 } } },
+	{ "command": "play.pause", "parameters": { "paused": false } },
+	{ "command": "input.click", "parameters": { "entity": "F7E0000000000072" },
+		"expect": {
+			"/clicked": { "equals": true },
+			"/events/1/type": { "equals": "click" },
+			"/events/1/name": { "equals": "Play Button" } } },
+	{ "command": "input.click", "parameters": { "entity": "F7E0000000000087" },
+		"expect": { "/events/1/name": { "equals": "Name Field" } } },
+	{ "command": "input.type", "parameters": { "text": "!" } },
+	{ "command": "ui.layout", "parameters": { "entity": "F7E0000000000087" },
+		"expect": {
+			"/elements/0/editing": { "equals": true },
+			"/elements/0/text": { "equals": "Strata!" } } },
+	{ "command": "input.sequence", "parameters": { "steps": 4,
+			"events": [ { "step": 1, "command": "input.click", "parameters": { "entity": "F7E0000000000072" } } ],
+			"observe": [ { "entity": "F7E0000000000083", "script": "UIFeatures", "field": "LastWidget" } ] },
+		"expect": {
+			"/seen/0/step": { "equals": 1 },
+			"/samples/0/values/0/value": { "equals": "Play Button" } } },
 	{ "command": "script.status",
 		"expect": {
 			"/loaded": { "equals": true },
@@ -25,5 +55,7 @@
 	{ "command": "play.stop" },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "Transform" },
 		"expect": { "/values/Translation": { "equals": [ -4, 4, 0 ] } } },
+	{ "command": "component.get", "parameters": { "entity": "F7E0000000000087", "component": "UIInputField" },
+		"expect": { "/values/Text": { "equals": "Strata" } } },
 	{ "command": "project.export", "parameters": { "directory": "@STRATA_FEATURE_RUN_DIR@/Build" } }
 ]

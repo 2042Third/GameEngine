@@ -40,6 +40,21 @@ namespace Strata::StringUtils
 		return text.size() >= suffix.size() && text.substr(text.size() - suffix.size()) == suffix;
 	}
 
+	// A count with its thousands separated by commas, as the editor shows counts to people: 12345 -> "12,345".
+	inline std::string FormatThousands(uint64_t value)
+	{
+		std::string digits = std::to_string(value);
+		std::string result;
+		result.reserve(digits.size() + digits.size() / 3);
+		for (size_t index = 0; index < digits.size(); index++)
+		{
+			if (index > 0 && (digits.size() - index) % 3 == 0)
+				result += ',';
+			result += digits[index];
+		}
+		return result;
+	}
+
 	// The text with every byte sequence that is no valid UTF-8 (stray continuation bytes, truncated or overlong sequences,
 	// surrogates, code points past U+10FFFF) replaced by U+FFFD, so that messages from third-party code (an image decoder
 	// quoting the bytes of a file) can go into logs, JSON and the UI. Valid text comes back unchanged.

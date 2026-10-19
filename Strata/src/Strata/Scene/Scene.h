@@ -70,6 +70,16 @@ namespace Strata
 		PhysicsLayerSettings PhysicsLayers; // Layer names and which layers collide
 	};
 
+	// What Scene::Copy copies.
+	struct SceneCopyOptions
+	{
+		// Only what a document of the scene holds, for a save that writes it in the background (a snapshot): the IDs, the
+		// hierarchy, the kept unknown components and every serializable registered component, also those play copies leave
+		// out (ComponentFlags::NoCopy); not the cached world transforms. The copy's world transforms are never computed, so it
+		// is only read (written, as SceneDocumentWriter does), never updated or played.
+		bool SerializedOnly = false;
+	};
+
 	// A world of entities. Owns the EnTT registry, the hierarchy, and (while playing) the runtime systems.
 	// All Scene functions must be called on the main thread.
 	//
@@ -95,10 +105,13 @@ namespace Strata
 		// are, and every component storage is copied whole (ComponentInfo::CopyStorage), the storages in parallel on the job
 		// system. Copies keep the source asset and the lineage (GetSourceAsset, GetLineageID).
 		static Ref<Scene> Copy(const Ref<Scene>& source);
+		// The same with options (SceneCopyOptions::SerializedOnly: the snapshot a background save writes).
+		static Ref<Scene> Copy(const Ref<Scene>& source, const SceneCopyOptions& options);
 		// Copies context data a module keeps for a scene (in its registry's context) into a copy of the scene: Copy calls every
-		// copier, in registration order, once the copy is complete; a copier does nothing for a source without such data (the
-		// Renderer module's clones the render scene: RenderScene::CopyIntoScene). Registered only while the composition root
-		// registers modules (Engine::RegisterBuiltinModules); returns false otherwise.
+		// copier, in registration order, once a full copy is complete (never for SceneCopyOptions::SerializedOnly snapshots,
+		// which need no render scene); a copier does nothing for a source without such data (the Renderer module's clones the
+		// render scene: RenderScene::CopyIntoScene). Registered only while the composition root registers modules
+		// (Engine::RegisterBuiltinModules); returns false otherwise.
 		using SceneContextCopier = void (*)(const Scene& source, Scene& destination);
 		static bool RegisterContextCopier(SceneContextCopier copier);
 		// Lets go of a scene that is no longer used (one a scene switch or an opened scene replaced) without spending the
@@ -347,18 +360,26 @@ namespace Strata
 		SceneRuntimeMode GetRuntimeMode() const { return m_RuntimeMode; }
 		bool IsUpdating() const { return m_IsUpdating; }
 		// Pausing stops the updates of the running systems and tells them (SceneSystem::OnPausedChanged). Starting the scene
-		// resets it to unpaused.
+		// resets it to unpaused. Resuming drops the steps that have not run (Step): it hands the scene to real time, and a
+		// count asked for while paused must not leak into a later pause.
 		void SetPaused(bool paused);
 		bool IsPaused() const { return m_IsPaused; }
 		// While paused, lets the next `frames` updates each advance the simulation by exactly one fixed step.
 		void Step(uint32_t frames = 1) { m_StepFrames += frames; }
-		// Steps requested with Step that have not run yet.
+		// Steps requested with Step that have not run yet (dropped by resuming and by OnRuntimeStop).
 		uint32_t GetStepFrames() const { return m_StepFrames; }
+		// Fixed steps run since OnRuntimeStart, stepped (Step) or due on the clock: the game's own time base, which tools
+		// that must be exact (play.step, simulated input) count in instead of frames.
+		uint64_t GetFixedStepCount() const { return m_FixedSteps; }
 
 		// Simulation time since OnRuntimeStart (seconds) and number of runtime updates.
 		double GetTime() const { return m_Time; }
 		uint64_t GetFrameIndex() const { return m_FrameIndex; }
 		float GetTimeScale() const { return m_TimeScale; }
+		// Time that the time scale does not slow or stop (menus and fades at time scale 0): the latest runtime update's timestep
+		// before the time scale (the fixed timestep of a step while paused), and their sum since OnRuntimeStart, in seconds.
+		float GetUnscaledDeltaTime() const { return m_UnscaledDeltaTime; }
+		double GetUnscaledTime() const { return m_UnscaledTime; }
 		void SetTimeScale(float timeScale) { m_TimeScale = std::max(0.0f, timeScale); }
 
 		// How an update that is behind runs its fixed steps. Without time dilation (the default, so that tests and tools step
@@ -635,11 +656,14 @@ namespace Strata
 		bool m_IsUpdating = false;
 		bool m_IsPaused = false;
 		uint32_t m_StepFrames = 0;
+		uint64_t m_FixedSteps = 0;
 		float m_FixedTimeAccumulator = 0.0f;
 		float m_TimeScale = 1.0f;
 		bool m_TimeDilation = false;
 		uint64_t m_DroppedFixedSteps = 0;
 		double m_Time = 0.0;
+		double m_UnscaledTime = 0.0;
+		float m_UnscaledDeltaTime = 0.0f;
 		uint64_t m_FrameIndex = 0;
 		std::optional<int32_t> m_QuitRequest;
 		std::optional<UUID> m_SceneLoadRequest;
@@ -655,6 +679,7 @@ namespace Strata
 
 		friend class Entity;
 		friend class SceneSerializer;
+		friend class SceneBuilder;
 	};
 
 }

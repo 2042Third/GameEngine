@@ -110,12 +110,25 @@ ctest --preset macos-debug -LE perf
   source's median (target 5 ms);
   `Perf.Editor` adds `FindReferences10k`, `JournalPerCommand`, the recovery journal's write (the frames and the I/O
   threads' time, `RecoveryWriteIOTime100k`) and snapshot, and the longest frame while `scene.open` opens 10,000 prefab
-  instances (`SceneOpen10kPrefabInstancesMaxFrame`); `Perf.EditorPanels` and `PerfGPU.Editor` time the Content Browser
+  instances (`SceneOpen10kPrefabInstancesMaxFrame`), and saving the realistic worlds in a helper process (the longest frame
+  from the save's start to its publication, `SaveMaxFrame250k` and `SaveMaxFrame1M`; the 1M save's `SaveSeconds1M` and
+  `SavePeakPrivateIncrease1M`; `--strata-test-helper=save-world <project> <scene> <result file>` runs one by hand);
+  `Perf.Scene.CancelLoad1M` cancels loads of the realistic 1M world at 25, 50 and 75% of the read and
+  `RefuseOverCap1M` loads a 1,100,445-entity document (both through `SceneLoader`); `Perf.Runtime.World1MStart`,
+  `World1MTransientMemory` (a helper process: `--strata-test-helper=start-world-game <manifest> <result file>`) and
+  `QuitDuringLoad1M` start and quit the realistic 1M world exported as a game (cooked, and with its JSON);
+  `Perf.Editor.ImportFolder24x4kPeakPrivate` imports 24 textures of 4096x4096 with a 1 GiB import memory budget (a
+  helper process: `--strata-test-helper=import-folder <project> <folder> <budget MB> <result file>`);
+  `Perf.EditorPanels` and `PerfGPU.Editor` time the Content Browser
   with 10,001 assets (icons; thumbnails); and `PerfGPU.Editor` the longest frames of `scene.open` of the 100,000- and
   1,000,000-entity scenes (and of the 100,000 over the million, and of 100,000 cubes over the 100,000, whose render
   proxies the load builds before the swap: `SceneOpen100kCubesMaxFrame`), of starting play of the million, of
   `asset.import` of a 4096x4096 texture and of making a stress project's thumbnails, and the editor's working set with
-  the million open),
+  the million open; `PerfGPU.Editor.WorldOpen1M*` opens the realistic 1M world in a headless editor through `StrataCLI`
+  (its time, longest frame and peak memory; `WorldOpen1MSaved*` once the editor saved it); world-scale gates write their projects with `Perf/WorldFixture.h`: realistic 250k and 1M worlds,
+  many-asset projects, texture folders, exported world games; to look at one, `StrataTests
+  --strata-test-helper=write-world-project <new dir> World1M:1000000:colliders`, `write-many-assets-project <new dir>
+  30000` or `write-texture-folder <new dir> 24 4096`),
   `StrataEditor.Smoke`
   (the real editor in a window with `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label
   `gpu`; it creates a project in `build/<preset>/StrataTests/SmokeProject` (emptied first by `StrataEditor.SmokeClean`),

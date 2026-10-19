@@ -2,6 +2,7 @@
 
 #include "Audio/AudioTestUtils.h"
 #include "Editor/CommandTestUtils.h"
+#include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "FeatureTest/FeatureTestUtils.h"
@@ -176,5 +177,36 @@ TEST_SUITE("Editor.Perf")
 		CheckProfileSchema(empty);
 		CHECK(empty["frames"] == 0);
 		CHECK(empty["frame"]["maxMs"] == 0.0f);
+	}
+
+	TEST_CASE("Command work is timed as the Editor.Commands stage, not as untimed time")
+	{
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		FrameProfiler& profiler = FrameProfiler::Get();
+		profiler.Reset();
+
+		// A frame that runs a command and polls a pending one, and a frame without commands.
+		profiler.BeginFrame();
+		auto start = std::chrono::steady_clock::now();
+		Run(context, commands, "editor.status");
+		EditorCommandResult waiting = commands.Execute(context, "editor.wait", { { "frames", 2 } });
+		REQUIRE(waiting.IsPending());
+		PollCommandResult(waiting, context);
+		profiler.EndFrame(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+		profiler.BeginFrame();
+		start = std::chrono::steady_clock::now();
+		context.Update(Timestep(1.0f / 60.0f));
+		profiler.EndFrame(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+
+		const FrameStageID stage = profiler.FindStage("Editor.Commands");
+		REQUIRE(stage != c_InvalidFrameStage);
+		CHECK(profiler.IsStageInWorkTime(stage));
+		CHECK(profiler.GetFrame(1).StageMs[stage] > 0.0f);
+		CHECK(profiler.GetFrame(0).StageMs[stage] == 0.0f);
+		// editor.perf names it.
+		const nlohmann::json profile = Run(context, commands, "editor.perf", { { "frames", 2 } });
+		REQUIRE(profile["stages"].contains("Editor.Commands"));
+		CHECK(profile["stages"]["Editor.Commands"]["maxMs"].get<float>() > 0.0f);
 	}
 }

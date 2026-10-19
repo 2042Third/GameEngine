@@ -4,11 +4,13 @@
 #include "UI/ItemProbe.h"
 #include "UI/Theme.h"
 
+#include <Strata/Core/Assert.h>
 #include <Strata/ImGui/ImGuiRenderer.h>
 #include <Strata/Renderer/Texture.h>
 
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
+#include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <cmath>
@@ -35,6 +37,9 @@ namespace Strata::UI
 			if (tooltip && *tooltip && IsTooltipDue())
 				ImGui::SetTooltip("%s", tooltip);
 		}
+
+		// The strip the chips drawn now belong to (ChipStrip), if any.
+		ChipStrip* s_ChipStrip = nullptr;
 
 		// The factor ImGui applies to font sizes (UI scale and main scale), for text drawn at an explicit size.
 		float GetFontScale()
@@ -122,8 +127,11 @@ namespace Strata::UI
 			const ThemeColors& colors = GetThemeColors();
 			const float height = ImGui::GetFrameHeight();
 			const bool hasLabel = label && *label;
+			const float labeledWidth = ChipWidth(icon, label);
+			const float iconWidth = ChipWidth(icon, nullptr);
+			const bool showLabel = hasLabel && !(s_ChipStrip && s_ChipStrip->NextIsIcon(labeledWidth, iconWidth));
 			const ImVec2 iconSize = ImGui::CalcTextSize(icon);
-			const float width = ChipWidth(icon, label);
+			const float width = showLabel || !hasLabel ? labeledWidth : iconWidth;
 
 			// Chips lie over what their window shows: a click on one leaves the focus where it was, so that a chip over the
 			// game view does not hand the game the input.
@@ -168,11 +176,14 @@ namespace Strata::UI
 			const float textY = min.y + (height - ImGui::GetFontSize()) * 0.5f;
 			const float iconX = min.x + style.FramePadding.x;
 			AddText(drawList, ImVec2(iconX, textY), iconColor, icon);
-			if (hasLabel)
+			if (showLabel)
 				AddText(drawList, ImVec2(iconX + iconSize.x + style.ItemInnerSpacing.x, textY), labelColor, label);
 			ImGui::RenderNavCursor(ImRect(min, max), ImGui::GetItemID());
 
-			ShowTooltip(tooltip);
+			if (hasLabel && !showLabel && IsTooltipDue())
+				ImGui::SetTooltip("%s", tooltip && *tooltip ? fmt::format("{}\n{}", label, tooltip).c_str() : label);
+			else
+				ShowTooltip(tooltip);
 			ItemProbe::Record(id, true, ToColorU32(iconColor), hasLabel ? std::string_view(label) : std::string_view());
 			return pressed;
 		}
@@ -202,6 +213,40 @@ namespace Strata::UI
 			return ImGui::GetFrameHeight();
 		const ImGuiStyle& style = ImGui::GetStyle();
 		return style.FramePadding.x * 2.0f + ImGui::CalcTextSize(icon).x + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label).x;
+	}
+
+	ChipStrip::ChipStrip(ChipStripState& state, float available)
+		: m_State(state), m_Available(available)
+	{
+		ST_CORE_ASSERT(!s_ChipStrip, "Chip strips do not nest");
+		s_ChipStrip = this;
+	}
+
+	ChipStrip::~ChipStrip()
+	{
+		s_ChipStrip = nullptr;
+		// The chips the next frame draws as icons: from the last one back, as few as make the strip fit.
+		m_State.Widths.resize(m_Count);
+		const float spacing = ImGui::GetStyle().ItemSpacing.x;
+		float width = m_Count > 0 ? spacing * static_cast<float>(m_Count - 1) : 0.0f;
+		for (const auto& [labeled, icon] : m_State.Widths)
+			width += labeled;
+		size_t firstIcon = m_Count;
+		while (firstIcon > 0 && width > m_Available)
+		{
+			firstIcon--;
+			width -= m_State.Widths[firstIcon].first - m_State.Widths[firstIcon].second;
+		}
+		m_State.FirstIcon = firstIcon < m_Count ? firstIcon : SIZE_MAX;
+	}
+
+	bool ChipStrip::NextIsIcon(float labeledWidth, float iconWidth)
+	{
+		const size_t index = m_Count++;
+		if (m_State.Widths.size() < m_Count)
+			m_State.Widths.resize(m_Count);
+		m_State.Widths[index] = { labeledWidth, iconWidth };
+		return index >= m_State.FirstIcon;
 	}
 
 	float ChipWidth(const char* icon, const char* label)

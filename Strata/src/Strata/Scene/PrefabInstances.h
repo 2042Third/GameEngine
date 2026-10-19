@@ -60,6 +60,13 @@ namespace Strata
 		// of the root's.
 		nlohmann::json MakeTemplate(const Scene& scene, Entity root, const nlohmann::json* rootTransform, const nlohmann::json* rootName,
 			std::unordered_map<UUID, UUID>& outNewIds);
+		// The prefab ids MakeTemplate gives the entities of the instance at `root`, by their UUIDs, without serializing it: an
+		// entity's PrefabEntityID, or a new id for an entity that is not linked to the root's prefab and for an entity whose id
+		// an entity listed before it has (a copy made within the instance).
+		std::unordered_map<UUID, UUID> MapTemplateIds(Entity root);
+		// One entity's components as MakeTemplate lists them: without its link, references to the instance's entities replaced
+		// by their prefab ids (`templateIds`, MapTemplateIds's).
+		nlohmann::json MakeTemplateComponents(Entity entity, const std::unordered_map<UUID, UUID>& templateIds);
 
 		// How an instance differs from the prefab's snapshot (the template below the root's template id), ignoring the root's
 		// transform and name.
@@ -82,10 +89,15 @@ namespace Strata
 		// A hash of an instance's values in the same form (MakeTemplate's, without the root's transform and name): equal for
 		// equal values, so an instance whose hash is the one it had when it took its prefab's values is unmodified since.
 		uint64_t GetContentHash(const Scene& scene, Entity root);
+		// The hash both of the above take, of a part as ExtractTemplate or MakeTemplate gives it: for code that already has the
+		// instance's template (GetContentHash of it without serializing the instance again) or hashes one part for many instances.
+		uint64_t GetTemplateHash(const nlohmann::json& part);
 		// Records on an instance root that the instance has just taken the values of its part of `snapshot` (instantiated,
 		// created, applied, reverted or updated): PrefabInstanceComponent::PrefabVersion and SyncedHash. A prefab that changes
 		// while the instance's scene is closed then still updates it once the scene opens, when it was not modified.
 		void MarkSynced(Scene& scene, Entity root, const nlohmann::json& snapshot);
+		// The same with the part's version (GetPartVersion) and the instance's content hash (GetContentHash) already worked out.
+		void MarkSynced(Entity root, uint64_t partVersion, uint64_t contentHash);
 		// Whether the instance was made from (or last took) another version of its part than the snapshot's: true only when its
 		// root records a version (MarkSynced) and it differs.
 		bool IsOutdated(Entity root, const nlohmann::json& snapshot);

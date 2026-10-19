@@ -4,6 +4,7 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/ExternalEditor.h"
 #include "Editor/GameExport.h"
+#include "Editor/InputSequence.h"
 #include "Editor/ProjectSamples.h"
 #include "Editor/ProjectThumbnail.h"
 #include "Editor/SceneRecovery.h"
@@ -11,6 +12,7 @@
 #include "Editor/ThumbnailCache.h"
 
 #include <Strata/Asset/AssetDependencies.h>
+#include <Strata/Asset/AssetImporter.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Audio/AudioEngine.h>
 #include <Strata/Core/Crypto.h>
@@ -22,15 +24,19 @@
 #include <Strata/Core/Profiling.h>
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
+#include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
+#include <Strata/Scene/PrefabInstances.h>
+#include <Strata/Scene/PrefabOverrides.h>
 #include <Strata/Scene/SceneLoader.h>
 #include <Strata/Scene/SceneSerializer.h>
 #include <Strata/Scripting/ScriptingComponents.h>
 
 #include <algorithm>
+#include <unordered_set>
 #include <limits>
 #include <string_view>
 #include <utility>
@@ -144,6 +150,7 @@ namespace Strata
 		// still has, which scans find by their handles wherever they moved.
 		m_UndoStack.SetObserver(m_Recovery.get());
 		m_Recovery->BeginScene(*m_EditScene, UUID::Null(), {}, {});
+		CreateAnimationPreview();
 		m_Recovery->SetEntryValidator([this](const RecoveryEntry& entry) -> std::string
 		{
 			if (!entry.Scene.IsValid())
@@ -163,16 +170,36 @@ namespace Strata
 			return scenes;
 		});
 		SetStatusProvider("recovery", [this]() { return m_Recovery->DescribeStatus(); });
-		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details).
+		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details). Imports
+		// still running (a project opened with assets to import, re-imports) deliver their assets when they finish; scanning
+		// is the scan of the project's files while it registers them (null: none runs).
 		SetStatusProvider("assets", [this]()
 		{
 			const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
 			if (!manager)
 				return nlohmann::json(nullptr);
 			nlohmann::json description = CommandUtils::DescribeAssetStats(manager->GetStats());
-			// Imports still running (a project opened with assets to import, re-imports): their assets arrive when they finish.
 			description["importing"] = m_AssetManager && manager == m_AssetManager ? m_AssetManager->GetPendingImportCount() : 0u;
+			// The background scan of the project's assets, while it runs (commands that need the whole registry wait for it).
+			description["scanning"] = CommandUtils::DescribeAssetScan(*this);
+			// Documents changed on disk whose search of what they reference waits or runs (no import: exports do not wait for it).
+			description["referenceSearches"] = m_AssetManager && manager == m_AssetManager ? m_AssetManager->GetPendingReferenceSearches().size() : size_t(0);
+			// The imports' memory estimates against their budget (EditorAssetManager::SetImportMemoryBudget).
+			description["importMemoryMB"] = m_AssetManager && manager == m_AssetManager ? CommandUtils::DescribeImportMemory(m_AssetManager->GetImportMemoryStats())
+				: nlohmann::json(nullptr);
 			return description;
+		}, [this]()
+		{
+			const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+			if (!manager)
+				return nlohmann::json(nullptr);
+			const AssetManagerStats stats = manager->GetStats();
+			return nlohmann::json {
+				{ "ready", stats.LoadedAssets },
+				{ "loading", stats.LoadingAssets },
+				{ "importing", m_AssetManager && manager == m_AssetManager ? m_AssetManager->GetPendingImportCount() : 0u },
+				{ "scanning", CommandUtils::DescribeAssetScan(*this) },
+				{ "failed", stats.FailedAssets } };
 		});
 	}
 
@@ -289,7 +316,13 @@ namespace Strata
 		specification.WatchFiles = m_Specification.WatchAssetFiles;
 		m_AssetManager = CreateRef<EditorAssetManager>(specification);
 		AssetManager::SetActive(m_AssetManager);
-		m_AssetManager->Scan(m_Specification.ImportInBackground ? ScanImports::InBackground : ScanImports::Wait);
+		m_DocumentSaver.SetAssetManager(m_AssetManager);
+		// In the background, the project opens at once: the scan's jobs prepare the assets while frames go on, and what needs
+		// the whole registry waits for it (commands, the start scene, the script usage scan).
+		if (m_Specification.ImportInBackground)
+			m_AssetManager->BeginScan(ScanImports::InBackground);
+		else
+			m_AssetManager->Scan(ScanImports::Wait);
 		m_AssetManager->PurgeTrash(c_TrashKeepTime);
 		OpenThumbnails();
 		ST_INFO("Opened project '{}' ({})", m_Project->GetConfig().Name, FileSystem::ToUTF8(m_Project->GetProjectDirectory()));
@@ -297,29 +330,80 @@ namespace Strata
 		m_Recovery->SetProject(m_Project->GetIntermediateDirectory() / SceneRecovery::c_DirectoryName, m_Project->GetAssetDirectory());
 		m_Recovery->Scan();
 		OpenScriptEngine(created);
-		StartScriptUsageScan();
 
 		// Continue with the start scene when the project has one: it loads in the background (UpdateSceneLoad warns when it
-		// cannot be opened).
+		// cannot be opened), once the assets are registered. Meanwhile it counts as the scene being opened (IsSceneLoading).
 		const AssetHandle startScene = m_Project->GetConfig().StartScene;
-		std::string sceneError;
-		if (startScene.IsValid())
+		if (m_AssetManager->IsScanning())
 		{
-			if (!BeginOpenScene(startScene, &sceneError))
+			m_AfterAssetScan = true;
+			if (startScene.IsValid())
 			{
-				ST_WARN("Could not open the start scene: {}", sceneError);
-				// Reported like a load that failed (project.open, scene.loadStatus).
+				CancelSceneLoad();
+				m_StartSceneAfterScan = startScene;
 				m_SceneLoadStatus = EditorSceneLoadStatus();
 				m_SceneLoadStatus.ID = m_NextSceneLoadID++;
 				m_SceneLoadStatus.Scene = startScene;
-				m_SceneLoadStatus.State = SceneLoadState::Failed;
-				m_SceneLoadStatus.Error = std::move(sceneError);
+				m_SceneLoadStatus.State = SceneLoadState::LoadingScene;
+				m_SceneLoadStatus.StartScene = true;
 				m_SceneLoadStatus.Started = std::chrono::steady_clock::now();
 			}
-			m_SceneLoadStatus.StartScene = true;
+		}
+		else
+		{
+			StartScriptUsageScan();
+			if (startScene.IsValid())
+				OpenStartScene(startScene, m_NextSceneLoadID);
 		}
 		m_RecentProjects.Add(m_Project->GetConfig().Name, m_Project->GetProjectFile());
 		return true;
+	}
+
+	void EditorContext::OpenStartScene(AssetHandle startScene, uint64_t id)
+	{
+		std::string sceneError;
+		if (!BeginOpenScene(startScene, &sceneError))
+		{
+			ST_WARN("Could not open the start scene: {}", sceneError);
+			// Reported like a load that failed (project.open, scene.loadStatus).
+			m_SceneLoadStatus = EditorSceneLoadStatus();
+			m_SceneLoadStatus.Scene = startScene;
+			m_SceneLoadStatus.State = SceneLoadState::Failed;
+			m_SceneLoadStatus.Error = std::move(sceneError);
+			m_SceneLoadStatus.Started = std::chrono::steady_clock::now();
+		}
+		// The load the project's opening announced (its ID) goes on as this one.
+		m_SceneLoadStatus.ID = id;
+		m_NextSceneLoadID = std::max(m_NextSceneLoadID, id + 1);
+		m_SceneLoadStatus.StartScene = true;
+	}
+
+	void EditorContext::FinishAssetScan()
+	{
+		if (!m_AfterAssetScan || !m_AssetManager || m_AssetManager->IsScanning())
+			return;
+		m_AfterAssetScan = false;
+		StartScriptUsageScan();
+		if (const AssetHandle startScene = std::exchange(m_StartSceneAfterScan, UUID::Null()); startScene.IsValid())
+		{
+			OpenStartScene(startScene, m_SceneLoadStatus.ID);
+			m_StartSceneAfterScanID = m_SceneLoadStatus.ID;
+		}
+	}
+
+	bool EditorContext::IsScanningAssets() const
+	{
+		return m_AssetManager && m_AssetManager->IsScanning();
+	}
+
+	bool EditorContext::IsWaitingForAssets() const
+	{
+		return IsScanningAssets() || m_StartSceneAfterScan.IsValid() || (m_SceneLoad && m_SceneLoadStatus.ID == m_StartSceneAfterScanID);
+	}
+
+	std::optional<AssetScanProgress> EditorContext::GetAssetScanProgress() const
+	{
+		return m_AssetManager ? m_AssetManager->GetScanProgress() : std::nullopt;
 	}
 
 	void EditorContext::OpenThumbnails()
@@ -340,6 +424,9 @@ namespace Strata
 
 	void EditorContext::ReleaseProject(bool activateBuiltinAssets)
 	{
+		// Saves in flight are written and published before anything of the project goes: closing never loses one. Through
+		// commands and the UI the project closes only once they ended, so this blocks only when the editor goes away.
+		m_DocumentSaver.FinishAll();
 		// The export reads the project's assets on an I/O thread: it stops before they go.
 		if (m_GameExport && !m_GameExport->IsFinished())
 		{
@@ -347,6 +434,7 @@ namespace Strata
 			m_GameExport->Wait();
 		}
 		CancelSceneLoad();
+		m_AfterAssetScan = false;
 		Stop();
 		const bool hadProject = m_Project != nullptr;
 		if (hadProject)
@@ -378,8 +466,10 @@ namespace Strata
 			m_AssetManager->Close();
 			if (AssetManager::GetActive() == m_AssetManager)
 				AssetManager::SetActive(nullptr);
+			m_DocumentSaver.SetAssetManager(nullptr);
 			m_AssetManager.reset();
 			m_SceneMetadataVersion = UINT64_MAX;
+			m_ImportFailureCount = 0;
 		}
 		if (m_Project)
 		{
@@ -412,6 +502,7 @@ namespace Strata
 		m_PendingFrame.reset();
 		m_AnimationPreview.reset(); // Of the scene that goes, which it refers to: before the scene is released
 		Ref<Scene> previous = std::exchange(m_EditScene, std::move(scene));
+		CreateAnimationPreview();
 		m_SceneHandle = handle;
 		ClearSelection();
 		m_UndoStack.Clear();
@@ -534,6 +625,12 @@ namespace Strata
 
 	bool EditorContext::WaitForSceneLoad(std::chrono::milliseconds timeout)
 	{
+		// A start scene waiting for the asset scan: the scan finishes here (it inserts everything at once).
+		if (m_AfterAssetScan && m_AssetManager)
+		{
+			m_AssetManager->Scan(ScanImports::InBackground);
+			FinishAssetScan();
+		}
 		if (!m_SceneLoad)
 			return m_SceneLoadStatus.State == SceneLoadState::Ready;
 		const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -579,6 +676,13 @@ namespace Strata
 
 	void EditorContext::CancelSceneLoad()
 	{
+		if (m_StartSceneAfterScan.IsValid())
+		{
+			m_StartSceneAfterScan = UUID::Null();
+			m_SceneLoadStatus.State = SceneLoadState::Cancelled;
+			m_SceneLoadStatus.Error = "Opening the scene was cancelled";
+			m_SceneLoadStatus.Seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_SceneLoadStatus.Started).count();
+		}
 		if (!m_SceneLoad)
 			return;
 		m_SceneLoad->Request.Cancel();
@@ -671,59 +775,161 @@ namespace Strata
 		m_Viewport.FrameScene(*this);
 	}
 
-	bool EditorContext::SaveScene(std::string* outError)
-	{
-		if (!m_AssetManager || !m_SceneHandle.IsValid())
-		{
-			if (outError)
-				*outError = "The scene has not been saved yet; save it under a path first";
-			return false;
-		}
-		// What the scene references comes from the JSON at hand: saving a large scene parses no document again.
-		const nlohmann::json json = SceneSerializer::Serialize(*m_EditScene);
-		std::vector<AssetHandle> references;
-		const bool scanned = AssetDependencies::ScanDocument(AssetType::Scene, json, references);
-		std::string document = JsonUtils::Dump(json, 1, '\t') + "\n";
-		const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(document.data()), document.size());
-		if (!m_AssetManager->SaveNativeAsset(m_SceneHandle, bytes, false, outError, scanned ? &references : nullptr))
-			return false;
-		m_UndoStack.MarkSaved();
-		OnSceneSaved();
-		// The changes are on disk now: the recovery journal starts again from this document.
-		const auto [sceneFile, scenePath] = GetSceneFile(m_SceneHandle);
-		m_Recovery->OnSaved(m_SceneHandle, sceneFile, scenePath, std::move(document));
-		return true;
-	}
-
-	bool EditorContext::SaveSceneAs(const std::string& relativePath, std::string* outError)
+	uint64_t EditorContext::BeginSaveScene(std::string* outError)
 	{
 		if (!m_AssetManager)
 		{
 			if (outError)
 				*outError = "No project is open";
-			return false;
+			return 0;
 		}
-		// The scene takes the name of its file.
-		const std::string previousName = m_EditScene->GetName();
-		m_EditScene->SetName(FileSystem::ToUTF8(FileSystem::FromUTF8(relativePath).stem()));
-		const nlohmann::json json = SceneSerializer::Serialize(*m_EditScene);
-		std::vector<AssetHandle> references;
-		const bool scanned = AssetDependencies::ScanDocument(AssetType::Scene, json, references);
-		std::string document = JsonUtils::Dump(json, 1, '\t') + "\n";
-		const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(document.data()), document.size());
-		const AssetHandle handle = m_AssetManager->CreateNativeAsset(relativePath, bytes, outError, scanned ? &references : nullptr);
-		if (!handle.IsValid())
+		if (!m_SceneHandle.IsValid())
 		{
-			m_EditScene->SetName(previousName);
-			return false;
+			if (outError)
+				*outError = "The scene has not been saved yet; save it under a path first";
+			return 0;
 		}
+		return SubmitSceneSave(m_SceneHandle, {}, std::nullopt, outError);
+	}
+
+	uint64_t EditorContext::BeginSaveSceneAs(const std::string& relativePath, std::string* outError)
+	{
+		if (!m_AssetManager)
+		{
+			if (outError)
+				*outError = "No project is open";
+			return 0;
+		}
+		const std::filesystem::path path = FileSystem::FromUTF8(relativePath);
+		const AssetImporter* importer = AssetImporterRegistry::FindByExtension(StringUtils::ToLower(FileSystem::ToUTF8(path.extension())));
+		if (!importer || importer->GetType() != AssetType::Scene)
+		{
+			if (outError)
+				*outError = fmt::format("'{}' is not a scene file (.stscene)", relativePath);
+			return 0;
+		}
+		const AssetHandle handle = m_AssetManager->ReserveNativeAsset(relativePath, UUID::Null(), outError);
+		if (!handle.IsValid())
+			return 0;
+
+		// The scene is the new asset from now on (a following save writes it) and takes the file's name; a failed save gives
+		// the previous ones back.
+		const SceneSaveRestore restore { m_SceneHandle, m_EditScene->GetName(), m_EditScene->GetSourceAsset() };
+		m_EditScene->SetName(FileSystem::ToUTF8(path.stem()));
 		m_SceneHandle = handle;
 		m_EditScene->SetSourceAsset(handle);
-		m_UndoStack.MarkSaved();
+		const uint64_t id = SubmitSceneSave(handle, m_AssetManager->GetReservedPath(handle), restore, outError);
+		if (id == 0)
+		{
+			m_SceneHandle = restore.Handle;
+			m_EditScene->SetName(restore.Name);
+			m_EditScene->SetSourceAsset(restore.SourceAsset);
+			m_AssetManager->ReleaseNativeAssetReservation(handle);
+		}
+		return id;
+	}
+
+	uint64_t EditorContext::SubmitSceneSave(AssetHandle handle, const std::string& newPath, std::optional<SceneSaveRestore> restore, std::string* outError)
+	{
+		// The snapshot holds the history's state from here on: a drag that goes on makes a step of its own.
+		m_UndoStack.BreakMerge();
+		DocumentSaveRequest request;
+		request.SavePoint = m_UndoStack.GetSavePoint();
+		request.Snapshot = Scene::Copy(m_EditScene, SceneCopyOptions { true });
+		request.Label = m_EditScene->GetName();
+		DocumentSaveItem item;
+		item.Asset = handle;
+		item.NewPath = newPath;
+		request.Items.push_back(std::move(item));
+		const SceneRecovery::SaveToken token = m_Recovery->BeginSave();
+		const uint64_t id = m_DocumentSaver.Submit(std::move(request), [this, handle, token, restore](const DocumentSaveStatus& status)
+		{
+			OnSceneSaveEnded(status, handle, token, restore);
+		}, outError);
+		if (id == 0)
+			m_Recovery->ReleaseSave(token);
+		return id;
+	}
+
+	void EditorContext::OnSceneSaveEnded(const DocumentSaveStatus& status, AssetHandle handle, const RecoverySaveToken& token,
+		const std::optional<SceneSaveRestore>& restore)
+	{
+		// The edited scene was replaced meanwhile (another scene or project): the file is written, but nothing of the scene now
+		// edited is marked, and its journal hears nothing (MarkSaved and OnSaved recognize another scene's point and token).
+		const bool sameScene = status.SavePoint.Generation == m_UndoStack.GetSavePoint().Generation;
+		// A save as a new asset that failed gives the scene its previous handle and name back, also when a newer save of the
+		// new asset replaced it before it began (that one's completion has nothing to give back).
+		if (status.State != DocumentSaveState::Done && sameScene && restore && m_SceneHandle == handle)
+		{
+			m_SceneHandle = restore->Handle;
+			m_EditScene->SetName(restore->Name);
+			m_EditScene->SetSourceAsset(restore->SourceAsset);
+		}
+		// A newer save of the same scene replaced this one before it began: the newer one's completion does the rest.
+		if (status.WrittenID != status.ID)
+		{
+			m_Recovery->ReleaseSave(token);
+			return;
+		}
+		if (status.State != DocumentSaveState::Done)
+		{
+			m_Recovery->ReleaseSave(token);
+			EditorNotification notification;
+			notification.Level = NotificationLevel::Error;
+			notification.Title = fmt::format("Saving '{}' failed", status.Label);
+			notification.Message = status.Error;
+			notification.ShowConsole = true;
+			if (m_AssetManager && m_AssetManager->IsHandleValid(handle))
+				notification.Asset = handle;
+			m_Notifications.Post(std::move(notification));
+			return;
+		}
+		if (!sameScene)
+		{
+			m_Recovery->ReleaseSave(token);
+			return;
+		}
+		m_UndoStack.MarkSaved(status.SavePoint);
 		OnSceneSaved();
 		const auto [sceneFile, scenePath] = GetSceneFile(handle);
-		m_Recovery->OnSaved(handle, sceneFile, scenePath, std::move(document));
+		const std::string baseHash = status.Items.empty() ? std::string() : Crypto::ToHex(status.Items.front().Sha256);
+		m_Recovery->OnSaved(handle, sceneFile, scenePath, baseHash, token, *m_EditScene, IsSceneModified());
+	}
+
+	bool EditorContext::WaitForSave(uint64_t id, std::string* outError)
+	{
+		m_DocumentSaver.FinishAll();
+		const std::optional<DocumentSaveStatus> status = m_DocumentSaver.GetStatus(id);
+		if (!status || status->State != DocumentSaveState::Done)
+		{
+			if (outError)
+				*outError = status ? status->Error : std::string("The save ended without a status");
+			return false;
+		}
 		return true;
+	}
+
+	uint64_t EditorContext::FindSaveOfCurrentState() const
+	{
+		const UndoStack::SavePoint current = m_UndoStack.GetSavePoint();
+		for (const DocumentSaveStatus& save : m_DocumentSaver.GetActiveStatuses())
+		{
+			if (save.SavePoint == current)
+				return save.ID;
+		}
+		return 0;
+	}
+
+	bool EditorContext::SaveScene(std::string* outError)
+	{
+		const uint64_t id = BeginSaveScene(outError);
+		return id != 0 && WaitForSave(id, outError);
+	}
+
+	bool EditorContext::SaveSceneAs(const std::string& relativePath, std::string* outError)
+	{
+		const uint64_t id = BeginSaveSceneAs(relativePath, outError);
+		return id != 0 && WaitForSave(id, outError);
 	}
 
 	void EditorContext::OnSceneSaved()
@@ -788,6 +994,8 @@ namespace Strata
 		m_MasterVolumeBeforePlay = AudioEngine::GetMasterVolume();
 		m_RuntimeScene = Scene::Copy(m_EditScene);
 		m_RuntimeSceneAsset = UUID::Null();
+		m_PlaySession++;
+		m_ReplacedFixedSteps = 0;
 		// Keys a tool held down in an earlier session (input.* commands) must not leak into this one.
 		ResetSimulatedInput();
 		ResetGameShell();
@@ -807,6 +1015,8 @@ namespace Strata
 			m_RuntimeSceneLoad->Request.Cancel();
 			m_RuntimeSceneLoad.reset();
 		}
+		m_FixedStepsAtStop = GetFixedStepCount();
+		m_StoppedSession = m_PlaySession;
 		// Stopped here and destroyed off the frame, like a replaced scene (ReplaceRuntimeScene).
 		Scene::ReleaseInBackground(std::move(m_RuntimeScene));
 		m_RuntimeSceneAsset = UUID::Null();
@@ -902,6 +1112,21 @@ namespace Strata
 		const SceneRuntimeMode mode = m_RuntimeScene->GetRuntimeMode();
 		const bool paused = m_RuntimeScene->IsPaused();
 		const uint32_t steps = m_RuntimeScene->GetStepFrames();
+		m_ReplacedFixedSteps += m_RuntimeScene->GetFixedStepCount();
+		// Said in the log and the activity journal: commands and agents would otherwise think the edited scene still runs.
+		auto describe = [this](AssetHandle scene, const std::string& name) -> nlohmann::json
+		{
+			const std::optional<AssetMetadata> metadata = scene.IsValid() && m_AssetManager ? m_AssetManager->GetMetadata(scene) : std::nullopt;
+			return { { "scene", scene.IsValid() ? UUIDToJson(scene) : nlohmann::json(nullptr) }, { "name", name },
+				{ "path", metadata ? nlohmann::json(metadata->Path) : nlohmann::json(nullptr) } };
+		};
+		const nlohmann::json from = describe(m_RuntimeSceneAsset, m_RuntimeScene->GetName());
+		const nlohmann::json to = describe(asset, next->GetName());
+		if (to["path"].is_string())
+			ST_INFO("Play mode switched to '{}' ({})", next->GetName(), to["path"].get<std::string>());
+		else
+			ST_INFO("Play mode switched to '{}'", next->GetName());
+		m_Journal->RecordEvent("play.sceneSwitched", { { "from", from }, { "to", to } }, true);
 		// The scene that goes stops here and is destroyed off the frame (a million entities take tens of milliseconds).
 		Scene::ReleaseInBackground(std::move(m_RuntimeScene));
 		m_RuntimeScene = std::move(next);
@@ -928,6 +1153,11 @@ namespace Strata
 
 	void EditorContext::SetPaused(bool paused)
 	{
+		if (!paused && IsPaused())
+		{
+			m_FixedStepsAtResume = GetFixedStepCount();
+			m_ResumeCount++;
+		}
 		if (m_RuntimeScene)
 			m_RuntimeScene->SetPaused(paused);
 		UpdateInputSuspension();
@@ -943,6 +1173,42 @@ namespace Strata
 		if (m_RuntimeScene && m_RuntimeScene->IsPaused())
 			m_RuntimeScene->Step(frames);
 		UpdateInputSuspension();
+	}
+
+	uint64_t EditorContext::StartInputSequence(Scope<InputSequence> sequence, std::string* outError)
+	{
+		if (IsInputSequenceRunning())
+		{
+			if (outError)
+				*outError = "An input sequence is running: it steps the game until it ends";
+			return 0;
+		}
+		if (HasPendingSteps())
+		{
+			if (outError)
+				*outError = "play.step's steps are still running: wait for them (or resume the game) first";
+			return 0;
+		}
+		m_InputSequence = std::move(sequence);
+		m_InputSequenceId++;
+		if (!m_InputSequence->Start(*this, outError))
+			return 0;
+		return m_InputSequenceId;
+	}
+
+	bool EditorContext::IsInputSequenceRunning() const
+	{
+		return m_InputSequence && !m_InputSequence->IsFinished();
+	}
+
+	uint32_t EditorContext::GetPendingSteps() const
+	{
+		return m_RuntimeScene && m_RuntimeScene->IsPaused() ? m_RuntimeScene->GetStepFrames() : 0;
+	}
+
+	uint64_t EditorContext::GetFixedStepCount() const
+	{
+		return m_RuntimeScene ? m_ReplacedFixedSteps + m_RuntimeScene->GetFixedStepCount() : 0;
 	}
 
 	void EditorContext::UpdateInputSuspension()
@@ -1069,7 +1335,7 @@ namespace Strata
 	// Undo
 	////////////////////////////////////////////////////////////////////////////////
 
-	bool EditorContext::CommitEdit(SceneEditTransaction& transaction)
+	bool EditorContext::CommitEdit(SceneEditTransaction& transaction, OverrideUpkeep overrides)
 	{
 		if (IsPlaying())
 			return false;
@@ -1079,7 +1345,99 @@ namespace Strata
 			transaction.Rollback();
 			return false;
 		}
+		if (overrides == OverrideUpkeep::Update)
+			UpdatePrefabOverrides(transaction);
 		return transaction.Commit(m_UndoStack);
+	}
+
+	void EditorContext::UpdatePrefabOverrides(SceneEditTransaction& transaction)
+	{
+		Scene& scene = transaction.GetScene();
+		if (!m_AssetManager || &scene != m_EditScene.get())
+			return;
+		// A scene without prefab links has no instances to look for (edits of large scenes without prefabs pay nothing).
+		const auto* links = std::as_const(scene.GetRegistry()).storage<PrefabInstanceComponent>();
+		if (!links || links->empty())
+			return;
+
+		// The instances the edit touched, with the entities it changed in each. An entity added to an instance (not linked)
+		// belongs to the instance of its nearest linked ancestor.
+		struct TouchedInstance
+		{
+			Entity Root;
+			std::vector<Entity> Entities; // Entities whose components alone changed
+			bool Reshaped = false;        // Entities were made, destroyed, moved or linked otherwise: the whole list is worked out
+		};
+		std::vector<TouchedInstance> instances;
+		std::unordered_map<UUID, size_t> instanceOf;
+		auto touch = [&](Entity entity) -> TouchedInstance*
+		{
+			while (entity && !entity.HasComponent<PrefabInstanceComponent>())
+				entity = entity.GetParent();
+			const Entity root = entity ? PrefabInstances::FindInstanceRoot(entity) : Entity();
+			if (!root)
+				return nullptr;
+			const auto [found, added] = instanceOf.try_emplace(root.GetUUID(), instances.size());
+			if (added)
+				instances.push_back({ root });
+			return &instances[found->second];
+		};
+		// Whether the entity has the link it had before the edit (the same prefab and prefab entity).
+		auto sameLink = [](const EntityState& state, Entity entity)
+		{
+			const nlohmann::json* before = JsonUtils::Find(state.Components, "PrefabInstance");
+			const PrefabInstanceComponent* link = entity.TryGetComponent<PrefabInstanceComponent>();
+			if (!before || !link)
+				return !before && !link;
+			const nlohmann::json* prefab = JsonUtils::Find(*before, "Prefab");
+			const nlohmann::json* id = JsonUtils::Find(*before, "PrefabEntityID");
+			return prefab && id && id->is_string() && UUIDFromJson(*prefab) == std::optional<UUID>(link->Prefab)
+				&& id->get_ref<const std::string&>() == link->PrefabEntityID.ToString();
+		};
+		for (const EntityState& state : transaction.GetBefore())
+		{
+			const Entity entity = scene.GetEntityByUUID(state.ID);
+			const Entity parent = entity ? entity.GetParent() : Entity();
+			const bool reshaped = !state.Exists || !entity || (parent ? parent.GetUUID() : UUID::Null()) != state.Parent || !sameLink(state, entity);
+			if (TouchedInstance* instance = touch(entity))
+			{
+				if (reshaped)
+					instance->Reshaped = true;
+				else
+					instance->Entities.push_back(entity);
+			}
+			// The instance it left, or was destroyed in.
+			if (reshaped && state.Parent.IsValid())
+			{
+				if (TouchedInstance* instance = touch(scene.GetEntityByUUID(state.Parent)))
+					instance->Reshaped = true;
+			}
+		}
+
+		// Each against its part of the prefab as the sync knows it; the list changes with the edit (and undo restores it).
+		for (const TouchedInstance& instance : instances)
+		{
+			Entity root = instance.Root;
+			// Tracked whether its list changes or not: the steps of a gizmo drag or a slider then all have the same entities and
+			// merge into one, also when only some of them change the list.
+			transaction.Track(root.GetUUID());
+			const PrefabInstanceComponent& link = root.GetComponent<PrefabInstanceComponent>();
+			const PrefabOverrides::IndexedPart* part = m_PrefabSync.GetBaselinePart(*this, link.Prefab, link.PrefabEntityID);
+			if (!part)
+				continue;
+			std::vector<PrefabOverride> overrides = link.Overrides;
+			if (!instance.Reshaped && PrefabOverrides::UpdateOverrides(root, *part, instance.Entities, overrides))
+			{
+				m_OverrideUpkeep.Entities += instance.Entities.size();
+			}
+			else
+			{
+				overrides = PrefabOverrides::ComputeOverrides(scene, root, part->Part);
+				m_OverrideUpkeep.WholeLists++;
+			}
+			if (overrides != link.Overrides)
+				root.GetComponent<PrefabInstanceComponent>().Overrides = std::move(overrides);
+		}
 	}
 
 	bool EditorContext::Undo(std::string* outError)
@@ -1628,7 +1986,7 @@ namespace Strata
 		notification.Title = "Building scripts";
 		notification.Message = fmt::format("{} (output in the Console)", m_Project->GetScriptModuleName());
 		notification.ShowConsole = true;
-		m_Notifications.Post(std::move(notification));
+		m_BuildNotification = m_Notifications.Post(std::move(notification));
 		return true;
 	}
 
@@ -1643,9 +2001,23 @@ namespace Strata
 		return m_Project && FileSystem::IsRegularFile(m_Project->GetScriptSourceDirectory() / "CMakeLists.txt");
 	}
 
+	bool EditorContext::IsAnnouncedLogEntry(uint64_t sequence) const
+	{
+		return sequence != 0 && std::find(m_AnnouncedLogEntries.begin(), m_AnnouncedLogEntries.end(), sequence) != m_AnnouncedLogEntries.end();
+	}
+
 	void EditorContext::OnScriptBuildFinished()
 	{
 		const ScriptBuildResult& result = m_ScriptBuilder.GetLastResult();
+		// The failure's error is the build pill's and the build toast's news: not an unread error besides.
+		if (result.LoggedError != 0)
+		{
+			m_AnnouncedLogEntries.push_back(result.LoggedError);
+			// A few suffice: the Console reads new entries every frame.
+			constexpr size_t c_MaxAnnouncedLogEntries = 16;
+			while (m_AnnouncedLogEntries.size() > c_MaxAnnouncedLogEntries)
+				m_AnnouncedLogEntries.pop_front();
+		}
 		m_LastScriptBuildLoad = {};
 		m_LastScriptBuildLoad.BuildID = result.ID;
 		// The watcher comes back before the built module loads: with hot reload the module loads from a private copy, so
@@ -1711,7 +2083,9 @@ namespace Strata
 			notification.Title = m_LastScriptBuildLoad.Reloaded ? "Scripts built and reloaded" : "Scripts built";
 			notification.Message = fmt::format("{:.1f} s", result.Seconds);
 		}
-		m_Notifications.Post(std::move(notification));
+		// In the place of "Building scripts", when it still shows: one toast that changes, not two side by side.
+		m_Notifications.Replace(m_BuildNotification, std::move(notification));
+		m_BuildNotification = 0;
 	}
 
 	bool EditorContext::StopOnScriptFault()
@@ -1767,10 +2141,18 @@ namespace Strata
 		}
 	}
 
+	void EditorContext::CreateAnimationPreview()
+	{
+		// Skinned characters stand in their rest pose while the scene is edited, as they do in play before their first
+		// animation; the scene's animators are found through their component's signals from here on.
+		AnimationPreviewSpecification specification;
+		specification.RestPoses = true;
+		m_AnimationPreview = CreateScope<AnimationPreview>(*m_EditScene, specification);
+	}
+
 	AnimationPreview& EditorContext::GetAnimationPreview()
 	{
-		if (!m_AnimationPreview)
-			m_AnimationPreview = CreateScope<AnimationPreview>(*m_EditScene);
+		ST_CORE_ASSERT(m_AnimationPreview, "The edited scene has its animation preview from the start");
 		return *m_AnimationPreview;
 	}
 
@@ -1795,6 +2177,10 @@ namespace Strata
 			if (m_AssetManager->HasImportFailures())
 				NotifyImportFailures();
 		}
+		// Saves written in the background are published (and their completions run) between frames.
+		m_DocumentSaver.Update();
+		// The asset scan ended: what waited for the whole registry goes on (the start scene, the script usage scan).
+		FinishAssetScan();
 		// A scene being opened replaces the edited one between frames, before anything draws or updates it.
 		UpdateSceneLoad();
 		if (m_GameExport)
@@ -1825,12 +2211,19 @@ namespace Strata
 				m_PrefabSync.Update(*this);
 			m_EditScene->OnUpdateEditor(timestep);
 		}
-		// Before the viewports render: previews whose assets arrived get their poses.
+		// Before the viewports render: previews whose assets arrived get their poses, animators without a request the edit pose
+		// the viewport settings ask for (a change of it looks at every animator once).
 		if (m_AnimationPreview)
+		{
+			m_AnimationPreview->SetEditPose(m_Viewport.GetSettings().EditPose);
 			m_AnimationPreview->Update();
+		}
 		// After the game's update and before the next input frame: taps whose frames passed let go, and input frames stop
 		// while the game is paused (a step was used up, or play mode stopped).
-		m_SimulatedInput.Update();
+		// An input sequence counts the step the game ran and gives the next one its events (taps it made end below).
+		if (m_InputSequence)
+			m_InputSequence->Update(*this);
+		m_SimulatedInput.Update(GetFixedStepCount());
 		UpdateInputSuspension();
 		PruneSelection();
 		m_Viewport.UpdatePicking(*this);
@@ -1910,6 +2303,7 @@ namespace Strata
 		const std::vector<AssetImportFailure> failures = m_AssetManager->TakeImportFailures(&count);
 		if (failures.empty())
 			return;
+		m_ImportFailureCount += count;
 		// One toast however many fail (a project whose files are broken fails many imports as it opens): it counts them and
 		// shows the latest; the Console lists them all.
 		const AssetImportFailure& latest = failures.back();
@@ -1956,10 +2350,10 @@ namespace Strata
 		return m_Specification.SamplesDirectory.empty() ? ProjectSamples::GetDefaultDirectory() : m_Specification.SamplesDirectory;
 	}
 
-	void EditorContext::SetStatusProvider(const std::string& section, StatusProvider provider)
+	void EditorContext::SetStatusProvider(const std::string& section, StatusProvider provider, StatusProvider compactProvider)
 	{
 		if (provider)
-			m_StatusProviders.insert_or_assign(section, std::move(provider));
+			m_StatusProviders.insert_or_assign(section, StatusSection { std::move(provider), std::move(compactProvider) });
 		else
 			m_StatusProviders.erase(section);
 	}

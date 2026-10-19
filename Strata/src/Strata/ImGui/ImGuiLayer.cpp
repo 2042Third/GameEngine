@@ -3,6 +3,7 @@
 
 #include "Strata/Core/Application.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/Window.h"
 #include "Strata/Events/ApplicationEvent.h"
 #include "Strata/Renderer/Renderer.h"
 
@@ -56,7 +57,8 @@ namespace Strata
 			io.IniFilename = m_LayoutFileUTF8.c_str();
 		}
 
-		SetContentScale(window->GetContentScale());
+		m_Window = window;
+		SetContentScale(ToUIScale(window->GetContentScale(), glm::uvec2(window->GetWidth(), window->GetHeight()), window->GetFramebufferSize()));
 
 		if (!m_Renderer.Init(Renderer::GetDevice(), Renderer::GetShaderLibrary()))
 		{
@@ -80,6 +82,7 @@ namespace Strata
 		m_Platform.Shutdown();
 		ImGui::DestroyContext();
 		m_Initialized = false;
+		m_Window = nullptr;
 	}
 
 	void ImGuiLayer::OnEvent(Event& event)
@@ -88,7 +91,8 @@ namespace Strata
 		EventDispatcher dispatcher(event);
 		dispatcher.Dispatch<WindowContentScaleEvent>([this](WindowContentScaleEvent& scaleEvent)
 		{
-			SetContentScale(scaleEvent.GetScale());
+			SetContentScale(m_Window ? ToUIScale(scaleEvent.GetScale(), glm::uvec2(m_Window->GetWidth(), m_Window->GetHeight()), m_Window->GetFramebufferSize())
+				: scaleEvent.GetScale());
 			return false;
 		});
 
@@ -108,6 +112,17 @@ namespace Strata
 	{
 		if (!m_Initialized)
 			return;
+
+		// The window's size in pixels may follow its content scale event (moved to a display of another density): the scale
+		// is checked again once both are known (not while the window is minimized and has no size).
+		const glm::uvec2 windowSize(m_Window->GetWidth(), m_Window->GetHeight());
+		const glm::uvec2 framebufferSize = m_Window->GetFramebufferSize();
+		if (windowSize.x > 0 && framebufferSize.x > 0)
+		{
+			const std::optional<float> scale = ValidateScale(ToUIScale(m_Window->GetContentScale(), windowSize, framebufferSize));
+			if (scale && *scale != m_ContentScale)
+				SetContentScale(*scale);
+		}
 
 		m_Platform.NewFrame();
 		ImGui::NewFrame();
@@ -149,6 +164,16 @@ namespace Strata
 		}
 		m_ContentScale = *valid;
 		ApplyStyle();
+	}
+
+	float ImGuiLayer::ToUIScale(float contentScale, const glm::uvec2& windowSize, const glm::uvec2& framebufferSize)
+	{
+		if (windowSize.x == 0 || framebufferSize.x == 0)
+			return contentScale;
+		const float pixelsPerUnit = static_cast<float>(framebufferSize.x) / static_cast<float>(windowSize.x);
+		if (!std::isfinite(pixelsPerUnit) || pixelsPerUnit <= 1.0f)
+			return contentScale;
+		return contentScale / pixelsPerUnit;
 	}
 
 	void ImGuiLayer::SetContentScaleOverride(float scale)

@@ -1,10 +1,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
+#include "Asset/ImportRecordTestUtils.h"
 #include "Editor/SceneComparison.h"
+#include "Perf/ImportMemoryMeasurement.h"
+#include "Perf/WorldGameMeasurement.h"
 #include "Engine/ModuleRegistrationHelpers.h"
 #include "Network/FakeEditorProcess.h"
 #include "Perf/StressProject.h"
+#include "Perf/WorldFixture.h"
 #include "Reflection/ComponentSchema.h"
 #include "Renderer/GPUTestUtils.h"
 #include "Runtime/PerfLogReader.h"
@@ -32,6 +36,10 @@
 
 #if ST_WITH_PHYSICS
 	#include "Physics/PhysicsTestUtils.h"
+#endif
+
+#if ST_TESTS_HAVE_EDITOR
+	#include "Editor/WorldSaveMeasurement.h"
 #endif
 
 #include <stb_image.h>
@@ -789,6 +797,26 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		return 0;
 	}
 
+	// write-world-project, write-many-assets-project, write-texture-folder: the world-scale fixtures (Perf/WorldFixture.h).
+	if (const std::optional<int> result = Strata::Tests::RunWorldFixtureHelper(mode, argc, argv))
+		return *result;
+	// append-import-records <cache directory> <first index>: writes import records until it is killed (Asset/ImportRecordTestUtils.h).
+	if (const std::optional<int> result = Strata::Tests::RunImportRecordHelper(mode, argc, argv))
+		return *result;
+#if ST_TESTS_HAVE_EDITOR
+	// save-world <project directory> <scene handle> <result file>: a save of a world scene measured in an editor without a
+	// GPU, in a process of its own for its peak memory (Editor/WorldSaveMeasurement.h).
+	if (const std::optional<int> result = Strata::Tests::RunWorldSaveHelper(mode, argc, argv))
+		return *result;
+#endif
+	// start-world-game <manifest> <result file>: an exported world game's start measured in a process of its own, for its peak
+	// memory (Perf/WorldGameMeasurement.h).
+	if (const std::optional<int> result = Strata::Tests::RunWorldGameHelper(mode, argc, argv))
+		return *result;
+	// import-folder <project directory> <folder> <budget MB> <result file>: a folder imported with an import memory budget, in
+	// a process of its own for its peak memory (Perf/ImportMemoryMeasurement.h).
+	if (const std::optional<int> result = Strata::Tests::RunImportMemoryHelper(mode, argc, argv))
+		return *result;
 	if (mode == "write-stress-project")
 	{
 		// <directory>: writes the streaming stress project (Perf/StressProject.h: 111.8 MB of block-compressed textures, the

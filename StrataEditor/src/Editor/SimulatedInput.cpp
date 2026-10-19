@@ -37,21 +37,22 @@ namespace Strata
 
 	}
 
-	Ref<const SimulatedHold> SimulatedInput::Press(SimulatedControlType type, uint16_t code, uint32_t frames)
+	Ref<const SimulatedHold> SimulatedInput::Press(SimulatedControlType type, uint16_t code, uint32_t steps, uint64_t fixedSteps)
 	{
 		const uint64_t nextFrame = Input::GetFrameIndex() + 1;
 		Ref<SimulatedHold> hold = CreateRef<SimulatedHold>();
 		hold->Type = type;
 		hold->Code = code;
 		hold->FirstFrame = nextFrame;
-		hold->LastFrame = frames > 0 ? nextFrame + frames - 1 : 0;
+		hold->FirstStep = fixedSteps + 1;
+		hold->LastStep = steps > 0 ? fixedSteps + steps : 0;
 		if (!IsHeld(type, code))
 			SimulateControl(type, code, true);
 		m_Holds.push_back(hold);
 		return hold;
 	}
 
-	Ref<const SimulatedHold> SimulatedInput::HoldAxis(uint32_t gamepad, GamepadAxis axis, float value, uint32_t frames)
+	Ref<const SimulatedHold> SimulatedInput::HoldAxis(uint32_t gamepad, GamepadAxis axis, float value, uint32_t steps, uint64_t fixedSteps)
 	{
 		const uint64_t nextFrame = Input::GetFrameIndex() + 1;
 		const uint16_t code = MakeGamepadCode(gamepad, static_cast<uint32_t>(axis));
@@ -61,7 +62,7 @@ namespace Strata
 			if (previous->Type == SimulatedControlType::GamepadAxis && previous->Code == code)
 			{
 				previous->Ended = true;
-				previous->Interrupted = previous->LastFrame != 0;
+				previous->Interrupted = previous->IsTap();
 				previous->EndFrame = nextFrame;
 			}
 		}
@@ -72,7 +73,8 @@ namespace Strata
 		hold->Code = code;
 		hold->Value = std::isfinite(value) ? std::clamp(value, GetGamepadAxisMinimum(axis), 1.0f) : 0.0f;
 		hold->FirstFrame = nextFrame;
-		hold->LastFrame = frames > 0 ? nextFrame + frames - 1 : 0;
+		hold->FirstStep = fixedSteps + 1;
+		hold->LastStep = steps > 0 ? fixedSteps + steps : 0;
 		Input::SimulateGamepadAxis(gamepad, axis, hold->Value);
 		m_Holds.push_back(hold);
 		return hold;
@@ -90,10 +92,20 @@ namespace Strata
 		}
 		for (const Ref<SimulatedHold>& hold : holds)
 		{
-			End(hold, hold->LastFrame != 0);
+			End(hold, hold->IsTap());
 			released = true;
 		}
 		return released;
+	}
+
+	bool SimulatedInput::EndHold(const Ref<const SimulatedHold>& hold)
+	{
+		const auto it = std::find(m_Holds.begin(), m_Holds.end(), hold);
+		if (it == m_Holds.end())
+			return false;
+		const Ref<SimulatedHold> held = *it;
+		End(held, held->IsTap());
+		return true;
 	}
 
 	void SimulatedInput::ReleaseAll()
@@ -102,7 +114,7 @@ namespace Strata
 		for (const Ref<SimulatedHold>& hold : m_Holds)
 		{
 			hold->Ended = true;
-			hold->Interrupted = hold->LastFrame != 0;
+			hold->Interrupted = hold->IsTap();
 			hold->EndFrame = endFrame;
 		}
 		m_Holds.clear();
@@ -115,19 +127,18 @@ namespace Strata
 		for (const Ref<SimulatedHold>& hold : m_Holds)
 		{
 			hold->Ended = true;
-			hold->Interrupted = hold->LastFrame != 0;
+			hold->Interrupted = hold->IsTap();
 			hold->EndFrame = endFrame;
 		}
 		m_Holds.clear();
 	}
 
-	void SimulatedInput::Update()
+	void SimulatedInput::Update(uint64_t fixedSteps)
 	{
-		const uint64_t frame = Input::GetFrameIndex();
 		std::vector<Ref<SimulatedHold>> finished;
 		for (const Ref<SimulatedHold>& hold : m_Holds)
 		{
-			if (hold->LastFrame != 0 && frame >= hold->LastFrame)
+			if (hold->IsTap() && fixedSteps >= hold->LastStep)
 				finished.push_back(hold);
 		}
 		for (const Ref<SimulatedHold>& hold : finished)
