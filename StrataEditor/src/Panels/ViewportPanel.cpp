@@ -133,7 +133,7 @@ namespace Strata
 		m_Image.PixelScale = ViewportImageArea::ChoosePixelScale(glm::vec2(viewportScale.x, viewportScale.y), glm::vec2(displayScale.x, displayScale.y));
 		// The 2D canvas mode shows the canvas at its reference aspect ratio: the image is letterboxed in the area under the
 		// toolbar (whose chips never cover it).
-		const bool canvasMode = CanvasModeView::IsActive(context) && m_CanvasMode.Layout(context, m_Image, 0.0f);
+		const bool canvasMode = CanvasModeView::IsActive(context) && m_CanvasMode.Layout(context, m_Image);
 		if (!canvasMode)
 			m_CanvasMode.Reset(context);
 		const glm::uvec2 size = m_Image.GetPixelSize();

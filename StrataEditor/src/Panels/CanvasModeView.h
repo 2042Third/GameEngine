@@ -34,9 +34,9 @@ namespace Strata
 		// Whether the viewport shows the canvas mode this frame: the setting is on and the scene is not playing.
 		static bool IsActive(const EditorContext& context);
 
-		// Frames the shown canvas in the panel's area (`image` on entry, less `topInset` units at its top: the viewport's chip
-		// row) and makes `image` the part of it the viewport renders. Returns the canvas (invalid: the mode shows nothing).
-		Entity Layout(EditorContext& context, ViewportImageArea& image, float topInset);
+		// Frames the shown canvas in the panel's image area under the toolbar (`image` on entry, which no chip covers) and makes
+		// `image` the part of it the viewport renders. Returns the canvas (invalid: the mode shows nothing).
+		Entity Layout(EditorContext& context, ViewportImageArea& image);
 		// The game screen the canvas is laid out for: the canvas at its fit, in pixels, however it is zoomed.
 		glm::uvec2 GetScreenPixels() const { return m_Frame.ScreenPixels; }
 		// Turns a view of the whole screen (a camera at the screen's aspect ratio) into the view of the part rendered.
