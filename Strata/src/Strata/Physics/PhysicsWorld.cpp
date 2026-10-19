@@ -1508,7 +1508,12 @@ namespace Strata
 				const JPH::Vec3 center = box.GetCenter();
 				const int32_t x = static_cast<int32_t>(std::floor(center.GetX() / c_WakeRegionSize));
 				const int32_t z = static_cast<int32_t>(std::floor(center.GetZ() / c_WakeRegionSize));
-				regions.emplace_back((static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) | static_cast<uint32_t>(z), box);
+				const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) | static_cast<uint32_t>(z);
+				// Neighbors in the batch (a cell's bodies come in the order they were made) merge before the sort.
+				if (!regions.empty() && regions.back().first == key)
+					regions.back().second.Encapsulate(box);
+				else
+					regions.emplace_back(key, box);
 			}
 			std::sort(regions.begin(), regions.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 			for (size_t first = 0; first < regions.size();)
