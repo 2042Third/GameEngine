@@ -1,6 +1,8 @@
 #include "stpch.h"
 #include "Strata/Core/CrashGuard.h"
 
+#include "Strata/Core/Log.h"
+
 #include <Windows.h>
 #include <malloc.h>
 
@@ -34,6 +36,27 @@ namespace Strata
 			CONTEXT Unwind; // The context being unwound
 		};
 		thread_local StackCapture t_StackCapture;
+
+		// Whether this thread's stack guarantee was checked (raised where needed) for containing stack overflows.
+		thread_local bool t_StackGuaranteeChecked = false;
+
+		// Dispatching a stack overflow exception runs on what is left of the thread's stack, and the system first stores
+		// the processor's whole register state there (several KiB with AVX-512), which can take more than Windows leaves a
+		// thread by default: the dispatch then overflows again and the process ends uncontained. So the first guarded call
+		// on a thread raises its guarantee (never lowers it: a thread may have asked for more).
+		void EnsureStackGuarantee()
+		{
+			if (t_StackGuaranteeChecked)
+				return;
+			t_StackGuaranteeChecked = true;
+
+			ULONG current = 0; // 0 queries the current guarantee without changing it
+			if (SetThreadStackGuarantee(&current) && current >= c_CrashGuardStackGuaranteeBytes)
+				return;
+			ULONG requested = c_CrashGuardStackGuaranteeBytes;
+			if (!SetThreadStackGuarantee(&requested))
+				ST_CORE_WARN("CrashGuard: could not keep {} KiB of this thread's stack for containing stack overflows (error {})", c_CrashGuardStackGuaranteeBytes / 1024, GetLastError());
+		}
 
 #if defined(_M_X64)
 		// The faulting instruction and its callers' return addresses, unwound from the fault's context with the functions'
@@ -172,6 +195,7 @@ namespace Strata
 
 	bool CrashGuard::Invoke(GuardedFunction function, void* userData, CrashInfo* outInfo)
 	{
+		EnsureStackGuarantee();
 		FaultRecord record;
 		if (InvokeWithSEH(function, userData, &record))
 			return true;
