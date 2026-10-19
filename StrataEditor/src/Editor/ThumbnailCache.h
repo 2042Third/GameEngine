@@ -98,7 +98,7 @@ namespace Strata
 		static constexpr uint32_t c_MaxPreviewSize = 512;
 		// Part of the cache files' key: bump it when thumbnails would look different (rendering or decoding changed), so that
 		// cached ones are made again.
-		static constexpr uint32_t c_Version = 1;
+		static constexpr uint32_t c_Version = 2;
 
 		ThumbnailCache(const Ref<EditorAssetManager>& assets, ThumbnailCacheSpecification specification);
 		~ThumbnailCache();
