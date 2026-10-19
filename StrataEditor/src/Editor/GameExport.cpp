@@ -163,8 +163,9 @@ namespace Strata
 			return fail("No project is open");
 		if (context.IsPlaying())
 			return fail("Stop playing before exporting");
-		// A save in flight of the scene as it is now counts as saved: the export plans once it is written.
-		if (context.IsSceneModified() && !context.IsSavingCurrentState())
+		// A save in flight of the scene as it is now counts as saved: the export plans once it is written, and fails if it fails.
+		const uint64_t awaitedSave = context.IsSceneModified() ? context.FindSaveOfCurrentState() : 0;
+		if (context.IsSceneModified() && awaitedSave == 0)
 			return fail("The open scene has unsaved changes; save it first (the export uses the saved files)");
 		const Project& project = *context.GetProject();
 		if (std::optional<std::string> problem = CheckExportDirectory(options.Directory, project.GetProjectDirectory()))
@@ -235,6 +236,7 @@ namespace Strata
 		exporter->m_Options = options;
 		exporter->m_Assets = std::static_pointer_cast<EditorAssetManager>(assets->shared_from_this());
 		exporter->m_Saver = &context.GetDocumentSaver();
+		exporter->m_AwaitedSave = awaitedSave;
 		exporter->m_PackOptions = std::move(packOptions);
 		exporter->m_FileName = ToFileName(project.GetConfig().Name);
 		exporter->m_Runtime = runtime;
@@ -286,6 +288,24 @@ namespace Strata
 			// Finished imports are applied by the asset manager's update, which runs every frame.
 			if (m_Assets->HasPendingImports() || (m_Saver && m_Saver->IsBusy()))
 				return;
+			if (m_AwaitedSave != 0)
+			{
+				// Kept statuses outlast the saves an export waits for, unless dozens more ended meanwhile: then it is unknown.
+				const std::optional<DocumentSaveStatus> save = m_Saver->GetStatus(m_AwaitedSave);
+				if (!save || save->State != DocumentSaveState::Done)
+				{
+					{
+						std::scoped_lock<std::mutex> lock(m_Shared->Mutex);
+						m_Shared->Ended = true;
+						m_Shared->Outcome = GameExportState::Failed;
+						m_Shared->Error = fmt::format("The scene's save failed, so the export would hold the file from before it ({})",
+							save ? save->Error : std::string("its outcome is no longer known"));
+					}
+					Collect();
+					return;
+				}
+				m_AwaitedSave = 0;
+			}
 			// Searches of what documents reference are no imports: those that have not run yet are done here, by a job.
 			if (!m_DocumentsScanned && !m_DocumentScan)
 			{

@@ -776,6 +776,50 @@ TEST_SUITE("Editor.Saves")
 		}
 	}
 
+	TEST_CASE("An export started while the scene's save writes plans once it is written, and fails when the save fails")
+	{
+		GatedJobSystem jobs;
+		EditorSaves editor("SaveExport");
+		editor.Run("project.setStartScene", { { "scene", "Scenes/Main.stscene" } });
+		const auto exportTo = [&](const char* folder)
+		{
+			return editor.Commands.Execute(editor.Context, "project.export",
+				{ { "directory", FileSystem::ToUTF8(editor.Directory / folder) }, { "includeRuntime", false } });
+		};
+
+		// The scene's save of what the export sees counts as saved: the export waits for it.
+		editor.Run("entity.create", { { "name", "Second" } });
+		EditorCommandResult save;
+		EditorCommandResult exported;
+		{
+			BackgroundGate gate;
+			save = editor.Commands.Execute(editor.Context, "scene.save");
+			REQUIRE(save.IsPending());
+			exported = exportTo("Build");
+			REQUIRE(exported.IsPending());
+		}
+		CHECK(CompleteCommand(editor.Context, std::move(save)).Success);
+		const EditorCommandResult done = CompleteCommand(editor.Context, std::move(exported));
+		CHECK_MESSAGE(done.Success, done.Error);
+
+		// A save that fails leaves the changes unsaved: the export fails instead of packing the start scene's file from before.
+		editor.Run("entity.create", { { "name", "Third" } });
+		REQUIRE(FileSystem::WriteText(editor.Context.GetProject()->GetAssetDirectory() / "Blocked", "not a folder"));
+		{
+			BackgroundGate gate;
+			save = editor.Commands.Execute(editor.Context, "scene.saveAs", { { "path", "Blocked/Level.stscene" } });
+			REQUIRE(save.IsPending());
+			exported = exportTo("Failed");
+			REQUIRE(exported.IsPending());
+		}
+		CHECK_FALSE(CompleteCommand(editor.Context, std::move(save)).Success);
+		const EditorCommandResult failed = CompleteCommand(editor.Context, std::move(exported));
+		CHECK_FALSE(failed.Success);
+		CHECK_MESSAGE(failed.Error.find("save failed") != std::string::npos, failed.Error);
+		CHECK(editor.Context.IsSceneModified());
+		CHECK_FALSE(FileSystem::Exists(editor.Directory / "Failed" / "Saves.stpak"));
+	}
+
 	TEST_CASE("The perf gates' save of a world, measured in a helper process, reports what it wrote and the frames meanwhile")
 	{
 		const WorldSceneSpec world { "Small", 3000, true };

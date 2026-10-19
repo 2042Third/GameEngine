@@ -2536,7 +2536,7 @@ is the `strata-scripting` skill. The layers:
   `CommandUtils::AfterSaves`, which defers them while saves are in flight; the UI's save (Ctrl+S, File > Save, the question's
   Save) goes through the command runner, `RequestDiscardChanges` waits for saves in a saving dialog (Cancel gives up the
   action, never the save), and a status pill shows them. `GameExport` plans once no save is in flight, and starts while
-  the scene's current state is being saved. Closing the project (`ReleaseProject`) and the editor finish every save first.
+  the scene's current state is being saved (`FindSaveOfCurrentState`): it fails if that save fails. Closing the project (`ReleaseProject`) and the editor finish every save first.
 - **Undo** (`SceneEdit.h`, `UndoStack.h`). A `SceneEditTransaction` snapshots the entities an edit touches as
   `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
   `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs

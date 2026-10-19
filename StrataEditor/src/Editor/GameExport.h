@@ -138,6 +138,9 @@ namespace Strata
 		// The editor's saves: the pack is planned once none is in flight, so that it holds what they write (the context
 		// outlives its export).
 		const DocumentSaver* m_Saver = nullptr;
+		// The save of the modified scene the export started during (EditorContext::FindSaveOfCurrentState), or 0: the pack is
+		// planned only once it succeeded, or it would hold the file from before.
+		uint64_t m_AwaitedSave = 0;
 		AssetPackBuildOptions m_PackOptions;
 		GameManifest m_Manifest;
 		std::string m_FileName; // Of the pack, manifest and executable, without extension

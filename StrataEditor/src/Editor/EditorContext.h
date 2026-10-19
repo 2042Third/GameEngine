@@ -234,9 +234,9 @@ namespace Strata
 		bool SaveSceneAs(const std::string& relativePath, std::string* outError = nullptr);
 		// Saves that have not ended (writing, waiting behind another or not published yet).
 		bool HasSavesInFlight() const { return m_DocumentSaver.IsBusy(); }
-		// Whether a save in flight holds the edited scene as it is now: once it is published the scene is unmodified (unless
-		// edited meanwhile).
-		bool IsSavingCurrentState() const;
+		// The save in flight that holds the edited scene as it is now (DocumentSaver::GetStatus tells how it ended; once it
+		// is published the scene is unmodified, unless edited meanwhile), or 0 without one.
+		uint64_t FindSaveOfCurrentState() const;
 		std::vector<DocumentSaveStatus> GetSaveStatuses() const { return m_DocumentSaver.GetActiveStatuses(); }
 		// The background saves of the project's documents: the edited scene's (above), and those of other editor parts.
 		DocumentSaver& GetDocumentSaver() { return m_DocumentSaver; }

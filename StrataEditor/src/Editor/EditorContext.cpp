@@ -899,11 +899,15 @@ namespace Strata
 		return true;
 	}
 
-	bool EditorContext::IsSavingCurrentState() const
+	uint64_t EditorContext::FindSaveOfCurrentState() const
 	{
 		const UndoStack::SavePoint current = m_UndoStack.GetSavePoint();
-		const std::vector<DocumentSaveStatus> saves = m_DocumentSaver.GetActiveStatuses();
-		return std::any_of(saves.begin(), saves.end(), [&current](const DocumentSaveStatus& save) { return save.SavePoint == current; });
+		for (const DocumentSaveStatus& save : m_DocumentSaver.GetActiveStatuses())
+		{
+			if (save.SavePoint == current)
+				return save.ID;
+		}
+		return 0;
 	}
 
 	bool EditorContext::SaveScene(std::string* outError)
