@@ -321,6 +321,40 @@ TEST_SUITE("Editor.Undo")
 		CHECK(stack.IsModified());
 	}
 
+	TEST_CASE("A group recorded while a save writes stays unsaved once the save marks its point, and a cancelled one changes nothing")
+	{
+		int value = 0;
+		UndoStack stack;
+		stack.Execute(CreateScope<AddAction>(value, 1, true));
+		// A save takes its point, then a batch (editor.batch) records its steps as one group while the save writes.
+		stack.BreakMerge();
+		const UndoStack::SavePoint point = stack.GetSavePoint();
+		REQUIRE(stack.BeginGroup("Batch of 2 commands"));
+		CHECK(stack.Execute(CreateScope<AddAction>(value, 10, true)));
+		CHECK(stack.Execute(CreateScope<AddAction>(value, 100, true)));
+		REQUIRE(stack.EndGroup());
+		stack.MarkSaved(point);
+		CHECK(stack.IsModified());
+		// Undoing the group reaches the saved state; redoing it leaves it again.
+		REQUIRE(stack.Undo());
+		CHECK(value == 1);
+		CHECK_FALSE(stack.IsModified());
+		REQUIRE(stack.Redo());
+		CHECK(value == 111);
+		CHECK(stack.IsModified());
+
+		// A group cancelled while a save writes records nothing: the scene is the saved one again once the save marks it.
+		stack.BreakMerge();
+		const UndoStack::SavePoint second = stack.GetSavePoint();
+		REQUIRE(stack.BeginGroup("Cancelled"));
+		CHECK(stack.Execute(CreateScope<AddAction>(value, 1000)));
+		REQUIRE(stack.CancelGroup());
+		CHECK(value == 111);
+		stack.MarkSaved(second);
+		CHECK_FALSE(stack.IsModified());
+		CHECK(stack.GetHistory() == std::vector<std::string> { "Add 1", "Batch of 2 commands" });
+	}
+
 	TEST_CASE("A save point before every action holds until a scene change is trimmed off, and a cleared history marks nothing")
 	{
 		int value = 0;
