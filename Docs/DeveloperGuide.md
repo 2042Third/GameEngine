@@ -750,8 +750,8 @@ short. Their full wording:
   `UnknownComponentsComponent` and are saved back unchanged (also through play mode, prefab snapshots, duplication and
   undo). Data a module keeps in a scene's registry context that a copy should keep (the render scene) is copied by a
   `Scene::SceneContextCopier` the module registers there too (`Scene::RegisterContextCopier`, refused outside the
-  composition root); `Scene::Copy` runs the copiers once the copy is complete. Details: Docs/Architecture.md,
-  "Composition root and registries" and "Scene runtime lifecycle".
+  composition root); `Scene::Copy` runs the copiers once a full copy is complete, never for `SerializedOnly` snapshots.
+  Details: Docs/Architecture.md, "Composition root and registries" and "Scene runtime lifecycle".
 - **Engine modules:** a service a program runs for its whole life (a device, audio, a UI, the project) is an
   `EngineModule` (`Core/EngineModule.h`) in its own module's folder (`<Module>/<Module>Module.{h,cpp}`, with
   `static constexpr std::string_view c_Name`, a specification struct and a `Factory`), listed by the programs that run

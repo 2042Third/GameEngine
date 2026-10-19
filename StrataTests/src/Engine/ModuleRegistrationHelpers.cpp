@@ -381,6 +381,7 @@ namespace Strata::Tests
 			// composition root runs.
 			if (!copierRegistered)
 				return Fail("the context copier was refused during the composition root's registration");
+			s_GarageContextCopies = 0; // The copies above count too
 			const Ref<Scene> original = CreateRef<Scene>("Depot");
 			original->GetRegistry().ctx().emplace<TestGarageContext>(TestGarageContext { 3 });
 			const Ref<Scene> copy = Scene::Copy(original);
@@ -388,12 +389,16 @@ namespace Strata::Tests
 			const TestGarageContext* copied = copyOfCopy->GetRegistry().ctx().find<TestGarageContext>();
 			if (s_GarageContextCopies != 2 || !copied || copied->Vehicles != 3)
 				return Fail(fmt::format("the context copier ran {} times for 2 copies", s_GarageContextCopies));
+			// A snapshot to save (SerializedOnly) is no full copy: no copier runs for it.
+			const Ref<Scene> snapshot = Scene::Copy(original, SceneCopyOptions { .SerializedOnly = true });
+			if (s_GarageContextCopies != 2 || snapshot->GetRegistry().ctx().find<TestGarageContext>())
+				return Fail("the context copier ran for a SerializedOnly snapshot");
 			const uint64_t beforeCopier = Log::GetBuffer().GetLatestSequence();
 			if (Scene::RegisterContextCopier(&CopyGarageContext))
 				return Fail("a context copier was registered after the composition root");
 			if (FindLoggedError(beforeCopier, "RegisterContextCopier").empty())
 				return Fail("the refused context copier logged no error");
-			std::printf("context copiers: one run per copy, late registration refused\n");
+			std::printf("context copiers: one run per full copy, none for snapshots, late registration refused\n");
 			std::fflush(stdout);
 			return 0;
 		}

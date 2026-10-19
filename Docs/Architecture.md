@@ -893,8 +893,8 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   arrays) and the root list are copied as they are, and the dirty list and the transform pass carry over, so the copy
   needs no recomputation. The copy's signals are connected only afterwards: copying emits none, as a deserialized scene's
   construction emits none before its systems start. Then the modules' context copiers run
-  (`Scene::RegisterContextCopier`): the Renderer module's clones the render scene, so the copy's first frame builds no
-  proxy and uploads nothing (see [Render scene](#render-scene), "Clones"). Copying is mostly the system handing out fresh memory (page faults),
+  (`Scene::RegisterContextCopier`; never for a `SerializedOnly` snapshot, which a save only writes): the Renderer
+  module's clones the render scene, so the copy's first frame builds no proxy and uploads nothing (see [Render scene](#render-scene), "Clones"). Copying is mostly the system handing out fresh memory (page faults),
   which the threads share: a 1,000,000-entity scene copies in about 43 ms (`Perf.Scene.Copy1M`; about 0.7 s entity by
   entity before), and the editor's frame that starts playing it takes about 47 ms (`PerfGPU.Editor.PlayStart1MMaxFrame`).
   Systems starting must not walk the hierarchy either: `ScriptSystem` sorts the scripted entities into hierarchy order
@@ -2064,7 +2064,7 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   sorts its lights by relevance instead). The CPU path walks the records instead of the registry. The counts come back
   with the culling's (`CullCounters::VisibleLights`, `DrawnLights`).
 - **Clones** (`RenderScene::CopyIntoScene`, the Renderer module's `Scene::SceneContextCopier`). `Scene::Copy` of a scene
-  with a render scene (play start) clones it into the copy: the copy's entities keep the source's EnTT identifiers, so
+  with a render scene (play start; not a background save's `SerializedOnly` snapshot) clones it into the copy: the copy's entities keep the source's EnTT identifiers, so
   every proxy, instance, mesh and material slot and palette index stays the same, and the clone is the source's arrays
   copied member by member, the large ones on the job system at once (`Core/ParallelClone.h`); it records its source
   (`GetCloneSource`) and the source's change versions (`GetCloneVersions`), connects its listeners to the copy's

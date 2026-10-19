@@ -282,9 +282,12 @@ namespace Strata
 		}
 		destination->m_HierarchyVersion++;
 		destination->ConnectSignals();
-		// The modules' context data of the complete copy (a render scene's clone).
-		for (const SceneContextCopier copier : GetContextCopiers())
-			copier(*source, *destination);
+		// The modules' context data of a complete copy (a render scene's clone); a snapshot to save needs none.
+		if (!options.SerializedOnly)
+		{
+			for (const SceneContextCopier copier : GetContextCopiers())
+				copier(*source, *destination);
+		}
 		return destination;
 	}
 

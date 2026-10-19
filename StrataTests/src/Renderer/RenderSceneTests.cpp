@@ -1012,6 +1012,8 @@ TEST_SUITE("Renderer.RenderScene")
 		Ref<Scene> plain = CreateRef<Scene>("Plain");
 		AddCube(*plain, glm::vec3(0.0f));
 		CHECK(RenderScene::Find(*Scene::Copy(plain)) == nullptr);
+		// A snapshot a background save writes (SerializedOnly) needs no render scene: the copiers do not run for it.
+		CHECK(RenderScene::Find(*Scene::Copy(source, SceneCopyOptions { .SerializedOnly = true })) == nullptr);
 
 		Ref<Scene> copy = Scene::Copy(source);
 		RenderScene* clone = RenderScene::Find(*copy);
