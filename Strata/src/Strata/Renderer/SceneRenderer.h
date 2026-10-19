@@ -171,7 +171,10 @@ namespace Strata
 		// was visible in the previous frame into the depth prepass, a depth pyramid of that (Scene/HZBBuild.comp) tests every
 		// other proxy in the frustum, and the second phase draws those found visible (in the same frame: nothing appears a
 		// frame late). Camera cuts and a renderer's first frame start without history (the first phase draws nothing).
-		// Shadow cascades are not occlusion culled.
+		// The shadow cascades are culled alike, each against a pyramid of its own first phase's shadow map (a quarter of
+		// ShadowMapSize each way): casters hidden from the light behind other casters are left out. That costs GPU time of
+		// its own, so it runs while it pays: while the latest frame that culled the cascades found at least a sixteenth of
+		// their casters hidden, otherwise once every 16 frames to look again (SceneRendererStats::ShadowOcclusionCulled).
 		bool OcclusionCulling = true;
 	};
 
@@ -267,6 +270,8 @@ namespace Strata
 		// The frame's requests came from the GPU's visibility feedback (SceneRendererSpecification::VisibilityFeedback); its
 		// VisibleProxies and CulledInstances then count only the proxies the CPU still looked at.
 		bool FeedbackRequests = false;
+		// The frame's cascades were occlusion culled (SceneRendererSpecification::OcclusionCulling, while it pays).
+		bool ShadowOcclusionCulled = false;
 		uint32_t DrawCalls = 0;       // Draw calls of the forward passes (opaque and transparent)
 		uint32_t OpaqueDrawCalls = 0; // Of those, opaque batches: also the draw calls of the depth prepass
 		uint32_t ShadowDrawCalls = 0; // Draw calls into the shadow cascades
@@ -278,6 +283,9 @@ namespace Strata
 		// GPU-driven frames: mesh renderers in the frustum hidden behind what the view draws (OcclusionCulling; with
 		// AddGPUCounts).
 		uint32_t OccludedProxies = 0;
+		// GPU-driven frames: casters hidden in a cascade behind what it draws, summed over cascades (OcclusionCulling; with
+		// AddGPUCounts).
+		uint32_t OccludedCasters = 0;
 		uint64_t Triangles = 0;
 		// Drawn submesh instances per selected level of detail; the last entry also counts all higher levels.
 		std::array<uint32_t, c_LODStatCount> InstancesPerLOD = {};
@@ -356,6 +364,7 @@ namespace Strata
 		uint32_t VisibleProxies = 0;   // Mesh renderers that passed the view's frustum and size tests
 		uint32_t SizeCulledProxies = 0; // In the frustum, below SceneRendererSpecification::MinProjectedPixels
 		uint32_t OccludedProxies = 0;  // In the frustum, hidden behind what the view draws (SceneRendererSpecification::OcclusionCulling)
+		uint32_t OccludedCasters = 0;  // In a cascade's box, hidden behind what the cascade draws (summed over cascades)
 		uint32_t SubTexelCasters = 0;
 		uint32_t SkinnedInstances = 0;
 		uint32_t Lights = 0;           // Point and spot lights in the view (all of them: no SceneRendererSpecification::MaxLights)
@@ -853,7 +862,13 @@ namespace Strata
 		// Whether the frame's view is occlusion culled (SceneRendererSpecification::OcclusionCulling, with a depth pyramid).
 		bool IsOcclusionCulled() const;
 		bool CreateDepthPyramid();
+		// The cascades' draws: the first phase, and with occlusion culling the cascades' pyramids, second phase and its draws.
 		void DrawGPUShadows(nvrhi::ICommandList* commandList);
+		// The cascades' dense buckets [first, end).
+		void DrawGPUShadowBuckets(nvrhi::ICommandList* commandList, uint32_t firstDense, uint32_t endDense);
+		// Creates the cascades' depth pyramids once the shadow map exists (GPU-driven renderers); false when that failed.
+		bool EnsureShadowPyramid();
+		void RunShadowOcclusionPhase(nvrhi::ICommandList* commandList);
 		// The indirect draws of a dense bucket, as GetGPUIndirectPath says: its `slots` (without a GPU-written count), or as many
 		// as the GPU counted.
 		void DrawGPUBucket(nvrhi::ICommandList* commandList, uint32_t dense, uint32_t slots);
@@ -1174,6 +1189,7 @@ namespace Strata
 			uint64_t TablesVersion = 0;
 			uint32_t MeshSlots = 0;
 			uint32_t MaterialSlots = 0;
+			bool ShadowOcclusion = false; // The frame culled its cascades by occlusion with history (its counters say whether that paid)
 		};
 		std::array<CounterReadback, c_GPURecordCount> m_CounterReadbacks;
 		uint32_t m_CounterReadbackIndex = 0;
@@ -1198,6 +1214,20 @@ namespace Strata
 		nvrhi::BindingLayoutHandle m_DepthPyramidLayout;
 		nvrhi::ComputePipelineHandle m_DepthPyramidPipeline;
 		nvrhi::SamplerHandle m_DepthPyramidSampler; // A minimum filter where the device has one (samplerFilterMinmax)
+		// The cascades' depth pyramids (a layer each, level 0 a quarter of the shadow map each way) with a binding set per level
+		// (over every layer), and what the culling binds while there is none.
+		nvrhi::TextureHandle m_ShadowPyramid;
+		nvrhi::ComputePipelineHandle m_ShadowPyramidPipeline; // Scene/HZBBuildArray.comp
+		nvrhi::TextureHandle m_DummyShadowPyramid;
+		nvrhi::ITexture* m_CullBoundShadowPyramid = nullptr;
+		uint32_t m_ShadowPyramidSize = 0; // Level 0
+		uint32_t m_ShadowPyramidLevels = 0;
+		std::vector<nvrhi::BindingSetHandle> m_ShadowPyramidSets;
+		// Whether the latest frame whose counters arrived and that culled the cascades by occlusion found enough of their
+		// casters hidden (true until one did), and the latest frame that culled them (RenderCount + 1 while rendering).
+		bool m_ShadowOcclusionPays = true;
+		uint64_t m_ShadowOcclusionRender = 0;
+		bool m_ShadowOcclusionMeasured = false; // The frame culls its cascades by occlusion, with history
 		// The newest visibility feedback read back (ResolveCullCounters), which frames apply until a newer one arrives.
 		struct VisibilityFeedback
 		{

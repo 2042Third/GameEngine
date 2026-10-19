@@ -4,42 +4,64 @@
 
 #include "Include/Common.glsl"
 
-// One level of the depth pyramid occlusion culling tests against (Cull.comp's second phase): each texel the farthest
-// (smallest, reversed-Z) of the 2x2 texels of the level below it (the depth buffer for level 0), those past an odd edge
-// left out, so a texel covers exactly the depth pixels p with p >> (level + 1) equal to it. Where the device filters
-// with a minimum (samplerFilterMinmax) one sample of the 2x2 does it; otherwise four loads.
+// One level of a depth pyramid occlusion culling tests against (Cull.comp's second phases): each texel the farthest
+// (smallest, reversed-Z) of the 2x2 texels of the level below it, or of Reduction x Reduction texels of the depth for level 0
+// (2 for the view's depth buffer, 4 for a shadow cascade), those past an odd edge left out, so a texel covers exactly the depth
+// pixels p with p >> (level + log2(Reduction)) equal to it. Where the device filters with a minimum (samplerFilterMinmax)
+// one sample per 2x2 does it; otherwise four loads. With ST_HZB_ARRAY (registered as Scene/HZBBuildArray.comp) the source
+// and the destination are array textures (the shadow cascades'), a layer per z of the dispatch.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
+#ifdef ST_HZB_ARRAY
+layout(set = 0, binding = ST_SRV(0)) uniform texture2DArray u_Source;
+layout(set = 0, binding = ST_UAV(0), r32f) uniform writeonly image2DArray o_Destination;
+#define ST_HZB_LAYER int(gl_GlobalInvocationID.z)
+#define ST_HZB_FETCH(texel) texelFetch(u_Source, ivec3(texel, ST_HZB_LAYER), 0).r
+#define ST_HZB_SAMPLE(uv) textureLod(sampler2DArray(u_Source, u_MinimumSampler), vec3(uv, float(ST_HZB_LAYER)), 0.0).r
+#define ST_HZB_STORE(texel, value) imageStore(o_Destination, ivec3(texel, ST_HZB_LAYER), vec4(value))
+#else
 layout(set = 0, binding = ST_SRV(0)) uniform texture2D u_Source;
-layout(set = 0, binding = ST_SAMPLER(0)) uniform sampler u_MinimumSampler;
 layout(set = 0, binding = ST_UAV(0), r32f) uniform writeonly image2D o_Destination;
+#define ST_HZB_FETCH(texel) texelFetch(u_Source, texel, 0).r
+#define ST_HZB_SAMPLE(uv) textureLod(sampler2D(u_Source, u_MinimumSampler), uv, 0.0).r
+#define ST_HZB_STORE(texel, value) imageStore(o_Destination, texel, vec4(value))
+#endif
+layout(set = 0, binding = ST_SAMPLER(0)) uniform sampler u_MinimumSampler;
 
 layout(push_constant) uniform PyramidParameters
 {
 	uvec2 SourceSize;
 	uvec2 DestinationSize;
 	uint UseMinimumSampler;
+	uint Reduction; // Source texels per destination texel each way: 2, or 4
 } u_Pyramid;
+
+// The farthest depth of the source's 2x2 texels from `base`.
+float Farthest2x2(ivec2 base)
+{
+	if (u_Pyramid.UseMinimumSampler != 0u)
+	{
+		// The 2x2 footprint's center; clamping repeats an odd edge's texel, which leaves the minimum as it is.
+		vec2 uv = (vec2(base) + 1.0) / vec2(u_Pyramid.SourceSize);
+		return ST_HZB_SAMPLE(uv);
+	}
+	ivec2 last = ivec2(u_Pyramid.SourceSize) - 1;
+	return min(min(ST_HZB_FETCH(min(base, last)), ST_HZB_FETCH(min(base + ivec2(1, 0), last))),
+		min(ST_HZB_FETCH(min(base + ivec2(0, 1), last)), ST_HZB_FETCH(min(base + ivec2(1, 1), last))));
+}
 
 void main()
 {
 	uvec2 texel = gl_GlobalInvocationID.xy;
 	if (any(greaterThanEqual(texel, u_Pyramid.DestinationSize)))
 		return;
-	float farthest;
-	if (u_Pyramid.UseMinimumSampler != 0u)
+	int reduction = u_Pyramid.Reduction == 4u ? 4 : 2;
+	ivec2 base = ivec2(texel) * reduction;
+	float farthest = Farthest2x2(base);
+	if (reduction == 4)
 	{
-		// The 2x2 footprint's center; clamping repeats an odd edge's texel, which leaves the minimum as it is.
-		vec2 uv = (vec2(texel) * 2.0 + 1.0) / vec2(u_Pyramid.SourceSize);
-		farthest = textureLod(sampler2D(u_Source, u_MinimumSampler), uv, 0.0).r;
+		farthest = min(min(farthest, Farthest2x2(base + ivec2(2, 0))), min(Farthest2x2(base + ivec2(0, 2)), Farthest2x2(base + ivec2(2, 2))));
 	}
-	else
-	{
-		ivec2 base = ivec2(texel) * 2;
-		ivec2 last = ivec2(u_Pyramid.SourceSize) - 1;
-		farthest = min(min(texelFetch(u_Source, base, 0).r, texelFetch(u_Source, min(base + ivec2(1, 0), last), 0).r),
-			min(texelFetch(u_Source, min(base + ivec2(0, 1), last), 0).r, texelFetch(u_Source, min(base + ivec2(1, 1), last), 0).r));
-	}
-	imageStore(o_Destination, ivec2(texel), vec4(farthest));
+	ST_HZB_STORE(ivec2(texel), farthest);
 }

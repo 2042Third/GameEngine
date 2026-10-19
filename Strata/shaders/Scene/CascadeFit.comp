@@ -68,5 +68,6 @@ void main()
 	u_Cascades[cascade].ViewProjection = projection * u_Fit.LightView;
 	// Penumbrae are searched for blockers up to this distance from the receiver (world units).
 	float searchDistance = 0.2 * depths.w + 5.0;
-	u_Cascades[cascade].Parameters = vec4(depths.z, farPlane - nearPlane, searchDistance, 0.0);
+	// w: the near plane's light view z, for the cascades' occlusion culling (Cull.comp's IsOccludedInCascade).
+	u_Cascades[cascade].Parameters = vec4(depths.z, farPlane - nearPlane, searchDistance, nearZ);
 }

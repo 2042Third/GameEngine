@@ -26,10 +26,20 @@ namespace Strata
 	{
 
 		constexpr uint32_t c_CullGroupSize = 64;
-		// Cull.comp's and CullBuild.comp's modes: bit 0 writes the draw list (else counts), bit 1 runs the view's second phase.
+		// Cull.comp's and CullBuild.comp's modes: bit 0 writes the draw list (else counts), bit 1 runs the second phase (of the
+		// view, or with Scene/CullShadow.comp of the cascades); CullBuild.comp builds the cascades' second phase with bit 2.
 		constexpr uint32_t c_CullModeCount = 0;
 		constexpr uint32_t c_CullModeWrite = 1;
 		constexpr uint32_t c_CullModeSecondPhase = 2;
+		constexpr uint32_t c_CullModeShadowSecondPhase = 4;
+		// A cascade's depth pyramid starts at a quarter of its shadow map each way (an eighth of the memory a half would take).
+		constexpr uint32_t c_ShadowPyramidReduction = 4;
+		// The cascades' occlusion culling costs GPU time (their pyramids, a second culling pass over the proxies, and the wait
+		// for the first phase's shadow maps) that only hidden casters pay back: it runs while the latest frame that ran it found
+		// at least 1 / c_ShadowOcclusionPaysShare of the cascades' casters hidden, and otherwise every
+		// c_ShadowOcclusionProbeFrames frames to look again.
+		constexpr uint64_t c_ShadowOcclusionPaysShare = 16;
+		constexpr uint64_t c_ShadowOcclusionProbeFrames = 16;
 
 		// Scene/HZBBuild.comp's push constants.
 		struct DepthPyramidParameters
@@ -37,6 +47,7 @@ namespace Strata
 			glm::uvec2 SourceSize = glm::uvec2(0);
 			glm::uvec2 DestinationSize = glm::uvec2(0);
 			uint32_t UseMinimumSampler = 0;
+			uint32_t Reduction = 2; // Source texels per destination texel each way
 		};
 		// Shadow casters are drawn into a cascade only while they span at least this many of its texels (as the CPU path,
 		// SceneRendererExtraction.cpp).
@@ -82,7 +93,7 @@ namespace Strata
 				parts.Shadow = true;
 				parts.Cascade = (bucket - RenderData::c_CullViewBuckets) / RenderData::c_CullShadowBucketsPerCascade;
 				local = (bucket - RenderData::c_CullViewBuckets) % RenderData::c_CullShadowBucketsPerCascade;
-				parts.AlphaMask = (local & 16u) != 0;
+				parts.AlphaMask = (local & RenderData::c_CullShadowAlphaMask) != 0;
 			}
 			parts.Mirrored = (local & 1u) != 0;
 			parts.DoubleSided = (local & 2u) != 0;
@@ -113,6 +124,7 @@ namespace Strata
 		combined.CulledInstances = indexed > combined.VisibleProxies ? indexed - combined.VisibleProxies : 0u;
 		combined.SizeCulledProxies = gpu.SizeCulledProxies;
 		combined.OccludedProxies = gpu.OccludedProxies;
+		combined.OccludedCasters = gpu.OccludedCasters;
 		for (size_t lod = 0; lod < combined.InstancesPerLOD.size(); lod++)
 			combined.InstancesPerLOD[lod] += gpu.InstancesPerLOD[lod];
 		return combined;
@@ -159,6 +171,8 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7),
 			nvrhi::BindingLayoutItem::Texture_SRV(8),
+			nvrhi::BindingLayoutItem::Texture_SRV(9),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(10),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2),
@@ -204,6 +218,9 @@ namespace Strata
 		pyramidDesc.CS = shaders.Get("Scene/HZBBuild.comp");
 		pyramidDesc.bindingLayouts = { m_DepthPyramidLayout };
 		m_DepthPyramidPipeline = pyramidDesc.CS && m_DepthPyramidLayout ? m_Device->createComputePipeline(pyramidDesc) : nullptr;
+		// The cascades' pyramids: layers of array textures.
+		pyramidDesc.CS = shaders.Get("Scene/HZBBuildArray.comp");
+		m_ShadowPyramidPipeline = pyramidDesc.CS && m_DepthPyramidLayout ? m_Device->createComputePipeline(pyramidDesc) : nullptr;
 		nvrhi::SamplerDesc pyramidSampler;
 		pyramidSampler.setAllAddressModes(nvrhi::SamplerAddressMode::Clamp);
 		if (Renderer::GetGraphicsDevice().GetInfo().SupportsSamplerMinMax)
@@ -211,6 +228,17 @@ namespace Strata
 		else
 			pyramidSampler.setAllFilters(false);
 		m_DepthPyramidSampler = m_Device->createSampler(pyramidSampler);
+		// Bound in place of the cascades' pyramids until the shadow map exists (nothing reads it then).
+		nvrhi::TextureDesc dummyPyramid;
+		dummyPyramid.width = 1;
+		dummyPyramid.height = 1;
+		dummyPyramid.arraySize = RenderData::c_CullMaxCascades;
+		dummyPyramid.dimension = nvrhi::TextureDimension::Texture2DArray;
+		dummyPyramid.format = nvrhi::Format::R32_FLOAT;
+		dummyPyramid.debugName = m_Specification.DebugName + ".DummyShadowPyramid";
+		dummyPyramid.initialState = nvrhi::ResourceStates::ShaderResource;
+		dummyPyramid.keepInitialState = true;
+		m_DummyShadowPyramid = m_Device->createTexture(dummyPyramid);
 
 		bool recreated = false;
 		const bool created = EnsureBufferCapacity(m_BucketTableBuffer, 2 * RenderData::c_CullBuckets, sizeof(uint32_t), "CullBuckets", recreated)
@@ -227,7 +255,7 @@ namespace Strata
 			m_CounterReadbacks[index].Readback = CreateScope<BufferReadback>(m_Device, sizeof(RenderData::CullCounters), m_Specification.DebugName + ".CullCounterReadback");
 		const bool readbacks = std::all_of(m_CounterReadbacks.begin(), m_CounterReadbacks.end(), [](const CounterReadback& entry) { return entry.Readback->IsValid(); });
 		if (!m_CullViewPipeline || !m_CullShadowPipeline || !m_CullBuildPipeline || !m_CullFeedbackPipeline || !m_DepthPyramidPipeline || !m_DepthPyramidSampler
-			|| !created || !m_CullConstantBuffer || !readbacks)
+			|| !m_ShadowPyramidPipeline || !m_DummyShadowPyramid || !created || !m_CullConstantBuffer || !readbacks)
 		{
 			// The CPU path draws instead.
 			ST_CORE_ERROR("{}: the GPU-driven path is unavailable (its pipelines or buffers could not be created); the CPU culls and draws",
@@ -487,6 +515,24 @@ namespace Strata
 		const uint32_t viewBuckets = static_cast<uint32_t>(m_CullBuckets.size());
 		for (uint32_t cascade = 0; cascade < m_CascadeCount; cascade++)
 			addBuckets(true, cascade);
+		const uint32_t firstPhaseBuckets = static_cast<uint32_t>(m_CullBuckets.size());
+		const uint64_t frame = m_RenderCount + 1;
+		// Without history (a camera cut, the first frame) the first phase would draw nothing: the cascades are drawn whole, and
+		// that records their history.
+		const bool shadowOcclusion = occlusion && m_CascadeCount > 0 && m_ShadowPyramid != nullptr && !m_ResetVisibility
+			&& (m_ShadowOcclusionPays || frame >= m_ShadowOcclusionRender + c_ShadowOcclusionProbeFrames);
+		m_Stats.ShadowOcclusionCulled = shadowOcclusion;
+		if (shadowOcclusion)
+		{
+			m_ShadowOcclusionRender = frame;
+			// The cascades' second-phase buckets: the same states for what their first phase did not draw.
+			for (uint32_t dense = viewBuckets; dense < firstPhaseBuckets; dense++)
+			{
+				const uint32_t bucket = m_CullBuckets[dense] + RenderData::c_CullShadowSecondPhase;
+				m_CullBucketTable[bucket] = static_cast<uint32_t>(m_CullBuckets.size());
+				m_CullBuckets.push_back(bucket);
+			}
+		}
 
 		RenderData::CullConstants& constants = m_CullConstants;
 		constants = RenderData::CullConstants {};
@@ -531,6 +577,10 @@ namespace Strata
 		constants.LODErrorThreshold = m_LODCriteria.ErrorThreshold;
 		constants.LODFadeFrame = m_LODFadeFrame;
 		constants.LODFade = m_Specification.FadeLevelsOfDetail ? 1u : 0u;
+		constants.ShadowOcclusion = shadowOcclusion ? 1u : 0u;
+		constants.SecondPhaseShadowBuckets = firstPhaseBuckets;
+		constants.ShadowMapSize = m_Specification.ShadowMapSize;
+		constants.ShadowPyramidLevels = m_ShadowPyramidLevels;
 		// The bucket table's second part: each dense bucket's draw slots.
 		for (const uint32_t bucket : m_CullBuckets)
 			m_CullBucketTable.push_back(GetBucketSlots(bucket));
@@ -638,6 +688,8 @@ namespace Strata
 			nvrhi::BindingSetItem::StructuredBuffer_SRV(6, pool.GetLODBuffer()),
 			nvrhi::BindingSetItem::StructuredBuffer_SRV(7, m_BucketTableBuffer),
 			nvrhi::BindingSetItem::Texture_SRV(8, m_DepthPyramid),
+			nvrhi::BindingSetItem::Texture_SRV(9, m_ShadowPyramid ? m_ShadowPyramid.Get() : m_DummyShadowPyramid.Get()),
+			nvrhi::BindingSetItem::StructuredBuffer_SRV(10, m_CascadeBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_CullCountBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_CullOffsetBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_CullArgumentBuffer),
@@ -656,6 +708,7 @@ namespace Strata
 		m_CullBindingSet = m_Device->createBindingSet(desc, m_CullBindingLayout);
 		m_CullBoundSceneVersion = m_SceneGPU->GetBufferVersion();
 		m_CullBoundTableVersion = pool.GetTableVersion();
+		m_CullBoundShadowPyramid = m_ShadowPyramid.Get();
 		return m_CullBindingSet != nullptr;
 	}
 
@@ -666,7 +719,8 @@ namespace Strata
 		if (!pool.RecordTableUploads(commandList))
 			return false; // Logged by the pool
 		// Tables replaced (the pool's, the scene copy's or the renderer's): the binding set follows.
-		if (!m_CullBindingSet || m_CullBoundSceneVersion != m_SceneGPU->GetBufferVersion() || m_CullBoundTableVersion != pool.GetTableVersion())
+		if (!m_CullBindingSet || m_CullBoundSceneVersion != m_SceneGPU->GetBufferVersion() || m_CullBoundTableVersion != pool.GetTableVersion()
+			|| m_CullBoundShadowPyramid != m_ShadowPyramid.Get())
 		{
 			if (!CreateCullBindingSet())
 			{
@@ -695,6 +749,8 @@ namespace Strata
 		commandList->clearBufferUInt(m_CullArgumentBuffer, 0);
 		if (shadows)
 			commandList->clearBufferUInt(m_CasterDepthBuffer, 0); // No caster yet in any cascade
+		// What the cascades' occlusion culling finds says whether it pays only where it had history.
+		m_ShadowOcclusionMeasured = constants.ShadowOcclusion != 0 && !m_ResetVisibility;
 		if (m_ResetVisibility)
 		{
 			// No history (a camera cut, the first frame, another scene): the first phase draws nothing.
@@ -800,8 +856,97 @@ namespace Strata
 		pass(c_CullModeSecondPhase | c_CullModeCount, m_CullViewPipeline, constants.ProxyCount);
 		pass(c_CullModeSecondPhase, m_CullBuildPipeline, static_cast<uint64_t>(constants.BucketCount) * constants.LODCapacity);
 		pass(c_CullModeSecondPhase | c_CullModeWrite, m_CullViewPipeline, constants.ProxyCount);
-		// This frame's visibility is the next one's history.
+		// This frame's visibility (the view's and the cascades') is the next one's history.
 		m_VisibilityParity ^= 1u;
+	}
+
+	bool SceneRenderer::EnsureShadowPyramid()
+	{
+		if (m_ShadowPyramid || !m_ShadowPyramidPipeline || !m_CullShadowPipeline || !m_ShadowMap)
+			return true; // Made, or not needed (no GPU-driven path; made with the shadow map)
+		const uint32_t size = std::max((m_Specification.ShadowMapSize + c_ShadowPyramidReduction - 1) / c_ShadowPyramidReduction, 1u);
+		uint32_t levels = 1;
+		while ((size >> levels) > 0)
+			levels++;
+		nvrhi::TextureDesc desc;
+		desc.width = size;
+		desc.height = size;
+		desc.arraySize = RenderData::c_MaxCascades;
+		desc.dimension = nvrhi::TextureDimension::Texture2DArray;
+		desc.mipLevels = levels;
+		desc.format = nvrhi::Format::R32_FLOAT;
+		desc.isUAV = true;
+		desc.debugName = m_Specification.DebugName + ".ShadowPyramid";
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		nvrhi::TextureHandle pyramid = m_Device->createTexture(desc);
+		if (!pyramid)
+			return false;
+		// A binding set per level, over every layer (a dispatch builds the level of each cascade): level 0 reads the shadow map.
+		const nvrhi::ArraySlice layers = RenderData::c_MaxCascades;
+		std::vector<nvrhi::BindingSetHandle> sets;
+		for (uint32_t level = 0; level < levels; level++)
+		{
+			nvrhi::BindingSetDesc set;
+			set.bindings = {
+				level == 0 ? nvrhi::BindingSetItem::Texture_SRV(0, m_ShadowMap, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, layers))
+					: nvrhi::BindingSetItem::Texture_SRV(0, pyramid, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(level - 1, 1, 0, layers)),
+				nvrhi::BindingSetItem::Sampler(0, m_DepthPyramidSampler),
+				nvrhi::BindingSetItem::Texture_UAV(0, pyramid, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(level, 1, 0, layers)),
+				nvrhi::BindingSetItem::PushConstants(0, sizeof(DepthPyramidParameters))
+			};
+			sets.push_back(m_Device->createBindingSet(set, m_DepthPyramidLayout));
+			if (!sets.back())
+				return false;
+		}
+		m_ShadowPyramid = pyramid;
+		m_ShadowPyramidSize = size;
+		m_ShadowPyramidLevels = levels;
+		m_ShadowPyramidSets = std::move(sets);
+		return true;
+	}
+
+	void SceneRenderer::RunShadowOcclusionPhase(nvrhi::ICommandList* commandList)
+	{
+		ST_PROFILE_FUNCTION();
+		// The cascades' depth pyramids of their first phase's shadow maps, level by level, every cascade in one dispatch (few
+		// dispatches and state changes: MoltenVK's submission costs CPU time per dispatch).
+		const bool minimumSampler = Renderer::GetGraphicsDevice().GetInfo().SupportsSamplerMinMax;
+		nvrhi::ComputeState pyramidState;
+		pyramidState.pipeline = m_ShadowPyramidPipeline;
+		glm::uvec2 source(m_Specification.ShadowMapSize);
+		glm::uvec2 destination(m_ShadowPyramidSize);
+		for (uint32_t level = 0; level < m_ShadowPyramidLevels; level++)
+		{
+			pyramidState.bindings = { m_ShadowPyramidSets[level] };
+			commandList->setComputeState(pyramidState);
+			DepthPyramidParameters parameters;
+			parameters.SourceSize = source;
+			parameters.DestinationSize = destination;
+			parameters.UseMinimumSampler = minimumSampler ? 1u : 0u;
+			parameters.Reduction = level == 0 ? c_ShadowPyramidReduction : 2u;
+			commandList->setPushConstants(&parameters, sizeof(parameters));
+			commandList->dispatch((destination.x + 7) / 8, (destination.y + 7) / 8, m_CascadeCount);
+			source = destination;
+			destination = glm::max((destination + 1u) / 2u, glm::uvec2(1));
+		}
+
+		// The second phase: every caster's visibility in each cascade against its pyramid, and the draws the first phase did
+		// not make. The view's second phase builds its own buckets later.
+		const RenderData::CullConstants& constants = m_CullConstants;
+		nvrhi::ComputeState state;
+		state.bindings = { m_CullBindingSet };
+		const auto pass = [&](uint32_t mode, nvrhi::IComputePipeline* pipeline, uint64_t items)
+		{
+			state.pipeline = pipeline;
+			commandList->setComputeState(state);
+			commandList->setPushConstants(&mode, sizeof(mode));
+			Dispatch(commandList, items);
+			CullBarrier(commandList);
+		};
+		pass(c_CullModeSecondPhase | c_CullModeCount, m_CullShadowPipeline, constants.ProxyCount);
+		pass(c_CullModeShadowSecondPhase, m_CullBuildPipeline, static_cast<uint64_t>(constants.BucketCount) * constants.LODCapacity);
+		pass(c_CullModeSecondPhase | c_CullModeWrite, m_CullShadowPipeline, constants.ProxyCount);
 	}
 
 	void SceneRenderer::RecordCullReadback(nvrhi::ICommandList* commandList)
@@ -812,6 +957,7 @@ namespace Strata
 		readback.Readback->Record(commandList, m_CullCounterBuffer, 0, sizeof(RenderData::CullCounters));
 		readback.Render = m_RenderCount + 1;
 		readback.HasFeedback = false;
+		readback.ShadowOcclusion = m_ShadowOcclusionMeasured;
 		if (!feedback)
 			return;
 		// The feedback's copy: a readback whose earlier copy may still be under way is replaced only once it completed.
@@ -907,6 +1053,18 @@ namespace Strata
 	void SceneRenderer::DrawGPUShadows(nvrhi::ICommandList* commandList)
 	{
 		commandList->clearDepthStencilTexture(m_ShadowMap, nvrhi::AllSubresources, true, 0.0f, false, 0);
+		const RenderData::CullConstants& constants = m_CullConstants;
+		DrawGPUShadowBuckets(commandList, constants.ViewBucketCount, constants.SecondPhaseShadowBuckets);
+		if (constants.ShadowOcclusion != 0)
+		{
+			// What the first phase did not draw, found visible against its depth, in the same frame.
+			RunShadowOcclusionPhase(commandList);
+			DrawGPUShadowBuckets(commandList, constants.SecondPhaseShadowBuckets, constants.BucketCount);
+		}
+	}
+
+	void SceneRenderer::DrawGPUShadowBuckets(nvrhi::ICommandList* commandList, uint32_t firstDense, uint32_t endDense)
+	{
 		const GeometryPool& pool = *Renderer::GetGeometryPool();
 		const bool count = GetGPUIndirectPath() == GPUIndirectPath::Count;
 		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
@@ -916,7 +1074,7 @@ namespace Strata
 		state.indexBuffer = nvrhi::IndexBufferBinding { pool.GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
 		state.indirectParams = m_CullArgumentBuffer;
 		state.indirectCountBuffer = count ? m_CullBucketCountBuffer.Get() : nullptr;
-		for (uint32_t dense = m_CullConstants.ViewBucketCount; dense < m_CullConstants.BucketCount; dense++)
+		for (uint32_t dense = firstDense; dense < std::min(endDense, m_CullConstants.BucketCount); dense++)
 		{
 			const uint32_t bucket = m_CullBuckets[dense];
 			const BucketParts parts = DecodeBucket(bucket);
@@ -977,8 +1135,16 @@ namespace Strata
 		stats.DrawListEntries = counters.DrawListUsed;
 		stats.Overflow = counters.Overflow;
 		stats.OccludedProxies = counters.Occluded;
+		stats.OccludedCasters = counters.OccludedCasters;
 		for (size_t lod = 0; lod < stats.InstancesPerLOD.size(); lod++)
 			stats.InstancesPerLOD[lod] = counters.InstancesPerLOD[lod];
+		if (newest->ShadowOcclusion)
+		{
+			// The casters it tested: those it drew and those it found hidden (in cascade instances and proxies, alike for meshes
+			// of one submesh; one drawn by the first phase and then found hidden counts twice, which only lowers the share).
+			const uint64_t tested = static_cast<uint64_t>(counters.ShadowInstances) + counters.OccludedCasters;
+			m_ShadowOcclusionPays = counters.OccludedCasters > 0 && counters.OccludedCasters * c_ShadowOcclusionPaysShare >= tested;
+		}
 
 		// The frame's visibility feedback: the touched mesh slots' records, then the material slots' (each part's count in
 		// the header, at most its places).

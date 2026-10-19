@@ -38,8 +38,12 @@
 #define ST_CULL_GEOMETRY_SKINNED       2u
 #define ST_CULL_VIEW_BUCKETS           32u
 #define ST_CULL_SECOND_PHASE_BUCKET    16u  // MakeViewBucket's second-phase bit
-#define ST_CULL_SHADOW_BUCKETS         32u
-#define ST_CULL_BUCKETS                160u // c_CullBuckets: the bucket table's bucket -> dense index part
+#define ST_CULL_SHADOW_BUCKETS         64u
+#define ST_CULL_SHADOW_ALPHA_MASK_BUCKET 16u // MakeShadowBucket's alpha-masked bit
+#define ST_CULL_SHADOW_SECOND_PHASE_BUCKET 32u // MakeShadowBucket's second-phase bit
+#define ST_CULL_BUCKETS                288u // c_CullBuckets: the bucket table's bucket -> dense index part
+#define ST_CULL_MAX_CASCADES           4u
+#define ST_VISIBILITY_CASCADE_SHIFT    2u   // RenderData::c_VisibilityCascadeShift
 #define ST_CULL_NONE                   0xFFFFFFFFu
 
 // CullCounters, by index
@@ -58,6 +62,7 @@
 #define ST_COUNTER_INSTANCES_PER_LOD  12
 #define ST_LOD_STAT_COUNT             8
 #define ST_COUNTER_OCCLUDED           20
+#define ST_COUNTER_OCCLUDED_CASTERS   23
 
 struct GPUProxy
 {
@@ -136,6 +141,16 @@ struct CullConstants
 	float LODErrorThreshold; // LODSelection::GetErrorThreshold of the view
 	uint LODFadeFrame;       // The frame's number for level-of-detail cross-fades
 	uint LODFade;            // 1: levels of detail cross-fade
+	uint ShadowOcclusion;    // 1: the cascades are occlusion culled
+	uint SecondPhaseShadowBuckets; // The dense index of the cascades' first second-phase bucket
+	uint ShadowMapSize;      // Each cascade's texels each way
+	uint ShadowPyramidLevels;
+};
+
+struct CullCascade
+{
+	mat4 ViewProjection;
+	vec4 Parameters;         // RenderData::CascadeData: w is the near plane's light view z (camera-relative)
 };
 
 layout(set = 0, binding = ST_CBV(0), std140) uniform CullBuffer
@@ -171,7 +186,8 @@ layout(set = 0, binding = ST_UAV(9), std430) buffer FeedbackRecordBuffer { uvec4
 // Per cascade the nearest drawn caster's light view z (EncodeOrderedFloat; 0: none), for Scene/CascadeFit.comp.
 layout(set = 0, binding = ST_UAV(10), std430) buffer CasterDepthBuffer { uint u_CasterDepths[]; };
 // Per proxy whether the view saw it, in two bits that alternate frame by frame: the previous frame's
-// (u_Cull.VisibilityParity) and this frame's, written by the second phase.
+// (u_Cull.VisibilityParity) and this frame's, written by the second phase; and likewise per cascade whether the proxy
+// cast into it, in bits ST_VISIBILITY_CASCADE_SHIFT + ST_CULL_MAX_CASCADES * parity + cascade.
 layout(set = 0, binding = ST_UAV(11), std430) buffer VisibilityBuffer { uint u_Visibility[]; };
 // Per instance its level-of-detail cross-fade state (UpdateLODFade, LODSelection::LODFadeState), written by the view's
 // writing passes.
@@ -179,6 +195,11 @@ layout(set = 0, binding = ST_UAV(12), std430) buffer LODFadeBuffer { uvec2 u_LOD
 // The depth pyramid of the first phase's depth (Scene/HZBBuild.comp): each texel the farthest (smallest, reversed-Z)
 // depth of the pixels it covers; level m's texel covers pixels p with p >> (m + 1) equal to it.
 layout(set = 0, binding = ST_SRV(8)) uniform texture2D u_DepthPyramid;
+// Per cascade (a layer each) the depth pyramid of its first phase's shadow map: level m's texel covers texels t with
+// t >> (m + 2) equal to it.
+layout(set = 0, binding = ST_SRV(9)) uniform texture2DArray u_ShadowPyramid;
+// The cascades' projections (Scene/CascadeFit.comp), fitted after the counting pass.
+layout(set = 0, binding = ST_SRV(10), std430) readonly buffer CullCascadeBuffer { CullCascade u_CullCascades[]; };
 
 #define ST_LOD_RELATIVE_ERROR(record) u_GeometryLODs[record].RelativeError
 #include "Include/LODSelection.glsl"
@@ -202,6 +223,21 @@ float GetScreenFraction(vec3 center, float radius)
 		return (2.0 * radius) / u_Cull.LODParameters.y;
 	float distance = length(center - u_Cull.CameraPosition.xyz);
 	return radius / (max(distance, u_Cull.LODParameters.z) * u_Cull.LODParameters.y);
+}
+
+// The texels of a depth pyramid's level that cover a rectangle of pixels [minPixel, maxPixel] of a target of `size` pixels,
+// clamped to it: the finest level at which it spans at most two texels each way (corners `low` and `high`). Level m's texel
+// covers the pixels p with p >> (m + shift) equal to it.
+int GetPyramidFootprint(vec2 minPixel, vec2 maxPixel, vec2 size, int levels, int shift, out ivec2 low, out ivec2 high)
+{
+	low = ivec2(clamp(floor(minPixel), vec2(0.0), size - 1.0));
+	high = ivec2(clamp(floor(maxPixel), vec2(0.0), size - 1.0));
+	int level = 0;
+	while (level + 1 < levels && (((high.x >> (level + shift)) - (low.x >> (level + shift))) > 1 || ((high.y >> (level + shift)) - (low.y >> (level + shift))) > 1))
+		level++;
+	low = low >> (level + shift);
+	high = high >> (level + shift);
+	return level;
 }
 
 // Frustum::IsAABBVisible: the corner furthest along each plane's normal is inside.

@@ -6,7 +6,8 @@
 #include <vector>
 
 // Occlusion culling on the GPU-driven path (SceneRendererSpecification::OcclusionCulling): what the view saw in the previous
-// frame is drawn first, a depth pyramid of that tests the rest, and what is found visible is drawn in the same frame.
+// frame is drawn first, a depth pyramid of that tests the rest, and what is found visible is drawn in the same frame. The
+// shadow cascades are culled alike, each against a pyramid of its own shadow map.
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -116,6 +117,70 @@ namespace
 		gpu.GetDevice().WaitForIdle();
 	}
 
+	// A slab high above a box, under a sun shining almost straight down: the slab hides the box from the light (in every
+	// cascade both fall in), while the camera, looking from the side, sees both.
+	struct SlabScene
+	{
+		Scene World;
+		Entity Slab;
+		Entity Box;
+
+		explicit SlabScene(SceneTestAssets& assets)
+		{
+			AddNeutralPostProcess(World);
+			AddSun(World, glm::normalize(glm::vec3(0.1f, -1.0f, 0.05f)), 3.0f);
+			MaterialProperties lit;
+			lit.BaseColor = glm::vec4(0.7f, 0.7f, 0.75f, 1.0f);
+			const AssetHandle material = assets.AddMaterial(lit);
+			AddMesh(World, BuiltinAssets::PlaneMesh, material, glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(40.0f);
+			Slab = AddMesh(World, BuiltinAssets::CubeMesh, material, glm::vec3(0.0f, 6.0f, 0.0f), "Slab");
+			Slab.GetComponent<TransformComponent>().Scale = glm::vec3(6.0f, 0.5f, 6.0f);
+			Box = AddMesh(World, BuiltinAssets::CubeMesh, material, glm::vec3(0.0f, 1.0f, 0.0f), "Box");
+		}
+	};
+
+	SceneCamera SlabCamera()
+	{
+		SceneCamera camera = LookAt(glm::vec3(0.0f, 2.5f, 14.0f), glm::vec3(0.0f, 2.0f, 0.0f));
+		camera.Projection = Math::PerspectiveReverseZ(glm::radians(50.0f), 1.0f, 0.1f, 200.0f);
+		camera.VerticalFOV = glm::radians(50.0f);
+		camera.Far = 200.0f;
+		return camera;
+	}
+
+	// Renders a frame with each renderer and checks that the culled one drew the same image, the casters it left out counted
+	// as occluded (each caster in each cascade is drawn, found occluded, or both: drawn by the first phase, which draws what was
+	// visible in the previous frame, and then found hidden).
+	void CheckSameShadows(GPUContext& gpu, SceneRenderer& culled, SceneRenderer& unculled, Scene& scene, const SceneCamera& camera)
+	{
+		REQUIRE(gpu.GetDevice().BeginFrame());
+		Renderer::BeginFrame();
+		const ReadbackImage expected = RenderToImage(unculled, scene, camera);
+		const ReadbackImage actual = RenderToImage(culled, scene, camera);
+		gpu.GetDevice().EndFrame();
+		culled.ResolveGPUStats(true);
+		unculled.ResolveGPUStats(true);
+		REQUIRE(culled.GetGPUStats().CountersRender == culled.GetRenderCount());
+		REQUIRE(unculled.GetGPUStats().CountersRender == unculled.GetRenderCount());
+		CHECK(MaxDifference(expected, actual) <= 1);
+		CHECK(unculled.GetGPUStats().OccludedCasters == 0);
+		CHECK(culled.GetGPUStats().ShadowInstances <= unculled.GetGPUStats().ShadowInstances);
+		CHECK(culled.GetGPUStats().ShadowInstances + culled.GetGPUStats().OccludedCasters >= unculled.GetGPUStats().ShadowInstances);
+		CHECK(culled.GetGPUStats().Overflow == 0);
+	}
+
+	// Renders frames as CheckSameShadows does until three in a row culled the cascades (at most 40): whether they did.
+	bool RenderUntilCascadesCulled(GPUContext& gpu, SceneRenderer& culled, SceneRenderer& unculled, Scene& scene, const SceneCamera& camera)
+	{
+		uint32_t consecutive = 0;
+		for (int frame = 0; frame < 40 && consecutive < 3; frame++)
+		{
+			CheckSameShadows(gpu, culled, unculled, scene, camera);
+			consecutive = culled.GetStats().ShadowOcclusionCulled ? consecutive + 1 : 0u;
+		}
+		return consecutive == 3;
+	}
+
 }
 
 TEST_SUITE("GPU.SceneRenderer.Occlusion")
@@ -149,6 +214,98 @@ TEST_SUITE("GPU.SceneRenderer.Occlusion")
 		const glm::vec3 direction(-std::sin(glm::radians(40.0f)), 0.0f, -std::cos(glm::radians(40.0f)));
 		const SceneCamera aside = OrthographicLookAt(position, position + direction * 10.0f, 6.0f);
 		CheckOcclusion(gpu, camera, aside);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A caster hidden from the light behind another is left out of its cascades, and drawn in the frame it shows")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		SlabScene scene(assets);
+		SceneRenderer culled;
+		culled.SetViewportSize(c_Size, c_Size);
+		SceneRendererSpecification everything;
+		everything.OcclusionCulling = false;
+		SceneRenderer unculled(everything);
+		unculled.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = SlabCamera();
+
+		// The first frame has no history: the cascades are drawn whole, which records it. The second draws them all first and
+		// finds the box hidden; from the third on it is left out, with the same shadows.
+		CheckSameShadows(gpu, culled, unculled, scene.World, camera);
+		CHECK_FALSE(culled.GetStats().ShadowOcclusionCulled);
+		CHECK(culled.GetGPUStats().OccludedCasters == 0);
+		CHECK(culled.GetGPUStats().ShadowInstances == unculled.GetGPUStats().ShadowInstances);
+		CheckSameShadows(gpu, culled, unculled, scene.World, camera);
+		CHECK(culled.GetStats().ShadowOcclusionCulled);
+		CheckSameShadows(gpu, culled, unculled, scene.World, camera);
+		CHECK(culled.GetStats().ShadowOcclusionCulled);
+		const uint32_t occluded = culled.GetGPUStats().OccludedCasters;
+		CHECK(occluded >= 1);
+		CHECK(culled.GetGPUStats().ShadowInstances + occluded == unculled.GetGPUStats().ShadowInstances);
+		CHECK(AddGPUCounts(culled.GetStats(), culled.GetGPUStats()).OccludedCasters == occluded);
+		// The view's occlusion culling hides nothing here: the camera sees every mesh.
+		CHECK(culled.GetGPUStats().OccludedProxies == 0);
+
+		// The slab goes: the box's shadow is drawn in that same frame (the cascades' second phase finds it).
+		scene.Slab.SetActive(false);
+		CheckSameShadows(gpu, culled, unculled, scene.World, camera);
+		CHECK(culled.GetStats().ShadowOcclusionCulled);
+		CHECK(culled.GetGPUStats().OccludedCasters == 0);
+		// Back, the box is hidden again once the culling looks again (it paused, finding nothing hidden).
+		scene.Slab.SetActive(true);
+		CHECK(RenderUntilCascadesCulled(gpu, culled, unculled, scene.World, camera));
+		CHECK(culled.GetGPUStats().OccludedCasters == occluded);
+		CHECK(culled.GetGPUStats().ShadowInstances + occluded == unculled.GetGPUStats().ShadowInstances);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The cascades' occlusion culling pauses while it hides nothing, and resumes once it does")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		SlabScene scene(assets);
+		scene.Slab.SetActive(false);
+		SceneRenderer culled;
+		culled.SetViewportSize(c_Size, c_Size);
+		SceneRendererSpecification everything;
+		everything.OcclusionCulling = false;
+		SceneRenderer unculled(everything);
+		unculled.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = SlabCamera();
+
+		// The second frame culls the cascades (the first has no history, and nothing says yet that it does not pay); once a
+		// frame's counters show nothing hidden, only every 16th frame looks again.
+		CheckSameShadows(gpu, culled, unculled, scene.World, camera);
+		CheckSameShadows(gpu, culled, unculled, scene.World, camera);
+		CHECK(culled.GetStats().ShadowOcclusionCulled);
+		CHECK(culled.GetGPUStats().OccludedCasters == 0);
+		uint32_t culledFrames = 0;
+		for (int frame = 0; frame < 48; frame++)
+		{
+			CheckSameShadows(gpu, culled, unculled, scene.World, camera);
+			culledFrames += culled.GetStats().ShadowOcclusionCulled ? 1u : 0u;
+		}
+		CHECK(culledFrames == 3);
+
+		// The slab comes: the next look finds the box hidden behind it (the frames that draw the cascades whole record their
+		// history), and from then on every frame culls the cascades.
+		scene.Slab.SetActive(true);
+		CHECK(RenderUntilCascadesCulled(gpu, culled, unculled, scene.World, camera));
+		CHECK(culled.GetGPUStats().OccludedCasters >= 1);
+		CHECK(culled.GetGPUStats().ShadowInstances + culled.GetGPUStats().OccludedCasters == unculled.GetGPUStats().ShadowInstances);
+		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

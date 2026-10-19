@@ -129,8 +129,17 @@ namespace
 				CHECK(frame.Counts.SkinnedInstances <= reference.Counts.SkinnedInstances);
 			}
 			LastReference = reference.Counts;
-			CHECK(frame.Counts.ShadowCasters == reference.Counts.ShadowCasters);
-			CHECK(frame.Counts.ShadowDraws == reference.Counts.ShadowDraws);
+			if (GPU.GetGPUStats().OccludedCasters == 0)
+			{
+				CHECK(frame.Counts.ShadowCasters == reference.Counts.ShadowCasters);
+				CHECK(frame.Counts.ShadowDraws == reference.Counts.ShadowDraws);
+			}
+			else
+			{
+				// The cascades' occlusion culling leaves out casters hidden from the light behind others: the same shadows.
+				CHECK(frame.Counts.ShadowCasters <= reference.Counts.ShadowCasters);
+				CHECK(frame.Counts.ShadowDraws <= reference.Counts.ShadowDraws);
+			}
 			return frame;
 		}
 	};

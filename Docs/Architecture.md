@@ -1833,6 +1833,8 @@ UploadSceneData                  the changed range of each draw list (and the bu
 RunGPUCulling                    (GPU-driven) Cull.comp counts (and writes visibility feedback), CullBuild.comp places
                                  the draws, CullFeedback.comp packs the feedback, Cull.comp writes the draw list; the
                                  passes then draw each bucket indirectly
+RunShadowOcclusionPhase          (GPU-driven, after the cascades' first-phase draws) HZBBuildArray.comp's pyramid per
+                                 cascade, CullShadow.comp's second phase and its shadow draws
 RunOcclusionPhase                (GPU-driven, after the first phase's prepass) HZBBuild.comp's depth pyramid, Cull.comp's
                                  second phase and its prepass draws
 ReleaseFrameAssets               (when Render returns, however it ends) every reference the frame took, and the manager
@@ -2089,9 +2091,30 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   of its own) with the `EQUAL` depth test, and ambient occlusion, entity IDs, outlines and tints read the final depth. The
   per-proxy visibility is two bits that alternate frame by frame (the previous frame's, this frame's), cleared on a camera
   cut, a renderer's first frame or another render scene: the first phase then draws nothing and the second tests
-  everything against an empty pyramid. Orthographic views work alike. Shadow cascades are not occlusion culled, and the
-  CPU path does none; `SceneRendererGPUStats::OccludedProxies` (`renderStats.occludedProxies`) counts what the second
-  phase found hidden. Visibility feedback still marks occluded proxies' assets as in view, so requests do not depend on it.
+  everything against an empty pyramid. Orthographic views work alike. The CPU path does none;
+  `SceneRendererGPUStats::OccludedProxies` (`renderStats.occludedProxies`) counts what the second phase found hidden.
+  Visibility feedback still marks occluded proxies' assets as in view, so requests do not depend on it.
+- **The cascades' occlusion culling** (the same switch; `CullShadow.comp`'s second phase, `Scene/HZBBuildArray.comp`,
+  `RunShadowOcclusionPhase`). Each cascade is culled in two phases too, around its shadow map: the first draws the casters
+  that were drawn into it in the previous frame (a visibility bit per cascade and parity, beside the view's), a depth
+  pyramid per cascade follows (a layer each of one array texture; level 0 a quarter of the shadow map each way, each
+  texel the farthest of 4x4 texels, about 5.6 MB for four 2048 cascades), and the second phase tests every caster in the
+  cascade's box against it and draws those visible now that the first did not draw. The test is the caster's light view
+  box (the one the box and sub-texel tests use): its texel rectangle from the cascade's square and its nearest depth from
+  the cascade's orthographic depth range, the near plane's z coming from `CascadeFit.comp` (`CascadeData::Parameters.w`).
+  The fit still sees every caster in the box, both phases', since it runs before the first phase draws. Casters reaching
+  past the near plane (flattened onto it) are never hidden, and the shadow bias only moves depth away from the light, so
+  what is left out could not have changed the map: the shadows are the same. The cascades' second phase has shadow buckets
+  of its own (`c_CullShadowSecondPhase`), which `CullBuild.comp` builds in its own pass (mode bit 2), before the view's.
+  A caster that comes out from behind another is drawn in that frame; one that a new occluder hides is left out from the
+  second frame after it appeared (the occluder is drawn by the second phase first, then by the first, which finds the
+  caster hidden). `SceneRendererGPUStats::OccludedCasters` (`renderStats.occludedCasters`) counts the casters found hidden
+  per cascade. The pass costs GPU time of its own (about 1 ms at 100,000 and 300,000 casters on the M2 Max, mostly the
+  pyramids' wait for the first phase's shadow maps and the second pass over the proxies), so it runs while it pays: while
+  the latest frame that ran it with history found at least a sixteenth of the cascades' casters hidden, and otherwise
+  every 16th frame, to look again (`SceneRendererStats::ShadowOcclusionCulled`). Frames without it draw the cascades whole
+  and record what they drew as the next frame's history, so a look sees the whole picture; frames without history
+  (camera cuts, a renderer's first frame) do the same.
 - **Camera-relative rendering** (Docs/DeveloperGuide.md, "Camera-relative space"). Scene shaders work with the camera at
   the origin: the frame's view matrices are rotation-only, vertex shaders subtract the camera's position from the
   instance's translation before anything is added to it (`TransformPositionRelative`), and lights, the clusters' bounds,

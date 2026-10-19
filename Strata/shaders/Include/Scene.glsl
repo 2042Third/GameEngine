@@ -259,7 +259,8 @@ layout(set = 0, binding = ST_SRV(16), std430) readonly buffer TextureTableBuffer
 struct CascadeData
 {
 	mat4 ViewProjection; // Light clip space, reversed-Z
-	vec4 Parameters;     // x: world units per shadow texel, y: depth range in world units, z: penumbra search distance
+	vec4 Parameters;     // x: world units per shadow texel, y: depth range in world units, z: penumbra search distance,
+	                     // w: the near plane's light view z (camera-relative)
 };
 
 layout(set = 0, binding = ST_SRV(17), std430) readonly buffer CascadeBuffer

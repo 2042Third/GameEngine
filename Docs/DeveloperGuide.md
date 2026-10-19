@@ -1964,6 +1964,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   left out only from the frame after the one that found it hidden; tests that count draws or instances render a frame
   more first, or turn occlusion culling off. Anything new that reads the view's depth runs after the second phase's
   prepass.
+- The shadow cascades are occlusion culled alike, each against a pyramid of its own first-phase shadow map, with the same
+  switch, while it pays (`SceneRendererStats::ShadowOcclusionCulled` says whether a frame did). Tests that count shadow
+  casters or shadow draws expect at most the CPU path's counts once `SceneRendererGPUStats::OccludedCasters` is not 0 (each
+  caster in each cascade is drawn, found hidden, or both in the frame visibility changes); tests of the culling itself
+  render until `ShadowOcclusionCulled` (it pauses after a frame that hid nothing). A pass that writes a cascade's depth
+  runs before its pyramid is built (`RunShadowOcclusionPhase`). The occlusion test must stay conservative: a new shadow bias toward the light, or anything
+  else that lets a hidden caster change the map, breaks it.
 - Buckets the frame cannot have get no storage: the CPU lists the present ones (mirrored proxies, double-sided and
   alpha-masked materials, the arenas of its meshes, posed proxies; `RenderSceneStats::MirroredProxies`, `PosedProxies`)
   and gives each a dense index; a bucket's draw slots are its arena's LOD records among the meshes the CPU's marks found

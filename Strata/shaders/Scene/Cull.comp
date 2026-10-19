@@ -15,6 +15,11 @@
 // (counting the record down to zero). The order of instances within a record follows GPU scheduling, which opaque
 // pixels do not depend on.
 //
+// With occlusion culling these passes are each phase's: the first draws what was visible in the previous frame (u_Visibility),
+// the second (bit 1 of the mode, after a depth pyramid of the first phase's depth) tests everything else and draws what it
+// finds visible. The view's phases run around its depth prepass; the cascades' (u_Cull.ShadowOcclusion) around each
+// cascade's first-phase shadow map, with the pyramids of Scene/HZBBuildArray.comp in u_ShadowPyramid.
+//
 // Mode 0 also writes visibility feedback (with u_Cull.Feedback): the mesh and material slots of proxies within the prefetch
 // distance, in the view (frustum and size tests) or casting into a cascade, whether their meshes are loaded or not
 // (unloaded ones are placed by their recorded bounds), with the largest projected size and, for textured materials, UV
@@ -24,12 +29,12 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform CullParameters
 {
-	uint Mode; // Bit 0: write the draw list (else count); bit 1: the view's second phase (occlusion culling)
+	uint Mode; // Bit 0: write the draw list (else count); bit 1: the second phase (occlusion culling) of the view or the cascades
 } u_Parameters;
 
 #define ST_CULL_MODE_WRITE        1u
 #define ST_CULL_MODE_SECOND_PHASE 2u
-#define ST_SHARED_COUNTERS (ST_COUNTER_OCCLUDED + 1)
+#define ST_SHARED_COUNTERS (ST_COUNTER_OCCLUDED_CASTERS + 1)
 
 bool IsCounting()
 {
@@ -163,15 +168,9 @@ bool IsOccluded(vec3 boxMin, vec3 boxMax)
 		maxPixel = max(maxPixel, pixel);
 		nearest = max(nearest, ndc.z);
 	}
-	ivec2 low = ivec2(clamp(floor(minPixel), vec2(0.0), size - 1.0));
-	ivec2 high = ivec2(clamp(floor(maxPixel), vec2(0.0), size - 1.0));
-	// The finest level where the rectangle spans at most two texels each way.
-	int levels = int(u_Cull.OcclusionParameters.z);
-	int level = 0;
-	while (level + 1 < levels && (((high.x >> (level + 1)) - (low.x >> (level + 1))) > 1 || ((high.y >> (level + 1)) - (low.y >> (level + 1))) > 1))
-		level++;
-	ivec2 a = low >> (level + 1);
-	ivec2 b = high >> (level + 1);
+	ivec2 a;
+	ivec2 b;
+	int level = GetPyramidFootprint(minPixel, maxPixel, size, int(u_Cull.OcclusionParameters.z), 1, a, b);
 	float farthest = min(min(texelFetch(u_DepthPyramid, a, level).r, texelFetch(u_DepthPyramid, ivec2(b.x, a.y), level).r),
 		min(texelFetch(u_DepthPyramid, ivec2(a.x, b.y), level).r, texelFetch(u_DepthPyramid, b, level).r));
 	return nearest < farthest;
@@ -217,6 +216,112 @@ void EmitViewInstances(GPUProxy proxy, GeometryEntry entry, float fraction, uint
 			Count(ST_COUNTER_SKINNED_INSTANCES);
 	}
 }
+
+#ifdef ST_CULL_SHADOW
+// The cascades a caster is drawn into (their boxes, less those it spans less than a texel of, counted with `countSubTexel`), and
+// its light view bounds relative to the camera, as the cascades' boxes are (AABB::Transformed of the light view times the
+// world transform).
+uint GetCasterCascades(GPUProxy proxy, bool countSubTexel, out vec3 lightMin, out vec3 lightMax)
+{
+	CullInstance first = u_CullInstances[proxy.FirstInstance];
+	mat4 world = transpose(mat4(first.WorldRows[0], first.WorldRows[1], first.WorldRows[2], vec4(0.0, 0.0, 0.0, 1.0)));
+	world[3].xyz -= u_Cull.CameraPosition.xyz;
+	mat4 lightWorld = u_Cull.LightView * world;
+	vec3 localCenter = (proxy.LocalMin + proxy.LocalMax) * 0.5;
+	vec3 localExtents = (proxy.LocalMax - proxy.LocalMin) * 0.5;
+	vec3 lightCenter = (lightWorld * vec4(localCenter, 1.0)).xyz;
+	mat3 basis = mat3(lightWorld);
+	vec3 lightExtents = vec3(abs(basis[0][0]) * localExtents.x + abs(basis[1][0]) * localExtents.y + abs(basis[2][0]) * localExtents.z,
+		abs(basis[0][1]) * localExtents.x + abs(basis[1][1]) * localExtents.y + abs(basis[2][1]) * localExtents.z,
+		abs(basis[0][2]) * localExtents.x + abs(basis[1][2]) * localExtents.y + abs(basis[2][2]) * localExtents.z);
+	lightMin = lightCenter - lightExtents;
+	lightMax = lightCenter + lightExtents;
+	float extent = max(lightMax.x - lightMin.x, lightMax.y - lightMin.y);
+	uint cascadeMask = 0u;
+	for (uint cascade = 0u; cascade < u_Cull.CascadeCount; cascade++)
+	{
+		vec4 box = u_Cull.CascadeBoxes[cascade];
+		vec4 parameters = u_Cull.CascadeParameters[cascade];
+		if (lightMax.x < box.x || lightMin.x > box.z || lightMax.y < box.y || lightMin.y > box.w || lightMax.z < parameters.x)
+			continue;
+		if (extent < parameters.y)
+		{
+			if (countSubTexel)
+				Count(ST_COUNTER_SUB_TEXEL_CASTERS);
+			continue;
+		}
+		cascadeMask |= 1u << cascade;
+	}
+	return cascadeMask;
+}
+
+// The cascades whose visibility bits of a parity are set in a proxy's visibility word.
+uint GetCascadeVisibility(uint state, uint parity)
+{
+	return (state >> (ST_VISIBILITY_CASCADE_SHIFT + ST_CULL_MAX_CASCADES * parity)) & ((1u << ST_CULL_MAX_CASCADES) - 1u);
+}
+
+// Records the cascades a proxy is visible in this frame (the bits of the parity after u_Cull.VisibilityParity).
+void SetCascadeVisibility(uint proxyIndex, uint cascadeMask)
+{
+	uint shift = ST_VISIBILITY_CASCADE_SHIFT + ST_CULL_MAX_CASCADES * (u_Cull.VisibilityParity ^ 1u);
+	uint currentBits = ((1u << ST_CULL_MAX_CASCADES) - 1u) << shift;
+	u_Visibility[proxyIndex] = (u_Visibility[proxyIndex] & ~currentBits) | (cascadeMask << shift);
+}
+
+// Whether a caster's light view box lies, everywhere it covers the cascade's shadow map, behind the depth of the cascade's first
+// phase (its pyramid's farthest depth there is nearer to the light than the box's nearest point, reversed-Z). The cascade's
+// projection is orthographic: depth runs linearly from its far side (0) to its near plane (1), and casters reaching past the
+// near plane, which ShadowMesh.vert flattens onto it, are never hidden.
+bool IsOccludedInCascade(uint cascade, vec3 lightMin, vec3 lightMax)
+{
+	float farZ = u_Cull.CascadeParameters[cascade].x;
+	float nearZ = u_CullCascades[cascade].Parameters.w;
+	if (!(lightMax.z < nearZ) || !(nearZ > farZ))
+		return false;
+	float nearest = (lightMax.z - farZ) / (nearZ - farZ);
+	// Texels as the rasterizer places them (top-left origin, light view +y up).
+	vec4 box = u_Cull.CascadeBoxes[cascade];
+	float size = float(u_Cull.ShadowMapSize);
+	vec2 scale = vec2(size) / max(box.zw - box.xy, vec2(1.0e-20));
+	vec2 minPixel = vec2(lightMin.x - box.x, box.w - lightMax.y) * scale;
+	vec2 maxPixel = vec2(lightMax.x - box.x, box.w - lightMin.y) * scale;
+	ivec2 a;
+	ivec2 b;
+	int level = GetPyramidFootprint(minPixel, maxPixel, vec2(size), int(u_Cull.ShadowPyramidLevels), 2, a, b);
+	int layer = int(cascade);
+	float farthest = min(min(texelFetch(u_ShadowPyramid, ivec3(a, layer), level).r, texelFetch(u_ShadowPyramid, ivec3(b.x, a.y, layer), level).r),
+		min(texelFetch(u_ShadowPyramid, ivec3(a.x, b.y, layer), level).r, texelFetch(u_ShadowPyramid, ivec3(b, layer), level).r));
+	return nearest < farthest;
+}
+
+// A caster's draws into the cascades of `cascadeMask` (opaque and alpha-masked instances: transparent surfaces cast no
+// shadows), in the buckets of a phase (`phaseBit`: 0, or ST_CULL_SHADOW_SECOND_PHASE_BUCKET).
+void EmitShadowInstances(GPUProxy proxy, GeometryEntry entry, float fraction, uint geometry, uint mirrored, uint cascadeMask, uint phaseBit)
+{
+	if (cascadeMask == 0u)
+		return;
+	for (uint submesh = 0u; submesh < proxy.InstanceCount; submesh++)
+	{
+		uint instance = proxy.FirstInstance + submesh;
+		uint materialSlot = u_CullInstances[instance].MaterialIndex;
+		uint material = materialSlot < u_Cull.MaterialSlotCount ? u_MaterialFlags[materialSlot] : 0u;
+		if ((material & ST_CULL_MATERIAL_AVAILABLE) == 0u || (material & ST_CULL_MATERIAL_TRANSPARENT) != 0u)
+			continue;
+		GeometrySubmesh geometrySubmesh = u_GeometrySubmeshes[entry.FirstSubmesh + submesh];
+		uint lod = ChooseLOD(geometrySubmesh, fraction);
+		uint bucket = mirrored | ((material & ST_CULL_MATERIAL_DOUBLE_SIDED) != 0u ? 2u : 0u) | (geometry << 2)
+			| ((material & ST_CULL_MATERIAL_ALPHA_MASK) != 0u ? ST_CULL_SHADOW_ALPHA_MASK_BUCKET : 0u) | phaseBit;
+		for (uint cascade = 0u; cascade < u_Cull.CascadeCount; cascade++)
+		{
+			if ((cascadeMask & (1u << cascade)) == 0u)
+				continue;
+			Emit(instance, ST_CULL_VIEW_BUCKETS + cascade * ST_CULL_SHADOW_BUCKETS + bucket, geometrySubmesh.FirstLOD + lod);
+			Count(ST_COUNTER_SHADOW_INSTANCES);
+		}
+	}
+}
+#endif
 
 // Whether the mesh table holds a drawable mesh for the proxy: loaded, with the layout its instances were made for.
 bool IsDrawable(GPUProxy proxy, out uint mesh, out GeometryEntry entry)
@@ -288,36 +393,9 @@ void CullProxy(uint proxyIndex)
 #else
 	if ((proxy.Flags & ST_PROXY_CAST_SHADOWS) == 0u || (proxy.Flags & ST_PROXY_MESH_BOUNDS) == 0u || proxy.InstanceCount == 0u)
 		return;
-	// The local bounds in light space (AABB::Transformed of the light view times the world transform).
-	CullInstance first = u_CullInstances[proxy.FirstInstance];
-	// Camera-relative, as the cascades are (their boxes are relative to the camera's light-space position).
-	mat4 world = transpose(mat4(first.WorldRows[0], first.WorldRows[1], first.WorldRows[2], vec4(0.0, 0.0, 0.0, 1.0)));
-	world[3].xyz -= u_Cull.CameraPosition.xyz;
-	mat4 lightWorld = u_Cull.LightView * world;
-	vec3 localCenter = (proxy.LocalMin + proxy.LocalMax) * 0.5;
-	vec3 localExtents = (proxy.LocalMax - proxy.LocalMin) * 0.5;
-	vec3 lightCenter = (lightWorld * vec4(localCenter, 1.0)).xyz;
-	mat3 basis = mat3(lightWorld);
-	vec3 lightExtents = vec3(abs(basis[0][0]) * localExtents.x + abs(basis[1][0]) * localExtents.y + abs(basis[2][0]) * localExtents.z,
-		abs(basis[0][1]) * localExtents.x + abs(basis[1][1]) * localExtents.y + abs(basis[2][1]) * localExtents.z,
-		abs(basis[0][2]) * localExtents.x + abs(basis[1][2]) * localExtents.y + abs(basis[2][2]) * localExtents.z);
-	vec3 lightMin = lightCenter - lightExtents;
-	vec3 lightMax = lightCenter + lightExtents;
-	float extent = max(lightMax.x - lightMin.x, lightMax.y - lightMin.y);
-	uint cascadeMask = 0u;
-	for (uint cascade = 0u; cascade < u_Cull.CascadeCount; cascade++)
-	{
-		vec4 box = u_Cull.CascadeBoxes[cascade];
-		vec4 parameters = u_Cull.CascadeParameters[cascade];
-		if (lightMax.x < box.x || lightMin.x > box.z || lightMax.y < box.y || lightMin.y > box.w || lightMax.z < parameters.x)
-			continue;
-		if (extent < parameters.y)
-		{
-			Count(ST_COUNTER_SUB_TEXEL_CASTERS);
-			continue;
-		}
-		cascadeMask |= 1u << cascade;
-	}
+	vec3 lightMin;
+	vec3 lightMax;
+	uint cascadeMask = GetCasterCascades(proxy, true, lightMin, lightMax);
 	if (cascadeMask == 0u)
 		return;
 	if (feedback)
@@ -330,7 +408,8 @@ void CullProxy(uint proxyIndex)
 		return;
 	if (IsCounting())
 	{
-		// Every drawn caster extends the depth range of its cascades toward the light (Scene/CascadeFit.comp).
+		// Every drawn caster extends the depth range of its cascades toward the light (Scene/CascadeFit.comp), in both phases'
+		// cascades: the projections are known before the first phase draws.
 		uint nearZ = EncodeOrderedFloat(lightMax.z);
 		for (uint cascade = 0u; cascade < u_Cull.CascadeCount; cascade++)
 		{
@@ -338,26 +417,14 @@ void CullProxy(uint proxyIndex)
 				atomicMax(u_CasterDepths[cascade], nearZ);
 		}
 	}
-	for (uint submesh = 0u; submesh < proxy.InstanceCount; submesh++)
-	{
-		uint instance = proxy.FirstInstance + submesh;
-		uint materialSlot = u_CullInstances[instance].MaterialIndex;
-		uint material = materialSlot < u_Cull.MaterialSlotCount ? u_MaterialFlags[materialSlot] : 0u;
-		// Transparent surfaces cast no shadows.
-		if ((material & ST_CULL_MATERIAL_AVAILABLE) == 0u || (material & ST_CULL_MATERIAL_TRANSPARENT) != 0u)
-			continue;
-		GeometrySubmesh geometrySubmesh = u_GeometrySubmeshes[entry.FirstSubmesh + submesh];
-		uint lod = ChooseLOD(geometrySubmesh, fraction);
-		uint bucket = mirrored | ((material & ST_CULL_MATERIAL_DOUBLE_SIDED) != 0u ? 2u : 0u) | (geometry << 2)
-			| ((material & ST_CULL_MATERIAL_ALPHA_MASK) != 0u ? 16u : 0u);
-		for (uint cascade = 0u; cascade < u_Cull.CascadeCount; cascade++)
-		{
-			if ((cascadeMask & (1u << cascade)) == 0u)
-				continue;
-			Emit(instance, ST_CULL_VIEW_BUCKETS + cascade * ST_CULL_SHADOW_BUCKETS + bucket, geometrySubmesh.FirstLOD + lod);
-			Count(ST_COUNTER_SHADOW_INSTANCES);
-		}
-	}
+	// Occlusion culled: the first phase draws into each cascade what it held in the previous frame; the second the other
+	// casters it finds visible against the first phase's depth (CullShadowSecondPhase). Frames that draw the cascades whole
+	// record what they drew as the next frame's history (the culling pauses while it does not pay).
+	if (u_Cull.ShadowOcclusion != 0u)
+		cascadeMask &= GetCascadeVisibility(u_Visibility[proxyIndex], u_Cull.VisibilityParity);
+	else if (IsCounting())
+		SetCascadeVisibility(proxyIndex, cascadeMask);
+	EmitShadowInstances(proxy, entry, fraction, geometry, mirrored, cascadeMask, 0u);
 #endif
 }
 
@@ -396,6 +463,47 @@ void CullSecondPhase(uint proxyIndex)
 	uint mirrored = (proxy.Flags & ST_PROXY_MIRRORED) != 0u ? 1u : 0u;
 	EmitViewInstances(proxy, entry, fraction, geometry, mirrored, ST_CULL_SECOND_PHASE_BUCKET);
 }
+#else
+// The cascades' second phase: per cascade whether the proxy casts into it visibly this frame (its box and sub-texel tests and
+// the occlusion test against the cascade's pyramid; written while counting), and the draws into the cascades where it is
+// visible now that the first phase did not draw it into.
+void CullShadowSecondPhase(uint proxyIndex)
+{
+	GPUProxy proxy = u_Proxies[proxyIndex];
+	uint visibleMask = 0u;
+	uint mesh = 0u;
+	GeometryEntry entry = GeometryEntry(0u, 0u, 0u, 0u);
+	const uint drawable = ST_PROXY_ACTIVE | ST_PROXY_INDEXED | ST_PROXY_CAST_SHADOWS | ST_PROXY_MESH_BOUNDS;
+	bool tested = (proxy.Flags & drawable) == drawable && proxy.MeshSlot < u_Cull.MeshSlotCount && IsDrawable(proxy, mesh, entry);
+	if (tested)
+	{
+		vec3 lightMin;
+		vec3 lightMax;
+		uint cascadeMask = GetCasterCascades(proxy, false, lightMin, lightMax);
+		for (uint cascade = 0u; cascade < u_Cull.CascadeCount; cascade++)
+		{
+			if ((cascadeMask & (1u << cascade)) == 0u)
+				continue;
+			if (IsOccludedInCascade(cascade, lightMin, lightMax))
+				Count(ST_COUNTER_OCCLUDED_CASTERS);
+			else
+				visibleMask |= 1u << cascade;
+		}
+	}
+	uint previousMask = GetCascadeVisibility(u_Visibility[proxyIndex], u_Cull.VisibilityParity);
+	if (IsCounting())
+		SetCascadeVisibility(proxyIndex, visibleMask);
+	uint drawMask = visibleMask & ~previousMask;
+	if (drawMask == 0u)
+		return;
+	vec3 center = (proxy.WorldMin + proxy.WorldMax) * 0.5;
+	vec3 extents = (proxy.WorldMax - proxy.WorldMin) * 0.5;
+	float fraction = GetScreenFraction(center, length(extents));
+	bool skinnedArena = (mesh & ST_CULL_MESH_SKINNED_ARENA) != 0u;
+	uint geometry = skinnedArena ? ((proxy.Flags & ST_PROXY_SKINNED) != 0u ? ST_CULL_GEOMETRY_SKINNED : ST_CULL_GEOMETRY_SKINNED_ARENA) : ST_CULL_GEOMETRY_STATIC;
+	uint mirrored = (proxy.Flags & ST_PROXY_MIRRORED) != 0u ? 1u : 0u;
+	EmitShadowInstances(proxy, entry, fraction, geometry, mirrored, drawMask, ST_CULL_SHADOW_SECOND_PHASE_BUCKET);
+}
 #endif
 
 void main()
@@ -408,11 +516,15 @@ void main()
 	uint proxyIndex = gl_GlobalInvocationID.x;
 	if (proxyIndex < u_Cull.ProxyCount)
 	{
-#ifndef ST_CULL_SHADOW
 		if ((u_Parameters.Mode & ST_CULL_MODE_SECOND_PHASE) != 0u)
+		{
+#ifndef ST_CULL_SHADOW
 			CullSecondPhase(proxyIndex);
-		else
+#else
+			CullShadowSecondPhase(proxyIndex);
 #endif
+		}
+		else
 			CullProxy(proxyIndex);
 	}
 

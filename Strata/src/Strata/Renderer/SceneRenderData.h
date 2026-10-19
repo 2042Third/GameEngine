@@ -65,7 +65,9 @@ namespace Strata
 		struct CascadeData
 		{
 			glm::mat4 ViewProjection;           // Light clip space, reversed-Z
-			glm::vec4 Parameters = glm::vec4(0.0f); // x: world units per shadow texel, y: depth range in world units, z: penumbra search distance
+			// x: world units per shadow texel, y: depth range in world units, z: penumbra search distance, w: the near plane's light
+			// view z (camera-relative: the cascades' occlusion culling places depths with it)
+			glm::vec4 Parameters = glm::vec4(0.0f);
 		};
 		static_assert(sizeof(CascadeData) == 80);
 

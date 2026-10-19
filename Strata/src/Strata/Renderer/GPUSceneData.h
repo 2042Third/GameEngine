@@ -111,13 +111,13 @@ namespace Strata::RenderData
 	// Draw buckets: one per pipeline state and vertex arena. A view bucket's index: mirrored (bit 0), double-sided (bit 1),
 	// geometry (bits 2-3, c_CullGeometry*), the occlusion culling's second phase (bit 4: what the first phase did not draw,
 	// found visible against the depth pyramid); shadow buckets follow the view's, c_CullShadowBucketsPerCascade per
-	// cascade, alpha-masked in bit 4. Buckets the frame cannot have get no storage: the bucket table maps the present ones
-	// to dense indices (c_CullNoBucket for the others).
+	// cascade, alpha-masked in bit 4 and the cascade's second phase in bit 5. Buckets the frame cannot have get no storage:
+	// the bucket table maps the present ones to dense indices (c_CullNoBucket for the others).
 	constexpr uint32_t c_CullGeometryStatic = 0;       // Static arena, unskinned pipelines
 	constexpr uint32_t c_CullGeometrySkinnedArena = 1; // Skinned arena drawn in its bind pose: unskinned pipelines
 	constexpr uint32_t c_CullGeometrySkinned = 2;      // Skinned arena, posed: the skinned pipelines
 	constexpr uint32_t c_CullViewBuckets = 32;
-	constexpr uint32_t c_CullShadowBucketsPerCascade = 32;
+	constexpr uint32_t c_CullShadowBucketsPerCascade = 64;
 	constexpr uint32_t c_CullMaxCascades = 4;
 	constexpr uint32_t c_CullBuckets = c_CullViewBuckets + c_CullMaxCascades * c_CullShadowBucketsPerCascade;
 	constexpr uint32_t c_CullNoBucket = ~0u;
@@ -127,10 +127,19 @@ namespace Strata::RenderData
 		return (mirrored ? 1u : 0u) | (doubleSided ? 2u : 0u) | (geometry << 2) | (secondPhase ? 16u : 0u);
 	}
 
-	constexpr uint32_t MakeShadowBucket(uint32_t cascade, bool mirrored, bool doubleSided, uint32_t geometry, bool alphaMask)
+	constexpr uint32_t c_CullShadowAlphaMask = 16;   // A shadow bucket's alpha-masked bit
+	constexpr uint32_t c_CullShadowSecondPhase = 32; // A shadow bucket's second-phase bit
+
+	constexpr uint32_t MakeShadowBucket(uint32_t cascade, bool mirrored, bool doubleSided, uint32_t geometry, bool alphaMask, bool secondPhase = false)
 	{
-		return c_CullViewBuckets + cascade * c_CullShadowBucketsPerCascade + MakeViewBucket(mirrored, doubleSided, geometry) + (alphaMask ? 16u : 0u);
+		return c_CullViewBuckets + cascade * c_CullShadowBucketsPerCascade + MakeViewBucket(mirrored, doubleSided, geometry)
+			+ (alphaMask ? c_CullShadowAlphaMask : 0u) + (secondPhase ? c_CullShadowSecondPhase : 0u);
 	}
+
+	// The visibility buffer's bits per proxy (occlusion culling), two sets alternating frame by frame (CullConstants::
+	// VisibilityParity: the previous frame's): the view's bit `parity`, and each cascade's bit c_VisibilityCascadeShift +
+	// c_CullMaxCascades * parity + cascade.
+	constexpr uint32_t c_VisibilityCascadeShift = 2;
 
 	// What a frame's culling tests and sizes (a constant buffer, std140).
 	struct CullConstants
@@ -169,8 +178,14 @@ namespace Strata::RenderData
 		float LODErrorThreshold = 0.0f;      // LODSelection::GetErrorThreshold of the view (LODCriteria::ErrorThreshold)
 		uint32_t LODFadeFrame = 0;           // The frame's number for level-of-detail cross-fades (LODSelection::UpdateLODFade)
 		uint32_t LODFade = 0;                // 1: levels of detail cross-fade (SceneRendererSpecification::FadeLevelsOfDetail)
+		// 1 when the cascades are occlusion culled: the first phase draws into each what it held in the previous frame, a depth
+		// pyramid per cascade of that tests the other casters, and the second phase draws those found visible.
+		uint32_t ShadowOcclusion = 0;
+		uint32_t SecondPhaseShadowBuckets = 0; // The dense index of the cascades' first second-phase bucket (BucketCount without)
+		uint32_t ShadowMapSize = 0;            // Each cascade's texels each way (the cascade pyramids' level 0 is a quarter of it)
+		uint32_t ShadowPyramidLevels = 0;
 	};
-	static_assert(sizeof(CullConstants) == 6 * 16 + 3 * 16 + 64 + 64 + 16 + 8 * 16 + 64);
+	static_assert(sizeof(CullConstants) == 6 * 16 + 3 * 16 + 64 + 64 + 16 + 8 * 16 + 64 + 16);
 
 	// What a frame's culling counted (read back frames later: SceneRendererGPUStats).
 	struct CullCounters
@@ -191,10 +206,13 @@ namespace Strata::RenderData
 		uint32_t Occluded = 0;         // Proxies in the frustum hidden behind what the view draws (the second phase's test)
 		uint32_t VisibleLights = 0;    // Point and spot lights in the view (Scene/LightCompact.comp: the GPU-driven path's lights)
 		uint32_t DrawnLights = 0;      // Point and spot lights that are drawn somewhere (in the view or not)
-		uint32_t Reserved[9] = {};
+		uint32_t OccludedCasters = 0;  // Casters hidden in a cascade behind what it draws, summed over cascades (its second phase's test)
+		uint32_t Reserved[8] = {};
 	};
 	static_assert(sizeof(CullCounters) == 128);
 	// Include/Lights.glsl's ST_COUNTER_VISIBLE_LIGHTS and ST_COUNTER_DRAWN_LIGHTS.
 	static_assert(offsetof(CullCounters, VisibleLights) == 21 * sizeof(uint32_t) && offsetof(CullCounters, DrawnLights) == 22 * sizeof(uint32_t));
+	// Include/Culling.glsl's ST_COUNTER_OCCLUDED_CASTERS.
+	static_assert(offsetof(CullCounters, OccludedCasters) == 23 * sizeof(uint32_t));
 
 }

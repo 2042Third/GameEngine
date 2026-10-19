@@ -1021,6 +1021,9 @@ namespace Strata
 		}
 		m_ShadowMap = shadowMap;
 		m_ShadowFramebuffers = std::move(framebuffers);
+		// Without the cascades' pyramids the cascades are drawn whole (no occlusion culling): a limitation, not a failure.
+		if (!EnsureShadowPyramid())
+			ST_CORE_WARN("{}: the shadow cascades' depth pyramids could not be created; the cascades are not occlusion culled", m_Specification.DebugName);
 		return true;
 	}
 
@@ -1949,17 +1952,18 @@ namespace Strata
 		GatherDraws(renderScene, camera, !m_GPUDrivenFrame);
 		GatherShadowDraws(renderScene, camera, frame, !m_GPUDrivenFrame);
 		BuildDrawArguments();
-		if (m_GPUDrivenFrame)
-			PrepareGPUCulling(renderScene, camera);
-		ReportVisibleAnimators(scene);
-		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
 		bool degraded = false; // Rendered with a reported limitation: keep the error so it is not logged every frame
+		// Before the GPU's culling is prepared: the cascades' occlusion culling needs their pyramids, made with the map.
 		if (frame.ShadowParams.w > 0.0f && !EnsureShadowMap())
 		{
 			m_Errors.Report("failed to create the shadow map; rendering without shadows");
 			frame.ShadowParams.w = 0.0f;
 			degraded = true;
 		}
+		if (m_GPUDrivenFrame)
+			PrepareGPUCulling(renderScene, camera);
+		ReportVisibleAnimators(scene);
+		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
 		const PostProcessComponent postProcess = GetPostProcessSettings(scene);
 		frame.AOParams = glm::vec4(postProcess.AmbientOcclusion ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
