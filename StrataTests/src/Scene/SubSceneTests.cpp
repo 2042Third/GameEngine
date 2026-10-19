@@ -112,6 +112,54 @@ TEST_SUITE("Scene.SubScenes")
 		CHECK_FALSE(scene.HasPendingSubScenes());
 	}
 
+	TEST_CASE("Unloading makes every top-level entity inactive at once and reports the leaves as changed")
+	{
+		// Leaves (a cell's usual top-level entities), one with children, one the game put below it (no longer top-level: it
+		// goes with its new parent) and one that was inactive already.
+		Scene scene("Level");
+		std::vector<Entity> roots;
+		for (int index = 0; index < 100; index++)
+			roots.push_back(scene.CreateEntity("Leaf"));
+		Entity parent = scene.CreateEntity("Parent");
+		Entity child = scene.CreateChildEntity(parent, "Child");
+		Entity moved = scene.CreateEntity("Moved");
+		Entity asleep = scene.CreateEntity("Asleep");
+		asleep.AddComponent<InactiveComponent>();
+		roots.insert(roots.end(), { parent, moved, asleep });
+		const SubSceneID id = scene.AdoptSubScene(UUID(0xCE11), roots);
+		REQUIRE(id != 0);
+		REQUIRE(scene.SetParent(moved, parent));
+		Entity resident = scene.CreateEntity("Resident");
+		scene.UpdateWorldTransforms();
+		const uint64_t version = scene.GetTransformsVersion();
+
+		REQUIRE(scene.UnloadSubScene(id));
+		for (const Entity root : roots)
+		{
+			CHECK(root.HasComponent<InactiveComponent>() == (root != moved));
+			CHECK_FALSE(scene.IsActiveInHierarchy(root));
+		}
+		CHECK_FALSE(scene.IsActiveInHierarchy(child));
+		CHECK(scene.IsActiveInHierarchy(resident));
+		std::vector<entt::entity> changed;
+		REQUIRE(scene.GetWorldTransformChanges(version, changed));
+		for (int index = 0; index < 100; index++)
+			CHECK(std::find(changed.begin(), changed.end(), roots[index].GetHandle()) != changed.end());
+		CHECK(std::find(changed.begin(), changed.end(), child.GetHandle()) != changed.end());
+		CHECK(std::find(changed.begin(), changed.end(), moved.GetHandle()) != changed.end());
+		CHECK(std::find(changed.begin(), changed.end(), asleep.GetHandle()) == changed.end());
+		CheckSceneCaches(scene);
+
+		// Taken out of the sub-scene, an entity it made inactive is active again; the one that was inactive stays so.
+		REQUIRE(scene.SetSubSceneOf(roots[0], 0));
+		CHECK(scene.IsActiveInHierarchy(roots[0]));
+		REQUIRE(scene.SetSubSceneOf(asleep, 0));
+		CHECK_FALSE(scene.IsActiveInHierarchy(asleep));
+		scene.FlushSubSceneUnloads();
+		CHECK(scene.GetEntityCount() == 3);
+		CheckSceneCaches(scene);
+	}
+
 	TEST_CASE("Slices cut their chunks to the time left, so that they end close to the time limit")
 	{
 		// A twentieth of a millisecond per update: a chunk of 512 entities would overrun it many times over. Chunks hold what

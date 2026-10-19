@@ -1091,6 +1091,50 @@ namespace Strata
 			RecordTransformChanges(++m_TransformsVersion, changed, changed.size() > c_MaxTransformChanges);
 	}
 
+	void Scene::DeactivateEntities(std::span<const Entity> entities, std::vector<Entity>& outDeactivated)
+	{
+		// The storages once, not a registry lookup per entity and component. The component's other listeners (physics)
+		// hear each entity as it gets it; no listener reads activity while it is being added.
+		auto& inactive = m_Registry.storage<InactiveComponent>();
+		const size_t first = outDeactivated.size();
+		m_DeferActivityRefresh = true;
+		for (const Entity entity : entities)
+		{
+			if (!entity.IsValid() || entity.GetScene() != this || inactive.contains(entity.GetHandle()))
+				continue;
+			inactive.emplace(entity.GetHandle());
+			outDeactivated.push_back(entity);
+		}
+		m_DeferActivityRefresh = false;
+
+		// An inactive entity is inactive whatever its parent: a leaf changes alone, without a walk, and all of them in one
+		// transform version. Others walk their subtrees, as OnInactiveAdded would.
+		const auto& hierarchy = m_Registry.storage<HierarchyComponent>();
+		auto& worldTransforms = m_Registry.storage<WorldTransformComponent>();
+		std::vector<entt::entity> changedLeaves;
+		changedLeaves.reserve(outDeactivated.size() - first);
+		for (size_t index = first; index < outDeactivated.size(); index++)
+		{
+			const entt::entity handle = outDeactivated[index].GetHandle();
+			// Not linked yet (being copied or deserialized): the linking step computes activity.
+			if (!hierarchy.contains(handle) || !worldTransforms.contains(handle))
+				continue;
+			if (hierarchy.get(handle).FirstChild != entt::null)
+			{
+				RefreshSubtreeActivity(handle, true);
+				continue;
+			}
+			WorldTransformComponent& world = worldTransforms.get(handle);
+			if (world.ActiveInHierarchy)
+			{
+				world.ActiveInHierarchy = false;
+				changedLeaves.push_back(handle);
+			}
+		}
+		if (!changedLeaves.empty())
+			RecordTransformChanges(++m_TransformsVersion, changedLeaves, changedLeaves.size() > c_MaxTransformChanges);
+	}
+
 	void Scene::FinishLinking(std::span<const entt::entity> roots)
 	{
 		// New subtrees have no consistent state to prune against.
@@ -1830,7 +1874,7 @@ namespace Strata
 	void Scene::OnInactiveAdded(entt::registry& registry, entt::entity handle)
 	{
 		// Components being copied or deserialized before the entity is linked: the linking step computes activity.
-		if (m_DestroyingEntities || !registry.all_of<HierarchyComponent, WorldTransformComponent>(handle))
+		if (m_DestroyingEntities || m_DeferActivityRefresh || !registry.all_of<HierarchyComponent, WorldTransformComponent>(handle))
 			return;
 		RefreshSubtreeActivity(handle, true);
 	}

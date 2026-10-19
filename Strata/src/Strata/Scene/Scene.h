@@ -624,6 +624,9 @@ namespace Strata
 		// skipped (only valid when they were consistent before).
 		void RefreshSubtreeDepth(entt::entity root, bool prune);
 		void RefreshSubtreeActivity(entt::entity root, bool prune, bool rootLosesInactive = false);
+		// Gives each entity that lacks it an InactiveComponent (appending those to `outDeactivated`), then refreshes their
+		// activity at once: thousands of top-level entities (a cell that unloads) cost a lookup or two each.
+		void DeactivateEntities(std::span<const Entity> entities, std::vector<Entity>& outDeactivated);
 		// Depth, activity and stale transforms after linking a batch of new subtrees (deserialization).
 		void FinishLinking(std::span<const entt::entity> roots);
 		// Logs entities that moved in the hierarchy at the current hierarchy version (see GetHierarchyMoves).
@@ -673,6 +676,7 @@ namespace Strata
 		mutable bool m_RootIndicesValid = true;
 		// Set while subtrees are torn down: the signals their components emit must not walk links into destroyed entities.
 		bool m_DestroyingEntities = false;
+		bool m_DeferActivityRefresh = false; // DeactivateEntities adds InactiveComponents: it refreshes activity itself
 
 		// World transforms: entities whose HierarchyComponent::TransformDirty is set, in the order they were marked.
 		std::vector<entt::entity> m_DirtyTransforms;

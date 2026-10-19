@@ -162,13 +162,7 @@ namespace Strata
 				roots.push_back(root);
 		}
 		load.DeactivatedRoots.clear();
-		for (Entity root : roots)
-		{
-			if (root.HasComponent<InactiveComponent>())
-				continue;
-			root.AddComponent<InactiveComponent>();
-			load.DeactivatedRoots.push_back(root);
-		}
+		DeactivateEntities(roots, load.DeactivatedRoots);
 		load.Roots = std::move(roots);
 		status.State = SubSceneState::Unloading;
 		status.DestroyedEntities = 0;
