@@ -132,15 +132,44 @@ namespace Strata
 		return true;
 	}
 
+	void GameUIRenderer::ReleaseResources()
+	{
+		if (m_BindingSets.empty() && !m_QuadBuffer && !m_TextureSlotBuffer && !m_GlyphBuffer && !m_ClipBuffer && !m_TransformBuffer)
+			return;
+		// Command lists in flight hold references to what they use. New buffers are filled whole (EnsureBuffer reports them).
+		m_BindingSets.clear();
+		m_QuadBuffer = nullptr;
+		m_TextureSlotBuffer = nullptr;
+		m_GlyphBuffer = nullptr;
+		m_ClipBuffer = nullptr;
+		m_TransformBuffer = nullptr;
+		m_Uploaded.clear();
+		m_UploadedTransforms.clear();
+		m_SceneId = 0;
+	}
+
 	bool GameUIRenderer::Prepare(const SceneOverlayFrame& frame)
 	{
 		m_Runs.clear();
-		for (auto& [atlases, set] : m_BindingSets)
-			set.second = false;
+		// Binding sets no draw of the previous frame used are let go, whether or not it drew (atlases grow and change, and a
+		// frame that draws no UI uses none): they hold the atlases' textures and the buffers.
+		for (auto it = m_BindingSets.begin(); it != m_BindingSets.end();)
+		{
+			if (!it->second.second)
+			{
+				it = m_BindingSets.erase(it);
+				continue;
+			}
+			it->second.second = false;
+			++it;
+		}
 		Scene* scene = frame.OverlayScene;
-		// A scene without canvases costs this check.
+		// A scene without canvases costs this check, and holds nothing of the UI's (a menu's atlases and quads included).
 		if (!scene || !GameUIScene::HasCanvases(*scene))
+		{
+			ReleaseResources();
 			return false;
+		}
 		GameUIScene& ui = GameUIScene::Get(*scene);
 		SceneOverlayStats& stats = *frame.Stats;
 		// World-space canvases are part of the scene: drawn in every view of it that has its camera.
@@ -702,9 +731,6 @@ namespace Strata
 	void GameUIRenderer::Draw(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer)
 	{
 		DrawRuns(commandList, framebuffer, false);
-		// Binding sets of atlases no draw used this frame are let go (atlases grow and change).
-		for (auto it = m_BindingSets.begin(); it != m_BindingSets.end();)
-			it = it->second.second ? std::next(it) : m_BindingSets.erase(it);
 	}
 
 	void GameUIRenderer::DrawRuns(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer, bool world)

@@ -2154,7 +2154,9 @@ draws with a depth-tested pipeline (reversed-Z, no depth writes, so what is near
 (canvas units to clip space, one per world-space canvas, uploaded when the camera or the entity moved; the push
 constants' flags name it): its quads stay in canvas units, its edges and outlines are antialiased over what a canvas unit
 covers on the screen (`fwidth`), its clip rects are tested in canvas units, and its textures stream to the pixels a
-canvas unit projects to. `GameRenderer` shows a
+canvas unit projects to. The pass keeps a binding set per combination of atlases drawn, and lets go of those no draw of
+the previous frame used at the start of the next `Prepare` (with the atlases' textures they hold); a scene without
+canvases also releases its buffers, which the next canvases fill whole again. `GameRenderer` shows a
 scene without a primary camera that has screen-space UI (a main menu) as that UI over black instead of its
 missing-camera message (`SceneRenderOptions::OverlayScene`).
 

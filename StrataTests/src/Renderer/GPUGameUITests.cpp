@@ -6,8 +6,13 @@
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/GameUI/GameUIComponents.h"
 #include "Strata/GameUI/GameUIHitTest.h"
+#include "Strata/GameUI/GameUIRenderer.h"
 #include "Strata/GameUI/GameUIScene.h"
 #include "Strata/Renderer/Font.h"
+#include "Strata/Renderer/FontAtlas.h"
+#include "Strata/Renderer/FontAtlasCache.h"
+#include "Strata/Renderer/SceneOverlay.h"
+#include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Renderer/TextureStreamer.h"
 #include "Strata/Runtime/GameRenderer.h"
 #include "Strata/Asset/BuiltinAssets.h"
@@ -756,6 +761,85 @@ TEST_SUITE("GPU.GameUI")
 			CAPTURE(component);
 			CHECK(std::abs(fractions[0][component] - fractions[1][component]) <= 0.01f);
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The UI pass lets go of atlas textures and buffers once frames stop drawing its UI")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		nvrhi::IDevice* device = gpu.GetNvrhiDevice();
+		UIScene ui;
+		Entity label = ui.AddImage(ui.Canvas, "Label", { 10.0f, 10.0f }, { 200.0f, 30.0f }, { 0.1f, 0.1f, 0.1f, 1.0f });
+		label.AddComponent<UITextComponent>().Text = "Atlas";
+		Scene withoutUI("Without UI");
+
+		// The pass as a SceneRenderer drives it, over a target of its own.
+		FontAtlasCache atlases;
+		GameUIRenderer pass(SceneOverlayPassContext { "UIPassRelease" });
+		nvrhi::TextureDesc desc;
+		desc.width = 256;
+		desc.height = 256;
+		desc.format = nvrhi::Format::RGBA8_UNORM;
+		desc.isRenderTarget = true;
+		desc.initialState = nvrhi::ResourceStates::RenderTarget;
+		desc.keepInitialState = true;
+		nvrhi::TextureHandle target = device->createTexture(desc);
+		REQUIRE(target);
+		nvrhi::FramebufferHandle framebuffer = device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(target));
+		nvrhi::CommandListHandle commandList = device->createCommandList();
+		std::vector<VisibleTextureUse> visibleTextures;
+		SceneOverlayStats stats;
+		auto renderFrame = [&](Scene& scene, bool drawScreenSpace)
+		{
+			atlases.BeginFrame(GlyphRasterBudget {});
+			commandList->open();
+			stats = {};
+			SceneOverlayFrame frame;
+			frame.OverlayScene = &scene;
+			frame.ViewportSize = { 256, 256 };
+			frame.DrawScreenSpace = drawScreenSpace;
+			frame.CommandList = commandList;
+			frame.Atlases = &atlases;
+			frame.VisibleTextures = &visibleTextures;
+			frame.Stats = &stats;
+			const bool draws = pass.Prepare(frame);
+			if (draws)
+				pass.Draw(commandList, framebuffer);
+			commandList->close();
+			REQUIRE(gpu.ExecuteAndWait(commandList));
+			visibleTextures.clear();
+			return draws;
+		};
+
+		REQUIRE(renderFrame(ui.Target, true));
+		CHECK(stats.PendingGlyphs == 0);
+		// The default font's atlas (never dropped by the cache): how many hold its texture, this handle included.
+		FontAtlas* atlas = atlases.Get(Font::GetDefault());
+		REQUIRE(atlas);
+		nvrhi::TextureHandle texture = atlas->GetTexture();
+		REQUIRE(texture);
+		auto countReferences = [&texture]()
+		{
+			texture->AddRef();
+			return texture->Release();
+		};
+		const unsigned long whileDrawn = countReferences();
+
+		// A scene without canvases (a game's next level after its menu): the pass holds neither the atlas nor its buffers.
+		CHECK_FALSE(renderFrame(withoutUI, true));
+		CHECK(countReferences() < whileDrawn);
+		// Drawn again, everything is uploaded again into new buffers.
+		REQUIRE(renderFrame(ui.Target, true));
+		CHECK(stats.UploadedBytes >= stats.Quads * sizeof(RenderData::UIQuad));
+		CHECK(countReferences() == whileDrawn);
+		REQUIRE(renderFrame(ui.Target, true));
+		CHECK(stats.UploadedBytes == 0);
+
+		// Screen-space canvases hidden (an editor view without the game UI): the atlas is let go the frame after.
+		CHECK_FALSE(renderFrame(ui.Target, false));
+		CHECK_FALSE(renderFrame(ui.Target, false));
+		CHECK(countReferences() < whileDrawn);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

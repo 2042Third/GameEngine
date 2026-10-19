@@ -100,6 +100,8 @@ namespace Strata
 		void UpdateTextures(GameUIScene& ui, const SceneOverlayFrame& frame, AssetManagerBase* assets, float maxScale);
 		void BuildRuns(GameUIScene& ui, std::span<const UICanvasView> views);
 		bool EnsureBuffer(nvrhi::BufferHandle& buffer, uint64_t bytes, uint32_t stride, const char* name);
+		// Lets go of the binding sets and the buffers (a scene without canvases).
+		void ReleaseResources();
 		nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo, bool world);
 		nvrhi::IBindingSet* GetBindingSet(const std::array<nvrhi::ITexture*, RenderData::c_MaxBoundAtlases>& atlases);
 	private:
