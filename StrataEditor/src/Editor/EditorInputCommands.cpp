@@ -992,7 +992,7 @@ namespace Strata
 
 	void RegisterUIInputCommands(EditorCommandRegistry& registry)
 	{
-		registry.Register({ "input.click",
+		registry.Register(MayDefer({ "input.click",
 			"Clicks a game UI element of the running game (play mode) as a player would: moves the simulated pointer to the center of its "
 			"rect (at the game view's size) and taps a mouse button there. Fails, changing nothing, when the element is not shown on a canvas "
 			"that receives input, or when something else is on top of its center (the error names what a click would hit: the menu is "
@@ -1123,9 +1123,9 @@ namespace Strata
 					answer["held"] = DescribeSimulatedInput(pollContext);
 					return EditorCommandResult::Ok(std::move(answer));
 				});
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
-		registry.Register({ "input.type",
+		registry.Register(MayDefer({ "input.type",
 			"Types text into the running game (play mode), as a keyboard with its layout and input method would: scripts read it with "
 			"Input::GetTypedText in the next game frame (UTF-8, at most 1,024 bytes a frame; malformed UTF-8 arrives as U+FFFD). Answers once "
 			"the game has seen it, or at once with wait false (the default while paused).",
@@ -1143,7 +1143,7 @@ namespace Strata
 					return NoGameError();
 				Input::SimulateText(text);
 				return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, { { "text", text } }, "text");
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 	}
 
 }
