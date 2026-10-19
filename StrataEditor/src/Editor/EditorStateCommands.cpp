@@ -2,6 +2,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/RecentProjects.h"
+#include "Editor/SceneRecovery.h"
 #include "Editor/ViewportRenderer.h"
 
 #include <Strata/Renderer/Renderer.h>

@@ -1,5 +1,6 @@
 #include "Renderer/SceneRendererTestUtils.h"
 
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Runtime/GameRenderer.h"
 
 #include <functional>

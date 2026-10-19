@@ -7,6 +7,7 @@
 #include "Editor/HarnessEditor.h"
 #include "Editor/HierarchyView.h"
 #include "Editor/PrefabSync.h"
+#include "Editor/SceneRecovery.h"
 #include "Editor/ThumbnailCache.h"
 #include "EditorLayer.h"
 #include "Perf/PerfUtils.h"

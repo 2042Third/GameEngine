@@ -4,6 +4,7 @@
 #include "Animation/SkinnedMeshTestUtils.h"
 #include "Asset/AssetTestUtils.h"
 #include "Scene/SceneTestUtils.h"
+#include "Strata/Animation/AnimationComponents.h"
 #include "Strata/Animation/AnimationPreview.h"
 #include "Strata/Animation/AnimationSystem.h"
 #include "Strata/Asset/AssetManager.h"
@@ -17,6 +18,10 @@
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/SceneServices.h"
 #include "TestHelpers.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+#endif
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -121,6 +126,7 @@ namespace
 		return true;
 	}
 
+#if ST_WITH_PHYSICS
 	// A static box collider (physics' world) at `position`.
 	Entity CreateStaticBox(Scene& scene, const std::string& name, const glm::vec3& position, const glm::vec3& halfExtents)
 	{
@@ -129,6 +135,7 @@ namespace
 		entity.AddComponent<BoxColliderComponent>().HalfExtents = halfExtents;
 		return entity;
 	}
+#endif
 
 	glm::vec3 GetWorldPosition(const Scene& scene, Entity entity)
 	{
@@ -819,6 +826,7 @@ TEST_SUITE("Animation.RootMotion")
 		CheckSceneCaches(*scene.SceneRef);
 	}
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("Root motion walks a character controller, which collides, and turns its entity")
 	{
 		AnimationScene scene;
@@ -882,6 +890,7 @@ TEST_SUITE("Animation.RootMotion")
 		CHECK(std::abs(turned.y) < 0.02f);
 		CheckSceneCaches(world);
 	}
+#endif
 }
 
 TEST_SUITE("Animation.Streaming")

@@ -39,7 +39,13 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
 # Statically link the MSVC runtime everywhere so exported games need no redistributable.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "ProgramDatabase")
+# Compiler caches cannot cache objects whose debug information goes into a PDB that every compile of the target shares:
+# with STRATA_COMPILER_CACHE the objects carry it (/Z7) and the linker gathers it as before.
+if(STRATA_COMPILER_CACHE)
+	set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "Embedded")
+else()
+	set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "ProgramDatabase")
+endif()
 if(MSVC)
 	add_link_options("$<$<CONFIG:Release,Dist>:/DEBUG;/OPT:REF;/OPT:ICF>")
 endif()

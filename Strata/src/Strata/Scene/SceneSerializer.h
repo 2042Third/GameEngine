@@ -4,7 +4,7 @@
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include <filesystem>
 #include <functional>

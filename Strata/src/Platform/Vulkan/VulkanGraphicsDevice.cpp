@@ -12,7 +12,9 @@
 // NVRHI is linked as a static library, which leaves defining vulkan.hpp's dynamic dispatcher to the application.
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
-#include <nvrhi/validation.h>
+#if !defined(ST_DIST)
+	#include <nvrhi/validation.h>
+#endif
 #include <nvrhi/vulkan.h>
 
 #define GLFW_INCLUDE_NONE
@@ -911,7 +913,14 @@ namespace Strata
 			return false;
 		}
 
+#if defined(ST_DIST)
+		// NVRHI's validation layer is not part of shipping builds (games never ask for it): the plain device.
+		if (m_Specification.EnableValidation)
+			ST_CORE_WARN("NVRHI validation is not part of Dist builds: the device runs without it");
+		m_NvrhiDevice = nvrhi::DeviceHandle(m_NvrhiVulkanDevice);
+#else
 		m_NvrhiDevice = m_Specification.EnableValidation ? nvrhi::validation::createValidationLayer(m_NvrhiVulkanDevice) : nvrhi::DeviceHandle(m_NvrhiVulkanDevice);
+#endif
 		return true;
 	}
 

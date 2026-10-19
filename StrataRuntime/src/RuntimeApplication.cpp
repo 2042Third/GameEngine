@@ -1,21 +1,37 @@
-#include <Strata.h>
-#include <Strata/Core/EntryPoint.h>
-#include <Strata/Project/GameManifest.h>
+#include <Strata/Core/Application.h>
+#include <Strata/Core/FileSystem.h>
 #include <Strata/Core/FrameProfiler.h>
+#include <Strata/Core/Layer.h>
+#include <Strata/Core/Log.h>
+#include <Strata/Core/Platform.h>
 #include <Strata/Core/SaveFiles.h>
+#include <Strata/Core/Version.h>
+#include <Strata/Engine/EntryPoint.h>
+#include <Strata/Project/GameManifest.h>
+#include <Strata/Project/ProjectModule.h>
 #include <Strata/Renderer/GPUUploadQueue.h>
+#include <Strata/Renderer/GraphicsDevice.h>
+#include <Strata/Renderer/GraphicsModule.h>
 #include <Strata/Renderer/ImageWriter.h>
+#include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/StagingPool.h>
 #include <Strata/Runtime/FramePerfLog.h>
 #include <Strata/Runtime/GameRenderer.h>
 #include <Strata/Runtime/GameRuntime.h>
 #include <Strata/Runtime/GameWindowService.h>
 
+#if ST_WITH_AUDIO
+	#include <Strata/Audio/AudioModule.h>
+#endif
+
 namespace Strata
 {
 
 	// Exit codes: 1 when the game cannot start, 2 when its scripts crashed in a headless run.
 	constexpr int c_ScriptCrashExitCode = 2;
+	// Threads of the job system's background pool: a game's only background work is letting scenes go
+	// (Scene::ReleaseInBackground); imports and compression, which the pool is sized for in tools, never run in games.
+	constexpr uint32_t c_BackgroundThreadCount = 2;
 	// Frames per second of a headless run (no vsync paces it): game time passes as in a window, and a dedicated server
 	// does not keep a CPU core busy.
 	constexpr uint32_t c_HeadlessFrameRate = 60;
@@ -209,11 +225,19 @@ namespace Strata
 			const bool lastFrame = m_Options.MaxFrames && application.GetFrameCount() + 1 == *m_Options.MaxFrames;
 			if (!lastFrame || m_Options.ScreenshotPath.empty())
 				return;
+			// CheckOptions refused a screenshot without a window, so the game renders with the Graphics module.
+			GraphicsModule* graphics = application.GetModules().Find<GraphicsModule>();
+			if (!graphics)
+			{
+				ST_ERROR("Screenshot failed: the game renders nothing");
+				application.SetExitCode(1);
+				return;
+			}
 			// This frame is already rendered: a game that shows the missing-camera message, or a cleared frame because nothing
 			// plays yet, cannot be what a screenshot is for (the loading scene can).
 			const bool showingMessage = m_Renderer && m_Renderer->IsShowingMessage();
 			const bool loading = !m_Runtime->GetScene();
-			application.RequestBackBufferCapture([path = m_Options.ScreenshotPath, showingMessage, loading](const ReadbackImage& image)
+			graphics->RequestBackBufferCapture([path = m_Options.ScreenshotPath, showingMessage, loading](const ReadbackImage& image)
 			{
 				// A requested screenshot that cannot be made, or shows no game, fails the run, so scripted runs (CI) notice.
 				std::string error;
@@ -294,10 +318,8 @@ namespace Strata
 		return ProgramRun::Interactive;
 	}
 
-	Application* CreateApplication(const CommandLine& commandLine)
+	std::optional<ApplicationLaunch> CreateApplication(const CommandLine& commandLine)
 	{
-		// Games read cooked asset packs and never name the asset pipeline: the Application constructor registers the
-		// engine's modules without it, and the importers are not linked into the runtime.
 		RuntimeOptions options;
 		if (std::optional<std::string> game = commandLine.GetOption("--game"))
 			options.ManifestPath = FileSystem::FromUTF8(*game);
@@ -317,25 +339,35 @@ namespace Strata
 		if (const std::optional<std::string> problem = CheckOptions(commandLine))
 		{
 			ST_CRITICAL("{}", *problem);
-			return nullptr;
+			return std::nullopt;
 		}
 		if (!manifest)
 		{
 			Application::ReportFatalError(name, fmt::format("No game to run: {}", options.ManifestPath.empty()
 				? std::string("no single .stgame manifest next to the executable (pass --game <file>)") : error), c_GameFilesAdvice);
-			return nullptr;
+			return std::nullopt;
 		}
 
 		// The options' values were checked above (CheckOptions).
 		ApplicationSpecification specification;
 		specification.Name = name;
 		specification.CommandLineArgs = commandLine;
-		// Headless runs the simulation only, like a dedicated server: no window and no GPU.
+		// Headless runs the simulation only, like a dedicated server: no window and no GPU, sound mixed without a device.
+		// Games have no ImGui.
 		specification.Headless = commandLine.HasFlag("--headless");
-		specification.EnableRenderer = !specification.Headless;
 		if (specification.Headless)
+		{
 			specification.MaxFrameRate = c_HeadlessFrameRate;
-		specification.EnableImGui = false;
+		}
+		else
+		{
+			specification.Modules.push_back(GraphicsModule::Factory());
+		}
+#if ST_WITH_AUDIO
+		specification.Modules.push_back(AudioModule::Factory({ .NullDevice = specification.Headless }));
+#endif
+		specification.Modules.push_back(ProjectModule::Factory());
+		specification.Jobs.BackgroundThreadCount = c_BackgroundThreadCount;
 		specification.Window.Title = name;
 		specification.Window.Width = manifest->WindowWidth;
 		specification.Window.Height = manifest->WindowHeight;
@@ -366,7 +398,15 @@ namespace Strata
 			options.SaveDirectory = FileSystem::FromUTF8(*saves);
 			ST_INFO("Keeping the game's save files in {}", FileSystem::ToUTF8(options.SaveDirectory));
 		}
-		return new RuntimeApplication(specification, std::move(options));
+
+		// Games read cooked asset packs and never name the asset pipeline: the composition root registers the engine's
+		// modules without it, and the importers are not linked into the runtime.
+		ApplicationLaunch launch;
+		launch.Create = [specification, options = std::move(options)]() -> Scope<Application>
+		{
+			return CreateScope<RuntimeApplication>(specification, options);
+		};
+		return launch;
 	}
 
 }

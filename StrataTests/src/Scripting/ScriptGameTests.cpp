@@ -1,11 +1,12 @@
 #include <doctest/doctest.h>
 
-#include "Audio/AudioTestUtils.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/EditorAssetManager.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Renderer/Material.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include <filesystem>
@@ -17,13 +18,13 @@ using namespace Strata::Tests;
 namespace
 {
 
-	// A project with a scene asset ("Levels/Next.stscene") and an audio clip, whose asset manager is the active one while
-	// it lives.
+	// A project with a scene asset ("Levels/Next.stscene") and a material (an asset that is no scene), whose asset manager is
+	// the active one while it lives.
 	struct GameProject
 	{
 		Ref<EditorAssetManager> Manager;
 		AssetHandle Level = UUID::Null();
-		AssetHandle Clip = UUID::Null();
+		AssetHandle Paint = UUID::Null(); // A material
 
 		GameProject()
 		{
@@ -42,8 +43,8 @@ namespace
 			Level = Manager->FindAssetByPath("Levels/Next.stscene");
 			REQUIRE(Manager->GetAssetType(Level) == AssetType::Scene);
 			AssetMetadata metadata;
-			metadata.Name = "Sine";
-			Clip = Manager->AddMemoryAsset(CreateClipAsset(0.1f), metadata);
+			metadata.Name = "Paint";
+			Paint = Manager->AddMemoryAsset(Material::Create(), metadata);
 			AssetManager::SetActive(Manager);
 		}
 
@@ -89,7 +90,7 @@ TEST_SUITE("Scripting.Game")
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
 		Scene scene;
 		Entity runner = scene.CreateEntity("Runner");
-		AddFieldOverride(AddScriptEntry(runner, "GameFlowMisuse"), "NotAScene", PropertyType::Asset, PropertyValue(UUID(project.Clip)));
+		AddFieldOverride(AddScriptEntry(runner, "GameFlowMisuse"), "NotAScene", PropertyType::Asset, PropertyValue(UUID(project.Paint)));
 		scene.OnRuntimeStart();
 		RunFrames(scene, 1);
 

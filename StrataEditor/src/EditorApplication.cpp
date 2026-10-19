@@ -1,7 +1,18 @@
-#include <Strata.h>
 #include <Strata/Asset/AssetImporter.h>
-#include <Strata/Core/EntryPoint.h>
+#include <Strata/Audio/AudioModule.h>
+#include <Strata/Core/Application.h>
+#include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Log.h>
+#include <Strata/Core/Platform.h>
+#include <Strata/Core/Timer.h>
+#include <Strata/Core/Version.h>
+#include <Strata/Engine/EntryPoint.h>
 #include <Strata/ImGui/ImGuiLayer.h>
+#include <Strata/ImGui/ImGuiModule.h>
+#include <Strata/Project/ProjectModule.h>
+#include <Strata/Renderer/GraphicsDevice.h>
+#include <Strata/Renderer/GraphicsModule.h>
+#include <Strata/Renderer/Renderer.h>
 
 #include "Editor/ExternalEditor.h"
 #include "EditorHost.h"
@@ -148,11 +159,11 @@ namespace Strata
 		uint64_t GetFrameCount() const override { return m_Application.GetFrameCount(); }
 		double GetTime() const override { return Time::GetTime(); }
 		std::optional<double> GetProcessUptime() const override { return Platform::GetProcessUptime(); }
-		bool HasGraphicsDevice() const override { return m_Application.GetGraphicsDevice() != nullptr; }
+		bool HasGraphicsDevice() const override { return GetDevice() != nullptr; }
 
 		std::optional<GraphicsDeviceInfo> GetGraphicsDeviceInfo() const override
 		{
-			const GraphicsDevice* device = m_Application.GetGraphicsDevice();
+			const GraphicsDevice* device = GetDevice();
 			return device ? std::optional<GraphicsDeviceInfo>(device->GetInfo()) : std::nullopt;
 		}
 
@@ -178,8 +189,9 @@ namespace Strata
 
 		float GetUIScale() const override
 		{
-			const ImGuiLayer* imgui = m_Application.GetImGuiLayer();
-			return imgui ? imgui->GetUIScale() : 1.0f;
+			const ImGuiModule* imgui = m_Application.GetModules().Find<ImGuiModule>();
+			const ImGuiLayer* layer = imgui ? imgui->GetLayer() : nullptr;
+			return layer ? layer->GetUIScale() : 1.0f;
 		}
 
 		void SetMaxFrameRate(uint32_t framesPerSecond) override { m_Application.SetMaxFrameRate(framesPerSecond); }
@@ -188,7 +200,19 @@ namespace Strata
 
 		void RequestScreenshot(std::function<void(const ReadbackImage&)> callback) override
 		{
-			m_Application.RequestBackBufferCapture(std::move(callback));
+			if (GraphicsModule* graphics = m_Application.GetModules().Find<GraphicsModule>())
+			{
+				graphics->RequestBackBufferCapture(std::move(callback));
+				return;
+			}
+			// Nothing will ever be rendered: the answer is an empty image, on the next frame as a capture's would be.
+			m_Application.SubmitToMainThread([callback = std::move(callback)]() { callback(ReadbackImage()); });
+		}
+	private:
+		GraphicsDevice* GetDevice() const
+		{
+			const GraphicsModule* graphics = m_Application.GetModules().Find<GraphicsModule>();
+			return graphics ? graphics->GetDevice() : nullptr;
 		}
 	private:
 		Application& m_Application;
@@ -205,7 +229,8 @@ namespace Strata
 			if (!IsRunning())
 				return;
 			// The editor's look: the Bedrock theme at the UI scale, and its own fonts (ImGui's built-in font is never used).
-			if (ImGuiLayer* imgui = GetImGuiLayer(); imgui && imgui->IsInitialized())
+			const ImGuiModule* imguiModule = GetModules().Find<ImGuiModule>();
+			if (ImGuiLayer* imgui = imguiModule ? imguiModule->GetLayer() : nullptr)
 			{
 				if (options.UIScale)
 					imgui->SetContentScaleOverride(*options.UIScale);
@@ -236,20 +261,20 @@ namespace Strata
 		return ProgramRun::Interactive;
 	}
 
-	Application* CreateApplication(const CommandLine& commandLine)
+	std::optional<ApplicationLaunch> CreateApplication(const CommandLine& commandLine)
 	{
 		// Answered before anything starts: no log file, window or automation session.
 		if (commandLine.HasFlag("--help") || commandLine.HasFlag("-h"))
 		{
 			std::fputs(GetUsage().c_str(), stdout);
 			Application::SetStartupExitCode(0);
-			return nullptr;
+			return std::nullopt;
 		}
 		if (commandLine.HasFlag("--version"))
 		{
 			std::printf("Strata Editor %s\n", std::string(c_EngineVersion).c_str());
 			Application::SetStartupExitCode(0);
-			return nullptr;
+			return std::nullopt;
 		}
 		std::optional<std::string> problem = CheckArguments(commandLine);
 		if (!problem)
@@ -258,7 +283,7 @@ namespace Strata
 		{
 			std::fprintf(stderr, "%s\n\n%s", problem->c_str(), GetUsage().c_str());
 			Application::SetStartupExitCode(c_UsageExitCode);
-			return nullptr;
+			return std::nullopt;
 		}
 
 		const std::filesystem::path userData = Platform::GetUserDataDirectory("Strata");
@@ -267,12 +292,6 @@ namespace Strata
 		logSpecification.LogFile = userData / "Logs" / "StrataEditor.log";
 		Log::Init(logSpecification);
 		ST_INFO("Strata Editor {} ({})", c_EngineVersion, Platform::GetName());
-
-		// The editor imports assets: it registers the modules with the asset pipeline, before the Application constructor
-		// would register them without it.
-		Engine::ModuleRegistrationOptions modules;
-		modules.AssetPipeline = RegisterAssetPipeline;
-		Engine::RegisterBuiltinModules(modules);
 
 		EditorOptions options;
 		options.ShowImGuiDemo = commandLine.HasFlag("--imgui-demo");
@@ -306,19 +325,29 @@ namespace Strata
 		specification.Name = "Strata Editor";
 		specification.CommandLineArgs = commandLine;
 		// --no-gpu: automation that needs no rendering (export, asset processing) on machines without a GPU.
-		specification.EnableRenderer = !commandLine.HasFlag("--no-gpu");
-		specification.Headless = commandLine.HasFlag("--headless") || !specification.EnableRenderer;
-		specification.EnableImGui = !specification.Headless;
+		const bool graphics = !commandLine.HasFlag("--no-gpu");
+		specification.Headless = commandLine.HasFlag("--headless") || !graphics;
 		// Without a window there is no vsync: a headless editor waiting for automation would otherwise spin a CPU core,
 		// and playing scenes advance about as they would in a 60 Hz game.
 		if (specification.Headless)
 			specification.MaxFrameRate = c_HeadlessFrameRate;
-		// The panel layout: --layout picks the file; otherwise the user's, except in scripted runs (a fixed number of
-		// frames), which never overwrite it.
-		if (std::optional<std::string> layout = commandLine.GetOption("--layout"))
-			specification.ImGuiLayoutFile = FileSystem::FromUTF8(*layout);
-		else if (!commandLine.GetIntOption("--frames"))
-			specification.ImGuiLayoutFile = userData / "EditorLayout.ini";
+		// The modules: the device (offscreen when headless, for captures and thumbnails), sound (mixed without a device when
+		// headless), the UI in a window, the project.
+		if (graphics)
+			specification.Modules.push_back(GraphicsModule::Factory());
+		specification.Modules.push_back(AudioModule::Factory({ .NullDevice = specification.Headless }));
+		if (!specification.Headless)
+		{
+			// The panel layout: --layout picks the file; otherwise the user's, except in scripted runs (a fixed number of
+			// frames), which never overwrite it.
+			ImGuiModuleSpecification imgui;
+			if (std::optional<std::string> layout = commandLine.GetOption("--layout"))
+				imgui.LayoutFile = FileSystem::FromUTF8(*layout);
+			else if (!commandLine.GetIntOption("--frames"))
+				imgui.LayoutFile = userData / "EditorLayout.ini";
+			specification.Modules.push_back(ImGuiModule::Factory(std::move(imgui)));
+		}
+		specification.Modules.push_back(ProjectModule::Factory());
 		specification.Window.Title = "Strata Editor";
 		specification.Window.Width = 1600;
 		specification.Window.Height = 900;
@@ -330,7 +359,11 @@ namespace Strata
 		// A person's window shows the start scene loading; scripted runs and headless editors (driven by tools) start with it open.
 		options.OpenStartSceneInBackground = !options.Headless && !options.MaxFrames && options.CommandScript.empty();
 
-		return new EditorApplication(specification, options);
+		// The editor imports assets: the composition root registers the modules with the asset pipeline.
+		ApplicationLaunch launch;
+		launch.Registration.AssetPipeline = RegisterAssetPipeline;
+		launch.Create = [specification, options]() -> Scope<Application> { return CreateScope<EditorApplication>(specification, options); };
+		return launch;
 	}
 
 }

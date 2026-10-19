@@ -1,8 +1,11 @@
 #include "Editor/ProjectTemplates.h"
 
+#include <Strata/Audio/AudioComponents.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Math/Math.h>
+#include <Strata/Physics/PhysicsComponents.h>
 #include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>

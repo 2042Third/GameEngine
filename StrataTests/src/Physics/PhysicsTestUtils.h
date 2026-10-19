@@ -3,6 +3,7 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Physics/PhysicsWorld.h"
 #include "Strata/Scene/Entity.h"

@@ -2,6 +2,7 @@
 
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include <algorithm>

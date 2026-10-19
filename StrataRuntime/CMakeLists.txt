@@ -10,9 +10,20 @@ strata_configure_target(StrataRuntime)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_RUNTIME_SOURCES})
 target_include_directories(StrataRuntime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(StrataRuntime PRIVATE Strata)
+# A map of what the linker put into the executable, next to it (exports copy the executable only): StrataRuntime.NoTooling
+# reads it.
+set(STRATA_RUNTIME_MAP "$<TARGET_FILE_DIR:StrataRuntime>/StrataRuntime.map")
+if(MSVC)
+	target_link_options(StrataRuntime PRIVATE "/MAP:${STRATA_RUNTIME_MAP}")
+elseif(APPLE)
+	target_link_options(StrataRuntime PRIVATE "LINKER:-map,${STRATA_RUNTIME_MAP}")
+else()
+	target_link_options(StrataRuntime PRIVATE "LINKER:-Map=${STRATA_RUNTIME_MAP}")
+endif()
+set_property(TARGET StrataRuntime APPEND PROPERTY ADDITIONAL_CLEAN_FILES "${STRATA_RUNTIME_MAP}")
 
 if(WIN32)
-	# A windowed program, as every exported game is: no console window opens with it. It keeps main (Core/EntryPoint.h),
+	# A windowed program, as every exported game is: no console window opens with it. It keeps main (Engine/EntryPoint.h),
 	# and prints to the pipes its callers pass or the terminal that started it (Platform::ConnectStandardStreams).
 	set_target_properties(StrataRuntime PROPERTIES WIN32_EXECUTABLE TRUE)
 	if(MSVC)

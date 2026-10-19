@@ -6,6 +6,7 @@
 #include "Renderer/UploadQueueTestUtils.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureFormat.h"

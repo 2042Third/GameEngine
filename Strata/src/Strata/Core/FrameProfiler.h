@@ -75,7 +75,7 @@ namespace Strata
 		{ "Scene.Transforms", true }, // Scene::UpdateWorldTransforms
 		{ "Render.Extract", true },   // SceneRenderer gathering lights, draws and shadow casters from the scene
 		{ "Render.Submit", true },    // SceneRenderer recording and submitting its command list
-		{ "Editor.UI", true },        // ImGui: the layers' OnImGuiRender and drawing the UI (Application::RenderImGui)
+		{ "Editor.UI", true },        // ImGui: the layers' OnImGuiRender and drawing the UI (ImGuiModule::OnRenderUI)
 		{ "Present", false }          // GraphicsDevice::EndFrame (presenting the back buffer), after the work time
 	} };
 

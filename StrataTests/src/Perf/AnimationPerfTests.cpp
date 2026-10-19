@@ -7,6 +7,7 @@
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Strata/Animation/AnimationComponents.h"
 #include "Strata/Animation/AnimationSystem.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"

@@ -1,12 +1,19 @@
 #include <doctest/doctest.h>
 
-#include "Strata/Animation/AnimationSystem.h"
-#include "Strata/Audio/AudioSystem.h"
 #include "Strata/Core/Log.h"
-#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSystem.h"
 #include "Strata/Scripting/ScriptSystem.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsSystem.h"
+#endif
+#if ST_WITH_AUDIO
+	#include "Strata/Audio/AudioSystem.h"
+#endif
+#if ST_WITH_ANIMATION
+	#include "Strata/Animation/AnimationSystem.h"
+#endif
 
 #include <algorithm>
 #include <string>
@@ -82,6 +89,17 @@ namespace
 		return descriptor;
 	}
 
+#if ST_TESTS_HAVE_EVERY_MODULE
+	// A recording system with soft constraints only (its test orders it among every module's systems).
+	SceneSystemDescriptor MakeSoftRecording(const std::string& name, std::vector<std::string> afterIfPresent, std::vector<std::string> beforeIfPresent = {})
+	{
+		SceneSystemDescriptor descriptor = MakeRecording(name);
+		descriptor.AfterIfPresent = std::move(afterIfPresent);
+		descriptor.BeforeIfPresent = std::move(beforeIfPresent);
+		return descriptor;
+	}
+#endif
+
 	std::vector<std::string> GetSystemNames()
 	{
 		std::vector<std::string> names;
@@ -127,6 +145,7 @@ namespace
 
 TEST_SUITE("Scene.Systems")
 {
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("The built-in systems update in the order Scripting, Animation, Physics, Audio")
 	{
 		// Animation runs after the scripts (which drive animators) and before physics (root motion moves bodies before the
@@ -135,11 +154,19 @@ TEST_SUITE("Scene.Systems")
 
 		const std::vector<SceneSystemDescriptor>& descriptors = SceneSystemRegistry::GetAll();
 		REQUIRE(descriptors.size() == 4);
-		CHECK(descriptors[0].After.empty());
-		CHECK(descriptors[1].After == std::vector<std::string> { "Scripting" });
-		CHECK(descriptors[1].Before == std::vector<std::string> { "Physics" });
-		CHECK(descriptors[2].After == std::vector<std::string> { "Scripting" });
-		CHECK(descriptors[3].After == std::vector<std::string> { "Physics" });
+		// Each names another module's system: soft constraints, so that the engine runs without that module.
+		for (const SceneSystemDescriptor& descriptor : descriptors)
+		{
+			CAPTURE(descriptor.Name);
+			CHECK(descriptor.After.empty());
+			CHECK(descriptor.Before.empty());
+		}
+		CHECK(descriptors[0].AfterIfPresent.empty());
+		CHECK(descriptors[1].AfterIfPresent == std::vector<std::string> { "Scripting" });
+		CHECK(descriptors[1].BeforeIfPresent == std::vector<std::string> { "Physics" });
+		CHECK(descriptors[2].AfterIfPresent == std::vector<std::string> { "Scripting" });
+		CHECK(descriptors[3].AfterIfPresent == std::vector<std::string> { "Scripting", "Animation", "Physics" });
+		CHECK(SceneSystemRegistry::GetAbsentSoftConstraints().empty());
 		CHECK(descriptors[0].Type == entt::type_id<ScriptSystem>().hash());
 		CHECK(descriptors[1].Type == entt::type_id<AnimationSystem>().hash());
 		CHECK(descriptors[2].Type == entt::type_id<PhysicsSystem>().hash());
@@ -147,7 +174,9 @@ TEST_SUITE("Scene.Systems")
 		CHECK(descriptors[1].ProfileStage == "Scene.Animation");
 		CHECK_FALSE(descriptors[1].RunsInSimulateMode);
 	}
+#endif
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("After and Before are honored, and registration order decides the rest")
 	{
 		RecordingSystem::Updates.clear();
@@ -175,7 +204,9 @@ TEST_SUITE("Scene.Systems")
 		REQUIRE(SceneSystemRegistry::Register(MakeRecording("TestB")));
 		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "TestA", "TestC", "Audio", "TestD", "TestB" });
 	}
+#endif
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("A system moves ahead of earlier registered ones only as far as its constraints require")
 	{
 		RecordingSystem::Updates.clear();
@@ -196,6 +227,7 @@ TEST_SUITE("Scene.Systems")
 		}
 		CHECK(RecordingSystem::Updates == std::vector<std::string> { "EarlyInput", "Wind", "CameraFollow" });
 	}
+#endif
 
 	TEST_CASE("A cycle or an unknown name is refused with the systems named, and the registry stays unchanged")
 	{
@@ -244,6 +276,41 @@ TEST_SUITE("Scene.Systems")
 		CHECK_FALSE(SceneSystemRegistry::Unregister("NoSuchSystem"));
 	}
 
+#if ST_TESTS_HAVE_EVERY_MODULE
+	TEST_CASE("Soft constraints order the systems that are registered and ignore the others")
+	{
+		ScopedSystems systems;
+		// Neither TestLate nor TestEarly is registered yet: TestSoft runs where registration order puts it.
+		REQUIRE(systems.Register(MakeSoftRecording("TestSoft", { "TestLate" }, { "TestEarly" })));
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "Audio", "TestSoft" });
+		const std::vector<std::string> absent = SceneSystemRegistry::GetAbsentSoftConstraints();
+		CHECK(absent == std::vector<std::string> { "TestSoft after TestLate", "TestSoft before TestEarly" });
+
+		// Systems registered later pick up the constraints that name them: TestSoft moves after TestLate...
+		REQUIRE(systems.Register(MakeRecording("TestLate")));
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "Audio", "TestLate", "TestSoft" });
+		// ...and before TestEarly, wherever that was registered.
+		REQUIRE(systems.Register(MakeRecording("TestEarly", {}, { "Physics" })));
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "TestLate", "TestSoft", "TestEarly", "Physics", "Audio" });
+		CHECK(SceneSystemRegistry::GetAbsentSoftConstraints().empty());
+
+		// Soft constraints that close a cycle are refused like hard ones, and the registry stays unchanged.
+		const std::vector<std::string> names = GetSystemNames();
+		const uint64_t before = Log::GetBuffer().GetLatestSequence();
+		CHECK_FALSE(SceneSystemRegistry::Register(MakeSoftRecording("TestLate", { "TestEarly" })));
+		CHECK(FindError(before, "Scene system 'TestLate' is not registered: the update order of the scene systems has a cycle") != "");
+		CHECK_FALSE(SceneSystemRegistry::Register(MakeSoftRecording("TestSelf", { "TestSelf" })));
+		CHECK(FindError(before, "scene system 'TestSelf' names itself in its update order") != "");
+		CHECK(GetSystemNames() == names);
+
+		// Soft references never keep a system from going: TestSoft goes on without the systems it names.
+		CHECK(SceneSystemRegistry::Unregister("TestLate"));
+		std::erase(systems.Names, "TestLate");
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "TestSoft", "TestEarly", "Physics", "Audio" });
+		CHECK(SceneSystemRegistry::GetAbsentSoftConstraints() == std::vector<std::string> { "TestSoft after TestLate" });
+	}
+#endif
+
 	TEST_CASE("The registry refuses changes while a scene runs")
 	{
 		const std::vector<std::string> names = GetSystemNames();
@@ -255,8 +322,8 @@ TEST_SUITE("Scene.Systems")
 		const uint64_t before = Log::GetBuffer().GetLatestSequence();
 		CHECK_FALSE(SceneSystemRegistry::Register(MakeRecording("TestA")));
 		CHECK(FindError(before, "Scene system 'TestA' is not registered: ").find("scene(s) are running") != std::string::npos);
-		CHECK_FALSE(SceneSystemRegistry::Unregister("Audio"));
-		CHECK(FindError(before, "Scene system 'Audio' is not unregistered: ").find("scene(s) are running") != std::string::npos);
+		CHECK_FALSE(SceneSystemRegistry::Unregister("Scripting"));
+		CHECK(FindError(before, "Scene system 'Scripting' is not unregistered: ").find("scene(s) are running") != std::string::npos);
 		CHECK(GetSystemNames() == names);
 
 		scene.OnRuntimeStop();
@@ -285,6 +352,7 @@ TEST_SUITE("Scene.Systems")
 		CHECK(typeless.CallsLateUpdate);
 		CHECK(typeless.CallsPausedUpdate);
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 		// The built-ins take part in seven calls of an idle frame: Scripting in all three phases, Animation in OnUpdate,
 		// Physics in OnUpdate and OnFixedUpdate, Audio in OnLateUpdate; a paused frame calls Animation alone.
 		const std::vector<SceneSystemDescriptor>& builtins = SceneSystemRegistry::GetAll();
@@ -293,6 +361,7 @@ TEST_SUITE("Scene.Systems")
 		CHECK((builtins[1].CallsUpdate && !builtins[1].CallsFixedUpdate && !builtins[1].CallsLateUpdate && builtins[1].CallsPausedUpdate));
 		CHECK((builtins[2].CallsUpdate && builtins[2].CallsFixedUpdate && !builtins[2].CallsLateUpdate && !builtins[2].CallsPausedUpdate));
 		CHECK((!builtins[3].CallsUpdate && !builtins[3].CallsFixedUpdate && builtins[3].CallsLateUpdate && !builtins[3].CallsPausedUpdate));
+#endif
 
 		// The scene calls what the descriptors ask for, in frames and in steps of a paused scene.
 		PhaseCounts all;
@@ -336,25 +405,33 @@ TEST_SUITE("Scene.Systems")
 		REQUIRE(systems.Register(MakeSceneSystemDescriptor<RecordingSystem>("TestTyped", true, [](Scene&) { return CreateScope<RecordingSystem>("TestTyped"); })));
 
 		Scene scene;
-		CHECK(scene.GetSystem<PhysicsSystem>() == nullptr);
+		CHECK(scene.GetSystem<ScriptSystem>() == nullptr);
 
 		scene.OnRuntimeStart();
 		CHECK(scene.GetSystem<ScriptSystem>() != nullptr);
+#if ST_WITH_PHYSICS
 		CHECK(scene.GetSystem<PhysicsSystem>() != nullptr);
+#endif
+#if ST_WITH_AUDIO
 		CHECK(scene.GetSystem<AudioSystem>() != nullptr);
+#endif
 		CHECK(scene.GetSystem<RecordingSystem>() != nullptr);
 		// Exact classes only: neither base classes nor unregistered classes are found.
 		CHECK(scene.GetSystem<SceneSystem>() == nullptr);
 		CHECK(scene.GetSystem<OtherRecordingSystem>() == nullptr);
 		scene.OnRuntimeStop();
-		CHECK(scene.GetSystem<PhysicsSystem>() == nullptr);
+		CHECK(scene.GetSystem<ScriptSystem>() == nullptr);
 		CHECK(scene.GetSystem<RecordingSystem>() == nullptr);
 
 		// Simulate mode creates only the systems that run in it.
 		scene.OnRuntimeStart(SceneRuntimeMode::Simulate);
 		CHECK(scene.GetSystem<ScriptSystem>() == nullptr);
+#if ST_WITH_PHYSICS
 		CHECK(scene.GetSystem<PhysicsSystem>() != nullptr);
+#endif
+#if ST_WITH_AUDIO
 		CHECK(scene.GetSystem<AudioSystem>() == nullptr);
+#endif
 		CHECK(scene.GetSystem<RecordingSystem>() != nullptr);
 		scene.OnRuntimeStop();
 	}

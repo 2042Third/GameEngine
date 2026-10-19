@@ -38,6 +38,8 @@ namespace Strata
 	class Scene;
 	class TextRenderer;
 	class Texture;
+	struct PostProcessComponent;
+	struct SkyLightComponent;
 	struct Submesh;
 	struct TextureHold;
 

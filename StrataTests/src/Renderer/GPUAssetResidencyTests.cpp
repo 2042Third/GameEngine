@@ -5,6 +5,7 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Renderer/Material.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/StagingPool.h"
 #include "Strata/Runtime/GameRenderer.h"
 #include "Strata/Runtime/GameRuntime.h"

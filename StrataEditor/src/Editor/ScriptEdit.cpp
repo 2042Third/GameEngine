@@ -7,6 +7,7 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scripting/ScriptSystem.h>
+#include <Strata/Scripting/ScriptingComponents.h>
 
 #include <algorithm>
 

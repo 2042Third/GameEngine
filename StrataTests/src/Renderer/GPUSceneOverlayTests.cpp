@@ -1,6 +1,7 @@
 #include "Renderer/SceneRendererTestUtils.h"
 
 #include "Strata/Renderer/DebugDraw.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/SceneGizmos.h"
 
 #include <cstring>
