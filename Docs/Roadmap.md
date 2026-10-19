@@ -389,8 +389,7 @@ Open items and deferrals later waves own:
   (`PrefabInstances`), not the compiled prototypes scene loads use; per-property overrides and a prefab edit mode are
   later work.
 - Animation and characters: root motion through a character controller is walked at the frame's first fixed step, and on
-  a tilted entity its vertical part becomes the controller's velocity (gravity and the ground then decide the height);
-  culling and drawing skinned proxies on the GPU belongs to `gpu-driven-rendering`.
+  a tilted entity its vertical part becomes the controller's velocity (gravity and the ground then decide the height).
 - Mip streaming: its limit "the longest frame at most 2 ms over the whole-texture baseline's" is gated as a ratio
   (`Mips.MaxFrameRatio`, budgets cannot be negative) and was measured on a shared machine only; the transfer queue stays
   off by default (it loaded the stress game no faster and held more memory).
