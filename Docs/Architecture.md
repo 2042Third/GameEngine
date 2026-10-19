@@ -2109,7 +2109,9 @@ the highest ancestor whose rect depends on its children (a layout group, or a re
 under a plain parent lays out one element; a text change reshapes the text and lays out only when its rect fits it; colors,
 textures and toggles rewrite quads only. Structural changes (elements added, removed, reparented or reordered) rebuild the
 canvas's element list, keep the boxes and shaped texts of the elements that stay, and lay out what moved and the groups it
-left and entered. Layout is lazy: `EnsureLayout(screen)` brings every canvas up to date for a screen when the UI pass or
+left and entered. Only the canvases a move changes rebuild: moving an entity that is no element looks for elements and
+canvases below it, so gameplay reparenting plain entities (an item into a hand, a spawn under a container) costs the UI
+nothing, and a canvas below a moved entity is found as a root again. Layout is lazy: `EnsureLayout(screen)` brings every canvas up to date for a screen when the UI pass or
 the UI system asks. Debug builds compare every cached layout with a full recomputation after each `EnsureLayout`
 (`GameUIScene::Validate`, which names the entity whose write was not signaled); `Tests::CheckSceneCaches` checks it too.
 `GameUISceneStats` (`ElementsLaidOut`, `TextsShaped`, `QuadsBuilt`, `FullRebuilds`) counts the work for tests: an idle

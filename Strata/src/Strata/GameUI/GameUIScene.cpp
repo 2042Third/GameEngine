@@ -459,6 +459,48 @@ namespace Strata
 		return c_NoElement;
 	}
 
+	bool GameUIScene::MarkCanvasesOfMovedSubtree(entt::entity entity)
+	{
+		// An entity no canvas holds as an element moved with its descendants (or is an element no canvas held yet). Only the
+		// canvases its elements left and entered change:
+		// moves of plain entities elsewhere in the scene (meshes attached to a hand, spawns under a container) cost no
+		// canvas anything. Every element below the entity was in the same root canvas, unless a canvas below it holds
+		// them, and a canvas below it may become a root or stop being one: the canvas list is found again then.
+		if (m_Registry->storage<UICanvasComponent>().empty())
+			return false; // No canvas holds elements; one added later rebuilds every canvas
+		bool holdsElements = false;
+		bool leftCanvasMarked = false;
+		std::vector<WalkFrame>& stack = m_WalkScratch;
+		stack.clear();
+		stack.push_back({ entity, c_NoElement });
+		while (!stack.empty())
+		{
+			const entt::entity current = stack.back().Entity;
+			stack.pop_back();
+			if (m_Registry->all_of<UICanvasComponent>(current))
+			{
+				m_CanvasListDirty = true; // Rebuilds every canvas: nothing more to find
+				return true;
+			}
+			if (m_Registry->all_of<UIRectComponent>(current))
+			{
+				holdsElements = true;
+				if (!leftCanvasMarked)
+				{
+					if (const ElementRef* ref = FindRef(current))
+					{
+						m_Canvases[ref->Canvas].StructureDirty = true;
+						leftCanvasMarked = true;
+					}
+				}
+			}
+			const HierarchyComponent& hierarchy = m_Registry->get<HierarchyComponent>(current);
+			for (entt::entity child = hierarchy.FirstChild; child != entt::null; child = m_Registry->get<HierarchyComponent>(child).NextSibling)
+				stack.push_back({ child, c_NoElement });
+		}
+		return holdsElements;
+	}
+
 	void GameUIScene::RebuildCanvasList()
 	{
 		ST_PROFILE_FUNCTION();
@@ -795,20 +837,25 @@ namespace Strata
 					m_CanvasListDirty = true;
 					continue;
 				}
-				const HierarchyComponent& hierarchy = m_Registry->get<HierarchyComponent>(entity);
 				if (const ElementRef* ref = FindRef(entity))
-					m_Canvases[ref->Canvas].StructureDirty = true;
-				else if (hierarchy.ChildCount > 0)
 				{
-					// An entity that is no element moved with its descendants: canvases it carried or held may change.
-					for (Canvas& canvas : m_Canvases)
+					// The canvas it left, and the one it entered (found below). Canvases nested in it may become roots.
+					Canvas& canvas = m_Canvases[ref->Canvas];
+					canvas.StructureDirty = true;
+					for (uint32_t index = ref->Element + 1; index < canvas.Elements[ref->Element].SubtreeEnd; index++)
 					{
-						if (m_Scene->IsDescendantOf(Entity(canvas.Entity, m_Scene), Entity(entity, m_Scene)))
+						if (m_Registry->all_of<UICanvasComponent>(canvas.Elements[index].Entity))
+						{
 							m_CanvasListDirty = true;
-						canvas.StructureDirty = true;
+							break;
+						}
 					}
+					m_PendingStructure.push_back(entity);
 				}
-				m_PendingStructure.push_back(entity);
+				else if (MarkCanvasesOfMovedSubtree(entity))
+				{
+					m_PendingStructure.push_back(entity);
+				}
 			}
 		}
 		m_HierarchyVersion = m_Scene->GetHierarchyVersion();

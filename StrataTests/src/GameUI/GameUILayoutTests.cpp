@@ -585,6 +585,74 @@ TEST_SUITE("GameUI.Dirty")
 		CHECK(error.find(box.GetUUID().ToString()) != std::string::npos);
 	}
 
+	TEST_CASE("Moving plain entities with children costs the canvases nothing unless elements move with them")
+	{
+		Scene scene("Widgets");
+		const Tests::Perf::UIWidgets widgets = Tests::Perf::CreateUIWidgets(scene, 20, 12);
+		// A hand with an item of nested meshes, and a container beside it, as gameplay reparents them.
+		Entity hand = scene.CreateEntity("Hand");
+		Entity container = scene.CreateEntity("Container");
+		Entity item = scene.CreateChildEntity(hand, "Item");
+		scene.CreateChildEntity(scene.CreateChildEntity(item, "Part"), "Detail");
+		GameUIScene& ui = GameUIScene::Get(scene);
+		Frame(ui);
+		ui.TakeStats();
+		for (int move = 0; move < 4; move++)
+		{
+			scene.SetParent(item, move % 2 == 0 ? container : hand, false);
+			scene.SetParent(scene.CreateChildEntity(container, "Spawned"), item, false);
+			Frame(ui);
+			const GameUISceneStats stats = ui.TakeStats();
+			CHECK(stats.QuadsBuilt == 0);
+			CHECK(stats.ElementsLaidOut == 0);
+			CHECK(stats.FullRebuilds == 0);
+		}
+		std::string error;
+		CHECK_MESSAGE(ui.Validate(&error), error);
+	}
+
+	TEST_CASE("Elements below plain entities, and canvases below moved elements, follow their moves")
+	{
+		UITestScene ui;
+		Entity other = ui.Target.CreateEntity("Other Canvas");
+		other.AddComponent<UIRectComponent>();
+		UICanvasComponent& otherCanvas = other.AddComponent<UICanvasComponent>();
+		otherCanvas.ScaleMode = UICanvasScaleMode::ConstantPixelSize;
+		otherCanvas.ScaleFactor = 2.0f;
+		Entity group = ui.Target.CreateChildEntity(ui.Canvas, "Plain Group");
+		Entity child = ui.Add(group, "Child", StretchRect({ 0.0f, 0.0f }, { 0.5f, 1.0f }));
+		GameUIScene& scene = ui.GetUI();
+		CheckBox(ui.Box(child), { 0.0f, 0.0f }, { 960.0f, 1080.0f });
+		// The plain group into the other canvas, then out of every canvas.
+		ui.Target.SetParent(group, other, false);
+		CheckBox(ui.Box(child), { 0.0f, 0.0f }, { 480.0f, 540.0f });
+		ui.Target.SetParent(group, Entity(), false);
+		scene.EnsureLayout({});
+		UICanvasView view;
+		uint32_t element = 0;
+		CHECK_FALSE(scene.FindElement(child.GetHandle(), {}, view, element));
+		ui.Target.SetParent(group, ui.Canvas, false);
+		CheckBox(ui.Box(child), { 0.0f, 0.0f }, { 960.0f, 1080.0f });
+
+		// A canvas nested below an element, and one below a plain group, become roots when what holds them leaves.
+		Entity panel = ui.Add(ui.Canvas, "Panel", StretchRect({ 0.0f, 0.0f }, { 1.0f, 1.0f }));
+		Entity inner = ui.Add(panel, "Inner Canvas", StretchRect({ 0.0f, 0.0f }, { 1.0f, 1.0f }));
+		inner.AddComponent<UICanvasComponent>().ScaleMode = UICanvasScaleMode::ConstantPixelSize;
+		Entity deep = ui.Target.CreateChildEntity(group, "Deep Group");
+		Entity deepCanvas = ui.Add(deep, "Deep Canvas", StretchRect({ 0.0f, 0.0f }, { 1.0f, 1.0f }));
+		deepCanvas.AddComponent<UICanvasComponent>().ScaleMode = UICanvasScaleMode::ConstantPixelSize;
+		CHECK(scene.EnsureLayout({}).size() == 2);
+		ui.Target.SetParent(panel, Entity(), false);
+		CHECK(scene.EnsureLayout({}).size() == 3);
+		ui.Target.SetParent(group, Entity(), false);
+		CHECK(scene.EnsureLayout({}).size() == 4);
+		ui.Target.SetParent(group, other, false);
+		CHECK(scene.EnsureLayout({}).size() == 3);
+		std::string error;
+		CHECK_MESSAGE(scene.Validate(&error), error);
+		Tests::CheckSceneCaches(ui.Target);
+	}
+
 	TEST_CASE("More hierarchy moves than the scene remembers still lay out correctly, at most once whole")
 	{
 		Scene scene("Widgets");

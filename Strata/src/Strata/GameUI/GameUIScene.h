@@ -283,6 +283,8 @@ namespace Strata
 		void ResolveParts(uint32_t canvasIndex);
 		// The root canvas the entity is in (or is), or ~0u.
 		uint32_t FindRootCanvas(entt::entity entity) const;
+		// Marks the canvases changed by the move of an entity no canvas holds; true when it is or holds elements.
+		bool MarkCanvasesOfMovedSubtree(entt::entity entity);
 		const ElementRef* FindRef(entt::entity entity) const;
 		bool DependsOnChildren(uint32_t element, const Canvas& canvas) const;
 		bool IsVisible(const Canvas& canvas, uint32_t element) const;
