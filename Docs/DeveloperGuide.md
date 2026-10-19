@@ -941,7 +941,13 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   (`SaveFiles::ValidateName`: no separators, no "..", no device names) and writes are atomic. Code that runs a game
   in-process (tests, tools) provides both, or the calls fail and are reported.
 - Host function order: the character controller, gamepad, cursor, window, save file and collision layer functions
-  (`CharacterMove` to `PhysicsGetLayerIndex`) are appended to ABI version 1 after the Animator functions.
+  (`CharacterMove` to `PhysicsGetLayerIndex`) are appended to ABI version 1 after the Animator functions, then wave 4's
+  world streaming functions (`WorldRequestCellsAround` to `WorldIsLayerEnabled`).
+- World streaming: `World::RequestCellsAround` (a `WorldCellRequest`, released with `Release`), `IsLoadedAround`,
+  `SetLayerEnabled` and `IsLayerEnabled` (`StrataScript/World.h`) go through the scene service `IWorldStreaming` the
+  World system offers in every running scene; in a scene that streams no world (`IWorldStreaming::IsStreaming` false)
+  every call fails and is reported once. Requests are temporary sources at priority 100 that last until released or play
+  stops; an unknown layer is an answer for `IsLayerEnabled` (nullopt) and misuse for `SetLayerEnabled` (reported).
 - Assets: `Assets::RequestLoad` pins the asset for the playing scene (`ScriptSystem::RequestAsset`; never evicted to meet
   memory budgets, see [Asset pipeline](#asset-pipeline), "Residency") until `Assets::Release` (host function
   `ReleaseAsset`, appended to ABI version 1) or the end of play; requests do not add up.

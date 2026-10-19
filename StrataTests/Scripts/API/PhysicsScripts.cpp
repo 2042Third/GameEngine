@@ -31,27 +31,6 @@ namespace
 		Entity Plain = Scene::FindEntityByName("Plain");
 	};
 
-	// Points the SDK at another host API table while it lives (restoring the engine's on every path).
-	class ScopedHost
-	{
-	public:
-		explicit ScopedHost(const StrataScriptHostAPI* host)
-			: m_Previous(Detail::s_Host)
-		{
-			Detail::s_Host = host;
-		}
-
-		~ScopedHost()
-		{
-			Detail::s_Host = m_Previous;
-		}
-
-		ScopedHost(const ScopedHost&) = delete;
-		ScopedHost& operator=(const ScopedHost&) = delete;
-	private:
-		const StrataScriptHostAPI* m_Previous;
-	};
-
 }
 
 // Body functions and queries through the SDK, over three fixed steps (the physics world exists from the first one on).

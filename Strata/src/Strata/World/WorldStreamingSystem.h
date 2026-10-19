@@ -42,6 +42,7 @@ namespace Strata
 		bool SetLayerEnabled(std::string_view layer, bool enabled) override;
 		std::optional<bool> IsLayerEnabled(std::string_view layer) const override;
 		WorldStreamingStats GetStats() const override;
+		bool IsStreaming() const override { return m_Streamer != nullptr; }
 
 		// The streamer, while the scene streams a world (null otherwise): the cell map reads its cell states.
 		const WorldStreamer* GetStreamer() const { return m_Streamer.get(); }

@@ -180,6 +180,14 @@ the scene has unsaved changes (pass `"force": true` only to throw away edits you
   (`ScreenSpace: false`) uses `FontSize` world units.
 - `script.add {"entity", "class", "fields": {...}}`: asset fields take paths (`"Materials/Red.stmat"`, `"Builtin/Cube"`),
   entity fields take IDs from `entity.create`. Fields left out keep the class defaults.
+- A large level is a world: `world.create {"path": "Worlds/Island", "cellSize": 64}` makes a World asset and its
+  persistent scene (opened), with layers Terrain, Buildings, Props and Gameplay (`world.setLayers` changes them). Keep
+  cameras, lights, game managers and the player in the persistent scene (the default edit layer, "Persistent"); place
+  level content by layer: `world.edit {"editLayer": "Props"}`, then create entities at their positions (each goes into
+  the cell under it; `world.moveEntities` moves existing ones). A `StreamingSource` on the player (or the primary camera)
+  streams the cells around it while the game plays. `scene.save` writes the dirty cells, `world.cook` sizes physics for
+  the busiest radius, and `project.export` cooks and packs the world. Scripts that teleport or spawn far away prefetch
+  first (`World::RequestCellsAround`, `World::IsLoadedAround`, strata-scripting). Worlds stay within 20 km of the origin.
 
 ## 6. Verify: play it and look at it
 

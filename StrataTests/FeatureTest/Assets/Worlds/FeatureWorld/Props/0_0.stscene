@@ -89,6 +89,39 @@
 					}
 				},
 				"ID": "F7E6000000020200"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Cell Script"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "WorldCellFeatures"
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							208.0,
+							0.5,
+							212.0
+						]
+					}
+				},
+				"ID": "F7E6000000030200"
 			}
 		],
 		"Name": "FeatureWorld Props 0_0",

@@ -20,3 +20,4 @@
 #include "StrataScript/Script.h"
 #include "StrataScript/Time.h"
 #include "StrataScript/Value.h"
+#include "StrataScript/World.h"

@@ -450,6 +450,9 @@ namespace Strata
 		virtual bool SetLayerEnabled(std::string_view layer, bool enabled) = 0;
 		virtual std::optional<bool> IsLayerEnabled(std::string_view layer) const = 0;
 		virtual WorldStreamingStats GetStats() const = 0;
+		// Whether the scene streams a world: its first active World component names a World asset. The service exists in every
+		// running scene of an engine with the World module; the calls above fail in one that streams none.
+		virtual bool IsStreaming() const = 0;
 	};
 
 	// The engine's audio output (AudioEngine), which outlives every scene: an engine service (Core/EngineServices.h) the

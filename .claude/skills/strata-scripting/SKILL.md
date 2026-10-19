@@ -163,6 +163,23 @@ std::vector<Entity> nearby = Physics::OverlapSphere(center, 3.0f);
   then use names in code: `Physics::GetLayerIndex("Debris")` (-1 for a name the scene lacks), `1u << layer` as a query
   mask, `Physics::SetLayersCollide(a, b, false)` to let two layers pass through each other while the scene plays (e.g.
   a ghost power-up), `Physics::GetLayersCollide(a, b)`.
+- Worlds (a scene whose World component names a World asset streams its cells around the streaming sources): before a
+  teleport or a spawn far away, prefetch and wait, so the ground there exists and has collision:
+
+  ```cpp
+  m_Prefetch = World::RequestCellsAround(destination, 10.0f); // WorldCellRequest: cells stream before every source's
+  // ... each OnUpdate until it is in:
+  if (World::IsLoadedAround(destination, 10.0f))
+  {
+  	GetEntity().GetRigidBody().Teleport(destination);
+  	m_Prefetch.Release(); // they stay while a source is near
+  }
+  ```
+
+  `World::SetLayerEnabled("Props", false)` unloads a layer's cells (on again with `true`), `World::IsLayerEnabled("Props")`
+  answers `std::optional<bool>` (nullopt for a layer the world lacks). Keep the request in a field as its `GetID()` (an
+  int) if it must survive a hot reload: `WorldCellRequest(static_cast<uint64_t>(id)).Release()`. In a scene that is no
+  world every call fails, reported once.
 - Moving a body by writing its transform works too (kinematic platforms, editor-like placement) but takes effect at the
   next fixed step; `Teleport` is immediate. Results always name the entity that owns the body (the RigidBody entity,
   also for colliders on its children).

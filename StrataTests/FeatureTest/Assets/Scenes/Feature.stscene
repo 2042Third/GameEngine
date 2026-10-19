@@ -2658,6 +2658,13 @@
 					"Name": {
 						"Name": "Streamer"
 					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "WorldFeatures"
+							}
+						]
+					},
 					"StreamingSource": {
 						"Enabled": true,
 						"Layers": "Ground, Props",
