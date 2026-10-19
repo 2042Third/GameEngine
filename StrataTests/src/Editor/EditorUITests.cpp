@@ -3,6 +3,7 @@
 #include "Audio/AudioTestUtils.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/ImGuiHarness.h"
+#include "Editor/UIRectEdit.h"
 #include "EditorLayer.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/ConsolePanel.h"
@@ -23,6 +24,8 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Events/ApplicationEvent.h>
+#include <Strata/GameUI/GameUIComponents.h>
+#include <Strata/GameUI/GameUIScene.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Network/EditorSession.h>
 #include <Strata/Network/RpcClient.h>
@@ -970,7 +973,34 @@ TEST_SUITE("Editor.UI")
 	{
 		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIViewportToolbar"));
 		editor.Frames(2);
-		const auto checkChips = [](std::initializer_list<const char*> chips, const char* imageKey = "Viewport.Image")
+		// What game-ui draws of the active scene's screen-space canvases (elements with an image or a text) where a view shows
+		// them: laid out for `screen`, the game's screen in the image's pixels, mapped into the panel through `area`.
+		const auto getUIRects = [&editor](const UIScreen& screen, const ViewportImageArea& area)
+		{
+			std::vector<std::pair<ImVec2, ImVec2>> rects;
+			Scene& scene = *editor.Context().GetActiveScene();
+			if (!GameUIScene::HasCanvases(scene))
+				return rects;
+			GameUIScene& ui = GameUIScene::Get(scene);
+			for (const UICanvasView& view : ui.EnsureLayout(screen))
+			{
+				if (view.WorldSpace)
+					continue;
+				for (uint32_t element = 0; element < ui.GetElementCount(view); element++)
+				{
+					if (!ui.IsElementVisible(view, element) || !scene.GetRegistry().any_of<UIImageComponent, UITextComponent>(ui.GetElementEntity(view, element)))
+						continue;
+					const UIBox box = ui.GetVisibleBox(view, element);
+					if (!(box.Size.x > 0.0f && box.Size.y > 0.0f))
+						continue;
+					const glm::vec2 min = area.Min + box.Min * view.Scale / area.PixelScale;
+					const glm::vec2 max = area.Min + box.GetMax() * view.Scale / area.PixelScale;
+					rects.emplace_back(ImVec2(min.x, min.y), ImVec2(max.x, max.y));
+				}
+			}
+			return rects;
+		};
+		const auto checkChips = [](std::initializer_list<const char*> chips, const char* imageKey, const std::vector<std::pair<ImVec2, ImVec2>>& uiRects)
 		{
 			const std::optional<UI::ItemProbe::Item> image = UI::ItemProbe::Find(imageKey);
 			REQUIRE(image.has_value());
@@ -983,13 +1013,26 @@ TEST_SUITE("Editor.UI")
 				// Rectangles that do not intersect: the chip ends above the image's first row, so it covers nothing the game
 				// draws in it (its screen-space text, its canvases).
 				CHECK(chip->Max.y <= image->Min.y);
+				for (const auto& [min, max] : uiRects)
+				{
+					CAPTURE(min.x);
+					CAPTURE(min.y);
+					CHECK((chip->Max.x <= min.x || max.x <= chip->Min.x || chip->Max.y <= min.y || max.y <= chip->Min.y));
+				}
 			}
 		};
-		checkChips({ "Viewport.Camera", "Viewport.Grid", "Viewport.Outline", "Viewport.Gizmos", "Viewport.Stats", "Viewport.PreviewLighting",
-			"Viewport.GameUI", "Viewport.DebugView" });
-		// The image keeps the panel's full width and starts below the toolbar.
 		const ViewportPanel* viewport = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
 		REQUIRE(viewport);
+		// A HUD at the top left, where chips over the image were drawn (the feature menu's Play Button is at the top right).
+		editor.Run("ui.create", { { "type", "text" }, { "name", "Score" }, { "anchor", "topLeft" }, { "position", { 8, 8 } } });
+		// The Scene view with the game's UI shown, as edit mode lays it out (the view's image is the game's screen).
+		editor.Run("viewport.setSettings", { { "gameUI", true } });
+		editor.Frames(1);
+		const std::vector<std::pair<ImVec2, ImVec2>> sceneUI = getUIRects(UIRectEdit::GetGameScreen(editor.Context()), viewport->GetImageArea());
+		REQUIRE_FALSE(sceneUI.empty());
+		checkChips({ "Viewport.Camera", "Viewport.Grid", "Viewport.Outline", "Viewport.Gizmos", "Viewport.Stats", "Viewport.PreviewLighting",
+			"Viewport.GameUI", "Viewport.DebugView" }, "Viewport.Image", sceneUI);
+		// The image keeps the panel's full width and starts below the toolbar.
 		const ViewportImageArea& area = viewport->GetImageArea();
 		CHECK(area.Min.y == doctest::Approx(UI::ItemProbe::Find("Viewport.Image")->Min.y));
 
@@ -1000,13 +1043,16 @@ TEST_SUITE("Editor.UI")
 		const GameViewPanel* game = editor.Layer->GetPanels().Get<GameViewPanel>(EditorPanels::c_Game);
 		REQUIRE(game);
 		REQUIRE(game->IsShown());
-		checkChips({ "GameView.Resolution", "GameView.Stats" }, "GameView.Image");
+		// The game's UI is laid out for the Game view's screen (the UI's input screen, at the rendered resolution).
+		const std::vector<std::pair<ImVec2, ImVec2>> gameUI = getUIRects(GameUIScene::GetInputScreen().Screen, game->GetImageArea());
+		REQUIRE_FALSE(gameUI.empty());
+		checkChips({ "GameView.Resolution", "GameView.Stats" }, "GameView.Image", gameUI);
 		REQUIRE(editor.Context().IsGameInputActive());
 		const ViewportImageArea& gameImage = game->GetImageArea();
 		editor.ClickAt(ImVec2(gameImage.Min.x + gameImage.Size.x * 0.5f, gameImage.Min.y + gameImage.Size.y * 0.5f));
 		editor.Frames(1);
 		REQUIRE(editor.Context().IsGameInputActive());
-		checkChips({ "GameView.Resolution", "GameView.Stats" }, "GameView.Image");
+		checkChips({ "GameView.Resolution", "GameView.Stats" }, "GameView.Image", gameUI);
 		REQUIRE(editor.Click("Toolbar.Stop"));
 	}
 
