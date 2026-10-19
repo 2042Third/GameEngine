@@ -1879,8 +1879,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   pendingSteps, running}`, `selection {count, primary}`, `undo {undo, redo}`, `errors` (`unread`: errors and criticals
   logged after the latest message a `log.read` from level Error or below returned, `EditorContext::MarkLogRead`;
   `scriptBuild {failed, errors}`; `scriptFault`, the current fault in one line; `importFailures`, the open project's
-  imports that failed with nobody waiting for them), `assets {ready, loading, importing, scanning, failed}`, `saving` and
-  `editor {launcher}`. `sections: [...]` adds `engine` (`engineCommit`, `platform`), `project`, `selection` and `undo` in
+  imports that failed with nobody waiting for them), `assets {ready, loading, importing, scanning, failed}` (`scanning`:
+  the background scan's `{phase, done, total}`, `CommandUtils::DescribeAssetScan`), `saving` (the saves in flight,
+  `CommandUtils::DescribeSaves`) and `editor {launcher}`. `sections: [...]` adds `engine` (`engineCommit`, `platform`), `project`, `selection` and `undo` in
   full, `sceneLoad`, `memory` and the sections of other editor parts, which add them through
   `EditorContext::SetStatusProvider(section, full, compact)`: `automation`, `assets` (the totals of `asset.stats`),
   `game` (the window requests of the running game, `null` without any, its cursor mode and its save directory),
@@ -2422,11 +2423,12 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
 
 - **Launching waits for progress, not a fixed time.** The editor publishes its session within its startup (its
   project's assets are scanned in the background). `StrataCLI launch` (`CLI::LaunchEditor`) bounds only the wait for the
-  session (`--wait-timeout`); with a project it then polls `editor.status` every 250 ms until `assets.scanning` and
-  `sceneLoad` are null, reporting the progress (stderr; `strata_launch_editor` sends MCP `notifications/progress`,
+  session (`--wait-timeout`); with a project it then polls `editor.status {sections: ["sceneLoad"]}` every 250 ms until
+  `assets.scanning` and `sceneLoad` are null (an editor that refuses `sections` is asked without them), reporting the progress (stderr; `strata_launch_editor` sends MCP `notifications/progress`,
   growing only, when the call names a `progressToken`), and fails, stopping the editor, only when the editor exits or
   nothing progressed for `--stall-timeout` (60 s). `--no-wait-scan` returns at the session. The test executable's fake
-  editor (`STRATA_TEST_FAKE_EDITOR`) reports a scan as `STRATA_TEST_FAKE_SCAN` says (`<milliseconds>` or `stall`).
+  editor (`STRATA_TEST_FAKE_EDITOR`) reports a scan as `STRATA_TEST_FAKE_SCAN` says (`<milliseconds>` or `stall`) and,
+  in its `sceneLoad` section only (like the real compact answer), a start scene's load as `STRATA_TEST_FAKE_SCENE_LOAD` says.
 
 ### Commands and requests
 

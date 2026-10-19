@@ -144,6 +144,12 @@ namespace Strata
 		// subScenes: [{id, scene, name, state, entities}], switching: {scene, progress} or null (a scene the game asked for
 		// loads)}.
 		nlohmann::json DescribeRunningScene(const EditorContext& context);
+		// The saves in flight (DocumentSaver), for editor.status's saving, compact answer included: [{saveId, label, documents,
+		// state, progress}], empty when none writes.
+		nlohmann::json DescribeSaves(const EditorContext& context);
+		// The background scan of the project's assets, for editor.status's assets.scanning, compact answer included: {phase,
+		// done, total}, null when none runs.
+		nlohmann::json DescribeAssetScan(const EditorContext& context);
 
 		// What mutating commands report while the scene is running.
 		std::string GetRunningCopyWarning(const EditorContext& context);

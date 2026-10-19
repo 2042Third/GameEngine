@@ -116,7 +116,7 @@ namespace
 		const Process::RunResult launched = RunCli({ "launch", "--headless", "--project", FileSystem::ToUTF8(project) });
 		REQUIRE_MESSAGE(launched.ExitCode == 0, launched.ErrorOutput);
 		const nlohmann::json opened = Call(project, "scene.open", { { "scene", UUIDToJson(scene) } });
-		const nlohmann::json status = Call(project, "editor.status");
+		const nlohmann::json status = Call(project, "editor.status", { { "sections", { "memory" } } });
 		WorldOpen open;
 		open.Seconds = opened.value("seconds", 0.0);
 		open.MaxFrameMs = opened["frameTimes"].value("maxMs", 0.0);
@@ -169,11 +169,12 @@ TEST_SUITE("PerfGPU.Editor")
 		const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 		REQUIRE_MESSAGE(launched.ExitCode == 0, launched.ErrorOutput);
 		MESSAGE(fmt::format("The full launch (the scan of 30,000 assets and the start scene) took {:.2f} s", seconds));
-		const Process::RunResult status = RunCli({ "call", "editor.status", "--project", FileSystem::ToUTF8(project) });
+		const Process::RunResult status = RunCli({ "call", "editor.status", R"({"sections": ["sceneLoad"]})", "--project", FileSystem::ToUTF8(project) });
 		REQUIRE(status.ExitCode == 0);
 		const std::optional<nlohmann::json> value = JsonRpc::Parse(status.Output);
 		REQUIRE(value.has_value());
 		CHECK((*value)["assets"]["scanning"].is_null());
+		REQUIRE(value->contains("sceneLoad"));
 		CHECK((*value)["sceneLoad"].is_null());
 		Quit(project);
 	}

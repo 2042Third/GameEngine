@@ -408,6 +408,37 @@ TEST_SUITE("CLI.Discovery")
 		REQUIRE(result.EditorProcess->Wait(std::chrono::milliseconds(10000)).has_value());
 	}
 
+	TEST_CASE("Launching waits for the start scene's load, which editor.status reports only in its sceneLoad section")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("LaunchSceneSessions") / "Sessions";
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("LaunchSceneProject");
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
+		Tests::ScopedEnvironmentVariable fakeSceneLoad("STRATA_TEST_FAKE_SCENE_LOAD", "4000");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+
+		EditorLaunchSpecification specification;
+		specification.EditorPath = Tests::GetTestExecutablePath();
+		specification.ProjectDirectory = project;
+		specification.NoGpu = true;
+		std::vector<EditorStartupProgress> progress;
+		specification.OnProgress = [&progress](const EditorStartupProgress& step) { progress.push_back(step); };
+		EditorLaunchResult result = LaunchEditor(specification);
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		REQUIRE_FALSE(progress.empty());
+		CHECK(progress.front().Phase == "OpeningScene");
+		CHECK(progress.front().Message.find("Opening the start scene") != std::string::npos);
+
+		// The launch answered once the scene was open: the status says so too.
+		RpcClient client;
+		REQUIRE_MESSAGE(client.Connect("127.0.0.1", result.Session.Port, result.Session.Token, std::chrono::milliseconds(3000)), client.GetLastError());
+		const RpcResult status = client.Call("editor.status", { { "sections", nlohmann::json::array({ "sceneLoad" }) } }, std::chrono::milliseconds(5000));
+		REQUIRE(status.IsSuccess());
+		CHECK(status.GetValue()["sceneLoad"].is_null());
+		CHECK(client.Call("editor.quit", nlohmann::json::object(), std::chrono::milliseconds(5000)).IsSuccess());
+		client.Close();
+		REQUIRE(result.EditorProcess->Wait(std::chrono::milliseconds(10000)).has_value());
+	}
+
 	TEST_CASE("A launch whose project stops progressing fails naming the stall and stops the editor; without waiting it returns at the session")
 	{
 		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("LaunchStallSessions") / "Sessions";

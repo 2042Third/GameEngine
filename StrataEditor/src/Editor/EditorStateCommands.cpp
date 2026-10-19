@@ -632,8 +632,8 @@ namespace Strata
 					status["undo"]["count"] = undo.GetHistory().size();
 				}
 				status["errors"] = DescribeErrors(context);
-				// Saves running in the background (none: scene.save writes before it answers).
-				status["saving"] = nlohmann::json::array();
+				// Saves running in the background (scene.save, scene.saveAs), so that agents see a save they started without waiting.
+				status["saving"] = DescribeSaves(context);
 				if (wants("sceneLoad"))
 					status["sceneLoad"] = DescribeSceneLoad(context);
 				if (wants("memory"))

@@ -4,6 +4,7 @@
 #include "Editor/SceneEdit.h"
 
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Asset/AssetRegistration.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
@@ -321,6 +322,25 @@ namespace Strata
 				{ "entityCount", scene.GetEntityCount() },
 				{ "subScenes", std::move(subScenes) },
 				{ "switching", std::move(switching) } };
+		}
+
+		nlohmann::json DescribeSaves(const EditorContext& context)
+		{
+			nlohmann::json saves = nlohmann::json::array();
+			for (const DocumentSaveStatus& status : context.GetSaveStatuses())
+			{
+				saves.push_back({ { "saveId", status.ID }, { "label", status.Label }, { "documents", status.Documents },
+					{ "state", DocumentSaveStateToString(status.State) }, { "progress", status.Progress } });
+			}
+			return saves;
+		}
+
+		nlohmann::json DescribeAssetScan(const EditorContext& context)
+		{
+			const std::optional<AssetScanProgress> scan = context.GetAssetScanProgress();
+			if (!scan)
+				return nullptr;
+			return { { "phase", AssetScanPhaseToString(scan->Phase) }, { "done", scan->Done }, { "total", scan->Total } };
 		}
 
 		std::string GetRunningCopyWarning(const EditorContext& context)

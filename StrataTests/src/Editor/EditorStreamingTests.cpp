@@ -261,7 +261,7 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(importSet["budgets"]["importBytes"] == 512 * c_MiB);
 		CHECK(harness.Context.GetAssetManager()->GetImportMemoryStats().Budget == 512 * c_MiB);
 		CHECK(harness.Run("asset.stats")["importMemoryMB"]["budget"].get<double>() == doctest::Approx(512.0));
-		CHECK(harness.Run("editor.status")["assets"]["importMemoryMB"]["budget"].get<double>() == doctest::Approx(512.0));
+		CHECK(harness.Run("editor.status", { { "sections", { "assets" } } })["assets"]["importMemoryMB"]["budget"].get<double>() == doctest::Approx(512.0));
 		CHECK_FALSE(harness.Execute("asset.setBudget", { { "importMB", 0 } }).Success);
 
 		// Values that are not positive numbers change nothing.

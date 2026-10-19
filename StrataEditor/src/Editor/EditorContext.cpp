@@ -170,17 +170,6 @@ namespace Strata
 			return scenes;
 		});
 		SetStatusProvider("recovery", [this]() { return m_Recovery->DescribeStatus(); });
-		// The saves in flight (empty when none writes), so that agents see a save they started without waiting for it.
-		SetStatusProvider("saving", [this]()
-		{
-			nlohmann::json saves = nlohmann::json::array();
-			for (const DocumentSaveStatus& status : m_DocumentSaver.GetActiveStatuses())
-			{
-				saves.push_back({ { "saveId", status.ID }, { "label", status.Label }, { "documents", status.Documents },
-					{ "state", DocumentSaveStateToString(status.State) }, { "progress", status.Progress } });
-			}
-			return saves;
-		});
 		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details). Imports
 		// still running (a project opened with assets to import, re-imports) deliver their assets when they finish; scanning
 		// is the scan of the project's files while it registers them (null: none runs).
@@ -192,9 +181,7 @@ namespace Strata
 			nlohmann::json description = CommandUtils::DescribeAssetStats(manager->GetStats());
 			description["importing"] = m_AssetManager && manager == m_AssetManager ? m_AssetManager->GetPendingImportCount() : 0u;
 			// The background scan of the project's assets, while it runs (commands that need the whole registry wait for it).
-			const std::optional<AssetScanProgress> scan = GetAssetScanProgress();
-			description["scanning"] = scan ? nlohmann::json { { "phase", AssetScanPhaseToString(scan->Phase) }, { "done", scan->Done }, { "total", scan->Total } }
-				: nlohmann::json(nullptr);
+			description["scanning"] = CommandUtils::DescribeAssetScan(*this);
 			// Documents changed on disk whose search of what they reference waits or runs (no import: exports do not wait for it).
 			description["referenceSearches"] = m_AssetManager && manager == m_AssetManager ? m_AssetManager->GetPendingReferenceSearches().size() : size_t(0);
 			// The imports' memory estimates against their budget (EditorAssetManager::SetImportMemoryBudget).
@@ -211,7 +198,7 @@ namespace Strata
 				{ "ready", stats.LoadedAssets },
 				{ "loading", stats.LoadingAssets },
 				{ "importing", m_AssetManager && manager == m_AssetManager ? m_AssetManager->GetPendingImportCount() : 0u },
-				{ "scanning", nullptr },
+				{ "scanning", CommandUtils::DescribeAssetScan(*this) },
 				{ "failed", stats.FailedAssets } };
 		});
 	}

@@ -615,13 +615,15 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 		REQUIRE(session.has_value());
 		// The first answer comes while the project is not ready: its assets are scanned (or, on a fast machine where the scan
 		// just ended, its start scene is still opening; the log below proves the order either way).
-		const nlohmann::json first = Call("editor.status");
+		const nlohmann::json first = Call("editor.status", { { "sections", { "sceneLoad" } } });
+		REQUIRE(first.contains("sceneLoad"));
 		CHECK((!first["assets"]["scanning"].is_null() || !first["sceneLoad"].is_null()));
 		// Edits wait for it (they answer once it is ready: in CI's Windows Debug build, more than the CLI's default 30 s).
 		const nlohmann::json created = CallWaiting("entity.create", { { "name", "After The Scan" } }, std::chrono::minutes(5));
 		CHECK(created.contains("id"));
-		const nlohmann::json ready = Call("editor.status");
+		const nlohmann::json ready = Call("editor.status", { { "sections", { "sceneLoad" } } });
 		CHECK(ready["assets"]["scanning"].is_null());
+		REQUIRE(ready.contains("sceneLoad"));
 		CHECK(ready["sceneLoad"].is_null());
 		CHECK(Call("entity.find", { { "name", "Cube 9999" } })["entities"].size() == 1);
 		CHECK(Call("asset.list", { { "type", "Material" }, { "includeBuiltin", false } })["assets"].size() == 10'000);

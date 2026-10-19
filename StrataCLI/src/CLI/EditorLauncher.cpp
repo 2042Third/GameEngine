@@ -151,12 +151,20 @@ namespace Strata::CLI
 
 		std::optional<EditorStartupProgress> last;
 		auto lastChange = std::chrono::steady_clock::now();
+		// The compact editor.status leaves the start scene's load out: ask for it. An editor from before the sections
+		// refuses the parameter, and reports the load without it.
+		nlohmann::json statusParameters = { { "sections", nlohmann::json::array({ "sceneLoad" }) } };
 		while (true)
 		{
-			const RpcResult status = client.Call("editor.status", nlohmann::json::object(), c_StatusTimeout);
+			const RpcResult status = client.Call("editor.status", statusParameters, c_StatusTimeout);
 			// An editor without the status (an older one) has nothing to wait for.
 			if (status.IsError() && status.GetError().Code == static_cast<int>(JsonRpc::ErrorCode::MethodNotFound))
 				return true;
+			if (status.IsError() && status.GetError().Code == static_cast<int>(JsonRpc::ErrorCode::InvalidParams) && !statusParameters.empty())
+			{
+				statusParameters = nlohmann::json::object();
+				continue;
+			}
 			if (status.IsError())
 			{
 				if (isProcessAlive && !isProcessAlive())
