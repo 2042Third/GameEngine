@@ -2032,6 +2032,11 @@ namespace Strata
 
 		if (m_GPUDrivenFrame)
 		{
+			// After the frame's uploads of what casters are drawn with: which cascades keep their layers (the culling draws
+			// nothing into them).
+			m_CachedCascadeMask = frame.ShadowParams.w > 0.0f ? PrepareShadowCache(renderScene, camera) : 0u;
+			m_CullConstants.CachedCascades = m_CachedCascadeMask;
+			m_Stats.CachedCascadeMask = m_CachedCascadeMask;
 			if (!UploadCullTables(commandList))
 			{
 				gpuTimer.End();
@@ -2069,7 +2074,10 @@ namespace Strata
 			if (m_GPUDrivenFrame)
 				DrawGPUShadows(commandList);
 			else
+			{
+				m_ShadowCacheValid = 0; // The CPU path redraws every layer
 				DrawShadows(commandList, static_cast<uint32_t>(frame.ShadowParams.w));
+			}
 			commandList->endMarker();
 		}
 
@@ -2242,6 +2250,7 @@ namespace Strata
 		m_Device->executeCommandList(commandList);
 		if (m_GPUDrivenFrame)
 			SubmitCullReadback();
+		CommitShadowCache();
 
 		m_Stats.Rendered = true;
 		m_HasRenderedFrame = true;

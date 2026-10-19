@@ -302,7 +302,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		const nlohmann::json& stats = result["renderStats"];
 		INFO(stats.dump(1));
 		for (const char* key : { "gpuDriven", "drawCommands", "draws", "opaqueDraws", "shadowDraws", "instances", "shadowCasters", "triangles", "visibleProxies",
-			"occludedProxies", "occludedCasters", "culledProxies", "instancesPerLod", "lights", "droppedLights", "materials", "pendingAssets", "extractMs", "sortMs", "proxyUpdates",
+			"occludedProxies", "occludedCasters", "cachedCascades", "culledProxies", "instancesPerLod", "lights", "droppedLights", "materials", "pendingAssets", "extractMs", "sortMs", "proxyUpdates",
 			"instanceBytesUploaded", "deferredInstanceBytes", "geometryPool", "gpuMs", "gpuStatsFrame" })
 		{
 			CAPTURE(key);

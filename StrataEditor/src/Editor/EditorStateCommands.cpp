@@ -18,6 +18,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 
 #include <algorithm>
+#include <bit>
 #include <filesystem>
 #include <limits>
 #include <optional>
@@ -275,6 +276,7 @@ namespace Strata
 				{ "visibleProxies", stats.VisibleProxies },
 				{ "occludedProxies", stats.OccludedProxies },
 				{ "occludedCasters", stats.OccludedCasters },
+				{ "cachedCascades", std::popcount(stats.CachedCascadeMask) },
 				{ "culledProxies", stats.CulledInstances },
 				{ "instancesPerLod", std::move(lods) },
 				{ "lights", stats.Lights },
@@ -819,7 +821,8 @@ namespace Strata
 			"asset requests came from the GPU's visibility feedback of an earlier frame, not from the CPU walking the view), drawCommands (draw "
 			"calls the CPU recorded), draws (instanced draws of the view), opaqueDraws, shadowDraws, instances, shadowCasters, triangles, "
 			"visibleProxies, occludedProxies (in the frustum but hidden behind what the view draws: left out on the GPU-driven path), occludedCasters "
-			"(shadow casters hidden from the light behind other casters, per cascade: left out of those cascades on the GPU-driven path), culledProxies, "
+			"(shadow casters hidden from the light behind other casters, per cascade: left out of those cascades on the GPU-driven path), cachedCascades "
+			"(shadow cascades kept from the previous frame: nothing reaching them changed), culledProxies, "
 			"sizeCulledProxies (in view but below a pixel), instancesPerLod, lights, droppedLights, "
 			"materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes (new mesh renderers waiting for "
 			"their upload to the GPU), geometryPool "

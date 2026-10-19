@@ -419,6 +419,8 @@ lights, overlays and text: [Rendering](Docs/DeveloperGuide.md#rendering).
   ([Batching](Docs/DeveloperGuide.md#batching)).
 - Scene shaders work in camera-relative space (`TransformPositionRelative`; rotation-only view matrices): upload anything
   positioned relative to the camera, subtracting in double ([Camera-relative space](Docs/DeveloperGuide.md#camera-relative-space)).
+- Shadow cascades are kept while nothing reaching them changed (`PrepareShadowCache`): a new input of what casters are
+  drawn with changes a version it compares ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
 - What is drawn and what is requested are decided twice, by the CPU path (`SceneRendererExtraction.cpp`) and the GPU's
   culling and visibility feedback (`Cull.comp`): change both, keep shading independent of draw order (no screen-space
   derivatives there), and keep `GPU.SceneRenderer.GPUDriven` and `.Feedback` passing

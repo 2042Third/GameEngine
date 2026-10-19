@@ -227,9 +227,12 @@ TEST_SUITE("GPU.SceneRenderer.Occlusion")
 		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
 		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
 		SlabScene scene(assets);
-		SceneRenderer culled;
+		// Every frame draws the cascades (no layer kept from the previous frame), so each frame's culling is measured.
+		SceneRendererSpecification redrawn;
+		redrawn.CacheShadowCascades = false;
+		SceneRenderer culled(redrawn);
 		culled.SetViewportSize(c_Size, c_Size);
-		SceneRendererSpecification everything;
+		SceneRendererSpecification everything = redrawn;
 		everything.OcclusionCulling = false;
 		SceneRenderer unculled(everything);
 		unculled.SetViewportSize(c_Size, c_Size);
@@ -277,9 +280,11 @@ TEST_SUITE("GPU.SceneRenderer.Occlusion")
 		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
 		SlabScene scene(assets);
 		scene.Slab.SetActive(false);
-		SceneRenderer culled;
+		SceneRendererSpecification redrawn;
+		redrawn.CacheShadowCascades = false;
+		SceneRenderer culled(redrawn);
 		culled.SetViewportSize(c_Size, c_Size);
-		SceneRendererSpecification everything;
+		SceneRendererSpecification everything = redrawn;
 		everything.OcclusionCulling = false;
 		SceneRenderer unculled(everything);
 		unculled.SetViewportSize(c_Size, c_Size);

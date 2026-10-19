@@ -24,6 +24,36 @@ namespace
 		}
 	};
 
+	// A floor with pillars from close by to far away (casters in every cascade), and a large box far away that moves: the
+	// cascades' squares cover the bounding spheres of their view slices, so near things are in every cascade, far ones only
+	// in the last.
+	struct CascadeCacheScene
+	{
+		Scene SceneData;
+		Entity Sun;
+		Entity Mover;
+
+		explicit CascadeCacheScene(SceneTestAssets& assets)
+		{
+			AddNeutralPostProcess(SceneData);
+			// A low sun: long shadows, which show where the far box stands.
+			Sun = AddSun(SceneData, glm::normalize(glm::vec3(-0.8f, -0.6f, -0.1f)), 3.0f);
+			Sun.GetComponent<DirectionalLightComponent>().ShadowDistance = 150.0f;
+			MaterialProperties lit;
+			lit.BaseColor = glm::vec4(0.7f, 0.7f, 0.75f, 1.0f);
+			const AssetHandle material = assets.AddMaterial(lit);
+			AddMesh(SceneData, BuiltinAssets::PlaneMesh, material, glm::vec3(0.0f, 0.0f, -60.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(200.0f);
+			for (uint32_t index = 0; index < 30; index++)
+			{
+				const float distance = 2.0f + static_cast<float>(index * index) * 0.12f;
+				Entity pillar = AddMesh(SceneData, BuiltinAssets::CubeMesh, material, glm::vec3(static_cast<float>(index % 2) * 4.0f - 2.0f, 1.0f, -distance), "Pillar");
+				pillar.GetComponent<TransformComponent>().Scale = glm::vec3(0.6f + distance * 0.02f, 2.0f + distance * 0.05f, 0.6f);
+			}
+			Mover = AddMesh(SceneData, BuiltinAssets::CubeMesh, material, glm::vec3(4.0f, 2.0f, -80.0f), "Mover");
+			Mover.GetComponent<TransformComponent>().Scale = glm::vec3(4.0f);
+		}
+	};
+
 	// Direction a sun travels at an elevation above the horizon (degrees), coming from the given azimuth (degrees
 	// around +Y, 0 = from +X).
 	glm::vec3 SunDirection(float elevation, float azimuth)
@@ -349,6 +379,81 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		const glm::uvec2 cell = ProjectToPixel(camera, glm::vec3(-1.0f, 4.0f, -1.0f), size);
 		CHECK(renderer.GetEntityAt(scene, cell.x, cell.y) == screen);
 		CHECK(renderer.GetEntityAt(scene, hole.x, hole.y) != screen);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Cascades are kept while nothing reaches them, and redrawn when a caster in them moves, the camera or the light")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!Renderer::GetGraphicsDevice().GetInfo().SupportsDrawIndirectFirstInstance)
+			return; // Caching is the GPU-driven path's
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		CascadeCacheScene cacheScene(assets);
+		Scene& scene = cacheScene.SceneData;
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		SceneRenderer cached(specification);
+		specification.CacheShadowCascades = false;
+		SceneRenderer redrawn(specification);
+		constexpr uint32_t size = 128;
+		cached.SetViewportSize(size, size);
+		redrawn.SetViewportSize(size, size);
+		SceneCamera camera = LookAt(glm::vec3(0.0f, 4.0f, 6.0f), glm::vec3(0.0f, 1.0f, -20.0f));
+		camera.Projection = Math::PerspectiveReverseZ(glm::radians(60.0f), 1.0f, 0.1f, 500.0f);
+		camera.Far = 500.0f;
+		const uint32_t allCascades = (1u << specification.ShadowCascades) - 1u;
+
+		// A frame of each: the same image whatever the cached renderer kept; the cascades it kept.
+		ReadbackImage image;
+		const auto frame = [&]()
+		{
+			const ReadbackImage expected = RenderToImage(redrawn, scene, camera);
+			image = RenderToImage(cached, scene, camera);
+			CHECK(MaxDifference(expected, image) <= 1);
+			REQUIRE(cached.GetStats().GPUDriven);
+			return cached.GetStats().CachedCascadeMask;
+		};
+		const auto move = [](Entity entity, const glm::vec3& offset)
+		{
+			entity.GetComponent<TransformComponent>().Translation += offset;
+			entity.MarkModified<TransformComponent>();
+		};
+
+		CHECK(frame() == 0u);           // Nothing drawn yet
+		CHECK(frame() == allCascades);  // Nothing changed
+		// The box's first move: the cache did not follow it before, so its old bounds are not known and every cascade is
+		// redrawn. From then on only the cascades its old or new bounds reach are: the last one, not the first.
+		const uint32_t last = 1u << (specification.ShadowCascades - 1);
+		move(cacheScene.Mover, glm::vec3(2.0f, 0.0f, 0.0f));
+		CHECK(frame() == 0u);
+		const ReadbackImage before = image;
+		move(cacheScene.Mover, glm::vec3(3.0f, 0.0f, 0.0f));
+		const uint32_t kept = frame();
+		CHECK((kept & last) == 0u);
+		CHECK((kept & 1u) != 0u);
+		CHECK(MaxDifference(before, image) > 16); // The box and its shadow moved in view
+		move(cacheScene.Mover, glm::vec3(0.0f, 0.0f, 2.0f));
+		CHECK(frame() == kept);
+		CHECK(frame() == allCascades);
+		// The box goes: what its bounds reached is redrawn without it.
+		cacheScene.Mover.SetActive(false);
+		CHECK(frame() == kept);
+		CHECK(frame() == allCascades);
+
+		// The camera moves, or the light turns: every cascade is drawn again.
+		camera = LookAt(glm::vec3(0.0f, 4.0f, 5.9f), glm::vec3(0.0f, 1.0f, -20.0f));
+		camera.Projection = Math::PerspectiveReverseZ(glm::radians(60.0f), 1.0f, 0.1f, 500.0f);
+		camera.Far = 500.0f;
+		CHECK(frame() == 0u);
+		CHECK(frame() == allCascades);
+		cacheScene.Sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::normalize(glm::vec3(-0.45f, -1.0f, -0.4f)));
+		cacheScene.Sun.MarkModified<TransformComponent>();
+		CHECK(frame() == 0u);
+		CHECK(frame() == allCascades);
+		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

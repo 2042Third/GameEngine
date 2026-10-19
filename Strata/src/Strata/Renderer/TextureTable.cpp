@@ -265,6 +265,8 @@ namespace Strata
 				start = position;
 			}
 		}
+		if (bytes > 0)
+			m_UploadVersion++;
 		if (outBytes)
 			*outBytes = bytes;
 		return true;

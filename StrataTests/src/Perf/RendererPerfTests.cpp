@@ -73,7 +73,7 @@ TEST_SUITE("PerfGPU.Renderer")
 			Scene scene("Cubes");
 			Perf::AddCameraAndLight(scene);
 			Perf::CreateCubeGrid(scene, count);
-			SceneRenderer renderer;
+			SceneRenderer renderer(Perf::MeasuredRendererSpecification());
 			renderer.SetViewportSize(c_Width, c_Height);
 			// The median frame (every attempt renders its own warm-up and measured frames); for 100,000 cubes also the GPU's
 			// median busy time and what timing the GPU costs the CPU per frame (GPUProfiler's own time: writes, resolves).
@@ -122,7 +122,7 @@ TEST_SUITE("PerfGPU.Renderer")
 		Scene scene("Materials");
 		Perf::AddCameraAndLight(scene);
 		Perf::CreateCubeGrid(scene, materials.size(), materials);
-		SceneRenderer renderer;
+		SceneRenderer renderer(Perf::MeasuredRendererSpecification());
 		renderer.SetViewportSize(c_Width, c_Height);
 		// The median frame, and the opaque draws of the last one (the GPU's on the GPU-driven path): batching is material-free,
 		// so the 10,000 materials share the draws of the cube's pipeline state (a count, the same in every frame).
@@ -146,7 +146,7 @@ TEST_SUITE("PerfGPU.Renderer")
 		Ref<Scene> source = CreateRef<Scene>("Cubes");
 		Perf::AddCameraAndLight(*source);
 		Perf::CreateCubeGrid(*source, c_Count);
-		SceneRenderer renderer;
+		SceneRenderer renderer(Perf::MeasuredRendererSpecification());
 		renderer.SetViewportSize(c_Width, c_Height);
 		const SceneCamera camera = GridView(c_Count);
 		// The copy hook's time in Scene::Copy (the render scene's clone), and what the copy's first Render costs beyond the
@@ -183,7 +183,7 @@ TEST_SUITE("PerfGPU.Renderer")
 		Scene scene("UniqueMeshes");
 		Perf::AddCameraAndLight(scene);
 		Perf::CreateUniqueMeshGrid(scene, assets, c_Count);
-		SceneRenderer renderer;
+		SceneRenderer renderer(Perf::MeasuredRendererSpecification());
 		renderer.SetViewportSize(c_Width, c_Height);
 		// The median Render (extraction, recording and submitting) and the draws the CPU recorded: the meshes share the
 		// geometry pool's buffers, so draws follow pipeline states (buckets), not meshes.
@@ -216,7 +216,7 @@ TEST_SUITE("PerfGPU.Renderer")
 			Scene scene("ShadowedCubes");
 			Perf::AddCameraAndLight(scene, 4.0f * halfExtent);
 			Perf::CreateCubeGrid(scene, count);
-			SceneRenderer renderer;
+			SceneRenderer renderer(Perf::MeasuredRendererSpecification());
 			renderer.SetViewportSize(c_Width, c_Height);
 			const char* key = count == 100'000 ? "PerfGPU.Renderer.Render100kCubesShadowed" : "PerfGPU.Renderer.Render300kCubesShadowed";
 			Perf::CheckBudgetConfirmed(key, [&]
@@ -266,7 +266,7 @@ TEST_SUITE("PerfGPU.Renderer")
 		Scene scene("Textures");
 		Perf::AddCameraAndLight(scene);
 		Perf::CreateCubeGrid(scene, c_Textures, materials);
-		SceneRenderer renderer;
+		SceneRenderer renderer(Perf::MeasuredRendererSpecification());
 		renderer.SetViewportSize(c_Width, c_Height);
 		const SceneCamera camera = GridView(c_Textures);
 

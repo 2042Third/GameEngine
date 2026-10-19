@@ -31,6 +31,15 @@ namespace Strata::Tests::Perf
 		double TimerCostMs = 0.0;   // GPUProfilerStats::CPUMilliseconds per measured frame
 	};
 
+	// The renderers whose frames are measured redraw every shadow cascade every frame (SceneRendererSpecification::
+	// CacheShadowCascades off): a still camera over a still scene keeps them, which would leave the shadows' cost out.
+	inline SceneRendererSpecification MeasuredRendererSpecification()
+	{
+		SceneRendererSpecification specification;
+		specification.CacheShadowCascades = false;
+		return specification;
+	}
+
 	// Runs `warmup` then `measured` frames as an application does - the frame profiler's frame (FrameProfiler::Get(), reset
 	// first) around the device's frame (frame pacing) and the renderer's (Renderer::BeginFrame, which hands the GPU times of
 	// completed frames to the profiler) - timing `render` in each. After the last frame it waits for the GPU and runs one

@@ -265,6 +265,7 @@ namespace Strata
 			record.SubmeshCount = entry.SubmeshCount;
 		}
 		m_EntryTable.MarkDirty(handle);
+		m_ContentVersion++;
 	}
 
 	void GeometryPool::ReleaseLayout(Entry& entry)

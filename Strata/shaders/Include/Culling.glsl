@@ -145,6 +145,10 @@ struct CullConstants
 	uint SecondPhaseShadowBuckets; // The dense index of the cascades' first second-phase bucket
 	uint ShadowMapSize;      // Each cascade's texels each way
 	uint ShadowPyramidLevels;
+	uint CachedCascades;     // The cascades that keep their layer: nothing is drawn into them
+	uint Reserved0;
+	uint Reserved1;
+	uint Reserved2;
 };
 
 struct CullCascade

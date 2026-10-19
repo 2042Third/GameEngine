@@ -129,14 +129,15 @@ namespace
 				CHECK(frame.Counts.SkinnedInstances <= reference.Counts.SkinnedInstances);
 			}
 			LastReference = reference.Counts;
-			if (GPU.GetGPUStats().OccludedCasters == 0)
+			if (GPU.GetGPUStats().OccludedCasters == 0 && GPU.GetStats().CachedCascadeMask == 0)
 			{
 				CHECK(frame.Counts.ShadowCasters == reference.Counts.ShadowCasters);
 				CHECK(frame.Counts.ShadowDraws == reference.Counts.ShadowDraws);
 			}
 			else
 			{
-				// The cascades' occlusion culling leaves out casters hidden from the light behind others: the same shadows.
+				// The cascades' occlusion culling leaves out casters hidden from the light behind others, and cascades kept from
+				// the previous frame get no draws: the same shadows.
 				CHECK(frame.Counts.ShadowCasters <= reference.Counts.ShadowCasters);
 				CHECK(frame.Counts.ShadowDraws <= reference.Counts.ShadowDraws);
 			}

@@ -139,6 +139,8 @@ namespace Strata
 		uint32_t GetLODCapacity() const { return static_cast<uint32_t>(m_LODTable.Records.size()); }
 		// Changes whenever a table buffer is replaced.
 		uint64_t GetTableVersion() const { return m_TableVersion; }
+		// Changes whenever a mesh's entry changes (added, removed, its layout or levels written, moved by compaction).
+		uint64_t GetContentVersion() const { return m_ContentVersion; }
 		// Writes the table entries that changed (and replaced buffers whole) into the command list, and the bytes written into
 		// `outBytes` when given. Run before work that reads the tables; false when a buffer could not be created (logged).
 		bool RecordTableUploads(nvrhi::ICommandList* commandList, uint64_t* outBytes = nullptr);
@@ -274,6 +276,7 @@ namespace Strata
 		RangeAllocator m_SubmeshAllocator;
 		RangeAllocator m_LODAllocator;
 		uint64_t m_TableVersion = 1;
+		uint64_t m_ContentVersion = 1;
 		uint32_t m_Growths = 0;
 		uint64_t m_MovedBytes = 0;
 		uint32_t m_Moves = 0;

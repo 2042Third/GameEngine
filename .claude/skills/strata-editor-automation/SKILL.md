@@ -396,7 +396,8 @@ whose level of detail is cross-fading is drawn twice for 16 frames, at both leve
 `shadowCasters`, `triangles`, `visibleProxies`, `culledProxies`, `sizeCulledProxies` (in view but below half a pixel),
 `occludedProxies` (in the frustum but hidden behind what the view draws: the GPU-driven path leaves them out),
 `occludedCasters` (shadow casters hidden from the light behind other casters, counted per cascade: left out of those cascades
-alike), `instancesPerLod`, `lights` (the GPU-driven path counts every point and spot light in view), `droppedLights` (the CPU path's lights beyond its 4,096), `materials`, `pendingAssets`, `extractMs`, `sortMs`,
+alike), `cachedCascades` (shadow cascades kept from the previous frame because nothing reaching them changed: a still view
+draws no shadows), `instancesPerLod`, `lights` (the GPU-driven path counts every point and spot light in view), `droppedLights` (the CPU path's lights beyond its 4,096), `materials`, `pendingAssets`, `extractMs`, `sortMs`,
 `proxyUpdates`, `instanceBytesUploaded`, `deferredInstanceBytes` (new mesh renderers still waiting for their upload to
 the GPU: drawn in a frame or two), `sceneMirrorMB` (GPU memory of the scenes' GPU copies: playing doubles the scene's) and `gpuMs` (the GPU's ms per stage of frame `gpuStatsFrame`). Gate it like the stages: `{"expect": {"/gpu/stages/GPU.Shadows/p50Ms": {"max": 2}}}`. On macOS a
 stage that begins inside a render pass shows its time in the stage before it (`GPU.Transparent` in `GPU.Opaque`). The

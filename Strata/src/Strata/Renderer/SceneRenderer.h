@@ -25,6 +25,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -176,6 +177,13 @@ namespace Strata
 		// its own, so it runs while it pays: while the latest frame that culled the cascades found at least a sixteenth of
 		// their casters hidden, otherwise once every 16 frames to look again (SceneRendererStats::ShadowOcclusionCulled).
 		bool OcclusionCulling = true;
+		// GPU-driven frames redraw a shadow cascade only when something that reaches it changed since the frame that drew it:
+		// the camera (any part of SceneCamera or the viewport), the light or the cascade's square, a caster whose bounds before or
+		// after its change reach the cascade (a caster's first change, the frames before which it was not followed, redraws
+		// every cascade), or what the casters are drawn with (the scene's GPU copy's mesh and material tables, the geometry pool's
+		// tables and, while materials are alpha-masked, the texture table's entries). Other cascades keep their shadow map
+		// layer (SceneRendererStats::CachedCascadeMask): a still camera over a still or local change costs no shadow draws.
+		bool CacheShadowCascades = true;
 	};
 
 	// A material the last frame drew, for streaming its textures at the resolution the screen needs.
@@ -327,6 +335,9 @@ namespace Strata
 		uint32_t EnvironmentUpdates = 0;
 		bool PreviewLighting = false;     // SceneRenderOptions::PreviewEnvironment lit the scene (it has no light of its own)
 		uint32_t ShadowCasters = 0;       // Instances drawn into shadow cascades (summed over cascades)
+		// GPU-driven frames: the cascades (a bit each) that kept their shadow map layer from the previous frame
+		// (SceneRendererSpecification::CacheShadowCascades); the GPU's counts still count their casters.
+		uint32_t CachedCascadeMask = 0;
 		// Casters left out of cascades in which they would span less than a texel (summed over cascades): they would only flicker.
 		uint32_t SubTexelCasters = 0;
 		uint32_t SkinnedInstances = 0;    // Drawn instances of posed skinned meshes (view; also counted in Instances)
@@ -558,6 +569,8 @@ namespace Strata
 		// camera's light-space position (what the GPU culls and fits with, Docs/Architecture.md, "Camera-relative rendering").
 		struct CascadeBox
 		{
+			bool operator==(const CascadeBox&) const = default;
+
 			glm::vec2 Min = glm::vec2(0.0f);
 			glm::vec2 Max = glm::vec2(0.0f);
 			float FarZ = 0.0f;        // Far side of the slice's bounding sphere
@@ -869,6 +882,12 @@ namespace Strata
 		// Creates the cascades' depth pyramids once the shadow map exists (GPU-driven renderers); false when that failed.
 		bool EnsureShadowPyramid();
 		void RunShadowOcclusionPhase(nvrhi::ICommandList* commandList);
+		// The cascades the frame keeps from the previous one (SceneRendererSpecification::CacheShadowCascades), after the frame's
+		// uploads; the cache holds nothing until CommitShadowCache, once the frame's command list was executed.
+		uint32_t PrepareShadowCache(const RenderScene& renderScene, const SceneCamera& camera);
+		void CommitShadowCache();
+		// The cascades (a bit each) a world-space box reaches, as GPU culling places casters in them, with a margin.
+		uint32_t GetCascadesReached(const AABB& worldBounds, const glm::vec3& cameraPosition) const;
 		// The indirect draws of a dense bucket, as GetGPUIndirectPath says: its `slots` (without a GPU-written count), or as many
 		// as the GPU counted.
 		void DrawGPUBucket(nvrhi::ICommandList* commandList, uint32_t dense, uint32_t slots);
@@ -1228,6 +1247,39 @@ namespace Strata
 		bool m_ShadowOcclusionPays = true;
 		uint64_t m_ShadowOcclusionRender = 0;
 		bool m_ShadowOcclusionMeasured = false; // The frame culls its cascades by occlusion, with history
+		// Shadow cascade caching (SceneRendererSpecification::CacheShadowCascades): what each cascade's layer was drawn for
+		// (the camera, the light and the cascade's square), what the casters were drawn with, the proxy log's version read, and
+		// the world bounds of the proxies that changed since the cache began following them (their next change's old bounds).
+		struct ShadowCacheKey
+		{
+			SceneCamera Camera;
+			glm::uvec2 ViewportSize = glm::uvec2(0);
+			glm::mat4 LightView = glm::mat4(1.0f);
+			CascadeBox Box;
+			uint32_t CascadeCount = 0;
+			uint32_t ShadowMapSize = 0;
+			LODCriteria LOD;
+			bool operator==(const ShadowCacheKey& other) const;
+		};
+		struct ShadowCacheContent
+		{
+			uint64_t RenderSceneId = 0;
+			uint64_t TablesVersion = 0;
+			uint64_t PoolContentVersion = 0;
+			uint64_t TextureUploadVersion = 0; // While the scene has alpha-masked materials (0 otherwise)
+			nvrhi::ITexture* ShadowMap = nullptr;
+			bool operator==(const ShadowCacheContent&) const = default;
+		};
+		std::array<ShadowCacheKey, RenderData::c_MaxCascades> m_ShadowCacheKeys = {};
+		std::array<ShadowCacheKey, RenderData::c_MaxCascades> m_ShadowCachePendingKeys = {};
+		ShadowCacheContent m_ShadowCacheContent;
+		ShadowCacheContent m_ShadowCachePendingContent;
+		uint32_t m_ShadowCacheValid = 0;      // The layers that hold what their keys describe (committed)
+		bool m_ShadowCachePending = false;    // The frame drew GPU shadows: CommitShadowCache takes the pending state
+		uint32_t m_CachedCascadeMask = 0;     // The frame's
+		uint64_t m_ShadowCacheProxyVersion = 0;
+		std::unordered_map<uint32_t, AABB> m_ShadowCacheBounds;
+		std::vector<uint32_t> m_ShadowCacheChanges;
 		// The newest visibility feedback read back (ResolveCullCounters), which frames apply until a newer one arrives.
 		struct VisibilityFeedback
 		{

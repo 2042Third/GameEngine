@@ -7,6 +7,9 @@
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/TextureTable.h"
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -40,6 +43,10 @@ namespace Strata
 		// c_ShadowOcclusionProbeFrames frames to look again.
 		constexpr uint64_t c_ShadowOcclusionPaysShare = 16;
 		constexpr uint64_t c_ShadowOcclusionProbeFrames = 16;
+		// Shadow cascade caching follows the old bounds of at most this many proxies that changed (beyond, a change of one it
+		// does not follow redraws every cascade), and tests boxes against the cascades with a margin of this many texels.
+		constexpr size_t c_MaxShadowCacheBounds = 65536;
+		constexpr float c_ShadowCacheMarginTexels = 2.0f;
 
 		// Scene/HZBBuild.comp's push constants.
 		struct DepthPyramidParameters
@@ -1050,10 +1057,148 @@ namespace Strata
 		}
 	}
 
+	bool SceneRenderer::ShadowCacheKey::operator==(const ShadowCacheKey& other) const
+	{
+		const auto sameCamera = [](const SceneCamera& a, const SceneCamera& b)
+		{
+			return a.View == b.View && a.Projection == b.Projection && a.Position == b.Position && a.Near == b.Near && a.Far == b.Far
+				&& a.VerticalFOV == b.VerticalFOV && a.Orthographic == b.Orthographic;
+		};
+		return sameCamera(Camera, other.Camera) && ViewportSize == other.ViewportSize && LightView == other.LightView && Box == other.Box
+			&& CascadeCount == other.CascadeCount && ShadowMapSize == other.ShadowMapSize && LOD.LODThreshold == other.LOD.LODThreshold
+			&& LOD.ErrorThreshold == other.LOD.ErrorThreshold && LOD.ViewportHeight == other.LOD.ViewportHeight;
+	}
+
+	uint32_t SceneRenderer::GetCascadesReached(const AABB& worldBounds, const glm::vec3& cameraPosition) const
+	{
+		if (!worldBounds.IsValid())
+			return 0;
+		// Light view space relative to the camera, as the cascades' squares and the GPU's casters are.
+		const AABB lightBounds = worldBounds.Transformed(m_LightView * glm::translate(glm::mat4(1.0f), -cameraPosition));
+		uint32_t mask = 0;
+		for (uint32_t cascade = 0; cascade < m_CascadeCount; cascade++)
+		{
+			const CascadeBox& box = m_Cascades[cascade];
+			const float margin = c_ShadowCacheMarginTexels * box.WorldPerTexel;
+			if (lightBounds.Max.x < box.RelativeMin.x - margin || lightBounds.Min.x > box.RelativeMax.x + margin
+				|| lightBounds.Max.y < box.RelativeMin.y - margin || lightBounds.Min.y > box.RelativeMax.y + margin
+				|| lightBounds.Max.z < box.RelativeFarZ - margin)
+				continue;
+			mask |= 1u << cascade;
+		}
+		return mask;
+	}
+
+	uint32_t SceneRenderer::PrepareShadowCache(const RenderScene& renderScene, const SceneCamera& camera)
+	{
+		ST_PROFILE_FUNCTION();
+		const uint32_t allCascades = (1u << m_CascadeCount) - 1u;
+		// What the cache held until now: a failed frame leaves nothing (only CommitShadowCache restores it).
+		const uint32_t valid = m_ShadowCacheValid;
+		m_ShadowCacheValid = 0;
+		m_ShadowCachePending = true;
+		ShadowCacheContent& content = m_ShadowCachePendingContent;
+		content = {};
+		content.RenderSceneId = renderScene.GetId();
+		content.TablesVersion = m_SceneGPU->GetTablesVersion();
+		content.PoolContentVersion = Renderer::GetGeometryPool()->GetContentVersion();
+		content.TextureUploadVersion = m_SceneGPU->HasAlphaMaskedMaterials() ? Renderer::GetTextureTable().GetUploadVersion() : 0;
+		content.ShadowMap = m_ShadowMap.Get();
+		for (uint32_t cascade = 0; cascade < m_CascadeCount; cascade++)
+		{
+			ShadowCacheKey& key = m_ShadowCachePendingKeys[cascade];
+			key.Camera = camera;
+			key.ViewportSize = m_ViewportSize;
+			key.LightView = m_LightView;
+			key.Box = m_Cascades[cascade];
+			key.CascadeCount = m_CascadeCount;
+			key.ShadowMapSize = m_Specification.ShadowMapSize;
+			key.LOD = m_LODCriteria;
+		}
+
+		// The proxies that changed since the cache last looked: the cascades their old and new bounds reach are redrawn.
+		const uint64_t proxyVersion = renderScene.GetProxyVersion();
+		uint32_t dirty = 0;
+		m_ShadowCacheChanges.clear();
+		if (!m_Specification.CacheShadowCascades || valid == 0 || !(content == m_ShadowCacheContent))
+		{
+			// Nothing to keep: the changes so far need no following (old bounds start again from the next change).
+			dirty = allCascades;
+			m_ShadowCacheBounds.clear();
+		}
+		else if (proxyVersion != m_ShadowCacheProxyVersion && !renderScene.GetProxyChanges(m_ShadowCacheProxyVersion, m_ShadowCacheChanges))
+		{
+			dirty = allCascades; // More changes than the log keeps
+			m_ShadowCacheBounds.clear();
+		}
+		else
+		{
+			for (const uint32_t proxy : m_ShadowCacheChanges)
+			{
+				const bool alive = proxy < renderScene.GetProxyCapacity() && renderScene.GetEntity(proxy) != entt::null;
+				const AABB bounds = alive ? renderScene.GetWorldBounds(proxy) : AABB();
+				auto it = m_ShadowCacheBounds.find(proxy);
+				if (it == m_ShadowCacheBounds.end())
+					dirty = allCascades; // Its bounds before the change are not known
+				else
+					dirty |= GetCascadesReached(it->second, camera.Position);
+				dirty |= GetCascadesReached(bounds, camera.Position);
+				if (!alive)
+				{
+					if (it != m_ShadowCacheBounds.end())
+						m_ShadowCacheBounds.erase(it);
+				}
+				else if (it != m_ShadowCacheBounds.end())
+					it->second = bounds;
+				else if (m_ShadowCacheBounds.size() < c_MaxShadowCacheBounds)
+					m_ShadowCacheBounds.emplace(proxy, bounds);
+			}
+		}
+		m_ShadowCacheProxyVersion = proxyVersion;
+
+		uint32_t cached = 0;
+		for (uint32_t cascade = 0; cascade < m_CascadeCount; cascade++)
+		{
+			if ((valid & (1u << cascade)) != 0 && (dirty & (1u << cascade)) == 0 && m_ShadowCachePendingKeys[cascade] == m_ShadowCacheKeys[cascade])
+				cached |= 1u << cascade;
+		}
+		return cached;
+	}
+
+	void SceneRenderer::CommitShadowCache()
+	{
+		if (!m_ShadowCachePending)
+			return;
+		m_ShadowCachePending = false;
+		if (!m_Specification.CacheShadowCascades)
+			return;
+		// Every cascade's layer now holds what its key describes: drawn by this frame, or kept for the same key.
+		m_ShadowCacheKeys = m_ShadowCachePendingKeys;
+		m_ShadowCacheContent = m_ShadowCachePendingContent;
+		m_ShadowCacheValid = (1u << m_CascadeCount) - 1u;
+	}
+
 	void SceneRenderer::DrawGPUShadows(nvrhi::ICommandList* commandList)
 	{
-		commandList->clearDepthStencilTexture(m_ShadowMap, nvrhi::AllSubresources, true, 0.0f, false, 0);
 		const RenderData::CullConstants& constants = m_CullConstants;
+		const uint32_t cached = m_CachedCascadeMask;
+		const uint32_t allCascades = (1u << m_CascadeCount) - 1u;
+		if (cached == allCascades)
+		{
+			// Every layer is kept: no draws, and no occlusion culling of the cascades to measure.
+			m_ShadowOcclusionMeasured = false;
+			return;
+		}
+		if (cached == 0)
+			commandList->clearDepthStencilTexture(m_ShadowMap, nvrhi::AllSubresources, true, 0.0f, false, 0);
+		else
+		{
+			for (uint32_t cascade = 0; cascade < m_CascadeCount; cascade++)
+			{
+				if ((cached & (1u << cascade)) == 0)
+					commandList->clearDepthStencilTexture(m_ShadowMap, nvrhi::TextureSubresourceSet(0, 1, cascade, 1), true, 0.0f, false, 0);
+			}
+		}
 		DrawGPUShadowBuckets(commandList, constants.ViewBucketCount, constants.SecondPhaseShadowBuckets);
 		if (constants.ShadowOcclusion != 0)
 		{
@@ -1079,8 +1224,8 @@ namespace Strata
 			const uint32_t bucket = m_CullBuckets[dense];
 			const BucketParts parts = DecodeBucket(bucket);
 			const uint32_t slots = GetBucketSlots(bucket);
-			if (slots == 0 && !count)
-				continue;
+			if ((slots == 0 && !count) || (m_CachedCascadeMask & (1u << parts.Cascade)) != 0)
+				continue; // Nothing to draw, or a kept layer
 			const PipelineKey key { parts.AlphaMask ? Pass::ShadowMasked : Pass::Shadow, parts.DoubleSided, parts.Mirrored,
 				parts.Geometry == RenderData::c_CullGeometrySkinned };
 			const GeometryArena arena = parts.Geometry == RenderData::c_CullGeometryStatic ? GeometryArena::Static : GeometryArena::Skinned;

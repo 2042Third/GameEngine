@@ -1969,7 +1969,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   casters or shadow draws expect at most the CPU path's counts once `SceneRendererGPUStats::OccludedCasters` is not 0 (each
   caster in each cascade is drawn, found hidden, or both in the frame visibility changes); tests of the culling itself
   render until `ShadowOcclusionCulled` (it pauses after a frame that hid nothing). A pass that writes a cascade's depth
-  runs before its pyramid is built (`RunShadowOcclusionPhase`). The occlusion test must stay conservative: a new shadow bias toward the light, or anything
+  runs before its pyramid is built (`RunShadowOcclusionPhase`).
+- Shadow cascades are kept while nothing that reaches them changed (`SceneRendererSpecification::CacheShadowCascades`;
+  Docs/Architecture.md, "Cascades kept from frame to frame"). Anything new that changes what casters are drawn with (their
+  geometry, materials, textures or the shadow pass's inputs) changes a version `PrepareShadowCache` compares, or a still
+  camera keeps showing the old shadows; a change of a caster itself goes through the render scene's proxy log, as every
+  proxy change does. Tests that count shadow draws expect at most the CPU path's counts once
+  `SceneRendererStats::CachedCascadeMask` is not 0, and tests of the cascades' culling turn caching off. The occlusion test must stay conservative: a new shadow bias toward the light, or anything
   else that lets a hidden caster change the map, breaks it.
 - Buckets the frame cannot have get no storage: the CPU lists the present ones (mirrored proxies, double-sided and
   alpha-masked materials, the arenas of its meshes, posed proxies; `RenderSceneStats::MirroredProxies`, `PosedProxies`)

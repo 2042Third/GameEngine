@@ -184,8 +184,14 @@ namespace Strata::RenderData
 		uint32_t SecondPhaseShadowBuckets = 0; // The dense index of the cascades' first second-phase bucket (BucketCount without)
 		uint32_t ShadowMapSize = 0;            // Each cascade's texels each way (the cascade pyramids' level 0 is a quarter of it)
 		uint32_t ShadowPyramidLevels = 0;
+		// The cascades (a bit each) that keep their shadow map layer from the previous frame (SceneRendererSpecification::
+		// CacheShadowCascades): nothing is drawn into them, though their casters still fit their depth ranges.
+		uint32_t CachedCascades = 0;
+		uint32_t Reserved0 = 0; // std140 padding of the last vector
+		uint32_t Reserved1 = 0;
+		uint32_t Reserved2 = 0;
 	};
-	static_assert(sizeof(CullConstants) == 6 * 16 + 3 * 16 + 64 + 64 + 16 + 8 * 16 + 64 + 16);
+	static_assert(sizeof(CullConstants) == 6 * 16 + 3 * 16 + 64 + 64 + 16 + 8 * 16 + 64 + 2 * 16);
 
 	// What a frame's culling counted (read back frames later: SceneRendererGPUStats).
 	struct CullCounters

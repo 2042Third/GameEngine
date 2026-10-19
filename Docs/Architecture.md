@@ -2130,6 +2130,22 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   (`GatherShadowDraws`), the GPU-driven path's shadow culling records them (`u_CasterDepths`, an atomic maximum of
   order-preserving encoded floats, `Include/OrderedFloat.glsl`) before the fit runs. So no frame waits for the GPU and
   both paths build the same matrices from the same inputs.
+- **Cascades kept from frame to frame** (`SceneRendererSpecification::CacheShadowCascades`, on by default; the GPU-driven
+  path's `PrepareShadowCache`, `CommitShadowCache`). A cascade's layer of the shadow map is redrawn only when something
+  that reaches it changed since the frame that drew it; otherwise the culling draws nothing into it
+  (`CullConstants::CachedCascades`) and its layer is neither cleared nor drawn (`SceneRendererStats::CachedCascadeMask`,
+  `renderStats.cachedCascades`). A layer is described by its key (the whole camera and viewport, since the slices and
+  their squares follow both; the light's view; the cascade's square and depth range; the map size and the level-of-detail
+  criteria, since casters choose levels by the view) and by what its casters were drawn with (the render scene, the GPU
+  copy's mesh and material tables version, `GeometryPool::GetContentVersion` and, while materials are alpha-masked,
+  `TextureTable::GetUploadVersion`): a change of either redraws it. Casters that changed are read from the render scene's
+  proxy log: the cascades their world bounds reach, before and after the change (light space relative to the camera, with
+  two texels of margin), are redrawn. The bounds before a change are known only for proxies the cache saw change before
+  (up to 65,536; a static proxy's first change redraws every cascade), and a log that overflowed redraws every cascade.
+  The fit still runs every frame over every caster, so a kept cascade's projection is the one it was drawn with. The
+  cache is committed once the frame's command list was executed (a failed frame keeps nothing), and frames of the CPU
+  path redraw every layer. Perf tests that measure what frames cost turn it off (`Perf::MeasuredRendererSpecification`):
+  a still camera over a still scene would otherwise keep every cascade.
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same
   result on any number of threads), then sorted with a stable radix sort (`Core/RadixSort.h`) of 64-bit keys: cascade,
   alpha mask, winding, culling, mesh slot, submesh and level of detail. The sort reads the keys once to find the bytes

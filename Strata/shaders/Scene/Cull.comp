@@ -419,12 +419,13 @@ void CullProxy(uint proxyIndex)
 	}
 	// Occlusion culled: the first phase draws into each cascade what it held in the previous frame; the second the other
 	// casters it finds visible against the first phase's depth (CullShadowSecondPhase). Frames that draw the cascades whole
-	// record what they drew as the next frame's history (the culling pauses while it does not pay).
+	// record what they drew as the next frame's history (the culling pauses while it does not pay). Cascades that keep their
+	// layer from the previous frame get no draws.
 	if (u_Cull.ShadowOcclusion != 0u)
 		cascadeMask &= GetCascadeVisibility(u_Visibility[proxyIndex], u_Cull.VisibilityParity);
 	else if (IsCounting())
 		SetCascadeVisibility(proxyIndex, cascadeMask);
-	EmitShadowInstances(proxy, entry, fraction, geometry, mirrored, cascadeMask, 0u);
+	EmitShadowInstances(proxy, entry, fraction, geometry, mirrored, cascadeMask & ~u_Cull.CachedCascades, 0u);
 #endif
 }
 
@@ -493,7 +494,7 @@ void CullShadowSecondPhase(uint proxyIndex)
 	uint previousMask = GetCascadeVisibility(u_Visibility[proxyIndex], u_Cull.VisibilityParity);
 	if (IsCounting())
 		SetCascadeVisibility(proxyIndex, visibleMask);
-	uint drawMask = visibleMask & ~previousMask;
+	uint drawMask = visibleMask & ~previousMask & ~u_Cull.CachedCascades;
 	if (drawMask == 0u)
 		return;
 	vec3 center = (proxy.WorldMin + proxy.WorldMax) * 0.5;

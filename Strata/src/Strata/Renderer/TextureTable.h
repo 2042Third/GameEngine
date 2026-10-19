@@ -86,6 +86,8 @@ namespace Strata
 		// Valid once RecordUploads ran; replaced when the table grows (GetBufferVersion changes).
 		nvrhi::IBuffer* GetBuffer() const { return m_Buffer; }
 		uint64_t GetBufferVersion() const { return m_BufferVersion; }
+		// Changes with every RecordUploads that wrote entries: what the GPU samples changed (main thread).
+		uint64_t GetUploadVersion() const { return m_UploadVersion; }
 	private:
 		void MarkDirtyLocked(uint32_t index);
 		void EndFadeLocked(uint32_t index);
@@ -122,6 +124,7 @@ namespace Strata
 		nvrhi::BufferHandle m_Buffer;
 		uint64_t m_BufferCapacity = 0; // Entries
 		uint64_t m_BufferVersion = 0;
+		uint64_t m_UploadVersion = 0;
 		std::vector<GPUEntry> m_UploadScratch;
 		std::vector<uint32_t> m_DirtyScratch;
 	};
