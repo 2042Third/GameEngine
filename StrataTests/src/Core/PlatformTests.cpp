@@ -186,6 +186,16 @@ TEST_SUITE("Core.Platform")
 		CHECK(memory->PeakWorkingSet >= memory->WorkingSet);
 	}
 
+	TEST_CASE("Physical memory is reported, and holds what the process uses")
+	{
+		const std::optional<uint64_t> physical = Platform::GetPhysicalMemorySize();
+		REQUIRE(physical.has_value());
+		CHECK(*physical >= (1ull << 30)); // Every machine the engine supports has a gigabyte
+		const std::optional<ProcessMemoryInfo> memory = Platform::GetProcessMemory();
+		REQUIRE(memory.has_value());
+		CHECK(*physical > memory->WorkingSet);
+	}
+
 	TEST_CASE("Process memory grows with a touched allocation and its peaks keep the growth")
 	{
 		constexpr size_t c_AllocationSize = 256 * 1024 * 1024;

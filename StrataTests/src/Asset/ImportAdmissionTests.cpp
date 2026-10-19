@@ -12,6 +12,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Core/Platform.h>
 
 #include <spdlog/fmt/fmt.h>
 
@@ -46,6 +47,7 @@ namespace
 		static inline uint64_t s_Running = 0;      // The estimates of the imports running now
 		static inline uint32_t s_RunningCount = 0;
 		static inline uint64_t s_MaxRunning = 0;
+		static inline uint64_t s_MaxRunningInBudget = 0; // The largest sum while no import over the budget runs
 		static inline uint32_t s_MaxRunningCount = 0;
 		static inline uint32_t s_Imported = 0;
 		static inline bool s_LargeRanAlone = true;
@@ -82,6 +84,8 @@ namespace
 					s_LargeRanAlone = false;
 				if (estimate > 1000)
 					s_LargeRunning = true;
+				if (!s_LargeRunning)
+					s_MaxRunningInBudget = std::max(s_MaxRunningInBudget, s_Running);
 			}
 			while (!s_Open.load() && !context.IsCancelled())
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -110,6 +114,7 @@ namespace
 			s_Running = 0;
 			s_RunningCount = 0;
 			s_MaxRunning = 0;
+			s_MaxRunningInBudget = 0;
 			s_MaxRunningCount = 0;
 			s_Imported = 0;
 			s_LargeRanAlone = true;
@@ -192,6 +197,7 @@ TEST_SUITE("Asset.ImportAdmission")
 		}, std::chrono::seconds(60)));
 		CHECK(GatedImporter::s_Imported == estimates.size());
 		CHECK(GatedImporter::s_MaxRunning <= 2000);
+		CHECK(GatedImporter::s_MaxRunningInBudget <= 1000);
 		CHECK(GatedImporter::s_LargeRanAlone);
 		stats = manager.GetImportMemoryStats();
 		CHECK(stats.Admitted == 0);
@@ -276,7 +282,13 @@ TEST_SUITE("Asset.ImportAdmission")
 			manager.SetImportMemoryBudget(1500);
 			CHECK(WaitUntil([&]() { return manager.GetImportMemoryStats().Running == 3; }, std::chrono::seconds(10)));
 			CHECK(manager.GetImportMemoryStats().Waiting == 1);
-			// Closing cancels them: the one that waits never runs, and nothing hangs.
+			// Two of the three admitted get the two threads; the third waits for one.
+			CHECK(WaitUntil([]()
+			{
+				std::scoped_lock<std::mutex> lock(GatedImporter::s_Mutex);
+				return GatedImporter::s_RunningCount == 2;
+			}, std::chrono::seconds(10)));
+			// Closing cancels them: the admitted one without a thread and the one that waits never run, and nothing hangs.
 			manager.Close();
 		}
 		CHECK(WaitUntil([]()
@@ -285,13 +297,108 @@ TEST_SUITE("Asset.ImportAdmission")
 			return GatedImporter::s_RunningCount == 0;
 		}, std::chrono::seconds(10)));
 		CHECK(GatedImporter::s_MaxRunningCount <= 3);
+		CHECK(GatedImporter::s_Imported == 2);
+	}
+
+	TEST_CASE("Cancelled imports give their estimates back, whether they run, wait, or were admitted and wait for a thread")
+	{
+		// Two background threads, which the tests holds in turns, so that an admitted import is cancelled before it starts.
+		ScopedJobSystem jobs(2, 1);
+		RegisterGatedImporter();
+		GatedImporter::Reset();
+		const std::filesystem::path root = CreateTemporaryDirectory("ImportAdmissionCancel");
+		REQUIRE(FileSystem::WriteText(root / "Assets" / "A.sttestgated", "800"));
+		REQUIRE(FileSystem::WriteText(root / "Assets" / "B.sttestgated", "500"));
+		EditorAssetManager manager(MakeSpecification(root));
+		manager.SetImportMemoryBudget(1000);
+		GatedImporter::s_Open = true;
+		manager.BeginScan(ScanImports::InBackground);
+		REQUIRE(WaitUntil([&]()
+		{
+			manager.Update();
+			return !manager.IsScanning() && !manager.HasPendingImports();
+		}, std::chrono::seconds(30)));
+		GatedImporter::Reset();
+		const AssetHandle a = manager.FindAssetByPath("A.sttestgated");
+		const AssetHandle b = manager.FindAssetByPath("B.sttestgated");
+		ImportMemoryStats stats;
+		const auto statsAre = [&](uint64_t admitted, uint32_t waiting, uint64_t queued)
+		{
+			manager.Update();
+			stats = manager.GetImportMemoryStats();
+			return stats.Admitted == admitted && stats.Waiting == waiting && stats.Queued == queued;
+		};
+		const auto backgroundIdleBut = [](uint32_t running)
+		{
+			const JobPoolStats background = JobSystem::GetStats().Background;
+			return background.RunningJobs == running && background.QueuedJobs == 0;
+		};
+
+		// A runs, held at the gate; B waits for room without a thread.
+		REQUIRE(manager.ReimportAssetInBackground(a));
+		REQUIRE(WaitUntil([]()
+		{
+			std::scoped_lock<std::mutex> lock(GatedImporter::s_Mutex);
+			return GatedImporter::s_RunningCount == 1;
+		}, std::chrono::seconds(10)));
+		REQUIRE(manager.ReimportAssetInBackground(b));
+		REQUIRE(WaitUntil([&]() { return statsAre(800, 1, 500) && backgroundIdleBut(1); }, std::chrono::seconds(10)));
+
+		// B imported again while it waits: the replaced import leaves the queue, the new one (B2) waits in its place.
+		REQUIRE(manager.ReimportAssetInBackground(b));
+		REQUIRE(WaitUntil([&]() { return statsAre(800, 1, 500) && backgroundIdleBut(1); }, std::chrono::seconds(10)));
+
+		// Both threads held: the free one by a blocker, A's by a second blocker once A ends.
+		std::atomic<bool> release = false;
+		std::atomic<uint32_t> blocking = 0;
+		const auto blocker = [&]()
+		{
+			blocking++;
+			while (!release.load())
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		};
+		const JobHandle first = JobSystem::Submit(blocker, JobPriority::Background);
+		REQUIRE(WaitUntil([&]() { return blocking.load() == 1; }, std::chrono::seconds(10)));
+		const JobHandle second = JobSystem::Submit(blocker, JobPriority::Background);
+
+		// A imported again while it runs: cancelled, it gives its 800 back, which admits B2 (500), whose job then waits for a
+		// thread behind the new import of A (A2).
+		REQUIRE(manager.ReimportAssetInBackground(a));
+		CHECK(WaitUntil([&]() { return blocking.load() == 2 && statsAre(500, 0, 0); }, std::chrono::seconds(10)));
+		// B imported again while admitted, before its job starts: B2 gives its 500 back when the job finds it cancelled.
+		REQUIRE(manager.ReimportAssetInBackground(b));
+		release = true;
+		first.Wait();
+		second.Wait();
+		// A2 (800) and B3 (500) do not fit together: whichever asked first runs, the other waits for it.
+		const bool settled = WaitUntil([&]() { return statsAre(800, 1, 500) || statsAre(500, 1, 800); }, std::chrono::seconds(10));
+		INFO("Admitted ", stats.Admitted, ", waiting ", stats.Waiting, ", queued ", stats.Queued);
+		CHECK(settled);
+
+		GatedImporter::s_Open = true;
+		REQUIRE(WaitUntil([&]()
+		{
+			manager.Update();
+			return !manager.HasPendingImports();
+		}, std::chrono::seconds(30)));
+		CHECK(statsAre(0, 0, 0));
+		CHECK(manager.GetImportMemoryStats().Running == 0);
+		// A (cancelled at the gate), A2 and B3 ran; the B and B2 that were replaced never did.
+		CHECK(GatedImporter::s_Imported == 3);
+		CHECK(GatedImporter::s_MaxRunningInBudget <= 1000);
+		CHECK(manager.GetImportInfo(a).Error.empty());
+		CHECK(manager.GetImportInfo(b).Error.empty());
+	}
+
+	TEST_CASE("The default budget is a quarter of physical memory, between 1 and 4 GiB")
+	{
+		const std::optional<uint64_t> physical = Platform::GetPhysicalMemorySize();
+		REQUIRE(physical.has_value());
+		CHECK(EditorAssetManager::GetDefaultImportMemoryBudget() == std::clamp<uint64_t>(*physical / 4, 1ull << 30, 4ull << 30));
 	}
 
 	TEST_CASE("Estimates come from the source's header: textures by their pixels, glTF by their buffers and images, the rest by their size")
 	{
-		CHECK(EditorAssetManager::GetDefaultImportMemoryBudget() >= (1ull << 30));
-		CHECK(EditorAssetManager::GetDefaultImportMemoryBudget() <= (4ull << 30));
-
 		const std::filesystem::path assets = CreateTemporaryDirectory("ImportEstimates") / "Assets";
 		const auto write = [&](const std::string& path, std::span<const uint8_t> bytes)
 		{
