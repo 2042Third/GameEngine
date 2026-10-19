@@ -1,7 +1,13 @@
 [
-	{ "command": "scene.open", "parameters": { "scene": "Scenes/Feature.stscene" } },
-	{ "command": "script.load", "parameters": { "path": "$<TARGET_FILE:StrataTestScriptsFeatureTest>" },
+	{ "command": "scene.new", "parameters": { "force": true } },
+	{ "command": "script.load", "parameters": { "path": "$<TARGET_FILE:StrataTestScriptsAPI>" },
 		"expect": { "/classes": { "min": 1 } } },
+	{ "command": "entity.create", "parameters": { "name": "Ground", "components": {
+		"Transform": { "Translation": [ 0, -0.5, 0 ] }, "BoxCollider": { "HalfExtents": [ 20, 0.5, 20 ] } } } },
+	{ "command": "entity.create", "parameters": { "name": "Hero", "components": { "CharacterController": {} } }, "bind": { "hero": "/id" } },
+	{ "command": "script.add", "parameters": { "entity": { "$ref": "hero" }, "class": "KeyboardWalker" } },
+	{ "command": "entity.create", "parameters": { "name": "Ball", "components": {
+		"Transform": { "Translation": [ 30, 40, 0 ] }, "RigidBody": {}, "SphereCollider": {} } }, "bind": { "ball": "/id" } },
 	{ "command": "play.start" },
 	{ "command": "input.sequence",
 		"parameters": {
@@ -10,13 +16,18 @@
 				{ "step": 40, "key": "Space" },
 				{ "step": 60, "command": "input.mouseMove", "parameters": { "position": [ 100, 50 ] } } ],
 			"steps": 150,
-			"observe": [ { "entity": "F7E0000000000012", "world": true } ] },
+			"observe": [
+				{ "entity": { "$ref": "hero" }, "world": true },
+				{ "entity": { "$ref": "hero" }, "script": "KeyboardWalker", "field": "Jumps" },
+				{ "entity": { "$ref": "ball" }, "world": true } ] },
 		"expect": {
 			"/stepsRun": { "equals": 150 },
 			"/interrupted": { "equals": false },
 			"/samples/0/step": { "equals": 150 },
-			"/samples/0/values/0/value/position/0": { "min": -4.05, "max": -3.95 },
-			"/samples/0/values/0/value/position/1": { "min": 1.6354, "max": 1.6374 } } },
+			"/samples/0/values/0/value/position/0": { "min": -0.0005, "max": 0.0005 },
+			"/samples/0/values/0/value/position/2": { "min": -1.5005, "max": -1.4995 },
+			"/samples/0/values/1/value": { "equals": 1 },
+			"/samples/0/values/2/value/position/1": { "min": 10.398, "max": 10.408 } } },
 	{ "command": "input.state", "expect": { "/holds": { "equals": [] }, "/sequenceRunning": { "equals": false } } },
 	{ "command": "play.stop" }
 ]

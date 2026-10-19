@@ -1918,7 +1918,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (resumed at the end if it ran) and runs exactly one step per frame, giving each step its events (`key`, `mouseButton`,
   `gamepadButton` with `action` and a tap's `steps`; `gamepadAxis`; `mouseMove`; `scroll`; `command`: any `input.*`
   command, run with `wait: false`), so the game ends in the same state whatever the frame rate (`Editor.Input` compares
-  frames of 1, 16.7 and 50 ms bit for bit; CTest `StrataEditor.InputSequence` headless and windowed). `observe` samples
+  frames of 1, 16.7 and 50 ms bit for bit; CTests `StrataEditor.InputSequence` and `InputSequenceWindowed` walk a character
+  exactly 1.5 m with a 30-step W through the real editor, headless and in a window). `observe` samples
   component properties, script fields or world transforms every few steps and at the end. Its holds are its own, released
   at its end unless `keepHeld`; a play stop or a resume fails it with `stepsRun`, and `play.step` and another sequence are
   refused while it runs. A `command` event's parameters are checked against its command's schema up front

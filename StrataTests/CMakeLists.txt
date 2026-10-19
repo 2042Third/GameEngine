@@ -632,8 +632,9 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 endif()
 
 # input.sequence through the real editor (Editor/InputSequenceCommands.json.in, on a copy of the feature project): the same
-# sequence of input ends with the feature scene's ball at the same place headless (60 frames per second) and in a window
-# (an unthrottled --frames run), as it runs one fixed step per frame whatever the frame rate.
+# sequence of input walks the API module's KeyboardWalker exactly 1.5 m (W held for 30 steps), makes it jump once and
+# leaves a falling ball at the same height headless (60 frames per second) and in a window (an unthrottled --frames run,
+# where the window's own input must not override the simulated keys), as it runs one fixed step per frame.
 if(TARGET StrataEditor)
 	set(STRATA_INPUT_SEQUENCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/InputSequenceRun")
 	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/InputSequenceCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/InputSequenceCommands.json.configured" @ONLY)
