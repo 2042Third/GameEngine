@@ -55,6 +55,19 @@ namespace Strata
 		std::vector<ImportDependency> Dependencies; // Filled by ReadImportDependency
 	};
 
+	// What an import's memory estimate reads (AssetImporter::EstimateImportMemory): the source's first bytes and size and,
+	// where they do not tell, more of the source or the files it names (ReadEstimateBytes).
+	struct ImportEstimateSource
+	{
+		std::span<const uint8_t> Head;        // The source's first bytes: 64 KiB (c_AssetPrefixHeadBytes), all of a smaller file
+		uint64_t Size = 0;                    // Of the whole source
+		std::filesystem::path Path;           // Absolute path of the source; empty: nothing beyond Head can be read
+		std::filesystem::path AssetDirectory; // Project asset root: estimates read no file outside it
+		// Reads at most `maxBytes` from `offset` of a file of the project; null reads it directly. The editor's asset manager
+		// reads under its shared file lock.
+		std::function<std::optional<std::vector<uint8_t>>(const std::filesystem::path& absolutePath, uint64_t offset, uint64_t maxBytes)> Read;
+	};
+
 	struct ImportContext
 	{
 		AssetHandle Handle = UUID::Null();    // The asset being imported; sub-asset handles derive from it
@@ -113,11 +126,12 @@ namespace Strata
 
 		virtual bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const = 0;
 
-		// About the memory an import of the source takes at its peak, in bytes, from its first bytes (`head`: up to
-		// c_AssetPrefixHeadBytes, all of a smaller file), its size and its settings: background imports start only while the
-		// estimates of those that run fit the import memory budget (EditorAssetManager::SetImportMemoryBudget). The default:
-		// four times the source's size.
-		virtual uint64_t EstimateImportMemory(std::span<const uint8_t> head, uint64_t sourceSize, const nlohmann::json& settings) const;
+		// About the memory an import of the source takes at its peak, in bytes, from its first bytes, its size and its
+		// settings, and what else of it or of the files it names the estimate reads (ReadEstimateBytes; reading a file's
+		// header is cheap, reading all of a large one is not): background imports start only while the estimates of those
+		// that run fit the import memory budget (EditorAssetManager::SetImportMemoryBudget). The default: four times the
+		// source's size.
+		virtual uint64_t EstimateImportMemory(const ImportEstimateSource& source, const nlohmann::json& settings) const;
 	};
 
 	// Builds the properties of AssetImporter::GetSettingsProperties: one entry per setting (its type, the value it takes
@@ -180,6 +194,14 @@ namespace Strata
 
 	// Reads the source file of an import (through ImportContext::ReadFile); null when it cannot be read.
 	std::optional<std::vector<uint8_t>> ReadImportSource(const ImportContext& context);
+
+	// For an import's memory estimate: at most `maxBytes` from `offset` of the source or a file it names (through
+	// ImportEstimateSource::Read). Only regular files inside the asset directory, also after resolving symbolic links, are
+	// read; null for anything else and when nothing can be read beyond the head.
+	std::optional<std::vector<uint8_t>> ReadEstimateBytes(const ImportEstimateSource& source, const std::filesystem::path& path, uint64_t offset,
+		uint64_t maxBytes);
+	// The size of a file ReadEstimateBytes would read; null for any other.
+	std::optional<uint64_t> GetEstimateFileSize(const ImportEstimateSource& source, const std::filesystem::path& path);
 
 	// Reads a file an import uses besides its source (external buffers, images) and records it in the result's
 	// dependencies, also when it is missing. Only regular files inside the asset directory, also after resolving

@@ -4,6 +4,7 @@
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetImporter.h>
+#include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Asset/GltfImporter.h>
 #include <Strata/Asset/TextureImporter.h>
@@ -61,9 +62,9 @@ namespace
 			return std::stoull(std::string(text));
 		}
 
-		uint64_t EstimateImportMemory(std::span<const uint8_t> head, uint64_t, const nlohmann::json&) const override
+		uint64_t EstimateImportMemory(const ImportEstimateSource& source, const nlohmann::json&) const override
 		{
-			return ParseEstimate(std::string_view(reinterpret_cast<const char*>(head.data()), head.size()));
+			return ParseEstimate(std::string_view(reinterpret_cast<const char*>(source.Head.data()), source.Head.size()));
 		}
 
 		bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const override
@@ -286,35 +287,109 @@ TEST_SUITE("Asset.ImportAdmission")
 		CHECK(GatedImporter::s_MaxRunningCount <= 3);
 	}
 
-	TEST_CASE("Estimates come from the source's header: textures by their pixels, glTF by their buffers, the rest by their size")
+	TEST_CASE("Estimates come from the source's header: textures by their pixels, glTF by their buffers and images, the rest by their size")
 	{
 		CHECK(EditorAssetManager::GetDefaultImportMemoryBudget() >= (1ull << 30));
 		CHECK(EditorAssetManager::GetDefaultImportMemoryBudget() <= (4ull << 30));
 
+		const std::filesystem::path assets = CreateTemporaryDirectory("ImportEstimates") / "Assets";
+		const auto write = [&](const std::string& path, std::span<const uint8_t> bytes)
+		{
+			REQUIRE(FileSystem::CreateDirectories((assets / FileSystem::FromUTF8(path)).parent_path()));
+			REQUIRE(FileSystem::WriteBytes(assets / FileSystem::FromUTF8(path), bytes));
+		};
+		// The estimate the asset manager asks for: the file's first 64 KiB, its size, and reads of it and of what it names.
+		std::vector<uint8_t> head;
+		const auto source = [&](const std::filesystem::path& file)
+		{
+			head = FileSystem::ReadBytesPrefix(file, c_AssetPrefixHeadBytes).value_or(std::vector<uint8_t>());
+			ImportEstimateSource estimated;
+			estimated.Head = head;
+			estimated.Size = FileSystem::GetFileSize(file).value_or(0);
+			estimated.Path = file;
+			estimated.AssetDirectory = assets;
+			return estimated;
+		};
+		const auto bytesOf = [](std::string_view text) { return std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(text.data()), text.size()); };
+
+		// Textures: 20 bytes per pixel, from the header.
 		const TextureImporter texture;
 		const std::vector<uint8_t> png = CreateSolidPNG(64, 32, 1, 2, 3);
-		CHECK(texture.EstimateImportMemory(png, png.size(), nlohmann::json::object()) == 64ull * 32 * 20);
+		ImportEstimateSource inMemory;
+		inMemory.Head = png;
+		inMemory.Size = png.size();
+		CHECK(texture.EstimateImportMemory(inMemory, nlohmann::json::object()) == 64ull * 32 * 20);
+		// No header to be found: 50 times the size.
 		const std::vector<uint8_t> garbage = { 1, 2, 3, 4 };
-		CHECK(texture.EstimateImportMemory(garbage, 1000, nlohmann::json::object()) == 4000);
+		inMemory.Head = garbage;
+		inMemory.Size = 1000;
+		CHECK(texture.EstimateImportMemory(inMemory, nlohmann::json::object()) == 50'000);
 
-		// A .glb whose JSON names a buffer of 1,000,000 bytes and an image of 50,000 bytes in a buffer view.
-		const std::string json = R"({"asset":{"version":"2.0"},"buffers":[{"byteLength":1000000}],"bufferViews":[{"buffer":0,"byteLength":50000}],"images":[{"bufferView":0,"mimeType":"image/png"}]})";
-		BinaryWriter glb;
-		glb.WriteBytes("glTF", 4);
-		glb.Write(uint32_t(2));
-		glb.Write(uint32_t(0));
-		glb.Write(static_cast<uint32_t>(json.size()));
-		glb.WriteBytes("JSON", 4);
-		glb.WriteBytes(json.data(), json.size());
+		// A JPEG whose frame header (4096 x 2048) follows 100 KB of metadata segments (an EXIF thumbnail, XMP), past the
+		// head: larger prefixes are read until it shows.
+		std::vector<uint8_t> jpeg = { 0xFF, 0xD8 };
+		for (int segment = 0; segment < 2; segment++)
+		{
+			const uint16_t length = 50'000;
+			jpeg.insert(jpeg.end(), { 0xFF, 0xE1, static_cast<uint8_t>(length >> 8), static_cast<uint8_t>(length & 0xFF) });
+			jpeg.resize(jpeg.size() + length - 2, 0x20);
+		}
+		jpeg.insert(jpeg.end(), { 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x08, 0x00, 0x10, 0x00, 0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01 });
+		jpeg.resize(jpeg.size() + 4'000'000, 0x55); // The scan data an image this large would have, about
+		write("Photos/Late.jpg", jpeg);
+		CHECK(texture.EstimateImportMemory(source(assets / "Photos" / "Late.jpg"), nlohmann::json::object()) == 4096ull * 2048 * 20);
+
+		// A .glb whose JSON names a buffer of 1,000,000 bytes and a 64 x 32 PNG in a view of its binary chunk.
 		const GltfImporter gltf;
-		// Twice the buffer and eight times the image: 2,400,000, unless four times the source's size is more.
-		CHECK(gltf.EstimateImportMemory(glb.GetData(), 100'000, nlohmann::json::object()) == 2'400'000);
-		CHECK(gltf.EstimateImportMemory(glb.GetData(), 1'100'000, nlohmann::json::object()) == 4'400'000);
-		// A head that does not hold the document: four times the size.
-		CHECK(gltf.EstimateImportMemory(std::span<const uint8_t>(glb.GetData().data(), 30), 100'000, nlohmann::json::object()) == 400'000);
-		// A .gltf held whole by its head, whose lengths are crafted to wrap a sum around: the estimate saturates.
+		const auto makeGlb = [](const std::string& json, std::span<const uint8_t> binary)
+		{
+			BinaryWriter glb;
+			glb.WriteBytes("glTF", 4);
+			glb.Write(uint32_t(2));
+			glb.Write(uint32_t(0));
+			glb.Write(static_cast<uint32_t>(json.size()));
+			glb.WriteBytes("JSON", 4);
+			glb.WriteBytes(json.data(), json.size());
+			glb.Write(static_cast<uint32_t>(binary.size()));
+			glb.WriteBytes("BIN\0", 4);
+			glb.WriteBytes(binary.data(), binary.size());
+			return glb.GetData();
+		};
+		const std::string embeddedJson = fmt::format(R"({{"asset":{{"version":"2.0"}},"buffers":[{{"byteLength":1000000}}],"bufferViews":[{{"buffer":0,"byteOffset":8,"byteLength":{}}}],"images":[{{"bufferView":0,"mimeType":"image/png"}}]}})", png.size());
+		std::vector<uint8_t> binary(8, 0);
+		binary.insert(binary.end(), png.begin(), png.end());
+		write("Models/Embedded.glb", makeGlb(embeddedJson, binary));
+		// Twice the buffer and the image by its header.
+		CHECK(gltf.EstimateImportMemory(source(assets / "Models" / "Embedded.glb"), nlohmann::json::object()) == 2'000'000 + 64ull * 32 * 20);
+
+		// A .gltf with a buffer file and images beside it (one named with an escaped space), one of them the JPEG above and
+		// one outside the asset directory (never read: its import fails).
+		REQUIRE(FileSystem::WriteBytes(assets.parent_path() / "Outside.png", CreateSolidPNG(256, 256, 0, 0, 0)));
+		const std::vector<uint8_t> wide = CreateSolidPNG(128, 16, 4, 5, 6);
+		write("Models/Textures/Wide One.png", wide);
+		const std::string separate = R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Separate.bin","byteLength":3000}],)"
+			R"("images":[{"uri":"Textures/Wide%20One.png"},{"uri":"../Photos/Late.jpg"},{"uri":"../../Outside.png"}]})";
+		write("Models/Separate.gltf", bytesOf(separate));
+		CHECK(gltf.EstimateImportMemory(source(assets / "Models" / "Separate.gltf"), nlohmann::json::object()) == 6000 + 128ull * 16 * 20 + 4096ull * 2048 * 20);
+
+		// A .gltf larger than the head is read whole; one larger than c_MaxEstimatedDocumentBytes counts by its size.
+		const std::string padded = R"({"asset":{"version":"2.0","extras":")" + std::string(200'000, 'x') + R"("},"buffers":[{"byteLength":10000000}]})";
+		write("Models/Padded.gltf", bytesOf(padded));
+		CHECK(gltf.EstimateImportMemory(source(assets / "Models" / "Padded.gltf"), nlohmann::json::object()) == 20'000'000);
+		ImportEstimateSource unread = source(assets / "Models" / "Padded.gltf");
+		unread.Size = GltfImporter::c_MaxEstimatedDocumentBytes + 1;
+		CHECK(gltf.EstimateImportMemory(unread, nlohmann::json::object()) == unread.Size * 4);
+		// Only the head, nothing to read: four times the size.
+		const std::vector<uint8_t> glb = makeGlb(embeddedJson, binary);
+		ImportEstimateSource cut;
+		cut.Head = std::span<const uint8_t>(glb.data(), 30);
+		cut.Size = 100'000;
+		CHECK(gltf.EstimateImportMemory(cut, nlohmann::json::object()) == 400'000);
+		// A .gltf whose lengths are crafted to wrap a sum around: the estimate saturates.
 		const std::string huge = R"({"asset":{"version":"2.0"},"buffers":[{"byteLength":18446744073709551615},{"byteLength":9223372036854775807}]})";
-		const std::span<const uint8_t> hugeBytes(reinterpret_cast<const uint8_t*>(huge.data()), huge.size());
-		CHECK(gltf.EstimateImportMemory(hugeBytes, huge.size(), nlohmann::json::object()) == UINT64_MAX);
+		ImportEstimateSource crafted;
+		crafted.Head = bytesOf(huge);
+		crafted.Size = huge.size();
+		CHECK(gltf.EstimateImportMemory(crafted, nlohmann::json::object()) == UINT64_MAX);
 	}
 }

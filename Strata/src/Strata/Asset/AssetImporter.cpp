@@ -69,9 +69,9 @@ namespace Strata
 		return true;
 	}
 
-	uint64_t AssetImporter::EstimateImportMemory(std::span<const uint8_t>, uint64_t sourceSize, const nlohmann::json&) const
+	uint64_t AssetImporter::EstimateImportMemory(const ImportEstimateSource& source, const nlohmann::json&) const
 	{
-		return sourceSize > UINT64_MAX / 4 ? UINT64_MAX : sourceSize * 4;
+		return source.Size > UINT64_MAX / 4 ? UINT64_MAX : source.Size * 4;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -273,6 +273,40 @@ namespace Strata
 	std::optional<std::vector<uint8_t>> ReadImportSource(const ImportContext& context)
 	{
 		return context.ReadFile ? context.ReadFile(context.SourcePath) : FileSystem::ReadBytes(context.SourcePath);
+	}
+
+	namespace
+	{
+
+		// The file an estimate may read at `path`, normalized: a regular file inside the asset directory, also after
+		// resolving symbolic links (as ReadImportDependency reads).
+		std::optional<std::filesystem::path> FindEstimateFile(const ImportEstimateSource& source, const std::filesystem::path& path)
+		{
+			if (source.Path.empty() || source.AssetDirectory.empty())
+				return std::nullopt;
+			const std::filesystem::path normalized = path.lexically_normal();
+			const std::filesystem::path assetDirectory = source.AssetDirectory.lexically_normal();
+			if (!FileSystem::IsInside(normalized, assetDirectory) || !FileSystem::IsRegularFile(normalized)
+				|| !FileSystem::IsInsideResolved(normalized, assetDirectory))
+				return std::nullopt;
+			return normalized;
+		}
+
+	}
+
+	std::optional<std::vector<uint8_t>> ReadEstimateBytes(const ImportEstimateSource& source, const std::filesystem::path& path, uint64_t offset,
+		uint64_t maxBytes)
+	{
+		const std::optional<std::filesystem::path> file = FindEstimateFile(source, path);
+		if (!file)
+			return std::nullopt;
+		return source.Read ? source.Read(*file, offset, maxBytes) : FileSystem::ReadBytesRange(*file, offset, maxBytes);
+	}
+
+	std::optional<uint64_t> GetEstimateFileSize(const ImportEstimateSource& source, const std::filesystem::path& path)
+	{
+		const std::optional<std::filesystem::path> file = FindEstimateFile(source, path);
+		return file ? FileSystem::GetFileSize(*file) : std::nullopt;
 	}
 
 	std::optional<std::vector<uint8_t>> ReadImportDependency(const ImportContext& context, ImportResult& result, const std::filesystem::path& path)

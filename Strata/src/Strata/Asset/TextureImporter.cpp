@@ -338,18 +338,52 @@ namespace Strata
 		return properties;
 	}
 
-	uint64_t TextureImporter::EstimateImportMemory(std::span<const uint8_t> head, uint64_t sourceSize, const nlohmann::json& settings) const
+	namespace
 	{
-		int width = 0;
-		int height = 0;
-		int channels = 0;
-		if (head.empty() || head.size() > static_cast<size_t>(INT_MAX)
-			|| !stbi_info_from_memory(head.data(), static_cast<int>(head.size()), &width, &height, &channels) || width <= 0 || height <= 0)
-			return AssetImporter::EstimateImportMemory(head, sourceSize, settings);
-		// Below 2^62 (both sides are below 2^31), so the factor of 20 saturates rather than wrapping around.
-		const uint64_t pixels = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
-		constexpr uint64_t c_BytesPerPixel = 4 + 16;
-		return pixels > UINT64_MAX / c_BytesPerPixel ? UINT64_MAX : pixels * c_BytesPerPixel;
+
+		// The decoded pixels (4 bytes each) and their working copies (16 bytes each) of the image whose first bytes these
+		// are; null while its header is not among them.
+		std::optional<uint64_t> EstimateFromImageHeader(std::span<const uint8_t> bytes)
+		{
+			int width = 0;
+			int height = 0;
+			int channels = 0;
+			if (bytes.empty() || bytes.size() > static_cast<size_t>(INT_MAX)
+				|| !stbi_info_from_memory(bytes.data(), static_cast<int>(bytes.size()), &width, &height, &channels) || width <= 0 || height <= 0)
+				return std::nullopt;
+			// Below 2^62 (both sides are below 2^31), so the factor of 20 saturates rather than wrapping around.
+			const uint64_t pixels = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+			constexpr uint64_t c_BytesPerPixel = 4 + 16;
+			return pixels > UINT64_MAX / c_BytesPerPixel ? UINT64_MAX : pixels * c_BytesPerPixel;
+		}
+
+	}
+
+	uint64_t TextureImporter::EstimateImportMemory(const ImportEstimateSource& source, const nlohmann::json&) const
+	{
+		return EstimateImageMemory(source, source.Path, 0, source.Size, source.Head);
+	}
+
+	uint64_t TextureImporter::EstimateImageMemory(const ImportEstimateSource& source, const std::filesystem::path& path, uint64_t offset, uint64_t size,
+		std::span<const uint8_t> head)
+	{
+		if (std::optional<uint64_t> estimate = EstimateFromImageHeader(head))
+			return *estimate;
+		// stb_image reads at most INT_MAX bytes: a larger image does not decode.
+		const uint64_t readable = std::min<uint64_t>(size, static_cast<uint64_t>(INT_MAX));
+		uint64_t read = head.size();
+		uint64_t prefix = head.empty() ? (64ull << 10) : static_cast<uint64_t>(head.size()) * 8;
+		while (read < readable)
+		{
+			const std::optional<std::vector<uint8_t>> bytes = ReadEstimateBytes(source, path, offset, std::min(prefix, readable));
+			if (!bytes || bytes->size() <= read)
+				break; // Unreadable, or the file ends before the image does
+			read = bytes->size();
+			if (std::optional<uint64_t> estimate = EstimateFromImageHeader(*bytes))
+				return *estimate;
+			prefix = prefix > UINT64_MAX / 8 ? UINT64_MAX : prefix * 8;
+		}
+		return size > UINT64_MAX / c_UnknownImageFactor ? UINT64_MAX : size * c_UnknownImageFactor;
 	}
 
 	bool TextureImporter::Import(const ImportContext& context, ImportResult& result, std::string* outError) const

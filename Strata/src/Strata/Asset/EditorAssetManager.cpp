@@ -818,15 +818,19 @@ namespace Strata
 			return stats;
 		}
 
-		// The import's estimate from the source's first bytes (AssetImporter::EstimateImportMemory), under the shared file
-		// lock.
+		// The import's estimate from the source's first bytes and what else of it and the files it names the importer reads
+		// (AssetImporter::EstimateImportMemory), all under the shared file lock.
 		uint64_t EstimateImport(const ImportRequest& request) const
 		{
 			const std::filesystem::path sourcePath = ToAbsolute(request.Path);
 			std::shared_lock<std::shared_mutex> fileLock(FileMutex);
-			const uint64_t size = FileSystem::GetFileSize(sourcePath).value_or(0);
 			const std::vector<uint8_t> head = FileSystem::ReadBytesPrefix(sourcePath, c_AssetPrefixHeadBytes).value_or(std::vector<uint8_t>());
-			return request.Importer->EstimateImportMemory(head, size, request.Settings);
+			ImportEstimateSource source;
+			source.Head = head;
+			source.Size = FileSystem::GetFileSize(sourcePath).value_or(0);
+			source.Path = sourcePath;
+			source.AssetDirectory = Specification.AssetDirectory;
+			return request.Importer->EstimateImportMemory(source, request.Settings);
 		}
 
 		// An import for code that waits for it (scans and imports that block: tools, tests), admitted like background ones.

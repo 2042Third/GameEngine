@@ -1287,9 +1287,12 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   (`EditorAssetManager::SetImportMemoryBudget`; by default a quarter of physical memory clamped to 1-4 GiB,
   `GetDefaultImportMemoryBudget` with `Platform::GetPhysicalMemorySize`, so that it binds on large machines too). An
   import job first reads the source's head (`c_AssetPrefixHeadBytes`) and asks its importer for an estimate
-  (`AssetImporter::EstimateImportMemory`: four times the source's size by default; textures 20 bytes per pixel from the
-  image header, `stbi_info_from_memory`; glTF twice its buffers and eight times its embedded images, from the document in
-  the head). It runs at once on its thread when nothing waits before it and its estimate fits beside the imports admitted,
+  (`AssetImporter::EstimateImportMemory` with an `ImportEstimateSource`, through which it reads more of the source or of
+  the files it names, `ReadEstimateBytes`, under the shared file lock: four times the source's size by default; textures
+  20 bytes per pixel from the image header, `stbi_info_from_memory`, reading prefixes eight times larger until it shows,
+  since a JPEG's frame header follows its metadata segments, and 50 times its size for an image whose header never shows;
+  glTF twice its buffers and its images by their headers like textures, whether embedded in the `.glb`, in buffer files
+  or files beside it, with the document read past the head up to 64 MiB). It runs at once on its thread when nothing waits before it and its estimate fits beside the imports admitted,
   or when nothing else is admitted, however large it is (`BackgroundWork::AdmitOrWait`); otherwise it joins the work's
   queue of waiting imports, in arrival order, and its thread is free for other work. An admitted import that ends
   (finished, failed or cancelled) releases its estimate and submits, as background jobs, the waiting imports that now fit,

@@ -20,6 +20,8 @@ namespace Strata
 		static std::optional<std::vector<uint8_t>> ReadBytes(const std::filesystem::path& path);
 		// The file's first bytes, at most `maxBytes` (all of a smaller file).
 		static std::optional<std::vector<uint8_t>> ReadBytesPrefix(const std::filesystem::path& path, uint64_t maxBytes);
+		// At most `maxBytes` from `offset` on (fewer at the file's end; none from beyond it).
+		static std::optional<std::vector<uint8_t>> ReadBytesRange(const std::filesystem::path& path, uint64_t offset, uint64_t maxBytes);
 		static std::optional<std::string> ReadText(const std::filesystem::path& path);
 
 		// Writes are atomic: data goes to a temporary file that then replaces the destination,

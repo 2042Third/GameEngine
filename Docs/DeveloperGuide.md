@@ -800,7 +800,9 @@ short. Their full wording:
   **Imports take memory by their estimates.** Background imports start only while their estimates fit the import memory
   budget (Docs/Architecture.md, "Import memory admission"). An importer whose imports take much more (or much less) than
   four times their source's size overrides `AssetImporter::EstimateImportMemory`, which sees the source's first
-  `c_AssetPrefixHeadBytes`, its size and its settings: decode only headers there, never the source. An estimate changes no
+  `c_AssetPrefixHeadBytes`, its size and its settings (`ImportEstimateSource`), and reads more of the source or of the
+  files it names through `ReadEstimateBytes` (files inside the asset directory only) where the head does not tell: decode
+  only headers, never the source, and read the files a source names (a model's images) by their headers too. An estimate changes no
   import output, so it bumps no `GetVersion()`. Editor code imports through the background forms, which wait for room
   without holding a thread; the blocking forms wait on theirs (tools and tests).
 

@@ -49,6 +49,11 @@ namespace Strata
 
 	std::optional<std::vector<uint8_t>> FileSystem::ReadBytesPrefix(const std::filesystem::path& path, uint64_t maxBytes)
 	{
+		return ReadBytesRange(path, 0, maxBytes);
+	}
+
+	std::optional<std::vector<uint8_t>> FileSystem::ReadBytesRange(const std::filesystem::path& path, uint64_t offset, uint64_t maxBytes)
+	{
 		CountThreadOperation();
 		if (!IsRegularFile(path))
 			return std::nullopt;
@@ -58,10 +63,13 @@ namespace Strata
 		const std::streamoff size = stream.tellg();
 		if (size < 0)
 			return std::nullopt;
-		const uint64_t count = std::min<uint64_t>(static_cast<uint64_t>(size), maxBytes);
+		const uint64_t fileSize = static_cast<uint64_t>(size);
+		const uint64_t count = offset >= fileSize ? 0 : std::min<uint64_t>(fileSize - offset, maxBytes);
 		std::vector<uint8_t> data(static_cast<size_t>(count));
-		stream.seekg(0, std::ios::beg);
-		if (count > 0 && !stream.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(count)))
+		if (count == 0)
+			return data;
+		stream.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+		if (!stream.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(count)))
 			return std::nullopt;
 		return data;
 	}
