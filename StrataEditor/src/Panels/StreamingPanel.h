@@ -90,9 +90,10 @@ namespace Strata
 		const std::optional<AssetManagerStats>& GetStats() const { return m_Stats; }
 		// The running game's physics capacity as this frame's OnUpdate read it (nullopt while editing or without physics).
 		const std::optional<PhysicsCapacityInfo>& GetPhysics() const { return m_Physics; }
-		// Opens the Physics section at the next draw (the status bar's pill of bodies without collision leads there).
+		// Opens the Physics section at the next draw and scrolls it to the top of the panel (the status bar's pill of bodies
+		// without collision leads there). Sections: World, Physics, Memory, Loads and uploads, then the assets.
 		void RevealPhysics() { m_RevealPhysics = true; }
-		// Opens the World section, with its cell map, at the next draw (the Hierarchy's world strip leads there).
+		// Opens the World section, with its cell map, at the next draw and scrolls to it (the Hierarchy's world strip leads there).
 		void RevealWorld() { m_RevealWorld = true; }
 		const CellMap& GetCellMap() const { return m_CellMap; }
 		// The asset table as last built, for tests and tools: its rows (every listed asset, unfiltered), the labels of the

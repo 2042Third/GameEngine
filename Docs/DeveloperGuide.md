@@ -1323,7 +1323,7 @@ works: Docs/Architecture.md, "World partition"; for people: Docs/Manual/Worlds.m
     `K importing` while imports run (`editor.status` has the count as `assets.importing`), in Sulfur from
     85% of it and Cinnabar beyond it or on failures; click to open the Streaming panel), bodies of the running game
     without collision (`N bodies without collision`, Cinnabar, only while its physics world is at its growth limit with
-    bodies waiting; click to open the Streaming panel's Physics section). The frame pill (`ms · FPS · J
+    bodies waiting; click to open the Streaming panel's Physics section, scrolled into view). The frame pill (`ms · FPS · J
     jobs`, jobs running or queued averaged over 60 frames) opens the Performance panel. Where the pills' full texts do
     not fit side by side (a window about 1,000 points wide with every stream's pill) they all show compact ones, until the
     full ones fit with a margin again (`EditorLayer::StatusPillText`: who is connected without the port, the class count
@@ -1699,8 +1699,8 @@ works: Docs/Architecture.md, "World partition"; for people: Docs/Manual/Worlds.m
   or for other reasons; the bodies built and destroyed and the milliseconds spent on them in the last frame; the slices
   the bodies of a scene switched to were built in while it loaded (`preparedSlices`, 0 for bodies built as the scene
   started: a play copy); growths; demand; dropped contact steps; the last step's time, the steps run and held. `{running: false}` while editing. While a
-  game runs, the Streaming panel's Physics section shows the same capacity, read once per frame through
-  `IPhysicsCapacity` (constant time), and leads the status bar's pill of bodies without collision.
+  game runs, the Streaming panel's Physics section (after the World section, before Memory) shows the same capacity, read
+  once per frame through `IPhysicsCapacity` (constant time), and leads the status bar's pill of bodies without collision.
 
 ### Edits while playing and value ranges
 

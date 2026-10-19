@@ -336,24 +336,33 @@ namespace Strata
 			std::array<char, 160> summary {};
 			std::snprintf(summary.data(), summary.size(), "%s \xC2\xB7 %u loaded \xC2\xB7 %u loading%s", asset ? asset->GetData().Name.c_str() : "World",
 				worldStats.CellsLoaded, worldStats.CellsLoading, worldStats.CellsFailed > 0 ? " \xC2\xB7 failures" : "");
-			if (UI::SectionHeader("Streaming.World", "World", ImGuiTreeNodeFlags_DefaultOpen, summary.data()))
+			const bool open = UI::SectionHeader("Streaming.World", "World", ImGuiTreeNodeFlags_DefaultOpen, summary.data());
+			// A section asked for is scrolled to the top of the panel, wherever the person had scrolled.
+			if (m_RevealWorld)
+				ImGui::SetScrollHereY(0.0f);
+			if (open)
 				DrawWorld(context, *streamer, editable);
 		}
 		m_RevealWorld = false;
+		// While a game runs, its physics capacity next, short as it is: bodies without collision are the problem the status
+		// bar's pill leads here for.
+		if (m_Physics)
+		{
+			if (m_RevealPhysics)
+				ImGui::SetNextItemOpen(true);
+			const bool open = UI::SectionHeader("Streaming.Physics", "Physics");
+			if (m_RevealPhysics)
+				ImGui::SetScrollHereY(0.0f);
+			m_RevealPhysics = false;
+			if (open)
+				DrawPhysics(*m_Physics);
+		}
 		if (UI::SectionHeader("Streaming.Memory", "Memory"))
 			DrawPools(stats);
 		if (UI::SectionHeader("Streaming.Loads", "Loads and uploads"))
 		{
 			DrawStreaming(stats);
 			DrawUploads(stats);
-		}
-		if (m_Physics)
-		{
-			if (m_RevealPhysics)
-				ImGui::SetNextItemOpen(true);
-			m_RevealPhysics = false;
-			if (UI::SectionHeader("Streaming.Physics", "Physics"))
-				DrawPhysics(*m_Physics);
 		}
 		if (sideBySide)
 		{

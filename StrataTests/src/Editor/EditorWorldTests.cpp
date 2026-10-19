@@ -29,6 +29,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -114,6 +115,30 @@ TEST_SUITE("Editor.World")
 		const std::optional<UI::ItemProbe::Item> bodies = UI::ItemProbe::Find("Streaming.PhysicsBodies");
 		REQUIRE(bodies);
 		CHECK(UI::ItemProbe::Find("Streaming.PhysicsWaiting").has_value());
+
+		// Scrolled away from the section, the pill brings it back to the top of the panel's sections (the panel, or its
+		// overview beside the asset table in a wide panel).
+		ImGuiWindow* panel = editor.FindPanelWindow(EditorPanels::c_Streaming);
+		REQUIRE(panel);
+		ImGuiWindow* sections = panel;
+		for (ImGuiWindow* window : ImGui::GetCurrentContext()->Windows)
+		{
+			if (window->RootWindow == panel && std::string_view(window->Name).find("/Overview") != std::string_view::npos)
+				sections = window;
+		}
+		REQUIRE(sections->ScrollMax.y > 0.0f);
+		ImGui::SetScrollY(sections, sections->ScrollMax.y);
+		editor.Frames(2);
+		auto headerInView = [&]()
+		{
+			const std::optional<UI::ItemProbe::Item> header = UI::ItemProbe::Find("Streaming.Physics");
+			REQUIRE(header);
+			return header->Min.y >= sections->InnerClipRect.Min.y - 1.0f && header->Max.y <= sections->InnerClipRect.Max.y + 1.0f;
+		};
+		CHECK_FALSE(headerInView());
+		REQUIRE(editor.Click("Status.Physics"));
+		editor.Frames(3);
+		CHECK(headerInView());
 
 		// Removed bodies make room: the waiting ones get theirs, and the pill goes.
 		Scene& game = *editor.Context().GetActiveScene();
