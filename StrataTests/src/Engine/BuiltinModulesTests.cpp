@@ -292,6 +292,32 @@ TEST_SUITE("Engine.Modules")
 	}
 #endif
 
+#if ST_TESTS_HAVE_EVERY_MODULE
+	TEST_CASE("Without the game UI module the others register and the UI components stay unknown, saved back unchanged")
+	{
+		// The feature scene's canvases and widgets, with their entity references and colors, in a build without GameUI.
+		const std::filesystem::path scene = FileSystem::FromUTF8(STRATA_FEATURE_TEST_DIR) / "Assets" / "Scenes" / "Feature.stscene";
+		const Process::RunResult result = RunHelper({ "--strata-test-helper=register-without", "GameUI", FileSystem::ToUTF8(scene) });
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
+		CHECK(result.Output.find("modules: Scene Renderer Physics Audio Animation Scripting\n") != std::string::npos);
+		CHECK(result.Output.find("systems: Scripting Animation Physics Audio\n") != std::string::npos);
+		const size_t unknown = result.Output.find("unknown components: ");
+		REQUIRE(unknown != std::string::npos);
+		const std::string names = result.Output.substr(unknown, result.Output.find('\n', unknown) - unknown);
+		CHECK(names == "unknown components: UIButton UICanvas UIImage UIInputField UILayout UIMask UIRect UISelectable UISlider UIText UIToggle");
+		const size_t saved = result.Output.find("saved unchanged: ");
+		REQUIRE(saved != std::string::npos);
+		size_t unchanged = 0;
+		size_t total = 0;
+		REQUIRE(std::sscanf(result.Output.c_str() + saved, "saved unchanged: %zu of %zu", &unchanged, &total) == 2);
+		CHECK(total >= 28); // Every UI entity of the scene at least
+		CHECK(unchanged == total);
+	}
+#endif
+
 	TEST_CASE("Built-in asset factories are accepted only for built-in handles")
 	{
 		const uint64_t before = Log::GetBuffer().GetLatestSequence();
