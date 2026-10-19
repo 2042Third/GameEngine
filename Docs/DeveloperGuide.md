@@ -572,9 +572,11 @@ exercised by it.
   - `GPU.FeatureTest` (in `StrataTests.GPU`) renders the scene for 4 frames without playing it (no scripts) and checks
     entities in the ID buffer, text and stats;
   - `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` (label `feature`): the real executables open a copy of
-    the project, load the feature scripts (`script.load`), step the physics (`expect` conditions on the ball and on
-    `script.status`), export it with the module and run it headless; they must exit cleanly and print what the
-    scripts log (`StrataTests/Editor/RunAndExpect.cmake`).
+    the project, load the feature scripts (`script.load`), lay out and hit-test the menu (`ui.layout`, `ui.hitTest`),
+    step the physics, click the Play Button and type into the Name Field while playing (`input.click`, `input.type`;
+    `expect` conditions on the rects, the ball, the clicks, the field's text and `script.status`), export it with the
+    module and run it headless; they must exit cleanly and print what the scripts log
+    (`StrataTests/Editor/RunAndExpect.cmake`). A new editor command a game relies on gets a step there.
 - **The feature test enforces coverage.** It fails when:
   - a registered component is missing from the feature scene, or a property has its default value on every entity
     with the component (new properties need a non-default value there, which also proves that they serialize);
