@@ -164,10 +164,11 @@ namespace Strata
 
 		// True if the entity owns a body that is part of the simulation.
 		bool HasBody(Entity entity) const;
-		// The Jolt body ID (index and sequence number) of the body the entity owns, also out of the simulation, or c_NoBodyID:
-		// for diagnostics and tests (which bodies a build gave which IDs).
-		static constexpr uint32_t c_NoBodyID = 0xFFFFFFFFu;
-		uint32_t GetBodyID(Entity entity) const;
+		// The physics library's ID of the body the entity owns (its slot and the slot's generation; the world it belongs to
+		// is left out, so that two worlds built alike give equal IDs), also out of the simulation, or c_NoBodyID: for
+		// diagnostics and tests (which bodies a build gave which IDs).
+		static constexpr uint64_t c_NoBodyID = UINT64_MAX;
+		uint64_t GetBodyID(Entity entity) const;
 		// The entity owning the body that holds this entity's colliders (the entity itself, its nearest ancestor with a
 		// RigidBodyComponent, or invalid if its colliders are not part of any body).
 		Entity GetBodyEntity(Entity entity) const;

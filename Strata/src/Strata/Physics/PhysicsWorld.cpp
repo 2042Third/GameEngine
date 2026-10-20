@@ -4693,12 +4693,12 @@ namespace Strata
 		return FindSimulatedRecord(*m_Data, entity) != nullptr;
 	}
 
-	uint32_t PhysicsWorld::GetBodyID(Entity entity) const
+	uint64_t PhysicsWorld::GetBodyID(Entity entity) const
 	{
 		if (!entity.IsValid() || entity.GetScene() != m_Data->OwnerScene)
 			return c_NoBodyID;
 		const BodyRecord* record = FindRecord(*m_Data, entity.GetHandle());
-		return record && record->HasBody() ? record->BodyID.GetIndexAndSequenceNumber() : c_NoBodyID;
+		return record && record->HasBody() ? static_cast<uint64_t>(record->BodyID.GetIndexAndSequenceNumber()) : c_NoBodyID;
 	}
 
 	Entity PhysicsWorld::GetBodyEntity(Entity entity) const
@@ -5164,7 +5164,7 @@ namespace Strata
 		stats.JobCount = data.JobCounters.Jobs.load(std::memory_order_relaxed);
 		stats.WorkerJobCount = data.JobCounters.WorkerJobs.load(std::memory_order_relaxed);
 		stats.LastStepTime = data.LastStepTime;
-		stats.JoltStepTime = data.LastJoltTime;
+		stats.LibraryStepTime = data.LastJoltTime;
 		stats.SyncTime = data.LastSyncTime;
 		stats.WriteBackTime = data.LastWriteBackTime;
 		stats.ContactTime = data.LastContactTime;

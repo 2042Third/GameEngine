@@ -35,9 +35,8 @@ whose `Exclude` does not (the same glob semantics as `MatchesGlob`; a file in no
 naming it), and makes one static library per layer, `Strata_<Layer>` (alias `Strata::<Layer>`), that links `PUBLIC`
 exactly the built layers of its `MayInclude`: a library can only link what its layer may include. Every layer library
 gets `strata_configure_target`, the precompiled header `stpch.h` and `StrataEngineCodegen` (`PRIVATE`: the instruction
-sets Jolt requires of its users and its definitions, the code generation every engine object had while the engine was one
-library that linked Jolt; `strata_engine_cpu_options` gives builds without the physics module the same instruction sets,
-and the configure checks them against Jolt's whenever Jolt is built). Layers the table marks `"Tooling": true`
+sets of the `STRATA_USE_*` options, from `strata_engine_cpu_options`, the same with or without the physics module, and
+while Jolt is built its definitions; the configure checks that Jolt compiles its users for the same instruction sets). Layers the table marks `"Tooling": true`
 (AssetPipeline, Network, ImGui) are `EXCLUDE_FROM_ALL`; a layer with `"Option"` is built only when that CMake option is
 on: Physics, Audio and Animation (`STRATA_WITH_PHYSICS`, `_AUDIO`,
 `_ANIMATION`, with their vendor libraries; `ST_WITH_*` definitions tell code which it has, Docs/DeveloperGuide.md,
@@ -109,7 +108,7 @@ when the commit does).
 | --- | --- | --- |
 | `Strata_<Layer>` (`Strata::<Layer>`) | static libraries | One per layer of `Layers.json`: the engine modules, platform code, embedded shaders and default font (`Strata/src/`). |
 | `Strata`, `StrataTooling` | interface libraries | Every built layer a game contains; the tooling layers (AssetPipeline, Network, ImGui). |
-| `StrataEngineCodegen` | interface library | The compile options and definitions every engine object shares: Jolt's instruction sets, also without the physics module (`strata_engine_cpu_options`), and with it Jolt's definitions. |
+| `StrataEngineCodegen` | interface library | The compile options and definitions every engine object shares: the instruction sets of the `STRATA_USE_*` options, also without the physics module (`strata_engine_cpu_options`), and with it Jolt's definitions. |
 | `StrataScriptCore` | interface library | Script C ABI and header-only C++ SDK; links glm only (`StrataScriptCore/`). |
 | `StrataEditorCore` | static library | The editor without UI (`StrataEditor/src/Editor/`); links `Strata`, `Strata::AssetPipeline` and `Strata::Network`. |
 | `StrataEditorUI` | static library | The ImGui interface on the core: `EditorLayer`, panels, widget kit, theme, embedded fonts; links `Strata::ImGui`, and `ImGuizmo` and `nfd` privately (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer.*`). |

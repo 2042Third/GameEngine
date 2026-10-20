@@ -158,6 +158,14 @@ Useful CMake options: `-DSTRATA_BUILD_EDITOR=OFF`, `-DSTRATA_BUILD_RUNTIME=OFF`,
 `-DSTRATA_WITH_PHYSICS=OFF`, `-DSTRATA_WITH_AUDIO=OFF`, `-DSTRATA_WITH_ANIMATION=OFF` (games without a module:
 [Optional modules](#optional-modules)).
 
+**Instruction sets.** Every engine object is compiled for the instruction sets of the `STRATA_USE_*` options
+(`SSE4_1`, `SSE4_2`, `AVX`, `AVX2`, `LZCNT`, `TZCNT`, `F16C`, `FMADD` on, `AVX512` off), `STRATA_CROSS_PLATFORM_DETERMINISTIC`
+(off: on leaves out fused multiply-adds) and `STRATA_CROSS_COMPILE_ARM` (`strata_engine_cpu_options` in
+`CMake/StrataCompilerOptions.cmake`): x86-64 GCC and Clang get `-mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma
+-mfpmath=sse`, MSVC `/arch:AVX2` with the Visual Studio generators (nothing with `cl` under Ninja), ARM64 nothing. These
+are the defaults the engine had when Jolt chose them; Jolt's own option names (`USE_AVX2`...) no longer apply. The
+vendored physics library is compiled with its own flags (Strata/vendor/CMakeLists.txt).
+
 **Sources** are collected with `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)`: re-run the configure step (`cmake --preset
 <preset>`) after adding or removing source files, because the Visual Studio generator re-globs during the build but
 compiles that build with the stale project, so new files would only appear in the next build.

@@ -511,7 +511,7 @@ TEST_SUITE("Physics.Capacity")
 #endif
 		struct Run
 		{
-			std::vector<uint32_t> BodyIDs;
+			std::vector<uint64_t> BodyIDs;
 			std::vector<glm::mat4> Poses;
 			uint64_t ParallelBuilds = 0;
 		};

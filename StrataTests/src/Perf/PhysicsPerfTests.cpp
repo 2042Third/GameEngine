@@ -95,7 +95,7 @@ namespace
 		constexpr uint32_t c_Warmup = 5;
 		constexpr uint32_t c_Frames = 40;
 		std::vector<double> frames;
-		std::vector<double> joltSteps;
+		std::vector<double> librarySteps;
 		std::vector<double> strataSteps;
 		for (uint32_t frame = 0; frame < c_Warmup + c_Frames; frame++)
 		{
@@ -107,13 +107,13 @@ namespace
 			// Read between the timed frames.
 			const PhysicsStats stats = physics.GetStats();
 			frames.push_back(elapsed);
-			joltSteps.push_back(stats.JoltStepTime);
-			strataSteps.push_back(static_cast<double>(stats.LastStepTime) - static_cast<double>(stats.JoltStepTime));
+			librarySteps.push_back(stats.LibraryStepTime);
+			strataSteps.push_back(static_cast<double>(stats.LastStepTime) - static_cast<double>(stats.LibraryStepTime));
 		}
 		const Perf::Measurement frame = Perf::Summarize(frames);
-		const Perf::Measurement jolt = Perf::Summarize(joltSteps);
+		const Perf::Measurement library = Perf::Summarize(librarySteps);
 		const Perf::Measurement strata = Perf::Summarize(strataSteps);
-		MESSAGE(metric, ": frame median ", frame.MedianMs, " ms (p95 ", frame.P95Ms, " ms); step: Jolt ", jolt.MedianMs, " ms, Strata ", strata.MedianMs, " ms");
+		MESSAGE(metric, ": frame median ", frame.MedianMs, " ms (p95 ", frame.P95Ms, " ms); step: library ", library.MedianMs, " ms, Strata ", strata.MedianMs, " ms");
 
 		// Still the busy phase: most boxes are awake.
 		const PhysicsStats stats = physics.GetStats();
@@ -134,20 +134,20 @@ namespace
 			CHECK(stats.ContactPairCount == 0);
 		}
 		scene.OnRuntimeStop();
-		REQUIRE(jolt.MedianMs > 0.0);
+		REQUIRE(library.MedianMs > 0.0);
 		return Perf::MetricValues { { metric + ".ActiveFrame", frame.MedianMs }, { metric + ".StrataStepTime", strata.MedianMs },
-			{ metric + ".StrataToJoltStep", strata.MedianMs / jolt.MedianMs } };
+			{ metric + ".StrataToLibraryStep", strata.MedianMs / library.MedianMs } };
 	}
 
 	// The busy phase of falling box stacks: the median 60 Hz frame (one fixed step each) against the budget of
 	// `<metric>.ActiveFrame`, the median of Strata's part of a step (synchronization, write-back, contacts: the step minus
-	// Jolt's own) against `<metric>.StrataStepTime`, and that median to the median of Jolt's part against
-	// `<metric>.StrataToJoltStep` (Strata's part must stay below Jolt's: that budget is below 1). Every attempt of the
-	// confirmed check plays the stacks afresh.
+	// the physics library's own) against `<metric>.StrataStepTime`, and that median to the median of the library's part,
+	// `<metric>.StrataToLibraryStep` (Strata's part should stay below the library's). Every attempt of the confirmed check
+	// plays the stacks afresh.
 	void MeasureFallingBoxes(size_t count, const std::string& metric, ContactListening listening = ContactListening::Nobody)
 	{
 		Perf::ScopedApplicationJobSystem jobs;
-		Perf::CheckBudgetsConfirmed({ metric + ".ActiveFrame", metric + ".StrataStepTime", metric + ".StrataToJoltStep" }, [&]
+		Perf::CheckBudgetsConfirmed({ metric + ".ActiveFrame", metric + ".StrataStepTime", metric + ".StrataToLibraryStep" }, [&]
 		{
 			return PlayFallingBoxes(count, metric, listening);
 		});
@@ -318,8 +318,8 @@ TEST_SUITE("Perf.Physics")
 			// They walked on: past the first step at x = 2..4 for the first rows.
 			CHECK(GetWorldPosition(scene, characters.front()).x > 1.5f);
 			const Perf::Measurement step = Perf::Summarize(samples);
-			MESSAGE("1,000 characters: median step ", step.MedianMs, " ms (p95 ", step.P95Ms, " ms); controllers ", stats.CharacterTime, " ms, Jolt ",
-				stats.JoltStepTime, " ms");
+			MESSAGE("1,000 characters: median step ", step.MedianMs, " ms (p95 ", step.P95Ms, " ms); controllers ", stats.CharacterTime, " ms, library ",
+				stats.LibraryStepTime, " ms");
 			scene.OnRuntimeStop();
 			return step.MedianMs;
 		});
