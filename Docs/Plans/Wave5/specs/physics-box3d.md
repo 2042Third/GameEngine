@@ -404,9 +404,9 @@ box3d grows its own storage (bodies, shapes, contacts, tree nodes, arena) as nee
   streamed world's next world starts large enough; it cannot pre-grow a running box3d world (its API has no reserve), so
   the cost of box3d's growth while a cell loads is measured (`Perf.Physics.Grow65kMaxFrame`, `Perf.World.*`).
 - `PhysicsCapacityInfo::ReservedBytes` stays constant-time (`IPhysicsCapacity` is "cheap": the Streaming panel calls it
-  every editor frame while playing, `GameRuntime` for every perf-log row): Strata's record bytes plus
-  `EstimateReservedBytes` of the room (the larger of the reserved room and `b3World_GetMaxCapacity`, which box3d keeps
-  as a value). `b3World_GetCounters().byteCount` walks every island, sensor and hull (O(islands + sensors + hulls)), so
+  every editor frame while playing, `GameRuntime` for every perf-log row): `EstimateReservedBytes` of the room (the
+  larger of what box3d reserved and `b3World_GetMaxCapacity`, which box3d keeps as a value), box3d's storage only
+  (Strata's records are not counted: the estimate is fitted to and tested against box3d's own count). `b3World_GetCounters().byteCount` walks every island, sensor and hull (O(islands + sensors + hulls)), so
   it is read only on demand (`physics.stats`, tests), never per frame. `EstimateReservedBytes(settings)` (also the world
   cook's report, before any world exists) uses per-body, per-shape and per-contact constants fitted to box3d's counts,
   tested within 15% of `byteCount`, and the service's value is tested equal to the formula.

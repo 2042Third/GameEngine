@@ -635,11 +635,17 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(info.GrowthLimit == PhysicsCapacitySettings::c_MaxBodiesLimit);
 		CHECK(info.WaitingForSlot == 0);
 		CHECK(info.PendingOther == 1); // The box scaled to zero
-		// Constant time (the editor reads it every frame): the estimate of what box3d reserved and held, not its count of its
-		// bytes.
-		CHECK(info.ReservedBytes == world->GetReservedBytes());
-		CHECK(info.ReservedBytes >= PhysicsWorld::EstimateReservedBytes(world->GetSettings()));
-		const uint64_t reservedBefore = info.ReservedBytes;
+		// Constant time (the editor reads it every frame): EstimateReservedBytes of the larger of what box3d reserved (the
+		// automatic room: 1,024 bodies and 2,048 contacts) and the most it held, not box3d's count of its bytes.
+		const auto estimate = [&](uint32_t bodies, uint32_t contacts)
+		{
+			PhysicsSettings room = world->GetSettings();
+			room.MaxBodies = bodies;
+			room.MaxContactConstraints = contacts;
+			return PhysicsWorld::EstimateReservedBytes(room);
+		};
+		CHECK(info.ReservedBytes == estimate(1024, 2048));
+		CHECK(world->GetReservedBytes() == info.ReservedBytes);
 
 		// The work of each update: bodies built, then destroyed.
 		StepScene(scene, 1);
@@ -665,9 +671,15 @@ TEST_SUITE("Physics.Capacity")
 		info = capacity->GetCapacityInfo();
 		CHECK(info.MaxBodies == 131072);
 		CHECK(info.GrowthCount == 1);
-		CHECK(info.ReservedBytes == world->GetReservedBytes());
-		CHECK(info.ReservedBytes >= reservedBefore);
 		CHECK(GetPhysics(scene).GetStats().ChangeTime >= info.LastGrowthMs);
+		// box3d cannot reserve ahead in a running world: what it takes follows what it holds once that passes its reserved
+		// room (b3World_GetMaxCapacity, counted at the start of each of its steps), here 40 + 1,100 bodies.
+		CHECK(info.ReservedBytes == estimate(1024, 2048));
+		CreateBoxRow(scene, 1100, 10.0f);
+		StepScene(scene, 2);
+		info = capacity->GetCapacityInfo();
+		CHECK(info.Bodies == 1140);
+		CHECK(info.ReservedBytes == estimate(1140, 2048));
 		scene.OnRuntimeStop();
 		CHECK(scene.GetService<IPhysicsCapacity>() == nullptr);
 	}
