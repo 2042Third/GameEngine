@@ -471,8 +471,10 @@ Acceptance (`StrataEditor.OpenWorld`, `--no-gpu`):
   terrain tiles and the player: no prop leaked into it) and at least 5,000 bodies within a source's radius (the scatter's
   trees and rocks; made: 9,161). (Changed when made: `world.info` reports cell counts, not their entities; the bodies
   measure the scatter and the leak.)
-- `play.start` with `TourOnStart` false: `until` `world.status`'s `/playing` shows at least 9 loaded cells and none loading
-  within 900 steps.
+- Every import done before playing (`editor.status`'s `/assets/importing` 0, `until` in seconds: a fresh copy imports the
+  terrain, and the simulation waits only 10 s for mesh colliders). `play.start` with `TourOnStart` false: `until`
+  `world.status`'s `/playing` shows at least 9 loaded cells and none loading, bounded in seconds (streaming is I/O: a
+  paused wait's steps run in microseconds and would end it before any read completes; the teleport's wait likewise).
 - Tab (walk): `until` `Grounded` is true within 300 steps; W held 120 steps: `DistanceWalked` at least 4 and
   `HeightAboveGround` at least -0.1 (never below the terrain).
 - Teleport to landmark 3 (500 m away): `until` `TeleportsDone` 1 and `Grounded` within 1,800 steps; `StartAreaLoaded` false
