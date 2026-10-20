@@ -197,7 +197,9 @@ std::vector<Entity> nearby = Physics::OverlapSphere(center, 3.0f);
   Bodies bounce (`Restitution`) only when they hit faster than 1 m/s; damping multiplies the velocity by
   `1 / (1 + damping * h)` in every sub-step `h` (a quarter of the fixed step per collision step), which keeps a little more
   of it than Jolt's `1 - damping * dt` per fixed step: bodies damp slightly less (a damping of 2 leaves 0.55 of the speed
-  after a second, not 0.52). A box landing flat may slide a few millimeters.
+  after a second, not 0.52). A box landing flat may slide a few millimeters. Bodies that start overlapping are pushed
+  apart at up to 3 m/s, enough to throw light ones over a wall: spawn them apart, remembering that an instance's root
+  gets the scale given to `Instantiate`/`InstantiateMany` (1 by default), not its prefab's.
 - Moving a body by writing its transform works too (kinematic platforms, editor-like placement) but takes effect at the
   next fixed step; `Teleport` is immediate. Results always name the entity that owns the body (the RigidBody entity,
   also for colliders on its children).

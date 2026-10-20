@@ -13,6 +13,11 @@ namespace
 	// The playground's dynamic bodies, by tag.
 	constexpr const char* c_BodyTags[] = { "Crate", "Domino", "Ball", "Ghost", "Pin" };
 
+	// The ball prefab's scale (a sphere collider of radius 0.5 at half size: 0.25 m). An instance's root gets the scale it
+	// is spawned with instead of the prefab's, so every spawn passes it: at scale 1 the balls of a pour, 0.6 m apart, would
+	// start overlapping, and the physics would throw them apart (over the pit's walls).
+	constexpr float c_BallScale = 0.5f;
+
 	int32_t CountBodies()
 	{
 		int32_t count = 0;
@@ -205,7 +210,7 @@ void Playground::Shoot(const glm::vec3& origin, const glm::vec3& direction)
 {
 	if (!Assets::IsLoaded(BallPrefab))
 		return; // Still loading: requested in OnCreate
-	Entity ball = Scene::Instantiate(BallPrefab, origin + direction * 1.5f);
+	Entity ball = Scene::Instantiate(BallPrefab, origin + direction * 1.5f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(c_BallScale));
 	if (!ball.IsValid())
 		return;
 	Shots++;
@@ -264,7 +269,7 @@ void Playground::SpawnBalls(const glm::vec3& center, float spread, int32_t count
 		const int32_t cell = index % (perRow * perRow);
 		const glm::vec3 position = center + glm::vec3(-spread + 0.3f + static_cast<float>(cell % perRow) * 0.6f + random.Range(-0.04f, 0.04f),
 			static_cast<float>(layer) * 0.6f, -spread + 0.3f + static_cast<float>(cell / perRow) * 0.6f + random.Range(-0.04f, 0.04f));
-		transforms.push_back(glm::translate(glm::mat4(1.0f), position));
+		transforms.push_back(glm::scale(glm::translate(glm::mat4(1.0f), position), glm::vec3(c_BallScale)));
 	}
 	Scene::InstantiateMany(BallPrefab, transforms);
 }

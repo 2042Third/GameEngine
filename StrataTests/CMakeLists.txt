@@ -713,7 +713,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataEditor.Tetris PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
 	# The Physics Playground: about 600 bodies settle (a tower, a pyramid, 500 balls), ghosts sink through the balls to the pit's
 	# floor (their layers do not collide), the domino run falls, the goal counts what the funnel feeds it, a shot flies along
-	# the view, a hot reload keeps the fields and R resets the scene; the checks run paused, so "until" waits in exact steps.
+	# the view, a hot reload keeps the fields, R resets the scene and a pour of 100 balls stays in the pit (balls spawned
+	# overlapping would be thrown over its walls); the checks run paused, so "until" waits in exact steps.
 	# The exported games run the demo by themselves.
 	add_test(NAME StrataEditor.PhysicsPlayground
 		COMMAND "${CMAKE_COMMAND}"
