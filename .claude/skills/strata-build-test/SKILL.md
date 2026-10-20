@@ -171,7 +171,7 @@ ctest --preset macos-debug -LE perf
   runs on `StrataTests/Editor/SampleProject.cmake`, which also fails on warnings its `ALLOWED_MESSAGES` do not list:
   `StrataEditor.Tetris`, `.PhysicsPlayground`, `.OpenWorld` and `.ThirdPerson`; their exported games' windowed checks
   `StrataRuntime.<Sample>Windowed*` and `StrataEditor.OpenWorldRender` are `gpu` tests on their exports, and
-  `StrataTests.PerfSamples` records the Open World tour's provisional metrics in Release) and `StrataEditor.Install` (installs the build into a fresh prefix, as a
+  `StrataTests.PerfGPU.Samples` measures the Open World tour's provisional metrics in Release) and `StrataEditor.Install` (installs the build into a fresh prefix, as a
   release archive holds it, and makes, builds, plays and exports a game with the installed editor alone,
   `StrataTests/Editor/InstallEndToEnd.cmake`); `-LE package` skips them on machines without a toolchain. Packaging and
   releases: Docs/DeveloperGuide.md, "Packages" and "Releases".

@@ -44,9 +44,6 @@
 	"Perf.Scripting.ScriptedDestroy10kOf100kRoots": { "Measured": 21.25, "Budget": 31.87, "Unit": "ms" },
 	"Perf.FrameProfiler.Frame16Stages": { "Measured": 0.6303, "Budget": 0.9454, "Unit": "us" },
 	"Perf.Jobs.SubmitWait": { "Unit": "us", "Provisional": true },
-	"PerfSamples.OpenWorldTour.FrameMedianMs": { "Unit": "ms", "Provisional": true, "Target": 16.7 },
-	"PerfSamples.OpenWorldTour.FrameP95Ms": { "Unit": "ms", "Provisional": true },
-	"PerfSamples.OpenWorldTour.GPUBusyMedianMs": { "Unit": "ms", "Provisional": true },
 	"Perf.Jobs.SubmitMany": { "Unit": "us", "Provisional": true },
 	"Perf.Jobs.ParallelForOverhead": { "Unit": "us", "Provisional": true },
 	"Perf.Jobs.WakeLatency": { "Unit": "us", "Provisional": true },
@@ -186,6 +183,9 @@
 	"PerfGPU.Editor.EditFrameWorldIdle": { "Unit": "ms", "Provisional": true, "Target": 0.2808 },
 	"PerfGPU.Editor.PlayStartWorldMaxFrame": { "Unit": "ms", "Provisional": true, "Target": 50.0 },
 	"PerfGPU.World.CellDriveMaxFrame": { "Unit": "ms", "Provisional": true, "Target": 8.0 },
+	"PerfGPU.Samples.OpenWorldTour.FrameWorkMedianMs": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Samples.OpenWorldTour.FrameWorkP95Ms": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Samples.OpenWorldTour.GPUBusyMedianMs": { "Unit": "ms", "Provisional": true },
 	"Perf.World.DrivePeakPrivate": { "Unit": "MB", "Provisional": true, "Target": 2048.0 },
 	"Perf.World.DriveFrameP95": { "Unit": "ms", "Provisional": true, "Target": 16.7 }
 }

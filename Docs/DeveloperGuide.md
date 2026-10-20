@@ -396,8 +396,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 
 - **Perf tests** (the perf lab, `StrataTests/src/Perf/PerfUtils.h`): suites named `Perf.*` (CPU) and `PerfGPU.*`
   run as the CTests `StrataTests.Perf` and `StrataTests.PerfGPU` (label `perf`; PerfGPU also `gpu`) in Release and
-  Dist only, one at a time: `ctest --preset windows-release -L perf`. No other CTest runs them; the lab's own logic is
-  tested by the suite `PerfLab` in the shard `StrataTests.Core.Core`. A perf test measures metrics in a measurement function
+  Dist only, one at a time: `ctest --preset windows-release -L perf`; `PerfGPU.Samples` measures the sample games that
+  the sample tests export, so it runs in `StrataTests.PerfGPU.Samples`, after them. No other CTest runs them; the lab's
+  own logic is tested by the suite `PerfLab` in the shard `StrataTests.Core.Core`. A perf test measures metrics in a
+  measurement function
   (`Perf::Measure(name, warmup, iterations, function)` times each call and returns the median, 95th percentile, minimum
   and maximum in milliseconds; `Platform::GetProcessMemory` reports private bytes and the working set with their peaks)
   and checks them with `Perf::CheckBudgetConfirmed("<Suite>.<Metric>", measure)`, or with
@@ -666,9 +668,11 @@ exercised by it.
   with a perf log and check it with `check-perf-log`). A change to a sample's scene or scripts must keep its command
   script passing. Their exports are fixtures of `gpu` tests on the Mac: `StrataRuntime.<Sample>Windowed` runs the exported
   game in a window and checks its screenshot (`check-image`) and perf log, `StrataEditor.OpenWorldRender` checks the
-  GPU-driven path's `renderStats` in a capture at the island's start, and `StrataRuntime.OpenWorldTour` (labels `perf`
-  and `gpu`, Release and Dist) writes the tour's perf log that `StrataTests.PerfSamples` (suite `PerfSamples`, path in
-  `STRATA_OPEN_WORLD_TOUR_LOG`) records as provisional metrics. `StrataEditor.Install` (`Editor/InstallEndToEnd.cmake`) installs the build into
+  GPU-driven path's `renderStats` in a capture at the island's start, and `StrataTests.PerfGPU.Samples` (suite
+  `PerfGPU.Samples`, Release and Dist) starts the exported Open World (`STRATA_OPEN_WORLD_GAME`) once per attempt,
+  windowed at 1920 x 1080 with the display's vsync, and measures its tour from the first frame with a cell loaded for
+  8 s: the frames' `WorkMs` (median and 95th percentile; the frame interval is the display's and only reported) and `GPUBusyMs`.
+  `StrataEditor.Install` (`Editor/InstallEndToEnd.cmake`) installs the build into
   a fresh prefix, checks the layout (exactly the top-level entries a release holds), and makes a game with the installed
   editor alone: `project.create` from `basic3d`, `script.build` (whose cache must name the installation as
   `STRATA_ENGINE_DIR`, never the source tree), play and export; the exported game runs headless. The `Package*` suites
