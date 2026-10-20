@@ -21,6 +21,14 @@ namespace Strata
 {
 
 	class Scene;
+	struct SceneWorkBudget;
+
+	// The physics world PhysicsSystem::PrepareLoadedScene built for a loaded scene before it runs (Scene::GetPreparedState):
+	// the system adopts it when the scene starts.
+	struct PreparedPhysicsWorld
+	{
+		Scope<PhysicsWorld> World;
+	};
 
 	// Rigid body physics for a running scene (Play and Simulate modes).
 	//
@@ -35,14 +43,14 @@ namespace Strata
 	// and static bodies only follow signaled changes, see PhysicsWorld).
 	//
 	// Other systems reach it through the scene services it registers while it exists (Scene/SceneServices.h):
-	// ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries and ICharacterControl. Collision events are collected during each
+	// ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries, ICharacterControl and IPhysicsCapacity. Collision events are collected during each
 	// step and dispatched afterwards on the main thread to the registered listeners (see ICollisionEventSource, which also
 	// says which contacts are tracked). Listeners may use the whole scene and physics API, including destroying entities;
 	// End events caused by changes made outside a step are dispatched after the next update.
 	//
 	// Main thread only. Functions return false / zero / empty results while there is no simulation.
 	class PhysicsSystem : public SceneSystem, public ICollisionEventSource, public IBodyMotionQuery, public IBodyControl, public IPhysicsQueries,
-		public ICharacterControl
+		public ICharacterControl, public IPhysicsCapacity
 	{
 	public:
 		explicit PhysicsSystem(Scene& scene);
@@ -61,6 +69,13 @@ namespace Strata
 		// capacities for at least that much. Scenes that only share a name share nothing.
 		static PhysicsCapacityDemand GetRememberedCapacityDemand(UUID sceneLineage);
 		static void ForgetCapacityDemands();
+
+		// The physics module's preparation of a loaded scene (SceneSystemDescriptor::PrepareLoadedScene): creates the world the
+		// scene's system will run (PreparedPhysicsWorld, Sliced) and builds its bodies in slices of c_PrepareBodiesPerSlice
+		// owners, in parallel, until the budget's time is up (at least one slice per call); true once every body is built.
+		// Scenes without physics components need nothing. OnRuntimeStart adopts the world, so the first frame builds no body.
+		static bool PrepareLoadedScene(Scene& scene, SceneWorkBudget& budget);
+		static constexpr uint32_t c_PrepareBodiesPerSlice = 8192;
 
 		void OnRuntimeStart() override;
 		void OnRuntimeStop() override;
@@ -143,6 +158,14 @@ namespace Strata
 		bool TeleportCharacter(Entity entity, const glm::vec3& position) override;
 		bool AddCharacterMotion(Entity entity, const glm::vec3& displacement) override;
 		std::optional<CharacterState> GetCharacterState(Entity entity) override;
+
+		//////////////////////////////////////////////////////////////////////////
+		// Capacity (IPhysicsCapacity; see PhysicsWorld::GetCapacityInfo and Reserve). A reservation made before the world
+		// exists applies to it once it is created, and ends when the scene stops.
+		//////////////////////////////////////////////////////////////////////////
+
+		PhysicsCapacityInfo GetCapacityInfo() const override;
+		void Reserve(uint32_t bodies) override;
 	private:
 		struct CollisionListener
 		{
@@ -152,9 +175,14 @@ namespace Strata
 			bool Removed = false;
 		};
 
+		static bool HasPhysicsComponents(const Scene& scene);
+		// The settings a world of the scene is created with: the default settings, the scene's capacities and its layer matrix.
+		static PhysicsSettings MakeWorldSettings(const Scene& scene, const PhysicsSettings& defaults);
 		bool SceneHasPhysicsComponents() const;
 		void OnPhysicsComponentAdded(entt::registry& registry, entt::entity handle);
 		void CreateWorld();
+		// Makes `world` (created with `settings`) the system's world: gravity, layers and contact tracking follow.
+		void AdoptWorld(Scope<PhysicsWorld> world, const PhysicsSettings& settings);
 		// Creates the world once physics components exist, then applies the changes recorded since the last call.
 		void ApplyPendingChanges();
 		void SyncGravity();
@@ -171,6 +199,7 @@ namespace Strata
 		Scope<PhysicsWorld> m_World;
 		bool m_Running = false;
 		bool m_WorldRequested = false;
+		uint32_t m_ReservedBodies = 0; // See Reserve
 		std::vector<entt::scoped_connection> m_CreationConnections; // Watch for the first physics component
 
 		std::vector<Ref<CollisionListener>> m_CollisionListeners;

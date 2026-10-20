@@ -25,13 +25,14 @@ namespace Strata
 		// Animation (the values are stored in packs and import records: append only)
 		Skeleton,           // Joint hierarchy and rest pose of an imported model (Animation/Skeleton.h)
 		AnimationClip,      // Joint channels of an imported animation (Animation/AnimationClip.h)
-		AnimationController // States, transitions and parameters (".stanimator", Animation/AnimationController.h)
+		AnimationController, // States, transitions and parameters (".stanimator", Animation/AnimationController.h)
+		World                // Layers and cells of a streamed world (".stworld", World/WorldAsset.h)
 	};
 
 	const char* AssetTypeToString(AssetType type);
 	std::optional<AssetType> AssetTypeFromString(std::string_view text);
 
-	// File extension of the asset types the engine writes itself (".stscene", ".stprefab", ".stmat", ".stanimator"); empty for types
+	// File extension of the asset types the engine writes itself (".stscene", ".stprefab", ".stmat", ".stanimator", ".stworld"); empty for types
 	// that are always imported from other formats.
 	std::string_view GetNativeAssetExtension(AssetType type);
 

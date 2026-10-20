@@ -589,6 +589,22 @@ extern "C"
 		double (*GetRealTime)(StrataScriptContext* context);
 		uint64_t (*GetTypedText)(StrataScriptContext* context, char* buffer, uint64_t capacity);
 
+		/*
+		 * World streaming (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use), in a scene
+		 * that is a world's persistent scene (its first active World component names a World asset); in other scenes every
+		 * call fails and is reported once. Positions are three floats (x, y, z), radii finite and at least 0.
+		 * WorldRequestCellsAround streams the cells within the radius of the position on every enabled layer, before the
+		 * sources' cells, until WorldReleaseCells or the scene stops: a request ID, 0 on failure (prefetch before a teleport
+		 * or a spawn, then poll WorldIsLoadedAround). WorldIsLoadedAround tells whether every existing cell of every enabled
+		 * layer within the radius is loaded. WorldSetLayerEnabled turns a layer on or off by name (a disabled layer's cells
+		 * unload; false for a name the world does not have); WorldIsLayerEnabled answers 1, 0, or -1 for an unknown layer.
+		 */
+		uint64_t (*WorldRequestCellsAround)(StrataScriptContext* context, const float* position, float radius);
+		bool (*WorldReleaseCells)(StrataScriptContext* context, uint64_t request);
+		bool (*WorldIsLoadedAround)(StrataScriptContext* context, const float* position, float radius);
+		bool (*WorldSetLayerEnabled)(StrataScriptContext* context, StrataScriptString layer, bool enabled);
+		int32_t (*WorldIsLayerEnabled)(StrataScriptContext* context, StrataScriptString layer);
+
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;
 

@@ -636,16 +636,17 @@ TEST_SUITE("Editor.Viewport")
 			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
 			nlohmann::json settings = harness.Run("viewport.getSettings");
 			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "allColliders", "stats", "previewLighting", "gameUI", "canvasMode", "gizmo",
-				"space", "snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView", "gameView", "pilotGameCamera", "editPose" })
+				"space", "snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView", "gameView", "pilotGameCamera", "editPose", "cellBounds" })
 			{
 				CAPTURE(key);
 				CHECK(settings.contains(key));
 			}
-			CHECK(settings.size() == 18);
+			CHECK(settings.size() == 19);
 			CHECK(settings["canvasMode"] == false);
 			CHECK(settings["editPose"] == "rest");
 			CHECK(settings["gameView"] == nlohmann::json { { "mode", "free" }, { "width", 1280 }, { "height", 720 } });
 			CHECK(settings["pilotGameCamera"] == false);
+			CHECK(settings["cellBounds"] == false);
 			CHECK(settings["allColliders"] == false);
 			CHECK(settings["previewLighting"] == true);
 			CHECK(settings["gameUI"] == false);
@@ -653,7 +654,9 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(settings["debugView"] == "none");
 
 			settings = harness.Run("viewport.setSettings", { { "grid", false }, { "gameUI", true }, { "previewLighting", false }, { "gizmo", "Rotate" },
-				{ "space", "Local" }, { "snap", true }, { "rotateSnap", 45 }, { "allColliders", true }, { "debugView", "streaming" }, { "canvasMode", true } });
+				{ "space", "Local" }, { "snap", true }, { "rotateSnap", 45 }, { "allColliders", true }, { "debugView", "streaming" }, { "canvasMode", true },
+				{ "cellBounds", true } });
+			CHECK(settings["cellBounds"] == true);
 			CHECK(settings["grid"] == false);
 			CHECK(settings["canvasMode"] == true);
 			CHECK(settings["allColliders"] == true);
@@ -698,6 +701,7 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(harness.Error("viewport.setSettings", { { "previewLighting", "yes" } }).find("'previewLighting'") != std::string::npos);
 			CHECK(harness.Error("viewport.setSettings", { { "gizmo", "Move" } }).find("'gizmo'") != std::string::npos);
 			CHECK(harness.Error("viewport.setSettings", { { "debugView", "mips" } }).find("'debugView'") != std::string::npos);
+			CHECK(harness.Error("viewport.setSettings", { { "cellBounds", 1 } }).find("'cellBounds'") != std::string::npos);
 			CHECK(harness.Error("viewport.setSettings", { { "lighting", true } }).find("Unknown parameter") != std::string::npos);
 			CHECK(harness.Run("viewport.getSettings") == settings);
 			CHECK(harness.Context.GetUndoStack().GetHistory().empty());
@@ -710,6 +714,7 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(harness.Context.GetViewport().GetSettings().ShowGameUI);
 		CHECK_FALSE(harness.Context.GetViewport().GetSettings().ShowGrid);
 		CHECK(harness.Context.GetViewport().GetSettings().AllColliders);
+		CHECK(harness.Context.GetViewport().GetSettings().CellBounds);
 		CHECK(harness.Context.GetViewport().GetSettings().GameView.Mode == GameViewMode::Aspect16x9);
 		CHECK(harness.Context.GetViewport().GetSettings().CanvasMode);
 		CHECK(harness.Context.GetViewport().GetSettings().GameView.Width == 800);

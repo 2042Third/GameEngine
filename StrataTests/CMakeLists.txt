@@ -41,6 +41,7 @@ strata_add_script_module(StrataTestScriptsMalformed NO_SDK_ENTRY SOURCES "${STRA
 strata_add_script_module(StrataTestScriptsNewerSDK NO_SDK_ENTRY SOURCES "${STRATA_TEST_SCRIPTS_DIR}/NewerSDK/NewerSDKModule.cpp")
 set(STRATA_FEATURE_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/FeatureTest")
 strata_add_script_module(StrataTestScriptsFeatureTest SOURCE_DIR "${STRATA_FEATURE_TEST_DIR}/Scripts")
+strata_add_script_module(StrataTestScriptsWorld SOURCE_DIR "${STRATA_TEST_SCRIPTS_DIR}/World")
 set(STRATA_TEST_SCRIPT_MODULES
 	StrataTestScriptsAPI
 	StrataTestScriptsReloadV1
@@ -51,7 +52,8 @@ set(STRATA_TEST_SCRIPT_MODULES
 	StrataTestScriptsMalformed
 	StrataTestScriptsNewerSDK
 	StrataTestScriptsDependent
-	StrataTestScriptsFeatureTest)
+	StrataTestScriptsFeatureTest
+	StrataTestScriptsWorld)
 foreach(module IN LISTS STRATA_TEST_SCRIPT_MODULES)
 	strata_configure_target(${module})
 	set_target_properties(${module} PROPERTIES FOLDER "Strata/TestScripts")
@@ -71,7 +73,7 @@ endif()
 # Tests of the optional modules (STRATA_WITH_*): a build without one leaves out its test folder, the other files that test
 # little else (below), and the feature test (src/FeatureTest: the feature scene holds every component). Test cases elsewhere
 # that need a module are guarded with #if ST_WITH_<MODULE>.
-set(STRATA_TESTS_OF_PHYSICS "src/Physics/" "src/Perf/PhysicsPerfTests.cpp" "src/Scripting/ScriptPhysicsTests.cpp"
+set(STRATA_TESTS_OF_PHYSICS "src/Physics/" "src/Perf/PhysicsPerfTests.cpp" "src/Perf/WorldPerfTests.cpp" "src/Scripting/ScriptPhysicsTests.cpp"
 	"src/Scripting/ScriptCollisionTests.cpp")
 set(STRATA_TESTS_OF_AUDIO "src/Audio/" "src/Core/ApplicationAudioTests.cpp" "src/Scripting/ScriptAudioTests.cpp")
 set(STRATA_TESTS_OF_ANIMATION "src/Animation/" "src/Asset/GltfSkinImportTests.cpp" "src/Perf/AnimationPerfTests.cpp"
@@ -489,7 +491,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 30 --perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLog.csv")
 	set_tests_properties(StrataRuntime.PerfLog PROPERTIES FIXTURES_REQUIRED StrataExportedGame FIXTURES_SETUP StrataRuntimePerfLog)
 	add_test(NAME StrataRuntime.PerfLogCheck
-		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLog.csv" 30 --nonzero Assets.Update)
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLog.csv" 30 --nonzero Assets.Update --column WorldCellsLoaded
+			--column PhysicsBodiesWaiting --column PhysicsMaxBodies --column World.Streaming)
 	set_tests_properties(StrataRuntime.PerfLogCheck PROPERTIES FIXTURES_REQUIRED StrataRuntimePerfLog)
 	add_test(NAME StrataRuntime.InvalidPerfLog
 		COMMAND "${CMAKE_COMMAND}"
@@ -503,6 +506,27 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEXPECTED_OUTPUT=--save-directory needs the folder to keep the game's save files in"
 			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidSaveDirectory PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+
+	# A generated 6 x 6 world (2,500 entities and 500 static bodies per Ground cell; a quarter in Debug, whose frames are
+	# slow) driven headless by its WorldDrive script (StrataTests/Scripts/World), which visits every cell, checks its
+	# collision and ends the game: no cell may lack collision, and no frame of the perf log may leave a body waiting for a
+	# slot. The frame limit only bounds a drive that never ends.
+	if(STRATA_WITH_PHYSICS)
+		set(STRATA_WORLD_GAME_DIR "${CMAKE_CURRENT_BINARY_DIR}/WorldGame-$<CONFIG>")
+		set(STRATA_WORLD_DRIVE_FRAMES 7200)
+		add_test(NAME StrataRuntime.WorldWrite COMMAND StrataTests --strata-test-helper=write-world-game "${STRATA_WORLD_GAME_DIR}"
+			"$<IF:$<CONFIG:Debug>,625,2500>" "$<IF:$<CONFIG:Debug>,125,500>")
+		set_tests_properties(StrataRuntime.WorldWrite PROPERTIES FIXTURES_SETUP StrataWorldGame LABELS "feature")
+		add_test(NAME StrataRuntime.World
+			COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataRuntime>"
+				"-DARGUMENTS=--game|${STRATA_WORLD_GAME_DIR}/World.stgame|--headless|--frames|${STRATA_WORLD_DRIVE_FRAMES}|--perf-log|${STRATA_WORLD_GAME_DIR}/PerfLog.csv"
+				"-DEXPECT=World drive: 36 cells visited, 0 without collision" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+		set_tests_properties(StrataRuntime.World PROPERTIES FIXTURES_REQUIRED StrataWorldGame FIXTURES_SETUP StrataWorldGamePerfLog LABELS "feature")
+		add_test(NAME StrataRuntime.WorldPerfLog
+			COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_WORLD_GAME_DIR}/PerfLog.csv" any --nonzero WorldCellsLoaded
+				--nonzero World.Streaming --max PhysicsBodiesWaiting 0)
+		set_tests_properties(StrataRuntime.WorldPerfLog PROPERTIES FIXTURES_REQUIRED StrataWorldGamePerfLog LABELS "feature")
+	endif()
 
 	# The exported game in a window renders a few frames from its camera and saves the last one, which must show the scene:
 	# not black, not one color, and the blue box covering at least 1% of it.

@@ -17,10 +17,11 @@ namespace Strata
 	// Query layer mask that accepts every layer.
 	constexpr uint32_t c_AllPhysicsLayers = 0xFFFFFFFFu;
 
-	// Configuration of a physics world. Capacities are fixed when the world is created; 0 sizes one automatically from the
+	// Configuration of a physics world. Capacities are set when the world is created; 0 sizes one automatically from the
 	// bodies the scene has then (see PhysicsWorld::ResolveCapacities), and a scene's SceneSettings::PhysicsCapacity overrides
-	// these. The layer matrix is the scene's (SceneSettings::PhysicsLayers, which PhysicsSystem applies when it creates the
-	// world and when it changes); PhysicsWorld::SetLayerCollisionMasks changes it at runtime.
+	// these. A world whose bodies outgrow MaxBodies grows (see PhysicsWorld, "Capacities") up to GrowthLimit. The layer matrix
+	// is the scene's (SceneSettings::PhysicsLayers, which PhysicsSystem applies when it creates the world and when it
+	// changes); PhysicsWorld::SetLayerCollisionMasks changes it at runtime.
 	struct PhysicsSettings
 	{
 		uint32_t MaxBodies = 0;
@@ -31,6 +32,10 @@ namespace Strata
 		// Longest wait, in seconds of simulation time, at the start for the meshes of mesh colliders (still loading or being
 		// cooked) before the first step; 0 does not wait. See PhysicsWorld.
 		float MeshWaitTimeout = 10.0f;
+		// The most bodies a world may grow to when bodies find it full: a cap on the memory physics reserves (about 80 bytes
+		// per body and more per pair and contact, see PhysicsWorld::EstimateReservedBytes). 0: the engine's limit
+		// (PhysicsCapacitySettings::c_MaxBodiesLimit). A world never shrinks below the MaxBodies it was created with.
+		uint32_t GrowthLimit = 0;
 
 		// Layer collision matrix: bit j of LayerCollisionMasks[i] is set when layer i collides with layer j. Two layers
 		// collide only if both of their masks allow it, so an asymmetric edit disables the pair. Everything collides by
@@ -99,7 +104,7 @@ namespace Strata
 		uint32_t MaxBodies = 0;
 		uint32_t MaxBodyPairs = 0;
 		uint32_t MaxContactConstraints = 0;
-		uint32_t BodyOverflowCount = 0;  // Entities waiting for a body because the world is full (part of PendingBodyCount)
+		uint32_t BodyOverflowCount = 0;  // Entities waiting for a body slot because the world is full (part of PendingBodyCount)
 		uint64_t ContactOverflowSteps = 0; // Steps that dropped contacts or body pairs because their buffers were full
 		PhysicsCapacityDemand Demand;    // What the world needed beyond its capacities so far (empty while they suffice)
 		// Work of the last step, which grows with the awake bodies and the signaled changes, not with sleeping bodies or the
@@ -127,6 +132,24 @@ namespace Strata
 		float WriteBackTime = 0.0f;
 		float ContactTime = 0.0f;
 		float CharacterTime = 0.0f;      // Moving the character controllers (see CharacterControllerSet)
+		// Growth (see PhysicsWorld, "Capacities"): how often the world grew since it was created, and its last growth (wall
+		// time in milliseconds, MaxBodies before and after).
+		uint32_t GrowthCount = 0;
+		float LastGrowthMs = 0.0f;
+		uint32_t LastGrowthFrom = 0;
+		uint32_t LastGrowthTo = 0;
+		uint64_t ParallelBuildCount = 0; // Rounds of changes since the world was created that built their bodies on the job threads
+		// The scene's last update (see PhysicsWorld::GetCapacityInfo): bodies built or rebuilt, bodies destroyed, and the
+		// milliseconds spent applying changes (building and destroying bodies, a growth).
+		uint32_t BodiesAddedLastUpdate = 0;
+		uint32_t BodiesRemovedLastUpdate = 0;
+		float ChangeTime = 0.0f;
+		// Broad phase queries that woke the bodies around removed, destroyed, moved or reshaped bodies since the world was
+		// created: bodies removed together are woken around in merged regions, so a cell leaving costs a few dozen.
+		uint64_t WakeQueryCount = 0;
+		// The slices a loaded scene's world was built in while its load prepared it, before the scene ran
+		// (PhysicsSystem::PrepareLoadedScene); 0 for a world built when its scene started.
+		uint32_t PreparedSlices = 0;
 	};
 
 	// Triangle data used to build MeshColliderComponent shapes.

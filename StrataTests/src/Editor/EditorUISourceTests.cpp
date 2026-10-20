@@ -28,6 +28,7 @@ namespace
 		// Comments and the contents of string and character literals blanked out (line breaks kept), so prose and text
 		// that mention code do not count.
 		std::string Code;
+		std::string Text; // As written
 	};
 
 	// Blanks out // and /* */ comments outside string and character literals, keeping line breaks for line numbers.
@@ -110,7 +111,7 @@ namespace
 
 	SourceFile MakeSourceFile(std::string name, const std::string& text)
 	{
-		return { std::move(name), BlankLiterals(StripComments(text)) };
+		return { std::move(name), BlankLiterals(StripComments(text)), text };
 	}
 
 	std::filesystem::path GetEditorSourceDirectory()
@@ -178,6 +179,31 @@ namespace
 	std::string Describe(const SourceFile& file, size_t offset, const std::string& what)
 	{
 		return file.Name + ":" + std::to_string(GetLine(file.Code, offset)) + ": " + what;
+	}
+
+	// Characters encoded as UTF-8 twice ("\xC3\x82\xC2\xB7" for a middle dot, shown as an A with a circumflex before it):
+	// a UTF-8 lead byte's Latin-1 character (U+00C2 to U+00F4, bytes C3 82 to C3 B4) followed by a continuation byte's
+	// (U+0080 to U+00BF, bytes C2 80 to C2 BF). No text the editor shows means that pair.
+	std::vector<std::string> FindDoubleEncodedText(const SourceFile& file)
+	{
+		std::vector<std::string> findings;
+		const std::string& text = file.Text;
+		auto byteAt = [&text](size_t index) { return static_cast<unsigned char>(text[index]); };
+		for (size_t index = 0; index + 3 < text.size(); index++)
+		{
+			if (byteAt(index) == 0xC3 && byteAt(index + 1) >= 0x82 && byteAt(index + 1) <= 0xB4 && byteAt(index + 2) == 0xC2 && byteAt(index + 3) >= 0x80 &&
+				byteAt(index + 3) <= 0xBF)
+			{
+				findings.push_back(file.Name + ":" + std::to_string(GetLine(text, index)) + ": " + text.substr(index, 4));
+				index += 3;
+			}
+		}
+		return findings;
+	}
+
+	size_t CountDoubleEncodedText(const std::string& code)
+	{
+		return FindDoubleEncodedText(MakeSourceFile("Example.cpp", code)).size();
 	}
 
 	// Findings by line: rules that find the same literal report it once.
@@ -527,6 +553,28 @@ TEST_SUITE("Editor.UI.Source")
 		for (const std::string& finding : findings)
 			FAIL_CHECK("The editor uses its own fonts (UI/EditorFonts.h): " << finding);
 		CHECK(findings.empty());
+	}
+
+	TEST_CASE("Text is encoded as UTF-8 once")
+	{
+		std::vector<std::string> findings;
+		for (const SourceFile& file : LoadSources({ "" }, {}))
+		{
+			for (std::string& finding : FindDoubleEncodedText(file))
+				findings.push_back(std::move(finding));
+		}
+		for (const std::string& finding : findings)
+			FAIL_CHECK("Text encoded as UTF-8 twice (write the character's \\x escapes, as the other texts do): " << finding);
+		CHECK(findings.empty());
+	}
+
+	TEST_CASE("The encoding rule finds characters encoded twice, and only those")
+	{
+		CHECK(CountDoubleEncodedText("ImGui::Text(\"+%u built \xC3\x82\xC2\xB7 -%u destroyed\");") == 1);
+		CHECK(CountDoubleEncodedText("// caf\xC3\x83\xC2\xA9 and na\xC3\x83\xC2\xAFve") == 2);
+		CHECK(CountDoubleEncodedText("ImGui::Text(\"+%u built \xC2\xB7 -%u destroyed\");") == 0);
+		CHECK(CountDoubleEncodedText("ImGui::Text(\"caf\xC3\xA9 \xE2\x80\x94 \xC3\x84\");") == 0);
+		CHECK(CountDoubleEncodedText("const char* dot = \"\\xC2\\xB7\";") == 0);
 	}
 
 	TEST_CASE("The color rule finds colors however they are written")

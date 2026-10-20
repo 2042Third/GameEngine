@@ -255,8 +255,8 @@ TEST_SUITE("Scene.CookedScene")
 
 	TEST_CASE("Truncated, damaged and inconsistent cooked documents are refused with an error")
 	{
-		const Ref<Scene> small = MakeSmallScene();
-		const std::vector<uint8_t> bytes = Cook(*small);
+		const Ref<Scene> smallScene = MakeSmallScene();
+		const std::vector<uint8_t> bytes = Cook(*smallScene);
 		REQUIRE(CookedSceneReader::Read(bytes).has_value());
 
 		// Truncated at every byte.

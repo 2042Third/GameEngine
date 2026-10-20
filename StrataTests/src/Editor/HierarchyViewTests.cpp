@@ -11,7 +11,11 @@
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
 
+#include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
@@ -225,6 +229,73 @@ TEST_SUITE("Editor.HierarchyView")
 		view.Update(data.SceneData);
 		CHECK(RowNames(view, scene) == std::vector<std::string> { "Root1", "Lamp", "Box", "Root2", "Camera" });
 		CHECK(HierarchyFilter::Parse("Red c:Mesh t:Enemy box").Words == std::vector<std::string> { "red", "box" });
+	}
+
+	TEST_CASE("The l: and cell: terms find the entities of a world's layers and cells")
+	{
+		const HierarchyFilter parsed = HierarchyFilter::Parse("l:Props cell:3,-1 cell:x cell: l:");
+		CHECK(parsed.Layers == std::vector<std::string> { "props" });
+		CHECK(parsed.Cells == std::vector<std::pair<int32_t, int32_t>> { { 3, -1 } });
+		CHECK(parsed.InvalidCells == std::vector<std::string> { "x" });
+		CHECK(parsed.ReadsCells());
+		CHECK_FALSE(HierarchyFilter::Parse("cell: l:").ReadsCells());
+
+		// Root1's subtree is in cell Props (3, -1), Root2's in Ground (0, 0), Camera in the persistent scene, and an additive
+		// scene that is no cell holds Extra.
+		FilterScene data;
+		Scene& scene = *data.SceneData;
+		const AssetHandle props = UUID(0x1001);
+		const AssetHandle ground = UUID(0x1002);
+		const AssetHandle additive = UUID(0x1003);
+		const SubSceneID propsCell = scene.AdoptSubScene(props, std::vector<Entity> { data.Root1 });
+		const SubSceneID groundCell = scene.AdoptSubScene(ground, std::vector<Entity> { data.Root2 });
+		REQUIRE(propsCell != 0);
+		REQUIRE(groundCell != 0);
+		REQUIRE(scene.AdoptSubScene(additive, std::vector<Entity> { scene.CreateEntity("Extra") }) != 0);
+		int resolved = 0;
+		HierarchyView view;
+		view.SetCellResolver([&](AssetHandle cellScene) -> std::optional<HierarchyCell>
+		{
+			resolved++;
+			if (cellScene == props)
+				return HierarchyCell { "Props", 3, -1 };
+			if (cellScene == ground)
+				return HierarchyCell { "Ground", 0, 0 };
+			return std::nullopt;
+		});
+		auto shown = [&](std::string_view filter)
+		{
+			view.SetFilter(filter);
+			view.Update(data.SceneData);
+			return RowNames(view, scene);
+		};
+		CHECK(shown("l:props") == std::vector<std::string> { "Root1", "Lamp", "Box", "Bulb" });
+		// The resolver is asked once per cell scene and rebuild, not per entity.
+		CHECK(resolved <= 3);
+		CHECK(shown("l:PROP lamp") == std::vector<std::string> { "Root1", "Lamp" });
+		CHECK(shown("l:persistent") == std::vector<std::string> { "Camera" });
+		CHECK(shown("cell:0,0") == std::vector<std::string> { "Root2", "Crate" });
+		CHECK(shown("l:ground cell:0,0") == std::vector<std::string> { "Root2", "Crate" });
+		CHECK(shown("l:props cell:0,0").empty());
+		CHECK(shown("cell:3").empty());
+		CHECK(shown("l:extra").empty());
+
+		// Membership changes rebuild a filter that reads cells: Root2 moves into the Props cell, then into the persistent scene.
+		view.SetFilter("l:props");
+		view.Update(data.SceneData);
+		REQUIRE(scene.SetSubSceneOf(data.Root2, propsCell));
+		CHECK(view.Update(data.SceneData));
+		CHECK(RowNames(view, scene) == std::vector<std::string> { "Root1", "Lamp", "Box", "Bulb", "Root2", "Crate" });
+		REQUIRE(scene.SetSubSceneOf(data.Root2, 0));
+		CHECK(view.Update(data.SceneData));
+		CHECK(RowNames(view, scene) == std::vector<std::string> { "Root1", "Lamp", "Box", "Bulb" });
+		CHECK_FALSE(view.Update(data.SceneData));
+
+		// Without a world nothing is a cell: only the entities of no sub-scene are persistent.
+		view.SetCellResolver({});
+		CHECK(view.Update(data.SceneData));
+		CHECK(view.GetRows().empty());
+		CHECK(shown("l:persistent") == std::vector<std::string> { "Root2", "Crate", "Camera" });
 	}
 
 	TEST_CASE("A filtering view outlives the scenes it showed, and scenes outlive the views")

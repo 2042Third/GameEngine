@@ -30,6 +30,7 @@
 #include <iterator>
 #include <optional>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace Strata
@@ -2635,6 +2636,109 @@ namespace Strata
 		}
 
 		////////////////////////////////////////////////////////////////////////////////
+		// World streaming
+		////////////////////////////////////////////////////////////////////////////////
+
+		constexpr const char* c_WithoutWorld = "the scene streams no world (it has no active World component naming a World asset)";
+
+		// The scene's world streaming (IWorldStreaming, Scene/SceneServices.h), reporting when the scene streams no world.
+		IWorldStreaming* RequireWorld(ScriptSystem& system, const char* function)
+		{
+			IWorldStreaming* world = system.GetScene().GetService<IWorldStreaming>();
+			if (!world || !world->IsStreaming())
+			{
+				system.ReportProblem(function, c_WithoutWorld);
+				return nullptr;
+			}
+			return world;
+		}
+
+		// A region a script passes: its center and radius, reporting a missing or non-finite center or a bad radius.
+		std::optional<std::pair<glm::vec3, float>> ReadRegion(ScriptSystem& system, const float* position, float radius, const char* function)
+		{
+			const std::optional<glm::vec3> center = ReadVector3(system, position, "position", function);
+			if (!center)
+				return std::nullopt;
+			if (!std::isfinite(radius) || radius < 0.0f)
+			{
+				system.ReportProblem(function, fmt::format("the radius ({}) must be a finite number of at least 0", radius));
+				return std::nullopt;
+			}
+			return std::pair<glm::vec3, float> { *center, radius };
+		}
+
+		uint64_t HostWorldRequestCellsAround(StrataScriptContext* context, const float* position, float radius)
+		{
+			return HostCall("WorldRequestCellsAround", uint64_t(0), [&]() -> uint64_t
+			{
+				ScriptSystem* system = ResolveContext(context, "WorldRequestCellsAround");
+				IWorldStreaming* world = system ? RequireWorld(*system, "WorldRequestCellsAround") : nullptr;
+				const std::optional<std::pair<glm::vec3, float>> region = world ? ReadRegion(*system, position, radius, "WorldRequestCellsAround") : std::nullopt;
+				return region ? world->RequestCellsAround(region->first, region->second) : 0;
+			});
+		}
+
+		bool HostWorldReleaseCells(StrataScriptContext* context, uint64_t request)
+		{
+			return HostCall("WorldReleaseCells", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "WorldReleaseCells");
+				IWorldStreaming* world = system ? RequireWorld(*system, "WorldReleaseCells") : nullptr;
+				if (!world)
+					return false;
+				if (!world->ReleaseCells(request))
+				{
+					system->ReportProblem("WorldReleaseCells", fmt::format("request {} is not held (never made, or released already)", request));
+					return false;
+				}
+				return true;
+			});
+		}
+
+		bool HostWorldIsLoadedAround(StrataScriptContext* context, const float* position, float radius)
+		{
+			return HostCall("WorldIsLoadedAround", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "WorldIsLoadedAround");
+				IWorldStreaming* world = system ? RequireWorld(*system, "WorldIsLoadedAround") : nullptr;
+				const std::optional<std::pair<glm::vec3, float>> region = world ? ReadRegion(*system, position, radius, "WorldIsLoadedAround") : std::nullopt;
+				return region && world->IsLoadedAround(region->first, region->second);
+			});
+		}
+
+		bool HostWorldSetLayerEnabled(StrataScriptContext* context, StrataScriptString layer, bool enabled)
+		{
+			return HostCall("WorldSetLayerEnabled", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "WorldSetLayerEnabled");
+				IWorldStreaming* world = system ? RequireWorld(*system, "WorldSetLayerEnabled") : nullptr;
+				if (!world)
+					return false;
+				const std::string_view name = ScriptStringView(layer);
+				if (!world->SetLayerEnabled(name, enabled))
+				{
+					system->ReportProblem("WorldSetLayerEnabled", fmt::format("the world has no layer named '{}'", name));
+					return false;
+				}
+				return true;
+			});
+		}
+
+		int32_t HostWorldIsLayerEnabled(StrataScriptContext* context, StrataScriptString layer)
+		{
+			return HostCall("WorldIsLayerEnabled", int32_t(-1), [&]() -> int32_t
+			{
+				ScriptSystem* system = ResolveContext(context, "WorldIsLayerEnabled");
+				IWorldStreaming* world = system ? RequireWorld(*system, "WorldIsLayerEnabled") : nullptr;
+				if (!world)
+					return -1;
+				// An unknown name is an answer (-1), not misuse, as for collision layers.
+				const std::optional<bool> enabled = world->IsLayerEnabled(ScriptStringView(layer));
+				return enabled ? (*enabled ? 1 : 0) : -1;
+			});
+		}
+
+		////////////////////////////////////////////////////////////////////////////////
 		// The table
 		////////////////////////////////////////////////////////////////////////////////
 
@@ -2779,7 +2883,12 @@ namespace Strata
 	X(UIIsActionDown) \
 	X(GetUnscaledDeltaTime) \
 	X(GetRealTime) \
-	X(GetTypedText)
+	X(GetTypedText) \
+	X(WorldRequestCellsAround) \
+	X(WorldReleaseCells) \
+	X(WorldIsLoadedAround) \
+	X(WorldSetLayerEnabled) \
+	X(WorldIsLayerEnabled)
 
 		struct HostFunctionEntry
 		{

@@ -253,8 +253,8 @@ TEST_SUITE("Renderer.CookedTexture")
 		CHECK_FALSE(GetCookedTexturePrefixSize(version1, version1.size(), 32));
 		CHECK_FALSE(ParseCookedTexturePrefix(version1, version1.size() + 100));
 		// Textures no larger than the tail have no levels to stream: a prefix would be all of them.
-		const std::vector<uint8_t> small = CreateChain(TextureFormat::RGBA8, 32, 32, "Small")->Serialize();
-		CHECK(GetCookedTexturePrefixSize(small, small.size(), 32) == small.size());
+		const std::vector<uint8_t> smallChain = CreateChain(TextureFormat::RGBA8, 32, 32, "Small")->Serialize();
+		CHECK(GetCookedTexturePrefixSize(smallChain, smallChain.size(), 32) == smallChain.size());
 
 		// The levels above the tail are read as one range each run of them: [first, end) is contiguous, the smaller first.
 		for (const auto& [first, end] : { std::pair { 5u, 6u }, std::pair { 0u, 6u }, std::pair { 3u, 5u } })

@@ -25,8 +25,11 @@
 #include <Strata/Renderer/Mesh.h>
 #include <Strata/Renderer/Texture.h>
 #include <Strata/Renderer/TextureStreamer.h>
+#include <Strata/World/WorldAsset.h>
 
 #include <imgui.h>
+#include <nlohmann/json.hpp>
+#include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <cmath>
@@ -176,6 +179,8 @@ namespace Strata
 			DrawModelSummary(*assets, *metadata);
 		if (metadata->Type == AssetType::AudioClip)
 			DrawAudioPreview(handle);
+		if (metadata->Type == AssetType::World && assets)
+			DrawWorldSummary(*assets, *metadata);
 		if (assets)
 			DrawDetails(*assets, *metadata);
 	}
@@ -255,6 +260,55 @@ namespace Strata
 					panelContext.Shell->RequestDiscardChanges([open]() { open(true); });
 				else
 					open(false);
+			}
+		}
+		if (metadata.Type == AssetType::World && context.GetAssetManager())
+		{
+			// Open edits the world: its persistent scene, with the cells around the camera.
+			const Ref<WorldAsset> world = context.GetAssetManager()->GetAsset<WorldAsset>(metadata.Handle);
+			const AssetHandle persistent = world ? world->GetData().PersistentScene : UUID::Null();
+			next();
+			UI::ButtonStyle openStyle;
+			openStyle.Enabled = persistent.IsValid() && persistent != context.GetSceneHandle() && !context.IsPlaying();
+			const char* openTooltip = !world ? "The world is loading" : !persistent.IsValid() ? "The world names no persistent scene"
+				: openStyle.Enabled ? "Open the world for editing: its persistent scene, with the cells around the camera" : "The world is open (or the editor is playing)";
+			if (UI::ToolbarButton("AssetInspector.OpenWorld", Icons::FolderOpen, "Open", openTooltip, openStyle))
+			{
+				auto open = [&runner = panelContext.Runner, &context, &commands, scene = UUIDToJson(persistent)](bool force)
+				{
+					RunEditorCommandDeferred(runner, context, commands, "scene.open", { { "scene", scene }, { "force", force } });
+				};
+				if (panelContext.Shell)
+					panelContext.Shell->RequestDiscardChanges([open]() { open(true); });
+				else
+					open(false);
+			}
+			// Cook measures the changed cells off the frame (world.cook); with the world open it also sizes its physics.
+			next();
+			UI::ButtonStyle cookStyle;
+			cookStyle.Enabled = !m_Cook->Running && !context.IsPlaying();
+			if (UI::ToolbarButton("AssetInspector.CookWorld", Icons::Gauge, "Cook", "Measure the cells that changed (entities, bodies, bounds) into the "
+				"world's index, and with the world open size its physics for the busiest place a source can stand (world.cook)", cookStyle))
+			{
+				m_Cook->Running = true;
+				m_Cook->World = metadata.Handle;
+				m_Cook->Outcome.clear();
+				panelContext.Runner.Run(context, commands, "world.cook", { { "world", asset } }, [state = m_Cook](const EditorCommandResult& result)
+				{
+					state->Running = false;
+					state->Failed = !result.Success;
+					if (result.Success)
+					{
+						state->Outcome = fmt::format("Cooked {} cells ({} read again): at most {} bodies in reach, a capacity of {} recommended",
+							result.Value.value("cells", 0), result.Value.value("cellsRead", 0), result.Value.value("maxBodiesInRadius", 0),
+							result.Value.value("recommendedMaxBodies", 0));
+					}
+					else
+					{
+						state->Outcome = result.Error;
+						ST_ERROR("Cook: {}", result.Error);
+					}
+				}, CommandOrigin { CommandSource::UI });
 			}
 		}
 		if (metadata.Type == AssetType::Prefab || metadata.Type == AssetType::Model)
@@ -608,6 +662,76 @@ namespace Strata
 			drawList->AddLine(ImVec2(x, min.y), ImVec2(x, max.y), ImGui::GetColorU32(colors.Text));
 		}
 		drawList->AddRect(min, max, ImGui::GetColorU32(colors.Border));
+	}
+
+	void AssetInspectorPanel::DrawWorldSummary(EditorAssetManager& assets, const AssetMetadata& metadata)
+	{
+		if (!UI::SectionHeader("AssetInspector.WorldSection", (std::string(Icons::Earth) + "  World").c_str()))
+			return;
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const Ref<WorldAsset> world = assets.GetAsset<WorldAsset>(metadata.Handle);
+		if (!world)
+		{
+			ImGui::TextColored(colors.TextSecondary, "%s", assets.GetAssetState(metadata.Handle) == AssetState::Failed ? "The world cannot be loaded" : "Loading...");
+			return;
+		}
+		const WorldData& data = world->GetData();
+		ImGui::Text("%zu cells on %zu layers", data.Cells.size(), data.Layers.size());
+		UI::ItemProbe::Record("AssetInspector.WorldCells");
+		if (ImGui::BeginTable("AssetInspector.WorldLayers", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp))
+		{
+			ImGui::TableSetupColumn("Layer");
+			ImGui::TableSetupColumn("Cell");
+			ImGui::TableSetupColumn("Streams within");
+			ImGui::TableSetupColumn("Cells");
+			ImGui::TableSetupColumn("At start");
+			ImGui::TableHeadersRow();
+			for (const WorldLayer& layer : data.Layers)
+			{
+				size_t cells = 0;
+				for (const WorldCell& cell : data.Cells)
+					cells += cell.Layer == layer.ID ? 1 : 0;
+				ImGui::TableNextRow();
+				ImGui::TableNextColumn();
+				ImGui::TextColored(layer.EnabledByDefault ? colors.Text : colors.TextSecondary, "%s", layer.Name.c_str());
+				if (!layer.EnabledByDefault && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+					ImGui::SetTooltip("Off until a game enables it (World::SetLayerEnabled)");
+				ImGui::TableNextColumn();
+				ImGui::Text("%g m", static_cast<double>(layer.CellSize));
+				ImGui::TableNextColumn();
+				ImGui::Text("%g m", static_cast<double>(layer.StreamingDistance));
+				ImGui::TableNextColumn();
+				ImGui::Text("%zu", cells);
+				ImGui::TableNextColumn();
+				ImGui::TextColored(layer.LoadBeforeStart ? colors.Text : colors.TextSecondary, "%s", layer.LoadBeforeStart ? "Loaded" : "Streams");
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+				{
+					ImGui::SetTooltip("%s", layer.LoadBeforeStart ? "A game starts once these cells around its sources are in, with their collision"
+						: "These cells stream in after the game starts");
+				}
+			}
+			ImGui::EndTable();
+		}
+		UI::ItemProbe::Record("AssetInspector.WorldLayers");
+		ImGui::PushStyleColor(ImGuiCol_Text, colors.TextSecondary);
+		if (data.Index)
+		{
+			ImGui::TextWrapped("Cooked: %zu cells measured, at most %llu bodies within any source's reach, a physics capacity of %u recommended",
+				data.Index->Cells.size(), static_cast<unsigned long long>(data.Index->MaxBodiesInRadius), data.Index->GetRecommendedMaxBodies());
+		}
+		else
+		{
+			ImGui::TextWrapped("Not cooked yet: Cook measures the cells (exports cook every world)");
+		}
+		ImGui::PopStyleColor();
+		UI::ItemProbe::Record("AssetInspector.WorldIndex");
+		if (m_Cook->World == metadata.Handle && (m_Cook->Running || !m_Cook->Outcome.empty()))
+		{
+			ImGui::PushStyleColor(ImGuiCol_Text, m_Cook->Failed ? colors.Error : colors.TextSecondary);
+			ImGui::TextWrapped("%s", m_Cook->Running ? "Cooking..." : m_Cook->Outcome.c_str());
+			ImGui::PopStyleColor();
+			UI::ItemProbe::Record("AssetInspector.WorldCook", true, 0, m_Cook->Running ? std::string_view("Cooking...") : std::string_view(m_Cook->Outcome));
+		}
 	}
 
 	void AssetInspectorPanel::DrawDetails(EditorAssetManager& assets, const AssetMetadata& metadata)

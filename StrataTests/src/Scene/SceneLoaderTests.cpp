@@ -10,6 +10,7 @@
 #include "Strata/Scene/SceneLoader.h"
 #include "Strata/Scene/SceneReadProgress.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scene/SceneWorkBudget.h"
 #include "TestHelpers.h"
 
 #include <algorithm>
@@ -98,7 +99,9 @@ TEST_SUITE("Scene.Loader")
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
 		while (!request.IsFinished() && std::chrono::steady_clock::now() < deadline)
 		{
-			manager.AllowReads(1);
+			// One read per step: allowances given while the scene is prepared on the worker must not add up, or every
+			// dependency would pass at once on a slow machine and the load would never be seen loading them.
+			manager.AllowOneRead();
 			manager.Update();
 			request.Update();
 			progress.push_back(request.GetProgress());
@@ -175,7 +178,7 @@ TEST_SUITE("Scene.Loader")
 		};
 		std::vector<Call> calls;
 		SceneLoadOptions options;
-		options.Prepare = [&](Scene& scene)
+		options.Prepare = [&](Scene& scene, SceneWorkBudget&)
 		{
 			Call call { &scene };
 			for (const AssetHandle dependency : fixture.Dependencies)

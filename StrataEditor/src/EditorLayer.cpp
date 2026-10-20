@@ -140,11 +140,15 @@ namespace Strata
 			"command the person, agents and scripts ran: editor.activity), Console, ContentBrowser, Hierarchy, Inspector, AssetInspector (the "
 			"Asset tab: the inspected asset, its settings and preview), Viewport (the Scene view; \"Scene\" works too) or Game (the Game view: the "
 			"game through its camera); for the ContentBrowser, scripts: true shows its Scripts root "
-			"(the project's script files with their classes, as script.list lists them) and false its asset folders. Changes no scene data and "
-			"records no undo; fails in an editor without a window (--no-gpu or headless) and while the launcher shows (no project is open).",
+			"(the project's script files with their classes, as script.list lists them) and false its asset folders; for the Hierarchy, search "
+			"replaces the text of its search field as if the person typed it (a name, c:Light, t:Enemy, and in a world l:Props or cell:3,-1; "
+			"\"\" clears it). Changes no scene data and records no undo; fails in an editor without a window (--no-gpu or headless) and while "
+			"the launcher shows (no project is open).",
 			CommandUtils::ObjectSchema({ { "panel", { { "type", "string" }, { "enum", panels }, { "description", "The panel to show" } } },
 				{ "scripts", CommandUtils::BoolSchema("ContentBrowser only: show its Scripts root (true) or its asset folders (false); "
-					"without it, the browser shows what it showed") } }, { "panel" }),
+					"without it, the browser shows what it showed") },
+				{ "search", CommandUtils::StringSchema("Hierarchy only: the search field's new text (\"\" clears it); without it, the search stays") } },
+				{ "panel" }),
 			[this](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
 			{
 				CommandArguments arguments(parameters);
@@ -153,6 +157,7 @@ namespace Strata
 				// The Scene view keeps the id it had as the viewport.
 				if (panel == "Scene")
 					panel = EditorPanels::c_Viewport;
+				const std::optional<std::string> search = arguments.Has("search") ? std::optional<std::string>(arguments.GetString("search", "")) : std::nullopt;
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				const EditorPanelDescriptor* descriptor = m_Panels.FindDescriptor(panel);
@@ -160,6 +165,8 @@ namespace Strata
 					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'panel': the editor has no panel '{}'", panel));
 				if (scripts && panel != EditorPanels::c_ContentBrowser)
 					return EditorCommandResult::InvalidParameters("Parameter 'scripts': only the ContentBrowser has a Scripts root");
+				if (search && panel != EditorPanels::c_Hierarchy)
+					return EditorCommandResult::InvalidParameters("Parameter 'search': only the Hierarchy has a search field this command fills");
 				if (m_Options.Headless)
 					return EditorCommandResult::Fail("This editor runs without a window: it has no panels to show");
 				if (IsLauncherShown())
@@ -171,6 +178,12 @@ namespace Strata
 					if (ContentBrowserPanel* browser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
 						browser->ShowScripts(context, *scripts);
 					result["scripts"] = *scripts;
+				}
+				if (search)
+				{
+					if (SceneHierarchyPanel* hierarchy = m_Panels.Get<SceneHierarchyPanel>(EditorPanels::c_Hierarchy))
+						hierarchy->SetSearch(*search);
+					result["search"] = *search;
 				}
 				return EditorCommandResult::Ok(std::move(result));
 			}, EditorCommandKind::Session });
@@ -310,6 +323,17 @@ namespace Strata
 					m_Panels.Focus(EditorPanels::c_ContentBrowser);
 			});
 		}
+		if (SceneHierarchyPanel* hierarchy = m_Panels.Get<SceneHierarchyPanel>(EditorPanels::c_Hierarchy))
+		{
+			hierarchy->SetShowCellMapHandler([this]()
+			{
+				if (StreamingPanel* streaming = m_Panels.Get<StreamingPanel>(EditorPanels::c_Streaming))
+				{
+					streaming->RevealWorld();
+					m_Panels.Focus(EditorPanels::c_Streaming);
+				}
+			});
+		}
 	}
 
 	void EditorLayer::OnAttach()
@@ -341,6 +365,10 @@ namespace Strata
 			viewportSettings.DebugColors.LOD[level] = ToVec4(UI::WithAlpha(*lodColors[level], c_DebugTintAlpha));
 		for (size_t level = 0; level < viewportSettings.DebugColors.Mip.size(); level++)
 			viewportSettings.DebugColors.Mip[level] = ToVec4(UI::WithAlpha(*lodColors[level], c_DebugTintAlpha));
+		// The cell bounds in the cell map's colors: loading Sulfur, loaded Ochre, unloading the secondary text.
+		viewportSettings.DebugColors.CellLoading = ToVec4(themeColors.Warning);
+		viewportSettings.DebugColors.CellLoaded = ToVec4(themeColors.Accent);
+		viewportSettings.DebugColors.CellUnloading = ToVec4(themeColors.TextSecondary);
 		// Startup counts as activity: the layout settles at the full rate.
 		m_LastInputTime = m_Host->GetTime();
 
@@ -1682,6 +1710,7 @@ namespace Strata
 		DrawFramePill();
 		DrawAssetsPill();
 		DrawSavingPill();
+		DrawPhysicsPill();
 
 		ImGui::SameLine();
 		bool showConsole = DrawAutomationPill();
@@ -1761,6 +1790,31 @@ namespace Strata
 		}
 		if (clicked)
 			m_Panels.Focus(EditorPanels::c_Performance);
+	}
+
+	void EditorLayer::DrawPhysicsPill()
+	{
+		// Only a world at its growth limit leaves bodies without collision (others grow before their next step): rare, and
+		// something to fix. The Streaming panel reads the running game's capacity once per frame.
+		StreamingPanel* streaming = m_Panels.Get<StreamingPanel>(EditorPanels::c_Streaming);
+		if (!streaming || !streaming->GetPhysics() || streaming->GetPhysics()->WaitingForSlot == 0)
+			return;
+		const PhysicsCapacityInfo& physics = *streaming->GetPhysics();
+		const std::string text = fmt::format("{} {} without collision", physics.WaitingForSlot, physics.WaitingForSlot == 1 ? "body" : "bodies");
+		const std::string compact = fmt::format("{} no collision", physics.WaitingForSlot);
+		ImGui::SameLine();
+		const bool clicked = UI::Pill("Status.Physics", Icons::CircleAlert, StatusPillText(Icons::CircleAlert, text, compact), UI::GetThemeColors().Error);
+		if (UI::IsTooltipDue())
+		{
+			ImGui::SetTooltip("%u bodies of the running game have no collision: its physics world is at its growth limit of %u bodies "
+				"(PhysicsSettings::GrowthLimit), so they wait until bodies are removed. Click to see the world's capacity (Streaming, Physics).",
+				physics.WaitingForSlot, physics.MaxBodies);
+		}
+		if (clicked)
+		{
+			streaming->RevealPhysics();
+			m_Panels.Focus(EditorPanels::c_Streaming);
+		}
 	}
 
 	void EditorLayer::DrawAssetsPill()

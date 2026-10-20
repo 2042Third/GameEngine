@@ -11,6 +11,7 @@
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scene/SceneWorkBudget.h"
 #include "Strata/Scene/SubScene.h"
 #include "TestHelpers.h"
 
@@ -157,8 +158,9 @@ TEST_SUITE("Scene.Streaming")
 		CHECK(scene.GetRootEntities() == std::vector<UUID> { existing.GetUUID(), subRootID });
 		CheckSceneCaches(scene);
 
-		// The scene's setting bounds every slice; it is saved with the scene.
+		// The scene's setting bounds every slice; it is saved with the scene, and so is the unloads' bound.
 		scene.GetSettings().MaxEntitiesInstantiatedPerFrame = 1500;
+		scene.GetSettings().MaxEntitiesDestroyedPerFrame = 700;
 		const SubSceneID second = scene.BeginAdditiveLoad(MakeNestedScene(6000, "Second"));
 		for (const size_t count : UpdateUntilSettled(scene, second))
 			CHECK(count <= 1500);
@@ -167,17 +169,21 @@ TEST_SUITE("Scene.Streaming")
 		const Ref<Scene> reloaded = CreateRef<Scene>();
 		REQUIRE_MESSAGE(SceneSerializer::Deserialize(*reloaded, SceneSerializer::Serialize(scene), &error), error);
 		CHECK(reloaded->GetSettings().MaxEntitiesInstantiatedPerFrame == 1500);
+		CHECK(reloaded->GetSettings().MaxEntitiesDestroyedPerFrame == 700);
 		// Sub-scene tags are runtime only: neither saved nor copied.
 		CHECK(CountSubSceneTags(scene) == 2);
 		CHECK(CountSubSceneTags(*reloaded) == 0);
 		CHECK(CountSubSceneTags(*Scene::Copy(running)) == 0);
 
-		// Unloading removes exactly what each brought.
+		// Unloading removes exactly what each brought (finished at once here; updates destroy it a slice at a time).
 		CHECK(scene.UnloadSubScene(id));
-		CHECK_FALSE(scene.UnloadSubScene(id));
+		CHECK(scene.UnloadSubScene(id)); // Being unloaded: nothing changes
+		scene.FlushSubSceneUnloads();
 		CHECK(scene.GetSubSceneStatus(id) == nullptr);
+		CHECK_FALSE(scene.UnloadSubScene(id));
 		CHECK(scene.GetEntityCount() == 6001);
 		CHECK(scene.UnloadSubScene(second));
+		scene.FlushSubSceneUnloads();
 		CHECK(scene.GetEntityCount() == 1);
 		CHECK(scene.GetSubScenes().empty());
 		CheckSceneCaches(scene);
@@ -265,6 +271,106 @@ TEST_SUITE("Scene.Streaming")
 		CheckSceneCaches(scene);
 		scene.OnRuntimeStop();
 	}
+
+	TEST_CASE("An unloading sub-scene leaves scripts' updates, physics, audio and rendering in the request's frame, before its entities go")
+	{
+		ScopedJobSystem jobs(2, 1);
+		ScopedAudioEngine audio;
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		// A cell: 300 static boxes as top-level leaves (a cell's usual entities), a root whose children are static boxes, and
+		// an entity with a script and a sound.
+		Ref<Scene> sub = CreateRef<Scene>("Cell");
+		for (int index = 0; index < 300; index++)
+		{
+			Entity box = sub->CreateEntity("Box");
+			box.GetComponent<TransformComponent>().Translation = glm::vec3(static_cast<float>(index % 20) * 3.0f, 0.0f, static_cast<float>(index / 20) * 3.0f);
+			box.AddComponent<BoxColliderComponent>();
+			box.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		}
+		Entity group = sub->CreateEntity("Group");
+		group.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, -20.0f);
+		for (int index = 0; index < 10; index++)
+		{
+			Entity part = sub->CreateChildEntity(group, "Part");
+			part.GetComponent<TransformComponent>().Translation = glm::vec3(static_cast<float>(index) * 3.0f, 0.0f, 0.0f);
+			part.AddComponent<BoxColliderComponent>();
+		}
+		Entity actor = sub->CreateEntity("Actor");
+		AddScriptEntry(actor, "Lifecycle");
+		actor.AddComponent<AudioSourceComponent>();
+		sub->UpdateWorldTransforms();
+
+		Scene scene("Level");
+		CreateLogEntity(scene);
+		Entity resident = scene.CreateEntity("Resident");
+		resident.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, 200.0f);
+		resident.AddComponent<BoxColliderComponent>();
+		resident.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		AddScriptEntry(resident, "Lifecycle");
+		resident.AddComponent<AudioSourceComponent>();
+		scene.OnRuntimeStart();
+		RenderScene& renderScene = RenderScene::Get(scene);
+		auto countActiveProxies = [&]()
+		{
+			uint32_t count = 0;
+			for (uint32_t proxy = 0; proxy < renderScene.GetProxyCapacity(); proxy++)
+			{
+				if (renderScene.GetEntity(proxy) != entt::null && (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Active) != 0)
+					count++;
+			}
+			return count;
+		};
+		const SubSceneID id = scene.BeginAdditiveLoad(sub);
+		UpdateUntilSettled(scene, id, [&]() { renderScene.Sync(nullptr); });
+		REQUIRE(scene.IsSubSceneLoaded(id));
+		scene.OnUpdateRuntime(c_FrameTime);
+		renderScene.Sync(nullptr);
+		PhysicsSystem& physics = *scene.GetSystem<PhysicsSystem>();
+		AudioSystem& sounds = *scene.GetSystem<AudioSystem>();
+		const glm::vec3 down(0.0f, -1.0f, 0.0f);
+		const glm::vec3 overBox(6.0f, 5.0f, 3.0f);
+		const glm::vec3 overPart(6.0f, 5.0f, -20.0f);
+		REQUIRE(physics.GetStats().StaticBodyCount == 311);
+		REQUIRE(physics.Raycast(overBox, down, 10.0f).has_value());
+		REQUIRE(physics.Raycast(overPart, down, 10.0f).has_value());
+		REQUIRE(sounds.GetStats().SourceCount == 2);
+		REQUIRE(countActiveProxies() == 301);
+
+		// The request's frame has no time left to destroy anything: every entity stays, yet none of them is in the game.
+		ClearLog(scene);
+		REQUIRE(scene.UnloadSubScene(id));
+		const size_t entities = scene.GetEntityCount();
+		SceneWorkBudget spent = SceneWorkBudget::ForFrame(scene.GetSettings());
+		spent.EntitiesToCreate = 0;
+		spent.EntitiesToDestroy = 0;
+		spent.Deadline = std::chrono::steady_clock::now();
+		scene.OnUpdateRuntime(c_FrameTime, &spent);
+		renderScene.Sync(nullptr);
+		CHECK(scene.GetEntityCount() == entities);
+		CHECK(physics.GetStats().StaticBodyCount == 1);
+		CHECK_FALSE(physics.Raycast(overBox, down, 10.0f).has_value());
+		CHECK_FALSE(physics.Raycast(overPart, down, 10.0f).has_value());
+		CHECK(sounds.GetStats().SourceCount == 1);
+		CHECK(countActiveProxies() == 1);
+		const std::string log = GetLog(scene);
+		CHECK(log.find("Resident.Lifecycle.Update;") != std::string::npos);
+		CHECK(log.find("Actor.Lifecycle.Update;") == std::string::npos);
+		CHECK(log.find("Actor.Lifecycle.Destroy;") == std::string::npos);
+
+		// The unload then destroys them, and nothing comes back.
+		scene.FlushSubSceneUnloads();
+		scene.OnUpdateRuntime(c_FrameTime);
+		renderScene.Sync(nullptr);
+		CHECK(scene.GetEntityCount() == entities - 312);
+		CHECK(physics.GetStats().StaticBodyCount == 1);
+		CHECK(sounds.GetStats().SourceCount == 1);
+		CHECK(countActiveProxies() == 1);
+		CHECK(GetLog(scene).find("Actor.Lifecycle.Destroy;") != std::string::npos);
+		std::string error;
+		CHECK_MESSAGE(renderScene.Validate(&error), error);
+		CheckSceneCaches(scene);
+		scene.OnRuntimeStop();
+	}
 #endif
 
 	TEST_CASE("A sub-scene whose IDs the scene has fails with an error and changes nothing")
@@ -341,6 +447,9 @@ TEST_SUITE("Scene.Streaming")
 		listener.Disconnect();
 		CHECK(scene.GetSubSceneStatus(doomedID)->State == SubSceneState::Failed);
 		CHECK(listener.Unloaded);
+		// The unload started once the update returned; its entities go over the next updates, or at once here.
+		CHECK(scene.GetSubSceneStatus(resident)->State == SubSceneState::Unloading);
+		scene.FlushSubSceneUnloads();
 		CHECK(scene.GetSubSceneStatus(resident) == nullptr);
 		CHECK(scene.GetEntityCount() == 4);
 		CHECK(CountSubSceneTags(scene) == 0);
@@ -408,6 +517,7 @@ TEST_SUITE("Scene.Streaming")
 		CHECK(scene.FindEntityByName("B49").GetParent() == streamedGroupB);
 		CheckSceneCaches(scene);
 		CHECK(scene.UnloadSubScene(id));
+		scene.FlushSubSceneUnloads();
 		CHECK(scene.GetEntityCount() == 1);
 		CheckSceneCaches(scene);
 
@@ -580,6 +690,7 @@ TEST_SUITE("Scene.Streaming")
 		CHECK(scene.GetRegistry().get<SubSceneComponent>(roots[0].GetHandle()).Source == fixture.SceneHandle);
 		CHECK(roots[4].GetComponent<TransformComponent>().Translation.x == 4.0f);
 		CHECK(scene.UnloadSubScene(loaded));
+		scene.FlushSubSceneUnloads();
 		CHECK(saveEntities() == before);
 
 		// What cannot load fails at once, adding nothing.

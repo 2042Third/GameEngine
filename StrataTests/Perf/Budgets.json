@@ -174,5 +174,15 @@
 	"Perf.GameUI.Layout10k": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.GameUI.Render10k": { "Unit": "ms", "Provisional": true, "Target": 1.0 },
 	"PerfGPU.GameUI.RenderIdle10k": { "Unit": "ms", "Provisional": true },
-	"Perf.GameUI.IdleFrame10k": { "Unit": "ms", "Provisional": true }
+	"Perf.GameUI.IdleFrame10k": { "Unit": "ms", "Provisional": true },
+	"Perf.Physics.Grow65kMigration": { "Unit": "ms", "Provisional": true, "Target": 16.7 },
+	"Perf.Physics.Create100kStaticBodies": { "Unit": "ms", "Provisional": true, "Target": 25.0 },
+	"Perf.World.CellUnloadMaxFrame": { "Unit": "ms", "Provisional": true, "Target": 4.0 },
+	"Perf.World.PhysicsBodiesWaiting": { "Unit": "count", "Provisional": true, "Target": 0.0 },
+	"Perf.World.CellDriveMaxFrame": { "Unit": "ms", "Provisional": true, "Target": 8.0 },
+	"PerfGPU.Editor.EditFrameWorldIdle": { "Unit": "ms", "Provisional": true, "Target": 0.2808 },
+	"PerfGPU.Editor.PlayStartWorldMaxFrame": { "Unit": "ms", "Provisional": true, "Target": 50.0 },
+	"PerfGPU.World.CellDriveMaxFrame": { "Unit": "ms", "Provisional": true, "Target": 8.0 },
+	"Perf.World.DrivePeakPrivate": { "Unit": "MB", "Provisional": true, "Target": 2048.0 },
+	"Perf.World.DriveFrameP95": { "Unit": "ms", "Provisional": true, "Target": 16.7 }
 }

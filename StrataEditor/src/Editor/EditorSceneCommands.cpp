@@ -1,6 +1,7 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorWorld.h"
 #include "Editor/ProjectTemplates.h"
 #include "Editor/SceneEdit.h"
 
@@ -62,6 +63,7 @@ namespace Strata
 				{ "fixedTimestep", settings.FixedTimestep },
 				{ "maxFixedStepsPerFrame", settings.MaxFixedStepsPerFrame },
 				{ "maxEntitiesInstantiatedPerFrame", settings.MaxEntitiesInstantiatedPerFrame },
+				{ "maxEntitiesDestroyedPerFrame", settings.MaxEntitiesDestroyedPerFrame },
 				{ "physicsCapacity", {
 					{ "maxBodies", settings.PhysicsCapacity.MaxBodies },
 					{ "maxBodyPairs", settings.PhysicsCapacity.MaxBodyPairs },
@@ -273,6 +275,17 @@ namespace Strata
 					failed.Announced = true;
 					return failed;
 				}
+				// A world's save ends with its World document: what it wrote is listed then.
+				if (context.IsWorldSaveWriting(id))
+					return std::nullopt;
+				// Its cells are written, but the World document that lists them is not: the scene stays modified.
+				if (std::string worldError = context.GetWorldSaveError(id); !worldError.empty())
+				{
+					EditorCommandResult failed = EditorCommandResult::Fail(std::move(worldError));
+					failed.Announced = true;
+					return failed;
+				}
+				const std::optional<std::vector<WorldSavedDocument>> documents = context.GetWorldSaveDocuments(id);
 				constexpr double c_Megabyte = 1024.0 * 1024.0;
 				const DocumentSaveItemResult* written = status->Items.empty() ? nullptr : &status->Items.front();
 				nlohmann::json value = {
@@ -286,13 +299,29 @@ namespace Strata
 						{ "peakPrivateMBDuring", static_cast<double>(peakPrivate) / c_Megabyte } } } };
 				if (!frameTimes.IsEmpty())
 					value["frameTimes"] = frameTimes.Describe();
+				if (documents)
+				{
+					nlohmann::json list = nlohmann::json::array();
+					uint64_t bytes = 0;
+					uint64_t entities = 0;
+					for (const WorldSavedDocument& document : *documents)
+					{
+						list.push_back({ { "path", document.Path }, { "kind", document.Kind }, { "bytes", document.Bytes }, { "entities", document.Entities } });
+						bytes += document.Bytes;
+						entities += document.Entities;
+					}
+					value["path"] = path;
+					value["bytes"] = bytes;
+					value["entities"] = entities;
+					value["documents"] = std::move(list);
+				}
 				return EditorCommandResult::Ok(std::move(value));
 			});
 		}
 
 		nlohmann::json DescribeSubScene(const SubSceneStatus& status)
 		{
-			return {
+			nlohmann::json value = {
 				{ "subScene", status.ID },
 				{ "scene", status.Scene.IsValid() ? UUIDToJson(status.Scene) : nlohmann::json(nullptr) },
 				{ "state", SubSceneStateToString(status.State) },
@@ -302,6 +331,10 @@ namespace Strata
 				{ "totalEntities", status.TotalEntities },
 				{ "slices", status.Slices },
 				{ "error", status.Error.empty() ? nlohmann::json(nullptr) : nlohmann::json(status.Error) } };
+			// Being unloaded: its entities are inactive and go a slice per frame.
+			if (status.State == SubSceneState::Unloading)
+				value["destroyedEntities"] = status.DestroyedEntities;
+			return value;
 		}
 
 		// What scene.loadStatus reports: the scene being opened or the last one, the running game's switch and its sub-scenes.
@@ -326,7 +359,8 @@ namespace Strata
 			nlohmann::json subScenes = nlohmann::json::array();
 			for (const SubSceneStatus& subScene : context.GetActiveScene()->GetSubScenes())
 				subScenes.push_back(DescribeSubScene(subScene));
-			return { { "open", std::move(open) }, { "lastOpen", std::move(lastOpen) }, { "play", std::move(play) }, { "subScenes", std::move(subScenes) } };
+			return { { "open", std::move(open) }, { "lastOpen", std::move(lastOpen) }, { "play", std::move(play) }, { "subScenes", std::move(subScenes) },
+				{ "world", DescribeWorldLoads(context) } };
 		}
 
 		// The load of scene.loadAdditive: starts loading the scene asset into the running scene and answers once every entity
@@ -488,7 +522,9 @@ namespace Strata
 			"startScene, state: Ready | Failed | Cancelled, error, seconds}, null before the first), play (the scene a running game asked for "
 			"while it loads, {scene, progress}, null when none) and subScenes (the running scene's sub-scenes, scene.loadAdditive: {subScene, "
 			"scene, state: Loading | Instantiating | Loaded | Failed, progress, createdEntities, skippedEntities (not created because an "
-			"ancestor was deleted while the sub-scene loaded), totalEntities, slices, error}). With wait, it "
+			"ancestor was deleted while the sub-scene loaded), totalEntities, slices, error}) and world (the cells the open world streams around "
+			"the editor camera, editor, and while playing those of the running game, game: each {cellsWanted, cellsLoading, cellsLoaded, "
+			"cellsUnloading, cellsPinned, cellsFailed} or null; null when no world streams). With wait, it "
 			"answers once no scene is being opened, e.g. after starting an editor with a window, which opens its project's start scene in the "
 			"background (scene edits and play.start fail until then).",
 			ObjectSchema({ { "wait", BoolSchema("Answer once no scene is being opened (default false: at once)") } }),
@@ -528,8 +564,11 @@ namespace Strata
 			} }));
 
 		registry.Register({ "scene.unloadAdditive",
-			"Removes a sub-scene from the running game (play mode only): stops its load, releasing what it held loaded, or destroys its entities "
-			"with their descendants (their scripts get OnDestroy). Returns {subScene, entities (the running scene's count afterwards)}.",
+			"Removes a sub-scene from the running game (play mode only): stops its load, releasing what it held loaded, and takes its entities out "
+			"of the game at once (inactive: no rendering, scripts' updates, physics or audio); they are destroyed with their descendants over the "
+			"following frames (at most the scene's maxEntitiesDestroyedPerFrame a frame; their scripts get OnDestroy; scene.loadStatus shows the "
+			"sub-scene Unloading with destroyedEntities until its last entity is gone). Returns {subScene, entities (the running scene's count now), "
+			"unloadingEntities (those still to destroy)}.",
 			ObjectSchema({ { "subScene", IntegerSchema("The sub-scene's number (scene.loadAdditive, scene.loadStatus)", 1, std::numeric_limits<int64_t>::max()) } },
 				{ "subScene" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
@@ -546,8 +585,12 @@ namespace Strata
 				if (!scene.GetSubSceneStatus(static_cast<SubSceneID>(id)))
 					return EditorCommandResult::InvalidParameters(fmt::format("The running scene has no sub-scene {} (see scene.loadStatus)", id));
 				scene.UnloadSubScene(static_cast<SubSceneID>(id));
+				size_t unloading = 0;
+				for (const Entity root : scene.GetSubSceneRoots(static_cast<SubSceneID>(id)))
+					unloading += scene.CountSubtree(root);
 				// Only the running game has sub-scenes: no warning that play.stop discards this; replays leave it out.
-				EditorCommandResult result = EditorCommandResult::Ok({ { "subScene", id }, { "entities", scene.GetEntityCount() } });
+				EditorCommandResult result = EditorCommandResult::Ok({ { "subScene", id }, { "entities", scene.GetEntityCount() },
+					{ "unloadingEntities", unloading } });
 				result.RunningCopy = true;
 				return result;
 			} });
@@ -559,7 +602,10 @@ namespace Strata
 			"published: {scene, path, bytes, entities, seconds, frames, "
 			"frameTimes (the editor's frames meanwhile: count, medianMs, meanMs, p95Ms, maxMs), memory {privateMBBefore, peakPrivateMBDuring}}. "
 			"With wait false it answers at once with {scene, path, saveId, state: Writing | Queued}; editor.status's saving lists the saves "
-			"in flight. A save queues behind one that writes. New scenes need scene.saveAs first.",
+			"in flight. A save queues behind one that writes. New scenes need scene.saveAs first. A world's persistent scene saves "
+			"the documents changed since the last save, in the background too: the persistent scene (without the cells' entities), each dirty "
+			"cell and then the world's document with those cells' index entries; documents lists them ({path, kind: persistent, cell or world, "
+			"bytes, entities}; bytes and entities are their sums), and a world's save waits for its previous one.",
 			ObjectSchema({ { "wait", BoolSchema("Answer once the document is written (default true); false answers at once with the save's saveId") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -567,7 +613,14 @@ namespace Strata
 				const bool wait = arguments.GetBool("wait", true);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				return StartSceneSave(context, wait, [](EditorContext& context, std::string* outError) { return context.BeginSaveScene(outError); });
+				const auto start = [wait](EditorContext& context, const nlohmann::json&)
+				{
+					return StartSceneSave(context, wait, [](EditorContext& context, std::string* outError) { return context.BeginSaveScene(outError); });
+				};
+				// A world saves once its previous save ended (its documents and its index are written by one save at a time).
+				if (context.GetWorld() && context.GetWorld()->IsSaving())
+					return AfterSaves(start)(context, parameters);
+				return start(context, parameters);
 			} }));
 
 		registry.Register(MayDefer({ "scene.saveAs",
@@ -627,6 +680,9 @@ namespace Strata
 				{ "maxEntitiesInstantiatedPerFrame", IntegerSchema("Entities sub-scenes loading into the scene (scene.loadAdditive, scripts' "
 					"Scene::LoadAdditive) may create per frame, all together (default 5000); each frame also stops creating after about 2 ms", 1,
 					SceneSettings::c_MaxEntitiesInstantiatedLimit) },
+				{ "maxEntitiesDestroyedPerFrame", IntegerSchema("Entities sub-scenes being unloaded (scene.unloadAdditive, scripts' SubScene::Unload, a "
+					"world's cells) may destroy per frame, all together (default 5000); creation and destruction together stop after about 2 ms a frame",
+					1, SceneSettings::c_MaxEntitiesDestroyedLimit) },
 				{ "physicsCapacity", std::move(capacitySchema) },
 				{ "layerNames", layerNamesSchema },
 				{ "resetLayerCollisions", BoolSchema("Lets every pair of layers collide again before layerCollisions applies") },
@@ -664,6 +720,8 @@ namespace Strata
 				after.MaxFixedStepsPerFrame = static_cast<uint32_t>(arguments.GetInt("maxFixedStepsPerFrame", before.MaxFixedStepsPerFrame, 1, 64));
 				after.MaxEntitiesInstantiatedPerFrame = static_cast<uint32_t>(arguments.GetInt("maxEntitiesInstantiatedPerFrame", before.MaxEntitiesInstantiatedPerFrame,
 					1, SceneSettings::c_MaxEntitiesInstantiatedLimit));
+				after.MaxEntitiesDestroyedPerFrame = static_cast<uint32_t>(arguments.GetInt("maxEntitiesDestroyedPerFrame", before.MaxEntitiesDestroyedPerFrame,
+					1, SceneSettings::c_MaxEntitiesDestroyedLimit));
 				if (arguments.GetBool("resetLayerCollisions", false))
 					after.PhysicsLayers.ResetMatrix();
 				if (!arguments.IsValid())
@@ -678,7 +736,8 @@ namespace Strata
 
 				const bool changed = after.Gravity != before.Gravity || after.FixedTimestep != before.FixedTimestep
 					|| after.MaxFixedStepsPerFrame != before.MaxFixedStepsPerFrame || after.PhysicsCapacity != before.PhysicsCapacity
-					|| after.MaxEntitiesInstantiatedPerFrame != before.MaxEntitiesInstantiatedPerFrame || after.PhysicsLayers != before.PhysicsLayers;
+					|| after.MaxEntitiesInstantiatedPerFrame != before.MaxEntitiesInstantiatedPerFrame
+					|| after.MaxEntitiesDestroyedPerFrame != before.MaxEntitiesDestroyedPerFrame || after.PhysicsLayers != before.PhysicsLayers;
 				scene.GetSettings() = after;
 				if (changed && !context.IsPlaying())
 					context.GetUndoStack().Record(CreateScope<SceneSettingsAction>(scene, before, after));

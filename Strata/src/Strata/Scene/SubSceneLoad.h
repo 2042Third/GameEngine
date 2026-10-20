@@ -29,8 +29,14 @@ namespace Strata
 		JobHandle CompileJob;
 		// The slices' progress through the prototype (released once every entity exists).
 		Scope<PrototypeInstantiation> Instantiation;
-		// The top-level entities created so far (each with a SubSceneComponent): what unloading destroys.
+		// The top-level entities created so far or given to it (each with a SubSceneComponent): what unloading destroys.
+		// Entities that leave it are erased at once (Scene::LeaveSubScene); entries of entities destroyed meanwhile stay until
+		// an unload or GetSubSceneRoots reads the list (their tag no longer names it).
 		std::vector<Entity> Roots;
+		// How many of the instantiation's top-level entities were tagged so far (its list only grows).
+		size_t TaggedRoots = 0;
+		// The top-level entities the unload made inactive (they had no InactiveComponent): active again if they leave it.
+		std::vector<Entity> DeactivatedRoots;
 	};
 
 }

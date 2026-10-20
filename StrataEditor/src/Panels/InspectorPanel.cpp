@@ -2,6 +2,7 @@
 
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorWorld.h"
 #include "Editor/PropertyEdit.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/ScriptEdit.h"
@@ -212,8 +213,9 @@ namespace Strata
 			SceneSettingRow MaxBodies;
 			SceneSettingRow MaxBodyPairs;
 			SceneSettingRow MaxContactConstraints;
-			// Sub-scenes (SceneSettings::MaxEntitiesInstantiatedPerFrame).
+			// Sub-scenes (SceneSettings::MaxEntitiesInstantiatedPerFrame, MaxEntitiesDestroyedPerFrame).
 			SceneSettingRow MaxEntitiesInstantiated;
+			SceneSettingRow MaxEntitiesDestroyed;
 		};
 
 		SceneSettingRow MakeSceneSettingRow(PropertyInfo property)
@@ -235,10 +237,10 @@ namespace Strata
 			return s_Header.c_str();
 		}
 
-		// The streaming section's summary ("5000 entities per frame").
+		// The streaming section's summary ("5000 / 5000 entities per frame": created / destroyed).
 		std::string DescribeStreaming(const SceneSettings& settings)
 		{
-			return fmt::format("{} entities per frame", settings.MaxEntitiesInstantiatedPerFrame);
+			return fmt::format("{} / {} entities per frame", settings.MaxEntitiesInstantiatedPerFrame, settings.MaxEntitiesDestroyedPerFrame);
 		}
 
 		const char* GetLayersHeader()
@@ -371,6 +373,17 @@ namespace Strata
 				maxEntitiesInstantiated.Max = static_cast<float>(SceneSettings::c_MaxEntitiesInstantiatedLimit); // A power of two: exact as a float
 				maxEntitiesInstantiated.Speed = 50.0f;
 				properties.MaxEntitiesInstantiated = MakeSceneSettingRow(std::move(maxEntitiesInstantiated));
+				PropertyInfo maxEntitiesDestroyed;
+				maxEntitiesDestroyed.Name = "MaxEntitiesDestroyedPerFrame";
+				maxEntitiesDestroyed.DisplayName = "Destroyed per Frame";
+				maxEntitiesDestroyed.Tooltip = "Entities sub-scenes being unloaded (a world's cells, streamed parts of a level) may destroy per frame, all "
+					"together; they leave the game at once and go over the following frames. Creating and destroying together stop after about 2 ms "
+					"a frame";
+				maxEntitiesDestroyed.Type = PropertyType::UInt;
+				maxEntitiesDestroyed.Min = 1.0f;
+				maxEntitiesDestroyed.Max = static_cast<float>(SceneSettings::c_MaxEntitiesDestroyedLimit); // A power of two: exact as a float
+				maxEntitiesDestroyed.Speed = 50.0f;
+				properties.MaxEntitiesDestroyed = MakeSceneSettingRow(std::move(maxEntitiesDestroyed));
 				return properties;
 			}();
 			return s_Properties;
@@ -469,6 +482,28 @@ namespace Strata
 	// Header
 	////////////////////////////////////////////////////////////////////////////////
 
+	void InspectorPanel::DrawCellLine(EditorContext& context, const Scene& scene, Entity entity)
+	{
+		// In a world: the cell of the entity's top-level ancestor (O(depth), for the primary selection only).
+		const EditorWorld* world = context.GetWorld();
+		if (!world)
+			return;
+		const SubSceneID subScene = scene.GetSubSceneOf(entity);
+		const SubSceneStatus* status = subScene != 0 ? scene.GetSubSceneStatus(subScene) : nullptr;
+		const std::optional<WorldCellKey> key = status ? world->FindCellKey(status->Scene) : std::nullopt;
+		const std::string text = key ? "Cell: " + world->DescribeKey(*key) : subScene != 0 ? std::string("Additive scene") : std::string("Persistent scene");
+		UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Caption);
+		ImGui::TextColored(UI::GetThemeColors().TextSecondary, "%s", text.c_str());
+		ImGui::PopFont();
+		UI::ItemProbe::Record("Inspector.Cell", true, 0, text);
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+		{
+			ImGui::SetTooltip("%s", key ? "The world cell the entity belongs to (through its top-level ancestor): it streams in and out with the cell"
+				: subScene != 0 ? "The entity belongs to a scene loaded additively, not to a cell of the world"
+				: "The entity is in the world's persistent scene, which never streams out");
+		}
+	}
+
 	void InspectorPanel::DrawHeader(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities)
 	{
 		const UI::ThemeColors& colors = UI::GetThemeColors();
@@ -528,7 +563,7 @@ namespace Strata
 				: "Active: inactive entities and their children are neither simulated nor drawn");
 		}
 
-		// The ID (in the form commands take) with a copy button, and the prefab the entity comes from.
+		// The ID (in the form commands take) with a copy button, and the world cell the entity belongs to.
 		if (single)
 		{
 			const std::string id = UUIDToJson(primary.GetUUID()).get<std::string>();
@@ -539,6 +574,7 @@ namespace Strata
 			ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 			if (UI::IconButton("Inspector.CopyID", Icons::Copy, "Copy the ID (as commands and scripts take it)"))
 				ImGui::SetClipboardText(id.c_str());
+			DrawCellLine(context, scene, primary);
 		}
 		ImGui::Spacing();
 	}
@@ -1224,8 +1260,11 @@ namespace Strata
 		SceneSettings shown = m_SettingsDraft.value_or(scene.GetSettings());
 		if (!m_PhysicsSummary || m_PhysicsSummary->Gravity != shown.Gravity || m_PhysicsSummary->FixedTimestep != shown.FixedTimestep)
 			m_PhysicsSummary = PhysicsSummary { shown.Gravity, shown.FixedTimestep, DescribePhysics(shown) };
-		if (!m_StreamingSummary || m_StreamingSummary->MaxEntitiesInstantiatedPerFrame != shown.MaxEntitiesInstantiatedPerFrame)
-			m_StreamingSummary = StreamingSummary { shown.MaxEntitiesInstantiatedPerFrame, DescribeStreaming(shown) };
+		if (!m_StreamingSummary || m_StreamingSummary->MaxEntitiesInstantiatedPerFrame != shown.MaxEntitiesInstantiatedPerFrame
+			|| m_StreamingSummary->MaxEntitiesDestroyedPerFrame != shown.MaxEntitiesDestroyedPerFrame)
+		{
+			m_StreamingSummary = StreamingSummary { shown.MaxEntitiesInstantiatedPerFrame, shown.MaxEntitiesDestroyedPerFrame, DescribeStreaming(shown) };
+		}
 		const SceneSettingProperties& properties = GetSceneSettingProperties();
 		const SceneSettings defaults;
 		bool changed = false;
@@ -1276,6 +1315,9 @@ namespace Strata
 				draw(properties.MaxEntitiesInstantiated, shown.MaxEntitiesInstantiatedPerFrame, PropertyValue(defaults.MaxEntitiesInstantiatedPerFrame), {},
 					[&](const PropertyValue& value)
 					{ shown.MaxEntitiesInstantiatedPerFrame = std::clamp(std::get<uint32_t>(value), 1u, SceneSettings::c_MaxEntitiesInstantiatedLimit); });
+				draw(properties.MaxEntitiesDestroyed, shown.MaxEntitiesDestroyedPerFrame, PropertyValue(defaults.MaxEntitiesDestroyedPerFrame), {},
+					[&](const PropertyValue& value)
+					{ shown.MaxEntitiesDestroyedPerFrame = std::clamp(std::get<uint32_t>(value), 1u, SceneSettings::c_MaxEntitiesDestroyedLimit); });
 				UI::EndPropertyTable();
 			}
 		}
@@ -1292,6 +1334,7 @@ namespace Strata
 				{ "fixedTimestep", settings.FixedTimestep },
 				{ "maxFixedStepsPerFrame", settings.MaxFixedStepsPerFrame },
 				{ "maxEntitiesInstantiatedPerFrame", settings.MaxEntitiesInstantiatedPerFrame },
+				{ "maxEntitiesDestroyedPerFrame", settings.MaxEntitiesDestroyedPerFrame },
 				{ "physicsCapacity", { { "maxBodies", capacity.MaxBodies }, { "maxBodyPairs", capacity.MaxBodyPairs },
 					{ "maxContactConstraints", capacity.MaxContactConstraints } } } });
 		}

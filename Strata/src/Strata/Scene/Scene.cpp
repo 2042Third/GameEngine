@@ -6,10 +6,12 @@
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scene/SceneWorkBudget.h"
 #include "Strata/Scene/SubSceneLoad.h"
 #include "Strata/Scene/UnknownComponents.h"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <functional>
@@ -32,6 +34,32 @@ namespace Strata
 		uint64_t HashLookupValue(std::string_view value)
 		{
 			return static_cast<uint64_t>(std::hash<std::string_view>()(value));
+		}
+
+		// Removes the IDs of `removed` from a sibling list, keeping the order of the others. Sibling lists can be long (the
+		// top-level entities of a streaming world's cells: tens of thousands) and lose entities a batch at a time (each slice
+		// of a cell's unload): a bitmap of the removed IDs rejects nearly every kept entry before the exact lookup, so a pass
+		// costs little more than reading the list.
+		void EraseIds(std::vector<UUID>& list, std::span<const UUID> removed)
+		{
+			if (removed.empty() || list.empty())
+				return;
+			// About 64 bits per removed ID (one in 64 kept entries reaches the exact lookup), at most 4 Mi bits (512 KiB).
+			const uint32_t bits = std::clamp<uint32_t>(static_cast<uint32_t>(std::bit_width(removed.size() * 64 - 1)), 6, 22);
+			// Fibonacci hashing: the top bits of the product spread sequential IDs as well as random ones.
+			const auto bitIndex = [bits](UUID id) { return (static_cast<uint64_t>(id) * 0x9E3779B97F4A7C15ull) >> (64 - bits); };
+			std::vector<uint64_t> bitmap(size_t(1) << (bits - 6), 0);
+			for (const UUID id : removed)
+			{
+				const uint64_t index = bitIndex(id);
+				bitmap[index >> 6] |= uint64_t(1) << (index & 63);
+			}
+			const std::unordered_set<UUID> exact(removed.begin(), removed.end());
+			std::erase_if(list, [&](UUID id)
+			{
+				const uint64_t index = bitIndex(id);
+				return ((bitmap[index >> 6] >> (index & 63)) & 1) != 0 && exact.contains(id);
+			});
 		}
 
 		// Equal values (matching infinities included) and two NaNs agree: transforms that overflow compute the same
@@ -152,6 +180,8 @@ namespace Strata
 		// Sub-scene loads hold asset requests (main thread only); a compilation still running finishes into its own result.
 		scene->m_SubScenes.clear();
 		scene->m_DeferredSubSceneUnloads.clear();
+		// What systems prepared listens to the registry or holds engine objects (a physics world): it goes here.
+		scene->m_PreparedStates.clear();
 		// What is left are storages and caches nothing else reaches: component values hold no engine objects, and the registry
 		// signals nothing while it is destroyed (its render scene, in the registry's context, is plain data). Whoever lets go
 		// last destroys it: the job, unless someone else still holds the scene.
@@ -445,6 +475,23 @@ namespace Strata
 		return subtree;
 	}
 
+	size_t Scene::CountSubtree(Entity entity) const
+	{
+		if (!entity.IsValid() || entity.GetScene() != this)
+			return 0;
+		size_t count = 0;
+		std::vector<entt::entity> stack = { entity.GetHandle() };
+		while (!stack.empty())
+		{
+			const entt::entity current = stack.back();
+			stack.pop_back();
+			count++;
+			for (entt::entity child = GetHierarchy(current).FirstChild; child != entt::null; child = GetHierarchy(child).NextSibling)
+				stack.push_back(child);
+		}
+		return count;
+	}
+
 	void Scene::CollectHierarchyOrder(std::vector<entt::entity>& outEntities) const
 	{
 		// Depth-first, parents before children, iteratively (hierarchies can be arbitrarily deep).
@@ -522,9 +569,7 @@ namespace Strata
 			// The parent may have gone with a later root of the batch.
 			if (parent != entt::null && !m_Registry.valid(parent))
 				continue;
-			std::vector<UUID>& siblings = GetChildIds(parent);
-			const std::unordered_set<UUID> removed(ids.begin(), ids.end());
-			std::erase_if(siblings, [&removed](UUID id) { return removed.contains(id); });
+			EraseIds(GetChildIds(parent), ids);
 		}
 
 		if (destroyedAny)
@@ -1055,6 +1100,18 @@ namespace Strata
 		if (prune && rootWorld.ActiveInHierarchy == active)
 			return;
 
+		// A leaf changes alone, without a walk's lists: the top-level entities of a cell that unloads are thousands of leaves
+		// turned inactive at once.
+		if (GetHierarchy(root).FirstChild == entt::null)
+		{
+			if (rootWorld.ActiveInHierarchy != active)
+			{
+				rootWorld.ActiveInHierarchy = active;
+				RecordTransformChanges(++m_TransformsVersion, std::span<const entt::entity>(&root, 1), false);
+			}
+			return;
+		}
+
 		std::vector<entt::entity> changed;
 		if (rootWorld.ActiveInHierarchy != active)
 			changed.push_back(root);
@@ -1080,6 +1137,50 @@ namespace Strata
 
 		if (!changed.empty())
 			RecordTransformChanges(++m_TransformsVersion, changed, changed.size() > c_MaxTransformChanges);
+	}
+
+	void Scene::DeactivateEntities(std::span<const Entity> entities, std::vector<Entity>& outDeactivated)
+	{
+		// The storages once, not a registry lookup per entity and component. The component's other listeners (physics)
+		// hear each entity as it gets it; no listener reads activity while it is being added.
+		auto& inactive = m_Registry.storage<InactiveComponent>();
+		const size_t first = outDeactivated.size();
+		m_DeferActivityRefresh = true;
+		for (const Entity entity : entities)
+		{
+			if (!entity.IsValid() || entity.GetScene() != this || inactive.contains(entity.GetHandle()))
+				continue;
+			inactive.emplace(entity.GetHandle());
+			outDeactivated.push_back(entity);
+		}
+		m_DeferActivityRefresh = false;
+
+		// An inactive entity is inactive whatever its parent: a leaf changes alone, without a walk, and all of them in one
+		// transform version. Others walk their subtrees, as OnInactiveAdded would.
+		const auto& hierarchy = m_Registry.storage<HierarchyComponent>();
+		auto& worldTransforms = m_Registry.storage<WorldTransformComponent>();
+		std::vector<entt::entity> changedLeaves;
+		changedLeaves.reserve(outDeactivated.size() - first);
+		for (size_t index = first; index < outDeactivated.size(); index++)
+		{
+			const entt::entity handle = outDeactivated[index].GetHandle();
+			// Not linked yet (being copied or deserialized): the linking step computes activity.
+			if (!hierarchy.contains(handle) || !worldTransforms.contains(handle))
+				continue;
+			if (hierarchy.get(handle).FirstChild != entt::null)
+			{
+				RefreshSubtreeActivity(handle, true);
+				continue;
+			}
+			WorldTransformComponent& world = worldTransforms.get(handle);
+			if (world.ActiveInHierarchy)
+			{
+				world.ActiveInHierarchy = false;
+				changedLeaves.push_back(handle);
+			}
+		}
+		if (!changedLeaves.empty())
+			RecordTransformChanges(++m_TransformsVersion, changedLeaves, changedLeaves.size() > c_MaxTransformChanges);
 	}
 
 	void Scene::FinishLinking(std::span<const entt::entity> roots)
@@ -1124,6 +1225,9 @@ namespace Strata
 			return true;
 
 		const glm::mat4 worldTransform = keepWorldTransform ? GetWorldTransform(child) : glm::mat4(1.0f);
+		// A top-level entity of a sub-scene that becomes a child belongs to its new top-level ancestor's.
+		if (parentHandle != entt::null)
+			LeaveSubScene(childHandle);
 		Unlink(childHandle);
 		LinkLast(childHandle, parentHandle);
 		m_HierarchyVersion++;
@@ -1200,10 +1304,7 @@ namespace Strata
 			Unlink(move.Target, false);
 		}
 		for (const auto& [parent, ids] : detachedIds)
-		{
-			const std::unordered_set<UUID> removed(ids.begin(), ids.end());
-			std::erase_if(GetChildIds(parent), [&removed](UUID id) { return removed.contains(id); });
-		}
+			EraseIds(GetChildIds(parent), ids);
 
 		// Attached in ascending position order. The parent links are set first, one entity at a time, so that each cycle
 		// check sees the entities attached before it.
@@ -1258,6 +1359,9 @@ namespace Strata
 		RecordHierarchyMoves(moved);
 		for (const Move& move : moves)
 		{
+			// A top-level entity of a sub-scene that becomes a child belongs to its new top-level ancestor's.
+			if (move.Parent != entt::null)
+				LeaveSubScene(move.Target);
 			RefreshSubtreeDepth(move.Target, true);
 			RefreshSubtreeActivity(move.Target, true);
 			MarkTransformDirty(move.Target);
@@ -1759,6 +1863,15 @@ namespace Strata
 		}
 		if (visited != m_EntityMap.size())
 			return fail(fmt::format("{} entities are reachable from the roots, but the scene has {}", visited, m_EntityMap.size()));
+		// Sub-scenes name their top-level entities only: their descendants belong to them through them.
+		if (const auto* tags = m_Registry.storage<SubSceneComponent>())
+		{
+			for (const entt::entity tagged : static_cast<const entt::sparse_set&>(*tags))
+			{
+				if (GetHierarchy(tagged).Parent != entt::null)
+					return fail(fmt::format("{} names sub-scene {} but is not a top-level entity", describe(tagged), m_Registry.get<SubSceneComponent>(tagged).SubScene));
+			}
+		}
 
 		auto checkIndex = [&](const LookupIndex& index, auto view, auto value, std::string_view kind) -> bool
 		{
@@ -1809,7 +1922,7 @@ namespace Strata
 	void Scene::OnInactiveAdded(entt::registry& registry, entt::entity handle)
 	{
 		// Components being copied or deserialized before the entity is linked: the linking step computes activity.
-		if (m_DestroyingEntities || !registry.all_of<HierarchyComponent, WorldTransformComponent>(handle))
+		if (m_DestroyingEntities || m_DeferActivityRefresh || !registry.all_of<HierarchyComponent, WorldTransformComponent>(handle))
 			return;
 		RefreshSubtreeActivity(handle, true);
 	}
@@ -1908,6 +2021,8 @@ namespace Strata
 			return;
 		m_StepFrames = 0;
 
+		// Sub-scenes being unloaded go before the systems stop, so that their scripts still get OnDestroy.
+		FlushSubSceneUnloads();
 		m_IsUpdating = true;
 		for (auto it = m_Systems.rbegin(); it != m_Systems.rend(); ++it)
 			(*it)->OnRuntimeStop();
@@ -1957,14 +2072,19 @@ namespace Strata
 			m_Services.erase(it);
 	}
 
-	void Scene::OnUpdateRuntime(Timestep timestep)
+	void Scene::OnUpdateRuntime(Timestep timestep, SceneWorkBudget* budget)
 	{
 		ST_PROFILE_FUNCTION();
 
 		// Before the systems update, so that they see the slice's entities in this update. Idle frames of scenes without
 		// sub-scenes (nearly all) skip even the call.
 		if (!m_SubScenes.empty())
-			UpdateSubScenes();
+		{
+			if (budget)
+				UpdateSubScenes(*budget);
+			else
+				UpdateSubScenes();
+		}
 		if (!m_IsRunning)
 		{
 			UpdateWorldTransforms();
@@ -2084,11 +2204,16 @@ namespace Strata
 			system->OnPausedChanged(paused);
 	}
 
-	void Scene::OnUpdateEditor(Timestep)
+	void Scene::OnUpdateEditor(Timestep, SceneWorkBudget* budget)
 	{
 		ST_PROFILE_FUNCTION();
 		if (!m_SubScenes.empty())
-			UpdateSubScenes();
+		{
+			if (budget)
+				UpdateSubScenes(*budget);
+			else
+				UpdateSubScenes();
+		}
 		UpdateWorldTransforms();
 #ifdef ST_DEBUG
 		AssertCachesValid();

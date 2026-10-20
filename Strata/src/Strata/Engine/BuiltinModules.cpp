@@ -11,6 +11,7 @@
 #include "Strata/Scene/SceneRegistration.h"
 #include "Strata/Scene/SceneSystem.h"
 #include "Strata/Scripting/ScriptingRegistration.h"
+#include "Strata/World/WorldRegistration.h"
 
 // The optional modules this build has (STRATA_WITH_*, Docs/DeveloperGuide.md, "Optional modules").
 #if ST_WITH_PHYSICS
@@ -68,6 +69,7 @@ namespace Strata::Engine
 			{ "Animation", RegisterAnimationModule },
 #endif
 			{ "Scripting", RegisterScriptingModule },
+			{ "World", RegisterWorldModule },
 			{ "GameUI", RegisterGameUIModule },
 		};
 

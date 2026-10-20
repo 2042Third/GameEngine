@@ -7,7 +7,10 @@
 #include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Scene/SceneSystem.h"
 
+#include <algorithm>
+#include <cmath>
 #include <iterator>
+#include <unordered_set>
 
 namespace Strata
 {
@@ -42,7 +45,25 @@ namespace Strata
 
 	}
 
-	Scope<FramePerfLog> FramePerfLog::Create(const std::filesystem::path& path, FrameProfiler& profiler, std::string* outError)
+	void FramePerfRow::Add(double value, int decimals)
+	{
+		m_Count++;
+		if (!std::isfinite(value))
+		{
+			m_Line += ',';
+			return;
+		}
+		fmt::format_to(std::back_inserter(m_Line), ",{:.{}f}", value, std::clamp(decimals, 0, 9));
+	}
+
+	void FramePerfRow::AddEmpty()
+	{
+		m_Count++;
+		m_Line += ',';
+	}
+
+	Scope<FramePerfLog> FramePerfLog::Create(const std::filesystem::path& path, FrameProfiler& profiler, const FramePerfLogSpecification& specification,
+		std::string* outError)
 	{
 		const auto fail = [&](std::string message) -> Scope<FramePerfLog>
 		{
@@ -50,6 +71,18 @@ namespace Strata
 				*outError = std::move(message);
 			return nullptr;
 		};
+
+		std::unordered_set<std::string> groupColumns;
+		for (const FramePerfColumnGroup& group : specification.Columns)
+		{
+			if (group.Names.empty())
+				return fail("a column group of the perf log names no column");
+			for (const std::string& name : group.Names)
+			{
+				if (name.empty() || !groupColumns.insert(name).second)
+					return fail(fmt::format("the perf log's column '{}' is empty or named twice", name));
+			}
+		}
 
 		if (path.has_parent_path() && !FileSystem::CreateDirectories(path.parent_path()))
 			return fail(fmt::format("cannot create the folder of '{}'", FileSystem::ToUTF8(path)));
@@ -81,6 +114,12 @@ namespace Strata
 			"PeakPrivateMB", "GPUFrame", "GPUBusyMs" })
 		{
 			log->m_Columns.push_back(column);
+		}
+		log->m_Groups = specification.Columns;
+		for (const FramePerfColumnGroup& group : log->m_Groups)
+		{
+			log->m_Columns.insert(log->m_Columns.end(), group.Names.begin(), group.Names.end());
+			log->m_GroupColumnCount += group.Names.size();
 		}
 
 		std::string header;
@@ -134,6 +173,32 @@ namespace Strata
 			line += ",,";
 	}
 
+	bool FramePerfLog::FormatGroups(std::string& out)
+	{
+		// The program's columns, each group checked for writing what it names.
+		for (const FramePerfColumnGroup& group : m_Groups)
+		{
+			FramePerfRow row(out);
+			if (group.Write)
+			{
+				group.Write(row);
+			}
+			else
+			{
+				for (size_t column = 0; column < group.Names.size(); column++)
+					row.AddEmpty();
+			}
+			if (row.GetCount() != group.Names.size())
+			{
+				m_Failed = true;
+				ST_CORE_ERROR("The perf log '{}' stopped: a column group wrote {} values for its {} columns ({}...)", FileSystem::ToUTF8(m_Path), row.GetCount(),
+					group.Names.size(), group.Names.front());
+				return false;
+			}
+		}
+		return true;
+	}
+
 	void FramePerfLog::CaptureFrame(const FrameSample& frame, const AssetManagerStats* assets, const GPUUploadQueueStats* uploads, const FramePerfDeviceMemory* device)
 	{
 		if (m_Failed || m_Closed)
@@ -141,6 +206,8 @@ namespace Strata
 		CapturedFrame captured;
 		captured.Index = frame.Index;
 		FormatCapture(captured.Columns, assets, uploads, device);
+		if (!FormatGroups(captured.Groups))
+			return;
 		m_Captured.push_back(std::move(captured));
 	}
 
@@ -166,6 +233,7 @@ namespace Strata
 		// The frame's captured columns; frames captured before it that never got a row (a listener added later) go.
 		while (!m_Captured.empty() && m_Captured.front().Index < frame.Index)
 			m_Captured.pop_front();
+		const bool captured = !m_Captured.empty() && m_Captured.front().Index == frame.Index;
 
 		m_Line.clear();
 		auto out = std::back_inserter(m_Line);
@@ -180,19 +248,23 @@ namespace Strata
 				m_Line += ',';
 		}
 		fmt::format_to(out, ",{:.2f},{:.2f}", frame.WorkerBusyPercent, frame.IOBusyPercent);
-		if (!m_Captured.empty() && m_Captured.front().Index == frame.Index)
-		{
+		if (captured)
 			m_Line += m_Captured.front().Columns;
-			m_Captured.pop_front();
-		}
 		else
-		{
 			m_Line.append(c_CapturedColumns, ',');
-		}
 		if (frame.HasGPU)
 			fmt::format_to(out, ",1,{:.4f}", frame.GPUBusyMs);
 		else
 			m_Line += ",0,";
+		if (captured)
+		{
+			m_Line += m_Captured.front().Groups;
+			m_Captured.pop_front();
+		}
+		else
+		{
+			m_Line.append(m_GroupColumnCount, ',');
+		}
 		m_Line += '\n';
 
 		m_File.write(m_Line.data(), static_cast<std::streamsize>(m_Line.size()));

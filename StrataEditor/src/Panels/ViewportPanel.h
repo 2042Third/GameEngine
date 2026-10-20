@@ -95,7 +95,10 @@ namespace Strata
 		// the load's progress. The edited scene stays visible (and read-only) behind it.
 		void DrawSceneLoadOverlay(EditorContext& context);
 		// The latest automation command, as a chip right-aligned at `top` against `right`.
-		void DrawAgentChip(EditorPanelContext& context, float right, float top);
+		// The agent chip's width this frame (0 when it does not show), its text made again when it changed: the toolbar's chips
+		// keep clear of it, so that a click on it never lands on a chip under it.
+		float PrepareAgentChip(EditorPanelContext& context);
+		void DrawAgentChip(EditorPanelContext& context, float right, float top, float width);
 		// While animation.preview poses animators of the edited scene: a chip naming what it shows, so that the pose is never
 		// taken for scene data; a click stops every preview (animation.preview {stop: true}).
 		void DrawPreviewChip(EditorPanelContext& context);

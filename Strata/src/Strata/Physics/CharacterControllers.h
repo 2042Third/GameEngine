@@ -104,6 +104,13 @@ namespace Strata
 		// collectContacts the bodies each controller touched are reported (otherwise nothing is gathered).
 		void Step(float timestep, const glm::vec3& gravity, bool collectContacts, CharacterStepOutput& output);
 
+		// Moves the controllers into another Jolt system that holds the same bodies under the same IDs (a world that grew,
+		// see PhysicsWorld): each keeps its position, velocity, ground state and contacts. Controllers a full world left
+		// without a presence body get one if the new system has room, appended to `outChanges`. Main thread, between steps.
+		void Rebind(JPH::PhysicsSystem& system, std::vector<CharacterBodyChange>& outChanges);
+		// Controllers without a presence body because the world was full: bodies the world must make room for.
+		uint32_t GetWaitingPresenceBodyCount() const;
+
 		//////////////////////////////////////////////////////////////////////////
 		// Gameplay (see ICharacterControl; entities without a controller get false or nothing)
 		//////////////////////////////////////////////////////////////////////////

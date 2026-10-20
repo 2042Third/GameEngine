@@ -21,3 +21,4 @@
 #include "StrataScript/Time.h"
 #include "StrataScript/UI.h"
 #include "StrataScript/Value.h"
+#include "StrataScript/World.h"

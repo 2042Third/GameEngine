@@ -114,6 +114,7 @@ namespace
 		"scene.loadAdditive", "scene.new", "scene.open", "scene.save", "scene.saveAs", "scene.setSettings", "scene.unloadAdditive",
 		"script.add", "script.build", "script.create", "script.init", "script.load", "script.reload", "script.remove", "script.setField",
 		"ui.create",
+		"world.cook", "world.create", "world.moveEntities", "world.setLayers",
 	};
 	constexpr std::string_view c_QueryCommands[] = {
 		"animation.info",
@@ -127,6 +128,7 @@ namespace
 		"input.state",
 		"log.read",
 		"material.get",
+		"physics.stats",
 		"play.state",
 		"prefab.status",
 		"project.exportStatus", "project.info", "project.samples", "project.templates",
@@ -135,6 +137,7 @@ namespace
 		"selection.get",
 		"ui.hitTest", "ui.layout",
 		"viewport.capture", "viewport.getSettings",
+		"world.info", "world.status",
 	};
 	constexpr std::string_view c_SessionCommands[] = {
 		"animation.preview",
@@ -150,13 +153,14 @@ namespace
 		"script.open", "script.setExternalEditor",
 		"selection.set",
 		"viewport.setSettings",
+		"world.edit", "world.loadCells",
 	};
 	// Queries whose results show what the editor's session holds (EditorCommandResults::Session): replays never bind IDs
 	// from them.
 	constexpr std::string_view c_SessionResultCommands[] = {
 		"asset.stats", "audio.state", "camera.get", "edit.history", "editor.activity", "editor.perf", "editor.recentProjects", "editor.status", "input.state",
-		"log.read", "play.state", "project.exportStatus", "scene.loadStatus", "scene.recoveryStatus", "script.status", "selection.get",
-		"viewport.getSettings",
+		"log.read", "physics.stats", "play.state", "project.exportStatus", "scene.loadStatus", "scene.recoveryStatus", "script.status", "selection.get",
+		"viewport.getSettings", "world.status",
 	};
 
 	// Commands whose handlers may answer later (EditorCommand::MayDefer): editor.batch refuses them, and Debug builds assert
@@ -172,6 +176,7 @@ namespace
 		"scene.loadAdditive", "scene.loadStatus", "scene.new", "scene.open", "scene.recover", "scene.recoveryStatus", "scene.save", "scene.saveAs",
 		"script.build",
 		"viewport.capture",
+		"world.cook", "world.create", "world.loadCells", "world.setLayers",
 	};
 
 	// Commands besides the Edit ones that answer from the whole asset registry (EditorCommand::WaitsForAssets): while the
@@ -179,7 +184,7 @@ namespace
 	// another file keeps its flag.
 	constexpr std::string_view c_AssetScanCommands[] = {
 		"animation.info", "asset.findReferences", "asset.info", "asset.list", "material.get", "prefab.status", "project.export", "scene.recover",
-		"scene.recoveryStatus",
+		"scene.recoveryStatus", "world.info",
 	};
 
 	template<size_t N>

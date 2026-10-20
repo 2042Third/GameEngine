@@ -122,7 +122,8 @@ namespace Strata
 		// The toolbar while the Scripts root shows: back to the assets, its name, its actions and its search.
 		void DrawScriptsToolbar(EditorPanelContext& context);
 		void DrawBreadcrumbs(EditorPanelContext& context);
-		void DrawFilters();
+		// The type chips, leaving `reservedWidth` at the row's end: with their labels while they fit, else their icons only.
+		void DrawFilters(float reservedWidth);
 		void DrawFolderTree(EditorPanelContext& context);
 		// The tree's Scripts root, below the asset folders (which scroll above it, so that it stays in view).
 		void DrawScriptsRoot(const EditorContext& context);
@@ -151,6 +152,8 @@ namespace Strata
 		void CreateFolder(EditorPanelContext& context);
 		// A new material in the open folder (material.create), selected and renamed in place.
 		void CreateMaterial(EditorPanelContext& context, EditorAssetManager& assets);
+		// A new world in the current folder (world.create), opened once unsaved changes are settled.
+		void CreateWorld(EditorPanelContext& context, EditorAssetManager& assets);
 		void RebuildLabels();
 		// The item's tile title, cut with an ellipsis to the width (cached per width).
 		const std::string& GetTileTitle(size_t index, float width);

@@ -300,9 +300,9 @@ TEST_SUITE("Editor.UI")
 		// GPU memory without a device).
 		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
 		const AssetHandle large = manager->Add(0x74001, MakeUsage(0, 2 << 20));
-		const AssetHandle small = manager->Add(0x74002, MakeUsage(0, 1 << 20));
+		const AssetHandle smallAsset = manager->Add(0x74002, MakeUsage(0, 1 << 20));
 		const AssetHandle broken = manager->AddStored(0x74003, c_FakeAssetType, { 1, 2, 3 }, "Fake/Broken");
-		for (const AssetHandle handle : { large, small, broken })
+		for (const AssetHandle handle : { large, smallAsset, broken })
 			manager->RequestLoad(handle);
 		REQUIRE(manager->WaitForPendingLoads());
 		manager->Update();
@@ -324,7 +324,7 @@ TEST_SUITE("Editor.UI")
 		REQUIRE(labels.size() >= 3);
 		CHECK(labels[0] == "Fake/Broken");
 		CHECK(labels[1] == manager->GetMetadata(large)->Path);
-		CHECK(labels[2] == manager->GetMetadata(small)->Path);
+		CHECK(labels[2] == manager->GetMetadata(smallAsset)->Path);
 	}
 
 	TEST_CASE("The Streaming table shows the mip levels of assets that stream them")

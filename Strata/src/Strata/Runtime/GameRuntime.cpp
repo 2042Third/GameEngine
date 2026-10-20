@@ -5,6 +5,8 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Profiling.h"
 #include "Strata/Renderer/RenderScene.h"
+#include "Strata/Scene/SceneServices.h"
+#include "Strata/Scene/SceneWorkBudget.h"
 
 #include <algorithm>
 #include <utility>
@@ -52,6 +54,9 @@ namespace Strata
 		runtime->m_TimeDilation = options.TimeDilation;
 		if (options.PrepareRenderScenes)
 			runtime->m_LoadOptions.Prepare = &RenderScene::PrepareLoadedScene;
+		// Every scene the game loads will run: its systems prepare it (physics' bodies, a world's first cells), so that its
+		// first frame builds nothing.
+		runtime->m_LoadOptions.PrepareSystems = true;
 		const AssetResidencyBudgets budgets = runtime->m_AssetManager->GetResidencyBudgets();
 		ST_CORE_INFO("Asset budgets: GPU textures {}, GPU buffers {}, CPU {}", DescribeBudget(budgets.GpuTextures), DescribeBudget(budgets.GpuBuffers),
 			DescribeBudget(budgets.Cpu));
@@ -166,7 +171,7 @@ namespace Strata
 		CheckScriptFault();
 	}
 
-	void GameRuntime::UpdateSceneLoads()
+	void GameRuntime::UpdateSceneLoads(SceneWorkBudget* budget)
 	{
 		if (!m_LoadingSceneLoad && !m_SceneLoad)
 			return;
@@ -176,7 +181,7 @@ namespace Strata
 		if (m_LoadingSceneLoad)
 		{
 			SceneLoadRequest& request = m_LoadingSceneLoad->Request;
-			request.Update();
+			request.Update(budget);
 			if (request.GetState() == SceneLoadState::Ready)
 			{
 				StartScene(request.TakeScene(), m_LoadingSceneLoad->Scene, request.GetAssets());
@@ -193,7 +198,7 @@ namespace Strata
 		if (!m_SceneLoad)
 			return;
 		SceneLoadRequest& request = m_SceneLoad->Request;
-		request.Update();
+		request.Update(budget);
 		if (m_Scene)
 			m_Scene->SetSceneLoadProgress(request.GetProgress());
 		if (!request.IsFinished())
@@ -241,10 +246,12 @@ namespace Strata
 		if (m_QuitRequest)
 			return;
 		m_AssetManager->Update();
-		UpdateSceneLoads();
+		// One budget for the frame's loading work: the scene loads' preparation and the running scene's sub-scenes draw from it.
+		SceneWorkBudget budget = SceneWorkBudget::ForFrame(m_Scene ? m_Scene->GetSettings() : SceneSettings());
+		UpdateSceneLoads(&budget);
 		if (!m_Scene)
 			return;
-		m_Scene->OnUpdateRuntime(timestep);
+		m_Scene->OnUpdateRuntime(timestep, &budget);
 		CheckScriptFault();
 		HandleSceneRequests();
 	}
@@ -295,6 +302,44 @@ namespace Strata
 		if (!LoadScene(scene, &error))
 			ST_CORE_ERROR("'{}' cannot switch scenes: {}", m_Manifest.Name, error);
 		// While the start scene loads, the loading scene may ask for another scene: that one is then the game's start.
+	}
+
+	FramePerfColumnGroup GameRuntime::MakePerfLogColumns() const
+	{
+		FramePerfColumnGroup group;
+		group.Names = { "WorldCellsWanted", "WorldCellsLoading", "WorldCellsLoaded", "WorldCellsUnloading", "PhysicsBodies", "PhysicsBodiesWaiting",
+			"PhysicsMaxBodies" };
+		group.Write = [this](FramePerfRow& row)
+		{
+			const IWorldStreaming* streaming = m_Scene ? m_Scene->GetService<IWorldStreaming>() : nullptr;
+			if (streaming)
+			{
+				const WorldStreamingStats stats = streaming->GetStats();
+				row.Add(stats.CellsWanted, 0);
+				row.Add(stats.CellsLoading, 0);
+				row.Add(stats.CellsLoaded, 0);
+				row.Add(stats.CellsUnloading, 0);
+			}
+			else
+			{
+				for (int column = 0; column < 4; column++)
+					row.AddEmpty();
+			}
+			const IPhysicsCapacity* capacity = m_Scene ? m_Scene->GetService<IPhysicsCapacity>() : nullptr;
+			if (capacity)
+			{
+				const PhysicsCapacityInfo info = capacity->GetCapacityInfo();
+				row.Add(info.Bodies, 0);
+				row.Add(info.WaitingForSlot, 0);
+				row.Add(info.MaxBodies, 0);
+			}
+			else
+			{
+				for (int column = 0; column < 3; column++)
+					row.AddEmpty();
+			}
+		};
+		return group;
 	}
 
 }

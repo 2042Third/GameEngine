@@ -2,6 +2,7 @@
 
 #include "Editor/CommandJournal.h"
 #include "Editor/CommandUtils.h"
+#include "Editor/EditorWorld.h"
 #include "Editor/ExternalEditor.h"
 #include "Editor/GameExport.h"
 #include "Editor/InputSequence.h"
@@ -10,6 +11,7 @@
 #include "Editor/SceneRecovery.h"
 #include "Editor/ScriptProject.h"
 #include "Editor/ThumbnailCache.h"
+#include "Editor/WorldCook.h"
 
 #include <Strata/Asset/AssetDependencies.h>
 #include <Strata/Asset/AssetImporter.h>
@@ -33,7 +35,9 @@
 #include <Strata/Scene/PrefabOverrides.h>
 #include <Strata/Scene/SceneLoader.h>
 #include <Strata/Scene/SceneSerializer.h>
+#include <Strata/Scene/SceneWorkBudget.h>
 #include <Strata/Scripting/ScriptingComponents.h>
+#include <Strata/World/WorldStreamingSystem.h>
 
 #include <algorithm>
 #include <unordered_set>
@@ -148,7 +152,7 @@ namespace Strata
 		});
 		// The recovery journal follows every step the undo stack applies; recovery files apply only to scenes the project
 		// still has, which scans find by their handles wherever they moved.
-		m_UndoStack.SetObserver(m_Recovery.get());
+		m_UndoStack.AddObserver(m_Recovery.get());
 		m_Recovery->BeginScene(*m_EditScene, UUID::Null(), {}, {});
 		CreateAnimationPreview();
 		m_Recovery->SetEntryValidator([this](const RecoveryEntry& entry) -> std::string
@@ -170,6 +174,8 @@ namespace Strata
 			return scenes;
 		});
 		SetStatusProvider("recovery", [this]() { return m_Recovery->DescribeStatus(); });
+		// The world the edited scene is, when it is one (world.status has the details).
+		SetStatusProvider("world", [this]() { return CommandUtils::DescribeWorldSummary(*this); });
 		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details). Imports
 		// still running (a project opened with assets to import, re-imports) deliver their assets when they finish; scanning
 		// is the scan of the project's files while it registers them (null: none runs).
@@ -443,6 +449,8 @@ namespace Strata
 		CancelSceneLoad();
 		m_AfterAssetScan = false;
 		Stop();
+		// The world reads the project's assets: it goes before them.
+		m_World.reset();
 		const bool hadProject = m_Project != nullptr;
 		if (hadProject)
 		{
@@ -508,11 +516,15 @@ namespace Strata
 		m_Viewport.StoreSceneCamera(m_SceneHandle);
 		m_PendingFrame.reset();
 		m_AnimationPreview.reset(); // Of the scene that goes, which it refers to: before the scene is released
+		m_World.reset();             // Likewise
 		Ref<Scene> previous = std::exchange(m_EditScene, std::move(scene));
 		CreateAnimationPreview();
 		m_SceneHandle = handle;
 		ClearSelection();
 		m_UndoStack.Clear();
+		// A world's persistent scene streams its cells around the editor camera.
+		if (m_AssetManager)
+			m_World = EditorWorld::Attach(*m_AssetManager, *m_EditScene, m_UndoStack);
 		// The scene that goes is destroyed off the frame (a million entities take tens of milliseconds).
 		Scene::ReleaseInBackground(std::move(previous));
 		const auto [sceneFile, scenePath] = GetSceneFile(handle);
@@ -609,7 +621,7 @@ namespace Strata
 		return true;
 	}
 
-	std::function<bool(Scene&)> EditorContext::GetScenePreparation()
+	std::function<bool(Scene&, SceneWorkBudget&)> EditorContext::GetScenePreparation()
 	{
 		// The viewport draws a scene from its render proxies: built while the scene waits to replace the shown one, so the
 		// frame that swaps it in builds none (a hundred thousand mesh renderers take tens of milliseconds). Without a GPU
@@ -699,13 +711,13 @@ namespace Strata
 		m_SceneLoadStatus.Seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_SceneLoadStatus.Started).count();
 	}
 
-	void EditorContext::UpdateSceneLoad()
+	void EditorContext::UpdateSceneLoad(SceneWorkBudget* budget)
 	{
 		if (!m_SceneLoad)
 			return;
 		ST_PROFILE_STAGE("Scene.Load");
 		SceneLoadRequest& request = m_SceneLoad->Request;
-		request.Update();
+		request.Update(budget);
 		m_SceneLoadStatus.State = request.GetState();
 		m_SceneLoadStatus.Progress = request.GetProgress();
 		if (!request.IsFinished())
@@ -796,6 +808,9 @@ namespace Strata
 				*outError = "The scene has not been saved yet; save it under a path first";
 			return 0;
 		}
+		// A world saves the documents it changed: the persistent scene, the dirty cells, its index.
+		if (m_World)
+			return SubmitWorldSave(outError);
 		return SubmitSceneSave(m_SceneHandle, {}, std::nullopt, outError);
 	}
 
@@ -805,6 +820,12 @@ namespace Strata
 		{
 			if (outError)
 				*outError = "No project is open";
+			return 0;
+		}
+		if (m_World)
+		{
+			if (outError)
+				*outError = "A world is saved in place (scene.save); world.create makes another";
 			return 0;
 		}
 		const std::filesystem::path path = FileSystem::FromUTF8(relativePath);
@@ -881,14 +902,7 @@ namespace Strata
 		if (status.State != DocumentSaveState::Done)
 		{
 			m_Recovery->ReleaseSave(token);
-			EditorNotification notification;
-			notification.Level = NotificationLevel::Error;
-			notification.Title = fmt::format("Saving '{}' failed", status.Label);
-			notification.Message = status.Error;
-			notification.ShowConsole = true;
-			if (m_AssetManager && m_AssetManager->IsHandleValid(handle))
-				notification.Asset = handle;
-			m_Notifications.Post(std::move(notification));
+			NotifySaveFailed(status.Label, status.Error, handle);
 			return;
 		}
 		if (!sameScene)
@@ -901,6 +915,187 @@ namespace Strata
 		const auto [sceneFile, scenePath] = GetSceneFile(handle);
 		const std::string baseHash = status.Items.empty() ? std::string() : Crypto::ToHex(status.Items.front().Sha256);
 		m_Recovery->OnSaved(handle, sceneFile, scenePath, baseHash, token, *m_EditScene, IsSceneModified());
+	}
+
+	void EditorContext::NotifySaveFailed(const std::string& label, const std::string& error, AssetHandle asset)
+	{
+		EditorNotification notification;
+		notification.Level = NotificationLevel::Error;
+		notification.Title = fmt::format("Saving '{}' failed", label);
+		notification.Message = error;
+		notification.ShowConsole = true;
+		if (m_AssetManager && m_AssetManager->IsHandleValid(asset))
+			notification.Asset = asset;
+		m_Notifications.Post(std::move(notification));
+	}
+
+	uint64_t EditorContext::SubmitWorldSave(std::string* outError)
+	{
+		// The snapshot holds the history's state from here on: a drag that goes on makes a step of its own.
+		m_UndoStack.BreakMerge();
+		Ref<WorldSavePlan> plan = CreateRef<WorldSavePlan>();
+		if (!m_World->BeginSave(*m_AssetManager, m_SceneHandle, *plan, outError))
+			return 0;
+		DocumentSaveRequest request;
+		request.SavePoint = m_UndoStack.GetSavePoint();
+		request.Snapshot = Scene::Copy(m_EditScene, SceneCopyOptions { true });
+		request.Label = m_EditScene->GetName();
+		request.Items = plan->Items;
+		const SceneRecovery::SaveToken token = m_Recovery->BeginSave();
+		const AssetHandle handle = m_SceneHandle;
+		const uint64_t id = m_DocumentSaver.Submit(std::move(request), [this, handle, token, plan](const DocumentSaveStatus& status)
+		{
+			OnWorldSaveEnded(status, handle, token, *plan);
+		}, outError);
+		if (id == 0)
+		{
+			m_Recovery->ReleaseSave(token);
+			m_World->CancelSave(*m_AssetManager, *plan);
+			return 0;
+		}
+		m_WorldSave = WorldSaveState { id, false, {}, {} };
+		return id;
+	}
+
+	void EditorContext::OnWorldSaveEnded(const DocumentSaveStatus& status, AssetHandle handle, const RecoverySaveToken& token, const WorldSavePlan& plan)
+	{
+		std::vector<WorldSavedDocument> documents;
+		for (size_t index = 0; index < plan.Documents.size() && index < status.Items.size(); index++)
+		{
+			const DocumentSaveItemResult& item = status.Items[index];
+			if (item.Error.empty())
+				documents.push_back({ item.Path.empty() ? plan.Documents[index].Path : item.Path, plan.Documents[index].Kind, item.Bytes, item.Entities });
+		}
+		const bool current = m_WorldSave.Request == status.ID;
+		if (current)
+			m_WorldSave.Documents = documents;
+		// The world was replaced meanwhile (another scene or project): the files are written, but nothing of what is edited
+		// now is marked, and its journal hears nothing.
+		const bool sameWorld = m_World && m_SceneHandle == handle && status.SavePoint.Generation == m_UndoStack.GetSavePoint().Generation;
+		if (!sameWorld || !m_AssetManager)
+		{
+			m_Recovery->ReleaseSave(token);
+			if (current)
+				m_WorldSave.Ended = true;
+			return;
+		}
+		std::string indexError;
+		const std::optional<std::string> index = m_World->FinishSave(*m_AssetManager, plan, status, &indexError);
+		const bool written = status.State == DocumentSaveState::Done;
+		// The journal follows the persistent scene's document: the one written now, or the file as it is.
+		std::string baseHash;
+		if (written)
+		{
+			const auto persistent = std::find_if(plan.Documents.begin(), plan.Documents.end(), [](const WorldSavePlan::Document& document) { return document.Kind == "persistent"; });
+			if (persistent != plan.Documents.end())
+			{
+				baseHash = Crypto::ToHex(status.Items[static_cast<size_t>(persistent - plan.Documents.begin())].Sha256);
+			}
+			else
+			{
+				std::vector<uint8_t> bytes;
+				if (m_AssetManager->ReadStoredData(handle, bytes))
+					baseHash = Crypto::ToHex(Sha256::Hash(std::span<const uint8_t>(bytes)));
+			}
+		}
+		else
+		{
+			m_Recovery->ReleaseSave(token);
+			NotifySaveFailed(status.Label, status.Error, handle);
+		}
+		if (!index)
+		{
+			if (!indexError.empty())
+			{
+				// The cells are written, but the world cannot list them: the scene stays modified, and the next save tries again.
+				NotifySaveFailed(status.Label, indexError, m_World->GetWorld());
+				if (written)
+					m_Recovery->ReleaseSave(token);
+				if (current)
+					m_WorldSave.Error = indexError;
+			}
+			else if (written)
+			{
+				MarkWorldSaved(status.SavePoint, handle, token, std::move(baseHash));
+			}
+			if (current)
+				m_WorldSave.Ended = true;
+			return;
+		}
+		// The World document with the saved cells' index entries, written once their files are (their stamps are known now).
+		DocumentSaveRequest request;
+		DocumentSaveItem item;
+		item.Asset = m_World->GetWorld();
+		item.Document = *index;
+		item.Reload = true;
+		request.Items.push_back(std::move(item));
+		request.SavePoint = status.SavePoint;
+		request.Label = fmt::format("{} (index)", status.Label);
+		std::string error;
+		const std::optional<RecoverySaveToken> heldToken = written ? std::optional<RecoverySaveToken>(token) : std::nullopt;
+		if (m_DocumentSaver.Submit(std::move(request), [this, id = status.ID, handle, heldToken, baseHash](const DocumentSaveStatus& indexStatus)
+		{
+			OnWorldIndexSaved(indexStatus, id, handle, heldToken ? &*heldToken : nullptr, baseHash);
+		}, &error) == 0)
+		{
+			m_World->FinishIndexSave();
+			NotifySaveFailed(status.Label, error, m_World->GetWorld());
+			if (written)
+				m_Recovery->ReleaseSave(token);
+			if (current)
+			{
+				m_WorldSave.Error = error;
+				m_WorldSave.Ended = true;
+			}
+		}
+	}
+
+	void EditorContext::OnWorldIndexSaved(const DocumentSaveStatus& status, uint64_t save, AssetHandle handle, const RecoverySaveToken* token, std::string baseHash)
+	{
+		const bool current = m_WorldSave.Request == save;
+		const bool indexWritten = status.State == DocumentSaveState::Done && !status.Items.empty();
+		if (!indexWritten)
+			NotifySaveFailed(status.Label, status.Error, status.Items.empty() ? UUID::Null() : status.Items.front().Asset);
+		// Another world (or none) is edited now: the files are written, but nothing of what is edited now is marked.
+		const bool sameWorld = m_World && m_SceneHandle == handle && status.SavePoint.Generation == m_UndoStack.GetSavePoint().Generation;
+		if (current && m_World)
+			m_World->FinishIndexSave();
+		if (token)
+		{
+			if (indexWritten && sameWorld)
+				MarkWorldSaved(status.SavePoint, handle, *token, std::move(baseHash));
+			else
+				m_Recovery->ReleaseSave(*token);
+		}
+		if (!current)
+			return;
+		if (indexWritten)
+			m_WorldSave.Documents.push_back({ status.Items.front().Path, "world", status.Items.front().Bytes, 0 });
+		else
+			m_WorldSave.Error = status.Error.empty() ? std::string("The world's document was not written") : status.Error;
+		m_WorldSave.Ended = true;
+	}
+
+	void EditorContext::MarkWorldSaved(const UndoStack::SavePoint& savePoint, AssetHandle handle, const RecoverySaveToken& token, std::string baseHash)
+	{
+		m_UndoStack.MarkSaved(savePoint);
+		OnSceneSaved();
+		const auto [sceneFile, scenePath] = GetSceneFile(handle);
+		m_Recovery->OnSaved(handle, sceneFile, scenePath, std::move(baseHash), token, *m_EditScene, IsSceneModified());
+	}
+
+	std::optional<std::vector<WorldSavedDocument>> EditorContext::GetWorldSaveDocuments(uint64_t save) const
+	{
+		if (save == 0 || m_WorldSave.Request != save || !m_WorldSave.Ended)
+			return std::nullopt;
+		return m_WorldSave.Documents;
+	}
+
+	std::string EditorContext::GetWorldSaveError(uint64_t save) const
+	{
+		if (save == 0 || m_WorldSave.Request != save || !m_WorldSave.Ended)
+			return std::string();
+		return m_WorldSave.Error;
 	}
 
 	bool EditorContext::WaitForSave(uint64_t id, std::string* outError)
@@ -1000,6 +1195,9 @@ namespace Strata
 		m_UndoStack.BreakMerge();
 		m_MasterVolumeBeforePlay = AudioEngine::GetMasterVolume();
 		m_RuntimeScene = Scene::Copy(m_EditScene);
+		// A world plays with the cells the editor has loaded (its edit radius), never the whole world: the game streams the
+		// others around the play camera from their saved documents.
+		const std::vector<WorldCellKey> pinnedCells = m_World ? m_World->PrepareRuntimeCopy(*m_RuntimeScene) : std::vector<WorldCellKey>();
 		m_RuntimeSceneAsset = UUID::Null();
 		m_PlaySession++;
 		m_ReplacedFixedSteps = 0;
@@ -1008,6 +1206,12 @@ namespace Strata
 		ResetGameShell();
 		m_RuntimeScene->SetTimeDilation(m_Specification.TimeDilation);
 		m_RuntimeScene->OnRuntimeStart(mode);
+		// Cells with unsaved edits stay for the session: their documents on disk are older than what plays.
+		if (WorldStreamingSystem* streaming = m_RuntimeScene->GetSystem<WorldStreamingSystem>())
+		{
+			for (const WorldCellKey& key : pinnedCells)
+				streaming->PinCell(key);
+		}
 		m_SceneState = mode == SceneRuntimeMode::Play ? SceneState::Play : SceneState::Simulate;
 		UpdateInputSuspension();
 		return true;
@@ -1089,19 +1293,21 @@ namespace Strata
 		next->Scene = target;
 		SceneLoadOptions options;
 		options.Prepare = GetScenePreparation();
+		// The scene will run: its systems prepare it too (physics' bodies), so that the swap builds nothing.
+		options.PrepareSystems = true;
 		next->Request = SceneLoader::LoadAsync(target, options);
 		m_RuntimeSceneLoad = std::move(next);
 		m_RuntimeScene->SetSceneLoadProgress(0.0f);
 		return true;
 	}
 
-	void EditorContext::UpdateRuntimeSceneLoad()
+	void EditorContext::UpdateRuntimeSceneLoad(SceneWorkBudget& budget)
 	{
 		if (!m_RuntimeSceneLoad || !m_RuntimeScene)
 			return;
 		ST_PROFILE_STAGE("Scene.Load");
 		SceneLoadRequest& request = m_RuntimeSceneLoad->Request;
-		request.Update();
+		request.Update(&budget);
 		m_RuntimeScene->SetSceneLoadProgress(request.GetProgress());
 		if (!request.IsFinished())
 			return;
@@ -1256,7 +1462,10 @@ namespace Strata
 				m_Selection.push_back(entity);
 		}
 		if (!m_Selection.empty())
+		{
+			m_SelectionVersion++;
 			InspectEntities();
+		}
 	}
 
 	void EditorContext::Select(UUID entity, bool additive)
@@ -1269,19 +1478,26 @@ namespace Strata
 		if (!m_SelectionSet.insert(entity).second)
 			std::erase(m_Selection, entity);
 		m_Selection.push_back(entity);
+		m_SelectionVersion++;
 		InspectEntities();
 	}
 
 	void EditorContext::Deselect(UUID entity)
 	{
 		if (m_SelectionSet.erase(entity) > 0)
+		{
 			std::erase(m_Selection, entity);
+			m_SelectionVersion++;
+		}
 	}
 
 	void EditorContext::ClearSelection()
 	{
+		if (m_Selection.empty())
+			return;
 		m_Selection.clear();
 		m_SelectionSet.clear();
+		m_SelectionVersion++;
 	}
 
 	bool EditorContext::IsSelected(UUID entity) const
@@ -1301,13 +1517,14 @@ namespace Strata
 
 	void EditorContext::PruneSelection()
 	{
-		std::erase_if(m_Selection, [this](UUID entity)
+		if (std::erase_if(m_Selection, [this](UUID entity)
 		{
 			if (GetActiveScene()->GetEntityByUUID(entity))
 				return false;
 			m_SelectionSet.erase(entity);
 			return true;
-		});
+		}) > 0)
+			m_SelectionVersion++;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -1352,6 +1569,9 @@ namespace Strata
 			transaction.Rollback();
 			return false;
 		}
+		// In a world, entities move into the cells their positions lie in, within the same step.
+		if (m_World)
+			m_World->Recell(transaction);
 		if (overrides == OverrideUpkeep::Update)
 			UpdatePrefabOverrides(transaction);
 		return transaction.Commit(m_UndoStack);
@@ -1559,8 +1779,21 @@ namespace Strata
 		std::vector<EntityState> removals;
 		if (entry.Complete)
 		{
+			// A world's snapshot holds the cells that were loaded then: the entities of other cells (loaded now) stay.
+			std::unordered_set<AssetHandle> recordedCells;
+			if (m_World)
+			{
+				for (const AssetHandle cell : EditorWorld::CollectCells(data.Steps))
+					recordedCells.insert(cell);
+			}
 			for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
 			{
+				if (m_World)
+				{
+					const SubSceneStatus* status = scene.GetSubSceneStatus(scene.GetSubSceneOf(entity));
+					if (status && status->Scene.IsValid() && !recordedCells.contains(status->Scene))
+						continue;
+				}
 				if (listed.insert(entity.GetUUID()).second)
 				{
 					ids.push_back(entity.GetUUID());
@@ -2188,8 +2421,11 @@ namespace Strata
 		m_DocumentSaver.Update();
 		// The asset scan ended: what waited for the whole registry goes on (the start scene, the script usage scan).
 		FinishAssetScan();
+		// One budget for the frame's loading work: a scene being opened, the running game's switch and the updated scene's
+		// sub-scenes draw from it.
+		SceneWorkBudget budget = SceneWorkBudget::ForFrame((m_RuntimeScene ? m_RuntimeScene : m_EditScene)->GetSettings());
 		// A scene being opened replaces the edited one between frames, before anything draws or updates it.
-		UpdateSceneLoad();
+		UpdateSceneLoad(&budget);
 		if (m_GameExport)
 		{
 			m_GameExport->Update();
@@ -2204,8 +2440,8 @@ namespace Strata
 			InspectEntities();
 		if (m_RuntimeScene)
 		{
-			UpdateRuntimeSceneLoad();
-			m_RuntimeScene->OnUpdateRuntime(timestep);
+			UpdateRuntimeSceneLoad(budget);
+			m_RuntimeScene->OnUpdateRuntime(timestep, &budget);
 			// A crashed game stops; one that still runs gets what it asked for.
 			if (!StopOnScriptFault())
 				HandleRuntimeRequests();
@@ -2216,7 +2452,14 @@ namespace Strata
 			// rolled back (the opened scene is caught up with once it is in).
 			if (!IsSceneLoading())
 				m_PrefabSync.Update(*this);
-			m_EditScene->OnUpdateEditor(timestep);
+			// The world's cells around the editor camera; the scene's update below advances their loads and unloads.
+			if (m_World)
+			{
+				ST_PROFILE_STAGE("World.Streaming");
+				const EditorCamera& camera = m_Viewport.GetCamera();
+				m_World->Update(camera.GetPosition(), camera.GetForward(), m_Selection, m_SelectionVersion);
+			}
+			m_EditScene->OnUpdateEditor(timestep, &budget);
 		}
 		// Before the viewports render: previews whose assets arrived get their poses, animators without a request the edit pose
 		// the viewport settings ask for (a change of it looks at every animator once).
@@ -2297,6 +2540,7 @@ namespace Strata
 				notification.Message = FileSystem::ToUTF8(exporter.GetOptions().Directory);
 				break;
 			case GameExportState::WaitingForImports:
+			case GameExportState::CookingWorlds:
 			case GameExportState::Packing:
 			case GameExportState::Copying:
 				return;
@@ -2363,6 +2607,18 @@ namespace Strata
 			m_StatusProviders.insert_or_assign(section, StatusSection { std::move(provider), std::move(compactProvider) });
 		else
 			m_StatusProviders.erase(section);
+	}
+
+	const Ref<WorldCookCache>& EditorContext::GetWorldCookCache()
+	{
+		// The cells another project's cooks read mean nothing for this one (also when it is the same project opened again: its
+		// files may have changed meanwhile).
+		if (!m_WorldCookCache || m_WorldCookCacheGeneration != m_ProjectGeneration)
+		{
+			m_WorldCookCache = CreateRef<WorldCookCache>();
+			m_WorldCookCacheGeneration = m_ProjectGeneration;
+		}
+		return m_WorldCookCache;
 	}
 
 }

@@ -5,7 +5,9 @@
 #include "Strata/Core/Profiling.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/EntityPrototype.h"
+#include "Strata/Scene/SceneHierarchy.h"
 #include "Strata/Scene/SceneLoader.h"
+#include "Strata/Scene/SceneWorkBudget.h"
 #include "Strata/Scene/SubSceneLoad.h"
 
 #include <algorithm>
@@ -20,9 +22,30 @@ namespace Strata
 	namespace
 	{
 
-		// Entities created between two looks at the clock: a few hundred microseconds of work in Release builds, so a slice
-		// stops close to the time limit.
+		// The most entities created or destroyed between two looks at the clock. Later chunks of an update hold what fits in
+		// the time left at the cost per entity measured lately (SceneWorkBudget::FitChunk), so that a slice ends close to its
+		// deadline: entities untouched for a while (an unloading cell's, in a frame of other work) cost several times what
+		// warm ones do.
 		constexpr size_t c_InstantiationChunk = 512;
+		constexpr uint32_t c_UnloadChunk = 512;
+		// The fewest a later chunk holds, however little time is left: each chunk has fixed costs (the walk that collects
+		// it, the sibling lists it compacts).
+		constexpr size_t c_MinSliceChunk = 32;
+
+		// The next chunk of an update's pass over the sub-scenes. Its first is a whole chunk whatever the estimate, so that
+		// where entities cost far more than the frame allows (Debug builds, slow machines) loads still progress as fast.
+		size_t GetChunkWithin(std::chrono::steady_clock::time_point deadline, double nanosecondsPerEntity, bool first, size_t largest)
+		{
+			if (first)
+				return largest;
+			const auto remaining = std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - std::chrono::steady_clock::now());
+			return SceneWorkBudget::FitChunk(remaining, nanosecondsPerEntity, c_MinSliceChunk, largest);
+		}
+
+		std::chrono::nanoseconds Since(std::chrono::steady_clock::time_point start)
+		{
+			return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start);
+		}
 
 	}
 
@@ -34,6 +57,7 @@ namespace Strata
 			case SubSceneState::Instantiating: return "Instantiating";
 			case SubSceneState::Loaded:        return "Loaded";
 			case SubSceneState::Failed:        return "Failed";
+			case SubSceneState::Unloading:     return "Unloading";
 		}
 		return "Unknown";
 	}
@@ -43,6 +67,7 @@ namespace Strata
 		SceneLoadOptions loadOptions;
 		loadOptions.Priority = options.Priority;
 		loadOptions.RequiredProgress = options.RequiredProgress;
+		loadOptions.Reload = options.Reload;
 		Scope<SceneLoadRequest> request = CreateScope<SceneLoadRequest>(SceneLoader::LoadAsync(scene, loadOptions));
 		if (request->GetState() == SceneLoadState::Failed)
 		{
@@ -90,9 +115,11 @@ namespace Strata
 
 	bool Scene::UnloadSubScene(SubSceneID id)
 	{
-		auto it = std::find_if(m_SubScenes.begin(), m_SubScenes.end(), [id](const Scope<SubSceneLoad>& load) { return load->Status.ID == id; });
-		if (it == m_SubScenes.end())
+		SubSceneLoad* load = FindSubScene(id);
+		if (!load)
 			return false;
+		if (load->Status.State == SubSceneState::Unloading)
+			return true;
 		// While sub-scenes advance (a failed one's entities go, and their scripts' OnDestroy may unload sub-scenes), the load
 		// being advanced must stay: the unload waits for the end of UpdateSubScenes.
 		if (m_AdvancingSubScenes)
@@ -101,16 +128,145 @@ namespace Strata
 				m_DeferredSubSceneUnloads.push_back(id);
 			return true;
 		}
-
-		// Taken out of the list first: systems reacting to the destruction may load or unload sub-scenes themselves.
-		Scope<SubSceneLoad> load = std::move(*it);
-		m_SubScenes.erase(it);
-		if (load->Request)
-			load->Request->Cancel();
-		// A compilation still running finishes into its own result, which goes with the job.
-		load->Instantiation.reset();
-		DestroySubSceneEntities(*load);
+		BeginSubSceneUnload(*load);
+		RemoveUnloadedSubScenes();
 		return true;
+	}
+
+	void Scene::BeginSubSceneUnload(SubSceneLoad& load)
+	{
+		SubSceneStatus& status = load.Status;
+		if (load.Request)
+			load.Request->Cancel();
+		load.Request.reset();
+		// A compilation still running finishes into its own result, which goes with the job.
+		load.Compiled.reset();
+		load.CompileJob = JobHandle();
+		load.Instantiation.reset();
+
+		// Its top-level entities as they are now leave the game at once: inactive, they leave rendering, the scripts' updates,
+		// physics (in one batch) and audio in this frame, before any of them is destroyed.
+		std::vector<Entity> roots;
+		roots.reserve(load.Roots.size());
+		for (const Entity root : load.Roots)
+		{
+			const SubSceneComponent* tag = root.IsValid() ? m_Registry.try_get<SubSceneComponent>(root.GetHandle()) : nullptr;
+			if (tag && tag->SubScene == status.ID)
+				roots.push_back(root);
+		}
+		load.DeactivatedRoots.clear();
+		DeactivateEntities(roots, load.DeactivatedRoots);
+		load.Roots = std::move(roots);
+		status.State = SubSceneState::Unloading;
+		status.DestroyedEntities = 0;
+	}
+
+	bool Scene::AdvanceSubSceneUnload(SubSceneLoad& load, uint32_t& budget, std::chrono::steady_clock::time_point deadline)
+	{
+		// While the scene updates, destruction is deferred to the end of the update: slices run between updates.
+		ST_CORE_ASSERT(!m_IsUpdating, "Scene '{}': sub-scene slices run between updates", m_Name);
+		std::vector<Entity> tops;
+		while (budget > 0 && std::chrono::steady_clock::now() < deadline)
+		{
+			const auto chunkStart = std::chrono::steady_clock::now();
+			const size_t chunk = GetChunkWithin(deadline, m_DestroyNanosecondsPerEntity, m_SlicedThisPass == 0, std::min(budget, c_UnloadChunk));
+			const size_t count = CollectUnloadSlice(load, chunk, tops);
+			if (count == 0)
+				break;
+			DestroyEntities(tops);
+			SceneWorkBudget::RecordChunkCost(m_DestroyNanosecondsPerEntity, Since(chunkStart), count);
+			m_SlicedThisPass += count;
+			load.Status.DestroyedEntities += count;
+			budget -= static_cast<uint32_t>(count);
+		}
+		CollectUnloadSlice(load, 0, tops); // Only refreshes the living top-level entities
+		return load.Roots.empty();
+	}
+
+	size_t Scene::CollectUnloadSlice(SubSceneLoad& load, size_t limit, std::vector<Entity>& outTops)
+	{
+		outTops.clear();
+		// The top-level entities as they are now: those still of this sub-scene (the game may have destroyed them, or moved
+		// them into another).
+		std::erase_if(load.Roots, [&](const Entity root)
+		{
+			const SubSceneComponent* tag = root.IsValid() ? m_Registry.try_get<SubSceneComponent>(root.GetHandle()) : nullptr;
+			return !tag || tag->SubScene != load.Status.ID;
+		});
+		if (limit == 0)
+			return 0;
+
+		// Post-order: an entity is collected once its children are, so every collected entity's descendants are collected
+		// before it, and the slice destroys exactly what it collected. The tops are kept as a stack: collecting an entity
+		// replaces its children's entries (the last ChildCount ones) with its own.
+		std::vector<std::pair<entt::entity, entt::entity>>& walk = m_UnloadWalk;
+		std::vector<entt::entity> tops;
+		size_t collected = 0;
+		for (const Entity root : load.Roots)
+		{
+			walk.clear();
+			const HierarchyComponent& rootLinks = m_Registry.get<HierarchyComponent>(root.GetHandle());
+			walk.emplace_back(root.GetHandle(), rootLinks.FirstChild);
+			while (!walk.empty() && collected < limit)
+			{
+				auto& [entity, nextChild] = walk.back();
+				if (nextChild != entt::null)
+				{
+					const entt::entity child = nextChild;
+					const HierarchyComponent& childLinks = m_Registry.get<HierarchyComponent>(child);
+					nextChild = childLinks.NextSibling;
+					walk.emplace_back(child, childLinks.FirstChild);
+					continue;
+				}
+				const uint32_t children = m_Registry.get<HierarchyComponent>(entity).ChildCount;
+				ST_CORE_ASSERT(tops.size() >= children, "An unload slice collects every child before its parent");
+				tops.resize(tops.size() - children);
+				tops.push_back(entity);
+				collected++;
+				walk.pop_back();
+			}
+			if (collected >= limit)
+				break;
+		}
+		outTops.reserve(tops.size());
+		for (const entt::entity top : tops)
+			outTops.emplace_back(top, this);
+		return collected;
+	}
+
+	void Scene::RemoveUnloadedSubScenes()
+	{
+		std::vector<Entity> tops;
+		if (std::erase_if(m_SubScenes, [&](const Scope<SubSceneLoad>& load)
+		{
+			if (load->Status.State != SubSceneState::Unloading)
+				return false;
+			CollectUnloadSlice(*load, 0, tops); // Only refreshes the living top-level entities
+			return load->Roots.empty();
+		}) > 0)
+			m_SubSceneMembershipVersion++;
+	}
+
+	void Scene::FlushSubSceneUnloads()
+	{
+		ST_CORE_ASSERT(!m_IsUpdating, "Scene '{}': sub-scene unloads finish between updates", m_Name);
+		// By ID: systems hearing the destruction may load or unload sub-scenes.
+		std::vector<SubSceneID> unloading;
+		for (const Scope<SubSceneLoad>& load : m_SubScenes)
+		{
+			if (load->Status.State == SubSceneState::Unloading)
+				unloading.push_back(load->Status.ID);
+		}
+		for (const SubSceneID id : unloading)
+		{
+			if (SubSceneLoad* load = FindSubScene(id))
+			{
+				uint32_t unlimited = SceneSettings::c_MaxEntitiesDestroyedLimit;
+				while (!AdvanceSubSceneUnload(*load, unlimited, std::chrono::steady_clock::time_point::max()))
+					unlimited = SceneSettings::c_MaxEntitiesDestroyedLimit;
+			}
+		}
+		RemoveUnloadedSubScenes();
 	}
 
 	bool Scene::IsSubSceneLoaded(SubSceneID id) const
@@ -153,41 +309,59 @@ namespace Strata
 	{
 		return std::any_of(m_SubScenes.begin(), m_SubScenes.end(), [](const Scope<SubSceneLoad>& load)
 		{
-			return load->Status.State == SubSceneState::Loading || load->Status.State == SubSceneState::Instantiating;
+			const SubSceneState state = load->Status.State;
+			return state == SubSceneState::Loading || state == SubSceneState::Instantiating || state == SubSceneState::Unloading;
 		});
 	}
 
 	void Scene::UpdateSubScenes()
+	{
+		SceneWorkBudget budget = SceneWorkBudget::ForFrame(m_Settings, c_MaxSubSceneMillisecondsPerFrame);
+		UpdateSubScenes(budget);
+	}
+
+	void Scene::UpdateSubScenes(SceneWorkBudget& budget)
 	{
 		if (!HasPendingSubScenes())
 			return;
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Scene.Load");
 
-		const auto deadline = std::chrono::steady_clock::now()
-			+ std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double, std::milli>(c_MaxInstantiationMillisecondsPerFrame));
-		size_t budget = std::clamp<uint32_t>(m_Settings.MaxEntitiesInstantiatedPerFrame, 1, SceneSettings::c_MaxEntitiesInstantiatedLimit);
-		// By ID: systems hearing the new entities may start sub-scene loads, which grow the list.
+		// Creation and destruction together, within the frame's budget.
+		const auto deadline = budget.GetDeadlineWithin(budget.SubSceneMilliseconds);
+		// By ID: systems hearing the new or destroyed entities may start or stop sub-scene loads, which change the list.
+		std::vector<SubSceneID> unloading;
 		std::vector<SubSceneID> pending;
 		for (const Scope<SubSceneLoad>& load : m_SubScenes)
 		{
-			if (load->Status.State == SubSceneState::Loading || load->Status.State == SubSceneState::Instantiating)
+			const SubSceneState state = load->Status.State;
+			if (state == SubSceneState::Unloading)
+				unloading.push_back(load->Status.ID);
+			else if (state == SubSceneState::Loading || state == SubSceneState::Instantiating)
 				pending.push_back(load->Status.ID);
 		}
 		m_AdvancingSubScenes = true;
+		m_SlicedThisPass = 0;
+		// Unloads first: they free memory, and the IDs a reload of the same scene waits for.
+		for (const SubSceneID id : unloading)
+		{
+			if (SubSceneLoad* load = FindSubScene(id); load && load->Status.State == SubSceneState::Unloading)
+				AdvanceSubSceneUnload(*load, budget.EntitiesToDestroy, deadline);
+		}
 		for (const SubSceneID id : pending)
 		{
 			if (SubSceneLoad* load = FindSubScene(id))
-				AdvanceSubScene(*load, budget, deadline);
+				AdvanceSubScene(*load, budget.EntitiesToCreate, deadline);
 		}
 		m_AdvancingSubScenes = false;
+		RemoveUnloadedSubScenes();
 		const std::vector<SubSceneID> unloads = std::move(m_DeferredSubSceneUnloads);
 		m_DeferredSubSceneUnloads.clear();
 		for (const SubSceneID id : unloads)
 			UnloadSubScene(id);
 	}
 
-	void Scene::AdvanceSubScene(SubSceneLoad& load, size_t& budget, std::chrono::steady_clock::time_point deadline)
+	void Scene::AdvanceSubScene(SubSceneLoad& load, uint32_t& budget, std::chrono::steady_clock::time_point deadline)
 	{
 		SubSceneStatus& status = load.Status;
 		if (status.State == SubSceneState::Loading && load.Request && !load.Compiled)
@@ -220,6 +394,14 @@ namespace Strata
 			if (!load.CompileJob.IsComplete())
 				return;
 			status.Progress = 0.5f;
+			// The same scene loaded again while its previous sub-scene is still being unloaded waits until that one is gone:
+			// its entities keep the IDs the new ones would take.
+			const bool previousLeaving = status.Scene.IsValid() && std::any_of(m_SubScenes.begin(), m_SubScenes.end(), [&](const Scope<SubSceneLoad>& other)
+			{
+				return other.get() != &load && other->Status.State == SubSceneState::Unloading && other->Status.Scene == status.Scene;
+			});
+			if (previousLeaving)
+				return;
 			StartSubSceneInstantiation(load);
 		}
 		if (status.State != SubSceneState::Instantiating || !load.Instantiation)
@@ -231,21 +413,28 @@ namespace Strata
 		while (budget > 0 && !instantiation.IsComplete() && std::chrono::steady_clock::now() < deadline)
 		{
 			std::string error;
-			const size_t count = ContinueInstantiation(instantiation, std::min(budget, c_InstantiationChunk), &error);
+			const auto chunkStart = std::chrono::steady_clock::now();
+			const size_t chunk = GetChunkWithin(deadline, m_CreateNanosecondsPerEntity, m_SlicedThisPass == 0, std::min<size_t>(budget, c_InstantiationChunk));
+			const size_t count = ContinueInstantiation(instantiation, chunk, &error);
 			if (count == 0)
 			{
 				FailSubScene(load, error.empty() ? std::string("No entity could be created") : std::move(error));
 				return;
 			}
-			budget -= count;
+			budget -= static_cast<uint32_t>(count);
 			created += count;
 			// The new top-level entities name their sub-scene, so that unloading finds them wherever the game moved them.
 			const std::vector<Entity>& roots = instantiation.GetRoots();
-			for (size_t index = load.Roots.size(); index < roots.size(); index++)
+			for (size_t index = load.TaggedRoots; index < roots.size(); index++)
 			{
 				m_Registry.emplace_or_replace<SubSceneComponent>(roots[index].GetHandle(), SubSceneComponent { status.ID, status.Scene });
 				load.Roots.push_back(roots[index]);
 			}
+			if (roots.size() > load.TaggedRoots)
+				m_SubSceneMembershipVersion++;
+			load.TaggedRoots = roots.size();
+			SceneWorkBudget::RecordChunkCost(m_CreateNanosecondsPerEntity, Since(chunkStart), count);
+			m_SlicedThisPass += count;
 		}
 		if (created > 0)
 			status.Slices++;
@@ -326,14 +515,116 @@ namespace Strata
 		DestroyEntities(roots);
 	}
 
+	SubSceneID Scene::AdoptSubScene(AssetHandle source, std::span<const Entity> roots, std::string* outError)
+	{
+		for (const Entity root : roots)
+		{
+			if (!root.IsValid() || root.GetScene() != this || GetHierarchy(root.GetHandle()).Parent != entt::null)
+			{
+				if (outError)
+					*outError = root.IsValid() && root.GetScene() == this ? fmt::format("'{}' is not a top-level entity", root.GetName()) : "An entity is not of this scene";
+				return 0;
+			}
+		}
+
+		Scope<SubSceneLoad> load = CreateScope<SubSceneLoad>();
+		SubSceneStatus& status = load->Status;
+		status.ID = m_NextSubSceneID++;
+		status.Scene = source;
+		status.State = SubSceneState::Loaded;
+		status.Progress = 1.0f;
+		for (const Entity root : roots)
+		{
+			LeaveSubScene(root.GetHandle());
+			m_Registry.emplace<SubSceneComponent>(root.GetHandle(), SubSceneComponent { status.ID, source });
+			if (std::find(load->Roots.begin(), load->Roots.end(), root) == load->Roots.end())
+			{
+				load->Roots.push_back(root);
+				status.CreatedEntities += CountSubtree(root);
+			}
+		}
+		status.TotalEntities = status.CreatedEntities;
+		const SubSceneID id = status.ID;
+		m_SubScenes.push_back(std::move(load));
+		m_SubSceneMembershipVersion++;
+		return id;
+	}
+
+	bool Scene::SetSubSceneOf(Entity root, SubSceneID id)
+	{
+		if (!root.IsValid() || root.GetScene() != this || GetHierarchy(root.GetHandle()).Parent != entt::null)
+			return false;
+		SubSceneLoad* load = id != 0 ? FindSubScene(id) : nullptr;
+		if (id != 0 && (!load || load->Status.State != SubSceneState::Loaded))
+			return false;
+		if (GetSubSceneOf(root) == id)
+			return true;
+		LeaveSubScene(root.GetHandle());
+		if (load)
+		{
+			m_Registry.emplace<SubSceneComponent>(root.GetHandle(), SubSceneComponent { id, load->Status.Scene });
+			load->Roots.push_back(root);
+		}
+		m_SubSceneMembershipVersion++;
+		return true;
+	}
+
+	SubSceneID Scene::GetSubSceneOf(Entity entity) const
+	{
+		if (!entity.IsValid() || entity.GetScene() != this)
+			return 0;
+		entt::entity top = entity.GetHandle();
+		for (entt::entity parent = GetHierarchy(top).Parent; parent != entt::null; parent = GetHierarchy(parent).Parent)
+			top = parent;
+		const SubSceneComponent* tag = m_Registry.try_get<SubSceneComponent>(top);
+		return tag ? tag->SubScene : 0;
+	}
+
+	SubSceneID Scene::FindSubSceneBySource(AssetHandle source) const
+	{
+		if (!source.IsValid())
+			return 0;
+		SubSceneID unloading = 0;
+		for (auto it = m_SubScenes.rbegin(); it != m_SubScenes.rend(); ++it)
+		{
+			const SubSceneStatus& status = (*it)->Status;
+			if (status.Scene != source)
+				continue;
+			if (status.State != SubSceneState::Unloading)
+				return status.ID;
+			if (unloading == 0)
+				unloading = status.ID;
+		}
+		return unloading;
+	}
+
+	void Scene::LeaveSubScene(entt::entity root)
+	{
+		const SubSceneComponent* tag = m_Registry.try_get<SubSceneComponent>(root);
+		if (!tag)
+			return;
+		if (SubSceneLoad* load = FindSubScene(tag->SubScene))
+		{
+			const Entity entity(root, this);
+			std::erase(load->Roots, entity);
+			// The unload made it inactive: leaving the sub-scene, it is active again.
+			if (auto deactivated = std::find(load->DeactivatedRoots.begin(), load->DeactivatedRoots.end(), entity); deactivated != load->DeactivatedRoots.end())
+			{
+				load->DeactivatedRoots.erase(deactivated);
+				if (m_Registry.all_of<InactiveComponent>(root))
+					m_Registry.remove<InactiveComponent>(root);
+			}
+		}
+		m_Registry.remove<SubSceneComponent>(root);
+		m_SubSceneMembershipVersion++;
+	}
+
 	SubSceneLoad* Scene::FindSubScene(SubSceneID id) const
 	{
-		for (const Scope<SubSceneLoad>& load : m_SubScenes)
-		{
-			if (load->Status.ID == id)
-				return load.get();
-		}
-		return nullptr;
+		// IDs grow with every load and are appended as they are given, and erasing keeps the order: the list is sorted by ID,
+		// so that a world's hundreds of cells are found in logarithmic time.
+		const auto it = std::lower_bound(m_SubScenes.begin(), m_SubScenes.end(), id, [](const Scope<SubSceneLoad>& load, SubSceneID value) { return load->Status.ID < value; });
+		return it != m_SubScenes.end() && (*it)->Status.ID == id ? it->get() : nullptr;
 	}
 
 }

@@ -26,6 +26,7 @@ namespace Strata
 	class ISkinningPoses;
 	class Mesh;
 	class Scene;
+	struct SceneWorkBudget;
 	struct MeshSkinBinding;
 	struct WorldTransformComponent;
 
@@ -166,14 +167,15 @@ namespace Strata
 		static bool Prepare(Scene& scene, const Ref<AssetManagerBase>& assets, std::chrono::microseconds budget);
 		// The entities Prepare's syncs read at a time: a few hundred microseconds of work.
 		static constexpr uint32_t c_PrepareChunk = 2048;
-		// What a frame spends preparing a loaded scene (PrepareLoadedScene): 100,000 mesh renderers take about ten frames.
-		static constexpr std::chrono::microseconds c_PrepareFrameBudget { 4000 };
 		// What a frame uploads of a loaded scene's GPU copy (PrepareLoadedScene): new proxies' records and instances.
 		static constexpr uint64_t c_PrepareUploadBytes = 16ull << 20;
 		// SceneLoadOptions::Prepare for owners that render the scenes they load (the editor, StrataRuntime with a window):
-		// Prepare with the active asset manager and c_PrepareFrameBudget, then, with a renderer, the scene's GPU copy
-		// (RenderSceneGPU) within c_PrepareUploadBytes per call; true once both are complete.
-		static bool PrepareLoadedScene(Scene& scene);
+		// Prepare with the active asset manager and the time left in the frame's loading budget (at least one chunk; a frame's
+		// 4 ms build about 10,000 mesh renderers' proxies), then, with a renderer, the scene's GPU copy (RenderSceneGPU) within
+		// c_PrepareUploadBytes per call: in the call that completed the proxies only while the budget still has time (else the
+		// next call fills it, whatever its time, so a sync that alone outlasts the budget never holds the copy back); true once
+		// both are complete.
+		static bool PrepareLoadedScene(Scene& scene, SceneWorkBudget& budget);
 
 		// Compares every proxy, the spatial index and the instance data with what a rebuild from the scene would produce.
 		// Returns false with the first difference.
@@ -532,6 +534,8 @@ namespace Strata
 		RenderSceneStats m_Stats;
 		uint64_t m_SyncCount = 0;
 		uint32_t m_SyncUpdates = 0;
+		// PrepareLoadedScene: the proxies were complete as an earlier call ended (its GPU copy then fills whatever the time).
+		bool m_PreparedProxies = false;
 		std::vector<entt::entity> m_ChangeScratch;
 		std::vector<entt::entity> m_PendingScratch;
 		RenderLights m_Lights;

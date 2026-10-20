@@ -50,7 +50,8 @@ namespace Strata
 			{ "DebugView", ViewportDebugViewToString(DebugView) },
 			{ "GameView", { { "Mode", GameViewModeToString(GameView.Mode) }, { "Width", GameView.Width }, { "Height", GameView.Height } } },
 			{ "PilotGameCamera", PilotGameCamera },
-			{ "EditPose", AnimationEditPoseToString(EditPose) }
+			{ "EditPose", AnimationEditPoseToString(EditPose) },
+			{ "CellBounds", CellBounds }
 		};
 	}
 
@@ -69,7 +70,8 @@ namespace Strata
 		for (const auto& [key, flag] : { std::pair<const char*, bool*> { "ShowGrid", &result.ShowGrid }, { "ShowSelectionOutline", &result.ShowSelectionOutline },
 			{ "ShowSceneGizmos", &result.ShowSceneGizmos }, { "AllColliders", &result.AllColliders }, { "ShowStats", &result.ShowStats },
 			{ "PreviewLighting", &result.PreviewLighting },
-			{ "ShowGameUI", &result.ShowGameUI }, { "CanvasMode", &result.CanvasMode }, { "Snap", &result.Snap }, { "PilotGameCamera", &result.PilotGameCamera } })
+			{ "ShowGameUI", &result.ShowGameUI }, { "CanvasMode", &result.CanvasMode }, { "Snap", &result.Snap }, { "PilotGameCamera", &result.PilotGameCamera },
+			{ "CellBounds", &result.CellBounds } })
 		{
 			if (const auto it = json.find(key); it != json.end())
 			{

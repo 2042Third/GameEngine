@@ -57,6 +57,11 @@ namespace Strata
 	struct RecoverySaveToken;
 	enum class DiscardOutcome : uint8_t;
 	class ThumbnailCache;
+	struct SceneWorkBudget;
+	struct WorldCookCache;
+	struct WorldSavedDocument;
+	struct WorldSavePlan;
+	class EditorWorld;
 
 	enum class SceneState : uint8_t
 	{
@@ -338,6 +343,8 @@ namespace Strata
 
 		// In selection order (the last one is the primary selection).
 		const std::vector<UUID>& GetSelection() const { return m_Selection; }
+		// Changes whenever the selection does, so that results depending on it can be cached.
+		uint64_t GetSelectionVersion() const { return m_SelectionVersion; }
 		void SetSelection(std::vector<UUID> selection);
 		void Select(UUID entity, bool additive = false);
 		void Deselect(UUID entity);
@@ -372,6 +379,19 @@ namespace Strata
 		UndoStack& GetUndoStack() { return m_UndoStack; }
 		// The prefab instances of the edited scene and their prefabs (updates after prefab changes, modified marks).
 		PrefabSync& GetPrefabSync() { return m_PrefabSync; }
+		// What the world cook read this session (world.cook, exports), for the open project. Cooks share it: one that runs
+		// while its project closes fills the old project's cache, which the next project never sees.
+		const Ref<WorldCookCache>& GetWorldCookCache();
+		// The world the edited scene is the persistent scene of, streamed around the editor camera; null when it is none.
+		EditorWorld* GetWorld() const { return m_World.get(); }
+		// Whether the save whose first request has this ID (BeginSaveScene) is the world's latest save, still writing (its World
+		// document follows its cells).
+		bool IsWorldSaveWriting(uint64_t save) const { return save != 0 && m_WorldSave.Request == save && !m_WorldSave.Ended; }
+		// The documents that save wrote (scene.save's documents) once it ended; nullopt for another save.
+		std::optional<std::vector<WorldSavedDocument>> GetWorldSaveDocuments(uint64_t save) const;
+		// Why that save failed once it ended, when its cells were written but the World document was not (the scene stays
+		// modified then); empty for a save that succeeded or another save.
+		std::string GetWorldSaveError(uint64_t save) const;
 		// Thumbnails of the open project's assets (Content Browser, Asset tab); null without a project or a GPU.
 		ThumbnailCache* GetThumbnails() const { return m_Thumbnails.get(); }
 		// The project's picture for the launcher, made after each scene save.
@@ -594,16 +614,16 @@ namespace Strata
 		// runs.
 		bool SwitchRuntimeScene(AssetHandle scene, std::string* outError);
 		// Advances the play-mode scene switch and swaps the loaded scene in once it is ready (Update).
-		void UpdateRuntimeSceneLoad();
+		void UpdateRuntimeSceneLoad(SceneWorkBudget& budget);
 		// Replaces the running scene with `next`, which continues the way play mode was going (paused, with its steps); what
 		// the previous scene used goes a few frames later, unless `next` requested it by then or its load brought it in
 		// (`loaded`).
 		void ReplaceRuntimeScene(Ref<Scene> next, AssetHandle asset, std::span<const AssetHandle> loaded);
 		// Advances the scene being opened and makes it the edited scene once it is ready (Update).
-		void UpdateSceneLoad();
+		void UpdateSceneLoad(SceneWorkBudget* budget = nullptr);
 		// SceneLoadOptions::Prepare of the editor's scene loads (opened and switched to in play mode): the loaded scene's
 		// render proxies while the editor renders (RenderScene::PrepareLoadedScene), nothing without a GPU.
-		static std::function<bool(Scene&)> GetScenePreparation();
+		static std::function<bool(Scene&, SceneWorkBudget&)> GetScenePreparation();
 		// Makes a scene that was opened the edited one: the editor camera, the trim of what the previous scene used (sparing
 		// what the load brought in, `loaded`).
 		void FinishOpenScene(Ref<Scene> scene, AssetHandle handle, std::span<const AssetHandle> loaded);
@@ -652,6 +672,20 @@ namespace Strata
 		// A save of the edited scene ended (DocumentSaver's completion).
 		void OnSceneSaveEnded(const DocumentSaveStatus& status, AssetHandle handle, const RecoverySaveToken& token,
 			const std::optional<SceneSaveRestore>& restore);
+		// Takes the snapshot and submits the save of the edited world's changed documents (EditorWorld::BeginSave).
+		uint64_t SubmitWorldSave(std::string* outError);
+		// The world save's first request ended: the cells' outcome, then the World document's request. The scene is marked
+		// saved, and the recovery journal follows it, only once every document is written: the World document too, when the
+		// save changed it (it lists the new cells, whose entities a world that does not list them leaves out).
+		void OnWorldSaveEnded(const DocumentSaveStatus& status, AssetHandle handle, const RecoverySaveToken& token, const WorldSavePlan& plan);
+		// The world save's World document was written (or failed): the save ended. `token` is the recovery journal's while the
+		// first request wrote everything (null when it failed: its token was released then), `baseHash` the persistent
+		// scene's document hash for the journal.
+		void OnWorldIndexSaved(const DocumentSaveStatus& status, uint64_t save, AssetHandle handle, const RecoverySaveToken* token, std::string baseHash);
+		// Marks the edited world saved as of `savePoint` and lets the recovery journal follow the persistent scene's document.
+		void MarkWorldSaved(const UndoStack::SavePoint& savePoint, AssetHandle handle, const RecoverySaveToken& token, std::string baseHash);
+		// Tells the person that a save failed (a notification naming the asset, the console shown).
+		void NotifySaveFailed(const std::string& label, const std::string& error, AssetHandle asset);
 		// Blocks until the save ended (SaveScene, SaveSceneAs): false with the reason when it failed.
 		bool WaitForSave(uint64_t id, std::string* outError);
 		void CloseScriptEngine();
@@ -742,6 +776,7 @@ namespace Strata
 
 		std::vector<UUID> m_Selection;
 		std::unordered_set<UUID> m_SelectionSet; // The same entities, for IsSelected
+		uint64_t m_SelectionVersion = 0;
 		AssetHandle m_InspectedAsset = UUID::Null();
 		uint64_t m_InspectionVersion = 0;
 		Ref<CommandJournal> m_Journal;
@@ -818,6 +853,19 @@ namespace Strata
 		// Declared after what its completions use (the undo stack, the recovery journal, the notifications); idle by the time
 		// the context goes (ReleaseProject finishes every save).
 		DocumentSaver m_DocumentSaver;
+		Ref<WorldCookCache> m_WorldCookCache;
+		uint64_t m_WorldCookCacheGeneration = 0; // The project the cache belongs to (GetProjectGeneration)
+		// Declared after the undo stack and the edited scene, which it observes and streams into: it goes first.
+		Scope<EditorWorld> m_World;
+		// The latest save of the world: its first request, whether it ended (with its World document) and what it wrote.
+		struct WorldSaveState
+		{
+			uint64_t Request = 0;
+			bool Ended = true;
+			std::vector<WorldSavedDocument> Documents;
+			std::string Error; // The World document's write failed (or could not be made)
+		};
+		WorldSaveState m_WorldSave;
 	};
 
 }

@@ -84,6 +84,15 @@ namespace Strata
 
 		// The totals of AssetManagerBase::GetStats as asset.stats and editor.status report them (EditorStreamingCommands.cpp).
 		nlohmann::json DescribeAssetStats(const AssetManagerStats& stats);
+		// physics.stats' answer for a scene (EditorWorldCommands.cpp): {running: false} for none or one that does not run.
+		nlohmann::json DescribePhysicsStats(const Scene* scene);
+		// scene.loadStatus's world streaming (EditorWorldCommands.cpp): the editor's world (editor) and, while playing, the
+		// running game's (game), each {cellsWanted, cellsLoading, cellsLoaded, cellsUnloading, cellsPinned, cellsFailed} or
+		// null; null when neither streams a world.
+		nlohmann::json DescribeWorldLoads(const EditorContext& context);
+		// editor.status's world section (EditorWorldCommands.cpp): the open world's {name (null while its asset loads),
+		// cellsLoaded, cellsLoading, cellsDirty, persistentDirty}; null without one.
+		nlohmann::json DescribeWorldSummary(const EditorContext& context);
 		// The imports' memory estimates as asset.stats and editor.status report them: {admitted, budget, queued} in MB.
 		nlohmann::json DescribeImportMemory(const ImportMemoryStats& stats);
 
@@ -153,8 +162,9 @@ namespace Strata
 		nlohmann::json DescribePlayState(const EditorContext& context);
 		// What runs while playing (null in edit mode), for play.state, scene.info and editor.status: {scene (the running scene
 		// asset after a switch the game asked for; null while the edited scene's copy runs), name, path, entityCount,
-		// subScenes: [{id, scene, name, state, entities}], switching: {scene, progress} or null (a scene the game asked for
-		// loads)}.
+		// subScenes: [{id, scene, name, state, entities}] (additive loads; a world's cells are left out), world: the world the
+		// game streams {world, cellsWanted, cellsLoading, cellsLoaded, cellsUnloading, cellsFailed} or null, switching: {scene,
+		// progress} or null (a scene the game asked for loads)}.
 		nlohmann::json DescribeRunningScene(const EditorContext& context);
 		// The saves in flight (DocumentSaver), for editor.status's saving, compact answer included: [{saveId, label, documents,
 		// state, progress}], empty when none writes.

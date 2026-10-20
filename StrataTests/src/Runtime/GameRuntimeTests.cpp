@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
+#include "Runtime/PerfLogReader.h"
 #include "Scene/SceneTestUtils.h"
 #include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Asset/BuiltinAssets.h"
@@ -12,10 +13,19 @@
 #include "Strata/Runtime/GameRuntime.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/World/WorldComponents.h"
 #include "TestHelpers.h"
+#include "World/WorldTestUtils.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+	#include "Strata/Physics/PhysicsSystem.h"
+#endif
 
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -45,6 +55,22 @@ namespace
 			scene.CreateEntity("Entity");
 		return ToBytes(JsonUtils::Dump(SceneSerializer::Serialize(scene)));
 	}
+
+#if ST_WITH_PHYSICS
+	// A scene document named `name` with a camera and `count` static boxes with colliders.
+	std::vector<uint8_t> MakeColliderScene(const std::string& name, size_t count)
+	{
+		Scene scene(name);
+		scene.CreateEntity("Camera").AddComponent<CameraComponent>().Primary = true;
+		for (size_t index = 0; index < count; index++)
+		{
+			Entity box = scene.CreateEntity("Box");
+			box.GetComponent<TransformComponent>().Translation = glm::vec3(static_cast<float>(index % 100) * 2.0f, 0.0f, static_cast<float>(index / 100) * 2.0f);
+			box.AddComponent<BoxColliderComponent>();
+		}
+		return ToBytes(JsonUtils::Dump(SceneSerializer::Serialize(scene)));
+	}
+#endif
 
 	// A scene document named `name` with a camera and `count` cubes (the built-in mesh, which every asset manager has).
 	std::vector<uint8_t> MakeCubeScene(const std::string& name, size_t count)
@@ -250,6 +276,87 @@ TEST_SUITE("Runtime.Game")
 		REQUIRE_MESSAGE(headless, error);
 		REQUIRE(headless->WaitForStart());
 		CHECK(RenderScene::Find(*headless->GetScene()) == nullptr);
+	}
+
+#if ST_WITH_PHYSICS
+	TEST_CASE("A game starts and switches to scenes whose physics bodies are built already")
+	{
+		ScopedJobSystem jobs(2, 2);
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimePreparedPhysics");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeColliderScene("Start", 300) }, { 0x1012, MakeColliderScene("Next", 20) } },
+			UUID(0x1010));
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		REQUIRE(game->WaitForStart());
+		// The bodies were built while the scene loaded: the frame it started in built none.
+		const PhysicsSystem* start = game->GetScene()->GetSystem<PhysicsSystem>();
+		REQUIRE(start);
+		CHECK(start->GetStats().BodyCount == 300);
+		CHECK(start->GetStats().PreparedSlices >= 1);
+
+		game->GetScene()->RequestSceneLoad(UUID(0x1012));
+		UpdateUntil(*game, [&]() { return game->GetSceneHandle() == UUID(0x1012); });
+		const PhysicsSystem* next = game->GetScene()->GetSystem<PhysicsSystem>();
+		REQUIRE(next);
+		CHECK(next->GetStats().BodyCount == 20);
+		CHECK(next->GetStats().PreparedSlices >= 1);
+	}
+#endif
+
+	TEST_CASE("A world game starts with its start cells in, paces the frames that show nothing and logs its streaming")
+	{
+		ScopedJobSystem jobs(2, 1);
+		GeneratedWorldSpecification specification;
+		specification.GridX = 3;
+		specification.GridZ = 3;
+		specification.EntitiesPerCell = 10;
+		specification.BodiesPerCell = 3;
+		specification.Floors = true;
+		specification.BuildPersistent = [](Scene& persistent, AssetHandle world) { persistent.CreateEntity("World").AddComponent<WorldComponent>().World = world; };
+		GeneratedWorld world;
+		const std::filesystem::path manifest = WriteGeneratedWorldGame(CreateTemporaryDirectory("RuntimeWorldGame"), specification, &world);
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		// Nothing plays yet: a renderer would clear the frame, at most 60 times a second.
+		CHECK(game->GetFrameRateCap(0) == GameRuntime::c_LoadingFrameRate);
+		REQUIRE(game->WaitForStart());
+		CHECK(game->GetFrameRateCap(0) == 0);
+		CHECK(game->GetFrameRateCap(144) == 144);
+
+		// The Ground's cells around the camera at the origin came with the start (prepared, then adopted), bodies and all.
+		const IWorldStreaming* streaming = game->GetScene()->GetService<IWorldStreaming>();
+		REQUIRE(streaming);
+		CHECK(streaming->GetStats().CellsLoaded == 4);
+		CHECK(streaming->GetStats().LoadsStarted == 0);
+		for (uint32_t frame = 0; frame < 3; frame++)
+			game->Update(c_Frame);
+
+		// The perf log's columns read the running scene's streaming and physics.
+		const FramePerfColumnGroup columns = game->MakePerfLogColumns();
+		REQUIRE(columns.Names.size() == 7);
+		CHECK(columns.Names[2] == "WorldCellsLoaded");
+		CHECK(columns.Names[5] == "PhysicsBodiesWaiting");
+		std::string line;
+		FramePerfRow row(line);
+		columns.Write(row);
+		REQUIRE(row.GetCount() == 7);
+		const std::optional<PerfLogTable> table = ParsePerfLog("A,B,C,D,E,F,G\n" + line.substr(1) + "\n", error);
+		REQUIRE_MESSAGE(table, error);
+		const std::vector<double>& values = table->Rows[0];
+		CHECK(values[0] >= 4.0); // Wanted
+		CHECK(values[2] >= 4.0); // Loaded
+#if ST_WITH_PHYSICS
+		CHECK(values[4] >= static_cast<double>(4 * world.BodiesPerGroundCell)); // Bodies
+		CHECK(values[5] == 0.0); // Waiting
+		CHECK(values[6] >= values[4]); // Capacity
+#else
+		// An engine without physics leaves the physics columns empty.
+		CHECK(std::isnan(values[4]));
+		CHECK(std::isnan(values[5]));
+		CHECK(std::isnan(values[6]));
+#endif
 	}
 
 	TEST_CASE("A scene the running scene asks for in every update loads once and replaces it")

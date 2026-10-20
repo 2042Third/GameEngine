@@ -121,6 +121,9 @@ namespace Strata
 		ViewportDebugView DebugView = ViewportDebugView::None;
 		// The debug views' colors. Not saved: the editor's theme sets them.
 		ViewportDebugColors DebugColors;
+		// While the edited scene is a world (or the game streams one): the squares of the cells loading, loaded and unloading
+		// around the camera, colored by state (CellBoundsOverlay).
+		bool CellBounds = false;
 		// The Game view's image size.
 		GameViewSettings GameView;
 		// The Scene view looks through the scene's primary camera (with the editor's overlays) instead of the editor camera

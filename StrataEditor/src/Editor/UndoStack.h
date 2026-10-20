@@ -193,8 +193,11 @@ namespace Strata
 
 		void Clear();
 
-		// Told about every change the stack applies (null: nobody). The observer must outlive the stack or be removed.
-		void SetObserver(UndoStackObserver* observer) { m_Observer = observer; }
+		// Told about every change the stack applies, in the order they were added (the recovery journal, a world's dirty cells).
+		// Adding one twice changes nothing; an observer must outlive the stack or be removed first. Not while the stack tells
+		// its observers.
+		void AddObserver(UndoStackObserver* observer);
+		void RemoveObserver(UndoStackObserver* observer);
 	private:
 		struct Entry
 		{
@@ -218,7 +221,7 @@ namespace Strata
 		uint64_t m_Version = 0;
 		uint64_t m_Generation = 0;  // Changes with Clear (SavePoint)
 		uint64_t m_SceneTrims = 0;  // Steps that change the scene trimmed from the front (SavePoint)
-		UndoStackObserver* m_Observer = nullptr;
+		std::vector<UndoStackObserver*> m_Observers;
 		Scope<EditorActionGroup> m_Group; // The group BeginGroup opened, until EndGroup or CancelGroup
 		std::string m_GroupName;
 	};

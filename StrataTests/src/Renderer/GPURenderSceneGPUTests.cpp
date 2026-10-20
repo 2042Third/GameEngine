@@ -8,6 +8,7 @@
 #include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureTable.h"
+#include "Strata/Scene/SceneWorkBudget.h"
 
 #include <cstring>
 #include <random>
@@ -389,8 +390,11 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		AddNeutralPostProcess(scene);
 		AddCubeRow(scene, 500);
 		int calls = 0;
-		while (!RenderScene::PrepareLoadedScene(scene))
+		for (SceneWorkBudget budget = SceneWorkBudget::ForFrame(scene.GetSettings()); !RenderScene::PrepareLoadedScene(scene, budget);
+			budget = SceneWorkBudget::ForFrame(scene.GetSettings()))
+		{
 			REQUIRE(++calls < 100);
+		}
 		RenderSceneGPU* mirror = Renderer::GetRenderSceneGPUs().Find(RenderScene::Get(scene).GetId());
 		REQUIRE(mirror);
 		CHECK(mirror->GetDeferredProxies() == 0);
@@ -403,6 +407,32 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		CHECK(renderer.GetStats().InstanceUploadRanges == 0);
 		CHECK(GetDrawnCounts(renderer).Instances > 0);
 		CheckMirror(gpu, RenderScene::Get(scene), *mirror);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A loaded scene's preparation draws from the frame's loading budget: a spent one leaves the GPU copy for the next frame")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadBuiltinAssets(assets);
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddCubeRow(scene, 200);
+		// A frame whose loading time is spent (other loads drew it): the proxies get their chunk, the GPU copy nothing yet.
+		SceneWorkBudget spent = SceneWorkBudget::ForFrame(scene.GetSettings());
+		spent.Deadline = std::chrono::steady_clock::now();
+		CHECK_FALSE(RenderScene::PrepareLoadedScene(scene, spent));
+		const RenderSceneGPU* untouched = Renderer::GetRenderSceneGPUs().Find(RenderScene::Get(scene).GetId());
+		CHECK((!untouched || !untouched->IsResident(0)));
+		// The next frame's budget fills it.
+		SceneWorkBudget next = SceneWorkBudget::ForFrame(scene.GetSettings());
+		next.Deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		CHECK(RenderScene::PrepareLoadedScene(scene, next));
+		const RenderSceneGPU* mirror = Renderer::GetRenderSceneGPUs().Find(RenderScene::Get(scene).GetId());
+		REQUIRE(mirror);
+		CHECK(mirror->GetDeferredProxies() == 0);
+		CHECK(mirror->IsResident(0));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

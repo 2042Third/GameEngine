@@ -839,9 +839,9 @@ TEST_SUITE("Asset.Groups")
 		const AssetHandle large = manager->Add(0x300, MakeUsage(300), 300);
 		const AssetHandle medium = manager->Add(0x301, MakeUsage(200), 200);
 		const AssetHandle unknownSize = manager->Add(0x302, MakeUsage(5));
-		const AssetHandle small = manager->Add(0x303, MakeUsage(150), 150);
+		const AssetHandle smallAsset = manager->Add(0x303, MakeUsage(150), 150);
 		manager->SetDependencies(first, { large, medium, unknownSize });
-		manager->SetDependencies(second, { small });
+		manager->SetDependencies(second, { smallAsset });
 		const uint64_t builtin = manager->GetStats().Resident.Cpu;
 		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
 		budgets.Cpu = builtin + 1400;
@@ -866,7 +866,7 @@ TEST_SUITE("Asset.Groups")
 		manager->RequestLoad(second, AssetPriority::High);
 		manager->AllowReads(3);
 		REQUIRE(WaitUntil([&]() { return manager->GetReadCount(second) == 1 && manager->GetStats().OutstandingReads == 0; }));
-		CHECK(manager->GetAssetState(small) == AssetState::Unloaded);
+		CHECK(manager->GetAssetState(smallAsset) == AssetState::Unloaded);
 		CHECK(manager->GetStats().DependencyPrefetches == 1);
 
 		manager->OpenGate();

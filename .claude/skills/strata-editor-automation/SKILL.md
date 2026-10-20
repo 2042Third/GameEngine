@@ -101,7 +101,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | --- | --- |
 | What is open, is it playing, unsaved changes? | `editor.status` |
 | Are the project's assets still being scanned? | `editor.status`'s `assets.scanning` (`{phase, done, total}`, null once done): until the scan and the start scene after it are done, edits and asset queries wait (they answer once the project is ready); `editor.status`, `editor.wait`, `log.read` answer at once |
-| Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress` and whether it is the project's `startScene`, `lastOpen` with how it ended, `play` for a switch a running game asked for, `subScenes` of the running game; `{"wait": true}` answers once nothing is opening); also `editor.status {"sections": ["sceneLoad"]}` |
+| Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress` and whether it is the project's `startScene`, `lastOpen` with how it ended, `play` for a switch a running game asked for, `subScenes` of the running game, `world` for the cells a world streams in the editor and the game; `{"wait": true}` answers once nothing is opening); also `editor.status {"sections": ["sceneLoad", "world"]}` |
 | What did the person, other agents or I just do? | `editor.activity {since, limit, source, command}` (every command run: source UI / Automation with the client's name / CommandScript / Internal, a one-line summary such as "Rename 'Crate' to 'Box'", parameters, result or error, undo step, entities touched); page with `since` = the returned `latest`, or the latest first with `{"newest": true}` and `before` = the returned `oldest` |
 | Are there unsaved changes a crashed (or discarding) editor left? | `scene.recoveryStatus` (entries with `id`, `sceneName`, `applicable`; the edited scene's `journal`), then `scene.recover {scene: <id or scene>, action: "apply" \| "discard"}` |
 | Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`; editors run with `--commands` or `--frames` list what they opened without saving it); `editor.removeRecentProject {path}` takes one off |
@@ -122,6 +122,13 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What does the game play (sound)? | `audio.state` (play mode): `voices` (entity or null for one-shots, clip, playing, looping, position...), `oneShots` (`playing`, `played`, `dropped`), `listener`, `masterVolume` |
 | What happened (errors, script output)? | `log.read` (`{"newest": true, "limit": 20}` for the latest first, paging with `before` = the returned `oldest`; oldest first with `after` = the previous `latest`; `minLevel`; `logger`: `Strata` engine, `App` editor, `Script` scripts) |
 | How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`; `importMemoryMB`: the imports' memory estimates against their budget); `asset.setBudget` changes the open project's budgets (MB of memory, staging and uploads per frame; ms of finalization and of upload steps per frame; `importMB`, the memory imports may take together: imports beyond it wait their turn) |
+| Make a world | `world.create {"path": "Worlds/Island", "cellSize": 64}` (layers default to Terrain, Buildings, Props, Gameplay; opens it unless `open: false`) |
+| Change a world's layers | `world.setLayers {"world": ..., "layers": ["Terrain", {"name": "Props", "cellSize": 32, "streamingDistance": 64}]}` (renames move folders; removing a layer with cells needs `deleteCells`) |
+| Which cells of the open world are loaded, dirty, pinned? | `world.status {"cells": true}` (null `world` when the edited scene is no world); `world.edit {"editLayer": "Props", "visibleLayers": [...], "radiusScale": 2}`; `world.loadCells {"cells": [{"layer": "Ground", "x": 3, "z": -1}], "wait": true}` (pinned until `unpin`/`unpinAll`). People see the same in the Streaming panel's cell map, the Hierarchy's world strip (edit layer) and its search terms `l:Props`, `l:persistent`, `cell:3,-1` (show them a cell's entities with `editor.showPanel {"panel": "Hierarchy", "search": "cell:3,-1"}`); `viewport.setSettings {"cellBounds": true}` outlines the cells around the camera in captures and the viewport |
+| Put entities into a world's cells | Edits re-cell by position by themselves; new entities go into `world.edit`'s `editLayer` cell (default "Persistent"); `world.moveEntities {"entities": [...], "layer": "Props"}` (or "Persistent"); `scene.save` writes only dirty cells (`documents`) |
+| How big is a world, which cells changed since its index? | `world.info {"world": "Worlds/Island.stworld"}`: layers (cell size, streaming distance), cells, `index.staleCells`, `maxBodiesInRadius` |
+| Measure a world's cells (bodies, bounds) and size its physics | `world.cook {"world": ...}` with the persistent scene open: reads changed cells only, writes the index, sets the capacity (`apply`, default true; one undo step); fails naming entity IDs cells share |
+| Are physics bodies missing collision, how full is the physics world? | `physics.stats` while playing: bodies, capacity (`maxBodies`, `reservedMB`), `waitingForSlot` (bodies without collision: only a world at its growth limit has them; others grow before their next step), last frame's `addedLastFrame`/`removedLastFrame`, `growths` |
 | Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %; `gpu`: the GPU's stages and `boundBy`; `renderStats`: what the viewport's frame drew; `gameRenderStats`: the Game view's) |
 
 Commands added at run time (for example `script.*`, `viewport.*`, `camera.*` when those features are present)
@@ -189,7 +196,10 @@ editor started with `--no-gpu` (use `--headless`):
   seconds, ...}`; they appear over several frames, at most the scene's `maxEntitiesInstantiatedPerFrame` per frame
   (`scene.setSettings`). Deleting one of its entities before its children appeared leaves those out (`skippedEntities`).
   Its entities keep their IDs, so loading the same scene twice fails; `scene.unloadAdditive
-  {subScene}` removes one (also a failed one), and `play.stop` discards them all with the running copy.
+  {subScene}` removes one (also a failed one): its entities leave the game at once (inactive) and are destroyed over the
+  next frames (`unloadingEntities`; `scene.loadStatus` shows it `Unloading` with `destroyedEntities`, at most the scene's
+  `maxEntitiesDestroyedPerFrame` a frame), and loading the same scene again meanwhile waits until they are gone.
+  `play.stop` discards them all with the running copy.
 - `camera.get`; `camera.set {position?, target?, yaw?, pitch?, distance?, fov?, near?, far?, flySpeed?}`;
   `camera.focus {entities?}` frames the given (or selected) entities. Every scene remembers its own editor camera; a
   scene opened for the first time is framed on what it renders, seen from the direction of its primary camera.
@@ -249,7 +259,7 @@ editor started with `--no-gpu` (use `--headless`):
   left always stays). When a project opens with changes an editor left behind, `scene.recoveryStatus` lists them;
   `scene.recover {"scene": "<id>", "action": "apply"}` reopens the scene (in the background, like `scene.open`; it fails
   while another scene is being opened) with them as one undo step (the scene stays unsaved: save
-  it), `"discard"` drops them. Entries follow their scene by its handle, so moving or renaming a scene (`asset.move`)
+  it; a world's changes wait for the cells they name to load and go back into them), `"discard"` drops them. Entries follow their scene by its handle, so moving or renaming a scene (`asset.move`)
   keeps its changes recoverable (`scenePath` is where the scene is now). Ask the person before recovering or discarding their changes, or show them the choice:
   `editor.showDialog {"dialog": "recovery"}`.
 - **Play mode**: `play.start` runs a copy of the scene, after building the scripts when their sources changed or they
@@ -371,7 +381,8 @@ To rest entities on what is below them,
 undo step (as the inspector does for a multi-selection); `entity.rename`, `entity.delete`, `scene.setSettings` (gravity,
 timestep, and `physicsCapacity {maxBodies, maxBodyPairs, maxContactConstraints}` for scenes that spawn many bodies while
 they play; 0 sizes a capacity from the bodies the scene starts with; set capacities in edit mode: they apply when play
-starts; `maxEntitiesInstantiatedPerFrame` bounds how many entities sub-scenes create per frame, 5000 by default).
+starts; `maxEntitiesInstantiatedPerFrame` and `maxEntitiesDestroyedPerFrame` bound how many entities sub-scenes create
+and destroy per frame, 5000 each by default).
 Collision layers: `scene.setSettings {"layerNames": {"1": "Player", "2": "Debris"}, "layerCollisions":
 [{"layers": ["Player", "Debris"], "collide": false}]}` names layers and keeps pairs apart (`resetLayerCollisions: true`
 lets everything collide again first; `scene.info` lists `physicsLayers`), and `RigidBody.Layer` and
@@ -432,7 +443,8 @@ a paused scene by exactly n fixed steps, one per frame (unthrottled), and **answ
 drops steps not run yet (a waiting `play.step` then fails with `stepsRun`); `"wait": false` answers at once with
 `pendingSteps`. `frames` is an older name of `steps`. `play.simulate` runs physics only. After the game switched scenes
 itself (`Game::LoadScene`), `play.state` (and `scene.info`, `editor.status`) name what runs as `running` (`scene`, `name`,
-`path`, `entityCount`, `subScenes`, `switching`); `scene.info`'s `name` stays the edited scene's.
+`path`, `entityCount`, `subScenes`, `world`: a streaming world's cell counts, its cells left out of `subScenes`,
+`switching`); `scene.info`'s `name` stays the edited scene's.
 
 **Frame cost**: every `editor.wait` result of a running editor has `frameTimes` (`count`, `medianMs`, `meanMs`, `p95Ms`,
 `maxMs`): the CPU time of the frames that ran entirely during the wait, without the waits for the GPU and vsync (measure

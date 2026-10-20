@@ -108,7 +108,8 @@ namespace Strata
 			{ "scaleSnap", "ScaleSnap" },
 			{ "debugView", "DebugView" },
 			{ "pilotGameCamera", "PilotGameCamera" },
-			{ "editPose", "EditPose" }
+			{ "editPose", "EditPose" },
+			{ "cellBounds", "CellBounds" }
 		};
 
 		nlohmann::json DebugViewSchema(std::string description)
@@ -603,7 +604,9 @@ namespace Strata
 					{ "description", "What skinned characters of the edited scene show while it does not play: \"rest\" (the default) their "
 						"skeleton's rest pose, \"clipStart\" the first frame of what they play on start (the controller's default state's clip, "
 						"else the Animator's Clip; the rest pose without either). animation.preview requests win over both, and play mode is "
-						"unchanged" } } } }),
+						"unchanged" } } },
+				{ "cellBounds", BoolSchema("While a world is open (or the game streams one), draw the squares of its cells loading (Sulfur), loaded (Ochre) "
+					"and unloading (gray) around the camera") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				nlohmann::json changes = nlohmann::json::object();

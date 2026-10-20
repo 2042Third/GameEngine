@@ -1,17 +1,25 @@
 #include "Panels/StreamingPanel.h"
 
+#include "Editor/EditorContext.h"
+#include "Editor/EditorWorld.h"
+#include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/ItemProbe.h"
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
 #include <Strata/Core/StringUtils.h>
+#include <Strata/Scene/Scene.h>
+#include <Strata/World/WorldAsset.h>
+#include <Strata/World/WorldStreamingSystem.h>
 
 #include <imgui.h>
+#include <nlohmann/json.hpp>
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <initializer_list>
 #include <limits>
 #include <numeric>
@@ -30,6 +38,23 @@ namespace Strata
 		// The upload sparkline's height, in text heights, and the room above its highest value (the budget line stays inside).
 		constexpr float c_SparklineHeightInFontSizes = 2.5f;
 		constexpr float c_SparklineHeadroom = 1.1f;
+
+		// Continues the line with " \xC2\xB7 <fact>" where that fits, else puts the fact on a line of its own (narrow panels).
+		void ContinueLine(const char* fact, const ImVec4& color)
+		{
+			const char* separator = "\xC2\xB7 ";
+			ImGui::SameLine();
+			if (ImGui::CalcTextSize(separator).x + ImGui::CalcTextSize(fact).x <= ImGui::GetContentRegionAvail().x)
+			{
+				ImGui::TextColored(color, "%s%s", separator, fact);
+				return;
+			}
+			// On a line of its own, wrapped where even that is too narrow (a side dock at 150%).
+			ImGui::NewLine();
+			ImGui::PushStyleColor(ImGuiCol_Text, color);
+			ImGui::TextWrapped("%s", fact);
+			ImGui::PopStyleColor();
+		}
 		// From this width (in text heights) the overview goes beside the asset table, taking this share of the width.
 		constexpr float c_SideBySideWidthInFontSizes = 60.0f;
 		constexpr float c_OverviewShare = 0.42f;
@@ -237,8 +262,17 @@ namespace Strata
 		return AssetTypeToString(type);
 	}
 
-	void StreamingPanel::OnUpdate(EditorPanelContext&)
+	void StreamingPanel::OnUpdate(EditorPanelContext& context)
 	{
+		// Only a running game has physics; reading its capacity costs a service lookup.
+		m_Physics.reset();
+		if (context.Context.IsPlaying())
+		{
+			const Ref<Scene>& scene = context.Context.GetActiveScene();
+			if (const IPhysicsCapacity* physics = scene && scene->IsRunning() ? scene->GetService<IPhysicsCapacity>() : nullptr)
+				m_Physics = physics->GetCapacityInfo();
+		}
+
 		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
 		if (!manager)
 		{
@@ -261,7 +295,7 @@ namespace Strata
 		WaitForTableBuild();
 	}
 
-	void StreamingPanel::OnImGuiRender(EditorPanelContext&)
+	void StreamingPanel::OnImGuiRender(EditorPanelContext& context)
 	{
 		if (!m_Stats)
 		{
@@ -295,6 +329,51 @@ namespace Strata
 			&& available * (1.0f - c_OverviewShare) - ImGui::GetStyle().ItemSpacing.x >= GetTableWidth(0);
 		if (sideBySide)
 			ImGui::BeginChild("Overview", ImVec2(available * c_OverviewShare, 0.0f), ImGuiChildFlags_None);
+		// The world first while one streams (the game's while playing, the editor's otherwise): the cells are what streams then.
+		const WorldStreamer* streamer = nullptr;
+		bool editable = false;
+		if (context.Context.IsPlaying())
+		{
+			const Ref<Scene>& scene = context.Context.GetActiveScene();
+			const WorldStreamingSystem* system = scene && scene->IsRunning() ? scene->GetSystem<WorldStreamingSystem>() : nullptr;
+			streamer = system && system->GetStreamer() && system->GetStreamer()->GetWorld().IsValid() ? system->GetStreamer() : nullptr;
+		}
+		else if (const EditorWorld* world = context.Context.GetWorld())
+		{
+			streamer = &world->GetStreamer();
+			editable = true;
+		}
+		if (streamer)
+		{
+			if (m_RevealWorld)
+				ImGui::SetNextItemOpen(true);
+			// Formatted into a buffer: an open world's frames allocate nothing for it.
+			const WorldStreamingStats worldStats = streamer->GetStats();
+			const Ref<WorldAsset> asset = streamer->GetWorldAsset();
+			std::array<char, 160> summary {};
+			std::snprintf(summary.data(), summary.size(), "%s \xC2\xB7 %u loaded \xC2\xB7 %u loading%s", asset ? asset->GetData().Name.c_str() : "World",
+				worldStats.CellsLoaded, worldStats.CellsLoading, worldStats.CellsFailed > 0 ? " \xC2\xB7 failures" : "");
+			const bool open = UI::SectionHeader("Streaming.World", "World", ImGuiTreeNodeFlags_DefaultOpen, summary.data());
+			// A section asked for is scrolled to the top of the panel, wherever the person had scrolled.
+			if (m_RevealWorld)
+				ImGui::SetScrollHereY(0.0f);
+			if (open)
+				DrawWorld(context, *streamer, editable);
+		}
+		m_RevealWorld = false;
+		// While a game runs, its physics capacity next, short as it is: bodies without collision are the problem the status
+		// bar's pill leads here for.
+		if (m_Physics)
+		{
+			if (m_RevealPhysics)
+				ImGui::SetNextItemOpen(true);
+			const bool open = UI::SectionHeader("Streaming.Physics", "Physics");
+			if (m_RevealPhysics)
+				ImGui::SetScrollHereY(0.0f);
+			m_RevealPhysics = false;
+			if (open)
+				DrawPhysics(*m_Physics);
+		}
 		if (UI::SectionHeader("Streaming.Memory", "Memory"))
 			DrawPools(stats);
 		if (UI::SectionHeader("Streaming.Loads", "Loads and uploads"))
@@ -313,6 +392,31 @@ namespace Strata
 		else if (UI::SectionHeader("Streaming.Assets", "Assets"))
 		{
 			DrawTable();
+		}
+	}
+
+	void StreamingPanel::DrawWorld(EditorPanelContext& context, const WorldStreamer& streamer, bool editable)
+	{
+		// The cells in each state are the legend's counts; the header's summary has the world's name and its loaded cells.
+		m_CellMap.Update(streamer, editable ? context.Context.GetWorld() : nullptr);
+		const std::optional<CellMap::Request> request = m_CellMap.Draw(streamer, ImGui::GetFontSize() * CellMap::c_HeightInFontSizes, editable);
+		if (!request)
+			return;
+		const Ref<WorldAsset> world = streamer.GetWorldAsset();
+		const WorldLayer* layer = world ? world->GetData().FindLayer(request->Key.Layer) : nullptr;
+		const nlohmann::json cell = { { "layer", layer ? nlohmann::json(layer->Name) : nlohmann::json(request->Key.Layer) }, { "x", request->Key.X }, { "z", request->Key.Z } };
+		switch (request->Action)
+		{
+			case CellMap::Request::Kind::LoadAndPin:
+				RunEditorCommand(context.Context, context.Commands, "world.loadCells", { { "cells", nlohmann::json::array({ cell }) } });
+				break;
+			case CellMap::Request::Kind::Unpin:
+				RunEditorCommand(context.Context, context.Commands, "world.loadCells", { { "unpin", nlohmann::json::array({ cell }) } });
+				break;
+			case CellMap::Request::Kind::Show:
+				if (m_RevealAsset)
+					m_RevealAsset(request->Scene);
+				break;
 		}
 	}
 
@@ -341,6 +445,43 @@ namespace Strata
 		ImGui::Text("Evictions %llu (%llu checked) \xC2\xB7 cancellations %llu \xC2\xB7 staging releases %llu", static_cast<unsigned long long>(stats.Evictions),
 			static_cast<unsigned long long>(stats.EvictionChecks), static_cast<unsigned long long>(stats.Cancellations),
 			static_cast<unsigned long long>(stats.StagingReleases));
+	}
+
+	void StreamingPanel::DrawPhysics(const PhysicsCapacityInfo& physics)
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		if (physics.MaxBodies == 0)
+		{
+			ImGui::TextDisabled("The game has no physics bodies");
+			return;
+		}
+		// Body slots against the capacity, colored like a memory budget: a world grows before it is full, so High says it
+		// will grow soon and Over that it is at its growth limit with bodies waiting.
+		const BudgetPressure pressure = physics.WaitingForSlot > 0 ? BudgetPressure::Over : GetBudgetPressure(physics.Bodies, physics.MaxBodies);
+		DrawBar("Bodies", GetFraction(physics.Bodies, physics.MaxBodies), GetBudgetPressureColor(pressure),
+			fmt::format("{} / {} ({:.0f}%)", physics.Bodies, physics.MaxBodies, 100.0 * static_cast<double>(physics.Bodies) / static_cast<double>(physics.MaxBodies)));
+		UI::ItemProbe::Record("Streaming.PhysicsBodies");
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Body slots in use (bodies of inactive entities and character controllers' presence bodies count) against the world's capacity, "
+				"which grows before it is full (physics.stats)");
+		if (physics.WaitingForSlot > 0)
+		{
+			ImGui::TextColored(colors.Error, "%u bodies without collision: the world is at its growth limit", physics.WaitingForSlot);
+			UI::ItemProbe::Record("Streaming.PhysicsWaiting");
+		}
+		// Formatted into a buffer: the section allocates nothing per frame.
+		std::array<char, 96> fact {};
+		ImGui::TextWrapped("Last frame: %u built \xC2\xB7 %u destroyed", physics.AddedLastUpdate, physics.RemovedLastUpdate);
+		std::snprintf(fact.data(), fact.size(), "%u waiting for meshes or valid transforms", physics.PendingOther);
+		ContinueLine(fact.data(), physics.PendingOther > 0 ? colors.Warning : colors.TextSecondary);
+		UI::ItemProbe::Record("Streaming.PhysicsPending");
+		if (physics.GrowthCount > 0)
+			ImGui::TextWrapped("Grew %u %s, the last in %.1f ms", physics.GrowthCount, physics.GrowthCount == 1 ? "time" : "times", physics.LastGrowthMs);
+		else
+			ImGui::TextColored(colors.TextSecondary, "Never grew");
+		std::snprintf(fact.data(), fact.size(), "reserves %.1f MB", ToMB(physics.ReservedBytes));
+		ContinueLine(fact.data(), colors.TextSecondary);
+		UI::ItemProbe::Record("Streaming.PhysicsReserved");
 	}
 
 	void StreamingPanel::DrawUploads(const AssetManagerStats& stats)

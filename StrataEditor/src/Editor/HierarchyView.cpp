@@ -4,9 +4,11 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/SceneHierarchy.h>
+#include <Strata/Scene/SubScene.h>
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 
 namespace Strata
 {
@@ -39,6 +41,27 @@ namespace Strata
 		size_t GetSlot(entt::entity entity)
 		{
 			return static_cast<size_t>(entt::to_entity(entity));
+		}
+
+		// "<x>,<z>" of a "cell:" term: two integers.
+		std::optional<std::pair<int32_t, int32_t>> ParseCellCoordinates(std::string_view text)
+		{
+			const size_t comma = text.find(',');
+			if (comma == std::string_view::npos)
+				return std::nullopt;
+			auto parse = [](std::string_view number) -> std::optional<int32_t>
+			{
+				int32_t value = 0;
+				const auto [end, error] = std::from_chars(number.data(), number.data() + number.size(), value);
+				if (error != std::errc() || end != number.data() + number.size() || number.empty())
+					return std::nullopt;
+				return value;
+			};
+			const std::optional<int32_t> x = parse(text.substr(0, comma));
+			const std::optional<int32_t> z = parse(text.substr(comma + 1));
+			if (!x || !z)
+				return std::nullopt;
+			return std::pair<int32_t, int32_t> { *x, *z };
 		}
 
 		// The first top-level entity's handle, or null for an empty scene.
@@ -78,6 +101,23 @@ namespace Strata
 			{
 				if (term.size() > 2)
 					filter.Tags.push_back(term.substr(2));
+			}
+			else if (term.starts_with("l:"))
+			{
+				if (term.size() > 2)
+					filter.Layers.push_back(term.substr(2));
+			}
+			else if (term.starts_with("cell:"))
+			{
+				// "cell:" alone asks for nothing yet; a term that is no "<x>,<z>" ("cell:3" while it is typed) matches nothing,
+				// with a hint under the box.
+				if (term.size() > 5)
+				{
+					if (const std::optional<std::pair<int32_t, int32_t>> cell = ParseCellCoordinates(std::string_view(term).substr(5)))
+						filter.Cells.push_back(*cell);
+					else
+						filter.InvalidCells.push_back(term.substr(5));
+				}
 			}
 			else
 			{
@@ -156,6 +196,14 @@ namespace Strata
 			observe(ComponentRegistry::Find<TagComponent>(), true);
 		for (const ComponentInfo* info : m_FilterComponents)
 			observe(info, false);
+		// Cells: which sub-scene a top-level entity belongs to (Scene::SetSubSceneOf, loads, unloads). Reparenting changes the
+		// hierarchy version, which rebuilds the rows anyway.
+		if (m_Filter.ReadsCells())
+		{
+			m_Connections.push_back(registry.on_construct<SubSceneComponent>().connect<&HierarchyView::OnComponentChanged>(*this));
+			m_Connections.push_back(registry.on_update<SubSceneComponent>().connect<&HierarchyView::OnComponentChanged>(*this));
+			m_Connections.push_back(registry.on_destroy<SubSceneComponent>().connect<&HierarchyView::OnComponentChanged>(*this));
+		}
 	}
 
 	void HierarchyView::OnComponentChanged(entt::registry&, entt::entity)
@@ -165,6 +213,7 @@ namespace Strata
 
 	void HierarchyView::Rebuild(const Scene& scene)
 	{
+		m_ResolvedCells.clear();
 		const size_t previous = m_Rows.size();
 		m_Rows.clear();
 		m_Rows.reserve(previous);
@@ -314,7 +363,60 @@ namespace Strata
 					return false;
 			}
 		}
+		if (m_Filter.ReadsCells() && !MatchesCell(registry, entity))
+			return false;
 		return true;
+	}
+
+	bool HierarchyView::MatchesCell(const entt::registry& registry, entt::entity entity) const
+	{
+		// A term that is no cell matches nothing.
+		if (!m_Filter.InvalidCells.empty())
+			return false;
+		entt::entity root = entity;
+		for (entt::entity parent = registry.get<HierarchyComponent>(root).Parent; parent != entt::null; parent = registry.get<HierarchyComponent>(parent).Parent)
+			root = parent;
+		const SubSceneComponent* subScene = registry.try_get<SubSceneComponent>(root);
+		const HierarchyCell* cell = nullptr;
+		if (subScene)
+		{
+			auto found = m_ResolvedCells.find(subScene->Source);
+			if (found == m_ResolvedCells.end())
+			{
+				std::optional<HierarchyCell> resolved = m_CellResolver ? m_CellResolver(subScene->Source) : std::nullopt;
+				if (resolved)
+					resolved->Layer = StringUtils::ToLower(resolved->Layer);
+				found = m_ResolvedCells.emplace(subScene->Source, std::move(resolved)).first;
+			}
+			// A sub-scene that is no cell (an additive scene) is in no layer and not the persistent scene either.
+			if (!found->second)
+				return false;
+			cell = &*found->second;
+		}
+		for (const std::string& layer : m_Filter.Layers)
+		{
+			const bool matches = layer == HierarchyFilter::c_PersistentLayerTerm ? !subScene : cell && ContainsLowered(cell->Layer, layer);
+			if (!matches)
+				return false;
+		}
+		for (const std::pair<int32_t, int32_t>& coordinates : m_Filter.Cells)
+		{
+			if (!cell || cell->X != coordinates.first || cell->Z != coordinates.second)
+				return false;
+		}
+		return true;
+	}
+
+	void HierarchyView::SetCellResolver(HierarchyCellResolver resolver)
+	{
+		m_CellResolver = std::move(resolver);
+		InvalidateCells();
+	}
+
+	void HierarchyView::InvalidateCells()
+	{
+		if (m_Filter.ReadsCells())
+			m_Dirty = true;
 	}
 
 	std::optional<size_t> HierarchyView::FindRow(UUID entity) const

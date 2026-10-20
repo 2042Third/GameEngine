@@ -33,6 +33,8 @@
 #include "Strata/Scripting/ScriptModule.h"
 #include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
+#include "World/WorldDriveGame.h"
+#include "World/WorldDriveProcess.h"
 
 #if ST_WITH_PHYSICS
 	#include "Physics/PhysicsTestUtils.h"
@@ -876,31 +878,92 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		std::printf("Wrote the stress game to '%s'\n", argv[2]);
 		return 0;
 	}
+	if (mode == "world-drive")
+	{
+		// <manifest> <frames> <result file>: drives a generated world headless along its diagonal and writes what it measured,
+		// peak memory included, for Perf.World.DrivePeakPrivate and DriveFrameP95.
+		return Strata::Tests::RunWorldDriveProcess(argc, argv);
+	}
+	if (mode == "write-world-game")
+	{
+		// <directory> [<entities per cell> <bodies per cell>]: the game StrataRuntime.World drives (World/WorldDriveGame.h).
+		if (argc != 3 && argc != 5)
+			return 2;
+		uint32_t sizes[2] = { 2500, 500 };
+		for (int index = 3; index < argc; index++)
+		{
+			const std::string_view text(argv[index]);
+			const auto [end, parseError] = std::from_chars(text.data(), text.data() + text.size(), sizes[index - 3]);
+			if (parseError != std::errc() || end != text.data() + text.size() || sizes[index - 3] == 0)
+				return 2;
+		}
+		return Strata::Tests::WriteWorldDriveGame(Strata::FileSystem::FromUTF8(argv[2]), sizes[0], sizes[1]);
+	}
 	if (mode == "check-perf-log")
 	{
-		// <csv> <rows> [--nonzero <column>...]: succeeds if the file is a perf log of StrataRuntime --perf-log with exactly
-		// <rows> rows of consecutive frames and every built-in stage among its columns (Runtime/PerfLogReader.h), and each
-		// --nonzero column is above 0 in at least one row (e.g. a stage that must have run).
+		// <csv> <rows> [--nonzero <column>... --column <column>... --max <column> <value>...]: succeeds if the file is a perf
+		// log of StrataRuntime --perf-log with exactly <rows> rows ("any": however many the game ran) of consecutive frames and
+		// every built-in stage among its
+		// columns (Runtime/PerfLogReader.h), each --nonzero column is above 0 in at least one row (e.g. a stage that must have
+		// run), each --column is there (a column group's) and each --max column is at most its value in every row.
 		if (argc < 4)
 			return 2;
 		const std::string_view rowsText(argv[3]);
+		const bool anyRows = rowsText == "any";
 		uint64_t rows = 0;
 		const auto [rowsEnd, rowsError] = std::from_chars(rowsText.data(), rowsText.data() + rowsText.size(), rows);
-		if (rowsError != std::errc() || rowsEnd != rowsText.data() + rowsText.size())
+		if (!anyRows && (rowsError != std::errc() || rowsEnd != rowsText.data() + rowsText.size()))
 			return 2;
 		std::string error;
 		const std::optional<Strata::Tests::PerfLogTable> table = Strata::Tests::ReadPerfLog(Strata::FileSystem::FromUTF8(argv[2]), error);
-		if (!table || !Strata::Tests::ValidatePerfLog(*table, rows, error))
+		if (table && anyRows)
+			rows = table->Rows.size();
+		if (!table || (anyRows && rows == 0) || !Strata::Tests::ValidatePerfLog(*table, rows, error))
 		{
 			std::fprintf(stderr, "'%s' is not the expected perf log: %s\n", argv[2], error.c_str());
 			return 1;
 		}
 		for (int index = 4; index < argc; index++)
 		{
-			if (std::string_view(argv[index]) != "--nonzero" || index + 1 >= argc)
+			const std::string_view option(argv[index]);
+			if ((option != "--nonzero" && option != "--column" && option != "--max") || index + 1 >= argc)
 				return 2;
 			const char* columnName = argv[++index];
 			const std::optional<size_t> column = table->FindColumn(columnName);
+			if (option == "--max")
+			{
+				if (index + 1 >= argc)
+					return 2;
+				const std::string_view limitText(argv[++index]);
+				int64_t limit = 0;
+				const auto [limitEnd, limitError] = std::from_chars(limitText.data(), limitText.data() + limitText.size(), limit);
+				if (limitError != std::errc() || limitEnd != limitText.data() + limitText.size())
+					return 2;
+				if (!column)
+				{
+					std::fprintf(stderr, "'%s': no column '%s'\n", argv[2], columnName);
+					return 1;
+				}
+				for (size_t row = 0; row < table->Rows.size(); row++)
+				{
+					if (table->Rows[row][*column] > static_cast<double>(limit))
+					{
+						std::fprintf(stderr, "'%s': '%s' is %g in row %zu, above %lld\n", argv[2], columnName, table->Rows[row][*column], row,
+							static_cast<long long>(limit));
+						return 1;
+					}
+				}
+				continue;
+			}
+			if (option == "--column")
+			{
+				if (!column)
+				{
+					std::fprintf(stderr, "'%s': no column '%s'\n", argv[2], columnName);
+					return 1;
+				}
+				continue;
+			}
 			const bool nonzero = column && std::any_of(table->Rows.begin(), table->Rows.end(), [&](const std::vector<double>& row) { return row[*column] > 0.0; });
 			if (!nonzero)
 			{

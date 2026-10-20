@@ -3,6 +3,7 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorWorld.h"
 #include "Editor/EditorPlacement.h"
 #include "Editor/GameUIPresets.h"
 #include "Editor/PrefabSync.h"
@@ -26,12 +27,16 @@
 #include <Strata/Scene/PrefabInstances.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneHierarchy.h>
+#include <Strata/World/WorldAsset.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cstdio>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -351,6 +356,7 @@ namespace Strata
 		m_VisibleRows.clear();
 		Scene& scene = *context.GetActiveScene();
 		// Rows are rebuilt only when the hierarchy, the expansion or the filter changed.
+		UpdateCellResolver(context);
 		m_View.Update(context.GetActiveScene());
 		UpdateReveal(context);
 
@@ -364,6 +370,7 @@ namespace Strata
 		// While a scene is being opened, the scene shown cannot change: its rows show, disabled.
 		const bool readOnly = DrawSceneLoadBanner("Hierarchy.SceneLoadBanner", context);
 		ImGui::BeginDisabled(readOnly);
+		DrawWorldStrip(context, commands);
 		DrawHeader(context, commands);
 
 		// While the panel (or its list) has the keyboard focus.
@@ -416,6 +423,133 @@ namespace Strata
 		}
 	}
 
+	void SceneHierarchyPanel::UpdateCellResolver(EditorContext& context)
+	{
+		if (!m_CellResolverSet)
+		{
+			// The context outlives its panels.
+			m_View.SetCellResolver([&context](AssetHandle cellScene) -> std::optional<HierarchyCell>
+			{
+				const EditorWorld* world = context.GetWorld();
+				const std::optional<WorldCellKey> key = world ? world->FindCellKey(cellScene) : std::nullopt;
+				if (!key)
+					return std::nullopt;
+				const Ref<WorldAsset> asset = world->GetWorldAsset();
+				const WorldLayer* layer = asset ? asset->GetData().FindLayer(key->Layer) : nullptr;
+				return HierarchyCell { layer ? layer->Name : std::to_string(key->Layer), key->X, key->Z };
+			});
+			m_CellResolverSet = true;
+		}
+		// Two pointer comparisons per frame: another world, or its World asset reloaded (renamed layers).
+		const EditorWorld* world = context.GetWorld();
+		const void* asset = world ? static_cast<const void*>(world->GetWorldAsset().get()) : nullptr;
+		if (world != m_ResolvedWorld || asset != m_ResolvedWorldAsset)
+		{
+			m_ResolvedWorld = world;
+			m_ResolvedWorldAsset = asset;
+			m_View.InvalidateCells();
+		}
+	}
+
+	void SceneHierarchyPanel::DrawWorldStrip(EditorContext& context, const EditorCommandRegistry& commands)
+	{
+		const EditorWorld* world = context.GetWorld();
+		if (!world || context.IsPlaying())
+			return;
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const Ref<WorldAsset> asset = world->GetWorldAsset();
+		const WorldStreamingStats stats = world->GetStreamer().GetStats();
+		const size_t dirty = world->GetDirtyCells().size();
+
+		// The world's name and its cells, with the map button at the right.
+		const float mapButtonWidth = ImGui::GetFrameHeight();
+		const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+		const float rightScreen = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextColored(colors.Accent, "%s", Icons::Globe);
+		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+		UI::PushFont(UI::EditorFont::SemiBold, UI::TextSize::Body);
+		ImGui::TextUnformatted(asset ? asset->GetData().Name.c_str() : "World");
+		ImGui::PopFont();
+		UI::ItemProbe::Record("Hierarchy.WorldName", true, 0, asset ? std::string_view(asset->GetData().Name) : std::string_view("World"));
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+		{
+			ImGui::SetTooltip("This scene is the persistent scene of a world: the cells around the camera stream in and out as it "
+				"moves, and saving writes only the cells that changed. Search \"l:Props\" or \"cell:3,-1\" to find a cell's entities.");
+		}
+		// The counts, as far as they fit before the map button (a narrow panel shows fewer; the cell map has them all).
+		const float countsRight = rightScreen - mapButtonWidth - style.ItemSpacing.x;
+		std::array<char, 64> text {};
+		auto count = [&](float spacing, const ImVec4& color, const char* format, auto value)
+		{
+			std::snprintf(text.data(), text.size(), format, value);
+			if (ImGui::GetItemRectMax().x + spacing + ImGui::CalcTextSize(text.data()).x > countsRight)
+				return false;
+			ImGui::SameLine(0.0f, spacing);
+			ImGui::TextColored(color, "%s", text.data());
+			return true;
+		};
+		bool shown = count(style.ItemSpacing.x, colors.TextSecondary, "%u cells loaded", stats.CellsLoaded);
+		if (shown && stats.CellsLoading > 0)
+			shown = count(style.ItemInnerSpacing.x, colors.Warning, "\xC2\xB7 %u loading", stats.CellsLoading);
+		if (shown && dirty > 0)
+			count(style.ItemInnerSpacing.x, colors.Warning, "\xC2\xB7 %zu unsaved", dirty);
+		UI::ItemProbe::Record("Hierarchy.WorldCells");
+		ImGui::SameLine(std::max(right - mapButtonWidth, ImGui::GetCursorPosX()));
+		if (UI::IconButton("Hierarchy.CellMap", Icons::Map, "Show the cell map (Streaming panel, World)") && m_ShowCellMap)
+			m_ShowCellMap();
+
+		// The layer new top-level entities go into.
+		const char* label = "Edit layer";
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextColored(colors.TextSecondary, "%s", label);
+		ImGui::SameLine();
+		const float width = std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFrameHeight());
+		const ImVec2 min = ImGui::GetCursorScreenPos();
+		ImGui::SetNextItemWidth(width);
+		const std::string& current = world->GetEditLayer();
+		const bool open = ImGui::BeginCombo("##EditLayer", current.c_str());
+		UI::ItemProbe::RecordRect("Hierarchy.EditLayer", min, ImVec2(min.x + width, min.y + ImGui::GetFrameHeight()), true, 0, current);
+		if (!open && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+		{
+			ImGui::SetTooltip("Where new top-level entities go: Persistent keeps them in the persistent scene, which never streams out "
+				"(cameras, lights, game managers); a layer puts them into its cell at their position (world.edit editLayer)");
+		}
+		if (!open)
+		{
+			ImGui::Spacing();
+			return;
+		}
+		std::optional<std::string> picked;
+		auto option = [&](const std::string& name)
+		{
+			const bool selected = name == current;
+			UI::PushSelectionColors(selected);
+			if (ImGui::Selectable(name.c_str(), selected))
+				picked = name;
+			UI::PopSelectionColors();
+			UI::ItemProbe::Record("Hierarchy.EditLayer." + name, true, 0, name);
+		};
+		option(EditorWorld::c_PersistentLayer);
+		if (asset)
+		{
+			for (const WorldLayer& layer : asset->GetData().Layers)
+				option(layer.Name);
+		}
+		ImGui::EndCombo();
+		if (picked && *picked != current)
+			RunEditorCommand(context, commands, "world.edit", { { "editLayer", *picked } });
+		ImGui::Spacing();
+	}
+
+	void SceneHierarchyPanel::SetSearch(std::string_view text)
+	{
+		m_FilterText = std::string(text);
+		m_View.SetFilter(m_FilterText);
+		m_ReloadSearch = true;
+	}
+
 	void SceneHierarchyPanel::DrawHeader(EditorContext& context, const EditorCommandRegistry& commands)
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
@@ -429,10 +563,12 @@ namespace Strata
 		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 		const float collapseWidth = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x;
 		if (UI::SearchField("Hierarchy.Search", m_FilterText, "Search", std::max(ImGui::GetContentRegionAvail().x - collapseWidth, ImGui::GetFrameHeight()),
-			"Search by name; \"c:Light\" finds entities with a component, \"t:Enemy\" with a tag. Terms combine."))
+			"Search by name; \"c:Light\" finds entities with a component, \"t:Enemy\" with a tag; in a world, \"l:Props\" those of a layer's "
+			"cells (\"l:persistent\" the persistent scene's) and \"cell:3,-1\" one cell's. Terms combine.", m_ReloadSearch))
 		{
 			m_View.SetFilter(m_FilterText);
 		}
+		m_ReloadSearch = false;
 		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 		if (UI::IconButton("Hierarchy.CollapseAll", Icons::ChevronsDownUp, "Collapse all", !m_View.IsFiltering()))
 			m_View.CollapseAll();

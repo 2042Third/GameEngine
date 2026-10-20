@@ -18,6 +18,13 @@ namespace Strata
 	class Scene;
 	struct PhysicsWorldData;
 
+	// How a world builds the bodies of the scene it is created for.
+	enum class PhysicsBuildMode : uint8_t
+	{
+		Immediate = 0, // In the constructor (play starts, tools)
+		Sliced         // Over calls of BuildSlice: a loaded scene prepared before it runs (PhysicsSystem::PrepareLoadedScene)
+	};
+
 	// One rigid body simulation (a Jolt physics system) bound to a scene.
 	//
 	// Bodies are built from entity components:
@@ -71,9 +78,16 @@ namespace Strata
 	//
 	// Capacities: Jolt allocates the world for fixed numbers of bodies, body pairs and contact constraints. Capacities that are
 	// 0 in the settings are sized when the world is created from the bodies the scene has then (ResolveCapacities), so a scene
-	// gets the room it needs without settings; a body that finds the world full waits for a free slot (one aggregated error
-	// names the entities), and steps that overflow the pair or contact buffers drop contacts (a warning once per world). Both
-	// are recorded (PhysicsStats::BodyOverflowCount, ContactOverflowSteps, Demand), so the next world of the scene can grow.
+	// gets the room it needs without settings. A body that finds the world full waits for a slot, queued in the order it
+	// failed (no step looks at it; slots that free go to the first waiters), and the world grows before its next step (also
+	// when Reserve asked for more room than it has): it moves into a new Jolt system for the next power of two of at least
+	// twice its bodies and what it needs, up to PhysicsSettings::GrowthLimit. Every body keeps its JPH::BodyID, pose,
+	// velocity, sleep state and contacts, and character controllers keep their state; automatic pair and contact capacities
+	// grow with it, given ones stay, and a given MaxBodies is exceeded with a warning (correctness comes first). The bodies
+	// are moved in fixed chunks on the job threads, and the old system is destroyed by a background job. At its growth limit
+	// a world keeps bodies waiting (one aggregated error names them) until bodies are removed. Steps that overflow the pair
+	// or contact buffers drop contacts (a warning once per world). Both are recorded (PhysicsStats::BodyOverflowCount,
+	// ContactOverflowSteps, Demand, GrowthCount), so the next world of the scene starts large enough.
 	//
 	// Main thread only. Jolt runs the step on Strata's JobSystem workers when it is initialized.
 	class PhysicsWorld
@@ -81,7 +95,9 @@ namespace Strata
 	public:
 		// Creates the bodies of every entity in the scene and starts listening to its changes. `demand` is what an earlier
 		// world of the scene needed beyond its capacities: automatic capacities are sized for at least that much.
-		explicit PhysicsWorld(Scene& scene, const PhysicsSettings& settings = PhysicsSettings(), const PhysicsCapacityDemand& demand = {});
+		// A Sliced world only starts listening and builds its bodies over BuildSlice calls.
+		explicit PhysicsWorld(Scene& scene, const PhysicsSettings& settings = PhysicsSettings(), const PhysicsCapacityDemand& demand = {},
+			PhysicsBuildMode mode = PhysicsBuildMode::Immediate);
 		~PhysicsWorld(); // Destroys every body without emitting collision events
 
 		// The settings a world is created with for `bodyCount` bodies: capacities given in `settings` stay (clamped to the
@@ -92,6 +108,15 @@ namespace Strata
 		// each at least what `demand` asks for, and an automatic TempAllocatorSize holds a step's scratch data for those
 		// capacities (at least 10 MiB).
 		static PhysicsSettings ResolveCapacities(const PhysicsSettings& settings, uint32_t bodyCount, const PhysicsCapacityDemand& demand = {});
+		// What a world of these resolved capacities (see ResolveCapacities) reserves when it is created, in bytes: Jolt's
+		// buffers (about 48 bytes per body, 90 per body pair and some 300 per contact constraint) and the step's scratch
+		// memory. Fitted to the commit charge the reference machine measures (Perf.Physics.MostBodies.ReservedMemory and
+		// LargestCapacities.ReservedMemory, within 15%); systems that count only touched pages report less.
+		static uint64_t EstimateReservedBytes(const PhysicsSettings& settings);
+		// The entities of a scene that may own a body when a world is created for it: those with a RigidBody, collider entities
+		// without one (colliders merged into an ancestor's body count too, so this is an upper bound) and character
+		// controllers (their presence bodies). Linear, without allocating. Automatic capacities and the world cook count by it.
+		static uint32_t CountBodyCandidates(const Scene& scene);
 
 		PhysicsWorld(const PhysicsWorld&) = delete;
 		PhysicsWorld& operator=(const PhysicsWorld&) = delete;
@@ -116,8 +141,33 @@ namespace Strata
 		// Applies the component, hierarchy-activity and destruction changes recorded since the last call.
 		void ApplyPendingChanges();
 
+		// Builds the bodies of up to `maxOwners` more entities of a Sliced world, in hierarchy order (in parallel, see
+		// "Parallel creation"), with the changes recorded meanwhile; true once every body is built (at once for an Immediate
+		// world). The last call rebuilds the broad phase's trees, as the constructor of an Immediate world does.
+		bool BuildSlice(uint32_t maxOwners);
+		bool IsBuilt() const;
+
+		// What the world holds and has room for, without work that grows with the bodies (see IPhysicsCapacity). The last
+		// update's counters (also PhysicsStats::BodiesAddedLastUpdate, BodiesRemovedLastUpdate, ChangeTime) are those of the
+		// scene's update before its current frame index (Scene::GetFrameIndex): the update that just ended when read between
+		// updates, the previous one when read during an update.
+		PhysicsCapacityInfo GetCapacityInfo() const;
+
+		// Asks for room for `bodies` bodies in all (character controllers' presence bodies included): a world with less grows
+		// before its next step (see "Capacities"). The world streamer reserves for the cells it is about to load, so their
+		// bodies never find the world full. The latest call counts; 0 reserves nothing.
+		void Reserve(uint32_t bodies);
+		uint32_t GetReservedBodies() const;
+		// Applies the pending changes and grows the world now if bodies wait for a slot or more were reserved than it has room
+		// for, as the next step would. Returns whether it grew. Never call it during a step, a query or a collision dispatch.
+		bool Grow();
+
 		// True if the entity owns a body that is part of the simulation.
 		bool HasBody(Entity entity) const;
+		// The Jolt body ID (index and sequence number) of the body the entity owns, also out of the simulation, or c_NoBodyID:
+		// for diagnostics and tests (which bodies a build gave which IDs).
+		static constexpr uint32_t c_NoBodyID = 0xFFFFFFFFu;
+		uint32_t GetBodyID(Entity entity) const;
 		// The entity owning the body that holds this entity's colliders (the entity itself, its nearest ancestor with a
 		// RigidBodyComponent, or invalid if its colliders are not part of any body).
 		Entity GetBodyEntity(Entity entity) const;

@@ -7,6 +7,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,41 @@ namespace Strata
 	{
 		uint64_t DeviceBytes = 0;
 		uint64_t StagingBytes = 0;
+	};
+
+	// The values a column group writes into a row (FramePerfColumnGroup::Write): one call of Add or AddEmpty per column it
+	// names, in their order.
+	class FramePerfRow
+	{
+	public:
+		explicit FramePerfRow(std::string& line)
+			: m_Line(line)
+		{
+		}
+
+		// A number with `decimals` digits after the point (0-9); an empty field for a value that is no finite number.
+		void Add(double value, int decimals);
+		// An empty field: nothing to report this frame (no world streams, say).
+		void AddEmpty();
+		uint32_t GetCount() const { return m_Count; }
+	private:
+		std::string& m_Line;
+		uint32_t m_Count = 0;
+	};
+
+	// Columns a program adds after the built-in ones (FramePerfLogSpecification): their names, and a function that writes
+	// their values for each row, read when the row is written (after the frame).
+	struct FramePerfColumnGroup
+	{
+		std::vector<std::string> Names;
+		std::function<void(FramePerfRow&)> Write; // Null: the group's fields stay empty
+	};
+
+	struct FramePerfLogSpecification
+	{
+		// Groups of columns that follow every built-in column, in this order. A group that writes another number of values
+		// than it names fails the log like a write error.
+		std::vector<FramePerfColumnGroup> Columns;
 	};
 
 	// A CSV file with one row per frame (StrataRuntime --perf-log): what the frame profiler recorded and where the frame left
@@ -50,16 +86,20 @@ namespace Strata
 	//                                            (Platform::GetProcessMemory; empty where the system does not report it)
 	//   GPUFrame, GPUBusyMs                      1 when the frame's GPU times arrived (else 0), and its GPU stages added up
 	//                                            (empty without them)
-	// A row describes one frame: its numbers beside the profiler's are captured when the frame ends (CaptureFrame), and the
-	// row is written once the frame's GPU times are known (WriteFrame from a FrameListenerTiming::WithGPU listener). The
-	// file is complete once the log is closed.
+	//   <group columns>...                       the columns of the specification's groups, in their order (empty in a row
+	//                                            whose frame was not captured)
+	// A row describes one frame: its numbers beside the profiler's (and the groups' values) are captured when the frame ends
+	// (CaptureFrame), and the row is written once the frame's GPU times are known (WriteFrame from a
+	// FrameListenerTiming::WithGPU listener). The file is complete once the log is closed.
 	class FramePerfLog
 	{
 	public:
 		// Creates (or replaces) the file and writes the header, after registering the stage of every registered scene system
 		// in the profiler (SceneSystemDescriptor::ProfileStage; scenes register them when they first run, which may be after
-		// the header), so that every system has a column. Null with the reason in outError when it cannot be written.
-		static Scope<FramePerfLog> Create(const std::filesystem::path& path, FrameProfiler& profiler, std::string* outError = nullptr);
+		// the header), so that every system has a column. Null with the reason in outError when it cannot be written, or
+		// when a group names no column or names one twice.
+		static Scope<FramePerfLog> Create(const std::filesystem::path& path, FrameProfiler& profiler,
+			const FramePerfLogSpecification& specification = {}, std::string* outError = nullptr);
 		~FramePerfLog();
 
 		FramePerfLog(const FramePerfLog&) = delete;
@@ -67,7 +107,8 @@ namespace Strata
 
 		// Captures a frame's numbers beside the profiler's when it ends (an Immediate frame listener calls it): the asset
 		// manager's statistics after the frame, the upload queue's and the device's memory before the next frame begins (null:
-		// none) and the process's memory, for the frame's row.
+		// none), the process's memory and the column groups' values, for the frame's row. A group that writes another count
+		// of values than it names fails the log.
 		void CaptureFrame(const FrameSample& frame, const AssetManagerStats* assets, const GPUUploadQueueStats* uploads = nullptr,
 			const FramePerfDeviceMemory* device = nullptr);
 		// Appends the row of a recorded frame once its GPU times are known (a WithGPU frame listener calls it), with what
@@ -89,10 +130,13 @@ namespace Strata
 		{
 			uint64_t Index = 0;
 			std::string Columns;
+			std::string Groups; // The column groups' fields
 		};
 
 		FramePerfLog() = default;
 		static void FormatCapture(std::string& out, const AssetManagerStats* assets, const GPUUploadQueueStats* uploads, const FramePerfDeviceMemory* device);
+		// Appends the column groups' fields; false (the log failed) when a group wrote another count of values than it names.
+		bool FormatGroups(std::string& out);
 	private:
 		std::filesystem::path m_Path;
 		const FrameProfiler* m_Profiler = nullptr; // Outlives the log
@@ -102,6 +146,8 @@ namespace Strata
 		std::vector<bool> m_GPUStages; // Per stage column: a GPU stage
 		uint32_t m_WarnedStages = 0;   // Stages registered after the header that were warned about (by count)
 		std::deque<CapturedFrame> m_Captured; // Oldest first
+		std::vector<FramePerfColumnGroup> m_Groups;
+		size_t m_GroupColumnCount = 0;
 		uint64_t m_Rows = 0;
 		bool m_Failed = false;
 		bool m_Closed = false;

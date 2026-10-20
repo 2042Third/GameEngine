@@ -27,8 +27,26 @@ namespace Strata
 		nlohmann::json Components; // ComponentAccess::SerializeEntityComponents plus the UnknownComponentsComponent's entries
 		UUID Parent = UUID::Null();
 		size_t SiblingIndex = 0;
+		// The scene asset of the sub-scene the entity belongs to (a world's cell; null: none, the persistent scene): its own
+		// for a top-level entity, its top-level ancestor's for a descendant. A state of an entity that does not exist names
+		// the cell the entity is in on the other side of its step (SceneEditAction fills it in), so that undoing a creation
+		// or redoing a deletion waits for that cell too: done while it is not loaded, the entity would come back with it.
+		AssetHandle Cell = UUID::Null();
 
 		bool operator==(const EntityState& other) const = default;
+	};
+
+	// Offered by an open world (EditorWorld) as a scene service of the edited scene: undo steps that need a cell which is not
+	// loaded ask it to load (and keep) the cell, and name the cell in their error.
+	class ISceneCellLoader
+	{
+	public:
+		virtual ~ISceneCellLoader() = default;
+
+		// How the cell of a scene asset reads in errors ("Props (3, -1)").
+		virtual std::string DescribeCell(AssetHandle cell) const = 0;
+		// Loads and pins the cell, so that the step can be done once it is in.
+		virtual void RequestCell(AssetHandle cell) = 0;
 	};
 
 	namespace SceneEdit
@@ -57,6 +75,13 @@ namespace Strata
 		// UUIDs), replaces the components that differ and restores parents and sibling order. States must be
 		// consistent: an entity that is removed has all its descendants in the set.
 		void ApplyEntities(Scene& scene, const std::vector<EntityState>& states);
+		// Whether every cell the states name is loaded, so that ApplyEntities can put the entities back into them and finds
+		// the entities they hold. False with the reason otherwise (changing nothing), after asking the scene's
+		// ISceneCellLoader to load the missing cells.
+		bool CheckCells(Scene& scene, const std::vector<EntityState>& states, std::string* outError = nullptr);
+		// Gives the states of entities that do not exist on one side of a step the Cell of the other side. The two lists name
+		// the same entities in the same order (as SceneEditTransaction captures them).
+		void LinkCells(std::vector<EntityState>& before, std::vector<EntityState>& after);
 
 	}
 
@@ -65,7 +90,9 @@ namespace Strata
 	class SceneEditAction final : public EditorAction
 	{
 	public:
-		// mergeKey: consecutive actions with the same non-empty key and the same entities become one undo step.
+		// The states list the same entities in the same order (as SceneEditTransaction makes them); those of entities that do
+		// not exist on one side take the other side's Cell (SceneEdit::LinkCells). mergeKey: consecutive actions with the same
+		// non-empty key and the same entities become one undo step.
 		SceneEditAction(Scene& scene, std::string name, std::vector<EntityState> before, std::vector<EntityState> after, std::string mergeKey = {});
 
 		const std::string& GetName() const override { return m_Name; }
@@ -119,6 +146,9 @@ namespace Strata
 
 		// Names the step after all, once what it made is known (e.g. the names of pasted entities).
 		void SetName(std::string name) { m_Name = std::move(name); }
+		// The entities the edit tracks, in the order tracked, and whether the edit created the one at an index.
+		const std::vector<UUID>& GetEntities() const { return m_Entities; }
+		bool WasCreated(size_t index) const { return !m_Before[index].Exists; }
 		// Records the edit on the stack. Returns false when nothing changed.
 		bool Commit(UndoStack& undoStack);
 		// The edit as an action, for a step that holds more (EditorActionGroup); null when nothing changed. Ends the

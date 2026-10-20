@@ -366,10 +366,17 @@ namespace Strata::UI
 		ItemProbe::Record(id, true, 0, text);
 	}
 
-	bool SearchField(const char* id, std::string& text, const char* hint, float width, const char* tooltip)
+	bool SearchField(const char* id, std::string& text, const char* hint, float width, const char* tooltip, bool reload)
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
 		ImGui::PushID(id);
+		// An active text field keeps its own copy of the text and writes it back every frame; it reads the caller's again only
+		// when asked to, before it is drawn.
+		if (reload)
+		{
+			if (ImGuiInputTextState* state = ImGui::GetInputTextState(ImGui::GetID("##Search")))
+				state->ReloadUserBufAndMoveToEnd();
+		}
 		const float clearWidth = text.empty() ? 0.0f : ImGui::GetFrameHeight() + style.ItemInnerSpacing.x;
 		const float fieldWidth = (width < 0.0f ? ImGui::GetContentRegionAvail().x : width) - clearWidth;
 		ImGui::SetNextItemWidth(std::max(fieldWidth, ImGui::GetFrameHeight()));

@@ -18,9 +18,10 @@ means `Strata/src/Strata/Scene/Scene.h`.
 7. [Streaming and residency](#streaming-and-residency)
 8. [Render scene](#render-scene)
 9. [Animation](#animation)
-10. [Scripting](#scripting)
-11. [Editor](#editor)
-12. [Export and the runtime](#export-and-the-runtime)
+10. [World partition](#world-partition)
+11. [Scripting](#scripting)
+12. [Editor](#editor)
+13. [Export and the runtime](#export-and-the-runtime)
 
 ## Targets and dependencies
 
@@ -274,8 +275,9 @@ mounted `AssetPack`s), `AssetPackWriter` and `AssetDependencies` (tooling: writi
 reference), `AssetImporter` with the built-in importers
 (`AssetImporters.cpp`, `GltfImporter`, `TextureImporter`), `AssetLoaderRegistry` (the loaders, registered by the
 modules that own the types) and `BuiltinAssets` (fixed handles; the owning module provides each object through a
-factory). The asset types are Scene, Prefab, Model, Mesh, Material, Texture, AudioClip, Font, Skeleton, AnimationClip and
-AnimationController (`AssetTypes.h`; the animation types belong to the Animation module). See
+factory). The asset types are Scene, Prefab, Model, Mesh, Material, Texture, AudioClip, Font, Skeleton, AnimationClip,
+AnimationController and World (`AssetTypes.h`; the animation types belong to the Animation module, World to the World
+module). See
 [Asset pipeline](#asset-pipeline) and [Streaming and residency](#streaming-and-residency).
 
 **Renderer** (`Renderer/`). `GraphicsDevice` is the device interface (NVRHI on Vulkan, implemented in
@@ -332,19 +334,45 @@ the full-detail level of every submesh with indices offset by its base vertex), 
 default); `PhysicsSystem` gives its world that matrix, restricted by the default settings' (`GetDefaultSettings`), when
 it creates the world and before every step after it changed (`scene.setSettings`, undo, the inspector, scripts'
 `Physics::SetLayersCollide`, `PhysicsSystem::SetLayersCollide`; `PhysicsWorld::SetLayerCollisionMasks` wakes the bodies,
-and character controllers read the world's live matrix). A world's capacities are fixed when it is created: those the
+and character controllers read the world's live matrix). A world's capacities are set when it is created: those the
 scene does not set (`SceneSettings::PhysicsCapacity`) are sized from the bodies the scene starts with
 (`PhysicsWorld::ResolveCapacities`: at least 65,536 bodies, the next power of two of twice the bodies; four body pairs per
-body slot; at least 10,240 contacts, two per body; scratch memory for them), bodies that find the world full wait for a
-slot and are reported in one error, steps that overflow the pair or contact buffers are counted
-(`PhysicsStats::BodyOverflowCount`, `ContactOverflowSteps`), and what a world lacked is remembered per scene
+body slot; at least 10,240 contacts, two per body; scratch memory for them). Bodies that find the world full wait for a
+slot in a queue in the order they failed (no step looks at them: slots freed by a round of changes go to the first of
+them, which get their bodies in the same round), and before its next step the world grows (`PhysicsWorld::Grow`, also
+when `PhysicsWorld::Reserve` asked for more room): it moves every body into a new Jolt system for the next power of two
+of at least twice its bodies and what it needs, up to `PhysicsSettings::GrowthLimit` (default the engine's limit, a
+memory cap for games). Bodies keep their `JPH::BodyID`, pose, velocity, accumulated forces, sleep state and the contact
+cache, character controllers keep their state (`CharacterControllerSet::Rebind`), automatic pair and contact capacities
+grow with it, a `MaxBodies` the scene gives is exceeded with a warning, the bodies are created in fixed chunks of 4,096
+on the job threads, and the old system is destroyed by a background job (`PhysicsStats::GrowthCount`, `LastGrowthMs`); a grown
+world clears the contact cache of the bodies it creates, because its Jolt system counts their sequence numbers anew. Only
+a world at its growth limit leaves bodies waiting, reported in one error. A round of changes with at least 256 bodies to
+build (a play start, a streamed cell) builds them on the job threads (`RefreshOwnersInParallel`): the main thread starts
+each build in record order (records, merged colliders, transforms, velocities), jobs build box, sphere and capsule
+shapes (each chunk shares its own box and sphere shapes: one shape shared by every thread would make the bodies' reference
+counting contend for one cache line; the main thread merges them into the world's), settings and Jolt bodies in fixed
+chunks of 512, and the main thread gives them
+their IDs in record order, building the serial way what the jobs left to it (mesh colliders, anything that warns). So
+body IDs and the simulation do not depend on the number of threads (`PhysicsStats::ParallelBuildCount`). Broad phase
+batches are prepared on one thread at a time: Jolt 5.6's node allocator publishes a new page's size before its pointer
+without ordering, so two threads preparing at once can crash on processors that reorder stores (Apple silicon). Bodies
+that leave the simulation (inactive entities, a cell leaving) and bodies destroyed in a round of changes leave the broad
+phase in one batch at its end, and the bodies around them are woken afterwards: box by box for a few, in merged 16 m
+regions of the moving tree for many (`PhysicsStats::WakeQueryCount`), so a cell of thousands of bodies leaves in a few
+dozen queries. Steps that overflow the pair or contact buffers
+are counted (`PhysicsStats::BodyOverflowCount`, `ContactOverflowSteps`), and what a world lacked is remembered per scene
 (`Scene::GetLineageID`: the scene asset it was loaded from or saved as, else the scene and its copies; never another
 scene of the same name), so the scene's next world is sized for it. Jolt reserves a world's buffers when it is created
 and does not survive a failed allocation, so the capacities a scene may ask for are limited (`PhysicsCapacitySettings`:
-about 80 bytes per body, 90 per body pair and 830 per contact constraint, about 940 MiB at the limits). Other systems
-use physics through the scene services `PhysicsSystem` offers (`ICollisionEventSource`, `IBodyMotionQuery`,
-`IBodyControl`, `IPhysicsQueries`, `ICharacterControl`, with `CollisionEvent`, `RaycastHit` and `CharacterState`, in
-`Scene/SceneServices.h`); collision events
+about 80 bytes per body, 90 per body pair and 830 per contact constraint, about 940 MiB at the limits;
+`PhysicsWorld::EstimateReservedBytes` estimates what given capacities reserve, fitted to the reference machine's commit
+charge). Other systems use physics through the scene services `PhysicsSystem` offers (`ICollisionEventSource`,
+`IBodyMotionQuery`, `IBodyControl`, `IPhysicsQueries`, `ICharacterControl`, `IPhysicsCapacity`, with `CollisionEvent`,
+`RaycastHit`, `CharacterState` and `PhysicsCapacityInfo`, in `Scene/SceneServices.h`); `IPhysicsCapacity` reports body
+slots in use, the capacity, bodies waiting for a slot or for other reasons, the bodies built and destroyed in the last
+update (counted per `Scene::GetFrameIndex`, so no call per frame is needed), growths and the reserved bytes, all without
+work that grows with the bodies, and reserves room ahead of a load; collision events
 collected during a step are dispatched
 afterwards on the main thread to the listeners. Contacts are tracked only for pairs someone wants (every pair while a
 listener of all entities is registered, otherwise pairs with a watched entity, such as one whose script has contact
@@ -353,7 +381,10 @@ the step, and each touching pair knows its position in the pair lists of both it
 in constant time (`PhysicsStats::PairIndexOperations` counts the list writes). Bodies created while changes are applied
 (play start, a prefab spawn, a streamed cell) join the simulation in one batch per activation mode
 (`AddBodiesPrepare`/`AddBodiesFinalize`), and destroyed bodies leave it in one batch, when `ApplyPendingChanges` ends;
-each Jolt body index leads to its entity and record in constant time (`BodySlot`). Jolt rebuilds a broad phase tree, and
+each Jolt body index leads to its entity and record in constant time (`BodySlot`), and so does each entity index
+(`RecordSlot`: the records stay in an ordered map for the steps' deterministic order, but a cell that loads or unloads
+looks up tens of thousands of them in a frame; the index points into the map's nodes, so records are created and removed
+only through `EmplaceRecord` and `EraseRecord`, which assert that the counts agree). Jolt rebuilds a broad phase tree, and
 frees the nodes of the bodies removed from it, only while the tree holds bodies, and aborts the process when its fixed
 node pool runs out: so every world keeps one static anchor body in each of its two trees (static and moving bodies), on a
 layer outside the 32 that collides with nothing and that no query accepts, beside its body capacity
@@ -408,6 +439,12 @@ keyframe reduction) and `AnimationController` (the `.stanimator` document: param
 `AnimationSystem`, the "Animation" scene system (Play only), which offers the scene services `ISkinningPoses`,
 `IAnimatorControl` and `IAnimationEventSource`. `AnimationTypes.h` has the joint pose and its math. See
 [Animation](#animation).
+
+**World** (`World/`). World partition: the World asset (`WorldAsset`, the `.stworld` document: a persistent scene,
+layers of square cells and the cells that have content, with the cook's index), the grid math (`WorldGrid`,
+`WorldCellKey`), the streaming core (`WorldStreamer`), the components `WorldComponent` and `StreamingSourceComponent`
+(`WorldComponents.h`, registered by the module, category "World") and `WorldStreamingSystem`, the "World" scene system
+(Play and Simulate), which offers the scene service `IWorldStreaming`. See [World partition](#world-partition).
 
 **Scripting** (`Scripting/`). `ScriptEngine` (the loaded module, hot reload, faults, optional watchdog),
 `ScriptModule` (loading, validation and guarded calls), `ScriptSystem` (the "Scripting" scene system: instances and
@@ -479,14 +516,15 @@ A file may include files of its own layer and of the layers it lists, which are 
 | Physics | `Physics/**` | Core, Asset, Reflection, Scene |
 | Audio | `Audio/**` | Core, App (its engine module), Asset, Reflection, Scene |
 | Animation | `Animation/**` | Core, Asset, Reflection, Scene |
+| World | `World/**` | Core, Asset, Reflection, Scene |
 | GameUI | `GameUI/**` | Core, Input, Asset, Reflection, Scene, Renderer (only Engine includes it; see [Game UI](#game-ui)) |
 | Scripting | `Scripting/**` | Core, Input, Asset, Reflection, Scene |
 | Project | `Project/**` | Core, App (its engine module), Asset, Reflection |
 | Runtime | `Runtime/**` | Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Scripting, Project |
 | Network (tooling) | `Network/**`, `Platform/*/*Socket.cpp` | Core |
 | ImGui (tooling) | `ImGui/**` | Core, Input, App, Renderer |
-| AssetPipeline (tooling) | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `TextureCooker.*`, `BC7Encoder.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio, Animation (the glTF importer writes skeletons and clips) |
-| Engine | `Engine/**` | the layers a game contains: Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Animation, Scripting, GameUI (shipped games link the composition root and the entry point too; see below) |
+| AssetPipeline (tooling) | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `TextureCooker.*`, `BC7Encoder.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio, Animation (the glTF importer writes skeletons and clips), World (the dependency scanner reads world documents) |
+| Engine | `Engine/**` | the layers a game contains: Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Animation, Scripting, World, GameUI (shipped games link the composition root and the entry point too; see below) |
 
 `Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in the shard `StrataTests.Core.Core`) reads every C, C++ and
 Objective-C(++) source and header under `Strata/src` (`STRATA_SOURCE_DIR`; `.h`, `.hpp`, `.inl`, `.c`, `.cpp`, `.m`, `.mm`,
@@ -536,6 +574,8 @@ RegisterAnimationModule    Animation/AnimationRegistration.cpp its components (A
                                                                AttachToJoint); Skeleton, AnimationClip, AnimationController loaders,
                                                                "Animation" system
 RegisterScriptingModule    Scripting/ScriptingRegistration.cpp the Script component (ScriptingComponents.cpp); "Scripting" system
+RegisterWorldModule        World/WorldRegistration.cpp         its components (WorldComponents.h: World, StreamingSource); World
+                                                               loader; "World" system
 RegisterGameUIModule       GameUI/GameUIRegistration.cpp       its components (GameUIComponents.cpp, category "UI"); the UI pass
                                                                (SceneOverlayRegistry); "UI" system
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
@@ -701,7 +741,9 @@ Windowed applications are paced by vsync when it is on (`WindowSpecification::VS
 headless ones by the cap alone, which the editor and the runtime set to 60 (`MaxFrameRate`,
 `StrataEditor/src/EditorApplication.cpp`, `RuntimeApplication.cpp`). The cap is the application's `FramePacer`
 (`Core/Timer.h`) and can change while it runs (`Application::SetMaxFrameRate`; setting the current rate keeps the frame
-schedule): the editor lowers it while it is idle (see [Editor](#editor)). The pacer's wait comes after step 8, so
+schedule): the editor lowers it while it is idle (see [Editor](#editor)), and a windowed runtime caps itself at 60 while
+no scene plays (`GameRuntime::GetFrameRateCap`: the cleared frames of a game loading its start scene left the loading
+threads no CPU at 900 a second) and goes back to the game's pacing once one does. The pacer's wait comes after step 8, so
 `Application::GetLastFrameWorkTime` leaves it out as well: a capped frame rate changes the rate, not the cost of a
 frame. An exception escaping a frame (e.g. a lost device inside NVRHI) is logged and ends the loop.
 
@@ -749,8 +791,8 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Input` | `Input::BeginFrame` and the window's events (`Application::RunFrame`) |
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
-| `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (`SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
-| `Scene.UI`, `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays, or by `FramePerfLog::Create`; `Scene.UI` is the game UI's input) |
+| `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (the systems' `PrepareLoadedScene`: physics' bodies; `SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
+| `Scene.UI`, `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays, or by `FramePerfLog::Create`; `World.Streaming`, the World system's, when the World module registers, so that perf logs created before a scene plays have its column; `Scene.UI` is the game UI's input) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView` (or `ApplyFeedback`), `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
@@ -822,6 +864,7 @@ are, in update order:
 | UI | `GameUISystem` | Play | Before Scripting (soft) | The game UI's input: hit tests, pointer capture, focus, navigation and widget events (see [Game UI](#game-ui)). |
 | Scripting | `ScriptSystem` | Play | | Script instances of the active `ScriptEngine` (null engine: no scripts). |
 | Animation | `AnimationSystem` | Play | After Scripting, Before Physics (soft) | Animators in `OnUpdate`: poses, root motion, attachments, events (see [Animation](#animation)). |
+| World | `WorldStreamingSystem` | Play, Simulate | After Scripting, Before Physics and Audio (soft) | Streams the cells of the scene's world in `OnUpdate` (see [World partition](#world-partition)). |
 | Physics | `PhysicsSystem` | Play, Simulate | After Scripting (soft) | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
 | Audio | `AudioSystem` | Play | After Scripting, Animation, Physics (soft) | Sources and listener, in `OnLateUpdate` after everything that moves them. |
 
@@ -849,16 +892,16 @@ are, in update order:
 - **Per-frame calls.** A frame calls `OnUpdate`, `OnFixedUpdate` and `OnLateUpdate` only on the systems whose descriptor
   asks for them (`SceneSystemDescriptor::CallsUpdate`, `CallsFixedUpdate`, `CallsLateUpdate`; all three for a descriptor
   built by hand). `MakeSceneSystemDescriptor<T>` sets them from the callbacks `T` overrides, told apart at compile time by
-  the type of `&T::OnUpdate`, so the built-ins cost an idle play frame eight calls (UI `OnUpdate`, Scripting all three,
-  Animation `OnUpdate`, Physics `OnUpdate` and `OnFixedUpdate`, Audio `OnLateUpdate`) and a new system adds only the
-  phases it uses (`Perf.Scene.IdlePlayFrame1M`). `OnUpdateRuntime` walks one list of systems per phase, built when the
-  scene starts. A
+  the type of `&T::OnUpdate`, so the built-ins cost an idle play frame nine calls (UI `OnUpdate`, Scripting all three,
+  Animation and World `OnUpdate`, Physics `OnUpdate` and `OnFixedUpdate`, Audio `OnLateUpdate`) and a new system adds
+  only the phases it uses (`Perf.Scene.IdlePlayFrame1M`). `OnUpdateRuntime` walks one list of systems per phase, built
+  when the scene starts. A
   paused frame (no step due) calls `OnPausedUpdate` instead (`CallsPausedUpdate`; of the built-ins only Animation's), for
   work the paused frame shows that advances no time.
 - **Profiling.** A system's start and update callbacks run in the frame profiler stage its descriptor names
-  (`SceneSystemDescriptor::ProfileStage`: `Scene.UI`, `Scene.Scripts`, `Scene.Animation`, `Scene.Physics`, `Scene.Audio`; empty: not
-  timed on its own),
-  resolved when the scene starts; scenes updated outside a profiled frame (tests) skip the stages altogether.
+  (`SceneSystemDescriptor::ProfileStage`: `Scene.UI`, `Scene.Scripts`, `Scene.Animation`, `World.Streaming`,
+  `Scene.Physics`, `Scene.Audio`; empty: not timed on its own), resolved when the scene starts; scenes updated outside a
+  profiled frame (tests) skip the stages altogether.
 
 ```text
 OnRuntimeStart(mode)   reset time, pause, steps and requests; create the systems the mode runs;
@@ -953,10 +996,18 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   part would fill the room it needs, to be evicted again (`GetSkippedAssetCount`). A level larger than a budget never
   pushes the pool past it. States: `LoadingScene` (the document is read and the
   scene prepared on the loading worker, its world transforms included), `LoadingDependencies` (the prepared scene is
-  taken and the spent asset unloaded; the rest goes on loading), `Preparing` (enough of it is in, and
-  `SceneLoadOptions::Prepare` works on the scene once per frame until it returns true: owners that render the scenes
-  they load, the editor with a GPU and `StrataRuntime` with a window (`GameRuntimeOptions::PrepareRenderScenes`), build
-  its render proxies so, `RenderScene::PrepareLoadedScene`, see Render scene), `Ready` (the share of the stored bytes it
+  taken and the spent asset unloaded; the rest goes on loading), `Preparing` (enough of it is in, and the scene is
+  prepared once per frame, drawing from the frame's `SceneWorkBudget` that `SceneLoadRequest::Update(budget)` gets from
+  the owner, until every step returned true: with `SceneLoadOptions::PrepareSystems`, which the owners of scenes that
+  will run set (`GameRuntime` for every scene it loads, `EditorContext::SwitchRuntimeScene`; never `scene.open`, whose
+  scene is edited), first the scene systems' hooks (`SceneSystemDescriptor::PrepareLoadedScene`), in update order and
+  one after the other (the World system loads a world's start cells, `WorldStreamingSystem::PrepareLoadedScene`, see
+  World partition; physics then builds the bodies, `PhysicsSystem::PrepareLoadedScene`, a slice of 8,192 owners at a time
+  in parallel, into a world it keeps as the scene's prepared state, `Scene::SetPreparedState`, and adopts when the scene
+  starts, so the frame the scene starts in builds no body); then `SceneLoadOptions::Prepare`: owners that render the
+  scenes they load, the editor with a GPU and `StrataRuntime` with a window (`GameRuntimeOptions::PrepareRenderScenes`),
+  build its render proxies so, `RenderScene::PrepareLoadedScene`, see Render scene; `GetPreparedScene` shows the scene
+  meanwhile), `Ready` (the share of the stored bytes it
   waits for that `SceneLoadOptions::RequiredProgress` asks for is in: all of it by default; a dependency that fails, or is
   deleted meanwhile, counts as finished, the scene shows a fallback for it; and the scene is prepared), `Failed` (the
   scene asset could not be loaded, or was deleted before it was read) and `Cancelled`. `GetProgress` is the
@@ -976,7 +1027,8 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   again beside the start scene's load. The new scene replaces the running one between updates, then its systems start and
   the trim of what only the previous scene used is scheduled. The scene it replaces is let go with
   `Scene::ReleaseInBackground`: stopped on the main thread (systems, scripts' `OnDestroy`, bodies, voices; its sub-scene
-  loads and their pins dropped), then destroyed by a background job, since destroying a million entities takes tens of
+  loads and their pins dropped; what systems prepared for it, `Scene::SetPreparedState`, dropped), then destroyed by a
+  background job, since destroying a million entities takes tens of
   milliseconds (also the edited scene `scene.open` replaces, the copy `play.stop` ends and a scene a cancelled or failed
   load had read). The registry signals nothing while it is destroyed and its render scene is plain data, so nothing the
   main thread uses goes with it. The swap, the per-frame advance of the loads and sub-scene slices are the frame
@@ -987,9 +1039,16 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   through `SceneLoader` (pinned at `SubSceneOptions::Priority` until every entity exists), the prepared scene is compiled
   into an `EntityPrototype` on the job system (which also drops the prepared scene, so the main thread never pays for
   destroying it), and its entities are created by `Scene::UpdateSubScenes`, which `OnUpdateRuntime` and `OnUpdateEditor`
-  call first: in slices of at most `SceneSettings::MaxEntitiesInstantiatedPerFrame` entities per update for all sub-scenes
-  together (default 5,000; saved with the scene, `scene.setSettings`, the Inspector's Streaming section), cut in chunks of
-  512 and stopped once `Scene::c_MaxInstantiationMillisecondsPerFrame` (2 ms) went by. Each slice's entities are complete
+  call first with the frame's `SceneWorkBudget` (`Scene/SceneWorkBudget.h`: a deadline and the entities still to create and
+  to destroy, made once per frame by the scenes' owner, `GameRuntime::Update` and `EditorContext::Update`, with
+  `SceneWorkBudget::ForFrame`: 4 ms; without one the scene makes its own): in slices of at most
+  `SceneSettings::MaxEntitiesInstantiatedPerFrame` entities per update for all sub-scenes together (default 5,000; saved with
+  the scene, `scene.setSettings`, the Inspector's Streaming section), cut in chunks and stopped once
+  `Scene::c_MaxSubSceneMillisecondsPerFrame` (2 ms, for creation and destruction together; `SceneWorkBudget::SubSceneMilliseconds`)
+  went by. An update's first chunk holds 512 entities (where they cost more than the frame allows, in Debug builds and on
+  slow machines, loads still progress that fast); later ones hold what fits in the time left at the cost per entity the
+  scene measured lately (`SceneWorkBudget::FitChunk`), from 32 to 512, so that a slice ends close to its limit: entities
+  untouched for a while (an unloading cell's) cost several times what warm ones do. Each slice's entities are complete
   when it returns (`ContinueInstantiation`), so systems treat them like any other: their component signals give scripts
   `OnCreate` at the next sync point, physics its bodies in its batches, audio its voices and the render scene its proxies.
   An entity whose parent an earlier slice created and gameplay or the editor destroyed since is not created, nor are its
@@ -997,15 +1056,32 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   The entities keep their IDs, so a sub-scene with an ID the scene has already fails with that ID in its error: checked for
   all of them before the first entity exists, and again per slice for IDs the scene gained meanwhile, where the failure
   destroys what the sub-scene created. Its top-level entities carry a runtime-only `SubSceneComponent` (not registered:
-  never saved, copied or shown) naming it, and `UnloadSubScene(id)` cancels the load (releasing every pin) and destroys
-  them with `DestroyEntities` (systems hear `OnEntityDestroying`; deferred while the scene updates). `GetSubSceneStatus`
-  reports the state (`Loading`, `Instantiating`, `Loaded`, `Failed` with the error), the progress (half the closure's
-  bytes, half the entities), the entities created and the slices; failed sub-scenes stay until unloaded. A sub-scene's own
+  never saved, copied or shown) naming it. `UnloadSubScene(id)` cancels the load (releasing every pin) and makes those
+  top-level entities inactive at once (`InactiveComponent`: the sub-scene leaves rendering, the scripts' updates, physics, in
+  one batch, and audio in that frame); the sub-scene is then `Unloading`, and each `UpdateSubScenes` destroys a slice first
+  (before creating), within `SceneSettings::MaxEntitiesDestroyedPerFrame` (default 5,000) and the shared time limit: the
+  first entities of a post-order walk from its top-level entities as they are then (children before parents, so the
+  slice's topmost ones are destroyed with their descendants in one `DestroyEntities` per chunk; systems hear
+  `OnEntityDestroying`, scripts get `OnDestroy`). What the game moved out of its subtrees meanwhile survives. Its ID is
+  known until its last entity is gone (`SubSceneStatus::DestroyedEntities`); a second unload changes nothing; the same
+  scene loaded again meanwhile waits in `Loading` until it is gone (its entities keep the IDs the new ones take);
+  `FlushSubSceneUnloads` finishes every unload at once (tools, tests, and `OnRuntimeStop` before the systems stop).
+  Membership: a sub-scene's entities are its top-level entities (each with its `SubSceneComponent`) and their
+  descendants. `AdoptSubScene(source, roots)` registers existing top-level entities as a `Loaded` sub-scene (a play
+  copy's cells, a cell the editor makes; no roots is allowed), `SetSubSceneOf(root, id)` moves a top-level entity into a
+  `Loaded` sub-scene or out of every one (one leaving a sub-scene being unloaded is active again when the unload made it
+  inactive), `GetSubSceneOf(entity)` answers through its top-level ancestor (its depth) and `FindSubSceneBySource(asset)`
+  finds a scene asset's sub-scene; a top-level entity that becomes a child (`SetParent`, `PlaceEntities`) loses its
+  `SubSceneComponent` and belongs to its new top-level ancestor's sub-scene, which `ValidateHierarchy` checks.
+  `GetSubSceneStatus` reports the state (`Loading`, `Instantiating`, `Loaded`, `Failed` with the error, `Unloading`), the
+  progress (half the closure's bytes, half the entities), the entities created and the slices; failed sub-scenes stay until
+  unloaded. A sub-scene's own
   settings (gravity...) are not applied. Scripts load sub-scenes with `Scene::LoadAdditive` (the SDK's `SubScene`), read
   an asset closure's progress with `Assets::GetLoadProgress` (`ScriptSystem::GetAssetLoadProgress`, an
   `AssetGroupRequest` the scene pins until `Assets::Release`) and make many prefab instances with
   `Scene::InstantiateMany`; the editor's commands are `scene.loadAdditive` (play mode; deferred until the sub-scene's entities
-  exist), `scene.unloadAdditive` and `scene.loadStatus` (`subScenes`).
+  exist), `scene.unloadAdditive` (answers at once with `unloadingEntities`) and `scene.loadStatus` (`subScenes`, with
+  `destroyedEntities` while one unloads).
 - A scene knows the scene asset it was loaded from or saved as (`Scene::GetSourceAsset`, set when a scene asset's
   scene is taken or copied and by the editor's save-as) and keeps an ID across its copies (`GetLineageID`: the source
   asset, else an ID of its own), by which systems recognize it from one play session to the next.
@@ -1028,6 +1104,8 @@ which means the module is not in the build or its system does not run in this mo
 | `IBodyControl`: velocities, forces, impulses, gravity scale, wake-up, teleport | `PhysicsSystem` | script host (`RigidBody`) |
 | `IPhysicsQueries`: raycasts and overlaps | `PhysicsSystem` | script host (`Physics`) |
 | `ICharacterControl`: character controllers' walk velocity, jumps, teleports, root motion and state | `PhysicsSystem` | script host (`CharacterController`), animation's root motion |
+| `IPhysicsCapacity`: bodies against the capacity, waiting bodies, the last update's builds and destructions, growths, reserved bytes; room reserved ahead of a load | `PhysicsSystem` | the world streamer, the editor (Streaming panel, status bar, `physics.stats`), games' perf logs, tests |
+| `IWorldStreaming`: cell requests around a point, whether a region is loaded, layers on and off, streaming statistics, whether the scene streams a world at all | `WorldStreamingSystem` | games' scripts (prefetching before a teleport), the editor, games' perf logs, tests |
 | `IAudioPlayback`: sources (and whether an entity has one, `HasSource`) and one-shots | `AudioSystem` (an adapter object) | script host (`AudioSource`, `Audio`) |
 | `ISkinningPoses`: each animator's pose (model-space joint matrices with a version), and which animators renderers drew | `AnimationSystem`; the editor's pose preview for edited scenes | `RenderScene` (palettes of skinned meshes), `SceneRenderer` (reports the animators of what it drew) |
 | `IAnimatorControl`: play, cross-fade, parameters, speed, state queries, joint transforms, whether an entity has an animator (`HasAnimator`) | `AnimationSystem` | script host (`Animator`), tools and tests |
@@ -1900,7 +1978,9 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   requests), before its read slot frees: a material's textures load alongside the material, a mesh's default materials
   alongside the mesh. Documents that place entities (scenes, prefabs, models) prefetch nothing: what their entities use
   is requested by whatever draws or plays it, once it is needed (prefetching a scene's meshes and materials raised the
-  stress sweep's peak private memory by 60 to 100 MB; loading screens take a closure with a group load). Prefetches
+  stress sweep's peak private memory by 60 to 100 MB; loading screens take a closure with a group load), and scenes are
+  never prefetched, as load closures stop at them: a World asset lists all its cells, and prefetching them held a drive
+  across a 10,000-cell world at 12.6 GB instead of 280 MB (`Perf.World.DrivePeakPrivate`). Prefetches
   never evict anything: a dependency is prefetched only while its stored size fits in every pool with a budget beside
   what is resident, reserved for arrivals, on its way (the stored bytes of every load queued or in flight, prefetches
   included, until it is finalized) and a window of `InFlightBytes` kept free for the requests to come, so tight budgets
@@ -2048,7 +2128,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   builds every proxy (about 36 ms for 100,000 mesh renderers, Release), so a loaded scene is prepared before it is shown:
   `RenderScene::Prepare` syncs chunks of `c_PrepareChunk` queued entities (`Sync(assets, maxPending)` reads the latest
   queued ones and leaves the others queued) until its budget is spent, and `PrepareLoadedScene`, the scene loads'
-  `SceneLoadOptions::Prepare` where the owner renders, spends `c_PrepareFrameBudget` (4 ms) per frame. The frame that
+  `SceneLoadOptions::Prepare` where the owner renders, spends what is left of the frame's `SceneWorkBudget` (4 ms in all,
+  after the systems' preparation; at least one chunk). The frame that
   swaps the scene in then builds no proxy (the longest frame of opening 20,000 prefab instances of five cubes in the
   editor: 51-52 ms before, 15.5-17 ms with it, most of it the first frame's upload of every instance and the
   Hierarchy's rows).
@@ -2162,7 +2243,10 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   `DeferredProxies`; the editor's single pictures, `viewport.capture`, the project's picture and thumbnails, render again
   until none waits); a destroyed proxy's record is cleared at once. Buffers grow by a GPU copy into larger ones (the
   old ones released deferred), so growth uploads nothing again. `PrepareLoadedScene` fills a loaded scene's mirror too,
-  within `c_PrepareUploadBytes` a frame, so the frame that shows the scene uploads no proxy. A render scene's
+  within `c_PrepareUploadBytes` a frame, so the frame that shows the scene uploads no proxy; both draw from the frame's
+  `SceneWorkBudget` (the proxies get the time left, at least a chunk; the call that completes them fills the mirror only
+  while the budget still has time, else the next call fills it whatever its time, so a sync that alone outlasts the budget,
+  as Debug builds' validation of a large scene does, never holds the copy back). A render scene's
   destructor posts its id (any thread) and `Renderer::BeginFrame` releases its mirror; mirrors no renderer updated for
   `RenderSceneGPUCache::c_UnusedFrames` (300) frames go too, and a later frame of their scene uploads it again.
   The mirror also holds the scene's asset tables, by slot: the mesh table (per mesh slot the `GeometryHandle` of the
@@ -2497,6 +2581,233 @@ system, not to entities: a character's joints add no entities and no transform c
   of a wider table, and a tab narrower than a table's least width scrolls it sideways instead of squeezing names and
   numbers into ellipses) and shows skeletons and clips, and the Inspector shows a playing animator's state and
   parameters.
+
+## World partition
+
+A world is a large level split into cells that stream around their sources. Its persistent scene holds what is always
+loaded (the player, the sky, game logic); everything else lives in cell scenes, which load as sub-scenes of the running
+scene (see Additive scenes) when a source comes near and unload when it leaves.
+
+**The World asset** (`World/WorldAsset.h`, `AssetType::World`, the native `.stworld` document of `WorldData`):
+
+```json
+{ "Strata": { "Format": "World", "Version": 1 },
+  "World": {
+    "Name": "Island", "PersistentScene": "<scene handle>", "GridOrigin": [0, 0],
+    "Layers": [ { "ID": 1, "Name": "Terrain", "CellSize": 256, "StreamingDistance": 1024,
+                  "EnabledByDefault": true, "LoadBeforeStart": true } ],
+    "Cells": [ { "Layer": 1, "X": 0, "Z": -1, "Scene": "<scene handle>" } ],
+    "Index": { "Version": 1, "MaxBodiesInRadius": 41210, "PersistentBodies": 12,
+               "Cells": [ { "Layer": 1, "X": 0, "Z": -1, "Stamp": "<content stamp>", "Entities": 2502, "Bodies": 501,
+                            "Bounds": { "Min": [0, -1, -256], "Max": [256, 30, 0] }, "ClosureBytes": 1048576 } ] } } }
+```
+
+- **Layers** are grids of square cells of one size (`CellSize`, 1 to 65,536 m) from the world's `GridOrigin`, streamed
+  within one distance of a source (`StreamingDistance`, 0 to 1,000 km): terrain in large cells far out, props in small
+  ones near. A world has 1 to 32. Cells and `WorldCellKey` name layers by `ID` (1-255, unique), so renaming one is cheap;
+  names are unique and free of control characters and commas (sources list layers by name, separated by commas).
+  `EnabledByDefault` says whether the layer streams until a game disables it, `LoadBeforeStart` whether a game's loads
+  wait for its cells around the sources.
+- **Cells** that have content list their scene. Each is unique per (layer, X, Z), lies within `WorldData::c_MaxExtent`
+  (1,000 km) of the origin and has a scene of its own, never the persistent one. Their documents live in
+  `<world folder>/<WorldName>/<LayerName>/<X>_<Z>.stscene`, and their handles are derived from the world's,
+  `DeriveSubAssetHandle(world, "Cell/<layerID>/<X>/<Z>")`, so that an undo step can name a cell before its file exists.
+- **The index**, written by the cook, holds each cell's content stamp, entity and body counts, bounds and the stored
+  bytes of its dependency closure, and the most bodies the sources can keep loaded anywhere: what reserving physics room,
+  the cell map and `world.info` read without loading cells.
+- **Validation.** `WorldData::FromJson` checks the types of every field and `WorldData::Validate` every rule above (both
+  with the reason, naming the layer or cell); `WorldAsset::Create` validates data built in code too, and keeps a hash map
+  from packed keys to cells (`FindCell`, `FindSummary`). Unknown keys are ignored, for documents of later versions.
+- **References.** `AssetDependencies::Scan` lists the persistent scene and every cell's scene. Scenes stop load
+  closures (`AssetClosureScope::Load`), so loading a world, or the persistent scene that names it, loads no cell; an
+  export's closure (`All`) ships them all.
+
+**Grid math** (`World/WorldGrid.h`): `WorldCellKey { Layer, X, Z }` packs into 64 bits in the order of (layer, X, Z)
+(`Pack`, for hash maps and the streamer's total order of cells); `WorldGrid::CellAt` finds a position's cell
+(squares include their lower edges; Y is unbounded), `CellBounds` a cell's square and `Distance` the distance from a
+point to a square on the ground plane (0 inside), in double precision.
+
+**Streaming** (`World/WorldStreamer.h`). `WorldStreamer` streams a world's cells into a scene as sub-scenes; the World
+scene system drives it in Play and Simulate, the editor in Edit. Its inputs each update: the World asset (requested from
+the scene's asset manager every update, never held), the sources (`WorldStreamingSource`: position, facing, radius, layer
+mask, priority and view bias), the enabled layers (by name, from `EnabledByDefault`) and the pinned cells (counted pins
+of the owner's: dirty or selected cells, requests).
+
+- **Wanted cells.** Per source and enabled layer of its mask, the existing cells whose squares lie within the source's
+  radius (`Radius`, else the layer's `StreamingDistance` times the world's `DistanceScale`); pinned cells always. The
+  grid squares within the radius are visited through the asset's hash map (or the layer's cell list when that is
+  shorter), never the whole cell table.
+- **Hysteresis.** A loaded cell stays while it lies within the radius plus `H = max(CellSize / 2, 0.1 * radius)`, so a
+  source swinging across a border starts nothing; beyond it the cell unloads (sliced, `Scene::UnloadSubScene`), and a
+  loading one is cancelled.
+- **Loads** start in a total order (priority descending, view-biased distance ascending, packed key ascending: cells
+  ahead of a source rank as if `ViewBias` of its radius nearer), through `Scene::LoadSubScene` at `High` priority within
+  half a source's radius and `Normal` beyond, at most `c_MaxConcurrentCellLoads` (4) at once. A cell unloading is loaded
+  again once its unload finished.
+- **Reserving physics room.** With a cooked index, before starting loads the streamer asks `IPhysicsCapacity::Reserve`
+  for the persistent scene's bodies plus those of the cells loaded, loading, unloading and starting, so a world grows once,
+  before the cells' bodies arrive, instead of at each slice.
+- **Determinism and idling.** Decisions depend only on the inputs and the cells' states, in a total order, so drives that
+  see the same states decide alike whatever the thread count (`GetLastDecisions`). An update polls only the cells in
+  flight; it evaluates (`WorldStreamingStats::EvaluatedCells`) only when a source moved more than `c_SourceEpsilon` (1 cm)
+  since the last evaluation, a pin, layer, world or scale changed, or a load or unload finished.
+- **Failures.** A cell whose load fails stays `Failed` with its error, and is tried again only once its scene's source
+  revision changes (`AssetManagerBase::GetSourceRevisions`, after a reimport).
+- **Adoption.** `AdoptLoadedCells` takes over the scene's sub-scenes whose sources are the world's cells (a prepared
+  start's, the cells the editor adopted into a play copy). `Scene::FindSubScene` finds a sub-scene by binary search: the
+  list is in the order of the IDs.
+- **What it tells.** `GetStats` (cells wanted, loading, loaded, unloading, pinned and failed, loads and unloads started,
+  the entities the cells' slices created and destroyed since its last update, the cells evaluated, and a state version
+  for caches such as the cell map), `GetCellStates` (every cell's state, sub-scene, entities and error) and
+  `IsLoadedAround` (every existing cell of every enabled layer within a radius is loaded).
+
+**Components** (`World/WorldComponents.h`). `WorldComponent` (`World`: the World asset; `DistanceScale`, 0.1-10: a
+quality knob multiplying every layer's streaming distance) makes a scene a world's persistent scene; the first active
+one in hierarchy order counts. `StreamingSourceComponent` (`Enabled`, `Radius`: 0 for each layer's distance, `Layers`:
+comma-separated names, empty for every enabled layer, unknown names warned about once, `Priority` -100 to 100, `ViewBias`
+0-1) marks the points cells stream around, facing their -Z axis; without an active one, the primary camera is the source.
+Cell membership needs no component of its own: a loaded cell is a sub-scene whose source is the cell's scene, its
+top-level entities carry the runtime-only `SubSceneComponent`.
+
+**The World system** (`World/WorldStreamingSystem.h`, "World", After Scripting, Before Physics, Play and Simulate, stage
+`World.Streaming`). Each update it checks the `WorldComponent` storage (a scene without one costs nothing more), gathers
+the active sources through their world transforms (else the primary camera) and the requests, and runs a
+`WorldStreamer`. `OnRuntimeStart` adopts the cells already loaded (a prepared start's, a play copy's). It offers
+`IWorldStreaming`: `RequestCellsAround(position, radius)` (a temporary source of priority 100 until `ReleaseCells` or the
+end of play; radius 0 asks for the cells at the position), `IsLoadedAround`, `SetLayerEnabled`/`IsLayerEnabled` by name
+and `GetStats`. A scene that stops naming a world unloads its cells.
+
+**A world's start.** The system's preparation hook (`WorldStreamingSystem::PrepareLoadedScene`, run while a scene loaded
+with `SceneLoadOptions::PrepareSystems` is `Preparing`) loads, around the scene's sources, the cells of the layers flagged
+`LoadBeforeStart`, advancing them with `Scene::UpdateSubScenes` within the frame's budget, and returns once they are
+loaded or failed; physics' hook then builds their bodies and the renderer's preparation their proxies. Before that, it
+raises the scene's `PhysicsCapacity.MaxBodies` to the cooked index's recommendation when it is lower, so a game never
+starts with less room than its world needs; exports also save that capacity into the packed persistent scene
+(`GameExport` passes the cooks' `RecommendedMaxBodies` as `AssetPackWriteOptions::AdjustSceneSettings`, raising a lower
+`PhysicsCapacity.MaxBodies`), so loads without preparation get it too, and the cells are packed in the cooked binary form
+like every scene. The game thus
+swaps in a world whose ground exists and has collision, while its loading scene plays. A world started without
+preparation (tools and tests calling `OnRuntimeStart`) streams its start cells over its first frames;
+`WorldStreamingSystem::WaitForStartCells` waits for them.
+
+**The cook** (`world.cook`, `StrataEditor/src/Editor/WorldCook.h`). It measures a world's cells for its index, off the
+frame: the cells whose content stamp (`EditorAssetManager::GetContentStamp`) differs from their index entry's, and from
+what the session's `WorldCookCache` holds (`EditorContext::GetWorldCookCache`), are read on I/O jobs through
+`WorldCellIO::ReadCellSummary` (the streamed reader, `SceneSerializer::DeserializeText`, asked to stop when the cook is
+cancelled), the others reused. The cook shares the
+project's asset manager and the cache with the editor, so both outlive a project closed while it runs; `world.cook` then
+cancels it and fails, writing nothing (the cache is the open project's: a project opened again starts a new one). The
+cooked document is written once no save is in flight, and only while the World document holds the bytes the cook read
+(`WorldCook::IsSourceCurrent`): one a save or a layer change wrote meanwhile makes `world.cook` and exports start the cook
+again from it, so that it never undoes a save's new cells. Per cell: its
+entities, its physics bodies (`PhysicsWorld::CountBodyCandidates`, the rule physics sizes by), its bounds (entities'
+positions, renderers' recorded mesh bounds, colliders) and the stored bytes of its dependency closure without other
+scenes. Then the most bodies the sources can keep loaded (`MaxBodiesInRadius`): per layer the largest radius a source of
+the persistent scene uses (else the layer's distance times `DistanceScale`) plus its hysteresis; per cell the bodies of
+the cells whose squares lie within that of any point of it; the largest sum per layer, summed over the layers, times the
+sources (at least one), plus the persistent scene's bodies. `WorldIndex::GetRecommendedMaxBodies` is 1.25 times that, for
+spawns. Entity IDs a cell shares with another or with the persistent scene fail the cook, naming them (a cell loads only
+when its IDs are new to the scene; IDs of cells unchanged since a cook of an earlier session were checked then); cells
+beyond the 20 km worlds are supported within, and empty ones, are warnings. The fresh index is written into the world
+document (an `AssetDocumentAction`), and with `apply` (default true, when the persistent scene is the edited one in edit
+mode, checked as the cook starts and again as it ends) the recommended capacity into the persistent scene's
+`PhysicsCapacity.MaxBodies` (a `SceneSettingsAction`), one undo step. `world.info` describes a world with its layers and
+how many cells changed since its index was made. An export cooks every world of the project first (`GameExport`'s
+`CookingWorlds` state, between `WaitingForImports` and `Packing`), writing the fresh indexes into the world documents
+like an import's result (no undo step, only when they changed), so the packed World assets carry them; games then size
+their physics from them when they start (see A world's start).
+
+**The editor's world** (`StrataEditor/src/Editor/EditorWorld.h`). When the edited scene is a world's persistent scene
+(its first active `WorldComponent` names a registered World asset), `EditorContext::ResetScene` attaches an
+`EditorWorld` (`EditorContext::GetWorld`; a WorldComponent naming no world of the project logs one warning and the scene
+is edited as a plain one). It streams the cells around the editor camera with a `WorldStreamer` in edit mode, before the
+scene's update advances the sub-scenes (stage `World.Streaming`): each layer's distance times the radius scale, the
+visible layers only, cells read as their files are now (`SubSceneOptions::Reload`). It keeps loaded the cells some reason
+needs (pins: those `world.loadCells` pins, those holding selected entities, those undo steps asked for through the
+scene's `ISceneCellLoader` service, until the next save, and dirty ones). The selected entities' cells are looked up
+again only when the selection (`EditorContext::GetSelectionVersion`), the scene's hierarchy or sub-scene membership
+(`Scene::GetSubSceneMembershipVersion`) or the cell table changed, as a select-all selects every loaded entity. As an `UndoStackObserver` it marks the documents
+every step touches dirty: the cells and the persistent scene of the states before and after (an entity moved between
+cells dirties both), the persistent scene for any step that leaves its settings different from the saved ones,
+everything loaded for a step only a snapshot describes. Undo steps carry membership: `EntityState::Cell` is the scene
+asset of the sub-scene of the entity's top-level ancestor (restored for top-level entities through
+`Scene::SetSubSceneOf`), and the state of an entity a step creates or deletes names the cell of the other side
+(`SceneEdit::LinkCells`). `SceneEdit::CheckCells` fails a step naming a cell that is not loaded before anything changes
+("it is loading now, undo again once it is in"): done without the cell, an edited child would be recreated outside it,
+an undone creation or a redone deletion would come back with it. The recovery journal records `Cell` in every state,
+also of deleted entities, and `scene.recover` of a world waits before applying until the cells its states name are
+loaded (`EditorWorld::PrepareRecoveredCells`, pinned until the next save; a cell made after the last save, which no
+document holds, is made again from the position its states record; a cell that fails to load fails the recovery, which
+stays on offer). A snapshot journal removes only the entities of the persistent scene and of the cells it holds: cells
+loaded now that it never saw keep theirs (one emptied of all its entities before the snapshot gets them back). Saves
+write only dirty documents, in the background like any scene's (`EditorContext::SubmitWorldSave`, from
+`BeginSaveScene`), in two `DocumentSaver` requests. `EditorWorld::BeginSave` plans the first, written from one
+`SerializedOnly` snapshot of the edited scene: an item per document whose `SceneWriteOptions::Roots` are the UUIDs of its
+top-level entities, listed on the main thread (the snapshot keeps IDs, not the runtime-only `SubSceneComponent`): the
+persistent scene's without the cells' (with the scene's settings; written when dirty, or when nothing else is), each dirty
+cell's (no settings: cells use their host's), new cells reserved with their derived handles
+(`EditorAssetManager::ReserveNativeAsset`). The saved cells' index entries are measured from memory then
+(`WorldCellIO::SummarizeEntities`). The dirty marks clear at once (edits made meanwhile mark again) and the saved cells stay
+pinned until the save ended. The first request's completion (`EditorWorld::FinishSave`) marks what failed dirty again,
+takes the written cells' stamps and closure bytes, lists the new cells and returns the World document, which a second
+request writes (ready `Document` bytes, `Reload`) when it changed: stamps exist only once files are written. One
+`UndoStack::MarkSaved(SavePoint)` per save, and the persistent scene's document hash as the recovery journal's new base,
+once every document is written: the World document too when the save changed it, as a world that does not list a new cell
+leaves its entities out. When that document fails, `scene.save` fails, the scene stays modified (closing asks) and the next
+save lists the new cells.
+A world saves once at a time: `scene.save` waits for the previous save (`AfterSaves`), `BeginSaveScene` refuses while one
+writes. `scene.save` answers once the World document is written, listing the documents (`documents: [{path, kind,
+bytes, entities}]`); `scene.saveAs` refuses worlds. Playing a world copies the edited scene as any play start does, which is the persistent scene plus the
+cells the editor has loaded (its edit radius), never the whole world; `EditorWorld::PrepareRuntimeCopy` then makes the
+fully loaded cells the copy's sub-scenes (adopted by their roots' IDs, so the game's World system adopts them and loads
+nothing twice), removes the entities of cells still loading or unloading (the game loads those whole), and the game's
+streamer pins the cells with unsaved edits for the session (`WorldStreamingSystem::PinCell`), whose documents are older
+than what plays. Further cells stream around the game's sources from their saved documents. Edits re-cell by position: `EditorContext::CommitEdit` calls `EditorWorld::Recell` before recording, so
+a tracked top-level entity of a cell whose world position now lies in another cell of its layer moves into it
+(`Scene::SetSubSceneOf`) within the same undo step (a gizmo drag across a border, a translation, a paste), and an entity
+the edit created that belongs to no sub-scene goes into the edit layer's cell at its position (`world.edit {editLayer}`;
+the default, "Persistent", keeps new entities in the persistent scene, so cameras, lights and game managers never stream
+out with a cell). A target cell that does not exist is made in memory (`Scene::AdoptSubScene` with its derived handle)
+and written at the next save, with its `.meta` and an entry in the World document's `Cells`; one that exists but is not
+loaded is loaded and pinned, and the entity moves with its next edit. `world.create` makes a world and its persistent
+scene (the two name each other, so both handles are chosen before their `.meta` files are written), opened or as one
+undo step; `world.setLayers` replaces its layers (a rename moves the cells' folder, removing or re-gridding a layer that
+has cells moves them to the trash only with `deleteCells`), one undo step. `world.moveEntities` moves top-level entities into
+a layer's cell at their positions, or into the persistent scene. `world.status` describes it (cells by state, dirty documents, edit settings, the
+cell list), `world.edit` sets the edit layer, visible layers and radius scale for the session, and `world.loadCells`
+loads cells by key or region, pinned until let go (`wait` answers once they are in).
+
+**Coordinates and what is not loaded.** Scenes and physics stay float32 (gpu-driven-rendering renders relative to the
+camera): float32 resolves positions to 2 mm up to 32 km and 4 mm up to 65 km, so worlds are supported within 20 km of
+the origin (`WorldData::c_SupportedExtent`; `world.cook` warns about cells beyond it). `World.Coordinates` streams, rests
+a body, ray-casts with physics and with the editor's `SceneRaycast` 20 km out. Origin rebasing and double precision are
+wave 5. There is no HLOD (wave 5): distant cells are simply not loaded, and `world.info` reports each layer's streaming
+distance so a game can set its fog or far plane to match.
+
+**The cell map** (`StrataEditor/src/UI/CellMap.h`, the Streaming panel's World section, first while a world streams: the
+running game's `WorldStreamingSystem` streamer while playing, the editor's otherwise). It draws a world's cells as
+squares on the ground plane (+X right, -Z up), one layer or all overlaid (finer cells on top), colored with the theme's
+meanings (unloaded, wanted, loading Sulfur, loaded Ochre, unloading, failed Cinnabar), outlined in the warning color when
+unsaved, with a pin on pinned cells, and the sources as dots with their radius circles and facing; a line under the
+map counts the cells per state. Drag pans, the wheel zooms around the mouse and a double click frames the sources; hovering names a
+cell (state, entities, cooked bodies, error), a click selects it, and its context menu runs `world.loadCells` (Load and
+pin, Unpin) or reveals the cell's scene. Its cells are copied from the streamer only when `WorldStreamingStats::
+StateVersion`, the World asset object or `EditorWorld::GetDirtyVersion` changed, and only while the section is drawn
+(a closed panel copies nothing, `Editor.UI.World`); only the cells in view are drawn, walking the grid squares in view
+or the cells, whichever are fewer, as draw-list rectangles. Its height follows the space left in the panel (4 to 18
+font sizes), so a short bottom dock shows it whole, and a wide, short map frames the sources by the mean of its sides.
+
+**A world in the Hierarchy and the Inspector.** While the edited scene is a world (edit mode), a strip at the top of the
+Hierarchy names the world, counts its loaded, loading and unsaved cells, picks the edit layer (a combo running
+`world.edit {editLayer}`) and leads to the cell map. The Hierarchy's search takes `l:<layer>` (`l:persistent`) and
+`cell:<x>,<z>` (see the hierarchy model in [Editor](#editor)), resolved through `EditorWorld::FindCellKey`, and the
+Inspector's header names the primary selection's cell ("Cell: Props (3, -1)", "Persistent scene"), read through its
+top-level ancestor's sub-scene: O(depth), for that entity only. The viewport's cell bounds (`ViewportSettings::CellBounds`,
+saved, `viewport.setSettings {cellBounds}`, a "Cells" chip while a world is open; `Editor/CellBoundsOverlay.h`, drawn in
+`ViewportRenderer::DrawCellBounds` only while on) outline the cells loading, loaded and unloading around the camera
+(`WorldStreamer::GetActiveCells`: as many as the sources keep, whatever the world's size) as debug lines over the scene,
+at the bottom of their cooked bounds (y = 0 without an index), in the cell map's colors; the squares are worked out again
+only when the streamer's state version or World asset changed.
 
 ## Game UI
 
@@ -2886,6 +3197,10 @@ is the `strata-scripting` skill. The layers:
   project, including `project.templates`, `project.samples`, `project.openSample`, `project.close`, `project.export`,
   `project.exportStatus`, `project.cancelExport` and `project.setExportSettings`),
   `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects`, `editor.removeRecentProject` and `editor.perf`,
+  log, play, selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
+  `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`),
+  `EditorWorldCommands.cpp` (`physics.stats`) and
+  `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel` and `editor.showDialog` (the
   log, selection), `Commands/PlayCommands.cpp` (play), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
   `EditorInputCommands.cpp` (input, including `input.click` and `input.type` for the game UI), `EditorUICommands.cpp`
   (`ui.create`, `ui.layout`, `ui.hitTest`), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`),
@@ -3150,10 +3465,13 @@ is the `strata-scripting` skill. The layers:
 - **Hierarchy model** (`HierarchyView.h`). The hierarchy panel's rows without UI: the visible entities of the active
   scene as a flat depth-first list (`HierarchyRow`: handle, ID, depth, has-children, expanded, match), walked along the
   scene's sibling links into expanded entities only, or, with a filter (`HierarchyFilter`: name words, `c:` component,
-  `t:` tag, all case-insensitive substrings), the matches with their ancestors. `Update` rebuilds only when the scene
+  `t:` tag, all case-insensitive substrings; in a world `l:` layer, `l:persistent` for the persistent scene, and
+  `cell:<x>,<z>`, read from the top-level ancestor's `SubSceneComponent` through the panel's `HierarchyCellResolver`,
+  asked once per cell scene and rebuild), the matches with their ancestors. `Update` rebuilds only when the scene
   (a weak reference, so a new scene at the same address is noticed), its hierarchy version, the expansion or the filter
-  changed, or, while filtering, a name, tag or filtered component did: it connects to those types' signals through
-  `ComponentInfo::Observe` only while a filter is on. An unchanged frame costs about 10 ns and rebuilding 100,000
+  changed, or, while filtering, a name, tag, filtered component or (for cell terms) sub-scene membership did: it
+  connects to those types' signals through `ComponentInfo::Observe` (`SubSceneComponent`'s directly) only while a
+  filter is on. An unchanged frame costs about 10 ns and rebuilding 100,000
   top-level rows about 0.6 ms (`Perf.Editor`). `Reveal` expands an entity's collapsed ancestors and returns its row,
   `GetDropTarget` maps a drop at a fraction of a row's height (top quarter before, bottom quarter after, the middle
   inside) to `entity.setParent`'s parent and final index, and `GetTopmostInHierarchyOrder` orders a selection for
@@ -3626,6 +3944,19 @@ resident MB per pool, evictions), the texture streamer's (`StreamedMB`: bytes re
 `MipLevelsRaised` and `MipLevelsDropped` so far, `MipsBelowWanted`: textures below the level their views need, from
 `AssetManagerStats::Detail`), the frame's steps through the upload queue (`UploadQueueMB`, `UploadQueueMs`,
 `UploadQueueSteps`), the graphics device's memory in use and the upload staging of it (`DeviceMB`, `StagingMB`: with
+the resident pools they tell what render targets and the swapchain take) and the process's private memory with its peak
+so far (`PrivateMB`, `PeakPrivateMB`). Programs add columns of their own after every built-in one through column
+groups (`FramePerfLogSpecification::Columns`: each `FramePerfColumnGroup` names its columns and writes a row's values
+through `FramePerfRow::Add(value, decimals)` and `AddEmpty`, read when the frame is captured, so that a row written
+once its GPU times arrived holds its own frame's values; they follow `GPUFrame` and `GPUBusyMs`; a group that writes
+another number of values than it names fails the log like a write error). StrataRuntime adds the running scene's world
+streaming and physics capacity (`GameRuntime::MakePerfLogColumns`: `WorldCellsWanted`, `WorldCellsLoading`,
+`WorldCellsLoaded`, `WorldCellsUnloading` from `IWorldStreaming`, `PhysicsBodies`, `PhysicsBodiesWaiting` and
+`PhysicsMaxBodies` from `IPhysicsCapacity`; empty while no scene plays), then what its renderer drew
+(`GameRenderer::MakePerfLogColumns`: `DrawCalls`, `Instances`, `Triangles`, `VisibleProxies`, `OccludedProxies`,
+`InstanceUploadMB`, with the GPU-driven path's counts as far as the GPU reported them, `AddGPUCounts`; empty headless),
+and the `World.Streaming` stage has its column
+with the other stages. A log that cannot be written fails the run (exit code 1).
 the resident pools they tell what render targets and the swapchain take), the process's private memory with its peak
 so far (`PrivateMB`, `PeakPrivateMB`) and the GPU: each GPU stage's column (`GPU.Shadows`...), `GPUFrame` (1 when the frame's GPU
 times arrived) and `GPUBusyMs`. A row describes one frame: what the frame left is captured when it ends

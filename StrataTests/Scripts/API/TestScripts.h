@@ -55,6 +55,27 @@ namespace ScriptTests
 		return std::abs(std::abs(glm::dot(a, b)) - 1.0f) <= epsilon;
 	}
 
+	// Points the SDK at another host API table while it lives (restoring the engine's on every path).
+	class ScopedHost
+	{
+	public:
+		explicit ScopedHost(const StrataScriptHostAPI* host)
+			: m_Previous(Strata::Detail::s_Host)
+		{
+			Strata::Detail::s_Host = host;
+		}
+
+		~ScopedHost()
+		{
+			Strata::Detail::s_Host = m_Previous;
+		}
+
+		ScopedHost(const ScopedHost&) = delete;
+		ScopedHost& operator=(const ScopedHost&) = delete;
+	private:
+		const StrataScriptHostAPI* m_Previous;
+	};
+
 	// Base of scripts that verify API behavior: Checks counts the checks, Failure names the first one that failed.
 	class CheckingScript : public Strata::Script
 	{

@@ -16,8 +16,10 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -493,6 +495,36 @@ TEST_SUITE("Core.Platform")
 		CHECK_FALSE(library.Load(Platform::GetExecutableDirectory() / "DoesNotExist.library"));
 		CHECK_FALSE(library.GetLastError().empty());
 		CHECK(DynamicLibrary::GetPlatformFileName("Game").find("Game") != std::string::npos);
+	}
+
+	TEST_CASE("DynamicLibrary refuses a library file cut short and leaves the loader to other threads")
+	{
+		// A build cut short while it was written or copied: its headers and none of the code they describe. The platform's
+		// loader must not read past the end of the file (on Linux that read faults inside the loader and leaves it locked;
+		// see PosixDynamicLibrary.cpp).
+		const std::filesystem::path libraryPath = Platform::GetExecutableDirectory() / STRATA_TEST_LIBRARY_NAME;
+		const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(libraryPath);
+		REQUIRE(bytes.has_value());
+		constexpr size_t c_CutSize = 4096;
+		REQUIRE(bytes->size() > c_CutSize);
+		const std::filesystem::path cut = Tests::CreateTemporaryDirectory("CutLibrary") / FileSystem::FromUTF8(DynamicLibrary::GetPlatformFileName("Cut"));
+		REQUIRE(FileSystem::WriteBytes(cut, std::span<const uint8_t>(bytes->data(), c_CutSize)));
+		DynamicLibrary library;
+		CHECK_FALSE(library.Load(cut));
+		CHECK_FALSE(library.GetLastError().empty());
+		CHECK_FALSE(library.IsLoaded());
+
+		// Another thread loads the whole library: nothing was left holding the loader. (The thread is detached so that a
+		// loader left locked fails the check instead of hanging the test.)
+		auto loaded = std::make_shared<std::promise<bool>>();
+		std::future<bool> result = loaded->get_future();
+		std::thread([loaded, libraryPath]()
+		{
+			DynamicLibrary other;
+			loaded->set_value(other.Load(libraryPath));
+		}).detach();
+		REQUIRE(result.wait_for(std::chrono::seconds(60)) == std::future_status::ready);
+		CHECK(result.get());
 	}
 
 	TEST_CASE("Process captures output and exit codes")

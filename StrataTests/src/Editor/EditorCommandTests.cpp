@@ -270,7 +270,8 @@ TEST_SUITE("Editor.Commands")
 		for (const auto& [key, value] : status.items())
 			keys.push_back(key);
 		CHECK(keys == std::vector<std::string> { "assets", "automation", "brief", "engineCommit", "engineVersion", "errors", "game", "memory",
-			"platform", "play", "project", "recovery", "saving", "scene", "sceneLoad", "selection", "undo" });
+			"platform", "play", "project", "recovery", "saving", "scene", "sceneLoad", "selection", "undo", "world" });
+		CHECK(status["world"].is_null()); // The edited scene is no world
 		CHECK(status["undo"]["position"] == 1);
 		CHECK(status["undo"]["count"] == 1);
 		CHECK(status["selection"]["inspectedAsset"].is_null());

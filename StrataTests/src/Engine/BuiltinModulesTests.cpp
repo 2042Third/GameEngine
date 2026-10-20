@@ -77,7 +77,8 @@ TEST_SUITE("Engine.Modules")
 		CHECK((ComponentRegistry::Find("RigidBody") != nullptr) == ST_WITH_PHYSICS);
 		CHECK((ComponentRegistry::Find("AudioSource") != nullptr) == ST_WITH_AUDIO);
 		CHECK((ComponentRegistry::Find("Animator") != nullptr) == ST_WITH_ANIMATION);
-		for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Texture, AssetType::Mesh, AssetType::Material, AssetType::Font })
+		CHECK(ComponentRegistry::Find("StreamingSource") != nullptr);
+		for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Texture, AssetType::Mesh, AssetType::Material, AssetType::Font, AssetType::World })
 		{
 			CAPTURE(AssetTypeToString(type));
 			CHECK(AssetLoaderRegistry::Find(type) != nullptr);
@@ -88,6 +89,7 @@ TEST_SUITE("Engine.Modules")
 		const std::vector<std::string> systems = GetSystemNames();
 		const auto hasSystem = [&systems](const char* name) { return std::find(systems.begin(), systems.end(), name) != systems.end(); };
 		CHECK(hasSystem("Scripting"));
+		CHECK(hasSystem("World"));
 		CHECK(hasSystem("Physics") == ST_WITH_PHYSICS);
 		CHECK(hasSystem("Audio") == ST_WITH_AUDIO);
 		CHECK(hasSystem("Animation") == ST_WITH_ANIMATION);
@@ -196,10 +198,11 @@ TEST_SUITE("Engine.Modules")
 		INFO("Output: ", result.Output);
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
-		// The loaders and systems of the modules the build has: 11 and five in a full build.
-		const int loaders = 7 + (ST_WITH_AUDIO ? 1 : 0) + (ST_WITH_ANIMATION ? 3 : 0);
+		// The loaders and systems of the modules the build has: 12 and six in a full build.
+		const int loaders = 8 + (ST_WITH_AUDIO ? 1 : 0) + (ST_WITH_ANIMATION ? 3 : 0);
 		std::string systems = " UI Scripting";
 		systems += ST_WITH_ANIMATION ? " Animation" : "";
+		systems += " World";
 		systems += ST_WITH_PHYSICS ? " Physics" : "";
 		systems += ST_WITH_AUDIO ? " Audio" : "";
 		CHECK(result.Output.find("loaders: " + std::to_string(loaders) + ", systems:" + systems + "\n") != std::string::npos);
@@ -220,6 +223,7 @@ TEST_SUITE("Engine.Modules")
 		expected.push_back("Animation");
 #endif
 		expected.push_back("Scripting");
+		expected.push_back("World");
 		expected.push_back("GameUI");
 		CHECK(Engine::GetBuiltinModuleNames() == expected);
 		CHECK(Engine::GetRegisteredModules() == expected);
@@ -235,9 +239,9 @@ TEST_SUITE("Engine.Modules")
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
 		CHECK(result.ExitCode == 0);
-		CHECK(result.Output.find("modules: Scene Renderer Audio Animation Scripting GameUI\n") != std::string::npos);
+		CHECK(result.Output.find("modules: Scene Renderer Audio Animation Scripting World GameUI\n") != std::string::npos);
 		// The others' soft constraints order them as in a full engine.
-		CHECK(result.Output.find("systems: UI Scripting Animation Audio\n") != std::string::npos);
+		CHECK(result.Output.find("systems: UI Scripting Animation World Audio\n") != std::string::npos);
 		// The feature scene's physics components stay unknown components and save back unchanged.
 		const size_t unknown = result.Output.find("unknown components: ");
 		REQUIRE(unknown != std::string::npos);
@@ -275,8 +279,8 @@ TEST_SUITE("Engine.Modules")
 		CHECK(result.Output.find("the Scene module cannot be excluded (every engine has it); it is registered") != std::string::npos);
 		CHECK(result.Output.find("the Renderer module cannot be excluded (every engine has it); it is registered") != std::string::npos);
 		CHECK(result.Output.find("'Teleportation' is no engine module of this build and cannot be excluded") != std::string::npos);
-		CHECK(result.Output.find("modules: Scene Renderer Physics Animation Scripting GameUI\n") != std::string::npos);
-		CHECK(result.Output.find("systems: UI Scripting Animation Physics\n") != std::string::npos);
+		CHECK(result.Output.find("modules: Scene Renderer Physics Animation Scripting World GameUI\n") != std::string::npos);
+		CHECK(result.Output.find("systems: UI Scripting Animation World Physics\n") != std::string::npos);
 	}
 #endif
 
@@ -290,8 +294,8 @@ TEST_SUITE("Engine.Modules")
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
 		CHECK(result.ExitCode == 0);
-		CHECK(result.Output.find("modules: Scene Renderer Physics Audio Animation GameUI\n") != std::string::npos);
-		CHECK(result.Output.find("systems: Animation Physics Audio UI\n") != std::string::npos);
+		CHECK(result.Output.find("modules: Scene Renderer Physics Audio Animation World GameUI\n") != std::string::npos);
+		CHECK(result.Output.find("systems: Animation World Physics Audio UI\n") != std::string::npos);
 	}
 #endif
 
@@ -305,8 +309,8 @@ TEST_SUITE("Engine.Modules")
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
 		CHECK(result.ExitCode == 0);
-		CHECK(result.Output.find("modules: Scene Renderer Physics Audio Animation Scripting\n") != std::string::npos);
-		CHECK(result.Output.find("systems: Scripting Animation Physics Audio\n") != std::string::npos);
+		CHECK(result.Output.find("modules: Scene Renderer Physics Audio Animation Scripting World\n") != std::string::npos);
+		CHECK(result.Output.find("systems: Scripting Animation World Physics Audio\n") != std::string::npos);
 		const size_t unknown = result.Output.find("unknown components: ");
 		REQUIRE(unknown != std::string::npos);
 		const std::string names = result.Output.substr(unknown, result.Output.find('\n', unknown) - unknown);

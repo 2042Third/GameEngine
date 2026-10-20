@@ -1,6 +1,7 @@
 #include "Editor/ViewportRenderer.h"
 
 #include "Editor/EditorContext.h"
+#include "Editor/EditorWorld.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/SceneEdit.h"
 
@@ -11,6 +12,7 @@
 #include <Strata/Renderer/Texture.h>
 #include <Strata/Renderer/TextureStreamer.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/World/WorldStreamingSystem.h>
 
 #include <algorithm>
 #include <unordered_set>
@@ -173,6 +175,8 @@ namespace Strata
 				gizmos.View = gizmoView;
 				DrawSceneGizmos(m_DebugDraw, *scene, gizmos);
 			}
+			if (settings.CellBounds)
+				DrawCellBounds(context, view);
 		}
 		// The debug view tints what is drawn and boxes what cannot be (meshes that are not there).
 		m_StreamingView.Build(*scene, settings.DebugView, view.Camera, m_Renderer->GetLODCriteria(), settings.DebugColors, m_DebugDraw);
@@ -184,6 +188,21 @@ namespace Strata
 		if (rendered)
 			m_RenderedScene = scene;
 		return rendered;
+	}
+
+	void ViewportRenderer::DrawCellBounds(EditorContext& context, const ViewportView& view)
+	{
+		const ViewportSettings& settings = context.GetViewport().GetSettings();
+		if (context.IsPlaying())
+		{
+			const Ref<Scene>& scene = context.GetActiveScene();
+			const WorldStreamingSystem* system = scene && scene->IsRunning() ? scene->GetSystem<WorldStreamingSystem>() : nullptr;
+			if (system && system->GetStreamer())
+				m_CellBounds.Draw(*system->GetStreamer(), view.Camera.Position, 1.0f, settings.DebugColors, m_DebugDraw);
+			return;
+		}
+		if (const EditorWorld* world = context.GetWorld())
+			m_CellBounds.Draw(world->GetStreamer(), view.Camera.Position, world->GetRadiusScale(), settings.DebugColors, m_DebugDraw);
 	}
 
 	uint32_t ViewportRenderer::CountTexturesBelowWanted() const

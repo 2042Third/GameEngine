@@ -267,12 +267,15 @@ namespace Strata
 		// are drawn as icons (their labels in their tooltips).
 		ImGui::PushClipRect(layout.Min, layout.Max, true);
 		ImGui::SetCursorScreenPos(layout.ChipsMin);
+		const float agentWidth = PrepareAgentChip(panelContext);
 		{
-			UI::ChipStrip strip(m_ChipStrip, layout.Max.x - layout.ChipsMin.x);
+			const float agentRoom = agentWidth > 0.0f ? agentWidth + style.ItemSpacing.x * 2.0f : 0.0f;
+			UI::ChipStrip strip(m_ChipStrip, layout.Max.x - layout.ChipsMin.x - agentRoom);
 			DrawChips(context);
 			DrawPreviewChip(panelContext);
 		}
-		DrawAgentChip(panelContext, layout.Max.x - style.ItemSpacing.x, layout.ChipsMin.y);
+		if (agentWidth > 0.0f)
+			DrawAgentChip(panelContext, layout.Max.x - style.ItemSpacing.x, layout.ChipsMin.y, agentWidth);
 		ImGui::PopClipRect();
 		if (rendered && settings.DebugView != ViewportDebugView::None)
 			DrawDebugViewLegend(context);
@@ -379,6 +382,13 @@ namespace Strata
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.Gizmos", Icons::Shapes, "Gizmos", &settings.ShowSceneGizmos, "Light, camera and collider shapes");
 		ImGui::SameLine();
+		// While a world is open: its cells' squares around the camera.
+		if (context.GetWorld())
+		{
+			UI::ToggleChip("Viewport.CellBounds", Icons::Grid2X2, "Cells", &settings.CellBounds,
+				"The squares of the world's cells around the camera: loading (Sulfur), loaded (Ochre) and unloading (gray)");
+			ImGui::SameLine();
+		}
 		DrawStatsChip(settings);
 		// View settings of the Scene view's editor camera: the Game view always looks the way the game will ship.
 		ImGui::SameLine();
@@ -439,15 +449,15 @@ namespace Strata
 			RunEditorCommand(context, panelContext.Commands, "animation.preview", { { "stop", true } });
 	}
 
-	void ViewportPanel::DrawAgentChip(EditorPanelContext& panelContext, float right, float top)
+	float ViewportPanel::PrepareAgentChip(EditorPanelContext& panelContext)
 	{
 		const AutomationActivity& activity = panelContext.Context.GetJournal().GetLatestAutomationActivity();
 		if (activity.Id == 0)
-			return;
+			return 0.0f;
 		const double age = std::chrono::duration<double>(Now() - activity.Finished).count();
 		const bool connected = panelContext.Shell && panelContext.Shell->GetAutomationState().Clients > 0;
 		if (!connected && age >= c_AgentChipSeconds)
-			return;
+			return 0.0f;
 
 		// The text changes once a second at most: it is made again only then.
 		const int64_t seconds = static_cast<int64_t>(age);
@@ -457,7 +467,13 @@ namespace Strata
 			m_AgentChipSeconds = seconds;
 			m_AgentChipText = fmt::format("Agent: {} \xC2\xB7 {}", activity.Command, UI::DescribeSecondsAgo(age));
 		}
-		const float width = UI::ChipWidth(Icons::Bot, m_AgentChipText.c_str());
+		return UI::ChipWidth(Icons::Bot, m_AgentChipText.c_str());
+	}
+
+	void ViewportPanel::DrawAgentChip(EditorPanelContext& panelContext, float right, float top, float width)
+	{
+		const AutomationActivity& activity = panelContext.Context.GetJournal().GetLatestAutomationActivity();
+		const double age = std::chrono::duration<double>(Now() - activity.Finished).count();
 		ImGui::SetCursorScreenPos(ImVec2(right - width, top));
 		const bool clicked = UI::Chip("Viewport.Agent", Icons::Bot, m_AgentChipText.c_str(), nullptr);
 		if (UI::IsTooltipDue())

@@ -4,8 +4,10 @@
 #include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneWorkBudget.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <unordered_map>
 
@@ -41,6 +43,16 @@ namespace Strata
 			return storage && !storage->empty();
 		}
 
+		// Layers collide when both the physics settings and the scene's layer matrix let them.
+		std::array<uint32_t, c_PhysicsLayerCount> CombineLayerMasks(const PhysicsSettings& settings, const Scene& scene)
+		{
+			std::array<uint32_t, c_PhysicsLayerCount> masks;
+			const PhysicsLayerSettings& layers = scene.GetSettings().PhysicsLayers;
+			for (uint32_t layer = 0; layer < c_PhysicsLayerCount; layer++)
+				masks[layer] = settings.LayerCollisionMasks[layer] & layers.CollisionMasks[layer];
+			return masks;
+		}
+
 	}
 
 	PhysicsSystem::PhysicsSystem(Scene& scene)
@@ -51,11 +63,13 @@ namespace Strata
 		m_Scene.RegisterService<IBodyControl>(*this);
 		m_Scene.RegisterService<IPhysicsQueries>(*this);
 		m_Scene.RegisterService<ICharacterControl>(*this);
+		m_Scene.RegisterService<IPhysicsCapacity>(*this);
 	}
 
 	PhysicsSystem::~PhysicsSystem()
 	{
 		OnRuntimeStop();
+		m_Scene.UnregisterService<IPhysicsCapacity>(*this);
 		m_Scene.UnregisterService<ICharacterControl>(*this);
 		m_Scene.UnregisterService<IPhysicsQueries>(*this);
 		m_Scene.UnregisterService<IBodyControl>(*this);
@@ -81,6 +95,16 @@ namespace Strata
 			return;
 
 		m_Running = true;
+		// A loaded scene whose world was prepared before it ran (PrepareLoadedScene): its bodies exist already, and its
+		// signals were connected from the start, so it is exact.
+		if (Scope<PreparedPhysicsWorld> prepared = m_Scene.TakePreparedState<PreparedPhysicsWorld>(); prepared && prepared->World)
+		{
+			while (!prepared->World->BuildSlice(c_PrepareBodiesPerSlice))
+				continue;
+			const PhysicsSettings settings = prepared->World->GetSettings();
+			AdoptWorld(std::move(prepared->World), settings);
+			return;
+		}
 		if (SceneHasPhysicsComponents())
 		{
 			CreateWorld();
@@ -114,6 +138,7 @@ namespace Strata
 		m_CreationConnections.clear();
 		m_WorldRequested = false;
 		m_Running = false;
+		m_ReservedBodies = 0;
 		if (m_World)
 		{
 			// What this world lacked, the scene's next world gets.
@@ -147,6 +172,18 @@ namespace Strata
 		SyncLayers();
 		m_World->Simulate(timestep);
 		DispatchCollisionEvents();
+	}
+
+	PhysicsCapacityInfo PhysicsSystem::GetCapacityInfo() const
+	{
+		return m_World ? m_World->GetCapacityInfo() : PhysicsCapacityInfo();
+	}
+
+	void PhysicsSystem::Reserve(uint32_t bodies)
+	{
+		m_ReservedBodies = bodies;
+		if (m_World)
+			m_World->Reserve(bodies);
 	}
 
 	CollisionListenerID PhysicsSystem::AddCollisionListener(CollisionCallback callback, CollisionListenerScope scope)
@@ -244,11 +281,7 @@ namespace Strata
 
 	std::array<uint32_t, c_PhysicsLayerCount> PhysicsSystem::GetEffectiveLayerMasks() const
 	{
-		std::array<uint32_t, c_PhysicsLayerCount> masks;
-		const PhysicsLayerSettings& layers = m_Scene.GetSettings().PhysicsLayers;
-		for (uint32_t layer = 0; layer < c_PhysicsLayerCount; layer++)
-			masks[layer] = m_Settings.LayerCollisionMasks[layer] & layers.CollisionMasks[layer];
-		return masks;
+		return CombineLayerMasks(m_Settings, m_Scene);
 	}
 
 	void PhysicsSystem::SyncLayers()
@@ -457,11 +490,54 @@ namespace Strata
 		return m_World ? m_World->GetCharacterState(entity) : std::nullopt;
 	}
 
-	bool PhysicsSystem::SceneHasPhysicsComponents() const
+	bool PhysicsSystem::HasPhysicsComponents(const Scene& scene)
 	{
-		const entt::registry& registry = m_Scene.GetRegistry();
+		const entt::registry& registry = scene.GetRegistry();
 		return HasAny<RigidBodyComponent>(registry) || HasAny<BoxColliderComponent>(registry) || HasAny<SphereColliderComponent>(registry)
 			|| HasAny<CapsuleColliderComponent>(registry) || HasAny<MeshColliderComponent>(registry) || HasAny<CharacterControllerComponent>(registry);
+	}
+
+	bool PhysicsSystem::SceneHasPhysicsComponents() const
+	{
+		return HasPhysicsComponents(m_Scene);
+	}
+
+	PhysicsSettings PhysicsSystem::MakeWorldSettings(const Scene& scene, const PhysicsSettings& defaults)
+	{
+		// The scene's capacities win over the defaults; those left automatic are sized by the world, for at least what an
+		// earlier world of this scene needed.
+		PhysicsSettings settings = defaults;
+		const PhysicsCapacitySettings& capacity = scene.GetSettings().PhysicsCapacity;
+		if (capacity.MaxBodies != 0)
+			settings.MaxBodies = capacity.MaxBodies;
+		if (capacity.MaxBodyPairs != 0)
+			settings.MaxBodyPairs = capacity.MaxBodyPairs;
+		if (capacity.MaxContactConstraints != 0)
+			settings.MaxContactConstraints = capacity.MaxContactConstraints;
+		// The scene's layer matrix, as the scene's settings say when the world starts.
+		settings.LayerCollisionMasks = CombineLayerMasks(defaults, scene);
+		return settings;
+	}
+
+	bool PhysicsSystem::PrepareLoadedScene(Scene& scene, SceneWorkBudget& budget)
+	{
+		if (!HasPhysicsComponents(scene))
+			return true;
+		ST_PROFILE_FUNCTION();
+		PreparedPhysicsWorld* prepared = scene.GetPreparedState<PreparedPhysicsWorld>();
+		if (!prepared)
+		{
+			Scope<PreparedPhysicsWorld> state = CreateScope<PreparedPhysicsWorld>();
+			state->World = CreateScope<PhysicsWorld>(scene, MakeWorldSettings(scene, GetDefaultSettings()), GetRememberedCapacityDemand(scene.GetLineageID()),
+				PhysicsBuildMode::Sliced);
+			prepared = &scene.SetPreparedState(std::move(state));
+		}
+		do
+		{
+			if (prepared->World->BuildSlice(c_PrepareBodiesPerSlice))
+				return true;
+		} while (budget.HasTime());
+		return false;
 	}
 
 	void PhysicsSystem::OnPhysicsComponentAdded(entt::registry&, entt::entity)
@@ -472,23 +548,19 @@ namespace Strata
 
 	void PhysicsSystem::CreateWorld()
 	{
+		const PhysicsSettings settings = MakeWorldSettings(m_Scene, m_Settings);
+		AdoptWorld(CreateScope<PhysicsWorld>(m_Scene, settings, GetRememberedCapacityDemand(m_Scene.GetLineageID())), settings);
+	}
+
+	void PhysicsSystem::AdoptWorld(Scope<PhysicsWorld> world, const PhysicsSettings& settings)
+	{
 		m_CreationConnections.clear();
 		m_WorldRequested = false;
-		// The scene's capacities win over the defaults; those left automatic are sized by the world, for at least what an
-		// earlier world of this scene needed.
-		PhysicsSettings settings = m_Settings;
-		const PhysicsCapacitySettings& capacity = m_Scene.GetSettings().PhysicsCapacity;
-		if (capacity.MaxBodies != 0)
-			settings.MaxBodies = capacity.MaxBodies;
-		if (capacity.MaxBodyPairs != 0)
-			settings.MaxBodyPairs = capacity.MaxBodyPairs;
-		if (capacity.MaxContactConstraints != 0)
-			settings.MaxContactConstraints = capacity.MaxContactConstraints;
-		// The scene's layer matrix, as the scene's settings say when the world starts.
-		settings.LayerCollisionMasks = GetEffectiveLayerMasks();
-		m_World = CreateScope<PhysicsWorld>(m_Scene, settings, GetRememberedCapacityDemand(m_Scene.GetLineageID()));
+		m_World = std::move(world);
 		m_AppliedGravity = m_Scene.GetSettings().Gravity;
 		m_AppliedLayerMasks = settings.LayerCollisionMasks;
+		if (m_ReservedBodies > 0)
+			m_World->Reserve(m_ReservedBodies);
 		// Contacts are tracked for the listeners and watches registered so far.
 		UpdateContactTracking();
 		for (const auto& [entity, count] : m_CollisionWatches)

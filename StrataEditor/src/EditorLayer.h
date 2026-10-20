@@ -198,6 +198,8 @@ namespace Strata
 		// The status bar's pills of the frame time and of assets; clicking them opens the Performance and Streaming panels.
 		void DrawFramePill();
 		void DrawAssetsPill();
+		// "N bodies without collision" while the running game's physics world is at its growth limit with bodies waiting.
+		void DrawPhysicsPill();
 		// The status bar's pills of automation and scripts; true when the pill was clicked to show the Console.
 		bool DrawAutomationPill();
 		bool DrawScriptsPill();

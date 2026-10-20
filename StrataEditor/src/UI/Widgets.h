@@ -103,8 +103,10 @@ namespace Strata::UI
 
 	// A search field: a text field with a search icon as its hint and a clear button while it holds text, at the given
 	// width (negative: the available width), with an optional tooltip (e.g. the search syntax). Returns true when the text
-	// changed this frame (also when cleared). The probe records the field under the id.
-	bool SearchField(const char* id, std::string& text, const char* hint = "Search", float width = -1.0f, const char* tooltip = nullptr);
+	// changed this frame (also when cleared). The probe records the field under the id. `reload`: the caller replaced `text`
+	// since the last frame, and a field being typed in shows the new text instead of writing its own back over it.
+	bool SearchField(const char* id, std::string& text, const char* hint = "Search", float width = -1.0f, const char* tooltip = nullptr,
+		bool reload = false);
 
 	// Rows of lists with a selection (tree nodes and selectables, e.g. the Hierarchy's). ImGui draws every hovered row in
 	// ImGuiCol_HeaderHovered, selected or not, and the theme keeps that neutral so that hovering is not mistaken for

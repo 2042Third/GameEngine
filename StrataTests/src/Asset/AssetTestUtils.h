@@ -221,6 +221,17 @@ namespace Strata::Tests
 			m_Condition.notify_all();
 		}
 
+		// Lets at most one more read through: allowances do not add up while no read waits (a test that allows one read per
+		// step sees one read per step however long the steps between the reads take).
+		void AllowOneRead()
+		{
+			{
+				std::scoped_lock<std::mutex> lock(m_Mutex);
+				m_AllowedReads = std::max<uint32_t>(m_AllowedReads, 1);
+			}
+			m_Condition.notify_all();
+		}
+
 		// Waits until this many reads wait at the gate.
 		bool WaitForWaitingReads(uint32_t count, std::chrono::milliseconds timeout = std::chrono::milliseconds(10000))
 		{

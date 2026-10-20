@@ -6,6 +6,7 @@
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Physics/PhysicsSystem.h"
+#include "Strata/Physics/PhysicsWorld.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
@@ -241,14 +242,30 @@ TEST_SUITE("Perf.Physics")
 
 		const PhysicsCapacitySettings largest { PhysicsCapacitySettings::c_MaxBodiesLimit, PhysicsCapacitySettings::c_MaxBodyPairsLimit,
 			PhysicsCapacitySettings::c_MaxContactConstraintsLimit };
+		// PhysicsWorld::EstimateReservedBytes of a world with those capacities (the settings PhysicsSystem gives it).
+		const auto estimateMB = [&](const PhysicsCapacitySettings& capacity)
+		{
+			PhysicsSettings settings = PhysicsSystem::GetDefaultSettings();
+			settings.MaxBodies = capacity.MaxBodies;
+			settings.MaxBodyPairs = capacity.MaxBodyPairs;
+			settings.MaxContactConstraints = capacity.MaxContactConstraints;
+			return static_cast<double>(PhysicsWorld::EstimateReservedBytes(PhysicsWorld::ResolveCapacities(settings, PhysicsWorld::CountBodyCandidates(scene)))) / c_MB;
+		};
 		// What the largest capacities reserve, and the most bodies with the pairs and contacts sized automatically for them:
 		// both budgets are below 1 GiB (1073.7 MB), the physics workstream's acceptance limit.
 		Perf::CheckBudgetsConfirmed({ "Perf.Physics.LargestCapacities.ReservedMemory", "Perf.Physics.MostBodies.ReservedMemory" }, [&]
 		{
 			const uint64_t largestReserved = measureReserved(largest);
 			const uint64_t mostBodiesReserved = measureReserved({ PhysicsCapacitySettings::c_MaxBodiesLimit, 0, 0 });
-			MESSAGE("Reserved for the largest capacities: ", static_cast<double>(largestReserved) / c_MB, " MB; for the most bodies: ",
-				static_cast<double>(mostBodiesReserved) / c_MB, " MB");
+			MESSAGE("Reserved for the largest capacities: ", static_cast<double>(largestReserved) / c_MB, " MB (estimated ", estimateMB(largest),
+				" MB); for the most bodies: ", static_cast<double>(mostBodiesReserved) / c_MB, " MB (estimated ",
+				estimateMB({ PhysicsCapacitySettings::c_MaxBodiesLimit, 0, 0 }), " MB)");
+#if defined(ST_PLATFORM_WINDOWS)
+			// The estimate is of what a world reserves, which is what private bytes count on Windows (the commit charge); other
+			// systems count only the pages touched so far.
+			CHECK(static_cast<double>(largestReserved) / c_MB == doctest::Approx(estimateMB(largest)).epsilon(0.15));
+			CHECK(static_cast<double>(mostBodiesReserved) / c_MB == doctest::Approx(estimateMB({ PhysicsCapacitySettings::c_MaxBodiesLimit, 0, 0 })).epsilon(0.15));
+#endif
 			return Perf::MetricValues { { "Perf.Physics.LargestCapacities.ReservedMemory", static_cast<double>(largestReserved) / c_MB },
 				{ "Perf.Physics.MostBodies.ReservedMemory", static_cast<double>(mostBodiesReserved) / c_MB } };
 		});
@@ -306,6 +323,100 @@ TEST_SUITE("Perf.Physics")
 			scene.OnRuntimeStop();
 			return step.MedianMs;
 		});
+	}
+
+	TEST_CASE("Growing a world of 65,536 bodies to 131,072")
+	{
+		// A full world (90% static bodies, 10% dynamic ones awake) grows: every body moves into a Jolt system twice the size,
+		// keeping its ID and state (PhysicsWorld, "Capacities"). The growth's own time (PhysicsStats::LastGrowthMs), the
+		// median of 5 fresh worlds: a growth happens once per world, so each sample needs a world of its own.
+		Perf::ScopedApplicationJobSystem jobs;
+		constexpr uint32_t c_Bodies = 65'536;
+		Scene scene("Grow65k");
+		scene.GetSettings().Gravity = glm::vec3(0.0f);
+		scene.GetSettings().PhysicsCapacity.MaxBodies = c_Bodies;
+		for (uint32_t index = 0; index < c_Bodies; index++)
+		{
+			const glm::vec3 position(static_cast<float>(index % 256) * 3.0f, 0.0f, static_cast<float>(index / 256) * 3.0f);
+			if (index % 10 == 0)
+				CreateDynamicBox(scene, "Dynamic", position + glm::vec3(0.0f, 5.0f, 0.0f));
+			else
+				CreateStaticBox(scene, "Static", position, glm::vec3(0.5f));
+		}
+
+		Perf::CheckBudgetConfirmed("Perf.Physics.Grow65kMigration", [&]
+		{
+			constexpr uint32_t c_Warmup = 1;
+			constexpr uint32_t c_Samples = 5;
+			std::vector<double> samples;
+			for (uint32_t round = 0; round < c_Warmup + c_Samples; round++)
+			{
+				scene.OnRuntimeStart();
+				PhysicsWorld* world = GetPhysics(scene).GetWorld();
+				REQUIRE(world != nullptr);
+				REQUIRE(world->GetStats().BodyCount == c_Bodies);
+				world->Reserve(c_Bodies + 1);
+				REQUIRE(world->Grow());
+				const PhysicsStats stats = world->GetStats();
+				CHECK(stats.MaxBodies == 2 * c_Bodies);
+				CHECK(stats.BodyCount == c_Bodies);
+				if (round >= c_Warmup)
+					samples.push_back(stats.LastGrowthMs);
+				scene.OnRuntimeStop();
+			}
+			const Perf::Measurement growth = Perf::Summarize(samples);
+			MESSAGE("Growing 65,536 bodies to 131,072: median ", growth.MedianMs, " ms, max ", growth.MaxMs, " ms");
+			return growth.MedianMs;
+		});
+	}
+
+	TEST_CASE("Creating 100,000 static bodies in one update")
+	{
+		// The play start of the scale audit's 1M world built 100,000 static bodies in one frame on the main thread. Here a
+		// running scene gets 100,000 static boxes at once (a world's ground, a streamed region) and the next physics call
+		// builds their bodies, on the job threads (PhysicsWorld, parallel creation). Only that call is timed; the boxes go
+		// again before the next round. The median of 5 rounds.
+		Perf::ScopedApplicationJobSystem jobs;
+		constexpr uint32_t c_Bodies = 100'000;
+		Scene scene("Create100k");
+		scene.GetSettings().PhysicsCapacity.MaxBodies = 262'144; // Room for all of them: the build, not a growth, is measured
+		CreateGround(scene);
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		scene.OnUpdateRuntime(c_FrameTimestep);
+
+		Perf::CheckBudgetConfirmed("Perf.Physics.Create100kStaticBodies", [&]
+		{
+			constexpr uint32_t c_Warmup = 1;
+			constexpr uint32_t c_Rounds = 5;
+			std::vector<double> samples;
+			for (uint32_t round = 0; round < c_Warmup + c_Rounds; round++)
+			{
+				std::vector<Entity> boxes;
+				boxes.reserve(c_Bodies);
+				for (uint32_t index = 0; index < c_Bodies; index++)
+				{
+					const glm::vec3 position(static_cast<float>(index % 316) * 2.0f, 0.5f, static_cast<float>(index / 316) * 2.0f);
+					boxes.push_back(CreateStaticBox(scene, "Static", position, glm::vec3(0.5f)));
+				}
+
+				const Clock::time_point start = Clock::now();
+				const bool built = physics.HasBody(boxes.back());
+				const double elapsed = MillisecondsSince(start);
+				CHECK(built);
+				CHECK(physics.GetStats().StaticBodyCount == c_Bodies + 1);
+				if (round >= c_Warmup)
+					samples.push_back(elapsed);
+
+				scene.DestroyEntities(boxes);
+				scene.OnUpdateRuntime(c_FrameTimestep);
+				CHECK(physics.GetStats().StaticBodyCount == 1);
+			}
+			const Perf::Measurement creation = Perf::Summarize(samples);
+			MESSAGE("Creating 100,000 static bodies: median ", creation.MedianMs, " ms, max ", creation.MaxMs, " ms");
+			return creation.MedianMs;
+		});
+		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Creating 10,000 bodies in one frame")

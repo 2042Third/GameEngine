@@ -25,11 +25,12 @@
 // (Simulate has no audio). So the Scripting and Audio modules use physics and audio through the Scene layer and never
 // include each other's headers (the layers of StrataTests/Architecture/Layers.json).
 //
-// The built-in providers: PhysicsSystem offers ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries and
-// ICharacterControl; AudioSystem offers IAudioPlayback; the Animation module's system offers ISkinningPoses, IAnimatorControl and
-// IAnimationEventSource (the editor's pose preview provides ISkinningPoses for edited scenes, where no system runs); the
-// GameUI module's system offers IUIEvents and IUIControl. All services are main thread only, like the scene.
-// IAudioOutput, defined here too, is an engine service (Core/EngineServices.h): it belongs to the process, not to a scene.
+// The built-in providers: PhysicsSystem offers ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries,
+// ICharacterControl and IPhysicsCapacity; AudioSystem offers IAudioPlayback; the World module's system offers
+// IWorldStreaming; the Animation module's system offers ISkinningPoses, IAnimatorControl and IAnimationEventSource (the
+// editor's pose preview provides ISkinningPoses for edited scenes, where no system runs); the GameUI module's system offers
+// IUIEvents and IUIControl. All services are main thread only, like the scene. IAudioOutput, defined here too, is an
+// engine service (Core/EngineServices.h): it belongs to the process, not to a scene.
 namespace Strata
 {
 
@@ -372,6 +373,86 @@ namespace Strata
 
 		virtual AnimationEventListenerID AddAnimationEventListener(AnimationEventCallback callback) = 0;
 		virtual bool RemoveAnimationEventListener(AnimationEventListenerID id) = 0;
+	};
+
+	//////////////////////////////////////////////////////////////////////////
+	// Physics capacity
+	//////////////////////////////////////////////////////////////////////////
+
+	// What a running scene's physics world holds and has room for (IPhysicsCapacity). Bodies count the body slots in use:
+	// every body of the world, also those of inactive entities, and character controllers' presence bodies.
+	struct PhysicsCapacityInfo
+	{
+		uint32_t Bodies = 0;
+		uint32_t MaxBodies = 0;          // The capacity now (it grows, see PhysicsWorld); 0 while the scene has no physics world
+		uint32_t WaitingForSlot = 0;     // Entities waiting for a body slot: a world at its growth limit, or before its growth
+		uint32_t PendingOther = 0;       // Entities waiting for a body for other reasons (a mesh loading, a degenerate transform)
+		uint32_t AddedLastUpdate = 0;    // Bodies built (or rebuilt) during the scene's last update
+		uint32_t RemovedLastUpdate = 0;  // Bodies destroyed during it
+		uint32_t GrowthCount = 0;        // Growths of the world since it was created
+		float LastGrowthMs = 0.0f;
+		uint64_t ReservedBytes = 0;      // What the world's capacities reserve (PhysicsWorld::EstimateReservedBytes)
+	};
+
+	// The capacity of a running scene's physics world (PhysicsSystem), for code that may not include the Physics module: the
+	// world streamer reserves room for the cells it is about to load, the editor shows it and games log it. Cheap: no work
+	// grows with the bodies.
+	class IPhysicsCapacity
+	{
+	public:
+		virtual ~IPhysicsCapacity() = default;
+
+		virtual PhysicsCapacityInfo GetCapacityInfo() const = 0;
+		// Asks for room for `bodies` bodies in all: a world with less grows before its next step (see PhysicsWorld::Reserve).
+		// The latest call counts; 0 reserves nothing.
+		virtual void Reserve(uint32_t bodies) = 0;
+	};
+
+	//////////////////////////////////////////////////////////////////////////
+	// World streaming
+	//////////////////////////////////////////////////////////////////////////
+
+	// What a world's streaming does (WorldStreamer::GetStats, IWorldStreaming): cells by state, the loads and unloads it
+	// started, and the entities the cells' slices created and destroyed in the scene's last update.
+	struct WorldStreamingStats
+	{
+		uint32_t CellsWanted = 0;    // Cells within a source's radius (or pinned)
+		uint32_t CellsLoading = 0;   // Cells whose scene loads or whose entities are being created
+		uint32_t CellsLoaded = 0;
+		uint32_t CellsUnloading = 0;
+		uint32_t CellsPinned = 0;
+		uint32_t CellsFailed = 0;    // Cells whose load failed, not retried until their scene changes
+		uint64_t LoadsStarted = 0;   // Since streaming started
+		uint64_t UnloadsStarted = 0;
+		uint32_t EntitiesCreatedLastUpdate = 0;
+		uint32_t EntitiesDestroyedLastUpdate = 0;
+		uint32_t EvaluatedCells = 0; // Cells the last update looked at: 0 while nothing moved or changed
+		uint64_t StateVersion = 0;   // Changes whenever a cell's state does (a cell map rebuilds when it changed)
+	};
+
+	// The streaming of the world a running scene is the persistent scene of (the World module's system), for code that may
+	// not include the World module: scripts prefetch cells before a teleport, games toggle layers, the editor and the perf
+	// log show the streaming. Main thread.
+	class IWorldStreaming
+	{
+	public:
+		virtual ~IWorldStreaming() = default;
+
+		// Streams the cells within `radius` of `position` on every enabled layer, at priority 100 (before the sources'), until
+		// released or the scene stops: a request ID, 0 when the position or radius is no finite number (radius >= 0).
+		virtual uint64_t RequestCellsAround(const glm::vec3& position, float radius) = 0;
+		// False for an unknown or released request.
+		virtual bool ReleaseCells(uint64_t request) = 0;
+		// Whether every existing cell of every enabled layer within `radius` of `position` is loaded.
+		virtual bool IsLoadedAround(const glm::vec3& position, float radius) const = 0;
+		// Layers by name (WorldLayer::Name), starting from their EnabledByDefault: a disabled layer's cells unload. False, and
+		// nullopt, for a name the world does not have.
+		virtual bool SetLayerEnabled(std::string_view layer, bool enabled) = 0;
+		virtual std::optional<bool> IsLayerEnabled(std::string_view layer) const = 0;
+		virtual WorldStreamingStats GetStats() const = 0;
+		// Whether the scene streams a world: its first active World component names a World asset. The service exists in every
+		// running scene of an engine with the World module; the calls above fail in one that streams none.
+		virtual bool IsStreaming() const = 0;
 	};
 
 	//////////////////////////////////////////////////////////////////////////

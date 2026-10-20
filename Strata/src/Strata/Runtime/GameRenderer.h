@@ -2,6 +2,7 @@
 
 #include "Strata/Core/Base.h"
 #include "Strata/Renderer/SceneRenderer.h"
+#include "Strata/Runtime/FramePerfLog.h"
 #include "Strata/Scene/Entity.h"
 
 #include <glm/glm.hpp>
@@ -36,6 +37,13 @@ namespace Strata
 		// Renders a frame of plain black into `target`: what a game shows while it has no scene yet (its start scene loads
 		// and it has no loading scene). False under the conditions of Render.
 		bool RenderEmpty(nvrhi::IFramebuffer* target, const glm::uvec2& size);
+
+		// The perf log's Render columns (StrataRuntime --perf-log): what the renderer's latest frame drew, the GPU-driven path's
+		// counts as far as the GPU reported them (AddGPUCounts, usually two or three frames older): DrawCalls, Instances,
+		// Triangles, VisibleProxies, OccludedProxies and InstanceUploadMB (instance data, draw lists and the GPU scene's proxy
+		// records uploaded, MB of 2^20 bytes). Empty fields without a renderer (null: a headless game) or before it rendered a frame. The renderer outlives
+		// the log.
+		static FramePerfColumnGroup MakePerfLogColumns(const GameRenderer* renderer);
 
 		// Whether the last frame showed the missing-camera message.
 		bool IsShowingMessage() const { return m_ShowingMessage; }

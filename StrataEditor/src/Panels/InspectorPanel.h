@@ -76,6 +76,8 @@ namespace Strata
 
 		void DrawSelection(EditorPanelContext& panelContext);
 		void DrawHeader(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
+		// The world cell (or the persistent scene) the entity belongs to, while the edited scene is a world.
+		static void DrawCellLine(EditorContext& context, const Scene& scene, Entity entity);
 		// Under the header for an entity of a prefab instance: the prefab (a click inspects it), Select (the instance's root),
 		// Open (the prefab in the Asset tab and the Content Browser) and the Overrides menu (Apply All, Revert All, each
 		// override).
@@ -132,6 +134,7 @@ namespace Strata
 		struct StreamingSummary
 		{
 			uint32_t MaxEntitiesInstantiatedPerFrame = 0;
+			uint32_t MaxEntitiesDestroyedPerFrame = 0;
 			std::string Text;
 		};
 		std::optional<StreamingSummary> m_StreamingSummary;

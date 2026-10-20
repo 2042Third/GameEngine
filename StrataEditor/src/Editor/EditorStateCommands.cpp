@@ -1,6 +1,7 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorWorld.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneRecovery.h"
 #include "Editor/ViewportRenderer.h"
@@ -540,7 +541,8 @@ namespace Strata
 		registry.Register(MayDefer({ "scene.recover",
 			"Applies or discards recovery data (scene.recoveryStatus). apply: opens the scene the changes were made to in the background as "
 			"scene.open does (a scene never saved: a new scene of its name) and, once it is in, turns it into what the edits left, as one undo "
-			"step back to the saved scene; the scene stays modified (save it to keep the changes). It refuses when the scene file changed since "
+			"step back to the saved scene (a world's changes wait until the cells they name are loaded, and go back into them); the scene stays "
+			"modified (save it to keep the changes). It refuses when the scene file changed since "
 			"the changes were made (applicable false), while playing, while a scene is being opened (scene.loadStatus), and while the edited "
 			"scene has unsaved changes it would discard unless force is true; it waits for saves in flight (scene.save) first. discard: moves "
 			"the data to "
@@ -572,6 +574,7 @@ namespace Strata
 					bool Begun = false;
 					uint64_t SceneLoad = 0;
 					bool Discarded = false;
+					std::optional<std::vector<AssetHandle>> Cells; // A world's: the cells the changes name, once the scene is in
 				};
 				auto progress = std::make_shared<Progress>();
 				return EditorCommandResult::Defer([reference, action, force, progress](EditorContext& context) -> std::optional<EditorCommandResult>
@@ -604,6 +607,21 @@ namespace Strata
 								return EditorCommandResult::Fail(status.Error, EditorCommandError::Cancelled);
 							if (status.State == SceneLoadState::Failed)
 								return EditorCommandResult::Fail(status.Error);
+						}
+						// A world's changes go back into its cells: the cells they name load first.
+						if (EditorWorld* world = context.GetWorld())
+						{
+							if (!progress->Cells)
+								progress->Cells = EditorWorld::CollectCells(data.Steps);
+							switch (world->PrepareRecoveredCells(*progress->Cells, data.Steps, &error))
+							{
+								case EditorWorld::RecoveredCells::Loading:
+									return std::nullopt;
+								case EditorWorld::RecoveredCells::Failed:
+									return EditorCommandResult::Fail(error);
+								case EditorWorld::RecoveredCells::Ready:
+									break;
+							}
 						}
 						size_t applied = 0;
 						if (!context.ApplyRecovery(data, &applied, &error))
@@ -674,10 +692,12 @@ namespace Strata
 			"workingSetMB and their peaks) and the sections of editor parts: automation (port, clients, connectedClients with the names agents "
 			"gave, pending requests and commands), assets (memory and budgets per pool, streaming queue, uploads; see asset.stats), game (the "
 			"running game's window requests, cursor and save directory), recovery (the edited scene's journal of unsaved changes and how many "
-			"recovery entries apply; see scene.recoveryStatus) and editor (window, frame rate, GPU). sections: [\"all\"] returns everything.",
+			"recovery entries apply; see scene.recoveryStatus), world (the open world: {name, cellsLoaded, cellsLoading, cellsDirty, "
+			"persistentDirty}, null when the edited scene is no world; see world.status) and editor (window, frame rate, GPU). sections: "
+			"[\"all\"] returns everything.",
 			ObjectSchema({ { "sections", { { "type", "array" }, { "items", { { "type", "string" } } }, { "uniqueItems", true },
 				{ "description", "Sections to add to the compact answer: engine, project, selection, undo, sceneLoad, memory, automation, assets, "
-					"game, recovery, editor, or all" } } } }),
+					"game, recovery, world, editor, or all" } } } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);

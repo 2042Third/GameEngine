@@ -15,27 +15,6 @@ namespace
 
 	constexpr float c_NaN = std::numeric_limits<float>::quiet_NaN();
 
-	// Points the SDK at another host API table while it lives (restoring the engine's on every path).
-	class ScopedHost
-	{
-	public:
-		explicit ScopedHost(const StrataScriptHostAPI* host)
-			: m_Previous(Detail::s_Host)
-		{
-			Detail::s_Host = host;
-		}
-
-		~ScopedHost()
-		{
-			Detail::s_Host = m_Previous;
-		}
-
-		ScopedHost(const ScopedHost&) = delete;
-		ScopedHost& operator=(const ScopedHost&) = delete;
-	private:
-		const StrataScriptHostAPI* m_Previous;
-	};
-
 }
 
 // Walks, jumps and teleports "Hero" through the SDK over the fixed steps of two seconds (at 60 steps per second).

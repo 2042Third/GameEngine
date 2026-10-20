@@ -104,8 +104,8 @@ TEST_SUITE("GPU.SceneRenderer.CameraRelative")
 			for (const float distance : { 20'000.0f, 100'000.0f })
 			{
 				CAPTURE(distance);
-				const ReadbackImage far = RenderAt(glm::vec3(distance, 0.0f, distance), sphere, ground, mode);
-				const double share = MatchingShare(origin, far, 2);
+				const ReadbackImage farImage = RenderAt(glm::vec3(distance, 0.0f, distance), sphere, ground, mode);
+				const double share = MatchingShare(origin, farImage, 2);
 				MESSAGE(distance, " units away: ", share * 100.0, "% of the pixels within 2/255");
 				CHECK(share >= 0.999);
 			}

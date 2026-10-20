@@ -51,6 +51,7 @@ namespace Strata
 		RegisterInputCommands(*this);
 		RegisterStreamingCommands(*this);
 		RegisterAnimationCommands(*this);
+		RegisterWorldCommands(*this);
 		RegisterAudioCommands(*this);
 		RegisterUICommands(*this);
 		RegisterUIInputCommands(*this);

@@ -373,6 +373,13 @@ Open items and deferrals later waves own:
   are wave 5's. Additive loads have no prototype form yet (`SceneLoadOptions::PrepareAs`,
   `SceneLoadRequest::TakePrototype`): cells and sub-scenes load through `SceneLoader` or `SceneDocumentReader` with
   `EntityPrototypeBuilder`. Prefab and asset-editor saves stay synchronous.
+- World partition (wave 4's `world-partition`): `PhysicsSettings::GrowthLimit` has no scene or project setting, so the
+  "bodies without collision" pill appears only in tests; a world's save writes its World document in a second request
+  once the cells' stamps exist, so a crash between the two leaves new cells unlisted (the scene is marked saved, and the
+  recovery journal rebased, only after the second, so the journal keeps their edits and the next save lists them); the
+  running game's cells are summed up in `play.state` and `editor.status` (`running.world`), never listed.
+- Tests: `Strata::Tests::ScopedJobSystem` is defined twice (`Asset/AssetTestUtils.h` and `Physics/PhysicsTestUtils.h`,
+  with different constructors), so a test file cannot include both.
 - Tests that start the CLI's fake editor set its environment variables in the test process (`CLI.Discovery`,
   `CLI.Application`, `CLI.Mcp`), against the testing rule: `ProcessSpecification` has no environment of its own, and
   the launcher finds the session of the process it started by its ID, so a wrapper process cannot set it.
@@ -388,11 +395,9 @@ Open items and deferrals later waves own:
 - Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
   `GameRuntime`, the editor and many tests use the script engine directly; physics, audio and animation can be left
   out (`STRATA_WITH_PHYSICS`, `STRATA_WITH_AUDIO`, `STRATA_WITH_ANIMATION`, wave 4's `engine-modules`).
-- Physics: what an overflowing world needed is remembered per scene for the process, not saved with the scene;
-  automatic capacities reserve Jolt's buffers generously (70,000 bodies reserve about a million body pairs), and a world
-  at the largest capacities still reserves about 940 MiB at play start; dynamic bodies below other dynamic bodies are
-  still written back one by one; a collider built from a mesh that is reimported while evicted keeps the old data until
-  the mesh loads again (the source revisions render-scene uses would tell).
+- Physics: dynamic bodies below other dynamic bodies are still written back one by one; a collider built from a mesh
+  that is reimported while evicted keeps the old data until the mesh loads again (the source revisions render-scene uses
+  would tell).
 - Textures: HDR textures stay RGBA16F until a BC6H encoder exists.
 - Two caches keep assets between frames: `SceneRenderer`'s environment
   cache (the sky's map) and `TextRenderer`'s glyph atlases (their fonts). Streaming the stress world from pack version 2
@@ -577,6 +582,12 @@ Open items and deferrals later waves own:
     a Metal draw); `Render10kMaterials` measured 1.15 times the step-0 base on the Mac (0.844 against 0.737 ms, 7
     pairs), with the GPU busy 2.3-2.5 ms a frame; the `drawIndirectCount`, min/max sampler and device-minimum
     `maxDrawIndirectCount` paths are chosen by device features but run only on drivers that have them.
+  - Wave 4's `world-partition`: its metrics are provisional (Mac: `Perf.World.CellUnloadMaxFrame` 2.6-2.7 ms against
+    4 ms, `CellDriveMaxFrame` 2.65-5.5 ms and `PerfGPU.World.CellDriveMaxFrame` 9.5 ms against 8 ms,
+    `Perf.World.DrivePeakPrivate` 280 MB against 2,048 MB, `DriveFrameP95` 4.2 ms, `Perf.Physics.Create100kStaticBodies`
+    29.1 ms against 25 ms, `PerfGPU.Editor.PlayStartWorldMaxFrame` 37-61 ms against 50 ms); the editor-frame
+    no-regression A/Bs (`PerfGPU.Editor.{Edit,Play}FrameNested{100k,1M}`, `SceneOpen*`) cannot be judged on the Mac,
+    and `Perf.Physics.Boxes30kTracked.StrataStepTime` measured 1.022 times the step-0 base (36 pairs).
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
 

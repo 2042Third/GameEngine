@@ -12,6 +12,7 @@
 #include "Strata/Physics/PhysicsLayers.h"
 #include "Strata/Physics/PhysicsMeshShapes.h"
 #include "Strata/Physics/PhysicsRuntime.h"
+#include "Strata/Physics/PhysicsStateBuffer.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneHierarchy.h"
@@ -38,13 +39,19 @@
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Constraints/ContactConstraintManager.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/StateRecorder.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
+#include <cmath>
 #include <cstring>
+#include <deque>
+#include <functional>
 #include <map>
+#include <memory>
+#include <optional>
 #include <set>
 #include <span>
 #include <utility>
@@ -107,6 +114,13 @@ namespace Strata
 		constexpr uint64_t c_TempBytesPerBody = 32;
 		// Per contact constraint: the constraint itself, its offset, its island links and their validation.
 		constexpr uint64_t c_TempBytesPerContactConstraint = JPH::ContactConstraintManager::cMaxConstraintSize + 4 * sizeof(uint32_t);
+		// What Jolt reserves per capacity besides the scratch memory (see PhysicsWorld::EstimateReservedBytes): fitted to the
+		// reference machine's commit charge of worlds at the most bodies and at the largest capacities (555 and 984 MB), which
+		// cost about 80 bytes per body, 90 per body pair and 835 per contact constraint with their automatic scratch memory.
+		constexpr uint64_t c_ReservedBytesPerBody = 80 - c_TempBytesPerBody;
+		constexpr uint64_t c_ReservedBytesPerBodyPair = 90;
+		static_assert(c_TempBytesPerContactConstraint < 835, "Jolt's contact constraints grew: fit the reserved bytes per contact constraint again");
+		constexpr uint64_t c_ReservedBytesPerContactConstraint = 835 - c_TempBytesPerContactConstraint;
 		static_assert(PhysicsCapacitySettings::c_MaxBodiesLimit <= JPH::PhysicsSystem::cMaxBodiesLimit, "Scene capacities exceed Jolt's body limit");
 		static_assert(PhysicsCapacitySettings::c_MaxBodyPairsLimit <= JPH::PhysicsSystem::cMaxBodyPairsLimit, "Scene capacities exceed Jolt's body pair limit");
 		static_assert(PhysicsCapacitySettings::c_MaxContactConstraintsLimit <= JPH::PhysicsSystem::cMaxContactConstraintsLimit,
@@ -142,7 +156,8 @@ namespace Strata
 			InvalidColliders,    // Every collider has invalid data; waits for a component change
 			DegenerateTransform, // Retried when a transform change is signaled (on the entity or an ancestor)
 			MissingMesh,         // Retried when the mesh provider reports new data or a shape finished cooking
-			BodyLimit            // Retried every step while the world is full
+			WaitingForSlot,      // The world is full: queued in PhysicsWorldData::SlotWaiters, retried when a slot frees or the world grows
+			Count
 		};
 
 		//////////////////////////////////////////////////////////////////////////
@@ -332,6 +347,13 @@ namespace Strata
 					return false;
 			}
 			return true;
+		}
+
+		// Whether an entity has no children.
+		bool IsLeaf(Entity entity)
+		{
+			const RelationshipComponent* relationship = entity.TryGetComponent<RelationshipComponent>();
+			return !relationship || relationship->Children.empty();
 		}
 
 		// Visits root and its descendants depth first, parents before children. The visitor returns whether to descend into
@@ -578,6 +600,12 @@ namespace Strata
 				m_BodyInterest.assign(bodyCapacity, 0);
 			}
 
+			// Main thread, between steps: a world that grew has more body indices; the interest of the existing ones stays.
+			void Grow(uint32_t bodyCapacity)
+			{
+				m_BodyInterest.resize(std::max<size_t>(m_BodyInterest.size(), bodyCapacity), 0);
+			}
+
 			void SetTrackAll(bool trackAll) { m_TrackAll = trackAll; }
 			bool IsTrackingAll() const { return m_TrackAll; }
 			void SetBodyInterest(const JPH::BodyID& body, bool interested)
@@ -749,11 +777,15 @@ namespace Strata
 			// Created and counted as part of the simulation, but waiting for the batch that adds the bodies of this round of
 			// changes to Jolt (see FlushBodyBatches); only ApplyChanges sees such records.
 			bool AddPending = false;
+			// Out of the simulation, but still in Jolt's broad phase until the batch of this round removes it
+			// (PhysicsWorldData::PendingDeactivations); a body that joins the simulation again meanwhile just stays.
+			bool RemovalPending = false;
 			bool Suspended = false;                         // Out of the simulation because the world transform is degenerate
 			bool WaitsForParent = false;                    // Not built because the parent cannot be inverted (dynamic bodies)
 			bool KinematicMoving = false;                   // MoveKinematic gave the body a velocity during the last step
 			bool TransformDirty = false;                    // A signaled transform change to apply at the next step
 			bool Polled = false;                            // Listed in PhysicsWorldData::PolledBodies
+			uint64_t SlotTicket = 0;                        // Its entry in PhysicsWorldData::SlotWaiters while it waits for a slot
 			uint64_t WriteBackPass = 0;                     // Last write-back pass that wrote this body
 			uint64_t SyncPass = 0;                          // Last step whose synchronization handled this record
 			glm::vec3 ShapeScale = glm::vec3(1.0f);         // World scale baked into the shape
@@ -778,6 +810,13 @@ namespace Strata
 		{
 			JPH::uint32 Body = JPH::BodyID::cInvalidBodyID;
 			entt::entity Entity = entt::null;
+			BodyRecord* Record = nullptr;
+		};
+
+		// An entry of PhysicsWorldData::RecordIndex: the entity recorded at an index (its version included) and its record.
+		struct RecordSlot
+		{
+			entt::entity Handle = entt::null;
 			BodyRecord* Record = nullptr;
 		};
 
@@ -848,14 +887,24 @@ namespace Strata
 			JPH::RefConst<JPH::Shape> Shape;
 		};
 
-		// Entities whose changes are applied by the next ApplyPendingChanges, in the order they were recorded.
+		// Entities whose changes are applied by the next ApplyPendingChanges, in the order they were recorded, each once.
+		// Membership is a slot per entity index holding the entity recorded there (a cell's unload records tens of thousands
+		// at once, where a hash set's inserts and clearing cost milliseconds); an index reused by a new entity in the same
+		// batch takes the slot over, so both are recorded.
 		class ChangeList
 		{
 		public:
 			void Add(entt::entity handle)
 			{
-				if (m_Set.insert(handle).second)
-					m_List.push_back(handle);
+				if (handle == entt::null)
+					return;
+				const size_t index = static_cast<size_t>(entt::to_entity(handle));
+				if (index >= m_Recorded.size())
+					m_Recorded.resize(std::max(index + 1, m_Recorded.size() * 2), entt::null);
+				if (m_Recorded[index] == handle)
+					return;
+				m_Recorded[index] = handle;
+				m_List.push_back(handle);
 			}
 
 			bool IsEmpty() const { return m_List.empty(); }
@@ -864,20 +913,26 @@ namespace Strata
 			// changes, so applying changes does not allocate once the buffers have grown.
 			const std::vector<entt::entity>& TakeInto(std::vector<entt::entity>& list)
 			{
+				ForgetRecorded();
 				list.clear();
 				m_List.swap(list);
-				m_Set.clear();
 				return list;
 			}
 
 			void Clear()
 			{
+				ForgetRecorded();
 				m_List.clear();
-				m_Set.clear();
 			}
 		private:
+			void ForgetRecorded()
+			{
+				for (const entt::entity handle : m_List)
+					m_Recorded[static_cast<size_t>(entt::to_entity(handle))] = entt::null;
+			}
+
 			std::vector<entt::entity> m_List;
-			std::unordered_set<entt::entity> m_Set;
+			std::vector<entt::entity> m_Recorded; // By entity index: the entity recorded there, or null
 		};
 
 		struct MeshProviderStorage
@@ -912,35 +967,6 @@ namespace Strata
 			return result;
 		}
 
-		// The entities that may own a body when the world is created: those with a RigidBody, and collider entities without
-		// one (colliders merged into an ancestor's body count too, so this is an upper bound). Linear, without allocating.
-		uint32_t CountBodyCandidates(const Scene& scene)
-		{
-			const entt::registry& registry = scene.GetRegistry();
-			uint64_t count = 0;
-			if (const auto* rigidBodies = registry.storage<RigidBodyComponent>())
-				count += rigidBodies->size();
-			const auto countColliders = [&]<typename Collider, typename... Earlier>()
-			{
-				const auto* colliders = registry.storage<Collider>();
-				if (!colliders)
-					return;
-				for (const entt::entity handle : static_cast<const entt::sparse_set&>(*colliders))
-				{
-					// Entities with several colliders count once (with the first collider type they have).
-					if (!registry.any_of<RigidBodyComponent, Earlier...>(handle))
-						count++;
-				}
-			};
-			countColliders.template operator()<BoxColliderComponent>();
-			countColliders.template operator()<SphereColliderComponent, BoxColliderComponent>();
-			countColliders.template operator()<CapsuleColliderComponent, BoxColliderComponent, SphereColliderComponent>();
-			countColliders.template operator()<MeshColliderComponent, BoxColliderComponent, SphereColliderComponent, CapsuleColliderComponent>();
-			// Character controllers have presence bodies.
-			count += CharacterControllerSet::CountCandidates(scene);
-			return static_cast<uint32_t>(std::min<uint64_t>(count, UINT32_MAX));
-		}
-
 	}
 
 	struct PhysicsWorldData
@@ -969,7 +995,18 @@ namespace Strata
 		CharacterStepOutput CharacterStep;                            // Scratch of StepCharacters
 		std::vector<ContactReport> CharacterReports;                  // The step's contacts of character controllers (see StepCharacters)
 
-		std::map<entt::entity, BodyRecord> Bodies;                    // Ordered: per-step processing is deterministic
+		// Ordered: per-step processing is deterministic. Records are created only by EmplaceRecord and removed only by
+		// EraseRecord (or cleared together with RecordIndex and RecordOverflow, as Clear does), never through the map itself:
+		// the index below points into its nodes, so a direct erase would leave FindRecord a dangling record, and a direct
+		// insert a record FindRecord does not find. Debug and Release builds check the counts (CheckRecordIndex).
+		std::map<entt::entity, BodyRecord> Bodies;
+		// The records by entity index, for lookups (FindRecord): the map's ordered search costs a cache miss per level, and a
+		// cell that loads or unloads looks up tens of thousands of records in a frame. Its nodes keep their addresses. A new
+		// entity can take the index of a destroyed one whose record the same changes have not removed yet: the newer record
+		// then waits in the overflow (rare, and only until it is removed).
+		std::vector<RecordSlot> RecordIndex;
+		std::unordered_map<entt::entity, BodyRecord*> RecordOverflow;
+		size_t IndexedRecords = 0; // Records RecordIndex holds; the others are in RecordOverflow
 		std::unordered_map<entt::entity, entt::entity> MergedOwners;  // Collider entity -> rigid body entity owning its body
 		// Records that need attention at the next step besides the awake bodies (see NeedsPolling). Entries are dropped
 		// lazily, so the list may hold records that no longer need it (or no longer exist).
@@ -982,6 +1019,11 @@ namespace Strata
 		std::vector<JPH::BodyID> PendingActivatedAdds;
 		std::vector<JPH::BodyID> PendingRemovals;
 		std::vector<JPH::BodyID> PendingDestructions;
+		std::vector<JPH::BodyID> PendingDeactivations;                // Bodies leaving the simulation (BodyRecord::RemovalPending)
+		// Where the bodies removed or destroyed since the last flush were: the bodies resting on them are woken after the
+		// batch, in merged regions (see WakeAroundRemovedBodies), instead of a query per body.
+		std::vector<JPH::AABox> WakeBounds;
+		uint64_t WakeQueryCount = 0;                                  // Broad phase queries that woke bodies since the world was created
 		uint64_t AddBatchCount = 0;                                   // Batches of new bodies added since the world was created
 		std::unordered_map<PairKey, TouchingPair, PairKeyHash> TouchingPairs;
 		std::unordered_map<UUID, std::vector<PairKey>> EntityPairs;   // Touching pairs of each entity (see AddTouchingPair)
@@ -1001,15 +1043,40 @@ namespace Strata
 		JPH::EPhysicsUpdateError ReportedErrors = JPH::EPhysicsUpdateError::None;
 
 		// Capacities: whether each was sized automatically (the advice of the overflow messages differs), the records waiting
-		// for a free body slot (BuildFailure::BodyLimit), the first of them since the overflow was last reported, and what the
-		// world needed beyond its capacities.
+		// for a free body slot (BuildFailure::WaitingForSlot), the first of them since the overflow was last reported, and what
+		// the world needed beyond its capacities.
 		bool AutomaticMaxBodies = false;
 		bool AutomaticMaxBodyPairs = false;
 		bool AutomaticMaxContactConstraints = false;
-		uint32_t BodyLimitCount = 0;
-		entt::entity FirstBodyLimitFailure = entt::null;
-		ErrorThrottle BodyLimitErrors { "Physics" };                  // One aggregated error while bodies wait for a slot
+		bool AutomaticTempAllocatorSize = false;
+		uint32_t SlotWaiterCount = 0;
+		std::array<uint32_t, static_cast<size_t>(BuildFailure::Count)> FailureCounts {}; // Records per BuildFailure (see SetFailure)
+		entt::entity FirstSlotWaiter = entt::null;
+		ErrorThrottle SlotWaiterErrors { "Physics" };                 // One aggregated error while bodies wait for a slot
+		// The records waiting for a slot, in the order they started waiting, with the ticket each got then: an entry whose
+		// record has another ticket (it stopped waiting, or waits again from a later place) or no longer exists is skipped.
+		// Waiting records are never polled: freed slots (see GiveSlotsToWaiters) take them from the front.
+		std::deque<std::pair<entt::entity, uint64_t>> SlotWaiters;
+		uint64_t NextSlotTicket = 1;
 		PhysicsCapacityDemand Demand;
+		// Growth (see GrowWorld): the bodies asked to have room for (PhysicsWorld::Reserve), and the growths so far.
+		uint32_t ReservedBodies = 0;
+		uint64_t ReservedBytes = 0;    // EstimateReservedBytes of the settings in effect
+		// What updates of the scene built, destroyed and spent applying changes (see UpdateCounters): those of the update
+		// Scene::GetFrameIndex was CounterFrame in, and of the one before it.
+		struct UpdateCounters
+		{
+			uint32_t BodiesAdded = 0;
+			uint32_t BodiesRemoved = 0;
+			float ChangeTime = 0.0f;
+		};
+		uint64_t CounterFrame = 0;
+		UpdateCounters CurrentUpdate;
+		UpdateCounters PreviousUpdate;
+		uint32_t GrowthCount = 0;
+		float LastGrowthMs = 0.0f;
+		uint32_t LastGrowthFrom = 0;
+		uint32_t LastGrowthTo = 0;
 		uint64_t ContactOverflowSteps = 0;
 		uint64_t StepCount = 0;
 		uint64_t WriteBackPass = 0;
@@ -1024,6 +1091,7 @@ namespace Strata
 		uint32_t LastWrittenBodies = 0;
 		uint32_t LastOrderedSlots = 0;
 		uint64_t BuildCount = 0;
+		uint64_t ParallelBuildCount = 0;                              // Rounds of changes that built their bodies on the job threads
 		uint64_t MeshCheckCount = 0;
 		// The start of the simulation waits for meshes (see HoldForMeshes).
 		bool HasStarted = false;
@@ -1052,6 +1120,13 @@ namespace Strata
 		std::vector<Entity> VisitStack;                               // See VisitSubtree
 		std::vector<entt::entity> ChangeScratch;                      // See ChangeList::TakeInto
 		std::unordered_set<entt::entity> VisitedOwners;
+
+		// A Sliced world's entities with physics components, in hierarchy order, and how many BuildSlice has handed to the
+		// rounds of changes so far (see PhysicsWorld::BuildSlice).
+		std::vector<entt::entity> PendingBuild;
+		size_t PendingBuildIndex = 0;
+		uint32_t PreparedSlices = 0; // BuildSlice calls that built bodies
+		bool Built = false;
 
 		// Recorded by registry signals, applied by ApplyPendingChanges.
 		ChangeList StructureChanges; // Components added, removed or modified; entity destroyed
@@ -1120,8 +1195,69 @@ namespace Strata
 		template<typename Data>
 		auto FindRecord(Data& data, entt::entity handle) -> decltype(&data.Bodies.begin()->second)
 		{
-			auto it = data.Bodies.find(handle);
-			return it != data.Bodies.end() ? &it->second : nullptr;
+			if (handle == entt::null)
+				return nullptr;
+			const size_t index = static_cast<size_t>(entt::to_entity(handle));
+			if (index >= data.RecordIndex.size())
+				return nullptr;
+			const RecordSlot& slot = data.RecordIndex[index];
+			if (slot.Handle == handle)
+				return slot.Record;
+			if (data.RecordOverflow.empty())
+				return nullptr;
+			const auto overflow = data.RecordOverflow.find(handle);
+			return overflow != data.RecordOverflow.end() ? overflow->second : nullptr;
+		}
+
+		// Every record is in the index or the overflow, and nothing else is: a record created or removed through the map
+		// itself breaks the counts. Constant time, so that it runs after every change of the records.
+		void CheckRecordIndex([[maybe_unused]] const PhysicsWorldData& data)
+		{
+			ST_CORE_ASSERT(data.Bodies.size() == data.IndexedRecords + data.RecordOverflow.size(),
+				"Physics: {} body records, but {} indexed and {} in the overflow (a record was created or removed outside EmplaceRecord and EraseRecord)",
+				data.Bodies.size(), data.IndexedRecords, data.RecordOverflow.size());
+		}
+
+		// Creates the record of an entity (or finds the one it has) and indexes it for FindRecord.
+		std::pair<BodyRecord*, bool> EmplaceRecord(PhysicsWorldData& data, entt::entity handle)
+		{
+			auto [it, created] = data.Bodies.try_emplace(handle);
+			if (created)
+			{
+				const size_t index = static_cast<size_t>(entt::to_entity(handle));
+				// Doubling, but never past the largest entity index (2^20 slots, 16 MiB).
+				if (index >= data.RecordIndex.size())
+					data.RecordIndex.resize(std::max(index + 1, std::min(data.RecordIndex.size() * 2, static_cast<size_t>(entt::to_entity(entt::entity(entt::null))) + 1)));
+				RecordSlot& slot = data.RecordIndex[index];
+				if (slot.Handle == entt::null)
+				{
+					slot = RecordSlot { handle, &it->second };
+					data.IndexedRecords++;
+				}
+				else
+				{
+					data.RecordOverflow.emplace(handle, &it->second);
+				}
+				CheckRecordIndex(data);
+			}
+			return { &it->second, created };
+		}
+
+		void EraseRecord(PhysicsWorldData& data, std::map<entt::entity, BodyRecord>::iterator it)
+		{
+			const entt::entity handle = it->first;
+			const size_t index = static_cast<size_t>(entt::to_entity(handle));
+			if (index < data.RecordIndex.size() && data.RecordIndex[index].Handle == handle)
+			{
+				data.RecordIndex[index] = RecordSlot();
+				data.IndexedRecords--;
+			}
+			else
+			{
+				data.RecordOverflow.erase(handle);
+			}
+			data.Bodies.erase(it);
+			CheckRecordIndex(data);
 		}
 
 		// The record of an entity whose body is part of the simulation, or nullptr.
@@ -1156,16 +1292,70 @@ namespace Strata
 			return slot.Record;
 		}
 
-		// Sets why a record has no body (BuildFailure::None: it has one), counting the records that wait for a free slot.
+		bool IsSlotWaiter(const PhysicsWorldData& data, const std::pair<entt::entity, uint64_t>& entry)
+		{
+			const BodyRecord* record = FindRecord(data, entry.first);
+			return record && record->Failure == BuildFailure::WaitingForSlot && record->SlotTicket == entry.second;
+		}
+
+		// Drops the entries of records that stopped waiting from the queue once they are most of it, so that entities that wait
+		// and go again (spawns at the growth limit) do not grow it without end. Linear, amortized over the entries dropped.
+		void CompactSlotWaiters(PhysicsWorldData& data)
+		{
+			constexpr size_t c_MinCompactedSize = 1024;
+			if (data.SlotWaiters.size() < c_MinCompactedSize || data.SlotWaiters.size() < 2 * static_cast<size_t>(data.SlotWaiterCount))
+				return;
+			std::erase_if(data.SlotWaiters, [&](const std::pair<entt::entity, uint64_t>& entry) { return !IsSlotWaiter(data, entry); });
+		}
+
+		// The counters of the scene's current update (Scene::GetFrameIndex, which advances at the end of each update): those of
+		// earlier updates are let go as the frames advance, so no call per frame is needed.
+		PhysicsWorldData::UpdateCounters& GetUpdateCounters(PhysicsWorldData& data)
+		{
+			const uint64_t frame = data.OwnerScene->GetFrameIndex();
+			if (frame != data.CounterFrame)
+			{
+				data.PreviousUpdate = frame == data.CounterFrame + 1 ? data.CurrentUpdate : PhysicsWorldData::UpdateCounters();
+				data.CurrentUpdate = PhysicsWorldData::UpdateCounters();
+				data.CounterFrame = frame;
+			}
+			return data.CurrentUpdate;
+		}
+
+		// The counters of the scene's last update, the one before the current frame index (see GetUpdateCounters).
+		PhysicsWorldData::UpdateCounters GetLastUpdateCounters(const PhysicsWorldData& data)
+		{
+			const uint64_t frame = data.OwnerScene->GetFrameIndex();
+			if (frame == data.CounterFrame)
+				return data.PreviousUpdate;
+			if (frame == data.CounterFrame + 1)
+				return data.CurrentUpdate;
+			return {};
+		}
+
+		// Sets why a record has no body (BuildFailure::None: it has one), counting the records that wait for a free slot and
+		// queuing them in the order they start waiting. A record that fails on a full world again keeps its place.
 		void SetFailure(PhysicsWorldData& data, entt::entity handle, BodyRecord& record, BuildFailure failure)
 		{
-			if (record.Failure == BuildFailure::BodyLimit)
-				data.BodyLimitCount--;
-			if (failure == BuildFailure::BodyLimit)
+			if (record.Failure == BuildFailure::WaitingForSlot && failure == BuildFailure::WaitingForSlot)
+				return;
+			if (record.Failure != BuildFailure::None)
+				data.FailureCounts[static_cast<size_t>(record.Failure)]--;
+			if (failure != BuildFailure::None)
+				data.FailureCounts[static_cast<size_t>(failure)]++;
+			if (record.Failure == BuildFailure::WaitingForSlot)
 			{
-				data.BodyLimitCount++;
-				if (data.FirstBodyLimitFailure == entt::null)
-					data.FirstBodyLimitFailure = handle;
+				data.SlotWaiterCount--;
+				record.SlotTicket = 0;
+			}
+			if (failure == BuildFailure::WaitingForSlot)
+			{
+				data.SlotWaiterCount++;
+				record.SlotTicket = data.NextSlotTicket++;
+				CompactSlotWaiters(data);
+				data.SlotWaiters.emplace_back(handle, record.SlotTicket);
+				if (data.FirstSlotWaiter == entt::null)
+					data.FirstSlotWaiter = handle;
 			}
 			record.Failure = failure;
 		}
@@ -1177,47 +1367,55 @@ namespace Strata
 			return data.JoltSystem->GetNumBodies() - c_BroadPhaseAnchorCount;
 		}
 
+		// The most bodies the world may grow to: PhysicsSettings::GrowthLimit (0: the engine's limit), never below MaxBodies.
+		uint32_t GetGrowthLimit(const PhysicsSettings& settings)
+		{
+			const uint32_t limit = settings.GrowthLimit == 0 ? PhysicsCapacitySettings::c_MaxBodiesLimit : std::min(settings.GrowthLimit, PhysicsCapacitySettings::c_MaxBodiesLimit);
+			return std::max(limit, settings.MaxBodies);
+		}
+
 		// One error for the entities that found the world full, instead of one per entity (thousands at once when a scene
 		// outgrows an explicit capacity); logged again only once they all got a body and the world fills up again. Records
 		// what the world would have needed, so that the scene's next world can grow.
 		void ReportBodyLimit(PhysicsWorldData& data)
 		{
-			if (data.BodyLimitCount == 0)
+			if (data.SlotWaiterCount == 0)
 			{
-				data.BodyLimitErrors.Clear();
-				data.FirstBodyLimitFailure = entt::null;
+				data.SlotWaiterErrors.Clear();
+				data.FirstSlotWaiter = entt::null;
 				return;
 			}
 
-			const uint64_t needed = static_cast<uint64_t>(GetUsedBodySlots(data)) + data.BodyLimitCount;
+			const uint64_t needed = static_cast<uint64_t>(GetUsedBodySlots(data)) + data.SlotWaiterCount;
 			data.Demand.Bodies = std::max(data.Demand.Bodies, static_cast<uint32_t>(std::min<uint64_t>(needed, PhysicsCapacitySettings::c_MaxBodiesLimit)));
-			if (!data.BodyLimitErrors.GetLastMessage().empty())
+			// Below its growth limit the world grows before the next step, which gives them their bodies (and says so).
+			if (data.Settings.MaxBodies < GetGrowthLimit(data.Settings) || !data.SlotWaiterErrors.GetLastMessage().empty())
 				return;
 
-			const Entity first(data.FirstBodyLimitFailure, data.OwnerScene);
+			const Entity first(data.FirstSlotWaiter, data.OwnerScene);
 			std::string entities = first.IsValid() ? fmt::format("'{}'", first.GetName()) : std::string("an entity");
-			if (data.BodyLimitCount > 1)
-				entities += fmt::format(" and {} more entities", data.BodyLimitCount - 1);
-			const char* advice = data.AutomaticMaxBodies ? "the scene's next play start sizes the world for them"
-				: "raise the scene's PhysicsCapacity.MaxBodies to make room";
-			data.BodyLimitErrors.Report(fmt::format("cannot create a body for {}: the world's limit of {} bodies is reached; they get one when bodies "
-				"are removed ({})", entities, data.Settings.MaxBodies, advice));
+			if (data.SlotWaiterCount > 1)
+				entities += fmt::format(" and {} more entities", data.SlotWaiterCount - 1);
+			const bool engineLimit = data.Settings.MaxBodies >= PhysicsCapacitySettings::c_MaxBodiesLimit;
+			data.SlotWaiterErrors.Report(fmt::format("cannot create a body for {}: the world is at {} of {} bodies and cannot grow; they get one when bodies "
+				"are removed", entities, engineLimit ? "the engine's limit" : "its growth limit (PhysicsSettings::GrowthLimit)", data.Settings.MaxBodies));
 		}
 
 		// Whether a record without a body waits for a body that can be built later (rather than for a component change).
 		bool IsPending(const BodyRecord& record)
 		{
-			return !record.HasBody() && (record.Failure == BuildFailure::DegenerateTransform || record.Failure == BuildFailure::MissingMesh || record.Failure == BuildFailure::BodyLimit);
+			return !record.HasBody() && (record.Failure == BuildFailure::DegenerateTransform || record.Failure == BuildFailure::MissingMesh || record.Failure == BuildFailure::WaitingForSlot);
 		}
 
 		// Whether a record needs attention at the next step although its body may be asleep or out of the simulation (awake
 		// bodies are synchronized anyway): a signaled transform change, which also retries a build that failed on a
-		// degenerate transform and brings back a body suspended for one, or a build waiting for a free body slot. Nothing
-		// else is polled: activity changes bring bodies back through their signals, and mesh data is checked when the mesh
-		// provider reports changes (see RefreshMeshBodies).
+		// degenerate transform and brings back a body suspended for one. Nothing else is polled: activity changes bring
+		// bodies back through their signals, mesh data is checked when the mesh provider reports changes (see
+		// RefreshMeshBodies), and records waiting for a body slot are handed slots as they free (see GiveSlotsToWaiters), so
+		// a step costs nothing per waiting record.
 		bool NeedsPolling(const BodyRecord& record)
 		{
-			return record.TransformDirty || (!record.HasBody() && record.Failure == BuildFailure::BodyLimit);
+			return record.TransformDirty;
 		}
 
 		const ShapeMember* FindShapeMember(const BodyRecord& record, entt::entity handle)
@@ -1331,22 +1529,82 @@ namespace Strata
 		// Simulation membership
 		//////////////////////////////////////////////////////////////////////////
 
-		// Wakes the bodies around a body (which may rest on it) before it is removed, moved or reshaped.
+		// Wakes the bodies in a box: only the tree of moving bodies is searched, since static bodies never sleep.
+		void WakeBodiesIn(PhysicsWorldData& data, JPH::AABox bounds)
+		{
+			bounds.ExpandBy(JPH::Vec3::sReplicate(c_WakeMargin));
+			const JPH::SpecifiedBroadPhaseLayerFilter movingBodies(c_MovingBroadPhaseLayer);
+			const JPH::ObjectLayerFilter layerFilter;
+			data.JoltSystem->GetBodyInterface().ActivateBodiesInAABox(bounds, movingBodies, layerFilter);
+			data.WakeQueryCount++;
+		}
+
+		// The world bounds of a body, if it exists. Main thread, between steps: nothing else changes bodies then.
+		std::optional<JPH::AABox> GetBodyBounds(const PhysicsWorldData& data, const JPH::BodyID& bodyID)
+		{
+			const JPH::BodyLockRead lock(data.JoltSystem->GetBodyLockInterfaceNoLock(), bodyID);
+			if (!lock.Succeeded())
+				return std::nullopt;
+			return lock.GetBody().GetWorldSpaceBounds();
+		}
+
+		// Wakes the bodies around a body (which may rest on it) before it is moved or reshaped.
 		void WakeBodiesAround(PhysicsWorldData& data, const JPH::BodyID& bodyID)
 		{
-			JPH::AABox bounds;
+			if (const std::optional<JPH::AABox> bounds = GetBodyBounds(data, bodyID))
+				WakeBodiesIn(data, *bounds);
+		}
+
+		// Remembers where a body that leaves the broad phase in this round's batch is, so that the bodies resting on it wake
+		// once it is gone (WakeAroundRemovedBodies).
+		void QueueWakeAround(PhysicsWorldData& data, const JPH::BodyID& bodyID)
+		{
+			if (const std::optional<JPH::AABox> bounds = GetBodyBounds(data, bodyID))
+				data.WakeBounds.push_back(*bounds);
+		}
+
+		// Wakes the bodies around the bodies a batch removed. A few are woken box by box; many (a cell leaving) in merged
+		// regions of a coarse grid, one query per region instead of one per body: bodies near the removed ones that rested on
+		// something else may wake too, and fall asleep again.
+		void WakeAroundRemovedBodies(PhysicsWorldData& data)
+		{
+			constexpr size_t c_MaxSingleWakes = 16;
+			constexpr float c_WakeRegionSize = 16.0f;
+			std::vector<JPH::AABox>& bounds = data.WakeBounds;
+			if (bounds.size() <= c_MaxSingleWakes)
 			{
-				JPH::BodyLockRead lock(data.JoltSystem->GetBodyLockInterface(), bodyID);
-				if (!lock.Succeeded())
-					return;
-				bounds = lock.GetBody().GetWorldSpaceBounds();
+				for (const JPH::AABox& box : bounds)
+					WakeBodiesIn(data, box);
+				bounds.clear();
+				return;
 			}
 
-			// The lock must be released first: activation locks the bodies it finds, possibly including this one.
-			bounds.ExpandBy(JPH::Vec3::sReplicate(c_WakeMargin));
-			const JPH::BroadPhaseLayerFilter broadPhaseFilter;
-			const JPH::ObjectLayerFilter layerFilter;
-			data.JoltSystem->GetBodyInterface().ActivateBodiesInAABox(bounds, broadPhaseFilter, layerFilter);
+			// Regions keyed by the grid square of each box's center, in key order (deterministic).
+			std::vector<std::pair<uint64_t, JPH::AABox>> regions;
+			regions.reserve(bounds.size());
+			for (const JPH::AABox& box : bounds)
+			{
+				const JPH::Vec3 center = box.GetCenter();
+				const int32_t x = static_cast<int32_t>(std::floor(center.GetX() / c_WakeRegionSize));
+				const int32_t z = static_cast<int32_t>(std::floor(center.GetZ() / c_WakeRegionSize));
+				const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) | static_cast<uint32_t>(z);
+				// Neighbors in the batch (a cell's bodies come in the order they were made) merge before the sort.
+				if (!regions.empty() && regions.back().first == key)
+					regions.back().second.Encapsulate(box);
+				else
+					regions.emplace_back(key, box);
+			}
+			std::sort(regions.begin(), regions.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+			for (size_t first = 0; first < regions.size();)
+			{
+				JPH::AABox region = regions[first].second;
+				size_t next = first + 1;
+				for (; next < regions.size() && regions[next].first == regions[first].first; next++)
+					region.Encapsulate(regions[next].second);
+				WakeBodiesIn(data, region);
+				first = next;
+			}
+			bounds.clear();
 		}
 
 		void WakeAllBodies(PhysicsWorldData& data)
@@ -1388,8 +1646,10 @@ namespace Strata
 			}
 			else
 			{
-				WakeBodiesAround(data, record.BodyID);
-				data.JoltSystem->GetBodyInterface().RemoveBody(record.BodyID);
+				// Leaves Jolt's broad phase with the round's batch (FlushBodyDestructions), with the bodies around it woken then.
+				QueueWakeAround(data, record.BodyID);
+				data.PendingDeactivations.push_back(record.BodyID);
+				record.RemovalPending = true;
 			}
 			record.InSimulation = false;
 			record.KinematicMoving = false;
@@ -1430,7 +1690,17 @@ namespace Strata
 				record.KinematicTargetRotation = rotation;
 			}
 
-			bodies.AddBody(record.BodyID, record.Type == RigidBodyType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+			if (record.RemovalPending)
+			{
+				// Still in the broad phase: it stays, and the batch leaves it there.
+				record.RemovalPending = false;
+				if (record.Type != RigidBodyType::Static)
+					bodies.ActivateBody(record.BodyID);
+			}
+			else
+			{
+				bodies.AddBody(record.BodyID, record.Type == RigidBodyType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+			}
 			if (record.Type == RigidBodyType::Dynamic)
 			{
 				// Motion resumes where it stopped.
@@ -1458,12 +1728,19 @@ namespace Strata
 			if (!record.HasBody())
 				return;
 
+			GetUpdateCounters(data).BodiesRemoved++;
 			if (record.InSimulation && !record.AddPending)
 			{
-				// The bodies resting on it must notice, while it can still be found where it is.
-				WakeBodiesAround(data, record.BodyID);
+				// The bodies resting on it wake once the batch removed it.
+				QueueWakeAround(data, record.BodyID);
 				data.PendingRemovals.push_back(record.BodyID);
 			}
+			else if (record.RemovalPending)
+			{
+				// Its pending removal becomes part of its destruction (the deactivation's entry is skipped: the slot is empty).
+				data.PendingRemovals.push_back(record.BodyID);
+			}
+			record.RemovalPending = false;
 			data.PendingDestructions.push_back(record.BodyID);
 			data.BodySlots[record.BodyID.GetIndex()] = BodySlot();
 			data.Contacts.SetBodyInterest(record.BodyID, false);
@@ -1474,16 +1751,44 @@ namespace Strata
 			record.KinematicMoving = false;
 		}
 
-		// Removes and destroys the bodies DestroyJoltBody queued, in one batch each (their slots become free).
+		// Removes the bodies that left the simulation (RemoveFromSimulation) from Jolt's broad phase, and removes and
+		// destroys the bodies DestroyJoltBody queued (their slots become free), in one batch each; then wakes the bodies around
+		// them.
 		void FlushBodyDestructions(PhysicsWorldData& data)
 		{
 			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
+			// Deactivations still wanted: a body that joined the simulation again or was destroyed meanwhile is skipped.
+			std::erase_if(data.PendingDeactivations, [&](const JPH::BodyID& bodyID)
+			{
+				BodyRecord* record = FindBodyRecord(data, bodyID);
+				if (!record || !record->RemovalPending)
+					return true;
+				record->RemovalPending = false;
+				return false;
+			});
+			if (!data.PendingDeactivations.empty())
+				bodies.RemoveBodies(data.PendingDeactivations.data(), static_cast<int>(data.PendingDeactivations.size()));
 			if (!data.PendingRemovals.empty())
 				bodies.RemoveBodies(data.PendingRemovals.data(), static_cast<int>(data.PendingRemovals.size()));
 			if (!data.PendingDestructions.empty())
 				bodies.DestroyBodies(data.PendingDestructions.data(), static_cast<int>(data.PendingDestructions.size()));
+			data.PendingDeactivations.clear();
 			data.PendingRemovals.clear();
 			data.PendingDestructions.clear();
+			if (!data.WakeBounds.empty())
+				WakeAroundRemovedBodies(data);
+		}
+
+		// A grown world's Jolt system counts body sequence numbers from 0 (see GrowWorld), so a body made there may get the ID
+		// of a body that was destroyed since the growth, whose pairs Jolt's contact cache still holds from the last step:
+		// their cache is cleared for the next step. Before any growth, IDs never repeat that way.
+		void InvalidateReusedIDs(PhysicsWorldData& data, std::span<const JPH::BodyID> bodies)
+		{
+			if (data.GrowthCount == 0)
+				return;
+			JPH::BodyInterface& bodyInterface = data.JoltSystem->GetBodyInterface();
+			for (const JPH::BodyID& body : bodies)
+				bodyInterface.InvalidateContactCache(body);
 		}
 
 		// Adds the bodies created since the last flush to the simulation, in one batch per activation mode, after the queued
@@ -1505,10 +1810,13 @@ namespace Strata
 				});
 				if (batch.empty())
 					return;
-				// AddBodiesPrepare may reorder the batch; Finalize takes it as it left it.
+				// AddBodiesPrepare may reorder the batch; Finalize takes it as it left it. Never prepared on several threads at once:
+				// Jolt's broad phase node allocator (FixedSizeFreeList, Jolt 5.6) publishes a new page's size before its pointer
+				// without ordering, so a thread preparing beside one that allocates a page may read a page that is not there yet.
 				const JPH::BodyInterface::AddState state = bodies.AddBodiesPrepare(batch.data(), static_cast<int>(batch.size()));
 				bodies.AddBodiesFinalize(batch.data(), static_cast<int>(batch.size()), state, activation);
 				data.AddBatchCount++;
+				InvalidateReusedIDs(data, batch);
 				batch.clear();
 			};
 			addBatch(data.PendingAdds, JPH::EActivation::DontActivate);
@@ -1550,7 +1858,12 @@ namespace Strata
 				bodies.DestroyBodies(all.data(), static_cast<int>(all.size()));
 
 			data.Bodies.clear();
-			data.BodyLimitCount = 0;
+			data.RecordIndex.clear();
+			data.RecordOverflow.clear();
+			data.IndexedRecords = 0;
+			data.SlotWaiterCount = 0;
+			data.FailureCounts.fill(0);
+			data.SlotWaiters.clear();
 			data.MergedOwners.clear();
 			data.PolledBodies.clear();
 			data.RecheckedEntities.clear();
@@ -1567,9 +1880,47 @@ namespace Strata
 		// Shapes
 		//////////////////////////////////////////////////////////////////////////
 
-		JPH::RefConst<JPH::Shape> CreateShape(PhysicsWorldData& data, const JPH::ShapeSettings& settings, const Entity& entity, std::string_view what, PhysicsWarning warning)
+		struct ShapePart
+		{
+			JPH::RefConst<JPH::Shape> Shape;
+			JPH::Vec3 Position = JPH::Vec3::sZero(); // Body space
+			JPH::Quat Rotation = JPH::Quat::sIdentity();
+		};
+
+		// The box and sphere shapes a chunk of a parallel build shares between its bodies (see RefreshOwnersInParallel): a
+		// shape shared across threads would make every body's reference counting contend for one cache line. Searched
+		// linearly: chunks hold a few sizes.
+		struct ChunkShapes
+		{
+			static constexpr size_t c_MaxShapes = 64;
+			std::vector<std::pair<PrimitiveShapeKey, JPH::RefConst<JPH::Shape>>> Shapes;
+		};
+
+		// What building a body's shape found. Shapes are built on the main thread, which warns about what it cannot use, or
+		// on a job thread (OffThread, see RefreshOwnersInParallel), which stops at the first problem or mesh collider and
+		// leaves the body to the main thread (NeedsMainThread), so that warnings and mesh data stay on the main thread, and
+		// shares shapes within its chunk (ChunkShapes).
+		struct ShapeBuild
+		{
+			std::vector<ShapePart> Parts;
+			std::vector<ShapeMember> ShapeMembers;   // Entities that contributed colliders
+			std::vector<MeshSource> MeshSources;     // Meshes of the mesh colliders considered
+			bool WaitsForMesh = false;               // A mesh collider was left out until its data arrives or is cooked
+			uint32_t ColliderCount = 0;              // Collider components considered, usable or not
+			bool OffThread = false;
+			bool NeedsMainThread = false;
+			ChunkShapes* Chunk = nullptr; // Off the main thread
+		};
+
+		JPH::RefConst<JPH::Shape> CreateShape(PhysicsWorldData& data, ShapeBuild& build, const JPH::ShapeSettings& settings, const Entity& entity, std::string_view what,
+			PhysicsWarning warning)
 		{
 			JPH::ShapeSettings::ShapeResult result = settings.Create();
+			if (result.HasError() && build.OffThread)
+			{
+				build.NeedsMainThread = true;
+				return nullptr;
+			}
 			if (result.HasError())
 			{
 				if (ShouldWarn(data, entity.GetUUID(), warning))
@@ -1612,24 +1963,13 @@ namespace Strata
 			bool m_PastEnd = false;
 		};
 
-		struct ShapePart
+		void WarnNonFiniteCollider(PhysicsWorldData& data, ShapeBuild& build, const Entity& entity, std::string_view collider)
 		{
-			JPH::RefConst<JPH::Shape> Shape;
-			JPH::Vec3 Position = JPH::Vec3::sZero(); // Body space
-			JPH::Quat Rotation = JPH::Quat::sIdentity();
-		};
-
-		struct ShapeBuild
-		{
-			std::vector<ShapePart> Parts;
-			std::vector<ShapeMember> ShapeMembers;   // Entities that contributed colliders
-			std::vector<MeshSource> MeshSources;     // Meshes of the mesh colliders considered
-			bool WaitsForMesh = false;               // A mesh collider was left out until its data arrives or is cooked
-			uint32_t ColliderCount = 0;              // Collider components considered, usable or not
-		};
-
-		void WarnNonFiniteCollider(PhysicsWorldData& data, const Entity& entity, std::string_view collider)
-		{
+			if (build.OffThread)
+			{
+				build.NeedsMainThread = true;
+				return;
+			}
 			if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidCollider))
 				ST_CORE_WARN("Physics: the {} of '{}' has non-finite dimensions and is ignored", collider, entity.GetName());
 		}
@@ -1692,13 +2032,29 @@ namespace Strata
 		// The shape of a box or sphere collider of these (scaled) dimensions. Shapes are immutable, so bodies of the same size
 		// share one: a scene of thousands of identical boxes builds one shape (up to c_MaxSharedPrimitiveShapes sizes per
 		// world). Null, with a warning about the entity, for dimensions the shape rejects.
-		JPH::RefConst<JPH::Shape> GetPrimitiveShape(PhysicsWorldData& data, const Entity& entity, const PrimitiveShapeKey& key, const JPH::ShapeSettings& settings,
-			std::string_view what)
+		// Off the main thread, a chunk of a parallel build shares its own shapes (ChunkShapes), which the main thread merges
+		// into the world's afterwards; the world's are only read there (the main thread changes none while jobs run).
+		JPH::RefConst<JPH::Shape> GetPrimitiveShape(PhysicsWorldData& data, ShapeBuild& build, const Entity& entity, const PrimitiveShapeKey& key,
+			const JPH::ShapeSettings& settings, std::string_view what)
 		{
+			if (build.OffThread)
+			{
+				ST_CORE_ASSERT(build.Chunk, "A shape built off the main thread belongs to a chunk");
+				for (const auto& [chunkKey, chunkShape] : build.Chunk->Shapes)
+				{
+					if (chunkKey == key)
+						return chunkShape;
+				}
+				JPH::RefConst<JPH::Shape> shape = CreateShape(data, build, settings, entity, what, PhysicsWarning::InvalidCollider);
+				if (shape && build.Chunk->Shapes.size() < ChunkShapes::c_MaxShapes)
+					build.Chunk->Shapes.emplace_back(key, shape);
+				return shape;
+			}
+
 			auto it = data.PrimitiveShapes.find(key);
 			if (it != data.PrimitiveShapes.end())
 				return it->second;
-			JPH::RefConst<JPH::Shape> shape = CreateShape(data, settings, entity, what, PhysicsWarning::InvalidCollider);
+			JPH::RefConst<JPH::Shape> shape = CreateShape(data, build, settings, entity, what, PhysicsWarning::InvalidCollider);
 			if (shape && data.PrimitiveShapes.size() < c_MaxSharedPrimitiveShapes)
 				data.PrimitiveShapes.emplace(key, shape);
 			return shape;
@@ -1721,12 +2077,12 @@ namespace Strata
 					const glm::vec3 halfExtents = glm::max(glm::abs(box->HalfExtents) * absoluteScale, glm::vec3(c_MinColliderExtent));
 					const PrimitiveShapeKey key { PrimitiveShapeKey::ShapeKind::Box,
 						{ std::bit_cast<uint32_t>(halfExtents.x), std::bit_cast<uint32_t>(halfExtents.y), std::bit_cast<uint32_t>(halfExtents.z) } };
-					if (JPH::RefConst<JPH::Shape> shape = GetPrimitiveShape(data, entity, key, JPH::BoxShapeSettings(ToJolt(halfExtents)), "box collider"))
+					if (JPH::RefConst<JPH::Shape> shape = GetPrimitiveShape(data, build, entity, key, JPH::BoxShapeSettings(ToJolt(halfExtents)), "box collider"))
 						build.Parts.push_back({ shape, placeAt(box->Offset), partRotation });
 				}
 				else
 				{
-					WarnNonFiniteCollider(data, entity, "box collider");
+					WarnNonFiniteCollider(data, build, entity, "box collider");
 				}
 			}
 
@@ -1737,12 +2093,12 @@ namespace Strata
 				{
 					const float radius = std::max(std::abs(sphere->Radius) * maxScale, c_MinColliderExtent);
 					const PrimitiveShapeKey key { PrimitiveShapeKey::ShapeKind::Sphere, { std::bit_cast<uint32_t>(radius), 0, 0 } };
-					if (JPH::RefConst<JPH::Shape> shape = GetPrimitiveShape(data, entity, key, JPH::SphereShapeSettings(radius), "sphere collider"))
+					if (JPH::RefConst<JPH::Shape> shape = GetPrimitiveShape(data, build, entity, key, JPH::SphereShapeSettings(radius), "sphere collider"))
 						build.Parts.push_back({ shape, placeAt(sphere->Offset), partRotation });
 				}
 				else
 				{
-					WarnNonFiniteCollider(data, entity, "sphere collider");
+					WarnNonFiniteCollider(data, build, entity, "sphere collider");
 				}
 			}
 
@@ -1755,20 +2111,25 @@ namespace Strata
 					const float halfHeight = std::abs(capsule->HalfHeight) * absoluteScale.y;
 					JPH::RefConst<JPH::Shape> shape;
 					if (halfHeight < c_MinColliderExtent)
-						shape = CreateShape(data, JPH::SphereShapeSettings(radius), entity, "capsule collider", PhysicsWarning::InvalidCollider); // No cylindrical part
+						shape = CreateShape(data, build, JPH::SphereShapeSettings(radius), entity, "capsule collider", PhysicsWarning::InvalidCollider); // No cylindrical part
 					else
-						shape = CreateShape(data, JPH::CapsuleShapeSettings(halfHeight, radius), entity, "capsule collider", PhysicsWarning::InvalidCollider);
+						shape = CreateShape(data, build, JPH::CapsuleShapeSettings(halfHeight, radius), entity, "capsule collider", PhysicsWarning::InvalidCollider);
 					if (shape)
 						build.Parts.push_back({ shape, placeAt(capsule->Offset), partRotation });
 				}
 				else
 				{
-					WarnNonFiniteCollider(data, entity, "capsule collider");
+					WarnNonFiniteCollider(data, build, entity, "capsule collider");
 				}
 			}
 
 			if (const MeshColliderComponent* meshCollider = entity.TryGetComponent<MeshColliderComponent>())
 			{
+				if (build.OffThread)
+				{
+					build.NeedsMainThread = true; // Mesh data comes from the main thread's provider
+					return;
+				}
 				build.ColliderCount++;
 				AssetHandle mesh = meshCollider->Mesh;
 				if (!mesh.IsValid())
@@ -1796,7 +2157,7 @@ namespace Strata
 					else
 					{
 						// Convex hulls and triangle meshes support any non-zero scale, including mirroring.
-						if (JPH::RefConst<JPH::Shape> shape = CreateShape(data, JPH::ScaledShapeSettings(meshShape.GetPtr(), ToJolt(scale)), entity, "mesh collider", PhysicsWarning::InvalidMesh))
+						if (JPH::RefConst<JPH::Shape> shape = CreateShape(data, build, JPH::ScaledShapeSettings(meshShape.GetPtr(), ToJolt(scale)), entity, "mesh collider", PhysicsWarning::InvalidMesh))
 							build.Parts.push_back({ shape, ToJolt(translation), partRotation });
 					}
 				}
@@ -1806,7 +2167,7 @@ namespace Strata
 				build.ShapeMembers.push_back({ entity.GetHandle(), poseInBody });
 		}
 
-		JPH::RefConst<JPH::Shape> CombineParts(PhysicsWorldData& data, const Entity& owner, const std::vector<ShapePart>& parts)
+		JPH::RefConst<JPH::Shape> CombineParts(PhysicsWorldData& data, ShapeBuild& build, const Entity& owner, const std::vector<ShapePart>& parts)
 		{
 			if (parts.empty())
 				return nullptr;
@@ -1818,13 +2179,13 @@ namespace Strata
 					return part.Shape;
 
 				const JPH::RotatedTranslatedShapeSettings settings(part.Position, part.Rotation, part.Shape.GetPtr());
-				return CreateShape(data, settings, owner, "collider placement", PhysicsWarning::InvalidCollider);
+				return CreateShape(data, build, settings, owner, "collider placement", PhysicsWarning::InvalidCollider);
 			}
 
 			JPH::StaticCompoundShapeSettings compound;
 			for (const ShapePart& part : parts)
 				compound.AddShape(part.Position, part.Rotation, part.Shape.GetPtr());
-			return CreateShape(data, compound, owner, "compound collider", PhysicsWarning::InvalidCollider);
+			return CreateShape(data, build, compound, owner, "compound collider", PhysicsWarning::InvalidCollider);
 		}
 
 		float SanitizeNonNegative(float value, float fallback)
@@ -1951,7 +2312,7 @@ namespace Strata
 			const UUID entityID = record.EntityID;
 			SetMeshSources(data, handle, record, {});
 			SetFailure(data, handle, record, BuildFailure::None);
-			data.Bodies.erase(it); // A PolledBodies entry is dropped by the next step
+			EraseRecord(data, it); // A PolledBodies entry is dropped by the next step
 			EndContactsOf(data, entityID);
 		}
 
@@ -1977,7 +2338,7 @@ namespace Strata
 				if (it != data.MergedOwners.end() && it->second != owner)
 					data.OwnerRefreshes.Add(it->second); // Taken from another body
 				data.MergedOwners[entity] = owner;
-				if (data.Bodies.find(entity) != data.Bodies.end())
+				if (FindRecord(data, entity))
 					DestroyRecord(data, entity); // Was a static body of its own
 			}
 
@@ -2002,37 +2363,157 @@ namespace Strata
 			UpdatePolling(data, handle, record);
 		}
 
-		// (Re)builds the body of an owner entity from its components, its collider descendants and its world transform.
-		void BuildBody(PhysicsWorldData& data, Entity entity)
+		// The first part of a body's (re)build, which only the main thread may do, in record order: the record, the body type
+		// and the collider entities merged into it (see UpdateMergedEntities).
+		struct BodyBuildStart
 		{
-			ST_PROFILE_FUNCTION();
+			Entity Owner;
+			BodyRecord* Record = nullptr;
+			const RigidBodyComponent* RigidBody = nullptr;
+			RigidBodyType Type = RigidBodyType::Static;
+		};
+
+		BodyBuildStart BeginBodyBuild(PhysicsWorldData& data, Entity entity)
+		{
 			data.BuildCount++;
-
-			Scene& scene = *data.OwnerScene;
+			BodyBuildStart start;
+			start.Owner = entity;
+			start.RigidBody = entity.TryGetComponent<RigidBodyComponent>();
 			const entt::entity handle = entity.GetHandle();
-			const RigidBodyComponent* rigidBody = entity.TryGetComponent<RigidBodyComponent>();
-
-			auto [recordIt, created] = data.Bodies.try_emplace(handle);
-			BodyRecord& record = recordIt->second;
+			auto [record, created] = EmplaceRecord(data, handle);
+			start.Record = record;
 			if (created)
-				record.EntityID = entity.GetUUID();
+				start.Record->EntityID = entity.GetUUID();
 
-			RigidBodyType type = rigidBody ? rigidBody->Type : RigidBodyType::Static;
-			if (type != RigidBodyType::Static && type != RigidBodyType::Dynamic && type != RigidBodyType::Kinematic)
+			start.Type = start.RigidBody ? start.RigidBody->Type : RigidBodyType::Static;
+			if (start.Type != RigidBodyType::Static && start.Type != RigidBodyType::Dynamic && start.Type != RigidBodyType::Kinematic)
 			{
-				if (ShouldWarn(data, record.EntityID, PhysicsWarning::InvalidType))
-					ST_CORE_WARN("Physics: '{}' has an invalid rigid body type {}; it is treated as static", entity.GetName(), static_cast<int>(type));
-				type = RigidBodyType::Static;
+				if (ShouldWarn(data, start.Record->EntityID, PhysicsWarning::InvalidType))
+					ST_CORE_WARN("Physics: '{}' has an invalid rigid body type {}; it is treated as static", entity.GetName(), static_cast<int>(start.Type));
+				start.Type = RigidBodyType::Static;
 			}
 
 			// Collider descendants only merge into rigid bodies; collider entities without one are static bodies of their own.
-			UpdateMergedEntities(data, handle, record, rigidBody ? CollectMergedEntities(scene, entity, data.VisitStack) : std::vector<entt::entity>());
+			UpdateMergedEntities(data, handle, *start.Record, start.RigidBody ? CollectMergedEntities(*data.OwnerScene, entity, data.VisitStack) : std::vector<entt::entity>());
+			return start;
+		}
 
-			const glm::mat4 worldTransform = scene.GetWorldTransform(entity);
-			glm::vec3 position;
-			glm::quat rotation;
-			glm::vec3 scale;
-			const bool decomposed = Math::DecomposeTransform(worldTransform, position, rotation, scale);
+		// The motion a dynamic body (re)built now starts with: a body rebuilt because a property changed keeps moving as before;
+		// one that was out of the simulation (or had no body after a failed build) resumes the motion it had.
+		void GetBuildVelocities(PhysicsWorldData& data, const BodyRecord& record, RigidBodyType type, glm::vec3& outLinear, glm::vec3& outAngular)
+		{
+			outLinear = glm::vec3(0.0f);
+			outAngular = glm::vec3(0.0f);
+			if (type != RigidBodyType::Dynamic)
+				return;
+			if (record.HasBody() && record.InSimulation)
+			{
+				JPH::Vec3 currentLinear;
+				JPH::Vec3 currentAngular;
+				data.JoltSystem->GetBodyInterface().GetLinearAndAngularVelocity(record.BodyID, currentLinear, currentAngular);
+				outLinear = ToGlm(currentLinear);
+				outAngular = ToGlm(currentAngular);
+				return;
+			}
+			outLinear = record.SavedLinearVelocity;
+			outAngular = record.SavedAngularVelocity;
+		}
+
+		// Where a body is built: its entity's world transform and that transform's parts.
+		struct BodyPose
+		{
+			glm::mat4 WorldTransform = glm::mat4(1.0f);
+			glm::vec3 Position = glm::vec3(0.0f);
+			glm::quat Rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+			glm::vec3 Scale = glm::vec3(1.0f);
+		};
+
+		// Gives a body built for a record (created without an ID, on any thread) its ID, the next free one as CreateBody would
+		// give it, and makes it the record's body. A full world frees the old body's slot for its replacement instead of losing
+		// the body (its motion was read before, and its contacts carry over like in any rebuild), and the slots of the bodies
+		// destroyed in this round of changes. Without a slot the body is destroyed and the record waits for one (reported for
+		// all such records at once, see ReportBodyLimit).
+		void InstallBody(PhysicsWorldData& data, const BodyBuildStart& start, JPH::Body* body, const BodyPose& pose, std::vector<ShapeMember> shapeMembers,
+			const glm::vec3& linearVelocity, const glm::vec3& angularVelocity)
+		{
+			BodyRecord& record = *start.Record;
+			const entt::entity handle = start.Owner.GetHandle();
+			const RigidBodyType type = start.Type;
+			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
+			// Bodies destroyed in this round of changes keep their slots until the batch: they do not count.
+			if (!record.HasBody() && GetUsedBodySlots(data) - data.PendingDestructions.size() >= data.Settings.MaxBodies)
+			{
+				bodies.DestroyBodyWithoutID(body);
+				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, pose.WorldTransform);
+				return;
+			}
+
+			bool assigned = bodies.AssignBodyID(body);
+			if (!assigned && (record.HasBody() || !data.PendingDestructions.empty()))
+			{
+				DestroyJoltBody(data, record);
+				FlushBodyDestructions(data);
+				assigned = bodies.AssignBodyID(body);
+			}
+			if (!assigned)
+			{
+				bodies.DestroyBodyWithoutID(body);
+				record.SavedLinearVelocity = linearVelocity;
+				record.SavedAngularVelocity = angularVelocity;
+				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, pose.WorldTransform);
+				return;
+			}
+
+			// Contacts are tracked per entity pair and carry over to the new body; the next step confirms or ends them.
+			DestroyJoltBody(data, record);
+			GetUpdateCounters(data).BodiesAdded++;
+			record.BodyID = body->GetID();
+			SetFailure(data, handle, record, BuildFailure::None);
+			record.ShapeScale = pose.Scale;
+			record.WorldScale = pose.Scale;
+			record.LastWorldTransform = pose.WorldTransform;
+			record.KinematicTargetPosition = pose.Position;
+			record.KinematicTargetRotation = pose.Rotation;
+			record.ShapeMembers = std::move(shapeMembers);
+			data.BodySlots[record.BodyID.GetIndex()] = BodySlot { record.BodyID.GetIndexAndSequenceNumber(), handle, &record };
+			data.Contacts.SetBodyInterest(record.BodyID, data.ContactInterest.contains(record.EntityID));
+			ClearWarnings(data, record.EntityID, c_TransientWarnings);
+
+			if (!IsSimulated(*data.OwnerScene, start.Owner))
+			{
+				// Its motion applies when it joins the simulation (AddToSimulation).
+				record.SavedLinearVelocity = type == RigidBodyType::Dynamic ? linearVelocity : glm::vec3(0.0f);
+				record.SavedAngularVelocity = type == RigidBodyType::Dynamic ? angularVelocity : glm::vec3(0.0f);
+				EndContactsOf(data, record.EntityID);
+			}
+			else
+			{
+				// Joins the simulation with the batch of this round (created where its entity is, with its motion).
+				(type == RigidBodyType::Static ? data.PendingAdds : data.PendingActivatedAdds).push_back(record.BodyID);
+				record.AddPending = true;
+				record.InSimulation = true;
+				record.TransformDirty = false;
+				record.SavedLinearVelocity = glm::vec3(0.0f);
+				record.SavedAngularVelocity = glm::vec3(0.0f);
+				if (data.EntityPairs.find(record.EntityID) != data.EntityPairs.end())
+					data.RecheckedEntities.push_back(record.EntityID); // Its contacts carried over: the next step confirms or ends them
+			}
+			UpdatePolling(data, handle, record);
+		}
+
+		// The rest of a body's (re)build on the main thread, after BeginBodyBuild: its shape from the owner's colliders and those
+		// merged into it, placed at the owner's world transform; failures and what cannot be used are warned about.
+		void CompleteBodyBuild(PhysicsWorldData& data, const BodyBuildStart& start)
+		{
+			Scene& scene = *data.OwnerScene;
+			const Entity& entity = start.Owner;
+			const entt::entity handle = entity.GetHandle();
+			BodyRecord& record = *start.Record;
+			const RigidBodyType type = start.Type;
+
+			BodyPose pose;
+			pose.WorldTransform = scene.GetWorldTransform(entity);
+			const bool decomposed = Math::DecomposeTransform(pose.WorldTransform, pose.Position, pose.Rotation, pose.Scale);
 			if (!decomposed || (type == RigidBodyType::Dynamic && !HasInvertibleParent(scene, entity)))
 			{
 				if (ShouldWarn(data, record.EntityID, PhysicsWarning::DegenerateTransform))
@@ -2043,18 +2524,17 @@ namespace Strata
 						ST_CORE_WARN("Physics: the parent of '{}' is scaled to (nearly) zero, so its simulated pose cannot be written back; it gets its body once the parent's transform is valid", entity.GetName());
 				}
 				record.Type = type;
-				SetBuildFailure(data, handle, record, BuildFailure::DegenerateTransform, worldTransform);
+				SetBuildFailure(data, handle, record, BuildFailure::DegenerateTransform, pose.WorldTransform);
 				record.WaitsForParent = decomposed; // The world transform may stay the same when the parent is fixed
 				return;
 			}
 			record.WaitsForParent = false;
 
 			ShapeBuild build;
-			AddColliderParts(data, entity, glm::mat4(1.0f), glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), scale, type, build);
+			AddColliderParts(data, entity, glm::mat4(1.0f), glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), pose.Scale, type, build);
 
 			// Merged colliders are placed with their transform relative to the body (position and rotation, without scale).
-			const glm::mat4 bodyToWorld = Math::ComposeTransform(position, rotation, glm::vec3(1.0f));
-			const glm::mat4 worldToBody = glm::inverse(bodyToWorld);
+			const glm::mat4 worldToBody = glm::inverse(Math::ComposeTransform(pose.Position, pose.Rotation, glm::vec3(1.0f)));
 			for (entt::entity mergedHandle : record.MergedEntities)
 			{
 				const Entity merged(mergedHandle, &scene);
@@ -2077,7 +2557,7 @@ namespace Strata
 			record.Type = type;
 			SetMeshSources(data, handle, record, std::move(build.MeshSources));
 
-			const JPH::RefConst<JPH::Shape> shape = CombineParts(data, entity, build.Parts);
+			const JPH::RefConst<JPH::Shape> shape = CombineParts(data, build, entity, build.Parts);
 			if (!shape)
 			{
 				BuildFailure failure = BuildFailure::InvalidColliders;
@@ -2088,103 +2568,47 @@ namespace Strata
 				else if (build.ColliderCount == 0)
 				{
 					failure = BuildFailure::NoCollider;
-					if (rigidBody && ShouldWarn(data, record.EntityID, PhysicsWarning::MissingCollider))
+					if (start.RigidBody && ShouldWarn(data, record.EntityID, PhysicsWarning::MissingCollider))
 						ST_CORE_WARN("Physics: '{}' has a Rigid Body but no collider; it is not simulated", entity.GetName());
 				}
 				else if (ShouldWarn(data, record.EntityID, PhysicsWarning::NoUsableCollider))
 				{
 					ST_CORE_WARN("Physics: '{}' has no usable collider; it is not simulated", entity.GetName());
 				}
-				SetBuildFailure(data, handle, record, failure, worldTransform);
+				SetBuildFailure(data, handle, record, failure, pose.WorldTransform);
 				return;
 			}
 
-			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
-			// Bodies destroyed in this round of changes keep their slots until the batch: they do not count.
+			// A record without a body in a full world waits without making one.
 			if (!record.HasBody() && GetUsedBodySlots(data) - data.PendingDestructions.size() >= data.Settings.MaxBodies)
 			{
-				// Reported for all such entities at once (ReportBodyLimit).
-				SetBuildFailure(data, handle, record, BuildFailure::BodyLimit, worldTransform);
+				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, pose.WorldTransform);
 				return;
 			}
 
-			// A dynamic body rebuilt because a property changed keeps moving as before; one that was out of the simulation (or
-			// had no body after a failed build) resumes the motion it had.
-			glm::vec3 linearVelocity(0.0f);
-			glm::vec3 angularVelocity(0.0f);
-			if (type == RigidBodyType::Dynamic)
-			{
-				if (record.HasBody() && record.InSimulation)
-				{
-					JPH::Vec3 currentLinear;
-					JPH::Vec3 currentAngular;
-					bodies.GetLinearAndAngularVelocity(record.BodyID, currentLinear, currentAngular);
-					linearVelocity = ToGlm(currentLinear);
-					angularVelocity = ToGlm(currentAngular);
-				}
-				else
-				{
-					linearVelocity = record.SavedLinearVelocity;
-					angularVelocity = record.SavedAngularVelocity;
-				}
-			}
-
-			JPH::BodyCreationSettings settings = MakeBodySettings(data, entity, rigidBody, type, shape.GetPtr(), position, rotation);
+			glm::vec3 linearVelocity;
+			glm::vec3 angularVelocity;
+			GetBuildVelocities(data, record, type, linearVelocity, angularVelocity);
+			JPH::BodyCreationSettings settings = MakeBodySettings(data, entity, start.RigidBody, type, shape.GetPtr(), pose.Position, pose.Rotation);
 			// A body that joins the simulation now starts with that motion (one that does not gets it when it is added).
 			settings.mLinearVelocity = ToJolt(linearVelocity);
 			settings.mAngularVelocity = ToJolt(angularVelocity);
-			JPH::Body* body = bodies.CreateBody(settings);
-			if (!body && (record.HasBody() || !data.PendingDestructions.empty()))
-			{
-				// The world is full: free the old body's slot for its replacement instead of losing the body (its motion
-				// was read above, and its contacts carry over like in any rebuild), and the slots of the bodies destroyed in
-				// this round of changes.
-				DestroyJoltBody(data, record);
-				FlushBodyDestructions(data);
-				body = bodies.CreateBody(settings);
-			}
+			JPH::Body* body = data.JoltSystem->GetBodyInterface().CreateBodyWithoutID(settings);
 			if (!body)
 			{
 				record.SavedLinearVelocity = linearVelocity;
 				record.SavedAngularVelocity = angularVelocity;
-				SetBuildFailure(data, handle, record, BuildFailure::BodyLimit, worldTransform);
+				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, pose.WorldTransform);
 				return;
 			}
+			InstallBody(data, start, body, pose, std::move(build.ShapeMembers), linearVelocity, angularVelocity);
+		}
 
-			// Contacts are tracked per entity pair and carry over to the new body; the next step confirms or ends them.
-			DestroyJoltBody(data, record);
-			record.BodyID = body->GetID();
-			SetFailure(data, handle, record, BuildFailure::None);
-			record.ShapeScale = scale;
-			record.WorldScale = scale;
-			record.LastWorldTransform = worldTransform;
-			record.KinematicTargetPosition = position;
-			record.KinematicTargetRotation = rotation;
-			record.ShapeMembers = std::move(build.ShapeMembers);
-			data.BodySlots[record.BodyID.GetIndex()] = BodySlot { record.BodyID.GetIndexAndSequenceNumber(), handle, &record };
-			data.Contacts.SetBodyInterest(record.BodyID, data.ContactInterest.contains(record.EntityID));
-			ClearWarnings(data, record.EntityID, c_TransientWarnings);
-
-			if (!IsSimulated(scene, entity))
-			{
-				// Its motion applies when it joins the simulation (AddToSimulation).
-				record.SavedLinearVelocity = type == RigidBodyType::Dynamic ? linearVelocity : glm::vec3(0.0f);
-				record.SavedAngularVelocity = type == RigidBodyType::Dynamic ? angularVelocity : glm::vec3(0.0f);
-				EndContactsOf(data, record.EntityID);
-			}
-			else
-			{
-				// Joins the simulation with the batch of this round (created where its entity is, with its motion).
-				(type == RigidBodyType::Static ? data.PendingAdds : data.PendingActivatedAdds).push_back(record.BodyID);
-				record.AddPending = true;
-				record.InSimulation = true;
-				record.TransformDirty = false;
-				record.SavedLinearVelocity = glm::vec3(0.0f);
-				record.SavedAngularVelocity = glm::vec3(0.0f);
-				if (data.EntityPairs.find(record.EntityID) != data.EntityPairs.end())
-					data.RecheckedEntities.push_back(record.EntityID); // Its contacts carried over: the next step confirms or ends them
-			}
-			UpdatePolling(data, handle, record);
+		// (Re)builds the body of an owner entity from its components, its collider descendants and its world transform.
+		void BuildBody(PhysicsWorldData& data, Entity entity)
+		{
+			ST_PROFILE_FUNCTION();
+			CompleteBodyBuild(data, BeginBodyBuild(data, entity));
 		}
 
 		// Re-evaluates an entity that may own a body: builds or rebuilds the body, or removes the record if the entity no
@@ -2202,6 +2626,167 @@ namespace Strata
 			DestroyRecord(data, handle);
 			if (owner.IsValid())
 				data.OwnerRefreshes.Add(owner.GetHandle()); // Its colliders are part of the ancestor's body now
+		}
+
+		// Rounds of changes with at least this many owners to refresh build their bodies on the job threads.
+		constexpr uint32_t c_ParallelBuildThreshold = 256;
+		// Owners per job of a parallel build (fixed, so that the result does not depend on the number of threads).
+		constexpr uint32_t c_ParallelBuildChunk = 512;
+
+		// A body built on the job threads (see RefreshOwnersInParallel).
+		struct ParallelBodyBuild
+		{
+			BodyBuildStart Start;
+			// Read on the main thread before the jobs: the world transforms of the owner and of the merged entities that are part
+			// of its shape (the scene computes stale ones on demand), the motion the body starts with, and whether its parent
+			// can be inverted (dynamic bodies).
+			glm::mat4 WorldTransform = glm::mat4(1.0f);
+			std::vector<std::pair<entt::entity, glm::mat4>> Parts;
+			glm::vec3 LinearVelocity = glm::vec3(0.0f);
+			glm::vec3 AngularVelocity = glm::vec3(0.0f);
+			bool Eligible = false;
+			// Results of the jobs: the body (created without an ID) and its pose, or NeedsMainThread for anything a warning, a
+			// failure or mesh data may come from: such owners are built the serial way, in their place.
+			JPH::Body* Body = nullptr;
+			BodyPose Pose;
+			std::vector<ShapeMember> ShapeMembers;
+			bool NeedsMainThread = true;
+		};
+
+		// Builds what the jobs may for one owner: its shape from box, sphere and capsule colliders (box and sphere shapes shared
+		// within the chunk), its settings and its Jolt body. Reads only components, the transforms read before and the world's
+		// settings.
+		void BuildBodyOffThread(PhysicsWorldData& data, ParallelBodyBuild& item, ChunkShapes& chunkShapes)
+		{
+			const Entity& entity = item.Start.Owner;
+			BodyPose& pose = item.Pose;
+			pose.WorldTransform = item.WorldTransform;
+			if (!Math::DecomposeTransform(pose.WorldTransform, pose.Position, pose.Rotation, pose.Scale))
+				return;
+
+			ShapeBuild build;
+			build.OffThread = true;
+			build.Chunk = &chunkShapes;
+			AddColliderParts(data, entity, glm::mat4(1.0f), glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), pose.Scale, item.Start.Type, build);
+			const glm::mat4 worldToBody = glm::inverse(Math::ComposeTransform(pose.Position, pose.Rotation, glm::vec3(1.0f)));
+			for (const auto& [mergedHandle, mergedWorld] : item.Parts)
+			{
+				if (build.NeedsMainThread)
+					return;
+				const glm::mat4 poseInBody = worldToBody * mergedWorld; // As in HasShapePartChanged
+				glm::vec3 partTranslation;
+				glm::quat partRotation;
+				glm::vec3 partScale;
+				if (!Math::DecomposeTransform(poseInBody, partTranslation, partRotation, partScale))
+					return;
+				AddColliderParts(data, Entity(mergedHandle, data.OwnerScene), poseInBody, partTranslation, partRotation, partScale, item.Start.Type, build);
+			}
+			if (build.NeedsMainThread || build.Parts.empty())
+				return;
+			const JPH::RefConst<JPH::Shape> shape = CombineParts(data, build, entity, build.Parts);
+			if (!shape)
+				return;
+
+			// MakeBodySettings warns only about invalid layers, which the main thread checked before.
+			JPH::BodyCreationSettings settings = MakeBodySettings(data, entity, item.Start.RigidBody, item.Start.Type, shape.GetPtr(), pose.Position, pose.Rotation);
+			settings.mLinearVelocity = ToJolt(item.LinearVelocity);
+			settings.mAngularVelocity = ToJolt(item.AngularVelocity);
+			item.Body = data.JoltSystem->GetBodyInterfaceNoLock().CreateBodyWithoutID(settings);
+			if (!item.Body)
+				return;
+			item.ShapeMembers = std::move(build.ShapeMembers);
+			item.NeedsMainThread = false;
+		}
+
+		// Refreshes many owners at once, with the results of the serial path (RefreshOwner, in record order): the same body IDs,
+		// shapes and settings, so the simulation does not depend on the number of threads. The main thread starts each build in
+		// record order (records, merged colliders, transforms, velocities), the job threads build shapes and bodies in fixed
+		// chunks, and the main thread installs them in record order, building the serial way the owners the jobs left to it.
+		void RefreshOwnersInParallel(PhysicsWorldData& data, std::span<const entt::entity> handles)
+		{
+			ST_PROFILE_FUNCTION();
+			data.ParallelBuildCount++;
+			Scene& scene = *data.OwnerScene;
+			std::vector<ParallelBodyBuild> items;
+			items.reserve(handles.size());
+			for (const entt::entity handle : handles)
+			{
+				const Entity entity(handle, &scene);
+				const Entity owner = FindBodyOwner(entity);
+				if (owner != entity || !entity.IsValid())
+				{
+					RefreshOwner(data, handle);
+					continue;
+				}
+
+				ParallelBodyBuild& item = items.emplace_back();
+				item.Start = BeginBodyBuild(data, entity);
+				const BodyRecord& record = *item.Start.Record;
+				const RigidBodyComponent* rigidBody = item.Start.RigidBody;
+				item.Eligible = !entity.HasComponent<MeshColliderComponent>() && (!rigidBody || rigidBody->Layer < c_PhysicsLayerCount)
+					&& (item.Start.Type != RigidBodyType::Dynamic || HasInvertibleParent(scene, entity));
+				if (!item.Eligible)
+					continue;
+				item.WorldTransform = scene.GetWorldTransform(entity);
+				for (const entt::entity mergedHandle : record.MergedEntities)
+				{
+					const Entity merged(mergedHandle, &scene);
+					if (!IsPartOfOwnerShape(scene, merged, entity))
+						continue;
+					if (merged.HasComponent<MeshColliderComponent>())
+					{
+						item.Eligible = false;
+						break;
+					}
+					item.Parts.emplace_back(mergedHandle, scene.GetWorldTransform(merged));
+				}
+				GetBuildVelocities(data, record, item.Start.Type, item.LinearVelocity, item.AngularVelocity);
+			}
+
+			const uint32_t itemCount = static_cast<uint32_t>(items.size());
+			const uint32_t chunkCount = (itemCount + c_ParallelBuildChunk - 1) / c_ParallelBuildChunk;
+			std::vector<ChunkShapes> chunkShapes(chunkCount);
+			const auto build = [&](uint32_t firstChunk, uint32_t lastChunk)
+			{
+				for (uint32_t chunk = firstChunk; chunk < lastChunk; chunk++)
+				{
+					for (uint32_t index = chunk * c_ParallelBuildChunk; index < std::min(itemCount, (chunk + 1) * c_ParallelBuildChunk); index++)
+					{
+						if (items[index].Eligible)
+							BuildBodyOffThread(data, items[index], chunkShapes[chunk]);
+					}
+				}
+			};
+			if (chunkCount > 1 && JobSystem::IsInitialized())
+				JobSystem::ParallelFor(chunkCount, 1, build);
+			else
+				build(0, chunkCount);
+			// Later builds share the chunks' shapes, in chunk order.
+			for (const ChunkShapes& chunk : chunkShapes)
+			{
+				for (const auto& [key, shape] : chunk.Shapes)
+				{
+					if (data.PrimitiveShapes.size() >= c_MaxSharedPrimitiveShapes)
+						break;
+					data.PrimitiveShapes.emplace(key, shape);
+				}
+			}
+
+			for (ParallelBodyBuild& item : items)
+			{
+				if (item.NeedsMainThread)
+				{
+					if (item.Body)
+						data.JoltSystem->GetBodyInterface().DestroyBodyWithoutID(item.Body);
+					CompleteBodyBuild(data, item.Start);
+					continue;
+				}
+				BodyRecord& record = *item.Start.Record;
+				record.Type = item.Start.Type;
+				record.WaitsForParent = false;
+				SetMeshSources(data, item.Start.Owner.GetHandle(), record, {});
+				InstallBody(data, item.Start, item.Body, item.Pose, std::move(item.ShapeMembers), item.LinearVelocity, item.AngularVelocity);
+			}
 		}
 
 		void RefreshActivity(PhysicsWorldData& data, entt::entity handle, BodyRecord& record)
@@ -2323,7 +2908,11 @@ namespace Strata
 				if (change.OldBody != c_NoCharacterBody)
 					data.Contacts.SetBodyInterest(JPH::BodyID(change.OldBody), false);
 				if (change.NewBody != c_NoCharacterBody)
+				{
 					data.Contacts.SetBodyInterest(JPH::BodyID(change.NewBody), data.ContactInterest.contains(change.Entity));
+					const JPH::BodyID newBody(change.NewBody);
+					InvalidateReusedIDs(data, std::span<const JPH::BodyID>(&newBody, 1));
+				}
 				if (change.Removed)
 					EndContactsOf(data, change.Entity);
 				else if (data.EntityPairs.find(change.Entity) != data.EntityPairs.end())
@@ -2331,17 +2920,45 @@ namespace Strata
 			}
 		}
 
-		void ApplyChanges(PhysicsWorldData& data)
+		bool HasChanges(const PhysicsWorldData& data)
 		{
-			ST_PROFILE_FUNCTION();
+			return !data.StructureChanges.IsEmpty() || !data.SubtreeChanges.IsEmpty() || !data.ActivityChanges.IsEmpty() || !data.TransformChanges.IsEmpty() || !data.OwnerRefreshes.IsEmpty();
+		}
 
-			Scene& scene = *data.OwnerScene;
-			const auto hasChanges = [&]()
+		// Hands the body slots that are free now (those of bodies destroyed in this round of changes count) to the records that
+		// waited longest for one, in the order they started waiting: they are rebuilt with the next round. Entries of records
+		// that no longer wait are dropped on the way. Returns whether a record was handed a slot. A record handed a slot keeps
+		// its place until it has a body, so one that loses its slot to another build of the round stays first.
+		bool GiveSlotsToWaiters(PhysicsWorldData& data)
+		{
+			if (data.SlotWaiterCount == 0)
+				return false;
+			const uint64_t used = GetUsedBodySlots(data) - data.PendingDestructions.size();
+			if (used >= data.Settings.MaxBodies)
+				return false;
+
+			uint64_t free = data.Settings.MaxBodies - used;
+			while (!data.SlotWaiters.empty() && !IsSlotWaiter(data, data.SlotWaiters.front()))
+				data.SlotWaiters.pop_front();
+
+			bool given = false;
+			for (size_t index = 0; index < data.SlotWaiters.size() && free > 0; index++)
 			{
-				return !data.StructureChanges.IsEmpty() || !data.SubtreeChanges.IsEmpty() || !data.ActivityChanges.IsEmpty() || !data.TransformChanges.IsEmpty() || !data.OwnerRefreshes.IsEmpty();
-			};
+				if (!IsSlotWaiter(data, data.SlotWaiters[index]))
+					continue;
+				data.OwnerRefreshes.Add(data.SlotWaiters[index].first);
+				free--;
+				given = true;
+			}
+			return given;
+		}
 
-			for (uint32_t round = 0; round < c_MaxChangeRounds && hasChanges(); round++)
+		// Applies recorded changes round after round until none are left (a round's changes can record more: colliders move
+		// to other bodies). False if c_MaxChangeRounds rounds did not settle them.
+		bool ApplyChangeRounds(PhysicsWorldData& data)
+		{
+			Scene& scene = *data.OwnerScene;
+			for (uint32_t round = 0; round < c_MaxChangeRounds && HasChanges(data); round++)
 			{
 				// Hierarchy changes may move any physics entity of the subtree to another body.
 				for (entt::entity handle : data.SubtreeChanges.TakeInto(data.ChangeScratch))
@@ -2360,6 +2977,20 @@ namespace Strata
 					if (!changed.IsValid())
 					{
 						data.StructureChanges.Add(handle);
+						continue;
+					}
+					// A leaf (the top-level entities of a cell that unloads, most often): nothing to walk, and no owner it could
+					// reach twice.
+					if (IsLeaf(changed))
+					{
+						if (BodyRecord* record = FindRecord(data, handle))
+						{
+							RefreshActivity(data, handle, *record);
+						}
+						else if (const auto merged = data.MergedOwners.find(handle); merged != data.MergedOwners.end())
+						{
+							RefreshOwnerIfShapeChanged(data, merged->second, changed);
+						}
 						continue;
 					}
 
@@ -2409,7 +3040,7 @@ namespace Strata
 				// The bodies an entity was part of, and the one it is part of now.
 				for (entt::entity handle : data.StructureChanges.TakeInto(data.ChangeScratch))
 				{
-					if (data.Bodies.find(handle) != data.Bodies.end())
+					if (FindRecord(data, handle))
 						data.OwnerRefreshes.Add(handle);
 					auto merged = data.MergedOwners.find(handle);
 					if (merged != data.MergedOwners.end())
@@ -2423,11 +3054,33 @@ namespace Strata
 						data.OwnerRefreshes.Add(owner.GetHandle());
 				}
 
-				for (entt::entity handle : data.OwnerRefreshes.TakeInto(data.ChangeScratch))
-					RefreshOwner(data, handle);
+				const std::vector<entt::entity>& owners = data.OwnerRefreshes.TakeInto(data.ChangeScratch);
+				if (owners.size() >= c_ParallelBuildThreshold)
+				{
+					RefreshOwnersInParallel(data, owners);
+				}
+				else
+				{
+					for (entt::entity handle : owners)
+						RefreshOwner(data, handle);
+				}
 			}
+			return !HasChanges(data);
+		}
 
-			if (hasChanges())
+		void ApplyChanges(PhysicsWorldData& data)
+		{
+			ST_PROFILE_FUNCTION();
+
+			Scene& scene = *data.OwnerScene;
+			// Timed only when there is something to do: physics calls apply pending changes before every query.
+			const bool timed = HasChanges(data);
+			const std::chrono::steady_clock::time_point start = timed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
+			bool settled = ApplyChangeRounds(data);
+			// Slots freed by this call go to the records waiting for one, which get their bodies in the same call.
+			if (settled && GiveSlotsToWaiters(data))
+				settled = ApplyChangeRounds(data);
+			if (!settled)
 			{
 				ST_CORE_ERROR("Physics: scene '{}' did not settle after {} rounds of changes; remaining changes are dropped", scene.GetName(), c_MaxChangeRounds);
 				data.StructureChanges.Clear();
@@ -2439,6 +3092,243 @@ namespace Strata
 			FlushBodyBatches(data);
 			ReportBodyLimit(data);
 			ApplyCharacterChanges(data);
+			if (timed)
+				GetUpdateCounters(data).ChangeTime += std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start).count();
+		}
+
+		//////////////////////////////////////////////////////////////////////////
+		// Growth
+		//////////////////////////////////////////////////////////////////////////
+
+		// Bodies a growth moves per job (fixed, so that the result does not depend on the number of threads).
+		constexpr uint32_t c_MigrationChunk = 4096;
+
+		// The bodies the world must have room for now: its bodies, the records and character controllers waiting for a slot,
+		// and what was reserved (PhysicsWorld::Reserve).
+		uint64_t GetRequiredBodies(const PhysicsWorldData& data)
+		{
+			const uint64_t waiting = static_cast<uint64_t>(data.SlotWaiterCount) + (data.Characters ? data.Characters->GetWaitingPresenceBodyCount() : 0u);
+			return std::max<uint64_t>(static_cast<uint64_t>(GetUsedBodySlots(data)) + waiting, data.ReservedBodies);
+		}
+
+		bool NeedsGrowth(const PhysicsWorldData& data)
+		{
+			return data.Settings.MaxBodies < GetGrowthLimit(data.Settings) && GetRequiredBodies(data) > data.Settings.MaxBodies;
+		}
+
+		// The settings of a world grown to `maxBodies`: the automatic pair and contact capacities and scratch memory follow
+		// ResolveCapacities' ratios for the bodies it must hold; capacities the settings gave stay.
+		PhysicsSettings GetGrownSettings(const PhysicsWorldData& data, uint32_t maxBodies, uint64_t requiredBodies)
+		{
+			PhysicsSettings grown = data.Settings;
+			grown.MaxBodies = maxBodies;
+			if (data.AutomaticMaxBodyPairs)
+				grown.MaxBodyPairs = ClampCapacity(std::max<uint64_t>(uint64_t(c_BodyPairsPerBody) * maxBodies, data.Settings.MaxBodyPairs), PhysicsCapacitySettings::c_MaxBodyPairsLimit);
+			if (data.AutomaticMaxContactConstraints)
+			{
+				grown.MaxContactConstraints = ClampCapacity(std::max<uint64_t>(uint64_t(c_ContactConstraintsPerBody) * requiredBodies, data.Settings.MaxContactConstraints),
+					PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
+			}
+			if (data.AutomaticTempAllocatorSize)
+			{
+				const uint64_t scratch = c_TempAllocatorBaseSize + c_TempBytesPerBody * grown.MaxBodies + c_TempBytesPerContactConstraint * grown.MaxContactConstraints;
+				grown.TempAllocatorSize = static_cast<uint32_t>(std::min<uint64_t>(std::max(scratch, c_MinTempAllocatorSize), UINT32_MAX));
+			}
+			return SanitizeSettings(grown);
+		}
+
+		// A Jolt system and its scratch memory that a growth replaced: destroyed by a background job, with Jolt kept initialized
+		// until then (its bodies' shapes are reference counted, so the bodies of the new system keep theirs).
+		struct RetiredJoltSystem
+		{
+			PhysicsRuntimeReference Runtime;
+			Scope<JPH::PhysicsSystem> System;
+			Scope<JPH::TempAllocator> Allocator;
+		};
+
+		void RetireJoltSystem(Scope<JPH::PhysicsSystem> system, Scope<JPH::TempAllocator> allocator)
+		{
+			std::shared_ptr<RetiredJoltSystem> retired = std::make_shared<RetiredJoltSystem>();
+			retired->System = std::move(system);
+			retired->Allocator = std::move(allocator);
+			if (!JobSystem::IsInitialized())
+				return; // Destroyed here
+			JobSystem::Submit([retired = std::move(retired)]() mutable { retired.reset(); }, JobPriority::Background);
+		}
+
+		// Moves the world into a Jolt system with room for the bodies it needs (see PhysicsWorld, "Capacities"). Every body
+		// keeps its JPH::BodyID (index and sequence number), so the records, BodySlots, contacts, character controllers and
+		// anything else that kept a body ID stay valid; bodies keep their poses, velocities, accumulated forces, sleep state
+		// and the contact cache (warm starting), so resting bodies keep resting and no touching pair begins again. Runs between
+		// steps, after the batches of a round of changes were flushed. Returns false when the world is at its growth limit (or
+		// the move failed, which leaves the old system in place).
+		bool GrowWorld(PhysicsWorldData& data)
+		{
+			ST_PROFILE_FUNCTION();
+			ST_CORE_ASSERT(data.PendingAdds.empty() && data.PendingActivatedAdds.empty() && data.PendingDestructions.empty(), "A world grows between rounds of changes");
+
+			using Clock = std::chrono::steady_clock;
+			const Clock::time_point start = Clock::now();
+			const uint32_t from = data.Settings.MaxBodies;
+			const uint64_t required = GetRequiredBodies(data);
+			const uint32_t to = static_cast<uint32_t>(std::min<uint64_t>(NextPowerOfTwo(std::max<uint64_t>(2ull * from, required)), GetGrowthLimit(data.Settings)));
+			if (to <= from)
+				return false;
+			const PhysicsSettings grown = GetGrownSettings(data, to, required);
+
+			Scope<JPH::PhysicsSystem> system = CreateScope<JPH::PhysicsSystem>();
+			system->Init(grown.MaxBodies + c_BroadPhaseAnchorCount, 0, grown.MaxBodyPairs, grown.MaxContactConstraints, data.BroadPhaseLayers, data.ObjectVsBroadPhase,
+				data.LayerPairFilter);
+			system->SetPhysicsSettings(data.JoltSystem->GetPhysicsSettings());
+			system->SetGravity(data.JoltSystem->GetGravity());
+
+			// Every body of the old system (the anchors and character controllers' presence bodies included), in index order:
+			// created in the new one on the job threads, chunk by chunk, from the old body's settings and its exact mass
+			// properties (settings round-trip the inertia through an inverse).
+			JPH::BodyIDVector bodyIDs;
+			data.JoltSystem->GetBodies(bodyIDs);
+			const uint32_t bodyCount = static_cast<uint32_t>(bodyIDs.size());
+			const uint32_t chunkCount = (bodyCount + c_MigrationChunk - 1) / c_MigrationChunk;
+			std::vector<JPH::Body*> created(bodyCount, nullptr);
+			std::vector<uint8_t> states(bodyCount, 0); // Bit 0: in the broad phase; bit 1: active
+			const JPH::BodyLockInterfaceNoLock& oldLocks = data.JoltSystem->GetBodyLockInterfaceNoLock();
+			// Creating bodies is safe on any thread (disjoint bodies); the main thread waits meanwhile.
+			const JPH::BodyInterface& newBodies = system->GetBodyInterfaceNoLock();
+			const auto forChunks = [&](const std::function<void(uint32_t begin, uint32_t end)>& function)
+			{
+				const auto run = [&](uint32_t firstChunk, uint32_t lastChunk)
+				{
+					for (uint32_t chunk = firstChunk; chunk < lastChunk; chunk++)
+						function(chunk * c_MigrationChunk, std::min(bodyCount, (chunk + 1) * c_MigrationChunk));
+				};
+				if (chunkCount > 1 && JobSystem::IsInitialized())
+					JobSystem::ParallelFor(chunkCount, 1, run);
+				else
+					run(0, chunkCount);
+			};
+			forChunks([&](uint32_t begin, uint32_t end)
+			{
+				for (uint32_t index = begin; index < end; index++)
+				{
+					const JPH::Body* old = oldLocks.TryGetBody(bodyIDs[index]);
+					if (!old)
+						continue;
+					JPH::Body* body = newBodies.CreateBodyWithoutID(old->GetBodyCreationSettings());
+					if (body && old->IsDynamic())
+					{
+						const JPH::MotionProperties& oldMotion = *old->GetMotionProperties();
+						JPH::MotionProperties& motion = *body->GetMotionProperties();
+						motion.SetInverseMass(oldMotion.GetInverseMassUnchecked());
+						motion.SetInverseInertia(oldMotion.GetInverseInertiaDiagonal(), oldMotion.GetInertiaRotation());
+					}
+					created[index] = body;
+					states[index] = static_cast<uint8_t>((old->IsInBroadPhase() ? 1u : 0u) | (old->IsActive() ? 2u : 0u));
+				}
+			});
+
+			// Their IDs, in index order on the main thread.
+			JPH::BodyInterface& newInterface = system->GetBodyInterface();
+			bool moved = true;
+			for (uint32_t index = 0; index < bodyCount; index++)
+			{
+				if (moved && created[index] && newInterface.AssignBodyID(created[index], bodyIDs[index]))
+					continue;
+				moved = false;
+				if (created[index] && created[index]->GetID().IsInvalid())
+					newInterface.DestroyBodyWithoutID(created[index]);
+				created[index] = nullptr;
+			}
+			if (!moved)
+			{
+				// Nothing changed yet: the old system stays, and its bodies keep waiting (the new system takes the bodies it
+				// already got with it).
+				ST_CORE_ERROR("Physics: the world of scene '{}' could not grow from {} to {} bodies: its bodies could not be moved", data.OwnerScene->GetName(), from, to);
+				return false;
+			}
+
+			// The bodies that were in the old broad phase join the new one, sleeping and awake ones in a batch each (awake ones
+			// activated). Prepared on this thread only: see FlushBodyBatches.
+			std::vector<JPH::BodyID> sleeping;
+			std::vector<JPH::BodyID> awake;
+			for (uint32_t index = 0; index < bodyCount; index++)
+			{
+				if (states[index] & 1u)
+					((states[index] & 2u) ? awake : sleeping).push_back(bodyIDs[index]);
+			}
+			const auto addBatch = [&](std::vector<JPH::BodyID>& batch, JPH::EActivation activation)
+			{
+				if (batch.empty())
+					return;
+				const JPH::BodyInterface::AddState state = newInterface.AddBodiesPrepare(batch.data(), static_cast<int>(batch.size()));
+				newInterface.AddBodiesFinalize(batch.data(), static_cast<int>(batch.size()), state, activation);
+			};
+			addBatch(sleeping, JPH::EActivation::DontActivate);
+			addBatch(awake, JPH::EActivation::Activate);
+
+			// What the creation settings do not carry, once activation reset it: forces and torques accumulated for the next
+			// step, sleep timers and spheres.
+			forChunks([&](uint32_t begin, uint32_t end)
+			{
+				PhysicsStateBuffer motion;
+				for (uint32_t index = begin; index < end; index++)
+				{
+					const JPH::Body* old = oldLocks.TryGetBody(bodyIDs[index]);
+					if (!old || !created[index] || old->IsStatic())
+						continue;
+					motion.Clear();
+					old->GetMotionProperties()->SaveState(motion);
+					created[index]->GetMotionProperties()->RestoreState(motion);
+				}
+			});
+
+			// The contact cache, so that touching pairs warm start and are not reported as new.
+			PhysicsStateBuffer contacts;
+			data.JoltSystem->SaveState(contacts, JPH::EStateRecorderState::Contacts);
+			if (!system->RestoreState(contacts) || contacts.IsFailed())
+				ST_CORE_WARN("Physics: the world of scene '{}' lost its contact cache while it grew; contacts warm start again", data.OwnerScene->GetName());
+
+			// The swap.
+			Scope<JPH::TempAllocator> oldAllocator;
+			if (grown.TempAllocatorSize != data.Settings.TempAllocatorSize)
+			{
+				oldAllocator = std::move(data.Allocator);
+				data.Allocator = CreateScope<JPH::TempAllocatorImplWithMallocFallback>(grown.TempAllocatorSize);
+			}
+			std::swap(data.JoltSystem, system);
+			data.JoltSystem->SetContactListener(&data.Contacts);
+			data.JoltSystem->SetBodyActivationListener(&data.Activations);
+			data.Settings = grown;
+			data.BodySlots.resize(data.JoltSystem->GetMaxBodies());
+			data.MovedBodyBits.resize((data.BodySlots.size() + 63) / 64, 0);
+			data.Contacts.Grow(data.JoltSystem->GetMaxBodies());
+			std::vector<CharacterBodyChange>& characterChanges = data.CharacterChanges;
+			characterChanges.clear();
+			data.Characters->Rebind(*data.JoltSystem, characterChanges);
+			for (const CharacterBodyChange& change : characterChanges)
+				data.Contacts.SetBodyInterest(JPH::BodyID(change.NewBody), data.ContactInterest.contains(change.Entity));
+			RetireJoltSystem(std::move(system), std::move(oldAllocator));
+
+			// Every waiting record tries again (in the order they waited).
+			for (const auto& [handle, ticket] : data.SlotWaiters)
+			{
+				if (IsSlotWaiter(data, { handle, ticket }))
+					data.OwnerRefreshes.Add(handle);
+			}
+
+			data.GrowthCount++;
+			data.LastGrowthFrom = from;
+			data.LastGrowthTo = to;
+			data.LastGrowthMs = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
+			GetUpdateCounters(data).ChangeTime += data.LastGrowthMs;
+			data.ReservedBytes = PhysicsWorld::EstimateReservedBytes(data.Settings);
+			ST_CORE_INFO("Physics: the world of scene '{}' grew from {} to {} bodies in {:.1f} ms; cook the world (world.cook) or raise its physics capacity to "
+				"start at that size", data.OwnerScene->GetName(), from, to, data.LastGrowthMs);
+			if (!data.AutomaticMaxBodies && data.GrowthCount == 1)
+			{
+				ST_CORE_WARN("Physics: scene '{}' needs more bodies than its PhysicsCapacity.MaxBodies of {}; its world grew beyond it, to {} bodies", data.OwnerScene->GetName(),
+					from, to);
+			}
+			return true;
 		}
 
 		//////////////////////////////////////////////////////////////////////////
@@ -2743,7 +3633,6 @@ namespace Strata
 						case BuildFailure::DegenerateTransform:
 							retry = scene.GetWorldTransform(entity) != record->LastWorldTransform || (record->WaitsForParent && HasInvertibleParent(scene, entity));
 							break;
-						case BuildFailure::BodyLimit: retry = GetUsedBodySlots(data) < data.Settings.MaxBodies; break;
 						default: break;
 					}
 				}
@@ -3485,7 +4374,7 @@ namespace Strata
 		{
 			if (!entity.IsValid() || entity.GetScene() != data.OwnerScene)
 				return {};
-			if (data.Bodies.find(entity.GetHandle()) != data.Bodies.end())
+			if (FindRecord(data, entity.GetHandle()))
 				return entity;
 			auto merged = data.MergedOwners.find(entity.GetHandle());
 			return merged != data.MergedOwners.end() ? Entity(merged->second, data.OwnerScene) : Entity();
@@ -3552,7 +4441,7 @@ namespace Strata
 	// PhysicsWorld
 	////////////////////////////////////////////////////////////////////////////////
 
-	PhysicsWorld::PhysicsWorld(Scene& scene, const PhysicsSettings& settings, const PhysicsCapacityDemand& demand)
+	PhysicsWorld::PhysicsWorld(Scene& scene, const PhysicsSettings& settings, const PhysicsCapacityDemand& demand, PhysicsBuildMode mode)
 		: m_Data(CreateScope<PhysicsWorldData>(scene, SanitizeSettings(ResolveCapacities(settings, CountBodyCandidates(scene), demand))))
 	{
 		ST_PROFILE_FUNCTION();
@@ -3561,6 +4450,8 @@ namespace Strata
 		data.AutomaticMaxBodies = settings.MaxBodies == 0;
 		data.AutomaticMaxBodyPairs = settings.MaxBodyPairs == 0;
 		data.AutomaticMaxContactConstraints = settings.MaxContactConstraints == 0;
+		data.AutomaticTempAllocatorSize = settings.TempAllocatorSize == 0;
+		data.ReservedBytes = EstimateReservedBytes(data.Settings);
 		data.Allocator = CreateScope<JPH::TempAllocatorImplWithMallocFallback>(data.Settings.TempAllocatorSize);
 		data.Jobs = CreatePhysicsJobSystem(&data.JobCounters);
 		data.JoltSystem = CreateScope<JPH::PhysicsSystem>();
@@ -3589,13 +4480,53 @@ namespace Strata
 		RememberMeshState(data); // Before the bodies read mesh data: later changes are noticed against it
 		for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
 		{
-			if (HasPhysicsComponent(entity))
+			if (!HasPhysicsComponent(entity))
+				continue;
+			if (mode == PhysicsBuildMode::Sliced)
+				data.PendingBuild.push_back(entity.GetHandle());
+			else
 				data.StructureChanges.Add(entity.GetHandle());
 		}
-		ApplyChanges(data);
+		if (mode == PhysicsBuildMode::Immediate)
+		{
+			ApplyChanges(data);
+			// Bodies were inserted in batches; rebuilding the broad phase trees once makes the first queries and steps fast.
+			data.JoltSystem->OptimizeBroadPhase();
+			data.Built = true;
+		}
+	}
 
-		// Bodies were inserted one by one; rebuilding the broad phase trees once makes the first queries and steps fast.
+	bool PhysicsWorld::BuildSlice(uint32_t maxOwners)
+	{
+		ST_PROFILE_FUNCTION();
+		PhysicsWorldData& data = *m_Data;
+		if (data.Built)
+			return true;
+		// The owners of the next entities (colliders merged into an ancestor's body are built with it), handed to a round of
+		// changes with what was recorded meanwhile.
+		uint32_t owners = 0;
+		for (; data.PendingBuildIndex < data.PendingBuild.size() && owners < maxOwners; data.PendingBuildIndex++)
+		{
+			const Entity entity(data.PendingBuild[data.PendingBuildIndex], data.OwnerScene);
+			if (entity.IsValid() && FindBodyOwner(entity) == entity)
+			{
+				data.OwnerRefreshes.Add(entity.GetHandle());
+				owners++;
+			}
+		}
+		ApplyChanges(data);
+		data.PreparedSlices++;
+		if (data.PendingBuildIndex < data.PendingBuild.size())
+			return false;
+		data.PendingBuild = {};
 		data.JoltSystem->OptimizeBroadPhase();
+		data.Built = true;
+		return true;
+	}
+
+	bool PhysicsWorld::IsBuilt() const
+	{
+		return m_Data->Built;
 	}
 
 	PhysicsSettings PhysicsWorld::ResolveCapacities(const PhysicsSettings& settings, uint32_t bodyCount, const PhysicsCapacityDemand& demand)
@@ -3620,6 +4551,40 @@ namespace Strata
 			resolved.TempAllocatorSize = static_cast<uint32_t>(std::min<uint64_t>(std::max(scratch, c_MinTempAllocatorSize), UINT32_MAX));
 		}
 		return resolved;
+	}
+
+	uint64_t PhysicsWorld::EstimateReservedBytes(const PhysicsSettings& settings)
+	{
+		const PhysicsSettings resolved = SanitizeSettings(settings);
+		return c_ReservedBytesPerBody * resolved.MaxBodies + c_ReservedBytesPerBodyPair * resolved.MaxBodyPairs
+			+ c_ReservedBytesPerContactConstraint * resolved.MaxContactConstraints + resolved.TempAllocatorSize;
+	}
+
+	uint32_t PhysicsWorld::CountBodyCandidates(const Scene& scene)
+	{
+		const entt::registry& registry = scene.GetRegistry();
+		uint64_t count = 0;
+		if (const auto* rigidBodies = registry.storage<RigidBodyComponent>())
+			count += rigidBodies->size();
+		const auto countColliders = [&]<typename Collider, typename... Earlier>()
+		{
+			const auto* colliders = registry.storage<Collider>();
+			if (!colliders)
+				return;
+			for (const entt::entity handle : static_cast<const entt::sparse_set&>(*colliders))
+			{
+				// Entities with several colliders count once (with the first collider type they have).
+				if (!registry.any_of<RigidBodyComponent, Earlier...>(handle))
+					count++;
+			}
+		};
+		countColliders.template operator()<BoxColliderComponent>();
+		countColliders.template operator()<SphereColliderComponent, BoxColliderComponent>();
+		countColliders.template operator()<CapsuleColliderComponent, BoxColliderComponent, SphereColliderComponent>();
+		countColliders.template operator()<MeshColliderComponent, BoxColliderComponent, SphereColliderComponent, CapsuleColliderComponent>();
+		// Character controllers have presence bodies.
+		count += CharacterControllerSet::CountCandidates(scene);
+		return static_cast<uint32_t>(std::min<uint64_t>(count, UINT32_MAX));
 	}
 
 	PhysicsWorld::~PhysicsWorld()
@@ -3686,9 +4651,54 @@ namespace Strata
 		ApplyChanges(*m_Data);
 	}
 
+	PhysicsCapacityInfo PhysicsWorld::GetCapacityInfo() const
+	{
+		const PhysicsWorldData& data = *m_Data;
+		PhysicsCapacityInfo info;
+		info.Bodies = GetUsedBodySlots(data);
+		info.MaxBodies = data.Settings.MaxBodies;
+		info.WaitingForSlot = data.SlotWaiterCount;
+		info.PendingOther = data.FailureCounts[static_cast<size_t>(BuildFailure::DegenerateTransform)] + data.FailureCounts[static_cast<size_t>(BuildFailure::MissingMesh)];
+		const PhysicsWorldData::UpdateCounters lastUpdate = GetLastUpdateCounters(data);
+		info.AddedLastUpdate = lastUpdate.BodiesAdded;
+		info.RemovedLastUpdate = lastUpdate.BodiesRemoved;
+		info.GrowthCount = data.GrowthCount;
+		info.LastGrowthMs = data.LastGrowthMs;
+		info.ReservedBytes = data.ReservedBytes;
+		return info;
+	}
+
+	void PhysicsWorld::Reserve(uint32_t bodies)
+	{
+		m_Data->ReservedBodies = std::min(bodies, PhysicsCapacitySettings::c_MaxBodiesLimit);
+	}
+
+	uint32_t PhysicsWorld::GetReservedBodies() const
+	{
+		return m_Data->ReservedBodies;
+	}
+
+	bool PhysicsWorld::Grow()
+	{
+		PhysicsWorldData& data = *m_Data;
+		ApplyChanges(data);
+		if (!NeedsGrowth(data) || !GrowWorld(data))
+			return false;
+		ApplyChanges(data);
+		return true;
+	}
+
 	bool PhysicsWorld::HasBody(Entity entity) const
 	{
 		return FindSimulatedRecord(*m_Data, entity) != nullptr;
+	}
+
+	uint32_t PhysicsWorld::GetBodyID(Entity entity) const
+	{
+		if (!entity.IsValid() || entity.GetScene() != m_Data->OwnerScene)
+			return c_NoBodyID;
+		const BodyRecord* record = FindRecord(*m_Data, entity.GetHandle());
+		return record && record->HasBody() ? record->BodyID.GetIndexAndSequenceNumber() : c_NoBodyID;
 	}
 
 	Entity PhysicsWorld::GetBodyEntity(Entity entity) const
@@ -3708,6 +4718,9 @@ namespace Strata
 		const auto millisecondsBetween = [](Clock::time_point start, Clock::time_point end) { return std::chrono::duration<float, std::milli>(end - start).count(); };
 		const Clock::time_point startTime = Clock::now();
 		ApplyChanges(data);
+		// Bodies that found the world full, or bodies reserved for, get room before the step (see "Capacities").
+		if (NeedsGrowth(data) && GrowWorld(data))
+			ApplyChanges(data);
 		data.HeldLastStep = HoldForMeshes(data, timestep);
 		if (data.HeldLastStep)
 		{
@@ -4127,7 +5140,7 @@ namespace Strata
 		stats.MaxBodies = data.Settings.MaxBodies;
 		stats.MaxBodyPairs = data.Settings.MaxBodyPairs;
 		stats.MaxContactConstraints = data.Settings.MaxContactConstraints;
-		stats.BodyOverflowCount = data.BodyLimitCount;
+		stats.BodyOverflowCount = data.SlotWaiterCount;
 		stats.ContactOverflowSteps = data.ContactOverflowSteps;
 		stats.Demand = data.Demand;
 		stats.SyncedBodyCount = data.LastSyncedBodies;
@@ -4135,6 +5148,13 @@ namespace Strata
 		stats.WrittenBodyCount = data.LastWrittenBodies;
 		stats.OrderedSlotCount = data.LastOrderedSlots;
 		stats.BuildCount = data.BuildCount;
+		stats.ParallelBuildCount = data.ParallelBuildCount;
+		stats.WakeQueryCount = data.WakeQueryCount;
+		stats.PreparedSlices = data.PreparedSlices;
+		const PhysicsWorldData::UpdateCounters lastUpdate = GetLastUpdateCounters(data);
+		stats.BodiesAddedLastUpdate = lastUpdate.BodiesAdded;
+		stats.BodiesRemovedLastUpdate = lastUpdate.BodiesRemoved;
+		stats.ChangeTime = lastUpdate.ChangeTime;
 		stats.AddBatchCount = data.AddBatchCount;
 		stats.SharedShapeCount = static_cast<uint32_t>(data.PrimitiveShapes.size());
 		stats.MeshCheckCount = data.MeshCheckCount;
@@ -4148,6 +5168,10 @@ namespace Strata
 		stats.SyncTime = data.LastSyncTime;
 		stats.WriteBackTime = data.LastWriteBackTime;
 		stats.ContactTime = data.LastContactTime;
+		stats.GrowthCount = data.GrowthCount;
+		stats.LastGrowthMs = data.LastGrowthMs;
+		stats.LastGrowthFrom = data.LastGrowthFrom;
+		stats.LastGrowthTo = data.LastGrowthTo;
 		return stats;
 	}
 

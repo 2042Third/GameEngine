@@ -31,7 +31,7 @@ namespace Strata
 			return true;
 		}
 
-		// Assets the engine writes itself (materials, prefabs, scenes, animation controllers) are stored as their JSON source. Importing only
+		// Assets the engine writes itself (materials, prefabs, scenes, animation controllers, worlds) are stored as their JSON source. Importing only
 		// validates the document with the type's loader.
 		class NativeAssetImporter final : public AssetImporter
 		{
@@ -164,6 +164,7 @@ namespace Strata
 #if ST_WITH_ANIMATION
 		AssetImporterRegistry::Register(CreateScope<NativeAssetImporter>(AssetType::AnimationController, GetNativeAssetExtension(AssetType::AnimationController)));
 #endif
+		AssetImporterRegistry::Register(CreateScope<NativeAssetImporter>(AssetType::World, GetNativeAssetExtension(AssetType::World)));
 		AssetImporterRegistry::Register(CreateScope<TextureImporter>());
 		AssetImporterRegistry::Register(CreateScope<GltfImporter>());
 #if ST_WITH_AUDIO

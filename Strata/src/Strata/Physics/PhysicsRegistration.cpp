@@ -16,6 +16,8 @@ namespace Strata
 		SceneSystemDescriptor descriptor = MakeSceneSystemDescriptor<PhysicsSystem>("Physics", true, [](Scene& scene) { return CreateScope<PhysicsSystem>(scene); });
 		descriptor.AfterIfPresent = { "Scripting" };
 		descriptor.ProfileStage = "Scene.Physics";
+		// A loaded scene's bodies are built while its load prepares it, so that the frame it starts in builds none.
+		descriptor.PrepareLoadedScene = &PhysicsSystem::PrepareLoadedScene;
 		const bool registered = SceneSystemRegistry::Register(std::move(descriptor));
 		ST_CORE_VERIFY(registered, "The physics module could not register its scene system");
 	}

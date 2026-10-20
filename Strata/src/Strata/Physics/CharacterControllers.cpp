@@ -5,6 +5,7 @@
 #include "Strata/Math/Math.h"
 #include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Physics/PhysicsLayers.h"
+#include "Strata/Physics/PhysicsStateBuffer.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 
@@ -181,6 +182,7 @@ namespace Strata
 			glm::vec3 NewPosition = glm::vec3(0.0f);
 			JPH::Vec3 StepVelocity = JPH::Vec3::sZero();
 			std::vector<PushContact> Pushes;
+			bool WaitsForPresenceSlot = false; // The world was full when the presence body was made (see Rebind)
 			bool HasParent = false;
 			bool CanWrite = true;
 			glm::mat4 InverseParentWorld = glm::mat4(1.0f);
@@ -299,6 +301,7 @@ namespace Strata
 		std::vector<ControllerRecord*> StepRecords;
 		std::vector<entt::entity> ChangeScratch;
 		std::vector<JPH::BodyID> NewPresenceBodies;
+		uint32_t WaitingPresenceBodies = 0; // Records with WaitsForPresenceSlot
 		float LastStepTime = 0.0f;
 
 		// Declared last: disconnected before anything the handlers use is destroyed.
@@ -375,6 +378,76 @@ namespace Strata
 			record.PresenceBody = JPH::BodyID();
 		}
 
+		// The Jolt character of a record, with its capsule `shape`, standing at `position` (its feet) in the set's Jolt system.
+		JPH::Ref<JPH::CharacterVirtual> CreateCharacter(CharacterControllerSetData& data, ControllerRecord& record, const JPH::Shape* shape, const glm::vec3& position)
+		{
+			JPH::Ref<JPH::CharacterVirtualSettings> settings = new JPH::CharacterVirtualSettings();
+			settings->mShape = shape;
+			settings->mUp = JPH::Vec3::sAxisY();
+			settings->mCharacterPadding = c_CharacterPadding;
+			// Contacts below the center of the capsule's lower sphere can hold it up.
+			settings->mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -record.Shape.Radius);
+			// The set presses down what the character stands on and pushes bodies itself (see Step), after every move.
+			settings->mMass = 0.0f;
+			settings->mMaxStrength = 0.0f;
+			JPH::Ref<JPH::CharacterVirtual> character = new JPH::CharacterVirtual(settings, ToJoltPosition(position), JPH::Quat::sIdentity(),
+				static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&record)), data.System);
+			character->SetListener(&data.Listener);
+			return character;
+		}
+
+		void SetWaitsForPresenceSlot(CharacterControllerSetData& data, ControllerRecord& record, bool waits)
+		{
+			if (record.WaitsForPresenceSlot == waits)
+				return;
+			record.WaitsForPresenceSlot = waits;
+			if (waits)
+				data.WaitingPresenceBodies++;
+			else
+				data.WaitingPresenceBodies--;
+		}
+
+		// The presence body of a record at `position`: kinematic, on the controller's layer. Moving wakes it (triggers only
+		// notice awake bodies); standing still it falls asleep like any body, so that its contacts with sleeping bodies (a
+		// crate on its head) last. It joins the simulation with the batch of ApplyChanges. A full world leaves the controller
+		// without one until the world grows (see Rebind).
+		void CreatePresenceBody(CharacterControllerSetData& data, ControllerRecord& record, const Entity& entity, const glm::vec3& position)
+		{
+			SetWaitsForPresenceSlot(data, record, false);
+			const JPH::RefConst<JPH::Shape> presenceShape = CreateCapsule(record.Shape, c_PresenceRadiusFraction);
+			if (!presenceShape)
+				return;
+			if (data.System->GetNumBodies() < data.System->GetMaxBodies())
+			{
+				JPH::BodyCreationSettings bodySettings(presenceShape, GetPresencePosition(position), JPH::Quat::sIdentity(), JPH::EMotionType::Kinematic,
+					PhysicsLayers::MakeObjectLayer(record.Shape.Layer, true));
+				bodySettings.mUserData = static_cast<uint64_t>(record.EntityID);
+				if (JPH::Body* body = data.System->GetBodyInterface().CreateBody(bodySettings))
+				{
+					record.PresenceBody = body->GetID();
+					data.NewPresenceBodies.push_back(record.PresenceBody);
+				}
+			}
+			SetWaitsForPresenceSlot(data, record, record.PresenceBody.IsInvalid());
+			if (record.WaitsForPresenceSlot && data.FullWorldEntities.insert(record.EntityID).second)
+			{
+				ST_CORE_WARN("Physics: the world has no room for the presence body of '{}' (its body limit is reached): it moves, but bodies, "
+					"triggers and queries do not see it until the world grows", entity.GetName());
+			}
+		}
+
+		// New presence bodies join the simulation in one batch.
+		void AddNewPresenceBodies(CharacterControllerSetData& data)
+		{
+			if (data.NewPresenceBodies.empty())
+				return;
+			JPH::BodyInterface& bodies = data.System->GetBodyInterface();
+			const int count = static_cast<int>(data.NewPresenceBodies.size());
+			const JPH::BodyInterface::AddState state = bodies.AddBodiesPrepare(data.NewPresenceBodies.data(), count);
+			bodies.AddBodiesFinalize(data.NewPresenceBodies.data(), count, state, JPH::EActivation::Activate);
+			data.NewPresenceBodies.clear();
+		}
+
 		// Builds the Jolt character and the presence body of a record at `position` (its feet), keeping the record's gameplay
 		// state. The presence body joins the simulation with the batch of ApplyChanges.
 		bool BuildCharacter(CharacterControllerSetData& data, ControllerRecord& record, Entity entity, const glm::vec3& position)
@@ -389,40 +462,9 @@ namespace Strata
 				return false;
 			}
 
-			JPH::Ref<JPH::CharacterVirtualSettings> settings = new JPH::CharacterVirtualSettings();
-			settings->mShape = shape;
-			settings->mUp = JPH::Vec3::sAxisY();
-			settings->mCharacterPadding = c_CharacterPadding;
-			// Contacts below the center of the capsule's lower sphere can hold it up.
-			settings->mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -record.Shape.Radius);
-			// The set presses down what the character stands on and pushes bodies itself (see Step), after every move.
-			settings->mMass = 0.0f;
-			settings->mMaxStrength = 0.0f;
-			record.Character = new JPH::CharacterVirtual(settings, ToJoltPosition(position), JPH::Quat::sIdentity(), static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&record)), data.System);
-			record.Character->SetListener(&data.Listener);
+			record.Character = CreateCharacter(data, record, shape.GetPtr(), position);
 			RefreshSettings(record, component);
-
-			// The presence body: kinematic, on the controller's layer. Moving wakes it (triggers only notice awake bodies);
-			// standing still it falls asleep like any body, so that its contacts with sleeping bodies (a crate on its head)
-			// last.
-			const JPH::RefConst<JPH::Shape> presenceShape = CreateCapsule(record.Shape, c_PresenceRadiusFraction);
-			JPH::BodyInterface& bodies = data.System->GetBodyInterface();
-			if (presenceShape && data.System->GetNumBodies() < data.System->GetMaxBodies())
-			{
-				JPH::BodyCreationSettings bodySettings(presenceShape, GetPresencePosition(position), JPH::Quat::sIdentity(), JPH::EMotionType::Kinematic,
-					PhysicsLayers::MakeObjectLayer(record.Shape.Layer, true));
-				bodySettings.mUserData = static_cast<uint64_t>(record.EntityID);
-				if (JPH::Body* body = bodies.CreateBody(bodySettings))
-				{
-					record.PresenceBody = body->GetID();
-					data.NewPresenceBodies.push_back(record.PresenceBody);
-				}
-			}
-			if (record.PresenceBody.IsInvalid() && data.FullWorldEntities.insert(record.EntityID).second)
-			{
-				ST_CORE_WARN("Physics: the world has no room for the presence body of '{}' (its body limit is reached): it moves, but bodies, "
-					"triggers and queries do not see it", entity.GetName());
-			}
+			CreatePresenceBody(data, record, entity, position);
 
 			// Where it stands right away: the ground state is valid before its first step.
 			const ControllerLayerFilter layers(*data.Settings, record.Shape.Layer);
@@ -437,6 +479,7 @@ namespace Strata
 			ControllerRecord& record = it->second;
 			const JPH::BodyID body = record.PresenceBody;
 			DestroyPresenceBody(data, record);
+			SetWaitsForPresenceSlot(data, record, false);
 			outChanges.push_back({ record.EntityID, body.GetIndexAndSequenceNumber(), c_NoCharacterBody, true });
 			data.Controllers.erase(it);
 		}
@@ -469,6 +512,7 @@ namespace Strata
 				const JPH::Vec3 velocity = record.Character->GetLinearVelocity();
 				if (!BuildCharacter(data, record, entity, position))
 				{
+					SetWaitsForPresenceSlot(data, record, false);
 					outChanges.push_back({ record.EntityID, oldBody.GetIndexAndSequenceNumber(), c_NoCharacterBody, true });
 					data.Controllers.erase(it);
 					return;
@@ -748,15 +792,47 @@ namespace Strata
 		for (const entt::entity handle : handles)
 			RefreshController(data, handle, outChanges);
 
-		// New presence bodies join the simulation in one batch.
-		if (!data.NewPresenceBodies.empty())
+		AddNewPresenceBodies(data);
+	}
+
+	void CharacterControllerSet::Rebind(JPH::PhysicsSystem& system, std::vector<CharacterBodyChange>& outChanges)
+	{
+		ST_PROFILE_FUNCTION();
+		CharacterControllerSetData& data = *m_Data;
+		data.System = &system;
+		PhysicsStateBuffer state;
+		for (auto& [handle, record] : data.Controllers)
 		{
-			JPH::BodyInterface& bodies = data.System->GetBodyInterface();
-			const int count = static_cast<int>(data.NewPresenceBodies.size());
-			const JPH::BodyInterface::AddState state = bodies.AddBodiesPrepare(data.NewPresenceBodies.data(), count);
-			bodies.AddBodiesFinalize(data.NewPresenceBodies.data(), count, state, JPH::EActivation::Activate);
-			data.NewPresenceBodies.clear();
+			// The same capsule in the new system, with everything the old one knew: position, velocity, ground state and the
+			// contacts its next move starts from (they name bodies by ID, which the growth kept).
+			const JPH::Ref<JPH::CharacterVirtual> previous = record.Character;
+			state.Clear();
+			previous->SaveState(state);
+			record.Character = CreateCharacter(data, record, previous->GetShape(), ToGlm(JPH::Vec3(previous->GetPosition())));
+			record.Character->RestoreState(state);
+			const Entity entity(handle, data.OwnerScene);
+			if (const CharacterControllerComponent* component = entity.TryGetComponent<CharacterControllerComponent>())
+				RefreshSettings(record, *component);
+			if (state.IsFailed())
+				ST_CORE_ERROR("Physics: the character controller of '{}' could not keep its state while its world grew", entity.GetName());
+
+			// Controllers the full world left without a presence body get one now.
+			if (record.WaitsForPresenceSlot)
+			{
+				CreatePresenceBody(data, record, entity, record.Position);
+				if (!record.PresenceBody.IsInvalid())
+				{
+					data.FullWorldEntities.erase(record.EntityID);
+					outChanges.push_back({ record.EntityID, c_NoCharacterBody, record.PresenceBody.GetIndexAndSequenceNumber(), false });
+				}
+			}
 		}
+		AddNewPresenceBodies(data);
+	}
+
+	uint32_t CharacterControllerSet::GetWaitingPresenceBodyCount() const
+	{
+		return m_Data->WaitingPresenceBodies;
 	}
 
 	void CharacterControllerSet::Step(float timestep, const glm::vec3& gravity, bool collectContacts, CharacterStepOutput& output)

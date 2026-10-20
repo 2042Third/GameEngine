@@ -42,22 +42,26 @@ namespace Strata
 	namespace
 	{
 
-		// The type filter's chips: a label and the asset types it shows.
+		// The type filter's chips: a label, the asset types it shows and its tooltip (which names it when the chip shows its
+		// icon only).
 		struct TypeChip
 		{
 			const char* Id;
 			const char* Label;
 			AssetType Type;
+			const char* Tooltip;
 		};
 		constexpr TypeChip c_TypeChips[] = {
-			{ "ContentBrowser.Filter.Scene", "Scenes", AssetType::Scene },
-			{ "ContentBrowser.Filter.Prefab", "Prefabs", AssetType::Prefab },
-			{ "ContentBrowser.Filter.Model", "Models", AssetType::Model },
-			{ "ContentBrowser.Filter.Material", "Materials", AssetType::Material },
-			{ "ContentBrowser.Filter.Texture", "Textures", AssetType::Texture },
-			{ "ContentBrowser.Filter.AudioClip", "Audio", AssetType::AudioClip },
-			{ "ContentBrowser.Filter.Font", "Fonts", AssetType::Font },
-			{ "ContentBrowser.Filter.AnimationController", "Controllers", AssetType::AnimationController },
+			{ "ContentBrowser.Filter.Scene", "Scenes", AssetType::Scene, "Scenes: show only these types (several can be on)" },
+			{ "ContentBrowser.Filter.Prefab", "Prefabs", AssetType::Prefab, "Prefabs: show only these types (several can be on)" },
+			{ "ContentBrowser.Filter.Model", "Models", AssetType::Model, "Models: show only these types (several can be on)" },
+			{ "ContentBrowser.Filter.Material", "Materials", AssetType::Material, "Materials: show only these types (several can be on)" },
+			{ "ContentBrowser.Filter.Texture", "Textures", AssetType::Texture, "Textures: show only these types (several can be on)" },
+			{ "ContentBrowser.Filter.AudioClip", "Audio", AssetType::AudioClip, "Audio clips: show only these types (several can be on)" },
+			{ "ContentBrowser.Filter.Font", "Fonts", AssetType::Font, "Fonts: show only these types (several can be on)" },
+			{ "ContentBrowser.Filter.AnimationController", "Controllers", AssetType::AnimationController,
+				"Animation controllers: show only these types (several can be on)" },
+			{ "ContentBrowser.Filter.World", "Worlds", AssetType::World, "Worlds: show only these types (several can be on)" },
 		};
 
 		// The tree pane's width when the panel opens, in font sizes.
@@ -355,6 +359,22 @@ namespace Strata
 		BeginRename(folder);
 	}
 
+	void ContentBrowserPanel::CreateWorld(EditorPanelContext& panelContext, EditorAssetManager& assets)
+	{
+		// "World", "World 2", ... in this folder, with a persistent scene of the same name; it replaces the edited scene, so
+		// the person is asked about unsaved changes first.
+		std::string path = CommandUtils::MakeUniqueAssetPath(assets, m_View.GetFolder(), "World", ".stworld", "World");
+		path.resize(path.size() - std::string_view(".stworld").size());
+		auto create = [&runner = panelContext.Runner, &context = panelContext.Context, &commands = panelContext.Commands, path](bool force)
+		{
+			RunEditorCommandDeferred(runner, context, commands, "world.create", { { "path", path }, { "force", force } });
+		};
+		if (panelContext.Shell)
+			panelContext.Shell->RequestDiscardChanges([create]() { create(true); });
+		else
+			create(false);
+	}
+
 	void ContentBrowserPanel::CreateMaterial(EditorPanelContext& panelContext, EditorAssetManager& assets)
 	{
 		// "Material", "Material 2", ...: made, selected (the Asset tab shows it) and renamed in place, like a new folder.
@@ -548,6 +568,10 @@ namespace Strata
 			UI::ItemProbe::Record("ContentBrowser.New.Folder");
 			const bool material = ImGui::MenuItem((std::string(Icons::Palette) + "  Material").c_str());
 			UI::ItemProbe::Record("ContentBrowser.New.Material");
+			const bool world = ImGui::MenuItem((std::string(Icons::Earth) + "  World").c_str());
+			UI::ItemProbe::Record("ContentBrowser.New.World");
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+				ImGui::SetTooltip("A world of streamed cells and its persistent scene, opened for editing (world.create)");
 			// Scripts live in the project's script directory, not among the assets: the editor's New Script dialog writes them.
 			const bool canWriteScript = panelContext.Shell != nullptr;
 			const bool script = ImGui::MenuItem((std::string(Icons::FileCode) + "  Script...").c_str(), nullptr, false, canWriteScript);
@@ -556,6 +580,8 @@ namespace Strata
 				CreateFolder(panelContext);
 			if (material)
 				CreateMaterial(panelContext, assets);
+			if (world)
+				CreateWorld(panelContext, assets);
 			if (script)
 				panelContext.Shell->ShowNewScriptDialog();
 			ImGui::EndPopup();
@@ -582,11 +608,10 @@ namespace Strata
 		// The second row: the search, the type chips, and the view's mode and size at the right end.
 		if (UI::SearchField("ContentBrowser.Search", m_Search, "Search", ImGui::GetFontSize() * 12.0f, "Names below this folder that contain every word"))
 			m_View.SetSearch(m_Search);
-		ImGui::SameLine();
-		DrawFilters();
-
 		const float sliderWidth = ImGui::GetFontSize() * 5.0f;
 		const float viewWidth = ImGui::GetFrameHeight() * 2.0f + style.ItemInnerSpacing.x + (m_Mode == ViewMode::Grid ? sliderWidth + style.ItemSpacing.x : 0.0f);
+		ImGui::SameLine();
+		DrawFilters(viewWidth + style.ItemSpacing.x);
 		ImGui::SameLine();
 		ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - viewWidth));
 		if (m_Mode == ViewMode::Grid)
@@ -671,9 +696,14 @@ namespace Strata
 		}
 	}
 
-	void ContentBrowserPanel::DrawFilters()
+	void ContentBrowserPanel::DrawFilters(float reservedWidth)
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
+		float labeledWidth = 0.0f;
+		for (const TypeChip& chip : c_TypeChips)
+			labeledWidth += UI::ChipWidth(UI::GetAssetTypeIcon(chip.Type), chip.Label) + style.ItemInnerSpacing.x;
+		const bool labels = labeledWidth + reservedWidth <= ImGui::GetContentRegionAvail().x;
+
 		std::set<AssetType> types = m_View.GetTypeFilter();
 		bool changed = false;
 		for (size_t index = 0; index < std::size(c_TypeChips); index++)
@@ -682,7 +712,7 @@ namespace Strata
 			bool on = types.contains(chip.Type);
 			if (index > 0)
 				ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
-			if (UI::ToggleChip(chip.Id, UI::GetAssetTypeIcon(chip.Type), chip.Label, &on, "Show only these types (several can be on)"))
+			if (UI::ToggleChip(chip.Id, UI::GetAssetTypeIcon(chip.Type), labels ? chip.Label : nullptr, &on, chip.Tooltip))
 			{
 				if (on)
 					types.insert(chip.Type);
@@ -1158,6 +1188,11 @@ namespace Strata
 		{
 			if (EditorAssetManager* assets = context.GetAssetManager())
 				CreateMaterial(panelContext, *assets);
+		}
+		if (ImGui::MenuItem((std::string(Icons::Earth) + "  New World").c_str()))
+		{
+			if (EditorAssetManager* assets = context.GetAssetManager())
+				CreateWorld(panelContext, *assets);
 		}
 		if (ImGui::MenuItem((std::string(Icons::FileCode) + "  New Script...").c_str(), nullptr, false, panelContext.Shell != nullptr))
 			panelContext.Shell->ShowNewScriptDialog();

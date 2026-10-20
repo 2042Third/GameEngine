@@ -53,6 +53,10 @@ namespace Strata
 			{ 0.30f, 0.56f, 0.88f, 0.55f },
 			{ 0.91f, 0.76f, 0.30f, 0.55f },
 			{ 0.90f, 0.33f, 0.29f, 0.55f } } };
+		// The viewport's cell bounds (CellBoundsOverlay): cells loading, loaded and unloading.
+		glm::vec4 CellLoading = { 0.91f, 0.76f, 0.30f, 1.0f };
+		glm::vec4 CellLoaded = { 0.84f, 0.55f, 0.27f, 1.0f };
+		glm::vec4 CellUnloading = { 0.60f, 0.58f, 0.55f, 1.0f };
 	};
 
 	// What a debug view found in the last Build, among the entities in the camera's view.

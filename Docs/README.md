@@ -21,6 +21,8 @@ Guides for people making games in the editor:
 - [Manual/Scripting.md](Manual/Scripting.md): creating, building, debugging and hot-reloading scripts, the Problems
   panel, crash reports with file and line, opening scripts in an IDE (CMake presets for IntelliSense) and attaching a
   debugger.
+- [Manual/Worlds.md](Manual/Worlds.md): worlds of streamed cells: layers, editing by cell, the cell map, saving,
+  cooking, playing and exporting, streaming sources and the script API, and their limits.
 - [Manual/Prefabs.md](Manual/Prefabs.md): making prefabs, placing instances, overrides (the prefab bar, the marks,
   Apply and Revert), how prefab changes reach instances, and unpacking.
 - [Manual/GameView.md](Manual/GameView.md): playing and testing in the editor: the Scene and Game views, resolutions,

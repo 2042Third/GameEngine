@@ -8,10 +8,13 @@
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/EntitySink.h"
 #include "Strata/Scene/SceneDocumentReader.h"
+#include "Strata/World/WorldAsset.h"
 
 #if ST_WITH_ANIMATION
 	#include "Strata/Animation/AnimationController.h"
 #endif
+
+#include <nlohmann/json.hpp>
 
 #include <optional>
 #include <string_view>
@@ -51,6 +54,7 @@ namespace Strata
 				case AssetType::Model:               return "Model";
 				case AssetType::Material:            return "Material";
 				case AssetType::AnimationController: return "AnimationController";
+				case AssetType::World:               return "World";
 				default:                             return {};
 			}
 		}
@@ -209,6 +213,17 @@ namespace Strata
 				*outError = "animation controllers cannot be read: the engine has no animation module";
 			return false;
 #endif
+		}
+		else if (type == AssetType::World)
+		{
+			// The persistent scene and every cell's scene. Scenes stop load closures (AssetClosureScope::Load), so loading the
+			// persistent scene, which references the world, never pins its cells.
+			const std::optional<WorldData> world = WorldData::FromJson(*content, outError);
+			if (!world)
+				return false;
+			references.Add(world->PersistentScene);
+			for (const WorldCell& cell : world->Cells)
+				references.Add(cell.Scene);
 		}
 		else
 		{
