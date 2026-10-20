@@ -325,6 +325,8 @@ TEST_SUITE("PerfGPU.World")
 				frame();
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
+			// The gate measures GPU culling: a device without it would record the CPU path's frames.
+			REQUIRE(renderer.GetStats().GPUDriven);
 			double longest = 0.0;
 			uint64_t mostDeferred = 0;
 			for (uint32_t index = 0; index < 900; index++)
