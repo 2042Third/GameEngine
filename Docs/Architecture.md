@@ -334,8 +334,8 @@ indices offset by its base vertex), so physics never depends on the renderer. `P
 statistics. Colliders become box3d shapes of their body: boxes are hulls made per size and placement and shared by the
 world's bodies, spheres and capsules are values, convex mesh colliders are hulls of at most 64 vertices (44 when box3d
 refuses a round mesh at 64: its hulls have at most 128 faces and edges), triangle meshes are mesh shapes (static bodies
-only; a mesh collider away from its static body's origin is a baked compound), and dynamic bodies get the component's
-mass with the shapes' distribution. Collision layers are the scene's (`SceneSettings::PhysicsLayers`,
+only; a mesh collider away from its static body's origin is a baked compound, whose mesh takes the body's friction and
+restitution as its material), and dynamic bodies get the component's mass with the shapes' distribution. Collision layers are the scene's (`SceneSettings::PhysicsLayers`,
 `Scene/PhysicsLayerSettings.h`: names for up to 32 layers and a symmetric matrix of which collide, everything by default);
 `PhysicsSystem` gives its world that matrix, restricted by the default settings' (`GetDefaultSettings`), when it creates
 the world and before every step after it changed (`scene.setSettings`, undo, the inspector, scripts'

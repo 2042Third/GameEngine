@@ -454,6 +454,61 @@ TEST_SUITE("Physics.MeshColliders")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("A mesh collider offset from its static body is placed where its entity is")
+	{
+		// A level root with a triangle-mesh child moved, turned and scaled within it: box3d holds the child as a baked compound
+		// whose transform and scale place it.
+		ScopedMeshProvider provider(CreateMeshProvider());
+		Scene scene;
+		Entity level = scene.CreateEntity("Level");
+		level.GetTransform().Translation = glm::vec3(1.0f, 0.0f, 0.0f);
+		level.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Static;
+		Entity plate = CreateMeshEntity(scene, "Plate", glm::vec3(0.0f), c_PlateMesh, false); // 2 x 2 m, facing up
+		scene.SetParent(plate, level, false);
+		const glm::quat turn = glm::angleAxis(glm::radians(40.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		const glm::vec3 scale(2.0f, 1.0f, 3.0f);
+		plate.GetTransform().Translation = glm::vec3(4.0f, 2.0f, -3.0f);
+		plate.GetTransform().Rotation = turn;
+		plate.GetTransform().Scale = scale;
+		plate.MarkModified<TransformComponent>();
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		REQUIRE(WaitUntil([&]()
+		{
+			StepScene(scene, 1);
+			return physics.HasBody(level);
+		}, std::chrono::seconds(10)));
+
+		// Points of the plate in its own space (half extents 1 x 1, scaled to 2 x 3), where its entity puts them.
+		const glm::vec3 center = GetWorldPosition(scene, plate);
+		REQUIRE(Math::IsNearlyEqual(center, glm::vec3(5.0f, 2.0f, -3.0f), 1.0e-4f));
+		const auto placed = [&](const glm::vec3& local) { return center + turn * (local * scale); };
+		for (const glm::vec3& inside : { glm::vec3(0.0f), glm::vec3(0.9f, 0.0f, 0.9f), glm::vec3(-0.9f, 0.0f, 0.9f), glm::vec3(0.9f, 0.0f, -0.9f) })
+		{
+			const glm::vec3 point = placed(inside);
+			CAPTURE(point);
+			const std::optional<RaycastHit> hit = physics.Raycast(point + glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+			REQUIRE(hit.has_value());
+			CHECK(hit->HitEntity == level); // The body's entity, as for every collider merged into a body
+			CHECK(Math::IsNearlyEqual(hit->Point, point, 0.01f));
+		}
+		for (const glm::vec3& outside : { glm::vec3(1.1f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.1f) })
+		{
+			const glm::vec3 point = placed(outside);
+			CAPTURE(point);
+			CHECK_FALSE(physics.Raycast(point + glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f).has_value());
+		}
+
+		// A box dropped onto a corner of the plate comes to rest on it there.
+		const glm::vec3 corner = placed(glm::vec3(0.7f, 0.0f, 0.7f));
+		Entity box = CreateDynamicBox(scene, "Box", corner + glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.2f));
+		StepScene(scene, 120);
+		const glm::vec3 rested = GetWorldPosition(scene, box);
+		CHECK(std::abs(rested.y - (corner.y + 0.2f)) < 0.02f);
+		CHECK(glm::length(glm::vec2(rested.x - corner.x, rested.z - corner.z)) < 0.05f);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("A triangle mesh collider away from its trigger body's origin is unusable, with a warning")
 	{
 		ScopedMeshProvider provider(CreateMeshProvider());

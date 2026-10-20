@@ -1827,11 +1827,16 @@ namespace Strata
 				}
 				case ShapePart::Kind::OffsetMesh:
 				{
-					// The compound holds the mesh by pointer (its triangles are shared, not copied): the record keeps both.
+					// The compound holds the mesh by pointer (its triangles are shared, not copied): the record keeps both. A
+					// compound ignores the shape's material: its meshes bring their own (copied by b3CreateCompound), one for
+					// the cooked triangles' material index 0.
+					const b3SurfaceMaterial material = definition.baseMaterial;
 					b3CompoundMeshDef meshDefinition = {};
 					meshDefinition.meshData = part.Cooked->GetMesh();
 					meshDefinition.transform = part.Placement;
 					meshDefinition.scale = part.Scale;
+					meshDefinition.materials = &material;
+					meshDefinition.materialCount = 1;
 					b3CompoundDef compoundDefinition = {};
 					compoundDefinition.meshes = &meshDefinition;
 					compoundDefinition.meshCount = 1;
