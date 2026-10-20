@@ -661,7 +661,8 @@ exercised by it.
   exports in full and pruned), its output must hold the test's `EDITOR_EXPECT` lines, both exports must hold the game,
   manifest, pack and script module, and each game runs headless (`--save-directory` in the work directory, a perf log when
   asked) printing the `GAME_EXPECT` lines; any warning, error or critical line that no `ALLOWED_MESSAGES` expression
-  matches fails the run, and the test's declaration says why each is expected; `PERF_LOG` and `PERF_CHECK` run the games
+  matches (`EDITOR_ALLOWED_MESSAGES` too for the editor's output alone) fails the run, and the test's declaration says
+  why each is expected; `PERF_LOG` and `PERF_CHECK` run the games
   with a perf log and check it with `check-perf-log`). A change to a sample's scene or scripts must keep its command
   script passing. Their exports are fixtures of `gpu` tests on the Mac: `StrataRuntime.<Sample>Windowed` runs the exported
   game in a window and checks its screenshot (`check-image`) and perf log, `StrataEditor.OpenWorldRender` checks the

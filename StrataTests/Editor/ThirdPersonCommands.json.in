@@ -9,7 +9,7 @@
 	{"command": "input.click", "parameters": {"entity": {"$ref": "playButton"}}},
 	{"command": "play.state", "expect": {"/running/name": {"equals": "Course"}}, "until": {"seconds": 60}},
 	{"command": "play.pause", "parameters": {"paused": true}},
-	{"command": "physics.stats", "expect": {"/waitingForMeshes": {"equals": false}}, "until": {"seconds": 300}},
+	{"command": "physics.stats", "expect": {"/waitingForMeshes": {"equals": false}, "/pendingOther": {"equals": 0}}, "until": {"seconds": 300}},
 	{"command": "entity.find", "parameters": {"name": "Player"}, "bind": {"player": "/entities/0"}},
 	{"command": "entity.find", "parameters": {"name": "Crate"}, "bind": {"crate": "/entities/0"}},
 	{"command": "entity.find", "parameters": {"name": "Game"}, "bind": {"game": "/entities/0"}},

@@ -7,12 +7,13 @@
 #   3. both exports must hold the game, its .stgame manifest, its .stpak and the script module the manifest names, the
 #      pruned pack must not be larger, and each game runs headless for GAME_FRAMES frames (with a perf log when PERF_LOG
 #      is on: <export>/Perf.csv) with its saves in the work directory, printing every GAME_EXPECT line.
-# No output may hold a warning, error or critical line that no ALLOWED_MESSAGES expression matches (each with its reason
-# where the test is declared).
+# No output may hold a warning, error or critical line that no ALLOWED_MESSAGES expression matches, nor the editor's one
+# that no EDITOR_ALLOWED_MESSAGES expression matches either (each with its reason where the test is declared).
 #
 # cmake -DEDITOR=<StrataEditor> -DSAMPLE_DIR=<Samples/Name> -DPROJECT_FILE=<Name.stproj> -DGAME=<exported name>
 #       -DCOMMANDS=<NameCommands.json.in> -DWORK_DIR=<directory> -DEXECUTABLE_SUFFIX=<.exe or empty>
 #       [-DEDITOR_EXPECT=a|b] [-DGAME_EXPECT=a|b] [-DGAME_FRAMES=120] [-DPERF_LOG=ON] [-DALLOWED_MESSAGES=regex|regex]
+#       [-DEDITOR_ALLOWED_MESSAGES=regex|regex]
 #       [-DPERF_CHECKER=<StrataTests> -DPERF_CHECK=--nonzero|Column|...] (the perf logs checked by check-perf-log)
 #       -P SampleProject.cmake
 # Lists are separated by '|' (a ';' would split the test's command line), so expressions use character classes, not '|'.
@@ -25,7 +26,7 @@ endforeach()
 if(NOT DEFINED GAME_FRAMES OR GAME_FRAMES STREQUAL "")
 	set(GAME_FRAMES 120)
 endif()
-foreach(list EDITOR_EXPECT GAME_EXPECT ALLOWED_MESSAGES PERF_CHECK)
+foreach(list EDITOR_EXPECT GAME_EXPECT ALLOWED_MESSAGES EDITOR_ALLOWED_MESSAGES PERF_CHECK)
 	string(REPLACE "|" ";" ${list} "${${list}}")
 endforeach()
 include("${CMAKE_CURRENT_LIST_DIR}/JsonEscape.cmake")
@@ -34,8 +35,13 @@ include("${CMAKE_CURRENT_LIST_DIR}/JsonEscape.cmake")
 # (15 minutes at its 60 frames per second; --quit-after-commands ends it as soon as the script is done).
 set(max_frames 54000)
 
-# Fails with the lines of `output` that are warnings, errors or critical messages no allowed expression matches.
+# Fails with the lines of `output` that are warnings, errors or critical messages that no expression of ALLOWED_MESSAGES
+# or of the lists named after `what` matches.
 function(check_messages output what)
+	set(allowed_expressions ${ALLOWED_MESSAGES})
+	foreach(extra IN LISTS ARGN)
+		list(APPEND allowed_expressions ${${extra}})
+	endforeach()
 	string(REPLACE "\r" "" output "${output}")
 	string(REPLACE ";" "\\;" output "${output}")
 	string(REPLACE "\n" ";" lines "${output}")
@@ -45,7 +51,7 @@ function(check_messages output what)
 			continue()
 		endif()
 		set(allowed FALSE)
-		foreach(expression IN LISTS ALLOWED_MESSAGES)
+		foreach(expression IN LISTS allowed_expressions)
 			if(line MATCHES "${expression}")
 				set(allowed TRUE)
 				break()
@@ -56,7 +62,7 @@ function(check_messages output what)
 		endif()
 	endforeach()
 	if(NOT unexpected STREQUAL "")
-		message(FATAL_ERROR "SampleProject: ${what} logged messages no ALLOWED_MESSAGES expression expects:${unexpected}")
+		message(FATAL_ERROR "SampleProject: ${what} logged messages no allowed expression expects:${unexpected}")
 	endif()
 endfunction()
 
@@ -100,7 +106,7 @@ if(NOT result EQUAL 0)
 	message(FATAL_ERROR "SampleProject: the editor's command script failed (${result})")
 endif()
 check_expected("${output}" "${EDITOR_EXPECT}" "the editor")
-check_messages("${output}" "the editor")
+check_messages("${output}" "the editor" EDITOR_ALLOWED_MESSAGES)
 
 # 3. The exported games, full and pruned.
 foreach(export_dir "${EXPORT_DIR}" "${PRUNED_EXPORT_DIR}")
