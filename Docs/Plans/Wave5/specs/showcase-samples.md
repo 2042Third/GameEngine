@@ -283,6 +283,9 @@ frame and a paused game (`Input::SetSuspended`) still waits for its next step.
 - Acceptance: an `Editor.Commands` test plays a scene whose script sets the time scale to 0 when a key is tapped and back
   to 1 when a UI button is clicked: the tap and the `input.click` answer, the script saw both, and fixed steps run again.
   Must-fail: without the counter the click never answers (the test's bounded wait fails).
+  As made: the `Editor.Commands` test sets the scene's time scale itself (a script's `Time::SetTimeScale` writes the same
+  setting); the round trip through a script, a key tap that pauses at time scale 0 and an `input.click` on Resume that
+  brings 1 back, is the Third-Person regression's pause step.
 
 **I6. Small engine bugs found while building** get a fix and a regression test that fails without it, in their own commits;
 large gaps go into the report (section 9 lists the expected ones).
@@ -363,6 +366,10 @@ exactly):
 - `gpu`: the exported game windowed for 600 frames, `--screenshot` passes `check-image`; `--perf-log` has a nonzero
   `Scene.Physics` column. The report gives the Mac's Release median of `Scene.Physics` with every body awake (information,
   not a gate).
+- As made (the review round): the tool panel, the HUD and the buttons are sliced images of two Kenney UI Pack 2.0 PNGs
+  (they were flat colors until then); the step-bounded waits give their seconds (600 to 900, so the steps decide on CI's
+  slowest job), and Debug runs only the pruned exported game (`GAME_RUNS`; the full one runs the same scripts), which kept
+  CI's Windows Debug run at 1,219 of its 1,800 s before.
 
 ### 4.3 Third-Person Adventure (`Samples/ThirdPerson`)
 
@@ -424,7 +431,10 @@ script there (the scripts on the animator's entity receive them). The settings c
 the toggle) besides the log line. The scene switch is awaited for 60 s, not 10 s (CI's slowest runners; it takes well
 under a second on the Mac). The coin check places the player on the sixth coin's spot (the first coin sits 5 m ahead of
 the start, out of the walk test's reach). The attract mode walks five points over two islands, collecting four coins,
-then returns to the menu. There is no music (no CC0 loop that fit).
+then returns to the menu. There is no music (no CC0 loop that fit). In the review round the menus', HUD's and pause
+panels and their buttons became sliced Kenney UI Pack images, the physics wait also requires every body built
+(`pendingOther` 0), the windowed run checks its perf log (animation, UI and GPU time), and Debug runs only the pruned
+exported game.
 
 ### 4.4 Open World (`Samples/OpenWorld`)
 
@@ -441,7 +451,7 @@ then returns to the menu. There is no music (no CC0 loop that fit).
   Wildlife (2) and Landmarks (5). The persistent scene holds the terrain, the sun and procedural sky, a 2 km water plane
   (blended), post-processing, the player, the game manager and the UI. The camera's far plane and the tour's height are
   chosen so that the edge of the loaded vegetation is far and low in the view (pop-in at the horizon, not in front).
-- **Props at scale.** About 25 Nature Kit models (imported with `UnlitMaterials: Lit`) as one-entity prefabs (a
+- **Props at scale.** About 25 Nature Kit models (imported with the default settings: I5 was dropped) as one-entity prefabs (a
   `MeshRenderer` on the model's mesh; trees with a capsule and large rocks with a box collider, static), placed by the
   generator's `scatter` command: a command script of `prefab.instantiate {instances}` steps (seeded Poisson-disc sampling
   on the same height function: palms on the beach, oaks and pines inland, rocks on slopes, flowers and grass tufts in
@@ -488,8 +498,9 @@ Acceptance (`StrataEditor.OpenWorld`, `--no-gpu`):
   `HeightAboveGround` at least -0.1 (never below the terrain).
 - Teleport to landmark 3 (500 m away): `until` `TeleportsDone` 1 and `Grounded` within 1,800 steps; `StartAreaLoaded` false
   (the start's Vegetation cells are gone).
-- A fox near landmark 3 (`entity.find`): `StateIndex` at least 0 (a known state); `Distance` reset, over 300 steps at least
-  1.
+- A fox near landmark 3 (`entity.find`): `StateIndex` at least 0 (a known state); `Distance` reset, within 1,200 steps at
+  least 1 (as made: a fox surveys standing still for up to 10 s and then walks or runs, never surveying twice in a row;
+  300 steps, 5 s, could fall within one survey).
 - `DayLengthSeconds` set to 20 (`script.setField`): within 900 steps a campfire's `PointLight` intensity is above 0.
 - Export full and pruned (cooked cells in the pack, the loading scene); both games headless for 1,800 frames with
   `--perf-log`: they print "OpenWorld: tour reached waypoint 8"; `check-perf-log` sees nonzero `WorldCellsLoaded` and
@@ -500,13 +511,22 @@ Acceptance (`StrataEditor.OpenWorld`, `--no-gpu`):
   Kit's leaves are teal, which the check does not count as green); and an editor run with a GPU (`--headless`) at the start
   position: `viewport.capture`'s `renderStats` (a headless editor's `editor.perf` has none, it renders only captures):
   `gpuDriven` true, `instances` at least 2,700 and `drawCommands` at most 26 (measured 5,468 and 13: half and twice).
-- Perf, information on the Mac (Release, quiet, under the perf lock): the tour's median and 95th-percentile frame time and
-  GPU busy time at 1920 x 1080, as provisional metrics `PerfGPU.Samples.OpenWorldTour.FrameMedianMs`, `.FrameP95Ms` and
-  `.GPUBusyMedianMs` (`{"Unit": "ms", "Provisional": true}` in `Budgets.json`, unit only: no Mac number goes there; target
-  16.7 for the median). They are measured by `StrataRuntime.OpenWorldTourPerf` (labels `perf` and `gpu`, Release and Dist),
-  a CTest with `FIXTURES_REQUIRED` on `StrataEditor.OpenWorld`'s export that runs the exported tour windowed with
-  `--perf-log` and hands the log to a test helper mode (`--strata-test-helper=record-perf-log`) that computes the metrics
-  and writes them to the perf results as every perf test does; never gated here.
+- Perf, information on the Mac (Release, quiet, under the perf lock): the tour at 1920 x 1080 as provisional metrics
+  `PerfGPU.Samples.OpenWorldTour.FrameWorkMedianMs`, `.FrameWorkP95Ms` and `.GPUBusyMedianMs` (`{"Unit": "ms",
+  "Provisional": true}` in `Budgets.json`, unit only: no Mac number goes there). As made: the suite `PerfGPU.Samples` runs
+  in its own CTest, `StrataTests.PerfGPU.Samples` (labels `perf` and `gpu`, Release and Dist, `FIXTURES_REQUIRED` on
+  `StrataEditor.OpenWorld`'s export), and starts the exported game windowed with `--perf-log` once per attempt of
+  `CheckBudgetsConfirmed`, so that a result over a future budget is measured again. The game keeps the display's vsync, as
+  players see it, so the frame interval is the display's (8.33 ms on the Mac's 120 Hz panel) and only reported: the metrics
+  are the frames' `WorkMs` (median and 95th percentile) and the GPU's busy median, over 8 s of the tour from the first frame
+  with a cell loaded (not a fixed count of loading frames). Measured: 1.43, 2.71 and 4.37 ms. No target.
+- As made (the review round): the regression waits for every body to be built (`physics.stats` `pendingOther` 0, not only
+  `waitingForMeshes` false, which also turns false when physics' 10 s start hold runs out); the hold's warning is expected
+  in the editor's run alone (`EDITOR_ALLOWED_MESSAGES`: the paused game's waits for the cells step it on slow runners, and
+  the explorer flies until a ray finds the ground), never in the exported games. The streaming source is checked apart from
+  the camera's fallback: after the teleport the camera moves 4 km off the island and the cells around the explorer stay
+  wanted. The render check has no frame wait before its capture, and the windowed run checks its perf log (cells loaded,
+  world streaming and GPU time, no body waiting).
 
 ### 4.5 Tetris
 
@@ -548,7 +568,7 @@ Adventure, Open World, Physics Playground, Tetris in that order (the richest fir
 | `StrataEditor.PhysicsPlayground`, `.ThirdPerson`, `.OpenWorld` | `package` | sections 4.2-4.4 (`RESOURCE_LOCK toolchain`, `TIMEOUT 1800`) |
 | `StrataRuntime.PhysicsPlaygroundWindowed`, `.ThirdPersonWindowed`, `.OpenWorldWindowed` (+ their image and perf-log checks) | `gpu` | the exported games in a window (fixtures on the package tests' exports) |
 | `StrataEditor.OpenWorldRender` | `gpu` | render statistics at the start position |
-| `StrataRuntime.OpenWorldTourPerf` | `perf`, `gpu` | provisional tour metrics (Release), on the package test's export |
+| `StrataTests.PerfGPU.Samples` | `perf`, `gpu` | provisional tour metrics (Release), on the package test's export |
 
 **Must-fail checks** (each done once by hand, the result in the report; the permanent ones are I1, I2, I4, I5 and I7's tests):
 for every sample, break what each expectation checks and see the regression fail: a script that never counts dominoes or
@@ -556,7 +576,8 @@ coins; the goal trigger made solid; the ghost layer's collision turned back on; 
 set (animator stays Idle); the crate made static; the Playground's ball prefab removed from `alwaysInclude` (the pruned
 game logs a failed spawn: an unexpected error, and no "goal scored"); the attract mode's course load broken (the exported
 Third-Person prints no "course loaded"); the Vegetation layer emptied (`world.info` fails); `StreamingSource` removed (no
-cells load); a warning added to a script's start (the unexpected-message check fails). Restore each.
+cells load; as made, the primary camera's fallback loaded the same cells, so the regression moves the camera away and
+checks the cells the source wants, none without it); a warning added to a script's start (the unexpected-message check fails). Restore each.
 
 **Physics robustness** (for `physics-box3d`): checks wait by condition or in game time (`until`, `play.step`), never by frame
 counts, and run with the game paused, so each step is a fixed step whatever the machine; the samples rely only on primitive
@@ -658,7 +679,7 @@ appended after Tetris.
 9. The Open World (the same as the Playground, plus the render check).
 10. I7 taps at time scale 0.
 11. Third-Person Adventure (the same).
-12. `StrataRuntime.OpenWorldTourPerf` and the provisional metrics; the Mac measurements.
+12. The tour's provisional metrics (as made: `StrataTests.PerfGPU.Samples`); the Mac measurements.
 13. **Batch 2:** docs and skills completed, `Samples.json` order and the install test, the archive growth measured, the full
     Debug and Release suites, the lint, CI on `ci/showcase-samples`.
 
