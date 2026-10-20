@@ -695,9 +695,12 @@ Open items and deferrals later waves own:
     69-73 ms for those bodies), `Create10kBodies` 2.89 (3.4 to 9.7 ms; box3d alone 6.3 ms), `CellUnloadMaxFrame` 1.66
     (2.6 to 4.4 ms; box3d alone disables 25,000 static bodies in 2.0-2.5 ms), `CellDriveMaxFrame` 1.31 and
     `DriveFrameP95` 1.23 (both noisy), and `Grow65kMaxFrame` (65,536 bodies created in one frame) 73-80 ms against its
-    16.7 ms target. Ways down: bulk insertion and removal in box3d (an upstream change), or creating the bodies of very
-    large batches over several frames (a change of the rule that every body gets its collision at once). Strata's own
-    part of creating the 100,000 static bodies grew from about 17 to 27 ms in sampled runs, mostly allocations per body.
+    16.7 ms target. The port keeps the rule that every body gets its collision at once (a body a frame leaves without
+    collision is a gameplay defect, a slow frame of a large spawn is not), so the way down is bulk insertion and removal
+    in box3d (its trees already build in bulk, `b3DynamicTree_Rebuild`, but its API inserts every shape), taken with a
+    later box3d bump. Strata's own part of creating the 100,000 static bodies grew from about 17 to 27 ms in sampled
+    runs, mostly allocations per body: a follow-up, since removing all of it would still leave about 2.5 times Jolt's
+    time.
     New provisional metrics: `StrataToLibraryStep`
     (Mac: `Boxes10k` 0.45, `Boxes30kTracked` 0.92, `Boxes70k` 0.61) and `Grow65kMaxFrame`; the reference machine
     measures them and checks `StrataStepTime` against its existing budgets (Mac ratios 0.87, 1.01 and 0.87).
