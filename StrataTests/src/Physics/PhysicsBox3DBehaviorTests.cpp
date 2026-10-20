@@ -5,6 +5,7 @@
 #include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Physics/PhysicsMeshShapes.h"
 #include "Strata/Physics/PhysicsRuntime.h"
+#include "Strata/Scene/SceneServices.h"
 #include "TestHelpers.h"
 
 #include <box3d/box3d.h>
@@ -391,6 +392,51 @@ TEST_SUITE("Physics.Events")
 		StepScene(scene, 2);
 		CHECK(recorder.Count(CollisionEventType::End, zone.GetUUID(), crate.GetUUID()) == 3);
 		CHECK(physics.GetStats().ContactPairCount == 0);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Triggers report convex colliders and characters, not triangle meshes")
+	{
+		// box3d's sensors only see convex shapes (its documented difference from Jolt): a trigger moving over a triangle-mesh
+		// floor reports nothing, over a box it reports Begin and End, and a character walking through it Begin and End.
+		ScopedMeshProvider provider(CreateMeshProvider());
+		Scene scene;
+		Entity floor = CreateMeshEntity(scene, "Floor", glm::vec3(0.0f), c_PlateMesh, false); // 2 x 2 m at y = 0
+		Entity crate = CreateStaticBox(scene, "Crate", glm::vec3(5.0f, 0.0f, 0.0f), glm::vec3(0.5f));
+		Entity probe = CreateDynamicBox(scene, "Probe", glm::vec3(-3.0f, 0.0f, 0.0f));
+		RigidBodyComponent& probeBody = probe.GetComponent<RigidBodyComponent>();
+		probeBody.Type = RigidBodyType::Kinematic;
+		probeBody.IsTrigger = true;
+		Entity zone = CreateStaticTrigger(scene, "Zone", glm::vec3(0.0f, 1.0f, 10.0f), glm::vec3(1.0f));
+		Entity walker = scene.CreateEntity("Walker");
+		walker.GetTransform().Translation = glm::vec3(-3.0f, 0.0f, 10.0f);
+		CharacterControllerComponent& controller = walker.AddComponent<CharacterControllerComponent>();
+		controller.GravityScale = 0.0f;
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		REQUIRE(WaitUntil([&]()
+		{
+			StepScene(scene, 1);
+			return physics.HasBody(floor);
+		}, std::chrono::seconds(10)));
+		CollisionRecorder recorder(physics);
+		ICharacterControl* characters = scene.GetService<ICharacterControl>();
+		REQUIRE(characters != nullptr);
+		REQUIRE(characters->MoveCharacter(walker, glm::vec3(6.0f, 0.0f, 0.0f)));
+		for (int frame = 0; frame < 100; frame++)
+		{
+			probe.GetTransform().Translation.x += 0.1f;
+			scene.MarkTransformChanged(probe);
+			StepScene(scene, 1);
+		}
+		REQUIRE(GetWorldPosition(scene, probe).x > 6.0f);
+		CHECK(recorder.Count(CollisionEventType::Begin, probe.GetUUID(), floor.GetUUID()) == 0);
+		CHECK(recorder.Count(CollisionEventType::Begin, probe.GetUUID(), crate.GetUUID()) == 1);
+		CHECK(recorder.Count(CollisionEventType::End, probe.GetUUID(), crate.GetUUID()) == 1);
+		REQUIRE(GetWorldPosition(scene, walker).x > 2.0f);
+		CHECK(recorder.Count(CollisionEventType::Begin, zone.GetUUID(), walker.GetUUID()) == 1);
+		CHECK(recorder.Count(CollisionEventType::End, zone.GetUUID(), walker.GetUUID()) == 1);
+		CHECK(recorder.Count(CollisionEventType::Begin) == 2);
 		scene.OnRuntimeStop();
 	}
 }

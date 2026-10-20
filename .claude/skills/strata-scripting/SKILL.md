@@ -88,7 +88,7 @@ ST_SCRIPT_CLASS(Turret)
 | `OnDestroy()` | Entity destroyed (still valid here), script removed, or play stopped (descendants first). |
 | `OnReload()` | After a hot reload, instead of `OnCreate`. Re-acquire cached pointers and non-field state. |
 | `OnCollisionEnter/Exit(collision)` | The entity's physics body starts/stops touching another body (after a fixed step). |
-| `OnTriggerEnter/Exit(collision)` | The same for contacts where either body is a trigger. |
+| `OnTriggerEnter/Exit(collision)` | The same for contacts where either body is a trigger. Triggers see convex colliders (boxes, spheres, capsules, convex meshes) and characters, never triangle-mesh colliders: a moving trigger crossing a mesh wall or floor reports nothing (box3d's sensors skip them; give such a wall a box collider if a trigger must see it). |
 | `OnAnimationEvent(name)` | The entity's animator passed an event of its controller's current state (after the animators were evaluated). |
 | `OnUIClick(widget)` | The player clicked a UI button on the entity, or one whose `EventTarget` is the entity (before `OnUpdate`). |
 | `OnUIValueChanged(widget, value)` | The player changed a slider (its value) or a toggle (1 on, 0 off) on the entity or targeting it. |
