@@ -527,6 +527,11 @@ ghosts 8, goal 5 of 5, the pins fall, as under Jolt. The Third-Person robot walk
 (4.5 m, 1.47-1.50 m); it pushes the crate 3.9 m in the regression's 2 s (Jolt 2.9 m), since Strata's mover keeps the
 character's pace while pushing where Jolt's character slowed against the crate (the `PushBodies` formula is unchanged), and
 the crate still drops into the pit as the course's step. The Open World's explorer walks and stands on the terrain as before.
+The Open World's perf checks `--max PhysicsBodiesWaiting 0` could no longer fail: on box3d bodies wait for room only at the
+growth limit (2^21 bodies, the island has 11,452), where Jolt's also counted those waiting before a growth. Bodies waiting
+for their mesh colliders are `PendingOther`, now logged as `PhysicsBodiesPending`; the island's 97 terrain colliders cook
+in the first frames (97 pending in one or two rows), so the checks add `--last-max PhysicsBodiesPending 0` (none left at the
+end) beside the kept growth-limit check, and the exported games' ban on the mesh-wait warning bounds the start.
 
 ### 7.1 Budgets
 

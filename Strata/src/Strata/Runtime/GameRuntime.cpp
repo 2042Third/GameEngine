@@ -308,7 +308,7 @@ namespace Strata
 	{
 		FramePerfColumnGroup group;
 		group.Names = { "WorldCellsWanted", "WorldCellsLoading", "WorldCellsLoaded", "WorldCellsUnloading", "PhysicsBodies", "PhysicsBodiesWaiting",
-			"PhysicsMaxBodies" };
+			"PhysicsBodiesPending", "PhysicsMaxBodies" };
 		group.Write = [this](FramePerfRow& row)
 		{
 			const IWorldStreaming* streaming = m_Scene ? m_Scene->GetService<IWorldStreaming>() : nullptr;
@@ -331,11 +331,12 @@ namespace Strata
 				const PhysicsCapacityInfo info = capacity->GetCapacityInfo();
 				row.Add(info.Bodies, 0);
 				row.Add(info.WaitingForSlot, 0);
+				row.Add(info.PendingOther, 0);
 				row.Add(info.MaxBodies, 0);
 			}
 			else
 			{
-				for (int column = 0; column < 3; column++)
+				for (int column = 0; column < 4; column++)
 					row.AddEmpty();
 			}
 		};

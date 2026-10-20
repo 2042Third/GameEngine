@@ -3964,8 +3964,9 @@ through `FramePerfRow::Add(value, decimals)` and `AddEmpty`, read when the frame
 once its GPU times arrived holds its own frame's values; they follow `GPUFrame` and `GPUBusyMs`; a group that writes
 another number of values than it names fails the log like a write error). StrataRuntime adds the running scene's world
 streaming and physics capacity (`GameRuntime::MakePerfLogColumns`: `WorldCellsWanted`, `WorldCellsLoading`,
-`WorldCellsLoaded`, `WorldCellsUnloading` from `IWorldStreaming`, `PhysicsBodies`, `PhysicsBodiesWaiting` and
-`PhysicsMaxBodies` from `IPhysicsCapacity`; empty while no scene plays), then what its renderer drew
+`WorldCellsLoaded`, `WorldCellsUnloading` from `IWorldStreaming`, `PhysicsBodies`, `PhysicsBodiesWaiting` (at the
+growth limit), `PhysicsBodiesPending` (for a mesh or a valid transform) and `PhysicsMaxBodies` from `IPhysicsCapacity`;
+empty while no scene plays), then what its renderer drew
 (`GameRenderer::MakePerfLogColumns`: `DrawCalls`, `Instances`, `Triangles`, `VisibleProxies`, `OccludedProxies`,
 `InstanceUploadMB`, with the GPU-driven path's counts as far as the GPU reported them, `AddGPUCounts`; empty headless),
 and the `World.Streaming` stage has its column

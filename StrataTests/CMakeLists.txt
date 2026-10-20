@@ -539,7 +539,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataRuntime.PerfLog PROPERTIES FIXTURES_REQUIRED StrataExportedGame FIXTURES_SETUP StrataRuntimePerfLog)
 	add_test(NAME StrataRuntime.PerfLogCheck
 		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLog.csv" 30 --nonzero Assets.Update --column WorldCellsLoaded
-			--column PhysicsBodiesWaiting --column PhysicsMaxBodies --column World.Streaming)
+			--column PhysicsBodiesWaiting --column PhysicsBodiesPending --column PhysicsMaxBodies --column World.Streaming)
 	set_tests_properties(StrataRuntime.PerfLogCheck PROPERTIES FIXTURES_REQUIRED StrataRuntimePerfLog)
 	add_test(NAME StrataRuntime.InvalidPerfLog
 		COMMAND "${CMAKE_COMMAND}"
@@ -751,7 +751,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	# The Open World: a streamed island (a world of three layers over 97 terrain tiles in the persistent scene, 20,000 props,
 	# 30 foxes, five camps). The explorer streams cells in, walks on the terrain, teleports 500 m once the cells and the ground
 	# there are in, a fox wanders and the campfires light at dusk; the exported games fly the tour over cooked cells, their
-	# perf logs showing cells loaded, streaming at work and no body waiting for its collider.
+	# perf logs showing cells loaded, streaming at work, no body waiting at the physics world's growth limit and none still
+	# waiting for its collider at the end (the terrain's 97 mesh colliders cook in the first frames, the simulation holding).
 	add_test(NAME StrataEditor.OpenWorld
 		COMMAND "${CMAKE_COMMAND}"
 			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
@@ -768,7 +769,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DGAME_FRAMES=1800"
 			"-DPERF_LOG=ON"
 			"-DPERF_CHECKER=$<TARGET_FILE:StrataTests>"
-			"-DPERF_CHECK=--nonzero|WorldCellsLoaded|--nonzero|World.Streaming|--max|PhysicsBodiesWaiting|0"
+			"-DPERF_CHECK=--nonzero|WorldCellsLoaded|--nonzero|World.Streaming|--max|PhysicsBodiesWaiting|0|--last-max|PhysicsBodiesPending|0"
 			# A fresh copy has never built its scripts: opening its scene says so, and play.start builds them.
 			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'OpenWorld' are not built yet"
 			# On CI's runners the editor's play copy loads and cooks the terrain's 97 mesh colliders while the start's cells
@@ -780,7 +781,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
 	set_tests_properties(StrataEditor.OpenWorld PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataOpenWorldExport)
 	# In a window at 1920 x 1080 with a small texture budget (mip streaming under pressure): the island fills the picture,
-	# and the perf log shows cells loaded, streaming and the GPU at work, and no body waiting for its collider.
+	# and the perf log shows cells loaded, streaming and the GPU at work, no body waiting at the growth limit and none left
+	# waiting for its collider at the end.
 	set(STRATA_OPEN_WORLD_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/OpenWorld/$<CONFIG>")
 	add_test(NAME StrataRuntime.OpenWorldWindowed
 		COMMAND "${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1920x1080 --frames 1200 --asset-budget-mb 128
@@ -792,7 +794,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataRuntime.OpenWorldWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
 	add_test(NAME StrataRuntime.OpenWorldWindowedPerf
 		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_OPEN_WORLD_DIR}/Windowed.csv" 1200 --nonzero WorldCellsLoaded
-			--nonzero World.Streaming --nonzero GPUBusyMs --max PhysicsBodiesWaiting 0)
+			--nonzero World.Streaming --nonzero GPUBusyMs --max PhysicsBodiesWaiting 0 --last-max PhysicsBodiesPending 0)
 	set_tests_properties(StrataRuntime.OpenWorldWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
 	# The editor with a GPU at the start: the GPU-driven path draws thousands of instances in a few indirect commands.
 	add_test(NAME StrataEditor.OpenWorldRender

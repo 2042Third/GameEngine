@@ -49,6 +49,7 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -901,11 +902,12 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	}
 	if (mode == "check-perf-log")
 	{
-		// <csv> <rows> [--nonzero <column>... --column <column>... --max <column> <value>...]: succeeds if the file is a perf
-		// log of StrataRuntime --perf-log with exactly <rows> rows ("any": however many the game ran) of consecutive frames and
-		// every built-in stage among its
-		// columns (Runtime/PerfLogReader.h), each --nonzero column is above 0 in at least one row (e.g. a stage that must have
-		// run), each --column is there (a column group's) and each --max column is at most its value in every row.
+		// <csv> <rows> [--nonzero <column>... --column <column>... --max <column> <value>... --last-max <column> <value>...]:
+		// succeeds if the file is a perf log of StrataRuntime --perf-log with exactly <rows> rows ("any": however many the game
+		// ran) of consecutive frames and every built-in stage among its columns (Runtime/PerfLogReader.h), each --nonzero
+		// column is above 0 in at least one row (e.g. a stage that must have run), each --column is there (a column group's),
+		// each --max column is at most its value in every row and each --last-max column at most its value in the last row
+		// (a count that may be above it while the game starts, e.g. bodies waiting for their mesh colliders, but not after).
 		if (argc < 4)
 			return 2;
 		const std::string_view rowsText(argv[3]);
@@ -926,11 +928,11 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		for (int index = 4; index < argc; index++)
 		{
 			const std::string_view option(argv[index]);
-			if ((option != "--nonzero" && option != "--column" && option != "--max") || index + 1 >= argc)
+			if ((option != "--nonzero" && option != "--column" && option != "--max" && option != "--last-max") || index + 1 >= argc)
 				return 2;
 			const char* columnName = argv[++index];
 			const std::optional<size_t> column = table->FindColumn(columnName);
-			if (option == "--max")
+			if (option == "--max" || option == "--last-max")
 			{
 				if (index + 1 >= argc)
 					return 2;
@@ -944,7 +946,14 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 					std::fprintf(stderr, "'%s': no column '%s'\n", argv[2], columnName);
 					return 1;
 				}
-				for (size_t row = 0; row < table->Rows.size(); row++)
+				// Rows before a scene plays leave a column group's columns empty, but the last row must have a value to check.
+				if (option == "--last-max" && (table->Rows.empty() || std::isnan(table->Rows.back()[*column])))
+				{
+					std::fprintf(stderr, "'%s': '%s' has no value in the last row\n", argv[2], columnName);
+					return 1;
+				}
+				const size_t firstRow = option == "--last-max" ? table->Rows.size() - 1 : 0;
+				for (size_t row = firstRow; row < table->Rows.size(); row++)
 				{
 					if (table->Rows[row][*column] > static_cast<double>(limit))
 					{
