@@ -2288,7 +2288,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   belong to commands (`SimulatedInput`, owned by `EditorContext`): a tap ends only its own hold, overlapping holds of a
   button keep it down until the last ends, a release ends every hold of its button, and `input.releaseAll` ends all of
   them and drops presses still queued (`Input::ReleaseAllSimulated`).
-- **Durations count fixed steps**, the game's own time base (`EditorContext::GetFixedStepCount`), never frames: a tap of
+- **Durations count fixed steps**, the game's own time base (`EditorContext::GetInputStepCount`: its fixed steps, plus
+  each frame a running game updates at time scale 0 without a step, so that a pause menu's buttons can be clicked; a
+  paused game's taps still wait for its next step), never frames: a tap of
   N `steps` (or `seconds` of game time, rounded up to whole steps of the scene's `FixedTimestep`; `frames` is an accepted
   older name of `steps`) goes down in the next input frame and is let go after the frame whose update ran its N-th step
   (`SimulatedHold::FirstStep`/`LastStep`, `SimulatedInput::Update(fixedSteps)`). It covers exactly N steps when frames

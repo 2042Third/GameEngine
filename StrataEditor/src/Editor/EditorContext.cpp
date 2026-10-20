@@ -1201,6 +1201,7 @@ namespace Strata
 		m_RuntimeSceneAsset = UUID::Null();
 		m_PlaySession++;
 		m_ReplacedFixedSteps = 0;
+		m_FrozenInputFrames = 0;
 		// Keys a tool held down in an earlier session (input.* commands) must not leak into this one.
 		ResetSimulatedInput();
 		ResetGameShell();
@@ -2441,7 +2442,11 @@ namespace Strata
 		if (m_RuntimeScene)
 		{
 			UpdateRuntimeSceneLoad(budget);
+			const uint64_t stepsBefore = GetFixedStepCount();
 			m_RuntimeScene->OnUpdateRuntime(timestep, &budget);
+			// Time standing still (time scale 0, a pause menu) runs frames but no fixed step: taps count those frames instead.
+			if (m_RuntimeScene && !m_RuntimeScene->IsPaused() && m_RuntimeScene->GetTimeScale() <= 0.0f && GetFixedStepCount() == stepsBefore)
+				m_FrozenInputFrames++;
 			// A crashed game stops; one that still runs gets what it asked for.
 			if (!StopOnScriptFault())
 				HandleRuntimeRequests();
@@ -2473,7 +2478,7 @@ namespace Strata
 		// An input sequence counts the step the game ran and gives the next one its events (taps it made end below).
 		if (m_InputSequence)
 			m_InputSequence->Update(*this);
-		m_SimulatedInput.Update(GetFixedStepCount());
+		m_SimulatedInput.Update(GetInputStepCount());
 		UpdateInputSuspension();
 		PruneSelection();
 		m_Viewport.UpdatePicking(*this);

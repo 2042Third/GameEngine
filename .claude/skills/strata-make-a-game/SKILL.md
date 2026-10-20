@@ -319,6 +319,8 @@ play.stop
     result counts them); input given while paused arrives in the next step.
   - Input durations (`input.key {"steps": 20}`, `{"seconds": 0.5}`) count the game's fixed steps, not frames: a key held
     for 60 steps moves a player the same distance however fast the editor draws.
+    A pause menu at `Time::SetTimeScale(0)` runs no steps: taps then last frames instead, so `input.click` on its buttons
+    works too.
   - Or set slow timings with `script.setField` while exploring.
 - Check every feature you built: movement, rotation, repeats, scoring, level changes, game over, restart, pause.
 
