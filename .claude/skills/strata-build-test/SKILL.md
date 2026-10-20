@@ -168,7 +168,10 @@ ctest --preset macos-debug -LE perf
   `StrataEditor.Scripts` (the real editor builds, plays and exports a scripted game,
   `StrataTests/Editor/ScriptsEndToEnd.cmake`) and `StrataEditor.Tetris` (the editor plays `Samples/Tetris` with
   simulated input and checks its HUD, then exports it in full and pruned and runs both games headless; every sample's test
-  runs on `StrataTests/Editor/SampleProject.cmake`, which also fails on warnings its `ALLOWED_MESSAGES` do not list) and `StrataEditor.Install` (installs the build into a fresh prefix, as a
+  runs on `StrataTests/Editor/SampleProject.cmake`, which also fails on warnings its `ALLOWED_MESSAGES` do not list:
+  `StrataEditor.Tetris`, `.PhysicsPlayground` and `.OpenWorld`; their exported games' windowed checks
+  `StrataRuntime.<Sample>Windowed*` and `StrataEditor.OpenWorldRender` are `gpu` tests on their exports, and
+  `StrataTests.PerfSamples` records the Open World tour's provisional metrics in Release) and `StrataEditor.Install` (installs the build into a fresh prefix, as a
   release archive holds it, and makes, builds, plays and exports a game with the installed editor alone,
   `StrataTests/Editor/InstallEndToEnd.cmake`); `-LE package` skips them on machines without a toolchain. Packaging and
   releases: Docs/DeveloperGuide.md, "Packages" and "Releases".

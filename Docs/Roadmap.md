@@ -874,8 +874,11 @@ The wave-4 audits rank these first for wave 5:
   - Crash reports in shipped games.
   - Game settings with quality presets mapped to the renderer.
   - Exports per platform and configuration, with a macOS app bundle.
-- **`manual-and-samples`:** a people's manual reachable from the Help menu, playable templates, and a 3D sample made
-  through the editor with a CTest that plays it.
+- **`manual-and-samples`:** a people's manual reachable from the Help menu and playable templates. (The 3D samples made
+  through the editor with CTests that play them came with wave 5's `showcase-samples`: the Physics Playground and the
+  Open World; still open from it: budgets of the Open World tour's provisional metrics on the reference machine, the
+  samples' windowed checks on Windows and NVIDIA, sound for the Open World once a CC0 ambience fits, and Quaternius'
+  packs, which do not download without a browser.)
 - **`scene-contexts`:** per-scene asset managers and script engines instead of process-wide active ones.
 - **`vfx`:** particles, trails and decals on the GPU-driven path.
 - **`mesh-streaming`:** Mesh v2 with quantized vertices, per-LOD streaming on the geometry pool, and a collision

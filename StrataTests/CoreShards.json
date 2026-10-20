@@ -6,6 +6,7 @@
 		{ "Test": "StrataTests.Package", "Suites": [ "Package*" ] },
 		{ "Test": "StrataTests.Perf", "Suites": [ "Perf.*" ] },
 		{ "Test": "StrataTests.PerfGPU", "Suites": [ "PerfGPU.*" ] },
+		{ "Test": "StrataTests.PerfSamples", "Suites": [ "PerfSamples" ] },
 		{ "Test": "StrataTests.FeatureTest", "Suites": [ "FeatureTest", "Editor.FeatureTest" ] }
 	],
 	"FuzzSuites": [ "*.Sweep" ],

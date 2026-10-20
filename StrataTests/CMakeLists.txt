@@ -758,6 +758,20 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DARGUMENTS=--headless|--no-automation|--quit-after-commands|--frames|36000|--project|${STRATA_OPEN_WORLD_DIR}/Project|--commands|${CMAKE_CURRENT_SOURCE_DIR}/Editor/OpenWorldRenderCommands.json"
 			"-DEXPECT=Command script finished (" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataEditor.OpenWorldRender PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldExport)
+	# The tour's frame and GPU times at 1920 x 1080 (Release and Dist): recorded as provisional perf metrics, never checked
+	# while the reference machine is away (StrataTests/Perf/Budgets.json).
+	add_test(NAME StrataRuntime.OpenWorldTour
+		COMMAND "${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1920x1080 --frames 1500
+			--perf-log "${STRATA_OPEN_WORLD_DIR}/Tour.csv" --save-directory "${STRATA_OPEN_WORLD_DIR}/TourSaves"
+		CONFIGURATIONS Release Dist)
+	set_tests_properties(StrataRuntime.OpenWorldTour PROPERTIES LABELS "perf;gpu" RUN_SERIAL TRUE FIXTURES_REQUIRED StrataOpenWorldExport
+		FIXTURES_SETUP StrataOpenWorldTourLog)
+	add_test(NAME StrataTests.PerfSamples
+		COMMAND StrataTests --test-suite=PerfSamples --no-intro=true
+		CONFIGURATIONS Release Dist
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+	set_tests_properties(StrataTests.PerfSamples PROPERTIES LABELS "perf;gpu" FIXTURES_REQUIRED "StrataOpenWorldTourLog;StrataPerfResults"
+		ENVIRONMENT "STRATA_OPEN_WORLD_TOUR_LOG=${STRATA_OPEN_WORLD_DIR}/Tour.csv")
 endif()
 
 # input.sequence through the real editor (Editor/InputSequenceCommands.json.in, on a copy of the feature project): the same

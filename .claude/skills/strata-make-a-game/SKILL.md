@@ -95,6 +95,15 @@ Design the code for verification before writing it:
   - Textures: normal maps and roughness maps import by their name tokens (`_normal`, `_n`, `_rough`...); `material.get`
     and `material.set` return `warnings` with a `fix` when a texture was imported for another use than its slot.
 
+### Downloaded assets
+
+Assets made by others must be CC0 or CC-BY 4.0 (with the attribution it asks for); leave out anything whose license is
+unclear. Download each pack into a new, empty directory, inspect and trim it with scripts kept elsewhere (`python3 -I`),
+and bring files in only through `asset.import`. Fix files the importer rejects before importing (Kenney's Nature Kit lists
+a child node as its scene's root: list the root nodes instead) and record every change. A sample in `Samples/` credits
+every imported file in its `CREDITS.md` table (`| Files | Source | Author | License | Attribution | Changes |`) and each
+pack in `ThirdPartyNotices.md`'s "Sample assets" table; `Samples.Content` checks both and the size budgets.
+
 ## 4. Scripts
 
 Write the sources (`script.create {"class": "Player"}` starts a class), then `script.build` (configures CMake on the
@@ -391,6 +400,25 @@ assets by path (`Assets::Find`, prefabs spawned by path), name them first with `
 start scene in the background (a black frame meanwhile): a large one can show a scene of its own while it loads,
 `project.setExportSettings {"loadingScene": "Scenes/Loading.stscene"}` (a small scene with a camera and a `Text`; its
 scripts read the start scene's progress with `Game::GetSceneLoadProgress()` for a loading bar).
+
+## Worked examples and recipes
+
+The samples in `Samples/` were made this way; their `README.md` says how, and `StrataTests/Editor/<Sample>Commands.json.in`
+is each one's regression:
+
+- **Tetris**: scripted rules on a grid, a HUD, generated sounds.
+- **PhysicsPlayground**: ~600 bodies placed with `prefab.instantiate {instances}`; shooting through the cursor (the camera's
+  field of view and the window size give the ray), grabbing (a velocity toward a point in front of the camera each fixed
+  step), impact sounds by material with a voice budget shared by every body, a trigger that counts balls, a collision
+  layer that passes through another (`scene.setSettings {layerNames, layerCollisions}`), R reloading the scene to reset.
+- **OpenWorld**: a generated terrain (`Tools/GenerateIslandTerrain.py`) kept in a world's persistent scene with static
+  mesh colliders; 20,000 props scattered into a world layer (`world.edit {editLayer}`, `world.loadCells` to pin the
+  region first, then `prefab.instantiate {instances}` steps); foxes with an animation controller; teleports that prefetch
+  cells and wait for the ground (`World::IsLoadedAround` plus a raycast); a day-night script driving the sun and the
+  procedural sky's colors; a camera tour; the export's loading scene with a progress bar.
+
+Every sample has a `Picture.png`: save the start scene in an editor with a GPU and copy `.strata/Thumbnail.png`; the
+launcher shows it and copies start with it.
 
 ## Pitfalls
 
