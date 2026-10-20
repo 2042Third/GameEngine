@@ -551,8 +551,15 @@ Open items and deferrals later waves own:
   would tell).
 - Physics on box3d (wave 5's `physics-box3d`): creating and removing many bodies costs about three times Jolt's time,
   because box3d inserts every shape into its trees one at a time on the main thread (the numbers are in the reference
-  machine's list below; the way down is bulk insertion in box3d, with a later bump), and Strata's own part of it grew
-  with allocations per body; triggers do not see triangle-mesh colliders (box3d's sensors skip meshes), and a
+  machine's list below), and Strata's own part of it grew with allocations per body. The owner left it as it is on
+  2026-10-20 ("creation speed is not too important") after a check found no easy fix: bodies created disabled pay the
+  tree insert when enabled (12-15 ms per 25,000 either way); creating a streamed cell's statics across frames with a
+  filter that collides with nothing but keeps their category, then setting the real filter without a pair search at
+  activation, costs 0.1 ms per 25,000, but box3d then makes no contact for bodies already resting within a proxy's
+  margin (a box pushed into a newly active wall went 58 mm in; sleeping boxes sank 51 mm), so that route needs the
+  overlapping movers re-marked and woken at activation and mesh and compound shapes measured; disabling 25,000 bodies
+  at an unload costs about what destroying them does (2.7 against 2.4 ms). The other ways down are bulk insertion in
+  box3d (an upstream change and a later bump) or fewer allocations per body in Strata; triggers do not see triangle-mesh colliders (box3d's sensors skip meshes), and a
   triangle-mesh collider away from its trigger body's origin is unusable, with a warning; box3d holds at most 128
   worlds; its mover, on which the character controllers are built, is experimental upstream. MSVC builds under Ninja
   get no `/arch:AVX2` where the Visual Studio generator's do (as with Jolt): unifying them changes what CI's Windows
@@ -759,8 +766,8 @@ Open items and deferrals later waves own:
     `Create100kStaticBodies` 3.40 (28.8 to 98 ms; box3d's `b3InsertLeaf` alone is 54% of it, and box3d by itself takes
     69-73 ms for those bodies), `Create10kBodies` 2.89 (3.4 to 9.7 ms; box3d alone 6.3 ms; this one has a confirmed
     budget, 11.99 ms from Jolt's 7.995 ms on the reference machine, which box3d is expected to exceed there at about
-    23 ms, so `-L perf` will fail on it there until the owner grants an exception to "budgets only go down", measured
-    again on the reference machine, or creating bodies costs less), `CellUnloadMaxFrame` 1.66
+    23 ms, so `-L perf` will fail on it there; the owner chose to leave creation as it is, so it needs measuring again on
+    box3d on the reference machine), `CellUnloadMaxFrame` 1.66
     (2.6 to 4.4 ms; box3d alone disables 25,000 static bodies in 2.0-2.5 ms), `CellDriveMaxFrame` 1.31 and
     `DriveFrameP95` 1.23 (both noisy), and `Grow65kMaxFrame` (65,536 bodies created in one frame) 73-80 ms against its
     16.7 ms target. The port keeps the rule that every body gets its collision at once (a body a frame leaves without
