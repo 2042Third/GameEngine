@@ -8,43 +8,23 @@
 #include "Strata/Physics/AssetMeshProvider.h"
 #include "Strata/Physics/CharacterControllers.h"
 #include "Strata/Physics/PhysicsComponents.h"
-#include "Strata/Physics/PhysicsJobSystem.h"
-#include "Strata/Physics/PhysicsLayers.h"
+#include "Strata/Physics/PhysicsFilters.h"
 #include "Strata/Physics/PhysicsMeshShapes.h"
 #include "Strata/Physics/PhysicsRuntime.h"
-#include "Strata/Physics/PhysicsStateBuffer.h"
+#include "Strata/Physics/PhysicsTaskSystem.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneHierarchy.h"
 
-#include <Jolt/Jolt.h>
-#include <Jolt/Core/JobSystem.h>
-#include <Jolt/Core/StreamIn.h>
-#include <Jolt/Core/TempAllocator.h>
-#include <Jolt/Physics/Body/BodyActivationListener.h>
-#include <Jolt/Physics/Body/BodyCreationSettings.h>
-#include <Jolt/Physics/Body/BodyLock.h>
-#include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
-#include <Jolt/Physics/Collision/CastResult.h>
-#include <Jolt/Physics/Collision/CollideShape.h>
-#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
-#include <Jolt/Physics/Collision/ContactListener.h>
-#include <Jolt/Physics/Collision/ObjectLayer.h>
-#include <Jolt/Physics/Collision/RayCast.h>
-#include <Jolt/Physics/Collision/Shape/BoxShape.h>
-#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
-#include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
-#include <Jolt/Physics/Collision/Shape/ScaledShape.h>
-#include <Jolt/Physics/Collision/Shape/SphereShape.h>
-#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
-#include <Jolt/Physics/Constraints/ContactConstraintManager.h>
-#include <Jolt/Physics/PhysicsSystem.h>
-#include <Jolt/Physics/StateRecorder.h>
+#include <box3d/box3d.h>
+#include <box3d/collision.h>
+#include <box3d/math_functions.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <deque>
@@ -54,6 +34,8 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace Strata
@@ -62,26 +44,26 @@ namespace Strata
 	namespace
 	{
 
-		// Broad phase layers: static bodies never collide with each other, so they live in their own tree that only moving
-		// bodies are tested against.
-		constexpr JPH::BroadPhaseLayer c_StaticBroadPhaseLayer(0);
-		constexpr JPH::BroadPhaseLayer c_MovingBroadPhaseLayer(1);
-		constexpr JPH::uint c_BroadPhaseLayerCount = 2;
-
-		// Collider dimensions (after scaling) are clamped to at least this size so that Jolt never sees degenerate shapes.
+		// Collider dimensions (after scaling) are clamped to at least this size so that box3d never sees degenerate shapes
+		// (b3MakeTransformedBoxHull clamps half widths to the same millimeter).
 		constexpr float c_MinColliderExtent = 1.0e-3f;
 		// Relative change of an entity's world scale that rebuilds its body's shape, and the smallest absolute change that
 		// counts (scales this small are degenerate anyway).
 		constexpr float c_ScaleChangeTolerance = 1.0e-4f;
 		constexpr float c_MinScaleChange = 1.0e-10f;
 		constexpr float c_MaxRaycastDistance = 1.0e5f;
-		// Bodies within this distance of a body that is removed or moved are woken up, so that nothing keeps sleeping on
-		// top of a body that is no longer there.
+		// Bodies within this distance of a static body that is moved are woken up, so that nothing keeps sleeping on top of a
+		// body that is no longer there (box3d wakes the bodies touching a body it disables or destroys itself).
 		constexpr float c_WakeMargin = 0.1f;
 		constexpr float c_MinimumMass = 0.001f;
 		// Applying a change can move colliders to another body, which is a change in turn; this many rounds always settle
 		// a consistent hierarchy, so hitting the limit means a bug rather than a big change.
 		constexpr uint32_t c_MaxChangeRounds = 16;
+		// box3d computes in single precision and asserts on coordinates beyond B3_HUGE (1e5 m at one unit per meter): bodies
+		// whose world position is farther from the origin wait like bodies with a degenerate transform.
+		constexpr float c_MaxBodyCoordinate = 1.0e5f;
+		// Solver sub-steps of each box3d step (box3d's recommended count).
+		constexpr int c_SolverSubSteps = 4;
 
 		// Warnings are issued once per entity and kind. The transient kinds are reset when the entity's body is built, so
 		// that a recurring problem is reported again.
@@ -103,40 +85,18 @@ namespace Strata
 
 		constexpr PhysicsWarning c_TransientWarnings[] = { PhysicsWarning::MissingCollider, PhysicsWarning::DegenerateTransform, PhysicsWarning::MissingMesh, PhysicsWarning::NoUsableCollider };
 
-		// Automatic capacities (see PhysicsWorld::ResolveCapacities).
-		constexpr uint32_t c_MinAutomaticBodies = 65536;
-		constexpr uint32_t c_BodyPairsPerBody = 4;
-		constexpr uint32_t c_MinAutomaticContactConstraints = 10240;
-		constexpr uint32_t c_ContactConstraintsPerBody = 2;
-		constexpr uint64_t c_MinTempAllocatorSize = 10ull * 1024 * 1024;
-		// Scratch memory of a step besides the contact constraints: body pairs in flight, islands, the large island splitter.
-		constexpr uint64_t c_TempAllocatorBaseSize = 4ull * 1024 * 1024;
-		constexpr uint64_t c_TempBytesPerBody = 32;
-		// Per contact constraint: the constraint itself, its offset, its island links and their validation.
-		constexpr uint64_t c_TempBytesPerContactConstraint = JPH::ContactConstraintManager::cMaxConstraintSize + 4 * sizeof(uint32_t);
-		// What Jolt reserves per capacity besides the scratch memory (see PhysicsWorld::EstimateReservedBytes): fitted to the
-		// reference machine's commit charge of worlds at the most bodies and at the largest capacities (555 and 984 MB), which
-		// cost about 80 bytes per body, 90 per body pair and 835 per contact constraint with their automatic scratch memory.
-		constexpr uint64_t c_ReservedBytesPerBody = 80 - c_TempBytesPerBody;
-		constexpr uint64_t c_ReservedBytesPerBodyPair = 90;
-		static_assert(c_TempBytesPerContactConstraint < 835, "Jolt's contact constraints grew: fit the reserved bytes per contact constraint again");
-		constexpr uint64_t c_ReservedBytesPerContactConstraint = 835 - c_TempBytesPerContactConstraint;
-		static_assert(PhysicsCapacitySettings::c_MaxBodiesLimit <= JPH::PhysicsSystem::cMaxBodiesLimit, "Scene capacities exceed Jolt's body limit");
-		static_assert(PhysicsCapacitySettings::c_MaxBodyPairsLimit <= JPH::PhysicsSystem::cMaxBodyPairsLimit, "Scene capacities exceed Jolt's body pair limit");
-		static_assert(PhysicsCapacitySettings::c_MaxContactConstraintsLimit <= JPH::PhysicsSystem::cMaxContactConstraintsLimit,
-			"Scene capacities exceed Jolt's contact constraint limit");
+		// Automatic room (see PhysicsWorld::ResolveCapacities).
+		constexpr uint32_t c_MinAutomaticBodies = 1024;
+		constexpr uint32_t c_ContactsPerBody = 2;
+		// What a world's room takes once it is used (see PhysicsWorld::EstimateReservedBytes), fitted to box3d's own count of
+		// a world's bytes (b3World_GetCounters().byteCount) for worlds of boxes resting on a floor: 2.44 MB for 1,024 bodies and
+		// contacts, 38.7 MB for 16,384, 51.1 MB for 16,384 bodies and 65,536 contacts. Per body (box3d's reserved and used
+		// storage of a body, its shape, proxy and island), per contact, and the world's fixed part.
+		constexpr uint64_t c_ReservedBytesPerBody = 2120;
+		constexpr uint64_t c_ReservedBytesPerContact = 250;
+		constexpr uint64_t c_ReservedBytesBase = 32ull * 1024;
 		static_assert(2 * Scene::c_MaxEntities <= PhysicsCapacitySettings::c_MaxBodiesLimit, "The automatic body capacity must fit a scene full of bodies");
-
-		// Jolt rebuilds a broad phase tree, freeing the nodes of the bodies removed from it, only while the tree holds bodies.
-		// A tree that removals emptied keeps those nodes, so bodies added and removed again before every step (a spawn that is
-		// gone by the next step, repeated) take nodes from a fixed pool until Jolt runs out of them and aborts the process.
-		// The world keeps one anchor body in each of its two trees (static and moving), on a layer that collides with nothing
-		// and that no query accepts, so every tree always holds a body and the steps maintain it. The anchors are the first
-		// bodies of the world (indices 0 and 1) and come on top of its body capacity.
-		constexpr uint32_t c_BroadPhaseAnchorCount = 2;
-		constexpr uint32_t c_AnchorLayer = c_PhysicsLayerCount; // A user layer outside the valid range: collides with nothing
-		static_assert(PhysicsCapacitySettings::c_MaxBodiesLimit + c_BroadPhaseAnchorCount <= JPH::PhysicsSystem::cMaxBodiesLimit,
-			"The broad phase anchors must fit beside the largest body capacity");
+		static_assert(PhysicsCapacitySettings::c_MaxBodiesLimit <= B3_MAX_SHAPES, "box3d must hold a shape for every body of the largest world");
 
 		uint32_t NextPowerOfTwo(uint64_t value)
 		{
@@ -154,9 +114,9 @@ namespace Strata
 			None = 0,
 			NoCollider,          // A rigid body without colliders; waits for a component change
 			InvalidColliders,    // Every collider has invalid data; waits for a component change
-			DegenerateTransform, // Retried when a transform change is signaled (on the entity or an ancestor)
+			DegenerateTransform, // Retried when a transform change is signaled (on the entity or an ancestor); also beyond c_MaxBodyCoordinate
 			MissingMesh,         // Retried when the mesh provider reports new data or a shape finished cooking
-			WaitingForSlot,      // The world is full: queued in PhysicsWorldData::SlotWaiters, retried when a slot frees or the world grows
+			WaitingForSlot,      // The world is at its growth limit: queued in PhysicsWorldData::SlotWaiters, retried when bodies go
 			Count
 		};
 
@@ -164,29 +124,29 @@ namespace Strata
 		// Conversions
 		//////////////////////////////////////////////////////////////////////////
 
-		JPH::Vec3 ToJolt(const glm::vec3& value)
+		b3Vec3 ToB3(const glm::vec3& value)
 		{
-			return JPH::Vec3(value.x, value.y, value.z);
+			return b3Vec3 { value.x, value.y, value.z };
 		}
 
-		JPH::RVec3 ToJoltPosition(const glm::vec3& value)
+		b3Quat ToB3(const glm::quat& value)
 		{
-			return JPH::RVec3(value.x, value.y, value.z);
+			return b3Quat { b3Vec3 { value.x, value.y, value.z }, value.w };
 		}
 
-		JPH::Quat ToJolt(const glm::quat& value)
+		b3Transform ToB3Transform(const glm::vec3& position, const glm::quat& rotation)
 		{
-			return JPH::Quat(value.x, value.y, value.z, value.w);
+			return b3Transform { ToB3(position), ToB3(rotation) };
 		}
 
-		glm::vec3 ToGlm(JPH::Vec3Arg value)
+		glm::vec3 ToGlm(const b3Vec3& value)
 		{
-			return glm::vec3(value.GetX(), value.GetY(), value.GetZ());
+			return glm::vec3(value.x, value.y, value.z);
 		}
 
-		glm::quat ToGlm(JPH::QuatArg value)
+		glm::quat ToGlm(const b3Quat& value)
 		{
-			return glm::quat(value.GetW(), value.GetX(), value.GetY(), value.GetZ());
+			return glm::quat(value.s, value.v.x, value.v.y, value.v.z);
 		}
 
 		bool IsFinite(const glm::vec3& value)
@@ -199,92 +159,27 @@ namespace Strata
 			return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z) && std::isfinite(value.w);
 		}
 
-		JPH::EMotionType ToMotionType(RigidBodyType type)
+		bool IsWithinCoordinateRange(const glm::vec3& position)
+		{
+			return glm::all(glm::lessThanEqual(glm::abs(position), glm::vec3(c_MaxBodyCoordinate)));
+		}
+
+		b3BodyType ToBodyType(RigidBodyType type)
 		{
 			switch (type)
 			{
-				case RigidBodyType::Static: return JPH::EMotionType::Static;
-				case RigidBodyType::Dynamic: return JPH::EMotionType::Dynamic;
-				case RigidBodyType::Kinematic: return JPH::EMotionType::Kinematic;
+				case RigidBodyType::Static: return b3_staticBody;
+				case RigidBodyType::Dynamic: return b3_dynamicBody;
+				case RigidBodyType::Kinematic: return b3_kinematicBody;
 			}
-			return JPH::EMotionType::Static;
+			return b3_staticBody;
 		}
 
-		//////////////////////////////////////////////////////////////////////////
-		// Layers (encoded as in PhysicsLayers.h)
-		//////////////////////////////////////////////////////////////////////////
-
-		using PhysicsLayers::GetUserLayer;
-		using PhysicsLayers::IsMovingLayer;
-		using PhysicsLayers::MakeObjectLayer;
-
-		class BroadPhaseLayerMapping final : public JPH::BroadPhaseLayerInterface
+		// A body's ID without its world, as PhysicsWorld::GetBodyID reports it: the slot and its generation.
+		uint64_t GetBodyKey(b3BodyId body)
 		{
-		public:
-			JPH::uint GetNumBroadPhaseLayers() const override
-			{
-				return c_BroadPhaseLayerCount;
-			}
-
-			JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override
-			{
-				return IsMovingLayer(layer) ? c_MovingBroadPhaseLayer : c_StaticBroadPhaseLayer;
-			}
-
-#if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
-			const char* GetBroadPhaseLayerName(JPH::BroadPhaseLayer layer) const override
-			{
-				return layer == c_MovingBroadPhaseLayer ? "Moving" : "Static";
-			}
-#endif
-		};
-
-		class ObjectVsBroadPhaseFilter final : public JPH::ObjectVsBroadPhaseLayerFilter
-		{
-		public:
-			bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broadPhaseLayer) const override
-			{
-				return IsMovingLayer(layer) || broadPhaseLayer == c_MovingBroadPhaseLayer;
-			}
-		};
-
-		// Reads the live layer matrix of the world's settings; it is only changed on the main thread between steps.
-		class UserLayerPairFilter final : public JPH::ObjectLayerPairFilter
-		{
-		public:
-			explicit UserLayerPairFilter(const PhysicsSettings& settings)
-				: m_Settings(settings)
-			{
-			}
-
-			bool ShouldCollide(JPH::ObjectLayer layerA, JPH::ObjectLayer layerB) const override
-			{
-				if (!IsMovingLayer(layerA) && !IsMovingLayer(layerB))
-					return false;
-				return m_Settings.DoLayersCollide(GetUserLayer(layerA), GetUserLayer(layerB));
-			}
-		private:
-			const PhysicsSettings& m_Settings;
-		};
-
-		// Query filter accepting the user layers of a layer mask.
-		class LayerMaskFilter final : public JPH::ObjectLayerFilter
-		{
-		public:
-			explicit LayerMaskFilter(uint32_t layerMask)
-				: m_LayerMask(layerMask)
-			{
-			}
-
-			bool ShouldCollide(JPH::ObjectLayer layer) const override
-			{
-				// Bodies outside the user layers (the broad phase anchors) never match.
-				const uint32_t userLayer = GetUserLayer(layer);
-				return userLayer < c_PhysicsLayerCount && (m_LayerMask & ST_BIT(userLayer)) != 0;
-			}
-		private:
-			uint32_t m_LayerMask;
-		};
+			return (static_cast<uint64_t>(body.generation) << 32) | static_cast<uint32_t>(body.index1);
+		}
 
 		//////////////////////////////////////////////////////////////////////////
 		// Hierarchy
@@ -485,7 +380,7 @@ namespace Strata
 		// Contact pairs
 		//////////////////////////////////////////////////////////////////////////
 
-		// Contacts are tracked per pair of entities (not bodies), so that rebuilding a body keeps its contacts.
+		// Contacts are tracked per pair of entities (not bodies or shapes), so that rebuilding a body keeps its contacts.
 		struct PairKey
 		{
 			uint64_t Low = 0;
@@ -510,6 +405,9 @@ namespace Strata
 			return first < second ? PairKey { first, second } : PairKey { second, first };
 		}
 
+		// A pair of entities that touch, tracked while someone wants its contacts (see ICollisionEventSource). box3d reports a
+		// contact per pair of shapes (and per child of a compound or mesh) and a sensor visit per pair of a sensor shape and a
+		// visitor shape, so a pair counts them: it begins when its first contact begins and ends when its last one ends.
 		struct TouchingPair
 		{
 			UUID A = UUID::Null();
@@ -519,229 +417,16 @@ namespace Strata
 			uint32_t IndexInA = 0;
 			uint32_t IndexInB = 0;
 			bool IsTrigger = false;
-			uint64_t CheckStep = 0;  // Step during which the pair ends unless it is reported (see CollectCheckedPairs)
-			uint64_t ReportStep = 0; // Last step during which the pair was reported
-			uint64_t SortKey = 0;
+			// One of the entities' bodies was rebuilt since the pair began: its old shapes' contacts are gone, and the new shapes'
+			// contacts of the next step confirm the pair, or it ends then (see ResolveRecheckedPairs).
+			bool Unconfirmed = false;
+			uint32_t ContactCount = 0;      // Shape contacts and sensor visits of the pair that touch now
+			uint64_t CharacterStep = 0;     // Last step in which a character controller's move reported the pair
+			uint64_t CheckStep = 0;         // Last step whose refresh visited the pair (see CollectCheckedPairs)
+			uint64_t SortKey = 0;           // When the pair began (PhysicsWorldData::NextPairOrder): orders the ends of removals
+			b3ContactId Contact = {};       // A contact of the pair, for the point of its End (null for triggers and characters)
 			glm::vec3 Point = glm::vec3(0.0f);
 			glm::vec3 Normal = glm::vec3(0.0f); // From A towards B
-		};
-
-		//////////////////////////////////////////////////////////////////////////
-		// Listeners (called from Jolt's worker threads during a step)
-		//////////////////////////////////////////////////////////////////////////
-
-		struct ContactReport
-		{
-			PairKey Pair;
-			// Entity of Jolt's body 1, the body with the lower ID: the contact constraint manager sorts the bodies by ID before
-			// calling the contact listener (the order by motion type only applies to collision detection and validation).
-			UUID EntityA = UUID::Null();
-			UUID EntityB = UUID::Null();
-			uint64_t SortKey = 0;        // Both body IDs; orders events independently of thread timing
-			// Both sub shape IDs; picks a deterministic manifold among several per pair (0: a character controller's report).
-			uint64_t SubShapeKey = 0;
-			glm::vec3 Point = glm::vec3(0.0f);
-			glm::vec3 Normal = glm::vec3(0.0f);
-			bool IsTrigger = false;
-		};
-
-		// A strict total order of the reports of a step that does not depend on the order in which worker threads reported
-		// them: by pair, then by sub shape pair, then (several collision steps report the same sub shapes) by contact.
-		bool IsReportOrderedBefore(const ContactReport& a, const ContactReport& b)
-		{
-			if (!(a.Pair == b.Pair))
-				return a.Pair < b.Pair;
-			if (a.SubShapeKey != b.SubShapeKey)
-				return a.SubShapeKey < b.SubShapeKey;
-			const auto bits = [](const ContactReport& report)
-			{
-				return std::array<uint32_t, 6> { std::bit_cast<uint32_t>(report.Point.x), std::bit_cast<uint32_t>(report.Point.y), std::bit_cast<uint32_t>(report.Point.z),
-					std::bit_cast<uint32_t>(report.Normal.x), std::bit_cast<uint32_t>(report.Normal.y), std::bit_cast<uint32_t>(report.Normal.z) };
-			};
-			return bits(a) < bits(b);
-		}
-
-		// The contact buffer a thread fills during a step (see ContactCollector), cached per thread: valid while Collector and
-		// Step match the collector's.
-		struct ContactBufferSlot
-		{
-			uint64_t Collector = 0;
-			uint64_t Step = 0;
-			std::vector<ContactReport>* Reports = nullptr;
-		};
-		thread_local ContactBufferSlot t_ContactBuffer;
-		std::atomic<uint64_t> s_NextContactCollectorID { 1 };
-
-		// Records the contacts that exist during a step and that someone wants (see ICollisionEventSource): every pair while
-		// tracking all of them, otherwise the pairs with a body of interest. Contact begin/end is derived from these reports on
-		// the main thread after the step (see ProcessContacts), so OnContactRemoved is not needed: it would also fire when a
-		// body merely falls asleep, which must not end a contact.
-		//
-		// Jolt reports from its job threads. Each thread appends to a buffer of its own, claimed once per step with one atomic
-		// increment, so recording takes no lock; the buffers are merged after the step (a thread beyond the expected number,
-		// which the job system never runs, shares a locked buffer). The buffers keep their capacity, so steps after the first
-		// allocate nothing.
-		class ContactCollector final : public JPH::ContactListener
-		{
-		public:
-			void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings&) override
-			{
-				Record(body1, body2, manifold);
-			}
-
-			void OnContactPersisted(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings&) override
-			{
-				Record(body1, body2, manifold);
-			}
-
-			// Main thread, between steps: what to record. `bodyCapacity` is the world's MaxBodies (the range of body indices).
-			void Initialize(uint32_t bodyCapacity)
-			{
-				m_BodyInterest.assign(bodyCapacity, 0);
-			}
-
-			// Main thread, between steps: a world that grew has more body indices; the interest of the existing ones stays.
-			void Grow(uint32_t bodyCapacity)
-			{
-				m_BodyInterest.resize(std::max<size_t>(m_BodyInterest.size(), bodyCapacity), 0);
-			}
-
-			void SetTrackAll(bool trackAll) { m_TrackAll = trackAll; }
-			bool IsTrackingAll() const { return m_TrackAll; }
-			void SetBodyInterest(const JPH::BodyID& body, bool interested)
-			{
-				const uint32_t index = body.GetIndex();
-				if (index < m_BodyInterest.size())
-					m_BodyInterest[index] = interested ? 1 : 0;
-			}
-
-			// Main thread, before a step: the threads that report in it claim their buffers anew.
-			void BeginStep()
-			{
-				m_Step++;
-				m_ClaimedBuffers.store(0, std::memory_order_relaxed);
-				// The stepping thread and every worker may report; the count follows the job system as it is now.
-				const size_t threads = static_cast<size_t>(JobSystem::IsInitialized() ? JobSystem::GetWorkerThreadCount() : 0) + 1;
-				while (m_Buffers.size() < threads)
-					m_Buffers.push_back(CreateScope<ReportBuffer>());
-			}
-
-			// Main thread, after a step: moves the step's reports into `reports` (discarding its contents).
-			void TakeReports(std::vector<ContactReport>& reports)
-			{
-				reports.clear();
-				const size_t claimed = std::min<size_t>(m_ClaimedBuffers.load(std::memory_order_relaxed), m_Buffers.size());
-				for (size_t index = 0; index < claimed; index++)
-				{
-					std::vector<ContactReport>& buffer = m_Buffers[index]->Reports;
-					reports.insert(reports.end(), buffer.begin(), buffer.end());
-					buffer.clear();
-				}
-				std::scoped_lock<std::mutex> lock(m_SharedMutex);
-				reports.insert(reports.end(), m_SharedReports.begin(), m_SharedReports.end());
-				m_SharedReports.clear();
-			}
-		private:
-			bool IsWanted(const JPH::Body& body1, const JPH::Body& body2) const
-			{
-				if (m_TrackAll)
-					return true;
-				const uint32_t index1 = body1.GetID().GetIndex();
-				const uint32_t index2 = body2.GetID().GetIndex();
-				return (index1 < m_BodyInterest.size() && m_BodyInterest[index1]) || (index2 < m_BodyInterest.size() && m_BodyInterest[index2]);
-			}
-
-			void Record(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold)
-			{
-				if (!IsWanted(body1, body2))
-					return;
-
-				ContactReport report;
-				report.EntityA = UUID(body1.GetUserData());
-				report.EntityB = UUID(body2.GetUserData());
-				report.Pair = MakePairKey(report.EntityA, report.EntityB);
-				report.SortKey = (static_cast<uint64_t>(body1.GetID().GetIndexAndSequenceNumber()) << 32) | body2.GetID().GetIndexAndSequenceNumber();
-				report.SubShapeKey = (static_cast<uint64_t>(manifold.mSubShapeID1.GetValue()) << 32) | manifold.mSubShapeID2.GetValue();
-				report.IsTrigger = body1.IsSensor() || body2.IsSensor();
-				report.Normal = ToGlm(manifold.mWorldSpaceNormal);
-
-				// Midway between the two surfaces, averaged over the manifold's points.
-				const JPH::uint pointCount = static_cast<JPH::uint>(manifold.mRelativeContactPointsOn1.size());
-				if (pointCount > 0)
-				{
-					JPH::Vec3 sum = JPH::Vec3::sZero();
-					for (JPH::uint index = 0; index < pointCount; index++)
-						sum += manifold.mRelativeContactPointsOn1[index] + manifold.mRelativeContactPointsOn2[index];
-					report.Point = ToGlm(manifold.mBaseOffset + sum / (2.0f * static_cast<float>(pointCount)));
-				}
-				else
-				{
-					report.Point = ToGlm(0.5f * (body1.GetCenterOfMassPosition() + body2.GetCenterOfMassPosition()));
-				}
-
-				ContactBufferSlot& slot = t_ContactBuffer;
-				if (slot.Collector != m_ID || slot.Step != m_Step)
-				{
-					const size_t index = m_ClaimedBuffers.fetch_add(1, std::memory_order_relaxed);
-					slot = ContactBufferSlot { m_ID, m_Step, index < m_Buffers.size() ? &m_Buffers[index]->Reports : nullptr };
-				}
-				if (slot.Reports)
-				{
-					slot.Reports->push_back(report);
-					return;
-				}
-				std::scoped_lock<std::mutex> lock(m_SharedMutex);
-				m_SharedReports.push_back(report);
-			}
-		private:
-			// Padded to a cache line, so that the headers of buffers threads append to concurrently never share one.
-			struct ReportBuffer
-			{
-				std::vector<ContactReport> Reports;
-				std::byte Padding[64 - sizeof(std::vector<ContactReport>)] = {};
-			};
-			static_assert(sizeof(ReportBuffer) == 64, "A contact buffer fills one cache line");
-
-			const uint64_t m_ID = s_NextContactCollectorID.fetch_add(1, std::memory_order_relaxed);
-			uint64_t m_Step = 0;
-			bool m_TrackAll = true;
-			std::vector<uint8_t> m_BodyInterest; // Per Jolt body index: its entity is of interest
-			std::vector<Scope<ReportBuffer>> m_Buffers;
-			std::atomic<size_t> m_ClaimedBuffers = 0;
-			std::mutex m_SharedMutex;
-			std::vector<ContactReport> m_SharedReports;
-		};
-
-		// Bodies that fall asleep at the end of a step moved during it; they are written back with the active ones.
-		class ActivationCollector final : public JPH::BodyActivationListener
-		{
-		public:
-			void OnBodyActivated(const JPH::BodyID&, JPH::uint64) override
-			{
-			}
-
-			void OnBodyDeactivated(const JPH::BodyID& bodyID, JPH::uint64) override
-			{
-				std::scoped_lock<std::mutex> lock(m_Mutex);
-				m_Deactivated.push_back(bodyID);
-			}
-
-			void Clear()
-			{
-				std::scoped_lock<std::mutex> lock(m_Mutex);
-				m_Deactivated.clear();
-			}
-
-			// Like ContactCollector::SwapReports: double buffered, so that steps allocate nothing.
-			void SwapDeactivated(std::vector<JPH::BodyID>& bodies)
-			{
-				bodies.clear();
-				std::scoped_lock<std::mutex> lock(m_Mutex);
-				m_Deactivated.swap(bodies);
-			}
-		private:
-			std::mutex m_Mutex;
-			std::vector<JPH::BodyID> m_Deactivated;
 		};
 
 		//////////////////////////////////////////////////////////////////////////
@@ -765,26 +450,44 @@ namespace Strata
 			bool Waiting = false;                      // The data was not available, or its shape was still cooking
 		};
 
+		// A baked compound (box3d's form of a triangle mesh placed away from its body's origin), owned by the bodies using it.
+		class CompoundData
+		{
+		public:
+			explicit CompoundData(b3CompoundData* compound)
+				: m_Compound(compound)
+			{
+			}
+			~CompoundData()
+			{
+				if (m_Compound)
+					b3DestroyCompound(m_Compound);
+			}
+			CompoundData(const CompoundData&) = delete;
+			CompoundData& operator=(const CompoundData&) = delete;
+
+			const b3CompoundData* Get() const { return m_Compound; }
+		private:
+			b3CompoundData* m_Compound = nullptr;
+		};
+
 		// An entity that owns a body (a rigid body, or a collider entity without a rigid body ancestor). The record exists as
 		// long as the entity needs a body, also while the body cannot be built (see BuildFailure).
 		struct BodyRecord
 		{
 			UUID EntityID = UUID::Null();
-			JPH::BodyID BodyID;                             // Invalid while the body cannot be built
+			b3BodyId BodyID = b3_nullBodyId;                // Null while the body cannot be built
 			RigidBodyType Type = RigidBodyType::Static;
 			BuildFailure Failure = BuildFailure::None;
-			bool InSimulation = false;
-			// Created and counted as part of the simulation, but waiting for the batch that adds the bodies of this round of
-			// changes to Jolt (see FlushBodyBatches); only ApplyChanges sees such records.
-			bool AddPending = false;
-			// Out of the simulation, but still in Jolt's broad phase until the batch of this round removes it
-			// (PhysicsWorldData::PendingDeactivations); a body that joins the simulation again meanwhile just stays.
-			bool RemovalPending = false;
+			uint32_t Layer = 0;                             // Collision layer of its shapes
+			bool InSimulation = false;                      // Its body is enabled in box3d
+			bool IsTrigger = false;                         // Its shapes are sensors
 			bool Suspended = false;                         // Out of the simulation because the world transform is degenerate
 			bool WaitsForParent = false;                    // Not built because the parent cannot be inverted (dynamic bodies)
-			bool KinematicMoving = false;                   // MoveKinematic gave the body a velocity during the last step
+			bool KinematicMoving = false;                   // A target transform gave the body a velocity for the last step
 			bool TransformDirty = false;                    // A signaled transform change to apply at the next step
 			bool Polled = false;                            // Listed in PhysicsWorldData::PolledBodies
+			bool HasPendingForce = false;                   // PendingForce or PendingTorque are set
 			uint64_t SlotTicket = 0;                        // Its entry in PhysicsWorldData::SlotWaiters while it waits for a slot
 			uint64_t WriteBackPass = 0;                     // Last write-back pass that wrote this body
 			uint64_t SyncPass = 0;                          // Last step whose synchronization handled this record
@@ -793,24 +496,48 @@ namespace Strata
 			glm::mat4 LastWorldTransform = glm::mat4(1.0f); // Entity world transform the body was last synchronized with
 			glm::vec3 KinematicTargetPosition = glm::vec3(0.0f);
 			glm::quat KinematicTargetRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-			// Velocities of a dynamic body while it is out of the simulation (Jolt clears them on removal).
+			// Velocities of a dynamic body while it is out of the simulation, so that it resumes them.
 			glm::vec3 SavedLinearVelocity = glm::vec3(0.0f);
 			glm::vec3 SavedAngularVelocity = glm::vec3(0.0f);
+			// Forces and torques for the next fixed step (box3d clears them after each of its steps, so they are applied before
+			// every box3d step of the fixed step, see ApplyPendingForces).
+			glm::vec3 PendingForce = glm::vec3(0.0f);
+			glm::vec3 PendingTorque = glm::vec3(0.0f);
 			std::vector<entt::entity> MergedEntities; // Collider descendants that belong to this body
 			std::vector<ShapeMember> ShapeMembers;    // Entities whose colliders are part of the current shape
 			std::vector<MeshSource> MeshSources;      // Meshes of the colliders considered by the last build
+			std::vector<b3ShapeId> Shapes;            // The body's box3d shapes
+			// What the body's shapes point to and must outlive them: cooked meshes and baked compounds.
+			std::vector<Ref<const PhysicsCookedShape>> CookedShapes;
+			std::vector<Ref<const CompoundData>> Compounds;
 
-			bool HasBody() const { return !BodyID.IsInvalid(); }
+			bool HasBody() const { return B3_IS_NON_NULL(BodyID); }
 		};
 
-		// What a Jolt body slot (a body index) leads to: the body occupying it (index and sequence number, to recognize a reused
-		// slot), the entity owning it and that entity's record. Records live in a std::map, whose elements stay in place until
-		// they are removed, which empties the slot first.
+		// What a box3d body slot (its index) leads to: the generation of the body occupying it (to recognize a reused slot),
+		// the entity owning it and that entity's record. Records live in a std::map, whose elements stay in place until they
+		// are removed, which empties the slot first.
 		struct BodySlot
 		{
-			JPH::uint32 Body = JPH::BodyID::cInvalidBodyID;
+			uint16_t Generation = 0;
+			bool Used = false;
+			uint64_t AwakeStamp = 0; // PhysicsWorldData::AwakeStamp when the body was last listed awake
 			entt::entity Entity = entt::null;
 			BodyRecord* Record = nullptr;
+		};
+
+		// What a box3d shape slot leads to, for events and queries: the entity whose body (or character controller) the shape
+		// belongs to. Kept from the shape's creation to its destruction; events naming a shape that is gone (or a slot reused
+		// since, of another generation) resolve to nothing.
+		struct ShapeSlot
+		{
+			uint16_t Generation = 0;
+			bool Used = false;
+			bool Sensor = false;
+			bool Convex = true;                        // Not a triangle mesh (rays starting inside are not reported)
+			RigidBodyType BodyType = RigidBodyType::Static;
+			UUID Entity = UUID::Null();
+			uint64_t BodyKey = 0;
 		};
 
 		// An entry of PhysicsWorldData::RecordIndex: the entity recorded at an index (its version included) and its record.
@@ -837,55 +564,35 @@ namespace Strata
 			bool ScaleChanged = false;
 		};
 
-		// A cooked mesh shape restored in a world, shared by the colliders using the same data.
-		struct MeshShapeKey
+		// A box hull of these half extents and this placement in its body, by the bits of its values: box hulls are made once
+		// per size and placement and shared by the bodies of a world (box3d keeps one copy per hull in its world too).
+		struct BoxHullKey
 		{
-			const PhysicsMeshData* Data = nullptr;
-			bool Convex = false;
+			std::array<uint32_t, 10> Bits = {};
 
-			bool operator==(const MeshShapeKey& other) const { return Data == other.Data && Convex == other.Convex; }
+			bool operator==(const BoxHullKey& other) const = default;
 		};
 
-		struct MeshShapeKeyHash
+		struct BoxHullKeyHash
 		{
-			size_t operator()(const MeshShapeKey& key) const
+			size_t operator()(const BoxHullKey& key) const
 			{
-				return static_cast<size_t>(Hash::Combine(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(key.Data)), key.Convex ? 1u : 0u));
+				uint64_t hash = 0;
+				for (uint32_t bits : key.Bits)
+					hash = Hash::Combine(hash, bits);
+				return static_cast<size_t>(hash);
 			}
 		};
 
-		// A box (half extents) or sphere (radius) shape, by the bits of its dimensions.
-		struct PrimitiveShapeKey
+		BoxHullKey MakeBoxHullKey(const glm::vec3& halfExtents, const b3Transform& placement)
 		{
-			enum class ShapeKind : uint32_t
-			{
-				Box = 0,
-				Sphere
-			};
-			ShapeKind Kind = ShapeKind::Box;
-			std::array<uint32_t, 3> Dimensions = {};
+			const auto bits = [](float value) { return std::bit_cast<uint32_t>(value); };
+			return BoxHullKey { { bits(halfExtents.x), bits(halfExtents.y), bits(halfExtents.z), bits(placement.p.x), bits(placement.p.y), bits(placement.p.z),
+				bits(placement.q.v.x), bits(placement.q.v.y), bits(placement.q.v.z), bits(placement.q.s) } };
+		}
 
-			bool operator==(const PrimitiveShapeKey& other) const = default;
-		};
-
-		struct PrimitiveShapeKeyHash
-		{
-			size_t operator()(const PrimitiveShapeKey& key) const
-			{
-				const uint64_t first = (static_cast<uint64_t>(key.Kind) << 32) | key.Dimensions[0];
-				const uint64_t second = (static_cast<uint64_t>(key.Dimensions[1]) << 32) | key.Dimensions[2];
-				return static_cast<size_t>(Hash::Combine(first, second));
-			}
-		};
-
-		// Distinct box and sphere sizes whose shape a world shares between its bodies; sizes beyond get shapes of their own.
-		constexpr size_t c_MaxSharedPrimitiveShapes = 4096;
-
-		struct RestoredMeshShape
-		{
-			std::weak_ptr<const PhysicsMeshData> Source; // The entry belongs to its key only while the source is alive
-			JPH::RefConst<JPH::Shape> Shape;
-		};
+		// Distinct box hulls a world shares between its bodies; hulls beyond are made per body.
+		constexpr size_t c_MaxSharedBoxHulls = 4096;
 
 		// Entities whose changes are applied by the next ApplyPendingChanges, in the order they were recorded, each once.
 		// Membership is a slot per entity index holding the entity recorded there (a cell's unload records tens of thousands
@@ -959,10 +666,8 @@ namespace Strata
 		{
 			PhysicsSettings result = settings;
 			result.MaxBodies = ClampCapacity(settings.MaxBodies, PhysicsCapacitySettings::c_MaxBodiesLimit);
-			result.MaxBodyPairs = ClampCapacity(settings.MaxBodyPairs, PhysicsCapacitySettings::c_MaxBodyPairsLimit);
 			result.MaxContactConstraints = ClampCapacity(settings.MaxContactConstraints, PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
 			result.CollisionSteps = std::clamp(settings.CollisionSteps, 1u, 64u);
-			result.TempAllocatorSize = std::max(settings.TempAllocatorSize, 64u * 1024u);
 			result.MeshWaitTimeout = std::isfinite(settings.MeshWaitTimeout) ? std::max(settings.MeshWaitTimeout, 0.0f) : 0.0f;
 			return result;
 		}
@@ -972,28 +677,21 @@ namespace Strata
 	struct PhysicsWorldData
 	{
 		PhysicsWorldData(Scene& scene, const PhysicsSettings& settings)
-			: OwnerScene(&scene), Settings(settings), LayerPairFilter(Settings)
+			: OwnerScene(&scene), Settings(settings), Tasks(&TaskCounters)
 		{
 		}
 
-		PhysicsRuntimeReference Runtime; // First member: Jolt stays initialized until every other member is destroyed
+		PhysicsRuntimeReference Runtime; // First member: box3d's hooks are installed before anything else uses box3d
 		Scene* OwnerScene = nullptr;
 		PhysicsSettings Settings;
-		BroadPhaseLayerMapping BroadPhaseLayers;
-		ObjectVsBroadPhaseFilter ObjectVsBroadPhase;
-		UserLayerPairFilter LayerPairFilter;
-		ContactCollector Contacts;
-		ActivationCollector Activations;
-		PhysicsJobCounters JobCounters;
-		Scope<JPH::TempAllocator> Allocator;
-		Scope<JPH::JobSystem> Jobs;
-		std::unordered_map<MeshShapeKey, RestoredMeshShape, MeshShapeKeyHash> MeshShapes; // See PhysicsMeshShapes
-		std::unordered_map<PrimitiveShapeKey, JPH::RefConst<JPH::Shape>, PrimitiveShapeKeyHash> PrimitiveShapes; // See GetPrimitiveShape
-		Scope<JPH::PhysicsSystem> JoltSystem; // Destroyed before the listeners, filters and allocators it references
-		Scope<CharacterControllerSet> Characters; // Destroyed (with its presence bodies) before the Jolt system it uses
+		PhysicsTaskCounters TaskCounters;
+		PhysicsTaskSystem Tasks;  // Outlives the box3d world, which calls it during steps
+		b3WorldId World = b3_nullWorldId;
+		bool HasStepped = false;  // A box3d step ran: static shapes created from now on must find their pairs themselves
+		std::unordered_map<BoxHullKey, Scope<b3BoxHull>, BoxHullKeyHash> BoxHulls; // See GetBoxHull
+		Scope<CharacterControllerSet> Characters; // Destroyed (with its presence bodies) before the box3d world it uses
 		std::vector<CharacterBodyChange> CharacterChanges;            // Scratch of ApplyCharacterChanges
 		CharacterStepOutput CharacterStep;                            // Scratch of StepCharacters
-		std::vector<ContactReport> CharacterReports;                  // The step's contacts of character controllers (see StepCharacters)
 
 		// Ordered: per-step processing is deterministic. Records are created only by EmplaceRecord and removed only by
 		// EraseRecord (or cleared together with RecordIndex and RecordOverflow, as Clear does), never through the map itself:
@@ -1011,25 +709,31 @@ namespace Strata
 		// Records that need attention at the next step besides the awake bodies (see NeedsPolling). Entries are dropped
 		// lazily, so the list may hold records that no longer need it (or no longer exist).
 		std::vector<entt::entity> PolledBodies;
-		std::vector<BodySlot> BodySlots;                              // Per Jolt body index (MaxBodies of them), see FindBodyRecord
-		// Bodies created while changes are applied join the simulation in one batch per activation mode (static bodies are
-		// not activated), and bodies destroyed meanwhile leave it and go in one batch each: Jolt inserts a batch into its
-		// broad phase trees at once (AddBodiesPrepare/Finalize) instead of body by body. FlushBodyBatches ends ApplyChanges.
-		std::vector<JPH::BodyID> PendingAdds;
-		std::vector<JPH::BodyID> PendingActivatedAdds;
-		std::vector<JPH::BodyID> PendingRemovals;
-		std::vector<JPH::BodyID> PendingDestructions;
-		std::vector<JPH::BodyID> PendingDeactivations;                // Bodies leaving the simulation (BodyRecord::RemovalPending)
-		// Where the bodies removed or destroyed since the last flush were: the bodies resting on them are woken after the
-		// batch, in merged regions (see WakeAroundRemovedBodies), instead of a query per body.
-		std::vector<JPH::AABox> WakeBounds;
-		uint64_t WakeQueryCount = 0;                                  // Broad phase queries that woke bodies since the world was created
-		uint64_t AddBatchCount = 0;                                   // Batches of new bodies added since the world was created
+		std::vector<BodySlot> BodySlots;                              // Per box3d body index, see FindBodyRecord
+		std::vector<ShapeSlot> ShapeSlots;                            // Per box3d shape index, see ResolveShape
+		uint32_t LiveBodies = 0;                                      // box3d bodies of records and character controllers
+		// The bodies that were awake after the last step, and those woken or created since (see MarkAwake): what the next step
+		// synchronizes besides the polled records, by body index. Listed once per stamp.
+		std::vector<int32_t> AwakeBodies;
+		uint64_t AwakeStamp = 1;
+		// Bodies created in the current round of changes, static and moving: rounds that created bodies (see AddBatchCount).
+		bool RoundCreatedStatic = false;
+		bool RoundCreatedMoving = false;
+		uint64_t WakeQueryCount = 0;                                  // Tree queries that woke bodies since the world was created
+		uint64_t AddBatchCount = 0;                                   // Rounds of changes (per motion kind) that created bodies
 		std::unordered_map<PairKey, TouchingPair, PairKeyHash> TouchingPairs;
 		std::unordered_map<UUID, std::vector<PairKey>> EntityPairs;   // Touching pairs of each entity (see AddTouchingPair)
 		uint64_t PairIndexOperations = 0;                             // Entries of EntityPairs written since the world was created
+		uint64_t NextPairOrder = 1;
+		bool TrackAll = true;                                         // See SetTrackAllContacts
 		std::unordered_set<UUID> ContactInterest;                     // Entities whose contacts are wanted (see SetContactInterest)
-		std::vector<UUID> RecheckedEntities;                          // Built or rebuilt since the last step: their pairs are checked
+		std::vector<UUID> SeededEntities;                             // Wanted since the last step: their touching pairs are seeded after it
+		bool SeedAll = false;                                         // Tracking all contacts started: every body's pairs are seeded
+		std::vector<UUID> UnwantedEntities;                           // No longer wanted: their pairs nobody wants end after the next step
+		bool CheckAllWanted = false;                                  // Tracking all contacts stopped: every pair nobody wants ends
+		std::vector<UUID> RecheckedEntities;                          // Rebuilt since the last step: their unconfirmed pairs end unless confirmed
+		std::vector<PairKey> CharacterPairs;                          // Pairs the character controllers reported in the last step
+		std::set<entt::entity> TriggerBodies;                         // Records whose shapes are sensors (seeding finds what is inside them)
 		std::set<entt::entity> MeshBodies;                            // Records with MeshSources (ordered: deterministic rebuilds)
 		std::set<entt::entity> WaitingMeshBodies;                     // Records with a MeshSource that waits for data or cooking
 		std::unordered_map<AssetHandle, std::vector<entt::entity>> MeshUsers; // Mesh -> records whose MeshSources use it
@@ -1038,30 +742,31 @@ namespace Strata
 		uint64_t SeenMeshProviderVersion = 0;
 		uint64_t SeenCompletedCooks = 0;
 		std::vector<CollisionEvent> PendingEvents;
-		std::vector<UUID> LeftAfterStep;                              // Bodies removed between the step and contact processing
+		std::vector<entt::entity> ForcedBodies;                       // Records with forces for the next step (see ApplyPendingForces)
 		std::unordered_set<uint64_t> IssuedWarnings;                  // Hash of (entity, PhysicsWarning)
-		JPH::EPhysicsUpdateError ReportedErrors = JPH::EPhysicsUpdateError::None;
 
-		// Capacities: whether each was sized automatically (the advice of the overflow messages differs), the records waiting
-		// for a free body slot (BuildFailure::WaitingForSlot), the first of them since the overflow was last reported, and what
-		// the world needed beyond its capacities.
+		// Capacities (see PhysicsWorld, "Capacities"): whether the room was sized automatically, the room the world has now,
+		// the records waiting at the growth limit (BuildFailure::WaitingForSlot), the first of them since the limit was last
+		// reported, and what the world needed beyond the room it was created with.
 		bool AutomaticMaxBodies = false;
-		bool AutomaticMaxBodyPairs = false;
 		bool AutomaticMaxContactConstraints = false;
-		bool AutomaticTempAllocatorSize = false;
+		uint32_t RoomBodies = 0;
+		// What box3d reserved when the world was created: the room, but never more than the automatic room of the scene's
+		// bodies (a room given far beyond them, the largest a scene may ask for, would reserve gigabytes box3d grows into
+		// anyway when the bodies come).
+		uint32_t LibraryRoomBodies = 0;
+		uint32_t LibraryRoomContacts = 0;
 		uint32_t SlotWaiterCount = 0;
 		std::array<uint32_t, static_cast<size_t>(BuildFailure::Count)> FailureCounts {}; // Records per BuildFailure (see SetFailure)
 		entt::entity FirstSlotWaiter = entt::null;
 		ErrorThrottle SlotWaiterErrors { "Physics" };                 // One aggregated error while bodies wait for a slot
 		// The records waiting for a slot, in the order they started waiting, with the ticket each got then: an entry whose
 		// record has another ticket (it stopped waiting, or waits again from a later place) or no longer exists is skipped.
-		// Waiting records are never polled: freed slots (see GiveSlotsToWaiters) take them from the front.
+		// Waiting records are never polled: bodies that go (see GiveSlotsToWaiters) hand their room to them from the front.
 		std::deque<std::pair<entt::entity, uint64_t>> SlotWaiters;
 		uint64_t NextSlotTicket = 1;
 		PhysicsCapacityDemand Demand;
-		// Growth (see GrowWorld): the bodies asked to have room for (PhysicsWorld::Reserve), and the growths so far.
-		uint32_t ReservedBodies = 0;
-		uint64_t ReservedBytes = 0;    // EstimateReservedBytes of the settings in effect
+		uint32_t ReservedBodies = 0;   // See PhysicsWorld::Reserve
 		// What updates of the scene built, destroyed and spent applying changes (see UpdateCounters): those of the update
 		// Scene::GetFrameIndex was CounterFrame in, and of the one before it.
 		struct UpdateCounters
@@ -1077,12 +782,12 @@ namespace Strata
 		float LastGrowthMs = 0.0f;
 		uint32_t LastGrowthFrom = 0;
 		uint32_t LastGrowthTo = 0;
-		uint64_t ContactOverflowSteps = 0;
+		bool GrewThisRound = false;
 		uint64_t StepCount = 0;
 		uint64_t WriteBackPass = 0;
 		uint64_t SyncPass = 0;
 		float LastStepTime = 0.0f;
-		float LastJoltTime = 0.0f;      // The parts of LastStepTime (see PhysicsStats)
+		float LastLibraryTime = 0.0f;   // The parts of LastStepTime (see PhysicsStats)
 		float LastSyncTime = 0.0f;
 		float LastWriteBackTime = 0.0f;
 		float LastContactTime = 0.0f;
@@ -1105,14 +810,14 @@ namespace Strata
 		std::vector<entt::entity> MeshChecks;                         // Scratch of RefreshMeshBodies and HoldForMeshes
 		std::vector<AssetHandle> ChangedMeshes;
 		std::vector<PairKey> CheckedPairs;
-		std::vector<ContactReport> Reports;
 		std::vector<TouchingPair> EndedPairs;
 		std::vector<TouchingPair> BegunPairs;
-		std::vector<JPH::BodyID> DeactivatedBodies;
+		std::vector<b3ContactData> ContactScratch;
+		std::vector<b3ShapeId> ShapeScratch;
 		std::vector<std::pair<uint32_t, entt::entity>> NestedWrites;  // Depth and entity of dynamic bodies below written ones
 		std::vector<PoseWrite> PoseWrites;                            // See WriteBackDynamicBodies
 		std::vector<entt::entity> WrittenEntities;
-		// Ordering scratch of the write-back: a bit per body index (allocated with the world, all clear between steps) and the
+		// Ordering scratch of the write-back: a bit per body index (grown with the slots, all clear between steps) and the
 		// words of it that bits were set in during this step.
 		std::vector<uint64_t> MovedBodyBits;
 		std::vector<uint32_t> MovedBodyWords;
@@ -1277,19 +982,69 @@ namespace Strata
 			return record && record->Type == RigidBodyType::Dynamic ? record : nullptr;
 		}
 
-		// The record (and in outEntity the entity) owning a body, or nullptr for a body the world does not know (any more).
-		// Constant time: a body's index leads to its slot.
-		BodyRecord* FindBodyRecord(const PhysicsWorldData& data, const JPH::BodyID& bodyID, entt::entity* outEntity = nullptr)
+		// Makes a body known by its index (records' bodies and character controllers' presence bodies). box3d reuses indices,
+		// so the slots grow to the largest index in use.
+		void RegisterBody(PhysicsWorldData& data, b3BodyId body, entt::entity handle, BodyRecord* record)
 		{
-			const uint32_t index = bodyID.GetIndex();
+			const size_t index = static_cast<size_t>(body.index1 - 1);
 			if (index >= data.BodySlots.size())
+			{
+				data.BodySlots.resize(std::max(index + 1, data.BodySlots.size() * 2));
+				data.MovedBodyBits.resize((data.BodySlots.size() + 63) / 64, 0);
+			}
+			data.BodySlots[index] = BodySlot { body.generation, true, 0, handle, record };
+			data.LiveBodies++;
+		}
+
+		void UnregisterBody(PhysicsWorldData& data, b3BodyId body)
+		{
+			const size_t index = static_cast<size_t>(body.index1 - 1);
+			if (index < data.BodySlots.size() && data.BodySlots[index].Used && data.BodySlots[index].Generation == body.generation)
+			{
+				data.BodySlots[index] = BodySlot();
+				data.LiveBodies--;
+			}
+		}
+
+		void RegisterShape(PhysicsWorldData& data, b3ShapeId shape, const ShapeSlot& slot)
+		{
+			const size_t index = static_cast<size_t>(shape.index1 - 1);
+			if (index >= data.ShapeSlots.size())
+				data.ShapeSlots.resize(std::max(index + 1, data.ShapeSlots.size() * 2));
+			data.ShapeSlots[index] = slot;
+			data.ShapeSlots[index].Generation = shape.generation;
+			data.ShapeSlots[index].Used = true;
+		}
+
+		void UnregisterShape(PhysicsWorldData& data, b3ShapeId shape)
+		{
+			const size_t index = static_cast<size_t>(shape.index1 - 1);
+			if (index < data.ShapeSlots.size() && data.ShapeSlots[index].Generation == shape.generation)
+				data.ShapeSlots[index] = ShapeSlot();
+		}
+
+		// The entity a shape belongs to as of now, or nullptr for a shape the world does not know (any more): events may name
+		// shapes destroyed since, whose slots may hold other shapes now.
+		const ShapeSlot* ResolveShape(const PhysicsWorldData& data, b3ShapeId shape)
+		{
+			const int64_t index = static_cast<int64_t>(shape.index1) - 1;
+			if (index < 0 || static_cast<size_t>(index) >= data.ShapeSlots.size())
 				return nullptr;
-			const BodySlot& slot = data.BodySlots[index];
-			if (slot.Body != bodyID.GetIndexAndSequenceNumber())
-				return nullptr;
-			if (outEntity)
-				*outEntity = slot.Entity;
-			return slot.Record;
+			const ShapeSlot& slot = data.ShapeSlots[static_cast<size_t>(index)];
+			return slot.Used && slot.Generation == shape.generation ? &slot : nullptr;
+		}
+
+		// Lists a body as awake for the next step's synchronization (see PhysicsWorldData::AwakeBodies).
+		void MarkAwake(PhysicsWorldData& data, b3BodyId body)
+		{
+			const int64_t index = static_cast<int64_t>(body.index1) - 1;
+			if (index < 0 || static_cast<size_t>(index) >= data.BodySlots.size())
+				return;
+			BodySlot& slot = data.BodySlots[static_cast<size_t>(index)];
+			if (!slot.Used || slot.Generation != body.generation || slot.AwakeStamp == data.AwakeStamp)
+				return;
+			slot.AwakeStamp = data.AwakeStamp;
+			data.AwakeBodies.push_back(static_cast<int32_t>(index));
 		}
 
 		bool IsSlotWaiter(const PhysicsWorldData& data, const std::pair<entt::entity, uint64_t>& entry)
@@ -1360,11 +1115,10 @@ namespace Strata
 			record.Failure = failure;
 		}
 
-		// The body slots of the world's own bodies (those of records and the presence bodies of character controllers): Jolt's
-		// body count without the broad phase anchors.
+		// The bodies of the world (those of records and the presence bodies of character controllers).
 		uint32_t GetUsedBodySlots(const PhysicsWorldData& data)
 		{
-			return data.JoltSystem->GetNumBodies() - c_BroadPhaseAnchorCount;
+			return data.LiveBodies;
 		}
 
 		// The most bodies the world may grow to: PhysicsSettings::GrowthLimit (0: the engine's limit), never below MaxBodies.
@@ -1374,9 +1128,9 @@ namespace Strata
 			return std::max(limit, settings.MaxBodies);
 		}
 
-		// One error for the entities that found the world full, instead of one per entity (thousands at once when a scene
-		// outgrows an explicit capacity); logged again only once they all got a body and the world fills up again. Records
-		// what the world would have needed, so that the scene's next world can grow.
+		// One error for the entities that found the world at its growth limit, instead of one per entity (thousands at once
+		// when a scene outgrows its limit); logged again only once they all got a body and the world reaches its limit again.
+		// Records what the world would have needed, so that the scene's next world reserves it.
 		void ReportBodyLimit(PhysicsWorldData& data)
 		{
 			if (data.SlotWaiterCount == 0)
@@ -1388,17 +1142,17 @@ namespace Strata
 
 			const uint64_t needed = static_cast<uint64_t>(GetUsedBodySlots(data)) + data.SlotWaiterCount;
 			data.Demand.Bodies = std::max(data.Demand.Bodies, static_cast<uint32_t>(std::min<uint64_t>(needed, PhysicsCapacitySettings::c_MaxBodiesLimit)));
-			// Below its growth limit the world grows before the next step, which gives them their bodies (and says so).
-			if (data.Settings.MaxBodies < GetGrowthLimit(data.Settings) || !data.SlotWaiterErrors.GetLastMessage().empty())
+			if (!data.SlotWaiterErrors.GetLastMessage().empty())
 				return;
 
 			const Entity first(data.FirstSlotWaiter, data.OwnerScene);
 			std::string entities = first.IsValid() ? fmt::format("'{}'", first.GetName()) : std::string("an entity");
 			if (data.SlotWaiterCount > 1)
 				entities += fmt::format(" and {} more entities", data.SlotWaiterCount - 1);
-			const bool engineLimit = data.Settings.MaxBodies >= PhysicsCapacitySettings::c_MaxBodiesLimit;
+			const uint32_t limit = GetGrowthLimit(data.Settings);
+			const bool engineLimit = limit >= PhysicsCapacitySettings::c_MaxBodiesLimit;
 			data.SlotWaiterErrors.Report(fmt::format("cannot create a body for {}: the world is at {} of {} bodies and cannot grow; they get one when bodies "
-				"are removed", entities, engineLimit ? "the engine's limit" : "its growth limit (PhysicsSettings::GrowthLimit)", data.Settings.MaxBodies));
+				"are removed", entities, engineLimit ? "the engine's limit" : "its growth limit (PhysicsSettings::GrowthLimit)", limit));
 		}
 
 		// Whether a record without a body waits for a body that can be built later (rather than for a component change).
@@ -1529,130 +1283,89 @@ namespace Strata
 		// Simulation membership
 		//////////////////////////////////////////////////////////////////////////
 
-		// Wakes the bodies in a box: only the tree of moving bodies is searched, since static bodies never sleep.
-		void WakeBodiesIn(PhysicsWorldData& data, JPH::AABox bounds)
+		// The bodies a query finds, whatever their layer (every shape's mask holds the query category).
+		b3QueryFilter MakeAllShapesFilter()
 		{
-			bounds.ExpandBy(JPH::Vec3::sReplicate(c_WakeMargin));
-			const JPH::SpecifiedBroadPhaseLayerFilter movingBodies(c_MovingBroadPhaseLayer);
-			const JPH::ObjectLayerFilter layerFilter;
-			data.JoltSystem->GetBodyInterface().ActivateBodiesInAABox(bounds, movingBodies, layerFilter);
+			return PhysicsFilters::MakeQueryFilter(c_AllPhysicsLayers);
+		}
+
+		// Wakes the dynamic and kinematic bodies in a box (static bodies never sleep).
+		void WakeBodiesIn(PhysicsWorldData& data, b3AABB bounds)
+		{
+			bounds.lowerBound = b3Sub(bounds.lowerBound, b3Vec3 { c_WakeMargin, c_WakeMargin, c_WakeMargin });
+			bounds.upperBound = b3Add(bounds.upperBound, b3Vec3 { c_WakeMargin, c_WakeMargin, c_WakeMargin });
+			// Collected first: waking moves bodies between box3d's solver sets, which a query callback must not do.
+			std::vector<b3ShapeId>& shapes = data.ShapeScratch;
+			shapes.clear();
+			b3World_OverlapAABB(data.World, bounds, MakeAllShapesFilter(), [](b3ShapeId shape, void* context)
+			{
+				static_cast<std::vector<b3ShapeId>*>(context)->push_back(shape);
+				return true;
+			}, &shapes);
 			data.WakeQueryCount++;
-		}
-
-		// The world bounds of a body, if it exists. Main thread, between steps: nothing else changes bodies then.
-		std::optional<JPH::AABox> GetBodyBounds(const PhysicsWorldData& data, const JPH::BodyID& bodyID)
-		{
-			const JPH::BodyLockRead lock(data.JoltSystem->GetBodyLockInterfaceNoLock(), bodyID);
-			if (!lock.Succeeded())
-				return std::nullopt;
-			return lock.GetBody().GetWorldSpaceBounds();
-		}
-
-		// Wakes the bodies around a body (which may rest on it) before it is moved or reshaped.
-		void WakeBodiesAround(PhysicsWorldData& data, const JPH::BodyID& bodyID)
-		{
-			if (const std::optional<JPH::AABox> bounds = GetBodyBounds(data, bodyID))
-				WakeBodiesIn(data, *bounds);
-		}
-
-		// Remembers where a body that leaves the broad phase in this round's batch is, so that the bodies resting on it wake
-		// once it is gone (WakeAroundRemovedBodies).
-		void QueueWakeAround(PhysicsWorldData& data, const JPH::BodyID& bodyID)
-		{
-			if (const std::optional<JPH::AABox> bounds = GetBodyBounds(data, bodyID))
-				data.WakeBounds.push_back(*bounds);
-		}
-
-		// Wakes the bodies around the bodies a batch removed. A few are woken box by box; many (a cell leaving) in merged
-		// regions of a coarse grid, one query per region instead of one per body: bodies near the removed ones that rested on
-		// something else may wake too, and fall asleep again.
-		void WakeAroundRemovedBodies(PhysicsWorldData& data)
-		{
-			constexpr size_t c_MaxSingleWakes = 16;
-			constexpr float c_WakeRegionSize = 16.0f;
-			std::vector<JPH::AABox>& bounds = data.WakeBounds;
-			if (bounds.size() <= c_MaxSingleWakes)
+			for (const b3ShapeId shape : shapes)
 			{
-				for (const JPH::AABox& box : bounds)
-					WakeBodiesIn(data, box);
-				bounds.clear();
+				const b3BodyId body = b3Shape_GetBody(shape);
+				if (b3Body_GetType(body) == b3_staticBody || !b3Body_IsEnabled(body))
+					continue;
+				b3Body_SetAwake(body, true);
+				MarkAwake(data, body);
+			}
+		}
+
+		// Wakes the bodies touching a body (which may rest on it) before it is moved.
+		void WakeTouchingBodies(PhysicsWorldData& data, b3BodyId body)
+		{
+			const int capacity = b3Body_GetContactCapacity(body);
+			if (capacity <= 0)
 				return;
-			}
-
-			// Regions keyed by the grid square of each box's center, in key order (deterministic).
-			std::vector<std::pair<uint64_t, JPH::AABox>> regions;
-			regions.reserve(bounds.size());
-			for (const JPH::AABox& box : bounds)
+			std::vector<b3ContactData>& contacts = data.ContactScratch;
+			contacts.resize(static_cast<size_t>(capacity));
+			const int count = b3Body_GetContactData(body, contacts.data(), capacity);
+			for (int index = 0; index < count; index++)
 			{
-				const JPH::Vec3 center = box.GetCenter();
-				const int32_t x = static_cast<int32_t>(std::floor(center.GetX() / c_WakeRegionSize));
-				const int32_t z = static_cast<int32_t>(std::floor(center.GetZ() / c_WakeRegionSize));
-				const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) | static_cast<uint32_t>(z);
-				// Neighbors in the batch (a cell's bodies come in the order they were made) merge before the sort.
-				if (!regions.empty() && regions.back().first == key)
-					regions.back().second.Encapsulate(box);
-				else
-					regions.emplace_back(key, box);
+				const b3BodyId bodyA = b3Shape_GetBody(contacts[index].shapeIdA);
+				const b3BodyId other = B3_ID_EQUALS(bodyA, body) ? b3Shape_GetBody(contacts[index].shapeIdB) : bodyA;
+				if (b3Body_GetType(other) == b3_staticBody)
+					continue;
+				b3Body_SetAwake(other, true);
+				MarkAwake(data, other);
 			}
-			std::sort(regions.begin(), regions.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-			for (size_t first = 0; first < regions.size();)
-			{
-				JPH::AABox region = regions[first].second;
-				size_t next = first + 1;
-				for (; next < regions.size() && regions[next].first == regions[first].first; next++)
-					region.Encapsulate(regions[next].second);
-				WakeBodiesIn(data, region);
-				first = next;
-			}
-			bounds.clear();
 		}
 
 		void WakeAllBodies(PhysicsWorldData& data)
 		{
-			std::vector<JPH::BodyID> bodies;
 			for (const auto& [handle, record] : data.Bodies)
 			{
 				if (record.InSimulation && record.Type != RigidBodyType::Static)
-					bodies.push_back(record.BodyID);
+				{
+					b3Body_SetAwake(record.BodyID, true);
+					MarkAwake(data, record.BodyID);
+				}
 			}
-			if (!bodies.empty())
-				data.JoltSystem->GetBodyInterface().ActivateBodies(bodies.data(), static_cast<int>(bodies.size()));
 		}
 
-		// Keeps the motion of a dynamic body that leaves the simulation (Jolt clears it on removal) so that it resumes when
-		// the body is back, also when the body is rebuilt in between.
-		void SaveVelocities(PhysicsWorldData& data, BodyRecord& record)
+		// Keeps the motion of a dynamic body that leaves the simulation so that it resumes when the body is back, also when
+		// the body is rebuilt in between.
+		void SaveVelocities(BodyRecord& record)
 		{
 			if (!record.HasBody() || !record.InSimulation || record.Type != RigidBodyType::Dynamic)
 				return;
-
-			JPH::Vec3 linearVelocity;
-			JPH::Vec3 angularVelocity;
-			data.JoltSystem->GetBodyInterface().GetLinearAndAngularVelocity(record.BodyID, linearVelocity, angularVelocity);
-			record.SavedLinearVelocity = ToGlm(linearVelocity);
-			record.SavedAngularVelocity = ToGlm(angularVelocity);
+			record.SavedLinearVelocity = ToGlm(b3Body_GetLinearVelocity(record.BodyID));
+			record.SavedAngularVelocity = ToGlm(b3Body_GetAngularVelocity(record.BodyID));
 		}
 
+		// Takes a body out of the simulation: box3d disables it (it keeps its shapes) and wakes the bodies it touched.
 		void RemoveFromSimulation(PhysicsWorldData& data, BodyRecord& record)
 		{
 			if (!record.InSimulation)
 				return;
 
-			SaveVelocities(data, record);
-			if (record.AddPending)
-			{
-				// Never added to Jolt: it only leaves the batch (FlushBodyBatches skips it).
-				record.AddPending = false;
-			}
-			else
-			{
-				// Leaves Jolt's broad phase with the round's batch (FlushBodyDestructions), with the bodies around it woken then.
-				QueueWakeAround(data, record.BodyID);
-				data.PendingDeactivations.push_back(record.BodyID);
-				record.RemovalPending = true;
-			}
+			SaveVelocities(record);
+			b3Body_Disable(record.BodyID);
 			record.InSimulation = false;
 			record.KinematicMoving = false;
+			record.HasPendingForce = false;
 			EndContactsOf(data, record.EntityID);
 		}
 
@@ -1671,42 +1384,38 @@ namespace Strata
 			if (record.Type == RigidBodyType::Dynamic && !HasInvertibleParent(*data.OwnerScene, entity))
 				return PlacementResult::DegenerateTransform;
 
-			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
 			const glm::mat4 worldTransform = data.OwnerScene->GetWorldTransform(entity);
 			if (worldTransform != record.LastWorldTransform)
 			{
 				glm::vec3 position;
 				glm::quat rotation;
 				glm::vec3 scale;
-				if (!Math::DecomposeTransform(worldTransform, position, rotation, scale))
+				if (!Math::DecomposeTransform(worldTransform, position, rotation, scale) || !IsWithinCoordinateRange(position))
 					return PlacementResult::DegenerateTransform;
 				if (HasScaleChanged(scale, record.ShapeScale))
 					return PlacementResult::ScaleChanged;
 				record.WorldScale = scale;
 
-				bodies.SetPositionAndRotation(record.BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::DontActivate);
+				b3Body_SetTransform(record.BodyID, ToB3(position), ToB3(rotation));
 				record.LastWorldTransform = worldTransform;
 				record.KinematicTargetPosition = position;
 				record.KinematicTargetRotation = rotation;
 			}
 
-			if (record.RemovalPending)
-			{
-				// Still in the broad phase: it stays, and the batch leaves it there.
-				record.RemovalPending = false;
-				if (record.Type != RigidBodyType::Static)
-					bodies.ActivateBody(record.BodyID);
-			}
-			else
-			{
-				bodies.AddBody(record.BodyID, record.Type == RigidBodyType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
-			}
+			// Enabling finds the body's pairs again, and its contacts begin at the next step.
+			b3Body_Enable(record.BodyID);
 			if (record.Type == RigidBodyType::Dynamic)
 			{
 				// Motion resumes where it stopped.
-				bodies.SetLinearAndAngularVelocity(record.BodyID, ToJolt(record.SavedLinearVelocity), ToJolt(record.SavedAngularVelocity));
+				b3Body_SetLinearVelocity(record.BodyID, ToB3(record.SavedLinearVelocity));
+				b3Body_SetAngularVelocity(record.BodyID, ToB3(record.SavedAngularVelocity));
 				record.SavedLinearVelocity = glm::vec3(0.0f);
 				record.SavedAngularVelocity = glm::vec3(0.0f);
+			}
+			if (record.Type != RigidBodyType::Static)
+			{
+				b3Body_SetAwake(record.BodyID, true);
+				MarkAwake(data, record.BodyID);
 			}
 			if (record.Suspended)
 			{
@@ -1721,246 +1430,94 @@ namespace Strata
 			return PlacementResult::Added;
 		}
 
-		// Destroys the Jolt body of a record (the record itself stays): the body leaves the simulation and is destroyed with
-		// the batch of FlushBodyBatches, so it keeps its slot until then. Contacts are left alone.
-		void DestroyJoltBody(PhysicsWorldData& data, BodyRecord& record)
+		// Destroys the box3d body of a record (the record itself stays). box3d wakes the bodies it touched. Contacts are left
+		// alone: the caller ends them, or keeps them for a rebuilt body (see InstallBody).
+		void DestroyBox3DBody(PhysicsWorldData& data, BodyRecord& record)
 		{
 			if (!record.HasBody())
 				return;
 
 			GetUpdateCounters(data).BodiesRemoved++;
-			if (record.InSimulation && !record.AddPending)
-			{
-				// The bodies resting on it wake once the batch removed it.
-				QueueWakeAround(data, record.BodyID);
-				data.PendingRemovals.push_back(record.BodyID);
-			}
-			else if (record.RemovalPending)
-			{
-				// Its pending removal becomes part of its destruction (the deactivation's entry is skipped: the slot is empty).
-				data.PendingRemovals.push_back(record.BodyID);
-			}
-			record.RemovalPending = false;
-			data.PendingDestructions.push_back(record.BodyID);
-			data.BodySlots[record.BodyID.GetIndex()] = BodySlot();
-			data.Contacts.SetBodyInterest(record.BodyID, false);
-			record.BodyID = JPH::BodyID();
+			for (const b3ShapeId shape : record.Shapes)
+				UnregisterShape(data, shape);
+			UnregisterBody(data, record.BodyID);
+			b3DestroyBody(record.BodyID);
+			// Only now: the shapes pointed to these.
+			record.Shapes.clear();
+			record.CookedShapes.clear();
+			record.Compounds.clear();
+			record.BodyID = b3_nullBodyId;
 			record.InSimulation = false;
-			record.AddPending = false;
 			record.Suspended = false;
 			record.KinematicMoving = false;
+			record.HasPendingForce = false;
 		}
 
-		// Removes the bodies that left the simulation (RemoveFromSimulation) from Jolt's broad phase, and removes and
-		// destroys the bodies DestroyJoltBody queued (their slots become free), in one batch each; then wakes the bodies around
-		// them.
-		void FlushBodyDestructions(PhysicsWorldData& data)
+		// The pairs of an entity whose body is rebuilt: the old shapes' contacts are gone, so the pairs wait for the new shapes'
+		// contacts of the next step to confirm them (see ResolveRecheckedPairs).
+		void MarkPairsUnconfirmed(PhysicsWorldData& data, UUID entityID)
 		{
-			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
-			// Deactivations still wanted: a body that joined the simulation again or was destroyed meanwhile is skipped.
-			std::erase_if(data.PendingDeactivations, [&](const JPH::BodyID& bodyID)
-			{
-				BodyRecord* record = FindBodyRecord(data, bodyID);
-				if (!record || !record->RemovalPending)
-					return true;
-				record->RemovalPending = false;
-				return false;
-			});
-			if (!data.PendingDeactivations.empty())
-				bodies.RemoveBodies(data.PendingDeactivations.data(), static_cast<int>(data.PendingDeactivations.size()));
-			if (!data.PendingRemovals.empty())
-				bodies.RemoveBodies(data.PendingRemovals.data(), static_cast<int>(data.PendingRemovals.size()));
-			if (!data.PendingDestructions.empty())
-				bodies.DestroyBodies(data.PendingDestructions.data(), static_cast<int>(data.PendingDestructions.size()));
-			data.PendingDeactivations.clear();
-			data.PendingRemovals.clear();
-			data.PendingDestructions.clear();
-			if (!data.WakeBounds.empty())
-				WakeAroundRemovedBodies(data);
-		}
-
-		// A grown world's Jolt system counts body sequence numbers from 0 (see GrowWorld), so a body made there may get the ID
-		// of a body that was destroyed since the growth, whose pairs Jolt's contact cache still holds from the last step:
-		// their cache is cleared for the next step. Before any growth, IDs never repeat that way.
-		void InvalidateReusedIDs(PhysicsWorldData& data, std::span<const JPH::BodyID> bodies)
-		{
-			if (data.GrowthCount == 0)
+			auto indexIt = data.EntityPairs.find(entityID);
+			if (indexIt == data.EntityPairs.end())
 				return;
-			JPH::BodyInterface& bodyInterface = data.JoltSystem->GetBodyInterface();
-			for (const JPH::BodyID& body : bodies)
-				bodyInterface.InvalidateContactCache(body);
-		}
-
-		// Adds the bodies created since the last flush to the simulation, in one batch per activation mode, after the queued
-		// removals and destructions. Bodies destroyed or taken out of the simulation since they were queued are skipped.
-		void FlushBodyBatches(PhysicsWorldData& data)
-		{
-			FlushBodyDestructions(data);
-
-			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
-			const auto addBatch = [&](std::vector<JPH::BodyID>& batch, JPH::EActivation activation)
+			for (const PairKey& key : indexIt->second)
 			{
-				std::erase_if(batch, [&](const JPH::BodyID& bodyID)
-				{
-					BodyRecord* record = FindBodyRecord(data, bodyID);
-					if (!record || !record->AddPending)
-						return true;
-					record->AddPending = false;
-					return false;
-				});
-				if (batch.empty())
-					return;
-				// AddBodiesPrepare may reorder the batch; Finalize takes it as it left it. Never prepared on several threads at once:
-				// Jolt's broad phase node allocator (FixedSizeFreeList, Jolt 5.6) publishes a new page's size before its pointer
-				// without ordering, so a thread preparing beside one that allocates a page may read a page that is not there yet.
-				const JPH::BodyInterface::AddState state = bodies.AddBodiesPrepare(batch.data(), static_cast<int>(batch.size()));
-				bodies.AddBodiesFinalize(batch.data(), static_cast<int>(batch.size()), state, activation);
-				data.AddBatchCount++;
-				InvalidateReusedIDs(data, batch);
-				batch.clear();
-			};
-			addBatch(data.PendingAdds, JPH::EActivation::DontActivate);
-			addBatch(data.PendingActivatedAdds, JPH::EActivation::Activate);
-		}
-
-		// Adds the anchor of the static and of the moving broad phase tree (see c_BroadPhaseAnchorCount): static bodies on the
-		// anchor layer, at the origin, never activated. Called on a new world, so they take the first two body indices.
-		void AddBroadPhaseAnchors(PhysicsWorldData& data)
-		{
-			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
-			const JPH::RefConst<JPH::Shape> shape = new JPH::SphereShape(0.01f);
-			for (const bool moving : { false, true })
-			{
-				const JPH::BodyCreationSettings settings(shape, JPH::RVec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Static, MakeObjectLayer(c_AnchorLayer, moving));
-				[[maybe_unused]] const JPH::BodyID anchor = bodies.CreateAndAddBody(settings, JPH::EActivation::DontActivate);
-				ST_CORE_ASSERT(!anchor.IsInvalid() && anchor.GetIndex() < c_BroadPhaseAnchorCount, "The broad phase anchors must be the world's first bodies");
-			}
-		}
-
-		void DestroyAllBodies(PhysicsWorldData& data)
-		{
-			FlushBodyBatches(data);
-			std::vector<JPH::BodyID> added;
-			std::vector<JPH::BodyID> all;
-			for (const auto& [handle, record] : data.Bodies)
-			{
-				if (!record.HasBody())
+				auto pairIt = data.TouchingPairs.find(key);
+				if (pairIt == data.TouchingPairs.end())
 					continue;
-				if (record.InSimulation)
-					added.push_back(record.BodyID);
-				all.push_back(record.BodyID);
+				pairIt->second.ContactCount = 0;
+				pairIt->second.Unconfirmed = true;
 			}
-
-			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
-			if (!added.empty())
-				bodies.RemoveBodies(added.data(), static_cast<int>(added.size()));
-			if (!all.empty())
-				bodies.DestroyBodies(all.data(), static_cast<int>(all.size()));
-
-			data.Bodies.clear();
-			data.RecordIndex.clear();
-			data.RecordOverflow.clear();
-			data.IndexedRecords = 0;
-			data.SlotWaiterCount = 0;
-			data.FailureCounts.fill(0);
-			data.SlotWaiters.clear();
-			data.MergedOwners.clear();
-			data.PolledBodies.clear();
-			data.RecheckedEntities.clear();
-			data.MeshBodies.clear();
-			data.WaitingMeshBodies.clear();
-			data.MeshUsers.clear();
-			std::fill(data.BodySlots.begin(), data.BodySlots.end(), BodySlot());
-			data.TouchingPairs.clear();
-			data.EntityPairs.clear();
-			data.PendingEvents.clear();
+			data.RecheckedEntities.push_back(entityID);
 		}
 
 		//////////////////////////////////////////////////////////////////////////
 		// Shapes
 		//////////////////////////////////////////////////////////////////////////
 
+		// One collider's part of a body, in body space.
 		struct ShapePart
 		{
-			JPH::RefConst<JPH::Shape> Shape;
-			JPH::Vec3 Position = JPH::Vec3::sZero(); // Body space
-			JPH::Quat Rotation = JPH::Quat::sIdentity();
+			enum class Kind : uint8_t
+			{
+				Hull,       // A box: Hull is the world's or the build's box hull
+				Sphere,
+				Capsule,
+				CookedHull, // A convex mesh collider: Cooked's hull, scaled by Scale, then placed by Placement
+				Mesh,       // A triangle mesh collider at its body's origin: Cooked's mesh, scaled by Scale
+				OffsetMesh  // A triangle mesh collider elsewhere in its (static) body: a baked compound of the mesh
+			};
+			Kind Type = Kind::Hull;
+			const b3HullData* Hull = nullptr;
+			b3Sphere Sphere = {};
+			b3Capsule Capsule = {};
+			Ref<const PhysicsCookedShape> Cooked;
+			b3Transform Placement = b3Transform_identity;
+			b3Vec3 Scale = { 1.0f, 1.0f, 1.0f };
 		};
 
-		// The box and sphere shapes a chunk of a parallel build shares between its bodies (see RefreshOwnersInParallel): a
-		// shape shared across threads would make every body's reference counting contend for one cache line. Searched
-		// linearly: chunks hold a few sizes.
-		struct ChunkShapes
+		// The box hulls a chunk of a parallel build makes (see RefreshOwnersInParallel), merged into the world's afterwards; the
+		// world's are only read there (the main thread changes none while jobs run). Searched linearly: chunks hold a few sizes.
+		struct ChunkHulls
 		{
-			static constexpr size_t c_MaxShapes = 64;
-			std::vector<std::pair<PrimitiveShapeKey, JPH::RefConst<JPH::Shape>>> Shapes;
+			static constexpr size_t c_MaxHulls = 64;
+			std::vector<std::pair<BoxHullKey, Scope<b3BoxHull>>> Hulls;
 		};
 
-		// What building a body's shape found. Shapes are built on the main thread, which warns about what it cannot use, or
-		// on a job thread (OffThread, see RefreshOwnersInParallel), which stops at the first problem or mesh collider and
-		// leaves the body to the main thread (NeedsMainThread), so that warnings and mesh data stay on the main thread, and
-		// shares shapes within its chunk (ChunkShapes).
+		// What building a body's shape found. Shapes are built on the main thread, which warns about what it cannot use, or on a
+		// job thread (OffThread, see RefreshOwnersInParallel), which stops at the first problem or mesh collider and leaves the
+		// body to the main thread (NeedsMainThread), so that warnings and mesh data stay on the main thread.
 		struct ShapeBuild
 		{
 			std::vector<ShapePart> Parts;
+			std::deque<b3BoxHull> OwnHulls;          // Box hulls beyond the shared ones (box3d copies them into its world)
 			std::vector<ShapeMember> ShapeMembers;   // Entities that contributed colliders
 			std::vector<MeshSource> MeshSources;     // Meshes of the mesh colliders considered
 			bool WaitsForMesh = false;               // A mesh collider was left out until its data arrives or is cooked
 			uint32_t ColliderCount = 0;              // Collider components considered, usable or not
 			bool OffThread = false;
 			bool NeedsMainThread = false;
-			ChunkShapes* Chunk = nullptr; // Off the main thread
-		};
-
-		JPH::RefConst<JPH::Shape> CreateShape(PhysicsWorldData& data, ShapeBuild& build, const JPH::ShapeSettings& settings, const Entity& entity, std::string_view what,
-			PhysicsWarning warning)
-		{
-			JPH::ShapeSettings::ShapeResult result = settings.Create();
-			if (result.HasError() && build.OffThread)
-			{
-				build.NeedsMainThread = true;
-				return nullptr;
-			}
-			if (result.HasError())
-			{
-				if (ShouldWarn(data, entity.GetUUID(), warning))
-					ST_CORE_WARN("Physics: the {} of '{}' is invalid and is ignored: {}", what, entity.GetName(), result.GetError().c_str());
-				return nullptr;
-			}
-			return result.Get();
-		}
-
-		// Reads a shape saved in Jolt's binary state format (see PhysicsMeshShapes).
-		class ByteStreamIn final : public JPH::StreamIn
-		{
-		public:
-			explicit ByteStreamIn(std::span<const uint8_t> bytes)
-				: m_Bytes(bytes)
-			{
-			}
-
-			void ReadBytes(void* outData, size_t byteCount) override
-			{
-				if (byteCount == 0)
-					return; // Empty arrays may pass a null destination
-				if (byteCount > m_Bytes.size() - m_Offset)
-				{
-					// Reading past the end: the data is incomplete.
-					std::memset(outData, 0, byteCount);
-					m_Offset = m_Bytes.size();
-					m_PastEnd = true;
-					return;
-				}
-				std::memcpy(outData, m_Bytes.data() + m_Offset, byteCount);
-				m_Offset += byteCount;
-			}
-
-			bool IsEOF() const override { return m_PastEnd; }
-			bool IsFailed() const override { return m_PastEnd; }
-		private:
-			std::span<const uint8_t> m_Bytes;
-			size_t m_Offset = 0;
-			bool m_PastEnd = false;
+			ChunkHulls* Chunk = nullptr; // Off the main thread
 		};
 
 		void WarnNonFiniteCollider(PhysicsWorldData& data, ShapeBuild& build, const Entity& entity, std::string_view collider)
@@ -1974,10 +1531,39 @@ namespace Strata
 				ST_CORE_WARN("Physics: the {} of '{}' has non-finite dimensions and is ignored", collider, entity.GetName());
 		}
 
-		// The unscaled shape of a mesh collider: cooked once per mesh data object (process-wide, see PhysicsMeshShapes) and
-		// restored once per world, shared by every collider using the data. Returns nullptr if there is no shape: the mesh
-		// data has not arrived or is still cooking (the build waits for it, see RefreshMeshBodies), or it cannot be used.
-		JPH::RefConst<JPH::Shape> GetMeshShape(PhysicsWorldData& data, const Entity& entity, AssetHandle mesh, bool convex, ShapeBuild& build)
+		// The box hull of these half extents at this placement: made once per size and placement and shared by the world's
+		// bodies (up to c_MaxSharedBoxHulls of them), or by the bodies of a parallel build's chunk.
+		const b3HullData* GetBoxHull(PhysicsWorldData& data, ShapeBuild& build, const glm::vec3& halfExtents, const b3Transform& placement)
+		{
+			const BoxHullKey key = MakeBoxHullKey(halfExtents, placement);
+			const auto make = [&]() { return b3MakeTransformedBoxHull(halfExtents.x, halfExtents.y, halfExtents.z, placement); };
+			if (const auto shared = data.BoxHulls.find(key); shared != data.BoxHulls.end())
+				return &shared->second->base;
+			if (build.OffThread)
+			{
+				ST_CORE_ASSERT(build.Chunk, "A shape built off the main thread belongs to a chunk");
+				for (const auto& [chunkKey, hull] : build.Chunk->Hulls)
+				{
+					if (chunkKey == key)
+						return &hull->base;
+				}
+				if (build.Chunk->Hulls.size() < ChunkHulls::c_MaxHulls)
+				{
+					build.Chunk->Hulls.emplace_back(key, CreateScope<b3BoxHull>(make()));
+					return &build.Chunk->Hulls.back().second->base;
+				}
+			}
+			else if (data.BoxHulls.size() < c_MaxSharedBoxHulls)
+			{
+				return &data.BoxHulls.emplace(key, CreateScope<b3BoxHull>(make())).first->second->base;
+			}
+			return &build.OwnHulls.emplace_back(make()).base;
+		}
+
+		// The cooked shape of a mesh collider: cooked once per mesh data object (process-wide, see PhysicsMeshShapes), shared
+		// by every collider using the data. Returns nullptr if there is none: the mesh data has not arrived or is still
+		// cooking (the build waits for it, see RefreshMeshBodies), or it cannot be used.
+		Ref<const PhysicsCookedShape> GetMeshShape(PhysicsWorldData& data, const Entity& entity, AssetHandle mesh, bool convex, ShapeBuild& build)
 		{
 			const Ref<const PhysicsMeshData> meshData = GetActiveMeshProvider().GetMeshData(mesh);
 			MeshSource& source = build.MeshSources.emplace_back(MeshSource { mesh, convex, meshData, false });
@@ -1990,11 +1576,6 @@ namespace Strata
 				return nullptr;
 			}
 
-			const MeshShapeKey key { meshData.get(), convex };
-			auto it = data.MeshShapes.find(key);
-			if (it != data.MeshShapes.end() && !it->second.Source.expired())
-				return it->second.Shape;
-
 			const PhysicsMeshShapes::Result cooked = PhysicsMeshShapes::Request(meshData, convex);
 			if (cooked.CookState == PhysicsMeshShapes::State::Cooking)
 			{
@@ -2002,71 +1583,27 @@ namespace Strata
 				build.WaitsForMesh = true;
 				return nullptr;
 			}
-
-			JPH::RefConst<JPH::Shape> shape;
-			std::string error = cooked.Error;
-			if (cooked.CookState == PhysicsMeshShapes::State::Ready)
-			{
-				ByteStreamIn stream(*cooked.Shape);
-				JPH::Shape::ShapeResult restored = JPH::Shape::sRestoreFromBinaryState(stream);
-				if (restored.HasError())
-					error = restored.GetError().c_str();
-				else if (stream.IsFailed())
-					error = "its cooked shape is incomplete";
-				else
-					shape = restored.Get();
-			}
-			if (!shape)
+			if (cooked.CookState != PhysicsMeshShapes::State::Ready || !cooked.Shape)
 			{
 				if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidMesh))
-					ST_CORE_WARN("Physics: the mesh collider of '{}' cannot use mesh {} and is ignored: {}", entity.GetName(), mesh.ToString(), error);
+					ST_CORE_WARN("Physics: the mesh collider of '{}' cannot use mesh {} and is ignored: {}", entity.GetName(), mesh.ToString(), cooked.Error);
 				return nullptr;
 			}
-
-			// Shapes of data that no longer exists go (which includes an entry left at this address).
-			std::erase_if(data.MeshShapes, [](const auto& entry) { return entry.second.Source.expired(); });
-			data.MeshShapes[key] = RestoredMeshShape { meshData, shape };
-			return shape;
+			return cooked.Shape;
 		}
 
-		// The shape of a box or sphere collider of these (scaled) dimensions. Shapes are immutable, so bodies of the same size
-		// share one: a scene of thousands of identical boxes builds one shape (up to c_MaxSharedPrimitiveShapes sizes per
-		// world). Null, with a warning about the entity, for dimensions the shape rejects.
-		// Off the main thread, a chunk of a parallel build shares its own shapes (ChunkShapes), which the main thread merges
-		// into the world's afterwards; the world's are only read there (the main thread changes none while jobs run).
-		JPH::RefConst<JPH::Shape> GetPrimitiveShape(PhysicsWorldData& data, ShapeBuild& build, const Entity& entity, const PrimitiveShapeKey& key,
-			const JPH::ShapeSettings& settings, std::string_view what)
+		bool IsIdentityPlacement(const glm::vec3& translation, const glm::quat& rotation)
 		{
-			if (build.OffThread)
-			{
-				ST_CORE_ASSERT(build.Chunk, "A shape built off the main thread belongs to a chunk");
-				for (const auto& [chunkKey, chunkShape] : build.Chunk->Shapes)
-				{
-					if (chunkKey == key)
-						return chunkShape;
-				}
-				JPH::RefConst<JPH::Shape> shape = CreateShape(data, build, settings, entity, what, PhysicsWarning::InvalidCollider);
-				if (shape && build.Chunk->Shapes.size() < ChunkShapes::c_MaxShapes)
-					build.Chunk->Shapes.emplace_back(key, shape);
-				return shape;
-			}
-
-			auto it = data.PrimitiveShapes.find(key);
-			if (it != data.PrimitiveShapes.end())
-				return it->second;
-			JPH::RefConst<JPH::Shape> shape = CreateShape(data, build, settings, entity, what, PhysicsWarning::InvalidCollider);
-			if (shape && data.PrimitiveShapes.size() < c_MaxSharedPrimitiveShapes)
-				data.PrimitiveShapes.emplace(key, shape);
-			return shape;
+			return translation == glm::vec3(0.0f) && rotation == glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
 		}
 
 		// Adds the colliders of an entity whose transform in body space is (translation, rotation, scale).
-		void AddColliderParts(PhysicsWorldData& data, const Entity& entity, const glm::mat4& poseInBody, const glm::vec3& translation, const glm::quat& rotation, const glm::vec3& scale, RigidBodyType bodyType, ShapeBuild& build)
+		void AddColliderParts(PhysicsWorldData& data, const Entity& entity, const glm::mat4& poseInBody, const glm::vec3& translation, const glm::quat& rotation, const glm::vec3& scale,
+			RigidBodyType bodyType, bool trigger, ShapeBuild& build)
 		{
 			const glm::vec3 absoluteScale = glm::abs(scale);
 			const float maxScale = std::max({ absoluteScale.x, absoluteScale.y, absoluteScale.z });
-			const JPH::Quat partRotation = ToJolt(rotation);
-			const auto placeAt = [&](const glm::vec3& offset) { return ToJolt(translation + rotation * (offset * scale)); };
+			const auto placeAt = [&](const glm::vec3& offset) { return translation + rotation * (offset * scale); };
 			const size_t partCount = build.Parts.size();
 
 			if (const BoxColliderComponent* box = entity.TryGetComponent<BoxColliderComponent>())
@@ -2074,11 +1611,12 @@ namespace Strata
 				build.ColliderCount++;
 				if (IsFinite(box->HalfExtents) && IsFinite(box->Offset))
 				{
+					// Boxes are symmetric, so mirroring needs nothing: the half extents scale by the absolute scale.
 					const glm::vec3 halfExtents = glm::max(glm::abs(box->HalfExtents) * absoluteScale, glm::vec3(c_MinColliderExtent));
-					const PrimitiveShapeKey key { PrimitiveShapeKey::ShapeKind::Box,
-						{ std::bit_cast<uint32_t>(halfExtents.x), std::bit_cast<uint32_t>(halfExtents.y), std::bit_cast<uint32_t>(halfExtents.z) } };
-					if (JPH::RefConst<JPH::Shape> shape = GetPrimitiveShape(data, build, entity, key, JPH::BoxShapeSettings(ToJolt(halfExtents)), "box collider"))
-						build.Parts.push_back({ shape, placeAt(box->Offset), partRotation });
+					ShapePart part;
+					part.Type = ShapePart::Kind::Hull;
+					part.Hull = GetBoxHull(data, build, halfExtents, ToB3Transform(placeAt(box->Offset), rotation));
+					build.Parts.push_back(std::move(part));
 				}
 				else
 				{
@@ -2091,10 +1629,10 @@ namespace Strata
 				build.ColliderCount++;
 				if (std::isfinite(sphere->Radius) && IsFinite(sphere->Offset))
 				{
-					const float radius = std::max(std::abs(sphere->Radius) * maxScale, c_MinColliderExtent);
-					const PrimitiveShapeKey key { PrimitiveShapeKey::ShapeKind::Sphere, { std::bit_cast<uint32_t>(radius), 0, 0 } };
-					if (JPH::RefConst<JPH::Shape> shape = GetPrimitiveShape(data, build, entity, key, JPH::SphereShapeSettings(radius), "sphere collider"))
-						build.Parts.push_back({ shape, placeAt(sphere->Offset), partRotation });
+					ShapePart part;
+					part.Type = ShapePart::Kind::Sphere;
+					part.Sphere = b3Sphere { ToB3(placeAt(sphere->Offset)), std::max(std::abs(sphere->Radius) * maxScale, c_MinColliderExtent) };
+					build.Parts.push_back(std::move(part));
 				}
 				else
 				{
@@ -2109,13 +1647,21 @@ namespace Strata
 				{
 					const float radius = std::max(std::abs(capsule->Radius) * std::max(absoluteScale.x, absoluteScale.z), c_MinColliderExtent);
 					const float halfHeight = std::abs(capsule->HalfHeight) * absoluteScale.y;
-					JPH::RefConst<JPH::Shape> shape;
+					const glm::vec3 center = placeAt(capsule->Offset);
+					ShapePart part;
 					if (halfHeight < c_MinColliderExtent)
-						shape = CreateShape(data, build, JPH::SphereShapeSettings(radius), entity, "capsule collider", PhysicsWarning::InvalidCollider); // No cylindrical part
+					{
+						part.Type = ShapePart::Kind::Sphere; // No cylindrical part
+						part.Sphere = b3Sphere { ToB3(center), radius };
+					}
 					else
-						shape = CreateShape(data, build, JPH::CapsuleShapeSettings(halfHeight, radius), entity, "capsule collider", PhysicsWarning::InvalidCollider);
-					if (shape)
-						build.Parts.push_back({ shape, placeAt(capsule->Offset), partRotation });
+					{
+						// Along the collider's Y axis, through its center.
+						const glm::vec3 axis = rotation * glm::vec3(0.0f, halfHeight, 0.0f);
+						part.Type = ShapePart::Kind::Capsule;
+						part.Capsule = b3Capsule { ToB3(center - axis), ToB3(center + axis), radius };
+					}
+					build.Parts.push_back(std::move(part));
 				}
 				else
 				{
@@ -2138,6 +1684,7 @@ namespace Strata
 						mesh = renderer->Mesh;
 				}
 
+				const bool offset = !IsIdentityPlacement(translation, rotation);
 				if (!mesh.IsValid())
 				{
 					if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidMesh))
@@ -2148,18 +1695,23 @@ namespace Strata
 					if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::UnsupportedMesh))
 						ST_CORE_WARN("Physics: the non-convex mesh collider of '{}' is ignored: triangle meshes are only supported on static bodies (enable Convex)", entity.GetName());
 				}
-				else if (JPH::RefConst<JPH::Shape> meshShape = GetMeshShape(data, entity, mesh, meshCollider->Convex, build))
+				else if (!meshCollider->Convex && trigger && offset)
 				{
-					if (scale == glm::vec3(1.0f))
+					// A triangle mesh away from its body's origin is a baked compound in box3d, which cannot be a sensor.
+					if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::UnsupportedMesh))
 					{
-						build.Parts.push_back({ meshShape, ToJolt(translation), partRotation });
+						ST_CORE_WARN("Physics: the non-convex mesh collider of '{}' is ignored: a triangle mesh in a trigger must be at its body's origin (put it on "
+							"the trigger's entity, or enable Convex)", entity.GetName());
 					}
-					else
-					{
-						// Convex hulls and triangle meshes support any non-zero scale, including mirroring.
-						if (JPH::RefConst<JPH::Shape> shape = CreateShape(data, build, JPH::ScaledShapeSettings(meshShape.GetPtr(), ToJolt(scale)), entity, "mesh collider", PhysicsWarning::InvalidMesh))
-							build.Parts.push_back({ shape, ToJolt(translation), partRotation });
-					}
+				}
+				else if (Ref<const PhysicsCookedShape> cooked = GetMeshShape(data, entity, mesh, meshCollider->Convex, build))
+				{
+					ShapePart part;
+					part.Cooked = std::move(cooked);
+					part.Placement = ToB3Transform(translation, rotation);
+					part.Scale = ToB3(scale); // Convex hulls and triangle meshes support any non-zero scale, including mirroring
+					part.Type = meshCollider->Convex ? ShapePart::Kind::CookedHull : (offset ? ShapePart::Kind::OffsetMesh : ShapePart::Kind::Mesh);
+					build.Parts.push_back(std::move(part));
 				}
 			}
 
@@ -2167,85 +1719,128 @@ namespace Strata
 				build.ShapeMembers.push_back({ entity.GetHandle(), poseInBody });
 		}
 
-		JPH::RefConst<JPH::Shape> CombineParts(PhysicsWorldData& data, ShapeBuild& build, const Entity& owner, const std::vector<ShapePart>& parts)
-		{
-			if (parts.empty())
-				return nullptr;
-
-			if (parts.size() == 1)
-			{
-				const ShapePart& part = parts.front();
-				if (part.Position.IsNearZero(0.0f) && part.Rotation == JPH::Quat::sIdentity())
-					return part.Shape;
-
-				const JPH::RotatedTranslatedShapeSettings settings(part.Position, part.Rotation, part.Shape.GetPtr());
-				return CreateShape(data, build, settings, owner, "collider placement", PhysicsWarning::InvalidCollider);
-			}
-
-			JPH::StaticCompoundShapeSettings compound;
-			for (const ShapePart& part : parts)
-				compound.AddShape(part.Position, part.Rotation, part.Shape.GetPtr());
-			return CreateShape(data, build, compound, owner, "compound collider", PhysicsWarning::InvalidCollider);
-		}
-
 		float SanitizeNonNegative(float value, float fallback)
 		{
 			return std::isfinite(value) ? std::max(value, 0.0f) : fallback;
 		}
 
-		JPH::BodyCreationSettings MakeBodySettings(PhysicsWorldData& data, const Entity& entity, const RigidBodyComponent* rigidBody, RigidBodyType type, const JPH::Shape* shape, const glm::vec3& position, const glm::quat& rotation)
+		// How a body is made: its definition (without its pose and motion), the definition its shapes share, and its mass.
+		struct BodySetup
+		{
+			b3BodyDef Body = b3DefaultBodyDef();
+			b3ShapeDef Shape = b3DefaultShapeDef();
+			uint32_t Layer = 0;
+			bool Trigger = false;
+			float Mass = 0.0f; // Dynamic bodies: the total mass the shapes' mass distribution is scaled to
+		};
+
+		BodySetup MakeBodySetup(PhysicsWorldData& data, const Entity& entity, const RigidBodyComponent* rigidBody, RigidBodyType type)
 		{
 			const RigidBodyComponent defaults;
-			uint32_t layer = 0;
+			BodySetup setup;
 			if (rigidBody && rigidBody->Layer < c_PhysicsLayerCount)
 			{
-				layer = rigidBody->Layer;
+				setup.Layer = rigidBody->Layer;
 			}
 			else if (rigidBody && ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidLayer))
 			{
 				ST_CORE_WARN("Physics: '{}' uses collision layer {}, but layers range from 0 to {}; layer 0 is used", entity.GetName(), rigidBody->Layer, c_PhysicsLayerCount - 1);
 			}
 
-			JPH::BodyCreationSettings settings(shape, ToJoltPosition(position), ToJolt(rotation), ToMotionType(type), MakeObjectLayer(layer, type != RigidBodyType::Static));
-			settings.mUserData = static_cast<uint64_t>(entity.GetUUID());
-			settings.mFriction = defaults.Friction;
-			settings.mRestitution = defaults.Restitution;
+			setup.Body.type = ToBodyType(type);
+			setup.Body.userData = nullptr;
+			setup.Shape.filter = PhysicsFilters::MakeShapeFilter(setup.Layer, data.Settings.LayerCollisionMasks);
+			setup.Shape.baseMaterial.friction = defaults.Friction;
+			setup.Shape.baseMaterial.restitution = defaults.Restitution;
+			// Every shape is seen by sensors, and every solid shape reports its contacts: box3d fixes a contact's events when the
+			// contact is made, so Strata keeps only the pairs someone wants (see ProcessStepEvents).
+			setup.Shape.enableSensorEvents = true;
+			setup.Shape.enableContactEvents = true;
+			// The mass comes from the component, the distribution from the shapes (see InstallBody and ApplyMass).
+			setup.Shape.density = 1.0f;
 			if (!rigidBody)
-				return settings;
+				return setup;
 
-			settings.mFriction = SanitizeNonNegative(rigidBody->Friction, defaults.Friction);
-			settings.mRestitution = std::isfinite(rigidBody->Restitution) ? std::clamp(rigidBody->Restitution, 0.0f, 1.0f) : defaults.Restitution;
-			settings.mIsSensor = rigidBody->IsTrigger;
+			setup.Shape.baseMaterial.friction = SanitizeNonNegative(rigidBody->Friction, defaults.Friction);
+			setup.Shape.baseMaterial.restitution = std::isfinite(rigidBody->Restitution) ? std::clamp(rigidBody->Restitution, 0.0f, 1.0f) : defaults.Restitution;
+			setup.Trigger = rigidBody->IsTrigger;
+			setup.Shape.isSensor = rigidBody->IsTrigger;
+			setup.Shape.enableContactEvents = !rigidBody->IsTrigger;
 			if (type == RigidBodyType::Static)
-				return settings;
+				return setup;
 
-			settings.mLinearDamping = SanitizeNonNegative(rigidBody->LinearDamping, defaults.LinearDamping);
-			settings.mAngularDamping = SanitizeNonNegative(rigidBody->AngularDamping, defaults.AngularDamping);
-			settings.mGravityFactor = std::isfinite(rigidBody->GravityScale) ? rigidBody->GravityScale : defaults.GravityScale;
-			// Jolt sensors only support discrete collision detection.
-			if (rigidBody->ContinuousCollision && !rigidBody->IsTrigger)
-				settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
-
+			setup.Body.linearDamping = SanitizeNonNegative(rigidBody->LinearDamping, defaults.LinearDamping);
+			setup.Body.angularDamping = SanitizeNonNegative(rigidBody->AngularDamping, defaults.AngularDamping);
+			setup.Body.gravityScale = std::isfinite(rigidBody->GravityScale) ? rigidBody->GravityScale : defaults.GravityScale;
 			if (type == RigidBodyType::Kinematic)
+				return setup;
+
+			// box3d sweeps every dynamic body against static ones; a bullet also against kinematic and dynamic bodies.
+			setup.Body.isBullet = rigidBody->ContinuousCollision && !rigidBody->IsTrigger;
+			setup.Mass = std::isfinite(rigidBody->Mass) ? std::max(rigidBody->Mass, c_MinimumMass) : defaults.Mass;
+			// Rotation locks hold the world axes: box3d applies them to the world angular velocity.
+			setup.Body.motionLocks.angularX = rigidBody->LockRotationX;
+			setup.Body.motionLocks.angularY = rigidBody->LockRotationY;
+			setup.Body.motionLocks.angularZ = rigidBody->LockRotationZ;
+			return setup;
+		}
+
+		// Creates a shape of a body from its part; null if box3d refuses it.
+		b3ShapeId CreatePartShape(BodyRecord& record, b3BodyId body, const b3ShapeDef& definition, const ShapePart& part)
+		{
+			switch (part.Type)
 			{
-				// Static triggers only detect moving bodies; kinematic triggers also detect static colliders.
-				settings.mCollideKinematicVsNonDynamic = rigidBody->IsTrigger;
-				return settings;
+				case ShapePart::Kind::Hull:
+					return b3CreateHullShape(body, &definition, part.Hull);
+				case ShapePart::Kind::Sphere:
+					return b3CreateSphereShape(body, &definition, &part.Sphere);
+				case ShapePart::Kind::Capsule:
+					return b3CreateCapsuleShape(body, &definition, &part.Capsule);
+				case ShapePart::Kind::CookedHull:
+				{
+					record.CookedShapes.push_back(part.Cooked);
+					return b3CreateTransformedHullShape(body, &definition, part.Cooked->GetHull(), part.Placement, part.Scale);
+				}
+				case ShapePart::Kind::Mesh:
+				{
+					record.CookedShapes.push_back(part.Cooked);
+					return b3CreateMeshShape(body, &definition, part.Cooked->GetMesh(), part.Scale);
+				}
+				case ShapePart::Kind::OffsetMesh:
+				{
+					// The compound holds the mesh by pointer (its triangles are shared, not copied): the record keeps both.
+					b3CompoundMeshDef meshDefinition = {};
+					meshDefinition.meshData = part.Cooked->GetMesh();
+					meshDefinition.transform = part.Placement;
+					meshDefinition.scale = part.Scale;
+					b3CompoundDef compoundDefinition = {};
+					compoundDefinition.meshes = &meshDefinition;
+					compoundDefinition.meshCount = 1;
+					b3CompoundData* compound = b3CreateCompound(&compoundDefinition);
+					if (!compound)
+						return b3_nullShapeId;
+					Ref<const CompoundData> owned = CreateRef<const CompoundData>(compound);
+					record.CookedShapes.push_back(part.Cooked);
+					record.Compounds.push_back(owned);
+					b3ShapeDef compoundShape = definition;
+					return b3CreateBakedCompoundShape(body, &compoundShape, owned->Get());
+				}
 			}
+			return b3_nullShapeId;
+		}
 
-			// The shapes provide the mass distribution, the component the total mass.
-			settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
-			settings.mMassPropertiesOverride.mMass = std::isfinite(rigidBody->Mass) ? std::max(rigidBody->Mass, c_MinimumMass) : defaults.Mass;
-
-			JPH::EAllowedDOFs allowedDOFs = JPH::EAllowedDOFs::All;
-			if (rigidBody->LockRotationX)
-				allowedDOFs &= ~JPH::EAllowedDOFs::RotationX;
-			if (rigidBody->LockRotationY)
-				allowedDOFs &= ~JPH::EAllowedDOFs::RotationY;
-			if (rigidBody->LockRotationZ)
-				allowedDOFs &= ~JPH::EAllowedDOFs::RotationZ;
-			settings.mAllowedDOFs = allowedDOFs;
-			return settings;
+		// Scales the mass the shapes give a dynamic body (density 1) to the component's mass; the distribution (center and
+		// inertia) stays the shapes'.
+		void ApplyMass(b3BodyId body, float mass)
+		{
+			b3Body_ApplyMassFromShapes(body);
+			b3MassData massData = b3Body_GetMassData(body);
+			if (!(massData.mass > 0.0f) || !std::isfinite(massData.mass))
+				return;
+			const float factor = mass / massData.mass;
+			massData.mass = mass;
+			massData.inertia = b3MulSM(factor, massData.inertia);
+			b3Body_SetMassData(body, massData);
 		}
 
 		//////////////////////////////////////////////////////////////////////////
@@ -2298,7 +1893,7 @@ namespace Strata
 				return;
 
 			BodyRecord& record = it->second;
-			DestroyJoltBody(data, record);
+			DestroyBox3DBody(data, record);
 			for (entt::entity merged : record.MergedEntities)
 			{
 				auto mergedIt = data.MergedOwners.find(merged);
@@ -2311,6 +1906,7 @@ namespace Strata
 
 			const UUID entityID = record.EntityID;
 			SetMeshSources(data, handle, record, {});
+			data.TriggerBodies.erase(handle);
 			SetFailure(data, handle, record, BuildFailure::None);
 			EraseRecord(data, it); // A PolledBodies entry is dropped by the next step
 			EndContactsOf(data, entityID);
@@ -2349,13 +1945,13 @@ namespace Strata
 		// body keeps its motion for when it can be built again. Expects record.Type to be the type the body is built with.
 		void SetBuildFailure(PhysicsWorldData& data, entt::entity handle, BodyRecord& record, BuildFailure failure, const glm::mat4& worldTransform)
 		{
-			SaveVelocities(data, record);
+			SaveVelocities(record);
 			if (record.Type != RigidBodyType::Dynamic)
 			{
 				record.SavedLinearVelocity = glm::vec3(0.0f);
 				record.SavedAngularVelocity = glm::vec3(0.0f);
 			}
-			DestroyJoltBody(data, record);
+			DestroyBox3DBody(data, record);
 			SetFailure(data, handle, record, failure);
 			record.LastWorldTransform = worldTransform;
 			record.ShapeMembers.clear();
@@ -2400,7 +1996,7 @@ namespace Strata
 
 		// The motion a dynamic body (re)built now starts with: a body rebuilt because a property changed keeps moving as before;
 		// one that was out of the simulation (or had no body after a failed build) resumes the motion it had.
-		void GetBuildVelocities(PhysicsWorldData& data, const BodyRecord& record, RigidBodyType type, glm::vec3& outLinear, glm::vec3& outAngular)
+		void GetBuildVelocities(const BodyRecord& record, RigidBodyType type, glm::vec3& outLinear, glm::vec3& outAngular)
 		{
 			outLinear = glm::vec3(0.0f);
 			outAngular = glm::vec3(0.0f);
@@ -2408,11 +2004,8 @@ namespace Strata
 				return;
 			if (record.HasBody() && record.InSimulation)
 			{
-				JPH::Vec3 currentLinear;
-				JPH::Vec3 currentAngular;
-				data.JoltSystem->GetBodyInterface().GetLinearAndAngularVelocity(record.BodyID, currentLinear, currentAngular);
-				outLinear = ToGlm(currentLinear);
-				outAngular = ToGlm(currentAngular);
+				outLinear = ToGlm(b3Body_GetLinearVelocity(record.BodyID));
+				outAngular = ToGlm(b3Body_GetAngularVelocity(record.BodyID));
 				return;
 			}
 			outLinear = record.SavedLinearVelocity;
@@ -2428,36 +2021,39 @@ namespace Strata
 			glm::vec3 Scale = glm::vec3(1.0f);
 		};
 
-		// Gives a body built for a record (created without an ID, on any thread) its ID, the next free one as CreateBody would
-		// give it, and makes it the record's body. A full world frees the old body's slot for its replacement instead of losing
-		// the body (its motion was read before, and its contacts carry over like in any rebuild), and the slots of the bodies
-		// destroyed in this round of changes. Without a slot the body is destroyed and the record waits for one (reported for
-		// all such records at once, see ReportBodyLimit).
-		void InstallBody(PhysicsWorldData& data, const BodyBuildStart& start, JPH::Body* body, const BodyPose& pose, std::vector<ShapeMember> shapeMembers,
+		// Grows the room of a world to hold `required` bodies: box3d grows its storage itself while bodies are created, and the
+		// world counts it as a growth to the next power of two of at least twice the room (and records it as the scene's
+		// demand, so that its next world reserves the room at once). Returns whether the room grew.
+		bool GrowRoom(PhysicsWorldData& data, uint64_t required)
+		{
+			if (required <= data.RoomBodies)
+				return false;
+			const uint32_t from = data.RoomBodies;
+			const uint32_t to = static_cast<uint32_t>(std::min<uint64_t>(std::max<uint64_t>(NextPowerOfTwo(std::max<uint64_t>(2ull * from, required)), required),
+				PhysicsCapacitySettings::c_MaxBodiesLimit));
+			if (to <= from)
+				return false;
+			data.RoomBodies = to;
+			data.GrowthCount++;
+			data.LastGrowthFrom = from;
+			data.LastGrowthTo = to;
+			data.GrewThisRound = true;
+			data.Demand.Bodies = std::max(data.Demand.Bodies, to);
+			return true;
+		}
+
+		// Creates the box3d body of a record (on the main thread, in record order, so that IDs and results do not depend on the
+		// number of threads) from its built shape, and makes it the record's body; the old body (a rebuild) goes first, its
+		// contacts carried over to be confirmed by the next step. At its growth limit a world leaves a record that has no body
+		// waiting for one (reported for all such records at once, see ReportBodyLimit).
+		void InstallBody(PhysicsWorldData& data, const BodyBuildStart& start, const BodyPose& pose, ShapeBuild& build, const BodySetup& setup,
 			const glm::vec3& linearVelocity, const glm::vec3& angularVelocity)
 		{
 			BodyRecord& record = *start.Record;
 			const entt::entity handle = start.Owner.GetHandle();
 			const RigidBodyType type = start.Type;
-			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
-			// Bodies destroyed in this round of changes keep their slots until the batch: they do not count.
-			if (!record.HasBody() && GetUsedBodySlots(data) - data.PendingDestructions.size() >= data.Settings.MaxBodies)
+			if (!record.HasBody() && GetUsedBodySlots(data) >= GetGrowthLimit(data.Settings))
 			{
-				bodies.DestroyBodyWithoutID(body);
-				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, pose.WorldTransform);
-				return;
-			}
-
-			bool assigned = bodies.AssignBodyID(body);
-			if (!assigned && (record.HasBody() || !data.PendingDestructions.empty()))
-			{
-				DestroyJoltBody(data, record);
-				FlushBodyDestructions(data);
-				assigned = bodies.AssignBodyID(body);
-			}
-			if (!assigned)
-			{
-				bodies.DestroyBodyWithoutID(body);
 				record.SavedLinearVelocity = linearVelocity;
 				record.SavedAngularVelocity = angularVelocity;
 				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, pose.WorldTransform);
@@ -2465,38 +2061,96 @@ namespace Strata
 			}
 
 			// Contacts are tracked per entity pair and carry over to the new body; the next step confirms or ends them.
-			DestroyJoltBody(data, record);
+			if (record.HasBody())
+			{
+				DestroyBox3DBody(data, record);
+				MarkPairsUnconfirmed(data, record.EntityID);
+			}
+
+			const bool simulated = IsSimulated(*data.OwnerScene, start.Owner);
+			b3BodyDef bodyDefinition = setup.Body;
+			bodyDefinition.position = ToB3(pose.Position);
+			bodyDefinition.rotation = ToB3(pose.Rotation);
+			// A body that joins the simulation now starts with that motion (one that does not gets it when it is added).
+			if (simulated && type == RigidBodyType::Dynamic)
+			{
+				bodyDefinition.linearVelocity = ToB3(linearVelocity);
+				bodyDefinition.angularVelocity = ToB3(angularVelocity);
+			}
+			bodyDefinition.isEnabled = simulated;
+			bodyDefinition.isAwake = true;
+			const b3BodyId body = b3CreateBody(data.World, &bodyDefinition);
+			RegisterBody(data, body, handle, &record);
+
+			// Before the world's first step the build need not look for pairs of static shapes (the first step finds every
+			// pair); afterwards a static shape that does not would miss the bodies resting where it appears until they move.
+			b3ShapeDef shapeDefinition = setup.Shape;
+			// The entity's UUID, for code that has only box3d's shape (the character controllers' moves).
+			shapeDefinition.userData = reinterpret_cast<void*>(static_cast<uintptr_t>(static_cast<uint64_t>(record.EntityID)));
+			shapeDefinition.invokeContactCreation = data.HasStepped || type != RigidBodyType::Static;
+			// A dynamic body's mass is set once its shapes are made (ApplyMass); other bodies have none to compute.
+			shapeDefinition.updateBodyMass = type != RigidBodyType::Dynamic;
+			ShapeSlot shapeSlot;
+			shapeSlot.Sensor = setup.Trigger;
+			shapeSlot.BodyType = type;
+			shapeSlot.Entity = record.EntityID;
+			shapeSlot.BodyKey = GetBodyKey(body);
+			for (const ShapePart& part : build.Parts)
+			{
+				const b3ShapeId shape = CreatePartShape(record, body, shapeDefinition, part);
+				if (B3_IS_NULL(shape))
+					continue;
+				shapeSlot.Convex = part.Type != ShapePart::Kind::Mesh && part.Type != ShapePart::Kind::OffsetMesh;
+				RegisterShape(data, shape, shapeSlot);
+				record.Shapes.push_back(shape);
+			}
+			record.BodyID = body;
+			if (record.Shapes.empty())
+			{
+				// box3d refused every part (it should not: the parts were validated); the body waits for a component change.
+				if (ShouldWarn(data, record.EntityID, PhysicsWarning::NoUsableCollider))
+					ST_CORE_WARN("Physics: '{}' has no usable collider; it is not simulated", start.Owner.GetName());
+				record.Type = type;
+				SetBuildFailure(data, handle, record, BuildFailure::InvalidColliders, pose.WorldTransform);
+				return;
+			}
+			if (type == RigidBodyType::Dynamic)
+				ApplyMass(body, setup.Mass);
+
 			GetUpdateCounters(data).BodiesAdded++;
-			record.BodyID = body->GetID();
+			(type == RigidBodyType::Static ? data.RoundCreatedStatic : data.RoundCreatedMoving) = true;
 			SetFailure(data, handle, record, BuildFailure::None);
+			record.Type = type;
+			record.Layer = setup.Layer;
+			record.IsTrigger = setup.Trigger;
+			if (setup.Trigger)
+				data.TriggerBodies.insert(handle);
+			else
+				data.TriggerBodies.erase(handle);
 			record.ShapeScale = pose.Scale;
 			record.WorldScale = pose.Scale;
 			record.LastWorldTransform = pose.WorldTransform;
 			record.KinematicTargetPosition = pose.Position;
 			record.KinematicTargetRotation = pose.Rotation;
-			record.ShapeMembers = std::move(shapeMembers);
-			data.BodySlots[record.BodyID.GetIndex()] = BodySlot { record.BodyID.GetIndexAndSequenceNumber(), handle, &record };
-			data.Contacts.SetBodyInterest(record.BodyID, data.ContactInterest.contains(record.EntityID));
+			record.ShapeMembers = std::move(build.ShapeMembers);
 			ClearWarnings(data, record.EntityID, c_TransientWarnings);
 
-			if (!IsSimulated(*data.OwnerScene, start.Owner))
+			if (!simulated)
 			{
 				// Its motion applies when it joins the simulation (AddToSimulation).
 				record.SavedLinearVelocity = type == RigidBodyType::Dynamic ? linearVelocity : glm::vec3(0.0f);
 				record.SavedAngularVelocity = type == RigidBodyType::Dynamic ? angularVelocity : glm::vec3(0.0f);
+				record.InSimulation = false;
 				EndContactsOf(data, record.EntityID);
 			}
 			else
 			{
-				// Joins the simulation with the batch of this round (created where its entity is, with its motion).
-				(type == RigidBodyType::Static ? data.PendingAdds : data.PendingActivatedAdds).push_back(record.BodyID);
-				record.AddPending = true;
 				record.InSimulation = true;
 				record.TransformDirty = false;
 				record.SavedLinearVelocity = glm::vec3(0.0f);
 				record.SavedAngularVelocity = glm::vec3(0.0f);
-				if (data.EntityPairs.find(record.EntityID) != data.EntityPairs.end())
-					data.RecheckedEntities.push_back(record.EntityID); // Its contacts carried over: the next step confirms or ends them
+				if (type != RigidBodyType::Static)
+					MarkAwake(data, body);
 			}
 			UpdatePolling(data, handle, record);
 		}
@@ -2514,24 +2168,28 @@ namespace Strata
 			BodyPose pose;
 			pose.WorldTransform = scene.GetWorldTransform(entity);
 			const bool decomposed = Math::DecomposeTransform(pose.WorldTransform, pose.Position, pose.Rotation, pose.Scale);
-			if (!decomposed || (type == RigidBodyType::Dynamic && !HasInvertibleParent(scene, entity)))
+			const bool inRange = decomposed && IsWithinCoordinateRange(pose.Position);
+			if (!inRange || (type == RigidBodyType::Dynamic && !HasInvertibleParent(scene, entity)))
 			{
 				if (ShouldWarn(data, record.EntityID, PhysicsWarning::DegenerateTransform))
 				{
 					if (!decomposed)
 						ST_CORE_WARN("Physics: '{}' has a degenerate world transform (zero scale or non-finite values); it gets its body once the transform is valid", entity.GetName());
+					else if (!inRange)
+						ST_CORE_WARN("Physics: '{}' is more than {} m from the origin, beyond what the simulation supports; it gets its body once it is back within", entity.GetName(), c_MaxBodyCoordinate);
 					else
 						ST_CORE_WARN("Physics: the parent of '{}' is scaled to (nearly) zero, so its simulated pose cannot be written back; it gets its body once the parent's transform is valid", entity.GetName());
 				}
 				record.Type = type;
 				SetBuildFailure(data, handle, record, BuildFailure::DegenerateTransform, pose.WorldTransform);
-				record.WaitsForParent = decomposed; // The world transform may stay the same when the parent is fixed
+				record.WaitsForParent = inRange; // The world transform may stay the same when the parent is fixed
 				return;
 			}
 			record.WaitsForParent = false;
 
+			const bool trigger = start.RigidBody && start.RigidBody->IsTrigger;
 			ShapeBuild build;
-			AddColliderParts(data, entity, glm::mat4(1.0f), glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), pose.Scale, type, build);
+			AddColliderParts(data, entity, glm::mat4(1.0f), glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), pose.Scale, type, trigger, build);
 
 			// Merged colliders are placed with their transform relative to the body (position and rotation, without scale).
 			const glm::mat4 worldToBody = glm::inverse(Math::ComposeTransform(pose.Position, pose.Rotation, glm::vec3(1.0f)));
@@ -2551,14 +2209,13 @@ namespace Strata
 						ST_CORE_WARN("Physics: the colliders of '{}' have a degenerate transform and are left out of the body of '{}'", merged.GetName(), entity.GetName());
 					continue;
 				}
-				AddColliderParts(data, merged, poseInBody, partTranslation, partRotation, partScale, type, build);
+				AddColliderParts(data, merged, poseInBody, partTranslation, partRotation, partScale, type, trigger, build);
 			}
 
 			record.Type = type;
 			SetMeshSources(data, handle, record, std::move(build.MeshSources));
 
-			const JPH::RefConst<JPH::Shape> shape = CombineParts(data, build, entity, build.Parts);
-			if (!shape)
+			if (build.Parts.empty())
 			{
 				BuildFailure failure = BuildFailure::InvalidColliders;
 				if (build.WaitsForMesh)
@@ -2579,29 +2236,11 @@ namespace Strata
 				return;
 			}
 
-			// A record without a body in a full world waits without making one.
-			if (!record.HasBody() && GetUsedBodySlots(data) - data.PendingDestructions.size() >= data.Settings.MaxBodies)
-			{
-				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, pose.WorldTransform);
-				return;
-			}
-
 			glm::vec3 linearVelocity;
 			glm::vec3 angularVelocity;
-			GetBuildVelocities(data, record, type, linearVelocity, angularVelocity);
-			JPH::BodyCreationSettings settings = MakeBodySettings(data, entity, start.RigidBody, type, shape.GetPtr(), pose.Position, pose.Rotation);
-			// A body that joins the simulation now starts with that motion (one that does not gets it when it is added).
-			settings.mLinearVelocity = ToJolt(linearVelocity);
-			settings.mAngularVelocity = ToJolt(angularVelocity);
-			JPH::Body* body = data.JoltSystem->GetBodyInterface().CreateBodyWithoutID(settings);
-			if (!body)
-			{
-				record.SavedLinearVelocity = linearVelocity;
-				record.SavedAngularVelocity = angularVelocity;
-				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, pose.WorldTransform);
-				return;
-			}
-			InstallBody(data, start, body, pose, std::move(build.ShapeMembers), linearVelocity, angularVelocity);
+			GetBuildVelocities(record, type, linearVelocity, angularVelocity);
+			const BodySetup setup = MakeBodySetup(data, entity, start.RigidBody, type);
+			InstallBody(data, start, pose, build, setup, linearVelocity, angularVelocity);
 		}
 
 		// (Re)builds the body of an owner entity from its components, its collider descendants and its world transform.
@@ -2628,12 +2267,12 @@ namespace Strata
 				data.OwnerRefreshes.Add(owner.GetHandle()); // Its colliders are part of the ancestor's body now
 		}
 
-		// Rounds of changes with at least this many owners to refresh build their bodies on the job threads.
+		// Rounds of changes with at least this many owners to refresh build their bodies' shapes on the job threads.
 		constexpr uint32_t c_ParallelBuildThreshold = 256;
 		// Owners per job of a parallel build (fixed, so that the result does not depend on the number of threads).
 		constexpr uint32_t c_ParallelBuildChunk = 512;
 
-		// A body built on the job threads (see RefreshOwnersInParallel).
+		// A body whose shape is built on the job threads (see RefreshOwnersInParallel).
 		struct ParallelBodyBuild
 		{
 			BodyBuildStart Start;
@@ -2645,29 +2284,30 @@ namespace Strata
 			glm::vec3 LinearVelocity = glm::vec3(0.0f);
 			glm::vec3 AngularVelocity = glm::vec3(0.0f);
 			bool Eligible = false;
-			// Results of the jobs: the body (created without an ID) and its pose, or NeedsMainThread for anything a warning, a
-			// failure or mesh data may come from: such owners are built the serial way, in their place.
-			JPH::Body* Body = nullptr;
+			// Results of the jobs: the shape, the pose and the body's setup, or NeedsMainThread for anything a warning, a failure
+			// or mesh data may come from: such owners are built the serial way, in their place.
 			BodyPose Pose;
-			std::vector<ShapeMember> ShapeMembers;
+			ShapeBuild Build;
+			BodySetup Setup;
 			bool NeedsMainThread = true;
 		};
 
-		// Builds what the jobs may for one owner: its shape from box, sphere and capsule colliders (box and sphere shapes shared
-		// within the chunk), its settings and its Jolt body. Reads only components, the transforms read before and the world's
-		// settings.
-		void BuildBodyOffThread(PhysicsWorldData& data, ParallelBodyBuild& item, ChunkShapes& chunkShapes)
+		// Builds what the jobs may for one owner: its shape from box, sphere and capsule colliders (box hulls shared within the
+		// chunk) and its setup. Reads only components, the transforms read before and the world's settings; creates nothing
+		// in box3d, whose creation functions are main-thread only.
+		void BuildBodyOffThread(PhysicsWorldData& data, ParallelBodyBuild& item, ChunkHulls& chunkHulls)
 		{
 			const Entity& entity = item.Start.Owner;
 			BodyPose& pose = item.Pose;
 			pose.WorldTransform = item.WorldTransform;
-			if (!Math::DecomposeTransform(pose.WorldTransform, pose.Position, pose.Rotation, pose.Scale))
+			if (!Math::DecomposeTransform(pose.WorldTransform, pose.Position, pose.Rotation, pose.Scale) || !IsWithinCoordinateRange(pose.Position))
 				return;
 
-			ShapeBuild build;
+			ShapeBuild& build = item.Build;
 			build.OffThread = true;
-			build.Chunk = &chunkShapes;
-			AddColliderParts(data, entity, glm::mat4(1.0f), glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), pose.Scale, item.Start.Type, build);
+			build.Chunk = &chunkHulls;
+			const bool trigger = item.Start.RigidBody && item.Start.RigidBody->IsTrigger;
+			AddColliderParts(data, entity, glm::mat4(1.0f), glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), pose.Scale, item.Start.Type, trigger, build);
 			const glm::mat4 worldToBody = glm::inverse(Math::ComposeTransform(pose.Position, pose.Rotation, glm::vec3(1.0f)));
 			for (const auto& [mergedHandle, mergedWorld] : item.Parts)
 			{
@@ -2679,29 +2319,21 @@ namespace Strata
 				glm::vec3 partScale;
 				if (!Math::DecomposeTransform(poseInBody, partTranslation, partRotation, partScale))
 					return;
-				AddColliderParts(data, Entity(mergedHandle, data.OwnerScene), poseInBody, partTranslation, partRotation, partScale, item.Start.Type, build);
+				AddColliderParts(data, Entity(mergedHandle, data.OwnerScene), poseInBody, partTranslation, partRotation, partScale, item.Start.Type, trigger, build);
 			}
 			if (build.NeedsMainThread || build.Parts.empty())
 				return;
-			const JPH::RefConst<JPH::Shape> shape = CombineParts(data, build, entity, build.Parts);
-			if (!shape)
-				return;
 
-			// MakeBodySettings warns only about invalid layers, which the main thread checked before.
-			JPH::BodyCreationSettings settings = MakeBodySettings(data, entity, item.Start.RigidBody, item.Start.Type, shape.GetPtr(), pose.Position, pose.Rotation);
-			settings.mLinearVelocity = ToJolt(item.LinearVelocity);
-			settings.mAngularVelocity = ToJolt(item.AngularVelocity);
-			item.Body = data.JoltSystem->GetBodyInterfaceNoLock().CreateBodyWithoutID(settings);
-			if (!item.Body)
-				return;
-			item.ShapeMembers = std::move(build.ShapeMembers);
+			// MakeBodySetup warns only about invalid layers, which the main thread checked before.
+			item.Setup = MakeBodySetup(data, entity, item.Start.RigidBody, item.Start.Type);
 			item.NeedsMainThread = false;
 		}
 
 		// Refreshes many owners at once, with the results of the serial path (RefreshOwner, in record order): the same body IDs,
 		// shapes and settings, so the simulation does not depend on the number of threads. The main thread starts each build in
-		// record order (records, merged colliders, transforms, velocities), the job threads build shapes and bodies in fixed
-		// chunks, and the main thread installs them in record order, building the serial way the owners the jobs left to it.
+		// record order (records, merged colliders, transforms, velocities), the job threads build shapes and setups in fixed
+		// chunks, and the main thread creates the bodies in record order, building the serial way the owners the jobs left to
+		// it.
 		void RefreshOwnersInParallel(PhysicsWorldData& data, std::span<const entt::entity> handles)
 		{
 			ST_PROFILE_FUNCTION();
@@ -2740,12 +2372,12 @@ namespace Strata
 					}
 					item.Parts.emplace_back(mergedHandle, scene.GetWorldTransform(merged));
 				}
-				GetBuildVelocities(data, record, item.Start.Type, item.LinearVelocity, item.AngularVelocity);
+				GetBuildVelocities(record, item.Start.Type, item.LinearVelocity, item.AngularVelocity);
 			}
 
 			const uint32_t itemCount = static_cast<uint32_t>(items.size());
 			const uint32_t chunkCount = (itemCount + c_ParallelBuildChunk - 1) / c_ParallelBuildChunk;
-			std::vector<ChunkShapes> chunkShapes(chunkCount);
+			std::vector<ChunkHulls> chunkHulls(chunkCount);
 			const auto build = [&](uint32_t firstChunk, uint32_t lastChunk)
 			{
 				for (uint32_t chunk = firstChunk; chunk < lastChunk; chunk++)
@@ -2753,7 +2385,7 @@ namespace Strata
 					for (uint32_t index = chunk * c_ParallelBuildChunk; index < std::min(itemCount, (chunk + 1) * c_ParallelBuildChunk); index++)
 					{
 						if (items[index].Eligible)
-							BuildBodyOffThread(data, items[index], chunkShapes[chunk]);
+							BuildBodyOffThread(data, items[index], chunkHulls[chunk]);
 					}
 				}
 			};
@@ -2761,23 +2393,13 @@ namespace Strata
 				JobSystem::ParallelFor(chunkCount, 1, build);
 			else
 				build(0, chunkCount);
-			// Later builds share the chunks' shapes, in chunk order.
-			for (const ChunkShapes& chunk : chunkShapes)
-			{
-				for (const auto& [key, shape] : chunk.Shapes)
-				{
-					if (data.PrimitiveShapes.size() >= c_MaxSharedPrimitiveShapes)
-						break;
-					data.PrimitiveShapes.emplace(key, shape);
-				}
-			}
 
+			// The bodies, in record order. The chunks' hulls stay alive until every body is made: the shapes point at them until
+			// box3d copied them.
 			for (ParallelBodyBuild& item : items)
 			{
 				if (item.NeedsMainThread)
 				{
-					if (item.Body)
-						data.JoltSystem->GetBodyInterface().DestroyBodyWithoutID(item.Body);
 					CompleteBodyBuild(data, item.Start);
 					continue;
 				}
@@ -2785,7 +2407,18 @@ namespace Strata
 				record.Type = item.Start.Type;
 				record.WaitsForParent = false;
 				SetMeshSources(data, item.Start.Owner.GetHandle(), record, {});
-				InstallBody(data, item.Start, item.Body, item.Pose, std::move(item.ShapeMembers), item.LinearVelocity, item.AngularVelocity);
+				InstallBody(data, item.Start, item.Pose, item.Build, item.Setup, item.LinearVelocity, item.AngularVelocity);
+			}
+
+			// Later builds share the chunks' hulls, in chunk order.
+			for (ChunkHulls& chunk : chunkHulls)
+			{
+				for (auto& [key, hull] : chunk.Hulls)
+				{
+					if (data.BoxHulls.size() >= c_MaxSharedBoxHulls)
+						break;
+					data.BoxHulls.try_emplace(key, std::move(hull));
+				}
 			}
 		}
 
@@ -2893,9 +2526,10 @@ namespace Strata
 			});
 		}
 
-		// Applies the changes of the character controllers (see CharacterControllerSet::ApplyChanges): contacts are wanted
-		// through presence bodies like through bodies, and end when a controller leaves the simulation; a rebuilt controller
-		// keeps its contacts, which the next step confirms or ends.
+		// Applies the changes of the character controllers (see CharacterControllerSet::ApplyChanges): their presence bodies
+		// are known by their slots like records' bodies (events and queries name them), contacts are wanted through them like
+		// through bodies and end when a controller leaves the simulation; a rebuilt controller keeps its contacts, which the
+		// next step confirms or ends.
 		void ApplyCharacterChanges(PhysicsWorldData& data)
 		{
 			if (!data.Characters)
@@ -2905,18 +2539,24 @@ namespace Strata
 			data.Characters->ApplyChanges(changes);
 			for (const CharacterBodyChange& change : changes)
 			{
-				if (change.OldBody != c_NoCharacterBody)
-					data.Contacts.SetBodyInterest(JPH::BodyID(change.OldBody), false);
-				if (change.NewBody != c_NoCharacterBody)
+				if (B3_IS_NON_NULL(change.OldShape))
+					UnregisterShape(data, change.OldShape);
+				if (B3_IS_NON_NULL(change.OldBody))
+					UnregisterBody(data, change.OldBody);
+				if (B3_IS_NON_NULL(change.NewBody))
 				{
-					data.Contacts.SetBodyInterest(JPH::BodyID(change.NewBody), data.ContactInterest.contains(change.Entity));
-					const JPH::BodyID newBody(change.NewBody);
-					InvalidateReusedIDs(data, std::span<const JPH::BodyID>(&newBody, 1));
+					RegisterBody(data, change.NewBody, entt::null, nullptr);
+					ShapeSlot slot;
+					slot.BodyType = RigidBodyType::Kinematic;
+					slot.Entity = change.Entity;
+					slot.BodyKey = GetBodyKey(change.NewBody);
+					RegisterShape(data, change.NewShape, slot);
+					MarkAwake(data, change.NewBody);
 				}
 				if (change.Removed)
 					EndContactsOf(data, change.Entity);
 				else if (data.EntityPairs.find(change.Entity) != data.EntityPairs.end())
-					data.RecheckedEntities.push_back(change.Entity);
+					MarkPairsUnconfirmed(data, change.Entity);
 			}
 		}
 
@@ -2925,19 +2565,20 @@ namespace Strata
 			return !data.StructureChanges.IsEmpty() || !data.SubtreeChanges.IsEmpty() || !data.ActivityChanges.IsEmpty() || !data.TransformChanges.IsEmpty() || !data.OwnerRefreshes.IsEmpty();
 		}
 
-		// Hands the body slots that are free now (those of bodies destroyed in this round of changes count) to the records that
-		// waited longest for one, in the order they started waiting: they are rebuilt with the next round. Entries of records
-		// that no longer wait are dropped on the way. Returns whether a record was handed a slot. A record handed a slot keeps
-		// its place until it has a body, so one that loses its slot to another build of the round stays first.
+		// Hands the room of bodies that went (those destroyed in this round of changes count) to the records that waited longest
+		// for it at the growth limit, in the order they started waiting: they are rebuilt with the next round. Entries of
+		// records that no longer wait are dropped on the way. Returns whether a record was handed room. A record handed room
+		// keeps its place until it has a body, so one that loses it to another build of the round stays first.
 		bool GiveSlotsToWaiters(PhysicsWorldData& data)
 		{
 			if (data.SlotWaiterCount == 0)
 				return false;
-			const uint64_t used = GetUsedBodySlots(data) - data.PendingDestructions.size();
-			if (used >= data.Settings.MaxBodies)
+			const uint64_t used = GetUsedBodySlots(data);
+			const uint64_t limit = GetGrowthLimit(data.Settings);
+			if (used >= limit)
 				return false;
 
-			uint64_t free = data.Settings.MaxBodies - used;
+			uint64_t free = limit - used;
 			while (!data.SlotWaiters.empty() && !IsSlotWaiter(data, data.SlotWaiters.front()))
 				data.SlotWaiters.pop_front();
 
@@ -3076,8 +2717,11 @@ namespace Strata
 			// Timed only when there is something to do: physics calls apply pending changes before every query.
 			const bool timed = HasChanges(data);
 			const std::chrono::steady_clock::time_point start = timed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
+			data.RoundCreatedStatic = false;
+			data.RoundCreatedMoving = false;
+			data.GrewThisRound = false;
 			bool settled = ApplyChangeRounds(data);
-			// Slots freed by this call go to the records waiting for one, which get their bodies in the same call.
+			// Room freed by this call goes to the records waiting for it, which get their bodies in the same call.
 			if (settled && GiveSlotsToWaiters(data))
 				settled = ApplyChangeRounds(data);
 			if (!settled)
@@ -3089,246 +2733,24 @@ namespace Strata
 				data.TransformChanges.Clear();
 				data.OwnerRefreshes.Clear();
 			}
-			FlushBodyBatches(data);
+			// One per motion kind that got new bodies, as the batches of physics engines that add bodies in batches count.
+			data.AddBatchCount += (data.RoundCreatedStatic ? 1u : 0u) + (data.RoundCreatedMoving ? 1u : 0u);
 			ReportBodyLimit(data);
 			ApplyCharacterChanges(data);
+			// One growth per round of changes that outgrew the room (or was asked for more, PhysicsWorld::Reserve), however
+			// many bodies it created.
+			GrowRoom(data, std::max<uint64_t>(GetUsedBodySlots(data), data.ReservedBodies));
 			if (timed)
-				GetUpdateCounters(data).ChangeTime += std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start).count();
-		}
-
-		//////////////////////////////////////////////////////////////////////////
-		// Growth
-		//////////////////////////////////////////////////////////////////////////
-
-		// Bodies a growth moves per job (fixed, so that the result does not depend on the number of threads).
-		constexpr uint32_t c_MigrationChunk = 4096;
-
-		// The bodies the world must have room for now: its bodies, the records and character controllers waiting for a slot,
-		// and what was reserved (PhysicsWorld::Reserve).
-		uint64_t GetRequiredBodies(const PhysicsWorldData& data)
-		{
-			const uint64_t waiting = static_cast<uint64_t>(data.SlotWaiterCount) + (data.Characters ? data.Characters->GetWaitingPresenceBodyCount() : 0u);
-			return std::max<uint64_t>(static_cast<uint64_t>(GetUsedBodySlots(data)) + waiting, data.ReservedBodies);
-		}
-
-		bool NeedsGrowth(const PhysicsWorldData& data)
-		{
-			return data.Settings.MaxBodies < GetGrowthLimit(data.Settings) && GetRequiredBodies(data) > data.Settings.MaxBodies;
-		}
-
-		// The settings of a world grown to `maxBodies`: the automatic pair and contact capacities and scratch memory follow
-		// ResolveCapacities' ratios for the bodies it must hold; capacities the settings gave stay.
-		PhysicsSettings GetGrownSettings(const PhysicsWorldData& data, uint32_t maxBodies, uint64_t requiredBodies)
-		{
-			PhysicsSettings grown = data.Settings;
-			grown.MaxBodies = maxBodies;
-			if (data.AutomaticMaxBodyPairs)
-				grown.MaxBodyPairs = ClampCapacity(std::max<uint64_t>(uint64_t(c_BodyPairsPerBody) * maxBodies, data.Settings.MaxBodyPairs), PhysicsCapacitySettings::c_MaxBodyPairsLimit);
-			if (data.AutomaticMaxContactConstraints)
 			{
-				grown.MaxContactConstraints = ClampCapacity(std::max<uint64_t>(uint64_t(c_ContactConstraintsPerBody) * requiredBodies, data.Settings.MaxContactConstraints),
-					PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
-			}
-			if (data.AutomaticTempAllocatorSize)
-			{
-				const uint64_t scratch = c_TempAllocatorBaseSize + c_TempBytesPerBody * grown.MaxBodies + c_TempBytesPerContactConstraint * grown.MaxContactConstraints;
-				grown.TempAllocatorSize = static_cast<uint32_t>(std::min<uint64_t>(std::max(scratch, c_MinTempAllocatorSize), UINT32_MAX));
-			}
-			return SanitizeSettings(grown);
-		}
-
-		// A Jolt system and its scratch memory that a growth replaced: destroyed by a background job, with Jolt kept initialized
-		// until then (its bodies' shapes are reference counted, so the bodies of the new system keep theirs).
-		struct RetiredJoltSystem
-		{
-			PhysicsRuntimeReference Runtime;
-			Scope<JPH::PhysicsSystem> System;
-			Scope<JPH::TempAllocator> Allocator;
-		};
-
-		void RetireJoltSystem(Scope<JPH::PhysicsSystem> system, Scope<JPH::TempAllocator> allocator)
-		{
-			std::shared_ptr<RetiredJoltSystem> retired = std::make_shared<RetiredJoltSystem>();
-			retired->System = std::move(system);
-			retired->Allocator = std::move(allocator);
-			if (!JobSystem::IsInitialized())
-				return; // Destroyed here
-			JobSystem::Submit([retired = std::move(retired)]() mutable { retired.reset(); }, JobPriority::Background);
-		}
-
-		// Moves the world into a Jolt system with room for the bodies it needs (see PhysicsWorld, "Capacities"). Every body
-		// keeps its JPH::BodyID (index and sequence number), so the records, BodySlots, contacts, character controllers and
-		// anything else that kept a body ID stay valid; bodies keep their poses, velocities, accumulated forces, sleep state
-		// and the contact cache (warm starting), so resting bodies keep resting and no touching pair begins again. Runs between
-		// steps, after the batches of a round of changes were flushed. Returns false when the world is at its growth limit (or
-		// the move failed, which leaves the old system in place).
-		bool GrowWorld(PhysicsWorldData& data)
-		{
-			ST_PROFILE_FUNCTION();
-			ST_CORE_ASSERT(data.PendingAdds.empty() && data.PendingActivatedAdds.empty() && data.PendingDestructions.empty(), "A world grows between rounds of changes");
-
-			using Clock = std::chrono::steady_clock;
-			const Clock::time_point start = Clock::now();
-			const uint32_t from = data.Settings.MaxBodies;
-			const uint64_t required = GetRequiredBodies(data);
-			const uint32_t to = static_cast<uint32_t>(std::min<uint64_t>(NextPowerOfTwo(std::max<uint64_t>(2ull * from, required)), GetGrowthLimit(data.Settings)));
-			if (to <= from)
-				return false;
-			const PhysicsSettings grown = GetGrownSettings(data, to, required);
-
-			Scope<JPH::PhysicsSystem> system = CreateScope<JPH::PhysicsSystem>();
-			system->Init(grown.MaxBodies + c_BroadPhaseAnchorCount, 0, grown.MaxBodyPairs, grown.MaxContactConstraints, data.BroadPhaseLayers, data.ObjectVsBroadPhase,
-				data.LayerPairFilter);
-			system->SetPhysicsSettings(data.JoltSystem->GetPhysicsSettings());
-			system->SetGravity(data.JoltSystem->GetGravity());
-
-			// Every body of the old system (the anchors and character controllers' presence bodies included), in index order:
-			// created in the new one on the job threads, chunk by chunk, from the old body's settings and its exact mass
-			// properties (settings round-trip the inertia through an inverse).
-			JPH::BodyIDVector bodyIDs;
-			data.JoltSystem->GetBodies(bodyIDs);
-			const uint32_t bodyCount = static_cast<uint32_t>(bodyIDs.size());
-			const uint32_t chunkCount = (bodyCount + c_MigrationChunk - 1) / c_MigrationChunk;
-			std::vector<JPH::Body*> created(bodyCount, nullptr);
-			std::vector<uint8_t> states(bodyCount, 0); // Bit 0: in the broad phase; bit 1: active
-			const JPH::BodyLockInterfaceNoLock& oldLocks = data.JoltSystem->GetBodyLockInterfaceNoLock();
-			// Creating bodies is safe on any thread (disjoint bodies); the main thread waits meanwhile.
-			const JPH::BodyInterface& newBodies = system->GetBodyInterfaceNoLock();
-			const auto forChunks = [&](const std::function<void(uint32_t begin, uint32_t end)>& function)
-			{
-				const auto run = [&](uint32_t firstChunk, uint32_t lastChunk)
+				const float elapsed = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start).count();
+				GetUpdateCounters(data).ChangeTime += elapsed;
+				if (data.GrewThisRound)
 				{
-					for (uint32_t chunk = firstChunk; chunk < lastChunk; chunk++)
-						function(chunk * c_MigrationChunk, std::min(bodyCount, (chunk + 1) * c_MigrationChunk));
-				};
-				if (chunkCount > 1 && JobSystem::IsInitialized())
-					JobSystem::ParallelFor(chunkCount, 1, run);
-				else
-					run(0, chunkCount);
-			};
-			forChunks([&](uint32_t begin, uint32_t end)
-			{
-				for (uint32_t index = begin; index < end; index++)
-				{
-					const JPH::Body* old = oldLocks.TryGetBody(bodyIDs[index]);
-					if (!old)
-						continue;
-					JPH::Body* body = newBodies.CreateBodyWithoutID(old->GetBodyCreationSettings());
-					if (body && old->IsDynamic())
-					{
-						const JPH::MotionProperties& oldMotion = *old->GetMotionProperties();
-						JPH::MotionProperties& motion = *body->GetMotionProperties();
-						motion.SetInverseMass(oldMotion.GetInverseMassUnchecked());
-						motion.SetInverseInertia(oldMotion.GetInverseInertiaDiagonal(), oldMotion.GetInertiaRotation());
-					}
-					created[index] = body;
-					states[index] = static_cast<uint8_t>((old->IsInBroadPhase() ? 1u : 0u) | (old->IsActive() ? 2u : 0u));
+					data.LastGrowthMs = elapsed;
+					ST_CORE_INFO("Physics: the world of scene '{}' grew from {} to {} bodies; cook the world (world.cook) or raise its physics capacity to start "
+						"at that size", scene.GetName(), data.LastGrowthFrom, data.LastGrowthTo);
 				}
-			});
-
-			// Their IDs, in index order on the main thread.
-			JPH::BodyInterface& newInterface = system->GetBodyInterface();
-			bool moved = true;
-			for (uint32_t index = 0; index < bodyCount; index++)
-			{
-				if (moved && created[index] && newInterface.AssignBodyID(created[index], bodyIDs[index]))
-					continue;
-				moved = false;
-				if (created[index] && created[index]->GetID().IsInvalid())
-					newInterface.DestroyBodyWithoutID(created[index]);
-				created[index] = nullptr;
 			}
-			if (!moved)
-			{
-				// Nothing changed yet: the old system stays, and its bodies keep waiting (the new system takes the bodies it
-				// already got with it).
-				ST_CORE_ERROR("Physics: the world of scene '{}' could not grow from {} to {} bodies: its bodies could not be moved", data.OwnerScene->GetName(), from, to);
-				return false;
-			}
-
-			// The bodies that were in the old broad phase join the new one, sleeping and awake ones in a batch each (awake ones
-			// activated). Prepared on this thread only: see FlushBodyBatches.
-			std::vector<JPH::BodyID> sleeping;
-			std::vector<JPH::BodyID> awake;
-			for (uint32_t index = 0; index < bodyCount; index++)
-			{
-				if (states[index] & 1u)
-					((states[index] & 2u) ? awake : sleeping).push_back(bodyIDs[index]);
-			}
-			const auto addBatch = [&](std::vector<JPH::BodyID>& batch, JPH::EActivation activation)
-			{
-				if (batch.empty())
-					return;
-				const JPH::BodyInterface::AddState state = newInterface.AddBodiesPrepare(batch.data(), static_cast<int>(batch.size()));
-				newInterface.AddBodiesFinalize(batch.data(), static_cast<int>(batch.size()), state, activation);
-			};
-			addBatch(sleeping, JPH::EActivation::DontActivate);
-			addBatch(awake, JPH::EActivation::Activate);
-
-			// What the creation settings do not carry, once activation reset it: forces and torques accumulated for the next
-			// step, sleep timers and spheres.
-			forChunks([&](uint32_t begin, uint32_t end)
-			{
-				PhysicsStateBuffer motion;
-				for (uint32_t index = begin; index < end; index++)
-				{
-					const JPH::Body* old = oldLocks.TryGetBody(bodyIDs[index]);
-					if (!old || !created[index] || old->IsStatic())
-						continue;
-					motion.Clear();
-					old->GetMotionProperties()->SaveState(motion);
-					created[index]->GetMotionProperties()->RestoreState(motion);
-				}
-			});
-
-			// The contact cache, so that touching pairs warm start and are not reported as new.
-			PhysicsStateBuffer contacts;
-			data.JoltSystem->SaveState(contacts, JPH::EStateRecorderState::Contacts);
-			if (!system->RestoreState(contacts) || contacts.IsFailed())
-				ST_CORE_WARN("Physics: the world of scene '{}' lost its contact cache while it grew; contacts warm start again", data.OwnerScene->GetName());
-
-			// The swap.
-			Scope<JPH::TempAllocator> oldAllocator;
-			if (grown.TempAllocatorSize != data.Settings.TempAllocatorSize)
-			{
-				oldAllocator = std::move(data.Allocator);
-				data.Allocator = CreateScope<JPH::TempAllocatorImplWithMallocFallback>(grown.TempAllocatorSize);
-			}
-			std::swap(data.JoltSystem, system);
-			data.JoltSystem->SetContactListener(&data.Contacts);
-			data.JoltSystem->SetBodyActivationListener(&data.Activations);
-			data.Settings = grown;
-			data.BodySlots.resize(data.JoltSystem->GetMaxBodies());
-			data.MovedBodyBits.resize((data.BodySlots.size() + 63) / 64, 0);
-			data.Contacts.Grow(data.JoltSystem->GetMaxBodies());
-			std::vector<CharacterBodyChange>& characterChanges = data.CharacterChanges;
-			characterChanges.clear();
-			data.Characters->Rebind(*data.JoltSystem, characterChanges);
-			for (const CharacterBodyChange& change : characterChanges)
-				data.Contacts.SetBodyInterest(JPH::BodyID(change.NewBody), data.ContactInterest.contains(change.Entity));
-			RetireJoltSystem(std::move(system), std::move(oldAllocator));
-
-			// Every waiting record tries again (in the order they waited).
-			for (const auto& [handle, ticket] : data.SlotWaiters)
-			{
-				if (IsSlotWaiter(data, { handle, ticket }))
-					data.OwnerRefreshes.Add(handle);
-			}
-
-			data.GrowthCount++;
-			data.LastGrowthFrom = from;
-			data.LastGrowthTo = to;
-			data.LastGrowthMs = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
-			GetUpdateCounters(data).ChangeTime += data.LastGrowthMs;
-			data.ReservedBytes = PhysicsWorld::EstimateReservedBytes(data.Settings);
-			ST_CORE_INFO("Physics: the world of scene '{}' grew from {} to {} bodies in {:.1f} ms; cook the world (world.cook) or raise its physics capacity to "
-				"start at that size", data.OwnerScene->GetName(), from, to, data.LastGrowthMs);
-			if (!data.AutomaticMaxBodies && data.GrowthCount == 1)
-			{
-				ST_CORE_WARN("Physics: scene '{}' needs more bodies than its PhysicsCapacity.MaxBodies of {}; its world grew beyond it, to {} bodies", data.OwnerScene->GetName(),
-					from, to);
-			}
-			return true;
 		}
 
 		//////////////////////////////////////////////////////////////////////////
@@ -3397,18 +2819,6 @@ namespace Strata
 			data.Connections.emplace_back(registry.on_destroy<InactiveComponent>().connect<&OnActivityChanged>(data));
 			// Every entity has an IDComponent until it is destroyed, so its removal reports entity destruction.
 			data.Connections.emplace_back(registry.on_destroy<IDComponent>().connect<&OnEntityDestroyed>(data));
-		}
-
-		//////////////////////////////////////////////////////////////////////////
-		// Stepping
-		//////////////////////////////////////////////////////////////////////////
-
-		// The bodies Jolt simulates in the next step (awake dynamic and kinematic bodies). Between steps only the main thread
-		// changes the list, so reading it without a lock is safe.
-		std::span<const JPH::BodyID> GetAwakeBodies(const PhysicsWorldData& data)
-		{
-			const JPH::BodyID* bodies = data.JoltSystem->GetActiveBodiesUnsafe(JPH::EBodyType::RigidBody);
-			return std::span<const JPH::BodyID>(bodies, data.JoltSystem->GetNumActiveBodies(JPH::EBodyType::RigidBody));
 		}
 
 		// The state of the mesh provider and of cooking that mesh sources are checked against.
@@ -3603,12 +3013,15 @@ namespace Strata
 			});
 		}
 
+		//////////////////////////////////////////////////////////////////////////
+		// Stepping
+		//////////////////////////////////////////////////////////////////////////
+
 		// Brings one body in line with its entity before a step: kinematic target, teleport, degenerate transform, scale
 		// change, or a retry of a body that could not be built. Each record is synchronized at most once per step.
 		void SyncBody(PhysicsWorldData& data, entt::entity handle, float timestep)
 		{
 			Scene& scene = *data.OwnerScene;
-			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
 			BodyRecord* record = FindRecord(data, handle);
 			if (!record || record->SyncPass == data.SyncPass)
 				return;
@@ -3626,16 +3039,8 @@ namespace Strata
 			{
 				// A build whose cause of failure may have gone away is retried.
 				bool retry = false;
-				if (IsSimulated(scene, entity))
-				{
-					switch (record->Failure)
-					{
-						case BuildFailure::DegenerateTransform:
-							retry = scene.GetWorldTransform(entity) != record->LastWorldTransform || (record->WaitsForParent && HasInvertibleParent(scene, entity));
-							break;
-						default: break;
-					}
-				}
+				if (IsSimulated(scene, entity) && record->Failure == BuildFailure::DegenerateTransform)
+					retry = scene.GetWorldTransform(entity) != record->LastWorldTransform || (record->WaitsForParent && HasInvertibleParent(scene, entity));
 				if (retry)
 					data.OwnerRefreshes.Add(handle);
 				record->TransformDirty = false;
@@ -3664,7 +3069,8 @@ namespace Strata
 				// A kinematic body keeps the velocity of its last move; stop it at its target.
 				if (record->KinematicMoving)
 				{
-					bodies.MoveKinematic(record->BodyID, ToJoltPosition(record->KinematicTargetPosition), ToJolt(record->KinematicTargetRotation), timestep);
+					b3Body_SetLinearVelocity(record->BodyID, b3Vec3 { 0.0f, 0.0f, 0.0f });
+					b3Body_SetAngularVelocity(record->BodyID, b3Vec3 { 0.0f, 0.0f, 0.0f });
 					record->KinematicMoving = false;
 				}
 				record->TransformDirty = false;
@@ -3681,7 +3087,8 @@ namespace Strata
 			glm::quat rotation;
 			glm::vec3 scale;
 			const bool decomposed = Math::DecomposeTransform(worldTransform, position, rotation, scale);
-			if (!decomposed || (record->Type == RigidBodyType::Dynamic && !HasInvertibleParent(scene, entity)))
+			const bool inRange = decomposed && IsWithinCoordinateRange(position);
+			if (!inRange || (record->Type == RigidBodyType::Dynamic && !HasInvertibleParent(scene, entity)))
 			{
 				// Out of the simulation (like an inactive entity) until the transform is valid again; the transform is
 				// left as it is.
@@ -3689,6 +3096,8 @@ namespace Strata
 				{
 					if (!decomposed)
 						ST_CORE_WARN("Physics: '{}' has a degenerate world transform; its body leaves the simulation until the transform is valid", entity.GetName());
+					else if (!inRange)
+						ST_CORE_WARN("Physics: '{}' moved more than {} m from the origin, beyond what the simulation supports; its body leaves the simulation until it is back within", entity.GetName(), c_MaxBodyCoordinate);
 					else
 						ST_CORE_WARN("Physics: the parent of '{}' is scaled to (nearly) zero, so its simulated pose cannot be written back; its body leaves the simulation until the parent's transform is valid", entity.GetName());
 				}
@@ -3707,15 +3116,16 @@ namespace Strata
 			switch (record->Type)
 			{
 				case RigidBodyType::Static:
-					// Jolt only activates a body that is moved itself, so bodies resting on it at the old and the new place
-					// are woken up explicitly.
-					WakeBodiesAround(data, record->BodyID);
-					bodies.SetPositionAndRotation(record->BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::DontActivate);
-					WakeBodiesAround(data, record->BodyID);
+					// Bodies resting on it at the old and the new place are woken up explicitly: static bodies have no island.
+					WakeBodiesIn(data, b3Body_ComputeAABB(record->BodyID));
+					b3Body_SetTransform(record->BodyID, ToB3(position), ToB3(rotation));
+					WakeBodiesIn(data, b3Body_ComputeAABB(record->BodyID));
 					break;
 				case RigidBodyType::Kinematic:
-					// Moved with a velocity: the bodies it touches, also those resting on it, wake up through their contacts.
-					bodies.MoveKinematic(record->BodyID, ToJoltPosition(position), ToJolt(rotation), timestep);
+					// Moved with a velocity that reaches the target in the step: the bodies it touches, also those resting on it,
+					// wake up through their contacts.
+					b3Body_SetTargetTransform(record->BodyID, b3WorldTransform { ToB3(position), ToB3(rotation) }, timestep, true);
+					MarkAwake(data, record->BodyID);
 					record->KinematicMoving = true;
 					record->KinematicTargetPosition = position;
 					record->KinematicTargetRotation = rotation;
@@ -3723,8 +3133,10 @@ namespace Strata
 				case RigidBodyType::Dynamic:
 					// Moved from outside physics (gameplay code, editor gizmo, a moving parent): teleport, keeping velocity,
 					// and wake the bodies that rested on it.
-					WakeBodiesAround(data, record->BodyID);
-					bodies.SetPositionAndRotation(record->BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::Activate);
+					WakeTouchingBodies(data, record->BodyID);
+					b3Body_SetTransform(record->BodyID, ToB3(position), ToB3(rotation));
+					b3Body_SetAwake(record->BodyID, true);
+					MarkAwake(data, record->BodyID);
 					break;
 			}
 			record->LastWorldTransform = worldTransform;
@@ -3749,11 +3161,11 @@ namespace Strata
 
 			std::vector<std::pair<entt::entity, BodyRecord*>>& awake = data.AwakeRecords;
 			awake.clear();
-			for (const JPH::BodyID& bodyID : GetAwakeBodies(data))
+			for (const int32_t index : data.AwakeBodies)
 			{
-				entt::entity handle = entt::null;
-				if (BodyRecord* record = FindBodyRecord(data, bodyID, &handle))
-					awake.emplace_back(handle, record);
+				const BodySlot& slot = data.BodySlots[static_cast<size_t>(index)];
+				if (slot.Used && slot.Record && slot.Record->InSimulation && slot.Record->Type != RigidBodyType::Static)
+					awake.emplace_back(slot.Entity, slot.Record);
 			}
 
 			const Scene& scene = *data.OwnerScene;
@@ -3810,7 +3222,7 @@ namespace Strata
 			for (entt::entity handle : data.PolledBodies)
 				FindRecord(data, handle)->Polled = true;
 
-			// Processed in a fixed order, whatever the order of Jolt's active list; then the bodies below entities that moved
+			// Processed in a fixed order, whatever the order the bodies woke in; then the bodies below entities that moved
 			// without a signal, in the order they were found.
 			std::sort(candidates.begin(), candidates.end());
 			candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
@@ -3822,146 +3234,489 @@ namespace Strata
 			ApplyChanges(data);
 		}
 
-		struct ParticipantState
+		//////////////////////////////////////////////////////////////////////////
+		// Contacts and triggers
+		//////////////////////////////////////////////////////////////////////////
+
+		// Whether the contacts of a pair of entities become events (see ICollisionEventSource).
+		bool IsWanted(const PhysicsWorldData& data, UUID a, UUID b)
 		{
-			bool Simulated = false; // Has a body in the simulation
-			bool Static = false;
-			bool Active = false;
-		};
-
-		ParticipantState GetParticipantState(PhysicsWorldData& data, UUID entityID)
-		{
-			ParticipantState state;
-			const Entity entity = data.OwnerScene->GetEntityByUUID(entityID);
-			if (!entity.IsValid())
-				return state;
-
-			const BodyRecord* record = FindRecord(data, entity.GetHandle());
-			if (!record || !record->InSimulation)
-				return state;
-
-			// Between steps only the main thread touches the bodies, so the locks can be skipped.
-			state.Simulated = true;
-			state.Static = record->Type == RigidBodyType::Static;
-			state.Active = !state.Static && data.JoltSystem->GetBodyInterfaceNoLock().IsActive(record->BodyID);
-			return state;
+			return data.TrackAll || data.ContactInterest.contains(a) || data.ContactInterest.contains(b);
 		}
 
-		// Whether a touching pair must end unless the next step reports it: a body is awake (Jolt reports the contacts of
-		// awake bodies), or the pair can never be reported again (a body left the simulation, or both bodies are static).
-		bool MustBeReported(PhysicsWorldData& data, const TouchingPair& pair)
+		// The point and normal of a contact: midway between the two surfaces, averaged over its first manifold's points, and
+		// the normal from shape A towards shape B. False if box3d has no touching manifold for it (any more).
+		bool ReadContactPoint(b3ContactId contact, glm::vec3& outPoint, glm::vec3& outNormal, b3ShapeId* outShapeA = nullptr)
 		{
-			const ParticipantState a = GetParticipantState(data, pair.A);
-			const ParticipantState b = GetParticipantState(data, pair.B);
-			return !a.Simulated || !b.Simulated || a.Active || b.Active || (a.Static && b.Static);
+			if (!b3Contact_IsValid(contact))
+				return false;
+			const b3ContactData contactData = b3Contact_GetData(contact);
+			if (contactData.manifoldCount <= 0 || !contactData.manifolds || contactData.manifolds[0].pointCount <= 0)
+				return false;
+			const b3Manifold& manifold = contactData.manifolds[0];
+			const glm::vec3 centerA = ToGlm(b3Body_GetWorldCenter(b3Shape_GetBody(contactData.shapeIdA)));
+			const glm::vec3 centerB = ToGlm(b3Body_GetWorldCenter(b3Shape_GetBody(contactData.shapeIdB)));
+			glm::vec3 sum(0.0f);
+			for (int index = 0; index < manifold.pointCount; index++)
+				sum += centerA + ToGlm(manifold.points[index].anchorA) + centerB + ToGlm(manifold.points[index].anchorB);
+			outPoint = sum / (2.0f * static_cast<float>(manifold.pointCount));
+			outNormal = ToGlm(manifold.normal);
+			if (outShapeA)
+				*outShapeA = contactData.shapeIdA;
+			return IsFinite(outPoint) && IsFinite(outNormal);
 		}
 
-		// Collects the touching pairs that end unless the step reports them: those of awake bodies, and those of bodies built
-		// since the last step whose contacts carried over (see MustBeReported). Pairs of sleeping bodies stay touching until a
-		// body wakes up, and are not visited at all.
+		// Where a trigger and a visitor meet, as far as their shapes' bounds tell (box3d's sensor events carry no point): the
+		// center of the intersection of the bounds, and the direction from the trigger's center to the visitor's.
+		void ComputeTriggerPoint(b3ShapeId sensor, b3ShapeId visitor, glm::vec3& outPoint, glm::vec3& outNormal)
+		{
+			const b3AABB a = b3Shape_GetAABB(sensor);
+			const b3AABB b = b3Shape_GetAABB(visitor);
+			const glm::vec3 lower = glm::max(ToGlm(a.lowerBound), ToGlm(b.lowerBound));
+			const glm::vec3 upper = glm::min(ToGlm(a.upperBound), ToGlm(b.upperBound));
+			outPoint = 0.5f * (lower + upper);
+			const glm::vec3 direction = 0.5f * (ToGlm(b.lowerBound) + ToGlm(b.upperBound)) - 0.5f * (ToGlm(a.lowerBound) + ToGlm(a.upperBound));
+			const float length = glm::length(direction);
+			outNormal = length > 1.0e-6f && std::isfinite(length) ? direction / length : glm::vec3(0.0f, 1.0f, 0.0f);
+		}
+
+		// A pair begins: tracked from now on, its Begin queued in the order the events happened.
+		TouchingPair& BeginPair(PhysicsWorldData& data, const PairKey& key, UUID a, UUID b, bool trigger, const glm::vec3& point, const glm::vec3& normal, b3ContactId contact)
+		{
+			TouchingPair pair;
+			pair.A = a;
+			pair.B = b;
+			pair.IsTrigger = trigger;
+			pair.SortKey = data.NextPairOrder++;
+			pair.Contact = contact;
+			pair.Point = point;
+			pair.Normal = normal;
+			AddTouchingPair(data, key, pair);
+			TouchingPair& added = data.TouchingPairs.find(key)->second;
+			QueueEvent(data, CollisionEventType::Begin, added);
+			return added;
+		}
+
+		void EndPair(PhysicsWorldData& data, std::unordered_map<PairKey, TouchingPair, PairKeyHash>::iterator it)
+		{
+			TouchingPair pair = it->second;
+			RemovePairFromIndex(data, pair.A, it->second);
+			RemovePairFromIndex(data, pair.B, it->second);
+			data.TouchingPairs.erase(it);
+			QueueEvent(data, CollisionEventType::End, pair);
+		}
+
+		// One contact or visit of a pair began: the pair begins with it, or counts it (a pair that waited for a rebuilt body's
+		// new shapes is confirmed by it).
+		void CountBegin(PhysicsWorldData& data, UUID a, UUID b, bool trigger, const glm::vec3& point, const glm::vec3& normal, b3ContactId contact)
+		{
+			if (a == b || !IsWanted(data, a, b))
+				return;
+			const PairKey key = MakePairKey(a, b);
+			auto it = data.TouchingPairs.find(key);
+			TouchingPair& pair = it != data.TouchingPairs.end() ? it->second : BeginPair(data, key, a, b, trigger, point, normal, contact);
+			pair.ContactCount++;
+			pair.Unconfirmed = false;
+			if (B3_IS_NULL(pair.Contact) || !b3Contact_IsValid(pair.Contact))
+				pair.Contact = contact;
+		}
+
+		// One contact or visit of a pair ended: the pair ends with its last one, unless a character controller's move reported
+		// it in this step or it waits for a rebuilt body's new shapes.
+		void CountEnd(PhysicsWorldData& data, UUID a, UUID b)
+		{
+			if (a == b)
+				return;
+			auto it = data.TouchingPairs.find(MakePairKey(a, b));
+			if (it == data.TouchingPairs.end())
+				return;
+			TouchingPair& pair = it->second;
+			if (pair.ContactCount > 0)
+				pair.ContactCount--;
+			if (pair.ContactCount == 0 && !pair.Unconfirmed && pair.CharacterStep != data.StepCount)
+				EndPair(data, it);
+		}
+
+		// Marks a moved body for the write-back (see WriteBackDynamicBodies).
+		void MarkMoved(PhysicsWorldData& data, b3BodyId body)
+		{
+			const int64_t index = static_cast<int64_t>(body.index1) - 1;
+			if (index < 0 || static_cast<size_t>(index) >= data.BodySlots.size())
+				return;
+			uint64_t& word = data.MovedBodyBits[static_cast<size_t>(index) / 64];
+			if (word == 0)
+				data.MovedBodyWords.push_back(static_cast<uint32_t>(index / 64));
+			word |= uint64_t(1) << (index % 64);
+		}
+
+		// Reads the events of one box3d step (box3d clears them at its next step): the bodies that moved, and contacts and
+		// sensor visits that began and ended, folded into entity pairs (each step's End events before its Begin events). Shapes
+		// resolve through the world's own slots: End events may name shapes that are gone, whose pairs were ended (a removal)
+		// or wait for confirmation (a rebuild) already. With lastStep, the bodies still awake are listed for the next step.
+		void ProcessStepEvents(PhysicsWorldData& data, bool lastStep)
+		{
+			const b3BodyEvents bodyEvents = b3World_GetBodyEvents(data.World);
+			if (lastStep)
+			{
+				data.AwakeStamp++;
+				data.AwakeBodies.clear();
+			}
+			for (int index = 0; index < bodyEvents.moveCount; index++)
+			{
+				const b3BodyMoveEvent& move = bodyEvents.moveEvents[index];
+				MarkMoved(data, move.bodyId);
+				if (lastStep && !move.fellAsleep)
+					MarkAwake(data, move.bodyId);
+			}
+
+			const b3ContactEvents contactEvents = b3World_GetContactEvents(data.World);
+			const b3SensorEvents sensorEvents = b3World_GetSensorEvents(data.World);
+			for (int index = 0; index < contactEvents.endCount; index++)
+			{
+				const b3ContactEndTouchEvent& event = contactEvents.endEvents[index];
+				const ShapeSlot* a = ResolveShape(data, event.shapeIdA);
+				const ShapeSlot* b = ResolveShape(data, event.shapeIdB);
+				if (a && b)
+					CountEnd(data, a->Entity, b->Entity);
+			}
+			for (int index = 0; index < sensorEvents.endCount; index++)
+			{
+				const b3SensorEndTouchEvent& event = sensorEvents.endEvents[index];
+				const ShapeSlot* sensor = ResolveShape(data, event.sensorShapeId);
+				const ShapeSlot* visitor = ResolveShape(data, event.visitorShapeId);
+				if (sensor && visitor && !(sensor->BodyType == RigidBodyType::Static && visitor->BodyType == RigidBodyType::Static))
+					CountEnd(data, sensor->Entity, visitor->Entity);
+			}
+			for (int index = 0; index < contactEvents.beginCount; index++)
+			{
+				const b3ContactBeginTouchEvent& event = contactEvents.beginEvents[index];
+				const ShapeSlot* a = ResolveShape(data, event.shapeIdA);
+				const ShapeSlot* b = ResolveShape(data, event.shapeIdB);
+				if (!a || !b || a->Entity == b->Entity || !IsWanted(data, a->Entity, b->Entity))
+					continue;
+				glm::vec3 point(0.0f);
+				glm::vec3 normal(0.0f, 1.0f, 0.0f);
+				ReadContactPoint(event.contactId, point, normal);
+				CountBegin(data, a->Entity, b->Entity, false, point, normal, event.contactId);
+			}
+			for (int index = 0; index < sensorEvents.beginCount; index++)
+			{
+				const b3SensorBeginTouchEvent& event = sensorEvents.beginEvents[index];
+				const ShapeSlot* sensor = ResolveShape(data, event.sensorShapeId);
+				const ShapeSlot* visitor = ResolveShape(data, event.visitorShapeId);
+				// Neither body moves (a static trigger and a static collider or static trigger): no pair, as in the physics
+				// engines whose triggers only detect what can move into them.
+				if (!sensor || !visitor || (sensor->BodyType == RigidBodyType::Static && visitor->BodyType == RigidBodyType::Static))
+					continue;
+				if (sensor->Entity == visitor->Entity || !IsWanted(data, sensor->Entity, visitor->Entity))
+					continue;
+				glm::vec3 point;
+				glm::vec3 normal;
+				ComputeTriggerPoint(event.sensorShapeId, event.visitorShapeId, point, normal);
+				CountBegin(data, sensor->Entity, visitor->Entity, true, point, normal, b3ContactId {});
+			}
+		}
+
+		// The touching pairs that the step may end (those of awake bodies), counted for PhysicsStats::CheckedPairCount; their
+		// points are refreshed after the step (see RefreshCheckedPairs). Pairs of sleeping bodies are not visited at all.
 		void CollectCheckedPairs(PhysicsWorldData& data)
 		{
 			ST_PROFILE_FUNCTION();
 
 			data.CheckedPairs.clear();
 			const uint64_t step = data.StepCount;
-			const auto checkPairsOf = [&](UUID entityID, bool awake)
+			for (const int32_t index : data.AwakeBodies)
 			{
-				auto indexIt = data.EntityPairs.find(entityID);
+				const BodySlot& slot = data.BodySlots[static_cast<size_t>(index)];
+				if (!slot.Used || !slot.Record)
+					continue;
+				auto indexIt = data.EntityPairs.find(slot.Record->EntityID);
 				if (indexIt == data.EntityPairs.end())
-					return;
+					continue;
 				for (const PairKey& key : indexIt->second)
 				{
 					auto pairIt = data.TouchingPairs.find(key);
 					if (pairIt == data.TouchingPairs.end() || pairIt->second.CheckStep == step)
 						continue;
-					if (!awake && !MustBeReported(data, pairIt->second))
-						continue;
 					pairIt->second.CheckStep = step;
 					data.CheckedPairs.push_back(key);
 				}
-			};
-
-			const JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterfaceNoLock();
-			for (const JPH::BodyID& bodyID : GetAwakeBodies(data))
-				checkPairsOf(UUID(bodies.GetUserData(bodyID)), true);
-			for (UUID entityID : data.RecheckedEntities)
-				checkPairsOf(entityID, false);
-			data.RecheckedEntities.clear();
+			}
 			data.LastCheckedPairs = static_cast<uint32_t>(data.CheckedPairs.size());
 		}
 
-		// Turns the contacts reported during the step into events: reported pairs that were not touching begin, checked pairs
-		// (see CollectCheckedPairs) that were not reported end.
-		void ProcessContacts(PhysicsWorldData& data)
+		// The points of the checked pairs that still touch, as of the end of the step (their End carries the last one).
+		void RefreshCheckedPairs(PhysicsWorldData& data)
 		{
-			ST_PROFILE_FUNCTION();
-
-			const uint64_t step = data.StepCount;
-			std::vector<ContactReport>& reports = data.Reports;
-			data.Contacts.TakeReports(reports);
-			reports.insert(reports.end(), data.CharacterReports.begin(), data.CharacterReports.end());
-			// Several sub shape pairs of an entity pair may touch (and several collision steps report them again); the first
-			// report of each pair in this order, which does not depend on thread timing, describes the contact.
-			std::sort(reports.begin(), reports.end(), IsReportOrderedBefore);
-
-			const auto leftAfterStep = [&](UUID entityID) { return std::find(data.LeftAfterStep.begin(), data.LeftAfterStep.end(), entityID) != data.LeftAfterStep.end(); };
-			std::vector<TouchingPair>& begun = data.BegunPairs;
-			begun.clear();
-			for (size_t index = 0; index < reports.size(); index++)
-			{
-				const ContactReport& report = reports[index];
-				if (index > 0 && reports[index - 1].Pair == report.Pair)
-					continue;
-				// The contacts of a body that left the simulation after the step ended already.
-				if (!data.LeftAfterStep.empty() && (leftAfterStep(report.EntityA) || leftAfterStep(report.EntityB)))
-					continue;
-
-				auto it = data.TouchingPairs.find(report.Pair);
-				if (it == data.TouchingPairs.end())
-				{
-					TouchingPair pair;
-					pair.A = report.EntityA;
-					pair.B = report.EntityB;
-					pair.IsTrigger = report.IsTrigger;
-					pair.ReportStep = step;
-					pair.SortKey = report.SortKey;
-					pair.Point = report.Point;
-					pair.Normal = report.Normal;
-					AddTouchingPair(data, report.Pair, pair);
-					begun.push_back(pair);
-				}
-				else
-				{
-					// Keep the pair's orientation from when it began (body IDs, and thus Jolt's order, change on rebuilds).
-					TouchingPair& pair = it->second;
-					pair.IsTrigger = report.IsTrigger;
-					pair.ReportStep = step;
-					pair.Point = report.Point;
-					pair.Normal = report.EntityA == pair.A ? report.Normal : -report.Normal;
-				}
-			}
-
-			std::vector<TouchingPair>& ended = data.EndedPairs;
-			ended.clear();
 			for (const PairKey& key : data.CheckedPairs)
 			{
 				auto it = data.TouchingPairs.find(key);
-				if (it == data.TouchingPairs.end() || it->second.ReportStep == step)
+				if (it == data.TouchingPairs.end() || it->second.IsTrigger)
 					continue;
-				ended.push_back(it->second);
-				RemovePairFromIndex(data, it->second.A, it->second);
-				RemovePairFromIndex(data, it->second.B, it->second);
-				data.TouchingPairs.erase(it);
+				TouchingPair& pair = it->second;
+				glm::vec3 point;
+				glm::vec3 normal;
+				b3ShapeId shapeA = b3_nullShapeId;
+				if (!ReadContactPoint(pair.Contact, point, normal, &shapeA))
+					continue;
+				const ShapeSlot* a = ResolveShape(data, shapeA);
+				pair.Point = point;
+				pair.Normal = a && a->Entity == pair.A ? normal : -normal;
 			}
+		}
 
-			const auto bySortKey = [](const TouchingPair& a, const TouchingPair& b) { return a.SortKey < b.SortKey; };
-			std::sort(ended.begin(), ended.end(), bySortKey);
-			std::sort(begun.begin(), begun.end(), bySortKey);
+		// Pairs of bodies rebuilt since the last step that the step did not confirm (no contact of the new shapes, no report of
+		// a character controller) end now.
+		void ResolveRecheckedPairs(PhysicsWorldData& data)
+		{
+			std::vector<UUID>& entities = data.RecheckedEntities;
+			if (entities.empty())
+				return;
+			std::sort(entities.begin(), entities.end());
+			entities.erase(std::unique(entities.begin(), entities.end()), entities.end());
+			std::vector<TouchingPair>& ended = data.EndedPairs;
+			ended.clear();
+			for (const UUID entityID : entities)
+			{
+				auto indexIt = data.EntityPairs.find(entityID);
+				if (indexIt == data.EntityPairs.end())
+					continue;
+				for (const PairKey& key : indexIt->second)
+				{
+					auto pairIt = data.TouchingPairs.find(key);
+					if (pairIt == data.TouchingPairs.end() || !pairIt->second.Unconfirmed)
+						continue;
+					if (pairIt->second.ContactCount > 0 || pairIt->second.CharacterStep == data.StepCount)
+						pairIt->second.Unconfirmed = false;
+					else
+						ended.push_back(pairIt->second);
+				}
+			}
+			entities.clear();
+			// Ended after the walk (ending changes the lists walked), in the order the pairs began.
+			std::sort(ended.begin(), ended.end(), [](const TouchingPair& a, const TouchingPair& b) { return a.SortKey < b.SortKey; });
 			for (const TouchingPair& pair : ended)
-				QueueEvent(data, CollisionEventType::End, pair);
-			for (const TouchingPair& pair : begun)
-				QueueEvent(data, CollisionEventType::Begin, pair);
+			{
+				auto it = data.TouchingPairs.find(MakePairKey(pair.A, pair.B));
+				if (it != data.TouchingPairs.end())
+					EndPair(data, it);
+			}
+		}
+
+		// The pairs the character controllers reported in the previous step but not in this one end, unless box3d's contacts
+		// still hold them.
+		void ResolveCharacterPairs(PhysicsWorldData& data, std::vector<PairKey>& reported)
+		{
+			for (const PairKey& key : data.CharacterPairs)
+			{
+				auto it = data.TouchingPairs.find(key);
+				if (it == data.TouchingPairs.end())
+					continue;
+				const TouchingPair& pair = it->second;
+				if (pair.CharacterStep != data.StepCount && pair.ContactCount == 0 && !pair.Unconfirmed)
+					EndPair(data, it);
+			}
+			data.CharacterPairs.swap(reported);
+			reported.clear();
+		}
+
+		// Pairs nobody wants any more (an entity of interest was let go, or tracking all contacts stopped) end.
+		void EndUnwantedPairs(PhysicsWorldData& data)
+		{
+			if (!data.CheckAllWanted && data.UnwantedEntities.empty())
+				return;
+			std::vector<TouchingPair>& ended = data.EndedPairs;
+			ended.clear();
+			const auto collect = [&](const TouchingPair& pair)
+			{
+				if (!IsWanted(data, pair.A, pair.B))
+					ended.push_back(pair);
+			};
+			if (data.CheckAllWanted)
+			{
+				for (const auto& [key, pair] : data.TouchingPairs)
+					collect(pair);
+			}
+			else
+			{
+				for (const UUID entityID : data.UnwantedEntities)
+				{
+					auto indexIt = data.EntityPairs.find(entityID);
+					if (indexIt == data.EntityPairs.end())
+						continue;
+					for (const PairKey& key : indexIt->second)
+					{
+						auto pairIt = data.TouchingPairs.find(key);
+						if (pairIt != data.TouchingPairs.end())
+							collect(pairIt->second);
+					}
+				}
+			}
+			data.CheckAllWanted = false;
+			data.UnwantedEntities.clear();
+			std::sort(ended.begin(), ended.end(), [](const TouchingPair& a, const TouchingPair& b) { return a.SortKey < b.SortKey; });
+			ended.erase(std::unique(ended.begin(), ended.end(), [](const TouchingPair& a, const TouchingPair& b) { return a.SortKey == b.SortKey; }), ended.end());
+			for (const TouchingPair& pair : ended)
+			{
+				auto it = data.TouchingPairs.find(MakePairKey(pair.A, pair.B));
+				if (it != data.TouchingPairs.end())
+					EndPair(data, it);
+			}
+		}
+
+		// A pair found touching by seeding: its contacts and visits counted now.
+		struct SeedCount
+		{
+			UUID A = UUID::Null();
+			UUID B = UUID::Null();
+			bool Trigger = false;
+			uint32_t Count = 0;
+			b3ContactId Contact = {};
+			glm::vec3 Point = glm::vec3(0.0f);
+			glm::vec3 Normal = glm::vec3(0.0f);
+		};
+
+		// Counts the touching contacts of a body's shapes per pair of entities (each contact once, by its ID).
+		void CountBodyContacts(PhysicsWorldData& data, b3BodyId body, std::map<PairKey, SeedCount>& counts, std::unordered_set<uint64_t>& seenContacts)
+		{
+			const int capacity = b3Body_GetContactCapacity(body);
+			if (capacity <= 0)
+				return;
+			std::vector<b3ContactData>& contacts = data.ContactScratch;
+			contacts.resize(static_cast<size_t>(capacity));
+			const int count = b3Body_GetContactData(body, contacts.data(), capacity);
+			for (int index = 0; index < count; index++)
+			{
+				const b3ContactData& contact = contacts[index];
+				if (contact.manifoldCount <= 0)
+					continue;
+				const uint64_t contactKey = (static_cast<uint64_t>(contact.contactId.generation) << 32) | static_cast<uint32_t>(contact.contactId.index1);
+				if (!seenContacts.insert(contactKey).second)
+					continue;
+				const ShapeSlot* a = ResolveShape(data, contact.shapeIdA);
+				const ShapeSlot* b = ResolveShape(data, contact.shapeIdB);
+				if (!a || !b || a->Entity == b->Entity || !IsWanted(data, a->Entity, b->Entity))
+					continue;
+				SeedCount& seed = counts[MakePairKey(a->Entity, b->Entity)];
+				if (seed.Count == 0)
+				{
+					seed.A = a->Entity;
+					seed.B = b->Entity;
+					seed.Contact = contact.contactId;
+					ReadContactPoint(contact.contactId, seed.Point, seed.Normal);
+				}
+				seed.Count++;
+			}
+		}
+
+		// Counts the visitors of a trigger record's sensor shapes per pair of entities; with onlyEntity set, only its visits.
+		void CountTriggerVisits(PhysicsWorldData& data, const BodyRecord& trigger, UUID onlyEntity, std::map<PairKey, SeedCount>& counts)
+		{
+			if (!trigger.HasBody() || !trigger.InSimulation)
+				return;
+			std::vector<b3ShapeId>& visitors = data.ShapeScratch;
+			for (const b3ShapeId sensorShape : trigger.Shapes)
+			{
+				const ShapeSlot* sensor = ResolveShape(data, sensorShape);
+				const int capacity = b3Shape_GetSensorCapacity(sensorShape);
+				if (!sensor || capacity <= 0)
+					continue;
+				visitors.resize(static_cast<size_t>(capacity));
+				const int count = b3Shape_GetSensorData(sensorShape, visitors.data(), capacity);
+				for (int index = 0; index < count; index++)
+				{
+					const ShapeSlot* visitor = ResolveShape(data, visitors[index]);
+					if (!visitor || visitor->Entity == sensor->Entity || (sensor->BodyType == RigidBodyType::Static && visitor->BodyType == RigidBodyType::Static))
+						continue;
+					if ((onlyEntity != UUID::Null() && visitor->Entity != onlyEntity && sensor->Entity != onlyEntity) || !IsWanted(data, sensor->Entity, visitor->Entity))
+						continue;
+					SeedCount& seed = counts[MakePairKey(sensor->Entity, visitor->Entity)];
+					if (seed.Count == 0)
+					{
+						seed.A = sensor->Entity;
+						seed.B = visitor->Entity;
+						seed.Trigger = true;
+						ComputeTriggerPoint(sensorShape, visitors[index], seed.Point, seed.Normal);
+					}
+					seed.Count++;
+				}
+			}
+		}
+
+		// Pairs that became wanted while touching (an entity of interest added, or tracking all contacts started) begin now,
+		// counted from box3d's touching contacts and sensor overlaps; tracked pairs among them take the count.
+		void SeedWantedPairs(PhysicsWorldData& data)
+		{
+			if (!data.SeedAll && data.SeededEntities.empty())
+				return;
+			std::map<PairKey, SeedCount> counts;
+			std::unordered_set<uint64_t> seenContacts;
+			// A contact is listed by both of its bodies (a character controller's presence body has no record: its contacts are
+			// found through the dynamic bodies it touches), so contacts are counted once by their IDs.
+			const auto seedRecord = [&](const BodyRecord& record)
+			{
+				if (!record.HasBody() || !record.InSimulation)
+					return;
+				if (record.IsTrigger)
+					CountTriggerVisits(data, record, UUID::Null(), counts);
+				else
+					CountBodyContacts(data, record.BodyID, counts, seenContacts);
+			};
+			if (data.SeedAll)
+			{
+				for (const auto& [handle, record] : data.Bodies)
+					seedRecord(record);
+			}
+			else
+			{
+				std::sort(data.SeededEntities.begin(), data.SeededEntities.end());
+				data.SeededEntities.erase(std::unique(data.SeededEntities.begin(), data.SeededEntities.end()), data.SeededEntities.end());
+				for (const UUID entityID : data.SeededEntities)
+				{
+					const Entity entity = data.OwnerScene->GetEntityByUUID(entityID);
+					const BodyRecord* record = entity.IsValid() ? FindRecord(data, entity.GetHandle()) : nullptr;
+					if (record)
+						seedRecord(*record);
+					if (record && record->IsTrigger)
+						continue;
+					// The triggers this entity is inside of.
+					for (const entt::entity triggerHandle : data.TriggerBodies)
+					{
+						if (const BodyRecord* trigger = FindRecord(data, triggerHandle))
+							CountTriggerVisits(data, *trigger, entityID, counts);
+					}
+				}
+			}
+			data.SeedAll = false;
+			data.SeededEntities.clear();
+
+			for (const auto& [key, seed] : counts)
+			{
+				auto it = data.TouchingPairs.find(key);
+				if (it != data.TouchingPairs.end())
+				{
+					it->second.ContactCount = seed.Count;
+					it->second.Unconfirmed = false;
+					continue;
+				}
+				TouchingPair& pair = BeginPair(data, key, seed.A, seed.B, seed.Trigger, seed.Point, seed.Normal, seed.Contact);
+				pair.ContactCount = seed.Count;
+			}
+		}
+
+		// Forces and torques of the fixed step act in every box3d step of it (box3d clears them after each).
+		void ApplyPendingForces(PhysicsWorldData& data, std::vector<entt::entity>& forced)
+		{
+			for (const entt::entity handle : forced)
+			{
+				const BodyRecord* record = FindRecord(data, handle);
+				if (!record || !record->HasPendingForce || !record->InSimulation)
+					continue;
+				if (record->PendingForce != glm::vec3(0.0f))
+					b3Body_ApplyForceToCenter(record->BodyID, ToB3(record->PendingForce), true);
+				if (record->PendingTorque != glm::vec3(0.0f))
+					b3Body_ApplyTorque(record->BodyID, ToB3(record->PendingTorque), true);
+			}
 		}
 
 		// After an entity was moved by physics: with simulatedMove (written back from the simulation), dynamic descendants
@@ -4003,15 +3758,14 @@ namespace Strata
 			});
 		}
 
-		// Moves the character controllers by one step, before Jolt's (see CharacterControllerSet::Step): what they touched joins
-		// this step's contact reports; bodies of their entities and of the entities below them follow at the next step, as after
-		// a teleport (the write-back emits no on_update).
-		void StepCharacters(PhysicsWorldData& data, float timestep)
+		// Moves the character controllers by one step, before box3d's (see CharacterControllerSet::Step): what they touched joins
+		// the touching pairs (reported every step while it lasts, see ResolveCharacterPairs); bodies of their entities and of the
+		// entities below them follow at the next step, as after a teleport (the write-back emits no on_update).
+		void StepCharacters(PhysicsWorldData& data, float timestep, std::vector<PairKey>& reported)
 		{
-			data.CharacterReports.clear();
 			CharacterStepOutput& output = data.CharacterStep;
-			const bool collectContacts = data.Contacts.IsTrackingAll() || !data.ContactInterest.empty();
-			data.Characters->Step(timestep, ToGlm(data.JoltSystem->GetGravity()), collectContacts, output);
+			const bool collectContacts = data.TrackAll || !data.ContactInterest.empty();
+			data.Characters->Step(timestep, ToGlm(b3World_GetGravity(data.World)), collectContacts, output);
 
 			Scene& scene = *data.OwnerScene;
 			for (entt::entity handle : output.Moved)
@@ -4027,23 +3781,22 @@ namespace Strata
 			for (const CharacterContactReport& contact : output.Contacts)
 			{
 				// Wanted like any contact: every one while tracking all, else those of an entity of interest.
-				if (!data.Contacts.IsTrackingAll() && !data.ContactInterest.contains(contact.Controller) && !data.ContactInterest.contains(contact.Other))
+				if (contact.Controller == contact.Other || !IsWanted(data, contact.Controller, contact.Other))
 					continue;
-				ContactReport report;
-				report.EntityA = contact.Controller;
-				report.EntityB = contact.Other;
-				report.Pair = MakePairKey(contact.Controller, contact.Other);
-				report.SortKey = (static_cast<uint64_t>(contact.ControllerBody) << 32) | contact.OtherBody;
-				report.Point = contact.Point;
-				report.Normal = contact.Normal;
-				data.CharacterReports.push_back(report);
-			}
-
-			// The contacts of controllers without a presence body (a full world) are not checked through an awake body.
-			for (UUID entityID : output.WithoutPresenceBody)
-			{
-				if (data.EntityPairs.find(entityID) != data.EntityPairs.end())
-					data.RecheckedEntities.push_back(entityID);
+				const PairKey key = MakePairKey(contact.Controller, contact.Other);
+				auto it = data.TouchingPairs.find(key);
+				TouchingPair& pair = it != data.TouchingPairs.end() ? it->second
+					: BeginPair(data, key, contact.Controller, contact.Other, false, contact.Point, contact.Normal, b3ContactId {});
+				if (pair.CharacterStep != data.StepCount)
+					reported.push_back(key);
+				pair.CharacterStep = data.StepCount;
+				pair.Unconfirmed = false;
+				if (pair.ContactCount == 0)
+				{
+					// Only the controller holds it: its point is the move's.
+					pair.Point = contact.Point;
+					pair.Normal = pair.A == contact.Controller ? contact.Normal : -contact.Normal;
+				}
 			}
 		}
 
@@ -4060,12 +3813,19 @@ namespace Strata
 			glm::vec3 entityPosition;
 			glm::quat entityRotation;
 			glm::vec3 entityScale;
-			if (Math::DecomposeTransform(record.LastWorldTransform, entityPosition, entityRotation, entityScale))
-				data.JoltSystem->GetBodyInterface().SetPositionAndRotation(record.BodyID, ToJoltPosition(entityPosition), ToJolt(entityRotation), JPH::EActivation::DontActivate);
+			if (Math::DecomposeTransform(record.LastWorldTransform, entityPosition, entityRotation, entityScale) && IsWithinCoordinateRange(entityPosition))
+				b3Body_SetTransform(record.BodyID, ToB3(entityPosition), ToB3(entityRotation));
 			RemoveFromSimulation(data, record);
 			record.Suspended = true;
 			UpdatePolling(data, handle, record);
-			data.LeftAfterStep.push_back(record.EntityID);
+		}
+
+		bool ReadBodyPose(b3BodyId body, glm::vec3& outPosition, glm::quat& outRotation)
+		{
+			const b3WorldTransform transform = b3Body_GetTransform(body);
+			outPosition = ToGlm(transform.p);
+			outRotation = ToGlm(transform.q);
+			return IsFinite(outPosition) && IsFinite(outRotation);
 		}
 
 		void WarnNonFinitePose(PhysicsWorldData& data, entt::entity handle, const BodyRecord& record)
@@ -4077,16 +3837,14 @@ namespace Strata
 		// Writes one body's simulated pose to its entity, given its parent's world transform. The entity keeps its own scale:
 		// the pose is composed with its world scale as of the last synchronization (the shape's within tolerance), or its
 		// current one if it was edited without a signal while the body slept, in which case the shape is rebuilt before the
-		// next step (ScaleChanged).
-		void WritePose(const JPH::BodyInterface& bodies, PoseWrite& item)
+		// next step (ScaleChanged). Reads only its body (box3d's getters do not change the world) and writes only its record
+		// and transform, so it may run on worker threads for distinct bodies.
+		void WritePose(PoseWrite& item)
 		{
 			BodyRecord& record = *item.Record;
-			JPH::RVec3 bodyPosition;
-			JPH::Quat bodyRotation;
-			bodies.GetPositionAndRotation(record.BodyID, bodyPosition, bodyRotation);
-			const glm::vec3 position = ToGlm(bodyPosition);
-			const glm::quat rotation = ToGlm(bodyRotation);
-			if (!IsFinite(position) || !IsFinite(rotation))
+			glm::vec3 position;
+			glm::quat rotation;
+			if (!ReadBodyPose(record.BodyID, position, rotation))
 			{
 				item.NonFinite = true;
 				return;
@@ -4114,7 +3872,8 @@ namespace Strata
 			item.Written = true;
 		}
 
-		// Writes the poses of the dynamic bodies that moved (awake, or fell asleep during this step) to their entities.
+		// Writes the poses of the dynamic bodies that moved in the step (box3d's move events, those that fell asleep included)
+		// to their entities.
 		//
 		// Bodies without a dynamic ancestor written in this step (nearly all of them: roots, and bodies below static or
 		// kinematic parents) are written in parallel chunks on the job system, with their parents' world transforms read
@@ -4129,29 +3888,12 @@ namespace Strata
 
 			Scene& scene = *data.OwnerScene;
 			entt::registry& registry = scene.GetRegistry();
-			const JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterfaceNoLock();
 
-			// The bodies that moved, in body index order (Jolt's active list has no fixed order), each once: their bits are set
-			// in a bitmap over the body indices, and only the words that got bits are sorted, read and cleared again, so the
-			// ordering costs what moved, not the world's capacity.
+			// The bodies that moved, in body index order, each once: their bits were set in a bitmap over the body indices
+			// (MarkMoved), and only the words that got bits are sorted, read and cleared again, so the ordering costs what
+			// moved, not the world's size.
 			std::vector<uint64_t>& movedBits = data.MovedBodyBits;
 			std::vector<uint32_t>& movedWords = data.MovedBodyWords;
-			movedWords.clear();
-			const auto markMoved = [&](const JPH::BodyID& bodyID)
-			{
-				const uint32_t index = bodyID.GetIndex();
-				if (index >= data.BodySlots.size())
-					return;
-				uint64_t& word = movedBits[index / 64];
-				if (word == 0)
-					movedWords.push_back(index / 64);
-				word |= uint64_t(1) << (index % 64);
-			};
-			for (const JPH::BodyID& bodyID : GetAwakeBodies(data))
-				markMoved(bodyID);
-			data.Activations.SwapDeactivated(data.DeactivatedBodies);
-			for (const JPH::BodyID& bodyID : data.DeactivatedBodies)
-				markMoved(bodyID);
 			std::sort(movedWords.begin(), movedWords.end());
 			data.LastOrderedSlots = static_cast<uint32_t>(movedWords.size() * 64);
 
@@ -4165,12 +3907,13 @@ namespace Strata
 				{
 					const BodySlot& slot = data.BodySlots[size_t(word) * 64 + static_cast<size_t>(std::countr_zero(bits))];
 					BodyRecord* record = slot.Record;
-					if (!record || record->Type != RigidBodyType::Dynamic || !record->InSimulation)
+					if (!slot.Used || !record || record->Type != RigidBodyType::Dynamic || !record->InSimulation)
 						continue;
 					record->WriteBackPass = data.WriteBackPass;
 					writes.push_back(PoseWrite { record, slot.Entity });
 				}
 			}
+			movedWords.clear();
 			data.LastWrittenBodies = static_cast<uint32_t>(writes.size());
 
 			// Bodies below another body written in this step wait for its pose (nested dynamics, serial); the others get their
@@ -4222,13 +3965,13 @@ namespace Strata
 				JobSystem::ParallelFor(count, batchSize, [&](uint32_t begin, uint32_t end)
 				{
 					for (uint32_t index = begin; index < end; index++)
-						WritePose(bodies, writes[index]);
+						WritePose(writes[index]);
 				});
 			}
 			else
 			{
 				for (PoseWrite& write : writes)
-					WritePose(bodies, write);
+					WritePose(write);
 			}
 
 			// The outcomes, in body order on the main thread.
@@ -4262,12 +4005,9 @@ namespace Strata
 				BodyRecord& record = *FindRecord(data, handle); // Listed above
 				const Entity entity(handle, &scene);
 
-				JPH::RVec3 bodyPosition;
-				JPH::Quat bodyRotation;
-				bodies.GetPositionAndRotation(record.BodyID, bodyPosition, bodyRotation);
-				const glm::vec3 position = ToGlm(bodyPosition);
-				const glm::quat rotation = ToGlm(bodyRotation);
-				if (!IsFinite(position) || !IsFinite(rotation))
+				glm::vec3 position;
+				glm::quat rotation;
+				if (!ReadBodyPose(record.BodyID, position, rotation))
 				{
 					WarnNonFinitePose(data, handle, record);
 					continue;
@@ -4293,70 +4033,22 @@ namespace Strata
 			}
 		}
 
-		// Steps that overflow the body pair or contact buffers drop contacts: counted, warned about once per world, and recorded
-		// as twice the capacity that overflowed, so that the scene's next world grows.
-		void ReportUpdateErrors(PhysicsWorldData& data, JPH::EPhysicsUpdateError errors)
-		{
-			const JPH::EPhysicsUpdateError contactErrors = JPH::EPhysicsUpdateError::ManifoldCacheFull | JPH::EPhysicsUpdateError::ContactConstraintsFull;
-			if ((errors & (contactErrors | JPH::EPhysicsUpdateError::BodyPairCacheFull)) != JPH::EPhysicsUpdateError::None)
-				data.ContactOverflowSteps++;
-			const auto grow = [](uint32_t& demand, uint32_t capacity, uint32_t limit)
-			{
-				demand = std::max(demand, static_cast<uint32_t>(std::min<uint64_t>(uint64_t(capacity) * 2, limit)));
-			};
-			if ((errors & JPH::EPhysicsUpdateError::BodyPairCacheFull) != JPH::EPhysicsUpdateError::None)
-				grow(data.Demand.BodyPairs, data.Settings.MaxBodyPairs, PhysicsCapacitySettings::c_MaxBodyPairsLimit);
-			if ((errors & contactErrors) != JPH::EPhysicsUpdateError::None)
-				grow(data.Demand.ContactConstraints, data.Settings.MaxContactConstraints, PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
-
-			const auto reportOnce = [&](JPH::EPhysicsUpdateError error, const char* message, bool automatic, const char* capacity)
-			{
-				if ((errors & error) == JPH::EPhysicsUpdateError::None || (data.ReportedErrors & error) != JPH::EPhysicsUpdateError::None)
-					return;
-				data.ReportedErrors = data.ReportedErrors | error;
-				ST_CORE_WARN("Physics: scene '{}': {}; contacts were dropped (reported once per world; {})", data.OwnerScene->GetName(), message,
-					automatic ? "the scene's next play start grows the automatic capacity" : fmt::format("raise the scene's PhysicsCapacity.{}", capacity));
-			};
-
-			reportOnce(JPH::EPhysicsUpdateError::ManifoldCacheFull, "the contact manifold cache is full", data.AutomaticMaxContactConstraints, "MaxContactConstraints");
-			reportOnce(JPH::EPhysicsUpdateError::BodyPairCacheFull, "the body pair cache is full", data.AutomaticMaxBodyPairs, "MaxBodyPairs");
-			reportOnce(JPH::EPhysicsUpdateError::ContactConstraintsFull, "the contact constraint buffer is full", data.AutomaticMaxContactConstraints,
-				"MaxContactConstraints");
-		}
-
 		//////////////////////////////////////////////////////////////////////////
 		// Queries
 		//////////////////////////////////////////////////////////////////////////
 
-		// Query filter skipping an ignored body, triggers (unless requested) and bodies of entities that are destroyed or about
-		// to be. Queries run on the main thread, so reading the scene is safe.
-		class QueryBodyFilter final : public JPH::BodyFilter
+		// Whether a query reports a shape: not a trigger (unless requested), not the ignored entity's, not of an entity that is
+		// destroyed or about to be. Queries run on the main thread, so reading the scene is safe.
+		const ShapeSlot* AcceptQueryShape(const PhysicsWorldData& data, b3ShapeId shape, UUID ignoredEntity, bool includeTriggers)
 		{
-		public:
-			QueryBodyFilter(const Scene& scene, const JPH::BodyID& ignoredBody, bool includeTriggers)
-				: m_Scene(scene), m_IgnoredBody(ignoredBody), m_IncludeTriggers(includeTriggers)
-			{
-			}
+			const ShapeSlot* slot = ResolveShape(data, shape);
+			if (!slot || (!includeTriggers && slot->Sensor) || (ignoredEntity != UUID::Null() && slot->Entity == ignoredEntity))
+				return nullptr;
+			const Entity entity = data.OwnerScene->GetEntityByUUID(slot->Entity);
+			return entity.IsValid() && !IsPendingDestroyInHierarchy(*data.OwnerScene, entity) ? slot : nullptr;
+		}
 
-			bool ShouldCollide(const JPH::BodyID& bodyID) const override
-			{
-				return bodyID != m_IgnoredBody;
-			}
-
-			bool ShouldCollideLocked(const JPH::Body& body) const override
-			{
-				if (!m_IncludeTriggers && body.IsSensor())
-					return false;
-				const Entity entity = m_Scene.GetEntityByUUID(UUID(body.GetUserData()));
-				return entity.IsValid() && !IsPendingDestroyInHierarchy(m_Scene, entity);
-			}
-		private:
-			const Scene& m_Scene;
-			JPH::BodyID m_IgnoredBody;
-			bool m_IncludeTriggers;
-		};
-
-		bool MakeRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, JPH::RRayCast& outRay, float& outLength)
+		bool MakeRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, glm::vec3& outTranslation, float& outLength)
 		{
 			if (!IsFinite(origin) || !IsFinite(direction) || std::isnan(maxDistance) || !(maxDistance > 0.0f))
 				return false;
@@ -4366,7 +4058,7 @@ namespace Strata
 				return false;
 
 			outLength = std::min(maxDistance, c_MaxRaycastDistance);
-			outRay = JPH::RRayCast(ToJoltPosition(origin), ToJolt(direction / directionLength * outLength));
+			outTranslation = direction / directionLength * outLength;
 			return true;
 		}
 
@@ -4380,56 +4072,103 @@ namespace Strata
 			return merged != data.MergedOwners.end() ? Entity(merged->second, data.OwnerScene) : Entity();
 		}
 
-		JPH::BodyID GetIgnoredBody(const PhysicsWorldData& data, Entity ignoreEntity)
+		// The entity whose body (and character controller) a query ignores for ignoreEntity: the owner of its colliders' body.
+		UUID GetIgnoredEntity(const PhysicsWorldData& data, Entity ignoreEntity)
 		{
+			if (!ignoreEntity.IsValid() || ignoreEntity.GetScene() != data.OwnerScene)
+				return UUID::Null();
 			const Entity owner = GetBodyEntityOf(data, ignoreEntity);
-			const BodyRecord* record = owner.IsValid() ? FindRecord(data, owner.GetHandle()) : nullptr;
-			return record ? record->BodyID : JPH::BodyID();
+			return owner.IsValid() ? owner.GetUUID() : ignoreEntity.GetUUID();
 		}
 
-		std::optional<RaycastHit> MakeRaycastHit(const PhysicsWorldData& data, const JPH::RRayCast& ray, float length, const JPH::RayCastResult& result)
+		struct RayQuery
 		{
-			JPH::BodyLockRead lock(data.JoltSystem->GetBodyLockInterface(), result.mBodyID);
-			if (!lock.Succeeded())
-				return std::nullopt;
+			const PhysicsWorldData* Data = nullptr;
+			UUID Ignored = UUID::Null();
+			bool IncludeTriggers = false;
+			bool All = false;
+			// The closest hit, or (All) the closest hit per entity.
+			struct Hit
+			{
+				UUID Entity = UUID::Null();
+				uint64_t BodyKey = 0;
+				glm::vec3 Point = glm::vec3(0.0f);
+				glm::vec3 Normal = glm::vec3(0.0f);
+				float Fraction = 2.0f;
+			};
+			Hit Closest;
+			std::unordered_map<UUID, Hit> PerEntity;
+		};
 
-			const JPH::Body& body = lock.GetBody();
-			const JPH::RVec3 point = ray.GetPointOnRay(result.mFraction);
+		float RayCallback(b3ShapeId shape, b3Pos point, b3Vec3 normal, float fraction, uint64_t, int, int, void* context)
+		{
+			RayQuery& query = *static_cast<RayQuery*>(context);
+			const ShapeSlot* slot = AcceptQueryShape(*query.Data, shape, query.Ignored, query.IncludeTriggers);
+			if (!slot)
+				return -1.0f;
+			// A ray starting inside a convex collider passes out of it without a hit.
+			if (slot->Convex && !(fraction > 0.0f))
+				return -1.0f;
+			RayQuery::Hit hit { slot->Entity, slot->BodyKey, ToGlm(point), ToGlm(normal), fraction };
+			if (!query.All)
+			{
+				if (fraction < query.Closest.Fraction)
+					query.Closest = hit;
+				return fraction; // Only closer hits from now on
+			}
+			auto [it, inserted] = query.PerEntity.try_emplace(slot->Entity, hit);
+			if (!inserted && fraction < it->second.Fraction)
+				it->second = hit;
+			return 1.0f;
+		}
 
+		std::optional<RaycastHit> MakeRaycastHit(const PhysicsWorldData& data, const RayQuery::Hit& found, float length)
+		{
 			RaycastHit hit;
-			hit.EntityID = UUID(body.GetUserData());
-			hit.HitEntity = data.OwnerScene->GetEntityByUUID(hit.EntityID);
-			hit.Point = ToGlm(point);
-			hit.Normal = ToGlm(body.GetWorldSpaceSurfaceNormal(result.mSubShapeID2, point));
-			hit.Distance = result.mFraction * length;
+			hit.EntityID = found.Entity;
+			hit.HitEntity = data.OwnerScene->GetEntityByUUID(found.Entity);
+			hit.Point = found.Point;
+			hit.Normal = found.Normal;
+			hit.Distance = found.Fraction * length;
 			if (!hit.HitEntity.IsValid() || !IsFinite(hit.Point) || !IsFinite(hit.Normal))
 				return std::nullopt;
 			return hit;
 		}
 
-		std::vector<Entity> CollectOverlaps(const PhysicsWorldData& data, const JPH::Shape& shape, const glm::vec3& center, const glm::quat& rotation, uint32_t layerMask, bool includeTriggers)
+		// The entities whose bodies overlap a convex proxy around `center`, in body order (deterministic).
+		std::vector<Entity> CollectOverlaps(const PhysicsWorldData& data, const glm::vec3& center, const b3ShapeProxy& proxy, uint32_t layerMask, bool includeTriggers)
 		{
-			JPH::ClosestHitPerBodyCollisionCollector<JPH::CollideShapeCollector> collector;
-			const JPH::CollideShapeSettings settings;
-			const JPH::BroadPhaseLayerFilter broadPhaseFilter;
-			const LayerMaskFilter layerFilter(layerMask);
-			const QueryBodyFilter bodyFilter(*data.OwnerScene, JPH::BodyID(), includeTriggers);
-			const JPH::RMat44 transform = JPH::RMat44::sRotationTranslation(ToJolt(rotation), ToJoltPosition(center));
-			data.JoltSystem->GetNarrowPhaseQuery().CollideShape(&shape, JPH::Vec3::sOne(), transform, settings, ToJoltPosition(center), collector, broadPhaseFilter, layerFilter, bodyFilter);
+			struct OverlapQuery
+			{
+				const PhysicsWorldData* Data = nullptr;
+				bool IncludeTriggers = false;
+				std::vector<std::pair<uint64_t, UUID>> Found;
+			} query { &data, includeTriggers, {} };
+			b3World_OverlapShape(data.World, ToB3(center), &proxy, PhysicsFilters::MakeQueryFilter(layerMask), [](b3ShapeId shape, void* context)
+			{
+				OverlapQuery& overlap = *static_cast<OverlapQuery*>(context);
+				if (const ShapeSlot* slot = AcceptQueryShape(*overlap.Data, shape, UUID::Null(), overlap.IncludeTriggers))
+					overlap.Found.emplace_back(slot->BodyKey, slot->Entity);
+				return true;
+			}, &query);
 
-			std::vector<JPH::BodyID> bodies;
-			bodies.reserve(collector.mHits.size());
-			for (const JPH::CollideShapeResult& hit : collector.mHits)
-				bodies.push_back(hit.mBodyID2);
-			std::sort(bodies.begin(), bodies.end());
-			bodies.erase(std::unique(bodies.begin(), bodies.end()), bodies.end());
+			// The body index (the key's low half) orders them as the bodies were made, whatever order the tree visits them in.
+			std::sort(query.Found.begin(), query.Found.end(), [](const auto& a, const auto& b)
+			{
+				const uint32_t indexA = static_cast<uint32_t>(a.first);
+				const uint32_t indexB = static_cast<uint32_t>(b.first);
+				return indexA != indexB ? indexA < indexB : a.first < b.first;
+			});
+			query.Found.erase(std::unique(query.Found.begin(), query.Found.end()), query.Found.end());
 
 			std::vector<Entity> entities;
-			entities.reserve(bodies.size());
-			const JPH::BodyInterface& bodyInterface = data.JoltSystem->GetBodyInterface();
-			for (const JPH::BodyID& bodyID : bodies)
+			entities.reserve(query.Found.size());
+			std::unordered_set<UUID> seen; // An entity may have a body and a character controller's presence body
+			for (const auto& [key, entityID] : query.Found)
 			{
-				if (const Entity entity = data.OwnerScene->GetEntityByUUID(UUID(bodyInterface.GetUserData(bodyID))))
+				if (!seen.insert(entityID).second)
+					continue;
+				if (const Entity entity = data.OwnerScene->GetEntityByUUID(entityID))
 					entities.push_back(entity);
 			}
 			return entities;
@@ -4441,6 +4180,28 @@ namespace Strata
 	// PhysicsWorld
 	////////////////////////////////////////////////////////////////////////////////
 
+	namespace
+	{
+
+		// The bodies of a scene that can move when a world is created for it: rigid bodies that are not static, and character
+		// controllers' presence bodies. box3d reserves its static and moving storage apart.
+		uint32_t CountMovingCandidates(const Scene& scene)
+		{
+			uint64_t count = CharacterControllerSet::CountCandidates(scene);
+			const entt::registry& registry = scene.GetRegistry();
+			if (const auto* rigidBodies = registry.storage<RigidBodyComponent>())
+			{
+				for (const entt::entity handle : static_cast<const entt::sparse_set&>(*rigidBodies))
+				{
+					if (rigidBodies->get(handle).Type != RigidBodyType::Static)
+						count++;
+				}
+			}
+			return static_cast<uint32_t>(std::min<uint64_t>(count, UINT32_MAX));
+		}
+
+	}
+
 	PhysicsWorld::PhysicsWorld(Scene& scene, const PhysicsSettings& settings, const PhysicsCapacityDemand& demand, PhysicsBuildMode mode)
 		: m_Data(CreateScope<PhysicsWorldData>(scene, SanitizeSettings(ResolveCapacities(settings, CountBodyCandidates(scene), demand))))
 	{
@@ -4448,34 +4209,41 @@ namespace Strata
 
 		PhysicsWorldData& data = *m_Data;
 		data.AutomaticMaxBodies = settings.MaxBodies == 0;
-		data.AutomaticMaxBodyPairs = settings.MaxBodyPairs == 0;
 		data.AutomaticMaxContactConstraints = settings.MaxContactConstraints == 0;
-		data.AutomaticTempAllocatorSize = settings.TempAllocatorSize == 0;
-		data.ReservedBytes = EstimateReservedBytes(data.Settings);
-		data.Allocator = CreateScope<JPH::TempAllocatorImplWithMallocFallback>(data.Settings.TempAllocatorSize);
-		data.Jobs = CreatePhysicsJobSystem(&data.JobCounters);
-		data.JoltSystem = CreateScope<JPH::PhysicsSystem>();
-		data.JoltSystem->Init(data.Settings.MaxBodies + c_BroadPhaseAnchorCount, 0, data.Settings.MaxBodyPairs, data.Settings.MaxContactConstraints, data.BroadPhaseLayers,
-			data.ObjectVsBroadPhase, data.LayerPairFilter);
-		data.BodySlots.resize(data.JoltSystem->GetMaxBodies());
-		data.MovedBodyBits.assign((data.BodySlots.size() + 63) / 64, 0);
-		data.Contacts.Initialize(data.JoltSystem->GetMaxBodies());
-		data.JoltSystem->SetContactListener(&data.Contacts);
-		data.JoltSystem->SetBodyActivationListener(&data.Activations);
-		AddBroadPhaseAnchors(data);
+		data.RoomBodies = data.Settings.MaxBodies;
+		ST_CORE_VERIFY(HasFreeWorld(), "PhysicsWorld: box3d holds at most {} worlds at once; check PhysicsWorld::HasFreeWorld first", B3_MAX_WORLDS);
 
+		b3WorldDef definition = b3DefaultWorldDef();
 		const glm::vec3 gravity = scene.GetSettings().Gravity;
 		if (IsFinite(gravity))
 		{
-			data.JoltSystem->SetGravity(ToJolt(gravity));
+			definition.gravity = ToB3(gravity);
 		}
 		else
 		{
 			ST_CORE_WARN("Physics: scene '{}' has a non-finite gravity; the default is used", scene.GetName());
-			data.JoltSystem->SetGravity(ToJolt(SceneSettings().Gravity));
+			definition.gravity = ToB3(SceneSettings().Gravity);
 		}
+		definition.enableSleep = true;
+		definition.enableContinuous = true;
+		// The room box3d reserves at once (see LibraryRoomBodies), split between its static and moving storage like the
+		// scene's bodies.
+		const uint32_t candidateCount = CountBodyCandidates(scene);
+		const PhysicsSettings automaticRoom = ResolveCapacities(PhysicsSettings(), candidateCount, demand);
+		data.LibraryRoomBodies = std::min(data.RoomBodies, automaticRoom.MaxBodies);
+		data.LibraryRoomContacts = std::min(data.Settings.MaxContactConstraints, automaticRoom.MaxContactConstraints);
+		const uint64_t candidates = std::max<uint64_t>(candidateCount, 1);
+		const uint64_t moving = std::min<uint64_t>(CountMovingCandidates(scene), candidates);
+		const uint64_t movingRoom = std::min<uint64_t>(data.LibraryRoomBodies, (static_cast<uint64_t>(data.LibraryRoomBodies) * moving + candidates - 1) / candidates);
+		definition.capacity.dynamicBodyCount = static_cast<int>(movingRoom);
+		definition.capacity.staticBodyCount = static_cast<int>(data.LibraryRoomBodies - movingRoom);
+		definition.capacity.dynamicShapeCount = definition.capacity.dynamicBodyCount;
+		definition.capacity.staticShapeCount = definition.capacity.staticBodyCount;
+		definition.capacity.contactCount = static_cast<int>(data.LibraryRoomContacts);
+		data.Tasks.Configure(definition);
+		data.World = b3CreateWorld(&definition);
 
-		data.Characters = CreateScope<CharacterControllerSet>(scene, *data.JoltSystem, data.Settings);
+		data.Characters = CreateScope<CharacterControllerSet>(scene, data.World, data.Settings);
 		ConnectSignals(data);
 		RememberMeshState(data); // Before the bodies read mesh data: later changes are noticed against it
 		for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
@@ -4490,10 +4258,13 @@ namespace Strata
 		if (mode == PhysicsBuildMode::Immediate)
 		{
 			ApplyChanges(data);
-			// Bodies were inserted in batches; rebuilding the broad phase trees once makes the first queries and steps fast.
-			data.JoltSystem->OptimizeBroadPhase();
 			data.Built = true;
 		}
+	}
+
+	bool PhysicsWorld::HasFreeWorld()
+	{
+		return b3GetWorldCount() < B3_MAX_WORLDS;
 	}
 
 	bool PhysicsWorld::BuildSlice(uint32_t maxOwners)
@@ -4519,7 +4290,6 @@ namespace Strata
 		if (data.PendingBuildIndex < data.PendingBuild.size())
 			return false;
 		data.PendingBuild = {};
-		data.JoltSystem->OptimizeBroadPhase();
 		data.Built = true;
 		return true;
 	}
@@ -4535,20 +4305,10 @@ namespace Strata
 		const uint64_t bodies = std::max(bodyCount, demand.Bodies);
 		if (resolved.MaxBodies == 0)
 			resolved.MaxBodies = ClampCapacity(std::max<uint64_t>(c_MinAutomaticBodies, NextPowerOfTwo(2 * bodies)), PhysicsCapacitySettings::c_MaxBodiesLimit);
-		if (resolved.MaxBodyPairs == 0)
-		{
-			resolved.MaxBodyPairs = ClampCapacity(std::max<uint64_t>(uint64_t(c_BodyPairsPerBody) * resolved.MaxBodies, demand.BodyPairs),
-				PhysicsCapacitySettings::c_MaxBodyPairsLimit);
-		}
 		if (resolved.MaxContactConstraints == 0)
 		{
-			resolved.MaxContactConstraints = ClampCapacity(std::max({ uint64_t(c_MinAutomaticContactConstraints), c_ContactConstraintsPerBody * bodies,
+			resolved.MaxContactConstraints = ClampCapacity(std::max({ uint64_t(c_ContactsPerBody) * c_MinAutomaticBodies, c_ContactsPerBody * bodies,
 				uint64_t(demand.ContactConstraints) }), PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
-		}
-		if (resolved.TempAllocatorSize == 0)
-		{
-			const uint64_t scratch = c_TempAllocatorBaseSize + c_TempBytesPerBody * resolved.MaxBodies + c_TempBytesPerContactConstraint * resolved.MaxContactConstraints;
-			resolved.TempAllocatorSize = static_cast<uint32_t>(std::min<uint64_t>(std::max(scratch, c_MinTempAllocatorSize), UINT32_MAX));
 		}
 		return resolved;
 	}
@@ -4556,8 +4316,7 @@ namespace Strata
 	uint64_t PhysicsWorld::EstimateReservedBytes(const PhysicsSettings& settings)
 	{
 		const PhysicsSettings resolved = SanitizeSettings(settings);
-		return c_ReservedBytesPerBody * resolved.MaxBodies + c_ReservedBytesPerBodyPair * resolved.MaxBodyPairs
-			+ c_ReservedBytesPerContactConstraint * resolved.MaxContactConstraints + resolved.TempAllocatorSize;
+		return c_ReservedBytesBase + c_ReservedBytesPerBody * resolved.MaxBodies + c_ReservedBytesPerContact * resolved.MaxContactConstraints;
 	}
 
 	uint32_t PhysicsWorld::CountBodyCandidates(const Scene& scene)
@@ -4589,9 +4348,17 @@ namespace Strata
 
 	PhysicsWorld::~PhysicsWorld()
 	{
-		m_Data->Connections.clear();
-		m_Data->Characters.reset();
-		DestroyAllBodies(*m_Data);
+		PhysicsWorldData& data = *m_Data;
+		data.Connections.clear();
+		data.Characters.reset();
+		// The world takes every body and shape with it at once; what the shapes pointed to (cooked meshes, compounds) goes
+		// with the records afterwards.
+		if (B3_IS_NON_NULL(data.World))
+			b3DestroyWorld(data.World);
+		data.World = b3_nullWorldId;
+		data.Bodies.clear();
+		data.RecordIndex.clear();
+		data.RecordOverflow.clear();
 	}
 
 	void PhysicsWorld::SetMeshProvider(Ref<PhysicsMeshProvider> provider)
@@ -4623,12 +4390,20 @@ namespace Strata
 
 	void PhysicsWorld::SetTrackAllContacts(bool trackAll)
 	{
-		m_Data->Contacts.SetTrackAll(trackAll);
+		PhysicsWorldData& data = *m_Data;
+		if (data.TrackAll == trackAll)
+			return;
+		data.TrackAll = trackAll;
+		// Pairs that touch now begin after the next step; pairs nobody wants any more end then.
+		if (trackAll)
+			data.SeedAll = true;
+		else
+			data.CheckAllWanted = true;
 	}
 
 	bool PhysicsWorld::IsTrackingAllContacts() const
 	{
-		return m_Data->Contacts.IsTrackingAll();
+		return m_Data->TrackAll;
 	}
 
 	void PhysicsWorld::SetContactInterest(UUID entityID, bool interested)
@@ -4636,14 +4411,12 @@ namespace Strata
 		PhysicsWorldData& data = *m_Data;
 		if (interested ? !data.ContactInterest.insert(entityID).second : data.ContactInterest.erase(entityID) == 0)
 			return;
-		const Entity entity = data.OwnerScene->GetEntityByUUID(entityID);
-		const BodyRecord* record = entity.IsValid() ? FindRecord(data, entity.GetHandle()) : nullptr;
-		if (record && record->HasBody())
-			data.Contacts.SetBodyInterest(record->BodyID, interested);
-		// A character controller's triggers and the bodies landing on it reach it through its presence body.
-		const uint32_t presenceBody = data.Characters->GetPresenceBody(entityID);
-		if (presenceBody != c_NoCharacterBody)
-			data.Contacts.SetBodyInterest(JPH::BodyID(presenceBody), interested);
+		if (data.TrackAll)
+			return; // Every pair is tracked anyway
+		if (interested)
+			data.SeededEntities.push_back(entityID);
+		else
+			data.UnwantedEntities.push_back(entityID);
 	}
 
 	void PhysicsWorld::ApplyPendingChanges()
@@ -4656,7 +4429,8 @@ namespace Strata
 		const PhysicsWorldData& data = *m_Data;
 		PhysicsCapacityInfo info;
 		info.Bodies = GetUsedBodySlots(data);
-		info.MaxBodies = data.Settings.MaxBodies;
+		info.MaxBodies = data.RoomBodies;
+		info.GrowthLimit = GetGrowthLimit(data.Settings);
 		info.WaitingForSlot = data.SlotWaiterCount;
 		info.PendingOther = data.FailureCounts[static_cast<size_t>(BuildFailure::DegenerateTransform)] + data.FailureCounts[static_cast<size_t>(BuildFailure::MissingMesh)];
 		const PhysicsWorldData::UpdateCounters lastUpdate = GetLastUpdateCounters(data);
@@ -4664,8 +4438,26 @@ namespace Strata
 		info.RemovedLastUpdate = lastUpdate.BodiesRemoved;
 		info.GrowthCount = data.GrowthCount;
 		info.LastGrowthMs = data.LastGrowthMs;
-		info.ReservedBytes = data.ReservedBytes;
+		info.ReservedBytes = GetReservedBytes();
 		return info;
+	}
+
+	uint64_t PhysicsWorld::GetReservedBytes() const
+	{
+		// Constant time (the editor reads it every frame): the estimate of what box3d reserved and the most it held since
+		// (b3World_GetMaxCapacity keeps them as values); counting its bytes (b3World_GetCounters) walks every island, sensor
+		// and hull.
+		const PhysicsWorldData& data = *m_Data;
+		const b3Capacity held = b3World_GetMaxCapacity(data.World);
+		PhysicsSettings room = data.Settings;
+		room.MaxBodies = std::max<uint32_t>(data.LibraryRoomBodies, static_cast<uint32_t>(std::max(held.staticBodyCount, 0) + std::max(held.dynamicBodyCount, 0)));
+		room.MaxContactConstraints = std::max<uint32_t>(data.LibraryRoomContacts, static_cast<uint32_t>(std::max(held.contactCount, 0)));
+		return EstimateReservedBytes(room);
+	}
+
+	uint64_t PhysicsWorld::CountLibraryBytes() const
+	{
+		return static_cast<uint64_t>(std::max<int64_t>(b3World_GetCounters(m_Data->World).byteCount, 0));
 	}
 
 	void PhysicsWorld::Reserve(uint32_t bodies)
@@ -4681,11 +4473,10 @@ namespace Strata
 	bool PhysicsWorld::Grow()
 	{
 		PhysicsWorldData& data = *m_Data;
+		const uint32_t growths = data.GrowthCount;
 		ApplyChanges(data);
-		if (!NeedsGrowth(data) || !GrowWorld(data))
-			return false;
-		ApplyChanges(data);
-		return true;
+		GrowRoom(data, data.ReservedBodies);
+		return data.GrowthCount != growths;
 	}
 
 	bool PhysicsWorld::HasBody(Entity entity) const
@@ -4698,7 +4489,7 @@ namespace Strata
 		if (!entity.IsValid() || entity.GetScene() != m_Data->OwnerScene)
 			return c_NoBodyID;
 		const BodyRecord* record = FindRecord(*m_Data, entity.GetHandle());
-		return record && record->HasBody() ? static_cast<uint64_t>(record->BodyID.GetIndexAndSequenceNumber()) : c_NoBodyID;
+		return record && record->HasBody() ? GetBodyKey(record->BodyID) : c_NoBodyID;
 	}
 
 	Entity PhysicsWorld::GetBodyEntity(Entity entity) const
@@ -4718,9 +4509,8 @@ namespace Strata
 		const auto millisecondsBetween = [](Clock::time_point start, Clock::time_point end) { return std::chrono::duration<float, std::milli>(end - start).count(); };
 		const Clock::time_point startTime = Clock::now();
 		ApplyChanges(data);
-		// Bodies that found the world full, or bodies reserved for, get room before the step (see "Capacities").
-		if (NeedsGrowth(data) && GrowWorld(data))
-			ApplyChanges(data);
+		// Room reserved for bodies to come (PhysicsWorld::Reserve) counts before the step (see "Capacities").
+		GrowRoom(data, data.ReservedBodies);
 		data.HeldLastStep = HoldForMeshes(data, timestep);
 		if (data.HeldLastStep)
 		{
@@ -4729,32 +4519,60 @@ namespace Strata
 			return;
 		}
 
-		data.StepCount++; // Identifies this step in the contact pairs' check and report marks
+		data.StepCount++; // Identifies this step in the contact pairs' marks
 		SyncEntitiesToBodies(data, timestep);
-		StepCharacters(data, timestep);
-
+		std::vector<PairKey> characterPairs;
+		StepCharacters(data, timestep, characterPairs);
 		CollectCheckedPairs(data);
-		data.Activations.Clear();
-		data.Contacts.BeginStep();
-		const Clock::time_point joltStart = Clock::now();
-		{
-			ST_PROFILE_SCOPE("PhysicsWorld::Simulate - Jolt");
-			const JPH::EPhysicsUpdateError errors = data.JoltSystem->Update(timestep, static_cast<int>(data.Settings.CollisionSteps), data.Allocator.get(), data.Jobs.get());
-			if (errors != JPH::EPhysicsUpdateError::None)
-				ReportUpdateErrors(data, errors);
-		}
-		const Clock::time_point joltEnd = Clock::now();
+		const Clock::time_point stepsStart = Clock::now();
 
-		data.LeftAfterStep.clear();
+		// CollisionSteps box3d steps of the fixed step; forces act in each, and each one's events are read before the next.
+		const uint32_t steps = data.Settings.CollisionSteps;
+		const float subStep = timestep / static_cast<float>(steps);
+		float libraryTime = 0.0f;
+		for (uint32_t step = 0; step < steps; step++)
+		{
+			ApplyPendingForces(data, data.ForcedBodies);
+			const Clock::time_point libraryStart = Clock::now();
+			{
+				ST_PROFILE_SCOPE("PhysicsWorld::Simulate - box3d");
+				b3World_Step(data.World, subStep, c_SolverSubSteps);
+			}
+			libraryTime += millisecondsBetween(libraryStart, Clock::now());
+			data.HasStepped = true;
+			ProcessStepEvents(data, step + 1 == steps);
+		}
+		for (const entt::entity handle : data.ForcedBodies)
+		{
+			if (BodyRecord* record = FindRecord(data, handle))
+			{
+				record->PendingForce = glm::vec3(0.0f);
+				record->PendingTorque = glm::vec3(0.0f);
+				record->HasPendingForce = false;
+			}
+		}
+		data.ForcedBodies.clear();
+		const Clock::time_point stepsEnd = Clock::now();
+
 		WriteBackDynamicBodies(data);
 		const Clock::time_point writeBackEnd = Clock::now();
-		ProcessContacts(data);
+		ResolveCharacterPairs(data, characterPairs);
+		ResolveRecheckedPairs(data);
+		EndUnwantedPairs(data);
+		SeedWantedPairs(data);
+		RefreshCheckedPairs(data);
+		// Contacts beyond the room reserved for them: the scene's next world reserves what this one held.
+		const b3Capacity held = b3World_GetMaxCapacity(data.World);
+		if (held.contactCount > 0 && static_cast<uint32_t>(held.contactCount) > data.Settings.MaxContactConstraints)
+			data.Demand.ContactConstraints = std::max(data.Demand.ContactConstraints, std::min(NextPowerOfTwo(static_cast<uint64_t>(held.contactCount)),
+				PhysicsCapacitySettings::c_MaxContactConstraintsLimit));
 		const Clock::time_point endTime = Clock::now();
 
-		data.LastSyncTime = millisecondsBetween(startTime, joltStart);
-		data.LastJoltTime = millisecondsBetween(joltStart, joltEnd);
-		data.LastWriteBackTime = millisecondsBetween(joltEnd, writeBackEnd);
-		data.LastContactTime = millisecondsBetween(writeBackEnd, endTime);
+		const float eventTime = millisecondsBetween(stepsStart, stepsEnd) - libraryTime;
+		data.LastSyncTime = millisecondsBetween(startTime, stepsStart);
+		data.LastLibraryTime = libraryTime;
+		data.LastWriteBackTime = millisecondsBetween(stepsEnd, writeBackEnd);
+		data.LastContactTime = eventTime + millisecondsBetween(writeBackEnd, endTime);
 		data.LastStepTime = millisecondsBetween(startTime, endTime);
 	}
 
@@ -4775,14 +4593,14 @@ namespace Strata
 		if (!IsFinite(gravity))
 			return false;
 
-		m_Data->JoltSystem->SetGravity(ToJolt(gravity));
+		b3World_SetGravity(m_Data->World, ToB3(gravity));
 		WakeAllBodies(*m_Data);
 		return true;
 	}
 
 	glm::vec3 PhysicsWorld::GetGravity() const
 	{
-		return ToGlm(m_Data->JoltSystem->GetGravity());
+		return ToGlm(b3World_GetGravity(m_Data->World));
 	}
 
 	bool PhysicsWorld::DoLayersCollide(uint32_t layerA, uint32_t layerB) const
@@ -4792,10 +4610,22 @@ namespace Strata
 
 	void PhysicsWorld::SetLayerCollisionMasks(const std::array<uint32_t, c_PhysicsLayerCount>& masks)
 	{
-		if (m_Data->Settings.LayerCollisionMasks == masks)
+		PhysicsWorldData& data = *m_Data;
+		if (data.Settings.LayerCollisionMasks == masks)
 			return;
-		m_Data->Settings.LayerCollisionMasks = masks;
-		WakeAllBodies(*m_Data);
+		data.Settings.LayerCollisionMasks = masks;
+		// box3d keeps a filter per shape: every shape takes its layer's new mask (rare, O(shapes)), and box3d drops and finds
+		// their pairs again.
+		for (auto& [handle, record] : data.Bodies)
+		{
+			if (!record.HasBody())
+				continue;
+			const b3Filter filter = PhysicsFilters::MakeShapeFilter(record.Layer, masks);
+			for (const b3ShapeId shape : record.Shapes)
+				b3Shape_SetFilter(shape, filter, true);
+		}
+		data.Characters->RefreshFilters();
+		WakeAllBodies(data);
 	}
 
 	glm::vec3 PhysicsWorld::GetLinearVelocity(Entity entity) const
@@ -4803,7 +4633,31 @@ namespace Strata
 		const BodyRecord* record = FindSimulatedRecord(*m_Data, entity);
 		if (!record || record->Type == RigidBodyType::Static)
 			return glm::vec3(0.0f);
-		return ToGlm(m_Data->JoltSystem->GetBodyInterface().GetLinearVelocity(record->BodyID));
+		return ToGlm(b3Body_GetLinearVelocity(record->BodyID));
+	}
+
+	namespace
+	{
+
+		void WakeRecord(PhysicsWorldData& data, const BodyRecord& record)
+		{
+			b3Body_SetAwake(record.BodyID, true);
+			MarkAwake(data, record.BodyID);
+		}
+
+		// Queues a force or torque for the next fixed step (see ApplyPendingForces).
+		void AddPendingForce(PhysicsWorldData& data, Entity entity, BodyRecord& record, const glm::vec3& force, const glm::vec3& torque)
+		{
+			if (!record.HasPendingForce)
+			{
+				record.HasPendingForce = true;
+				data.ForcedBodies.push_back(entity.GetHandle());
+			}
+			record.PendingForce += force;
+			record.PendingTorque += torque;
+			WakeRecord(data, record);
+		}
+
 	}
 
 	bool PhysicsWorld::SetLinearVelocity(Entity entity, const glm::vec3& velocity)
@@ -4812,9 +4666,8 @@ namespace Strata
 		if (!record || !IsFinite(velocity))
 			return false;
 
-		JPH::BodyInterface& bodies = m_Data->JoltSystem->GetBodyInterface();
-		bodies.SetLinearVelocity(record->BodyID, ToJolt(velocity));
-		bodies.ActivateBody(record->BodyID);
+		b3Body_SetLinearVelocity(record->BodyID, ToB3(velocity));
+		WakeRecord(*m_Data, *record);
 		return true;
 	}
 
@@ -4823,7 +4676,7 @@ namespace Strata
 		const BodyRecord* record = FindSimulatedRecord(*m_Data, entity);
 		if (!record || record->Type == RigidBodyType::Static)
 			return glm::vec3(0.0f);
-		return ToGlm(m_Data->JoltSystem->GetBodyInterface().GetAngularVelocity(record->BodyID));
+		return ToGlm(b3Body_GetAngularVelocity(record->BodyID));
 	}
 
 	bool PhysicsWorld::SetAngularVelocity(Entity entity, const glm::vec3& velocity)
@@ -4832,29 +4685,30 @@ namespace Strata
 		if (!record || !IsFinite(velocity))
 			return false;
 
-		JPH::BodyInterface& bodies = m_Data->JoltSystem->GetBodyInterface();
-		bodies.SetAngularVelocity(record->BodyID, ToJolt(velocity));
-		bodies.ActivateBody(record->BodyID);
+		b3Body_SetAngularVelocity(record->BodyID, ToB3(velocity));
+		WakeRecord(*m_Data, *record);
 		return true;
 	}
 
 	bool PhysicsWorld::AddForce(Entity entity, const glm::vec3& force)
 	{
-		const BodyRecord* record = FindDynamicRecord(*m_Data, entity);
+		BodyRecord* record = FindDynamicRecord(*m_Data, entity);
 		if (!record || !IsFinite(force))
 			return false;
 
-		m_Data->JoltSystem->GetBodyInterface().AddForce(record->BodyID, ToJolt(force), JPH::EActivation::Activate);
+		AddPendingForce(*m_Data, entity, *record, force, glm::vec3(0.0f));
 		return true;
 	}
 
 	bool PhysicsWorld::AddForceAtPosition(Entity entity, const glm::vec3& force, const glm::vec3& worldPosition)
 	{
-		const BodyRecord* record = FindDynamicRecord(*m_Data, entity);
+		BodyRecord* record = FindDynamicRecord(*m_Data, entity);
 		if (!record || !IsFinite(force) || !IsFinite(worldPosition))
 			return false;
 
-		m_Data->JoltSystem->GetBodyInterface().AddForce(record->BodyID, ToJolt(force), ToJoltPosition(worldPosition), JPH::EActivation::Activate);
+		// Off its center of mass, a force also turns the body.
+		const glm::vec3 center = ToGlm(b3Body_GetWorldCenter(record->BodyID));
+		AddPendingForce(*m_Data, entity, *record, force, glm::cross(worldPosition - center, force));
 		return true;
 	}
 
@@ -4864,7 +4718,8 @@ namespace Strata
 		if (!record || !IsFinite(impulse))
 			return false;
 
-		m_Data->JoltSystem->GetBodyInterface().AddImpulse(record->BodyID, ToJolt(impulse));
+		b3Body_ApplyLinearImpulseToCenter(record->BodyID, ToB3(impulse), true);
+		MarkAwake(*m_Data, record->BodyID);
 		return true;
 	}
 
@@ -4874,17 +4729,18 @@ namespace Strata
 		if (!record || !IsFinite(impulse) || !IsFinite(worldPosition))
 			return false;
 
-		m_Data->JoltSystem->GetBodyInterface().AddImpulse(record->BodyID, ToJolt(impulse), ToJoltPosition(worldPosition));
+		b3Body_ApplyLinearImpulse(record->BodyID, ToB3(impulse), ToB3(worldPosition), true);
+		MarkAwake(*m_Data, record->BodyID);
 		return true;
 	}
 
 	bool PhysicsWorld::AddTorque(Entity entity, const glm::vec3& torque)
 	{
-		const BodyRecord* record = FindDynamicRecord(*m_Data, entity);
+		BodyRecord* record = FindDynamicRecord(*m_Data, entity);
 		if (!record || !IsFinite(torque))
 			return false;
 
-		m_Data->JoltSystem->GetBodyInterface().AddTorque(record->BodyID, ToJolt(torque), JPH::EActivation::Activate);
+		AddPendingForce(*m_Data, entity, *record, glm::vec3(0.0f), torque);
 		return true;
 	}
 
@@ -4894,7 +4750,8 @@ namespace Strata
 		if (!record || !IsFinite(impulse))
 			return false;
 
-		m_Data->JoltSystem->GetBodyInterface().AddAngularImpulse(record->BodyID, ToJolt(impulse));
+		b3Body_ApplyAngularImpulse(record->BodyID, ToB3(impulse), true);
+		MarkAwake(*m_Data, record->BodyID);
 		return true;
 	}
 
@@ -4910,9 +4767,8 @@ namespace Strata
 			rigidBody->GravityScale = gravityScale;
 		if (record->Type != RigidBodyType::Static)
 		{
-			JPH::BodyInterface& bodies = m_Data->JoltSystem->GetBodyInterface();
-			bodies.SetGravityFactor(record->BodyID, gravityScale);
-			bodies.ActivateBody(record->BodyID);
+			b3Body_SetGravityScale(record->BodyID, gravityScale);
+			WakeRecord(*m_Data, *record);
 		}
 		return true;
 	}
@@ -4922,7 +4778,7 @@ namespace Strata
 		const BodyRecord* record = FindSimulatedRecord(*m_Data, entity);
 		if (!record || record->Type == RigidBodyType::Static)
 			return false;
-		return !m_Data->JoltSystem->GetBodyInterface().IsActive(record->BodyID);
+		return !b3Body_IsAwake(record->BodyID);
 	}
 
 	bool PhysicsWorld::WakeUp(Entity entity)
@@ -4931,7 +4787,7 @@ namespace Strata
 		if (!record || record->Type == RigidBodyType::Static)
 			return false;
 
-		m_Data->JoltSystem->GetBodyInterface().ActivateBody(record->BodyID);
+		WakeRecord(*m_Data, *record);
 		return true;
 	}
 
@@ -4939,7 +4795,7 @@ namespace Strata
 	{
 		PhysicsWorldData& data = *m_Data;
 		BodyRecord* record = FindSimulatedRecord(data, entity);
-		if (!record || !IsFinite(position) || !IsFinite(rotation))
+		if (!record || !IsFinite(position) || !IsFinite(rotation) || !IsWithinCoordinateRange(position))
 			return false;
 
 		const float rotationLength = glm::length(rotation);
@@ -4964,19 +4820,23 @@ namespace Strata
 		record->KinematicTargetRotation = normalizedRotation;
 		record->KinematicMoving = false;
 
-		// Bodies resting on it must notice that it left: Jolt only activates the moved body itself.
-		WakeBodiesAround(data, record->BodyID);
-		JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
+		// Bodies resting on it must notice that it left.
 		if (record->Type == RigidBodyType::Static)
 		{
-			bodies.SetPositionAndRotation(record->BodyID, ToJoltPosition(position), ToJolt(normalizedRotation), JPH::EActivation::DontActivate);
-			WakeBodiesAround(data, record->BodyID);
+			WakeBodiesIn(data, b3Body_ComputeAABB(record->BodyID));
+			b3Body_SetTransform(record->BodyID, ToB3(position), ToB3(normalizedRotation));
+			WakeBodiesIn(data, b3Body_ComputeAABB(record->BodyID));
 		}
 		else
 		{
+			WakeTouchingBodies(data, record->BodyID);
 			if (record->Type == RigidBodyType::Kinematic)
-				bodies.SetLinearAndAngularVelocity(record->BodyID, JPH::Vec3::sZero(), JPH::Vec3::sZero());
-			bodies.SetPositionAndRotation(record->BodyID, ToJoltPosition(position), ToJolt(normalizedRotation), JPH::EActivation::Activate);
+			{
+				b3Body_SetLinearVelocity(record->BodyID, b3Vec3 { 0.0f, 0.0f, 0.0f });
+				b3Body_SetAngularVelocity(record->BodyID, b3Vec3 { 0.0f, 0.0f, 0.0f });
+			}
+			b3Body_SetTransform(record->BodyID, ToB3(position), ToB3(normalizedRotation));
+			WakeRecord(data, *record);
 		}
 
 		// The entity's descendants moved with it.
@@ -5002,7 +4862,7 @@ namespace Strata
 	bool PhysicsWorld::TeleportCharacter(Entity entity, const glm::vec3& position)
 	{
 		PhysicsWorldData& data = *m_Data;
-		if (!data.Characters->Teleport(entity, position))
+		if (!IsFinite(position) || !IsWithinCoordinateRange(position) || !data.Characters->Teleport(entity, position))
 			return false;
 		// Bodies of the entity (colliders on it) and below it follow, as they follow a teleported body.
 		if (BodyRecord* record = FindRecord(data, entity.GetHandle()))
@@ -5029,21 +4889,19 @@ namespace Strata
 		ST_PROFILE_FUNCTION();
 
 		const PhysicsWorldData& data = *m_Data;
-		JPH::RRayCast ray;
+		glm::vec3 translation;
 		float length = 0.0f;
-		if (!MakeRay(origin, direction, maxDistance, ray, length))
+		if (!MakeRay(origin, direction, maxDistance, translation, length))
 			return std::nullopt;
 
-		JPH::RayCastSettings settings;
-		settings.mTreatConvexAsSolid = false; // A ray starting inside a convex collider passes out of it without a hit
-		JPH::ClosestHitCollisionCollector<JPH::CastRayCollector> collector;
-		const JPH::BroadPhaseLayerFilter broadPhaseFilter;
-		const LayerMaskFilter layerFilter(layerMask);
-		const QueryBodyFilter bodyFilter(*data.OwnerScene, GetIgnoredBody(data, ignoreEntity), includeTriggers);
-		data.JoltSystem->GetNarrowPhaseQuery().CastRay(ray, settings, collector, broadPhaseFilter, layerFilter, bodyFilter);
-		if (!collector.HadHit())
+		RayQuery query;
+		query.Data = &data;
+		query.Ignored = GetIgnoredEntity(data, ignoreEntity);
+		query.IncludeTriggers = includeTriggers;
+		b3World_CastRay(data.World, ToB3(origin), ToB3(translation), PhysicsFilters::MakeQueryFilter(layerMask), &RayCallback, &query);
+		if (query.Closest.Fraction > 1.0f)
 			return std::nullopt;
-		return MakeRaycastHit(data, ray, length, collector.mHit);
+		return MakeRaycastHit(data, query.Closest, length);
 	}
 
 	std::vector<RaycastHit> PhysicsWorld::RaycastAll(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, uint32_t layerMask, Entity ignoreEntity, bool includeTriggers) const
@@ -5052,29 +4910,31 @@ namespace Strata
 
 		const PhysicsWorldData& data = *m_Data;
 		std::vector<RaycastHit> hits;
-		JPH::RRayCast ray;
+		glm::vec3 translation;
 		float length = 0.0f;
-		if (!MakeRay(origin, direction, maxDistance, ray, length))
+		if (!MakeRay(origin, direction, maxDistance, translation, length))
 			return hits;
 
-		JPH::RayCastSettings settings;
-		settings.mTreatConvexAsSolid = false;
-		JPH::ClosestHitPerBodyCollisionCollector<JPH::CastRayCollector> collector;
-		const JPH::BroadPhaseLayerFilter broadPhaseFilter;
-		const LayerMaskFilter layerFilter(layerMask);
-		const QueryBodyFilter bodyFilter(*data.OwnerScene, GetIgnoredBody(data, ignoreEntity), includeTriggers);
-		data.JoltSystem->GetNarrowPhaseQuery().CastRay(ray, settings, collector, broadPhaseFilter, layerFilter, bodyFilter);
+		RayQuery query;
+		query.Data = &data;
+		query.Ignored = GetIgnoredEntity(data, ignoreEntity);
+		query.IncludeTriggers = includeTriggers;
+		query.All = true;
+		b3World_CastRay(data.World, ToB3(origin), ToB3(translation), PhysicsFilters::MakeQueryFilter(layerMask), &RayCallback, &query);
 
-		std::vector<JPH::RayCastResult> results(collector.mHits.begin(), collector.mHits.end());
-		std::sort(results.begin(), results.end(), [](const JPH::RayCastResult& a, const JPH::RayCastResult& b)
+		std::vector<RayQuery::Hit> results;
+		results.reserve(query.PerEntity.size());
+		for (const auto& [entityID, hit] : query.PerEntity)
+			results.push_back(hit);
+		std::sort(results.begin(), results.end(), [](const RayQuery::Hit& a, const RayQuery::Hit& b)
 		{
-			return a.mFraction != b.mFraction ? a.mFraction < b.mFraction : a.mBodyID < b.mBodyID;
+			return a.Fraction != b.Fraction ? a.Fraction < b.Fraction : static_cast<uint64_t>(a.Entity) < static_cast<uint64_t>(b.Entity);
 		});
 
 		hits.reserve(results.size());
-		for (const JPH::RayCastResult& result : results)
+		for (const RayQuery::Hit& result : results)
 		{
-			if (std::optional<RaycastHit> hit = MakeRaycastHit(data, ray, length, result))
+			if (std::optional<RaycastHit> hit = MakeRaycastHit(data, result, length))
 				hits.push_back(*hit);
 		}
 		return hits;
@@ -5087,9 +4947,9 @@ namespace Strata
 		if (!IsFinite(center) || !std::isfinite(radius) || !(radius > 0.0f))
 			return {};
 
-		JPH::SphereShape sphere(radius);
-		sphere.SetEmbedded(); // Stack object: never deleted through its reference count
-		return CollectOverlaps(*m_Data, sphere, center, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), layerMask, includeTriggers);
+		const b3Vec3 point = { 0.0f, 0.0f, 0.0f };
+		const b3ShapeProxy proxy = { &point, 1, radius };
+		return CollectOverlaps(*m_Data, center, proxy, layerMask, includeTriggers);
 	}
 
 	std::vector<Entity> PhysicsWorld::OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, uint32_t layerMask, bool includeTriggers) const
@@ -5102,11 +4962,17 @@ namespace Strata
 		const float rotationLength = glm::length(rotation);
 		if (!(rotationLength > 1.0e-6f))
 			return {};
+		const glm::quat normalizedRotation = rotation / rotationLength;
 
-		const float convexRadius = std::min(JPH::cDefaultConvexRadius, std::min({ halfExtents.x, halfExtents.y, halfExtents.z }));
-		JPH::BoxShape box(ToJolt(halfExtents), convexRadius);
-		box.SetEmbedded();
-		return CollectOverlaps(*m_Data, box, center, rotation / rotationLength, layerMask, includeTriggers);
+		// The box's corners, relative to its center.
+		std::array<b3Vec3, 8> corners;
+		for (uint32_t index = 0; index < 8; index++)
+		{
+			const glm::vec3 corner((index & 1u) ? halfExtents.x : -halfExtents.x, (index & 2u) ? halfExtents.y : -halfExtents.y, (index & 4u) ? halfExtents.z : -halfExtents.z);
+			corners[index] = ToB3(normalizedRotation * corner);
+		}
+		const b3ShapeProxy proxy = { corners.data(), 8, 0.0f };
+		return CollectOverlaps(*m_Data, center, proxy, layerMask, includeTriggers);
 	}
 
 	PhysicsStats PhysicsWorld::GetStats() const
@@ -5134,14 +5000,13 @@ namespace Strata
 		}
 		stats.CharacterControllerCount = data.Characters->GetCount();
 		stats.CharacterTime = data.Characters->GetLastStepTime();
-		stats.ActiveBodyCount = data.JoltSystem->GetNumActiveBodies(JPH::EBodyType::RigidBody);
+		stats.ActiveBodyCount = static_cast<uint32_t>(std::max(b3World_GetAwakeBodyCount(data.World), 0));
 		stats.ContactPairCount = static_cast<uint32_t>(data.TouchingPairs.size());
 		stats.PairIndexOperations = data.PairIndexOperations;
-		stats.MaxBodies = data.Settings.MaxBodies;
-		stats.MaxBodyPairs = data.Settings.MaxBodyPairs;
+		stats.MaxBodies = data.RoomBodies;
 		stats.MaxContactConstraints = data.Settings.MaxContactConstraints;
+		stats.GrowthLimit = GetGrowthLimit(data.Settings);
 		stats.BodyOverflowCount = data.SlotWaiterCount;
-		stats.ContactOverflowSteps = data.ContactOverflowSteps;
 		stats.Demand = data.Demand;
 		stats.SyncedBodyCount = data.LastSyncedBodies;
 		stats.CheckedPairCount = data.LastCheckedPairs;
@@ -5156,15 +5021,15 @@ namespace Strata
 		stats.BodiesRemovedLastUpdate = lastUpdate.BodiesRemoved;
 		stats.ChangeTime = lastUpdate.ChangeTime;
 		stats.AddBatchCount = data.AddBatchCount;
-		stats.SharedShapeCount = static_cast<uint32_t>(data.PrimitiveShapes.size());
+		stats.SharedShapeCount = static_cast<uint32_t>(data.BoxHulls.size());
 		stats.MeshCheckCount = data.MeshCheckCount;
 		stats.WaitingForMeshes = data.HeldLastStep;
 		stats.HeldStepCount = data.HeldStepCount;
 		stats.StepCount = data.StepCount;
-		stats.JobCount = data.JobCounters.Jobs.load(std::memory_order_relaxed);
-		stats.WorkerJobCount = data.JobCounters.WorkerJobs.load(std::memory_order_relaxed);
+		stats.JobCount = data.TaskCounters.Tasks.load(std::memory_order_relaxed);
+		stats.WorkerJobCount = data.TaskCounters.WorkerTasks.load(std::memory_order_relaxed);
 		stats.LastStepTime = data.LastStepTime;
-		stats.LibraryStepTime = data.LastJoltTime;
+		stats.LibraryStepTime = data.LastLibraryTime;
 		stats.SyncTime = data.LastSyncTime;
 		stats.WriteBackTime = data.LastWriteBackTime;
 		stats.ContactTime = data.LastContactTime;

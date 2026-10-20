@@ -4,27 +4,20 @@
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Physics/PhysicsComponents.h"
-#include "Strata/Physics/PhysicsLayers.h"
-#include "Strata/Physics/PhysicsStateBuffer.h"
+#include "Strata/Physics/PhysicsFilters.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 
-#include <Jolt/Jolt.h>
-#include <Jolt/Core/TempAllocator.h>
-#include <Jolt/Physics/Body/BodyCreationSettings.h>
-#include <Jolt/Physics/Body/BodyLock.h>
-#include <Jolt/Physics/Character/CharacterVirtual.h>
-#include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
-#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
-#include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
-#include <Jolt/Physics/Collision/Shape/SphereShape.h>
-#include <Jolt/Physics/Collision/ShapeFilter.h>
-#include <Jolt/Physics/PhysicsSystem.h>
+#include <box3d/box3d.h>
+#include <box3d/collision.h>
+#include <box3d/math_functions.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <chrono>
 #include <cmath>
 #include <map>
+#include <optional>
 #include <unordered_set>
 
 namespace Strata
@@ -36,40 +29,40 @@ namespace Strata
 		// What a character weighs (kilograms, an adult person): its weight presses on a dynamic body it stands on (PushBodies).
 		constexpr float c_CharacterMass = 70.0f;
 		// The presence body's radius is this fraction of the character's, so that it stays clear of what the character touches
-		// on its sides (the character keeps its padding away from geometry) and meets only what moves into the character; its
-		// top is the character's (a crate on its head rests where the character's head is) and its bottom stays above the
-		// ground.
+		// on its sides and meets only what moves into the character; its top is the character's (a crate on its head rests where
+		// the character's head is) and its bottom stays above the ground.
 		constexpr float c_PresenceRadiusFraction = 0.9f;
-		// How far Jolt's characters keep their shape from geometry (CharacterVirtualSettings::mCharacterPadding, its default):
-		// their shape is lifted by it above their position.
-		constexpr float c_CharacterPadding = 0.02f;
-		// Smallest radius and height of a controller's capsule (world units), so Jolt never sees a degenerate shape.
+		// Smallest radius and height of a controller's capsule (world units), so box3d never sees a degenerate shape, and the
+		// shortest segment of its capsule (box3d's capsules need one; a spherical character is this much taller).
 		constexpr float c_MinCharacterExtent = 1.0e-3f;
+		constexpr float c_MinCapsuleSegment = 0.01f;
 		// Moving away from the ground faster than this (meters per second) leaves it: a jump or a launch. Slower, a character
 		// on the ground takes on the ground's velocity (a moving platform).
 		constexpr float c_LeaveGroundSpeed = 0.1f;
 		// An entity whose world position differs from where its controller put it by more than this (relative to the
 		// position's magnitude, at least this many meters) was moved from outside: the controller teleports there.
 		constexpr float c_ExternalMoveTolerance = 1.0e-4f;
-		// Scratch memory for the collision queries of one batch of controllers (falls back to the heap beyond), and the
-		// smallest batch; batches are bounded so that the scratch memory stays bounded however many controllers move.
-		constexpr uint32_t c_ScratchBytesPerBatch = 128 * 1024;
+		// How far around its capsule a controller looks for what it touches (the ground below it, walls beside it): box3d's
+		// mover keeps a capsule within its linear slop (5 mm) of what it rests on.
+		constexpr float c_ContactMargin = 0.02f;
+		// Mover iterations of a pass, and the movement below which a pass is done.
+		constexpr int c_MoveIterations = 4;
+		constexpr float c_MoveTolerance = 1.0e-4f;
+		// Planes a controller considers at once (the solver's input); more touching shapes than this are rare.
+		constexpr size_t c_MaxPlanes = 32;
+		// Controllers moved per job (fixed by the count, so batches do not depend on the threads).
 		constexpr uint32_t c_MinBatchSize = 16;
 		constexpr uint32_t c_BatchesPerThread = 4;
+		static_assert(sizeof(void*) >= sizeof(uint64_t), "Shapes carry their entity's UUID in their user data");
 
-		JPH::Vec3 ToJolt(const glm::vec3& value)
+		b3Vec3 ToB3(const glm::vec3& value)
 		{
-			return JPH::Vec3(value.x, value.y, value.z);
+			return b3Vec3 { value.x, value.y, value.z };
 		}
 
-		JPH::RVec3 ToJoltPosition(const glm::vec3& value)
+		glm::vec3 ToGlm(const b3Vec3& value)
 		{
-			return JPH::RVec3(value.x, value.y, value.z);
-		}
-
-		glm::vec3 ToGlm(JPH::Vec3Arg value)
-		{
-			return glm::vec3(value.GetX(), value.GetY(), value.GetZ());
+			return glm::vec3(value.x, value.y, value.z);
 		}
 
 		bool IsFinite(const glm::vec3& value)
@@ -83,18 +76,6 @@ namespace Strata
 			return glm::all(glm::lessThanEqual(glm::abs(a - b), glm::vec3(tolerance)));
 		}
 
-		CharacterGroundState ToGroundState(JPH::CharacterBase::EGroundState state)
-		{
-			switch (state)
-			{
-				case JPH::CharacterBase::EGroundState::OnGround: return CharacterGroundState::OnGround;
-				case JPH::CharacterBase::EGroundState::OnSteepGround: return CharacterGroundState::OnSteepGround;
-				case JPH::CharacterBase::EGroundState::NotSupported: return CharacterGroundState::NotSupported;
-				case JPH::CharacterBase::EGroundState::InAir: return CharacterGroundState::InAir;
-			}
-			return CharacterGroundState::InAir;
-		}
-
 		bool IsPendingDestroyInHierarchy(const Scene& scene, Entity entity)
 		{
 			for (Entity current = entity; current.IsValid(); current = current.GetParent())
@@ -103,6 +84,12 @@ namespace Strata
 					return true;
 			}
 			return false;
+		}
+
+		// The entity whose body a shape belongs to (PhysicsWorld and the presence bodies put its UUID in the shape's user data).
+		UUID GetShapeEntity(b3ShapeId shape)
+		{
+			return UUID(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(b3Shape_GetUserData(shape))));
 		}
 
 		// The shape values a controller is built with, from its component (sanitized: finite, within the shapes' limits).
@@ -127,135 +114,75 @@ namespace Strata
 			return shape;
 		}
 
-		// The controller's capsule (a sphere when it is no taller than wide) with its top at `shape.Height` above the origin and
-		// its radius times `radiusFraction`: standing on the origin with the full radius.
-		JPH::RefConst<JPH::Shape> CreateCapsule(const ControllerShape& shape, float radiusFraction)
+		// The controller's capsule relative to its feet: standing on the origin with the full radius (times radiusFraction, its
+		// bottom staying where the full capsule's lower sphere is centered minus that radius), its top at the height.
+		b3Capsule MakeCapsule(const ControllerShape& shape, float radiusFraction, float inflate = 0.0f)
 		{
-			const float radius = shape.Radius * radiusFraction;
-			const float halfCylinder = std::max(shape.Height - 2.0f * shape.Radius, 0.0f) * 0.5f;
-			JPH::RefConst<JPH::ShapeSettings> core;
-			if (halfCylinder > c_MinCharacterExtent)
-				core = new JPH::CapsuleShapeSettings(halfCylinder, radius);
-			else
-				core = new JPH::SphereShapeSettings(radius);
-			const float center = shape.Height - halfCylinder - radius;
-			const JPH::RotatedTranslatedShapeSettings placed(JPH::Vec3(0.0f, center, 0.0f), JPH::Quat::sIdentity(), core.GetPtr());
-			JPH::ShapeSettings::ShapeResult result = placed.Create();
-			return result.HasError() ? nullptr : result.Get();
+			const float radius = shape.Radius * radiusFraction + inflate;
+			const float bottom = shape.Radius;
+			const float top = std::max(shape.Height - shape.Radius * radiusFraction, bottom + c_MinCapsuleSegment);
+			return b3Capsule { b3Vec3 { 0.0f, bottom, 0.0f }, b3Vec3 { 0.0f, top, 0.0f }, radius };
 		}
 
-		// Where a controller's presence body is for its feet at `position`: lifted by the padding like the character's shape.
-		JPH::RVec3 GetPresencePosition(const glm::vec3& position)
-		{
-			return JPH::RVec3(position.x, position.y + c_CharacterPadding, position.z);
-		}
-
-		// A dynamic body a controller ran into during its move: pushed after every controller moved (see Step).
+		// A dynamic body a controller walked into during its move: pushed after every controller moved (see Step).
 		struct PushContact
 		{
-			JPH::BodyID Body;
-			JPH::RVec3 Position = JPH::RVec3::sZero();
-			JPH::Vec3 Normal = JPH::Vec3::sZero();   // Towards the character
-			JPH::Vec3 Velocity = JPH::Vec3::sZero(); // Of the body at the contact point
+			b3BodyId Body = b3_nullBodyId;
+			glm::vec3 Position = glm::vec3(0.0f);
+			glm::vec3 Normal = glm::vec3(0.0f);   // Towards the character
+			glm::vec3 Velocity = glm::vec3(0.0f); // Of the body at the contact point
+		};
+
+		// A plane a mover query found, with what it came from (relative to the query's origin).
+		struct PlaneSource
+		{
+			b3ShapeId Shape = b3_nullShapeId;
+			glm::vec3 Point = glm::vec3(0.0f);
+		};
+
+		// What a controller stands on (see FindGround).
+		struct GroundContact
+		{
+			CharacterGroundState State = CharacterGroundState::InAir;
+			glm::vec3 Normal = glm::vec3(0.0f);
+			glm::vec3 Point = glm::vec3(0.0f); // World space
+			glm::vec3 Velocity = glm::vec3(0.0f);
+			b3BodyId Body = b3_nullBodyId;
+			UUID Entity = UUID::Null();
 		};
 
 		struct ControllerRecord
 		{
 			UUID EntityID = UUID::Null();
 			entt::entity Handle = entt::null;
-			JPH::Ref<JPH::CharacterVirtual> Character;
-			JPH::BodyID PresenceBody;
+			b3BodyId PresenceBody = b3_nullBodyId;
+			b3ShapeId PresenceShape = b3_nullShapeId;
 			ControllerShape Shape;
 			// Settings applied without rebuilding (refreshed from the component on every change).
 			float GravityScale = 1.0f;
 			float PushStrength = 200.0f;
 			float StepHeight = 0.35f;
+			float CosMaxSlope = std::cos(glm::radians(45.0f));
 			// Gameplay requests (ICharacterControl).
 			glm::vec3 WalkVelocity = glm::vec3(0.0f);
 			glm::vec3 Motion = glm::vec3(0.0f);
 			float JumpSpeed = 0.0f;
 			bool JumpRequested = false;
-			// Where the controller put its entity, and the velocity it moved with in its last step (after collisions).
+			// Where the controller put its entity, the velocity it moved with in its last step, the velocity it was given
+			// besides walking (gravity, jumps, the ground's motion, after collisions: what the next step goes on with off the
+			// ground) and what it stands on.
 			glm::vec3 Position = glm::vec3(0.0f);
 			glm::vec3 Velocity = glm::vec3(0.0f);
+			glm::vec3 CarriedVelocity = glm::vec3(0.0f);
+			GroundContact Ground;
 			// Step scratch: written by the controller's own move (on any thread), read afterwards on the main thread.
 			glm::vec3 NewPosition = glm::vec3(0.0f);
-			JPH::Vec3 StepVelocity = JPH::Vec3::sZero();
+			glm::vec3 StepVelocity = glm::vec3(0.0f);
 			std::vector<PushContact> Pushes;
-			bool WaitsForPresenceSlot = false; // The world was full when the presence body was made (see Rebind)
+			std::vector<CharacterContactReport> Touching;
 			bool HasParent = false;
 			bool CanWrite = true;
 			glm::mat4 InverseParentWorld = glm::mat4(1.0f);
-		};
-
-		// Receives the contacts of the controllers' moves on the job system's threads; it writes only into the record of the
-		// character it is called for, which only one thread moves.
-		class ControllerContactListener final : public JPH::CharacterContactListener
-		{
-		public:
-			void OnContactAdded(const JPH::CharacterVirtual* character, const JPH::CharacterContact& contact, JPH::CharacterContactSettings& settings) override
-			{
-				Record(character, contact, settings);
-			}
-
-			void OnContactPersisted(const JPH::CharacterVirtual* character, const JPH::CharacterContact& contact, JPH::CharacterContactSettings& settings) override
-			{
-				Record(character, contact, settings);
-			}
-		private:
-			static void Record(const JPH::CharacterVirtual* character, const JPH::CharacterContact& contact, JPH::CharacterContactSettings& settings)
-			{
-				// Jolt would push the body from this thread, in an order that depends on the threads; the set pushes afterwards.
-				settings.mCanReceiveImpulses = false;
-				if (contact.mMotionTypeB != JPH::EMotionType::Dynamic || contact.mIsSensorB || contact.mBodyB.IsInvalid())
-					return;
-				ControllerRecord* record = reinterpret_cast<ControllerRecord*>(static_cast<uintptr_t>(character->GetUserData()));
-				const auto existing = std::find_if(record->Pushes.begin(), record->Pushes.end(), [&](const PushContact& push) { return push.Body == contact.mBodyB; });
-				if (existing != record->Pushes.end())
-					return; // One push per body and step, from its first contact
-				record->Pushes.push_back({ contact.mBodyB, contact.mPosition, contact.mContactNormal, contact.mLinearVelocity });
-			}
-		};
-
-		// The layers a controller collides with: those its layer collides with in the world's live matrix.
-		class ControllerLayerFilter final : public JPH::ObjectLayerFilter
-		{
-		public:
-			ControllerLayerFilter(const PhysicsSettings& settings, uint32_t layer)
-				: m_Settings(settings), m_Layer(layer)
-			{
-			}
-
-			bool ShouldCollide(JPH::ObjectLayer layer) const override
-			{
-				return m_Settings.DoLayersCollide(m_Layer, PhysicsLayers::GetUserLayer(layer));
-			}
-		private:
-			const PhysicsSettings& m_Settings;
-			uint32_t m_Layer;
-		};
-
-		// A controller never collides with its own presence body or with the bodies of its own entity (colliders on it).
-		class ControllerBodyFilter final : public JPH::BodyFilter
-		{
-		public:
-			ControllerBodyFilter(const JPH::BodyID& presenceBody, UUID entity)
-				: m_PresenceBody(presenceBody), m_Entity(static_cast<uint64_t>(entity))
-			{
-			}
-
-			bool ShouldCollide(const JPH::BodyID& body) const override
-			{
-				return body != m_PresenceBody;
-			}
-
-			bool ShouldCollideLocked(const JPH::Body& body) const override
-			{
-				return body.GetUserData() != m_Entity;
-			}
-		private:
-			JPH::BodyID m_PresenceBody;
-			uint64_t m_Entity;
 		};
 
 		// Entities whose controllers ApplyChanges looks at, in the order they were recorded.
@@ -286,22 +213,15 @@ namespace Strata
 	struct CharacterControllerSetData
 	{
 		Scene* OwnerScene = nullptr;
-		JPH::PhysicsSystem* System = nullptr;
+		b3WorldId World = b3_nullWorldId;
 		const PhysicsSettings* Settings = nullptr;
 		std::map<entt::entity, ControllerRecord> Controllers; // Ordered: steps and their effects follow entity order
 		DirtyList Dirty;
 		bool RecheckAll = false;
 		size_t CheckedPendingDestroys = 0; // Scene::GetPendingDestroys().size() when last checked
 		std::unordered_set<UUID> WarnedEntities; // Controllers ignored because their entity has a RigidBody (warned once)
-		std::unordered_set<UUID> FullWorldEntities; // Controllers without a presence body because the world was full (warned once)
-		ControllerContactListener Listener;
-		// Per batch of a step's parallel moves (see Step), and one for the main thread's queries.
-		std::vector<Scope<JPH::TempAllocatorImplWithMallocFallback>> Allocators;
-		Scope<JPH::TempAllocatorImplWithMallocFallback> MainAllocator;
 		std::vector<ControllerRecord*> StepRecords;
 		std::vector<entt::entity> ChangeScratch;
-		std::vector<JPH::BodyID> NewPresenceBodies;
-		uint32_t WaitingPresenceBodies = 0; // Records with WaitsForPresenceSlot
 		float LastStepTime = 0.0f;
 
 		// Declared last: disconnected before anything the handlers use is destroyed.
@@ -329,13 +249,6 @@ namespace Strata
 			data.RecheckAll = true;
 		}
 
-		JPH::TempAllocator& GetMainAllocator(CharacterControllerSetData& data)
-		{
-			if (!data.MainAllocator)
-				data.MainAllocator = CreateScope<JPH::TempAllocatorImplWithMallocFallback>(c_ScratchBytesPerBatch);
-			return *data.MainAllocator;
-		}
-
 		// Whether an entity is simulated as a controller: an enabled component, no rigid body, active and not about to be
 		// destroyed.
 		bool IsControllerWanted(CharacterControllerSetData& data, Entity entity)
@@ -361,251 +274,403 @@ namespace Strata
 			record.GravityScale = std::isfinite(component.GravityScale) ? component.GravityScale : defaults.GravityScale;
 			record.PushStrength = std::isfinite(component.PushStrength) ? std::max(component.PushStrength, 0.0f) : defaults.PushStrength;
 			record.StepHeight = std::isfinite(component.StepHeight) ? std::max(component.StepHeight, 0.0f) : defaults.StepHeight;
-			if (record.Character)
-			{
-				const float maxSlope = std::isfinite(component.MaxSlopeDegrees) ? std::clamp(component.MaxSlopeDegrees, 0.0f, 89.0f) : defaults.MaxSlopeDegrees;
-				record.Character->SetMaxSlopeAngle(glm::radians(maxSlope));
-			}
+			const float maxSlope = std::isfinite(component.MaxSlopeDegrees) ? std::clamp(component.MaxSlopeDegrees, 0.0f, 89.0f) : defaults.MaxSlopeDegrees;
+			record.CosMaxSlope = std::cos(glm::radians(maxSlope));
 		}
 
-		void DestroyPresenceBody(CharacterControllerSetData& data, ControllerRecord& record)
+		void DestroyPresenceBody(ControllerRecord& record)
 		{
-			if (record.PresenceBody.IsInvalid())
+			if (B3_IS_NULL(record.PresenceBody))
 				return;
-			JPH::BodyInterface& bodies = data.System->GetBodyInterface();
-			bodies.RemoveBody(record.PresenceBody);
-			bodies.DestroyBody(record.PresenceBody);
-			record.PresenceBody = JPH::BodyID();
+			b3DestroyBody(record.PresenceBody);
+			record.PresenceBody = b3_nullBodyId;
+			record.PresenceShape = b3_nullShapeId;
 		}
 
-		// The Jolt character of a record, with its capsule `shape`, standing at `position` (its feet) in the set's Jolt system.
-		JPH::Ref<JPH::CharacterVirtual> CreateCharacter(CharacterControllerSetData& data, ControllerRecord& record, const JPH::Shape* shape, const glm::vec3& position)
+		// The presence body of a record at `position`: kinematic, on the controller's layer, seen by sensors. Moving wakes it;
+		// standing still it falls asleep like any body, so that its contacts with sleeping bodies (a crate on its head) last.
+		void CreatePresenceBody(CharacterControllerSetData& data, ControllerRecord& record, const glm::vec3& position)
 		{
-			JPH::Ref<JPH::CharacterVirtualSettings> settings = new JPH::CharacterVirtualSettings();
-			settings->mShape = shape;
-			settings->mUp = JPH::Vec3::sAxisY();
-			settings->mCharacterPadding = c_CharacterPadding;
-			// Contacts below the center of the capsule's lower sphere can hold it up.
-			settings->mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -record.Shape.Radius);
-			// The set presses down what the character stands on and pushes bodies itself (see Step), after every move.
-			settings->mMass = 0.0f;
-			settings->mMaxStrength = 0.0f;
-			JPH::Ref<JPH::CharacterVirtual> character = new JPH::CharacterVirtual(settings, ToJoltPosition(position), JPH::Quat::sIdentity(),
-				static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&record)), data.System);
-			character->SetListener(&data.Listener);
-			return character;
+			b3BodyDef bodyDefinition = b3DefaultBodyDef();
+			bodyDefinition.type = b3_kinematicBody;
+			bodyDefinition.position = ToB3(position);
+			record.PresenceBody = b3CreateBody(data.World, &bodyDefinition);
+			b3ShapeDef shapeDefinition = b3DefaultShapeDef();
+			shapeDefinition.userData = reinterpret_cast<void*>(static_cast<uintptr_t>(static_cast<uint64_t>(record.EntityID)));
+			shapeDefinition.filter = PhysicsFilters::MakeShapeFilter(record.Shape.Layer, data.Settings->LayerCollisionMasks);
+			shapeDefinition.enableSensorEvents = true;
+			shapeDefinition.enableContactEvents = true;
+			const b3Capsule capsule = MakeCapsule(record.Shape, c_PresenceRadiusFraction);
+			record.PresenceShape = b3CreateCapsuleShape(record.PresenceBody, &shapeDefinition, &capsule);
 		}
 
-		void SetWaitsForPresenceSlot(CharacterControllerSetData& data, ControllerRecord& record, bool waits)
+		void MovePresenceBody(ControllerRecord& record)
 		{
-			if (record.WaitsForPresenceSlot == waits)
+			if (B3_IS_NULL(record.PresenceBody))
 				return;
-			record.WaitsForPresenceSlot = waits;
-			if (waits)
-				data.WaitingPresenceBodies++;
-			else
-				data.WaitingPresenceBodies--;
+			// Teleported (no velocity), as the character's move put it: a velocity would carry what rests on it by friction and
+			// push what it touches harder than the character's push strength.
+			b3Body_SetTransform(record.PresenceBody, ToB3(record.Position), b3Quat_identity);
+			b3Body_SetAwake(record.PresenceBody, true);
 		}
 
-		// The presence body of a record at `position`: kinematic, on the controller's layer. Moving wakes it (triggers only
-		// notice awake bodies); standing still it falls asleep like any body, so that its contacts with sleeping bodies (a
-		// crate on its head) last. It joins the simulation with the batch of ApplyChanges. A full world leaves the controller
-		// without one until the world grows (see Rebind).
-		void CreatePresenceBody(CharacterControllerSetData& data, ControllerRecord& record, const Entity& entity, const glm::vec3& position)
+		//////////////////////////////////////////////////////////////////////////
+		// Mover queries (read-only: any thread)
+		//////////////////////////////////////////////////////////////////////////
+
+		// What a controller's queries need: the world, the layer filter, itself (its own shapes and presence body are skipped),
+		// and where the planes go.
+		struct MoverQuery
 		{
-			SetWaitsForPresenceSlot(data, record, false);
-			const JPH::RefConst<JPH::Shape> presenceShape = CreateCapsule(record.Shape, c_PresenceRadiusFraction);
-			if (!presenceShape)
-				return;
-			if (data.System->GetNumBodies() < data.System->GetMaxBodies())
-			{
-				JPH::BodyCreationSettings bodySettings(presenceShape, GetPresencePosition(position), JPH::Quat::sIdentity(), JPH::EMotionType::Kinematic,
-					PhysicsLayers::MakeObjectLayer(record.Shape.Layer, true));
-				bodySettings.mUserData = static_cast<uint64_t>(record.EntityID);
-				if (JPH::Body* body = data.System->GetBodyInterface().CreateBody(bodySettings))
-				{
-					record.PresenceBody = body->GetID();
-					data.NewPresenceBodies.push_back(record.PresenceBody);
-				}
-			}
-			SetWaitsForPresenceSlot(data, record, record.PresenceBody.IsInvalid());
-			if (record.WaitsForPresenceSlot && data.FullWorldEntities.insert(record.EntityID).second)
-			{
-				ST_CORE_WARN("Physics: the world has no room for the presence body of '{}' (its body limit is reached): it moves, but bodies, "
-					"triggers and queries do not see it until the world grows", entity.GetName());
-			}
+			b3WorldId World = b3_nullWorldId;
+			b3QueryFilter Filter = {};
+			UUID Self = UUID::Null();
+			std::vector<b3CollisionPlane>* Planes = nullptr;
+			std::vector<PlaneSource>* Sources = nullptr;
+		};
+
+		bool AcceptMoverShape(b3ShapeId shape, void* context)
+		{
+			const MoverQuery& query = *static_cast<const MoverQuery*>(context);
+			return !b3Shape_IsSensor(shape) && GetShapeEntity(shape) != query.Self;
 		}
 
-		// New presence bodies join the simulation in one batch.
-		void AddNewPresenceBodies(CharacterControllerSetData& data)
+		bool CollectPlanes(b3ShapeId shape, const b3PlaneResult* planes, int planeCount, void* context)
 		{
-			if (data.NewPresenceBodies.empty())
-				return;
-			JPH::BodyInterface& bodies = data.System->GetBodyInterface();
-			const int count = static_cast<int>(data.NewPresenceBodies.size());
-			const JPH::BodyInterface::AddState state = bodies.AddBodiesPrepare(data.NewPresenceBodies.data(), count);
-			bodies.AddBodiesFinalize(data.NewPresenceBodies.data(), count, state, JPH::EActivation::Activate);
-			data.NewPresenceBodies.clear();
-		}
-
-		// Builds the Jolt character and the presence body of a record at `position` (its feet), keeping the record's gameplay
-		// state. The presence body joins the simulation with the batch of ApplyChanges.
-		bool BuildCharacter(CharacterControllerSetData& data, ControllerRecord& record, Entity entity, const glm::vec3& position)
-		{
-			const CharacterControllerComponent& component = entity.GetComponent<CharacterControllerComponent>();
-			record.Shape = GetShapeOf(component);
-			const JPH::RefConst<JPH::Shape> shape = CreateCapsule(record.Shape, 1.0f);
-			if (!shape)
+			MoverQuery& query = *static_cast<MoverQuery*>(context);
+			if (!AcceptMoverShape(shape, context))
+				return true;
+			for (int index = 0; index < planeCount && query.Planes->size() < c_MaxPlanes; index++)
 			{
-				ST_CORE_WARN("Physics: the Character Controller of '{}' has an unusable shape (height {}, radius {}); it is not simulated", entity.GetName(),
-					component.Height, component.Radius);
-				return false;
+				b3CollisionPlane plane = {};
+				plane.plane = planes[index].plane;
+				plane.pushLimit = FLT_MAX;
+				plane.push = 0.0f;
+				plane.clipVelocity = true;
+				query.Planes->push_back(plane);
+				query.Sources->push_back(PlaneSource { shape, ToGlm(planes[index].point) });
 			}
-
-			record.Character = CreateCharacter(data, record, shape.GetPtr(), position);
-			RefreshSettings(record, component);
-			CreatePresenceBody(data, record, entity, position);
-
-			// Where it stands right away: the ground state is valid before its first step.
-			const ControllerLayerFilter layers(*data.Settings, record.Shape.Layer);
-			const ControllerBodyFilter bodyFilter(record.PresenceBody, record.EntityID);
-			record.Character->RefreshContacts(JPH::BroadPhaseLayerFilter(), layers, bodyFilter, JPH::ShapeFilter(), GetMainAllocator(data));
-			record.Position = position;
 			return true;
 		}
 
-		void RemoveController(CharacterControllerSetData& data, std::map<entt::entity, ControllerRecord>::iterator it, std::vector<CharacterBodyChange>& outChanges)
+		// The planes of what a capsule at `position` overlaps (relative to the position).
+		void CollidePlanes(MoverQuery& query, const glm::vec3& position, const b3Capsule& capsule)
 		{
-			ControllerRecord& record = it->second;
-			const JPH::BodyID body = record.PresenceBody;
-			DestroyPresenceBody(data, record);
-			SetWaitsForPresenceSlot(data, record, false);
-			outChanges.push_back({ record.EntityID, body.GetIndexAndSequenceNumber(), c_NoCharacterBody, true });
-			data.Controllers.erase(it);
+			query.Planes->clear();
+			query.Sources->clear();
+			b3World_CollideMover(query.World, ToB3(position), &capsule, query.Filter, &CollectPlanes, &query);
 		}
 
-		// Creates, rebuilds or removes the controller of one entity after a change.
-		void RefreshController(CharacterControllerSetData& data, entt::entity handle, std::vector<CharacterBodyChange>& outChanges)
+		// How far along `translation` a capsule at `position` moves before it touches something (0 to 1).
+		float CastCapsule(MoverQuery& query, const glm::vec3& position, const b3Capsule& capsule, const glm::vec3& translation)
 		{
-			const Entity entity(handle, data.OwnerScene);
-			auto it = data.Controllers.find(handle);
-			if (!IsControllerWanted(data, entity))
-			{
-				if (it != data.Controllers.end())
-					RemoveController(data, it, outChanges);
-				return;
-			}
+			if (!(glm::dot(translation, translation) > 0.0f))
+				return 1.0f;
+			return b3World_CastMover(query.World, ToB3(position), &capsule, ToB3(translation), query.Filter, &AcceptMoverShape, &query);
+		}
 
-			const CharacterControllerComponent& component = entity.GetComponent<CharacterControllerComponent>();
-			if (it != data.Controllers.end())
+		enum class PassKind : uint8_t
+		{
+			Across,   // Walking: ground too steep to stand on blocks like a wall, walkable ground is climbed
+			Vertical, // Falling or rising: walkable ground holds the capsule, steeper ground lets it slide down
+			Standing  // Standing on the ground (an edge of a step included): whatever faces up holds the capsule
+		};
+
+		// Adapts the planes to a pass (see PassKind).
+		void ShapePlanes(std::vector<b3CollisionPlane>& planes, PassKind pass, float cosMaxSlope)
+		{
+			for (b3CollisionPlane& plane : planes)
 			{
-				ControllerRecord& record = it->second;
-				if (GetShapeOf(component) == record.Shape)
+				b3Vec3& normal = plane.plane.normal;
+				const bool upward = normal.y > 1.0e-3f;
+				const bool walkable = upward && normal.y >= cosMaxSlope;
+				if (pass == PassKind::Across && upward && !walkable)
 				{
-					RefreshSettings(record, component);
-					return;
+					const float horizontal = std::sqrt(normal.x * normal.x + normal.z * normal.z);
+					if (horizontal > 1.0e-4f)
+						normal = b3Vec3 { normal.x / horizontal, 0.0f, normal.z / horizontal };
 				}
-				// A new shape or layer: a new character and presence body where the old one stood, walking on as before.
-				const JPH::BodyID oldBody = record.PresenceBody;
-				DestroyPresenceBody(data, record);
-				const glm::vec3 position = ToGlm(JPH::Vec3(record.Character->GetPosition()));
-				const JPH::Vec3 velocity = record.Character->GetLinearVelocity();
-				if (!BuildCharacter(data, record, entity, position))
+				else if ((pass == PassKind::Vertical && walkable) || (pass == PassKind::Standing && upward))
 				{
-					SetWaitsForPresenceSlot(data, record, false);
-					outChanges.push_back({ record.EntityID, oldBody.GetIndexAndSequenceNumber(), c_NoCharacterBody, true });
-					data.Controllers.erase(it);
-					return;
+					normal = b3Vec3 { 0.0f, 1.0f, 0.0f };
 				}
-				record.Character->SetLinearVelocity(velocity);
-				outChanges.push_back({ record.EntityID, oldBody.GetIndexAndSequenceNumber(), record.PresenceBody.GetIndexAndSequenceNumber(), false });
-				return;
 			}
-
-			ControllerRecord& record = data.Controllers[handle];
-			record.EntityID = entity.GetUUID();
-			record.Handle = handle;
-			const glm::vec3 position(data.OwnerScene->GetWorldTransform(entity)[3]);
-			if (!IsFinite(position) || !BuildCharacter(data, record, entity, position))
-			{
-				if (!IsFinite(position))
-					ST_CORE_WARN("Physics: the Character Controller of '{}' has a non-finite position; it is not simulated", entity.GetName());
-				data.Controllers.erase(handle);
-				return;
-			}
-			outChanges.push_back({ record.EntityID, c_NoCharacterBody, record.PresenceBody.GetIndexAndSequenceNumber(), false });
 		}
 
-		// Puts a controller (and its presence body) at a position, as if it had always stood there: no velocity carried over.
-		void PlaceController(CharacterControllerSetData& data, ControllerRecord& record, const glm::vec3& position)
+		// Moves a capsule from `position` by `displacement` as far as it can, sliding along what it meets (box3d's plane
+		// solver and mover cast). The planes of the last iteration stay in the query.
+		glm::vec3 SlideMove(MoverQuery& query, glm::vec3 position, const glm::vec3& displacement, const b3Capsule& capsule, PassKind pass, float cosMaxSlope)
 		{
-			JPH::CharacterVirtual& character = *record.Character;
-			character.SetPosition(ToJoltPosition(position));
-			JPH::Vec3 velocity = character.GetLinearVelocity();
-			velocity.SetY(0.0f);
-			character.SetLinearVelocity(velocity);
-			record.Position = position;
-			record.Velocity = glm::vec3(0.0f);
-			if (!record.PresenceBody.IsInvalid())
-				data.System->GetBodyInterface().SetPositionAndRotation(record.PresenceBody, GetPresencePosition(position), JPH::Quat::sIdentity(), JPH::EActivation::Activate);
-			const ControllerLayerFilter layers(*data.Settings, record.Shape.Layer);
-			const ControllerBodyFilter bodyFilter(record.PresenceBody, record.EntityID);
-			character.RefreshContacts(JPH::BroadPhaseLayerFilter(), layers, bodyFilter, JPH::ShapeFilter(), GetMainAllocator(data));
+			const glm::vec3 target = position + displacement;
+			for (int iteration = 0; iteration < c_MoveIterations; iteration++)
+			{
+				CollidePlanes(query, position, capsule);
+				ShapePlanes(*query.Planes, pass, cosMaxSlope);
+				const b3PlaneSolverResult solved = b3SolvePlanes(ToB3(target - position), query.Planes->data(), static_cast<int>(query.Planes->size()));
+				glm::vec3 delta = ToGlm(solved.delta);
+				const float fraction = CastCapsule(query, position, capsule, delta);
+				delta *= fraction;
+				position += delta;
+				if (glm::dot(delta, delta) < c_MoveTolerance * c_MoveTolerance)
+					break;
+			}
+			return position;
 		}
 
-		// One fixed step of one controller: its velocity from the gameplay requests, gravity and the ground, then Jolt's move.
+		// The normal of the surface right below a point, `offset` beside it (box3d's mover planes give the direction from the
+		// contact to the capsule, which at an edge is not the surface's), if the surface is about as high as the point.
+		std::optional<glm::vec3> FindSurfaceNormal(MoverQuery& query, const glm::vec3& point, const glm::vec2& offset)
+		{
+			constexpr float c_Height = 0.05f;
+			const glm::vec3 origin(point.x + offset.x, point.y + c_Height, point.z + offset.y);
+			struct RayQuery
+			{
+				const MoverQuery* Mover = nullptr;
+				float Fraction = 2.0f;
+				glm::vec3 Normal = glm::vec3(0.0f);
+			} ray { &query, 2.0f, glm::vec3(0.0f) };
+			b3World_CastRay(query.World, ToB3(origin), b3Vec3 { 0.0f, -2.0f * c_Height, 0.0f }, query.Filter, [](b3ShapeId shape, b3Pos, b3Vec3 normal, float fraction, uint64_t, int, int, void* context)
+			{
+				RayQuery& found = *static_cast<RayQuery*>(context);
+				MoverQuery mover = *found.Mover;
+				if (!AcceptMoverShape(shape, &mover))
+					return -1.0f;
+				if (fraction < found.Fraction)
+				{
+					found.Fraction = fraction;
+					found.Normal = ToGlm(normal);
+				}
+				return fraction;
+			}, &ray);
+			if (ray.Fraction > 1.0f)
+				return std::nullopt;
+			return ray.Normal;
+		}
+
+		// Whether a contact on a capsule's round bottom is on an edge of walkable ground (a step's, or a ledge's): the surface
+		// just beside the edge, on either side, is walkable at the contact's height.
+		std::optional<glm::vec3> FindWalkableEdge(MoverQuery& query, const glm::vec3& point, const glm::vec3& position, float cosMaxSlope)
+		{
+			constexpr float c_Inset = 0.02f;
+			glm::vec2 inward(position.x - point.x, position.z - point.z);
+			const float length = glm::length(inward);
+			if (!(length > 1.0e-5f))
+				return std::nullopt;
+			inward = inward / length * c_Inset;
+			for (const glm::vec2& offset : { -inward, inward })
+			{
+				if (const std::optional<glm::vec3> surface = FindSurfaceNormal(query, point, offset); surface && surface->y >= cosMaxSlope)
+					return surface;
+			}
+			return std::nullopt;
+		}
+
+		// What a capsule at `position` stands on: the planes of what it touches within c_ContactMargin, below its lower
+		// sphere's center and facing up. Walkable (no steeper than the maximum slope) is OnGround, only steeper is
+		// OnSteepGround, touching only beside or above NotSupported, nothing InAir; the ground is the most upward plane.
+		GroundContact FindGround(MoverQuery& query, const ControllerRecord& record, const glm::vec3& position)
+		{
+			GroundContact ground;
+			const b3Capsule probe = MakeCapsule(record.Shape, 1.0f, c_ContactMargin);
+			CollidePlanes(query, position, probe);
+			if (query.Planes->empty())
+				return ground;
+			ground.State = CharacterGroundState::NotSupported;
+			const float lowerCenter = probe.center1.y;
+			float best = 1.0e-3f;
+			int bestIndex = -1;
+			for (size_t index = 0; index < query.Planes->size(); index++)
+			{
+				const b3Vec3 normal = (*query.Planes)[index].plane.normal;
+				const PlaneSource& source = (*query.Sources)[index];
+				if (!(source.Point.y < lowerCenter) || !(normal.y > best))
+					continue;
+				best = normal.y;
+				bestIndex = static_cast<int>(index);
+			}
+			if (bestIndex < 0)
+				return ground;
+			glm::vec3 normal = ToGlm((*query.Planes)[static_cast<size_t>(bestIndex)].plane.normal);
+			const PlaneSource source = (*query.Sources)[static_cast<size_t>(bestIndex)];
+			ground.Point = position + source.Point;
+			if (normal.y < record.CosMaxSlope)
+			{
+				// The capsule's round bottom on an edge (a step's) meets it at a slant: the surface just inside the edge says
+				// whether it stands on a step or on a slope.
+				if (const std::optional<glm::vec3> surface = FindWalkableEdge(query, ground.Point, position, record.CosMaxSlope))
+					normal = *surface;
+			}
+			ground.State = normal.y >= record.CosMaxSlope ? CharacterGroundState::OnGround : CharacterGroundState::OnSteepGround;
+			ground.Normal = normal;
+			ground.Body = b3Shape_GetBody(source.Shape);
+			ground.Entity = GetShapeEntity(source.Shape);
+			if (b3Body_GetType(ground.Body) != b3_staticBody)
+				ground.Velocity = ToGlm(b3Body_GetWorldPointVelocity(ground.Body, ToB3(ground.Point)));
+			return ground;
+		}
+
+		// Remembers the dynamic bodies a pass ran into, once per body and step, for the pushes after the moves.
+		void GatherPushes(MoverQuery& query, ControllerRecord& record, const glm::vec3& position)
+		{
+			for (size_t index = 0; index < query.Planes->size(); index++)
+			{
+				const PlaneSource& source = (*query.Sources)[index];
+				const b3BodyId body = b3Shape_GetBody(source.Shape);
+				if (b3Body_GetType(body) != b3_dynamicBody)
+					continue;
+				const auto existing = std::find_if(record.Pushes.begin(), record.Pushes.end(), [&](const PushContact& push) { return B3_ID_EQUALS(push.Body, body); });
+				if (existing != record.Pushes.end())
+					continue; // One push per body and step, from its first contact
+				const glm::vec3 point = position + source.Point;
+				record.Pushes.push_back({ body, point, ToGlm((*query.Planes)[index].plane.normal), ToGlm(b3Body_GetWorldPointVelocity(body, ToB3(point))) });
+			}
+		}
+
+		// Collects what the controller touches at the end of its move (each body once: the first of its planes in box3d's
+		// deterministic order).
+		void GatherTouching(MoverQuery& query, ControllerRecord& record, const glm::vec3& position)
+		{
+			record.Touching.clear();
+			const b3Capsule probe = MakeCapsule(record.Shape, 1.0f, c_ContactMargin);
+			CollidePlanes(query, position, probe);
+			for (size_t index = 0; index < query.Planes->size(); index++)
+			{
+				const PlaneSource& source = (*query.Sources)[index];
+				const UUID other = GetShapeEntity(source.Shape);
+				if (other == UUID::Null() || std::any_of(record.Touching.begin(), record.Touching.end(), [other](const CharacterContactReport& report) { return report.Other == other; }))
+					continue;
+				CharacterContactReport report;
+				report.Controller = record.EntityID;
+				report.Other = other;
+				report.Point = position + source.Point;
+				report.Normal = -ToGlm((*query.Planes)[index].plane.normal);
+				record.Touching.push_back(report);
+			}
+		}
+
+		// One fixed step of one controller: its velocity from the gameplay requests, gravity and the ground, then its moves.
 		// Reads the world as it was before the step and writes only the record (see CharacterControllerSet::Step).
-		void MoveController(const CharacterControllerSetData& data, ControllerRecord& record, float timestep, const glm::vec3& gravity, JPH::TempAllocator& allocator)
+		void MoveController(const CharacterControllerSetData& data, ControllerRecord& record, float timestep, const glm::vec3& gravity, bool collectContacts)
 		{
-			JPH::CharacterVirtual& character = *record.Character;
 			record.Pushes.clear();
-			character.UpdateGroundVelocity();
+			std::vector<b3CollisionPlane> planes;
+			std::vector<PlaneSource> sources;
+			planes.reserve(c_MaxPlanes);
+			sources.reserve(c_MaxPlanes);
+			MoverQuery query { data.World, PhysicsFilters::MakeLayerQueryFilter(record.Shape.Layer, data.Settings->LayerCollisionMasks), record.EntityID, &planes, &sources };
 
-			const JPH::Vec3 up = JPH::Vec3::sAxisY();
-			const JPH::Vec3 groundVelocity = character.GetGroundVelocity();
-			// The vertical velocity it was given last step (after gravity), not the measured one: walking up a step moves it up
-			// by the step's height within one step, which must not launch it.
-			const float verticalVelocity = character.GetLinearVelocity().GetY();
-			const bool onGround = character.GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
-			JPH::Vec3 velocity;
-			if (onGround && verticalVelocity - groundVelocity.GetY() < c_LeaveGroundSpeed)
-			{
-				// Standing: it moves with what it stands on.
-				velocity = groundVelocity;
-			}
-			else
-			{
-				// In the air, on steep ground or leaving the ground: its vertical motion goes on (sliding down a steep slope
-				// speeds up like falling), except that a ceiling stops a rise.
-				float vertical = verticalVelocity;
-				if (vertical > 0.0f && record.Velocity.y < vertical)
-					vertical = std::max(record.Velocity.y, 0.0f);
-				velocity = JPH::Vec3(0.0f, vertical, 0.0f);
-			}
-			if (record.JumpRequested)
-				velocity.SetY((onGround ? groundVelocity.GetY() : 0.0f) + record.JumpSpeed);
-
+			// The velocity it was given last step (after gravity and collisions), not the measured one: walking up a step moves
+			// it up by the step's height within one step, which must not launch it.
+			const GroundContact& previousGround = record.Ground;
+			const bool onGround = previousGround.State == CharacterGroundState::OnGround;
+			// Standing, it moves with what it stands on; in the air or on steep ground its motion goes on (sliding down a steep
+			// slope speeds up like falling).
+			glm::vec3 carried = onGround ? previousGround.Velocity : record.CarriedVelocity;
+			const bool jumping = record.JumpRequested;
+			if (jumping)
+				carried.y = (onGround ? previousGround.Velocity.y : 0.0f) + record.JumpSpeed;
 			const glm::vec3 scaledGravity = gravity * record.GravityScale;
-			velocity += ToJolt(scaledGravity) * timestep;
+			carried += scaledGravity * timestep;
+			// Moving away from the ground faster than c_LeaveGroundSpeed leaves it (a jump or a launch).
+			const bool leaving = carried.y - (onGround ? previousGround.Velocity.y : 0.0f) > c_LeaveGroundSpeed;
+
 			// Walking is horizontal; the vertical part of the walk velocity counts only without gravity (flying, swimming).
 			glm::vec3 walk = record.WalkVelocity;
 			if (record.GravityScale != 0.0f)
 				walk.y = 0.0f;
-			velocity += ToJolt(walk) + ToJolt(record.Motion) / timestep;
-			character.SetLinearVelocity(velocity);
+			const glm::vec3 velocity = carried + walk + record.Motion / timestep;
 			record.StepVelocity = velocity;
 
-			JPH::CharacterVirtual::ExtendedUpdateSettings settings;
-			settings.mWalkStairsStepUp = up * record.StepHeight;
-			settings.mStickToFloorStepDown = -up * record.StepHeight;
-			const ControllerLayerFilter layers(*data.Settings, record.Shape.Layer);
-			const ControllerBodyFilter bodies(record.PresenceBody, record.EntityID);
-			character.ExtendedUpdate(timestep, ToJolt(scaledGravity), settings, JPH::BroadPhaseLayerFilter(), layers, bodies, JPH::ShapeFilter(), allocator);
+			const glm::vec3 start = record.Position;
+			const b3Capsule capsule = MakeCapsule(record.Shape, 1.0f);
+			const glm::vec3 across(velocity.x * timestep, 0.0f, velocity.z * timestep);
 
-			record.NewPosition = ToGlm(JPH::Vec3(character.GetPosition()));
-			record.Velocity = (record.NewPosition - record.Position) / timestep;
+			// Across: slide along walls and up walkable slopes.
+			glm::vec3 position = SlideMove(query, start, across, capsule, PassKind::Across, record.CosMaxSlope);
+			GatherPushes(query, record, position);
+			// What blocked the carried motion across stops it (a wall stops a slide or a flight).
+			glm::vec3 horizontal(carried.x, 0.0f, carried.z);
+			horizontal = ToGlm(b3ClipVector(ToB3(horizontal), planes.data(), static_cast<int>(planes.size())));
+			horizontal.y = 0.0f;
+
+			// Steps: blocked while standing, it tries the same move from up to a step higher and keeps it if it lands on walkable
+			// ground further along.
+			const float wanted = glm::length(glm::vec2(across.x, across.z));
+			const float made = glm::length(glm::vec2(position.x - start.x, position.z - start.z));
+			if (onGround && !jumping && record.StepHeight > 0.0f && wanted > c_MoveTolerance && made < wanted * 0.99f)
+			{
+				const glm::vec3 up(0.0f, record.StepHeight, 0.0f);
+				const glm::vec3 lifted = start + up * CastCapsule(query, start, capsule, up);
+				glm::vec3 stepped = SlideMove(query, lifted, across, capsule, PassKind::Across, record.CosMaxSlope);
+				const glm::vec3 down(0.0f, -(lifted.y - start.y) - c_ContactMargin, 0.0f);
+				stepped += down * CastCapsule(query, stepped, capsule, down);
+				const float steppedMade = glm::length(glm::vec2(stepped.x - start.x, stepped.z - start.z));
+				// It must stand on walkable ground no higher above its feet than the step height (on a higher step's edge it
+				// would only hang on).
+				const GroundContact landed = FindGround(query, record, stepped);
+				if (steppedMade > made + c_MoveTolerance && landed.State == CharacterGroundState::OnGround && landed.Point.y - start.y <= record.StepHeight + c_ContactMargin)
+					position = stepped;
+			}
+
+			// Vertical: fall, rise or stand.
+			const glm::vec3 vertical(0.0f, velocity.y * timestep, 0.0f);
+			position = SlideMove(query, position, vertical, capsule, onGround && !leaving ? PassKind::Standing : PassKind::Vertical, record.CosMaxSlope);
+			// What the collisions left of the carried motion: a floor stops a fall, a ceiling a rise, steep ground turns a fall
+			// into a slide down along it.
+			glm::vec3 next = ToGlm(b3ClipVector(ToB3(glm::vec3(horizontal.x, carried.y, horizontal.z)), planes.data(), static_cast<int>(planes.size())));
+
+			// Stick to the ground: walking down a slope or a step within the step height, it stays on the ground.
+			if (onGround && !leaving && record.StepHeight > 0.0f)
+			{
+				const GroundContact ground = FindGround(query, record, position);
+				if (ground.State == CharacterGroundState::InAir || ground.State == CharacterGroundState::NotSupported)
+				{
+					const glm::vec3 down(0.0f, -record.StepHeight, 0.0f);
+					const float fraction = CastCapsule(query, position, capsule, down);
+					if (fraction < 1.0f)
+					{
+						const glm::vec3 snapped = position + down * fraction;
+						if (FindGround(query, record, snapped).State == CharacterGroundState::OnGround)
+							position = snapped;
+					}
+				}
+			}
+
+			record.Ground = FindGround(query, record, position);
+			if (leaving && record.Ground.State == CharacterGroundState::OnGround)
+				record.Ground.State = CharacterGroundState::InAir; // Rising off the ground (a jump)
+			if (record.Ground.State == CharacterGroundState::InAir)
+			{
+				record.Ground.Normal = glm::vec3(0.0f);
+				record.Ground.Velocity = glm::vec3(0.0f);
+				record.Ground.Body = b3_nullBodyId;
+				record.Ground.Entity = UUID::Null();
+			}
+			// Standing, it carries what it stands on (so that it keeps the motion of a platform it walks off).
+			record.CarriedVelocity = record.Ground.State == CharacterGroundState::OnGround ? record.Ground.Velocity : next;
+			if (collectContacts)
+				GatherTouching(query, record, position);
+			else
+				record.Touching.clear();
+
+			record.NewPosition = IsFinite(position) ? position : start;
+			record.Velocity = (record.NewPosition - start) / timestep;
 			record.Motion = glm::vec3(0.0f);
 			record.JumpRequested = false;
+		}
+
+		// Puts a controller (and its presence body) at a position, as if it had always stood there: no vertical velocity
+		// carried over.
+		void PlaceController(CharacterControllerSetData& data, ControllerRecord& record, const glm::vec3& position)
+		{
+			record.Position = position;
+			record.Velocity = glm::vec3(0.0f);
+			record.CarriedVelocity = glm::vec3(0.0f);
+			MovePresenceBody(record);
+			std::vector<b3CollisionPlane> planes;
+			std::vector<PlaneSource> sources;
+			MoverQuery query { data.World, PhysicsFilters::MakeLayerQueryFilter(record.Shape.Layer, data.Settings->LayerCollisionMasks), record.EntityID, &planes, &sources };
+			record.Ground = FindGround(query, record, position);
 		}
 
 		// Pushes the dynamic bodies a controller ran into during its move, and presses on a dynamic body it stands on.
@@ -621,61 +686,49 @@ namespace Strata
 		// On a dynamic body, the character's weight (c_CharacterMass under the scene's gravity, scaled like the character's)
 		// presses on it at the ground contact: all of it while the character stands (what holds the character in place on a
 		// slope holds the body too), and only the part across the surface while it slides down ground too steep to stand on.
-		void PushBodies(CharacterControllerSetData& data, ControllerRecord& record, float timestep, const glm::vec3& gravity)
+		void PushBodies(ControllerRecord& record, float timestep, const glm::vec3& gravity)
 		{
-			JPH::BodyInterface& bodies = data.System->GetBodyInterface();
 			const float maxImpulse = record.PushStrength * timestep;
 			for (const PushContact& push : record.Pushes)
 			{
-				glm::vec3 impulse(0.0f);
-				{
-					JPH::BodyLockRead lock(data.System->GetBodyLockInterface(), push.Body);
-					if (!lock.SucceededAndIsInBroadPhase() || !lock.GetBody().IsDynamic())
-						continue;
-					const JPH::Body& body = lock.GetBody();
-					// The normal points from the body to the character: the character closes in while the body's point moves
-					// towards it faster than the character moves away.
-					const float closingSpeed = (push.Velocity - record.StepVelocity).Dot(push.Normal);
-					if (!(closingSpeed > 0.0f))
-						continue;
-					const JPH::Vec3 arm = JPH::Vec3(push.Position - body.GetCenterOfMassPosition());
-					const JPH::Vec3 turn = arm.Cross(push.Normal);
-					const float inverseMassAtContact = body.GetMotionProperties()->GetInverseMass() + turn.Dot(body.GetInverseInertia().Multiply3x3(turn));
-					if (!(inverseMassAtContact > 0.0f))
-						continue;
-					const float magnitude = std::min(closingSpeed / inverseMassAtContact, maxImpulse);
-					impulse = -magnitude * ToGlm(push.Normal);
-					impulse.y = std::max(impulse.y, 0.0f);
-				}
-				// The lock is released first: AddImpulse locks the body itself.
+				if (!b3Body_IsValid(push.Body) || b3Body_GetType(push.Body) != b3_dynamicBody || !b3Body_IsEnabled(push.Body))
+					continue;
+				// The normal points from the body to the character: the character closes in while the body's point moves
+				// towards it faster than the character moves away.
+				const float closingSpeed = glm::dot(push.Velocity - record.StepVelocity, push.Normal);
+				if (!(closingSpeed > 0.0f))
+					continue;
+				const glm::vec3 arm = push.Position - ToGlm(b3Body_GetWorldCenter(push.Body));
+				const glm::vec3 turn = glm::cross(arm, push.Normal);
+				const b3Vec3 inverseInertiaTurn = b3MulMV(b3Body_GetWorldInverseRotationalInertia(push.Body), ToB3(turn));
+				const float inverseMassAtContact = b3Body_GetInverseMass(push.Body) + glm::dot(turn, ToGlm(inverseInertiaTurn));
+				if (!(inverseMassAtContact > 0.0f))
+					continue;
+				const float magnitude = std::min(closingSpeed / inverseMassAtContact, maxImpulse);
+				glm::vec3 impulse = -magnitude * push.Normal;
+				impulse.y = std::max(impulse.y, 0.0f);
 				if (impulse != glm::vec3(0.0f))
-					bodies.AddImpulse(push.Body, ToJolt(impulse), push.Position);
+					b3Body_ApplyLinearImpulse(push.Body, ToB3(impulse), ToB3(push.Position), true);
 			}
 
-			const JPH::CharacterVirtual& character = *record.Character;
-			const JPH::BodyID ground = character.GetGroundBodyID();
-			const JPH::CharacterBase::EGroundState state = character.GetGroundState();
-			const bool standing = state == JPH::CharacterBase::EGroundState::OnGround;
-			const bool sliding = state == JPH::CharacterBase::EGroundState::OnSteepGround;
+			const GroundContact& ground = record.Ground;
+			const bool standing = ground.State == CharacterGroundState::OnGround;
+			const bool sliding = ground.State == CharacterGroundState::OnSteepGround;
 			const glm::vec3 weight = c_CharacterMass * record.GravityScale * gravity;
-			if (ground.IsInvalid() || (!standing && !sliding) || !(glm::dot(weight, weight) > 0.0f))
+			if (B3_IS_NULL(ground.Body) || (!standing && !sliding) || !(glm::dot(weight, weight) > 0.0f))
+				return;
+			if (!b3Body_IsValid(ground.Body) || b3Body_GetType(ground.Body) != b3_dynamicBody || !b3Body_IsEnabled(ground.Body))
 				return;
 			glm::vec3 force = weight;
 			if (sliding)
 			{
 				// The ground's normal points out of it: the weight presses into it as far as it points against the normal.
-				const glm::vec3 normal = ToGlm(character.GetGroundNormal());
-				const float into = -glm::dot(weight, normal);
+				const float into = -glm::dot(weight, ground.Normal);
 				if (!(into > 0.0f))
 					return;
-				force = -into * normal;
+				force = -into * ground.Normal;
 			}
-			{
-				JPH::BodyLockRead lock(data.System->GetBodyLockInterface(), ground);
-				if (!lock.SucceededAndIsInBroadPhase() || !lock.GetBody().IsDynamic())
-					return;
-			}
-			bodies.AddImpulse(ground, ToJolt(force * timestep), character.GetGroundPosition());
+			b3Body_ApplyLinearImpulse(ground.Body, ToB3(force * timestep), ToB3(ground.Point), true);
 		}
 
 		// Writes a controller's new position to its entity's translation (its rotation and scale stay).
@@ -688,27 +741,71 @@ namespace Strata
 			return true;
 		}
 
-		void GatherContacts(const ControllerRecord& record, std::vector<CharacterContactReport>& outContacts)
+		void RemoveController(std::map<entt::entity, ControllerRecord>& controllers, std::map<entt::entity, ControllerRecord>::iterator it, std::vector<CharacterBodyChange>& outChanges)
 		{
-			const size_t first = outContacts.size();
-			for (const JPH::CharacterContact& contact : record.Character->GetActiveContacts())
+			ControllerRecord& record = it->second;
+			CharacterBodyChange change;
+			change.Entity = record.EntityID;
+			change.OldBody = record.PresenceBody;
+			change.OldShape = record.PresenceShape;
+			change.Removed = true;
+			DestroyPresenceBody(record);
+			outChanges.push_back(change);
+			controllers.erase(it);
+		}
+
+		// Creates, rebuilds or removes the controller of one entity after a change.
+		void RefreshController(CharacterControllerSetData& data, entt::entity handle, std::vector<CharacterBodyChange>& outChanges)
+		{
+			const Entity entity(handle, data.OwnerScene);
+			auto it = data.Controllers.find(handle);
+			if (!IsControllerWanted(data, entity))
 			{
-				if (!contact.mHadCollision || contact.mWasDiscarded || contact.mIsSensorB || contact.mBodyB.IsInvalid() || contact.mUserData == static_cast<uint64_t>(record.EntityID))
-					continue;
-				// One contact per body (Jolt lists one per sub shape), the first in Jolt's deterministic order.
-				const uint32_t other = contact.mBodyB.GetIndexAndSequenceNumber();
-				const auto begin = outContacts.begin() + static_cast<std::ptrdiff_t>(first);
-				if (std::any_of(begin, outContacts.end(), [other](const CharacterContactReport& report) { return report.OtherBody == other; }))
-					continue;
-				CharacterContactReport report;
-				report.Controller = record.EntityID;
-				report.Other = UUID(contact.mUserData);
-				report.ControllerBody = record.PresenceBody.IsInvalid() ? c_NoCharacterBody : record.PresenceBody.GetIndexAndSequenceNumber();
-				report.OtherBody = other;
-				report.Point = ToGlm(JPH::Vec3(contact.mPosition));
-				report.Normal = -ToGlm(contact.mContactNormal);
-				outContacts.push_back(report);
+				if (it != data.Controllers.end())
+					RemoveController(data.Controllers, it, outChanges);
+				return;
 			}
+
+			const CharacterControllerComponent& component = entity.GetComponent<CharacterControllerComponent>();
+			if (it != data.Controllers.end())
+			{
+				ControllerRecord& record = it->second;
+				RefreshSettings(record, component);
+				if (GetShapeOf(component) == record.Shape)
+					return;
+				// A new shape or layer: a new presence body where the old one stood, walking on as before.
+				CharacterBodyChange change;
+				change.Entity = record.EntityID;
+				change.OldBody = record.PresenceBody;
+				change.OldShape = record.PresenceShape;
+				DestroyPresenceBody(record);
+				record.Shape = GetShapeOf(component);
+				CreatePresenceBody(data, record, record.Position);
+				change.NewBody = record.PresenceBody;
+				change.NewShape = record.PresenceShape;
+				outChanges.push_back(change);
+				return;
+			}
+
+			const glm::vec3 position(data.OwnerScene->GetWorldTransform(entity)[3]);
+			if (!IsFinite(position))
+			{
+				ST_CORE_WARN("Physics: the Character Controller of '{}' has a non-finite position; it is not simulated", entity.GetName());
+				return;
+			}
+			ControllerRecord& record = data.Controllers[handle];
+			record.EntityID = entity.GetUUID();
+			record.Handle = handle;
+			record.Shape = GetShapeOf(component);
+			RefreshSettings(record, component);
+			CreatePresenceBody(data, record, position);
+			// Where it stands right away: the ground state is valid before its first step.
+			PlaceController(data, record, position);
+			CharacterBodyChange change;
+			change.Entity = record.EntityID;
+			change.NewBody = record.PresenceBody;
+			change.NewShape = record.PresenceShape;
+			outChanges.push_back(change);
 		}
 
 		// The set's data is reached through a Scope, also from const members, so one non-const lookup serves both.
@@ -722,12 +819,12 @@ namespace Strata
 
 	}
 
-	CharacterControllerSet::CharacterControllerSet(Scene& scene, JPH::PhysicsSystem& system, const PhysicsSettings& settings)
+	CharacterControllerSet::CharacterControllerSet(Scene& scene, b3WorldId world, const PhysicsSettings& settings)
 		: m_Data(CreateScope<CharacterControllerSetData>())
 	{
 		CharacterControllerSetData& data = *m_Data;
 		data.OwnerScene = &scene;
-		data.System = &system;
+		data.World = world;
 		data.Settings = &settings;
 
 		entt::registry& registry = scene.GetRegistry();
@@ -751,7 +848,7 @@ namespace Strata
 		CharacterControllerSetData& data = *m_Data;
 		data.Connections.clear();
 		for (auto& [handle, record] : data.Controllers)
-			DestroyPresenceBody(data, record);
+			DestroyPresenceBody(record);
 		data.Controllers.clear();
 	}
 
@@ -791,48 +888,16 @@ namespace Strata
 		handles.erase(std::unique(handles.begin(), handles.end()), handles.end());
 		for (const entt::entity handle : handles)
 			RefreshController(data, handle, outChanges);
-
-		AddNewPresenceBodies(data);
 	}
 
-	void CharacterControllerSet::Rebind(JPH::PhysicsSystem& system, std::vector<CharacterBodyChange>& outChanges)
+	void CharacterControllerSet::RefreshFilters()
 	{
-		ST_PROFILE_FUNCTION();
 		CharacterControllerSetData& data = *m_Data;
-		data.System = &system;
-		PhysicsStateBuffer state;
 		for (auto& [handle, record] : data.Controllers)
 		{
-			// The same capsule in the new system, with everything the old one knew: position, velocity, ground state and the
-			// contacts its next move starts from (they name bodies by ID, which the growth kept).
-			const JPH::Ref<JPH::CharacterVirtual> previous = record.Character;
-			state.Clear();
-			previous->SaveState(state);
-			record.Character = CreateCharacter(data, record, previous->GetShape(), ToGlm(JPH::Vec3(previous->GetPosition())));
-			record.Character->RestoreState(state);
-			const Entity entity(handle, data.OwnerScene);
-			if (const CharacterControllerComponent* component = entity.TryGetComponent<CharacterControllerComponent>())
-				RefreshSettings(record, *component);
-			if (state.IsFailed())
-				ST_CORE_ERROR("Physics: the character controller of '{}' could not keep its state while its world grew", entity.GetName());
-
-			// Controllers the full world left without a presence body get one now.
-			if (record.WaitsForPresenceSlot)
-			{
-				CreatePresenceBody(data, record, entity, record.Position);
-				if (!record.PresenceBody.IsInvalid())
-				{
-					data.FullWorldEntities.erase(record.EntityID);
-					outChanges.push_back({ record.EntityID, c_NoCharacterBody, record.PresenceBody.GetIndexAndSequenceNumber(), false });
-				}
-			}
+			if (B3_IS_NON_NULL(record.PresenceShape))
+				b3Shape_SetFilter(record.PresenceShape, PhysicsFilters::MakeShapeFilter(record.Shape.Layer, data.Settings->LayerCollisionMasks), true);
 		}
-		AddNewPresenceBodies(data);
-	}
-
-	uint32_t CharacterControllerSet::GetWaitingPresenceBodyCount() const
-	{
-		return m_Data->WaitingPresenceBodies;
 	}
 
 	void CharacterControllerSet::Step(float timestep, const glm::vec3& gravity, bool collectContacts, CharacterStepOutput& output)
@@ -873,18 +938,15 @@ namespace Strata
 			records.push_back(&record);
 		}
 
-		// The moves: in parallel batches, each with scratch memory of its own.
+		// The moves: in parallel batches (box3d's queries only read the world).
 		const uint32_t count = static_cast<uint32_t>(records.size());
 		const uint32_t threads = JobSystem::IsInitialized() ? JobSystem::GetWorkerThreadCount() + 1 : 1;
 		const uint32_t batchSize = std::max(c_MinBatchSize, (count + threads * c_BatchesPerThread - 1) / (threads * c_BatchesPerThread));
 		const uint32_t batches = (count + batchSize - 1) / batchSize;
-		while (data.Allocators.size() < batches)
-			data.Allocators.push_back(CreateScope<JPH::TempAllocatorImplWithMallocFallback>(c_ScratchBytesPerBatch));
 		const auto move = [&](uint32_t begin, uint32_t end)
 		{
-			JPH::TempAllocator& allocator = *data.Allocators[begin / batchSize];
 			for (uint32_t index = begin; index < end; index++)
-				MoveController(data, *records[index], timestep, gravity, allocator);
+				MoveController(data, *records[index], timestep, gravity, collectContacts);
 		};
 		if (batches > 1 && JobSystem::IsInitialized())
 			JobSystem::ParallelFor(count, batchSize, move);
@@ -892,7 +954,6 @@ namespace Strata
 			move(0, count);
 
 		// After the moves, on the main thread in controller order: write the entities, move the presence bodies, push.
-		JPH::BodyInterface& bodies = data.System->GetBodyInterface();
 		for (ControllerRecord* record : records)
 		{
 			if (record->NewPosition != record->Position && IsFinite(record->NewPosition))
@@ -902,19 +963,11 @@ namespace Strata
 					output.Moved.push_back(record->Handle);
 					record->Position = record->NewPosition;
 				}
-				else
-				{
-					// Its parent cannot be inverted, so its entity cannot be placed: it stays where its entity is.
-					record->Character->SetPosition(ToJoltPosition(record->Position));
-				}
-				if (!record->PresenceBody.IsInvalid())
-					bodies.SetPositionAndRotation(record->PresenceBody, GetPresencePosition(record->Position), JPH::Quat::sIdentity(), JPH::EActivation::Activate);
+				MovePresenceBody(*record);
 			}
-			PushBodies(data, *record, timestep, gravity);
+			PushBodies(*record, timestep, gravity);
 			if (collectContacts)
-				GatherContacts(*record, output.Contacts);
-			if (record->PresenceBody.IsInvalid())
-				output.WithoutPresenceBody.push_back(record->EntityID);
+				output.Contacts.insert(output.Contacts.end(), record->Touching.begin(), record->Touching.end());
 		}
 		scene.MarkTransformsChanged(output.Moved);
 		data.LastStepTime = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
@@ -984,25 +1037,17 @@ namespace Strata
 		if (!record)
 			return std::nullopt;
 
-		const JPH::CharacterVirtual& character = *record->Character;
 		CharacterState state;
-		state.Ground = ToGroundState(character.GetGroundState());
+		state.Ground = record->Ground.State;
 		state.Velocity = record->Velocity;
 		if (state.Ground != CharacterGroundState::InAir)
 		{
-			state.GroundNormal = ToGlm(character.GetGroundNormal());
-			state.GroundVelocity = ToGlm(character.GetGroundVelocity());
-			if (!character.GetGroundBodyID().IsInvalid())
-				state.GroundEntity = m_Data->OwnerScene->GetEntityByUUID(UUID(character.GetGroundUserData()));
+			state.GroundNormal = record->Ground.Normal;
+			state.GroundVelocity = record->Ground.Velocity;
+			if (record->Ground.Entity != UUID::Null())
+				state.GroundEntity = m_Data->OwnerScene->GetEntityByUUID(record->Ground.Entity);
 		}
 		return state;
-	}
-
-	uint32_t CharacterControllerSet::GetPresenceBody(UUID entity) const
-	{
-		const Entity found = m_Data->OwnerScene->GetEntityByUUID(entity);
-		const ControllerRecord* record = FindController(*m_Data, found);
-		return record && !record->PresenceBody.IsInvalid() ? record->PresenceBody.GetIndexAndSequenceNumber() : c_NoCharacterBody;
 	}
 
 	uint32_t CharacterControllerSet::GetCount() const

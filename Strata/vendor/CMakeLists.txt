@@ -199,6 +199,10 @@ if(STRATA_WITH_PHYSICS)
 	# agree in Strata's objects. box3d's heavy validation (BOX3D_VALIDATE) stays off: it makes Debug test runs several times
 	# slower, and the golden hash and the physics suites cover correctness.
 	target_compile_definitions(box3d PUBLIC "$<$<NOT:$<CONFIG:Dist>>:B3_ENABLE_ASSERT>")
+	# The most triangles of a mesh one convex shape collides with at once (box3d's default is 512, beyond which it drops the
+	# others and logs once): a 4 m crate on a render mesh of 10 cm triangles covers 3,200. The buffer is in box3d's per-worker
+	# arena, not on the stack.
+	target_compile_definitions(box3d PUBLIC B3_MAX_MESH_CONTACT_TRIANGLES=4096)
 	if(UNIX AND NOT APPLE)
 		target_link_libraries(box3d PUBLIC m)
 	endif()

@@ -29,7 +29,17 @@ using namespace Strata::Tests;
 namespace
 {
 
-	constexpr uint32_t c_MiB = 1024u * 1024u;
+	// Warnings and errors logged since `logStart`.
+	size_t CountLogWarnings(uint64_t logStart)
+	{
+		size_t count = 0;
+		for (const LogEntry& entry : Log::GetBuffer().GetEntries(logStart))
+		{
+			if (entry.Level >= LogLevel::Warn)
+				count++;
+		}
+		return count;
+	}
 
 	// Forgets what earlier worlds needed (process-wide, per scene) before and after a test, so tests do not size each other's
 	// worlds.
@@ -89,16 +99,16 @@ namespace Strata::Tests
 	int RunBroadPhaseChurnProcess()
 	{
 #if defined(_MSC_VER)
-		// Jolt aborts the process when its broad phase runs out of nodes: let the exit code say so, without a dialog.
+		// A broad phase that leaked its nodes would end the process: let the exit code say so, without a dialog.
 		_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
 #endif
 		LogSpecification logSpecification;
 		logSpecification.Level = LogLevel::Warn;
 		Log::Init(logSpecification);
 
-		// A world for 1,024 bodies: its broad phase has nodes for twice the trees of that many bodies. Spawning 1,000 bodies
-		// and removing them before the next step, again and again, takes all of them within a few rounds unless the steps
-		// free the nodes of removed bodies, in the tree of moving bodies and in the tree of static ones.
+		// A world reserved for 1,024 bodies. Spawning 1,000 bodies and removing them before the next step, again and again,
+		// would grow its broad phase's trees without end (or exhaust a fixed node pool) unless the nodes of removed bodies are
+		// freed, in the tree of moving bodies and in the tree of static ones.
 		constexpr uint32_t c_Rounds = 20;
 		constexpr uint32_t c_Bodies = 1000;
 		int result = 0;
@@ -138,7 +148,7 @@ TEST_SUITE("Physics.Capacity")
 {
 	TEST_CASE("Bodies spawned and removed again before every step never exhaust the broad phase")
 	{
-		// Jolt ends the process when its broad phase runs out of nodes, so the spawns run in a helper process
+		// A broad phase that runs out of nodes ends the process, so the spawns run in a helper process
 		// (RunBroadPhaseChurnProcess).
 		ProcessSpecification specification;
 		specification.Executable = GetTestExecutablePath();
@@ -155,53 +165,35 @@ TEST_SUITE("Physics.Capacity")
 	{
 		const PhysicsSettings automatic;
 		CHECK(automatic.MaxBodies == 0);
-		CHECK(automatic.MaxBodyPairs == 0);
 		CHECK(automatic.MaxContactConstraints == 0);
-		CHECK(automatic.TempAllocatorSize == 0);
 
 		// Small scenes get the minimums.
 		const PhysicsSettings smallSettings = PhysicsWorld::ResolveCapacities(automatic, 10);
-		CHECK(smallSettings.MaxBodies == 65536);
-		CHECK(smallSettings.MaxBodyPairs == 4 * 65536);
-		CHECK(smallSettings.MaxContactConstraints == 10240);
-		CHECK(smallSettings.TempAllocatorSize >= 10 * c_MiB);
+		CHECK(smallSettings.MaxBodies == 1024);
+		CHECK(smallSettings.MaxContactConstraints == 2048);
 
-		// Large ones: the next power of two of twice the bodies, four pairs per body slot, two contacts per body, and the
-		// scratch memory for them.
+		// Large ones: the next power of two of twice the bodies, and two contacts per body.
 		const PhysicsSettings large = PhysicsWorld::ResolveCapacities(automatic, 70'000);
 		CHECK(large.MaxBodies == 262'144);
-		CHECK(large.MaxBodyPairs == 4 * 262'144);
 		CHECK(large.MaxContactConstraints == 140'000);
-		CHECK(large.TempAllocatorSize > smallSettings.TempAllocatorSize);
 
 		// Given capacities stay.
 		PhysicsSettings given;
 		given.MaxBodies = 100;
-		given.MaxBodyPairs = 200;
 		given.MaxContactConstraints = 300;
-		given.TempAllocatorSize = c_MiB;
-		const PhysicsSettings kept = PhysicsWorld::ResolveCapacities(given, 70'000, { 500'000, 500'000, 500'000 });
+		const PhysicsSettings kept = PhysicsWorld::ResolveCapacities(given, 70'000, { 500'000, 500'000 });
 		CHECK(kept.MaxBodies == 100);
-		CHECK(kept.MaxBodyPairs == 200);
 		CHECK(kept.MaxContactConstraints == 300);
-		CHECK(kept.TempAllocatorSize == c_MiB);
 
 		// What an earlier world needed raises the automatic ones.
-		const PhysicsSettings grown = PhysicsWorld::ResolveCapacities(automatic, 10, { 100'000, 3'000'000, 400'000 });
+		const PhysicsSettings grown = PhysicsWorld::ResolveCapacities(automatic, 10, { 100'000, 400'000 });
 		CHECK(grown.MaxBodies == 262'144);
-		CHECK(grown.MaxBodyPairs == 3'000'000);
 		CHECK(grown.MaxContactConstraints == 400'000);
 
-		// Nothing exceeds the limits a scene may ask for, which bound the memory a world reserves: also not the pairs sized for
-		// the largest number of bodies, given or automatic.
+		// Nothing exceeds the limits a scene may ask for.
 		const PhysicsSettings huge = PhysicsWorld::ResolveCapacities(automatic, 20'000'000);
 		CHECK(huge.MaxBodies == PhysicsCapacitySettings::c_MaxBodiesLimit);
-		CHECK(huge.MaxBodyPairs == PhysicsCapacitySettings::c_MaxBodyPairsLimit);
 		CHECK(huge.MaxContactConstraints == PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
-		CHECK(PhysicsWorld::ResolveCapacities(automatic, 10, { 0, UINT32_MAX, 0 }).MaxBodyPairs == PhysicsCapacitySettings::c_MaxBodyPairsLimit);
-		PhysicsSettings mostBodies;
-		mostBodies.MaxBodies = PhysicsCapacitySettings::c_MaxBodiesLimit;
-		CHECK(PhysicsWorld::ResolveCapacities(mostBodies, 10).MaxBodyPairs == PhysicsCapacitySettings::c_MaxBodyPairsLimit);
 		// The automatic sizing has room for a scene full of bodies.
 		const PhysicsSettings full = PhysicsWorld::ResolveCapacities(automatic, static_cast<uint32_t>(Scene::c_MaxEntities));
 		CHECK(full.MaxBodies == PhysicsCapacitySettings::c_MaxBodiesLimit);
@@ -214,12 +206,12 @@ TEST_SUITE("Physics.Capacity")
 		Scene scene("Capacities");
 		CreateGround(scene);
 		CreateBoxRow(scene, 3);
-		scene.GetSettings().PhysicsCapacity = { 16, 0, 64 };
+		scene.GetSettings().PhysicsCapacity.MaxBodies = 16;
+		scene.GetSettings().PhysicsCapacity.MaxContactConstraints = 64;
 
 		scene.OnRuntimeStart();
 		PhysicsStats stats = GetPhysics(scene).GetStats();
 		CHECK(stats.MaxBodies == 16);
-		CHECK(stats.MaxBodyPairs == 4 * 16);
 		CHECK(stats.MaxContactConstraints == 64);
 		CHECK(stats.BodyCount == 4);
 		scene.OnRuntimeStop();
@@ -227,13 +219,12 @@ TEST_SUITE("Physics.Capacity")
 		// Without scene capacities, the default settings give what they set and the rest is automatic.
 		scene.GetSettings().PhysicsCapacity = {};
 		PhysicsSettings defaults;
-		defaults.MaxBodyPairs = 1000;
+		defaults.MaxContactConstraints = 1000;
 		ScopedPhysicsSettings scopedDefaults(defaults);
 		scene.OnRuntimeStart();
 		stats = GetPhysics(scene).GetStats();
-		CHECK(stats.MaxBodies == 65536);
-		CHECK(stats.MaxBodyPairs == 1000);
-		CHECK(stats.MaxContactConstraints == 10240);
+		CHECK(stats.MaxBodies == 1024);
+		CHECK(stats.MaxContactConstraints == 1000);
 		CHECK(stats.Demand.IsEmpty());
 		scene.OnRuntimeStop();
 	}
@@ -293,7 +284,7 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(PhysicsSystem::GetRememberedCapacityDemand(other.GetLineageID()).IsEmpty());
 	}
 
-	TEST_CASE("A full world grows before its next step, beyond a capacity the scene gives with a warning")
+	TEST_CASE("A world grows past its reserved room in place, without a warning, and remembers it")
 	{
 		ScopedCapacityDemands demands;
 		Scene scene("Growing");
@@ -301,27 +292,26 @@ TEST_SUITE("Physics.Capacity")
 		scene.GetSettings().PhysicsCapacity.MaxBodies = 4;
 		const std::vector<Entity> boxes = CreateBoxRow(scene, 10);
 
-		// The bodies wait until the step, which grows the world first: no error, one info and one warning about the setting.
+		// Every body is built at once: box3d grows its storage, and the world counts one growth of its room (no error, no
+		// warning).
 		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
-		CHECK(physics.GetStats().BodyOverflowCount == 6);
-		StepScene(scene, 1);
 		PhysicsStats stats = physics.GetStats();
 		CHECK(stats.BodyCount == 10);
 		CHECK(stats.BodyOverflowCount == 0);
-		CHECK(stats.MaxBodies == 16); // The next power of two of twice the capacity and of the bodies needed
-		CHECK(stats.MaxBodyPairs == 4 * 16); // Automatic pairs grow with it
+		CHECK(stats.MaxBodies == 16); // The next power of two of twice the room and of the bodies
 		CHECK(stats.GrowthCount == 1);
 		CHECK(stats.LastGrowthFrom == 4);
 		CHECK(stats.LastGrowthTo == 16);
 		CHECK(stats.LastGrowthMs >= 0.0f);
+		CHECK(stats.Demand.Bodies == 16);
 		CHECK(CountLogMessages(logStart, "cannot create a body") == 0);
-		CHECK(CountLogMessages(logStart, "needs more bodies than its PhysicsCapacity.MaxBodies of 4; its world grew beyond it, to 16 bodies") == 1);
+		CHECK(CountLogWarnings(logStart) == 0);
 		for (const Entity box : boxes)
 			CHECK(physics.HasBody(box));
 
-		// The bodies of the grown world behave as before: queries find them, new ones are built, removed ones go.
+		// The bodies behave as before: queries find them, new ones are built, removed ones go.
 		CHECK(physics.Raycast(glm::vec3(-10.0f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f).has_value());
 		CreateBoxRow(scene, 3, 10.0f);
 		scene.DestroyEntities(std::vector<Entity>(boxes.begin(), boxes.begin() + 2));
@@ -330,6 +320,8 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(stats.BodyCount == 11);
 		CHECK(stats.GrowthCount == 1);
 		scene.OnRuntimeStop();
+		// The scene's next world is reserved for what this one grew to.
+		CHECK(PhysicsSystem::GetRememberedCapacityDemand(scene.GetLineageID()).Bodies == 16);
 	}
 
 	TEST_CASE("Growth keeps every body's ID, motion, sleep and touching pairs")
@@ -384,12 +376,23 @@ TEST_SUITE("Physics.Capacity")
 			linear.push_back(physics.GetLinearVelocity(sphere));
 			angular.push_back(physics.GetAngularVelocity(sphere));
 		}
-		CHECK(physics.GetStats().BodyOverflowCount > 0);
+		std::vector<uint64_t> ids;
+		const PhysicsWorld* world = physics.GetWorld();
+		REQUIRE(world != nullptr);
+		for (const Entity entity : resting)
+			ids.push_back(world->GetBodyID(entity));
+		for (const Entity entity : moving)
+			ids.push_back(world->GetBodyID(entity));
 
 		StepScene(scene, 1);
 		const PhysicsStats stats = physics.GetStats();
 		CHECK(stats.BodyOverflowCount == 0);
 		CHECK(stats.GrowthCount == 1);
+		size_t index = 0;
+		for (const Entity entity : resting)
+			CHECK(world->GetBodyID(entity) == ids[index++]);
+		for (const Entity entity : moving)
+			CHECK(world->GetBodyID(entity) == ids[index++]);
 		CHECK(stats.MaxBodies == 16384);
 		CHECK(stats.BodyCount == 1 + 20 + 100 + 10'000);
 		for (size_t index = 0; index < moving.size(); index++)
@@ -628,11 +631,15 @@ TEST_SUITE("Physics.Capacity")
 		REQUIRE(world != nullptr);
 		PhysicsCapacityInfo info = capacity->GetCapacityInfo();
 		CHECK(info.Bodies == 10);
-		CHECK(info.MaxBodies == 65536);
+		CHECK(info.MaxBodies == 1024);
+		CHECK(info.GrowthLimit == PhysicsCapacitySettings::c_MaxBodiesLimit);
 		CHECK(info.WaitingForSlot == 0);
 		CHECK(info.PendingOther == 1); // The box scaled to zero
-		CHECK(info.ReservedBytes == PhysicsWorld::EstimateReservedBytes(world->GetSettings()));
-		CHECK(info.ReservedBytes > 0);
+		// Constant time (the editor reads it every frame): the estimate of what box3d reserved and held, not its count of its
+		// bytes.
+		CHECK(info.ReservedBytes == world->GetReservedBytes());
+		CHECK(info.ReservedBytes >= PhysicsWorld::EstimateReservedBytes(world->GetSettings()));
+		const uint64_t reservedBefore = info.ReservedBytes;
 
 		// The work of each update: bodies built, then destroyed.
 		StepScene(scene, 1);
@@ -651,36 +658,47 @@ TEST_SUITE("Physics.Capacity")
 		StepScene(scene, 1);
 		CHECK(capacity->GetCapacityInfo().RemovedLastUpdate == 0);
 
-		// Room asked for grows the world before the next step, and what it reserves grows with it.
+		// Room asked for grows the world's room before the next step, and what it takes grows with it.
 		capacity->Reserve(100'000);
-		CHECK(capacity->GetCapacityInfo().MaxBodies == 65536);
+		CHECK(capacity->GetCapacityInfo().MaxBodies == 1024);
 		StepScene(scene, 1);
 		info = capacity->GetCapacityInfo();
 		CHECK(info.MaxBodies == 131072);
 		CHECK(info.GrowthCount == 1);
-		CHECK(info.ReservedBytes == PhysicsWorld::EstimateReservedBytes(world->GetSettings()));
+		CHECK(info.ReservedBytes == world->GetReservedBytes());
+		CHECK(info.ReservedBytes >= reservedBefore);
 		CHECK(GetPhysics(scene).GetStats().ChangeTime >= info.LastGrowthMs);
 		scene.OnRuntimeStop();
 		CHECK(scene.GetService<IPhysicsCapacity>() == nullptr);
 	}
 
-	TEST_CASE("The reserved bytes of a world follow its capacities")
+	TEST_CASE("The reserved bytes of a world are within 15% of box3d's count of them")
 	{
 		PhysicsSettings smallSettings = PhysicsWorld::ResolveCapacities(PhysicsSettings(), 10);
 		PhysicsSettings large = PhysicsWorld::ResolveCapacities(PhysicsSettings(), 100'000);
 		CHECK(PhysicsWorld::EstimateReservedBytes(large) > PhysicsWorld::EstimateReservedBytes(smallSettings));
-		// The reference machine's world at the most bodies (Perf.Physics.MostBodies.ReservedMemory) reserved 554.96 MB, and one at
-		// the largest capacities (LargestCapacities.ReservedMemory) 984.2 MB: the estimate is within 15% of both.
-		PhysicsSettings mostBodies;
-		mostBodies.MaxBodies = PhysicsCapacitySettings::c_MaxBodiesLimit;
-		const double mostBodiesMB = static_cast<double>(PhysicsWorld::EstimateReservedBytes(PhysicsWorld::ResolveCapacities(mostBodies, 2))) / 1.0e6;
-		CHECK(mostBodiesMB == doctest::Approx(554.96).epsilon(0.15));
-		PhysicsSettings largest;
-		largest.MaxBodies = PhysicsCapacitySettings::c_MaxBodiesLimit;
-		largest.MaxBodyPairs = PhysicsCapacitySettings::c_MaxBodyPairsLimit;
-		largest.MaxContactConstraints = PhysicsCapacitySettings::c_MaxContactConstraintsLimit;
-		const double largestMB = static_cast<double>(PhysicsWorld::EstimateReservedBytes(PhysicsWorld::ResolveCapacities(largest, 2))) / 1.0e6;
-		CHECK(largestMB == doctest::Approx(984.2).epsilon(0.15));
+
+		// Worlds whose room is used: boxes resting on a floor, each touching it.
+		for (const uint32_t count : { 1024u, 16384u })
+		{
+			Scene scene("Bytes");
+			Entity floor = scene.CreateEntity("Floor");
+			floor.GetTransform().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+			floor.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(400.0f, 0.5f, 400.0f);
+			for (uint32_t index = 0; index + 1 < count; index++)
+				CreateDynamicBox(scene, "Box", glm::vec3(static_cast<float>(index % 128) * 1.5f - 96.0f, 0.5f, static_cast<float>(index / 128) * 1.5f - 96.0f));
+			scene.GetSettings().PhysicsCapacity.MaxBodies = count;
+			scene.GetSettings().PhysicsCapacity.MaxContactConstraints = count;
+			scene.OnRuntimeStart();
+			StepScene(scene, 2);
+			const PhysicsWorld* world = GetPhysics(scene).GetWorld();
+			REQUIRE(world != nullptr);
+			const double estimated = static_cast<double>(world->GetReservedBytes());
+			const double counted = static_cast<double>(world->CountLibraryBytes());
+			INFO("Bodies: ", count, ", estimated ", estimated / 1.0e6, " MB, box3d counts ", counted / 1.0e6, " MB");
+			CHECK(estimated == doctest::Approx(counted).epsilon(0.15));
+			scene.OnRuntimeStop();
+		}
 	}
 
 	TEST_CASE("The body candidates of a scene count rigid bodies, colliders of their own and character controllers")
@@ -713,8 +731,8 @@ TEST_SUITE("Physics.Capacity")
 		const PhysicsStats before = physics.GetStats();
 		REQUIRE(before.StaticBodyCount == 2500);
 
-		// The cell leaves the simulation in one update: its bodies leave Jolt's broad phase in one batch, and the bodies around
-		// them are woken in merged regions (16 m squares: at most 7 x 7 of them), not one query per body.
+		// The cell leaves the simulation in one update: box3d disables its bodies, waking what touched them, without a query of
+		// its own per body.
 		cell.AddComponent<InactiveComponent>();
 		StepScene(scene, 1);
 		const PhysicsStats after = physics.GetStats();
@@ -732,7 +750,7 @@ TEST_SUITE("Physics.Capacity")
 		scene.OnRuntimeStop();
 	}
 
-	TEST_CASE("Steps that overflow the contact buffers are counted, warned about once and remembered")
+	TEST_CASE("Contacts beyond the reserved count are counted in the demand and reserved by the scene's next world")
 	{
 		ScopedCapacityDemands demands;
 		Scene scene("Pile");
@@ -740,78 +758,62 @@ TEST_SUITE("Physics.Capacity")
 		CreateGround(scene);
 		CreateBoxRow(scene, 10, 0.45f);
 
+		// box3d grows its contact storage: nothing is dropped and nothing is warned about, and the demand records it.
 		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
 		scene.OnRuntimeStart();
 		StepScene(scene, 10);
 		const PhysicsStats stats = GetPhysics(scene).GetStats();
-		CHECK(stats.ContactOverflowSteps > 0);
-		CHECK(stats.Demand.ContactConstraints == 8);
-		// One warning per kind of buffer that overflowed (the contact constraints and their manifold cache share the capacity).
-		const size_t warnings = CountLogMessages(logStart, "contacts were dropped");
-		CHECK(warnings >= 1);
-		CHECK(warnings <= 2);
-		CHECK(CountLogMessages(logStart, "raise the scene's PhysicsCapacity.MaxContactConstraints") == warnings);
-		StepScene(scene, 10);
-		CHECK(GetPhysics(scene).GetStats().ContactOverflowSteps >= stats.ContactOverflowSteps);
-		CHECK(CountLogMessages(logStart, "contacts were dropped") == warnings);
+		CHECK(stats.Demand.ContactConstraints >= 10);
+		CHECK(CountLogWarnings(logStart) == 0);
 		scene.OnRuntimeStop();
-		CHECK(PhysicsSystem::GetRememberedCapacityDemand(scene.GetLineageID()).ContactConstraints == 8);
+		const uint32_t remembered = PhysicsSystem::GetRememberedCapacityDemand(scene.GetLineageID()).ContactConstraints;
+		CHECK(remembered == stats.Demand.ContactConstraints);
 
-		// With automatic capacities the next world has room for every contact.
+		// The scene's next world with automatic room reserves at least that.
 		scene.GetSettings().PhysicsCapacity = {};
-		const uint64_t secondStart = Log::GetBuffer().GetLatestSequence();
 		scene.OnRuntimeStart();
-		StepScene(scene, 10);
-		CHECK(GetPhysics(scene).GetStats().ContactOverflowSteps == 0);
-		CHECK(CountLogMessages(secondStart, "contacts were dropped") == 0);
+		CHECK(GetPhysics(scene).GetStats().MaxContactConstraints >= remembered);
 		scene.OnRuntimeStop();
 	}
 
-	TEST_CASE("An automatic capacity that overflowed grows in the scene's next world, and only in that scene's")
+	TEST_CASE("An automatic room that a world outgrew is reserved by the scene's next world, and only in that scene's")
 	{
 		ScopedCapacityDemands demands;
-		// 64 weightless spheres around one point: every two of them overlap, 2,016 pairs, far more than the 4 x 64 = 256 body
-		// pairs automatic sizing gives 64 bodies (the 4 contacts keep the room the pairs share with contacts small).
-		const auto createCluster = [](Scene& scene)
+		const auto createScene = [](Scene& scene)
 		{
 			scene.GetSettings().Gravity = glm::vec3(0.0f);
-			scene.GetSettings().PhysicsCapacity = { 64, 0, 4 };
-			for (uint32_t index = 0; index < 64; index++)
-			{
-				const glm::vec3 cell(static_cast<float>(index % 4), static_cast<float>(index / 4 % 4), static_cast<float>(index / 16));
-				CreateDynamicSphere(scene, "Sphere " + std::to_string(index), 0.1f * cell);
-			}
+			CreateBoxRow(scene, 10);
 		};
-		Ref<Scene> scene = CreateRef<Scene>("Cluster");
-		createCluster(*scene);
+		Ref<Scene> scene = CreateRef<Scene>("Spawner");
+		createScene(*scene);
 
-		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+		// 10 bodies get the automatic room of 1,024; 1,500 spawned ones outgrow it.
 		scene->OnRuntimeStart();
-		CHECK(GetPhysics(*scene).GetStats().MaxBodyPairs == 256);
-		StepScene(*scene, 2);
+		CHECK(GetPhysics(*scene).GetStats().MaxBodies == 1024);
+		for (uint32_t index = 0; index < 1500; index++)
+			CreateDynamicSphere(*scene, "Spawned", glm::vec3(static_cast<float>(index % 50) * 2.0f, 10.0f, static_cast<float>(index / 50) * 2.0f), 0.25f);
+		StepScene(*scene, 1);
 		const PhysicsStats stats = GetPhysics(*scene).GetStats();
-		CHECK(stats.ContactOverflowSteps > 0);
-		CHECK(stats.Demand.BodyPairs == 512);
-		CHECK(CountLogMessages(logStart, "the body pair cache is full; contacts were dropped (reported once per world; the scene's next play start grows the "
-			"automatic capacity)") == 1);
+		CHECK(stats.GrowthCount == 1);
+		CHECK(stats.MaxBodies == 2048);
+		CHECK(stats.Demand.Bodies == 2048);
 		scene->OnRuntimeStop();
 
-		// Its next world has room for twice the pairs, and so has a copy of it (what the editor plays); the contacts stay as
-		// the scene sets them.
+		// Its next world reserves room for what it grew to, and so does a copy of it (what the editor plays).
 		scene->OnRuntimeStart();
-		CHECK(GetPhysics(*scene).GetStats().MaxBodyPairs == 512);
-		CHECK(GetPhysics(*scene).GetStats().MaxContactConstraints == 4);
+		CHECK(GetPhysics(*scene).GetStats().MaxBodies >= 2048);
+		CHECK(GetPhysics(*scene).GetStats().GrowthCount == 0);
 		scene->OnRuntimeStop();
 		Ref<Scene> copy = Scene::Copy(scene);
 		copy->OnRuntimeStart();
-		CHECK(GetPhysics(*copy).GetStats().MaxBodyPairs == 512);
+		CHECK(GetPhysics(*copy).GetStats().MaxBodies >= 2048);
 		copy->OnRuntimeStop();
 
 		// Another scene of the same name is sized for its own bodies.
-		Scene namesake("Cluster");
-		createCluster(namesake);
+		Scene namesake("Spawner");
+		createScene(namesake);
 		namesake.OnRuntimeStart();
-		CHECK(GetPhysics(namesake).GetStats().MaxBodyPairs == 256);
+		CHECK(GetPhysics(namesake).GetStats().MaxBodies == 1024);
 		namesake.OnRuntimeStop();
 	}
 
@@ -834,9 +836,9 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(first->GetSourceAsset() == asset->Handle);
 		CHECK(first->GetLineageID() == asset->Handle);
 		first->OnRuntimeStart();
-		CHECK(GetPhysics(*first).GetStats().BodyOverflowCount == 6);
+		CHECK(GetPhysics(*first).GetStats().GrowthCount == 1);
 		first->OnRuntimeStop();
-		CHECK(PhysicsSystem::GetRememberedCapacityDemand(asset->Handle).Bodies == 10);
+		CHECK(PhysicsSystem::GetRememberedCapacityDemand(asset->Handle).Bodies == 16);
 
 		const Ref<Scene> second = asset->CreateScene(&error);
 		REQUIRE_MESSAGE(second, error);

@@ -901,7 +901,9 @@ TEST_SUITE("Physics.Lifecycle")
 		REQUIRE(physics.HasBody(box));
 		StepScene(scene, 120);
 		CHECK(std::abs(GetWorldPosition(scene, box).y - 0.5f) < 0.03f);
-		CHECK(GetWorldPosition(scene, box).x == doctest::Approx(1.0f).epsilon(1.0e-3));
+		// Where it landed: box3d's contact solver lets a box landing flat slide a few millimeters (5.3 mm for a cube dropped
+		// 3.5 m in a world of box3d alone).
+		CHECK(std::abs(GetWorldPosition(scene, box).x - 1.0f) < 0.01f);
 	}
 
 	TEST_CASE("Entities pending destruction leave the simulation and queries right away")

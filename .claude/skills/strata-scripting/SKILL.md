@@ -192,6 +192,10 @@ std::vector<Entity> nearby = Physics::OverlapSphere(center, 3.0f);
   answers `std::optional<bool>` (nullopt for a layer the world lacks). Keep the request in a field as its `GetID()` (an
   int) if it must survive a hot reload: `WorldCellRequest(static_cast<uint64_t>(id)).Release()`. In a scene that is no
   world every call fails, reported once.
+- The simulation is box3d. Every dynamic body is swept against static ones, so fast bodies do not pass through walls
+  and floors; set `ContinuousCollision` on bullets that must not pass through moving (kinematic or dynamic) bodies either.
+  Bodies bounce (`Restitution`) only when they hit faster than 1 m/s; damping takes `1 / (1 + damping * dt)` of the
+  velocity per sub-step, a little less than `1 - damping * dt`. A box landing flat may slide a few millimeters.
 - Moving a body by writing its transform works too (kinematic platforms, editor-like placement) but takes effect at the
   next fixed step; `Teleport` is immediate. Results always name the entity that owns the body (the RigidBody entity,
   also for colliders on its children).

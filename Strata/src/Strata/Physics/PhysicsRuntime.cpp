@@ -3,19 +3,10 @@
 
 #include "Strata/Core/Assert.h"
 
-#include <Jolt/Jolt.h>
-#include <Jolt/Core/Factory.h>
-#include <Jolt/Core/IssueReporting.h>
-#include <Jolt/Core/Memory.h>
-#include <Jolt/RegisterTypes.h>
-
 #include <box3d/box3d.h>
 
 #include <atomic>
-#include <cstdarg>
-#include <cstdio>
 #include <mutex>
-#include <string_view>
 
 namespace Strata
 {
@@ -49,37 +40,6 @@ namespace Strata
 			return action == AssertAction::Break ? 1 : 0;
 		}
 
-		// Jolt reports problems it recovers from (e.g. full contact caches) through Trace; it may be called from Jolt's
-		// worker threads, which is fine because the engine loggers are thread-safe.
-		void JoltTrace(const char* format, ...)
-		{
-			char message[1024];
-			va_list arguments;
-			va_start(arguments, format);
-			std::vsnprintf(message, sizeof(message), format, arguments);
-			va_end(arguments);
-			ST_CORE_WARN("Jolt: {}", message);
-		}
-
-#ifdef JPH_ENABLE_ASSERTS
-		// Jolt asserts at the end of a step that the step had no errors, but those errors (full body pair and contact buffers)
-		// are returned to the caller too, which handles them: PhysicsWorld counts them, warns once and sizes the scene's next
-		// world for them. Escalating the assertion would turn a recoverable overflow into an abort in builds with asserts.
-		bool IsHandledUpdateErrorAssertion(const char* expression, const char* file)
-		{
-			return expression && file && std::string_view(expression) == "errors == EPhysicsUpdateError::None" && std::string_view(file).ends_with("PhysicsSystem.cpp");
-		}
-
-		// Routes Jolt's internal asserts through the engine's assert handling (logging, debugger break, test handlers).
-		bool JoltAssertFailed(const char* expression, const char* message, const char* file, JPH::uint line)
-		{
-			if (IsHandledUpdateErrorAssertion(expression, file))
-				return false;
-			const AssertAction action = Detail::HandleAssertFailure(true, false, expression, file, static_cast<int>(line), message ? std::string(message) : std::string());
-			return action == AssertAction::Break;
-		}
-#endif
-
 	}
 
 	void PhysicsRuntime::Acquire()
@@ -91,26 +51,15 @@ namespace Strata
 		});
 
 		std::scoped_lock<std::mutex> lock(s_RuntimeMutex);
-		if (s_ReferenceCount++ > 0)
-			return;
-
-		JPH::RegisterDefaultAllocator();
-		JPH::Trace = &JoltTrace;
-		JPH_IF_ENABLE_ASSERTS(JPH::AssertFailed = &JoltAssertFailed;)
-		JPH::Factory::sInstance = new JPH::Factory();
-		JPH::RegisterTypes();
+		s_ReferenceCount++;
 	}
 
 	void PhysicsRuntime::Release()
 	{
 		std::scoped_lock<std::mutex> lock(s_RuntimeMutex);
 		ST_CORE_ASSERT(s_ReferenceCount > 0, "PhysicsRuntime::Release called without a matching Acquire");
-		if (s_ReferenceCount == 0 || --s_ReferenceCount > 0)
-			return;
-
-		JPH::UnregisterTypes();
-		delete JPH::Factory::sInstance;
-		JPH::Factory::sInstance = nullptr;
+		if (s_ReferenceCount > 0)
+			s_ReferenceCount--;
 	}
 
 	bool PhysicsRuntime::IsInitialized()

@@ -111,7 +111,7 @@ namespace Strata
 			return;
 		}
 
-		// No physics yet: create the world (and allocate Jolt's per-world buffers) only once a physics component appears.
+		// No physics yet: create the world only once a physics component appears.
 		entt::registry& registry = m_Scene.GetRegistry();
 		m_CreationConnections.emplace_back(registry.on_construct<RigidBodyComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
 		m_CreationConnections.emplace_back(registry.on_construct<BoxColliderComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
@@ -147,7 +147,6 @@ namespace Strata
 			{
 				PhysicsCapacityDemand& remembered = GetCapacityDemandStorage()[m_Scene.GetLineageID()];
 				remembered.Bodies = std::max(remembered.Bodies, demand.Bodies);
-				remembered.BodyPairs = std::max(remembered.BodyPairs, demand.BodyPairs);
 				remembered.ContactConstraints = std::max(remembered.ContactConstraints, demand.ContactConstraints);
 			}
 		}
@@ -505,13 +504,12 @@ namespace Strata
 	PhysicsSettings PhysicsSystem::MakeWorldSettings(const Scene& scene, const PhysicsSettings& defaults)
 	{
 		// The scene's capacities win over the defaults; those left automatic are sized by the world, for at least what an
-		// earlier world of this scene needed.
+		// earlier world of this scene needed. (PhysicsCapacitySettings::MaxBodyPairs, of scenes saved for Jolt's fixed pair
+		// buffer, sizes nothing: box3d has no such buffer.)
 		PhysicsSettings settings = defaults;
 		const PhysicsCapacitySettings& capacity = scene.GetSettings().PhysicsCapacity;
 		if (capacity.MaxBodies != 0)
 			settings.MaxBodies = capacity.MaxBodies;
-		if (capacity.MaxBodyPairs != 0)
-			settings.MaxBodyPairs = capacity.MaxBodyPairs;
 		if (capacity.MaxContactConstraints != 0)
 			settings.MaxContactConstraints = capacity.MaxContactConstraints;
 		// The scene's layer matrix, as the scene's settings say when the world starts.
@@ -527,6 +525,9 @@ namespace Strata
 		PreparedPhysicsWorld* prepared = scene.GetPreparedState<PreparedPhysicsWorld>();
 		if (!prepared)
 		{
+			// Without a free box3d world the scene's start reports it (see CreateWorld).
+			if (!PhysicsWorld::HasFreeWorld())
+				return true;
 			Scope<PreparedPhysicsWorld> state = CreateScope<PreparedPhysicsWorld>();
 			state->World = CreateScope<PhysicsWorld>(scene, MakeWorldSettings(scene, GetDefaultSettings()), GetRememberedCapacityDemand(scene.GetLineageID()),
 				PhysicsBuildMode::Sliced);
@@ -548,6 +549,16 @@ namespace Strata
 
 	void PhysicsSystem::CreateWorld()
 	{
+		if (!PhysicsWorld::HasFreeWorld())
+		{
+			// box3d holds a fixed number of worlds at once (B3_MAX_WORLDS): the scene plays without physics rather than
+			// overrunning it.
+			m_WorldRequested = false;
+			if (!m_ReportedNoWorld)
+				ST_CORE_ERROR("Physics: scene '{}' plays without physics: every physics world the engine can hold at once is in use", m_Scene.GetName());
+			m_ReportedNoWorld = true;
+			return;
+		}
 		const PhysicsSettings settings = MakeWorldSettings(m_Scene, m_Settings);
 		AdoptWorld(CreateScope<PhysicsWorld>(m_Scene, settings, GetRememberedCapacityDemand(m_Scene.GetLineageID())), settings);
 	}

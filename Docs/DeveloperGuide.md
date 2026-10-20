@@ -223,7 +223,7 @@ compile time of the editor's and the tests' objects by about 40%.
 ### Optional modules
 
 `-DSTRATA_WITH_PHYSICS=OFF`, `-DSTRATA_WITH_AUDIO=OFF` and `-DSTRATA_WITH_ANIMATION=OFF` build the engine without a module,
-for games that do not need it: its layer's library (the layer's `"Option"` in `Layers.json`) and its vendor library (Jolt,
+for games that do not need it: its layer's library (the layer's `"Option"` in `Layers.json`) and its vendor library (box3d,
 miniaudio) are not built, and nothing links them. The editor is a tool with every module: leaving one out needs
 `-DSTRATA_BUILD_EDITOR=OFF`, or the configure fails saying so. Scripting is always built.
 
@@ -461,7 +461,7 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `Perf.Scripting` (100,000 and 300,000 trivial scripts, frames that spawn and
   destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame), `Perf.Physics` (box stacks of
   `CreateBoxStacks`: the first frames of 30,000 boxes with time dilation, 70,000 boxes that all get a body, the busy
-  frames of 70,000 and 10,000 boxes with Strata's part of a step below Jolt's (a `ratio` metric), and of 30,000 boxes
+  frames of 70,000 and 10,000 boxes with Strata's part of a step against box3d's (a provisional `ratio` metric), and of 30,000 boxes
   whose floor contacts are tracked; creating 10,000 bodies in one frame; the memory a world at the largest capacities and
   at the most bodies reserves; a fixed step of 1,000 character controllers walking over steps), `Perf.TextureCook` (a cold
   import of the stress project, the stored sizes of its largest
@@ -588,8 +588,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   save files in the build tree (`StrataRuntime --save-directory`).
 - `StrataTests.exe --strata-test-helper=<mode>` turns the test binary into a child process for
   process tests (see `TestMain.cpp`), so tests never depend on external programs: e.g. `record-arguments <file>` stands in
-  for the external code editor (it writes its arguments to the file), `broad-phase-churn` adds and removes bodies until
-  Jolt's broad phase would run out of nodes, `run-with-environment NAME=VALUE... -- <program>` runs a program with an
+  for the external code editor (it writes its arguments to the file), `broad-phase-churn` adds and removes bodies again and
+  again, which must not grow box3d's trees without end, `run-with-environment NAME=VALUE... -- <program>` runs a program with an
   environment of its own (a test never changes its process's environment for one child, e.g. a Vulkan loader without
   drivers for `GPU.Startup`) and, on Windows, `console-output [--interrupt-when <text>] <program>` runs a program as a
   terminal does, pressing Ctrl+C once the console shows the text (`Tests::RunInConsole`). With
@@ -1367,11 +1367,11 @@ works: Docs/Architecture.md, "World partition"; for people: Docs/Manual/Worlds.m
   the swap frame creates nothing. Loading work (sub-scene slices, preparation, the streamer) draws from the frame's
   `SceneWorkBudget` (`SceneWorkBudget::ForFrame`, made once per frame by `GameRuntime::Update` and
   `EditorContext::Update`); unloads are sliced (`SubSceneState::Unloading`, `SceneSettings::MaxEntitiesDestroyedPerFrame`).
-- **Physics never drops collision.** Bodies that find the world full wait in a FIFO (`BuildFailure::WaitingForSlot`)
-  that no step polls; the world grows by migration between steps (`PhysicsWorld::Grow`, keeping every body ID, velocity,
-  sleep state and contact), before streamed cells arrive (`IPhysicsCapacity::Reserve` with the cooked counts), up to
-  `PhysicsSettings::GrowthLimit`; only a world at that limit leaves bodies waiting, and the editor shows it (`physics.stats`,
-  the Streaming panel's Physics section, a status pill).
+- **Physics never drops collision.** box3d grows its storage while bodies are created, so every body gets one at once
+  up to `PhysicsSettings::GrowthLimit`; the world counts a round that outgrew its room as a growth (also when streamed
+  cells reserve room before they arrive, `IPhysicsCapacity::Reserve` with the cooked counts) and the scene's next world
+  reserves it. Only a world at its growth limit leaves bodies waiting, in a FIFO (`BuildFailure::WaitingForSlot`) that no
+  step polls, and the editor shows it (`physics.stats`, the Streaming panel's Physics section, a status pill).
 - **Tests.** `World.*` (asset, streamer, system, coordinates), `Scripting.World`, `Editor.World`, `Editor.WorldCook` and
   `Editor.UI.World` run in the Core shards on worlds scaled down for Debug (`World/WorldTestUtils.h` generates and packs
   them, `Editor/WorldProjectUtils.h` writes them into projects); `StrataRuntime.World` (label `feature`) drives a

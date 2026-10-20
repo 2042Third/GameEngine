@@ -5,12 +5,10 @@
 namespace Strata
 {
 
-	// Process-wide lifetime of the physics libraries. Jolt (allocator hooks, type factory, logging and assert hooks) is
-	// reference counted: the first Acquire initializes it and the last Release shuts it down, so independent users (one
-	// PhysicsWorld per running scene, tools) need no coordination. box3d's assert and log hooks are installed by the first
-	// Acquire of the process and stay: box3d reads them as plain globals, also from cook jobs, and its cooked hulls and
-	// meshes outlive every world. Its allocation stays box3d's own (aligned allocation, thread-safe), so whatever it made is
-	// freed by the allocator that made it. Thread-safe.
+	// Process-wide use of the physics library, box3d: counted while physics worlds (and tools such as mesh cooking) use it.
+	// box3d's assert and log hooks are installed by the first Acquire of the process and stay: box3d reads them as plain
+	// globals, also from cook jobs, and its cooked hulls and meshes outlive every world. Its allocation stays box3d's own
+	// (aligned allocation, thread-safe), so whatever it made is freed by the allocator that made it. Thread-safe.
 	class PhysicsRuntime
 	{
 	public:

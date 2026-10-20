@@ -77,7 +77,7 @@ linker. Vendor and system libraries attach to the layers that use them (`strata_
 | App | `PRIVATE` glfw, Vulkan headers (`VulkanLoader`), stb (window icon) |
 | Asset | `PRIVATE` zstd_decompress |
 | Renderer | `PUBLIC` nvrhi; `PRIVATE` nvrhi_vk, Vulkan headers, glfw, stb, MikkTSpace, meshoptimizer; the shaders (`strata_add_shaders(Strata_Renderer ...)`) and the default font |
-| Physics | `PRIVATE` Jolt |
+| Physics | `PRIVATE` box3d (and Jolt, until its removal) |
 | Audio | `PRIVATE` miniaudio |
 | Scripting | `PRIVATE` StrataScriptCore (`ScriptABI.h` only) |
 | Network | `PRIVATE` ws2_32 (Windows) |
@@ -323,106 +323,111 @@ font per renderer) with `FontFace`/`TextLayout` (glyph metrics and text shaping 
 DeveloperGuide.md, "Rendering".
 
 **Physics** (`Physics/`). `PhysicsSystem` is the "Physics" scene system (Play and Simulate). `PhysicsWorld` builds a
-Jolt world from RigidBody and collider components and steps it; `PhysicsRuntime` reference-counts Jolt's global
-state; `PhysicsJobSystem` runs Jolt's jobs on the engine's worker pool; `PhysicsMeshShapes` cooks mesh collider shapes
-on jobs and caches them process-wide; `AssetMeshProvider` supplies mesh data from the active asset manager, reading
-the triangles through `MeshGeometryRegistry` (`Asset/MeshGeometry.h`: the renderer registers the reader of its `Mesh`,
-the full-detail level of every submesh with indices offset by its base vertex), so physics never depends on the renderer.
-`PhysicsTypes.h` has the settings and statistics. Collision layers are the scene's (`SceneSettings::PhysicsLayers`,
-`Scene/PhysicsLayerSettings.h`: names for up to 32 layers and a symmetric matrix of which collide, everything by
-default); `PhysicsSystem` gives its world that matrix, restricted by the default settings' (`GetDefaultSettings`), when
-it creates the world and before every step after it changed (`scene.setSettings`, undo, the inspector, scripts'
-`Physics::SetLayersCollide`, `PhysicsSystem::SetLayersCollide`; `PhysicsWorld::SetLayerCollisionMasks` wakes the bodies,
-and character controllers read the world's live matrix). A world's capacities are set when it is created: those the
-scene does not set (`SceneSettings::PhysicsCapacity`) are sized from the bodies the scene starts with
-(`PhysicsWorld::ResolveCapacities`: at least 65,536 bodies, the next power of two of twice the bodies; four body pairs per
-body slot; at least 10,240 contacts, two per body; scratch memory for them). Bodies that find the world full wait for a
-slot in a queue in the order they failed (no step looks at them: slots freed by a round of changes go to the first of
-them, which get their bodies in the same round), and before its next step the world grows (`PhysicsWorld::Grow`, also
-when `PhysicsWorld::Reserve` asked for more room): it moves every body into a new Jolt system for the next power of two
-of at least twice its bodies and what it needs, up to `PhysicsSettings::GrowthLimit` (default the engine's limit, a
-memory cap for games). Bodies keep their `JPH::BodyID`, pose, velocity, accumulated forces, sleep state and the contact
-cache, character controllers keep their state (`CharacterControllerSet::Rebind`), automatic pair and contact capacities
-grow with it, a `MaxBodies` the scene gives is exceeded with a warning, the bodies are created in fixed chunks of 4,096
-on the job threads, and the old system is destroyed by a background job (`PhysicsStats::GrowthCount`, `LastGrowthMs`); a grown
-world clears the contact cache of the bodies it creates, because its Jolt system counts their sequence numbers anew. Only
-a world at its growth limit leaves bodies waiting, reported in one error. A round of changes with at least 256 bodies to
-build (a play start, a streamed cell) builds them on the job threads (`RefreshOwnersInParallel`): the main thread starts
-each build in record order (records, merged colliders, transforms, velocities), jobs build box, sphere and capsule
-shapes (each chunk shares its own box and sphere shapes: one shape shared by every thread would make the bodies' reference
-counting contend for one cache line; the main thread merges them into the world's), settings and Jolt bodies in fixed
-chunks of 512, and the main thread gives them
-their IDs in record order, building the serial way what the jobs left to it (mesh colliders, anything that warns). So
-body IDs and the simulation do not depend on the number of threads (`PhysicsStats::ParallelBuildCount`). Broad phase
-batches are prepared on one thread at a time: Jolt 5.6's node allocator publishes a new page's size before its pointer
-without ordering, so two threads preparing at once can crash on processors that reorder stores (Apple silicon). Bodies
-that leave the simulation (inactive entities, a cell leaving) and bodies destroyed in a round of changes leave the broad
-phase in one batch at its end, and the bodies around them are woken afterwards: box by box for a few, in merged 16 m
-regions of the moving tree for many (`PhysicsStats::WakeQueryCount`), so a cell of thousands of bodies leaves in a few
-dozen queries. Steps that overflow the pair or contact buffers
-are counted (`PhysicsStats::BodyOverflowCount`, `ContactOverflowSteps`), and what a world lacked is remembered per scene
-(`Scene::GetLineageID`: the scene asset it was loaded from or saved as, else the scene and its copies; never another
-scene of the same name), so the scene's next world is sized for it. Jolt reserves a world's buffers when it is created
-and does not survive a failed allocation, so the capacities a scene may ask for are limited (`PhysicsCapacitySettings`:
-about 80 bytes per body, 90 per body pair and 830 per contact constraint, about 940 MiB at the limits;
-`PhysicsWorld::EstimateReservedBytes` estimates what given capacities reserve, fitted to the reference machine's commit
-charge). Other systems use physics through the scene services `PhysicsSystem` offers (`ICollisionEventSource`,
-`IBodyMotionQuery`, `IBodyControl`, `IPhysicsQueries`, `ICharacterControl`, `IPhysicsCapacity`, with `CollisionEvent`,
-`RaycastHit`, `CharacterState` and `PhysicsCapacityInfo`, in `Scene/SceneServices.h`); `IPhysicsCapacity` reports body
-slots in use, the capacity, bodies waiting for a slot or for other reasons, the bodies built and destroyed in the last
-update (counted per `Scene::GetFrameIndex`, so no call per frame is needed), growths and the reserved bytes, all without
-work that grows with the bodies, and reserves room ahead of a load; collision events
-collected during a step are dispatched
-afterwards on the main thread to the listeners. Contacts are tracked only for pairs someone wants (every pair while a
-listener of all entities is registered, otherwise pairs with a watched entity, such as one whose script has contact
-callbacks): Jolt's job threads record those into buffers of their own, without a lock, which are merged and sorted after
-the step, and each touching pair knows its position in the pair lists of both its entities, so it is added and removed
-in constant time (`PhysicsStats::PairIndexOperations` counts the list writes). Bodies created while changes are applied
-(play start, a prefab spawn, a streamed cell) join the simulation in one batch per activation mode
-(`AddBodiesPrepare`/`AddBodiesFinalize`), and destroyed bodies leave it in one batch, when `ApplyPendingChanges` ends;
-each Jolt body index leads to its entity and record in constant time (`BodySlot`), and so does each entity index
-(`RecordSlot`: the records stay in an ordered map for the steps' deterministic order, but a cell that loads or unloads
+box3d world from RigidBody and collider components and steps it; `PhysicsRuntime` counts its users and installs box3d's
+assert and log hooks once per process (asserts go through Strata's assert handling, logs become warnings);
+`PhysicsTaskSystem` runs box3d's step tasks on the engine's worker pool (the stepping thread runs a task no worker has
+started, so a step completes while every worker is busy); `PhysicsMeshShapes` cooks mesh collider shapes (box3d hulls and
+meshes) on jobs and caches them process-wide, shared by reference with the bodies whose shapes point to them;
+`AssetMeshProvider` supplies mesh data from the active asset manager, reading the triangles through `MeshGeometryRegistry`
+(`Asset/MeshGeometry.h`: the renderer registers the reader of its `Mesh`, the full-detail level of every submesh with
+indices offset by its base vertex), so physics never depends on the renderer. `PhysicsTypes.h` has the settings and
+statistics. Colliders become box3d shapes of their body: boxes are hulls made per size and placement and shared by the
+world's bodies, spheres and capsules are values, convex mesh colliders are hulls of at most 64 vertices (44 when box3d
+refuses a round mesh at 64: its hulls have at most 128 faces and edges), triangle meshes are mesh shapes (static bodies
+only; a mesh collider away from its static body's origin is a baked compound), and dynamic bodies get the component's
+mass with the shapes' distribution. Collision layers are the scene's (`SceneSettings::PhysicsLayers`,
+`Scene/PhysicsLayerSettings.h`: names for up to 32 layers and a symmetric matrix of which collide, everything by default);
+`PhysicsSystem` gives its world that matrix, restricted by the default settings' (`GetDefaultSettings`), when it creates
+the world and before every step after it changed (`scene.setSettings`, undo, the inspector, scripts'
+`Physics::SetLayersCollide`, `PhysicsSystem::SetLayersCollide`; `PhysicsWorld::SetLayerCollisionMasks` gives every shape
+its new filter and wakes the bodies, and character controllers read the world's live matrix). Each shape's box3d filter
+has its layer as category and its layer's row of the matrix as mask (`PhysicsFilters.h`), plus a query bit no shape has
+and every query asks for, so queries find bodies whatever their layer collides with. box3d holds at most 128 worlds at
+once: `PhysicsSystem` checks `PhysicsWorld::HasFreeWorld` first and a scene that finds none plays without physics, with
+one error; worlds are created and destroyed on the main thread only. A world's capacities are the room box3d reserves when
+it is created: those the scene does not set (`SceneSettings::PhysicsCapacity`) are sized from the bodies the scene
+starts with (`PhysicsWorld::ResolveCapacities`: at least 1,024 bodies, the next power of two of twice the bodies; two
+contacts per body), and box3d reserves no more than that automatic room even when a scene gives more. box3d grows its
+storage as bodies and contacts come, so no body waits below the growth limit: a round of changes whose bodies outgrow
+the room counts one growth (the room doubles, `PhysicsStats::GrowthCount`, `LastGrowthMs`), and what a world needed
+beyond its room (bodies, contacts) is remembered per scene (`Scene::GetLineageID`: the scene asset it was loaded from or
+saved as, else the scene and its copies; never another scene of the same name), so the scene's next world reserves it.
+Only a world at its growth limit (`PhysicsSettings::GrowthLimit`, default the engine's limit, a memory cap for games)
+leaves bodies waiting, in a queue in the order they failed (no step looks at them: room freed by a round of changes goes
+to the first of them, which get their bodies in the same round), reported in one error. `PhysicsWorld::EstimateReservedBytes`
+estimates what a room takes once used (fitted to box3d's own count of a world's bytes), and `IPhysicsCapacity` reports it in
+constant time. A round of changes with at least 256 bodies to build (a play start, a streamed cell) prepares them on the
+job threads (`RefreshOwnersInParallel`): the main thread starts each build in record order (records, merged colliders,
+transforms, velocities), jobs build box, sphere and capsule parts (each chunk shares its own box hulls; the main thread
+merges them into the world's) and the bodies' definitions in fixed chunks of 512, and the main thread creates the bodies
+and shapes in record order (box3d's creation functions are single-threaded), building the serial way what the jobs left to
+it (mesh colliders, anything that warns). So body IDs and the simulation do not depend on the number of threads
+(`PhysicsStats::ParallelBuildCount`). Static shapes created before a world's first step skip box3d's pair search (the first
+step finds every pair); afterwards they search, or bodies resting where they appear would not touch them. Bodies that leave
+the simulation (inactive entities, a cell leaving) are disabled in box3d, destroyed bodies destroyed, and box3d wakes what
+touched them; a static body that moves wakes the bodies around its old and new place (`PhysicsStats::WakeQueryCount`).
+Other systems use physics through the scene services `PhysicsSystem` offers (`ICollisionEventSource`, `IBodyMotionQuery`,
+`IBodyControl`, `IPhysicsQueries`, `ICharacterControl`, `IPhysicsCapacity`, with `CollisionEvent`, `RaycastHit`,
+`CharacterState` and `PhysicsCapacityInfo`, in `Scene/SceneServices.h`); `IPhysicsCapacity` reports the bodies, the room
+and growth limit, bodies waiting at the limit or for other reasons, the bodies built and destroyed in the last update
+(counted per `Scene::GetFrameIndex`, so no call per frame is needed), growths and the reserved bytes, all without work that
+grows with the bodies, and reserves room ahead of a load; collision events collected during a step are dispatched
+afterwards on the main thread to the listeners. A fixed step runs `PhysicsSettings::CollisionSteps` box3d steps (each of 4
+sub-steps); forces of the fixed step act in every one, and each one's events are read before the next. box3d reports
+contacts per pair of shapes (and child) when they start and stop touching, and sensor visits likewise: they are folded into
+pairs of entities that begin with their first contact and end with their last, tracked only for pairs someone wants (every
+pair while a listener of all entities is registered, otherwise pairs with a watched entity, such as one whose script has
+contact callbacks; a pair that becomes wanted while touching is seeded from box3d's contact and sensor data). Shapes resolve
+to entities through the world's own slots (`ShapeSlot`, by box3d's index and generation), so events of shapes that are gone
+resolve to nothing; a rebuilt body's pairs wait for its new shapes' contacts of the next step, which confirm them without a
+new Begin. Sensor events where neither body moves (a static trigger and a static collider) are dropped, and trigger events
+get the center of the two shapes' bounds' intersection as their point. Each touching pair knows its position in the pair
+lists of both its entities, so it is added and removed in constant time (`PhysicsStats::PairIndexOperations` counts the
+list writes). Each box3d body index leads to its entity and record in constant time (`BodySlot`), and so does each entity
+index (`RecordSlot`: the records stay in an ordered map for the steps' deterministic order, but a cell that loads or unloads
 looks up tens of thousands of them in a frame; the index points into the map's nodes, so records are created and removed
-only through `EmplaceRecord` and `EraseRecord`, which assert that the counts agree). Jolt rebuilds a broad phase tree, and
-frees the nodes of the bodies removed from it, only while the tree holds bodies, and aborts the process when its fixed
-node pool runs out: so every world keeps one static anchor body in each of its two trees (static and moving bodies), on a
-layer outside the 32 that collides with nothing and that no query accepts, beside its body capacity
-(`c_BroadPhaseAnchorCount`). Bodies spawned and removed again before every step then cost nodes only until the next step
-(`Physics.Capacity` runs such spawns in a helper process). Around each step the work on awake
-bodies runs on the job system: the synchronization skips, in parallel chunks, the bodies whose entity is where the last
-step put it (`Scene::FindCurrentWorldTransform` reads only current cached matrices), and the write-back writes the poses of
-bodies without a dynamic ancestor in parallel chunks, each touching only its own record and `TransformComponent` through
-pointers fetched beforehand, against parent world transforms read before the writes, then tells the scene about all of them
-at once (`Scene::MarkTransformsChanged`, no `on_update`); bodies below other written dynamic bodies follow one by one,
-parents first, and the rare cases (scale edits, failed writes, descendants to update) are handled on the main thread in body
-order, so the results do not depend on the number of threads. Body order comes from a bitmap over the body indices of
-which only the words that got bits are sorted, read and cleared, so a step costs what moved, not the world's capacity.
+only through `EmplaceRecord` and `EraseRecord`, which assert that the counts agree). Bodies spawned and removed again before
+every step must not grow box3d's trees without end (`Physics.Capacity` runs such spawns in a helper process). Around each
+step the work on awake bodies runs on the job system: the synchronization visits the bodies awake after the last step
+(box3d's move events) and those woken since, skipping in parallel chunks those whose entity is where the last step put it
+(`Scene::FindCurrentWorldTransform` reads only current cached matrices), and the write-back writes the poses of the bodies
+box3d moved, those without a dynamic ancestor in parallel chunks, each touching only its own record and
+`TransformComponent` through pointers fetched beforehand, against parent world transforms read before the writes, then
+tells the scene about all of them at once (`Scene::MarkTransformsChanged`, no `on_update`); bodies below other written
+dynamic bodies follow one by one, parents first, and the rare cases (scale edits, failed writes, descendants to update)
+are handled on the main thread in body order, so the results do not depend on the number of threads. Body order comes from
+a bitmap over the body indices of which only the words that got bits are sorted, read and cleared, so a step costs what
+moved, not the world's size. box3d computes in single precision: bodies more than 100 km (1e5 m) from the origin wait like
+bodies with a degenerate transform.
 
 **Character controllers** (`Physics/CharacterControllers`, `CharacterControllerComponent`). An entity with an active,
-enabled controller and no rigid body (an entity with both is the rigid body, with a warning) is a Jolt `CharacterVirtual`:
-an upright capsule standing on the entity's origin (its rotation and scale do not change it) that moves by collision
-queries, plus a kinematic presence body (90% of its radius, its top at the capsule's, carrying the entity's UUID) through
-which dynamic bodies land on it, triggers detect it and queries hit it. Each fixed step, after the bodies are synchronized
-and before Jolt's step, `CharacterControllerSet::Step` moves every controller: its velocity is the walk velocity its
-script set (`ICharacterControl::MoveCharacter`, kept until the next call; the vertical part only without gravity), a
-pending jump, accumulated root motion (`AddCharacterMotion`: the animation system's, see Animation, Root motion) and
-gravity times its `GravityScale`; standing on walkable ground it takes on the ground's velocity (moving platforms), in
-the air its vertical velocity goes on (a ceiling stops a rise). Jolt's `ExtendedUpdate` then slides it along walls, walks
-it up steps up to `StepHeight` and keeps it on the ground walking down, against the layers its layer collides with (the
-world's live matrix) and never its own entity's bodies. The moves run in parallel batches on the job system (bounded
-scratch memory per batch), each reading only the world before the step and writing only its own controller: Jolt would push dynamic
-bodies from many threads in any order, so the set disables that and pushes afterwards, on the main thread in entity order
-(`PushBodies`: an inelastic push, the body's effective mass at the contact times the speed the character closes in on it
-along the normal, never downwards and at most `PushStrength` newtons over the step; and the character's weight, 70 kg
-under its gravity, pressing on a dynamic body it stands on: all of it while it stands, the part across the surface while
-it slides down steep ground), moves the presence bodies and writes each entity's translation
-(`Scene::MarkTransformsChanged`; its rotation and scale stay). So the results do not depend on the number of threads
-(`Physics.Character`), and 1,000 walking controllers take about 0.8 ms per step (`Perf.Physics.Characters1000Step`). An
-entity moved from outside (a script writing its transform, the editor) teleports its controller at the next step. The
-controllers' contacts (`GetActiveContacts`, one per touched body) join the step's contact reports, so `CollisionEvent`s
-and the scripts' `OnCollisionEnter/Exit` report them like any body's; triggers and bodies landing on a controller reach
-it through its presence body (`OnTriggerEnter/Exit`). The ground state (on ground, on steep ground, not supported, in
-air), ground normal, velocity and entity are `CharacterState` (`ICharacterControl::GetCharacterState`).
+enabled controller and no rigid body (an entity with both is the rigid body, with a warning) is an upright capsule
+standing on the entity's origin (its rotation and scale do not change it) that moves by box3d's mover queries
+(`b3World_CollideMover`, `b3SolvePlanes`, `b3World_CastMover`), plus a kinematic presence body (90% of its radius, its top
+at the capsule's, its shape carrying the entity's UUID) through which dynamic bodies land on it, triggers detect it and
+queries hit it. Each fixed step, after the bodies are synchronized and before box3d's step, `CharacterControllerSet::Step`
+moves every controller: its velocity is the walk velocity its script set (`ICharacterControl::MoveCharacter`, kept until
+the next call; the vertical part only without gravity), a pending jump, accumulated root motion (`AddCharacterMotion`: the
+animation system's, see Animation, Root motion) and gravity times its `GravityScale`; standing on walkable ground it takes
+on the ground's velocity (moving platforms), off it its motion goes on (a ceiling stops a rise, steep ground turns a fall
+into a slide). The move has two passes: across, where ground too steep to stand on blocks like a wall and walkable slopes
+are climbed, and up or down, where walkable ground holds the capsule and steeper ground lets it slide; blocked while
+standing, it tries the move from up to `StepHeight` higher (a step), and walking down it sticks to the ground within the
+step height. Where it stands comes from what touches its capsule's lower half: an edge (a step's) counts as the walkable
+surface beside it. It moves against the layers its layer collides with (the world's live matrix) and never its own
+entity's bodies or triggers. The moves run in parallel batches on the job system, each reading only the world before the
+step (box3d's queries do not change it) and writing only its own controller; pushes happen afterwards, on the main thread in
+entity order (`PushBodies`: an inelastic push, the body's effective mass at the contact times the speed the character
+closes in on it along the normal, never downwards and at most `PushStrength` newtons over the step; and the character's
+weight, 70 kg under its gravity, pressing on a dynamic body it stands on: all of it while it stands, the part across the
+surface while it slides down steep ground), together with moving the presence bodies (teleported, so they carry no
+velocity) and writing each entity's translation (`Scene::MarkTransformsChanged`; its rotation and scale stay). So the
+results do not depend on the number of threads (`Physics.Character`). An entity moved from outside (a script writing its
+transform, the editor) teleports its controller at the next step. What a controller touches at the end of its move (one
+contact per touched entity) joins the step's contact pairs, so `CollisionEvent`s and the scripts' `OnCollisionEnter/Exit`
+report them like any body's; triggers and bodies landing on a controller reach it through its presence body
+(`OnTriggerEnter/Exit`). The ground state (on ground, on steep ground, not supported, in air), ground normal, velocity and
+entity are `CharacterState` (`ICharacterControl::GetCharacterState`).
 
 **Audio** (`Audio/`). `AudioEngine` wraps the miniaudio mixer, output device, listener and one-shots (main-thread
 API; mixing runs on miniaudio's audio thread, or is pulled with `AdvanceNullDevice`/`ReadFrames` without a device).
@@ -864,7 +869,7 @@ are, in update order:
 | Scripting | `ScriptSystem` | Play | | Script instances of the active `ScriptEngine` (null engine: no scripts). |
 | Animation | `AnimationSystem` | Play | After Scripting, Before Physics (soft) | Animators in `OnUpdate`: poses, root motion, attachments, events (see [Animation](#animation)). |
 | World | `WorldStreamingSystem` | Play, Simulate | After Scripting, Before Physics and Audio (soft) | Streams the cells of the scene's world in `OnUpdate` (see [World partition](#world-partition)). |
-| Physics | `PhysicsSystem` | Play, Simulate | After Scripting (soft) | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
+| Physics | `PhysicsSystem` | Play, Simulate | After Scripting (soft) | box3d world; steps in `OnFixedUpdate`, then dispatches contacts. |
 | Audio | `AudioSystem` | Play | After Scripting, Animation, Physics (soft) | Sources and listener, in `OnLateUpdate` after everything that moves them. |
 
 - **Update order.** A `SceneSystemDescriptor` names the systems it runs `After` and `Before`. The registry keeps the
@@ -950,8 +955,8 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   makes the next one owe even more. Tests and tools keep the default, every due step up to `MaxFixedStepsPerFrame`.
 - `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame`, `MaxEntitiesInstantiatedPerFrame` (see
   additive scenes below), the physics world's capacities
-  (`PhysicsCapacity`: bodies, body pairs and contact constraints; 0, the default, sizes one automatically; each up to a
-  limit that bounds the memory a world reserves) and the collision layers (`PhysicsLayers`: names, unique ignoring case,
+  (`PhysicsCapacity`: the room for bodies and contacts box3d reserves; 0, the default, sizes it automatically; each up to
+  a limit; 0.4.0's body pairs are read and ignored) and the collision layers (`PhysicsLayers`: names, unique ignoring case,
   and the pairs that do not collide; saved as `"PhysicsLayers": {"Names": {"<index>": name}, "NoCollisions": [[a, b]]}`,
   which scenes from before load as all colliding, without a format change). All of it is saved with the scene and
   changed with `scene.setSettings` (one undo step); capacities apply when a world is created, at play start, the layer
@@ -1253,9 +1258,9 @@ The main thread owns the scene, input, scripts, editor state and rendering submi
 rules"). Other threads:
 
 - **Job workers** (`JobSystem::Init`, `Core/JobSystem.cpp`; hardware threads - 1 by default, at the normal thread
-  priority): `JobSystem::Submit` and `ParallelFor` work such as asset decoding, Jolt's jobs, mesh shape cooking, world
+  priority): `JobSystem::Submit` and `ParallelFor` work such as asset decoding, box3d's step tasks, mesh shape cooking, world
   transform propagation, the renderer's extraction of draws (see [Render scene](#render-scene)) and PNG encoding of
-  captures. Much of it is frame work: a frame that waits for a batch or a Jolt job a worker has started goes on only once
+  captures. Much of it is frame work: a frame that waits for a batch or a box3d task a worker has started goes on only once
   that worker has the processor again, so workers keep the main thread's priority (below it, a machine whose processors
   other programs keep busy, a build for one, would starve them and stall frames for seconds).
 - **Background threads** (`JobSystem::Init`; by default every hardware thread but four, at least half of them and at
@@ -1292,9 +1297,9 @@ Jobs submitted before `JobSystem::Init` or after `Shutdown` run inline. A thread
 no thread has started it yet (whoever claims a job first runs it), so waiting inside a job cannot deadlock; it never runs
 other queued jobs, which could hold it far longer than what it waits for (a frame waiting for its own work would
 otherwise pick up an import's compression). `ParallelFor`'s calling thread runs batches until none is left and then waits
-only for the batches its helpers are running; helpers that had not started are dropped (`Core/JobSystem.h`). Jolt's step
-is called on the main thread and its jobs run on the worker pool, with the stepping thread running them itself when the
-workers are busy (`Physics/PhysicsJobSystem.cpp`).
+only for the batches its helpers are running; helpers that had not started are dropped (`Core/JobSystem.h`). box3d's step
+is called on the main thread and its tasks run on the worker pool, with the stepping thread running them itself when the
+workers are busy (`Physics/PhysicsTaskSystem.cpp`).
 
 Results come back to the main thread by polling, never through callbacks into engine state from other threads:
 

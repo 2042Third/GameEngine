@@ -39,7 +39,7 @@ message with what to install and where its log is); [Docs/Releases/](Docs/Releas
   occlusion, for the view and the shadow cascades) and draws it indirectly from one geometry pool; what the GPU sees
   decides which textures and mip levels stream in, rendering is camera-relative so far-away worlds keep their precision,
   and levels of detail are chosen by their projected error.
-- **Physics:** Jolt rigid bodies with box, sphere, capsule and mesh colliders, triggers, collision events,
+- **Physics:** [box3d](https://github.com/erincatto/box3d) rigid bodies with box, sphere, capsule and mesh colliders, triggers, collision events,
   raycasts and overlap queries, named collision layers, and character controllers that climb steps and slopes, ride
   moving ground and push bodies. When the fixed steps cannot keep up with real time, the game slows down instead of
   falling further behind.

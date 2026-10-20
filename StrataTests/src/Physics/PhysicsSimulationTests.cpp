@@ -293,14 +293,17 @@ TEST_SUITE("Physics.Simulation")
 		CHECK_FALSE(physics.AddImpulse(pusher, glm::vec3(1.0f, 0.0f, 0.0f)));
 	}
 
-	TEST_CASE("Continuous collision keeps fast projectiles from tunneling through thin walls")
+	TEST_CASE("Bullets do not tunnel through thin kinematic walls")
 	{
-		// At 240 m/s the projectile advances 4 m per step: it is at x = 4 before and x = 8 after the wall at x = 6.
+		// At 240 m/s the projectile advances 4 m per step: it is at x = 4 before and x = 8 after the wall at x = 6. box3d sweeps
+		// every dynamic body against static ones; continuous collision (a bullet) sweeps it against moving bodies too, so the
+		// wall is kinematic here.
 		const auto fire = [](bool continuous)
 		{
 			Scene scene;
 			scene.GetSettings().Gravity = glm::vec3(0.0f);
-			CreateStaticBox(scene, "Wall", glm::vec3(6.0f, 0.0f, 0.0f), glm::vec3(0.05f, 5.0f, 5.0f));
+			Entity wall = CreateStaticBox(scene, "Wall", glm::vec3(6.0f, 0.0f, 0.0f), glm::vec3(0.05f, 5.0f, 5.0f));
+			wall.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
 			Entity projectile = CreateDynamicSphere(scene, "Projectile", glm::vec3(0.0f, 0.0f, 0.0f), 0.1f);
 			RigidBodyComponent& rigidBody = projectile.GetComponent<RigidBodyComponent>();
 			rigidBody.ContinuousCollision = continuous;
@@ -312,14 +315,15 @@ TEST_SUITE("Physics.Simulation")
 			return GetWorldPosition(scene, projectile).x;
 		};
 
-		CHECK(fire(false) > 6.05f); // Discrete collision detection misses the wall
-		CHECK(fire(true) < 5.95f);  // The linear cast stops it in front of the wall
+		CHECK(fire(false) > 6.05f); // Discrete against a moving body: it misses the wall
+		CHECK(fire(true) < 5.95f);  // The sweep stops it in front of the wall
 	}
 
 	TEST_CASE("Collision sub-steps catch fast bodies that one collision step misses")
 	{
 		// At 240 m/s a projectile advances 4 m per step: one collision step per step tests it at x = 4 and x = 8, both clear
-		// of the wall between x = 5.7 and 6.9; four collision steps test it every meter, and at x = 6 it is in the wall.
+		// of the wall between x = 5.7 and 6.9; four collision steps test it every meter, and at x = 6 it is in the wall. The
+		// wall is kinematic: box3d sweeps every dynamic body against static ones, which would catch it either way.
 		const auto fire = [](uint32_t collisionSteps)
 		{
 			PhysicsSettings settings;
@@ -328,7 +332,8 @@ TEST_SUITE("Physics.Simulation")
 
 			Scene scene;
 			scene.GetSettings().Gravity = glm::vec3(0.0f);
-			CreateStaticBox(scene, "Wall", glm::vec3(6.3f, 0.0f, 0.0f), glm::vec3(0.6f, 5.0f, 5.0f));
+			Entity wall = CreateStaticBox(scene, "Wall", glm::vec3(6.3f, 0.0f, 0.0f), glm::vec3(0.6f, 5.0f, 5.0f));
+			wall.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
 			Entity projectile = CreateDynamicSphere(scene, "Projectile", glm::vec3(0.0f), 0.1f);
 			projectile.GetComponent<RigidBodyComponent>().LinearDamping = 0.0f;
 
@@ -339,11 +344,70 @@ TEST_SUITE("Physics.Simulation")
 			CHECK(physics.SetLinearVelocity(projectile, glm::vec3(240.0f, 0.0f, 0.0f)));
 			StepScene(scene, 5);
 			CHECK(physics.GetStats().StepCount == 5); // Collision steps subdivide a step; they are not steps of their own
-			return GetWorldPosition(scene, projectile).x;
+			return std::pair(GetWorldPosition(scene, projectile).x, physics.GetLinearVelocity(projectile).x);
 		};
 
-		CHECK(fire(1) > 6.9f);
-		CHECK(fire(4) < 5.7f);
+		CHECK(fire(1).first > 6.9f);
+		// Caught inside the wall, the contact stops it: it no longer moves on at 240 m/s, and stays short of the far side.
+		const auto [caught, speed] = fire(4);
+		CHECK(caught < 6.9f);
+		CHECK(speed < 10.0f);
+	}
+
+	TEST_CASE("Forces act through every collision step of a step")
+	{
+		// box3d clears forces after each of its steps: a step of four collision steps applies them in all four, so a force
+		// changes the velocity as much as with one.
+		const auto push = [](uint32_t collisionSteps)
+		{
+			PhysicsSettings settings;
+			settings.CollisionSteps = collisionSteps;
+			ScopedPhysicsSettings scopedSettings(settings);
+			Scene scene;
+			scene.GetSettings().Gravity = glm::vec3(0.0f);
+			Entity body = CreateDynamicSphere(scene, "Body", glm::vec3(0.0f), 0.5f);
+			RigidBodyComponent& rigidBody = body.GetComponent<RigidBodyComponent>();
+			rigidBody.Mass = 2.0f;
+			rigidBody.LinearDamping = 0.0f;
+			rigidBody.AngularDamping = 0.0f;
+			scene.OnRuntimeStart();
+			PhysicsSystem& physics = GetPhysics(scene);
+			CHECK(physics.AddForce(body, glm::vec3(12.0f, 0.0f, 0.0f)));
+			CHECK(physics.AddTorque(body, glm::vec3(0.0f, 3.0f, 0.0f)));
+			StepScene(scene, 1);
+			return std::pair(physics.GetLinearVelocity(body).x, physics.GetAngularVelocity(body).y);
+		};
+		const auto [linearOne, angularOne] = push(1);
+		const auto [linearFour, angularFour] = push(4);
+		// 12 N on 2 kg for 1/60 s: 0.1 m/s.
+		CHECK(linearOne == doctest::Approx(0.1f).epsilon(1.0e-3));
+		CHECK(linearFour == doctest::Approx(linearOne).epsilon(1.0e-3));
+		CHECK(angularOne > 0.0f);
+		CHECK(angularFour == doctest::Approx(angularOne).epsilon(1.0e-3));
+	}
+
+	TEST_CASE("A touch that begins and ends within one step of several collision steps reports Begin and End")
+	{
+		// A ball crosses a thin trigger within one step: with four collision steps one of them finds it inside, and both
+		// events are reported although the step ends with the ball beyond.
+		PhysicsSettings settings;
+		settings.CollisionSteps = 4;
+		ScopedPhysicsSettings scopedSettings(settings);
+		Scene scene;
+		scene.GetSettings().Gravity = glm::vec3(0.0f);
+		Entity gate = CreateStaticBox(scene, "Gate", glm::vec3(2.0f, 0.0f, 0.0f), glm::vec3(0.6f, 2.0f, 2.0f));
+		gate.AddComponent<RigidBodyComponent>().IsTrigger = true;
+		Entity ball = CreateDynamicSphere(scene, "Ball", glm::vec3(0.0f), 0.1f);
+		ball.GetComponent<RigidBodyComponent>().LinearDamping = 0.0f;
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		CollisionRecorder recorder(physics);
+		REQUIRE(physics.SetLinearVelocity(ball, glm::vec3(240.0f, 0.0f, 0.0f)));
+		StepScene(scene, 1);
+		CHECK(GetWorldPosition(scene, ball).x > 2.7f);
+		CHECK(recorder.Count(CollisionEventType::Begin, ball.GetUUID(), gate.GetUUID()) == 1);
+		CHECK(recorder.Count(CollisionEventType::End, ball.GetUUID(), gate.GetUUID()) == 1);
+		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Parented dynamic bodies write their world transform through the hierarchy")
@@ -365,10 +429,12 @@ TEST_SUITE("Physics.Simulation")
 		scene.OnRuntimeStart();
 		StepScene(scene, 180);
 
+		// Where it landed: box3d's contact solver lets a box landing flat slide a few millimeters (5.3 mm for a cube dropped
+		// 3.5 m in a world of box3d alone).
 		const glm::vec3 worldPosition = GetWorldPosition(scene, child);
 		CHECK(worldPosition.x == doctest::Approx(10.0f).epsilon(1.0e-3));
 		CHECK(std::abs(worldPosition.y - 0.5f) < 0.03f);
-		CHECK(std::abs(worldPosition.z) < 1.0e-3f);
+		CHECK(std::abs(worldPosition.z) < 0.01f);
 
 		// The parent is untouched and the child's local transform expresses the simulated pose under it.
 		CHECK(scene.GetWorldTransform(parent) == parentWorld);

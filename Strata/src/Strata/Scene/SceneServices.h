@@ -384,14 +384,15 @@ namespace Strata
 	struct PhysicsCapacityInfo
 	{
 		uint32_t Bodies = 0;
-		uint32_t MaxBodies = 0;          // The capacity now (it grows, see PhysicsWorld); 0 while the scene has no physics world
-		uint32_t WaitingForSlot = 0;     // Entities waiting for a body slot: a world at its growth limit, or before its growth
+		uint32_t MaxBodies = 0;          // The room now (it grows, see PhysicsWorld); 0 while the scene has no physics world
+		uint32_t GrowthLimit = 0;        // The most bodies the world may hold; beyond it entities wait
+		uint32_t WaitingForSlot = 0;     // Entities waiting for a body at the world's growth limit
 		uint32_t PendingOther = 0;       // Entities waiting for a body for other reasons (a mesh loading, a degenerate transform)
 		uint32_t AddedLastUpdate = 0;    // Bodies built (or rebuilt) during the scene's last update
 		uint32_t RemovedLastUpdate = 0;  // Bodies destroyed during it
 		uint32_t GrowthCount = 0;        // Growths of the world since it was created
 		float LastGrowthMs = 0.0f;
-		uint64_t ReservedBytes = 0;      // What the world's capacities reserve (PhysicsWorld::EstimateReservedBytes)
+		uint64_t ReservedBytes = 0;      // What the world's room takes (PhysicsWorld::EstimateReservedBytes)
 	};
 
 	// The capacity of a running scene's physics world (PhysicsSystem), for code that may not include the Physics module: the
@@ -403,7 +404,8 @@ namespace Strata
 		virtual ~IPhysicsCapacity() = default;
 
 		virtual PhysicsCapacityInfo GetCapacityInfo() const = 0;
-		// Asks for room for `bodies` bodies in all: a world with less grows before its next step (see PhysicsWorld::Reserve).
+		// Asks for room for `bodies` bodies in all: a world with less grows its room before its next step (see
+		// PhysicsWorld::Reserve).
 		// The latest call counts; 0 reserves nothing.
 		virtual void Reserve(uint32_t bodies) = 0;
 	};
