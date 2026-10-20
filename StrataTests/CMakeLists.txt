@@ -499,6 +499,15 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEXPECTED_OUTPUT=asset-budget-mb needs a whole number of megabytes"
 			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidAssetBudget PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+	# A frame count that is not a positive whole number is refused, so a mistyped check cannot run forever.
+	foreach(frames abc 0 -5)
+		add_test(NAME StrataRuntime.InvalidFrames.${frames}
+			COMMAND "${CMAKE_COMMAND}"
+				"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--headless;--frames;${frames}"
+				"-DEXPECTED_OUTPUT=--frames needs a positive whole number of frames"
+				-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+		set_tests_properties(StrataRuntime.InvalidFrames.${frames} PROPERTIES FIXTURES_REQUIRED StrataExportedGame TIMEOUT 60)
+	endforeach()
 	# --perf-log writes a CSV row per frame (FramePerfLog), also headless; the check reads it back (Runtime/PerfLogReader.h).
 	add_test(NAME StrataRuntime.PerfLog
 		COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 30 --perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLog.csv")
