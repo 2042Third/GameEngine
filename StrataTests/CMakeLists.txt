@@ -749,15 +749,21 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEDITOR_ALLOWED_MESSAGES=\\[warning\\] Strata: Physics: scene 'Island' starts simulating after waiting 10 s for meshes"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
 	set_tests_properties(StrataEditor.OpenWorld PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataOpenWorldExport)
-	# In a window at 1920 x 1080 with a small texture budget (mip streaming under pressure): the island fills the picture.
+	# In a window at 1920 x 1080 with a small texture budget (mip streaming under pressure): the island fills the picture,
+	# and the perf log shows cells loaded, streaming and the GPU at work, and no body waiting for its collider.
 	set(STRATA_OPEN_WORLD_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/OpenWorld/$<CONFIG>")
 	add_test(NAME StrataRuntime.OpenWorldWindowed
 		COMMAND "${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1920x1080 --frames 1200 --asset-budget-mb 128
-			--screenshot "${STRATA_OPEN_WORLD_DIR}/Windowed.png" --save-directory "${STRATA_OPEN_WORLD_DIR}/WindowedSaves")
+			--screenshot "${STRATA_OPEN_WORLD_DIR}/Windowed.png" --perf-log "${STRATA_OPEN_WORLD_DIR}/Windowed.csv"
+			--save-directory "${STRATA_OPEN_WORLD_DIR}/WindowedSaves")
 	set_tests_properties(StrataRuntime.OpenWorldWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldExport FIXTURES_SETUP StrataOpenWorldWindowed)
 	add_test(NAME StrataRuntime.OpenWorldWindowedImage
 		COMMAND StrataTests --strata-test-helper=check-image "${STRATA_OPEN_WORLD_DIR}/Windowed.png" --size 1920x1080 --dominant green 5)
 	set_tests_properties(StrataRuntime.OpenWorldWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
+	add_test(NAME StrataRuntime.OpenWorldWindowedPerf
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_OPEN_WORLD_DIR}/Windowed.csv" 1200 --nonzero WorldCellsLoaded
+			--nonzero World.Streaming --nonzero GPUBusyMs --max PhysicsBodiesWaiting 0)
+	set_tests_properties(StrataRuntime.OpenWorldWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
 	# The editor with a GPU at the start: the GPU-driven path draws thousands of instances in a few indirect commands.
 	add_test(NAME StrataEditor.OpenWorldRender
 		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
@@ -799,15 +805,21 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'ThirdPerson' are not built yet|\\[warning\\] Strata: Import 'Models/Robot/RobotExpressive.glb': Not imported: morph target"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
 	set_tests_properties(StrataEditor.ThirdPerson PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataThirdPersonExport)
-	# The exported game in a window: its main menu, the robot dancing on its island under the title and the menu.
+	# The exported game in a window: its main menu, the robot dancing on its island under the title and the menu; the perf
+	# log shows the robot's animation, the menu's UI and the GPU at work.
 	set(STRATA_THIRD_PERSON_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/ThirdPerson/$<CONFIG>")
 	add_test(NAME StrataRuntime.ThirdPersonWindowed
 		COMMAND "${STRATA_THIRD_PERSON_DIR}/Build/ThirdPerson${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1280x720 --frames 300
-			--screenshot "${STRATA_THIRD_PERSON_DIR}/Windowed.png" --save-directory "${STRATA_THIRD_PERSON_DIR}/WindowedSaves")
+			--screenshot "${STRATA_THIRD_PERSON_DIR}/Windowed.png" --perf-log "${STRATA_THIRD_PERSON_DIR}/Windowed.csv"
+			--save-directory "${STRATA_THIRD_PERSON_DIR}/WindowedSaves")
 	set_tests_properties(StrataRuntime.ThirdPersonWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonExport FIXTURES_SETUP StrataThirdPersonWindowed)
 	add_test(NAME StrataRuntime.ThirdPersonWindowedImage
 		COMMAND StrataTests --strata-test-helper=check-image "${STRATA_THIRD_PERSON_DIR}/Windowed.png" --size 1280x720)
 	set_tests_properties(StrataRuntime.ThirdPersonWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonWindowed)
+	add_test(NAME StrataRuntime.ThirdPersonWindowedPerf
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_THIRD_PERSON_DIR}/Windowed.csv" 300 --nonzero Scene.Animation
+			--nonzero Scene.UI --nonzero GPUBusyMs)
+	set_tests_properties(StrataRuntime.ThirdPersonWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonWindowed)
 endif()
 
 # input.sequence through the real editor (Editor/InputSequenceCommands.json.in, on a copy of the feature project): the same
