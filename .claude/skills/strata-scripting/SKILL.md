@@ -194,8 +194,10 @@ std::vector<Entity> nearby = Physics::OverlapSphere(center, 3.0f);
   world every call fails, reported once.
 - The simulation is box3d. Every dynamic body is swept against static ones, so fast bodies do not pass through walls
   and floors; set `ContinuousCollision` on bullets that must not pass through moving (kinematic or dynamic) bodies either.
-  Bodies bounce (`Restitution`) only when they hit faster than 1 m/s; damping takes `1 / (1 + damping * dt)` of the
-  velocity per sub-step, a little less than `1 - damping * dt`. A box landing flat may slide a few millimeters.
+  Bodies bounce (`Restitution`) only when they hit faster than 1 m/s; damping multiplies the velocity by
+  `1 / (1 + damping * h)` in every sub-step `h` (a quarter of the fixed step per collision step), which keeps a little more
+  of it than Jolt's `1 - damping * dt` per fixed step: bodies damp slightly less (a damping of 2 leaves 0.55 of the speed
+  after a second, not 0.52). A box landing flat may slide a few millimeters.
 - Moving a body by writing its transform works too (kinematic platforms, editor-like placement) but takes effect at the
   next fixed step; `Teleport` is immediate. Results always name the entity that owns the body (the RigidBody entity,
   also for colliders on its children).

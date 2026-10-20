@@ -206,7 +206,7 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(GetWorldPosition(scene, light).x == doctest::Approx(4.0f).epsilon(0.02));
 		const float dampedSpeed = physics.GetLinearVelocity(damped).x;
 		CHECK(dampedSpeed > 0.0f);
-		CHECK(dampedSpeed < 1.0f); // ~4 * (1 - 2/60)^60 = 0.52
+		CHECK(dampedSpeed < 1.0f); // box3d: 4 / (1 + 2/240)^240 = 0.55 (240 sub-steps of 1/240 s)
 		CHECK(GetWorldPosition(scene, damped).x < 0.6f * GetWorldPosition(scene, light).x);
 
 		// Torque and off-center impulses spin bodies.
