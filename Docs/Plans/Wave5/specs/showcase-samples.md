@@ -68,8 +68,24 @@ What exists (release 0.4.0, main at 580eee9e):
   step); GameUI (canvases, buttons, toggles, sliders, layouts, sliced images, fonts, `input.click`); `Audio::PlayOneShotAt`,
   `SetMasterVolume`, `AudioSource`; `Game::LoadScene`, `SetWindowMode`, `SetVSync`, save files; the procedural sky and HDR
   environment maps; `editor.perf`'s `renderStats` (`gpuDriven`, `instances`, `drawCommands`...).
+- **Also there, and shown by the samples:** the export's loading scene (`project.setExportSettings {loadingScene}`) with
+  `Game::GetSceneLoadProgress` (the Open World's start and the course load); texture mip streaming and residency budgets
+  (`--asset-budget-mb`, `asset.setBudget`: one exported Open World run under a small budget); `AttachToJointComponent` (a
+  prop in the robot's hand); `Animator`'s `GetCurrentState` (the checks' state fields); `entity.dropToGround` (landmarks
+  placed on the terrain mesh); `UIMask` (the Third-Person's scrolling credits panel). The procedural sky's colors are
+  constant (`SkyLightComponent`): the Open World's `DayNight` script drives its colors and intensity itself.
+- **What the checks can express:** `expect` takes `equals`, `min` and `max` on absolute JSON pointers; `$ref` bindings
+  substitute into parameters, not into conditions. A check of a difference, an "or", or a comparison with an earlier value
+  is therefore a script field that computes it (section 4.2-4.4 name them), never an extension of `expect`.
+- **What physics guarantees:** the simulation waits before its first step only for mesh colliders that exist then; one that
+  arrives later (with a streamed cell) is pending until its mesh loads and its shape is cooked (`PhysicsWorld.h`).
+  `MeshColliderComponent::Convex` defaults to true; non-convex mesh colliders exist only on static bodies. `physics-box3d`
+  defers triggers on triangle meshes, so every trigger of the samples uses a primitive collider.
 - **What is not there** (and the samples work around, section 9): no terrain system (height fields are wave 5's
-  `world-environment`), no particles (`vfx`), no joints, no input actions, no morph targets, no exported-game automation.
+  `world-environment`), no fog (height fog is `render-quality`'s: distant streamed cells are hidden by streaming distances,
+  the camera's far plane and the tour's height, not by fog), no particles (`vfx`), no joints, no input actions, no morph
+  targets, no exported-game automation. Simulated taps (`input.key`, `input.click`...) end only after the game's fixed steps,
+  and none run at time scale 0 (I7 fixes that before the Third-Person's pause menu).
 
 What changes:
 
@@ -77,9 +93,10 @@ What changes:
 | --- | --- |
 | `Samples/` | Three new projects, each with `README.md`, `CREDITS.md`, `Picture.png` and `Screenshots/`; Tetris gets the same files; `Samples.json` lists four samples with pictures. |
 | Launcher | Sample cards show the sample's picture; a copy starts with it as its thumbnail. |
-| Command scripts | `until`: a query step repeated until its `expect` holds, bounded in game steps and seconds. |
-| Tests | One generic sample runner (`SampleProject.cmake`, Tetris moved onto it), three new package tests, windowed GPU runs of every exported sample, a `Samples.Content` suite (licenses, credits, sizes, required files). |
-| glTF import | A setting that imports `KHR_materials_unlit` materials lit (Kenney's kits are authored unlit by their exporter). |
+| Command scripts | `until`: a query step repeated until its `expect` holds, bounded in game steps and seconds; in a paused game each attempt runs one fixed step (exact, independent of the frame rate). |
+| Simulated input | Taps end while the game runs no fixed steps (time scale 0): I7. |
+| Tests | One generic sample runner (`SampleProject.cmake`, Tetris moved onto it; unexpected warnings fail it), three new package tests, windowed GPU runs of every exported sample, a `Samples.Content` suite (licenses, credits, sizes, required files); the tests that copied all of `Samples/` copy only what they need. |
+| glTF import | A setting that imports `KHR_materials_unlit` materials lit (Kenney's Nature Kit is authored unlit by its exporter). |
 | Tools | `Tools/GenerateIslandTerrain.py`: the Open World's terrain tiles, palette and prop scatter, deterministic, outputs committed. |
 | Docs, skills, notices | Section 7. |
 
@@ -113,15 +130,21 @@ dropping maps the engine does not use) is recorded in the credits' Changes colum
 | What | Limit |
 | --- | --- |
 | Source assets of one sample (files an importer reads: models, buffers, images, sounds, fonts) | 25 MB |
-| Source assets of all new samples | 60 MB |
 | Documents of one sample (scenes, world cells, prefabs, materials, controllers, `.meta`, `.stworld`) | 20 MB |
+| Binary files of all samples, Tetris included (every file that is not a text document: source assets, `Picture.png`, `Screenshots/`); they barely compress | 55 MB |
+| Text documents of all samples (they compress about tenfold in the archives) | 50 MB |
 | `Picture.png` | PNG, exactly 480 x 270 (`ProjectThumbnail::c_Width` x `c_Height`) |
 | `Screenshots/` | at most 3 PNGs, 3 MB together |
 
 Textures 1K (2K only where a 1K map visibly fails), JPEG for color, PNG where alpha or exact palettes need it;
-`EXT_meshopt_compression` or `KHR_mesh_quantization` for generated meshes. The release archives grow by at most 60 MB; the
-report states the growth measured with `cmake -E tar cfz` of `Samples/` before and after (and the release dry run's package
-notice when the integrator runs it).
+`EXT_meshopt_compression` or `KHR_mesh_quantization` for generated meshes. With the two totals, the release archives grow
+by at most 60 MB (55 MB of binaries plus about a tenth of the documents); the report states the growth measured with
+`cmake -E tar cfz` of `Samples/` before and after (and the release dry run's package notice when the integrator runs it).
+
+**PBR maps.** The engine's `MetallicRoughnessMap` is glTF-packed (G roughness, B metallic, multiplied by the factors,
+`Material.h`). A grayscale ambientCG roughness JPEG is used as that map only with `Metallic` 0 (non-metals); a metal set's
+metalness and roughness maps are packed into one map by a scratch script before import, recorded in the credits' Changes
+column.
 
 **Credits format** (machine-read). Each sample's `CREDITS.md` has one table:
 
@@ -136,7 +159,8 @@ notice when the integrator runs it).
 `Attribution` text) or `Strata` (made for this repository: generated by a committed tool, named in Source, or by the agent
 that made the sample, like Tetris' sounds; no license is claimed, the repository's terms are the owner's call).
 `ThirdPartyNotices.md` gains a "Sample assets" table with one row per source pack (sample, pack, URL, author, license,
-attribution); exported games ship that file, which carries the Fox's CC-BY attribution with every exported Open World.
+attribution), which replaces its sentence about Poly Haven environment maps in sample projects; exported games ship that
+file, which carries the Fox's CC-BY attribution with every exported Open World.
 
 ## 4. Deliverables
 
@@ -163,25 +187,36 @@ Every sample is a project under `Samples/<Directory>/`:
 - A launcher entry in `Samples.json` with a description of one or two sentences written for people.
 - A regression command script `StrataTests/Editor/<Directory>Commands.json.in` run by CTest (label `package`: it builds the
   scripts), exported full and pruned, both games run headless; a windowed run of the exported game (label `gpu`) whose
-  screenshot is checked.
-- The sample's start scene opens without warnings or errors in the log, and every scene and cell document loads cleanly
-  and saves back the same (`Scene.Serialization`'s committed-scenes test, extended to every sample).
+  screenshot is checked. Every exported-game run passes `--save-directory <work directory>/Saves`, so no run reads or
+  writes the player's own save files (a windowed check never runs fullscreen because of an owner's setting).
+- The sample's runs log no warning or error but the ones its CTest lists as expected (`ALLOWED_MESSAGES`, regular
+  expressions, each with the reason: the robot's skipped morph targets, the regression's deliberate misuse checks):
+  `SampleProject.cmake` fails on any other `[warning]`, `[error]` or `[critical]` line of the editor's and the games'
+  output. Every scene and cell document loads cleanly and saves back the same (`Scene.Serialization`'s committed-scenes
+  test, extended to every sample).
+- Colliders: every trigger (goal basket, launch pad, coins, jump pads, goal flag) uses a primitive collider (box, sphere,
+  capsule); non-convex mesh colliders (`Convex` false) only on static bodies; dynamic bodies use primitives.
 
 ### 4.1 Infrastructure (engine and tests), before the samples
 
 **I1. Command-script `until`.** A step may carry `"until": {"steps": n, "seconds": s}` (at least one; `seconds` defaults to
 300, `steps` counts the running game's fixed steps since the step began, `Scene::GetFixedStepCount`). The step's command
 must be a query (`EditorCommandKind::Query`); the runner issues it once per frame until its `expect` holds, and fails the
-step with the last result and the attempts made when `steps` fixed steps ran or `s` seconds passed first. Only the final
-attempt is recorded in the activity journal (with `attempts`), so a wait does not flood it. Parsing refuses `until` without
-`expect`, on a non-query command, with non-positive bounds or unknown keys, and inside `editor.batch` (atomic, one frame).
-`bind` applies to the final result.
+step with the last result and the attempts made when `steps` fixed steps ran or `s` seconds passed first. **In a paused
+game** each attempt that fails runs exactly one fixed step before the next (as `play.step` does), so a paused wait is exact
+and independent of the frame rate, bounded by `steps`; `seconds` stays the wall-clock guard. The sample regressions run
+their physics checks paused (unpaused editor play drops steps when a frame falls behind, which a Debug build with 600
+bodies on 3 threads does, so outcomes would depend on the machine). Only the final attempt is recorded in the activity
+journal (with `attempts`), so a wait does not flood it. Parsing refuses `until` without `expect`, on a non-query command,
+with non-positive bounds or unknown keys, and inside `editor.batch` (atomic, one frame). `bind` applies to the final
+result.
 
 - Acceptance: unit tests in `Editor.CommandScript` (and `Editor.CommandScriptBindings` for `bind`) for: a field that
-  reaches its value after some steps passes; one that never does fails after `steps` (game paused: after `seconds`); a
-  non-query or an `until` without `expect` is refused before anything runs; the journal holds one entry; `bind` reads the
-  final result. Must-fail: with the runner's `until` handling removed the first test fails (the condition is false on the
-  first attempt).
+  reaches its value after some steps passes, unpaused and paused (paused: the step count advanced by exactly the attempts
+  minus one); one that never does fails after `steps`; one whose game neither plays nor steps (play mode off) fails after
+  `seconds`; a non-query or an `until` without `expect` is refused before anything runs; the journal holds one entry;
+  `bind` reads the final result. Must-fail: with the runner's `until` handling removed the first test fails (the condition
+  is false on the first attempt); without the paused stepping the paused test fails.
 
 **I2. Sample pictures in the launcher.** A `Samples.json` entry takes an optional `"Picture": "Picture.png"` (a relative path
 inside the sample's directory: no absolute paths, no `..`, PNG). `ProjectSample::Picture` holds it (empty when absent);
@@ -195,37 +230,59 @@ before its first save.
   pictures leave the sample listed without one; a copy's thumbnail equals the picture byte for byte; `project.samples`
   reports it. A headless UI test (`Editor.UI`, `ImGuiHarness`) shows the sample card with an image. Must-fail: without
   the WelcomePanel change the UI test sees no image on the card; without `Copy`'s change the thumbnail check fails.
+- `ProjectSamplesTests` stops expecting exactly one sample: it reads the repository's `Samples.json` and expects what it
+  lists (Tetris among them), so adding a sample breaks no test. The tests that copy the whole `Samples/` directory
+  (`ProjectSamplesTests`' `CopySamples`, `DataSafetyTests`) copy only `Samples.json` and `Tetris/`, or write a synthetic
+  index, so that about 100 MB of new samples are not copied per test on 3-thread CI runners and a nearly full disk.
 
 **I3. One sample runner.** `StrataTests/Editor/SampleProject.cmake` generalizes `TetrisSample.cmake`: copy the sample without
 `.strata` (refusing a directory that is not the named sample), configure the command script (export directories as JSON
 strings), run the editor `--no-gpu --no-automation --quit-after-commands --frames <cap>` on it, check the editor's output for
 each `EDITOR_EXPECT` line, check both exports exist (game, `.stgame`, `.stpak`, the script module), run each `--headless
---frames <n>` (with `--perf-log` when asked) and check each `GAME_EXPECT` line, and check the pruned pack is not larger.
-Parameters come from `StrataTests/CMakeLists.txt`. `StrataEditor.Tetris` runs on it with its current commands and lines
-unchanged; `TetrisSample.cmake` is removed.
+--frames <n> --save-directory <work>/Saves` (with `--perf-log` when asked) and check each `GAME_EXPECT` line, check the
+pruned pack is not larger, and fail on any warning, error or critical line of any output that no `ALLOWED_MESSAGES`
+expression matches. Parameters come from `StrataTests/CMakeLists.txt`. `StrataEditor.Tetris` runs on it with its current
+commands and lines unchanged; `TetrisSample.cmake` is removed.
 
-- Acceptance: `StrataEditor.Tetris` passes on the new runner; each failure branch (missing expected line, a failing game)
-  is checked once by hand and reported.
+- Acceptance: `StrataEditor.Tetris` passes on the new runner; each failure branch (missing expected line, a failing game,
+  an unexpected warning) is checked once by hand and reported.
 
 **I4. `Samples.Content`** (doctest suite `StrataTests/src/Samples/SampleContentTests.cpp`, a shard in `CoreShards.json`).
 For every sample of `Samples.json`, and every directory of `Samples/` (none unlisted): `README.md`, `CREDITS.md` and
 `Picture.png` (480 x 270 PNG) exist; every source-asset file under `Assets/` (the extensions the importers read) is covered
 by exactly one credits row; every row covers at least one file; licenses are in the allowed set, CC-BY rows have an
 attribution; every CC0 and CC-BY source URL appears in `ThirdPartyNotices.md`'s "Sample assets" table; the budgets of
-section 3 hold. The checks are a function (`CheckSampleContent(directory, notices) -> errors`) so the suite also runs it on
+section 3 hold, per sample and the two totals over all samples. The checks are functions (`CheckSampleContent(directory,
+notices) -> errors` per sample, `CheckSamplesTotals(samples) -> errors` for the totals) so the suite also runs them on
 crafted directories.
 
 - Acceptance: the suite passes on the repository. Must-fail (permanent test cases on crafted temporary directories): an
-  uncredited `.png`, a stale row, a `CC-BY-4.0` row without attribution, an unknown license, a 26 MB source asset, a
-  missing picture and a picture of the wrong size each produce the expected error.
+  uncredited `.png`, a stale row, a `CC-BY-4.0` row without attribution, an unknown license, a 26 MB source asset, binary
+  files over the total, a missing picture and a picture of the wrong size each produce the expected error.
 
 **I5. Lit import of unlit glTF materials.** `GltfImporter` setting `UnlitMaterials`: `AsAuthored` (default: today's output,
 so `GetVersion` stays) or `Lit` (the `KHR_materials_unlit` flag is ignored; base color, factors and textures are kept),
-described in `GetSettingsProperties`. Needed for Kenney's Nature Kit, whose 329 models all carry the extension.
+described in `GetSettingsProperties`. Needed for Kenney's Nature Kit, whose 329 models all carry the extension (the
+Platformer Kit's GLBs are checked in the first step: if they carry it too, the Third-Person imports them `Lit`). The key is
+left out of the importer's default settings (an absent key means `AsAuthored`), because `EditorAssetManager` hashes the
+merged default and `.meta` settings into the cache key: a new default key would re-import every existing glTF of every
+project once.
 
 - Acceptance: an `Asset.Gltf` test imports a model with `KHR_materials_unlit` both ways (`Unlit` true, then false with the
-  same base color); `asset.setImportSettings` re-imports with it. Must-fail: without the setting's handling the `Lit`
-  import keeps `Unlit` true.
+  same base color); `asset.setImportSettings` re-imports with it; an existing model's cache stays valid (an import of a
+  project made before the setting is not redone). Must-fail: without the setting's handling the `Lit` import keeps
+  `Unlit` true; with the key in the defaults the cache test fails.
+
+**I7. Taps while time stands still.** At `Time::SetTimeScale(0)` (a pause menu) the game runs frames but no fixed steps
+(`Scene` scales the frame's time into the step accumulator), so a simulated tap, which ends only after its last fixed step,
+never ends, and `input.key`, `input.mouseButton`, `input.click` and `input.gamepadButton` never answer. Taps count, in
+place of fixed steps, the input frames the running game updates without a fixed step when its time scale is 0 (a counter
+next to the step count that the editor advances by one for each such frame), so a 1-step tap at scale 0 lasts one input
+frame and a paused game (`Input::SetSuspended`) still waits for its next step.
+
+- Acceptance: an `Editor.Commands` test plays a scene whose script sets the time scale to 0 when a key is tapped and back
+  to 1 when a UI button is clicked: the tap and the `input.click` answer, the script saw both, and fixed steps run again.
+  Must-fail: without the counter the click never answers (the test's bounded wait fails).
 
 **I6. Small engine bugs found while building** get a fix and a regression test that fails without it, in their own commits;
 large gaps go into the report (section 9 lists the expected ones).
@@ -253,64 +310,86 @@ sliced images, a Kenney font) and a HUD (bodies, score, frame time). Impacts pla
 turns it off) pushes the dominoes after 2 s, pours after 6 s and feeds the goal after 10 s, so the exported game shows
 something without input.
 
-Script fields the checks read: `Bodies`, `TowerTopDrift` (metres the top crate moved), `DominoesDown` (tipped beyond 45
-degrees), `BallsInPit`, `BallsEscaped` (outside the arena or below the floor), `GhostsOnPitFloor`, `Score`, `Shots`.
+Colliders: crates, dominoes, pins and ghosts are boxes, balls spheres, all dynamic; the arena, pit walls, funnel and ramp
+are static boxes (the funnel built of boxes); the goal basket and the launch pad are box triggers.
 
-Acceptance (`StrataEditor.PhysicsPlayground`, `--no-gpu`):
-- `script.build` succeeds; `play.start`; `physics.stats` reports at least 600 dynamic bodies.
+Script fields the checks read: `Bodies`, `TowerTopDrift` (metres the top crate moved), `DominoesDown` (tipped beyond 45
+degrees), `BallsInPit`, `BallsEscaped` (outside the arena or below the floor), `GhostsOnPitFloor`, `Score`, `Shots`,
+`LastShotForwardSpeed` (the newest shot ball's velocity along the camera's forward, sampled in the step after the shot),
+`ShotSpeed` (the tuning field it is compared with), `Reloads` (`OnReload` calls).
+
+Acceptance (`StrataEditor.PhysicsPlayground`, `--no-gpu`; the physics checks run with the game paused, so `until` steps it
+exactly):
+- `script.build` succeeds; `play.start`; `physics.stats` reports at least 600 dynamic bodies; `Bodies` equals the scene's
+  count (a number written into the script once the scene is built).
 - After `play.step` of 180 steps (3 s of game time): `TowerTopDrift` at most 0.25; `BallsEscaped` 0.
 - `input.click` on "Start Dominoes": `until` `DominoesDown` at least 60 within 1,200 steps.
 - `input.click` on "Feed Goal": `until` `Score` at least 4 within 900 steps.
 - Ghosts: `until` `GhostsOnPitFloor` equals 8 within 600 steps.
-- A left click at the viewport's centre (`input.mouseButton`): `Shots` 1 and the newest ball's velocity along the camera's
-  forward at least half the shot speed.
-- `script.reload` while playing: the fields keep their values, `Bodies` unchanged, the playground goes on (a domino reset
-  and rerun reaches 60 again).
+- A left click at the viewport's centre (`input.mouseButton`): `Shots` 1 and `LastShotForwardSpeed` at least half of
+  `ShotSpeed` (the expected value is the field's default, written into the check).
+- `script.reload` while playing: `Reloads` 1, `Shots` still 1 and `Bodies` the scene's count plus the poured and shot balls
+  (known numbers), and the playground goes on (a domino reset and rerun reaches 60 again).
 - R: `DominoesDown` 0 and `TowerTopDrift` below 0.05 after 60 steps; the log has "Playground: reset".
-- Export full and pruned (prefabs spawned by path in `alwaysInclude`); both games headless for 900 frames print
-  "Playground: 6xx bodies" (the count from the scene), "Playground: domino run complete" and "Playground: goal scored".
+- Export full and pruned. `alwaysInclude` names only what scripts load by path and no scene references (pruned packs keep
+  every scene with its closure anyway): the ball prefab the shots and pours spawn and the impact sounds played by path.
+  Both games headless for 900 frames print "Playground: 6xx bodies" (the count from the scene), "Playground: domino run
+  complete" and "Playground: goal scored".
 - `gpu`: the exported game windowed for 600 frames, `--screenshot` passes `check-image`; `--perf-log` has a nonzero
   `Scene.Physics` column. The report gives the Mac's Release median of `Scene.Physics` with every body awake (information,
   not a gate).
 
 ### 4.3 Third-Person Adventure (`Samples/ThirdPerson`)
 
-- **Scenes.** `Scenes/MainMenu.stscene` (start scene): a camera on the robot dancing and waving on a platform, a canvas with
-  the title (Kenney font), Play, Settings, Credits and Quit. `Scenes/Course.stscene`: a course of Platformer Kit pieces
-  (about 40 models: islands, paths, ramps and stairs within the controller's step height and slope, trees, fences, flags),
-  12 spinning coins (triggers), 2 jump pads (trigger: a high `Jump`), a crate to push off a ledge into a gap so the player
-  can climb across, a goal flag; the Poly Haven HDRI as the sky light's environment, a sun with shadows, post-processing.
+- **Scenes.** `Scenes/MainMenu.stscene` (start scene): a camera on the robot dancing and waving on a platform with a flag
+  in its hand (`AttachToJointComponent` on its hand joint), a canvas with the title (Kenney font), Play, Settings, Credits
+  (a scrolling panel inside a `UIMask`) and Quit. `Scenes/Course.stscene`: a course of Platformer Kit pieces (about 40
+  models: islands, paths, ramps and stairs within the controller's step height and slope, trees, fences, flags; static
+  bodies, non-convex mesh colliders), 12 spinning coins (sphere triggers), 2 jump pads (box triggers: a high `Jump`), a
+  crate (dynamic box) to push off a ledge into a gap so the player can climb across, a goal flag (box trigger); the Poly
+  Haven HDRI as the sky light's environment, a sun with shadows, post-processing. `Scenes/Loading.stscene`: the export's
+  loading scene, a progress bar from `Game::GetSceneLoadProgress`.
 - **Character.** `RobotExpressive.glb` imported (scale from `asset.info` bounds: about 1.8 m tall; morph targets are skipped
-  with the importer's warning, listed in the README), a controller `Animations/Robot.stanimator`: parameters `Speed`
-  (float), `Grounded` (bool), `Jump` (trigger), `Emote` (int); states Idle, Walk, Run, Jump, Wave, Dance with cross-fades;
+  with the importer's warning, listed in the README and the CTest's `ALLOWED_MESSAGES`), a controller
+  `Animations/Robot.stanimator`: parameters `Speed` (float), `Grounded` (bool), `Jump`, `Wave` and `Dance` (triggers;
+  animators have only float, bool and trigger parameters); states Idle, Walk, Run, Jump, Wave, Dance with cross-fades;
   `Footstep` events at the foot contacts of Walking and Running.
-- **Scripts.** `ThirdPersonPlayer` (camera-relative movement, Shift sprints, Space jumps with a short coyote time, 1 and 2
-  emote while idle, footsteps from `OnAnimationEvent`, a land sound), `FollowCamera` (mouse or right stick orbit, scroll
-  zoom, a spring arm shortened by `Physics::Raycast` so walls never come between camera and player), `Coin`, `JumpPad`,
-  `Goal`, `CourseState` (HUD: coins, time; a completion panel with the best time kept in a save file), `PauseMenu` (Esc:
-  `Time::SetTimeScale(0)`, Resume, Settings, Restart, Main Menu, Quit), `SettingsMenu` (master volume and mouse sensitivity
-  sliders, invert-Y, fullscreen and vsync toggles through `Game::SetWindowMode` and `SetVSync`; written to `settings.json`
-  with `Game::WriteSaveFile` and read at start), `MainMenu` (`Game::LoadScene`). Gamepad: left stick moves, right stick
-  orbits, A jumps, Start pauses; UI navigation works by itself.
+- **Scripts.** `ThirdPersonPlayer` (camera-relative movement, Shift sprints, Space jumps with a short coyote time, 1 waves
+  and 2 dances while idle, footsteps from `OnAnimationEvent`, a land sound), `FollowCamera` (mouse or right stick orbit,
+  scroll zoom, a spring arm shortened by `Physics::Raycast` so walls never come between camera and player), `Coin`,
+  `JumpPad`, `Goal`, `CourseState` (HUD: coins, time; a completion panel with the best time kept in a save file),
+  `PauseMenu` (Esc: `Time::SetTimeScale(0)`, Resume, Settings, Restart, Main Menu, Quit), `SettingsMenu` (master volume and
+  mouse sensitivity sliders, invert-Y, fullscreen and vsync toggles through `Game::SetWindowMode` and `SetVSync`; written to
+  `settings.json` with `Game::WriteSaveFile` and read at start), `MainMenu` (`Game::LoadScene`). **Attract mode:** after
+  `AttractDelaySeconds` (default 10) in the main menu without input, the menu sets the module's attract flag (game-wide
+  state in the script module, which stays loaded across scene loads) and loads the course; in attract mode the player walks
+  itself along `AttractPath` waypoints to the first coins, and any key, click or button returns to the main menu (the arcade
+  convention). The editor regression sets `AttractDelaySeconds` to 0 (off). Gamepad: left stick moves, right stick orbits,
+  A jumps, Start pauses; UI navigation works by itself.
 - **Audio.** Footsteps (Kenney Impact Sounds), jump and land, coin and completion (Interface Sounds), UI hover and click,
   a streamed music loop when a CC0 one fits (else none: the README says so).
 
+Script fields the checks read (expect compares a value with constants only, section 2): `ThirdPersonPlayer.AnimatorState`
+(the index of `Animator::GetCurrentState` in Idle 0, Walk 1, Run 2, Jump 3, Wave 4, Dance 5; -1 for another),
+`DistanceWalkedForward` (metres along the camera's forward since the field was last reset by `script.setField`),
+`MaxJumpHeight`, `Grounded`; the crate's `Pushable.Displacement` (metres from its start); `CourseState.Coins`;
+`PauseMenu.Paused` and `TimeScale`.
+
 Acceptance (`StrataEditor.ThirdPerson`, `--no-gpu`):
 - `play.start` in the main menu; `input.click` Play: `until` `play.state`'s `/running/name` is "Course" within 10 s.
-- `input.sequence`: W held 90 steps moves the player at least 3 m along the camera's forward (world position samples); the
-  animator's state is Walk or Run while held (`animation.info {entity}` during a held `input.key`), Idle within 60 steps
-  after release.
-- Space: the player's `MaxJumpHeight` field at least 0.5 m, `Grounded` again within 120 steps.
-- The player placed behind the crate (`component.set` on the running copy), W held 120 steps: the crate moved at least
-  0.5 m.
+- `input.sequence`: W held 90 steps: `DistanceWalkedForward` at least 3; `AnimatorState` between 1 and 2 (Walk or Run)
+  while held (`input.key` held, then `script.getField`), 0 (Idle) within 60 steps after release (`until`).
+- Space: `MaxJumpHeight` at least 0.5 m, `Grounded` again within 120 steps.
+- The player placed behind the crate (`component.set` on the running copy), W held 120 steps: `Displacement` at least 0.5.
 - The player placed on a coin: `until` the coins `UIText` equals "1 / 12" within 120 steps; the log has
   "ThirdPerson: coin 1 of 12".
-- Esc: the pause panel is active and `Time` scale 0 (a script field); `input.click` Settings, the invert-Y toggle: the log
-  has "ThirdPerson: settings saved"; Resume: scale 1.
+- Esc: `Paused` true and `TimeScale` 0; `input.click` Settings, the invert-Y toggle: the log has "ThirdPerson: settings
+  saved"; `input.click` Resume: `TimeScale` 1 (these taps at time scale 0 need I7).
 - The player placed in the goal: the completion panel is active; the log has "ThirdPerson: course complete in".
-- Export full and pruned (`Scenes/Course.stscene` in `alwaysInclude`, since it is loaded by path); both games headless for
-  300 frames print "ThirdPerson: main menu ready" and "ThirdPerson: course scene available" (the menu checks
-  `Assets::Find` of the course, so a pruned export that drops it fails).
+- Export full and pruned with the loading scene. `alwaysInclude` names what scripts load by path and no scene references
+  (the sounds played by path, if any). Both games headless for 1,800 frames (attract mode on, as saved) print
+  "ThirdPerson: main menu ready", "ThirdPerson: attract mode", "ThirdPerson: course loaded" (the course loaded through
+  `Game::LoadScene` from the cooked pack, behind the loading scene) and "ThirdPerson: coin 1 of 12".
 - `gpu`: the exported game windowed, its menu screenshot passes `check-image`.
 
 ### 4.4 Open World (`Samples/OpenWorld`)
@@ -319,57 +398,77 @@ Acceptance (`StrataEditor.ThirdPerson`, `--no-gpu`):
   `GenerateBrandAssets.py`'s; CI never runs it): an island about 768 m across in a 12 x 12 grid of 64 m tiles, written as
   one glTF model `Terrain/Island.glb` with one mesh per land tile (2 m spacing, shared edge vertices identical so tiles
   meet without cracks, `KHR_mesh_quantization`), its UVs into a small palette `Terrain/Palette.png` (sand, grass, forest
-  floor, rock, snow by height and slope). Imported with `GenerateLODs` off (simplified tiles would open seams). The
-  instance is unpacked and each tile moved into its cell of the Terrain layer, with a static `MeshCollider`.
-- **World.** `world.create {"path": "Worlds/Island", "cellSize": 64}`; layers Terrain, Vegetation, Wildlife, Landmarks.
-  The persistent scene holds the sun and procedural sky, a 2 km water plane (blended), post-processing, the player, the
-  game manager and the UI.
+  floor, rock, snow by height and slope). Imported with `GenerateLODs` off (simplified tiles would open seams). **The
+  terrain stays in the persistent scene** (the unpacked instance's tiles, each a static body with a `MeshCollider`,
+  `Convex` false): it is visible from everywhere (no fog hides missing tiles, section 2), and the simulation waits for its
+  colliders before the first step, so nothing falls through after a teleport. The streamed layers are Vegetation, Wildlife
+  and Landmarks.
+- **World.** `world.create {"path": "Worlds/Island", "cellSize": 64}`; layers Vegetation (streaming distance 3 cells),
+  Wildlife (2) and Landmarks (5). The persistent scene holds the terrain, the sun and procedural sky, a 2 km water plane
+  (blended), post-processing, the player, the game manager and the UI. The camera's far plane and the tour's height are
+  chosen so that the edge of the loaded vegetation is far and low in the view (pop-in at the horizon, not in front).
 - **Props at scale.** About 25 Nature Kit models (imported with `UnlitMaterials: Lit`) as one-entity prefabs (a
   `MeshRenderer` on the model's mesh; trees with a capsule and large rocks with a box collider, static), placed by the
   generator's `scatter` command: a command script of `prefab.instantiate {instances}` steps (seeded Poisson-disc sampling
   on the same height function: palms on the beach, oaks and pines inland, rocks on slopes, flowers and grass tufts in
-  clearings) that the editor runs into the Vegetation layer. At least 20,000 instances. Before scattering, the bytes a
-  prop instance takes in its cell document are measured and the count set so that the documents stay within 20 MB.
+  clearings) that the editor runs into the Vegetation layer: the script starts with `world.edit {"editLayer":
+  "Vegetation"}` and pins every cell of the island with `world.loadCells`, so no instance lands in the persistent scene
+  (an entity created in an unloaded cell's area would stay there, `EditorWorld::Recell`). At least 20,000 instances.
+  Before scattering, the bytes a prop instance takes in its cell document are measured and the count set so that the
+  documents stay within 20 MB.
 - **Landmarks.** Four or five places (camps with tents, campfires with a point light, a crackling 3D `AudioSource` and an
-  emissive ember material; a canoe on a beach; bridges and fences), so walking has destinations.
+  emissive ember material; a canoe on a beach; bridges and fences), placed on the terrain mesh with `entity.dropToGround`,
+  so walking has destinations.
 - **Wildlife.** 30 foxes (Khronos Fox, skinned) in the Wildlife layer's cells, each with a `Wander` script (survey, walk,
-  run; ground height by raycast; a fox stays inside its cell's area so it never walks into an unloaded cell).
+  run; ground height by raycast against the Terrain collision layer, and a fox stands still until its ground ray hits; a
+  fox stays inside its cell's area so it never walks into an unloaded cell).
 - **Player.** `Explorer`: flies (WASD, mouse, Shift fast, Q and E down and up) or walks (Tab: a `CharacterController`,
   the make-a-game skill's first-person walker); a `StreamingSource`; teleporting (the map's landmarks on 1-5) prefetches
-  with `World::RequestCellsAround` and waits for `World::IsLoadedAround` behind a short fade.
+  with `World::RequestCellsAround`, and the fade ends and walking resumes only once `World::IsLoadedAround` holds and a
+  downward `Physics::Raycast` at the destination hits the Terrain layer.
 - **Day and night.** `DayNight` turns the sun (a full day in `DayLengthSeconds`, default 600) in steps of at most 0.25
-  degrees, so the shadow cascades are not redrawn every frame; the procedural sky follows; campfire lights come on at dusk.
-- **Tour.** The game starts with a camera tour over 8 waypoints (Catmull-Rom, low over the forest so cells stream in and
-  out); any key or click hands over control (`TourOnStart` field, which the editor regression turns off).
+  degrees, so the shadow cascades are not redrawn every frame, and drives the procedural sky's colors and intensity itself
+  (they are constants of `SkyLightComponent`); campfire lights come on at dusk.
+- **Tour.** The game starts behind the export's loading scene (progress from `Game::GetSceneLoadProgress`), then with a
+  camera tour over 8 waypoints (Catmull-Rom, low over the forest so cells stream in and out); any key or click hands over
+  control (`TourOnStart` field, which the editor regression turns off).
 - **UI.** HUD (mode, time of day, cells loaded, the controls), pause menu (Resume, day speed slider, restart the tour,
   Credits with the Fox's attribution, Quit).
 - **Audio.** Campfires, waves near the shore (a 3D source on the water's edge of each beach cell) and an ambience loop
   when a CC0 one fits.
 
+Script fields the checks read: `Explorer.Grounded`, `HeightAboveGround`, `DistanceWalked` (metres since reset),
+`StartAreaLoaded` (`World::IsLoadedAround` the start position, each frame), `TeleportsDone`; a fox's `Wander.Distance`
+(metres since reset) and `Wander.StateIndex` (Survey 0, Walk 1, Run 2).
+
 Acceptance (`StrataEditor.OpenWorld`, `--no-gpu`):
 - `world.info`: at least 80 cells with content; the Vegetation layer's cells hold at least 20,000 entities; layers as
-  listed.
+  listed; the persistent scene holds no props (its entity count at most the terrain tiles plus 50).
 - `play.start` with `TourOnStart` false: `until` `world.status`'s `/playing` shows at least 9 loaded cells and none loading
   within 900 steps.
-- Tab (walk): `until` the explorer's `Grounded` field is true within 300 steps; W held 120 steps moves it at least 4 m
-  over the terrain without falling below it (its world height stays above the terrain's at that point minus 0.1 m: the
-  script's `HeightAboveGround` field at least -0.1).
-- Teleport to landmark 3 (500 m away): `until` loaded around it and `Grounded` within 1,800 steps; `world.status` reports
-  cells unloaded since the start (the start's cells are gone).
-- A fox near landmark 3 (`entity.find`): `animation.info` names one of its states; over 300 steps it moves at least 1 m.
+- Tab (walk): `until` `Grounded` is true within 300 steps; W held 120 steps: `DistanceWalked` at least 4 and
+  `HeightAboveGround` at least -0.1 (never below the terrain).
+- Teleport to landmark 3 (500 m away): `until` `TeleportsDone` 1 and `Grounded` within 1,800 steps; `StartAreaLoaded` false
+  (the start's Vegetation cells are gone).
+- A fox near landmark 3 (`entity.find`): `StateIndex` at least 0 (a known state); `Distance` reset, over 300 steps at least
+  1.
 - `DayLengthSeconds` set to 20 (`script.setField`): within 900 steps a campfire's `PointLight` intensity is above 0.
-- Export full and pruned (cooked cells in the pack); both games headless for 1,800 frames with `--perf-log`: they print
-  "OpenWorld: tour reached waypoint 8"; `check-perf-log` sees nonzero `WorldCellsLoaded` and `World.Streaming` and no row
-  with `PhysicsBodiesWaiting` above 0. Debug runs a shorter tour (a field) if CI's Debug job cannot finish 1,800 frames in
-  its timeout.
-- `gpu`: the exported game windowed for 1,200 frames at 1920 x 1080 (`--resolution`): `check-image` with green dominant on
-  at least 10% of the screenshot; and an editor run with a GPU (`--headless`) at the start position: `editor.perf`'s
-  `renderStats.gpuDriven` true, `instances` at least 5,000 and `drawCommands` at most 256 (thresholds confirmed at the first
-  measurement and stated in the report: at most half the instances and twice the draw commands measured).
+- Export full and pruned (cooked cells in the pack, the loading scene); both games headless for 1,800 frames with
+  `--perf-log`: they print "OpenWorld: tour reached waypoint 8"; `check-perf-log` sees nonzero `WorldCellsLoaded` and
+  `World.Streaming` and no row with `PhysicsBodiesWaiting` above 0. Debug runs a shorter tour (a field) if CI's Debug job
+  cannot finish 1,800 frames in its timeout.
+- `gpu`: the exported game windowed for 1,200 frames at 1920 x 1080 (`--resolution`) and `--asset-budget-mb 128` (mip
+  streaming under a budget): `check-image` with green dominant on at least 10% of the screenshot, and no error line; and
+  an editor run with a GPU (`--headless`) at the start position: `editor.perf`'s `renderStats.gpuDriven` true, `instances`
+  at least 5,000 and `drawCommands` at most 256 (thresholds confirmed at the first measurement and stated in the report: at
+  most half the instances and twice the draw commands measured).
 - Perf, information on the Mac (Release, quiet, under the perf lock): the tour's median and 95th-percentile frame time and
-  GPU busy time at 1920 x 1080 from the perf log, as provisional metrics `PerfGPU.Samples.OpenWorldTour.FrameMedianMs`,
-  `.FrameP95Ms` and `.GPUBusyMedianMs` (`{"Unit": "ms", "Provisional": true}`, target 16.7 for the median) measured by a
-  `PerfGPU.Samples` test that runs the exported tour; never gated here.
+  GPU busy time at 1920 x 1080, as provisional metrics `PerfGPU.Samples.OpenWorldTour.FrameMedianMs`, `.FrameP95Ms` and
+  `.GPUBusyMedianMs` (`{"Unit": "ms", "Provisional": true}` in `Budgets.json`, unit only: no Mac number goes there; target
+  16.7 for the median). They are measured by `StrataRuntime.OpenWorldTourPerf` (labels `perf` and `gpu`, Release and Dist),
+  a CTest with `FIXTURES_REQUIRED` on `StrataEditor.OpenWorld`'s export that runs the exported tour windowed with
+  `--perf-log` and hands the log to a test helper mode (`--strata-test-helper=record-perf-log`) that computes the metrics
+  and writes them to the perf results as every perf test does; never gated here.
 
 ### 4.5 Tetris
 
@@ -378,9 +477,11 @@ Acceptance (`StrataEditor.OpenWorld`, `--no-gpu`):
 
 ### 4.6 The launcher and the index
 
-`Samples.json` lists Third-Person Adventure, Open World, Physics Playground, Tetris in that order (the richest first), each
-with its picture. `StrataEditor.Install` checks that `project.samples` lists the four ids and that the installed copies
-carry no `.strata` (its check of `/samples/0/id` changes accordingly). `ProjectSamplesTests` expects four samples.
+Each sample's directory and its `Samples.json` entry land in the same commit, the entry appended after Tetris, so that
+`StrataEditor.Install`'s check of `/samples/0` stays valid until the last step. Then `Samples.json` lists Third-Person
+Adventure, Open World, Physics Playground, Tetris in that order (the richest first), each with its picture, and
+`StrataEditor.Install` checks that `project.samples` lists the four ids and that the installed copies carry no `.strata`.
+`ProjectSamplesTests` reads `Samples.json` (I2), so it needs no change per sample.
 
 ## 5. Making each sample (the method)
 
@@ -400,6 +501,7 @@ carry no `.strata` (its check of `/samples/0/id` changes accordingly). `ProjectS
 | Test | Label | What |
 | --- | --- | --- |
 | `Editor.CommandScript` (`until` cases) | | I1 |
+| `Editor.Commands` (a tap and a click at time scale 0) | | I7 |
 | `Editor.Samples`, the launcher's `Editor.UI` test | | I2 |
 | `Samples.Content` | | I4, including its crafted-directory must-fail cases |
 | `Asset.Gltf` (`UnlitMaterials`) | | I5 |
@@ -408,16 +510,19 @@ carry no `.strata` (its check of `/samples/0/id` changes accordingly). `ProjectS
 | `StrataEditor.PhysicsPlayground`, `.ThirdPerson`, `.OpenWorld` | `package` | sections 4.2-4.4 (`RESOURCE_LOCK toolchain`, `TIMEOUT 1800`) |
 | `StrataRuntime.PhysicsPlaygroundWindowed`, `.ThirdPersonWindowed`, `.OpenWorldWindowed` (+ their image and perf-log checks) | `gpu` | the exported games in a window (fixtures on the package tests' exports) |
 | `StrataEditor.OpenWorldRender` | `gpu` | render statistics at the start position |
-| `PerfGPU.Samples` | `perf` | provisional tour metrics (Release) |
+| `StrataRuntime.OpenWorldTourPerf` | `perf`, `gpu` | provisional tour metrics (Release), on the package test's export |
 
-**Must-fail checks** (each done once by hand, the result in the report; the permanent ones are I1, I2, I4 and I5's tests):
+**Must-fail checks** (each done once by hand, the result in the report; the permanent ones are I1, I2, I4, I5 and I7's tests):
 for every sample, break what each expectation checks and see the regression fail: a script that never counts dominoes or
 coins; the goal trigger made solid; the ghost layer's collision turned back on; the controller's `Speed` parameter never
-set (animator stays Idle); the crate made static; the course removed from `alwaysInclude` (the pruned game fails); the
-Vegetation layer emptied (`world.info` fails); `StreamingSource` removed (no cells load). Restore each.
+set (animator stays Idle); the crate made static; the Playground's ball prefab removed from `alwaysInclude` (the pruned
+game logs a failed spawn: an unexpected error, and no "goal scored"); the attract mode's course load broken (the exported
+Third-Person prints no "course loaded"); the Vegetation layer emptied (`world.info` fails); `StreamingSource` removed (no
+cells load); a warning added to a script's start (the unexpected-message check fails). Restore each.
 
 **Physics robustness** (for `physics-box3d`): checks wait by condition or in game time (`until`, `play.step`), never by frame
-counts; thresholds are what any sound rigid-body engine reaches with margin (60 of 64 dominoes, tower drift 0.25 m, 4 of 5
+counts, and run with the game paused, so each step is a fixed step whatever the machine; the samples rely only on primitive
+triggers, dynamic primitives and static (convex or non-convex) mesh colliders; thresholds are what any sound rigid-body engine reaches with margin (60 of 64 dominoes, tower drift 0.25 m, 4 of 5
 balls through a wide funnel, 0 balls escaped over walls three times a ball's bounce height); scenes avoid edge cases
 engines treat differently (stacks start separated by 1 mm and settle, no bodies start interpenetrating, no thin walls
 against fast balls without CCD). The checks name the physical outcome in their `expect` message so the box3d stream can tell
@@ -436,7 +541,7 @@ editor) and in the Windows Dist job. Each must finish within its 1,800 s timeout
   sample's `CREDITS.md` and in `ThirdPartyNotices.md` (`Samples.Content`).
 - `Docs/DeveloperGuide.md`: Repository layout (the samples, their files and tests, `GenerateIslandTerrain.py` under
   `Tools/`); Testing (the sample runner, `Samples.Content`, the windowed and render checks); Deferred commands and command
-  scripts (`until`); Launcher and Templates and recent projects (sample pictures, the copy's thumbnail); Importers
+  scripts (`until`, paused stepping); Simulated input (taps at time scale 0); Launcher and Templates and recent projects (sample pictures, the copy's thumbnail); Importers
   (`UnlitMaterials`); Packages (what samples add to the archives); a "Samples" paragraph: the rules of section 3 and 4
   (licenses, credits format, budgets, made through the editor, regression, picture).
 - `Docs/Architecture.md`: the `ProjectSamples` paragraph (pictures, seeded thumbnails).
@@ -464,8 +569,12 @@ editor) and in the Windows Dist job. Each must finish within its 1,800 s timeout
 - **Document size:** thousands of prefab instances in pretty-printed JSON cells (estimated 400-700 bytes each). Measured
   before scattering; the count is set to fit 20 MB; JSON compresses about tenfold in archives and in git.
 - **Binary assets in git** (no LFS): up to 60 MB forever in history (open question 2).
-- **Terrain without a terrain system:** mesh tiles with mesh colliders; seams avoided by identical edge vertices and no LODs;
-  collision gaps at tile edges are checked by the walk test.
+- **Terrain without a terrain system:** mesh tiles with mesh colliders in the persistent scene; seams avoided by identical
+  edge vertices and no LODs; collision gaps at tile edges are checked by the walk test.
+- **Pop-in without fog:** distant vegetation is not loaded; streaming distances, the far plane and the tour's height keep the
+  loaded edge far and low in the view, and the README says so.
+- **Scattering into a world:** instances created where no cell is loaded stay in the persistent scene; the scatter script
+  pins every island cell first and the acceptance bounds the persistent scene's entities.
 - **Importers on untrusted files:** a crash is an engine bug to fix with a crafted-file test; the Kenney, Khronos and
   three.js files are widely used and parse with cgltf, stb_image and stb_vorbis today.
 - **RobotExpressive's morph targets** (facial expressions) are skipped with a warning: the face stays neutral.
@@ -491,23 +600,36 @@ editor) and in the Windows Dist job. Each must finish within its 1,800 s timeout
 
 ## 10. Deliver in this order
 
-1. I1 `until` (with docs and skill lines).
-2. I3 the generic runner, Tetris moved onto it.
-3. I4 `Samples.Content`, Tetris' README, CREDITS and (after I2) picture; the "Sample assets" table.
-4. I2 sample pictures in the launcher.
-5. Physics Playground (assets, project, scripts, scene, UI, audio, regression, exports, windowed check, README, credits,
+Every commit keeps every test passing (golden rule 2): a sample's directory and its `Samples.json` entry land together,
+appended after Tetris.
+
+1. I1 `until`, with its paused stepping (with docs and skill lines).
+2. I3 the generic runner, Tetris moved onto it (the unexpected-message check, `--save-directory`).
+3. I4 `Samples.Content`, with Tetris' README, CREDITS and `Picture.png` (the project's thumbnail; it needs no launcher
+   change) and the "Sample assets" table.
+4. I2 sample pictures in the launcher; `ProjectSamplesTests` reads `Samples.json`; the copying tests copy only Tetris.
+5. Open World de-risk spike, before any sample: `Tools/GenerateIslandTerrain.py` (terrain tiles), a 20,000-prop scatter
+   into a world, cook, export and a headless streaming run, in a scratch project; what it finds (document sizes, the
+   scatter's pins, collider readiness, pop-in) goes into this spec, and the generator is committed if it works.
+6. Physics Playground (assets, project, scripts, scene, UI, audio, regression, exports, windowed check, README, credits,
    picture, screenshots, notices).
-6. Third-Person Adventure (the same).
-7. I5 `UnlitMaterials`.
-8. `Tools/GenerateIslandTerrain.py` and the Open World (the same, plus the render check).
-9. `PerfGPU.Samples` and the provisional metrics; the Mac measurements.
-10. Docs and skills completed, `Samples.json` order and the install test, the archive growth measured, the full Debug and
-    Release suites, the lint, CI on `ci/showcase-samples`.
+7. **Batch 1:** CI green on `ci/showcase-samples` at the Playground's tip, which the report names: the integrator can land
+   the infrastructure, Tetris' files and the Playground on their own, so `physics-box3d`'s sample acceptance (its D13) can
+   start on them.
+8. I5 `UnlitMaterials` (the Nature Kit; the Platformer Kit too if its GLBs carry the extension).
+9. The Open World (the same as the Playground, plus the render check).
+10. I7 taps at time scale 0.
+11. Third-Person Adventure (the same).
+12. `StrataRuntime.OpenWorldTourPerf` and the provisional metrics; the Mac measurements.
+13. **Batch 2:** docs and skills completed, `Samples.json` order and the install test, the archive growth measured, the full
+    Debug and Release suites, the lint, CI on `ci/showcase-samples`.
 
 ## 11. Merge notes
 
-- Lands before `physics-box3d`. That stream's acceptance includes `StrataEditor.PhysicsPlayground`, `.ThirdPerson` and
-  `.OpenWorld`; their thresholds stay; scene tuning fields may change with a reason.
+- Lands before `physics-box3d`, in two batches (section 10): batch 1 (infrastructure, Tetris' files, the Playground) can
+  land alone, so `physics-box3d` need not wait for the Open World. That stream's acceptance includes
+  `StrataEditor.PhysicsPlayground`, `.ThirdPerson` and `.OpenWorld`; their thresholds stay; scene tuning fields may change
+  with a reason.
 - Files shared with other streams: `AGENTS.md` (headroom), `Docs/DeveloperGuide.md`, `ThirdPartyNotices.md` (box3d replaces
   the Jolt row; this stream adds a separate table), `StrataTests/CMakeLists.txt` (new tests near `StrataEditor.Tetris`),
   `StrataTests/CoreShards.json` (one shard), `Samples/Samples.json`.
