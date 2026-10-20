@@ -63,7 +63,8 @@ foreach(file
 		"StrataScriptCore/Include/StrataScript/StrataScript.h" "StrataScriptCore/Include/StrataScript/ScriptABI.h"
 		"StrataScriptCore/Source/ScriptModuleEntry.cpp" "StrataScriptCore/ThirdParty/glm/glm/glm.hpp"
 		"StrataScriptCore/ThirdParty/glm/glm/gtc/quaternion.hpp" "StrataScriptCore/ThirdParty/glm/copying.txt"
-		"Samples/Samples.json" "Samples/Tetris/Tetris.stproj" "Docs/Manual/Scripting.md"
+		"Samples/Samples.json" "Samples/ThirdPerson/ThirdPerson.stproj" "Samples/OpenWorld/OpenWorld.stproj"
+		"Samples/PhysicsPlayground/PhysicsPlayground.stproj" "Samples/Tetris/Tetris.stproj" "Docs/Manual/Scripting.md"
 		"Skills/strata-editor-automation/SKILL.md" "Skills/strata-make-a-game/SKILL.md" "Skills/strata-scripting/SKILL.md")
 	if(NOT EXISTS "${prefix}/${file}")
 		fail("the installation lacks '${file}'")
@@ -128,7 +129,8 @@ endfunction()
 # 2. The version, the samples beside the editor and a project from the template people start with.
 run_editor(Create "[
 	{ \"command\": \"editor.status\", \"expect\": { \"/engineVersion\": { \"equals\": \"${VERSION}\" } } },
-	{ \"command\": \"project.samples\", \"expect\": { \"/samples/0/id\": { \"equals\": \"Tetris\" } } },
+	{ \"command\": \"project.samples\", \"expect\": { \"/samples/0/id\": { \"equals\": \"ThirdPerson\" }, \"/samples/1/id\": { \"equals\": \"OpenWorld\" },
+		\"/samples/2/id\": { \"equals\": \"PhysicsPlayground\" }, \"/samples/3/id\": { \"equals\": \"Tetris\" } } },
 	{ \"command\": \"project.create\", \"parameters\": { \"directory\": \"${project_json}\", \"name\": \"Install Game\", \"template\": \"basic3d\" } },
 	{ \"command\": \"entity.create\", \"parameters\": { \"name\": \"Greeter Host\" } },
 	{ \"command\": \"scene.save\" }

@@ -1,0 +1,3 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":1,"Entities":[
+{"Components":{"CapsuleCollider":{"HalfHeight":0.22969352,"Offset":[0,0.30655998,0],"Radius":0.07686648},"MeshRenderer":{"CastShadows":true,"Material":"0000000000000000","Mesh":"ED6A1F2469E7932E"},"Name":{"Name":"Oak"},"RigidBody":{"AngularDamping":0.05,"ContinuousCollision":false,"Friction":0.5,"GravityScale":1,"IsTrigger":false,"Layer":0,"LinearDamping":0.05,"LockRotationX":false,"LockRotationY":false,"LockRotationZ":false,"Mass":1,"Restitution":0,"Type":"Static"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"BD1F5E2DF1701639"}
+]}}

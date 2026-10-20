@@ -3193,7 +3193,8 @@ is the `strata-scripting` skill. The layers:
   `Materials/Ground.stmat`, and a static box collider whose top is the ground plane). Samples (`ProjectSamples`) are
   finished projects listed by `Samples.json` in a samples directory next to the executable, which the `StrataSamples` build target fills from the repository's `Samples/`
   (`CMake/StrataCopySamples.cmake`, without local `.strata` data); `project.openSample` copies one, again without its
-  `.strata`, into a new directory and opens the copy, so the shipped sample never changes. Opening a scene restores the editor camera it was last shown with (stored per
+  `.strata`, into a new directory and opens the copy, so the shipped sample never changes; a sample's picture (the index's
+  `Picture`) is its launcher card's image and the copy's first thumbnail. Opening a scene restores the editor camera it was last shown with (stored per
   scene handle in the viewport state) or frames what it renders (`EditorViewport::FrameScene`, `SceneBounds`).
   `GetActiveScene` is the running copy while playing, else the edited scene. The **inspection target** says what the
   inspectors show: the selected entities, or one asset (`SetInspectedAsset`, from the Content Browser or

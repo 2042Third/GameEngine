@@ -1,0 +1,19 @@
+{
+	"Project": {
+		"AssetDirectory": "Assets",
+		"Export": {
+			"AlwaysInclude": [],
+			"LoadingScene": "43FD467DF4593C28"
+		},
+		"Name": "ThirdPerson",
+		"Scripts": {
+			"ModuleName": "ThirdPersonScripts",
+			"SourceDirectory": "Scripts"
+		},
+		"StartScene": "755D4CAD3809AF61"
+	},
+	"Strata": {
+		"Format": "Project",
+		"Version": 2
+	}
+}

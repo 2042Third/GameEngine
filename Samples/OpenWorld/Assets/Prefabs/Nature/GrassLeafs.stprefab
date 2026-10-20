@@ -1,0 +1,3 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":1,"Entities":[
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"0000000000000000","Mesh":"FB8ECFA4FC33DAC3"},"Name":{"Name":"GrassLeafs"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"144E62E3F0B30257"}
+]}}

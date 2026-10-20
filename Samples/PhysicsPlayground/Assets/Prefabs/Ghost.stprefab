@@ -1,0 +1,3 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":1,"Entities":[
+{"Components":{"BoxCollider":{"HalfExtents":[0.5,0.5,0.5],"Offset":[0,0,0]},"MeshRenderer":{"CastShadows":true,"Material":"56ACCA90A4F8447E","Mesh":"0000000000000001"},"Name":{"Name":"Ghost"},"RigidBody":{"AngularDamping":0.05,"ContinuousCollision":false,"Friction":0.5,"GravityScale":1,"IsTrigger":false,"Layer":2,"LinearDamping":0.05,"LockRotationX":false,"LockRotationY":false,"LockRotationZ":false,"Mass":5,"Restitution":0.1,"Type":"Dynamic"},"Tag":{"Tag":"Ghost"},"Transform":{"Rotation":[0,0,0,1],"Scale":[0.6,0.6,0.6],"Translation":[0,0,0]}},"ID":"40CABD666C3FBBCF"}
+]}}

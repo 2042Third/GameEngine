@@ -282,13 +282,13 @@ namespace Strata
 			}
 			if (action == ButtonAction::Press)
 			{
-				Ref<const SimulatedHold> hold = input.Press(type, code, 0, context.GetFixedStepCount());
+				Ref<const SimulatedHold> hold = input.Press(type, code, 0, context.GetInputStepCount());
 				return AnswerWhenSeen(context, wait, hold->FirstFrame, std::move(result), std::move(what));
 			}
 
 			// A tap answers once the game has seen its end: the input frame after the frame that ran its last step (unless
 			// another hold keeps the button down).
-			Ref<const SimulatedHold> hold = input.Press(type, code, static_cast<uint32_t>(steps), context.GetFixedStepCount());
+			Ref<const SimulatedHold> hold = input.Press(type, code, static_cast<uint32_t>(steps), context.GetInputStepCount());
 			if (!wait)
 				return AnswerNow(context, std::move(result));
 			return EditorCommandResult::Defer([hold, result = std::move(result), what = std::move(what)](EditorContext& pollContext) -> std::optional<EditorCommandResult>
@@ -829,7 +829,7 @@ namespace Strata
 					return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, std::move(result), "gamepad axis");
 				}
 
-				Ref<const SimulatedHold> hold = input.HoldAxis(gamepad, *axis, *axisValue, static_cast<uint32_t>(steps), context.GetFixedStepCount());
+				Ref<const SimulatedHold> hold = input.HoldAxis(gamepad, *axis, *axisValue, static_cast<uint32_t>(steps), context.GetInputStepCount());
 				result["value"] = hold->Value;
 				if (steps == 0)
 					return AnswerWhenSeen(context, wait, hold->FirstFrame, std::move(result), "gamepad axis");
@@ -919,6 +919,7 @@ namespace Strata
 				}
 				state["holds"] = std::move(holds);
 				state["fixedSteps"] = context.GetFixedStepCount();
+				state["inputSteps"] = context.GetInputStepCount(); // What the holds' steps count in
 				state["sequenceRunning"] = context.IsInputSequenceRunning();
 				return EditorCommandResult::Ok(std::move(state));
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
@@ -1077,7 +1078,7 @@ namespace Strata
 				Input::SimulateMouseMove(position);
 				if (!wait)
 				{
-					context.GetSimulatedInput().Press(SimulatedControlType::MouseButton, *button, static_cast<uint32_t>(steps), context.GetFixedStepCount());
+					context.GetSimulatedInput().Press(SimulatedControlType::MouseButton, *button, static_cast<uint32_t>(steps), context.GetInputStepCount());
 					return AnswerNow(context, std::move(result));
 				}
 
@@ -1086,7 +1087,7 @@ namespace Strata
 				IUIEvents* source = scene.GetService<IUIEvents>();
 				const UIEventListenerID listener = source ? source->AddUIEventListener([events](const UIEventInfo& event) { events->push_back(event); }) : 0;
 				const std::weak_ptr<Scene> playing = context.GetActiveScene();
-				Ref<const SimulatedHold> hold = context.GetSimulatedInput().Press(SimulatedControlType::MouseButton, *button, static_cast<uint32_t>(steps), context.GetFixedStepCount());
+				Ref<const SimulatedHold> hold = context.GetSimulatedInput().Press(SimulatedControlType::MouseButton, *button, static_cast<uint32_t>(steps), context.GetInputStepCount());
 				const UUID pressedID = pressed ? pressed.GetUUID() : UUID::Null();
 				return EditorCommandResult::Defer([hold, events, listener, playing, pressedID, result = std::move(result)](EditorContext& pollContext)
 					-> std::optional<EditorCommandResult>

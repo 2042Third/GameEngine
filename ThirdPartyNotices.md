@@ -41,5 +41,18 @@ The engine embeds the font [Roboto Medium](https://fonts.google.com/specimen/Rob
 compiled in from the copy that Dear ImGui distributes (`Strata/vendor/imgui/misc/fonts/Roboto-Medium.ttf`) and ships in
 every game.
 
-HDR environment maps in sample projects come from [Poly Haven](https://polyhaven.com/hdris) and are
-licensed CC0.
+## Sample assets
+
+The sample projects under `Samples/` (and the games exported from them) use the asset packs below. Each sample's
+`CREDITS.md` lists which of its files come from which pack, what was changed, and the files made for Strata. CC0 packs
+are in the public domain; CC-BY packs ask for the attribution given here, which every game made from them must show.
+
+| Sample | Pack | Source | Author | License | Attribution |
+| --- | --- | --- | --- | --- | --- |
+| Physics Playground | ambientCG Tiles101, Bricks076C, Planks037B, Concrete034, Plastic010, Metal032 | https://ambientcg.com/view?id=Tiles101, https://ambientcg.com/view?id=Bricks076C, https://ambientcg.com/view?id=Planks037B, https://ambientcg.com/view?id=Concrete034, https://ambientcg.com/view?id=Plastic010, https://ambientcg.com/view?id=Metal032 | ambientCG | CC0 1.0 | |
+| Physics Playground | Kenney Impact Sounds, Interface Sounds, UI Pack, Kenney Fonts | https://kenney.nl/assets/impact-sounds, https://kenney.nl/assets/interface-sounds, https://kenney.nl/assets/ui-pack, https://kenney.nl/assets/kenney-fonts | Kenney | CC0 1.0 | |
+| Open World | Kenney Nature Kit, Kenney Fonts | https://kenney.nl/assets/nature-kit, https://kenney.nl/assets/kenney-fonts | Kenney | CC0 1.0 | |
+| Open World | Khronos glTF Sample Assets: Fox | https://github.com/KhronosGroup/glTF-Sample-Assets/tree/edc7c9e67c639d230715049ee31f9a96a6babbbe/Models/Fox | PixelMannen; tomkranis; @AsoboStudio and @scurest | CC0 1.0 (model); CC BY 4.0 (rigging, animation, glTF conversion) | Fox: model by PixelMannen (CC0 1.0); rigging and animation by tomkranis (CC BY 4.0); glTF conversion by @AsoboStudio and @scurest (CC BY 4.0) |
+| Third-Person Adventure | three.js example models: RobotExpressive | https://github.com/mrdoob/three.js/blob/f67dcda032208b367f5965bbd835c16f839909c8/examples/models/gltf/RobotExpressive/RobotExpressive.glb | Tomás Laulhé (Quaternius); modifications by Don McCurdy | CC0 1.0 | |
+| Third-Person Adventure | Kenney Platformer Kit, Impact Sounds, Interface Sounds, UI Pack, Kenney Fonts | https://kenney.nl/assets/platformer-kit, https://kenney.nl/assets/impact-sounds, https://kenney.nl/assets/interface-sounds, https://kenney.nl/assets/ui-pack, https://kenney.nl/assets/kenney-fonts | Kenney | CC0 1.0 | |
+| Third-Person Adventure | Poly Haven: Kloofendal 48d Partly Cloudy (Pure Sky) | https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky | Greg Zaal; sky edits by Jarod Guest | CC0 1.0 | |

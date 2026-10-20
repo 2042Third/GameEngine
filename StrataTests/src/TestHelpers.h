@@ -26,6 +26,10 @@ namespace Strata::Tests
 	// directory and returns the copy's directory, or an empty path when the copy failed (outError says why). Tests never
 	// open the samples in place.
 	std::filesystem::path CopySampleProject(const std::string& name, std::string* outError = nullptr);
+	// Copies the repository's samples index (Samples/Samples.json) into `destination`, listing only the samples named, and
+	// those samples' directories (with their local editor data, should someone have opened them in place): the samples a test
+	// opens, not every sample of the repository. Returns false, with the reason, when something could not be copied.
+	bool CopySamples(const std::filesystem::path& destination, const std::vector<std::string>& names, std::string* outError = nullptr);
 
 	// Log entries (of every logger) written since construction; REQUIREs that the log buffer dropped none of them.
 	class LogCapture

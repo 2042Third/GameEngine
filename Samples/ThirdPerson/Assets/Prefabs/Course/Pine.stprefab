@@ -1,0 +1,3 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":1,"Entities":[
+{"Components":{"CapsuleCollider":{"HalfHeight":0.6564014,"Offset":[0,0.7986734,0],"Radius":0.142272},"MeshRenderer":{"CastShadows":true,"Material":"0000000000000000","Mesh":"BBAB095729D2F543"},"Name":{"Name":"Pine"},"RigidBody":{"AngularDamping":0.05,"ContinuousCollision":false,"Friction":0.5,"GravityScale":1,"IsTrigger":false,"Layer":0,"LinearDamping":0.05,"LockRotationX":false,"LockRotationY":false,"LockRotationZ":false,"Mass":1,"Restitution":0,"Type":"Static"},"Transform":{"Rotation":[0,0,0,1],"Scale":[2,2,2],"Translation":[0,0,0]}},"ID":"1EBB3AC7DEC01328"}
+]}}

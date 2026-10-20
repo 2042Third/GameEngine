@@ -1,5 +1,7 @@
 #include "Editor/ProjectSamples.h"
 
+#include "Editor/ProjectThumbnail.h"
+
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
@@ -7,6 +9,7 @@
 #include <Strata/Project/Project.h>
 
 #include <algorithm>
+#include <array>
 #include <system_error>
 
 namespace Strata
@@ -37,6 +40,46 @@ namespace Strata
 				const auto value = static_cast<unsigned char>(character);
 				return value < 0x20 || character == '/' || character == '\\' || character == ':';
 			});
+		}
+
+		// The sample's picture from the index's "Picture" value: a relative path inside the sample's directory (no root, no
+		// "..") naming a PNG file. Empty, with the reason, otherwise.
+		std::filesystem::path ResolvePicture(const nlohmann::json& value, const std::filesystem::path& sampleDirectory, std::string& outReason)
+		{
+			if (!value.is_string() || value.get_ref<const std::string&>().empty())
+			{
+				outReason = "\"Picture\" must name a file of the sample, e.g. \"Picture.png\"";
+				return {};
+			}
+			const std::filesystem::path relative = FileSystem::FromUTF8(value.get<std::string>());
+			if (relative.is_absolute() || relative.has_root_name() || relative.has_root_directory())
+			{
+				outReason = fmt::format("its picture '{}' is not a path inside the sample", value.get<std::string>());
+				return {};
+			}
+			for (const std::filesystem::path& part : relative)
+			{
+				if (part == "..")
+				{
+					outReason = fmt::format("its picture '{}' is not a path inside the sample", value.get<std::string>());
+					return {};
+				}
+			}
+			const std::filesystem::path picture = sampleDirectory / relative;
+			constexpr std::array<uint8_t, 8> c_Signature = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n' };
+			const std::optional<std::vector<uint8_t>> header = FileSystem::IsRegularFile(picture) ? FileSystem::ReadBytesPrefix(picture, c_Signature.size())
+				: std::nullopt;
+			if (!header)
+			{
+				outReason = fmt::format("its picture '{}' is missing", value.get<std::string>());
+				return {};
+			}
+			if (header->size() != c_Signature.size() || !std::equal(c_Signature.begin(), c_Signature.end(), header->begin()))
+			{
+				outReason = fmt::format("its picture '{}' is not a PNG", value.get<std::string>());
+				return {};
+			}
+			return picture;
 		}
 
 		std::filesystem::path Resolve(const std::filesystem::path& path)
@@ -125,6 +168,13 @@ namespace Strata
 				ST_WARN("The sample '{}' is left out: {}", sample.Id, error);
 				continue;
 			}
+			if (const nlohmann::json* picture = JsonUtils::Find(entry, "Picture"))
+			{
+				std::string reason;
+				sample.Picture = ResolvePicture(*picture, directory / FileSystem::FromUTF8(sample.Id), reason);
+				if (sample.Picture.empty())
+					ST_WARN("The sample '{}' is offered without its picture: {}", sample.Id, reason);
+			}
 			samples.push_back(std::move(sample));
 		}
 		return samples;
@@ -211,6 +261,13 @@ namespace Strata
 		}
 		if (error)
 			return failCopy(fmt::format("Cannot list the sample '{}': {}", FileSystem::ToUTF8(source), error.message()));
+		// The launcher shows the copy with the sample's picture until the copy's first save writes its own.
+		if (!sample.Picture.empty())
+		{
+			const std::filesystem::path thumbnail = ProjectThumbnail::GetFile(destination);
+			if (!FileSystem::CreateDirectories(thumbnail.parent_path()) || !FileSystem::Copy(sample.Picture, thumbnail, true))
+				ST_WARN("The copy of the sample '{}' starts without its picture: '{}' could not be written", sample.Id, FileSystem::ToUTF8(thumbnail));
+		}
 		return destination / sample.ProjectFile.filename();
 	}
 

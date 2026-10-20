@@ -1,0 +1,3 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":1,"Entities":[
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"0000000000000000","Mesh":"384AB38A41EEB54A"},"Name":{"Name":"Plant"},"Transform":{"Rotation":[0,0,0,1],"Scale":[2,2,2],"Translation":[0,0,0]}},"ID":"D4D072822AF95087"}
+]}}

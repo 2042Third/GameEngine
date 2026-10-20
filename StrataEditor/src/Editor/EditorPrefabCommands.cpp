@@ -169,7 +169,10 @@ namespace Strata
 			const nlohmann::json* entities = JsonUtils::Find(snapshot, "Entities");
 			size_t topLevel = 0;
 			const nlohmann::json* rootTransform = nullptr;
-			for (const nlohmann::json& entity : entities && entities->is_array() ? *entities : nlohmann::json::array())
+			// A reference into the snapshot, never a copy: rootTransform points into it after the loop.
+			static const nlohmann::json s_NoEntities = nlohmann::json::array();
+			const nlohmann::json& entityList = entities && entities->is_array() ? *entities : s_NoEntities;
+			for (const nlohmann::json& entity : entityList)
 			{
 				if (entity.contains("Parent"))
 					continue;

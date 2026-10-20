@@ -342,6 +342,41 @@ TEST_SUITE("Editor.UICommands")
 		CHECK(covered.ErrorData["cover"] == cover["entity"]);
 	}
 
+	TEST_CASE("Taps end while time stands still: a pause menu at time scale 0 can be clicked")
+	{
+		PlayingUIHarness harness;
+		const nlohmann::json canvas = harness.Run("ui.create", { { "type", "canvas" } });
+		const nlohmann::json resume = harness.Run("ui.create", { { "type", "button" }, { "parent", canvas["entity"] }, { "anchor", "topLeft" },
+			{ "position", { 100, 100 } }, { "name", "Resume" } });
+		harness.Run("play.start");
+		harness.Frame();
+
+		// As a pause menu does: the game runs frames, but no fixed step while its time scale is 0.
+		Scene& scene = *harness.Context.GetActiveScene();
+		scene.SetTimeScale(0.0f);
+		harness.Frame();
+		const uint64_t steps = harness.Context.GetFixedStepCount();
+		const EditorCommandResult key = harness.RunFrames("input.key", { { "key", "Escape" } });
+		INFO(key.Error);
+		REQUIRE(key.Success);
+		CHECK(key.Value["seen"] == true);
+		const EditorCommandResult clicked = harness.RunFrames("input.click", { { "entity", resume["entity"] } });
+		INFO(clicked.Error);
+		REQUIRE(clicked.Success);
+		bool click = false;
+		for (const nlohmann::json& event : clicked.Value["events"])
+			click |= event["type"] == "click" && event["widget"] == resume["entity"];
+		CHECK(click);
+		CHECK(harness.Context.GetFixedStepCount() == steps); // No fixed step ran meanwhile
+		CHECK(harness.Context.GetInputStepCount() > steps);
+
+		// Time on again: fixed steps run, and taps count them.
+		scene.SetTimeScale(1.0f);
+		const EditorCommandResult again = harness.RunFrames("input.key", { { "key", "Space" }, { "steps", 3 } });
+		REQUIRE(again.Success);
+		CHECK(harness.Context.GetFixedStepCount() >= steps + 3);
+	}
+
 	TEST_CASE("input.click holds its button for fixed steps of the game, also as an event of input.sequence")
 	{
 		PlayingUIHarness harness;

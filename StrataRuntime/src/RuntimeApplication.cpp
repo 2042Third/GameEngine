@@ -348,8 +348,11 @@ namespace Strata
 				if (!megabytes || *megabytes <= 0 || *megabytes > c_MaxAssetBudgetMB)
 					return fmt::format("--asset-budget-mb needs a whole number of megabytes from 1 to {}", c_MaxAssetBudgetMB);
 			}
-			// The screenshot is taken on the last frame, so it needs a frame count and a window.
+			// A run meant to end by itself must not run forever because its frame count was mistyped.
 			const std::optional<int64_t> frames = commandLine.GetIntOption("--frames");
+			if ((commandLine.HasFlag("--frames") || commandLine.GetOption("--frames")) && (!frames || *frames <= 0))
+				return std::string("--frames needs a positive whole number of frames");
+			// The screenshot is taken on the last frame, so it needs a frame count and a window.
 			if (commandLine.GetOption("--screenshot") && (!frames || *frames <= 0 || commandLine.HasFlag("--headless")))
 				return std::string("--screenshot needs --frames <count> and a window (not --headless)");
 			if (commandLine.HasFlag("--perf-log") && commandLine.GetOption("--perf-log").value_or(std::string()).empty())

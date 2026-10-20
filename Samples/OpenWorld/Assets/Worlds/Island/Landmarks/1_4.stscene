@@ -1,0 +1,5 @@
+{"Strata":{"Format":"Scene","Version":1},"Scene":{"Name":"1_4","EntityCount":3,"Entities":[
+{"Components":{"Name":{"Name":"Beach Canoe"},"PrefabInstance":{"Prefab":"845B688B82465DCC","PrefabEntityID":"62048DD27DD125D9","PrefabVersion":"D3F4391825145652","SyncedHash":"D3F4391825145652"},"Transform":{"Rotation":[0,0.5735765,0,0.819152],"Scale":[4,4,4],"Translation":[114,13.075508,278]}},"ID":"92B14F76194505F5"},
+{"Components":{"Name":{"Name":"tmpParent"},"PrefabInstance":{"Prefab":"845B688B82465DCC","PrefabEntityID":"1F9D2FBF87971FD5","PrefabVersion":"","SyncedHash":""},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"ADCE5BE9B5480AC8","Parent":"92B14F76194505F5"},
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"0000000000000000","Mesh":"B0B4E5B22DB659AE"},"Name":{"Name":"canoe"},"PrefabInstance":{"Prefab":"845B688B82465DCC","PrefabEntityID":"1F9DEE7F8797ACB1","PrefabVersion":"","SyncedHash":""},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,-0.05,0]}},"ID":"E957062D43EA36DB","Parent":"ADCE5BE9B5480AC8"}
+]}}

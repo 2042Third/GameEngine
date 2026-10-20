@@ -183,6 +183,9 @@
 	"PerfGPU.Editor.EditFrameWorldIdle": { "Unit": "ms", "Provisional": true, "Target": 0.2808 },
 	"PerfGPU.Editor.PlayStartWorldMaxFrame": { "Unit": "ms", "Provisional": true, "Target": 50.0 },
 	"PerfGPU.World.CellDriveMaxFrame": { "Unit": "ms", "Provisional": true, "Target": 8.0 },
+	"PerfGPU.Samples.OpenWorldTour.FrameWorkMedianMs": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Samples.OpenWorldTour.FrameWorkP95Ms": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Samples.OpenWorldTour.GPUBusyMedianMs": { "Unit": "ms", "Provisional": true },
 	"Perf.World.DrivePeakPrivate": { "Unit": "MB", "Provisional": true, "Target": 2048.0 },
 	"Perf.World.DriveFrameP95": { "Unit": "ms", "Provisional": true, "Target": 16.7 }
 }

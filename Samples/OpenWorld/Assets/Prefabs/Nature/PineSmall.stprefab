@@ -1,0 +1,3 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":1,"Entities":[
+{"Components":{"CapsuleCollider":{"HalfHeight":0.1818,"Offset":[0,0.2418,0],"Radius":0.06},"MeshRenderer":{"CastShadows":true,"Material":"0000000000000000","Mesh":"2B20823DDB2214D7"},"Name":{"Name":"PineSmall"},"RigidBody":{"AngularDamping":0.05,"ContinuousCollision":false,"Friction":0.5,"GravityScale":1,"IsTrigger":false,"Layer":0,"LinearDamping":0.05,"LockRotationX":false,"LockRotationY":false,"LockRotationZ":false,"Mass":1,"Restitution":0,"Type":"Static"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"9F8D38518C4C82D0"}
+]}}

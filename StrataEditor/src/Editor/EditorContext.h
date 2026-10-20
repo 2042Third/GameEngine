@@ -296,8 +296,12 @@ namespace Strata
 		uint32_t GetPendingSteps() const;
 		bool HasPendingSteps() const { return GetPendingSteps() > 0; }
 		// Fixed steps the game ran since play mode started, across the scene switches it asked for (the running scene's
-		// Scene::GetFixedStepCount, plus those of the scenes it replaced): what play.step and simulated input count in.
+		// Scene::GetFixedStepCount, plus those of the scenes it replaced): what play.step counts in.
 		uint64_t GetFixedStepCount() const;
+		// What simulated input's taps count in (SimulatedInput): the fixed steps, plus each frame the running game updated
+		// without a fixed step because its time scale is 0 (a pause menu), so that taps end then too. A paused game's input
+		// frames stand still (Input::SetSuspended), so its taps still wait for the next step.
+		uint64_t GetInputStepCount() const { return GetFixedStepCount() + m_FrozenInputFrames; }
 		// Changes with every start of play or simulate mode: a command that waits across frames tells a new session from its own.
 		uint64_t GetPlaySession() const { return m_PlaySession; }
 		// GetFixedStepCount when the game was last resumed (SetPaused(false) of a paused game), which dropped the pending
@@ -723,6 +727,7 @@ namespace Strata
 		AssetBounds m_AssetBounds;
 		uint64_t m_PlaySession = 0;
 		uint64_t m_ReplacedFixedSteps = 0; // Fixed steps of the scenes a game switch replaced in this play session
+		uint64_t m_FrozenInputFrames = 0;  // Frames of this play session the game updated at time scale 0 without a fixed step
 		uint64_t m_FixedStepsAtResume = 0;
 		uint64_t m_ResumeCount = 0;
 		Scope<InputSequence> m_InputSequence;
