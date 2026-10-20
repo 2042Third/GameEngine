@@ -12,6 +12,7 @@ alongside the executable.
 | [glm](https://github.com/g-truc/glm) | 1.0.3 | MIT | Yes | Math |
 | [EnTT](https://github.com/skypjack/entt) | 3.16.0 | MIT | Yes | Entity-component system |
 | [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | 5.6.0 | MIT | Yes | Physics |
+| [box3d](https://github.com/erincatto/box3d) | efca0c1 | MIT | Yes | Physics |
 | [miniaudio](https://github.com/mackron/miniaudio) | 0.11.25 | Public domain (Unlicense) or MIT-0 | Yes | Audio |
 | [spdlog](https://github.com/gabime/spdlog) (bundles [fmt](https://github.com/fmtlib/fmt)) | 1.17.0 | MIT | Yes | Logging |
 | [nlohmann/json](https://github.com/nlohmann/json) | 3.12.0 | MIT | Yes | JSON serialization |

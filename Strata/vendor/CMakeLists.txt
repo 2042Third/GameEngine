@@ -162,6 +162,42 @@ if(STRATA_WITH_PHYSICS)
 	add_subdirectory(JoltPhysics/Build SYSTEM)
 endif()
 
+# --- box3d (box3d; the physics module's: STRATA_WITH_PHYSICS) ---------------------------------------
+# Built from its sources here, like zstd, instead of through box3d's own CMake: its top-level file sets a
+# FETCHCONTENT_BASE_DIR cache entry inside the source tree, exports compile commands and adds install rules and a debug
+# postfix, and its src/CMakeLists.txt adds /W4 (which overrides the vendor /W0) and reads the including project's
+# version.
+if(STRATA_WITH_PHYSICS)
+	set(BOX3D_DIR "${CMAKE_CURRENT_SOURCE_DIR}/box3d")
+	file(GLOB BOX3D_SOURCES CONFIGURE_DEPENDS "${BOX3D_DIR}/src/*.c")
+	add_library(box3d STATIC ${BOX3D_SOURCES})
+	# C17 with extensions: box3d uses _Static_assert and anonymous unions.
+	set_target_properties(box3d PROPERTIES C_STANDARD 17 C_STANDARD_REQUIRED YES C_EXTENSIONS YES)
+	target_include_directories(box3d SYSTEM PUBLIC "${BOX3D_DIR}/include")
+	target_include_directories(box3d PRIVATE "${BOX3D_DIR}/src")
+	# Contraction into fused multiply-adds is the one value-changing transform compilers enable by default (arm64 Clang
+	# does), and box3d's cross-platform determinism needs it off; MSVC does not contract under /fp:precise.
+	if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+		if(CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+			target_compile_options(box3d PRIVATE /clang:-ffp-contract=off)
+		else()
+			target_compile_options(box3d PRIVATE -ffp-contract=off)
+		endif()
+	endif()
+	# box3d picks its AVX2 kernels at run time (simd.c). GCC and Clang compile them through target pragmas; MSVC needs the
+	# file itself compiled for AVX2.
+	if(MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_C_COMPILER_ARCHITECTURE_ID MATCHES "^(x64|X86)$")
+		set_source_files_properties("${BOX3D_DIR}/src/wide8.c" PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+	endif()
+	# Asserts follow ST_CORE_ASSERT: on in Debug and Release, compiled out of Dist. PUBLIC, so that box3d's inline functions
+	# agree in Strata's objects. box3d's heavy validation (BOX3D_VALIDATE) stays off: it makes Debug test runs several times
+	# slower, and the golden hash and the physics suites cover correctness.
+	target_compile_definitions(box3d PUBLIC "$<$<NOT:$<CONFIG:Dist>>:B3_ENABLE_ASSERT>")
+	if(UNIX AND NOT APPLE)
+		target_link_libraries(box3d PUBLIC m)
+	endif()
+endif()
+
 # --- zstd (zstd_decompress, zstd_compress) --------------------------------------------------------
 # Asset packs store their blocks zstd-compressed. Games only decompress; compression is a separate library that only the
 # pack writer (tooling) references, so a shipped game links none of it. Built without zstd's multithreading (packs
