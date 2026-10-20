@@ -388,11 +388,11 @@ TEST_SUITE("Physics.Capacity")
 		const PhysicsStats stats = physics.GetStats();
 		CHECK(stats.BodyOverflowCount == 0);
 		CHECK(stats.GrowthCount == 1);
-		size_t index = 0;
+		size_t idIndex = 0;
 		for (const Entity entity : resting)
-			CHECK(world->GetBodyID(entity) == ids[index++]);
+			CHECK(world->GetBodyID(entity) == ids[idIndex++]);
 		for (const Entity entity : moving)
-			CHECK(world->GetBodyID(entity) == ids[index++]);
+			CHECK(world->GetBodyID(entity) == ids[idIndex++]);
 		CHECK(stats.MaxBodies == 16384);
 		CHECK(stats.BodyCount == 1 + 20 + 100 + 10'000);
 		for (size_t index = 0; index < moving.size(); index++)
