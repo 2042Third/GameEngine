@@ -281,8 +281,9 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
   (`"ScaleMode": "ScaleWithScreen"`, `"ReferenceResolution": [1280, 720]`, `"MatchWidthOrHeight": 1`, and
   `"ReceivesInput": false` for a HUD that must never block clicks) and children with `UIRect` (anchors and pivot 0..1 of
   the parent's rect, top-left origin; `Position` and `Size` in canvas units, which are pixels at the reference
-  resolution) and `UIText`, `UIImage` (`CornerRadius`, `BorderWidth` for rounded, framed panels; a translucent `Color`)
-  or `UILayout` (a vertical or horizontal stack; children with `"FitContent": "Both"` take their text's size).
+  resolution) and `UIText`, `UIImage` (`CornerRadius`, `BorderWidth` for rounded, framed panels; a translucent `Color`;
+  or an imported PNG as a nine-slice image: `"Type": "Sliced"`, `SliceBorders` in texels, as the Playground's and the
+  Third-Person's buttons and panels use the Kenney UI Pack) or `UILayout` (a vertical or horizontal stack; children with `"FitContent": "Both"` take their text's size).
   `Samples/Tetris` shows the score on a rounded panel in the top-left corner and its messages on a centered panel. `Text`
   stays for world text (`ScreenSpace: false`, `FontSize` in world units); screen-space `Text` keeps its pixel size on
   every screen, so do not build HUDs with it. Panels with buttons in the level (a terminal, a shop sign) are canvases
