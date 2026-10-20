@@ -163,6 +163,97 @@ TEST_SUITE("Physics.Character")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Characters stick to the ground walking down slopes and steps")
+	{
+		Scene scene;
+		CreateGround(scene);
+		const float slope = glm::radians(30.0f);
+		CreateRamp(scene, "Ramp", 0.0f, 30.0f); // Rises along +X from x = 0 to 8.7 m, 5 m high
+		// A 0.3 m step, below the 0.35 m step height, 10 m further along Z: its edge at x = 0.
+		CreateStaticBox(scene, "Step", glm::vec3(-2.5f, 0.15f, 10.0f), glm::vec3(2.5f, 0.15f, 2.0f));
+		Entity descender = CreateCharacter(scene, "Descender", glm::vec3(7.0f, 7.0f * std::tan(slope) + 0.05f, 0.0f));
+		Entity stepper = CreateCharacter(scene, "Stepper", glm::vec3(-2.0f, 0.3f, 10.0f));
+		for (Entity character : { descender, stepper })
+			character.GetComponent<CharacterControllerComponent>().MaxSlopeDegrees = 45.0f;
+		scene.OnRuntimeStart();
+		StepScene(scene, 10);
+		REQUIRE(GetState(scene, descender).Ground == CharacterGroundState::OnGround);
+		REQUIRE(GetState(scene, stepper).Ground == CharacterGroundState::OnGround);
+
+		// Walking down at 3 m/s, each step takes the surface 2.9 cm lower than one step of gravity falls (0.3 cm): only
+		// sticking to the ground keeps the characters on it. Under its center, the capsule's round bottom rests r (1 / cos 30 -
+		// 1) = 4.6 cm above the slope, plus the mover's 2 cm margin along the slope's normal (2.3 cm up).
+		REQUIRE(GetCharacters(scene).MoveCharacter(descender, glm::vec3(-3.0f, 0.0f, 0.0f)));
+		REQUIRE(GetCharacters(scene).MoveCharacter(stepper, glm::vec3(3.0f, 0.0f, 0.0f)));
+		for (uint32_t step = 0; step < 150; step++)
+		{
+			CAPTURE(step);
+			StepScene(scene, 1);
+			const glm::vec3 position = GetWorldPosition(scene, descender);
+			CAPTURE(position);
+			CHECK(GetState(scene, descender).Ground == CharacterGroundState::OnGround);
+			const float surface = std::max(0.0f, position.x * std::tan(slope));
+			CHECK(position.y > surface - 0.01f);
+			CHECK(position.y < surface + (0.3f * (1.0f / std::cos(slope) - 1.0f) + 0.02f / std::cos(slope)) + 0.005f);
+			CHECK(GetState(scene, stepper).Ground == CharacterGroundState::OnGround);
+		}
+		CHECK(GetWorldPosition(scene, descender).x < 0.0f);
+		const glm::vec3 below = GetWorldPosition(scene, stepper);
+		CHECK(below.x > 3.0f);
+		CHECK(std::abs(below.y) < 0.02f);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Characters ride moving platforms and keep their motion when they leave them")
+	{
+		Scene scene;
+		Entity platform = CreateStaticBox(scene, "Platform", glm::vec3(0.0f, -0.1f, 0.0f), glm::vec3(3.0f, 0.1f, 3.0f));
+		platform.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		Entity rider = CreateCharacter(scene, "Rider", glm::vec3(0.0f, 0.0f, 0.0f));
+		scene.OnRuntimeStart();
+		StepScene(scene, 10);
+		REQUIRE(GetState(scene, rider).Ground == CharacterGroundState::OnGround);
+
+		// The platform moves at 1.5 m/s along X (a kinematic body follows its entity), and the rider with it, though it does
+		// not walk.
+		const float timestep = scene.GetSettings().FixedTimestep;
+		const glm::vec3 platformVelocity(1.5f, 0.0f, 0.0f);
+		const auto movePlatform = [&](uint32_t steps)
+		{
+			for (uint32_t step = 0; step < steps; step++)
+			{
+				platform.GetTransform().Translation += platformVelocity * timestep;
+				scene.MarkTransformChanged(platform);
+				StepScene(scene, 1);
+			}
+		};
+		movePlatform(5);
+		const glm::vec3 start = GetWorldPosition(scene, rider);
+		const float offset = start.x - GetWorldPosition(scene, platform).x;
+		movePlatform(60);
+		const glm::vec3 rode = GetWorldPosition(scene, rider);
+		CHECK(rode.x - start.x == doctest::Approx(1.5f).epsilon(0.03));
+		CHECK(std::abs(rode.y) < 0.02f);
+		const CharacterState riding = GetState(scene, rider);
+		CHECK(riding.Ground == CharacterGroundState::OnGround);
+		CHECK(riding.GroundEntity == platform);
+		CHECK(Math::IsNearlyEqual(riding.GroundVelocity, platformVelocity, 0.02f));
+
+		// Jumping off, it keeps the platform's motion through the air and lands on it again where it went on.
+		REQUIRE(GetCharacters(scene).JumpCharacter(rider, 3.0f));
+		movePlatform(10);
+		const glm::vec3 flying = GetWorldPosition(scene, rider);
+		CHECK(GetState(scene, rider).Ground == CharacterGroundState::InAir);
+		CHECK(flying.y > 0.2f);
+		CHECK(flying.x - rode.x == doctest::Approx(1.5f * 10.0f * timestep).epsilon(0.05));
+		movePlatform(50);
+		const glm::vec3 landed = GetWorldPosition(scene, rider);
+		CHECK(GetState(scene, rider).Ground == CharacterGroundState::OnGround);
+		CHECK(landed.x - rode.x == doctest::Approx(1.5f * 60.0f * timestep).epsilon(0.03));
+		CHECK(std::abs(landed.x - GetWorldPosition(scene, platform).x - offset) < 0.05f);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Jumps leave the ground and land again")
 	{
 		Scene scene;
@@ -507,16 +598,21 @@ TEST_SUITE("Physics.Character")
 			return poses;
 		};
 
+		// Each worker count splits the move batches and box3d's stages differently.
 		const std::vector<glm::mat4> serial = simulate(0);
-		const std::vector<glm::mat4> parallel = simulate(4);
-		REQUIRE(serial.size() == parallel.size());
-		size_t different = 0;
-		for (size_t index = 0; index < serial.size(); index++)
+		for (const uint32_t workers : { 1u, 2u, 4u })
 		{
-			if (serial[index] != parallel[index])
-				different++;
+			CAPTURE(workers);
+			const std::vector<glm::mat4> parallel = simulate(workers);
+			REQUIRE(serial.size() == parallel.size());
+			size_t different = 0;
+			for (size_t index = 0; index < serial.size(); index++)
+			{
+				if (serial[index] != parallel[index])
+					different++;
+			}
+			CHECK(different == 0);
 		}
-		CHECK(different == 0);
 	}
 
 	TEST_CASE("Character controllers of an additive sub-scene stand, walk and leave with it")
