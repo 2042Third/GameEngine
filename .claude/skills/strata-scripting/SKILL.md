@@ -198,8 +198,9 @@ std::vector<Entity> nearby = Physics::OverlapSphere(center, 3.0f);
   `1 / (1 + damping * h)` in every sub-step `h` (a quarter of the fixed step per collision step), which keeps a little more
   of it than Jolt's `1 - damping * dt` per fixed step: bodies damp slightly less (a damping of 2 leaves 0.55 of the speed
   after a second, not 0.52). A box landing flat may slide a few millimeters. Bodies that start overlapping are pushed
-  apart at up to 3 m/s, enough to throw light ones over a wall: spawn them apart, remembering that an instance's root
-  gets the scale given to `Instantiate`/`InstantiateMany` (1 by default), not its prefab's.
+  apart at up to 3 m/s, enough to throw light ones over a wall: spawn them apart, remembering that `Instantiate` with a
+  translation sets the root's whole local transform, scale included (1 unless passed), and `InstantiateMany` takes it
+  from each matrix; only `Instantiate(prefab)` without a transform keeps the prefab root's scale.
 - Moving a body by writing its transform works too (kinematic platforms, editor-like placement) but takes effect at the
   next fixed step; `Teleport` is immediate. Results always name the entity that owns the body (the RigidBody entity,
   also for colliders on its children).
@@ -454,7 +455,8 @@ moments (checkpoints, menus) and keep saves small.
 
 - On-screen text (score, lives, messages): a `UIText` element on a UI canvas (it scales with the screen); change it with
   `entity.GetUI().SetText("Score: " + std::to_string(score))` (see [Game UI](#game-ui)).
-- Spawning: `Scene::Instantiate(prefab, position)` (request the prefab early), `Scene::InstantiateMany` for many at once,
+- Spawning: `Scene::Instantiate(prefab, position)` (request the prefab early; this form sets the root's scale too, 1
+  unless passed: pass the prefab's scale when its root is scaled), `Scene::InstantiateMany` for many at once,
   `Scene::CreateEntity` plus `AddComponent`/`SetProperty` for simple shapes; `entity.Destroy()` removes it at the end of
   the frame.
 - `Random` (StrataScript/Gameplay.h): seedable and deterministic on every platform - `Random random(seed);
