@@ -66,6 +66,11 @@ namespace Strata
 						return EditorCommandResult::InvalidParameters(fmt::format("Step {}: unknown command '{}' (editor.commands lists them)", index, name));
 					if (command->Name == "editor.batch")
 						return EditorCommandResult::InvalidParameters(fmt::format("Step {}: a batch cannot run another batch", index));
+					if (script->GetStep(index).Until)
+					{
+						return EditorCommandResult::InvalidParameters(fmt::format("Step {}: \"until\" repeats a query over frames, which a batch cannot wait "
+							"for: run it on its own", index));
+					}
 					if (command->MayDefer)
 					{
 						return EditorCommandResult::InvalidParameters(fmt::format("Step {}: {} can take frames (it loads, builds, waits or captures), which a "

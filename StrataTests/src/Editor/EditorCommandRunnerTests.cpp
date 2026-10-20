@@ -9,6 +9,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
 
+#include <chrono>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -71,6 +72,39 @@ namespace
 		bool Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{
 			return Runner.Run(Context, Commands, name, parameters, [this](const EditorCommandResult& result) { Results.push_back(result); });
+		}
+
+		// Registers test.steps, a query that answers the game's fixed steps ({"steps": n}), for "until" waits.
+		void RegisterStepQuery()
+		{
+			EditorCommand steps { "test.steps", "Test query that answers the game's fixed steps.", CommandUtils::ObjectSchema({}),
+				[](EditorContext& context, const nlohmann::json&) { return EditorCommandResult::Ok({ { "steps", context.GetFixedStepCount() } }); } };
+			steps.Kind = EditorCommandKind::Query;
+			Commands.Register(std::move(steps));
+		}
+
+		// Runs a script frame by frame, as the editor does (the script, the runner, then the game's update), until it
+		// finishes or `seconds` of wall-clock time passed.
+		void RunScript(EditorCommandScript& script, double seconds = 10.0)
+		{
+			const auto start = std::chrono::steady_clock::now();
+			while (!script.Update(Runner, Context, Commands) && std::chrono::steady_clock::now() - start < std::chrono::duration<double>(seconds))
+			{
+				Runner.Update(Context);
+				Context.Update(Timestep(1.0f / 60.0f));
+			}
+		}
+
+		// The activity journal's entries of a command.
+		std::vector<const CommandJournalEntry*> GetJournalEntries(std::string_view command)
+		{
+			std::vector<const CommandJournalEntry*> entries;
+			for (const CommandJournalEntry& entry : Context.GetJournal().GetEntries())
+			{
+				if (entry.Command == command)
+					entries.push_back(&entry);
+			}
+			return entries;
 		}
 	};
 
@@ -391,6 +425,143 @@ TEST_SUITE("Editor.CommandScript")
 			"selection.get: expected a value at '/entities/x', but the result has none",
 		};
 		CHECK(errors == expected);
+	}
+
+	TEST_CASE("Until repeats a query until its expectation holds")
+	{
+		RunnerHarness harness;
+		harness.RegisterStepQuery();
+		REQUIRE(harness.Context.Play());
+		std::string error;
+		Scope<EditorCommandScript> script = EditorCommandScript::FromJson(nlohmann::json::parse(R"([
+			{ "command": "test.steps", "expect": { "/steps": { "min": 5 } }, "until": { "steps": 600 }, "bind": { "steps": "/steps" } },
+			{ "command": "selection.get" }
+		])"), &error);
+		REQUIRE_MESSAGE(script, error);
+		harness.RunScript(*script);
+		REQUIRE(script->IsFinished());
+		CHECK_FALSE(script->HasFailed());
+		// The condition was false on the first attempt: the step waited for the game, and bind read the final result.
+		CHECK(script->GetBindings().at("steps").get<uint64_t>() >= 5);
+		const std::vector<const CommandJournalEntry*> entries = harness.GetJournalEntries("test.steps");
+		REQUIRE(entries.size() == 1);
+		CHECK(entries[0]->Status == CommandStatus::Succeeded);
+		CHECK(entries[0]->Source == CommandSource::CommandScript);
+		const nlohmann::json summary = nlohmann::json::parse(entries[0]->ResultSummary);
+		CHECK(summary["attempts"].get<int64_t>() > 1);
+		CHECK(harness.GetJournalEntries("selection.get").size() == 1);
+	}
+
+	TEST_CASE("Until steps a paused game exactly, one fixed step per attempt")
+	{
+		RunnerHarness harness;
+		harness.RegisterStepQuery();
+		REQUIRE(harness.Context.Play());
+		harness.Context.SetPaused(true);
+		std::string error;
+		Scope<EditorCommandScript> script = EditorCommandScript::FromJson(nlohmann::json::parse(R"([
+			{ "command": "test.steps", "expect": { "/steps": { "min": 5 } }, "until": { "steps": 600 }, "bind": { "steps": "/steps" } }
+		])"), &error);
+		REQUIRE_MESSAGE(script, error);
+		harness.RunScript(*script);
+		REQUIRE(script->IsFinished());
+		CHECK_FALSE(script->HasFailed());
+		CHECK(script->GetBindings().at("steps") == 5);
+		CHECK(harness.Context.GetFixedStepCount() == 5);
+		CHECK(harness.Context.IsPaused());
+		const std::vector<const CommandJournalEntry*> entries = harness.GetJournalEntries("test.steps");
+		REQUIRE(entries.size() == 1);
+		CHECK(nlohmann::json::parse(entries[0]->ResultSummary)["attempts"] == 6);
+	}
+
+	TEST_CASE("Until fails once its bounds are reached")
+	{
+		RunnerHarness harness;
+		harness.RegisterStepQuery();
+		REQUIRE(harness.Context.Play());
+		harness.Context.SetPaused(true);
+		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+		Scope<EditorCommandScript> script = EditorCommandScript::FromJson(nlohmann::json::parse(R"([
+			{ "command": "test.steps", "expect": { "/steps": { "min": 1000 } }, "until": { "steps": 20 }, "bind": { "steps": "/steps" } }
+		])"));
+		REQUIRE(script);
+		harness.RunScript(*script);
+		REQUIRE(script->IsFinished());
+		CHECK(script->HasFailed());
+		CHECK(harness.Context.GetFixedStepCount() == 20);
+		CHECK_FALSE(script->GetBindings().contains("steps"));
+		bool reported = false;
+		for (const LogEntry& entry : Log::GetBuffer().GetEntries(logStart))
+		{
+			if (entry.Level == LogLevel::Error && entry.Message.find("expected '/steps' to be a number in [1000, inf], but it is 20 (until: 21 attempts in 20 fixed steps") != std::string::npos)
+				reported = entry.Message.find("the last result: {\"steps\":20}") != std::string::npos;
+		}
+		CHECK(reported);
+		REQUIRE(harness.GetJournalEntries("test.steps").size() == 1);
+		CHECK(harness.GetJournalEntries("test.steps")[0]->Status == CommandStatus::Succeeded); // The command itself answered
+
+		// A game that neither plays nor steps: only the seconds end the wait.
+		harness.Context.Stop();
+		Scope<EditorCommandScript> idle = EditorCommandScript::FromJson(nlohmann::json::parse(R"([
+			{ "command": "test.steps", "expect": { "/steps": { "min": 1 } }, "until": { "seconds": 0.2 } }
+		])"));
+		REQUIRE(idle);
+		const auto start = std::chrono::steady_clock::now();
+		harness.RunScript(*idle);
+		CHECK(idle->IsFinished());
+		CHECK(idle->HasFailed());
+		CHECK(std::chrono::steady_clock::now() - start >= std::chrono::milliseconds(200));
+	}
+
+	TEST_CASE("Malformed waits are refused before anything runs")
+	{
+		struct Case
+		{
+			const char* Step;
+			const char* Error;
+		};
+		const Case cases[] = {
+			{ R"({ "command": "test.steps", "until": { "steps": 5 } })", "give an \"expect\"" },
+			{ R"({ "command": "test.steps", "expect": { "/steps": { "min": 1 } }, "until": 5 })", "\"until\" must be an object" },
+			{ R"({ "command": "test.steps", "expect": { "/steps": { "min": 1 } }, "until": {} })", "\"until\" must be an object" },
+			{ R"({ "command": "test.steps", "expect": { "/steps": { "min": 1 } }, "until": { "steps": 0 } })", "\"steps\" must be an integer from 1" },
+			{ R"({ "command": "test.steps", "expect": { "/steps": { "min": 1 } }, "until": { "steps": 1.5 } })", "\"steps\" must be an integer from 1" },
+			{ R"({ "command": "test.steps", "expect": { "/steps": { "min": 1 } }, "until": { "seconds": 0 } })", "\"seconds\" must be a number above 0" },
+			{ R"({ "command": "test.steps", "expect": { "/steps": { "min": 1 } }, "until": { "seconds": -1 } })", "\"seconds\" must be a number above 0" },
+			{ R"({ "command": "test.steps", "expect": { "/steps": { "min": 1 } }, "until": { "frames": 5 } })", "unknown key 'frames'" },
+		};
+		for (const Case& testCase : cases)
+		{
+			INFO("step: ", testCase.Step);
+			std::string error;
+			CHECK_FALSE(EditorCommandScript::FromJson(nlohmann::json::array({ nlohmann::json::parse(testCase.Step) }), &error));
+			CHECK(error.find("Step 1 (test.steps)") != std::string::npos);
+			CHECK(error.find(testCase.Error) != std::string::npos);
+		}
+
+		// A wait on a command that is not a query, or that does not exist, fails the script before its first step runs.
+		for (const char* command : { "entity.create", "no.such.command" })
+		{
+			INFO("command: ", command);
+			RunnerHarness harness;
+			const nlohmann::json steps = nlohmann::json::array({ { { "command", "entity.create" }, { "parameters", { { "name", "First" } } } },
+				{ { "command", command }, { "expect", { { "/id", { { "min", 0 } } } } }, { "until", { { "steps", 5 } } } } });
+			Scope<EditorCommandScript> script = EditorCommandScript::FromJson(steps);
+			REQUIRE(script);
+			harness.RunScript(*script);
+			CHECK(script->IsFinished());
+			CHECK(script->HasFailed());
+			CHECK(harness.GetJournalEntries("entity.create").empty());
+		}
+
+		// editor.batch runs its steps within one frame: it refuses waits.
+		RunnerHarness harness;
+		harness.RegisterStepQuery();
+		const EditorCommandResult batch = harness.Commands.Execute(harness.Context, "editor.batch", { { "steps", nlohmann::json::array({
+			{ { "command", "test.steps" }, { "expect", { { "/steps", { { "min", 1 } } } } }, { "until", { { "steps", 5 } } } } }) } });
+		CHECK_FALSE(batch.Success);
+		CHECK(batch.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(batch.Error.find("\"until\"") != std::string::npos);
 	}
 
 	TEST_CASE("Scripts load from files")

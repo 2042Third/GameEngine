@@ -343,6 +343,18 @@ StrataEditor --no-gpu --no-automation --quit-after-commands --project <dir> --co
 Entity IDs are stable once the scene is saved. Make timing-dependent outcomes deterministic with fields (no gravity
 while checking an exact score), then turn them back to let time play its part (fast gravity to reach game over).
 
+Outcomes that take game time (a domino run falling, a player reaching a coin) are waited for, not guessed: give the query
+step `"until": {"steps": 1200}` and it repeats until its `expect` holds, failing after 1,200 fixed steps (or `"seconds"`,
+300 by default). Pause first (`play.pause`): a paused wait runs one fixed step per attempt, so the check is exact on any
+machine. A check of a difference or an "or" (moved 3 m, Walk or Run) is a script field that computes it, since `expect`
+compares with constants only:
+
+```json
+{ "command": "play.pause", "parameters": { "paused": true } },
+{ "command": "script.get", "parameters": { "entity": "<game id>", "class": "Playground" },
+  "expect": { "/scripts/0/fields/DominoesDown": { "min": 60 } }, "until": { "steps": 1200 } }
+```
+
 Steps that create something can name what they made for later steps: `"bind": {"ball": "/id"}` on the step, then
 `{"$ref": "ball"}` wherever a later step's parameters need the ID. To turn how you built the scene into a script, export
 your session: `editor.activity.export {"path": "Build.json", "since": <the journal.latest you noted in section 1>}`

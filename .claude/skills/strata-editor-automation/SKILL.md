@@ -620,7 +620,9 @@ the inspector, with gizmos or in the material editor have no command, so no scri
 (and a `warning`) counts them, and `unrepeatableEdits` counts what `scene.recover` applied (its recovery file is not in
 a copy). Write your own scripts the same way: `"bind": {"crate":
 "/id"}` on a step, `{"$ref": "crate"}` (or `{"$ref": "copy", "pointer": "/entities/0"}`) in any later parameter; a name
-no earlier step binds fails the script before it starts.
+no earlier step binds fails the script before it starts. A query step that waits for the game takes `"until": {"steps": 600}` (with
+`"seconds"`, default 300, as the wall-clock guard): it repeats once per frame until its `expect` holds, and in a paused game
+each attempt runs one fixed step first, so the wait is exact on any machine; only its final attempt is journaled.
 
 **Finish**: save (`scene.save`), then `editor.quit`. Like every command that would replace the scene, it refuses while
 the scene has unsaved changes; `{"force": true}` discards them. The editor answers, closes and removes its session file.

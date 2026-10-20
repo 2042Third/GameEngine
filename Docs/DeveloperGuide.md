@@ -1871,7 +1871,14 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   result by JSON pointer (`{"crate": "/id"}`), which later parameters use as `{"$ref": "crate"}` (optionally with a
   `"pointer"` into the bound value): scripts then work with the fresh IDs every run gives created entities and assets. A
   reference to a name no earlier step binds fails the script before it starts; a step whose references have no value
-  (their step failed) fails without running. If a command or an expectation fails, or the script has not finished by the
+  (their step failed) fails without running. `until` (optional, with an `expect`) waits for a condition: `{"steps": n,
+  "seconds": s}` (at least one; seconds default to 300) repeats the step, which must be a query (`EditorCommandKind::Query`,
+  checked before the first step runs), once per frame until its result meets `expect`, and fails with the last result and
+  the attempts made after `n` of the game's fixed steps or `s` seconds. In a paused game each attempt that misses runs one
+  fixed step first (as `play.step` does), so a paused wait is exact whatever the frame rate: physics checks pause and wait
+  this way, since unpaused editor play drops steps when a frame falls behind. Only the final attempt is journaled (its
+  result with `attempts`), `bind` reads it, and `editor.batch` refuses `until`. If a command or an expectation fails, or the
+  script has not finished by the
   last of `--frames N` frames or by `editor.quit`, the process exit code becomes 1. `editor.activity.export {path, since}`
   writes what a session did after a journal entry as such a script (`CommandJournal::BuildReplayScript`: the edits, also
   those made while playing that outlast play mode (assets, `scene.save`) but not edits of the running copy

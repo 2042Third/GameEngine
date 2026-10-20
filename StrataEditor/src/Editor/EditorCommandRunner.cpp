@@ -154,6 +154,51 @@ namespace Strata
 			return std::nullopt;
 		}
 
+		// The "until" object of a script step; an error message when it is malformed.
+		std::optional<std::string> ParseUntil(const nlohmann::json& until, EditorCommandScript::UntilBounds& out)
+		{
+			constexpr std::string_view c_Format = "{\"steps\": fixed steps, \"seconds\": seconds} (at least one)";
+			if (!until.is_object() || until.empty())
+				return fmt::format("\"until\" must be an object {}", c_Format);
+			for (const auto& [key, value] : until.items())
+			{
+				if (key == "steps")
+				{
+					if (!value.is_number_integer() || value.get<int64_t>() < 1 || value.get<int64_t>() > static_cast<int64_t>(EditorCommandScript::c_MaxUntilSteps))
+						return fmt::format("\"until\": \"steps\" must be an integer from 1 to {}", EditorCommandScript::c_MaxUntilSteps);
+					out.Steps = value.get<uint64_t>();
+				}
+				else if (key == "seconds")
+				{
+					if (!value.is_number() || !(value.get<double>() > 0.0) || value.get<double>() > EditorCommandScript::c_MaxUntilSeconds)
+						return fmt::format("\"until\": \"seconds\" must be a number above 0 and at most {}", EditorCommandScript::c_MaxUntilSeconds);
+					out.Seconds = value.get<double>();
+				}
+				else
+				{
+					return fmt::format("\"until\": unknown key '{}' (expected {})", key, c_Format);
+				}
+			}
+			return std::nullopt;
+		}
+
+		// Turns the activity journal off while it lives, so that the attempts of an "until" step leave no entries of their own.
+		class JournalPause
+		{
+		public:
+			explicit JournalPause(CommandJournal& journal)
+				: m_Journal(journal), m_WasEnabled(journal.IsEnabled())
+			{
+				m_Journal.SetEnabled(false);
+			}
+			~JournalPause() { m_Journal.SetEnabled(m_WasEnabled); }
+			JournalPause(const JournalPause&) = delete;
+			JournalPause& operator=(const JournalPause&) = delete;
+		private:
+			CommandJournal& m_Journal;
+			bool m_WasEnabled;
+		};
+
 		// Binding names: letters, digits, '_', '-' and '.', at most 64 of them.
 		bool IsValidBindingName(const std::string& name)
 		{
@@ -383,8 +428,11 @@ namespace Strata
 				return fail(fmt::format("Step {} must be an object {{\"command\": name, \"parameters\": {{...}}}}", index + 1));
 			for (const auto& [key, value] : step.items())
 			{
-				if (key != "command" && key != "parameters" && key != "expect" && key != "bind")
-					return fail(fmt::format("Step {}: unknown key '{}' (expected \"command\", \"parameters\", \"expect\" and \"bind\")", index + 1, key));
+				if (key != "command" && key != "parameters" && key != "expect" && key != "bind" && key != "until")
+				{
+					return fail(fmt::format("Step {}: unknown key '{}' (expected \"command\", \"parameters\", \"expect\", \"bind\" and \"until\")", index + 1,
+						key));
+				}
 			}
 			const nlohmann::json* command = JsonUtils::Find(step, "command");
 			if (!command || !command->is_string() || command->get<std::string>().empty())
@@ -415,10 +463,23 @@ namespace Strata
 				if (const std::optional<std::string> error = ParseBindings(*bind, bindings))
 					return fail(fmt::format("Step {} ({}): {}", index + 1, command->get<std::string>(), *error));
 			}
+			std::optional<UntilBounds> until;
+			if (const nlohmann::json* untilJson = JsonUtils::Find(step, "until"))
+			{
+				UntilBounds bounds;
+				if (const std::optional<std::string> error = ParseUntil(*untilJson, bounds))
+					return fail(fmt::format("Step {} ({}): {}", index + 1, command->get<std::string>(), *error));
+				if (expectations.empty())
+				{
+					return fail(fmt::format("Step {} ({}): \"until\" repeats the step until its \"expect\" holds: give an \"expect\"", index + 1,
+						command->get<std::string>()));
+				}
+				until = bounds;
+			}
 			for (const Binding& binding : bindings)
 				bound.insert(binding.Name);
 			steps.push_back({ command->get<std::string>(), parameters ? *parameters : nlohmann::json::object(), std::move(expectations), std::move(bindings),
-				usesBindings });
+				usesBindings, until });
 		}
 		return CreateScope<EditorCommandScript>(std::move(steps));
 	}
@@ -570,10 +631,163 @@ namespace Strata
 		return result;
 	}
 
+	std::optional<std::string> EditorCommandScript::CheckUntilSteps(const EditorCommandRegistry& commands) const
+	{
+		for (size_t index = 0; index < m_Steps.size(); index++)
+		{
+			const Step& step = m_Steps[index];
+			if (!step.Until)
+				continue;
+			const EditorCommand* command = commands.Find(step.Command);
+			if (!command)
+				return fmt::format("Step {} ({}): unknown command (editor.commands lists them)", index + 1, step.Command);
+			if (command->Kind != EditorCommandKind::Query)
+			{
+				return fmt::format("Step {} ({}): \"until\" repeats a query, and {} is not one (its kind is {})", index + 1, step.Command, step.Command,
+					EditorCommandKindToString(command->Kind));
+			}
+		}
+		return std::nullopt;
+	}
+
+	void EditorCommandScript::TakeBindings(const Step& step, const EditorCommandResult* result, bool succeeded)
+	{
+		for (const Binding& binding : step.Bindings)
+		{
+			if (succeeded && result)
+			{
+				if (const nlohmann::json* value = ResolveJsonPath(result->Value, binding.Path))
+				{
+					m_Bindings.insert_or_assign(binding.Name, *value);
+					continue;
+				}
+				ST_ERROR("{}: the result has no value at '{}' to bind as '{}'", step.Command, binding.Pointer, binding.Name);
+				m_Failed = true;
+			}
+			// Later steps that use its bindings fail instead of running with values of an earlier step.
+			m_Bindings.erase(binding.Name);
+		}
+	}
+
+	bool EditorCommandScript::JudgeUntilAttempt(EditorContext& context)
+	{
+		UntilWait& wait = *m_Until;
+		const Step& step = m_Steps[wait.Index];
+		EditorCommandResult result = std::move(*wait.Result);
+		wait.Result.reset();
+
+		const uint64_t steps = context.GetFixedStepCount();
+		const uint64_t stepsRun = steps >= wait.StartSteps ? steps - wait.StartSteps : steps; // A new play session counts from 0
+		const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - wait.Started).count();
+		std::string unmet;
+		if (result.Success)
+		{
+			unmet = CheckExpectations(result.Value, step.Expectations);
+			if (!unmet.empty() && (!step.Until->Steps || stepsRun < *step.Until->Steps) && seconds < step.Until->Seconds)
+			{
+				// Not yet: the next attempt comes in a later frame, after one more fixed step while the game is paused.
+				if (context.IsPlaying() && context.IsPaused() && !context.IsInputSequenceRunning())
+				{
+					if (!context.HasPendingSteps())
+						context.Step(1);
+					wait.StepTarget = context.GetFixedStepCount() + context.GetPendingSteps();
+				}
+				return false;
+			}
+		}
+
+		// The final attempt is the step's one entry in the activity journal, with how many attempts it took.
+		CommandJournal& journal = context.GetJournal();
+		const uint64_t entry = journal.Begin(CommandOrigin { CommandSource::CommandScript }, step.Command, wait.Kind, wait.Results, wait.Parameters,
+			context.IsPlaying());
+		EditorCommandResult recorded = result;
+		if (recorded.Value.is_object())
+			recorded.Value["attempts"] = wait.Attempts;
+		journal.Complete(entry, recorded);
+
+		if (!result.Success)
+		{
+			ST_ERROR("{} failed: {}", step.Command, result.Error);
+			m_Failed = true;
+			TakeBindings(step, nullptr, false);
+		}
+		else if (unmet.empty())
+		{
+			ST_INFO("{} -> {} (after {} {})", step.Command, DescribeResultValue(result.Value), wait.Attempts, wait.Attempts == 1 ? "attempt" : "attempts");
+			TakeBindings(step, &result, true);
+		}
+		else
+		{
+			ST_ERROR("{}: {} (until: {} attempts in {} fixed steps and {:.1f} s; the last result: {})", step.Command, unmet, wait.Attempts, stepsRun, seconds,
+				DescribeResultValue(result.Value));
+			m_Failed = true;
+			TakeBindings(step, nullptr, false);
+		}
+		m_Until.reset();
+		return true;
+	}
+
+	bool EditorCommandScript::ContinueUntil(EditorCommandRunner& runner, EditorContext& context, const EditorCommandRegistry& commands)
+	{
+		// The result of an attempt that answered over frames.
+		if (m_Until->Result && JudgeUntilAttempt(context))
+			return true;
+
+		UntilWait& wait = *m_Until;
+		if (wait.LastAttemptUpdate == m_UpdateCount)
+			return false; // One attempt per frame
+		if (wait.StepTarget)
+		{
+			// Paused: the next attempt sees the fixed step asked for, unless the game was resumed or stopped (which drops it).
+			if (context.IsPlaying() && context.IsPaused() && context.HasPendingSteps() && context.GetFixedStepCount() < *wait.StepTarget
+				&& std::chrono::duration<double>(std::chrono::steady_clock::now() - wait.Started).count() < m_Steps[wait.Index].Until->Seconds)
+			{
+				return false;
+			}
+			wait.StepTarget.reset();
+		}
+
+		wait.LastAttemptUpdate = m_UpdateCount;
+		wait.Attempts++;
+		m_Waiting = true;
+		{
+			const JournalPause pause(context.GetJournal());
+			runner.Run(context, commands, m_Steps[wait.Index].Command, wait.Parameters, [this](const EditorCommandResult& result)
+			{
+				m_Until->Result = result;
+				m_Waiting = false;
+			}, CommandOrigin { CommandSource::CommandScript });
+		}
+		// An attempt that answered at once is judged now; one that answers later, in the frame its result arrives.
+		return !m_Waiting && JudgeUntilAttempt(context);
+	}
+
 	bool EditorCommandScript::Update(EditorCommandRunner& runner, EditorContext& context, const EditorCommandRegistry& commands)
 	{
-		while (!m_Waiting && m_Next < m_Steps.size())
+		m_UpdateCount++;
+		if (!m_CheckedUntil)
 		{
+			// A script whose waits cannot work is refused before its first step runs.
+			m_CheckedUntil = true;
+			if (const std::optional<std::string> error = CheckUntilSteps(commands))
+			{
+				ST_ERROR("The command script cannot run: {}", *error);
+				m_Failed = true;
+				m_Next = m_Steps.size();
+				return IsFinished();
+			}
+		}
+
+		while (!m_Waiting)
+		{
+			if (m_Until)
+			{
+				if (!ContinueUntil(runner, context, commands))
+					break;
+				continue;
+			}
+			if (m_Next >= m_Steps.size())
+				break;
 			const size_t index = m_Next++;
 			const Step& step = m_Steps[index];
 			nlohmann::json parameters;
@@ -590,38 +804,39 @@ namespace Strata
 				}
 				parameters = std::move(*substituted);
 			}
+			if (step.Until)
+			{
+				const EditorCommand* command = commands.Find(step.Command);
+				UntilWait wait;
+				wait.Index = index;
+				wait.Parameters = step.UsesBindings ? std::move(parameters) : step.Parameters;
+				wait.Kind = command ? command->Kind : EditorCommandKind::Query;
+				wait.Results = command ? command->Results : EditorCommandResults::Content;
+				wait.StartSteps = context.GetFixedStepCount();
+				wait.Started = std::chrono::steady_clock::now();
+				m_Until = std::move(wait);
+				continue;
+			}
 			m_Waiting = true;
 			runner.Run(context, commands, step.Command, step.UsesBindings ? parameters : step.Parameters, [this, index](const EditorCommandResult& result)
 			{
-				const std::string& name = m_Steps[index].Command;
+				const Step& finished = m_Steps[index];
 				if (result.Success)
 				{
-					ST_INFO("{} -> {}", name, DescribeResultValue(result.Value));
-					const std::string unmet = CheckExpectations(result.Value, m_Steps[index].Expectations);
+					ST_INFO("{} -> {}", finished.Command, DescribeResultValue(result.Value));
+					const std::string unmet = CheckExpectations(result.Value, finished.Expectations);
 					if (!unmet.empty())
 					{
-						ST_ERROR("{}: {}", name, unmet);
+						ST_ERROR("{}: {}", finished.Command, unmet);
 						m_Failed = true;
 					}
-					for (const Binding& binding : m_Steps[index].Bindings)
-					{
-						if (const nlohmann::json* value = ResolveJsonPath(result.Value, binding.Path))
-						{
-							m_Bindings.insert_or_assign(binding.Name, *value);
-							continue;
-						}
-						ST_ERROR("{}: the result has no value at '{}' to bind as '{}'", name, binding.Pointer, binding.Name);
-						m_Bindings.erase(binding.Name);
-						m_Failed = true;
-					}
+					TakeBindings(finished, &result, true);
 				}
 				else
 				{
-					ST_ERROR("{} failed: {}", name, result.Error);
+					ST_ERROR("{} failed: {}", finished.Command, result.Error);
 					m_Failed = true;
-					// Later steps that use its bindings fail instead of running with values of an earlier step.
-					for (const Binding& binding : m_Steps[index].Bindings)
-						m_Bindings.erase(binding.Name);
+					TakeBindings(finished, nullptr, false);
 				}
 				m_Waiting = false;
 			}, CommandOrigin { CommandSource::CommandScript });
