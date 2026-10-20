@@ -17,7 +17,7 @@ through the balls, and a ramp that sends balls into ten pins. An AI agent made i
 | Raycasts and impulses: shoot a ball through the cursor, grab a body and pull it | `Scripts/Playground.cpp` (`Shoot`, `UpdateGrab`) |
 | Spawning many at once: a pour of 100 balls in one `Scene::InstantiateMany` call | `Playground::SpawnBalls` |
 | GPU-driven rendering: hundreds of instanced bodies with shadows; PBR materials from ambientCG | `Materials/`, `Textures/` |
-| Game UI: a tool panel of buttons, a slow-motion toggle (`Time::SetTimeScale`), a shot-power slider and a HUD ([Game UI](https://github.com/2042Third/GameEngine/blob/main/Docs/Manual/GameUI.md)) | `UI` in the scene |
+| Game UI: a tool panel of buttons drawn with sliced images (Kenney UI Pack: corners kept, edges and middle stretched), a slow-motion toggle (`Time::SetTimeScale`), a shot-power slider and a HUD ([Game UI](https://github.com/2042Third/GameEngine/blob/main/Docs/Manual/GameUI.md)) | `UI` in the scene, `Assets/UI/` |
 | Audio: one-shots heard where bodies meet, louder the harder they hit, within a budget of voices | `Scripts/Impact.cpp` |
 | Hot reload: the fields keep their values when the scripts are rebuilt while playing | `Playground::OnReload` |
 | Export: the game runs a demo of its stations by itself (`AutoDemo`) | `project.export` |
@@ -56,5 +56,5 @@ exact fixed steps, shoots, hot reloads, resets and exports, and the exported gam
 
 ## Credits
 
-Textures from [ambientCG](https://ambientcg.com) and sounds and a font from [Kenney](https://kenney.nl), all CC0: see
+Textures from [ambientCG](https://ambientcg.com) and sounds, UI images and a font from [Kenney](https://kenney.nl), all CC0: see
 [CREDITS.md](CREDITS.md).

@@ -15,4 +15,5 @@ domain; the authors are named as thanks, and the game's credits (Main Menu > Cre
 | `Assets/Sounds/Complete.ogg` | https://kenney.nl/assets/interface-sounds (version 1.0) | Kenney | CC0-1.0 | | `confirmation_004.ogg`, renamed |
 | `Assets/Sounds/Bounce.ogg` | https://kenney.nl/assets/interface-sounds (version 1.0) | Kenney | CC0-1.0 | | `pluck_002.ogg`, renamed |
 | `Assets/Sounds/UI/` | https://kenney.nl/assets/ui-pack (version 2.0) | Kenney | CC0-1.0 | | `click-a.ogg`, `tap-a.ogg` and `switch-a.ogg`, renamed `Click.ogg`, `Hover.ogg` and `Toggle.ogg` |
+| `Assets/UI/` | https://kenney.nl/assets/ui-pack (version 2.0) | Kenney | CC0-1.0 | | 2 of 870 PNGs: `Blue/Default/button_rectangle_depth_gradient.png` and `Grey/Default/button_square_flat.png` (the buttons' and panels' sliced images) |
 | `Assets/Fonts/KenneyFuture.ttf` | https://kenney.nl/assets/kenney-fonts | Kenney | CC0-1.0 | | `Kenney Future.ttf`, renamed |

@@ -15,3 +15,4 @@ domain; the authors are named as thanks.
 | `Assets/Sounds/UI/Shot.ogg` | https://kenney.nl/assets/impact-sounds | Kenney | CC0-1.0 | | `impactPunch_medium_000.ogg`, renamed |
 | `Assets/Sounds/UI/Goal.ogg` | https://kenney.nl/assets/interface-sounds | Kenney | CC0-1.0 | | `confirmation_002.ogg`, renamed |
 | `Assets/Fonts/KenneyFuture.ttf` | https://kenney.nl/assets/kenney-fonts | Kenney | CC0-1.0 | | `Kenney Future.ttf`, renamed |
+| `Assets/UI/` | https://kenney.nl/assets/ui-pack (version 2.0) | Kenney | CC0-1.0 | | 2 of 870 PNGs: `Blue/Default/button_rectangle_depth_gradient.png` and `Grey/Default/button_square_flat.png` (the buttons' and panels' sliced images) |
