@@ -660,12 +660,28 @@ TEST_SUITE("Editor.World")
 		// The editor's view keeps a render scene of the edited world (no GPU here: its proxies alone).
 		Scene& edited = *project.Context.GetEditScene();
 		RenderScene& renderScene = RenderScene::Get(edited);
+		// A cell is being created as play starts, one entity per update: the copy leaves its entities out, and the game loads
+		// it whole.
+		edited.GetSettings().MaxEntitiesInstantiatedPerFrame = 1;
+		project.Run("world.loadCells", { { "cells", { { { "layer", "Ground" }, { "x", 4 }, { "z", 4 } } } } });
+		const AssetHandle partialCell = project.GetCell(4, 4);
+		std::vector<UUID> partialRoots;
+		REQUIRE(WaitUntil([&]()
+		{
+			project.Context.Update(Timestep(1.0f / 60.0f));
+			const SubSceneID cell = edited.FindSubSceneBySource(partialCell);
+			const SubSceneStatus* status = edited.GetSubSceneStatus(cell);
+			if (!status || status->State != SubSceneState::Instantiating)
+				return false;
+			partialRoots.clear();
+			for (const Entity& root : edited.GetSubSceneRoots(cell))
+				partialRoots.push_back(root.GetUUID());
+			return !partialRoots.empty();
+		}, std::chrono::seconds(30)));
 		renderScene.Sync(nullptr);
 		const uint32_t editedProxies = renderScene.GetStats().Proxies;
 		REQUIRE(editedProxies > 0);
-		// A cell starts loading as play starts: the copy leaves its entities out, and the game loads it whole.
-		project.Run("world.loadCells", { { "cells", { { { "layer", "Ground" }, { "x", 4 }, { "z", 4 } } } } });
-		project.Context.Update(Timestep(1.0f / 60.0f));
+		const size_t editedRenderers = std::as_const(edited.GetRegistry()).storage<MeshRendererComponent>()->size();
 
 		project.Run("play.start");
 		const Ref<Scene>& running = project.Context.GetActiveScene();
@@ -681,7 +697,10 @@ TEST_SUITE("Editor.World")
 		const auto renderers = std::as_const(running->GetRegistry()).storage<MeshRendererComponent>();
 		REQUIRE(renderers);
 		CHECK(clone->GetStats().Proxies == renderers->size());
-		CHECK(clone->GetStats().Proxies <= editedProxies);
+		for (const UUID& root : partialRoots)
+			CHECK_FALSE(running->GetEntityByUUID(root));
+		CHECK(renderers->size() + partialRoots.size() <= editedRenderers);
+		CHECK(clone->GetStats().Proxies + partialRoots.size() <= editedProxies);
 		project.Run("play.stop");
 	}
 
