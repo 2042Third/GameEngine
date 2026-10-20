@@ -41,10 +41,10 @@ namespace
 			Run("project.create", { { "directory", FileSystem::ToUTF8(Root / "Game") }, { "name", "Game" }, { "template", "basic3d" } });
 			REQUIRE(Context.GetSceneHandle().IsValid());
 			REQUIRE_FALSE(Context.IsSceneModified());
-			// Another project to open, and a copy of the samples to open one of.
+			// Another project to open, and a copy of a sample to open (only Tetris: not every sample of the repository).
 			REQUIRE(Project::Create(Root / "Other", "Other") != nullptr);
 			std::string error;
-			REQUIRE_MESSAGE(FileSystem::CopyDirectory(FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Samples", Root / "Samples", &error), error);
+			REQUIRE_MESSAGE(Tests::CopySamples(Root / "Samples", { "Tetris" }, &error), error);
 		}
 
 		static EditorContextSpecification MakeSpecification(const std::filesystem::path& root)

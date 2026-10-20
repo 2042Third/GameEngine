@@ -134,15 +134,25 @@ namespace Strata
 
 	nvrhi::ITexture* WelcomePanel::GetCardImage(const std::filesystem::path& projectFile)
 	{
+		return GetImage(ProjectThumbnail::GetFile(projectFile.parent_path()));
+	}
+
+	nvrhi::ITexture* WelcomePanel::GetSampleImage(const std::filesystem::path& picture)
+	{
+		return picture.empty() ? nullptr : GetImage(picture);
+	}
+
+	nvrhi::ITexture* WelcomePanel::GetImage(const std::filesystem::path& file)
+	{
 		if (!Renderer::IsInitialized())
 			return nullptr;
-		CardImage& image = m_CardImages[FileSystem::ToUTF8(projectFile)];
+		CardImage& image = m_CardImages[FileSystem::ToUTF8(file)];
 		if (image.Texture)
 			return image.Texture;
 		if (!image.Load)
 		{
 			image.Load = CreateRef<CardImageLoad>();
-			JobSystem::SubmitIO([load = image.Load, file = ProjectThumbnail::GetFile(projectFile.parent_path())]()
+			JobSystem::SubmitIO([load = image.Load, file]()
 			{
 				if (FileSystem::IsRegularFile(file))
 				{
@@ -277,7 +287,11 @@ namespace Strata
 			if (samples.Success && samples.Value.contains("samples"))
 			{
 				for (const nlohmann::json& entry : samples.Value["samples"])
-					m_Samples.push_back({ entry.value("id", ""), entry.value("name", ""), entry.value("description", "") });
+				{
+					const nlohmann::json picture = entry.value("picture", nlohmann::json());
+					m_Samples.push_back({ entry.value("id", ""), entry.value("name", ""), entry.value("description", ""),
+						picture.is_string() ? FileSystem::FromUTF8(picture.get<std::string>()) : std::filesystem::path() });
+				}
 			}
 			else
 			{
@@ -639,16 +653,35 @@ namespace Strata
 			const bool last = index + 1 == cards.size() || (index + 1) % columns == 0;
 			return last ? grid.Width - (cardWidth + gap) * (count - 1.0f) : cardWidth;
 		};
+		// A sample with a picture shows it (the icon while it loads): its card keeps the picture's place from the start.
+		std::vector<std::optional<UI::CardPicture>> pictures(cards.size());
+		for (size_t index = 0; index < cards.size(); index++)
+		{
+			if (cards[index].Sample && !cards[index].Source->Picture.empty())
+			{
+				UI::CardPicture picture;
+				if (nvrhi::ITexture* texture = GetSampleImage(cards[index].Source->Picture))
+				{
+					picture.Texture = static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(texture));
+					picture.Aspect = static_cast<float>(texture->getDesc().width) / static_cast<float>(std::max(texture->getDesc().height, 1u));
+				}
+				pictures[index] = picture;
+			}
+		}
 		float height = 0.0f;
 		for (size_t index = 0; index < cards.size(); index++)
-			height = std::max(height, UI::GetCardHeight(getCardWidth(index), true, cards[index].Title, cards[index].Source->Description));
+		{
+			height = std::max(height, UI::GetCardHeight(getCardWidth(index), true, cards[index].Title, cards[index].Source->Description,
+				pictures[index] ? &*pictures[index] : nullptr));
+		}
 		for (size_t index = 0; index < cards.size(); index++)
 		{
 			const StarterCard& card = cards[index];
 			if (index % columns != 0)
 				ImGui::SameLine();
 			const ImVec2 size(getCardWidth(index), height);
-			if (UI::Card(card.ProbeKey.c_str(), card.Icon, card.Title, card.Source->Description, size) && context.Shell)
+			if (UI::Card(card.ProbeKey.c_str(), card.Icon, card.Title, card.Source->Description, size, false, pictures[index] ? &*pictures[index] : nullptr)
+				&& context.Shell)
 			{
 				if (card.Sample)
 					context.Shell->ShowOpenSampleDialog(card.Source->Id);

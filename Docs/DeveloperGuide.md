@@ -2111,7 +2111,11 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   reach (a disconnected drive or share). `project.samples` lists the samples next to
   the executable (`Editor/ProjectSamples`, `EditorContextSpecification::SamplesDirectory` in tests) and
   `project.openSample {sample, directory}` copies one (without `.strata`) into a new or empty directory and opens the
-  copy; `project.close` closes the project.
+  copy; `project.close` closes the project. An index entry's optional `Picture` (a PNG inside the sample's directory: no
+  absolute path, no `..`) is `ProjectSample::Picture` and `project.samples`' `picture`; a picture that is not one leaves the
+  sample offered without it, the log saying why. The launcher's sample cards show it (read on an I/O job like the recent
+  projects' pictures, the icon in its place until then: `UI::CardPicture`), and the copy starts with it as its
+  `.strata/Thumbnail.png`, so its recent-project card shows it before its first save.
 
 ### Launcher
 

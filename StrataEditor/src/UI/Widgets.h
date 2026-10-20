@@ -126,9 +126,18 @@ namespace Strata::UI
 
 	// A clickable card: a raised, rounded surface with an icon, a title and a description (e.g. project templates or recent
 	// projects). The size is in pixels: derive it from the font size. Returns true when clicked.
-	bool Card(const char* id, const char* icon, std::string_view title, std::string_view description, const ImVec2& size, bool selected = false);
-	// The height a Card of this width needs to show its icon, title and description without clipping.
-	float GetCardHeight(float width, bool hasIcon, std::string_view title, std::string_view description);
+	// A picture a Card shows on its left, in place of its icon, with the title and description beside it: a texture of display
+	// colors (drawn as they are), as wide as Aspect times its height. While Texture is 0 (it loads, or it failed) the card's
+	// icon is drawn where the picture goes, so the card keeps its layout.
+	struct CardPicture
+	{
+		ImTextureID Texture = 0;
+		float Aspect = 16.0f / 9.0f;
+	};
+	bool Card(const char* id, const char* icon, std::string_view title, std::string_view description, const ImVec2& size, bool selected = false,
+		const CardPicture* picture = nullptr);
+	// The height a Card of this width needs to show its icon (or picture), title and description without clipping.
+	float GetCardHeight(float width, bool hasIcon, std::string_view title, std::string_view description, const CardPicture* picture = nullptr);
 
 	// Modal dialogs: OpenModal(name) once (e.g. from a menu item), then every frame BeginModal(name, ...) and, while it
 	// returns true, the contents and EndModal(). The dialog is centered on the main viewport when it appears, sized to its

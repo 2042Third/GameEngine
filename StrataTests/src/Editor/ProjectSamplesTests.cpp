@@ -7,10 +7,12 @@
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Log.h>
 
 #include <algorithm>
 #include <filesystem>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -53,15 +55,27 @@ namespace
 		}
 	};
 
-	// A private copy of the repository's samples, with local editor data in the Tetris sample, as if someone had opened it
-	// in place.
+	// A private copy of the repository's Tetris sample and an index that lists it, with local editor data in the sample, as if
+	// someone had opened it in place.
 	std::filesystem::path CopySamples(const std::string& name)
 	{
 		const std::filesystem::path samples = Tests::CreateTemporaryDirectory(name) / "Samples";
 		std::string error;
-		REQUIRE_MESSAGE(FileSystem::CopyDirectory(FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Samples", samples, &error), error);
+		REQUIRE_MESSAGE(Tests::CopySamples(samples, { "Tetris" }, &error), error);
 		REQUIRE(FileSystem::WriteText(samples / "Tetris" / ".strata" / "Marker.txt", "local editor data"));
 		return samples;
+	}
+
+	// The directories the repository's samples index lists, in its order.
+	std::vector<std::string> GetRepositorySampleIds()
+	{
+		const std::optional<std::string> text = FileSystem::ReadText(FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Samples" / "Samples.json");
+		REQUIRE(text);
+		const nlohmann::json index = nlohmann::json::parse(*text);
+		std::vector<std::string> ids;
+		for (const nlohmann::json& entry : index["Samples"])
+			ids.push_back(entry["Directory"].get<std::string>());
+		return ids;
 	}
 
 	size_t CountFiles(const std::filesystem::path& directory)
@@ -134,16 +148,26 @@ TEST_SUITE("Editor.Samples")
 		std::string error;
 		const std::optional<std::vector<ProjectSample>> samples = ProjectSamples::List(directory, &error);
 		REQUIRE_MESSAGE(samples.has_value(), error);
-		REQUIRE(samples->size() == 1);
-		const ProjectSample& tetris = samples->front();
-		CHECK(tetris.Id == "Tetris");
-		CHECK(tetris.Name == "Tetris");
-		CHECK_FALSE(tetris.Description.empty());
-		CHECK(tetris.ProjectFile == directory / "Tetris" / "Tetris.stproj");
+		// Every sample the repository's index lists, in its order, each with its picture.
+		const std::vector<std::string> ids = GetRepositorySampleIds();
+		REQUIRE(samples->size() == ids.size());
+		for (size_t index = 0; index < ids.size(); index++)
+		{
+			const ProjectSample& sample = (*samples)[index];
+			CAPTURE(sample.Id);
+			CHECK(sample.Id == ids[index]);
+			CHECK_FALSE(sample.Name.empty());
+			CHECK_FALSE(sample.Description.empty());
+			CHECK(sample.ProjectFile.parent_path() == directory / FileSystem::FromUTF8(sample.Id));
+			CHECK(sample.Picture == directory / FileSystem::FromUTF8(sample.Id) / "Picture.png");
+			CHECK_FALSE(FileSystem::Exists(directory / FileSystem::FromUTF8(sample.Id) / ".strata"));
+			// The same files as the repository's sample (without its local editor data, should it have been opened in place).
+			CheckSameFiles(FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Samples" / FileSystem::FromUTF8(sample.Id), directory / FileSystem::FromUTF8(sample.Id));
+		}
+		const auto tetris = std::find_if(samples->begin(), samples->end(), [](const ProjectSample& sample) { return sample.Id == "Tetris"; });
+		REQUIRE(tetris != samples->end());
+		CHECK(tetris->ProjectFile == directory / "Tetris" / "Tetris.stproj");
 		CHECK(FileSystem::IsRegularFile(directory / "Tetris" / "Scripts" / "CMakeLists.txt"));
-		CHECK_FALSE(FileSystem::Exists(directory / "Tetris" / ".strata"));
-		// The same files as the repository's sample (without its local editor data, should it have been opened in place).
-		CheckSameFiles(FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Samples" / "Tetris", directory / "Tetris");
 	}
 
 	TEST_CASE("project.samples lists the samples, and project.openSample opens a copy of one")
@@ -157,6 +181,7 @@ TEST_SUITE("Editor.Samples")
 		CHECK(list["samples"][0]["id"] == "Tetris");
 		CHECK(list["samples"][0]["name"] == "Tetris");
 		CHECK_FALSE(list["samples"][0]["description"].get<std::string>().empty());
+		CHECK(FileSystem::FromUTF8(list["samples"][0]["picture"].get<std::string>()) == samples / "Tetris" / "Picture.png");
 
 		// Into a new directory below one that does not exist yet.
 		const std::filesystem::path copy = Tests::CreateTemporaryDirectory("SamplesOpenCopy") / "Games" / "My Tetris";
@@ -182,6 +207,8 @@ TEST_SUITE("Editor.Samples")
 		// Every other file: the sample's local data and the copy's own do not count.
 		REQUIRE(FileSystem::IsRegularFile(samples / "Tetris" / ".strata" / "Marker.txt"));
 		CheckSameFiles(samples / "Tetris", copy);
+		// The copy starts with the sample's picture as its own, so the launcher's card of the copy shows it before a save.
+		CHECK(FileSystem::ReadBytes(copy / ".strata" / "Thumbnail.png") == FileSystem::ReadBytes(samples / "Tetris" / "Picture.png"));
 		harness.Context.CloseProject();
 	}
 
@@ -221,6 +248,47 @@ TEST_SUITE("Editor.Samples")
 
 		// Missing parameters.
 		CHECK(harness.Execute("project.openSample", { { "sample", "Tetris" } }).ErrorKind == EditorCommandError::InvalidParameters);
+	}
+
+	TEST_CASE("A sample whose picture is not a PNG inside it is offered without one")
+	{
+		const std::filesystem::path samples = CopySamples("SamplesPicture");
+		const std::filesystem::path index = samples / ProjectSamples::c_IndexFileName;
+		REQUIRE(FileSystem::WriteText(samples / "Tetris" / "Notes.png", "not a picture"));
+		REQUIRE(FileSystem::WriteText(samples / "Outside.png", "outside"));
+		const auto listWith = [&](const std::string& picture)
+		{
+			REQUIRE(FileSystem::WriteText(index, R"({ "Strata": { "Format": "Samples", "Version": 1 }, "Samples": [ { "Directory": "Tetris", "Name": "Tetris", )"
+				R"("Picture": )" + picture + " } ] }"));
+			std::string error;
+			const std::optional<std::vector<ProjectSample>> listed = ProjectSamples::List(samples, &error);
+			REQUIRE_MESSAGE(listed.has_value(), error);
+			REQUIRE(listed->size() == 1);
+			return listed->front().Picture;
+		};
+		CHECK(listWith(R"("Picture.png")") == samples / "Tetris" / "Picture.png");
+		const std::string absolute = nlohmann::json(FileSystem::ToUTF8(samples / "Tetris" / "Picture.png")).dump();
+		for (const std::string& picture : { absolute, std::string(R"("../Outside.png")"), std::string(R"("Missing.png")"), std::string(R"("Notes.png")"),
+			std::string(R"("")"), std::string("5") })
+		{
+			CAPTURE(picture);
+			Tests::LogCapture log;
+			CHECK(listWith(picture).empty());
+			const std::vector<LogEntry> entries = log.GetEntries();
+			CHECK(std::any_of(entries.begin(), entries.end(), [](const LogEntry& entry)
+			{
+				return entry.Level == LogLevel::Warn && entry.Message.find("The sample 'Tetris' is offered without its picture") != std::string::npos;
+			}));
+		}
+
+		// A copy of a sample without a picture has no thumbnail until its first save.
+		listWith(R"("Missing.png")");
+		SamplesHarness harness(samples);
+		CHECK(harness.Run("project.samples")["samples"][0]["picture"].is_null());
+		const std::filesystem::path copy = Tests::CreateTemporaryDirectory("SamplesPictureCopy") / "Tetris";
+		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.openSample", { { "sample", "Tetris" }, { "directory", FileSystem::ToUTF8(copy) } });
+		CHECK_FALSE(FileSystem::Exists(copy / ".strata" / "Thumbnail.png"));
+		harness.Context.CloseProject();
 	}
 
 	TEST_CASE("The samples index is validated")

@@ -453,7 +453,25 @@ namespace Strata::UI
 		ImGui::PopFont();
 	}
 
-	bool Card(const char* id, const char* icon, std::string_view title, std::string_view description, const ImVec2& size, bool selected)
+	namespace
+	{
+
+		// The share of a card's content width its picture takes (CardPicture).
+		constexpr float c_CardPictureShare = 0.42f;
+
+		// Where a card's picture goes: from the content's top left, its width a share of the content width, its height from its
+		// aspect.
+		ImVec2 GetCardPictureSize(float width, const CardPicture& picture)
+		{
+			const float contentWidth = std::max(width - ImGui::GetStyle().WindowPadding.x * 2.0f, 1.0f);
+			const float pictureWidth = std::floor(contentWidth * c_CardPictureShare);
+			return ImVec2(pictureWidth, std::round(pictureWidth / std::max(picture.Aspect, 0.1f)));
+		}
+
+	}
+
+	bool Card(const char* id, const char* icon, std::string_view title, std::string_view description, const ImVec2& size, bool selected,
+		const CardPicture* picture)
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const ThemeColors& colors = GetThemeColors();
@@ -486,20 +504,45 @@ namespace Strata::UI
 
 		const float fontScale = GetFontScale();
 		const ImVec2 padding = style.WindowPadding;
-		const float wrapWidth = std::max(max.x - min.x - padding.x * 2.0f, 1.0f);
-		drawList->PushClipRect(min, max, true);
+		float textLeft = min.x + padding.x;
 		float y = min.y + padding.y;
-		if (icon && *icon)
+		drawList->PushClipRect(min, max, true);
+		const float iconSize = GetTextSize(TextSize::Display) * fontScale;
+		if (picture)
 		{
-			const float iconSize = GetTextSize(TextSize::Display) * fontScale;
+			const ImVec2 pictureSize = GetCardPictureSize(size.x, *picture);
+			const ImVec2 pictureMin(min.x + padding.x, min.y + padding.y);
+			const ImVec2 pictureMax(pictureMin.x + pictureSize.x, pictureMin.y + pictureSize.y);
+			if (picture->Texture)
+			{
+				// Display colors, drawn as they are (ImGuiTextureDisplay::Direct).
+				drawList->AddImage(picture->Texture, pictureMin, pictureMax);
+			}
+			else
+			{
+				drawList->AddRectFilled(pictureMin, pictureMax, ToDrawColor(colors.Chrome), style.FrameRounding);
+				if (icon && *icon)
+				{
+					const ImVec2 iconExtent = EditorFonts::Get(EditorFont::Regular)->CalcTextSizeA(iconSize, FLT_MAX, 0.0f, icon);
+					drawList->AddText(EditorFonts::Get(EditorFont::Regular), iconSize, ImVec2(std::round((pictureMin.x + pictureMax.x - iconExtent.x) * 0.5f),
+						std::round((pictureMin.y + pictureMax.y - iconExtent.y) * 0.5f)), ToDrawColor(colors.Accent), icon);
+				}
+			}
+			drawList->AddRect(pictureMin, pictureMax, ToDrawColor(border));
+			ItemProbe::RecordRect(std::string(id) + ".Picture", pictureMin, pictureMax, true, 0, picture->Texture ? "image" : "icon");
+			textLeft = pictureMax.x + style.ItemSpacing.x;
+		}
+		else if (icon && *icon)
+		{
 			drawList->AddText(EditorFonts::Get(EditorFont::Regular), iconSize, ImVec2(min.x + padding.x, y), ToDrawColor(colors.Accent), icon);
 			y += iconSize + style.ItemSpacing.y;
 		}
+		const float wrapWidth = std::max(max.x - padding.x - textLeft, 1.0f);
 		const float titleSize = GetTextSize(TextSize::Body) * fontScale;
-		drawList->AddText(EditorFonts::Get(EditorFont::SemiBold), titleSize, ImVec2(min.x + padding.x, y), ToDrawColor(colors.Text), title.data(),
+		drawList->AddText(EditorFonts::Get(EditorFont::SemiBold), titleSize, ImVec2(textLeft, y), ToDrawColor(colors.Text), title.data(),
 			title.data() + title.size(), wrapWidth);
 		y += titleSize + style.ItemInnerSpacing.y;
-		drawList->AddText(EditorFonts::Get(EditorFont::Regular), GetTextSize(TextSize::Caption) * fontScale, ImVec2(min.x + padding.x, y),
+		drawList->AddText(EditorFonts::Get(EditorFont::Regular), GetTextSize(TextSize::Caption) * fontScale, ImVec2(textLeft, y),
 			ToDrawColor(colors.TextSecondary), description.data(), description.data() + description.size(), wrapWidth);
 		drawList->PopClipRect();
 		ImGui::RenderNavCursor(ImRect(min, max), ImGui::GetItemID());
@@ -508,12 +551,19 @@ namespace Strata::UI
 		return pressed;
 	}
 
-	float GetCardHeight(float width, bool hasIcon, std::string_view title, std::string_view description)
+	float GetCardHeight(float width, bool hasIcon, std::string_view title, std::string_view description, const CardPicture* picture)
 	{
-		// Card's layout: padding, the icon and a gap, the title, a small gap, the description, padding.
+		// Card's layout: padding, the icon and a gap, the title, a small gap, the description, padding; or the picture with the
+		// title and description beside it.
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const float fontScale = GetFontScale();
-		const float wrapWidth = std::max(width - style.WindowPadding.x * 2.0f, 1.0f);
+		float wrapWidth = std::max(width - style.WindowPadding.x * 2.0f, 1.0f);
+		ImVec2 pictureSize(0.0f, 0.0f);
+		if (picture)
+		{
+			pictureSize = GetCardPictureSize(width, *picture);
+			wrapWidth = std::max(wrapWidth - pictureSize.x - style.ItemSpacing.x, 1.0f);
+		}
 		ImFont* semiBold = EditorFonts::Get(EditorFont::SemiBold);
 		ImFont* regular = EditorFonts::Get(EditorFont::Regular);
 		const float titleSize = GetTextSize(TextSize::Body) * fontScale;
@@ -521,10 +571,10 @@ namespace Strata::UI
 		const float titleHeight = (semiBold ? semiBold : ImGui::GetFont())->CalcTextSizeA(titleSize, FLT_MAX, wrapWidth, title.data(), title.data() + title.size()).y;
 		const float descriptionHeight = (regular ? regular : ImGui::GetFont())->CalcTextSizeA(captionSize, FLT_MAX, wrapWidth, description.data(),
 			description.data() + description.size()).y;
-		float height = style.WindowPadding.y * 2.0f + std::max(titleHeight, titleSize) + style.ItemInnerSpacing.y + descriptionHeight;
-		if (hasIcon)
-			height += GetTextSize(TextSize::Display) * fontScale + style.ItemSpacing.y;
-		return std::ceil(height);
+		float textHeight = std::max(titleHeight, titleSize) + style.ItemInnerSpacing.y + descriptionHeight;
+		if (hasIcon && !picture)
+			textHeight += GetTextSize(TextSize::Display) * fontScale + style.ItemSpacing.y;
+		return std::ceil(style.WindowPadding.y * 2.0f + std::max(textHeight, pictureSize.y));
 	}
 
 	void OpenModal(const char* name)

@@ -87,6 +87,17 @@ TEST_SUITE("Editor.Launcher")
 			CAPTURE(item);
 			CHECK(IsDrawn(item));
 		}
+		// The sample's card keeps the place of its picture (Samples.json names one), with the icon there until the picture is
+		// read and uploaded (never without a GPU); templates have none.
+		const std::optional<UI::ItemProbe::Item> picture = UI::ItemProbe::Find("Welcome.Sample.Tetris.Picture");
+		REQUIRE(picture);
+		CHECK(picture->Text == "icon");
+		const std::optional<UI::ItemProbe::Item> card = UI::ItemProbe::Find("Welcome.Sample.Tetris");
+		REQUIRE(card);
+		CHECK(picture->Min.x > card->Min.x);
+		CHECK(picture->Max.y < card->Max.y);
+		CHECK(picture->Max.x - picture->Min.x > (picture->Max.y - picture->Min.y) * 1.7f); // 16:9
+		CHECK_FALSE(UI::ItemProbe::Find("Welcome.Template.basic3d.Picture"));
 		// No toolbar, status bar or panels behind it.
 		CHECK_FALSE(IsDrawn("Toolbar.Play"));
 		CHECK_FALSE(IsDrawn("Status.PlayState"));

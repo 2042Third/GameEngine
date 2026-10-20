@@ -505,6 +505,18 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(picture->getDesc().width == ProjectThumbnail::c_Width);
 		// A project without a picture has none.
 		CHECK(welcome.GetCardImage(directory.parent_path() / "Missing" / "Missing.stproj") == nullptr);
+		// A sample's card reads its picture the same way.
+		nvrhi::ITexture* sample = nullptr;
+		for (int attempt = 0; attempt < 2000 && !sample; attempt++)
+		{
+			sample = welcome.GetSampleImage(FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Samples" / "Tetris" / "Picture.png");
+			if (!sample)
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		REQUIRE(sample);
+		CHECK(sample->getDesc().width == ProjectThumbnail::c_Width);
+		CHECK(sample->getDesc().height == ProjectThumbnail::c_Height);
+		CHECK(welcome.GetSampleImage({}) == nullptr);
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

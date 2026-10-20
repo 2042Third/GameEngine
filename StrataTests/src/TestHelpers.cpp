@@ -1,6 +1,7 @@
 #include "TestHelpers.h"
 
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Process.h"
 #include "Strata/Core/UUID.h"
 
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <mutex>
 #include <numbers>
+#include <optional>
 #include <random>
 #include <string_view>
 #include <vector>
@@ -91,6 +93,44 @@ namespace Strata::Tests
 			return {};
 		}
 		return copy;
+	}
+
+	bool CopySamples(const std::filesystem::path& destination, const std::vector<std::string>& names, std::string* outError)
+	{
+		const std::filesystem::path samples = FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Samples";
+		const std::optional<std::string> text = FileSystem::ReadText(samples / "Samples.json");
+		std::optional<nlohmann::json> index = text ? JsonUtils::Parse(*text) : std::nullopt;
+		if (!index || !index->contains("Samples") || !(*index)["Samples"].is_array())
+		{
+			if (outError)
+				*outError = "the repository's Samples/Samples.json could not be read";
+			return false;
+		}
+		nlohmann::json kept = nlohmann::json::array();
+		for (const nlohmann::json& entry : (*index)["Samples"])
+		{
+			if (std::find(names.begin(), names.end(), entry.value("Directory", std::string())) != names.end())
+				kept.push_back(entry);
+		}
+		if (kept.size() != names.size())
+		{
+			if (outError)
+				*outError = "Samples/Samples.json does not list every sample asked for";
+			return false;
+		}
+		(*index)["Samples"] = std::move(kept);
+		if (!FileSystem::CreateDirectories(destination) || !FileSystem::WriteText(destination / "Samples.json", index->dump(1, '\t') + "\n"))
+		{
+			if (outError)
+				*outError = "the samples index could not be written";
+			return false;
+		}
+		for (const std::string& name : names)
+		{
+			if (!FileSystem::CopyDirectory(samples / FileSystem::FromUTF8(name), destination / FileSystem::FromUTF8(name), outError))
+				return false;
+		}
+		return true;
 	}
 
 	LogCapture::LogCapture()
