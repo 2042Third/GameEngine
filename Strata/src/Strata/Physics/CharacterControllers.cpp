@@ -890,13 +890,19 @@ namespace Strata
 			RefreshController(data, handle, outChanges);
 	}
 
-	void CharacterControllerSet::RefreshFilters()
+	void CharacterControllerSet::RefreshFilters(std::vector<UUID>& outRefiltered)
 	{
 		CharacterControllerSetData& data = *m_Data;
 		for (auto& [handle, record] : data.Controllers)
 		{
-			if (B3_IS_NON_NULL(record.PresenceShape))
-				b3Shape_SetFilter(record.PresenceShape, PhysicsFilters::MakeShapeFilter(record.Shape.Layer, data.Settings->LayerCollisionMasks), true);
+			if (B3_IS_NULL(record.PresenceShape))
+				continue;
+			const b3Filter filter = PhysicsFilters::MakeShapeFilter(record.Shape.Layer, data.Settings->LayerCollisionMasks);
+			const b3Filter current = b3Shape_GetFilter(record.PresenceShape);
+			if (current.categoryBits == filter.categoryBits && current.maskBits == filter.maskBits && current.groupIndex == filter.groupIndex)
+				continue;
+			b3Shape_SetFilter(record.PresenceShape, filter, true);
+			outRefiltered.push_back(record.EntityID);
 		}
 	}
 

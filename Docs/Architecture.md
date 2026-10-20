@@ -339,8 +339,10 @@ mass with the shapes' distribution. Collision layers are the scene's (`SceneSett
 `Scene/PhysicsLayerSettings.h`: names for up to 32 layers and a symmetric matrix of which collide, everything by default);
 `PhysicsSystem` gives its world that matrix, restricted by the default settings' (`GetDefaultSettings`), when it creates
 the world and before every step after it changed (`scene.setSettings`, undo, the inspector, scripts'
-`Physics::SetLayersCollide`, `PhysicsSystem::SetLayersCollide`; `PhysicsWorld::SetLayerCollisionMasks` gives every shape
-its new filter and wakes the bodies, and character controllers read the world's live matrix). Each shape's box3d filter
+`Physics::SetLayersCollide`, `PhysicsSystem::SetLayersCollide`; `PhysicsWorld::SetLayerCollisionMasks` gives the shapes
+of the changed layers their new filters and wakes the bodies, and character controllers read the world's live matrix;
+box3d drops those shapes' contacts and finds them again, so their pairs wait for the next step like a rebuilt body's and
+only the pairs the change parts end). Each shape's box3d filter
 has its layer as category and its layer's row of the matrix as mask (`PhysicsFilters.h`), plus a query bit no shape has
 and every query asks for, so queries find bodies whatever their layer collides with. box3d holds at most 128 worlds at
 once: `PhysicsSystem` checks `PhysicsWorld::HasFreeWorld` first and a scene that finds none plays without physics, with

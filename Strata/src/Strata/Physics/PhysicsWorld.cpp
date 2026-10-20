@@ -1453,9 +1453,18 @@ namespace Strata
 			record.HasPendingForce = false;
 		}
 
-		// The pairs of an entity whose body is rebuilt: the old shapes' contacts are gone, so the pairs wait for the new shapes'
-		// contacts of the next step to confirm them (see ResolveRecheckedPairs).
-		void MarkPairsUnconfirmed(PhysicsWorldData& data, UUID entityID)
+		// Which pairs of an entity lost their box3d contacts.
+		enum class LostContacts : uint8_t
+		{
+			All,  // A rebuild: the old shapes, their contacts and their sensor visits are gone
+			Solid // A new filter (SetLayerCollisionMasks): box3d destroys the shapes' contacts but keeps their sensor visits
+		};
+
+		// The pairs of an entity whose shapes lost their contacts wait for the contacts of the next step to confirm them (see
+		// ResolveRecheckedPairs): box3d reports the End of each lost contact and, where the shapes still touch, the Begin of a
+		// new one with that step, which must neither end nor begin the pair again. A new filter keeps the trigger pairs'
+		// counts: box3d checks sensor visits again at its next step and reports only the visits that changed.
+		void MarkPairsUnconfirmed(PhysicsWorldData& data, UUID entityID, LostContacts lost = LostContacts::All)
 		{
 			auto indexIt = data.EntityPairs.find(entityID);
 			if (indexIt == data.EntityPairs.end())
@@ -1463,7 +1472,7 @@ namespace Strata
 			for (const PairKey& key : indexIt->second)
 			{
 				auto pairIt = data.TouchingPairs.find(key);
-				if (pairIt == data.TouchingPairs.end())
+				if (pairIt == data.TouchingPairs.end() || (lost == LostContacts::Solid && pairIt->second.IsTrigger))
 					continue;
 				pairIt->second.ContactCount = 0;
 				pairIt->second.Unconfirmed = true;
@@ -4613,18 +4622,24 @@ namespace Strata
 		PhysicsWorldData& data = *m_Data;
 		if (data.Settings.LayerCollisionMasks == masks)
 			return;
+		const std::array<uint32_t, c_PhysicsLayerCount> previous = data.Settings.LayerCollisionMasks;
 		data.Settings.LayerCollisionMasks = masks;
-		// box3d keeps a filter per shape: every shape takes its layer's new mask (rare, O(shapes)), and box3d drops and finds
-		// their pairs again.
+		// box3d keeps a filter per shape: the shapes of the layers whose masks changed take the new ones (rare, O(bodies)).
+		// box3d destroys their contacts and finds them again at the next step, so their pairs wait for it to confirm them,
+		// and only the pairs whose layers the change parts end.
 		for (auto& [handle, record] : data.Bodies)
 		{
-			if (!record.HasBody())
+			if (!record.HasBody() || previous[record.Layer] == masks[record.Layer])
 				continue;
 			const b3Filter filter = PhysicsFilters::MakeShapeFilter(record.Layer, masks);
 			for (const b3ShapeId shape : record.Shapes)
 				b3Shape_SetFilter(shape, filter, true);
+			MarkPairsUnconfirmed(data, record.EntityID, LostContacts::Solid);
 		}
-		data.Characters->RefreshFilters();
+		std::vector<UUID> refilteredCharacters;
+		data.Characters->RefreshFilters(refilteredCharacters);
+		for (const UUID entityID : refilteredCharacters)
+			MarkPairsUnconfirmed(data, entityID, LostContacts::Solid);
 		WakeAllBodies(data);
 	}
 

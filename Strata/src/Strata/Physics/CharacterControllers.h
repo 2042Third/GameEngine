@@ -97,8 +97,9 @@ namespace Strata
 		// collectContacts the bodies each controller touched are reported (otherwise nothing is gathered).
 		void Step(float timestep, const glm::vec3& gravity, bool collectContacts, CharacterStepOutput& output);
 
-		// The presence bodies take the world's layer matrix after it changed.
-		void RefreshFilters();
+		// The presence bodies take the world's layer matrix after it changed. Lists the controllers whose presence shapes took
+		// a new filter (box3d destroyed those shapes' contacts).
+		void RefreshFilters(std::vector<UUID>& outRefiltered);
 
 		//////////////////////////////////////////////////////////////////////////
 		// Gameplay (see ICharacterControl; entities without a controller get false or nothing)
