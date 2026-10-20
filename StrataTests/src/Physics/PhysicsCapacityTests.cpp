@@ -672,6 +672,40 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(scene.GetService<IPhysicsCapacity>() == nullptr);
 	}
 
+	TEST_CASE("box3d reserves a scene's room when play starts, up to its limit for a new world")
+	{
+		ScopedCapacityDemands demands;
+		Scene scene("Reserved");
+		CreateBoxRow(scene, 3);
+		const auto reservedFor = [&](const PhysicsCapacitySettings& capacity)
+		{
+			scene.GetSettings().PhysicsCapacity = capacity;
+			scene.OnRuntimeStart();
+			const PhysicsWorld* world = GetPhysics(scene).GetWorld();
+			REQUIRE(world != nullptr);
+			const uint64_t reserved = world->GetReservedBytes();
+			scene.OnRuntimeStop();
+			return reserved;
+		};
+		const auto estimate = [](uint32_t bodies, uint32_t contacts)
+		{
+			PhysicsSettings room;
+			room.MaxBodies = bodies;
+			room.MaxContactConstraints = contacts;
+			return PhysicsWorld::EstimateReservedBytes(room);
+		};
+
+		// A room the scene gives for the bodies it creates while it plays is reserved at once: the world does not grow into it.
+		CHECK(reservedFor({ 50'000, 0 }) == estimate(50'000, 2048));
+		CHECK(reservedFor({ 0, 100'000 }) == estimate(1024, 100'000));
+		CHECK(reservedFor({ 0, 0 }) == estimate(1024, 2048));
+		// The largest room a scene may ask for would take gigabytes before any body needs them: box3d reserves up to its limit
+		// and grows beyond it as the bodies come.
+		const uint64_t largest = reservedFor({ PhysicsCapacitySettings::c_MaxBodiesLimit, PhysicsCapacitySettings::c_MaxContactConstraintsLimit });
+		CHECK(largest == estimate(PhysicsWorld::c_MaxBodiesReservedAtCreation, PhysicsWorld::c_MaxContactsReservedAtCreation));
+		CHECK(largest < estimate(PhysicsCapacitySettings::c_MaxBodiesLimit, PhysicsCapacitySettings::c_MaxContactConstraintsLimit) / 8);
+	}
+
 	TEST_CASE("The reserved bytes of a world are within 15% of box3d's count of them")
 	{
 		PhysicsSettings smallSettings = PhysicsWorld::ResolveCapacities(PhysicsSettings(), 10);

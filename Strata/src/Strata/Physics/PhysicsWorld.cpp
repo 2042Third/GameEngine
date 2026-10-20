@@ -756,9 +756,8 @@ namespace Strata
 		bool AutomaticMaxBodies = false;
 		bool AutomaticMaxContactConstraints = false;
 		uint32_t RoomBodies = 0;
-		// What box3d reserved when the world was created: the room, but never more than the automatic room of the scene's
-		// bodies (a room given far beyond them, the largest a scene may ask for, would reserve gigabytes box3d grows into
-		// anyway when the bodies come).
+		// What box3d reserved when the world was created: the room, up to PhysicsWorld::c_MaxBodiesReservedAtCreation and
+		// c_MaxContactsReservedAtCreation (or the automatic room of the scene's bodies, when that is larger).
 		uint32_t LibraryRoomBodies = 0;
 		uint32_t LibraryRoomContacts = 0;
 		uint32_t SlotWaiterCount = 0;
@@ -4250,8 +4249,8 @@ namespace Strata
 		// scene's bodies.
 		const uint32_t candidateCount = CountBodyCandidates(scene);
 		const PhysicsSettings automaticRoom = ResolveCapacities(PhysicsSettings(), candidateCount, demand);
-		data.LibraryRoomBodies = std::min(data.RoomBodies, automaticRoom.MaxBodies);
-		data.LibraryRoomContacts = std::min(data.Settings.MaxContactConstraints, automaticRoom.MaxContactConstraints);
+		data.LibraryRoomBodies = std::min(data.RoomBodies, std::max(automaticRoom.MaxBodies, c_MaxBodiesReservedAtCreation));
+		data.LibraryRoomContacts = std::min(data.Settings.MaxContactConstraints, std::max(automaticRoom.MaxContactConstraints, c_MaxContactsReservedAtCreation));
 		const uint64_t candidates = std::max<uint64_t>(candidateCount, 1);
 		const uint64_t moving = std::min<uint64_t>(CountMovingCandidates(scene), candidates);
 		const uint64_t movingRoom = std::min<uint64_t>(data.LibraryRoomBodies, (static_cast<uint64_t>(data.LibraryRoomBodies) * moving + candidates - 1) / candidates);

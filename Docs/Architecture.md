@@ -349,7 +349,10 @@ once: `PhysicsSystem` checks `PhysicsWorld::HasFreeWorld` first and a scene that
 one error; worlds are created and destroyed on the main thread only. A world's capacities are the room box3d reserves when
 it is created: those the scene does not set (`SceneSettings::PhysicsCapacity`) are sized from the bodies the scene
 starts with (`PhysicsWorld::ResolveCapacities`: at least 1,024 bodies, the next power of two of twice the bodies; two
-contacts per body), and box3d reserves no more than that automatic room even when a scene gives more. box3d grows its
+contacts per body). box3d reserves the room at once up to 131,072 bodies and 262,144 contacts
+(`PhysicsWorld::c_MaxBodiesReservedAtCreation`, about 340 MB; more only when the automatic room is larger), so that a
+scene sized for the bodies it creates while it plays does not grow into them, while the largest room a scene may ask for
+does not take gigabytes before any body needs them. box3d grows its
 storage as bodies and contacts come, so no body waits below the growth limit: a round of changes whose bodies outgrow
 the room counts one growth (the room doubles, `PhysicsStats::GrowthCount`, `LastGrowthMs`), and what a world needed
 beyond its room (bodies, contacts) is remembered per scene (`Scene::GetLineageID`: the scene asset it was loaded from or

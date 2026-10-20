@@ -355,7 +355,8 @@ namespace Strata
 				properties.MaxFixedSteps = MakeSceneSettingRow(std::move(maxFixedSteps));
 				properties.MaxBodies = MakeSceneSettingRow(MakeCapacityProperty("MaxBodies", "Max Bodies",
 					"Bodies the physics world has room for when play starts (about 2 KiB each); Auto (0) sizes it from the bodies the scene "
-					"starts with. The world grows while bodies are created beyond it: raise it for scenes that create many bodies while they play",
+					"starts with. The world grows while bodies are created beyond it: raise it for scenes that create many bodies while they play "
+					"(up to 131,072 bodies are reserved at once)",
 					PhysicsCapacitySettings::c_MaxBodiesLimit));
 				properties.MaxContactConstraints = MakeSceneSettingRow(MakeCapacityProperty("MaxContactConstraints", "Max Contacts",
 					"Contacts the physics world has room for when play starts (about 250 bytes each); Auto (0): sized from the bodies",

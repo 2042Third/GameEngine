@@ -77,8 +77,9 @@ namespace Strata
 	// most PhysicsSettings::MeshWaitTimeout seconds of simulation time, with a warning naming the colliders that are still
 	// missing; mesh colliders added later, unknown meshes and meshes that failed to load are not waited for.
 	//
-	// Capacities: the settings' MaxBodies and MaxContactConstraints are the room box3d reserves when the world is created;
-	// 0 sizes them from the bodies the scene has then (ResolveCapacities). box3d grows its storage as bodies and contacts
+	// Capacities: the settings' MaxBodies and MaxContactConstraints are the room box3d reserves when the world is created
+	// (up to c_MaxBodiesReservedAtCreation and c_MaxContactsReservedAtCreation); 0 sizes them from the bodies the scene has
+	// then (ResolveCapacities). box3d grows its storage as bodies and contacts
 	// come, so a world never refuses a body below PhysicsSettings::GrowthLimit: when its bodies outgrow the room, the world
 	// counts a growth (the room doubles: PhysicsStats::GrowthCount, LastGrowthFrom/To, LastGrowthMs) and records the demand
 	// (also the contacts it held beyond its room), so the scene's next world reserves enough (PhysicsSystem remembers it per
@@ -105,10 +106,16 @@ namespace Strata
 		//  - MaxContactConstraints: twice the bodies, at least 2,048;
 		// each at least what `demand` asks for.
 		static PhysicsSettings ResolveCapacities(const PhysicsSettings& settings, uint32_t bodyCount, const PhysicsCapacityDemand& demand = {});
-		// What a world with this room (see ResolveCapacities) takes, in bytes: per body (box3d's body, shape and proxy, and
-		// the world's record), per contact, and the world's fixed part. Fitted to box3d's own count of a world's bytes (see
-		// CountLibraryBytes); constant time.
+		// What a world with this room (see ResolveCapacities) takes in box3d, in bytes: per body (its body, shape, proxy and
+		// island), per contact, and the world's fixed part. Fitted to box3d's own count of a world's bytes (see
+		// CountLibraryBytes); Strata's records are not counted. Constant time.
 		static uint64_t EstimateReservedBytes(const PhysicsSettings& settings);
+		// The most room box3d reserves when a world is created, unless the automatic room of the scene's bodies is larger
+		// (about 280 MB of bodies and 65 MB of contacts by EstimateReservedBytes): a room given beyond it counts for growth
+		// only, and box3d grows its storage as the bodies come, so that the largest room a scene may ask for does not reserve
+		// gigabytes up front.
+		static constexpr uint32_t c_MaxBodiesReservedAtCreation = 1u << 17;
+		static constexpr uint32_t c_MaxContactsReservedAtCreation = 1u << 18;
 		// Whether box3d has room for another world (it holds at most 128 at once): PhysicsSystem checks it before creating one.
 		static bool HasFreeWorld();
 		// The entities of a scene that may own a body when a world is created for it: those with a RigidBody, collider entities

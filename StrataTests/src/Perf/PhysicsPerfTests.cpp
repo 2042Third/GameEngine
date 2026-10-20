@@ -232,7 +232,14 @@ TEST_SUITE("Perf.Physics")
 		Scene scene;
 		CreateGround(scene);
 		CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 5.0f, 0.0f));
-		const auto measureReserved = [&](const PhysicsCapacitySettings& capacity) -> uint64_t
+		// What the process gained, and the world's estimate of what box3d reserved (PhysicsWorld::GetReservedBytes: up to
+		// c_MaxBodiesReservedAtCreation bodies, the rest of the room counts for growth only).
+		struct Reserved
+		{
+			uint64_t Measured = 0;
+			uint64_t Estimated = 0;
+		};
+		const auto measureReserved = [&](const PhysicsCapacitySettings& capacity)
 		{
 			scene.GetSettings().PhysicsCapacity = capacity;
 			const std::optional<ProcessMemoryInfo> before = Platform::GetProcessMemory();
@@ -242,8 +249,12 @@ TEST_SUITE("Perf.Physics")
 			const std::optional<ProcessMemoryInfo> during = Platform::GetProcessMemory();
 			REQUIRE(during);
 			CHECK(GetPhysics(scene).GetStats().MaxBodies == capacity.MaxBodies);
+			REQUIRE(GetPhysics(scene).GetWorld() != nullptr);
+			Reserved reserved;
+			reserved.Estimated = GetPhysics(scene).GetWorld()->GetReservedBytes();
 			scene.OnRuntimeStop();
-			return during->PrivateBytes > before->PrivateBytes ? during->PrivateBytes - before->PrivateBytes : 0;
+			reserved.Measured = during->PrivateBytes > before->PrivateBytes ? during->PrivateBytes - before->PrivateBytes : 0;
+			return reserved;
 		};
 
 		PhysicsCapacitySettings largest;
@@ -251,31 +262,24 @@ TEST_SUITE("Perf.Physics")
 		largest.MaxContactConstraints = PhysicsCapacitySettings::c_MaxContactConstraintsLimit;
 		PhysicsCapacitySettings mostBodies;
 		mostBodies.MaxBodies = PhysicsCapacitySettings::c_MaxBodiesLimit;
-		// PhysicsWorld::EstimateReservedBytes of a world with those capacities (the settings PhysicsSystem gives it).
-		const auto estimateMB = [&](const PhysicsCapacitySettings& capacity)
-		{
-			PhysicsSettings settings = PhysicsSystem::GetDefaultSettings();
-			settings.MaxBodies = capacity.MaxBodies;
-			settings.MaxContactConstraints = capacity.MaxContactConstraints;
-			return static_cast<double>(PhysicsWorld::EstimateReservedBytes(PhysicsWorld::ResolveCapacities(settings, PhysicsWorld::CountBodyCandidates(scene)))) / c_MB;
-		};
 		// What the largest capacities reserve, and the most bodies with the contacts sized automatically for them: both budgets
 		// are below 1 GiB (1073.7 MB), the physics workstream's acceptance limit.
 		Perf::CheckBudgetsConfirmed({ "Perf.Physics.LargestCapacities.ReservedMemory", "Perf.Physics.MostBodies.ReservedMemory" }, [&]
 		{
-			const uint64_t largestReserved = measureReserved(largest);
-			const uint64_t mostBodiesReserved = measureReserved(mostBodies);
-			MESSAGE("Reserved for the largest capacities: ", static_cast<double>(largestReserved) / c_MB, " MB (estimated ", estimateMB(largest),
-				" MB); for the most bodies: ", static_cast<double>(mostBodiesReserved) / c_MB, " MB (estimated ",
-				estimateMB(mostBodies), " MB)");
+			const Reserved largestReserved = measureReserved(largest);
+			const Reserved mostBodiesReserved = measureReserved(mostBodies);
+			MESSAGE("Reserved for the largest capacities: ", static_cast<double>(largestReserved.Measured) / c_MB, " MB (estimated ",
+				static_cast<double>(largestReserved.Estimated) / c_MB, " MB); for the most bodies: ", static_cast<double>(mostBodiesReserved.Measured) / c_MB,
+				" MB (estimated ", static_cast<double>(mostBodiesReserved.Estimated) / c_MB, " MB)");
 #if defined(ST_PLATFORM_WINDOWS)
-			// The estimate is of what a world reserves, which is what private bytes count on Windows (the commit charge); other
-			// systems count only the pages touched so far.
-			CHECK(static_cast<double>(largestReserved) / c_MB == doctest::Approx(estimateMB(largest)).epsilon(0.15));
-			CHECK(static_cast<double>(mostBodiesReserved) / c_MB == doctest::Approx(estimateMB(mostBodies)).epsilon(0.15));
+			// Private bytes on Windows are the commit charge, also of storage not touched yet (other systems count only the pages
+			// touched so far). The estimate is of a world whose room is used (fitted to box3d's count of its bytes): box3d's
+			// reservation for an empty room commits at most that.
+			CHECK(static_cast<double>(largestReserved.Measured) <= 1.15 * static_cast<double>(largestReserved.Estimated));
+			CHECK(static_cast<double>(mostBodiesReserved.Measured) <= 1.15 * static_cast<double>(mostBodiesReserved.Estimated));
 #endif
-			return Perf::MetricValues { { "Perf.Physics.LargestCapacities.ReservedMemory", static_cast<double>(largestReserved) / c_MB },
-				{ "Perf.Physics.MostBodies.ReservedMemory", static_cast<double>(mostBodiesReserved) / c_MB } };
+			return Perf::MetricValues { { "Perf.Physics.LargestCapacities.ReservedMemory", static_cast<double>(largestReserved.Measured) / c_MB },
+				{ "Perf.Physics.MostBodies.ReservedMemory", static_cast<double>(mostBodiesReserved.Measured) / c_MB } };
 		});
 	}
 

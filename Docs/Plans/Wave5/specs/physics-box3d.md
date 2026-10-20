@@ -390,7 +390,11 @@ box3d grows its own storage (bodies, shapes, contacts, tree nodes, arena) as nee
 - `MaxBodies` and `MaxContactConstraints` (settings and scene) are the **room a world reserves** when it is created:
   0 sizes them from the scene (`ResolveCapacities`: bodies the next power of two of twice the body candidates, at least
   1,024; contacts two per body; each at least the remembered demand), split into static and moving counts by the
-  candidates' types. Exceeding the room is no error and no warning: box3d grows, the world counts a growth
+  candidates' types. box3d reserves the room up to 131,072 bodies and 262,144 contacts
+  (`PhysicsWorld::c_MaxBodiesReservedAtCreation`, `c_MaxContactsReservedAtCreation`; more only when the automatic room
+  is larger): the largest room a scene may ask for would otherwise reserve about 4.6 GB before any body needs it, and a
+  room beyond the bound counts for growth only (decided in the review round; the implementation first reserved only the
+  automatic room, which left a scene's own room without effect on box3d). Exceeding the room is no error and no warning: box3d grows, the world counts a growth
   (`GrowthCount`, `LastGrowthFrom/To`: the room doubled; `LastGrowthMs`: the round of changes that grew it) and records
   the demand, so the scene's next world reserves enough (`GetRememberedCapacityDemand`, per lineage as today).
 - `GrowthLimit` (default the engine's limit, 2^21 bodies, and box3d's `B3_MAX_SHAPES`, 2^22, for shapes) is the only

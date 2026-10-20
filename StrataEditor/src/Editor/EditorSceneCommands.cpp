@@ -653,8 +653,9 @@ namespace Strata
 			// working; listed so that clients validating requests against the schema send them too.
 			{ "maxBodyPairs", { { "deprecated", true },
 				{ "description", "Ignored since 0.5.0 (box3d has no buffer of body pairs to size); accepted for older command scripts, with a warning" } } } });
-		capacitySchema["description"] = "Physics world room (only the given values change), reserved when play starts; raise it for scenes that "
-			"create many bodies while they play, so that the world does not grow during play";
+		capacitySchema["description"] = "Physics world room (only the given values change), reserved when play starts (up to 131072 bodies and "
+			"262144 contacts at once; beyond that it counts for growth only); raise it for scenes that create many bodies while they play, so "
+			"that the world does not grow during play";
 		const nlohmann::json layerNamesSchema = {
 			{ "type", "object" },
 			{ "description", R"(Names of collision layers by index ("0" to "31"), e.g. {"1": "Player", "2": "Debris"}; "" or null clears )"

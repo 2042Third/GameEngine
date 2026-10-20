@@ -48,8 +48,8 @@ namespace Strata
 
 		// The largest values a scene may ask for, whether its file or a command sets them. A world's room is bounded by
 		// MaxBodies (its bodies wait beyond it); a scene holds at most Scene::c_MaxEntities (2^20 - 1) entities, so 2^21
-		// bodies have room for all of them, with the automatic sizing's headroom. box3d reserves its storage up to the
-		// automatic room at once and grows it while bodies come (see PhysicsWorld::GetReservedBytes).
+		// bodies have room for all of them, with the automatic sizing's headroom. box3d reserves the room at once up to
+		// PhysicsWorld::c_MaxBodiesReservedAtCreation and grows its storage beyond it while bodies come.
 		static constexpr uint32_t c_MaxBodiesLimit = 1u << 21;
 		static constexpr uint32_t c_MaxContactConstraintsLimit = 1u << 19;
 
