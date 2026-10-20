@@ -18,7 +18,8 @@ message with what to install and where its log is); [Docs/Releases/](Docs/Releas
 
 - **Engine core:** an entity-component system (EnTT) with reflection-driven components, hierarchy and
   prefabs, a job system, and UTF-8 file handling. Scenes hold up to 1,048,575 entities and a frame costs what changed
-  (transforms, activity and lookups are cached); an always-on frame profiler times the stages of every frame.
+  (transforms, activity and lookups are cached); an always-on frame profiler times the stages of every frame,
+  on the CPU and the GPU. Engine services are modules, and games can be built without physics, audio or animation.
 - **Assets:** stable handles stored in `.meta` sidecars, cached imports that run in the background and are redone when
   sources change, hot reload, and asynchronous streaming within memory budgets. Textures are block-compressed on import
   (BC7, BC1, BC4, BC5) and stream mip by mip, from their smallest levels up to the resolution the screen needs. Shipped
@@ -27,16 +28,23 @@ message with what to install and where its log is); [Docs/Releases/](Docs/Releas
   Radiance HDR), audio (WAV, MP3, FLAC, Ogg Vorbis) and TrueType fonts (validated before use).
 - **Scenes:** scenes load in the background, in the editor and in games. Additive sub-scenes stream in slices of
   entities per frame and unload in one step, prefabs compile into prototypes that spawn many instances in one call, and
-  placed instances stay linked to their prefab (apply, revert, unpack).
+  placed instances stay linked to their prefab (per-property overrides, apply, revert, unpack). Worlds larger than
+  memory are split into cells and layers that stream around the camera or other sources, in games and in the editor.
+  Saves run in the background, large projects open while their assets are scanned, and exports cook scenes into a
+  binary form.
 - **Rendering:** physically based shading with image-based lighting from HDR environment maps or a procedural sky,
-  clustered point and spot lights, cascaded soft shadows (PCSS), ground-truth ambient occlusion, HDR with
-  automatic exposure, bloom, tone mapping, color grading and FXAA, GPU skinning, signed-distance-field text, and editor
-  overlays (grid, selection outlines, debug shapes). A persistent render scene with a spatial index culls what is out
-  of view and uploads only what changed, and instancing works across materials.
+  clustered point and spot lights, cascaded soft shadows (PCSS), ground-truth ambient occlusion, HDR with automatic
+  exposure, bloom, tone mapping, color grading and FXAA, GPU skinning, signed-distance-field text, and editor overlays
+  (grid, selection outlines, debug shapes). The scene is kept on the GPU, which culls it (frustum, size and two-phase
+  occlusion, for the view and the shadow cascades) and draws it indirectly from one geometry pool; what the GPU sees
+  decides which textures and mip levels stream in, rendering is camera-relative so far-away worlds keep their precision,
+  and levels of detail are chosen by their projected error.
 - **Physics:** Jolt rigid bodies with box, sphere, capsule and mesh colliders, triggers, collision events,
   raycasts and overlap queries, named collision layers, and character controllers that climb steps and slopes, ride
   moving ground and push bodies. When the fixed steps cannot keep up with real time, the game slows down instead of
   falling further behind.
+- **Game UI:** screen-space and world-space canvases with anchored layouts, text, images, masks and widgets (buttons,
+  toggles, sliders, input fields) driven by the mouse, keyboard and gamepads, built in the editor or from scripts.
 - **Audio:** miniaudio playback with spatial sources, a listener that follows the camera or a listener
   component, and one-shot sounds.
 - **Animation:** skeletons, clips and skinned meshes from glTF, and animation controllers (`.stanimator`) with states,
@@ -45,20 +53,23 @@ message with what to install and where its log is); [Docs/Releases/](Docs/Releas
 - **Scripting:** game logic in C++ script modules built against a small SDK and a C ABI, so they never link the engine.
   Scripts create, change and destroy entities and components, spawn prefabs, load sub-scenes, read input (keyboard,
   mouse, gamepads, cursor modes), drive physics (forces, velocities, raycasts, collision and trigger callbacks,
-  character controllers) and animators, play audio, set the game's window mode, keep save files, and load scenes or quit
-  the game. Script crashes (access violations, exceptions, and on Windows aborts) disable the script instead of taking
-  down the editor or the game, and modules hot reload while the game plays, keeping their fields.
+  character controllers) and animators, play audio, build game UI, stream a world's cells, set the game's window mode,
+  keep save files, and load scenes or quit the game. Script crashes (access violations, exceptions, and on Windows
+  aborts) disable the script instead of taking down the editor or the game, and modules hot reload while the game plays,
+  keeping their fields.
 - **Editor:** a launcher (templates, samples, recent projects) and dockable panels (viewport with gizmos, hierarchy,
   inspector that edits many entities at once, asset tab, content browser with thumbnails, console, problems, activity,
   streaming and performance) in its own "Bedrock" look (Inter and JetBrains Mono type, Lucide icons, sharp at any
   display scale), undo/redo for every edit, autosave and crash recovery, deletes that go to the project's trash, play
-  and simulate modes, game scripts made, built and hot reloaded from the editor (opened in your code editor, with CMake
-  presets for IDEs), and game export in the background. Every operation is an editor command with a JSON Schema, so
-  scripts, tests and AI agents use the same API as the UI.
+  and simulate modes with a Game view beside the Scene view, worlds edited cell by cell, game scripts made, built and
+  hot reloaded from the editor (opened in your code editor, with CMake presets for IDEs), and game export in the
+  background. Every operation is an editor command with a JSON Schema, so scripts, tests and AI agents use the same API
+  as the UI.
 - **Automation:** the editor serves its commands over a local, token-authenticated JSON-RPC connection. `StrataCLI`
   drives it from the command line and is also an MCP server, so AI agents can build a game from scratch without anyone
-  touching the editor. Agents play-test with simulated input and viewport captures, and the Activity panel lists every
-  command with who ran it and exports a session as a command script that repeats it.
+  touching the editor. Agents play-test deterministically (fixed steps, scripted input sequences) and look through
+  viewport captures, and the Activity panel lists every command with who ran it and exports a session as a command
+  script that repeats it.
 - **Runtime:** plays exported games (`<Game>` executable, `.stgame` manifest, `.stpak` asset pack and the
   game's script module), which can play a loading scene while the start scene loads. With `--headless` it runs the
   simulation without a window or GPU, at 60 frames per second.

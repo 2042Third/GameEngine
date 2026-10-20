@@ -7,7 +7,7 @@
 		{
 			"Directory": "Tetris",
 			"Name": "Tetris",
-			"Description": "The falling-block classic, made by an AI agent through the editor alone: C++ game scripts, a text HUD and sounds."
+			"Description": "The falling-block classic, made by an AI agent through the editor alone: C++ game scripts, a game UI HUD and sounds."
 		}
 	]
 }
