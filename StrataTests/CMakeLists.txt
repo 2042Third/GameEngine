@@ -102,13 +102,14 @@ set(STRATA_PERF_RESULTS_DIR "${CMAKE_BINARY_DIR}/PerfResults")
 
 add_executable(StrataTests ${STRATA_TEST_SOURCES})
 strata_configure_target(StrataTests)
-# GCC before 14.4 reports false -Warray-bounds errors at -O3 in the tests' Dist build (asserts compiled out change what
-# is inlined): a memcpy into a std::string temporary or a struct holding strings, "forming offset [32, 48] is out of the
-# bounds [0, 32]", where libstdc++ copies into the string's heap buffer, not its 32-byte object. GCC 14.2 (Ubuntu 24.04,
-# the release workflow's compiler) reports it in five test files; GCC 14.4 compiles the same commands clean. The engine
-# keeps the warning on every compiler.
+# GCC before 14.4 reports false -Warray-bounds and -Wstringop-overflow errors at -O3 in the tests' Dist build (asserts
+# compiled out change what is inlined): a memcpy into a std::string temporary or a struct holding strings, "forming
+# offset [32, 48] is out of the bounds [0, 32]" or "writing 33 bytes into a region of size 16", where libstdc++ copies
+# into the string's heap buffer, not its 32-byte object or 16-byte inline buffer. GCC 14.2 (Ubuntu 24.04, the release
+# workflow's compiler) reports both in five test files; GCC 14.4 compiles the same commands clean. The engine keeps the
+# warnings on every compiler.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14.4)
-	target_compile_options(StrataTests PRIVATE -Wno-array-bounds)
+	target_compile_options(StrataTests PRIVATE -Wno-array-bounds -Wno-stringop-overflow)
 endif()
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_TEST_SOURCES})
 # The engine with its tooling (the asset pipeline: importers; the network: the RPC tests; ImGui: the UI tests).
