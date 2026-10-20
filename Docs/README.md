@@ -34,6 +34,8 @@ Guides for people making games in the editor:
 
 What each release of Strata delivers, for the people who download it, and what the archives hold:
 
+- [Releases/0.4.0.md](Releases/0.4.0.md): Strata 0.4.0 (wave 4: worlds streamed in cells, GPU-driven rendering, game
+  UI, background saves, the Game view, prefab overrides, exact play-testing, engine modules).
 - [Releases/0.3.0.md](Releases/0.3.0.md): Strata 0.3.0, the first release (waves 1 to 3).
 - [Releases/PackageReadme.md](Releases/PackageReadme.md): the `README.md` of the release archives (requirements, first
   start, making a game, connecting an AI agent). How releases are cut: DeveloperGuide.md, "Releases".

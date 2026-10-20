@@ -12,7 +12,7 @@ Releases for Windows (x64), Linux (x64, Ubuntu 24.04 or newer) and macOS (Apple 
 [releases page](https://github.com/2042Third/GameEngine/releases): unpack the archive and run `StrataEditor`. Its
 `README.md` lists what each platform needs (a GPU with a Vulkan 1.2 driver; started without one, the editor says so in a
 message with what to install and where its log is); [Docs/Releases/](Docs/Releases/) has the notes of every release
-([0.3.0](Docs/Releases/0.3.0.md) is the first).
+([0.4.0](Docs/Releases/0.4.0.md) is the latest, [0.3.0](Docs/Releases/0.3.0.md) the first).
 
 ## Features
 

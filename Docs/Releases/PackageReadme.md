@@ -17,7 +17,7 @@ project's releases page: https://github.com/2042Third/GameEngine/releases
 | `StrataCLI` | Command-line client of a running editor, and an MCP server for AI agents (`StrataCLI mcp`). |
 | `Samples/` | Finished games to learn from (Tetris). The editor opens copies of them (Open Sample). |
 | `StrataScriptCore/` | The script SDK: the headers your scripts include and the CMake package their build uses. |
-| `Docs/Manual/` | Guides for making games, such as `Scripting.md`. |
+| `Docs/Manual/` | Guides for making games: `Scripting.md`, `Worlds.md`, `Prefabs.md`, `GameView.md` and `GameUI.md`. |
 | `Skills/` | Guides for AI agents that make games with the editor (see "Connect an AI agent"). |
 | `StrataInstall.json` | Marks this folder as a Strata installation. Keep it next to the executables. |
 | `ThirdPartyNotices.md` | The third-party components Strata contains and their licenses. |
@@ -44,8 +44,8 @@ headless (`StrataEditor --no-gpu`, for automation and exports) and games run wit
 
 - **macOS 14 or newer, Apple silicon.** Vulkan runs on Metal through MoltenVK, which is not in this folder: install the
   Vulkan SDK from https://vulkan.lunarg.com/sdk/home#mac (choose "System Global Installation"), or run
-  `brew install molten-vk vulkan-loader`. The macOS build is new: it is tested headless, but the editor's window has not
-  been tried on a Mac yet (see the release notes).
+  `brew install molten-vk vulkan-loader`. The macOS build has been run on one Mac so far, an Apple M2 Max (see the
+  release notes).
 
 **Building scripts** needs a C++ compiler and CMake 3.25 or later on your machine. The editor looks for them when it
 first builds scripts and says exactly what is missing:
@@ -81,12 +81,15 @@ and get its exit code, pipe its output, e.g. `.\StrataEditor --version | Write-O
 
 1. Start `StrataEditor`. In the launcher choose **New Project**, pick the **Basic 3D** template (a lit scene with a
    camera, a sun, a sky and a ground), a name and a folder. Or choose **Open Sample** and open a copy of Tetris.
-2. Build the scene with the viewport, the Hierarchy and the Inspector. Drop models, textures and sounds onto the window
-   to import them.
+2. Build the scene with the Scene view, the Hierarchy and the Inspector. Drop models, textures and sounds onto the
+   window to import them. Menus and HUDs are UI elements (**Hierarchy > + > UI**, see `Docs/Manual/GameUI.md`); a level
+   too large to keep loaded is a world of streamed cells (**New > World** in the Content Browser, see
+   `Docs/Manual/Worlds.md`).
 3. Write scripts in the project's `Scripts` folder (**Scripts > New Script...** starts one) and build them with
    **Scripts > Build Scripts** (Ctrl+B). Build errors are listed in the Problems panel; a double click opens the line.
    Attach a script in the Inspector (**Add Component > Script**) and press **Play**: Play builds changed scripts first,
-   and rebuilding while the game plays reloads them without stopping it. `Docs/Manual/Scripting.md` describes the SDK.
+   and rebuilding while the game plays reloads them without stopping it. The Game view shows the game as a player sees
+   it, at the resolution you pick (`Docs/Manual/GameView.md`). `Docs/Manual/Scripting.md` describes the SDK.
 4. Choose the start scene (**File > Set as Start Scene**) and export with **File > Export Game...**. The export folder
    holds everything the game needs: run the game's executable there.
 
@@ -98,10 +101,12 @@ The launcher's "Connect an AI agent" section shows the exact command. For Claude
 claude mcp add strata -- "<this folder>/StrataCLI" mcp
 ```
 
-The agent then sees every editor command as a tool, and can start an editor itself (headless or with a window). The
-guides in `Skills/` teach an agent the editor's commands (`strata-editor-automation`), the script SDK
-(`strata-scripting`) and the whole path from an empty project to an exported game (`strata-make-a-game`). For Claude
-Code, copy the three folders into `~/.claude/skills/` (every project) or into your game project's `.claude/skills/`.
+The agent then sees the editor's most used commands as tools (the `core` toolset; it can turn on the others, such as
+`scene`, `ui` or `world`, or you start the server with `--toolsets all`), and can start an editor itself (headless or
+with a window). The guides in `Skills/` teach an agent the editor's commands (`strata-editor-automation`), the script
+SDK (`strata-scripting`) and the whole path from an empty project to an exported game (`strata-make-a-game`). For
+Claude Code, copy the three folders into `~/.claude/skills/` (every project) or into your game project's
+`.claude/skills/`.
 
 ## When something goes wrong
 
