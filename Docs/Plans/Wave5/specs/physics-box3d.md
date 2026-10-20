@@ -518,6 +518,16 @@ scripts (and `Editor/TetrisCommands.json.in`) pass on box3d. *Accept:* they pass
 tuning causes (bounces, friction, character feel, continuous collision) is listed in the report, and fixed in the engine
 when it is a defect.
 
+As made (after merging main at 11b5449e; Jolt's values from the samples' report): every sample regression passed on box3d
+before any change. Differences: the Playground's pour threw about 40 of its 100 balls over the pit's walls (none under
+Jolt) because the script spawned the ball prefab at scale 1 (1 m balls 0.6 m apart, overlapping), which box3d pushes apart
+at up to 3 m/s where Jolt separated them gently: a sample defect, fixed (balls spawn at the prefab's scale; the regression
+now pours and expects all 600 balls in the pit). The tower settles with 1 cm of drift (Jolt 11-15 cm); dominoes 64 of 64,
+ghosts 8, goal 5 of 5, the pins fall, as under Jolt. The Third-Person robot walks 4.5 m and jumps 1.50 m as under Jolt
+(4.5 m, 1.47-1.50 m); it pushes the crate 3.9 m in the regression's 2 s (Jolt 2.9 m), since Strata's mover keeps the
+character's pace while pushing where Jolt's character slowed against the crate (the `PushBodies` formula is unchanged), and
+the crate still drops into the pit as the course's step. The Open World's explorer walks and stands on the terrain as before.
+
 ### 7.1 Budgets
 
 - Untouched: every existing entry's `Measured` and `Budget`.
