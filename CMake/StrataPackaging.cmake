@@ -13,18 +13,20 @@
 #   Skills/                                  the agent skills for making games with the editor
 #
 # `cpack` packs it as Strata-<version>-<platform>.zip on Windows and .tar.gz on Linux and macOS, with the folder of that
-# name at its top. STRATA_PACKAGE_VERSION names the version in the file name (the release workflow passes the tag's,
-# e.g. 0.3.0-rc1); it must start with the project's version.
+# name at its top. STRATA_PACKAGE_VERSION names the version in the file name: empty for the project's version, or the
+# project's version with a pre-release suffix (the release workflow passes the tag's, e.g. 0.4.0-rc1).
 
 if(NOT TARGET StrataEditor OR NOT TARGET StrataRuntime OR NOT TARGET StrataCLI)
 	message(STATUS "Strata packaging: the editor, the runtime and the CLI are not all built; no install rules")
 	return()
 endif()
 
-set(STRATA_PACKAGE_VERSION "${PROJECT_VERSION}" CACHE STRING "The version in the release archive's name (the project's version, or it with a pre-release suffix)")
-if(NOT STRATA_PACKAGE_VERSION MATCHES "^${PROJECT_VERSION}(-[0-9A-Za-z.]+)?$")
-	message(FATAL_ERROR "STRATA_PACKAGE_VERSION '${STRATA_PACKAGE_VERSION}' is not the project's version ${PROJECT_VERSION} (with an optional "
-		"pre-release suffix such as -rc1): bump project(Strata VERSION) in CMakeLists.txt, or package the version it names")
+include(StrataPackageVersion)
+set(STRATA_PACKAGE_VERSION "" CACHE STRING
+	"The version in the release archive's name: empty for the project's version, or it with a pre-release suffix such as -rc1")
+strata_resolve_package_version(_strataPackageVersion _strataPackageVersionError "${PROJECT_VERSION}" "${STRATA_PACKAGE_VERSION}")
+if(_strataPackageVersionError)
+	message(FATAL_ERROR "${_strataPackageVersionError}")
 endif()
 
 # The platform part of the archive's name.
@@ -85,10 +87,10 @@ endforeach()
 
 set(CPACK_PACKAGE_NAME "Strata")
 set(CPACK_PACKAGE_VENDOR "Strata")
-set(CPACK_PACKAGE_VERSION "${STRATA_PACKAGE_VERSION}")
+set(CPACK_PACKAGE_VERSION "${_strataPackageVersion}")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${PROJECT_DESCRIPTION}")
 set(CPACK_PACKAGE_HOMEPAGE_URL "${PROJECT_HOMEPAGE_URL}")
-set(CPACK_PACKAGE_FILE_NAME "Strata-${STRATA_PACKAGE_VERSION}-${STRATA_PACKAGE_PLATFORM}")
+set(CPACK_PACKAGE_FILE_NAME "Strata-${_strataPackageVersion}-${STRATA_PACKAGE_PLATFORM}")
 set(CPACK_PACKAGE_DIRECTORY "${PROJECT_BINARY_DIR}/Packages")
 if(WIN32)
 	set(CPACK_GENERATOR "ZIP")

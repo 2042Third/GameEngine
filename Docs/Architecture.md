@@ -3995,8 +3995,9 @@ beside the editor, `project.samples` reads `Samples/` beside it, the launcher's 
 marker makes an editor beside it an installed one (`FindEngineInstallation`): its script builds use the folder as
 `STRATA_ENGINE_DIR` and find their toolchain on the machine ([Editor](#editor), "The toolchain of script builds"), since
 the paths baked in at the build machine's configure step mean nothing where the archive is unpacked. Nothing else
-depends on where Strata was built. Archives are named `Strata-<STRATA_PACKAGE_VERSION>-<platform>` (the project's
-version, or it with a pre-release suffix the release workflow passes; configuring refuses another), with that folder at
+depends on where Strata was built. Archives are named `Strata-<version>-<platform>`: the project's version, or it with a
+pre-release suffix the release workflow passes as `STRATA_PACKAGE_VERSION` (empty by default, so a version bump needs
+no change to a build directory's cache; configuring refuses another version), with that folder at
 their top. `StrataEditor.Install` installs each build and makes a game with the installed editor alone
 (`StrataTests/Editor/InstallEndToEnd.cmake`); `.github/workflows/release.yml` builds, tests, packs and publishes the
 archives (DeveloperGuide.md, "Releases").

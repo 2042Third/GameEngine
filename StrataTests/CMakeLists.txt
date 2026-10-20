@@ -282,6 +282,10 @@ add_test(NAME StrataTests.GPU
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
 set_tests_properties(StrataTests.GPU PROPERTIES LABELS "gpu")
 
+# The version in the release archives' names: empty follows the project's version, other values must be it with an
+# optional pre-release suffix (CMake/StrataPackageVersion.cmake).
+add_test(NAME StrataPackaging.Version COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/Packaging/PackageVersionTests.cmake")
+
 # Games contain no tooling: the runtime's linker map names no object or library of Dear ImGui, ImGuizmo, the asset
 # pipeline, the network or zstd's compressor (Architecture/CheckNoTooling.cmake; the configure checks what it links).
 if(TARGET StrataRuntime)
