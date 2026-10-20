@@ -115,9 +115,10 @@ Binaries land in `build/<preset>/bin/<Config>/`:
 
 Games can be play-tested without a person: while a game runs in the editor, the `input.key`, `input.mouseButton`,
 `input.mouseMove` and `input.scroll` commands press keys and buttons the way a player would, and `viewport.capture`
-returns the frame as a PNG. [`Samples/Tetris`](Samples/Tetris) is a complete game an AI agent made this way, entirely
-through editor commands: open a copy of it from the launcher (**Open Sample**), build its scripts (Ctrl+B) and press
-Play (arrow keys, Space, Z, P, R).
+returns the frame as a PNG. [`Samples/PhysicsPlayground`](Samples/PhysicsPlayground) (six physics stations, about 600
+bodies) and [`Samples/Tetris`](Samples/Tetris) are complete games an AI agent made this way, entirely
+through editor commands: open a copy of one from the launcher (**Open Sample**) and press Play, which builds its scripts
+first.
 
 Every step is also available as an editor command. For example, this command script creates a lit cube
 and saves the scene:
@@ -145,7 +146,7 @@ assets, scripts, scene, play-testing, export); `.claude/skills/strata-editor-aut
 | `StrataCLI/` | The automation client and MCP server. |
 | `StrataScriptCore/` | The script SDK and ABI that game code is written against. |
 | `StrataTests/` | Tests, test script modules, and the feature test project, which uses every component and the whole script API. |
-| `Samples/` | Example games, made through the editor by an AI agent (`Tetris`). |
+| `Samples/` | Example games, made through the editor by an AI agent: `PhysicsPlayground` (600 bodies to play with), `Tetris`. |
 | `.claude/skills/` | Task guides for AI agents working on the engine or making games with it. |
 
 ## Contributing

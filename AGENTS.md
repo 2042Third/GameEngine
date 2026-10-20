@@ -39,7 +39,7 @@ the work: checklist item 5.
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
 | `StrataTests/` | doctest unit tests, test helpers, the feature test project, and the layer table (`Architecture/Layers.json`, `LayeringAllowlist.txt`). |
-| `Samples/` | Games an AI agent made through the editor (`Tetris`), offered as copies by the launcher; open one in place only to change it ([details](Docs/DeveloperGuide.md#repository-layout)). |
+| `Samples/` | Games an AI agent made through the editor (`Tetris`, `PhysicsPlayground`), offered as copies by the launcher; open one in place only to change it ([details](Docs/DeveloperGuide.md#samples)). |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest, the build's git commit). |
 | `Tools/` | Standard-library Python tools: generators whose outputs are committed, perf, lint and CI helpers ([details](Docs/DeveloperGuide.md#repository-layout)). |
 | `Docs/` | `README.md` (index), `DeveloperGuide.md` (this file's details), `Architecture.md`, `Roadmap.md` (update its Status when a wave lands), `Manual/`, `Releases/` ([details](Docs/DeveloperGuide.md#repository-layout)). |
@@ -129,8 +129,8 @@ Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
   `Feature.stscene` and its scripts, a feature script fails a check or does not complete, the run logs a warning or
   error not in `c_ExpectedLogMessages`, or an asset type has no asset, imports with warnings or has its `.meta`
   rewritten ([Feature test](Docs/DeveloperGuide.md#feature-test): what counts, how to extend it).
-- Package tests (label `package`) need CMake and a compiler; a change to `Samples/Tetris` must keep
-  `Editor/TetrisCommands.json.in` passing.
+- Package tests (label `package`) need CMake and a compiler; a change to a sample must keep its
+  `Editor/<Sample>Commands.json.in` passing.
 
 ## Code style (Hazel conventions)
 
@@ -257,6 +257,7 @@ The threading, NVRHI, asset, layer, registration, engine module and transform ru
 
 Details: [Asset pipeline](Docs/DeveloperGuide.md#asset-pipeline).
 
+- Sample assets are CC0 or CC-BY, credited in the sample's `CREDITS.md` and `ThirdPartyNotices.md` (`Samples.Content`).
 - Every asset file has a committed `<file>.meta` (its handle): move or rename through
   `EditorAssetManager::MoveAsset`/`MoveFolder`, delete through `MoveToTrash`, and read folders and referencers from the
   manager's indexes, never from the disk per frame.

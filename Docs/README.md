@@ -68,6 +68,11 @@ Task playbooks for people and AI agents, in `.claude/skills/<name>/SKILL.md`:
 
 ## Samples
 
+Each sample is a project with its `README.md` (what it shows, controls, how it was made), `CREDITS.md` and `Picture.png`,
+and a CTest that plays it through the editor (`StrataTests/Editor/SampleProject.cmake`, [Samples](DeveloperGuide.md#samples)):
+
+- [Samples/PhysicsPlayground](../Samples/PhysicsPlayground/): six physics stations and 615 bodies to fly through: stacks,
+  dominoes, a ball pit, a goal, ghosts on their own collision layer and a ramp; shots, grabbing and a tool panel.
 - [Samples/Tetris](../Samples/Tetris/): a complete game an AI agent made through editor commands only (`Tetris.stproj`,
   `Assets/` with `.meta` files, C++ scripts in `Scripts/`). Open a copy of it from the launcher (Open Sample, or
   `project.openSample`) and press Play, which builds its scripts first; `StrataEditor --project Samples/Tetris` opens the
