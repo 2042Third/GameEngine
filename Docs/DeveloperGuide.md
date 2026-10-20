@@ -293,7 +293,8 @@ Ctrl+C, the dialogs' text) and `StrataEditor.Install` check this and the executa
 **Packages:** `cmake --install build/<preset> --config Dist --prefix <dir>` installs Strata the way a release archive
 holds it (`CMake/StrataPackaging.cmake`): the executables side by side, `StrataInstall.json` (which makes the editor
 build scripts with the installation's SDK and a toolchain it finds on the machine, see Scripting, "Building and loading
-scripts"), `README.md` (from `Docs/Releases/PackageReadme.md`), `ThirdPartyNotices.md`, `Samples/`, the script SDK in
+scripts"), `README.md` (from `Docs/Releases/PackageReadme.md`), `ThirdPartyNotices.md`, `Samples/` (the sample games: about 14 MB of a
+compressed archive in wave 5, bounded by `Samples.Content`, see Samples), the script SDK in
 `StrataScriptCore/` (with glm's headers in `ThirdParty/glm`), `Docs/Manual/` and the skills for making games in
 `Skills/`. `cpack --config build/<preset>/CPackConfig.cmake -C Dist` packs it into
 `build/<preset>/Packages/Strata-<version>-<windows-x64|linux-x64|macos-arm64>.<zip|tar.gz>` (Linux executables
