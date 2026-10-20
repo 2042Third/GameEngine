@@ -5,10 +5,8 @@
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Physics/PhysicsRuntime.h"
 
-#include <Jolt/Jolt.h>
-#include <Jolt/Core/StreamOut.h>
-#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
-#include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <box3d/box3d.h>
+#include <box3d/collision.h>
 
 #include <algorithm>
 #include <atomic>
@@ -61,31 +59,30 @@ namespace Strata
 			return s_Cache;
 		}
 
-		class ByteStreamOut final : public JPH::StreamOut
-		{
-		public:
-			explicit ByteStreamOut(std::vector<uint8_t>& bytes)
-				: m_Bytes(bytes)
-			{
-			}
-
-			void WriteBytes(const void* data, size_t byteCount) override
-			{
-				const uint8_t* begin = static_cast<const uint8_t*>(data);
-				m_Bytes.insert(m_Bytes.end(), begin, begin + byteCount);
-			}
-
-			bool IsFailed() const override { return false; }
-		private:
-			std::vector<uint8_t>& m_Bytes;
-		};
-
 		bool HasFinitePositions(const PhysicsMeshData& data)
 		{
 			return std::all_of(data.Positions.begin(), data.Positions.end(), [](const glm::vec3& position)
 			{
 				return std::isfinite(position.x) && std::isfinite(position.y) && std::isfinite(position.z);
 			});
+		}
+
+		std::atomic<uint64_t> s_LiveShapes = 0;
+
+		// The convex hull of the points: at most c_PreferredHullVertices vertices, else c_SafeHullVertices (see
+		// PhysicsMeshShapes); null if box3d refuses both.
+		b3HullData* CookHull(const std::vector<b3Vec3>& points)
+		{
+			const int count = static_cast<int>(points.size());
+			{
+				// The first attempt may exceed box3d's face or edge limits, which box3d logs; that is expected here.
+				Box3DLogSuppression suppression;
+				if (b3HullData* hull = b3CreateHull(points.data(), count, std::min(count, PhysicsMeshShapes::c_PreferredHullVertices)))
+					return hull;
+			}
+			if (count <= PhysicsMeshShapes::c_SafeHullVertices)
+				return nullptr;
+			return b3CreateHull(points.data(), count, PhysicsMeshShapes::c_SafeHullVertices);
 		}
 
 		// Validates the data and builds the shape; the result is Ready or Failed.
@@ -98,58 +95,75 @@ namespace Strata
 				result.Error = "its vertex positions are not all finite";
 				return result;
 			}
-
-			JPH::ShapeSettings::ShapeResult shape;
-			if (convex)
+			if (data.Positions.size() > static_cast<size_t>(INT32_MAX) || data.Indices.size() / 3 > static_cast<size_t>(INT32_MAX))
 			{
-				JPH::Array<JPH::Vec3> points;
-				points.reserve(data.Positions.size());
-				for (const glm::vec3& position : data.Positions)
-					points.push_back(JPH::Vec3(position.x, position.y, position.z));
-				shape = JPH::ConvexHullShapeSettings(points, JPH::cDefaultConvexRadius).Create();
-			}
-			else
-			{
-				if (data.Indices.empty() || data.Indices.size() % 3 != 0)
-				{
-					result.Error = fmt::format("a triangle list needs a positive multiple of 3 indices, it has {}", data.Indices.size());
-					return result;
-				}
-
-				JPH::VertexList vertices;
-				vertices.reserve(data.Positions.size());
-				for (const glm::vec3& position : data.Positions)
-					vertices.push_back(JPH::Float3(position.x, position.y, position.z));
-
-				JPH::IndexedTriangleList triangles;
-				triangles.reserve(data.Indices.size() / 3);
-				for (size_t index = 0; index < data.Indices.size(); index += 3)
-				{
-					const uint32_t i0 = data.Indices[index];
-					const uint32_t i1 = data.Indices[index + 1];
-					const uint32_t i2 = data.Indices[index + 2];
-					if (i0 >= vertices.size() || i1 >= vertices.size() || i2 >= vertices.size())
-					{
-						result.Error = fmt::format("it references vertices beyond its {} vertices", vertices.size());
-						return result;
-					}
-					triangles.push_back(JPH::IndexedTriangle(i0, i1, i2));
-				}
-				// The settings remove degenerate and duplicate triangles; a mesh without any valid triangle fails to build.
-				shape = JPH::MeshShapeSettings(std::move(vertices), std::move(triangles)).Create();
-			}
-
-			if (shape.HasError())
-			{
-				result.Error = shape.GetError().c_str();
+				result.Error = "it has too many vertices or triangles";
 				return result;
 			}
 
-			Ref<std::vector<uint8_t>> bytes = CreateRef<std::vector<uint8_t>>();
-			ByteStreamOut stream(*bytes);
-			shape.Get()->SaveBinaryState(stream);
+			std::vector<b3Vec3> vertices;
+			vertices.reserve(data.Positions.size());
+			for (const glm::vec3& position : data.Positions)
+				vertices.push_back(b3Vec3 { position.x, position.y, position.z });
+
+			if (convex)
+			{
+				if (vertices.size() < 4)
+				{
+					result.Error = fmt::format("a convex hull needs at least 4 points, it has {}", vertices.size());
+					return result;
+				}
+				b3HullData* hull = CookHull(vertices);
+				if (!hull)
+				{
+					result.Error = "its points do not span a volume (a convex hull cannot be built)";
+					return result;
+				}
+				result.CookState = PhysicsMeshShapes::State::Ready;
+				result.Shape = CreateRef<PhysicsCookedShape>(hull, nullptr);
+				return result;
+			}
+
+			if (data.Indices.empty() || data.Indices.size() % 3 != 0)
+			{
+				result.Error = fmt::format("a triangle list needs a positive multiple of 3 indices, it has {}", data.Indices.size());
+				return result;
+			}
+			if (vertices.size() < 3)
+			{
+				result.Error = fmt::format("a triangle mesh needs at least 3 vertices, it has {}", vertices.size());
+				return result;
+			}
+			std::vector<int32_t> indices;
+			indices.reserve(data.Indices.size());
+			for (const uint32_t index : data.Indices)
+			{
+				if (index >= vertices.size())
+				{
+					result.Error = fmt::format("it references vertices beyond its {} vertices", vertices.size());
+					return result;
+				}
+				indices.push_back(static_cast<int32_t>(index));
+			}
+
+			b3MeshDef definition = {};
+			definition.vertices = vertices.data();
+			definition.stride = 0;
+			definition.indices = indices.data();
+			definition.vertexCount = static_cast<int>(vertices.size());
+			definition.triangleCount = static_cast<int>(indices.size() / 3);
+			// Shared edges let convex bodies slide over the inner edges of the mesh without catching on them.
+			definition.identifyEdges = true;
+			definition.clockWiseWinding = false; // Counter-clockwise front faces (PhysicsMeshData)
+			// box3d skips degenerate triangles; a mesh without any other fails to build.
+			b3MeshData* mesh = b3CreateMesh(&definition, nullptr, 0);
+			if (!mesh)
+			{
+				result.Error = "it has no triangle with an area (a triangle mesh cannot be built)";
+				return result;
+			}
 			result.CookState = PhysicsMeshShapes::State::Ready;
-			result.Shape = std::move(bytes);
+			result.Shape = CreateRef<PhysicsCookedShape>(nullptr, mesh);
 			return result;
 		}
 
@@ -157,7 +171,7 @@ namespace Strata
 		{
 			PhysicsMeshShapes::Result result;
 			{
-				// Jolt stays initialized while it cooks, also if the last world goes away meanwhile.
+				// box3d's hooks are installed for the cook (they route its logs and asserts).
 				PhysicsRuntimeReference runtime;
 				result = CookShape(*data, convex);
 			}
@@ -172,6 +186,26 @@ namespace Strata
 			cache.CompletedCount.fetch_add(1, std::memory_order_release);
 		}
 
+	}
+
+	PhysicsCookedShape::PhysicsCookedShape(b3HullData* hull, b3MeshData* mesh)
+		: m_Hull(hull), m_Mesh(mesh)
+	{
+		s_LiveShapes.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	PhysicsCookedShape::~PhysicsCookedShape()
+	{
+		if (m_Hull)
+			b3DestroyHull(m_Hull);
+		if (m_Mesh)
+			b3DestroyMesh(m_Mesh);
+		s_LiveShapes.fetch_sub(1, std::memory_order_relaxed);
+	}
+
+	uint64_t PhysicsCookedShape::GetLiveCount()
+	{
+		return s_LiveShapes.load(std::memory_order_relaxed);
 	}
 
 	PhysicsMeshShapes::Result PhysicsMeshShapes::Request(const Ref<const PhysicsMeshData>& data, bool convex)

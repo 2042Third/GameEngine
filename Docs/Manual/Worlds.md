@@ -57,7 +57,9 @@ goes), **Unpin** it or **Show in Content Browser**. While the game plays, the ma
 
 **Cook** (the Asset panel's Cook button for a World asset, or `world.cook`) measures every changed cell: its entities, physics bodies,
 bounds and the size of what it loads. It writes them into the World asset's index and sizes the persistent scene's
-physics for the busiest place any source can stand, so the game never runs out of room for bodies. Exports cook every
+physics for the busiest place any source can stand, so the physics world starts with room for every body and never
+grows while the game plays (up to 131,072 bodies; beyond that, the physics library grows its storage as cells load,
+which costs a little time in those frames but never leaves a body without collision). Exports cook every
 world for you; cook yourself to see the numbers (and the warnings: entity IDs two cells share, cells beyond 20 km,
 empty cells).
 

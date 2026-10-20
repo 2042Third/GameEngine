@@ -17,24 +17,21 @@ namespace Strata
 	// Query layer mask that accepts every layer.
 	constexpr uint32_t c_AllPhysicsLayers = 0xFFFFFFFFu;
 
-	// Configuration of a physics world. Capacities are set when the world is created; 0 sizes one automatically from the
-	// bodies the scene has then (see PhysicsWorld::ResolveCapacities), and a scene's SceneSettings::PhysicsCapacity overrides
-	// these. A world whose bodies outgrow MaxBodies grows (see PhysicsWorld, "Capacities") up to GrowthLimit. The layer matrix
-	// is the scene's (SceneSettings::PhysicsLayers, which PhysicsSystem applies when it creates the world and when it
-	// changes); PhysicsWorld::SetLayerCollisionMasks changes it at runtime.
+	// Configuration of a physics world. Capacities are the room a world reserves when it is created; 0 sizes one
+	// automatically from the bodies the scene has then (see PhysicsWorld::ResolveCapacities), and a scene's
+	// SceneSettings::PhysicsCapacity overrides these. A world whose bodies outgrow its room grows (see PhysicsWorld,
+	// "Capacities") up to GrowthLimit. The layer matrix is the scene's (SceneSettings::PhysicsLayers, which PhysicsSystem
+	// applies when it creates the world and when it changes); PhysicsWorld::SetLayerCollisionMasks changes it at runtime.
 	struct PhysicsSettings
 	{
-		uint32_t MaxBodies = 0;
-		uint32_t MaxBodyPairs = 0;               // Broad phase pairs that can be processed per step
-		uint32_t MaxContactConstraints = 0;      // Contacts that can be solved per step
-		uint32_t CollisionSteps = 1;             // Collision sub-steps per fixed update (raise for very fast bodies)
-		uint32_t TempAllocatorSize = 0;          // Per-step scratch memory in bytes, 0: sized for the capacities (falls back to the heap when exceeded)
+		uint32_t MaxBodies = 0;                  // Bodies the world reserves room for
+		uint32_t MaxContactConstraints = 0;      // Contacts the world reserves room for
+		uint32_t CollisionSteps = 1;             // Simulation steps per fixed update (raise for very fast bodies)
 		// Longest wait, in seconds of simulation time, at the start for the meshes of mesh colliders (still loading or being
 		// cooked) before the first step; 0 does not wait. See PhysicsWorld.
 		float MeshWaitTimeout = 10.0f;
-		// The most bodies a world may grow to when bodies find it full: a cap on the memory physics reserves (about 80 bytes
-		// per body and more per pair and contact, see PhysicsWorld::EstimateReservedBytes). 0: the engine's limit
-		// (PhysicsCapacitySettings::c_MaxBodiesLimit). A world never shrinks below the MaxBodies it was created with.
+		// The most bodies a world may grow to: a cap on the memory physics uses (see PhysicsWorld::EstimateReservedBytes);
+		// beyond it bodies wait. 0: the engine's limit (PhysicsCapacitySettings::c_MaxBodiesLimit). Never below MaxBodies.
 		uint32_t GrowthLimit = 0;
 
 		// Layer collision matrix: bit j of LayerCollisionMasks[i] is set when layer i collides with layer j. Two layers
@@ -76,16 +73,15 @@ namespace Strata
 	// CollisionEvent, the collision listener types and RaycastHit are defined with the scene services that hand them to other
 	// systems (Scene/SceneServices.h).
 
-	// What a world needed beyond the capacities it was created with: entities that found it full, steps whose body pair or
-	// contact buffers were full. PhysicsSystem remembers it per scene (Scene::GetLineageID), and the next world it creates for
-	// that scene sizes its automatic capacities for at least this much ("the next play start grows the capacity").
+	// What a world needed beyond the room it was created with: the bodies it grew to (and those waiting at its growth limit),
+	// the contacts it held. PhysicsSystem remembers it per scene (Scene::GetLineageID), and the next world it creates for that
+	// scene sizes its automatic room for at least this much ("the next play start reserves the room").
 	struct PhysicsCapacityDemand
 	{
 		uint32_t Bodies = 0;
-		uint32_t BodyPairs = 0;
 		uint32_t ContactConstraints = 0;
 
-		bool IsEmpty() const { return Bodies == 0 && BodyPairs == 0 && ContactConstraints == 0; }
+		bool IsEmpty() const { return Bodies == 0 && ContactConstraints == 0; }
 		bool operator==(const PhysicsCapacityDemand& other) const = default;
 	};
 
@@ -96,27 +92,27 @@ namespace Strata
 		uint32_t DynamicBodyCount = 0;
 		uint32_t KinematicBodyCount = 0;
 		uint32_t ActiveBodyCount = 0;    // Awake bodies (sleeping and static bodies are not simulated), character controllers' presence bodies included
-		uint32_t PendingBodyCount = 0;   // Entities waiting for a body that cannot be built yet (degenerate transform, mesh not loaded, world full)
+		uint32_t PendingBodyCount = 0;   // Entities waiting for a body that cannot be built yet (degenerate transform, mesh not loaded, growth limit)
 		uint32_t CharacterControllerCount = 0; // Character controllers in the simulation (their presence bodies are not in BodyCount)
 		uint32_t ContactPairCount = 0;   // Touching pairs of entities that are tracked (those someone listens to, see ICollisionEventSource)
 		uint64_t PairIndexOperations = 0; // Entries of the per-entity touching pair lists written since the world was created
-		// Capacities of the world (as resolved when it was created) and what overflowed them.
+		// The room of the world (bodies: as it grew since it was created; contacts: as reserved), its growth limit, and what
+		// it needed beyond the room it was created with.
 		uint32_t MaxBodies = 0;
-		uint32_t MaxBodyPairs = 0;
 		uint32_t MaxContactConstraints = 0;
-		uint32_t BodyOverflowCount = 0;  // Entities waiting for a body slot because the world is full (part of PendingBodyCount)
-		uint64_t ContactOverflowSteps = 0; // Steps that dropped contacts or body pairs because their buffers were full
-		PhysicsCapacityDemand Demand;    // What the world needed beyond its capacities so far (empty while they suffice)
+		uint32_t GrowthLimit = 0;
+		uint32_t BodyOverflowCount = 0;  // Entities waiting for a body at the growth limit (part of PendingBodyCount)
+		PhysicsCapacityDemand Demand;    // What the world needed beyond its room so far (empty while it sufficed)
 		// Work of the last step, which grows with the awake bodies and the signaled changes, not with sleeping bodies or the
 		// world's capacity:
 		uint32_t SyncedBodyCount = 0;    // Bodies compared with their entity before the step (awake ones and those with changes)
-		uint32_t CheckedPairCount = 0;   // Touching pairs that could end during the step (those of awake or rebuilt bodies)
+		uint32_t CheckedPairCount = 0;   // Touching pairs of awake bodies, whose points the step refreshed
 		uint32_t WrittenBodyCount = 0;   // Dynamic bodies whose pose was written back to their entity
 		// Body slots read to put the moved bodies in body order for the write-back: the groups of 64 that hold a moved body.
 		uint32_t OrderedSlotCount = 0;
 		uint64_t BuildCount = 0;         // Bodies built or rebuilt since the world was created (attempts that failed included)
-		uint64_t AddBatchCount = 0;      // Batches that added new bodies to the simulation since then (one per activation mode per round of changes)
-		uint32_t SharedShapeCount = 0;   // Box and sphere shapes the world built, each shared by the bodies of its size
+		uint64_t AddBatchCount = 0;      // Rounds of changes that created bodies since then, one per kind (static, moving) they created
+		uint32_t SharedShapeCount = 0;   // Box hulls the world made, each shared by the bodies of its size and placement
 		uint64_t MeshCheckCount = 0;     // Mesh collider bodies checked for changed, arrived or cooked mesh data since then
 		uint64_t StepCount = 0;          // Simulation steps since the world was created
 		uint64_t DroppedSteps = 0;       // Fixed steps the scene dropped since it started (Scene::GetDroppedFixedStepCount)
@@ -125,15 +121,16 @@ namespace Strata
 		uint64_t JobCount = 0;           // Simulation jobs run since the world was created, on any thread
 		uint64_t WorkerJobCount = 0;     // The part of JobCount run by JobSystem worker threads (depends on thread timing)
 		float LastStepTime = 0.0f;       // Wall time of the last step in milliseconds, including transform synchronization
-		// The parts of LastStepTime, in milliseconds: Jolt's own step, and Strata's work around it (bringing the bodies in line
-		// with their entities, writing simulated poses back, turning contacts into events).
-		float JoltStepTime = 0.0f;
+		// The parts of LastStepTime, in milliseconds: the physics library's own step (wall time of its step calls), and
+		// Strata's work around it (bringing the bodies in line with their entities, writing simulated poses back, turning
+		// contacts into events).
+		float LibraryStepTime = 0.0f;
 		float SyncTime = 0.0f;           // Includes CharacterTime
 		float WriteBackTime = 0.0f;
 		float ContactTime = 0.0f;
 		float CharacterTime = 0.0f;      // Moving the character controllers (see CharacterControllerSet)
-		// Growth (see PhysicsWorld, "Capacities"): how often the world grew since it was created, and its last growth (wall
-		// time in milliseconds, MaxBodies before and after).
+		// Growth (see PhysicsWorld, "Capacities"): how often the world outgrew its room since it was created, and its last
+		// growth (wall time in milliseconds of the round of changes that grew it, the room before and after).
 		uint32_t GrowthCount = 0;
 		float LastGrowthMs = 0.0f;
 		uint32_t LastGrowthFrom = 0;
@@ -144,8 +141,8 @@ namespace Strata
 		uint32_t BodiesAddedLastUpdate = 0;
 		uint32_t BodiesRemovedLastUpdate = 0;
 		float ChangeTime = 0.0f;
-		// Broad phase queries that woke the bodies around removed, destroyed, moved or reshaped bodies since the world was
-		// created: bodies removed together are woken around in merged regions, so a cell leaving costs a few dozen.
+		// Tree queries that woke the bodies around moved static bodies since the world was created (box3d wakes the bodies
+		// touching a body it removes, destroys or that is teleported through its contacts).
 		uint64_t WakeQueryCount = 0;
 		// The slices a loaded scene's world was built in while its load prepared it, before the scene ran
 		// (PhysicsSystem::PrepareLoadedScene); 0 for a world built when its scene started.

@@ -2,7 +2,7 @@
 
 Strata is a production-grade 3D game engine written in C++20 with CMake, targeting Windows, Linux
 (Ubuntu 24+) and macOS. It renders through [NVRHI](https://github.com/NVIDIA-RTX/NVRHI) on Vulkan,
-uses GLFW for windowing, glm for math, EnTT for the entity-component system, Jolt for physics and
+uses GLFW for windowing, glm for math, EnTT for the entity-component system, box3d for physics and
 miniaudio for audio. Game logic is written in C++ script modules that are isolated from the engine
 behind a C ABI (crash containment + hot reload).
 
@@ -338,8 +338,8 @@ A world is a persistent scene whose `WorldComponent` names a World asset; its ce
 - Cell membership changes only through `Scene::SetSubSceneOf` and `EditorWorld`; only `EditorWorld` writes cell
   documents, through the `DocumentSaver`. Worlds stay within 20 km of the origin (`WorldData::c_SupportedExtent`).
 - Scenes that will run load with `SceneLoadOptions::PrepareSystems`; loading work draws from the frame's `SceneWorkBudget`.
-- Physics never leaves a body without collision below its growth limit: bodies wait for a slot, never polled, and the
-  world grows between steps.
+- Physics never leaves a body without collision below its growth limit: box3d grows while bodies are created; only at
+  the limit do bodies wait, never polled.
 
 ## Game UI
 

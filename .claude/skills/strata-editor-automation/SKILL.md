@@ -128,7 +128,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Put entities into a world's cells | Edits re-cell by position by themselves; new entities go into `world.edit`'s `editLayer` cell (default "Persistent"); `world.moveEntities {"entities": [...], "layer": "Props"}` (or "Persistent"); `scene.save` writes only dirty cells (`documents`) |
 | How big is a world, which cells changed since its index? | `world.info {"world": "Worlds/Island.stworld"}`: layers (cell size, streaming distance), cells, `index.staleCells`, `maxBodiesInRadius` |
 | Measure a world's cells (bodies, bounds) and size its physics | `world.cook {"world": ...}` with the persistent scene open: reads changed cells only, writes the index, sets the capacity (`apply`, default true; one undo step); fails naming entity IDs cells share |
-| Are physics bodies missing collision, how full is the physics world? | `physics.stats` while playing: bodies, capacity (`maxBodies`, `reservedMB`), `waitingForSlot` (bodies without collision: only a world at its growth limit has them; others grow before their next step), last frame's `addedLastFrame`/`removedLastFrame`, `growths` |
+| Are physics bodies missing collision, how full is the physics world? | `physics.stats` while playing: bodies, capacity (`maxBodies`, the room; `growthLimit`, the most it grows to; `reservedMB`), `waitingForSlot` (bodies without collision: only a world at its growth limit has them; below it box3d grows while bodies are created), last frame's `addedLastFrame`/`removedLastFrame`, `growths` |
 | Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %; `gpu`: the GPU's stages and `boundBy`; `renderStats`: what the viewport's frame drew; `gameRenderStats`: the Game view's) |
 
 Commands added at run time (for example `script.*`, `viewport.*`, `camera.*` when those features are present)
@@ -379,9 +379,10 @@ To rest entities on what is below them,
 **Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist),
 `component.remove`, `entity.setActive`: each takes `"entities": [...]` instead of `"entity"` to change all of them in one
 undo step (as the inspector does for a multi-selection); `entity.rename`, `entity.delete`, `scene.setSettings` (gravity,
-timestep, and `physicsCapacity {maxBodies, maxBodyPairs, maxContactConstraints}` for scenes that spawn many bodies while
-they play; 0 sizes a capacity from the bodies the scene starts with; set capacities in edit mode: they apply when play
-starts; `maxEntitiesInstantiatedPerFrame` and `maxEntitiesDestroyedPerFrame` bound how many entities sub-scenes create
+timestep, and `physicsCapacity {maxBodies, maxContactConstraints}`, the physics world's room when play starts (reserved
+at once up to 131,072 bodies), for scenes that spawn many bodies while they play (the world grows beyond it, in place, at
+a cost); 0 sizes it from the bodies the
+scene starts with; set it in edit mode: it applies when play starts; 0.4.0's `maxBodyPairs` is ignored with a `warning`; `maxEntitiesInstantiatedPerFrame` and `maxEntitiesDestroyedPerFrame` bound how many entities sub-scenes create
 and destroy per frame, 5000 each by default).
 Collision layers: `scene.setSettings {"layerNames": {"1": "Player", "2": "Debris"}, "layerCollisions":
 [{"layers": ["Player", "Debris"], "collide": false}]}` names layers and keeps pairs apart (`resetLayerCollisions: true`

@@ -17,37 +17,31 @@ if(STRATA_COMPILER_CACHE)
 	message(STATUS "Compiler cache: ${STRATA_COMPILER_CACHE_PROGRAM} (precompiled headers: ${STRATA_PRECOMPILED_HEADERS})")
 endif()
 
-# strata_jolt_instruction_sets()
-#   Sets STRATA_USE_<NAME> in the caller's scope for each of Jolt's instruction-set options (USE_SSE4_1, USE_SSE4_2,
-#   USE_AVX, USE_AVX2, USE_AVX512, USE_LZCNT, USE_TZCNT, USE_F16C, USE_FMADD) and STRATA_CROSS_PLATFORM_DETERMINISTIC: the
-#   option's value when it is set (Jolt's option() or the command line), else Jolt's default
-#   (Strata/vendor/JoltPhysics/Build/CMakeLists.txt). Builds without the physics module have no Jolt and read the same.
-function(strata_jolt_instruction_sets)
-	foreach(option IN ITEMS USE_SSE4_1 USE_SSE4_2 USE_AVX USE_AVX2 USE_AVX512 USE_LZCNT USE_TZCNT USE_F16C USE_FMADD
-			CROSS_PLATFORM_DETERMINISTIC CROSS_COMPILE_ARM)
-		if(DEFINED ${option})
-			set(value ${${option}})
-		elseif(option MATCHES "^(USE_AVX512|CROSS_PLATFORM_DETERMINISTIC|CROSS_COMPILE_ARM)$")
-			set(value OFF)
-		else()
-			set(value ON)
-		endif()
-		if(value)
-			set(STRATA_${option} ON PARENT_SCOPE)
-		else()
-			set(STRATA_${option} OFF PARENT_SCOPE)
-		endif()
-	endforeach()
-endfunction()
+# The instruction sets every engine object is compiled for (strata_engine_cpu_options), Strata's own options. Their
+# defaults are the ones the engine was built with before 0.5.0, when its former physics library chose them (x86-64:
+# AVX2 with LZCNT, TZCNT, F16C and FMA; no AVX-512), so the code generation of every engine object stayed the same when
+# physics moved to box3d.
+# STRATA_CROSS_PLATFORM_DETERMINISTIC leaves out fused multiply-adds (-mfma lets the compiler contract floating-point
+# math, which changes results); STRATA_CROSS_COMPILE_ARM targets ARM64 from an x86-64 host. box3d is compiled with its
+# own flags (Strata/vendor/CMakeLists.txt), so its results do not depend on these.
+option(STRATA_USE_SSE4_1 "Compile the engine for SSE 4.1 (x86-64)" ON)
+option(STRATA_USE_SSE4_2 "Compile the engine for SSE 4.2 (x86-64)" ON)
+option(STRATA_USE_AVX "Compile the engine for AVX (x86-64)" ON)
+option(STRATA_USE_AVX2 "Compile the engine for AVX2 (x86-64)" ON)
+option(STRATA_USE_AVX512 "Compile the engine for AVX-512 (x86-64)" OFF)
+option(STRATA_USE_LZCNT "Compile the engine for LZCNT (x86-64)" ON)
+option(STRATA_USE_TZCNT "Compile the engine for TZCNT (x86-64)" ON)
+option(STRATA_USE_F16C "Compile the engine for F16C (x86-64)" ON)
+option(STRATA_USE_FMADD "Compile the engine for fused multiply-adds (x86-64)" ON)
+option(STRATA_CROSS_PLATFORM_DETERMINISTIC "Compile the engine without fused multiply-adds, for results that match across platforms" OFF)
+option(STRATA_CROSS_COMPILE_ARM "Compile the engine for ARM64 from an x86-64 host" OFF)
 
 # strata_engine_cpu_options(<outVariable>)
-#   The instruction-set options Jolt gives every target that links it (Jolt/Jolt.cmake), under Jolt's own conditions and
-#   from strata_jolt_instruction_sets: StrataEngineCodegen compiles every engine object with them, also in builds without
-#   the physics module, so that leaving a module out changes no other code generation (-mfma, for one, lets the compiler
-#   contract floating-point math, which changes results). Strata/CMakeLists.txt checks them against Jolt's whenever Jolt
-#   is built, so the two cannot drift apart.
+#   The compile options of the STRATA_USE_* instruction sets: StrataEngineCodegen compiles every engine object with them,
+#   also in builds without the physics module, so that leaving a module out changes no other code generation. MSVC gets
+#   /arch only with the Visual Studio generators (their platform names the architecture; cl under Ninja gets none), as
+#   the engine always had.
 function(strata_engine_cpu_options outVariable)
-	strata_jolt_instruction_sets()
 	set(options "")
 	if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
 		if(CMAKE_VS_PLATFORM_NAME STREQUAL "x86" OR CMAKE_VS_PLATFORM_NAME STREQUAL "x64")
@@ -60,7 +54,7 @@ function(strata_engine_cpu_options outVariable)
 			endif()
 		endif()
 	elseif(XCODE OR STRATA_CROSS_COMPILE_ARM OR CMAKE_OSX_ARCHITECTURES MATCHES "arm64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
-		# Jolt sets nothing: Xcode builds several architectures at once, and ARM64 needs no options.
+		# Nothing: Xcode builds several architectures at once, and ARM64 needs no options.
 	elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|x86|i386)$")
 		if(STRATA_USE_AVX512)
 			list(APPEND options -mavx512f -mavx512vl -mavx512dq -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c)

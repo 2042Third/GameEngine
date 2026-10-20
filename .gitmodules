@@ -14,10 +14,6 @@
 	path = Strata/vendor/miniaudio
 	url = https://github.com/mackron/miniaudio.git
 	shallow = true
-[submodule "Strata/vendor/JoltPhysics"]
-	path = Strata/vendor/JoltPhysics
-	url = https://github.com/jrouwe/JoltPhysics.git
-	shallow = true
 [submodule "Strata/vendor/entt"]
 	path = Strata/vendor/entt
 	url = https://github.com/skypjack/entt.git
@@ -77,4 +73,8 @@
 [submodule "Strata/vendor/zstd"]
 	path = Strata/vendor/zstd
 	url = https://github.com/facebook/zstd
+	shallow = true
+[submodule "Strata/vendor/box3d"]
+	path = Strata/vendor/box3d
+	url = https://github.com/erincatto/box3d.git
 	shallow = true

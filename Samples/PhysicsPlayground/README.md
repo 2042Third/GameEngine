@@ -15,7 +15,7 @@ through the balls, and a ramp that sends balls into ten pins. An AI agent made i
 | Triggers and contacts: the goal's basket counts balls (`OnTriggerEnter`), the launch pad sends them down the ramp, impacts sound by material (`OnCollisionEnter`) | `Scripts/GoalBasket.cpp`, `LaunchPad.cpp`, `Impact.cpp` |
 | Collision layers: the Ghost layer does not collide with the Ball layer (the scene's layer matrix) | Scene settings, the Ghost prefab |
 | Raycasts and impulses: shoot a ball through the cursor, grab a body and pull it | `Scripts/Playground.cpp` (`Shoot`, `UpdateGrab`) |
-| Spawning many at once: a pour of 100 balls in one `Scene::InstantiateMany` call | `Playground::SpawnBalls` |
+| Spawning many at once: a pour of 100 balls in one `Scene::InstantiateMany` call, at the ball prefab's scale (an instance's root takes the scale it is given) | `Playground::SpawnBalls` |
 | GPU-driven rendering: hundreds of instanced bodies with shadows; PBR materials from ambientCG | `Materials/`, `Textures/` |
 | Game UI: a tool panel of buttons drawn with sliced images (Kenney UI Pack: corners kept, edges and middle stretched), a slow-motion toggle (`Time::SetTimeScale`), a shot-power slider and a HUD ([Game UI](https://github.com/2042Third/GameEngine/blob/main/Docs/Manual/GameUI.md)) | `UI` in the scene, `Assets/UI/` |
 | Audio: one-shots heard where bodies meet, louder the harder they hit, within a budget of voices | `Scripts/Impact.cpp` |

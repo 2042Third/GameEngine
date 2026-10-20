@@ -66,7 +66,6 @@ namespace Strata
 				{ "maxEntitiesDestroyedPerFrame", settings.MaxEntitiesDestroyedPerFrame },
 				{ "physicsCapacity", {
 					{ "maxBodies", settings.PhysicsCapacity.MaxBodies },
-					{ "maxBodyPairs", settings.PhysicsCapacity.MaxBodyPairs },
 					{ "maxContactConstraints", settings.PhysicsCapacity.MaxContactConstraints } } },
 				{ "physicsLayers", DescribeLayers(settings.PhysicsLayers) }
 			};
@@ -157,8 +156,8 @@ namespace Strata
 		}
 
 		// Reads scene.setSettings' "physicsCapacity" object into `capacity` (only the fields it names change). Returns an error
-		// message for an invalid object, empty on success.
-		std::string ReadPhysicsCapacity(const nlohmann::json& value, PhysicsCapacitySettings& capacity)
+		// message for an invalid object, empty on success; `outWarning` gets what was accepted but ignored.
+		std::string ReadPhysicsCapacity(const nlohmann::json& value, PhysicsCapacitySettings& capacity, std::string& outWarning)
 		{
 			if (!value.is_object())
 				return "Parameter 'physicsCapacity' must be an object";
@@ -169,15 +168,21 @@ namespace Strata
 				uint32_t Limit;
 			} fields[] = {
 				{ "maxBodies", &PhysicsCapacitySettings::MaxBodies, PhysicsCapacitySettings::c_MaxBodiesLimit },
-				{ "maxBodyPairs", &PhysicsCapacitySettings::MaxBodyPairs, PhysicsCapacitySettings::c_MaxBodyPairsLimit },
 				{ "maxContactConstraints", &PhysicsCapacitySettings::MaxContactConstraints, PhysicsCapacitySettings::c_MaxContactConstraintsLimit } };
 			for (const auto& [key, entry] : value.items())
 			{
 				// Captured through a name of its own: Apple Clang 15 cannot capture structured bindings.
 				const std::string& name = key;
+				if (name == "maxBodyPairs")
+				{
+					// 0.4.0's capacity of its physics library's pair buffer: command scripts written for it keep working, told that it
+					// does nothing.
+					outWarning = "physicsCapacity.maxBodyPairs is ignored: since 0.5.0 (box3d) the physics world has no buffer of body pairs to size";
+					continue;
+				}
 				const auto field = std::find_if(std::begin(fields), std::end(fields), [&name](const auto& candidate) { return name == candidate.Name; });
 				if (field == std::end(fields))
-					return fmt::format("Unknown parameter 'physicsCapacity.{}' (known: maxBodies, maxBodyPairs, maxContactConstraints)", key);
+					return fmt::format("Unknown parameter 'physicsCapacity.{}' (known: maxBodies, maxContactConstraints)", key);
 				const bool isCount = entry.is_number_unsigned() || (entry.is_number_integer() && entry.get<int64_t>() >= 0);
 				if (!isCount || entry.get<uint64_t>() > field->Limit)
 					return fmt::format("Parameter 'physicsCapacity.{}' must be an integer from 0 (automatic) to {}", key, field->Limit);
@@ -640,14 +645,17 @@ namespace Strata
 			} }));
 
 		nlohmann::json capacitySchema = ObjectSchema({
-			{ "maxBodies", IntegerSchema("Most bodies the physics world holds (each reserves about 80 bytes); 0 sizes it from the bodies the scene "
-				"starts with", 0, PhysicsCapacitySettings::c_MaxBodiesLimit) },
-			{ "maxBodyPairs", IntegerSchema("Most pairs of bodies with overlapping bounds per step (each reserves about 90 bytes); 0: automatic", 0,
-				PhysicsCapacitySettings::c_MaxBodyPairsLimit) },
-			{ "maxContactConstraints", IntegerSchema("Most contacts solved per step (each reserves about 830 bytes); 0: automatic", 0,
-				PhysicsCapacitySettings::c_MaxContactConstraintsLimit) } });
-		capacitySchema["description"] = "Physics world capacities (only the given ones change), reserved in memory when play starts; raise them for "
-			"scenes that create many bodies while they play";
+			{ "maxBodies", IntegerSchema("Bodies the physics world has room for when play starts (each about 2 KiB); 0 sizes it from the bodies the "
+				"scene starts with. The world grows beyond it while bodies are created", 0, PhysicsCapacitySettings::c_MaxBodiesLimit) },
+			{ "maxContactConstraints", IntegerSchema("Contacts the physics world has room for when play starts (each about 250 bytes); 0: automatic", 0,
+				PhysicsCapacitySettings::c_MaxContactConstraintsLimit) },
+			// Accepted with any value and ignored with a warning (ReadPhysicsCapacity), so that 0.4.0's command scripts keep
+			// working; listed so that clients validating requests against the schema send them too.
+			{ "maxBodyPairs", { { "deprecated", true },
+				{ "description", "Ignored since 0.5.0 (box3d has no buffer of body pairs to size); accepted for older command scripts, with a warning" } } } });
+		capacitySchema["description"] = "Physics world room (only the given values change), reserved when play starts (up to 131072 bodies and "
+			"262144 contacts at once; beyond that it counts for growth only); raise it for scenes that create many bodies while they play, so "
+			"that the world does not grow during play";
 		const nlohmann::json layerNamesSchema = {
 			{ "type", "object" },
 			{ "description", R"(Names of collision layers by index ("0" to "31"), e.g. {"1": "Player", "2": "Debris"}; "" or null clears )"
@@ -706,9 +714,10 @@ namespace Strata
 						return EditorCommandResult::InvalidParameters("Parameter 'fixedTimestep' must be between 0.001 and 0.1");
 					after.FixedTimestep = step->get<float>();
 				}
+				std::string capacityWarning;
 				if (auto capacity = parameters.find("physicsCapacity"); capacity != parameters.end())
 				{
-					if (std::string error = ReadPhysicsCapacity(*capacity, after.PhysicsCapacity); !error.empty())
+					if (std::string error = ReadPhysicsCapacity(*capacity, after.PhysicsCapacity, capacityWarning); !error.empty())
 						return EditorCommandResult::InvalidParameters(error);
 				}
 				if (auto names = parameters.find("layerNames"); names != parameters.end())
@@ -748,7 +757,13 @@ namespace Strata
 					std::string warning = GetRunningCopyWarning(context);
 					if (after.PhysicsCapacity != before.PhysicsCapacity)
 						warning += "; physics capacities apply to worlds created later, not to the running one, so set them in edit mode";
+					if (!capacityWarning.empty())
+						warning += "; " + capacityWarning;
 					result["warning"] = std::move(warning);
+				}
+				else if (!capacityWarning.empty())
+				{
+					result["warning"] = std::move(capacityWarning);
 				}
 				EditorCommandResult outcome = EditorCommandResult::Ok(std::move(result));
 				outcome.RunningCopy = context.IsPlaying();

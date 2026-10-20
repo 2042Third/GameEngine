@@ -26,6 +26,12 @@ using namespace Strata::Tests;
 namespace
 {
 
+	// Warnings of the physics module and of box3d logged since `logStart` (a run that logs one has a defect).
+	size_t CountPhysicsWarnings(uint64_t logStart)
+	{
+		return CountLogMessages(logStart, "Physics: ") + CountLogMessages(logStart, "box3d: ");
+	}
+
 	using Clock = std::chrono::steady_clock;
 
 	constexpr float c_FrameTimestep = 1.0f / 60.0f;
@@ -95,7 +101,7 @@ namespace
 		constexpr uint32_t c_Warmup = 5;
 		constexpr uint32_t c_Frames = 40;
 		std::vector<double> frames;
-		std::vector<double> joltSteps;
+		std::vector<double> librarySteps;
 		std::vector<double> strataSteps;
 		for (uint32_t frame = 0; frame < c_Warmup + c_Frames; frame++)
 		{
@@ -107,20 +113,19 @@ namespace
 			// Read between the timed frames.
 			const PhysicsStats stats = physics.GetStats();
 			frames.push_back(elapsed);
-			joltSteps.push_back(stats.JoltStepTime);
-			strataSteps.push_back(static_cast<double>(stats.LastStepTime) - static_cast<double>(stats.JoltStepTime));
+			librarySteps.push_back(stats.LibraryStepTime);
+			strataSteps.push_back(static_cast<double>(stats.LastStepTime) - static_cast<double>(stats.LibraryStepTime));
 		}
 		const Perf::Measurement frame = Perf::Summarize(frames);
-		const Perf::Measurement jolt = Perf::Summarize(joltSteps);
+		const Perf::Measurement library = Perf::Summarize(librarySteps);
 		const Perf::Measurement strata = Perf::Summarize(strataSteps);
-		MESSAGE(metric, ": frame median ", frame.MedianMs, " ms (p95 ", frame.P95Ms, " ms); step: Jolt ", jolt.MedianMs, " ms, Strata ", strata.MedianMs, " ms");
+		MESSAGE(metric, ": frame median ", frame.MedianMs, " ms (p95 ", frame.P95Ms, " ms); step: library ", library.MedianMs, " ms, Strata ", strata.MedianMs, " ms");
 
 		// Still the busy phase: most boxes are awake.
 		const PhysicsStats stats = physics.GetStats();
 		CHECK(stats.ActiveBodyCount > count / 2);
 		CHECK(stats.StepCount == c_Warmup + c_Frames);
-		CHECK(stats.ContactOverflowSteps == 0);
-		CHECK(CountLogMessages(logStart, "contacts were dropped") == 0);
+		CHECK(CountPhysicsWarnings(logStart) == 0);
 		if (listening == ContactListening::Floor)
 		{
 			// Every bottom box landed (on the floor, for good), and only those contacts are tracked.
@@ -134,20 +139,20 @@ namespace
 			CHECK(stats.ContactPairCount == 0);
 		}
 		scene.OnRuntimeStop();
-		REQUIRE(jolt.MedianMs > 0.0);
+		REQUIRE(library.MedianMs > 0.0);
 		return Perf::MetricValues { { metric + ".ActiveFrame", frame.MedianMs }, { metric + ".StrataStepTime", strata.MedianMs },
-			{ metric + ".StrataToJoltStep", strata.MedianMs / jolt.MedianMs } };
+			{ metric + ".StrataToLibraryStep", strata.MedianMs / library.MedianMs } };
 	}
 
 	// The busy phase of falling box stacks: the median 60 Hz frame (one fixed step each) against the budget of
 	// `<metric>.ActiveFrame`, the median of Strata's part of a step (synchronization, write-back, contacts: the step minus
-	// Jolt's own) against `<metric>.StrataStepTime`, and that median to the median of Jolt's part against
-	// `<metric>.StrataToJoltStep` (Strata's part must stay below Jolt's: that budget is below 1). Every attempt of the
-	// confirmed check plays the stacks afresh.
+	// the physics library's own) against `<metric>.StrataStepTime`, and that median to the median of the library's part,
+	// `<metric>.StrataToLibraryStep` (Strata's part should stay below the library's). Every attempt of the confirmed check
+	// plays the stacks afresh.
 	void MeasureFallingBoxes(size_t count, const std::string& metric, ContactListening listening = ContactListening::Nobody)
 	{
 		Perf::ScopedApplicationJobSystem jobs;
-		Perf::CheckBudgetsConfirmed({ metric + ".ActiveFrame", metric + ".StrataStepTime", metric + ".StrataToJoltStep" }, [&]
+		Perf::CheckBudgetsConfirmed({ metric + ".ActiveFrame", metric + ".StrataStepTime", metric + ".StrataToLibraryStep" }, [&]
 		{
 			return PlayFallingBoxes(count, metric, listening);
 		});
@@ -162,7 +167,8 @@ TEST_SUITE("Perf.Physics")
 		Perf::ScopedApplicationJobSystem jobs;
 		// The first frames of a game capped at 60 frames per second that opens this scene: starting play (the world and its
 		// bodies), then 30 frames, with the time dilation games run with (GameRuntimeOptions::TimeDilation). Their total time,
-		// and the warnings of dropped contacts (a count); every attempt opens the scene afresh.
+		// and the physics warnings the run logged (a count: physics engines with fixed contact buffers warned about dropped
+		// contacts here; box3d grows its own, and any warning is a defect); every attempt opens the scene afresh.
 		Perf::CheckBudgetsConfirmed({ "Perf.Physics.Boxes30k.StartAnd30Frames", "Perf.Physics.Boxes30k.DroppedContactWarnings" }, [&]
 		{
 			Scene scene;
@@ -178,7 +184,7 @@ TEST_SUITE("Perf.Physics")
 			MESSAGE("Started in ", startup, " ms and played ", c_Frames, " frames in ", elapsed - startup, " ms: ", stats.StepCount, " steps, ",
 				stats.DroppedSteps, " dropped");
 			CHECK(stats.StepCount >= c_Frames);
-			const size_t droppedContacts = CountLogMessages(logStart, "contacts were dropped");
+			const size_t droppedContacts = CountPhysicsWarnings(logStart);
 			scene.OnRuntimeStop();
 			return Perf::MetricValues { { "Perf.Physics.Boxes30k.StartAnd30Frames", elapsed },
 				{ "Perf.Physics.Boxes30k.DroppedContactWarnings", static_cast<double>(droppedContacts) } };
@@ -226,7 +232,14 @@ TEST_SUITE("Perf.Physics")
 		Scene scene;
 		CreateGround(scene);
 		CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 5.0f, 0.0f));
-		const auto measureReserved = [&](const PhysicsCapacitySettings& capacity) -> uint64_t
+		// What the process gained, and the world's estimate of what box3d reserved (PhysicsWorld::GetReservedBytes: up to
+		// c_MaxBodiesReservedAtCreation bodies, the rest of the room counts for growth only).
+		struct Reserved
+		{
+			uint64_t Measured = 0;
+			uint64_t Estimated = 0;
+		};
+		const auto measureReserved = [&](const PhysicsCapacitySettings& capacity)
 		{
 			scene.GetSettings().PhysicsCapacity = capacity;
 			const std::optional<ProcessMemoryInfo> before = Platform::GetProcessMemory();
@@ -236,38 +249,37 @@ TEST_SUITE("Perf.Physics")
 			const std::optional<ProcessMemoryInfo> during = Platform::GetProcessMemory();
 			REQUIRE(during);
 			CHECK(GetPhysics(scene).GetStats().MaxBodies == capacity.MaxBodies);
+			REQUIRE(GetPhysics(scene).GetWorld() != nullptr);
+			Reserved reserved;
+			reserved.Estimated = GetPhysics(scene).GetWorld()->GetReservedBytes();
 			scene.OnRuntimeStop();
-			return during->PrivateBytes > before->PrivateBytes ? during->PrivateBytes - before->PrivateBytes : 0;
+			reserved.Measured = during->PrivateBytes > before->PrivateBytes ? during->PrivateBytes - before->PrivateBytes : 0;
+			return reserved;
 		};
 
-		const PhysicsCapacitySettings largest { PhysicsCapacitySettings::c_MaxBodiesLimit, PhysicsCapacitySettings::c_MaxBodyPairsLimit,
-			PhysicsCapacitySettings::c_MaxContactConstraintsLimit };
-		// PhysicsWorld::EstimateReservedBytes of a world with those capacities (the settings PhysicsSystem gives it).
-		const auto estimateMB = [&](const PhysicsCapacitySettings& capacity)
-		{
-			PhysicsSettings settings = PhysicsSystem::GetDefaultSettings();
-			settings.MaxBodies = capacity.MaxBodies;
-			settings.MaxBodyPairs = capacity.MaxBodyPairs;
-			settings.MaxContactConstraints = capacity.MaxContactConstraints;
-			return static_cast<double>(PhysicsWorld::EstimateReservedBytes(PhysicsWorld::ResolveCapacities(settings, PhysicsWorld::CountBodyCandidates(scene)))) / c_MB;
-		};
-		// What the largest capacities reserve, and the most bodies with the pairs and contacts sized automatically for them:
-		// both budgets are below 1 GiB (1073.7 MB), the physics workstream's acceptance limit.
+		PhysicsCapacitySettings largest;
+		largest.MaxBodies = PhysicsCapacitySettings::c_MaxBodiesLimit;
+		largest.MaxContactConstraints = PhysicsCapacitySettings::c_MaxContactConstraintsLimit;
+		PhysicsCapacitySettings mostBodies;
+		mostBodies.MaxBodies = PhysicsCapacitySettings::c_MaxBodiesLimit;
+		// What the largest capacities reserve, and the most bodies with the contacts sized automatically for them: both budgets
+		// are below 1 GiB (1073.7 MB), the physics workstream's acceptance limit.
 		Perf::CheckBudgetsConfirmed({ "Perf.Physics.LargestCapacities.ReservedMemory", "Perf.Physics.MostBodies.ReservedMemory" }, [&]
 		{
-			const uint64_t largestReserved = measureReserved(largest);
-			const uint64_t mostBodiesReserved = measureReserved({ PhysicsCapacitySettings::c_MaxBodiesLimit, 0, 0 });
-			MESSAGE("Reserved for the largest capacities: ", static_cast<double>(largestReserved) / c_MB, " MB (estimated ", estimateMB(largest),
-				" MB); for the most bodies: ", static_cast<double>(mostBodiesReserved) / c_MB, " MB (estimated ",
-				estimateMB({ PhysicsCapacitySettings::c_MaxBodiesLimit, 0, 0 }), " MB)");
+			const Reserved largestReserved = measureReserved(largest);
+			const Reserved mostBodiesReserved = measureReserved(mostBodies);
+			MESSAGE("Reserved for the largest capacities: ", static_cast<double>(largestReserved.Measured) / c_MB, " MB (estimated ",
+				static_cast<double>(largestReserved.Estimated) / c_MB, " MB); for the most bodies: ", static_cast<double>(mostBodiesReserved.Measured) / c_MB,
+				" MB (estimated ", static_cast<double>(mostBodiesReserved.Estimated) / c_MB, " MB)");
 #if defined(ST_PLATFORM_WINDOWS)
-			// The estimate is of what a world reserves, which is what private bytes count on Windows (the commit charge); other
-			// systems count only the pages touched so far.
-			CHECK(static_cast<double>(largestReserved) / c_MB == doctest::Approx(estimateMB(largest)).epsilon(0.15));
-			CHECK(static_cast<double>(mostBodiesReserved) / c_MB == doctest::Approx(estimateMB({ PhysicsCapacitySettings::c_MaxBodiesLimit, 0, 0 })).epsilon(0.15));
+			// Private bytes on Windows are the commit charge, also of storage not touched yet (other systems count only the pages
+			// touched so far). The estimate is of a world whose room is used (fitted to box3d's count of its bytes): box3d's
+			// reservation for an empty room commits at most that.
+			CHECK(static_cast<double>(largestReserved.Measured) <= 1.15 * static_cast<double>(largestReserved.Estimated));
+			CHECK(static_cast<double>(mostBodiesReserved.Measured) <= 1.15 * static_cast<double>(mostBodiesReserved.Estimated));
 #endif
-			return Perf::MetricValues { { "Perf.Physics.LargestCapacities.ReservedMemory", static_cast<double>(largestReserved) / c_MB },
-				{ "Perf.Physics.MostBodies.ReservedMemory", static_cast<double>(mostBodiesReserved) / c_MB } };
+			return Perf::MetricValues { { "Perf.Physics.LargestCapacities.ReservedMemory", static_cast<double>(largestReserved.Measured) / c_MB },
+				{ "Perf.Physics.MostBodies.ReservedMemory", static_cast<double>(mostBodiesReserved.Measured) / c_MB } };
 		});
 	}
 
@@ -318,54 +330,63 @@ TEST_SUITE("Perf.Physics")
 			// They walked on: past the first step at x = 2..4 for the first rows.
 			CHECK(GetWorldPosition(scene, characters.front()).x > 1.5f);
 			const Perf::Measurement step = Perf::Summarize(samples);
-			MESSAGE("1,000 characters: median step ", step.MedianMs, " ms (p95 ", step.P95Ms, " ms); controllers ", stats.CharacterTime, " ms, Jolt ",
-				stats.JoltStepTime, " ms");
+			MESSAGE("1,000 characters: median step ", step.MedianMs, " ms (p95 ", step.P95Ms, " ms); controllers ", stats.CharacterTime, " ms, library ",
+				stats.LibraryStepTime, " ms");
 			scene.OnRuntimeStop();
 			return step.MedianMs;
 		});
 	}
 
-	TEST_CASE("Growing a world of 65,536 bodies to 131,072")
+	TEST_CASE("Creating 65,536 bodies in a world reserved for 65,536")
 	{
-		// A full world (90% static bodies, 10% dynamic ones awake) grows: every body moves into a Jolt system twice the size,
-		// keeping its ID and state (PhysicsWorld, "Capacities"). The growth's own time (PhysicsStats::LastGrowthMs), the
-		// median of 5 fresh worlds: a growth happens once per world, so each sample needs a world of its own.
+		// A world reserved for 65,536 bodies (90% static, 10% dynamic ones awake) gets 65,536 more in one update: box3d grows
+		// its storage while the bodies are created (PhysicsWorld, "Capacities"). Each fresh world times that one frame (the
+		// longest of the growth by nature: the frame that creates the bodies is the one box3d grows in), and the median of 5
+		// worlds goes against Perf.Physics.Grow65kMaxFrame (a provisional target of one 60 Hz frame); the slowest world's is
+		// reported too.
 		Perf::ScopedApplicationJobSystem jobs;
 		constexpr uint32_t c_Bodies = 65'536;
-		Scene scene("Grow65k");
-		scene.GetSettings().Gravity = glm::vec3(0.0f);
-		scene.GetSettings().PhysicsCapacity.MaxBodies = c_Bodies;
-		for (uint32_t index = 0; index < c_Bodies; index++)
+		const auto createBodies = [](Scene& scene, uint32_t first, uint32_t count)
 		{
-			const glm::vec3 position(static_cast<float>(index % 256) * 3.0f, 0.0f, static_cast<float>(index / 256) * 3.0f);
-			if (index % 10 == 0)
-				CreateDynamicBox(scene, "Dynamic", position + glm::vec3(0.0f, 5.0f, 0.0f));
-			else
-				CreateStaticBox(scene, "Static", position, glm::vec3(0.5f));
-		}
+			for (uint32_t index = first; index < first + count; index++)
+			{
+				const glm::vec3 position(static_cast<float>(index % 256) * 3.0f, 0.0f, static_cast<float>(index / 256) * 3.0f);
+				if (index % 10 == 0)
+					CreateDynamicBox(scene, "Dynamic", position + glm::vec3(0.0f, 5.0f, 0.0f));
+				else
+					CreateStaticBox(scene, "Static", position, glm::vec3(0.5f));
+			}
+		};
 
-		Perf::CheckBudgetConfirmed("Perf.Physics.Grow65kMigration", [&]
+		Perf::CheckBudgetConfirmed("Perf.Physics.Grow65kMaxFrame", [&]
 		{
 			constexpr uint32_t c_Warmup = 1;
 			constexpr uint32_t c_Samples = 5;
 			std::vector<double> samples;
 			for (uint32_t round = 0; round < c_Warmup + c_Samples; round++)
 			{
+				Scene scene("Grow65k");
+				scene.GetSettings().Gravity = glm::vec3(0.0f);
+				scene.GetSettings().PhysicsCapacity.MaxBodies = c_Bodies;
+				createBodies(scene, 0, c_Bodies);
 				scene.OnRuntimeStart();
 				PhysicsWorld* world = GetPhysics(scene).GetWorld();
 				REQUIRE(world != nullptr);
 				REQUIRE(world->GetStats().BodyCount == c_Bodies);
-				world->Reserve(c_Bodies + 1);
-				REQUIRE(world->Grow());
+				createBodies(scene, c_Bodies, c_Bodies);
+				const Clock::time_point start = Clock::now();
+				scene.OnUpdateRuntime(scene.GetSettings().FixedTimestep);
+				const double frame = MillisecondsSince(start);
 				const PhysicsStats stats = world->GetStats();
+				CHECK(stats.BodyCount == 2 * c_Bodies);
+				CHECK(stats.GrowthCount == 1);
 				CHECK(stats.MaxBodies == 2 * c_Bodies);
-				CHECK(stats.BodyCount == c_Bodies);
 				if (round >= c_Warmup)
-					samples.push_back(stats.LastGrowthMs);
+					samples.push_back(frame);
 				scene.OnRuntimeStop();
 			}
 			const Perf::Measurement growth = Perf::Summarize(samples);
-			MESSAGE("Growing 65,536 bodies to 131,072: median ", growth.MedianMs, " ms, max ", growth.MaxMs, " ms");
+			MESSAGE("Creating 65,536 bodies in a world reserved for 65,536: frame median ", growth.MedianMs, " ms, max ", growth.MaxMs, " ms");
 			return growth.MedianMs;
 		});
 	}

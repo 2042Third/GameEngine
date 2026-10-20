@@ -89,7 +89,10 @@ TEST_SUITE("Editor.World")
 		CHECK(stats["bodies"]["static"] == 1);
 		CHECK(stats["bodies"]["dynamic"] == 10);
 		CHECK(stats["bodies"]["slotsUsed"] == 11);
-		CHECK(stats["capacity"]["maxBodies"] == 65536);
+		CHECK(stats["capacity"]["maxBodies"] == 1024);
+		CHECK(stats["capacity"]["growthLimit"] == PhysicsCapacitySettings::c_MaxBodiesLimit);
+		CHECK_FALSE(stats["capacity"].contains("maxBodyPairs"));
+		CHECK_FALSE(stats.contains("contactOverflowSteps"));
 		CHECK(stats["capacity"]["reservedMB"].get<double>() > 1.0);
 		CHECK(stats["waitingForSlot"] == 0);
 		CHECK(stats["growths"]["count"] == 0);

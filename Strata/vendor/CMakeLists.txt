@@ -138,28 +138,44 @@ if(STRATA_WITH_AUDIO)
 	endif()
 endif()
 
-# --- Jolt Physics (Jolt; the physics module's: STRATA_WITH_PHYSICS) ------------------------------------
+# --- box3d (box3d; the physics module's: STRATA_WITH_PHYSICS) ---------------------------------------
+# Built from its sources here, like zstd, instead of through box3d's own CMake: its top-level file sets a
+# FETCHCONTENT_BASE_DIR cache entry inside the source tree, exports compile commands and adds install rules and a debug
+# postfix, and its src/CMakeLists.txt adds /W4 (which overrides the vendor /W0) and reads the including project's
+# version.
 if(STRATA_WITH_PHYSICS)
-	strata_vendor_option(OVERRIDE_CXX_FLAGS OFF)
-	strata_vendor_option(INTERPROCEDURAL_OPTIMIZATION OFF)
-	strata_vendor_option(FLOATING_POINT_EXCEPTIONS_ENABLED OFF)
-	strata_vendor_option(ENABLE_ALL_WARNINGS OFF)
-	strata_vendor_option(ENABLE_INSTALL OFF)
-	strata_vendor_option(ENABLE_OBJECT_STREAM OFF)
-	strata_vendor_option(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE OFF)
-	strata_vendor_option(PROFILER_IN_DEBUG_AND_RELEASE OFF)
-	strata_vendor_option(USE_STATIC_MSVC_RUNTIME_LIBRARY ON)
-	strata_vendor_option(CPP_RTTI_ENABLED ON)
-	strata_vendor_option(CPP_EXCEPTIONS_ENABLED ON)
-	strata_vendor_option(JPH_USE_DX12 OFF)
-	strata_vendor_option(JPH_USE_VK OFF)
-	strata_vendor_option(JPH_USE_MTL OFF)
-	strata_vendor_option(TARGET_UNIT_TESTS OFF)
-	strata_vendor_option(TARGET_HELLO_WORLD OFF)
-	strata_vendor_option(TARGET_PERFORMANCE_TEST OFF)
-	strata_vendor_option(TARGET_SAMPLES OFF)
-	strata_vendor_option(TARGET_VIEWER OFF)
-	add_subdirectory(JoltPhysics/Build SYSTEM)
+	set(BOX3D_DIR "${CMAKE_CURRENT_SOURCE_DIR}/box3d")
+	file(GLOB BOX3D_SOURCES CONFIGURE_DEPENDS "${BOX3D_DIR}/src/*.c")
+	add_library(box3d STATIC ${BOX3D_SOURCES})
+	# C17 with extensions: box3d uses _Static_assert and anonymous unions.
+	set_target_properties(box3d PROPERTIES C_STANDARD 17 C_STANDARD_REQUIRED YES C_EXTENSIONS YES)
+	target_include_directories(box3d SYSTEM PUBLIC "${BOX3D_DIR}/include")
+	target_include_directories(box3d PRIVATE "${BOX3D_DIR}/src")
+	# Contraction into fused multiply-adds is the one value-changing transform compilers enable by default (arm64 Clang
+	# does), and box3d's cross-platform determinism needs it off; MSVC does not contract under /fp:precise.
+	if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+		if(CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+			target_compile_options(box3d PRIVATE /clang:-ffp-contract=off)
+		else()
+			target_compile_options(box3d PRIVATE -ffp-contract=off)
+		endif()
+	endif()
+	# box3d picks its AVX2 kernels at run time (simd.c). GCC and Clang compile them through target pragmas; MSVC needs the
+	# file itself compiled for AVX2.
+	if(MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_C_COMPILER_ARCHITECTURE_ID MATCHES "^(x64|X86)$")
+		set_source_files_properties("${BOX3D_DIR}/src/wide8.c" PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+	endif()
+	# Asserts follow ST_CORE_ASSERT: on in Debug and Release, compiled out of Dist. PUBLIC, so that box3d's inline functions
+	# agree in Strata's objects. box3d's heavy validation (BOX3D_VALIDATE) stays off: it makes Debug test runs several times
+	# slower, and the golden hash and the physics suites cover correctness.
+	target_compile_definitions(box3d PUBLIC "$<$<NOT:$<CONFIG:Dist>>:B3_ENABLE_ASSERT>")
+	# The most triangles of a mesh one convex shape collides with at once (box3d's default is 512, beyond which it drops the
+	# others and logs once): a 4 m crate on a render mesh of 10 cm triangles covers 3,200. The buffer is in box3d's per-worker
+	# arena, not on the stack.
+	target_compile_definitions(box3d PUBLIC B3_MAX_MESH_CONTACT_TRIANGLES=4096)
+	if(UNIX AND NOT APPLE)
+		target_link_libraries(box3d PUBLIC m)
+	endif()
 endif()
 
 # --- zstd (zstd_decompress, zstd_compress) --------------------------------------------------------
@@ -199,10 +215,9 @@ add_library(zstd_compress STATIC EXCLUDE_FROM_ALL
 	"${ZSTD_DIR}/compress/zstd_opt.c"
 	"${ZSTD_DIR}/compress/zstd_preSplit.c")
 target_link_libraries(zstd_compress PUBLIC zstd_decompress)
-# MSVC x86 builds require AVX2 already: the engine compiles with Jolt's instruction sets, /arch:AVX2 (or AVX512; same
-# condition, strata_jolt_instruction_sets, also without the physics module). It lets zstd use its BMI2 bit readers
+# MSVC x86 builds require AVX2 already: the engine compiles for Strata's instruction sets, /arch:AVX2 (or AVX512; same
+# condition as strata_engine_cpu_options, CMake/StrataCompilerOptions.cmake). It lets zstd use its BMI2 bit readers
 # (STATIC_BMI2), about 10% faster at decompressing; GCC and Clang builds pick them at run time (DYNAMIC_BMI2).
-strata_jolt_instruction_sets()
 if(MSVC AND (STRATA_USE_AVX2 OR STRATA_USE_AVX512) AND CMAKE_VS_PLATFORM_NAME MATCHES "^(x86|x64)$")
 	target_compile_options(zstd_decompress PRIVATE /arch:AVX2)
 	target_compile_options(zstd_compress PRIVATE /arch:AVX2)

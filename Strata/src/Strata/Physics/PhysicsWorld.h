@@ -25,14 +25,14 @@ namespace Strata
 		Sliced         // Over calls of BuildSlice: a loaded scene prepared before it runs (PhysicsSystem::PrepareLoadedScene)
 	};
 
-	// One rigid body simulation (a Jolt physics system) bound to a scene.
+	// One rigid body simulation (a box3d world) bound to a scene.
 	//
 	// Bodies are built from entity components:
 	//  - An entity with a RigidBodyComponent owns a body. Its shape is made of the entity's own colliders and those of its
 	//    descendants that have no RigidBodyComponent of their own (placed with their transform relative to the owner);
 	//    descendants with their own RigidBodyComponent are separate bodies.
 	//  - Collider entities without a RigidBodyComponent on themselves or any ancestor are static bodies of their own.
-	//  - Several colliders form a compound shape. World scale is baked into the shapes: boxes and mesh colliders scale
+	//  - Several colliders are several shapes of one body. World scale is baked into the shapes: boxes and mesh colliders scale
 	//    exactly (including non-uniform and mirrored scale), sphere radii scale by the largest absolute axis scale,
 	//    capsule radii by the larger of |X| and |Z| and their half height by |Y|. Shear (non-uniform scale under a rotated
 	//    parent) cannot be represented and is approximated by the decomposed scale.
@@ -40,8 +40,9 @@ namespace Strata
 	//
 	// An entity whose body cannot be built yet keeps a pending record and is retried once that can succeed: a degenerate
 	// (e.g. zero scale) world transform when a transform change is signaled (see below), a mesh collider when its mesh data
-	// is available and its shape cooked (see SetMeshProvider), a full world when bodies are freed. A body whose world
-	// transform becomes degenerate leaves the simulation until a signaled change (or reactivation) makes it valid again.
+	// is available and its shape cooked (see SetMeshProvider), a world at its growth limit when bodies are freed. A body whose
+	// world transform becomes degenerate (or farther than 1e5 m from the origin, beyond box3d's single precision) leaves the
+	// simulation until a signaled change (or reactivation) makes it valid again.
 	// Dynamic bodies write their pose back relative to their parent, so for them a parent scaled to (nearly) zero, which
 	// cannot be inverted, counts as a degenerate transform too.
 	//
@@ -65,7 +66,7 @@ namespace Strata
 	// bodies or the world's capacity (see PhysicsStats::SyncedBodyCount, CheckedPairCount, WrittenBodyCount and
 	// OrderedSlotCount).
 	//
-	// Character controllers (CharacterControllerComponent, see CharacterControllerSet) move in each step before Jolt's: they
+	// Character controllers (CharacterControllerComponent, see CharacterControllerSet) move in each step before box3d's: they
 	// walk, fall and push dynamic bodies, write their entities' translations, and their contacts join the bodies' (the
 	// entity pairs above), so contact events and the scripts' callbacks report them like bodies' contacts.
 	//
@@ -76,20 +77,19 @@ namespace Strata
 	// most PhysicsSettings::MeshWaitTimeout seconds of simulation time, with a warning naming the colliders that are still
 	// missing; mesh colliders added later, unknown meshes and meshes that failed to load are not waited for.
 	//
-	// Capacities: Jolt allocates the world for fixed numbers of bodies, body pairs and contact constraints. Capacities that are
-	// 0 in the settings are sized when the world is created from the bodies the scene has then (ResolveCapacities), so a scene
-	// gets the room it needs without settings. A body that finds the world full waits for a slot, queued in the order it
-	// failed (no step looks at it; slots that free go to the first waiters), and the world grows before its next step (also
-	// when Reserve asked for more room than it has): it moves into a new Jolt system for the next power of two of at least
-	// twice its bodies and what it needs, up to PhysicsSettings::GrowthLimit. Every body keeps its JPH::BodyID, pose,
-	// velocity, sleep state and contacts, and character controllers keep their state; automatic pair and contact capacities
-	// grow with it, given ones stay, and a given MaxBodies is exceeded with a warning (correctness comes first). The bodies
-	// are moved in fixed chunks on the job threads, and the old system is destroyed by a background job. At its growth limit
-	// a world keeps bodies waiting (one aggregated error names them) until bodies are removed. Steps that overflow the pair
-	// or contact buffers drop contacts (a warning once per world). Both are recorded (PhysicsStats::BodyOverflowCount,
-	// ContactOverflowSteps, Demand, GrowthCount), so the next world of the scene starts large enough.
+	// Capacities: the settings' MaxBodies and MaxContactConstraints are the room box3d reserves when the world is created
+	// (up to c_MaxBodiesReservedAtCreation and c_MaxContactsReservedAtCreation); 0 sizes them from the bodies the scene has
+	// then (ResolveCapacities). box3d grows its storage as bodies and contacts
+	// come, so a world never refuses a body below PhysicsSettings::GrowthLimit: when its bodies outgrow the room, the world
+	// counts a growth (the room doubles: PhysicsStats::GrowthCount, LastGrowthFrom/To, LastGrowthMs) and records the demand
+	// (also the contacts it held beyond its room), so the scene's next world reserves enough (PhysicsSystem remembers it per
+	// scene). Every body keeps its ID, pose, motion and contacts. At its growth limit a world keeps new bodies waiting,
+	// queued in the order they failed (no step looks at them; bodies that go hand their room to the first waiters), and one
+	// aggregated error names them.
 	//
-	// Main thread only. Jolt runs the step on Strata's JobSystem workers when it is initialized.
+	// Main thread only; worlds are created and destroyed on the main thread (box3d's world slots are not thread-safe), and
+	// box3d holds at most 128 worlds at once (HasFreeWorld). box3d runs the step's tasks on Strata's JobSystem workers when
+	// it is initialized (PhysicsTaskSystem).
 	class PhysicsWorld
 	{
 	public:
@@ -100,19 +100,24 @@ namespace Strata
 			PhysicsBuildMode mode = PhysicsBuildMode::Immediate);
 		~PhysicsWorld(); // Destroys every body without emitting collision events
 
-		// The settings a world is created with for `bodyCount` bodies: capacities given in `settings` stay (clamped to the
-		// engine's limits), automatic ones (0) become
-		//  - MaxBodies: the next power of two of at least twice the bodies, at least 65,536;
-		//  - MaxBodyPairs: four times MaxBodies;
-		//  - MaxContactConstraints: twice the bodies, at least 10,240;
-		// each at least what `demand` asks for, and an automatic TempAllocatorSize holds a step's scratch data for those
-		// capacities (at least 10 MiB).
+		// The settings a world is created with for `bodyCount` bodies: room given in `settings` stays (clamped to the engine's
+		// limits), automatic room (0) becomes
+		//  - MaxBodies: the next power of two of at least twice the bodies, at least 1,024;
+		//  - MaxContactConstraints: twice the bodies, at least 2,048;
+		// each at least what `demand` asks for.
 		static PhysicsSettings ResolveCapacities(const PhysicsSettings& settings, uint32_t bodyCount, const PhysicsCapacityDemand& demand = {});
-		// What a world of these resolved capacities (see ResolveCapacities) reserves when it is created, in bytes: Jolt's
-		// buffers (about 48 bytes per body, 90 per body pair and some 300 per contact constraint) and the step's scratch
-		// memory. Fitted to the commit charge the reference machine measures (Perf.Physics.MostBodies.ReservedMemory and
-		// LargestCapacities.ReservedMemory, within 15%); systems that count only touched pages report less.
+		// What a world with this room (see ResolveCapacities) takes in box3d, in bytes: per body (its body, shape, proxy and
+		// island), per contact, and the world's fixed part. Fitted to box3d's own count of a world's bytes (see
+		// CountLibraryBytes); Strata's records are not counted. Constant time.
 		static uint64_t EstimateReservedBytes(const PhysicsSettings& settings);
+		// The most room box3d reserves when a world is created, unless the automatic room of the scene's bodies is larger
+		// (about 280 MB of bodies and 65 MB of contacts by EstimateReservedBytes): a room given beyond it counts for growth
+		// only, and box3d grows its storage as the bodies come, so that the largest room a scene may ask for does not reserve
+		// gigabytes up front.
+		static constexpr uint32_t c_MaxBodiesReservedAtCreation = 1u << 17;
+		static constexpr uint32_t c_MaxContactsReservedAtCreation = 1u << 18;
+		// Whether box3d has room for another world (it holds at most 128 at once): PhysicsSystem checks it before creating one.
+		static bool HasFreeWorld();
 		// The entities of a scene that may own a body when a world is created for it: those with a RigidBody, collider entities
 		// without one (colliders merged into an ancestor's body count too, so this is an upper bound) and character
 		// controllers (their presence bodies). Linear, without allocating. Automatic capacities and the world cook count by it.
@@ -154,20 +159,25 @@ namespace Strata
 		PhysicsCapacityInfo GetCapacityInfo() const;
 
 		// Asks for room for `bodies` bodies in all (character controllers' presence bodies included): a world with less grows
-		// before its next step (see "Capacities"). The world streamer reserves for the cells it is about to load, so their
-		// bodies never find the world full. The latest call counts; 0 reserves nothing.
+		// its room before its next step (see "Capacities"), so the scene's next world reserves it at once. The world streamer
+		// reserves for the cells it is about to load. The latest call counts; 0 reserves nothing.
 		void Reserve(uint32_t bodies);
 		uint32_t GetReservedBodies() const;
-		// Applies the pending changes and grows the world now if bodies wait for a slot or more were reserved than it has room
-		// for, as the next step would. Returns whether it grew. Never call it during a step, a query or a collision dispatch.
+		// Applies the pending changes and grows the room now if more was reserved than the world has, as the next step would.
+		// Returns whether it grew. Never call it during a step, a query or a collision dispatch.
 		bool Grow();
+		// What the world takes now, by EstimateReservedBytes of its room (constant time, see GetCapacityInfo), and box3d's own
+		// count of its bytes (which walks every island, sensor and hull: for diagnostics and tests, not every frame).
+		uint64_t GetReservedBytes() const;
+		uint64_t CountLibraryBytes() const;
 
 		// True if the entity owns a body that is part of the simulation.
 		bool HasBody(Entity entity) const;
-		// The Jolt body ID (index and sequence number) of the body the entity owns, also out of the simulation, or c_NoBodyID:
-		// for diagnostics and tests (which bodies a build gave which IDs).
-		static constexpr uint32_t c_NoBodyID = 0xFFFFFFFFu;
-		uint32_t GetBodyID(Entity entity) const;
+		// The physics library's ID of the body the entity owns (its slot and the slot's generation; the world it belongs to
+		// is left out, so that two worlds built alike give equal IDs), also out of the simulation, or c_NoBodyID: for
+		// diagnostics and tests (which bodies a build gave which IDs).
+		static constexpr uint64_t c_NoBodyID = UINT64_MAX;
+		uint64_t GetBodyID(Entity entity) const;
 		// The entity owning the body that holds this entity's colliders (the entity itself, its nearest ancestor with a
 		// RigidBodyComponent, or invalid if its colliders are not part of any body).
 		Entity GetBodyEntity(Entity entity) const;
@@ -182,9 +192,9 @@ namespace Strata
 		std::vector<CollisionEvent> TakeCollisionEvents();
 
 		// Which contacts become events (see ICollisionEventSource): while tracking all contacts (the default) every touching
-		// pair, otherwise only pairs with an entity of interest (one owning a body). Contacts of pairs nobody wants are not
-		// recorded during the step, so they cost nothing beyond Jolt's own work. A pair is tracked from the first step that
-		// reports it while it is wanted; one that stops being wanted ends at the next step that checks it.
+		// pair, otherwise only pairs with an entity of interest (one owning a body). box3d reports when shapes start and stop
+		// touching; contacts of pairs nobody wants are dropped. A pair that becomes wanted while it touches begins after the
+		// next step; one that stops being wanted ends after it.
 		void SetTrackAllContacts(bool trackAll);
 		bool IsTrackingAllContacts() const;
 		void SetContactInterest(UUID entity, bool interested);

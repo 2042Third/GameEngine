@@ -88,7 +88,7 @@ ST_SCRIPT_CLASS(Turret)
 | `OnDestroy()` | Entity destroyed (still valid here), script removed, or play stopped (descendants first). |
 | `OnReload()` | After a hot reload, instead of `OnCreate`. Re-acquire cached pointers and non-field state. |
 | `OnCollisionEnter/Exit(collision)` | The entity's physics body starts/stops touching another body (after a fixed step). |
-| `OnTriggerEnter/Exit(collision)` | The same for contacts where either body is a trigger. |
+| `OnTriggerEnter/Exit(collision)` | The same for contacts where either body is a trigger. Triggers see convex colliders (boxes, spheres, capsules, convex meshes) and characters, never triangle-mesh colliders: a moving trigger crossing a mesh wall or floor reports nothing (box3d's sensors skip them; give such a wall a box collider if a trigger must see it). |
 | `OnAnimationEvent(name)` | The entity's animator passed an event of its controller's current state (after the animators were evaluated). |
 | `OnUIClick(widget)` | The player clicked a UI button on the entity, or one whose `EventTarget` is the entity (before `OnUpdate`). |
 | `OnUIValueChanged(widget, value)` | The player changed a slider (its value) or a toggle (1 on, 0 off) on the entity or targeting it. |
@@ -192,6 +192,15 @@ std::vector<Entity> nearby = Physics::OverlapSphere(center, 3.0f);
   answers `std::optional<bool>` (nullopt for a layer the world lacks). Keep the request in a field as its `GetID()` (an
   int) if it must survive a hot reload: `WorldCellRequest(static_cast<uint64_t>(id)).Release()`. In a scene that is no
   world every call fails, reported once.
+- The simulation is box3d. Every dynamic body is swept against static ones, so fast bodies do not pass through walls
+  and floors; set `ContinuousCollision` on bullets that must not pass through moving (kinematic or dynamic) bodies either.
+  Bodies bounce (`Restitution`) only when they hit faster than 1 m/s; damping multiplies the velocity by
+  `1 / (1 + damping * h)` in every sub-step `h` (a quarter of the fixed step per collision step), which keeps a little more
+  of it than Jolt's `1 - damping * dt` per fixed step: bodies damp slightly less (a damping of 2 leaves 0.55 of the speed
+  after a second, not 0.52). A box landing flat may slide a few millimeters. Bodies that start overlapping are pushed
+  apart at up to 3 m/s, enough to throw light ones over a wall: spawn them apart, remembering that `Instantiate` with a
+  translation sets the root's whole local transform, scale included (1 unless passed), and `InstantiateMany` takes it
+  from each matrix; only `Instantiate(prefab)` without a transform keeps the prefab root's scale.
 - Moving a body by writing its transform works too (kinematic platforms, editor-like placement) but takes effect at the
   next fixed step; `Teleport` is immediate. Results always name the entity that owns the body (the RigidBody entity,
   also for colliders on its children).
@@ -446,7 +455,8 @@ moments (checkpoints, menus) and keep saves small.
 
 - On-screen text (score, lives, messages): a `UIText` element on a UI canvas (it scales with the screen); change it with
   `entity.GetUI().SetText("Score: " + std::to_string(score))` (see [Game UI](#game-ui)).
-- Spawning: `Scene::Instantiate(prefab, position)` (request the prefab early), `Scene::InstantiateMany` for many at once,
+- Spawning: `Scene::Instantiate(prefab, position)` (request the prefab early; this form sets the root's scale too, 1
+  unless passed: pass the prefab's scale when its root is scaled), `Scene::InstantiateMany` for many at once,
   `Scene::CreateEntity` plus `AddComponent`/`SetProperty` for simple shapes; `entity.Destroy()` removes it at the end of
   the frame.
 - `Random` (StrataScript/Gameplay.h): seedable and deterministic on every platform - `Random random(seed);

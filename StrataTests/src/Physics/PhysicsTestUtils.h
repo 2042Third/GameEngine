@@ -23,7 +23,7 @@ namespace Strata::Tests
 {
 
 	// The helper process "broad-phase-churn" (TestMain.cpp, PhysicsCapacityTests.cpp): spawns bodies and removes them again
-	// before every step, round after round. Prints how many rounds it survived and returns 0, or ends where Jolt aborts.
+	// before every step, round after round. Prints how many rounds it survived and returns 0, or ends where box3d aborts.
 	int RunBroadPhaseChurnProcess();
 
 	// Advances a running scene by `steps` fixed steps (each update covers exactly one fixed timestep).

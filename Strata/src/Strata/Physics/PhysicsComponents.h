@@ -34,7 +34,7 @@ namespace Strata
 		float Friction = 0.5f;
 		float Restitution = 0.0f;
 		bool IsTrigger = false; // Reports overlaps without colliding
-		bool ContinuousCollision = false;
+		bool ContinuousCollision = false; // Also swept against moving bodies (every dynamic body is swept against static ones)
 		bool LockRotationX = false;
 		bool LockRotationY = false;
 		bool LockRotationZ = false;

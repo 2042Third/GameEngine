@@ -1079,14 +1079,14 @@ TEST_SUITE("Editor.Commands")
 	TEST_CASE("Physics capacities are validated and changed in one undo step")
 	{
 		CommandHarness harness;
-		const nlohmann::json automatic = { { "maxBodies", 0 }, { "maxBodyPairs", 0 }, { "maxContactConstraints", 0 } };
+		const nlohmann::json automatic = { { "maxBodies", 0 }, { "maxContactConstraints", 0 } };
 		CHECK(harness.Run("scene.info")["settings"]["physicsCapacity"] == automatic);
 
 		// Invalid values change nothing: they are not counts in range, or not capacities at all.
 		const nlohmann::json invalid[] = {
 			{ { "maxBodies", -1 } },
 			{ { "maxBodies", uint64_t(PhysicsCapacitySettings::c_MaxBodiesLimit) + 1 } },
-			{ { "maxBodyPairs", 2.5 } },
+			{ { "maxContactConstraints", 2.5 } },
 			{ { "maxContactConstraints", "lots" } },
 			{ { "maxBodies", 64 }, { "gravityScale", 2 } },
 			nlohmann::json::array({ 64 }) };
@@ -1102,20 +1102,48 @@ TEST_SUITE("Editor.Commands")
 		const size_t steps = harness.Context.GetUndoStack().GetPosition();
 		const nlohmann::json changed = harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", 200000 }, { "maxContactConstraints", 50000 } } },
 			{ "fixedTimestep", 0.02 } })["settings"];
-		CHECK(changed["physicsCapacity"] == nlohmann::json { { "maxBodies", 200000 }, { "maxBodyPairs", 0 }, { "maxContactConstraints", 50000 } });
-		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 0, 50000 });
+		CHECK(changed["physicsCapacity"] == nlohmann::json { { "maxBodies", 200000 }, { "maxContactConstraints", 50000 } });
+		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 50000 });
 		CHECK(harness.Context.GetUndoStack().GetPosition() == steps + 1);
 
 		harness.Run("edit.undo");
 		CHECK(harness.Run("scene.info")["settings"]["physicsCapacity"] == automatic);
 		CHECK(harness.Run("scene.info")["settings"]["fixedTimestep"].get<double>() == doctest::Approx(1.0 / 60.0));
 		harness.Run("edit.redo");
-		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 0, 50000 });
+		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 50000 });
+
+		// 0.4.0's maxBodyPairs (its physics library's pair buffer) is accepted, so that command scripts written for it keep
+		// working, but ignored: box3d has none, as the warning says. Nothing changes, so there is no undo step.
+		for (const nlohmann::json& pairs : { nlohmann::json(65536), nlohmann::json(2.5) })
+		{
+			INFO(pairs.dump());
+			const size_t pairSteps = harness.Context.GetUndoStack().GetPosition();
+			const nlohmann::json ignored = harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodyPairs", pairs } } } });
+			REQUIRE(ignored.contains("warning"));
+			CHECK(ignored["warning"].get<std::string>().find("maxBodyPairs is ignored") != std::string::npos);
+			CHECK(ignored["settings"]["physicsCapacity"] == nlohmann::json { { "maxBodies", 200000 }, { "maxContactConstraints", 50000 } });
+			CHECK(harness.Context.GetUndoStack().GetPosition() == pairSteps);
+		}
+		const nlohmann::json withPairs = harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", 300000 }, { "maxBodyPairs", 1000 } } } });
+		CHECK(withPairs.contains("warning"));
+		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 300000, 50000 });
+		harness.Run("edit.undo");
+		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 50000 });
+		const nlohmann::json withoutPairs = harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", 200000 } } } });
+		CHECK_FALSE(withoutPairs.contains("warning"));
+		// The schema allows what the command accepts: clients that validate requests against it send maxBodyPairs too, and
+		// learn that it is deprecated.
+		const EditorCommand* setSettings = harness.Commands.Find("scene.setSettings");
+		REQUIRE(setSettings);
+		const nlohmann::json& capacitySchema = setSettings->Parameters["properties"]["physicsCapacity"];
+		CHECK(capacitySchema["additionalProperties"] == false);
+		REQUIRE(capacitySchema["properties"].contains("maxBodyPairs"));
+		CHECK(capacitySchema["properties"]["maxBodyPairs"]["deprecated"] == true);
+		CHECK_FALSE(capacitySchema["properties"]["maxBodyPairs"].contains("type"));
 
 		// The limits are accepted; one more is not.
-		const PhysicsCapacitySettings limits { PhysicsCapacitySettings::c_MaxBodiesLimit, PhysicsCapacitySettings::c_MaxBodyPairsLimit,
-			PhysicsCapacitySettings::c_MaxContactConstraintsLimit };
-		const std::pair<const char*, uint64_t> beyondLimits[] = { { "maxBodyPairs", uint64_t(limits.MaxBodyPairs) + 1 },
+		const PhysicsCapacitySettings limits { PhysicsCapacitySettings::c_MaxBodiesLimit, PhysicsCapacitySettings::c_MaxContactConstraintsLimit };
+		const std::pair<const char*, uint64_t> beyondLimits[] = { { "maxBodies", uint64_t(limits.MaxBodies) + 1 },
 			{ "maxContactConstraints", uint64_t(limits.MaxContactConstraints) + 1 } };
 		for (const auto& [name, value] : beyondLimits)
 		{
@@ -1123,8 +1151,7 @@ TEST_SUITE("Editor.Commands")
 			CHECK(harness.Commands.Execute(harness.Context, "scene.setSettings", { { "physicsCapacity", { { name, value } } } }).ErrorKind
 				== EditorCommandError::InvalidParameters);
 		}
-		harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", limits.MaxBodies }, { "maxBodyPairs", limits.MaxBodyPairs },
-			{ "maxContactConstraints", limits.MaxContactConstraints } } } });
+		harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", limits.MaxBodies }, { "maxContactConstraints", limits.MaxContactConstraints } } } });
 		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == limits);
 		harness.Run("edit.undo");
 
@@ -1147,7 +1174,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK(gravityOnly["warning"].get<std::string>().find("capacities") == std::string::npos);
 		CHECK(harness.Context.GetUndoStack().GetPosition() == playSteps);
 		harness.Run("play.stop");
-		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 0, 50000 });
+		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 50000 });
 		CHECK_FALSE(harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", 300000 } } } }).contains("warning"));
 	}
 

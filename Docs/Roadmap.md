@@ -685,6 +685,33 @@ Open items and deferrals later waves own:
     29.1 ms against 25 ms, `PerfGPU.Editor.PlayStartWorldMaxFrame` 37-61 ms against 50 ms); the editor-frame
     no-regression A/Bs (`PerfGPU.Editor.{Edit,Play}FrameNested{100k,1M}`, `SceneOpen*`) cannot be judged on the Mac,
     and `Perf.Physics.Boxes30kTracked.StrataStepTime` measured 1.022 times the step-0 base (36 pairs).
+  - Wave 5's `physics-box3d` (physics on box3d instead of Jolt; Mac A/Bs against step 0's build, 3 interleaved pairs,
+    ratios of medians): busy frames 0.58-0.63 (`Boxes70k.ActiveFrame` 24.7 to 14.4 ms, `Boxes10k` 3.53 to 2.23,
+    `Boxes30kTracked` 11.0 to 6.9), whole steps 0.60-0.63, `Boxes30k.StartAnd30Frames` 0.66, `Characters1000Step` 0.41,
+    `PerfGPU.World.CellDriveMaxFrame` 0.73 and `Perf.World.DrivePeakPrivate` 0.74, no body waiting and no dropped
+    contact. Creating and removing bodies costs more, because box3d inserts every shape into its trees one at a time on
+    the main thread (its API allows no other thread), where Jolt built them in parallel and in bulk:
+    `Create100kStaticBodies` 3.40 (28.8 to 98 ms; box3d's `b3InsertLeaf` alone is 54% of it, and box3d by itself takes
+    69-73 ms for those bodies), `Create10kBodies` 2.89 (3.4 to 9.7 ms; box3d alone 6.3 ms; this one has a confirmed
+    budget, 11.99 ms from Jolt's 7.995 ms on the reference machine, which box3d is expected to exceed there at about
+    23 ms, so `-L perf` will fail on it: the owner either grants an exception to "budgets only go down", to be measured
+    again on the reference machine, or holds the merge until creating bodies costs less), `CellUnloadMaxFrame` 1.66
+    (2.6 to 4.4 ms; box3d alone disables 25,000 static bodies in 2.0-2.5 ms), `CellDriveMaxFrame` 1.31 and
+    `DriveFrameP95` 1.23 (both noisy), and `Grow65kMaxFrame` (65,536 bodies created in one frame) 73-80 ms against its
+    16.7 ms target. The port keeps the rule that every body gets its collision at once (a body a frame leaves without
+    collision is a gameplay defect, a slow frame of a large spawn is not), so the way down is bulk insertion and removal
+    in box3d (its trees already build in bulk, `b3DynamicTree_Rebuild`, but its API inserts every shape), taken with a
+    later box3d bump. Strata's own part of creating the 100,000 static bodies grew from about 17 to 27 ms in sampled
+    runs, mostly allocations per body: a follow-up, since removing all of it would still leave about 2.5 times Jolt's
+    time.
+    A world now reserves a scene's own room in box3d at once, up to 131,072 bodies (it reserved only the automatic room
+    of the starting bodies before the review round): Mac A/B of that change, 4 interleaved pairs, `CellDriveMaxFrame`
+    0.85 (noisy), `CellUnloadMaxFrame` 0.94, `Create100kStaticBodies` and `Grow65kMaxFrame` 1.00, and the pages
+    touched at play start for the largest room 0.7 to 25.9 MB (Windows commits the whole reservation: up to 343 MB by
+    the estimate, below the 1,033 MB budget). New provisional metrics: `StrataToLibraryStep`
+    (Mac: `Boxes10k` 0.45, `Boxes30kTracked` 0.92, `Boxes70k` 0.61) and `Grow65kMaxFrame` (the median of 5 fresh
+    worlds' growth frames); the reference machine measures them and checks `StrataStepTime` against its existing
+    budgets (Mac ratios 0.87, 1.01 and 0.87) and `Create10kBodies` against its budget (above).
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
 
@@ -884,7 +911,8 @@ The wave-4 audits rank these first for wave 5:
 - **`mesh-streaming`:** Mesh v2 with quantized vertices, per-LOD streaming on the geometry pool, and a collision
   sub-asset, so physics stops depending on the renderer's Mesh.
 - **HLOD:** merged, simplified cells with baked atlases for distant parts of a world.
-- **`world-environment`:** terrain cooked into world cells, with height-field colliders and sculpt and paint tools.
+- **`world-environment`:** terrain cooked into world cells, with height-field colliders (box3d's height-field shapes)
+  and sculpt and paint tools.
 - **`animation-authoring`:** previews and scrubbing of animators, clips and transitions in the Inspector and the Asset
   tab.
 - **Exported-game automation:** command scripts, simulated input and expectations in StrataRuntime.
@@ -898,7 +926,10 @@ Further:
 - Localization with string tables and font fallback chains.
 - BC6H.
 - ImGui multi-viewports.
-- Physics joints, ragdolls and vehicles.
+- Physics joints, ragdolls and vehicles, on box3d's joints (revolute, prismatic, spherical, weld, wheel, distance,
+  motor): components, gizmos, a script API and the feature test, in a stream of their own after the port to box3d.
+- Triggers that meet triangle-mesh colliders (box3d's sensors skip meshes), and box3d's recordings and replays as an
+  editor debugging tool.
 - Level-design tools beyond placement: orthographic views, surface and vertex snapping, hiding and locking in the editor
   only.
 - OBJ and FBX import.

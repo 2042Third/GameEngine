@@ -117,6 +117,30 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_TEST_SOURCES}
 target_link_libraries(StrataTests PRIVATE Strata StrataTooling StrataScriptCore doctest stb)
 # The glTF tests compress models with meshoptimizer's encoders (EXT_meshopt_compression), which the engine only decodes.
 target_link_libraries(StrataTests PRIVATE meshoptimizer)
+# The physics tests drive box3d directly too, among them box3d's own cross-platform determinism scenario (its golden hash,
+# Physics.Box3D): compiled from the vendored sources as box3d compiles itself (C17, no floating-point contraction), for the
+# tests only.
+if(STRATA_WITH_PHYSICS)
+	set(BOX3D_SHARED_DIR "${PROJECT_SOURCE_DIR}/Strata/vendor/box3d/shared")
+	add_library(StrataTestsBox3DScenarios STATIC "${BOX3D_SHARED_DIR}/determinism.c" "${BOX3D_SHARED_DIR}/human.c" "${BOX3D_SHARED_DIR}/utils.c")
+	set_target_properties(StrataTestsBox3DScenarios PROPERTIES C_STANDARD 17 C_STANDARD_REQUIRED YES C_EXTENSIONS YES FOLDER "Vendor")
+	target_include_directories(StrataTestsBox3DScenarios SYSTEM PUBLIC "${BOX3D_SHARED_DIR}")
+	target_link_libraries(StrataTestsBox3DScenarios PUBLIC box3d)
+	# Vendor code: compiled without warnings, like the library it exercises.
+	if(MSVC)
+		target_compile_options(StrataTestsBox3DScenarios PRIVATE /W0)
+	else()
+		target_compile_options(StrataTestsBox3DScenarios PRIVATE -w)
+	endif()
+	if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+		if(CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+			target_compile_options(StrataTestsBox3DScenarios PRIVATE /clang:-ffp-contract=off)
+		else()
+			target_compile_options(StrataTestsBox3DScenarios PRIVATE -ffp-contract=off)
+		endif()
+	endif()
+	target_link_libraries(StrataTests PRIVATE box3d StrataTestsBox3DScenarios)
+endif()
 # The editor's UI library brings the editor core; the UI tests draw it headless (src/Editor/ImGuiHarness.h).
 if(TARGET StrataEditorUI)
 	target_link_libraries(StrataTests PRIVATE StrataEditorUI)
@@ -515,7 +539,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataRuntime.PerfLog PROPERTIES FIXTURES_REQUIRED StrataExportedGame FIXTURES_SETUP StrataRuntimePerfLog)
 	add_test(NAME StrataRuntime.PerfLogCheck
 		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLog.csv" 30 --nonzero Assets.Update --column WorldCellsLoaded
-			--column PhysicsBodiesWaiting --column PhysicsMaxBodies --column World.Streaming)
+			--column PhysicsBodiesWaiting --column PhysicsBodiesPending --column PhysicsMaxBodies --column World.Streaming)
 	set_tests_properties(StrataRuntime.PerfLogCheck PROPERTIES FIXTURES_REQUIRED StrataRuntimePerfLog)
 	add_test(NAME StrataRuntime.InvalidPerfLog
 		COMMAND "${CMAKE_COMMAND}"
@@ -689,7 +713,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataEditor.Tetris PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
 	# The Physics Playground: about 600 bodies settle (a tower, a pyramid, 500 balls), ghosts sink through the balls to the pit's
 	# floor (their layers do not collide), the domino run falls, the goal counts what the funnel feeds it, a shot flies along
-	# the view, a hot reload keeps the fields and R resets the scene; the checks run paused, so "until" waits in exact steps.
+	# the view, a hot reload keeps the fields, R resets the scene and a pour of 100 balls stays in the pit (balls spawned
+	# overlapping would be thrown over its walls); the checks run paused, so "until" waits in exact steps.
 	# The exported games run the demo by themselves.
 	add_test(NAME StrataEditor.PhysicsPlayground
 		COMMAND "${CMAKE_COMMAND}"
@@ -726,7 +751,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	# The Open World: a streamed island (a world of three layers over 97 terrain tiles in the persistent scene, 20,000 props,
 	# 30 foxes, five camps). The explorer streams cells in, walks on the terrain, teleports 500 m once the cells and the ground
 	# there are in, a fox wanders and the campfires light at dusk; the exported games fly the tour over cooked cells, their
-	# perf logs showing cells loaded, streaming at work and no body waiting for its collider.
+	# perf logs showing cells loaded, streaming at work, no body waiting at the physics world's growth limit and none still
+	# waiting for its collider at the end (the terrain's 97 mesh colliders cook in the first frames, the simulation holding).
 	add_test(NAME StrataEditor.OpenWorld
 		COMMAND "${CMAKE_COMMAND}"
 			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
@@ -743,7 +769,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DGAME_FRAMES=1800"
 			"-DPERF_LOG=ON"
 			"-DPERF_CHECKER=$<TARGET_FILE:StrataTests>"
-			"-DPERF_CHECK=--nonzero|WorldCellsLoaded|--nonzero|World.Streaming|--max|PhysicsBodiesWaiting|0"
+			"-DPERF_CHECK=--nonzero|WorldCellsLoaded|--nonzero|World.Streaming|--max|PhysicsBodiesWaiting|0|--last-max|PhysicsBodiesPending|0"
 			# A fresh copy has never built its scripts: opening its scene says so, and play.start builds them.
 			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'OpenWorld' are not built yet"
 			# On CI's runners the editor's play copy loads and cooks the terrain's 97 mesh colliders while the start's cells
@@ -755,7 +781,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
 	set_tests_properties(StrataEditor.OpenWorld PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataOpenWorldExport)
 	# In a window at 1920 x 1080 with a small texture budget (mip streaming under pressure): the island fills the picture,
-	# and the perf log shows cells loaded, streaming and the GPU at work, and no body waiting for its collider.
+	# and the perf log shows cells loaded, streaming and the GPU at work, no body waiting at the growth limit and none left
+	# waiting for its collider at the end.
 	set(STRATA_OPEN_WORLD_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/OpenWorld/$<CONFIG>")
 	add_test(NAME StrataRuntime.OpenWorldWindowed
 		COMMAND "${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1920x1080 --frames 1200 --asset-budget-mb 128
@@ -767,7 +794,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataRuntime.OpenWorldWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
 	add_test(NAME StrataRuntime.OpenWorldWindowedPerf
 		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_OPEN_WORLD_DIR}/Windowed.csv" 1200 --nonzero WorldCellsLoaded
-			--nonzero World.Streaming --nonzero GPUBusyMs --max PhysicsBodiesWaiting 0)
+			--nonzero World.Streaming --nonzero GPUBusyMs --max PhysicsBodiesWaiting 0 --last-max PhysicsBodiesPending 0)
 	set_tests_properties(StrataRuntime.OpenWorldWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
 	# The editor with a GPU at the start: the GPU-driven path draws thousands of instances in a few indirect commands.
 	add_test(NAME StrataEditor.OpenWorldRender

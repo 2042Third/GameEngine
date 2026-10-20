@@ -1230,7 +1230,7 @@
 					"Min": 0.0,
 					"Name": "ContinuousCollision",
 					"Speed": 0.0,
-					"Tooltip": "",
+					"Tooltip": "Also swept against kinematic and dynamic bodies, for bullets (every dynamic body is swept against static ones anyway)",
 					"Type": "Bool"
 				},
 				{

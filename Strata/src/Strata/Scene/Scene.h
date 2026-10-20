@@ -37,22 +37,20 @@ namespace Strata
 	struct SubSceneLoad;
 	struct TransformComponent;
 
-	// Capacities of a scene's physics world, fixed when its simulation is created. 0 sizes a capacity automatically from the
-	// bodies the scene has when it starts playing (see PhysicsWorld): set them for scenes that create many bodies while they
-	// play (spawners, streamed cells), which the automatic sizes cannot foresee.
+	// The room of a scene's physics world when its simulation is created. 0 sizes it automatically from the bodies the scene
+	// has when it starts playing (see PhysicsWorld). The world grows while bodies are created beyond it, in place, so set
+	// them for scenes that create many bodies while they play (spawners, streamed cells) to keep that growth out of play.
+	// (0.4.0 files also hold a MaxBodyPairs, the size of its physics library's buffer of overlapping pairs: read and ignored.)
 	struct PhysicsCapacitySettings
 	{
 		uint32_t MaxBodies = 0;
-		uint32_t MaxBodyPairs = 0;          // Pairs of bodies whose bounds overlap, per step
 		uint32_t MaxContactConstraints = 0; // Contacts solved per step
 
-		// The largest values a scene may ask for, whether its file or a command sets them. The physics engine reserves memory
-		// for every capacity when the world is created, and does not survive an allocation that fails, so the limits bound
-		// what one world reserves: about 80 bytes per body, 90 per body pair and 830 per contact constraint, so about 940 MiB
-		// at the limits. A scene holds at most Scene::c_MaxEntities (2^20 - 1) entities, so 2^21 bodies have room for all of
-		// them, with the automatic sizing's headroom.
+		// The largest values a scene may ask for, whether its file or a command sets them. A world's room is bounded by
+		// MaxBodies (its bodies wait beyond it); a scene holds at most Scene::c_MaxEntities (2^20 - 1) entities, so 2^21
+		// bodies have room for all of them, with the automatic sizing's headroom. box3d reserves the room at once up to
+		// PhysicsWorld::c_MaxBodiesReservedAtCreation and grows its storage beyond it while bodies come.
 		static constexpr uint32_t c_MaxBodiesLimit = 1u << 21;
-		static constexpr uint32_t c_MaxBodyPairsLimit = 1u << 22;
 		static constexpr uint32_t c_MaxContactConstraintsLimit = 1u << 19;
 
 		bool operator==(const PhysicsCapacitySettings& other) const = default;

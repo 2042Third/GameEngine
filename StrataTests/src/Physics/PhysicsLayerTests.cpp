@@ -218,6 +218,60 @@ TEST_SUITE("Physics.Layers")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Changing the matrix while bodies touch ends only the pairs whose layers it parts")
+	{
+		Scene scene;
+		Entity ground = CreateGround(scene); // Layer 0
+		Entity box = CreateBoxAbove(scene, "Box", 0.0f, 1);
+		// The box comes to rest inside a trigger of layer 2, and a crate on a character of layer 1.
+		Entity zone = CreateStaticBox(scene, "Zone", glm::vec3(0.0f, 0.5f, 0.0f), glm::vec3(1.0f));
+		RigidBodyComponent& zoneBody = zone.AddComponent<RigidBodyComponent>();
+		zoneBody.Type = RigidBodyType::Static;
+		zoneBody.IsTrigger = true;
+		zoneBody.Layer = 2;
+		Entity character = scene.CreateEntity("Character");
+		character.GetTransform().Translation = glm::vec3(5.0f, 0.0f, 0.0f);
+		CharacterControllerComponent& controller = character.AddComponent<CharacterControllerComponent>();
+		controller.Height = 1.8f;
+		controller.Radius = 0.3f;
+		controller.Layer = 1;
+		Entity crate = CreateDynamicBox(scene, "Crate", glm::vec3(5.0f, 3.0f, 0.0f), glm::vec3(0.2f));
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		CollisionRecorder recorder(physics);
+		StepScene(scene, 90);
+		REQUIRE(recorder.Count(CollisionEventType::Begin, box.GetUUID(), ground.GetUUID()) == 1);
+		REQUIRE(recorder.Count(CollisionEventType::Begin, zone.GetUUID(), box.GetUUID()) == 1);
+		REQUIRE(recorder.Count(CollisionEventType::Begin, character.GetUUID(), ground.GetUUID()) == 1);
+		REQUIRE(recorder.Count(CollisionEventType::Begin, character.GetUUID(), crate.GetUUID()) == 1);
+		REQUIRE(recorder.Count(CollisionEventType::End) == 0);
+		const size_t begins = recorder.Count(CollisionEventType::Begin);
+		const uint32_t pairs = physics.GetStats().ContactPairCount;
+
+		// Layers 1 and 3 part: the box's and the character's shapes take new filters, and box3d drops their contacts and finds
+		// them again. Nothing stopped touching, so nothing ends or begins.
+		physics.SetLayersCollide(1, 3, false);
+		StepScene(scene, 10);
+		CHECK(recorder.Count(CollisionEventType::End) == 0);
+		CHECK(recorder.Count(CollisionEventType::Begin) == begins);
+		CHECK(physics.GetStats().ContactPairCount == pairs);
+
+		// Layers 1 and 2 part: the box leaves the zone, and only that pair ends.
+		physics.SetLayersCollide(1, 2, false);
+		StepScene(scene, 2);
+		CHECK(recorder.Count(CollisionEventType::End, zone.GetUUID(), box.GetUUID()) == 1);
+		CHECK(recorder.Count(CollisionEventType::End) == 1);
+		CHECK(recorder.Count(CollisionEventType::Begin) == begins);
+
+		// Layers 0 and 1 part: the box and the character lose the ground (and fall through it).
+		physics.SetLayersCollide(0, 1, false);
+		StepScene(scene, 2);
+		CHECK(recorder.Count(CollisionEventType::End, box.GetUUID(), ground.GetUUID()) == 1);
+		CHECK(recorder.Count(CollisionEventType::End, character.GetUUID(), ground.GetUUID()) == 1);
+		CHECK(recorder.Count(CollisionEventType::Begin) == begins);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Letting two layers collide while the scene plays makes their bodies collide")
 	{
 		Scene scene;

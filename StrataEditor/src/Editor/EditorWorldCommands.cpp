@@ -339,7 +339,7 @@ namespace Strata
 					{ "slotsUsed", capacity.Bodies } } },
 				{ "capacity", {
 					{ "maxBodies", stats.MaxBodies },
-					{ "maxBodyPairs", stats.MaxBodyPairs },
+					{ "growthLimit", stats.GrowthLimit },
 					{ "maxContactConstraints", stats.MaxContactConstraints },
 					{ "reservedMB", static_cast<double>(capacity.ReservedBytes) / c_BytesPerMB } } },
 				{ "waitingForSlot", capacity.WaitingForSlot },
@@ -355,9 +355,7 @@ namespace Strata
 					{ "to", stats.LastGrowthTo } } },
 				{ "demand", {
 					{ "bodies", stats.Demand.Bodies },
-					{ "bodyPairs", stats.Demand.BodyPairs },
 					{ "contactConstraints", stats.Demand.ContactConstraints } } },
-				{ "contactOverflowSteps", stats.ContactOverflowSteps },
 				{ "lastStepMs", stats.LastStepTime },
 				{ "steps", stats.StepCount },
 				{ "heldSteps", stats.HeldStepCount },
@@ -961,12 +959,12 @@ namespace Strata
 
 		registry.Register({ "physics.stats",
 			"The physics of the running game (play or simulate): bodies in the simulation (total, static, dynamic, kinematic, awake, character "
-			"controllers) and the body slots in use, the world's capacities (maxBodies, maxBodyPairs, maxContactConstraints) and the memory they "
-			"reserve (reservedMB), bodies waiting for a slot (only a world at its growth limit leaves bodies without collision; others grow before "
-			"their next step) and waiting for other reasons (meshes loading, degenerate transforms), the bodies built and destroyed and the "
-			"milliseconds spent on it in the last frame, the slices a switched-to scene's bodies were built in while it loaded (preparedSlices; 0 when they "
-			"were built as the scene started), the world's growths (count, the last one's milliseconds and capacities), what the world "
-			"needed beyond its capacities (demand), steps that dropped contacts, the last step's milliseconds, the steps run, the steps held while "
+			"controllers) and the bodies in use, the world's room (maxBodies: as it grew; growthLimit: the most it may hold; maxContactConstraints) "
+			"and the memory it takes (reservedMB), bodies waiting at the growth limit (waitingForSlot: below it no body waits) and waiting for "
+			"other reasons (meshes loading, degenerate transforms), the bodies built and destroyed and the milliseconds spent on it in the last "
+			"frame, the slices a switched-to scene's bodies were built in while it loaded (preparedSlices; 0 when they were built as the scene "
+			"started), the world's growths past its room (count, the last one's milliseconds and room), what the world needed beyond the room it "
+			"was created with (demand: the scene's next world reserves it), the last step's milliseconds, the steps run, the steps held while "
 			"mesh colliders wait for their meshes, and whether the last step was held. {running: false} while editing; simulating is false while "
 			"a running scene has no physics components.",
 			ObjectSchema({}),

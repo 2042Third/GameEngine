@@ -335,14 +335,15 @@ TEST_SUITE("Runtime.Game")
 
 		// The perf log's columns read the running scene's streaming and physics.
 		const FramePerfColumnGroup columns = game->MakePerfLogColumns();
-		REQUIRE(columns.Names.size() == 7);
+		REQUIRE(columns.Names.size() == 8);
 		CHECK(columns.Names[2] == "WorldCellsLoaded");
 		CHECK(columns.Names[5] == "PhysicsBodiesWaiting");
+		CHECK(columns.Names[6] == "PhysicsBodiesPending");
 		std::string line;
 		FramePerfRow row(line);
 		columns.Write(row);
-		REQUIRE(row.GetCount() == 7);
-		const std::optional<PerfLogTable> table = ParsePerfLog("A,B,C,D,E,F,G\n" + line.substr(1) + "\n", error);
+		REQUIRE(row.GetCount() == 8);
+		const std::optional<PerfLogTable> table = ParsePerfLog("A,B,C,D,E,F,G,H\n" + line.substr(1) + "\n", error);
 		REQUIRE_MESSAGE(table, error);
 		const std::vector<double>& values = table->Rows[0];
 		CHECK(values[0] >= 4.0); // Wanted
@@ -350,12 +351,14 @@ TEST_SUITE("Runtime.Game")
 #if ST_WITH_PHYSICS
 		CHECK(values[4] >= static_cast<double>(4 * world.BodiesPerGroundCell)); // Bodies
 		CHECK(values[5] == 0.0); // Waiting
-		CHECK(values[6] >= values[4]); // Capacity
+		CHECK(values[6] == 0.0); // Pending: the cells' boxes need no mesh
+		CHECK(values[7] >= values[4]); // Capacity
 #else
 		// An engine without physics leaves the physics columns empty.
 		CHECK(std::isnan(values[4]));
 		CHECK(std::isnan(values[5]));
 		CHECK(std::isnan(values[6]));
+		CHECK(std::isnan(values[7]));
 #endif
 	}
 

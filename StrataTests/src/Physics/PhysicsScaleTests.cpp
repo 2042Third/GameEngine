@@ -42,9 +42,10 @@ namespace
 		return boxes;
 	}
 
-	size_t CountDroppedContactWarnings(uint64_t logStart)
+	// Warnings of the physics module and of box3d logged since `logStart`.
+	size_t CountPhysicsWarnings(uint64_t logStart)
 	{
-		return CountLogMessages(logStart, "contacts were dropped") + CountLogMessages(logStart, "is full");
+		return CountLogMessages(logStart, "Physics: ") + CountLogMessages(logStart, "box3d: ");
 	}
 
 }
@@ -64,13 +65,12 @@ TEST_SUITE("Physics.Scale")
 		PhysicsSystem& physics = GetPhysics(scene);
 		StepScene(scene, 2);
 
-		// Every box touches the floor: one Enter each, and no buffer overflowed.
+		// Every box touches the floor: one Enter each, and nothing was warned about.
 		const ScriptSystem& scripts = GetScriptSystem(scene);
 		CHECK(GetField<int32_t>(scripts, floor, "ContactRecorder", "CollisionEnters") == 5000);
 		CHECK(GetField<int32_t>(scripts, floor, "ContactRecorder", "CollisionExits") == 0);
-		CHECK(CountDroppedContactWarnings(logStart) == 0);
+		CHECK(CountPhysicsWarnings(logStart) == 0);
 		PhysicsStats stats = physics.GetStats();
-		CHECK(stats.ContactOverflowSteps == 0);
 		CHECK(stats.ContactPairCount == 5000);
 
 		// Removing boxes ends their contacts with the floor, whose list holds thousands of pairs: each removal writes a few
@@ -91,7 +91,7 @@ TEST_SUITE("Physics.Scale")
 		CHECK(secondOperations >= 1250);
 		CHECK(GetField<int32_t>(scripts, floor, "ContactRecorder", "CollisionExits") == 2500);
 		CHECK(physics.GetStats().ContactPairCount == 2500);
-		CHECK(CountDroppedContactWarnings(logStart) == 0);
+		CHECK(CountPhysicsWarnings(logStart) == 0);
 		CHECK_FALSE(engine->IsFaulted());
 		scene.OnRuntimeStop();
 	}
@@ -103,7 +103,7 @@ TEST_SUITE("Physics.Scale")
 		std::vector<Entity> boxes = CreateRestingBoxes(scene, 16);
 
 		// Playing without listeners of every entity and without watched entities (the scripting system listens, but no script
-		// has contact callbacks): contacts cost nothing beyond Jolt's step.
+		// has contact callbacks): contacts cost nothing beyond box3d's step.
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
 		ICollisionEventSource* contacts = scene.GetService<ICollisionEventSource>();
@@ -278,7 +278,7 @@ TEST_SUITE("Physics.Scale")
 
 	TEST_CASE("Contact events do not depend on how many threads report them")
 	{
-		// Reports from Jolt's job threads go into per-thread buffers, merged after the step: the events must come out the
+		// box3d's tasks run on any number of workers, and its events are read after the step: the events must come out the
 		// same, in the same order, with any number of workers.
 		const auto record = [](uint32_t workers)
 		{

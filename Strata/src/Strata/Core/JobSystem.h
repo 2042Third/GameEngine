@@ -91,7 +91,7 @@ namespace Strata
 	// inline on the calling thread, so engine code never needs to special-case single-threaded operation.
 	//
 	// Workers and I/O threads run at the normal thread priority, like the main thread: frame work runs on the workers
-	// (Jolt's jobs, transform propagation, the renderer's extraction), and a frame that waits for a job a worker has started
+	// (box3d's tasks, transform propagation, the renderer's extraction), and a frame that waits for a job a worker has started
 	// can only go on once that worker got the processor back. Background threads run below it (Platform's
 	// ThreadPriority::BelowNormal): a pool as large as the processors busy with long jobs would otherwise share them evenly
 	// with the frame's threads and stretch frames by whole scheduling quanta.

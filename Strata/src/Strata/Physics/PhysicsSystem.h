@@ -199,6 +199,7 @@ namespace Strata
 		Scope<PhysicsWorld> m_World;
 		bool m_Running = false;
 		bool m_WorldRequested = false;
+		bool m_ReportedNoWorld = false; // The scene found no free physics world (reported once)
 		uint32_t m_ReservedBodies = 0; // See Reserve
 		std::vector<entt::scoped_connection> m_CreationConnections; // Watch for the first physics component
 

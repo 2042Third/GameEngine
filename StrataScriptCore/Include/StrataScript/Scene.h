@@ -159,7 +159,8 @@ namespace Strata
 			return host ? Entity(host->Instantiate(Detail::GetContext(), asset.ID, parent.GetID(), nullptr)) : Entity();
 		}
 
-		// Instantiates with the given local transform for the root (relative to the parent, or the world for roots).
+		// Instantiates with the given local transform for the root (relative to the parent, or the world for roots). It
+		// replaces the prefab root's whole transform: its scale is `scale` (1 unless passed), not the prefab's.
 		static Entity Instantiate(AssetHandle asset, const glm::vec3& translation, const glm::quat& rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
 			const glm::vec3& scale = glm::vec3(1.0f), Entity parent = Entity())
 		{

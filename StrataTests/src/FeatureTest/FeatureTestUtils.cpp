@@ -430,19 +430,18 @@ namespace Strata::Tests
 		CHECK(bodies == 3);
 
 		// The scene's physics capacities (a scene setting: non-default in every field, so they prove that they serialize) sized
-		// its world, and sufficed.
+		// its world's room, and sufficed: it never grew. (Its MaxBodyPairs, a 0.4.0 key box3d has no use for, loads without a
+		// warning.)
 		const PhysicsCapacitySettings& capacity = scene.GetSettings().PhysicsCapacity;
 		CHECK(capacity.MaxBodies != PhysicsCapacitySettings().MaxBodies);
-		CHECK(capacity.MaxBodyPairs != PhysicsCapacitySettings().MaxBodyPairs);
 		CHECK(capacity.MaxContactConstraints != PhysicsCapacitySettings().MaxContactConstraints);
 		const PhysicsSystem* physics = scene.GetSystem<PhysicsSystem>();
 		REQUIRE(physics != nullptr);
 		const PhysicsStats physicsStats = physics->GetStats();
 		CHECK(physicsStats.MaxBodies == capacity.MaxBodies);
-		CHECK(physicsStats.MaxBodyPairs == capacity.MaxBodyPairs);
 		CHECK(physicsStats.MaxContactConstraints == capacity.MaxContactConstraints);
 		CHECK(physicsStats.BodyOverflowCount == 0);
-		CHECK(physicsStats.ContactOverflowSteps == 0);
+		CHECK(physicsStats.GrowthCount == 0);
 
 		// The scene's collision layers (names and a matrix that is not the default, so they prove that they serialize) reached
 		// the running scene; the feature scripts read them (PhysicsApiFeatures).

@@ -116,8 +116,9 @@ namespace Strata
 
 		// The perf log's columns of the running scene's world streaming and physics capacity (FramePerfLog column groups):
 		// WorldCellsWanted, WorldCellsLoading, WorldCellsLoaded, WorldCellsUnloading (IWorldStreaming), PhysicsBodies,
-		// PhysicsBodiesWaiting and PhysicsMaxBodies (IPhysicsCapacity); empty while no scene plays or its systems offer no such
-		// service. The group reads this runtime: it must not outlive it.
+		// PhysicsBodiesWaiting (at the growth limit), PhysicsBodiesPending (for a mesh or a valid transform) and PhysicsMaxBodies
+		// (IPhysicsCapacity); empty while no scene plays or its systems offer no such service. The group reads this runtime: it
+		// must not outlive it.
 		FramePerfColumnGroup MakePerfLogColumns() const;
 	private:
 		GameRuntime() = default;

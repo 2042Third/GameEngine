@@ -1454,11 +1454,11 @@ TEST_SUITE("Editor.UI.Inspector")
 		const auto capacity = [&]() { return editor.Context().GetActiveScene()->GetSettings().PhysicsCapacity; };
 		REQUIRE(capacity() == PhysicsCapacitySettings());
 		CHECK(editor.ProbeText("Inspector.Scene.MaxBodies.Label") == "Max Bodies");
-		CHECK(editor.ProbeText("Inspector.Scene.MaxBodyPairs.Label") == "Max Body Pairs");
 		CHECK(editor.ProbeText("Inspector.Scene.MaxContactConstraints.Label") == "Max Contacts");
+		// box3d has no buffer of body pairs: 0.4.0's Max Body Pairs row is gone.
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Scene.MaxBodyPairs").has_value());
 		// 0, sized automatically when play starts, reads as such rather than as no room at all.
 		CHECK(editor.ProbeText("Inspector.Scene.MaxBodies") == "Auto");
-		CHECK(editor.ProbeText("Inspector.Scene.MaxBodyPairs") == "Auto");
 		CHECK(editor.ProbeText("Inspector.Scene.MaxContactConstraints") == "Auto");
 		CHECK(editor.ProbeText("Inspector.Scene.MaxFixedStepsPerFrame") == std::to_string(SceneSettings().MaxFixedStepsPerFrame));
 
@@ -1468,22 +1468,22 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(capacity().MaxBodies == 50'000u);
 		editor.Frames(1);
 		CHECK(editor.ProbeText("Inspector.Scene.MaxBodies") == "50000");
-		CHECK(capacity().MaxBodyPairs == 0u);
+		CHECK(capacity().MaxContactConstraints == 0u);
 		CHECK(editor.UndoPosition() == position + 1);
 		editor.TypeNumber("Inspector.Scene.MaxContactConstraints", "4096");
 		CHECK(capacity().MaxContactConstraints == 4096u);
 		CHECK(capacity().MaxBodies == 50'000u);
 		CHECK(editor.UndoPosition() == position + 2);
 		// More than a world may reserve is the limit (scene.setSettings refuses more).
-		editor.TypeNumber("Inspector.Scene.MaxBodyPairs", "999999999");
-		CHECK(capacity().MaxBodyPairs == PhysicsCapacitySettings::c_MaxBodyPairsLimit);
+		editor.TypeNumber("Inspector.Scene.MaxContactConstraints", "999999999");
+		CHECK(capacity().MaxContactConstraints == PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
+		CHECK(editor.UndoPosition() == position + 3);
 
 		editor.Run("edit.undo");
 		editor.Run("edit.undo");
 		editor.Frames(1);
 		CHECK(capacity().MaxBodies == 50'000u);
 		CHECK(capacity().MaxContactConstraints == 0u);
-		CHECK(capacity().MaxBodyPairs == 0u);
 		editor.Frames(1);
 		CHECK(editor.ProbeText("Inspector.Scene.MaxContactConstraints") == "Auto");
 	}

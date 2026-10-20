@@ -67,12 +67,13 @@ TEST_SUITE("Physics.Hierarchy")
 		REQUIRE(antennaHit);
 		CHECK(antennaHit->Point.y == doctest::Approx(1.0f + 0.75f + 1.0f + 0.2f).epsilon(1.0e-3));
 
-		// The car falls as one body and is not pushed around by its own cabin.
+		// The car falls as one body and is not pushed around by its own cabin. box3d's contact solver lets a box landing flat
+		// slide a few millimeters: this car lands 6.4 mm away (x -2.1 mm, z 6.1 mm; box3d is deterministic on every platform),
+		// where a push of its own cabin would move it centimeters.
 		StepScene(scene, 150);
 		const glm::vec3 position = GetWorldPosition(scene, car.Chassis);
 		CHECK(std::abs(position.y - 0.25f) < 0.03f);
-		CHECK(std::abs(position.x) < 1.0e-3f);
-		CHECK(std::abs(position.z) < 1.0e-3f);
+		CHECK(glm::length(glm::vec2(position.x, position.z)) < 0.01f);
 		CHECK(Math::IsNearlyEqual(GetWorldRotation(scene, car.Chassis), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), 1.0e-3f));
 		CHECK(Math::IsNearlyEqual(GetWorldPosition(scene, car.Cabin), position + glm::vec3(0.0f, 0.75f, 0.5f), 1.0e-3f));
 		CHECK(physics.GetStats().ContactPairCount == 1); // Only the car touching the ground
@@ -450,5 +451,49 @@ TEST_SUITE("Physics.Hierarchy")
 		REQUIRE(signHit);
 		CHECK(signHit->HitEntity == sign);
 		CHECK(signHit->Point.y == doctest::Approx(7.5f).epsilon(1.0e-3));
+	}
+
+	TEST_CASE("A chain of moving dynamic bodies writes each one under its parent's new pose")
+	{
+		// Three dynamic bodies, each the child of the one before, all moving in the same step: every body's local transform must
+		// be written against its parent's pose of this step (parents first), or the scene places it where its parent was.
+		Scene scene;
+		struct Link
+		{
+			Entity Body;
+			glm::vec3 Start;
+			glm::vec3 Velocity;
+		};
+		std::vector<Link> chain = {
+			{ {}, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(0.0f, 0.0f, 2.0f) },
+			{ {}, glm::vec3(5.0f, 5.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f) },
+			{ {}, glm::vec3(10.0f, 5.0f, 0.0f), glm::vec3(2.0f, 0.0f, 0.0f) },
+		};
+		for (size_t index = 0; index < chain.size(); index++)
+		{
+			Link& link = chain[index];
+			link.Body = CreateDynamicBox(scene, "Link " + std::to_string(index), link.Start);
+			RigidBodyComponent& body = link.Body.GetComponent<RigidBodyComponent>();
+			body.GravityScale = 0.0f;
+			body.LinearDamping = 0.0f;
+			if (index > 0)
+				scene.SetParent(link.Body, chain[index - 1].Body);
+		}
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		for (const Link& link : chain)
+			REQUIRE(physics.SetLinearVelocity(link.Body, link.Velocity));
+
+		// Free, undamped motion: after one second each body is its velocity away from where it started.
+		const float timestep = scene.GetSettings().FixedTimestep;
+		const uint32_t steps = static_cast<uint32_t>(std::lround(1.0f / timestep));
+		StepScene(scene, steps);
+		const float seconds = static_cast<float>(steps) * timestep;
+		for (const Link& link : chain)
+		{
+			INFO(link.Body.GetName());
+			CHECK(Math::IsNearlyEqual(GetWorldPosition(scene, link.Body), link.Start + link.Velocity * seconds, 1.0e-3f));
+		}
 	}
 }
