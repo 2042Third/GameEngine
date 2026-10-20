@@ -457,10 +457,61 @@ machine" lists what waits for it.
   characters. The script ABI keeps version 1 with its host functions in merge order (wave 3's 119, then game-ui's 18
   and world-partition's 5: 142). Release 0.4.0 holds the wave.
 
+**Wave 5 landed (2026-10-20).** The owner asked for it on 2026-10-20: physics on box3d instead of Jolt, and more
+projects that show the engine, with assets downloaded online, since Tetris alone was too barebones; the wave-4 audits'
+list ("Later") waited. Two streams were planned, showcase-samples and physics-box3d, each with a spec that an
+independent review corrected before work began (20 and 18 corrections); both branched from release 0.4.0 (580eee9e)
+and ran at the same time on the Mac (Apple M2 Max, 12 threads, MoltenVK 1.4.2), the Windows reference machine still
+away. showcase-samples merged into main first, after its review round (17 findings, fixed or answered); physics-box3d
+then merged main, ran the samples' regressions on box3d, fixed what box3d changed in them, and merged after its review
+round and the landing's review (18 and 2 findings), on the same day. Each merge waited for CI to be green on all six
+jobs. Numbers are Release builds on that Mac, A/Bs interleaved under the perf lock against 0.4.0's build; every metric
+the wave added is provisional (the open items' "Waiting for the Windows reference machine").
+
+- `showcase-samples`: three sample projects beside Tetris, made through the editor by an agent the way Tetris was, with
+  CC0 and CC-BY assets downloaded from Kenney, ambientCG, Poly Haven, the three.js examples and Khronos' glTF samples
+  (each sample within 25 MB of source assets and 20 MB of documents, credited in its `CREDITS.md` and in
+  `ThirdPartyNotices.md`'s "Sample assets", checked by `Samples.Content`): the Physics Playground (615 bodies in six
+  stations; on Jolt 64 of 64 dominoes fell, the tower drifted 0.11-0.15 m, 500 balls stayed in the pit, 8 ghosts sank
+  through the balls and the goal caught 5 of 5), the Open World (a 768 m island of 97 generated terrain tiles with mesh
+  colliders, a three-layer world in 64 m cells, 20,000 props scattered by biome, 30 foxes, five camps, day and night
+  and a tour; the start's render draws 5,468 instances in 13 draw commands) and the Third-Person Adventure "Sky Islands"
+  (a skinned robot with an animation controller and footstep events, a follow camera, coins, jump pads and a pushable
+  crate, a main menu, pause and settings menus of sliced images, save files, a loading scene and an attract mode). One
+  runner (`StrataTests/Editor/SampleProject.cmake`) plays each sample's regression command script, exports it in full
+  and pruned and runs both games headless, and windowed where a GPU is; command scripts gained `until` (exact waits in
+  fixed steps while paused), and the launcher and `project.samples` show the samples' pictures. Fixed on the way:
+  `prefab.instantiate {instances}` lost the prefab root's transform, simulated taps at time scale 0 never ended, and the
+  project thumbnail did not wait for game UI glyphs. On the Mac the Open World tour's frame work takes 1.43 ms (median;
+  p95 2.71 ms) with the GPU busy 4.37 ms, over 958 frames at 1920x1080; the samples add about 13.9 MB to a compressed
+  archive.
+- `physics-box3d`: box3d (MIT, pinned at efca0c1 of 2026-10-15, 40 commits after v0.1.0) replaced Jolt, which is gone
+  (submodule, options, notices, tests), behind the same components, scene services and script API (the ABI unchanged):
+  box3d's tasks on the job system, its asserts and log through the engine's, box hulls shared per size, convex hulls of
+  at most 64 vertices (44 when 64 do not fit) and triangle meshes cooked on jobs and shared by reference, contact and
+  sensor events folded per entity pair, collision layers as filters with a query bit, character controllers as
+  Strata's own move on box3d's mover queries, capacities as the room box3d reserves at play start (up to 131,072
+  bodies) that grows in place, worlds created on the main thread only and within box3d's 128, Strata's own CPU options
+  (`STRATA_USE_*`) and a golden-hash case that pins determinism with 1 and 5 workers. 0.4.0 scenes load unchanged
+  (`MaxBodyPairs` is ignored; `scene.setSettings` warns about it). On the Mac, against 0.4.0's build (3 interleaved
+  pairs, ratios of medians): busy frames 0.58-0.63 (`Boxes70k.ActiveFrame` 24.7 to 14.4 ms), `Characters1000Step` 0.41,
+  `Boxes30k.StartAnd30Frames` 0.66, `PerfGPU.World.CellDriveMaxFrame` 0.73; creating and removing bodies costs more,
+  since box3d inserts every shape one at a time on the main thread (`Create100kStaticBodies` 3.40, 28.8 to 98 ms;
+  `Create10kBodies` 2.89; `CellUnloadMaxFrame` 1.66). The samples passed on box3d before any change: the tower settles
+  with 1 cm of drift, the robot pushes the crate 3.9 m in the regression's 2 s (2.9 m on Jolt, whose character slowed
+  against it), and the Playground's pour, which spawned overlapping 1 m balls that box3d pushes apart at up to 3 m/s,
+  now spawns them at the prefab's scale with all 600 in the pit.
+- Landing: showcase-samples landed first, so physics-box3d merged main and checked the samples on box3d (one conflict,
+  in `Docs/DeveloperGuide.md`, both blocks kept; box3d's `physics.stats` keeps the `pendingOther` that the samples'
+  regressions wait for): the Open World's perf checks bound the bodies waiting for their mesh colliders
+  (`PhysicsBodiesPending`), since box3d's bodies wait for room only at the growth limit, and the SDK's `Instantiate`
+  says which forms replace a prefab root's scale. The script ABI keeps version 1 and its 142 host functions. Release
+  0.5.0 holds the wave.
+
 Open items and deferrals later waves own:
 
 - GPU-driven rendering (wave 4's `gpu-driven-rendering`): skinning still runs per draw (compute skinning once per
-  frame, measured by a GPU-time metric, is wave 5's); the shadow cascade cache follows the GPU-driven path only (the
+  frame, measured by a GPU-time metric, is later work); the shadow cascade cache follows the GPU-driven path only (the
   CPU path redraws every layer each frame); render scenes are copied whole at play start, not shared by copy-on-write
   pages; on tile-based drivers a timestamp inside a render pass may land at the pass's end, so `GPU.UI` is checked
   for presence, not for its time.
@@ -470,7 +521,7 @@ Open items and deferrals later waves own:
 - World I/O (wave 4's `world-io`): pack version 3 (small entries bundled, a zstd dictionary, shared blocks decoded
   once; the 10.7x inflation of small assets in `Perf.Asset.Pack30kMaterialsRatio`), cold reads without the system
   cache with 16 outstanding reads (`PerfGPU.Pack.ColdStreamStressWorld`) and a background-thread cap while loads run
-  are wave 5's. Additive loads have no prototype form yet (`SceneLoadOptions::PrepareAs`,
+  are later work. Additive loads have no prototype form yet (`SceneLoadOptions::PrepareAs`,
   `SceneLoadRequest::TakePrototype`): cells and sub-scenes load through `SceneLoader` or `SceneDocumentReader` with
   `EntityPrototypeBuilder`. Prefab and asset-editor saves stay synchronous.
 - World partition (wave 4's `world-partition`): `PhysicsSettings::GrowthLimit` has no scene or project setting, so the
@@ -491,13 +542,27 @@ Open items and deferrals later waves own:
   Mac's `GPU.AssetResidency` "Arrivals that need room...".
 - Game UI (wave 4's `game-ui`): world-space canvases draw unlit, after post-processing, and the game's hit tests on
   them ignore scene geometry in front (the editor's picks check meshes); UI action bindings use the engine's input
-  names (`Key/KPEnter`, `Gamepad/A`) until an input-actions asset names actions (wave 5).
+  names (`Key/KPEnter`, `Gamepad/A`) until an input-actions asset names actions (`project-settings`).
 - Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
   `GameRuntime`, the editor and many tests use the script engine directly; physics, audio and animation can be left
   out (`STRATA_WITH_PHYSICS`, `STRATA_WITH_AUDIO`, `STRATA_WITH_ANIMATION`, wave 4's `engine-modules`).
 - Physics: dynamic bodies below other dynamic bodies are still written back one by one; a collider built from a mesh
   that is reimported while evicted keeps the old data until the mesh loads again (the source revisions render-scene uses
   would tell).
+- Physics on box3d (wave 5's `physics-box3d`): creating and removing many bodies costs about three times Jolt's time,
+  because box3d inserts every shape into its trees one at a time on the main thread (the numbers are in the reference
+  machine's list below; the way down is bulk insertion in box3d, with a later bump), and Strata's own part of it grew
+  with allocations per body; triggers do not see triangle-mesh colliders (box3d's sensors skip meshes), and a
+  triangle-mesh collider away from its trigger body's origin is unusable, with a warning; box3d holds at most 128
+  worlds; its mover, on which the character controllers are built, is experimental upstream. MSVC builds under Ninja
+  get no `/arch:AVX2` where the Visual Studio generator's do (as with Jolt): unifying them changes what CI's Windows
+  Release job builds, an owner's choice.
+- Samples (wave 5's `showcase-samples`): their windowed and image checks (label `gpu`) have run on the Mac only, not on
+  Windows or NVIDIA; the Open World has no sound and the Third-Person Adventure no music (no CC0 loop that fit was
+  found); Quaternius' larger packs refused a scripted download (itch.io, Google Drive); the importer skips the robot's
+  facial morph targets; the Open World's editor run allows physics' warning that it started simulating after waiting
+  10 s for meshes (waiting for cells steps the paused game, which spends that simulation time on slow runners, and
+  `MeshWaitTimeout` is no scene setting), while its exported games must not print it.
 - Textures: HDR textures stay RGBA16F until a BC6H encoder exists.
 - Two caches keep assets between frames: `SceneRenderer`'s environment
   cache (the sky's map) and `TextRenderer`'s glyph atlases (their fonts). Streaming the stress world from pack version 2
@@ -685,7 +750,7 @@ Open items and deferrals later waves own:
     29.1 ms against 25 ms, `PerfGPU.Editor.PlayStartWorldMaxFrame` 37-61 ms against 50 ms); the editor-frame
     no-regression A/Bs (`PerfGPU.Editor.{Edit,Play}FrameNested{100k,1M}`, `SceneOpen*`) cannot be judged on the Mac,
     and `Perf.Physics.Boxes30kTracked.StrataStepTime` measured 1.022 times the step-0 base (36 pairs).
-  - Wave 5's `physics-box3d` (physics on box3d instead of Jolt; Mac A/Bs against step 0's build, 3 interleaved pairs,
+  - Wave 5's `physics-box3d` (physics on box3d instead of Jolt; Mac A/Bs against 0.4.0's build, 3 interleaved pairs,
     ratios of medians): busy frames 0.58-0.63 (`Boxes70k.ActiveFrame` 24.7 to 14.4 ms, `Boxes10k` 3.53 to 2.23,
     `Boxes30kTracked` 11.0 to 6.9), whole steps 0.60-0.63, `Boxes30k.StartAnd30Frames` 0.66, `Characters1000Step` 0.41,
     `PerfGPU.World.CellDriveMaxFrame` 0.73 and `Perf.World.DrivePeakPrivate` 0.74, no body waiting and no dropped
@@ -694,8 +759,8 @@ Open items and deferrals later waves own:
     `Create100kStaticBodies` 3.40 (28.8 to 98 ms; box3d's `b3InsertLeaf` alone is 54% of it, and box3d by itself takes
     69-73 ms for those bodies), `Create10kBodies` 2.89 (3.4 to 9.7 ms; box3d alone 6.3 ms; this one has a confirmed
     budget, 11.99 ms from Jolt's 7.995 ms on the reference machine, which box3d is expected to exceed there at about
-    23 ms, so `-L perf` will fail on it: the owner either grants an exception to "budgets only go down", to be measured
-    again on the reference machine, or holds the merge until creating bodies costs less), `CellUnloadMaxFrame` 1.66
+    23 ms, so `-L perf` will fail on it there until the owner grants an exception to "budgets only go down", measured
+    again on the reference machine, or creating bodies costs less), `CellUnloadMaxFrame` 1.66
     (2.6 to 4.4 ms; box3d alone disables 25,000 static bodies in 2.0-2.5 ms), `CellDriveMaxFrame` 1.31 and
     `DriveFrameP95` 1.23 (both noisy), and `Grow65kMaxFrame` (65,536 bodies created in one frame) 73-80 ms against its
     16.7 ms target. The port keeps the rule that every body gets its collision at once (a body a frame leaves without
@@ -712,6 +777,9 @@ Open items and deferrals later waves own:
     (Mac: `Boxes10k` 0.45, `Boxes30kTracked` 0.92, `Boxes70k` 0.61) and `Grow65kMaxFrame` (the median of 5 fresh
     worlds' growth frames); the reference machine measures them and checks `StrataStepTime` against its existing
     budgets (Mac ratios 0.87, 1.01 and 0.87) and `Create10kBodies` against its budget (above).
+  - Wave 5's `showcase-samples`: the `PerfGPU.Samples.OpenWorldTour.*` metrics are provisional (Mac, 1920x1080:
+    `FrameWorkMedianMs` 1.434, `FrameWorkP95Ms` 2.710 and `GPUBusyMedianMs` 4.369 over 958 frames; the frame interval,
+    8.3 ms, is the display's).
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
 
@@ -885,9 +953,48 @@ landed", says what each delivered and what moved to later waves).
   - Small fixes go to what a person meets every day.
   - Depends on `animation`, `content-and-prefabs`, `gameplay-and-scripting`, `agent-activity`, `editor-authoring`.
 
-### Later (wave 5 and beyond)
+### Wave 5
 
-The wave-4 audits rank these first for wave 5:
+Asked for by the owner on 2026-10-20: "switch to box3d (https://github.com/erincatto/box3d) as its physics engine, and
+include some more projects that you think could demonstrate this engine, you can also download assets online, current
+sample project is too barebones". The two streams took the place of the wave-4 audits' list, which stays in "Later".
+Each had a spec that an independent review corrected before work began (`Docs/Plans/Wave5/specs/`, removed when the
+wave landed and kept in git history at 40fbb852); both branched from release 0.4.0 and ran at the same time on the Mac,
+and `showcase-samples` landed first so that `physics-box3d` could check its samples on box3d before it merged. Landed
+on 2026-10-20 with release 0.5.0 (Status, "Wave 5 landed", says what each delivered, and the open items what moved to
+later waves). What earlier waves had moved to wave 5 (pack version 3, cold reads, the background-thread cap, per-scene
+contexts, compute skinning, input actions) stays open, in the open items and "Later".
+
+- **`showcase-samples`: Sample projects that show what Strata does.** Before this wave `Samples/` held only Tetris, a
+  small scripted 2.5D game with built-in meshes and generated sounds: a person who opened the launcher saw nothing of
+  the GPU-driven rendering, world streaming, physics, skinned animation, game UI, audio and export that waves 1-4 built.
+  - Three samples were made through the editor the way Tetris was (StrataCLI, command scripts, C++ game scripts), with
+    assets downloaded from sources with clear licenses: CC0 first, CC-BY 4.0 only with its attribution, within 25 MB
+    of source assets and 20 MB of documents each.
+  - The Physics Playground: about 600 bodies in stations of stacks, dominoes, a ball pit, triggers, collision layers,
+    raycasts and impulses, with a tool panel and impact sounds.
+  - The Third-Person Adventure: a skinned character with an animation controller, a character controller and a follow
+    camera, triggers, several scenes, menus, save files and display settings.
+  - The Open World: a streamed world of 20,000 instanced props on generated terrain with mesh colliders, animated foxes
+    in streamed cells, day and night, and prefetching before teleports.
+  - Each is played by a CTest that fails when the sample breaks, with exact waits in fixed steps (`until`), exported in
+    full and pruned and run headless and in a window; `Samples.Content` checks their files, credits, licenses, links
+    and budgets, and the launcher shows them with pictures.
+- **`physics-box3d`: Strata's physics on box3d instead of Jolt.** Everything physics did on Jolt moved to box3d,
+  behind the same interfaces.
+  - box3d became the only physics library: Jolt went, with its submodule, options, notices and the tests that named it.
+  - `PhysicsSystem`, `PhysicsWorld`, the scene services and the components kept their contracts, so scripts, audio,
+    animation, world partition, the editor and the runtime changed only where they named Jolt's capacity model.
+  - Every physics test kept its meaning, the determinism tests held, 0.4.0 scene files load unchanged, and the script
+    ABI kept version 1.
+  - Interleaved A/Bs against the Jolt build measured the port on the Mac: steps faster, bodies created and removed more
+    slowly (Status).
+  - New physics features (joints, height fields, double precision, recordings) were left to later streams, so that the
+    port's diff stayed about parity and its regressions attributable.
+
+### Later (wave 6 and beyond)
+
+The wave-4 audits ranked these first; wave 5 took the owner's request instead, so they lead for wave 6:
 - **`render-quality`:** TAA with motion vectors, shadows of point and spot lights, reflection probes and screen-space
   reflections, height fog and a physical atmosphere, extracting the sun from HDR skies with documented light units,
   cascade blending, transmission and clearcoat. It builds on `gpu-driven-rendering`'s per-view culling and instance
@@ -901,11 +1008,8 @@ The wave-4 audits rank these first for wave 5:
   - Crash reports in shipped games.
   - Game settings with quality presets mapped to the renderer.
   - Exports per platform and configuration, with a macOS app bundle.
-- **`manual-and-samples`:** a people's manual reachable from the Help menu and playable templates. (The 3D samples made
-  through the editor with CTests that play them came with wave 5's `showcase-samples`: the Physics Playground, the
-  Open World and the Third-Person Adventure; still open from it: budgets of the Open World tour's provisional metrics on the reference machine, the
-  samples' windowed checks on Windows and NVIDIA, sound for the Open World once a CC0 ambience fits, and Quaternius'
-  packs, which do not download without a browser.)
+- **`manual-and-samples`:** a people's manual reachable from the Help menu and playable templates (the 3D samples came
+  with wave 5; what they left open is in Status).
 - **`scene-contexts`:** per-scene asset managers and script engines instead of process-wide active ones.
 - **`vfx`:** particles, trails and decals on the GPU-driven path.
 - **`mesh-streaming`:** Mesh v2 with quantized vertices, per-LOD streaming on the geometry pool, and a collision
@@ -927,7 +1031,8 @@ Further:
 - BC6H.
 - ImGui multi-viewports.
 - Physics joints, ragdolls and vehicles, on box3d's joints (revolute, prismatic, spherical, weld, wheel, distance,
-  motor): components, gizmos, a script API and the feature test, in a stream of their own after the port to box3d.
+  motor): components, gizmos, a script API and the feature test, in a stream of their own now that physics runs on
+  box3d.
 - Triggers that meet triangle-mesh colliders (box3d's sensors skip meshes), and box3d's recordings and replays as an
   editor debugging tool.
 - Level-design tools beyond placement: orthographic views, surface and vertex snapping, hiding and locking in the editor

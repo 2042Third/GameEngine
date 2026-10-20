@@ -2793,8 +2793,8 @@ loads cells by key or region, pinned until let go (`wait` answers once they are 
 camera): float32 resolves positions to 2 mm up to 32 km and 4 mm up to 65 km, so worlds are supported within 20 km of
 the origin (`WorldData::c_SupportedExtent`; `world.cook` warns about cells beyond it). `World.Coordinates` streams, rests
 a body, ray-casts with physics and with the editor's `SceneRaycast` 20 km out. Origin rebasing and double precision are
-wave 5. There is no HLOD (wave 5): distant cells are simply not loaded, and `world.info` reports each layer's streaming
-distance so a game can set its fog or far plane to match.
+later work (Roadmap.md, "Later"). There is no HLOD yet: distant cells are simply not loaded, and `world.info` reports
+each layer's streaming distance so a game can set its fog or far plane to match.
 
 **The cell map** (`StrataEditor/src/UI/CellMap.h`, the Streaming panel's World section, first while a world streams: the
 running game's `WorldStreamingSystem` streamer while playing, the editor's otherwise). It draws a world's cells as
