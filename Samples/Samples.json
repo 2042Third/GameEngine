@@ -15,6 +15,12 @@
 			"Name": "Physics Playground",
 			"Description": "Six physics stations and about 600 bodies to fly through and play with: stacks, dominoes, a ball pit, a goal and ghosts that pass through balls. Shoot, grab, pour and reset.",
 			"Picture": "Picture.png"
+		},
+		{
+			"Directory": "OpenWorld",
+			"Name": "Open World",
+			"Description": "A 768 m island streamed in cells: 20,000 trees, rocks and flowers drawn on the GPU, foxes, camps, a day that turns into night. Fly the tour, walk, teleport.",
+			"Picture": "Picture.png"
 		}
 	]
 }

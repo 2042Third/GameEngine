@@ -146,7 +146,7 @@ assets, scripts, scene, play-testing, export); `.claude/skills/strata-editor-aut
 | `StrataCLI/` | The automation client and MCP server. |
 | `StrataScriptCore/` | The script SDK and ABI that game code is written against. |
 | `StrataTests/` | Tests, test script modules, and the feature test project, which uses every component and the whole script API. |
-| `Samples/` | Example games, made through the editor by an AI agent: `PhysicsPlayground` (600 bodies to play with), `Tetris`. |
+| `Samples/` | Example games, made through the editor by an AI agent: `OpenWorld` (a streamed island of 20,000 props), `PhysicsPlayground` (600 bodies to play with), `Tetris`. |
 | `.claude/skills/` | Task guides for AI agents working on the engine or making games with it. |
 
 ## Contributing

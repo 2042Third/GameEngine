@@ -71,6 +71,8 @@ Task playbooks for people and AI agents, in `.claude/skills/<name>/SKILL.md`:
 Each sample is a project with its `README.md` (what it shows, controls, how it was made), `CREDITS.md` and `Picture.png`,
 and a CTest that plays it through the editor (`StrataTests/Editor/SampleProject.cmake`, [Samples](DeveloperGuide.md#samples)):
 
+- [Samples/OpenWorld](../Samples/OpenWorld/): a 768 m island streamed in cells, 20,000 props drawn on the GPU, foxes, camps
+  and a day that turns into night; a tour, flying, walking and teleports.
 - [Samples/PhysicsPlayground](../Samples/PhysicsPlayground/): six physics stations and 615 bodies to fly through: stacks,
   dominoes, a ball pit, a goal, ghosts on their own collision layer and a ramp; shots, grabbing and a tool panel.
 - [Samples/Tetris](../Samples/Tetris/): a complete game an AI agent made through editor commands only (`Tetris.stproj`,

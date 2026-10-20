@@ -720,6 +720,44 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	add_test(NAME StrataRuntime.PhysicsPlaygroundWindowedPerf
 		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_PLAYGROUND_DIR}/Windowed.csv" 600 --nonzero Scene.Physics)
 	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataPhysicsPlaygroundWindowed)
+	# The Open World: a streamed island (a world of three layers over 97 terrain tiles in the persistent scene, 20,000 props,
+	# 30 foxes, five camps). The explorer streams cells in, walks on the terrain, teleports 500 m once the cells and the ground
+	# there are in, a fox wanders and the campfires light at dusk; the exported games fly the tour over cooked cells, their
+	# perf logs showing cells loaded, streaming at work and no body waiting for its collider.
+	add_test(NAME StrataEditor.OpenWorld
+		COMMAND "${CMAKE_COMMAND}"
+			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
+			"-DSAMPLE_DIR=${PROJECT_SOURCE_DIR}/Samples/OpenWorld"
+			"-DPROJECT_FILE=OpenWorld.stproj"
+			"-DGAME=OpenWorld"
+			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/OpenWorldCommands.json.in"
+			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/Samples/OpenWorld/$<CONFIG>"
+			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DEDITOR_EXPECT=OpenWorld: walking|OpenWorld: arrived at Teleport3|OpenWorld: campfires lit"
+			"-DGAME_EXPECT=Loaded script module 'OpenWorldScripts'|OpenWorld: tour started|OpenWorld: tour reached waypoint 8"
+			"-DGAME_FRAMES=1800"
+			"-DPERF_LOG=ON"
+			"-DPERF_CHECKER=$<TARGET_FILE:StrataTests>"
+			"-DPERF_CHECK=--nonzero|WorldCellsLoaded|--nonzero|World.Streaming|--max|PhysicsBodiesWaiting|0"
+			# A fresh copy has never built its scripts: opening its scene says so, and play.start builds them.
+			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'OpenWorld' are not built yet"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
+	set_tests_properties(StrataEditor.OpenWorld PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataOpenWorldExport)
+	# In a window at 1920 x 1080 with a small texture budget (mip streaming under pressure): the island fills the picture.
+	set(STRATA_OPEN_WORLD_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/OpenWorld/$<CONFIG>")
+	add_test(NAME StrataRuntime.OpenWorldWindowed
+		COMMAND "${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1920x1080 --frames 1200 --asset-budget-mb 128
+			--screenshot "${STRATA_OPEN_WORLD_DIR}/Windowed.png" --save-directory "${STRATA_OPEN_WORLD_DIR}/WindowedSaves")
+	set_tests_properties(StrataRuntime.OpenWorldWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldExport FIXTURES_SETUP StrataOpenWorldWindowed)
+	add_test(NAME StrataRuntime.OpenWorldWindowedImage
+		COMMAND StrataTests --strata-test-helper=check-image "${STRATA_OPEN_WORLD_DIR}/Windowed.png" --size 1920x1080 --dominant green 5)
+	set_tests_properties(StrataRuntime.OpenWorldWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
+	# The editor with a GPU at the start: the GPU-driven path draws thousands of instances in a few indirect commands.
+	add_test(NAME StrataEditor.OpenWorldRender
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
+			"-DARGUMENTS=--headless|--no-automation|--quit-after-commands|--frames|36000|--project|${STRATA_OPEN_WORLD_DIR}/Project|--commands|${CMAKE_CURRENT_SOURCE_DIR}/Editor/OpenWorldRenderCommands.json"
+			"-DEXPECT=Command script finished (" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataEditor.OpenWorldRender PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldExport)
 endif()
 
 # input.sequence through the real editor (Editor/InputSequenceCommands.json.in, on a copy of the feature project): the same

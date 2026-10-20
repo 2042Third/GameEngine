@@ -1,0 +1,3 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":1,"Entities":[
+{"Components":{"BoxCollider":{"HalfExtents":[0.31396267,0.10391039,0.40618458],"Offset":[0,0.079887986,0]},"MeshRenderer":{"CastShadows":true,"Material":"0000000000000000","Mesh":"C617E4007BA72042"},"Name":{"Name":"StoneLarge"},"RigidBody":{"AngularDamping":0.05,"ContinuousCollision":false,"Friction":0.5,"GravityScale":1,"IsTrigger":false,"Layer":0,"LinearDamping":0.05,"LockRotationX":false,"LockRotationY":false,"LockRotationZ":false,"Mass":1,"Restitution":0,"Type":"Static"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"B45FCDDAE81E5E62"}
+]}}

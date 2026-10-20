@@ -13,6 +13,7 @@
 # cmake -DEDITOR=<StrataEditor> -DSAMPLE_DIR=<Samples/Name> -DPROJECT_FILE=<Name.stproj> -DGAME=<exported name>
 #       -DCOMMANDS=<NameCommands.json.in> -DWORK_DIR=<directory> -DEXECUTABLE_SUFFIX=<.exe or empty>
 #       [-DEDITOR_EXPECT=a|b] [-DGAME_EXPECT=a|b] [-DGAME_FRAMES=120] [-DPERF_LOG=ON] [-DALLOWED_MESSAGES=regex|regex]
+#       [-DPERF_CHECKER=<StrataTests> -DPERF_CHECK=--nonzero|Column|...] (the perf logs checked by check-perf-log)
 #       -P SampleProject.cmake
 # Lists are separated by '|' (a ';' would split the test's command line), so expressions use character classes, not '|'.
 
@@ -24,7 +25,7 @@ endforeach()
 if(NOT DEFINED GAME_FRAMES OR GAME_FRAMES STREQUAL "")
 	set(GAME_FRAMES 120)
 endif()
-foreach(list EDITOR_EXPECT GAME_EXPECT ALLOWED_MESSAGES)
+foreach(list EDITOR_EXPECT GAME_EXPECT ALLOWED_MESSAGES PERF_CHECK)
 	string(REPLACE "|" ";" ${list} "${${list}}")
 endforeach()
 include("${CMAKE_CURRENT_LIST_DIR}/JsonEscape.cmake")
@@ -129,6 +130,13 @@ foreach(export_dir "${EXPORT_DIR}" "${PRUNED_EXPORT_DIR}")
 	check_messages("${output}" "the exported game in '${export_dir}'")
 	if(PERF_LOG AND NOT EXISTS "${export_dir}/Perf.csv")
 		message(FATAL_ERROR "SampleProject: the exported game in '${export_dir}' wrote no perf log")
+	endif()
+	if(PERF_LOG AND PERF_CHECKER)
+		execute_process(COMMAND "${PERF_CHECKER}" --strata-test-helper=check-perf-log "${export_dir}/Perf.csv" ${GAME_FRAMES} ${PERF_CHECK}
+			OUTPUT_VARIABLE check_output ERROR_VARIABLE check_output RESULT_VARIABLE check_result)
+		if(NOT check_result EQUAL 0)
+			message(FATAL_ERROR "SampleProject: the perf log of the exported game in '${export_dir}' fails its check (${check_result}): ${check_output}")
+		endif()
 	endif()
 endforeach()
 file(SIZE "${EXPORT_DIR}/${GAME}.stpak" full_pack)
