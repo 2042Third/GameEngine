@@ -823,6 +823,44 @@ TEST_SUITE("Editor.World")
 		CHECK_FALSE(project.Try("world.moveEntities", { { "entities", { UUIDToJson(rock) } }, { "layer", "Rivers" } }).Success);
 		CHECK(CellOf(project.Context, rock) == newCell);
 	}
+
+	TEST_CASE("A world whose document cannot be written stays modified, and the next save lists the cells it made")
+	{
+		GridWorldProject project("EditorWorldIndexFailure", 3);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
+		Settle(project);
+		project.Run("world.edit", { { "editLayer", "Ground" } });
+		const UUID rock = GridWorldProject::ToUUID(project.Run("entity.create", { { "name", "Rock" }, { "components", { { "Transform", { { "Translation", { 112.0, 0.0, 16.0 } } } } } } })["id"]);
+		const AssetHandle newCell = DeriveSubAssetHandle(project.World, "Cell/1/3/0");
+		REQUIRE(CellOf(project.Context, rock) == newCell);
+
+		// A folder takes the World document's place: the new cell's file is written, the World document that lists it is not.
+		const std::filesystem::path worldFile = project.Directory / "Assets" / "Worlds" / "Gen.stworld";
+		const std::optional<std::string> worldText = FileSystem::ReadText(worldFile);
+		REQUIRE(worldText.has_value());
+		REQUIRE(FileSystem::Remove(worldFile));
+		REQUIRE(FileSystem::CreateDirectories(worldFile));
+		const EditorCommandResult failed = project.Try("scene.save", {});
+		CHECK_FALSE(failed.Success);
+		CHECK(failed.Error.find("Gen.stworld") != std::string::npos);
+		CHECK(FileSystem::Exists(project.Directory / "Assets" / "Worlds" / "Gen" / "Ground" / "3_0.stscene"));
+		// Closing would lose the cell's entities (a world that does not list a cell leaves it out): the scene stays modified.
+		CHECK(project.Context.IsSceneModified());
+		CHECK_FALSE(project.Context.GetWorld()->IsSaving());
+
+		// Once the document can be written, the next save lists the cell.
+		REQUIRE(FileSystem::Remove(worldFile));
+		REQUIRE(FileSystem::WriteText(worldFile, *worldText));
+		const nlohmann::json saved = project.Run("scene.save");
+		bool wroteWorld = false;
+		for (const nlohmann::json& document : saved["documents"])
+			wroteWorld = wroteWorld || document["kind"] == "world";
+		CHECK(wroteWorld);
+		CHECK_FALSE(project.Context.IsSceneModified());
+		CHECK(project.ReadWorld()->FindCell(WorldCellKey { 1, 3, 0 }) >= 0);
+	}
+
 }
 
 TEST_SUITE("Editor.World")

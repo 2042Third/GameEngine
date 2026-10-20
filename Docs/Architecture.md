@@ -2748,7 +2748,10 @@ cell's (no settings: cells use their host's), new cells reserved with their deri
 pinned until the save ended. The first request's completion (`EditorWorld::FinishSave`) marks what failed dirty again,
 takes the written cells' stamps and closure bytes, lists the new cells and returns the World document, which a second
 request writes (ready `Document` bytes, `Reload`) when it changed: stamps exist only once files are written. One
-`UndoStack::MarkSaved(SavePoint)` per save, and the persistent scene's document hash as the recovery journal's new base.
+`UndoStack::MarkSaved(SavePoint)` per save, and the persistent scene's document hash as the recovery journal's new base,
+once every document is written: the World document too when the save changed it, as a world that does not list a new cell
+leaves its entities out. When that document fails, `scene.save` fails, the scene stays modified (closing asks) and the next
+save lists the new cells.
 A world saves once at a time: `scene.save` waits for the previous save (`AfterSaves`), `BeginSaveScene` refuses while one
 writes. `scene.save` answers once the World document is written, listing the documents (`documents: [{path, kind,
 bytes, entities}]`); `scene.saveAs` refuses worlds. Playing a world copies the edited scene as any play start does, which is the persistent scene plus the

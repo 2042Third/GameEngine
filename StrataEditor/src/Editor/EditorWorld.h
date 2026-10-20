@@ -150,7 +150,9 @@ namespace Strata
 		//   loads, a previous save still writes or a new cell's path cannot be reserved.
 		// - FinishSave takes the first request's outcome: documents that failed are dirty again; for the cells written it
 		//   refreshes their index entries (stamps, closure bytes) and lists the new ones, and returns the World document to
-		//   write next (Document bytes), nullopt when it is unchanged (the save is done then) or invalid (outError).
+		//   write next (Document bytes), nullopt when it is unchanged (the save is done then) or cannot be written (outError:
+		//   invalid, or the World asset no longer loaded). Until that document is written the scene is not saved
+		//   (EditorContext marks it then), and the next save lists the new cells.
 		// - FinishIndexSave ends the save once that document's write ended.
 		// CancelSave undoes BeginSave when the request could not be submitted.
 		bool BeginSave(EditorAssetManager& assets, AssetHandle persistent, WorldSavePlan& outPlan, std::string* outError = nullptr);

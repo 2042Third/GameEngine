@@ -389,6 +389,9 @@ namespace Strata
 		bool IsWorldSaveWriting(uint64_t save) const { return save != 0 && m_WorldSave.Request == save && !m_WorldSave.Ended; }
 		// The documents that save wrote (scene.save's documents) once it ended; nullopt for another save.
 		std::optional<std::vector<WorldSavedDocument>> GetWorldSaveDocuments(uint64_t save) const;
+		// Why that save failed once it ended, when its cells were written but the World document was not (the scene stays
+		// modified then); empty for a save that succeeded or another save.
+		std::string GetWorldSaveError(uint64_t save) const;
 		// Thumbnails of the open project's assets (Content Browser, Asset tab); null without a project or a GPU.
 		ThumbnailCache* GetThumbnails() const { return m_Thumbnails.get(); }
 		// The project's picture for the launcher, made after each scene save.
@@ -671,10 +674,16 @@ namespace Strata
 			const std::optional<SceneSaveRestore>& restore);
 		// Takes the snapshot and submits the save of the edited world's changed documents (EditorWorld::BeginSave).
 		uint64_t SubmitWorldSave(std::string* outError);
-		// The world save's first request ended: marks, the recovery journal, then the World document's request.
+		// The world save's first request ended: the cells' outcome, then the World document's request. The scene is marked
+		// saved, and the recovery journal follows it, only once every document is written: the World document too, when the
+		// save changed it (it lists the new cells, whose entities a world that does not list them leaves out).
 		void OnWorldSaveEnded(const DocumentSaveStatus& status, AssetHandle handle, const RecoverySaveToken& token, const WorldSavePlan& plan);
-		// The world save's World document was written (or failed): the save ended.
-		void OnWorldIndexSaved(const DocumentSaveStatus& status);
+		// The world save's World document was written (or failed): the save ended. `token` is the recovery journal's while the
+		// first request wrote everything (null when it failed: its token was released then), `baseHash` the persistent
+		// scene's document hash for the journal.
+		void OnWorldIndexSaved(const DocumentSaveStatus& status, uint64_t save, AssetHandle handle, const RecoverySaveToken* token, std::string baseHash);
+		// Marks the edited world saved as of `savePoint` and lets the recovery journal follow the persistent scene's document.
+		void MarkWorldSaved(const UndoStack::SavePoint& savePoint, AssetHandle handle, const RecoverySaveToken& token, std::string baseHash);
 		// Tells the person that a save failed (a notification naming the asset, the console shown).
 		void NotifySaveFailed(const std::string& label, const std::string& error, AssetHandle asset);
 		// Blocks until the save ended (SaveScene, SaveSceneAs): false with the reason when it failed.
@@ -854,6 +863,7 @@ namespace Strata
 			uint64_t Request = 0;
 			bool Ended = true;
 			std::vector<WorldSavedDocument> Documents;
+			std::string Error; // The World document's write failed (or could not be made)
 		};
 		WorldSaveState m_WorldSave;
 	};

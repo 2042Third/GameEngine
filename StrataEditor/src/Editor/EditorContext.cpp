@@ -953,7 +953,7 @@ namespace Strata
 			m_World->CancelSave(*m_AssetManager, *plan);
 			return 0;
 		}
-		m_WorldSave = WorldSaveState { id, false, {} };
+		m_WorldSave = WorldSaveState { id, false, {}, {} };
 		return id;
 	}
 
@@ -981,12 +981,11 @@ namespace Strata
 		}
 		std::string indexError;
 		const std::optional<std::string> index = m_World->FinishSave(*m_AssetManager, plan, status, &indexError);
-		if (status.State == DocumentSaveState::Done)
+		const bool written = status.State == DocumentSaveState::Done;
+		// The journal follows the persistent scene's document: the one written now, or the file as it is.
+		std::string baseHash;
+		if (written)
 		{
-			m_UndoStack.MarkSaved(status.SavePoint);
-			OnSceneSaved();
-			// The journal follows the persistent scene's document: the one written now, or the file as it is.
-			std::string baseHash;
 			const auto persistent = std::find_if(plan.Documents.begin(), plan.Documents.end(), [](const WorldSavePlan::Document& document) { return document.Kind == "persistent"; });
 			if (persistent != plan.Documents.end())
 			{
@@ -998,18 +997,27 @@ namespace Strata
 				if (m_AssetManager->ReadStoredData(handle, bytes))
 					baseHash = Crypto::ToHex(Sha256::Hash(std::span<const uint8_t>(bytes)));
 			}
-			const auto [sceneFile, scenePath] = GetSceneFile(handle);
-			m_Recovery->OnSaved(handle, sceneFile, scenePath, std::move(baseHash), token, *m_EditScene, IsSceneModified());
 		}
 		else
 		{
 			m_Recovery->ReleaseSave(token);
 			NotifySaveFailed(status.Label, status.Error, handle);
 		}
-		if (!indexError.empty())
-			NotifySaveFailed(status.Label, indexError, m_World->GetWorld());
 		if (!index)
 		{
+			if (!indexError.empty())
+			{
+				// The cells are written, but the world cannot list them: the scene stays modified, and the next save tries again.
+				NotifySaveFailed(status.Label, indexError, m_World->GetWorld());
+				if (written)
+					m_Recovery->ReleaseSave(token);
+				if (current)
+					m_WorldSave.Error = indexError;
+			}
+			else if (written)
+			{
+				MarkWorldSaved(status.SavePoint, handle, token, std::move(baseHash));
+			}
 			if (current)
 				m_WorldSave.Ended = true;
 			return;
@@ -1024,28 +1032,56 @@ namespace Strata
 		request.SavePoint = status.SavePoint;
 		request.Label = fmt::format("{} (index)", status.Label);
 		std::string error;
-		if (m_DocumentSaver.Submit(std::move(request), [this, id = status.ID](const DocumentSaveStatus& written)
+		const std::optional<RecoverySaveToken> heldToken = written ? std::optional<RecoverySaveToken>(token) : std::nullopt;
+		if (m_DocumentSaver.Submit(std::move(request), [this, id = status.ID, handle, heldToken, baseHash](const DocumentSaveStatus& indexStatus)
 		{
-			if (m_WorldSave.Request == id)
-				OnWorldIndexSaved(written);
+			OnWorldIndexSaved(indexStatus, id, handle, heldToken ? &*heldToken : nullptr, baseHash);
 		}, &error) == 0)
 		{
 			m_World->FinishIndexSave();
 			NotifySaveFailed(status.Label, error, m_World->GetWorld());
+			if (written)
+				m_Recovery->ReleaseSave(token);
 			if (current)
+			{
+				m_WorldSave.Error = error;
 				m_WorldSave.Ended = true;
+			}
 		}
 	}
 
-	void EditorContext::OnWorldIndexSaved(const DocumentSaveStatus& status)
+	void EditorContext::OnWorldIndexSaved(const DocumentSaveStatus& status, uint64_t save, AssetHandle handle, const RecoverySaveToken* token, std::string baseHash)
 	{
-		if (m_World)
+		const bool current = m_WorldSave.Request == save;
+		const bool indexWritten = status.State == DocumentSaveState::Done && !status.Items.empty();
+		if (!indexWritten)
+			NotifySaveFailed(status.Label, status.Error, status.Items.empty() ? UUID::Null() : status.Items.front().Asset);
+		// Another world (or none) is edited now: the files are written, but nothing of what is edited now is marked.
+		const bool sameWorld = m_World && m_SceneHandle == handle && status.SavePoint.Generation == m_UndoStack.GetSavePoint().Generation;
+		if (current && m_World)
 			m_World->FinishIndexSave();
-		if (status.State == DocumentSaveState::Done && !status.Items.empty())
+		if (token)
+		{
+			if (indexWritten && sameWorld)
+				MarkWorldSaved(status.SavePoint, handle, *token, std::move(baseHash));
+			else
+				m_Recovery->ReleaseSave(*token);
+		}
+		if (!current)
+			return;
+		if (indexWritten)
 			m_WorldSave.Documents.push_back({ status.Items.front().Path, "world", status.Items.front().Bytes, 0 });
 		else
-			NotifySaveFailed(status.Label, status.Error, status.Items.empty() ? UUID::Null() : status.Items.front().Asset);
+			m_WorldSave.Error = status.Error.empty() ? std::string("The world's document was not written") : status.Error;
 		m_WorldSave.Ended = true;
+	}
+
+	void EditorContext::MarkWorldSaved(const UndoStack::SavePoint& savePoint, AssetHandle handle, const RecoverySaveToken& token, std::string baseHash)
+	{
+		m_UndoStack.MarkSaved(savePoint);
+		OnSceneSaved();
+		const auto [sceneFile, scenePath] = GetSceneFile(handle);
+		m_Recovery->OnSaved(handle, sceneFile, scenePath, std::move(baseHash), token, *m_EditScene, IsSceneModified());
 	}
 
 	std::optional<std::vector<WorldSavedDocument>> EditorContext::GetWorldSaveDocuments(uint64_t save) const
@@ -1053,6 +1089,13 @@ namespace Strata
 		if (save == 0 || m_WorldSave.Request != save || !m_WorldSave.Ended)
 			return std::nullopt;
 		return m_WorldSave.Documents;
+	}
+
+	std::string EditorContext::GetWorldSaveError(uint64_t save) const
+	{
+		if (save == 0 || m_WorldSave.Request != save || !m_WorldSave.Ended)
+			return std::string();
+		return m_WorldSave.Error;
 	}
 
 	bool EditorContext::WaitForSave(uint64_t id, std::string* outError)

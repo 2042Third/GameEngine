@@ -1345,9 +1345,11 @@ works: Docs/Architecture.md, "World partition"; for people: Docs/Manual/Worlds.m
   `SceneEdit::CheckCells` can refuse a step whose cell is not loaded. Only `EditorWorld` writes cell documents, through
   one `DocumentSaver` request per save from a `SerializedOnly` snapshot (`EditorWorld::BeginSave`, items with the UUIDs of
   each document's top-level entities as `SceneWriteOptions::Roots`), then the World document with the cells' index
-  entries in a second request once their stamps exist (`FinishSave`); cells and the persistent scene are read with the
-  streamed reader (`Editor/WorldCellIO`, `SceneSerializer::DeserializeText`); a cell's scene handle is derived from the
-  world's (`DeriveSubAssetHandle(world, "Cell/<layer>/<x>/<z>")`), so steps name cells before their files exist.
+  entries in a second request once their stamps exist (`FinishSave`), and the scene is marked saved only once that
+  document is written (a world that does not list a new cell leaves its entities out); cells and the persistent scene
+  are read with the streamed reader (`Editor/WorldCellIO`, `SceneSerializer::DeserializeText`); a cell's scene handle is
+  derived from the world's (`DeriveSubAssetHandle(world, "Cell/<layer>/<x>/<z>")`), so steps name cells before their
+  files exist.
 - **Precision.** Scenes and physics are float32: worlds stay within `WorldData::c_SupportedExtent` (20 km) of the
   origin, where positions resolve to about 2 mm; `world.cook` warns about cells beyond it and `World.Coordinates` tests
   streaming, physics and rays there.

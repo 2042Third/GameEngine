@@ -375,7 +375,8 @@ Open items and deferrals later waves own:
   `EntityPrototypeBuilder`. Prefab and asset-editor saves stay synchronous.
 - World partition (wave 4's `world-partition`): `PhysicsSettings::GrowthLimit` has no scene or project setting, so the
   "bodies without collision" pill appears only in tests; a world's save writes its World document in a second request
-  once the cells' stamps exist, so a crash between the two leaves new cells unlisted until the next save lists them; the
+  once the cells' stamps exist, so a crash between the two leaves new cells unlisted (the scene is marked saved, and the
+  recovery journal rebased, only after the second, so the journal keeps their edits and the next save lists them); the
   running game's cells are summed up in `play.state` and `editor.status` (`running.world`), never listed.
 - Tests: `Strata::Tests::ScopedJobSystem` is defined twice (`Asset/AssetTestUtils.h` and `Physics/PhysicsTestUtils.h`,
   with different constructors), so a test file cannot include both.

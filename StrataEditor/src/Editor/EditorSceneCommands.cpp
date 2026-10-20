@@ -278,6 +278,13 @@ namespace Strata
 				// A world's save ends with its World document: what it wrote is listed then.
 				if (context.IsWorldSaveWriting(id))
 					return std::nullopt;
+				// Its cells are written, but the World document that lists them is not: the scene stays modified.
+				if (std::string worldError = context.GetWorldSaveError(id); !worldError.empty())
+				{
+					EditorCommandResult failed = EditorCommandResult::Fail(std::move(worldError));
+					failed.Announced = true;
+					return failed;
+				}
 				const std::optional<std::vector<WorldSavedDocument>> documents = context.GetWorldSaveDocuments(id);
 				constexpr double c_Megabyte = 1024.0 * 1024.0;
 				const DocumentSaveItemResult* written = status->Items.empty() ? nullptr : &status->Items.front();

@@ -728,7 +728,15 @@ namespace Strata
 		}
 		if (allWritten)
 			m_RequestedPins.clear(); // What undo steps asked for may go now
-		if (!world || WorldAsset::ToDocument(data) == WorldAsset::ToDocument(world->GetData()))
+		if (!world)
+		{
+			// The cells are written, but their index entries and the new cells cannot go into a World document now.
+			m_Saving = false;
+			if (outError)
+				*outError = "The world is no longer loaded, so its document was not written: save again";
+			return std::nullopt;
+		}
+		if (WorldAsset::ToDocument(data) == WorldAsset::ToDocument(world->GetData()))
 		{
 			m_Saving = false;
 			return std::nullopt;
