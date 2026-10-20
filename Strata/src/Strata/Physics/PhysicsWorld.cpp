@@ -29,6 +29,7 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -471,6 +472,9 @@ namespace Strata
 			b3CompoundData* m_Compound = nullptr;
 		};
 
+		// BodyRecord::LeftSimulationAt of a body that never left the simulation.
+		constexpr uint64_t c_NeverLeftSimulation = std::numeric_limits<uint64_t>::max();
+
 		// An entity that owns a body (a rigid body, or a collider entity without a rigid body ancestor). The record exists as
 		// long as the entity needs a body, also while the body cannot be built (see BuildFailure).
 		struct BodyRecord
@@ -491,6 +495,7 @@ namespace Strata
 			uint64_t SlotTicket = 0;                        // Its entry in PhysicsWorldData::SlotWaiters while it waits for a slot
 			uint64_t WriteBackPass = 0;                     // Last write-back pass that wrote this body
 			uint64_t SyncPass = 0;                          // Last step whose synchronization handled this record
+			uint64_t LeftSimulationAt = c_NeverLeftSimulation; // PhysicsWorldData::StepCount when the body last left the simulation
 			glm::vec3 ShapeScale = glm::vec3(1.0f);         // World scale baked into the shape
 			glm::vec3 WorldScale = glm::vec3(1.0f);         // Entity world scale at the last synchronization (ShapeScale within tolerance)
 			glm::mat4 LastWorldTransform = glm::mat4(1.0f); // Entity world transform the body was last synchronized with
@@ -1363,6 +1368,7 @@ namespace Strata
 
 			SaveVelocities(record);
 			b3Body_Disable(record.BodyID);
+			record.LeftSimulationAt = data.StepCount;
 			record.InSimulation = false;
 			record.KinematicMoving = false;
 			record.HasPendingForce = false;
@@ -1402,8 +1408,13 @@ namespace Strata
 				record.KinematicTargetRotation = rotation;
 			}
 
-			// Enabling finds the body's pairs again, and its contacts begin at the next step.
+			// Enabling finds the body's pairs again, and its contacts begin at the next step. Its sensor visits do not: box3d
+			// drops the visits of a disabled body at its next step, so a body back before that step keeps them unchanged and no
+			// Begin comes for the trigger pairs that ended when it left. They are seeded after the next step (SeedWantedPairs
+			// counts the visits of the body's sensors and of the triggers it is in).
 			b3Body_Enable(record.BodyID);
+			if (record.LeftSimulationAt == data.StepCount && (record.IsTrigger || !data.TriggerBodies.empty()) && (data.TrackAll || !data.ContactInterest.empty()))
+				data.SeededEntities.push_back(record.EntityID);
 			if (record.Type == RigidBodyType::Dynamic)
 			{
 				// Motion resumes where it stopped.

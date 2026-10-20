@@ -353,6 +353,46 @@ TEST_SUITE("Physics.Events")
 		CHECK(contacts->RemoveCollisionListener(listener));
 		scene.OnRuntimeStop();
 	}
+
+	TEST_CASE("A body or trigger that leaves and rejoins the simulation between two steps begins its trigger pairs again")
+	{
+		Scene scene;
+		scene.GetSettings().Gravity = glm::vec3(0.0f);
+		Entity zone = CreateStaticTrigger(scene, "Zone", glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(1.0f));
+		Entity crate = CreateDynamicBox(scene, "Crate", glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.25f));
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		CollisionRecorder recorder(physics);
+		StepScene(scene, 5);
+		REQUIRE(recorder.Count(CollisionEventType::Begin, zone.GetUUID(), crate.GetUUID()) == 1);
+
+		// Frames shorter than the fixed step (rendering faster than physics) apply activity changes without a step: the
+		// crate, then the zone, leaves in one frame and is back in the next. box3d never steps without it, so its sensor
+		// sees the same visitor as before and reports nothing; the pair that ended when it left must begin again.
+		const float timestep = scene.GetSettings().FixedTimestep;
+		uint32_t round = 0;
+		for (Entity toggled : { crate, zone })
+		{
+			CAPTURE(round);
+			toggled.SetActive(false);
+			scene.OnUpdateRuntime(timestep * 0.1f);
+			CHECK(recorder.Count(CollisionEventType::End, zone.GetUUID(), crate.GetUUID()) == round + 1);
+			toggled.SetActive(true);
+			scene.OnUpdateRuntime(timestep * 0.1f);
+			StepScene(scene, 2);
+			CHECK(recorder.Count(CollisionEventType::Begin, zone.GetUUID(), crate.GetUUID()) == round + 2);
+			CHECK(physics.GetStats().ContactPairCount == 1);
+			round++;
+		}
+
+		// The pair is tracked again: it ends when the crate leaves the zone.
+		crate.GetTransform().Translation.x = 5.0f;
+		crate.MarkModified<TransformComponent>();
+		StepScene(scene, 2);
+		CHECK(recorder.Count(CollisionEventType::End, zone.GetUUID(), crate.GetUUID()) == 3);
+		CHECK(physics.GetStats().ContactPairCount == 0);
+		scene.OnRuntimeStop();
+	}
 }
 
 TEST_SUITE("Physics.MeshColliders")

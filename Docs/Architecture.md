@@ -379,8 +379,9 @@ sub-steps); forces of the fixed step act in every one, and each one's events are
 contacts per pair of shapes (and child) when they start and stop touching, and sensor visits likewise: they are folded into
 pairs of entities that begin with their first contact and end with their last, tracked only for pairs someone wants (every
 pair while a listener of all entities is registered, otherwise pairs with a watched entity, such as one whose script has
-contact callbacks; a pair that becomes wanted while touching is seeded from box3d's contact and sensor data). Shapes resolve
-to entities through the world's own slots (`ShapeSlot`, by box3d's index and generation), so events of shapes that are gone
+contact callbacks; a pair that becomes wanted while touching is seeded from box3d's contact and sensor data, and so are the
+trigger pairs of a body back in the simulation before box3d stepped without it, whose sensor visits box3d never dropped).
+Shapes resolve to entities through the world's own slots (`ShapeSlot`, by box3d's index and generation), so events of shapes that are gone
 resolve to nothing; a rebuilt body's pairs wait for its new shapes' contacts of the next step, which confirm them without a
 new Begin. Sensor events where neither body moves (a static trigger and a static collider) are dropped, and trigger events
 get the center of the two shapes' bounds' intersection as their point. Each touching pair knows its position in the pair
