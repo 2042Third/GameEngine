@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Runs a command while it holds the perf lock, so that the measurements of agents run by one user on a machine never
-overlap (Docs/Plans/Wave4/mac.md, "Perf on the Mac": interleaved A/Bs under the lock). The lock lives in the user's
-temporary directory: every process that shares it must see the same one (TMPDIR on Linux and macOS, TEMP on Windows).
+overlap: interleaved A/Bs run under the lock (the method of wave 4's plan, Docs/Plans/Wave4/mac.md, "Perf on the Mac",
+in git history at fd7e1489). The lock lives in the user's temporary directory: every process that shares it must see the
+same one (TMPDIR on Linux and macOS, TEMP on Windows).
 
     python Tools/PerfLock.py --label <who> -- <command> [arguments...]
     python Tools/PerfLock.py --status
