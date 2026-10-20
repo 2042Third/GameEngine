@@ -190,11 +190,20 @@ TEST_SUITE("Editor.Launcher")
 		CHECK_FALSE(editor.Context().GetProject()->GetConfig().StartScene.IsValid());
 		CHECK(editor.Context().GetProject()->GetProjectFile().parent_path() == location / ProjectDialogs::c_DefaultProjectName);
 
-		// The sidebar's Open Sample goes straight to the only sample.
+		// The sidebar's Open Sample goes straight to the only sample, or lists them when there are several.
 		editor.Run("project.close");
 		editor.Frames(2);
+		const nlohmann::json samples = editor.Run("project.samples")["samples"];
+		REQUIRE_FALSE(samples.empty());
 		REQUIRE(editor.Click("Welcome.OpenSample"));
 		editor.Frames(3);
+		if (samples.size() > 1)
+		{
+			for (const nlohmann::json& sample : samples)
+				CHECK(IsDrawn("Welcome.SampleMenu." + sample["id"].get<std::string>()));
+			REQUIRE(editor.Click("Welcome.SampleMenu." + samples.back()["id"].get<std::string>()));
+			editor.Frames(3);
+		}
 		CHECK(IsDrawn("OpenSample.Open"));
 	}
 
@@ -661,7 +670,11 @@ TEST_SUITE("Editor.Launcher")
 				const std::optional<UI::ItemProbe::Item> agent = UI::ItemProbe::Find("Welcome.AgentCard");
 				REQUIRE(agent);
 				const float recentRight = rightmost(recentKeys);
-				const float startersRight = rightmost({ "Welcome.Template.basic3d", "Welcome.Template.empty", "Welcome.Sample.Tetris" });
+				std::vector<std::string> starterKeys = { "Welcome.Template.basic3d", "Welcome.Template.empty" };
+				const nlohmann::json samples = editor.Run("project.samples")["samples"];
+				for (const nlohmann::json& sample : samples)
+					starterKeys.push_back("Welcome.Sample." + sample["id"].get<std::string>());
+				const float startersRight = rightmost(starterKeys);
 				CHECK(std::abs(recentRight - agent->Max.x) <= 1.0f);
 				CHECK(std::abs(startersRight - agent->Max.x) <= 1.0f);
 				const std::optional<UI::ItemProbe::Item> firstStarter = UI::ItemProbe::Find("Welcome.Template.basic3d");

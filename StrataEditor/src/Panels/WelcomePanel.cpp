@@ -389,6 +389,7 @@ namespace Strata
 			{
 				if (ImGui::MenuItem(entry.Name.c_str()))
 					shell->ShowOpenSampleDialog(entry.Id);
+				UI::ItemProbe::Record("Welcome.SampleMenu." + entry.Id);
 			}
 			ImGui::EndPopup();
 		}
@@ -555,20 +556,40 @@ namespace Strata
 
 	void WelcomePanel::DrawRecentProjects(EditorPanelContext& context, const Grid& grid)
 	{
-		const ImVec2 cardSize(grid.ColumnWidth, std::round(ImGui::GetFontSize() * c_RecentCardHeightInFontSizes));
+		const float cardHeight = std::round(ImGui::GetFontSize() * c_RecentCardHeightInFontSizes);
 		const int64_t now = GetUnixTime();
+
+		// The cards the search leaves, in rows of the grid's columns; a row that is not full stretches its cards over the
+		// grid's width, as the starters' rows do, so every section ends at one right edge.
+		std::vector<size_t> visible;
+		for (size_t index = 0; index < m_RecentProjects.size(); index++)
+		{
+			if (m_Search.empty() || MatchesSearch(m_RecentProjects[index], m_Search))
+				visible.push_back(index);
+		}
+		const float gap = ImGui::GetStyle().ItemSpacing.x;
+		const size_t columns = static_cast<size_t>(grid.Columns);
+		const auto getCardWidth = [&](size_t position)
+		{
+			const size_t rowStart = position - position % columns;
+			const float count = static_cast<float>(std::min(columns, visible.size() - rowStart));
+			const float cardWidth = std::floor((grid.Width - gap * (count - 1.0f)) / count);
+			// The last card of the row takes what rounding left, so the row ends exactly at the grid's right edge.
+			const bool last = position + 1 == visible.size() || (position + 1) % columns == 0;
+			return last ? grid.Width - (cardWidth + gap) * (count - 1.0f) : cardWidth;
+		};
 
 		// Actions run after the loop: they change the list it walks.
 		std::filesystem::path open;
 		std::filesystem::path remove;
-		size_t shown = 0;
-		for (size_t index = 0; index < m_RecentProjects.size(); index++)
+		const size_t shown = visible.size();
+		for (size_t position = 0; position < visible.size(); position++)
 		{
+			const size_t index = visible[position];
 			const RecentProject& project = m_RecentProjects[index];
-			if (!m_Search.empty() && !MatchesSearch(project, m_Search))
-				continue;
-			if (shown++ % static_cast<size_t>(grid.Columns) != 0)
+			if (position % columns != 0)
 				ImGui::SameLine();
+			const ImVec2 cardSize(getCardWidth(position), cardHeight);
 			const std::string id = fmt::format("Welcome.Recent.{}", index);
 			const std::string initials = UI::GetInitials(project.Name);
 			const std::string path = UI::DisplayPath(project.Path.parent_path());
