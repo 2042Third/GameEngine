@@ -2,7 +2,6 @@
 	{ "command": "scene.loadStatus", "parameters": { "wait": true } },
 	{ "command": "camera.set", "parameters": { "position": [ 120, 35, 256 ], "target": [ 0, 20, 0 ] } },
 	{ "command": "world.loadCells", "parameters": { "region": { "center": [ 120, 20, 256 ], "radius": 320 }, "wait": true } },
-	{ "command": "editor.wait", "parameters": { "frames": 120 } },
 	{ "command": "viewport.capture", "parameters": { "width": 1280, "height": 720 },
 		"expect": { "/renderStats/gpuDriven": { "equals": true }, "/renderStats/instances": { "min": 2700 }, "/renderStats/drawCommands": { "max": 26 } } }
 ]
