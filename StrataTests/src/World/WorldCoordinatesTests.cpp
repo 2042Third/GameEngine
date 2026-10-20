@@ -126,8 +126,8 @@ TEST_SUITE("World.Coordinates")
 
 #if ST_WITH_PHYSICS
 		// A box dropped on the floor of cell (2, 2) there comes to rest on it and stays put: float32 resolves 2 mm there, and
-		// box3d's contact solver lets a box landing flat slide a few millimeters (5.3 mm for a cube dropped 3.5 m at the
-		// origin in a world of box3d alone).
+		// box3d's contact solver lets a box landing flat slide a few millimeters (this one 5.9 mm along x and 11.1 mm along z,
+		// where Jolt's stayed within 1 cm; box3d is deterministic on every platform).
 		Entity box = scene.CreateEntity("Dropped");
 		box.GetComponent<TransformComponent>().Translation = there + glm::vec3(0.0f, 1.0f, 0.0f);
 		box.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
@@ -136,7 +136,7 @@ TEST_SUITE("World.Coordinates")
 			RunFrame(mounted, scene);
 		const glm::vec3 rested = glm::vec3(scene.GetWorldTransform(box)[3]);
 		CHECK(rested.y == doctest::Approx(0.5f).epsilon(0.05));
-		CHECK(std::abs(rested.x - there.x) < 0.02f);
+		CHECK(std::abs(rested.x - there.x) < 0.012f);
 		CHECK(std::abs(rested.z - there.z) < 0.02f);
 		for (int frame = 0; frame < 600; frame++)
 			RunFrame(mounted, scene);

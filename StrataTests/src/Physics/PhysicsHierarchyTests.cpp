@@ -67,14 +67,13 @@ TEST_SUITE("Physics.Hierarchy")
 		REQUIRE(antennaHit);
 		CHECK(antennaHit->Point.y == doctest::Approx(1.0f + 0.75f + 1.0f + 0.2f).epsilon(1.0e-3));
 
-		// The car falls as one body and is not pushed around by its own cabin. (box3d's contact solver lets a box landing flat
-		// slide a few millimeters: 5.3 mm for a cube dropped 3.5 m in a world of box3d alone; a push of its own cabin would move
-		// it centimeters.)
+		// The car falls as one body and is not pushed around by its own cabin. box3d's contact solver lets a box landing flat
+		// slide a few millimeters: this car lands 6.4 mm away (x -2.1 mm, z 6.1 mm; box3d is deterministic on every platform),
+		// where a push of its own cabin would move it centimeters.
 		StepScene(scene, 150);
 		const glm::vec3 position = GetWorldPosition(scene, car.Chassis);
 		CHECK(std::abs(position.y - 0.25f) < 0.03f);
-		CHECK(std::abs(position.x) < 0.01f);
-		CHECK(std::abs(position.z) < 0.01f);
+		CHECK(glm::length(glm::vec2(position.x, position.z)) < 0.01f);
 		CHECK(Math::IsNearlyEqual(GetWorldRotation(scene, car.Chassis), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), 1.0e-3f));
 		CHECK(Math::IsNearlyEqual(GetWorldPosition(scene, car.Cabin), position + glm::vec3(0.0f, 0.75f, 0.5f), 1.0e-3f));
 		CHECK(physics.GetStats().ContactPairCount == 1); // Only the car touching the ground

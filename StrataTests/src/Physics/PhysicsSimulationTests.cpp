@@ -348,10 +348,14 @@ TEST_SUITE("Physics.Simulation")
 		};
 
 		CHECK(fire(1).first > 6.9f);
-		// Caught inside the wall, the contact stops it: it no longer moves on at 240 m/s, and stays short of the far side.
+		// Caught inside the wall: its sixth collision step ends at x = 6, 0.4 m deep, and the contact found at the start of
+		// the seventh stops it. box3d's soft contact takes 80% of the approach speed in that step's first sub-step (it moves
+		// on at most 240 * 0.2 / 960 = 5 cm), then pushes the sphere out at no more than contactSpeed (3 m/s) for the 14
+		// collision steps left (14 / 240 s: at most 17.5 cm), and that push is no velocity of the body's.
 		const auto [caught, speed] = fire(4);
-		CHECK(caught < 6.9f);
-		CHECK(speed < 10.0f);
+		CHECK(caught < 6.0f + 0.05f);
+		CHECK(caught > 6.0f - 0.175f - 0.05f);
+		CHECK(std::abs(speed) <= 3.0f);
 	}
 
 	TEST_CASE("Forces act through every collision step of a step")
@@ -429,12 +433,12 @@ TEST_SUITE("Physics.Simulation")
 		scene.OnRuntimeStart();
 		StepScene(scene, 180);
 
-		// Where it landed: box3d's contact solver lets a box landing flat slide a few millimeters (5.3 mm for a cube dropped
-		// 3.5 m in a world of box3d alone).
+		// Where it landed: box3d's contact solver lets a box landing flat slide a few millimeters (this one 1.6 mm along x and
+		// 1.1 mm along z; box3d is deterministic on every platform).
 		const glm::vec3 worldPosition = GetWorldPosition(scene, child);
 		CHECK(worldPosition.x == doctest::Approx(10.0f).epsilon(1.0e-3));
 		CHECK(std::abs(worldPosition.y - 0.5f) < 0.03f);
-		CHECK(std::abs(worldPosition.z) < 0.01f);
+		CHECK(std::abs(worldPosition.z) < 0.0025f);
 
 		// The parent is untouched and the child's local transform expresses the simulated pose under it.
 		CHECK(scene.GetWorldTransform(parent) == parentWorld);
