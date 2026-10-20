@@ -37,6 +37,10 @@ cmake --build --preset windows-debug --target StrataTests   # just the tests
   build directory of its own (`cmake --preset <platform> -B build/<name> ...`). A test case that needs a module is
   guarded with `#if ST_WITH_<MODULE>` (or `ST_TESTS_HAVE_EVERY_MODULE`); CI builds and tests the configuration without
   audio and physics, so check a change to such tests there or locally.
+- Upgrading box3d (the physics library; a submodule bump in a commit of its own): `Physics.Box3D`'s first case runs
+  box3d's determinism scenario against its golden sleep step and hash (`PhysicsBox3DTests.cpp`). Take new values only
+  from box3d's own `test/test_determinism.c` at the new commit, never from a Strata run, then run every `Physics.*` suite
+  and the feature test (Docs/DeveloperGuide.md, "Working with third-party code").
 - Cached options survive a re-configure. If a target you expect is missing, check `build/<preset>/CMakeCache.txt`
   (for example `STRATA_BUILD_RUNTIME`) and pass `-D<OPTION>=ON`.
 

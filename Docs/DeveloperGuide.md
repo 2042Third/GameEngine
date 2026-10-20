@@ -461,8 +461,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `Perf.Scripting` (100,000 and 300,000 trivial scripts, frames that spawn and
   destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame), `Perf.Physics` (box stacks of
   `CreateBoxStacks`: the first frames of 30,000 boxes with time dilation, 70,000 boxes that all get a body, the busy
-  frames of 70,000 and 10,000 boxes with Strata's part of a step against box3d's (a provisional `ratio` metric), and of 30,000 boxes
-  whose floor contacts are tracked; creating 10,000 bodies in one frame; the memory a world at the largest capacities and
+  frames of 70,000 and 10,000 boxes and of 30,000 boxes whose floor contacts are tracked, each with `ActiveFrame`,
+  `LastStepTime`, Strata's part of a step (`StrataStepTime`) and that part against box3d's own step (`StrataToLibraryStep`,
+  a `ratio`); creating 10,000 bodies in one frame and 100,000 static bodies in one update; the longest frame while 65,536
+  bodies are created in a world reserved for them (`Grow65kMaxFrame`); the memory a world at the largest capacities and
   at the most bodies reserves; a fixed step of 1,000 character controllers walking over steps), `Perf.TextureCook` (a cold
   import of the stress project, the stored sizes of its largest
   2048x2048 texture, its 4096x4096 texture and all of them, its pack's size, the BC7 encoder's time per block on one
@@ -2872,7 +2874,10 @@ box3d, the physics library, is built by `Strata/vendor/CMakeLists.txt` from its 
 which adds install rules, `/W4` and a cache entry inside the source tree): C17 with extensions, `-ffp-contract=off` on
 GCC and Clang (`/clang:-ffp-contract=off` for clang-cl; contraction is the one value-changing transform compilers make
 by default, and box3d's results match across platforms only without it), its AVX2 kernels with `/arch:AVX2` on MSVC x64
-(box3d picks them at run time), and asserts on in Debug and Release like `ST_CORE_ASSERT`. Its assert and log hooks
+(box3d picks them at run time), asserts on in Debug and Release like `ST_CORE_ASSERT`, and
+`B3_MAX_MESH_CONTACT_TRIANGLES` raised from 512 to 4096 (box3d keeps at most that many triangles of a mesh per convex
+shape, silently, so a large body on a dense mesh collider lost its support: "A large crate rests on a dense mesh
+floor"). Its assert and log hooks
 are installed once per process by `PhysicsRuntime` (asserts go through Strata's assert handling), and its step tasks
 run on the JobSystem through `PhysicsTaskSystem`. An upgrade must keep `Physics.Box3D`'s golden hash case passing: it
 runs box3d's own determinism scenario (`shared/determinism.c`, compiled for the tests only) with one worker and with
