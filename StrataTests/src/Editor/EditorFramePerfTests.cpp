@@ -436,9 +436,15 @@ TEST_SUITE("PerfGPU.Editor")
 			// The play copy's render scene is a clone of the edited scene's (Scene::Copy's context copiers): its first frames
 			// extract what they draw without building the copy's proxies again.
 			const nlohmann::json* playStages = JsonUtils::Find(profiles[1], "stages");
-			const nlohmann::json* extract = playStages ? JsonUtils::Find(*playStages, "Render.Extract") : nullptr;
-			MESSAGE("Starting to play: Render.Extract's longest frame ", extract ? GetNumber(*extract, "/maxMs") : 0.0, " ms of the longest frame's ",
-				playStartMax, " ms");
+			REQUIRE(playStages != nullptr);
+			const nlohmann::json* extract = JsonUtils::Find(*playStages, "Render.Extract");
+			REQUIRE(extract != nullptr);
+			const double extractMax = GetNumber(*extract, "/maxMs");
+			MESSAGE("Starting to play: Render.Extract's longest frame ", extractMax, " ms of the longest frame's ", playStartMax, " ms");
+			// Without the clone, the copy's first frames would build its proxies (some 60,000 renderers) in Render.Extract,
+			// which takes longer than a whole idle frame (1.4 ms against an idle median of 0.95 ms on the Mac); extracting from
+			// the clone takes a hundredth of one. Compared with this run's idle frame, so that it holds on any machine.
+			CHECK(extractMax < 0.25 * idleMedian);
 			MESSAGE("World of ", c_GridWorldSide * c_GridWorldSide, " cells: ", editCells, " cells loaded around the camera; idle frame median ", idleMedian,
 				" ms (World.Streaming mean ", streamingMean, " ms); the frame starting to play ", playStartMax, " ms (", GetNumber(opens[0], "/seconds"),
 				" s to open the persistent scene)");
