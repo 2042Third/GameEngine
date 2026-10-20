@@ -117,6 +117,30 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_TEST_SOURCES}
 target_link_libraries(StrataTests PRIVATE Strata StrataTooling StrataScriptCore doctest stb)
 # The glTF tests compress models with meshoptimizer's encoders (EXT_meshopt_compression), which the engine only decodes.
 target_link_libraries(StrataTests PRIVATE meshoptimizer)
+# The physics tests drive box3d directly too, among them box3d's own cross-platform determinism scenario (its golden hash,
+# Physics.Box3D): compiled from the vendored sources as box3d compiles itself (C17, no floating-point contraction), for the
+# tests only.
+if(STRATA_WITH_PHYSICS)
+	set(BOX3D_SHARED_DIR "${PROJECT_SOURCE_DIR}/Strata/vendor/box3d/shared")
+	add_library(StrataTestsBox3DScenarios STATIC "${BOX3D_SHARED_DIR}/determinism.c" "${BOX3D_SHARED_DIR}/human.c" "${BOX3D_SHARED_DIR}/utils.c")
+	set_target_properties(StrataTestsBox3DScenarios PROPERTIES C_STANDARD 17 C_STANDARD_REQUIRED YES C_EXTENSIONS YES FOLDER "Vendor")
+	target_include_directories(StrataTestsBox3DScenarios SYSTEM PUBLIC "${BOX3D_SHARED_DIR}")
+	target_link_libraries(StrataTestsBox3DScenarios PUBLIC box3d)
+	# Vendor code: compiled without warnings, like the library it exercises.
+	if(MSVC)
+		target_compile_options(StrataTestsBox3DScenarios PRIVATE /W0)
+	else()
+		target_compile_options(StrataTestsBox3DScenarios PRIVATE -w)
+	endif()
+	if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+		if(CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+			target_compile_options(StrataTestsBox3DScenarios PRIVATE /clang:-ffp-contract=off)
+		else()
+			target_compile_options(StrataTestsBox3DScenarios PRIVATE -ffp-contract=off)
+		endif()
+	endif()
+	target_link_libraries(StrataTests PRIVATE box3d StrataTestsBox3DScenarios)
+endif()
 # The editor's UI library brings the editor core; the UI tests draw it headless (src/Editor/ImGuiHarness.h).
 if(TARGET StrataEditorUI)
 	target_link_libraries(StrataTests PRIVATE StrataEditorUI)

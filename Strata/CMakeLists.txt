@@ -81,7 +81,7 @@ strata_layer_link(App PRIVATE glfw Vulkan::Headers stb)
 strata_layer_link(Asset PRIVATE zstd_decompress)
 strata_layer_link(Renderer PUBLIC nvrhi)
 strata_layer_link(Renderer PRIVATE nvrhi_vk Vulkan::Headers glfw stb MikkTSpace meshoptimizer)
-strata_layer_link(Physics PRIVATE Jolt)
+strata_layer_link(Physics PRIVATE Jolt box3d)
 strata_layer_link(Audio PRIVATE miniaudio)
 # Only the C ABI header (StrataScript/ScriptABI.h); the engine never includes the script SDK.
 strata_layer_link(Scripting PRIVATE StrataScriptCore)

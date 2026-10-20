@@ -2864,3 +2864,14 @@ The editor's fonts are not submodules: the release files of Inter, JetBrains Mon
 map) and their licenses are committed in `StrataEditor/Resources/Fonts/` and compiled in (`strata_embed_file`). To
 upgrade one, replace its files with those of the new release, update `ThirdPartyNotices.md` and, for Lucide, run
 `StrataEditor/Tools/GenerateIconHeader.py --version <release>` and commit the regenerated `UI/Icons.h` with it.
+
+box3d, the physics library, is built by `Strata/vendor/CMakeLists.txt` from its sources (not through its own CMake,
+which adds install rules, `/W4` and a cache entry inside the source tree): C17 with extensions, `-ffp-contract=off` on
+GCC and Clang (`/clang:-ffp-contract=off` for clang-cl; contraction is the one value-changing transform compilers make
+by default, and box3d's results match across platforms only without it), its AVX2 kernels with `/arch:AVX2` on MSVC x64
+(box3d picks them at run time), and asserts on in Debug and Release like `ST_CORE_ASSERT`. Its assert and log hooks
+are installed once per process by `PhysicsRuntime` (asserts go through Strata's assert handling), and its step tasks
+run on the JobSystem through `PhysicsTaskSystem`. An upgrade must keep `Physics.Box3D`'s golden hash case passing: it
+runs box3d's own determinism scenario (`shared/determinism.c`, compiled for the tests only) with one worker and with
+Strata's task system on four, against box3d's golden values; take the new values from box3d's
+`test/test_determinism.c` when the upgrade changes them.
