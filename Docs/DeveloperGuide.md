@@ -2018,6 +2018,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   types' labels about as short, or the laptop layouts change.
 - **`world.cook`** (`Editor/EditorWorldCommands.cpp`, deferred: it reads cells off the frame) measures a world's cells into
   its index (entities, bodies, bounds, closure bytes, `MaxBodiesInRadius`), re-reading only cells whose files changed; it
+  waits for saves in flight (`AfterSaves`, and again before it writes) and starts again when the World document was
+  written during the cook (`WorldCook::IsSourceCurrent`; exports do the same), so it never undoes a save's new cells; it
   fails, writing nothing, on entity IDs cells share and when the project closes before it ends; `apply` (default true)
   also sets the persistent scene's capacity when it is open in edit mode as the cook starts and as it ends (else a
   warning; an explicit `apply: true` fails, writing nothing). **`world.info`** describes a world, its layers and how

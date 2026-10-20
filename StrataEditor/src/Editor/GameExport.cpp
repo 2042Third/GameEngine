@@ -370,6 +370,35 @@ namespace Strata
 				if (!cook->Poll())
 					return;
 			}
+			// A world's save writes its World document after its cells: the cooked documents wait for it. A cook whose world's
+			// document was written meanwhile starts again from it, as its own document would undo that write (the cells a save
+			// listed); it reads only the cells whose files changed since.
+			if (m_Saver && m_Saver->IsBusy())
+				return;
+			bool restarted = false;
+			for (Scope<WorldCook>& cook : m_Cooks)
+			{
+				if (!cook->Succeeded() || cook->IsSourceCurrent())
+					continue;
+				const AssetHandle world = cook->GetWorld();
+				std::string error;
+				cook = WorldCook::Start(m_Assets, world, m_WorldCookCache, &error);
+				if (!cook)
+				{
+					m_Cooks.clear();
+					{
+						std::scoped_lock<std::mutex> lock(m_Shared->Mutex);
+						m_Shared->Ended = true;
+						m_Shared->Outcome = GameExportState::Failed;
+						m_Shared->Error = fmt::format("The world {} cannot be cooked: {}", world.ToString(), error);
+					}
+					Collect();
+					return;
+				}
+				restarted = true;
+			}
+			if (restarted)
+				return;
 			if (FinishCooking())
 				Begin();
 		}

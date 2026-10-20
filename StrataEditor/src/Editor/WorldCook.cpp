@@ -114,6 +114,7 @@ namespace Strata
 		cook->m_Cache = cache;
 		cook->m_World = world;
 		cook->m_Data = asset->GetData();
+		cook->m_SourceHash = Sha256::Hash(std::span<const uint8_t>(bytes));
 		const WorldData& data = cook->m_Data;
 		// The jobs read through the cook's reference, never one of their own: the cook waits for them, so that the manager is
 		// released on the main thread.
@@ -190,6 +191,12 @@ namespace Strata
 		m_Cancelled.store(true, std::memory_order_release);
 		for (const JobHandle& job : m_Jobs)
 			job.Wait();
+	}
+
+	bool WorldCook::IsSourceCurrent() const
+	{
+		std::vector<uint8_t> bytes;
+		return m_Assets->ReadStoredData(m_World, bytes) && Sha256::Hash(std::span<const uint8_t>(bytes)) == m_SourceHash;
 	}
 
 	bool WorldCook::Poll()

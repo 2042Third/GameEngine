@@ -2,6 +2,7 @@
 
 #include <Strata/Asset/AssetTypes.h>
 #include <Strata/Core/Base.h>
+#include <Strata/Core/Crypto.h>
 #include <Strata/Core/JobSystem.h>
 #include <Strata/World/WorldAsset.h>
 
@@ -81,6 +82,10 @@ namespace Strata
 		AssetHandle GetWorld() const { return m_World; }
 		// The World document with the fresh index (once Succeeded).
 		const WorldData& GetCookedData() const { return m_Data; }
+		// Whether the World document still holds the bytes the cook started from. False once something wrote it meanwhile
+		// (a save that listed new cells, a change of layers) or it cannot be read: a document made from the cook's reading
+		// would undo that write, so the cook starts again instead. Main thread.
+		bool IsSourceCurrent() const;
 
 		// The most bodies the sources can keep loaded at once: for each layer, the radius the sources use (the largest
 		// StreamingSourceComponent::Radius, else the layer's StreamingDistance times DistanceScale) plus its hysteresis; for
@@ -108,6 +113,7 @@ namespace Strata
 		Ref<WorldCookCache> m_Cache;
 		AssetHandle m_World = UUID::Null();
 		WorldData m_Data;
+		Sha256Digest m_SourceHash {}; // Of the World document the cook started from
 		std::vector<Scope<CellJob>> m_Reads; // The cells read by jobs
 		std::vector<JobHandle> m_Jobs;
 		Ref<WorldCookPersistentRead> m_Persistent; // Shared with its job

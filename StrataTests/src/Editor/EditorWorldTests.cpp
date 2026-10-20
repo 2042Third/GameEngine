@@ -5,6 +5,7 @@
 #include "Editor/HarnessEditor.h"
 #include "Editor/SaveTestUtils.h"
 #include "Editor/EditorWorld.h"
+#include "Editor/GameExport.h"
 #include "Editor/SceneRaycast.h"
 #include "Editor/WorldProjectUtils.h"
 #include "EditorLayer.h"
@@ -861,6 +862,77 @@ TEST_SUITE("Editor.World")
 		CHECK(project.ReadWorld()->FindCell(WorldCellKey { 1, 3, 0 }) >= 0);
 	}
 
+	TEST_CASE("world.cook keeps the cells a save listed while it cooked, starting again from the document the save wrote")
+	{
+		GridWorldProject project("EditorWorldCookDuringSave", 3);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
+		Settle(project);
+		project.Run("world.edit", { { "editLayer", "Ground" } });
+		project.Run("entity.create", { { "name", "Rock" }, { "components", { { "Transform", { { "Translation", { 112.0, 0.0, 16.0 } } } } } } });
+		const WorldCellKey newCell { 1, 3, 0 };
+
+		// The cook reads the World document as it starts; the save then writes the document that lists the new cell.
+		EditorCommandResult cook = project.Commands.Execute(project.Context, "world.cook", { { "world", UUIDToJson(project.World) } });
+		REQUIRE(cook.IsPending());
+		REQUIRE(project.Commands.Execute(project.Context, "scene.save", { { "wait", false } }).Success);
+		REQUIRE(WaitUntil([&]()
+		{
+			project.Context.Update(Timestep(1.0f / 60.0f));
+			return !project.Context.HasSavesInFlight();
+		}, std::chrono::seconds(60)));
+		REQUIRE(project.ReadWorld()->FindCell(newCell) >= 0);
+		cook = CompleteCommand(project.Context, std::move(cook));
+		INFO(cook.Error);
+		REQUIRE(cook.Success);
+		// The cooked document keeps the cell, and indexes it.
+		CHECK(cook.Value["cells"] == 10);
+		const Ref<WorldAsset> world = project.ReadWorld();
+		CHECK(world->FindCell(newCell) >= 0);
+		CHECK(world->FindSummary(newCell) != nullptr);
+	}
+
+	TEST_CASE("An export whose world is saved while it cooks keeps the cells the save listed")
+	{
+		GatedJobSystem jobs;
+		GridWorldProject project("EditorWorldExportDuringSave", 3);
+		project.Run("project.setStartScene", { { "scene", UUIDToJson(project.Persistent) } });
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
+		Settle(project);
+		const WorldCellKey newCell { 1, 3, 0 };
+		const std::filesystem::path output = project.Directory.parent_path() / "Build";
+		EditorCommandResult exported;
+		{
+			// The cooks' cell reads wait: the export cooks while a new cell is made and saved.
+			IOGate gate;
+			exported = project.Commands.Execute(project.Context, "project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false } });
+			REQUIRE(exported.IsPending());
+			REQUIRE(WaitUntil([&]()
+			{
+				project.Context.Update(Timestep(1.0f / 60.0f));
+				const Ref<GameExport>& exporter = project.Context.GetGameExport();
+				return exporter && exporter->GetState() == GameExportState::CookingWorlds;
+			}, std::chrono::seconds(30)));
+			project.Run("world.edit", { { "editLayer", "Ground" } });
+			project.Run("entity.create", { { "name", "Rock" }, { "components", { { "Transform", { { "Translation", { 112.0, 0.0, 16.0 } } } } } } });
+			REQUIRE(project.Commands.Execute(project.Context, "scene.save", { { "wait", false } }).Success);
+			REQUIRE(WaitUntil([&]()
+			{
+				project.Context.Update(Timestep(1.0f / 60.0f));
+				return !project.Context.HasSavesInFlight();
+			}, std::chrono::seconds(30)));
+			REQUIRE(project.ReadWorld()->FindCell(newCell) >= 0);
+		}
+		exported = CompleteCommand(project.Context, std::move(exported));
+		INFO(exported.Error);
+		REQUIRE(exported.Success);
+		// The cooked document keeps the cell, and indexes every cell.
+		const Ref<WorldAsset> cooked = project.ReadWorld();
+		CHECK(cooked->FindCell(newCell) >= 0);
+		REQUIRE(cooked->GetData().Index.has_value());
+		CHECK(cooked->GetData().Index->Cells.size() == 10);
+	}
 }
 
 TEST_SUITE("Editor.World")

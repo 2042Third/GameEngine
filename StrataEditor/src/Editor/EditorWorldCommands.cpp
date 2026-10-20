@@ -375,11 +375,13 @@ namespace Strata
 			"cells share entity IDs with each other or with the persistent scene (the error names them) or a cell cannot be read. apply (default "
 			"true): also sets the persistent scene's physics capacity (Physics Capacity > Max Bodies) to the recommended one, 1.25 times "
 			"maxBodiesInRadius for spawns, when the persistent scene is the edited scene in edit mode when the cook starts and when it ends "
-			"(otherwise a warning says it was not set; an explicit apply: true then fails, writing nothing). One undo step. Returns staleBefore (cells measured again), maxBodies (the recommended capacity), "
+			"(otherwise a warning says it was not set; an explicit apply: true then fails, writing nothing). One undo step. Saves in flight are "
+			"waited for, before the cook and before it writes; when the world document was written during the cook (a save listing new cells), "
+			"the cook starts again from it. Returns staleBefore (cells measured again), maxBodies (the recommended capacity), "
 			"seconds, and warnings: cells beyond the 20 km worlds are supported within, empty cells.",
 			ObjectSchema({ { "world", AssetSchema("The world (.stworld): handle or path") },
 				{ "apply", BoolSchema("Also set the persistent scene's physics capacity (default true)") } }, { "world" }),
-			[](EditorContext& context, const nlohmann::json& parameters)
+			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{
 				EditorAssetManager* assets = context.GetAssetManager();
 				if (!assets)
@@ -406,7 +408,7 @@ namespace Strata
 							"in edit mode, first");
 					apply = false;
 				}
-				return EditorCommandResult::Defer([cook, project, apply, explicitApply, started](EditorContext& pollContext) -> std::optional<EditorCommandResult>
+				return EditorCommandResult::Defer([cook, project, apply, explicitApply, started](EditorContext& pollContext) mutable -> std::optional<EditorCommandResult>
 				{
 					// Another project (or the same one opened again) is not the one the cook read: it stops, writing nothing.
 					EditorAssetManager* assets = pollContext.GetAssetManager();
@@ -422,6 +424,20 @@ namespace Strata
 					const std::optional<AssetMetadata> metadata = assets->GetMetadata(cook->GetWorld());
 					if (!metadata)
 						return EditorCommandResult::Fail("The world was deleted during the cook");
+					// A world's save writes its World document after its cells: the cooked document waits for it. One written
+					// during the cook holds what the cook's would undo (the cells a save listed): the cook starts again from it,
+					// reading only the cells whose files changed since.
+					if (pollContext.HasSavesInFlight())
+						return std::nullopt;
+					if (!cook->IsSourceCurrent())
+					{
+						std::string restartError;
+						const Ref<EditorAssetManager> manager = std::static_pointer_cast<EditorAssetManager>(assets->shared_from_this());
+						cook = Ref<WorldCook>(WorldCook::Start(manager, cook->GetWorld(), pollContext.GetWorldCookCache(), &restartError).release());
+						if (!cook)
+							return EditorCommandResult::Fail(restartError);
+						return std::nullopt;
+					}
 					// The capacity goes only into the persistent scene, edited in edit mode now: another scene may be open, or a
 					// game may run, since the cook started.
 					const bool applyNow = apply && CanApplyCapacity(pollContext, cook->GetCookedData().PersistentScene);
@@ -482,7 +498,7 @@ namespace Strata
 						{ "seconds", std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() },
 						{ "warnings", std::move(warnings) } });
 				});
-			}, EditorCommandKind::Edit }));
+			}), EditorCommandKind::Edit }));
 
 		registry.Register(MayDefer({ "world.create",
 			"Makes a new world: <path>.stworld and its persistent scene <path>.stscene (the basic3d content, a \"World\" entity with its "
