@@ -71,7 +71,9 @@ private:
 		const float angle = m_Random.NextFloat() * 6.2831853f;
 		const float distance = Range * (0.3f + 0.7f * m_Random.NextFloat());
 		m_Target = m_Home + glm::vec3(std::cos(angle) * distance, 0.0f, std::sin(angle) * distance);
-		SetState(roll < 0.25f ? 0 : (roll < 0.85f ? 1 : 2), 4.0f + m_Random.NextFloat() * 6.0f);
+		// A fox that surveyed walks or runs next: it never stands for two surveys in a row.
+		const bool surveyed = StateIndex == 0;
+		SetState(!surveyed && roll < 0.25f ? 0 : (roll < 0.85f ? 1 : 2), 4.0f + m_Random.NextFloat() * 6.0f);
 	}
 
 	void SetState(int32_t state, float seconds)
