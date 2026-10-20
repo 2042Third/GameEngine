@@ -287,6 +287,28 @@ frame and a paused game (`Input::SetSuspended`) still waits for its next step.
 **I6. Small engine bugs found while building** get a fix and a regression test that fails without it, in their own commits;
 large gaps go into the report (section 9 lists the expected ones).
 
+### 4.1.1 What the Open World spike found (step 5, 2026-10-20)
+
+Measured in a scratch project, before any sample was made:
+
+- **Kenney's Nature Kit does not import as downloaded:** its GLBs (exporter UniGLTF) list a child node as their scene's
+  root, which glTF forbids and cgltf rejects ("parsing failed (invalid glTF)"), and give every color metallic 1. No material
+  carries `KHR_materials_unlit` (the kit only lists it in `extensionsUsed`), so the models import lit. The chosen models are
+  prepared before import by a scratch script (the scene lists the root nodes; metallic 0), recorded in the credits' Changes
+  column. **I5 is dropped:** no asset the samples use is unlit (the Platformer Kit has no unlit material either), and a
+  setting no asset needs is not added.
+- **Terrain:** the generator's island is 97 tiles of 33 x 33 vertices (tiles wholly below the sea floor left out), a 2.2 MB
+  GLB and a 3.6 KB palette, imported and rendered in the GPU-driven path; each tile a static non-convex mesh collider.
+- **Scatter:** 20,000 instances of 26 one-entity prefabs (`prefab.instantiate {instances}`, 7.5 s in a Debug editor, the
+  Vegetation layer pinned over the island first) went into 81 cells: 12.1 MB of cell documents, about 600 bytes an
+  instance, within 20 MB. Trees and large rocks have colliders: `world.cook` measured at most 9,161 bodies around a source
+  and set the capacity to 11,452.
+- **Export:** the pruned pack is 7.0 MB (284 assets). Headless, the Debug runtime takes about 55 ms a frame with about
+  10,000 streamed entities loaded (Debug builds verify the scene's caches every frame), so 600 frames take 32 s on the Mac:
+  the Debug regression runs the shorter tour.
+- **Look:** dense conifer forest, rock and snow on the central peaks; the props' density per biome is tuned in the
+  generator when the sample is made.
+
 ### 4.2 Physics Playground (`Samples/PhysicsPlayground`)
 
 An arena (40 x 40 m, PBR floor and walls from ambientCG) with stations a free camera flies between:
@@ -616,7 +638,7 @@ appended after Tetris.
 7. **Batch 1:** CI green on `ci/showcase-samples` at the Playground's tip, which the report names: the integrator can land
    the infrastructure, Tetris' files and the Playground on their own, so `physics-box3d`'s sample acceptance (its D13) can
    start on them.
-8. I5 `UnlitMaterials` (the Nature Kit; the Platformer Kit too if its GLBs carry the extension).
+8. (I5 dropped: section 4.1.1.)
 9. The Open World (the same as the Playground, plus the render check).
 10. I7 taps at time scale 0.
 11. Third-Person Adventure (the same).
