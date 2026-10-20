@@ -135,11 +135,25 @@ TEST_SUITE("Physics.Box3D")
 		}
 
 		PhysicsRuntimeReference runtime;
-		std::vector<b3WorldId> held;
+		// Released by a guard too: a REQUIRE failing in between must not leave every box3d world taken, which would fail
+		// every later physics case of the process.
+		struct HeldWorlds
+		{
+			std::vector<b3WorldId> Worlds;
+
+			~HeldWorlds() { Release(); }
+
+			void Release()
+			{
+				for (const b3WorldId world : Worlds)
+					b3DestroyWorld(world);
+				Worlds.clear();
+			}
+		} held;
 		while (b3GetWorldCount() < B3_MAX_WORLDS)
 		{
 			const b3WorldDef definition = b3DefaultWorldDef();
-			held.push_back(b3CreateWorld(&definition));
+			held.Worlds.push_back(b3CreateWorld(&definition));
 		}
 		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
 		Scene crowded("Crowded");
@@ -153,8 +167,7 @@ TEST_SUITE("Physics.Box3D")
 		CHECK(CountLogMessages(logStart, "Physics: scene 'Crowded' plays without physics") == 1);
 		CHECK(GetWorldPosition(crowded, box).y == 2.0f);
 		crowded.OnRuntimeStop();
-		for (const b3WorldId world : held)
-			b3DestroyWorld(world);
+		held.Release();
 
 		// With a world free again, a scene gets physics.
 		crowded.OnRuntimeStart();
