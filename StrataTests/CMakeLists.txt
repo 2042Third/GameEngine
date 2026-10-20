@@ -740,7 +740,10 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DPERF_CHECKER=$<TARGET_FILE:StrataTests>"
 			"-DPERF_CHECK=--nonzero|WorldCellsLoaded|--nonzero|World.Streaming|--max|PhysicsBodiesWaiting|0"
 			# A fresh copy has never built its scripts: opening its scene says so, and play.start builds them.
-			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'OpenWorld' are not built yet"
+			# On CI's runners the editor's play copy loads and cooks the terrain's mesh colliders while the start's cells stream
+			# in, and its simulation may start after its 10 s wait without some of them (they arrive later; the regression waits
+			# for physics.stats' waitingForMeshes to reach 0 before anything walks).
+			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'OpenWorld' are not built yet|\\[warning\\] Strata: Physics: scene 'Island' starts simulating after waiting 10 s for meshes"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
 	set_tests_properties(StrataEditor.OpenWorld PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataOpenWorldExport)
 	# In a window at 1920 x 1080 with a small texture budget (mip streaming under pressure): the island fills the picture.

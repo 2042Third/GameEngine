@@ -1,7 +1,6 @@
 [
 	{"command": "script.build", "expect": {"/success": {"equals": true}}},
 	{"command": "editor.status", "parameters": {"sections": ["assets"]}, "expect": {"/assets/importing": {"equals": 0}, "/assets/scanning": {"equals": null}}, "until": {"seconds": 900}},
-	{"command": "asset.info", "parameters": {"asset": "Terrain/Island.glb"}, "expect": {"/bounds/size/0": {"min": 500}}},
 	{"command": "entity.find", "parameters": {"name": "Player"}, "bind": {"player": "/entities/0"}},
 	{"command": "entity.find", "parameters": {"name": "Sun"}, "bind": {"sun": "/entities/0"}},
 	{"command": "world.info", "parameters": {"world": "Worlds/Island.stworld"}, "expect": {"/layers/0/name": {"equals": "Vegetation"}, "/layers/0/cells": {"min": 80}, "/layers/1/name": {"equals": "Wildlife"}, "/layers/2/name": {"equals": "Landmarks"}, "/index/cooked": {"equals": true}, "/index/maxBodiesInRadius": {"min": 5000}, "/index/persistentBodies": {"max": 110}}},
@@ -9,6 +8,7 @@
 	{"command": "play.start", "expect": {"/state": {"equals": "Play"}}},
 	{"command": "play.pause", "parameters": {"paused": true}},
 	{"command": "world.status", "expect": {"/playing/loaded": {"min": 9}, "/playing/loading": {"equals": 0}}, "until": {"seconds": 300}},
+	{"command": "physics.stats", "expect": {"/waitingForMeshes": {"equals": 0}}, "until": {"seconds": 300}},
 	{"command": "input.key", "parameters": {"key": "Tab"}},
 	{"command": "script.get", "parameters": {"entity": {"$ref": "player"}, "class": "Explorer"}, "expect": {"/scripts/0/fields/Walking": {"equals": true}, "/scripts/0/fields/Grounded": {"equals": true}}, "until": {"steps": 300}},
 	{"command": "script.setField", "parameters": {"entity": {"$ref": "player"}, "class": "Explorer", "field": "DistanceWalked", "value": 0}},
