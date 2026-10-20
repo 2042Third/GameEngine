@@ -41,5 +41,11 @@ The engine embeds the font [Roboto Medium](https://fonts.google.com/specimen/Rob
 compiled in from the copy that Dear ImGui distributes (`Strata/vendor/imgui/misc/fonts/Roboto-Medium.ttf`) and ships in
 every game.
 
-HDR environment maps in sample projects come from [Poly Haven](https://polyhaven.com/hdris) and are
-licensed CC0.
+## Sample assets
+
+The sample projects under `Samples/` (and the games exported from them) use the asset packs below. Each sample's
+`CREDITS.md` lists which of its files come from which pack, what was changed, and the files made for Strata. CC0 packs
+are in the public domain; CC-BY packs ask for the attribution given here, which every game made from them must show.
+
+| Sample | Pack | Source | Author | License | Attribution |
+| --- | --- | --- | --- | --- | --- |

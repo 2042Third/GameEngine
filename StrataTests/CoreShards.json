@@ -17,6 +17,7 @@
 		{ "Name": "LoaderFaults", "Suites": [ "Scripting.LoaderFaults" ] },
 		{ "Name": "Renderer", "Suites": [ "Renderer*", "ImGui*", "Runtime*", "GameUI*" ] },
 		{ "Name": "Network", "Suites": [ "Network*", "CLI*" ] },
+		{ "Name": "Samples", "Suites": [ "Samples*" ] },
 		{ "Name": "EditorUI", "Suites": [ "Editor.UI*", "Editor.Theme*" ] },
 		{
 			"Name": "EditorData",
