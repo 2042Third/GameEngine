@@ -648,7 +648,11 @@ namespace Strata
 			{ "maxBodies", IntegerSchema("Bodies the physics world has room for when play starts (each about 2 KiB); 0 sizes it from the bodies the "
 				"scene starts with. The world grows beyond it while bodies are created", 0, PhysicsCapacitySettings::c_MaxBodiesLimit) },
 			{ "maxContactConstraints", IntegerSchema("Contacts the physics world has room for when play starts (each about 250 bytes); 0: automatic", 0,
-				PhysicsCapacitySettings::c_MaxContactConstraintsLimit) } });
+				PhysicsCapacitySettings::c_MaxContactConstraintsLimit) },
+			// Accepted with any value and ignored with a warning (ReadPhysicsCapacity), so that 0.4.0's command scripts keep
+			// working; listed so that clients validating requests against the schema send them too.
+			{ "maxBodyPairs", { { "deprecated", true },
+				{ "description", "Ignored since 0.5.0 (box3d has no buffer of body pairs to size); accepted for older command scripts, with a warning" } } } });
 		capacitySchema["description"] = "Physics world room (only the given values change), reserved when play starts; raise it for scenes that "
 			"create many bodies while they play, so that the world does not grow during play";
 		const nlohmann::json layerNamesSchema = {

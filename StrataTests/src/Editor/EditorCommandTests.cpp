@@ -1101,6 +1101,15 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 50000 });
 		const nlohmann::json withoutPairs = harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", 200000 } } } });
 		CHECK_FALSE(withoutPairs.contains("warning"));
+		// The schema allows what the command accepts: clients that validate requests against it send maxBodyPairs too, and
+		// learn that it is deprecated.
+		const EditorCommand* setSettings = harness.Commands.Find("scene.setSettings");
+		REQUIRE(setSettings);
+		const nlohmann::json& capacitySchema = setSettings->Parameters["properties"]["physicsCapacity"];
+		CHECK(capacitySchema["additionalProperties"] == false);
+		REQUIRE(capacitySchema["properties"].contains("maxBodyPairs"));
+		CHECK(capacitySchema["properties"]["maxBodyPairs"]["deprecated"] == true);
+		CHECK_FALSE(capacitySchema["properties"]["maxBodyPairs"].contains("type"));
 
 		// The limits are accepted; one more is not.
 		const PhysicsCapacitySettings limits { PhysicsCapacitySettings::c_MaxBodiesLimit, PhysicsCapacitySettings::c_MaxContactConstraintsLimit };

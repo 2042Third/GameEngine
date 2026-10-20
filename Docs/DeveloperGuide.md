@@ -1376,7 +1376,8 @@ works: Docs/Architecture.md, "World partition"; for people: Docs/Manual/Worlds.m
   step polls, and the editor shows it (`physics.stats`, the Streaming panel's Physics section, a status pill). A scene's
   `PhysicsCapacity` is the room its world starts with (`MaxBodies`, `MaxContactConstraints`); 0.4.0's `MaxBodyPairs`
   (its physics library's pair buffer) is read and ignored without a warning and no longer written, and
-  `scene.setSettings` accepts `physicsCapacity.maxBodyPairs` for older command scripts, ignoring it with a `warning`.
+  `scene.setSettings` accepts `physicsCapacity.maxBodyPairs` for older command scripts (its schema lists it as deprecated),
+  ignoring it with a `warning`.
 - **Tests.** `World.*` (asset, streamer, system, coordinates), `Scripting.World`, `Editor.World`, `Editor.WorldCook` and
   `Editor.UI.World` run in the Core shards on worlds scaled down for Debug (`World/WorldTestUtils.h` generates and packs
   them, `Editor/WorldProjectUtils.h` writes them into projects); `StrataRuntime.World` (label `feature`) drives a
