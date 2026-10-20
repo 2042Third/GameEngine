@@ -357,6 +357,106 @@ interleaved A/Bs against wave 2's build; the quiet campaign that decided the bud
   (`IdleFrame3kStreamedTextures`), 21.0 (`SceneOpen100kCubesMaxFrame`) and 5.36 (`RecoveryWriteIOTime100k`). The GCC
   lint of 506 translation units, the brace check and the compat check found nothing.
 
+**Wave 4 landed (2026-10-19).** Step 0 landed on main first, on 2026-10-13: wave 3's finishing round, release 0.3.0, the
+Dist CI job, the perf lock, the CI-compiler lint and the CI status tool, provisional perf budgets, New Script's missing
+class fixed and the `Scene::GetAssetManager` seam. The six streams branched from it, and each merged into main when it
+was ready, in the order engine-modules (2026-10-18), game-ui, authoring-and-playtest, world-io, gpu-driven-rendering,
+world-partition (2026-10-19); the plan's order put world-io, world-partition and gpu-driven-rendering before game-ui and
+authoring-and-playtest, which were ready first. Each merge did its wiring to the streams merged before it, after an
+independent review whose findings the stream fixed or answered (17, 18, 15, 16, 13 and 12, and 3, 3, 3 and 7 more that
+the last four landings found), and only once CI was green on all six jobs (Windows Release with a compiler cache,
+Windows Debug, the Windows Dist build with the package tests, Linux, Linux without audio and physics, macOS). The
+Windows reference machine went away on 2026-10-13 and the work moved to a Mac (Apple M2 Max, 12 threads, MoltenVK
+1.4.2); a usage limit paused the streams from 2026-10-14 to 2026-10-18. Numbers are Release builds on that Mac, measured
+while other streams built and tested on it, mostly as interleaved A/Bs under the perf lock against step 0's build. Every
+metric the wave added is provisional and there was no perf campaign: the open items' "Waiting for the Windows reference
+machine" lists what waits for it.
+
+- `engine-modules`: subsystems start and stop as `EngineModule`s in dependency order (graphics, audio, ImGui, the
+  project), so `Application` wires none of them and the layering allowlist went from 8 exceptions to 0; each layer of
+  `Layers.json` is a static library of its own that links only what the table allows (`Architecture.Libraries` reads
+  the real links); StrataRuntime links no tooling (no ImGui, ImGuizmo, asset pipeline or network layer:
+  `StrataRuntime.NoTooling`; the Release runtime 7.3% smaller); every module registers its own components and orders
+  its systems with soft constraints, so physics, audio and animation can be left out of a build (`STRATA_WITH_*`, CI's
+  "Linux (no Audio, no Physics)" job); precompiled headers and lighter headers, a sharded Core CTest and a fuzz run of
+  the sweeps (`StrataTests.Fuzz`), a compiler cache and a Windows Debug job in CI. On the Mac a clean Debug build takes
+  13% less CPU time (1,036 against 1,194 CPU-s) and an edit of `Scene/Components.h` 28% less, Debug ctest 94-163 s with
+  `-j 8` instead of 500-804 s serially, and a headless game 18 threads instead of 24 (windowed 29 instead of 36); warm
+  CI builds take 2-6 minutes instead of 13-22.
+- `game-ui`: the GameUI module: canvases in screen and world space (reference resolution, scale modes), rects with
+  anchors and pivots, images (rounded, sliced, filled), text shaped from font faces with shared glyph atlases, buttons,
+  toggles, sliders, input fields, layout groups and masks, drawn in one batched overlay pass; hit tests, focus, keyboard
+  and gamepad navigation and keyboard capture for typed text; 18 host functions, the callbacks `OnUIClick`,
+  `OnUIValueChanged`, `OnUIFocusChanged` and `OnUISubmit`, the SDK's `UI.h` and `Motion`, and unscaled time for pause
+  menus; `ui.*` commands and `input.click`/`input.type`; UI presets in the Hierarchy, the UI Rect drawer, the viewport's
+  2D canvas mode and UI picking; the Tetris HUD on a canvas; a people's guide, `Docs/Manual/GameUI.md`. On the Mac
+  10,000 elements are laid out in 0.30 ms and drawn in 0.21 ms (target 1 ms), and an idle frame of them takes 0.0003 ms.
+- `authoring-and-playtest`: skinned characters in their rest pose in edit mode, thumbnails and previews (or at the first
+  frame of what they play, `ViewportSettings::EditPose`), poses shared and computed again only when their assets change;
+  a model's import scale baked and reaching the instances already placed, normal maps recognized by name, with a
+  material warning and its fix; `play.step` answering after its steps, input counted in fixed steps (the same samples
+  at 1, 16.7 and 50 ms frames) and `input.sequence`, world transforms and bounds in queries, the running scene named;
+  MCP toolsets (the default list 32 tools and 18,634 bytes, against 124 tools and 73,093 bytes for every command) and a
+  compact `editor.status` within 1.5 KiB; the Game view beside the Scene view, with fixed resolutions and aspect
+  ratios; per-property prefab overrides that every other prefab change reaches, with the prefab bar and marks in the
+  Inspector and apply and revert per property; `editor.batch` (atomic, one undo step) and `prefab.instantiate` of many
+  instances in one step; Retina scaling, File > Open Scene, disabled properties with their reasons and other polish;
+  people's guides, `Docs/Manual/Prefabs.md` and `Docs/Manual/GameView.md`. On the Mac a drag inside a 5,000-entity
+  prefab instance costs 0.49 ms a frame (24.5 ms before the review round's fix, which compares only the entities an
+  edit touched), and applying a prefab to 10,000 instances 702 ms.
+- `world-io`: saves off the frame (`DocumentSaver` writes snapshots of one or several documents in the background with
+  undo save points, through a streamed scene writer; `scene.save`, closing and quitting answer once written; moves and
+  deletes of documents being saved are refused); streamed, cancellable scene reads with parallel parsing; cooked binary
+  scenes and prefabs in exported packs, loaded straight into prototypes on workers; asset registration at scale (an
+  append-only import record store, first scans in background slices, projects and automation available while the scan
+  runs); imports admitted by their memory estimates within a budget (a quarter of physical memory, 1-4 GiB). On the
+  Mac: saving 1,000,000 entities takes 2.4-6.1 s with the editor's longest frame 18-53 ms (the audit measured a 22 s
+  freeze on the reference machine); opening them 810 MB of working set instead of 2,047 MB and a longest frame of
+  15.7 ms instead of 25.0; an exported million-entity world starts in 526 ms cooked (2,201 ms from JSON) with 97 MB of
+  transient memory; a 30,000-asset project answers `editor.status` 1.48 s after its launch; an import of 600 files
+  holds no frame over 4.7 ms (188 ms before); 24 textures of 4096x4096 import within 572 MB of peak private memory,
+  against 1,556 MB without admission. Pack version 3, cold reads and the background-thread cap moved to wave 5.
+- `gpu-driven-rendering`: GPU timer queries per frame stage (the Performance panel, `editor.perf`, `--perf-log`,
+  GPU-time metrics), with the display's wait at the back buffer's first use counted as `Present`, outside the work time;
+  shadow casters found in parallel, without sub-texel ones; one geometry pool drawn with indirect multi-draw buckets;
+  the scene mirrored on the GPU (instances, meshes, materials, a stable texture table), culled by frustum, size and
+  two-phase depth-pyramid occlusion for the view and each shadow cascade and drawn with indirect draws, skinned
+  instances included; asset requests and mip streaming driven by the GPU's visibility feedback; cascades fitted on the
+  GPU and kept while nothing that reaches them changes; camera-relative rendering; render scenes cloned at play start;
+  lights as render-scene records culled on the GPU; mip levels kept until idle for 30 s and faded in; levels of detail
+  simplified with their attributes (cooked meshes version 3) and chosen by their projected error, with dithered
+  cross-fades. On the Mac, against step 0's build: `SceneRenderer::Render` of 100,000 cubes 0.50 ms instead of 1.98, of
+  300,000 0.54 instead of 4.98, of 1,000,000 0.60 ms with the GPU busy 12.4 ms; 10,000 unique meshes in 4 draw commands
+  (4.83 ms, MoltenVK turning each indirect draw into a Metal draw); 10,000 point lights in view all drawn (the CPU path
+  keeps 4,096); playing 1,000,000 cubes copies their render scene in 22-27 ms where the first render took 329 ms; the
+  same image at 0, 20 and 100 km from the origin; an idle editor's extraction 0.018 ms instead of 0.349. Compute
+  skinning and copy-on-write render scenes are later work.
+- `world-partition`: physics at world scale (bodies that wait for room queued, growth between steps by migration,
+  parallel body creation, constant-time record lookups, the physics capacity as a scene service, `physics.stats` with
+  a Streaming panel section and a pill); sub-scenes unloaded in budgeted slices, with their physics prepared before they
+  run; the World module: World assets of layers cut into grid cells, `WorldStreamer` and the World system streaming
+  cells around streaming sources in games and in the editor, and `world.cook` writing each cell's bounds, bodies and
+  asset closure and sizing the persistent scene's physics; worlds edited in the editor (`world.create`, `edit`,
+  `moveEntities`, `loadCells`, `setLayers`, `status`; the cell map, the Hierarchy's strip with its `l:` and `cell:`
+  terms, cell bounds in the viewport) and played there; the scripts' World API (5 host functions) and coordinates
+  checked 20 km from the origin; a people's guide, `Docs/Manual/Worlds.md`. On the Mac the longest frame of unloading a
+  25,000-entity cell is 2.6-2.7 ms (target 4; the audit measured 51-56 ms freeing it whole on the reference machine),
+  of driving through a world 2.65-5.5 ms (target 8), the exported world's run through 36 cells leaves none without
+  collision, and `Perf.Physics.Create10kBodies` takes 0.63 times step 0's time.
+- Landing: game-ui landed before the streams that build on it, so world-partition appended its host functions after
+  game-ui's and gpu-driven-rendering took the UI pass into its renderer. The wiring: `input.click` in fixed steps and
+  inside `input.sequence`, camera-less UI scenes in the Game view, the UI's inactive reasons and the game UI's commands
+  in the toolsets (authoring-and-playtest); `MayDefer` on the saving commands, saves and the scan in the compact
+  `editor.status`, prefab overrides and game UI through cooked scenes (world-io); the UI pass on the new renderer with
+  its `GPU.UI` stage and camera-relative world canvases, texture derivatives before discards in the scene shaders
+  (`Architecture.Shaders`), rest poses on the GPU-culled path, no context copiers for save snapshots and the Game view's
+  frame in `editor.perf` (gpu-driven-rendering); world saves through the `DocumentSaver` with streamed cell reads,
+  cooked cells and their physics capacity in exports, the runtime perf log's Render columns, cell loads within the
+  instance upload budget, render-scene clones at a world's play start, and worlds in `play.step`, `input.sequence` and
+  the Game view (world-partition). AGENTS.md's details moved into the developer guide to keep it under 40,000
+  characters. The script ABI keeps version 1 with its host functions in merge order (wave 3's 119, then game-ui's 18
+  and world-partition's 5: 142). Release 0.4.0 holds the wave.
+
 Open items and deferrals later waves own:
 
 - GPU-driven rendering (wave 4's `gpu-driven-rendering`): skinning still runs per draw (compute skinning once per
@@ -672,10 +772,11 @@ the workstreams it depends on have merged.
 ### Wave 4
 
 Planned after five audits of wave 3's tree, by a person and by an AI agent each making a game, and by the rendering,
-scale and streaming, and architecture lenses. The three streams planned here before stay; the scale audit split
-world-partition in two, and two streams join for what people and agents meet first. Before they branch, main takes
-wave 3's finish work, the release packaging (0.3.0) and a CI that is green on Windows, Linux and macOS. The streams
-merge in this order, and the wave ends with release 0.4.0.
+scale and streaming, and architecture lenses. The three streams planned here before stayed; the scale audit split
+world-partition in two, and two streams joined for what people and agents meet first. Before they branched, main took
+wave 3's finish work, the release packaging (0.3.0) and a CI that is green on Windows, Linux and macOS. Landed on
+2026-10-19 with release 0.4.0, each stream merging when it was ready rather than in this order (Status, "Wave 4
+landed", says what each delivered and what moved to later waves).
 
 - **`engine-modules`: Engine modules: EngineModule lifecycle, per-layer libraries, module-owned components, a
   tooling-free runtime, faster builds, optional subsystems.** Turn the layer table into the build.
@@ -684,22 +785,22 @@ merge in this order, and the wave ends with release 0.4.0.
   - Each layer of `Layers.json` becomes its own static library, generated from the table, so a library links only what
     its layer may include.
   - StrataRuntime structurally excludes Dear ImGui, ImGuizmo, the asset pipeline and the network layer, with a CTest
-    that checks it. Today the runtime links 425 KiB of ImGui, and every program starts 48 threads.
+    that checks it. Before this wave the runtime linked 425 KiB of ImGui, and every program started 48 threads.
   - Every module declares and registers its own components. Ordering constraints that name a system a build lacks are
     soft, and Audio, Physics, Animation and Scripting can be left out of a build.
   - Precompiled headers for the editor and test libraries and a sharded Core CTest (1,672 cases in one serial process
-    today) cut the clean build and the test run.
-  - Per-scene contexts move to wave 5, after the renderer and scene loading this wave rewrites; new code reaches the
+    before) cut the clean build and the test run.
+  - Per-scene contexts moved to wave 5, after the renderer and scene loading this wave rewrites; new code reaches the
     asset manager through the scene.
   - Depends on `module-foundation`, `physics-at-scale`, `mip-streaming`, `scene-streaming`, `content-and-prefabs`,
     `animation`.
 - **`world-io`: World I/O: saves off the frame, streamed and binary scenes, asset registration and imports at the scale
-  of tens of thousands of assets.** The paths around the frame fail before a world exists:
-  - saving a million entities freezes the editor for 22 s;
-  - opening them peaks at about 4 GB;
-  - registering a new asset costs 3-10 ms on the main thread (a 600-file import froze one frame for 3.6 s, and a fresh
+  of tens of thousands of assets.** Before this wave the paths around the frame failed before a world existed:
+  - saving a million entities froze the editor for 22 s;
+  - opening them peaked at about 4 GB;
+  - registering a new asset cost 3-10 ms on the main thread (a 600-file import froze one frame for 3.6 s, and a fresh
     30,000-asset project timed out `StrataCLI launch`);
-  - every import thread decodes a whole texture at once.
+  - every import thread decoded a whole texture at once.
 
   What changes:
   - Saves snapshot the scene and write it in the background.
@@ -708,7 +809,7 @@ merge in this order, and the wave ends with release 0.4.0.
     million entities in under 1.5 s with under 300 MB of transient memory).
   - Registration's file work runs on I/O threads in batches, with automation answering while a first scan runs.
   - Imports run within a memory budget.
-  - Pack version 3 bundles small entries (a 30,000-material pack is 10.7 times its content today).
+  - Pack version 3 bundles small entries (a 30,000-material pack is 10.7 times its content; moved to wave 5).
 
   Depends on `scene-streaming`, `pack-v2`, `content-and-prefabs`, `agent-activity`.
 - **`world-partition`: Layered world partition: data layers, grid cells, streaming sources, physics at world scale.**
@@ -719,9 +820,9 @@ merge in this order, and the wave ends with release 0.4.0.
     and proxies.
   - A cook writes each cell with its bounds, body count and asset closure.
   - Physics is sized for the most bodies any streaming radius holds, and grows between steps when something still
-    overflows, so a streamed body never lacks collision. Today streamed bodies beyond the play-start capacity of 65,536
-    get none.
-  - Cells unload in slices, so no frame frees a whole cell (51-56 ms today for 25,000 entities).
+    overflows, so a streamed body never lacks collision. Before this wave streamed bodies beyond the play-start
+    capacity of 65,536 got none.
+  - Cells unload in slices, so no frame frees a whole cell (51-56 ms before for 25,000 entities).
   - A world can be much larger than memory and than one ECS registry (1,048,575 entities) while frames stay within
     budget.
   - HLOD and origin rebasing come later.
@@ -729,7 +830,7 @@ merge in this order, and the wave ends with release 0.4.0.
 - **`gpu-driven-rendering`: GPU instruments, shadows at scale, shared geometry, GPU culling and indirect drawing,
   camera-relative rendering.** Scale rendering to millions of instances and thousands of distinct meshes.
   - GPU timer queries come first: frame stages, the Performance panel, `editor.perf`, `--perf-log` and GPU-time gates.
-  - Shadow casters are found in parallel and culled below a texel. 100,000 shadowed cubes cost 6-7 ms of CPU today.
+  - Shadow casters are found in parallel and culled below a texel. 100,000 shadowed cubes cost 6-7 ms of CPU before.
   - Meshes live in a shared geometry pool, so 10,000 distinct meshes no longer cost 37,000 draw calls and 20 ms.
   - Proxies mirrored on the GPU are frustum-, size- and occlusion-culled and LOD-selected per view and per shadow
     cascade, then drawn with indirect draws, skinned proxies included, so the CPU cost of drawing stays constant in
@@ -739,7 +840,7 @@ merge in this order, and the wave ends with release 0.4.0.
   - Render statistics and GPU times reach agents through `viewport.capture` and `editor.perf`.
   - Depends on `render-scene`, `mip-streaming`, `animation`, `streaming-observatory`.
 - **`game-ui`: Game UI: canvases, layout, widgets, focus navigation, script events, editor and agent authoring.** Give
-  games menus, HUDs and settings screens. Today the only UI is screen-space text sized in raw pixels.
+  games menus, HUDs and settings screens. Before this wave the only UI was screen-space text sized in raw pixels.
   - Canvases have a reference resolution and safe areas. Rects have anchors and pivots.
   - Images (with nine-slice), text, buttons, toggles, sliders and layout groups are drawn in one batched pass.
   - Mouse, keyboard and gamepad focus navigation; script callbacks; unscaled time, so pause menus move.
@@ -747,13 +848,14 @@ merge in this order, and the wave ends with release 0.4.0.
   - Depends on `render-scene`, `gameplay-and-scripting`, `editor-authoring`.
 - **`authoring-and-playtest`: Authoring fidelity and exact play-testing.** What people and agents make should behave
   as the editor shows it.
-  - Skinned characters stand in their rest pose in edit mode, thumbnails and previews; whole classes of characters lie
-    on their backs today.
+  - Skinned characters stand in their rest pose in edit mode, thumbnails and previews; whole classes of characters lay
+    on their backs before.
   - A model's import scale reaches the instances already placed, and normal maps are recognized and checked.
   - Agents play-test exactly: `play.step` answers once its steps ran, input lasts game updates rather than render
     frames, and `input.sequence` drives whole input timelines.
   - Agents can query world transforms and bounds, and the running scene names itself.
-  - The MCP server offers compact toolsets: today 121 tools cost about 27,000 tokens, close to clients' 128-tool limit.
+  - The MCP server offers compact toolsets: before, 121 tools cost about 27,000 tokens, close to clients' 128-tool
+    limit.
   - A Game view with fixed resolutions sits beside the Scene view while playing.
   - Prefab instances keep per-property overrides while every prefab change reaches them.
   - Small fixes go to what a person meets every day.
