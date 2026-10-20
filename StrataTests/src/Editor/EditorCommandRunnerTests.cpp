@@ -83,6 +83,29 @@ namespace
 			Commands.Register(std::move(steps));
 		}
 
+		// Registers test.stepsLater, a query that answers the game's fixed steps as test.steps does, read after `polls` polls
+		// (it answers over frames, as asset.info and scene.loadStatus may), for "until" waits on deferred attempts.
+		void RegisterDeferredStepQuery()
+		{
+			EditorCommand steps = MayDefer({ "test.stepsLater", "Test query that answers the game's fixed steps over frames.",
+				CommandUtils::ObjectSchema({ { "polls", CommandUtils::IntegerSchema("Polls", 1, 100) } }),
+				[](EditorContext&, const nlohmann::json& parameters)
+				{
+					CommandArguments arguments(parameters);
+					const int64_t polls = arguments.GetInt("polls", 1, 1, 100);
+					if (!arguments.IsValid())
+						return arguments.Fail();
+					return EditorCommandResult::Defer([polls, count = int64_t(0)](EditorContext& context) mutable -> std::optional<EditorCommandResult>
+					{
+						if (++count < polls)
+							return std::nullopt;
+						return EditorCommandResult::Ok({ { "steps", context.GetFixedStepCount() }, { "polls", count } });
+					});
+				} });
+			steps.Kind = EditorCommandKind::Query;
+			Commands.Register(std::move(steps));
+		}
+
 		// Runs a script frame by frame, as the editor does (the script, the runner, then the game's update), until it
 		// finishes or `seconds` of wall-clock time passed.
 		void RunScript(EditorCommandScript& script, double seconds = 10.0)
@@ -472,6 +495,37 @@ TEST_SUITE("Editor.CommandScript")
 		const std::vector<const CommandJournalEntry*> entries = harness.GetJournalEntries("test.steps");
 		REQUIRE(entries.size() == 1);
 		CHECK(nlohmann::json::parse(entries[0]->ResultSummary)["attempts"] == 6);
+	}
+
+	TEST_CASE("Until judges attempts that answer over frames, stepping a paused game only between attempts")
+	{
+		RunnerHarness harness;
+		harness.RegisterDeferredStepQuery();
+		REQUIRE(harness.Context.Play());
+		harness.Context.SetPaused(true);
+		Scope<EditorCommandScript> script = EditorCommandScript::FromJson(nlohmann::json::parse(R"([
+			{ "command": "test.stepsLater", "parameters": { "polls": 3 }, "expect": { "/steps": { "min": 4 } }, "until": { "steps": 600 },
+				"bind": { "steps": "/steps", "polls": "/polls" } },
+			{ "command": "selection.get" }
+		])"));
+		REQUIRE(script);
+		harness.RunScript(*script);
+		REQUIRE(script->IsFinished());
+		CHECK_FALSE(script->HasFailed());
+		// Each attempt answered three polls after it started, and no step ran while one was pending: the game stepped once
+		// after each of the four attempts that did not meet the expectation, and the fifth read 4 steps.
+		CHECK(script->GetBindings().at("steps") == 4);
+		CHECK(script->GetBindings().at("polls") == 3);
+		CHECK(harness.Context.GetFixedStepCount() == 4);
+		CHECK(harness.Context.IsPaused());
+		// One journal entry for the five attempts, the last one's, and the next step ran after it.
+		const std::vector<const CommandJournalEntry*> entries = harness.GetJournalEntries("test.stepsLater");
+		REQUIRE(entries.size() == 1);
+		CHECK(entries[0]->Status == CommandStatus::Succeeded);
+		const nlohmann::json summary = nlohmann::json::parse(entries[0]->ResultSummary);
+		CHECK(summary["attempts"] == 5);
+		CHECK(summary["steps"] == 4);
+		CHECK(harness.GetJournalEntries("selection.get").size() == 1);
 	}
 
 	TEST_CASE("Until fails once its bounds are reached")
