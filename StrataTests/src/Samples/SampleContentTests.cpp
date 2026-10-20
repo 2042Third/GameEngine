@@ -58,7 +58,7 @@ namespace
 	// A sample that follows every rule: its files, a sound made for it and a credited CC0 pack.
 	std::filesystem::path MakeValidSample(const std::filesystem::path& directory)
 	{
-		WriteFile(directory / "README.md", "# Crafted\n");
+		WriteFile(directory / "README.md", "# Crafted\n\n![Its picture](Picture.png) made as [the skill](https://example.com/skill.md#making) says.\n");
 		WriteFile(directory / "Crafted.stproj", "{}\n");
 		REQUIRE(FileSystem::WriteBytes(directory / "Picture.png", Tests::EncodePNG(480, 270, std::vector<uint8_t>(480 * 270 * 4, 128))));
 		WriteSizedFile(directory / "Assets" / "Sounds" / "Beep.wav", 1000);
@@ -178,6 +178,16 @@ TEST_SUITE("Samples.Content")
 		CHECK(HasError(Tests::CheckSampleContent(sample, c_Notices), "Picture.png is 320 x 180, not 480 x 270"));
 		WriteFile(sample / "Picture.png", "not a picture");
 		CHECK(HasError(Tests::CheckSampleContent(sample, c_Notices), "Picture.png is not a PNG"));
+
+		// Links that leave the sample break in its copies and in release archives; links to files it lacks break everywhere.
+		sample = MakeValidSample(root / "Links");
+		WriteFile(sample / "README.md", "# Crafted\n\nSee [the guide](../../Docs/DeveloperGuide.md#samples), [a file](/etc/hosts), "
+			"[the scripts](Scripts/Missing.cpp) and [above](#crafted).\n");
+		errors = Tests::CheckSampleContent(sample, c_Notices);
+		CHECK(HasError(errors, "README.md links to '../../Docs/DeveloperGuide.md#samples' outside the sample"));
+		CHECK(HasError(errors, "README.md links to '/etc/hosts' outside the sample"));
+		CHECK(HasError(errors, "README.md links to 'Scripts/Missing.cpp', which the sample does not hold"));
+		CHECK(errors.size() == 3);
 
 		// A 26 MB source asset is over a sample's 25 MB.
 		sample = MakeValidSample(root / "Large");

@@ -2892,7 +2892,8 @@ edited by hand; the only hand-written files are script sources, `README.md`, `CR
 project and then imported. Each sample has:
 
 - `README.md` (what it shows, mapped to the engine's features with links to the manual, its controls, how to open it, how
-  it was made, its credits), `CREDITS.md` and `Picture.png` (the project's own `.strata/Thumbnail.png`, 480 x 270, copied
+  it was made, its credits; links name files of the sample or `https://` pages, the repository's for the manual, guides
+  and skills, since copies open anywhere and release archives lay out the documents differently), `CREDITS.md` and `Picture.png` (the project's own `.strata/Thumbnail.png`, 480 x 270, copied
   once the start scene looks right; the launcher shows it), and optionally up to three PNGs in `Screenshots/` (3 MB
   together) that the README shows;
 - an entry in `Samples.json` (one or two sentences for people) and a CTest on `StrataTests/Editor/SampleProject.cmake`
@@ -2909,7 +2910,7 @@ the sample), and `Changes` says what was trimmed or converted. Every CC0 and CC-
 
 `Samples.Content` (`StrataTests/src/Samples/`) checks every sample the index lists and that no directory is unlisted: the
 files above, every source asset under `Assets/` (the extensions importers read) credited by exactly one row, no row that
-credits nothing, the licenses, attributions and notices, and the budgets (MB = 1,000,000 bytes): 25 MB of source assets
+credits nothing, the licenses, attributions and notices, the links of `README.md` and `CREDITS.md`, and the budgets (MB = 1,000,000 bytes): 25 MB of source assets
 and 20 MB of documents per sample, and over all samples 55 MB of binary files (they barely compress) and 50 MB of
 documents (about tenfold smaller in archives), so that release archives grow by at most about 60 MB. Textures are 1K
 (2K only where 1K visibly fails), JPEG for color and PNG where alpha or exact palettes need it.

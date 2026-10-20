@@ -2,7 +2,7 @@
 
 The falling-block classic: seven pieces in a 10 x 20 well, line clears, levels that speed up gravity, a ghost piece, a
 preview of the next piece, pause and game over. An AI agent made it through the editor alone, the way
-[`strata-make-a-game`](../../.claude/skills/strata-make-a-game/SKILL.md) describes.
+[`strata-make-a-game`](https://github.com/2042Third/GameEngine/blob/main/.claude/skills/strata-make-a-game/SKILL.md) describes.
 
 ![The sample as the launcher shows it](Picture.png)
 
@@ -10,9 +10,9 @@ preview of the next piece, pause and game over. An AI agent made it through the 
 
 | Engine feature | Where |
 | --- | --- |
-| C++ game scripts with fields, built and hot-reloaded by the editor ([Scripting](../../Docs/Manual/Scripting.md)) | `Scripts/TetrisBoard.cpp` (the game), `Scripts/TetrisGame.h` (rules without the engine, tested on their own) |
+| C++ game scripts with fields, built and hot-reloaded by the editor ([Scripting](https://github.com/2042Third/GameEngine/blob/main/Docs/Manual/Scripting.md)) | `Scripts/TetrisBoard.cpp` (the game), `Scripts/TetrisGame.h` (rules without the engine, tested on their own) |
 | Entities created and destroyed by a script, instanced rendering of the cells | The `Cells` child of the board |
-| Game UI: a canvas with a HUD, a panel and texts the script writes ([Game UI](../../Docs/Manual/GameUI.md)) | `HUD` in `Assets/Scenes/Main.stscene` |
+| Game UI: a canvas with a HUD, a panel and texts the script writes ([Game UI](https://github.com/2042Third/GameEngine/blob/main/Docs/Manual/GameUI.md)) | `HUD` in `Assets/Scenes/Main.stscene` |
 | Audio: one-shot sounds for moves, locks, clears and game over | `Assets/Sounds/` |
 | Keyboard input with key repeat | `TetrisBoard::OnUpdate` |
 | Export: a game that runs on its own | `project.export` |

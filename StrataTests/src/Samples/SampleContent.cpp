@@ -182,6 +182,43 @@ namespace Strata::Tests
 			return std::string_view(notices).substr(start, end == std::string::npos ? std::string::npos : end - start);
 		}
 
+		// The targets of a Markdown document's inline links and images: what follows "](" up to ')'.
+		std::vector<std::string> FindLinkTargets(const std::string& text)
+		{
+			std::vector<std::string> targets;
+			for (size_t found = text.find("]("); found != std::string::npos; found = text.find("](", found + 2))
+			{
+				const size_t start = found + 2;
+				const size_t end = text.find_first_of(") \t\n", start);
+				if (end != std::string::npos && text[end] == ')')
+					targets.push_back(text.substr(start, end - start));
+			}
+			return targets;
+		}
+
+		// What is wrong with the links of a sample's document `name`: each names a page on the web or a file of the sample.
+		// Copies of a sample open in any directory and release archives lay out the engine's documents differently from the
+		// repository, so a relative link that leaves the sample breaks in both.
+		void CheckLinks(const std::filesystem::path& directory, const char* name, std::vector<std::string>& errors)
+		{
+			const std::optional<std::string> text = FileSystem::ReadText(directory / name);
+			if (!text)
+				return;
+			for (const std::string& target : FindLinkTargets(*text))
+			{
+				if (target.empty() || target.front() == '#' || target.find("://") != std::string::npos || target.rfind("mailto:", 0) == 0)
+					continue;
+				const std::string file = target.substr(0, target.find('#'));
+				const std::filesystem::path relative = FileSystem::FromUTF8(file);
+				const bool leaves = relative.is_absolute() || relative.has_root_name() || relative.has_root_directory()
+					|| std::any_of(relative.begin(), relative.end(), [](const std::filesystem::path& part) { return part == ".."; });
+				if (leaves)
+					errors.push_back(fmt::format("{} links to '{}' outside the sample (link to its https:// page instead)", name, target));
+				else if (!FileSystem::Exists(directory / relative))
+					errors.push_back(fmt::format("{} links to '{}', which the sample does not hold", name, target));
+			}
+		}
+
 		// The width and height of a PNG from its header, or nothing when it is not one.
 		std::optional<std::pair<uint32_t, uint32_t>> ReadPNGSize(const std::filesystem::path& path)
 		{
@@ -223,6 +260,8 @@ namespace Strata::Tests
 			else if (size->first != c_SamplePictureWidth || size->second != c_SamplePictureHeight)
 				errors.push_back(fmt::format("Picture.png is {} x {}, not {} x {}", size->first, size->second, c_SamplePictureWidth, c_SamplePictureHeight));
 		}
+		CheckLinks(directory, "README.md", errors);
+		CheckLinks(directory, "CREDITS.md", errors);
 
 		const std::vector<SampleFile> files = ListFiles(directory);
 		std::vector<CreditsRow> rows;

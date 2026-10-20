@@ -32,8 +32,9 @@ namespace Strata::Tests
 	// What is wrong with the sample in `directory`: missing README.md, CREDITS.md or Picture.png (a 480 x 270 PNG), a source
 	// asset under Assets/ that no row or more than one row of CREDITS.md credits, a row that credits no file, a license other
 	// than CC0-1.0, CC-BY-4.0 and Strata, a CC-BY-4.0 row without attribution, a CC0 or CC-BY source whose URL is not in
-	// `notices` (ThirdPartyNotices.md's text: its "Sample assets" section) and budgets exceeded. Hidden entries (.strata,
-	// .gitignore) are left out. Empty when the sample follows every rule.
+	// `notices` (ThirdPartyNotices.md's text: its "Sample assets" section), a link of README.md or CREDITS.md that leaves the
+	// sample or names a file it does not hold (copies open anywhere; link to https:// pages) and budgets exceeded. Hidden
+	// entries (.strata, .gitignore) are left out. Empty when the sample follows every rule.
 	std::vector<std::string> CheckSampleContent(const std::filesystem::path& directory, const std::string& notices, const SampleBudgets& budgets = {});
 
 	// What is wrong with the samples' sizes together (SampleBudgets::TotalBinaryBytes and TotalDocumentBytes).

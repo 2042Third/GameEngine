@@ -3,7 +3,7 @@
 A 768 m island you fly over or walk on: a generated terrain, about 20,000 trees, rocks, flowers and grass tufts, five camps
 with campfires, 30 foxes that wander about, and a day that turns into night. The world streams in cells around you, so
 only what is near is loaded. An AI agent made it through the editor alone, the way
-[`strata-make-a-game`](../../.claude/skills/strata-make-a-game/SKILL.md) describes.
+[`strata-make-a-game`](https://github.com/2042Third/GameEngine/blob/main/.claude/skills/strata-make-a-game/SKILL.md) describes.
 
 ![Flying the tour over the island](Screenshots/Tour.png)
 
@@ -11,7 +11,7 @@ only what is near is loaded. An AI agent made it through the editor alone, the w
 
 | Engine feature | Where |
 | --- | --- |
-| World streaming: a World asset with three layers in 64 m cells (Vegetation 192 m, Wildlife 128 m, Landmarks 320 m), a streaming source on the player, cooked cells in the export ([Worlds](../../Docs/Manual/Worlds.md)) | `Worlds/Island.stworld`, `Worlds/Island/` |
+| World streaming: a World asset with three layers in 64 m cells (Vegetation 192 m, Wildlife 128 m, Landmarks 320 m), a streaming source on the player, cooked cells in the export ([Worlds](https://github.com/2042Third/GameEngine/blob/main/Docs/Manual/Worlds.md)) | `Worlds/Island.stworld`, `Worlds/Island/` |
 | GPU-driven rendering at scale: 20,000 instances of 26 one-entity prefabs culled and drawn by the GPU in a few indirect draws, with cascaded shadows | `Prefabs/Nature/` |
 | Prefetching before a teleport (`World::RequestCellsAround`, `World::IsLoadedAround`) and a raycast that waits for the ground | `Scripts/Explorer.cpp` |
 | A character controller on terrain: 97 terrain tiles with static, non-convex mesh colliders on the Terrain collision layer | the persistent scene's `Tile_*` entities |

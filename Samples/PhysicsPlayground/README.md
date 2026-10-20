@@ -3,7 +3,7 @@
 An arena of six physics stations, about 600 bodies, that you fly through and play with: a crate tower and pyramid, a
 domino run, a pit of 500 balls of four materials, a goal that counts what its funnel catches, ghost boxes that sink
 through the balls, and a ramp that sends balls into ten pins. An AI agent made it through the editor alone, the way
-[`strata-make-a-game`](../../.claude/skills/strata-make-a-game/SKILL.md) describes.
+[`strata-make-a-game`](https://github.com/2042Third/GameEngine/blob/main/.claude/skills/strata-make-a-game/SKILL.md) describes.
 
 ![The arena from above](Screenshots/Overview.png)
 
@@ -11,13 +11,13 @@ through the balls, and a ramp that sends balls into ten pins. An AI agent made i
 
 | Engine feature | Where |
 | --- | --- |
-| Rigid bodies at scale: stacks, a domino run, a ball pit; restitution, friction and mass per material ([Scripting](../../Docs/Manual/Scripting.md), Physics) | `Prefabs/` (crates, dominoes, four kinds of ball, pins, ghosts), `Scenes/Main.stscene` |
+| Rigid bodies at scale: stacks, a domino run, a ball pit; restitution, friction and mass per material ([Scripting](https://github.com/2042Third/GameEngine/blob/main/Docs/Manual/Scripting.md), Physics) | `Prefabs/` (crates, dominoes, four kinds of ball, pins, ghosts), `Scenes/Main.stscene` |
 | Triggers and contacts: the goal's basket counts balls (`OnTriggerEnter`), the launch pad sends them down the ramp, impacts sound by material (`OnCollisionEnter`) | `Scripts/GoalBasket.cpp`, `LaunchPad.cpp`, `Impact.cpp` |
 | Collision layers: the Ghost layer does not collide with the Ball layer (the scene's layer matrix) | Scene settings, the Ghost prefab |
 | Raycasts and impulses: shoot a ball through the cursor, grab a body and pull it | `Scripts/Playground.cpp` (`Shoot`, `UpdateGrab`) |
 | Spawning many at once: a pour of 100 balls in one `Scene::InstantiateMany` call | `Playground::SpawnBalls` |
 | GPU-driven rendering: hundreds of instanced bodies with shadows; PBR materials from ambientCG | `Materials/`, `Textures/` |
-| Game UI: a tool panel of buttons, a slow-motion toggle (`Time::SetTimeScale`), a shot-power slider and a HUD ([Game UI](../../Docs/Manual/GameUI.md)) | `UI` in the scene |
+| Game UI: a tool panel of buttons, a slow-motion toggle (`Time::SetTimeScale`), a shot-power slider and a HUD ([Game UI](https://github.com/2042Third/GameEngine/blob/main/Docs/Manual/GameUI.md)) | `UI` in the scene |
 | Audio: one-shots heard where bodies meet, louder the harder they hit, within a budget of voices | `Scripts/Impact.cpp` |
 | Hot reload: the fields keep their values when the scripts are rebuilt while playing | `Playground::OnReload` |
 | Export: the game runs a demo of its stations by itself (`AutoDemo`) | `project.export` |
