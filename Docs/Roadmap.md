@@ -666,10 +666,7 @@ Open items and deferrals later waves own:
     `SubmitMany` 0.41 us, `ParallelForOverhead` 95.9 us and `WakeLatency` 19.6 us), and its throughput targets are
     stated in the reference machine's numbers: a clean Debug build 30% below 3,099 CPU-seconds, Debug `ctest -j 8` in
     at most half of 658 s, and at most 28 threads in an editor.
-  - Wave 4's `game-ui`: the `Perf.GameUI.*` and `PerfGPU.GameUI.*` metrics are provisional. On the Mac,
-    `PerfGPU.Streaming.Mips.MaxUploadStageMs` measured 1.98-2.28 ms against the step-0 base's 1.59-1.66 ms, with
-    engine-modules and game-ui merged and no UI in its scene, on a machine other streams were building on: to be
-    measured again quietly.
+  - Wave 4's `game-ui`: the `Perf.GameUI.*` and `PerfGPU.GameUI.*` metrics are provisional.
   - Wave 4's `authoring-and-playtest`: `Perf.Editor.PrefabApply10kInstances` (Mac median 701.7 ms) and the prefab drag
     metrics (`DragInPrefabInstance5kMedian`, `DragPrefabInstanceRoot5kMedian`, `Drag100PrefabInstancesMedian`) are
     provisional, and the idle editor frame's criterion (`PerfGPU.Editor`) cannot be shown on the Mac, where frames wait
