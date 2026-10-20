@@ -327,16 +327,16 @@ TEST_SUITE("Editor.World")
 		CHECK_FALSE(project.Context.IsSceneModified());
 
 		// Far away, the first cells go and others come.
-		const glm::vec3 far(140.0f, 10.0f, 140.0f);
-		LookFrom(project, far);
+		const glm::vec3 farPosition(140.0f, 10.0f, 140.0f);
+		LookFrom(project, farPosition);
 		Settle(project);
 		status = project.Run("world.status", { { "cells", true } });
-		CHECK(LoadedCells(status) == GroundCellsWithin(5, far, 48.0f));
+		CHECK(LoadedCells(status) == GroundCellsWithin(5, farPosition, 48.0f));
 
 		// Hidden layers unload; the radius scale widens what loads.
 		project.Run("world.edit", { { "radiusScale", 2.0 } });
 		Settle(project);
-		CHECK(LoadedCells(project.Run("world.status", { { "cells", true } })) == GroundCellsWithin(5, far, 96.0f));
+		CHECK(LoadedCells(project.Run("world.status", { { "cells", true } })) == GroundCellsWithin(5, farPosition, 96.0f));
 		project.Run("world.edit", { { "visibleLayers", { "Ground" } } });
 		CHECK_FALSE(project.Context.GetWorld()->GetVisibleLayers().empty());
 		CHECK_FALSE(project.Try("world.edit", { { "visibleLayers", { "Rivers" } } }).Success);
@@ -727,8 +727,8 @@ TEST_SUITE("Editor.World")
 		CHECK(sequence["stepsRun"] == 30);
 		// The game streamed toward the source: entities of a far cell are in, and the bounds queries reach them in the game.
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-		Entity far;
-		while (!far)
+		Entity farEntity;
+		while (!farEntity)
 		{
 			REQUIRE(std::chrono::steady_clock::now() < deadline);
 			project.Run("play.step", { { "steps", 1 } });
@@ -737,12 +737,12 @@ TEST_SUITE("Editor.World")
 				if (entity.GetComponent<TransformComponent>().Translation.x > 128.0f && entity.GetComponent<TransformComponent>().Translation.z > 128.0f
 					&& entity.HasComponent<MeshRendererComponent>())
 				{
-					far = entity;
+					farEntity = entity;
 					break;
 				}
 			}
 		}
-		const nlohmann::json inGame = project.Run("entity.get", { { "entity", UUIDToJson(far.GetUUID()) }, { "world", true } });
+		const nlohmann::json inGame = project.Run("entity.get", { { "entity", UUIDToJson(farEntity.GetUUID()) }, { "world", true } });
 		CHECK(inGame["world"]["position"][0].get<float>() > 128.0f);
 		running = project.Run("play.state")["running"];
 		CHECK(running["world"]["cellsLoaded"].get<uint32_t>() > 0);
@@ -1154,8 +1154,8 @@ TEST_SUITE("Editor.World")
 		LookFrom(project, glm::vec3(140.0f, 10.0f, 140.0f));
 		Settle(project);
 		Scene& scene = *project.Context.GetEditScene();
-		const SubSceneID far = scene.FindSubSceneBySource(project.GetCell(4, 4));
-		REQUIRE(scene.IsSubSceneLoaded(far));
+		const SubSceneID farCell = scene.FindSubSceneBySource(project.GetCell(4, 4));
+		REQUIRE(scene.IsSubSceneLoaded(farCell));
 		project.Run("scene.recover", { { "scene", entries[0]["id"] }, { "action", "apply" } });
 		REQUIRE(&scene == project.Context.GetEditScene().get());
 		const Entity recoveredTower = scene.GetEntityByUUID(tower);
@@ -1166,7 +1166,7 @@ TEST_SUITE("Editor.World")
 		CHECK(project.Context.GetWorld()->IsCellDirty(towerCell));
 		REQUIRE(scene.GetEntityByUUID(renamed));
 		CHECK(scene.GetEntityByUUID(renamed).GetName() == "Renamed");
-		CHECK(scene.GetSubSceneRoots(far).size() == 7 + 4);
+		CHECK(scene.GetSubSceneRoots(farCell).size() == 7 + 4);
 
 		// The save writes the new cell with its .meta and lists it in the world.
 		const nlohmann::json saved = project.Run("scene.save");

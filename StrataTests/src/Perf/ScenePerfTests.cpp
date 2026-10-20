@@ -218,7 +218,7 @@ TEST_SUITE("Perf.Scene")
 		scene.UpdateWorldTransforms();
 
 		// One instance of a small and of a large prefab: the median call of many.
-		const Ref<Prefab> small = CreateMeshPrefab(10);
+		const Ref<Prefab> smallPrefab = CreateMeshPrefab(10);
 		const Ref<Prefab> large = CreateMeshPrefab(1000);
 		std::vector<Entity> roots;
 		const auto destroyRoots = [&]
@@ -233,7 +233,7 @@ TEST_SUITE("Perf.Scene")
 			const double batchMs = MeasureCreation("Perf.Scene.InstantiatePrefab10 (100 instances)", 5, 101, [&]
 			{
 				for (uint32_t index = 0; index < c_Batch; index++)
-					roots.push_back(small->Instantiate(scene).front());
+					roots.push_back(smallPrefab->Instantiate(scene).front());
 			}, destroyRoots);
 			return batchMs * 1000.0 / c_Batch;
 		});
@@ -242,7 +242,7 @@ TEST_SUITE("Perf.Scene")
 			return MeasureCreation("Perf.Scene.InstantiatePrefab1k", 5, 101, [&] { roots = large->Instantiate(scene); }, destroyRoots);
 		});
 
-		// A thousand instances of the small prefab in one call, each placed by its transform.
+		// A thousand instances of the smallPrefab prefab in one call, each placed by its transform.
 		std::vector<glm::mat4> transforms;
 		for (uint32_t index = 0; index < 1000; index++)
 			transforms.push_back(glm::translate(glm::mat4(1.0f), glm::vec3(static_cast<float>(index % 32) * 3.0f, 0.0f, static_cast<float>(index / 32) * 3.0f)));
@@ -250,7 +250,7 @@ TEST_SUITE("Perf.Scene")
 		{
 			return MeasureCreation("Perf.Scene.InstantiateMany1000x10", 3, 41, [&]
 			{
-				roots = small->InstantiateMany(scene, transforms);
+				roots = smallPrefab->InstantiateMany(scene, transforms);
 				REQUIRE(roots.size() == 1000);
 			}, destroyRoots);
 		});

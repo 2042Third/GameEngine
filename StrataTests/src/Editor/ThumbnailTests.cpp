@@ -273,19 +273,19 @@ TEST_SUITE("Editor.Thumbnails")
 				pixel[3] = 255;
 			}
 		}
-		const std::optional<ReadbackImage> small = ProjectThumbnail::Downscale(image, 3);
-		REQUIRE(small);
-		CHECK(small->Width == 2);
-		CHECK(small->Height == 1);
-		CHECK(small->BytesPerPixel == 4);
-		REQUIRE(small->Pixels.size() == 8);
-		CHECK(small->Pixels[0] == 255);
-		CHECK(small->Pixels[4] == 0);
-		CHECK(small->Pixels[1] == 70);  // (0+10+20+60+70+80+120+130+140) / 9
-		CHECK(small->Pixels[5] == 100); // (30+40+50+90+100+110+150+160+170) / 9
-		CHECK(small->Pixels[2] == 156); // 5 x 200 + 4 x 100 over 9, rounded
-		CHECK(small->Pixels[6] == 144); // 4 x 200 + 5 x 100 over 9, rounded
-		CHECK(small->Pixels[3] == 255);
+		const std::optional<ReadbackImage> downscaled = ProjectThumbnail::Downscale(image, 3);
+		REQUIRE(downscaled);
+		CHECK(downscaled->Width == 2);
+		CHECK(downscaled->Height == 1);
+		CHECK(downscaled->BytesPerPixel == 4);
+		REQUIRE(downscaled->Pixels.size() == 8);
+		CHECK(downscaled->Pixels[0] == 255);
+		CHECK(downscaled->Pixels[4] == 0);
+		CHECK(downscaled->Pixels[1] == 70);  // (0+10+20+60+70+80+120+130+140) / 9
+		CHECK(downscaled->Pixels[5] == 100); // (30+40+50+90+100+110+150+160+170) / 9
+		CHECK(downscaled->Pixels[2] == 156); // 5 x 200 + 4 x 100 over 9, rounded
+		CHECK(downscaled->Pixels[6] == 144); // 4 x 200 + 5 x 100 over 9, rounded
+		CHECK(downscaled->Pixels[3] == 255);
 
 		// Sizes that are not multiples of the factor, other formats and a factor of 0 are refused.
 		CHECK_FALSE(ProjectThumbnail::Downscale(image, 4));
