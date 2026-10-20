@@ -683,20 +683,26 @@ TEST_SUITE("Editor.Launcher")
 
 				// The content column sits in the middle of the main area (next to the sidebar).
 				ImGuiWindow* main = nullptr;
+				ImGuiWindow* content = nullptr;
 				for (ImGuiWindow* window : GImGui->Windows)
 				{
-					// Child windows are named after their parents: the main area's own name ends with "/Main_<id>".
+					// Child windows are named after their parents: the main area's own name ends with "/Main_<id>", its scrolling
+					// content's with "/Content_<id>".
 					const std::string_view name(window->Name);
 					const size_t slash = name.rfind('/');
 					if (window->Active && slash != std::string_view::npos && name.substr(slash + 1).starts_with("Main_"))
 						main = window;
+					if (window->Active && slash != std::string_view::npos && name.substr(slash + 1).starts_with("Content_"))
+						content = window;
 				}
 				REQUIRE(main);
+				REQUIRE(content);
 				const float leftMargin = agent->Min.x - main->Pos.x;
 				const float rightMargin = main->Pos.x + main->Size.x - agent->Max.x;
 				CHECK(leftMargin > 0.0f);
-				// A short window scrolls the content: its scrollbar takes from the right margin.
-				CHECK(std::abs(leftMargin - rightMargin) <= ImGui::GetStyle().ScrollbarSize + 2.0f);
+				// A short window scrolls the content: its scrollbar (the width it takes) takes from the right margin; so do the
+				// grid's whole-pixel columns, up to a pixel each (at most six here), and a pixel of rounding on either side.
+				CHECK(std::abs(leftMargin - rightMargin) <= content->ScrollbarSizes.x + 8.0f);
 			}
 		}
 	}

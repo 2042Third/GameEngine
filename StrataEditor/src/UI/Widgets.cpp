@@ -456,16 +456,18 @@ namespace Strata::UI
 	namespace
 	{
 
-		// The share of a card's content width its picture takes (CardPicture).
-		constexpr float c_CardPictureShare = 0.42f;
+		// A card's picture (CardPicture) is this many font sizes tall, and at most this share of the card's content wide.
+		constexpr float c_CardPictureHeightInFontSizes = 4.5f;
+		constexpr float c_CardPictureMaxShare = 0.45f;
 
-		// Where a card's picture goes: from the content's top left, its width a share of the content width, its height from its
-		// aspect.
+		// Where a card's picture goes: from the content's top left, as tall as the font makes it whatever the card's width (a
+		// wide card does not get a huge picture), narrower cards making it smaller.
 		ImVec2 GetCardPictureSize(float width, const CardPicture& picture)
 		{
+			const float aspect = std::max(picture.Aspect, 0.1f);
 			const float contentWidth = std::max(width - ImGui::GetStyle().WindowPadding.x * 2.0f, 1.0f);
-			const float pictureWidth = std::floor(contentWidth * c_CardPictureShare);
-			return ImVec2(pictureWidth, std::round(pictureWidth / std::max(picture.Aspect, 0.1f)));
+			const float pictureWidth = std::floor(std::min(ImGui::GetFontSize() * c_CardPictureHeightInFontSizes * aspect, contentWidth * c_CardPictureMaxShare));
+			return ImVec2(pictureWidth, std::round(pictureWidth / aspect));
 		}
 
 	}

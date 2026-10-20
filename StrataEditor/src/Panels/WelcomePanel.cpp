@@ -109,6 +109,30 @@ namespace Strata
 		return options;
 	}
 
+	namespace
+	{
+
+		// Cards in rows over the grid: as few rows as its columns allow, balanced (five cards in four columns: three and two,
+		// not four and one), each row stretched over the grid's width so that every row ends at its right edge.
+		size_t GetCardsPerRow(size_t count, size_t columns)
+		{
+			columns = std::max<size_t>(columns, 1);
+			const size_t rows = std::max<size_t>((count + columns - 1) / columns, 1);
+			return std::max<size_t>((count + rows - 1) / rows, 1);
+		}
+
+		float GetCardWidth(size_t index, size_t count, size_t perRow, float width, float gap)
+		{
+			const size_t rowStart = index - index % perRow;
+			const float inRow = static_cast<float>(std::min(perRow, count - rowStart));
+			const float cardWidth = std::floor((width - gap * (inRow - 1.0f)) / inRow);
+			// The last card of the row takes what rounding left, so the row ends exactly at the grid's right edge.
+			const bool last = index + 1 == count || (index + 1) % perRow == 0;
+			return last ? width - (cardWidth + gap) * (inRow - 1.0f) : cardWidth;
+		}
+
+	}
+
 	struct WelcomePanel::CardImageLoad
 	{
 		std::atomic<bool> Done = false;
@@ -559,8 +583,7 @@ namespace Strata
 		const float cardHeight = std::round(ImGui::GetFontSize() * c_RecentCardHeightInFontSizes);
 		const int64_t now = GetUnixTime();
 
-		// The cards the search leaves, in rows of the grid's columns; a row that is not full stretches its cards over the
-		// grid's width, as the starters' rows do, so every section ends at one right edge.
+		// The cards the search leaves, in balanced rows of at most the grid's columns, as the starters' (GetCardsPerRow).
 		std::vector<size_t> visible;
 		for (size_t index = 0; index < m_RecentProjects.size(); index++)
 		{
@@ -568,16 +591,7 @@ namespace Strata
 				visible.push_back(index);
 		}
 		const float gap = ImGui::GetStyle().ItemSpacing.x;
-		const size_t columns = static_cast<size_t>(grid.Columns);
-		const auto getCardWidth = [&](size_t position)
-		{
-			const size_t rowStart = position - position % columns;
-			const float count = static_cast<float>(std::min(columns, visible.size() - rowStart));
-			const float cardWidth = std::floor((grid.Width - gap * (count - 1.0f)) / count);
-			// The last card of the row takes what rounding left, so the row ends exactly at the grid's right edge.
-			const bool last = position + 1 == visible.size() || (position + 1) % columns == 0;
-			return last ? grid.Width - (cardWidth + gap) * (count - 1.0f) : cardWidth;
-		};
+		const size_t perRow = GetCardsPerRow(visible.size(), static_cast<size_t>(grid.Columns));
 
 		// Actions run after the loop: they change the list it walks.
 		std::filesystem::path open;
@@ -587,9 +601,9 @@ namespace Strata
 		{
 			const size_t index = visible[position];
 			const RecentProject& project = m_RecentProjects[index];
-			if (position % columns != 0)
+			if (position % perRow != 0)
 				ImGui::SameLine();
-			const ImVec2 cardSize(getCardWidth(position), cardHeight);
+			const ImVec2 cardSize(GetCardWidth(position, visible.size(), perRow, grid.Width, gap), cardHeight);
 			const std::string id = fmt::format("Welcome.Recent.{}", index);
 			const std::string initials = UI::GetInitials(project.Name);
 			const std::string path = UI::DisplayPath(project.Path.parent_path());
@@ -662,18 +676,10 @@ namespace Strata
 
 		UI::Heading("Start something new", UI::TextSize::Title);
 		ImGui::Spacing();
-		// Rows of at most the grid's columns, each stretched over the grid's width; one height for all.
+		// Balanced rows of at most the grid's columns, each stretched over the grid's width; one height for all.
 		const float gap = ImGui::GetStyle().ItemSpacing.x;
-		const size_t columns = static_cast<size_t>(grid.Columns);
-		const auto getCardWidth = [&](size_t index)
-		{
-			const size_t rowStart = index - index % columns;
-			const float count = static_cast<float>(std::min(columns, cards.size() - rowStart));
-			const float cardWidth = std::floor((grid.Width - gap * (count - 1.0f)) / count);
-			// The last card of the row takes what rounding left, so the row ends exactly at the grid's right edge.
-			const bool last = index + 1 == cards.size() || (index + 1) % columns == 0;
-			return last ? grid.Width - (cardWidth + gap) * (count - 1.0f) : cardWidth;
-		};
+		const size_t perRow = GetCardsPerRow(cards.size(), static_cast<size_t>(grid.Columns));
+		const auto getCardWidth = [&](size_t index) { return GetCardWidth(index, cards.size(), perRow, grid.Width, gap); };
 		// A sample with a picture shows it (the icon while it loads): its card keeps the picture's place from the start.
 		std::vector<std::optional<UI::CardPicture>> pictures(cards.size());
 		for (size_t index = 0; index < cards.size(); index++)
@@ -698,7 +704,7 @@ namespace Strata
 		for (size_t index = 0; index < cards.size(); index++)
 		{
 			const StarterCard& card = cards[index];
-			if (index % columns != 0)
+			if (index % perRow != 0)
 				ImGui::SameLine();
 			const ImVec2 size(getCardWidth(index), height);
 			if (UI::Card(card.ProbeKey.c_str(), card.Icon, card.Title, card.Source->Description, size, false, pictures[index] ? &*pictures[index] : nullptr)
