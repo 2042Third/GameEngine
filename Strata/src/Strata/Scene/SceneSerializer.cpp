@@ -160,7 +160,8 @@ namespace Strata
 				return;
 			}
 			outCapacity.MaxBodies = ReadCapacity(capacity, "MaxBodies", PhysicsCapacitySettings::c_MaxBodiesLimit, outWarnings);
-			outCapacity.MaxBodyPairs = ReadCapacity(capacity, "MaxBodyPairs", PhysicsCapacitySettings::c_MaxBodyPairsLimit, outWarnings);
+			// 0.4.0 wrote a "MaxBodyPairs" (its physics library's buffer of overlapping pairs) into every scene: box3d has no
+			// such buffer, so it is ignored without a warning, and no longer written.
 			outCapacity.MaxContactConstraints = ReadCapacity(capacity, "MaxContactConstraints", PhysicsCapacitySettings::c_MaxContactConstraintsLimit, outWarnings);
 		}
 
@@ -275,7 +276,6 @@ namespace Strata
 		const PhysicsCapacitySettings& capacity = sceneSettings.PhysicsCapacity;
 		settings["PhysicsCapacity"] = {
 			{ "MaxBodies", capacity.MaxBodies },
-			{ "MaxBodyPairs", capacity.MaxBodyPairs },
 			{ "MaxContactConstraints", capacity.MaxContactConstraints } };
 		settings["PhysicsLayers"] = WritePhysicsLayers(sceneSettings.PhysicsLayers);
 		return settings;

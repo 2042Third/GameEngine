@@ -31,7 +31,7 @@ namespace
 		Ref<Scene> scene = CreateRef<Scene>("Full");
 		scene->GetSettings().Gravity = { 0.0f, -20.0f, 1.0f };
 		scene->GetSettings().FixedTimestep = 1.0f / 120.0f;
-		scene->GetSettings().PhysicsCapacity = { 4096, 16384, 0 };
+		scene->GetSettings().PhysicsCapacity = { 4096, 16384 };
 
 		Entity root = scene->CreateEntity("Root");
 		root.GetTransform().Translation = { 1.5f, -2.0f, 3.25f };
@@ -167,7 +167,7 @@ TEST_SUITE("Scene.Serialization")
 
 		CHECK(loaded.GetName() == "Full");
 		CHECK(loaded.GetSettings().Gravity == glm::vec3(0.0f, -20.0f, 1.0f));
-		CHECK(loaded.GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 4096, 16384, 0 });
+		CHECK(loaded.GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 4096, 16384 });
 		CHECK(loaded.GetEntityCount() == original->GetEntityCount());
 
 		Entity root = loaded.FindEntityByName("Root");
@@ -210,14 +210,28 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(warnings.empty());
 
 		// Fields that are missing stay automatic.
-		CHECK(load({ { "PhysicsCapacity", { { "MaxBodies", 300 } } } }, warnings) == PhysicsCapacitySettings { 300, 0, 0 });
+		CHECK(load({ { "PhysicsCapacity", { { "MaxBodies", 300 } } } }, warnings) == PhysicsCapacitySettings { 300, 0 });
 		CHECK(warnings.empty());
+
+		// 0.4.0 wrote a MaxBodyPairs (its physics library's buffer of overlapping pairs) into every scene: box3d has no such
+		// buffer, so any value of it loads without a warning, and it is not written back.
+		for (const nlohmann::json& pairs : { nlohmann::json(16384), nlohmann::json(-5), nlohmann::json("many") })
+		{
+			INFO(pairs.dump());
+			CHECK(load({ { "PhysicsCapacity", { { "MaxBodies", 300 }, { "MaxBodyPairs", pairs } } } }, warnings) == PhysicsCapacitySettings { 300, 0 });
+			CHECK(warnings.empty());
+		}
+		const nlohmann::json written = SceneSerializer::SerializeSettings(SceneSettings())["PhysicsCapacity"];
+		CHECK(written == nlohmann::json { { "MaxBodies", 0 }, { "MaxContactConstraints", 0 } });
 
 		// Too large values are limited, others ignored; each with a warning.
 		const PhysicsCapacitySettings invalid = load({ { "PhysicsCapacity", {
-			{ "MaxBodies", uint64_t(1) << 40 }, { "MaxBodyPairs", -5 }, { "MaxContactConstraints", "many" } } } }, warnings);
-		CHECK(invalid == PhysicsCapacitySettings { PhysicsCapacitySettings::c_MaxBodiesLimit, 0, 0 });
-		CHECK(warnings.size() == 3);
+			{ "MaxBodies", uint64_t(1) << 40 }, { "MaxContactConstraints", "many" } } } }, warnings);
+		CHECK(invalid == PhysicsCapacitySettings { PhysicsCapacitySettings::c_MaxBodiesLimit, 0 });
+		CHECK(warnings.size() == 2);
+		warnings.clear();
+		CHECK(load({ { "PhysicsCapacity", { { "MaxBodies", -5 } } } }, warnings) == PhysicsCapacitySettings());
+		CHECK(warnings.size() == 1);
 		warnings.clear();
 		CHECK(load({ { "PhysicsCapacity", 12 } }, warnings) == PhysicsCapacitySettings());
 		CHECK(warnings.size() == 1);

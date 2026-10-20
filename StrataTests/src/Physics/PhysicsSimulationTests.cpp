@@ -780,7 +780,7 @@ TEST_SUITE("Physics.Simulation")
 			CHECK(first[index].Translation.y > 0.15f);
 		}
 
-		// Jolt's jobs run on Strata's worker pool when it is initialized; the results must not change.
+		// box3d's tasks run on Strata's worker pool when it is initialized; the results must not change.
 		ScopedJobSystem jobSystem(3);
 		const std::vector<BodyPose> threaded = SimulatePile();
 		CHECK(AreIdentical(first, threaded));
@@ -937,7 +937,7 @@ TEST_SUITE("Physics.Simulation")
 	TEST_CASE("Steps complete while every worker thread is busy")
 	{
 		// Physics jobs handed to the worker pool must never be required for a step to finish, and jobs the stepping thread
-		// ran itself must not stay alive in the pool's queue (they would exhaust Jolt's job pool within a few dozen steps).
+		// ran itself must not stay alive in the pool's queue (they would exhaust the pool of task slots within a few steps).
 		ScopedJobSystem jobSystem(2);
 		std::atomic<bool> release = false;
 		std::atomic<uint32_t> blocked = 0;

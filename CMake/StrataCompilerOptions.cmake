@@ -18,8 +18,9 @@ if(STRATA_COMPILER_CACHE)
 endif()
 
 # The instruction sets every engine object is compiled for (strata_engine_cpu_options), Strata's own options. Their
-# defaults are the ones the engine was built with while Jolt chose them (x86-64: AVX2 with LZCNT, TZCNT, F16C and FMA;
-# no AVX-512), so the code generation of every engine object stayed the same when physics moved to box3d.
+# defaults are the ones the engine was built with before 0.5.0, when its former physics library chose them (x86-64:
+# AVX2 with LZCNT, TZCNT, F16C and FMA; no AVX-512), so the code generation of every engine object stayed the same when
+# physics moved to box3d.
 # STRATA_CROSS_PLATFORM_DETERMINISTIC leaves out fused multiply-adds (-mfma lets the compiler contract floating-point
 # math, which changes results); STRATA_CROSS_COMPILE_ARM targets ARM64 from an x86-64 host. box3d is compiled with its
 # own flags (Strata/vendor/CMakeLists.txt), so its results do not depend on these.

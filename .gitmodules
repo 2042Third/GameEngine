@@ -14,10 +14,6 @@
 	path = Strata/vendor/miniaudio
 	url = https://github.com/mackron/miniaudio.git
 	shallow = true
-[submodule "Strata/vendor/JoltPhysics"]
-	path = Strata/vendor/JoltPhysics
-	url = https://github.com/jrouwe/JoltPhysics.git
-	shallow = true
 [submodule "Strata/vendor/entt"]
 	path = Strata/vendor/entt
 	url = https://github.com/skypjack/entt.git

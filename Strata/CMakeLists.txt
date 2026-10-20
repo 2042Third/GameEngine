@@ -5,33 +5,11 @@
 # Code generation every engine object shares, whichever layer compiles it: the instruction sets of Strata's STRATA_USE_*
 # options (/arch:AVX2 on MSVC x64 with the Visual Studio generators, nothing with cl under Ninja; -mavx2 -mbmi -mpopcnt
 # -mlzcnt -mf16c -mfma -mfpmath=sse on x86 GCC and Clang; -pthread off Windows), from strata_engine_cpu_options
-# (CMake/StrataCompilerOptions.cmake), so that builds without the physics module generate the same code. While Jolt is
-# built it must compile its users with exactly these (it follows the same options, Strata/vendor/CMakeLists.txt); its
-# JPH_* definitions only matter to code that includes Jolt, which a build without physics has none of.
+# (CMake/StrataCompilerOptions.cmake), so that builds without the physics module generate the same code. box3d is
+# compiled with its own flags (Strata/vendor/CMakeLists.txt), not these.
 strata_engine_cpu_options(STRATA_ENGINE_CPU_OPTIONS)
 add_library(StrataEngineCodegen INTERFACE)
 target_compile_options(StrataEngineCodegen INTERFACE ${STRATA_ENGINE_CPU_OPTIONS})
-if(TARGET Jolt)
-	get_target_property(STRATA_JOLT_OPTIONS Jolt INTERFACE_COMPILE_OPTIONS)
-	if(NOT STRATA_JOLT_OPTIONS)
-		set(STRATA_JOLT_OPTIONS "")
-	endif()
-	list(REMOVE_DUPLICATES STRATA_JOLT_OPTIONS)
-	# Quoted: both lists are empty where Jolt sets no options (cl under Ninja), and set() with nothing unsets.
-	set(strataJoltSorted "${STRATA_JOLT_OPTIONS}")
-	set(strataEngineSorted "${STRATA_ENGINE_CPU_OPTIONS}")
-	list(SORT strataJoltSorted)
-	list(SORT strataEngineSorted)
-	if(NOT "${strataJoltSorted}" STREQUAL "${strataEngineSorted}")
-		message(FATAL_ERROR "Jolt compiles its users with '${STRATA_JOLT_OPTIONS}', but strata_engine_cpu_options gives "
-			"'${STRATA_ENGINE_CPU_OPTIONS}': bring strata_engine_cpu_options (CMake/StrataCompilerOptions.cmake) to Jolt's "
-			"conditions for the same options (Strata/vendor/JoltPhysics/Jolt/Jolt.cmake)")
-	endif()
-	get_target_property(STRATA_JOLT_DEFINITIONS Jolt INTERFACE_COMPILE_DEFINITIONS)
-	if(STRATA_JOLT_DEFINITIONS)
-		target_compile_definitions(StrataEngineCodegen INTERFACE ${STRATA_JOLT_DEFINITIONS})
-	endif()
-endif()
 
 strata_add_layer_libraries(
 	TABLE "${PROJECT_SOURCE_DIR}/StrataTests/Architecture/Layers.json"
@@ -81,7 +59,7 @@ strata_layer_link(App PRIVATE glfw Vulkan::Headers stb)
 strata_layer_link(Asset PRIVATE zstd_decompress)
 strata_layer_link(Renderer PUBLIC nvrhi)
 strata_layer_link(Renderer PRIVATE nvrhi_vk Vulkan::Headers glfw stb MikkTSpace meshoptimizer)
-strata_layer_link(Physics PRIVATE Jolt box3d)
+strata_layer_link(Physics PRIVATE box3d)
 strata_layer_link(Audio PRIVATE miniaudio)
 # Only the C ABI header (StrataScript/ScriptABI.h); the engine never includes the script SDK.
 strata_layer_link(Scripting PRIVATE StrataScriptCore)

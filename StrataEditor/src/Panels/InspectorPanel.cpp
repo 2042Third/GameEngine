@@ -209,9 +209,8 @@ namespace Strata
 			SceneSettingRow Gravity;
 			SceneSettingRow FixedTimestep;
 			SceneSettingRow MaxFixedSteps;
-			// The physics world's capacities (SceneSettings::PhysicsCapacity): 0 sizes them automatically.
+			// The physics world's room (SceneSettings::PhysicsCapacity): 0 sizes it automatically.
 			SceneSettingRow MaxBodies;
-			SceneSettingRow MaxBodyPairs;
 			SceneSettingRow MaxContactConstraints;
 			// Sub-scenes (SceneSettings::MaxEntitiesInstantiatedPerFrame, MaxEntitiesDestroyedPerFrame).
 			SceneSettingRow MaxEntitiesInstantiated;
@@ -355,14 +354,12 @@ namespace Strata
 				properties.FixedTimestep = MakeSceneSettingRow(std::move(fixedTimestep));
 				properties.MaxFixedSteps = MakeSceneSettingRow(std::move(maxFixedSteps));
 				properties.MaxBodies = MakeSceneSettingRow(MakeCapacityProperty("MaxBodies", "Max Bodies",
-					"Bodies the physics world holds, reserved when play starts (about 80 bytes each); Auto (0) sizes it from the bodies the "
-					"scene starts with. Raise it for scenes that create many bodies while they play",
+					"Bodies the physics world has room for when play starts (about 2 KiB each); Auto (0) sizes it from the bodies the scene "
+					"starts with. The world grows while bodies are created beyond it: raise it for scenes that create many bodies while they play",
 					PhysicsCapacitySettings::c_MaxBodiesLimit));
-				properties.MaxBodyPairs = MakeSceneSettingRow(MakeCapacityProperty("MaxBodyPairs", "Max Body Pairs",
-					"Pairs of bodies with overlapping bounds per step (about 90 bytes each); Auto (0): sized from the bodies",
-					PhysicsCapacitySettings::c_MaxBodyPairsLimit));
 				properties.MaxContactConstraints = MakeSceneSettingRow(MakeCapacityProperty("MaxContactConstraints", "Max Contacts",
-					"Contacts solved per step (about 830 bytes each); Auto (0): sized from the bodies", PhysicsCapacitySettings::c_MaxContactConstraintsLimit));
+					"Contacts the physics world has room for when play starts (about 250 bytes each); Auto (0): sized from the bodies",
+					PhysicsCapacitySettings::c_MaxContactConstraintsLimit));
 				PropertyInfo maxEntitiesInstantiated;
 				maxEntitiesInstantiated.Name = "MaxEntitiesInstantiatedPerFrame";
 				maxEntitiesInstantiated.DisplayName = "Entities per Frame";
@@ -1297,8 +1294,6 @@ namespace Strata
 				PhysicsCapacitySettings& capacity = shown.PhysicsCapacity;
 				draw(properties.MaxBodies, capacity.MaxBodies, PropertyValue(defaults.PhysicsCapacity.MaxBodies), c_AutomaticCapacity, [&](const PropertyValue& value)
 					{ capacity.MaxBodies = std::min(std::get<uint32_t>(value), PhysicsCapacitySettings::c_MaxBodiesLimit); });
-				draw(properties.MaxBodyPairs, capacity.MaxBodyPairs, PropertyValue(defaults.PhysicsCapacity.MaxBodyPairs), c_AutomaticCapacity, [&](const PropertyValue& value)
-					{ capacity.MaxBodyPairs = std::min(std::get<uint32_t>(value), PhysicsCapacitySettings::c_MaxBodyPairsLimit); });
 				draw(properties.MaxContactConstraints, capacity.MaxContactConstraints, PropertyValue(defaults.PhysicsCapacity.MaxContactConstraints), c_AutomaticCapacity,
 					[&](const PropertyValue& value)
 					{ capacity.MaxContactConstraints = std::min(std::get<uint32_t>(value), PhysicsCapacitySettings::c_MaxContactConstraintsLimit); });
@@ -1335,8 +1330,7 @@ namespace Strata
 				{ "maxFixedStepsPerFrame", settings.MaxFixedStepsPerFrame },
 				{ "maxEntitiesInstantiatedPerFrame", settings.MaxEntitiesInstantiatedPerFrame },
 				{ "maxEntitiesDestroyedPerFrame", settings.MaxEntitiesDestroyedPerFrame },
-				{ "physicsCapacity", { { "maxBodies", capacity.MaxBodies }, { "maxBodyPairs", capacity.MaxBodyPairs },
-					{ "maxContactConstraints", capacity.MaxContactConstraints } } } });
+				{ "physicsCapacity", { { "maxBodies", capacity.MaxBodies }, { "maxContactConstraints", capacity.MaxContactConstraints } } } });
 		}
 		DrawSky(context, commands);
 	}

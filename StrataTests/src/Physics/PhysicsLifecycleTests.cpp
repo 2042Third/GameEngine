@@ -90,7 +90,7 @@ TEST_SUITE("Physics.Lifecycle")
 		CHECK(dynamic_cast<PhysicsSystem*>(system.get()) != nullptr);
 	}
 
-	TEST_CASE("Jolt is initialized while a physics world exists")
+	TEST_CASE("The physics runtime is initialized while a physics world exists")
 	{
 		REQUIRE_FALSE(PhysicsRuntime::IsInitialized());
 		{
@@ -107,7 +107,7 @@ TEST_SUITE("Physics.Lifecycle")
 		}
 		CHECK_FALSE(PhysicsRuntime::IsInitialized());
 
-		// Standalone worlds work without a scene system, and Jolt can be initialized again after a shutdown.
+		// Standalone worlds work without a scene system, and the runtime can be initialized again after a shutdown.
 		Scene scene;
 		Entity box = CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 2.0f, 0.0f));
 		{

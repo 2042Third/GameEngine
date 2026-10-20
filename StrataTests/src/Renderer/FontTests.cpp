@@ -247,7 +247,6 @@ namespace
 		"Strata/vendor/imgui/misc/fonts/Karla-Regular.ttf",
 		"Strata/vendor/imgui/misc/fonts/ProggyClean.ttf",
 		"Strata/vendor/imgui/misc/fonts/ProggyTiny.ttf",
-		"Strata/vendor/JoltPhysics/Assets/Fonts/Roboto-Regular.ttf",
 		"Strata/vendor/tracy/profiler/src/font/FiraCode-Retina.ttf",
 		"Strata/vendor/tracy/profiler/src/font/Roboto-Bold.ttf",
 		"Strata/vendor/tracy/profiler/src/font/Roboto-Italic.ttf",
@@ -730,10 +729,37 @@ TEST_SUITE("Renderer.Font")
 		pairs.SetU16(pairAdjustment + 10, 0xFFFF);
 		checkKerningDisabled(pairs.Data);
 
-		// Without GPOS, the kern table is read: the pair count must fit it.
-		FontPatcher kern(Tests::ReadSourceFile("Strata/vendor/JoltPhysics/Assets/Fonts/Roboto-Regular.ttf"));
-		std::memcpy(kern.Data.data() + kern.Record("GPOS"), "GPOX", 4);
+		// Without GPOS, the kern table is read: the pair count must fit it. A vendored Roboto whose GPOS becomes a kern table
+		// of one format 0 subtable kerning "AV" (no vendored font has both tables).
 		std::string error;
+		const std::vector<uint8_t> roboto = Tests::ReadSourceFile("Strata/vendor/imgui/misc/fonts/Roboto-Medium.ttf");
+		uint32_t glyphA = 0;
+		uint32_t glyphV = 0;
+		{
+			Ref<Font> plain = Font::Create(roboto, &error);
+			REQUIRE_MESSAGE(plain, error);
+			Scope<FontAtlas> plainAtlas = FontAtlas::Create(plain);
+			REQUIRE(plainAtlas);
+			glyphA = plainAtlas->GetGlyph('A').GlyphIndex;
+			glyphV = plainAtlas->GetGlyph('V').GlyphIndex;
+		}
+		// The record is renamed in the bytes: a FontPatcher made from them afterwards finds it as "kern".
+		std::vector<uint8_t> renamed = roboto;
+		std::memcpy(renamed.data() + FontPatcher(roboto).Record("GPOS"), "kern", 4);
+		std::vector<uint8_t> kernTable(4 + 14 + 6, 0);
+		Write16(kernTable, 0, 0);       // Version
+		Write16(kernTable, 2, 1);       // One subtable
+		Write16(kernTable, 4, 0);       // Subtable version
+		Write16(kernTable, 6, 14 + 6);  // Subtable length
+		Write16(kernTable, 8, 0x0001);  // Horizontal, format 0
+		Write16(kernTable, 10, 1);      // One pair
+		Write16(kernTable, 12, 6);      // Search range
+		Write16(kernTable, 14, 0);      // Entry selector
+		Write16(kernTable, 16, 0);      // Range shift
+		Write16(kernTable, 18, glyphA);
+		Write16(kernTable, 20, glyphV);
+		Write16(kernTable, 22, static_cast<uint16_t>(int16_t(-150)));
+		FontPatcher kern(ReplaceTable(FontPatcher(std::move(renamed)), "kern", kernTable));
 		Ref<Font> kernFont = Font::Create(kern.Data, &error);
 		REQUIRE_MESSAGE(kernFont, error);
 		CHECK(kernFont->HasUsableKerning());

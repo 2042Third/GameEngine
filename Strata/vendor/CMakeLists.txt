@@ -138,36 +138,6 @@ if(STRATA_WITH_AUDIO)
 	endif()
 endif()
 
-# --- Jolt Physics (Jolt; the physics module's: STRATA_WITH_PHYSICS) ------------------------------------
-if(STRATA_WITH_PHYSICS)
-	strata_vendor_option(OVERRIDE_CXX_FLAGS OFF)
-	strata_vendor_option(INTERPROCEDURAL_OPTIMIZATION OFF)
-	strata_vendor_option(FLOATING_POINT_EXCEPTIONS_ENABLED OFF)
-	strata_vendor_option(ENABLE_ALL_WARNINGS OFF)
-	strata_vendor_option(ENABLE_INSTALL OFF)
-	strata_vendor_option(ENABLE_OBJECT_STREAM OFF)
-	strata_vendor_option(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE OFF)
-	strata_vendor_option(PROFILER_IN_DEBUG_AND_RELEASE OFF)
-	strata_vendor_option(USE_STATIC_MSVC_RUNTIME_LIBRARY ON)
-	strata_vendor_option(CPP_RTTI_ENABLED ON)
-	strata_vendor_option(CPP_EXCEPTIONS_ENABLED ON)
-	strata_vendor_option(JPH_USE_DX12 OFF)
-	strata_vendor_option(JPH_USE_VK OFF)
-	strata_vendor_option(JPH_USE_MTL OFF)
-	strata_vendor_option(TARGET_UNIT_TESTS OFF)
-	strata_vendor_option(TARGET_HELLO_WORLD OFF)
-	strata_vendor_option(TARGET_PERFORMANCE_TEST OFF)
-	strata_vendor_option(TARGET_SAMPLES OFF)
-	strata_vendor_option(TARGET_VIEWER OFF)
-	# Jolt compiles its users for its own instruction-set options: it follows Strata's (CMake/StrataCompilerOptions.cmake),
-	# which Strata/CMakeLists.txt checks.
-	foreach(option IN ITEMS USE_SSE4_1 USE_SSE4_2 USE_AVX USE_AVX2 USE_AVX512 USE_LZCNT USE_TZCNT USE_F16C USE_FMADD
-			CROSS_PLATFORM_DETERMINISTIC CROSS_COMPILE_ARM)
-		strata_vendor_option(${option} ${STRATA_${option}})
-	endforeach()
-	add_subdirectory(JoltPhysics/Build SYSTEM)
-endif()
-
 # --- box3d (box3d; the physics module's: STRATA_WITH_PHYSICS) ---------------------------------------
 # Built from its sources here, like zstd, instead of through box3d's own CMake: its top-level file sets a
 # FETCHCONTENT_BASE_DIR cache entry inside the source tree, exports compile commands and adds install rules and a debug

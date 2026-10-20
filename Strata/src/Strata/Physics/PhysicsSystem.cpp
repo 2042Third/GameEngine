@@ -504,8 +504,7 @@ namespace Strata
 	PhysicsSettings PhysicsSystem::MakeWorldSettings(const Scene& scene, const PhysicsSettings& defaults)
 	{
 		// The scene's capacities win over the defaults; those left automatic are sized by the world, for at least what an
-		// earlier world of this scene needed. (PhysicsCapacitySettings::MaxBodyPairs, of scenes saved for Jolt's fixed pair
-		// buffer, sizes nothing: box3d has no such buffer.)
+		// earlier world of this scene needed.
 		PhysicsSettings settings = defaults;
 		const PhysicsCapacitySettings& capacity = scene.GetSettings().PhysicsCapacity;
 		if (capacity.MaxBodies != 0)

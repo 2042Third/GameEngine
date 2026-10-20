@@ -25,7 +25,7 @@ option(STRATA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors in first-par
 # The optional engine modules (their layers' "Option" in StrataTests/Architecture/Layers.json): a game without one builds
 # without its layer and vendor library. Code tests ST_WITH_PHYSICS (and so on), a definition every engine target gets.
 # The editor is a tool with every module.
-option(STRATA_WITH_PHYSICS "Build the physics module (Jolt)" ON)
+option(STRATA_WITH_PHYSICS "Build the physics module (box3d)" ON)
 option(STRATA_WITH_AUDIO "Build the audio module (miniaudio)" ON)
 option(STRATA_WITH_ANIMATION "Build the animation module" ON)
 set(strataAbsentModules "")

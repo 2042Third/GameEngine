@@ -103,7 +103,7 @@ TEST_SUITE("Physics.Scale")
 		std::vector<Entity> boxes = CreateRestingBoxes(scene, 16);
 
 		// Playing without listeners of every entity and without watched entities (the scripting system listens, but no script
-		// has contact callbacks): contacts cost nothing beyond Jolt's step.
+		// has contact callbacks): contacts cost nothing beyond box3d's step.
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
 		ICollisionEventSource* contacts = scene.GetService<ICollisionEventSource>();
@@ -278,7 +278,7 @@ TEST_SUITE("Physics.Scale")
 
 	TEST_CASE("Contact events do not depend on how many threads report them")
 	{
-		// Reports from Jolt's job threads go into per-thread buffers, merged after the step: the events must come out the
+		// box3d's tasks run on any number of workers, and its events are read after the step: the events must come out the
 		// same, in the same order, with any number of workers.
 		const auto record = [](uint32_t workers)
 		{

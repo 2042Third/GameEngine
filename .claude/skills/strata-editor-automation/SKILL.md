@@ -379,9 +379,9 @@ To rest entities on what is below them,
 **Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist),
 `component.remove`, `entity.setActive`: each takes `"entities": [...]` instead of `"entity"` to change all of them in one
 undo step (as the inspector does for a multi-selection); `entity.rename`, `entity.delete`, `scene.setSettings` (gravity,
-timestep, and `physicsCapacity {maxBodies, maxBodyPairs, maxContactConstraints}` for scenes that spawn many bodies while
-they play; 0 sizes a capacity from the bodies the scene starts with; set capacities in edit mode: they apply when play
-starts; `maxEntitiesInstantiatedPerFrame` and `maxEntitiesDestroyedPerFrame` bound how many entities sub-scenes create
+timestep, and `physicsCapacity {maxBodies, maxContactConstraints}`, the physics world's room when play starts, for scenes
+that spawn many bodies while they play (the world grows beyond it, in place, at a cost); 0 sizes it from the bodies the
+scene starts with; set it in edit mode: it applies when play starts; 0.4.0's `maxBodyPairs` is ignored with a `warning`; `maxEntitiesInstantiatedPerFrame` and `maxEntitiesDestroyedPerFrame` bound how many entities sub-scenes create
 and destroy per frame, 5000 each by default).
 Collision layers: `scene.setSettings {"layerNames": {"1": "Player", "2": "Debris"}, "layerCollisions":
 [{"layers": ["Player", "Debris"], "collide": false}]}` names layers and keeps pairs apart (`resetLayerCollisions: true`

@@ -163,8 +163,8 @@ Useful CMake options: `-DSTRATA_BUILD_EDITOR=OFF`, `-DSTRATA_BUILD_RUNTIME=OFF`,
 (off: on leaves out fused multiply-adds) and `STRATA_CROSS_COMPILE_ARM` (`strata_engine_cpu_options` in
 `CMake/StrataCompilerOptions.cmake`): x86-64 GCC and Clang get `-mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma
 -mfpmath=sse`, MSVC `/arch:AVX2` with the Visual Studio generators (nothing with `cl` under Ninja), ARM64 nothing. These
-are the defaults the engine had when Jolt chose them; Jolt's own option names (`USE_AVX2`...) no longer apply. The
-vendored physics library is compiled with its own flags (Strata/vendor/CMakeLists.txt).
+are the defaults the engine had before 0.5.0, when its former physics library chose them; that library's option names
+(`USE_AVX2`...) no longer apply. box3d is compiled with its own flags (Strata/vendor/CMakeLists.txt).
 
 **Sources** are collected with `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)`: re-run the configure step (`cmake --preset
 <preset>`) after adding or removing source files, because the Visual Studio generator re-globs during the build but
@@ -1371,7 +1371,10 @@ works: Docs/Architecture.md, "World partition"; for people: Docs/Manual/Worlds.m
   up to `PhysicsSettings::GrowthLimit`; the world counts a round that outgrew its room as a growth (also when streamed
   cells reserve room before they arrive, `IPhysicsCapacity::Reserve` with the cooked counts) and the scene's next world
   reserves it. Only a world at its growth limit leaves bodies waiting, in a FIFO (`BuildFailure::WaitingForSlot`) that no
-  step polls, and the editor shows it (`physics.stats`, the Streaming panel's Physics section, a status pill).
+  step polls, and the editor shows it (`physics.stats`, the Streaming panel's Physics section, a status pill). A scene's
+  `PhysicsCapacity` is the room its world starts with (`MaxBodies`, `MaxContactConstraints`); 0.4.0's `MaxBodyPairs`
+  (its physics library's pair buffer) is read and ignored without a warning and no longer written, and
+  `scene.setSettings` accepts `physicsCapacity.maxBodyPairs` for older command scripts, ignoring it with a `warning`.
 - **Tests.** `World.*` (asset, streamer, system, coordinates), `Scripting.World`, `Editor.World`, `Editor.WorldCook` and
   `Editor.UI.World` run in the Core shards on worlds scaled down for Debug (`World/WorldTestUtils.h` generates and packs
   them, `Editor/WorldProjectUtils.h` writes them into projects); `StrataRuntime.World` (label `feature`) drives a
