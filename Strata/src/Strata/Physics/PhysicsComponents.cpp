@@ -129,7 +129,7 @@ namespace Strata
 			.Property("Friction", &RigidBodyComponent::Friction, Range(0.0f, 10.0f, 0.01f))
 			.Property("Restitution", &RigidBodyComponent::Restitution, Slider(0.0f, 1.0f))
 			.Property("IsTrigger", &RigidBodyComponent::IsTrigger, WithTooltip({}, "Reports overlaps without colliding"))
-			.Property("ContinuousCollision", &RigidBodyComponent::ContinuousCollision)
+			.Property("ContinuousCollision", &RigidBodyComponent::ContinuousCollision, WithTooltip({}, "Also swept against kinematic and dynamic bodies, for bullets (every dynamic body is swept against static ones anyway)"))
 			.Property("LockRotationX", &RigidBodyComponent::LockRotationX)
 			.Property("LockRotationY", &RigidBodyComponent::LockRotationY)
 			.Property("LockRotationZ", &RigidBodyComponent::LockRotationZ)
