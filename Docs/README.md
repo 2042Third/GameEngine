@@ -34,6 +34,8 @@ Guides for people making games in the editor:
 
 What each release of Strata delivers, for the people who download it, and what the archives hold:
 
+- [Releases/0.5.0.md](Releases/0.5.0.md): Strata 0.5.0 (wave 5: physics on box3d instead of Jolt, and three sample
+  games beside Tetris: the Third-Person Adventure, the Open World and the Physics Playground).
 - [Releases/0.4.0.md](Releases/0.4.0.md): Strata 0.4.0 (wave 4: worlds streamed in cells, GPU-driven rendering, game
   UI, background saves, the Game view, prefab overrides, exact play-testing, engine modules).
 - [Releases/0.3.0.md](Releases/0.3.0.md): Strata 0.3.0, the first release (waves 1 to 3).
@@ -68,20 +70,22 @@ Task playbooks for people and AI agents, in `.claude/skills/<name>/SKILL.md`:
 
 ## Samples
 
-Each sample is a project with its `README.md` (what it shows, controls, how it was made), `CREDITS.md` and `Picture.png`,
-and a CTest that plays it through the editor (`StrataTests/Editor/SampleProject.cmake`, [Samples](DeveloperGuide.md#samples)):
+Each sample is a project with its `README.md` (what it shows, controls, how it was made), `CREDITS.md` and
+`Picture.png`, and a CTest that plays it through the editor (`StrataTests/Editor/SampleProject.cmake`,
+[Samples](DeveloperGuide.md#samples)):
 
 - [Samples/ThirdPerson](../Samples/ThirdPerson/): Sky Islands, a platformer course over floating islands for an animated
   robot (a character controller, an animation controller with footstep events, a follow camera), with a main menu,
   settings kept in a save file, a pause menu, a loading scene and an attract mode.
-- [Samples/OpenWorld](../Samples/OpenWorld/): a 768 m island streamed in cells, 20,000 props drawn on the GPU, foxes, camps
-  and a day that turns into night; a tour, flying, walking and teleports.
-- [Samples/PhysicsPlayground](../Samples/PhysicsPlayground/): six physics stations and 615 bodies to fly through: stacks,
-  dominoes, a ball pit, a goal, ghosts on their own collision layer and a ramp; shots, grabbing and a tool panel.
+- [Samples/OpenWorld](../Samples/OpenWorld/): a 768 m island streamed in cells, 20,000 props drawn on the GPU, foxes,
+  camps and a day that turns into night; a tour, flying, walking and teleports.
+- [Samples/PhysicsPlayground](../Samples/PhysicsPlayground/): six physics stations and 615 bodies to fly through:
+  stacks, dominoes, a ball pit, a goal, ghosts on their own collision layer and a ramp; shots, grabbing and a tool
+  panel.
 - [Samples/Tetris](../Samples/Tetris/): a complete game an AI agent made through editor commands only (`Tetris.stproj`,
   `Assets/` with `.meta` files, C++ scripts in `Scripts/`). Open a copy of it from the launcher (Open Sample, or
-  `project.openSample`) and press Play, which builds its scripts first; `StrataEditor --project Samples/Tetris` opens the
-  sample itself, to change it. `Samples/Samples.json` lists the samples. The CTest `StrataEditor.Tetris`
+  `project.openSample`) and press Play, which builds its scripts first; `StrataEditor --project Samples/Tetris` opens
+  the sample itself, to change it. `Samples/Samples.json` lists the samples. The CTest `StrataEditor.Tetris`
   (`StrataTests/Editor/SampleProject.cmake`) plays a copy with simulated input, checks its HUD, exports it and runs the
   exported game headless.
 

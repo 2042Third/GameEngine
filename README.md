@@ -12,7 +12,8 @@ Releases for Windows (x64), Linux (x64, Ubuntu 24.04 or newer) and macOS (Apple 
 [releases page](https://github.com/2042Third/GameEngine/releases): unpack the archive and run `StrataEditor`. Its
 `README.md` lists what each platform needs (a GPU with a Vulkan 1.2 driver; started without one, the editor says so in a
 message with what to install and where its log is); [Docs/Releases/](Docs/Releases/) has the notes of every release
-([0.4.0](Docs/Releases/0.4.0.md) is the latest, [0.3.0](Docs/Releases/0.3.0.md) the first).
+([0.5.0](Docs/Releases/0.5.0.md) is the latest, then [0.4.0](Docs/Releases/0.4.0.md), and
+[0.3.0](Docs/Releases/0.3.0.md) was the first).
 
 ## Features
 
@@ -39,10 +40,11 @@ message with what to install and where its log is); [Docs/Releases/](Docs/Releas
   occlusion, for the view and the shadow cascades) and draws it indirectly from one geometry pool; what the GPU sees
   decides which textures and mip levels stream in, rendering is camera-relative so far-away worlds keep their precision,
   and levels of detail are chosen by their projected error.
-- **Physics:** [box3d](https://github.com/erincatto/box3d) rigid bodies with box, sphere, capsule and mesh colliders, triggers, collision events,
-  raycasts and overlap queries, named collision layers, and character controllers that climb steps and slopes, ride
-  moving ground and push bodies. When the fixed steps cannot keep up with real time, the game slows down instead of
-  falling further behind.
+- **Physics:** [box3d](https://github.com/erincatto/box3d) rigid bodies with box, sphere, capsule and mesh colliders
+  (convex hulls, and triangle meshes on static bodies), triggers, collision events, raycasts and overlap queries, named
+  collision layers, and character controllers on box3d's mover that climb steps and slopes, stick to the ground, ride
+  moving ground and push bodies. The physics world grows in place while bodies stream in. When the fixed steps cannot
+  keep up with real time, the game slows down instead of falling further behind.
 - **Game UI:** screen-space and world-space canvases with anchored layouts, text, images, masks and widgets (buttons,
   toggles, sliders, input fields) driven by the mouse, keyboard and gamepads, built in the editor or from scripts.
 - **Audio:** miniaudio playback with spatial sources, a listener that follows the camera or a listener
@@ -70,6 +72,11 @@ message with what to install and where its log is); [Docs/Releases/](Docs/Releas
   touching the editor. Agents play-test deterministically (fixed steps, scripted input sequences) and look through
   viewport captures, and the Activity panel lists every command with who ran it and exports a session as a command
   script that repeats it.
+- **Samples:** four games an AI agent made through the editor, each played by a test that also exports it: the
+  Third-Person Adventure "Sky Islands" (an animated robot on a platformer course, with menus, save files and an attract
+  mode), the Open World (a 768 m island streamed in cells, 20,000 props drawn on the GPU, foxes, day and night), the
+  Physics Playground (six stations and about 600 bodies to shoot, grab and pour) and Tetris, with assets from CC0 and
+  CC-BY packs credited per sample.
 - **Runtime:** plays exported games (`<Game>` executable, `.stgame` manifest, `.stpak` asset pack and the
   game's script module), which can play a loading scene while the start scene loads. With `--headless` it runs the
   simulation without a window or GPU, at 60 frames per second.
@@ -115,10 +122,10 @@ Binaries land in `build/<preset>/bin/<Config>/`:
 
 Games can be play-tested without a person: while a game runs in the editor, the `input.key`, `input.mouseButton`,
 `input.mouseMove` and `input.scroll` commands press keys and buttons the way a player would, and `viewport.capture`
-returns the frame as a PNG. [`Samples/PhysicsPlayground`](Samples/PhysicsPlayground) (six physics stations, about 600
-bodies) and [`Samples/Tetris`](Samples/Tetris) are complete games an AI agent made this way, entirely
-through editor commands: open a copy of one from the launcher (**Open Sample**) and press Play, which builds its scripts
-first.
+returns the frame as a PNG. The four samples, [`Samples/ThirdPerson`](Samples/ThirdPerson),
+[`Samples/OpenWorld`](Samples/OpenWorld), [`Samples/PhysicsPlayground`](Samples/PhysicsPlayground) and
+[`Samples/Tetris`](Samples/Tetris), are complete games an AI agent made this way, entirely through editor commands: open
+a copy of one from the launcher (**Open Sample**) and press Play, which builds its scripts first.
 
 Every step is also available as an editor command. For example, this command script creates a lit cube
 and saves the scene:
