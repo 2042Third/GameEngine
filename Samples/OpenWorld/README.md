@@ -50,8 +50,9 @@ field to false to start flying at once.
 `Tools/GenerateIslandTerrain.py terrain` wrote the island's 97 terrain tiles and their palette, imported with
 `asset.import` (without LODs, which would open seams between tiles) and placed in the persistent scene, each tile given a
 static mesh collider. `world.create` made the world and its layers. `Tools/GenerateIslandTerrain.py scatter` wrote the
-command script of `prefab.instantiate {instances}` steps that placed 20,000 props by biome (palms on beaches, oaks and
-pines inland, rocks on slopes), run with the Vegetation layer as the edit layer and its cells pinned; the camps and foxes
+command script that makes the Vegetation layer the edit layer, pins its cells (`world.edit`, `world.loadCells`) and
+places 20,000 props by biome with `prefab.instantiate {instances}` steps (palms on beaches, oaks and pines inland, rocks
+on slopes), so that none lands in the persistent scene; the camps and foxes
 were placed the same way in their layers and set on the terrain with `entity.dropToGround`. `world.cook` measured the
 cells for the export. `StrataTests/Editor/OpenWorldCommands.json.in` is the regression (CTest `StrataEditor.OpenWorld`).
 

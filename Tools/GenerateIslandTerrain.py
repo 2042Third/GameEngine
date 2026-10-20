@@ -15,8 +15,11 @@ terrain  writes Island.glb, one glTF 2.0 model with one mesh per tile of a GRID 
          neighbor's, so tiles meet without cracks (import them without LODs: simplified tiles would open seams). Normals
          are 8-bit and texture coordinates 16-bit (KHR_mesh_quantization); every tile shares one index buffer. The
          texture coordinates look up Palette.png by height (u) and slope (v): sand, grass, forest floor, rock and snow.
-scatter  writes a command script (editor command steps, StrataEditor --commands or StrataCLI) of prefab.instantiate
-         steps with instances, one per prefab: seeded Poisson-disc samples on the island, each given the prefab that
+scatter  writes a command script (editor command steps, StrataEditor --commands or StrataCLI) for an editor that has the
+         island's world open: it makes VEGETATION_LAYER the edit layer and loads and pins every cell of that layer over
+         the island (world.edit, world.loadCells), so that no instance lands in the persistent scene, then places the
+         props with prefab.instantiate steps with instances, one per prefab: seeded Poisson-disc samples on the island,
+         each given the prefab that
          suits its height, slope and forest density (palms on beaches, oaks on grass, pines in forests and higher up,
          rocks on slopes, flowers, grass and bushes in clearings), standing on the terrain (the same height function, at
          the exact tile surface: the triangle under the point), turned and scaled at random. The prefabs are named
@@ -42,6 +45,7 @@ SEA_FLOOR_CUTOFF = -7.0   # Tiles whose every vertex lies below this are left ou
 PALETTE_SIZE = (128, 32)  # u: height, v: slope
 HEIGHT_RANGE = (-10.0, 80.0)  # Heights the palette's u spans
 PREFAB_DIRECTORY = "Prefabs/Nature"
+VEGETATION_LAYER = "Vegetation"  # The world layer whose cells hold the scatter
 
 # The vegetation and rocks the scatter places: prefab name, base scale (Nature Kit models are about a meter tall), and
 # the scale's random variation.
@@ -336,8 +340,13 @@ def write_scatter(output, count):
         placements.setdefault(name, []).append({"components": {"Transform": {"Translation": [round(x, 3), y, round(z, 3)],
                                                                              "Rotation": [0.0, yaw, 0.0], "Scale": [scale, scale, scale]}}})
         placed += 1
-    steps = [{"command": "prefab.instantiate", "parameters": {"prefab": "%s/%s.stprefab" % (PREFAB_DIRECTORY, name), "instances": instances}}
-             for name, instances in sorted(placements.items())]
+    # New top-level entities go into the edit layer's cells, which must be loaded (and stay so) while the props arrive.
+    steps = [{"command": "world.edit", "parameters": {"editLayer": VEGETATION_LAYER},
+              "expect": {"/editLayer": {"equals": VEGETATION_LAYER}}},
+             {"command": "world.loadCells", "parameters": {"region": {"min": [-HALF_EXTENT, -HALF_EXTENT], "max": [HALF_EXTENT, HALF_EXTENT]},
+                                                           "layers": [VEGETATION_LAYER], "pin": True, "wait": True}}]
+    steps += [{"command": "prefab.instantiate", "parameters": {"prefab": "%s/%s.stprefab" % (PREFAB_DIRECTORY, name), "instances": instances}}
+              for name, instances in sorted(placements.items())]
     with open(output, "w", encoding="utf-8", newline="\n") as file:
         json.dump(steps, file, separators=(",", ":"))
         file.write("\n")
@@ -349,7 +358,7 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     terrain = commands.add_parser("terrain", help="Write Island.glb and Palette.png")
     terrain.add_argument("--output", required=True, help="The directory to write them into")
-    scatter = commands.add_parser("scatter", help="Write the vegetation's prefab.instantiate command script")
+    scatter = commands.add_parser("scatter", help="Write the vegetation's command script, for an editor with the island's world open")
     scatter.add_argument("--output", required=True, help="The command script to write (.json)")
     scatter.add_argument("--count", type=int, default=20000, help="Instances to place (default 20,000)")
     arguments = parser.parse_args()
