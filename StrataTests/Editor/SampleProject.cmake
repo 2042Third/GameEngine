@@ -5,15 +5,16 @@
 #      @EXPORT_DIR_JSON@ and @PRUNED_EXPORT_DIR_JSON@), which builds, plays, checks with "expect" and "until" and exports
 #      the game in full and pruned; its output must hold every EDITOR_EXPECT line;
 #   3. both exports must hold the game, its .stgame manifest, its .stpak and the script module the manifest names, the
-#      pruned pack must not be larger, and each game runs headless for GAME_FRAMES frames (with a perf log when PERF_LOG
-#      is on: <export>/Perf.csv) with its saves in the work directory, printing every GAME_EXPECT line.
+#      pruned pack must not be larger, and the games GAME_RUNS names (full, pruned or both, the default) run headless for
+#      GAME_FRAMES frames (with a perf log when PERF_LOG is on: <export>/Perf.csv) with their saves in the work directory,
+#      printing every GAME_EXPECT line.
 # No output may hold a warning, error or critical line that no ALLOWED_MESSAGES expression matches, nor the editor's one
 # that no EDITOR_ALLOWED_MESSAGES expression matches either (each with its reason where the test is declared).
 #
 # cmake -DEDITOR=<StrataEditor> -DSAMPLE_DIR=<Samples/Name> -DPROJECT_FILE=<Name.stproj> -DGAME=<exported name>
 #       -DCOMMANDS=<NameCommands.json.in> -DWORK_DIR=<directory> -DEXECUTABLE_SUFFIX=<.exe or empty>
 #       [-DEDITOR_EXPECT=a|b] [-DGAME_EXPECT=a|b] [-DGAME_FRAMES=120] [-DPERF_LOG=ON] [-DALLOWED_MESSAGES=regex|regex]
-#       [-DEDITOR_ALLOWED_MESSAGES=regex|regex]
+#       [-DEDITOR_ALLOWED_MESSAGES=regex|regex] [-DGAME_RUNS=full|pruned]
 #       [-DPERF_CHECKER=<StrataTests> -DPERF_CHECK=--nonzero|Column|...] (the perf logs checked by check-perf-log)
 #       -P SampleProject.cmake
 # Lists are separated by '|' (a ';' would split the test's command line), so expressions use character classes, not '|'.
@@ -26,8 +27,16 @@ endforeach()
 if(NOT DEFINED GAME_FRAMES OR GAME_FRAMES STREQUAL "")
 	set(GAME_FRAMES 120)
 endif()
-foreach(list EDITOR_EXPECT GAME_EXPECT ALLOWED_MESSAGES EDITOR_ALLOWED_MESSAGES PERF_CHECK)
+if(NOT DEFINED GAME_RUNS OR GAME_RUNS STREQUAL "")
+	set(GAME_RUNS "full|pruned")
+endif()
+foreach(list EDITOR_EXPECT GAME_EXPECT ALLOWED_MESSAGES EDITOR_ALLOWED_MESSAGES PERF_CHECK GAME_RUNS)
 	string(REPLACE "|" ";" ${list} "${${list}}")
+endforeach()
+foreach(run IN LISTS GAME_RUNS)
+	if(NOT run STREQUAL "full" AND NOT run STREQUAL "pruned")
+		message(FATAL_ERROR "SampleProject: GAME_RUNS names '${run}'; it lists full, pruned or both")
+	endif()
 endforeach()
 include("${CMAKE_CURRENT_LIST_DIR}/JsonEscape.cmake")
 
@@ -109,7 +118,12 @@ check_expected("${output}" "${EDITOR_EXPECT}" "the editor")
 check_messages("${output}" "the editor" EDITOR_ALLOWED_MESSAGES)
 
 # 3. The exported games, full and pruned.
-foreach(export_dir "${EXPORT_DIR}" "${PRUNED_EXPORT_DIR}")
+foreach(run full pruned)
+	if(run STREQUAL "full")
+		set(export_dir "${EXPORT_DIR}")
+	else()
+		set(export_dir "${PRUNED_EXPORT_DIR}")
+	endif()
 	set(game "${export_dir}/${GAME}${EXECUTABLE_SUFFIX}")
 	set(manifest "${export_dir}/${GAME}.stgame")
 	if(NOT EXISTS "${game}" OR NOT EXISTS "${manifest}" OR NOT EXISTS "${export_dir}/${GAME}.stpak")
@@ -119,6 +133,10 @@ foreach(export_dir "${EXPORT_DIR}" "${PRUNED_EXPORT_DIR}")
 	string(JSON module ERROR_VARIABLE module_error GET "${manifest_text}" "Game" "ScriptModule")
 	if(module_error OR module STREQUAL "" OR NOT EXISTS "${export_dir}/${module}")
 		message(FATAL_ERROR "SampleProject: '${manifest}' names no script module that the export holds (${module_error})")
+	endif()
+	list(FIND GAME_RUNS "${run}" run_index)
+	if(run_index EQUAL -1)
+		continue()
 	endif()
 
 	set(arguments --headless --frames ${GAME_FRAMES} --save-directory "${WORK_DIR}/Saves")

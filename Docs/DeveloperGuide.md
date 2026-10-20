@@ -661,7 +661,8 @@ exercised by it.
   (`Editor/SampleProject.cmake`, one runner for every sample: the real editor builds a copy of the sample without its
   `.strata`, runs `Editor/<Sample>Commands.json.in` (`input.*` commands, `expect` and `until` on its fields and HUD,
   exports in full and pruned), its output must hold the test's `EDITOR_EXPECT` lines, both exports must hold the game,
-  manifest, pack and script module, and each game runs headless (`--save-directory` in the work directory, a perf log when
+  manifest, pack and script module, and each game `GAME_RUNS` names (both by default; the three larger samples run only the
+  pruned one in Debug, whose full game runs the same scripts) runs headless (`--save-directory` in the work directory, a perf log when
   asked) printing the `GAME_EXPECT` lines; any warning, error or critical line that no `ALLOWED_MESSAGES` expression
   matches (`EDITOR_ALLOWED_MESSAGES` too for the editor's output alone) fails the run, and the test's declaration says
   why each is expected; `PERF_LOG` and `PERF_CHECK` run the games

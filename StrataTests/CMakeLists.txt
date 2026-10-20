@@ -697,6 +697,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DSAMPLE_DIR=${PROJECT_SOURCE_DIR}/Samples/PhysicsPlayground"
 			"-DPROJECT_FILE=PhysicsPlayground.stproj"
 			"-DGAME=PhysicsPlayground"
+			# Debug runs only the pruned game: the full one runs the same scripts (Release, Dist and the other platforms run both).
+			"-DGAME_RUNS=$<IF:$<CONFIG:Debug>,pruned,full|pruned>"
 			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/PhysicsPlaygroundCommands.json.in"
 			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/Samples/PhysicsPlayground/$<CONFIG>"
 			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
@@ -731,6 +733,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DSAMPLE_DIR=${PROJECT_SOURCE_DIR}/Samples/OpenWorld"
 			"-DPROJECT_FILE=OpenWorld.stproj"
 			"-DGAME=OpenWorld"
+			# Debug runs only the pruned game: the full one runs the same scripts (Release, Dist and the other platforms run both).
+			"-DGAME_RUNS=$<IF:$<CONFIG:Debug>,pruned,full|pruned>"
 			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/OpenWorldCommands.json.in"
 			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/Samples/OpenWorld/$<CONFIG>"
 			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
@@ -790,6 +794,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DSAMPLE_DIR=${PROJECT_SOURCE_DIR}/Samples/ThirdPerson"
 			"-DPROJECT_FILE=ThirdPerson.stproj"
 			"-DGAME=ThirdPerson"
+			# Debug runs only the pruned game: the full one runs the same scripts (Release, Dist and the other platforms run both).
+			"-DGAME_RUNS=$<IF:$<CONFIG:Debug>,pruned,full|pruned>"
 			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/ThirdPersonCommands.json.in"
 			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/Samples/ThirdPerson/$<CONFIG>"
 			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
