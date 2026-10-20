@@ -417,6 +417,15 @@ Acceptance (`StrataEditor.ThirdPerson`, `--no-gpu`):
   `Game::LoadScene` from the cooked pack, behind the loading scene) and "ThirdPerson: coin 1 of 12".
 - `gpu`: the exported game windowed, its menu screenshot passes `check-image`.
 
+As made (2026-10-20): the game is called "Sky Islands". The robot imports 4.6 m tall and stands at scale 0.4; the course
+is 35 Platformer Kit blocks at twice their size on a 4 m grid (seven islands, a bridge, a slope, a 2 m deep pit with
+fences, two jump pads, the goal 11 m up). The animator is on the robot model, so the footstep events reach a `Footsteps`
+script there (the scripts on the animator's entity receive them). The settings check reads `SettingsMenu.Saves` (1 after
+the toggle) besides the log line. The scene switch is awaited for 60 s, not 10 s (CI's slowest runners; it takes well
+under a second on the Mac). The coin check places the player on the sixth coin's spot (the first coin sits 5 m ahead of
+the start, out of the walk test's reach). The attract mode walks five points over two islands, collecting four coins,
+then returns to the menu. There is no music (no CC0 loop that fit).
+
 ### 4.4 Open World (`Samples/OpenWorld`)
 
 - **Terrain.** `Tools/GenerateIslandTerrain.py` (standard library only, deterministic from a seed, outputs committed like

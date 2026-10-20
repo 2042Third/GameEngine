@@ -1,0 +1,4 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":2,"Entities":[
+{"Components":{"Name":{"Name":"Coin"},"RigidBody":{"AngularDamping":0.05,"ContinuousCollision":false,"Friction":0.5,"GravityScale":1,"IsTrigger":true,"Layer":0,"LinearDamping":0.05,"LockRotationX":false,"LockRotationY":false,"LockRotationZ":false,"Mass":1,"Restitution":0,"Type":"Static"},"Script":{"Scripts":[{"Class":"Coin","Fields":{}}]},"SphereCollider":{"Offset":[0,0,0],"Radius":0.7},"Tag":{"Tag":"Coin"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"34635AEDA7827CC0"},
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"0000000000000000","Mesh":"3D050665ECFD45B1"},"Name":{"Name":"Visual"},"Transform":{"Rotation":[0,0,0,1],"Scale":[2.5,2.5,2.5],"Translation":[0,-0.5,0]}},"ID":"8CC2F9D42F510EB1","Parent":"34635AEDA7827CC0"}
+]}}

@@ -775,6 +775,36 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
 	set_tests_properties(StrataTests.PerfSamples PROPERTIES LABELS "perf;gpu" FIXTURES_REQUIRED "StrataOpenWorldTourLog;StrataPerfResults"
 		ENVIRONMENT "STRATA_OPEN_WORLD_TOUR_LOG=${STRATA_OPEN_WORLD_DIR}/Tour.csv")
+	# The Third-Person Adventure: the main menu's Play loads the course (Game::LoadScene); the robot walks where the camera looks
+	# (its animator in Walk or Run while it moves, Idle after), jumps, pushes the crate, collects a coin, pauses at time scale
+	# 0 and saves a setting from the pause menu, and completes the course at the goal. The exported games wait in the main
+	# menu until its attract mode loads the course from the cooked pack, behind the loading scene, and walks to a coin.
+	add_test(NAME StrataEditor.ThirdPerson
+		COMMAND "${CMAKE_COMMAND}"
+			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
+			"-DSAMPLE_DIR=${PROJECT_SOURCE_DIR}/Samples/ThirdPerson"
+			"-DPROJECT_FILE=ThirdPerson.stproj"
+			"-DGAME=ThirdPerson"
+			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/ThirdPersonCommands.json.in"
+			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/Samples/ThirdPerson/$<CONFIG>"
+			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DEDITOR_EXPECT=ThirdPerson: main menu ready|ThirdPerson: starting the course|ThirdPerson: course loaded (12 coins)|ThirdPerson: coin 1 of 12|ThirdPerson: paused|ThirdPerson: settings saved|ThirdPerson: resumed|ThirdPerson: course complete in"
+			"-DGAME_EXPECT=Loaded script module 'ThirdPersonScripts'|ThirdPerson: main menu ready|ThirdPerson: attract mode|ThirdPerson: course loaded (12 coins, attract mode)|ThirdPerson: coin 1 of 12"
+			"-DGAME_FRAMES=1800"
+			# A fresh copy has never built its scripts: opening its scene says so, and play.start builds them. The robot's three
+			# facial expressions are morph targets, which the glTF importer skips (its face stays neutral).
+			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'ThirdPerson' are not built yet|\\[warning\\] Strata: Import 'Models/Robot/RobotExpressive.glb': Not imported: morph target"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
+	set_tests_properties(StrataEditor.ThirdPerson PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataThirdPersonExport)
+	# The exported game in a window: its main menu, the robot dancing on its island under the title and the menu.
+	set(STRATA_THIRD_PERSON_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/ThirdPerson/$<CONFIG>")
+	add_test(NAME StrataRuntime.ThirdPersonWindowed
+		COMMAND "${STRATA_THIRD_PERSON_DIR}/Build/ThirdPerson${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1280x720 --frames 300
+			--screenshot "${STRATA_THIRD_PERSON_DIR}/Windowed.png" --save-directory "${STRATA_THIRD_PERSON_DIR}/WindowedSaves")
+	set_tests_properties(StrataRuntime.ThirdPersonWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonExport FIXTURES_SETUP StrataThirdPersonWindowed)
+	add_test(NAME StrataRuntime.ThirdPersonWindowedImage
+		COMMAND StrataTests --strata-test-helper=check-image "${STRATA_THIRD_PERSON_DIR}/Windowed.png" --size 1280x720)
+	set_tests_properties(StrataRuntime.ThirdPersonWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonWindowed)
 endif()
 
 # input.sequence through the real editor (Editor/InputSequenceCommands.json.in, on a copy of the feature project): the same

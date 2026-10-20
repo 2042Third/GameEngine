@@ -1,0 +1,3 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":1,"Entities":[
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"0000000000000000","Mesh":"FD2E35A5B0880C44"},"Name":{"Name":"Sign"},"Transform":{"Rotation":[0,0,0,1],"Scale":[2,2,2],"Translation":[0,0,0]}},"ID":"0CCEE09876024016"}
+]}}

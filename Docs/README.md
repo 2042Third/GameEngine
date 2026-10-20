@@ -71,6 +71,9 @@ Task playbooks for people and AI agents, in `.claude/skills/<name>/SKILL.md`:
 Each sample is a project with its `README.md` (what it shows, controls, how it was made), `CREDITS.md` and `Picture.png`,
 and a CTest that plays it through the editor (`StrataTests/Editor/SampleProject.cmake`, [Samples](DeveloperGuide.md#samples)):
 
+- [Samples/ThirdPerson](../Samples/ThirdPerson/): Sky Islands, a platformer course over floating islands for an animated
+  robot (a character controller, an animation controller with footstep events, a follow camera), with a main menu,
+  settings kept in a save file, a pause menu, a loading scene and an attract mode.
 - [Samples/OpenWorld](../Samples/OpenWorld/): a 768 m island streamed in cells, 20,000 props drawn on the GPU, foxes, camps
   and a day that turns into night; a tour, flying, walking and teleports.
 - [Samples/PhysicsPlayground](../Samples/PhysicsPlayground/): six physics stations and 615 bodies to fly through: stacks,

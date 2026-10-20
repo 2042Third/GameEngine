@@ -1,0 +1,3 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":1,"Entities":[
+{"Components":{"BoxCollider":{"HalfExtents":[0.3265494,0.2,0.33115205],"Offset":[0,0.2,0]},"MeshRenderer":{"CastShadows":true,"Material":"0000000000000000","Mesh":"52C58A3394902C24"},"Name":{"Name":"Rocks"},"RigidBody":{"AngularDamping":0.05,"ContinuousCollision":false,"Friction":0.5,"GravityScale":1,"IsTrigger":false,"Layer":0,"LinearDamping":0.05,"LockRotationX":false,"LockRotationY":false,"LockRotationZ":false,"Mass":1,"Restitution":0,"Type":"Static"},"Transform":{"Rotation":[0,0,0,1],"Scale":[2,2,2],"Translation":[0,0,0]}},"ID":"ED7FF3AC58D30303"}
+]}}

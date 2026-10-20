@@ -416,6 +416,15 @@ is each one's regression:
   region first, then `prefab.instantiate {instances}` steps); foxes with an animation controller; teleports that prefetch
   cells and wait for the ground (`World::IsLoadedAround` plus a raycast); a day-night script driving the sun and the
   procedural sky's colors; a camera tour; the export's loading scene with a progress bar.
+- **ThirdPerson**: a character controller whose child is a skinned model (scaled from `asset.info` bounds, turned 180
+  degrees: glTF faces +Z) with an animation controller (`animation.createController`: float, bool and trigger parameters,
+  cross-fades, `Footstep` events at times read off the clip's foot keys; the events reach scripts on the animator's
+  entity); camera-relative movement with coyote time; a follow camera whose arm a raycast shortens; triggers that collect
+  and launch; a crate the controller pushes; a main menu scene that loads the course (`Game::LoadScene`, the scene as an
+  asset field so pruned exports keep it); settings in a save file applied with `Audio::SetMasterVolume`,
+  `Game::SetWindowMode` and `Game::SetVSync`; a pause menu at time scale 0; an attract mode kept in the script module's
+  own state across scene loads; a flag in a hand (`AttachToJoint`: the joint's transform carries the model's scale, so
+  the child's scale divides by it).
 
 Every sample has a `Picture.png`: save the start scene in an editor with a GPU and copy `.strata/Thumbnail.png`; the
 launcher shows it and copies start with it.
