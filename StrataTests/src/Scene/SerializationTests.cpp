@@ -144,10 +144,27 @@ TEST_SUITE("Scene.Serialization")
 		const std::filesystem::path scenes = FileSystem::FromUTF8(STRATA_FEATURE_TEST_DIR) / "Assets" / "Scenes";
 		Tests::CheckSceneFileLoadsCleanly(scenes / "Feature.stscene");
 		Tests::CheckSceneFileLoadsCleanly(scenes / "FeatureSub.stscene");
-		std::string error;
-		const std::filesystem::path tetris = Tests::CopySampleProject("Tetris", &error);
-		REQUIRE_MESSAGE(!tetris.empty(), error);
-		Tests::CheckSceneFileLoadsCleanly(tetris / "Assets" / "Scenes" / "Main.stscene");
+		// Every scene of every sample the index lists (world cells included). The files are only read, never opened as a
+		// project, so the samples' directories stay as committed.
+		const std::filesystem::path samples = FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Samples";
+		const std::optional<std::string> index = FileSystem::ReadText(samples / "Samples.json");
+		REQUIRE(index);
+		const nlohmann::json samplesIndex = nlohmann::json::parse(*index);
+		size_t checked = 0;
+		for (const nlohmann::json& sample : samplesIndex["Samples"])
+		{
+			const std::filesystem::path assets = samples / FileSystem::FromUTF8(sample["Directory"].get<std::string>()) / "Assets";
+			std::error_code error;
+			for (std::filesystem::recursive_directory_iterator it(assets, error), end; !error && it != end; it.increment(error))
+			{
+				if (it->is_regular_file(error) && it->path().extension() == ".stscene")
+				{
+					Tests::CheckSceneFileLoadsCleanly(it->path());
+					checked++;
+				}
+			}
+		}
+		CHECK(checked >= 2);
 	}
 #endif
 

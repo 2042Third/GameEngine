@@ -1,0 +1,19 @@
+{
+	"Project": {
+		"AssetDirectory": "Assets",
+		"Export": {
+			"AlwaysInclude": [],
+			"LoadingScene": "F8A23B2F45552087"
+		},
+		"Name": "OpenWorld",
+		"Scripts": {
+			"ModuleName": "OpenWorldScripts",
+			"SourceDirectory": "Scripts"
+		},
+		"StartScene": "3A8A714892F1CC38"
+	},
+	"Strata": {
+		"Format": "Project",
+		"Version": 2
+	}
+}

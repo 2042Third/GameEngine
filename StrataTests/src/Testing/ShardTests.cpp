@@ -102,7 +102,7 @@ namespace
 		if (shards == json.end() || !shards->is_array() || ownTests == json.end() || !ownTests->is_array())
 			return std::nullopt;
 		for (const nlohmann::json& own : *ownTests)
-			table.Runs.push_back({ JsonUtils::GetString(own, "Test"), GetStrings(own, "Suites"), {} });
+			table.Runs.push_back({ JsonUtils::GetString(own, "Test"), GetStrings(own, "Suites"), GetStrings(own, "Exclude") });
 		for (const nlohmann::json& shard : *shards)
 			table.Runs.push_back({ "StrataTests.Core." + JsonUtils::GetString(shard, "Name"), GetStrings(shard, "Suites"), GetStrings(shard, "Exclude") });
 		table.FuzzSuites = GetStrings(json, "FuzzSuites");
@@ -223,6 +223,22 @@ TEST_SUITE("Testing.Shards")
 		REQUIRE(bad.Problems.size() == 2);
 		CHECK(bad.Problems[0].find("Audio.Engine runs in no Core shard") != std::string::npos);
 		CHECK(bad.Problems[1].find("Scene.Odd runs in several CTests (StrataTests.Core.Scene, StrataTests.Core.Core)") != std::string::npos);
+	}
+
+	TEST_CASE("Own CTests leave out the suites their Exclude filters match")
+	{
+		const std::optional<ShardTable> table = ParseShards(nlohmann::json::parse(R"({
+			"OwnTests": [
+				{ "Test": "StrataTests.PerfGPU", "Suites": [ "PerfGPU.*" ], "Exclude": [ "PerfGPU.Samples*" ] },
+				{ "Test": "StrataTests.PerfGPU.Samples", "Suites": [ "PerfGPU.Samples*" ] }
+			],
+			"Shards": [ { "Name": "Core", "Suites": [ "Core*" ] } ],
+			"FuzzSuites": []
+		})"));
+		REQUIRE(table);
+		CHECK(CheckShards(*table, { "PerfGPU.Editor", "PerfGPU.Samples", "Core.Log" }).Problems.empty());
+		REQUIRE(table->Runs.size() == 3);
+		CHECK(table->Runs[0].Exclude == std::vector<std::string> { "PerfGPU.Samples*" });
 	}
 
 	TEST_CASE("Every suite runs in exactly one Core shard or in its own CTest")

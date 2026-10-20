@@ -333,8 +333,8 @@ namespace Strata
 			}), EditorCommandKind::Session }));
 
 		registry.Register({ "project.samples",
-			"The sample projects that come with the editor (finished games to learn from, e.g. Tetris): id, name, description. Open one with "
-			"project.openSample, which works on a copy.",
+			"The sample projects that come with the editor (finished games to learn from, e.g. Tetris): id, name, description and picture (the "
+			"absolute path of its PNG, 480x270, or null). Open one with project.openSample, which works on a copy.",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
@@ -344,7 +344,10 @@ namespace Strata
 					return EditorCommandResult::Fail(error);
 				nlohmann::json list = nlohmann::json::array();
 				for (const ProjectSample& sample : *samples)
-					list.push_back({ { "id", sample.Id }, { "name", sample.Name }, { "description", sample.Description } });
+				{
+					list.push_back({ { "id", sample.Id }, { "name", sample.Name }, { "description", sample.Description },
+						{ "picture", sample.Picture.empty() ? nlohmann::json(nullptr) : nlohmann::json(FileSystem::ToUTF8(sample.Picture)) } });
+				}
 				return EditorCommandResult::Ok({ { "samples", std::move(list) } });
 			}, EditorCommandKind::Query });
 

@@ -261,8 +261,9 @@ endif()
 if(TARGET StrataRuntime)
 	list(APPEND STRATA_PERF_GPU_ENVIRONMENT "STRATA_TEST_RUNTIME_PATH=$<TARGET_FILE:StrataRuntime>")
 endif()
+# PerfGPU.Samples runs in a CTest of its own (StrataTests.PerfGPU.Samples), after the sample test that exports its game.
 add_test(NAME StrataTests.PerfGPU
-	COMMAND StrataTests --test-suite=PerfGPU.* --no-intro=true
+	COMMAND StrataTests --test-suite=PerfGPU.* --test-suite-exclude=PerfGPU.Samples* --no-intro=true
 	CONFIGURATIONS Release Dist
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
 set_tests_properties(StrataTests.PerfGPU PROPERTIES
@@ -499,6 +500,15 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEXPECTED_OUTPUT=asset-budget-mb needs a whole number of megabytes"
 			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidAssetBudget PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+	# A frame count that is not a positive whole number is refused, so a mistyped check cannot run forever.
+	foreach(frames abc 0 -5)
+		add_test(NAME StrataRuntime.InvalidFrames.${frames}
+			COMMAND "${CMAKE_COMMAND}"
+				"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--headless;--frames;${frames}"
+				"-DEXPECTED_OUTPUT=--frames needs a positive whole number of frames"
+				-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+		set_tests_properties(StrataRuntime.InvalidFrames.${frames} PROPERTIES FIXTURES_REQUIRED StrataExportedGame TIMEOUT 60)
+	endforeach()
 	# --perf-log writes a CSV row per frame (FramePerfLog), also headless; the check reads it back (Runtime/PerfLogReader.h).
 	add_test(NAME StrataRuntime.PerfLog
 		COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 30 --perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLog.csv")
@@ -658,18 +668,160 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		set_tests_properties(StrataEditor.Install PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
 	endif()
 
-	# The Tetris sample (Samples/Tetris), played through the real editor with simulated input: its scripts are built, moves
-	# from its fixed piece sequence clear a line (checked on the HUD), gravity ends the game, it restarts, and the exported
-	# game runs headless (see Editor/TetrisSample.cmake).
+	# The sample projects (Samples/<Directory>), each played through the real editor by its command script (scripts built,
+	# simulated input, "expect" and "until" checks), exported full and pruned, and both games run headless
+	# (Editor/SampleProject.cmake). Messages a run may log are listed with their reasons; any other warning fails it.
+	# Tetris: moves from its fixed piece sequence clear a line (checked on the HUD), gravity ends the game, it restarts.
 	add_test(NAME StrataEditor.Tetris
 		COMMAND "${CMAKE_COMMAND}"
 			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
 			"-DSAMPLE_DIR=${PROJECT_SOURCE_DIR}/Samples/Tetris"
+			"-DPROJECT_FILE=Tetris.stproj"
+			"-DGAME=Tetris"
 			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/TetrisCommands.json.in"
-			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/TetrisSample/$<CONFIG>"
+			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/Samples/Tetris/$<CONFIG>"
 			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
-			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/TetrisSample.cmake")
+			"-DEDITOR_EXPECT=Tetris: new game with seed 60|Tetris: cleared 1 line; score 209, lines 1, level 2|Tetris: game over|Tetris: new game with seed 61"
+			"-DGAME_EXPECT=Loaded script module 'TetrisScripts'|Tetris: new game with seed 60|Tetris: piece 1 is J, next I"
+			# A fresh copy has never built its scripts: opening its scene says so, and play.start builds them.
+			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'Tetris' are not built yet"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
 	set_tests_properties(StrataEditor.Tetris PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
+	# The Physics Playground: about 600 bodies settle (a tower, a pyramid, 500 balls), ghosts sink through the balls to the pit's
+	# floor (their layers do not collide), the domino run falls, the goal counts what the funnel feeds it, a shot flies along
+	# the view, a hot reload keeps the fields and R resets the scene; the checks run paused, so "until" waits in exact steps.
+	# The exported games run the demo by themselves.
+	add_test(NAME StrataEditor.PhysicsPlayground
+		COMMAND "${CMAKE_COMMAND}"
+			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
+			"-DSAMPLE_DIR=${PROJECT_SOURCE_DIR}/Samples/PhysicsPlayground"
+			"-DPROJECT_FILE=PhysicsPlayground.stproj"
+			"-DGAME=PhysicsPlayground"
+			# Debug runs only the pruned game: the full one runs the same scripts (Release, Dist and the other platforms run both).
+			"-DGAME_RUNS=$<IF:$<CONFIG:Debug>,pruned,full|pruned>"
+			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/PhysicsPlaygroundCommands.json.in"
+			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/Samples/PhysicsPlayground/$<CONFIG>"
+			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DEDITOR_EXPECT=Playground: 615 bodies|Playground: domino run complete|Playground: goal scored|Playground: scripts reloaded (1)|Playground: reset"
+			"-DGAME_EXPECT=Loaded script module 'PhysicsPlaygroundScripts'|Playground: 615 bodies|Playground: domino run complete|Playground: goal scored"
+			"-DGAME_FRAMES=900"
+			# A fresh copy has never built its scripts: opening its scene says so, and play.start builds them.
+			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'PhysicsPlayground' are not built yet"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
+	set_tests_properties(StrataEditor.PhysicsPlayground PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain
+		FIXTURES_SETUP StrataPhysicsPlaygroundExport)
+	# The exported Playground in a window: its demo plays for ten seconds, the last frame shows the arena, and its physics
+	# took time every frame (Scene.Physics in the perf log).
+	set(STRATA_PLAYGROUND_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/PhysicsPlayground/$<CONFIG>")
+	add_test(NAME StrataRuntime.PhysicsPlaygroundWindowed
+		COMMAND "${STRATA_PLAYGROUND_DIR}/Build/PhysicsPlayground${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1280x720 --frames 600
+			--screenshot "${STRATA_PLAYGROUND_DIR}/Windowed.png" --perf-log "${STRATA_PLAYGROUND_DIR}/Windowed.csv" --save-directory "${STRATA_PLAYGROUND_DIR}/WindowedSaves")
+	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataPhysicsPlaygroundExport
+		FIXTURES_SETUP StrataPhysicsPlaygroundWindowed)
+	add_test(NAME StrataRuntime.PhysicsPlaygroundWindowedImage COMMAND StrataTests --strata-test-helper=check-image "${STRATA_PLAYGROUND_DIR}/Windowed.png" --size 1280x720)
+	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataPhysicsPlaygroundWindowed)
+	add_test(NAME StrataRuntime.PhysicsPlaygroundWindowedPerf
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_PLAYGROUND_DIR}/Windowed.csv" 600 --nonzero Scene.Physics)
+	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataPhysicsPlaygroundWindowed)
+	# The Open World: a streamed island (a world of three layers over 97 terrain tiles in the persistent scene, 20,000 props,
+	# 30 foxes, five camps). The explorer streams cells in, walks on the terrain, teleports 500 m once the cells and the ground
+	# there are in, a fox wanders and the campfires light at dusk; the exported games fly the tour over cooked cells, their
+	# perf logs showing cells loaded, streaming at work and no body waiting for its collider.
+	add_test(NAME StrataEditor.OpenWorld
+		COMMAND "${CMAKE_COMMAND}"
+			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
+			"-DSAMPLE_DIR=${PROJECT_SOURCE_DIR}/Samples/OpenWorld"
+			"-DPROJECT_FILE=OpenWorld.stproj"
+			"-DGAME=OpenWorld"
+			# Debug runs only the pruned game: the full one runs the same scripts (Release, Dist and the other platforms run both).
+			"-DGAME_RUNS=$<IF:$<CONFIG:Debug>,pruned,full|pruned>"
+			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/OpenWorldCommands.json.in"
+			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/Samples/OpenWorld/$<CONFIG>"
+			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DEDITOR_EXPECT=OpenWorld: walking|OpenWorld: arrived at Teleport3|OpenWorld: campfires lit"
+			"-DGAME_EXPECT=Loaded script module 'OpenWorldScripts'|OpenWorld: tour started|OpenWorld: tour reached waypoint 8"
+			"-DGAME_FRAMES=1800"
+			"-DPERF_LOG=ON"
+			"-DPERF_CHECKER=$<TARGET_FILE:StrataTests>"
+			"-DPERF_CHECK=--nonzero|WorldCellsLoaded|--nonzero|World.Streaming|--max|PhysicsBodiesWaiting|0"
+			# A fresh copy has never built its scripts: opening its scene says so, and play.start builds them.
+			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'OpenWorld' are not built yet"
+			# On CI's runners the editor's play copy loads and cooks the terrain's 97 mesh colliders while the start's cells
+			# stream in, and the paused game's waits for the cells step it, so its simulation may start after physics' 10 s
+			# (of simulation time) without some of them. Nothing falls meanwhile: the explorer flies until a ray finds the
+			# ground under it, and the regression waits for every body to be built (physics.stats' pendingOther 0) before it
+			# walks. The exported games load the island before it plays and must not need this.
+			"-DEDITOR_ALLOWED_MESSAGES=\\[warning\\] Strata: Physics: scene 'Island' starts simulating after waiting 10 s for meshes"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
+	set_tests_properties(StrataEditor.OpenWorld PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataOpenWorldExport)
+	# In a window at 1920 x 1080 with a small texture budget (mip streaming under pressure): the island fills the picture,
+	# and the perf log shows cells loaded, streaming and the GPU at work, and no body waiting for its collider.
+	set(STRATA_OPEN_WORLD_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/OpenWorld/$<CONFIG>")
+	add_test(NAME StrataRuntime.OpenWorldWindowed
+		COMMAND "${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1920x1080 --frames 1200 --asset-budget-mb 128
+			--screenshot "${STRATA_OPEN_WORLD_DIR}/Windowed.png" --perf-log "${STRATA_OPEN_WORLD_DIR}/Windowed.csv"
+			--save-directory "${STRATA_OPEN_WORLD_DIR}/WindowedSaves")
+	set_tests_properties(StrataRuntime.OpenWorldWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldExport FIXTURES_SETUP StrataOpenWorldWindowed)
+	add_test(NAME StrataRuntime.OpenWorldWindowedImage
+		COMMAND StrataTests --strata-test-helper=check-image "${STRATA_OPEN_WORLD_DIR}/Windowed.png" --size 1920x1080 --dominant green 5)
+	set_tests_properties(StrataRuntime.OpenWorldWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
+	add_test(NAME StrataRuntime.OpenWorldWindowedPerf
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_OPEN_WORLD_DIR}/Windowed.csv" 1200 --nonzero WorldCellsLoaded
+			--nonzero World.Streaming --nonzero GPUBusyMs --max PhysicsBodiesWaiting 0)
+	set_tests_properties(StrataRuntime.OpenWorldWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
+	# The editor with a GPU at the start: the GPU-driven path draws thousands of instances in a few indirect commands.
+	add_test(NAME StrataEditor.OpenWorldRender
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
+			"-DARGUMENTS=--headless|--no-automation|--quit-after-commands|--frames|36000|--project|${STRATA_OPEN_WORLD_DIR}/Project|--commands|${CMAKE_CURRENT_SOURCE_DIR}/Editor/OpenWorldRenderCommands.json"
+			"-DEXPECT=Command script finished (" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataEditor.OpenWorldRender PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldExport)
+	# The tour's frames at 1920 x 1080 (Release and Dist, PerfGPU.Samples): the exported game started once per attempt, its
+	# metrics provisional while the reference machine is away (StrataTests/Perf/Budgets.json).
+	add_test(NAME StrataTests.PerfGPU.Samples
+		COMMAND StrataTests --test-suite=PerfGPU.Samples* --no-intro=true
+		CONFIGURATIONS Release Dist
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+	set_tests_properties(StrataTests.PerfGPU.Samples PROPERTIES LABELS "perf;gpu" RUN_SERIAL TRUE
+		FIXTURES_REQUIRED "StrataOpenWorldExport;StrataPerfResults"
+		ENVIRONMENT "STRATA_OPEN_WORLD_GAME=${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX}")
+	# The Third-Person Adventure: the main menu's Play loads the course (Game::LoadScene); the robot walks where the camera looks
+	# (its animator in Walk or Run while it moves, Idle after), jumps, pushes the crate, collects a coin, pauses at time scale
+	# 0 and saves a setting from the pause menu, and completes the course at the goal. The exported games wait in the main
+	# menu until its attract mode loads the course from the cooked pack, behind the loading scene, and walks to a coin.
+	add_test(NAME StrataEditor.ThirdPerson
+		COMMAND "${CMAKE_COMMAND}"
+			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
+			"-DSAMPLE_DIR=${PROJECT_SOURCE_DIR}/Samples/ThirdPerson"
+			"-DPROJECT_FILE=ThirdPerson.stproj"
+			"-DGAME=ThirdPerson"
+			# Debug runs only the pruned game: the full one runs the same scripts (Release, Dist and the other platforms run both).
+			"-DGAME_RUNS=$<IF:$<CONFIG:Debug>,pruned,full|pruned>"
+			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/ThirdPersonCommands.json.in"
+			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/Samples/ThirdPerson/$<CONFIG>"
+			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DEDITOR_EXPECT=ThirdPerson: main menu ready|ThirdPerson: starting the course|ThirdPerson: course loaded (12 coins)|ThirdPerson: coin 1 of 12|ThirdPerson: paused|ThirdPerson: settings saved|ThirdPerson: resumed|ThirdPerson: course complete in"
+			"-DGAME_EXPECT=Loaded script module 'ThirdPersonScripts'|ThirdPerson: main menu ready|ThirdPerson: attract mode|ThirdPerson: course loaded (12 coins, attract mode)|ThirdPerson: coin 1 of 12"
+			"-DGAME_FRAMES=1800"
+			# A fresh copy has never built its scripts: opening its scene says so, and play.start builds them. The robot's three
+			# facial expressions are morph targets, which the glTF importer skips (its face stays neutral).
+			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'ThirdPerson' are not built yet|\\[warning\\] Strata: Import 'Models/Robot/RobotExpressive.glb': Not imported: morph target"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
+	set_tests_properties(StrataEditor.ThirdPerson PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataThirdPersonExport)
+	# The exported game in a window: its main menu, the robot dancing on its island under the title and the menu; the perf
+	# log shows the robot's animation, the menu's UI and the GPU at work.
+	set(STRATA_THIRD_PERSON_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/ThirdPerson/$<CONFIG>")
+	add_test(NAME StrataRuntime.ThirdPersonWindowed
+		COMMAND "${STRATA_THIRD_PERSON_DIR}/Build/ThirdPerson${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1280x720 --frames 300
+			--screenshot "${STRATA_THIRD_PERSON_DIR}/Windowed.png" --perf-log "${STRATA_THIRD_PERSON_DIR}/Windowed.csv"
+			--save-directory "${STRATA_THIRD_PERSON_DIR}/WindowedSaves")
+	set_tests_properties(StrataRuntime.ThirdPersonWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonExport FIXTURES_SETUP StrataThirdPersonWindowed)
+	add_test(NAME StrataRuntime.ThirdPersonWindowedImage
+		COMMAND StrataTests --strata-test-helper=check-image "${STRATA_THIRD_PERSON_DIR}/Windowed.png" --size 1280x720)
+	set_tests_properties(StrataRuntime.ThirdPersonWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonWindowed)
+	add_test(NAME StrataRuntime.ThirdPersonWindowedPerf
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_THIRD_PERSON_DIR}/Windowed.csv" 300 --nonzero Scene.Animation
+			--nonzero Scene.UI --nonzero GPUBusyMs)
+	set_tests_properties(StrataRuntime.ThirdPersonWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonWindowed)
 endif()
 
 # input.sequence through the real editor (Editor/InputSequenceCommands.json.in, on a copy of the feature project): the same

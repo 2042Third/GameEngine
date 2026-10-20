@@ -43,7 +43,7 @@ namespace Strata
 	bool InputSequence::ApplyEvents(EditorContext& context, std::string* outError)
 	{
 		SimulatedInput& input = context.GetSimulatedInput();
-		const uint64_t fixedSteps = context.GetFixedStepCount();
+		const uint64_t fixedSteps = context.GetInputStepCount();
 		for (; m_NextEvent < m_Events.size() && m_Events[m_NextEvent].Step == m_Result.StepsRun; m_NextEvent++)
 		{
 			const Event& event = m_Events[m_NextEvent];

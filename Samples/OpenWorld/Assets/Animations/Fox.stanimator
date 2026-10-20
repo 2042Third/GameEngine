@@ -1,0 +1,34 @@
+{
+	"AnimationController": {
+		"DefaultState": "Survey",
+		"Parameters": [],
+		"States": [
+			{
+				"Clip": "C76C20E3EAFFADA5",
+				"Events": [],
+				"Loop": true,
+				"Name": "Survey",
+				"Speed": 1.0
+			},
+			{
+				"Clip": "2E1B7151CB357CAF",
+				"Events": [],
+				"Loop": true,
+				"Name": "Walk",
+				"Speed": 1.0
+			},
+			{
+				"Clip": "A750B2E423EF3743",
+				"Events": [],
+				"Loop": true,
+				"Name": "Run",
+				"Speed": 1.0
+			}
+		],
+		"Transitions": []
+	},
+	"Strata": {
+		"Format": "AnimationController",
+		"Version": 1
+	}
+}

@@ -425,6 +425,36 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Commands.Execute(harness.Context, "editor.batch", { { "steps", tooMany } }).ErrorKind == EditorCommandError::InvalidParameters);
 	}
 
+	TEST_CASE("prefab.instantiate {instances} keeps the prefab root's transform values an instance does not give")
+	{
+		CommandHarness harness;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorInstantiateManyScale") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		const std::string domino = harness.Run("entity.create", { { "name", "Domino" }, { "components", {
+			{ "Transform", { { "Scale", { 0.5, 1.0, 0.15 } }, { "Rotation", { 0.0, 30.0, 0.0 } } } },
+			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } })["id"].get<std::string>();
+		const nlohmann::json prefab = harness.Run("prefab.create", { { "entities", { domino } }, { "path", "Prefabs/Domino.stprefab" }, { "link", false } })["asset"];
+		const glm::quat turned = harness.Context.GetEditScene()->GetEntityByUUID(*UUIDFromJson(domino)).GetComponent<TransformComponent>().Rotation;
+
+		// Made together (only a Transform each): what an instance leaves out comes from the prefab's root, as for one instance.
+		const nlohmann::json result = harness.Run("prefab.instantiate", { { "prefab", prefab }, { "instances", {
+			{ { "components", { { "Transform", { { "Translation", { 1.0, 0.0, 0.0 } } } } } } },
+			{ { "components", { { "Transform", { { "Translation", { 2.0, 0.0, 0.0 } }, { "Rotation", { 0.0, 90.0, 0.0 } } } } } } },
+			{ { "components", { { "Transform", { { "Scale", { 2.0, 2.0, 2.0 } } } } } } },
+			nlohmann::json::object() } } });
+		REQUIRE(result["instances"].size() == 4);
+		const Scene& scene = *harness.Context.GetEditScene();
+		const auto transformOf = [&](size_t index) { return scene.GetEntityByUUID(*UUIDFromJson(result["instances"][index]["id"])).GetComponent<TransformComponent>(); };
+		const auto isClose = [](const glm::vec3& a, const glm::vec3& b) { return glm::all(glm::epsilonEqual(a, b, 1e-5f)); };
+		CHECK(isClose(transformOf(0).Translation, glm::vec3(1.0f, 0.0f, 0.0f)));
+		CHECK(isClose(transformOf(0).Scale, glm::vec3(0.5f, 1.0f, 0.15f)));
+		CHECK(std::abs(glm::dot(transformOf(0).Rotation, turned)) > 0.9999f);
+		CHECK(isClose(transformOf(1).Scale, glm::vec3(0.5f, 1.0f, 0.15f)));
+		CHECK(isClose(transformOf(2).Scale, glm::vec3(2.0f)));
+		CHECK(isClose(transformOf(3).Scale, glm::vec3(0.5f, 1.0f, 0.15f)));
+		CHECK(harness.Run("prefab.status", { { "entity", result["instances"][3]["id"] } })["modified"] == false);
+	}
+
 	TEST_CASE("prefab.instantiate {instances} makes a thousand instances in one undo step")
 	{
 		CommandHarness harness;

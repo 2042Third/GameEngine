@@ -52,6 +52,9 @@ namespace Strata
 		static bool MatchesSearch(const RecentProject& project, std::string_view search);
 		// The picture a recent project's card shows (null while it is read, without one and without a GPU).
 		nvrhi::ITexture* GetCardImage(const std::filesystem::path& projectFile);
+		// A sample's picture (project.samples' picture: a PNG file), read the same way: null until it is ready, or when it
+		// cannot be read.
+		nvrhi::ITexture* GetSampleImage(const std::filesystem::path& picture);
 
 		// The command line that adds Strata's MCP server to Claude Code: claude mcp add strata -- "<StrataCLI>" mcp
 		static std::string GetAgentCommandLine(const std::filesystem::path& cliExecutable);
@@ -62,6 +65,7 @@ namespace Strata
 			std::string Id;
 			std::string Name;
 			std::string Description;
+			std::filesystem::path Picture; // A sample's picture (project.samples); empty for templates and samples without one
 		};
 
 		// The columns the sections' cards share.
@@ -122,7 +126,9 @@ namespace Strata
 		bool m_StartersRead = false;
 		std::string m_Error;
 		std::string m_Search;
-		// The pictures of the recent projects, by project file (read again each time the launcher shows).
+		// Reads a picture file on an I/O job the first time it is asked for, then uploads it: null until then, or when it fails.
+		nvrhi::ITexture* GetImage(const std::filesystem::path& file);
+		// The pictures of the recent projects and the samples, by picture file (read again each time the launcher shows).
 		std::unordered_map<std::string, CardImage> m_CardImages;
 		nvrhi::CommandListHandle m_UploadCommands;
 	};

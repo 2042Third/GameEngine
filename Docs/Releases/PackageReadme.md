@@ -15,7 +15,7 @@ project's releases page: https://github.com/2042Third/GameEngine/releases
 | `StrataEditor` | The editor. Start it to get the launcher: new project, open a project, the samples, connecting an AI agent. |
 | `StrataRuntime` | Plays exported games. The editor copies it into every game it exports, renamed after the game. |
 | `StrataCLI` | Command-line client of a running editor, and an MCP server for AI agents (`StrataCLI mcp`). |
-| `Samples/` | Finished games to learn from (Tetris). The editor opens copies of them (Open Sample). |
+| `Samples/` | Finished games to learn from: Third-Person Adventure, Open World, Physics Playground and Tetris, each with a `README.md` of what it shows. The editor opens copies of them (Open Sample). |
 | `StrataScriptCore/` | The script SDK: the headers your scripts include and the CMake package their build uses. |
 | `Docs/Manual/` | Guides for making games: `Scripting.md`, `Worlds.md`, `Prefabs.md`, `GameView.md` and `GameUI.md`. |
 | `Skills/` | Guides for AI agents that make games with the editor (see "Connect an AI agent"). |
@@ -80,7 +80,9 @@ and get its exit code, pipe its output, e.g. `.\StrataEditor --version | Write-O
 ## Make a game
 
 1. Start `StrataEditor`. In the launcher choose **New Project**, pick the **Basic 3D** template (a lit scene with a
-   camera, a sun, a sky and a ground), a name and a folder. Or choose **Open Sample** and open a copy of Tetris.
+   camera, a sun, a sky and a ground), a name and a folder. Or choose **Open Sample** and open a copy of one of the
+   samples: the Third-Person Adventure (an animated character, menus, several scenes), the Open World (a streamed
+   island), the Physics Playground (hundreds of bodies to play with) or Tetris (a small scripted game).
 2. Build the scene with the Scene view, the Hierarchy and the Inspector. Drop models, textures and sounds onto the
    window to import them. Menus and HUDs are UI elements (**Hierarchy > + > UI**, see `Docs/Manual/GameUI.md`); a level
    too large to keep loaded is a world of streamed cells (**New > World** in the Content Browser, see

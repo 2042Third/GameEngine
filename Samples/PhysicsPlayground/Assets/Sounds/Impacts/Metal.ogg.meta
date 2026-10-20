@@ -1,0 +1,11 @@
+{
+	"Handle": "050F18D05F49A8EE",
+	"ImportSettings": {
+		"LoadMode": "Decompressed"
+	},
+	"Strata": {
+		"Format": "AssetMeta",
+		"Version": 1
+	},
+	"Type": "AudioClip"
+}

@@ -95,6 +95,15 @@ Design the code for verification before writing it:
   - Textures: normal maps and roughness maps import by their name tokens (`_normal`, `_n`, `_rough`...); `material.get`
     and `material.set` return `warnings` with a `fix` when a texture was imported for another use than its slot.
 
+### Downloaded assets
+
+Assets made by others must be CC0 or CC-BY 4.0 (with the attribution it asks for); leave out anything whose license is
+unclear. Download each pack into a new, empty directory, inspect and trim it with scripts kept elsewhere (`python3 -I`),
+and bring files in only through `asset.import`. Fix files the importer rejects before importing (Kenney's Nature Kit lists
+a child node as its scene's root: list the root nodes instead) and record every change. A sample in `Samples/` credits
+every imported file in its `CREDITS.md` table (`| Files | Source | Author | License | Attribution | Changes |`) and each
+pack in `ThirdPartyNotices.md`'s "Sample assets" table; `Samples.Content` checks both and the size budgets.
+
 ## 4. Scripts
 
 Write the sources (`script.create {"class": "Player"}` starts a class), then `script.build` (configures CMake on the
@@ -272,8 +281,9 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
   (`"ScaleMode": "ScaleWithScreen"`, `"ReferenceResolution": [1280, 720]`, `"MatchWidthOrHeight": 1`, and
   `"ReceivesInput": false` for a HUD that must never block clicks) and children with `UIRect` (anchors and pivot 0..1 of
   the parent's rect, top-left origin; `Position` and `Size` in canvas units, which are pixels at the reference
-  resolution) and `UIText`, `UIImage` (`CornerRadius`, `BorderWidth` for rounded, framed panels; a translucent `Color`)
-  or `UILayout` (a vertical or horizontal stack; children with `"FitContent": "Both"` take their text's size).
+  resolution) and `UIText`, `UIImage` (`CornerRadius`, `BorderWidth` for rounded, framed panels; a translucent `Color`;
+  or an imported PNG as a nine-slice image: `"Type": "Sliced"`, `SliceBorders` in texels, as the Playground's and the
+  Third-Person's buttons and panels use the Kenney UI Pack) or `UILayout` (a vertical or horizontal stack; children with `"FitContent": "Both"` take their text's size).
   `Samples/Tetris` shows the score on a rounded panel in the top-left corner and its messages on a centered panel. `Text`
   stays for world text (`ScreenSpace: false`, `FontSize` in world units); screen-space `Text` keeps its pixel size on
   every screen, so do not build HUDs with it. Panels with buttons in the level (a terminal, a shop sign) are canvases
@@ -319,6 +329,8 @@ play.stop
     result counts them); input given while paused arrives in the next step.
   - Input durations (`input.key {"steps": 20}`, `{"seconds": 0.5}`) count the game's fixed steps, not frames: a key held
     for 60 steps moves a player the same distance however fast the editor draws.
+    A pause menu at `Time::SetTimeScale(0)` runs no steps: taps then last frames instead, so `input.click` on its buttons
+    works too.
   - Or set slow timings with `script.setField` while exploring.
 - Check every feature you built: movement, rotation, repeats, scoring, level changes, game over, restart, pause.
 
@@ -343,6 +355,18 @@ StrataEditor --no-gpu --no-automation --quit-after-commands --project <dir> --co
 Entity IDs are stable once the scene is saved. Make timing-dependent outcomes deterministic with fields (no gravity
 while checking an exact score), then turn them back to let time play its part (fast gravity to reach game over).
 
+Outcomes that take game time (a domino run falling, a player reaching a coin) are waited for, not guessed: give the query
+step `"until": {"steps": 1200}` and it repeats until its `expect` holds, failing after 1,200 fixed steps (or `"seconds"`,
+300 by default). Pause first (`play.pause`): a paused wait runs one fixed step per attempt, so the check is exact on any
+machine. A check of a difference or an "or" (moved 3 m, Walk or Run) is a script field that computes it, since `expect`
+compares with constants only:
+
+```json
+{ "command": "play.pause", "parameters": { "paused": true } },
+{ "command": "script.get", "parameters": { "entity": "<game id>", "class": "Playground" },
+  "expect": { "/scripts/0/fields/DominoesDown": { "min": 60 } }, "until": { "steps": 1200 } }
+```
+
 Steps that create something can name what they made for later steps: `"bind": {"ball": "/id"}` on the step, then
 `{"$ref": "ball"}` wherever a later step's parameters need the ID. To turn how you built the scene into a script, export
 your session: `editor.activity.export {"path": "Build.json", "since": <the journal.latest you noted in section 1>}`
@@ -354,8 +378,8 @@ into it first, then run the script, which builds them.
 If the editor crashed or was killed, nothing you did is lost: the project's recovery journal kept the unsaved changes.
 `scene.recoveryStatus` lists entries (`complete: true` for a scene never saved: a snapshot of every entity rather than
 the changes), and `scene.recover {"scene": "<id>", "action": "apply"}` brings them back.
-In a source checkout, `StrataTests/Editor/TetrisCommands.json.in` and `TetrisSample.cmake` are the full example (CTest
-`StrataEditor.Tetris`).
+In a source checkout, `StrataTests/Editor/TetrisCommands.json.in` and `SampleProject.cmake` are the full example (CTest
+`StrataEditor.Tetris`; the runner fails on any warning the test does not list as expected).
 
 ## 8. Export and check the game
 
@@ -377,6 +401,34 @@ assets by path (`Assets::Find`, prefabs spawned by path), name them first with `
 start scene in the background (a black frame meanwhile): a large one can show a scene of its own while it loads,
 `project.setExportSettings {"loadingScene": "Scenes/Loading.stscene"}` (a small scene with a camera and a `Text`; its
 scripts read the start scene's progress with `Game::GetSceneLoadProgress()` for a loading bar).
+
+## Worked examples and recipes
+
+The samples in `Samples/` were made this way; their `README.md` says how, and `StrataTests/Editor/<Sample>Commands.json.in`
+is each one's regression:
+
+- **Tetris**: scripted rules on a grid, a HUD, generated sounds.
+- **PhysicsPlayground**: ~600 bodies placed with `prefab.instantiate {instances}`; shooting through the cursor (the camera's
+  field of view and the window size give the ray), grabbing (a velocity toward a point in front of the camera each fixed
+  step), impact sounds by material with a voice budget shared by every body, a trigger that counts balls, a collision
+  layer that passes through another (`scene.setSettings {layerNames, layerCollisions}`), R reloading the scene to reset.
+- **OpenWorld**: a generated terrain (`Tools/GenerateIslandTerrain.py`) kept in a world's persistent scene with static
+  mesh colliders; 20,000 props scattered into a world layer (`world.edit {editLayer}`, `world.loadCells` to pin the
+  region first, then `prefab.instantiate {instances}` steps); foxes with an animation controller; teleports that prefetch
+  cells and wait for the ground (`World::IsLoadedAround` plus a raycast); a day-night script driving the sun and the
+  procedural sky's colors; a camera tour; the export's loading scene with a progress bar.
+- **ThirdPerson**: a character controller whose child is a skinned model (scaled from `asset.info` bounds, turned 180
+  degrees: glTF faces +Z) with an animation controller (`animation.createController`: float, bool and trigger parameters,
+  cross-fades, `Footstep` events at times read off the clip's foot keys; the events reach scripts on the animator's
+  entity); camera-relative movement with coyote time; a follow camera whose arm a raycast shortens; triggers that collect
+  and launch; a crate the controller pushes; a main menu scene that loads the course (`Game::LoadScene`, the scene as an
+  asset field so pruned exports keep it); settings in a save file applied with `Audio::SetMasterVolume`,
+  `Game::SetWindowMode` and `Game::SetVSync`; a pause menu at time scale 0; an attract mode kept in the script module's
+  own state across scene loads; a flag in a hand (`AttachToJoint`: the joint's transform carries the model's scale, so
+  the child's scale divides by it).
+
+Every sample has a `Picture.png`: save the start scene in an editor with a GPU and copy `.strata/Thumbnail.png`; the
+launcher shows it and copies start with it.
 
 ## Pitfalls
 

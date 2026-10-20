@@ -134,10 +134,12 @@ namespace Strata
 				Cancel();
 				return;
 			}
-			// Complete, as captures wait for it: what loads, glyphs still being prepared, the finer levels of textures the view
-			// wants (a texture counts as loaded with its mip tail) and mesh renderers still on their way to the GPU.
+			// Complete, as captures wait for it: what loads, glyphs still being prepared (the scene's text and the game UI's),
+			// the finer levels of textures the view wants (a texture counts as loaded with its mip tail) and mesh renderers still
+			// on their way to the GPU.
 			const SceneRendererStats& stats = renderer->GetStats();
-			const bool incomplete = stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || stats.DeferredProxies > 0 || renderer->CountTexturesBelowWanted() > 0;
+			const bool incomplete = stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || stats.Overlays.PendingGlyphs > 0 || stats.DeferredProxies > 0
+				|| renderer->CountTexturesBelowWanted() > 0;
 			if (incomplete && ++m_Frames < c_MaxFrames)
 				return;
 			std::string error;

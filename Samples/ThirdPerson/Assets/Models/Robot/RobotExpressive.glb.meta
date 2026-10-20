@@ -1,0 +1,20 @@
+{
+	"Handle": "8ABBDFE3E9D1BBAA",
+	"ImportSettings": {
+		"GenerateLODs": true,
+		"ImportCameras": true,
+		"ImportLights": true,
+		"ImportMaterials": true,
+		"LODCount": 3,
+		"MaxTextureSize": 0,
+		"OptimizeMeshes": true,
+		"Scale": 1.0,
+		"TextureCompression": "Auto",
+		"TextureQuality": "High"
+	},
+	"Strata": {
+		"Format": "AssetMeta",
+		"Version": 1
+	},
+	"Type": "Model"
+}

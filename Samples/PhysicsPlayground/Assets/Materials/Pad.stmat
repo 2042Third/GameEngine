@@ -1,0 +1,41 @@
+{
+	"Material": {
+		"AlphaCutoff": 0.5,
+		"AlphaMode": "Opaque",
+		"BaseColor": [
+			1,
+			0.55,
+			0.1,
+			1
+		],
+		"BaseColorMap": "0000000000000000",
+		"DoubleSided": false,
+		"EmissiveColor": [
+			1,
+			0.45,
+			0.05
+		],
+		"EmissiveIntensity": 2,
+		"EmissiveMap": "0000000000000000",
+		"Metallic": 0,
+		"MetallicRoughnessMap": "0000000000000000",
+		"NormalMap": "0000000000000000",
+		"NormalScale": 1,
+		"OcclusionMap": "0000000000000000",
+		"OcclusionStrength": 1,
+		"Roughness": 0.4,
+		"UVOffset": [
+			0,
+			0
+		],
+		"UVTiling": [
+			1,
+			1
+		],
+		"Unlit": false
+	},
+	"Strata": {
+		"Format": "Material",
+		"Version": 1
+	}
+}

@@ -1,0 +1,3 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":1,"Entities":[
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"6F79AFE81713F212","Mesh":"0000000000000002"},"Name":{"Name":"BallMetal"},"RigidBody":{"AngularDamping":0.05,"ContinuousCollision":false,"Friction":0.3,"GravityScale":1,"IsTrigger":false,"Layer":1,"LinearDamping":0.05,"LockRotationX":false,"LockRotationY":false,"LockRotationZ":false,"Mass":3,"Restitution":0.15,"Type":"Dynamic"},"Script":{"Scripts":[{"Class":"Impact","Fields":{"Kind":{"Type":"Int","Value":1}}}]},"SphereCollider":{"Offset":[0,0,0],"Radius":0.5},"Tag":{"Tag":"Ball"},"Transform":{"Rotation":[0,0,0,1],"Scale":[0.5,0.5,0.5],"Translation":[0,0,0]}},"ID":"1991296CEC21F1C7"}
+]}}

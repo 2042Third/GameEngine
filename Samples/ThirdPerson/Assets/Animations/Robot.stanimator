@@ -1,0 +1,277 @@
+{
+	"AnimationController": {
+		"DefaultState": "Idle",
+		"Parameters": [
+			{
+				"Default": 0.0,
+				"Name": "Speed",
+				"Type": "Float"
+			},
+			{
+				"Default": true,
+				"Name": "Grounded",
+				"Type": "Bool"
+			},
+			{
+				"Name": "Jump",
+				"Type": "Trigger"
+			},
+			{
+				"Name": "Wave",
+				"Type": "Trigger"
+			},
+			{
+				"Name": "Dance",
+				"Type": "Trigger"
+			}
+		],
+		"States": [
+			{
+				"Clip": "E9C1D4AC112447DE",
+				"Events": [],
+				"Loop": true,
+				"Name": "Idle",
+				"Speed": 1.0
+			},
+			{
+				"Clip": "57D5825B3AB8DCFD",
+				"Events": [
+					{
+						"Name": "Footstep",
+						"Time": 0.019999999552965164
+					},
+					{
+						"Name": "Footstep",
+						"Time": 0.5
+					}
+				],
+				"Loop": true,
+				"Name": "Walk",
+				"Speed": 1.0
+			},
+			{
+				"Clip": "76CC7E24795F51DA",
+				"Events": [
+					{
+						"Name": "Footstep",
+						"Time": 0.2800000011920929
+					},
+					{
+						"Name": "Footstep",
+						"Time": 0.7599999904632568
+					}
+				],
+				"Loop": true,
+				"Name": "Run",
+				"Speed": 1.0
+			},
+			{
+				"Clip": "5C84360EC5B352B3",
+				"Events": [],
+				"Loop": false,
+				"Name": "Jump",
+				"Speed": 1.0
+			},
+			{
+				"Clip": "72385BA5BEF187AA",
+				"Events": [],
+				"Loop": false,
+				"Name": "Wave",
+				"Speed": 1.0
+			},
+			{
+				"Clip": "D2261DDA1C78AC15",
+				"Events": [],
+				"Loop": true,
+				"Name": "Dance",
+				"Speed": 1.0
+			}
+		],
+		"Transitions": [
+			{
+				"AnyState": true,
+				"CanTransitionToSelf": true,
+				"Conditions": [
+					{
+						"Mode": "Set",
+						"Parameter": "Jump"
+					}
+				],
+				"Duration": 0.10000000149011612,
+				"ExitTime": null,
+				"To": "Jump"
+			},
+			{
+				"Conditions": [
+					{
+						"Mode": "Greater",
+						"Parameter": "Speed",
+						"Threshold": 0.10000000149011612
+					}
+				],
+				"Duration": 0.15000000596046448,
+				"ExitTime": null,
+				"From": "Idle",
+				"To": "Walk"
+			},
+			{
+				"Conditions": [
+					{
+						"Mode": "Set",
+						"Parameter": "Wave"
+					}
+				],
+				"Duration": 0.20000000298023224,
+				"ExitTime": null,
+				"From": "Idle",
+				"To": "Wave"
+			},
+			{
+				"Conditions": [
+					{
+						"Mode": "Set",
+						"Parameter": "Dance"
+					}
+				],
+				"Duration": 0.25,
+				"ExitTime": null,
+				"From": "Idle",
+				"To": "Dance"
+			},
+			{
+				"Conditions": [
+					{
+						"Mode": "Greater",
+						"Parameter": "Speed",
+						"Threshold": 4.5
+					}
+				],
+				"Duration": 0.20000000298023224,
+				"ExitTime": null,
+				"From": "Walk",
+				"To": "Run"
+			},
+			{
+				"Conditions": [
+					{
+						"Mode": "Less",
+						"Parameter": "Speed",
+						"Threshold": 0.10000000149011612
+					}
+				],
+				"Duration": 0.20000000298023224,
+				"ExitTime": null,
+				"From": "Walk",
+				"To": "Idle"
+			},
+			{
+				"Conditions": [
+					{
+						"Mode": "Less",
+						"Parameter": "Speed",
+						"Threshold": 4.5
+					}
+				],
+				"Duration": 0.20000000298023224,
+				"ExitTime": null,
+				"From": "Run",
+				"To": "Walk"
+			},
+			{
+				"Conditions": [
+					{
+						"Mode": "True",
+						"Parameter": "Grounded"
+					},
+					{
+						"Mode": "Greater",
+						"Parameter": "Speed",
+						"Threshold": 0.10000000149011612
+					}
+				],
+				"Duration": 0.15000000596046448,
+				"ExitTime": 0.4000000059604645,
+				"From": "Jump",
+				"To": "Walk"
+			},
+			{
+				"Conditions": [
+					{
+						"Mode": "True",
+						"Parameter": "Grounded"
+					},
+					{
+						"Mode": "Less",
+						"Parameter": "Speed",
+						"Threshold": 0.10000000149011612
+					}
+				],
+				"Duration": 0.20000000298023224,
+				"ExitTime": 0.4000000059604645,
+				"From": "Jump",
+				"To": "Idle"
+			},
+			{
+				"Conditions": [
+					{
+						"Mode": "Greater",
+						"Parameter": "Speed",
+						"Threshold": 0.10000000149011612
+					}
+				],
+				"Duration": 0.15000000596046448,
+				"ExitTime": null,
+				"From": "Wave",
+				"To": "Walk"
+			},
+			{
+				"Conditions": [],
+				"Duration": 0.25,
+				"ExitTime": 0.9200000166893005,
+				"From": "Wave",
+				"To": "Idle"
+			},
+			{
+				"Conditions": [
+					{
+						"Mode": "Set",
+						"Parameter": "Dance"
+					}
+				],
+				"Duration": 0.25,
+				"ExitTime": null,
+				"From": "Wave",
+				"To": "Dance"
+			},
+			{
+				"Conditions": [
+					{
+						"Mode": "Greater",
+						"Parameter": "Speed",
+						"Threshold": 0.10000000149011612
+					}
+				],
+				"Duration": 0.15000000596046448,
+				"ExitTime": null,
+				"From": "Dance",
+				"To": "Walk"
+			},
+			{
+				"Conditions": [
+					{
+						"Mode": "Set",
+						"Parameter": "Wave"
+					}
+				],
+				"Duration": 0.25,
+				"ExitTime": null,
+				"From": "Dance",
+				"To": "Wave"
+			}
+		]
+	},
+	"Strata": {
+		"Format": "AnimationController",
+		"Version": 1
+	}
+}

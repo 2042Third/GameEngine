@@ -25,8 +25,8 @@ namespace Strata
 		uint16_t Code = 0;        // The key or mouse button; for gamepad controls SimulatedInput::MakeGamepadCode
 		float Value = 0.0f;       // A gamepad axis' value
 		uint64_t FirstFrame = 0;  // The input frame (Input::GetFrameIndex) the hold starts in
-		// The game's fixed steps (EditorContext::GetFixedStepCount) a tap covers, from the first one that sees it down to the
-		// last; LastStep 0 for a hold that lasts until it is released.
+		// The game's input steps (EditorContext::GetInputStepCount: its fixed steps, and its frames at time scale 0) a tap covers,
+		// from the first one that sees it down to the last; LastStep 0 for a hold that lasts until it is released.
 		uint64_t FirstStep = 0;
 		uint64_t LastStep = 0;
 		bool Ended = false;
@@ -56,7 +56,7 @@ namespace Strata
 		static constexpr uint32_t GetGamepadControl(uint16_t code) { return code & 0xFF; }
 
 		// Holds a key, mouse button or gamepad button for `steps` fixed steps of the game (a tap), or with 0 until Release or
-		// ReleaseAll. `fixedSteps` is the game's step count now (EditorContext::GetFixedStepCount): the tap covers the next
+		// ReleaseAll. `fixedSteps` is the game's input step count now (EditorContext::GetInputStepCount): the tap covers the next
 		// `steps` steps. The button goes down in the next input frame, unless another hold keeps it down already.
 		Ref<const SimulatedHold> Press(SimulatedControlType type, uint16_t code, uint32_t steps, uint64_t fixedSteps);
 		// Holds a gamepad axis at `value` (clamped to the axis' range) for `steps` fixed steps, or with 0 until released or
