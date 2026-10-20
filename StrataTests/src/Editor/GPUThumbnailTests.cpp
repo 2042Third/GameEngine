@@ -509,6 +509,80 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The project's picture waits for every glyph of the game UI's text")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUThumbnailUIText") / "Game";
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		const auto run = [&](std::string_view name, const nlohmann::json& parameters)
+		{
+			return Tests::RunCommandToCompletion(context, commands, name, parameters);
+		};
+		const auto frameUntil = [&](const std::function<bool()>& condition)
+		{
+			for (int frame = 0; frame < 3000 && !condition(); frame++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				context.Update(Timestep(1.0f / 60.0f));
+				gpu.GetDevice().EndFrame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return condition();
+		};
+		run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+
+		// One centered line of red text with more distinct glyphs than a frame rasterizes, seen by the scene's camera (the
+		// game's screen-space UI shows in the scene camera's view): drawn before they are all in the atlas, the line would have
+		// gaps where glyphs are missing.
+		run("entity.create", { { "name", "Camera" }, { "components", { { "Transform", { { "Translation", { 0.0, 1.0, 5.0 } } } },
+			{ "Camera", { { "Primary", true } } } } } });
+		const nlohmann::json text = run("ui.create", { { "type", "text" }, { "text", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" },
+			{ "anchor", "middleCenter" }, { "size", { 1800, 120 } } });
+		run("component.set", { { "entity", text["entity"] }, { "component", "UIText" }, { "values", { { "Color", { 1.0, 0.0, 0.0, 1.0 } },
+			{ "FontSize", 40.0 }, { "Alignment", "Center" } } } });
+		run("scene.saveAs", { { "path", "Scenes/Text.stscene" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+
+		const std::optional<std::vector<uint8_t>> png = FileSystem::ReadBytes(ProjectThumbnail::GetFile(directory));
+		REQUIRE(png);
+		const std::optional<ReadbackImage> image = ImageReader::DecodeRGBA8(*png);
+		REQUIRE(image);
+		std::vector<bool> redColumns(image->Width, false);
+		for (uint32_t y = 0; y < image->Height; y++)
+		{
+			for (uint32_t x = 0; x < image->Width; x++)
+			{
+				const glm::u8vec4 pixel = Tests::GetPixelRGBA8(*image, x, y);
+				if (pixel.r > 150 && pixel.g < 90 && pixel.b < 90)
+					redColumns[x] = true;
+			}
+		}
+		const auto first = std::find(redColumns.begin(), redColumns.end(), true);
+		REQUIRE(first != redColumns.end());
+		const uint32_t left = static_cast<uint32_t>(first - redColumns.begin());
+		const uint32_t right = static_cast<uint32_t>(redColumns.rend() - std::find(redColumns.rbegin(), redColumns.rend(), true)) - 1;
+		CAPTURE(left);
+		CAPTURE(right);
+		// The whole line, centered (its middle within 2% of the picture's), without gaps: each of 16 spans across it, about
+		// four characters wide, holds red.
+		const float middle = (static_cast<float>(left) + static_cast<float>(right)) * 0.5f;
+		CHECK(std::abs(middle - static_cast<float>(image->Width) * 0.5f) < static_cast<float>(image->Width) * 0.02f);
+		constexpr uint32_t c_Spans = 16;
+		for (uint32_t span = 0; span < c_Spans; span++)
+		{
+			const uint32_t begin = left + (right - left) * span / c_Spans;
+			const uint32_t end = left + (right - left) * (span + 1) / c_Spans;
+			CAPTURE(span);
+			CHECK(std::find(redColumns.begin() + begin, redColumns.begin() + end + 1, true) != redColumns.begin() + end + 1);
+		}
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The project's picture and prefab thumbnails wait until their mesh renderers reached the GPU")
 	{
 		Tests::GPUContext gpu;
