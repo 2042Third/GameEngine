@@ -167,8 +167,8 @@ ctest --preset macos-debug -LE perf
   test time: `StrataScriptCore.Package` and `.PackageDist`, `StrataTests.Package` (suites `Package*`),
   `StrataEditor.Scripts` (the real editor builds, plays and exports a scripted game,
   `StrataTests/Editor/ScriptsEndToEnd.cmake`) and `StrataEditor.Tetris` (the editor plays `Samples/Tetris` with
-  simulated input and checks its HUD, then exports it in full and pruned and runs both games headless,
-  `StrataTests/Editor/TetrisSample.cmake`) and `StrataEditor.Install` (installs the build into a fresh prefix, as a
+  simulated input and checks its HUD, then exports it in full and pruned and runs both games headless; every sample's test
+  runs on `StrataTests/Editor/SampleProject.cmake`, which also fails on warnings its `ALLOWED_MESSAGES` do not list) and `StrataEditor.Install` (installs the build into a fresh prefix, as a
   release archive holds it, and makes, builds, plays and exports a game with the installed editor alone,
   `StrataTests/Editor/InstallEndToEnd.cmake`); `-LE package` skips them on machines without a toolchain. Packaging and
   releases: Docs/DeveloperGuide.md, "Packages" and "Releases".

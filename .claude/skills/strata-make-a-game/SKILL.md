@@ -366,8 +366,8 @@ into it first, then run the script, which builds them.
 If the editor crashed or was killed, nothing you did is lost: the project's recovery journal kept the unsaved changes.
 `scene.recoveryStatus` lists entries (`complete: true` for a scene never saved: a snapshot of every entity rather than
 the changes), and `scene.recover {"scene": "<id>", "action": "apply"}` brings them back.
-In a source checkout, `StrataTests/Editor/TetrisCommands.json.in` and `TetrisSample.cmake` are the full example (CTest
-`StrataEditor.Tetris`).
+In a source checkout, `StrataTests/Editor/TetrisCommands.json.in` and `SampleProject.cmake` are the full example (CTest
+`StrataEditor.Tetris`; the runner fails on any warning the test does not list as expected).
 
 ## 8. Export and check the game
 

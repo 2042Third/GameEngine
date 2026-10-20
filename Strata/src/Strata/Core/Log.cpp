@@ -209,7 +209,7 @@ namespace Strata
 		if (specification.ConsoleOutput)
 		{
 			auto consoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-			consoleSink->set_pattern("%^[%T] %n: %v%$");
+			consoleSink->set_pattern("%^[%T] [%l] %n: %v%$");
 			writtenSinks.push_back(consoleSink);
 		}
 

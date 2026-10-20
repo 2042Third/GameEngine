@@ -658,17 +658,24 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		set_tests_properties(StrataEditor.Install PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
 	endif()
 
-	# The Tetris sample (Samples/Tetris), played through the real editor with simulated input: its scripts are built, moves
-	# from its fixed piece sequence clear a line (checked on the HUD), gravity ends the game, it restarts, and the exported
-	# game runs headless (see Editor/TetrisSample.cmake).
+	# The sample projects (Samples/<Directory>), each played through the real editor by its command script (scripts built,
+	# simulated input, "expect" and "until" checks), exported full and pruned, and both games run headless
+	# (Editor/SampleProject.cmake). Messages a run may log are listed with their reasons; any other warning fails it.
+	# Tetris: moves from its fixed piece sequence clear a line (checked on the HUD), gravity ends the game, it restarts.
 	add_test(NAME StrataEditor.Tetris
 		COMMAND "${CMAKE_COMMAND}"
 			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
 			"-DSAMPLE_DIR=${PROJECT_SOURCE_DIR}/Samples/Tetris"
+			"-DPROJECT_FILE=Tetris.stproj"
+			"-DGAME=Tetris"
 			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/TetrisCommands.json.in"
-			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/TetrisSample/$<CONFIG>"
+			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/Samples/Tetris/$<CONFIG>"
 			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
-			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/TetrisSample.cmake")
+			"-DEDITOR_EXPECT=Tetris: new game with seed 60|Tetris: cleared 1 line; score 209, lines 1, level 2|Tetris: game over|Tetris: new game with seed 61"
+			"-DGAME_EXPECT=Loaded script module 'TetrisScripts'|Tetris: new game with seed 60|Tetris: piece 1 is J, next I"
+			# A fresh copy has never built its scripts: opening its scene says so, and play.start builds them.
+			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'Tetris' are not built yet"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
 	set_tests_properties(StrataEditor.Tetris PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
 endif()
 

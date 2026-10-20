@@ -653,10 +653,14 @@ exercised by it.
   compiler at test time, like the other `package` tests: `StrataTests.Package` (doctest suites named `Package*`, e.g.
   `Package.ScriptBuild`: script.build, hot reload while playing, compiler diagnostics, export) and
   `StrataEditor.Scripts` (`Editor/ScriptsEndToEnd.cmake`: the real editor creates a project, builds and attaches a
-  script, plays and exports, and the game runs headless) and `StrataEditor.Tetris` (`Editor/TetrisSample.cmake`: the real
-  editor builds a copy of `Samples/Tetris`, plays it with `input.*` commands and `expect`s on its HUD from
-  `Editor/TetrisCommands.json.in`, and exports it; the game runs headless). A change to the sample's scene or scripts
-  must keep that command script passing. `StrataEditor.Install` (`Editor/InstallEndToEnd.cmake`) installs the build into
+  script, plays and exports, and the game runs headless) and the sample tests, `StrataEditor.Tetris` and the others
+  (`Editor/SampleProject.cmake`, one runner for every sample: the real editor builds a copy of the sample without its
+  `.strata`, runs `Editor/<Sample>Commands.json.in` (`input.*` commands, `expect` and `until` on its fields and HUD,
+  exports in full and pruned), its output must hold the test's `EDITOR_EXPECT` lines, both exports must hold the game,
+  manifest, pack and script module, and each game runs headless (`--save-directory` in the work directory, a perf log when
+  asked) printing the `GAME_EXPECT` lines; any warning, error or critical line that no `ALLOWED_MESSAGES` expression
+  matches fails the run, and the test's declaration says why each is expected). A change to a sample's scene or scripts
+  must keep its command script passing. `StrataEditor.Install` (`Editor/InstallEndToEnd.cmake`) installs the build into
   a fresh prefix, checks the layout (exactly the top-level entries a release holds), and makes a game with the installed
   editor alone: `project.create` from `basic3d`, `script.build` (whose cache must name the installation as
   `STRATA_ENGINE_DIR`, never the source tree), play and export; the exported game runs headless. The `Package*` suites
@@ -668,7 +672,9 @@ exercised by it.
 AGENTS.md, [Code style](../AGENTS.md#code-style-hazel-conventions), states the code style, the precompiled headers' rule
 in short ([Precompiled headers](#precompiled-headers) has it in full) and three conventions whose details are these:
 
-- **Logging:** the console and the log file are written by a thread of their own (`Core/BackgroundLogSink`): a log call
+- **Logging:** console lines are `[time] [level] logger: message` (the level, as the log file and `StrataCLI` write it, so
+  that output captured without colors still tells a warning from information: the sample tests fail on unexpected ones).
+  The console and the log file are written by a thread of their own (`Core/BackgroundLogSink`): a log call
   waits for them only for warnings and errors (flushed before the call returns) and while 65,536 messages are queued (a
   burst the writer cannot keep up with); what is queued is written at exit and by `Log::Shutdown`.
 - **Private files:** Windows security descriptors and their checks live in `Platform/Windows/WindowsFileSecurity`.

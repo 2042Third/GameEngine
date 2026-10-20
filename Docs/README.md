@@ -72,7 +72,7 @@ Task playbooks for people and AI agents, in `.claude/skills/<name>/SKILL.md`:
   `Assets/` with `.meta` files, C++ scripts in `Scripts/`). Open a copy of it from the launcher (Open Sample, or
   `project.openSample`) and press Play, which builds its scripts first; `StrataEditor --project Samples/Tetris` opens the
   sample itself, to change it. `Samples/Samples.json` lists the samples. The CTest `StrataEditor.Tetris`
-  (`StrataTests/Editor/TetrisSample.cmake`) plays a copy with simulated input, checks its HUD, exports it and runs the
+  (`StrataTests/Editor/SampleProject.cmake`) plays a copy with simulated input, checks its HUD, exports it and runs the
   exported game headless.
 
 ## Keeping the documentation current
