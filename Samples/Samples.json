@@ -9,6 +9,12 @@
 			"Name": "Tetris",
 			"Description": "The falling-block classic, made by an AI agent through the editor alone: C++ game scripts, a game UI HUD and sounds.",
 			"Picture": "Picture.png"
+		},
+		{
+			"Directory": "PhysicsPlayground",
+			"Name": "Physics Playground",
+			"Description": "Six physics stations and about 600 bodies to fly through and play with: stacks, dominoes, a ball pit, a goal and ghosts that pass through balls. Shoot, grab, pour and reset.",
+			"Picture": "Picture.png"
 		}
 	]
 }

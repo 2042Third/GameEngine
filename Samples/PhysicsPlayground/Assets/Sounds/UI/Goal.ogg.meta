@@ -1,0 +1,11 @@
+{
+	"Handle": "DBFE804ED7EB8DA1",
+	"ImportSettings": {
+		"LoadMode": "Decompressed"
+	},
+	"Strata": {
+		"Format": "AssetMeta",
+		"Version": 1
+	},
+	"Type": "AudioClip"
+}

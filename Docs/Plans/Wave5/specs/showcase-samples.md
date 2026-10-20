@@ -352,7 +352,10 @@ exactly):
   `ShotSpeed` (the expected value is the field's default, written into the check).
 - `script.reload` while playing: `Reloads` 1, `Shots` still 1 and `Bodies` the scene's count plus the poured and shot balls
   (known numbers), and the playground goes on (a domino reset and rerun reaches 60 again).
-- R: `DominoesDown` 0 and `TowerTopDrift` below 0.05 after 60 steps; the log has "Playground: reset".
+- R (the scene loaded again): after 60 steps `Bodies` the scene's count, `DominoesDown` 0, `Shots` 0 and `TowerTopDrift` at
+  most 0.25; the log has "Playground: reset". (Changed when made: `TowerTopDrift` is the top crate's sideways movement, and
+  the 12-crate stack sways a few centimeters while it settles under any engine, so the reset is told by the counts, not by
+  a drift below 0.05.)
 - Export full and pruned. `alwaysInclude` names only what scripts load by path and no scene references (pruned packs keep
   every scene with its closure anyway): the ball prefab the shots and pours spawn and the impact sounds played by path.
   Both games headless for 900 frames print "Playground: 6xx bodies" (the count from the scene), "Playground: domino run

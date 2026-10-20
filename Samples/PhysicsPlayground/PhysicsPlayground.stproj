@@ -1,0 +1,21 @@
+{
+	"Project": {
+		"AssetDirectory": "Assets",
+		"Export": {
+			"AlwaysInclude": [
+				"Prefabs/Ball.stprefab",
+				"Sounds/Impacts"
+			]
+		},
+		"Name": "PhysicsPlayground",
+		"Scripts": {
+			"ModuleName": "PhysicsPlaygroundScripts",
+			"SourceDirectory": "Scripts"
+		},
+		"StartScene": "51ED0D2229085C4F"
+	},
+	"Strata": {
+		"Format": "Project",
+		"Version": 2
+	}
+}

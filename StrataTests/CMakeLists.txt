@@ -686,6 +686,40 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'Tetris' are not built yet"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
 	set_tests_properties(StrataEditor.Tetris PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
+	# The Physics Playground: about 600 bodies settle (a tower, a pyramid, 500 balls), ghosts sink through the balls to the pit's
+	# floor (their layers do not collide), the domino run falls, the goal counts what the funnel feeds it, a shot flies along
+	# the view, a hot reload keeps the fields and R resets the scene; the checks run paused, so "until" waits in exact steps.
+	# The exported games run the demo by themselves.
+	add_test(NAME StrataEditor.PhysicsPlayground
+		COMMAND "${CMAKE_COMMAND}"
+			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
+			"-DSAMPLE_DIR=${PROJECT_SOURCE_DIR}/Samples/PhysicsPlayground"
+			"-DPROJECT_FILE=PhysicsPlayground.stproj"
+			"-DGAME=PhysicsPlayground"
+			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/PhysicsPlaygroundCommands.json.in"
+			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/Samples/PhysicsPlayground/$<CONFIG>"
+			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DEDITOR_EXPECT=Playground: 615 bodies|Playground: domino run complete|Playground: goal scored|Playground: scripts reloaded (1)|Playground: reset"
+			"-DGAME_EXPECT=Loaded script module 'PhysicsPlaygroundScripts'|Playground: 615 bodies|Playground: domino run complete|Playground: goal scored"
+			"-DGAME_FRAMES=900"
+			# A fresh copy has never built its scripts: opening its scene says so, and play.start builds them.
+			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'PhysicsPlayground' are not built yet"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
+	set_tests_properties(StrataEditor.PhysicsPlayground PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain
+		FIXTURES_SETUP StrataPhysicsPlaygroundExport)
+	# The exported Playground in a window: its demo plays for ten seconds, the last frame shows the arena, and its physics
+	# took time every frame (Scene.Physics in the perf log).
+	set(STRATA_PLAYGROUND_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/PhysicsPlayground/$<CONFIG>")
+	add_test(NAME StrataRuntime.PhysicsPlaygroundWindowed
+		COMMAND "${STRATA_PLAYGROUND_DIR}/Build/PhysicsPlayground${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1280x720 --frames 600
+			--screenshot "${STRATA_PLAYGROUND_DIR}/Windowed.png" --perf-log "${STRATA_PLAYGROUND_DIR}/Windowed.csv" --save-directory "${STRATA_PLAYGROUND_DIR}/WindowedSaves")
+	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataPhysicsPlaygroundExport
+		FIXTURES_SETUP StrataPhysicsPlaygroundWindowed)
+	add_test(NAME StrataRuntime.PhysicsPlaygroundWindowedImage COMMAND StrataTests --strata-test-helper=check-image "${STRATA_PLAYGROUND_DIR}/Windowed.png" --size 1280x720)
+	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataPhysicsPlaygroundWindowed)
+	add_test(NAME StrataRuntime.PhysicsPlaygroundWindowedPerf
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_PLAYGROUND_DIR}/Windowed.csv" 600 --nonzero Scene.Physics)
+	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataPhysicsPlaygroundWindowed)
 endif()
 
 # input.sequence through the real editor (Editor/InputSequenceCommands.json.in, on a copy of the feature project): the same

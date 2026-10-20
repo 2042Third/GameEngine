@@ -1,0 +1,3 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":1,"Entities":[
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"138B8FCC64A3A821","Mesh":"0000000000000002"},"Name":{"Name":"BallWood"},"RigidBody":{"AngularDamping":0.05,"ContinuousCollision":false,"Friction":0.6,"GravityScale":1,"IsTrigger":false,"Layer":1,"LinearDamping":0.05,"LockRotationX":false,"LockRotationY":false,"LockRotationZ":false,"Mass":0.6,"Restitution":0.3,"Type":"Dynamic"},"Script":{"Scripts":[{"Class":"Impact","Fields":{"Kind":{"Type":"Int","Value":0}}}]},"SphereCollider":{"Offset":[0,0,0],"Radius":0.5},"Tag":{"Tag":"Ball"},"Transform":{"Rotation":[0,0,0,1],"Scale":[0.5,0.5,0.5],"Translation":[0,0,0]}},"ID":"5F3D18778EC6695E"}
+]}}

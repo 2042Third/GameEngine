@@ -49,3 +49,5 @@ are in the public domain; CC-BY packs ask for the attribution given here, which 
 
 | Sample | Pack | Source | Author | License | Attribution |
 | --- | --- | --- | --- | --- | --- |
+| Physics Playground | ambientCG Tiles101, Bricks076C, Planks037B, Concrete034, Plastic010, Metal032 | https://ambientcg.com/view?id=Tiles101, https://ambientcg.com/view?id=Bricks076C, https://ambientcg.com/view?id=Planks037B, https://ambientcg.com/view?id=Concrete034, https://ambientcg.com/view?id=Plastic010, https://ambientcg.com/view?id=Metal032 | ambientCG | CC0 1.0 | |
+| Physics Playground | Kenney Impact Sounds, Interface Sounds, Kenney Fonts | https://kenney.nl/assets/impact-sounds, https://kenney.nl/assets/interface-sounds, https://kenney.nl/assets/kenney-fonts | Kenney | CC0 1.0 | |
