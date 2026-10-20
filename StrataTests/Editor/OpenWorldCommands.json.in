@@ -8,7 +8,7 @@
 	{"command": "play.start", "expect": {"/state": {"equals": "Play"}}},
 	{"command": "play.pause", "parameters": {"paused": true}},
 	{"command": "world.status", "expect": {"/playing/loaded": {"min": 9}, "/playing/loading": {"equals": 0}}, "until": {"seconds": 300}},
-	{"command": "physics.stats", "expect": {"/waitingForMeshes": {"equals": 0}}, "until": {"seconds": 300}},
+	{"command": "physics.stats", "expect": {"/waitingForMeshes": {"equals": false}}, "until": {"seconds": 300}},
 	{"command": "input.key", "parameters": {"key": "Tab"}},
 	{"command": "script.get", "parameters": {"entity": {"$ref": "player"}, "class": "Explorer"}, "expect": {"/scripts/0/fields/Walking": {"equals": true}, "/scripts/0/fields/Grounded": {"equals": true}}, "until": {"steps": 300}},
 	{"command": "script.setField", "parameters": {"entity": {"$ref": "player"}, "class": "Explorer", "field": "DistanceWalked", "value": 0}},
