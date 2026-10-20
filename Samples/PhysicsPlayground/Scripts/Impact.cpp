@@ -62,7 +62,17 @@ public:
 private:
 	void FindSound()
 	{
-		m_Sound = Assets::Find(c_SoundPaths[std::clamp(Kind, 0, 2)]);
+		const char* path = c_SoundPaths[std::clamp(Kind, 0, 2)];
+		m_Sound = Assets::Find(path);
+		if (!m_Sound.IsValid())
+		{
+			// A game exported without it (the project's alwaysInclude names Sounds/Impacts): said once, the bodies stay silent.
+			static bool s_Reported = false;
+			if (!s_Reported)
+				Log::Warn("Playground: the impact sound '", path, "' is not in the game");
+			s_Reported = true;
+			return;
+		}
 		Assets::RequestLoad(m_Sound);
 	}
 private:
