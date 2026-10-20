@@ -445,13 +445,13 @@ TEST_SUITE("Editor.Commands")
 		REQUIRE(result["instances"].size() == 4);
 		const Scene& scene = *harness.Context.GetEditScene();
 		const auto transformOf = [&](size_t index) { return scene.GetEntityByUUID(*UUIDFromJson(result["instances"][index]["id"])).GetComponent<TransformComponent>(); };
-		const auto near = [](const glm::vec3& a, const glm::vec3& b) { return glm::all(glm::epsilonEqual(a, b, 1e-5f)); };
-		CHECK(near(transformOf(0).Translation, glm::vec3(1.0f, 0.0f, 0.0f)));
-		CHECK(near(transformOf(0).Scale, glm::vec3(0.5f, 1.0f, 0.15f)));
+		const auto isClose = [](const glm::vec3& a, const glm::vec3& b) { return glm::all(glm::epsilonEqual(a, b, 1e-5f)); };
+		CHECK(isClose(transformOf(0).Translation, glm::vec3(1.0f, 0.0f, 0.0f)));
+		CHECK(isClose(transformOf(0).Scale, glm::vec3(0.5f, 1.0f, 0.15f)));
 		CHECK(std::abs(glm::dot(transformOf(0).Rotation, turned)) > 0.9999f);
-		CHECK(near(transformOf(1).Scale, glm::vec3(0.5f, 1.0f, 0.15f)));
-		CHECK(near(transformOf(2).Scale, glm::vec3(2.0f)));
-		CHECK(near(transformOf(3).Scale, glm::vec3(0.5f, 1.0f, 0.15f)));
+		CHECK(isClose(transformOf(1).Scale, glm::vec3(0.5f, 1.0f, 0.15f)));
+		CHECK(isClose(transformOf(2).Scale, glm::vec3(2.0f)));
+		CHECK(isClose(transformOf(3).Scale, glm::vec3(0.5f, 1.0f, 0.15f)));
 		CHECK(harness.Run("prefab.status", { { "entity", result["instances"][3]["id"] } })["modified"] == false);
 	}
 
