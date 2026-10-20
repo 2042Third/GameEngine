@@ -453,4 +453,48 @@ TEST_SUITE("Physics.Hierarchy")
 		CHECK(signHit->HitEntity == sign);
 		CHECK(signHit->Point.y == doctest::Approx(7.5f).epsilon(1.0e-3));
 	}
+
+	TEST_CASE("A chain of moving dynamic bodies writes each one under its parent's new pose")
+	{
+		// Three dynamic bodies, each the child of the one before, all moving in the same step: every body's local transform must
+		// be written against its parent's pose of this step (parents first), or the scene places it where its parent was.
+		Scene scene;
+		struct Link
+		{
+			Entity Body;
+			glm::vec3 Start;
+			glm::vec3 Velocity;
+		};
+		std::vector<Link> chain = {
+			{ {}, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(0.0f, 0.0f, 2.0f) },
+			{ {}, glm::vec3(5.0f, 5.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f) },
+			{ {}, glm::vec3(10.0f, 5.0f, 0.0f), glm::vec3(2.0f, 0.0f, 0.0f) },
+		};
+		for (size_t index = 0; index < chain.size(); index++)
+		{
+			Link& link = chain[index];
+			link.Body = CreateDynamicBox(scene, "Link " + std::to_string(index), link.Start);
+			RigidBodyComponent& body = link.Body.GetComponent<RigidBodyComponent>();
+			body.GravityScale = 0.0f;
+			body.LinearDamping = 0.0f;
+			if (index > 0)
+				scene.SetParent(link.Body, chain[index - 1].Body);
+		}
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		for (const Link& link : chain)
+			REQUIRE(physics.SetLinearVelocity(link.Body, link.Velocity));
+
+		// Free, undamped motion: after one second each body is its velocity away from where it started.
+		const float timestep = scene.GetSettings().FixedTimestep;
+		const uint32_t steps = static_cast<uint32_t>(std::lround(1.0f / timestep));
+		StepScene(scene, steps);
+		const float seconds = static_cast<float>(steps) * timestep;
+		for (const Link& link : chain)
+		{
+			INFO(link.Body.GetName());
+			CHECK(Math::IsNearlyEqual(GetWorldPosition(scene, link.Body), link.Start + link.Velocity * seconds, 1.0e-3f));
+		}
+	}
 }

@@ -297,7 +297,7 @@ the helper process creates the 129th world without the check):
 | Contact seeding | do not seed wanted pairs from `b3Body_GetContactData` | "A watch begun while bodies touch ..." |
 | Contact filter | track every box3d contact event | `Physics.Scale` "Contacts are tracked only while someone wants them" |
 | Body ID order | create bodies in job order | `Physics.Capacity` "Bodies built on the job threads get the same IDs ..." |
-| Write-back order | write children before parents | `Physics.Simulation` "Parented dynamic bodies write their world transform through the hierarchy" |
+| Write-back order | write children before parents (nested bodies by depth, deepest first; or with their parents' writes) | `Physics.Hierarchy` "A chain of moving dynamic bodies writes each one under its parent's new pose" ("Parented dynamic bodies ..." has one body under a static parent, which no order changes) |
 | Character determinism | push bodies from the move jobs | `Physics.Character` "Characters move the same with any number of threads" |
 | World limit | create the 129th world without the check | "A scene that finds no free box3d world ..." (box3d asserts) |
 | Mass override | keep box3d's density mass | `Physics.Simulation` "Mass and damping shape the response ..." |
