@@ -692,10 +692,12 @@ namespace Strata
 			"workingSetMB and their peaks) and the sections of editor parts: automation (port, clients, connectedClients with the names agents "
 			"gave, pending requests and commands), assets (memory and budgets per pool, streaming queue, uploads; see asset.stats), game (the "
 			"running game's window requests, cursor and save directory), recovery (the edited scene's journal of unsaved changes and how many "
-			"recovery entries apply; see scene.recoveryStatus) and editor (window, frame rate, GPU). sections: [\"all\"] returns everything.",
+			"recovery entries apply; see scene.recoveryStatus), world (the open world: {name, cellsLoaded, cellsLoading, cellsDirty, "
+			"persistentDirty}, null when the edited scene is no world; see world.status) and editor (window, frame rate, GPU). sections: "
+			"[\"all\"] returns everything.",
 			ObjectSchema({ { "sections", { { "type", "array" }, { "items", { { "type", "string" } } }, { "uniqueItems", true },
 				{ "description", "Sections to add to the compact answer: engine, project, selection, undo, sceneLoad, memory, automation, assets, "
-					"game, recovery, editor, or all" } } } }),
+					"game, recovery, world, editor, or all" } } } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
