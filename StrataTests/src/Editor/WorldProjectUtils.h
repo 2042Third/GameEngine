@@ -17,6 +17,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
+#include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
 #include <Strata/World/WorldAsset.h>
 #include <Strata/World/WorldComponents.h>
@@ -24,6 +25,7 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/fmt/fmt.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -91,7 +93,7 @@ namespace Strata::Tests
 					const uint32_t bodies = (3 * x + 5 * z) % 7;
 					for (uint32_t index = 0; index < entities; index++)
 					{
-						Entity entity = cell->CreateEntityWithUUID(UUID(0x6F0000000000ull + (static_cast<uint64_t>(z * side + x) << 8) + index), fmt::format("Box {}", index));
+						Entity entity = cell->CreateEntityWithUUID(GetBoxID(static_cast<int32_t>(x), static_cast<int32_t>(z), index), fmt::format("Box {}", index));
 						TransformComponent& transform = entity.GetComponent<TransformComponent>();
 						transform.Translation = glm::vec3(x * c_GenCellSize + 4.0f + 7.0f * static_cast<float>(index % 4), 0.5f + static_cast<float>(index),
 							z * c_GenCellSize + 3.0f + 5.0f * static_cast<float>(index / 4));
@@ -132,6 +134,19 @@ namespace Strata::Tests
 		AssetHandle GetCell(int32_t x, int32_t z) const
 		{
 			return DeriveSubAssetHandle(World, fmt::format("Cell/1/{}/{}", x, z));
+		}
+
+		// The ID of box `index` of cell (x, z). Every cell has a "Box 0", and cells load in no promised order: a lookup by
+		// name finds the box of whichever loaded cell comes first in the hierarchy.
+		UUID GetBoxID(int32_t x, int32_t z, uint32_t index) const
+		{
+			return UUID(0x6F0000000000ull + (static_cast<uint64_t>(z * static_cast<int32_t>(Side) + x) << 8) + index);
+		}
+
+		// Box `index` of cell (x, z) in the edited scene (invalid while its cell is not loaded).
+		Entity FindBox(int32_t x, int32_t z, uint32_t index = 0)
+		{
+			return Context.GetEditScene()->GetEntityByUUID(GetBoxID(x, z, index));
 		}
 
 		static UUID ToUUID(const nlohmann::json& json)

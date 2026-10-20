@@ -419,7 +419,7 @@ TEST_SUITE("Editor.World")
 		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
 		Settle(project);
 		// An entity of cell (0, 0).
-		const Entity box = project.Context.GetEditScene()->FindEntityByName("Box 0");
+		const Entity box = project.FindBox(0, 0);
 		REQUIRE(box);
 		project.Run("component.set", { { "entity", UUIDToJson(box.GetUUID()) }, { "component", "Transform" }, { "values", { { "Scale", { 2.0, 2.0, 2.0 } } } } });
 		nlohmann::json status = project.Run("world.status", { { "cells", true } });
@@ -447,7 +447,7 @@ TEST_SUITE("Editor.World")
 		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
 		Settle(project);
 		EditorWorld& world = *project.Context.GetWorld();
-		const Entity box = project.Context.GetEditScene()->FindEntityByName("Box 0"); // Of cell (0, 0)
+		const Entity box = project.FindBox(0, 0);
 		REQUIRE(box);
 		const uint64_t before = world.GetSelectionPinLookups();
 		project.Context.Select(box.GetUUID());
@@ -515,7 +515,7 @@ TEST_SUITE("Editor.World")
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
 		// Cell A's box is edited, then saved.
-		const Entity box = project.Context.GetEditScene()->FindEntityByName("Box 0");
+		const Entity box = project.FindBox(0, 0);
 		REQUIRE(box);
 		const UUID boxID = box.GetUUID();
 		REQUIRE(project.Context.GetEditScene()->GetSubSceneStatus(project.Context.GetEditScene()->GetSubSceneOf(box))->Scene == project.GetCell(0, 0));
@@ -593,10 +593,15 @@ TEST_SUITE("Editor.World")
 		GatedJobSystem jobs;
 		GridWorldProject project("EditorWorldBackgroundSave", 3);
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		// The cells east of (0, 0) load first, so that a "Box 0" of theirs comes before its own in the hierarchy: the editor
+		// promises no order in which cells load, so the box is found by its ID.
+		LookFrom(project, glm::vec3(100.0f, 10.0f, 14.0f));
+		Settle(project);
 		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
 		Settle(project);
-		const Entity box = project.Context.GetEditScene()->FindEntityByName("Box 0");
+		const Entity box = project.FindBox(0, 0);
 		REQUIRE(box);
+		REQUIRE(CellOf(project.Context, box.GetUUID()) == project.GetCell(0, 0));
 		const UUID boxID = box.GetUUID();
 		const auto scale = [&](double value)
 		{
@@ -711,7 +716,7 @@ TEST_SUITE("Editor.World")
 		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
 		Settle(project);
 		// A box of cell (0, 0): its world transform and bounds are the scene's, whatever cell it is in.
-		const Entity box = project.Context.GetEditScene()->FindEntityByName("Box 0");
+		const Entity box = project.FindBox(0, 0);
 		REQUIRE(box);
 		REQUIRE(CellOf(project.Context, box.GetUUID()) == project.GetCell(0, 0));
 		const nlohmann::json id = UUIDToJson(box.GetUUID());
@@ -776,7 +781,7 @@ TEST_SUITE("Editor.World")
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		LookFrom(project, glm::vec3(30.0f, 10.0f, 14.0f));
 		Settle(project);
-		const Entity box = project.Context.GetEditScene()->FindEntityByName("Box 0");
+		const Entity box = project.FindBox(0, 0);
 		REQUIRE(box);
 		const UUID id = box.GetUUID();
 		const glm::vec3 before = box.GetComponent<TransformComponent>().Translation;
@@ -1029,7 +1034,7 @@ TEST_SUITE("Editor.World")
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
 		Settle(project);
-		const Entity box = project.Context.GetEditScene()->FindEntityByName("Box 0");
+		const Entity box = project.FindBox(0, 0);
 		REQUIRE(box);
 		project.Run("component.set", { { "entity", UUIDToJson(box.GetUUID()) }, { "component", "Transform" }, { "values", { { "Scale", { 2.0, 2.0, 2.0 } } } } });
 		const std::filesystem::path worlds = project.Directory / "Assets" / "Worlds" / "Gen";
