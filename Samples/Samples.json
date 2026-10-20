@@ -5,15 +5,9 @@
 	},
 	"Samples": [
 		{
-			"Directory": "Tetris",
-			"Name": "Tetris",
-			"Description": "The falling-block classic, made by an AI agent through the editor alone: C++ game scripts, a game UI HUD and sounds.",
-			"Picture": "Picture.png"
-		},
-		{
-			"Directory": "PhysicsPlayground",
-			"Name": "Physics Playground",
-			"Description": "Six physics stations and about 600 bodies to fly through and play with: stacks, dominoes, a ball pit, a goal and ghosts that pass through balls. Shoot, grab, pour and reset.",
+			"Directory": "ThirdPerson",
+			"Name": "Third-Person Adventure",
+			"Description": "Sky Islands: an animated robot runs, jumps and pushes a crate across floating islands to collect coins and race to the flag. Main menu, settings, pause menu and an attract mode.",
 			"Picture": "Picture.png"
 		},
 		{
@@ -23,9 +17,15 @@
 			"Picture": "Picture.png"
 		},
 		{
-			"Directory": "ThirdPerson",
-			"Name": "Third-Person Adventure",
-			"Description": "Sky Islands: an animated robot runs, jumps and pushes a crate across floating islands to collect coins and race to the flag. Main menu, settings, pause menu and an attract mode.",
+			"Directory": "PhysicsPlayground",
+			"Name": "Physics Playground",
+			"Description": "Six physics stations and about 600 bodies to fly through and play with: stacks, dominoes, a ball pit, a goal and ghosts that pass through balls. Shoot, grab, pour and reset.",
+			"Picture": "Picture.png"
+		},
+		{
+			"Directory": "Tetris",
+			"Name": "Tetris",
+			"Description": "The falling-block classic, made by an AI agent through the editor alone: C++ game scripts, a game UI HUD and sounds.",
 			"Picture": "Picture.png"
 		}
 	]
