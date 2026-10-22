@@ -118,7 +118,11 @@ strata_add_shaders(Strata_Renderer
 	VARIANTS
 		"Scene/Forward.frag|Scene/ForwardTransparent.frag|ST_FORWARD_TRANSPARENT"
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassNoEntityIDs.frag|ST_NO_ENTITY_IDS"
+		"Scene/DepthPrepass.frag|Scene/DepthPrepassVelocity.frag|ST_VELOCITY"
+		"Scene/DepthPrepass.frag|Scene/DepthPrepassNoEntityIDsVelocity.frag|ST_NO_ENTITY_IDS,ST_VELOCITY"
 		"Scene/Mesh.vert|Scene/MeshSkinned.vert|ST_SKINNED"
+		"Scene/Mesh.vert|Scene/MeshVelocity.vert|ST_VELOCITY"
+		"Scene/Mesh.vert|Scene/MeshSkinnedVelocity.vert|ST_SKINNED,ST_VELOCITY"
 		"Scene/ShadowMesh.vert|Scene/ShadowMeshSkinned.vert|ST_SKINNED"
 		"Scene/Cull.comp|Scene/CullShadow.comp|ST_CULL_SHADOW"
 		"Scene/HZBBuild.comp|Scene/HZBBuildArray.comp|ST_HZB_ARRAY"

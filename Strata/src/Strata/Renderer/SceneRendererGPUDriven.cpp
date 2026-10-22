@@ -1064,7 +1064,7 @@ namespace Strata
 		const GeometryPool& pool = *Renderer::GetGeometryPool();
 		const bool count = GetGPUIndirectPath() == GPUIndirectPath::Count;
 		nvrhi::GraphicsState state;
-		state.framebuffer = pass == Pass::Prepass ? m_PrepassFramebuffer.Get() : m_ForwardFramebuffer.Get();
+		state.framebuffer = pass == Pass::Prepass ? GetPrepassFramebuffer() : m_ForwardFramebuffer.Get();
 		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y)));
 		state.bindings = { m_GPUSceneBindingSet, Renderer::GetBindlessTextures().GetTable() };
 		state.indexBuffer = nvrhi::IndexBufferBinding { pool.GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
@@ -1077,7 +1077,7 @@ namespace Strata
 			const uint32_t slots = GetBucketSlots(bucket);
 			if (slots == 0 && !count)
 				continue;
-			const PipelineKey key { pass, parts.DoubleSided, parts.Mirrored, parts.Geometry == RenderData::c_CullGeometrySkinned };
+			const PipelineKey key { pass, parts.DoubleSided, parts.Mirrored, parts.Geometry == RenderData::c_CullGeometrySkinned, m_MotionFrame };
 			const GeometryArena arena = parts.Geometry == RenderData::c_CullGeometryStatic ? GeometryArena::Static : GeometryArena::Skinned;
 			state.pipeline = GetScenePipeline(key);
 			state.vertexBuffers = {

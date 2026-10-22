@@ -40,6 +40,8 @@ namespace Strata
 		constexpr nvrhi::Format c_DepthFormat = nvrhi::Format::D32;
 		constexpr nvrhi::Format c_NormalFormat = nvrhi::Format::RG16_FLOAT;
 		constexpr nvrhi::Format c_EntityIDFormat = nvrhi::Format::R32_UINT;
+		// Motion vectors in UV units: 11 significant bits keep a motion to about 2^-11 of its length.
+		constexpr nvrhi::Format c_VelocityFormat = nvrhi::Format::RG16_FLOAT;
 		constexpr nvrhi::Format c_HDRFormat = nvrhi::Format::RGBA16_FLOAT;
 		constexpr nvrhi::Format c_OutputFormat = nvrhi::Format::RGBA8_UNORM;
 		constexpr nvrhi::Format c_EnvironmentFormat = nvrhi::Format::RGBA16_FLOAT;
@@ -929,6 +931,33 @@ namespace Strata
 			ST_CORE_VERIFY(desc.CS && m_MotionCopyLayout, "SceneRenderer: the motion copy shader is missing");
 			m_MotionCopyPipeline = m_Device->createComputePipeline(desc);
 			ST_CORE_VERIFY(m_MotionCopyPipeline, "SceneRenderer: failed to create the motion copy pipeline");
+			ShaderLibrary& shaders = Renderer::GetShaderLibrary();
+			m_MeshVelocityVertexShader = shaders.Get("Scene/MeshVelocity.vert");
+			m_SkinnedMeshVelocityVertexShader = shaders.Get("Scene/MeshSkinnedVelocity.vert");
+			m_PrepassVelocityPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/DepthPrepassVelocity.frag" : "Scene/DepthPrepassNoEntityIDsVelocity.frag");
+			ST_CORE_VERIFY(m_MeshVelocityVertexShader && m_SkinnedMeshVelocityVertexShader && m_PrepassVelocityPixelShader,
+				"SceneRenderer: the velocity shaders are missing");
+		}
+		if (!m_VelocityTexture)
+		{
+			m_VelocityTexture = CreateRenderTarget(m_Device, m_ViewportSize.x, m_ViewportSize.y, c_VelocityFormat, m_Specification.DebugName + ".Velocity", false);
+			if (m_VelocityTexture)
+			{
+				nvrhi::FramebufferDesc desc;
+				desc.addColorAttachment(m_NormalTexture);
+				if (m_EntityIDTexture)
+					desc.addColorAttachment(m_EntityIDTexture);
+				desc.addColorAttachment(m_VelocityTexture);
+				desc.setDepthAttachment(m_DepthTexture);
+				m_MotionPrepassFramebuffer = m_Device->createFramebuffer(desc);
+			}
+			if (!m_VelocityTexture || !m_MotionPrepassFramebuffer)
+			{
+				m_VelocityTexture = nullptr;
+				m_MotionPrepassFramebuffer = nullptr;
+				m_Errors.Report(fmt::format("failed to create the velocity target for a {}x{} viewport; rendering without motion", m_ViewportSize.x, m_ViewportSize.y));
+				return false;
+			}
 		}
 		if (!keepContents)
 		{
@@ -1492,6 +1521,8 @@ namespace Strata
 		m_DepthPyramidLevels = 0;
 		release(m_CullBindingSet); // References the depth pyramid
 		// The motion history goes with the targets: the next frame that asks starts without one.
+		release(m_VelocityTexture);
+		release(m_MotionPrepassFramebuffer);
 		release(m_PreviousInstances);
 		release(m_PreviousPalette);
 		release(m_GrownPreviousInstances);
@@ -1694,12 +1725,12 @@ namespace Strata
 		desc.primType = nvrhi::PrimitiveType::TriangleList;
 		desc.inputLayout = key.Skinned ? m_SkinnedInputLayout : m_InputLayout;
 		if (key.Skinned)
-			desc.VS = shadowPass ? m_SkinnedShadowVertexShader : m_SkinnedMeshVertexShader;
+			desc.VS = shadowPass ? m_SkinnedShadowVertexShader : (key.Velocity ? m_SkinnedMeshVelocityVertexShader : m_SkinnedMeshVertexShader);
 		else
-			desc.VS = shadowPass ? m_ShadowVertexShader : m_MeshVertexShader;
+			desc.VS = shadowPass ? m_ShadowVertexShader : (key.Velocity ? m_MeshVelocityVertexShader : m_MeshVertexShader);
 		switch (key.PassType)
 		{
-			case Pass::Prepass:      desc.PS = m_PrepassPixelShader; break;
+			case Pass::Prepass:      desc.PS = key.Velocity ? m_PrepassVelocityPixelShader : m_PrepassPixelShader; break;
 			case Pass::ShadowMasked: desc.PS = m_ShadowMaskPixelShader; break;
 			case Pass::Shadow:       desc.PS = nullptr; break; // Depth only
 			case Pass::Transparent:  desc.PS = m_ForwardTransparentPixelShader; break;
@@ -1748,7 +1779,7 @@ namespace Strata
 		}
 
 		nvrhi::IFramebuffer* framebuffer = shadowPass ? m_ShadowFramebuffers[0].Get()
-			: (key.PassType == Pass::Prepass ? m_PrepassFramebuffer.Get() : m_ForwardFramebuffer.Get());
+			: (key.PassType == Pass::Prepass ? (key.Velocity ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get()) : m_ForwardFramebuffer.Get());
 		nvrhi::GraphicsPipelineHandle pipeline = m_Device->createGraphicsPipeline(desc, framebuffer->getFramebufferInfo());
 		ST_CORE_VERIFY(pipeline, "SceneRenderer: failed to create a scene pipeline");
 		m_ScenePipelines.emplace_back(key, pipeline);
@@ -1916,12 +1947,15 @@ namespace Strata
 			return;
 
 		nvrhi::GraphicsState state;
-		state.framebuffer = pass == Pass::Prepass ? m_PrepassFramebuffer.Get() : m_ForwardFramebuffer.Get();
+		state.framebuffer = pass == Pass::Prepass ? GetPrepassFramebuffer() : m_ForwardFramebuffer.Get();
 		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y)));
 		state.bindings = { m_SceneBindingSet, Renderer::GetBindlessTextures().GetTable() };
 		const uint32_t firstArgument = transparent ? static_cast<uint32_t>(m_OpaqueBatches.size()) : 0u;
+		// Transparent surfaces have no EQUAL test to agree with and write no motion: the plain shaders.
+		const bool velocity = m_MotionFrame && pass != Pass::Transparent;
 		DrawBuckets(commandList, state, batches, firstArgument,
-			[pass](const SceneDrawBatch& batch) { return PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned }; }, nullptr, nullptr);
+			[pass, velocity](const SceneDrawBatch& batch) { return PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned, velocity }; }, nullptr,
+			nullptr);
 		if (pass == Pass::Prepass)
 			return;
 		for (const SceneDrawBatch& batch : batches)
@@ -2147,6 +2181,16 @@ namespace Strata
 		frame.InverseView = glm::inverse(frame.View);
 		frame.InverseProjection = glm::inverse(camera.Projection);
 		frame.InverseViewProjection = glm::inverse(frame.ViewProjection);
+		// Built in double, from the same products, so a camera that did not move gives the same matrix twice (no motion).
+		frame.UnjitteredViewProjection = glm::mat4(glm::dmat4(camera.Projection) * glm::dmat4(frame.View));
+		frame.PreviousViewProjection = frame.UnjitteredViewProjection;
+		if (m_Stats.MotionHistory)
+		{
+			const glm::dvec3 offset = glm::dvec3(camera.Position) - glm::dvec3(m_MotionCamera.Position);
+			frame.PreviousViewProjection = glm::mat4(glm::dmat4(m_MotionCamera.Projection) * glm::dmat4(m_MotionCamera.RelativeView)
+				* glm::translate(glm::dmat4(1.0), offset));
+		}
+		frame.TemporalParams = glm::vec4(m_Stats.MotionHistory ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 		frame.CameraPosition = glm::vec4(camera.Position, camera.Near);
 		const glm::vec3 forward = -glm::vec3(frame.InverseView[2]);
 		frame.CameraForward = glm::vec4(glm::length(forward) > 1e-6f ? glm::normalize(forward) : glm::vec3(0.0f, 0.0f, -1.0f), camera.Orthographic ? 1.0f : 0.0f);
@@ -2327,6 +2371,8 @@ namespace Strata
 		commandList->clearTextureFloat(m_NormalTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f));
 		if (m_EntityIDTexture)
 			commandList->clearTextureUInt(m_EntityIDTexture, nvrhi::AllSubresources, 0);
+		if (m_MotionFrame)
+			commandList->clearTextureFloat(m_VelocityTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f));
 		commandList->clearTextureFloat(m_HDRTexture, nvrhi::AllSubresources, nvrhi::Color(SRGBToLinear(clear.r), SRGBToLinear(clear.g), SRGBToLinear(clear.b), 1.0f));
 
 		commandList->beginMarker("Prepass");
@@ -2397,6 +2443,7 @@ namespace Strata
 			commandList->beginMarker("MotionCopy");
 			RecordMotionCopy(commandList, renderScene, !motionHistory);
 			commandList->endMarker();
+			m_MotionCamera = MotionCamera { frame.View, camera.Projection, camera.Position };
 		}
 		commandList->beginMarker("Exposure");
 		UpdateExposure(commandList, postProcess);

@@ -35,6 +35,7 @@ namespace
 	{
 		ReadbackImage Color;
 		ReadbackImage IDs;
+		ReadbackImage Velocity;
 		DrawnCounts Counts;
 		bool GPUDriven = false;
 	};
@@ -96,11 +97,16 @@ namespace
 			GPU.SetViewportSize(c_Size, c_Size);
 		}
 
+		// With motion vectors, which both paths write with the same shaders through every phase.
 		static PathFrame Capture(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
 		{
 			PathFrame frame;
-			frame.Color = RenderToImage(renderer, scene, camera);
+			SceneRenderOptions options;
+			options.MotionVectors = true;
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), frame.Color));
 			REQUIRE(Renderer::ReadTexture(renderer.GetEntityIDTexture(), frame.IDs));
+			REQUIRE(Renderer::ReadTexture(renderer.GetVelocityTexture(), frame.Velocity));
 			frame.Counts = GetDrawnCounts(renderer);
 			frame.GPUDriven = renderer.GetStats().GPUDriven;
 			return frame;
@@ -115,6 +121,7 @@ namespace
 			CHECK_FALSE(reference.GPUDriven);
 			CHECK(MaxDifference(reference.Color, frame.Color) <= 1);
 			CHECK(CountDifferentIDs(reference.IDs, frame.IDs) == 0);
+			CHECK(reference.Velocity.Pixels == frame.Velocity.Pixels);
 			if (GPU.GetGPUStats().OccludedProxies == 0)
 			{
 				CHECK(frame.Counts.Instances == reference.Counts.Instances);
@@ -424,6 +431,10 @@ namespace
 				CHECK(third.Counts.Instances < comparison.LastReference.Instances);
 				occludedScenes++;
 			}
+			// A turning camera: both paths write the same motion vectors.
+			SceneCamera turned = camera;
+			turned.View = glm::rotate(glm::mat4(1.0f), 0.02f, glm::vec3(0.0f, 1.0f, 0.0f)) * camera.View;
+			comparison.Check(scene, turned);
 			if (scene.GetService<ISkinningPoses>())
 			{
 				CHECK(frame.Counts.SkinnedInstances == 3);

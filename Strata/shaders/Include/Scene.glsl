@@ -36,6 +36,10 @@ struct FrameConstants
 	mat4 InverseView;
 	mat4 InverseProjection;
 	mat4 InverseViewProjection;
+	// What motion vectors measure positions with: this frame's view-projection without a temporal jitter, and the renderer's
+	// previous frame's, which takes positions relative to this frame's camera to that frame's clip space.
+	mat4 UnjitteredViewProjection;
+	mat4 PreviousViewProjection;
 	vec4 CameraPosition;            // xyz: world position, w: near clip distance
 	vec4 CameraForward;             // xyz: world view direction, w: 1 for orthographic projections
 	vec4 ViewportSize;             // xy: size in pixels, zw: 1 / size
@@ -53,6 +57,7 @@ struct FrameConstants
 	vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 	vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
 	vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
+	vec4 TemporalParams;            // x: 1 when u_PreviousInstances and u_PreviousJoints hold the renderer's previous frame
 };
 
 layout(set = 0, binding = ST_CBV(0), std140) uniform FrameBuffer
@@ -81,6 +86,21 @@ layout(set = 0, binding = ST_SRV(14), std430) readonly buffer DrawListBuffer
 {
 	uint u_DrawList[];
 };
+
+#ifdef ST_VELOCITY
+// The motion history (SceneRenderOptions::MotionVectors): every instance as the renderer's previous frame drew it, valid when
+// TemporalParams.x is 1.
+layout(set = 0, binding = ST_SRV(20), std430) readonly buffer PreviousInstanceBuffer
+{
+	InstanceData u_PreviousInstances[];
+};
+#endif
+
+// The motion from a previous clip position to the current one, in UV units (current minus previous).
+vec2 GetClipMotion(vec4 currentClip, vec4 previousClip)
+{
+	return NDCToUV(currentClip.xy / currentClip.w) - NDCToUV(previousClip.xy / previousClip.w);
+}
 
 #define ST_DRAW_ENTRY_INSTANCE_BITS 27u          // RenderData::c_DrawEntryInstanceBits
 #define ST_DRAW_ENTRY_INSTANCE_MASK 0x07FFFFFFu
@@ -128,6 +148,30 @@ JointMatrix BlendJoints(InstanceData instance, uvec4 joints, vec4 weights)
 	}
 	return blended;
 }
+
+#ifdef ST_VELOCITY
+// The palettes as the renderer's previous frame drew them (the motion history, like u_PreviousInstances).
+layout(set = 0, binding = ST_SRV(21), std430) readonly buffer PreviousJointBuffer
+{
+	JointMatrix u_PreviousJoints[];
+};
+
+JointMatrix BlendPreviousJoints(InstanceData instance, uvec4 joints, vec4 weights)
+{
+	JointMatrix blended;
+	blended.Rows[0] = vec4(0.0);
+	blended.Rows[1] = vec4(0.0);
+	blended.Rows[2] = vec4(0.0);
+	for (int influence = 0; influence < 4; influence++)
+	{
+		JointMatrix joint = u_PreviousJoints[instance.SkinPalette + joints[influence]];
+		blended.Rows[0] += joint.Rows[0] * weights[influence];
+		blended.Rows[1] += joint.Rows[1] * weights[influence];
+		blended.Rows[2] += joint.Rows[2] * weights[influence];
+	}
+	return blended;
+}
+#endif
 
 vec3 SkinPosition(JointMatrix skin, vec3 position)
 {

@@ -6,7 +6,9 @@
 
 // Depth prepass: writes depth, view-space normals (screen-space effects) and entity ids (picking). Alpha-masked
 // materials are tested here; the forward pass then shades only the visible surface. With ST_NO_ENTITY_IDS (registered as
-// Scene/DepthPrepassNoEntityIDs.frag) it writes no entity ids, for renderers without an entity-ID buffer.
+// Scene/DepthPrepassNoEntityIDs.frag) it writes no entity ids, for renderers without an entity-ID buffer. With ST_VELOCITY
+// (Scene/DepthPrepassVelocity.frag, DepthPrepassNoEntityIDsVelocity.frag) it also writes the motion since the renderer's
+// previous frame (Scene/MeshVelocity.vert), in UV units, into the attachment after the others.
 
 layout(location = 0) in vec3 v_RelativePosition;
 layout(location = 1) in vec3 v_Normal;
@@ -14,10 +16,19 @@ layout(location = 2) in vec4 v_Tangent;
 layout(location = 3) in vec2 v_TexCoord;
 layout(location = 4) flat in uint v_InstanceIndex;
 layout(location = 5) flat in uint v_LODFade;
+#ifdef ST_VELOCITY
+layout(location = 6) in vec4 v_CurrentClip;
+layout(location = 7) in vec4 v_PreviousClip;
+#endif
 
 layout(location = 0) out vec2 o_Normal;
 #ifndef ST_NO_ENTITY_IDS
 layout(location = 1) out uint o_EntityID;
+#endif
+#if defined(ST_VELOCITY) && defined(ST_NO_ENTITY_IDS)
+layout(location = 1) out vec2 o_Velocity;
+#elif defined(ST_VELOCITY)
+layout(location = 2) out vec2 o_Velocity;
 #endif
 
 void main()
@@ -41,5 +52,8 @@ void main()
 	o_Normal = OctahedralEncode(normalize(mat3(u_Frame.View) * normal));
 #ifndef ST_NO_ENTITY_IDS
 	o_EntityID = instance.EntityID;
+#endif
+#ifdef ST_VELOCITY
+	o_Velocity = GetClipMotion(v_CurrentClip, v_PreviousClip);
 #endif
 }

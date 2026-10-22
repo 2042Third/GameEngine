@@ -40,6 +40,10 @@ namespace Strata
 			glm::mat4 InverseView;
 			glm::mat4 InverseProjection;
 			glm::mat4 InverseViewProjection;
+			// What motion vectors measure positions with: this frame's view-projection without a temporal jitter, and the
+			// renderer's previous frame's, which takes positions relative to this frame's camera to that frame's clip space.
+			glm::mat4 UnjitteredViewProjection;
+			glm::mat4 PreviousViewProjection;
 			glm::vec4 CameraPosition;            // xyz: world position, w: near clip distance
 			glm::vec4 CameraForward;             // xyz: world view direction, w: 1 for orthographic projections
 			glm::vec4 ViewportSize;              // xy: size in pixels, zw: 1 / size
@@ -57,8 +61,9 @@ namespace Strata
 			glm::vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 			glm::vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
 			glm::vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
+			glm::vec4 TemporalParams;            // x: 1 when the motion history holds the renderer's previous frame
 		};
-		static_assert(sizeof(FrameConstants) == 6 * 64 + 17 * 16);
+		static_assert(sizeof(FrameConstants) == 8 * 64 + 18 * 16);
 
 		// A directional shadow cascade as shaders read it (u_Cascades, Include/Scene.glsl): written on the GPU by
 		// Scene/CascadeFit.comp, which fits its depth range to the casters (CascadeFitConstants).

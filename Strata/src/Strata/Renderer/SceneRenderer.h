@@ -244,13 +244,18 @@ namespace Strata
 		// The scene whose overlay passes (the game UI) are drawn, when not the rendered scene's: GameRenderer shows a scene
 		// without a camera as its UI over an empty frame. Must stay valid during Render.
 		Scene* OverlayScene = nullptr;
-		// Motion: the renderer keeps its own copy of the render scene's instances and joint palettes as its latest frame drew
-		// them (its motion history: SceneRenderer::GetPreviousInstanceBuffer, GetPreviousPaletteBuffer), made by the first frame
-		// that asks and kept until the render targets are released: the size of the scene's instance and palette buffers
-		// (64 bytes per instance slot, 48 per joint matrix). At the end of each such frame it copies what the scene's GPU copy
-		// wrote since its previous frame (RenderSceneGPU::GetInstanceWrites), so a still scene costs no copy. Its previous frame
-		// is the renderer's latest, whenever that was rendered (renderers of one scene keep their own); a frame after one that
-		// did not ask, or of another render scene than the latest (but a clone of it), has none (SceneRendererStats::MotionHistory).
+		// Motion vectors: the frame writes each opaque or alpha-masked surface's motion since the renderer's previous frame into
+		// the velocity target (SceneRenderer::GetVelocityTexture): its unjittered position in this frame's UV space minus its
+		// position in the previous frame's (moved entities, skinned poses and the camera alike; nothing is written where nothing
+		// is drawn). The renderer keeps its own copy of the render scene's instances and joint palettes as its latest frame drew
+		// them (its motion history: GetPreviousInstanceBuffer, GetPreviousPaletteBuffer), made by the first frame that asks and
+		// kept with the velocity target until the render targets are released: the size of the scene's instance and palette
+		// buffers (64 bytes per instance slot, 48 per joint matrix). At the end of each such frame it copies what the scene's GPU
+		// copy wrote since its previous frame (RenderSceneGPU::GetInstanceWrites), so a still scene costs no copy. Its previous
+		// frame is the renderer's latest, whenever that was rendered (renderers of one scene keep their own); a frame after one
+		// that did not ask, or of another render scene than the latest (but a clone of it), has none
+		// (SceneRendererStats::MotionHistory) and no motion. An instance slot another entity held in the previous frame, and a new
+		// instance, move with the camera only. The image is the same with and without motion vectors.
 		bool MotionVectors = false;
 
 		// The overlays below are drawn over the finished image (after tone mapping and anti-aliasing) with exact display
@@ -497,6 +502,10 @@ namespace Strata
 		nvrhi::ITexture* GetBloomTexture() const { return m_BloomTexture; } // Level 0 of the bloom chain (half resolution)
 		// The view's depth pyramid occlusion culling tests against (R32_FLOAT, every level): null without the GPU-driven path.
 		nvrhi::ITexture* GetDepthPyramid() const { return m_DepthPyramid; }
+		// The motion vectors of the latest frame that asked for them (SceneRenderOptions::MotionVectors): RG16_FLOAT, in UV units
+		// (current minus previous position), 0 where nothing was drawn. Null until a frame asks, and again once the render
+		// targets are released.
+		nvrhi::ITexture* GetVelocityTexture() const { return m_VelocityTexture; }
 		// The motion history (SceneRenderOptions::MotionVectors): the render scene's instances (RenderData::InstanceData) and
 		// joint matrices as this renderer's latest frame with motion drew them, indexed like the scene's GPU copy. Null until a
 		// frame asks for motion, and again once the render targets are released.
@@ -568,6 +577,9 @@ namespace Strata
 			bool DoubleSided = false;
 			bool Mirrored = false; // Instances with a mirroring transform: front faces wind clockwise
 			bool Skinned = false;  // The skinned vertex shaders and the skin vertex stream
+			// The prepass and the forward pass of a frame with motion vectors: the velocity vertex shaders (both passes, so their
+			// depths agree), and the prepass writes the velocity target.
+			bool Velocity = false;
 			bool operator==(const PipelineKey&) const = default;
 		};
 
@@ -748,7 +760,10 @@ namespace Strata
 			nvrhi::TextureDimension sourceDimension, nvrhi::ITexture* output, uint32_t outputMip, nvrhi::TextureDimension outputDimension,
 			const RenderData::IBLParameters& parameters, uint32_t layers);
 		bool CreateSceneBindingSets();
-		// The motion history's buffers (SceneRenderOptions::MotionVectors) at the size of the scene's GPU copy's; with
+		// The prepass's framebuffer of the frame: with the velocity target in a frame with motion vectors.
+		nvrhi::IFramebuffer* GetPrepassFramebuffer() const { return m_MotionFrame ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get(); }
+		// The motion history's buffers (SceneRenderOptions::MotionVectors) at the size of the scene's GPU copy's, and the velocity
+		// target with its prepass framebuffer; with
 		// `keepContents` a buffer that grows keeps what it held (copied at the frame's start, RecordMotionGrowth). False (logged)
 		// when they cannot be created.
 		bool EnsureMotionResources(bool keepContents);
@@ -1369,6 +1384,19 @@ namespace Strata
 		uint64_t m_MotionSceneId = 0;
 		uint64_t m_MotionWriteVersion = 0;
 		uint64_t m_MotionRender = 0;
+		// The camera of the frame that copied the history last (rotation-only view, projection without jitter).
+		struct MotionCamera
+		{
+			glm::mat4 RelativeView = glm::mat4(1.0f);
+			glm::mat4 Projection = glm::mat4(1.0f);
+			glm::vec3 Position = glm::vec3(0.0f);
+		};
+		MotionCamera m_MotionCamera;
+		nvrhi::TextureHandle m_VelocityTexture;
+		nvrhi::FramebufferHandle m_MotionPrepassFramebuffer; // The prepass's attachments and the velocity target
+		nvrhi::ShaderHandle m_MeshVelocityVertexShader;
+		nvrhi::ShaderHandle m_SkinnedMeshVelocityVertexShader;
+		nvrhi::ShaderHandle m_PrepassVelocityPixelShader;
 		nvrhi::BindingLayoutHandle m_MotionCopyLayout;
 		nvrhi::ComputePipelineHandle m_MotionCopyPipeline;
 		nvrhi::BufferHandle m_MotionCopyListBuffer; // The elements a frame copies: the instances', then the joints'
