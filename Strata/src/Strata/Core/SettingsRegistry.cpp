@@ -353,12 +353,14 @@ namespace Strata
 			if (section.Read || section.MakeDefault || section.References || !section.Schema.is_null())
 				return refuse("a section with fields is described by them: it gives no Schema, MakeDefault, Read or References");
 			std::unordered_set<std::string> names;
-			for (const SettingsField& field : section.Fields)
+			for (SettingsField& field : section.Fields)
 			{
 				if (std::string problem = CheckField(field); !problem.empty())
 					return refuse(problem);
 				if (!names.insert(field.Name).second)
 					return refuse(fmt::format("two fields are named '{}'", field.Name));
+				// Kept in the stored form, which CheckField found it has: a missing member then validates to what a given one does.
+				field.Default = *ValidateField(field, field.Default);
 			}
 		}
 		else

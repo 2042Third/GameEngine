@@ -108,6 +108,18 @@ TEST_SUITE("Core.Settings")
 		twice.Fields[1].Name = "Speed";
 		CHECK_FALSE(registry.Register(twice));
 		CHECK(registry.GetAll().empty());
+
+		// Registered defaults are in the stored form too: a Float default given as a whole number, an Asset default in short.
+		SettingsSection shortDefaults = Tests::MakeSimpleTestSection();
+		shortDefaults.Fields[0].Default = 2;
+		shortDefaults.Fields[5].Default = "ab";
+		REQUIRE(registry.Register(shortDefaults));
+		const SettingsSection& registered = *registry.Find("Test.Simple");
+		CHECK(registered.GetDefault()["Speed"].is_number_float());
+		CHECK(registered.GetDefault()["Icon"] == "00000000000000AB");
+		CHECK(registered.Validate(nlohmann::json::object(), 1) == registered.Validate(registered.GetDefault(), 1));
+		CHECK(registered.Validate(nlohmann::json::object(), 1)->at("Speed").is_number_float());
+		CHECK(registered.GetValueSchema()["properties"]["Icon"]["default"] == "00000000000000AB");
 	}
 
 	TEST_CASE("A section's Read upgrades an older version")

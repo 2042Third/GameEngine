@@ -53,7 +53,7 @@ namespace Strata
 		uint32_t MaxLength = 0;  // String: the most bytes it may hold
 		std::vector<std::string> Options; // Enum
 		std::string AssetType;   // Asset: the type's name as AssetTypeToString writes it ("Texture")
-		nlohmann::json Default;  // A valid value of the field
+		nlohmann::json Default;  // A valid value of the field; Register keeps it in the stored form (Float: 2.0, Asset: 16 digits)
 	};
 
 	// A section of settings. Its id is "<Module>.<Name>" ("Scene.CollisionLayers"). A simple section lists its Fields: its
