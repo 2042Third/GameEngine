@@ -689,14 +689,16 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(later["pendingAssets"] == 0);
 		CHECK(harness.CountDifferences(image, settled) == 0);
 
-		// Without waiting, a capture takes what the frame has.
+		// Without waiting, a capture takes what the frame has: it renders again only for the scene's temporal anti-aliasing, the
+		// jitter's phases.
 		harness.Run("play.stop");
 		harness.Run("play.start", { { "build", false } });
 		nlohmann::json immediate = size;
 		immediate["waitForAssets"] = false;
 		nlohmann::json at;
 		harness.Capture(immediate, &at);
-		CHECK(at["waitedFrames"] == 0);
+		CHECK(at["temporalFrames"] == c_TemporalSettleFrames);
+		CHECK(at["waitedFrames"] == c_TemporalSettleFrames - 1);
 		harness.Run("play.stop");
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

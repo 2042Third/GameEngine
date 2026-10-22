@@ -95,6 +95,20 @@ TEST_SUITE("Reflection")
 		CHECK_FALSE(projection->SetValue(&camera, int32_t(7)));
 		CHECK(camera.Projection == ProjectionType::Orthographic);
 
+		// Post-processing's anti-aliasing method: FXAA by default, its two choices only.
+		const PropertyInfo* method = ComponentRegistry::Find<PostProcessComponent>()->FindProperty("AntiAliasingMethod");
+		REQUIRE(method);
+		CHECK(method->Type == PropertyType::Enum);
+		REQUIRE(method->EnumValues.size() == 2);
+		CHECK(method->EnumValues[0].Name == "FXAA");
+		CHECK(method->EnumValues[1].Name == "TAA");
+		PostProcessComponent postProcess;
+		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::FXAA);
+		CHECK(method->SetValue(&postProcess, int32_t(1)));
+		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::TAA);
+		CHECK_FALSE(method->SetValue(&postProcess, int32_t(2)));
+		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::TAA);
+
 		const PropertyInfo* rotation = ComponentRegistry::Find<TransformComponent>()->FindProperty("Rotation");
 		TransformComponent transform;
 		CHECK(rotation->SetValue(&transform, glm::quat(2.0f, 0.0f, 0.0f, 0.0f)));
@@ -228,7 +242,9 @@ TEST_SUITE("Scene.InactiveProperties")
 		post.AutoExposure = false;
 		post.Bloom = false;
 		post.AmbientOcclusion = false;
+		post.AntiAliasing = false;
 		CHECK(reason("PostProcess", "AutoExposureMinEV") == "Auto Exposure is off");
+		CHECK(reason("PostProcess", "AntiAliasingMethod") == "Anti Aliasing is off");
 		CHECK_FALSE(reason("PostProcess", "AutoExposureSpeed").empty());
 		CHECK(reason("PostProcess", "BloomThreshold") == "Bloom is off");
 		CHECK(reason("PostProcess", "AmbientOcclusionRadius") == "Ambient Occlusion is off");
@@ -236,8 +252,9 @@ TEST_SUITE("Scene.InactiveProperties")
 		post.AutoExposure = true;
 		post.Bloom = true;
 		post.AmbientOcclusion = true;
+		post.AntiAliasing = true;
 		for (const char* property : { "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed", "BloomIntensity", "BloomThreshold",
-			"AmbientOcclusionRadius", "AmbientOcclusionIntensity" })
+			"AmbientOcclusionRadius", "AmbientOcclusionIntensity", "AntiAliasingMethod" })
 			CHECK_MESSAGE(reason("PostProcess", property).empty(), property);
 
 		// The camera's other projection; the animator's clip under a controller.

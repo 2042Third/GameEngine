@@ -819,6 +819,21 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Run("entity.get", { { "entity", c } })["inactive"] == nlohmann::json { { "PostProcess", post["inactive"] } });
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 		CHECK_FALSE(harness.Run("entity.get", { { "entity", c } }).contains("inactive"));
+
+		// The anti-aliasing method: added with a value, set, undone; inactive while anti-aliasing is off.
+		harness.Run("component.add", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "AntiAliasingMethod", "TAA" } } } });
+		const auto method = [&]() { return harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } })["values"]["AntiAliasingMethod"]; };
+		CHECK(method() == "TAA");
+		harness.Run("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "AntiAliasingMethod", "FXAA" } } } });
+		CHECK(method() == "FXAA");
+		harness.Run("edit.undo");
+		CHECK(method() == "TAA");
+		CHECK_FALSE(harness.Error("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "AntiAliasingMethod", "MSAA" } } } }).empty());
+		CHECK(method() == "TAA");
+		harness.Run("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "AntiAliasing", false } } } });
+		CHECK(harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } })["inactive"]
+			== nlohmann::json { { "AntiAliasingMethod", "Anti Aliasing is off" } });
+		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 		harness.Run("component.remove", { { "entity", c }, { "component", "SpotLight" } });
 		CHECK_FALSE(harness.Error("component.get", { { "entity", c }, { "component", "SpotLight" } }).empty());
 

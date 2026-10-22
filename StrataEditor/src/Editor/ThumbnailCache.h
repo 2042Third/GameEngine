@@ -131,6 +131,8 @@ namespace Strata
 		// Whether work is queued or running (tests and perf runs wait for it to end).
 		bool IsBusy() const;
 		ThumbnailCacheStats GetStats() const;
+		// The renderer of the scenes it draws (null until it drew one): what its latest frame drew (tests).
+		const SceneRenderer* GetRenderer() const { return m_Renderer.get(); }
 
 		// The thumbnail of a cooked texture from the largest level the view holds that fits c_Size on a side (a view of the
 		// header and mip tail, ParseCookedTexturePrefix, is enough): block-compressed levels are decoded; one channel shows

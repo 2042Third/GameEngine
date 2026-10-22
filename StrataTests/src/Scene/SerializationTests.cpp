@@ -64,6 +64,7 @@ namespace
 		PostProcessComponent& postProcess = lights.AddComponent<PostProcessComponent>();
 		postProcess.Tonemapper = TonemapOperator::AgX;
 		postProcess.Exposure = 1.5f;
+		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
 
 		Entity ui = scene->CreateEntity("UI");
 		TextComponent& text = ui.AddComponent<TextComponent>();
@@ -200,6 +201,8 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(mesh.GetComponent<RigidBodyComponent>().Type == RigidBodyType::Kinematic);
 #endif
 
+		CHECK(loaded.FindEntityByName("Lights").GetComponent<PostProcessComponent>().AntiAliasingMethod == AntiAliasingMode::TAA);
+
 		Entity ui = loaded.FindEntityByName("UI");
 		CHECK(ui.GetComponent<TextComponent>().Text == "Score: 0\nLine two \xE2\x9C\x93");
 		const ScriptEntry* script = ui.GetComponent<ScriptComponent>().FindScript("ScoreCounter");
@@ -321,6 +324,38 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(thing.GetName() == "Thing");
 		CHECK(thing.GetTransform().Translation == glm::vec3(1.0f, 2.0f, 3.0f));
 		CHECK(thing.GetTransform().Scale == glm::vec3(1.0f)); // Invalid value ignored
+	}
+
+	TEST_CASE("Post-processing saved before its anti-aliasing method loads as FXAA; unknown methods warn")
+	{
+		const auto load = [](const nlohmann::json& postProcess, std::vector<std::string>& warnings)
+		{
+			const nlohmann::json document = {
+				{ "Strata", { { "Format", "Scene" }, { "Version", 1 } } },
+				{ "Scene", { { "Name", "Old" }, { "Entities", { { { "ID", "00000000000000AA" }, { "Components", {
+					{ "Name", { { "Name", "Post" } } }, { "PostProcess", postProcess } } } } } } } }
+			};
+			Scene scene;
+			std::string error;
+			REQUIRE_MESSAGE(SceneSerializer::Deserialize(scene, document, &error, &warnings), error);
+			return scene.GetEntityByUUID(UUID(0xAA)).GetComponent<PostProcessComponent>();
+		};
+		// As 0.5.0 saved it: anti-aliasing on, no method.
+		std::vector<std::string> warnings;
+		PostProcessComponent loaded = load({ { "AntiAliasing", true }, { "Bloom", false } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.AntiAliasing);
+		CHECK(loaded.AntiAliasingMethod == AntiAliasingMode::FXAA);
+		loaded = load({ { "AntiAliasing", true }, { "AntiAliasingMethod", "TAA" } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.AntiAliasingMethod == AntiAliasingMode::TAA);
+		loaded = load({ { "AntiAliasingMethod", "MSAA" } }, warnings);
+		CHECK(CountWarnings(warnings, "AntiAliasingMethod") == 1);
+		CHECK(loaded.AntiAliasingMethod == AntiAliasingMode::FXAA);
+		warnings.clear();
+		loaded = load({ { "AntiAliasingMethod", 7 } }, warnings);
+		CHECK(CountWarnings(warnings, "AntiAliasingMethod") == 1);
+		CHECK(loaded.AntiAliasingMethod == AntiAliasingMode::FXAA);
 	}
 
 	TEST_CASE("Hand-written entity data without ids is accepted")

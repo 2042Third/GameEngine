@@ -136,12 +136,18 @@ namespace Strata
 			}
 			// Complete, as captures wait for it: what loads, glyphs still being prepared (the scene's text and the game UI's),
 			// the finer levels of textures the view wants (a texture counts as loaded with its mip tail), mesh renderers still
-			// on their way to the GPU, and temporal anti-aliasing's history until it holds the jitter's phases.
+			// on their way to the GPU, and then temporal anti-aliasing's history until it holds the jitter's phases of the
+			// complete view (an incomplete frame starts it again).
 			const SceneRendererStats& stats = renderer->GetStats();
 			const bool incomplete = stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || stats.Overlays.PendingGlyphs > 0 || stats.DeferredProxies > 0
-				|| renderer->CountTexturesBelowWanted() > 0 || (stats.TemporalAntiAliasing && stats.TemporalFrames < c_TemporalSettleFrames);
-			if (incomplete && ++m_Frames < c_MaxFrames)
+				|| renderer->CountTexturesBelowWanted() > 0;
+			const bool unsettled = stats.TemporalAntiAliasing && stats.TemporalFrames < c_TemporalSettleFrames;
+			if ((incomplete || unsettled) && ++m_Frames < c_MaxFrames)
+			{
+				if (incomplete)
+					renderer->GetSceneRenderer().ResetHistory();
 				return;
+			}
 			std::string error;
 			m_Readback = TextureReadback::Create(renderer->GetOutputTexture(), {}, &error);
 			// Like captures, the picture keeps no render targets between saves.

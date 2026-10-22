@@ -48,11 +48,14 @@ TEST_SUITE("GPU.FeatureTest")
 
 		SceneRenderer renderer;
 		renderer.SetViewportSize(c_Width, c_Height);
-		// A few frames, as an application renders them: assets finish uploading and the environment is prepared.
-		for (int32_t frame = 0; frame < 4; frame++)
+		// A few frames, as an application renders them: assets finish uploading and the environment is prepared. The scene's
+		// post-processing is temporal anti-aliasing: the still view's history grows with each frame.
+		for (uint32_t frame = 0; frame < 4; frame++)
 		{
 			project.GetAssetManager()->Update();
 			REQUIRE(renderer.Render(*scene, camera));
+			CHECK(renderer.GetStats().TemporalAntiAliasing);
+			CHECK(renderer.GetStats().TemporalFrames == frame + 1);
 		}
 
 		const SceneRendererStats& stats = renderer.GetStats();

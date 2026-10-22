@@ -860,6 +860,8 @@ namespace Strata
 			// Thumbnails wait for their textures' levels and show them at once, and draw their levels of detail as they are.
 			specification.FadeTextureLevels = false;
 			specification.FadeLevelsOfDetail = false;
+			// Thumbnails are single frames of one scene after another: a scene with temporal anti-aliasing draws with FXAA.
+			specification.TemporalAntiAliasing = false;
 			m_Renderer = CreateScope<SceneRenderer>(specification);
 		}
 		// Thumbnails and the preview share the renderer: its targets follow the image's size (they change only when a preview

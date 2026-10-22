@@ -675,7 +675,7 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("The project's picture of a TAA scene settles its history")
+	TEST_CASE("The project's picture of a TAA scene settles its history, and thumbnails draw TAA with FXAA")
 	{
 		Tests::GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -711,7 +711,7 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		PostProcessComponent& postProcess = postProcessEntity.GetComponent<PostProcessComponent>();
 		postProcess.AntiAliasing = true;
 		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
-		Tests::AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Cube");
+		Entity cube = Tests::AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Cube");
 
 		// The project's picture: the capture renderer's last frame is the eighth of its history, the mean of the jitter's phases.
 		run("camera.set", { { "position", { 0.0, 1.0, 4.0 } }, { "target", { 0.0, 0.0, 0.0 } } });
@@ -723,6 +723,20 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(captureRenderer->GetStats().TemporalAntiAliasing);
 		CHECK(captureRenderer->GetStats().TemporalFrames == c_TemporalSettleFrames);
 
+		// A prefab of the cube with the post-processing: its thumbnail is a single frame, drawn with FXAA.
+		const std::optional<UUID> prefabHandle = UUIDFromJson(run("prefab.create", { { "entities", { UUIDToJson(cube.GetUUID()), UUIDToJson(postProcessEntity.GetUUID()) } },
+			{ "path", "Prefabs/Cube.stprefab" } })["asset"]);
+		REQUIRE(prefabHandle);
+		ThumbnailCache& thumbnails = *context.GetThumbnails();
+		REQUIRE(frameUntil([&]()
+		{
+			thumbnails.Request(*prefabHandle);
+			return thumbnails.GetState(*prefabHandle) == ThumbnailState::Ready || thumbnails.GetState(*prefabHandle) == ThumbnailState::Unavailable;
+		}));
+		CHECK(thumbnails.GetState(*prefabHandle) == ThumbnailState::Ready);
+		REQUIRE(thumbnails.GetRenderer());
+		CHECK_FALSE(thumbnails.GetRenderer()->GetStats().TemporalAntiAliasing);
+		CHECK(thumbnails.GetRenderer()->GetTemporalHistoryTexture() == nullptr);
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

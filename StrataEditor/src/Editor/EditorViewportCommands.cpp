@@ -335,12 +335,16 @@ namespace Strata
 			const bool instancesPending = request.WaitForAssets && progress.DeferredProxies > 0 && progress.InstanceFrames < c_MaxCaptureInstanceFrames;
 			// The motion view shows the motion since the capture renderer's previous frame, which its first frame lacks.
 			const bool motionPending = progress.DebugView == ViewportDebugView::Motion && !stats.MotionHistory && progress.MotionFrames == 0;
-			// Temporal anti-aliasing: the mean of the jitter's phases, as the viewport shows a still view once it settled (the
-			// capture's targets are released after each picture, so each one starts its history again).
-			const bool temporalPending = stats.TemporalAntiAliasing && stats.TemporalFrames < c_TemporalSettleFrames
+			const bool contentPending = textPending || assetsPending || mipsPending || posesPending || instancesPending || motionPending;
+			// Temporal anti-aliasing: the mean of the jitter's phases of the complete view, as the viewport shows a still view once it
+			// settled. A frame still incomplete starts the history again (the capture's targets are released after each picture,
+			// so each one starts it anyway), so the picture blends complete frames only.
+			const bool temporalPending = !contentPending && stats.TemporalAntiAliasing && stats.TemporalFrames < c_TemporalSettleFrames
 				&& progress.TemporalFrames < c_MaxCaptureTemporalFrames;
-			if (textPending || assetsPending || mipsPending || posesPending || instancesPending || motionPending || temporalPending)
+			if (contentPending || temporalPending)
 			{
+				if (contentPending)
+					renderer->GetSceneRenderer().ResetHistory();
 				progress.MotionFrames += motionPending ? 1 : 0;
 				progress.TemporalFrames += temporalPending ? 1 : 0;
 				progress.TextFrames += textPending ? 1 : 0;
@@ -690,8 +694,8 @@ namespace Strata
 			"lack the finer mip levels the view wants (up to about two seconds, as a texture budget may keep them out), and animators that animate only "
 			"while seen (WhenVisible) until they show the pose of their time (a few frames, also while paused), and mesh renderers the scene just "
 			"gained until they reached the GPU (a few frames for a million; renderStats.deferredInstanceBytes says what still waited), and a scene "
-			"drawn with temporal anti-aliasing (PostProcess AntiAliasingMethod TAA) until its frames reach 8, the mean of its jitter's phases "
-			"(temporalFrames: the frames the picture's history holds, 0 without it). Reports what was still "
+			"drawn with temporal anti-aliasing (PostProcess AntiAliasingMethod TAA), also without waitForAssets, until 8 frames of the complete "
+			"view, the mean of its jitter's phases (temporalFrames: the frames the picture's history holds, 0 without it). Reports what was still "
 			"loading when the picture was taken (pendingAssets), the textures drawn coarser than the view wants (texturesBelowWanted), animators "
 			"drawn with an older pose (stalePoses) and glyphs that could not be prepared in time (pendingTextGlyphs). debugView colors the picture "
 			"by streaming state, level of detail or mip levels (default: the viewport's, viewport.setSettings) and the result's debugView says what it "

@@ -59,6 +59,11 @@ namespace Strata
 			return post.AmbientOcclusion ? std::string() : "Ambient Occlusion is off";
 		}
 
+		std::string WithAntiAliasing(const PostProcessComponent& post)
+		{
+			return post.AntiAliasing ? std::string() : "Anti Aliasing is off";
+		}
+
 	}
 
 	void RegisterRendererComponents()
@@ -142,7 +147,11 @@ namespace Strata
 			.Property("AmbientOcclusion", &PostProcessComponent::AmbientOcclusion)
 			.Property("AmbientOcclusionRadius", &PostProcessComponent::AmbientOcclusionRadius, WithTooltip(Range(0.01f, 10.0f, 0.01f), "World units"))
 			.Property("AmbientOcclusionIntensity", &PostProcessComponent::AmbientOcclusionIntensity, Slider(0.0f, 4.0f))
-			.Property("AntiAliasing", &PostProcessComponent::AntiAliasing, WithTooltip({}, "Fast approximate anti-aliasing (FXAA)"))
+			.Property("AntiAliasing", &PostProcessComponent::AntiAliasing, WithTooltip({}, "Smooths jagged edges, by the method below"))
+			.EnumProperty("AntiAliasingMethod", &PostProcessComponent::AntiAliasingMethod, { { "FXAA", 0 }, { "TAA", 1 } },
+				{ .Tooltip = "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another "
+					"sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion, "
+					"a slight blur of what moves" })
 			.Property("Vignette", &PostProcessComponent::Vignette, Slider(0.0f, 1.0f))
 			.Property("Saturation", &PostProcessComponent::Saturation, Slider(0.0f, 2.0f))
 			.Property("Contrast", &PostProcessComponent::Contrast, WithTooltip(Slider(0.5f, 2.0f), "Around middle gray; 1 = unchanged"));
@@ -150,6 +159,7 @@ namespace Strata
 		SetInactiveReasons<PostProcessComponent>({ "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed" }, &WithAutoExposure);
 		SetInactiveReasons<PostProcessComponent>({ "BloomIntensity", "BloomThreshold" }, &WithBloom);
 		SetInactiveReasons<PostProcessComponent>({ "AmbientOcclusionRadius", "AmbientOcclusionIntensity" }, &WithAmbientOcclusion);
+		SetInactiveReasons<PostProcessComponent>({ "AntiAliasingMethod" }, &WithAntiAliasing);
 
 		ComponentRegistry::Register<TextComponent>("Text")
 			.Category("UI")

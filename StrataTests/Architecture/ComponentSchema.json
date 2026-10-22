@@ -938,8 +938,31 @@
 					"Min": 0.0,
 					"Name": "AntiAliasing",
 					"Speed": 0.0,
-					"Tooltip": "Fast approximate anti-aliasing (FXAA)",
+					"Tooltip": "Smooths jagged edges, by the method below",
 					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Anti Aliasing Method",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "FXAA",
+							"Value": 0
+						},
+						{
+							"DisplayName": "",
+							"Name": "TAA",
+							"Value": 1
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "AntiAliasingMethod",
+					"Speed": 0.0,
+					"Tooltip": "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion, a slight blur of what moves",
+					"Type": "Enum"
 				},
 				{
 					"AssetFilter": 0,
