@@ -16,12 +16,12 @@ only what is near is loaded. An AI agent made it through the editor alone, the w
 | Prefetching before a teleport (`World::RequestCellsAround`, `World::IsLoadedAround`) and a raycast that waits for the ground | `Scripts/Explorer.cpp` |
 | A character controller on terrain: 97 terrain tiles with static, non-convex mesh colliders on the Terrain collision layer | the persistent scene's `Tile_*` entities |
 | Skinned animation in streamed cells: foxes with an animation controller (Survey, Walk, Run) | `Prefabs/Fox.stprefab`, `Scripts/Wander.cpp` |
-| Lighting that changes: a sun that turns in steps (the shadow cascades stay cached between steps), a procedural sky colored by script, campfire point lights at dusk | `Scripts/DayNight.h` |
+| Lighting that changes: a sun that turns in steps (the shadow cascades stay cached between steps), a procedural sky colored by script, campfire point lights at dusk, a height fog the sky lights (it follows the sky's colors) | `Scripts/DayNight.h`, `Worlds/Island.stscene` (Height Fog) |
 | Game UI: a clock, the mode, a pause menu with a day-length slider and the credits | `Scripts/IslandHud.cpp` |
 | The export's loading scene with a progress bar (`Game::GetSceneLoadProgress`) | `Scenes/Loading.stscene`, `Scripts/LoadingScreen.cpp` |
 
-It has no sound: there was no CC0 ambience or campfire loop that fit. Distant vegetation is not loaded (there is no fog
-yet): the streaming distances and the camera's far plane keep its edge far away.
+It has no sound: there was no CC0 ambience or campfire loop that fit. Distant vegetation is not loaded: a light height
+fog hazes the distance, and the streaming distances and the camera's far plane keep its edge far away.
 
 ## Controls
 
