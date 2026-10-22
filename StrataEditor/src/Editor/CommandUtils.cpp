@@ -264,23 +264,36 @@ namespace Strata
 		{
 			if (force)
 				return std::nullopt;
+			// Both are named when both are at stake, so that one answer covers what force would discard.
+			std::string settings;
+			if (scope == DiscardScope::Project && context.HasUnwrittenProjectSettings())
+			{
+				settings = fmt::format("The project file '{}' could not be written ({}): the project's settings changed since are only in the "
+					"editor, and {} would discard them. Write it with project.save once the cause is fixed, or pass force: true to discard them",
+					FileSystem::ToUTF8(context.GetProject()->GetProjectFile()), context.GetProjectFileError(), action);
+			}
 			if (!context.IsSceneModified())
 			{
-				if (scope != DiscardScope::Project || !context.HasUnwrittenProjectSettings())
+				if (settings.empty())
 					return std::nullopt;
-				return EditorCommandResult::Fail(fmt::format("The project file '{}' could not be written ({}): the project's settings changed since "
-					"are only in the editor, and {} would discard them. Write it with project.save once the cause is fixed, or pass force: true to "
-					"discard them", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()), context.GetProjectFileError(), action));
+				return EditorCommandResult::Fail(std::move(settings));
 			}
 			const std::string& scene = context.GetEditScene()->GetName();
+			std::string message;
 			if (!context.HasProject())
 			{
-				return EditorCommandResult::Fail(fmt::format("The scene '{}' has unsaved changes, which {} would discard; without a project they cannot be "
-					"saved: pass force: true to discard them", scene, action));
+				message = fmt::format("The scene '{}' has unsaved changes, which {} would discard; without a project they cannot be saved: pass "
+					"force: true to discard them", scene, action);
 			}
-			const char* save = context.GetSceneHandle().IsValid() ? "scene.save" : "scene.saveAs, as the scene was never saved";
-			return EditorCommandResult::Fail(fmt::format("The scene '{}' has unsaved changes, which {} would discard: save them first ({}) or pass "
-				"force: true to discard them (they are kept as recovery data, scene.recoveryStatus)", scene, action, save));
+			else
+			{
+				const char* save = context.GetSceneHandle().IsValid() ? "scene.save" : "scene.saveAs, as the scene was never saved";
+				message = fmt::format("The scene '{}' has unsaved changes, which {} would discard: save them first ({}) or pass force: true to "
+					"discard them (they are kept as recovery data, scene.recoveryStatus)", scene, action, save);
+			}
+			if (!settings.empty())
+				message += ". " + settings;
+			return EditorCommandResult::Fail(std::move(message));
 		}
 
 		EditorCommandHandler AfterSaves(EditorCommandHandler handler)

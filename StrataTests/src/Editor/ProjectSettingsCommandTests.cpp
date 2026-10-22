@@ -289,11 +289,18 @@ TEST_SUITE("Editor.ProjectSettings")
 		CHECK_FALSE(project.Execute("editor.quit").Success);
 		CHECK_FALSE(project.Context.IsQuitRequested());
 		CHECK(project.Execute("scene.open", { { "scene", "Scenes/Main.stscene" } }).Success);
+		// With unsaved scene changes as well, the refusal names both, which force would discard together.
+		project.Run("entity.create", { { "name", "Unsaved" } });
+		const EditorCommandResult both = project.Execute("project.close");
+		CHECK_FALSE(both.Success);
+		CHECK(both.Error.find("'Main' has unsaved changes") != std::string::npos);
+		CHECK(both.Error.find("Game.stproj") != std::string::npos);
+		CHECK(project.Context.HasProject());
 
 		const nlohmann::json closed = project.Run("project.close", { { "force", true } });
 		CHECK(closed["closed"] == true);
 		CHECK(closed["discardedSettings"] == true);
-		CHECK(closed["discardedChanges"] == false);
+		CHECK(closed["discardedChanges"] == true);
 		CHECK_FALSE(project.Context.HasProject());
 	}
 
