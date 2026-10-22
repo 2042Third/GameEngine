@@ -214,6 +214,9 @@ namespace Strata
 		void DrawUnsavedChangesModal();
 		// The question of RequestReleaseProject about the project's unwritten settings, inside its modal.
 		void DrawUnwrittenSettingsQuestion();
+		// Runs the action that waited for the answer about unwritten settings, or first asks about the scene's changes made
+		// while it waited.
+		void RunPendingReleaseAction();
 		void HandleShortcuts();
 		void UpdateWindowTitle();
 		// Advances the startup command script; once it finished, reports the result (a failed script fails the process).
@@ -301,6 +304,7 @@ namespace Strata
 		// An action that releases the project (RequestReleaseProject) waiting for the answer about the project's unwritten
 		// settings, and whether the question's Retry (project.save) is writing.
 		std::function<void()> m_PendingReleaseAction;
+		uint64_t m_ReleaseQuestionVersion = 0; // The undo stack's version when that question was asked
 		bool m_OpenUnwrittenSettingsModal = false;
 		bool m_RetryingProjectWrite = false;
 		int m_UnsavedChangesModalFrame = -1; // ImGui's frame the question was drawn in last

@@ -1795,7 +1795,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   its error and `project.save`, and reports `discardedSettings`; one that keeps the project open (`DiscardScope::Scene`)
   loses no settings and is not refused for them. The UI asks before releasing the project with
   `EditorShell::RequestReleaseProject`: after the question about the scene, a question about the unwritten settings
-  offers Retry (`project.save`, then the action), Don't Save and Cancel. The UI keeps asking (the unsaved-changes
+  offers Retry (`project.save`, then the action), Don't Save and Cancel (changes of the scene made while it waits are
+  asked about before the action runs). The UI keeps asking (the unsaved-changes
   dialog, `EditorShell::RequestDiscardChanges`) and passes `force` once the person has answered, for the changes they were
   asked about only: the question's Don't Save asks again when the scene changed while it waited, a dialog that runs the
   command later asks again when the scene changed since (`UndoStack::GetVersion`), a modal dialog asks over itself

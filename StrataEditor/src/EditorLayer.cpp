@@ -892,8 +892,22 @@ namespace Strata
 				return;
 			}
 			m_PendingReleaseAction = action;
+			m_ReleaseQuestionVersion = m_Context.GetUndoStack().GetVersion();
 			m_OpenUnwrittenSettingsModal = true;
 		});
+	}
+
+	void EditorLayer::RunPendingReleaseAction()
+	{
+		std::function<void()> action = std::exchange(m_PendingReleaseAction, nullptr);
+		if (!action)
+			return;
+		// The answer is for the settings and for the scene as it was when asked: changes of the scene made while the question
+		// waited (an agent's, a script's) are asked about first rather than discarded unseen.
+		if (m_Context.IsSceneModified() && m_Context.GetUndoStack().GetVersion() != m_ReleaseQuestionVersion)
+			RequestDiscardChanges(std::move(action));
+		else
+			action();
 	}
 
 	void EditorLayer::ReportError(const std::string& message)
@@ -2109,8 +2123,7 @@ namespace Strata
 		if (!m_RetryingProjectWrite && !m_Context.HasUnwrittenProjectSettings() && m_Context.GetProjectFileState() != SettingsFileState::Writing)
 		{
 			ImGui::CloseCurrentPopup();
-			if (std::function<void()> action = std::exchange(m_PendingReleaseAction, nullptr))
-				action();
+			RunPendingReleaseAction();
 			return;
 		}
 		const std::string file = m_Context.HasProject() ? FileSystem::ToUTF8(m_Context.GetProject()->GetProjectFile().filename()) : std::string();
@@ -2137,8 +2150,7 @@ namespace Strata
 		if (UI::DialogButton("UnwrittenSettings.Discard", "Don't Save"))
 		{
 			ImGui::CloseCurrentPopup();
-			if (std::function<void()> action = std::exchange(m_PendingReleaseAction, nullptr))
-				action();
+			RunPendingReleaseAction();
 		}
 		ImGui::SameLine();
 		if (UI::DialogButton("UnwrittenSettings.Cancel", "Cancel"))

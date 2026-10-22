@@ -293,6 +293,40 @@ TEST_SUITE("Editor.DataSafety")
 		CHECK(written->GetConfig().Export.AlwaysInclude == std::vector<std::string> { "Scenes" });
 	}
 
+	TEST_CASE("Scene changes made while the unwritten settings question waits are asked about before the project closes")
+	{
+		Tests::HarnessEditor editor;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("DataSafetyUnwrittenMeanwhile") / "Game";
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" }, { "template", "basic3d" } });
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Context().GetProjectFileState() != SettingsFileState::Writing; }));
+		const std::filesystem::path projectFile = editor.Context().GetProject()->GetProjectFile();
+		REQUIRE(FileSystem::Remove(projectFile));
+		REQUIRE(FileSystem::CreateDirectories(projectFile));
+		editor.Run("project.setExportSettings", { { "alwaysInclude", { "Scenes" } } });
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Context().HasUnwrittenProjectSettings(); }));
+		REQUIRE_FALSE(editor.Context().IsSceneModified());
+
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.CloseProject"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnwrittenSettings.Dialog").has_value());
+		// An agent edits the scene while the person reads the question.
+		editor.Run("entity.create", { { "name", "Meanwhile" } });
+		REQUIRE(editor.Context().IsSceneModified());
+
+		// Don't Save answers for the settings: the scene's new changes are asked about, and Cancel keeps them and the project.
+		REQUIRE(editor.Click("UnwrittenSettings.Discard"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnsavedChanges.Cancel").has_value());
+		CHECK(editor.Context().HasProject());
+		REQUIRE(editor.Click("UnsavedChanges.Cancel"));
+		editor.Frames(2);
+		CHECK(editor.Context().HasProject());
+		CHECK(editor.Context().GetEditScene()->FindEntityByName("Meanwhile"));
+		CHECK(editor.Context().HasUnwrittenProjectSettings());
+	}
+
 	TEST_CASE("File > Open Scene asks about unsaved changes, then opens a scene file of the asset directory")
 	{
 		Tests::HarnessEditor editor;
