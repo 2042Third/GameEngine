@@ -22,16 +22,17 @@ namespace Strata
 	class RenderScene;
 	class Scene;
 
-	// What the viewport shows: the scene as rendered, or colored by what the streaming pillars do to it.
+	// What the viewport shows: the scene as rendered, colored by what the streaming pillars do to it, or its motion.
 	enum class ViewportDebugView : uint8_t
 	{
 		None = 0,
 		Streaming, // Entities whose mesh, material or textures are still loading, or failed to
 		LOD,       // Entities by the level of detail their mesh is drawn at
-		Mip        // Entities by how far their textures' resident mip levels are from those their view needs
+		Mip,       // Entities by how far their textures' resident mip levels are from those their view needs
+		Motion     // Every pixel's motion since the view's previous frame (SceneRenderOptions::ShowMotionVectors), not a tint
 	};
 
-	// "none", "streaming", "lod", "mip" (the names commands and the saved viewport state use).
+	// "none", "streaming", "lod", "mip", "motion" (the names commands and the saved viewport state use).
 	const char* ViewportDebugViewToString(ViewportDebugView view);
 	std::optional<ViewportDebugView> ViewportDebugViewFromString(std::string_view name);
 
@@ -94,7 +95,7 @@ namespace Strata
 		static constexpr uint32_t c_MaxPlaceholderBoxes = 4096;
 
 		// Rebuilds the tints and adds placeholder boxes to `placeholders` (which the caller clears and draws). Entities outside
-		// the camera's view get no tint. ViewportDebugView::None builds nothing.
+		// the camera's view get no tint. ViewportDebugView::None and Motion build nothing.
 		// `lod`: the renderer's (SceneRenderer::GetLODCriteria).
 		void Build(Scene& scene, ViewportDebugView view, const SceneCamera& camera, const LODCriteria& lod, const ViewportDebugColors& colors,
 			DebugDraw& placeholders);

@@ -1523,6 +1523,7 @@ namespace Strata
 		// The motion history goes with the targets: the next frame that asks starts without one.
 		release(m_VelocityTexture);
 		release(m_MotionPrepassFramebuffer);
+		release(m_MotionViewBindingSet);
 		release(m_PreviousInstances);
 		release(m_PreviousPalette);
 		release(m_GrownPreviousInstances);
@@ -2157,7 +2158,7 @@ namespace Strata
 
 		// Motion: the history holds the renderer's previous frame when that frame copied it (its latest frame asked for motion
 		// too) and drew this render scene or the one it is a clone of (the same slots).
-		m_MotionFrame = options.MotionVectors;
+		m_MotionFrame = options.MotionVectors || options.ShowMotionVectors;
 		const bool motionHistory = m_MotionFrame && m_MotionRender != 0 && m_MotionRender == m_RenderCount
 			&& (m_MotionSceneId == renderScene.GetId() || renderScene.GetCloneSource() == m_MotionSceneId);
 		bool motionFailed = false;
@@ -2619,7 +2620,8 @@ namespace Strata
 
 	bool SceneRenderer::HasOverlays(const SceneRenderOptions& options)
 	{
-		return options.ShowGrid || !options.SelectedEntities.empty() || (options.DebugShapes && !options.DebugShapes->IsEmpty()) || !options.EntityTints.empty();
+		return options.ShowGrid || !options.SelectedEntities.empty() || (options.DebugShapes && !options.DebugShapes->IsEmpty()) || !options.EntityTints.empty()
+			|| options.ShowMotionVectors;
 	}
 
 	bool SceneRenderer::DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport)
@@ -2669,6 +2671,63 @@ namespace Strata
 		commandList->setPushConstants(&parameters, sizeof(parameters));
 		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
 		m_Stats.TintedEntities = parameters.Count;
+		return true;
+	}
+
+	bool SceneRenderer::DrawMotionView(nvrhi::ICommandList* commandList, const nvrhi::Viewport& viewport)
+	{
+		if (!m_MotionViewPipeline)
+		{
+			nvrhi::BindingLayoutDesc layout;
+			layout.visibility = nvrhi::ShaderType::Pixel;
+			layout.bindings = {
+				nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+				nvrhi::BindingLayoutItem::Texture_SRV(0),
+				nvrhi::BindingLayoutItem::Texture_SRV(1)
+			};
+			m_MotionViewLayout = m_Device->createBindingLayout(layout);
+			nvrhi::IShader* pixelShader = Renderer::GetShaderLibrary().Get("Overlay/MotionView.frag");
+			ST_CORE_VERIFY(pixelShader && m_MotionViewLayout, "SceneRenderer: the motion view shader is missing");
+			// Blended over the image without the depth attachment the other overlays test against: it reads the depth.
+			nvrhi::BlendState::RenderTarget blend;
+			blend.setBlendEnable(true)
+				.setSrcBlend(nvrhi::BlendFactor::SrcAlpha)
+				.setDestBlend(nvrhi::BlendFactor::InvSrcAlpha)
+				.setSrcBlendAlpha(nvrhi::BlendFactor::One)
+				.setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
+			nvrhi::GraphicsPipelineDesc desc;
+			desc.primType = nvrhi::PrimitiveType::TriangleList;
+			desc.VS = m_FullscreenVertexShader;
+			desc.PS = pixelShader;
+			desc.bindingLayouts = { m_MotionViewLayout };
+			desc.renderState.rasterState.setCullNone();
+			desc.renderState.blendState.setRenderTarget(0, blend);
+			desc.renderState.depthStencilState.setDepthTestEnable(false).setDepthWriteEnable(false);
+			m_MotionViewPipeline = m_Device->createGraphicsPipeline(desc, m_OutputFramebuffer->getFramebufferInfo());
+			ST_CORE_VERIFY(m_MotionViewPipeline, "SceneRenderer: failed to create the motion view pipeline");
+		}
+		if (!m_MotionViewBindingSet)
+		{
+			nvrhi::BindingSetDesc desc;
+			desc.bindings = {
+				nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
+				nvrhi::BindingSetItem::Texture_SRV(0, m_VelocityTexture),
+				nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture)
+			};
+			m_MotionViewBindingSet = m_Device->createBindingSet(desc, m_MotionViewLayout);
+			if (!m_MotionViewBindingSet)
+			{
+				m_Errors.Report("failed to create the motion view's bindings");
+				return false;
+			}
+		}
+		nvrhi::GraphicsState state;
+		state.pipeline = m_MotionViewPipeline;
+		state.framebuffer = m_OutputFramebuffer;
+		state.viewport.addViewportAndScissorRect(viewport);
+		state.bindings = { m_MotionViewBindingSet };
+		commandList->setGraphicsState(state);
+		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
 		return true;
 	}
 
@@ -2772,7 +2831,10 @@ namespace Strata
 			complete = false;
 		}
 
-		// Tints color the scene itself: the other overlays go over them.
+		// The motion view and the tints color the scene itself: the other overlays go over them. Without motion vectors (they
+		// could not be made: reported) there is no motion view.
+		if (options.ShowMotionVectors && m_MotionFrame && !DrawMotionView(commandList, viewport))
+			return false;
 		if (entityIDs && !options.EntityTints.empty() && !DrawEntityTints(commandList, scene, options.EntityTints, viewport))
 			return false;
 

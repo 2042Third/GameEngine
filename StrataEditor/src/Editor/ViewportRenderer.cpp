@@ -181,6 +181,7 @@ namespace Strata
 		// The debug view tints what is drawn and boxes what cannot be (meshes that are not there).
 		m_StreamingView.Build(*scene, settings.DebugView, view.Camera, m_Renderer->GetLODCriteria(), settings.DebugColors, m_DebugDraw);
 		options.EntityTints = m_StreamingView.GetTints();
+		options.ShowMotionVectors = settings.DebugView == ViewportDebugView::Motion;
 		if (!m_DebugDraw.IsEmpty())
 			options.DebugShapes = &m_DebugDraw;
 

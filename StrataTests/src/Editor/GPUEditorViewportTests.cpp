@@ -1342,7 +1342,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("viewport.capture shows the LOD, streaming and mip debug views")
+	TEST_CASE("viewport.capture shows the LOD, streaming, mip and motion debug views")
 	{
 		Tests::GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -1387,6 +1387,18 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(result["debugView"]["tintedEntities"] == 0);
 		CHECK(result["debugView"]["entitiesPerMipShortfall"] == nlohmann::json::array({ 0, 0, 0, 0 }));
 		CHECK(harness.CountDifferences(mip, plain) == 0);
+
+		// The motion view renders a frame more, against which nothing moved: the image darkened, nothing tinted.
+		const DecodedImage motion = harness.Capture(withView("motion"), &result);
+		CHECK(result["debugView"]["view"] == "motion");
+		CHECK(result["debugView"]["tintedEntities"] == 0);
+		CHECK(harness.CountDifferences(motion, plain) > 50);
+		for (const glm::ivec2 pixel : { glm::ivec2(1, 1), glm::ivec2(32, 32) })
+		{
+			const glm::ivec4 expected(glm::vec4(plain.At(pixel.x, pixel.y)) * 0.35f + 0.5f);
+			for (int channel = 0; channel < 3; channel++)
+				CHECK(std::abs(motion.At(pixel.x, pixel.y)[channel] - expected[channel]) <= 1);
+		}
 
 		// Captures default to the viewport's debug view; unknown views are refused.
 		harness.Run("viewport.setSettings", { { "debugView", "lod" } });

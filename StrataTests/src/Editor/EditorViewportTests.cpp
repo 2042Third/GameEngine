@@ -438,6 +438,10 @@ TEST_SUITE("Editor.Viewport")
 		REQUIRE_MESSAGE(restored.FromJson(settings.ToJson(), &error), error);
 		CHECK(restored.DebugView == ViewportDebugView::Mip);
 		CHECK(settings.ToJson()["DebugView"] == "mip");
+		settings.DebugView = ViewportDebugView::Motion;
+		REQUIRE_MESSAGE(restored.FromJson(settings.ToJson(), &error), error);
+		CHECK(restored.DebugView == ViewportDebugView::Motion);
+		CHECK(settings.ToJson()["DebugView"] == "motion");
 		// The selection and debug view colors are the editor theme's, not saved with the project.
 		CHECK_FALSE(settings.ToJson().contains("SelectionColor"));
 		CHECK_FALSE(settings.ToJson().contains("DebugColors"));
@@ -669,6 +673,12 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(settings["rotateSnap"] == 45.0);
 			CHECK(settings["debugView"] == "streaming");
 			CHECK(harness.Context.GetViewport().GetSettings().DebugView == ViewportDebugView::Streaming);
+			CHECK(harness.Run("viewport.getSettings") == settings);
+			// The motion view, and no view of another name.
+			CHECK(harness.Run("viewport.setSettings", { { "debugView", "motion" } })["debugView"] == "motion");
+			CHECK(harness.Context.GetViewport().GetSettings().DebugView == ViewportDebugView::Motion);
+			CHECK(harness.Error("viewport.setSettings", { { "debugView", "velocity" } }).find("'debugView'") != std::string::npos);
+			settings = harness.Run("viewport.setSettings", { { "debugView", "streaming" } });
 			CHECK(harness.Run("viewport.getSettings") == settings);
 
 			// The Game view's size and the Scene view's game camera.

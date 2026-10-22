@@ -114,7 +114,7 @@ namespace Strata
 
 		nlohmann::json DebugViewSchema(std::string description)
 		{
-			return { { "type", "string" }, { "enum", { "none", "streaming", "lod", "mip" } }, { "description", std::move(description) } };
+			return { { "type", "string" }, { "enum", { "none", "streaming", "lod", "mip", "motion" } }, { "description", std::move(description) } };
 		}
 
 		// What the debug view of a render found.
@@ -238,6 +238,7 @@ namespace Strata
 			uint32_t MipFrames = 0;   // Renders repeated so far while textures were coarser than the view wants
 			uint32_t PoseFrames = 0;  // Renders repeated so far while animators showed poses older than their time
 			uint32_t InstanceFrames = 0; // Renders repeated so far while new mesh renderers waited for their upload to the GPU
+			uint32_t MotionFrames = 0;   // Renders repeated for the motion view's previous frame
 			uint32_t TexturesBelowWanted = 0;
 			uint32_t StalePoses = 0;
 			uint32_t DeferredProxies = 0;
@@ -277,7 +278,8 @@ namespace Strata
 		// scene's text are still being rasterized, or (waitForAssets) assets of the view are still loading, textures it draws
 		// lack the levels the view wants or new mesh renderers wait for their upload to the GPU, the image would lack them: the
 		// next polls render again until it is complete, or c_MaxCaptureTextFrames, c_MaxCaptureAssetFrames,
-		// c_MaxCaptureMipFrames and c_MaxCaptureInstanceFrames ran out.
+		// c_MaxCaptureMipFrames and c_MaxCaptureInstanceFrames ran out. The motion view renders a second frame, the first one's
+		// motion being none.
 		std::optional<EditorCommandResult> StartCapture(EditorContext& context, const CaptureRequest& request, CaptureProgress& progress)
 		{
 			EditorViewport& viewport = context.GetViewport();
@@ -327,8 +329,11 @@ namespace Strata
 			const bool mipsPending = request.WaitForAssets && progress.TexturesBelowWanted > 0 && progress.MipFrames < c_MaxCaptureMipFrames;
 			const bool posesPending = request.WaitForAssets && progress.StalePoses > 0 && progress.PoseFrames < c_MaxCapturePoseFrames;
 			const bool instancesPending = request.WaitForAssets && progress.DeferredProxies > 0 && progress.InstanceFrames < c_MaxCaptureInstanceFrames;
-			if (textPending || assetsPending || mipsPending || posesPending || instancesPending)
+			// The motion view shows the motion since the capture renderer's previous frame, which its first frame lacks.
+			const bool motionPending = progress.DebugView == ViewportDebugView::Motion && !stats.MotionHistory && progress.MotionFrames == 0;
+			if (textPending || assetsPending || mipsPending || posesPending || instancesPending || motionPending)
 			{
+				progress.MotionFrames += motionPending ? 1 : 0;
 				progress.TextFrames += textPending ? 1 : 0;
 				progress.AssetFrames += assetsPending ? 1 : 0;
 				progress.MipFrames += mipsPending ? 1 : 0;
@@ -591,7 +596,9 @@ namespace Strata
 				{ "debugView", DebugViewSchema("Color every view of the viewport: \"streaming\" tints entities whose mesh, material or textures are still "
 					"loading (Sulfur; failed ones Cinnabar; entities whose mesh is not there are drawn as boxes), \"lod\" tints entities by the level of "
 					"detail they are drawn at (0 to 3+), \"mip\" tints entities with textures by the mip levels their worst texture lacks against what "
-					"their view needs (none Malachite, 1 Azurite, 2 Sulfur, 3 or more or still loading Cinnabar), \"none\" shows the image as rendered") },
+					"their view needs (none Malachite, 1 Azurite, 2 Sulfur, 3 or more or still loading Cinnabar), \"motion\" colors every pixel by its motion "
+					"since the view's previous frame (hue: the direction, right red, up yellow-green, left cyan, down violet; strength: the speed, full at "
+					"16 pixels a frame; still pixels darkened), \"none\" shows the image as rendered") },
 				{ "gameView", ObjectSchema({
 					{ "mode", { { "type", "string" }, { "enum", { "free", "16:9", "16:10", "4:3", "21:9", "1920x1080", "1280x720", "custom", "game" } },
 						{ "description", "The Game view's image: free fills the panel, an aspect ratio is the largest image of it inside the panel "
@@ -694,7 +701,8 @@ namespace Strata
 					"while textures lack the mip levels the view wants, up to about two, and while new mesh renderers are on their way to the GPU (default "
 					"true); false takes the picture at once") },
 				{ "debugView", DebugViewSchema("\"streaming\" tints entities by streaming state (pending Sulfur, failed Cinnabar, missing meshes as boxes), "
-					"\"lod\" by level of detail, \"mip\" by the mip levels their textures lack, \"none\" not at all (default: the viewport's debug view)") },
+					"\"lod\" by level of detail, \"mip\" by the mip levels their textures lack, \"motion\" colors pixels by their motion since the capture's "
+					"previous frame (rendered twice for it: still scenes show none), \"none\" not at all (default: the viewport's debug view)") },
 				{ "path", StringSchema("Also save the PNG to this .png file: relative to the project directory (needs an open project) or absolute; folders are "
 					"created, network and device paths are refused") },
 				{ "overwrite", BoolSchema("Replace an existing file at path (default false: an existing file is an error)") } }),
@@ -729,7 +737,7 @@ namespace Strata
 				{
 					request.DebugView = ViewportDebugViewFromString(arguments.GetString("debugView"));
 					if (!request.DebugView && arguments.IsValid())
-						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\", \"lod\" or \"mip\"");
+						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\", \"lod\", \"mip\" or \"motion\"");
 				}
 				request.Overwrite = arguments.GetBool("overwrite", false);
 				if (arguments.Has("path"))

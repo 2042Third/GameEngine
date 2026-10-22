@@ -571,9 +571,11 @@ namespace Strata
 			label = "LOD";
 		else if (settings.DebugView == ViewportDebugView::Mip)
 			label = "Mip";
+		else if (settings.DebugView == ViewportDebugView::Motion)
+			label = "Motion";
 		if (UI::ToggleChip("Viewport.DebugView", Icons::Layers, label, &clicked,
 			"Debug views: color the scene by streaming state (meshes, materials and textures still loading or failed), by the level of detail "
-			"meshes are drawn at, or by the mip levels textures lack against what the view needs"))
+			"meshes are drawn at, by the mip levels textures lack against what the view needs, or by how each pixel moved since the previous frame"))
 		{
 			ImGui::OpenPopup("DebugView");
 		}
@@ -583,7 +585,8 @@ namespace Strata
 			{ ViewportDebugView::None, "Lit (no debug view)" },
 			{ ViewportDebugView::Streaming, "Streaming: loading and failed assets" },
 			{ ViewportDebugView::LOD, "LOD: level of detail drawn" },
-			{ ViewportDebugView::Mip, "Mip: texture levels resident against needed" }
+			{ ViewportDebugView::Mip, "Mip: texture levels resident against needed" },
+			{ ViewportDebugView::Motion, "Motion: movement since the previous frame" }
 		};
 		for (const auto& [view, name] : views)
 		{
@@ -616,7 +619,7 @@ namespace Strata
 					std::to_string(stats.EntitiesPerLOD[level]) });
 			}
 		}
-		else
+		else if (settings.DebugView == ViewportDebugView::Mip)
 		{
 			// Entities by the mip levels their worst texture lacks against what the view needs.
 			constexpr std::array<const char*, 4> names = { "Mips as needed", "1 level short", "2 levels short", "3+ short, loading" };
@@ -624,8 +627,11 @@ namespace Strata
 			for (size_t shortfall = 0; shortfall < settings.DebugColors.Mip.size(); shortfall++)
 				lines.push_back({ toColor(settings.DebugColors.Mip[shortfall]), names[shortfall], std::to_string(stats.EntitiesPerMipShortfall[shortfall]) });
 		}
-		const std::string note = settings.DebugView == ViewportDebugView::Streaming && stats.PlaceholderBoxes > 0
-			? fmt::format("{} boxes: meshes not there yet", stats.PlaceholderBoxes) : std::string();
+		std::string note;
+		if (settings.DebugView == ViewportDebugView::Streaming && stats.PlaceholderBoxes > 0)
+			note = fmt::format("{} boxes: meshes not there yet", stats.PlaceholderBoxes);
+		else if (settings.DebugView == ViewportDebugView::Motion)
+			note = "Hue: direction, strength: speed (full at 16 px)";
 
 		// At the image's bottom left.
 		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);

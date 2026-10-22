@@ -289,6 +289,12 @@ namespace Strata
 		// scenes and invalid ones are ignored; an entity listed twice keeps its first color. The span must stay valid during
 		// Render.
 		std::span<const SceneEntityTint> EntityTints;
+
+		// The motion debug view, drawn first (Overlay/MotionView.frag): every pixel's motion since the renderer's previous frame
+		// (MotionVectors, which it implies) as a color over the image, its hue the direction on screen (right red, up
+		// yellow-green, left cyan, down violet) and its strength the speed, full at 16 pixels a frame; still pixels show the
+		// image darkened. Where nothing was drawn (the sky) the motion is the camera's.
+		bool ShowMotionVectors = false;
 	};
 
 	struct SceneRendererStats
@@ -978,6 +984,8 @@ namespace Strata
 		bool PrepareOverlayPasses(Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, nvrhi::ICommandList* commandList,
 			GPUPassTimer& gpuTimer);
 		void DrawDebugLines(nvrhi::ICommandList* commandList, DebugDrawDepth depth, uint32_t firstVertex, uint32_t vertexCount);
+		// The motion debug view (SceneRenderOptions::ShowMotionVectors) into the output texture; false when GPU resources failed.
+		bool DrawMotionView(nvrhi::ICommandList* commandList, const nvrhi::Viewport& viewport);
 		// The tints of SceneRenderOptions::EntityTints (StatusTint.frag); false when GPU resources failed.
 		bool DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport);
 	private:
@@ -1397,6 +1405,10 @@ namespace Strata
 		nvrhi::ShaderHandle m_MeshVelocityVertexShader;
 		nvrhi::ShaderHandle m_SkinnedMeshVelocityVertexShader;
 		nvrhi::ShaderHandle m_PrepassVelocityPixelShader;
+		// The motion debug view (DrawMotionView): its binding set names the velocity target and the depth.
+		nvrhi::BindingLayoutHandle m_MotionViewLayout;
+		nvrhi::BindingSetHandle m_MotionViewBindingSet;
+		nvrhi::GraphicsPipelineHandle m_MotionViewPipeline;
 		nvrhi::BindingLayoutHandle m_MotionCopyLayout;
 		nvrhi::ComputePipelineHandle m_MotionCopyPipeline;
 		nvrhi::BufferHandle m_MotionCopyListBuffer; // The elements a frame copies: the instances', then the joints'

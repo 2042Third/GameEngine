@@ -109,6 +109,7 @@ strata_add_shaders(Strata_Renderer
 		Overlay/Grid.frag
 		Overlay/Outline.frag
 		Overlay/StatusTint.frag
+		Overlay/MotionView.frag
 		Overlay/DebugLine.vert
 		Overlay/DebugLine.frag
 		Overlay/Text.vert

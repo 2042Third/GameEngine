@@ -622,6 +622,55 @@ TEST_SUITE("GPU.SceneRenderer.MotionVectors")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The motion view colors moving pixels by their direction over the image and darkens still ones")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		MotionScene scene(assets, 16);
+		SceneRenderer plain = CreateRenderer("Plain");
+		SceneRenderer view = CreateRenderer("View");
+		plain.SetViewportSize(c_Size, c_Size);
+		view.SetViewportSize(c_Size, c_Size);
+		SceneRenderOptions options;
+		options.ShowMotionVectors = true;
+		REQUIRE(view.Render(scene.Contents, scene.Camera, nullptr, options));
+		CHECK(view.GetVelocityTexture() != nullptr); // The view implies motion vectors
+		// The cube moves right on screen (+X); the camera stays.
+		scene.Move(scene.Cubes[9], glm::vec3(0.5f, 0.0f, 0.0f));
+		REQUIRE(view.Render(scene.Contents, scene.Camera, nullptr, options));
+		CHECK(view.GetStats().MotionHistory);
+		ReadbackImage image;
+		REQUIRE(Renderer::ReadTexture(view.GetOutputTexture(), image));
+		const MotionFrame motion = ReadMotionFrame(view);
+		const ReadbackImage reference = RenderToImage(plain, scene.Contents, scene.Camera);
+		uint32_t red = 0;
+		uint32_t moving = 0;
+		uint32_t darkened = 0;
+		uint32_t still = 0;
+		for (size_t pixel = 0; pixel < motion.IDs.size(); pixel++)
+		{
+			const uint8_t* color = &image.Pixels[pixel * 4];
+			if (motion.IDs[pixel] == GetID(scene.Cubes[9]))
+			{
+				moving++;
+				red += color[0] > color[1] + 10 && color[0] > color[2] + 10 ? 1u : 0u;
+				continue;
+			}
+			// Still pixels: the image under 65% black.
+			still++;
+			bool close = true;
+			for (int channel = 0; channel < 3; channel++)
+				close = close && std::abs(static_cast<int>(color[channel]) - static_cast<int>(reference.Pixels[pixel * 4 + channel] * 0.35f + 0.5f)) <= 1;
+			darkened += close ? 1u : 0u;
+		}
+		CHECK(moving > 8);
+		CHECK(red == moving);
+		CHECK(darkened == still);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Asking for motion vectors leaves the image bit-identical on both paths, with skinned and mirrored instances")
 	{
 		GPUContext gpu;

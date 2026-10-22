@@ -37,6 +37,7 @@ namespace Strata
 			case ViewportDebugView::Streaming: return "streaming";
 			case ViewportDebugView::LOD:       return "lod";
 			case ViewportDebugView::Mip:       return "mip";
+			case ViewportDebugView::Motion:    return "motion";
 			case ViewportDebugView::None:      break;
 		}
 		return "none";
@@ -44,7 +45,8 @@ namespace Strata
 
 	std::optional<ViewportDebugView> ViewportDebugViewFromString(std::string_view name)
 	{
-		for (ViewportDebugView view : { ViewportDebugView::None, ViewportDebugView::Streaming, ViewportDebugView::LOD, ViewportDebugView::Mip })
+		for (ViewportDebugView view : { ViewportDebugView::None, ViewportDebugView::Streaming, ViewportDebugView::LOD, ViewportDebugView::Mip,
+			ViewportDebugView::Motion })
 		{
 			if (name == ViewportDebugViewToString(view))
 				return view;
@@ -64,7 +66,7 @@ namespace Strata
 	{
 		m_Tints.clear();
 		m_Stats = {};
-		if (view == ViewportDebugView::None || !AssetManager::HasActive())
+		if (view == ViewportDebugView::None || view == ViewportDebugView::Motion || !AssetManager::HasActive())
 			return;
 
 		// The proxies as the renderer will draw them this frame (its own Sync then finds nothing new), from the cached world
