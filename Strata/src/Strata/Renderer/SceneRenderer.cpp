@@ -777,6 +777,7 @@ namespace Strata
 	{
 		frame.EnvironmentParams = glm::vec4(0.0f);
 		frame.SkyParams = glm::vec4(0.0f);
+		m_SkyHorizon.reset();
 
 		const SkyLightComponent* skyLight = nullptr;
 		for (auto [entity, sky, world] : scene.GetRegistry().view<SkyLightComponent, WorldTransformComponent>().each())
@@ -845,6 +846,8 @@ namespace Strata
 		}
 
 		frame.EnvironmentParams = glm::vec4(std::max(skyLight->Intensity, 0.0f), rotation, static_cast<float>(c_PrefilteredMipCount - 1), 1.0f);
+		if (procedural)
+			m_SkyHorizon = glm::vec3(SanitizeRadiance(skyLight->HorizonColor * frame.EnvironmentParams.x));
 		const float backgroundMips = static_cast<float>(MipCountFor(c_EnvironmentCubeSize) - 1);
 		frame.SkyParams = glm::vec4(std::clamp(skyLight->BackgroundBlur, 0.0f, 1.0f) * backgroundMips, skyLight->ShowBackground ? 1.0f : 0.0f, 0.0f, 0.0f);
 		m_Stats.EnvironmentLighting = true;
@@ -1185,10 +1188,14 @@ namespace Strata
 		const double height = static_cast<double>(camera.Position.y) - static_cast<double>(finiteOr(fog->BaseHeight, 0.0f));
 		frame.FogDensity = glm::vec4(density, falloff, static_cast<float>(std::isfinite(height) ? std::clamp(height, -c_MaxHeight, c_MaxHeight) : 0.0), startDistance);
 		frame.FogColor = glm::vec4(glm::vec3(SanitizeRadiance(fog->Color)), std::clamp(finiteOr(fog->MaxOpacity, 1.0f), 0.0f, 1.0f));
-		// The light it scatters besides the sun: the sky's irradiance when the environment lights the scene, else what lights
-		// the scene's surfaces without one (the ambient color); without ColorFromSky, Color itself is the fog's radiance.
+		// The light it scatters besides the sun's. The procedural sky's horizon, the haze its gradient ends in: fog that hides
+		// the distance then meets the sky at the horizon without a seam (the irradiance from above, mostly the zenith's color,
+		// made a darker band there). An environment map's irradiance from above, read on the GPU. Without an environment, what
+		// lights the scene's surfaces then (the ambient color). Without ColorFromSky, Color itself is the fog's radiance.
 		if (!fog->ColorFromSky)
 			frame.FogLight = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
+		else if (m_SkyHorizon)
+			frame.FogLight = glm::vec4(*m_SkyHorizon, 0.0f);
 		else if (frame.EnvironmentParams.w > 0.0f)
 			frame.FogLight = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
 		else

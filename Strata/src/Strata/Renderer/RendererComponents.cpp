@@ -151,8 +151,8 @@ namespace Strata
 				WithTooltip(Slider(0.0f, 1.0f), "The most the fog hides of what lies behind it; the sky at the horizon gets this much"))
 			.Property("Color", &HeightFogComponent::Color, WithTooltip(Color(), "Linear albedo: the fraction of its light the fog scatters toward the viewer"))
 			.Property("ColorFromSky", &HeightFogComponent::ColorFromSky,
-				WithTooltip({}, "The sky's light lights the fog (the environment's irradiance, or the ambient color without one); off, Color is the fog's own "
-					"radiance. The directional light lights it either way"))
+				WithTooltip({}, "The sky lights the fog: the procedural sky's horizon color, an environment map's light from above, or the ambient color "
+					"without either; off, Color is the fog's own radiance. The directional light lights it either way"))
 			.Property("SunScattering", &HeightFogComponent::SunScattering,
 				WithTooltip(Slider(0.0f, 1.0f), "How strongly the fog scatters the directional light toward a viewer looking at it: 0 equally in every "
 					"direction, 1 into a glow around the light"));

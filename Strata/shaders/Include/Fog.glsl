@@ -26,17 +26,18 @@ float GetFogOpticalDepth(float startHeight, float rise, float distance)
 	return u_Frame.FogDensity.x * distance * exp(min(-falloff * lowest, 80.0)) * mean;
 }
 
-// The light the fog scatters toward a viewer looking along `direction`: the sky's (or a constant light) equally in every
-// direction, the directional light's through the Henyey-Greenstein phase function, both times the fog's albedo.
+// The light the fog scatters toward a viewer looking along `direction`: the sky's (a constant light, or an environment map's
+// irradiance) equally in every direction, the directional light's through the Henyey-Greenstein phase function, both times
+// the fog's albedo.
 vec3 GetFogInscattering(vec3 direction)
 {
 	vec3 light = u_Frame.FogLight.rgb;
 	if (u_Frame.FogLight.w > 0.0)
 	{
-		// The irradiance from above and below: their mean is the sky's mean radiance for a uniform sky.
-		vec3 up = textureLod(samplerCube(u_IrradianceMap, u_LinearClampSampler), vec3(0.0, 1.0, 0.0), 0.0).rgb;
-		vec3 down = textureLod(samplerCube(u_IrradianceMap, u_LinearClampSampler), vec3(0.0, -1.0, 0.0), 0.0).rgb;
-		light += 0.5 * (up + down) * u_Frame.EnvironmentParams.x;
+		// An environment map's irradiance from above (its radiance where it is uniform), taken for the light from every
+		// direction, as if the ground below the fog were as bright as the sky: the light the fog scatters within itself makes
+		// up much of what a darker ground does not send.
+		light += textureLod(samplerCube(u_IrradianceMap, u_LinearClampSampler), vec3(0.0, 1.0, 0.0), 0.0).rgb * u_Frame.EnvironmentParams.x;
 	}
 	if (u_Frame.DirectionalLightDirection.w > 0.0)
 	{

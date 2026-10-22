@@ -237,7 +237,7 @@ TEST_SUITE("GPU.SceneRenderer.Fog")
 		REQUIRE(renderer.GetStats().EnvironmentLighting);
 		CHECK(renderer.GetStats().HeightFog);
 
-		// The sky lights the fog: its irradiance, here the sky's color.
+		// The sky lights the fog: the procedural sky's horizon color, here the sky's color.
 		const glm::dvec3 inscattered = glm::dvec3(fog.Color) * skyColor;
 		int worstBelow = 0;
 		int worstAbove = 0;
@@ -264,6 +264,33 @@ TEST_SUITE("GPU.SceneRenderer.Fog")
 		fog.Density = 0.0f;
 		const ReadbackImage clear = RenderToImage(renderer, scene, camera);
 		CHECK(MaxDifference(GetPixelRGBA8(clear, c_Size / 4, c_Size - 1), ExpectFogged(skyColor, inscattered, 0.0, 0.0)) <= 1);
+
+		// Fog that hides the sky entirely (below the horizon, at full opacity) takes the procedural sky's horizon color,
+		// whatever its gradient, so the horizon shows no seam.
+		fog.Density = 0.05f;
+		fog.MaxOpacity = 1.0f;
+		fog.Color = glm::vec3(1.0f, 0.9f, 0.8f);
+		sky.ZenithColor = glm::vec3(0.1f, 0.2f, 0.6f);
+		sky.HorizonColor = glm::vec3(0.6f, 0.65f, 0.7f);
+		sky.GroundColor = glm::vec3(0.2f, 0.15f, 0.1f);
+		const auto checkHidden = [&](const glm::dvec3& light, int tolerance)
+		{
+			const ReadbackImage image = RenderToImage(renderer, scene, camera);
+			const glm::ivec3 expected = ExpectFogged(glm::dvec3(0.0), glm::dvec3(fog.Color) * light, std::numeric_limits<double>::infinity(), 1.0);
+			int worst = 0;
+			for (uint32_t y = c_Size / 2 + 1; y < c_Size; y++)
+				worst = std::max(worst, MaxDifference(GetPixelRGBA8(image, c_Size / 4, y), expected));
+			CHECK(worst <= tolerance);
+		};
+		checkHidden(glm::dvec3(sky.HorizonColor), 1);
+
+		// An environment map lights the fog with its irradiance from above: a map of one color above the horizon and another
+		// below gives the upper one (within its filtering).
+		const glm::vec3 upper(0.5f, 0.6f, 0.8f);
+		sky.Source = SkyLightSource::EnvironmentMap;
+		sky.EnvironmentMap = assets.Add(CreateEnvironmentTexture(upper, glm::vec3(0.1f, 0.08f, 0.05f)), "TwoToneSky");
+		checkHidden(glm::dvec3(upper), 2);
+		REQUIRE(renderer.GetStats().EnvironmentLighting);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

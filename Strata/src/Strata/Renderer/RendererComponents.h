@@ -89,8 +89,9 @@ namespace Strata
 		float StartDistance = 0.0f; // Meters from the camera before which there is no fog
 		float MaxOpacity = 1.0f;    // The most the fog hides of what lies behind it (the sky at the horizon gets this much)
 		glm::vec3 Color = { 0.7f, 0.8f, 0.9f }; // Linear albedo of the scattering: what fraction of its light the fog scatters
-		// The sky lights the fog (the environment's irradiance, or the ambient color without an environment); off, Color is
-		// the fog's own radiance. The directional light lights it in both cases (SunScattering).
+		// The sky lights the fog: the procedural sky's horizon color (so fog that hides the distance meets the sky without a
+		// seam), an environment map's irradiance from above, or the ambient color without an environment; off, Color is the
+		// fog's own radiance. The directional light lights it in both cases (SunScattering).
 		bool ColorFromSky = true;
 		// How strongly the fog scatters the directional light forward, toward a viewer looking at the light: 0 scatters it
 		// equally in every direction, 1 gathers it into a glow around the light (the Henyey-Greenstein phase function's

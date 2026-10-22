@@ -1102,6 +1102,9 @@ namespace Strata
 		// Directional light and shadows
 		ShadowLight m_ShadowLight;
 		glm::vec3 m_SunColor = glm::vec3(1.0f); // Color of the directional light the scene is lit by (the procedural sun's tint)
+		// The frame's procedural sky's horizon radiance (its HorizonColor times its intensity), which lights height fog; unset
+		// when no procedural sky lights the scene (UpdateEnvironment).
+		std::optional<glm::vec3> m_SkyHorizon;
 		nvrhi::TextureHandle m_ShadowMap;      // Depth array, one layer per cascade (created on first use)
 		nvrhi::TextureHandle m_DummyShadowMap; // Bound while no shadows are rendered
 		nvrhi::ITexture* m_BoundShadowMap = nullptr;

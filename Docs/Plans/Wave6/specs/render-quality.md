@@ -571,12 +571,14 @@ with slice c's far end widened (it would grow the finer cascade at its widest en
 
 **D9 Height fog per fragment.** A `HeightFogComponent` (first active one applies, like `PostProcess`): `Density`
 (extinction at `BaseHeight`, 1/m, 0.02), `HeightFalloff` (1/m, 0.2), `BaseHeight` (0), `StartDistance` (0), `MaxOpacity`
-(1), `Color` (linear albedo of the scattering, 0.7 0.8 0.9), `ColorFromSky` (true: the sky's irradiance lights the fog,
-from the environment's irradiance map, or the atmosphere's when it is on) and `SunScattering` (forward-scattering
-strength toward the directional light, 0.5). `Forward.frag` (opaque and transparent) applies the analytic integral of
-exponential height fog along the camera ray before `SanitizeHDR`, from camera-relative positions and the camera's world
-height; `Skybox.frag` applies it at infinite distance. Parameters go into `FrameConstants`; no fog component means a
-uniform branch that skips it. Rejected: a fullscreen pass after the sky (transparent surfaces would still need the
+(1), `Color` (linear albedo of the scattering, 0.7 0.8 0.9), `ColorFromSky` (true: the sky lights the fog: an
+environment map's irradiance from above; the procedural sky's `HorizonColor`, because its irradiance from above is
+mostly the zenith's color and made a dark blue band below the horizon in the Open World (S4); the atmosphere's when it
+is on, which S7 reads at the horizon for the same reason) and `SunScattering` (forward-scattering strength toward the
+directional light, 0.5). `Forward.frag` (opaque and transparent) applies the analytic integral of exponential height
+fog along the camera ray before `SanitizeHDR`, from camera-relative positions and the camera's world height;
+`Skybox.frag` applies it at infinite distance. Parameters go into `FrameConstants`; no fog component means a uniform
+branch that skips it. Rejected: a fullscreen pass after the sky (transparent surfaces would still need the
 per-fragment path, and it adds a full-screen read and write); volumetric froxels (deferred).
 
 **D10 The atmosphere as a sky source (S7, with the pre-exposure its real values need).**
