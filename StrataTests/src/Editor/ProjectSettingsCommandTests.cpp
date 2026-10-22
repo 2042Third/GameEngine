@@ -205,6 +205,20 @@ TEST_SUITE("Editor.ProjectSettings")
 		REQUIRE(project.WaitForWrites());
 		CHECK(project.ReadProjectFile()->GetConfig().StartScene == project.Second);
 		CHECK_FALSE(project.Context.IsSceneModified());
+
+		// A change the project file could not be written with is refused naming its bound, and changes nothing: export settings
+		// that name the scenes' folder often enough to take the file over 1 MiB.
+		const size_t largeSteps = undo.GetCount();
+		const uint64_t writes = project.Context.GetProjectFileWriter()->GetWriteCount();
+		const std::vector<std::string> included = project.Context.GetProject()->GetConfig().Export.AlwaysInclude;
+		const nlohmann::json many(100000, "Scenes");
+		const EditorCommandResult refused = project.Execute("project.setExportSettings", { { "alwaysInclude", many } });
+		CHECK_FALSE(refused.Success);
+		CHECK(refused.Error.find("1 MiB") != std::string::npos);
+		CHECK(undo.GetCount() == largeSteps);
+		CHECK(project.Context.GetProject()->GetConfig().Export.AlwaysInclude == included);
+		CHECK(project.Context.GetProjectFileWriter()->GetWriteCount() == writes);
+		CHECK(project.Context.GetProjectFileState() == SettingsFileState::Written);
 	}
 
 	TEST_CASE("The project file is written by a job, never by the main thread")

@@ -77,14 +77,23 @@ namespace Strata
 	{
 		if (before == after)
 			return true;
+		// The project file is written later, on a job: a change it could not be written with (over its bound) is refused now.
+		Project changed = *context.GetProject();
+		after.ApplyTo(changed.GetConfig());
+		if (!changed.MakeFileText(outError))
+			return false;
 		return context.GetUndoStack().Execute(CreateScope<ProjectSettingsAction>(context, std::move(name), std::move(before), std::move(after)), outError);
 	}
 
 	bool ChangeProjectSection(EditorContext& context, std::string name, std::string section, nlohmann::json after, std::string* outError)
 	{
-		nlohmann::json before = context.GetProject()->GetSettings().GetStoredEntry(section);
+		const Project& project = *context.GetProject();
+		nlohmann::json before = project.GetSettings().GetStoredEntry(section);
 		if (before == after)
 			return true;
+		Project changed = project;
+		if (!changed.GetSettings().RestoreStoredEntry(section, after, context.GetSettingsRegistry(), outError) || !changed.MakeFileText(outError))
+			return false;
 		return context.GetUndoStack().Execute(CreateScope<ProjectSettingsAction>(context, std::move(name), std::move(section), std::move(before), std::move(after)),
 			outError);
 	}

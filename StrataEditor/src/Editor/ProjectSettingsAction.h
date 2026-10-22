@@ -63,7 +63,9 @@ namespace Strata
 	};
 
 	// A command's change of the open project's fields: executed and recorded as one undo step (ProjectSettingsAction). A change
-	// that changes nothing records nothing. False, with the reason, when the step could not be executed (nothing changed then).
+	// that changes nothing records nothing. False, with the reason, when the project file could not be written with the change
+	// (Project::MakeFileText: over its 1 MiB, checked on a copy before anything changes) or the step could not be executed
+	// (nothing changed then).
 	bool ChangeProjectSettings(EditorContext& context, std::string name, ProjectSettingsFields before, ProjectSettingsFields after, std::string* outError);
 	// The same for one settings section, from its stored entry to `after` (null: reset to its default).
 	bool ChangeProjectSection(EditorContext& context, std::string name, std::string section, nlohmann::json after, std::string* outError);

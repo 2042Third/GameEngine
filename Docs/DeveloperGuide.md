@@ -897,7 +897,8 @@ setting is one registration, and no other code learns of it.
   forwarding to the open project's values).
 - **Changes are undo steps.** Every command that changes the project's settings (`project.setStartScene`,
   `project.setExportSettings`, `project.setSettings`) records one `ProjectSettingsAction` (`Editor/ProjectSettingsAction.h`,
-  made with `ChangeProjectSettings` or `ChangeProjectSection`; a section's step keeps its stored entries,
+  made with `ChangeProjectSettings` or `ChangeProjectSection`, which first refuse, on a copy, a change the project file
+  could not be written with, such as one over its 1 MiB; a section's step keeps its stored entries,
   `ProjectSettingsValues::GetStoredEntry`, and puts them back with `RestoreStoredEntry`, also a value its section
   refuses): it sets the values and queues a write when it runs and when it is undone, changes no scene
   (`ChangesScene() == false`, so the scene stays saved) and goes with the rest of the history when a scene opens. Such

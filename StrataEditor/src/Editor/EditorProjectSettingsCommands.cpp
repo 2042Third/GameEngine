@@ -163,7 +163,8 @@ namespace Strata
 				if (!section)
 					return std::move(*failure);
 
-				// The change is made on copies first: nothing changes unless all of it is valid, the project file's bound included.
+				// The change is made on copies first: nothing changes unless all of it is valid, the project file's bound included
+				// (ChangeProjectSection).
 				const Ref<Project>& project = context.GetProject();
 				ProjectSettingsValues values = project->GetSettings();
 				std::string error;
@@ -171,10 +172,6 @@ namespace Strata
 					values.Reset(id);
 				else if (!values.Set(id, *value, settings, &error))
 					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'value': {}", error));
-				Project changed = *project;
-				changed.GetSettings() = values;
-				if (!changed.MakeFileText(&error))
-					return EditorCommandResult::Fail(error);
 
 				const std::string name = fmt::format("{} {}", reset ? "Reset" : "Set", section->Title);
 				if (!ChangeProjectSection(context, name, id, values.GetStoredEntry(id), &error))
