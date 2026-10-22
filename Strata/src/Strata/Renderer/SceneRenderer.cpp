@@ -2405,7 +2405,10 @@ namespace Strata
 			frame.PreviousViewProjection = glm::mat4(glm::dmat4(m_MotionCamera.Projection) * glm::dmat4(m_MotionCamera.RelativeView)
 				* glm::translate(glm::dmat4(1.0), offset));
 		}
-		frame.TemporalParams = glm::vec4(m_Stats.MotionHistory ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+		// Per-pixel noise turns by the golden ratio's fraction of a turn each frame of the history (from its reset on, so captures
+		// are deterministic): the frames the history averages sample the turn evenly.
+		const double noiseTurn = m_TemporalFrame ? std::fmod(static_cast<double>(m_TemporalFrames - 1) * 0.6180339887498949, 1.0) : 0.0;
+		frame.TemporalParams = glm::vec4(m_Stats.MotionHistory ? 1.0f : 0.0f, 0.0f, static_cast<float>(noiseTurn), 0.0f);
 		frame.CameraPosition = glm::vec4(camera.Position, camera.Near);
 		const glm::vec3 forward = -glm::vec3(frame.InverseView[2]);
 		frame.CameraForward = glm::vec4(glm::length(forward) > 1e-6f ? glm::normalize(forward) : glm::vec3(0.0f, 0.0f, -1.0f), camera.Orthographic ? 1.0f : 0.0f);

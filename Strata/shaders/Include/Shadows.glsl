@@ -19,10 +19,11 @@ const vec2 c_PoissonDisk[16] = vec2[](
 	vec2(0.44323325, -0.97511554), vec2(0.53742981, -0.47373420), vec2(-0.26496911, -0.41893023), vec2(0.79197514, 0.19090188),
 	vec2(-0.24188840, 0.99706507), vec2(-0.81409955, 0.91437590), vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790));
 
-// Per-pixel rotation of the sampling pattern (interleaved gradient noise) trades banding for fine noise.
+// Per-pixel rotation of the sampling pattern (interleaved gradient noise) trades banding for fine noise. With temporal
+// anti-aliasing every frame turns it further (TemporalParams.z), so the history averages the noise away.
 mat2 ShadowSampleRotation(vec2 pixel)
 {
-	float angle = TWO_PI * fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
+	float angle = TWO_PI * fract(fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715)))) + u_Frame.TemporalParams.z);
 	float s = sin(angle);
 	float c = cos(angle);
 	return mat2(c, s, -s, c);

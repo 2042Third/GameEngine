@@ -68,7 +68,8 @@ void main()
 		return;
 	}
 
-	float noise = InterleavedGradientNoise(vec2(pixel));
+	// With temporal anti-aliasing every frame turns the slices further (TemporalParams.z), so the history averages the noise away.
+	float noise = fract(InterleavedGradientNoise(vec2(pixel)) + u_Frame.TemporalParams.z);
 	float jitter = fract(noise * 7.13 + 0.5);
 	float falloffStart = u_AO.Radius * 0.6;
 	// Samples closer than this many pixels would read the pixel itself.
