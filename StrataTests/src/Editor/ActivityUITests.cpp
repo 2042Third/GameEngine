@@ -4,6 +4,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
+#include "Editor/SettingsFileWriter.h"
 #include "Editor/UndoStack.h"
 #include "Panels/ActivityPanel.h"
 #include "Panels/ViewportPanel.h"
@@ -16,6 +17,7 @@
 #include <Strata/Core/Platform.h>
 #include <Strata/Network/EditorSession.h>
 #include <Strata/Network/RpcClient.h>
+#include <Strata/Project/Project.h>
 
 #include <nlohmann/json.hpp>
 
@@ -232,6 +234,48 @@ TEST_SUITE("Editor.UI.Activity")
 		const std::optional<UI::ItemProbe::Item> kept = UI::ItemProbe::Find(fmt::format("Activity.Summary.{}", entry));
 		REQUIRE(kept.has_value());
 		CHECK(kept->Text == "done");
+	}
+
+	TEST_CASE("Re-running a command that releases the project asks about its unwritten settings")
+	{
+		HarnessEditor editor;
+		const std::filesystem::path directory = CreateTemporaryDirectory("ActivityRerunUnwritten") / "Game";
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" }, { "template", "basic3d" } });
+		const std::filesystem::path projectFile = editor.Context().GetProject()->GetProjectFile();
+		// The person opened the project (again) from the UI: the entry holds the answer of that time.
+		auto opened = std::make_shared<std::optional<EditorCommandResult>>();
+		editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "project.open",
+			{ { "path", FileSystem::ToUTF8(projectFile) }, { "force", true } }, [opened](const EditorCommandResult& result) { *opened = result; },
+			CommandOrigin { CommandSource::UI });
+		REQUIRE(editor.FramesUntil([&]() { return opened->has_value(); }));
+		REQUIRE((*opened)->Success);
+		const uint64_t entry = (*opened)->JournalId;
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Context().GetProjectFileState() != SettingsFileState::Writing; }));
+
+		// Since then a write of the project file failed (a directory takes its place): its settings are only in the editor.
+		REQUIRE(FileSystem::Remove(projectFile));
+		REQUIRE(FileSystem::CreateDirectories(projectFile));
+		editor.Run("project.setExportSettings", { { "alwaysInclude", { "Scenes" } } });
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Context().HasUnwrittenProjectSettings(); }));
+		REQUIRE_FALSE(editor.Context().IsSceneModified());
+
+		editor.Run("editor.showPanel", { { "panel", "Activity" } });
+		editor.Frames(2);
+		ActivityPanel* panel = editor.Layer->GetPanels().Get<ActivityPanel>(EditorPanels::c_Activity);
+		REQUIRE(panel);
+		panel->Select(entry);
+		editor.Frames(2);
+
+		// Re-run asks about them before the project goes; Cancel keeps them, and runs nothing.
+		const CommandJournal& journal = editor.Context().GetJournal();
+		REQUIRE(editor.Click("Activity.Rerun"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnwrittenSettings.Dialog").has_value());
+		REQUIRE(editor.Click("UnwrittenSettings.Cancel"));
+		editor.Frames(2);
+		CHECK(FindLatest(journal, "project.open") == entry);
+		CHECK(editor.Context().HasUnwrittenProjectSettings());
+		CHECK(editor.Context().GetProject()->GetConfig().Export.AlwaysInclude == std::vector<std::string> { "Scenes" });
 	}
 
 	TEST_CASE("Re-run and Undo to here work on the oldest entry of a full journal, which their own commands push out")

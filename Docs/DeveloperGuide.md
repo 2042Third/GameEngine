@@ -1800,7 +1800,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   asked about only: the question's Don't Save asks again when the scene changed while it waited, a dialog that runs the
   command later asks again when the scene changed since (`UndoStack::GetVersion`), a modal dialog asks over itself
   (`EditorShell::DrawDiscardQuestion` between its `BeginModal` and `EndModal`), and a recorded `force` is never repeated
-  for the person (the Activity panel's Re-run asks).
+  for the person (the Activity panel's Re-run asks, through `RequestReleaseProject` for a command that releases the
+  project).
 - **Saves are never lost and never hold a frame:** the project file goes through `Editor/SettingsFileWriter`
   ([Project settings](#project-settings)), and the edited scene and every engine-native document a command or a
   panel writes as a whole go through `Editor/DocumentSaver` (`EditorContext::BeginSaveScene`, `BeginSaveSceneAs`; world

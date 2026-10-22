@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <string_view>
 
 namespace Strata
 {
@@ -104,6 +105,14 @@ namespace Strata
 		{
 			const auto properties = command.Parameters.find("properties");
 			return properties != command.Parameters.end() && properties->is_object() && properties->contains("force");
+		}
+
+		// Of those, the commands that release the project (CheckUnsavedChanges with DiscardScope::Project): their force discards
+		// the project's unwritten settings too.
+		bool ReleasesProject(std::string_view command)
+		{
+			return command == "project.open" || command == "project.create" || command == "project.close" || command == "project.openSample"
+				|| command == "editor.quit";
 		}
 
 	}
@@ -419,8 +428,9 @@ namespace Strata
 			return;
 		}
 
-		// A command that replaces the edited scene asks about its unsaved changes now, as the menus do: the force it was recorded
-		// with answered for other changes. The answer may come in a later frame, so the run keeps what outlives this one.
+		// A command that replaces the edited scene asks about its unsaved changes now, as the menus do (and one that releases the
+		// project about its unwritten settings too): the force it was recorded with answered for other changes. The answer may
+		// come in a later frame, so the run keeps what outlives this one.
 		const EditorCommand* command = panelContext.Commands.Find(action.Command);
 		const bool replacesScene = command && ReplacesScene(*command);
 		if (replacesScene && action.Parameters.is_object())
@@ -439,7 +449,9 @@ namespace Strata
 					ST_WARN("{}: {}", name, result.Value["warning"].get<std::string>());
 			}, CommandOrigin { CommandSource::UI });
 		};
-		if (replacesScene && panelContext.Shell)
+		if (replacesScene && panelContext.Shell && ReleasesProject(action.Command))
+			panelContext.Shell->RequestReleaseProject([rerun]() { rerun(true); });
+		else if (replacesScene && panelContext.Shell)
 			panelContext.Shell->RequestDiscardChanges([rerun]() { rerun(true); });
 		else
 			rerun(false);
