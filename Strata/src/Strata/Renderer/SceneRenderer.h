@@ -534,6 +534,12 @@ namespace Strata
 		// frame asks for motion, and again once the render targets are released.
 		nvrhi::IBuffer* GetPreviousInstanceBuffer() const { return m_PreviousInstances; }
 		nvrhi::IBuffer* GetPreviousPaletteBuffer() const { return m_PreviousPalette; }
+		// The temporal anti-aliasing history's newest image (RGBA16_FLOAT, the resolved HDR scene color of the latest frame drawn
+		// with it): null until a frame draws a scene with TAA (SceneRendererSpecification::TemporalAntiAliasing), and again
+		// once the render targets are released. Two textures of the viewport's size, used in turn.
+		nvrhi::ITexture* GetTemporalHistoryTexture() const { return m_HistoryTextures[m_HistoryIndex]; }
+		// The HDR image the latest frame's post-processing read: the resolved one with temporal anti-aliasing, else the HDR target.
+		nvrhi::ITexture* GetResolvedHDRTexture() const { return m_TemporalResolved ? m_HistoryTextures[m_HistoryIndex].Get() : m_HDRTexture.Get(); }
 
 		// Entity visible at a pixel of the last rendered frame (invalid when none, when no frame was rendered since the last
 		// resize, or without an entity-ID buffer). Blocks until the GPU is done; meant for tests and tools (editors use
@@ -800,10 +806,17 @@ namespace Strata
 		// After the frame's draws: copies into the motion history what the scene's GPU copy wrote since the renderer's previous
 		// frame, or all of it with `full`.
 		void RecordMotionCopy(nvrhi::ICommandList* commandList, const RenderScene& renderScene, bool full);
+		// The temporal anti-aliasing history's textures and the binding sets that read them, made by the first frame with TAA;
+		// false (reported) when they cannot be created.
+		bool EnsureTemporalResources();
+		// Blends the frame's HDR image into the history's other texture, which becomes its newest (PostProcess/TAA.comp).
+		void ResolveTemporal(nvrhi::ICommandList* commandList);
 		void RenderAmbientOcclusion(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
-		// Meters the HDR image (automatic exposure) or writes the manual exposure into the exposure buffer.
-		void UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
-		void RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
+		// Meters the HDR image (automatic exposure) through `bindingSet` (the HDR target's or the resolved image's) or writes the
+		// manual exposure into the exposure buffer.
+		void UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* bindingSet);
+		// The bloom chain of the image `prefilterSet` reads (the first downsample: the HDR target's or the resolved image's).
+		void RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet);
 		// The scene's first active post-processing settings, or the defaults.
 		static PostProcessComponent GetPostProcessSettings(Scene& scene);
 		nvrhi::IGraphicsPipeline* GetScenePipeline(const PipelineKey& key);
@@ -1159,6 +1172,18 @@ namespace Strata
 		glm::vec2 m_TemporalJitterClip = glm::vec2(0.0f);
 		bool m_ResetHistory = false;
 		uint32_t m_HistoryResets = 0;
+		// The history's two textures, used in turn: the newest image is m_HistoryIndex's, whose binding sets of the exposure, the
+		// bloom's first downsample and the tone mapping read it; the resolve's set of an index reads its texture and writes the
+		// other one. Whether the latest frame's post-processing read the resolved image.
+		std::array<nvrhi::TextureHandle, 2> m_HistoryTextures;
+		uint32_t m_HistoryIndex = 0;
+		bool m_TemporalResolved = false;
+		nvrhi::BindingLayoutHandle m_TemporalBindingLayout;
+		nvrhi::ComputePipelineHandle m_TemporalPipeline;
+		std::array<nvrhi::BindingSetHandle, 2> m_TemporalResolveSets;
+		std::array<nvrhi::BindingSetHandle, 2> m_TemporalExposureSets;
+		std::array<nvrhi::BindingSetHandle, 2> m_TemporalBloomSets;
+		std::array<nvrhi::BindingSetHandle, 2> m_TemporalTonemapSets;
 		std::optional<std::chrono::steady_clock::time_point> m_LastExposureTime;
 		nvrhi::BindingLayoutHandle m_BloomBindingLayout;
 		nvrhi::ComputePipelineHandle m_BloomPipeline;

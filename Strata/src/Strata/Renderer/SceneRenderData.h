@@ -342,6 +342,16 @@ namespace Strata
 		};
 		static_assert(sizeof(BloomParameters) == 16);
 
+		// PostProcess/TAA.comp: how the frame's image and the temporal history are blended.
+		struct TemporalParameters
+		{
+			float CurrentWeight;     // 1 / the frames the history holds with this one (1: the history is not read)
+			float MinWeight;         // The current frame's least weight
+			float MotionWeightScale; // The current frame's weight per pixel of motion...
+			float MaxMotionWeight;   // ...up to this
+		};
+		static_assert(sizeof(TemporalParameters) == 16);
+
 		// Scene/MotionCopy.comp: copies the listed elements of a buffer into a renderer's motion history.
 		struct MotionCopyParameters
 		{

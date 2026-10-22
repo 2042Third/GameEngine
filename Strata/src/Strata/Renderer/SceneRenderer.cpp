@@ -72,6 +72,13 @@ namespace Strata
 		constexpr int c_ShadowDepthBias = -16;
 		constexpr float c_ShadowSlopeDepthBias = -1.5f;
 
+		// Temporal anti-aliasing (PostProcess/TAA.comp): the current frame's least weight once the history holds eight frames (a
+		// still pixel then follows the mean of the jitter's eight phases, within 13% of their spread whatever their order), and
+		// its weight per pixel of motion, up to the largest, which keeps moving surfaces sharp at the cost of anti-aliasing.
+		constexpr float c_TemporalMinWeight = 1.0f / 8.0f;
+		constexpr float c_TemporalMotionWeightScale = 1.0f / 32.0f;
+		constexpr float c_TemporalMaxMotionWeight = 0.5f;
+
 		// Elevation and azimuth (from +X toward +Z), in degrees, of SceneRenderer::GetDefaultSunDirection.
 		constexpr float c_DefaultSunElevation = 45.0f;
 		constexpr float c_DefaultSunAzimuth = 37.0f;
@@ -482,6 +489,24 @@ namespace Strata
 		m_BloomBindingLayout = m_Device->createBindingLayout(bloomLayout);
 		m_BloomPipeline = createComputePipeline("PostProcess/Bloom.comp", m_BloomBindingLayout);
 
+		// Temporal anti-aliasing's resolve: the frame constants and the linear clamp sampler at the scene set's slots, its images
+		// above them (PostProcess/TAA.comp).
+		nvrhi::BindingLayoutDesc temporalLayout;
+		temporalLayout.visibility = nvrhi::ShaderType::Compute;
+		temporalLayout.bindings = {
+			nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+			nvrhi::BindingLayoutItem::Texture_SRV(22),
+			nvrhi::BindingLayoutItem::Texture_SRV(23),
+			nvrhi::BindingLayoutItem::Texture_SRV(24),
+			nvrhi::BindingLayoutItem::Texture_SRV(25),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(26),
+			nvrhi::BindingLayoutItem::Sampler(8),
+			nvrhi::BindingLayoutItem::Texture_UAV(0),
+			nvrhi::BindingLayoutItem::PushConstants(1, sizeof(RenderData::TemporalParameters))
+		};
+		m_TemporalBindingLayout = m_Device->createBindingLayout(temporalLayout);
+		m_TemporalPipeline = createComputePipeline("PostProcess/TAA.comp", m_TemporalBindingLayout);
+
 		nvrhi::BindingLayoutDesc fxaaLayout;
 		fxaaLayout.visibility = nvrhi::ShaderType::Pixel;
 		fxaaLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Sampler(0) };
@@ -490,8 +515,8 @@ namespace Strata
 		ST_CORE_VERIFY(m_InputLayout && m_SceneBindingLayout && m_TonemapBindingLayout && m_FrameConstantBuffer && m_CommandList && m_ShadowPushBindingSet
 			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_ClusterBuffer
 			&& m_ClusterBindingLayout && m_ClusterPipeline && m_AOBindingLayout && m_GTAOPipeline && m_AOBlurPipeline && m_ExposureBindingLayout
-			&& m_HistogramPipeline && m_ExposurePipeline && m_HistogramBuffer && m_ExposureBuffer && m_BloomBindingLayout && m_BloomPipeline && m_FXAABindingLayout,
-			"SceneRenderer: failed to create GPU resources");
+			&& m_HistogramPipeline && m_ExposurePipeline && m_HistogramBuffer && m_ExposureBuffer && m_BloomBindingLayout && m_BloomPipeline && m_FXAABindingLayout
+			&& m_TemporalBindingLayout && m_TemporalPipeline, "SceneRenderer: failed to create GPU resources");
 		CreateIBLResources();
 		CreateOverlayResources();
 		m_FontAtlases = CreateScope<FontAtlasCache>();
@@ -1160,7 +1185,7 @@ namespace Strata
 		commandList->dispatch(groupsX, groupsY, 1);
 	}
 
-	void SceneRenderer::UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings)
+	void SceneRenderer::UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* bindingSet)
 	{
 		const auto now = std::chrono::steady_clock::now();
 		// Rendering pauses (breakpoints, minimized windows) must not turn into one huge adaptation step.
@@ -1189,7 +1214,7 @@ namespace Strata
 		commandList->clearBufferUInt(m_HistogramBuffer, 0);
 		nvrhi::ComputeState state;
 		state.pipeline = m_HistogramPipeline;
-		state.bindings = { m_ExposureBindingSet };
+		state.bindings = { bindingSet };
 		commandList->setComputeState(state);
 		commandList->setPushConstants(&parameters, sizeof(parameters));
 		commandList->dispatch((m_ViewportSize.x + 15) / 16, (m_ViewportSize.y + 15) / 16, 1);
@@ -1203,7 +1228,7 @@ namespace Strata
 		commandList->dispatch(1, 1, 1);
 	}
 
-	void SceneRenderer::RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings)
+	void SceneRenderer::RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet)
 	{
 		RenderData::BloomParameters parameters = {};
 		parameters.Threshold = std::max(settings.BloomThreshold, 0.0f);
@@ -1221,11 +1246,112 @@ namespace Strata
 			commandList->dispatch(DispatchGroups(std::max(1u, desc.width >> level)), DispatchGroups(std::max(1u, desc.height >> level)), 1);
 		};
 
-		dispatch(m_BloomDownsampleSets[0], RenderData::c_BloomPrefilter, 0);
+		dispatch(prefilterSet, RenderData::c_BloomPrefilter, 0);
 		for (uint32_t level = 1; level < m_BloomLevels; level++)
 			dispatch(m_BloomDownsampleSets[level], RenderData::c_BloomDownsample, level);
 		for (uint32_t level = m_BloomLevels - 1; level-- > 0;)
 			dispatch(m_BloomUpsampleSets[level], RenderData::c_BloomUpsample, level);
+	}
+
+	bool SceneRenderer::EnsureTemporalResources()
+	{
+		if (m_HistoryTextures[0])
+			return true;
+
+		const uint32_t width = m_ViewportSize.x;
+		const uint32_t height = m_ViewportSize.y;
+		std::array<nvrhi::TextureHandle, 2> textures;
+		for (uint32_t index = 0; index < 2; index++)
+		{
+			nvrhi::TextureDesc desc;
+			desc.width = width;
+			desc.height = height;
+			desc.format = c_HDRFormat;
+			desc.isUAV = true;
+			desc.debugName = fmt::format("{}.History{}", m_Specification.DebugName, index);
+			desc.initialState = nvrhi::ResourceStates::ShaderResource;
+			desc.keepInitialState = true;
+			textures[index] = m_Device->createTexture(desc);
+		}
+		bool created = textures[0] && textures[1];
+		std::array<nvrhi::BindingSetHandle, 2> resolveSets;
+		std::array<nvrhi::BindingSetHandle, 2> exposureSets;
+		std::array<nvrhi::BindingSetHandle, 2> bloomSets;
+		std::array<nvrhi::BindingSetHandle, 2> tonemapSets;
+		for (uint32_t index = 0; created && index < 2; index++)
+		{
+			nvrhi::BindingSetDesc resolve;
+			resolve.bindings = {
+				nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
+				nvrhi::BindingSetItem::Texture_SRV(22, m_HDRTexture),
+				nvrhi::BindingSetItem::Texture_SRV(23, m_DepthTexture),
+				nvrhi::BindingSetItem::Texture_SRV(24, m_VelocityTexture),
+				nvrhi::BindingSetItem::Texture_SRV(25, textures[index]),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(26, m_ExposureBuffer),
+				nvrhi::BindingSetItem::Sampler(8, m_LinearClampSampler),
+				nvrhi::BindingSetItem::Texture_UAV(0, textures[1 - index]),
+				nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::TemporalParameters))
+			};
+			resolveSets[index] = m_Device->createBindingSet(resolve, m_TemporalBindingLayout);
+			// The post-processing of the image a texture holds, as of the HDR target's (CreateRenderTargets).
+			nvrhi::BindingSetDesc exposure;
+			exposure.bindings = {
+				nvrhi::BindingSetItem::Texture_SRV(0, textures[index]),
+				nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_HistogramBuffer),
+				nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_ExposureBuffer),
+				nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::ExposureParameters))
+			};
+			exposureSets[index] = m_Device->createBindingSet(exposure, m_ExposureBindingLayout);
+			nvrhi::BindingSetDesc bloom;
+			bloom.bindings = {
+				nvrhi::BindingSetItem::Texture_SRV(0, textures[index]),
+				nvrhi::BindingSetItem::Sampler(0, m_LinearClampSampler),
+				nvrhi::BindingSetItem::Texture_UAV(0, m_BloomTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_ExposureBuffer),
+				nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::BloomParameters))
+			};
+			bloomSets[index] = m_Device->createBindingSet(bloom, m_BloomBindingLayout);
+			nvrhi::BindingSetDesc tonemap;
+			tonemap.bindings = {
+				nvrhi::BindingSetItem::Texture_SRV(0, textures[index]),
+				nvrhi::BindingSetItem::Sampler(0, m_PointClampSampler),
+				nvrhi::BindingSetItem::Texture_SRV(1, m_BloomTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
+				nvrhi::BindingSetItem::Sampler(1, m_LinearClampSampler),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_ExposureBuffer),
+				nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::TonemapParameters))
+			};
+			tonemapSets[index] = m_Device->createBindingSet(tonemap, m_TonemapBindingLayout);
+			created = resolveSets[index] && exposureSets[index] && bloomSets[index] && tonemapSets[index];
+		}
+		if (!created)
+		{
+			// Nothing used them yet: they go with their handles.
+			m_Errors.Report(fmt::format("failed to create the temporal anti-aliasing history for a {}x{} viewport; drawing with FXAA", width, height));
+			return false;
+		}
+		m_HistoryTextures = std::move(textures);
+		m_HistoryIndex = 0;
+		m_TemporalResolveSets = std::move(resolveSets);
+		m_TemporalExposureSets = std::move(exposureSets);
+		m_TemporalBloomSets = std::move(bloomSets);
+		m_TemporalTonemapSets = std::move(tonemapSets);
+		return true;
+	}
+
+	void SceneRenderer::ResolveTemporal(nvrhi::ICommandList* commandList)
+	{
+		RenderData::TemporalParameters parameters = {};
+		parameters.CurrentWeight = 1.0f / static_cast<float>(m_TemporalFrames);
+		parameters.MinWeight = c_TemporalMinWeight;
+		parameters.MotionWeightScale = c_TemporalMotionWeightScale;
+		parameters.MaxMotionWeight = c_TemporalMaxMotionWeight;
+		nvrhi::ComputeState state;
+		state.pipeline = m_TemporalPipeline;
+		state.bindings = { m_TemporalResolveSets[m_HistoryIndex] };
+		commandList->setComputeState(state);
+		commandList->setPushConstants(&parameters, sizeof(parameters));
+		commandList->dispatch(DispatchGroups(m_ViewportSize.x), DispatchGroups(m_ViewportSize.y), 1);
+		m_HistoryIndex = 1 - m_HistoryIndex;
 	}
 
 	bool SceneRenderer::EnsureShadowMap()
@@ -1540,7 +1666,18 @@ namespace Strata
 			release(set);
 		m_MotionCopyBound = {};
 		m_MotionRender = 0;
-		m_TemporalFrames = 0; // The temporal history starts again at the new size
+		// The temporal history starts again at the new size.
+		for (uint32_t index = 0; index < 2; index++)
+		{
+			release(m_HistoryTextures[index]);
+			release(m_TemporalResolveSets[index]);
+			release(m_TemporalExposureSets[index]);
+			release(m_TemporalBloomSets[index]);
+			release(m_TemporalTonemapSets[index]);
+		}
+		m_HistoryIndex = 0;
+		m_TemporalResolved = false;
+		m_TemporalFrames = 0;
 		m_TemporalRender = 0;
 		Renderer::ReleaseDeferred(std::move(released));
 	}
@@ -2183,9 +2320,13 @@ namespace Strata
 		m_Stats.DeferredInstanceBytes = m_SceneGPU->GetDeferredBytes();
 		m_Stats.DeferredProxies = m_SceneGPU->GetDeferredProxies();
 
+		// Temporal anti-aliasing (below) blends along the motion vectors.
+		const PostProcessComponent postProcess = GetPostProcessSettings(scene);
+		const bool temporalWanted = m_Specification.TemporalAntiAliasing && postProcess.AntiAliasing && postProcess.AntiAliasingMethod == AntiAliasingMode::TAA;
+
 		// Motion: the history holds the renderer's previous frame when that frame copied it (its latest frame asked for motion
 		// too) and drew this render scene or the one it is a clone of (the same slots).
-		m_MotionFrame = options.MotionVectors || options.ShowMotionVectors;
+		m_MotionFrame = options.MotionVectors || options.ShowMotionVectors || temporalWanted;
 		const bool motionHistory = m_MotionFrame && m_MotionRender != 0 && m_MotionRender == m_RenderCount
 			&& (m_MotionSceneId == renderScene.GetId() || renderScene.GetCloneSource() == m_MotionSceneId);
 		bool motionFailed = false;
@@ -2204,9 +2345,11 @@ namespace Strata
 		// Temporal anti-aliasing: the history goes on from the renderer's previous frame when that frame resolved it, in this
 		// device frame or the one before, of this render scene or the one it is a clone of (entering Play keeps it), without a
 		// camera cut or a reset asked for (a resize released it). Counted in frames, never in time, so slow frames keep it.
-		const PostProcessComponent postProcess = GetPostProcessSettings(scene);
+		// Without its resources (or the motion vectors') the frame is drawn with FXAA.
 		const bool cameraCut = IsCameraCut(camera);
-		m_TemporalFrame = m_Specification.TemporalAntiAliasing && postProcess.AntiAliasing && postProcess.AntiAliasingMethod == AntiAliasingMode::TAA;
+		m_TemporalFrame = temporalWanted && m_MotionFrame && EnsureTemporalResources();
+		const bool temporalFailed = temporalWanted && !m_TemporalFrame;
+		m_TemporalResolved = false;
 		glm::vec2 jitterClip(0.0f);
 		glm::vec2 previousJitterClip(0.0f);
 		if (m_TemporalFrame)
@@ -2304,7 +2447,8 @@ namespace Strata
 		GatherDraws(renderScene, camera, !m_GPUDrivenFrame);
 		GatherShadowDraws(renderScene, camera, frame, !m_GPUDrivenFrame);
 		BuildDrawArguments();
-		bool degraded = motionFailed; // Rendered with a reported limitation: keep the error so it is not logged every frame
+		// Rendered with a reported limitation: keep the error so it is not logged every frame.
+		bool degraded = motionFailed || temporalFailed;
 		// Before the GPU's culling is prepared: the cascades' occlusion culling needs their pyramids, made with the map.
 		if (frame.ShadowParams.w > 0.0f && !EnsureShadowMap())
 		{
@@ -2515,16 +2659,25 @@ namespace Strata
 			RecordMotionCopy(commandList, renderScene, !motionHistory);
 			commandList->endMarker();
 			m_MotionCamera = MotionCamera { frame.View, camera.Projection, camera.Position };
+			if (m_TemporalFrame)
+			{
+				commandList->beginMarker("TAA");
+				ResolveTemporal(commandList);
+				commandList->endMarker();
+				m_TemporalResolved = true;
+			}
 		}
+		// Post-processing reads the resolved image with temporal anti-aliasing (the history's newest texture).
+		const bool resolved = m_TemporalResolved;
 		gpuTimer.Next(gpuStages.Post);
 		commandList->beginMarker("Exposure");
-		UpdateExposure(commandList, postProcess);
+		UpdateExposure(commandList, postProcess, resolved ? m_TemporalExposureSets[m_HistoryIndex].Get() : m_ExposureBindingSet.Get());
 		commandList->endMarker();
 		const bool bloom = postProcess.Bloom && postProcess.BloomIntensity > 0.0f;
 		if (bloom)
 		{
 			commandList->beginMarker("Bloom");
-			RenderBloom(commandList, postProcess);
+			RenderBloom(commandList, postProcess, resolved ? m_TemporalBloomSets[m_HistoryIndex].Get() : m_BloomDownsampleSets[0].Get());
 			commandList->endMarker();
 		}
 
@@ -2584,12 +2737,14 @@ namespace Strata
 			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
 		};
 
-		nvrhi::IFramebuffer* tonemapTarget = postProcess.AntiAliasing ? m_LDRFramebuffer.Get() : output;
+		// FXAA unless the image was resolved temporally.
+		const bool fxaa = postProcess.AntiAliasing && !resolved;
+		nvrhi::IFramebuffer* tonemapTarget = fxaa ? m_LDRFramebuffer.Get() : output;
 		commandList->beginMarker("Tonemap");
 		drawFullscreen(GetFullscreenPipeline(m_TonemapPipelines, m_TonemapPixelShader, m_TonemapBindingLayout, tonemapTarget->getFramebufferInfo()),
-			tonemapTarget, m_TonemapBindingSet, &tonemap, sizeof(tonemap));
+			tonemapTarget, resolved ? m_TemporalTonemapSets[m_HistoryIndex].Get() : m_TonemapBindingSet.Get(), &tonemap, sizeof(tonemap));
 		commandList->endMarker();
-		if (postProcess.AntiAliasing)
+		if (fxaa)
 		{
 			commandList->beginMarker("FXAA");
 			drawFullscreen(GetFullscreenPipeline(m_FXAAPipelines, m_FXAAPixelShader, m_FXAABindingLayout, output->getFramebufferInfo()), output, m_FXAABindingSet, nullptr, 0);
@@ -2631,7 +2786,7 @@ namespace Strata
 			SubmitCullReadback();
 		CommitShadowCache();
 
-		if (m_TemporalFrame)
+		if (m_TemporalResolved)
 			m_TemporalRender = m_RenderCount + 1;
 		m_Stats.Rendered = true;
 		m_HasRenderedFrame = true;

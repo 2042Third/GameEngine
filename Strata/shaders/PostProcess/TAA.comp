@@ -1,0 +1,136 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/Exposure.glsl"
+#include "Include/Motion.glsl"
+
+// Temporal anti-aliasing's resolve (SceneRenderer, in GPU.TAA): blends the frame's jittered HDR image with the renderer's
+// history of earlier frames into the history's other texture. The history is fetched where the pixel's surface was in the
+// previous frame - along the motion of the nearest surface in the pixel's 3x3 neighborhood, so an edge moves with its
+// foreground, or the camera's where nothing was drawn - with a Catmull-Rom filter (a still pixel reads its own texel), then
+// clamped to the colors of the neighborhood in this frame (in YCoCg, luma and chroma), which rejects what the history holds of
+// surfaces that moved away or were uncovered. Both colors are weighted by their exposed luminance (1 / (1 + L)), so a bright
+// sample among dark ones does not flicker as the jitter moves it. The current frame's weight is the largest of
+// CurrentWeight (1 / the frames in the history: the frames after a reset are averaged evenly), MinWeight and a weight growing
+// with the motion's length in pixels; a pixel whose surface was outside the previous frame takes the current frame alone.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Slots above the scene set's (Include/Scene.glsl, whose frame constants and linear clamp sampler this pass binds too).
+layout(set = 0, binding = ST_SRV(22)) uniform texture2D u_Current;
+layout(set = 0, binding = ST_SRV(23)) uniform texture2D u_Depth;
+layout(set = 0, binding = ST_SRV(24)) uniform texture2D u_Velocity;
+layout(set = 0, binding = ST_SRV(25)) uniform texture2D u_History;
+layout(set = 0, binding = ST_SRV(26), std430) readonly buffer TemporalExposureBuffer
+{
+	float u_Exposure[]; // The previous frame's (Include/Exposure.glsl)
+};
+layout(set = 0, binding = ST_UAV(0), rgba16f) uniform writeonly image2D o_History;
+
+layout(push_constant) uniform TemporalParameters
+{
+	float CurrentWeight;     // 1 / the frames the history holds with this one (1: the history is not read)
+	float MinWeight;         // The current frame's least weight
+	float MotionWeightScale; // The current frame's weight per pixel of motion...
+	float MaxMotionWeight;   // ...up to this
+} u_Temporal;
+
+vec3 RGBToYCoCg(vec3 color)
+{
+	return vec3(0.25 * color.r + 0.5 * color.g + 0.25 * color.b, 0.5 * color.r - 0.5 * color.b, -0.25 * color.r + 0.5 * color.g - 0.25 * color.b);
+}
+
+vec3 YCoCgToRGB(vec3 color)
+{
+	float base = color.x - color.z;
+	return vec3(base + color.y, color.x + color.z, base - color.y);
+}
+
+vec3 SampleHistoryBilinear(vec2 position)
+{
+	return textureLod(sampler2D(u_History, u_LinearClampSampler), position * u_Frame.ViewportSize.zw, 0.0).rgb;
+}
+
+// The history at `uv` through a Catmull-Rom filter of the 4x4 texels around it, in nine bilinear fetches: along each axis the
+// two middle texels' weights are positive, so one fetch between them, placed by their ratio, reads both.
+vec3 SampleHistory(vec2 uv)
+{
+	vec2 position = uv * u_Frame.ViewportSize.xy;
+	vec2 center = floor(position - 0.5) + 0.5; // The texel center at or before the position
+	vec2 f = position - center;
+	vec2 weight0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+	vec2 weight1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+	vec2 weight2 = f * (0.5 + f * (2.0 - 1.5 * f));
+	vec2 weight3 = f * f * (-0.5 + 0.5 * f);
+	vec2 weight12 = weight1 + weight2;
+	vec2 position0 = center - 1.0;
+	vec2 position12 = center + weight2 / weight12;
+	vec2 position3 = center + 2.0;
+
+	vec3 color = SampleHistoryBilinear(vec2(position0.x, position0.y)) * (weight0.x * weight0.y)
+		+ SampleHistoryBilinear(vec2(position12.x, position0.y)) * (weight12.x * weight0.y)
+		+ SampleHistoryBilinear(vec2(position3.x, position0.y)) * (weight3.x * weight0.y)
+		+ SampleHistoryBilinear(vec2(position0.x, position12.y)) * (weight0.x * weight12.y)
+		+ SampleHistoryBilinear(vec2(position12.x, position12.y)) * (weight12.x * weight12.y)
+		+ SampleHistoryBilinear(vec2(position3.x, position12.y)) * (weight3.x * weight12.y)
+		+ SampleHistoryBilinear(vec2(position0.x, position3.y)) * (weight0.x * weight3.y)
+		+ SampleHistoryBilinear(vec2(position12.x, position3.y)) * (weight12.x * weight3.y)
+		+ SampleHistoryBilinear(vec2(position3.x, position3.y)) * (weight3.x * weight3.y);
+	// The filter's negative lobes may undershoot next to an edge.
+	return max(color, vec3(0.0));
+}
+
+void main()
+{
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = ivec2(u_Frame.ViewportSize.xy);
+	if (pixel.x >= size.x || pixel.y >= size.y)
+		return;
+
+	vec3 current = texelFetch(u_Current, pixel, 0).rgb;
+	vec3 low = RGBToYCoCg(current);
+	vec3 high = low;
+	// The nearest surface (reversed-Z: the largest depth) of the neighborhood, the pixel's own on ties.
+	float nearestDepth = texelFetch(u_Depth, pixel, 0).r;
+	ivec2 nearestPixel = pixel;
+	for (int y = -1; y <= 1; y++)
+	{
+		for (int x = -1; x <= 1; x++)
+		{
+			if (x == 0 && y == 0)
+				continue;
+			ivec2 neighbor = clamp(pixel + ivec2(x, y), ivec2(0), size - 1);
+			vec3 color = RGBToYCoCg(texelFetch(u_Current, neighbor, 0).rgb);
+			low = min(low, color);
+			high = max(high, color);
+			float depth = texelFetch(u_Depth, neighbor, 0).r;
+			if (depth > nearestDepth)
+			{
+				nearestDepth = depth;
+				nearestPixel = neighbor;
+			}
+		}
+	}
+
+	vec3 result = current;
+	if (u_Temporal.CurrentWeight < 1.0)
+	{
+		vec2 uv = (vec2(pixel) + 0.5) * u_Frame.ViewportSize.zw;
+		// Nothing drawn in the neighborhood (the sky, which has no geometry): the camera's motion of its direction.
+		vec2 motion = nearestDepth > 0.0 ? texelFetch(u_Velocity, nearestPixel, 0).rg : GetCameraMotion(uv, 0.0);
+		vec2 previousUV = uv - motion;
+		if (all(greaterThanEqual(previousUV, vec2(0.0))) && all(lessThanEqual(previousUV, vec2(1.0))))
+		{
+			vec3 history = motion == vec2(0.0) ? texelFetch(u_History, pixel, 0).rgb : SampleHistory(previousUV);
+			history = YCoCgToRGB(clamp(RGBToYCoCg(history), low, high));
+			float motionPixels = length(motion * u_Frame.ViewportSize.xy);
+			float weight = max(max(u_Temporal.CurrentWeight, u_Temporal.MinWeight), min(motionPixels * u_Temporal.MotionWeightScale, u_Temporal.MaxMotionWeight));
+			float exposure = u_Exposure[ST_EXPOSURE_MULTIPLIER];
+			float currentWeight = weight / (1.0 + Luminance(current) * exposure);
+			float historyWeight = (1.0 - weight) / (1.0 + Luminance(max(history, vec3(0.0))) * exposure);
+			result = (current * currentWeight + history * historyWeight) / max(currentWeight + historyWeight, 1e-6);
+		}
+	}
+	imageStore(o_History, pixel, vec4(SanitizeHDR(result), 1.0));
+}
