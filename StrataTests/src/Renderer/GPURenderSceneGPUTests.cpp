@@ -633,7 +633,7 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("The GPU copy logs the instances and joints it writes; versions older than its log or than the mirror read as unknown")
+	TEST_CASE("The GPU copy logs the instances and joints it writes; versions older than its log, than the mirror or than its copy read as unknown")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -655,13 +655,14 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		RenderScene& renderScene = RenderScene::Get(*scene);
 		RenderSceneGPUCache& cache = Renderer::GetRenderSceneGPUs();
 		const RenderSceneGPU& mirror = cache.Get(renderScene);
+		const uint64_t id = renderScene.GetId();
 		const uint64_t version = mirror.GetWriteVersion();
 		std::vector<std::pair<uint32_t, uint32_t>> ranges;
-		CHECK(mirror.GetInstanceWrites(version, ranges));
-		CHECK(mirror.GetPaletteWrites(version, ranges));
+		CHECK(mirror.GetInstanceWrites(id, version, ranges));
+		CHECK(mirror.GetPaletteWrites(id, version, ranges));
 		CHECK(ranges.empty());
 		// The first update wrote every instance.
-		REQUIRE(mirror.GetInstanceWrites(version - 1, ranges));
+		REQUIRE(mirror.GetInstanceWrites(id, version - 1, ranges));
 		REQUIRE(ranges.size() == 1);
 		CHECK(ranges[0] == std::pair<uint32_t, uint32_t>(0u, 40u));
 		ranges.clear();
@@ -674,13 +675,13 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		move(cubes[30]);
 		render(*scene);
 		CHECK(mirror.GetWriteVersion() > version);
-		REQUIRE(mirror.GetInstanceWrites(version, ranges));
+		REQUIRE(mirror.GetInstanceWrites(id, version, ranges));
 		REQUIRE(ranges.size() == 2);
 		const auto instanceOf = [&](Entity cube) { return renderScene.GetFirstInstance(renderScene.FindProxy(cube.GetHandle())); };
 		CHECK(ranges[0] == std::pair<uint32_t, uint32_t>(instanceOf(cubes[30]), 1u));
 		CHECK(ranges[1] == std::pair<uint32_t, uint32_t>(instanceOf(cubes[3]), 1u));
 		ranges.clear();
-		CHECK(mirror.GetPaletteWrites(version, ranges));
+		CHECK(mirror.GetPaletteWrites(id, version, ranges));
 		CHECK(ranges.empty());
 
 		// The log remembers at most as many elements as the buffer has room for: writing more forgets the oldest.
@@ -691,9 +692,9 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 				move(cube);
 			render(*scene);
 		}
-		CHECK_FALSE(mirror.GetInstanceWrites(before, ranges));
+		CHECK_FALSE(mirror.GetInstanceWrites(id, before, ranges));
 		CHECK(ranges.empty());
-		CHECK(mirror.GetInstanceWrites(mirror.GetWriteVersion(), ranges));
+		CHECK(mirror.GetInstanceWrites(id, mirror.GetWriteVersion(), ranges));
 
 		// A clone made by GPU copies keeps the source's log; a mirror made later never knows a version from before it.
 		Ref<Scene> copy = Scene::Copy(scene);
@@ -702,13 +703,25 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		REQUIRE(clone);
 		const uint64_t sourceVersion = mirror.GetWriteVersion();
 		CHECK(clone->GetWriteVersion() == sourceVersion);
-		CHECK(clone->GetInstanceWrites(sourceVersion, ranges));
+		CHECK(clone->GetInstanceWrites(id, sourceVersion, ranges));
+		CHECK(ranges.empty());
+		// The source's writes after the copy are not in the clone's buffers: its later versions read as unknown there.
+		move(cubes[7]);
+		render(*scene);
+		const RenderSceneGPU* source = cache.Find(id);
+		REQUIRE(source);
+		REQUIRE(source->GetWriteVersion() > sourceVersion);
+		CHECK_FALSE(clone->GetInstanceWrites(id, source->GetWriteVersion(), ranges));
+		CHECK_FALSE(clone->GetPaletteWrites(id, source->GetWriteVersion(), ranges));
+		CHECK(clone->GetInstanceWrites(id, sourceVersion, ranges));
+		CHECK(ranges.empty());
 		Ref<Scene> other = CreateRef<Scene>("Other");
 		AddCubeRow(*other, 2);
 		render(*other);
 		const RenderSceneGPU* otherMirror = cache.Find(RenderScene::Get(*other).GetId());
 		REQUIRE(otherMirror);
-		CHECK_FALSE(otherMirror->GetInstanceWrites(sourceVersion, ranges));
+		CHECK_FALSE(otherMirror->GetInstanceWrites(otherMirror->GetRenderSceneId(), sourceVersion, ranges));
+		CHECK_FALSE(otherMirror->GetInstanceWrites(id, sourceVersion, ranges));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

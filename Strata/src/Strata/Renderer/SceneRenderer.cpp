@@ -1036,7 +1036,8 @@ namespace Strata
 			Part& part = parts[index];
 			m_MotionRanges.clear();
 			const bool logged = !full
-				&& (index == 0 ? m_SceneGPU->GetInstanceWrites(m_MotionWriteVersion, m_MotionRanges) : m_SceneGPU->GetPaletteWrites(m_MotionWriteVersion, m_MotionRanges));
+				&& (index == 0 ? m_SceneGPU->GetInstanceWrites(m_MotionSceneId, m_MotionWriteVersion, m_MotionRanges)
+					: m_SceneGPU->GetPaletteWrites(m_MotionSceneId, m_MotionWriteVersion, m_MotionRanges));
 			if (!logged)
 			{
 				part.Full = true;

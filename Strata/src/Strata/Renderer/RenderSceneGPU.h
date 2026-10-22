@@ -139,12 +139,15 @@ namespace Strata
 		// ranges: a reader further behind copies the whole buffer, which costs no more. Write versions are unique in the
 		// process and a mirror's logs start at its creation, so a version taken before a mirror was made (a scene's mirror made
 		// again, a clone filled by uploads) never reads as up to date; a clone made by GPU copies keeps its source's logs, as its
-		// buffers hold what the source's did.
+		// buffers hold what the source's did, but only up to the copy: the source's later writes are not in the clone's buffers.
 		uint64_t GetWriteVersion() const { return m_WriteVersion; }
-		// Appends the ranges (first element, count) written after `sinceVersion`, newest first, possibly overlapping. Returns
-		// false, appending nothing, when the log does not reach back that far: then any element may have changed.
-		bool GetInstanceWrites(uint64_t sinceVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const;
-		bool GetPaletteWrites(uint64_t sinceVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const;
+		// Appends the ranges (first element, count) written after `sinceVersion`, newest first, possibly overlapping:
+		// `sinceVersion` is a write version the reader took from the mirror of render scene `renderSceneId`, this mirror's
+		// scene or, for a clone made by GPU copies, its source's. Returns false, appending nothing, when the log does not reach
+		// back that far or the version is not one this mirror's buffers went through (the source's after the copy): then any
+		// element may differ.
+		bool GetInstanceWrites(uint64_t renderSceneId, uint64_t sinceVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const;
+		bool GetPaletteWrites(uint64_t renderSceneId, uint64_t sinceVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const;
 		static constexpr size_t c_MaxWriteLogEntries = 65536;
 
 		// The record of a proxy as the GPU's culling reads it.
@@ -176,6 +179,9 @@ namespace Strata
 		};
 		// Logs the instance and palette regions of an update that was recorded (m_Regions), under a new write version.
 		void RecordWrites();
+		// Whether a write version taken from the mirror of render scene `renderSceneId` is one this mirror's buffers held: its
+		// own, or its source's up to the copy that made it.
+		bool IsOwnWriteVersion(uint64_t renderSceneId, uint64_t version) const;
 
 		// Grows the buffer to `elementCount` elements by a GPU copy (new space cleared to zeros where `clear`). False when it
 		// cannot be created (logged).
@@ -204,6 +210,9 @@ namespace Strata
 		GrowingBuffer m_Palette;
 		uint64_t m_BufferVersion = 0;
 		uint64_t m_WriteVersion = 0;
+		// A clone made by GPU copies: its source's render scene and write version at the copy (0 for other mirrors).
+		uint64_t m_CloneSourceId = 0;
+		uint64_t m_CloneWriteVersion = 0;
 		WriteLog m_InstanceWrites;
 		WriteLog m_PaletteWrites;
 		bool m_Initialized = false; // The first update reads everything

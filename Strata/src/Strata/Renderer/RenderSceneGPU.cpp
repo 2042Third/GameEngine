@@ -66,6 +66,9 @@ namespace Strata
 		Scope<RenderSceneGPU> clone = CloneWithParallelMembers(source, [&source]() { return Scope<RenderSceneGPU>(new RenderSceneGPU(source)); },
 			&RenderSceneGPU::m_Records, &RenderSceneGPU::m_Resident, &RenderSceneGPU::m_Queued, &RenderSceneGPU::m_Seen, &RenderSceneGPU::m_InstanceOwners);
 		clone->m_RenderSceneId = renderSceneId;
+		// The source's logs hold what the clone's buffers went through up to now; its later versions do not.
+		clone->m_CloneSourceId = source.m_RenderSceneId;
+		clone->m_CloneWriteVersion = source.m_WriteVersion;
 		clone->m_CommandList = clone->m_Device->createCommandList();
 		if (!clone->m_CommandList)
 			return nullptr;
@@ -224,14 +227,22 @@ namespace Strata
 		return true;
 	}
 
-	bool RenderSceneGPU::GetInstanceWrites(uint64_t sinceVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const
+	bool RenderSceneGPU::IsOwnWriteVersion(uint64_t renderSceneId, uint64_t version) const
 	{
-		return m_InstanceWrites.Get(sinceVersion, m_WriteVersion, outRanges);
+		if (renderSceneId == m_RenderSceneId)
+			return true;
+		// Versions are unique in the process, but the source keeps writing after the copy: those writes are in its buffers only.
+		return m_CloneSourceId != 0 && renderSceneId == m_CloneSourceId && version <= m_CloneWriteVersion;
 	}
 
-	bool RenderSceneGPU::GetPaletteWrites(uint64_t sinceVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const
+	bool RenderSceneGPU::GetInstanceWrites(uint64_t renderSceneId, uint64_t sinceVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const
 	{
-		return m_PaletteWrites.Get(sinceVersion, m_WriteVersion, outRanges);
+		return IsOwnWriteVersion(renderSceneId, sinceVersion) && m_InstanceWrites.Get(sinceVersion, m_WriteVersion, outRanges);
+	}
+
+	bool RenderSceneGPU::GetPaletteWrites(uint64_t renderSceneId, uint64_t sinceVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const
+	{
+		return IsOwnWriteVersion(renderSceneId, sinceVersion) && m_PaletteWrites.Get(sinceVersion, m_WriteVersion, outRanges);
 	}
 
 	void RenderSceneGPU::RecordWrites()

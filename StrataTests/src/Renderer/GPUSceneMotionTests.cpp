@@ -360,19 +360,20 @@ TEST_SUITE("GPU.SceneRenderer.MotionVectors")
 		current.SetViewportSize(c_Size, c_Size);
 		REQUIRE(behind.Render(scene.Contents, scene.Camera, nullptr, MotionOptions()));
 		const RenderSceneGPU& mirror = Renderer::GetRenderSceneGPUs().Get(RenderScene::Get(scene.Contents));
+		const uint64_t id = RenderScene::Get(scene.Contents).GetId();
 		const uint64_t version = mirror.GetWriteVersion();
 
 		// The other renderer's frames write every cube again and again, until the log no longer reaches back to the version.
 		std::vector<std::pair<uint32_t, uint32_t>> ranges;
 		uint32_t frames = 0;
-		for (; frames < 16 && mirror.GetInstanceWrites(version, ranges); frames++)
+		for (; frames < 16 && mirror.GetInstanceWrites(id, version, ranges); frames++)
 		{
 			for (const Entity cube : scene.Cubes)
 				scene.Move(cube, glm::vec3(0.0f, 0.1f, 0.0f));
 			REQUIRE(current.Render(scene.Contents, scene.Camera, nullptr, MotionOptions()));
 			ranges.clear();
 		}
-		REQUIRE_FALSE(mirror.GetInstanceWrites(version, ranges));
+		REQUIRE_FALSE(mirror.GetInstanceWrites(id, version, ranges));
 		CHECK(frames > 1);
 		REQUIRE(behind.Render(scene.Contents, scene.Camera, nullptr, MotionOptions()));
 		CHECK(behind.GetStats().MotionHistory);
@@ -619,6 +620,56 @@ TEST_SUITE("GPU.SceneRenderer.MotionVectors")
 		const MotionFrame motion = ReadMotionFrame(second);
 		CHECK(CountPixels(motion, scene.Cubes[2]) > 8);
 		CheckMotion(motion, scene.Camera, scene.Camera, { { GetID(scene.Cubes[2]), glm::dvec3(step) * 2.0 } });
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A renderer that drew the source after its copy changed apart from it follows the copy from what it drew")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		Ref<Scene> source = CreateRef<Scene>("Source");
+		AddNeutralPostProcess(*source);
+		AddSun(*source, glm::normalize(glm::vec3(-0.3f, -1.0f, -0.4f)), 3.0f);
+		std::vector<Entity> cubes;
+		for (uint32_t index = 0; index < 4; index++)
+			cubes.push_back(AddMesh(*source, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(static_cast<float>(index) * 2.0f - 3.0f, 0.0f, -2.0f), "Cube"));
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 8.0f, 4.0f), glm::vec3(0.0f, 0.0f, -2.0f));
+		const auto move = [](Entity cube)
+		{
+			cube.GetComponent<TransformComponent>().Translation.y += 0.5f;
+			cube.MarkModified<TransformComponent>();
+		};
+		SceneRenderer first = CreateRenderer("First");
+		SceneRenderer second = CreateRenderer("Second");
+		first.SetViewportSize(c_Size, c_Size);
+		second.SetViewportSize(c_Size, c_Size);
+		REQUIRE(first.Render(*source, camera, nullptr, MotionOptions()));
+
+		// The copy's GPU copy is made from the source's, with its write log.
+		Ref<Scene> copy = Scene::Copy(source);
+		RenderSceneGPUCache& mirrors = Renderer::GetRenderSceneGPUs();
+		const uint64_t sourceVersion = mirrors.Get(RenderScene::Get(*source)).GetWriteVersion();
+		REQUIRE(second.Render(*copy, camera, nullptr, MotionOptions()));
+		REQUIRE(mirrors.Get(RenderScene::Get(*copy)).GetWriteVersion() == sourceVersion);
+
+		// The copy writes a cube, then the source another, which the first renderer draws.
+		move(copy->GetEntityByUUID(cubes[0].GetUUID()));
+		REQUIRE(second.Render(*copy, camera, nullptr, MotionOptions()));
+		move(cubes[1]);
+		REQUIRE(first.Render(*source, camera, nullptr, MotionOptions()));
+
+		// Drawing the copy, the first renderer compares with the source as it drew it, and then holds the copy.
+		REQUIRE(first.Render(*copy, camera, nullptr, MotionOptions()));
+		CHECK(first.GetStats().MotionHistory);
+		const uint32_t movedInCopy = GetID(copy->GetEntityByUUID(cubes[0].GetUUID()));
+		const uint32_t movedInSource = GetID(copy->GetEntityByUUID(cubes[1].GetUUID()));
+		CheckMotion(ReadMotionFrame(first), camera, camera, { { movedInCopy, glm::dvec3(0.0, 0.5, 0.0) }, { movedInSource, glm::dvec3(0.0, -0.5, 0.0) } });
+		CheckHistory(gpu, *copy, first);
+		REQUIRE(first.Render(*copy, camera, nullptr, MotionOptions()));
+		CHECK(first.GetStats().MotionHistory);
+		CheckMotion(ReadMotionFrame(first), camera, camera);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
