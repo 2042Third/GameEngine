@@ -2,6 +2,7 @@
 
 #include "Editor/CommandJournal.h"
 #include "Editor/CommandUtils.h"
+#include "Editor/EditorPreferences.h"
 #include "Editor/EditorWorld.h"
 #include "Editor/ExternalEditor.h"
 #include "Editor/GameExport.h"
@@ -135,7 +136,9 @@ namespace Strata
 	EditorContext::EditorContext(const EditorContextSpecification& specification)
 		: m_Specification(specification), m_EditScene(CreateRef<Scene>()), m_Journal(CreateRef<CommandJournal>()),
 		  m_Recovery(CreateScope<SceneRecovery>()), m_ProjectThumbnail(CreateScope<ProjectThumbnail>()),
-		  m_ExternalEditor(CreateScope<ExternalEditorLauncher>(specification.EditorSettingsFile)),
+		  m_Preferences(CreateScope<EditorPreferences>(GetSettingsRegistry(), specification.PreferencesFile, specification.EditorSettingsFile,
+			  [this](const std::string& error) { OnPreferencesWritten(error); })),
+		  m_ExternalEditor(CreateScope<ExternalEditorLauncher>(*m_Preferences)),
 		  m_RecentProjects(specification.RecentProjectsFile, specification.RecentProjectsReadOnly)
 	{
 		ActivateBuiltinAssets();
@@ -215,6 +218,8 @@ namespace Strata
 	EditorContext::~EditorContext()
 	{
 		ReleaseProject(false);
+		// A preferences write still in flight ends here, while everything its completion uses (the notifications) is there.
+		m_Preferences->Finish();
 		if (m_BuiltinAssets && AssetManager::GetActive() == m_BuiltinAssets)
 			AssetManager::SetActive(nullptr);
 	}
@@ -306,7 +311,23 @@ namespace Strata
 
 	bool EditorContext::HasSavesInFlight() const
 	{
-		return m_DocumentSaver.IsBusy() || (m_ProjectFileWriter && m_ProjectFileWriter->IsBusy());
+		return m_DocumentSaver.IsBusy() || (m_ProjectFileWriter && m_ProjectFileWriter->IsBusy()) || m_Preferences->IsWriting();
+	}
+
+	bool EditorContext::HasUnwrittenPreferences() const
+	{
+		return m_Preferences->HasUnwrittenPreferences();
+	}
+
+	void EditorContext::OnPreferencesWritten(const std::string& error)
+	{
+		if (error.empty())
+			return;
+		const std::string file = FileSystem::ToUTF8(m_Preferences->GetFile().filename());
+		ST_ERROR("Writing the preferences file '{}' failed: {} (the change is kept in memory; the next change or preferences.save writes it "
+			"again)", FileSystem::ToUTF8(m_Preferences->GetFile()), error);
+		NotifySaveFailed(file, fmt::format("{}. The preferences are kept in memory: the next change, or preferences.save, writes them again.", error),
+			UUID::Null());
 	}
 
 	void EditorContext::OnProjectFileWritten(const std::string& error)
@@ -2471,6 +2492,7 @@ namespace Strata
 		m_DocumentSaver.Update();
 		if (m_ProjectFileWriter)
 			m_ProjectFileWriter->Update();
+		m_Preferences->Update();
 		// The asset scan ended: what waited for the whole registry goes on (the start scene, the script usage scan).
 		FinishAssetScan();
 		// One budget for the frame's loading work: a scene being opened, the running game's switch and the updated scene's

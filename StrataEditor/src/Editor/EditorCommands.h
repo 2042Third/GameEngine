@@ -198,6 +198,7 @@ namespace Strata
 	void RegisterPrefabCommands(EditorCommandRegistry& registry); // prefab.* (EditorPrefabCommands.cpp)
 	void RegisterAssetCommands(EditorCommandRegistry& registry);
 	void RegisterProjectSettingsCommands(EditorCommandRegistry& registry); // project.settings, setSettings, save
+	void RegisterPreferencesCommands(EditorCommandRegistry& registry); // preferences.* (EditorPreferencesCommands.cpp)
 	void RegisterEditorStateCommands(EditorCommandRegistry& registry);
 	void RegisterPlayCommands(EditorCommandRegistry& registry); // play.* (Commands/PlayCommands.cpp)
 	void RegisterBatchCommands(EditorCommandRegistry& registry); // editor.batch (Commands/BatchCommands.cpp)

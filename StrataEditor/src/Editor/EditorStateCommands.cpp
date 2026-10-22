@@ -807,10 +807,11 @@ namespace Strata
 			}, EditorCommandKind::Session });
 
 		registry.Register(MayDefer({ "editor.quit",
-			"Closes the editor after answering (pending commands are cancelled). Fails while the scene has unsaved changes, or the project file "
-			"unwritten settings (its last write failed: project.save), unless force is true; save first with scene.save or scene.saveAs. Waits for "
-			"saves in flight first, also with force: a save is never lost. Returns quitting, discardedChanges and discardedSettings (whether "
-			"unsaved scene changes or unwritten project settings were discarded).",
+			"Closes the editor after answering (pending commands are cancelled). Fails while the scene has unsaved changes, the project file "
+			"unwritten settings (its last write failed: project.save) or the preferences file unwritten preferences (preferences.save), unless "
+			"force is true; save first with scene.save or scene.saveAs. Waits for saves in flight first, also with force: a save is never lost. "
+			"Returns quitting, discardedChanges, discardedSettings and discardedPreferences (whether unsaved scene changes, unwritten project "
+			"settings or unwritten preferences were discarded).",
 			ObjectSchema({ { "force", ForceSchema() } }),
 			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -818,12 +819,14 @@ namespace Strata
 				const bool force = arguments.GetBool("force", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "quitting", DiscardScope::Project))
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "quitting", DiscardScope::Editor))
 					return std::move(*refused);
 				const bool modified = context.IsSceneModified();
 				const bool discardedSettings = context.HasUnwrittenProjectSettings();
+				const bool discardedPreferences = context.HasUnwrittenPreferences();
 				context.RequestQuit();
-				return EditorCommandResult::Ok({ { "quitting", true }, { "discardedChanges", modified }, { "discardedSettings", discardedSettings } });
+				return EditorCommandResult::Ok({ { "quitting", true }, { "discardedChanges", modified }, { "discardedSettings", discardedSettings },
+					{ "discardedPreferences", discardedPreferences } });
 			}), EditorCommandKind::Session }));
 
 		////////////////////////////////////////////////////////////////////////////////

@@ -914,6 +914,41 @@ setting is one registration, and no other code learns of it.
   and a game must not run with settings it cannot read); sections no registered module claims are ignored. While the
   runtime lives it provides them as `IProjectSettings`. A version-4 manifest has no settings and gets no provider.
 
+### Preferences
+
+The person's preferences are the registry's *user* sections (`SettingsScope::User`): the editor's own (the external
+editor, `Editor.ExternalEditor`), registered by `EditorPreferences::RegisterSections` in the editor's `Extra`
+registration (and the tests'), and any a module registers. They hold for every project and never reach a game.
+
+- **The store.** `Editor/EditorPreferences` keeps them in `<user data>/Strata/Preferences.json`
+  (`EditorPreferences::GetDefaultFile`, found with `Platform::FindUserDataDirectory`, so never in a shared temporary
+  folder): `{ "Strata": { "Format": "Preferences", "Version": 1 }, "Settings": { "<Id>": { "Version": n, "Value": ... } } }`,
+  the project file's envelope. It is read once, when the editor starts, through `Platform::ReadTrustedFile` (at most
+  64 KiB, `c_MaxFileBytes`: the preferences name a program the editor runs, so a file others could have written is not
+  read) and written through `Platform::WritePrivateFile` by its own `SettingsFileWriter`, in the background like the
+  project file. A file that cannot be read (too large, not trusted, not JSON, a later format) is ignored with a warning
+  and replaced by the next change; a stored value its section refuses keeps its stored value (its default applies, the
+  warning and `preferences.get`'s `problem` say why) and sections no registered section claims are written back as they
+  were read. `Set` validates through the section (`SettingsSection::Validate`) and refuses a change the file could not
+  hold. A failed write keeps the change in memory and is reported (an error in the log, a notification,
+  `preferences.get`'s `fileState` and `fileError`); `preferences.save` writes again, and `editor.quit` refuses meanwhile
+  unless forced ([No silent data loss](#no-silent-data-loss)). `EditorContextSpecification::PreferencesFile` names the
+  file; empty, as in tests, keeps the preferences in memory.
+- **The import.** 0.5.0 kept the external editor as the top-level `"ExternalEditor"` of
+  `<user data>/Strata/EditorSettings.json` (`EditorContextSpecification::EditorSettingsFile`), which every editor version
+  on the machine shares. While `Preferences.json` does not exist, the store imports that value once (read only, checked
+  by the section) and writes `Preferences.json` at once, so later starts read only it: a 0.5.0 editor on the same
+  machine keeps its own setting, and what it writes later changes nothing here. Nothing to import writes nothing.
+- **Commands.** `preferences.get` (Query, session results) describes every user section like `project.settings` does,
+  with `unclaimed`, `file`, `fileState` and `fileError`; `preferences.set {section, value | reset: true}` (Session)
+  validates the whole value first and changes nothing when it is refused; `preferences.save` (Session, deferred) writes
+  the file and answers once it is written. Preference changes are not undo steps: they are the person's environment,
+  not the project's content (`project.setSettings` refuses a user section, `preferences.set` a project section).
+- **The external editor.** `ExternalEditorLauncher` reads and writes its command through the store (the section's value
+  `{ "Command": ... }`); `STRATA_EXTERNAL_EDITOR` still wins. The section checks the template's form only; whether its
+  program is there depends on the machine and the PATH the editor started with, so `script.setExternalEditor` (and the
+  External Editor page) check that when the person sets one.
+
 ## Asset pipeline
 
 ### Asset files
@@ -1794,16 +1829,18 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   releases the project (`DiscardScope::Project`: the project commands above and `editor.quit`) also fails while the
   project file has unwritten settings (its last write failed: [Project settings](#project-settings)), naming the file,
   its error and `project.save`, and reports `discardedSettings`; one that keeps the project open (`DiscardScope::Scene`)
-  loses no settings and is not refused for them. The UI asks before releasing the project with
-  `EditorShell::RequestReleaseProject`: after the question about the scene, a question about the unwritten settings
-  offers Retry (`project.save`, then the action), Don't Save and Cancel (changes of the scene made while it waits are
-  asked about before the action runs). The UI keeps asking (the unsaved-changes
+  loses no settings and is not refused for them. Quitting (`DiscardScope::Editor`: `editor.quit`) also fails while the
+  preferences file has unwritten preferences ([Preferences](#preferences)), naming `preferences.save`, and reports
+  `discardedPreferences`. The UI asks before releasing the project with `EditorShell::RequestReleaseProject`: after the
+  question about the scene, a question about the unwritten settings offers Retry (`project.save`, then the action), Don't
+  Save and Cancel (changes of the scene made while it waits are asked about before the action runs); before quitting
+  with `EditorShell::RequestQuit`, which then asks the same about unwritten preferences (Retry runs `preferences.save`). The UI keeps asking (the unsaved-changes
   dialog, `EditorShell::RequestDiscardChanges`) and passes `force` once the person has answered, for the changes they were
   asked about only: the question's Don't Save asks again when the scene changed while it waited, a dialog that runs the
   command later asks again when the scene changed since (`UndoStack::GetVersion`), a modal dialog asks over itself
   (`EditorShell::DrawDiscardQuestion` between its `BeginModal` and `EndModal`), and a recorded `force` is never repeated
   for the person (the Activity panel's Re-run asks, through `RequestReleaseProject` for a command that releases the
-  project).
+  project and `RequestQuit` for `editor.quit`).
 - **Saves are never lost and never hold a frame:** the project file goes through `Editor/SettingsFileWriter`
   ([Project settings](#project-settings)), and the edited scene and every engine-native document a command or a
   panel writes as a whole go through `Editor/DocumentSaver` (`EditorContext::BeginSaveScene`, `BeginSaveSceneAs`; world
@@ -1952,9 +1989,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `script.setExternalEditor {command}` (`Editor/ExternalEditor`:
   a template such as `code -g {file}:{line}:{column}`, split into a program and arguments and started without a shell;
   the program is a path or a name found in PATH, `Platform::FindProgram`, and one that is not there is refused; batch
-  files are refused, except VS Code's launcher in PATH, which starts `Code.exe` beside it; the user's setting in
-  `<user data>/Strata/EditorSettings.json`, written private and read
-  only when trusted, `EditorContextSpecification::EditorSettingsFile`; `STRATA_EXTERNAL_EDITOR` overrides it; projects
+  files are refused, except VS Code's launcher in PATH, which starts `Code.exe` beside it; the user's setting, kept in
+  their preferences as the `Editor.ExternalEditor` section ([Preferences](#preferences)); `STRATA_EXTERNAL_EDITOR`
+  overrides it; projects
   cannot name one, as a shared project must not choose what runs; without one, the default application), `script.add
   {entity, class, fields}`, `script.remove {entity, class}`, `script.setField {entity, class, field, value}` (null
   resets to the default) and `script.get {entity, class?}` (the field values: the live instances' while playing, which
@@ -2979,7 +3016,8 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   `play` (`play.`, `input.`, `audio.`: game-ui's `input.click` and `input.type` too), `scripts`, `animation`, `viewport`
   (`viewport.`, `camera.`), `streaming` (`asset.stats`, `asset.setBudget`), `perf` (`editor.perf`), `editor` (`editor.`,
   `log.`), `ui` (`ui.create`, `ui.layout`, `ui.hitTest`), `world` (`world.`, `physics.`) and `settings` (the project's
-  settings: `project.settings`, `project.setSettings`, `project.save`; the project's other commands stay in `assets`). Exact names win over
+  settings: `project.settings`, `project.setSettings`, `project.save`, the project's other commands staying in `assets`;
+  and the preferences, `preferences.`). Exact names win over
   prefixes; a group the table does not know gets a toolset named after it, but a new built-in group goes into the table
   (`CLI.McpToolsets` checks that every command maps to a toolset it names, and what the `ui`, `play` and `settings`
   toolsets hold).

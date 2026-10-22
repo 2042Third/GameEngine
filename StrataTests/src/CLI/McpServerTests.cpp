@@ -610,6 +610,7 @@ TEST_SUITE("CLI.McpToolsets")
 		CHECK(McpToolsets::GetToolsets("project.setSettings") == std::vector<std::string> { "settings" });
 		CHECK(McpToolsets::GetToolsets("project.save") == std::vector<std::string> { "settings" });
 		CHECK(McpToolsets::GetToolsets("project.export") == std::vector<std::string> { "assets" });
+		CHECK(McpToolsets::GetToolsets("preferences.set") == std::vector<std::string> { "settings" });
 		// Groups the table does not know get a toolset named after them.
 		CHECK(McpToolsets::GetToolsets("weather.set") == std::vector<std::string> { "weather" });
 		CHECK(McpToolsets::GetToolsets("nodot") == std::vector<std::string> { "nodot" });

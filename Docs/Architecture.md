@@ -3365,7 +3365,10 @@ is the `strata-scripting` skill. The layers:
   job serializes and writes them atomically, and `EditorContext::Update` publishes the outcome; writes coalesce (one in
   flight, the newest next). A failed write keeps the change in memory and leaves the file with unwritten settings, which
   the commands that release the project refuse to discard unless forced; only `EditorContext::ReleaseProject` may write
-  on the main thread (it finishes a write in flight before the project goes).
+  on the main thread (it finishes a write in flight before the project goes). The person's preferences
+  (`Editor/EditorPreferences.h`: the registry's user sections, in `<user data>/Strata/Preferences.json`, which imports
+  0.5.0's `EditorSettings.json` once) are written the same way by a writer of their own; their changes are not undo
+  steps, and `editor.quit` refuses to discard unwritten ones unless forced.
 - **Background saves** (`Editor/DocumentSaver.h`). The one path that saves engine-native documents without holding a
   frame: the main thread takes a snapshot (`Scene::Copy` with `SerializedOnly`) and submits a `DocumentSaveRequest` (the
   snapshot, its undo `SavePoint`, a label and its items); a background job writes each item through `SceneDocumentWriter`
@@ -3897,7 +3900,7 @@ drawn at each level chosen by errors (`StreamingViewStats::MaxErrorPixelsPerLOD`
   crash. The project's files show relative to it, other paths cut at their start where the column is narrow, so file
   names stay readable, the cut texts computed again only when the column's width changes. Sources open in the person's
   code editor (`Editor/ExternalEditor`: `ExternalEditorLauncher` starts the command template's program directly, without a
-  shell, from the user's settings or `STRATA_EXTERNAL_EDITOR`, else the default application). The program is found as
+  shell, from the user's preferences or `STRATA_EXTERNAL_EDITOR`, else the default application). The program is found as
   the system finds programs (`Platform::FindProgram`: a path, or a name in the folders of PATH, on Windows with the
   extensions of PATHEXT), and VS Code's launcher in PATH (`bin/code.cmd`, a batch file) stands for `Code.exe` beside it;
   `script.setExternalEditor` refuses a program it cannot find, and the External Editor dialog shows the program a command

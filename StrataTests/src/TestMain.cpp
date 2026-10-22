@@ -23,6 +23,7 @@
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Process.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Engine/BuiltinModules.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Renderer/GraphicsDevice.h"
@@ -41,6 +42,7 @@
 #endif
 
 #if ST_TESTS_HAVE_EDITOR
+	#include "Editor/EditorPreferences.h"
 	#include "Editor/WorldSaveMeasurement.h"
 #endif
 
@@ -1158,6 +1160,10 @@ int main(int argc, char** argv)
 	// Like every program that uses the engine, before anything touches a registry; with the asset pipeline, like the editor.
 	Strata::Engine::ModuleRegistrationOptions modules;
 	modules.AssetPipeline = Strata::RegisterAssetPipeline;
+#if ST_TESTS_HAVE_EDITOR
+	// And the editor's preference sections, as the editor registers them.
+	modules.Extra.push_back([]() { Strata::EditorPreferences::RegisterSections(Strata::SettingsRegistry::GetProcessRegistry()); });
+#endif
 	Strata::Engine::RegisterBuiltinModules(modules);
 
 	if (isHelper)

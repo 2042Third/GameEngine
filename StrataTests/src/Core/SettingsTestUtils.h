@@ -189,6 +189,34 @@ namespace Strata::Tests
 		CHECK(std::regex_search(result.Output, std::regex(R"(test cases:\s+1 \|\s+1 passed)")));
 	}
 
+	// "Test.Preferences", a simple user section (a preference): Note (String of at most 96 KiB, "", more than a preferences file
+	// may hold) and Size (Int 1 to 4, 2).
+	inline SettingsSection MakeUserTestSection()
+	{
+		SettingsSection section;
+		section.Id = "Test.Preferences";
+		section.Title = "Test Preferences";
+		section.Category = "Tests";
+		section.Description = "A preference of tests.";
+		section.Scope = SettingsScope::User;
+		SettingsField& note = section.Fields.emplace_back();
+		note.Name = "Note";
+		note.Title = "Note";
+		note.Description = "A note of tests.";
+		note.Type = SettingsFieldType::String;
+		note.MaxLength = 96 * 1024;
+		note.Default = "";
+		SettingsField& size = section.Fields.emplace_back();
+		size.Name = "Size";
+		size.Title = "Size";
+		size.Description = "A size of tests.";
+		size.Type = SettingsFieldType::Int;
+		size.Min = 1.0;
+		size.Max = 4.0;
+		size.Default = 2;
+		return section;
+	}
+
 	// Registers both test sections in `registry`; REQUIREs that it accepts them.
 	inline void RegisterTestSections(SettingsRegistry& registry)
 	{

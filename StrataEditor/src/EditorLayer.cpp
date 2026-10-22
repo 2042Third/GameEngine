@@ -1,6 +1,7 @@
 #include "EditorLayer.h"
 
 #include "Editor/CommandUtils.h"
+#include "Editor/EditorPreferences.h"
 #include "Editor/GameExport.h"
 #include "Editor/ProjectSamples.h"
 #include "Editor/ProjectTemplates.h"
@@ -54,6 +55,7 @@ namespace Strata
 		constexpr const char* c_UnsavedChangesModal = "Unsaved Changes";
 		constexpr const char* c_SavingModal = "Saving";
 		constexpr const char* c_UnwrittenSettingsModal = "Project Settings Not Written";
+		constexpr const char* c_UnwrittenPreferencesModal = "Preferences Not Written";
 		// Between the parts of a pill's text.
 		constexpr const char* c_Separator = " \xC2\xB7 ";
 		// Frames the frame pill's tooltip summarizes for what bounds them: two seconds at 60 frames per second.
@@ -83,6 +85,7 @@ namespace Strata
 			EditorContextSpecification specification;
 			specification.RecentProjectsFile = options.RecentProjectsFile;
 			specification.RecentProjectsReadOnly = options.RecentProjectsReadOnly;
+			specification.PreferencesFile = options.PreferencesFile;
 			specification.EditorSettingsFile = options.EditorSettingsFile;
 			specification.WatchAssetFiles = options.WatchFiles;
 			specification.HotReloadScripts = options.WatchFiles;
@@ -698,10 +701,13 @@ namespace Strata
 		EventDispatcher dispatcher(event);
 		dispatcher.Dispatch<WindowCloseEvent>([this](WindowCloseEvent&)
 		{
-			if (!m_Context.IsSceneModified() && !m_Context.HasSavesInFlight() && !m_Context.HasUnwrittenProjectSettings())
+			if (!m_Context.IsSceneModified() && !m_Context.HasSavesInFlight() && !m_Context.HasUnwrittenProjectSettings()
+				&& !m_Context.HasUnwrittenPreferences())
+			{
 				return false;
+			}
 			// Keep running and ask first (after the saving dialog while saves write); closing happens from the dialog.
-			RequestReleaseProject([this]() { m_Host->Close(); });
+			RequestQuit([this]() { m_Host->Close(); });
 			return true;
 		});
 		dispatcher.Dispatch<WindowFileDropEvent>([this](WindowFileDropEvent& drop)
@@ -894,6 +900,21 @@ namespace Strata
 			m_PendingReleaseAction = action;
 			m_ReleaseQuestionVersion = m_Context.GetUndoStack().GetVersion();
 			m_OpenUnwrittenSettingsModal = true;
+		});
+	}
+
+	void EditorLayer::RequestQuit(std::function<void()> action)
+	{
+		RequestReleaseProject([this, action = std::move(action)]()
+		{
+			if (!m_Context.HasUnwrittenPreferences())
+			{
+				action();
+				return;
+			}
+			m_PendingQuitAction = action;
+			m_QuitQuestionVersion = m_Context.GetUndoStack().GetVersion();
+			m_OpenUnwrittenPreferencesModal = true;
 		});
 	}
 
@@ -1370,7 +1391,8 @@ namespace Strata
 			}
 			ImGui::Separator();
 			if (ImGui::MenuItem("Exit"))
-				RequestReleaseProject([this]() { m_Host->Close(); });
+				RequestQuit([this]() { m_Host->Close(); });
+			UI::ItemProbe::Record("Menu.File.Exit");
 			ImGui::EndMenu();
 		}
 
@@ -2160,6 +2182,62 @@ namespace Strata
 		}
 	}
 
+	void EditorLayer::DrawUnwrittenPreferencesQuestion()
+	{
+		// The answer is for the preferences and for the scene as it was when asked: changes of the scene made while the question
+		// waited are asked about first (RequestQuit asks again), like RunPendingReleaseAction does.
+		auto quit = [this]()
+		{
+			std::function<void()> action = std::exchange(m_PendingQuitAction, nullptr);
+			if (!action)
+				return;
+			if (m_Context.IsSceneModified() && m_Context.GetUndoStack().GetVersion() != m_QuitQuestionVersion)
+				RequestQuit(std::move(action));
+			else
+				action();
+		};
+		const EditorPreferences& preferences = m_Context.GetPreferences();
+		// Written meanwhile (the retry, or a later change): nothing is lost any more, and the editor closes.
+		if (!m_RetryingPreferencesWrite && !preferences.HasUnwrittenPreferences() && !preferences.IsWriting())
+		{
+			ImGui::CloseCurrentPopup();
+			quit();
+			return;
+		}
+		const std::string file = FileSystem::ToUTF8(preferences.GetFile());
+		ImGui::Text("The preferences file '%s' could not be written:", file.c_str());
+		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 32.0f);
+		ImGui::TextColored(UI::GetThemeColors().Warning, "%s", preferences.GetFileError().c_str());
+		ImGui::TextUnformatted("The preferences changed since are only in the editor: quitting discards them.");
+		ImGui::PopTextWrapPos();
+		UI::ItemProbe::Record("UnwrittenPreferences.Dialog");
+		ImGui::Spacing();
+		const bool writing = m_RetryingPreferencesWrite || preferences.IsWriting();
+		ImGui::BeginDisabled(writing);
+		if (UI::DialogButton("UnwrittenPreferences.Retry", writing ? "Writing..." : "Retry", true))
+		{
+			// Through the runner, like every save the UI starts; the question closes once the file is written.
+			m_RetryingPreferencesWrite = true;
+			m_CommandRunner.Run(m_Context, m_Commands, "preferences.save", nlohmann::json::object(), [this](const EditorCommandResult&)
+			{
+				m_RetryingPreferencesWrite = false;
+			}, CommandOrigin { CommandSource::UI });
+		}
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+		if (UI::DialogButton("UnwrittenPreferences.Discard", "Don't Save"))
+		{
+			ImGui::CloseCurrentPopup();
+			quit();
+		}
+		ImGui::SameLine();
+		if (UI::DialogButton("UnwrittenPreferences.Cancel", "Cancel"))
+		{
+			ImGui::CloseCurrentPopup();
+			m_PendingQuitAction = nullptr;
+		}
+	}
+
 	void EditorLayer::DrawUnsavedChangesModal()
 	{
 		// A dialog that asked draws the question over itself before the window's own call comes (popups belong to the level
@@ -2180,6 +2258,17 @@ namespace Strata
 		if (UI::BeginModal(c_UnwrittenSettingsModal, "Project Settings Not Written"))
 		{
 			DrawUnwrittenSettingsQuestion();
+			UI::EndModal();
+			return;
+		}
+		if (m_OpenUnwrittenPreferencesModal)
+		{
+			UI::OpenModal(c_UnwrittenPreferencesModal);
+			m_OpenUnwrittenPreferencesModal = false;
+		}
+		if (UI::BeginModal(c_UnwrittenPreferencesModal, "Preferences Not Written"))
+		{
+			DrawUnwrittenPreferencesQuestion();
 			UI::EndModal();
 			return;
 		}

@@ -363,8 +363,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 [Editor](Docs/DeveloperGuide.md#editor).
 
 - **Every change to the scene or project goes through a command** (or `SceneEditTransaction`/`SetPropertyWithUndo` for
-  continuous UI edits; project settings: an undoable `ProjectSettingsAction`); panels only draw state and call commands,
-  and never write, move or remove files.
+  continuous UI edits; project settings: an undoable `ProjectSettingsAction`, preferences: Session commands); panels only
+  draw state and call commands, and never write, move or remove files.
 - Commands (`<group>.<action>`) have a description written for agents, a complete JSON Schema and a kind
   (`EditorCommandKind`: mark every query and session command, and queries whose results follow the session as
   `EditorCommandResults::Session`); they read parameters with `CommandArguments`, reject invalid or
@@ -375,9 +375,9 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Files commands write for clients go through `CommandUtils::ResolveOutputPath`
   ([Output paths](Docs/DeveloperGuide.md#output-paths)).
 - A command that replaces the edited scene starts with `CommandUtils::CheckUnsavedChanges` (fails unless `force`, also
-  on unwritten project settings when it releases the project); UI code passes `force` only once the person answered
-  `EditorShell::RequestDiscardChanges` (`RequestReleaseProject`), for the changes asked about.
-- Saves never serialize on the main thread: documents go through `Editor/DocumentSaver`, the project file through
+  on unwritten settings or preferences it would release); UI code passes `force` only once the person answered
+  `EditorShell::RequestDiscardChanges` (`RequestReleaseProject`, `RequestQuit`), for the changes asked about.
+- Saves never serialize on the main thread: documents go through `Editor/DocumentSaver`, settings files through
   `SettingsFileWriter` (a snapshot in the frame, the writing on a background job), commands that replace the scene,
   close the project or quit wrap their handler in `CommandUtils::AfterSaves`, and UI code saves through the command runner
   ([No silent data loss](Docs/DeveloperGuide.md#no-silent-data-loss)).

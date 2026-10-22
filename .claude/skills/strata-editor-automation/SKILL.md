@@ -85,7 +85,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
   `scene.open`/`save`/`info`/`hierarchy`, `entity.create`/`get`/`find`/`delete`, `component.add`/`set`,
   `prefab.instantiate`, `asset.list`/`info`/`import`, `material.create`, `script.build`/`status`, `play.start`/`stop`/
   `step`, `input.sequence` and `viewport.capture`. The others are in `scene`, `assets`, `play`, `scripts`, `animation`,
-  `viewport`, `streaming`, `perf`, `editor`, `ui`, `world` and `settings` (the project's settings).
+  `viewport`, `streaming`, `perf`, `editor`, `ui`, `world` and `settings` (the project's settings and the preferences).
 - `strata_describe` lists the toolsets (`{}`), a toolset's commands (`{"toolset": "scene"}`) or one command's full
   description and schema (`{"command": "entity.rename"}`); read it before a command whose short description leaves you
   unsure. `strata_toolsets {"enable": ["scene"]}` lists a toolset's commands as tools too (`"all"` for every command;
@@ -613,6 +613,11 @@ exported games, and keep the assets they name from being deleted. The project fi
 `project.save` answers once it is written. When a write fails, `editor.status`' `project.fileState` is `"unwritten"`
 (`project.info`'s `fileError` says why): fix the cause and run `project.save`, because closing or switching the project
 refuses until then (`force: true` discards the settings, reported as `discardedSettings`).
+**Preferences** (toolset `settings`) are the person's, for every project, not the project's: `preferences.get` lists them
+like `project.settings` does (the external editor is `Editor.ExternalEditor`, `{"Command": "..."}`), and
+`preferences.set {"section", "value" | "reset": true}` changes one; they are no undo steps. Change them only when asked:
+they are someone's environment. A failed write shows as `preferences.get`'s `fileState` `"unwritten"`; `preferences.save`
+writes again, and `editor.quit` refuses until then (`force: true` reports `discardedPreferences`).
 Check the result headless: `<dir>/<Game> --headless --frames 120` (exit code 0). Games load scenes in the background
 too: the first frames run before the start scene is in, so give short checks enough `--frames`.
 

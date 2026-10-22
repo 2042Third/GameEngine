@@ -47,6 +47,7 @@ namespace Strata
 
 	// Used by reference, pointer or owning pointer only: their headers stay out of every file that includes this one.
 	class CommandJournal;
+	class EditorPreferences;
 	class ExternalEditorLauncher;
 	class GameExport;
 	struct GameExportOptions;
@@ -97,8 +98,11 @@ namespace Strata
 		// RecentProjects::GetDefaultFile). Empty: in memory only, as tests need. Read-only: read but never written.
 		std::filesystem::path RecentProjectsFile;
 		bool RecentProjectsReadOnly = false;
-		// Where the user's editor settings are kept, such as the external code editor (ExternalEditorLauncher; the editor
-		// application passes ExternalEditor::GetDefaultSettingsFile). Empty: in memory only, as tests need.
+		// Where the user's preferences are kept (EditorPreferences, such as the external code editor; the editor application
+		// passes EditorPreferences::GetDefaultFile). Empty: in memory only, and nothing is imported, as tests need.
+		std::filesystem::path PreferencesFile;
+		// 0.5.0's editor settings (ExternalEditor::GetDefaultSettingsFile), whose external editor is imported once while
+		// PreferencesFile does not exist. Read only, never written.
 		std::filesystem::path EditorSettingsFile;
 		// Where project.samples and project.openSample find the samples (ProjectSamples); empty: next to the executable
 		// (ProjectSamples::GetDefaultDirectory).
@@ -261,8 +265,8 @@ namespace Strata
 		// failed.
 		bool SaveScene(std::string* outError = nullptr);
 		bool SaveSceneAs(const std::string& relativePath, std::string* outError = nullptr);
-		// Saves that have not ended (writing, waiting behind another or not published yet): the documents' (DocumentSaver) and
-		// the project file's (SaveProjectFile).
+		// Saves that have not ended (writing, waiting behind another or not published yet): the documents' (DocumentSaver), the
+		// project file's (SaveProjectFile) and the preferences file's.
 		bool HasSavesInFlight() const;
 		// The save in flight that holds the edited scene as it is now (DocumentSaver::GetStatus tells how it ended; once it
 		// is published the scene is unmodified, unless edited meanwhile), or 0 without one.
@@ -533,7 +537,14 @@ namespace Strata
 		bool StartPlayBuild(std::string* outError = nullptr);
 		uint64_t GetPlayBuildID() const { return m_PlayBuildID; }
 		void ClearPlayBuild() { m_PlayBuildID = 0; }
-		// The person's code editor (script.open, script.setExternalEditor).
+		// The person's preferences (preferences.get, preferences.set): the settings registry's user sections, validated with
+		// GetSettingsRegistry and written in the background like the project file. A write that fails keeps the change in memory
+		// and is reported (a notification); editor.quit refuses meanwhile unless forced.
+		EditorPreferences& GetPreferences() { return *m_Preferences; }
+		const EditorPreferences& GetPreferences() const { return *m_Preferences; }
+		// The preferences file's last write failed and none succeeded since (EditorPreferences::HasUnwrittenPreferences).
+		bool HasUnwrittenPreferences() const;
+		// The person's code editor (script.open, script.setExternalEditor), kept in the preferences.
 		ExternalEditorLauncher& GetExternalEditor() { return *m_ExternalEditor; }
 		const ExternalEditorLauncher& GetExternalEditor() const { return *m_ExternalEditor; }
 		// Opens a source file at a line and column (0: unknown) in the external editor: a path relative to the project
@@ -726,6 +737,8 @@ namespace Strata
 		void UpdateScriptUsageScan();
 		// A write of the project file ended (its writer's completion): a failure is logged and posted.
 		void OnProjectFileWritten(const std::string& error);
+		// The same for the preferences file.
+		void OnPreferencesWritten(const std::string& error);
 		// Posts how the game export ended (EditorNotifications).
 		void NotifyExportFinished(const GameExport& exporter);
 		// Posts the imports that failed while nobody waited for them (EditorAssetManager::TakeImportFailures): one toast for
@@ -858,6 +871,9 @@ namespace Strata
 		std::optional<BuiltScriptSources> m_BuiltScriptSources;
 		uint64_t m_ProblemsPanelRequests = 0;
 		bool m_ScriptFaultLocationPending = false; // m_LastScriptFault waits for its symbolization
+		// Declared after the notifications its writer's completion posts to (the writer finishes when it goes), and before the
+		// launcher that reads it.
+		Scope<EditorPreferences> m_Preferences;
 		Scope<ExternalEditorLauncher> m_ExternalEditor;
 		// The scan of the project's scene and prefab files for scripts (see DoScenesUseScripts), shared with its I/O job.
 		struct ScriptUsageScan

@@ -55,6 +55,10 @@ namespace Strata
 		// written (EditorContext::HasUnwrittenProjectSettings), offering to write it again (project.save). The action's command
 		// passes force: true once the person decided.
 		virtual void RequestReleaseProject(std::function<void()> action) = 0;
+		// RequestReleaseProject for quitting the editor: once the project's questions are answered, it also asks about the
+		// preferences while their file could not be written (EditorContext::HasUnwrittenPreferences), offering to write it again
+		// (preferences.save).
+		virtual void RequestQuit(std::function<void()> action) = 0;
 		// A modal dialog that asks (RequestDiscardChanges) while it stays open calls this between its UI::BeginModal and
 		// UI::EndModal every frame: the question then shows over it. Asked from anywhere else, the question opens over the
 		// whole window, which closes a modal dialog that is open.

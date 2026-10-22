@@ -148,13 +148,15 @@ namespace Strata
 		// What a command that replaces the edited scene lets go of (CheckUnsavedChanges).
 		enum class DiscardScope : uint8_t
 		{
-			Scene,  // The edited scene (scene.open, scene.new, scene.recover): the project stays open
-			Project // The project too (project.open, project.create, project.close, project.openSample, editor.quit)
+			Scene,   // The edited scene (scene.open, scene.new, scene.recover): the project stays open
+			Project, // The project too (project.open, project.create, project.close, project.openSample)
+			Editor   // The project and the person's preferences (editor.quit)
 		};
 		// The guard of every command that replaces the edited scene: while the edited scene has unsaved changes (also while a
-		// copy of it plays: the edited scene is what is at stake) and, for a command that releases the project, while the
-		// project file has unwritten settings (EditorContext::HasUnwrittenProjectSettings: its last write failed), the command
-		// fails, changing nothing, unless `force` is true. `action` says what the command would do, e.g. "opening the scene
+		// copy of it plays: the edited scene is what is at stake), for a command that releases the project while the project
+		// file has unwritten settings (EditorContext::HasUnwrittenProjectSettings: its last write failed), and for quitting while
+		// the preferences file has unwritten preferences (EditorContext::HasUnwrittenPreferences), the command fails, changing
+		// nothing, unless `force` is true. `action` says what the command would do, e.g. "opening the scene
 		// 'Level2'". Returns the failure (naming the scene or the file, and how to proceed), or nullopt when the command may go
 		// on. A forced discard keeps the scene's changes as recovery data (EditorContext::ResetScene); unwritten settings are
 		// lost.

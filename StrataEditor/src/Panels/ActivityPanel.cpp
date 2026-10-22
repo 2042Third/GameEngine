@@ -108,11 +108,10 @@ namespace Strata
 		}
 
 		// Of those, the commands that release the project (CheckUnsavedChanges with DiscardScope::Project): their force discards
-		// the project's unwritten settings too.
+		// the project's unwritten settings too. editor.quit's (DiscardScope::Editor) also discards unwritten preferences.
 		bool ReleasesProject(std::string_view command)
 		{
-			return command == "project.open" || command == "project.create" || command == "project.close" || command == "project.openSample"
-				|| command == "editor.quit";
+			return command == "project.open" || command == "project.create" || command == "project.close" || command == "project.openSample";
 		}
 
 	}
@@ -449,7 +448,9 @@ namespace Strata
 					ST_WARN("{}: {}", name, result.Value["warning"].get<std::string>());
 			}, CommandOrigin { CommandSource::UI });
 		};
-		if (replacesScene && panelContext.Shell && ReleasesProject(action.Command))
+		if (replacesScene && panelContext.Shell && action.Command == "editor.quit")
+			panelContext.Shell->RequestQuit([rerun]() { rerun(true); });
+		else if (replacesScene && panelContext.Shell && ReleasesProject(action.Command))
 			panelContext.Shell->RequestReleaseProject([rerun]() { rerun(true); });
 		else if (replacesScene && panelContext.Shell)
 			panelContext.Shell->RequestDiscardChanges([rerun]() { rerun(true); });

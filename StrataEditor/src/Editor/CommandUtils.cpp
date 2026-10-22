@@ -1,6 +1,7 @@
 #include "Editor/CommandUtils.h"
 
 #include "Editor/EditorContext.h"
+#include "Editor/EditorPreferences.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/SettingsFileWriter.h"
 
@@ -266,11 +267,18 @@ namespace Strata
 				return std::nullopt;
 			// Both are named when both are at stake, so that one answer covers what force would discard.
 			std::string settings;
-			if (scope == DiscardScope::Project && context.HasUnwrittenProjectSettings())
+			if (scope != DiscardScope::Scene && context.HasUnwrittenProjectSettings())
 			{
 				settings = fmt::format("The project file '{}' could not be written ({}): the project's settings changed since are only in the "
 					"editor, and {} would discard them. Write it with project.save once the cause is fixed, or pass force: true to discard them",
 					FileSystem::ToUTF8(context.GetProject()->GetProjectFile()), context.GetProjectFileError(), action);
+			}
+			if (scope == DiscardScope::Editor && context.HasUnwrittenPreferences())
+			{
+				const EditorPreferences& preferences = context.GetPreferences();
+				settings += fmt::format("{}The preferences file '{}' could not be written ({}): the preferences changed since are only in the "
+					"editor, and {} would discard them. Write it with preferences.save once the cause is fixed, or pass force: true to discard them",
+					settings.empty() ? "" : ". ", FileSystem::ToUTF8(preferences.GetFile()), preferences.GetFileError(), action);
 			}
 			if (!context.IsSceneModified())
 			{

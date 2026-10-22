@@ -4,6 +4,7 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorPreferences.h"
 #include "Editor/ExternalEditor.h"
 #include "Editor/ScriptBuild.h"
 #include "Editor/ScriptProject.h"
@@ -14,6 +15,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
+#include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
@@ -375,16 +377,17 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		CHECK(harness.Run("script.setExternalEditor", { { "command", "" } })["program"].is_null());
 	}
 
-	TEST_CASE("The external editor setting is the user's, kept in their settings file; the environment overrides it")
+	TEST_CASE("The external editor setting is the user's, kept in their preferences; the environment overrides it")
 	{
 		ScopedEnvironmentVariable noOverride("STRATA_EXTERNAL_EDITOR", "");
-		const std::filesystem::path settings = CreateTemporaryDirectory("EditorSettings") / "Strata" / "EditorSettings.json";
+		const std::filesystem::path file = CreateTemporaryDirectory("ExternalEditorPreferences") / "Strata" / "Preferences.json";
 		// The editor the setting names is a program in PATH.
 		const std::filesystem::path tools = CreateTemporaryDirectory("EditorPrograms");
 		WriteProgramFile(tools / ProgramFileName("code"));
 		ScopedEnvironmentVariable path("PATH", FileSystem::ToUTF8(tools));
 		{
-			ExternalEditorLauncher launcher(settings);
+			EditorPreferences preferences(SettingsRegistry::GetProcessRegistry(), file);
+			ExternalEditorLauncher launcher(preferences);
 			CHECK(launcher.GetSource() == ExternalEditorSource::None);
 			std::string error;
 			CHECK_FALSE(launcher.SetUserCommand("edit.bat {file}", &error));
@@ -392,27 +395,17 @@ TEST_SUITE("Editor.ScriptWorkflow")
 			REQUIRE_MESSAGE(launcher.SetUserCommand("code -g {file}:{line}", &error), error);
 			CHECK(launcher.GetSource() == ExternalEditorSource::User);
 		}
-		CHECK(Platform::IsTrustedFile(settings));
 		{
-			ExternalEditorLauncher launcher(settings);
+			EditorPreferences preferences(SettingsRegistry::GetProcessRegistry(), file);
+			ExternalEditorLauncher launcher(preferences);
 			CHECK(launcher.GetUserCommand() == "code -g {file}:{line}");
 			ScopedEnvironmentVariable environment("STRATA_EXTERNAL_EDITOR", "subl {file}:{line}");
 			CHECK(launcher.GetSource() == ExternalEditorSource::Environment);
 			CHECK(launcher.GetCommand() == "subl {file}:{line}");
 			REQUIRE(launcher.SetUserCommand(""));
 		}
-		ExternalEditorLauncher cleared(settings);
-		CHECK(cleared.GetUserCommand().empty());
-
-		// A settings file that is not JSON is ignored (with a warning), not trusted blindly.
-		REQUIRE(Platform::WritePrivateFile(settings, "not json"));
-		LogCapture log;
-		ExternalEditorLauncher garbage(settings);
-		CHECK(garbage.GetUserCommand().empty());
-		bool warned = false;
-		for (const LogEntry& entry : log.GetEntries())
-			warned |= entry.Message.find("are ignored") != std::string::npos;
-		CHECK(warned);
+		EditorPreferences preferences(SettingsRegistry::GetProcessRegistry(), file);
+		CHECK(ExternalEditorLauncher(preferences).GetUserCommand().empty());
 	}
 
 	TEST_CASE("script.open starts the external editor at the line, for sources of the project or the engine only")

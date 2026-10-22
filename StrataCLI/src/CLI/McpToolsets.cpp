@@ -47,7 +47,8 @@ namespace Strata::CLI::McpToolsets
 			{ "viewport.", "viewport" }, { "camera.", "viewport" },
 			{ "editor.", "editor" }, { "log.", "editor" },
 			{ "ui.", "ui" },
-			{ "world.", "world" }, { "physics.", "world" } };
+			{ "world.", "world" }, { "physics.", "world" },
+			{ "preferences.", "settings" } };
 
 		constexpr ToolsetInfo c_Toolsets[] = {
 			{ "core", "Making and testing a game: project, scene, entities, components, prefabs, assets, scripts, play, input sequences, captures" },

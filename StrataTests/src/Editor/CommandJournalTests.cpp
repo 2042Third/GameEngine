@@ -131,6 +131,7 @@ namespace
 		"physics.stats",
 		"play.state",
 		"prefab.status",
+		"preferences.get",
 		"project.exportStatus", "project.info", "project.samples", "project.settings", "project.templates",
 		"scene.hierarchy", "scene.info", "scene.loadStatus", "scene.recoveryStatus",
 		"script.get", "script.list", "script.status",
@@ -148,6 +149,7 @@ namespace
 		"input.scroll", "input.sequence", "input.type",
 		"play.pause", "play.simulate", "play.start", "play.step", "play.stop",
 		"prefab.select",
+		"preferences.save", "preferences.set",
 		"project.cancelExport", "project.close", "project.create", "project.export", "project.open", "project.openSample",
 		"scene.recover",
 		"script.open", "script.setExternalEditor",
@@ -159,7 +161,7 @@ namespace
 	// from them.
 	constexpr std::string_view c_SessionResultCommands[] = {
 		"asset.stats", "audio.state", "camera.get", "edit.history", "editor.activity", "editor.perf", "editor.recentProjects", "editor.status", "input.state",
-		"log.read", "physics.stats", "play.state", "project.exportStatus", "scene.loadStatus", "scene.recoveryStatus", "script.status", "selection.get",
+		"log.read", "physics.stats", "play.state", "preferences.get", "project.exportStatus", "scene.loadStatus", "scene.recoveryStatus", "script.status", "selection.get",
 		"viewport.getSettings", "world.status",
 	};
 
@@ -172,6 +174,7 @@ namespace
 		"input.click", "input.gamepadAxis", "input.gamepadButton", "input.key", "input.mouseButton", "input.mouseMove", "input.releaseAll", "input.scroll",
 		"input.sequence", "input.type",
 		"play.start", "play.step",
+		"preferences.save",
 		"project.close", "project.create", "project.export", "project.open", "project.openSample", "project.save",
 		"scene.loadAdditive", "scene.loadStatus", "scene.new", "scene.open", "scene.recover", "scene.recoveryStatus", "scene.save", "scene.saveAs",
 		"script.build",

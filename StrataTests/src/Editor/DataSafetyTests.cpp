@@ -18,6 +18,7 @@
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -291,6 +292,42 @@ TEST_SUITE("Editor.DataSafety")
 		const Ref<Project> written = Project::Load(projectFile, &error);
 		REQUIRE(written);
 		CHECK(written->GetConfig().Export.AlwaysInclude == std::vector<std::string> { "Scenes" });
+	}
+
+	TEST_CASE("Quitting after a failed preferences write asks about it, and Retry writes it first")
+	{
+		// A directory in the preferences file's place makes its writes fail.
+		const std::filesystem::path file = Tests::CreateTemporaryDirectory("DataSafetyUnwrittenPreferences") / "Preferences.json";
+		REQUIRE(FileSystem::CreateDirectories(file));
+		EditorOptions options;
+		options.PreferencesFile = file;
+		Tests::HarnessEditor editor({}, options);
+		editor.Run("preferences.set", { { "section", "Editor.ExternalEditor" }, { "value", { { "Command", "code {file}" } } } });
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Context().HasUnwrittenPreferences(); }));
+
+		// File > Exit asks; Cancel keeps the editor running.
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.Exit"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnwrittenPreferences.Dialog").has_value());
+		REQUIRE(editor.Click("UnwrittenPreferences.Cancel"));
+		editor.Frames(2);
+		CHECK_FALSE(UI::ItemProbe::Find("UnwrittenPreferences.Dialog").has_value());
+		CHECK(editor.Host->Running);
+
+		// Retry writes the file once its cause is gone, and the editor closes after it.
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.Exit"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnwrittenPreferences.Dialog").has_value());
+		REQUIRE(FileSystem::Remove(file));
+		REQUIRE(editor.Click("UnwrittenPreferences.Retry"));
+		REQUIRE(editor.FramesUntil([&editor]() { return !editor.Host->Running; }));
+		const std::optional<nlohmann::json> written = JsonUtils::Parse(FileSystem::ReadText(file).value_or(""));
+		REQUIRE(written);
+		CHECK((*written)["Settings"]["Editor.ExternalEditor"]["Value"]["Command"] == "code {file}");
 	}
 
 	TEST_CASE("Scene changes made while the unwritten settings question waits are asked about before the project closes")

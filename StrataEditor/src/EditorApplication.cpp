@@ -5,6 +5,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
+#include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Core/Timer.h>
 #include <Strata/Core/Version.h>
 #include <Strata/Engine/EntryPoint.h>
@@ -15,6 +16,7 @@
 #include <Strata/Renderer/GraphicsModule.h>
 #include <Strata/Renderer/Renderer.h>
 
+#include "Editor/EditorPreferences.h"
 #include "Editor/ExternalEditor.h"
 #include "EditorHost.h"
 #include "EditorIcon.h"
@@ -265,7 +267,8 @@ namespace Strata
 		// The projects a person or an agent opens go to the user's recent projects; scripted runs only read them.
 		options.RecentProjectsFile = RecentProjects::GetDefaultFile().value_or(std::filesystem::path());
 		options.RecentProjectsReadOnly = !options.CommandScript.empty() || commandLine.GetIntOption("--frames").has_value();
-		// The person's code editor for script sources (script.setExternalEditor).
+		// The person's preferences, such as the code editor for script sources; 0.5.0's settings file is only imported from.
+		options.PreferencesFile = EditorPreferences::GetDefaultFile().value_or(std::filesystem::path());
 		options.EditorSettingsFile = ExternalEditor::GetDefaultSettingsFile().value_or(std::filesystem::path());
 
 		// Automation (StrataCLI, MCP): on by default, on a free loopback port unless --automation-port picks one. The values
@@ -323,6 +326,8 @@ namespace Strata
 		// The editor imports assets: the composition root registers the modules with the asset pipeline.
 		ApplicationLaunch launch;
 		launch.Registration.AssetPipeline = RegisterAssetPipeline;
+		// The editor's preference sections, beside the modules' settings sections.
+		launch.Registration.Extra.push_back([]() { EditorPreferences::RegisterSections(SettingsRegistry::GetProcessRegistry()); });
 		launch.Create = [specification, options]() -> Scope<Application> { return CreateScope<EditorApplication>(specification, options); };
 		return launch;
 	}

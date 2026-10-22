@@ -1,10 +1,13 @@
 #include "Editor/ExternalEditor.h"
 
+#include "Editor/EditorPreferences.h"
+
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/Process.h>
+#include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Core/StringUtils.h>
 
 #include <nlohmann/json.hpp>
@@ -20,8 +23,7 @@ namespace Strata
 	{
 
 		constexpr const char* c_EnvironmentVariable = "STRATA_EXTERNAL_EDITOR";
-		constexpr const char* c_SettingsKey = "ExternalEditor";
-		constexpr size_t c_MaxSettingsFileSize = 64 * 1024;
+		constexpr const char* c_CommandKey = "Command"; // The section's member
 		constexpr size_t c_MaxCommandLength = 4096;
 		// Editor processes kept to be reaped; older ones are let go (letting go never ends them).
 		constexpr size_t c_MaxTrackedProcesses = 16;
@@ -162,6 +164,46 @@ namespace Strata
 	namespace ExternalEditor
 	{
 
+		SettingsSection MakeSettingsSection()
+		{
+			SettingsSection section;
+			section.Id = c_SettingsSection;
+			section.Title = "External Editor";
+			section.Category = "Scripts";
+			section.Description = "The person's code editor, which opens script sources at a line (script.open, the Problems panel, crash reports, "
+				"New Script): Command is a template such as \"code -g {file}:{line}:{column}\" in which whitespace separates arguments, double "
+				"quotes group them and {file}, {line}, {column} and {directory} are filled in (without {file}, the file goes last); the program is "
+				"started directly, never through a shell, so batch files cannot be one. Empty: the system's default application. "
+				"STRATA_EXTERNAL_EDITOR wins over it.";
+			section.Scope = SettingsScope::User;
+			section.Schema = {
+				{ "type", "object" },
+				{ "properties", { { c_CommandKey, { { "type", "string" }, { "maxLength", c_MaxCommandLength },
+					{ "description", "The command template, or \"\" for the system's default application" } } } } },
+				{ "required", { c_CommandKey } },
+				{ "additionalProperties", false } };
+			section.MakeDefault = []() { return nlohmann::json { { c_CommandKey, "" } }; };
+			section.Read = [](const nlohmann::json& value, uint32_t, std::string* outError) -> std::optional<nlohmann::json>
+			{
+				const nlohmann::json* command = value.is_object() ? JsonUtils::Find(value, c_CommandKey) : nullptr;
+				if (!command || !command->is_string() || value.size() != 1)
+				{
+					Fail(outError, "the value must be { \"Command\": a command template or \"\" }");
+					return std::nullopt;
+				}
+				if (!command->get_ref<const std::string&>().empty())
+				{
+					if (std::optional<std::string> problem = ValidateCommand(command->get_ref<const std::string&>()))
+					{
+						Fail(outError, fmt::format("Command: {}", *problem));
+						return std::nullopt;
+					}
+				}
+				return value;
+			};
+			return section;
+		}
+
 		std::optional<std::filesystem::path> GetDefaultSettingsFile()
 		{
 			const std::optional<std::filesystem::path> directory = Platform::FindUserDataDirectory("Strata");
@@ -267,29 +309,9 @@ namespace Strata
 
 	}
 
-	ExternalEditorLauncher::ExternalEditorLauncher(std::filesystem::path settingsFile)
-		: m_SettingsFile(std::move(settingsFile))
+	ExternalEditorLauncher::ExternalEditorLauncher(EditorPreferences& preferences)
+		: m_Preferences(preferences)
 	{
-		if (m_SettingsFile.empty() || !FileSystem::Exists(m_SettingsFile))
-			return;
-		// The command names a program the editor runs: only a file the user alone could have written is read.
-		std::string error;
-		const std::optional<std::string> text = Platform::ReadTrustedFile(m_SettingsFile, c_MaxSettingsFileSize, &error);
-		const std::optional<nlohmann::json> json = text ? JsonUtils::Parse(*text) : std::nullopt;
-		const nlohmann::json* command = json ? JsonUtils::Find(*json, c_SettingsKey) : nullptr;
-		if (!text || !json)
-		{
-			ST_WARN("The editor settings '{}' are ignored: {}", FileSystem::ToUTF8(m_SettingsFile), text ? std::string("not JSON") : error);
-			return;
-		}
-		if (!command || !command->is_string())
-			return;
-		if (std::optional<std::string> problem = ExternalEditor::ValidateCommand(command->get<std::string>()))
-		{
-			ST_WARN("The external editor of the editor settings '{}' is ignored: {}", FileSystem::ToUTF8(m_SettingsFile), *problem);
-			return;
-		}
-		m_UserCommand = command->get<std::string>();
 	}
 
 	ExternalEditorLauncher::~ExternalEditorLauncher() = default;
@@ -298,14 +320,21 @@ namespace Strata
 	{
 		if (const std::optional<std::string> environment = Platform::GetEnvVar(c_EnvironmentVariable); environment && !environment->empty())
 			return *environment;
-		return m_UserCommand;
+		return GetUserCommand();
 	}
 
 	ExternalEditorSource ExternalEditorLauncher::GetSource() const
 	{
 		if (const std::optional<std::string> environment = Platform::GetEnvVar(c_EnvironmentVariable); environment && !environment->empty())
 			return ExternalEditorSource::Environment;
-		return m_UserCommand.empty() ? ExternalEditorSource::None : ExternalEditorSource::User;
+		return GetUserCommand().empty() ? ExternalEditorSource::None : ExternalEditorSource::User;
+	}
+
+	std::string ExternalEditorLauncher::GetUserCommand() const
+	{
+		const nlohmann::json* value = m_Preferences.FindSection(ExternalEditor::c_SettingsSection);
+		const nlohmann::json* command = value ? JsonUtils::Find(*value, c_CommandKey) : nullptr;
+		return command && command->is_string() ? command->get<std::string>() : std::string();
 	}
 
 	bool ExternalEditorLauncher::SetUserCommand(const std::string& command, std::string* outError)
@@ -316,26 +345,9 @@ namespace Strata
 			if (!ExternalEditor::ResolveProgram(command, &problem))
 				return Fail(outError, fmt::format("The external editor command cannot be used: {}", problem));
 		}
-		if (!m_SettingsFile.empty())
-		{
-			// Other settings in the file are kept.
-			nlohmann::json settings = nlohmann::json::object();
-			if (FileSystem::Exists(m_SettingsFile))
-			{
-				const std::optional<std::string> text = Platform::ReadTrustedFile(m_SettingsFile, c_MaxSettingsFileSize);
-				const std::optional<nlohmann::json> json = text ? JsonUtils::Parse(*text) : std::nullopt;
-				if (json && json->is_object())
-					settings = *json;
-			}
-			if (command.empty())
-				settings.erase(c_SettingsKey);
-			else
-				settings[c_SettingsKey] = command;
-			std::string error;
-			if (!Platform::WritePrivateFile(m_SettingsFile, JsonUtils::Dump(settings, 1, '\t') + "\n", &error))
-				return Fail(outError, fmt::format("Cannot save the editor settings '{}': {}", FileSystem::ToUTF8(m_SettingsFile), error));
-		}
-		m_UserCommand = command;
+		std::string error;
+		if (!m_Preferences.Set(ExternalEditor::c_SettingsSection, { { c_CommandKey, command } }, &error))
+			return Fail(outError, fmt::format("The external editor cannot be kept in the preferences: {}", error));
 		return true;
 	}
 

@@ -55,8 +55,10 @@ namespace Strata
 		// read-only for scripted runs (--frames, --commands), which are not the user's sessions.
 		std::filesystem::path RecentProjectsFile;
 		bool RecentProjectsReadOnly = false;
-		// The user's editor settings, such as the external code editor (EditorContextSpecification::EditorSettingsFile):
-		// empty keeps them in memory.
+		// The user's preferences, such as the external code editor (EditorContextSpecification::PreferencesFile): empty keeps
+		// them in memory; and 0.5.0's editor settings, imported once while the preferences file does not exist
+		// (EditorContextSpecification::EditorSettingsFile).
+		std::filesystem::path PreferencesFile;
 		std::filesystem::path EditorSettingsFile;
 		// Watch the project's assets and script module for changes made outside the editor (hot reload). UI tests turn it off:
 		// they need no watcher threads.
@@ -162,6 +164,7 @@ namespace Strata
 		// EditorShell
 		void RequestDiscardChanges(std::function<void()> action) override;
 		void RequestReleaseProject(std::function<void()> action) override;
+		void RequestQuit(std::function<void()> action) override;
 		void DrawDiscardQuestion() override;
 		void ShowNewProjectDialog(const std::string& templateId) override;
 		void ShowOpenSampleDialog(const std::string& sampleId) override;
@@ -214,6 +217,8 @@ namespace Strata
 		void DrawUnsavedChangesModal();
 		// The question of RequestReleaseProject about the project's unwritten settings, inside its modal.
 		void DrawUnwrittenSettingsQuestion();
+		// The question of RequestQuit about the unwritten preferences, inside its modal.
+		void DrawUnwrittenPreferencesQuestion();
 		// Runs the action that waited for the answer about unwritten settings, or first asks about the scene's changes made
 		// while it waited.
 		void RunPendingReleaseAction();
@@ -307,6 +312,12 @@ namespace Strata
 		uint64_t m_ReleaseQuestionVersion = 0; // The undo stack's version when that question was asked
 		bool m_OpenUnwrittenSettingsModal = false;
 		bool m_RetryingProjectWrite = false;
+		// A quit (RequestQuit) waiting for the answer about the unwritten preferences, and whether the question's Retry
+		// (preferences.save) is writing.
+		std::function<void()> m_PendingQuitAction;
+		uint64_t m_QuitQuestionVersion = 0; // The undo stack's version when that question was asked
+		bool m_OpenUnwrittenPreferencesModal = false;
+		bool m_RetryingPreferencesWrite = false;
 		int m_UnsavedChangesModalFrame = -1; // ImGui's frame the question was drawn in last
 		bool m_ShowImGuiDemo = false;
 		bool m_ResetLayout = false;

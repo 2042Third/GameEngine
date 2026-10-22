@@ -57,8 +57,9 @@ namespace
 
 	// The headers EditorContext.h (included by about a hundred editor and test objects) declares instead of including:
 	// it uses their types only by reference, pointer or owning pointer, so an edit of one rebuilds only its own users.
-	constexpr std::array<std::string_view, 6> c_EditorContextDeclares = {
+	constexpr std::array<std::string_view, 7> c_EditorContextDeclares = {
 		"Editor/CommandJournal.h",
+		"Editor/EditorPreferences.h",
 		"Editor/ExternalEditor.h",
 		"Editor/GameExport.h",
 		"Editor/ProjectThumbnail.h",
