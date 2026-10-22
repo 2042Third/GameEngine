@@ -3,9 +3,6 @@
 #include "UI/EditorPanelRegistry.h"
 #include "UI/SettingsPages.h"
 
-#include <string>
-#include <utility>
-
 namespace Strata
 {
 
@@ -20,9 +17,6 @@ namespace Strata
 		explicit ProjectSettingsPanel(const EditorSettingsPageRegistry& pages);
 
 		void OnImGuiRender(EditorPanelContext& context) override;
-		// Shows a page (a section's id, or SettingsBrowser::c_GamePage or c_ExportPage) from the next frame.
-		void Select(std::string id) { m_Browser.Select(std::move(id)); }
-		const std::string& GetSelected() const { return m_Browser.GetSelected(); }
 	private:
 		const EditorSettingsPageRegistry& m_Pages;
 		SettingsBrowser m_Browser { SettingsWindowKind::Project };

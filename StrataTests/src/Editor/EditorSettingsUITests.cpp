@@ -6,7 +6,6 @@
 #include "Editor/ExternalEditor.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/UndoStack.h"
-#include "Panels/ProjectSettingsPanel.h"
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
 #include "UI/SettingsPages.h"
