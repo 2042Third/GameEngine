@@ -252,6 +252,9 @@ TEST_SUITE("GPU.SceneRenderer.Occlusion")
 		CHECK(occluded >= 1);
 		CHECK(culled.GetGPUStats().ShadowInstances + occluded == unculled.GetGPUStats().ShadowInstances);
 		CHECK(AddGPUCounts(culled.GetStats(), culled.GetGPUStats()).OccludedCasters == occluded);
+		// Every caster the cascades draw now they drew the frame before: the first phase draws them all.
+		CHECK(culled.GetGPUStats().ShadowDraws > 0);
+		CHECK(culled.GetGPUStats().SecondPhaseShadowDraws == 0);
 		// The view's occlusion culling hides nothing here: the camera sees every mesh.
 		CHECK(culled.GetGPUStats().OccludedProxies == 0);
 
@@ -260,6 +263,8 @@ TEST_SUITE("GPU.SceneRenderer.Occlusion")
 		CheckSameShadows(gpu, culled, unculled, scene.World, camera);
 		CHECK(culled.GetStats().ShadowOcclusionCulled);
 		CHECK(culled.GetGPUStats().OccludedCasters == 0);
+		CHECK(culled.GetGPUStats().SecondPhaseShadowDraws >= 1);
+		CHECK(culled.GetGPUStats().SecondPhaseShadowDraws < culled.GetGPUStats().ShadowDraws);
 		// Back, the box is hidden again once the culling looks again (it paused, finding nothing hidden).
 		scene.Slab.SetActive(true);
 		CHECK(RenderUntilCascadesCulled(gpu, culled, unculled, scene.World, camera));
