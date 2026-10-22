@@ -511,7 +511,7 @@ namespace Strata
 			settings.MaxBodies = capacity.MaxBodies;
 		if (capacity.MaxContactConstraints != 0)
 			settings.MaxContactConstraints = capacity.MaxContactConstraints;
-		// The scene's layer matrix, as the scene's settings say when the world starts.
+		// The scene's layer matrix (its copy of the project's) as it is when the world starts.
 		settings.LayerCollisionMasks = CombineLayerMasks(defaults, scene);
 		return settings;
 	}

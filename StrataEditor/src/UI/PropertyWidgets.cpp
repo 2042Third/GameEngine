@@ -261,15 +261,16 @@ namespace Strata
 					}
 				}
 				// Unnamed layers would only be numbers to pick from: a layer is offered once the project names it.
+				constexpr const char* c_Hint = "Name more layers in Project Settings > Collision Layers";
 				ImGui::Separator();
-				ImGui::TextDisabled("Name more layers in Project Settings > Collision Layers");
+				ImGui::TextDisabled("%s", c_Hint);
 				if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
 				{
-					ImGui::SetTooltip("Select nothing: the Inspector shows the scene's settings, whose Collision Layers section names layers "
-						"(Name a Layer) and says which of them collide");
+					ImGui::SetTooltip("File > Project Settings, Collision Layers (or the link in the Inspector with nothing selected) names the "
+						"project's layers (Name a Layer) and says which of them collide");
 				}
 				if (!options.ProbeKey.empty())
-					UI::ItemProbe::Record(ProbeKey(options.ProbeKey, "Hint"), false, 0, "Name more layers in the scene's settings");
+					UI::ItemProbe::Record(ProbeKey(options.ProbeKey, "Hint"), false, 0, c_Hint);
 				ImGui::EndCombo();
 			}
 			return result;

@@ -2342,8 +2342,8 @@ namespace Strata
 		// Collision layers
 		////////////////////////////////////////////////////////////////////////////////
 
-		// The layer matrix lives in the scene's settings; the physics system applies changes before its next step (also when
-		// the scene plays without physics yet: a world created later starts with the matrix).
+		// The layer matrix is the scene's copy of the project's (Scene::GetPhysicsLayers); the physics system applies changes
+		// before its next step (also when the scene plays without physics yet: a world created later starts with the matrix).
 		bool HostPhysicsSetLayersCollide(StrataScriptContext* context, uint32_t layerA, uint32_t layerB, bool collide)
 		{
 			return HostCall("PhysicsSetLayersCollide", false, [&]()

@@ -476,7 +476,8 @@ TEST_SUITE("Editor.PhysicsLayers")
 		CHECK(editor.ProbeText("Inspector.RigidBody.Layer.0") == "Layer 0");
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.RigidBody.Layer.7").has_value());
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.RigidBody.Layer.31").has_value());
-		CHECK(UI::ItemProbe::Find("Inspector.RigidBody.Layer.Hint").has_value());
+		// The hint says where more layers are named: the project's settings, not the scene's.
+		CHECK(editor.ProbeText("Inspector.RigidBody.Layer.Hint") == "Name more layers in Project Settings > Collision Layers");
 		REQUIRE(editor.Click("Inspector.RigidBody.Layer.4"));
 		editor.Frames(1);
 		const Entity goblin = editor.Context().GetActiveScene()->GetEntityByUUID(id);

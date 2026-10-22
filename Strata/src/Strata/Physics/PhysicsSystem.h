@@ -189,7 +189,7 @@ namespace Strata
 		void SyncGravity();
 		// The matrix the world uses: the scene's and the default settings' masks together.
 		std::array<uint32_t, c_PhysicsLayerCount> GetEffectiveLayerMasks() const;
-		// Applies the scene's layer matrix to the world when it changed (scene.setSettings, a script, the inspector).
+		// Applies the scene's layer matrix to the world when it changed (the project's table applied again, a script).
 		void SyncLayers();
 		void DispatchCollisionEvents();
 		// Tells the world which contacts to track: all of them while a listener of every entity is registered.

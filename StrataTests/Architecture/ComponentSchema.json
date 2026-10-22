@@ -1278,7 +1278,7 @@
 					"Min": 0.0,
 					"Name": "Layer",
 					"Speed": 0.0,
-					"Tooltip": "Collision layer: it collides with the layers the scene's layer matrix lets it",
+					"Tooltip": "Collision layer: it collides with the layers the project's layer matrix lets it",
 					"Type": "UInt"
 				}
 			]
@@ -1496,7 +1496,7 @@
 					"Min": 0.0,
 					"Name": "Layer",
 					"Speed": 0.0,
-					"Tooltip": "Collision layer: it collides with the layers the scene's layer matrix lets it",
+					"Tooltip": "Collision layer: it collides with the layers the project's layer matrix lets it",
 					"Type": "UInt"
 				},
 				{
