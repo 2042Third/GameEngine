@@ -249,6 +249,38 @@ TEST_SUITE("PerfGPU.Renderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Render cost of 100,000 cubes in height fog")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		// Render100kCubes' scene with the default height fog over it: its integral, phase function and inscattering in every
+		// pixel the forward pass shades, against Render100kCubes (provisional: the reference machine sets the budgets).
+		constexpr size_t c_Count = 100'000;
+		Scene scene("FoggyCubes");
+		Perf::AddCameraAndLight(scene);
+		Perf::CreateCubeGrid(scene, c_Count);
+		scene.CreateEntity("Height Fog").AddComponent<HeightFogComponent>();
+		SceneRenderer renderer(Perf::MeasuredRendererSpecification());
+		renderer.SetViewportSize(c_Width, c_Height);
+		const bool measuresGPU = Perf::MeasuresGPU();
+		std::vector<std::string> keys = { "PerfGPU.Renderer.HeightFog" };
+		if (measuresGPU)
+			keys.push_back("PerfGPU.Renderer.HeightFogGPU");
+		Perf::CheckBudgetsConfirmed(keys, [&]
+		{
+			const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(c_Count), "100k cubes in height fog");
+			CHECK(GetDrawnCounts(renderer).Instances == c_Count);
+			CHECK(renderer.GetStats().HeightFog);
+			Perf::MetricValues values { { "PerfGPU.Renderer.HeightFog", measurement.CPU.MedianMs } };
+			if (measuresGPU)
+				values.emplace("PerfGPU.Renderer.HeightFogGPU", Perf::MeasureGPU(measurement));
+			return values;
+		});
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Render cost of 100,000 and 300,000 cubes whose shadows cover the view")
 	{
 		GPUContext gpu;
