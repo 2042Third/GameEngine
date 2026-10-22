@@ -389,7 +389,11 @@ worktree's scratch area compares the images, and the step's commit states the re
   clip units) and `TemporalParams` (the frame index for noise, the pre-exposure of D7 from S7, flags). Both declarations
   and the `static_assert` change together. As built in S1: `TemporalParams.x` is the flag "the history holds the
   previous frame" (`SceneRendererStats::MotionHistory`), and `JitterParams` is added by S2 with the jitter itself (S2 adds
-  the frame index to `TemporalParams` too).
+  the frame index to `TemporalParams` too). As built in S2: `JitterParams` holds this frame's jitter (xy) and the
+  previous TAA frame's (zw) in clip units; `TemporalParams.y` stays free for S7's pre-exposure; `TemporalParams.z` is the
+  per-pixel noise's turn, the golden ratio's fraction of a turn per frame since the history's reset (0 without TAA), which
+  later per-frame noise (SSR's start offsets) reuses; the TAA resolve's own compute layout binds its images at SRV 22-26,
+  above every scene-set slot of D16.
 - The sky has no geometry: the resolve derives its motion from the camera alone (direction at depth 0).
 - Rejected: a previous transform in `InstanceData` (the 64-byte rule); previous data in `RenderSceneGPU` (shared by
   renderers that render at different times, so "previous" differs per renderer); velocity written always (costs every
@@ -449,7 +453,10 @@ frame: 2.3).
   within its oscillation. `viewport.capture` bounds the wait by `c_MaxCaptureTemporalFrames` (16) and reports
   `temporalFrames` in its result; `ProjectThumbnail` adds the condition to its completeness check
   (`ProjectThumbnail.cpp:139-146`, bounded by its `c_MaxFrames`). Their targets are released after each image, so each
-  one starts from a reset.
+  one starts from a reset. As built in S2: a frame still incomplete for any other reason (assets, mips, glyphs, poses,
+  instances, the motion view) calls `ResetHistory`, so the eight frames are all complete ones (`c_TemporalSettleFrames` in
+  `ViewportRenderer.h`); the waits S6 and S7 add (`LocalShadowViewsPending`, `ReflectionProbesPending`,
+  `PreExposureSettled`) join those reasons. The TAA wait also applies without `waitForAssets`.
 - Renderers of single images draw their lighting at once. `SceneRendererSpecification::SpreadLightingUpdates` (default
   true) spreads local shadow views (D8) and probe conversions (D11) over frames, with fades; the capture renderer (a
   `ViewportRenderer` made with fades off), the thumbnails' renderer and the probe bake's renderer (D11) turn it off, so

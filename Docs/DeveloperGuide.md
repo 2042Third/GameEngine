@@ -622,7 +622,7 @@ exercised by it.
     `FeatureTest`, `src/FeatureTest/`), through editor commands in-process, and in the exported game in `GameRuntime`
     (suite `Editor.FeatureTest`);
   - `GPU.FeatureTest` (in `StrataTests.GPU`) renders the scene for 4 frames without playing it (no scripts) and checks
-    entities in the ID buffer, text and stats;
+    entities in the ID buffer, text and stats (its post-processing is TAA: the history grows);
   - `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` (label `feature`): the real executables open a copy of
     the project, load the feature scripts (`script.load`), lay out and hit-test the menu (`ui.layout`, `ui.hitTest`),
     step the physics, click the Play Button and type into the Name Field while playing (`input.click`, `input.type`, and
@@ -2123,7 +2123,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - **Templates and recent projects:** `project.create {template}` and `scene.new {template}` start from
   `Editor/ProjectTemplates` (`project.templates` lists them): `empty` (the commands' default, what they always did) or
   `basic3d` (a saved, lit start scene `Scenes/Main.stscene`: Main Camera with an audio listener, Sun shining from the
-  preview sun's direction, procedural Sky, Ground, Post Process; the editor UI and the skills use it). Its Ground has a
+  preview sun's direction, procedural Sky, Ground, Post Process with TAA; the editor UI and the skills use it). Its Ground has a
   dark stone material of the project, `Materials/Ground.stmat` (made by `EditorContext::NewScene` when the project has
   none, the built-in default material without a project), so white boxes stand out against it, and a static box collider
   whose top is the plane (y = 0), so what falls on it stays there (`Editor.Templates` drops a crate on it). Every opened
@@ -2233,12 +2233,14 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?,
   fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion", waitForAssets?, path?, overwrite?}` renders on the
   next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still
-  being rasterized, so text is never half drawn, and with `waitForAssets` (default true) up to `c_MaxCaptureAssetFrames`
-  while assets of the view are loading, so the first capture after opening or playing a scene shows its materials, and up
+  being rasterized, so text is never half drawn, for a scene drawn with temporal anti-aliasing until its history holds
+  `c_TemporalSettleFrames` frames of the complete view, up to `c_MaxCaptureTemporalFrames`, and with `waitForAssets`
+  (default true) up to `c_MaxCaptureAssetFrames` while assets of the view are loading, so the first capture after
+  opening or playing a scene shows its materials, and up
   to `c_MaxCaptureMipFrames` while textures it draws are coarser than its view wants them, as a texture counts as loaded
   with its mip tail, and up to `c_MaxCapturePoseFrames` while animators it draws show a pose older than their time), reads
   the image back without stalling, encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data":
-  <base64>}, "width", "height", "camera", "view": {"position", "forward", "fov"}, "waitedFrames", "overlays",
+  <base64>}, "width", "height", "camera", "view": {"position", "forward", "fov"}, "waitedFrames", "temporalFrames", "overlays",
   "pendingAssets", "texturesBelowWanted", "stalePoses", "pendingTextGlyphs", "previewLighting", "screenSpaceTexts", "hiddenScreenSpaceTexts", "ui": {"canvases",
   "hiddenCanvases", "elements", "drawCalls", "pendingGlyphs"}, "debugView":
   {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD",
@@ -2401,12 +2403,13 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 ### Scene renderer and lighting
 
 - `SceneRenderer` draws a `Scene` from a `SceneCamera` into its output texture or a given framebuffer:
-  light clustering, directional shadow cascades, depth/normal/entity-ID prepass (with motion vectors when asked: "Motion
-  vectors"), ground-truth ambient
+  light clustering, directional shadow cascades, depth/normal/entity-ID prepass (with motion vectors when asked or for
+  TAA: "Motion vectors and TAA"), ground-truth ambient
   occlusion, forward PBR (opaque surfaces with an EQUAL depth test and forced early depth testing), sky,
-  transparent surfaces (back to front), then post-processing from the scene's `PostProcessComponent`
-  (exposure, bloom, tone mapping and grading, FXAA). A target framebuffer must match the viewport size
-  and have a non-sRGB UNORM color format; `Render` returns false (and logs once) instead of rescaling. The output
+  transparent surfaces (back to front), the temporal anti-aliasing resolve when the scene chooses it, then
+  post-processing from the scene's `PostProcessComponent` (exposure, bloom, tone mapping and grading, FXAA without
+  TAA). A target framebuffer must match the viewport size and have a non-sRGB UNORM color format; `Render` returns false
+  (and logs once) instead of rescaling. The output
   texture is created by the first frame that needs it (no target, or overlays or text to compose), so renderers that
   draw into targets without overlays (games without text) never hold one.
 - Image-based lighting comes from the first active `SkyLightComponent`: an equirectangular HDR map (`EnvironmentMap`) or,
@@ -2588,7 +2591,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   on both paths. `GPU.SceneRenderer.CameraRelative` renders a scene 20 and 100 km from the origin against the origin's,
   and `GPU.GameUI` a world-space canvas 100 km out.
 
-### Motion vectors
+### Motion vectors and TAA
 
 - A frame with `SceneRenderOptions::MotionVectors` (or `ShowMotionVectors`, the motion debug view) writes each opaque and
   alpha-masked surface's motion since the renderer's previous frame into an RG16F velocity target
@@ -2617,6 +2620,44 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - Tests check motion against the CPU's reprojection of the depth buffer (`GPU.SceneRenderer.MotionVectors`: within 0.01 px
   plus 0.1% of the motion, 0.05 px 20 km out), that asking for motion leaves the image bit-identical on both paths, and
   `GPU.SceneRenderer.GPUDriven` compares the paths' velocity targets bit for bit.
+- **Temporal anti-aliasing** (`PostProcessComponent::AntiAliasingMethod` `TAA`, with `AntiAliasing` on; the Basic 3D
+  template and the 3D samples use it, FXAA stays the default): each frame offsets its samples by a sub-pixel jitter,
+  eight phases of a Halton (2, 3) sequence counted from the history's latest reset (`SceneRenderer::GetTemporalJitter`,
+  `SceneRendererStats::Jitter`), **only in the frame's copy of the camera** (`FrameConstants::Projection`,
+  `ViewProjection`, their inverses, `JitterParams`). Culling, levels of detail, the cascades and the shadow cache key,
+  the motion vectors' matrices and the overlays keep the camera's own; jittering `SceneCamera::Projection` would redraw
+  every cascade every frame. A frame with TAA makes motion vectors.
+- `PostProcess/TAA.comp` (in `GPU.TAA`, after the motion history's copy) blends the jittered HDR image into the
+  renderer's own history, a ping-pong pair of RGBA16F textures that exposure, bloom and tone mapping read through binding
+  sets made per texture (nothing is copied; FXAA is skipped): `GetTemporalHistoryTexture`, `GetResolvedHDRTexture`. The
+  history is fetched along the motion of the nearest surface of the pixel's 3x3 neighborhood (the camera's motion of the
+  sky's direction where nothing was drawn) through a Catmull-Rom filter (a still pixel reads its own texel), clamped to
+  the neighborhood's colors in YCoCg, and both colors are weighted by their exposed luminance (1 / (1 + L), the previous
+  frame's exposure). The current frame weighs the most of 1 / `TemporalFrames`, 1/8 (`c_TemporalMinWeight`) and 1/32 per
+  pixel of motion up to 1/2: the eight frames after a reset are averaged evenly, then the history is exponential and a
+  still pixel stays within 13% of its eight samples' spread around their mean. Transparent surfaces are resolved with the
+  rest. A renderer with TAA holds, besides the motion history, two history textures (8 bytes per pixel each) and the
+  velocity target (4 bytes per pixel), made by its first TAA frame and released with the render targets.
+- The history (`SceneRendererStats::TemporalFrames`, 1 on a reset frame; `HistoryResets`) starts again on the renderer's
+  first frame, after a camera cut, with a render scene that is neither the previous one nor a clone of it (entering Play
+  keeps it), after a resize, after a device frame (`Renderer::GetFrameNumber`, advanced by `Renderer::BeginFrame`) in
+  which the renderer did not render (hidden views), and after `SceneRenderer::ResetHistory` (`GameRenderer` calls it
+  where it calls `ResetExposureAdaptation`). It is counted in frames, never in time: slow frames never reset it. Tests
+  that render many frames without reading anything back finish each as a device frame would (wait, then NVRHI's garbage
+  collection), or the frame constants' versions run out.
+- With TAA, PCSS and GTAO turn their per-pixel noise by the golden ratio's fraction of a turn per frame of the history
+  (`TemporalParams.z`, counted from the reset so captures are deterministic), and the history averages it; without TAA the
+  turn is 0 and the images are unchanged.
+- Renderers of single images settle or turn TAA off: `viewport.capture` and the project's picture render their still view
+  again until the history holds `c_TemporalSettleFrames` (8) complete frames (a frame still incomplete for another reason
+  starts it again), bounded by `c_MaxCaptureTemporalFrames` (16) and `ProjectThumbnail::c_MaxFrames`; the thumbnails'
+  renderer sets `SceneRendererSpecification::TemporalAntiAliasing` off and draws TAA scenes with FXAA.
+- Tests (`GPU.SceneRenderer.TAA`): culling, levels of detail and the cached cascades match a renderer without the jitter;
+  a still edge between colors of equal luminance is the mean of its eight jittered frames at eight frames (0.5%) and stays
+  within 15% of their spread; a moving box leaves no trail beyond two pixels once it stops; every reset outputs the
+  frame's own image; slow frames keep the history; both paths resolve the same image over sixteen moving frames; the
+  noise turns and the converged penumbra is smoother. Overlays, the outline, captures and thumbnails have theirs
+  (`GPU.SceneRenderer.Overlays`, `GPU.GameUI`, `GPU.Editor.Viewport`, `GPU.Editor.Thumbnails`).
 
 ### Skinned meshes
 
@@ -2709,7 +2750,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   entities' pixels in the entity-ID buffer are blended with their color and no other pixel changes (debug views such as
   the editor's streaming, LOD and mip views). The motion view (`ShowMotionVectors`, `Overlay/MotionView.frag`, the
   editor's `motion` debug view) comes before them: each pixel's motion as a color (hue the direction, strength the speed,
-  full at 16 pixels a frame) over the image under 65% black. Code that needs the level of detail the renderer draws uses `LODSelection`
+  full at 16 pixels a frame) over the image under 65% black. In frames with temporal anti-aliasing the overlays draw with
+  the frame constants written again without the jitter, so their lines and glyphs stay steady, and those placed in the
+  scene (the grid, world-space text, depth-tested lines, world-space canvases: `SceneOverlayFrame::JitteredDepth`) bias
+  their depth tests by one pixel's depth slope against the jittered depth (`SetJitteredDepthBias`; the grid adds the
+  jitter to its own bias); where a silhouette hides an overlay, that edge follows the jittered depth by up to a pixel.
+  The selection outline then comes from a selection mask instead of the jittered entity IDs: the selected entities'
+  opaque and alpha-masked submeshes drawn again unjittered into an R8 target (`Scene/SelectionMask.frag`, a prepass
+  variant; draws built on the CPU on both paths, at the view's levels of detail), which `Overlay/OutlineMask.frag`
+  outlines. Code that needs the level of detail the renderer draws uses `LODSelection`
   (`Renderer/LODSelection.h`), the functions `SceneRenderer` calls, with the renderer's `GetLODCriteria()`.
 - Levels of detail: generated levels (`MeshUtils::GenerateLODs`) carry their error (`MeshLOD::Error`, in the mesh's
   units) and are chosen by it (`SceneRendererSpecification::LODErrorPixels`); levels without one (cooked meshes before

@@ -137,7 +137,7 @@ editor started with `--no-gpu` (use `--headless`):
 
 - `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?, fov?, overlays?, debugView?,
   waitForAssets?, path?}` returns `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, view, waitedFrames,
-  overlays, pendingAssets, texturesBelowWanted, stalePoses, pendingTextGlyphs, previewLighting, screenSpaceTexts,
+  temporalFrames, overlays, pendingAssets, texturesBelowWanted, stalePoses, pendingTextGlyphs, previewLighting, screenSpaceTexts,
   hiddenScreenSpaceTexts, ui: {canvases, hiddenCanvases, elements, drawCalls, pendingGlyphs}, debugView, notice?, path?}`. Text is complete in the picture, and so are the view's meshes,
   materials and textures: the capture renders again for up to about five seconds of frames while they load, up to about
   two more while textures still lack the finer mip levels the view wants, and a few while animated characters that
@@ -145,7 +145,9 @@ editor started with `--no-gpu` (use `--headless`):
   the scene just gained are still on their way to the GPU (a few frames for a million; `waitForAssets: false` takes it
   at once, `renderStats.deferredInstanceBytes` says what still waited; `pendingAssets` says what was still loading,
   `texturesBelowWanted` what was still blurrier than
-  wanted, e.g. under a texture budget, `stalePoses` the animators drawn in an older pose). `position` +
+  wanted, e.g. under a texture budget, `stalePoses` the animators drawn in an older pose). A scene with temporal
+  anti-aliasing (`PostProcess` `AntiAliasingMethod: "TAA"`) renders 8 frames of the complete view, also with
+  `waitForAssets: false`, so the picture is the converged one the viewport shows (`temporalFrames`: 8). `position` +
   `target` (and `fov`) look from your own camera: the
   person's view (`camera.get`) does not move, and the result's `camera` is `"custom"`. `camera: "scene"` without a size
   takes the Game view's resolution when it has one (`viewport.setSettings {"gameView": {"mode": "1280x720"}}`, or

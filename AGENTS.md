@@ -415,11 +415,13 @@ lights, overlays and text: [Rendering](Docs/DeveloperGuide.md#rendering).
   its `SubmitBatch`); code that renders into the back buffer calls `Renderer::PrepareBackBuffer()` first.
 - Never resolve assets per entity: go through the proxies and the frame's `AssetResolveCache`, whose references end
   with the frame; loaded materials are never changed in place (`ReplaceLoadedAsset`).
-- Every pass draws skinned instances with the `ST_SKINNED` variants (the prepass and the forward pass agree to the bit)
-  and mirrored ones (`c_InstanceMirrored`) with clockwise pipelines and flipped tangents; shaders derive normals with
-  `TransformNormal`. Draw list entries carry a fade code: mask the instance out, and opaque passes test `IsLODFadeDrawn`.
+- Every pass draws skinned instances with the `ST_SKINNED` variants (the prepass and the forward pass agree to the bit;
+  unskinned scenes pay nothing: `RenderScene::HasSkinProxies`) and mirrored ones (`c_InstanceMirrored`) with clockwise
+  pipelines and flipped tangents; shaders derive normals with `TransformNormal`. Draw list entries carry a fade code:
+  mask the instance out, and opaque passes test `IsLODFadeDrawn`.
 - Shaders writing HDR targets clamp with `SanitizeHDR`; normal maps are read as X and Y with Z reconstructed.
-- Skinning costs unskinned scenes nothing (`RenderScene::HasSkinProxies`).
+- Temporal effects jitter only the frame's copy of the camera and keep their history per renderer; renderers of single
+  images settle or turn TAA off.
 - Font files are untrusted input: extend `Renderer/FontValidation.h`, with crafted-font tests, before calling another
   stb_truetype function. Text is measured with `ShapeText`, never by rasterizing; passes that draw glyphs share the
   renderer's `FontAtlasCache`.
@@ -433,11 +435,10 @@ lights, overlays and text: [Rendering](Docs/DeveloperGuide.md#rendering).
 - Scene shaders work in camera-relative space (`TransformPositionRelative`; rotation-only view matrices): upload anything
   positioned relative to the camera, subtracting in double ([Camera-relative space](Docs/DeveloperGuide.md#camera-relative-space)).
 - Shadow cascades are kept while nothing reaching them changed (`PrepareShadowCache`): a new input of what casters are
-  drawn with changes a version it compares ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
-- What is drawn and what is requested are decided twice, by the CPU path (`SceneRendererExtraction.cpp`) and the GPU's
-  culling and visibility feedback (`Cull.comp`): change both, keep shading independent of draw order (no screen-space
-  derivatives there), and keep `GPU.SceneRenderer.GPUDriven` and `.Feedback` passing
-  ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
+  drawn with changes a version it compares. What is drawn and what is requested are decided twice, by the CPU path
+  (`SceneRendererExtraction.cpp`) and the GPU's culling and visibility feedback (`Cull.comp`): change both, keep shading
+  independent of draw order (no screen-space derivatives there), and keep `GPU.SceneRenderer.GPUDriven` and `.Feedback`
+  passing ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
 
 ## Automation (editor RPC + MCP)
 
