@@ -76,6 +76,10 @@ namespace Strata
 		// so that automation starts at once. The editor application turns it on for sessions that are not scripted (--frames,
 		// --commands): those and tests expect the project's scene once the editor started.
 		bool OpenStartSceneInBackground = false;
+		// Where the New Project and Open Sample dialogs suggest projects before a location is remembered; empty:
+		// ProjectDialogs::GetDefaultLocation, the user's projects folder. Tests pass a temporary directory: what the user keeps
+		// in that folder must not change the names the dialogs suggest.
+		std::filesystem::path DefaultProjectLocation;
 		// The toolchain script builds use instead of the engine's (EditorContextSpecification::ScriptBuild); UI tests build
 		// with a stand-in for CMake.
 		std::optional<ScriptBuildSettings> ScriptBuild;

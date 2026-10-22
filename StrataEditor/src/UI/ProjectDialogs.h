@@ -49,9 +49,13 @@ namespace Strata
 		// Whether Browse buttons may open the system's folder picker (FileDialogs, which needs a window).
 		void SetFolderPickerAvailable(bool available) { m_FolderPickerAvailable = available; }
 
-		// Where new projects and sample copies go: the remembered location, else GetDefaultLocation.
+		// Where new projects and sample copies go: the remembered location, else the default location set below, else
+		// GetDefaultLocation.
 		std::filesystem::path GetLocation() const;
 		void SetLocation(const std::filesystem::path& location);
+		// The location suggested before one is remembered, in place of GetDefaultLocation (EditorOptions::DefaultProjectLocation);
+		// empty restores GetDefaultLocation.
+		void SetDefaultLocation(const std::filesystem::path& location) { m_DefaultLocation = location; }
 		// <home>/StrataProjects, else (without a home directory) <user data>/Strata/Projects.
 		static std::filesystem::path GetDefaultLocation();
 
@@ -99,6 +103,7 @@ namespace Strata
 		bool m_OpenRequested = false;
 		bool m_FolderPickerAvailable = false;
 		std::filesystem::path m_RememberedLocation; // Empty: none yet
+		std::filesystem::path m_DefaultLocation;    // Empty: GetDefaultLocation
 
 		// The fields of the open dialog (UTF-8).
 		std::string m_Name;

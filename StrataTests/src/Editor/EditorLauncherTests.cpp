@@ -207,6 +207,24 @@ TEST_SUITE("Editor.Launcher")
 		CHECK(IsDrawn("OpenSample.Open"));
 	}
 
+	TEST_CASE("Before a location is remembered, New Project suggests a name free in the editor's default location")
+	{
+		// Tests set the default location: a project in the user's own projects folder must not change what they see.
+		const std::filesystem::path location = CreateTemporaryDirectory("LauncherDefaultLocation");
+		REQUIRE(FileSystem::CreateDirectories(location / ProjectDialogs::c_DefaultProjectName));
+		EditorOptions options;
+		options.DefaultProjectLocation = location;
+		HarnessEditor editor({}, options);
+		editor.Frames(2);
+		CHECK(editor.Layer->GetProjectDialogs().GetLocation() == location);
+		REQUIRE(editor.Click("Welcome.Template.empty"));
+		editor.Frames(3);
+		REQUIRE(editor.Click("NewProject.Create"));
+		editor.Frames(1);
+		REQUIRE(editor.Context().HasProject());
+		CHECK(editor.Context().GetProject()->GetProjectFile().parent_path() == location / (std::string(ProjectDialogs::c_DefaultProjectName) + " 2"));
+	}
+
 	TEST_CASE("New Project asks about unsaved changes first, and Cancel creates nothing")
 	{
 		HarnessEditor editor;

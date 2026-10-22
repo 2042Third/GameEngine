@@ -140,7 +140,9 @@ namespace Strata
 
 	std::filesystem::path ProjectDialogs::GetLocation() const
 	{
-		return m_RememberedLocation.empty() ? GetDefaultLocation() : m_RememberedLocation;
+		if (!m_RememberedLocation.empty())
+			return m_RememberedLocation;
+		return m_DefaultLocation.empty() ? GetDefaultLocation() : m_DefaultLocation;
 	}
 
 	void ProjectDialogs::SetLocation(const std::filesystem::path& location)

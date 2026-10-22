@@ -131,6 +131,8 @@ namespace Strata
 		m_Automation(m_Context, m_Commands, m_CommandRunner), m_ShowImGuiDemo(options.ShowImGuiDemo)
 	{
 		ST_ASSERT(m_Host, "The editor layer needs a host");
+		if (!options.DefaultProjectLocation.empty())
+			m_ProjectDialogs.SetDefaultLocation(options.DefaultProjectLocation);
 		// The settings windows' pages of complex sections; simple sections need none (a generic page draws them).
 		m_SettingsPages.Register(ExternalEditor::c_SettingsSection, [](EditorContext& context, const SettingsSection&, SettingsWindowKind)
 		{

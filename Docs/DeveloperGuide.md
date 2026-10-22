@@ -1783,7 +1783,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     widget records its rectangle in `UI::ItemProbe` under its id.
   - UI tests draw the real `EditorLayer` without a window or GPU through `StrataTests/src/Editor/ImGuiHarness.h` (a fake
     `EditorHost`, ImGui's texture requests honored without a renderer, injected input and typed text, a clipboard of its
-    own, `ClickItem` by probe key) and `HarnessEditor.h` (an editor on that harness, `ReplaceText` for kit text fields).
+    own, `ClickItem` by probe key) and `HarnessEditor.h` (an editor on that harness, `ReplaceText` for kit text fields,
+    and a temporary directory as `EditorOptions::DefaultProjectLocation`, so the project dialogs never read the user's
+    projects folder).
   - Idle throttling: a windowed editor runs at the full rate while anything happens (input in the last 0.5 s, a running
     unpaused scene or pending steps, loading assets, pending commands, an automation request in the last second, a
     script build, a panel's `IsAnimating`) and otherwise at 30 frames per second (10 without the focus), through
