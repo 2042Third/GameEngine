@@ -1261,6 +1261,50 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture of a TAA scene waits for eight frames and equals the viewport's eighth frame after a reset")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.AddScene();
+		EditorContext& context = harness.Context;
+		Entity postProcess = context.GetActiveScene()->FindEntityByName("PostProcess");
+		REQUIRE(postProcess);
+		postProcess.GetComponent<PostProcessComponent>().AntiAliasing = true;
+		postProcess.GetComponent<PostProcessComponent>().AntiAliasingMethod = AntiAliasingMode::TAA;
+		Entity cube = context.GetActiveScene()->FindEntityByName("Cube");
+		REQUIRE(cube);
+		cube.GetComponent<TransformComponent>().Rotation = glm::quat(glm::vec3(0.4f, 0.7f, 0.1f));
+		cube.MarkModified<TransformComponent>();
+
+		nlohmann::json result;
+		const DecodedImage captured = harness.CaptureLoaded({ { "width", 64 }, { "height", 64 }, { "overlays", false } }, &result);
+		CHECK(result["temporalFrames"] == c_TemporalSettleFrames);
+		CHECK(result["waitedFrames"].get<uint32_t>() >= c_TemporalSettleFrames - 1);
+
+		// The viewport, its history started again, shows the same picture at its eighth frame.
+		ViewportRenderer* renderer = context.GetViewport().GetRenderer();
+		REQUIRE(renderer);
+		const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, 1.0f);
+		REQUIRE(view);
+		renderer->GetSceneRenderer().ResetHistory();
+		for (uint32_t frame = 0; frame < c_TemporalSettleFrames; frame++)
+			REQUIRE(renderer->Render(context, glm::uvec2(64, 64), *view, context.GetViewport().GetSettings(), false));
+		CHECK(renderer->GetStats().TemporalFrames == c_TemporalSettleFrames);
+		ReadbackImage viewport;
+		REQUIRE(Renderer::ReadTexture(renderer->GetOutputTexture(), viewport));
+		REQUIRE(viewport.Pixels.size() == captured.Pixels.size());
+		int difference = 0;
+		for (size_t index = 0; index < viewport.Pixels.size(); index++)
+		{
+			if (index % 4 != 3)
+				difference = std::max(difference, std::abs(static_cast<int>(viewport.Pixels[index]) - static_cast<int>(captured.Pixels[index])));
+		}
+		CHECK(difference <= 1);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The selection outline has the color of the viewport's settings")
 	{
 		Tests::GPUContext gpu;

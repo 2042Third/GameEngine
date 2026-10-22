@@ -118,6 +118,51 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A game's temporal anti-aliasing starts again with each scene it shows and when its camera returns")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		WindowTarget target(gpu.GetNvrhiDevice());
+		const auto makeLevel = [](const char* name)
+		{
+			Ref<Scene> level = CreateRef<Scene>(name);
+			PostProcessComponent& postProcess = AddNeutralPostProcess(*level);
+			postProcess.AntiAliasing = true;
+			postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
+			AddMesh(*level, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Cube");
+			Entity camera = level->CreateEntity("Camera");
+			camera.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, 3.0f);
+			camera.AddComponent<CameraComponent>();
+			return level;
+		};
+		const Ref<Scene> first = makeLevel("First");
+		const Ref<Scene> second = makeLevel("Second");
+		GameRenderer renderer;
+		const glm::uvec2 size(c_Size, c_Size);
+		const SceneRendererStats& stats = renderer.GetSceneRenderer().GetStats();
+		for (int frame = 0; frame < 3; frame++)
+			REQUIRE(renderer.Render(first, target.Framebuffer, size));
+		CHECK(stats.TemporalFrames == 3);
+		CHECK(stats.HistoryResets == 1);
+		// A level load.
+		REQUIRE(renderer.Render(second, target.Framebuffer, size));
+		CHECK(stats.TemporalFrames == 1);
+		CHECK(stats.HistoryResets == 2);
+		REQUIRE(renderer.Render(second, target.Framebuffer, size));
+		CHECK(stats.TemporalFrames == 2);
+		// The camera goes (the message shows) and comes back.
+		Entity camera = second->FindEntityByName("Camera");
+		camera.SetActive(false);
+		REQUIRE(renderer.Render(second, target.Framebuffer, size));
+		CHECK(renderer.IsShowingMessage());
+		camera.SetActive(true);
+		REQUIRE(renderer.Render(second, target.Framebuffer, size));
+		CHECK(stats.TemporalFrames == 1);
+		CHECK(stats.HistoryResets == 3);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The perf log's Render columns hold what the game's frame drew, with the GPU's counts")
 	{
 		GPUContext gpu;

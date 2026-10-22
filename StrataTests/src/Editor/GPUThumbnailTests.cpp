@@ -5,8 +5,10 @@
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorViewport.h"
 #include "Editor/ProjectThumbnail.h"
 #include "Editor/ThumbnailCache.h"
+#include "Editor/ViewportRenderer.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/WelcomePanel.h"
 #include "Renderer/GPUTestUtils.h"
@@ -22,6 +24,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/ImageReader.h>
 #include <Strata/Renderer/Renderer.h>
+#include <Strata/Renderer/SceneRenderer.h>
 
 #include <algorithm>
 #include <atomic>
@@ -668,6 +671,58 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		nvrhi::ITexture* thumbnail = thumbnails.Request(prefab);
 		REQUIRE(thumbnail);
 		CHECK(isRed(ReadCenterAndCorner(thumbnail).first));
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The project's picture of a TAA scene settles its history")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUThumbnailTAA") / "Game";
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		const auto run = [&](std::string_view name, const nlohmann::json& parameters)
+		{
+			return Tests::RunCommandToCompletion(context, commands, name, parameters);
+		};
+		const auto frameUntil = [&](const std::function<bool()>& condition)
+		{
+			for (int frame = 0; frame < 3000 && !condition(); frame++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				context.Update(Timestep(1.0f / 60.0f));
+				gpu.GetDevice().EndFrame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return condition();
+		};
+		run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+
+		Scene& scene = *context.GetActiveScene();
+		Entity postProcessEntity = scene.FindEntityByName("Post Process");
+		if (!postProcessEntity)
+		{
+			postProcessEntity = scene.CreateEntity("Post Process");
+			postProcessEntity.AddComponent<PostProcessComponent>();
+		}
+		PostProcessComponent& postProcess = postProcessEntity.GetComponent<PostProcessComponent>();
+		postProcess.AntiAliasing = true;
+		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
+		Tests::AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Cube");
+
+		// The project's picture: the capture renderer's last frame is the eighth of its history, the mean of the jitter's phases.
+		run("camera.set", { { "position", { 0.0, 1.0, 4.0 } }, { "target", { 0.0, 0.0, 0.0 } } });
+		run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+		REQUIRE(FileSystem::Exists(ProjectThumbnail::GetFile(directory)));
+		ViewportRenderer* captureRenderer = context.GetViewport().GetCaptureRenderer();
+		REQUIRE(captureRenderer);
+		CHECK(captureRenderer->GetStats().TemporalAntiAliasing);
+		CHECK(captureRenderer->GetStats().TemporalFrames == c_TemporalSettleFrames);
+
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

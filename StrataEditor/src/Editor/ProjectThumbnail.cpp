@@ -135,11 +135,11 @@ namespace Strata
 				return;
 			}
 			// Complete, as captures wait for it: what loads, glyphs still being prepared (the scene's text and the game UI's),
-			// the finer levels of textures the view wants (a texture counts as loaded with its mip tail) and mesh renderers still
-			// on their way to the GPU.
+			// the finer levels of textures the view wants (a texture counts as loaded with its mip tail), mesh renderers still
+			// on their way to the GPU, and temporal anti-aliasing's history until it holds the jitter's phases.
 			const SceneRendererStats& stats = renderer->GetStats();
 			const bool incomplete = stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || stats.Overlays.PendingGlyphs > 0 || stats.DeferredProxies > 0
-				|| renderer->CountTexturesBelowWanted() > 0;
+				|| renderer->CountTexturesBelowWanted() > 0 || (stats.TemporalAntiAliasing && stats.TemporalFrames < c_TemporalSettleFrames);
 			if (incomplete && ++m_Frames < c_MaxFrames)
 				return;
 			std::string error;

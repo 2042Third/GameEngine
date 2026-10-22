@@ -64,6 +64,11 @@ namespace Strata
 	// settings for editor views (ViewportView::EditorView), as the game shows them otherwise.
 	SceneRenderOptions GetViewportRenderOptions(const ViewportView& view, const ViewportSettings& settings);
 
+	// Frames of temporal anti-aliasing a single picture of a view settles over (SceneRendererStats::TemporalFrames): the
+	// jitter's eight phases, after which the image is their mean, as the viewport's converged view shows it. Captures and the
+	// project's picture render their still view again until then.
+	constexpr uint32_t c_TemporalSettleFrames = SceneRenderer::c_TemporalJitterPhases;
+
 	// Renders the editor's active scene for the viewport or a capture, with the overlays the viewport settings enable:
 	// the ground grid, the selection outline (selected entities and their descendants) and the light, camera and collider
 	// shapes; editor views also get the settings' preview lighting and game UI (GetViewportRenderOptions). The settings'
