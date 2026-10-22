@@ -1391,6 +1391,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		// The motion view renders a frame more, against which nothing moved: the image darkened, nothing tinted.
 		const DecodedImage motion = harness.Capture(withView("motion"), &result);
 		CHECK(result["debugView"]["view"] == "motion");
+		CHECK(result["waitedFrames"] == 1);
 		CHECK(result["debugView"]["tintedEntities"] == 0);
 		CHECK(harness.CountDifferences(motion, plain) > 50);
 		for (const glm::ivec2 pixel : { glm::ivec2(1, 1), glm::ivec2(32, 32) })
