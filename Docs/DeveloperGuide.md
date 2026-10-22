@@ -2231,7 +2231,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - **View commands** change no scene data and record no undo: `camera.get`, `camera.set {position, target, yaw, pitch,
   distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
   (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?,
-  fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip", waitForAssets?, path?, overwrite?}` renders on the
+  fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion", waitForAssets?, path?, overwrite?}` renders on the
   next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still
   being rasterized, so text is never half drawn, and with `waitForAssets` (default true) up to `c_MaxCaptureAssetFrames`
   while assets of the view are loading, so the first capture after opening or playing a scene shows its materials, and up
@@ -2243,8 +2243,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   "hiddenCanvases", "elements", "drawCalls", "pendingGlyphs"}, "debugView":
   {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD",
   "entitiesPerMipShortfall"}, "notice"?, "path"?}` (the mip view counts entities with textures by the mip levels their
-  worst texture lacks: none, 1, 2, 3 or more or still loading); it defaults to the viewport's size, camera, overlays and
-  debug view and fails without a GPU. `position`, `target` and `fov` render through a camera of the capture's own (a copy
+  worst texture lacks: none, 1, 2, 3 or more or still loading; the motion view colors pixels by their motion since the
+  capture renderer's previous frame, so it renders a second frame, and a still scene shows none); it defaults to the
+  viewport's size, camera, overlays and debug view and fails without a GPU. `position`, `target` and `fov` render through a camera of the capture's own (a copy
   of the editor camera with those changes; `camera.get` is unchanged, the result's camera is `"custom"`), so agents look
   around without moving the person's view. `viewport.getSettings` and
   `viewport.setSettings {grid, selectionOutline, sceneGizmos, allColliders, stats, previewLighting, gameUI, gizmo, space,
@@ -2400,7 +2401,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 ### Scene renderer and lighting
 
 - `SceneRenderer` draws a `Scene` from a `SceneCamera` into its output texture or a given framebuffer:
-  light clustering, directional shadow cascades, depth/normal/entity-ID prepass, ground-truth ambient
+  light clustering, directional shadow cascades, depth/normal/entity-ID prepass (with motion vectors when asked: "Motion
+  vectors"), ground-truth ambient
   occlusion, forward PBR (opaque surfaces with an EQUAL depth test and forced early depth testing), sky,
   transparent surfaces (back to front), then post-processing from the scene's `PostProcessComponent`
   (exposure, bloom, tone mapping and grading, FXAA). A target framebuffer must match the viewport size
@@ -2586,6 +2588,36 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   on both paths. `GPU.SceneRenderer.CameraRelative` renders a scene 20 and 100 km from the origin against the origin's,
   and `GPU.GameUI` a world-space canvas 100 km out.
 
+### Motion vectors
+
+- A frame with `SceneRenderOptions::MotionVectors` (or `ShowMotionVectors`, the motion debug view) writes each opaque and
+  alpha-masked surface's motion since the renderer's previous frame into an RG16F velocity target
+  (`SceneRenderer::GetVelocityTexture`): its unjittered position in this frame's UV space minus its position in the
+  previous one's (`FrameConstants::UnjitteredViewProjection`, `PreviousViewProjection`, built in double relative to the
+  current camera, so a still camera gives the same matrix twice and exactly zero motion); 0 where nothing is drawn, where
+  `Include/Motion.glsl` (`GetCameraMotion`) derives the camera's motion from the depth (the sky as a direction).
+- Previous transforms and poses come from the renderer's **motion history**, its own copy of the render scene's instance
+  and palette buffers as its latest frame drew them (`GetPreviousInstanceBuffer`, `GetPreviousPaletteBuffer`, scene-set
+  SRV 20 and 21; without one the shared buffers are bound there): the shared GPU copy cannot hold "previous", since its
+  renderers render at different times. It costs 64 bytes per instance slot and 48 per joint matrix of the scene (64 MiB for
+  a million instances), per renderer that asks, plus the 4-byte-per-pixel target; made by the first frame that asks,
+  released with the render targets. At the end of each such frame `Scene/MotionCopy.comp` (timed in `GPU.Post`) copies
+  what `RenderSceneGPU` wrote since the renderer's previous frame (`GetInstanceWrites`, `GetPaletteWrites`: a log by
+  process-unique write version, bounded by the buffer's elements, which also covers deferred uploads); a renderer
+  further behind, a new history or another render scene copies the whole buffers, and a history that grows keeps its
+  contents. A still scene copies nothing. The history holds the renderer's previous frame only when that frame asked too
+  and drew the same render scene or the one it is a clone of (`SceneRendererStats::MotionHistory`); a frame without one
+  has no motion.
+- `Mesh.vert`'s `ST_VELOCITY` variants read the history: an instance's previous record only when its `EntityID` is the
+  current one (a slot another entity held, or a new instance, moves with the camera only), its previous palette only when
+  `SkinPalette` is the same range, and what did not change takes this frame's values (no rounding difference can move
+  it). A frame with motion draws the prepass **and** the forward pass with the velocity module (`PipelineKey::Velocity`),
+  so the EQUAL test meets the prepass's depths to the bit; the transparent and shadow passes keep their modules. Never give
+  only one of the two passes a vertex module.
+- Tests check motion against the CPU's reprojection of the depth buffer (`GPU.SceneRenderer.MotionVectors`: within 0.01 px
+  plus 0.1% of the motion, 0.05 px 20 km out), that asking for motion leaves the image bit-identical on both paths, and
+  `GPU.SceneRenderer.GPUDriven` compares the paths' velocity targets bit for bit.
+
 ### Skinned meshes
 
 - **Skinned meshes** (Docs/Architecture.md, "Render scene"): a mesh renderer with a `SkinComponent` is posed by the
@@ -2675,7 +2707,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   unless `ViewportSettings::AllColliders`), and so can the range spheres and cones of lights (`AllLightRanges`,
   `LightRangeEntities`; the editor shows the selection's only, the others as icons). Entity tints (`EntityTints`, `Overlay/StatusTint.frag`) come first: listed
   entities' pixels in the entity-ID buffer are blended with their color and no other pixel changes (debug views such as
-  the editor's streaming, LOD and mip views). Code that needs the level of detail the renderer draws uses `LODSelection`
+  the editor's streaming, LOD and mip views). The motion view (`ShowMotionVectors`, `Overlay/MotionView.frag`, the
+  editor's `motion` debug view) comes before them: each pixel's motion as a color (hue the direction, strength the speed,
+  full at 16 pixels a frame) over the image under 65% black. Code that needs the level of detail the renderer draws uses `LODSelection`
   (`Renderer/LODSelection.h`), the functions `SceneRenderer` calls, with the renderer's `GetLODCriteria()`.
 - Levels of detail: generated levels (`MeshUtils::GenerateLODs`) carry their error (`MeshLOD::Error`, in the mesh's
   units) and are chosen by it (`SceneRendererSpecification::LODErrorPixels`); levels without one (cooked meshes before

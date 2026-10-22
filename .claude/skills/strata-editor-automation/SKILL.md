@@ -158,7 +158,9 @@ editor started with `--no-gpu` (use `--headless`):
   is not loaded yet; `"lod"` tints entities by the level of detail they are drawn at (green 0, blue 1, yellow 2, red 3+);
   `"mip"` tints entities drawn with textures by the mip levels their worst texture lacks against what the view needs
   (green: as needed, blue 1 level short, yellow 2, red 3+ or still loading; textures stream their mip levels to what
-  the screen shows, so a picture taken right after the camera moved may be blurry where it is red); `"none"` is the
+  the screen shows, so a picture taken right after the camera moved may be blurry where it is red); `"motion"` colors
+  every pixel by how it moved since the view's previous frame (hue: direction, right red, up yellow-green, left cyan, down
+  violet; strength: speed, full at 16 pixels a frame; still pixels darkened: useful while playing); `"none"` is the
   plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
   `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the Game view). The result's
   `debugView` counts what it found among the entities in view: `{view, tintedEntities, pendingEntities, failedEntities,

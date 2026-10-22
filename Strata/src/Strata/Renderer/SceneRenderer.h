@@ -769,9 +769,8 @@ namespace Strata
 		// The prepass's framebuffer of the frame: with the velocity target in a frame with motion vectors.
 		nvrhi::IFramebuffer* GetPrepassFramebuffer() const { return m_MotionFrame ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get(); }
 		// The motion history's buffers (SceneRenderOptions::MotionVectors) at the size of the scene's GPU copy's, and the velocity
-		// target with its prepass framebuffer; with
-		// `keepContents` a buffer that grows keeps what it held (copied at the frame's start, RecordMotionGrowth). False (logged)
-		// when they cannot be created.
+		// target with its prepass framebuffer; with `keepContents` a buffer that grows keeps what it held (copied at the frame's
+		// start, RecordMotionGrowth). False (logged) when they cannot be created.
 		bool EnsureMotionResources(bool keepContents);
 		void RecordMotionGrowth(nvrhi::ICommandList* commandList);
 		// After the frame's draws: copies into the motion history what the scene's GPU copy wrote since the renderer's previous

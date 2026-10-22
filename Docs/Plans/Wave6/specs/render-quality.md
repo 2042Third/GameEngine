@@ -361,9 +361,12 @@ worktree's scratch area compares the images, and the step's commit states the re
   slot) and `m_PreviousPalette` (the palette buffer's layout): the shared data as this renderer last drew it. They are
   made with the first frame that has motion and released with the targets; they cost 64 bytes per instance slot (64 MiB
   for a million instances) per renderer with motion, which DG states. At the end of each frame a compute pass copies,
-  from the shared buffers, the slots and palette ranges the change logs report since the renderer's previous frame;
-  when a log overflowed (`GetInstanceChanges` returns false) or the buffers grew, it copies everything. Steady state
-  costs nothing. The copy is timed in `GPU.Post` in S1 and in `GPU.TAA` from S2 (D15).
+  from the shared buffers, the slots and palette ranges `RenderSceneGPU` wrote since the renderer's previous frame (as
+  built in S1: its write log, `GetInstanceWrites`/`GetPaletteWrites` by a process-unique write version, bounded by the
+  buffer's elements, rather than the render scene's change logs, which miss deferred and retried uploads); when the log
+  does not reach back, for a new history or another render scene, it copies everything; a history that grows keeps its
+  contents by a GPU copy. Steady state costs nothing. The copy is timed in `GPU.Post` in S1 and in `GPU.TAA` from S2
+  (D15).
 - `Mesh.vert` gains a velocity variant (`ST_VELOCITY`, with and without `ST_SKINNED`): it reads the previous record,
   and when its `EntityID` differs from the current one (a reused slot, a new entity) or its `SkinPalette` differs (a
   moved palette range) it uses the current transform or palette, so new and re-skinned instances move only with the
@@ -379,12 +382,14 @@ worktree's scratch area compares the images, and the step's commit states the re
   and palette buffers there (no allocation).
 - The copy also takes the slots `RenderSceneGPU` uploaded in the frame without a logged change (new proxies whose
   upload `NewInstanceBytesPerFrame` deferred), so a deferred instance's previous record is its own from its first drawn
-  frame.
+  frame (the write log covers them).
 - `FrameConstants` gains `UnjitteredViewProjection`, `PreviousViewProjection` (previous projection times previous
   rotation-only view times the translation from the previous to the current camera position, built in double: it maps a
   position relative to the current camera to the previous clip space), `JitterParams` (current and previous jitter in
   clip units) and `TemporalParams` (the frame index for noise, the pre-exposure of D7 from S7, flags). Both declarations
-  and the `static_assert` change together.
+  and the `static_assert` change together. As built in S1: `TemporalParams.x` is the flag "the history holds the
+  previous frame" (`SceneRendererStats::MotionHistory`), and `JitterParams` is added by S2 with the jitter itself (S2 adds
+  the frame index to `TemporalParams` too).
 - The sky has no geometry: the resolve derives its motion from the camera alone (direction at depth 0).
 - Rejected: a previous transform in `InstanceData` (the 64-byte rule); previous data in `RenderSceneGPU` (shared by
   renderers that render at different times, so "previous" differs per renderer); velocity written always (costs every
