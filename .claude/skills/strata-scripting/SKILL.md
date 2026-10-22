@@ -646,7 +646,7 @@ every step below is a command, and source files are written with your own file t
 The UI does the same with Scripts > New Script... (which starts a build, so that the new class can be attached once it
 finished), Scripts > Build Scripts (Ctrl+B), the toolbar's Play (which builds first when the sources changed since the last
 build) and Build Scripts buttons, the Problems panel (build errors and crashes; a double click opens the line in the
-external editor, Scripts > External Editor..., which lists the editors found on the machine), the Content Browser's
+external editor, Scripts > External Editor..., the Preferences page that lists the editors found on the machine), the Content Browser's
 Scripts root (the script files with their classes, below the asset folders; what `script.list` returns) and the
 inspector's Script section (add a class from the module, edit fields with their default shown and a reset button). People's guide:
 `Docs/Manual/Scripting.md` in the Strata folder (a download or a source checkout).

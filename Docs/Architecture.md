@@ -3116,7 +3116,8 @@ is the `strata-scripting` skill. The layers:
   used is kept in imgui.ini, `StrataLauncher`, first `<home>/StrataProjects`), About Strata (`UI/AboutDialog`: build,
   GPU, startup time, and `ThirdPartyNotices.md` compiled in and shown through `UI/Markdown`), Export Game
   (`UI/ExportDialog`, see [Export and the runtime](#export-and-the-runtime)), Recover Unsaved Changes
-  (`UI/RecoveryDialog`), New Script and External Editor (`UI/ScriptDialogs`) and the unsaved-changes question. Panels
+  (`UI/RecoveryDialog`), New Script (`UI/ScriptDialogs`), Preferences (`UI/PreferencesDialog`, whose External Editor page
+  is `UI/ScriptDialogs`' `ExternalEditorPage`) and the unsaved-changes question. Panels
   reach them through `EditorPanelContext::Shell` (`UI/EditorShell.h`, implemented by `EditorLayer`), and agents through
   `editor.showDialog`.
   The question is the UI's half of a rule the commands enforce themselves: every command that replaces the edited scene
@@ -3903,7 +3904,7 @@ drawn at each level chosen by errors (`StreamingViewStats::MaxErrorPixelsPerLOD`
   shell, from the user's preferences or `STRATA_EXTERNAL_EDITOR`, else the default application). The program is found as
   the system finds programs (`Platform::FindProgram`: a path, or a name in the folders of PATH, on Windows with the
   extensions of PATHEXT), and VS Code's launcher in PATH (`bin/code.cmd`, a batch file) stands for `Code.exe` beside it;
-  `script.setExternalEditor` refuses a program it cannot find, and the External Editor dialog shows the program a command
+  `script.setExternalEditor` refuses a program it cannot find, and the Preferences' External Editor page shows the program a command
   starts and offers the editors found on the machine (`ExternalEditor::FindChoices`: VS Code, the Visual Studio of the
   engine's toolchain, CLion). The Problems panel's double click, the Console's click on a message naming a source line
   (`FindSourceReference`) and `script.open` go through `EditorContext::OpenScriptSource`, which opens only code, CMake

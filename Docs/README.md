@@ -29,6 +29,8 @@ Guides for people making games in the editor:
   game input and the mouse, pausing and stepping.
 - [Manual/GameUI.md](Manual/GameUI.md): menus and HUDs: canvases, anchors and scale modes, the look of images, texts and
   widgets, buttons and sliders in scripts, keyboard and gamepad navigation, testing UI with commands.
+- [Manual/Settings.md](Manual/Settings.md): the Project Settings panel (the start and loading scenes, what exports keep,
+  the settings the engine and the game define) and the Preferences window (the external editor), undo and saving.
 
 ## Releases
 

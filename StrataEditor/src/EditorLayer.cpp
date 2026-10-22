@@ -2,6 +2,7 @@
 
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorPreferences.h"
+#include "Editor/ExternalEditor.h"
 #include "Editor/GameExport.h"
 #include "Editor/ProjectSamples.h"
 #include "Editor/ProjectTemplates.h"
@@ -14,6 +15,7 @@
 #include "Panels/GameViewPanel.h"
 #include "Panels/InspectorPanel.h"
 #include "Panels/PerformancePanel.h"
+#include "Panels/ProjectSettingsPanel.h"
 #include "Panels/ProblemsPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
 #include "Panels/StreamingPanel.h"
@@ -32,6 +34,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
+#include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Events/ApplicationEvent.h>
 #include <Strata/Events/KeyEvent.h>
 #include <Strata/Events/MouseEvent.h>
@@ -87,6 +90,7 @@ namespace Strata
 			specification.RecentProjectsReadOnly = options.RecentProjectsReadOnly;
 			specification.PreferencesFile = options.PreferencesFile;
 			specification.EditorSettingsFile = options.EditorSettingsFile;
+			specification.Settings = options.Settings;
 			specification.WatchAssetFiles = options.WatchFiles;
 			specification.HotReloadScripts = options.WatchFiles;
 			// Play mode runs on the wall clock, except in scripted runs (--frames, --commands), which count frames; and projects
@@ -125,6 +129,11 @@ namespace Strata
 		m_Automation(m_Context, m_Commands, m_CommandRunner), m_ShowImGuiDemo(options.ShowImGuiDemo)
 	{
 		ST_ASSERT(m_Host, "The editor layer needs a host");
+		// The settings windows' pages of complex sections; simple sections need none (a generic page draws them).
+		m_SettingsPages.Register(ExternalEditor::c_SettingsSection, [](EditorContext& context, const SettingsSection&, SettingsWindowKind)
+		{
+			return CreateScope<ExternalEditorPage>(context);
+		});
 		RegisterBuiltinPanels();
 		RegisterPanelCommands();
 	}
@@ -142,7 +151,8 @@ namespace Strata
 			"Opens a panel of the editor's window and brings it to the front, e.g. to show the person at the editor what you are looking at: "
 			"Streaming (asset memory per pool against its budget, loads, uploads, the assets), Performance (where the frames go, stage by "
 			"stage), Problems (the last script build's errors and warnings, the scripts' crash with where it happened), Activity (every "
-			"command the person, agents and scripts ran: editor.activity), Console, ContentBrowser, Hierarchy, Inspector, AssetInspector (the "
+			"command the person, agents and scripts ran: editor.activity), ProjectSettings (the project's settings, page by page: what "
+			"project.settings lists; needs a project), Console, ContentBrowser, Hierarchy, Inspector, AssetInspector (the "
 			"Asset tab: the inspected asset, its settings and preview), Viewport (the Scene view; \"Scene\" works too) or Game (the Game view: the "
 			"game through its camera); for the ContentBrowser, scripts: true shows its Scripts root "
 			"(the project's script files with their classes, as script.list lists them) and false its asset folders; for the Hierarchy, search "
@@ -199,27 +209,45 @@ namespace Strata
 			"the sample, the first one by default; see project.samples), recovery (Recover Unsaved Changes: the project's recovery data that "
 			"scene.recoveryStatus lists, for the person to recover or discard; needs a project, and closes by itself when nothing applies), "
 			"newScript (New Script: a script class for the project's script directory, as script.create writes; needs a project), "
-			"externalEditor (External Editor: the program that opens script files, as script.setExternalEditor sets) or about (About Strata). "
-			"The project dialogs ask about unsaved scene changes first. Changes no scene data and records no undo; fails in an editor without a "
-			"window (--no-gpu or headless). Returns {dialog} and, for openSample, the sample it offers (sample).",
+			"preferences (Preferences: the person's preferences that preferences.get lists, at section's page; works without a project), "
+			"externalEditor (Preferences at its External Editor page: the program that opens script files, as script.setExternalEditor sets) or "
+			"about (About Strata). The project dialogs ask about unsaved scene changes first. Changes no scene data and records no undo; fails "
+			"in an editor without a window (--no-gpu or headless). Returns {dialog} and, for openSample, the sample it offers (sample), for "
+			"preferences and externalEditor the page it shows (section).",
 			CommandUtils::ObjectSchema({
-				{ "dialog", { { "type", "string" }, { "enum", { "export", "newProject", "openSample", "recovery", "newScript", "externalEditor", "about" } },
-					{ "description", "The dialog to open" } } },
+				{ "dialog", { { "type", "string" }, { "enum", { "export", "newProject", "openSample", "recovery", "newScript", "preferences", "externalEditor",
+					"about" } }, { "description", "The dialog to open" } } },
 				{ "template", CommandUtils::StringSchema("newProject: the template to preselect (project.templates; default basic3d)") },
-				{ "sample", CommandUtils::StringSchema("openSample: the sample to copy (project.samples; default: the first one)") } }, { "dialog" }),
+				{ "sample", CommandUtils::StringSchema("openSample: the sample to copy (project.samples; default: the first one)") },
+				{ "section", CommandUtils::StringSchema("preferences: the preference section to show (preferences.get; default: the page shown last)") } },
+				{ "dialog" }),
 			[this](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
 			{
 				CommandArguments arguments(parameters);
 				const std::string dialog = arguments.GetString("dialog");
 				const std::string templateId = arguments.GetString("template", "");
 				std::string sample = arguments.GetString("sample", "");
+				std::string section = arguments.GetString("section", "");
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				if (dialog != "export" && dialog != "newProject" && dialog != "openSample" && dialog != "recovery" && dialog != "newScript"
-					&& dialog != "externalEditor" && dialog != "about")
+					&& dialog != "preferences" && dialog != "externalEditor" && dialog != "about")
 				{
-					return EditorCommandResult::InvalidParameters(fmt::format(
-						"Parameter 'dialog': the editor has no dialog '{}' (export, newProject, openSample, recovery, newScript, externalEditor, about)", dialog));
+					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'dialog': the editor has no dialog '{}' (export, newProject, "
+						"openSample, recovery, newScript, preferences, externalEditor, about)", dialog));
+				}
+				if (!section.empty() && dialog != "preferences")
+					return EditorCommandResult::InvalidParameters("Parameter 'section': only the preferences dialog shows a section");
+				if (dialog == "externalEditor")
+					section = ExternalEditor::c_SettingsSection;
+				if (!section.empty())
+				{
+					const SettingsSection* found = context.GetSettingsRegistry().Find(section);
+					if (!found || found->Scope != SettingsScope::User)
+					{
+						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'section': '{}' is no preference section (preferences.get "
+							"lists them)", section));
+					}
 				}
 				if (!templateId.empty() && !ProjectTemplates::Find(templateId))
 					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'template': unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
@@ -262,9 +290,9 @@ namespace Strata
 						return EditorCommandResult::Fail("No project is open: scripts belong to a project (project.open or project.create first)");
 					ShowNewScriptDialog();
 				}
-				else if (dialog == "externalEditor")
+				else if (dialog == "preferences" || dialog == "externalEditor")
 				{
-					ShowExternalEditorDialog();
+					ShowPreferencesDialog(section);
 				}
 				else
 				{
@@ -273,6 +301,8 @@ namespace Strata
 				nlohmann::json result = { { "dialog", dialog } };
 				if (dialog == "openSample")
 					result["sample"] = sample;
+				if (dialog == "preferences" || dialog == "externalEditor")
+					result["section"] = m_PreferencesDialog.GetSelected().empty() ? nlohmann::json(nullptr) : nlohmann::json(m_PreferencesDialog.GetSelected());
 				return EditorCommandResult::Ok(std::move(result));
 			}, EditorCommandKind::Session });
 	}
@@ -308,6 +338,8 @@ namespace Strata
 		add(EditorPanels::c_Performance, "Performance", Icons::ChartColumnStacked, []() { return CreateScope<PerformancePanel>(); }, EditorPanelPlacement::Docked,
 			false);
 		add(EditorPanels::c_Activity, "Activity", Icons::History, []() { return CreateScope<ActivityPanel>(); }, EditorPanelPlacement::Docked, false);
+		add(EditorPanels::c_ProjectSettings, "Project Settings", Icons::Settings2, [this]() { return CreateScope<ProjectSettingsPanel>(m_SettingsPages); },
+			EditorPanelPlacement::Docked, false);
 
 		if (ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
 		{
@@ -659,7 +691,7 @@ namespace Strata
 		m_AboutDialog.Draw(GetEnvironment());
 		m_ExportDialog.Draw(panelContext);
 		m_NewScriptDialog.Draw(panelContext);
-		m_ExternalEditorDialog.Draw(panelContext);
+		m_PreferencesDialog.Draw(panelContext, m_SettingsPages);
 		m_RecoveryDialog.Draw(panelContext);
 		// Closed with changes still on offer ("Later"): a toast says where they are.
 		const bool recoveryOpen = m_RecoveryDialog.IsOpen();
@@ -1232,6 +1264,8 @@ namespace Strata
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Activity).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Viewport).c_str(), center);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Game).c_str(), center);
+		// Pages of fields need room: the Project Settings join the views when they open.
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_ProjectSettings).c_str(), center);
 		ImGui::DockBuilderFinish(dockspaceId);
 		// On first run the Content Browser is the bottom area's visible tab, and the Inspector the right one's (the Asset tab
 		// comes forward when an asset is inspected).
@@ -1388,7 +1422,15 @@ namespace Strata
 				if (ImGui::MenuItem("Export Game...", nullptr, false, canExport))
 					ShowExportDialog();
 				UI::ItemProbe::Record("Menu.File.ExportGame", canExport);
+				ImGui::Separator();
+				if (ImGui::MenuItem("Project Settings...", nullptr, false, m_Context.HasProject()))
+					m_Panels.Focus(EditorPanels::c_ProjectSettings);
+				UI::ItemProbe::Record("Menu.File.ProjectSettings", m_Context.HasProject());
 			}
+			// The person's preferences, also from the launcher: they hold for every project.
+			if (ImGui::MenuItem("Preferences..."))
+				ShowPreferencesDialog({});
+			UI::ItemProbe::Record("Menu.File.Preferences");
 			ImGui::Separator();
 			if (ImGui::MenuItem("Exit"))
 				RequestQuit([this]() { m_Host->Close(); });
@@ -1457,7 +1499,9 @@ namespace Strata
 			ImGui::EndMenu();
 		}
 
-		if (ImGui::BeginMenu("Scripts"))
+		const bool scriptsMenu = ImGui::BeginMenu("Scripts");
+		UI::ItemProbe::Record("Menu.Scripts");
+		if (scriptsMenu)
 		{
 			const bool building = m_Context.GetScriptBuilder().IsRunning();
 			if (ImGui::MenuItem("Build Scripts", "Ctrl+B", false, m_Context.HasProject() && !building))
@@ -1473,7 +1517,8 @@ namespace Strata
 			if (ImGui::MenuItem("Open Scripts Folder", nullptr, false, m_Context.HasProject()))
 				RunEditorCommand(m_Context, m_Commands, "script.open");
 			if (ImGui::MenuItem("External Editor..."))
-				ShowExternalEditorDialog();
+				ShowPreferencesDialog(ExternalEditor::c_SettingsSection);
+			UI::ItemProbe::Record("Menu.Scripts.ExternalEditor");
 			if (ImGui::MenuItem("Show Problems", nullptr, false, m_Context.HasProject()))
 				m_Panels.Focus(EditorPanels::c_Problems);
 			ImGui::Separator();
@@ -1728,10 +1773,9 @@ namespace Strata
 		m_ExportDialog.Open(panelContext);
 	}
 
-	void EditorLayer::ShowExternalEditorDialog()
+	void EditorLayer::ShowPreferencesDialog(const std::string& section)
 	{
-		EditorPanelContext panelContext = MakePanelContext();
-		m_ExternalEditorDialog.Open(panelContext);
+		m_PreferencesDialog.Open(section);
 	}
 
 	void EditorLayer::DrawStatusBar()
@@ -1978,16 +2022,21 @@ namespace Strata
 
 	void EditorLayer::DockNewToolPanels()
 	{
-		const ImGuiWindow* console = ImGui::FindWindowByName(m_Panels.GetWindowName(EditorPanels::c_Console).c_str());
-		if (!console || console->DockId == 0)
-			return;
-		for (const char* id : { EditorPanels::c_Problems, EditorPanels::c_Streaming, EditorPanels::c_Performance, EditorPanels::c_Activity })
+		// Only windows the layout knows nothing about: a panel the user moved elsewhere stays there.
+		const auto dockNew = [this](const char* id, const ImGuiWindow* beside)
 		{
-			// Only windows the layout knows nothing about: a panel the user moved elsewhere stays there.
 			const std::string name = m_Panels.GetWindowName(id);
-			if (m_Panels.IsOpen(id) && !ImGui::FindWindowByName(name.c_str()) && !ImGui::FindWindowSettingsByID(ImHashStr(name.c_str())))
-				ImGui::DockBuilderDockWindow(name.c_str(), console->DockId);
-		}
+			if (beside && beside->DockId != 0 && m_Panels.IsOpen(id) && !ImGui::FindWindowByName(name.c_str())
+				&& !ImGui::FindWindowSettingsByID(ImHashStr(name.c_str())))
+			{
+				ImGui::DockBuilderDockWindow(name.c_str(), beside->DockId);
+			}
+		};
+		const ImGuiWindow* console = ImGui::FindWindowByName(m_Panels.GetWindowName(EditorPanels::c_Console).c_str());
+		for (const char* id : { EditorPanels::c_Problems, EditorPanels::c_Streaming, EditorPanels::c_Performance, EditorPanels::c_Activity })
+			dockNew(id, console);
+		// The Project Settings' pages need room: beside the Scene view.
+		dockNew(EditorPanels::c_ProjectSettings, ImGui::FindWindowByName(m_Panels.GetWindowName(EditorPanels::c_Viewport).c_str()));
 	}
 
 	bool EditorLayer::DrawAutomationPill()

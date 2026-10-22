@@ -9,9 +9,11 @@
 #include "UI/EditorPanelRegistry.h"
 #include "UI/EditorShell.h"
 #include "UI/ExportDialog.h"
-#include "UI/ScriptDialogs.h"
+#include "UI/PreferencesDialog.h"
 #include "UI/ProjectDialogs.h"
 #include "UI/RecoveryDialog.h"
+#include "UI/ScriptDialogs.h"
+#include "UI/SettingsPages.h"
 
 #include <Strata/Core/Base.h>
 #include <Strata/Core/Layer.h>
@@ -60,6 +62,9 @@ namespace Strata
 		// (EditorContextSpecification::EditorSettingsFile).
 		std::filesystem::path PreferencesFile;
 		std::filesystem::path EditorSettingsFile;
+		// The settings sections the editor validates and draws (EditorContextSpecification::Settings); null: the process's.
+		// Tests pass a local registry.
+		const SettingsRegistry* Settings = nullptr;
 		// Watch the project's assets and script module for changes made outside the editor (hot reload). UI tests turn it off:
 		// they need no watcher threads.
 		bool WatchFiles = true;
@@ -92,6 +97,7 @@ namespace Strata
 		constexpr const char* c_Performance = "Performance"; // PerformancePanel, opened from the status bar's frame pill
 		constexpr const char* c_Problems = "Problems";       // ProblemsPanel: script build diagnostics and crashes
 		constexpr const char* c_Activity = "Activity";       // ActivityPanel, opened from the viewport's agent chip or the View menu
+		constexpr const char* c_ProjectSettings = "ProjectSettings"; // ProjectSettingsPanel, opened from File > Project Settings...
 		constexpr const char* c_Welcome = "Welcome"; // The launcher (WelcomePanel)
 	}
 
@@ -154,7 +160,9 @@ namespace Strata
 		const AboutDialog& GetAboutDialog() const { return m_AboutDialog; }
 		const ExportDialog& GetExportDialog() const { return m_ExportDialog; }
 		NewScriptDialog& GetNewScriptDialog() { return m_NewScriptDialog; }
-		ExternalEditorDialog& GetExternalEditorDialog() { return m_ExternalEditorDialog; }
+		PreferencesDialog& GetPreferencesDialog() { return m_PreferencesDialog; }
+		// The custom pages of the settings windows (EditorSettingsPageRegistry).
+		const EditorSettingsPageRegistry& GetSettingsPages() const { return m_SettingsPages; }
 		const RecoveryDialog& GetRecoveryDialog() const { return m_RecoveryDialog; }
 		// File > Open Scene... (Ctrl+O) once its file dialog chose `file`: a scene file of the project's asset directory opens
 		// (scene.open through the runner) after the question about the edited scene's unsaved changes. False, with the reason
@@ -171,6 +179,7 @@ namespace Strata
 		void ShowOpenProjectDialog() override;
 		void ShowAboutDialog() override;
 		void ShowNewScriptDialog() override;
+		void ShowPreferencesDialog(const std::string& section) override;
 		void DismissLauncher() override;
 		void RenameEntity(UUID entity) override;
 		void ShowPanel(std::string_view panel) override;
@@ -210,7 +219,8 @@ namespace Strata
 		// The text a status bar pill shows: `text`, or `compact` (when given) while the pills' full texts do not fit side by
 		// side; counts the full text's width for that decision. Returns one of the two views.
 		std::string_view StatusPillText(const char* icon, std::string_view text, std::string_view compact = {});
-		// Tool panels (Streaming, Performance) opened in a layout saved before they existed join the Console's dock node.
+		// Tool panels (Streaming, Performance) opened in a layout saved before they existed join the Console's dock node, the
+		// Project Settings the Scene view's.
 		void DockNewToolPanels();
 		// The question about unsaved changes (RequestDiscardChanges), at the popup level it is called at: over the whole window,
 		// or over the dialog that calls DrawDiscardQuestion. Drawn once per frame, by whichever call comes first.
@@ -267,7 +277,6 @@ namespace Strata
 		// File > Export Game... and the toolbar's Export button: the Export dialog, showing a running export.
 		void ShowExportDialog();
 		// Scripts > External Editor... and editor.showDialog: the program that opens script files, and the editors found.
-		void ShowExternalEditorDialog();
 	private:
 		EditorOptions m_Options;
 		Scope<EditorHost> m_Host;
@@ -279,13 +288,15 @@ namespace Strata
 		EditorCommandRunner m_CommandRunner;
 		// Declared after what it serves, so it stops before they go away.
 		EditorAutomation m_Automation;
+		// Declared before the panels that draw its pages.
+		EditorSettingsPageRegistry m_SettingsPages;
 		EditorPanelRegistry m_Panels;
 		ProjectDialogs m_ProjectDialogs;
 		AboutDialog m_AboutDialog;
 		// Completions of its exports refer to it: OnDetach cancels the runner's commands while it still exists.
 		ExportDialog m_ExportDialog;
 		NewScriptDialog m_NewScriptDialog;
-		ExternalEditorDialog m_ExternalEditorDialog;
+		PreferencesDialog m_PreferencesDialog;
 		// The context's requests for the Problems panel this layer has shown (EditorContext::GetProblemsPanelRequests).
 		uint64_t m_ShownProblemsRequests = 0;
 		// Like the Export dialog, its completions refer to it.

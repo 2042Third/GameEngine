@@ -73,8 +73,9 @@ Console has the whole build output; messages that name a file and line open it w
 
 ## Your code editor
 
-Strata opens script files in the editor you choose under **Scripts > External Editor...**: a command with placeholders.
-The dialog lists the editors it finds on your machine (VS Code, the Visual Studio the engine builds with, CLion); click
+Strata opens script files in the editor you choose under **Scripts > External Editor...** (the External Editor page of
+**File > Preferences...**, see [Settings.md](Settings.md)): a command with placeholders. The page lists the editors it
+finds on your machine (VS Code, the Visual Studio the engine builds with, CLion); click
 one to use it. Commands look like
 
 ```text
@@ -84,11 +85,11 @@ clion --line {line} {file}
 ```
 
 `{file}`, `{line}`, `{column}` and `{directory}` (the project's `Scripts` folder) are filled in; without `{file}` the file
-is passed last. The program is a path, or a name found in the folders of `PATH` like a command prompt finds it; the dialog
-shows which program the command starts, and refuses one it cannot find. It is started directly, not through a shell, so
+is passed last. The program is a path, or a name found in the folders of `PATH` like a command prompt finds it; the page
+shows which program the command starts, and **Apply** refuses one it cannot find. It is started directly, not through a shell, so
 it cannot be a `.cmd` or `.bat` file: VS Code's `code` in `PATH` (a batch file on Windows) starts `Code.exe` beside it
-instead. Without a command, files open in the application your system uses for them. The setting is yours (kept in your
-user data, not in the project); the environment variable `STRATA_EXTERNAL_EDITOR` overrides it.
+instead. Without a command, files open in the application your system uses for them. The setting is yours (one of your
+preferences, kept in your user data, not in the project); the environment variable `STRATA_EXTERNAL_EDITOR` overrides it.
 
 ### IntelliSense and building in the IDE
 

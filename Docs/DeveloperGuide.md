@@ -914,6 +914,34 @@ setting is one registration, and no other code learns of it.
   and a game must not run with settings it cannot read); sections no registered module claims are ignored. While the
   runtime lives it provides them as `IProjectSettings`. A version-4 manifest has no settings and gets no provider.
 
+### Settings pages
+
+The editor draws the settings in two windows, both a `SettingsBrowser` (`UI/SettingsPages`: the pages listed on the left, grouped by
+category in registration order, with a search field over titles, categories and field titles; the selected page on the
+right): the **Project Settings** panel (`Panels/ProjectSettingsPanel`, id `ProjectSettings`, not open by default, docked
+beside the Scene view; File > Project Settings..., `editor.showPanel`), a panel so that it can stay open while the game
+plays, and the **Preferences** dialog ([Preferences](#preferences)).
+
+- **Pages.** The Project Settings window starts with the project's own fields: **Game** (the start scene,
+  `project.setStartScene`, and the loading scene, `project.setExportSettings`, picked with the asset picker) and
+  **Export** (`Export.AlwaysInclude`, `project.setExportSettings`). A simple section gets a *generic page*: its fields in
+  a property table drawn with `DrawPropertyWidget` (an Asset field with the asset picker of its type), each finished edit
+  running the section's command (`project.setSettings` for a project section, `preferences.set` for a user one) with the
+  whole value, and Reset to Defaults (`reset: true`). A complex section needs a *custom page* (`UI::SettingsPage`), which
+  the editor UI registers in the `EditorSettingsPageRegistry` (`EditorLayer::GetSettingsPages`) under the section's id;
+  `Editor.UI.ProjectSettings` fails for a complex section of the process's registry without one, so a section and its
+  page land together. The External Editor's page (`ExternalEditorPage`, `UI/ScriptDialogs`) is the first.
+- **Rules.** Pages change nothing themselves: every edit runs a command with `CommandOrigin { CommandSource::UI }`
+  (project steps are undoable, preferences are not). They draw from copies of the values, read again only when the
+  values' version changes (`ProjectSettingsValues::GetVersion`, `EditorPreferences::GetVersion`), never parsing per
+  frame; colors come from the theme and sizes from the font. Probe keys: `<Window>.Page.<Id>` for the list,
+  `<Window>.<Id>.<Field>` for a generic page's fields and `<Window>.Title`, `<Window>` being `ProjectSettings` or
+  `Preferences`; the Game page's `ProjectSettings.Game.StartScene` and `.LoadingScene`, the Export page's
+  `ProjectSettings.Export.Path`, `.Add`, `.AlwaysInclude.<n>` and `.Remove.<n>`.
+- **Adding a section.** Register it in the module's registration function ([Project settings](#project-settings)); a
+  simple one is drawn without more, a complex one registers its page in `EditorLayer`'s constructor beside the External
+  Editor's.
+
 ### Preferences
 
 The person's preferences are the registry's *user* sections (`SettingsScope::User`): the editor's own (the external
@@ -944,6 +972,10 @@ registration (and the tests'), and any a module registers. They hold for every p
   validates the whole value first and changes nothing when it is refused; `preferences.save` (Session, deferred) writes
   the file and answers once it is written. Preference changes are not undo steps: they are the person's environment,
   not the project's content (`project.setSettings` refuses a user section, `preferences.set` a project section).
+- **The window.** File > Preferences... (also from the launcher, where docked panels are not drawn) opens
+  `UI/PreferencesDialog`, a modal dialog drawn by `EditorLayer` (`EditorShell::ShowPreferencesDialog`, `editor.showDialog
+  {dialog: "preferences", section?}`) with the same list and pages as the Project Settings panel
+  ([Settings pages](#settings-pages)); its edits run `preferences.set` and apply at once.
 - **The external editor.** `ExternalEditorLauncher` reads and writes its command through the store (the section's value
   `{ "Command": ... }`); `STRATA_EXTERNAL_EDITOR` still wins. The section checks the template's form only; whether its
   program is there depends on the machine and the PATH the editor started with, so `script.setExternalEditor` (and the
@@ -1734,10 +1766,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     closed. Widgets drawn every frame write tooltips that take work (formatted statistics) only while they show
     (`UI::IsTooltipDue`). `editor.showPanel {panel, scripts?, search?}` (registered by
     `EditorLayer`, like `editor.showDialog {dialog: "export" | "newProject" | "openSample" | "recovery" | "newScript" |
-    "externalEditor" | "about"}`, the commands of the window itself) opens a docked panel and brings it to the front, so
-    agents can show the person what they look at (`scripts`: the Content Browser's Scripts root or its asset folders;
-    `search`: the Hierarchy's search text, as if typed, e.g. a world's `l:Props`; `UI::SearchField`'s `reload` makes a
-    field being typed in show it); it fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
+    "preferences" | "externalEditor" | "about", section?}`, the commands of the window itself) opens a docked panel and
+    brings it to the front, so agents can show the person what they look at (`scripts`: the Content Browser's Scripts
+    root or its asset folders; `search`: the Hierarchy's search text, as if typed, e.g. a world's `l:Props`;
+    `UI::SearchField`'s `reload` makes a field being typed in show it); it fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
     stays open through a layout reset and the saved open states read at the first frame, and is asked for again until its
     tab shows; while a modal dialog waits for the person it opens behind it (focusing it would close the dialog). Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
     icons), and check panels with `ImGuiHarness::CountFallbackGlyphs`.
@@ -2000,8 +2032,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   one. Script edits are undoable (`ScriptEdit`, shared with the inspector's Script drawer) and reach the live
   instances while playing. The UI builds with Scripts > Build Scripts (Ctrl+B) or the toolbar, and has Scripts > New
   Script... (`UI/ScriptDialogs`, also `EditorShell::ShowNewScriptDialog` for panels; it starts a build, as the Inspector
-  offers the loaded module's classes), Open Scripts Folder, External Editor... (the program a command starts, and the
-  editors found on the machine, `ExternalEditor::FindChoices`) and Show Problems. `UI/ScriptBrowser` is the view of the
+  offers the loaded module's classes), Open Scripts Folder, External Editor... (the Preferences dialog's External Editor
+  page, `ExternalEditorPage`: the program a command starts, and the editors found on the machine,
+  `ExternalEditor::FindChoices`) and Show Problems. `UI/ScriptBrowser` is the view of the
   script sources a panel draws (the Content Browser's Scripts root, below the asset folders, with New Script... also in the
   browser's New menu): the files with their classes, listed on an I/O thread when it
   is drawn and every second while it is, never while it is not (`ScriptSourceList`, whose version changes only with the

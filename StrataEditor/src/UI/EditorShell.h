@@ -73,6 +73,8 @@ namespace Strata
 		virtual void ShowAboutDialog() = 0;
 		// Scripts > New Script...: a class name and a template, then script.create (nothing without a project).
 		virtual void ShowNewScriptDialog() = 0;
+		// File > Preferences... (PreferencesDialog), at a preference section's page (empty: the page it showed last).
+		virtual void ShowPreferencesDialog(const std::string& section) = 0;
 		// Leaves the launcher for the editor without opening a project (an untitled scene with the built-in assets).
 		virtual void DismissLauncher() = 0;
 		// Renames an entity in place in the Hierarchy (F2 in the viewport): the Hierarchy comes to the front with the entity's

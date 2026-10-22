@@ -402,13 +402,13 @@ failure and guarding the project's release loses nothing.
   editor's preferences"): exact names for the `project.*` commands above (exact wins over the `project.` prefix),
   prefixes `inputActions.` and `preferences.`. `input.action` stays in `play`. Core is unchanged (32 of 32).
 - `editor.showDialog` gains `preferences` (with an optional `section`); `externalEditor` stays and opens Preferences at
-  that section. `editor.showPanel` opens `projectSettings` through the panel registry.
+  that section. `editor.showPanel` opens `ProjectSettings` through the panel registry.
 - `editor.status`' `project` section reports the settings file's state (writing, unwritten, the last error);
   `project.info` the game's identity.
 
 ### D5 Project Settings panel and Preferences dialog
 
-- **Project Settings** is a panel (`EditorPanelRegistry`, id `projectSettings`, not open by default): it needs a project,
+- **Project Settings** is a panel (`EditorPanelRegistry`, id `ProjectSettings`, PascalCase like the other panels' ids, not open by default): it needs a project,
   and a docked, non-modal window can stay open while playing to tune actions and layers. File > Project Settings...
   opens it.
 - **Preferences** is a modal dialog drawn by `EditorLayer` (`PreferencesDialog`, `EditorShell::ShowPreferencesDialog`):
@@ -874,7 +874,7 @@ the MCP `settings` toolset, the child-process helper that registers a game's tes
   `--strata-test-helper=settings-section` child, whose process registry has `Game.Tuning`.
 
 **S3 Preferences and the two windows.** `EditorPreferences` (`Preferences.json`, the one-time import),
-`preferences.get/set`, `Editor.ExternalEditor`, `PreferencesDialog`, the `projectSettings` panel with the Game page
+`preferences.get/set`, `Editor.ExternalEditor`, `PreferencesDialog`, the `ProjectSettings` panel with the Game page
 (start and loading scene) and the Export page, the generic page, `EditorSettingsPageRegistry`, menu items,
 `editor.showDialog preferences`. *Accept:*
 - `Editor.Preferences`: "A 0.5.0 EditorSettings.json is imported once and left as it was" (a file a 0.5.0 editor wrote
@@ -888,6 +888,13 @@ the MCP `settings` toolset, the child-process helper that registers a game's tes
   opens Preferences at its section".
 - `Editor.Launcher` keeps its 22 cases; `EditorUISourceTests` (theme, font-relative sizes, registry, no file writes in
   `Panels/`) and `HeaderWeightTests` (`EditorContext.h` declares `EditorPreferences`) pass.
+- *As built (what later steps build on):* the panel's id is `ProjectSettings` (`EditorPanels::c_ProjectSettings`, docked
+  beside the Scene view); both windows draw a `SettingsBrowser` (`UI/SettingsPages.h`), and a complex section's page is a
+  `SettingsPage` registered in `EditorLayer`'s constructor (`m_SettingsPages.Register(id, factory)`, the factory taking
+  the `EditorContext`, the section and the window), as the External Editor's is: S4's Collision Layers page and S7's
+  Input Actions page register there. Generic pages run a section's command on each finished edit. `EditorOptions::Settings`
+  gives a `HarnessEditor` a local registry. Preferences have `preferences.save` (the quit question's Retry) besides
+  `preferences.get/set`; `editor.quit` guards unwritten preferences (`DiscardScope::Editor`, `EditorShell::RequestQuit`).
 
 **S4 Collision layers for the project, with the migration.** The section in `RegisterSceneModule`, the working copy
 applied at hand-over, `Scene::GetStoredPhysicsLayers`, the readers, `project.setCollisionLayers`, `scene.setSettings`
