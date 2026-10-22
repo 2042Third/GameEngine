@@ -25,6 +25,7 @@
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Profiling.h>
+#include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -142,6 +143,7 @@ namespace Strata
 			m_ScriptBuilder.SetToolchainEnvironment(specification.ToolchainEnvironment);
 		m_GameWindowProvider = CreateScope<EngineServices::ScopedProvider<IGameWindow>>(m_GameWindow);
 		m_GameSavesProvider = CreateScope<EngineServices::ScopedProvider<IGameSaves>>(m_GameSaves);
+		m_ProjectSettingsProvider = CreateScope<EngineServices::ScopedProvider<IProjectSettings>>(m_OpenProjectSettings);
 		// What the game asked of its shell: window requests (recorded, not applied), its cursor, where its saves go.
 		SetStatusProvider("game", [this]()
 		{
@@ -297,6 +299,11 @@ namespace Strata
 		return GetProjectFileState() == SettingsFileState::Unwritten;
 	}
 
+	const SettingsRegistry& EditorContext::GetSettingsRegistry() const
+	{
+		return m_Specification.Settings ? *m_Specification.Settings : SettingsRegistry::GetProcessRegistry();
+	}
+
 	bool EditorContext::HasSavesInFlight() const
 	{
 		return m_DocumentSaver.IsBusy() || (m_ProjectFileWriter && m_ProjectFileWriter->IsBusy());
@@ -336,7 +343,7 @@ namespace Strata
 			if (projectFile.empty())
 				return false;
 		}
-		Ref<Project> project = Project::Load(projectFile, outError);
+		Ref<Project> project = Project::Load(projectFile, outError, &GetSettingsRegistry());
 		if (!project)
 			return false;
 

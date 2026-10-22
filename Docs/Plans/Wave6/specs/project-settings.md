@@ -864,6 +864,14 @@ the MCP `settings` toolset, the child-process helper that registers a game's tes
   thread"; the existing callers (EditorCommandTests, EditorExportDialogTests, EditorGameFlowTests) pass.
 - `CLI.McpToolsets` (EditorMcpToolsetsTests.cpp) passes with core unchanged (27 commands, 32 tools) and maps every new
   command to the `settings` or `play` toolset.
+- *As built (what later steps build on):* `SettingsFileWriter` is generic (a write function per snapshot; S3's preferences
+  file uses its own instance); project changes go through `ChangeProjectSettings` (the project's fields,
+  `ProjectSettingsFields`, which S5 extends with `Game`) or `ChangeProjectSection` (a section's stored entry), so
+  `project.setCollisionLayers` (S4) and `project.setGameInfo` (S5) record their steps the same way;
+  `CheckUnsavedChanges` takes a `DiscardScope` and the UI asks through `EditorShell::RequestReleaseProject` (S3 adds
+  unwritten preferences to `editor.quit`'s question there); `EditorContextSpecification::Settings` gives the editor a
+  local registry in tests; `Tests::RunInSettingsSectionProcess` runs a test case again in the
+  `--strata-test-helper=settings-section` child, whose process registry has `Game.Tuning`.
 
 **S3 Preferences and the two windows.** `EditorPreferences` (`Preferences.json`, the one-time import),
 `preferences.get/set`, `Editor.ExternalEditor`, `PreferencesDialog`, the `projectSettings` panel with the Game page

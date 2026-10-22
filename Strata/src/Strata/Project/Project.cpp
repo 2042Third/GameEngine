@@ -314,29 +314,37 @@ namespace Strata
 
 	bool Project::Save(std::string* outError) const
 	{
-		if (HasControlCharacters(m_Config.Name))
+		const std::optional<std::string> text = MakeFileText(outError);
+		if (!text)
+			return false;
+		if (!FileSystem::WriteText(m_ProjectFile, *text))
 		{
 			if (outError)
-				*outError = "The project name contains control characters";
+				*outError = fmt::format("Could not write '{}'", FileSystem::ToUTF8(m_ProjectFile));
 			return false;
 		}
-		if (!IsValidProjectSubdirectory(m_Config.AssetDirectory))
-		{
-			if (outError)
-				*outError = fmt::format("Asset directory '{}' must be a relative path inside the project", m_Config.AssetDirectory);
-			return false;
-		}
+		return true;
+	}
 
+	std::optional<std::string> Project::MakeFileText(std::string* outError) const
+	{
+		auto fail = [outError](std::string message) -> std::optional<std::string>
+		{
+			if (outError)
+				*outError = std::move(message);
+			return std::nullopt;
+		};
+
+		if (HasControlCharacters(m_Config.Name))
+			return fail("The project name contains control characters");
+		if (!IsValidProjectSubdirectory(m_Config.AssetDirectory))
+			return fail(fmt::format("Asset directory '{}' must be a relative path inside the project", m_Config.AssetDirectory));
 		if (!ValidateScriptSettings(m_Config.Scripts, outError))
-			return false;
+			return std::nullopt;
 		for (const std::string& entry : m_Config.Export.AlwaysInclude)
 		{
 			if (!IsValidProjectSubdirectory(entry))
-			{
-				if (outError)
-					*outError = fmt::format("'{}' in Export.AlwaysInclude is not a path relative to the asset directory", entry);
-				return false;
-			}
+				return fail(fmt::format("'{}' in Export.AlwaysInclude is not a path relative to the asset directory", entry));
 		}
 
 		nlohmann::json document = nlohmann::json::object();
@@ -363,23 +371,13 @@ namespace Strata
 		if (!m_Settings.IsEmpty())
 			document["Settings"] = m_Settings.ToJson();
 
-		const std::string text = JsonUtils::Dump(document, 1, '\t') + "\n";
+		std::string text = JsonUtils::Dump(document, 1, '\t') + "\n";
 		if (text.size() > c_MaxFileBytes)
 		{
-			if (outError)
-			{
-				*outError = fmt::format("The project file would take {} bytes, more than the {} MiB a project file may take", text.size(),
-					c_MaxFileBytes / (1024 * 1024));
-			}
-			return false;
+			return fail(fmt::format("The project file would take {} bytes, more than the {} MiB a project file may take", text.size(),
+				c_MaxFileBytes / (1024 * 1024)));
 		}
-		if (!FileSystem::WriteText(m_ProjectFile, text))
-		{
-			if (outError)
-				*outError = fmt::format("Could not write '{}'", FileSystem::ToUTF8(m_ProjectFile));
-			return false;
-		}
-		return true;
+		return text;
 	}
 
 	std::filesystem::path Project::GetAssetDirectory() const

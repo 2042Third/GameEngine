@@ -5,7 +5,10 @@
 #include <Strata/Asset/AssetTypes.h>
 #include <Strata/Project/Project.h>
 
+#include <nlohmann/json.hpp>
+
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace Strata
@@ -25,31 +28,44 @@ namespace Strata
 		bool operator==(const ProjectSettingsFields& other) const;
 	};
 
-	// One undoable change of the open project's settings (project.setStartScene, project.setExportSettings): Execute and Undo
-	// set the project's values and queue a write of the project file (EditorContext::SaveProjectFile, in the background). It
-	// changes no scene, so the edited scene stays saved; it goes with the rest of the history when a scene opens.
+	// One undoable change of the open project's settings: its own fields (project.setStartScene, project.setExportSettings) or
+	// one settings section (project.setSettings). Execute and Undo set the project's values and queue a write of the project
+	// file (EditorContext::SaveProjectFile, in the background). It changes no scene, so the edited scene stays saved; it goes
+	// with the rest of the history when a scene opens.
 	class ProjectSettingsAction final : public EditorAction
 	{
 	public:
 		ProjectSettingsAction(EditorContext& context, std::string name, ProjectSettingsFields before, ProjectSettingsFields after);
+		// A section's stored entries before and after (ProjectSettingsValues::GetStoredEntry; null: not stored), restored as
+		// they were, also a stored value its section refuses.
+		ProjectSettingsAction(EditorContext& context, std::string name, std::string section, nlohmann::json before, nlohmann::json after);
 
 		const std::string& GetName() const override { return m_Name; }
 		bool Execute(std::string* outError) override;
 		bool Undo(std::string* outError) override;
-		bool IsNoOp() const override { return m_Before == m_After; }
+		bool IsNoOp() const override;
 		bool ChangesScene() const override { return false; }
 	private:
-		bool Apply(const ProjectSettingsFields& fields, std::string* outError);
+		struct State
+		{
+			std::optional<ProjectSettingsFields> Fields; // A change of the fields, or else of m_Section
+			nlohmann::json SectionEntry;
+		};
+
+		bool Apply(const State& state, std::string* outError);
 	private:
 		EditorContext& m_Context;
 		std::string m_Name;
 		uint64_t m_ProjectGeneration; // The project the step changes (EditorContext::GetProjectGeneration)
-		ProjectSettingsFields m_Before;
-		ProjectSettingsFields m_After;
+		std::string m_Section;        // The section a section's step changes
+		State m_Before;
+		State m_After;
 	};
 
 	// A command's change of the open project's fields: executed and recorded as one undo step (ProjectSettingsAction). A change
 	// that changes nothing records nothing. False, with the reason, when the step could not be executed (nothing changed then).
 	bool ChangeProjectSettings(EditorContext& context, std::string name, ProjectSettingsFields before, ProjectSettingsFields after, std::string* outError);
+	// The same for one settings section, from its stored entry to `after` (null: reset to its default).
+	bool ChangeProjectSection(EditorContext& context, std::string name, std::string section, nlohmann::json after, std::string* outError);
 
 }

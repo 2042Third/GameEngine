@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -81,6 +82,9 @@ namespace Strata
 		static bool IsValidName(std::string_view name);
 
 		bool Save(std::string* outError = nullptr) const;
+		// The project file's text as Save writes it, or nullopt with the reason: invalid fields, or more than c_MaxFileBytes
+		// (what a change of the settings is checked against before it is made).
+		std::optional<std::string> MakeFileText(std::string* outError = nullptr) const;
 
 		ProjectConfig& GetConfig() { return m_Config; }
 		const ProjectConfig& GetConfig() const { return m_Config; }

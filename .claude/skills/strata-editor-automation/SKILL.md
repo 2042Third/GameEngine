@@ -85,7 +85,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
   `scene.open`/`save`/`info`/`hierarchy`, `entity.create`/`get`/`find`/`delete`, `component.add`/`set`,
   `prefab.instantiate`, `asset.list`/`info`/`import`, `material.create`, `script.build`/`status`, `play.start`/`stop`/
   `step`, `input.sequence` and `viewport.capture`. The others are in `scene`, `assets`, `play`, `scripts`, `animation`,
-  `viewport`, `streaming`, `perf`, `editor`, `ui` and `world`.
+  `viewport`, `streaming`, `perf`, `editor`, `ui`, `world` and `settings` (the project's settings).
 - `strata_describe` lists the toolsets (`{}`), a toolset's commands (`{"toolset": "scene"}`) or one command's full
   description and schema (`{"command": "entity.rename"}`); read it before a command whose short description leaves you
   unsure. `strata_toolsets {"enable": ["scene"]}` lists a toolset's commands as tools too (`"all"` for every command;
@@ -604,6 +604,15 @@ from the frame that started it); a large project takes a while, so give the call
 `project.setExportSettings {"loadingScene": "Scenes/Loading.stscene"}` names a scene the game plays while its start scene
 loads (null: none; the game shows black until its start scene is in; never the start scene itself, which is refused, and
 `project.setStartScene` of the loading scene clears that setting); exports keep it, also pruned ones.
+**Project settings** (toolset `settings`): `project.settings` lists the project's own fields and every settings section
+the engine's modules and the game register, with each section's `schema`, the `value` that applies and `isDefault`;
+`project.setSettings {"section": "<Module>.<Name>", "value": {...}}` (or `"reset": true`) replaces one section's value,
+which the section checks first (a bad field changes nothing and is named). These changes, like the start scene and the
+export settings, are undo steps that leave the scene saved, work while playing (they stay after `play.stop`), go into
+exported games, and keep the assets they name from being deleted. The project file is written in the background:
+`project.save` answers once it is written. When a write fails, `editor.status`' `project.fileState` is `"unwritten"`
+(`project.info`'s `fileError` says why): fix the cause and run `project.save`, because closing or switching the project
+refuses until then (`force: true` discards the settings, reported as `discardedSettings`).
 Check the result headless: `<dir>/<Game> --headless --frames 120` (exit code 0). Games load scenes in the background
 too: the first frames run before the start scene is in, so give short checks enough `--frames`.
 

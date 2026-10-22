@@ -363,7 +363,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 [Editor](Docs/DeveloperGuide.md#editor).
 
 - **Every change to the scene or project goes through a command** (or `SceneEditTransaction`/`SetPropertyWithUndo` for
-  continuous UI edits); panels only draw state and call commands, and never write, move or remove files.
+  continuous UI edits; project settings: an undoable `ProjectSettingsAction`); panels only draw state and call commands,
+  and never write, move or remove files.
 - Commands (`<group>.<action>`) have a description written for agents, a complete JSON Schema and a kind
   (`EditorCommandKind`: mark every query and session command, and queries whose results follow the session as
   `EditorCommandResults::Session`); they read parameters with `CommandArguments`, reject invalid or

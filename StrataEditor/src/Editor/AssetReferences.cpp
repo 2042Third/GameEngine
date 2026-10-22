@@ -3,6 +3,10 @@
 #include "Editor/EditorContext.h"
 
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Core/FileSystem.h>
+#include <Strata/Core/ProjectSettings.h>
+#include <Strata/Core/SettingsRegistry.h>
+#include <Strata/Project/Project.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
@@ -11,6 +15,7 @@
 #include <Strata/Scripting/ScriptingComponents.h>
 
 #include <algorithm>
+#include <optional>
 #include <unordered_map>
 
 namespace Strata
@@ -28,6 +33,50 @@ namespace Strata
 			{
 				return property.Type == PropertyType::Asset && !property.IsTransient();
 			});
+		}
+
+		// What of the project names any of the targets: its start scene, its loading scene, the settings sections whose validated
+		// values name one; nothing when none does.
+		std::optional<AssetReferencer> FindProjectReferencer(const EditorContext& context, const std::unordered_set<AssetHandle>& targets)
+		{
+			const Ref<Project>& project = context.GetProject();
+			if (!project)
+				return std::nullopt;
+			AssetReferencer entry;
+			std::vector<std::string> names;
+			const ProjectConfig& config = project->GetConfig();
+			if (config.StartScene.IsValid() && targets.contains(config.StartScene))
+			{
+				entry.ProjectSettings.push_back("startScene");
+				names.push_back("its start scene");
+			}
+			if (config.Export.LoadingScene.IsValid() && targets.contains(config.Export.LoadingScene))
+			{
+				entry.ProjectSettings.push_back("loadingScene");
+				names.push_back("its loading scene");
+			}
+			const SettingsRegistry& registry = context.GetSettingsRegistry();
+			const ProjectSettingsValues& settings = project->GetSettings();
+			for (const std::string& id : settings.GetStoredSections())
+			{
+				const SettingsSection* section = registry.Find(id);
+				const nlohmann::json* value = settings.FindSection(id);
+				if (!section || !value)
+					continue;
+				const std::vector<UUID> named = section->FindReferences(*value);
+				if (std::any_of(named.begin(), named.end(), [&targets](UUID handle) { return targets.contains(handle); }))
+				{
+					entry.ProjectSettings.push_back(id);
+					names.push_back(fmt::format("its settings '{}'", section->Title));
+				}
+			}
+			if (entry.ProjectSettings.empty())
+				return std::nullopt;
+			entry.Project = true;
+			entry.Path = FileSystem::ToUTF8(project->GetProjectFile().filename());
+			for (const std::string& name : names)
+				entry.Name += (entry.Name.empty() ? "" : ", ") + name;
+			return entry;
 		}
 
 	}
@@ -164,6 +213,9 @@ namespace Strata
 				entry.Entities = std::move(entities);
 				referencers.insert(referencers.begin(), std::move(entry));
 			}
+
+			if (std::optional<AssetReferencer> project = FindProjectReferencer(context, wanted))
+				referencers.insert(referencers.begin(), std::move(*project));
 			return referencers;
 		}
 
@@ -175,9 +227,14 @@ namespace Strata
 				nlohmann::json entry = {
 					{ "asset", referencer.Asset.IsValid() ? UUIDToJson(referencer.Asset) : nlohmann::json(nullptr) },
 					{ "path", referencer.Path },
-					{ "type", AssetTypeToString(referencer.Type) } };
+					{ "type", referencer.Project ? "Project" : AssetTypeToString(referencer.Type) } };
 				if (!referencer.Name.empty())
 					entry["name"] = referencer.Name;
+				if (referencer.Project)
+				{
+					entry["project"] = true;
+					entry["settings"] = referencer.ProjectSettings;
+				}
 				if (referencer.OpenScene)
 				{
 					entry["openScene"] = true;
@@ -203,7 +260,8 @@ namespace Strata
 				const AssetReferencer& referencer = referencers[index];
 				if (!text.empty())
 					text += ", ";
-				text += referencer.Path.empty() ? std::string("the open scene (never saved)") : referencer.Path;
+				text += referencer.Project ? fmt::format("the project {}", referencer.Path)
+					: referencer.Path.empty() ? std::string("the open scene (never saved)") : referencer.Path;
 				if (!referencer.Name.empty())
 					text += fmt::format(" ({})", referencer.Name);
 				if (referencer.OpenScene && !referencer.Entities.empty())

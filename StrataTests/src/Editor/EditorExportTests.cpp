@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
+#include "Core/SettingsTestUtils.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
@@ -486,6 +487,51 @@ TEST_SUITE("Editor.Export")
 		REQUIRE_MESSAGE(manifest, error);
 		REQUIRE(manifest->Settings);
 		CHECK(manifest->Settings->IsEmpty());
+	}
+
+	TEST_CASE("A pruned export keeps an asset a section names")
+	{
+		if (!IsSettingsSectionProcess())
+			return RunInSettingsSectionProcess();
+		ExportHarness harness("EditorExportSectionRoots");
+		// A texture nothing but the game's settings names.
+		const std::filesystem::path source = CreateTemporaryDirectory("EditorExportSectionRootsSource") / "Banner.png";
+		REQUIRE(FileSystem::WriteBytes(source, CreateSolidPNG(4, 4, 200, 40, 40)));
+		const nlohmann::json imported = harness.Run("asset.import", { { "file", FileSystem::ToUTF8(source) }, { "directory", "Textures" } });
+		const std::string banner = imported["asset"].get<std::string>();
+		const std::string bannerPath = imported["path"].get<std::string>();
+
+		const nlohmann::json without = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(harness.Directory / "Without") },
+			{ "includeRuntime", false }, { "prune", true } });
+		CHECK(ExcludedPaths(without).contains(bannerPath));
+
+		harness.Run("project.setSettings", { { "section", c_GameTestSection }, { "value", { { "Banner", banner } } } });
+		const nlohmann::json with = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(harness.Directory / "With") },
+			{ "includeRuntime", false }, { "prune", true } });
+		CHECK_FALSE(ExcludedPaths(with).contains(bannerPath));
+		std::string error;
+		const std::optional<GameManifest> manifest = GameManifest::Load(FileSystem::FromUTF8(with["manifest"].get<std::string>()), &error);
+		REQUIRE_MESSAGE(manifest, error);
+		REQUIRE(manifest->Settings);
+		REQUIRE(manifest->Settings->IsStored(c_GameTestSection));
+		CHECK(manifest->Settings->GetStoredEntry(c_GameTestSection)["Value"]["Banner"] == banner);
+	}
+
+	TEST_CASE("An export refuses a project whose section fails Read, naming it")
+	{
+		if (!IsSettingsSectionProcess())
+			return RunInSettingsSectionProcess();
+		ExportHarness harness("EditorExportInvalidSection");
+		std::string error;
+		std::optional<ProjectSettingsValues> values = ProjectSettingsValues::FromJson({ { c_GameTestSection, { { "Version", 1 },
+			{ "Value", { { "Lives", 99 } } } } } }, &error);
+		REQUIRE_MESSAGE(values, error);
+		harness.Context.GetProject()->GetSettings() = std::move(*values);
+		const std::string refused = harness.Error("project.export", { { "directory", FileSystem::ToUTF8(harness.Directory / "Refused") },
+			{ "includeRuntime", false } });
+		CHECK(refused.find(c_GameTestSection) != std::string::npos);
+		CHECK(refused.find("Lives") != std::string::npos);
+		CHECK_FALSE(FileSystem::Exists(harness.Directory / "Refused" / "Export Game.stgame"));
 	}
 
 	TEST_CASE("An export's frame times start with the frame that started it")

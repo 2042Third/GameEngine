@@ -75,6 +75,13 @@ namespace Strata
 		bool Set(std::string_view id, const nlohmann::json& value, const SettingsRegistry& registry, std::string* outError = nullptr);
 		// Removes a stored section (its default applies again); false when it is not stored.
 		bool Reset(std::string_view id);
+		// A stored section as the stored form holds it ({ "Version": n, "Value": ... }), valid or not; null when it is not
+		// stored. With RestoreStoredEntry, what an undo step keeps of a section.
+		nlohmann::json GetStoredEntry(std::string_view id) const;
+		// Puts back what GetStoredEntry returned (null: the section is not stored): the entry is stored as it is and validated
+		// as Validate does, so a valid one is provided again and a refused one keeps its stored value. False, with nothing
+		// changed and the reason in outError, for an entry of the wrong shape.
+		bool RestoreStoredEntry(std::string_view id, const nlohmann::json& entry, const SettingsRegistry& registry, std::string* outError = nullptr);
 		bool IsStored(std::string_view id) const;
 		// The ids of the stored sections, sorted.
 		std::vector<std::string> GetStoredSections() const;

@@ -3,10 +3,15 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/Process.h"
 #include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Core/UUID.h"
+#include "TestHelpers.h"
 
+#include <algorithm>
+#include <chrono>
 #include <optional>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -119,6 +124,69 @@ namespace Strata::Tests
 			return handles;
 		};
 		return section;
+	}
+
+	// "Game.Tuning", the section a game registers through ModuleRegistrationOptions::Extra in the child processes of
+	// --strata-test-helper=settings-section (RunInSettingsSectionProcess): Difficulty (Enum Easy, Normal or Hard, "Normal"),
+	// Lives (Int 1 to 9, 3) and Banner (a Texture, none).
+	inline constexpr const char* c_GameTestSection = "Game.Tuning";
+
+	inline SettingsSection MakeGameTestSection()
+	{
+		SettingsSection section;
+		section.Id = c_GameTestSection;
+		section.Title = "Tuning";
+		section.Category = "Game";
+		section.Description = "How hard the test game is, and the picture its menu shows.";
+		SettingsField& difficulty = section.Fields.emplace_back();
+		difficulty.Name = "Difficulty";
+		difficulty.Title = "Difficulty";
+		difficulty.Description = "How hard the game starts.";
+		difficulty.Type = SettingsFieldType::Enum;
+		difficulty.Options = { "Easy", "Normal", "Hard" };
+		difficulty.Default = "Normal";
+		SettingsField& lives = section.Fields.emplace_back();
+		lives.Name = "Lives";
+		lives.Title = "Lives";
+		lives.Description = "Lives a player starts with.";
+		lives.Type = SettingsFieldType::Int;
+		lives.Min = 1.0;
+		lives.Max = 9.0;
+		lives.Default = 3;
+		SettingsField& banner = section.Fields.emplace_back();
+		banner.Name = "Banner";
+		banner.Title = "Banner";
+		banner.Description = "The picture the menu shows.";
+		banner.Type = SettingsFieldType::Asset;
+		banner.AssetType = "Texture";
+		banner.Default = nullptr;
+		return section;
+	}
+
+	// Whether this process is a child of --strata-test-helper=settings-section: its process registry has the game's section.
+	inline bool IsSettingsSectionProcess()
+	{
+		return SettingsRegistry::GetProcessRegistry().Find(c_GameTestSection) != nullptr;
+	}
+
+	// For test cases about a section a game registers, which only a process registry can have: runs the current test case in
+	// a child process whose registry has the game's section (Engine/ModuleRegistrationHelpers.cpp) and checks that it passed
+	// there. A case calls it first when !IsSettingsSectionProcess() and returns; in the child it goes on.
+	inline void RunInSettingsSectionProcess()
+	{
+		// doctest's filters split at commas: '?' matches any one character, a comma too.
+		std::string name = doctest::getContextOptions()->currentTest->m_name;
+		std::replace(name.begin(), name.end(), ',', '?');
+		ProcessSpecification specification;
+		specification.Executable = GetTestExecutablePath();
+		specification.Arguments = { "--strata-test-helper=settings-section", "--test-case=" + name };
+		Process::RunResult result = Process::Run(specification, std::chrono::minutes(5));
+		std::erase(result.Output, '\r');
+		INFO(result.Output);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
+		// The case ran there, alone (doctest pads its counts).
+		CHECK(std::regex_search(result.Output, std::regex(R"(test cases:\s+1 \|\s+1 passed)")));
 	}
 
 	// Registers both test sections in `registry`; REQUIREs that it accepts them.

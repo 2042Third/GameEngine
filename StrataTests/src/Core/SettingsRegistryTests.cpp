@@ -290,4 +290,44 @@ TEST_SUITE("Core.Settings")
 		CHECK_FALSE(ProjectSettingsValues::FromJson({ { "not an id", { { "Version", 1 }, { "Value", nullptr } } } }));
 		CHECK(ProjectSettingsValues::FromJson(nlohmann::json::object())->IsEmpty());
 	}
+
+	TEST_CASE("A stored entry is restored as it was stored, valid or not")
+	{
+		SettingsRegistry registry;
+		Tests::RegisterTestSections(registry);
+		std::string error;
+		// Test.Complex stored at version 1 (upgraded once validated) and Test.Simple with a value its section refuses.
+		std::optional<ProjectSettingsValues> values = ProjectSettingsValues::FromJson({
+			{ "Test.Complex", { { "Version", 1 }, { "Value", { { "Name", "Old" } } } } },
+			{ "Test.Simple", { { "Version", 1 }, { "Value", { { "Count", 20 } } } } } }, &error);
+		REQUIRE_MESSAGE(values, error);
+		REQUIRE(values->Validate(registry).size() == 1);
+
+		const nlohmann::json complex = values->GetStoredEntry("Test.Complex");
+		CHECK(complex == nlohmann::json { { "Version", 2 }, { "Value", { { "Names", { "Old" } }, { "Targets", nlohmann::json::array() } } } });
+		const nlohmann::json refused = values->GetStoredEntry("Test.Simple");
+		CHECK(refused == nlohmann::json { { "Version", 1 }, { "Value", { { "Count", 20 } } } });
+		CHECK(values->GetStoredEntry("Test.Other").is_null());
+
+		// Changed, then restored: the valid entry is provided again, the refused one keeps its value and is not provided.
+		REQUIRE(values->Set("Test.Simple", { { "Count", 2 } }, registry, &error));
+		values->Reset("Test.Complex");
+		uint64_t version = values->GetVersion();
+		REQUIRE_MESSAGE(values->RestoreStoredEntry("Test.Complex", complex, registry, &error), error);
+		REQUIRE_MESSAGE(values->RestoreStoredEntry("Test.Simple", refused, registry, &error), error);
+		CHECK(values->GetVersion() != version);
+		REQUIRE(values->FindSection("Test.Complex"));
+		CHECK((*values->FindSection("Test.Complex"))["Names"] == nlohmann::json { "Old" });
+		CHECK_FALSE(values->FindSection("Test.Simple"));
+		CHECK(values->GetStoredEntry("Test.Simple") == refused);
+
+		// Null removes the section; an entry of the wrong shape changes nothing.
+		REQUIRE(values->RestoreStoredEntry("Test.Complex", nullptr, registry, &error));
+		CHECK_FALSE(values->IsStored("Test.Complex"));
+		version = values->GetVersion();
+		CHECK_FALSE(values->RestoreStoredEntry("Test.Simple", { { "Value", 1 } }, registry, &error));
+		CHECK(error.find("Test.Simple") != std::string::npos);
+		CHECK(values->GetVersion() == version);
+		CHECK(values->GetStoredEntry("Test.Simple") == refused);
+	}
 }

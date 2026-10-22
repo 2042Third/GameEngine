@@ -27,9 +27,17 @@ namespace Strata
 	}
 
 	ProjectSettingsAction::ProjectSettingsAction(EditorContext& context, std::string name, ProjectSettingsFields before, ProjectSettingsFields after)
-		: m_Context(context), m_Name(std::move(name)), m_ProjectGeneration(context.GetProjectGeneration()), m_Before(std::move(before)),
-		  m_After(std::move(after))
+		: m_Context(context), m_Name(std::move(name)), m_ProjectGeneration(context.GetProjectGeneration())
 	{
+		m_Before.Fields = std::move(before);
+		m_After.Fields = std::move(after);
+	}
+
+	ProjectSettingsAction::ProjectSettingsAction(EditorContext& context, std::string name, std::string section, nlohmann::json before, nlohmann::json after)
+		: m_Context(context), m_Name(std::move(name)), m_ProjectGeneration(context.GetProjectGeneration()), m_Section(std::move(section))
+	{
+		m_Before.SectionEntry = std::move(before);
+		m_After.SectionEntry = std::move(after);
 	}
 
 	bool ProjectSettingsAction::Execute(std::string* outError)
@@ -42,7 +50,12 @@ namespace Strata
 		return Apply(m_Before, outError);
 	}
 
-	bool ProjectSettingsAction::Apply(const ProjectSettingsFields& fields, std::string* outError)
+	bool ProjectSettingsAction::IsNoOp() const
+	{
+		return m_Before.Fields == m_After.Fields && m_Before.SectionEntry == m_After.SectionEntry;
+	}
+
+	bool ProjectSettingsAction::Apply(const State& state, std::string* outError)
 	{
 		// The history goes when the project does (a scene opens with the next one); this guards a step kept elsewhere.
 		if (!m_Context.HasProject() || m_Context.GetProjectGeneration() != m_ProjectGeneration)
@@ -51,7 +64,11 @@ namespace Strata
 				*outError = fmt::format("'{}' changed a project that is no longer open", m_Name);
 			return false;
 		}
-		fields.ApplyTo(m_Context.GetProject()->GetConfig());
+		Project& project = *m_Context.GetProject();
+		if (state.Fields)
+			state.Fields->ApplyTo(project.GetConfig());
+		else if (!project.GetSettings().RestoreStoredEntry(m_Section, state.SectionEntry, m_Context.GetSettingsRegistry(), outError))
+			return false;
 		m_Context.SaveProjectFile();
 		return true;
 	}
@@ -61,6 +78,15 @@ namespace Strata
 		if (before == after)
 			return true;
 		return context.GetUndoStack().Execute(CreateScope<ProjectSettingsAction>(context, std::move(name), std::move(before), std::move(after)), outError);
+	}
+
+	bool ChangeProjectSection(EditorContext& context, std::string name, std::string section, nlohmann::json after, std::string* outError)
+	{
+		nlohmann::json before = context.GetProject()->GetSettings().GetStoredEntry(section);
+		if (before == after)
+			return true;
+		return context.GetUndoStack().Execute(CreateScope<ProjectSettingsAction>(context, std::move(name), std::move(section), std::move(before), std::move(after)),
+			outError);
 	}
 
 }

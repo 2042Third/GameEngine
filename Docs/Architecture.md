@@ -1138,7 +1138,7 @@ the game (`EngineServices::ScopedProvider`, which restores the provider it repla
 | --- | --- | --- |
 | `IGameWindow`: window mode, resolution, vsync, the size the game renders at | StrataRuntime's `GameWindowService` (applied after the frame, `ApplyRequests`; headless: accepted and reported back), the editor's `EditorGameWindow` (recorded and reported, never applied: `editor.status`, a notice over the Game view and its "Game's request" resolution) | script host (`Game::SetWindowMode` and friends) |
 | `IGameSaves`: the save directory | `GameRuntime` (`<user data>/<game>/Saves`, `GameRuntimeOptions::SaveFilesDirectory`), `EditorContext` (`<project>/.strata/Saves`) | script host (`Game::WriteSaveFile` and friends, through `SaveFiles`) |
-| `IProjectSettings`: the project's settings sections, validated (DeveloperGuide.md, "Project settings") | `GameRuntime` (its manifest's, version 5 manifests; none for older ones) | the modules that register sections, on the main thread |
+| `IProjectSettings`: the project's settings sections, validated (DeveloperGuide.md, "Project settings") | `GameRuntime` (its manifest's, version 5 manifests; none for older ones), `EditorContext` (the open project's; none set without one) | the modules that register sections, on the main thread |
 
 ### Scene caches
 
@@ -3359,8 +3359,9 @@ is the `strata-scripting` skill. The layers:
   windowed sessions that are not scripted; scripted runs, headless editors and tests wait in `OpenProject`, so their first
   command finds the scene). With a 1,000,000-entity start scene the window's first frame comes after 1.0 s instead of 6.8 s
   (Release; the scene follows about 7 s later, while frames go on).
-- **The project file's writes** (`Editor/SettingsFileWriter.h`). Changes of the project's settings are undo steps
-  (`ProjectSettingsAction`) that queue a write of the project file: the frame copies the project's small values, an I/O
+- **The project file's writes** (`Editor/SettingsFileWriter.h`). Changes of the project's settings (its own fields and its
+  settings sections: `project.setSettings`, which `project.settings` describes) are undo steps (`ProjectSettingsAction`)
+  that queue a write of the project file: the frame copies the project's small values, an I/O
   job serializes and writes them atomically, and `EditorContext::Update` publishes the outcome; writes coalesce (one in
   flight, the newest next). A failed write keeps the change in memory and leaves the file with unwritten settings, which
   the commands that release the project refuse to discard unless forced; only `EditorContext::ReleaseProject` may write

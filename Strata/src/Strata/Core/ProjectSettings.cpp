@@ -199,6 +199,32 @@ namespace Strata
 		return true;
 	}
 
+	nlohmann::json ProjectSettingsValues::GetStoredEntry(std::string_view id) const
+	{
+		const auto it = m_Data->Entries.find(id);
+		if (it == m_Data->Entries.end())
+			return nullptr;
+		return { { "Version", it->second.Version }, { "Value", it->second.Value } };
+	}
+
+	bool ProjectSettingsValues::RestoreStoredEntry(std::string_view id, const nlohmann::json& entry, const SettingsRegistry& registry, std::string* outError)
+	{
+		if (entry.is_null())
+		{
+			Reset(id);
+			return true;
+		}
+		// The entry goes through the stored form's own checks, then through the validation of a loaded project.
+		std::optional<ProjectSettingsValues> parsed = FromJson(nlohmann::json { { std::string(id), entry } }, outError);
+		if (!parsed)
+			return false;
+		parsed->Validate(registry);
+		Data::Entry& restored = parsed->m_Data->Entries.begin()->second;
+		m_Data->Entries[std::string(id)] = std::move(restored);
+		m_Data->Version = MakeVersion();
+		return true;
+	}
+
 	bool ProjectSettingsValues::IsStored(std::string_view id) const
 	{
 		return m_Data->Entries.find(id) != m_Data->Entries.end();

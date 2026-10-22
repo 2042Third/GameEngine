@@ -32,7 +32,10 @@ namespace Strata::CLI::McpToolsets
 		constexpr std::pair<std::string_view, std::string_view> c_ExactToolsets[] = {
 			{ "asset.stats", "streaming" },
 			{ "asset.setBudget", "streaming" },
-			{ "editor.perf", "perf" } };
+			{ "editor.perf", "perf" },
+			{ "project.settings", "settings" },
+			{ "project.setSettings", "settings" },
+			{ "project.save", "settings" } };
 
 		constexpr std::pair<std::string_view, std::string_view> c_PrefixToolsets[] = {
 			{ "scene.", "scene" }, { "entity.", "scene" }, { "component.", "scene" }, { "prefab.", "scene" }, { "selection.", "scene" },
@@ -58,7 +61,8 @@ namespace Strata::CLI::McpToolsets
 			{ "perf", "Where frames go: the frame profiler" },
 			{ "editor", "The editor itself: status, activity, panels, dialogs, logs" },
 			{ "ui", "Game UI: canvases and widgets" },
-			{ "world", "Worlds, their cells, and physics statistics" } };
+			{ "world", "Worlds, their cells, and physics statistics" },
+			{ "settings", "Project settings, collision layers, input actions, the game's identity and the editor's preferences" } };
 
 		size_t FindSentenceEnd(std::string_view text)
 		{

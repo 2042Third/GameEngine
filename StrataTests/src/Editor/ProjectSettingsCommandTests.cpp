@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Core/SettingsTestUtils.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -9,9 +10,13 @@
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
+#include <Strata/Core/EngineServices.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Core/ProjectSettings.h>
+#include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Project/Project.h>
+#include <Strata/Reflection/PropertyJson.h>
 
 #include <atomic>
 #include <chrono>
@@ -50,16 +55,26 @@ namespace
 		WriterJobSystem& operator=(const WriterJobSystem&) = delete;
 	};
 
+	EditorContextSpecification MakeSpecification(const SettingsRegistry* settings)
+	{
+		EditorContextSpecification specification;
+		specification.WatchAssetFiles = false;
+		specification.Settings = settings;
+		return specification;
+	}
+
 	struct SettingsHarness
 	{
 		WriterJobSystem Jobs; // Before the context, which it outlives
-		EditorContext Context { EditorContextSpecification { false } };
+		EditorContext Context;
 		EditorCommandRegistry Commands;
 		std::filesystem::path ProjectFile;
 		AssetHandle Main = UUID::Null();
 		AssetHandle Second = UUID::Null();
 
-		explicit SettingsHarness(const std::string& name)
+		// settings: the sections the project's settings are validated with (null: the process's).
+		explicit SettingsHarness(const std::string& name, const SettingsRegistry* settings = nullptr)
+			: Context(MakeSpecification(settings))
 		{
 			const std::filesystem::path directory = CreateTemporaryDirectory(name) / "Game";
 			Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" }, { "template", "basic3d" } });
@@ -115,7 +130,31 @@ namespace
 		{
 			REQUIRE(FileSystem::Remove(ProjectFile));
 		}
+
+		// A texture asset of the project, imported from a PNG made for it.
+		std::string ImportTexture(const std::string& name)
+		{
+			const std::filesystem::path source = CreateTemporaryDirectory("ProjectSettingsTexture") / (name + ".png");
+			REQUIRE(FileSystem::WriteBytes(source, CreateSolidPNG(4, 4, 40, 200, 40)));
+			return Run("asset.import", { { "file", FileSystem::ToUTF8(source) }, { "directory", "Textures" } })["asset"].get<std::string>();
+		}
+
+		// The project file's stored settings, as written.
+		nlohmann::json ReadStoredSettings() const
+		{
+			return ReadProjectFile()->GetSettings().ToJson();
+		}
 	};
+
+	// The test sections (SettingsTestUtils.h) and a preference, Test.Preference.
+	void RegisterHarnessSections(SettingsRegistry& registry)
+	{
+		RegisterTestSections(registry);
+		SettingsSection preference = MakeSimpleTestSection();
+		preference.Id = "Test.Preference";
+		preference.Scope = SettingsScope::User;
+		REQUIRE(registry.Register(std::move(preference)));
+	}
 
 }
 
@@ -316,5 +355,311 @@ TEST_SUITE("Editor.ProjectSettings")
 		CHECK(project.Context.GetProject()->GetConfig().Export.AlwaysInclude.empty());
 		REQUIRE(project.WaitForWrites());
 		CHECK(project.ReadProjectFile()->GetConfig().Export.AlwaysInclude.empty());
+	}
+
+	TEST_CASE("setSettings rejects a bad value and changes nothing")
+	{
+		SettingsRegistry registry;
+		RegisterHarnessSections(registry);
+		// Two more sections like Test.Complex, which together can reach the project file's bound.
+		for (const char* id : { "Test.Large", "Test.Larger" })
+		{
+			SettingsSection large = MakeComplexTestSection();
+			large.Id = id;
+			REQUIRE(registry.Register(std::move(large)));
+		}
+		SettingsHarness project("ProjectSettingsRejects", &registry);
+		project.Run("project.setSettings", { { "section", "Test.Simple" }, { "value", { { "Count", 2 } } } });
+		REQUIRE(project.WaitForWrites());
+		const UndoStack& undo = project.Context.GetUndoStack();
+		const size_t steps = undo.GetCount();
+		const uint64_t writes = project.Context.GetProjectFileWriter()->GetWriteCount();
+		const uint64_t version = project.Context.GetProject()->GetSettings().GetVersion();
+		const nlohmann::json stored = project.ReadStoredSettings();
+
+		auto refuse = [&project](const nlohmann::json& parameters, EditorCommandError kind)
+		{
+			const EditorCommandResult result = project.Execute("project.setSettings", parameters);
+			CHECK_FALSE(result.Success);
+			CHECK(result.ErrorKind == kind);
+			return result.Error;
+		};
+		// The first bad field is named, also when a valid one comes before it.
+		CHECK(refuse({ { "section", "Test.Simple" }, { "value", { { "Speed", 2.0 }, { "Count", 20 } } } }, EditorCommandError::InvalidParameters)
+			.find("'Count' must be a whole number from 1 to 8") != std::string::npos);
+		CHECK(refuse({ { "section", "Test.Simple" }, { "value", { { "Nope", 1 } } } }, EditorCommandError::InvalidParameters).find("Nope")
+			!= std::string::npos);
+		CHECK(refuse({ { "section", "Test.Complex" }, { "value", { { "Names", { 1 } } } } }, EditorCommandError::InvalidParameters).find("Names")
+			!= std::string::npos);
+		const std::string unknown = refuse({ { "section", "Test.Unknown" }, { "value", nlohmann::json::object() } }, EditorCommandError::InvalidParameters);
+		CHECK(unknown.find("Test.Simple, Test.Complex") != std::string::npos);
+		CHECK(refuse({ { "section", "Test.Preference" }, { "value", nlohmann::json::object() } }, EditorCommandError::InvalidParameters).find("preference")
+			!= std::string::npos);
+		refuse({ { "section", "Test.Simple" } }, EditorCommandError::InvalidParameters);
+		refuse({ { "section", "Test.Simple" }, { "value", nlohmann::json::object() }, { "reset", true } }, EditorCommandError::InvalidParameters);
+
+		// Nothing changed: the values, the history, the file and its writes.
+		CHECK(undo.GetCount() == steps);
+		CHECK(project.Context.GetProject()->GetSettings().GetVersion() == version);
+		CHECK((*project.Context.GetProject()->GetSettings().FindSection("Test.Simple"))["Count"] == 2);
+		CHECK(project.Context.GetProjectFileWriter()->GetWriteCount() == writes);
+		CHECK(project.Context.GetProjectFileState() == SettingsFileState::Written);
+		CHECK(project.ReadStoredSettings() == stored);
+
+		// A value its section accepts that would take the project file over its 1 MiB is refused naming the bound: two sections
+		// of almost 512 KiB each, then a third that keeps the settings just under their own bound (compact JSON) and takes the file
+		// (indented, with the project's fields) over its.
+		const std::string quarter(127 * 1024, 'a');
+		project.Run("project.setSettings", { { "section", "Test.Complex" }, { "value", { { "Names", { quarter, quarter, quarter, quarter } } } } });
+		project.Run("project.setSettings", { { "section", "Test.Large" }, { "value", { { "Names", { quarter, quarter, quarter, quarter } } } } });
+		REQUIRE(project.WaitForWrites());
+		REQUIRE(project.Context.GetProjectFileState() == SettingsFileState::Written);
+		ProjectSettingsValues probe = project.Context.GetProject()->GetSettings();
+		REQUIRE(probe.Set("Test.Larger", { { "Names", { "" } } }, registry));
+		const size_t compact = JsonUtils::Dump(probe.ToJson()).size();
+		REQUIRE(compact + 8 < ProjectSettingsValues::c_MaxStoredBytes);
+		const std::string rest(ProjectSettingsValues::c_MaxStoredBytes - compact - 8, 'b');
+		REQUIRE(probe.Set("Test.Larger", { { "Names", { rest } } }, registry));
+		const size_t largeSteps = undo.GetCount();
+		const uint64_t largeWrites = project.Context.GetProjectFileWriter()->GetWriteCount();
+		CHECK(refuse({ { "section", "Test.Larger" }, { "value", { { "Names", { rest } } } } }, EditorCommandError::Failed).find("1 MiB")
+			!= std::string::npos);
+		CHECK(undo.GetCount() == largeSteps);
+		CHECK_FALSE(project.Context.GetProject()->GetSettings().IsStored("Test.Larger"));
+		CHECK(project.Context.GetProjectFileWriter()->GetWriteCount() == largeWrites);
+		CHECK(project.Context.GetProjectFileState() == SettingsFileState::Written);
+	}
+
+	TEST_CASE("One undo step per change, and the scene stays saved")
+	{
+		SettingsRegistry registry;
+		RegisterHarnessSections(registry);
+		SettingsHarness project("ProjectSettingsSteps", &registry);
+		const UndoStack& undo = project.Context.GetUndoStack();
+		const size_t steps = undo.GetCount();
+		REQUIRE_FALSE(project.Context.IsSceneModified());
+
+		const nlohmann::json set = project.Run("project.setSettings", { { "section", "Test.Simple" }, { "value", { { "Count", 2 }, { "Mode", "Slow" } } } });
+		CHECK(set["section"] == "Test.Simple");
+		CHECK(set["value"]["Count"] == 2);
+		CHECK(set["value"]["Speed"] == 1.0); // Fields left out take their defaults
+		CHECK(set["isDefault"] == false);
+		CHECK(undo.GetCount() == steps + 1);
+		CHECK(undo.GetUndoName() == "Set Simple");
+		CHECK_FALSE(project.Context.IsSceneModified());
+
+		project.Run("project.setSettings", { { "section", "Test.Complex" }, { "value", { { "Names", { "One" } } } } });
+		CHECK(undo.GetCount() == steps + 2);
+		CHECK_FALSE(project.Context.IsSceneModified());
+		// The same value again changes nothing and records nothing.
+		project.Run("project.setSettings", { { "section", "Test.Complex" }, { "value", { { "Names", { "One" } } } } });
+		CHECK(undo.GetCount() == steps + 2);
+
+		const nlohmann::json reset = project.Run("project.setSettings", { { "section", "Test.Simple" }, { "reset", true } });
+		CHECK(reset["isDefault"] == true);
+		CHECK(reset["value"]["Count"] == 4);
+		CHECK(undo.GetCount() == steps + 3);
+		CHECK(undo.GetUndoName() == "Reset Simple");
+		CHECK_FALSE(project.Context.IsSceneModified());
+		CHECK(project.Run("editor.status")["scene"]["modified"] == false);
+
+		// project.settings describes what applies.
+		const nlohmann::json listed = project.Run("project.settings");
+		REQUIRE(listed["sections"].size() == 2); // Not the preference
+		CHECK(listed["sections"][0]["id"] == "Test.Simple");
+		CHECK(listed["sections"][0]["isDefault"] == true);
+		CHECK(listed["sections"][0]["schema"]["type"] == "object");
+		CHECK(listed["sections"][1]["value"]["Names"] == nlohmann::json { "One" });
+		CHECK(listed["sections"][1]["problem"].is_null());
+		CHECK(listed["project"]["startScene"] == UUIDToJson(project.Main));
+		CHECK(listed["unclaimed"].empty());
+		const nlohmann::json one = project.Run("project.settings", { { "section", "Test.Complex" } });
+		REQUIRE(one["sections"].size() == 1);
+		CHECK(one["sections"][0]["version"] == 2);
+		CHECK_FALSE(project.Execute("project.settings", { { "section", "Test.Preference" } }).Success);
+
+		// The editor provides the open project's sections to the engine's modules.
+		IProjectSettings* provided = EngineServices::Get<IProjectSettings>();
+		REQUIRE(provided);
+		REQUIRE(provided->FindSection("Test.Complex"));
+		CHECK((*provided->FindSection("Test.Complex"))["Names"] == nlohmann::json { "One" });
+		CHECK_FALSE(provided->FindSection("Test.Simple"));
+	}
+
+	TEST_CASE("Undo and redo restore the section and rewrite the file")
+	{
+		SettingsRegistry registry;
+		RegisterHarnessSections(registry);
+		const std::filesystem::path projectFile = SettingsHarness("ProjectSettingsUndoSections", &registry).ProjectFile;
+		// The file stores a value its section refuses, and one no section of this editor claims: both stay as stored.
+		{
+			std::optional<std::string> text = FileSystem::ReadText(projectFile);
+			REQUIRE(text);
+			std::optional<nlohmann::json> document = JsonUtils::Parse(*text);
+			REQUIRE(document);
+			(*document)["Settings"] = { { "Test.Simple", { { "Version", 1 }, { "Value", { { "Count", 20 } } } } },
+				{ "Other.Section", { { "Version", 1 }, { "Value", 7 } } } };
+			REQUIRE(FileSystem::WriteText(projectFile, JsonUtils::Dump(*document, 1, '\t')));
+		}
+		WriterJobSystem jobs;
+		EditorContext context(MakeSpecification(&registry));
+		EditorCommandRegistry commands;
+		const nlohmann::json opened = RunCommandToCompletion(context, commands, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+		REQUIRE(opened["settingsProblems"].size() == 1);
+		CHECK(opened["settingsProblems"][0]["section"] == "Test.Simple");
+		CHECK(opened["settingsProblems"][0]["message"].get<std::string>().find("Count") != std::string::npos);
+		const nlohmann::json described = RunCommandToCompletion(context, commands, "project.settings", { { "section", "Test.Simple" } });
+		CHECK(described["sections"][0]["problem"].get<std::string>().find("Count") != std::string::npos);
+		CHECK(described["sections"][0]["isDefault"] == true);
+		CHECK(RunCommandToCompletion(context, commands, "project.settings")["unclaimed"] == nlohmann::json { "Other.Section" });
+		const nlohmann::json original = context.GetProject()->GetSettings().ToJson();
+
+		auto waitForWrites = [&context]()
+		{
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+			while (context.GetProjectFileState() == SettingsFileState::Writing && std::chrono::steady_clock::now() < deadline)
+			{
+				context.Update(Timestep(1.0f / 60.0f));
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			REQUIRE(context.GetProjectFileState() == SettingsFileState::Written);
+		};
+		auto stored = [&projectFile]()
+		{
+			std::string error;
+			const Ref<Project> project = Project::Load(projectFile, &error);
+			REQUIRE_MESSAGE(project, error);
+			return project->GetSettings().ToJson();
+		};
+
+		RunCommandToCompletion(context, commands, "project.setSettings", { { "section", "Test.Simple" }, { "value", { { "Count", 6 } } } });
+		waitForWrites();
+		CHECK(stored()["Test.Simple"]["Value"]["Count"] == 6);
+		CHECK(stored()["Other.Section"]["Value"] == 7);
+
+		// Undo puts back the value as it was stored, refused by its section again.
+		REQUIRE(context.Undo());
+		CHECK_FALSE(context.GetProject()->GetSettings().FindSection("Test.Simple"));
+		waitForWrites();
+		CHECK(stored() == original);
+		CHECK(RunCommandToCompletion(context, commands, "project.settings", { { "section", "Test.Simple" } })["sections"][0]["problem"].is_string());
+
+		REQUIRE(context.Redo());
+		CHECK((*context.GetProject()->GetSettings().FindSection("Test.Simple"))["Count"] == 6);
+		waitForWrites();
+		CHECK(stored()["Test.Simple"]["Value"]["Count"] == 6);
+
+		// A reset removes the section from the file, and its undo brings it back.
+		RunCommandToCompletion(context, commands, "project.setSettings", { { "section", "Test.Simple" }, { "reset", true } });
+		waitForWrites();
+		CHECK_FALSE(stored().contains("Test.Simple"));
+		REQUIRE(context.Undo());
+		waitForWrites();
+		CHECK(stored()["Test.Simple"]["Value"]["Count"] == 6);
+	}
+
+	TEST_CASE("Deleting the start or loading scene is refused while the project names it")
+	{
+		SettingsHarness project("ProjectSettingsReferencedScenes");
+		project.Run("scene.saveAs", { { "path", "Scenes/Loading.stscene" } });
+		project.Run("scene.open", { { "scene", "Scenes/Second.stscene" } });
+		project.Run("project.setExportSettings", { { "loadingScene", "Scenes/Loading.stscene" } });
+
+		for (const char* scene : { "Scenes/Main.stscene", "Scenes/Loading.stscene" })
+		{
+			CAPTURE(scene);
+			const EditorCommandResult refused = project.Execute("asset.delete", { { "asset", scene } });
+			REQUIRE_FALSE(refused.Success);
+			CHECK(refused.Error.find("Game.stproj") != std::string::npos);
+			const nlohmann::json references = project.Run("asset.findReferences", { { "asset", scene } })["referencedBy"];
+			REQUIRE_FALSE(references.empty());
+			CHECK(references[0]["type"] == "Project");
+			CHECK(references[0]["project"] == true);
+			CHECK(references[0]["path"] == "Game.stproj");
+			CHECK(references[0]["asset"].is_null());
+		}
+		CHECK(project.Run("asset.findReferences", { { "asset", "Scenes/Main.stscene" } })["referencedBy"][0]["settings"] == nlohmann::json { "startScene" });
+		CHECK(project.Run("asset.findReferences", { { "asset", "Scenes/Loading.stscene" } })["referencedBy"][0]["settings"]
+			== nlohmann::json { "loadingScene" });
+
+		// Once the project no longer names it, it can go.
+		project.Run("project.setExportSettings", { { "loadingScene", nullptr } });
+		project.Run("asset.delete", { { "asset", "Scenes/Loading.stscene" } });
+	}
+
+	TEST_CASE("A section registered by a game appears in project.settings and is validated by its fields")
+	{
+		if (!IsSettingsSectionProcess())
+			return RunInSettingsSectionProcess();
+		SettingsHarness project("ProjectSettingsGameSection");
+		const nlohmann::json listed = project.Run("project.settings", { { "section", c_GameTestSection } });
+		REQUIRE(listed["sections"].size() == 1);
+		const nlohmann::json& section = listed["sections"][0];
+		CHECK(section["title"] == "Tuning");
+		CHECK(section["category"] == "Game");
+		CHECK(section["isDefault"] == true);
+		CHECK(section["value"] == nlohmann::json { { "Difficulty", "Normal" }, { "Lives", 3 }, { "Banner", nullptr } });
+		CHECK(section["schema"]["properties"]["Difficulty"]["enum"] == nlohmann::json { "Easy", "Normal", "Hard" });
+
+		const EditorCommandResult refused = project.Execute("project.setSettings", { { "section", c_GameTestSection }, { "value", { { "Lives", 12 } } } });
+		CHECK(refused.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(refused.Error.find("'Lives'") != std::string::npos);
+		CHECK(project.Execute("project.setSettings", { { "section", c_GameTestSection }, { "value", { { "Difficulty", "Brutal" } } } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+		CHECK(project.Execute("project.setSettings", { { "section", c_GameTestSection }, { "value", { { "Banner", "Textures/None.png" } } } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+
+		project.Run("project.setSettings", { { "section", c_GameTestSection }, { "value", { { "Difficulty", "Hard" }, { "Lives", 5 } } } });
+		IProjectSettings* provided = EngineServices::Get<IProjectSettings>();
+		REQUIRE(provided);
+		REQUIRE(provided->FindSection(c_GameTestSection));
+		CHECK((*provided->FindSection(c_GameTestSection))["Lives"] == 5);
+		REQUIRE(project.WaitForWrites());
+		CHECK(project.ReadStoredSettings()[c_GameTestSection]["Value"]["Difficulty"] == "Hard");
+	}
+
+	TEST_CASE("Deleting an asset a section names is refused")
+	{
+		if (!IsSettingsSectionProcess())
+			return RunInSettingsSectionProcess();
+		SettingsHarness project("ProjectSettingsReferencedAsset");
+		const std::string banner = project.ImportTexture("Banner");
+		project.Run("project.setSettings", { { "section", c_GameTestSection }, { "value", { { "Banner", banner } } } });
+
+		const EditorCommandResult refused = project.Execute("asset.delete", { { "asset", banner } });
+		REQUIRE_FALSE(refused.Success);
+		CHECK(refused.Error.find("Tuning") != std::string::npos);
+		const nlohmann::json references = project.Run("asset.findReferences", { { "asset", banner } })["referencedBy"];
+		REQUIRE(references.size() == 1);
+		CHECK(references[0]["settings"] == nlohmann::json { c_GameTestSection });
+
+		project.Run("project.setSettings", { { "section", c_GameTestSection }, { "reset", true } });
+		project.Run("asset.delete", { { "asset", banner } });
+	}
+
+	TEST_CASE("project.open reports settingsProblems for a section that fails Read")
+	{
+		if (!IsSettingsSectionProcess())
+			return RunInSettingsSectionProcess();
+		const std::filesystem::path projectFile = SettingsHarness("ProjectSettingsOpenProblems").ProjectFile;
+		{
+			std::optional<std::string> text = FileSystem::ReadText(projectFile);
+			REQUIRE(text);
+			std::optional<nlohmann::json> document = JsonUtils::Parse(*text);
+			REQUIRE(document);
+			(*document)["Settings"] = { { c_GameTestSection, { { "Version", 1 }, { "Value", { { "Lives", 99 } } } } } };
+			REQUIRE(FileSystem::WriteText(projectFile, JsonUtils::Dump(*document, 1, '\t')));
+		}
+		WriterJobSystem jobs;
+		EditorContext context(MakeSpecification(nullptr));
+		EditorCommandRegistry commands;
+		const nlohmann::json opened = RunCommandToCompletion(context, commands, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+		REQUIRE(opened["settingsProblems"].size() == 1);
+		CHECK(opened["settingsProblems"][0]["section"] == c_GameTestSection);
+		CHECK(opened["settingsProblems"][0]["message"].get<std::string>().find("Lives") != std::string::npos);
+		// Its default applies meanwhile; setting it again fixes it.
+		CHECK(RunCommandToCompletion(context, commands, "project.settings", { { "section", c_GameTestSection } })["sections"][0]["value"]["Lives"] == 3);
+		RunCommandToCompletion(context, commands, "project.setSettings", { { "section", c_GameTestSection }, { "value", { { "Lives", 4 } } } });
+		CHECK(RunCommandToCompletion(context, commands, "project.settings", { { "section", c_GameTestSection } })["sections"][0]["problem"].is_null());
 	}
 }

@@ -846,9 +846,13 @@ setting is one registration, and no other code learns of it.
   invalid or taken id, a section without title, category or description, a simple section that also gives `Read`,
   `MakeDefault`, `Schema` or `References`, a complex section without them, and a default its own validation refuses.
 - **The registry parameter.** Code that validates takes the registry it validates with (`ProjectSettingsValues::Validate`,
-  `Set`, `GetReferences`). Unit tests register their sections in a local registry
+  `Set`, `GetReferences`; the editor's `EditorContextSpecification::Settings`, null for the process's, which its commands,
+  the project referencer and the export use). Unit tests register their sections in a local registry
   (`StrataTests/src/Core/SettingsTestUtils.h`: `Test.Simple`, a field of every type; `Test.Complex`, version 2 with an
-  upgrade and references); only what must go through the process registry registers in a child process.
+  upgrade and references); only what must go through the process registry registers in a child process: a test case
+  about a section a game registers starts with `if (!IsSettingsSectionProcess()) return RunInSettingsSectionProcess();`,
+  which runs that case again in `--strata-test-helper=settings-section`, whose `Extra` registers `Game.Tuning`
+  (`MakeGameTestSection`: an enum, an int and a texture).
 - **Reading.** Modules pull their settings: on the main thread, a consumer reads its section through the engine service
   `IProjectSettings` (`Strata/Core/ProjectSettings.h`; `EngineServices::Get` is null while no program provides one, and
   `FindSection` null while the project does not set the section: the default applies) and keeps what it made of the
@@ -857,7 +861,11 @@ setting is one registration, and no other code learns of it.
   uses: it keeps every stored section, also those no registered section claims (a build without the module) and those
   whose value its section refuses (both written back unchanged), and provides only validated ones.
 - **References.** A simple section's Asset fields name their handle, a complex section's `References` what its value
-  names; `ProjectSettingsValues::GetReferences` lists every validated section's, each valid handle once.
+  names; `ProjectSettingsValues::GetReferences` lists every validated section's, each valid handle once. The editor
+  counts the project as a referencer (`AssetReferences::Find`: its start scene, its loading scene and what its sections
+  name, `type: "Project"` in `asset.findReferences`), so deletes refuse those assets, and the export adds what the
+  sections name to a pruned pack's roots beside the start scene, the loading scene and `Export.AlwaysInclude` (built-in
+  assets need none; a handle that names no asset of the project fails the export).
 - **The project file.** `.stproj` version 3 stores the sections a project sets as
   `"Settings": { "<Id>": { "Version": n, "Value": ... } }` (`Project::GetSettings`); a section is stored once set, and
   resetting it removes it. The version went up with them because 0.5.0 rewrites the whole file from what it knows when it
@@ -879,9 +887,19 @@ setting is one registration, and no other code learns of it.
   ([No silent data loss](#no-silent-data-loss)). `EditorContext::ReleaseProject` is the only path that may write on the
   main thread: it finishes a write in flight, running one that has not started itself, and is reached by commands only
   once nothing was in flight, otherwise only when the editor goes away.
+- **Commands.** `project.settings` (Query) describes the project's own fields and every registered project section (id,
+  title, category, description, version, `schema`, the `value` that applies, `isDefault`, the `problem` of a stored value
+  its section refuses) and lists the stored sections no module claims (`unclaimed`); `section` narrows it to one.
+  `project.setSettings {section, value | reset: true}` replaces one section's value, checked first on copies (the
+  section's validation, the settings' bound and the project file's 1 MiB, `Project::MakeFileText`), so a refused value
+  changes nothing; preferences are refused. `project.open` and `project.openSample` report `settingsProblems`. While a
+  project is open the editor provides its sections as `IProjectSettings` (a provider the context owns for its life,
+  forwarding to the open project's values).
 - **Changes are undo steps.** Every command that changes the project's settings (`project.setStartScene`,
-  `project.setExportSettings`) records one `ProjectSettingsAction` (`Editor/ProjectSettingsAction.h`, made with
-  `ChangeProjectSettings`): it sets the values and queues a write when it runs and when it is undone, changes no scene
+  `project.setExportSettings`, `project.setSettings`) records one `ProjectSettingsAction` (`Editor/ProjectSettingsAction.h`,
+  made with `ChangeProjectSettings` or `ChangeProjectSection`; a section's step keeps its stored entries,
+  `ProjectSettingsValues::GetStoredEntry`, and puts them back with `RestoreStoredEntry`, also a value its section
+  refuses): it sets the values and queues a write when it runs and when it is undone, changes no scene
   (`ChangesScene() == false`, so the scene stays saved) and goes with the rest of the history when a scene opens. Such
   commands are allowed while playing: the change is the project's, not the running copy's, so it stays after `play.stop`
   and reports neither a `warning` nor `RunningCopy`; its step is undone once play stops (Undo and Redo refuse while
@@ -999,7 +1017,7 @@ setting is one registration, and no other code learns of it.
   script fields of asset type, material texture maps); importers add what their stored form does not show
   (`ImportResult::References`, e.g. a glTF mesh's materials) and mesh bounds (`Bounds`). A new asset property is found
   automatically; a new document type or a stored form with references needs `AssetDependencies::Scan` or the importer to
-  record them (each valid handle once, never the asset itself: `AssetManagerBase::NormalizeReferences`, which code that
+  record them (the project's settings name theirs through their sections: [Project settings](#project-settings)) (each valid handle once, never the asset itself: `AssetManagerBase::NormalizeReferences`, which code that
   compares scanned references with recorded ones uses too). Reads of requested assets other than scenes, prefabs and
   models prefetch their direct dependencies (only into the budgets' headroom beside what is on its way and a window of
   loads in flight, never evicting, not chaining: a finalizer must not request what an asset that arrives only prefetched
@@ -2957,9 +2975,11 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   (`scene.`, `entity.`, `component.`, `prefab.`, `selection.`, `edit.`), `assets` (`asset.`, `material.`, `project.`),
   `play` (`play.`, `input.`, `audio.`: game-ui's `input.click` and `input.type` too), `scripts`, `animation`, `viewport`
   (`viewport.`, `camera.`), `streaming` (`asset.stats`, `asset.setBudget`), `perf` (`editor.perf`), `editor` (`editor.`,
-  `log.`), `ui` (`ui.create`, `ui.layout`, `ui.hitTest`) and `world` (`world.`, `physics.`). Exact names win over
+  `log.`), `ui` (`ui.create`, `ui.layout`, `ui.hitTest`), `world` (`world.`, `physics.`) and `settings` (the project's
+  settings: `project.settings`, `project.setSettings`, `project.save`; the project's other commands stay in `assets`). Exact names win over
   prefixes; a group the table does not know gets a toolset named after it, but a new built-in group goes into the table
-  (`CLI.McpToolsets` checks that every command maps to a toolset it names, and what the `ui` and `play` toolsets hold).
+  (`CLI.McpToolsets` checks that every command maps to a toolset it names, and what the `ui`, `play` and `settings`
+  toolsets hold).
   `--toolsets <a,b>|all` picks them at start, the generic tool `strata_toolsets {enable, disable}` while it runs (the
   client hears `notifications/tools/list_changed`), `strata_describe` lists the toolsets, a toolset's commands (one line
   each) or one command's full description and schema, and `strata_call` runs any command. Tools of commands outside the

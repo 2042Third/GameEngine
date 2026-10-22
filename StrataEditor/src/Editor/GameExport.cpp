@@ -3,6 +3,7 @@
 #include "Editor/AssetEdit.h"
 #include "Editor/EditorContext.h"
 
+#include <Strata/Asset/Asset.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
@@ -225,8 +226,9 @@ namespace Strata
 
 		// The project's settings travel in the manifest (games read no project file). A section a registered module claims must
 		// be valid, or the game would refuse to start; sections no module of this build claims go as they are stored.
+		const SettingsRegistry& registry = context.GetSettingsRegistry();
 		ProjectSettingsValues settings = project.GetSettings();
-		if (const std::vector<SettingsProblem> problems = settings.Validate(SettingsRegistry::GetProcessRegistry()); !problems.empty())
+		if (const std::vector<SettingsProblem> problems = settings.Validate(registry); !problems.empty())
 		{
 			return fail(fmt::format("The project's settings section '{}' is invalid ({}): set it again or reset it before exporting",
 				problems.front().Section, problems.front().Message));
@@ -238,6 +240,20 @@ namespace Strata
 		packOptions.AlwaysInclude = project.GetConfig().Export.AlwaysInclude;
 		if (loadingSceneMetadata)
 			packOptions.AlwaysInclude.push_back(loadingSceneMetadata->Path);
+		// What the settings name is used by the game as the scenes' assets are: a pruned pack keeps it with what it uses (built-in
+		// assets come with every game).
+		for (const UUID handle : settings.GetReferences(registry))
+		{
+			if (IsBuiltinAssetHandle(handle))
+				continue;
+			const std::optional<AssetMetadata> metadata = assets->GetMetadata(handle);
+			if (!metadata)
+			{
+				return fail(fmt::format("The project's settings name the asset {}, which is not in the project: set them again (project.setSettings) "
+					"before exporting", handle.ToString()));
+			}
+			packOptions.AlwaysInclude.push_back(metadata->Path);
+		}
 		if (options.Prune)
 		{
 			// What AlwaysInclude names is checked now, without planning: the plan that is packed is made once, when imports

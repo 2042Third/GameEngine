@@ -111,6 +111,9 @@ namespace Strata
 		// frames go on while textures compress, the assets arriving as their imports finish. The editor turns it on for
 		// interactive and automation sessions; off by default, so that tests and scripted runs find every asset imported.
 		bool ImportInBackground = false;
+		// The settings sections the project's settings are validated with (project.open, project.settings, project.setSettings,
+		// the export); null: the process's registry (SettingsRegistry::GetProcessRegistry). Tests pass a local one.
+		const SettingsRegistry* Settings = nullptr;
 	};
 
 	// What became of the module of the last finished script build.
@@ -197,6 +200,8 @@ namespace Strata
 		bool HasUnwrittenProjectSettings() const;
 		// The project file's writer, for tests (SettingsFileWriter::SetTestHook); null without a project.
 		SettingsFileWriter* GetProjectFileWriter() const { return m_ProjectFileWriter.get(); }
+		// The settings sections the project's settings are validated with (EditorContextSpecification::Settings).
+		const SettingsRegistry& GetSettingsRegistry() const;
 
 		//////////////////////////////////////////////////////////////////////////
 		// Scene
@@ -792,10 +797,30 @@ namespace Strata
 		private:
 			const EditorContext& m_Context;
 		};
+		// The open project's settings, the engine service IProjectSettings (none set without a project). It lives as long as
+		// the context, like the game's services, so that providers of several contexts end in the reverse order of their start.
+		class OpenProjectSettings final : public IProjectSettings
+		{
+		public:
+			explicit OpenProjectSettings(const EditorContext& context)
+				: m_Context(context)
+			{
+			}
+
+			const nlohmann::json* FindSection(std::string_view id) const override { return GetValues().FindSection(id); }
+			uint64_t GetVersion() const override { return GetValues().GetVersion(); }
+		private:
+			const ProjectSettingsValues& GetValues() const { return m_Context.m_Project ? m_Context.m_Project->GetSettings() : m_None; }
+		private:
+			const EditorContext& m_Context;
+			ProjectSettingsValues m_None;
+		};
 		EditorGameWindow m_GameWindow;
 		ProjectGameSaves m_GameSaves { *this };
+		OpenProjectSettings m_OpenProjectSettings { *this };
 		Scope<EngineServices::ScopedProvider<IGameWindow>> m_GameWindowProvider;
 		Scope<EngineServices::ScopedProvider<IGameSaves>> m_GameSavesProvider;
+		Scope<EngineServices::ScopedProvider<IProjectSettings>> m_ProjectSettingsProvider;
 
 		std::vector<UUID> m_Selection;
 		std::unordered_set<UUID> m_SelectionSet; // The same entities, for IsSelected
