@@ -38,6 +38,8 @@ namespace Strata
 		// Buffer versions are unique in the process (main thread only), so a mirror made again for a scene never repeats one a
 		// renderer's binding sets were made for.
 		uint64_t s_LastBufferVersion = 0;
+		// Write versions (GetWriteVersion) likewise, so a version of one mirror never reads as up to date in a mirror made later.
+		uint64_t s_LastWriteVersion = 0;
 
 	}
 
@@ -49,6 +51,10 @@ namespace Strata
 		: m_Device(device), m_RenderSceneId(renderSceneId)
 	{
 		m_CommandList = m_Device->createCommandList();
+		// The logs start here: a reader of any earlier version copies everything.
+		m_WriteVersion = ++s_LastWriteVersion;
+		m_InstanceWrites.Floor = m_WriteVersion;
+		m_PaletteWrites.Floor = m_WriteVersion;
 	}
 
 	RenderSceneGPU::~RenderSceneGPU() = default;
@@ -187,6 +193,65 @@ namespace Strata
 		buffer.ElementCount = capacity;
 		m_BufferVersion = ++s_LastBufferVersion;
 		return true;
+	}
+
+	void RenderSceneGPU::WriteLog::Record(uint64_t version, uint32_t first, uint32_t count, uint64_t capacity)
+	{
+		Entries.push_back(Entry { version, first, count });
+		Elements += count;
+		// Readers further behind than the oldest entry kept copy everything.
+		while (Entries.size() - Start > 1 && (Elements > capacity || Entries.size() - Start > c_MaxWriteLogEntries))
+		{
+			Elements -= Entries[Start].Count;
+			Floor = Entries[Start].Version;
+			Start++;
+		}
+		if (Start > 0 && Start >= Entries.size() / 2)
+		{
+			Entries.erase(Entries.begin(), Entries.begin() + static_cast<ptrdiff_t>(Start));
+			Start = 0;
+		}
+	}
+
+	bool RenderSceneGPU::WriteLog::Get(uint64_t sinceVersion, uint64_t currentVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const
+	{
+		if (sinceVersion < Floor)
+			return false;
+		if (sinceVersion >= currentVersion)
+			return true;
+		for (size_t index = Entries.size(); index > Start && Entries[index - 1].Version > sinceVersion; index--)
+			outRanges.emplace_back(Entries[index - 1].First, Entries[index - 1].Count);
+		return true;
+	}
+
+	bool RenderSceneGPU::GetInstanceWrites(uint64_t sinceVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const
+	{
+		return m_InstanceWrites.Get(sinceVersion, m_WriteVersion, outRanges);
+	}
+
+	bool RenderSceneGPU::GetPaletteWrites(uint64_t sinceVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const
+	{
+		return m_PaletteWrites.Get(sinceVersion, m_WriteVersion, outRanges);
+	}
+
+	void RenderSceneGPU::RecordWrites()
+	{
+		bool versioned = false;
+		for (const GPUBufferRegion& region : m_Regions)
+		{
+			const bool instances = region.Buffer == m_Instances.Buffer.Get();
+			if (!instances && region.Buffer != m_Palette.Buffer.Get())
+				continue;
+			if (!versioned)
+			{
+				m_WriteVersion = ++s_LastWriteVersion;
+				versioned = true;
+			}
+			const uint64_t elementSize = instances ? sizeof(RenderData::InstanceData) : sizeof(RenderData::AffineTransform);
+			WriteLog& log = instances ? m_InstanceWrites : m_PaletteWrites;
+			log.Record(m_WriteVersion, static_cast<uint32_t>(region.Offset / elementSize), static_cast<uint32_t>(region.Size / elementSize),
+				instances ? m_Instances.ElementCount : m_Palette.ElementCount);
+		}
 	}
 
 	void RenderSceneGPU::MarkRecord(uint32_t proxy)
@@ -726,6 +791,8 @@ namespace Strata
 		gpuTimer.End();
 		m_CommandList->close();
 		m_Device->executeCommandList(m_CommandList);
+		if (uploaded)
+			RecordWrites();
 		m_Regions.clear();
 		if (!uploaded)
 		{

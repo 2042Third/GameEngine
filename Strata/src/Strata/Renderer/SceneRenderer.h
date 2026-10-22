@@ -244,6 +244,14 @@ namespace Strata
 		// The scene whose overlay passes (the game UI) are drawn, when not the rendered scene's: GameRenderer shows a scene
 		// without a camera as its UI over an empty frame. Must stay valid during Render.
 		Scene* OverlayScene = nullptr;
+		// Motion: the renderer keeps its own copy of the render scene's instances and joint palettes as its latest frame drew
+		// them (its motion history: SceneRenderer::GetPreviousInstanceBuffer, GetPreviousPaletteBuffer), made by the first frame
+		// that asks and kept until the render targets are released: the size of the scene's instance and palette buffers
+		// (64 bytes per instance slot, 48 per joint matrix). At the end of each such frame it copies what the scene's GPU copy
+		// wrote since its previous frame (RenderSceneGPU::GetInstanceWrites), so a still scene costs no copy. Its previous frame
+		// is the renderer's latest, whenever that was rendered (renderers of one scene keep their own); a frame after one that
+		// did not ask, or of another render scene than the latest (but a clone of it), has none (SceneRendererStats::MotionHistory).
+		bool MotionVectors = false;
 
 		// The overlays below are drawn over the finished image (after tone mapping and anti-aliasing) with exact display
 		// colors; all of them are off by default.
@@ -368,6 +376,13 @@ namespace Strata
 		uint32_t PendingTextGlyphs = 0;   // Glyphs waiting for rasterization (budgeted per frame), drawn on a later frame
 		uint32_t RasterizedTextGlyphs = 0; // Glyphs added to font atlases this frame (see TextRenderer::c_FrameRasterBudget)
 		SceneOverlayStats Overlays;       // The overlay passes (the game UI); their PendingAssets count in PendingAssets too
+		// Motion (SceneRenderOptions::MotionVectors): whether the frame had the renderer's previous frame to compare with, and
+		// what it copied into the motion history at its end: instances and joint matrices, all of them (MotionFullCopy) without
+		// a history or when the scene's GPU copy wrote more since the previous frame than its write log remembers.
+		bool MotionHistory = false;
+		bool MotionFullCopy = false;
+		uint32_t MotionCopiedInstances = 0;
+		uint32_t MotionCopiedJoints = 0;
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -482,6 +497,11 @@ namespace Strata
 		nvrhi::ITexture* GetBloomTexture() const { return m_BloomTexture; } // Level 0 of the bloom chain (half resolution)
 		// The view's depth pyramid occlusion culling tests against (R32_FLOAT, every level): null without the GPU-driven path.
 		nvrhi::ITexture* GetDepthPyramid() const { return m_DepthPyramid; }
+		// The motion history (SceneRenderOptions::MotionVectors): the render scene's instances (RenderData::InstanceData) and
+		// joint matrices as this renderer's latest frame with motion drew them, indexed like the scene's GPU copy. Null until a
+		// frame asks for motion, and again once the render targets are released.
+		nvrhi::IBuffer* GetPreviousInstanceBuffer() const { return m_PreviousInstances; }
+		nvrhi::IBuffer* GetPreviousPaletteBuffer() const { return m_PreviousPalette; }
 
 		// Entity visible at a pixel of the last rendered frame (invalid when none, when no frame was rendered since the last
 		// resize, or without an entity-ID buffer). Blocks until the GPU is done; meant for tests and tools (editors use
@@ -728,6 +748,14 @@ namespace Strata
 			nvrhi::TextureDimension sourceDimension, nvrhi::ITexture* output, uint32_t outputMip, nvrhi::TextureDimension outputDimension,
 			const RenderData::IBLParameters& parameters, uint32_t layers);
 		bool CreateSceneBindingSets();
+		// The motion history's buffers (SceneRenderOptions::MotionVectors) at the size of the scene's GPU copy's; with
+		// `keepContents` a buffer that grows keeps what it held (copied at the frame's start, RecordMotionGrowth). False (logged)
+		// when they cannot be created.
+		bool EnsureMotionResources(bool keepContents);
+		void RecordMotionGrowth(nvrhi::ICommandList* commandList);
+		// After the frame's draws: copies into the motion history what the scene's GPU copy wrote since the renderer's previous
+		// frame, or all of it with `full`.
+		void RecordMotionCopy(nvrhi::ICommandList* commandList, const RenderScene& renderScene, bool full);
 		void RenderAmbientOcclusion(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
 		// Meters the HDR image (automatic exposure) or writes the manual exposure into the exposure buffer.
 		void UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
@@ -1329,6 +1357,29 @@ namespace Strata
 		uint64_t m_MarksRender = 0;        // The latest frame (RenderCount + 1 while rendering) that ran the CPU's marks
 		uint64_t m_CutRender = 0;          // The latest frame that followed a camera cut
 		std::vector<uint32_t> m_UserScratch;
+
+		// The motion history (SceneRenderOptions::MotionVectors): the frame being rendered has motion; the buffers, and those they
+		// replaced whose contents the frame copies over (RecordMotionGrowth); the render scene and the write version of its GPU
+		// copy they hold, and the frame that copied them last (RenderCount + 1; 0: none, or not since a frame failed).
+		bool m_MotionFrame = false;
+		nvrhi::BufferHandle m_PreviousInstances;
+		nvrhi::BufferHandle m_PreviousPalette;
+		nvrhi::BufferHandle m_GrownPreviousInstances;
+		nvrhi::BufferHandle m_GrownPreviousPalette;
+		uint64_t m_MotionSceneId = 0;
+		uint64_t m_MotionWriteVersion = 0;
+		uint64_t m_MotionRender = 0;
+		nvrhi::BindingLayoutHandle m_MotionCopyLayout;
+		nvrhi::ComputePipelineHandle m_MotionCopyPipeline;
+		nvrhi::BufferHandle m_MotionCopyListBuffer; // The elements a frame copies: the instances', then the joints'
+		std::vector<uint32_t> m_MotionCopyList;
+		std::vector<std::pair<uint32_t, uint32_t>> m_MotionRanges;
+		// Per buffer (instances, palette) the copy's binding set and the buffers it names (source, list, destination).
+		std::array<nvrhi::BindingSetHandle, 2> m_MotionCopySets;
+		std::array<std::array<const nvrhi::IBuffer*, 3>, 2> m_MotionCopyBound = {};
+		// The buffers the scene binding sets name at SRV 20 and 21: the history, or the scene's own without one.
+		const nvrhi::IBuffer* m_BoundPreviousInstances = nullptr;
+		const nvrhi::IBuffer* m_BoundPreviousPalette = nullptr;
 	};
 
 }

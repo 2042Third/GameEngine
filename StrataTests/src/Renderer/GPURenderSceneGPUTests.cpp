@@ -12,6 +12,7 @@
 
 #include <cstring>
 #include <random>
+#include <utility>
 #include <vector>
 
 // The GPU's copy of a render scene (RenderSceneGPU): shared by the scene's renderers, uploaded where it changed, new proxies
@@ -629,6 +630,85 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		CHECK(renderer.GetStats().ProxyBytesUploaded == sizeof(RenderData::GPUProxy));
 		CheckMirror(gpu, RenderScene::Get(*copy), *cloneMirror);
 		CheckMirror(gpu, RenderScene::Get(*source), *sourceMirror);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The GPU copy logs the instances and joints it writes; versions older than its log or than the mirror read as unknown")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadBuiltinAssets(assets);
+		Ref<Scene> scene = CreateRef<Scene>("Logged");
+		AddNeutralPostProcess(*scene);
+		const std::vector<Entity> cubes = AddCubeRow(*scene, 40);
+		const SceneCamera camera = ViewOfRows();
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const auto render = [&](Scene& target) { Frame(gpu, [&]() { REQUIRE(renderer.Render(target, camera)); }); };
+		const auto move = [](Entity cube)
+		{
+			cube.GetComponent<TransformComponent>().Translation.y += 1.0f;
+			cube.MarkModified<TransformComponent>();
+		};
+		render(*scene);
+		RenderScene& renderScene = RenderScene::Get(*scene);
+		RenderSceneGPUCache& cache = Renderer::GetRenderSceneGPUs();
+		const RenderSceneGPU& mirror = cache.Get(renderScene);
+		const uint64_t version = mirror.GetWriteVersion();
+		std::vector<std::pair<uint32_t, uint32_t>> ranges;
+		CHECK(mirror.GetInstanceWrites(version, ranges));
+		CHECK(mirror.GetPaletteWrites(version, ranges));
+		CHECK(ranges.empty());
+		// The first update wrote every instance.
+		REQUIRE(mirror.GetInstanceWrites(version - 1, ranges));
+		REQUIRE(ranges.size() == 1);
+		CHECK(ranges[0] == std::pair<uint32_t, uint32_t>(0u, 40u));
+		ranges.clear();
+
+		// A still frame writes nothing; moved cubes write their instances, logged newest first.
+		render(*scene);
+		CHECK(mirror.GetWriteVersion() == version);
+		move(cubes[3]);
+		render(*scene);
+		move(cubes[30]);
+		render(*scene);
+		CHECK(mirror.GetWriteVersion() > version);
+		REQUIRE(mirror.GetInstanceWrites(version, ranges));
+		REQUIRE(ranges.size() == 2);
+		const auto instanceOf = [&](Entity cube) { return renderScene.GetFirstInstance(renderScene.FindProxy(cube.GetHandle())); };
+		CHECK(ranges[0] == std::pair<uint32_t, uint32_t>(instanceOf(cubes[30]), 1u));
+		CHECK(ranges[1] == std::pair<uint32_t, uint32_t>(instanceOf(cubes[3]), 1u));
+		ranges.clear();
+		CHECK(mirror.GetPaletteWrites(version, ranges));
+		CHECK(ranges.empty());
+
+		// The log remembers at most as many elements as the buffer has room for: writing more forgets the oldest.
+		const uint64_t before = mirror.GetWriteVersion();
+		for (uint64_t written = 0; written <= mirror.GetInstanceCapacity(); written += cubes.size())
+		{
+			for (const Entity cube : cubes)
+				move(cube);
+			render(*scene);
+		}
+		CHECK_FALSE(mirror.GetInstanceWrites(before, ranges));
+		CHECK(ranges.empty());
+		CHECK(mirror.GetInstanceWrites(mirror.GetWriteVersion(), ranges));
+
+		// A clone made by GPU copies keeps the source's log; a mirror made later never knows a version from before it.
+		Ref<Scene> copy = Scene::Copy(scene);
+		render(*copy);
+		const RenderSceneGPU* clone = cache.Find(RenderScene::Get(*copy).GetId());
+		REQUIRE(clone);
+		const uint64_t sourceVersion = mirror.GetWriteVersion();
+		CHECK(clone->GetWriteVersion() == sourceVersion);
+		CHECK(clone->GetInstanceWrites(sourceVersion, ranges));
+		Ref<Scene> other = CreateRef<Scene>("Other");
+		AddCubeRow(*other, 2);
+		render(*other);
+		const RenderSceneGPU* otherMirror = cache.Find(RenderScene::Get(*other).GetId());
+		REQUIRE(otherMirror);
+		CHECK_FALSE(otherMirror->GetInstanceWrites(sourceVersion, ranges));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

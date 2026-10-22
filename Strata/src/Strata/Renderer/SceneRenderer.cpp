@@ -269,6 +269,9 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(15), // Joint matrices (only the skinned vertex shaders read them)
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(16), // The texture table (material data names textures by its indices)
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(17), // The shadow cascades (Scene/CascadeFit.comp)
+			// The motion history's instances and joint matrices (SceneRenderOptions::MotionVectors): the previous frame's.
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(20),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(21),
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -843,6 +846,9 @@ namespace Strata
 		nvrhi::ITexture* environmentCube = GetEnvironmentCube();
 		const bool hasEnvironment = environmentCube != nullptr;
 		nvrhi::ITexture* shadowMap = m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get();
+		// Without a motion history the scene's own buffers stand in (nothing reads them then).
+		nvrhi::IBuffer* previousInstances = m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer();
+		nvrhi::IBuffer* previousPalette = m_PreviousPalette ? m_PreviousPalette.Get() : m_SceneGPU->GetPaletteBuffer();
 
 		// The shadow pass reads the same resources except for its own draw list (and never the shadow map).
 		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap)
@@ -855,6 +861,8 @@ namespace Strata
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(15, m_SceneGPU->GetPaletteBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(16, Renderer::GetTextureTable().GetBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(17, m_CascadeBuffer),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(20, previousInstances),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(21, previousPalette),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
@@ -892,12 +900,197 @@ namespace Strata
 		m_BoundShadowMap = shadowMap;
 		m_BoundSceneGPUVersion = m_SceneGPU->GetBufferVersion();
 		m_BoundTextureTableVersion = Renderer::GetTextureTable().GetBufferVersion();
+		m_BoundPreviousInstances = previousInstances;
+		m_BoundPreviousPalette = previousPalette;
 		if (!m_SceneBindingSet || !m_ShadowBindingSet || !m_ClusterBindingSet || (gpuSets && (!m_GPUSceneBindingSet || !m_GPUShadowBindingSet)))
 		{
 			m_SceneBindingSet = nullptr; // Recreated next frame
 			return false;
 		}
 		return true;
+	}
+
+	bool SceneRenderer::EnsureMotionResources(bool keepContents)
+	{
+		if (!m_MotionCopyPipeline)
+		{
+			nvrhi::BindingLayoutDesc layout;
+			layout.visibility = nvrhi::ShaderType::Compute;
+			layout.bindings = {
+				nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
+				nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
+				nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0),
+				nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::MotionCopyParameters))
+			};
+			m_MotionCopyLayout = m_Device->createBindingLayout(layout);
+			nvrhi::ComputePipelineDesc desc;
+			desc.CS = Renderer::GetShaderLibrary().Get("Scene/MotionCopy.comp");
+			desc.bindingLayouts = { m_MotionCopyLayout };
+			ST_CORE_VERIFY(desc.CS && m_MotionCopyLayout, "SceneRenderer: the motion copy shader is missing");
+			m_MotionCopyPipeline = m_Device->createComputePipeline(desc);
+			ST_CORE_VERIFY(m_MotionCopyPipeline, "SceneRenderer: failed to create the motion copy pipeline");
+		}
+		if (!keepContents)
+		{
+			m_GrownPreviousInstances = nullptr;
+			m_GrownPreviousPalette = nullptr;
+		}
+		const auto ensure = [&](nvrhi::BufferHandle& buffer, nvrhi::BufferHandle& grown, uint64_t capacity, uint32_t elementSize, const char* name)
+		{
+			const uint64_t bytes = std::max<uint64_t>(capacity, 1) * elementSize;
+			if (buffer && buffer->getDesc().byteSize >= bytes)
+				return true;
+			nvrhi::BufferDesc desc;
+			desc.byteSize = bytes;
+			desc.structStride = elementSize;
+			desc.canHaveUAVs = true;
+			desc.debugName = m_Specification.DebugName + "." + name;
+			desc.initialState = nvrhi::ResourceStates::ShaderResource;
+			desc.keepInitialState = true;
+			nvrhi::BufferHandle created = m_Device->createBuffer(desc);
+			if (!created)
+			{
+				m_Errors.Report(fmt::format("failed to allocate the motion history's {} buffer ({} bytes); rendering without motion", name, bytes));
+				return false;
+			}
+			// A history the frame compares with moves over at its start (RecordMotionGrowth); frames in flight may read the old one.
+			if (keepContents && buffer)
+				grown = buffer;
+			else if (buffer)
+				Renderer::ReleaseDeferred({ nvrhi::ResourceHandle(buffer.Get()) });
+			buffer = std::move(created);
+			return true;
+		};
+		return ensure(m_PreviousInstances, m_GrownPreviousInstances, m_SceneGPU->GetInstanceCapacity(), sizeof(RenderData::InstanceData), "PreviousInstances")
+			&& ensure(m_PreviousPalette, m_GrownPreviousPalette, m_SceneGPU->GetPaletteCapacity(), sizeof(RenderData::AffineTransform), "PreviousPalette");
+	}
+
+	void SceneRenderer::RecordMotionGrowth(nvrhi::ICommandList* commandList)
+	{
+		const auto grow = [commandList](nvrhi::BufferHandle& grown, nvrhi::IBuffer* buffer)
+		{
+			if (!grown)
+				return;
+			// The new space holds zeros, no instance's entity (0 is none): what is drawn there first moves with the camera only.
+			// NVRHI places no barrier between transfers into a buffer that stays a copy destination, so the clear ends with a
+			// transition of its own.
+			commandList->clearBufferUInt(buffer, 0);
+			commandList->setBufferState(buffer, nvrhi::ResourceStates::ShaderResource);
+			commandList->commitBarriers();
+			commandList->copyBuffer(buffer, 0, grown, 0, grown->getDesc().byteSize);
+			Renderer::ReleaseDeferred({ nvrhi::ResourceHandle(grown.Get()) });
+			grown = nullptr;
+		};
+		grow(m_GrownPreviousInstances, m_PreviousInstances);
+		grow(m_GrownPreviousPalette, m_PreviousPalette);
+	}
+
+	void SceneRenderer::RecordMotionCopy(nvrhi::ICommandList* commandList, const RenderScene& renderScene, bool full)
+	{
+		// Per buffer: copied whole, or the elements written since the history's version, listed (each once, in order).
+		struct Part
+		{
+			nvrhi::IBuffer* Source = nullptr;
+			nvrhi::IBuffer* Destination = nullptr;
+			uint64_t Capacity = 0;
+			uint32_t ElementSize = 0;
+			bool Full = false;
+			uint32_t ListOffset = 0;
+			uint32_t Count = 0;
+		};
+		std::array<Part, 2> parts;
+		parts[0] = Part { m_SceneGPU->GetInstanceBuffer(), m_PreviousInstances, m_SceneGPU->GetInstanceCapacity(), sizeof(RenderData::InstanceData) };
+		parts[1] = Part { m_SceneGPU->GetPaletteBuffer(), m_PreviousPalette, m_SceneGPU->GetPaletteCapacity(), sizeof(RenderData::AffineTransform) };
+		m_MotionCopyList.clear();
+		for (size_t index = 0; index < parts.size(); index++)
+		{
+			Part& part = parts[index];
+			m_MotionRanges.clear();
+			const bool logged = !full
+				&& (index == 0 ? m_SceneGPU->GetInstanceWrites(m_MotionWriteVersion, m_MotionRanges) : m_SceneGPU->GetPaletteWrites(m_MotionWriteVersion, m_MotionRanges));
+			if (!logged)
+			{
+				part.Full = true;
+				continue;
+			}
+			part.ListOffset = static_cast<uint32_t>(m_MotionCopyList.size());
+			std::sort(m_MotionRanges.begin(), m_MotionRanges.end());
+			uint64_t covered = 0; // Elements before it are listed
+			for (const auto& [first, count] : m_MotionRanges)
+			{
+				const uint64_t end = std::min<uint64_t>(static_cast<uint64_t>(first) + count, part.Capacity);
+				for (uint64_t element = std::max<uint64_t>(first, covered); element < end; element++)
+					m_MotionCopyList.push_back(static_cast<uint32_t>(element));
+				covered = std::max(covered, end);
+			}
+			part.Count = static_cast<uint32_t>(m_MotionCopyList.size() - part.ListOffset);
+			// A list of half the buffer copies no faster than the whole buffer.
+			if (static_cast<uint64_t>(part.Count) * 2 > part.Capacity)
+			{
+				m_MotionCopyList.resize(part.ListOffset);
+				part.Count = 0;
+				part.Full = true;
+			}
+		}
+
+		bool listReady = m_MotionCopyList.empty();
+		if (!listReady)
+		{
+			bool listRecreated = false;
+			listReady = EnsureBufferCapacity(m_MotionCopyListBuffer, m_MotionCopyList.size(), sizeof(uint32_t), "MotionCopyList", listRecreated);
+			if (listReady)
+				commandList->writeBuffer(m_MotionCopyListBuffer, m_MotionCopyList.data(), m_MotionCopyList.size() * sizeof(uint32_t));
+		}
+		for (size_t index = 0; index < parts.size(); index++)
+		{
+			Part& part = parts[index];
+			if (!part.Full && part.Count > 0)
+			{
+				const std::array<const nvrhi::IBuffer*, 3> bound = { part.Source, m_MotionCopyListBuffer.Get(), part.Destination };
+				if (listReady && (!m_MotionCopySets[index] || m_MotionCopyBound[index] != bound))
+				{
+					nvrhi::BindingSetDesc desc;
+					desc.bindings = {
+						nvrhi::BindingSetItem::StructuredBuffer_SRV(0, part.Source),
+						nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_MotionCopyListBuffer),
+						nvrhi::BindingSetItem::StructuredBuffer_UAV(0, part.Destination),
+						nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::MotionCopyParameters))
+					};
+					m_MotionCopySets[index] = m_Device->createBindingSet(desc, m_MotionCopyLayout);
+					m_MotionCopyBound[index] = m_MotionCopySets[index] ? bound : std::array<const nvrhi::IBuffer*, 3> {};
+				}
+				// Without its list or binding set the buffer is copied whole.
+				part.Full = !listReady || !m_MotionCopySets[index];
+			}
+			if (part.Full)
+			{
+				const uint64_t bytes = std::min(part.Source->getDesc().byteSize, part.Destination->getDesc().byteSize);
+				commandList->copyBuffer(part.Destination, 0, part.Source, 0, bytes);
+				part.Count = static_cast<uint32_t>(bytes / part.ElementSize);
+				continue;
+			}
+			if (part.Count == 0)
+				continue;
+			// At most 65535 groups of 64 elements per dispatch.
+			constexpr uint32_t c_GroupSize = 64;
+			constexpr uint32_t c_MaxEntriesPerDispatch = 65535 * c_GroupSize;
+			nvrhi::ComputeState state;
+			state.pipeline = m_MotionCopyPipeline;
+			state.bindings = { m_MotionCopySets[index] };
+			commandList->setComputeState(state);
+			for (uint32_t first = 0; first < part.Count; first += c_MaxEntriesPerDispatch)
+			{
+				const RenderData::MotionCopyParameters parameters = { first, part.Count, part.ElementSize / 4, part.ListOffset };
+				commandList->setPushConstants(&parameters, sizeof(parameters));
+				commandList->dispatch((std::min(part.Count - first, c_MaxEntriesPerDispatch) + c_GroupSize - 1) / c_GroupSize, 1, 1);
+			}
+		}
+		m_Stats.MotionFullCopy = parts[0].Full || parts[1].Full;
+		m_Stats.MotionCopiedInstances = parts[0].Count;
+		m_Stats.MotionCopiedJoints = parts[1].Count;
+		m_MotionSceneId = renderScene.GetId();
+		m_MotionWriteVersion = m_SceneGPU->GetWriteVersion();
+		m_MotionRender = m_RenderCount + 1;
 	}
 
 	PostProcessComponent SceneRenderer::GetPostProcessSettings(Scene& scene)
@@ -1298,6 +1491,16 @@ namespace Strata
 		m_DepthPyramidSets.clear();
 		m_DepthPyramidLevels = 0;
 		release(m_CullBindingSet); // References the depth pyramid
+		// The motion history goes with the targets: the next frame that asks starts without one.
+		release(m_PreviousInstances);
+		release(m_PreviousPalette);
+		release(m_GrownPreviousInstances);
+		release(m_GrownPreviousPalette);
+		release(m_MotionCopyListBuffer);
+		for (nvrhi::BindingSetHandle& set : m_MotionCopySets)
+			release(set);
+		m_MotionCopyBound = {};
+		m_MotionRender = 0;
 		Renderer::ReleaseDeferred(std::move(released));
 	}
 
@@ -1918,6 +2121,24 @@ namespace Strata
 		m_Stats.DeferredInstanceBytes = m_SceneGPU->GetDeferredBytes();
 		m_Stats.DeferredProxies = m_SceneGPU->GetDeferredProxies();
 
+		// Motion: the history holds the renderer's previous frame when that frame copied it (its latest frame asked for motion
+		// too) and drew this render scene or the one it is a clone of (the same slots).
+		m_MotionFrame = options.MotionVectors;
+		const bool motionHistory = m_MotionFrame && m_MotionRender != 0 && m_MotionRender == m_RenderCount
+			&& (m_MotionSceneId == renderScene.GetId() || renderScene.GetCloneSource() == m_MotionSceneId);
+		bool motionFailed = false;
+		if (m_MotionFrame)
+		{
+			// Until this frame copies it, the history holds no frame a later one could compare with (a failed frame leaves it so).
+			m_MotionRender = 0;
+			if (!EnsureMotionResources(motionHistory))
+			{
+				m_MotionFrame = false;
+				motionFailed = true;
+			}
+		}
+		m_Stats.MotionHistory = m_MotionFrame && motionHistory;
+
 		// Scene shaders work camera-relative (Include/Scene.glsl): the view's translation is left out of its matrices.
 		RenderData::FrameConstants frame = {};
 		frame.View = GetRelativeView(camera);
@@ -1967,7 +2188,7 @@ namespace Strata
 		GatherDraws(renderScene, camera, !m_GPUDrivenFrame);
 		GatherShadowDraws(renderScene, camera, frame, !m_GPUDrivenFrame);
 		BuildDrawArguments();
-		bool degraded = false; // Rendered with a reported limitation: keep the error so it is not logged every frame
+		bool degraded = motionFailed; // Rendered with a reported limitation: keep the error so it is not logged every frame
 		// Before the GPU's culling is prepared: the cascades' occlusion culling needs their pyramids, made with the map.
 		if (frame.ShadowParams.w > 0.0f && !EnsureShadowMap())
 		{
@@ -1984,7 +2205,9 @@ namespace Strata
 		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
-			|| m_BoundSceneGPUVersion != m_SceneGPU->GetBufferVersion();
+			|| m_BoundSceneGPUVersion != m_SceneGPU->GetBufferVersion()
+			|| m_BoundPreviousInstances != (m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer())
+			|| m_BoundPreviousPalette != (m_PreviousPalette ? m_PreviousPalette.Get() : m_SceneGPU->GetPaletteBuffer());
 		bool drawListsRecreated = false;
 		bool cullRecreated = false;
 		const bool buffersReady = (!m_GPUDrivenFrame || EnsureCullBuffers(cullRecreated))
@@ -2019,6 +2242,8 @@ namespace Strata
 		// The GPU's time per pass: each stage runs from its first command to the next stage's.
 		const RendererGPUStages& gpuStages = RendererGPUStages::Get();
 		GPUPassTimer gpuTimer(commandList, gpuStages.Setup, &BeginGPURecord());
+		if (m_GrownPreviousInstances || m_GrownPreviousPalette)
+			RecordMotionGrowth(commandList);
 		UpdateEnvironment(scene, preview, frame, commandList);
 		// The texture table's changed entries (textures that streamed levels moved to other bindless slots) before anything
 		// samples them; a table that grew has a new buffer, which the binding sets follow.
@@ -2166,6 +2391,13 @@ namespace Strata
 		commandList->endMarker();
 
 		gpuTimer.Next(gpuStages.Post);
+		// After every pass that reads the history: it now holds this frame for the next.
+		if (m_MotionFrame)
+		{
+			commandList->beginMarker("MotionCopy");
+			RecordMotionCopy(commandList, renderScene, !motionHistory);
+			commandList->endMarker();
+		}
 		commandList->beginMarker("Exposure");
 		UpdateExposure(commandList, postProcess);
 		commandList->endMarker();

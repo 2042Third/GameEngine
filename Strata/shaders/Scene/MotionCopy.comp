@@ -1,0 +1,41 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "Include/Common.glsl"
+
+// A renderer's motion history (SceneRenderer): copies the listed elements of the render scene's instance or palette buffer
+// into the renderer's copy of it, a thread per element.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(0), std430) readonly buffer SourceBuffer
+{
+	uint u_Source[];
+};
+layout(set = 0, binding = ST_SRV(1), std430) readonly buffer ListBuffer
+{
+	uint u_List[];
+};
+layout(set = 0, binding = ST_UAV(0), std430) buffer DestinationBuffer
+{
+	uint u_Destination[];
+};
+
+// RenderData::MotionCopyParameters
+layout(push_constant) uniform MotionCopyParameters
+{
+	uint First;
+	uint Count;
+	uint StrideWords;
+	uint ListOffset;
+} u_Parameters;
+
+void main()
+{
+	uint entry = u_Parameters.First + gl_GlobalInvocationID.x;
+	if (entry >= u_Parameters.Count)
+		return;
+	uint base = u_List[u_Parameters.ListOffset + entry] * u_Parameters.StrideWords;
+	for (uint word = 0u; word < u_Parameters.StrideWords; word++)
+		u_Destination[base + word] = u_Source[base + word];
+}

@@ -89,6 +89,7 @@ strata_add_shaders(Strata_Renderer
 		Scene/CullFeedback.comp
 		Scene/CascadeFit.comp
 		Scene/HZBBuild.comp
+		Scene/MotionCopy.comp
 		Debug/LODSelection.comp
 		IBL/EquirectToCube.comp
 		IBL/ProceduralSky.comp

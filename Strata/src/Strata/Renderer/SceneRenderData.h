@@ -332,6 +332,16 @@ namespace Strata
 		};
 		static_assert(sizeof(BloomParameters) == 16);
 
+		// Scene/MotionCopy.comp: copies the listed elements of a buffer into a renderer's motion history.
+		struct MotionCopyParameters
+		{
+			uint32_t First;       // The dispatch's first list entry
+			uint32_t Count;       // List entries in all
+			uint32_t StrideWords; // 32-bit words per element
+			uint32_t ListOffset;  // The list's first entry in the list buffer
+		};
+		static_assert(sizeof(MotionCopyParameters) == 16);
+
 	}
 
 }

@@ -130,6 +130,23 @@ namespace Strata
 		// The frame (BeginFrame) of the latest update.
 		uint64_t GetLastUsedFrame() const { return m_LastUsedFrame; }
 
+		// Elements the instance buffer and the palette buffer have room for (RenderData::InstanceData, joint matrices).
+		uint64_t GetInstanceCapacity() const { return m_Instances.ElementCount; }
+		uint64_t GetPaletteCapacity() const { return m_Palette.ElementCount; }
+		// What the updates wrote into the instance and palette buffers (changes, new proxies' instances, whole uploads), by write
+		// version: a reader that keeps a copy of a buffer as of a version (a renderer's motion history) copies these ranges
+		// again. Each log remembers at most as many written elements as its buffer has room for, and c_MaxWriteLogEntries
+		// ranges: a reader further behind copies the whole buffer, which costs no more. Write versions are unique in the
+		// process and a mirror's logs start at its creation, so a version taken before a mirror was made (a scene's mirror made
+		// again, a clone filled by uploads) never reads as up to date; a clone made by GPU copies keeps its source's logs, as its
+		// buffers hold what the source's did.
+		uint64_t GetWriteVersion() const { return m_WriteVersion; }
+		// Appends the ranges (first element, count) written after `sinceVersion`, newest first, possibly overlapping. Returns
+		// false, appending nothing, when the log does not reach back that far: then any element may have changed.
+		bool GetInstanceWrites(uint64_t sinceVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const;
+		bool GetPaletteWrites(uint64_t sinceVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const;
+		static constexpr size_t c_MaxWriteLogEntries = 65536;
+
 		// The record of a proxy as the GPU's culling reads it.
 		static RenderData::GPUProxy MakeRecord(const RenderScene& renderScene, uint32_t proxy);
 	private:
@@ -138,6 +155,27 @@ namespace Strata
 			nvrhi::BufferHandle Buffer;
 			uint64_t ElementCount = 0; // What the buffer has room for
 		};
+
+		// The ranges an update wrote into a buffer (GetInstanceWrites, GetPaletteWrites).
+		struct WriteLog
+		{
+			struct Entry
+			{
+				uint64_t Version = 0;
+				uint32_t First = 0;
+				uint32_t Count = 0;
+			};
+			std::vector<Entry> Entries;
+			size_t Start = 0;      // Entries before this are dropped (compacted when they make up half the list)
+			uint64_t Elements = 0; // The elements of the live entries
+			uint64_t Floor = 0;    // Writes up to this version may be missing
+
+			// Logs a write, dropping the oldest entries beyond `capacity` elements or c_MaxWriteLogEntries entries.
+			void Record(uint64_t version, uint32_t first, uint32_t count, uint64_t capacity);
+			bool Get(uint64_t sinceVersion, uint64_t currentVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const;
+		};
+		// Logs the instance and palette regions of an update that was recorded (m_Regions), under a new write version.
+		void RecordWrites();
 
 		// Grows the buffer to `elementCount` elements by a GPU copy (new space cleared to zeros where `clear`). False when it
 		// cannot be created (logged).
@@ -165,6 +203,9 @@ namespace Strata
 		GrowingBuffer m_Proxies;
 		GrowingBuffer m_Palette;
 		uint64_t m_BufferVersion = 0;
+		uint64_t m_WriteVersion = 0;
+		WriteLog m_InstanceWrites;
+		WriteLog m_PaletteWrites;
 		bool m_Initialized = false; // The first update reads everything
 
 		// The versions of the render scene the buffers hold.
