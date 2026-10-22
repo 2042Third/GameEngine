@@ -466,7 +466,8 @@ callbacks), `ScriptHostAPI` (the host function table), `ScriptValue` (ABI value 
 (class, field and fault descriptions) and `ScriptWatchdog`. See [Scripting](#scripting).
 
 **Project** (`Project/`). `Project` is a game project: the `.stproj` file (with the export settings,
-`Export.AlwaysInclude` and `Export.LoadingScene`), the asset directory, the script sources and the intermediate
+`Export.AlwaysInclude` and `Export.LoadingScene`, and the settings sections the project sets, which it keeps whether or
+not this build's modules know them: DeveloperGuide.md, "Project settings"), the asset directory, the script sources and the intermediate
 directory `.strata/` (`Cache/`, `Scripts/Build/`, `Scripts/Bin/`), plus the process-wide active project. `GameManifest`
 is the `.stgame` file of an exported game (name, asset pack and patch packs, start scene, loading scene, script module,
 window settings).

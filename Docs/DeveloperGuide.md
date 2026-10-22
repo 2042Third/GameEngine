@@ -856,6 +856,16 @@ setting is one registration, and no other code learns of it.
   whose value its section refuses (both written back unchanged), and provides only validated ones.
 - **References.** A simple section's Asset fields name their handle, a complex section's `References` what its value
   names; `ProjectSettingsValues::GetReferences` lists every validated section's, each valid handle once.
+- **The project file.** `.stproj` version 3 stores the sections a project sets as
+  `"Settings": { "<Id>": { "Version": n, "Value": ... } }` (`Project::GetSettings`); a section is stored once set, and
+  resetting it removes it. The version went up with them because 0.5.0 rewrites the whole file from what it knows when it
+  saves: it refuses a version-3 file instead of dropping its sections. Versions 1 and 2 still load (without settings) and
+  are saved as version 3. `Project::Load` validates the sections with the registry it is given (null: the process's): one
+  its section refuses keeps its stored value, its default applies, it is logged as a warning and listed by
+  `GetSettingsProblems`; a stored form of the wrong shape refuses the file. What this version does not know is written
+  back as it was read: sections no registered module claims and members of `"Project"` a later version added. A project
+  file holds at most 1 MiB (`Project::c_MaxFileBytes`): `Load` refuses a larger one without reading it whole, and `Save`
+  refuses to write one.
 
 ## Asset pipeline
 

@@ -4,10 +4,13 @@
 #include "Strata/Core/DynamicLibrary.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/Log.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Core/StringUtils.h"
 #include "Strata/Reflection/PropertyJson.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 
 namespace Strata
@@ -15,6 +18,9 @@ namespace Strata
 
 	namespace
 	{
+
+		// The members of "Project" this version reads; Load keeps the others for Save.
+		constexpr std::array<std::string_view, 5> c_KnownProjectMembers = { "Name", "AssetDirectory", "StartScene", "Scripts", "Export" };
 
 		Ref<Project>& GetActiveProjectStorage()
 		{
@@ -89,6 +95,32 @@ namespace Strata
 
 	}
 
+	Project::Project()
+		: m_UnknownMembers(CreateScope<nlohmann::json>(nlohmann::json::object()))
+	{
+	}
+
+	Project::~Project() = default;
+
+	Project::Project(const Project& other)
+		: m_ProjectFile(other.m_ProjectFile), m_Config(other.m_Config), m_Settings(other.m_Settings), m_SettingsProblems(other.m_SettingsProblems),
+		  m_UnknownMembers(CreateScope<nlohmann::json>(*other.m_UnknownMembers))
+	{
+	}
+
+	Project& Project::operator=(const Project& other)
+	{
+		if (this != &other)
+		{
+			m_ProjectFile = other.m_ProjectFile;
+			m_Config = other.m_Config;
+			m_Settings = other.m_Settings;
+			m_SettingsProblems = other.m_SettingsProblems;
+			*m_UnknownMembers = *other.m_UnknownMembers;
+		}
+		return *this;
+	}
+
 	bool Project::IsValidName(std::string_view name)
 	{
 		if (name.empty() || name.size() > 128 || name.front() == ' ' || name.back() == ' ' || name.back() == '.' || IsReservedFileName(name)
@@ -144,7 +176,7 @@ namespace Strata
 		return project;
 	}
 
-	Ref<Project> Project::Load(const std::filesystem::path& projectFile, std::string* outError)
+	Ref<Project> Project::Load(const std::filesystem::path& projectFile, std::string* outError, const SettingsRegistry* registry)
 	{
 		auto fail = [outError, &projectFile](const std::string& message) -> Ref<Project>
 		{
@@ -153,12 +185,15 @@ namespace Strata
 			return nullptr;
 		};
 
-		std::optional<std::string> text = FileSystem::ReadText(projectFile);
-		if (!text)
+		const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytesPrefix(projectFile, c_MaxFileBytes + 1);
+		if (!bytes)
 			return fail("cannot read the project file");
+		if (bytes->size() > c_MaxFileBytes)
+			return fail(fmt::format("the project file is larger than the {} MiB a project file may take", c_MaxFileBytes / (1024 * 1024)));
+		const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
 
 		std::string parseError;
-		std::optional<nlohmann::json> document = JsonUtils::Parse(*text, &parseError);
+		std::optional<nlohmann::json> document = JsonUtils::Parse(text, &parseError);
 		if (!document || !document->is_object())
 			return fail(fmt::format("invalid JSON ({})", parseError));
 
@@ -229,6 +264,27 @@ namespace Strata
 				projectConfig.Export.LoadingScene = *handle;
 			}
 		}
+		for (const auto& [name, member] : config->items())
+		{
+			if (std::find(c_KnownProjectMembers.begin(), c_KnownProjectMembers.end(), name) == c_KnownProjectMembers.end())
+				(*project->m_UnknownMembers)[name] = member;
+		}
+
+		// Versions 1 and 2 have no settings.
+		if (const nlohmann::json* settings = JsonUtils::Find(*document, "Settings"))
+		{
+			std::string settingsError;
+			std::optional<ProjectSettingsValues> values = ProjectSettingsValues::FromJson(*settings, &settingsError);
+			if (!values)
+				return fail(settingsError);
+			project->m_Settings = std::move(*values);
+		}
+		project->m_SettingsProblems = project->m_Settings.Validate(registry ? *registry : SettingsRegistry::GetProcessRegistry());
+		for (const SettingsProblem& problem : project->m_SettingsProblems)
+		{
+			ST_CORE_WARN("{}: the project's settings section '{}' is invalid, so its default applies (the stored value is kept): {}",
+				FileSystem::ToUTF8(projectFile), problem.Section, problem.Message);
+		}
 		return project;
 	}
 
@@ -298,9 +354,26 @@ namespace Strata
 				exportSettings["LoadingScene"] = UUIDToJson(m_Config.Export.LoadingScene);
 			config["Export"] = std::move(exportSettings);
 		}
+		for (const auto& [name, member] : m_UnknownMembers->items())
+		{
+			if (!config.contains(name))
+				config[name] = member;
+		}
 		document["Project"] = std::move(config);
+		if (!m_Settings.IsEmpty())
+			document["Settings"] = m_Settings.ToJson();
 
-		if (!FileSystem::WriteText(m_ProjectFile, JsonUtils::Dump(document, 1, '\t') + "\n"))
+		const std::string text = JsonUtils::Dump(document, 1, '\t') + "\n";
+		if (text.size() > c_MaxFileBytes)
+		{
+			if (outError)
+			{
+				*outError = fmt::format("The project file would take {} bytes, more than the {} MiB a project file may take", text.size(),
+					c_MaxFileBytes / (1024 * 1024));
+			}
+			return false;
+		}
+		if (!FileSystem::WriteText(m_ProjectFile, text))
 		{
 			if (outError)
 				*outError = fmt::format("Could not write '{}'", FileSystem::ToUTF8(m_ProjectFile));

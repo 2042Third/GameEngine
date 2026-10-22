@@ -2,6 +2,9 @@
 
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
+#include "Strata/Core/ProjectSettings.h"
+
+#include <nlohmann/json_fwd.hpp>
 
 #include <cstddef>
 #include <filesystem>
@@ -47,21 +50,29 @@ namespace Strata
 	// A game project: a directory holding the project file ("<Name>.stproj"), the asset directory, the script sources
 	// and the intermediate directory ".strata/" (import cache, script build output; never committed).
 	//
-	// Project file: { "Strata": { "Format": "Project", "Version": 2 }, "Project": { "Name": ..., "AssetDirectory": ...,
+	// Project file: { "Strata": { "Format": "Project", "Version": 3 }, "Project": { "Name": ..., "AssetDirectory": ...,
 	// "StartScene": "<handle>", "Scripts": { "SourceDirectory": "Scripts", "ModuleName": ... },
-	// "Export": { "AlwaysInclude": [...], "LoadingScene": "<handle>" } } }
-	// Version 1 files (without "Scripts") load with the default script settings; "Export" is optional (written when it says
-	// something).
+	// "Export": { "AlwaysInclude": [...], "LoadingScene": "<handle>" } },
+	// "Settings": { "<Section id>": { "Version": n, "Value": ... } } }
+	// Version 1 files (without "Scripts") load with the default script settings, version 1 and 2 files without settings;
+	// "Export" is optional (written when it says something), and so is "Settings" (written while a section is set). Version 3
+	// came with the settings: 0.5.0 rewrote the file from what it knew, so it refuses version 3 rather than drop them. What
+	// this version does not know is kept: sections no registered module claims, sections whose value their module refuses,
+	// and members of "Project" a later version added are written back as they were read.
 	class Project
 	{
 	public:
 		static constexpr std::string_view c_FileExtension = ".stproj";
-		static constexpr uint32_t c_FormatVersion = 2;
+		static constexpr uint32_t c_FormatVersion = 3;
+		// Larger project files are refused, by Load and by Save.
+		static constexpr size_t c_MaxFileBytes = 1024 * 1024;
 
 		// Creates the directory layout, a .gitignore for the intermediate directory, and the project file inside
 		// directory (which may exist but must not contain a project file yet).
 		static Ref<Project> Create(const std::filesystem::path& directory, const std::string& name, std::string* outError = nullptr);
-		static Ref<Project> Load(const std::filesystem::path& projectFile, std::string* outError = nullptr);
+		// Validates the project's settings sections with `registry` (null: the process's registry): a section that fails keeps
+		// its stored value, its default applies, and it is logged as a warning and listed by GetSettingsProblems.
+		static Ref<Project> Load(const std::filesystem::path& projectFile, std::string* outError = nullptr, const SettingsRegistry* registry = nullptr);
 		// Finds the project file in a directory (exactly one ".stproj" file).
 		static std::filesystem::path FindProjectFile(const std::filesystem::path& directory, std::string* outError = nullptr);
 		// Whether Create accepts a name: it becomes the project file's name, so it is a valid file name on every platform
@@ -73,6 +84,12 @@ namespace Strata
 
 		ProjectConfig& GetConfig() { return m_Config; }
 		const ProjectConfig& GetConfig() const { return m_Config; }
+
+		// The project's settings sections (Docs/DeveloperGuide.md, "Project settings").
+		ProjectSettingsValues& GetSettings() { return m_Settings; }
+		const ProjectSettingsValues& GetSettings() const { return m_Settings; }
+		// The stored sections Load's validation refused.
+		const std::vector<SettingsProblem>& GetSettingsProblems() const { return m_SettingsProblems; }
 
 		const std::filesystem::path& GetProjectFile() const { return m_ProjectFile; }
 		std::filesystem::path GetProjectDirectory() const { return m_ProjectFile.parent_path(); }
@@ -97,11 +114,17 @@ namespace Strata
 		// The project the editor or runtime is working on (null when none is open).
 		static void SetActive(const Ref<Project>& project);
 		static const Ref<Project>& GetActive();
+		~Project();
+		Project(const Project& other);
+		Project& operator=(const Project& other);
 	private:
-		Project() = default;
+		Project();
 	private:
 		std::filesystem::path m_ProjectFile; // Absolute
 		ProjectConfig m_Config;
+		ProjectSettingsValues m_Settings;
+		std::vector<SettingsProblem> m_SettingsProblems;
+		Scope<nlohmann::json> m_UnknownMembers; // Members of "Project" this version does not know: an object
 	};
 
 }
