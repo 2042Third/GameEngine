@@ -1231,6 +1231,7 @@ namespace Strata
 		nvrhi::BindingSetHandle m_DebugLineBindingSet;
 		nvrhi::InputLayoutHandle m_DebugLineInputLayout;
 		std::array<nvrhi::GraphicsPipelineHandle, 2> m_DebugLinePipelines; // Indexed by DebugDrawDepth
+		nvrhi::GraphicsPipelineHandle m_JitteredDebugLinePipeline; // Tested against a jittered depth (SetJitteredDepthBias)
 		nvrhi::BufferHandle m_DebugLineBuffer;
 		nvrhi::FramebufferHandle m_OverlayFramebuffer; // Output texture with the scene depth (read-only)
 		nvrhi::BindingSetHandle m_CopyBindingSet;      // Output texture, copied into external targets

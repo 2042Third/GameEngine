@@ -2976,7 +2976,8 @@ namespace Strata
 	void SceneRenderer::DrawDebugLines(nvrhi::ICommandList* commandList, DebugDrawDepth depth, uint32_t firstVertex, uint32_t vertexCount)
 	{
 		nvrhi::GraphicsState state;
-		state.pipeline = m_DebugLinePipelines[static_cast<size_t>(depth)];
+		// Tested against a jittered depth (temporal anti-aliasing): with its bias.
+		state.pipeline = depth == DebugDrawDepth::Tested && m_TemporalFrame ? m_JitteredDebugLinePipeline.Get() : m_DebugLinePipelines[static_cast<size_t>(depth)].Get();
 		state.framebuffer = m_OverlayFramebuffer;
 		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y)));
 		state.bindings = { m_DebugLineBindingSet };
@@ -2994,6 +2995,7 @@ namespace Strata
 		frame.ViewProjection = camera.Projection * GetRelativeView(camera);
 		frame.CameraPosition = camera.Position;
 		frame.HasCamera = frame.OverlayScene == &scene;
+		frame.JitteredDepth = m_TemporalFrame;
 		frame.ViewportSize = m_ViewportSize;
 		frame.ScreenView = options.ScreenView;
 		frame.DrawScreenSpace = options.DrawScreenSpaceText;
@@ -3058,8 +3060,10 @@ namespace Strata
 			m_DebugLinePipelines[static_cast<size_t>(DebugDrawDepth::OnTop)] = m_Device->createGraphicsPipeline(desc, info);
 			desc.renderState.depthStencilState.setDepthTestEnable(true);
 			m_DebugLinePipelines[static_cast<size_t>(DebugDrawDepth::Tested)] = m_Device->createGraphicsPipeline(desc, info);
-			ST_CORE_VERIFY(m_GridPipeline && m_OutlinePipeline && m_StatusTintPipeline && m_DebugLinePipelines[0] && m_DebugLinePipelines[1],
-				"SceneRenderer: failed to create the overlay pipelines");
+			SetJitteredDepthBias(desc.renderState.rasterState);
+			m_JitteredDebugLinePipeline = m_Device->createGraphicsPipeline(desc, info);
+			ST_CORE_VERIFY(m_GridPipeline && m_OutlinePipeline && m_StatusTintPipeline && m_DebugLinePipelines[0] && m_DebugLinePipelines[1]
+				&& m_JitteredDebugLinePipeline, "SceneRenderer: failed to create the overlay pipelines");
 		}
 		const nvrhi::Viewport viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y));
 
@@ -3125,7 +3129,7 @@ namespace Strata
 		if (testedVertices > 0)
 			DrawDebugLines(commandList, DebugDrawDepth::Tested, 0, testedVertices);
 		if (drawText)
-			m_TextRenderer->Draw(commandList, m_OverlayFramebuffer, false);
+			m_TextRenderer->Draw(commandList, m_OverlayFramebuffer, false, m_TemporalFrame);
 		// The game UI placed in the scene, with the world-space text.
 		if (drawOverlayPasses)
 		{
@@ -3197,7 +3201,7 @@ namespace Strata
 		if (onTopVertices > 0)
 			DrawDebugLines(commandList, DebugDrawDepth::OnTop, testedVertices, onTopVertices);
 		if (drawText)
-			m_TextRenderer->Draw(commandList, m_OverlayFramebuffer, true); // The HUD goes over everything
+			m_TextRenderer->Draw(commandList, m_OverlayFramebuffer, true, false); // The HUD goes over everything
 		// The game UI over the HUD text.
 		if (drawOverlayPasses)
 		{

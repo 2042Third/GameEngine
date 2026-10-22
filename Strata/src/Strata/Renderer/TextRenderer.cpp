@@ -7,6 +7,7 @@
 #include "Strata/Renderer/FontAtlasCache.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/RendererComponents.h"
+#include "Strata/Renderer/SceneOverlay.h"
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
@@ -235,12 +236,16 @@ namespace Strata
 		return true;
 	}
 
-	nvrhi::IGraphicsPipeline* TextRenderer::GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo, bool screenSpace)
+	nvrhi::IGraphicsPipeline* TextRenderer::GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo, bool screenSpace, bool jitteredDepth)
 	{
+		const auto choose = [screenSpace, jitteredDepth](const Pipelines& pipelines)
+		{
+			return screenSpace ? pipelines.Screen.Get() : (jitteredDepth ? pipelines.JitteredWorld.Get() : pipelines.World.Get());
+		};
 		for (const auto& [info, pipelines] : m_Pipelines)
 		{
 			if (info == framebufferInfo)
-				return screenSpace ? pipelines.second : pipelines.first;
+				return choose(pipelines);
 		}
 
 		nvrhi::BlendState::RenderTarget blend;
@@ -259,15 +264,19 @@ namespace Strata
 		desc.renderState.blendState.setRenderTarget(0, blend);
 		// World-space text is hidden behind scene geometry (reversed-Z) without changing the depth.
 		desc.renderState.depthStencilState.setDepthTestEnable(true).setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
-		nvrhi::GraphicsPipelineHandle world = m_Device->createGraphicsPipeline(desc, framebufferInfo);
+		Pipelines pipelines;
+		pipelines.World = m_Device->createGraphicsPipeline(desc, framebufferInfo);
+		nvrhi::GraphicsPipelineDesc jittered = desc;
+		SetJitteredDepthBias(jittered.renderState.rasterState);
+		pipelines.JitteredWorld = m_Device->createGraphicsPipeline(jittered, framebufferInfo);
 		desc.renderState.depthStencilState.setDepthTestEnable(false);
-		nvrhi::GraphicsPipelineHandle screen = m_Device->createGraphicsPipeline(desc, framebufferInfo);
-		ST_CORE_VERIFY(world && screen, "TextRenderer: failed to create the text pipelines");
-		m_Pipelines.emplace_back(framebufferInfo, std::pair { world, screen });
-		return screenSpace ? screen.Get() : world.Get();
+		pipelines.Screen = m_Device->createGraphicsPipeline(desc, framebufferInfo);
+		ST_CORE_VERIFY(pipelines.World && pipelines.JitteredWorld && pipelines.Screen, "TextRenderer: failed to create the text pipelines");
+		m_Pipelines.emplace_back(framebufferInfo, pipelines);
+		return choose(pipelines);
 	}
 
-	void TextRenderer::Draw(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer, bool screenSpace)
+	void TextRenderer::Draw(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer, bool screenSpace, bool jitteredDepth)
 	{
 		const std::vector<DrawRange>& ranges = screenSpace ? m_ScreenRanges : m_WorldRanges;
 		if (ranges.empty())
@@ -275,7 +284,7 @@ namespace Strata
 
 		const RenderData::TextParameters parameters = { m_ViewportSize, screenSpace ? 1u : 0u, 0u };
 		nvrhi::GraphicsState state;
-		state.pipeline = GetPipeline(framebuffer->getFramebufferInfo(), screenSpace);
+		state.pipeline = GetPipeline(framebuffer->getFramebufferInfo(), screenSpace, jitteredDepth);
 		state.framebuffer = framebuffer;
 		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(m_ViewportSize.x, m_ViewportSize.y));
 		state.vertexBuffers = { nvrhi::VertexBufferBinding { m_VertexBuffer, 0, 0 } };

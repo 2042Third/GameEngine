@@ -24,7 +24,8 @@ layout(location = 0) out vec4 o_Color;
 
 // Depth bias toward the camera, in depth slopes per pixel: a surface in the grid's plane (a floor at y = 0) is rasterized
 // with vertex positions snapped to the subpixel grid, so its depth differs from the exact plane by up to about a pixel's
-// worth of slope, most at grazing angles. Geometry further than that above the plane still hides the grid.
+// worth of slope, most at grazing angles. Geometry further than that above the plane still hides the grid. With temporal
+// anti-aliasing the scene's depth was drawn with the frame's jitter (JitterParams; the grid is not): its step is added.
 const float c_DepthSlopeBias = 2.0;
 
 // Coverage (0-1) of one pixel wide lines at whole grid coordinates.
@@ -81,5 +82,6 @@ void main()
 	if (color.a <= 0.0)
 		discard;
 	o_Color = color;
-	gl_FragDepth = min(depth + depthSlope * c_DepthSlopeBias, 1.0); // Reversed-Z: larger is nearer
+	vec2 jitterPixels = abs(u_Frame.JitterParams.xy) * u_Frame.ViewportSize.xy * 0.5;
+	gl_FragDepth = min(depth + depthSlope * (c_DepthSlopeBias + max(jitterPixels.x, jitterPixels.y)), 1.0); // Reversed-Z: larger is nearer
 }

@@ -168,6 +168,7 @@ namespace Strata
 	{
 		m_Runs.clear();
 		m_GPUTimer = frame.GPUTimer;
+		m_JitteredDepth = frame.JitteredDepth;
 		// Binding sets no draw of the previous frame used are let go, whether or not it drew (atlases grow and change, and a
 		// frame that draws no UI uses none): they hold the atlases' textures and the buffers.
 		for (auto it = m_BindingSets.begin(); it != m_BindingSets.end();)
@@ -685,9 +686,10 @@ namespace Strata
 		}
 	}
 
-	nvrhi::IGraphicsPipeline* GameUIRenderer::GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo, bool world)
+	nvrhi::IGraphicsPipeline* GameUIRenderer::GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo, bool world, bool jitteredDepth)
 	{
-		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>>& pipelines = world ? m_WorldPipelines : m_Pipelines;
+		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>>& pipelines = !world ? m_Pipelines
+			: (jitteredDepth ? m_JitteredWorldPipelines : m_WorldPipelines);
 		for (const auto& [info, pipeline] : pipelines)
 		{
 			if (info == framebufferInfo)
@@ -709,6 +711,8 @@ namespace Strata
 		desc.renderState.blendState.setRenderTarget(0, blend);
 		// A canvas in the scene hides behind what is in front of it (reversed-Z), like world text; it never writes depth.
 		desc.renderState.depthStencilState.setDepthTestEnable(world).setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
+		if (world && jitteredDepth)
+			SetJitteredDepthBias(desc.renderState.rasterState);
 		nvrhi::GraphicsPipelineHandle pipeline = m_Device->createGraphicsPipeline(desc, framebufferInfo);
 		ST_CORE_VERIFY(pipeline, "GameUIRenderer: failed to create the UI pipeline");
 		pipelines.emplace_back(framebufferInfo, pipeline);
@@ -764,7 +768,7 @@ namespace Strata
 		if (m_GPUTimer)
 			m_GPUTimer->Next(GetUIGPUStage());
 		nvrhi::GraphicsState state;
-		state.pipeline = GetPipeline(framebuffer->getFramebufferInfo(), world);
+		state.pipeline = GetPipeline(framebuffer->getFramebufferInfo(), world, world && m_JitteredDepth);
 		state.framebuffer = framebuffer;
 		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(m_ViewportSize.x, m_ViewportSize.y));
 		for (const DrawRun& run : m_Runs)

@@ -4,7 +4,9 @@
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/SceneGizmos.h"
 
+#include <algorithm>
 #include <cstring>
+#include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -163,6 +165,122 @@ TEST_SUITE("GPU.SceneRenderer.Overlays")
 			}
 			CHECK(gridPixels > 100);
 			CHECK(mismatches == 0);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("With TAA the grid on a floor and text on a wall cover the same pixels in every jitter phase")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::QuadMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		Scene scene;
+		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.AntiAliasing = true;
+		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
+		// A black floor (what the grid draws over it is its color times its coverage); a blue box and a blue wall hide some grid
+		// lines.
+		const AssetHandle black = assets.AddMaterial(UnlitColor({ 0.0f, 0.0f, 0.0f, 1.0f }));
+		AddMesh(scene, BuiltinAssets::PlaneMesh, black, glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(40.0f);
+		AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(UnlitColor({ 0.0f, 0.0f, 1.0f, 1.0f })), glm::vec3(0.6f, 0.5f, 0.3f), "Box");
+		// A wall seen at a grazing angle (a steep depth slope) and text 2 mm in front of it.
+		const glm::quat wallRotation = glm::angleAxis(glm::radians(70.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		Entity wall = AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(UnlitColor({ 0.0f, 0.0f, 0.25f, 1.0f })), glm::vec3(-1.5f, 1.5f, -1.0f), "Wall");
+		wall.GetComponent<TransformComponent>().Rotation = wallRotation;
+		wall.GetComponent<TransformComponent>().Scale = glm::vec3(3.0f);
+		Entity sign = scene.CreateEntity("Sign");
+		TextComponent& text = sign.AddComponent<TextComponent>();
+		text.Text = "WALL";
+		text.FontSize = 0.6f;
+		text.ScreenSpace = false;
+		text.Color = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
+		sign.GetComponent<TransformComponent>().Translation = glm::vec3(-1.5f, 1.5f, -1.0f) + wallRotation * glm::vec3(0.0f, 0.0f, 0.002f);
+		sign.GetComponent<TransformComponent>().Rotation = wallRotation;
+		const SceneCamera camera = LookAt(glm::vec3(0.4f, 2.5f, 4.0f), glm::vec3(-0.3f, 0.6f, 0.0f));
+
+		SceneRenderOptions options;
+		options.ShowGrid = true;
+		options.GridMinorColor = glm::vec4(1.0f, 0.0f, 1.0f, 1.0f);
+		options.GridMajorColor = options.GridMinorColor;
+		options.GridAxisXColor = options.GridMinorColor;
+		options.GridAxisZColor = options.GridMinorColor;
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		// The text's glyphs are rasterized over the first frames.
+		for (uint32_t frame = 0; frame < 120; frame++)
+		{
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			if (renderer.GetStats().PendingTextGlyphs == 0 && renderer.GetStats().PendingAssets == 0)
+				break;
+		}
+		REQUIRE(renderer.GetStats().PendingTextGlyphs == 0);
+
+		// Per phase: the grid's pixels (red), the text's (green) and the box's and the wall's (blue, no grid over them).
+		struct Coverage
+		{
+			std::vector<bool> Grid;
+			std::vector<bool> Text;
+			std::vector<bool> Box;
+		};
+		std::vector<Coverage> phases;
+		for (uint32_t phase = 0; phase < SceneRenderer::c_TemporalJitterPhases; phase++)
+		{
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			REQUIRE(renderer.GetStats().TemporalAntiAliasing);
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), image));
+			Coverage coverage;
+			for (uint32_t y = 0; y < c_Size; y++)
+			{
+				for (uint32_t x = 0; x < c_Size; x++)
+				{
+					const glm::u8vec4 color = GetPixelRGBA8(image, x, y);
+					coverage.Grid.push_back(color.r > 0);
+					coverage.Text.push_back(color.g > 0);
+					coverage.Box.push_back(color.b > 0 && color.r == 0);
+				}
+			}
+			phases.push_back(std::move(coverage));
+		}
+
+		const Coverage& first = phases[0];
+		CHECK(std::count(first.Grid.begin(), first.Grid.end(), true) > 200);
+		CHECK(std::count(first.Text.begin(), first.Text.end(), true) > 30);
+		// Whether a pixel is within one pixel of the box in either of two phases.
+		const auto nearBox = [](const Coverage& a, const Coverage& b, uint32_t x, uint32_t y)
+		{
+			for (uint32_t ny = y > 0 ? y - 1 : 0; ny <= std::min(y + 1, c_Size - 1); ny++)
+			{
+				for (uint32_t nx = x > 0 ? x - 1 : 0; nx <= std::min(x + 1, c_Size - 1); nx++)
+				{
+					if (a.Box[ny * c_Size + nx] || b.Box[ny * c_Size + nx])
+						return true;
+				}
+			}
+			return false;
+		};
+		for (size_t phase = 1; phase < phases.size(); phase++)
+		{
+			CAPTURE(phase);
+			// The text, steady; the grid too, but where the box's or the wall's silhouette hides it: that edge follows the jittered
+			// depth.
+			uint32_t textMoved = 0;
+			for (size_t pixel = 0; pixel < first.Text.size(); pixel++)
+				textMoved += phases[phase].Text[pixel] != first.Text[pixel] ? 1u : 0u;
+			CHECK(textMoved == 0);
+			uint32_t moved = 0;
+			for (uint32_t y = 0; y < c_Size; y++)
+			{
+				for (uint32_t x = 0; x < c_Size; x++)
+				{
+					if (phases[phase].Grid[y * c_Size + x] != first.Grid[y * c_Size + x] && !nearBox(phases[phase], first, x, y))
+						moved++;
+				}
+			}
+			CHECK(moved == 0);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

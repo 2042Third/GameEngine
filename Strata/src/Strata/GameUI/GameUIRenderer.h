@@ -102,7 +102,8 @@ namespace Strata
 		bool EnsureBuffer(nvrhi::BufferHandle& buffer, uint64_t bytes, uint32_t stride, const char* name);
 		// Lets go of the binding sets and the buffers (a scene without canvases).
 		void ReleaseResources();
-		nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo, bool world);
+		// `jitteredDepth`: SceneOverlayFrame::JitteredDepth, the world's depth test is biased (SetJitteredDepthBias).
+		nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo, bool world, bool jitteredDepth);
 		nvrhi::IBindingSet* GetBindingSet(const std::array<nvrhi::ITexture*, RenderData::c_MaxBoundAtlases>& atlases);
 	private:
 		std::string m_DebugName;
@@ -116,6 +117,8 @@ namespace Strata
 		bool m_EmptyAtlasWritten = false;
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_Pipelines;
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_WorldPipelines; // Depth-tested
+		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_JitteredWorldPipelines; // With SetJitteredDepthBias
+		bool m_JitteredDepth = false; // The frame's SceneOverlayFrame::JitteredDepth
 		std::map<std::array<nvrhi::ITexture*, RenderData::c_MaxBoundAtlases>, std::pair<nvrhi::BindingSetHandle, bool>> m_BindingSets; // With "used this frame"
 
 		nvrhi::BufferHandle m_QuadBuffer;

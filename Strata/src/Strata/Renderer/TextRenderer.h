@@ -60,8 +60,9 @@ namespace Strata
 		bool Prepare(Scene& scene, const glm::uvec2& viewportSize, bool drawScreenSpace, const glm::vec3& cameraPosition, nvrhi::ICommandList* commandList,
 			TextRenderStats& outStats, const SceneScreenView& screenView = {});
 		// Draws the prepared world-space or screen-space text into a framebuffer whose depth attachment holds the scene
-		// depth (world-space text is hidden behind it).
-		void Draw(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer, bool screenSpace);
+		// depth (world-space text is hidden behind it; `jitteredDepth`: that depth has temporal anti-aliasing's jitter, and
+		// the test is biased, SetJitteredDepthBias).
+		void Draw(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer, bool screenSpace, bool jitteredDepth);
 	private:
 		struct TextVertex
 		{
@@ -89,7 +90,7 @@ namespace Strata
 
 		AtlasBinding& GetBinding(FontAtlas& atlas);
 		void AppendQuads(AtlasBinding& binding, const glm::mat4& transform, const glm::vec4& color, bool screenSpace);
-		nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo, bool screenSpace);
+		nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo, bool screenSpace, bool jitteredDepth);
 	private:
 		std::string m_DebugName;
 		ErrorThrottle m_Errors; // Failures repeat every frame: logged once until text renders again
@@ -101,7 +102,14 @@ namespace Strata
 		nvrhi::BufferHandle m_FrameConstants;
 		nvrhi::SamplerHandle m_Sampler;
 		nvrhi::BufferHandle m_VertexBuffer;
-		std::vector<std::pair<nvrhi::FramebufferInfo, std::pair<nvrhi::GraphicsPipelineHandle, nvrhi::GraphicsPipelineHandle>>> m_Pipelines;
+		// Per framebuffer format: world-space text, with the jittered depth's bias, and screen-space text.
+		struct Pipelines
+		{
+			nvrhi::GraphicsPipelineHandle World;
+			nvrhi::GraphicsPipelineHandle JitteredWorld;
+			nvrhi::GraphicsPipelineHandle Screen;
+		};
+		std::vector<std::pair<nvrhi::FramebufferInfo, Pipelines>> m_Pipelines;
 
 		FontAtlasCache& m_Atlases;
 		// By atlas identity (FontAtlas::GetId): an atlas the cache dropped is never confused with a later one at its address.

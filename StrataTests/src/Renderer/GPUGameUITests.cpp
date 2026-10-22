@@ -762,6 +762,61 @@ TEST_SUITE("GPU.GameUI")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("With TAA a world-space canvas on a wall covers the same pixels in every jitter phase")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::QuadMesh));
+		UIScene ui;
+		PostProcessComponent& postProcess = ui.Target.GetRegistry().get<PostProcessComponent>(ui.Target.GetRegistry().view<PostProcessComponent>().front());
+		postProcess.AntiAliasing = true;
+		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
+		// A green 2 x 1 m sign 2 mm in front of a black wall, both seen at a grazing angle (a steep depth slope).
+		const glm::quat rotation = glm::angleAxis(glm::radians(70.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		Entity wall = AddMesh(ui.Target, BuiltinAssets::QuadMesh, assets.AddMaterial(UnlitColor({ 0.0f, 0.0f, 0.0f, 1.0f })), glm::vec3(0.0f), "Wall");
+		wall.GetComponent<TransformComponent>().Rotation = rotation;
+		wall.GetComponent<TransformComponent>().Scale = glm::vec3(4.0f);
+		Entity sign = ui.Target.CreateEntity("Sign");
+		sign.GetComponent<TransformComponent>().Translation = rotation * glm::vec3(0.0f, 0.0f, 0.002f);
+		sign.GetComponent<TransformComponent>().Rotation = rotation;
+		sign.AddComponent<UIRectComponent>();
+		UICanvasComponent& canvas = sign.AddComponent<UICanvasComponent>();
+		canvas.RenderMode = UICanvasRenderMode::WorldSpace;
+		canvas.ReferenceResolution = { 200.0f, 100.0f };
+		canvas.WorldUnitsPerUnit = 0.01f;
+		ui.AddImage(sign, "Panel", { 0.0f, 0.0f }, { 200.0f, 100.0f }, { 0.0f, 1.0f, 0.0f, 1.0f });
+
+		const glm::uvec2 size(64, 64);
+		SceneCamera camera = LookAt(glm::vec3(1.0f, 0.4f, 2.5f), glm::vec3(0.0f));
+		camera.ClearColor = { 0.0f, 0.0f, 0.0f, 1.0f };
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(size.x, size.y);
+		for (int frame = 0; frame < 3; frame++)
+			REQUIRE(renderer.Render(ui.Target, camera));
+		std::vector<bool> first;
+		for (uint32_t phase = 0; phase < SceneRenderer::c_TemporalJitterPhases; phase++)
+		{
+			CAPTURE(phase);
+			const ReadbackImage image = RenderToImage(renderer, ui.Target, camera);
+			REQUIRE(renderer.GetStats().TemporalAntiAliasing);
+			std::vector<bool> covered;
+			for (size_t index = 0; index < image.Pixels.size(); index += 4)
+				covered.push_back(image.Pixels[index + 1] > 0);
+			if (phase == 0)
+			{
+				first = covered;
+				CHECK(std::count(first.begin(), first.end(), true) > 100);
+				continue;
+			}
+			size_t moved = 0;
+			for (size_t pixel = 0; pixel < covered.size(); pixel++)
+				moved += covered[pixel] != first[pixel] ? 1u : 0u;
+			CHECK(moved == 0);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A screen view zooms and pans the canvases and the HUD text without laying them out again")
 	{
 		GPUContext gpu;

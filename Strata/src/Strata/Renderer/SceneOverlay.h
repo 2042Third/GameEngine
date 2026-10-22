@@ -67,6 +67,9 @@ namespace Strata
 		glm::mat4 ViewProjection = glm::mat4(1.0f);
 		glm::vec3 CameraPosition = glm::vec3(0.0f);
 		bool HasCamera = false;
+		// The scene depth was drawn with temporal anti-aliasing's jitter (SetJitteredDepthBias): overlays placed in the scene
+		// give their depth tests a bias.
+		bool JitteredDepth = false;
 		nvrhi::ICommandList* CommandList = nullptr; // Open: uploads are recorded here
 		FontAtlasCache* Atlases = nullptr;        // The renderer's glyph atlases, with what the frame's raster budget has left
 		std::vector<VisibleTextureUse>* VisibleTextures = nullptr; // Textures drawn, appended for mip streaming
@@ -75,6 +78,16 @@ namespace Strata
 		// as a GPU stage of its own: Next(its stage) before them, then Next back to the stage the timer had (GPU.Overlays).
 		GPUPassTimer* GPUTimer = nullptr;
 	};
+
+	// With temporal anti-aliasing the scene depth that overlays test against is jittered, up to half a pixel each way from
+	// where the overlays, drawn with the camera's own matrices, put their surfaces. Overlays placed in the scene then give their
+	// depth test this bias toward the camera (reversed-Z): one pixel's worth of the depth's slope, which covers the jitter, so
+	// those lying on a surface (the grid on a floor, text or a canvas on a wall) do not flicker against it.
+	inline void SetJitteredDepthBias(nvrhi::RasterState& rasterState)
+	{
+		// NVRHI enables a depth bias only with a constant part: one step of the depth format, negligible next to the slope's.
+		rasterState.setDepthBias(1).setSlopeScaleDepthBias(1.0f);
+	}
 
 	// A pass a module adds to every SceneRenderer, drawn over the finished image after the screen-space text (the game UI).
 	// The renderer knows nothing of the module: modules register factories (SceneOverlayRegistry) and each renderer makes one
