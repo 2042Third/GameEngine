@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
-#include <thread>
+#include <utility>
 
 namespace Strata
 {
