@@ -6,6 +6,7 @@
 #include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/Renderer.h"
 
+#include <algorithm>
 #include <chrono>
 #include <numeric>
 #include <vector>
@@ -35,13 +36,13 @@ namespace
 	};
 
 	// One application-like frame: the device's frame pacing, the renderer's frame (which resolves GPU times) and a render.
-	void RunFrame(GraphicsDevice& device, FrameProfiler& profiler, SceneRenderer& renderer, TimedScene& timed)
+	void RunFrame(GraphicsDevice& device, FrameProfiler& profiler, SceneRenderer& renderer, TimedScene& timed, const SceneRenderOptions& options = {})
 	{
 		profiler.BeginFrame();
 		REQUIRE(device.BeginFrame());
 		Renderer::BeginFrame();
 		const auto start = std::chrono::steady_clock::now();
-		CHECK(renderer.Render(*timed.TestScene, timed.Camera));
+		CHECK(renderer.Render(*timed.TestScene, timed.Camera, nullptr, options));
 		const double work = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 		device.EndFrame();
 		profiler.EndFrame(work);
@@ -199,6 +200,8 @@ TEST_SUITE("GPU.Renderer.Timers")
 			CHECK(sample.GPUStageMs[stages.Prepass] > 0.0f);
 			CHECK(sample.GPUStageMs[stages.Opaque] > 0.0f);
 			CHECK(sample.GPUStageMs[stages.Post] > 0.0f);
+			// Without motion vectors or temporal anti-aliasing the frame has no such pass.
+			CHECK(sample.GPUStageMs[stages.TAA] == 0.0f);
 			// GPU stages are not CPU time.
 			CHECK(sample.StageMs[stages.Opaque] == 0.0f);
 			const float stageSum = std::accumulate(sample.GPUStageMs.begin(), sample.GPUStageMs.end(), 0.0f);
@@ -232,6 +235,23 @@ TEST_SUITE("GPU.Renderer.Timers")
 		CHECK(own.BusyMs > 0.0f);
 		CHECK(own.Frame >= firstMeasured);
 		CHECK(gpuProfiler.GetStats().Timestamps > 0);
+		const auto findStage = [](const SceneRendererGPUStats& stats, FrameStageID stage)
+		{
+			return std::find_if(stats.StageMs.begin(), stats.StageMs.end(), [stage](const GPUStageTime& time) { return time.Stage == stage; }) != stats.StageMs.end();
+		};
+		CHECK_FALSE(findStage(own, stages.TAA));
+
+		// Frames with motion vectors copy the motion history in GPU.TAA.
+		SceneRenderOptions motion;
+		motion.MotionVectors = true;
+		const uint64_t firstMotion = profiler.GetTotalFrameCount();
+		for (uint32_t frame = 0; frame < latencyLimit + 2; frame++)
+			RunFrame(gpu.GetDevice(), profiler, renderer, timed, motion);
+		gpu.GetDevice().WaitForIdle();
+		renderer.ResolveGPUStats(true);
+		REQUIRE(renderer.GetGPUStats().HasTimes);
+		CHECK(renderer.GetGPUStats().Frame >= firstMotion);
+		CHECK(findStage(renderer.GetGPUStats(), stages.TAA));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

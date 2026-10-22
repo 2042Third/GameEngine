@@ -27,6 +27,7 @@ namespace Strata
 		FrameStageID AO = c_InvalidFrameStage;
 		FrameStageID Opaque = c_InvalidFrameStage;      // With the sky
 		FrameStageID Transparent = c_InvalidFrameStage;
+		FrameStageID TAA = c_InvalidFrameStage;         // The motion history's copy and the temporal anti-aliasing resolve
 		FrameStageID Post = c_InvalidFrameStage;        // Exposure, bloom, tone mapping, FXAA
 		FrameStageID Overlays = c_InvalidFrameStage;    // Grid, tints, outline, lines, text, the copy into a target
 

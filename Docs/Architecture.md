@@ -855,6 +855,7 @@ The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStage
 | `GPU.Setup` | a scene renderer's environment maps, scene data uploads and light clusters |
 | `GPU.Cull` | culling dispatches and depth pyramids |
 | `GPU.Shadows`, `GPU.Prepass`, `GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent` | the scene passes |
+| `GPU.TAA` | the motion history's copy (`Scene/MotionCopy.comp`) and the temporal anti-aliasing resolve |
 | `GPU.Post` | exposure, bloom, tone mapping and FXAA |
 | `GPU.Overlays` | grid, tints, outline, debug lines, text and the copy into a target |
 | `GPU.UI` | the game UI pass's draws, world-space and screen-space (`GameUIRenderer`, registered by `RegisterGameUIModule`), inside `GPU.Overlays`: the pass times them with the frame's timer (`SceneOverlayFrame::GPUTimer`) and hands it back |

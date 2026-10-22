@@ -2601,7 +2601,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   SRV 20 and 21; without one the shared buffers are bound there): the shared GPU copy cannot hold "previous", since its
   renderers render at different times. It costs 64 bytes per instance slot and 48 per joint matrix of the scene (64 MiB for
   a million instances), per renderer that asks, plus the 4-byte-per-pixel target; made by the first frame that asks,
-  released with the render targets. At the end of each such frame `Scene/MotionCopy.comp` (timed in `GPU.Post`) copies
+  released with the render targets. At the end of each such frame `Scene/MotionCopy.comp` (timed in `GPU.TAA`) copies
   what `RenderSceneGPU` wrote since the renderer's previous frame (`GetInstanceWrites`, `GetPaletteWrites`: a log by
   process-unique write version, bounded by the buffer's elements, which also covers deferred uploads); a renderer
   further behind, a new history or another render scene copies the whole buffers, and a history that grows keeps its

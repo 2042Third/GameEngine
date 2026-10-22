@@ -2444,15 +2444,16 @@ namespace Strata
 		DrawBatches(commandList, Pass::Transparent, true);
 		commandList->endMarker();
 
-		gpuTimer.Next(gpuStages.Post);
 		// After every pass that reads the history: it now holds this frame for the next.
 		if (m_MotionFrame)
 		{
+			gpuTimer.Next(gpuStages.TAA);
 			commandList->beginMarker("MotionCopy");
 			RecordMotionCopy(commandList, renderScene, !motionHistory);
 			commandList->endMarker();
 			m_MotionCamera = MotionCamera { frame.View, camera.Projection, camera.Position };
 		}
+		gpuTimer.Next(gpuStages.Post);
 		commandList->beginMarker("Exposure");
 		UpdateExposure(commandList, postProcess);
 		commandList->endMarker();
