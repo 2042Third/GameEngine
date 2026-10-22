@@ -466,6 +466,7 @@ TEST_SUITE("GPU.SceneRenderer.MotionVectors")
 			for (int frame = 0; frame < 3; frame++)
 			{
 				REQUIRE(renderer.Render(scene.Contents, scene.Camera, nullptr, MotionOptions()));
+				CHECK(renderer.GetStats().GPUDriven == (mode == GPUDrivenMode::Auto));
 				CHECK(renderer.GetStats().MotionHistory == (frame > 0));
 				const MotionFrame motion = ReadMotionFrame(renderer);
 				uint32_t moving = 0;
@@ -498,6 +499,7 @@ TEST_SUITE("GPU.SceneRenderer.MotionVectors")
 			renderer.SetViewportSize(c_Size, c_Size);
 			REQUIRE(renderer.Render(scene.Contents, scene.Camera, nullptr, MotionOptions()));
 			REQUIRE(renderer.Render(scene.Contents, scene.Camera, nullptr, MotionOptions()));
+			CHECK(renderer.GetStats().GPUDriven == (mode == GPUDrivenMode::Auto));
 
 			const glm::vec3 cubeOffset(0.4f, 0.0f, -0.3f);
 			const glm::vec3 mirroredOffset(0.0f, 0.2f, 0.3f);
@@ -599,6 +601,7 @@ TEST_SUITE("GPU.SceneRenderer.MotionVectors")
 			SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, distance), glm::vec3(0.0f));
 			REQUIRE(renderer.Render(scene, camera, nullptr, MotionOptions()));
 			REQUIRE(GetDrawnCounts(renderer).InstancesPerLOD[0] == 1);
+			CHECK(renderer.GetStats().GPUDriven == (mode == GPUDrivenMode::Auto));
 			bool fading = false;
 			SceneCamera previous = camera;
 			for (int step = 0; step < 40 && !fading; step++)
@@ -784,6 +787,8 @@ TEST_SUITE("GPU.SceneRenderer.MotionVectors")
 				REQUIRE(Renderer::ReadTexture(motion.GetOutputTexture(), motionLDR));
 				CHECK(plainLDR.Pixels == motionLDR.Pixels);
 				CHECK(plain.GetStats().DrawCommands == motion.GetStats().DrawCommands);
+				CHECK(plain.GetStats().GPUDriven == (mode == GPUDrivenMode::Auto));
+				CHECK(motion.GetStats().GPUDriven == (mode == GPUDrivenMode::Auto));
 				scene.Move(scene.Cubes[1], glm::vec3(0.1f, 0.0f, 0.0f));
 				scene.Move(scene.Mirrored, glm::vec3(0.0f, 0.0f, 0.1f));
 				scene.MovePose(glm::vec3(0.0f, 0.05f, 0.0f));
