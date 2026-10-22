@@ -23,6 +23,10 @@ namespace Strata
 	{
 		if (!section.empty())
 			m_Browser.Select(section);
+		// Opening again starts from the preferences as they are: a command typed but not applied before the dialog closed is
+		// gone, and the editors on the machine are looked for again.
+		if (!m_Open)
+			m_Browser.DiscardPage();
 		m_OpenRequested = true;
 	}
 

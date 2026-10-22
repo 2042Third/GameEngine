@@ -83,6 +83,9 @@ namespace Strata
 		// first page then.
 		void Select(std::string id);
 		const std::string& GetSelected() const { return m_Selected; }
+		// Lets the page go: the next Draw makes it again, from the values as they are then (a window opening again shows no
+		// edit left unapplied when it closed).
+		void DiscardPage() { m_Page.reset(); }
 		// The page drawn last (null before the first Draw), e.g. for tests.
 		SettingsPage* GetPage() const { return m_Page.get(); }
 

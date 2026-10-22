@@ -17,7 +17,8 @@ namespace Strata
 	public:
 		static constexpr const char* c_Popup = "Preferences";
 
-		// Opens the dialog at a section's page (empty: the page shown last, the first one at first).
+		// Opens the dialog at a section's page (empty: the page shown last, the first one at first), its page made again from
+		// the preferences as they are unless the dialog is open already.
 		void Open(const std::string& section = {});
 		void Draw(EditorPanelContext& context, const EditorSettingsPageRegistry& pages);
 		bool IsOpen() const { return m_Open; }

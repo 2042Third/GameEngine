@@ -344,4 +344,25 @@ TEST_SUITE("Editor.UI.Preferences")
 		editor.Frames(2);
 		CHECK(UI::ItemProbe::Find("ExternalEditor.Program")->Text.starts_with("Cannot start: there is no program 'noeditor'"));
 	}
+
+	TEST_CASE("Preferences open again from what is set: a command typed but not applied is gone")
+	{
+		HarnessEditor editor;
+		editor.Frames(1);
+		editor.Layer->ShowPreferencesDialog(ExternalEditor::c_SettingsSection);
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Layer->GetPreferencesDialog().IsOpen(); }));
+		editor.Frames(2);
+		REQUIRE(editor.ReplaceText("ExternalEditor.Command", "noeditor {file}"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("ExternalEditor.Program")->Text.starts_with("Cannot start: there is no program 'noeditor'"));
+		REQUIRE(editor.Click("Preferences.Close"));
+		REQUIRE(editor.FramesUntil([&editor]() { return !editor.Layer->GetPreferencesDialog().IsOpen(); }));
+		CHECK(editor.Context().GetExternalEditor().GetUserCommand().empty());
+
+		editor.Layer->ShowPreferencesDialog(ExternalEditor::c_SettingsSection);
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Layer->GetPreferencesDialog().IsOpen(); }));
+		editor.Frames(2);
+		CHECK(UI::ItemProbe::Find("ExternalEditor.Program")->Text == "Files open in the system's default application.");
+		CHECK_FALSE(UI::ItemProbe::Find("ExternalEditor.Apply")->Enabled);
+	}
 }
