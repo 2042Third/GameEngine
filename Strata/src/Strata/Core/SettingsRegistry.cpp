@@ -14,8 +14,9 @@ namespace Strata
 	namespace
 	{
 
-		// The largest whole number a double holds exactly: Int ranges stay within it.
-		constexpr double c_MaxExactInteger = 9007199254740992.0;
+		// The largest whole number a double holds exactly (2^53): Int ranges stay within it.
+		constexpr uint64_t c_MaxExactWholeNumber = uint64_t { 1 } << 53;
+		constexpr double c_MaxExactInteger = static_cast<double>(c_MaxExactWholeNumber);
 
 		bool IsUpper(char character) { return character >= 'A' && character <= 'Z'; }
 		bool IsAlphanumeric(char character)
@@ -64,7 +65,12 @@ namespace Strata
 					return std::nullopt;
 				case SettingsFieldType::Int:
 				{
-					if (!value.is_number_integer())
+					// Ranges lie within +-2^53 (CheckField), so larger whole numbers are refused before the conversion to double,
+					// which would round the next ones onto a bound of that size; the rest convert exactly.
+					const bool exact = value.is_number_unsigned() ? value.get<uint64_t>() <= c_MaxExactWholeNumber
+						: value.is_number_integer() && value.get<int64_t>() >= -static_cast<int64_t>(c_MaxExactWholeNumber)
+							&& value.get<int64_t>() <= static_cast<int64_t>(c_MaxExactWholeNumber);
+					if (!exact)
 						return std::nullopt;
 					const double number = value.get<double>();
 					if (number < field.Min || number > field.Max)

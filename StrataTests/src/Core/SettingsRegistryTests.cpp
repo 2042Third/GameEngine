@@ -6,6 +6,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -66,6 +68,17 @@ TEST_SUITE("Core.Settings")
 		// The first bad field in the order of the section's fields, whatever the value's order.
 		CHECK(GetValidationError(section, { { "Mode", "Medium" }, { "Count", 0 }, { "Speed", -1 } }).starts_with("'Speed' must be"));
 		CHECK(GetValidationError(section, { { "Mode", "Medium" }, { "Count", 0 } }).starts_with("'Count' must be"));
+		// Whole numbers are compared exactly, also next to the widest range an Int may have (+-2^53), where a double would round
+		// the next whole number onto the bound.
+		SettingsSection wide = Tests::MakeSimpleTestSection();
+		wide.Fields[1].Min = -9007199254740992.0;
+		wide.Fields[1].Max = 9007199254740992.0;
+		CHECK(wide.Validate({ { "Count", int64_t { 9007199254740992 } } }, 1));
+		CHECK(wide.Validate({ { "Count", int64_t { -9007199254740992 } } }, 1));
+		CHECK_FALSE(wide.Validate({ { "Count", int64_t { 9007199254740993 } } }, 1));
+		CHECK_FALSE(wide.Validate({ { "Count", uint64_t { 9007199254740993 } } }, 1));
+		CHECK_FALSE(wide.Validate({ { "Count", int64_t { -9007199254740993 } } }, 1));
+		CHECK_FALSE(wide.Validate({ { "Count", std::numeric_limits<uint64_t>::max() } }, 1));
 
 		// A member that names no field, a value that is not an object, a newer version and an oversized value are refused.
 		CHECK(GetValidationError(section, { { "Sped", 2.0 } }).starts_with("'Sped' is no field of the section"));
