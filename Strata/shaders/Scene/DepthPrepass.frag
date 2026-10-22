@@ -8,7 +8,10 @@
 // materials are tested here; the forward pass then shades only the visible surface. With ST_NO_ENTITY_IDS (registered as
 // Scene/DepthPrepassNoEntityIDs.frag) it writes no entity ids, for renderers without an entity-ID buffer. With ST_VELOCITY
 // (Scene/DepthPrepassVelocity.frag, DepthPrepassNoEntityIDsVelocity.frag) it also writes the motion since the renderer's
-// previous frame (Scene/MeshVelocity.vert), in UV units, into the attachment after the others.
+// previous frame (Scene/MeshVelocity.vert), in UV units, into the attachment after the others. With ST_SELECTION_MASK
+// (Scene/SelectionMask.frag) it writes only 1 into a mask where a surface is drawn, with the same tests: the selection mask
+// SceneRenderer draws the selected instances into, with the camera's own matrices, for their outline under temporal
+// anti-aliasing.
 
 layout(location = 0) in vec3 v_RelativePosition;
 layout(location = 1) in vec3 v_Normal;
@@ -21,6 +24,9 @@ layout(location = 6) in vec4 v_CurrentClip;
 layout(location = 7) in vec4 v_PreviousClip;
 #endif
 
+#ifdef ST_SELECTION_MASK
+layout(location = 0) out float o_Selected;
+#else
 layout(location = 0) out vec2 o_Normal;
 #ifndef ST_NO_ENTITY_IDS
 layout(location = 1) out uint o_EntityID;
@@ -29,6 +35,7 @@ layout(location = 1) out uint o_EntityID;
 layout(location = 1) out vec2 o_Velocity;
 #elif defined(ST_VELOCITY)
 layout(location = 2) out vec2 o_Velocity;
+#endif
 #endif
 
 void main()
@@ -46,6 +53,9 @@ void main()
 	if (masked && alpha < material.AlphaCutoff)
 		discard;
 
+#ifdef ST_SELECTION_MASK
+	o_Selected = 1.0;
+#else
 	vec3 normal = normalize(v_Normal);
 	if (!gl_FrontFacing)
 		normal = -normal;
@@ -55,5 +65,6 @@ void main()
 #endif
 #ifdef ST_VELOCITY
 	o_Velocity = GetClipMotion(v_CurrentClip, v_PreviousClip);
+#endif
 #endif
 }

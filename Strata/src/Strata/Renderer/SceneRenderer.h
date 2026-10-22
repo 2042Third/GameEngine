@@ -604,7 +604,8 @@ namespace Strata
 			Opaque,
 			Transparent,
 			Shadow,
-			ShadowMasked
+			ShadowMasked,
+			SelectionMask // The selected instances into the selection mask (temporal anti-aliasing's outline)
 		};
 
 		struct PipelineKey
@@ -894,6 +895,9 @@ namespace Strata
 		// The cascades' fit (m_CascadeFit: to the drawn casters the CPU found, or with `casterDraws` false to those the GPU's
 		// culling finds) and with `casterDraws` the casters' draws per cascade.
 		void GatherShadowDraws(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame, bool casterDraws);
+		// The selection mask's draws (m_SelectionBatches): the selected entities' opaque and alpha-masked submeshes the frame
+		// resolved, at the level of detail the view chooses, built on the CPU on both paths as transparent surfaces are.
+		void GatherSelectionDraws(RenderScene& renderScene, const SceneCamera& camera, Scene& scene, std::span<const Entity> selection);
 		// Records Scene/CascadeFit.comp: the cascades' projections into m_CascadeBuffer, before anything draws or samples them.
 		void FitCascades(nvrhi::ICommandList* commandList);
 		void MarkMesh(uint32_t slot, uint32_t usage);
@@ -1013,6 +1017,9 @@ namespace Strata
 		void ResolveCullCounters(bool wait);
 		void CreateOverlayResources();
 		static bool HasOverlays(const SceneRenderOptions& options);
+		// Draws the selection mask (m_SelectionBatches) of a frame with temporal anti-aliasing; false (reported) when its target
+		// cannot be created.
+		bool DrawSelectionMask(nvrhi::ICommandList* commandList);
 		// Draws the overlays into the output texture (which must hold the finished image); false when GPU resources failed.
 		bool RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, bool drawText,
 			bool drawOverlayPasses);
@@ -1221,6 +1228,16 @@ namespace Strata
 		uint64_t m_SelectionSceneId = 0;
 		uint64_t m_SelectionHierarchyVersion = 0;
 		bool m_SelectionUploaded = false;
+		// The selection outline of frames with temporal anti-aliasing: the selected instances drawn again with the camera's own
+		// matrices into an R8 mask (made with the first such outline, released with the targets), whose outline reads it.
+		std::vector<SceneDrawBatch> m_SelectionBatches; // After the shadow batches in the draw arguments
+		std::vector<uint32_t> m_SelectionProxies;
+		nvrhi::ShaderHandle m_SelectionMaskPixelShader;
+		nvrhi::ShaderHandle m_OutlineMaskPixelShader;
+		nvrhi::TextureHandle m_SelectionMaskTexture;
+		nvrhi::FramebufferHandle m_SelectionMaskFramebuffer; // The mask and the scene depth (read-only)
+		nvrhi::BindingSetHandle m_OutlineMaskBindingSet;     // The mask and the selection buffer
+		nvrhi::GraphicsPipelineHandle m_OutlineMaskPipeline;
 		nvrhi::ShaderHandle m_StatusTintPixelShader;
 		nvrhi::BindingLayoutHandle m_StatusTintBindingLayout;
 		nvrhi::BindingSetHandle m_StatusTintBindingSet; // Entity IDs and tints; recreated with either

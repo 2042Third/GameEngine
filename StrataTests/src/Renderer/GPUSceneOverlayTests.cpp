@@ -285,6 +285,88 @@ TEST_SUITE("GPU.SceneRenderer.Overlays")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("With TAA the selection outline comes from the selected instances drawn without the jitter, on both paths")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(mode == GPUDrivenMode::Auto);
+			Scene scene;
+			PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+			postProcess.AntiAliasing = true;
+			postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
+			// A selected box partly hidden behind another; the outline goes around what is visible of it.
+			Entity selected = AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(UnlitColor({ 1.0f, 0.0f, 0.0f, 1.0f })), glm::vec3(-0.4f, 0.0f, 0.0f), "Selected");
+			selected.GetComponent<TransformComponent>().Rotation = glm::quat(glm::vec3(0.4f, 0.7f, 0.1f));
+			Entity front = AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(UnlitColor({ 0.0f, 1.0f, 0.0f, 1.0f })), glm::vec3(0.6f, -0.3f, 1.0f), "Front");
+			front.GetComponent<TransformComponent>().Scale = glm::vec3(0.6f);
+			SceneRendererSpecification specification;
+			specification.TextureStreaming = false;
+			specification.GPUDriven = mode;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Size, c_Size);
+			const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.5f, 4.0f), glm::vec3(0.0f));
+			const Entity selection[] = { selected };
+			SceneRenderOptions options;
+			options.SelectedEntities = selection;
+			options.SelectionColor = glm::vec4(1.0f, 0.0f, 1.0f, 1.0f);
+			options.OutlineWidth = 2;
+
+			// Outline pixels, and those of the box in front (where the hidden part's edge follows the jittered depth).
+			std::vector<bool> first;
+			std::vector<bool> firstFront;
+			for (uint32_t frame = 0; frame < 2 * SceneRenderer::c_TemporalJitterPhases; frame++)
+			{
+				CAPTURE(frame);
+				REQUIRE(renderer.Render(scene, camera, nullptr, options));
+				REQUIRE(renderer.GetStats().TemporalAntiAliasing);
+				CHECK(renderer.GetStats().GPUDriven == (mode == GPUDrivenMode::Auto));
+				CHECK(renderer.GetStats().OutlinedEntities == 1);
+				ReadbackImage image;
+				REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), image));
+				std::vector<bool> outline;
+				std::vector<bool> nearFront;
+				for (uint32_t y = 0; y < c_Size; y++)
+				{
+					for (uint32_t x = 0; x < c_Size; x++)
+					{
+						const glm::u8vec4 color = GetPixelRGBA8(image, x, y);
+						outline.push_back(color == glm::u8vec4(255, 0, 255, 255));
+						nearFront.push_back(color.g > 0 && color.b == 0);
+					}
+				}
+				if (frame == 0)
+				{
+					first = outline;
+					firstFront = nearFront;
+					CHECK(std::count(first.begin(), first.end(), true) > 40);
+					continue;
+				}
+				uint32_t moved = 0;
+				for (uint32_t y = 0; y < c_Size; y++)
+				{
+					for (uint32_t x = 0; x < c_Size; x++)
+					{
+						if (outline[y * c_Size + x] == first[y * c_Size + x])
+							continue;
+						bool besideFront = false;
+						for (uint32_t ny = y > 0 ? y - 1 : 0; ny <= std::min(y + 1, c_Size - 1); ny++)
+						{
+							for (uint32_t nx = x > 0 ? x - 1 : 0; nx <= std::min(x + 1, c_Size - 1); nx++)
+								besideFront = besideFront || nearFront[ny * c_Size + nx] || firstFront[ny * c_Size + nx];
+						}
+						moved += besideFront ? 0u : 1u;
+					}
+				}
+				CHECK(moved == 0);
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Selected entities get an outline around their visible silhouette")
 	{
 		GPUContext gpu;

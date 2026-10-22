@@ -880,6 +880,63 @@ namespace Strata
 		}
 	}
 
+	void SceneRenderer::GatherSelectionDraws(RenderScene& renderScene, const SceneCamera& camera, Scene& scene, std::span<const Entity> selection)
+	{
+		ST_PROFILE_FUNCTION();
+		m_SelectionBatches.clear();
+		m_SelectionProxies.clear();
+		for (const Entity& entity : selection)
+		{
+			if (entity.GetScene() != &scene || !entity.IsValid())
+				continue;
+			const uint32_t proxy = renderScene.FindProxy(entity.GetHandle());
+			if (proxy != RenderScene::c_InvalidIndex)
+				m_SelectionProxies.push_back(proxy);
+		}
+		std::sort(m_SelectionProxies.begin(), m_SelectionProxies.end());
+		m_SelectionProxies.erase(std::unique(m_SelectionProxies.begin(), m_SelectionProxies.end()), m_SelectionProxies.end());
+
+		const std::span<const RenderData::InstanceData> instances = renderScene.GetInstances();
+		const bool skins = renderScene.HasSkinProxies();
+		for (const uint32_t proxy : m_SelectionProxies)
+		{
+			// What the frame draws of it: meshes and materials it resolved (none of a proxy out of view), once on the GPU.
+			const uint32_t meshSlot = renderScene.GetMeshSlot(proxy);
+			const Mesh* mesh = m_FrameMeshes[meshSlot];
+			const uint32_t count = renderScene.GetInstanceCount(proxy);
+			if (!mesh || count == 0 || mesh->GetSubmeshes().size() != count || !m_SceneGPU->IsResident(proxy))
+				continue;
+			const AABB& bounds = renderScene.GetWorldBounds(proxy);
+			const float fraction = GetScreenFraction(camera, bounds.GetCenter(), glm::length(bounds.GetExtents()));
+			const bool mirrored = (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Mirrored) != 0;
+			const bool skinned = skins && IsDrawnSkinned(renderScene, proxy, *mesh);
+			const uint32_t first = renderScene.GetFirstInstance(proxy);
+			const std::vector<Submesh>& submeshes = mesh->GetSubmeshes();
+			for (uint32_t submeshIndex = 0; submeshIndex < count; submeshIndex++)
+			{
+				const uint32_t instance = first + submeshIndex;
+				const uint32_t materialFlags = m_MaterialFlags[instances[instance].MaterialIndex];
+				// Alpha-blended surfaces are not in the depth prepass: as the entity-ID outline, the mask leaves them out.
+				if ((materialFlags & c_MaterialAvailable) == 0 || (materialFlags & c_MaterialTransparent) != 0)
+					continue;
+				const uint32_t lod = SelectLOD(*mesh, submeshes[submeshIndex], fraction);
+				if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
+					continue;
+				SceneDrawBatch batch;
+				batch.MeshSlot = meshSlot;
+				batch.SubmeshIndex = submeshIndex;
+				batch.LOD = lod;
+				batch.DoubleSided = (materialFlags & c_MaterialDoubleSided) != 0;
+				batch.Mirrored = mirrored;
+				batch.Skinned = skinned;
+				batch.FirstInstance = static_cast<uint32_t>(m_DrawInstancesBuild.size());
+				batch.InstanceCount = 1;
+				m_SelectionBatches.push_back(batch);
+				m_DrawInstancesBuild.push_back(RenderData::MakeDrawEntry(instance, 0));
+			}
+		}
+	}
+
 	void SceneRenderer::GatherDraws(RenderScene& renderScene, const SceneCamera& camera, bool opaqueDraws)
 	{
 		ST_PROFILE_FUNCTION();

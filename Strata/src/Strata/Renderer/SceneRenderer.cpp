@@ -221,9 +221,10 @@ namespace Strata
 		m_ShadowVertexShader = shaders.Get("Scene/ShadowMesh.vert");
 		m_ShadowMaskPixelShader = shaders.Get("Scene/ShadowMask.frag");
 		m_FXAAPixelShader = shaders.Get("PostProcess/FXAA.frag");
+		m_SelectionMaskPixelShader = shaders.Get("Scene/SelectionMask.frag");
 		ST_CORE_VERIFY(m_MeshVertexShader && m_PrepassPixelShader && m_ForwardPixelShader && m_ForwardTransparentPixelShader && m_FullscreenVertexShader
 			&& m_TonemapPixelShader && m_SkyboxPixelShader && m_ShadowVertexShader && m_ShadowMaskPixelShader && m_FXAAPixelShader && m_SkinnedMeshVertexShader
-			&& m_SkinnedShadowVertexShader, "SceneRenderer shaders are missing");
+			&& m_SkinnedShadowVertexShader && m_SelectionMaskPixelShader, "SceneRenderer shaders are missing");
 
 		m_Specification.ShadowCascades = std::clamp<uint32_t>(m_Specification.ShadowCascades, 1, RenderData::c_MaxCascades);
 		m_Specification.ShadowMapSize = std::clamp<uint32_t>(m_Specification.ShadowMapSize, 256, 8192);
@@ -1430,12 +1431,15 @@ namespace Strata
 			arguments.startInstanceLocation = batch.FirstInstance;
 			m_DrawArgumentsBuild.push_back(arguments);
 		};
-		// Opaque batches (the prepass and the opaque pass draw them alike), transparent ones, then the shadow batches.
+		// Opaque batches (the prepass and the opaque pass draw them alike), transparent ones, the shadow batches, then the
+		// selection mask's.
 		for (const SceneDrawBatch& batch : m_OpaqueBatches)
 			append(batch);
 		for (const SceneDrawBatch& batch : m_TransparentBatches)
 			append(batch);
 		for (const SceneDrawBatch& batch : m_ShadowBatches)
+			append(batch);
+		for (const SceneDrawBatch& batch : m_SelectionBatches)
 			append(batch);
 	}
 
@@ -1646,6 +1650,9 @@ namespace Strata
 		release(m_OverlayFramebuffer);
 		release(m_CopyBindingSet);
 		release(m_OutlineBindingSet); // References the entity-ID texture
+		release(m_SelectionMaskTexture);
+		release(m_SelectionMaskFramebuffer);
+		release(m_OutlineMaskBindingSet);
 		release(m_StatusTintBindingSet); // Likewise
 		release(m_DepthPyramid);
 		for (nvrhi::BindingSetHandle& set : m_DepthPyramidSets)
@@ -1868,6 +1875,7 @@ namespace Strata
 		}
 
 		const bool shadowPass = key.PassType == Pass::Shadow || key.PassType == Pass::ShadowMasked;
+		const bool selectionMask = key.PassType == Pass::SelectionMask;
 		nvrhi::GraphicsPipelineDesc desc;
 		desc.primType = nvrhi::PrimitiveType::TriangleList;
 		desc.inputLayout = key.Skinned ? m_SkinnedInputLayout : m_InputLayout;
@@ -1882,6 +1890,7 @@ namespace Strata
 			case Pass::Shadow:       desc.PS = nullptr; break; // Depth only
 			case Pass::Transparent:  desc.PS = m_ForwardTransparentPixelShader; break;
 			case Pass::Opaque:       desc.PS = m_ForwardPixelShader; break;
+			case Pass::SelectionMask: desc.PS = m_SelectionMaskPixelShader; break;
 		}
 		desc.bindingLayouts = { m_SceneBindingLayout, Renderer::GetBindlessTextures().GetLayout() };
 		if (shadowPass)
@@ -1911,6 +1920,12 @@ namespace Strata
 			case Pass::Opaque:
 				depth.setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::Equal);
 				break;
+			case Pass::SelectionMask:
+				// The selected surfaces where nothing is in front of them, drawn with the camera's own matrices against the
+				// jittered depth: with its bias.
+				depth.setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
+				SetJitteredDepthBias(desc.renderState.rasterState);
+				break;
 			case Pass::Transparent:
 			{
 				depth.setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
@@ -1926,7 +1941,8 @@ namespace Strata
 		}
 
 		nvrhi::IFramebuffer* framebuffer = shadowPass ? m_ShadowFramebuffers[0].Get()
-			: (key.PassType == Pass::Prepass ? (key.Velocity ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get()) : m_ForwardFramebuffer.Get());
+			: (key.PassType == Pass::Prepass ? (key.Velocity ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get())
+			: (selectionMask ? m_SelectionMaskFramebuffer.Get() : m_ForwardFramebuffer.Get()));
 		nvrhi::GraphicsPipelineHandle pipeline = m_Device->createGraphicsPipeline(desc, framebuffer->getFramebufferInfo());
 		ST_CORE_VERIFY(pipeline, "SceneRenderer: failed to create a scene pipeline");
 		m_ScenePipelines.emplace_back(key, pipeline);
@@ -2449,6 +2465,10 @@ namespace Strata
 		ResolveAssets(renderScene);
 		GatherDraws(renderScene, camera, !m_GPUDrivenFrame);
 		GatherShadowDraws(renderScene, camera, frame, !m_GPUDrivenFrame);
+		// With the jitter the selection outline comes from a mask of the selected instances drawn without it.
+		m_SelectionBatches.clear();
+		if (m_TemporalFrame && m_EntityIDTexture && !options.SelectedEntities.empty())
+			GatherSelectionDraws(renderScene, camera, scene, options.SelectedEntities);
 		BuildDrawArguments();
 		// Rendered with a reported limitation: keep the error so it is not logged every frame.
 		bool degraded = motionFailed || temporalFailed;
@@ -2803,11 +2823,12 @@ namespace Strata
 		ShaderLibrary& shaders = Renderer::GetShaderLibrary();
 		m_GridPixelShader = shaders.Get("Overlay/Grid.frag");
 		m_OutlinePixelShader = shaders.Get("Overlay/Outline.frag");
+		m_OutlineMaskPixelShader = shaders.Get("Overlay/OutlineMask.frag");
 		m_StatusTintPixelShader = shaders.Get("Overlay/StatusTint.frag");
 		m_DebugLineVertexShader = shaders.Get("Overlay/DebugLine.vert");
 		m_DebugLinePixelShader = shaders.Get("Overlay/DebugLine.frag");
 		m_CopyPixelShader = shaders.Get("PostProcess/Copy.frag");
-		ST_CORE_VERIFY(m_GridPixelShader && m_OutlinePixelShader && m_StatusTintPixelShader && m_DebugLineVertexShader && m_DebugLinePixelShader
+		ST_CORE_VERIFY(m_GridPixelShader && m_OutlinePixelShader && m_OutlineMaskPixelShader && m_StatusTintPixelShader && m_DebugLineVertexShader && m_DebugLinePixelShader
 			&& m_CopyPixelShader, "SceneRenderer overlay shaders are missing");
 
 		// Slot 1: register b0 belongs to the frame constants.
@@ -2986,6 +3007,37 @@ namespace Strata
 		commandList->draw(nvrhi::DrawArguments().setVertexCount(vertexCount).setStartVertexLocation(firstVertex));
 	}
 
+	bool SceneRenderer::DrawSelectionMask(nvrhi::ICommandList* commandList)
+	{
+		if (!m_SelectionMaskTexture)
+		{
+			nvrhi::TextureHandle mask = CreateRenderTarget(m_Device, m_ViewportSize.x, m_ViewportSize.y, nvrhi::Format::R8_UNORM,
+				m_Specification.DebugName + ".SelectionMask", false);
+			nvrhi::FramebufferHandle framebuffer = mask ? m_Device->createFramebuffer(nvrhi::FramebufferDesc()
+				.addColorAttachment(mask)
+				.setDepthAttachment(nvrhi::FramebufferAttachment().setTexture(m_DepthTexture).setReadOnly(true))) : nullptr;
+			if (!mask || !framebuffer)
+			{
+				m_Errors.Report(fmt::format("failed to create the selection mask for a {}x{} viewport", m_ViewportSize.x, m_ViewportSize.y));
+				return false;
+			}
+			m_SelectionMaskTexture = std::move(mask);
+			m_SelectionMaskFramebuffer = std::move(framebuffer);
+			m_OutlineMaskBindingSet = nullptr; // Names the mask
+		}
+		commandList->clearTextureFloat(m_SelectionMaskTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f));
+		if (m_SelectionBatches.empty())
+			return true;
+		nvrhi::GraphicsState state;
+		state.framebuffer = m_SelectionMaskFramebuffer;
+		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y)));
+		state.bindings = { m_SceneBindingSet, Renderer::GetBindlessTextures().GetTable() };
+		const uint32_t firstArgument = static_cast<uint32_t>(m_OpaqueBatches.size() + m_TransparentBatches.size() + m_ShadowBatches.size());
+		DrawBuckets(commandList, state, m_SelectionBatches, firstArgument,
+			[](const SceneDrawBatch& batch) { return PipelineKey { Pass::SelectionMask, batch.DoubleSided, batch.Mirrored, batch.Skinned }; }, nullptr, nullptr);
+		return true;
+	}
+
 	bool SceneRenderer::PrepareOverlayPasses(Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, nvrhi::ICommandList* commandList,
 		GPUPassTimer& gpuTimer)
 	{
@@ -3047,6 +3099,8 @@ namespace Strata
 			desc.bindingLayouts = { m_OutlineBindingLayout };
 			desc.renderState.depthStencilState.setDepthTestEnable(false);
 			m_OutlinePipeline = m_Device->createGraphicsPipeline(desc, info);
+			desc.PS = m_OutlineMaskPixelShader;
+			m_OutlineMaskPipeline = m_Device->createGraphicsPipeline(desc, info);
 
 			desc.PS = m_StatusTintPixelShader;
 			desc.bindingLayouts = { m_StatusTintBindingLayout };
@@ -3062,7 +3116,7 @@ namespace Strata
 			m_DebugLinePipelines[static_cast<size_t>(DebugDrawDepth::Tested)] = m_Device->createGraphicsPipeline(desc, info);
 			SetJitteredDepthBias(desc.renderState.rasterState);
 			m_JitteredDebugLinePipeline = m_Device->createGraphicsPipeline(desc, info);
-			ST_CORE_VERIFY(m_GridPipeline && m_OutlinePipeline && m_StatusTintPipeline && m_DebugLinePipelines[0] && m_DebugLinePipelines[1]
+			ST_CORE_VERIFY(m_GridPipeline && m_OutlinePipeline && m_OutlineMaskPipeline && m_StatusTintPipeline && m_DebugLinePipelines[0] && m_DebugLinePipelines[1]
 				&& m_JitteredDebugLinePipeline, "SceneRenderer: failed to create the overlay pipelines");
 		}
 		const nvrhi::Viewport viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y));
@@ -3182,16 +3236,38 @@ namespace Strata
 				commandList->writeBuffer(m_SelectionBuffer, m_SelectionIDs.data(), m_SelectionIDs.size() * sizeof(uint32_t));
 				m_SelectionUploaded = true;
 			}
+			// The jittered entity IDs would move the outline by a pixel from frame to frame: it follows the selection mask.
+			const bool masked = m_TemporalFrame;
+			if (masked)
+			{
+				if (!DrawSelectionMask(commandList))
+					return false;
+				if (recreated || !m_OutlineMaskBindingSet)
+				{
+					nvrhi::BindingSetDesc desc;
+					desc.bindings = {
+						nvrhi::BindingSetItem::Texture_SRV(0, m_SelectionMaskTexture),
+						nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SelectionBuffer),
+						nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::OutlineParameters))
+					};
+					m_OutlineMaskBindingSet = m_Device->createBindingSet(desc, m_OutlineBindingLayout);
+					if (!m_OutlineMaskBindingSet)
+					{
+						m_Errors.Report("failed to create the selection outline bindings");
+						return false;
+					}
+				}
+			}
 
 			RenderData::OutlineParameters parameters = {};
 			parameters.Color = options.SelectionColor;
 			parameters.Width = static_cast<int32_t>(std::clamp(options.OutlineWidth, 1u, 8u));
 			parameters.SelectedCount = static_cast<uint32_t>(m_SelectionIDs.size());
 			nvrhi::GraphicsState state;
-			state.pipeline = m_OutlinePipeline;
+			state.pipeline = masked ? m_OutlineMaskPipeline : m_OutlinePipeline;
 			state.framebuffer = m_OverlayFramebuffer;
 			state.viewport.addViewportAndScissorRect(viewport);
-			state.bindings = { m_OutlineBindingSet };
+			state.bindings = { masked ? m_OutlineMaskBindingSet : m_OutlineBindingSet };
 			commandList->setGraphicsState(state);
 			commandList->setPushConstants(&parameters, sizeof(parameters));
 			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));

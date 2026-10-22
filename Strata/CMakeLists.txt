@@ -122,6 +122,8 @@ strata_add_shaders(Strata_Renderer
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassNoEntityIDs.frag|ST_NO_ENTITY_IDS"
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassVelocity.frag|ST_VELOCITY"
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassNoEntityIDsVelocity.frag|ST_NO_ENTITY_IDS,ST_VELOCITY"
+		"Scene/DepthPrepass.frag|Scene/SelectionMask.frag|ST_SELECTION_MASK"
+		"Overlay/Outline.frag|Overlay/OutlineMask.frag|ST_OUTLINE_MASK"
 		"Scene/Mesh.vert|Scene/MeshSkinned.vert|ST_SKINNED"
 		"Scene/Mesh.vert|Scene/MeshVelocity.vert|ST_VELOCITY"
 		"Scene/Mesh.vert|Scene/MeshSkinnedVelocity.vert|ST_SKINNED,ST_VELOCITY"

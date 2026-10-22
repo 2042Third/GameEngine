@@ -1209,6 +1209,58 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("With TAA the selection outline covers the same pixels in all eight jitter phases")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		EditorContext& context = harness.Context;
+		Entity postProcess = context.GetActiveScene()->FindEntityByName("PostProcess");
+		REQUIRE(postProcess);
+		postProcess.GetComponent<PostProcessComponent>().AntiAliasing = true;
+		postProcess.GetComponent<PostProcessComponent>().AntiAliasingMethod = AntiAliasingMode::TAA;
+		Entity cube = context.GetActiveScene()->FindEntityByName("Cube");
+		REQUIRE(cube);
+		// Turned, so its silhouette crosses pixels at slants the jitter moves.
+		cube.GetComponent<TransformComponent>().Rotation = glm::quat(glm::vec3(0.4f, 0.7f, 0.1f));
+		cube.MarkModified<TransformComponent>();
+		context.Select(cube.GetUUID());
+		ViewportSettings settings = context.GetViewport().GetSettings();
+		settings.ShowGrid = false;
+		settings.ShowSceneGizmos = false;
+		settings.SelectionColor = glm::vec4(1.0f, 0.0f, 1.0f, 1.0f);
+		ViewportRenderer* renderer = context.GetViewport().GetRenderer();
+		REQUIRE(renderer);
+		const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, 1.0f);
+		REQUIRE(view);
+
+		std::vector<bool> first;
+		for (uint32_t frame = 0; frame < 2 * SceneRenderer::c_TemporalJitterPhases; frame++)
+		{
+			CAPTURE(frame);
+			REQUIRE(renderer->Render(context, glm::uvec2(64, 64), *view, settings, true));
+			REQUIRE(renderer->GetStats().TemporalAntiAliasing);
+			CHECK(renderer->GetStats().OutlinedEntities == 1);
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer->GetOutputTexture(), image));
+			std::vector<bool> outline;
+			for (size_t index = 0; index < image.Pixels.size(); index += 4)
+				outline.push_back(image.Pixels[index] == 255 && image.Pixels[index + 1] == 0 && image.Pixels[index + 2] == 255);
+			if (frame == 0)
+			{
+				first = outline;
+				CHECK(std::count(first.begin(), first.end(), true) > 20);
+				continue;
+			}
+			size_t moved = 0;
+			for (size_t pixel = 0; pixel < outline.size(); pixel++)
+				moved += outline[pixel] != first[pixel] ? 1u : 0u;
+			CHECK(moved == 0);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The selection outline has the color of the viewport's settings")
 	{
 		Tests::GPUContext gpu;
