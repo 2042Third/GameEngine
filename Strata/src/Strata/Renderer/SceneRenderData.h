@@ -67,8 +67,15 @@ namespace Strata
 			// Temporal anti-aliasing's offset of the frame's samples in clip units (added to Projection, ViewProjection and their
 			// inverses; 0 without it): xy this frame's, zw the renderer's previous frame's
 			glm::vec4 JitterParams;
+			// Height fog (HeightFogComponent; FogParams.x is 0 without one, and the scene shaders skip it):
+			glm::vec4 FogDensity;  // x: Density at BaseHeight (per meter), y: HeightFalloff, z: the camera's height above BaseHeight, w: StartDistance
+			glm::vec4 FogColor;    // rgb: Color (the scattering's albedo), w: MaxOpacity
+			// rgb: light the fog scatters besides the sky's irradiance and the sun (the ambient color without an environment, 1
+			// when ColorFromSky is off), w: 1 when the environment's irradiance lights it
+			glm::vec4 FogLight;
+			glm::vec4 FogParams;   // x: 1 when the scene has fog, y: the asymmetry of its scattering of the directional light
 		};
-		static_assert(sizeof(FrameConstants) == 8 * 64 + 19 * 16);
+		static_assert(sizeof(FrameConstants) == 8 * 64 + 23 * 16);
 
 		// A directional shadow cascade as shaders read it (u_Cascades, Include/Scene.glsl): written on the GPU by
 		// Scene/CascadeFit.comp, which fits its depth range to the casters (CascadeFitConstants).

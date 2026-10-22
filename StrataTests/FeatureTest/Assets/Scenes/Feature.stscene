@@ -363,6 +363,46 @@
 			},
 			{
 				"Components": {
+					"HeightFog": {
+						"BaseHeight": -1,
+						"Color": [
+							0.6,
+							0.7,
+							0.8
+						],
+						"ColorFromSky": false,
+						"Density": 0.01,
+						"HeightFalloff": 0.1,
+						"MaxOpacity": 0.9,
+						"StartDistance": 5,
+						"SunScattering": 0.7
+					},
+					"Name": {
+						"Name": "Fog"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E000000000008D"
+			},
+			{
+				"Components": {
 					"Inactive": {},
 					"Name": {
 						"Name": "Procedural Sky"

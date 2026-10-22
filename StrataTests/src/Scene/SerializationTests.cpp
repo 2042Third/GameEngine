@@ -63,6 +63,15 @@ namespace
 		lights.AddComponent<PointLightComponent>().Range = 42.0f;
 		lights.AddComponent<SpotLightComponent>().OuterConeAngle = 45.0f;
 		lights.AddComponent<SkyLightComponent>().EnvironmentMap = UUID(99);
+		HeightFogComponent& fog = lights.AddComponent<HeightFogComponent>();
+		fog.Density = 0.05f;
+		fog.HeightFalloff = 0.4f;
+		fog.BaseHeight = -3.0f;
+		fog.StartDistance = 12.0f;
+		fog.MaxOpacity = 0.8f;
+		fog.Color = glm::vec3(0.5f, 0.4f, 0.3f);
+		fog.ColorFromSky = false;
+		fog.SunScattering = 0.25f;
 		PostProcessComponent& postProcess = lights.AddComponent<PostProcessComponent>();
 		postProcess.Tonemapper = TonemapOperator::AgX;
 		postProcess.Exposure = 1.5f;
@@ -205,6 +214,15 @@ TEST_SUITE("Scene.Serialization")
 
 		CHECK(loaded.FindEntityByName("Lights").GetComponent<PostProcessComponent>().AntiAliasingMethod == AntiAliasingMode::TAA);
 		CHECK(loaded.FindEntityByName("Lights").GetComponent<DirectionalLightComponent>().CascadeBlend == doctest::Approx(0.3f));
+		const HeightFogComponent& fog = loaded.FindEntityByName("Lights").GetComponent<HeightFogComponent>();
+		CHECK(fog.Density == doctest::Approx(0.05f));
+		CHECK(fog.HeightFalloff == doctest::Approx(0.4f));
+		CHECK(fog.BaseHeight == doctest::Approx(-3.0f));
+		CHECK(fog.StartDistance == doctest::Approx(12.0f));
+		CHECK(fog.MaxOpacity == doctest::Approx(0.8f));
+		CHECK(fog.Color == glm::vec3(0.5f, 0.4f, 0.3f));
+		CHECK_FALSE(fog.ColorFromSky);
+		CHECK(fog.SunScattering == doctest::Approx(0.25f));
 
 		Entity ui = loaded.FindEntityByName("UI");
 		CHECK(ui.GetComponent<TextComponent>().Text == "Score: 0\nLine two \xE2\x9C\x93");
@@ -392,6 +410,42 @@ TEST_SUITE("Scene.Serialization")
 		loaded = load({ { "CascadeBlend", "wide" } }, warnings);
 		CHECK(CountWarnings(warnings, "CascadeBlend") == 1);
 		CHECK(loaded.CascadeBlend == doctest::Approx(0.1f));
+	}
+
+	TEST_CASE("Height fog loads its defaults for keys it lacks; out-of-range values are clamped, values of another type warn")
+	{
+		const auto load = [](const nlohmann::json& fog, std::vector<std::string>& warnings)
+		{
+			const nlohmann::json document = {
+				{ "Strata", { { "Format", "Scene" }, { "Version", 1 } } },
+				{ "Scene", { { "Name", "Foggy" }, { "Entities", { { { "ID", "00000000000000AB" }, { "Components", {
+					{ "Name", { { "Name", "Fog" } } }, { "HeightFog", fog } } } } } } } }
+			};
+			Scene scene;
+			std::string error;
+			REQUIRE_MESSAGE(SceneSerializer::Deserialize(scene, document, &error, &warnings), error);
+			return scene.GetEntityByUUID(UUID(0xAB)).GetComponent<HeightFogComponent>();
+		};
+		std::vector<std::string> warnings;
+		HeightFogComponent loaded = load(nlohmann::json::object(), warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.Density == doctest::Approx(0.02f));
+		CHECK(loaded.HeightFalloff == doctest::Approx(0.2f));
+		CHECK(loaded.MaxOpacity == 1.0f);
+		CHECK(loaded.ColorFromSky);
+		// Out of range: clamped, as every ranged property is.
+		loaded = load({ { "Density", -1 }, { "HeightFalloff", 0 }, { "StartDistance", -5 }, { "MaxOpacity", 2 }, { "SunScattering", -0.5 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.Density == 0.0f);
+		CHECK(loaded.HeightFalloff == HeightFogComponent::c_MinHeightFalloff);
+		CHECK(loaded.StartDistance == 0.0f);
+		CHECK(loaded.MaxOpacity == 1.0f);
+		CHECK(loaded.SunScattering == 0.0f);
+		// Another type or an unknown name: a warning, and the default.
+		loaded = load({ { "Density", "thick" }, { "Colour", { 1, 0, 0 } } }, warnings);
+		CHECK(CountWarnings(warnings, "Density") == 1);
+		CHECK(CountWarnings(warnings, "Colour") == 1);
+		CHECK(loaded.Density == doctest::Approx(0.02f));
 	}
 
 	TEST_CASE("Hand-written entity data without ids is accepted")

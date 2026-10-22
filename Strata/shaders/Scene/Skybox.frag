@@ -2,6 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "Include/Scene.glsl"
+#include "Include/Fog.glsl"
 
 // Environment background, drawn with a fullscreen triangle at the far plane where no geometry was rendered.
 
@@ -17,5 +18,17 @@ void main()
 	vec3 direction = normalize(farPoint.xyz / farPoint.w - nearPoint.xyz / nearPoint.w);
 
 	vec3 color = textureLod(samplerCube(u_EnvironmentMap, u_LinearClampSampler), RotateEnvironmentDirection(direction), u_Frame.SkyParams.x).rgb;
-	o_Color = vec4(SanitizeHDR(color * u_Frame.EnvironmentParams.x), 1.0);
+	color *= u_Frame.EnvironmentParams.x;
+	if (u_Frame.FogParams.x > 0.0)
+	{
+		// The fog's rays start where the surfaces' do (Include/Fog.glsl): at the camera, or on its plane when orthographic.
+		vec3 start = vec3(0.0);
+		if (u_Frame.CameraForward.w > 0.5)
+		{
+			vec3 nearPosition = nearPoint.xyz / nearPoint.w;
+			start = nearPosition - direction * dot(nearPosition, direction);
+		}
+		color = ApplyHeightFogToSky(color, start, direction);
+	}
+	o_Color = vec4(SanitizeHDR(color), 1.0);
 }

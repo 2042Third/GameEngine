@@ -2406,7 +2406,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   light clustering, directional shadow cascades, depth/normal/entity-ID prepass (with motion vectors when asked or for
   TAA: "Motion vectors and TAA"), ground-truth ambient
   occlusion, forward PBR (opaque surfaces with an EQUAL depth test and forced early depth testing), sky,
-  transparent surfaces (back to front), the temporal anti-aliasing resolve when the scene chooses it, then
+  transparent surfaces (back to front), each fogged by the scene's height fog ("Height fog"), the temporal
+  anti-aliasing resolve when the scene chooses it, then
   post-processing from the scene's `PostProcessComponent` (exposure, bloom, tone mapping and grading, FXAA without
   TAA). A target framebuffer must match the viewport size and have a non-sRGB UNORM color format; `Render` returns false
   (and logs once) instead of rescaling. The output
@@ -2717,6 +2718,25 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   Multiply coverage into the result and discard once at the end, as `GameUI/UIQuad.frag` does, or sample every texture
   before the discards, as `Scene/Forward.frag` and `Scene/DepthPrepass.frag` do. `Architecture.Shaders` checks every
   fragment shader's source.
+
+### Height fog
+
+- The first active `HeightFogComponent` fogs the scene (`SceneRenderer::FindHeightFog`;
+  `SceneRendererStats::HeightFog`). Its extinction is `Density` at `BaseHeight` and `Density * exp(-HeightFalloff * h)`
+  at `h` meters above it (rising below it); `Include/Fog.glsl` integrates it analytically along each view ray from
+  `StartDistance` on, per pixel, in `Scene/Forward.frag` (opaque and transparent surfaces alike, before `SanitizeHDR`)
+  and `Scene/Skybox.frag` (the sky, at an infinite distance: rays that stay level or fall never leave the fog and get
+  `MaxOpacity`). No pass, no target: without
+  the component a uniform branch skips it, and a disabled one or one of density 0 renders bit-identically to none
+  (`GPU.SceneRenderer.Fog`). Perspective rays start at the camera, orthographic ones on its plane; the camera's height
+  above the base is subtracted in double on the CPU (`FrameConstants::FogDensity`), and the integral is written so no
+  term overflows (the density at the ray's lowest point times the mean of an exponential that stays in (0, 1]).
+- The fog scatters `Color` (an albedo) of the light that reaches it: the sky's (the mean of the environment's irradiance
+  from above and below, or the ambient color without an environment) with `ColorFromSky`, else `Color` is its own
+  radiance; and the directional light's through a Henyey-Greenstein phase function whose asymmetry is `SunScattering`
+  times 0.9 (`HeightFogComponent::c_MaxSunAsymmetry`), so looking toward the sun shows a glow. It is not a volume: no
+  shadows or light shafts in it, and local lights do not light it. The clear color of a scene without a sky background
+  is not fogged.
 
 ### Streaming and uploads
 

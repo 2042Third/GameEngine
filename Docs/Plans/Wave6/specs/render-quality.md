@@ -1021,13 +1021,14 @@ with `CHECK(gpu.GetNewErrorCount() == 0)`) and `StrataTests.FeatureTest`.
   does. The file stays under 40,000 code points.
 - `Docs/DeveloperGuide.md`, Rendering: new subsections "Motion vectors and TAA" (with the memory per renderer), "Light
   units and exposure", "Local light shadows" (with the atlas's memory), "Reflections" (probes, bake, SSR), "Fog and
-  atmosphere"; "Scene renderer and lighting" (the pass list, the units paragraph replaced), "Render scene" (the probe
-  cache as a third cache that keeps assets across frames), "Lights, shadows and HDR" (cascade blending, the local
-  shadows sentence), "GPU-driven path" (local shadow views and buckets), "GPU timing" (the stages), "Overlays" (the
-  selection mask, the overlay depth bias, glass outlined), "Materials" (the new properties and maps), "Textures"
-  (`RemoveSun`), "Feature test" (the new entities and assets), "macOS and MoltenVK" (binding counts), "Building" (the
-  required `imageCubeArray`). Editor: "View commands" (`debugView` `"motion"`, what captures wait for and the result's
-  new fields), "MCP toolsets" (the `scene` toolset's `lighting.` prefix), the `lighting.*` commands.
+  atmosphere" (S4 adds it as "Height fog", which S7 extends and renames); "Scene renderer and lighting" (the pass list,
+  the units paragraph replaced), "Render scene" (the probe cache as a third cache that keeps assets across frames),
+  "Lights, shadows and HDR" (cascade blending, the local shadows sentence), "GPU-driven path" (local shadow views and
+  buckets), "GPU timing" (the stages), "Overlays" (the selection mask, the overlay depth bias, glass outlined),
+  "Materials" (the new properties and maps), "Textures" (`RemoveSun`), "Feature test" (the new entities and assets),
+  "macOS and MoltenVK" (binding counts), "Building" (the required `imageCubeArray`). Editor: "View commands"
+  (`debugView` `"motion"`, what captures wait for and the result's new fields), "MCP toolsets" (the `scene` toolset's
+  `lighting.` prefix), the `lighting.*` commands.
 - `Docs/Architecture.md`: the frame's pass order, the per-renderer history, the probe bake's data flow.
 - `Docs/Manual/Lighting.md` (new): units with reference values, exposure, the sky sources, fog, probes and how to bake
   them, local shadows and their cost. Linked from `Docs/README.md`.

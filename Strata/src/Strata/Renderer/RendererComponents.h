@@ -77,6 +77,32 @@ namespace Strata
 		float SunIntensity = 20.0f;
 	};
 
+	// Exponential height fog over the scene's surfaces and its sky. The first active entity with this component in a scene
+	// applies. Its density is Density at BaseHeight and falls by the factor e every 1 / HeightFalloff meters above it (rises
+	// below it); the renderer integrates it along each view ray from StartDistance on, per pixel (no volume: no light
+	// shafts or local lights in the fog).
+	struct HeightFogComponent
+	{
+		float Density = 0.02f;      // Extinction at BaseHeight, per meter
+		float HeightFalloff = 0.2f; // Per meter: how fast the density falls with height
+		float BaseHeight = 0.0f;    // World height (meters) where the density is Density
+		float StartDistance = 0.0f; // Meters from the camera before which there is no fog
+		float MaxOpacity = 1.0f;    // The most the fog hides of what lies behind it (the sky at the horizon gets this much)
+		glm::vec3 Color = { 0.7f, 0.8f, 0.9f }; // Linear albedo of the scattering: what fraction of its light the fog scatters
+		// The sky lights the fog (the environment's irradiance, or the ambient color without an environment); off, Color is
+		// the fog's own radiance. The directional light lights it in both cases (SunScattering).
+		bool ColorFromSky = true;
+		// How strongly the fog scatters the directional light forward, toward a viewer looking at the light: 0 scatters it
+		// equally in every direction, 1 gathers it into a glow around the light (the Henyey-Greenstein phase function's
+		// asymmetry is c_MaxSunAsymmetry times this).
+		float SunScattering = 0.5f;
+
+		// Below 1, so the glow around the light stays finite.
+		static constexpr float c_MaxSunAsymmetry = 0.9f;
+		// Above 0: no falloff would make the density the same at every height, whose integral toward the sky never ends.
+		static constexpr float c_MinHeightFalloff = 0.0001f;
+	};
+
 	enum class TonemapOperator : uint8_t
 	{
 		None = 0,

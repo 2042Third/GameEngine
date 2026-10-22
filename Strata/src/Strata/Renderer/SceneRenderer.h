@@ -41,6 +41,7 @@ namespace Strata
 	class Scene;
 	class TextRenderer;
 	class Texture;
+	struct HeightFogComponent;
 	struct PostProcessComponent;
 	struct SkyLightComponent;
 	struct Submesh;
@@ -375,6 +376,7 @@ namespace Strata
 		// environment map's environment that another renderer computed is taken over, not computed (0).
 		uint32_t EnvironmentUpdates = 0;
 		bool PreviewLighting = false;     // SceneRenderOptions::PreviewEnvironment lit the scene (it has no light of its own)
+		bool HeightFog = false;           // The scene's height fog (SceneRenderer::FindHeightFog) was drawn
 		uint32_t ShadowCasters = 0;       // Instances drawn into shadow cascades (summed over cascades)
 		// GPU-driven frames: the cascades (a bit each) that kept their shadow map layer from the previous frame
 		// (SceneRendererSpecification::CacheShadowCascades); the GPU's counts still count their casters.
@@ -488,6 +490,8 @@ namespace Strata
 		static glm::vec3 GetPreviewSunDirection();
 		// Whether SceneRenderOptions::PreviewEnvironment lights the scene: it has no active light of any kind.
 		static bool NeedsPreviewLighting(Scene& scene);
+		// The height fog the scene is rendered with: its first active HeightFogComponent, or null.
+		static const HeightFogComponent* FindHeightFog(Scene& scene);
 
 		explicit SceneRenderer(const SceneRendererSpecification& specification = {});
 		~SceneRenderer();
@@ -774,6 +778,9 @@ namespace Strata
 		// Finds the scene's sky light (or the preview sky); (re)computes the environment maps when its environment texture
 		// or its procedural sky's parameters changed.
 		void UpdateEnvironment(Scene& scene, bool preview, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList);
+		// The frame's fog constants from the scene's height fog (FindHeightFog), after the lights and the environment, whose
+		// light it scatters.
+		void SetHeightFog(Scene& scene, const SceneCamera& camera, RenderData::FrameConstants& frame);
 		// Keeps the sky light's environment map whole in the active asset manager's texture streamer until this renderer has
 		// computed (or taken over) its environment, also through frames it does not draw (TextureStreamer::Hold).
 		void HoldEnvironmentMap(AssetHandle map);

@@ -7,6 +7,7 @@
 #include "Include/PBR.glsl"
 #include "Include/Shadows.glsl"
 #include "Include/Clusters.glsl"
+#include "Include/Fog.glsl"
 
 // Forward shading into the HDR target, compiled in two variants (see Strata/CMakeLists.txt):
 // - Scene/Forward.frag shades opaque and alpha-masked surfaces after the depth prepass with an EQUAL depth test. The
@@ -149,6 +150,10 @@ void main()
 		float occlusion = mix(1.0, SampleMaterialTexture(material.OcclusionMap, uv).r, material.OcclusionStrength);
 		color = ShadeLitSurface(baseColor.rgb, baseColor.a, emissive, metallicRoughness, shadingNormal, occlusion, material);
 	}
+
+	// Both variants fog alike, so a transparent surface looks like an opaque one at its depth.
+	if (u_Frame.FogParams.x > 0.0)
+		color = ApplyHeightFog(color, v_RelativePosition);
 
 	// The prepass's mask: of a fading level, only the pixels whose depth it wrote.
 	if (!IsLODFadeDrawn(v_LODFade, gl_FragCoord.xy))

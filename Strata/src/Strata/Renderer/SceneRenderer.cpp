@@ -1155,6 +1155,49 @@ namespace Strata
 		m_MotionRender = m_RenderCount + 1;
 	}
 
+	const HeightFogComponent* SceneRenderer::FindHeightFog(Scene& scene)
+	{
+		for (auto [entity, fog, world] : scene.GetRegistry().view<HeightFogComponent, WorldTransformComponent>().each())
+		{
+			if (world.ActiveInHierarchy)
+				return &fog;
+		}
+		return nullptr;
+	}
+
+	void SceneRenderer::SetHeightFog(Scene& scene, const SceneCamera& camera, RenderData::FrameConstants& frame)
+	{
+		frame.FogDensity = glm::vec4(0.0f);
+		frame.FogColor = glm::vec4(0.0f);
+		frame.FogLight = glm::vec4(0.0f);
+		frame.FogParams = glm::vec4(0.0f);
+		const HeightFogComponent* fog = FindHeightFog(scene);
+		if (!fog)
+			return;
+
+		// Values the shaders may use (files and commands keep them in their ranges; this keeps them finite whatever wrote them).
+		const auto finiteOr = [](float value, float fallback) { return std::isfinite(value) ? value : fallback; };
+		const float density = std::max(finiteOr(fog->Density, 0.0f), 0.0f);
+		const float falloff = std::max(finiteOr(fog->HeightFalloff, HeightFogComponent::c_MinHeightFalloff), HeightFogComponent::c_MinHeightFalloff);
+		const float startDistance = std::max(finiteOr(fog->StartDistance, 0.0f), 0.0f);
+		// The camera's height above the base height, subtracted in double so a camera far from the base keeps its precision.
+		constexpr double c_MaxHeight = 1.0e9;
+		const double height = static_cast<double>(camera.Position.y) - static_cast<double>(finiteOr(fog->BaseHeight, 0.0f));
+		frame.FogDensity = glm::vec4(density, falloff, static_cast<float>(std::isfinite(height) ? std::clamp(height, -c_MaxHeight, c_MaxHeight) : 0.0), startDistance);
+		frame.FogColor = glm::vec4(glm::vec3(SanitizeRadiance(fog->Color)), std::clamp(finiteOr(fog->MaxOpacity, 1.0f), 0.0f, 1.0f));
+		// The light it scatters besides the sun: the sky's irradiance when the environment lights the scene, else what lights
+		// the scene's surfaces without one (the ambient color); without ColorFromSky, Color itself is the fog's radiance.
+		if (!fog->ColorFromSky)
+			frame.FogLight = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
+		else if (frame.EnvironmentParams.w > 0.0f)
+			frame.FogLight = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+		else
+			frame.FogLight = SanitizeRadiance(glm::vec3(frame.AmbientColor));
+		const float sunScattering = std::clamp(finiteOr(fog->SunScattering, 0.0f), 0.0f, 1.0f);
+		frame.FogParams = glm::vec4(1.0f, sunScattering * HeightFogComponent::c_MaxSunAsymmetry, 0.0f, 0.0f);
+		m_Stats.HeightFog = true;
+	}
+
 	PostProcessComponent SceneRenderer::GetPostProcessSettings(Scene& scene)
 	{
 		for (auto [entity, postProcess, world] : scene.GetRegistry().view<PostProcessComponent, WorldTransformComponent>().each())
@@ -2528,6 +2571,7 @@ namespace Strata
 		if (m_GrownPreviousInstances || m_GrownPreviousPalette)
 			RecordMotionGrowth(commandList);
 		UpdateEnvironment(scene, preview, frame, commandList);
+		SetHeightFog(scene, camera, frame);
 		// The texture table's changed entries (textures that streamed levels moved to other bindless slots) before anything
 		// samples them; a table that grew has a new buffer, which the binding sets follow.
 		TextureTable& textureTable = Renderer::GetTextureTable();

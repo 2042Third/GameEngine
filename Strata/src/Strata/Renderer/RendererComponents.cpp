@@ -136,6 +136,27 @@ namespace Strata
 		SetInactiveReasons<SkyLightComponent>({ "ZenithColor", "HorizonColor", "GroundColor", "SunSize", "SunIntensity" }, &ProceduralSkyOnly);
 		SetInactiveReasons<SkyLightComponent>({ "AmbientColor" }, &WithoutEnvironmentOnly);
 
+		ComponentRegistry::Register<HeightFogComponent>("HeightFog")
+			.DisplayName("Height Fog")
+			.Category("Rendering")
+			.Description("Fog that thickens toward the ground, over the scene's surfaces and its sky (the first active one applies)")
+			.Property("Density", &HeightFogComponent::Density,
+				WithTooltip(Range(0.0f, c_Unbounded, 0.001f), "Extinction per meter at the base height: 0.02 hides half of what lies 35 m away"))
+			.Property("HeightFalloff", &HeightFogComponent::HeightFalloff,
+				WithTooltip(Range(HeightFogComponent::c_MinHeightFalloff, c_Unbounded, 0.001f),
+					"Per meter: the density falls by the factor e every 1 / falloff meters above the base height and rises below it"))
+			.Property("BaseHeight", &HeightFogComponent::BaseHeight, WithTooltip(Range(-c_Unbounded, c_Unbounded, 0.1f), "World height in meters where the density is Density"))
+			.Property("StartDistance", &HeightFogComponent::StartDistance, WithTooltip(Range(0.0f, c_Unbounded, 0.1f), "Meters from the camera before which there is no fog"))
+			.Property("MaxOpacity", &HeightFogComponent::MaxOpacity,
+				WithTooltip(Slider(0.0f, 1.0f), "The most the fog hides of what lies behind it; the sky at the horizon gets this much"))
+			.Property("Color", &HeightFogComponent::Color, WithTooltip(Color(), "Linear albedo: the fraction of its light the fog scatters toward the viewer"))
+			.Property("ColorFromSky", &HeightFogComponent::ColorFromSky,
+				WithTooltip({}, "The sky's light lights the fog (the environment's irradiance, or the ambient color without one); off, Color is the fog's own "
+					"radiance. The directional light lights it either way"))
+			.Property("SunScattering", &HeightFogComponent::SunScattering,
+				WithTooltip(Slider(0.0f, 1.0f), "How strongly the fog scatters the directional light toward a viewer looking at it: 0 equally in every "
+					"direction, 1 into a glow around the light"));
+
 		ComponentRegistry::Register<PostProcessComponent>("PostProcess")
 			.DisplayName("Post Process")
 			.Category("Rendering")

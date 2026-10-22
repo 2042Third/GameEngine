@@ -65,6 +65,12 @@ struct FrameConstants
 	// Temporal anti-aliasing's offset of the frame's samples in clip units (in Projection, ViewProjection and their inverses; 0
 	// without it): xy this frame's, zw the renderer's previous frame's
 	vec4 JitterParams;
+	// Height fog (HeightFogComponent, Include/Fog.glsl; FogParams.x is 0 without one):
+	vec4 FogDensity; // x: density at the base height (per meter), y: height falloff, z: the camera's height above the base, w: start distance
+	vec4 FogColor;   // rgb: the scattering's albedo, w: maximum opacity
+	// rgb: light the fog scatters besides the sky's irradiance and the sun, w: 1 when the environment's irradiance lights it
+	vec4 FogLight;
+	vec4 FogParams;  // x: 1 when the scene has fog, y: the asymmetry of its scattering of the directional light
 };
 
 layout(set = 0, binding = ST_CBV(0), std140) uniform FrameBuffer

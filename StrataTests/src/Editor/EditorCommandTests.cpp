@@ -1081,6 +1081,29 @@ TEST_SUITE("Editor.Commands")
 		CHECK_FALSE(GameRuntime::Create(manifest, &error));
 	}
 
+	TEST_CASE("Height fog is added with values, set and undone; values outside its ranges are refused")
+	{
+		CommandHarness harness;
+		const auto fog = [&](const std::string& entity) { return harness.Run("component.get", { { "entity", entity }, { "component", "HeightFog" } }); };
+		// Added with values, set, undone; values outside the ranges refused.
+		const std::string entity = harness.Run("entity.create", { { "name", "Fog" } })["id"].get<std::string>();
+		harness.Run("component.add", { { "entity", entity }, { "component", "HeightFog" }, { "values", { { "Density", 0.1 }, { "Color", { 0.5, 0.6, 0.7 } } } } });
+		CHECK(fog(entity)["values"]["Density"].get<double>() == doctest::Approx(0.1));
+		CHECK(fog(entity)["values"]["Color"][2].get<double>() == doctest::Approx(0.7));
+		harness.Run("component.set", { { "entity", entity }, { "component", "HeightFog" }, { "values", { { "MaxOpacity", 0.5 }, { "BaseHeight", -20 } } } });
+		CHECK(fog(entity)["values"]["MaxOpacity"].get<double>() == doctest::Approx(0.5));
+		harness.Run("edit.undo");
+		CHECK(fog(entity)["values"]["MaxOpacity"].get<double>() == doctest::Approx(1.0));
+		CHECK(fog(entity)["values"]["BaseHeight"].get<double>() == doctest::Approx(0.0));
+		for (const auto& [property, value] : { std::pair("Density", -0.1), std::pair("HeightFalloff", 0.0), std::pair("StartDistance", -1.0),
+				 std::pair("MaxOpacity", 1.5), std::pair("SunScattering", 2.0) })
+		{
+			CAPTURE(property);
+			CHECK_FALSE(harness.Error("component.set", { { "entity", entity }, { "component", "HeightFog" }, { "values", { { property, value } } } }).empty());
+		}
+		CHECK(fog(entity)["values"]["Density"].get<double>() == doctest::Approx(0.1));
+	}
+
 	TEST_CASE("Scene settings changes are undoable")
 	{
 		CommandHarness harness;

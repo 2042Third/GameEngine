@@ -17,6 +17,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <limits>
+#include <utility>
+
 using namespace Strata;
 
 namespace
@@ -36,7 +39,7 @@ TEST_SUITE("Reflection")
 	{
 		const char* expected[] = {
 			"ID", "Name", "Transform", "Relationship", "Tag", "Inactive", "PrefabInstance", "Camera", "MeshRenderer",
-			"DirectionalLight", "PointLight", "SpotLight", "SkyLight", "PostProcess", "Text",
+			"DirectionalLight", "PointLight", "SpotLight", "SkyLight", "HeightFog", "PostProcess", "Text",
 #if ST_WITH_PHYSICS
 			"RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "CharacterController",
 #endif
@@ -128,6 +131,51 @@ TEST_SUITE("Reflection")
 		CHECK(sun.CascadeBlend == doctest::Approx(0.5f));
 		CHECK_FALSE(blend->SetValue(&sun, std::numeric_limits<float>::quiet_NaN()));
 		CHECK(sun.CascadeBlend == doctest::Approx(0.5f));
+
+		// Height fog: its defaults, and ranges that keep it a fog (no negative density or distance, a falloff above 0,
+		// opacities and scattering strengths within [0, 1]).
+		const ComponentInfo* fogInfo = ComponentRegistry::Find<HeightFogComponent>();
+		REQUIRE(fogInfo);
+		CHECK(fogInfo->Name == "HeightFog");
+		CHECK(fogInfo->DisplayName == "Height Fog");
+		const HeightFogComponent defaults;
+		CHECK(defaults.Density == doctest::Approx(0.02f));
+		CHECK(defaults.HeightFalloff == doctest::Approx(0.2f));
+		CHECK(defaults.BaseHeight == 0.0f);
+		CHECK(defaults.StartDistance == 0.0f);
+		CHECK(defaults.MaxOpacity == 1.0f);
+		CHECK(defaults.Color == glm::vec3(0.7f, 0.8f, 0.9f));
+		CHECK(defaults.ColorFromSky);
+		CHECK(defaults.SunScattering == doctest::Approx(0.5f));
+		const auto range = [&](const char* name) -> std::pair<float, float>
+		{
+			const PropertyInfo* property = fogInfo->FindProperty(name);
+			REQUIRE_MESSAGE(property, name);
+			CHECK(property->Type == PropertyType::Float);
+			return { property->Min, property->Max };
+		};
+		CHECK(range("Density").first == 0.0f);
+		CHECK(range("StartDistance").first == 0.0f);
+		CHECK(range("HeightFalloff").first == HeightFogComponent::c_MinHeightFalloff);
+		CHECK(HeightFogComponent::c_MinHeightFalloff > 0.0f);
+		CHECK(range("MaxOpacity") == std::pair(0.0f, 1.0f));
+		CHECK(range("SunScattering") == std::pair(0.0f, 1.0f));
+		CHECK(range("BaseHeight").first < -10000.0f); // Any world height
+		const PropertyInfo* fogColor = fogInfo->FindProperty("Color");
+		REQUIRE(fogColor);
+		CHECK(fogColor->Type == PropertyType::Color3);
+		CHECK(fogInfo->FindProperty("ColorFromSky")->Type == PropertyType::Bool);
+		HeightFogComponent fog;
+		CHECK_FALSE(fogInfo->FindProperty("Density")->IsInRange(PropertyValue(-0.1f)));
+		CHECK_FALSE(fogInfo->FindProperty("HeightFalloff")->IsInRange(PropertyValue(0.0f)));
+		CHECK_FALSE(fogInfo->FindProperty("MaxOpacity")->IsInRange(PropertyValue(1.5f)));
+		CHECK_FALSE(fogInfo->FindProperty("StartDistance")->IsInRange(PropertyValue(-1.0f)));
+		CHECK(fogInfo->FindProperty("HeightFalloff")->SetValue(&fog, PropertyValue(0.0f))); // Editors clamp
+		CHECK(fog.HeightFalloff == HeightFogComponent::c_MinHeightFalloff);
+		CHECK(fogInfo->FindProperty("SunScattering")->SetValue(&fog, PropertyValue(2.0f)));
+		CHECK(fog.SunScattering == 1.0f);
+		CHECK_FALSE(fogInfo->FindProperty("Density")->SetValue(&fog, std::numeric_limits<float>::quiet_NaN()));
+		CHECK(fog.Density == doctest::Approx(0.02f));
 
 		const PropertyInfo* rotation = ComponentRegistry::Find<TransformComponent>()->FindProperty("Rotation");
 		TransformComponent transform;
