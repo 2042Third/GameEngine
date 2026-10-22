@@ -318,6 +318,8 @@ namespace Strata::Tests
 		std::string error;
 		m_Project = Project::Load(CopyFeatureProject(m_Directory), &error);
 		REQUIRE_MESSAGE(m_Project, error);
+		REQUIRE(m_Project->GetSettingsProblems().empty());
+		m_SettingsProvider = CreateScope<EngineServices::ScopedProvider<IProjectSettings>>(m_Project->GetSettings());
 
 		EditorAssetManagerSpecification specification;
 		specification.AssetDirectory = m_Project->GetAssetDirectory();
@@ -443,8 +445,8 @@ namespace Strata::Tests
 		CHECK(physicsStats.BodyOverflowCount == 0);
 		CHECK(physicsStats.GrowthCount == 0);
 
-		// The scene's collision layers (names and a matrix that is not the default, so they prove that they serialize) reached
-		// the running scene; the feature scripts read them (PhysicsApiFeatures).
+		// The project's collision layers (names and a matrix that is not the default) reached the running scene: Feature.stscene
+		// stores none, so they came from FeatureTest.stproj; the feature scripts read them (PhysicsApiFeatures).
 		const PhysicsLayerSettings& layers = scene.GetPhysicsLayers();
 		CHECK(layers.Names[3] == "Triggers");
 		CHECK_FALSE(layers.IsDefaultMatrix());

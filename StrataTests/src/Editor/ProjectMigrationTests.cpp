@@ -376,9 +376,16 @@ TEST_SUITE("Editor.ProjectMigration")
 			REQUIRE_MESSAGE(!copy.empty(), error);
 			const std::filesystem::path projectFile = Project::FindProjectFile(copy, &error);
 			REQUIRE_MESSAGE(!projectFile.empty(), error);
-			// As 0.5.0 left it: version 2, without settings.
+			// The section the sample was migrated to when it was opened in place (none: the default table).
 			std::optional<nlohmann::json> file = JsonUtils::Parse(FileSystem::ReadText(projectFile).value_or(""));
 			REQUIRE(file.has_value());
+			CHECK((*file)["Strata"]["Version"] == Project::c_FormatVersion);
+			const nlohmann::json settings = file->value("Settings", nlohmann::json::object());
+			const nlohmann::json* committed = JsonUtils::Find(settings, ProjectCollisionLayers::c_SectionId);
+			const nlohmann::json* committedValue = committed ? JsonUtils::Find(*committed, "Value") : nullptr;
+			const PhysicsLayerSettings committedLayers = committedValue ? PhysicsLayerSettings::FromJson(*committedValue) : PhysicsLayerSettings();
+			CHECK(committedLayers == expected.Layers);
+			// As 0.5.0 left it: version 2, without settings.
 			(*file)["Strata"]["Version"] = 2;
 			file->erase("Settings");
 			REQUIRE(FileSystem::WriteText(projectFile, JsonUtils::Dump(*file, 1, '\t')));
@@ -391,7 +398,7 @@ TEST_SUITE("Editor.ProjectMigration")
 				scenes.push_back(scene);
 			CHECK(result["migrated"]["collisionLayers"]["scenes"] == scenes);
 			CHECK(result["migrated"]["collisionLayers"]["conflicts"].empty());
-			CHECK(harness.ProjectLayers() == expected.Layers);
+			CHECK(harness.ProjectLayers() == committedLayers);
 			CHECK(CountWarnings(logged, "collision layers") == 0);
 		}
 	}

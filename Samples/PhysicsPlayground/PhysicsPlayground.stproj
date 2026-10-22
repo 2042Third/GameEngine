@@ -14,8 +14,25 @@
 		},
 		"StartScene": "51ED0D2229085C4F"
 	},
+	"Settings": {
+		"Scene.CollisionLayers": {
+			"Value": {
+				"Names": {
+					"1": "Ball",
+					"2": "Ghost"
+				},
+				"NoCollisions": [
+					[
+						1,
+						2
+					]
+				]
+			},
+			"Version": 1
+		}
+	},
 	"Strata": {
 		"Format": "Project",
-		"Version": 2
+		"Version": 3
 	}
 }

@@ -5,7 +5,9 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/EditorAssetManager.h"
 #include "Strata/Core/Base.h"
+#include "Strata/Core/EngineServices.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Core/ProjectSettings.h"
 #include "Strata/Project/Project.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scripting/ScriptEngine.h"
@@ -46,7 +48,8 @@ namespace Strata::Tests
 	void LoadAllAssets(AssetManagerBase& manager);
 
 	// A copy of the feature project in a temporary directory, opened and imported. While it lives, its
-	// EditorAssetManager is the active asset manager and the project the active project.
+	// EditorAssetManager is the active asset manager, the project the active project and its settings the engine service
+	// IProjectSettings (as a program that runs a project provides them: scenes take its collision layers).
 	class FeatureProject
 	{
 	public:
@@ -65,6 +68,7 @@ namespace Strata::Tests
 	private:
 		std::filesystem::path m_Directory;
 		Ref<Project> m_Project;
+		Scope<EngineServices::ScopedProvider<IProjectSettings>> m_SettingsProvider; // After m_Project: ends first
 		Ref<EditorAssetManager> m_AssetManager;
 		Ref<AssetManagerBase> m_PreviousAssetManager;
 		Ref<Project> m_PreviousProject;

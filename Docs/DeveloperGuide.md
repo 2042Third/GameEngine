@@ -611,8 +611,10 @@ The feature test keeps [golden rule 6](../AGENTS.md#golden-rules): every compone
 exercised by it.
 
 - **Feature test** (golden rule 6): `StrataTests/FeatureTest/` is a real project (`FeatureTest.stproj`, `Assets/`
-  with committed `.meta` files). Its scene `Scenes/Feature.stscene` contains every registered component, the project
-  has assets of every type (the tiny binary ones come from `Tools/GenerateAssets.py`, whose outputs are committed), and
+  with committed `.meta` files). Its scene `Scenes/Feature.stscene` contains every registered component, its project
+  file sets every registered project settings section to a value other than the default (the collision layers the
+  scene and scripts use come from there: `FeatureProject` provides the project's settings as `IProjectSettings`, as a
+  program that runs a project does, and the scene stores none), the project has assets of every type (the tiny binary ones come from `Tools/GenerateAssets.py`, whose outputs are committed), and
   its script module `Scripts/` (target `StrataTestScriptsFeatureTest`) exercises the whole script SDK. Feature scripts
   derive from `FeatureTest::FeatureScript`: `Expect(condition, "description")` counts checks and keeps the first
   failure, `Completed` marks the end of a scenario, and `Journal()` records events in the scene's "Journal" entity.
@@ -651,13 +653,15 @@ exercised by it.
     count together; calls on receivers of unknown type do not count, and the failure lists them;
   - a feature script fails a check or does not complete, a script class never runs, or the run logs a warning or error
     other than the messages the scripts log on purpose (`c_ExpectedLogMessages` in `FeatureTestUtils.cpp`);
-  - an asset type has no asset in the project, an asset imports with warnings, or importing rewrites a `.meta` file.
+  - an asset type has no asset in the project, an asset imports with warnings, or importing rewrites a `.meta` file;
+  - a registered project settings section is not set in `FeatureTest.stproj`, or set to its default.
 - **Extending the feature test:** a new component gets an entity (or joins one) in `Feature.stscene` with a non-default
   value for every property; edit the JSON, or open a copy of the project in the editor, edit and save, and copy the
   scene back. A new script API is called from a feature script (extend the matching `Scripts/*Features.cpp`, or add a
   class with an entity in the scene and journal its `OnCreate`) that `Expect`s its effect; a new host function is also
-  listed in `ST_SCRIPT_HOST_FUNCTIONS`. A new asset type gets a small asset with its `.meta` in `Assets/`. Messages
-  scripts log on purpose go into `c_ExpectedLogMessages`.
+  listed in `ST_SCRIPT_HOST_FUNCTIONS`. A new asset type gets a small asset with its `.meta` in `Assets/`. A new project
+  settings section gets a value in `FeatureTest.stproj` (set it in a copy opened in the editor and copy the file back).
+  Messages scripts log on purpose go into `c_ExpectedLogMessages`.
 
 ### Script modules and package tests
 

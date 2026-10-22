@@ -12,8 +12,19 @@
 		},
 		"StartScene": "3A8A714892F1CC38"
 	},
+	"Settings": {
+		"Scene.CollisionLayers": {
+			"Value": {
+				"Names": {
+					"1": "Terrain"
+				},
+				"NoCollisions": []
+			},
+			"Version": 1
+		}
+	},
 	"Strata": {
 		"Format": "Project",
-		"Version": 2
+		"Version": 3
 	}
 }
