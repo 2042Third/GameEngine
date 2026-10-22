@@ -4,6 +4,7 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Profiling.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneWorkBudget.h"
@@ -33,6 +34,21 @@ namespace Strata
 		Scope<GameRuntime> runtime(new GameRuntime());
 		runtime->m_Opened = std::chrono::steady_clock::now();
 		runtime->m_Manifest = std::move(*manifest);
+		// The export validated the settings, so a section its module refuses is a damaged install, and the game must not run
+		// with settings it cannot read (bindings that do nothing, layers that collide wrongly). Sections no registered module
+		// claims are not provided.
+		if (runtime->m_Manifest.Settings)
+		{
+			const SettingsRegistry& registry = options.Settings ? *options.Settings : SettingsRegistry::GetProcessRegistry();
+			const std::vector<SettingsProblem> problems = runtime->m_Manifest.Settings->Validate(registry);
+			if (!problems.empty())
+			{
+				if (outError)
+					*outError = fmt::format("The game's settings section '{}' is invalid: {}", problems.front().Section, problems.front().Message);
+				return nullptr;
+			}
+			runtime->m_SettingsProvider = CreateScope<EngineServices::ScopedProvider<IProjectSettings>>(*runtime->m_Manifest.Settings);
+		}
 		const std::filesystem::path packPath = manifestPath.parent_path() / FileSystem::FromUTF8(runtime->m_Manifest.AssetPack);
 		runtime->m_AssetManager = RuntimeAssetManager::Create(packPath, outError);
 		if (!runtime->m_AssetManager)

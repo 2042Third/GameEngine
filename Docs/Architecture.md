@@ -467,10 +467,11 @@ callbacks), `ScriptHostAPI` (the host function table), `ScriptValue` (ABI value 
 
 **Project** (`Project/`). `Project` is a game project: the `.stproj` file (with the export settings,
 `Export.AlwaysInclude` and `Export.LoadingScene`, and the settings sections the project sets, which it keeps whether or
-not this build's modules know them: DeveloperGuide.md, "Project settings"), the asset directory, the script sources and the intermediate
-directory `.strata/` (`Cache/`, `Scripts/Build/`, `Scripts/Bin/`), plus the process-wide active project. `GameManifest`
-is the `.stgame` file of an exported game (name, asset pack and patch packs, start scene, loading scene, script module,
-window settings).
+not this build's modules know them: DeveloperGuide.md, "Project settings"), the asset directory, the script sources and
+the intermediate directory `.strata/` (`Cache/`, `Scripts/Build/`, `Scripts/Bin/`), plus the process-wide active
+project. `GameManifest` is the `.stgame` file of an exported game (name, asset pack and patch packs, start scene, loading
+scene, script module, window settings, and the project's settings sections as stored, which the runtime validates once
+the modules registered).
 
 **Runtime** (`Runtime/`). `GameRuntime` runs an exported game without depending on windowing or rendering: it opens
 the pack, loads the script module, starts scenes and honors their requests. `GameRenderer` draws the running scene
@@ -1137,6 +1138,7 @@ the game (`EngineServices::ScopedProvider`, which restores the provider it repla
 | --- | --- | --- |
 | `IGameWindow`: window mode, resolution, vsync, the size the game renders at | StrataRuntime's `GameWindowService` (applied after the frame, `ApplyRequests`; headless: accepted and reported back), the editor's `EditorGameWindow` (recorded and reported, never applied: `editor.status`, a notice over the Game view and its "Game's request" resolution) | script host (`Game::SetWindowMode` and friends) |
 | `IGameSaves`: the save directory | `GameRuntime` (`<user data>/<game>/Saves`, `GameRuntimeOptions::SaveFilesDirectory`), `EditorContext` (`<project>/.strata/Saves`) | script host (`Game::WriteSaveFile` and friends, through `SaveFiles`) |
+| `IProjectSettings`: the project's settings sections, validated (DeveloperGuide.md, "Project settings") | `GameRuntime` (its manifest's, version 5 manifests; none for older ones) | the modules that register sections, on the main thread |
 
 ### Scene caches
 
@@ -3981,7 +3983,8 @@ times arrived) and `GPUBusyMs`. A row describes one frame: what the frame left i
 columns belong together. `Create` registers every scene system's stage first, so `Scene.Animation` and every module's system
 get columns; a stage registered after the header gets none and is warned about once, by name. A log that cannot be written
 fails the run (exit code 1).
-`GameRuntime::Create` loads the manifest, makes a
+`GameRuntime::Create` loads the manifest, validates its settings sections (version 5; a section a registered module
+claims that its module refuses stops the game, naming it) and provides them as `IProjectSettings` while it lives, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
 `PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module
 into its own `ScriptEngine` without hot reload and makes it active, and starts loading the start scene (`SceneLoader`) and

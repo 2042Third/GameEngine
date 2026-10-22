@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
+#include "Core/SettingsTestUtils.h"
 #include "Runtime/PerfLogReader.h"
 #include "Scene/SceneTestUtils.h"
 #include "Strata/Asset/AssetPackWriter.h"
@@ -8,6 +9,8 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/ProjectSettings.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Runtime/GameRuntime.h"
@@ -113,6 +116,21 @@ namespace
 		manifest.LoadingScene = loadingScene;
 		REQUIRE_MESSAGE(manifest.Save(directory / "Game.stgame", &error), error);
 		return directory / "Game.stgame";
+	}
+
+	// Rewrites a manifest written by WriteGame: its format version and its settings (none when null).
+	void RewriteManifest(const std::filesystem::path& manifest, uint32_t version, const nlohmann::json& settings)
+	{
+		const std::optional<std::string> text = FileSystem::ReadText(manifest);
+		REQUIRE(text);
+		std::optional<nlohmann::json> json = JsonUtils::Parse(*text);
+		REQUIRE(json);
+		(*json)["Strata"]["Version"] = version;
+		if (settings.is_null())
+			json->erase("Settings");
+		else
+			(*json)["Settings"] = settings;
+		REQUIRE(FileSystem::WriteText(manifest, JsonUtils::Dump(*json, 1, '\t')));
 	}
 
 	// Frames until the condition holds (REQUIREd), sleeping a little between them for the loads on other threads.
@@ -468,5 +486,73 @@ TEST_SUITE("Runtime.Game")
 		CHECK(game->GetScene()->GetEntityCount() == 30'001);
 		CHECK_FALSE(game->IsShowingLoadingScene());
 		CHECK_FALSE(game->IsLoadingScene());
+	}
+
+	TEST_CASE("An exported game provides its manifest's settings while it runs, and a version-4 manifest none")
+	{
+		SettingsRegistry registry;
+		Tests::RegisterTestSections(registry);
+		GameRuntimeOptions options;
+		options.Settings = &registry;
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeSettings");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 1) } }, UUID(0x1010));
+		RewriteManifest(manifest, 5, {
+			{ "Test.Simple", { { "Version", 1 }, { "Value", { { "Count", 2 } } } } },
+			{ "Test.Complex", { { "Version", 1 }, { "Value", { { "Name", "Upgraded" } } } } },
+			{ "Game.Unknown", { { "Version", 9 }, { "Value", { { "Anything", true } } } } } });
+		REQUIRE_FALSE(EngineServices::Get<IProjectSettings>());
+
+		std::string error;
+		{
+			Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, options);
+			REQUIRE_MESSAGE(game, error);
+			UpdateUntil(*game, [&]() { return game->HasStarted(); });
+			const IProjectSettings* settings = EngineServices::Get<IProjectSettings>();
+			REQUIRE(settings);
+			REQUIRE(settings->FindSection("Test.Simple"));
+			CHECK((*settings->FindSection("Test.Simple"))["Count"] == 2);
+			CHECK((*settings->FindSection("Test.Simple"))["Mode"] == "Fast");
+			// Validated as the registry reads it: upgraded to the section's version.
+			REQUIRE(settings->FindSection("Test.Complex"));
+			CHECK((*settings->FindSection("Test.Complex"))["Names"] == nlohmann::json::array({ "Upgraded" }));
+			// A section no registered module claims is not provided, and does not stop the game.
+			CHECK_FALSE(settings->FindSection("Game.Unknown"));
+		}
+		CHECK_FALSE(EngineServices::Get<IProjectSettings>());
+
+		// A version-4 manifest has no settings to provide: modules keep their defaults (and scenes their stored settings).
+		RewriteManifest(manifest, 4, nullptr);
+		Scope<GameRuntime> old = GameRuntime::Create(manifest, &error, options);
+		REQUIRE_MESSAGE(old, error);
+		CHECK_FALSE(old->GetManifest().Settings.has_value());
+		CHECK_FALSE(EngineServices::Get<IProjectSettings>());
+		UpdateUntil(*old, [&]() { return old->HasStarted(); });
+		CHECK_FALSE(EngineServices::Get<IProjectSettings>());
+	}
+
+	TEST_CASE("A manifest section that fails Read stops the game naming it")
+	{
+		SettingsRegistry registry;
+		Tests::RegisterTestSections(registry);
+		GameRuntimeOptions options;
+		options.Settings = &registry;
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeSettingsInvalid");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 1) } }, UUID(0x1010));
+		RewriteManifest(manifest, 5, {
+			{ "Test.Complex", { { "Version", 2 }, { "Value", { { "Names", { "A" } } } } } },
+			{ "Test.Simple", { { "Version", 1 }, { "Value", { { "Count", 50 } } } } } });
+
+		std::string error;
+		CHECK_FALSE(GameRuntime::Create(manifest, &error, options));
+		CHECK(error == "The game's settings section 'Test.Simple' is invalid: 'Count' must be a whole number from 1 to 8");
+		CHECK_FALSE(EngineServices::Get<IProjectSettings>());
+
+		// Read refuses a newer version of a section too.
+		RewriteManifest(manifest, 5, { { "Test.Complex", { { "Version", 3 }, { "Value", nlohmann::json::object() } } } });
+		CHECK_FALSE(GameRuntime::Create(manifest, &error, options));
+		CHECK(error.find("'Test.Complex' is invalid") != std::string::npos);
+		// Once valid, the same game starts.
+		RewriteManifest(manifest, 5, { { "Test.Simple", { { "Version", 1 }, { "Value", { { "Count", 5 } } } } } });
+		CHECK(GameRuntime::Create(manifest, &error, options));
 	}
 }

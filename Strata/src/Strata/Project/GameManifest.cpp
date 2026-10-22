@@ -29,6 +29,7 @@ namespace Strata
 	{
 		return {
 			{ "Strata", { { "Format", "Game" }, { "Version", c_FormatVersion } } },
+			{ "Settings", Settings ? Settings->ToJson() : nlohmann::json::object() },
 			{ "Game", {
 				{ "Name", Name },
 				{ "AssetPack", AssetPack },
@@ -97,6 +98,21 @@ namespace Strata
 			manifest.WindowHeight = static_cast<uint32_t>(std::clamp<uint64_t>(JsonUtils::GetUInt(*window, "Height", manifest.WindowHeight), 1, c_MaxWindowSize));
 			manifest.Fullscreen = JsonUtils::GetBool(*window, "Fullscreen", manifest.Fullscreen);
 			manifest.VSync = JsonUtils::GetBool(*window, "VSync", manifest.VSync);
+		}
+
+		// Version 5: the project's settings, checked for their shape and size only (GameRuntime validates their values).
+		manifest.Settings.reset();
+		if (version >= 5)
+		{
+			manifest.Settings = ProjectSettingsValues();
+			if (const nlohmann::json* settings = JsonUtils::Find(json, "Settings"))
+			{
+				std::string settingsError;
+				std::optional<ProjectSettingsValues> values = ProjectSettingsValues::FromJson(*settings, &settingsError);
+				if (!values)
+					return fail(fmt::format("The manifest's settings are invalid: {}", settingsError));
+				manifest.Settings = std::move(*values);
+			}
 		}
 		return manifest;
 	}

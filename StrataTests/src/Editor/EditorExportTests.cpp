@@ -14,6 +14,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Core/ProjectSettings.h>
 #include <Strata/Project/GameManifest.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
@@ -461,6 +462,30 @@ TEST_SUITE("Editor.Export")
 		// Clearing the list again.
 		harness.Run("project.setExportSettings", { { "alwaysInclude", nlohmann::json::array() } });
 		CHECK(harness.Run("project.info")["export"]["alwaysInclude"].empty());
+	}
+
+	TEST_CASE("An export carries the project's settings sections into its manifest")
+	{
+		ExportHarness harness("EditorExportSettings");
+		// The game's manifest has the project's sections, also those no module of this build claims (as they are stored).
+		const nlohmann::json settings = { { "Game.Difficulty", { { "Version", 2 }, { "Value", { { "Level", "Hard" } } } } } };
+		std::string error;
+		std::optional<ProjectSettingsValues> values = ProjectSettingsValues::FromJson(settings, &error);
+		REQUIRE_MESSAGE(values, error);
+		harness.Context.GetProject()->GetSettings() = std::move(*values);
+		const nlohmann::json result = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(harness.Directory / "Settings") }, { "includeRuntime", false } });
+		std::optional<GameManifest> manifest = GameManifest::Load(FileSystem::FromUTF8(result["manifest"].get<std::string>()), &error);
+		REQUIRE_MESSAGE(manifest, error);
+		REQUIRE(manifest->Settings);
+		CHECK(manifest->Settings->ToJson() == settings);
+
+		// Without sections the manifest carries an empty set: the game provides the modules' defaults.
+		harness.Context.GetProject()->GetSettings() = ProjectSettingsValues();
+		const nlohmann::json plain = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(harness.Directory / "Plain") }, { "includeRuntime", false } });
+		manifest = GameManifest::Load(FileSystem::FromUTF8(plain["manifest"].get<std::string>()), &error);
+		REQUIRE_MESSAGE(manifest, error);
+		REQUIRE(manifest->Settings);
+		CHECK(manifest->Settings->IsEmpty());
 	}
 
 	TEST_CASE("An export's frame times start with the frame that started it")

@@ -761,7 +761,9 @@ short. Their full wording:
   layer or library, and `StrataRuntime.NoTooling` reads its linker map. Details: Docs/Architecture.md, "Targets and
   dependencies" and "Layers".
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers,
-  built-in asset objects, scene systems), never through lower layers calling functions of higher ones. A component lives in
+  built-in asset objects, scene systems, settings sections: a module reads its project settings only on the main thread,
+  through the engine service `IProjectSettings`, [Project settings](#project-settings)), never through lower layers
+  calling functions of higher ones. A component lives in
   the module that owns it: declared in `<Module>/<Module>Components.h` and registered by `<Module>Components.cpp`, which its
   `Register<Module>Module` calls (with a `Category` for Add Component). `Scene/Components.h` holds only the scene's own
   components (ID, Name, Transform, Relationship, Tag, Inactive, PrefabInstance, Camera) and the types of components
@@ -866,6 +868,14 @@ setting is one registration, and no other code learns of it.
   back as it was read: sections no registered module claims and members of `"Project"` a later version added. A project
   file holds at most 1 MiB (`Project::c_MaxFileBytes`): `Load` refuses a larger one without reading it whole, and `Save`
   refuses to write one.
+- **Exported games.** The export copies the project's sections into the game's manifest (`.stgame` version 5,
+  `"Settings"` in the project file's form), refusing to export while a section a registered module claims is invalid;
+  sections no module of the build claims go as they are stored. `GameManifest` keeps them unvalidated (bounded at 1 MiB),
+  because the runtime reads the manifest in `CreateApplication`, before the modules register. `GameRuntime::Create`
+  validates them with the process's registry (`GameRuntimeOptions::Settings` for tests): a section its module refuses stops
+  the game, naming the section (`Application::ReportFatalError`: the export wrote a valid one, so the install is damaged,
+  and a game must not run with settings it cannot read); sections no registered module claims are ignored. While the
+  runtime lives it provides them as `IProjectSettings`. A version-4 manifest has no settings and gets no provider.
 
 ## Asset pipeline
 
@@ -1825,7 +1835,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - `project.export` writes a playable game outside the project in the background (`GameExport`; the command answers when
   it finished, so command scripts that export need frames: `--quit-after-commands`): the asset pack (`<Game>.stpak`,
   ordered by first use; `prune` leaves out what neither the scenes nor `Export.AlwaysInclude` use and lists it in
-  `excludedAssets`), the script module, the manifest (`<Game>.stgame`, start scene, script module and window settings)
+  `excludedAssets`), the script module, the manifest (`<Game>.stgame`, start scene, script module, window settings and
+  the project's settings sections: [Project settings](#project-settings))
   and the runtime executable renamed after the game. It checks what it can before it starts (a usable directory outside
   the project, among others) and fails at once otherwise; the editor stays editable meanwhile, and a document saved
   during the export that references what its plan did not hold fails it, naming the document (export again).

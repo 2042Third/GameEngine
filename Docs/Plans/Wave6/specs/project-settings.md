@@ -855,7 +855,11 @@ the MCP `settings` toolset, the child-process helper that registers a game's tes
   registered by a game appears in project.settings and is validated by its fields" (child process), "Deleting an asset
   a section names is refused" (child process), "Deleting the start or loading scene is refused while the project names
   it", "Changes while playing persist, report no RunningCopy and are undone after play stops".
-- `Editor.Export`: "A pruned export keeps an asset a section names" (child process).
+- `Editor.Export`: "A pruned export keeps an asset a section names" (child process), and "An export refuses a project
+  whose section fails Read, naming it" (child process: S1's export copies the project's sections into the manifest and
+  refuses invalid ones, testable only once a process registry has a section).
+- `Editor.ProjectSettings`: "project.open reports settingsProblems for a section that fails Read" (child process; S1's
+  `Project::Load` already logs the warning and lists `GetSettingsProblems`).
 - `Editor.ProjectSettings`: "setStartScene and setExportSettings record undo steps and no longer write on the main
   thread"; the existing callers (EditorCommandTests, EditorExportDialogTests, EditorGameFlowTests) pass.
 - `CLI.McpToolsets` (EditorMcpToolsetsTests.cpp) passes with core unchanged (27 commands, 32 tools) and maps every new

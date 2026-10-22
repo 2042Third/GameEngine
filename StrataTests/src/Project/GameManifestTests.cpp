@@ -3,6 +3,7 @@
 #include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/ProjectSettings.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Runtime/GameRuntime.h"
@@ -155,7 +156,7 @@ TEST_SUITE("Project.GameManifest")
 		std::string error;
 		// None: written as null, read as none.
 		nlohmann::json json = manifest.ToJson();
-		CHECK(json["Strata"]["Version"] == 4);
+		CHECK(json["Strata"]["Version"] == 5);
 		CHECK(json["Game"]["LoadingScene"].is_null());
 		std::optional<GameManifest> loaded = GameManifest::FromJson(json, &error);
 		REQUIRE_MESSAGE(loaded, error);
@@ -242,5 +243,78 @@ TEST_SUITE("Project.GameManifest")
 		REQUIRE(manifest.Save(directory / "Broken.stgame"));
 		CHECK_FALSE(GameRuntime::Create(directory / "Broken.stgame", &error));
 		CHECK(error.find("Missing.stpak") != std::string::npos);
+	}
+
+	TEST_CASE("Version 5 settings round-trip unvalidated")
+	{
+		GameManifest manifest;
+		manifest.AssetPack = "Game.stpak";
+		manifest.StartScene = UUID(0x42);
+		// No registry is consulted: a section nothing registers and a value its section would refuse are carried alike.
+		const nlohmann::json settings = {
+			{ "Game.Difficulty", { { "Version", 2 }, { "Value", { { "Level", "Hard" } } } } },
+			{ "Test.Simple", { { "Version", 1 }, { "Value", { { "Count", 99 } } } } } };
+		std::string error;
+		std::optional<ProjectSettingsValues> values = ProjectSettingsValues::FromJson(settings, &error);
+		REQUIRE_MESSAGE(values, error);
+		manifest.Settings = std::move(*values);
+
+		const nlohmann::json json = manifest.ToJson();
+		CHECK(json["Strata"]["Version"] == 5);
+		CHECK(json["Settings"] == settings);
+		std::optional<GameManifest> loaded = GameManifest::FromJson(json, &error);
+		REQUIRE_MESSAGE(loaded, error);
+		REQUIRE(loaded->Settings);
+		CHECK(loaded->Settings->ToJson() == settings);
+		CHECK_FALSE(loaded->Settings->FindSection("Game.Difficulty"));
+		CHECK_FALSE(loaded->Settings->FindSection("Test.Simple"));
+
+		// A manifest without sections stores an empty object and reads back an empty, provided set.
+		GameManifest plain = manifest;
+		plain.Settings = ProjectSettingsValues();
+		CHECK(plain.ToJson()["Settings"] == nlohmann::json::object());
+		nlohmann::json withoutKey = plain.ToJson();
+		withoutKey.erase("Settings");
+		loaded = GameManifest::FromJson(withoutKey, &error);
+		REQUIRE_MESSAGE(loaded, error);
+		REQUIRE(loaded->Settings);
+		CHECK(loaded->Settings->IsEmpty());
+
+		// Settings of the wrong shape refuse the manifest.
+		nlohmann::json broken = json;
+		broken["Settings"] = { { "Game.Difficulty", { { "Value", 1 } } } };
+		CHECK_FALSE(GameManifest::FromJson(broken, &error));
+		CHECK(error.find("Game.Difficulty") != std::string::npos);
+	}
+
+	TEST_CASE("Version 4 manifests load without settings")
+	{
+		GameManifest manifest;
+		manifest.AssetPack = "Game.stpak";
+		manifest.StartScene = UUID(0x42);
+		nlohmann::json version4 = manifest.ToJson();
+		version4["Strata"]["Version"] = 4;
+		// Version 4 has no settings: a key of that name is not read.
+		version4["Settings"] = { { "Game.Difficulty", { { "Version", 1 }, { "Value", nullptr } } } };
+		std::string error;
+		const std::optional<GameManifest> loaded = GameManifest::FromJson(version4, &error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK_FALSE(loaded->Settings.has_value());
+		CHECK(loaded->StartScene == UUID(0x42));
+	}
+
+	TEST_CASE("Manifest settings over 1 MiB are refused")
+	{
+		GameManifest manifest;
+		manifest.AssetPack = "Game.stpak";
+		manifest.StartScene = UUID(0x42);
+		nlohmann::json json = manifest.ToJson();
+		json["Settings"] = { { "Game.Text", { { "Version", 1 }, { "Value", std::string(ProjectSettingsValues::c_MaxStoredBytes, 'x') } } } };
+		std::string error;
+		CHECK_FALSE(GameManifest::FromJson(json, &error));
+		CHECK(error.find("more than the 1 MiB") != std::string::npos);
+		// Just under the bound loads.
+		json["Settings"] = { { "Game.Text", { { "Version", 1 }, { "Value", std::string(ProjectSettingsValues::c_MaxStoredBytes - 64, 'x') } } } };
+		CHECK(GameManifest::FromJson(json, &error));
 	}
 }

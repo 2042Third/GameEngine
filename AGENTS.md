@@ -229,7 +229,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   `MayInclude`, with the reason in the layer's `Notes`. Removing an exception lowers `MaxAllowlistEntries`. The table is
   the build (a library per layer); games link no `Tooling` layer.
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers, scene
-  systems...), never through lower layers calling functions of higher ones. A component lives in its module
+  systems, settings sections read through `IProjectSettings` on the main thread...), never through lower layers
+  calling functions of higher ones. A component lives in its module
   (`<Module>/<Module>Components.h`); `Scene/Components.h` only holds Scene's and those sibling layers must read. Each
   module has one registration function (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`), called only by
   the composition root, `Engine::RegisterBuiltinModules`, in dependency order, before anything reads a registry. Tooling

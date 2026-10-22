@@ -7,6 +7,8 @@
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
+#include <Strata/Core/ProjectSettings.h>
+#include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/World/WorldAsset.h>
@@ -221,6 +223,15 @@ namespace Strata
 			}
 		}
 
+		// The project's settings travel in the manifest (games read no project file). A section a registered module claims must
+		// be valid, or the game would refuse to start; sections no module of this build claims go as they are stored.
+		ProjectSettingsValues settings = project.GetSettings();
+		if (const std::vector<SettingsProblem> problems = settings.Validate(SettingsRegistry::GetProcessRegistry()); !problems.empty())
+		{
+			return fail(fmt::format("The project's settings section '{}' is invalid ({}): set it again or reset it before exporting",
+				problems.front().Section, problems.front().Message));
+		}
+
 		AssetPackBuildOptions packOptions;
 		packOptions.StartScene = startScene;
 		packOptions.Prune = options.Prune;
@@ -259,6 +270,7 @@ namespace Strata
 		exporter->m_Manifest.WindowWidth = options.WindowWidth;
 		exporter->m_Manifest.WindowHeight = options.WindowHeight;
 		exporter->m_Manifest.Fullscreen = options.Fullscreen;
+		exporter->m_Manifest.Settings = std::move(settings);
 		exporter->m_StartTime = std::chrono::steady_clock::now();
 		exporter->m_Shared = CreateRef<Shared>();
 		ST_INFO("Exporting '{}' to {}", project.GetConfig().Name, FileSystem::ToUTF8(options.Directory));
