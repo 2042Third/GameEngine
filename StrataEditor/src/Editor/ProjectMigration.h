@@ -51,7 +51,7 @@ namespace Strata
 		// Names come from the start scene (`startScene`, null for none), then from the others by path: a scene that names a
 		// layer another named differently, or names one with a name another layer has, is a conflict and the first name
 		// stays. A pair of layers any scene keeps apart is kept apart, and scenes whose matrices differ (other than the default)
-		// are a conflict.
+		// are a conflict, which names the pairs they disagree on.
 		LayerMerge MergeSceneLayers(const std::vector<StoredSceneLayers>& scenes, AssetHandle startScene);
 
 	}

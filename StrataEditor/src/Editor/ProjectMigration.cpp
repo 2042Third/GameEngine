@@ -61,6 +61,28 @@ namespace Strata::ProjectMigration
 			return fmt::format("layer {} '{}'", layer, name);
 		}
 
+		// The pairs of layers two matrices disagree on, by index ("1 and 2, 3 and 3"): the first few, then how many more.
+		std::string DescribeDifferentPairs(const PhysicsLayerSettings& a, const PhysicsLayerSettings& b)
+		{
+			constexpr size_t c_MaxListedPairs = 8;
+			std::string text;
+			size_t count = 0;
+			for (uint32_t first = 0; first < c_PhysicsLayerCount; first++)
+			{
+				for (uint32_t second = first; second < c_PhysicsLayerCount; second++)
+				{
+					if (a.DoCollide(first, second) == b.DoCollide(first, second))
+						continue;
+					if (count < c_MaxListedPairs)
+						text += fmt::format("{}{} and {}", count == 0 ? "" : ", ", first, second);
+					count++;
+				}
+			}
+			if (count > c_MaxListedPairs)
+				text += fmt::format(" and {} more", count - c_MaxListedPairs);
+			return text;
+		}
+
 	}
 
 	SceneLayerScan ScanSceneLayers(const std::filesystem::path& assetDirectory, const std::atomic<bool>* cancel)
@@ -162,8 +184,8 @@ namespace Strata::ProjectMigration
 				continue;
 			if (matrixFrom && scene->Layers.CollisionMasks != matrixFrom->Layers.CollisionMasks)
 			{
-				merge.Conflicts.push_back(fmt::format("{} and {} keep different pairs of layers apart: the project keeps apart every pair either does",
-					matrixFrom->Path, scene->Path));
+				merge.Conflicts.push_back(fmt::format("{} and {} keep different pairs of layers apart (layers {}): the project keeps apart every pair "
+					"either does", matrixFrom->Path, scene->Path, DescribeDifferentPairs(matrixFrom->Layers, scene->Layers)));
 			}
 			if (!matrixFrom)
 				matrixFrom = scene;

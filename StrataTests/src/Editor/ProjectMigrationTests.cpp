@@ -249,10 +249,11 @@ TEST_SUITE("Editor.ProjectMigration")
 		CHECK_FALSE(layers.DoCollide(3, 3));
 		CHECK(layers.DoCollide(1, 3));
 		CHECK(layers.DoCollide(0, 0));
-		// Matrices that differ are a conflict.
+		// Matrices that differ are a conflict, which names the pairs they disagree on.
 		const nlohmann::json& conflicts = result["migrated"]["collisionLayers"]["conflicts"];
 		REQUIRE(conflicts.size() == 1);
 		CHECK(conflicts[0].get<std::string>().find("Scenes/Other.stscene") != std::string::npos);
+		CHECK(conflicts[0].get<std::string>().find("layers 1 and 2, 3 and 3") != std::string::npos);
 	}
 
 	TEST_CASE("A 0.5.0 project whose scenes store no layers or the default table gets no section and is written as version 3")

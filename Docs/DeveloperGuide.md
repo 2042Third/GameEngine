@@ -993,9 +993,9 @@ two members). A layer's name means the same in every scene and prefab.
   layer has, is a conflict and the first stays); a pair any scene keeps apart is kept apart (matrices that differ are a
   conflict). The section is set without an undo step when a scene stored a table, and the project file is written as
   version 3 in every case, so the version records the migration: a version-3 file never migrates (new projects, a
-  section reset later). Conflicts are logged as one warning, and `project.open` reports
-  `migrated: {collisionLayers: {scenes, conflicts, unreadable}}` (null when nothing migrated). Scene files are not
-  touched.
+  section reset later). Conflicts (the names, and the pairs on which matrices differ) are logged as one warning, and
+  `project.open` reports `migrated: {collisionLayers: {scenes, conflicts, unreadable}}` (null when nothing migrated).
+  Scene files are not touched.
 
 ### Preferences
 
