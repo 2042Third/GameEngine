@@ -5,6 +5,13 @@
 			"AlwaysInclude": [],
 			"LoadingScene": "43FD467DF4593C28"
 		},
+		"Game": {
+			"Company": "",
+			"Copyright": "",
+			"Icon": "D2E98BF70D16EE64",
+			"Title": "Sky Islands",
+			"Version": "1.0.0"
+		},
 		"Name": "ThirdPerson",
 		"Scripts": {
 			"ModuleName": "ThirdPersonScripts",

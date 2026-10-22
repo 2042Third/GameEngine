@@ -1,6 +1,13 @@
 {
 	"Project": {
 		"AssetDirectory": "Assets",
+		"Game": {
+			"Company": "Strata Tests",
+			"Copyright": "(c) 2026 Strata Tests",
+			"Icon": "F7A0000000000005",
+			"Title": "Strata Feature Test",
+			"Version": "6.1.2.3"
+		},
 		"Name": "FeatureTest",
 		"Scripts": {
 			"ModuleName": "FeatureTestScripts",

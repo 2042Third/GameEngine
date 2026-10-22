@@ -5,6 +5,13 @@
 			"AlwaysInclude": [],
 			"LoadingScene": "F8A23B2F45552087"
 		},
+		"Game": {
+			"Company": "",
+			"Copyright": "",
+			"Icon": "9413FB1C2C2D6CAF",
+			"Title": "Open World",
+			"Version": "1.0.0"
+		},
 		"Name": "OpenWorld",
 		"Scripts": {
 			"ModuleName": "OpenWorldScripts",

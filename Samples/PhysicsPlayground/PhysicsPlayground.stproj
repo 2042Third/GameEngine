@@ -7,6 +7,13 @@
 				"Sounds/Impacts"
 			]
 		},
+		"Game": {
+			"Company": "",
+			"Copyright": "",
+			"Icon": "07CDCBEC2D80821C",
+			"Title": "Physics Playground",
+			"Version": "1.0.0"
+		},
 		"Name": "PhysicsPlayground",
 		"Scripts": {
 			"ModuleName": "PhysicsPlaygroundScripts",

@@ -650,12 +650,13 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 
 	# The game runs longer than the in-process feature scenario (200 frames), where nothing may end it: its scripts quit only
 	# when a test runner asks them to. Its save files go into the build tree (--save-directory), never into the user's data,
-	# where the runs of other build trees would meet them.
+	# where the runs of other build trees would meet them. Its log names the project's title and version, and its icon lies
+	# next to it.
 	add_test(NAME StrataRuntime.FeatureTest
 		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_FEATURE_RUN_DIR}/Build/FeatureTest${CMAKE_EXECUTABLE_SUFFIX}"
 			"-DARGUMENTS=--headless|--frames|240|--save-directory|${STRATA_FEATURE_RUN_DIR}/Saves"
-			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}|Keeping the game's save files in ${STRATA_FEATURE_RUN_DIR}/Saves"
-			"-DEXPECT_PATHS=${STRATA_FEATURE_RUN_DIR}/Saves" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}|Keeping the game's save files in ${STRATA_FEATURE_RUN_DIR}/Saves|Strata Feature Test 6.1.2.3 (Strata "
+			"-DEXPECT_PATHS=${STRATA_FEATURE_RUN_DIR}/Saves|${STRATA_FEATURE_RUN_DIR}/Build/FeatureTest.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataRuntime.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestGame LABELS "feature")
 endif()
 

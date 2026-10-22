@@ -17,3 +17,4 @@ domain; the authors are named as thanks, and the game's credits (Main Menu > Cre
 | `Assets/Sounds/UI/` | https://kenney.nl/assets/ui-pack (version 2.0) | Kenney | CC0-1.0 | | `click-a.ogg`, `tap-a.ogg` and `switch-a.ogg`, renamed `Click.ogg`, `Hover.ogg` and `Toggle.ogg` |
 | `Assets/UI/` | https://kenney.nl/assets/ui-pack (version 2.0) | Kenney | CC0-1.0 | | 2 of 870 PNGs: `Blue/Default/button_rectangle_depth_gradient.png` and `Grey/Default/button_square_flat.png` (the buttons' and panels' sliced images) |
 | `Assets/Fonts/KenneyFuture.ttf` | https://kenney.nl/assets/kenney-fonts | Kenney | CC0-1.0 | | `Kenney Future.ttf`, renamed |
+| `Assets/Icon.png` | A render of the sample: a 256 x 256 `viewport.capture` of its main menu scene (the robot among the trees and flowers), the exported game's icon (`project.setGameInfo`) | Strata | Strata | | none |

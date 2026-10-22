@@ -385,7 +385,10 @@ In a source checkout, `StrataTests/Editor/TetrisCommands.json.in` and `SamplePro
 ## 8. Export and check the game
 
 ```text
-project.export {"directory": "<absolute, outside the project>"}   # <Game>[.exe], .stgame, .stpak, the script module
+viewport.capture {"width": 256, "height": 256, "camera": "scene", "path": "<absolute, outside the project>/Icon.png"}
+asset.import {"file": "<that Icon.png>"}                           # the icon's image, a texture of the project
+project.setGameInfo {"title": "<Game title>", "version": "1.0.0", "icon": "Icon.png"}   # what the exported game shows
+project.export {"directory": "<absolute, outside the project>"}   # <Game>[.exe], .stgame, .stpak, the script module, <Game>.png
 project.export {"directory": "<another one>", "prune": true}       # smaller: only what the scenes use (see below)
 <dir>/<Game> --headless --frames 600       # 10 s of game time at 60 frames per second; exit code 0, the scripts' log lines
 <dir>/<Game> --windowed --frames 120 --screenshot shot.png        # look at shot.png

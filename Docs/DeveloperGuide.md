@@ -614,7 +614,9 @@ exercised by it.
   with committed `.meta` files). Its scene `Scenes/Feature.stscene` contains every registered component, its project
   file sets every registered project settings section to a value other than the default (the collision layers the
   scene and scripts use come from there: `FeatureProject` provides the project's settings as `IProjectSettings`, as a
-  program that runs a project does, and the scene stores none), the project has assets of every type (the tiny binary ones come from `Tools/GenerateAssets.py`, whose outputs are committed), and
+  program that runs a project does, and the scene stores none), it gives the game an identity (title, version, company,
+  copyright and `Textures/Checker.png` as its icon, which `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` find in
+  the export, its log and `FeatureTest.png`), the project has assets of every type (the tiny binary ones come from `Tools/GenerateAssets.py`, whose outputs are committed), and
   its script module `Scripts/` (target `StrataTestScriptsFeatureTest`) exercises the whole script SDK. Feature scripts
   derive from `FeatureTest::FeatureScript`: `Expect(condition, "description")` counts checks and keeps the first
   failure, `Completed` marks the end of a scenario, and `Journal()` records events in the scene's "Journal" entity.
@@ -3200,7 +3202,10 @@ project and then imported. Each sample has:
   once the start scene looks right; the launcher shows it), and optionally up to three PNGs in `Screenshots/` (3 MB
   together) that the README shows;
 - an entry in `Samples.json` (one or two sentences for people) and a CTest on `StrataTests/Editor/SampleProject.cmake`
-  (label `package`) that plays it by its command script, exports it in full and pruned and runs both games headless.
+  (label `package`) that plays it by its command script, exports it in full and pruned and runs both games headless;
+- the game's identity (`project.setGameInfo`): its title, a version and `Assets/Icon.png`, a 256 x 256 `viewport.capture`
+  of the sample imported as a texture and credited as a render of it (`Strata`). Captures of a world need its cells
+  loaded around the view first (`world.loadCells`). Exports carry them ([Exporting games](#exporting-games)).
 
 Assets made by others are CC0 or CC-BY 4.0 with the attribution it asks for; anything whose license is unclear stays
 out. Downloads are untrusted data: each goes into a new, empty scratch directory, scripts that inspect or trim them run

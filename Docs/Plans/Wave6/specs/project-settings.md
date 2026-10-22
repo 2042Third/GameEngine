@@ -963,6 +963,15 @@ them as version 3 (D8). *Accept:*
 - `StrataEditor.Export` (ExportCommands.json.in) exports SmokeGame a third time with game info and checks the files;
   `StrataRuntime.FeatureTest` expects the log banner's title and version and `<File>.png` next to the exported feature
   game (`-DEXPECT`, `-DEXPECT_PATHS`).
+- *As built (what S6 builds on):* `Project/GameInfo.h` (`ProjectGameInfo`: `Validate`, `ValidateText`, `ValidateVersion`,
+  `ParseVersion` giving the four 16-bit numbers of `FILEVERSION`); `Editor/GameIcon` (`FindSource` from metadata,
+  `Convert`/`ConvertFile` giving `Images::Sizes`, one RGBA8 straight-alpha image per `c_Sizes` = 16 to 64 and 256, and
+  `EncodePNG`), which the export calls in its I/O job before the pack; `GameExportResult::Icon` and `Warnings`;
+  `Runtime/GamePresentation` (the runtime's title, banner, data directory name, icon file and `WindowSpecification::AppId`).
+  The third SmokeGame is `ExportSmoke/BuildIdentity/SmokeGame` (title "Smoke Adventure", version 2.0.1, company and
+  copyright "Strata Tests"), whose icon source is `StrataTests/FeatureTest/Assets/Textures/Checker.png` (64 x 64, so the
+  export enlarges it with a warning); `StrataRuntime.Identity` runs it headless and checks its banner and `SmokeGame.png`.
+  ThirdPerson's title is its game's name, "Sky Islands".
 
 **S6 Windows executable resources.** `PEResources`, the `VS_VERSIONINFO` builder, `RT_ICON`/`RT_GROUP_ICON` from the
 icon, the export on Windows hosts; a test-only PE image builder (`StrataTests/src/TestHelpers`) that makes valid PE32+
