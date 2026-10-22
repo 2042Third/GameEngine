@@ -2346,6 +2346,13 @@ namespace Strata
 			}
 			if (m_Context.GetProjectFileState() == SettingsFileState::Writing)
 				ImGui::Text("Writing '%s'...", FileSystem::ToUTF8(m_Context.GetProject()->GetProjectFile().filename()).c_str());
+			// Quitting also waits for the preferences (HasSavesInFlight).
+			if (m_Context.GetPreferences().IsWriting())
+			{
+				const std::string preferences = fmt::format("Writing '{}'...", FileSystem::ToUTF8(m_Context.GetPreferences().GetFile().filename()));
+				ImGui::TextUnformatted(preferences.c_str());
+				UI::ItemProbe::Record("Saving.Preferences", true, 0, preferences);
+			}
 			UI::ItemProbe::Record("Saving.Dialog");
 			ImGui::Spacing();
 			// Cancel gives up what was to happen next, never a save.

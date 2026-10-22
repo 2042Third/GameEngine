@@ -3,6 +3,7 @@
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorPreferences.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/SceneRecovery.h"
 #include "Editor/SettingsFileWriter.h"
@@ -10,6 +11,7 @@
 #include "UI/ItemProbe.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Scene/Scene.h>
@@ -17,10 +19,14 @@
 
 #include <nlohmann/json.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 // No silent data loss: every command that replaces the edited scene refuses to discard its unsaved changes unless told to
@@ -30,6 +36,27 @@ using namespace Strata;
 
 namespace
 {
+
+	// Job threads for a test that holds a settings file's write on its job (without them, a write runs where it is submitted).
+	struct WriterJobSystem
+	{
+		WriterJobSystem()
+		{
+			JobSystemSpecification specification;
+			specification.WorkerThreadCount = 2;
+			specification.IOThreadCount = 2;
+			specification.BackgroundThreadCount = 1;
+			JobSystem::Init(specification);
+		}
+
+		~WriterJobSystem()
+		{
+			JobSystem::Shutdown();
+		}
+
+		WriterJobSystem(const WriterJobSystem&) = delete;
+		WriterJobSystem& operator=(const WriterJobSystem&) = delete;
+	};
 
 	struct SafetyHarness
 	{
@@ -328,6 +355,37 @@ TEST_SUITE("Editor.DataSafety")
 		const std::optional<nlohmann::json> written = JsonUtils::Parse(FileSystem::ReadText(file).value_or(""));
 		REQUIRE(written);
 		CHECK((*written)["Settings"]["Editor.ExternalEditor"]["Value"]["Command"] == "code {file}");
+	}
+
+	TEST_CASE("Quitting waits for a preferences write in flight, naming it")
+	{
+		const std::filesystem::path file = Tests::CreateTemporaryDirectory("DataSafetyPreferencesInFlight") / "Preferences.json";
+		EditorOptions options;
+		options.PreferencesFile = file;
+		WriterJobSystem jobs; // Before the editor, which it outlives
+		Tests::HarnessEditor editor({}, options);
+		editor.Frames(1);
+		// The write is held on its job until the test lets it go.
+		auto release = std::make_shared<std::atomic<bool>>(false);
+		editor.Context().GetPreferences().GetWriter().SetTestHook([release]()
+		{
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+			while (!release->load() && std::chrono::steady_clock::now() < deadline)
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		});
+		editor.Run("preferences.set", { { "section", "Editor.ExternalEditor" }, { "value", { { "Command", "code {file}" } } } });
+		REQUIRE(editor.Context().GetPreferences().IsWriting());
+
+		// File > Exit waits in the Saving dialog, which says what it waits for.
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.Exit"));
+		REQUIRE(editor.FramesUntil([]() { return UI::ItemProbe::Find("Saving.Preferences").has_value(); }));
+		CHECK(UI::ItemProbe::Find("Saving.Preferences")->Text == "Writing 'Preferences.json'...");
+		CHECK(editor.Host->Running);
+		release->store(true);
+		REQUIRE(editor.FramesUntil([&editor]() { return !editor.Host->Running; }));
+		CHECK(FileSystem::Exists(file));
 	}
 
 	TEST_CASE("Scene changes made while the unwritten settings question waits are asked about before the project closes")
