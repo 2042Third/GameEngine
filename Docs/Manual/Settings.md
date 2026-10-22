@@ -7,8 +7,8 @@ Strata keeps two kinds of settings apart:
 - **Preferences** belong to you. They hold for every project you open on this computer and never reach a game: the code
   editor that opens your scripts, for example.
 
-This guide is for people working in the editor; the [Developer Guide](../DeveloperGuide.md) ("Project settings",
-"Preferences") explains how the engine keeps them.
+This guide is for people working in the editor; how the engine keeps them is in the engine's source, in
+`Docs/DeveloperGuide.md` ("Project settings", "Preferences").
 
 ## Project Settings
 
