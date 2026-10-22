@@ -1,6 +1,7 @@
 [
 	{"command": "script.build", "expect": {"/success": {"equals": true}}},
 	{"command": "editor.status", "parameters": {"sections": ["assets"]}, "expect": {"/assets/importing": {"equals": 0}, "/assets/scanning": {"equals": null}}, "until": {"seconds": 900}},
+	{"command": "component.get", "parameters": {"entity": "F7486ABFA648EBD7", "component": "PostProcess"}, "expect": {"/values/AntiAliasingMethod": {"equals": "TAA"}}},
 	{"command": "entity.find", "parameters": {"name": "Player"}, "bind": {"player": "/entities/0"}},
 	{"command": "entity.find", "parameters": {"name": "Sun"}, "bind": {"sun": "/entities/0"}},
 	{"command": "world.info", "parameters": {"world": "Worlds/Island.stworld"}, "expect": {"/layers/0/name": {"equals": "Vegetation"}, "/layers/0/cells": {"min": 80}, "/layers/1/name": {"equals": "Wildlife"}, "/layers/2/name": {"equals": "Landmarks"}, "/index/cooked": {"equals": true}, "/index/maxBodiesInRadius": {"min": 5000}, "/index/persistentBodies": {"max": 110}}},

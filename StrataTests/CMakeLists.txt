@@ -746,7 +746,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	add_test(NAME StrataRuntime.PhysicsPlaygroundWindowedImage COMMAND StrataTests --strata-test-helper=check-image "${STRATA_PLAYGROUND_DIR}/Windowed.png" --size 1280x720)
 	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataPhysicsPlaygroundWindowed)
 	add_test(NAME StrataRuntime.PhysicsPlaygroundWindowedPerf
-		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_PLAYGROUND_DIR}/Windowed.csv" 600 --nonzero Scene.Physics)
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_PLAYGROUND_DIR}/Windowed.csv" 600 --nonzero Scene.Physics --nonzero GPU.TAA)
 	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataPhysicsPlaygroundWindowed)
 	# The Open World: a streamed island (a world of three layers over 97 terrain tiles in the persistent scene, 20,000 props,
 	# 30 foxes, five camps). The explorer streams cells in, walks on the terrain, teleports 500 m once the cells and the ground
@@ -794,7 +794,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataRuntime.OpenWorldWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
 	add_test(NAME StrataRuntime.OpenWorldWindowedPerf
 		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_OPEN_WORLD_DIR}/Windowed.csv" 1200 --nonzero WorldCellsLoaded
-			--nonzero World.Streaming --nonzero GPUBusyMs --max PhysicsBodiesWaiting 0 --last-max PhysicsBodiesPending 0)
+			--nonzero World.Streaming --nonzero GPUBusyMs --nonzero GPU.TAA --max PhysicsBodiesWaiting 0 --last-max PhysicsBodiesPending 0)
 	set_tests_properties(StrataRuntime.OpenWorldWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
 	# The editor with a GPU at the start: the GPU-driven path draws thousands of instances in a few indirect commands.
 	add_test(NAME StrataEditor.OpenWorldRender
@@ -847,7 +847,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataRuntime.ThirdPersonWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonWindowed)
 	add_test(NAME StrataRuntime.ThirdPersonWindowedPerf
 		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_THIRD_PERSON_DIR}/Windowed.csv" 300 --nonzero Scene.Animation
-			--nonzero Scene.UI --nonzero GPUBusyMs)
+			--nonzero Scene.UI --nonzero GPUBusyMs --nonzero GPU.TAA)
 	set_tests_properties(StrataRuntime.ThirdPersonWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonWindowed)
 endif()
 

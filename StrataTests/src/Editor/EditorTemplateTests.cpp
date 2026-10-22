@@ -125,6 +125,8 @@ namespace
 		CHECK(postProcess.GetComponent<PostProcessComponent>().Tonemapper == TonemapOperator::ACES);
 		CHECK(postProcess.GetComponent<PostProcessComponent>().AutoExposure);
 		CHECK(postProcess.GetComponent<PostProcessComponent>().Exposure == doctest::Approx(1.0f));
+		CHECK(postProcess.GetComponent<PostProcessComponent>().AntiAliasing);
+		CHECK(postProcess.GetComponent<PostProcessComponent>().AntiAliasingMethod == AntiAliasingMode::TAA);
 	}
 
 	// Drops a dynamic unit box from 2 m above the middle of the scene's ground, in a playing copy of the scene, and returns the

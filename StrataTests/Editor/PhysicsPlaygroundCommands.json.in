@@ -1,4 +1,5 @@
 [
+	{ "command": "component.get", "parameters": { "entity": "8B22F284D166ECC6", "component": "PostProcess" }, "expect": { "/values/AntiAliasingMethod": { "equals": "TAA" } } },
 	{ "command": "entity.find", "parameters": { "name": "Game" }, "bind": { "game": "/entities/0" } },
 	{ "command": "entity.find", "parameters": { "name": "StartDominoes" }, "bind": { "start": "/entities/0" } },
 	{ "command": "entity.find", "parameters": { "name": "FeedGoal" }, "bind": { "feed": "/entities/0" } },

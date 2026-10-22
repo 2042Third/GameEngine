@@ -72,6 +72,8 @@ namespace Strata
 			// Automatic exposure brings the image's average to middle gray; with sunlit white surfaces (the default
 			// material) filling most of the view that leaves the sky dim. One stop brighter reads as a sunny day.
 			postProcess.Exposure = c_Basic3DExposureCompensation;
+			// Temporal anti-aliasing: steady edges, and the shadows' and ambient occlusion's noise averaged away.
+			postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
 		}
 
 	}
