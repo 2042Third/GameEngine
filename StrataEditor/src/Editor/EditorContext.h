@@ -6,6 +6,7 @@
 #include "Editor/EditorGameWindow.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/PrefabSync.h"
+#include "Editor/ProjectMigration.h"
 #include "Editor/ProjectTemplates.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
@@ -18,6 +19,7 @@
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/Crypto.h>
 #include <Strata/Core/EngineServices.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Scene/Scene.h>
@@ -35,6 +37,7 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -204,6 +207,17 @@ namespace Strata
 		bool HasUnwrittenProjectSettings() const;
 		// The project file's writer, for tests (SettingsFileWriter::SetTestHook); null without a project.
 		SettingsFileWriter* GetProjectFileWriter() const { return m_ProjectFileWriter.get(); }
+		// Applies the project's collision layers (Scene::ApplyProjectLayers) to the edited scene and the running one, as every
+		// change of the project's settings does (ProjectSettingsAction, its undo and redo too): a new table reaches a running
+		// game at once, replacing what its scripts changed, and a change of another section changes nothing.
+		void ApplyProjectLayers();
+		// Whether the open project, saved by 0.5.0 or older (Project::GetFileVersion below 3), is being migrated: its scenes'
+		// collision layers are read on a job, then become the project's (ProjectMigration), before its start scene opens.
+		bool IsMigratingProject() const { return m_ProjectMigration != nullptr; }
+		// What the open project's migration did ({collisionLayers: {scenes, conflicts, unreadable}}: the scenes whose layers
+		// were taken, start scene first, and the disagreements and unreadable scenes the log warned of), or null when it needed
+		// none or has not finished. The project file is written as version 3 in every case, so a project migrates once.
+		const nlohmann::json& GetProjectMigrationResult() const { return m_ProjectMigrationResult; }
 		// The settings sections the project's settings are validated with (EditorContextSpecification::Settings).
 		const SettingsRegistry& GetSettingsRegistry() const;
 
@@ -694,8 +708,17 @@ namespace Strata
 		void OnSceneSaved();
 		// Opens the project's start scene as the load with this ID (the one the project's opening announced).
 		void OpenStartScene(AssetHandle startScene, uint64_t id);
-		// Once the asset scan ended: what waited for the whole registry (the start scene, the script usage scan).
+		// Once the asset scan ended: what waited for the whole registry (the start scene, the script usage scan). The start
+		// scene also waits for the project's migration.
 		void FinishAssetScan();
+		// Starts the migration of a project saved by 0.5.0 or older: the scan of its scenes' layers on an I/O job.
+		void BeginProjectMigration();
+		// Finishes the migration once its scan is done (with `wait`, waiting for it), on the main thread: the project's
+		// collision layers, the project file written as version 3, the log.
+		void UpdateProjectMigration(bool wait);
+		// Takes the project's layers for a scene the editor adopts (edited or running) and warns, once per scene asset and
+		// session, when its document stores other layers: the project's apply, and saving the scene drops the scene's.
+		void AdoptProjectLayers(Scene& scene, AssetHandle handle);
 		// What a save of the edited scene restores when it fails (BeginSaveSceneAs).
 		struct SceneSaveRestore
 		{
@@ -914,6 +937,17 @@ namespace Strata
 		AssetHandle m_StartSceneAfterScan = UUID::Null();
 		uint64_t m_StartSceneAfterScanID = 0; // Its load, once it began
 		bool m_AfterAssetScan = false;
+		// The migration of a project saved by 0.5.0 or older, while its scan runs (the job writes only Scan; Cancel ends it
+		// early when the project goes).
+		struct PendingMigration
+		{
+			JobHandle Job;
+			std::shared_ptr<std::atomic<bool>> Cancel;
+			std::shared_ptr<ProjectMigration::SceneLayerScan> Scan;
+		};
+		Scope<PendingMigration> m_ProjectMigration;
+		nlohmann::json m_ProjectMigrationResult;
+		std::unordered_set<AssetHandle> m_StoredLayersWarned; // Scenes whose stored layers were warned of in this session
 		// Declared after what its completions use (the undo stack, the recovery journal, the notifications); idle by the time
 		// the context goes (ReleaseProject finishes every save).
 		DocumentSaver m_DocumentSaver;

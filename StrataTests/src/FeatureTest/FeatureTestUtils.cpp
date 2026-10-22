@@ -445,7 +445,7 @@ namespace Strata::Tests
 
 		// The scene's collision layers (names and a matrix that is not the default, so they prove that they serialize) reached
 		// the running scene; the feature scripts read them (PhysicsApiFeatures).
-		const PhysicsLayerSettings& layers = scene.GetSettings().PhysicsLayers;
+		const PhysicsLayerSettings& layers = scene.GetPhysicsLayers();
 		CHECK(layers.Names[3] == "Triggers");
 		CHECK_FALSE(layers.IsDefaultMatrix());
 		CHECK_FALSE(physics->DoLayersCollide(7, 7));

@@ -308,7 +308,7 @@ namespace Strata
 		}
 		else if (key == "Settings" && value.is_object())
 		{
-			SceneSerializer::DeserializeSettings(value, m_Scene.GetSettings(), m_Warnings ? &m_SettingsWarnings : nullptr);
+			SceneSerializer::DeserializeSettings(value, m_Scene, m_Warnings ? &m_SettingsWarnings : nullptr);
 		}
 	}
 

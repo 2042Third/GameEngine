@@ -1,10 +1,13 @@
 #pragma once
 
+#include <nlohmann/json_fwd.hpp>
+
 #include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Strata
 {
@@ -13,10 +16,11 @@ namespace Strata
 	// c_PhysicsLayerCount - 1.
 	constexpr uint32_t c_PhysicsLayerCount = 32;
 
-	// A scene's physics layers (SceneSettings::PhysicsLayers): their names and which of them collide. Bodies and character
-	// controllers belong to one layer each; two of them collide only if their layers do. Everything collides by default,
-	// and layers have no names until a scene gives them some. The physics system applies the matrix when it creates its
-	// world and whenever it changes (also while playing: scripts' Physics::SetLayersCollide changes the running scene's).
+	// Collision layers: their names and which of them collide. Bodies and character controllers belong to one layer each; two
+	// of them collide only if their layers do. Everything collides by default, and layers have no names until the project
+	// gives them some. The table is the project's (the settings section Scene.CollisionLayers, ProjectCollisionLayers); each
+	// scene works on a copy of it (Scene::GetPhysicsLayers), which the physics system applies when it creates its world and
+	// whenever it changes (also while playing: scripts' Physics::SetLayersCollide changes the running scene's).
 	struct PhysicsLayerSettings
 	{
 		static constexpr size_t c_MaxNameLength = 64;
@@ -84,6 +88,9 @@ namespace Strata
 			CollisionMasks.fill(c_AllLayersMask);
 		}
 
+		// No names and every pair colliding: the table of a project (or 0.5.0 scene) that sets no layers.
+		bool IsDefault() const;
+
 		// The layer of a name (ignoring case), or of "Layer <index>" for unnamed layers; nothing for unknown names.
 		std::optional<uint32_t> FindLayer(std::string_view name) const;
 		// The name, or "Layer <index>" without one.
@@ -91,6 +98,17 @@ namespace Strata
 		// Why `name` cannot name a layer (control characters, too long, or another layer's name), or nothing when it can. An
 		// empty name clears a layer's name.
 		std::optional<std::string> ValidateName(uint32_t layer, std::string_view name) const;
+
+		// The stored form, the value of the project section and what 0.5.0 wrote into every scene document:
+		// {"Names": {"<index>": "<name>", ...}, "NoCollisions": [[a, b], ...]}, the named layers by index (without leading
+		// zeros) and the pairs of layers that do not collide (each once, a <= b, in order), so a table where everything collides
+		// stores an empty list.
+		nlohmann::json ToJson() const;
+		// Reads the stored form. What it holds that is not a name or a pair is skipped and described in outProblems (one
+		// message each; a member of the wrong type as a whole), so callers decide whether a problem refuses the value (the
+		// project section) or only warns (scene documents). Names are checked in the order of their keys, each against those
+		// read before it.
+		static PhysicsLayerSettings FromJson(const nlohmann::json& json, std::vector<std::string>* outProblems = nullptr);
 	};
 
 }

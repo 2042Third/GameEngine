@@ -2357,7 +2357,7 @@ namespace Strata
 						fmt::format("layers {} and {}: layers range from 0 to {}", layerA, layerB, c_PhysicsLayerCount - 1));
 					return false;
 				}
-				system->GetScene().GetSettings().PhysicsLayers.SetCollide(layerA, layerB, collide);
+				system->GetScene().GetPhysicsLayers().SetCollide(layerA, layerB, collide);
 				return true;
 			});
 		}
@@ -2367,7 +2367,7 @@ namespace Strata
 			return HostCall("PhysicsGetLayersCollide", false, [&]()
 			{
 				ScriptSystem* system = ResolveContext(context, "PhysicsGetLayersCollide");
-				return system && system->GetScene().GetSettings().PhysicsLayers.DoCollide(layerA, layerB);
+				return system && system->GetScene().GetPhysicsLayers().DoCollide(layerA, layerB);
 			});
 		}
 
@@ -2378,8 +2378,8 @@ namespace Strata
 				ScriptSystem* system = ResolveContext(context, "PhysicsGetLayerIndex");
 				if (!system)
 					return -1;
-				// An unknown name is an answer (-1), not misuse: games look layers up that a scene may not have.
-				const std::optional<uint32_t> layer = system->GetScene().GetSettings().PhysicsLayers.FindLayer(ScriptStringView(name));
+				// An unknown name is an answer (-1), not misuse: games look layers up that a project may not name.
+				const std::optional<uint32_t> layer = system->GetScene().GetPhysicsLayers().FindLayer(ScriptStringView(name));
 				return layer ? static_cast<int32_t>(*layer) : -1;
 			});
 		}

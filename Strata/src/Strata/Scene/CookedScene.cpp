@@ -924,7 +924,7 @@ namespace Strata
 		Ref<Scene> scene = CreateRef<Scene>(contents->Name);
 		std::vector<std::string> warnings = std::move(contents->Warnings);
 		if (contents->Settings.is_object())
-			SceneSerializer::DeserializeSettings(contents->Settings, scene->GetSettings(), &warnings);
+			SceneSerializer::DeserializeSettings(contents->Settings, *scene, &warnings);
 		// The prototype keeps the document's IDs: instantiated with them, references between its entities stay as they are.
 		InstantiationOptions instantiation;
 		instantiation.KeepIDs = true;

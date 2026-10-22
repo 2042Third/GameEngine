@@ -339,11 +339,17 @@ refuses a round mesh at 64: its hulls have at most 128 faces and edges), triangl
 only; a mesh collider away from its static body's origin is a baked compound, whose mesh takes the body's friction and
 restitution as its material), and dynamic bodies get the component's mass with the shapes' distribution. Triggers see
 convex shapes and characters only: box3d's sensors skip triangle meshes, so a moving trigger crossing a mesh collider
-reports nothing (Jolt's did). Collision layers are the scene's (`SceneSettings::PhysicsLayers`,
-`Scene/PhysicsLayerSettings.h`: names for up to 32 layers and a symmetric matrix of which collide, everything by default);
-`PhysicsSystem` gives its world that matrix, restricted by the default settings' (`GetDefaultSettings`), when it creates
-the world and before every step after it changed (`scene.setSettings`, undo, the inspector, scripts'
-`Physics::SetLayersCollide`, `PhysicsSystem::SetLayersCollide`; `PhysicsWorld::SetLayerCollisionMasks` gives the shapes
+reports nothing (Jolt's did). Collision layers are the project's: one table (`Scene/PhysicsLayerSettings.h`: names for up
+to 32 layers and a symmetric matrix of which collide, everything by default), the project settings section
+`Scene.CollisionLayers` (`Scene/ProjectCollisionLayers`), of which each scene runs a working copy
+(`Scene::GetPhysicsLayers`). The copy is taken on the main thread when a scene is handed over (`Scene::ApplyProjectLayers`:
+the scene asset's hand-over, so every `SceneLoader` load before its preparation, `SceneLoadRequest::TakeScene`, the editor's
+adopted scenes and every change of the project's settings); the loader's worker never reads `IProjectSettings`, and a
+program without a project keeps what a 0.5.0 scene document stores. Scripts change the copy for as long as their scene
+runs; sub-scenes and world cells collide by their host's. `PhysicsSystem` gives its world that matrix, restricted by the
+default settings' (`GetDefaultSettings`), when it creates the world and before every step after it changed (the project's
+table applied again, scripts' `Physics::SetLayersCollide`, `PhysicsSystem::SetLayersCollide`;
+`PhysicsWorld::SetLayerCollisionMasks` gives the shapes
 of the changed layers their new filters and wakes the bodies, and character controllers read the world's live matrix;
 box3d drops those shapes' contacts and finds them again, so their pairs wait for the next step like a rebuilt body's and
 only the pairs the change parts end). Each shape's box3d filter
@@ -968,11 +974,11 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
 - `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame`, `MaxEntitiesInstantiatedPerFrame` (see
   additive scenes below), the physics world's capacities
   (`PhysicsCapacity`: the room for bodies and contacts box3d reserves; 0, the default, sizes it automatically; each up to
-  a limit; 0.4.0's body pairs are read and ignored) and the collision layers (`PhysicsLayers`: names, unique ignoring case,
-  and the pairs that do not collide; saved as `"PhysicsLayers": {"Names": {"<index>": name}, "NoCollisions": [[a, b]]}`,
-  which scenes from before load as all colliding, without a format change). All of it is saved with the scene and
-  changed with `scene.setSettings` (one undo step); capacities apply when a world is created, at play start, the layer
-  matrix at the next step.
+  a limit; 0.4.0's body pairs are read and ignored). All of it is saved with the scene and changed with
+  `scene.setSettings` (one undo step); capacities apply when a world is created, at play start. The collision layers left
+  the scene settings for the project's (`Scene.CollisionLayers`, above): a 0.5.0 scene's `"PhysicsLayers"` is still read
+  (`Scene::GetStoredPhysicsLayers`), never written, and the editor migrates 0.5.0 projects' tables into the project when it
+  opens them (`Editor/ProjectMigration`).
 - **Scene assets are read once.** The scene loader (`SceneAsset::Deserialize`, on the loading worker) reads the
   document into a scene, which validates it, and keeps that *prepared scene* instead of the parsed JSON, which is dropped
   at once. `SceneAsset::TakePreparedScene` hands it over without a copy (the first call; the asset is spent afterwards,
@@ -1138,7 +1144,7 @@ the game (`EngineServices::ScopedProvider`, which restores the provider it repla
 | --- | --- | --- |
 | `IGameWindow`: window mode, resolution, vsync, the size the game renders at | StrataRuntime's `GameWindowService` (applied after the frame, `ApplyRequests`; headless: accepted and reported back), the editor's `EditorGameWindow` (recorded and reported, never applied: `editor.status`, a notice over the Game view and its "Game's request" resolution) | script host (`Game::SetWindowMode` and friends) |
 | `IGameSaves`: the save directory | `GameRuntime` (`<user data>/<game>/Saves`, `GameRuntimeOptions::SaveFilesDirectory`), `EditorContext` (`<project>/.strata/Saves`) | script host (`Game::WriteSaveFile` and friends, through `SaveFiles`) |
-| `IProjectSettings`: the project's settings sections, validated (DeveloperGuide.md, "Project settings") | `GameRuntime` (its manifest's, version 5 manifests; none for older ones), `EditorContext` (the open project's; none set without one) | the modules that register sections, on the main thread |
+| `IProjectSettings`: the project's settings sections, validated (DeveloperGuide.md, "Project settings") | `GameRuntime` (its manifest's, version 5 manifests; none for older ones), `EditorContext` (the open project's; none set without one) | the modules that register sections (Scene: `ProjectCollisionLayers`), on the main thread |
 
 ### Scene caches
 
@@ -3709,13 +3715,14 @@ is the `strata-scripting` skill. The layers:
     component's menu copies and pastes its settable values through the clipboard as JSON
     (`EditorActions::CopyComponentValues`) and runs `component.set`/`component.remove {entities}`. With nothing selected
     it shows the scene's settings (gravity, the fixed step, and the physics world's capacities: 0, automatic sizing,
-    reads "Auto", `PropertyWidgetOptions::ZeroLabel`), applied by one `scene.setSettings` when a drag ends, the
-    collision layers (the named ones edited in place, "Name a Layer" for the next one without a name, and a matrix of
-    check boxes, one per pair of the layers shown: layer 0, the named ones and those with a pair that does not collide;
-    every edit is one `scene.setSettings`), how many entities sub-scenes create per frame (Streaming,
+    reads "Auto", `PropertyWidgetOptions::ZeroLabel`), applied by one `scene.setSettings` when a drag ends, a row
+    "Collision layers: <n> named" whose link opens the project's Collision Layers page (`CollisionLayersPage`: the named
+    layers edited in place, "Name a Layer" for the next one without a name, and a matrix of check boxes, one per pair of
+    the layers shown: layer 0, the named ones and those with a pair that does not collide; every edit is one
+    `project.setCollisionLayers`), how many entities sub-scenes create per frame (Streaming,
     `MaxEntitiesInstantiatedPerFrame`) and the first active sky light (the renderer's), in sections that start
-    closed: their headers sum them up ("Gravity 9.81 m/s² · 60 steps/s", "2 named · 1 pair passes through", the sky's
-    source; the summaries are formatted again only when their values change), and their rows,
+    closed: their headers sum them up ("Gravity 9.81 m/s² · 60 steps/s", the sky's source; the summaries are formatted
+    again only when their values change), and their rows,
     live widgets that cost frame time while they are drawn, show once a section is opened (it stays open while the
     editor runs).
   - The **Asset** inspector is tabbed with the Inspector: `EditorLayer` brings the tab of the inspection target forward

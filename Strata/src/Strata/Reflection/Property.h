@@ -56,7 +56,7 @@ namespace Strata
 		MultiLine = ST_BIT(3), // String edited in a multi-line text box
 		Slider = ST_BIT(4),    // Numeric value edited with a slider over [Min, Max]
 		PowerOfTwoLimit = ST_BIT(5), // Unsigned limit chosen among the powers of two up to Max, where 0 means no limit
-		PhysicsLayer = ST_BIT(6)     // Unsigned index of a physics layer, chosen by its name (SceneSettings::PhysicsLayers)
+		PhysicsLayer = ST_BIT(6)     // Unsigned index of a physics layer, chosen by its name (the project's collision layers)
 	};
 	ST_DEFINE_ENUM_FLAG_OPERATORS(PropertyFlags)
 

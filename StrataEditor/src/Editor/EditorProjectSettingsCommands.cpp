@@ -10,11 +10,16 @@
 #include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Scene/PhysicsLayerSettings.h>
+#include <Strata/Scene/ProjectCollisionLayers.h>
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace Strata
 {
@@ -80,6 +85,118 @@ namespace Strata
 				{ "problem", std::move(problem) } };
 		}
 
+		// A layer given by index (0 to c_PhysicsLayerCount - 1) or by name (its name, or "Layer <index>" without one).
+		std::optional<uint32_t> ReadLayer(const nlohmann::json& value, const PhysicsLayerSettings& layers)
+		{
+			if (value.is_number_unsigned() || (value.is_number_integer() && value.get<int64_t>() >= 0))
+			{
+				const uint64_t index = value.get<uint64_t>();
+				return index < c_PhysicsLayerCount ? std::optional<uint32_t>(static_cast<uint32_t>(index)) : std::nullopt;
+			}
+			if (value.is_string())
+				return layers.FindLayer(value.get<std::string>());
+			return std::nullopt;
+		}
+
+		// Reads project.setCollisionLayers' "layerNames" ({"<index>": name}; "" or null clears a name) into `layers`. The names
+		// are checked once all of them are in place, so layers can swap names in one call. Returns an error message, empty on
+		// success.
+		std::string ReadLayerNames(const nlohmann::json& value, PhysicsLayerSettings& layers)
+		{
+			if (!value.is_object())
+				return R"(Parameter 'layerNames' must be an object of layer indices to names, e.g. {"3": "Player"})";
+			std::vector<std::pair<uint32_t, std::string>> names;
+			for (const auto& [key, name] : value.items())
+			{
+				// Indices without leading zeros, so that one layer cannot be named twice ("3" and "03").
+				const bool isIndex = !key.empty() && key.size() <= 2 && (key.size() == 1 || key[0] != '0')
+					&& std::all_of(key.begin(), key.end(), [](char character) { return character >= '0' && character <= '9'; });
+				uint32_t layer = c_PhysicsLayerCount;
+				if (isIndex)
+				{
+					layer = 0;
+					for (const char character : key)
+						layer = layer * 10 + static_cast<uint32_t>(character - '0');
+				}
+				if (layer >= c_PhysicsLayerCount)
+					return fmt::format("Parameter 'layerNames': '{}' is no layer index (0 to {})", key, c_PhysicsLayerCount - 1);
+				if (!name.is_string() && !name.is_null())
+					return fmt::format("Parameter 'layerNames.{}' must be a string (empty or null clears the name)", key);
+				names.emplace_back(layer, name.is_string() ? name.get<std::string>() : std::string());
+				layers.Names[layer].clear();
+			}
+			for (const auto& [layer, name] : names)
+			{
+				if (std::optional<std::string> error = layers.ValidateName(layer, name))
+					return fmt::format("Parameter 'layerNames.{}': {}", layer, *error);
+				layers.Names[layer] = name;
+			}
+			return {};
+		}
+
+		// Reads project.setCollisionLayers' "layerCollisions" ([{"layers": [a, b], "collide": bool}], layers by index or name,
+		// applied in order) into `layers`. Returns an error message, empty on success.
+		std::string ReadLayerCollisions(const nlohmann::json& value, PhysicsLayerSettings& layers)
+		{
+			constexpr std::string_view c_Form = R"({"layers": [a, b], "collide": true | false})";
+			if (!value.is_array())
+				return fmt::format("Parameter 'layerCollisions' must be an array of {}", c_Form);
+			for (const nlohmann::json& entry : value)
+			{
+				if (!entry.is_object())
+					return fmt::format("Parameter 'layerCollisions': {} is not of the form {}", entry.dump(), c_Form);
+				for (const auto& [key, unused] : entry.items())
+				{
+					if (key != "layers" && key != "collide")
+						return fmt::format("Parameter 'layerCollisions': unknown key '{}' (entries are {})", key, c_Form);
+				}
+				const auto pair = entry.find("layers");
+				const auto collide = entry.find("collide");
+				if (pair == entry.end() || !pair->is_array() || pair->size() != 2 || collide == entry.end() || !collide->is_boolean())
+					return fmt::format("Parameter 'layerCollisions': {} is not of the form {}", entry.dump(), c_Form);
+				std::optional<uint32_t> found[2];
+				for (size_t side = 0; side < 2; side++)
+				{
+					found[side] = ReadLayer((*pair)[side], layers);
+					if (!found[side])
+					{
+						return fmt::format("Parameter 'layerCollisions': no layer {} (layers are indices from 0 to {} or their names)", (*pair)[side].dump(),
+							c_PhysicsLayerCount - 1);
+					}
+				}
+				layers.SetCollide(*found[0], *found[1], collide->get<bool>());
+			}
+			return {};
+		}
+
+		// The project's collision layers as its settings hold them (the section's default when it is not set or its stored value
+		// is refused).
+		PhysicsLayerSettings GetProjectLayers(const Project& project)
+		{
+			const nlohmann::json* value = project.GetSettings().FindSection(ProjectCollisionLayers::c_SectionId);
+			return value ? PhysicsLayerSettings::FromJson(*value) : PhysicsLayerSettings();
+		}
+
+	}
+
+	nlohmann::json CommandUtils::DescribePhysicsLayers(const PhysicsLayerSettings& layers)
+	{
+		nlohmann::json names = nlohmann::json::object();
+		for (uint32_t layer = 0; layer < c_PhysicsLayerCount; layer++)
+		{
+			if (!layers.Names[layer].empty())
+				names[std::to_string(layer)] = layers.Names[layer];
+		}
+		nlohmann::json noCollisions = nlohmann::json::array();
+		for (uint32_t a = 0; a < c_PhysicsLayerCount; a++)
+		{
+			for (uint32_t b = a; b < c_PhysicsLayerCount; b++)
+			{
+				if (!layers.DoCollide(a, b))
+					noCollisions.push_back({ layers.GetDisplayName(a), layers.GetDisplayName(b) });
+			}
+		}
+		return { { "names", std::move(names) }, { "noCollisions", std::move(noCollisions) } };
 	}
 
 	void RegisterProjectSettingsCommands(EditorCommandRegistry& registry)
@@ -178,6 +295,81 @@ namespace Strata
 					return EditorCommandResult::Fail(error);
 				const nlohmann::json* applied = project->GetSettings().FindSection(id);
 				return EditorCommandResult::Ok({ { "section", id }, { "value", applied ? *applied : section->GetDefault() }, { "isDefault", applied == nullptr } });
+			} });
+
+		const nlohmann::json layerNamesSchema = {
+			{ "type", "object" },
+			{ "description", R"(Names of collision layers by index ("0" to "31"), e.g. {"1": "Player", "2": "Debris"}; "" or null clears )"
+				"a name. Names are unique (ignoring case), at most 64 characters, and RigidBody.Layer, CharacterController.Layer, scripts' "
+				"Physics::GetLayerIndex and layerCollisions accept them" },
+			{ "propertyNames", { { "pattern", "^([0-9]|[1-2][0-9]|3[0-1])$" } } },
+			{ "additionalProperties", { { "type", nlohmann::json::array({ "string", "null" }) } } } };
+		const nlohmann::json layerCollisionsSchema = {
+			{ "type", "array" },
+			{ "description", "Changes of the layer matrix, applied in order after layerNames: whether two layers (indices 0-31 or names) collide. "
+				"Every pair collides by default; bodies and character controllers collide only when their layers do" },
+			{ "items", {
+				{ "type", "object" },
+				{ "properties", {
+					{ "layers", { { "type", "array" }, { "minItems", 2 }, { "maxItems", 2 }, { "description", "The two layers (the same twice: a layer with itself)" },
+						{ "items", { { "type", nlohmann::json::array({ "integer", "string" }) } } } } },
+					{ "collide", BoolSchema("Whether they collide") } } },
+				{ "required", nlohmann::json::array({ "layers", "collide" }) },
+				{ "additionalProperties", false } } } };
+		registry.Register({ "project.setCollisionLayers",
+			"Names the project's collision layers and sets which of them collide, as one undo step that leaves the scene saved, and writes the "
+			"project file in the background (project.save waits for it). The layers are the project's: every scene and prefab uses the same 32 "
+			"layers, names and matrix (scene.info's settings.physicsLayers shows them as the active scene runs them). layerNames apply first, "
+			"then resetLayerCollisions, then layerCollisions in order; an invalid request changes nothing. Allowed while playing: the running "
+			"game takes the new table at once (replacing what its scripts changed with Physics::SetLayersCollide) and the change stays after "
+			"play.stop. Returns physicsLayers ({names, noCollisions}, pairs by name).",
+			ObjectSchema({
+				{ "layerNames", layerNamesSchema },
+				{ "resetLayerCollisions", BoolSchema("Lets every pair of layers collide again before layerCollisions applies") },
+				{ "layerCollisions", layerCollisionsSchema } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const bool resetCollisions = arguments.GetBool("resetLayerCollisions", false);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!context.HasProject())
+					return EditorCommandResult::Fail("No project is open: collision layers belong to a project (project.open or project.create first)");
+				const SettingsRegistry& settings = context.GetSettingsRegistry();
+				if (!settings.Find(ProjectCollisionLayers::c_SectionId))
+				{
+					return EditorCommandResult::Fail(fmt::format("This editor has no '{}' settings section (the Scene module registers it)",
+						ProjectCollisionLayers::c_SectionId));
+				}
+				const Ref<Project>& project = context.GetProject();
+				PhysicsLayerSettings layers = GetProjectLayers(*project);
+				if (auto names = parameters.find("layerNames"); names != parameters.end())
+				{
+					if (std::string error = ReadLayerNames(*names, layers); !error.empty())
+						return EditorCommandResult::InvalidParameters(error);
+				}
+				if (resetCollisions)
+					layers.ResetMatrix();
+				if (auto collisions = parameters.find("layerCollisions"); collisions != parameters.end())
+				{
+					if (std::string error = ReadLayerCollisions(*collisions, layers); !error.empty())
+						return EditorCommandResult::InvalidParameters(error);
+				}
+
+				// The default table is no section: a project without layers stores none. Otherwise the change is checked on a copy
+				// (its section's validation, the project file's bound: ChangeProjectSection) before anything changes.
+				ProjectSettingsValues values = project->GetSettings();
+				std::string error;
+				if (layers.IsDefault())
+					values.Reset(ProjectCollisionLayers::c_SectionId);
+				else if (!values.Set(ProjectCollisionLayers::c_SectionId, layers.ToJson(), settings, &error))
+					return EditorCommandResult::Fail(error);
+				if (!ChangeProjectSection(context, "Set Collision Layers", ProjectCollisionLayers::c_SectionId,
+					values.GetStoredEntry(ProjectCollisionLayers::c_SectionId), &error))
+				{
+					return EditorCommandResult::Fail(error);
+				}
+				return EditorCommandResult::Ok({ { "physicsLayers", DescribePhysicsLayers(GetProjectLayers(*project)) } });
 			} });
 
 		registry.Register(MayDefer({ "project.save",

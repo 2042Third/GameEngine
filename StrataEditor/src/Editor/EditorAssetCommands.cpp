@@ -174,12 +174,14 @@ namespace Strata
 			});
 		}
 
-		// Adds what became of the start scene to a result: startSceneOpened, and startSceneError when it was not opened.
-		nlohmann::json DescribeStartScene(nlohmann::json value, bool opened, const std::string& error)
+		// Adds what became of the start scene to a result: startSceneOpened, and startSceneError when it was not opened; and
+		// what the migration of a project saved by 0.5.0 or older did (migrated, null when none ran).
+		nlohmann::json DescribeStartScene(const EditorContext& context, nlohmann::json value, bool opened, const std::string& error)
 		{
 			value["startSceneOpened"] = opened;
 			if (!opened && !error.empty())
 				value["startSceneError"] = error;
+			value["migrated"] = context.GetProjectMigrationResult();
 			return value;
 		}
 
@@ -196,11 +198,25 @@ namespace Strata
 			const AssetHandle startScene = context.GetProject()->GetConfig().StartScene;
 			value["startScene"] = startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr);
 			const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+			// A project saved by 0.5.0 or older is migrated first (its start scene opens afterwards).
+			if (!startScene.IsValid() && context.IsMigratingProject())
+			{
+				const std::weak_ptr<Project> project = context.GetProject();
+				return EditorCommandResult::Defer([project, value = std::move(value)](EditorContext& context) mutable -> std::optional<EditorCommandResult>
+				{
+					if (project.lock() != context.GetProject())
+						return EditorCommandResult::Fail("Another project was opened (or the project was closed) before its migration finished",
+							EditorCommandError::Cancelled);
+					if (context.IsMigratingProject())
+						return std::nullopt;
+					return EditorCommandResult::Ok(DescribeStartScene(context, std::move(value), false, std::string()));
+				});
+			}
 			if (!startScene.IsValid())
-				return EditorCommandResult::Ok(DescribeStartScene(std::move(value), false, std::string()));
+				return EditorCommandResult::Ok(DescribeStartScene(context, std::move(value), false, std::string()));
 			// The start scene could not even start loading (BeginOpenProject recorded why as a failed load).
 			if (!context.IsSceneLoading())
-				return EditorCommandResult::Ok(DescribeStartScene(std::move(value), false, status.Error));
+				return EditorCommandResult::Ok(DescribeStartScene(context, std::move(value), false, status.Error));
 
 			const uint64_t id = status.ID;
 			const std::weak_ptr<Project> project = context.GetProject();
@@ -211,11 +227,11 @@ namespace Strata
 						EditorCommandError::Cancelled);
 				const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
 				if (status.ID != id)
-					return EditorCommandResult::Ok(DescribeStartScene(std::move(value), false, "Another scene was opened instead (scene.open)"));
+					return EditorCommandResult::Ok(DescribeStartScene(context, std::move(value), false, "Another scene was opened instead (scene.open)"));
 				if (!status.IsFinished())
 					return std::nullopt;
 				value["seconds"] = status.Seconds;
-				return EditorCommandResult::Ok(DescribeStartScene(std::move(value), status.State == SceneLoadState::Ready, status.Error));
+				return EditorCommandResult::Ok(DescribeStartScene(context, std::move(value), status.State == SceneLoadState::Ready, status.Error));
 			});
 		}
 
@@ -303,7 +319,9 @@ namespace Strata
 			"changes or unwritten settings were discarded), settingsProblems ([{section, message}]: settings sections whose stored values are "
 			"refused, kept as stored while their defaults apply; set or reset them with project.setSettings), "
 			"startScene (null when the project has none), startSceneOpened, startSceneError (why it was not opened; the project stays open with an "
-			"empty scene), seconds (the start scene's load)}.",
+			"empty scene), seconds (the start scene's load), migrated (null, or for a project saved by 0.5.0 or older, which is migrated once "
+			"before its start scene opens and written as the current version: {collisionLayers: {scenes: those whose layers became the "
+			"project's, conflicts, unreadable}})}.",
 			ObjectSchema({ { "path", StringSchema("Project file (.stproj) or project directory") }, { "force", ForceSchema() } }, { "path" }),
 			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{

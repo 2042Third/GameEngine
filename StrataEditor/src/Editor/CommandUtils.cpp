@@ -541,11 +541,14 @@ namespace Strata
 					}
 					else if (HasFlag(property->Flags, PropertyFlags::PhysicsLayer) && value.is_string())
 					{
-						// Collision layers can be given by the names the scene's settings give them.
-						const PhysicsLayerSettings& layers = entity.GetScene()->GetSettings().PhysicsLayers;
+						// Collision layers can be given by the names the project gives them (the scene's copy of its table).
+						const PhysicsLayerSettings& layers = entity.GetScene()->GetPhysicsLayers();
 						const std::optional<uint32_t> layer = layers.FindLayer(value.get<std::string>());
 						if (!layer)
-							return fail(fmt::format("{}.{}: the scene has no layer named {} (scene.info lists them)", name, property->Name, value.dump()));
+						{
+							return fail(fmt::format("{}.{}: the project has no collision layer named {} (scene.info lists them; name one with "
+								"project.setCollisionLayers)", name, property->Name, value.dump()));
+						}
 						converted = *layer;
 					}
 					// Commands refuse values out of a property's range, where the inspector clamps as it drags: an agent learns its

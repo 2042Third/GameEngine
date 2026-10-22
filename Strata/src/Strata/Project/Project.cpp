@@ -104,7 +104,7 @@ namespace Strata
 
 	Project::Project(const Project& other)
 		: m_ProjectFile(other.m_ProjectFile), m_Config(other.m_Config), m_Settings(other.m_Settings), m_SettingsProblems(other.m_SettingsProblems),
-		  m_UnknownMembers(CreateScope<nlohmann::json>(*other.m_UnknownMembers))
+		  m_FileVersion(other.m_FileVersion), m_UnknownMembers(CreateScope<nlohmann::json>(*other.m_UnknownMembers))
 	{
 	}
 
@@ -116,6 +116,7 @@ namespace Strata
 			m_Config = other.m_Config;
 			m_Settings = other.m_Settings;
 			m_SettingsProblems = other.m_SettingsProblems;
+			m_FileVersion = other.m_FileVersion;
 			*m_UnknownMembers = *other.m_UnknownMembers;
 		}
 		return *this;
@@ -209,6 +210,7 @@ namespace Strata
 			return fail("missing \"Project\" object");
 
 		Ref<Project> project(new Project());
+		project->m_FileVersion = static_cast<uint32_t>(version);
 		std::error_code error;
 		project->m_ProjectFile = std::filesystem::absolute(projectFile, error).lexically_normal();
 		if (error)

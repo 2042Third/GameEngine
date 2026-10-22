@@ -75,6 +75,9 @@ namespace Strata
 		virtual void ShowNewScriptDialog() = 0;
 		// File > Preferences... (PreferencesDialog), at a preference section's page (empty: the page it showed last).
 		virtual void ShowPreferencesDialog(const std::string& section) = 0;
+		// The Project Settings panel, brought to the front at a page: a project section's id or a built-in page
+		// (SettingsBrowser::c_GamePage...).
+		virtual void ShowProjectSettings(const std::string& page) = 0;
 		// Leaves the launcher for the editor without opening a project (an untitled scene with the built-in assets).
 		virtual void DismissLauncher() = 0;
 		// Renames an entity in place in the Hierarchy (F2 in the viewport): the Hierarchy comes to the front with the entity's

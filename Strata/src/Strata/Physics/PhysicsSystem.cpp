@@ -43,11 +43,11 @@ namespace Strata
 			return storage && !storage->empty();
 		}
 
-		// Layers collide when both the physics settings and the scene's layer matrix let them.
+		// Layers collide when both the physics settings and the scene's copy of the project's layer matrix let them.
 		std::array<uint32_t, c_PhysicsLayerCount> CombineLayerMasks(const PhysicsSettings& settings, const Scene& scene)
 		{
 			std::array<uint32_t, c_PhysicsLayerCount> masks;
-			const PhysicsLayerSettings& layers = scene.GetSettings().PhysicsLayers;
+			const PhysicsLayerSettings& layers = scene.GetPhysicsLayers();
 			for (uint32_t layer = 0; layer < c_PhysicsLayerCount; layer++)
 				masks[layer] = settings.LayerCollisionMasks[layer] & layers.CollisionMasks[layer];
 			return masks;
@@ -268,14 +268,14 @@ namespace Strata
 			ST_CORE_WARN("Physics: cannot change the collision of layers {} and {}: layers range from 0 to {}", layerA, layerB, c_PhysicsLayerCount - 1);
 			return;
 		}
-		m_Scene.GetSettings().PhysicsLayers.SetCollide(layerA, layerB, collide);
+		m_Scene.GetPhysicsLayers().SetCollide(layerA, layerB, collide);
 		if (m_World)
 			SyncLayers();
 	}
 
 	bool PhysicsSystem::DoLayersCollide(uint32_t layerA, uint32_t layerB) const
 	{
-		return m_Settings.DoLayersCollide(layerA, layerB) && m_Scene.GetSettings().PhysicsLayers.DoCollide(layerA, layerB);
+		return m_Settings.DoLayersCollide(layerA, layerB) && m_Scene.GetPhysicsLayers().DoCollide(layerA, layerB);
 	}
 
 	std::array<uint32_t, c_PhysicsLayerCount> PhysicsSystem::GetEffectiveLayerMasks() const

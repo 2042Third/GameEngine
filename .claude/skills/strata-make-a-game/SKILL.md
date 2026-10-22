@@ -263,10 +263,11 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
   to apply or revert one of them.
 
 - Collision layers keep groups apart (bullets that pass through their shooter, debris the player walks through): name
-  them and set which pairs collide with `scene.setSettings {"layerNames": {"1": "Player", "2": "Debris"},
-  "layerCollisions": [{"layers": ["Player", "Debris"], "collide": false}]}`, then put bodies and controllers on them by
-  name (`component.set {"entity", "component": "RigidBody", "values": {"Layer": "Debris"}}`). Scripts change pairs while
-  the game plays (`Physics::SetLayersCollide`) and mask queries by layer (`1u << Physics::GetLayerIndex("Player")`).
+  them and set which pairs collide for the whole project with `project.setCollisionLayers {"layerNames": {"1":
+  "Player", "2": "Debris"}, "layerCollisions": [{"layers": ["Player", "Debris"], "collide": false}]}`, then put bodies
+  and controllers on them by name (`component.set {"entity", "component": "RigidBody", "values": {"Layer": "Debris"}}`).
+  Scripts change pairs while the game plays (`Physics::SetLayersCollide`, until the next scene) and mask queries by
+  layer (`1u << Physics::GetLayerIndex("Player")`).
 - Camera: `{"Camera": {"Primary": true, "PerspectiveFOV": 45}}`; cameras and lights look along their -Z, so a camera at
   `+Z` looking at the origin needs no rotation. Rotations are Euler degrees `[pitch, yaw, roll]`.
 - Light: a `DirectionalLight` (Intensity ~3, pitch -35) plus a `SkyLight`: `"Source": "Procedural"` for a sky (its sun
@@ -411,7 +412,7 @@ is each one's regression:
 - **PhysicsPlayground**: ~600 bodies placed with `prefab.instantiate {instances}`; shooting through the cursor (the camera's
   field of view and the window size give the ray), grabbing (a velocity toward a point in front of the camera each fixed
   step), impact sounds by material with a voice budget shared by every body, a trigger that counts balls, a collision
-  layer that passes through another (`scene.setSettings {layerNames, layerCollisions}`), R reloading the scene to reset.
+  layer that passes through another (`project.setCollisionLayers {layerNames, layerCollisions}`), R reloading the scene to reset.
 - **OpenWorld**: a generated terrain (`Tools/GenerateIslandTerrain.py`) kept in a world's persistent scene with static
   mesh colliders; 20,000 props scattered into a world layer (`world.edit {editLayer}`, `world.loadCells` to pin the
   region first, then `prefab.instantiate {instances}` steps); foxes with an animation controller; teleports that prefetch

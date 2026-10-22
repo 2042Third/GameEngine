@@ -2,7 +2,9 @@
 #include "Strata/Scene/SceneRegistration.h"
 
 #include "Strata/Asset/AssetManager.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Scene/Prefab.h"
+#include "Strata/Scene/ProjectCollisionLayers.h"
 #include "Strata/Scene/SceneReadProgress.h"
 
 namespace Strata
@@ -11,6 +13,9 @@ namespace Strata
 	void RegisterSceneModule()
 	{
 		RegisterSceneComponents();
+		// The project's collision layers are Scene's: the type, the parser and every reader of names are, so a build or game
+		// without physics keeps them.
+		SettingsRegistry::GetProcessRegistry().Register(ProjectCollisionLayers::MakeSection());
 
 		// Prefabs and scenes are stored as their JSON source, models in their cooked JSON form: all are read as streams, which
 		// stop once the load is given up.

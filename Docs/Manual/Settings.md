@@ -20,8 +20,19 @@ to find a page or a field), the selected page on the right:
 - **Export**: what an export that packs only what the scenes use keeps anyway: assets and folders your scripts load by
   path. Type a path relative to the `Assets` folder (`Prefabs/Enemy.stprefab`, or a folder such as `Prefabs`) and press
   **Add**; the cross removes one.
+- **Collision Layers** (under Physics): names for the 32 layers rigid bodies and character controllers are on, and which
+  layers collide. **Name a Layer** names the next free one (type over the name, Enter applies it; the cross removes it),
+  and the grid has a box for each pair of the layers shown: clear it and their bodies pass through each other. The
+  layers are the project's, the same in every scene and prefab; the Inspector shows how many are named when nothing is
+  selected, with a link to this page. Scripts can change which layers collide while the game plays, until the next scene
+  starts.
 - A page for each kind of setting the engine and your game define, grouped by category. **Reset to Defaults** sets a page
   back to the values it starts with.
+
+Strata 0.5.0 kept collision layers in each scene. The first time a later editor opens a project saved by 0.5.0, it makes
+the layers its scenes name the project's (the start scene's first; where scenes disagree, the log says how, and a pair
+any scene kept apart stays apart) and saves the project file in the new format, which 0.5.0 cannot open. Your scene
+files stay as they are until you save them.
 
 Every change takes effect at once and is saved in the project file right away, in the background. It is also a step of
 the undo history: **Edit > Undo** (Ctrl+Z) brings the previous value back. Changing project settings never marks the

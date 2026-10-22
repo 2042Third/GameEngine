@@ -21,6 +21,7 @@
 #include "Panels/StreamingPanel.h"
 #include "Panels/ViewportPanel.h"
 #include "Panels/WelcomePanel.h"
+#include "UI/CollisionLayersPage.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/FileDialogs.h"
@@ -40,6 +41,7 @@
 #include <Strata/Events/MouseEvent.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/ImageWriter.h>
+#include <Strata/Scene/ProjectCollisionLayers.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -133,6 +135,10 @@ namespace Strata
 		m_SettingsPages.Register(ExternalEditor::c_SettingsSection, [](EditorContext& context, const SettingsSection&, SettingsWindowKind)
 		{
 			return CreateScope<ExternalEditorPage>(context);
+		});
+		m_SettingsPages.Register(ProjectCollisionLayers::c_SectionId, [](EditorContext&, const SettingsSection&, SettingsWindowKind)
+		{
+			return CreateScope<CollisionLayersPage>();
 		});
 		RegisterBuiltinPanels();
 		RegisterPanelCommands();
@@ -1776,6 +1782,13 @@ namespace Strata
 	void EditorLayer::ShowPreferencesDialog(const std::string& section)
 	{
 		m_PreferencesDialog.Open(section);
+	}
+
+	void EditorLayer::ShowProjectSettings(const std::string& page)
+	{
+		if (ProjectSettingsPanel* panel = m_Panels.Get<ProjectSettingsPanel>(EditorPanels::c_ProjectSettings))
+			panel->Select(page);
+		m_Panels.Focus(EditorPanels::c_ProjectSettings);
 	}
 
 	void EditorLayer::DrawStatusBar()

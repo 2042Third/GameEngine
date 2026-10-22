@@ -384,10 +384,13 @@ at once up to 131,072 bodies), for scenes that spawn many bodies while they play
 a cost); 0 sizes it from the bodies the
 scene starts with; set it in edit mode: it applies when play starts; 0.4.0's `maxBodyPairs` is ignored with a `warning`; `maxEntitiesInstantiatedPerFrame` and `maxEntitiesDestroyedPerFrame` bound how many entities sub-scenes create
 and destroy per frame, 5000 each by default).
-Collision layers: `scene.setSettings {"layerNames": {"1": "Player", "2": "Debris"}, "layerCollisions":
-[{"layers": ["Player", "Debris"], "collide": false}]}` names layers and keeps pairs apart (`resetLayerCollisions: true`
-lets everything collide again first; `scene.info` lists `physicsLayers`), and `RigidBody.Layer` and
-`CharacterController.Layer` take a layer's name as well as its index (`component.set {"values": {"Layer": "Debris"}}`).
+Collision layers are the project's, the same in every scene (the `settings` toolset): `project.setCollisionLayers
+{"layerNames": {"1": "Player", "2": "Debris"}, "layerCollisions": [{"layers": ["Player", "Debris"], "collide": false}]}`
+names layers and keeps pairs apart as one undo step that leaves the scene saved (`resetLayerCollisions: true` lets
+everything collide again first; `scene.info` lists `physicsLayers`; `scene.setSettings` refuses these parameters since
+0.6.0), and `RigidBody.Layer` and `CharacterController.Layer` take a layer's name as well as its index
+(`component.set {"values": {"Layer": "Debris"}}`). Opening a 0.5.0 project makes its scenes' layers the project's once
+(`project.open`'s `migrated`).
 
 **Materials**: `material.set {"material": "Materials/Red.stmat", "properties": {"Roughness": 0.3}}` saves the material
 file and is one undo step (`edit.undo` restores the file and what entities show); entities using it show the change in

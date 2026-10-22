@@ -165,103 +165,6 @@ namespace Strata
 			outCapacity.MaxContactConstraints = ReadCapacity(capacity, "MaxContactConstraints", PhysicsCapacitySettings::c_MaxContactConstraintsLimit, outWarnings);
 		}
 
-		// {"Names": {"<index>": "<name>", ...}, "NoCollisions": [[a, b], ...]}: the named layers, and the pairs of layers that
-		// do not collide (each once, a <= b), so a scene where everything collides stores an empty list.
-		nlohmann::json WritePhysicsLayers(const PhysicsLayerSettings& layers)
-		{
-			nlohmann::json names = nlohmann::json::object();
-			for (uint32_t layer = 0; layer < c_PhysicsLayerCount; layer++)
-			{
-				if (!layers.Names[layer].empty())
-					names[std::to_string(layer)] = layers.Names[layer];
-			}
-			nlohmann::json noCollisions = nlohmann::json::array();
-			for (uint32_t a = 0; a < c_PhysicsLayerCount; a++)
-			{
-				for (uint32_t b = a; b < c_PhysicsLayerCount; b++)
-				{
-					if (!layers.DoCollide(a, b))
-						noCollisions.push_back({ a, b });
-				}
-			}
-			return { { "Names", std::move(names) }, { "NoCollisions", std::move(noCollisions) } };
-		}
-
-		// A layer index: an integer from 0 to c_PhysicsLayerCount - 1 (parsed files hold unsigned numbers, documents built in
-		// code signed ones).
-		std::optional<uint32_t> ReadLayerIndex(const nlohmann::json& value)
-		{
-			if (!value.is_number_integer())
-				return std::nullopt;
-			const bool inRange = value.is_number_unsigned() ? value.get<uint64_t>() < c_PhysicsLayerCount
-				: (value.get<int64_t>() >= 0 && value.get<int64_t>() < static_cast<int64_t>(c_PhysicsLayerCount));
-			if (!inRange)
-				return std::nullopt;
-			return static_cast<uint32_t>(value.get<int64_t>());
-		}
-
-		// What a file holds that is not a layer name or pair is reported and skipped; the rest of the settings still load.
-		void ReadPhysicsLayers(const nlohmann::json& json, PhysicsLayerSettings& outLayers, std::vector<std::string>* outWarnings)
-		{
-			auto warn = [outWarnings](std::string message)
-			{
-				if (outWarnings)
-					outWarnings->push_back(std::move(message));
-			};
-			if (!json.is_object())
-			{
-				warn("Scene settings: invalid 'PhysicsLayers' ignored (every layer collides)");
-				return;
-			}
-			if (const nlohmann::json* names = JsonUtils::Find(json, "Names"))
-			{
-				if (!names->is_object())
-				{
-					warn("Scene settings: invalid 'PhysicsLayers.Names' ignored");
-				}
-				else
-				{
-					for (const auto& [key, name] : names->items())
-					{
-						const bool digits = !key.empty() && key.size() <= 2 && std::all_of(key.begin(), key.end(), [](char character) { return character >= '0' && character <= '9'; });
-						uint32_t layer = digits ? 0 : c_PhysicsLayerCount;
-						for (size_t index = 0; digits && index < key.size(); index++)
-							layer = layer * 10 + static_cast<uint32_t>(key[index] - '0');
-						if (layer >= c_PhysicsLayerCount || !name.is_string())
-						{
-							warn(fmt::format("Scene settings: physics layer name '{}' ignored: names are given by layer index (0 to {})", key, c_PhysicsLayerCount - 1));
-							continue;
-						}
-						if (std::optional<std::string> problem = outLayers.ValidateName(layer, name.get<std::string>()))
-						{
-							warn(fmt::format("Scene settings: the name of physics layer {} is ignored: {}", layer, *problem));
-							continue;
-						}
-						outLayers.Names[layer] = name.get<std::string>();
-					}
-				}
-			}
-			if (const nlohmann::json* pairs = JsonUtils::Find(json, "NoCollisions"))
-			{
-				if (!pairs->is_array())
-				{
-					warn("Scene settings: invalid 'PhysicsLayers.NoCollisions' ignored (every layer collides)");
-					return;
-				}
-				for (const nlohmann::json& pair : *pairs)
-				{
-					const std::optional<uint32_t> a = pair.is_array() && pair.size() == 2 ? ReadLayerIndex(pair[0]) : std::nullopt;
-					const std::optional<uint32_t> b = pair.is_array() && pair.size() == 2 ? ReadLayerIndex(pair[1]) : std::nullopt;
-					if (!a || !b)
-					{
-						warn(fmt::format("Scene settings: physics layer pair {} ignored: pairs are two layer indices (0 to {})", pair.dump(), c_PhysicsLayerCount - 1));
-						continue;
-					}
-					outLayers.SetCollide(*a, *b, false);
-				}
-			}
-		}
-
 	}
 
 	nlohmann::json SceneSerializer::SerializeSettings(const SceneSettings& sceneSettings)
@@ -277,7 +180,6 @@ namespace Strata
 		settings["PhysicsCapacity"] = {
 			{ "MaxBodies", capacity.MaxBodies },
 			{ "MaxContactConstraints", capacity.MaxContactConstraints } };
-		settings["PhysicsLayers"] = WritePhysicsLayers(sceneSettings.PhysicsLayers);
 		return settings;
 	}
 
@@ -306,10 +208,30 @@ namespace Strata
 		// Scenes saved before capacities existed have none: every capacity is automatic.
 		if (const nlohmann::json* capacity = JsonUtils::Find(settings, "PhysicsCapacity"))
 			ReadPhysicsCapacity(*capacity, outSettings.PhysicsCapacity, outWarnings);
-		// Scenes saved before layer settings existed have none: no names, every layer collides. (Older readers skip the
-		// key: they misread nothing, so the format version stays.)
-		if (const nlohmann::json* layers = JsonUtils::Find(settings, "PhysicsLayers"))
-			ReadPhysicsLayers(*layers, outSettings.PhysicsLayers, outWarnings);
+	}
+
+	void SceneSerializer::DeserializeSettings(const nlohmann::json& settings, Scene& scene, std::vector<std::string>* outWarnings)
+	{
+		DeserializeSettings(settings, scene.GetSettings(), outWarnings);
+		scene.SetStoredPhysicsLayers(ReadStoredPhysicsLayers(settings, outWarnings));
+	}
+
+	std::optional<PhysicsLayerSettings> SceneSerializer::ReadStoredPhysicsLayers(const nlohmann::json& settings, std::vector<std::string>* outWarnings)
+	{
+		// Scenes saved before layer settings existed, and every scene saved since they became the project's, have none.
+		const nlohmann::json* stored = JsonUtils::Find(settings, "PhysicsLayers");
+		if (!stored)
+			return std::nullopt;
+		std::vector<std::string> problems;
+		PhysicsLayerSettings layers = PhysicsLayerSettings::FromJson(*stored, &problems);
+		if (outWarnings)
+		{
+			for (std::string& problem : problems)
+				outWarnings->push_back(fmt::format("Scene settings: in 'PhysicsLayers', {}", problem));
+		}
+		if (layers.IsDefault())
+			return std::nullopt;
+		return layers;
 	}
 
 	nlohmann::json SceneSerializer::Serialize(const Scene& scene)
@@ -359,7 +281,7 @@ namespace Strata
 
 		scene.SetName(JsonUtils::GetString(sceneJson, "Name", "Untitled"));
 		if (const nlohmann::json* settings = JsonUtils::Find(sceneJson, "Settings"); settings && settings->is_object())
-			DeserializeSettings(*settings, scene.GetSettings(), outWarnings);
+			DeserializeSettings(*settings, scene, outWarnings);
 
 		// A scene without an entity list is simply empty.
 		if (!sceneJson.contains("Entities"))

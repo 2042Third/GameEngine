@@ -5,6 +5,7 @@
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/ProjectCollisionLayers.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/SceneWorkBudget.h"
 #include "Strata/Scene/SubSceneLoad.h"
@@ -202,6 +203,27 @@ namespace Strata
 		m_Connections.emplace_back(m_Registry.on_destroy<TagComponent>().connect<&Scene::OnTagRemoved>(*this));
 	}
 
+	void Scene::SetStoredPhysicsLayers(std::optional<PhysicsLayerSettings> layers)
+	{
+		if (layers && layers->IsDefault())
+			layers.reset();
+		m_PhysicsLayers = layers ? *layers : PhysicsLayerSettings();
+		m_StoredPhysicsLayers = std::move(layers);
+		m_ProjectLayersVersion = 0;
+		m_StoredLayersDiffer = false;
+	}
+
+	bool Scene::ApplyProjectLayers()
+	{
+		const ProjectCollisionLayers::Table* table = ProjectCollisionLayers::Find();
+		if (!table || table->Version == m_ProjectLayersVersion)
+			return false;
+		m_PhysicsLayers = table->Layers;
+		m_ProjectLayersVersion = table->Version;
+		m_StoredLayersDiffer = m_StoredPhysicsLayers && *m_StoredPhysicsLayers != table->Layers;
+		return true;
+	}
+
 	Ref<Scene> Scene::Copy(const Ref<Scene>& source)
 	{
 		return Copy(source, SceneCopyOptions {});
@@ -214,6 +236,10 @@ namespace Strata
 		// listens to a new registry, so the storages can be filled in parallel.
 		Ref<Scene> destination(new Scene(source->m_Name, false));
 		destination->m_Settings = source->m_Settings;
+		destination->m_PhysicsLayers = source->m_PhysicsLayers;
+		destination->m_StoredPhysicsLayers = source->m_StoredPhysicsLayers;
+		destination->m_ProjectLayersVersion = source->m_ProjectLayersVersion;
+		destination->m_StoredLayersDiffer = source->m_StoredLayersDiffer;
 		destination->m_SourceAsset = source->m_SourceAsset;
 		destination->m_LocalLineageID = source->m_LocalLineageID;
 

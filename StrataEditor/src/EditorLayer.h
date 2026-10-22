@@ -180,6 +180,7 @@ namespace Strata
 		void ShowAboutDialog() override;
 		void ShowNewScriptDialog() override;
 		void ShowPreferencesDialog(const std::string& section) override;
+		void ShowProjectSettings(const std::string& page) override;
 		void DismissLauncher() override;
 		void RenameEntity(UUID entity) override;
 		void ShowPanel(std::string_view panel) override;

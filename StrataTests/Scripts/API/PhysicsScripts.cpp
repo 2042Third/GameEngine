@@ -334,7 +334,7 @@ public:
 		Expect(Physics::GetLayerIndex("Crates") == 2 && Physics::GetLayerIndex("zones") == 3, "GetLayerIndex finds named layers, ignoring case");
 		Expect(Physics::GetLayerIndex("Layer 7") == 7, "layers without a name are found as \"Layer <index>\"");
 		Expect(Physics::GetLayerIndex("Layer 2") == -1 && Physics::GetLayerIndex("Nothing") == -1 && Physics::GetLayerIndex("") == -1,
-			"names the scene does not give find nothing");
+			"names the project does not give find nothing");
 		Expect(Physics::GetLayersCollide(0, 2) && Physics::GetLayersCollide(2, 2), "every pair collides at first");
 		Expect(!Physics::SetLayersCollide(32, 0, false) && !Physics::GetLayersCollide(0, 32), "layers outside 0 to 31 are refused");
 		Expect(Physics::SetLayersCollide(static_cast<uint32_t>(Physics::GetLayerIndex("Crates")), 0, false), "SetLayersCollide");

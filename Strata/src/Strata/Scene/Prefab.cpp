@@ -400,6 +400,8 @@ namespace Strata
 		LogWarnings(*m_Prepared);
 		Ref<Scene> scene = std::move(m_Prepared);
 		scene->SetSourceAsset(Handle);
+		// The project's layers replace the document's here, on the main thread: the loader's worker never reads the project.
+		scene->ApplyProjectLayers();
 		return scene;
 	}
 
@@ -414,6 +416,7 @@ namespace Strata
 		LogWarnings(*m_Prepared);
 		Ref<Scene> scene = Scene::Copy(m_Prepared);
 		scene->SetSourceAsset(Handle);
+		scene->ApplyProjectLayers();
 		return scene;
 	}
 

@@ -32,6 +32,7 @@ namespace Strata
 	struct FrameProfileSummary;
 	struct ImportMemoryStats;
 	struct JobSystemStats;
+	struct PhysicsLayerSettings;
 	struct SceneRendererGPUStats;
 	struct SceneRendererStats;
 
@@ -86,6 +87,10 @@ namespace Strata
 		nlohmann::json DescribeAssetStats(const AssetManagerStats& stats);
 		// physics.stats' answer for a scene (EditorWorldCommands.cpp): {running: false} for none or one that does not run.
 		nlohmann::json DescribePhysicsStats(const Scene* scene);
+		// Collision layers as scene.info and project.setCollisionLayers report them (EditorProjectSettingsCommands.cpp): names,
+		// the named layers by index, and noCollisions, the pairs of layers that do not collide by their names ("Layer <index>"
+		// without one).
+		nlohmann::json DescribePhysicsLayers(const PhysicsLayerSettings& layers);
 		// scene.loadStatus's world streaming (EditorWorldCommands.cpp): the editor's world (editor) and, while playing, the
 		// running game's (game), each {cellsWanted, cellsLoading, cellsLoaded, cellsUnloading, cellsPinned, cellsFailed} or
 		// null; null when neither streams a world.

@@ -170,11 +170,12 @@ std::vector<Entity> nearby = Physics::OverlapSphere(center, 3.0f);
 - `Physics`: `Raycast` (closest hit), `RaycastAll` (sorted by distance), `OverlapSphere`, `OverlapBox`; triggers are
   skipped unless `includeTriggers` is set, `ignore` skips one entity (usually the caster).
 - Collision layers: every body and character controller is on one layer (0-31, `Layer`), and two of them collide only
-  when the scene's layer matrix lets their layers (everything collides by default). Name layers and set the matrix in
-  the editor (Inspector with nothing selected, Collision Layers; or `scene.setSettings {layerNames, layerCollisions}`),
-  then use names in code: `Physics::GetLayerIndex("Debris")` (-1 for a name the scene lacks), `1u << layer` as a query
-  mask, `Physics::SetLayersCollide(a, b, false)` to let two layers pass through each other while the scene plays (e.g.
-  a ghost power-up), `Physics::GetLayersCollide(a, b)`.
+  when the project's layer matrix lets their layers (everything collides by default). The layers are the project's, the
+  same in every scene and prefab: name them and set the matrix in the editor (Project Settings > Collision Layers; or
+  `project.setCollisionLayers {layerNames, layerCollisions}`), then use names in code: `Physics::GetLayerIndex("Debris")`
+  (-1 for a name the project lacks), `1u << layer` as a query mask, `Physics::SetLayersCollide(a, b, false)` to let two
+  layers pass through each other while the scene plays (e.g. a ghost power-up; it lasts until the next scene starts),
+  `Physics::GetLayersCollide(a, b)`.
 - Worlds (a scene whose World component names a World asset streams its cells around the streaming sources): before a
   teleport or a spawn far away, prefetch and wait, so the ground there exists and has collision:
 

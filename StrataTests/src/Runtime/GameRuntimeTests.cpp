@@ -16,6 +16,7 @@
 #include "Strata/Runtime/GameRuntime.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/ProjectCollisionLayers.h"
 #include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/World/WorldComponents.h"
@@ -319,6 +320,47 @@ TEST_SUITE("Runtime.Game")
 		REQUIRE(next);
 		CHECK(next->GetStats().BodyCount == 20);
 		CHECK(next->GetStats().PreparedSlices >= 1);
+	}
+
+	TEST_CASE("An exported game's second scene collides by the project's table")
+	{
+		ScopedJobSystem jobs(2, 2);
+		// The second scene's document stores its own table (0.5.0's form) where every layer collides; the project's keeps
+		// layers 0 and 4 apart.
+		Scene next("Next");
+		next.CreateEntity("Camera").AddComponent<CameraComponent>().Primary = true;
+		Entity ground = next.CreateEntity("Ground");
+		ground.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		ground.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(20.0f, 0.5f, 20.0f);
+		Entity ghost = next.CreateEntity("Ghost");
+		ghost.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 1.0f, 0.0f);
+		ghost.AddComponent<RigidBodyComponent>().Layer = 4;
+		ghost.AddComponent<BoxColliderComponent>();
+		nlohmann::json document = SceneSerializer::Serialize(next);
+		document["Scene"]["Settings"]["PhysicsLayers"] = { { "Names", { { "4", "Solid" } } }, { "NoCollisions", nlohmann::json::array() } };
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeProjectLayers");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 1) }, { 0x1012, ToBytes(JsonUtils::Dump(document)) } },
+			UUID(0x1010));
+		PhysicsLayerSettings project;
+		project.Names[4] = "Ghosts";
+		project.SetCollide(0, 4, false);
+		RewriteManifest(manifest, 5, { { ProjectCollisionLayers::c_SectionId, { { "Version", 1 }, { "Value", project.ToJson() } } } });
+
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		REQUIRE(game->WaitForStart());
+		CHECK(game->GetScene()->GetPhysicsLayers() == project);
+		game->GetScene()->RequestSceneLoad(UUID(0x1012));
+		UpdateUntil(*game, [&]() { return game->GetSceneHandle() == UUID(0x1012); });
+		Scene& running = *game->GetScene();
+		CHECK(running.GetPhysicsLayers() == project);
+		CHECK(running.DoStoredLayersDiffer());
+		const PhysicsSystem* physics = running.GetSystem<PhysicsSystem>();
+		REQUIRE(physics);
+		CHECK_FALSE(physics->DoLayersCollide(0, 4));
+		const Entity falling = running.FindEntityByName("Ghost");
+		UpdateUntil(*game, [&]() { return glm::vec3(running.GetWorldTransform(falling)[3]).y < -2.0f; });
 	}
 #endif
 

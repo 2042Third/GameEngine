@@ -215,8 +215,6 @@ The threading model, frame loop and pipelines these rules protect are described 
   `setBufferState`/`setTextureState(..., UnorderedAccess)` plus `commitBarriers()`. Drop render targets, and what
   references them, through `Renderer::ReleaseDeferred` (the Vulkan backend does not keep the textures of clears and
   resolves alive).
-- **Scripting isolation:** game scripts only see `StrataScriptCore`. Every call into script code goes
-  through `CrashGuard`; anything crossing the ABI is plain data (no STL types, no exceptions).
 - **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous; code must handle
   "not loaded yet" every frame instead of blocking. See [Asset pipeline](#asset-pipeline). New code that works for a
   scene (scene systems, loading into it, rendering it) reaches the asset manager through `Scene::GetAssetManager()`,
@@ -250,6 +248,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   Hierarchy changes go through `Scene` (`SetParent`, `SetSiblingIndex`, `PlaceEntities`, `DestroyEntities`...), never by
   editing `RelationshipComponent` or `HierarchyComponent`. Read sibling positions with `Scene::GetSiblingIndex`, remove
   many entities with one `DestroyEntities` call, and stay within `Scene::c_MaxEntities` live entities.
+- **Collision layers** are the project's (`Scene.CollisionLayers`); `Scene::GetPhysicsLayers` is a scene's working copy,
+  applied on the main thread ([details](Docs/DeveloperGuide.md#collision-layers)).
 
 The threading, NVRHI, asset, layer, registration, engine module and transform rules in full:
 [Architecture rules](Docs/DeveloperGuide.md#architecture-rules).

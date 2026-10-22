@@ -896,7 +896,7 @@ setting is one registration, and no other code learns of it.
   project is open the editor provides its sections as `IProjectSettings` (a provider the context owns for its life,
   forwarding to the open project's values).
 - **Changes are undo steps.** Every command that changes the project's settings (`project.setStartScene`,
-  `project.setExportSettings`, `project.setSettings`) records one `ProjectSettingsAction` (`Editor/ProjectSettingsAction.h`,
+  `project.setExportSettings`, `project.setSettings`, `project.setCollisionLayers`) records one `ProjectSettingsAction` (`Editor/ProjectSettingsAction.h`,
   made with `ChangeProjectSettings` or `ChangeProjectSection`, which first refuse, on a copy, a change the project file
   could not be written with, such as one over its 1 MiB; a section's step keeps its stored entries,
   `ProjectSettingsValues::GetStoredEntry`, and puts them back with `RestoreStoredEntry`, also a value its section
@@ -930,7 +930,9 @@ plays, and the **Preferences** dialog ([Preferences](#preferences)).
   whole value, and Reset to Defaults (`reset: true`). A complex section needs a *custom page* (`UI::SettingsPage`), which
   the editor UI registers in the `EditorSettingsPageRegistry` (`EditorLayer::GetSettingsPages`) under the section's id;
   `Editor.UI.ProjectSettings` fails for a complex section of the process's registry without one, so a section and its
-  page land together. The External Editor's page (`ExternalEditorPage`, `UI/ScriptDialogs`) is the first.
+  page land together: the External Editor's (`ExternalEditorPage`, `UI/ScriptDialogs`) and Collision Layers
+  (`CollisionLayersPage`, [Collision layers](#collision-layers)). `EditorShell::ShowProjectSettings(page)` brings the
+  panel forward at a page (the Inspector's link to the collision layers).
 - **Rules.** Pages change nothing themselves: every edit runs a command with `CommandOrigin { CommandSource::UI }`
   (project steps are undoable, preferences are not). They draw from copies of the values, read again only when the
   values' version changes (`ProjectSettingsValues::GetVersion`, `EditorPreferences::GetVersion`), never parsing per
@@ -941,6 +943,52 @@ plays, and the **Preferences** dialog ([Preferences](#preferences)).
 - **Adding a section.** Register it in the module's registration function ([Project settings](#project-settings)); a
   simple one is drawn without more, a complex one registers its page in `EditorLayer`'s constructor beside the External
   Editor's.
+
+### Collision layers
+
+Collision layers are the project's: one table, the project section `Scene.CollisionLayers` (`Scene/ProjectCollisionLayers`,
+registered by `RegisterSceneModule`, so a build or game without physics keeps the names), whose value is
+`PhysicsLayerSettings`' stored form, `{"Names": {"<index>": name}, "NoCollisions": [[a, b]]}` (`ToJson`/`FromJson`; names
+unique ignoring case, at most 64 characters; the section's `Read` refuses what `FromJson` reports and anything but those
+two members). A layer's name means the same in every scene and prefab.
+
+- **The working copy.** Each scene works on a copy, `Scene::GetPhysicsLayers()`: physics (ANDed with the process default
+  `PhysicsSettings::LayerCollisionMasks`, which only tests set), scripts, `component.set`'s layer names, the Inspector's
+  layer choice and `scene.info`'s `physicsLayers` read it, and scripts' `Physics::SetLayersCollide` changes it for as long
+  as the scene runs (the next scene starts from the project's). It is not saved and not part of scene undo or recovery;
+  `Scene::Copy` keeps it.
+- **Hand-over, on the main thread.** Scenes are built on the loader's worker, which never reads `IProjectSettings`: it
+  makes the document's stored layers the copy, which is all a program without a provider gets (tools, tests, a version-4
+  manifest: 0.5.0's behaviour). `Scene::ApplyProjectLayers()` then replaces the copy with the project's table
+  (`ProjectCollisionLayers::Find`: parsed again only when the provider's version changes, with a table version that
+  changes only when the table does, so an edit of another section never replaces a script's change). It runs when the
+  scene asset hands its scene over (`SceneAsset::TakePreparedScene` and `CreateScene`: every `SceneLoader` load takes the
+  table before its preparation, where physics creates bodies), in `SceneLoadRequest::TakeScene` when the table changed
+  meanwhile, in `EditorContext::ResetScene` and when play mode switches scenes, and after every change of the project's
+  settings, its undo and redo (`ProjectSettingsAction`: the edited scene and the running copy, whose script changes the
+  new table replaces). Sub-scenes and world cells are the host's entities and collide by its copy.
+- **Stored tables.** 0.5.0 wrote a table into every scene; no writer writes one now, and `SceneSerializer` still reads it
+  (`Scene::GetStoredPhysicsLayers`; `ReadStoredPhysicsLayers` reports invalid entries as warnings). A stored table equal to
+  the default counts as none. When the project's table replaces another stored one, `Scene::DoStoredLayersDiffer` says so
+  and the editor warns once per scene and session (saving the scene drops its table); exported games apply the project's
+  without a word.
+- **Editing.** `project.setCollisionLayers {layerNames, resetLayerCollisions, layerCollisions}` (layers by index or name,
+  applied in that order; the default table is no section) records one project step; `scene.setSettings` refuses those
+  parameters with `InvalidParameters` naming it, and `project.setSettings` sets the whole value. The Collision Layers page
+  (`UI/CollisionLayersPage`) names layers in place and edits a compact matrix of the layers shown (layer 0, the named ones,
+  those with a pair kept apart), one command per edit; probe keys under `ProjectSettings.Scene.CollisionLayers.`
+  (`Summary`, `Name.<i>`, `Clear.<i>`, `Add`, `Label.<i>`, `Cell.<a>.<b>`). The Inspector's scene settings show
+  "Collision layers: <n> named" with a link to the page (`Inspector.Layers`, `Inspector.Layers.Open`).
+- **Migration.** A project file of version 1 or 2 (`Project::GetFileVersion`) is migrated once when it opens, by every
+  path: an I/O job (`Editor/ProjectMigration`) walks the asset directory and reads each scene's settings with
+  `SceneDocumentReader`, stopping at the first entity when they came first; the start scene waits for it. On the main
+  thread the names come from the start scene, then the others by path (another name for an index, or a name another
+  layer has, is a conflict and the first stays); a pair any scene keeps apart is kept apart (matrices that differ are a
+  conflict). The section is set without an undo step when a scene stored a table, and the project file is written as
+  version 3 in every case, so the version records the migration: a version-3 file never migrates (new projects, a
+  section reset later). Conflicts are logged as one warning, and `project.open` reports
+  `migrated: {collisionLayers: {scenes, conflicts, unreadable}}` (null when nothing migrated). Scene files are not
+  touched.
 
 ### Preferences
 
@@ -1202,8 +1250,9 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
 - Physics: `RigidBody` (velocities, forces, impulses, `Teleport`) and `Physics` (raycasts, overlaps) go through the scene
   services the scene's `PhysicsSystem` offers (`IBodyMotionQuery`, `IBodyControl`, `IPhysicsQueries`), also in `OnCreate`:
   scenes start every system before the scripts (`SceneSystem::OnRuntimeStarted`). `Physics::SetLayersCollide`,
-  `GetLayersCollide` and `GetLayerIndex` read and change the playing scene's collision layers
-  (`SceneSettings::PhysicsLayers`; physics applies a change before its next step). Contacts reach scripts as
+  `GetLayersCollide` and `GetLayerIndex` read and change the playing scene's copy of the project's collision layers
+  (`Scene::GetPhysicsLayers`, [Collision layers](#collision-layers); physics applies a change before its next step, and it
+  lasts for that scene). Contacts reach scripts as
   `OnCollisionEnter/Exit` and `OnTriggerEnter/Exit` (class descriptor callbacks taking a `StrataScriptCollision`):
   `ScriptSystem` listens to the scene's `ICollisionEventSource` while it runs and calls the scripts of both entities,
   skipping removed, disabled and not yet started instances; contacts begin only for active entities, and each instance
@@ -2175,8 +2224,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `GameUI/GameUIComponents.cpp`: the canvas's scale settings by scale and render mode, an image's slices, fill, texture
   part and border, a text's outline color, a selectable's transition states and explicit navigation, a layout's grid;
   each following the code that reads the property); `component.get` and `entity.get` list them as `inactive`. It shows the scene's settings (gravity, the fixed step, the physics
-  world's capacities and the collision layers: names and a compact matrix, long names elided; bodies and controllers
-  choose their layer among layer 0 and the named ones; how many entities sub-scenes create per frame) and sky with
+  world's capacities, how many collision layers the project names with a link to their page, bodies and controllers
+  choosing their layer among layer 0 and the named ones; how many entities sub-scenes create per frame) and sky with
   nothing selected, in sections that start closed with a summary on their headers
   (`UI::SectionHeader`'s summary: live widgets cost frame time while they are drawn); the
   Asset tab edits materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings
@@ -3051,7 +3100,8 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   `play` (`play.`, `input.`, `audio.`: game-ui's `input.click` and `input.type` too), `scripts`, `animation`, `viewport`
   (`viewport.`, `camera.`), `streaming` (`asset.stats`, `asset.setBudget`), `perf` (`editor.perf`), `editor` (`editor.`,
   `log.`), `ui` (`ui.create`, `ui.layout`, `ui.hitTest`), `world` (`world.`, `physics.`) and `settings` (the project's
-  settings: `project.settings`, `project.setSettings`, `project.save`, the project's other commands staying in `assets`;
+  settings: `project.settings`, `project.setSettings`, `project.setCollisionLayers`, `project.save`, the project's other
+  commands staying in `assets`;
   and the preferences, `preferences.`). Exact names win over
   prefixes; a group the table does not know gets a toolset named after it, but a new built-in group goes into the table
   (`CLI.McpToolsets` checks that every command maps to a toolset it names, and what the `ui`, `play` and `settings`

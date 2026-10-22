@@ -35,6 +35,7 @@ namespace Strata::CLI::McpToolsets
 			{ "editor.perf", "perf" },
 			{ "project.settings", "settings" },
 			{ "project.setSettings", "settings" },
+			{ "project.setCollisionLayers", "settings" },
 			{ "project.save", "settings" } };
 
 		constexpr std::pair<std::string_view, std::string_view> c_PrefixToolsets[] = {

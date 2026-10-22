@@ -94,6 +94,10 @@ namespace Strata
 		const ProjectSettingsValues& GetSettings() const { return m_Settings; }
 		// The stored sections Load's validation refused.
 		const std::vector<SettingsProblem>& GetSettingsProblems() const { return m_SettingsProblems; }
+		// The format version of the file Load read (c_FormatVersion for a project Create made). A file of version 1 or 2 was
+		// written by 0.5.0 or older: the editor migrates what those kept elsewhere (the scenes' collision layers) when it opens
+		// one, and saves it as the current version.
+		uint32_t GetFileVersion() const { return m_FileVersion; }
 
 		const std::filesystem::path& GetProjectFile() const { return m_ProjectFile; }
 		std::filesystem::path GetProjectDirectory() const { return m_ProjectFile.parent_path(); }
@@ -128,6 +132,7 @@ namespace Strata
 		ProjectConfig m_Config;
 		ProjectSettingsValues m_Settings;
 		std::vector<SettingsProblem> m_SettingsProblems;
+		uint32_t m_FileVersion = c_FormatVersion;
 		Scope<nlohmann::json> m_UnknownMembers; // Members of "Project" this version does not know: an object
 	};
 
