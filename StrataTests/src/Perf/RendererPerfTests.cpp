@@ -214,6 +214,41 @@ TEST_SUITE("PerfGPU.Renderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Render cost of 100,000 cubes with temporal anti-aliasing")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		// Render100kCubes' scene with the post-processing's defaults but TAA: its jitter, motion vectors, motion history and
+		// resolve (provisional: the reference machine sets the budgets).
+		constexpr size_t c_Count = 100'000;
+		Scene scene("TemporalCubes");
+		Perf::AddCameraAndLight(scene);
+		Perf::CreateCubeGrid(scene, c_Count);
+		scene.CreateEntity("Post Process").AddComponent<PostProcessComponent>().AntiAliasingMethod = AntiAliasingMode::TAA;
+		SceneRenderer renderer(Perf::MeasuredRendererSpecification());
+		renderer.SetViewportSize(c_Width, c_Height);
+		const bool measuresGPU = Perf::MeasuresGPU();
+		std::vector<std::string> keys = { "PerfGPU.Renderer.Render100kCubesTAA" };
+		if (measuresGPU)
+			keys.push_back("PerfGPU.Renderer.Render100kCubesTAAGPU");
+		Perf::CheckBudgetsConfirmed(keys, [&]
+		{
+			const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(c_Count), "100k cubes with TAA");
+			CHECK(GetDrawnCounts(renderer).Instances == c_Count);
+			// A still view: the history goes on from frame to frame, and the motion history copies nothing.
+			CHECK(renderer.GetStats().TemporalAntiAliasing);
+			CHECK(renderer.GetStats().TemporalFrames > static_cast<uint32_t>(c_MeasuredFrames));
+			CHECK(renderer.GetStats().MotionCopiedInstances == 0);
+			Perf::MetricValues values { { "PerfGPU.Renderer.Render100kCubesTAA", measurement.CPU.MedianMs } };
+			if (measuresGPU)
+				values.emplace("PerfGPU.Renderer.Render100kCubesTAAGPU", Perf::MeasureGPU(measurement));
+			return values;
+		});
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Render cost of 100,000 and 300,000 cubes whose shadows cover the view")
 	{
 		GPUContext gpu;
