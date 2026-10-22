@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
