@@ -16,7 +16,13 @@ This guide is for people working in the editor; how the engine keeps them is in 
 to find a page or a field), the selected page on the right:
 
 - **Game**: the scene the game starts with, and the scene it plays while that one loads in the exported game (a loading
-  screen). Pick each from the project's scenes.
+  screen). Pick each from the project's scenes. Below them, who the game is: its **Title** (shown in the exported game's
+  window bar and in its messages; empty uses the project's name), its **Version** (such as `1.0.0`: up to four numbers
+  separated by dots), the **Company** that makes it and a **Copyright** line, and its **Icon**: a texture of the project
+  made from a PNG, JPEG, TGA or BMP image, at least 256 x 256 pixels and square (a narrower image is centered on
+  transparent pixels). A texture inside a model cannot be the icon: import its image as a texture of its own. The
+  project's name keeps naming the folders the game keeps its saves and logs in, so changing the title or the company never
+  loses a player's saves. The **Export Game** dialog sums them up, with a link to this page.
 - **Export**: what an export that packs only what the scenes use keeps anyway: assets and folders your scripts load by
   path. Type a path relative to the `Assets` folder (`Prefabs/Enemy.stprefab`, or a folder such as `Prefabs`) and press
   **Add**; the cross removes one.

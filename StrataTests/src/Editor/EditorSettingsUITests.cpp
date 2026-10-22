@@ -14,6 +14,7 @@
 #include <Strata/Core/ProjectSettings.h>
 #include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Project/Project.h>
+#include <Strata/Reflection/PropertyJson.h>
 
 #include <nlohmann/json.hpp>
 
@@ -159,6 +160,54 @@ TEST_SUITE("Editor.UI.ProjectSettings")
 		// One undo step each, as the commands record them; the scene stays saved.
 		CHECK(editor.Context().GetUndoStack().GetCount() == steps + 2);
 		CHECK_FALSE(editor.Context().IsSceneModified());
+	}
+
+	TEST_CASE("The Game page sets the icon through the asset picker")
+	{
+		HarnessEditor editor;
+		editor.Frames(1);
+		CreateProject(editor, "ProjectSettingsGameIcon");
+		const std::filesystem::path source = CreateTemporaryDirectory("ProjectSettingsGameIconSource") / "Icon.png";
+		REQUIRE(FileSystem::WriteBytes(source, CreateSolidPNG(16, 16, 40, 120, 220)));
+		const std::string icon = editor.Run("asset.import", { { "file", FileSystem::ToUTF8(source) }, { "directory", "Textures" } })["asset"].get<std::string>();
+		OpenProjectSettings(editor);
+		const size_t steps = editor.Context().GetUndoStack().GetCount();
+		const ProjectGameInfo& game = editor.Context().GetProject()->GetConfig().Game;
+
+		// The text fields run project.setGameInfo when their edit ends.
+		REQUIRE(editor.ReplaceText("ProjectSettings.Game.Title", "Star Adventure"));
+		Press(editor, ImGuiKey_Enter);
+		CHECK(game.Title == "Star Adventure");
+		REQUIRE(editor.ReplaceText("ProjectSettings.Game.Company", "Studio"));
+		Press(editor, ImGuiKey_Enter);
+		CHECK(game.Company == "Studio");
+		// A version the command refuses changes nothing, and the field shows the project's again.
+		REQUIRE(editor.ReplaceText("ProjectSettings.Game.Version", "one"));
+		Press(editor, ImGuiKey_Enter);
+		CHECK(game.Version == ProjectGameInfo::c_DefaultVersion);
+		CHECK(UI::ItemProbe::Find("ProjectSettings.Game.Version")->Text == ProjectGameInfo::c_DefaultVersion);
+
+		CHECK_FALSE(IsDrawn("ProjectSettings.Game.IconPreview"));
+		PickAsset(editor, "ProjectSettings.Game.Icon", "Icon");
+		CHECK(UUIDToJson(game.Icon) == icon);
+		CHECK(IsDrawn("ProjectSettings.Game.IconPreview"));
+		// One undo step each, as the command records them; the scene stays saved.
+		CHECK(editor.Context().GetUndoStack().GetCount() == steps + 3);
+		CHECK_FALSE(editor.Context().IsSceneModified());
+
+		// The Export dialog sums the identity up and leads to this page.
+		REQUIRE(editor.Click("ProjectSettings.Page.Export"));
+		editor.Frames(2);
+		CHECK_FALSE(IsDrawn("ProjectSettings.Game.Title"));
+		REQUIRE(editor.Click("Toolbar.Export"));
+		editor.Frames(2);
+		REQUIRE(editor.Layer->GetExportDialog().IsOpen());
+		REQUIRE(IsDrawn("Export.Identity"));
+		CHECK(UI::ItemProbe::Find("Export.Identity")->Text == "Star Adventure 1.0.0 by Studio, with the icon Textures/Icon.png");
+		REQUIRE(editor.Click("Export.EditIdentity"));
+		editor.Frames(2);
+		CHECK_FALSE(editor.Layer->GetExportDialog().IsOpen());
+		CHECK(IsDrawn("ProjectSettings.Game.Title"));
 	}
 
 	TEST_CASE("The Export page lists what pruned exports keep and changes it through project.setExportSettings")

@@ -35,8 +35,8 @@ namespace Strata
 			});
 		}
 
-		// What of the project names any of the targets: its start scene, its loading scene, the settings sections whose validated
-		// values name one; nothing when none does.
+		// What of the project names any of the targets: its start scene, its loading scene, the game's icon, the settings sections
+		// whose validated values name one; nothing when none does.
 		std::optional<AssetReferencer> FindProjectReferencer(const EditorContext& context, const std::unordered_set<AssetHandle>& targets)
 		{
 			const Ref<Project>& project = context.GetProject();
@@ -54,6 +54,11 @@ namespace Strata
 			{
 				entry.ProjectSettings.push_back("loadingScene");
 				names.push_back("its loading scene");
+			}
+			if (config.Game.Icon.IsValid() && targets.contains(config.Game.Icon))
+			{
+				entry.ProjectSettings.push_back("gameIcon");
+				names.push_back("the game's icon");
 			}
 			const SettingsRegistry& registry = context.GetSettingsRegistry();
 			const ProjectSettingsValues& settings = project->GetSettings();

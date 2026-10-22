@@ -611,8 +611,10 @@ loads (null: none; the game shows black until its start scene is in; never the s
 **Project settings** (toolset `settings`): `project.settings` lists the project's own fields and every settings section
 the engine's modules and the game register, with each section's `schema`, the `value` that applies and `isDefault`;
 `project.setSettings {"section": "<Module>.<Name>", "value": {...}}` (or `"reset": true`) replaces one section's value,
-which the section checks first (a bad field changes nothing and is named). These changes, like the start scene and the
-export settings, are undo steps that leave the scene saved, work while playing (they stay after `play.stop`), go into
+which the section checks first (a bad field changes nothing and is named). `project.setGameInfo {"title", "version",
+"company", "copyright", "icon"}` sets what exported games show of themselves (fields left out stay; `icon`: a texture of
+the project made from a PNG, JPEG, TGA or BMP file of at least 256 x 256 pixels, not a texture inside a model; the
+project's name keeps naming the save folder). These changes, like the start scene and the export settings, are undo steps that leave the scene saved, work while playing (they stay after `play.stop`), go into
 exported games, and keep the assets they name from being deleted. The project file is written in the background:
 `project.save` answers once it is written. When a write fails, `editor.status`' `project.fileState` is `"unwritten"`
 (`project.info`'s `fileError` says why): fix the cause and run `project.save`, because closing or switching the project

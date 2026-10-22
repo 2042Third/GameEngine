@@ -6,6 +6,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/SettingsFileWriter.h"
 #include "Editor/UndoStack.h"
+#include "FeatureTest/FeatureTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
@@ -606,6 +607,84 @@ TEST_SUITE("Editor.ProjectSettings")
 		// Once the project no longer names it, it can go.
 		project.Run("project.setExportSettings", { { "loadingScene", nullptr } });
 		project.Run("asset.delete", { { "asset", "Scenes/Loading.stscene" } });
+	}
+
+	TEST_CASE("project.setGameInfo sets the game's identity as one undo step")
+	{
+		SettingsHarness project("ProjectSettingsGameInfo");
+		const std::string icon = project.ImportTexture("Icon");
+		const UndoStack& undo = project.Context.GetUndoStack();
+		const size_t steps = undo.GetCount();
+		const nlohmann::json game = project.Run("project.setGameInfo", { { "title", "Star Adventure" }, { "version", "1.2.0" }, { "company", "Studio" },
+			{ "copyright", "(c) 2026 Studio" }, { "icon", icon } })["game"];
+		CHECK(game == nlohmann::json { { "title", "Star Adventure" }, { "version", "1.2.0" }, { "company", "Studio" }, { "copyright", "(c) 2026 Studio" },
+			{ "icon", icon } });
+		CHECK(undo.GetCount() == steps + 1);
+		CHECK_FALSE(project.Context.IsSceneModified());
+		CHECK(project.Run("project.info")["game"] == game);
+		CHECK(project.Run("project.settings")["project"]["game"] == game);
+		REQUIRE(project.WaitForWrites());
+		CHECK(project.ReadProjectFile()->GetConfig().Game.Title == "Star Adventure");
+
+		// Fields left out keep their values; an invalid field changes nothing, also beside a valid one.
+		CHECK(project.Run("project.setGameInfo", { { "version", "1.3" } })["game"]["title"] == "Star Adventure");
+		for (const nlohmann::json& parameters : { nlohmann::json { { "version", "2.0" }, { "title", "Two\nlines" } }, nlohmann::json { { "version", "1.0-beta" } },
+			nlohmann::json { { "company", std::string(129, 'c') } }, nlohmann::json { { "icon", "Textures/Missing.png" } }, nlohmann::json { { "icon", "Scenes/Main.stscene" } },
+			nlohmann::json::object(), nlohmann::json { { "title", 7 } } })
+		{
+			CAPTURE(parameters.dump());
+			const EditorCommandResult refused = project.Execute("project.setGameInfo", parameters);
+			CHECK_FALSE(refused.Success);
+			CHECK(refused.ErrorKind == EditorCommandError::InvalidParameters);
+		}
+		CHECK(project.Context.GetProject()->GetConfig().Game.Version == "1.3");
+		CHECK(undo.GetCount() == steps + 2);
+
+		// Undo puts the values back; null clears the icon.
+		project.Run("edit.undo");
+		CHECK(project.Context.GetProject()->GetConfig().Game.Version == "1.2.0");
+		CHECK(project.Run("project.setGameInfo", { { "icon", nullptr } })["game"]["icon"].is_null());
+	}
+
+	TEST_CASE("project.setGameInfo refuses a sub-asset texture and an icon source it cannot convert")
+	{
+		SettingsHarness project("ProjectSettingsGameIcon");
+		// A model whose texture comes from Textures/Checker.png: the model's texture is a sub-asset, the PNG a texture of its own.
+		const std::filesystem::path features = Tests::GetFeatureProjectSourceDirectory() / "Assets";
+		const std::string checker = project.Run("asset.import", { { "file", FileSystem::ToUTF8(features / "Textures" / "Checker.png") },
+			{ "directory", "Textures" } })["asset"].get<std::string>();
+		const std::string model = project.Run("asset.import", { { "file", FileSystem::ToUTF8(features / "Models" / "Platform.gltf") },
+			{ "directory", "Models" } })["asset"].get<std::string>();
+		const nlohmann::json info = project.Run("asset.info", { { "asset", model }, { "bounds", false } });
+		std::string subTexture;
+		for (const nlohmann::json& subAsset : info["subAssets"])
+		{
+			if (subAsset["type"] == "Texture")
+				subTexture = subAsset["asset"].get<std::string>();
+		}
+		REQUIRE_FALSE(subTexture.empty());
+		// An HDR image is a texture, but no icon.
+		const std::filesystem::path hdr = CreateTemporaryDirectory("ProjectSettingsGameIconHDR") / "Sky.hdr";
+		std::string radiance = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 2\n";
+		radiance += std::string("\x80\x80\x80\x81\x80\x80\x80\x81", 8);
+		REQUIRE(FileSystem::WriteText(hdr, radiance));
+		const std::string sky = project.Run("asset.import", { { "file", FileSystem::ToUTF8(hdr) }, { "directory", "Textures" } })["asset"].get<std::string>();
+
+		const size_t steps = project.Context.GetUndoStack().GetCount();
+		const EditorCommandResult inside = project.Execute("project.setGameInfo", { { "icon", subTexture } });
+		CHECK_FALSE(inside.Success);
+		CHECK(inside.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(inside.Error.find("is a texture inside '") != std::string::npos);
+		CHECK(inside.Error.find("Platform.gltf', which has no image file of its own") != std::string::npos);
+		const EditorCommandResult notAnImage = project.Execute("project.setGameInfo", { { "icon", sky } });
+		CHECK_FALSE(notAnImage.Success);
+		CHECK(notAnImage.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(notAnImage.Error.find("'Textures/Sky.hdr' is not a PNG, JPEG, TGA or BMP image") != std::string::npos);
+		CHECK(project.Context.GetUndoStack().GetCount() == steps);
+		CHECK_FALSE(project.Context.GetProject()->GetConfig().Game.Icon.IsValid());
+
+		// The PNG the model uses is a texture of its own: that one is accepted.
+		CHECK(project.Run("project.setGameInfo", { { "icon", checker } })["game"]["icon"] == checker);
 	}
 
 	TEST_CASE("A section registered by a game appears in project.settings and is validated by its fields")

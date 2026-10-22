@@ -243,8 +243,9 @@ namespace Strata
 		// Project
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "project.info", "The open project: name, path (the project file), directories, start scene, export settings and fileState (written, "
-			"writing, or unwritten when its last write failed, with fileError: project.save writes it again) ({open: false} without a project).", ObjectSchema({}),
+		registry.Register({ "project.info", "The open project: name, path (the project file), directories, start scene, export settings, the game's identity "
+			"(game: title, version, company, copyright, icon; project.setGameInfo) and fileState (written, writing, or unwritten when its last write "
+			"failed, with fileError: project.save writes it again) ({open: false} without a project).", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeProject(context));
@@ -869,7 +870,7 @@ namespace Strata
 		registry.Register({ "asset.findReferences",
 			"What uses an asset: the scenes, prefabs, models and materials whose recorded references name it (or one of its sub-assets), and the open "
 			"scene as it is in memory, with the entities that use it, and the project when it names it (type \"Project\", project: true, asset "
-			"null, path: the project file, settings: what names it, \"startScene\", \"loadingScene\" or a settings section's id). Returns {asset, "
+			"null, path: the project file, settings: what names it, \"startScene\", \"loadingScene\", \"gameIcon\" or a settings section's id). Returns {asset, "
 			"path, referencedBy: [{asset, path, type, name?, openScene?, entities?: [{id, name, component, property}], project?, settings?}]}.",
 			ObjectSchema({ { "asset", AssetSchema("Asset") } }, { "asset" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
@@ -893,7 +894,7 @@ namespace Strata
 			"Deletes an asset: moves its file, .meta and cached import to the project's trash (.strata/Trash) and removes it from the project, in one undo "
 			"step (edit.undo restores it with the same handle, so references to it work again, as long as the edited scene stays: opening or creating "
 			"another clears the undo history; the trash keeps the files for 30 days). Fails while scenes, prefabs, models, materials or the open "
-			"scene use it or the project names it (its start or loading scene, its settings), listing them in the error's data (referencedBy, as asset.findReferences returns it); force: true deletes it anyway, leaving "
+			"scene use it or the project names it (its start or loading scene, the game's icon, its settings), listing them in the error's data (referencedBy, as asset.findReferences returns it); force: true deletes it anyway, leaving "
 			"those references missing. The open scene itself cannot be deleted. Returns {asset, path, trash, referencedBy}.",
 			ObjectSchema({ { "asset", AssetSchema("Asset to delete") },
 				{ "force", BoolSchema("Delete although other assets or the open scene use it (default false)") } }, { "asset" }),

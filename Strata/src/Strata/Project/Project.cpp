@@ -20,7 +20,7 @@ namespace Strata
 	{
 
 		// The members of "Project" this version reads; Load keeps the others for Save.
-		constexpr std::array<std::string_view, 5> c_KnownProjectMembers = { "Name", "AssetDirectory", "StartScene", "Scripts", "Export" };
+		constexpr std::array<std::string_view, 6> c_KnownProjectMembers = { "Name", "AssetDirectory", "StartScene", "Scripts", "Export", "Game" };
 
 		Ref<Project>& GetActiveProjectStorage()
 		{
@@ -91,6 +91,34 @@ namespace Strata
 				return false;
 			}
 			return true;
+		}
+
+		// Reads "Game" (ProjectGameInfo): missing members keep their defaults. The reason when it is not of that form or a field
+		// is invalid.
+		std::optional<std::string> ReadGameInfo(const nlohmann::json& value, ProjectGameInfo& outInfo)
+		{
+			if (!value.is_object())
+				return std::string("\"Game\" must be an object");
+			for (const char* field : { "Title", "Version", "Company", "Copyright" })
+			{
+				const nlohmann::json* member = JsonUtils::Find(value, field);
+				if (member && !member->is_string())
+					return fmt::format("\"Game.{}\" must be a string", field);
+			}
+			outInfo.Title = JsonUtils::GetString(value, "Title", outInfo.Title);
+			outInfo.Version = JsonUtils::GetString(value, "Version", outInfo.Version);
+			outInfo.Company = JsonUtils::GetString(value, "Company", outInfo.Company);
+			outInfo.Copyright = JsonUtils::GetString(value, "Copyright", outInfo.Copyright);
+			if (const nlohmann::json* icon = JsonUtils::Find(value, "Icon"); icon && !icon->is_null())
+			{
+				const std::optional<UUID> handle = UUIDFromJson(*icon);
+				if (!handle)
+					return std::string("\"Game.Icon\" must be a texture handle or null");
+				outInfo.Icon = *handle;
+			}
+			if (std::optional<std::string> problem = outInfo.Validate())
+				return fmt::format("\"Game\" is invalid: {}", *problem);
+			return std::nullopt;
 		}
 
 	}
@@ -266,6 +294,11 @@ namespace Strata
 				projectConfig.Export.LoadingScene = *handle;
 			}
 		}
+		if (const nlohmann::json* game = JsonUtils::Find(*config, "Game"))
+		{
+			if (std::optional<std::string> problem = ReadGameInfo(*game, projectConfig.Game))
+				return fail(*problem);
+		}
 		for (const auto& [name, member] : config->items())
 		{
 			if (std::find(c_KnownProjectMembers.begin(), c_KnownProjectMembers.end(), name) == c_KnownProjectMembers.end())
@@ -348,6 +381,8 @@ namespace Strata
 			if (!IsValidProjectSubdirectory(entry))
 				return fail(fmt::format("'{}' in Export.AlwaysInclude is not a path relative to the asset directory", entry));
 		}
+		if (std::optional<std::string> problem = m_Config.Game.Validate())
+			return fail(fmt::format("The game's {}", *problem));
 
 		nlohmann::json document = nlohmann::json::object();
 		document["Strata"] = { { "Format", "Project" }, { "Version", c_FormatVersion } };
@@ -363,6 +398,12 @@ namespace Strata
 			if (m_Config.Export.LoadingScene.IsValid())
 				exportSettings["LoadingScene"] = UUIDToJson(m_Config.Export.LoadingScene);
 			config["Export"] = std::move(exportSettings);
+		}
+		if (!m_Config.Game.IsDefault())
+		{
+			const ProjectGameInfo& game = m_Config.Game;
+			config["Game"] = { { "Title", game.Title }, { "Version", game.Version }, { "Company", game.Company }, { "Copyright", game.Copyright },
+				{ "Icon", game.Icon.IsValid() ? UUIDToJson(game.Icon) : nlohmann::json(nullptr) } };
 		}
 		for (const auto& [name, member] : m_UnknownMembers->items())
 		{

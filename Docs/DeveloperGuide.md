@@ -866,13 +866,15 @@ setting is one registration, and no other code learns of it.
   whose value its section refuses (both written back unchanged), and provides only validated ones.
 - **References.** A simple section's Asset fields name their handle, a complex section's `References` what its value
   names; `ProjectSettingsValues::GetReferences` lists every validated section's, each valid handle once. The editor
-  counts the project as a referencer (`AssetReferences::Find`: its start scene, its loading scene and what its sections
-  name, `type: "Project"` in `asset.findReferences`), so deletes refuse those assets, and the export adds what the
+  counts the project as a referencer (`AssetReferences::Find`: its start scene, its loading scene, the game's icon and
+  what its sections name, `type: "Project"` in `asset.findReferences`), so deletes refuse those assets, and the export adds what the
   sections name to a pruned pack's roots beside the start scene, the loading scene and `Export.AlwaysInclude` (built-in
   assets need none; a handle that names no asset of the project fails the export).
 - **The project file.** `.stproj` version 3 stores the sections a project sets as
   `"Settings": { "<Id>": { "Version": n, "Value": ... } }` (`Project::GetSettings`); a section is stored once set, and
-  resetting it removes it. The version went up with them because 0.5.0 rewrites the whole file from what it knows when it
+  resetting it removes it. Its `"Project"` object also holds the game's identity, `"Game"` (`ProjectGameInfo`,
+  `Project/GameInfo.h`: title, version, company, copyright, icon; written once it differs from the defaults), which
+  `ProjectGameInfo::Validate` checks when the file is read and written. The version went up with them because 0.5.0 rewrites the whole file from what it knows when it
   saves: it refuses a version-3 file instead of dropping its sections. Versions 1 and 2 still load (without settings) and
   are saved as version 3. `Project::Load` validates the sections with the registry it is given (null: the process's): one
   its section refuses keeps its stored value, its default applies, it is logged as a warning and listed by
@@ -896,11 +898,16 @@ setting is one registration, and no other code learns of it.
   its section refuses) and lists the stored sections no module claims (`unclaimed`); `section` narrows it to one.
   `project.setSettings {section, value | reset: true}` replaces one section's value, checked first on copies (the
   section's validation, the settings' bound and the project file's 1 MiB, `Project::MakeFileText`), so a refused value
-  changes nothing; preferences are refused. `project.open` and `project.openSample` report `settingsProblems`. While a
+  changes nothing; preferences are refused. `project.setGameInfo {title, version, company, copyright, icon}` sets the
+  game's identity (fields left out keep their values; `project.info` and `project.settings` report it as `game`): text of
+  at most 128 characters without control characters, a version of one to four numbers up to 65535, and an icon that
+  `GameIcon::FindSource` accepts from the asset's metadata alone (a texture of the project, not a sub-asset, whose source
+  is PNG, JPEG, TGA or BMP), else `InvalidParameters` naming the field. `project.open` and `project.openSample` report `settingsProblems`. While a
   project is open the editor provides its sections as `IProjectSettings` (a provider the context owns for its life,
   forwarding to the open project's values).
 - **Changes are undo steps.** Every command that changes the project's settings (`project.setStartScene`,
-  `project.setExportSettings`, `project.setSettings`, `project.setCollisionLayers`) records one `ProjectSettingsAction` (`Editor/ProjectSettingsAction.h`,
+  `project.setExportSettings`, `project.setGameInfo`, `project.setSettings`, `project.setCollisionLayers`) records one
+  `ProjectSettingsAction` (`Editor/ProjectSettingsAction.h`,
   made with `ChangeProjectSettings` or `ChangeProjectSection`, which first refuse, on a copy, a change the project file
   could not be written with, such as one over its 1 MiB; a section's step keeps its stored entries,
   `ProjectSettingsValues::GetStoredEntry`, and puts them back with `RestoreStoredEntry`, also a value its section
@@ -927,7 +934,9 @@ beside the Scene view; File > Project Settings..., `editor.showPanel`), a panel 
 plays, and the **Preferences** dialog ([Preferences](#preferences)).
 
 - **Pages.** The Project Settings window starts with the project's own fields: **Game** (the start scene,
-  `project.setStartScene`, and the loading scene, `project.setExportSettings`, picked with the asset picker) and
+  `project.setStartScene`, and the loading scene, `project.setExportSettings`, picked with the asset picker; the title,
+  version, company and copyright, each running `project.setGameInfo` when its edit ends, and the icon, picked with the
+  asset picker and shown as its thumbnail; the Export dialog sums them up with a link to the page) and
   **Export** (`Export.AlwaysInclude`, `project.setExportSettings`). A simple section gets a *generic page*: its fields in
   a property table drawn with `DrawPropertyWidget` (an Asset field with the asset picker of its type), each finished edit
   running the section's command (`project.setSettings` for a project section, `preferences.set` for a user one) with the
@@ -942,7 +951,8 @@ plays, and the **Preferences** dialog ([Preferences](#preferences)).
   values' version changes (`ProjectSettingsValues::GetVersion`, `EditorPreferences::GetVersion`), never parsing per
   frame; colors come from the theme and sizes from the font. Probe keys: `<Window>.Page.<Id>` for the list,
   `<Window>.<Id>.<Field>` for a generic page's fields and `<Window>.Title`, `<Window>` being `ProjectSettings` or
-  `Preferences`; the Game page's `ProjectSettings.Game.StartScene` and `.LoadingScene`, the Export page's
+  `Preferences`; the Game page's `ProjectSettings.Game.StartScene`, `.LoadingScene`, `.Title`, `.Version`, `.Company`,
+  `.Copyright`, `.Icon` and `.IconPreview`, the Export dialog's `Export.Identity` and `Export.EditIdentity`, the Export page's
   `ProjectSettings.Export.Path`, `.Add`, `.AlwaysInclude.<n>` and `.Remove.<n>`.
 - **Adding a section.** Register it in the module's registration function ([Project settings](#project-settings)); a
   simple one is drawn without more, a complex one registers its page in `EditorLayer`'s constructor beside the External
@@ -3110,7 +3120,7 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   `play` (`play.`, `input.`, `audio.`: game-ui's `input.click` and `input.type` too), `scripts`, `animation`, `viewport`
   (`viewport.`, `camera.`), `streaming` (`asset.stats`, `asset.setBudget`), `perf` (`editor.perf`), `editor` (`editor.`,
   `log.`), `ui` (`ui.create`, `ui.layout`, `ui.hitTest`), `world` (`world.`, `physics.`) and `settings` (the project's
-  settings: `project.settings`, `project.setSettings`, `project.setCollisionLayers`, `project.save`, the project's other
+  settings: `project.settings`, `project.setSettings`, `project.setCollisionLayers`, `project.setGameInfo`, `project.save`, the project's other
   commands staying in `assets`;
   and the preferences, `preferences.`). Exact names win over
   prefixes; a group the table does not know gets a toolset named after it, but a new built-in group goes into the table

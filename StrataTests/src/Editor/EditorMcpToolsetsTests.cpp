@@ -98,7 +98,7 @@ TEST_SUITE("CLI.McpToolsets")
 		// The project's settings and the preferences commands make up the settings toolset; core stays as it was (27 commands, 32
 		// tools).
 		CHECK(toolsetCommands("settings") == std::set<std::string> { "preferences.get", "preferences.save", "preferences.set", "project.save",
-			"project.setCollisionLayers", "project.setSettings", "project.settings" });
+			"project.setCollisionLayers", "project.setGameInfo", "project.setSettings", "project.settings" });
 		const std::set<std::string> playCommands = toolsetCommands("play");
 		CHECK(playCommands.contains("input.click"));
 		CHECK(playCommands.contains("input.type"));

@@ -213,8 +213,19 @@ namespace Strata
 				{ "assetDirectory", FileSystem::ToUTF8(project->GetAssetDirectory()) },
 				{ "startScene", config.StartScene.IsValid() ? UUIDToJson(config.StartScene) : nlohmann::json(nullptr) },
 				{ "export", { { "alwaysInclude", config.Export.AlwaysInclude } } },
+				{ "game", DescribeGameInfo(config.Game) },
 				{ "fileState", SettingsFileStateToString(context.GetProjectFileState()) },
 				{ "fileError", context.HasUnwrittenProjectSettings() ? nlohmann::json(context.GetProjectFileError()) : nlohmann::json(nullptr) } };
+		}
+
+		nlohmann::json DescribeGameInfo(const ProjectGameInfo& game)
+		{
+			return {
+				{ "title", game.Title },
+				{ "version", game.Version },
+				{ "company", game.Company },
+				{ "copyright", game.Copyright },
+				{ "icon", game.Icon.IsValid() ? UUIDToJson(game.Icon) : nlohmann::json(nullptr) } };
 		}
 
 		nlohmann::json DescribeFrameTimes(std::vector<double> frameTimes)

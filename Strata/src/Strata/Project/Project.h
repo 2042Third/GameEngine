@@ -3,6 +3,7 @@
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
 #include "Strata/Core/ProjectSettings.h"
+#include "Strata/Project/GameInfo.h"
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -46,6 +47,7 @@ namespace Strata
 		AssetHandle StartScene = UUID::Null(); // Scene the runtime loads first
 		ProjectScriptSettings Scripts;
 		ProjectExportSettings Export;
+		ProjectGameInfo Game; // The game's title, version, company, copyright and icon (exported games show them)
 	};
 
 	// A game project: a directory holding the project file ("<Name>.stproj"), the asset directory, the script sources
@@ -53,10 +55,12 @@ namespace Strata
 	//
 	// Project file: { "Strata": { "Format": "Project", "Version": 3 }, "Project": { "Name": ..., "AssetDirectory": ...,
 	// "StartScene": "<handle>", "Scripts": { "SourceDirectory": "Scripts", "ModuleName": ... },
-	// "Export": { "AlwaysInclude": [...], "LoadingScene": "<handle>" } },
+	// "Export": { "AlwaysInclude": [...], "LoadingScene": "<handle>" },
+	// "Game": { "Title": ..., "Version": "1.0.0", "Company": ..., "Copyright": ..., "Icon": "<handle>" } },
 	// "Settings": { "<Section id>": { "Version": n, "Value": ... } } }
 	// Version 1 files (without "Scripts") load with the default script settings, version 1 and 2 files without settings;
-	// "Export" is optional (written when it says something), and so is "Settings" (written while a section is set). Version 3
+	// "Export" and "Game" are optional (written when they say something), and so is "Settings" (written while a section is
+	// set); a "Game" whose fields ProjectGameInfo::Validate refuses refuses the file. Version 3
 	// came with the settings: 0.5.0 rewrote the file from what it knew, so it refuses version 3 rather than drop them. What
 	// this version does not know is kept: sections no registered module claims, sections whose value their module refuses,
 	// and members of "Project" a later version added are written back as they were read.

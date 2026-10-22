@@ -33,6 +33,7 @@ namespace Strata
 	struct ImportMemoryStats;
 	struct JobSystemStats;
 	struct PhysicsLayerSettings;
+	struct ProjectGameInfo;
 	struct SceneRendererGPUStats;
 	struct SceneRendererStats;
 
@@ -77,6 +78,9 @@ namespace Strata
 
 		// {"open": false} without a project, else {"open": true, "name", "directory", "assetDirectory", "startScene"}.
 		nlohmann::json DescribeProject(const EditorContext& context);
+		// The game's identity as project.info, project.settings and project.setGameInfo report it: title (as set, empty for the
+		// project's name), version, company, copyright and icon (a handle, or null).
+		nlohmann::json DescribeGameInfo(const ProjectGameInfo& game);
 
 		// Applies component values (as in scene files) to the entity, adding missing components. Validated like the
 		// inspector: unknown components or properties, read-only properties, invalid values and references to missing

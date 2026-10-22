@@ -110,7 +110,7 @@ namespace
 		"entity.setParent",
 		"material.create", "material.set",
 		"prefab.apply", "prefab.create", "prefab.instantiate", "prefab.revert", "prefab.unpack",
-		"project.save", "project.setCollisionLayers", "project.setExportSettings", "project.setSettings", "project.setStartScene",
+		"project.save", "project.setCollisionLayers", "project.setExportSettings", "project.setGameInfo", "project.setSettings", "project.setStartScene",
 		"scene.loadAdditive", "scene.new", "scene.open", "scene.save", "scene.saveAs", "scene.setSettings", "scene.unloadAdditive",
 		"script.add", "script.build", "script.create", "script.init", "script.load", "script.reload", "script.remove", "script.setField",
 		"ui.create",

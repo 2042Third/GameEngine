@@ -1,9 +1,11 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/GameIcon.h"
 #include "Editor/ProjectSettingsAction.h"
 #include "Editor/SettingsFileWriter.h"
 
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/ProjectSettings.h>
@@ -14,6 +16,7 @@
 #include <Strata/Scene/ProjectCollisionLayers.h>
 
 #include <algorithm>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -202,8 +205,8 @@ namespace Strata
 	void RegisterProjectSettingsCommands(EditorCommandRegistry& registry)
 	{
 		registry.Register({ "project.settings",
-			"The project's settings: its own fields (project: name, startScene, loadingScene, alwaysInclude; set with project.setStartScene and "
-			"project.setExportSettings) and every project settings section the engine's modules and the game register (sections: id, title, "
+			"The project's settings: its own fields (project: name, startScene, loadingScene, alwaysInclude, game: the game's identity; set with "
+			"project.setStartScene, project.setExportSettings and project.setGameInfo) and every project settings section the engine's modules and the game register (sections: id, title, "
 			"category, description, version, schema: the JSON Schema of its value, value: what applies, isDefault: whether the project leaves it "
 			"at its default, problem: why a stored value is refused, null when none), in registration order; unclaimed lists sections the file "
 			"stores that no module of this editor claims (kept as stored). section narrows sections to one. Set one with project.setSettings.",
@@ -247,7 +250,8 @@ namespace Strata
 						{ "name", config.Name },
 						{ "startScene", config.StartScene.IsValid() ? UUIDToJson(config.StartScene) : nlohmann::json(nullptr) },
 						{ "loadingScene", config.Export.LoadingScene.IsValid() ? UUIDToJson(config.Export.LoadingScene) : nlohmann::json(nullptr) },
-						{ "alwaysInclude", config.Export.AlwaysInclude } } },
+						{ "alwaysInclude", config.Export.AlwaysInclude },
+						{ "game", DescribeGameInfo(config.Game) } } },
 					{ "sections", std::move(sections) },
 					{ "unclaimed", std::move(unclaimed) } });
 			}, EditorCommandKind::Query });
@@ -370,6 +374,70 @@ namespace Strata
 					return EditorCommandResult::Fail(error);
 				}
 				return EditorCommandResult::Ok({ { "physicsLayers", DescribePhysicsLayers(GetProjectLayers(*project)) } });
+			} });
+
+		registry.Register({ "project.setGameInfo",
+			"Sets the game's identity, which exported games show: title (the window's title, the log, dialogs; empty: the project's name), "
+			"version (one to four whole numbers from 0 to 65535 separated by dots, e.g. \"1.2.0\"), company and copyright (optional), at most "
+			"128 characters of text each without line breaks, and icon: a texture of the project whose source is a PNG, JPEG, TGA or BMP image "
+			"(at least 256 x 256 pixels, square or centered on transparent pixels), or null for none (the strata mark). Fields left out keep "
+			"their values. The project's name stays the game's name for its save and log directories, so a new title or company never moves "
+			"players' saves. One undo step that leaves the scene saved; writes the project file in the background (project.save waits for "
+			"it); allowed while playing. An invalid field changes nothing. Returns game (title, version, company, copyright, icon).",
+			ObjectSchema({
+				{ "title", StringSchema("The game's title (empty: the project's name)") },
+				{ "version", StringSchema("The game's version, e.g. \"1.0.0\"") },
+				{ "company", StringSchema("Who makes the game (empty: none)") },
+				{ "copyright", StringSchema("The copyright line, e.g. \"(c) 2026 Studio\" (empty: none)") },
+				{ "icon", { { "type", nlohmann::json::array({ "string", "null" }) },
+					{ "description", "Texture (handle or path) whose PNG, JPEG, TGA or BMP source becomes the game's icon; null for none" } } } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				if (!context.HasProject())
+					return EditorCommandResult::Fail("No project is open: the game's identity belongs to a project (project.open or project.create first)");
+				static constexpr std::string_view c_Fields[] = { "title", "version", "company", "copyright", "icon" };
+				if (std::none_of(std::begin(c_Fields), std::end(c_Fields), [&parameters](std::string_view field) { return parameters.contains(field); }))
+					return EditorCommandResult::InvalidParameters("Give at least one of 'title', 'version', 'company', 'copyright' and 'icon'");
+				const ProjectSettingsFields before = ProjectSettingsFields::Of(context.GetProject()->GetConfig());
+				ProjectGameInfo game = before.Game;
+				CommandArguments arguments(parameters);
+				game.Title = arguments.GetString("title", game.Title);
+				game.Version = arguments.GetString("version", game.Version);
+				game.Company = arguments.GetString("company", game.Company);
+				game.Copyright = arguments.GetString("copyright", game.Copyright);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				for (const auto& [parameter, text] : { std::pair<const char*, const std::string*>("title", &game.Title), { "company", &game.Company },
+					{ "copyright", &game.Copyright } })
+				{
+					if (std::optional<std::string> problem = ProjectGameInfo::ValidateText(*text))
+						return EditorCommandResult::InvalidParameters(fmt::format("Parameter '{}': {}", parameter, *problem));
+				}
+				if (std::optional<std::string> problem = ProjectGameInfo::ValidateVersion(game.Version))
+					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'version': {}", *problem));
+				if (const nlohmann::json* icon = JsonUtils::Find(parameters, "icon"))
+				{
+					game.Icon = UUID::Null();
+					if (!icon->is_null())
+					{
+						EditorAssetManager* assets = context.GetAssetManager();
+						if (!assets)
+							return EditorCommandResult::Fail("The project's assets are not available");
+						game.Icon = ResolveAsset(context, arguments, "icon", AssetType::Texture);
+						if (!arguments.IsValid())
+							return arguments.Fail();
+						std::string error;
+						if (!GameIcon::FindSource(*assets, game.Icon, &error))
+							return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'icon': {}", error));
+					}
+				}
+
+				ProjectSettingsFields after = before;
+				after.Game = std::move(game);
+				std::string error;
+				if (!ChangeProjectSettings(context, "Set Game Info", before, std::move(after), &error))
+					return EditorCommandResult::Fail(error);
+				return EditorCommandResult::Ok({ { "game", DescribeGameInfo(context.GetProject()->GetConfig().Game) } });
 			} });
 
 		registry.Register(MayDefer({ "project.save",

@@ -33,8 +33,8 @@ namespace Strata
 		AssetType Type = AssetType::None;
 		std::string Path;                 // Its file (sub-assets: their parent's), relative to the asset directory; the project file's name
 		std::string Name;                 // Sub-assets: their name in their file ("Material/0"); the project: what of it names them
-		// The project: its start scene, its loading scene or a settings section names the assets. ProjectSettings lists which
-		// ("startScene", "loadingScene", section ids).
+		// The project: its start scene, its loading scene, the game's icon or a settings section names the assets.
+		// ProjectSettings lists which ("startScene", "loadingScene", "gameIcon", section ids).
 		bool Project = false;
 		std::vector<std::string> ProjectSettings;
 		// The edited scene: its entities that use the asset now (also when they differ from what its file holds).

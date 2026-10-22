@@ -6,11 +6,14 @@
 #include "Strata/Core/Log.h"
 #include "Strata/Core/ProjectSettings.h"
 #include "Strata/Core/SettingsRegistry.h"
+#include "Strata/Project/GameInfo.h"
 #include "Strata/Project/Project.h"
 #include "TestHelpers.h"
 
 #include <nlohmann/json.hpp>
 
+#include <array>
+#include <cstdint>
 #include <filesystem>
 #include <initializer_list>
 #include <optional>
@@ -267,5 +270,79 @@ TEST_SUITE("Project.Settings")
 		CHECK(error.find("more than the 1 MiB a project file may take") != std::string::npos);
 		// The file on disk is left as it was.
 		CHECK_FALSE(ReadJson(project->GetProjectFile()).contains("Settings"));
+	}
+
+	TEST_CASE("Game info validates title, version, company and copyright")
+	{
+		CHECK_FALSE(ProjectGameInfo().Validate());
+		CHECK(ProjectGameInfo().IsDefault());
+
+		// Versions: one to four whole numbers from 0 to 65535, separated by dots.
+		for (const char* version : { "1", "1.0.0", "2026.10.22.1", "65535.0", "0", "01.2" })
+			CHECK_FALSE_MESSAGE(ProjectGameInfo::ValidateVersion(version), version);
+		for (const char* version : { "", "1.", ".1", "1..0", "1.0.0.0.0", "65536", "100000", "1.a", "-1", "+1", " 1", "1.0 ", "v1.0" })
+			CHECK_MESSAGE(ProjectGameInfo::ValidateVersion(version), version);
+		CHECK(ProjectGameInfo::ParseVersion("1.2") == std::array<uint16_t, 4> { 1, 2, 0, 0 });
+		CHECK(ProjectGameInfo::ParseVersion("2026.10.22.65535") == std::array<uint16_t, 4> { 2026, 10, 22, 65535 });
+		CHECK_FALSE(ProjectGameInfo::ParseVersion("1.2.3.4.5"));
+
+		// Text: valid UTF-8, at most 128 characters (not bytes), no control characters.
+		std::string accents;
+		for (int index = 0; index < 128; index++)
+			accents += "\xC3\xA9"; // U+00E9, two bytes
+		CHECK_FALSE(ProjectGameInfo::ValidateText(accents));
+		CHECK_FALSE(ProjectGameInfo::ValidateText(""));
+		CHECK_FALSE(ProjectGameInfo::ValidateText("\xE6\x98\x9F\xE9\x99\x85 Adventure (c) 2026"));
+		REQUIRE(ProjectGameInfo::ValidateText(accents + "e"));
+		CHECK(ProjectGameInfo::ValidateText(accents + "e")->find("129 characters") != std::string::npos);
+		for (const char* text : { "Line\nbreak", "Tab\there", "Delete\x7F", "Next line \xC2\x85", "Bad \xFF byte", "Truncated \xE6\x98" })
+			CHECK_MESSAGE(ProjectGameInfo::ValidateText(text), text);
+
+		// Validate names the first invalid field.
+		ProjectGameInfo game;
+		game.Copyright = "(c)\n2026";
+		game.Company = "Studio\t";
+		REQUIRE(game.Validate());
+		CHECK(game.Validate()->rfind("Company: ", 0) == 0);
+		game.Company = "Studio";
+		CHECK(game.Validate()->rfind("Copyright: ", 0) == 0);
+		game.Copyright = "(c) 2026 Studio";
+		game.Version = "1.0-beta";
+		CHECK(game.Validate()->rfind("Version: ", 0) == 0);
+
+		// The project file keeps them: written once they differ from the defaults.
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ProjectGameInfo");
+		SettingsRegistry registry;
+		std::string error;
+		Ref<Project> project = Project::Create(directory / "Game", "Game", &error);
+		REQUIRE_MESSAGE(project, error);
+		CHECK_FALSE(ReadJson(project->GetProjectFile())["Project"].contains("Game"));
+		game.Version = "2.1.0";
+		game.Title = "\xE6\x98\x9F Adventure";
+		game.Icon = UUID(0xABC);
+		project->GetConfig().Game = game;
+		REQUIRE_MESSAGE(project->Save(&error), error);
+		CHECK(GetMember(ReadJson(project->GetProjectFile()), { "Project", "Game", "Version" }) == "2.1.0");
+		CHECK(LoadProject(project->GetProjectFile(), registry)->GetConfig().Game == game);
+
+		// Save refuses invalid fields, leaving the file as it was; Load refuses a file that holds them.
+		project->GetConfig().Game.Title = "Two\nlines";
+		CHECK_FALSE(project->Save(&error));
+		CHECK(error.find("Title") != std::string::npos);
+		CHECK(LoadProject(project->GetProjectFile(), registry)->GetConfig().Game == game);
+		for (const nlohmann::json& stored : { nlohmann::json { { "Version", "x" } }, nlohmann::json { { "Title", 7 } },
+			nlohmann::json { { "Icon", "not a handle" } }, nlohmann::json("Game") })
+		{
+			const std::filesystem::path file = WriteProjectFile(directory, 3, { { "Name", "Invalid" }, { "Game", stored } });
+			CHECK_FALSE_MESSAGE(Project::Load(file, &error, &registry), stored.dump());
+			CHECK(error.find("\"Game") != std::string::npos);
+		}
+		// Members left out keep their defaults.
+		const std::filesystem::path partial = WriteProjectFile(directory, 3, { { "Name", "Partial" }, { "Game", { { "Company", "Studio" } } } });
+		const Ref<Project> partialProject = LoadProject(partial, registry);
+		const ProjectGameInfo& read = partialProject->GetConfig().Game;
+		CHECK(read.Company == "Studio");
+		CHECK(read.Version == ProjectGameInfo::c_DefaultVersion);
+		CHECK_FALSE(read.Icon.IsValid());
 	}
 }

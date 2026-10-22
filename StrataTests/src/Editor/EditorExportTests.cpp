@@ -517,6 +517,28 @@ TEST_SUITE("Editor.Export")
 		CHECK(manifest->Settings->GetStoredEntry(c_GameTestSection)["Value"]["Banner"] == banner);
 	}
 
+	TEST_CASE("Deleting the icon texture is refused while the project names it")
+	{
+		ExportHarness harness("EditorExportIconReference");
+		const std::filesystem::path source = CreateTemporaryDirectory("EditorExportIconReferenceSource") / "Icon.png";
+		REQUIRE(FileSystem::WriteBytes(source, CreateSolidPNG(4, 4, 40, 40, 200)));
+		const std::string icon = harness.Run("asset.import", { { "file", FileSystem::ToUTF8(source) }, { "directory", "Textures" } })["asset"].get<std::string>();
+		harness.Run("project.setGameInfo", { { "icon", icon } });
+
+		const std::string refused = harness.Error("asset.delete", { { "asset", icon } });
+		CHECK(refused.find("Export Game.stproj") != std::string::npos);
+		CHECK(refused.find("the game's icon") != std::string::npos);
+		const nlohmann::json references = harness.Run("asset.findReferences", { { "asset", icon } })["referencedBy"];
+		REQUIRE(references.size() == 1);
+		CHECK(references[0]["type"] == "Project");
+		CHECK(references[0]["settings"] == nlohmann::json { "gameIcon" });
+
+		// Once the project no longer names it, it can go.
+		harness.Run("project.setGameInfo", { { "icon", nullptr } });
+		harness.Run("asset.delete", { { "asset", icon } });
+		CHECK_FALSE(harness.Context.GetAssetManager()->GetMetadata(UUIDFromJson(nlohmann::json(icon)).value_or(UUID::Null())));
+	}
+
 	TEST_CASE("An export refuses a project whose section fails Read, naming it")
 	{
 		if (!IsSettingsSectionProcess())

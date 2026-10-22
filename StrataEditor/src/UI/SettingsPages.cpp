@@ -2,6 +2,7 @@
 
 #include "Editor/EditorContext.h"
 #include "Editor/EditorPreferences.h"
+#include "Editor/ThumbnailCache.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/Icons.h"
@@ -23,6 +24,9 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -239,7 +243,8 @@ namespace Strata
 			std::string m_Problem;
 		};
 
-		// The project's own fields: the scene the game starts with and the one it plays while that loads.
+		// The project's own fields: the scene the game starts with and the one it plays while that loads, and the game's identity
+		// (project.setGameInfo).
 		class GameSettingsPage final : public SettingsPage
 		{
 		public:
@@ -255,6 +260,28 @@ namespace Strata
 				m_LoadingScene.DisplayName = "Loading Scene";
 				m_LoadingScene.Tooltip = "A scene the exported game plays while its start scene loads; none: a cleared frame meanwhile "
 					"(project.setExportSettings)";
+
+				const auto text = [](const char* name, const char* parameter, const char* displayName, const char* tooltip)
+				{
+					TextField field;
+					field.Property.Name = name;
+					field.Property.DisplayName = displayName;
+					field.Property.Tooltip = tooltip;
+					field.Property.Type = PropertyType::String;
+					field.Parameter = parameter;
+					return field;
+				};
+				m_TextFields = { {
+					text("Title", "title", "Title", "The exported game's window title, also in its log and dialogs; empty: the project's name"),
+					text("Version", "version", "Version", "One to four whole numbers separated by dots, such as 1.0.0"),
+					text("Company", "company", "Company", "Who makes the game (optional)"),
+					text("Copyright", "copyright", "Copyright", "The copyright line, such as (c) 2026 Studio (optional)") } };
+				m_Icon.Name = "Icon";
+				m_Icon.DisplayName = "Icon";
+				m_Icon.Tooltip = "A texture of the project whose PNG, JPEG, TGA or BMP image becomes the exported game's icon, at least 256 x "
+					"256 pixels; none: the strata mark";
+				m_Icon.Type = PropertyType::Asset;
+				m_Icon.AssetFilter = AssetType::Texture;
 			}
 
 			void Draw(EditorPanelContext& context, float width) override
@@ -263,8 +290,18 @@ namespace Strata
 				if (!editor.HasProject())
 					return;
 				const ProjectConfig& config = editor.GetProject()->GetConfig();
+				// The text fields keep what is typed until the edit ends; they read the project again when its values changed (an
+				// agent's command, an undo) or a command refused what was typed.
+				if (!m_Shown || *m_Shown != config.Game)
+				{
+					m_Shown = config.Game;
+					const std::string* values[] = { &config.Game.Title, &config.Game.Version, &config.Game.Company, &config.Game.Copyright };
+					for (size_t index = 0; index < m_TextFields.size(); index++)
+						m_TextFields[index].Value = *values[index];
+				}
 				PropertyValue startScene = config.StartScene;
 				PropertyValue loadingScene = config.Export.LoadingScene;
+				PropertyValue icon = config.Game.Icon;
 				Scene& scene = *editor.GetActiveScene();
 				if (UI::BeginPropertyTable("Game"))
 				{
@@ -275,7 +312,25 @@ namespace Strata
 					UI::PropertyLabel(m_LoadingScene.DisplayName, m_LoadingScene.Tooltip, "ProjectSettings.Game.LoadingScene");
 					options.ProbeKey = "ProjectSettings.Game.LoadingScene";
 					const bool loadingChanged = DrawPropertyWidget(m_LoadingScene, loadingScene, scene, options).Changed;
+
+					std::optional<size_t> edited;
+					for (size_t index = 0; index < m_TextFields.size(); index++)
+					{
+						TextField& field = m_TextFields[index];
+						const std::string probe = fmt::format("ProjectSettings.Game.{}", field.Property.Name);
+						UI::PropertyLabel(field.Property.DisplayName, field.Property.Tooltip, probe);
+						options.ProbeKey = probe;
+						ImGui::PushID(static_cast<int>(index));
+						if (DrawPropertyWidget(field.Property, field.Value, scene, options).Finished)
+							edited = index;
+						ImGui::PopID();
+					}
+					UI::PropertyLabel(m_Icon.DisplayName, m_Icon.Tooltip, "ProjectSettings.Game.Icon");
+					options.ProbeKey = "ProjectSettings.Game.Icon";
+					const bool iconChanged = DrawPropertyWidget(m_Icon, icon, scene, options).Changed;
+					DrawIconPreview(editor, config.Game.Icon);
 					UI::EndPropertyTable();
+
 					// A game needs a start scene: the picker's None changes nothing.
 					const UUID start = std::get<UUID>(startScene);
 					if (startChanged && start.IsValid())
@@ -286,14 +341,62 @@ namespace Strata
 						RunEditorCommand(editor, context.Commands, "project.setExportSettings",
 							{ { "loadingScene", loading.IsValid() ? UUIDToJson(loading) : nlohmann::json(nullptr) } });
 					}
+					if (edited)
+					{
+						const TextField& field = m_TextFields[*edited];
+						RunEditorCommand(editor, context.Commands, "project.setGameInfo", { { field.Parameter, std::get<std::string>(field.Value) } });
+						// Read again: what the command set, or what stayed when it refused the text.
+						m_Shown.reset();
+					}
+					const UUID iconHandle = std::get<UUID>(icon);
+					if (iconChanged)
+					{
+						RunEditorCommand(editor, context.Commands, "project.setGameInfo",
+							{ { "icon", iconHandle.IsValid() ? UUIDToJson(iconHandle) : nlohmann::json(nullptr) } });
+					}
 				}
 				ImGui::Spacing();
 				Caption("The game's start scene opens first when the project opens and when the exported game starts. The loading scene "
-					"plays while the start scene loads in the exported game.", UI::GetThemeColors().TextSecondary, width);
+					"plays while the start scene loads in the exported game. Exported games show the title, the version and the icon; the "
+					"project's name keeps naming their save and log folders.", UI::GetThemeColors().TextSecondary, width);
 			}
 		private:
+			struct TextField
+			{
+				PropertyInfo Property;
+				const char* Parameter = nullptr; // Of project.setGameInfo
+				PropertyValue Value = std::string();
+			};
+
+			// The icon's thumbnail under its picker, while one is set.
+			void DrawIconPreview(EditorContext& editor, AssetHandle icon)
+			{
+				if (!icon.IsValid())
+					return;
+				const UI::ThemeColors& colors = UI::GetThemeColors();
+				ThumbnailCache* thumbnails = editor.GetThumbnails();
+				nvrhi::ITexture* thumbnail = thumbnails ? thumbnails->Request(icon) : nullptr;
+				const float side = std::round(ImGui::GetFontSize() * c_IconPreviewInFontSizes);
+				const ImVec2 min(std::round(ImGui::GetCursorScreenPos().x), std::round(ImGui::GetCursorScreenPos().y));
+				const ImVec2 max(min.x + side, min.y + side);
+				ImGui::Dummy(ImVec2(side, side));
+				ImDrawList* drawList = ImGui::GetWindowDrawList();
+				drawList->AddRectFilled(min, max, ImGui::GetColorU32(colors.Chrome));
+				// Display colors, drawn as they are (ImGuiTextureDisplay::Direct).
+				if (thumbnail)
+					drawList->AddImage(static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(thumbnail)), min, max);
+				drawList->AddRect(min, max, ImGui::GetColorU32(colors.Border));
+				UI::ItemProbe::RecordRect("ProjectSettings.Game.IconPreview", min, max, thumbnail != nullptr);
+			}
+		private:
+			// The icon's preview, in text heights.
+			static constexpr float c_IconPreviewInFontSizes = 4.0f;
+
 			PropertyInfo m_StartScene;
 			PropertyInfo m_LoadingScene;
+			std::array<TextField, 4> m_TextFields;
+			PropertyInfo m_Icon;
+			std::optional<ProjectGameInfo> m_Shown; // The values the text fields were read from
 		};
 
 		// What pruned exports keep although no scene uses it: Export.AlwaysInclude.
@@ -415,7 +518,8 @@ namespace Strata
 		m_Entries.clear();
 		if (m_Kind == SettingsWindowKind::Project)
 		{
-			m_Entries.push_back({ c_GamePage, "Game", "Project", "The scene the game starts with and the one it plays while that loads.", {}, nullptr });
+			m_Entries.push_back({ c_GamePage, "Game", "Project", "The scene the game starts with, the one it plays while that loads, and the "
+				"game's title, version, company and icon.", {}, nullptr });
 			m_Entries.push_back({ c_ExportPage, "Export", "Project", "What pruned exports keep although no scene uses it.", {}, nullptr });
 		}
 		const SettingsScope scope = m_Kind == SettingsWindowKind::Project ? SettingsScope::Project : SettingsScope::User;

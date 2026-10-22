@@ -22,16 +22,17 @@ namespace Strata
 	{
 		AssetHandle StartScene = UUID::Null();
 		ProjectExportSettings Export;
+		ProjectGameInfo Game;
 
 		static ProjectSettingsFields Of(const ProjectConfig& config);
 		void ApplyTo(ProjectConfig& config) const;
 		bool operator==(const ProjectSettingsFields& other) const;
 	};
 
-	// One undoable change of the open project's settings: its own fields (project.setStartScene, project.setExportSettings) or
-	// one settings section (project.setSettings). Execute and Undo set the project's values and queue a write of the project
-	// file (EditorContext::SaveProjectFile, in the background). It changes no scene, so the edited scene stays saved; it goes
-	// with the rest of the history when a scene opens.
+	// One undoable change of the open project's settings: its own fields (project.setStartScene, project.setExportSettings,
+	// project.setGameInfo) or one settings section (project.setSettings). Execute and Undo set the project's values and queue
+	// a write of the project file (EditorContext::SaveProjectFile, in the background). It changes no scene, so the edited
+	// scene stays saved; it goes with the rest of the history when a scene opens.
 	class ProjectSettingsAction final : public EditorAction
 	{
 	public:

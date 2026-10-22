@@ -12,6 +12,7 @@ namespace Strata
 		ProjectSettingsFields fields;
 		fields.StartScene = config.StartScene;
 		fields.Export = config.Export;
+		fields.Game = config.Game;
 		return fields;
 	}
 
@@ -19,11 +20,13 @@ namespace Strata
 	{
 		config.StartScene = StartScene;
 		config.Export = Export;
+		config.Game = Game;
 	}
 
 	bool ProjectSettingsFields::operator==(const ProjectSettingsFields& other) const
 	{
-		return StartScene == other.StartScene && Export.AlwaysInclude == other.Export.AlwaysInclude && Export.LoadingScene == other.Export.LoadingScene;
+		return StartScene == other.StartScene && Export.AlwaysInclude == other.Export.AlwaysInclude && Export.LoadingScene == other.Export.LoadingScene
+			&& Game == other.Game;
 	}
 
 	ProjectSettingsAction::ProjectSettingsAction(EditorContext& context, std::string name, ProjectSettingsFields before, ProjectSettingsFields after)

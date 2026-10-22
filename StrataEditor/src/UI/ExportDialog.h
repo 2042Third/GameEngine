@@ -44,6 +44,8 @@ namespace Strata
 		// The scene the game plays while its start scene loads (ProjectExportSettings::LoadingScene): a choice of none and the
 		// project's other scenes, listed only while it is open.
 		void DrawLoadingScene(EditorPanelContext& context, float width);
+		// The game's identity the export carries, with a link to the Game page of Project Settings where it is set.
+		void DrawIdentity(EditorPanelContext& context, float width);
 		void DrawProgress(EditorPanelContext& context, float width);
 		void DrawOutcome(float width);
 		void StartExport(EditorPanelContext& context);
@@ -56,6 +58,7 @@ namespace Strata
 	private:
 		bool m_OpenRequested = false;
 		bool m_Open = false;
+		bool m_CloseRequested = false; // The dialog closes at the end of its frame (it led to Project Settings)
 		bool m_FolderPickerAvailable = false;
 
 		// The fields (UTF-8), initialized from GameExportOptions.
