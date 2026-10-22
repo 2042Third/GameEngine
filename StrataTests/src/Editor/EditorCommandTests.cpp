@@ -1081,10 +1081,20 @@ TEST_SUITE("Editor.Commands")
 		CHECK_FALSE(GameRuntime::Create(manifest, &error));
 	}
 
-	TEST_CASE("Height fog is added with values, set and undone; values outside its ranges are refused")
+	TEST_CASE("Height fog is added with values, set and undone, out of its ranges refused; the Sky section adds it in one step")
 	{
 		CommandHarness harness;
+		// What the Inspector's Sky section runs for "Add Height Fog": an entity with the defaults, one undo step.
+		const size_t steps = harness.Context.GetUndoStack().GetPosition();
+		const std::string added = harness.Run("entity.create", { { "name", "Height Fog" }, { "components", { { "HeightFog", nlohmann::json::object() } } } })["id"].get<std::string>();
+		CHECK(harness.Context.GetUndoStack().GetPosition() == steps + 1);
 		const auto fog = [&](const std::string& entity) { return harness.Run("component.get", { { "entity", entity }, { "component", "HeightFog" } }); };
+		CHECK(fog(added)["values"]["Density"].get<double>() == doctest::Approx(0.02));
+		CHECK(fog(added)["values"]["ColorFromSky"] == true);
+		CHECK_FALSE(fog(added).contains("inactive"));
+		harness.Run("edit.undo");
+		CHECK(harness.Run("entity.find", { { "name", "Height Fog" } })["entities"].empty());
+
 		// Added with values, set, undone; values outside the ranges refused.
 		const std::string entity = harness.Run("entity.create", { { "name", "Fog" } })["id"].get<std::string>();
 		harness.Run("component.add", { { "entity", entity }, { "component", "HeightFog" }, { "values", { { "Density", 0.1 }, { "Color", { 0.5, 0.6, 0.7 } } } } });

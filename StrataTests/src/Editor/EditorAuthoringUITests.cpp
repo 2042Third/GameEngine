@@ -1440,6 +1440,17 @@ TEST_SUITE("Editor.UI.Inspector")
 		editor.Frames(1);
 		CHECK(editor.ProbeText("Inspector.Sky") == "Procedural");
 		CHECK(UI::ItemProbe::Find("Inspector.SkyLight.Intensity").has_value());
+
+		// Without height fog: a button adds it, in one undo step, and goes away once the scene has fog.
+		const size_t beforeFog = editor.UndoPosition();
+		REQUIRE(editor.Click("Inspector.AddHeightFog"));
+		editor.Frames(1);
+		CHECK(editor.UndoPosition() == beforeFog + 1);
+		const Entity fog = editor.Context().GetActiveScene()->FindEntityByName("Height Fog");
+		REQUIRE(fog);
+		CHECK(fog.HasComponent<HeightFogComponent>());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.AddHeightFog").has_value());
+
 		REQUIRE(editor.Click("Inspector.SelectSky"));
 		REQUIRE(editor.Context().GetPrimarySelection());
 		CHECK(editor.Context().GetPrimarySelection().HasComponent<SkyLightComponent>());

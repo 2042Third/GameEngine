@@ -27,6 +27,7 @@
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/RendererComponents.h>
+#include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/ComponentAccess.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/PrefabInstances.h>
@@ -1518,23 +1519,29 @@ namespace Strata
 			// The scene stays shown (nothing is selected): the new sky appears here.
 			if (UI::ToolbarButton("Inspector.AddSky", Icons::CloudSun, "Add Procedural Sky", "Create an entity with a procedural sky light"))
 				RunEditorCommand(context, commands, "entity.create", { { "name", "Sky" }, { "components", { { "SkyLight", { { "Source", "Procedural" } } } } } });
-			return;
 		}
-		ImGui::AlignTextToFramePadding();
-		ImGui::TextColored(colors.TextSecondary, "From '%s'", sky.GetName().c_str());
-		ImGui::SameLine();
-		if (UI::ToolbarButton("Inspector.SelectSky", Icons::MousePointerClick, "Select", "Select the entity that holds the sky"))
+		else
 		{
-			context.Select(sky.GetUUID());
-			return;
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextColored(colors.TextSecondary, "From '%s'", sky.GetName().c_str());
+			ImGui::SameLine();
+			if (UI::ToolbarButton("Inspector.SelectSky", Icons::MousePointerClick, "Select", "Select the entity that holds the sky"))
+			{
+				context.Select(sky.GetUUID());
+				return;
+			}
+			if (const ComponentInfo* info = ComponentRegistry::Find<SkyLightComponent>())
+			{
+				const Entity entities[] = { sky };
+				ImGui::PushID("Sky");
+				DrawProperties(context, entities, *info, nullptr);
+				ImGui::PopID();
+			}
 		}
-		const ComponentInfo* info = ComponentRegistry::Find<SkyLightComponent>();
-		if (!info)
-			return;
-		const Entity entities[] = { sky };
-		ImGui::PushID("Sky");
-		DrawProperties(context, entities, *info, nullptr);
-		ImGui::PopID();
+		// The fog the sky lights, offered here while the scene has none; the entity that holds it edits it.
+		if (!SceneRenderer::FindHeightFog(scene)
+			&& UI::ToolbarButton("Inspector.AddHeightFog", Icons::CloudFog, "Add Height Fog", "Create an entity with height fog: fog that thickens toward the ground"))
+			RunEditorCommand(context, commands, "entity.create", { { "name", "Height Fog" }, { "components", { { "HeightFog", nlohmann::json::object() } } } });
 	}
 
 }
