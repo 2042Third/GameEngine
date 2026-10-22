@@ -1001,12 +1001,18 @@ namespace Strata
 			if (!grown)
 				return;
 			// The new space holds zeros, no instance's entity (0 is none): what is drawn there first moves with the camera only.
-			// NVRHI places no barrier between transfers into a buffer that stays a copy destination, so the clear ends with a
-			// transition of its own.
+			// NVRHI places no barrier between transfers into a buffer that stays a copy destination, so the clear and the copy
+			// each end with a transition of their own (the frame's copy at its end may write the whole buffer again, with no pass
+			// reading it in between when nothing is drawn).
+			const auto barrier = [commandList, buffer]()
+			{
+				commandList->setBufferState(buffer, nvrhi::ResourceStates::ShaderResource);
+				commandList->commitBarriers();
+			};
 			commandList->clearBufferUInt(buffer, 0);
-			commandList->setBufferState(buffer, nvrhi::ResourceStates::ShaderResource);
-			commandList->commitBarriers();
+			barrier();
 			commandList->copyBuffer(buffer, 0, grown, 0, grown->getDesc().byteSize);
+			barrier();
 			Renderer::ReleaseDeferred({ nvrhi::ResourceHandle(grown.Get()) });
 			grown = nullptr;
 		};

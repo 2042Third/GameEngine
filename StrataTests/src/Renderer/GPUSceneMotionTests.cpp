@@ -419,6 +419,38 @@ TEST_SUITE("GPU.SceneRenderer.MotionVectors")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A history that grows in a frame that draws nothing holds the frame's whole copy")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		// No light casts shadows and the camera looks away: no pass of the frame reads the history between its growth and its
+		// copy, so nothing else orders the two writes (synchronization validation reports a write-after-write hazard there).
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		for (uint32_t index = 0; index < 8; index++)
+			AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(static_cast<float>(index) * 1.5f - 5.0f, 0.0f, -4.0f), "Cube");
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.0f, 2.0f), glm::vec3(0.0f, 1.0f, 10.0f));
+		SceneRenderer renderer = CreateRenderer();
+		renderer.SetViewportSize(c_Size, c_Size);
+		REQUIRE(renderer.Render(scene, camera, nullptr, MotionOptions()));
+		REQUIRE(renderer.Render(scene, camera, nullptr, MotionOptions()));
+		const uint64_t historyBytes = renderer.GetPreviousInstanceBuffer()->getDesc().byteSize;
+
+		// More new cubes than half the grown buffers' room: the frame grows the history, then copies all of it.
+		const uint64_t added = Renderer::GetRenderSceneGPUs().Get(RenderScene::Get(scene)).GetInstanceCapacity() * 3;
+		for (uint32_t index = 0; index < added; index++)
+			AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(static_cast<float>(index % 16), 0.0f, -6.0f - static_cast<float>(index / 16)), "New");
+		REQUIRE(renderer.Render(scene, camera, nullptr, MotionOptions()));
+		CHECK(GetDrawnCounts(renderer).Instances == 0);
+		CHECK(renderer.GetPreviousInstanceBuffer()->getDesc().byteSize > historyBytes);
+		CHECK(renderer.GetStats().MotionHistory);
+		CHECK(renderer.GetStats().MotionFullCopy);
+		CheckHistory(gpu, scene, renderer);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A still view has no motion and a moving camera moves every pixel as it reprojects, on both paths")
 	{
 		GPUContext gpu;
