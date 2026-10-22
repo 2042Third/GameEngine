@@ -63,6 +63,7 @@
 #define ST_LOD_STAT_COUNT             8
 #define ST_COUNTER_OCCLUDED           20
 #define ST_COUNTER_OCCLUDED_CASTERS   23
+#define ST_COUNTER_SECOND_PHASE_SHADOW_DRAWS 24
 
 struct GPUProxy
 {

@@ -78,5 +78,7 @@ void main()
 	else
 	{
 		atomicAdd(u_Counters[ST_COUNTER_SHADOW_DRAWS], 1u);
+		if (phase == 4u)
+			atomicAdd(u_Counters[ST_COUNTER_SECOND_PHASE_SHADOW_DRAWS], 1u);
 	}
 }

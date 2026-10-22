@@ -2559,8 +2559,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - The shadow cascades are occlusion culled alike, each against a pyramid of its own first-phase shadow map, with the same
   switch, while it pays (`SceneRendererStats::ShadowOcclusionCulled` says whether a frame did). Tests that count shadow
   casters or shadow draws expect at most the CPU path's counts once `SceneRendererGPUStats::OccludedCasters` is not 0 (each
-  caster in each cascade is drawn, found hidden, or both in the frame visibility changes); tests of the culling itself
-  render until `ShadowOcclusionCulled` (it pauses after a frame that hid nothing). A pass that writes a cascade's depth
+  caster in each cascade is drawn, found hidden, or both in the frame visibility changes). A caster a cascade did not draw
+  the frame before (new in its square, or visible again) is drawn in the second phase, so its record can draw in both:
+  up to `SceneRendererGPUStats::SecondPhaseShadowDraws` more draws than the CPU path's, for the same casters. Tests of
+  the culling itself render until `ShadowOcclusionCulled` (it pauses after a frame that hid nothing). A pass that writes a cascade's depth
   runs before its pyramid is built (`RunShadowOcclusionPhase`).
 - Shadow cascades are kept while nothing that reaches them changed (`SceneRendererSpecification::CacheShadowCascades`;
   Docs/Architecture.md, "Cascades kept from frame to frame"). Anything new that changes what casters are drawn with (their

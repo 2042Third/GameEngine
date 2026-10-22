@@ -1304,6 +1304,7 @@ namespace Strata
 		stats.ShadowInstances = counters.ShadowInstances;
 		stats.Draws = counters.ViewDraws;
 		stats.ShadowDraws = counters.ShadowDraws;
+		stats.SecondPhaseShadowDraws = counters.SecondPhaseShadowDraws;
 		stats.VisibleProxies = counters.VisibleProxies;
 		stats.SizeCulledProxies = counters.SizeCulled;
 		stats.SubTexelCasters = counters.SubTexelCasters;

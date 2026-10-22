@@ -141,8 +141,11 @@ namespace
 			LastReference = reference.Counts;
 			if (GPU.GetGPUStats().OccludedCasters == 0 && GPU.GetStats().CachedCascadeMask == 0)
 			{
+				// The same casters. A caster a cascade did not draw the frame before (one the turned camera brings into its square)
+				// is drawn in the cascade's second phase, so its record may draw in both phases: one draw more each.
 				CHECK(frame.Counts.ShadowCasters == reference.Counts.ShadowCasters);
-				CHECK(frame.Counts.ShadowDraws == reference.Counts.ShadowDraws);
+				CHECK(frame.Counts.ShadowDraws >= reference.Counts.ShadowDraws);
+				CHECK(frame.Counts.ShadowDraws <= reference.Counts.ShadowDraws + GPU.GetGPUStats().SecondPhaseShadowDraws);
 			}
 			else
 			{

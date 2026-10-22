@@ -213,12 +213,15 @@ namespace Strata::RenderData
 		uint32_t VisibleLights = 0;    // Point and spot lights in the view (Scene/LightCompact.comp: the GPU-driven path's lights)
 		uint32_t DrawnLights = 0;      // Point and spot lights that are drawn somewhere (in the view or not)
 		uint32_t OccludedCasters = 0;  // Casters hidden in a cascade behind what it draws, summed over cascades (its second phase's test)
-		uint32_t Reserved[8] = {};
+		uint32_t SecondPhaseShadowDraws = 0; // Of ShadowDraws, the cascades' second phase's
+		uint32_t Reserved[7] = {};
 	};
 	static_assert(sizeof(CullCounters) == 128);
 	// Include/Lights.glsl's ST_COUNTER_VISIBLE_LIGHTS and ST_COUNTER_DRAWN_LIGHTS.
 	static_assert(offsetof(CullCounters, VisibleLights) == 21 * sizeof(uint32_t) && offsetof(CullCounters, DrawnLights) == 22 * sizeof(uint32_t));
 	// Include/Culling.glsl's ST_COUNTER_OCCLUDED_CASTERS.
 	static_assert(offsetof(CullCounters, OccludedCasters) == 23 * sizeof(uint32_t));
+	// Include/Culling.glsl's ST_COUNTER_SECOND_PHASE_SHADOW_DRAWS.
+	static_assert(offsetof(CullCounters, SecondPhaseShadowDraws) == 24 * sizeof(uint32_t));
 
 }

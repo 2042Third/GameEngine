@@ -429,6 +429,9 @@ namespace Strata
 		uint32_t ShadowInstances = 0;  // Instances drawn into cascades (summed over cascades)
 		uint32_t Draws = 0;            // Indirect draws with instances in the view
 		uint32_t ShadowDraws = 0;
+		// Of ShadowDraws, those of the cascades' second occlusion phase: of casters a cascade did not draw the frame before (new to
+		// it, or found visible again). A record drawn in both phases is two draws where the CPU path makes one.
+		uint32_t SecondPhaseShadowDraws = 0;
 		uint32_t VisibleProxies = 0;   // Mesh renderers that passed the view's frustum and size tests
 		uint32_t SizeCulledProxies = 0; // In the frustum, below SceneRendererSpecification::MinProjectedPixels
 		uint32_t OccludedProxies = 0;  // In the frustum, hidden behind what the view draws (SceneRendererSpecification::OcclusionCulling)
