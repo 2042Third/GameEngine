@@ -4,6 +4,7 @@
 #include "Editor/EditorWorld.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneRecovery.h"
+#include "Editor/SettingsFileWriter.h"
 #include "Editor/ViewportRenderer.h"
 
 #include <Strata/Renderer/RenderSceneGPU.h>
@@ -94,7 +95,8 @@ namespace Strata
 			const Ref<Project>& project = context.GetProject();
 			if (!project)
 				return { { "open", false }, { "name", nullptr }, { "path", nullptr } };
-			return { { "open", true }, { "name", project->GetConfig().Name }, { "path", FileSystem::ToUTF8(project->GetProjectFile()) } };
+			return { { "open", true }, { "name", project->GetConfig().Name }, { "path", FileSystem::ToUTF8(project->GetProjectFile()) },
+				{ "fileState", SettingsFileStateToString(context.GetProjectFileState()) } };
 		}
 
 		// What went wrong that an agent should look at: errors logged since it last read the log, the last script build's
@@ -664,7 +666,7 @@ namespace Strata
 					const bool replaces = !entry->Scene.IsValid() || context.GetSceneHandle() != entry->Scene || context.IsSceneModified();
 					if (replaces && !force)
 					{
-						if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, false, fmt::format("recovering '{}'", entry->SceneName)))
+						if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, false, fmt::format("recovering '{}'", entry->SceneName), DiscardScope::Scene))
 							return std::move(*refused);
 					}
 					if (context.IsPlaying())
@@ -683,11 +685,12 @@ namespace Strata
 		////////////////////////////////////////////////////////////////////////////////
 
 		registry.Register({ "editor.status",
-			"Overview of the editor; start here to orient yourself. The default answer is compact: engineVersion, project {open, name, path}, "
-			"scene {name, scene, modified, entityCount}, play {state, paused, pendingSteps, running}, selection {count, primary}, undo {undo, "
-			"redo}, errors {unread (errors logged since the last log.read), scriptBuild {failed, errors}, scriptFault, importFailures}, assets "
-			"{ready, loading, importing, scanning, failed}, saving and editor {launcher}. sections adds whole sections: engine (engineCommit, "
-			"platform), project (directories, start scene, export settings), selection (with inspectedAsset), undo (position, count), sceneLoad "
+			"Overview of the editor; start here to orient yourself. The default answer is compact: engineVersion, project {open, name, path, "
+			"fileState: written, writing or unwritten (its last write failed: project.save)}, scene {name, scene, modified, entityCount}, play "
+			"{state, paused, pendingSteps, running}, selection {count, primary}, undo {undo, redo}, errors {unread (errors logged since the last "
+			"log.read), scriptBuild {failed, errors}, scriptFault, importFailures}, assets {ready, loading, importing, scanning, failed}, saving and "
+			"editor {launcher}. sections adds whole sections: engine (engineCommit, platform), project (directories, start scene, export settings, "
+			"fileError), selection (with inspectedAsset), undo (position, count), sceneLoad "
 			"(the scene scene.open or project.open is opening: {scene, startScene, state, progress}, null when none), memory (privateMB, "
 			"workingSetMB and their peaks) and the sections of editor parts: automation (port, clients, connectedClients with the names agents "
 			"gave, pending requests and commands), assets (memory and budgets per pool, streaming queue, uploads; see asset.stats), game (the "
@@ -804,8 +807,10 @@ namespace Strata
 			}, EditorCommandKind::Session });
 
 		registry.Register(MayDefer({ "editor.quit",
-			"Closes the editor after answering (pending commands are cancelled). Fails while the scene has unsaved changes unless force is "
-			"true; save first with scene.save or scene.saveAs. Waits for saves in flight first, also with force: a save is never lost.",
+			"Closes the editor after answering (pending commands are cancelled). Fails while the scene has unsaved changes, or the project file "
+			"unwritten settings (its last write failed: project.save), unless force is true; save first with scene.save or scene.saveAs. Waits for "
+			"saves in flight first, also with force: a save is never lost. Returns quitting, discardedChanges and discardedSettings (whether "
+			"unsaved scene changes or unwritten project settings were discarded).",
 			ObjectSchema({ { "force", ForceSchema() } }),
 			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -813,11 +818,12 @@ namespace Strata
 				const bool force = arguments.GetBool("force", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "quitting"))
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "quitting", DiscardScope::Project))
 					return std::move(*refused);
 				const bool modified = context.IsSceneModified();
+				const bool discardedSettings = context.HasUnwrittenProjectSettings();
 				context.RequestQuit();
-				return EditorCommandResult::Ok({ { "quitting", true }, { "discardedChanges", modified } });
+				return EditorCommandResult::Ok({ { "quitting", true }, { "discardedChanges", modified }, { "discardedSettings", discardedSettings } });
 			}), EditorCommandKind::Session }));
 
 		////////////////////////////////////////////////////////////////////////////////

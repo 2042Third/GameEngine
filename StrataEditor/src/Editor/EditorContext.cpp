@@ -9,6 +9,7 @@
 #include "Editor/ProjectSamples.h"
 #include "Editor/ProjectThumbnail.h"
 #include "Editor/SceneRecovery.h"
+#include "Editor/SettingsFileWriter.h"
 #include "Editor/ScriptProject.h"
 #include "Editor/ThumbnailCache.h"
 #include "Editor/WorldCook.h"
@@ -266,15 +267,50 @@ namespace Strata
 				*outError = fmt::format("The project was created, but its start scene could not be saved: {}", error);
 			return false;
 		}
-		Project& project = *m_Project;
-		project.GetConfig().StartScene = m_SceneHandle;
-		if (!project.Save(&error))
-		{
-			if (outError)
-				*outError = fmt::format("The project was created, but its start scene could not be set: {}", error);
-			return false;
-		}
+		// Written in the background like every change of the project's settings; a failure is reported as theirs are.
+		m_Project->GetConfig().StartScene = m_SceneHandle;
+		SaveProjectFile();
 		return true;
+	}
+
+	void EditorContext::SaveProjectFile()
+	{
+		if (!m_Project)
+			return;
+		// The snapshot: a copy of the project's small in-memory values, serialized and written on the writer's job.
+		Ref<const Project> snapshot = CreateRef<Project>(*m_Project);
+		m_ProjectFileWriter->Submit([snapshot](std::string* outError) { return snapshot->Save(outError); });
+	}
+
+	SettingsFileState EditorContext::GetProjectFileState() const
+	{
+		return m_ProjectFileWriter ? m_ProjectFileWriter->GetState() : SettingsFileState::Written;
+	}
+
+	std::string EditorContext::GetProjectFileError() const
+	{
+		return GetProjectFileState() == SettingsFileState::Unwritten ? m_ProjectFileWriter->GetLastError() : std::string();
+	}
+
+	bool EditorContext::HasUnwrittenProjectSettings() const
+	{
+		return GetProjectFileState() == SettingsFileState::Unwritten;
+	}
+
+	bool EditorContext::HasSavesInFlight() const
+	{
+		return m_DocumentSaver.IsBusy() || (m_ProjectFileWriter && m_ProjectFileWriter->IsBusy());
+	}
+
+	void EditorContext::OnProjectFileWritten(const std::string& error)
+	{
+		if (error.empty())
+			return;
+		const std::string file = FileSystem::ToUTF8(m_Project->GetProjectFile().filename());
+		ST_ERROR("Writing the project file '{}' failed: {} (the change is kept in memory; the next change or project.save writes it again)", file,
+			error);
+		NotifySaveFailed(file, fmt::format("{}. The project's settings are kept in memory: the next change, or project.save, writes them again.",
+			error), UUID::Null());
 	}
 
 	bool EditorContext::BeginOpenProject(const std::filesystem::path& path, std::string* outError)
@@ -308,6 +344,7 @@ namespace Strata
 		m_Project = project;
 		m_ProjectGeneration++;
 		Project::SetActive(m_Project);
+		m_ProjectFileWriter = CreateScope<SettingsFileWriter>([this](const std::string& error) { OnProjectFileWritten(error); });
 
 		// The editor camera and viewport settings continue where they were when the project was last closed.
 		const std::filesystem::path viewportState = GetViewportStateFile();
@@ -440,6 +477,10 @@ namespace Strata
 		// Saves in flight are written and published before anything of the project goes: closing never loses one. Through
 		// commands and the UI the project closes only once they ended, so this blocks only when the editor goes away.
 		m_DocumentSaver.FinishAll();
+		// So is a write of the project file: the only path that may write it on the main thread (a write that has not started
+		// runs here), reached by commands only once nothing was in flight, otherwise only when the editor goes away.
+		if (m_ProjectFileWriter)
+			m_ProjectFileWriter->Finish();
 		// The export reads the project's assets on an I/O thread: it stops before they go.
 		if (m_GameExport && !m_GameExport->IsFinished())
 		{
@@ -490,6 +531,7 @@ namespace Strata
 		{
 			if (Project::GetActive() == m_Project)
 				Project::SetActive(nullptr);
+			m_ProjectFileWriter.reset();
 			m_Project.reset();
 			m_ProjectGeneration++;
 		}
@@ -2420,6 +2462,8 @@ namespace Strata
 		}
 		// Saves written in the background are published (and their completions run) between frames.
 		m_DocumentSaver.Update();
+		if (m_ProjectFileWriter)
+			m_ProjectFileWriter->Update();
 		// The asset scan ended: what waited for the whole registry goes on (the start scene, the script usage scan).
 		FinishAssetScan();
 		// One budget for the frame's loading work: a scene being opened, the running game's switch and the updated scene's

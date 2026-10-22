@@ -5,6 +5,7 @@
 #include "Editor/ProjectSamples.h"
 #include "Editor/ProjectTemplates.h"
 #include "Editor/SceneRecovery.h"
+#include "Editor/SettingsFileWriter.h"
 #include "Panels/ActivityPanel.h"
 #include "Panels/AssetInspectorPanel.h"
 #include "Panels/ConsolePanel.h"
@@ -52,6 +53,7 @@ namespace Strata
 		constexpr const char* c_EditorStatusSection = "editor";
 		constexpr const char* c_UnsavedChangesModal = "Unsaved Changes";
 		constexpr const char* c_SavingModal = "Saving";
+		constexpr const char* c_UnwrittenSettingsModal = "Project Settings Not Written";
 		// Between the parts of a pill's text.
 		constexpr const char* c_Separator = " \xC2\xB7 ";
 		// Frames the frame pill's tooltip summarizes for what bounds them: two seconds at 60 frames per second.
@@ -696,10 +698,10 @@ namespace Strata
 		EventDispatcher dispatcher(event);
 		dispatcher.Dispatch<WindowCloseEvent>([this](WindowCloseEvent&)
 		{
-			if (!m_Context.IsSceneModified() && !m_Context.HasSavesInFlight())
+			if (!m_Context.IsSceneModified() && !m_Context.HasSavesInFlight() && !m_Context.HasUnwrittenProjectSettings())
 				return false;
 			// Keep running and ask first (after the saving dialog while saves write); closing happens from the dialog.
-			RequestDiscardChanges([this]() { m_Host->Close(); });
+			RequestReleaseProject([this]() { m_Host->Close(); });
 			return true;
 		});
 		dispatcher.Dispatch<WindowFileDropEvent>([this](WindowFileDropEvent& drop)
@@ -712,7 +714,7 @@ namespace Strata
 			});
 			if (project != paths.end())
 			{
-				RequestDiscardChanges([this, file = *project]() { OpenProjectFileNow(file); });
+				RequestReleaseProject([this, file = *project]() { OpenProjectFileNow(file); });
 				return true;
 			}
 			if (!m_Context.HasProject())
@@ -880,6 +882,20 @@ namespace Strata
 		action();
 	}
 
+	void EditorLayer::RequestReleaseProject(std::function<void()> action)
+	{
+		RequestDiscardChanges([this, action = std::move(action)]()
+		{
+			if (!m_Context.HasUnwrittenProjectSettings())
+			{
+				action();
+				return;
+			}
+			m_PendingReleaseAction = action;
+			m_OpenUnwrittenSettingsModal = true;
+		});
+	}
+
 	void EditorLayer::ReportError(const std::string& message)
 	{
 		ST_ERROR("{}", message);
@@ -907,7 +923,7 @@ namespace Strata
 	void EditorLayer::ShowNewProjectDialog(const std::string& templateId)
 	{
 		// Asked first: creating the project replaces the scene, and the dialog should not stand between the question and it.
-		RequestDiscardChanges([this, templateId]()
+		RequestReleaseProject([this, templateId]()
 		{
 			EditorPanelContext panelContext = MakePanelContext();
 			m_ProjectDialogs.OpenNewProject(panelContext, templateId);
@@ -916,7 +932,7 @@ namespace Strata
 
 	void EditorLayer::ShowOpenSampleDialog(const std::string& sampleId)
 	{
-		RequestDiscardChanges([this, sampleId]()
+		RequestReleaseProject([this, sampleId]()
 		{
 			EditorPanelContext panelContext = MakePanelContext();
 			std::string error;
@@ -935,7 +951,7 @@ namespace Strata
 
 	void EditorLayer::OpenProjectFile(const std::filesystem::path& projectFile)
 	{
-		RequestDiscardChanges([this, projectFile]() { OpenProjectFileNow(projectFile); });
+		RequestReleaseProject([this, projectFile]() { OpenProjectFileNow(projectFile); });
 	}
 
 	void EditorLayer::OpenProjectFileNow(const std::filesystem::path& projectFile)
@@ -1307,7 +1323,8 @@ namespace Strata
 			if (!launcher)
 			{
 				if (ImGui::MenuItem("Close Project", nullptr, false, m_Context.HasProject()))
-					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "project.close", { { "force", true } }); });
+					RequestReleaseProject([this]() { RunEditorCommand(m_Context, m_Commands, "project.close", { { "force", true } }); });
+				UI::ItemProbe::Record("Menu.File.CloseProject", m_Context.HasProject());
 				// Back from Continue without a project (with a project open, Close Project leads there).
 				if (ImGui::MenuItem("Show Launcher", nullptr, false, !m_Context.HasProject()))
 					m_LauncherDismissed = false;
@@ -1339,7 +1356,7 @@ namespace Strata
 			}
 			ImGui::Separator();
 			if (ImGui::MenuItem("Exit"))
-				RequestDiscardChanges([this]() { m_Host->Close(); });
+				RequestReleaseProject([this]() { m_Host->Close(); });
 			ImGui::EndMenu();
 		}
 
@@ -1902,9 +1919,10 @@ namespace Strata
 
 	void EditorLayer::DrawSavingPill()
 	{
-		if (!m_Context.HasSavesInFlight())
-			return;
+		// The documents' saves: the project file's writes take a moment, and one that fails posts a notification.
 		const std::vector<DocumentSaveStatus> saves = m_Context.GetSaveStatuses();
+		if (saves.empty())
+			return;
 		const DocumentSaveStatus& first = saves.front();
 		const std::string percent = fmt::format("{:.0f}%", std::floor(first.Progress * 100.0f));
 		std::string text = fmt::format("Saving '{}' {}", first.Label, percent);
@@ -2085,6 +2103,51 @@ namespace Strata
 		DrawUnsavedChangesModal();
 	}
 
+	void EditorLayer::DrawUnwrittenSettingsQuestion()
+	{
+		// Written meanwhile (the retry, or a later change): nothing is lost any more, and the action goes on.
+		if (!m_RetryingProjectWrite && !m_Context.HasUnwrittenProjectSettings() && m_Context.GetProjectFileState() != SettingsFileState::Writing)
+		{
+			ImGui::CloseCurrentPopup();
+			if (std::function<void()> action = std::exchange(m_PendingReleaseAction, nullptr))
+				action();
+			return;
+		}
+		const std::string file = m_Context.HasProject() ? FileSystem::ToUTF8(m_Context.GetProject()->GetProjectFile().filename()) : std::string();
+		ImGui::Text("The project file '%s' could not be written:", file.c_str());
+		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 32.0f);
+		ImGui::TextColored(UI::GetThemeColors().Warning, "%s", m_Context.GetProjectFileError().c_str());
+		ImGui::TextUnformatted("The project's settings changed since are only in the editor: going on discards them.");
+		ImGui::PopTextWrapPos();
+		UI::ItemProbe::Record("UnwrittenSettings.Dialog");
+		ImGui::Spacing();
+		const bool writing = m_RetryingProjectWrite || m_Context.GetProjectFileState() == SettingsFileState::Writing;
+		ImGui::BeginDisabled(writing);
+		if (UI::DialogButton("UnwrittenSettings.Retry", writing ? "Writing..." : "Retry", true))
+		{
+			// Through the runner, like every save the UI starts; the question closes once the file is written.
+			m_RetryingProjectWrite = true;
+			m_CommandRunner.Run(m_Context, m_Commands, "project.save", nlohmann::json::object(), [this](const EditorCommandResult&)
+			{
+				m_RetryingProjectWrite = false;
+			}, CommandOrigin { CommandSource::UI });
+		}
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+		if (UI::DialogButton("UnwrittenSettings.Discard", "Don't Save"))
+		{
+			ImGui::CloseCurrentPopup();
+			if (std::function<void()> action = std::exchange(m_PendingReleaseAction, nullptr))
+				action();
+		}
+		ImGui::SameLine();
+		if (UI::DialogButton("UnwrittenSettings.Cancel", "Cancel"))
+		{
+			ImGui::CloseCurrentPopup();
+			m_PendingReleaseAction = nullptr;
+		}
+	}
+
 	void EditorLayer::DrawUnsavedChangesModal()
 	{
 		// A dialog that asked draws the question over itself before the window's own call comes (popups belong to the level
@@ -2096,6 +2159,17 @@ namespace Strata
 		{
 			UI::OpenModal(c_UnsavedChangesModal);
 			m_OpenUnsavedChangesModal = false;
+		}
+		if (m_OpenUnwrittenSettingsModal)
+		{
+			UI::OpenModal(c_UnwrittenSettingsModal);
+			m_OpenUnwrittenSettingsModal = false;
+		}
+		if (UI::BeginModal(c_UnwrittenSettingsModal, "Project Settings Not Written"))
+		{
+			DrawUnwrittenSettingsQuestion();
+			UI::EndModal();
+			return;
 		}
 		// While saves are in flight, the action that waits for them (RequestDiscardChanges) shows their progress.
 		if (m_OpenSavingModal)
@@ -2120,6 +2194,8 @@ namespace Strata
 				const std::string label = fmt::format("Saving '{}'... {:.0f}%", save.Label, std::floor(save.Progress * 100.0f));
 				UI::StrataProgressBar(fmt::format("Saving.Progress.{}", save.ID).c_str(), save.Progress, label);
 			}
+			if (m_Context.GetProjectFileState() == SettingsFileState::Writing)
+				ImGui::Text("Writing '%s'...", FileSystem::ToUTF8(m_Context.GetProject()->GetProjectFile().filename()).c_str());
 			UI::ItemProbe::Record("Saving.Dialog");
 			ImGui::Spacing();
 			// Cancel gives up what was to happen next, never a save.

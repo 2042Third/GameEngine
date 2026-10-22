@@ -278,6 +278,7 @@ TEST_SUITE("Editor.WorldCook")
 		GridWorldProject project("WorldCookExport", 3);
 		project.Run("project.setStartScene", { { "scene", UUIDToJson(project.Persistent) } });
 		CHECK_FALSE(project.ReadWorld()->GetData().Index.has_value());
+		const size_t steps = project.Context.GetUndoStack().GetPosition();
 		const std::filesystem::path output = project.Directory.parent_path() / "Build";
 		const nlohmann::json exported = project.Run("project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false } });
 		const Ref<WorldAsset> cooked = project.ReadWorld();
@@ -285,7 +286,7 @@ TEST_SUITE("Editor.WorldCook")
 		CHECK(cooked->GetData().Index->Cells.size() == 9);
 		const uint32_t recommended = cooked->GetData().Index->GetRecommendedMaxBodies();
 		REQUIRE(recommended > 0);
-		CHECK(project.Context.GetUndoStack().GetPosition() == 0); // Derived data: no undo step
+		CHECK(project.Context.GetUndoStack().GetPosition() == steps); // Derived data: no undo step
 
 		std::string error;
 		Scope<GameRuntime> game = GameRuntime::Create(FileSystem::FromUTF8(exported["manifest"].get<std::string>()), &error);

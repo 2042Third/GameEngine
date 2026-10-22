@@ -491,7 +491,7 @@ namespace Strata
 					arguments.SetError(fmt::format("Unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "starting a new scene"))
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "starting a new scene", DiscardScope::Scene))
 					return std::move(*refused);
 				const bool discarded = context.IsSceneModified();
 				if (!context.NewScene(name, templateId))
@@ -515,7 +515,7 @@ namespace Strata
 				const bool force = arguments.GetBool("force", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the scene {}", parameters["scene"].dump())))
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the scene {}", parameters["scene"].dump()), DiscardScope::Scene))
 					return std::move(*refused);
 				return OpenSceneAndWait(context, handle, context.IsSceneModified());
 			}) }));

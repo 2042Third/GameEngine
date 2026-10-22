@@ -3,6 +3,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/ProjectTemplates.h"
+#include "Editor/SettingsFileWriter.h"
 #include "Editor/UndoStack.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
@@ -220,13 +221,22 @@ namespace Strata
 		// The dialogs open once the person has answered (EditorShell::RequestDiscardChanges), so what the scene holds now is
 		// what they answered about.
 		m_AnsweredVersion = context.GetUndoStack().GetVersion();
+		m_AnsweredWrites = GetProjectFileWrites(context);
 		m_Answered = false;
+	}
+
+	uint64_t ProjectDialogs::GetProjectFileWrites(const EditorContext& context)
+	{
+		return context.GetProjectFileWriter() ? context.GetProjectFileWriter()->GetWriteCount() : 0;
 	}
 
 	bool ProjectDialogs::MayReplaceScene(EditorPanelContext& context)
 	{
 		EditorContext& editor = context.Context;
-		const bool answered = !editor.IsSceneModified() || editor.GetUndoStack().GetVersion() == m_AnsweredVersion;
+		// The dialogs create or open a project, which releases the open one: its unwritten settings (the project file's last
+		// write failed) are asked about too, for the failure the person saw.
+		const bool answered = (!editor.IsSceneModified() || editor.GetUndoStack().GetVersion() == m_AnsweredVersion)
+			&& (!editor.HasUnwrittenProjectSettings() || GetProjectFileWrites(editor) == m_AnsweredWrites);
 		// A save in flight (an agent's scene.save while the dialog is open) is never lost: the project waits for it, as the
 		// commands that replace the scene do, so that they run at once once it is written.
 		if (!context.Shell)
@@ -235,10 +245,11 @@ namespace Strata
 			return true;
 		// The scene changed since the answer, or a save writes: the person decides about these changes too (after the saving
 		// dialog), over the dialog (DrawDiscardQuestion). The answer may come in a later frame; the dialog submits once it came.
-		const UndoStack* undo = &editor.GetUndoStack();
-		context.Shell->RequestDiscardChanges([this, undo]()
+		EditorContext* answeredContext = &editor;
+		context.Shell->RequestReleaseProject([this, answeredContext]()
 		{
-			m_AnsweredVersion = undo->GetVersion();
+			m_AnsweredVersion = answeredContext->GetUndoStack().GetVersion();
+			m_AnsweredWrites = GetProjectFileWrites(*answeredContext);
 			m_Answered = true;
 		});
 		return false;

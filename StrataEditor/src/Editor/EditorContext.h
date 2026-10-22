@@ -53,6 +53,8 @@ namespace Strata
 	class InputSequence;
 	class ProjectThumbnail;
 	class SceneRecovery;
+	class SettingsFileWriter;
+	enum class SettingsFileState : uint8_t;
 	struct RecoveryData;
 	struct RecoverySaveToken;
 	enum class DiscardOutcome : uint8_t;
@@ -182,6 +184,19 @@ namespace Strata
 		// Changes whenever a project opens or closes. UI state kept per project compares it rather than the manager's address,
 		// which the next project's manager may take over.
 		uint64_t GetProjectGeneration() const { return m_ProjectGeneration; }
+		// The project file is written in the background (SettingsFileWriter), never on the main thread: a change of the
+		// project's settings (ProjectSettingsAction) queues a write of the project as it is then, and writes coalesce. A write
+		// that fails keeps the change in memory and is reported (a notification, the project's fileState in project.info and
+		// editor.status); the next change, or project.save, tries again. Nothing happens without a project.
+		void SaveProjectFile();
+		// Where the project file stands (Written without a project) and, while it is Unwritten, why its last write failed.
+		SettingsFileState GetProjectFileState() const;
+		std::string GetProjectFileError() const;
+		// The project file's last write failed and none succeeded since: what changed is only in memory, and the commands that
+		// release the project refuse to unless forced (CommandUtils::CheckUnsavedChanges).
+		bool HasUnwrittenProjectSettings() const;
+		// The project file's writer, for tests (SettingsFileWriter::SetTestHook); null without a project.
+		SettingsFileWriter* GetProjectFileWriter() const { return m_ProjectFileWriter.get(); }
 
 		//////////////////////////////////////////////////////////////////////////
 		// Scene
@@ -241,8 +256,9 @@ namespace Strata
 		// failed.
 		bool SaveScene(std::string* outError = nullptr);
 		bool SaveSceneAs(const std::string& relativePath, std::string* outError = nullptr);
-		// Saves that have not ended (writing, waiting behind another or not published yet).
-		bool HasSavesInFlight() const { return m_DocumentSaver.IsBusy(); }
+		// Saves that have not ended (writing, waiting behind another or not published yet): the documents' (DocumentSaver) and
+		// the project file's (SaveProjectFile).
+		bool HasSavesInFlight() const;
 		// The save in flight that holds the edited scene as it is now (DocumentSaver::GetStatus tells how it ended; once it
 		// is published the scene is unmodified, unless edited meanwhile), or 0 without one.
 		uint64_t FindSaveOfCurrentState() const;
@@ -703,6 +719,8 @@ namespace Strata
 		void StartScriptUsageScan();
 		// Takes the finished scan's answer: a project whose scenes use scripts that are not built is told so once.
 		void UpdateScriptUsageScan();
+		// A write of the project file ended (its writer's completion): a failure is logged and posted.
+		void OnProjectFileWritten(const std::string& error);
 		// Posts how the game export ended (EditorNotifications).
 		void NotifyExportFinished(const GameExport& exporter);
 		// Posts the imports that failed while nobody waited for them (EditorAssetManager::TakeImportFailures): one toast for
@@ -858,6 +876,9 @@ namespace Strata
 		// Declared after what its completions use (the undo stack, the recovery journal, the notifications); idle by the time
 		// the context goes (ReleaseProject finishes every save).
 		DocumentSaver m_DocumentSaver;
+		// The open project's file (SaveProjectFile); declared after the notifications its completion posts to, and finished by
+		// ReleaseProject before the project goes.
+		Scope<SettingsFileWriter> m_ProjectFileWriter;
 		Ref<WorldCookCache> m_WorldCookCache;
 		uint64_t m_WorldCookCacheGeneration = 0; // The project the cache belongs to (GetProjectGeneration)
 		// Declared after the undo stack and the edited scene, which it observes and streams into: it goes first.

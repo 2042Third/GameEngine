@@ -7,6 +7,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/GameExport.h"
 #include "Editor/ProjectSamples.h"
+#include "Editor/ProjectSettingsAction.h"
 #include "Editor/ProjectTemplates.h"
 
 #include <Strata/Asset/AssetImporter.h>
@@ -221,7 +222,8 @@ namespace Strata
 		// Project
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "project.info", "The open project: name, path (the project file), directories, start scene and export settings ({open: false} without a project).", ObjectSchema({}),
+		registry.Register({ "project.info", "The open project: name, path (the project file), directories, start scene, export settings and fileState (written, "
+			"writing, or unwritten when its last write failed, with fileError: project.save writes it again) ({open: false} without a project).", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeProject(context));
@@ -248,9 +250,9 @@ namespace Strata
 		registry.Register(MayDefer({ "project.create",
 			"Creates a project in a directory and opens it. With template \"basic3d\" it starts with a saved, lit start scene (Scenes/Main.stscene: Main "
 			"Camera, Sun, Sky, Ground, Post Process); the default \"empty\" has no scene (see project.templates). Fails while the edited scene has "
-			"unsaved changes unless force is true (save first), before anything is created; waits for saves in flight (scene.save) first. Returns "
-			"projectFile, template, startScene and "
-			"discardedChanges (whether unsaved changes were discarded).",
+			"unsaved changes, or the open project's file unwritten settings (its last write failed: project.save), unless force is true (save "
+			"first), before anything is created; waits for saves in flight (scene.save, the project file) first. Returns projectFile, template, "
+			"startScene, discardedChanges and discardedSettings (whether unsaved scene changes or unwritten settings were discarded).",
 			ObjectSchema({
 				{ "directory", StringSchema("Absolute directory for the project") },
 				{ "name", StringSchema("Project name") },
@@ -271,9 +273,10 @@ namespace Strata
 					arguments.SetError(fmt::format("Unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("creating the project '{}'", name)))
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("creating the project '{}'", name), DiscardScope::Project))
 					return std::move(*refused);
 				const bool discarded = context.IsSceneModified();
+				const bool discardedSettings = context.HasUnwrittenProjectSettings();
 				std::string error;
 				if (!context.CreateProject(FileSystem::FromUTF8(directory), name, templateId, &error))
 					return EditorCommandResult::Fail(error);
@@ -282,14 +285,17 @@ namespace Strata
 					{ "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) },
 					{ "template", templateId },
 					{ "startScene", startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr) },
-					{ "discardedChanges", discarded } });
+					{ "discardedChanges", discarded },
+					{ "discardedSettings", discardedSettings } });
 			}), EditorCommandKind::Session }));
 
 		registry.Register(MayDefer({ "project.open",
-			"Opens a project file or the project in a directory. Fails while the edited scene has unsaved changes unless force is true (save first); "
-			"waits for saves in flight (scene.save) first, also with force. "
+			"Opens a project file or the project in a directory. Fails while the edited scene has unsaved changes, or the open project's file "
+			"unwritten settings (its last write failed: project.save), unless force is true (save first); waits for saves in flight (scene.save, the "
+			"project file) first, also with force. "
 			"The project opens at once; its start scene loads in the background like scene.open's (the frames go on, scene.loadStatus reports it) "
-			"and the command answers once it is the edited scene: {projectFile, discardedChanges (whether unsaved changes were discarded), "
+			"and the command answers once it is the edited scene: {projectFile, discardedChanges and discardedSettings (whether unsaved scene "
+			"changes or unwritten settings were discarded), "
 			"startScene (null when the project has none), startSceneOpened, startSceneError (why it was not opened; the project stays open with an "
 			"empty scene), seconds (the start scene's load)}.",
 			ObjectSchema({ { "path", StringSchema("Project file (.stproj) or project directory") }, { "force", ForceSchema() } }, { "path" }),
@@ -300,21 +306,23 @@ namespace Strata
 				const bool force = arguments.GetBool("force", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the project '{}'", path)))
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the project '{}'", path), DiscardScope::Project))
 					return std::move(*refused);
 				// A project that cannot be loaded changes nothing (OpenProject reads it before closing the open one).
 				const bool modified = context.IsSceneModified();
+				const bool discardedSettings = context.HasUnwrittenProjectSettings();
 				std::string error;
 				if (!context.BeginOpenProject(FileSystem::FromUTF8(path), &error))
 					return EditorCommandResult::Fail(error);
 				return FinishProjectOpen(context, { { "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) },
-					{ "discardedChanges", modified } });
+					{ "discardedChanges", modified }, { "discardedSettings", discardedSettings } });
 			}), EditorCommandKind::Session }));
 
 		registry.Register(MayDefer({ "project.close",
 			"Closes the open project; the editor shows its launcher. Without a project it does nothing. Fails while the edited scene has unsaved "
-			"changes unless force is true (save first). Waits for saves in flight (scene.save) first, also with force: a save is never lost. Returns "
-			"closed and discardedChanges (whether unsaved changes were discarded).",
+			"changes, or the project file unwritten settings (its last write failed: project.save), unless force is true (save first). Waits for "
+			"saves in flight (scene.save, the project file) first, also with force: a save is never lost. Returns closed, discardedChanges and "
+			"discardedSettings (whether unsaved scene changes or unwritten settings were discarded).",
 			ObjectSchema({ { "force", ForceSchema() } }),
 			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -324,12 +332,13 @@ namespace Strata
 					return arguments.Fail();
 				const bool hadProject = context.HasProject();
 				if (!hadProject)
-					return EditorCommandResult::Ok({ { "closed", false }, { "discardedChanges", false } });
-				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "closing the project"))
+					return EditorCommandResult::Ok({ { "closed", false }, { "discardedChanges", false }, { "discardedSettings", false } });
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "closing the project", DiscardScope::Project))
 					return std::move(*refused);
 				const bool discarded = context.IsSceneModified();
+				const bool discardedSettings = context.HasUnwrittenProjectSettings();
 				context.CloseProject();
-				return EditorCommandResult::Ok({ { "closed", true }, { "discardedChanges", discarded } });
+				return EditorCommandResult::Ok({ { "closed", true }, { "discardedChanges", discarded }, { "discardedSettings", discardedSettings } });
 			}), EditorCommandKind::Session }));
 
 		registry.Register({ "project.samples",
@@ -354,9 +363,9 @@ namespace Strata
 		registry.Register(MayDefer({ "project.openSample",
 			"Copies a sample project (project.samples) into a new directory and opens the copy, like project.open; the sample itself stays unchanged. "
 			"The copy leaves out local editor data (.strata): build its scripts with script.build before playing. Fails while the edited scene has "
-			"unsaved changes unless force is true (save first), before anything is copied; waits for saves in flight (scene.save) first. It answers "
-			"once the start scene is open, with "
-			"project.open's fields (projectFile, discardedChanges: whether unsaved changes were discarded, the start scene's) and sample.",
+			"unsaved changes, or the open project's file unwritten settings, unless force is true (save first), before anything is copied; waits "
+			"for saves in flight (scene.save, the project file) first. It answers once the start scene is open, with project.open's fields "
+			"(projectFile, discardedChanges, discardedSettings, the start scene's) and sample.",
 			ObjectSchema({
 				{ "sample", StringSchema("The sample's id from project.samples, e.g. \"Tetris\"") },
 				{ "directory", StringSchema("Absolute directory for the copy: created, or an existing empty directory") },
@@ -381,21 +390,23 @@ namespace Strata
 						known += (known.empty() ? "" : ", ") + candidate.Id;
 					return EditorCommandResult::InvalidParameters(fmt::format("There is no sample '{}' (samples: {})", id, known.empty() ? "none" : known));
 				}
-				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the sample '{}'", sample->Id)))
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the sample '{}'", sample->Id), DiscardScope::Project))
 					return std::move(*refused);
 				const bool discarded = context.IsSceneModified();
+				const bool discardedSettings = context.HasUnwrittenProjectSettings();
 				const std::filesystem::path projectFile = ProjectSamples::Copy(*sample, FileSystem::FromUTF8(directory), &error);
 				if (projectFile.empty())
 					return EditorCommandResult::Fail(error);
 				if (!context.BeginOpenProject(projectFile, &error))
 					return EditorCommandResult::Fail(fmt::format("The sample was copied to '{}' but could not be opened: {}", directory, error));
 				return FinishProjectOpen(context, { { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) },
-					{ "discardedChanges", discarded } });
+					{ "discardedChanges", discarded }, { "discardedSettings", discardedSettings } });
 			}), EditorCommandKind::Session }));
 
-		registry.Register({ "project.setStartScene", "Sets the scene a built game starts with and saves the project file. When it is the "
-			"export settings' loading scene (project.setExportSettings), that setting is cleared (loadingSceneCleared: true), as the loading scene "
-			"plays while the start scene loads. Returns startScene and loadingSceneCleared.",
+		registry.Register({ "project.setStartScene", "Sets the scene a built game starts with, as one undo step (the scene stays saved; allowed "
+			"while playing, where it is not discarded by play.stop), and writes the project file in the background (editor.status' project "
+			"fileState; project.save waits for it). When it is the export settings' loading scene (project.setExportSettings), that setting is "
+			"cleared (loadingSceneCleared: true), as the loading scene plays while the start scene loads. Returns startScene and loadingSceneCleared.",
 			ObjectSchema({ { "scene", AssetSchema("Start scene") } }, { "scene" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -406,20 +417,15 @@ namespace Strata
 				const AssetHandle scene = ResolveAsset(context, arguments, "scene", AssetType::Scene);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				Project& project = *context.GetProject();
-				const AssetHandle previous = project.GetConfig().StartScene;
-				const AssetHandle previousLoading = project.GetConfig().Export.LoadingScene;
-				project.GetConfig().StartScene = scene;
+				const ProjectSettingsFields before = ProjectSettingsFields::Of(context.GetProject()->GetConfig());
+				ProjectSettingsFields after = before;
+				after.StartScene = scene;
 				// The loading scene plays while the start scene loads: the scene that starts now no longer is the loading scene.
-				const bool loadingSceneCleared = previousLoading.IsValid() && previousLoading == scene;
+				const bool loadingSceneCleared = before.Export.LoadingScene.IsValid() && before.Export.LoadingScene == scene;
 				if (loadingSceneCleared)
-					project.GetConfig().Export.LoadingScene = UUID::Null();
-				if (!project.Save(&error))
-				{
-					project.GetConfig().StartScene = previous;
-					project.GetConfig().Export.LoadingScene = previousLoading;
+					after.Export.LoadingScene = UUID::Null();
+				if (!ChangeProjectSettings(context, "Set Start Scene", before, std::move(after), &error))
 					return EditorCommandResult::Fail(error);
-				}
 				return EditorCommandResult::Ok({ { "startScene", UUIDToJson(scene) }, { "loadingSceneCleared", loadingSceneCleared } });
 			} });
 
@@ -527,8 +533,9 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "cancelling", true } });
 			}, EditorCommandKind::Session });
 
-		registry.Register({ "project.setExportSettings", "Sets how the project exports and saves the project file; settings left out keep their "
-			"values. alwaysInclude: assets (\"Prefabs/Enemy.stprefab\") and folders (\"Prefabs\") relative to the asset directory that an export "
+		registry.Register({ "project.setExportSettings", "Sets how the project exports, as one undo step (the scene stays saved; allowed while "
+			"playing, where it is not discarded by play.stop), and writes the project file in the background (project.save waits for it); "
+			"settings left out keep their values. alwaysInclude: assets (\"Prefabs/Enemy.stprefab\") and folders (\"Prefabs\") relative to the asset directory that an export "
 			"with prune keeps, with what they use, although no scene uses them (assets scripts load by path); each must name an asset or a folder "
 			"of assets. loadingScene: a scene the exported game plays while its start scene loads (null: none, the game shows a cleared frame "
 			"meanwhile). Returns both settings.",
@@ -547,9 +554,9 @@ namespace Strata
 				const nlohmann::json* loading = JsonUtils::Find(parameters, "loadingScene");
 				if (!list && !loading)
 					return EditorCommandResult::InvalidParameters("Missing parameter 'alwaysInclude' (or 'loadingScene')");
-				Project& project = *context.GetProject();
-				const ProjectExportSettings previous = project.GetConfig().Export;
-				ProjectExportSettings settings = previous;
+				const Project& project = *context.GetProject();
+				const ProjectSettingsFields before = ProjectSettingsFields::Of(project.GetConfig());
+				ProjectExportSettings settings = before.Export;
 				if (list)
 				{
 					if (!list->is_array())
@@ -583,12 +590,10 @@ namespace Strata
 					}
 				}
 
-				project.GetConfig().Export = std::move(settings);
-				if (!project.Save(&error))
-				{
-					project.GetConfig().Export = previous;
+				ProjectSettingsFields after = before;
+				after.Export = std::move(settings);
+				if (!ChangeProjectSettings(context, "Set Export Settings", before, std::move(after), &error))
 					return EditorCommandResult::Fail(error);
-				}
 				const ProjectExportSettings& saved = project.GetConfig().Export;
 				return EditorCommandResult::Ok({ { "alwaysInclude", saved.AlwaysInclude },
 					{ "loadingScene", saved.LoadingScene.IsValid() ? UUIDToJson(saved.LoadingScene) : nlohmann::json(nullptr) } });

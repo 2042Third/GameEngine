@@ -5,6 +5,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/SceneRecovery.h"
+#include "Editor/SettingsFileWriter.h"
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
 
@@ -250,6 +251,46 @@ TEST_SUITE("Editor.DataSafety")
 		CHECK(editor.Context().GetEditScene()->GetName() == "Untitled");
 		CHECK_FALSE(editor.Context().GetEditScene()->FindEntityByName("Unsaved"));
 		CHECK_FALSE(editor.Context().IsSceneModified());
+	}
+
+	TEST_CASE("Closing the project after a failed project file write asks about it, and Retry writes it first")
+	{
+		Tests::HarnessEditor editor;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("DataSafetyUnwrittenSettings") / "Game";
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" }, { "template", "basic3d" } });
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Context().GetProjectFileState() != SettingsFileState::Writing; }));
+		const std::filesystem::path projectFile = editor.Context().GetProject()->GetProjectFile();
+		// A directory in the project file's place makes its writes fail.
+		REQUIRE(FileSystem::Remove(projectFile));
+		REQUIRE(FileSystem::CreateDirectories(projectFile));
+		editor.Run("project.setExportSettings", { { "alwaysInclude", { "Scenes" } } });
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Context().HasUnwrittenProjectSettings(); }));
+		REQUIRE_FALSE(editor.Context().IsSceneModified());
+
+		// File > Close Project asks; Cancel keeps the project open.
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.CloseProject"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnwrittenSettings.Dialog").has_value());
+		REQUIRE(editor.Click("UnwrittenSettings.Cancel"));
+		editor.Frames(2);
+		CHECK_FALSE(UI::ItemProbe::Find("UnwrittenSettings.Dialog").has_value());
+		CHECK(editor.Context().HasProject());
+
+		// Retry writes the file once its cause is gone, and the project closes after it.
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.CloseProject"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnwrittenSettings.Dialog").has_value());
+		REQUIRE(FileSystem::Remove(projectFile));
+		REQUIRE(editor.Click("UnwrittenSettings.Retry"));
+		REQUIRE(editor.FramesUntil([&editor]() { return !editor.Context().HasProject(); }));
+		std::string error;
+		const Ref<Project> written = Project::Load(projectFile, &error);
+		REQUIRE(written);
+		CHECK(written->GetConfig().Export.AlwaysInclude == std::vector<std::string> { "Scenes" });
 	}
 
 	TEST_CASE("File > Open Scene asks about unsaved changes, then opens a scene file of the asset directory")

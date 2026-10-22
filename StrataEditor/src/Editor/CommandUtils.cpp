@@ -2,6 +2,7 @@
 
 #include "Editor/EditorContext.h"
 #include "Editor/SceneEdit.h"
+#include "Editor/SettingsFileWriter.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/AssetRegistration.h>
@@ -210,7 +211,9 @@ namespace Strata
 				{ "directory", FileSystem::ToUTF8(project->GetProjectDirectory()) },
 				{ "assetDirectory", FileSystem::ToUTF8(project->GetAssetDirectory()) },
 				{ "startScene", config.StartScene.IsValid() ? UUIDToJson(config.StartScene) : nlohmann::json(nullptr) },
-				{ "export", { { "alwaysInclude", config.Export.AlwaysInclude } } } };
+				{ "export", { { "alwaysInclude", config.Export.AlwaysInclude } } },
+				{ "fileState", SettingsFileStateToString(context.GetProjectFileState()) },
+				{ "fileError", context.HasUnwrittenProjectSettings() ? nlohmann::json(context.GetProjectFileError()) : nlohmann::json(nullptr) } };
 		}
 
 		nlohmann::json DescribeFrameTimes(std::vector<double> frameTimes)
@@ -257,10 +260,18 @@ namespace Strata
 				"discarded them");
 		}
 
-		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action)
+		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action, DiscardScope scope)
 		{
-			if (force || !context.IsSceneModified())
+			if (force)
 				return std::nullopt;
+			if (!context.IsSceneModified())
+			{
+				if (scope != DiscardScope::Project || !context.HasUnwrittenProjectSettings())
+					return std::nullopt;
+				return EditorCommandResult::Fail(fmt::format("The project file '{}' could not be written ({}): the project's settings changed since "
+					"are only in the editor, and {} would discard them. Write it with project.save once the cause is fixed, or pass force: true to "
+					"discard them", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()), context.GetProjectFileError(), action));
+			}
 			const std::string& scene = context.GetEditScene()->GetName();
 			if (!context.HasProject())
 			{

@@ -83,10 +83,13 @@ namespace Strata
 		std::filesystem::path GetTarget(const std::string& folderName, std::string& outProblem);
 		// Notes that the person has answered the question about the edited scene's unsaved changes as they are now.
 		void NoteAnswer(EditorContext& context);
-		// Whether the dialog may replace the edited scene now: no save in flight, and without unsaved changes or with only those
-		// the person chose to discard (none made since). Otherwise waits for the saves (the saving dialog) and asks again; the
+		// Whether the dialog may replace the edited scene and release the project now: no save in flight, and without unsaved
+		// changes or unwritten project settings, or with only those the person chose to discard (none made since). Otherwise waits for the saves (the saving dialog) and asks again; the
 		// answer submits the dialog once more.
 		bool MayReplaceScene(EditorPanelContext& context);
+		// The writes of the open project's file so far (0 without a project): a failed write the person answered about is the
+		// one before the count they saw.
+		static uint64_t GetProjectFileWrites(const EditorContext& context);
 
 		static void* SettingsReadOpen(ImGuiContext* context, ImGuiSettingsHandler* handler, const char* name);
 		static void SettingsReadLine(ImGuiContext* context, ImGuiSettingsHandler* handler, void* entry, const char* line);
@@ -110,6 +113,7 @@ namespace Strata
 		// The undo stack's version (UndoStack::GetVersion) the person's answer about unsaved changes was given for, and
 		// whether a question the dialog asked has been answered since (the dialog then submits).
 		uint64_t m_AnsweredVersion = 0;
+		uint64_t m_AnsweredWrites = 0; // The project file's writes (SettingsFileWriter::GetWriteCount) when the person answered
 		bool m_Answered = false;
 
 		// The last target check: the fields it was made for and its result.

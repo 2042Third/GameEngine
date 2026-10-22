@@ -50,6 +50,11 @@ namespace Strata
 		// decided by the time the action runs, so its command passes force: true (the commands refuse to discard unsaved
 		// changes otherwise, see CommandUtils::CheckUnsavedChanges).
 		virtual void RequestDiscardChanges(std::function<void()> action) = 0;
+		// RequestDiscardChanges for an action that releases the project (opening, creating or closing a project, quitting): once
+		// the scene's changes are saved or discarded, it also asks about the project's settings while its file could not be
+		// written (EditorContext::HasUnwrittenProjectSettings), offering to write it again (project.save). The action's command
+		// passes force: true once the person decided.
+		virtual void RequestReleaseProject(std::function<void()> action) = 0;
 		// A modal dialog that asks (RequestDiscardChanges) while it stays open calls this between its UI::BeginModal and
 		// UI::EndModal every frame: the question then shows over it. Asked from anywhere else, the question opens over the
 		// whole window, which closes a modal dialog that is open.

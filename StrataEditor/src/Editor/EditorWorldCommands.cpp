@@ -554,7 +554,7 @@ namespace Strata
 					return EditorCommandResult::InvalidParameters(fmt::format("Invalid world: {}", error));
 				if (open)
 				{
-					if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("creating and opening the world '{}'", path)))
+					if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("creating and opening the world '{}'", path), DiscardScope::Scene))
 						return std::move(*refused);
 				}
 

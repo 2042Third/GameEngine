@@ -3359,6 +3359,12 @@ is the `strata-scripting` skill. The layers:
   windowed sessions that are not scripted; scripted runs, headless editors and tests wait in `OpenProject`, so their first
   command finds the scene). With a 1,000,000-entity start scene the window's first frame comes after 1.0 s instead of 6.8 s
   (Release; the scene follows about 7 s later, while frames go on).
+- **The project file's writes** (`Editor/SettingsFileWriter.h`). Changes of the project's settings are undo steps
+  (`ProjectSettingsAction`) that queue a write of the project file: the frame copies the project's small values, an I/O
+  job serializes and writes them atomically, and `EditorContext::Update` publishes the outcome; writes coalesce (one in
+  flight, the newest next). A failed write keeps the change in memory and leaves the file with unwritten settings, which
+  the commands that release the project refuse to discard unless forced; only `EditorContext::ReleaseProject` may write
+  on the main thread (it finishes a write in flight before the project goes).
 - **Background saves** (`Editor/DocumentSaver.h`). The one path that saves engine-native documents without holding a
   frame: the main thread takes a snapshot (`Scene::Copy` with `SerializedOnly`) and submits a `DocumentSaveRequest` (the
   snapshot, its undo `SavePoint`, a label and its items); a background job writes each item through `SceneDocumentWriter`

@@ -369,15 +369,16 @@ reaches the application only through `EditorHost`. Every command family, panel a
   `EditorCommandResults::Session`); they read parameters with `CommandArguments`, reject invalid or
   out-of-range input without side effects (`InvalidParameters` or `Failed`), track entities in a
   `SceneEditTransaction` (`Track` before changing or deleting, `TrackCreated` after creating), record one undo step per
-  successful mutation (`EditorActionGroup` for several actions) and, while playing, report a `warning` and set
-  `RunningCopy` ([Command conventions](Docs/DeveloperGuide.md#command-conventions)).
+  successful mutation (`EditorActionGroup` for several actions) and, for scene changes while playing, report a
+  `warning` and set `RunningCopy` ([Command conventions](Docs/DeveloperGuide.md#command-conventions)).
 - Files commands write for clients go through `CommandUtils::ResolveOutputPath`
   ([Output paths](Docs/DeveloperGuide.md#output-paths)).
-- A command that replaces the edited scene starts with `CommandUtils::CheckUnsavedChanges` (fails unless `force`); UI
-  code passes `force` only once the person answered `EditorShell::RequestDiscardChanges`, for the changes asked about.
-- Saves never serialize on the main thread: documents go through `Editor/DocumentSaver` (a snapshot in the frame, the
-  writing on a background job), commands that replace the scene, close the project or quit wrap their handler in
-  `CommandUtils::AfterSaves`, and UI code saves through the command runner
+- A command that replaces the edited scene starts with `CommandUtils::CheckUnsavedChanges` (fails unless `force`, also
+  on unwritten project settings when it releases the project); UI code passes `force` only once the person answered
+  `EditorShell::RequestDiscardChanges` (`RequestReleaseProject`), for the changes asked about.
+- Saves never serialize on the main thread: documents go through `Editor/DocumentSaver`, the project file through
+  `SettingsFileWriter` (a snapshot in the frame, the writing on a background job), commands that replace the scene,
+  close the project or quit wrap their handler in `CommandUtils::AfterSaves`, and UI code saves through the command runner
   ([No silent data loss](Docs/DeveloperGuide.md#no-silent-data-loss)).
 - Asset deletes go to the trash and refuse while something uses the asset; steps that change files check them first
   and fail with the reason when they no longer fit (never overwriting), and asset steps never mark the scene unsaved.

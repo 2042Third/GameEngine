@@ -445,7 +445,8 @@ TEST_SUITE("Editor.SceneLoad")
 		const nlohmann::json settings = project.Run("project.setExportSettings", { { "loadingScene", "Scenes/Two.stscene" } });
 		CHECK(settings["loadingScene"] == UUIDToJson(project.Two));
 		CHECK(settings["alwaysInclude"].empty());
-		// Saved with the project.
+		// Saved with the project (written in the background: project.save answers once it is).
+		project.Run("project.save");
 		std::string error;
 		const Ref<Project> saved = Project::Load(context.GetProject()->GetProjectFile(), &error);
 		REQUIRE_MESSAGE(saved, error);
@@ -470,6 +471,7 @@ TEST_SUITE("Editor.SceneLoad")
 		const nlohmann::json started = project.Run("project.setStartScene", { { "scene", UUIDToJson(project.Two) } });
 		CHECK(started["loadingSceneCleared"] == true);
 		CHECK_FALSE(context.GetProject()->GetConfig().Export.LoadingScene.IsValid());
+		project.Run("project.save");
 		const Ref<Project> reloaded = Project::Load(context.GetProject()->GetProjectFile(), &error);
 		REQUIRE_MESSAGE(reloaded, error);
 		CHECK(reloaded->GetConfig().StartScene == project.Two);

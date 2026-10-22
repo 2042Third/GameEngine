@@ -868,6 +868,24 @@ setting is one registration, and no other code learns of it.
   back as it was read: sections no registered module claims and members of `"Project"` a later version added. A project
   file holds at most 1 MiB (`Project::c_MaxFileBytes`): `Load` refuses a larger one without reading it whole, and `Save`
   refuses to write one.
+- **Writing the project file.** The editor never writes the project file on the main thread: a change of the project's
+  settings queues a write (`EditorContext::SaveProjectFile`), whose snapshot is a copy of the project's small in-memory
+  values, and `Editor/SettingsFileWriter` serializes and writes it atomically on an I/O job and publishes the outcome in
+  `EditorContext::Update`. Writes coalesce: one runs at a time and only the newest waiting one runs next. A failed write
+  keeps the change in memory, logs an error and posts a notification; until a later write succeeds the file has
+  *unwritten settings* (`HasUnwrittenProjectSettings`; `project.info` and `editor.status` report the project's
+  `fileState`: written, writing or unwritten, with `fileError`), and the next change or `project.save` (which answers once
+  the file is written, or fails with the reason) tries again. The commands that release the project refuse meanwhile
+  ([No silent data loss](#no-silent-data-loss)). `EditorContext::ReleaseProject` is the only path that may write on the
+  main thread: it finishes a write in flight, running one that has not started itself, and is reached by commands only
+  once nothing was in flight, otherwise only when the editor goes away.
+- **Changes are undo steps.** Every command that changes the project's settings (`project.setStartScene`,
+  `project.setExportSettings`) records one `ProjectSettingsAction` (`Editor/ProjectSettingsAction.h`, made with
+  `ChangeProjectSettings`): it sets the values and queues a write when it runs and when it is undone, changes no scene
+  (`ChangesScene() == false`, so the scene stays saved) and goes with the rest of the history when a scene opens. Such
+  commands are allowed while playing: the change is the project's, not the running copy's, so it stays after `play.stop`
+  and reports neither a `warning` nor `RunningCopy`; its step is undone once play stops (Undo and Redo refuse while
+  playing).
 - **Exported games.** The export copies the project's sections into the game's manifest (`.stgame` version 5,
   `"Settings"` in the project file's form), refusing to export while a section a registered module claims is invalid;
   sections no module of the build claims go as they are stored. `GameManifest` keeps them unvalidated (bounded at 1 MiB),
@@ -1753,20 +1771,28 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `project.create`, `project.close`, `project.openSample`, `editor.quit`) starts with the shared guard
   `CommandUtils::CheckUnsavedChanges`: while the edited scene has unsaved changes (also while a copy of it plays) it fails
   (`Failed`, naming the scene and how to proceed) and changes nothing, unless `force: true`; results report
-  `discardedChanges`. A new command that replaces the scene uses the same guard. The UI keeps asking (the unsaved-changes
+  `discardedChanges`. A new command that replaces the scene uses the same guard, with the `DiscardScope` it has: one that
+  releases the project (`DiscardScope::Project`: the project commands above and `editor.quit`) also fails while the
+  project file has unwritten settings (its last write failed: [Project settings](#project-settings)), naming the file,
+  its error and `project.save`, and reports `discardedSettings`; one that keeps the project open (`DiscardScope::Scene`)
+  loses no settings and is not refused for them. The UI asks before releasing the project with
+  `EditorShell::RequestReleaseProject`: after the question about the scene, a question about the unwritten settings
+  offers Retry (`project.save`, then the action), Don't Save and Cancel. The UI keeps asking (the unsaved-changes
   dialog, `EditorShell::RequestDiscardChanges`) and passes `force` once the person has answered, for the changes they were
   asked about only: the question's Don't Save asks again when the scene changed while it waited, a dialog that runs the
   command later asks again when the scene changed since (`UndoStack::GetVersion`), a modal dialog asks over itself
   (`EditorShell::DrawDiscardQuestion` between its `BeginModal` and `EndModal`), and a recorded `force` is never repeated
   for the person (the Activity panel's Re-run asks).
-- **Saves are never lost and never hold a frame:** the edited scene and every engine-native document a command or a
+- **Saves are never lost and never hold a frame:** the project file goes through `Editor/SettingsFileWriter`
+  ([Project settings](#project-settings)), and the edited scene and every engine-native document a command or a
   panel writes as a whole go through `Editor/DocumentSaver` (`EditorContext::BeginSaveScene`, `BeginSaveSceneAs`; world
   cells too), which serializes, scans and writes on a background job and publishes on the main thread; never serialize a
   document on the main thread for a save (the blocking `SaveScene`/`SaveSceneAs` are for tools, tests and a template's
   start scene). `scene.save` and `scene.saveAs` take `wait` (default true: they answer once the file is published; false:
   at once, with `saveId`), and `editor.status` lists `saving`. The commands that replace the edited scene, close the
   project or quit wrap their handlers in `CommandUtils::AfterSaves`, so they defer while saves are in flight and then
-  decide as above (`force` never discards a save in flight); a new command of that kind does the same and, like
+  decide as above (`force` never discards a save in flight; `EditorContext::HasSavesInFlight` counts the project file's
+  writes too); a new command of that kind does the same and, like
   `scene.save` and `scene.saveAs`, is registered with `MayDefer` (`editor.batch` refuses it). UI code saves
   through the command runner (the result comes in a later frame), `RequestDiscardChanges` waits for saves in a saving
   dialog, and `EditorContext::ReleaseProject` finishes every save before the project goes.
@@ -1799,7 +1825,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 - Undo works on entity snapshots: a `SceneEditTransaction` captures the entities an edit touches
   (`Track`, `TrackSubtree` before changing or deleting them, `TrackCreated` after creating them) and
-  `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded. Continuous edits merge
+  `EditorContext::CommitEdit` records the difference. Scene edits while playing are not recorded (they change the running
+  copy); steps of the project's settings and of assets are recorded in play too and undone after it, as Undo and Redo
+  refuse while playing. Continuous edits merge
   into one step (`EditorAction::MergeWith`); a merged step that ends where it started (`IsNoOp`) is dropped. Capturing
   reads cached sibling positions and applying a step removes and places entities in batches (`Scene::DestroyEntities`,
   `Scene::PlaceEntities`), so edits of many entities in long sibling lists stay linear. Commands that act on several
@@ -2148,9 +2176,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 ### Edits while playing and value ranges
 
-- Mutating commands report a `warning` in their result while the scene is playing (and set
+- Mutating commands of the scene report a `warning` in their result while the scene is playing (and set
   `EditorCommandResult::RunningCopy`, which replays read): such changes apply
-  to the running copy and are discarded by `play.stop`. Commands whose only target is the running game set
+  to the running copy and are discarded by `play.stop`. Changes of the project's settings are the project's and stay, so
+  they report neither ([Project settings](#project-settings)). Commands whose only target is the running game set
   `RunningCopy` without the warning, which would only repeat what they are for: `scene.loadAdditive`,
   `scene.unloadAdditive` and, while playing, `script.add`, `script.remove` and `script.setField` (live scripts). Unknown or missing parameters are errors, and so are values out of
   a property's range (`PropertyInfo::IsInRange`, checked by `CommandUtils::ApplyComponents` for `component.set`,

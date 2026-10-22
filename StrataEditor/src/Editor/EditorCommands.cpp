@@ -44,6 +44,7 @@ namespace Strata
 		RegisterEntityCommands(*this);
 		RegisterPrefabCommands(*this);
 		RegisterAssetCommands(*this);
+		RegisterProjectSettingsCommands(*this);
 		RegisterEditorStateCommands(*this);
 		RegisterPlayCommands(*this);
 		RegisterViewportCommands(*this);
