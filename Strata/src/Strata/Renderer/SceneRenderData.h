@@ -61,9 +61,14 @@ namespace Strata
 			glm::vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 			glm::vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
 			glm::vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
-			glm::vec4 TemporalParams;            // x: 1 when the motion history holds the renderer's previous frame
+			// x: 1 when the motion history holds the renderer's previous frame; y: reserved; z: the frame's rotation of per-pixel
+			// noise (PCSS, ambient occlusion) in turns, 0 without temporal anti-aliasing
+			glm::vec4 TemporalParams;
+			// Temporal anti-aliasing's offset of the frame's samples in clip units (added to Projection, ViewProjection and their
+			// inverses; 0 without it): xy this frame's, zw the renderer's previous frame's
+			glm::vec4 JitterParams;
 		};
-		static_assert(sizeof(FrameConstants) == 8 * 64 + 18 * 16);
+		static_assert(sizeof(FrameConstants) == 8 * 64 + 19 * 16);
 
 		// A directional shadow cascade as shaders read it (u_Cascades, Include/Scene.glsl): written on the GPU by
 		// Scene/CascadeFit.comp, which fits its depth range to the casters (CascadeFitConstants).

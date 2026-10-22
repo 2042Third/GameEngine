@@ -79,6 +79,15 @@ namespace Strata
 		KhronosNeutral
 	};
 
+	// How PostProcessComponent::AntiAliasing smooths edges.
+	enum class AntiAliasingMode : uint8_t
+	{
+		FXAA = 0, // Fast approximate anti-aliasing of the finished image
+		// Temporal anti-aliasing: each frame samples its pixels at another sub-pixel offset and is blended with the renderer's
+		// history of earlier frames, reprojected along the motion vectors (SceneRendererSpecification::TemporalAntiAliasing)
+		TAA
+	};
+
 	// Post-processing of the camera image. The first active entity with this component in a scene applies; scenes
 	// without one use the defaults.
 	struct PostProcessComponent
@@ -97,7 +106,8 @@ namespace Strata
 		bool AmbientOcclusion = true;
 		float AmbientOcclusionRadius = 0.6f; // World units
 		float AmbientOcclusionIntensity = 1.0f;
-		bool AntiAliasing = true; // FXAA
+		bool AntiAliasing = true;
+		AntiAliasingMode AntiAliasingMethod = AntiAliasingMode::FXAA;
 		float Vignette = 0.2f;
 		float Saturation = 1.0f;
 		float Contrast = 1.0f; // Around middle gray; 1 = unchanged

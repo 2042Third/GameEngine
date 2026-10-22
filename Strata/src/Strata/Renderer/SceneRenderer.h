@@ -191,6 +191,15 @@ namespace Strata
 		// tables and, while materials are alpha-masked, the texture table's entries). Other cascades keep their shadow map
 		// layer (SceneRendererStats::CachedCascadeMask): a still camera over a still or local change costs no shadow draws.
 		bool CacheShadowCascades = true;
+		// Scenes whose PostProcessComponent chooses AntiAliasingMode::TAA are drawn with temporal anti-aliasing: each frame
+		// offsets its samples by a sub-pixel jitter (8 phases of a Halton (2, 3) sequence, from the history's latest reset on,
+		// in the frame's copy of the camera only: culling, levels of detail, the shadow cascades and the overlays keep the
+		// camera's own matrices) and blends with the renderer's history of earlier frames. The history is the renderer's own and
+		// starts again (SceneRendererStats::HistoryResets) on its first frame, after a camera cut, with a render scene that is
+		// neither the previous one nor a clone of it, after a resize, after a device frame (Renderer::GetFrameNumber) in which it
+		// did not render, and after ResetHistory. Off: such scenes are drawn with FXAA (renderers of single images that do not
+		// render a view several times, such as thumbnails).
+		bool TemporalAntiAliasing = true;
 	};
 
 	// A material the last frame drew, for streaming its textures at the resolution the screen needs.
@@ -394,6 +403,14 @@ namespace Strata
 		bool MotionFullCopy = false;
 		uint32_t MotionCopiedInstances = 0;
 		uint32_t MotionCopiedJoints = 0;
+		// Temporal anti-aliasing (SceneRendererSpecification::TemporalAntiAliasing): whether the frame was drawn with it, the
+		// frames its history holds (1 on a frame that reset it, 0 without it), the history's resets since the renderer was
+		// made, and the frame's jitter in pixels (+x right, +y down; SceneRenderer::GetTemporalJitter of phase
+		// (TemporalFrames - 1) modulo c_TemporalJitterPhases, 0 without it).
+		bool TemporalAntiAliasing = false;
+		uint32_t TemporalFrames = 0;
+		uint32_t HistoryResets = 0;
+		glm::vec2 Jitter = glm::vec2(0.0f);
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -538,6 +555,13 @@ namespace Strata
 		// Automatic exposure adapts gradually; this makes the next frame jump to the scene's brightness (camera cuts,
 		// scene loads).
 		void ResetExposureAdaptation() { m_ResetExposure = true; }
+		// Temporal anti-aliasing starts its history again with the next frame (scene loads; SceneRendererSpecification::
+		// TemporalAntiAliasing).
+		void ResetHistory() { m_ResetHistory = true; }
+		// The sub-pixel offset of temporal anti-aliasing's samples in a phase (0 to c_TemporalJitterPhases - 1), in pixels (+x
+		// right, +y down): a Halton (2, 3) point in (-0.5, 0.5).
+		static constexpr uint32_t c_TemporalJitterPhases = 8;
+		static glm::vec2 GetTemporalJitter(uint32_t phase);
 
 		const SceneRendererSpecification& GetSpecification() const { return m_Specification; }
 		// What the renderer chooses levels of detail by at its viewport size (LODSelection::SelectLOD): tools showing the level
@@ -1124,6 +1148,17 @@ namespace Strata
 		nvrhi::BufferHandle m_HistogramBuffer;
 		nvrhi::BufferHandle m_ExposureBuffer; // See Include/Exposure.glsl
 		bool m_ResetExposure = true;
+		// Temporal anti-aliasing (SceneRendererSpecification::TemporalAntiAliasing): the frame being rendered uses it; the frames
+		// the history holds (0: none); the frame that resolved it last (RenderCount + 1; 0: none, or not since a frame failed),
+		// the device frame, render scene and jitter (clip units) of that frame; a reset asked for, and the resets so far.
+		bool m_TemporalFrame = false;
+		uint32_t m_TemporalFrames = 0;
+		uint64_t m_TemporalRender = 0;
+		uint64_t m_TemporalDeviceFrame = 0;
+		uint64_t m_TemporalSceneId = 0;
+		glm::vec2 m_TemporalJitterClip = glm::vec2(0.0f);
+		bool m_ResetHistory = false;
+		uint32_t m_HistoryResets = 0;
 		std::optional<std::chrono::steady_clock::time_point> m_LastExposureTime;
 		nvrhi::BindingLayoutHandle m_BloomBindingLayout;
 		nvrhi::ComputePipelineHandle m_BloomPipeline;

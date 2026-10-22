@@ -82,6 +82,8 @@ namespace Strata
 		// recycles bindless slots and staging memory, rolls the upload queue's frame and drops deferred releases the GPU is
 		// done with.
 		static void BeginFrame();
+		// Frames begun so far (BeginFrame): what renderers compare to know whether they rendered in the previous frame.
+		static uint64_t GetFrameNumber();
 		// Before the first command list of a frame that renders into the back buffer: the GPU waits for the display to hand
 		// the image over only from here on (GraphicsDevice::PrepareBackBuffer), so the frame's earlier work - asset uploads,
 		// offscreen rendering - never queues behind the display; the first call of a frame also clears the back buffer to

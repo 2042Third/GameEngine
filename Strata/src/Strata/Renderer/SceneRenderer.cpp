@@ -1540,6 +1540,8 @@ namespace Strata
 			release(set);
 		m_MotionCopyBound = {};
 		m_MotionRender = 0;
+		m_TemporalFrames = 0; // The temporal history starts again at the new size
+		m_TemporalRender = 0;
 		Renderer::ReleaseDeferred(std::move(released));
 	}
 
@@ -2029,6 +2031,24 @@ namespace Strata
 		return rendered;
 	}
 
+	glm::vec2 SceneRenderer::GetTemporalJitter(uint32_t phase)
+	{
+		// The radical inverses of the phase's index in bases 2 and 3; the index starts at 1, since 0 is the origin of both.
+		const auto radicalInverse = [](uint32_t index, uint32_t base)
+		{
+			float result = 0.0f;
+			float scale = 1.0f / static_cast<float>(base);
+			for (; index > 0; index /= base)
+			{
+				result += static_cast<float>(index % base) * scale;
+				scale /= static_cast<float>(base);
+			}
+			return result;
+		};
+		const uint32_t index = phase % c_TemporalJitterPhases + 1;
+		return glm::vec2(radicalInverse(index, 2), radicalInverse(index, 3)) - 0.5f;
+	}
+
 	glm::vec3 SceneRenderer::GetViewDirection(const SceneCamera& camera)
 	{
 		const glm::vec3 forward = -glm::vec3(camera.View[0][2], camera.View[1][2], camera.View[2][2]);
@@ -2181,14 +2201,58 @@ namespace Strata
 		}
 		m_Stats.MotionHistory = m_MotionFrame && motionHistory;
 
-		// Scene shaders work camera-relative (Include/Scene.glsl): the view's translation is left out of its matrices.
+		// Temporal anti-aliasing: the history goes on from the renderer's previous frame when that frame resolved it, in this
+		// device frame or the one before, of this render scene or the one it is a clone of (entering Play keeps it), without a
+		// camera cut or a reset asked for (a resize released it). Counted in frames, never in time, so slow frames keep it.
+		const PostProcessComponent postProcess = GetPostProcessSettings(scene);
+		const bool cameraCut = IsCameraCut(camera);
+		m_TemporalFrame = m_Specification.TemporalAntiAliasing && postProcess.AntiAliasing && postProcess.AntiAliasingMethod == AntiAliasingMode::TAA;
+		glm::vec2 jitterClip(0.0f);
+		glm::vec2 previousJitterClip(0.0f);
+		if (m_TemporalFrame)
+		{
+			const uint64_t deviceFrame = Renderer::GetFrameNumber();
+			const bool continues = m_TemporalFrames > 0 && m_TemporalRender != 0 && m_TemporalRender == m_RenderCount && !cameraCut && !m_ResetHistory
+				&& (m_TemporalSceneId == renderScene.GetId() || renderScene.GetCloneSource() == m_TemporalSceneId)
+				&& (deviceFrame == m_TemporalDeviceFrame || deviceFrame == m_TemporalDeviceFrame + 1);
+			if (continues)
+			{
+				// Kept within the counter in whole cycles of the jitter, so its phases go on in order.
+				constexpr uint32_t c_FramesWrap = 1u << 30;
+				m_TemporalFrames = m_TemporalFrames + 1 < c_FramesWrap ? m_TemporalFrames + 1 : m_TemporalFrames + 1 - c_FramesWrap / 2;
+				previousJitterClip = m_TemporalJitterClip;
+			}
+			else
+			{
+				m_TemporalFrames = 1;
+				m_HistoryResets++;
+			}
+			m_TemporalRender = 0; // Until this frame resolved it
+			m_TemporalDeviceFrame = deviceFrame;
+			m_TemporalSceneId = renderScene.GetId();
+			m_ResetHistory = false;
+			m_Stats.Jitter = GetTemporalJitter((m_TemporalFrames - 1) % c_TemporalJitterPhases);
+			// Clip space's +Y is up, the jitter's +y down.
+			jitterClip = glm::vec2(2.0f * m_Stats.Jitter.x / static_cast<float>(m_ViewportSize.x), -2.0f * m_Stats.Jitter.y / static_cast<float>(m_ViewportSize.y));
+			m_TemporalJitterClip = jitterClip;
+		}
+		m_Stats.TemporalAntiAliasing = m_TemporalFrame;
+		m_Stats.TemporalFrames = m_TemporalFrame ? m_TemporalFrames : 0u;
+		m_Stats.HistoryResets = m_HistoryResets;
+
+		// Scene shaders work camera-relative (Include/Scene.glsl): the view's translation is left out of its matrices. The jitter
+		// is only in the frame's copy of the projection: what the CPU culls, chooses levels of detail and fits the cascades with
+		// is the camera's own, and so are the motion vectors' matrices.
 		RenderData::FrameConstants frame = {};
 		frame.View = GetRelativeView(camera);
 		frame.Projection = camera.Projection;
-		frame.ViewProjection = camera.Projection * frame.View;
+		if (m_TemporalFrame)
+			frame.Projection = glm::translate(glm::mat4(1.0f), glm::vec3(jitterClip, 0.0f)) * camera.Projection;
+		frame.ViewProjection = frame.Projection * frame.View;
 		frame.InverseView = glm::inverse(frame.View);
-		frame.InverseProjection = glm::inverse(camera.Projection);
+		frame.InverseProjection = glm::inverse(frame.Projection);
 		frame.InverseViewProjection = glm::inverse(frame.ViewProjection);
+		frame.JitterParams = glm::vec4(jitterClip, previousJitterClip);
 		// Built in double, from the same products, so a camera that did not move gives the same matrix twice (no motion).
 		frame.UnjitteredViewProjection = glm::mat4(glm::dmat4(camera.Projection) * glm::dmat4(frame.View));
 		frame.PreviousViewProjection = frame.UnjitteredViewProjection;
@@ -2217,7 +2281,7 @@ namespace Strata
 		const Frustum frustum(camera.Projection * camera.View);
 		// What the frame requests: the GPU's visibility feedback where it can tell (SceneRendererSpecification::
 		// VisibilityFeedback), else the CPU's walk of the view.
-		if (IsCameraCut(camera))
+		if (cameraCut)
 		{
 			m_CutRender = m_RenderCount + 1;
 			m_ResetVisibility = true; // Occlusion culling starts without history
@@ -2252,7 +2316,6 @@ namespace Strata
 			PrepareGPUCulling(renderScene, camera);
 		ReportVisibleAnimators(scene);
 		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
-		const PostProcessComponent postProcess = GetPostProcessSettings(scene);
 		frame.AOParams = glm::vec4(postProcess.AmbientOcclusion ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 
@@ -2536,6 +2599,17 @@ namespace Strata
 		if (overlays)
 		{
 			gpuTimer.Next(gpuStages.Overlays);
+			if (m_TemporalFrame)
+			{
+				// The overlays keep the camera's own matrices, so their lines and glyphs stay steady (the frame's depth they test
+				// against is the jittered one, JitterParams).
+				RenderData::FrameConstants overlayFrame = frame;
+				overlayFrame.Projection = camera.Projection;
+				overlayFrame.ViewProjection = camera.Projection * frame.View;
+				overlayFrame.InverseProjection = glm::inverse(camera.Projection);
+				overlayFrame.InverseViewProjection = glm::inverse(overlayFrame.ViewProjection);
+				commandList->writeBuffer(m_FrameConstantBuffer, &overlayFrame, sizeof(overlayFrame));
+			}
 			commandList->beginMarker("Overlays");
 			const bool overlaysDrawn = RenderOverlays(commandList, scene, camera, options, text, overlayPasses);
 			commandList->endMarker();
@@ -2557,6 +2631,8 @@ namespace Strata
 			SubmitCullReadback();
 		CommitShadowCache();
 
+		if (m_TemporalFrame)
+			m_TemporalRender = m_RenderCount + 1;
 		m_Stats.Rendered = true;
 		m_HasRenderedFrame = true;
 		if (!degraded)

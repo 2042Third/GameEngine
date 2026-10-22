@@ -34,6 +34,7 @@ namespace Strata
 
 			nvrhi::CommandListHandle FrameCommandList;
 			bool BackBufferPrepared = false; // PrepareBackBuffer ran in this frame
+			uint64_t FrameNumber = 0;        // Frames begun (BeginFrame)
 
 			nvrhi::TextureHandle WhiteTexture;
 			nvrhi::TextureHandle BlackTexture;
@@ -240,6 +241,12 @@ namespace Strata
 		s_Data->UploadQueue->BeginFrame();
 		s_Data->DeferredReleases->Collect(DeferredReleaseQueue::c_FrameDestroyBudget);
 		s_Data->BackBufferPrepared = false;
+		s_Data->FrameNumber++;
+	}
+
+	uint64_t Renderer::GetFrameNumber()
+	{
+		return s_Data ? s_Data->FrameNumber : 0;
 	}
 
 	nvrhi::ITexture* Renderer::PrepareBackBuffer()
