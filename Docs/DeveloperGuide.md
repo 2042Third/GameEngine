@@ -980,8 +980,9 @@ two members). A layer's name means the same in every scene and prefab.
   applied in that order; the default table is no section) records one project step; `scene.setSettings` refuses those
   parameters with `InvalidParameters` naming it, and `project.setSettings` sets the whole value. The Collision Layers page
   (`UI/CollisionLayersPage`) names layers in place and edits a compact matrix of the layers shown (layer 0, the named ones,
-  those with a pair kept apart), one command per edit; probe keys under `ProjectSettings.Scene.CollisionLayers.`
-  (`Summary`, `Name.<i>`, `Clear.<i>`, `Add`, `Label.<i>`, `Cell.<a>.<b>`). The Inspector's scene settings show
+  those with a pair kept apart), one command per edit, refused with the reason while the project is not ready
+  (`DescribeAssetScanWait`); probe keys under `ProjectSettings.Scene.CollisionLayers.` (`Summary`, `Name.<i>`,
+  `Clear.<i>`, `Add`, `Label.<i>`, `Cell.<a>.<b>`, `Error`). The Inspector's scene settings show
   "Collision layers: <n> named" with a link to the page (`Inspector.Layers`, `Inspector.Layers.Open`).
 - **Migration.** A project file of version 1 or 2 (`Project::GetFileVersion`) is migrated once when it opens, by every
   path: an I/O job (`Editor/ProjectMigration`) walks the asset directory and reads each scene's settings with

@@ -18,8 +18,10 @@ namespace Strata
 	// The Collision Layers page of the Project Settings window (the project section Scene.CollisionLayers): the names of the
 	// project's layers, edited in place (a name applies when its field is left or Enter is pressed), and the matrix of which
 	// layers collide, compact enough for the layers a game names to fit a laptop's width. Every edit is one
-	// project.setCollisionLayers (one undo step). Probe keys, under "ProjectSettings.Scene.CollisionLayers.": Summary,
-	// Name.<layer>, Clear.<layer>, Add, Label.<layer> and Cell.<a>.<b> (each pair once, a's row before b's).
+	// project.setCollisionLayers (one undo step); while the project is not ready for edits (EditorContext::IsWaitingForAssets)
+	// an edit is refused with the reason. Probe keys, under "ProjectSettings.Scene.CollisionLayers.": Summary, Name.<layer>,
+	// Clear.<layer>, Add, Label.<layer>, Cell.<a>.<b> (each pair once, a's row before b's) and Error (why the last edit was
+	// refused).
 	class CollisionLayersPage final : public SettingsPage
 	{
 	public:

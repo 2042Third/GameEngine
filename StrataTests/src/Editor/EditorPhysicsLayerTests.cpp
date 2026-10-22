@@ -4,7 +4,9 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
+#include "Editor/SaveTestUtils.h"
 #include "EditorLayer.h"
+#include "Perf/WorldFixture.h"
 #include "TestHelpers.h"
 #include "UI/CollisionLayersPage.h"
 #include "UI/ItemProbe.h"
@@ -24,6 +26,7 @@
 #include <imgui_internal.h>
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -401,6 +404,45 @@ TEST_SUITE("Editor.PhysicsLayers")
 		CHECK(editor.Layers().DoCollide(0, 0));
 		CHECK_FALSE(editor.Layers().DoCollide(1, 2));
 		CHECK(editor.ProbeText(LayersEditor::PageKey("Summary")) == "2 named \xC2\xB7 1 pair passes through");
+	}
+
+	TEST_CASE("The Collision Layers page refuses edits until the project is ready, saying why")
+	{
+		// The project opens with its assets scanned in the background, held back while the gate is closed: commands that edit
+		// wait for the scan, which nothing on a page polls.
+		GatedJobSystem jobs;
+		std::string error;
+		const std::optional<ManyAssetsProject> project = WriteManyAssetsProject(CreateTemporaryDirectory("CollisionLayersPageWaits") / "Many", 4, error);
+		REQUIRE_MESSAGE(project.has_value(), error);
+		EditorOptions options;
+		options.ProjectPath = project->Directory;
+		std::optional<HarnessEditor> editor;
+		const std::string summary = LayersEditor::PageKey("Summary");
+		const std::string refusal = LayersEditor::PageKey("Error");
+		{
+			BackgroundGate gate;
+			editor.emplace(ImGuiHarness::Specification {}, options, std::string(), false, true);
+			editor->Frames(3);
+			REQUIRE(editor->Context().IsWaitingForAssets());
+			editor->Layer->ShowProjectSettings(ProjectCollisionLayers::c_SectionId);
+			REQUIRE(editor->FramesUntil([&]() { return UI::ItemProbe::Find(summary).has_value(); }));
+			editor->Frames(1);
+			REQUIRE(editor->Click(LayersEditor::PageKey("Add")));
+			editor->Frames(1);
+			// Refused at once with the reason, rather than left waiting where nothing would ever run it.
+			const std::optional<UI::ItemProbe::Item> said = UI::ItemProbe::Find(refusal);
+			REQUIRE(said.has_value());
+			CHECK(said->Text.find("Not yet") != std::string::npos);
+			CHECK(said->Text.find("still being scanned") != std::string::npos);
+		}
+		// The scan ends: the refused edit never runs, and the same click names the layer now.
+		REQUIRE(editor->FramesUntil([&]() { return !editor->Context().IsWaitingForAssets(); }, std::chrono::minutes(2)));
+		editor->Frames(2);
+		CHECK(editor->Context().GetActiveScene()->GetPhysicsLayers().Names[1].empty());
+		REQUIRE(editor->Click(LayersEditor::PageKey("Add")));
+		editor->Frames(1);
+		CHECK(editor->Context().GetActiveScene()->GetPhysicsLayers().Names[1] == "New Layer");
+		CHECK_FALSE(UI::ItemProbe::Find(refusal).has_value());
 	}
 
 	TEST_CASE("The Inspector links to the page")

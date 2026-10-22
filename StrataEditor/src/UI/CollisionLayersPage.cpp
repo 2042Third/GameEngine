@@ -94,6 +94,13 @@ namespace Strata
 
 	void CollisionLayersPage::Run(EditorPanelContext& context, const nlohmann::json& parameters)
 	{
+		// While the project is not ready (its assets scanned, its start scene opened, a 0.5.0 project migrated) the command would
+		// wait, and nothing on a page runs it later: it is refused, saying why, as RunEditorCommand refuses what the UI runs.
+		if (const std::optional<std::string> waiting = context.Commands.DescribeAssetScanWait(context.Context, "project.setCollisionLayers"))
+		{
+			m_Error = fmt::format("Not yet: {}", *waiting);
+			return;
+		}
 		const EditorCommandResult result = context.Commands.Execute(context.Context, "project.setCollisionLayers", parameters, CommandOrigin { CommandSource::UI });
 		m_Error = result.Success ? std::string() : result.Error;
 	}
@@ -115,7 +122,10 @@ namespace Strata
 		DrawNames(context);
 		DrawMatrix(context);
 		if (!m_Error.empty())
+		{
 			Caption(m_Error, colors.Error, width);
+			UI::ItemProbe::Record(ProbeKey("Error"), true, 0, m_Error);
+		}
 	}
 
 	void CollisionLayersPage::DrawNames(EditorPanelContext& context)
