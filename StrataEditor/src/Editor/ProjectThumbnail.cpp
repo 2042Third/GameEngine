@@ -72,7 +72,7 @@ namespace Strata
 
 	void ProjectThumbnail::Request()
 	{
-		if (m_Requested && (m_Readback || m_Frames > 0))
+		if (m_Requested && (m_Readback || m_Frames > 0 || m_TemporalFrames > 0))
 			m_RequestedAgain = true;
 		m_Requested = true;
 	}
@@ -82,6 +82,7 @@ namespace Strata
 		m_Requested = false;
 		m_RequestedAgain = false;
 		m_Frames = 0;
+		m_TemporalFrames = 0;
 		m_Readback.reset();
 	}
 
@@ -135,19 +136,21 @@ namespace Strata
 				return;
 			}
 			// Complete, as captures wait for it: what loads, glyphs still being prepared (the scene's text and the game UI's),
-			// the finer levels of textures the view wants (a texture counts as loaded with its mip tail), mesh renderers still
-			// on their way to the GPU, and then temporal anti-aliasing's history until it holds the jitter's phases of the
-			// complete view (an incomplete frame starts it again).
+			// the finer levels of textures the view wants (a texture counts as loaded with its mip tail) and mesh renderers still
+			// on their way to the GPU, for at most c_MaxFrames frames (a texture budget may keep levels out for good). An
+			// incomplete frame starts temporal anti-aliasing's history again, so that it holds the jitter's phases of the
+			// complete view, or of the view as it is once that wait ended: the picture then waits for the history too.
 			const SceneRendererStats& stats = renderer->GetStats();
 			const bool incomplete = stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || stats.Overlays.PendingGlyphs > 0 || stats.DeferredProxies > 0
 				|| renderer->CountTexturesBelowWanted() > 0;
-			const bool unsettled = stats.TemporalAntiAliasing && stats.TemporalFrames < c_TemporalSettleFrames;
-			if ((incomplete || unsettled) && ++m_Frames < c_MaxFrames)
+			if (incomplete && ++m_Frames < c_MaxFrames)
 			{
-				if (incomplete)
-					renderer->GetSceneRenderer().ResetHistory();
+				renderer->GetSceneRenderer().ResetHistory();
 				return;
 			}
+			const bool unsettled = stats.TemporalAntiAliasing && stats.TemporalFrames < c_TemporalSettleFrames;
+			if (unsettled && ++m_TemporalFrames < c_MaxTemporalFrames)
+				return;
 			std::string error;
 			m_Readback = TextureReadback::Create(renderer->GetOutputTexture(), {}, &error);
 			// Like captures, the picture keeps no render targets between saves.
@@ -167,6 +170,7 @@ namespace Strata
 		const bool read = m_Readback->GetResult(image);
 		m_Readback.reset();
 		m_Frames = 0;
+		m_TemporalFrames = 0;
 		m_Requested = m_RequestedAgain;
 		m_RequestedAgain = false;
 		if (!read)

@@ -741,6 +741,57 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The project's picture of a TAA scene settles its history also after waiting its frames for what stays incomplete")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path project = Tests::CopyFeatureProject(Tests::CreateTemporaryDirectory("GPUProjectPictureTAA") / "Project").parent_path();
+		// Fine stripes, whose finer levels a view close to them wants.
+		constexpr uint32_t size = 1024;
+		std::vector<uint8_t> pixels(size * size * 4, 255);
+		for (uint32_t y = 0; y < size; y++)
+		{
+			for (uint32_t x = 0; x < size; x++)
+			{
+				const uint8_t value = (x / 4) % 2 == 0 ? 40 : 220;
+				for (uint32_t channel = 0; channel < 3; channel++)
+					pixels[(static_cast<size_t>(y) * size + x) * 4 + channel] = value;
+			}
+		}
+		REQUIRE(FileSystem::WriteBytes(project / "Assets" / "Textures" / "Stripes.png", Tests::EncodePNG(size, size, pixels)));
+		ThumbnailHarness harness(gpu, project);
+		const AssetHandle stripes = harness.Find("Textures/Stripes.png");
+		const nlohmann::json material = harness.Run("material.create", { { "path", "Materials/Stripes.stmat" },
+			{ "properties", { { "BaseColorMap", UUIDToJson(stripes) }, { "Unlit", true } } } })["asset"];
+
+		// A wall of the stripes filling the camera's view, drawn with TAA.
+		harness.Run("scene.new", { { "name", "Picture" }, { "force", true } });
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Transform", { { "Translation", { 0.0, 0.0, 2.0 } } } },
+			{ "Camera", { { "Primary", true } } } } } });
+		harness.Run("entity.create", { { "name", "Wall" }, { "components", { { "Transform", { { "Scale", { 8.0, 8.0, 1.0 } } } },
+			{ "MeshRenderer", { { "Mesh", "Builtin/Quad" }, { "Material", material } } } } } });
+		harness.Run("entity.create", { { "name", "Post Process" }, { "components", { { "PostProcess", { { "AntiAliasingMethod", "TAA" } } } } } });
+
+		// Within 10 KB of textures the stripes never get the levels the view wants: the picture waits its frames for them and is
+		// then taken as it is, but only once the history holds the jitter's phases of those frames.
+		harness.Run("asset.setBudget", { { "gpuTexturesMB", 0.01 } });
+		harness.Run("scene.saveAs", { { "path", "Scenes/Picture.stscene" } });
+		for (int frame = 0; frame < 3000 && harness.Context.GetProjectThumbnail().IsPending(); frame++)
+		{
+			harness.Frame();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		REQUIRE_FALSE(harness.Context.GetProjectThumbnail().IsPending());
+		REQUIRE(FileSystem::Exists(ProjectThumbnail::GetFile(project)));
+		ViewportRenderer* captureRenderer = harness.Context.GetViewport().GetCaptureRenderer();
+		REQUIRE(captureRenderer);
+		CHECK(captureRenderer->CountTexturesBelowWanted() > 0);
+		CHECK(captureRenderer->GetStats().TemporalAntiAliasing);
+		CHECK(captureRenderer->GetStats().TemporalFrames == c_TemporalSettleFrames);
+		harness.Run("asset.setBudget", { { "reset", true } });
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The project's picture shows the levels its textures stream in, and the game's text as a game window shows it")
 	{
 		Tests::GPUContext gpu;

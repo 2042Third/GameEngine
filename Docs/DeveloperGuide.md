@@ -2650,8 +2650,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   turn is 0 and the images are unchanged.
 - Renderers of single images settle or turn TAA off: `viewport.capture` and the project's picture render their still view
   again until the history holds `c_TemporalSettleFrames` (8) complete frames (a frame still incomplete for another reason
-  starts it again), bounded by `c_MaxCaptureTemporalFrames` (16) and `ProjectThumbnail::c_MaxFrames`; the thumbnails'
-  renderer sets `SceneRendererSpecification::TemporalAntiAliasing` off and draws TAA scenes with FXAA.
+  starts it again while its own bounded wait lasts, so a view that stays incomplete still settles once that wait ended),
+  bounded by `c_MaxCaptureTemporalFrames` and `ProjectThumbnail::c_MaxTemporalFrames` (16); the thumbnails' renderer sets
+  `SceneRendererSpecification::TemporalAntiAliasing` off and draws TAA scenes with FXAA.
 - Tests (`GPU.SceneRenderer.TAA`): culling, levels of detail and the cached cascades match a renderer without the jitter;
   a still edge between colors of equal luminance is the mean of its eight jittered frames at eight frames (0.5%) and stays
   within 15% of their spread; a moving box leaves no trail beyond two pixels once it stops; every reset outputs the
