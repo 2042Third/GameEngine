@@ -98,6 +98,7 @@ namespace Strata
 		const nlohmann::json* format = header ? JsonUtils::Find(*header, "Format") : nullptr;
 		const nlohmann::json* version = header ? JsonUtils::Find(*header, "Version") : nullptr;
 		const nlohmann::json* settings = json ? JsonUtils::Find(*json, "Settings") : nullptr;
+		const bool laterFormat = format && *format == c_FormatName && version && version->is_number_unsigned() && version->get<uint64_t>() > c_FormatVersion;
 		const std::string problem = [&]() -> std::string
 		{
 			if (!text)
@@ -122,6 +123,16 @@ namespace Strata
 			}
 			return {};
 		}();
+		if (!problem.empty() && laterFormat)
+		{
+			// A later editor's preferences: replacing the file would discard them for that editor, so it is left as it is (like
+			// 0.5.0's file, which this editor only imports from), and this editor uses the defaults without changing them.
+			m_ReadOnlyReason = fmt::format("the preferences file '{}' is left as it is, because {}: preferences cannot be changed in "
+				"this editor", FileSystem::ToUTF8(m_File), problem);
+			ST_WARN("The preferences '{}' are ignored and left as they are: {}. Their defaults apply, and preferences cannot be changed in "
+				"this editor", FileSystem::ToUTF8(m_File), problem);
+			return;
+		}
 		if (!problem.empty())
 		{
 			ST_WARN("The preferences '{}' are ignored: {}. Changing a preference replaces the file", FileSystem::ToUTF8(m_File), problem);
@@ -243,6 +254,8 @@ namespace Strata
 			return fail(fmt::format("there is no preferences section '{}'", id));
 		if (section->Scope != SettingsScope::User)
 			return fail(fmt::format("'{}' is a project setting, not a preference", id));
+		if (!m_ReadOnlyReason.empty())
+			return fail(m_ReadOnlyReason);
 		std::string error;
 		std::optional<nlohmann::json> validated = section->Validate(value, section->Version, &error);
 		if (!validated)
@@ -266,7 +279,7 @@ namespace Strata
 	bool EditorPreferences::Reset(std::string_view id)
 	{
 		const auto it = m_Data->Entries.find(id);
-		if (it == m_Data->Entries.end())
+		if (it == m_Data->Entries.end() || !m_ReadOnlyReason.empty())
 			return false;
 		m_Data->Entries.erase(it);
 		m_Version = MakeVersion();
@@ -276,7 +289,7 @@ namespace Strata
 
 	void EditorPreferences::Save()
 	{
-		if (m_File.empty())
+		if (m_File.empty() || !m_ReadOnlyReason.empty())
 			return;
 		// The snapshot: a copy of the small values, serialized and written on the writer's job.
 		m_Writer->Submit([file = m_File, json = m_Data->ToFileJson()](std::string* outError)

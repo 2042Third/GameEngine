@@ -954,10 +954,12 @@ registration (and the tests'), and any a module registers. They hold for every p
   the project file's envelope. It is read once, when the editor starts, through `Platform::ReadTrustedFile` (at most
   64 KiB, `c_MaxFileBytes`: the preferences name a program the editor runs, so a file others could have written is not
   read) and written through `Platform::WritePrivateFile` by its own `SettingsFileWriter`, in the background like the
-  project file. A file that cannot be read (too large, not trusted, not JSON, a later format) is ignored with a warning
-  and replaced by the next change; a stored value its section refuses keeps its stored value (its default applies, the
-  warning and `preferences.get`'s `problem` say why) and sections no registered section claims are written back as they
-  were read. `Set` validates through the section (`SettingsSection::Validate`) and refuses a change the file could not
+  project file. A file that cannot be read (too large, not trusted, not JSON) is ignored with a warning and replaced by
+  the next change. A later editor's file (a later format) is ignored too but left as it is, so that editor keeps its
+  preferences: `GetReadOnlyReason` (`preferences.get`'s `readOnly`) says why, and `preferences.set`, `preferences.save`
+  and `script.setExternalEditor` refuse. A stored value its section refuses keeps its stored value (its default
+  applies, the warning and `preferences.get`'s `problem` say why) and sections no registered section claims are written
+  back as they were read. `Set` validates through the section (`SettingsSection::Validate`) and refuses a change the file could not
   hold. A failed write keeps the change in memory and is reported (an error in the log, a notification,
   `preferences.get`'s `fileState` and `fileError`); `preferences.save` writes again, and `editor.quit` refuses meanwhile
   unless forced ([No silent data loss](#no-silent-data-loss)). `EditorContextSpecification::PreferencesFile` names the
@@ -968,7 +970,7 @@ registration (and the tests'), and any a module registers. They hold for every p
   by the section) and writes `Preferences.json` at once, so later starts read only it: a 0.5.0 editor on the same
   machine keeps its own setting, and what it writes later changes nothing here. Nothing to import writes nothing.
 - **Commands.** `preferences.get` (Query, session results) describes every user section like `project.settings` does,
-  with `unclaimed`, `file`, `fileState` and `fileError`; `preferences.set {section, value | reset: true}` (Session)
+  with `unclaimed`, `file`, `fileState`, `fileError` and `readOnly`; `preferences.set {section, value | reset: true}` (Session)
   validates the whole value first and changes nothing when it is refused; `preferences.save` (Session, deferred) writes
   the file and answers once it is written. Preference changes are not undo steps: they are the person's environment,
   not the project's content (`project.setSettings` refuses a user section, `preferences.set` a project section).

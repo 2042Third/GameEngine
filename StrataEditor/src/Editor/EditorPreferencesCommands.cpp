@@ -80,7 +80,9 @@ namespace Strata
 			"JSON Schema of its value, value: what applies, isDefault: whether it is left at its default, problem: why a stored value is refused, "
 			"null when none), in registration order; unclaimed lists sections the file stores that this editor does not know (kept as stored); "
 			"file (null while the preferences are kept in memory only), fileState (written, writing or unwritten: its last write failed, "
-			"preferences.save) and fileError. section narrows sections to one. Works without a project. Set one with preferences.set.",
+			"preferences.save) and fileError; readOnly says why the file is left as it is (a later editor wrote it: this editor uses the "
+			"defaults and changes nothing), null otherwise. section narrows sections to one. Works without a project. Set one with "
+			"preferences.set.",
 			ObjectSchema({ { "section", StringSchema("A section's id (\"<Module>.<Name>\", e.g. \"Editor.ExternalEditor\") to describe alone") } }),
 			[](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
 			{
@@ -112,15 +114,17 @@ namespace Strata
 					{ "unclaimed", preferences.GetUnclaimedSections() },
 					{ "file", preferences.GetFile().empty() ? nlohmann::json(nullptr) : nlohmann::json(FileSystem::ToUTF8(preferences.GetFile())) },
 					{ "fileState", SettingsFileStateToString(preferences.GetFileState()) },
-					{ "fileError", preferences.HasUnwrittenPreferences() ? nlohmann::json(preferences.GetFileError()) : nlohmann::json(nullptr) } });
+					{ "fileError", preferences.HasUnwrittenPreferences() ? nlohmann::json(preferences.GetFileError()) : nlohmann::json(nullptr) },
+					{ "readOnly", preferences.GetReadOnlyReason().empty() ? nlohmann::json(nullptr) : nlohmann::json(preferences.GetReadOnlyReason()) } });
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "preferences.set",
 			"Sets one of the person's preference sections (preferences.get lists them with their schemas) to a value, or with reset: true back to "
 			"its default. Preferences are the person's own and hold for every project: the change is not an undo step and leaves the project and "
 			"the scene alone; the preferences file is written in the background (preferences.save waits for it). The value replaces the "
-			"section's whole value and is checked by the section first: an invalid one changes nothing and fails naming what is wrong. Works "
-			"without a project and while playing. Returns section, value (what applies now) and isDefault.",
+			"section's whole value and is checked by the section first: an invalid one changes nothing and fails naming what is wrong; it also "
+			"fails while the file is left as it is (preferences.get's readOnly). Works without a project and while playing. Returns section, "
+			"value (what applies now) and isDefault.",
 			ObjectSchema({
 				{ "section", StringSchema("The section's id, \"<Module>.<Name>\"") },
 				{ "value", { { "description", "The section's new value, matching its schema (preferences.get)" } } },
@@ -140,6 +144,8 @@ namespace Strata
 				const SettingsSection* section = FindPreferenceSection(preferences.GetRegistry(), id, failure);
 				if (!section)
 					return std::move(*failure);
+				if (!preferences.GetReadOnlyReason().empty())
+					return EditorCommandResult::Fail(fmt::format("Cannot change '{}': {}", id, preferences.GetReadOnlyReason()));
 				std::string error;
 				if (reset)
 					preferences.Reset(id);
@@ -152,14 +158,16 @@ namespace Strata
 		registry.Register(MayDefer({ "preferences.save",
 			"Writes the preferences file now and answers once it is written: preferences are written in the background after every change "
 			"anyway, so this is for after a write failed (preferences.get's fileState \"unwritten\", fileError says why) once its cause is fixed, "
-			"and for waiting until the file holds the latest change. Fails with the reason when the write fails. Returns file (null while the "
-			"preferences are kept in memory only: nothing is written then).",
+			"and for waiting until the file holds the latest change. Fails with the reason when the write fails, or when the file is left as it "
+			"is (preferences.get's readOnly). Returns file (null while the preferences are kept in memory only: nothing is written then).",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				EditorPreferences& preferences = context.GetPreferences();
 				if (preferences.GetFile().empty())
 					return EditorCommandResult::Ok({ { "file", nullptr } });
+				if (!preferences.GetReadOnlyReason().empty())
+					return EditorCommandResult::Fail(fmt::format("Nothing is written: {}", preferences.GetReadOnlyReason()));
 				preferences.Save();
 				return EditorCommandResult::Defer([](EditorContext& context) -> std::optional<EditorCommandResult>
 				{

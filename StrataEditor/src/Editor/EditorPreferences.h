@@ -62,15 +62,20 @@ namespace Strata
 		std::vector<std::string> GetUnclaimedSections() const;
 		// Changes whenever a value changes.
 		uint64_t GetVersion() const { return m_Version; }
+		// Why the file is left as it is, empty when the editor may write it: a later editor wrote it (a later format, which this
+		// editor cannot read), and replacing it would discard that editor's preferences. Every section has its default then,
+		// and changes are refused (Set, Reset, Save).
+		const std::string& GetReadOnlyReason() const { return m_ReadOnlyReason; }
 
 		// Sets a user section to `value` (validated by its section) and queues a write of the file. False, with nothing
-		// changed and the reason, when no user section has that id, the value is invalid or the file would outgrow
-		// c_MaxFileBytes.
+		// changed and the reason, when no user section has that id, the value is invalid, the file would outgrow
+		// c_MaxFileBytes or is left as it is (GetReadOnlyReason).
 		bool Set(std::string_view id, const nlohmann::json& value, std::string* outError = nullptr);
 		// Removes a stored section (its default applies again) and queues a write; false when it was not stored.
 		bool Reset(std::string_view id);
 
-		// Queues a write of the file as it is now (preferences.save: after a failed write, once its cause is gone).
+		// Queues a write of the file as it is now (preferences.save: after a failed write, once its cause is gone); nothing while
+		// the file is left as it is (GetReadOnlyReason).
 		void Save();
 		// Once per frame: publishes a write that ended and starts the next one.
 		void Update();
@@ -97,6 +102,7 @@ namespace Strata
 	private:
 		const SettingsRegistry& m_Registry;
 		std::filesystem::path m_File;
+		std::string m_ReadOnlyReason;
 		Scope<Data> m_Data; // Never null
 		uint64_t m_Version;
 		Scope<SettingsFileWriter> m_Writer;

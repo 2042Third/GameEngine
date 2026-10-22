@@ -232,6 +232,35 @@ TEST_SUITE("Editor.Preferences")
 		CHECK((*written)["Settings"]["Later.Feature"] == unclaimed);
 	}
 
+	TEST_CASE("A preferences file of a later format is left as it is")
+	{
+		PreferencesRegistry settings;
+		const std::filesystem::path file = CreateTemporaryDirectory("PreferencesLater") / "Strata" / "Preferences.json";
+		const std::string later = JsonUtils::Dump({ { "Strata", { { "Format", "Preferences" }, { "Version", 2 } } },
+			{ "Settings", { { ExternalEditor::c_SettingsSection, { { "Version", 1 }, { "Value", { { "Command", "code {file}" } } } } } } } });
+		REQUIRE(Platform::WritePrivateFile(file, later));
+		PreferencesHarness harness(file, &settings.Registry);
+		const EditorPreferences& preferences = harness.Context.GetPreferences();
+		// This editor cannot read it: the defaults apply, and it says why nothing can be changed.
+		CHECK(GetCommand(preferences).empty());
+		REQUIRE_FALSE(preferences.GetReadOnlyReason().empty());
+		CHECK(preferences.GetReadOnlyReason().find("later editor") != std::string::npos);
+		CHECK(harness.Run("preferences.get")["readOnly"] == preferences.GetReadOnlyReason());
+
+		// Changes are refused, through every path, rather than replacing the later editor's preferences.
+		const EditorCommandResult set = harness.Execute("preferences.set", { { "section", "Test.Preferences" }, { "value", { { "Size", 3 } } } });
+		CHECK_FALSE(set.Success);
+		CHECK(set.Error.find("later editor") != std::string::npos);
+		CHECK_FALSE(harness.Execute("preferences.set", { { "section", ExternalEditor::c_SettingsSection }, { "reset", true } }).Success);
+		std::string error;
+		CHECK_FALSE(harness.Context.GetExternalEditor().SetUserCommand("", &error));
+		CHECK_FALSE(harness.Execute("preferences.save").Success);
+		CHECK_FALSE(preferences.FindSection("Test.Preferences"));
+		REQUIRE(harness.WaitForWrites());
+		CHECK(harness.Context.GetPreferences().GetWriter().GetWriteCount() == 0);
+		CHECK(FileSystem::ReadText(file) == later);
+	}
+
 	TEST_CASE("STRATA_EXTERNAL_EDITOR still wins")
 	{
 		ScopedEnvironmentVariable noOverride("STRATA_EXTERNAL_EDITOR", "");

@@ -44,4 +44,5 @@ them back on the same page. **Close** or Escape closes the window.
 
 Strata 0.5.0 kept the external editor in `EditorSettings.json` in the same folder. The first time a later editor starts,
 it copies that setting into its preferences; from then on each version keeps its own, so an older editor installed beside
-it keeps working as it did.
+it keeps working as it did. An editor older than the one that last saved your preferences, if it cannot read them, leaves
+them as they are: it uses the defaults and lets you change nothing, so the newer editor still has them.
