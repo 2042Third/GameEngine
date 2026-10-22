@@ -201,7 +201,9 @@ process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime
 them), `Crypto` (SHA-256, peer authentication), `Base64`, `CommandLine`, `Timer`/`FramePacer`, `JsonUtils`
 (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the audio thread), `EngineServices` (process-wide
 interfaces a module or the program running a game offers the modules that may not include it, such as the audio output's
-master volume, `IAudioOutput`, the game's window, `IGameWindow`, and its save directory, `IGameSaves`), `SaveFiles` (a
+master volume, `IAudioOutput`, the game's window, `IGameWindow`, and its save directory, `IGameSaves`),
+`SettingsRegistry` and `ProjectSettings` (the settings sections modules register, and the project's values of them, read
+through the engine service `IProjectSettings`: DeveloperGuide.md, "Project settings"), `SaveFiles` (a
 game's save files: names checked before any path is formed, atomic writes; `SaveDirectory`), `FrameProfiler` (the
 always-on timer of the main thread's frame stages, see [Frame profiler](#frame-profiler)) and `Profiling`
 (`ST_PROFILE_STAGE`; Tracy with `STRATA_ENABLE_TRACY`).
@@ -564,8 +566,8 @@ The engine is extended through registries rather than through code that knows it
 `AssetImporterRegistry` (source files to stored bytes), `AssetManagerExtensionRegistry` (work modules do for every asset
 manager: the texture streamer), `BuiltinAssets` (objects of the built-in assets), `MeshGeometryRegistry` (the triangles of
 mesh assets for modules that do not draw them: physics), `SceneSystemRegistry` (runtime systems of playing scenes) and
-`SceneOverlayRegistry` (passes every `SceneRenderer` draws over the scene: the game UI's, see [Game UI](#game-ui)).
-`Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`) fills them, once per process, before anything reads
+`SceneOverlayRegistry` (passes every `SceneRenderer` draws over the scene: the game UI's, see [Game UI](#game-ui)) and
+the process's `SettingsRegistry` (project settings and preference sections). `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`) fills them, once per process, before anything reads
 them. Its modules are a table (`c_BuiltinModules`: a name and a registration function each, lower layers first), run in
 order but for those `ModuleRegistrationOptions::Exclude` names; `Engine::GetBuiltinModuleNames` lists the table and
 `Engine::GetRegisteredModules` what registered:
@@ -592,7 +594,7 @@ RegisterGameUIModule       GameUI/GameUIRegistration.cpp       its components (G
                                                                (SceneOverlayRegistry); "UI" system
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
-ComponentRegistry::Freeze
+ComponentRegistry::Freeze, then the process's SettingsRegistry
 log the registered modules, the scene systems' update order and the soft constraints naming absent systems
 ```
 

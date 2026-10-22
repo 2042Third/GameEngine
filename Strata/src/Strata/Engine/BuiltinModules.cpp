@@ -5,6 +5,7 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/MeshGeometry.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/GameUI/GameUIRegistration.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/RendererRegistration.h"
@@ -154,6 +155,7 @@ namespace Strata::Engine
 		}
 
 		ComponentRegistry::Freeze();
+		SettingsRegistry::GetProcessRegistry().Freeze();
 		s_State.store(RegistrationState::Registered, std::memory_order_release);
 
 		std::string order;

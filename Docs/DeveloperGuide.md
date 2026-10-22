@@ -31,6 +31,7 @@ stays under 40,000 characters (the test `Docs.AgentGuide` fails beyond). How the
   - [Script modules and package tests](#script-modules-and-package-tests)
 - [Code style](#code-style)
 - [Architecture rules](#architecture-rules)
+- [Project settings](#project-settings)
 - [Asset pipeline](#asset-pipeline)
   - [Asset files](#asset-files)
   - [Importers](#importers)
@@ -818,6 +819,43 @@ short. Their full wording:
   `Scene::GetSiblingIndex` (cached), never by searching the child list, and remove many entities with one
   `DestroyEntities` call. A registry holds at most `Scene::c_MaxEntities` (1,048,575) live entities; creating more
   fails with an error.
+
+## Project settings
+
+Project settings (kept with the project, carried into the games it exports) and the user's preferences (the editor's)
+are *sections* that the module owning them registers in a `SettingsRegistry` (`Strata/Core/SettingsRegistry.h`): a new
+setting is one registration, and no other code learns of it.
+
+- **Sections.** A section has an id `<Module>.<Name>` (`Scene.CollisionLayers`: two PascalCase identifiers,
+  `SettingsRegistry::IsValidSectionId`), a title, a category and a description written for agents, a scope (`Project`
+  or `User`) and a version, stored with its value. A *simple* section lists `Fields` (Bool, Int, Float, String, Enum or
+  Asset, each with a title, a description, its range, length, options or asset type, and a default): its value is an
+  object of them, which the section validates, describes (`GetValueSchema`, a JSON Schema) and defaults from them. A
+  *complex* section has no fields and gives `Schema`, `MakeDefault` and `Read`, and `References` when its value names
+  assets.
+- **One validation.** `SettingsSection::Validate` is the only check of a value: loading a project, the runtime's
+  manifest, commands and pages all call it, and it never asserts (values come from files and agents). It refuses a value
+  over 512 KiB (compact JSON) and a version newer than the section's, upgrades an older one (`Read` does; in a simple
+  section, fields added since take their defaults and members of fields removed since are dropped), then checks the
+  fields, naming the first bad one in the order of `Fields` (members that name no field are refused), or calls `Read`.
+- **Registering.** Modules register their sections in their registration function (`Register<Module>Module`), games and
+  the editor theirs through `ModuleRegistrationOptions::Extra`, into `SettingsRegistry::GetProcessRegistry()`, which
+  `Engine::RegisterBuiltinModules` freezes with the component registry. `Register` refuses, with the reason logged, an
+  invalid or taken id, a section without title, category or description, a simple section that also gives `Read`,
+  `MakeDefault`, `Schema` or `References`, a complex section without them, and a default its own validation refuses.
+- **The registry parameter.** Code that validates takes the registry it validates with (`ProjectSettingsValues::Validate`,
+  `Set`, `GetReferences`). Unit tests register their sections in a local registry
+  (`StrataTests/src/Core/SettingsTestUtils.h`: `Test.Simple`, a field of every type; `Test.Complex`, version 2 with an
+  upgrade and references); only what must go through the process registry registers in a child process.
+- **Reading.** Modules pull their settings: on the main thread, a consumer reads its section through the engine service
+  `IProjectSettings` (`Strata/Core/ProjectSettings.h`; `EngineServices::Get` is null while no program provides one, and
+  `FindSection` null while the project does not set the section: the default applies) and keeps what it made of the
+  value until `GetVersion()` changes. Versions are unique across the process, so a provider replaced by another is
+  noticed as well. Worker threads never read the service. `ProjectSettingsValues` is the implementation every provider
+  uses: it keeps every stored section, also those no registered section claims (a build without the module) and those
+  whose value its section refuses (both written back unchanged), and provides only validated ones.
+- **References.** A simple section's Asset fields name their handle, a complex section's `References` what its value
+  names; `ProjectSettingsValues::GetReferences` lists every validated section's, each valid handle once.
 
 ## Asset pipeline
 

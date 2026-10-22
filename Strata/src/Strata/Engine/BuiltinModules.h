@@ -14,7 +14,8 @@ namespace Strata::Engine
 		// names the importers itself, so they are not linked into games, whose importer registry stays closed.
 		std::function<void()> AssetPipeline;
 		// Registrations of games, tools and tests, run after the engine's modules and the asset pipeline while the
-		// registries are open: the place to register components (ComponentRegistry::Register), which is frozen afterwards.
+		// registries are open: the place to register components (ComponentRegistry::Register) and settings sections
+		// (SettingsRegistry::GetProcessRegistry), which are frozen afterwards.
 		std::vector<std::function<void()>> Extra;
 		// Engine modules of this build not to register, by name (GetBuiltinModuleNames): a test of what a game without them
 		// does, in a full build. Their components stay unknown components, their systems and services are absent. Scene and
@@ -31,7 +32,7 @@ namespace Strata::Engine
 
 	// The engine's composition root: opens the registries (components, asset loaders, built-in assets, scene systems), lets
 	// every engine module register into them in dependency order, runs options.AssetPipeline and options.Extra and freezes
-	// the component registry. Every program that uses the engine calls it once at startup, before anything touches a
+	// the component and settings registries. Every program that uses the engine calls it once at startup, before anything touches a
 	// registry: programs built on Strata/Engine/EntryPoint.h get this from its main, which calls it with the
 	// ApplicationLaunch::Registration that CreateApplication returns, before it creates the Application; tests and tools
 	// without that entry point call it first in their own main (StrataTests' does). Application never calls it. A second
