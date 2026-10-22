@@ -2697,6 +2697,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (1) of the cascade's texels (`SceneRendererStats::SubTexelCasters` counts those left out, per cascade): smaller ones
   only flicker in and out of texels. `FindShadowCasters` queries the cascades as one job each and tests the candidates
   in parallel chunks merged in chunk order, so its casters do not depend on the threads.
+- Cascade blending (`DirectionalLightComponent::CascadeBlend`, 0 to 0.5, 0.1 by default and for scenes saved before
+  it): each cascade's band is the last `CascadeBlend` of its slice's depth range, before its split (the first slice's
+  range counted from the camera). `Include/Shadows.glsl` (`CascadeBlendWeight`) mixes a band's pixels with the next
+  cascade by depth, and the last cascade's with no shadow, so no seam shows between cascades and shadows fade out by the
+  shadow distance instead of stopping. `FindShadowCasters` starts each next slice at the previous band before fitting
+  its sphere, so the next square covers the band; the CPU's caster test, the GPU's `CullConstants::CascadeBoxes`, the
+  fit and the cascade cache's keys all read those boxes. Its cost: a second PCSS evaluation in the bands' pixels, and
+  slightly larger squares (lower texel density, more casters) for cascades 1 to 3. 0 switches cascades at once, as 0.5.0
+  did (`GPU.SceneRenderer.Shadows`: the seam, the bands' coverage at 0.5, the fade).
 - HDR targets are RGBA16F: shaders writing them clamp with `SanitizeHDR` (Inf and NaN would turn
   black after tone mapping). Instances with a mirroring transform (negative determinant) use
   pipelines with clockwise front faces and flip their tangent handedness (`c_InstanceMirrored`). The ambient occlusion

@@ -109,6 +109,26 @@ TEST_SUITE("Reflection")
 		CHECK_FALSE(method->SetValue(&postProcess, int32_t(2)));
 		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::TAA);
 
+		// The directional light's cascade blend: 0.1 by default, within [0, 0.5]; commands refuse values outside, editors clamp.
+		const PropertyInfo* blend = ComponentRegistry::Find<DirectionalLightComponent>()->FindProperty("CascadeBlend");
+		REQUIRE(blend);
+		CHECK(blend->Type == PropertyType::Float);
+		CHECK(blend->Min == 0.0f);
+		CHECK(blend->Max == DirectionalLightComponent::c_MaxCascadeBlend);
+		CHECK(DirectionalLightComponent::c_MaxCascadeBlend == 0.5f);
+		DirectionalLightComponent sun;
+		CHECK(sun.CascadeBlend == doctest::Approx(0.1f));
+		CHECK(blend->IsInRange(PropertyValue(0.0f)));
+		CHECK(blend->IsInRange(PropertyValue(0.5f)));
+		CHECK_FALSE(blend->IsInRange(PropertyValue(0.6f)));
+		CHECK_FALSE(blend->IsInRange(PropertyValue(-0.1f)));
+		CHECK(blend->SetValue(&sun, PropertyValue(0.25f)));
+		CHECK(sun.CascadeBlend == doctest::Approx(0.25f));
+		CHECK(blend->SetValue(&sun, PropertyValue(0.9f)));
+		CHECK(sun.CascadeBlend == doctest::Approx(0.5f));
+		CHECK_FALSE(blend->SetValue(&sun, std::numeric_limits<float>::quiet_NaN()));
+		CHECK(sun.CascadeBlend == doctest::Approx(0.5f));
+
 		const PropertyInfo* rotation = ComponentRegistry::Find<TransformComponent>()->FindProperty("Rotation");
 		TransformComponent transform;
 		CHECK(rotation->SetValue(&transform, glm::quat(2.0f, 0.0f, 0.0f, 0.0f)));
@@ -220,6 +240,13 @@ TEST_SUITE("Scene.InactiveProperties")
 			REQUIRE(found);
 			return ComponentAccess::GetInactiveReason(entity, *info, *found);
 		};
+
+		// The directional light's cascade blend while it casts no shadows.
+		DirectionalLightComponent& sun = entity.AddComponent<DirectionalLightComponent>();
+		CHECK(reason("DirectionalLight", "CascadeBlend").empty());
+		sun.CastShadows = false;
+		CHECK(reason("DirectionalLight", "CascadeBlend") == "Cast Shadows is off");
+		CHECK(reason("DirectionalLight", "Intensity").empty()); // Always active
 
 		// The sky: the map's properties with the procedural sky, the procedural sky's with a map, the ambient color with either.
 		SkyLightComponent& sky = entity.AddComponent<SkyLightComponent>();

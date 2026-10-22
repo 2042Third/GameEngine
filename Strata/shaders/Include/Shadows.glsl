@@ -3,7 +3,8 @@
 
 // Directional light shadows: cascaded shadow maps (reversed-Z: larger depth = closer to the light) filtered with
 // percentage-closer soft shadows (PCSS): a blocker search estimates the penumbra from the light's angular size,
-// then percentage-closer filtering with that radius softens the edge. Acne is prevented by the rasterizer's slope
+// then percentage-closer filtering with that radius softens the edge. Each cascade blends into the next one over a band
+// before its split (the last one fades out). Acne is prevented by the rasterizer's slope
 // bias (shadow pass), a constant depth bias and a normal offset (ShadowBias), and a receiver plane depth bias that
 // follows the receiver's slope across the filter region.
 
@@ -40,6 +41,20 @@ int SelectCascade(float viewDepth)
 	return -1;
 }
 
+// How far a pixel is into the band where its cascade hands over to the next one (the last one fades out): 0 before the
+// band, 1 at the split. The band is the last ShadowParams.z of the cascade's depth range, from the previous split (the
+// first cascade's from the camera, at 0), as SceneRenderer::FindShadowCasters lays it out: the next cascade's slice starts
+// at the band, so its square covers it.
+float CascadeBlendWeight(int cascade, float viewDepth)
+{
+	float split = u_Frame.CascadeSplits[cascade];
+	float previousSplit = cascade > 0 ? u_Frame.CascadeSplits[cascade - 1] : 0.0;
+	float band = u_Frame.ShadowParams.z * (split - previousSplit);
+	if (!(band > 0.0))
+		return 0.0;
+	return clamp((viewDepth - (split - band)) / band, 0.0, 1.0);
+}
+
 // Receiver plane depth bias: the gradient of the receiver's light-space depth over the shadow map's uv, from the plane
 // through the receiver with its normal (in the cascade's orthographic light clip space the plane's normal is the world
 // normal through the inverse transpose of the projection, the cofactor matrix up to scale). Filter samples are compared
@@ -59,13 +74,9 @@ vec2 ReceiverDepthGradient(mat4 cascadeViewProjection, vec3 normal)
 	return vec2(-2.0 * lightNormal.x, 2.0 * lightNormal.y) / lightNormal.z;
 }
 
-// Fraction of light reaching the surface (1 = fully lit); `normal` is the receiver's geometric normal (facing the viewer).
-float SampleDirectionalShadow(vec3 relativePosition, vec3 normal, float viewDepth, vec2 pixel)
+// Fraction of light reaching the surface in one cascade (1 = fully lit, also outside the cascade's square).
+float SampleCascadeShadow(int cascade, vec3 relativePosition, vec3 normal, mat2 rotation)
 {
-	int cascade = SelectCascade(viewDepth);
-	if (cascade < 0)
-		return 1.0;
-
 	// Normal offset: push the lookup position off the surface by about a shadow texel to avoid acne.
 	vec4 cascadeData = u_Cascades[cascade].Parameters; // x: world units per texel, y: depth range, z: search distance (world units)
 	mat4 cascadeViewProjection = u_Cascades[cascade].ViewProjection;
@@ -84,7 +95,6 @@ float SampleDirectionalShadow(vec3 relativePosition, vec3 normal, float viewDept
 	float maxCorrection = cascadeData.z / depthRange;
 
 	float texelSize = u_Frame.ShadowParams.y;
-	mat2 rotation = ShadowSampleRotation(pixel);
 
 	// Blocker search over the region that could shade this receiver: the penumbra of blockers up to the search
 	// distance away.
@@ -119,6 +129,26 @@ float SampleDirectionalShadow(vec3 relativePosition, vec3 normal, float viewDept
 		shadowed += texture(sampler2DArrayShadow(u_ShadowMap, u_ShadowCompareSampler), vec4(uv + offset, float(cascade), reference));
 	}
 	return 1.0 - shadowed / 16.0;
+}
+
+// Fraction of light reaching the surface (1 = fully lit); `normal` is the receiver's geometric normal (facing the viewer).
+// Pixels in a cascade's blend band mix it with the next cascade by depth (the last cascade with no shadow), so neither the
+// seam between cascades nor the end of the shadows at the shadow distance shows.
+float SampleDirectionalShadow(vec3 relativePosition, vec3 normal, float viewDepth, vec2 pixel)
+{
+	int cascade = SelectCascade(viewDepth);
+	if (cascade < 0)
+		return 1.0;
+
+	mat2 rotation = ShadowSampleRotation(pixel);
+	float shadow = SampleCascadeShadow(cascade, relativePosition, normal, rotation);
+	float blend = CascadeBlendWeight(cascade, viewDepth);
+	if (blend > 0.0)
+	{
+		float next = cascade + 1 < int(u_Frame.ShadowParams.w) ? SampleCascadeShadow(cascade + 1, relativePosition, normal, rotation) : 1.0;
+		shadow = mix(shadow, next, blend);
+	}
+	return shadow;
 }
 
 #endif

@@ -23,6 +23,13 @@ namespace Strata
 		float ShadowSoftness = 1.0f;    // Angular diameter of the light in degrees (the sun is about 0.5): penumbra size
 		float ShadowBias = 1.0f;        // Depth offset toward the light, in shadow map texels
 		float ShadowNormalBias = 1.5f;  // Offset along the surface normal, in shadow map texels
+		// Fraction of each shadow cascade's depth range, before its far end, over which it blends into the next cascade (the
+		// last one fades out, ending at ShadowDistance): hides the seams between cascades. 0 switches cascades at once.
+		float CascadeBlend = 0.1f;
+
+		// At most half of a slice: a cascade's band then never reaches back into the previous one's, so a pixel blends two
+		// cascades at most.
+		static constexpr float c_MaxCascadeBlend = 0.5f;
 	};
 
 	// Point and spot lights cast no shadows (only the directional light does).

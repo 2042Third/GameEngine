@@ -631,6 +631,7 @@ namespace Strata
 			float Softness = 1.0f;
 			float Bias = 1.0f;
 			float NormalBias = 1.5f;
+			float CascadeBlend = 0.1f; // DirectionalLightComponent::CascadeBlend, within [0, 0.5]
 		};
 
 		// A transparent submesh instance, drawn on its own, back to front.

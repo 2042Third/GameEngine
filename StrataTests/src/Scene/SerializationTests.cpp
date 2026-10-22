@@ -57,7 +57,9 @@ namespace
 		mesh.SetActive(false);
 
 		Entity lights = scene->CreateEntity("Lights");
-		lights.AddComponent<DirectionalLightComponent>().Intensity = 5.0f;
+		DirectionalLightComponent& sun = lights.AddComponent<DirectionalLightComponent>();
+		sun.Intensity = 5.0f;
+		sun.CascadeBlend = 0.3f;
 		lights.AddComponent<PointLightComponent>().Range = 42.0f;
 		lights.AddComponent<SpotLightComponent>().OuterConeAngle = 45.0f;
 		lights.AddComponent<SkyLightComponent>().EnvironmentMap = UUID(99);
@@ -202,6 +204,7 @@ TEST_SUITE("Scene.Serialization")
 #endif
 
 		CHECK(loaded.FindEntityByName("Lights").GetComponent<PostProcessComponent>().AntiAliasingMethod == AntiAliasingMode::TAA);
+		CHECK(loaded.FindEntityByName("Lights").GetComponent<DirectionalLightComponent>().CascadeBlend == doctest::Approx(0.3f));
 
 		Entity ui = loaded.FindEntityByName("UI");
 		CHECK(ui.GetComponent<TextComponent>().Text == "Score: 0\nLine two \xE2\x9C\x93");
@@ -356,6 +359,39 @@ TEST_SUITE("Scene.Serialization")
 		loaded = load({ { "AntiAliasingMethod", 7 } }, warnings);
 		CHECK(CountWarnings(warnings, "AntiAliasingMethod") == 1);
 		CHECK(loaded.AntiAliasingMethod == AntiAliasingMode::FXAA);
+	}
+
+	TEST_CASE("Directional lights saved before cascade blending load with the default blend; invalid blends are clamped or warn")
+	{
+		const auto load = [](const nlohmann::json& light, std::vector<std::string>& warnings)
+		{
+			const nlohmann::json document = {
+				{ "Strata", { { "Format", "Scene" }, { "Version", 1 } } },
+				{ "Scene", { { "Name", "Old" }, { "Entities", { { { "ID", "00000000000000AA" }, { "Components", {
+					{ "Name", { { "Name", "Sun" } } }, { "DirectionalLight", light } } } } } } } }
+			};
+			Scene scene;
+			std::string error;
+			REQUIRE_MESSAGE(SceneSerializer::Deserialize(scene, document, &error, &warnings), error);
+			return scene.GetEntityByUUID(UUID(0xAA)).GetComponent<DirectionalLightComponent>();
+		};
+		// As 0.5.0 saved it: every shadow setting but the blend, which then blends at its default (cascade blending is on
+		// for existing scenes).
+		std::vector<std::string> warnings;
+		DirectionalLightComponent loaded = load({ { "CastShadows", true }, { "Intensity", 3 }, { "ShadowBias", 1 }, { "ShadowDistance", 80 },
+			{ "ShadowNormalBias", 1.5 }, { "ShadowSoftness", 1 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.CascadeBlend == doctest::Approx(0.1f));
+		loaded = load({ { "CascadeBlend", 0 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.CascadeBlend == 0.0f);
+		// Out of range: clamped, as every ranged property is; not a number: a warning, and the default.
+		loaded = load({ { "CascadeBlend", 0.9 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.CascadeBlend == doctest::Approx(0.5f));
+		loaded = load({ { "CascadeBlend", "wide" } }, warnings);
+		CHECK(CountWarnings(warnings, "CascadeBlend") == 1);
+		CHECK(loaded.CascadeBlend == doctest::Approx(0.1f));
 	}
 
 	TEST_CASE("Hand-written entity data without ids is accepted")

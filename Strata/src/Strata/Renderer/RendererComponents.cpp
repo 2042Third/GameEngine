@@ -14,9 +14,9 @@ namespace Strata
 	namespace
 	{
 
-		// Inactive reasons (PropertyInfo::InactiveReason) of the sky's and post-processing's properties, each following the code
-		// that reads the property in SceneRenderer: the sky and its environment, the ambient light, automatic exposure, bloom
-		// and ambient occlusion.
+		// Inactive reasons (PropertyInfo::InactiveReason) of the lights', the sky's and post-processing's properties, each
+		// following the code that reads the property in SceneRenderer: shadows, the sky and its environment, the ambient light,
+		// automatic exposure, bloom and ambient occlusion.
 		template<typename T>
 		void SetInactiveReasons(std::initializer_list<const char*> properties, std::string (*reason)(const T&))
 		{
@@ -42,6 +42,11 @@ namespace Strata
 			if (sky.EnvironmentMap.IsValid())
 				return "The environment map lights the scene: the ambient color applies only without one";
 			return {};
+		}
+
+		std::string WithShadows(const DirectionalLightComponent& light)
+		{
+			return light.CastShadows ? std::string() : "Cast Shadows is off";
 		}
 
 		std::string WithAutoExposure(const PostProcessComponent& post)
@@ -85,7 +90,11 @@ namespace Strata
 			.Property("ShadowDistance", &DirectionalLightComponent::ShadowDistance, Range(1.0f, 10000.0f, 1.0f))
 			.Property("ShadowSoftness", &DirectionalLightComponent::ShadowSoftness, Range(0.0f, 10.0f, 0.01f))
 			.Property("ShadowBias", &DirectionalLightComponent::ShadowBias, Range(0.0f, 10.0f, 0.01f))
-			.Property("ShadowNormalBias", &DirectionalLightComponent::ShadowNormalBias, Range(0.0f, 10.0f, 0.01f));
+			.Property("ShadowNormalBias", &DirectionalLightComponent::ShadowNormalBias, Range(0.0f, 10.0f, 0.01f))
+			.Property("CascadeBlend", &DirectionalLightComponent::CascadeBlend,
+				WithTooltip(Slider(0.0f, DirectionalLightComponent::c_MaxCascadeBlend), "Fraction of each shadow cascade's depth range over which it blends into the next one, "
+					"hiding the seams between them; the last one fades out by the Shadow Distance. 0 switches at once"));
+		SetInactiveReasons<DirectionalLightComponent>({ "CascadeBlend" }, &WithShadows);
 
 		ComponentRegistry::Register<PointLightComponent>("PointLight")
 			.DisplayName("Point Light")

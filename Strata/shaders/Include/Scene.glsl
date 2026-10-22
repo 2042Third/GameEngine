@@ -53,7 +53,9 @@ struct FrameConstants
 	vec4 TimeParams;                // x: scene time in seconds
 	vec4 SkyParams;                 // x: background mip (blur), y: 1 when the environment is the background
 	vec4 CascadeSplits;             // View distance where each cascade ends (their projections: u_Cascades)
-	vec4 ShadowParams;              // x: 2 tan(light angular radius), y: 1 / shadow map size, w: cascade count (0 = none)
+	// x: 2 tan(light angular radius), y: 1 / shadow map size, z: the fraction of each cascade's depth range over which it blends
+	// into the next (DirectionalLightComponent::CascadeBlend), w: cascade count (0 = none)
+	vec4 ShadowParams;
 	vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 	vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
 	vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)

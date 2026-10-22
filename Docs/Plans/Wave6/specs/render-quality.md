@@ -786,7 +786,9 @@ the cases specific to each.
 - Components: `CascadeBlend` in [0, 0.5], inactive without `CastShadows`; a 0.5.0 light without the key loads with the
   new default 0.1 (the deliberate change of D6).
 - Must-fail: do not move slice c+1's near end (the band case fails at `CascadeBlend` 0.5).
-- Feature test: `Sun.CascadeBlend` 0.2. Thumbnails render one cascade: no thumbnail change (checked).
+- Feature test: `Sun.CascadeBlend` 0.2. Thumbnails render one cascade, whose band fades the last tenth of the shadow
+  distance (72 to 80 m under the preview sun), which large models reach: `ThumbnailCache::c_Version` 4 (S3). Values out
+  of range in files are clamped, as every ranged property's are (no warning); values of another type warn.
 
 ### 6.4 Height fog (S4)
 

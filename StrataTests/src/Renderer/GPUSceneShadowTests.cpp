@@ -1,6 +1,13 @@
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Renderer/RendererComponents.h"
 
+#include <glm/gtc/packing.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <vector>
+
 using namespace Strata;
 using namespace Strata::Tests;
 
@@ -62,6 +69,110 @@ namespace
 		const float a = glm::radians(azimuth);
 		return -glm::vec3(std::cos(e) * std::cos(a), std::sin(e), std::cos(e) * std::sin(a));
 	}
+
+	// A camera at `position` looking along -Z, `pitch` degrees below the horizon, with a vertical field of view of `fov`
+	// degrees: its rows see the floor (y = 0) each at one view depth.
+	SceneCamera PitchedCamera(const glm::vec3& position, float pitch, float fov)
+	{
+		const float radians = glm::radians(pitch);
+		SceneCamera camera = LookAt(position, position + glm::vec3(0.0f, -std::sin(radians), -std::cos(radians)));
+		camera.Projection = Math::PerspectiveReverseZ(glm::radians(fov), 1.0f, 0.1f, 500.0f);
+		camera.VerticalFOV = glm::radians(fov);
+		camera.Far = 500.0f;
+		return camera;
+	}
+
+	// The view depth of the floor (y = 0) a row of a square image of the camera shows, or a negative value where it shows no
+	// floor (along a row of a camera without roll, it does not change).
+	float FloorRowDepth(const SceneCamera& camera, uint32_t row, uint32_t size)
+	{
+		const float ndcY = 1.0f - 2.0f * (static_cast<float>(row) + 0.5f) / static_cast<float>(size);
+		const glm::vec3 viewRay(0.0f, ndcY * std::tan(camera.VerticalFOV * 0.5f), -1.0f); // One unit of view depth
+		const glm::vec3 worldRay = glm::mat3(glm::inverse(camera.View)) * viewRay;
+		if (!(worldRay.y < 0.0f))
+			return -1.0f;
+		return camera.Position.y / -worldRay.y;
+	}
+
+	// How much of the sun reaches each pixel's surface (1 lit, 0 in full shadow; -1 where the sun lights nothing), from the
+	// HDR images (red) of the scene as it is, with the sun's shadows off (lit) and without the sun (dark): the scene's
+	// lighting is linear in the sun's. Square images.
+	struct SunlightImage
+	{
+		uint32_t Size = 0;
+		std::vector<float> Fraction;
+
+		float At(uint32_t x, uint32_t y) const { return Fraction[static_cast<size_t>(y) * Size + x]; }
+	};
+
+	SunlightImage RenderSunlight(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, Entity sun)
+	{
+		const auto renderHDR = [&]()
+		{
+			REQUIRE(renderer.Render(scene, camera));
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+			return image;
+		};
+		DirectionalLightComponent& light = sun.GetComponent<DirectionalLightComponent>();
+		const ReadbackImage shadowed = renderHDR();
+		const bool castShadows = light.CastShadows;
+		light.CastShadows = false;
+		sun.MarkModified<DirectionalLightComponent>();
+		const ReadbackImage lit = renderHDR();
+		const float intensity = light.Intensity;
+		light.Intensity = 0.0f;
+		sun.MarkModified<DirectionalLightComponent>();
+		const ReadbackImage dark = renderHDR();
+		light.CastShadows = castShadows;
+		light.Intensity = intensity;
+		sun.MarkModified<DirectionalLightComponent>();
+
+		for (const ReadbackImage* image : { &shadowed, &lit, &dark })
+		{
+			REQUIRE(image->Format == nvrhi::Format::RGBA16_FLOAT);
+			REQUIRE(image->Width == shadowed.Width);
+			REQUIRE(image->Height == shadowed.Width);
+		}
+		const auto red = [](const ReadbackImage& image, size_t pixel)
+		{
+			uint16_t value = 0;
+			std::memcpy(&value, image.Pixels.data() + pixel * image.BytesPerPixel, sizeof(value));
+			return glm::unpackHalf1x16(value);
+		};
+		SunlightImage result;
+		result.Size = shadowed.Width;
+		result.Fraction.resize(static_cast<size_t>(shadowed.Width) * shadowed.Height);
+		for (size_t pixel = 0; pixel < result.Fraction.size(); pixel++)
+		{
+			const float direct = red(lit, pixel) - red(dark, pixel);
+			const float reaching = red(shadowed, pixel) - red(dark, pixel);
+			result.Fraction[pixel] = direct > 1e-3f ? reaching / direct : -1.0f;
+		}
+		return result;
+	}
+
+	// A floor under a roof that shadows all of it, with a sun from +X 45 degrees above the horizon and shadows to 50 m: the
+	// splits of its four cascades, a blend of 0.8 logarithmic and 0.2 uniform splits from the near clip of 0.1 m, lie at
+	// 2.89, 6.80, 15.96 and 50 m.
+	struct RoofScene
+	{
+		Scene SceneData;
+		Entity Sun;
+
+		explicit RoofScene(SceneTestAssets& assets)
+		{
+			AddNeutralPostProcess(SceneData);
+			MaterialProperties matte;
+			matte.Roughness = 1.0f;
+			const AssetHandle material = assets.AddMaterial(matte);
+			AddMesh(SceneData, BuiltinAssets::PlaneMesh, material, glm::vec3(0.0f, 0.0f, -100.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(400.0f);
+			Entity roof = AddMesh(SceneData, BuiltinAssets::CubeMesh, material, glm::vec3(0.0f, 30.5f, -100.0f), "Roof");
+			roof.GetComponent<TransformComponent>().Scale = glm::vec3(400.0f, 1.0f, 400.0f);
+			Sun = AddSun(SceneData, SunDirection(45.0f, 0.0f), 3.0f);
+			Sun.GetComponent<DirectionalLightComponent>().ShadowDistance = 50.0f;
+		}
+	};
 
 }
 
@@ -454,6 +565,188 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		CHECK(frame() == 0u);
 		CHECK(frame() == allCascades);
 		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A shadow edge across a cascade split shows no seam while the cascades blend, and one where they switch at once")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		MaterialProperties matte;
+		matte.Roughness = 1.0f;
+		const AssetHandle material = assets.AddMaterial(matte);
+		AddMesh(scene, BuiltinAssets::PlaneMesh, material, glm::vec3(0.0f, 0.0f, -100.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(400.0f);
+		// A 4 m wall along Z, 7 m to the right, lit from +X 30 degrees above the horizon: the edge of its shadow runs along
+		// the floor's line x = 0, under the camera, so it stays in the image's middle column at every depth.
+		constexpr float elevation = 30.0f;
+		const float wallX = 0.1f + 4.0f / std::tan(glm::radians(elevation));
+		Entity wall = AddMesh(scene, BuiltinAssets::CubeMesh, material, glm::vec3(wallX, 2.0f, -100.0f), "Wall");
+		wall.GetComponent<TransformComponent>().Scale = glm::vec3(0.2f, 4.0f, 400.0f);
+		Entity sun = AddSun(scene, SunDirection(elevation, 0.0f), 3.0f);
+		DirectionalLightComponent& light = sun.GetComponent<DirectionalLightComponent>();
+		// Shadows to 50 m: the third cascade ends at 15.96 m (RoofScene), and its band at the default blend of 0.1 begins
+		// 0.92 m before. The normal offset, in texels of each cascade, moves the edge where the texels grow: four texels
+		// rather than the default 1.5 make that move outweigh the rounding of the edge to the coarser cascade's texels.
+		light.ShadowDistance = 50.0f;
+		light.ShadowNormalBias = 4.0f;
+
+		constexpr uint32_t size = 256;
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(size, size);
+		// Looking down at 45 degrees, the floor from 12.6 m to 21.9 m away: about 30 rows per metre of depth at the split.
+		const SceneCamera camera = PitchedCamera(glm::vec3(0.0f, 11.3f, 0.0f), 45.0f, 30.0f);
+
+		// Per row, the edge's place: the sunlight summed across 80 columns around it (lit on the left, in shadow on the
+		// right), in pixels. Steps of it from row to row inside a cascade are the shadow filter's noise.
+		struct Steps
+		{
+			float InCascade = 0.0f; // The largest step between rows inside the third or the fourth cascade
+			float AtSplit = 0.0f;   // The largest step from 14.8 m to 16.2 m: the third cascade's band and its split
+		};
+		const auto measure = [&](float blend)
+		{
+			light.CascadeBlend = blend;
+			sun.MarkModified<DirectionalLightComponent>();
+			const SunlightImage sunlight = RenderSunlight(renderer, scene, camera, sun);
+			std::vector<float> edges(size, 0.0f);
+			for (uint32_t row = 0; row < size; row++)
+			{
+				for (uint32_t x = size / 2 - 40; x < size / 2 + 40; x++)
+					edges[row] += std::clamp(sunlight.At(x, row), 0.0f, 1.0f);
+			}
+			Steps steps;
+			const auto inRange = [](float depth, float from, float to) { return depth >= from && depth <= to; };
+			for (uint32_t row = 0; row + 1 < size; row++)
+			{
+				const float depth = FloorRowDepth(camera, row, size);
+				const float nextDepth = FloorRowDepth(camera, row + 1, size);
+				const float step = std::abs(edges[row + 1] - edges[row]);
+				if ((inRange(depth, 13.0f, 14.8f) && inRange(nextDepth, 13.0f, 14.8f)) || (inRange(depth, 16.2f, 21.0f) && inRange(nextDepth, 16.2f, 21.0f)))
+				{
+					CHECK(std::abs(edges[row] - 40.0f) < 6.0f); // The edge stays in the middle
+					steps.InCascade = std::max(steps.InCascade, step);
+				}
+				else if (inRange(depth, 14.8f, 16.2f) && inRange(nextDepth, 14.8f, 16.2f))
+				{
+					steps.AtSplit = std::max(steps.AtSplit, step);
+				}
+			}
+			MESSAGE("Cascade blend " << blend << ": largest step in a cascade " << steps.InCascade << " px, at the split " << steps.AtSplit << " px");
+			return steps;
+		};
+
+		const Steps blended = measure(DirectionalLightComponent().CascadeBlend);
+		CHECK(blended.AtSplit <= blended.InCascade);
+		const Steps switched = measure(0.0f);
+		CHECK(switched.AtSplit > 2.0f * switched.InCascade);
+		CHECK(switched.AtSplit > 1.0f);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("At the widest cascade blend, the next cascade covers every pixel of each band")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		RoofScene roofScene(assets);
+		roofScene.Sun.GetComponent<DirectionalLightComponent>().CascadeBlend = DirectionalLightComponent::c_MaxCascadeBlend;
+
+		// A narrow view along the floor across the sun's direction, 20 cm above it: from 2.3 m on, its slices are long and
+		// thin, so the bands before the splits (half of each slice: from 1.45 m, 4.85 m and 11.38 m) reach past the squares
+		// of the next slices' spheres unless those slices begin at the bands.
+		constexpr uint32_t size = 256;
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(size, size);
+		const SceneCamera camera = PitchedCamera(glm::vec3(0.0f, 0.2f, 0.0f), 0.0f, 10.0f);
+		const SunlightImage sunlight = RenderSunlight(renderer, roofScene.SceneData, camera, roofScene.Sun);
+
+		// Up to the last cascade's band (from 32.98 m) the roof's shadow is whole.
+		uint32_t rows = 0;
+		float brightest = 0.0f;
+		for (uint32_t row = 0; row < size; row++)
+		{
+			const float depth = FloorRowDepth(camera, row, size);
+			if (depth < 0.0f || depth > 32.5f)
+				continue;
+			rows++;
+			for (uint32_t x = 0; x < size; x++)
+				brightest = std::max(brightest, sunlight.At(x, row));
+		}
+		CHECK(rows > 100);
+		CHECK(brightest < 0.02f);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Shadows fade out over the last cascade's band, ending at the shadow distance")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		RoofScene roofScene(assets);
+
+		constexpr uint32_t size = 256;
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(size, size);
+		// Looking down at 45 degrees from 20 m: the floor from about 15 m to 67 m away.
+		const SceneCamera camera = PitchedCamera(glm::vec3(0.0f, 20.0f, 0.0f), 45.0f, 60.0f);
+
+		// Per row, the mean sunlight; at the default blend of 0.1 the last band is the last 3.40 m before 50 m.
+		const auto rowSunlight = [&](const SunlightImage& sunlight, uint32_t row)
+		{
+			float sum = 0.0f;
+			for (uint32_t x = 0; x < size; x++)
+				sum += sunlight.At(x, row);
+			return sum / static_cast<float>(size);
+		};
+		const float bandStart = 50.0f - 0.1f * (50.0f - 15.964f);
+		const SunlightImage faded = RenderSunlight(renderer, roofScene.SceneData, camera, roofScene.Sun);
+		uint32_t bandRows = 0;
+		float previous = 0.0f;
+		for (uint32_t row = size; row-- > 0;) // Bottom up: depth grows
+		{
+			const float depth = FloorRowDepth(camera, row, size);
+			if (depth < 0.0f)
+				continue;
+			CAPTURE(depth);
+			const float sunlight = rowSunlight(faded, row);
+			if (depth < bandStart - 0.1f)
+			{
+				CHECK(sunlight < 0.01f);
+			}
+			else if (depth > 50.1f)
+			{
+				CHECK(sunlight > 0.99f);
+			}
+			else if (depth > bandStart + 0.1f && depth < 49.9f)
+			{
+				bandRows++;
+				CHECK(std::abs(sunlight - (depth - bandStart) / (50.0f - bandStart)) < 0.05f);
+				CHECK(sunlight >= previous - 0.01f);
+			}
+			previous = sunlight;
+		}
+		CHECK(bandRows >= 5);
+
+		// Without the blend, the shadow ends at once.
+		roofScene.Sun.GetComponent<DirectionalLightComponent>().CascadeBlend = 0.0f;
+		roofScene.Sun.MarkModified<DirectionalLightComponent>();
+		const SunlightImage cut = RenderSunlight(renderer, roofScene.SceneData, camera, roofScene.Sun);
+		for (uint32_t row = 0; row < size; row++)
+		{
+			const float depth = FloorRowDepth(camera, row, size);
+			if (depth > 0.0f && depth < 49.9f)
+				CHECK(rowSunlight(cut, row) < 0.01f);
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

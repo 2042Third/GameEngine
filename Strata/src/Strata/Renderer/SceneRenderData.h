@@ -57,7 +57,7 @@ namespace Strata
 			glm::vec4 TimeParams;                // x: scene time in seconds
 			glm::vec4 SkyParams;                 // x: background mip (blur), y: 1 when the environment is the background
 			glm::vec4 CascadeSplits;             // View distance where each cascade ends (their projections: CascadeData)
-			glm::vec4 ShadowParams;              // x: 2 tan(light angular radius), y: 1 / map size, w: cascade count
+			glm::vec4 ShadowParams;              // x: 2 tan(light angular radius), y: 1 / map size, z: cascade blend, w: cascade count
 			glm::vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 			glm::vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
 			glm::vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)

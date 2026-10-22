@@ -1991,6 +1991,7 @@ namespace Strata
 			m_ShadowLight.Softness = light.ShadowSoftness;
 			m_ShadowLight.Bias = light.ShadowBias;
 			m_ShadowLight.NormalBias = light.ShadowNormalBias;
+			m_ShadowLight.CascadeBlend = std::isfinite(light.CascadeBlend) ? std::clamp(light.CascadeBlend, 0.0f, DirectionalLightComponent::c_MaxCascadeBlend) : 0.0f;
 		};
 		float brightest = -1.0f;
 		for (auto [entity, light, world] : registry.view<DirectionalLightComponent, WorldTransformComponent>().each())

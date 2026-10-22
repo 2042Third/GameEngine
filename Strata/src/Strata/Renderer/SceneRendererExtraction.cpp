@@ -436,8 +436,13 @@ namespace Strata
 		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
 
 		// Each cascade's square covers the bounding sphere of a view frustum slice; its depth range is fitted to the casters
-		// (GatherShadowDraws).
+		// (GatherShadowDraws). A cascade blends into the next one over the last CascadeBlend of its slice, before its split
+		// (Include/Shadows.glsl, CascadeBlendWeight: the first slice's range is taken from the camera, at 0): the next slice
+		// starts at that band, so the next cascade's square covers it too. The near end is a slice's narrowest part, so its
+		// sphere grows little.
+		const float cascadeBlend = m_ShadowLight.CascadeBlend;
 		float sliceNear = nearClip;
+		float previousSplit = 0.0f;
 		AABB shadowedView; // The box around the part of the view the cascades cover (the slices' corners)
 		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
 		{
@@ -494,7 +499,8 @@ namespace Strata
 			box.WorldPerTexel = static_cast<float>(worldPerTexel);
 			box.Radius = radius;
 			frame.CascadeSplits[cascade] = sliceFar;
-			sliceNear = sliceFar;
+			sliceNear = std::max(sliceFar - cascadeBlend * (sliceFar - previousSplit), nearClip);
+			previousSplit = sliceFar;
 		}
 		m_CascadeCount = cascadeCount;
 
@@ -1158,7 +1164,7 @@ namespace Strata
 		}
 		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
 		const float halfAngle = glm::radians(std::clamp(m_ShadowLight.Softness, 0.0f, 10.0f)) * 0.5f;
-		frame.ShadowParams = glm::vec4(2.0f * std::tan(halfAngle), 1.0f / mapSize, 0.0f, static_cast<float>(cascadeCount));
+		frame.ShadowParams = glm::vec4(2.0f * std::tan(halfAngle), 1.0f / mapSize, m_ShadowLight.CascadeBlend, static_cast<float>(cascadeCount));
 		frame.ShadowBias = glm::vec4(m_ShadowLight.Bias, m_ShadowLight.NormalBias, 0.0f, 0.0f);
 		if (!casterDraws)
 			return; // The GPU's culling draws the casters

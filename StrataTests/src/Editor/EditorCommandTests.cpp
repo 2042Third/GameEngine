@@ -834,6 +834,23 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } })["inactive"]
 			== nlohmann::json { { "AntiAliasingMethod", "Anti Aliasing is off" } });
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
+
+		// The directional light's cascade blend: added with a value, set, undone; refused outside [0, 0.5]; inactive while the
+		// light casts no shadows.
+		harness.Run("component.add", { { "entity", c }, { "component", "DirectionalLight" }, { "values", { { "CascadeBlend", 0.25 } } } });
+		const auto light = [&]() { return harness.Run("component.get", { { "entity", c }, { "component", "DirectionalLight" } }); };
+		const auto blend = [&]() { return light()["values"]["CascadeBlend"].get<double>(); };
+		CHECK(blend() == doctest::Approx(0.25));
+		CHECK_FALSE(light().contains("inactive"));
+		harness.Run("component.set", { { "entity", c }, { "component", "DirectionalLight" }, { "values", { { "CascadeBlend", 0.4 } } } });
+		CHECK(blend() == doctest::Approx(0.4));
+		harness.Run("edit.undo");
+		CHECK(blend() == doctest::Approx(0.25));
+		CHECK_FALSE(harness.Error("component.set", { { "entity", c }, { "component", "DirectionalLight" }, { "values", { { "CascadeBlend", 0.6 } } } }).empty());
+		CHECK(blend() == doctest::Approx(0.25));
+		harness.Run("component.set", { { "entity", c }, { "component", "DirectionalLight" }, { "values", { { "CastShadows", false } } } });
+		CHECK(light()["inactive"] == nlohmann::json { { "CascadeBlend", "Cast Shadows is off" } });
+		harness.Run("component.remove", { { "entity", c }, { "component", "DirectionalLight" } });
 		harness.Run("component.remove", { { "entity", c }, { "component", "SpotLight" } });
 		CHECK_FALSE(harness.Error("component.get", { { "entity", c }, { "component", "SpotLight" } }).empty());
 

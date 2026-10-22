@@ -97,6 +97,7 @@
 			{
 				"Components": {
 					"DirectionalLight": {
+						"CascadeBlend": 0.2,
 						"CastShadows": true,
 						"Color": [
 							1,

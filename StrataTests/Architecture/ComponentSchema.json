@@ -467,6 +467,18 @@
 					"Speed": 0.009999999776482582,
 					"Tooltip": "",
 					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Cascade Blend",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 0.5,
+					"Min": 0.0,
+					"Name": "CascadeBlend",
+					"Speed": 0.0,
+					"Tooltip": "Fraction of each shadow cascade's depth range over which it blends into the next one, hiding the seams between them; the last one fades out by the Shadow Distance. 0 switches at once",
+					"Type": "Float"
 				}
 			]
 		},
