@@ -255,8 +255,9 @@ readbacks are the cull counters', `CounterReadback`, 1233-1247).
   `GPU.Editor.Viewport`, `GPU.Editor.Thumbnails` (the project thumbnail at 452), `Renderer.Material`, `Asset.Gltf`,
   `Asset.TextureImport`, `Editor.ImportSettings`. Components are tested as the strata-add-component skill says
   (section 4): `Reflection` and `Scene.InactiveProperties` (`StrataTests/src/Scene/ReflectionTests.cpp`),
-  `Scene.Serialization` (round trips; out-of-range values in files load with warnings), `Editor.Commands`
-  (`component.add` with values, `component.set`, undo); `component.get` reports inactive reasons (`inactive`).
+  `Scene.Serialization` (round trips; out-of-range values in files are clamped, values of another type warn),
+  `Editor.Commands` (`component.add` with values, `component.set`, undo); `component.get` reports inactive reasons
+  (`inactive`).
   Perf: `PerfGPU.Renderer` (`RendererPerfTests.cpp`, CPU medians and `...GPU` busy medians;
   `MeasuredRendererSpecification` turns `CacheShadowCascades` off), the measured `EditFrame*`, `Render100kCubes`,
   `Render10kMaterials`, `Render300kCubes`, `Skinned1000` entries, and the provisional shadowed and Open World tour
@@ -721,9 +722,9 @@ the comparison sampler); the scene set's storage buffers go from 8 to 12 of 31.
 Every new component and property is tested as the strata-add-component skill says (2.7): `Reflection` (the property
 exists with its range or choices; invalid values are rejected), `Scene.InactiveProperties` (its inactive reason),
 `Scene.Serialization` (a round trip keeps every value; a 0.5.0 file without the new keys loads with the defaults and no
-warning; out-of-range values and unknown names load with a warning), and `Editor.Commands` (`component.add` with values,
-`component.set`, undo restoring the previous state; `component.get` reports the inactive reason). The steps below name
-the cases specific to each.
+warning; out-of-range values are clamped to the range, as every ranged property's are, and values of another type or
+unknown names load with a warning), and `Editor.Commands` (`component.add` with values, `component.set`, undo restoring
+the previous state; `component.get` reports the inactive reason). The steps below name the cases specific to each.
 
 ### 6.1 Motion vectors (S1)
 
@@ -927,8 +928,8 @@ the cases specific to each.
 - Must-fail: forget the coat's Fresnel on the base (the energy case fails); glass without the entity-ID attachment (the
   click case fails).
 - Feature test: `Feature.stmat` gets clearcoat, a new `FeatureGlass.stmat` transmission, `Platform.gltf` the four
-  extensions. Thumbnails: `ThumbnailCache::c_Version` 4 if material previews change (checked by rendering one). Physics
-  Playground: clearcoat balls and glass blocks.
+  extensions. Thumbnails: `ThumbnailCache::c_Version` 5 (S3 made it 4) if material previews change (checked by rendering
+  one). Physics Playground: clearcoat balls and glass blocks.
 
 ### 6.12 Inspector, commands and MCP
 
