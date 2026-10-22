@@ -260,8 +260,9 @@ namespace Strata
 		// start scene opens once it ended (it counts as the scene being opened meanwhile).
 		bool IsScanningAssets() const;
 		std::optional<AssetScanProgress> GetAssetScanProgress() const;
-		// The scan runs, or the start scene that waited for it is still being opened: commands that need the whole registry
-		// (and every edit, which the start scene would replace) wait until the project is ready.
+		// The scan runs, the migration of a project saved by 0.5.0 or older runs (IsMigratingProject), or the start scene that
+		// waited for them is still being opened: commands that need the whole registry (and every edit, which the start scene
+		// or the migrated settings would replace) wait until the project is ready.
 		bool IsWaitingForAssets() const;
 		// Starts saving the edited scene to its asset in the background (DocumentSaver) and returns the save's ID, or 0 with
 		// the reason (no project; a scene never saved needs BeginSaveSceneAs). The frame only takes a snapshot of the scene

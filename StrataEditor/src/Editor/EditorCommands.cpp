@@ -157,6 +157,8 @@ namespace Strata
 		if (!command || !context.IsWaitingForAssets() || !WaitsForAssetScan(*command))
 			return std::nullopt;
 		const std::optional<AssetScanProgress> progress = context.GetAssetScanProgress();
+		if (!progress && context.IsMigratingProject())
+			return std::string("the scenes of a project saved by 0.5.0 are still being read for its collision layers");
 		if (!progress)
 			return std::string("the project's start scene is still being opened");
 		if (progress->Total == 0)

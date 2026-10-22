@@ -564,7 +564,10 @@ namespace Strata
 
 	bool EditorContext::IsWaitingForAssets() const
 	{
-		return IsScanningAssets() || m_StartSceneAfterScan.IsValid() || (m_SceneLoad && m_SceneLoadStatus.ID == m_StartSceneAfterScanID);
+		// The migration of a project saved by 0.5.0 sets the project's collision layers when it ends: an edit or an export made
+		// before would be built on the table it replaces (also in a project without a start scene, which nothing else holds).
+		return IsScanningAssets() || IsMigratingProject() || m_StartSceneAfterScan.IsValid()
+			|| (m_SceneLoad && m_SceneLoadStatus.ID == m_StartSceneAfterScanID);
 	}
 
 	std::optional<AssetScanProgress> EditorContext::GetAssetScanProgress() const

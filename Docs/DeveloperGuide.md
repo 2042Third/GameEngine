@@ -985,7 +985,9 @@ two members). A layer's name means the same in every scene and prefab.
   "Collision layers: <n> named" with a link to the page (`Inspector.Layers`, `Inspector.Layers.Open`).
 - **Migration.** A project file of version 1 or 2 (`Project::GetFileVersion`) is migrated once when it opens, by every
   path: an I/O job (`Editor/ProjectMigration`) walks the asset directory and reads each scene's settings with
-  `SceneDocumentReader`, stopping at the first entity when they came first; the start scene waits for it. On the main
+  `SceneDocumentReader`, stopping at the first entity when they came first; the start scene, Edit commands and those
+  marked `WaitsForAssets` (the export) wait for it (`EditorContext::IsWaitingForAssets`, also in a project without a
+  start scene), so no edit is made on the table it replaces. On the main
   thread the names come from the start scene, then the others by path (another name for an index, or a name another
   layer has, is a conflict and the first stays); a pair any scene keeps apart is kept apart (matrices that differ are a
   conflict). The section is set without an undo step when a scene stored a table, and the project file is written as
@@ -1895,7 +1897,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   state is `Failed` (`EditorCommandResult::Fail`). Automation reports them with different error codes.
 - **Commands wait for the asset scan.** A project opened in the background (the editor's interactive and automation
   runs: `EditorContextSpecification::ImportInBackground`) is open at once while its assets are scanned
-  (`EditorAssetManager::BeginScan`), and its start scene opens after the scan. Until both are done
+  (`EditorAssetManager::BeginScan`), and its start scene opens after the scan (and after the migration of a project saved
+  by 0.5.0, [Collision layers](#collision-layers)). Until all are done
   (`EditorContext::IsWaitingForAssets`), `EditorCommandRegistry::Execute` defers every Edit command and every command
   marked `EditorCommand::WaitsForAssets` before its handler runs: a new command that answers from the whole asset
   registry (asset, material, prefab and animation queries, the export, recovery) sets the flag, and joins

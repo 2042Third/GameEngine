@@ -353,6 +353,41 @@ TEST_SUITE("Editor.ProjectMigration")
 		harness.Run("project.save");
 	}
 
+	TEST_CASE("Edits wait for the upgrade also in a project without a start scene")
+	{
+		OldProject old("MigrationEditsWait");
+		// Without a start scene nothing else holds edits back while the scenes are read.
+		nlohmann::json file = old.ReadProjectFile();
+		file["Project"].erase("StartScene");
+		REQUIRE(FileSystem::WriteText(old.ProjectFile, JsonUtils::Dump(file, 1, '\t')));
+		old.AddScene("Scenes/Main.stscene", StoreLayers(MakeBallAndGhost()), true);
+
+		MigrationHarness harness;
+		std::string error;
+		REQUIRE_MESSAGE(harness.Context.BeginOpenProject(old.ProjectFile, &error), error);
+		REQUIRE(harness.Context.IsMigratingProject());
+		CHECK(harness.Context.IsWaitingForAssets());
+		// The UI's direct commands are refused, saying why.
+		const std::optional<std::string> waiting = harness.Commands.DescribeAssetScanWait(harness.Context, "project.setCollisionLayers");
+		REQUIRE(waiting.has_value());
+		CHECK(waiting->find("0.5.0") != std::string::npos);
+
+		// An edit of the layers made meanwhile runs once the scenes' layers are the project's, and builds on them: neither
+		// replaces the other, and its undo goes back to the migrated table.
+		EditorCommandResult named = harness.Commands.Execute(harness.Context, "project.setCollisionLayers", { { "layerNames", { { "3", "Player" } } } });
+		CHECK(named.IsPending());
+		named = CompleteCommand(harness.Context, std::move(named));
+		REQUIRE_MESSAGE(named.Success, named.Error);
+		CHECK_FALSE(harness.Context.IsMigratingProject());
+		PhysicsLayerSettings expected = MakeBallAndGhost();
+		expected.Names[3] = "Player";
+		CHECK(harness.ProjectLayers() == expected);
+		CHECK(harness.Context.GetActiveScene()->GetPhysicsLayers() == expected);
+		harness.Run("edit.undo");
+		CHECK(harness.ProjectLayers() == MakeBallAndGhost());
+		harness.Run("project.save");
+	}
+
 	TEST_CASE("Copies of PhysicsPlayground and OpenWorld migrate to their committed sections")
 	{
 		struct Expected
