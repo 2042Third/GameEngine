@@ -2024,8 +2024,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - `project.export` writes a playable game outside the project in the background (`GameExport`; the command answers when
   it finished, so command scripts that export need frames: `--quit-after-commands`): the asset pack (`<Game>.stpak`,
   ordered by first use; `prune` leaves out what neither the scenes nor `Export.AlwaysInclude` use and lists it in
-  `excludedAssets`), the script module, the manifest (`<Game>.stgame`, start scene, script module, window settings and
-  the project's settings sections: [Project settings](#project-settings))
+  `excludedAssets`), the script module, the manifest (`<Game>.stgame`, start scene, script module, window settings, the
+  game's identity and the project's settings sections: [Project settings](#project-settings)), the game's icon
   and the runtime executable renamed after the game. It checks what it can before it starts (a usable directory outside
   the project, among others) and fails at once otherwise; the editor stays editable meanwhile, and a document saved
   during the export that references what its plan did not hold fails it, naming the document (export again).
@@ -2036,6 +2036,21 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   dialog (`UI/ExportDialog`: File > Export Game..., the toolbar's Export button), which also picks the loading scene and
   shows and cancels exports that commands and agents started. CTest exports a small game
   (`StrataEditor --no-gpu`) and runs it headless; `StrataEditor.Tetris` also exports Tetris pruned and runs it.
+- **The game's identity** (`ProjectGameInfo`, set with `project.setGameInfo`: [Project settings](#project-settings))
+  travels in the version-5 manifest (`Title`, the project's name when it has none, `Version`, `Company`, `Copyright`,
+  `Icon`). The manifest's `Name` stays the project's name: it keys the game's log and save directories, so a new title or
+  company never moves players' saves. With an icon, the export makes `<Game>.png` next to the manifest, whether or not the
+  pack holds the texture: `Editor/GameIcon` reads the texture's source file (at most 16 MiB; `GameIcon::FindSource`
+  refuses sub-assets and formats other than PNG, JPEG, TGA and BMP), decodes it with `ImageReader` (at most 4,096 pixels a
+  side), centers it on transparent pixels to make it square and resizes it with stb_image_resize2 in linear light with
+  premultiplied alpha to 16, 20, 24, 28, 32, 40, 48, 56, 64 and 256 pixels (the brand icon's sizes; the 256-pixel image
+  is the PNG). A source under 256 pixels is enlarged with a warning (`project.export`'s `warnings`, the Export dialog's
+  outcome, the log); one that does not decode fails the export before the pack is written. The runtime presents the game
+  from its manifest before anything starts (`Runtime/GamePresentation`): the window's title and fatal-error dialogs show
+  the title, the log's first line names title and version, the window icon is the manifest's icon file
+  (`WindowSpecification::IconPath`: X11 and Windows show it; Cocoa and Wayland windows have no icons of their own), and the
+  window's application id is the executable's name (`WindowSpecification::AppId`: X11's `WM_CLASS`, Wayland's app id).
+  `StrataRuntime.Identity` runs a SmokeGame exported with an identity and checks its log and icon.
 
 ### Play mode and scene switches
 

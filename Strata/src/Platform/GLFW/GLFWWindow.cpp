@@ -73,6 +73,12 @@ namespace Strata
 		glfwWindowHint(GLFW_VISIBLE, specification.Visible ? GLFW_TRUE : GLFW_FALSE);
 		const bool sizeInPixels = specification.SizeInPixels && !specification.Fullscreen;
 		glfwWindowHint(GLFW_SCALE_TO_MONITOR, sizeInPixels ? GLFW_FALSE : GLFW_TRUE);
+		if (!specification.AppId.empty())
+		{
+			glfwWindowHintString(GLFW_X11_CLASS_NAME, specification.AppId.c_str());
+			glfwWindowHintString(GLFW_X11_INSTANCE_NAME, specification.AppId.c_str());
+			glfwWindowHintString(GLFW_WAYLAND_APP_ID, specification.AppId.c_str());
+		}
 
 		GLFWmonitor* monitor = nullptr;
 		int width = static_cast<int>(specification.Width);

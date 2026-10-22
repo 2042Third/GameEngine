@@ -9,10 +9,13 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/Platform.h"
 #include "Strata/Core/ProjectSettings.h"
 #include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Renderer/RenderScene.h"
+#include "Strata/Core/SaveFiles.h"
+#include "Strata/Runtime/GamePresentation.h"
 #include "Strata/Runtime/GameRuntime.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
@@ -570,6 +573,84 @@ TEST_SUITE("Runtime.Game")
 		CHECK_FALSE(EngineServices::Get<IProjectSettings>());
 		UpdateUntil(*old, [&]() { return old->HasStarted(); });
 		CHECK_FALSE(EngineServices::Get<IProjectSettings>());
+	}
+
+	TEST_CASE("The window title is the game's title")
+	{
+		GameManifest manifest;
+		manifest.Name = "Adventure";
+		manifest.Title = "Star Adventure";
+		manifest.Version = "1.2.0";
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeTitle");
+		const GamePresentation presentation = GamePresentation::Make(manifest, directory / "Adventure.stgame", directory / "Adventure Game.exe");
+		CHECK(presentation.Title == "Star Adventure");
+		CHECK(presentation.Banner.rfind("Star Adventure 1.2.0 (Strata ", 0) == 0);
+		CHECK(presentation.AppId == "Adventure Game");
+		WindowSpecification window;
+		presentation.ApplyTo(window);
+		CHECK(window.Title == "Star Adventure");
+		CHECK(window.AppId == "Adventure Game");
+
+		// A game without a title shows its name; one without a version (before version 5) names none.
+		manifest.Title.clear();
+		manifest.Version.clear();
+		const GamePresentation untitled = GamePresentation::Make(manifest, directory / "Adventure.stgame", directory / "Adventure");
+		CHECK(untitled.Title == "Adventure");
+		CHECK(untitled.Banner.rfind("Adventure (Strata ", 0) == 0);
+	}
+
+	TEST_CASE("Changing the title or the company keeps the save and log directories")
+	{
+		// A name of its own: the save directory is resolved in the player's data, and removed again below.
+		const std::string name = "Strata Test Identity Saves";
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeIdentitySaves");
+		const std::filesystem::path manifestPath = WriteGame(directory, { { 0x1010, MakeScene("Start", 1) } }, UUID(0x1010));
+		std::string error;
+		std::optional<GameManifest> manifest = GameManifest::Load(manifestPath, &error);
+		REQUIRE_MESSAGE(manifest, error);
+		manifest->Name = name;
+
+		std::vector<std::filesystem::path> saveDirectories;
+		std::vector<std::string> dataDirectories;
+		for (const auto& [title, company] : { std::pair<const char*, const char*>("First Title", "First Studio"), { "Second Title", "Second Studio" } })
+		{
+			manifest->Title = title;
+			manifest->Company = company;
+			REQUIRE_MESSAGE(manifest->Save(manifestPath, &error), error);
+			dataDirectories.push_back(GamePresentation::Make(*manifest, manifestPath, directory / "Game").DataDirectoryName);
+			Scope<GameRuntime> game = GameRuntime::Create(manifestPath, &error);
+			REQUIRE_MESSAGE(game, error);
+			const std::optional<std::filesystem::path> saves = game->GetSaveDirectory();
+			REQUIRE(saves);
+			saveDirectories.push_back(*saves);
+		}
+		CHECK(dataDirectories[0] == SaveFiles::MakeGameDirectoryName(name));
+		CHECK(dataDirectories[1] == dataDirectories[0]);
+		CHECK(saveDirectories[1] == saveDirectories[0]);
+		CHECK(FileSystem::ToUTF8(saveDirectories[0].parent_path().filename()) == dataDirectories[0]);
+		// Resolving the save directory created the game's data directory (not its Saves, which the first save creates).
+		CHECK_FALSE(FileSystem::Exists(saveDirectories[0]));
+		std::error_code ignored;
+		std::filesystem::remove(saveDirectories[0].parent_path(), ignored);
+	}
+
+	TEST_CASE("The window icon comes from the manifest's icon file")
+	{
+		GameManifest manifest;
+		manifest.Name = "Adventure";
+		manifest.Icon = "Adventure.png";
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeIcon");
+		const GamePresentation presentation = GamePresentation::Make(manifest, directory / "Adventure.stgame", directory / "Adventure");
+		CHECK(presentation.IconFile == directory / "Adventure.png");
+		WindowSpecification window;
+		presentation.ApplyTo(window);
+		CHECK(window.IconPath == directory / "Adventure.png");
+
+		// Without an icon the window keeps none (on Windows, the executable's).
+		manifest.Icon.clear();
+		WindowSpecification plain;
+		GamePresentation::Make(manifest, directory / "Adventure.stgame", directory / "Adventure").ApplyTo(plain);
+		CHECK(plain.IconPath.empty());
 	}
 
 	TEST_CASE("A manifest section that fails Read stops the game naming it")

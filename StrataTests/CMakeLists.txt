@@ -499,6 +499,13 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataEditor.Export PROPERTIES FIXTURES_REQUIRED StrataExportClean FIXTURES_SETUP StrataExportedGame)
 
 	add_test(NAME StrataRuntime.Smoke COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 30)
+	# The third export carries the game's identity: its log names the title and version, and its icon lies next to it.
+	add_test(NAME StrataRuntime.Identity
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_EXPORT_TEST_DIR}/BuildIdentity/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DARGUMENTS=--headless|--frames|30" "-DEXPECT=Smoke Adventure 2.0.1 (Strata "
+			"-DEXPECT_PATHS=${STRATA_EXPORT_TEST_DIR}/BuildIdentity/SmokeGame.png|${STRATA_EXPORT_TEST_DIR}/BuildIdentity/SmokeGame.stgame"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataRuntime.Identity PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 	set_tests_properties(StrataRuntime.Smoke PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 	# The exported game's executable (the runtime, renamed) carries the strata mark as its icon (StrataRuntime.rc.in).
 	if(WIN32)

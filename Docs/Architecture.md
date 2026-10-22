@@ -475,9 +475,10 @@ callbacks), `ScriptHostAPI` (the host function table), `ScriptValue` (ABI value 
 `Export.AlwaysInclude` and `Export.LoadingScene`, and the settings sections the project sets, which it keeps whether or
 not this build's modules know them: DeveloperGuide.md, "Project settings"), the asset directory, the script sources and
 the intermediate directory `.strata/` (`Cache/`, `Scripts/Build/`, `Scripts/Bin/`), plus the process-wide active
-project. `GameManifest` is the `.stgame` file of an exported game (name, asset pack and patch packs, start scene, loading
-scene, script module, window settings, and the project's settings sections as stored, which the runtime validates once
-the modules registered).
+project. `GameManifest` is the `.stgame` file of an exported game (name, the game's identity, asset pack and patch packs,
+start scene, loading scene, script module, window settings, and the project's settings sections as stored, which the
+runtime validates once the modules registered). The name keys the game's log and save directories; the title, version and
+icon are what it shows (`GamePresentation`).
 
 **Runtime** (`Runtime/`). `GameRuntime` runs an exported game without depending on windowing or rendering: it opens
 the pack, loads the script module, starts scenes and honors their requests. `GameRenderer` draws the running scene
@@ -3950,7 +3951,8 @@ It writes:
 | --- | --- |
 | `<Game>.stpak` | `EditorAssetManager::WriteAssetPack` of the plan: every project asset, or with `prune` what the scenes and `Export.AlwaysInclude` use, ordered by first use; scenes, prefabs and models cooked (`cookDocuments`, default true: `AssetPackCook`, binary documents that load without parsing JSON, [Scene documents](#scene-documents)) |
 | script module (and its PDB) | `EditorContext::ReadRunningScriptModule`: the loaded module, checked by digest |
-| `<Game>.stgame` | `GameManifest` (version 5): name, pack, start scene, loading scene (`Export.LoadingScene`, optional), module, window settings, the project's settings sections (those this build's modules claim validated, the others as stored) |
+| `<Game>.stgame` | `GameManifest` (version 5): name, the game's identity (title, version, company, copyright, icon file: `project.setGameInfo`), pack, start scene, loading scene (`Export.LoadingScene`, optional), module, window settings, the project's settings sections (those this build's modules claim validated, the others as stored) |
+| `<Game>.png` | The game's icon, 256 x 256 pixels, made from its texture's source image by `GameIcon` (only with an icon) |
 | `<Game>[.exe]`, `ThirdPartyNotices.md` | `StrataRuntime` from the editor's directory, renamed (`includeRuntime`) |
 
 The module's PDB is copied when it exists, except in Dist builds or with `includeScriptSymbols: false`

@@ -5,8 +5,6 @@
 #include <Strata/Core/Layer.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
-#include <Strata/Core/SaveFiles.h>
-#include <Strata/Core/Version.h>
 #include <Strata/Engine/EntryPoint.h>
 #include <Strata/Project/GameManifest.h>
 #include <Strata/Project/ProjectModule.h>
@@ -17,6 +15,7 @@
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/StagingPool.h>
 #include <Strata/Runtime/FramePerfLog.h>
+#include <Strata/Runtime/GamePresentation.h>
 #include <Strata/Runtime/GameRenderer.h>
 #include <Strata/Runtime/GameRuntime.h>
 #include <Strata/Runtime/GameWindowService.h>
@@ -397,25 +396,30 @@ namespace Strata
 		else
 			options.ManifestPath = GameManifest::FindForExecutable(Platform::GetExecutablePath());
 
-		// The manifest names the game, which also names its data directory (logs, saves: SaveFiles::MakeGameDirectoryName).
+		// The manifest names the game, which also names its data directory (logs, saves), and says what it shows: its title,
+		// version and icon (GamePresentation).
 		std::string error;
 		std::optional<GameManifest> manifest = options.ManifestPath.empty() ? std::nullopt : GameManifest::Load(options.ManifestPath, &error);
-		const std::string name = manifest ? manifest->Name : std::string("Strata Game");
+		GameManifest unnamed;
+		unnamed.Name = "Strata Game";
+		unnamed.Version.clear();
+		const GamePresentation presentation = GamePresentation::Make(manifest ? *manifest : unnamed, options.ManifestPath, Platform::GetExecutablePath());
 
 		LogSpecification logSpecification;
-		logSpecification.LogFile = Platform::GetUserDataDirectory(SaveFiles::MakeGameDirectoryName(name)) / "Logs" / "Game.log";
+		logSpecification.LogFile = Platform::GetUserDataDirectory(presentation.DataDirectoryName) / "Logs" / "Game.log";
 		Log::Init(logSpecification);
-		ST_INFO("{} (Strata {}, {})", name, c_EngineVersion, Platform::GetName());
+		ST_INFO("{}", presentation.Banner);
 		if (!manifest)
 		{
-			Application::ReportFatalError(name, fmt::format("No game to run: {}", options.ManifestPath.empty()
+			Application::ReportFatalError(presentation.Title, fmt::format("No game to run: {}", options.ManifestPath.empty()
 				? std::string("no single .stgame manifest next to the executable (pass --game <file>)") : error), c_GameFilesAdvice);
 			return std::nullopt;
 		}
 
 		// The options' values were checked above (CheckOptions).
 		ApplicationSpecification specification;
-		specification.Name = name;
+		// The title names the game in dialogs (Application::ReportFatalError) and to the graphics driver.
+		specification.Name = presentation.Title;
 		specification.CommandLineArgs = commandLine;
 		// Headless runs the simulation only, like a dedicated server: no window and no GPU, sound mixed without a device.
 		// Games have no ImGui.
@@ -433,7 +437,7 @@ namespace Strata
 #endif
 		specification.Modules.push_back(ProjectModule::Factory());
 		specification.Jobs.BackgroundThreadCount = c_BackgroundThreadCount;
-		specification.Window.Title = name;
+		presentation.ApplyTo(specification.Window);
 		specification.Window.Width = manifest->WindowWidth;
 		specification.Window.Height = manifest->WindowHeight;
 		specification.Window.Fullscreen = manifest->Fullscreen && !commandLine.HasFlag("--windowed");

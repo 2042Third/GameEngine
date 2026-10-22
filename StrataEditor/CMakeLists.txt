@@ -13,6 +13,8 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_EDITOR_CORE_S
 target_include_directories(StrataEditorCore PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 # The engine, and the tooling only editors contain: the asset pipeline and the network (automation).
 target_link_libraries(StrataEditorCore PUBLIC Strata Strata::AssetPipeline Strata::Network)
+# The game icon's conversion (Editor/GameIcon) resizes with stb_image_resize2.
+target_link_libraries(StrataEditorCore PRIVATE stb)
 strata_precompile_headers(StrataEditorCore "${CMAKE_CURRENT_SOURCE_DIR}/src/EditorPch.h")
 
 # Script builds (script.build) configure game script modules with the engine's own toolchain and configuration and the

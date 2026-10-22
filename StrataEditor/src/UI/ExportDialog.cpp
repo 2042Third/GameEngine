@@ -157,6 +157,8 @@ namespace Strata
 		}
 		const GameExportResult& result = watched->GetResult();
 		m_Outcome = DescribeExport(result.AssetCount, result.Pack.FileSize, result.Seconds, m_ExportedDirectory, result.ExcludedAssets.size());
+		for (const std::string& warning : result.Warnings)
+			m_Outcome += fmt::format(" {}.", warning);
 	}
 
 	const std::string& ExportDialog::GetDirectoryProblem(EditorPanelContext& context)
@@ -463,6 +465,14 @@ namespace Strata
 			const size_t excluded = excludedAssets && excludedAssets->is_array() ? excludedAssets->size() : 0;
 			m_Outcome = DescribeExport(JsonUtils::GetUInt(value, "assetCount", 0), JsonUtils::GetUInt(value, "packBytes", 0),
 				JsonUtils::GetFloat(value, "seconds", 0.0f), m_ExportedDirectory, excluded);
+			if (const nlohmann::json* warnings = JsonUtils::Find(value, "warnings"); warnings && warnings->is_array())
+			{
+				for (const nlohmann::json& warning : *warnings)
+				{
+					if (warning.is_string())
+						m_Outcome += fmt::format(" {}.", warning.get<std::string>());
+				}
+			}
 		}, CommandOrigin { CommandSource::UI });
 	}
 

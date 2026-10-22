@@ -64,6 +64,9 @@ namespace Strata
 		// screen coordinates scaled with the monitor's content scale, so a window takes the same share of every display.
 		bool SizeInPixels = false;
 		std::filesystem::path IconPath; // Optional PNG used as the window icon
+		// What the desktop groups the window under and matches its desktop entry with (X11's WM_CLASS, Wayland's app id), e.g.
+		// an exported game's executable name; empty: GLFW's default (the title on X11). Other platforms ignore it.
+		std::string AppId;
 	};
 
 	// Platform window. The swapchain is owned by the graphics device, which queries the native handle. The size

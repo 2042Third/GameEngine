@@ -32,6 +32,11 @@ namespace Strata
 			{ "Settings", Settings ? Settings->ToJson() : nlohmann::json::object() },
 			{ "Game", {
 				{ "Name", Name },
+				{ "Title", Title },
+				{ "Version", Version },
+				{ "Company", Company },
+				{ "Copyright", Copyright },
+				{ "Icon", Icon },
 				{ "AssetPack", AssetPack },
 				{ "PatchPacks", PatchPacks },
 				{ "StartScene", UUIDToJson(StartScene) },
@@ -61,6 +66,32 @@ namespace Strata
 
 		GameManifest manifest;
 		manifest.Name = JsonUtils::GetString(*game, "Name", manifest.Name);
+		// Version 5: the game's identity, checked as the project checks it (the export wrote it from there). Older games have
+		// none: their name is their title, and they name no version.
+		manifest.Version.clear();
+		if (version >= 5)
+		{
+			for (const char* field : { "Title", "Version", "Company", "Copyright", "Icon" })
+			{
+				const nlohmann::json* member = JsonUtils::Find(*game, field);
+				if (member && !member->is_string())
+					return fail(fmt::format("\"{}\" must be a string", field));
+			}
+			ProjectGameInfo identity;
+			identity.Title = JsonUtils::GetString(*game, "Title");
+			identity.Version = JsonUtils::GetString(*game, "Version", identity.Version);
+			identity.Company = JsonUtils::GetString(*game, "Company");
+			identity.Copyright = JsonUtils::GetString(*game, "Copyright");
+			if (std::optional<std::string> problem = identity.Validate())
+				return fail(fmt::format("The game's identity is invalid: {}", *problem));
+			manifest.Title = std::move(identity.Title);
+			manifest.Version = std::move(identity.Version);
+			manifest.Company = std::move(identity.Company);
+			manifest.Copyright = std::move(identity.Copyright);
+			manifest.Icon = JsonUtils::GetString(*game, "Icon");
+			if (!manifest.Icon.empty() && !IsPlainFileName(manifest.Icon))
+				return fail("\"Icon\" must be the file name of the game's icon next to the manifest");
+		}
 		manifest.AssetPack = JsonUtils::GetString(*game, "AssetPack");
 		if (!IsPlainFileName(manifest.AssetPack))
 			return fail("\"AssetPack\" must be the file name of the asset pack next to the manifest");

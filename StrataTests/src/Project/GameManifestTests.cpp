@@ -12,6 +12,7 @@
 #include "TestHelpers.h"
 
 #include <map>
+#include <utility>
 
 using namespace Strata;
 
@@ -301,6 +302,50 @@ TEST_SUITE("Project.GameManifest")
 		REQUIRE_MESSAGE(loaded, error);
 		CHECK_FALSE(loaded->Settings.has_value());
 		CHECK(loaded->StartScene == UUID(0x42));
+	}
+
+	TEST_CASE("Version 5 manifests carry the game's identity, checked like the project's")
+	{
+		GameManifest manifest;
+		manifest.Name = "Adventure";
+		manifest.AssetPack = "Adventure.stpak";
+		manifest.StartScene = UUID(0x42);
+		manifest.Title = "\xE6\x98\x9F Adventure";
+		manifest.Version = "2.1.0.7";
+		manifest.Company = "Studio";
+		manifest.Copyright = "(c) 2026 Studio";
+		manifest.Icon = "Adventure.png";
+		std::string error;
+		std::optional<GameManifest> loaded = GameManifest::FromJson(manifest.ToJson(), &error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK(loaded->Title == manifest.Title);
+		CHECK(loaded->GetDisplayTitle() == manifest.Title);
+		CHECK(loaded->Version == "2.1.0.7");
+		CHECK(loaded->Company == "Studio");
+		CHECK(loaded->Copyright == "(c) 2026 Studio");
+		CHECK(loaded->Icon == "Adventure.png");
+
+		const std::pair<const char*, nlohmann::json> invalid[] = { { "Title", "Two\nlines" }, { "Version", "1.0-beta" }, { "Company", 7 },
+			{ "Copyright", std::string(129, 'c') }, { "Icon", "../Other.png" }, { "Icon", "Icons/Game.png" } };
+		for (const auto& [field, value] : invalid)
+		{
+			nlohmann::json json = manifest.ToJson();
+			json["Game"][field] = value;
+			CAPTURE(value.dump());
+			CHECK_FALSE(GameManifest::FromJson(json, &error));
+		}
+
+		// Without a title the game shows its name; a version-4 manifest has no identity.
+		nlohmann::json untitled = manifest.ToJson();
+		untitled["Game"]["Title"] = "";
+		CHECK(GameManifest::FromJson(untitled)->GetDisplayTitle() == "Adventure");
+		nlohmann::json version4 = manifest.ToJson();
+		version4["Strata"]["Version"] = 4;
+		loaded = GameManifest::FromJson(version4, &error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK(loaded->GetDisplayTitle() == "Adventure");
+		CHECK(loaded->Version.empty());
+		CHECK(loaded->Icon.empty());
 	}
 
 	TEST_CASE("Manifest settings over 1 MiB are refused")

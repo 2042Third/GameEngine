@@ -7,6 +7,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/GameExport.h"
+#include "Editor/GameIcon.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
 
@@ -18,6 +19,7 @@
 #include <Strata/Core/ProjectSettings.h>
 #include <Strata/Project/GameManifest.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/ImageReader.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/Scene.h>
@@ -27,8 +29,10 @@
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <deque>
 #include <set>
 #include <span>
@@ -107,6 +111,46 @@ namespace
 			return result.Error;
 		}
 	};
+
+	// An RGBA8 image whose quadrants are red, green, blue and white (top left, top right, bottom left, bottom right), opaque.
+	std::vector<uint8_t> MakeQuadrants(uint32_t width, uint32_t height)
+	{
+		std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4, 255);
+		for (uint32_t y = 0; y < height; y++)
+		{
+			for (uint32_t x = 0; x < width; x++)
+			{
+				uint8_t* pixel = &pixels[(static_cast<size_t>(y) * width + x) * 4];
+				const bool right = x >= width / 2;
+				const bool bottom = y >= height / 2;
+				if (!right && !bottom)
+					pixel[1] = pixel[2] = 0;
+				else if (right && !bottom)
+					pixel[0] = pixel[2] = 0;
+				else if (!right && bottom)
+					pixel[0] = pixel[1] = 0;
+			}
+		}
+		return pixels;
+	}
+
+	// The pixel of an icon image at (x, y).
+	std::array<uint8_t, 4> PixelAt(const GameIcon::Image& image, uint32_t x, uint32_t y)
+	{
+		const uint8_t* pixel = &image.Pixels[(static_cast<size_t>(y) * image.Size + x) * 4];
+		return { pixel[0], pixel[1], pixel[2], pixel[3] };
+	}
+
+	// Whether a color is within a few steps of another (filters blur edges, and colors pass through linear light).
+	bool IsNear(const std::array<uint8_t, 4>& color, std::array<uint8_t, 4> expected, int tolerance = 6)
+	{
+		for (size_t channel = 0; channel < 4; channel++)
+		{
+			if (std::abs(static_cast<int>(color[channel]) - static_cast<int>(expected[channel])) > tolerance)
+				return false;
+		}
+		return true;
+	}
 
 	std::set<std::string> ExcludedPaths(const nlohmann::json& result)
 	{
@@ -517,6 +561,54 @@ TEST_SUITE("Editor.Export")
 		CHECK(manifest->Settings->GetStoredEntry(c_GameTestSection)["Value"]["Banner"] == banner);
 	}
 
+	TEST_CASE("The manifest carries title, version, company, copyright and the icon file; the PNG decodes at 256 pixels")
+	{
+		ExportHarness harness("EditorExportIdentity");
+		// Without an identity the game shows the project's name and has no icon.
+		const nlohmann::json plain = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(harness.Directory / "Plain") }, { "includeRuntime", false } });
+		CHECK(plain["icon"].is_null());
+		CHECK(plain["warnings"].empty());
+		std::string error;
+		std::optional<GameManifest> manifest = GameManifest::Load(FileSystem::FromUTF8(plain["manifest"].get<std::string>()), &error);
+		REQUIRE_MESSAGE(manifest, error);
+		CHECK(manifest->Title == "Export Game");
+		CHECK(manifest->Version == ProjectGameInfo::c_DefaultVersion);
+		CHECK(manifest->Icon.empty());
+
+		const std::filesystem::path source = CreateTemporaryDirectory("EditorExportIdentitySource") / "Icon.png";
+		REQUIRE(FileSystem::WriteBytes(source, EncodePNG(300, 300, MakeQuadrants(300, 300))));
+		const std::string icon = harness.Run("asset.import", { { "file", FileSystem::ToUTF8(source) }, { "directory", "Textures" } })["asset"].get<std::string>();
+		harness.Run("project.setGameInfo", { { "title", "Export Adventure" }, { "version", "2.3.4" }, { "company", "Studio" },
+			{ "copyright", "(c) 2026 Studio" }, { "icon", icon } });
+		const std::filesystem::path output = harness.Directory / "Identity";
+		const nlohmann::json result = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false }, { "prune", true } });
+		CHECK(result["warnings"].empty());
+		REQUIRE(result["icon"].is_string());
+		CHECK(FileSystem::FromUTF8(result["icon"].get<std::string>()) == output / "Export Game.png");
+		manifest = GameManifest::Load(output / "Export Game.stgame", &error);
+		REQUIRE_MESSAGE(manifest, error);
+		// The name keys the saves; the title is what the game shows.
+		CHECK(manifest->Name == "Export Game");
+		CHECK(manifest->Title == "Export Adventure");
+		CHECK(manifest->Version == "2.3.4");
+		CHECK(manifest->Company == "Studio");
+		CHECK(manifest->Copyright == "(c) 2026 Studio");
+		CHECK(manifest->Icon == "Export Game.png");
+		// The icon is a file of its own: a pruned pack need not hold its texture.
+		CHECK(ExcludedPaths(result).contains("Textures/Icon.png"));
+
+		const std::optional<std::vector<uint8_t>> png = FileSystem::ReadBytes(output / "Export Game.png");
+		REQUIRE(png);
+		const std::optional<ReadbackImage> decoded = ImageReader::DecodeRGBA8(*png, &error);
+		REQUIRE_MESSAGE(decoded, error);
+		CHECK(decoded->Width == 256);
+		CHECK(decoded->Height == 256);
+		const uint8_t* topLeft = &decoded->Pixels[(32 * 256 + 32) * 4];
+		CHECK(topLeft[0] > 240);
+		CHECK(topLeft[1] < 16);
+		CHECK(topLeft[3] == 255);
+	}
+
 	TEST_CASE("Deleting the icon texture is refused while the project names it")
 	{
 		ExportHarness harness("EditorExportIconReference");
@@ -599,5 +691,129 @@ TEST_SUITE("Editor.Export")
 		CHECK(error(FileSystem::ToUTF8(file)).find("is a file, not a directory") != std::string::npos);
 		CHECK_FALSE(FileSystem::Exists(harness.Directory / "Games"));
 		CHECK_FALSE(CheckExportDirectory(harness.Directory / "Build", project).has_value());
+	}
+}
+
+TEST_SUITE("Editor.Export.GameIcon")
+{
+	TEST_CASE("A square icon is resized to every size")
+	{
+		std::string error;
+		const std::optional<GameIcon::Images> icon = GameIcon::Convert(EncodePNG(512, 512, MakeQuadrants(512, 512)), &error);
+		REQUIRE_MESSAGE(icon, error);
+		CHECK(icon->SourceWidth == 512);
+		CHECK(icon->SourceHeight == 512);
+		CHECK(icon->Warnings.empty());
+		REQUIRE(icon->Sizes.size() == GameIcon::c_Sizes.size());
+		for (size_t index = 0; index < GameIcon::c_Sizes.size(); index++)
+		{
+			const GameIcon::Image& image = icon->Sizes[index];
+			const uint32_t size = GameIcon::c_Sizes[index];
+			CAPTURE(size);
+			REQUIRE(image.Size == size);
+			REQUIRE(image.Pixels.size() == static_cast<size_t>(size) * size * 4);
+			// Each quadrant keeps its color away from the edges between them.
+			const uint32_t first = size / 8;
+			const uint32_t last = size - 1 - size / 8;
+			CHECK(IsNear(PixelAt(image, first, first), { 255, 0, 0, 255 }));
+			CHECK(IsNear(PixelAt(image, last, first), { 0, 255, 0, 255 }));
+			CHECK(IsNear(PixelAt(image, first, last), { 0, 0, 255, 255 }));
+			CHECK(IsNear(PixelAt(image, last, last), { 255, 255, 255, 255 }));
+		}
+		CHECK(icon->GetLargest().Size == GameIcon::c_LargestSize);
+
+		// The largest image's PNG decodes as it is.
+		const std::optional<std::vector<uint8_t>> png = GameIcon::EncodePNG(icon->GetLargest(), &error);
+		REQUIRE_MESSAGE(png, error);
+		const std::optional<ReadbackImage> decoded = ImageReader::DecodeRGBA8(*png, &error);
+		REQUIRE_MESSAGE(decoded, error);
+		CHECK(decoded->Width == 256);
+		CHECK(decoded->Pixels == icon->GetLargest().Pixels);
+	}
+
+	TEST_CASE("A non-square icon is centered on transparent pixels")
+	{
+		// 400 x 200 of red: the 400-pixel square has 100 transparent rows above and below it.
+		std::vector<uint8_t> red(400 * 200 * 4, 0);
+		for (size_t pixel = 0; pixel < 400 * 200; pixel++)
+		{
+			red[pixel * 4] = 255;
+			red[pixel * 4 + 3] = 255;
+		}
+		std::string error;
+		const std::optional<GameIcon::Images> icon = GameIcon::Convert(EncodePNG(400, 200, red), &error);
+		REQUIRE_MESSAGE(icon, error);
+		CHECK(icon->Warnings.empty());
+		const GameIcon::Image& large = icon->GetLargest();
+		CHECK(PixelAt(large, 128, 10)[3] == 0);
+		CHECK(PixelAt(large, 128, 245)[3] == 0);
+		CHECK(IsNear(PixelAt(large, 128, 128), { 255, 0, 0, 255 }));
+		CHECK(IsNear(PixelAt(large, 5, 128), { 255, 0, 0, 255 }));
+		// The transparent border neither darkens nor tints the edge: colors are weighted by alpha.
+		for (uint32_t row = 56; row < 72; row++)
+		{
+			const std::array<uint8_t, 4> pixel = PixelAt(large, 128, row);
+			if (pixel[3] > 8)
+			{
+				CAPTURE(row);
+				CHECK(pixel[0] > 240);
+				CHECK(pixel[1] < 8);
+			}
+		}
+		const GameIcon::Image& small = icon->Sizes.front();
+		CHECK(small.Size == 16);
+		CHECK(IsNear(PixelAt(small, 8, 8), { 255, 0, 0, 255 }));
+		CHECK(PixelAt(small, 8, 0)[3] == 0);
+	}
+
+	TEST_CASE("A small icon is upscaled with a warning")
+	{
+		std::string error;
+		const std::optional<GameIcon::Images> icon = GameIcon::Convert(CreateSolidPNG(64, 48, 40, 200, 40), &error);
+		REQUIRE_MESSAGE(icon, error);
+		REQUIRE(icon->Warnings.size() == 1);
+		CHECK(icon->Warnings[0].find("64 x 48 pixels") != std::string::npos);
+		CHECK(icon->Warnings[0].find("at least 256 x 256") != std::string::npos);
+		REQUIRE(icon->Sizes.size() == GameIcon::c_Sizes.size());
+		CHECK(IsNear(PixelAt(icon->GetLargest(), 128, 128), { 40, 200, 40, 255 }));
+		// The sizes of the source and smaller are not enlarged, so no warning for a source of 256 pixels.
+		const std::optional<GameIcon::Images> exact = GameIcon::Convert(CreateSolidPNG(256, 256, 40, 200, 40), &error);
+		REQUIRE_MESSAGE(exact, error);
+		CHECK(exact->Warnings.empty());
+
+		// The export reports the warning.
+		ExportHarness harness("EditorExportSmallIcon");
+		const std::filesystem::path source = CreateTemporaryDirectory("EditorExportSmallIconSource") / "Small.png";
+		REQUIRE(FileSystem::WriteBytes(source, CreateSolidPNG(64, 64, 40, 200, 40)));
+		const std::string handle = harness.Run("asset.import", { { "file", FileSystem::ToUTF8(source) }, { "directory", "Textures" } })["asset"].get<std::string>();
+		harness.Run("project.setGameInfo", { { "icon", handle } });
+		const nlohmann::json result = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(harness.Directory / "Small") }, { "includeRuntime", false } });
+		REQUIRE(result["warnings"].size() == 1);
+		CHECK(result["warnings"][0].get<std::string>().find("64 x 64 pixels") != std::string::npos);
+	}
+
+	TEST_CASE("An icon that does not decode fails the export")
+	{
+		std::string error;
+		const std::vector<uint8_t> garbage = { 'n', 'o', 't', ' ', 'a', 'n', ' ', 'i', 'm', 'a', 'g', 'e' };
+		CHECK_FALSE(GameIcon::Convert(garbage, &error));
+		CHECK(error.find("no image the icon can be made from") != std::string::npos);
+
+		ExportHarness harness("EditorExportBrokenIcon");
+		const std::filesystem::path source = CreateTemporaryDirectory("EditorExportBrokenIconSource") / "Broken.png";
+		REQUIRE(FileSystem::WriteBytes(source, CreateSolidPNG(256, 256, 40, 200, 40)));
+		const std::string handle = harness.Run("asset.import", { { "file", FileSystem::ToUTF8(source) }, { "directory", "Textures" } })["asset"].get<std::string>();
+		harness.Run("project.setGameInfo", { { "icon", handle } });
+		// The file changes on disk after it was imported (nothing watches it here): the export decodes the file as it is.
+		const std::filesystem::path imported = harness.Context.GetAssetManager()->GetAbsolutePath(UUIDFromJson(nlohmann::json(handle)).value_or(UUID::Null()));
+		REQUIRE(FileSystem::WriteBytes(imported, garbage));
+		const std::filesystem::path output = harness.Directory / "Broken";
+		const std::string refused = harness.Error("project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false } });
+		CHECK(refused.find("The game's icon") != std::string::npos);
+		CHECK(refused.find("Broken.png") != std::string::npos);
+		CHECK(refused.find("project.setGameInfo") != std::string::npos);
+		// It failed before writing the pack or the manifest.
+		CHECK_FALSE(FileSystem::Exists(output / "Export Game.stgame"));
+		CHECK_FALSE(FileSystem::Exists(output / "Export Game.stpak"));
 	}
 }
