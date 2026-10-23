@@ -68,7 +68,8 @@ struct FrameConstants
 	// Height fog (HeightFogComponent, Include/Fog.glsl; FogParams.x is 0 without one):
 	vec4 FogDensity; // x: density at the base height (per meter), y: height falloff, z: the camera's height above the base, w: start distance
 	vec4 FogColor;   // rgb: the scattering's albedo, w: maximum opacity
-	// rgb: light the fog scatters besides the sky's irradiance and the sun, w: 1 when the environment's irradiance lights it
+	// rgb: light the fog scatters besides the sun's (the procedural sky's horizon, the ambient color, or 1 when ColorFromSky
+	// is off), w: 1 when an environment map's irradiance from above lights it instead
 	vec4 FogLight;
 	vec4 FogParams;  // x: 1 when the scene has fog, y: the asymmetry of its scattering of the directional light
 };
