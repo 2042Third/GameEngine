@@ -1,6 +1,9 @@
 #include "Renderer/TAATestUtils.h"
 
+#include <glm/gtc/constants.hpp>
+
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -116,6 +119,90 @@ namespace
 	float Luminance(const glm::vec3& color)
 	{
 		return glm::dot(color, c_LuminanceWeights);
+	}
+
+	TemporalAntiAliasingSettings WithResampleWeight(float weight)
+	{
+		TemporalAntiAliasingSettings settings = c_TAAOriginalSettings;
+		settings.ResampleWeight = weight;
+		return settings;
+	}
+
+	// Texture detail: a low-contrast texture (linear luminance 0.3 to 0.7, 0.18 apart in compressed luminance) on a plane facing
+	// an orthographic camera from above, one texel per pixel (8 per unit). Four bands of c_Size / 4 rows hold sinusoids along x
+	// of the periods in c_DetailPeriods. The plane is twice the view's width, so the camera can pan along it.
+	constexpr std::array<float, 4> c_DetailPeriods = { 3.0f, 4.0f, 5.0f, 6.0f };
+	constexpr uint32_t c_DetailBandRows = c_Size / 4;
+
+	struct DetailScene
+	{
+		Scene Contents;
+
+		DetailScene(SceneTestAssets& assets, const TemporalAntiAliasingSettings& settings)
+		{
+			SetTemporalAntiAliasingSettings(AddTemporalPostProcess(Contents, TemporalAntiAliasingPreset::Custom), settings);
+			constexpr uint32_t width = c_Size * 2;
+			std::vector<uint8_t> pixels;
+			pixels.reserve(static_cast<size_t>(width) * c_Size * 4);
+			for (uint32_t y = 0; y < c_Size; y++)
+			{
+				const float period = c_DetailPeriods[y / c_DetailBandRows];
+				for (uint32_t x = 0; x < width; x++)
+				{
+					const float value = 0.5f + 0.2f * std::sin(glm::two_pi<float>() * static_cast<float>(x) / period + 0.3f);
+					const uint8_t level = static_cast<uint8_t>(std::lround(value * 255.0f));
+					pixels.insert(pixels.end(), { level, level, level, 255 });
+				}
+			}
+			MaterialProperties properties = UnlitColor({ 1.0f, 1.0f, 1.0f, 1.0f });
+			properties.BaseColorMap = assets.AddTexture(width, c_Size, pixels, TextureFormat::RGBA8, TextureFilter::Linear, TextureWrap::Clamp);
+			// x from -4 to 12, z from -4 to 4.
+			Entity plane = AddMesh(Contents, BuiltinAssets::PlaneMesh, assets.AddMaterial(properties), glm::vec3(4.0f, 0.0f, 0.0f), "Detail");
+			plane.GetComponent<TransformComponent>().Scale = glm::vec3(16.0f, 1.0f, 8.0f);
+		}
+
+		// The view of the plane's left half moved `pixels` to the right.
+		static SceneCamera Camera(float pixels)
+		{
+			const float x = pixels / 8.0f;
+			return OrthographicLookAt(glm::vec3(x, 10.0f, 0.0f), glm::vec3(x, 0.0f, 0.0f), 8.0f);
+		}
+
+		// The standard deviation of the luminance in each band (its rows away from the other bands, the columns away from the
+		// view's sides, where a pan brings in what the history does not hold).
+		static std::array<double, 4> Amplitudes(const std::vector<glm::vec3>& image)
+		{
+			std::array<double, 4> amplitudes = {};
+			for (uint32_t band = 0; band < c_DetailPeriods.size(); band++)
+			{
+				double sum = 0.0;
+				double squares = 0.0;
+				uint32_t count = 0;
+				for (uint32_t y = band * c_DetailBandRows + 3; y < (band + 1) * c_DetailBandRows - 3; y++)
+				{
+					for (uint32_t x = 2; x < c_Size - 4; x++)
+					{
+						const double value = Luminance(image[static_cast<size_t>(y) * c_Size + x]);
+						sum += value;
+						squares += value * value;
+						count++;
+					}
+				}
+				const double mean = sum / count;
+				amplitudes[band] = std::sqrt(std::max(squares / count - mean * mean, 0.0));
+			}
+			return amplitudes;
+		}
+	};
+
+	// What a steady pan between texels keeps of a sinusoid of `period` texels, relative to a still view: the current frame
+	// weighs `weight`, and the history, read halfway between texels every frame, passes the Catmull-Rom filter's response
+	// there (its taps at 1.5 and 0.5 texels weigh -0.0625 and 0.5625 on each side), so w / (1 - (1 - w) a).
+	double PredictPanDetail(float period, float weight)
+	{
+		const double frequency = glm::two_pi<double>() / period;
+		const double response = 2.0 * (0.5625 * std::cos(frequency * 0.5) - 0.0625 * std::cos(frequency * 1.5));
+		return weight / (1.0 - (1.0 - weight) * response);
 	}
 
 	// Moves the boxes, the quad and the camera of a TemporalScene one frame on.
@@ -317,6 +404,81 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		INFO("trails: range " << range << ", variance " << variance);
 		CHECK(range >= 0.02);
 		CHECK(variance <= 0.5 * range);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A slow pan keeps more texture detail with the resampling term, as its model predicts")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		constexpr float c_ResampleWeight = 0.25f;
+		for (const float speed : { 0.5f, 1.5f })
+		{
+			CAPTURE(speed);
+			// 32 frames of a pan at `speed` pixels a frame; the detail kept, relative to a still view of the last position.
+			const auto pan = [&](const TemporalAntiAliasingSettings& settings)
+			{
+				DetailScene scene(assets, settings);
+				SceneRenderer renderer = CreateRenderer("Pan");
+				renderer.SetViewportSize(c_Size, c_Size);
+				for (uint32_t frame = 0; frame < 32; frame++)
+				{
+					REQUIRE(renderer.Render(scene.Contents, DetailScene::Camera(speed * static_cast<float>(frame))));
+					FinishFrame(gpu);
+				}
+				CHECK(renderer.GetStats().TemporalFrames == 32);
+				const std::array<double, 4> panned = DetailScene::Amplitudes(ReadHDR(renderer.GetResolvedHDRTexture()));
+				SceneRenderer still = CreateRenderer("Still");
+				still.SetViewportSize(c_Size, c_Size);
+				for (uint32_t frame = 0; frame < SceneRenderer::c_TemporalJitterPhases; frame++)
+					REQUIRE(still.Render(scene.Contents, DetailScene::Camera(speed * 31.0f)));
+				const std::array<double, 4> settled = DetailScene::Amplitudes(ReadHDR(still.GetResolvedHDRTexture()));
+				std::array<double, 4> kept = {};
+				for (size_t band = 0; band < kept.size(); band++)
+					kept[band] = panned[band] / settled[band];
+				return kept;
+			};
+			const std::array<double, 4> original = pan(c_TAAOriginalSettings);
+			const std::array<double, 4> resampled = pan(WithResampleWeight(c_ResampleWeight));
+			for (size_t band = 0; band < c_DetailPeriods.size(); band++)
+			{
+				const float period = c_DetailPeriods[band];
+				CAPTURE(period);
+				const double predicted = PredictPanDetail(period, c_ResampleWeight);
+				INFO("kept: original " << original[band] << " (predicted " << PredictPanDetail(period, 0.125f) << "), resampled " << resampled[band]
+					<< " (predicted " << predicted << ")");
+				CHECK(resampled[band] >= 0.9 * predicted);
+				// Short periods lose the most to the filter; from 5 texels on both keep most of the detail.
+				if (period <= 4.0f)
+					CHECK(resampled[band] >= 1.2 * original[band]);
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Integer motion reads the history's texels: the resampling term changes nothing")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		DetailScene off(assets, WithResampleWeight(0.0f));
+		DetailScene on(assets, WithResampleWeight(0.25f));
+		SceneRenderer offRenderer = CreateRenderer("Off");
+		SceneRenderer onRenderer = CreateRenderer("On");
+		offRenderer.SetViewportSize(c_Size, c_Size);
+		onRenderer.SetViewportSize(c_Size, c_Size);
+		for (uint32_t frame = 0; frame < 16; frame++)
+		{
+			CAPTURE(frame);
+			const SceneCamera camera = DetailScene::Camera(static_cast<float>(frame));
+			const ReadbackImage offImage = RenderToImage(offRenderer, off.Contents, camera);
+			const ReadbackImage onImage = RenderToImage(onRenderer, on.Contents, camera);
+			CHECK(ReadHDRBits(offRenderer.GetResolvedHDRTexture()) == ReadHDRBits(onRenderer.GetResolvedHDRTexture()));
+			CHECK(offImage.Pixels == onImage.Pixels);
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
