@@ -638,7 +638,8 @@ Bindings a game's rebinding menu saved while playing (`Input::SaveBindings`, int
 replace the project's at every play start, so `setAction`'s bindings do not reach play for those actions:
 `inputActions.resetPlayerBindings {}` deletes that file (and, while playing, gives the game the project's bindings back).
 **Preferences** (toolset `settings`) are the person's, for every project, not the project's: `preferences.get` lists them
-like `project.settings` does (the external editor is `Editor.ExternalEditor`, `{"Command": "..."}`), and
+like `project.settings` does (the external editor is `Editor.ExternalEditor`, `{"Command": "..."}`; the interface scale
+`Editor.Interface`, `{"Scale": "125%"}`), and
 `preferences.set {"section", "value" | "reset": true}` changes one; they are no undo steps. Change them only when asked:
 they are someone's environment. A failed write shows as `preferences.get`'s `fileState` `"unwritten"`; `preferences.save`
 writes again, and `editor.quit` refuses until then (`force: true` reports `discardedPreferences`).

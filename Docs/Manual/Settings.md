@@ -74,6 +74,9 @@ them back on the same page. **Close** or Escape closes the window.
 
 - **External Editor** (also **Scripts > External Editor...**): the program that opens your script files, from the
   Problems panel, crash reports and New Script. See [Your code editor](Scripting.md#your-code-editor).
+- **Interface**: the size of the editor's interface, as a percentage of the size Strata picks for your display
+  (**Automatic**). It changes at once and holds when you move the window to another display. Starting the editor with
+  `--ui-scale` overrides it for that session.
 
 Strata 0.5.0 kept the external editor in `EditorSettings.json` in the same folder. The first time a later editor starts,
 it copies that setting into its preferences; from then on each version keeps its own, so an older editor installed beside

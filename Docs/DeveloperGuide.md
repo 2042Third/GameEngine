@@ -1135,7 +1135,7 @@ section; the composition root runs it first, and Input is a module every engine 
 ### Preferences
 
 The person's preferences are the registry's *user* sections (`SettingsScope::User`): the editor's own (the external
-editor, `Editor.ExternalEditor`), registered by `EditorPreferences::RegisterSections` in the editor's `Extra`
+editor, `Editor.ExternalEditor`, and the interface, `Editor.Interface`), registered by `EditorPreferences::RegisterSections` in the editor's `Extra`
 registration (and the tests'), and any a module registers. They hold for every project and never reach a game.
 
 - **The store.** `Editor/EditorPreferences` keeps them in `<user data>/Strata/Preferences.json`
@@ -1172,6 +1172,12 @@ registration (and the tests'), and any a module registers. They hold for every p
   `{ "Command": ... }`); `STRATA_EXTERNAL_EDITOR` still wins. The section checks the template's form only; whether its
   program is there depends on the machine and the PATH the editor started with, so `script.setExternalEditor` (and the
   External Editor page) check that when the person sets one.
+- **The interface scale.** `Editor.Interface` (`Editor/EditorInterface`, a simple section on the generic page) holds
+  `Scale`, a percentage of the automatic UI scale: `Automatic` (100%), `75%`, `90%`, `110%`, `125%`, `150%`, `175%` or
+  `200%`. Whenever the preferences' version changes (and on the first frame) `EditorLayer` gives the factor to the host
+  (`EditorHost::SetUIScaleFactor`), which gives it to `ImGuiLayer::SetContentScaleFactor`: the UI scale is the content
+  scale times the factor (clamped to `c_MinScale`..`c_MaxScale`), so the choice holds on every display, and
+  `--ui-scale`'s override (`SetContentScaleOverride`) wins over it for its session.
 
 ## Asset pipeline
 
@@ -1898,7 +1904,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     selected row keeps the accent under the mouse.
   - Sizes are relative to the font (multiples of `ImGui::GetFontSize()` or `GetFrameHeight()`, or the style's sizes),
     never fixed pixels above 16, so the UI follows the UI scale (the window's content scale less what window coordinates
-    in points apply already, `ImGuiLayer::ToUIScale`, or `--ui-scale`). The default layout gives the side panels at least
+    in points apply already, `ImGuiLayer::ToUIScale`, times the person's `Editor.Interface` scale, or `--ui-scale`). The default layout gives the side panels at least
     16 (Hierarchy) and 18 (Inspector) text heights at large UI scales, each at most 30% of the width. The scan
     judges every value passed to size-taking calls by the product it is part of, and follows names that hold sizes
     (`const float width = 200.0f` used later is found too). `UI::ApplyTheme` sets every size ImGui scales to an even
@@ -2363,7 +2369,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   exits 3 with the usage, and so does a value an option does not take (`--frames abc`, `--frames 0`: `CheckValues`; the
   table of arguments is `c_Arguments` in `EditorApplication.cpp`: add new ones there; the runtime's is in
   `RuntimeApplication.cpp`, and both check and print theirs through `Core/CommandLineOptions`). `--ui-scale <factor>` draws the
-  UI at a fixed scale instead of the display's (e.g. 1 to check it at 100% on a 150% display), `--layout <file>` keeps
+  UI at a fixed scale instead of the display's and the person's preference (e.g. 1 to check it at 100% on a 150%
+  display), `--layout <file>` keeps
   the panel layout in that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers
   ImGui's demo window (Help menu) for UI work.
   Without `--frames`, a headless editor runs until `editor.quit` (which, like the other commands that replace the scene,

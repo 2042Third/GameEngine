@@ -194,6 +194,26 @@ namespace Strata
 		ApplyStyle();
 	}
 
+	void ImGuiLayer::SetContentScaleFactor(float factor)
+	{
+		if (!std::isfinite(factor) || factor <= 0.0f)
+		{
+			ST_CORE_WARN("ImGuiLayer: ignoring the UI scale factor {}", factor);
+			return;
+		}
+		if (factor == m_ContentScaleFactor)
+			return;
+		m_ContentScaleFactor = factor;
+		ApplyStyle();
+	}
+
+	float ImGuiLayer::GetUIScale() const
+	{
+		if (m_ContentScaleOverride > 0.0f)
+			return m_ContentScaleOverride;
+		return std::clamp(m_ContentScale * m_ContentScaleFactor, c_MinScale, c_MaxScale);
+	}
+
 	void ImGuiLayer::ApplyStyle()
 	{
 		if (!ImGui::GetCurrentContext())

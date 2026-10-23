@@ -4,8 +4,10 @@
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorInterface.h"
 #include "Editor/EditorPreferences.h"
 #include "Editor/ExternalEditor.h"
+#include "Editor/HarnessEditor.h"
 #include "Editor/SettingsFileWriter.h"
 #include "Editor/UndoStack.h"
 #include "TestHelpers.h"
@@ -16,6 +18,7 @@
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Core/Timestep.h>
+#include <Strata/ImGui/ImGuiLayer.h>
 
 #include <nlohmann/json.hpp>
 
@@ -298,6 +301,56 @@ TEST_SUITE("Editor.Preferences")
 		CHECK_FALSE(harness.Context.HasSavesInFlight());
 		harness.Run("preferences.set", { { "section", ExternalEditor::c_SettingsSection }, { "reset", true } });
 		CHECK(harness.Run("preferences.get")["sections"][0]["isDefault"] == true);
+	}
+
+	TEST_CASE("Scale applies through the host and --ui-scale wins")
+	{
+		{
+			HarnessEditor editor;
+			// The layer gives the host the preferences' factor from its first frame: Automatic, 100% of the display's scale.
+			editor.Host->UIScaleFactor = 0.5f;
+			editor.Frames(1);
+			CHECK(editor.Host->UIScaleFactor == 1.0f);
+			const size_t steps = editor.Context().GetUndoStack().GetCount();
+			editor.Run("preferences.set", { { "section", EditorInterface::c_SettingsSection }, { "value", { { "Scale", "125%" } } } });
+			editor.Frames(1);
+			CHECK(editor.Host->UIScaleFactor == doctest::Approx(1.25f));
+			CHECK(editor.Context().GetUndoStack().GetCount() == steps);
+			// A percentage the section does not offer changes nothing (100% is Automatic).
+			CHECK(editor.Layer->GetCommands().Execute(editor.Context(), "preferences.set",
+				{ { "section", EditorInterface::c_SettingsSection }, { "value", { { "Scale", "100%" } } } }).ErrorKind == EditorCommandError::InvalidParameters);
+			editor.Frames(1);
+			CHECK(editor.Host->UIScaleFactor == doctest::Approx(1.25f));
+			editor.Run("preferences.set", { { "section", EditorInterface::c_SettingsSection }, { "value", { { "Scale", "75%" } } } });
+			editor.Frames(1);
+			CHECK(editor.Host->UIScaleFactor == doctest::Approx(0.75f));
+			editor.Run("preferences.set", { { "section", EditorInterface::c_SettingsSection }, { "reset", true } });
+			editor.Frames(1);
+			CHECK(editor.Host->UIScaleFactor == 1.0f);
+		}
+
+		// The editor's host gives the factor to the ImGui layer: it scales the display's scale on every display, and the
+		// override --ui-scale sets wins over it.
+		ImGuiLayer layer;
+		layer.SetContentScale(2.0f);
+		layer.SetContentScaleFactor(1.25f);
+		CHECK(layer.GetUIScale() == doctest::Approx(2.5f));
+		layer.SetContentScale(1.0f);
+		CHECK(layer.GetUIScale() == doctest::Approx(1.25f));
+		layer.SetContentScaleOverride(1.5f);
+		CHECK(layer.GetUIScale() == doctest::Approx(1.5f));
+		layer.SetContentScaleFactor(2.0f);
+		CHECK(layer.GetUIScale() == doctest::Approx(1.5f));
+		layer.SetContentScaleOverride(0.0f);
+		CHECK(layer.GetUIScale() == doctest::Approx(2.0f));
+		// The product stays within the layer's range, and factors that are no scale are ignored.
+		layer.SetContentScale(3.0f);
+		CHECK(layer.GetUIScale() == ImGuiLayer::c_MaxScale);
+		layer.SetContentScaleFactor(0.0f);
+		layer.SetContentScaleFactor(-1.0f);
+		CHECK(layer.GetUIScale() == ImGuiLayer::c_MaxScale);
+		layer.SetContentScaleFactor(0.75f);
+		CHECK(layer.GetUIScale() == doctest::Approx(2.25f));
 	}
 
 	TEST_CASE("Preference commands are Session commands and record no undo")

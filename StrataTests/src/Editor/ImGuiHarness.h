@@ -39,6 +39,7 @@ namespace Strata::Tests
 			double Time = 0.0;
 			bool WindowFocused = true;
 			float UIScale = 1.0f;
+			float UIScaleFactor = 1.0f;  // What the layer last set (SetUIScaleFactor); GetUIScale reports UIScale alone
 			uint32_t MaxFrameRate = 0;
 			uint32_t FrameRateChanges = 0; // SetMaxFrameRate calls that changed the rate
 			double FrameWorkTime = 0.0;    // Reported as the last frame's work time
@@ -68,6 +69,7 @@ namespace Strata::Tests
 		glm::uvec2 GetWindowSize() const override { return glm::uvec2(0); }
 		bool IsWindowFocused() const override { return m_State->WindowFocused; }
 		float GetUIScale() const override { return m_State->UIScale; }
+		void SetUIScaleFactor(float factor) override { m_State->UIScaleFactor = factor; }
 		void SetMaxFrameRate(uint32_t framesPerSecond) override
 		{
 			if (framesPerSecond != m_State->MaxFrameRate)

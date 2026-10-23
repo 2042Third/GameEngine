@@ -1,6 +1,7 @@
 #include "EditorLayer.h"
 
 #include "Editor/CommandUtils.h"
+#include "Editor/EditorInterface.h"
 #include "Editor/EditorPreferences.h"
 #include "Editor/ExternalEditor.h"
 #include "Editor/GameExport.h"
@@ -583,6 +584,12 @@ namespace Strata
 			m_StartupSeconds = m_Host->GetProcessUptime();
 			if (m_StartupSeconds)
 				ST_INFO("Started in {:.2f} s", *m_StartupSeconds);
+		}
+		// The interface scale the person chose, given to the host whenever the preferences change (--ui-scale wins there).
+		if (const uint64_t version = m_Context.GetPreferences().GetVersion(); version != m_AppliedPreferencesVersion)
+		{
+			m_AppliedPreferencesVersion = version;
+			m_Host->SetUIScaleFactor(EditorInterface::GetScaleFactor(m_Context.GetPreferences()));
 		}
 		// The game's content scale in play mode is the editor's (UI scaled to a physical size matches the editor's UI).
 		m_Context.GetGameWindow().SetContentScale(m_Host->GetUIScale());

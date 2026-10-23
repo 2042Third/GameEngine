@@ -507,7 +507,8 @@ Retina window of 1600 x 900 points has 3200 x 1800 pixels and content scale 2, a
 rasterizes its fonts at the framebuffer's density, so its UI scale is 1; where windows are measured in pixels, Windows
 and X11, it is the content scale). The style is rebuilt from ImGui's dark defaults by the application's style callback
 (`SetStyleCallback`; the editor installs its Bedrock theme) and the fonts' DPI scale (`ImGuiStyle::FontScaleDpi`)
-follows; `SetContentScaleOverride` fixes the scale (`--ui-scale`).
+follows; `SetContentScaleFactor` multiplies the content scale (the editor's `Editor.Interface` preference) and
+`SetContentScaleOverride` fixes the scale (`--ui-scale`), winning over both.
 `ImGuiPlatform` is the platform backend, written for the engine (the vendored GLFW backend is not built): ImGui's input
 comes from the window's events (keys by what they type in the keyboard layout, `Window::GetLayoutKey`, with their
 modifiers; typed text, also from input methods; the mouse, its wheel and `MouseLeaveEvent`; focus), its clipboard and

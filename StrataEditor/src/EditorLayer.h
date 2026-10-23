@@ -343,6 +343,8 @@ namespace Strata
 		bool m_UIDrawn = false; // OnImGuiRender ran at least once
 		// The inspection target the inspector tabs show (EditorContext::GetInspectionVersion): a new one brings its tab forward.
 		uint64_t m_ShownInspectionVersion = 0;
+		// The preferences' version whose interface scale the host has (EditorPreferences::GetVersion never returns 0).
+		uint64_t m_AppliedPreferencesVersion = 0;
 		std::string m_WindowTitle;
 		std::string m_AutomationError; // Why automation did not start (when it was asked for)
 		// The automation pill's text, made again only when the connected clients change (EditorAutomation::GetClientsVersion).

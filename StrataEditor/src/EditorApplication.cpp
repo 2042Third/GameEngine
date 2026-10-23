@@ -173,6 +173,14 @@ namespace Strata
 			return layer ? layer->GetUIScale() : 1.0f;
 		}
 
+		void SetUIScaleFactor(float factor) override
+		{
+			// The layer's override (--ui-scale) wins over the factor.
+			const ImGuiModule* imgui = m_Application.GetModules().Find<ImGuiModule>();
+			if (ImGuiLayer* layer = imgui ? imgui->GetLayer() : nullptr)
+				layer->SetContentScaleFactor(factor);
+		}
+
 		void SetMaxFrameRate(uint32_t framesPerSecond) override { m_Application.SetMaxFrameRate(framesPerSecond); }
 		uint32_t GetMaxFrameRate() const override { return m_Application.GetMaxFrameRate(); }
 		double GetLastFrameWorkTime() const override { return m_Application.GetLastFrameWorkTime(); }

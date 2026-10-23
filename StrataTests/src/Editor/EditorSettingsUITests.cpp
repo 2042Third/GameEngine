@@ -2,6 +2,7 @@
 
 #include "Core/SettingsTestUtils.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorInterface.h"
 #include "Editor/EditorPreferences.h"
 #include "Editor/ExternalEditor.h"
 #include "Editor/HarnessEditor.h"
@@ -588,6 +589,31 @@ TEST_SUITE("Editor.UI.Preferences")
 		editor.Run("preferences.set", { { "section", ExternalEditor::c_SettingsSection }, { "value", { { "Command", "noeditor {file}" } } } });
 		editor.Frames(2);
 		CHECK(UI::ItemProbe::Find("ExternalEditor.Program")->Text.starts_with("Cannot start: there is no program 'noeditor'"));
+	}
+
+	TEST_CASE("The Interface page's scale runs preferences.set")
+	{
+		HarnessEditor editor;
+		editor.Frames(1);
+		OpenPreferences(editor);
+		REQUIRE(editor.Click("Preferences.Page.Editor.Interface"));
+		editor.Frames(2);
+		const std::string field = std::string("Preferences.") + EditorInterface::c_SettingsSection + ".Scale";
+		REQUIRE(IsDrawn(field));
+		CHECK(UI::ItemProbe::Find(field)->Text == "Automatic");
+
+		const size_t steps = editor.Context().GetUndoStack().GetCount();
+		REQUIRE(editor.Click(field));
+		editor.Frames(1);
+		REQUIRE(editor.Click(field + ".150%"));
+		editor.Frames(2);
+		const nlohmann::json* value = editor.Context().GetPreferences().FindSection(EditorInterface::c_SettingsSection);
+		REQUIRE(value);
+		CHECK((*value)["Scale"] == "150%");
+		CHECK(editor.Host->UIScaleFactor == doctest::Approx(1.5f));
+		CHECK(UI::ItemProbe::Find(field)->Text == "150%");
+		// A preference, not a step of the project's history.
+		CHECK(editor.Context().GetUndoStack().GetCount() == steps);
 	}
 
 	TEST_CASE("Preferences open again from what is set: a command typed but not applied is gone")
