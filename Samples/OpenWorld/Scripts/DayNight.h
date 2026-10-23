@@ -45,9 +45,10 @@ private:
 		m_AppliedAngle = angle;
 
 		const float height = std::sin(glm::radians(angle)); // The sun's: 1 at noon, below 0 at night
-		// By day the sun, at night the moon across the sky from it (its elevation the sun's depth below the horizon).
+		// By day the sun, at night the moon across the sky from it (its elevation the sun's depth below the horizon): half a
+		// turn on, rising after sunset (the sun at 180 to 270 degrees) and setting before sunrise (the sun at -90 to 0).
 		const bool night = height < 0.0f;
-		const float lightAngle = night ? angle - 180.0f : angle;
+		const float lightAngle = night ? std::fmod(angle + 180.0f, 360.0f) : angle;
 		// The light shines along its -Z: turned toward the azimuth, then down by the elevation. It stays at least 2 degrees
 		// up (its shadows stay short enough to draw) and fades out from there to the horizon instead, where the atmosphere
 		// has already turned it a dim red, and the sky, lit by it, darkens with it.
