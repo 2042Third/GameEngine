@@ -54,6 +54,9 @@ namespace Strata
 		// Frames a capture may render again while temporal anti-aliasing settles (c_TemporalSettleFrames): enough for its eight
 		// phases even when another user of the capture renderer started its history again in between.
 		constexpr uint32_t c_MaxCaptureTemporalFrames = 16;
+		// Frames a capture may render again while shadow views of point and spot lights wait to be drawn: none for the capture
+		// renderer, which draws every view in its first frame (SceneRendererSpecification::SpreadLightingUpdates is off).
+		constexpr uint32_t c_MaxCaptureLightingFrames = 16;
 		// Polls a finished capture waits for its frame's GPU times (they are resolved 1-3 frames after the GPU finished it).
 		constexpr uint32_t c_MaxCaptureGPUStatsPolls = 8;
 
@@ -243,9 +246,11 @@ namespace Strata
 			uint32_t InstanceFrames = 0; // Renders repeated so far while new mesh renderers waited for their upload to the GPU
 			uint32_t MotionFrames = 0;   // Renders repeated for the motion view's previous frame
 			uint32_t TemporalFrames = 0; // Renders repeated while temporal anti-aliasing settled
+			uint32_t LightingFrames = 0; // Renders repeated while shadow views of point and spot lights waited to be drawn
 			uint32_t TexturesBelowWanted = 0;
 			uint32_t StalePoses = 0;
 			uint32_t DeferredProxies = 0;
+			uint32_t LocalShadowViewsPending = 0;
 			SceneRendererStats Stats;     // The captured frame's
 			uint64_t RenderFrame = 0;     // The frame profiler's frame that rendered it
 			uint64_t RenderCount = 0;     // The capture renderer's frame (SceneRenderer::GetRenderCount), whose GPU counts it waits for
@@ -327,6 +332,7 @@ namespace Strata
 			progress.TexturesBelowWanted = renderer->CountTexturesBelowWanted();
 			progress.StalePoses = stats.StalePoses;
 			progress.DeferredProxies = stats.DeferredProxies;
+			progress.LocalShadowViewsPending = stats.LocalShadowViewsPending;
 			// The UI's glyphs complete like the text's (its fonts and textures count in pendingAssets).
 			const bool textPending = progress.PendingTextGlyphs + progress.UI.PendingGlyphs > 0 && progress.TextFrames < c_MaxCaptureTextFrames;
 			const bool assetsPending = request.WaitForAssets && progress.PendingAssets > 0 && progress.AssetFrames < c_MaxCaptureAssetFrames;
@@ -335,7 +341,8 @@ namespace Strata
 			const bool instancesPending = request.WaitForAssets && progress.DeferredProxies > 0 && progress.InstanceFrames < c_MaxCaptureInstanceFrames;
 			// The motion view shows the motion since the capture renderer's previous frame, which its first frame lacks.
 			const bool motionPending = progress.DebugView == ViewportDebugView::Motion && !stats.MotionHistory && progress.MotionFrames == 0;
-			const bool contentPending = textPending || assetsPending || mipsPending || posesPending || instancesPending || motionPending;
+			const bool lightingPending = progress.LocalShadowViewsPending > 0 && progress.LightingFrames < c_MaxCaptureLightingFrames;
+			const bool contentPending = textPending || assetsPending || mipsPending || posesPending || instancesPending || motionPending || lightingPending;
 			// Temporal anti-aliasing: the mean of the jitter's phases of the complete view, as the viewport shows a still view once it
 			// settled. A frame still incomplete starts the history again (the capture's targets are released after each picture,
 			// so each one starts it anyway), so the picture blends complete frames only.
@@ -346,6 +353,7 @@ namespace Strata
 				if (contentPending)
 					renderer->GetSceneRenderer().ResetHistory();
 				progress.MotionFrames += motionPending ? 1 : 0;
+				progress.LightingFrames += lightingPending ? 1 : 0;
 				progress.TemporalFrames += temporalPending ? 1 : 0;
 				progress.TextFrames += textPending ? 1 : 0;
 				progress.AssetFrames += assetsPending ? 1 : 0;
@@ -449,13 +457,14 @@ namespace Strata
 				{ "camera", request.OwnCamera.IsSet() ? "custom" : (progress.View.FromScene ? "scene" : "editor") },
 				{ "view", DescribeView(progress.View.Camera) },
 				{ "waitedFrames", std::max({ progress.TextFrames, progress.AssetFrames, progress.MipFrames, progress.PoseFrames, progress.InstanceFrames,
-					progress.MotionFrames, progress.TemporalFrames }) },
+					progress.MotionFrames, progress.TemporalFrames, progress.LightingFrames }) },
 				{ "temporalFrames", progress.Stats.TemporalFrames },
 				{ "overlays", progress.Overlays },
 				{ "pendingAssets", progress.PendingAssets },
 				{ "texturesBelowWanted", progress.TexturesBelowWanted },
 				{ "stalePoses", progress.StalePoses },
 				{ "pendingTextGlyphs", progress.PendingTextGlyphs },
+				{ "localShadowViewsPending", progress.LocalShadowViewsPending },
 				{ "previewLighting", progress.PreviewLighting },
 				{ "screenSpaceTexts", progress.ScreenSpaceTexts },
 				{ "hiddenScreenSpaceTexts", progress.HiddenScreenSpaceTexts },
@@ -697,7 +706,8 @@ namespace Strata
 			"drawn with temporal anti-aliasing (PostProcess AntiAliasingMethod TAA), also without waitForAssets, until 8 frames of the complete "
 			"view, the mean of its jitter's phases (temporalFrames: the frames the picture's history holds, 0 without it). Reports what was still "
 			"loading when the picture was taken (pendingAssets), the textures drawn coarser than the view wants (texturesBelowWanted), animators "
-			"drawn with an older pose (stalePoses) and glyphs that could not be prepared in time (pendingTextGlyphs). debugView colors the picture "
+			"drawn with an older pose (stalePoses), glyphs that could not be prepared in time (pendingTextGlyphs) and point and spot lights' shadow "
+			"views not drawn (localShadowViewsPending; captures draw them all at once). debugView colors the picture "
 			"by streaming state, level of detail or mip levels (default: the viewport's, viewport.setSettings) and the result's debugView says what it "
 			"found: {view, tintedEntities, pendingEntities, failedEntities, placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], "
 			"lodErrorPixels: [the largest error drawn at each of those, in pixels, where levels are chosen by their errors; else 0], "

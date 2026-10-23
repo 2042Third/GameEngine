@@ -80,6 +80,11 @@ namespace Strata
 		specification.DebugName = debugName;
 		specification.FadeTextureLevels = fades;
 		specification.FadeLevelsOfDetail = fades;
+		// The capture renderer draws single pictures: every shadow view of every shadowed light in its first frame (no fades),
+		// into a smaller atlas (released with its targets after each picture).
+		specification.SpreadLightingUpdates = fades;
+		if (!fades)
+			specification.LocalShadowAtlasSize = 2048;
 		m_Renderer = CreateScope<SceneRenderer>(specification);
 	}
 

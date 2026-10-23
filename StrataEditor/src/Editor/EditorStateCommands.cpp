@@ -226,6 +226,10 @@ namespace Strata
 				{ "occludedProxies", stats.OccludedProxies },
 				{ "occludedCasters", stats.OccludedCasters },
 				{ "cachedCascades", std::popcount(stats.CachedCascadeMask) },
+				{ "localShadowLights", stats.LocalShadowLights },
+				{ "localShadowViewsDrawn", stats.LocalShadowViewsDrawn },
+				{ "localShadowViewsPending", stats.LocalShadowViewsPending },
+				{ "localShadowCasters", stats.LocalShadowCasters },
 				{ "culledProxies", stats.CulledInstances },
 				{ "instancesPerLod", std::move(lods) },
 				{ "lights", stats.Lights },
@@ -874,7 +878,9 @@ namespace Strata
 			"calls the CPU recorded), draws (instanced draws of the view), opaqueDraws, shadowDraws, instances, shadowCasters, triangles, "
 			"visibleProxies, occludedProxies (in the frustum but hidden behind what the view draws: left out on the GPU-driven path), occludedCasters "
 			"(shadow casters hidden from the light behind other casters, per cascade: left out of those cascades on the GPU-driven path), cachedCascades "
-			"(shadow cascades kept from the previous frame: nothing reaching them changed), culledProxies, "
+			"(shadow cascades kept from the previous frame: nothing reaching them changed), localShadowLights (point and spot lights with "
+			"shadows), localShadowViewsDrawn (their shadow views drawn: none while nothing reaching them changed), localShadowViewsPending, "
+			"localShadowCasters, culledProxies, "
 			"sizeCulledProxies (in view but below a pixel), instancesPerLod, lights, droppedLights, "
 			"materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes (new mesh renderers waiting for "
 			"their upload to the GPU), geometryPool "

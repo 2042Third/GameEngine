@@ -2242,10 +2242,13 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (default true) up to `c_MaxCaptureAssetFrames` while assets of the view are loading, so the first capture after
   opening or playing a scene shows its materials, and up
   to `c_MaxCaptureMipFrames` while textures it draws are coarser than its view wants them, as a texture counts as loaded
-  with its mip tail, and up to `c_MaxCapturePoseFrames` while animators it draws show a pose older than their time), reads
+  with its mip tail, and up to `c_MaxCapturePoseFrames` while animators it draws show a pose older than their time; the
+  capture renderer draws every shadow view of every shadowed point and spot light in its first frame, without
+  `SpreadLightingUpdates`, so `c_MaxCaptureLightingFrames` and `localShadowViewsPending` stay unused there), reads
   the image back without stalling, encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data":
   <base64>}, "width", "height", "camera", "view": {"position", "forward", "fov"}, "waitedFrames", "temporalFrames", "overlays",
-  "pendingAssets", "texturesBelowWanted", "stalePoses", "pendingTextGlyphs", "previewLighting", "screenSpaceTexts", "hiddenScreenSpaceTexts", "ui": {"canvases",
+  "pendingAssets", "texturesBelowWanted", "stalePoses", "pendingTextGlyphs", "localShadowViewsPending", "previewLighting",
+  "screenSpaceTexts", "hiddenScreenSpaceTexts", "ui": {"canvases",
   "hiddenCanvases", "elements", "drawCalls", "pendingGlyphs"}, "debugView":
   {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD",
   "entitiesPerMipShortfall"}, "notice"?, "path"?}` (the mip view counts entities with textures by the mip levels their
@@ -2757,8 +2760,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - `SpreadLightingUpdates` (on by default) draws at most `LocalShadowViewsPerFrame` (12) views per frame, the nearest
   lights' first; a light casts its shadow once all its views hold content and then fades it in over
   `SceneRenderer::c_LocalShadowFadeFrames` frames, and the lights ranked just above the most relevant one left out fade by
-  their margin over it. Off (renderers of single images), every view that is not up to date is drawn in the frame and
-  nothing fades. `CacheLocalShadows` off draws every view of every shadowed light every frame (the perf tests' worst case).
+  their margin over it. Off (renderers of single images: the editor's capture renderer, which also draws the project's
+  picture, and the thumbnails' renderer, both with a 2048 atlas, 16 MiB), every view that is not up to date is drawn in the
+  frame and nothing fades; captures and the project's picture still count views left pending as incomplete.
+  `CacheLocalShadows` off draws every view of every shadowed light every frame (the perf tests' worst case).
   `SceneRendererStats::LocalShadowLights`, `LocalShadowViewsDrawn` and `LocalShadowViewsPending` say what a frame did.
 - Which views a frame draws is the CPU's decision on both paths (`FindLocalShadowCasters`, one job per drawn light: a
   sphere query of its range, then the exact tests per view on the CPU path); what each view draws is decided twice

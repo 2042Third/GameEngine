@@ -1307,6 +1307,69 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture of a scene with sixteen shadowed point lights shows every light's shadow in its first complete frame")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.Run("entity.create", { { "name", "PostProcess" }, { "components", { { "PostProcess", { { "Tonemapper", "None" }, { "AutoExposure", false },
+			{ "Vignette", 0.0 }, { "Bloom", false }, { "AmbientOcclusion", false }, { "AntiAliasing", false } } } } } });
+		Scene& scene = *harness.Context.GetActiveScene();
+		Entity floor = scene.CreateEntity("Floor");
+		floor.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		floor.GetComponent<TransformComponent>().Scale = glm::vec3(60.0f, 1.0f, 60.0f);
+		floor.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		std::vector<Entity> lamps;
+		std::vector<glm::vec3> shadowCenters;
+		for (int index = 0; index < 16; index++)
+		{
+			const glm::vec3 position(static_cast<float>(index % 4) * 5.0f - 7.5f, 3.0f, static_cast<float>(index / 4) * 5.0f - 7.5f);
+			Entity lamp = scene.CreateEntity("Lamp");
+			lamp.GetComponent<TransformComponent>().Translation = position;
+			PointLightComponent& light = lamp.AddComponent<PointLightComponent>();
+			light.Intensity = 30.0f;
+			light.Range = 4.5f;
+			light.CastShadows = true;
+			lamps.push_back(lamp);
+			// A cube halfway down, offset along X: its shadow twice as far along X on the floor.
+			Entity cube = scene.CreateEntity("Cube");
+			cube.GetComponent<TransformComponent>().Translation = position + glm::vec3(0.5f, -1.5f, 0.0f);
+			cube.GetComponent<TransformComponent>().Scale = glm::vec3(0.8f);
+			cube.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+			shadowCenters.push_back(position + glm::vec3(1.0f, -3.0f, 0.0f));
+		}
+		harness.Run("camera.set", { { "position", { 1, 24, 14 } }, { "target", { 0, 0, 0 } } });
+		const nlohmann::json parameters = { { "width", 256 }, { "height", 256 }, { "overlays", false } };
+
+		// The capture renderer draws every view of every light in its first frame, into its smaller atlas: nothing to wait for.
+		nlohmann::json result;
+		const DecodedImage shadowed = harness.CaptureLoaded(parameters, &result);
+		CHECK(result["localShadowViewsPending"] == 0);
+		CHECK(result["waitedFrames"] == 0);
+		CHECK(result["renderStats"]["localShadowLights"] == 16);
+		CHECK(result["renderStats"]["localShadowViewsDrawn"] == 96);
+		ViewportRenderer* capture = harness.Context.GetViewport().GetCaptureRenderer();
+		REQUIRE(capture);
+		CHECK(capture->GetSceneRenderer().GetSpecification().LocalShadowAtlasSize == 2048);
+		CHECK_FALSE(capture->GetSceneRenderer().GetSpecification().SpreadLightingUpdates);
+		CHECK(capture->GetSceneRenderer().GetLocalShadowAtlas() == nullptr); // Released with the targets after the picture
+
+		for (Entity lamp : lamps)
+		{
+			lamp.GetComponent<PointLightComponent>().CastShadows = false;
+			lamp.MarkModified<PointLightComponent>();
+		}
+		const DecodedImage lit = harness.CaptureLoaded(parameters, &result);
+		const SceneCamera camera = harness.Context.GetViewport().GetCamera().GetSceneCamera(1.0f);
+		for (size_t index = 0; index < lamps.size(); index++)
+		{
+			CAPTURE(index);
+			CHECK(MeanLumaAround(shadowed, camera, shadowCenters[index]) < MeanLumaAround(lit, camera, shadowCenters[index]) * 0.7);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The selection outline has the color of the viewport's settings")
 	{
 		Tests::GPUContext gpu;

@@ -77,8 +77,9 @@ namespace Strata
 	class ViewportRenderer
 	{
 	public:
-		// `fades`: SceneRendererSpecification::FadeTextureLevels and FadeLevelsOfDetail (off for the capture renderer, whose
-		// images wait for the levels they need and show them at once).
+		// `fades`: SceneRendererSpecification::FadeTextureLevels, FadeLevelsOfDetail and SpreadLightingUpdates (off for the
+		// capture renderer, whose images wait for the levels they need and show them and every light's shadow at once; it also
+		// draws local light shadows into a 2048 atlas).
 		explicit ViewportRenderer(const std::string& debugName, bool fades = true);
 
 		ViewportRenderer(const ViewportRenderer&) = delete;

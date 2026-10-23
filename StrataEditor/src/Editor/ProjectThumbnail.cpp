@@ -136,13 +136,14 @@ namespace Strata
 				return;
 			}
 			// Complete, as captures wait for it: what loads, glyphs still being prepared (the scene's text and the game UI's),
-			// the finer levels of textures the view wants (a texture counts as loaded with its mip tail) and mesh renderers still
-			// on their way to the GPU, for at most c_MaxFrames frames (a texture budget may keep levels out for good). An
+			// the finer levels of textures the view wants (a texture counts as loaded with its mip tail), mesh renderers still
+			// on their way to the GPU and point and spot lights' shadow views not drawn yet (none for the capture renderer, which
+			// draws them at once), for at most c_MaxFrames frames (a texture budget may keep levels out for good). An
 			// incomplete frame starts temporal anti-aliasing's history again, so that it holds the jitter's phases of the
 			// complete view, or of the view as it is once that wait ended: the picture then waits for the history too.
 			const SceneRendererStats& stats = renderer->GetStats();
 			const bool incomplete = stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || stats.Overlays.PendingGlyphs > 0 || stats.DeferredProxies > 0
-				|| renderer->CountTexturesBelowWanted() > 0;
+				|| stats.LocalShadowViewsPending > 0 || renderer->CountTexturesBelowWanted() > 0;
 			if (incomplete && ++m_Frames < c_MaxFrames)
 			{
 				renderer->GetSceneRenderer().ResetHistory();
