@@ -21,15 +21,15 @@ namespace
 {
 
 	// The shadows' and the ambient occlusion's noise turns every frame with TAA, and the history smooths it: the converged
-	// penumbra's roughness stays below `bound` times one frame's. `custom` (when set) is the look, under Custom.
-	void CheckNoiseSmoothed(const TemporalAntiAliasingSettings* custom, double bound)
+	// penumbra's roughness stays below `bound` times one frame's under `preset`; `custom` (when set) is the look, under Custom.
+	void CheckNoiseSmoothed(TemporalAntiAliasingPreset preset, const TemporalAntiAliasingSettings* custom, double bound)
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
 		LoadAssets(assets);
 		Scene scene;
-		PostProcessComponent& postProcess = AddTemporalPostProcess(scene, custom ? TemporalAntiAliasingPreset::Custom : TemporalAntiAliasingPreset::Original);
+		PostProcessComponent& postProcess = AddTemporalPostProcess(scene, custom ? TemporalAntiAliasingPreset::Custom : preset);
 		if (custom)
 			SetTemporalAntiAliasingSettings(postProcess, *custom);
 		postProcess.AmbientOcclusion = true;
@@ -151,6 +151,106 @@ namespace
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	// Cuts, other scenes, resizes, a skipped device frame and ResetHistory start the history again under `preset`; slow
+	// frames do not.
+	void CheckResets(TemporalAntiAliasingPreset preset)
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		TemporalScene scene(preset);
+		SceneRenderer renderer = CreateRenderer("Resets");
+		renderer.SetViewportSize(c_Size, c_Size);
+		const auto render = [&](Scene& contents, uint32_t frames)
+		{
+			for (uint32_t frame = 0; frame < frames; frame++)
+			{
+				REQUIRE(renderer.Render(contents, scene.Camera));
+				FinishFrame(gpu);
+			}
+		};
+
+		render(scene.Contents, 1);
+		CheckReset(renderer, 1);
+		render(scene.Contents, 3);
+		CHECK(renderer.GetStats().TemporalFrames == 4);
+		CHECK(renderer.GetStats().HistoryResets == 1);
+
+		// A camera cut.
+		const SceneCamera before = scene.Camera;
+		scene.Camera = LookAt(glm::vec3(60.0f, 9.0f, 8.0f), glm::vec3(60.0f, 0.0f, -2.5f));
+		render(scene.Contents, 1);
+		CheckReset(renderer, 2);
+		scene.Camera = before;
+		render(scene.Contents, 1);
+		CheckReset(renderer, 3);
+		render(scene.Contents, 2);
+		CHECK(renderer.GetStats().TemporalFrames == 3);
+
+		// Another render scene, then back; a copy of the scene (entering Play) goes on from its source.
+		TemporalScene other(preset);
+		render(other.Contents, 1);
+		CheckReset(renderer, 4);
+		render(scene.Contents, 1);
+		CheckReset(renderer, 5);
+		Ref<Scene> source = CreateRef<Scene>("Source");
+		AddTemporalPostProcess(*source, preset);
+		AddMesh(*source, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Box");
+		render(*source, 2);
+		CHECK(renderer.GetStats().HistoryResets == 6);
+		Ref<Scene> copy = Scene::Copy(source);
+		render(*copy, 1);
+		CHECK(renderer.GetStats().TemporalFrames == 3);
+		CHECK(renderer.GetStats().HistoryResets == 6);
+
+		// A resize.
+		render(scene.Contents, 2);
+		CHECK(renderer.GetStats().HistoryResets == 7);
+		renderer.SetViewportSize(c_Size * 2, c_Size);
+		render(scene.Contents, 1);
+		CheckReset(renderer, 8);
+
+		// Device frames: a renderer may render several times in one, goes on in the next, and starts again after one it skipped.
+		render(scene.Contents, 1);
+		Renderer::BeginFrame();
+		render(scene.Contents, 2);
+		CHECK(renderer.GetStats().TemporalFrames == 4);
+		Renderer::BeginFrame();
+		Renderer::BeginFrame();
+		render(scene.Contents, 1);
+		CheckReset(renderer, 9);
+
+		// Asked for (a level load).
+		render(scene.Contents, 1);
+		renderer.ResetHistory();
+		render(scene.Contents, 1);
+		CheckReset(renderer, 10);
+
+		// A frame without temporal anti-aliasing leaves the history behind.
+		render(scene.Contents, 1);
+		PostProcessComponent& postProcess = GetPostProcess(scene.Contents);
+		postProcess.AntiAliasingMethod = AntiAliasingMode::FXAA;
+		render(scene.Contents, 1);
+		CHECK_FALSE(renderer.GetStats().TemporalAntiAliasing);
+		CHECK(renderer.GetStats().TemporalFrames == 0);
+		CHECK(renderer.GetStats().Jitter == glm::vec2(0.0f));
+		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
+		render(scene.Contents, 1);
+		CheckReset(renderer, 11);
+
+		// Frames far apart in time (slower than any frame rate) go on, each in the device frame after the previous one's.
+		for (uint32_t frame = 0; frame < 3; frame++)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(300));
+			Renderer::BeginFrame();
+			render(scene.Contents, 1);
+		}
+		CHECK(renderer.GetStats().TemporalFrames == 4);
+		CHECK(renderer.GetStats().HistoryResets == 11);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 }
 
 TEST_SUITE("GPU.SceneRenderer.TAA")
@@ -224,100 +324,12 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 
 	TEST_CASE("Cuts, other scenes, resizes, a skipped device frame and ResetHistory start the history again; slow frames do not")
 	{
-		GPUContext gpu;
-		REQUIRE(gpu.IsValid());
-		SceneTestAssets assets;
-		LoadAssets(assets);
-		TemporalScene scene(TemporalAntiAliasingPreset::Original);
-		SceneRenderer renderer = CreateRenderer("Resets");
-		renderer.SetViewportSize(c_Size, c_Size);
-		const auto render = [&](Scene& contents, uint32_t frames)
-		{
-			for (uint32_t frame = 0; frame < frames; frame++)
-			{
-				REQUIRE(renderer.Render(contents, scene.Camera));
-				FinishFrame(gpu);
-			}
-		};
+		CheckResets(TemporalAntiAliasingPreset::Original);
+	}
 
-		render(scene.Contents, 1);
-		CheckReset(renderer, 1);
-		render(scene.Contents, 3);
-		CHECK(renderer.GetStats().TemporalFrames == 4);
-		CHECK(renderer.GetStats().HistoryResets == 1);
-
-		// A camera cut.
-		const SceneCamera before = scene.Camera;
-		scene.Camera = LookAt(glm::vec3(60.0f, 9.0f, 8.0f), glm::vec3(60.0f, 0.0f, -2.5f));
-		render(scene.Contents, 1);
-		CheckReset(renderer, 2);
-		scene.Camera = before;
-		render(scene.Contents, 1);
-		CheckReset(renderer, 3);
-		render(scene.Contents, 2);
-		CHECK(renderer.GetStats().TemporalFrames == 3);
-
-		// Another render scene, then back; a copy of the scene (entering Play) goes on from its source.
-		TemporalScene other(TemporalAntiAliasingPreset::Original);
-		render(other.Contents, 1);
-		CheckReset(renderer, 4);
-		render(scene.Contents, 1);
-		CheckReset(renderer, 5);
-		Ref<Scene> source = CreateRef<Scene>("Source");
-		AddTemporalPostProcess(*source, TemporalAntiAliasingPreset::Original);
-		AddMesh(*source, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Box");
-		render(*source, 2);
-		CHECK(renderer.GetStats().HistoryResets == 6);
-		Ref<Scene> copy = Scene::Copy(source);
-		render(*copy, 1);
-		CHECK(renderer.GetStats().TemporalFrames == 3);
-		CHECK(renderer.GetStats().HistoryResets == 6);
-
-		// A resize.
-		render(scene.Contents, 2);
-		CHECK(renderer.GetStats().HistoryResets == 7);
-		renderer.SetViewportSize(c_Size * 2, c_Size);
-		render(scene.Contents, 1);
-		CheckReset(renderer, 8);
-
-		// Device frames: a renderer may render several times in one, goes on in the next, and starts again after one it skipped.
-		render(scene.Contents, 1);
-		Renderer::BeginFrame();
-		render(scene.Contents, 2);
-		CHECK(renderer.GetStats().TemporalFrames == 4);
-		Renderer::BeginFrame();
-		Renderer::BeginFrame();
-		render(scene.Contents, 1);
-		CheckReset(renderer, 9);
-
-		// Asked for (a level load).
-		render(scene.Contents, 1);
-		renderer.ResetHistory();
-		render(scene.Contents, 1);
-		CheckReset(renderer, 10);
-
-		// A frame without temporal anti-aliasing leaves the history behind.
-		render(scene.Contents, 1);
-		PostProcessComponent& postProcess = GetPostProcess(scene.Contents);
-		postProcess.AntiAliasingMethod = AntiAliasingMode::FXAA;
-		render(scene.Contents, 1);
-		CHECK_FALSE(renderer.GetStats().TemporalAntiAliasing);
-		CHECK(renderer.GetStats().TemporalFrames == 0);
-		CHECK(renderer.GetStats().Jitter == glm::vec2(0.0f));
-		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
-		render(scene.Contents, 1);
-		CheckReset(renderer, 11);
-
-		// Frames far apart in time (slower than any frame rate) go on, each in the device frame after the previous one's.
-		for (uint32_t frame = 0; frame < 3; frame++)
-		{
-			std::this_thread::sleep_for(std::chrono::milliseconds(300));
-			Renderer::BeginFrame();
-			render(scene.Contents, 1);
-		}
-		CHECK(renderer.GetStats().TemporalFrames == 4);
-		CHECK(renderer.GetStats().HistoryResets == 11);
-		CHECK(gpu.GetNewErrorCount() == 0);
+	TEST_CASE("Under Sharp, cuts, other scenes, resizes, a skipped device frame and ResetHistory start the history again")
+	{
+		CheckResets(TemporalAntiAliasingPreset::Sharp);
 	}
 
 	TEST_CASE("At eight frames a still edge is the mean of its eight jittered frames, and then stays near it")
@@ -493,7 +505,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 
 	TEST_CASE("With TAA the shadows' and the ambient occlusion's noise turns every frame, and the history smooths it")
 	{
-		CheckNoiseSmoothed(nullptr, 0.5);
+		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Original, nullptr, 0.5);
 	}
 
 	TEST_CASE("Variance clipping keeps the history smoothing the shadows' and the ambient occlusion's noise")
@@ -501,7 +513,12 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		TemporalAntiAliasingSettings settings = c_TAAOriginalSettings;
 		settings.HistoryClamp = TemporalHistoryClamp::Variance;
 		settings.ClipWidth = 1.25f;
-		CheckNoiseSmoothed(&settings, 0.6);
+		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Custom, &settings, 0.6);
+	}
+
+	TEST_CASE("Sharp keeps the history smoothing the shadows' and the ambient occlusion's noise")
+	{
+		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Sharp, nullptr, 0.6);
 	}
 
 	TEST_CASE("Both paths resolve the same image over sixteen frames of a moving scene")

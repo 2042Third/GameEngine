@@ -413,14 +413,14 @@ TEST_SUITE("Scene.Serialization")
 		warnings.clear();
 		loaded = load({ { "AntiAliasing", true }, { "AntiAliasingMethod", "TAA" } }, warnings);
 		CHECK(warnings.empty());
-		CHECK(loaded.TAAPreset == PostProcessComponent().TAAPreset);
+		CHECK(loaded.TAAPreset == TemporalAntiAliasingPreset::Sharp);
+		// A preset other than the default, so the name and the integer are shown to be read.
 		for (const nlohmann::json& original : { nlohmann::json("Original"), nlohmann::json(1) })
 		{
 			loaded = load({ { "TAAPreset", original } }, warnings);
 			CHECK(warnings.empty());
 			CHECK(loaded.TAAPreset == TemporalAntiAliasingPreset::Original);
 		}
-		// A preset other than the default, so the name and the integer are shown to be read.
 		for (const nlohmann::json& sharp : { nlohmann::json("Sharp"), nlohmann::json(0) })
 		{
 			loaded = load({ { "TAAPreset", sharp } }, warnings);

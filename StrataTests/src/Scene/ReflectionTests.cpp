@@ -124,7 +124,7 @@ TEST_SUITE("Reflection")
 		CHECK((preset->EnumValues[0].Name == "Sharp" && preset->EnumValues[0].Value == 0));
 		CHECK((preset->EnumValues[1].Name == "Original" && preset->EnumValues[1].Value == 1));
 		CHECK((preset->EnumValues[2].Name == "Custom" && preset->EnumValues[2].Value == 2));
-		CHECK(PostProcessComponent().TAAPreset == TemporalAntiAliasingPreset::Original);
+		CHECK(PostProcessComponent().TAAPreset == TemporalAntiAliasingPreset::Sharp);
 		const PropertyInfo* clamp = post->FindProperty("TAAHistoryClamp");
 		REQUIRE(clamp);
 		REQUIRE(clamp->EnumValues.size() == 2);

@@ -127,6 +127,7 @@ namespace
 		CHECK(postProcess.GetComponent<PostProcessComponent>().Exposure == doctest::Approx(1.0f));
 		CHECK(postProcess.GetComponent<PostProcessComponent>().AntiAliasing);
 		CHECK(postProcess.GetComponent<PostProcessComponent>().AntiAliasingMethod == AntiAliasingMode::TAA);
+		CHECK(postProcess.GetComponent<PostProcessComponent>().TAAPreset == TemporalAntiAliasingPreset::Sharp);
 	}
 
 	// Drops a dynamic unit box from 2 m above the middle of the scene's ground, in a playing copy of the scene, and returns the

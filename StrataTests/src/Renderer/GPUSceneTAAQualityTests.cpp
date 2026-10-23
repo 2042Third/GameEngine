@@ -287,7 +287,8 @@ namespace
 			REQUIRE(Framebuffer);
 		}
 
-		std::vector<float> Render(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
+		// The displayed colors, linear.
+		std::vector<glm::vec3> RenderColors(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
 		{
 			REQUIRE(renderer.Render(scene, camera, Framebuffer));
 			ReadbackImage image;
@@ -298,13 +299,22 @@ namespace
 				const float encoded = static_cast<float>(value) / 65535.0f;
 				return encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
 			};
-			std::vector<float> luminance(static_cast<size_t>(c_Size) * c_Size);
-			for (size_t pixel = 0; pixel < luminance.size(); pixel++)
+			std::vector<glm::vec3> colors(static_cast<size_t>(c_Size) * c_Size);
+			for (size_t pixel = 0; pixel < colors.size(); pixel++)
 			{
 				uint16_t texel[4];
 				std::memcpy(texel, image.Pixels.data() + pixel * image.BytesPerPixel, sizeof(texel));
-				luminance[pixel] = Luminance(glm::vec3(linear(texel[0]), linear(texel[1]), linear(texel[2])));
+				colors[pixel] = glm::vec3(linear(texel[0]), linear(texel[1]), linear(texel[2]));
 			}
+			return colors;
+		}
+
+		// The displayed luminance.
+		std::vector<float> Render(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
+		{
+			std::vector<float> luminance;
+			for (const glm::vec3& color : RenderColors(renderer, scene, camera))
+				luminance.push_back(Luminance(color));
 			return luminance;
 		}
 	};
@@ -515,9 +525,12 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		};
 		const double range = measureTrail(c_TAAOriginalSettings);
 		const double variance = measureTrail(WithVarianceClipping(c_ClipWidth));
-		INFO("trails: range " << range << ", variance " << variance);
+		// Sharp, with every technique on, leaves at most half of Original's trail too.
+		const double sharp = measureTrail(c_TAASharpSettings);
+		INFO("trails: range " << range << ", variance " << variance << ", Sharp " << sharp);
 		CHECK(range >= 0.02);
 		CHECK(variance <= 0.5 * range);
+		CHECK(sharp <= 0.5 * range);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -1203,6 +1216,136 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		singlePlain.SetViewportSize(c_Size, c_Size);
 		CHECK(render(singleSharpened, 1.0f).Pixels == render(singlePlain, 0.0f).Pixels);
 		CHECK_FALSE(singleSharpened.GetStats().TemporalAntiAliasing);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+	TEST_CASE("Under Sharp a still edge settles in eight frames, then stays near the mean and flickers at most half again as Original")
+	{
+		// Sharp keeps the least weight at 1/8, so its eighth frame is the eight phases' mean where the clip leaves the samples
+		// alone; on S2's edge it moves them a little. The bounds are fixed: values Sharp is tuned to must meet them.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		const size_t pixels = static_cast<size_t>(c_Size) * c_Size;
+		constexpr uint32_t c_LaterFrames = 32;
+		// The displayed colors' mean temporal deviation over frames 9-40, per preset.
+		const auto run = [&](TemporalAntiAliasingPreset preset, bool checkConvergence)
+		{
+			CAPTURE(static_cast<int>(preset));
+			EdgeScene scene(assets, preset);
+			SceneRenderer renderer = CreateRenderer("Edge");
+			renderer.SetViewportSize(c_Size, c_Size);
+			DisplayTarget target(gpu);
+			std::vector<std::vector<glm::vec3>> phases;
+			for (uint32_t frame = 0; frame < SceneRenderer::c_TemporalJitterPhases; frame++)
+			{
+				target.RenderColors(renderer, scene.Contents, scene.Camera);
+				phases.push_back(ReadHDR(renderer.GetHDRTexture()));
+			}
+			std::vector<glm::vec3> mean(pixels, glm::vec3(0.0f));
+			std::vector<glm::vec3> spread(pixels, glm::vec3(0.0f));
+			for (size_t pixel = 0; pixel < pixels; pixel++)
+			{
+				glm::vec3 low(1e30f);
+				glm::vec3 high(-1e30f);
+				for (const std::vector<glm::vec3>& phase : phases)
+				{
+					mean[pixel] += phase[pixel] / static_cast<float>(phases.size());
+					low = glm::min(low, phase[pixel]);
+					high = glm::max(high, phase[pixel]);
+				}
+				spread[pixel] = high - low;
+			}
+			// How far a pixel is from the mean, in parts of its spread (the half floats' rounding taken off).
+			const auto offset = [&](const std::vector<glm::vec3>& image, size_t pixel)
+			{
+				const glm::vec3 excess = glm::max(glm::abs(image[pixel] - mean[pixel]) - mean[pixel] * 0.005f - 1e-4f, glm::vec3(0.0f));
+				const glm::vec3 parts = excess / glm::max(spread[pixel], glm::vec3(1e-6f));
+				return std::max({ parts.x, parts.y, parts.z });
+			};
+			if (checkConvergence)
+			{
+				const std::vector<glm::vec3> eighth = ReadHDR(renderer.GetResolvedHDRTexture());
+				double edgeOffset = 0.0;
+				uint32_t edgePixels = 0;
+				float largest = 0.0f;
+				for (size_t pixel = 0; pixel < pixels; pixel++)
+				{
+					largest = std::max(largest, offset(eighth, pixel));
+					if (glm::any(glm::greaterThan(spread[pixel], glm::vec3(0.05f))))
+					{
+						edgeOffset += offset(eighth, pixel);
+						edgePixels++;
+					}
+				}
+				REQUIRE(edgePixels >= c_Size);
+				INFO("eighth frame: edge pixels " << edgeOffset / edgePixels << " of their spread from the mean on average, at most " << largest);
+				CHECK(edgeOffset / edgePixels <= 0.05);
+				CHECK(largest <= 0.25f);
+			}
+			std::vector<glm::dvec3> sums(pixels, glm::dvec3(0.0));
+			std::vector<glm::dvec3> squares(pixels, glm::dvec3(0.0));
+			float latest = 0.0f;
+			for (uint32_t frame = 0; frame < c_LaterFrames; frame++)
+			{
+				const std::vector<glm::vec3> shown = target.RenderColors(renderer, scene.Contents, scene.Camera);
+				if (checkConvergence)
+				{
+					const std::vector<glm::vec3> image = ReadHDR(renderer.GetResolvedHDRTexture());
+					for (size_t pixel = 0; pixel < pixels; pixel++)
+						latest = std::max(latest, offset(image, pixel));
+				}
+				for (size_t pixel = 0; pixel < pixels; pixel++)
+				{
+					sums[pixel] += glm::dvec3(shown[pixel]);
+					squares[pixel] += glm::dvec3(shown[pixel]) * glm::dvec3(shown[pixel]);
+				}
+			}
+			if (checkConvergence)
+			{
+				INFO("frames 9-40: at most " << latest << " of a pixel's spread from the mean");
+				CHECK(latest <= 0.30f);
+			}
+			double deviation = 0.0;
+			for (size_t pixel = 0; pixel < pixels; pixel++)
+			{
+				const glm::dvec3 average = sums[pixel] / static_cast<double>(c_LaterFrames);
+				const glm::dvec3 variance = glm::max(squares[pixel] / static_cast<double>(c_LaterFrames) - average * average, glm::dvec3(0.0));
+				deviation += std::sqrt(variance.x) + std::sqrt(variance.y) + std::sqrt(variance.z);
+			}
+			return deviation / static_cast<double>(pixels);
+		};
+		const double original = run(TemporalAntiAliasingPreset::Original, false);
+		const double sharp = run(TemporalAntiAliasingPreset::Sharp, true);
+		INFO("displayed temporal deviation: Original " << original << ", Sharp " << sharp);
+		CHECK(original > 0.0);
+		CHECK(sharp <= 1.5 * original);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Under Sharp both paths resolve the same image over sixteen frames with a moving transparent quad")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		TemporalScene scene(TemporalAntiAliasingPreset::Sharp);
+		Entity quad = AddTransparentQuad(scene.Contents, assets, { 1.0f, 0.2f, 0.1f, 0.5f }, glm::vec3(-3.0f, 1.5f, -1.0f), 2.0f);
+		SceneRenderer cpu = CreateRenderer("CPU", GPUDrivenMode::Off);
+		SceneRenderer gpuDriven = CreateRenderer("GPU", GPUDrivenMode::Auto);
+		cpu.SetViewportSize(c_Size, c_Size);
+		gpuDriven.SetViewportSize(c_Size, c_Size);
+		for (uint32_t frame = 0; frame < 16; frame++)
+		{
+			CAPTURE(frame);
+			const ReadbackImage cpuImage = RenderToImage(cpu, scene.Contents, scene.Camera);
+			const ReadbackImage gpuImage = RenderToImage(gpuDriven, scene.Contents, scene.Camera);
+			CHECK(MaxDifference(cpuImage, gpuImage) <= 1);
+			CHECK(ReadIDs(cpu) == ReadIDs(gpuDriven));
+			CHECK(cpu.GetStats().TemporalFrames == frame + 1);
+			CHECK(gpuDriven.GetStats().GPUDriven);
+			Animate(scene, quad, frame);
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

@@ -27,7 +27,7 @@ TEST_SUITE("Renderer.Components")
 	TEST_CASE("The TAA's tunables default to the Sharp preset's table, and the tables are normalized")
 	{
 		const PostProcessComponent postProcess;
-		CHECK(postProcess.TAAPreset == TemporalAntiAliasingPreset::Original);
+		CHECK(postProcess.TAAPreset == TemporalAntiAliasingPreset::Sharp);
 		PostProcessComponent custom = postProcess;
 		custom.TAAPreset = TemporalAntiAliasingPreset::Custom;
 		CHECK(GetTemporalAntiAliasingSettings(custom) == c_TAASharpSettings);

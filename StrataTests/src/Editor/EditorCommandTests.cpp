@@ -851,11 +851,10 @@ TEST_SUITE("Editor.Commands")
 		harness.Run("component.add", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "AntiAliasingMethod", "TAA" } } } });
 		const auto postValues = [&]() { return harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } })["values"]; };
 		const auto postInactive = [&]() { return harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } })["inactive"]; };
-		CHECK(postValues()["TAAPreset"] == "Original");
-		CHECK(postInactive()["TAAMotionResponse"] == "The Original preset sets it (0.03125): choose Custom to tune it");
-		CHECK(postInactive()["TAAClipWidth"] == "The Original preset clamps to the colors' range: choose Custom to tune it");
-		CHECK(postInactive()["TAADisocclusionThreshold"] == "The Original preset does not reject uncovered surfaces: choose Custom to tune it");
-		CHECK(postInactive()["TAAHistoryClamp"] == "The Original preset sets it (Range): choose Custom to tune it");
+		CHECK(postValues()["TAAPreset"] == "Sharp");
+		CHECK(postInactive()["TAAMotionResponse"] == "The Sharp preset sets it (0.0625): choose Custom to tune it");
+		CHECK(postInactive()["TAAClipWidth"] == "The Sharp preset sets it (1.25): choose Custom to tune it");
+		CHECK(postInactive()["TAADisocclusionRejection"] == "The Sharp preset sets it (on): choose Custom to tune it");
 		CHECK_FALSE(postInactive().contains("TAAPreset"));
 		const size_t undoDepth = harness.Context.GetUndoStack().GetPosition();
 		harness.Run("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "TAAPreset", "Custom" }, { "TAAHistoryFrames", 12 },
@@ -880,13 +879,14 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Context.GetUndoStack().GetPosition() == undoDepth + 1);
 		harness.Run("edit.undo");
 		values = postValues();
-		CHECK(values["TAAPreset"] == "Original");
+		CHECK(values["TAAPreset"] == "Sharp");
 		CHECK(values["TAAHistoryFrames"] == 8);
 		CHECK(values["TAASharpening"] == 0.5);
-		harness.Run("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "TAAPreset", "Sharp" } } } });
-		CHECK(postInactive()["TAAMotionResponse"] == "The Sharp preset sets it (0.0625): choose Custom to tune it");
-		CHECK(postInactive()["TAAClipWidth"] == "The Sharp preset sets it (1.25): choose Custom to tune it");
-		CHECK(postInactive()["TAADisocclusionRejection"] == "The Sharp preset sets it (on): choose Custom to tune it");
+		harness.Run("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "TAAPreset", "Original" } } } });
+		CHECK(postInactive()["TAAMotionResponse"] == "The Original preset sets it (0.03125): choose Custom to tune it");
+		CHECK(postInactive()["TAAClipWidth"] == "The Original preset clamps to the colors' range: choose Custom to tune it");
+		CHECK(postInactive()["TAADisocclusionThreshold"] == "The Original preset does not reject uncovered surfaces: choose Custom to tune it");
+		CHECK(postInactive()["TAAHistoryClamp"] == "The Original preset sets it (Range): choose Custom to tune it");
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 
 		// The directional light's cascade blend: added with a value, set, undone; refused outside [0, 0.5]; inactive while the

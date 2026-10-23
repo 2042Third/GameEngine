@@ -1,7 +1,7 @@
 [
 	{"command": "script.build", "expect": {"/success": {"equals": true}}},
 	{"command": "editor.status", "parameters": {"sections": ["assets"]}, "expect": {"/assets/importing": {"equals": 0}, "/assets/scanning": {"equals": null}}, "until": {"seconds": 900}},
-	{"command": "component.get", "parameters": {"entity": "F7486ABFA648EBD7", "component": "PostProcess"}, "expect": {"/values/AntiAliasingMethod": {"equals": "TAA"}, "/values/AutoExposureMaxEV": {"equals": 16}}},
+	{"command": "component.get", "parameters": {"entity": "F7486ABFA648EBD7", "component": "PostProcess"}, "expect": {"/values/AntiAliasingMethod": {"equals": "TAA"}, "/values/TAAPreset": {"equals": "Sharp"}, "/values/AutoExposureMaxEV": {"equals": 16}}},
 	{"command": "component.get", "parameters": {"entity": "E20B148F1984A03E", "component": "SkyLight"}, "expect": {"/values/Source": {"equals": "Atmosphere"}}},
 	{"command": "component.get", "parameters": {"entity": "F312F59C4E00A421", "component": "PointLight"}, "expect": {"/values/CastShadows": {"equals": true}, "/values/Intensity": {"min": 1}}},
 	{"command": "component.get", "parameters": {"entity": "63B6A780439CC809", "component": "HeightFog"}, "expect": {"/values/Density": {"min": 0.001, "max": 0.002}, "/values/StartDistance": {"min": 39.9, "max": 40.1}, "/values/ColorFromSky": {"equals": true}}},

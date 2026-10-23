@@ -1068,7 +1068,7 @@ TEST_SUITE("Editor.UI.Inspector")
 	TEST_CASE("Choosing Custom as TAA Preset starts from the look in effect in one undo step, and keeps a tuning")
 	{
 		AuthoringEditor editor({ ImVec2(1600.0f, 1600.0f), 1.0f });
-		const UUID post = editor.Create("Post", { { "components", { { "PostProcess", { { "AntiAliasingMethod", "TAA" } } } } } });
+		const UUID post = editor.Create("Post", { { "components", { { "PostProcess", { { "AntiAliasingMethod", "TAA" }, { "TAAPreset", "Original" } } } } } });
 		editor.Context().Select(post);
 		editor.Frames(3);
 		const auto choose = [&](const char* preset)
@@ -1127,7 +1127,7 @@ TEST_SUITE("Editor.UI.Inspector")
 	TEST_CASE("Choosing Custom as TAA Preset for several entities writes the start they share, or the preset alone")
 	{
 		AuthoringEditor editor({ ImVec2(1600.0f, 1600.0f), 1.0f });
-		const nlohmann::json taa = { { "components", { { "PostProcess", { { "AntiAliasingMethod", "TAA" } } } } } };
+		const nlohmann::json taa = { { "components", { { "PostProcess", { { "AntiAliasingMethod", "TAA" }, { "TAAPreset", "Original" } } } } } };
 		const UUID first = editor.Create("First", taa);
 		const UUID second = editor.Create("Second", taa);
 		editor.Context().Select(first);

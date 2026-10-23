@@ -242,8 +242,9 @@ namespace Strata
 		bool AntiAliasing = true;
 		AntiAliasingMode AntiAliasingMethod = AntiAliasingMode::FXAA;
 		// The TAA's look: a preset, or the tunables below under Custom. The preset and the tunables are independent: choosing
-		// a preset writes no tunable (GetTemporalAntiAliasingCustomStart is where Custom starts from in the Inspector).
-		TemporalAntiAliasingPreset TAAPreset = TemporalAntiAliasingPreset::Original;
+		// a preset writes no tunable (GetTemporalAntiAliasingCustomStart is where Custom starts from in the Inspector). Files
+		// without it (every scene saved before the presets) load as Sharp.
+		TemporalAntiAliasingPreset TAAPreset = TemporalAntiAliasingPreset::Sharp;
 		uint32_t TAAHistoryFrames = c_TAASharpSettings.HistoryFrames;
 		float TAAMotionResponse = c_TAASharpSettings.MotionResponse;
 		float TAAMaxMotionWeight = c_TAASharpSettings.MaxMotionWeight;
