@@ -573,7 +573,9 @@ Open items and deferrals later waves own:
 - Flaky tests seen once, not reproduced since: Windows `CrashGuard`'s "repeated faults on other threads", the
   Mac's `GPU.AssetResidency` "Arrivals that need room..." and, in full parallel runs while the other wave-6 stream
   loaded the Mac, `GPU.TextureStreaming`'s tight-budget case and `GPU.SceneRenderer`'s "Resizing right after a frame
-  keeps its render targets..." (8 validation errors; it passed alone three times, and in the whole GPU suite run alone).
+  keeps its render targets..." (NVRHI reported 8 times that the volatile constant buffer `SceneRenderer.FrameConstants`
+  had run out of its 16 versions: the case renders 24 frames without waiting for a GPU the other stream kept busy; it
+  passed alone three times, and in the whole GPU suite run alone).
 - Game UI (wave 4's `game-ui`): world-space canvases draw unlit, after post-processing, and the game's hit tests on
   them ignore scene geometry in front (the editor's picks check meshes).
 - Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
@@ -838,8 +840,12 @@ Open items and deferrals later waves own:
     build before them (3 interleaved pairs, ratios of medians): `Perf.Scene.IdlePlayFrame1M` 1.04 (0.057 to 0.059 us, the
     game UI's check for changed actions), `Perf.GameUI.IdleFrame10k` 0.82, `Layout10k` 1.00, `PerfGPU.GameUI.Render10k`
     1.02 and `RenderIdle10k` 0.93; the editor frames (`PerfGPU.Editor.{Edit,Play}FrameNested{100k,1M}`, 0.82-1.04) wait
-    for the display on the Mac and are for the reference machine to judge. A person has not yet looked at an exported
-    game's icon and Properties in Windows Explorer (CI reads them back through Win32).
+    for the display on the Mac and are for the reference machine to judge. Project-wide collision layers' Mac A/B
+    against the build before them (3 interleaved pairs, ratios of medians): `Perf.Physics.*`'s times 0.90-1.01 (the
+    `StrataToLibraryStep` ratios 1.04-1.13), `Perf.Scene.*` 0.93-1.07 except `CancelLoad1M` 1.44 (one attempt per run,
+    the slowest of three cancellations: 3.0-7.3 ms before, 4.6-9.5 ms after, slower in each pair, against a 100 ms
+    target), and the 1M world's open (`PerfGPU.Editor.WorldOpen1M*`) 0.96-1.01. A person has not yet looked at an
+    exported game's icon and Properties in Windows Explorer (CI reads them back through Win32).
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
 
