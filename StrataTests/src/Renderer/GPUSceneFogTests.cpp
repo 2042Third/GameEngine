@@ -260,6 +260,22 @@ TEST_SUITE("GPU.SceneRenderer.Fog")
 		// Looking up, the fog thins: the top row shows more of the sky than the horizon does.
 		CHECK(GetPixelRGBA8(image, c_Size / 4, 0).b > GetPixelRGBA8(image, c_Size / 4, c_Size / 2).b + 10);
 
+		// Orthographic views look along parallel rays from the camera's plane: looking up, each row's ray starts at another
+		// height, so the rows above the camera see the sky through less fog than those below it.
+		const SceneCamera orthographic = OrthographicLookAt(cameraPosition, cameraPosition + glm::vec3(0.0f, 0.4f, -1.0f), 12.0f);
+		const ReadbackImage orthographicImage = RenderToImage(renderer, scene, orthographic);
+		int worstOrthographic = 0;
+		for (uint32_t y = 0; y < c_Size; y++)
+		{
+			const PixelRay ray = GetPixelRay(orthographic, c_Size / 4, y);
+			const glm::dvec3 start = ray.Origin - ray.Direction * glm::dot(ray.Origin - glm::dvec3(cameraPosition), ray.Direction);
+			const double distance = fog.StartDistance + 50.0 / (fog.HeightFalloff * ray.Direction.y);
+			const glm::ivec3 expected = ExpectFogged(skyColor, inscattered, IntegrateOpticalDepth(fog, start, ray.Direction, distance), fog.MaxOpacity);
+			worstOrthographic = std::max(worstOrthographic, MaxDifference(GetPixelRGBA8(orthographicImage, c_Size / 4, y), expected));
+		}
+		CHECK(worstOrthographic <= 1);
+		CHECK(GetPixelRGBA8(orthographicImage, c_Size / 4, 0).b > GetPixelRGBA8(orthographicImage, c_Size / 4, c_Size - 1).b + 10);
+
 		// A density of 0 leaves the sky as it is, also where rays never leave the fog.
 		fog.Density = 0.0f;
 		const ReadbackImage clear = RenderToImage(renderer, scene, camera);
