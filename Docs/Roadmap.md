@@ -568,7 +568,8 @@ same time on the Mac (Apple M2 Max), the Windows reference machine still away. `
 - Landing: `project-settings` landed first, so `render-quality` merged main (conflicts only in the Inspector's scene
   settings, where the collision layers became a link to Project Settings and the sky gained its buttons, and in the
   appended lists of the journal tests, Budgets.json and the feature commands); it appends no host function, so the
-  script ABI keeps version 1 and 155 host functions, and its `AGENTS.md` lines were shortened to fit.
+  script ABI keeps version 1 and 155 host functions, and its `AGENTS.md` lines were shortened to fit. Release 0.6.0
+  holds the wave.
 
 Open items and deferrals later waves own:
 
@@ -1120,6 +1121,35 @@ contexts, compute skinning, input actions) stays open, in the open items and "La
     slowly (Status).
   - New physics features (joints, height fields, double precision, recordings) were left to later streams, so that the
     port's diff stayed about parity and its regressions attributable.
+
+### Wave 6
+
+Asked for by the owner on 2026-10-22: "Start working on render-quality and project-settings", the two streams the
+wave-4 audits ranked first. Each had a spec that an independent review corrected before work began
+(`Docs/Plans/Wave6/specs/`, removed when the wave landed and kept in git history at ea66297b); both branched from
+release 0.5.0 (6425b57b) and ran at the same time on the Mac, and `project-settings` landed first, so that
+`render-quality` merged its version-3 projects, the samples' icons and its host functions before it landed. Landed on
+2026-10-23 with release 0.6.0 (Status, "Wave 6 landed", says what each delivered, and the open items what moved to
+later waves).
+
+- **`render-quality`: the rendering of a production engine.** Ordered by dependency, then by what the owner sees, with
+  a cut line after the core; everything below it landed too.
+  - The core: motion vectors and TAA, with the editor's selection outline, captures and thumbnails steady under it;
+    cascade blending; height fog; light units stated on every light, the sky and emission; shadows of point and spot
+    lights on both draw paths.
+  - Below the cut line: a pre-exposed HDR target with a physical atmosphere, reflection probes baked in the editor,
+    screen-space reflections, the sun extracted from HDR skies, and clear coat and transmission in materials and glTF;
+    and TAA's presets (Sharp, Original, Custom), which the owner asked for after seeing the first TAA.
+  - Scenes render as in 0.5.0 unless they opt in, apart from three deliberate changes of defaults (cascade blending,
+    the pre-exposure, `AutoExposureMaxEV` 16), and the script ABI is unchanged: scripts reach every new setting through
+    components' properties.
+- **`project-settings`: settings for the whole project.**
+  - Project settings as sections that modules register, in a Project Settings panel through undoable commands, written
+    off the main thread; preferences per user in a Preferences dialog.
+  - Input actions with rebinding, with the game UI's navigation as their first map; the Third-Person Adventure reads
+    its controls through them.
+  - Collision layers for the whole project, migrated once from 0.5.0's scenes.
+  - The game's title, version, company and icon in the exported game and its executable.
 
 ### Later (wave 7 and beyond)
 
