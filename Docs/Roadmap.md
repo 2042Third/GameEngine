@@ -508,10 +508,10 @@ the wave added is provisional (the open items' "Waiting for the Windows referenc
   says which forms replace a prefab root's scale. The script ABI keeps version 1 and its 142 host functions. Release
   0.5.0 holds the wave.
 
-**Wave 6 (under way).** Its two streams, `project-settings` and `render-quality`, each planned in a spec that an
+**Wave 6 landed.** Its two streams, `project-settings` and `render-quality`, each planned in a spec that an
 independent review corrected before work began, branched from release 0.5.0 (6425b57b) on 2026-10-22 and ran at the
-same time on the Mac (Apple M2 Max), the Windows reference machine still away. `project-settings` lands first;
-`render-quality` adds its part here when it lands, and the wave's landing makes this entry "Wave 6 landed".
+same time on the Mac (Apple M2 Max), the Windows reference machine still away. `project-settings` landed first,
+`render-quality` second.
 
 - `project-settings`: settings are sections that modules register (`SettingsRegistry`), read through `IProjectSettings`
   on the main thread. The project file (version 3) keeps them, sections the build does not know included; exports carry
@@ -539,6 +539,36 @@ same time on the Mac (Apple M2 Max), the Windows reference machine still away. `
   under load, and those terrain tiles did not draw; it happened on 0.5.0 too), and `Core.FrameProfiler`'s busy-workers
   case failed on CI's Windows Debug runner. On the Mac `Perf.Input.Actions256` measured 6.76 us against its 20 us
   target; the A/Bs are in the reference machine's list in the open items.
+- `render-quality`: temporal anti-aliasing with motion vectors, each renderer jittering only its frame's copy of the
+  camera and keeping its own motion history (the previous frame's instances and poses) and TAA history. Presets Sharp
+  (the default: variance clipping, a resampling term, a reactive mask for blended surfaces, disocclusion rejection and
+  luminance sharpening in the tone mapping, which never enters the history), Original (the first TAA, softer and
+  steadier) and Custom; the Basic 3D template and the three 3D samples use TAA Sharp, FXAA stays the method's default.
+  The editor keeps the selection outline and overlays steady under it, captures and project thumbnails wait until the
+  history and exposure settled, `viewport.capture {live, atFixedStep, frames}` and `play.start {paused}` show motion as
+  it plays, and the `motion` debug view shows the motion vectors. Shadow cascades blend across their seams. Lights have
+  units (lux, candela, nits; `Docs/Manual/Lighting.md`), the HDR target a pre-exposure so a real 100,000 lux sun keeps
+  its detail, and automatic exposure reaches EV 16. Point and spot lights cast shadows (`CastShadows`) from one atlas,
+  16 per view, cached while nothing in their range moves, on the CPU and GPU-driven paths alike. Height fog
+  (`HeightFog`), a physical atmosphere (`SkyLight` `Source` Atmosphere, the sky, its light and the sunset following the
+  directional light), reflection probes baked from the edited scene (`lighting.bakeProbes`, a cube array: the device's
+  `imageCubeArray` is now required) and screen-space reflections (with TAA). `lighting.extractSun` makes the directional
+  light the sun of an HDR sky, whose `RemoveSun` import setting paints it out. Materials gained clear coat and
+  transmission (glass seen through, refracted by its thickness, tinted by its volume), imported from glTF's
+  `KHR_materials_clearcoat`, `_transmission`, `_volume` and `_ior` (the glTF importer's version changed, so models
+  import once more). The Open World has fog, the atmosphere, a shadowed lantern and campfires; the Third-Person
+  Adventure screen-space reflections, the sun of its sky, shadowed lanterns and probes baked along the course; the
+  Physics Playground clear-coated balls and a glass pit (`Docs/Manual/AntiAliasing.md` and `Lighting.md` describe it all
+  for people). Fixed on the way: a scene renderer rendering frames back to back ran out of the versions of its frame
+  constants (it now waits for its own oldest frames; GPU tests failed under load); a probe bake cancelled while its
+  captures were copied in removed their staging folder under the copy and left them in the project; and the first bake
+  after opening a scene in a fresh session reported most probes incomplete, since it waited a count of frames and its
+  later views ended the texture streamer's holds on captures the earlier ones waited for. The A/Bs on the Mac are in the
+  reference machine's list.
+- Landing: `project-settings` landed first, so `render-quality` merged main (conflicts only in the Inspector's scene
+  settings, where the collision layers became a link to Project Settings and the sky gained its buttons, and in the
+  appended lists of the journal tests, Budgets.json and the feature commands); it appends no host function, so the
+  script ABI keeps version 1 and 155 host functions, and its `AGENTS.md` lines were shortened to fit.
 
 Open items and deferrals later waves own:
 
@@ -756,6 +786,18 @@ Open items and deferrals later waves own:
     where the cases before it warmed the process): its view draws the texture whole, as main did, and its windows end
     once the texture is whole (later attempts 2.97-5.23 ms), so the first attempt's hold is not the upload's. Platform
     code only CI compiles: the POSIX `Platform::FindProgram` and symbolizer (function names only on Linux and macOS).
+- Rendering (wave 6's `render-quality`): glass is seen through only to what was drawn before it (glass behind glass and
+  blended surfaces behind glass do not show), gets no ambient occlusion and casts no shadow, and its thickness comes
+  from the material, not a thickness map; screen-space reflections cover a clear coat's base only and trace no
+  transparent surface; TAA keeps a few softer frames where a surface uncovers what it hid, cannot reject surfaces that
+  recede fast, and Original stays soft in slow pans; probes are baked, so a moving sun does not relight them; at most 16
+  shadowed point and spot lights per view. Left for later (also in "Later" below): render scaling, dynamic resolution
+  and TAA as an upscaler, MSAA; project-wide renderer defaults (a `Renderer.Defaults` settings section, with
+  `game-shell`'s quality presets); layered shadow rendering, occlusion culling of local shadow views, more than 16
+  shadowed lights, sized local lights (PCSS) and contact shadows; run-time probe capture, cube texture assets and
+  clustered probe lists; SSR on a nearest-depth pyramid and for transparent surfaces; volumetric fog, light shafts and
+  aerial perspective, the atmosphere from altitude; thickness maps, sheen, specular, iridescence and anisotropy, EXR
+  import and area lights; fewer GTAO samples accumulated by TAA; shadows of a second directional light (the moon).
 - Project settings and input actions (wave 6's `project-settings`), left for later: game-shell's macOS app bundle (the
   Finder's icon, the version and copyright in `Info.plist`), installing desktop entries, signing exports, quality
   presets (a project section registered in `SettingsRegistry`) and input only while the game's window has the focus
@@ -843,6 +885,28 @@ Open items and deferrals later waves own:
     the slowest of three cancellations: 3.0-7.3 ms before, 4.6-9.5 ms after, slower in each pair, against a 100 ms
     target), and the 1M world's open (`PerfGPU.Editor.WorldOpen1M*`) 0.96-1.01. A person has not yet looked at an
     exported game's icon and Properties in Windows Explorer (CI reads them back through Win32).
+  - Wave 6's `render-quality`: its GPU suites (`StrataTests.GPU`, the samples' windowed and image checks) have run on the
+    Mac's MoltenVK only, never on Windows or NVIDIA (nor the GPU-driven path's count-indirect draws, which MoltenVK
+    lacks). Mac A/Bs of the final branch against main 0584ce47's Release build, under `Tools/PerfLock.py`, interleaved,
+    ratios of medians: `Render100kCubes` 1.03 over 8 pairs (1.05 and 1.08 in runs of 6 and 3; cascade blending accounts
+    for 3%, measured on one build at blend 0.1 against 0), `Render300kCubes` 1.02-1.08, `Render1MCubes` 1.02-1.04,
+    `Render10kMaterials` 0.99-1.03, `IdleFrame3kStreamedTextures` 0.99, the renderer's `EditFrame*` 0.95-1.06
+    (`EditFrameMaterials10k` 1.12 over 3), and `Skinned1000` 1.05-1.07, which came with the steps before TAA's presets
+    (1.07 from main to that point, 1.00 after); these CPU medians scatter by 10% between runs of one build. The GPU's
+    busy time grew by 4-5% for `Render100kCubesGPU` and 1-2% for `Render1MCubesGPU`, all of it in `GPU.Opaque` (100,000
+    cubes: 1.146 ms on main, 1.172 before TAA's presets, 1.232 at the end; every other stage within 1%): the forward
+    shader's paths for cascade blending, probes, local shadows, screen-space reflections, clear coat and transmission
+    cost registers whether a material takes them or not. Variants of the forward shader per material feature would win
+    that back but split the GPU-driven path's batches; the reference machine measures whether it matters. The editor's
+    nested-entity frames (1.01-1.06) wait for the display on the Mac. Sharp's `GPU.TAA` costs 1.52 times Original's
+    (0.477 against 0.313 ms at 1920x1080; `GPU.Post` 0.321 against 0.296 with its sharpening). New provisional metrics,
+    Mac medians of 5 runs (CPU / GPU busy, ms; `Tools/PerfStability.py` found all of them passing in 5 of 5):
+    `Render100kCubesTAA` 0.548 / 3.998, `Render100kCubesTAAOriginal` 0.551 / 3.783, `HeightFog` 0.502 / 3.381,
+    `Atmosphere` 0.534 / 3.542, `AtmosphereSunMovingMaxFrame` 1.249 / 5.087 (spread 0.98-2.56), `ReflectionProbes16`
+    0.593 / 4.336, `SSR` 0.588 / 4.454, `Transmission` 0.597 / 4.871, `LocalShadows16Lights` 1.333 / 6.510 and
+    `LocalShadows16LightsCached` 0.751 / 3.821, `TAALocalShadowsPeakMemory` 564 MiB. The Open World tour against
+    main's (4 pairs): frame work median 0.894 to 0.945 ms (1.06), its 95th percentile 1.25 to 1.31 ms, GPU busy 4.67 to
+    5.65 ms (1.21: the TAA, fog, atmosphere and shadowed lantern and campfires it adopted).
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
 
@@ -1058,10 +1122,10 @@ contexts, compute skinning, input actions) stays open, in the open items and "La
 ### Later (wave 6 and beyond)
 
 The wave-4 audits ranked these first; wave 5 took the owner's request instead, so they lead for wave 6:
-- **`render-quality`:** TAA with motion vectors, shadows of point and spot lights, reflection probes and screen-space
-  reflections, height fog and a physical atmosphere, extracting the sun from HDR skies with documented light units,
-  cascade blending, transmission and clearcoat. It builds on `gpu-driven-rendering`'s per-view culling and instance
-  history.
+- **Rendering after `render-quality`** (wave 6 landed TAA, local shadows, probes, SSR, fog, the atmosphere, light units,
+  clear coat and glass): render scaling and TAA as an upscaler with `game-shell`'s quality presets and a project-wide
+  `Renderer.Defaults` section; volumetric fog and light shafts; more shadowed lights with occlusion culling of their
+  views; run-time probe capture for moving suns; the rest of the open items' list.
 - **`project-settings`:**
   - Project Settings and Preferences panels.
   - Input actions with rebinding; `game-ui`'s navigation becomes their first map.
