@@ -781,8 +781,9 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
 	set_tests_properties(StrataEditor.OpenWorld PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataOpenWorldExport)
 	# In a window at 1920 x 1080 with a small texture budget (mip streaming under pressure): the island fills the picture,
-	# and the perf log shows cells loaded, streaming and the GPU at work, no body waiting at the growth limit and none left
-	# waiting for its collider at the end.
+	# and the perf log shows cells loaded, streaming and the GPU at work (TAA, and the shadow views of the lantern, which the
+	# tour sees for its first two seconds: the tour runs by the clock, so a fast display's 1200 frames see less of it), no
+	# body waiting at the growth limit and none left waiting for its collider at the end.
 	set(STRATA_OPEN_WORLD_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/OpenWorld/$<CONFIG>")
 	add_test(NAME StrataRuntime.OpenWorldWindowed
 		COMMAND "${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1920x1080 --frames 1200 --asset-budget-mb 128
