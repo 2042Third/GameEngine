@@ -248,11 +248,10 @@ The threading model, frame loop and pipelines these rules protect are described 
   Hierarchy changes go through `Scene` (`SetParent`, `SetSiblingIndex`, `PlaceEntities`, `DestroyEntities`...), never by
   editing `RelationshipComponent` or `HierarchyComponent`. Read sibling positions with `Scene::GetSiblingIndex`, remove
   many entities with one `DestroyEntities` call, and stay within `Scene::c_MaxEntities` live entities.
-- **Collision layers** are the project's (`Scene.CollisionLayers`); `Scene::GetPhysicsLayers` is a scene's working copy,
-  applied on the main thread ([details](Docs/DeveloperGuide.md#collision-layers)).
+- **Collision layers** are the project's (`Scene.CollisionLayers`); `Scene::GetPhysicsLayers` is a working copy applied
+  on the main thread ([details](Docs/DeveloperGuide.md#collision-layers)).
 
-The threading, NVRHI, asset, layer, registration, engine module and transform rules in full:
-[Architecture rules](Docs/DeveloperGuide.md#architecture-rules).
+These rules in full: [Architecture rules](Docs/DeveloperGuide.md#architecture-rules).
 
 ## Asset pipeline
 
@@ -307,8 +306,9 @@ Game logic is C++ script classes in a module built against `StrataScriptCore` on
 - Script code never runs while engine state it could invalidate is in use: entity destruction goes through
   `ScriptSystem::DestroyEntity`.
 - Save files go through `IGameSaves` (names pass `SaveFiles::ValidateName` before any path is formed; atomic writes);
-  code that runs a game in-process provides `IGameWindow`, `IGameSaves` and `IProjectSettings` and updates input actions
-  after its frame's input ([Gameplay API](Docs/DeveloperGuide.md#gameplay-api)).
+  in-process game loops provide `IGameWindow`, `IGameSaves` and `IProjectSettings` and update input actions after their
+  frame's input. Gameplay and UI read rebindable controls as input actions, and only `InputActions` touches the players'
+  bindings file ([Gameplay API](Docs/DeveloperGuide.md#gameplay-api)).
 - SDK helpers named like engine classes (`Random`, `Timer`) are tested only inside a script module.
 
 ## Audio
@@ -362,8 +362,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 [Editor](Docs/DeveloperGuide.md#editor).
 
 - **Every change to the scene or project goes through a command** (or `SceneEditTransaction`/`SetPropertyWithUndo` for
-  continuous UI edits; project settings: an undoable `ProjectSettingsAction`, preferences: Session commands); panels only
-  draw state and call commands, and never write, move or remove files.
+  continuous UI edits; project settings: `ProjectSettingsAction` steps, preferences: Session commands); panels only draw
+  state and call commands, and never write, move or remove files.
 - Commands (`<group>.<action>`) have a description written for agents, a complete JSON Schema and a kind
   (`EditorCommandKind`: mark every query and session command, and queries whose results follow the session as
   `EditorCommandResults::Session`); they read parameters with `CommandArguments`, reject invalid or
@@ -374,8 +374,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Files commands write for clients go through `CommandUtils::ResolveOutputPath`
   ([Output paths](Docs/DeveloperGuide.md#output-paths)).
 - A command that replaces the edited scene starts with `CommandUtils::CheckUnsavedChanges` (fails unless `force`, also
-  on unwritten settings or preferences it would release); UI code passes `force` only once the person answered
-  `EditorShell::RequestDiscardChanges` (`RequestReleaseProject`, `RequestQuit`), for the changes asked about.
+  on unwritten settings files it would release); UI code passes `force` only once the person answered
+  `EditorShell::RequestDiscardChanges` or its release and quit forms, for the changes asked about.
 - Saves never serialize on the main thread: documents go through `Editor/DocumentSaver`, settings files through
   `SettingsFileWriter` (a snapshot in the frame, the writing on a background job), commands that replace the scene,
   close the project or quit wrap their handler in `CommandUtils::AfterSaves`, and UI code saves through the command runner

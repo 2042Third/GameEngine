@@ -1447,7 +1447,12 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   `Input::SetGameCursorMode` applies while the game has the input; play mode stopping gives it back). `Input::GetTypedText`
   (host function `GetTypedText`) reads the frame's typed text. The project's input actions: `Input::IsActionDown` to
   `SaveBindings` and the binding capture, `BeginBindingCapture` to `CancelBindingCapture` (host functions
-  `InputIsActionDown` to `InputCancelBindingCapture`, [Input actions](#input-actions)).
+  `InputIsActionDown` to `InputCancelBindingCapture`, [Input actions](#input-actions)). Gameplay and the game UI read every
+  control a player could want to change through input actions, not fixed keys or gamepad buttons, so players can rebind
+  it (the Third-Person sample's `Gameplay` map and the skills' examples show how; the other samples still read devices);
+  device reads stay for what no player rebinds (mouse look, text entry, a debug key). Only `InputActions` touches the
+  players' bindings file (`SaveBindings`, `LoadBindings`, `DeleteSavedBindings`): scripts' save files cannot name it and
+  editor code goes through those functions.
 - Game UI (host functions `UIGetText` to `UIIsActionDown`, then `GetUnscaledDeltaTime`, `GetRealTime` and
   `GetTypedText`, appended to ABI version 1 after `PhysicsGetLayerIndex`): `UIElement` (`Entity::GetUI`: text, image,
   color, interactability, a slider's or toggle's value, the focus) and `UI` (the focus, `IsPointerOverUI`, the UI

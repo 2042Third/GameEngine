@@ -512,8 +512,9 @@ moments (checkpoints, menus) and keep saves small.
 
 ### Recipes
 
-A platformer player: a dynamic capsule body with `LockRotationX/Y/Z` set (so it does not tip over), friction 0, and a
-`Text` entity named "HUD" for the score.
+A platformer player: a dynamic capsule body with `LockRotationX/Y/Z` set (so it does not tip over), friction 0, a
+`Text` entity named "HUD" for the score, and the input actions `Gameplay/Move` (Axis: `1D:Key/A,Key/D`,
+`Gamepad/LeftX`) and `Gameplay/Jump` (Button: `Key/Space`, `Gamepad/A`).
 
 ```cpp
 class Player : public Script
@@ -530,7 +531,7 @@ public:
 	{
 		RigidBody body = GetEntity().GetRigidBody();
 		glm::vec3 velocity = body.GetLinearVelocity();
-		velocity.x = (Input::IsKeyDown(Key::D) ? Speed : 0.0f) - (Input::IsKeyDown(Key::A) ? Speed : 0.0f);
+		velocity.x = Input::GetActionAxis("Gameplay/Move") * Speed; // Held state: safe to read in OnFixedUpdate
 		body.SetLinearVelocity(velocity);
 	}
 
@@ -539,7 +540,7 @@ public:
 		const glm::vec3 feet = GetTransform().GetWorldPosition();
 		const glm::vec3 down(0.0f, -1.0f, 0.0f);
 		const bool grounded = Physics::Raycast(feet, down, 1.1f, Physics::c_AllLayers, GetEntity()).has_value();
-		if (grounded && Input::IsKeyPressed(Key::Space))
+		if (grounded && Input::IsActionPressed("Gameplay/Jump")) // A press: read in OnUpdate
 		{
 			RigidBody body = GetEntity().GetRigidBody();
 			glm::vec3 velocity = body.GetLinearVelocity();
