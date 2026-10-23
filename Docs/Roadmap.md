@@ -602,7 +602,9 @@ Open items and deferrals later waves own:
   `input.*` command); the Game view at a fixed resolution reports the editor's UI scale as the game's content scale.
 - Flaky tests seen once, not reproduced since: Windows `CrashGuard`'s "repeated faults on other threads", the
   Mac's `GPU.AssetResidency` "Arrivals that need room..." and, in full parallel runs while the other wave-6 stream
-  loaded the Mac, `GPU.TextureStreaming`'s tight-budget case.
+  loaded the Mac, `GPU.TextureStreaming`'s tight-budget case, and on CI's Windows Release runner
+  `Editor.ScriptWorkflow`'s "script.open starts the external editor at the line..." (its stand-in editor wrote no file
+  within the test's 10 seconds; the rerun of the job passed).
 - Game UI (wave 4's `game-ui`): world-space canvases draw unlit, after post-processing, and the game's hit tests on
   them ignore scene geometry in front (the editor's picks check meshes).
 - Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
@@ -1119,18 +1121,14 @@ contexts, compute skinning, input actions) stays open, in the open items and "La
   - New physics features (joints, height fields, double precision, recordings) were left to later streams, so that the
     port's diff stayed about parity and its regressions attributable.
 
-### Later (wave 6 and beyond)
+### Later (wave 7 and beyond)
 
-The wave-4 audits ranked these first; wave 5 took the owner's request instead, so they lead for wave 6:
+The wave-4 audits ranked these first; wave 5 took the owner's request instead, and wave 6 took `render-quality` and
+`project-settings`, so the rest lead for wave 7:
 - **Rendering after `render-quality`** (wave 6 landed TAA, local shadows, probes, SSR, fog, the atmosphere, light units,
   clear coat and glass): render scaling and TAA as an upscaler with `game-shell`'s quality presets and a project-wide
   `Renderer.Defaults` section; volumetric fog and light shafts; more shadowed lights with occlusion culling of their
   views; run-time probe capture for moving suns; the rest of the open items' list.
-- **`project-settings`:**
-  - Project Settings and Preferences panels.
-  - Input actions with rebinding; `game-ui`'s navigation becomes their first map.
-  - Collision layers for the whole project.
-  - The game's name, version, company and icon in the exported executable.
 - **`game-shell`:**
   - Crash reports in shipped games.
   - Game settings with quality presets mapped to the renderer.
