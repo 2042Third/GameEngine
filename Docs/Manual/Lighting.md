@@ -1,7 +1,7 @@
 # Lighting
 
 How a scene is lit and how its brightness reaches the screen: the lights and their units, exposure, the sky and fog,
-shadows and reflection probes.
+shadows, reflection probes and screen-space reflections.
 This guide is for people working in the editor; [DeveloperGuide.md](../DeveloperGuide.md) (Rendering, "Light units and
 exposure") explains how the renderer computes it.
 
@@ -142,3 +142,20 @@ a probe shows the scene as it was baked (a day-night cycle or a moving door is n
 - At most 16 probes in view light a scene, the strongest ones. The renderer prepares a probe's picture once, when the
   probe first comes into view (its reflections appear a few frames later), and keeps it (about 1 MB of video memory
   each); afterwards a probe costs only a little shading where its box is on screen.
+
+## Screen-space reflections
+
+Probes and the sky reflect a fixed picture. **Screen Space Reflections** (in the **Post Process**, with TAA) adds what
+the screen shows: a polished floor, a pond or a metal plate reflects the characters and things standing on or beside it,
+and the reflections move with them. Each frame the renderer follows the reflected rays across the image (at half
+resolution) and takes the color the previous frame showed where a ray meets a surface; TAA smooths the result.
+
+- Only what is on screen can be reflected. Things behind the camera, beside the view or hidden behind others are not:
+  there the probes and the sky reflect as before. Reflections fade toward the screen's edges.
+- **Screen Space Reflections Max Roughness** (0.5): rougher surfaces get none, and they fade out over the last quarter
+  below it. These reflections are sharp, so keep it low; matte materials (roughness near 1, as most low-poly kits use)
+  show none at all.
+- **Screen Space Reflections Intensity** (1): how much they replace the probes' and the sky's reflection.
+- Transparent surfaces do not get them.
+- They need TAA (Anti Aliasing Method TAA); with FXAA the settings are greyed out. Cost: about half a millisecond of GPU
+  time at 1920x1080 on an Apple M2 Max with every surface reflecting, and about 20 MB of video memory per view.

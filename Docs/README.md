@@ -30,7 +30,7 @@ Guides for people making games in the editor:
 - [Manual/GameUI.md](Manual/GameUI.md): menus and HUDs: canvases, anchors and scale modes, the look of images, texts and
   widgets, buttons and sliders in scripts, keyboard and gamepad navigation, testing UI with commands.
 - [Manual/Lighting.md](Manual/Lighting.md): lights and their units (lux, candela, nits) with reference values, exposure,
-  the sky, height fog and the sun's shadows.
+  the sky, height fog, shadows, reflection probes and screen-space reflections.
 - [Manual/AntiAliasing.md](Manual/AntiAliasing.md): FXAA and TAA, how many frames TAA keeps and when it trails, the
   Sharp and Original presets and every tunable of Custom, and TAA's limits.
 

@@ -284,6 +284,9 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
   technique against Original, start Custom from Original's values, `{"TAAPreset": "Custom", "TAAHistoryFrames": 8,
   "TAAMotionResponse": 0.03125, "TAAMaxMotionWeight": 0.5, "TAAResampleWeight": 0, "TAAHistoryClamp": "MinMax",
   "TAATransparentWeight": 0, "TAADisocclusionRejection": false, "TAASharpening": 0}`. See Docs/Manual/AntiAliasing.md.
+- Reflections: with TAA, `"ScreenSpaceReflections": true` on the `PostProcess` makes smooth floors, water and metal
+  reflect what the screen shows near them (only surfaces below `ScreenSpaceReflectionsMaxRoughness`, 0.5: matte kit
+  materials at roughness 1 show none). For what the screen does not show, bake Reflection Probes (Docs/Manual/Lighting.md).
 - HUD and menus: a canvas, so they keep their proportions on every screen. An entity with `UICanvas`
   (`"ScaleMode": "ScaleWithScreen"`, `"ReferenceResolution": [1280, 720]`, `"MatchWidthOrHeight": 1`, and
   `"ReceivesInput": false` for a HUD that must never block clicks) and children with `UIRect` (anchors and pivot 0..1 of

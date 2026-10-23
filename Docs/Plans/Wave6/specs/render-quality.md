@@ -693,6 +693,15 @@ pixel), with fades for roughness above `ScreenSpaceReflectionsMaxRoughness` (0.5
 `Forward.frag` mixes it over the probe or sky specular by its confidence before the split-sum BRDF. Rejected: a
 composite after the forward pass (it would need the IBL specular term separated out); tracing a depth pyramid (the
 existing pyramid keeps the farthest depth for occlusion; deferred); full resolution.
+- As built in S9: the surface variants are `Scene/DepthPrepassSurface.frag` and `...NoEntityIDsSurface.frag` (always with
+  `ST_VELOCITY`; `PipelineKey::Surface`, the surface target after the velocity target); `GetShadingNormal` moved into
+  `Include/MaterialTextures.glsl`. The trace (`Effects/ScreenSpaceReflections.comp`, `SceneRendererScreenReflections.cpp`)
+  binds its own layout (SRV 22-26: depth, surface, velocity, history, normals); scene-set SRV 18 holds its result (a
+  black texture until a frame traces) and `FrameConstants::ReflectionParams.x` says whether the frame traced (the
+  constants grew by 16 bytes). It runs from the history's second frame on (`SceneRendererStats::ScreenSpaceReflections`)
+  and reads only the history's color. A hit is the first point behind the depth buffer by less than its step's change of
+  depth plus the larger of 5 cm and 2% of the distance. The Third-Person's materials are all rough (glTF roughness 0.9 to
+  1), so its reflections are on but change no pixel; the windowed perf check's `GPU.Reflections` comes from the trace.
 
 **D13 Sun extraction at the source, written as a light.**
 - `Asset/HDRSun.h` (a pure function over a float equirectangular image): the brightest texel, the connected region
