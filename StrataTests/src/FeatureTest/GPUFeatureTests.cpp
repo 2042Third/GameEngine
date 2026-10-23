@@ -80,6 +80,8 @@ TEST_SUITE("GPU.FeatureTest")
 		CHECK(stats.PendingAssets == 0);
 		CHECK(stats.EnvironmentLighting); // The sky light's HDR environment map
 		CHECK(stats.HeightFog);           // The Fog entity's
+		CHECK(stats.ReflectionProbes == 1); // The Probe entity's, its capture converted
+		CHECK(stats.ReflectionProbesPending == 0);
 		CHECK(GetLightCounts(renderer).Lights >= 2); // The sun, plus the point and spot lights in view (the GPU's count on its path)
 		CHECK(GetDrawnCounts(renderer).Instances >= 8);
 		CHECK(stats.Texts == 2); // The HUD (with the project's font) and the world-space sign

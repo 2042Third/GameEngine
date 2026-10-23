@@ -10,6 +10,8 @@
 #include "Include/LocalShadows.glsl"
 #include "Include/Clusters.glsl"
 #include "Include/Fog.glsl"
+#define ST_REFLECTION_PROBE_SAMPLING
+#include "Include/ReflectionProbes.glsl"
 
 // Forward shading into the HDR target, compiled in two variants (see Strata/CMakeLists.txt):
 // - Scene/Forward.frag shades opaque and alpha-masked surfaces after the depth prepass with an EQUAL depth test. The
@@ -52,7 +54,8 @@ vec3 GetShadingNormal(MaterialData material, vec2 uv)
 }
 
 // The lit surface's color: the sun with its shadow, the punctual lights of the pixel's cluster (those with shadows through
-// their views, Include/LocalShadows.glsl), image-based or constant ambient light and the emission.
+// their views, Include/LocalShadows.glsl), the reflection probes' and the sky's image-based light (or the constant ambient)
+// and the emission.
 vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicRoughness, vec3 shadingNormal, float occlusion, MaterialData material)
 {
 	SurfaceData surface;
@@ -116,21 +119,47 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 	float screenOcclusion = u_Frame.AOParams.x > 0.0 ? texelFetch(u_AmbientOcclusion, ivec2(gl_FragCoord.xy), 0).r : 1.0;
 #endif
 	float diffuseOcclusion = surface.Occlusion * screenOcclusion;
-	if (u_Frame.EnvironmentParams.w > 0.0)
+	vec3 reflected = reflect(-surface.View, surface.Normal);
+	// Reflection probes whose boxes hold the surface light it first (Include/ReflectionProbes.glsl); the sky, or the constant
+	// ambient without an environment, fills in what they leave.
+	ProbeLight probes;
+	probes.Irradiance = vec3(0.0);
+	probes.Radiance = vec3(0.0);
+	probes.Weight = 0.0;
+	if (u_ProbeCounts.x > 0u)
+		probes = EvaluateReflectionProbes(surface.Position, surface.Normal, reflected, surface.Roughness);
+	bool environment = u_Frame.EnvironmentParams.w > 0.0;
+	if (environment || probes.Weight > 0.0)
 	{
 		// Image-based lighting: diffuse irradiance plus split-sum specular (prefiltered radiance x environment BRDF).
 		float NoV = max(dot(surface.Normal, surface.View), 1e-4);
-		vec3 reflected = reflect(-surface.View, surface.Normal);
 		vec3 f0 = mix(vec3(0.04), surface.Albedo, surface.Metallic);
 		vec2 dfg = textureLod(sampler2D(u_BRDFLut, u_LinearClampSampler), vec2(NoV, surface.Roughness), 0.0).rg;
 		vec3 specularColor = f0 * dfg.x + dfg.y;
-		vec3 irradiance = textureLod(samplerCube(u_IrradianceMap, u_LinearClampSampler), RotateEnvironmentDirection(surface.Normal), 0.0).rgb;
-		vec3 radiance = textureLod(samplerCube(u_PrefilteredMap, u_LinearClampSampler), RotateEnvironmentDirection(reflected),
-			surface.Roughness * u_Frame.EnvironmentParams.z).rgb;
-		vec3 diffuse = irradiance * surface.Albedo * (1.0 - surface.Metallic) * (1.0 - specularColor);
+		vec3 irradiance = vec3(0.0);
+		vec3 radiance = vec3(0.0);
+		if (environment)
+		{
+			irradiance = textureLod(samplerCube(u_IrradianceMap, u_LinearClampSampler), RotateEnvironmentDirection(surface.Normal), 0.0).rgb;
+			radiance = textureLod(samplerCube(u_PrefilteredMap, u_LinearClampSampler), RotateEnvironmentDirection(reflected),
+				surface.Roughness * u_Frame.EnvironmentParams.z).rgb;
+		}
 		// Specular occlusion from ambient occlusion (Lagarde): tighter for smooth surfaces and grazing views.
 		float specularOcclusion = clamp(pow(NoV + diffuseOcclusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0);
-		color += (diffuse * diffuseOcclusion + radiance * specularColor * specularOcclusion) * u_Frame.EnvironmentParams.x;
+		if (probes.Weight > 0.0)
+		{
+			// The probes' captures hold the scene's luminance (their intensities applied); the sky's share is scaled here.
+			float sky = 1.0 - probes.Weight;
+			irradiance = probes.Irradiance + (environment ? irradiance * u_Frame.EnvironmentParams.x : u_Frame.AmbientColor.rgb) * sky;
+			radiance = probes.Radiance + radiance * (environment ? u_Frame.EnvironmentParams.x * sky : 0.0);
+			vec3 diffuse = irradiance * surface.Albedo * (1.0 - surface.Metallic) * (1.0 - specularColor);
+			color += diffuse * diffuseOcclusion + radiance * specularColor * specularOcclusion;
+		}
+		else
+		{
+			vec3 diffuse = irradiance * surface.Albedo * (1.0 - surface.Metallic) * (1.0 - specularColor);
+			color += (diffuse * diffuseOcclusion + radiance * specularColor * specularOcclusion) * u_Frame.EnvironmentParams.x;
+		}
 	}
 	else
 	{

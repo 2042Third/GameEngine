@@ -53,6 +53,7 @@ namespace Strata
 			stages.Shadows = RegisterGPUStage("GPU.Shadows");
 			stages.Prepass = RegisterGPUStage("GPU.Prepass");
 			stages.AO = RegisterGPUStage("GPU.AO");
+			stages.Reflections = RegisterGPUStage("GPU.Reflections");
 			stages.Opaque = RegisterGPUStage("GPU.Opaque");
 			stages.Transparent = RegisterGPUStage("GPU.Transparent");
 			stages.TAA = RegisterGPUStage("GPU.TAA");

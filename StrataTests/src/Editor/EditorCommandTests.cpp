@@ -1141,6 +1141,35 @@ TEST_SUITE("Editor.Commands")
 		CHECK(fog(entity)["values"]["Density"].get<double>() == doctest::Approx(0.1));
 	}
 
+	TEST_CASE("A reflection probe is added with values, set and undone; out-of-range values and other asset types refused")
+	{
+		CommandHarness harness;
+		const std::string entity = harness.Run("entity.create", { { "name", "Probe" } })["id"].get<std::string>();
+		const auto probe = [&]() { return harness.Run("component.get", { { "entity", entity }, { "component", "ReflectionProbe" } }); };
+		harness.Run("component.add", { { "entity", entity }, { "component", "ReflectionProbe" }, { "values", { { "Extents", { 2, 3, 4 } }, { "Priority", 2 } } } });
+		CHECK(probe()["values"]["Extents"][1].get<double>() == doctest::Approx(3.0));
+		CHECK(probe()["values"]["Priority"] == 2);
+		CHECK(probe()["values"]["BoxProjection"] == true);
+		CHECK_FALSE(probe().contains("inactive"));
+		harness.Run("component.set", { { "entity", entity }, { "component", "ReflectionProbe" }, { "values", { { "BlendDistance", 0.25 }, { "BoxProjection", false } } } });
+		CHECK(probe()["values"]["BlendDistance"].get<double>() == doctest::Approx(0.25));
+		CHECK(probe()["values"]["BoxProjection"] == false);
+		harness.Run("edit.undo");
+		CHECK(probe()["values"]["BlendDistance"].get<double>() == doctest::Approx(1.0));
+		CHECK(probe()["values"]["BoxProjection"] == true);
+		for (const auto& [property, value] : { std::pair("BlendDistance", nlohmann::json(-1.0)), std::pair("Intensity", nlohmann::json(-0.5)),
+				 std::pair("Extents", nlohmann::json { 1, 0, 1 }), std::pair("Priority", nlohmann::json(2000)) })
+		{
+			CAPTURE(property);
+			CHECK_FALSE(harness.Error("component.set", { { "entity", entity }, { "component", "ReflectionProbe" }, { "values", { { property, value } } } }).empty());
+		}
+		// The capture is a texture: a material is refused.
+		const std::string material = UUIDToJson(BuiltinAssets::DefaultMaterial).get<std::string>();
+		const std::string refused = harness.Error("component.set", { { "entity", entity }, { "component", "ReflectionProbe" }, { "values", { { "Capture", material } } } });
+		CHECK(refused.find("not a Texture") != std::string::npos);
+		CHECK(probe()["values"]["Extents"][1].get<double>() == doctest::Approx(3.0));
+	}
+
 	TEST_CASE("A sky light switches to the atmosphere with its settings, undone; out-of-range settings refused; inactive ones named")
 	{
 		CommandHarness harness;

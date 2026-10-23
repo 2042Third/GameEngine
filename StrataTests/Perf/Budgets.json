@@ -196,6 +196,8 @@
 	"PerfGPU.Renderer.AtmosphereGPU": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.AtmosphereSunMovingMaxFrame": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.AtmosphereSunMovingMaxFrameGPU": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Renderer.ReflectionProbes16": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Renderer.ReflectionProbes16GPU": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.LocalShadows16Lights": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.LocalShadows16LightsGPU": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.LocalShadows16LightsCached": { "Unit": "ms", "Provisional": true },

@@ -25,6 +25,7 @@ namespace Strata
 		FrameStageID Shadows = c_InvalidFrameStage;
 		FrameStageID Prepass = c_InvalidFrameStage;
 		FrameStageID AO = c_InvalidFrameStage;
+		FrameStageID Reflections = c_InvalidFrameStage; // Reflection probes' conversions
 		FrameStageID Opaque = c_InvalidFrameStage;      // With the sky
 		FrameStageID Transparent = c_InvalidFrameStage;
 		FrameStageID TAA = c_InvalidFrameStage;         // The motion history's copy and the temporal anti-aliasing resolve

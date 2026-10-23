@@ -1,6 +1,7 @@
 # Lighting
 
-How a scene is lit and how its brightness reaches the screen: the lights and their units, exposure, the sky and fog.
+How a scene is lit and how its brightness reaches the screen: the lights and their units, exposure, the sky and fog,
+shadows and reflection probes.
 This guide is for people working in the editor; [DeveloperGuide.md](../DeveloperGuide.md) (Rendering, "Light units and
 exposure") explains how the renderer computes it.
 
@@ -118,3 +119,19 @@ They cost more than the sun's shadows, so use them where they show:
   the others keep their previous shadow meanwhile, and a light just switched on fades its shadow in over a few frames.
 - Keep the lamp's own model out of its light's shadow: turn **Cast Shadows** off on the lamp's mesh (Mesh Renderer), or
   place the light outside it, or the model darkens everything around.
+
+## Reflection probes
+
+Shiny surfaces reflect the sky everywhere unless something tells them what is around them: in a room, a courtyard or
+a cave, add a **Reflection Probe** (Add Component, Rendering) where a viewer would stand. Its **Capture** is a picture of
+the scene all around the probe (an HDR texture); inside its box (**Extents**, the half size along the entity's axes),
+surfaces reflect that picture and take their ambient light from it instead of from the sky.
+
+- **Box Projection** (on by default) makes reflections land where the walls are, as in a room; turn it off for open
+  spaces, where what the probe saw is far away.
+- **Blend Distance** fades the probe out over that many meters before its box's faces, into the sky's lighting or a
+  weaker probe's. Where boxes overlap, the higher **Priority** wins, then the smaller box; two probes blend at most.
+- **Intensity** brightens or darkens what the probe shows.
+- At most 16 probes in view light a scene, the strongest ones. The renderer prepares a probe's picture once, when the
+  probe first comes into view (its reflections appear a few frames later), and keeps it (about 1 MB of video memory
+  each); afterwards a probe costs only a little shading where its box is on screen.

@@ -54,8 +54,9 @@ namespace Strata
 		// Frames a capture may render again while temporal anti-aliasing settles (c_TemporalSettleFrames): enough for its eight
 		// phases even when another user of the capture renderer started its history again in between.
 		constexpr uint32_t c_MaxCaptureTemporalFrames = 16;
-		// Frames a capture may render again while shadow views of point and spot lights wait to be drawn: none for the capture
-		// renderer, which draws every view in its first frame (SceneRendererSpecification::SpreadLightingUpdates is off).
+		// Frames a capture may render again while shadow views of point and spot lights wait to be drawn, or reflection probes'
+		// captures to be converted: none for the capture renderer, which draws every view and converts every loaded capture in its
+		// first frame (SceneRendererSpecification::SpreadLightingUpdates is off); captures still loading count as pending assets.
 		constexpr uint32_t c_MaxCaptureLightingFrames = 16;
 		// Frames a capture may render again while its pre-exposure settles (SceneRendererStats::PreExposureSettled): automatic
 		// exposure reads its metering back frames later, and a scene far from 1 nit (daylight in real units) needs a second
@@ -257,6 +258,7 @@ namespace Strata
 			uint32_t StalePoses = 0;
 			uint32_t DeferredProxies = 0;
 			uint32_t LocalShadowViewsPending = 0;
+			uint32_t ReflectionProbesPending = 0;
 			SceneRendererStats Stats;     // The captured frame's
 			uint64_t RenderFrame = 0;     // The frame profiler's frame that rendered it
 			uint64_t RenderCount = 0;     // The capture renderer's frame (SceneRenderer::GetRenderCount), whose GPU counts it waits for
@@ -344,6 +346,7 @@ namespace Strata
 			progress.StalePoses = stats.StalePoses;
 			progress.DeferredProxies = stats.DeferredProxies;
 			progress.LocalShadowViewsPending = stats.LocalShadowViewsPending;
+			progress.ReflectionProbesPending = stats.ReflectionProbesPending;
 			// The UI's glyphs complete like the text's (its fonts and textures count in pendingAssets).
 			const bool textPending = progress.PendingTextGlyphs + progress.UI.PendingGlyphs > 0 && progress.TextFrames < c_MaxCaptureTextFrames;
 			const bool assetsPending = request.WaitForAssets && progress.PendingAssets > 0 && progress.AssetFrames < c_MaxCaptureAssetFrames;
@@ -352,7 +355,8 @@ namespace Strata
 			const bool instancesPending = request.WaitForAssets && progress.DeferredProxies > 0 && progress.InstanceFrames < c_MaxCaptureInstanceFrames;
 			// The motion view shows the motion since the capture renderer's previous frame, which its first frame lacks.
 			const bool motionPending = progress.DebugView == ViewportDebugView::Motion && !stats.MotionHistory && progress.MotionFrames == 0;
-			const bool lightingPending = progress.LocalShadowViewsPending > 0 && progress.LightingFrames < c_MaxCaptureLightingFrames;
+			const bool lightingPending = progress.LocalShadowViewsPending + progress.ReflectionProbesPending > 0
+				&& progress.LightingFrames < c_MaxCaptureLightingFrames;
 			// Until its pre-exposure settled the frame's brightest and darkest values may have clamped or lost bits.
 			const bool exposurePending = !stats.PreExposureSettled && progress.ExposureFrames < c_MaxCaptureExposureFrames;
 			const bool contentPending = textPending || assetsPending || mipsPending || posesPending || instancesPending || motionPending || lightingPending
@@ -480,6 +484,7 @@ namespace Strata
 				{ "stalePoses", progress.StalePoses },
 				{ "pendingTextGlyphs", progress.PendingTextGlyphs },
 				{ "localShadowViewsPending", progress.LocalShadowViewsPending },
+				{ "reflectionProbesPending", progress.ReflectionProbesPending },
 				{ "preExposureSettled", progress.Stats.PreExposureSettled },
 				{ "previewLighting", progress.PreviewLighting },
 				{ "screenSpaceTexts", progress.ScreenSpaceTexts },
@@ -725,7 +730,8 @@ namespace Strata
 			"view, the mean of its jitter's phases (temporalFrames: the frames the picture's history holds, 0 without it). Reports what was still "
 			"loading when the picture was taken (pendingAssets), the textures drawn coarser than the view wants (texturesBelowWanted), animators "
 			"drawn with an older pose (stalePoses), glyphs that could not be prepared in time (pendingTextGlyphs) and point and spot lights' shadow "
-			"views not drawn (localShadowViewsPending; captures draw them all at once). debugView colors the picture "
+			"views not drawn (localShadowViewsPending; captures draw them all at once) and reflection probes whose capture was not loaded "
+			"(reflectionProbesPending; captures convert loaded ones at once). debugView colors the picture "
 			"by streaming state, level of detail or mip levels (default: the viewport's, viewport.setSettings) and the result's debugView says what it "
 			"found: {view, tintedEntities, pendingEntities, failedEntities, placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], "
 			"lodErrorPixels: [the largest error drawn at each of those, in pixels, where levels are chosen by their errors; else 0], "

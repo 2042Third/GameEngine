@@ -1380,6 +1380,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		nlohmann::json result;
 		const DecodedImage shadowed = harness.CaptureLoaded(parameters, &result);
 		CHECK(result["localShadowViewsPending"] == 0);
+		CHECK(result["reflectionProbesPending"] == 0);
 		CHECK(result["waitedFrames"] == 0);
 		CHECK(result["renderStats"]["localShadowLights"] == 16);
 		CHECK(result["renderStats"]["localShadowViewsDrawn"] == 96);

@@ -2250,11 +2250,14 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   opening or playing a scene shows its materials, and up
   to `c_MaxCaptureMipFrames` while textures it draws are coarser than its view wants them, as a texture counts as loaded
   with its mip tail, and up to `c_MaxCapturePoseFrames` while animators it draws show a pose older than their time; the
-  capture renderer draws every shadow view of every shadowed point and spot light in its first frame, without
-  `SpreadLightingUpdates`, so `c_MaxCaptureLightingFrames` and `localShadowViewsPending` stay unused there), reads
+  capture renderer draws every shadow view of every shadowed point and spot light and converts every loaded reflection
+  probe capture in its first frame, without `SpreadLightingUpdates`, so `c_MaxCaptureLightingFrames`,
+  `localShadowViewsPending` and `reflectionProbesPending` stay unused there unless a capture still loads, which counts in
+  `pendingAssets` too), reads
   the image back without stalling, encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data":
   <base64>}, "width", "height", "camera", "view": {"position", "forward", "fov"}, "waitedFrames", "temporalFrames", "overlays",
-  "pendingAssets", "texturesBelowWanted", "stalePoses", "pendingTextGlyphs", "localShadowViewsPending", "preExposureSettled",
+  "pendingAssets", "texturesBelowWanted", "stalePoses", "pendingTextGlyphs", "localShadowViewsPending",
+  "reflectionProbesPending", "preExposureSettled",
   "previewLighting",
   "screenSpaceTexts", "hiddenScreenSpaceTexts", "ui": {"canvases",
   "hiddenCanvases", "elements", "drawCalls", "pendingGlyphs"}, "debugView":
@@ -2421,7 +2424,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   light clustering, directional shadow cascades and point and spot lights' shadow views ("Local light shadows"),
   depth/normal/entity-ID prepass (with motion vectors when asked or for
   TAA: "Motion vectors and TAA"), ground-truth ambient
-  occlusion, forward PBR (opaque surfaces with an EQUAL depth test and forced early depth testing), sky,
+  occlusion, the reflection probes' conversions ("Reflections"), forward PBR (opaque surfaces with an EQUAL depth test
+  and forced early depth testing), sky,
   transparent surfaces (back to front), each fogged by the scene's height fog ("Fog and atmosphere"), the temporal
   anti-aliasing resolve when the scene chooses it, then
   post-processing from the scene's `PostProcessComponent` (exposure, bloom, tone mapping and grading, FXAA without
@@ -2459,13 +2463,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   and textures are the loaded objects that frame found (`SceneRenderer::ReuseResolvedMaterials`;
   `SceneRendererStats::ReusedMaterials`), looking them up again in one call (`AssetResolveCache::Replay`,
   `AssetManagerBase::TouchLoadedAssets`). Loaded materials are never changed in place: an edit publishes a new object
-  (`ReplaceLoadedAsset`). Two caches keep assets across frames: `SceneRenderer`'s environment cache holds the sky
+  (`ReplaceLoadedAsset`). Caches keep assets across frames: `SceneRenderer`'s environment cache holds the sky
   light's environment map until the environment changes (the maps computed from a map are shared by every renderer
   lighting with it, so a renderer that starts later, such as a capture renderer, takes them over after the map dropped
   to its mip tail; until one has computed them it holds the map whole in the streamer, `TextureStreamer::Hold`, also
   through frames it does not draw), and `TextRenderer`'s glyph atlases hold their fonts (an atlas lives as long as its
-  font is loaded). Mesh layouts (bounds, submeshes) follow the asset manager's content changes in `RenderScene::Sync`,
-  whoever renders the scene; an evicted mesh keeps its layout until a reimport changes its source revision
+  font is loaded). A third, the probe cache ("Reflections"), holds what reflection probes' captures became: a renderer
+  holds a capture whole in the streamer until it converted it into a slot of its cube array, then the slot keeps it and
+  the texture drops to its tail. Mesh layouts (bounds, submeshes) follow the asset manager's content changes in
+  `RenderScene::Sync`, whoever renders the scene; an evicted mesh keeps its layout until a reimport changes its source revision
   (`AssetManagerBase::GetSourceRevisions`). Until a mesh's layout is known, the bounds the asset pipeline recorded for
   it place it (`AssetManagerBase::GetBounds`: import records, a pack's bounds table; read through
   `RenderScene::ResolveUnloadedBounds`, and a change of them is a content change), so imported and packed meshes are
@@ -2907,6 +2913,43 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     `EnvironmentUpdates`); a change meanwhile waits for the next refresh, which follows at once, so settings that change
     every frame still update the environment every 14 frames. Memory: the tables about 0.3 MiB, each set of maps about
     21 MiB, so a renderer with the atmosphere holds two (42 MiB); nothing exists without the atmosphere.
+
+### Reflections
+
+- **Reflection probes** (`ReflectionProbeComponent`, `SceneRendererReflectionProbes.cpp`): a `Capture` (an equirectangular
+  HDR texture asset, luminance in nits, as the sky's map is) of the scene seen from the entity's position lights the
+  surfaces inside its influence box (`Extents`, half sizes along the entity's axes, times its scale): their specular
+  reflections from its prefiltered cube (box-projected with `BoxProjection`: the reflected ray meets the box's faces and
+  the lookup goes from the box's center, where the capture was taken, to that point, so walls near the faces reflect
+  where they are) and their diffuse light from its irradiance (9 RGB spherical-harmonic coefficients), both times
+  `Intensity`. Inside the box the probe fades out over `BlendDistance` before the faces; the sky (or the constant
+  ambient) fills in what probes leave. Probes are not captured at run time: their captures are baked in the editor.
+- Each frame the renderer gathers the active probes with a capture (a registry view, so worlds' cells' probes count as
+  their entities do), tests their boxes' bounding spheres against the view and keeps the strongest
+  `SceneRendererSpecification::MaxReflectionProbes` (16 at most, `RenderData::c_MaxReflectionProbes`): the higher
+  `Priority`, then the smaller box (the more specific place), then the entity. `Scene/Forward.frag` walks that list
+  (`Include/ReflectionProbes.glsl`: at most 16 box tests per pixel, opaque and transparent surfaces alike) and blends the
+  first two whose boxes hold the pixel: the stronger takes its weight, the weaker its weight of the rest.
+- **The probe cache**: a renderer's cube array (RGBA16F, 128 texels across, six levels for roughness 0 to 1 as the sky's
+  prefiltered map, a cube per slot of `MaxReflectionProbes`: about 1 MiB a slot, 16 MiB at 16, with a 0.5 MiB scratch
+  cube; made with the first probe in view, released with the viewport, `SetViewportSize(0, 0)`, or once the scene has no
+  probe, kept across resizes) holds each capture in a slot, given to another capture only when the frame does not use it,
+  least recently used first. A capture is requested through the frame's `AssetResolveCache` (High) and held whole in the texture
+  streamer (`TextureStreamer::Hold`: nothing draws it, so nothing else raises its levels) until it is converted, then
+  released, so it drops to its tail while the slot keeps lighting; a reload of the texture converts it again. A
+  conversion (`GPU.Reflections`, between `GPU.AO` and `GPU.Opaque`): `IBL/EquirectToCube.comp` into a scratch cube of
+  128 with its levels, `IBL/Prefilter.comp` into the slot's six levels, `IBL/ProbeIrradiance.comp` (one work group over
+  the cube's 32-texel level) into the slot's coefficients in the probe buffer. With `SpreadLightingUpdates`
+  (`c_ReflectionProbeConversionsPerFrame`, 2) at most two captures convert per frame and a probe waiting for its capture
+  lights nothing meanwhile; without it (captures, thumbnails, the bake) every loaded one converts in the frame.
+  `SceneRendererStats::ReflectionProbes` (shaded with), `ReflectionProbeConversions` and `ReflectionProbesPending`
+  (kept in view, waiting for their capture to load or convert: captures and the project's picture wait for them).
+- Bindings: scene-set SRV 9 is the cube array (a one-slot black cube array, `Renderer::GetBlackCubeArrayTexture`, without
+  probes in view; the device's `imageCubeArray` is required, "Building") and SRV 10 the probe buffer
+  (`RenderData::ReflectionProbeBuffer`, 3.6 KB made with the renderer: the slots' coefficients, written on the GPU, then
+  the frame's list with camera-relative centers, written by the CPU only when it has probes or the previous upload had
+  some). A scene without probes in view makes nothing and renders bit-identically to one without the component
+  (`GPU.SceneRenderer.ReflectionProbes`).
 
 ### Streaming and uploads
 

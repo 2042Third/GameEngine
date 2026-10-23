@@ -96,6 +96,7 @@ strata_add_shaders(Strata_Renderer
 		IBL/CubeDownsample.comp
 		IBL/Irradiance.comp
 		IBL/Prefilter.comp
+		IBL/ProbeIrradiance.comp
 		IBL/BRDFLut.comp
 		Effects/GTAO.comp
 		Effects/AOBlur.comp

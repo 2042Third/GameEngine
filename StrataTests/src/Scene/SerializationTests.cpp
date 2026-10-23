@@ -80,6 +80,13 @@ namespace
 		fog.Color = glm::vec3(0.5f, 0.4f, 0.3f);
 		fog.ColorFromSky = false;
 		fog.SunScattering = 0.25f;
+		ReflectionProbeComponent& probe = lights.AddComponent<ReflectionProbeComponent>();
+		probe.Capture = UUID(98);
+		probe.Extents = glm::vec3(3.0f, 4.0f, 6.0f);
+		probe.BlendDistance = 0.5f;
+		probe.BoxProjection = false;
+		probe.Intensity = 1.5f;
+		probe.Priority = -3;
 		PostProcessComponent& postProcess = lights.AddComponent<PostProcessComponent>();
 		postProcess.Tonemapper = TonemapOperator::AgX;
 		postProcess.Exposure = 1.5f;
@@ -239,6 +246,13 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(fog.Color == glm::vec3(0.5f, 0.4f, 0.3f));
 		CHECK_FALSE(fog.ColorFromSky);
 		CHECK(fog.SunScattering == doctest::Approx(0.25f));
+		const ReflectionProbeComponent& probe = loaded.FindEntityByName("Lights").GetComponent<ReflectionProbeComponent>();
+		CHECK(probe.Capture == UUID(98));
+		CHECK(probe.Extents == glm::vec3(3.0f, 4.0f, 6.0f));
+		CHECK(probe.BlendDistance == doctest::Approx(0.5f));
+		CHECK_FALSE(probe.BoxProjection);
+		CHECK(probe.Intensity == doctest::Approx(1.5f));
+		CHECK(probe.Priority == -3);
 
 		Entity ui = loaded.FindEntityByName("UI");
 		CHECK(ui.GetComponent<TextComponent>().Text == "Score: 0\nLine two \xE2\x9C\x93");
@@ -574,6 +588,43 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(CountWarnings(warnings, "Density") == 1);
 		CHECK(CountWarnings(warnings, "Colour") == 1);
 		CHECK(loaded.Density == doctest::Approx(0.02f));
+	}
+
+	TEST_CASE("Reflection probes load their defaults for keys they lack; out-of-range values are clamped, values of another type warn")
+	{
+		const auto load = [](const nlohmann::json& probe, std::vector<std::string>& warnings)
+		{
+			const nlohmann::json document = {
+				{ "Strata", { { "Format", "Scene" }, { "Version", 1 } } },
+				{ "Scene", { { "Name", "Probed" }, { "Entities", { { { "ID", "00000000000000AC" }, { "Components", {
+					{ "Name", { { "Name", "Probe" } } }, { "ReflectionProbe", probe } } } } } } } }
+			};
+			Scene scene;
+			std::string error;
+			REQUIRE_MESSAGE(SceneSerializer::Deserialize(scene, document, &error, &warnings), error);
+			return scene.GetEntityByUUID(UUID(0xAC)).GetComponent<ReflectionProbeComponent>();
+		};
+		std::vector<std::string> warnings;
+		ReflectionProbeComponent loaded = load(nlohmann::json::object(), warnings);
+		CHECK(warnings.empty());
+		CHECK_FALSE(loaded.Capture.IsValid());
+		CHECK(loaded.Extents == glm::vec3(5.0f));
+		CHECK(loaded.BlendDistance == 1.0f);
+		CHECK(loaded.BoxProjection);
+		CHECK(loaded.Intensity == 1.0f);
+		CHECK(loaded.Priority == 0);
+		// Out of range: clamped, as every ranged property is.
+		loaded = load({ { "Extents", { 0, -1, 2 } }, { "BlendDistance", -2 }, { "Intensity", -1 }, { "Priority", 5000 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.Extents == glm::vec3(ReflectionProbeComponent::c_MinExtent, ReflectionProbeComponent::c_MinExtent, 2.0f));
+		CHECK(loaded.BlendDistance == 0.0f);
+		CHECK(loaded.Intensity == 0.0f);
+		CHECK(loaded.Priority == 1000);
+		// Another type or an unknown name: a warning, and the default.
+		loaded = load({ { "Intensity", "bright" }, { "Radius", 3 } }, warnings);
+		CHECK(CountWarnings(warnings, "Intensity") == 1);
+		CHECK(CountWarnings(warnings, "Radius") == 1);
+		CHECK(loaded.Intensity == 1.0f);
 	}
 
 	TEST_CASE("Hand-written entity data without ids is accepted")

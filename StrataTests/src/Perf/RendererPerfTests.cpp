@@ -286,6 +286,60 @@ TEST_SUITE("PerfGPU.Renderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Render cost of 100,000 cubes under 16 reflection probes")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		// Render100kCubes' scene under 16 reflection probes tiling the grid, each with a capture of its own, all converted before
+		// the measurement: the forward pass's box tests and lookups in every pixel, against Render100kCubes (provisional: the
+		// reference machine sets the budgets).
+		constexpr size_t c_Count = 100'000;
+		constexpr int c_ProbesPerSide = 4;
+		Scene scene("ProbedCubes");
+		Perf::AddCameraAndLight(scene);
+		Perf::CreateCubeGrid(scene, c_Count);
+		const float side = static_cast<float>(std::ceil(std::sqrt(static_cast<double>(c_Count)))) * Perf::c_GridSpacing;
+		const float cell = side / static_cast<float>(c_ProbesPerSide);
+		for (int z = 0; z < c_ProbesPerSide; z++)
+		{
+			for (int x = 0; x < c_ProbesPerSide; x++)
+			{
+				const float shade = 0.2f + 0.05f * static_cast<float>(z * c_ProbesPerSide + x);
+				Entity probe = scene.CreateEntity("Probe");
+				probe.GetComponent<TransformComponent>().Translation = glm::vec3((static_cast<float>(x) + 0.5f) * cell - side * 0.5f, 0.0f,
+					(static_cast<float>(z) + 0.5f) * cell - side * 0.5f);
+				ReflectionProbeComponent& component = probe.AddComponent<ReflectionProbeComponent>();
+				component.Capture = assets.Add(CreateEnvironmentTexture(glm::vec3(shade, shade, 1.0f), glm::vec3(0.1f)), "Capture");
+				component.Extents = glm::vec3(cell * 0.6f, 20.0f, cell * 0.6f);
+				component.BlendDistance = cell * 0.1f;
+			}
+		}
+		SceneRenderer renderer(Perf::MeasuredRendererSpecification());
+		renderer.SetViewportSize(c_Width, c_Height);
+		const SceneCamera camera = GridView(c_Count);
+		for (int frame = 0; frame < 32 && renderer.GetStats().ReflectionProbes < c_ProbesPerSide * c_ProbesPerSide; frame++)
+			REQUIRE(renderer.Render(scene, camera));
+		REQUIRE(renderer.GetStats().ReflectionProbes == c_ProbesPerSide * c_ProbesPerSide);
+		const bool measuresGPU = Perf::MeasuresGPU();
+		std::vector<std::string> keys = { "PerfGPU.Renderer.ReflectionProbes16" };
+		if (measuresGPU)
+			keys.push_back("PerfGPU.Renderer.ReflectionProbes16GPU");
+		Perf::CheckBudgetsConfirmed(keys, [&]
+		{
+			const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, camera, "100k cubes under 16 reflection probes");
+			CHECK(GetDrawnCounts(renderer).Instances == c_Count);
+			CHECK(renderer.GetStats().ReflectionProbes == c_ProbesPerSide * c_ProbesPerSide);
+			CHECK(renderer.GetStats().ReflectionProbeConversions == 0);
+			Perf::MetricValues values { { "PerfGPU.Renderer.ReflectionProbes16", measurement.CPU.MedianMs } };
+			if (measuresGPU)
+				values.emplace("PerfGPU.Renderer.ReflectionProbes16GPU", Perf::MeasureGPU(measurement));
+			return values;
+		});
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Render cost of 100,000 cubes under the atmosphere, with a still sun and with a moving one")
 	{
 		GPUContext gpu;

@@ -237,9 +237,9 @@ namespace Strata
 		};
 		static_assert(sizeof(LocalShadowData) == c_LocalShadowFaces * 64 + c_LocalShadowFaces * 16 + 2 * 16);
 
-		// Reflection probes: a renderer keeps at most this many in view,
-		// each capture converted into a slot of its cube array (a prefiltered cube, one level per roughness step, c_ReflectionProbeSize
-		// texels across) with its irradiance as spherical-harmonic coefficients.
+		// Reflection probes (ReflectionProbeComponent; Include/ReflectionProbes.glsl): a renderer keeps at most this many in
+		// view, each capture converted into a slot of its cube array (a prefiltered cube, one level per roughness step,
+		// c_ReflectionProbeSize texels across) with its irradiance as spherical-harmonic coefficients.
 		constexpr uint32_t c_MaxReflectionProbes = 16;
 		constexpr uint32_t c_ReflectionProbeSize = 128;
 		constexpr uint32_t c_ReflectionProbeMipCount = 6; // Roughness 0, 0.2, ... 1.0, as the sky's prefiltered map
@@ -260,7 +260,7 @@ namespace Strata
 		struct ReflectionProbeBuffer
 		{
 			// Per slot, coefficients of the irradiance over pi (what the sky's irradiance map holds) on the real spherical
-			// harmonics of bands 0 to 2, band by band; w unused.
+			// harmonics of bands 0 to 2, in the order of Include/ReflectionProbes.glsl's ProbeSHBasis; w unused.
 			glm::vec4 Irradiance[c_MaxReflectionProbes * c_ReflectionProbeSHCoefficients];
 			glm::uvec4 Counts; // x: probes in the list
 			ReflectionProbeData Probes[c_MaxReflectionProbes];
@@ -268,6 +268,15 @@ namespace Strata
 		static_assert(sizeof(ReflectionProbeBuffer) == c_MaxReflectionProbes * c_ReflectionProbeSHCoefficients * 16 + 16 + c_MaxReflectionProbes * 80);
 		// Where the CPU's part of the buffer starts.
 		constexpr size_t c_ReflectionProbeListOffset = offsetof(ReflectionProbeBuffer, Counts);
+		// IBL/ProbeIrradiance.comp: projects a slot's capture (a level of its cube, SourceSize texels across) onto the slot's
+		// irradiance coefficients.
+		struct ProbeIrradianceParameters
+		{
+			uint32_t SourceSize = 0;
+			uint32_t Slot = 0;
+			uint32_t Padding[2] = {};
+		};
+		static_assert(sizeof(ProbeIrradianceParameters) == 16);
 
 		// The push constants of the GPU's light culling passes (Include/Lights.glsl).
 		struct LightCullParameters

@@ -39,7 +39,7 @@ TEST_SUITE("Reflection")
 	{
 		const char* expected[] = {
 			"ID", "Name", "Transform", "Relationship", "Tag", "Inactive", "PrefabInstance", "Camera", "MeshRenderer",
-			"DirectionalLight", "PointLight", "SpotLight", "SkyLight", "HeightFog", "PostProcess", "Text",
+			"DirectionalLight", "PointLight", "SpotLight", "SkyLight", "HeightFog", "ReflectionProbe", "PostProcess", "Text",
 #if ST_WITH_PHYSICS
 			"RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "CharacterController",
 #endif
@@ -246,6 +246,33 @@ TEST_SUITE("Reflection")
 		CHECK_FALSE(skyInfo->FindProperty("AtmosphereHaze")->SetValue(&sky, std::numeric_limits<float>::quiet_NaN()));
 		CHECK(sky.AtmosphereHaze == 1.0f);
 		CHECK(fog.Density == doctest::Approx(0.02f));
+
+		// Reflection probes: a texture capture, a box of some size, no negative blend distance or intensity.
+		const ComponentInfo* probeInfo = ComponentRegistry::Find<ReflectionProbeComponent>();
+		REQUIRE(probeInfo);
+		CHECK(probeInfo->Name == "ReflectionProbe");
+		CHECK(probeInfo->DisplayName == "Reflection Probe");
+		const PropertyInfo* capture = probeInfo->FindProperty("Capture");
+		REQUIRE(capture);
+		CHECK(capture->Type == PropertyType::Asset);
+		CHECK(capture->AssetFilter == AssetType::Texture);
+		const PropertyInfo* extents = probeInfo->FindProperty("Extents");
+		REQUIRE(extents);
+		CHECK(extents->Type == PropertyType::Vec3);
+		CHECK(extents->Min == ReflectionProbeComponent::c_MinExtent);
+		CHECK(ReflectionProbeComponent::c_MinExtent > 0.0f);
+		CHECK_FALSE(extents->IsInRange(PropertyValue(glm::vec3(1.0f, 0.0f, 1.0f))));
+		CHECK(probeInfo->FindProperty("BlendDistance")->Min == 0.0f);
+		CHECK_FALSE(probeInfo->FindProperty("BlendDistance")->IsInRange(PropertyValue(-0.5f)));
+		CHECK(probeInfo->FindProperty("Intensity")->Min == 0.0f);
+		CHECK_FALSE(probeInfo->FindProperty("Intensity")->IsInRange(PropertyValue(-1.0f)));
+		CHECK(probeInfo->FindProperty("BoxProjection")->Type == PropertyType::Bool);
+		CHECK(probeInfo->FindProperty("Priority")->Type == PropertyType::Int);
+		ReflectionProbeComponent probe;
+		CHECK(extents->SetValue(&probe, PropertyValue(glm::vec3(-1.0f, 2.0f, 3.0f)))); // Editors clamp
+		CHECK(probe.Extents == glm::vec3(ReflectionProbeComponent::c_MinExtent, 2.0f, 3.0f));
+		CHECK_FALSE(probeInfo->FindProperty("Intensity")->SetValue(&probe, std::numeric_limits<float>::quiet_NaN()));
+		CHECK(probe.Intensity == 1.0f);
 
 		const PropertyInfo* rotation = ComponentRegistry::Find<TransformComponent>()->FindProperty("Rotation");
 		TransformComponent transform;

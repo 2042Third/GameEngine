@@ -230,6 +230,8 @@ namespace Strata
 				{ "localShadowViewsDrawn", stats.LocalShadowViewsDrawn },
 				{ "localShadowViewsPending", stats.LocalShadowViewsPending },
 				{ "localShadowCasters", stats.LocalShadowCasters },
+				{ "reflectionProbes", stats.ReflectionProbes },
+				{ "reflectionProbesPending", stats.ReflectionProbesPending },
 				{ "culledProxies", stats.CulledInstances },
 				{ "instancesPerLod", std::move(lods) },
 				{ "lights", stats.Lights },
@@ -868,8 +870,8 @@ namespace Strata
 			"stages inside the frame time added up per frame), untimed (the rest of each frame, work no stage accounts for) and jobs (worker, "
 			"I/O and background threads (imports, exports), how busy they were in percent, running and queued jobs now). gpu is the GPU's side of "
 			"the same frames, known 2-3 frames late: frames (with GPU times), latencyFrames, busy (the GPU stages added up per frame), stages (per GPU "
-			"stage: GPU.Uploads, GPU.Setup, GPU.Cull, GPU.Shadows, GPU.Prepass, GPU.AO, GPU.Opaque (with the sky), GPU.Transparent, GPU.TAA (motion vectors' "
-			"history and temporal anti-aliasing), GPU.Post, "
+			"stage: GPU.Uploads, GPU.Setup, GPU.Cull, GPU.Shadows, GPU.Prepass, GPU.AO, GPU.Reflections (reflection probes' conversions), "
+			"GPU.Opaque (with the sky), GPU.Transparent, GPU.TAA (motion vectors' history and temporal anti-aliasing), GPU.Post, "
 			"GPU.Overlays, GPU.UI (the game UI), GPU.ImGui) and boundBy: gpu when the GPU's median busy time takes at least 90% of the median frame interval and exceeds "
 			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
 			"times. renderStats is the viewport's latest frame (null while it renders none): gpuDriven (the GPU culled the frame and built its draws: "
@@ -880,7 +882,8 @@ namespace Strata
 			"(shadow casters hidden from the light behind other casters, per cascade: left out of those cascades on the GPU-driven path), cachedCascades "
 			"(shadow cascades kept from the previous frame: nothing reaching them changed), localShadowLights (point and spot lights with "
 			"shadows), localShadowViewsDrawn (their shadow views drawn: none while nothing reaching them changed), localShadowViewsPending, "
-			"localShadowCasters, culledProxies, "
+			"localShadowCasters, reflectionProbes (reflection probes the view shaded with), reflectionProbesPending (in view, their capture "
+			"still loading or waiting to be converted), culledProxies, "
 			"sizeCulledProxies (in view but below a pixel), instancesPerLod, lights, droppedLights, "
 			"materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes (new mesh renderers waiting for "
 			"their upload to the GPU), geometryPool "

@@ -286,7 +286,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(6),
 			nvrhi::BindingLayoutItem::Texture_SRV(7),
 			nvrhi::BindingLayoutItem::Texture_SRV(8),            // The local shadows' atlas
-			nvrhi::BindingLayoutItem::Texture_SRV(9),            // The reflection probes' cube array
+			nvrhi::BindingLayoutItem::Texture_SRV(9),            // The reflection probes' cube array (Include/ReflectionProbes.glsl)
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(10),  // The reflection probes (RenderData::ReflectionProbeBuffer)
 			nvrhi::BindingLayoutItem::Texture_SRV(11),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),
@@ -642,13 +642,13 @@ namespace Strata
 
 	void SceneRenderer::DispatchIBL(nvrhi::ICommandList* commandList, nvrhi::IComputePipeline* pipeline, nvrhi::ITexture* source,
 		const nvrhi::TextureSubresourceSet& sourceSubresources, nvrhi::TextureDimension sourceDimension, nvrhi::ITexture* output, uint32_t outputMip,
-		nvrhi::TextureDimension outputDimension, const RenderData::IBLParameters& parameters, uint32_t layers)
+		nvrhi::TextureDimension outputDimension, const RenderData::IBLParameters& parameters, uint32_t layers, uint32_t outputFirstLayer)
 	{
 		nvrhi::BindingSetDesc setDesc;
 		setDesc.bindings = {
 			nvrhi::BindingSetItem::Texture_SRV(0, source, nvrhi::Format::UNKNOWN, sourceSubresources, sourceDimension),
 			nvrhi::BindingSetItem::Sampler(0, sourceDimension == nvrhi::TextureDimension::Texture2D ? m_EquirectSampler.Get() : m_LinearClampSampler.Get()),
-			nvrhi::BindingSetItem::Texture_UAV(0, output, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(outputMip, 1, 0, layers), outputDimension),
+			nvrhi::BindingSetItem::Texture_UAV(0, output, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(outputMip, 1, outputFirstLayer, layers), outputDimension),
 			nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::IBLParameters))
 		};
 		nvrhi::BindingSetHandle bindingSet = m_Device->createBindingSet(setDesc, m_IBLBindingLayout);
@@ -1032,11 +1032,6 @@ namespace Strata
 			return false;
 		}
 		return true;
-	}
-
-	nvrhi::ITexture* SceneRenderer::GetBoundReflectionProbes() const
-	{
-		return Renderer::GetBlackCubeArrayTexture();
 	}
 
 	bool SceneRenderer::EnsureMotionResources(bool keepContents)
@@ -1839,7 +1834,9 @@ namespace Strata
 		m_HasRenderedFrame = false;
 		if (width == 0 || height == 0)
 		{
+			// Released altogether (a capture renderer between pictures): the probes' cube array too, which a resize keeps.
 			ReleaseRenderTargets();
+			ReleaseReflectionProbes();
 			return;
 		}
 
@@ -2749,6 +2746,9 @@ namespace Strata
 			}
 		}
 		ResolveAssets(renderScene);
+		// After the materials' lookups (which a still frame replays): the probes' captures, and the conversions of the frame.
+		if (!GatherReflectionProbes(scene, camera))
+			degraded = true;
 		GatherDraws(renderScene, camera, !m_GPUDrivenFrame);
 		GatherShadowDraws(renderScene, camera, frame, !m_GPUDrivenFrame);
 		GatherLocalShadowDraws(renderScene, !m_GPUDrivenFrame);
@@ -2838,6 +2838,7 @@ namespace Strata
 		UploadSceneData(commandList, drawListsRecreated);
 		if (!m_LocalShadowData.empty())
 			commandList->writeBuffer(m_LocalShadowBuffer, m_LocalShadowData.data(), m_LocalShadowData.size() * sizeof(RenderData::LocalShadowData));
+		UploadReflectionProbes(commandList);
 		if (!m_Lights.empty())
 		{
 			commandList->writeBuffer(m_LightBuffer, m_Lights.data(), m_Lights.size() * sizeof(RenderData::LightData));
@@ -2940,6 +2941,13 @@ namespace Strata
 			gpuTimer.Next(gpuStages.AO);
 			commandList->beginMarker("AmbientOcclusion");
 			RenderAmbientOcclusion(commandList, postProcess);
+			commandList->endMarker();
+		}
+		if (!m_ReflectionProbeConversions.empty())
+		{
+			gpuTimer.Next(gpuStages.Reflections);
+			commandList->beginMarker("Reflections");
+			ConvertReflectionProbes(commandList);
 			commandList->endMarker();
 		}
 		gpuTimer.Next(gpuStages.Opaque);

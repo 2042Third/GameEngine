@@ -17,6 +17,8 @@ only files whose content changed on purpose; the .meta files keep the handles ei
     Assets/Textures/Bumps_normal.png 16x16 RGB normal map of a grid of bumps (cooks to BC5)
     Assets/Textures/Roughness.png  16x16 grayscale ramp (one-channel data: cooks to BC4, sampled as gray)
     Assets/Textures/Sky.hdr        16x8 Radiance HDR sky gradient (equirectangular environment map)
+    Assets/Lighting/Feature/Probe.hdr 32x16 Radiance HDR capture of a room (a reflection probe's, as lighting.bakeProbes
+                                   writes them: warm walls, a bright window toward +X, a dark floor)
     Assets/Audio/Blip.wav          0.1 s mono 16-bit PCM tone
     Assets/Fonts/FeatureBlocks.ttf TrueType font: every printable ASCII character is a solid block
     Assets/Models/Platform.gltf    glTF 2.0 model: a 4 x 0.5 x 4 platform with a pyramid "Beacon" child node,
@@ -119,6 +121,25 @@ def make_sky_hdr():
             warmth = 1.5 if x in (3, 4) and y == 2 else 1.0
             pixels.extend(to_rgbe((color[0] * warmth, color[1] * warmth, color[2])))
     # Rows narrower than 8 pixels or not starting with the 2, 2 run-length marker are stored flat.
+    header = f"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y {height} +X {width}\n".encode("ascii")
+    return header + bytes(pixels)
+
+
+def make_probe_hdr():
+    width, height = 32, 16
+    pixels = bytearray()
+    for y in range(height):
+        for x in range(width):
+            # Columns 8-23 face +X (Include/IBL.glsl: u = atan2(z, x) / 2 pi + 0.5); a window in the middle rows there.
+            if y >= 12:
+                color = (0.05, 0.04, 0.03)  # The floor
+            elif 13 <= x <= 18 and 4 <= y <= 8:
+                color = (3.0, 2.8, 2.5)  # The window
+            elif y < 3:
+                color = (0.6, 0.55, 0.5)  # The ceiling
+            else:
+                color = (0.5, 0.25, 0.12) if x < 16 else (0.15, 0.3, 0.45)  # Warm and cool walls
+            pixels.extend(to_rgbe(color))
     header = f"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y {height} +X {width}\n".encode("ascii")
     return header + bytes(pixels)
 
@@ -525,6 +546,7 @@ def main():
     write_bytes("Textures/Bumps_normal.png", make_bumps_normal_png())
     write_bytes("Textures/Roughness.png", make_roughness_png())
     write_bytes("Textures/Sky.hdr", make_sky_hdr())
+    write_bytes("Lighting/Feature/Probe.hdr", make_probe_hdr())
     write_bytes("Audio/Blip.wav", make_blip_wav())
     write_bytes("Fonts/FeatureBlocks.ttf", make_font())
     write_bytes("Models/Platform.gltf", make_platform_gltf())

@@ -130,6 +130,24 @@ namespace Strata
 		static constexpr float c_MinHeightFalloff = 0.0001f;
 	};
 
+	// Reflections and ambient light inside a box from a capture of the scene seen from the entity's position: an
+	// equirectangular HDR texture (luminance in nits) that lighting.bakeProbes renders and imports, or any such texture. The
+	// box follows the entity's position, rotation and scale; inside it, surfaces reflect the capture (projected onto the box's
+	// faces with BoxProjection, as the walls of a room are) and are lit by its irradiance, fading toward the sky's lighting
+	// over BlendDistance before the box's faces. Where boxes overlap, the two strongest blend: higher Priority first, then the
+	// smaller box. The renderer keeps the strongest probes in view (SceneRendererSpecification::MaxReflectionProbes).
+	struct ReflectionProbeComponent
+	{
+		AssetHandle Capture = 0;                    // Equirectangular HDR texture of the scene around the probe (nits)
+		glm::vec3 Extents = { 5.0f, 5.0f, 5.0f };   // Half extents of the influence box in meters, along the entity's axes
+		float BlendDistance = 1.0f;                 // Meters inside the box's faces over which the probe fades out
+		bool BoxProjection = true;                  // Reflections hit the box's faces (rooms, courtyards) rather than infinity
+		float Intensity = 1.0f;                     // Multiplies the capture's luminance
+		int32_t Priority = 0;                       // Higher wins where boxes overlap (then the smaller box)
+
+		static constexpr float c_MinExtent = 0.01f; // Meters: a box of no size would reflect nothing
+	};
+
 	enum class TonemapOperator : uint8_t
 	{
 		None = 0,

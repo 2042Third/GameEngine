@@ -411,6 +411,44 @@
 			},
 			{
 				"Components": {
+					"Name": {
+						"Name": "Probe"
+					},
+					"ReflectionProbe": {
+						"BlendDistance": 1.5,
+						"BoxProjection": false,
+						"Capture": "F7A000000000000F",
+						"Extents": [
+							8,
+							4,
+							8
+						],
+						"Intensity": 0.8,
+						"Priority": 1
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							2,
+							0
+						]
+					}
+				},
+				"ID": "F7E000000000008F"
+			},
+			{
+				"Components": {
 					"Inactive": {},
 					"Name": {
 						"Name": "Procedural Sky"

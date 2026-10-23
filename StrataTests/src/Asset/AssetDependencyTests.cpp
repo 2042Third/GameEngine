@@ -13,6 +13,7 @@
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/SceneSerializer.h"
@@ -177,6 +178,12 @@ TEST_SUITE("Asset.Dependencies")
 		const std::vector<AssetHandle> dependencies = editor->GetDependencies(sceneHandle);
 		CHECK(std::set<AssetHandle>(dependencies.begin(), dependencies.end()) == walked);
 		CHECK(dependencies.size() == walked.size()); // Each once
+		// A reflection probe's capture is one of them (pruned exports and delete checks follow it).
+		const Entity probe = scene->FindEntityByName("Probe");
+		REQUIRE(probe);
+		const AssetHandle capture = probe.GetComponent<ReflectionProbeComponent>().Capture;
+		CHECK(capture.IsValid());
+		CHECK(std::find(dependencies.begin(), dependencies.end(), capture) != dependencies.end());
 
 		// The walk is meaningful: the scene references every kind of asset a scene can.
 		std::set<AssetType> types;

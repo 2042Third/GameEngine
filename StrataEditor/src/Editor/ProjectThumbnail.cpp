@@ -144,14 +144,14 @@ namespace Strata
 			}
 			// Complete, as captures wait for it: what loads, glyphs still being prepared (the scene's text and the game UI's),
 			// the finer levels of textures the view wants (a texture counts as loaded with its mip tail), mesh renderers still
-			// on their way to the GPU and point and spot lights' shadow views not drawn yet (none for the capture renderer, which
-			// draws them at once), for at most c_MaxFrames frames (a texture budget may keep levels out for good), and the
+			// on their way to the GPU, point and spot lights' shadow views not drawn yet and reflection probes' captures not
+			// converted yet (none for the capture renderer, which draws and converts them at once), for at most c_MaxFrames frames (a texture budget may keep levels out for good), and the
 			// pre-exposure until it settled, for at most c_MaxExposureFrames. An incomplete frame starts temporal
 			// anti-aliasing's history again, so that it holds the jitter's phases of the complete view, or of the view as it is
 			// once that wait ended: the picture then waits for the history too.
 			const SceneRendererStats& stats = renderer->GetStats();
 			const bool incomplete = stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || stats.Overlays.PendingGlyphs > 0 || stats.DeferredProxies > 0
-				|| stats.LocalShadowViewsPending > 0 || renderer->CountTexturesBelowWanted() > 0;
+				|| stats.LocalShadowViewsPending > 0 || stats.ReflectionProbesPending > 0 || renderer->CountTexturesBelowWanted() > 0;
 			const bool waiting = incomplete && ++m_Frames < c_MaxFrames;
 			const bool exposureWaiting = !stats.PreExposureSettled && ++m_ExposureFrames < c_MaxExposureFrames;
 			if (waiting || exposureWaiting)

@@ -241,6 +241,27 @@ namespace Strata
 				WithTooltip(Slider(0.0f, 1.0f), "How strongly the fog scatters the directional light toward a viewer looking at it: 0 equally in every "
 					"direction, 1 into a glow around the light"));
 
+		ComponentRegistry::Register<ReflectionProbeComponent>("ReflectionProbe")
+			.DisplayName("Reflection Probe")
+			.Category("Rendering")
+			.Description("Reflections and ambient light inside a box from a capture of the scene around the entity (lighting.bakeProbes renders "
+				"it); where boxes overlap the two strongest blend")
+			.AssetProperty("Capture", &ReflectionProbeComponent::Capture, AssetType::Texture,
+				{ .Tooltip = "Equirectangular HDR texture of the scene seen from the probe (luminance in nits): Bake writes one" })
+			.Property("Extents", &ReflectionProbeComponent::Extents,
+				WithTooltip(Range(ReflectionProbeComponent::c_MinExtent, c_Unbounded, 0.05f), "Half size of the influence box in meters, along the "
+					"entity's axes (times its scale)"))
+			.Property("BlendDistance", &ReflectionProbeComponent::BlendDistance,
+				WithTooltip(Range(0.0f, c_Unbounded, 0.05f), "Meters inside the box's faces over which the probe fades into the sky's lighting "
+					"(or a weaker probe's)"))
+			.Property("BoxProjection", &ReflectionProbeComponent::BoxProjection,
+				WithTooltip({}, "Reflections are projected onto the box's faces, so walls near the box's faces reflect where they are (rooms); "
+					"off, the capture is seen as if infinitely far (open spaces)"))
+			.Property("Intensity", &ReflectionProbeComponent::Intensity, WithTooltip(Range(0.0f, c_Unbounded, 0.01f), "Multiplies the capture's luminance"))
+			.Property("Priority", &ReflectionProbeComponent::Priority,
+				WithTooltip(Range(-1000.0f, 1000.0f, 0.1f), "Where boxes overlap the higher priority wins (then the smaller box); with more probes in "
+					"view than the renderer keeps, the strongest stay"));
+
 		ComponentRegistry::Register<PostProcessComponent>("PostProcess")
 			.DisplayName("Post Process")
 			.Category("Rendering")
