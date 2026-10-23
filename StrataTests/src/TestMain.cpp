@@ -4,6 +4,7 @@
 #include "Asset/ImportRecordTestUtils.h"
 #include "Editor/SceneComparison.h"
 #include "Perf/ImportMemoryMeasurement.h"
+#include "Perf/LocalShadowsMemory.h"
 #include "Perf/WorldGameMeasurement.h"
 #include "Engine/ModuleRegistrationHelpers.h"
 #include "Network/FakeEditorProcess.h"
@@ -674,6 +675,12 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	if (mode == "broad-phase-churn")
 		return Strata::Tests::RunBroadPhaseChurnProcess();
 #endif
+	if (mode == "local-shadows-memory")
+	{
+		// <result file>: renders a TAA scene of 100,000 cubes under 16 shadowed point lights and writes the process's peak
+		// memory (PerfGPU.Renderer's TAALocalShadowsPeakMemory).
+		return Strata::Tests::RunLocalShadowsMemoryProcess(argc, argv);
+	}
 	if (mode == "streaming-sweep")
 	{
 		// <settings file> <result file>: runs a camera sweep over a stress project's pack (Perf/StressProject.h) and writes

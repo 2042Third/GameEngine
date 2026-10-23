@@ -179,6 +179,9 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 		Entity camera = scene->CreateEntity("Camera");
 		camera.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, 6.0f);
 		camera.AddComponent<CameraComponent>();
+		// A shadowed lamp above the cubes: its six views are drawn in the first frame.
+		Entity lamp = AddPointLight(*scene, glm::vec3(0.0f, 2.0f, 1.0f), glm::vec3(1.0f), 10.0f, 5.0f);
+		lamp.GetComponent<PointLightComponent>().CastShadows = true;
 
 		const auto writeRow = [](const FramePerfColumnGroup& group)
 		{
@@ -190,11 +193,12 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 		};
 		// Without a renderer (a headless game), or before its first frame: empty fields.
 		const FramePerfColumnGroup headless = GameRenderer::MakePerfLogColumns(nullptr);
-		CHECK(headless.Names == std::vector<std::string> { "DrawCalls", "Instances", "Triangles", "VisibleProxies", "OccludedProxies", "InstanceUploadMB" });
-		CHECK(writeRow(headless) == ",,,,,,");
+		CHECK(headless.Names == std::vector<std::string> { "DrawCalls", "Instances", "Triangles", "VisibleProxies", "OccludedProxies", "InstanceUploadMB",
+			"LocalShadowLights", "LocalShadowViewsDrawn" });
+		CHECK(writeRow(headless) == ",,,,,,,,");
 		GameRenderer renderer;
 		const FramePerfColumnGroup columns = GameRenderer::MakePerfLogColumns(&renderer);
-		CHECK(writeRow(columns) == ",,,,,,");
+		CHECK(writeRow(columns) == ",,,,,,,,");
 
 		REQUIRE(renderer.Render(scene, target.Framebuffer, glm::uvec2(c_Size)));
 		renderer.GetSceneRenderer().ResolveGPUStats(true);
@@ -204,13 +208,24 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 		std::stringstream fields(writeRow(columns).substr(1));
 		for (std::string field; std::getline(fields, field, ',');)
 			values.push_back(std::stod(field));
-		REQUIRE(values.size() == 6);
+		REQUIRE(values.size() == 8);
 		CHECK(values[0] == static_cast<double>(drawn.Draws));
 		CHECK(values[1] == 3.0);
 		CHECK(values[2] == static_cast<double>(drawn.Triangles));
 		CHECK(values[3] == static_cast<double>(drawn.VisibleProxies));
 		CHECK(values[4] == 0.0);
 		CHECK(values[5] > 0.0); // The first frame uploads the instances
+		CHECK(values[6] == 1.0);
+		CHECK(values[7] == 6.0);
+		// The next frame keeps the lamp's views: nothing reaching them changed.
+		REQUIRE(renderer.Render(scene, target.Framebuffer, glm::uvec2(c_Size)));
+		std::stringstream next(writeRow(columns).substr(1));
+		values.clear();
+		for (std::string field; std::getline(next, field, ',');)
+			values.push_back(std::stod(field));
+		REQUIRE(values.size() == 8);
+		CHECK(values[6] == 1.0);
+		CHECK(values[7] == 0.0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

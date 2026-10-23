@@ -40,8 +40,9 @@ namespace Strata
 
 		// The perf log's Render columns (StrataRuntime --perf-log): what the renderer's latest frame drew, the GPU-driven path's
 		// counts as far as the GPU reported them (AddGPUCounts, usually two or three frames older): DrawCalls, Instances,
-		// Triangles, VisibleProxies, OccludedProxies and InstanceUploadMB (instance data, draw lists and the GPU scene's proxy
-		// records uploaded, MB of 2^20 bytes). Empty fields without a renderer (null: a headless game) or before it rendered a frame. The renderer outlives
+		// Triangles, VisibleProxies, OccludedProxies, InstanceUploadMB (instance data, draw lists and the GPU scene's proxy
+		// records uploaded, MB of 2^20 bytes), LocalShadowLights and LocalShadowViewsDrawn (the point and spot lights with shadows
+		// and their shadow views drawn in the frame). Empty fields without a renderer (null: a headless game) or before it rendered a frame. The renderer outlives
 		// the log.
 		static FramePerfColumnGroup MakePerfLogColumns(const GameRenderer* renderer);
 

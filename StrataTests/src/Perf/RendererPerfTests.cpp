@@ -1,11 +1,16 @@
 #include "Renderer/SceneRendererTestUtils.h"
 
+#include "Perf/LocalShadowsMemory.h"
 #include "Perf/PerfUtils.h"
 #include "Perf/RendererPerfUtils.h"
 #include "Perf/SceneGenerators.h"
 #include "Renderer/TextureStreamingTestUtils.h"
 
 #include <Strata/Asset/RuntimeAssetManager.h>
+#include <Strata/Core/FileSystem.h>
+#include <Strata/Core/FrameProfiler.h>
+#include <Strata/Core/Platform.h>
+#include <Strata/Core/Process.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/TextureStreamer.h>
@@ -279,6 +284,86 @@ TEST_SUITE("PerfGPU.Renderer")
 			return values;
 		});
 		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Render cost of 100,000 cubes under 16 shadowed point lights, every view drawn each frame and cached")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		// Render100kCubes' scene under 16 point lights that cast shadows, 4 by 4 over the grid (provisional: the reference machine
+		// sets the budgets): uncached, all 96 views drawn and culled every frame (the worst case, D8), and cached, a still
+		// scene's steady state (no view drawn, every light's shadow sampled).
+		constexpr size_t c_Count = 100'000;
+		Scene scene("ShadowedLampCubes");
+		Perf::AddCameraAndLight(scene);
+		Perf::CreateCubeGrid(scene, c_Count);
+		Perf::CreateShadowedLampGrid(scene, 16, 60.0f);
+		const bool measuresGPU = Perf::MeasuresGPU();
+		for (const bool cached : { false, true })
+		{
+			CAPTURE(cached);
+			SceneRendererSpecification specification = Perf::MeasuredRendererSpecification();
+			specification.CacheLocalShadows = cached;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Width, c_Height);
+			const std::string key = cached ? "PerfGPU.Renderer.LocalShadows16LightsCached" : "PerfGPU.Renderer.LocalShadows16Lights";
+			std::vector<std::string> keys = { key };
+			if (measuresGPU)
+				keys.push_back(key + "GPU");
+			Perf::CheckBudgetsConfirmed(keys, [&]
+			{
+				const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(c_Count),
+					cached ? "100k cubes under 16 cached shadowed lamps" : "100k cubes under 16 shadowed lamps, every view drawn");
+				const SceneRendererStats& stats = renderer.GetStats();
+				const DrawnCounts drawn = GetDrawnCounts(renderer);
+				CHECK(drawn.Instances == c_Count);
+				CHECK(stats.LocalShadowLights == 16);
+				CHECK(stats.LocalShadowViewsDrawn == (cached ? 0u : 96u));
+				if (!cached)
+					CHECK(drawn.LocalShadowCasters > 0);
+				// The views draw in GPU.Shadows (with the sun's cascades): its time is what the views add.
+				std::string stages;
+				for (const GPUStageTime& stage : renderer.GetGPUStats().StageMs)
+					stages += fmt::format(" {} {:.3f} ms", FrameProfiler::Get().GetStageName(stage.Stage), stage.Milliseconds);
+				MESSAGE("local shadow casters ", drawn.LocalShadowCasters, ", draws ", drawn.LocalShadowDraws, "; GPU stages of the latest frame:", stages);
+				Perf::MetricValues values { { key, measurement.CPU.MedianMs } };
+				if (measuresGPU)
+					values.emplace(key + "GPU", Perf::MeasureGPU(measurement));
+				return values;
+			});
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Peak memory of a TAA scene of 100,000 cubes under 16 shadowed point lights")
+	{
+		// What a renderer with motion vectors, the temporal history and the local shadows' atlas needs at once, as a game runs
+		// it at 1920x1080 (D2, D8; provisional): in a process of its own, so that no other test's allocations count.
+		const std::filesystem::path directory = CreateTemporaryDirectory("LocalShadowsMemory");
+		Perf::CheckBudgetConfirmed("PerfGPU.Renderer.TAALocalShadowsPeakMemory", [&]
+		{
+			const std::filesystem::path resultFile = directory / "Result.json";
+			ProcessSpecification process;
+			process.Executable = Platform::GetExecutablePath();
+			process.Arguments = { "--strata-test-helper=local-shadows-memory", FileSystem::ToUTF8(resultFile) };
+			const Process::RunResult run = Process::Run(process, std::chrono::minutes(10));
+			INFO("Helper output:\n", run.Output);
+			REQUIRE_MESSAGE(run.Started, run.Error);
+			REQUIRE_FALSE(run.TimedOut);
+			REQUIRE(run.ExitCode == 0);
+			std::string error;
+			const std::optional<LocalShadowsMemoryResult> result = ReadLocalShadowsMemoryResult(resultFile, error);
+			REQUIRE_MESSAGE(result, error);
+			REQUIRE_MESSAGE(result->Completed, result->Error);
+			REQUIRE_MESSAGE(!result->ValidationEnabled, "the helper's device validates: run PerfGPU with STRATA_TEST_GPU_VALIDATION=0 (ctest -L perf does)");
+			CHECK(result->NewErrors == 0);
+			CHECK(result->LocalShadowLights == 16);
+			CHECK(result->TemporalAntiAliasing);
+			MESSAGE("TAA scene of 100k cubes under 16 shadowed lamps: peak private ", result->PeakPrivateMB, " MiB");
+			return result->PeakPrivateMB;
+		});
 	}
 
 	TEST_CASE("Render cost of 100,000 and 300,000 cubes whose shadows cover the view")

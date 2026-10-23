@@ -187,6 +187,25 @@ namespace Strata::Tests::Perf
 		return lights;
 	}
 
+	std::vector<Entity> CreateShadowedLampGrid(Scene& scene, size_t count, float spacing)
+	{
+		std::vector<Entity> lamps;
+		lamps.reserve(count);
+		const size_t side = std::max<size_t>(1, static_cast<size_t>(std::ceil(std::sqrt(static_cast<double>(count)))));
+		const float offset = (static_cast<float>(side) - 1.0f) * spacing * 0.5f;
+		for (size_t index = 0; index < count; index++)
+		{
+			Entity lamp = Created(scene.CreateEntity("Lamp"));
+			lamp.GetTransform().Translation = glm::vec3(static_cast<float>(index % side) * spacing - offset, 3.0f, static_cast<float>(index / side) * spacing - offset);
+			PointLightComponent& light = lamp.AddComponent<PointLightComponent>();
+			light.Intensity = 50.0f;
+			light.Range = 10.0f;
+			light.CastShadows = true;
+			lamps.push_back(lamp);
+		}
+		return lamps;
+	}
+
 	ScopedApplicationJobSystem::ScopedApplicationJobSystem()
 	{
 		REQUIRE_FALSE(JobSystem::IsInitialized());

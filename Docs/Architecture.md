@@ -3969,7 +3969,7 @@ streaming and physics capacity (`GameRuntime::MakePerfLogColumns`: `WorldCellsWa
 growth limit), `PhysicsBodiesPending` (for a mesh or a valid transform) and `PhysicsMaxBodies` from `IPhysicsCapacity`;
 empty while no scene plays), then what its renderer drew
 (`GameRenderer::MakePerfLogColumns`: `DrawCalls`, `Instances`, `Triangles`, `VisibleProxies`, `OccludedProxies`,
-`InstanceUploadMB`, with the GPU-driven path's counts as far as the GPU reported them, `AddGPUCounts`; empty headless),
+`InstanceUploadMB`, `LocalShadowLights`, `LocalShadowViewsDrawn`, with the GPU-driven path's counts as far as the GPU reported them, `AddGPUCounts`; empty headless),
 and the `World.Streaming` stage has its column
 with the other stages. A log that cannot be written fails the run (exit code 1).
 the resident pools they tell what render targets and the swapchain take), the process's private memory with its peak

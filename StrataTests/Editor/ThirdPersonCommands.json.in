@@ -10,6 +10,8 @@
 	{"command": "input.click", "parameters": {"entity": {"$ref": "playButton"}}},
 	{"command": "play.state", "expect": {"/running/name": {"equals": "Course"}}, "until": {"seconds": 60}},
 	{"command": "component.get", "parameters": {"entity": "4BC76BF041EAD086", "component": "PostProcess"}, "expect": {"/values/AntiAliasingMethod": {"equals": "TAA"}}},
+	{"command": "component.get", "parameters": {"entity": "51829A25B89802F9", "component": "PointLight"}, "expect": {"/values/CastShadows": {"equals": true}}},
+	{"command": "component.get", "parameters": {"entity": "CFB8703236E38ABF", "component": "PointLight"}, "expect": {"/values/CastShadows": {"equals": true}}},
 	{"command": "play.pause", "parameters": {"paused": true}},
 	{"command": "physics.stats", "expect": {"/waitingForMeshes": {"equals": false}, "/pendingOther": {"equals": 0}}, "until": {"seconds": 300}},
 	{"command": "entity.find", "parameters": {"name": "Player"}, "bind": {"player": "/entities/0"}},

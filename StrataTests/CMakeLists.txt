@@ -794,7 +794,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataRuntime.OpenWorldWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
 	add_test(NAME StrataRuntime.OpenWorldWindowedPerf
 		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_OPEN_WORLD_DIR}/Windowed.csv" 1200 --nonzero WorldCellsLoaded
-			--nonzero World.Streaming --nonzero GPUBusyMs --nonzero GPU.TAA --max PhysicsBodiesWaiting 0 --last-max PhysicsBodiesPending 0)
+			--nonzero World.Streaming --nonzero GPUBusyMs --nonzero GPU.TAA --nonzero LocalShadowViewsDrawn --max PhysicsBodiesWaiting 0
+			--last-max PhysicsBodiesPending 0)
 	set_tests_properties(StrataRuntime.OpenWorldWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
 	# The editor with a GPU at the start: the GPU-driven path draws thousands of instances in a few indirect commands.
 	add_test(NAME StrataEditor.OpenWorldRender

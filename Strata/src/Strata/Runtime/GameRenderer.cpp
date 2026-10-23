@@ -129,7 +129,8 @@ namespace Strata
 	FramePerfColumnGroup GameRenderer::MakePerfLogColumns(const GameRenderer* renderer)
 	{
 		FramePerfColumnGroup group;
-		group.Names = { "DrawCalls", "Instances", "Triangles", "VisibleProxies", "OccludedProxies", "InstanceUploadMB" };
+		group.Names = { "DrawCalls", "Instances", "Triangles", "VisibleProxies", "OccludedProxies", "InstanceUploadMB", "LocalShadowLights",
+			"LocalShadowViewsDrawn" };
 		group.Write = [renderer, count = group.Names.size()](FramePerfRow& row)
 		{
 			if (!renderer || !renderer->GetStats().Rendered)
@@ -146,6 +147,8 @@ namespace Strata
 			row.Add(static_cast<double>(stats.VisibleProxies), 0);
 			row.Add(static_cast<double>(stats.OccludedProxies), 0);
 			row.Add(static_cast<double>(stats.InstanceBytesUploaded + stats.ProxyBytesUploaded) / (1024.0 * 1024.0), 3);
+			row.Add(static_cast<double>(stats.LocalShadowLights), 0);
+			row.Add(static_cast<double>(stats.LocalShadowViewsDrawn), 0);
 		};
 		return group;
 	}

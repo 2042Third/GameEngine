@@ -72,6 +72,10 @@ namespace Strata::Tests::Perf
 	// `parent`, otherwise roots.
 	std::vector<Entity> CreatePointLightGrid(Scene& scene, size_t count, float range, float height = 2.0f, Entity parent = {});
 
+	// The local shadows' measured scene: `count` point lights ("Lamp") that cast shadows, on a square grid `spacing` apart
+	// centered on the origin, 3 m above the ground and reaching 10 m (over CreateCubeGrid's cubes, a few dozen casters each).
+	std::vector<Entity> CreateShadowedLampGrid(Scene& scene, size_t count, float spacing);
+
 	// The game UI's scaling scene: one canvas ("Widgets", ScaleWithScreen at 1920x1080) holding `panels` panels ("Panel",
 	// anchored on a square grid, each a vertical layout group with a background image) of `buttons` buttons each ("Button":
 	// an image, a selectable and a button, with a "Label" child stretched over it whose text has 8 to 12 characters). With

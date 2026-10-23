@@ -191,5 +191,10 @@
 	"PerfGPU.Renderer.Render100kCubesTAA": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.Render100kCubesTAAGPU": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.HeightFog": { "Unit": "ms", "Provisional": true },
-	"PerfGPU.Renderer.HeightFogGPU": { "Unit": "ms", "Provisional": true }
+	"PerfGPU.Renderer.HeightFogGPU": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Renderer.LocalShadows16Lights": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Renderer.LocalShadows16LightsGPU": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Renderer.LocalShadows16LightsCached": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Renderer.LocalShadows16LightsCachedGPU": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Renderer.TAALocalShadowsPeakMemory": { "Unit": "MB", "Provisional": true }
 }
