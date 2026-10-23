@@ -515,6 +515,13 @@ with slice c's far end widened (it would grow the finer cascade at its widest en
   exposure buffer (one more storage buffer in every scene shader, and two renderers' values could differ in the last
   bit); a first P guessed from the scene's lights (wrong for every scene lit by its sky; the readback settles in a few
   frames).
+- As built in S7: automatic exposure's P is the power of two nearest a quarter of the metered multiplier
+  (`SceneRenderer::c_PreExposureHeadroomStops` 2: a real sun's disk passes the half-float range at the hysteresis's
+  stop otherwise), within 2^-24 to 2^24; the readback is copied right after the exposure pass (`GPU.Post`, the frame's
+  own metering) rather than in `GPU.Setup`. `ResetExposureAdaptation` also starts P again at 1, and
+  `JumpExposureAdaptation` only jumps the adaptation: captures and the project thumbnail reset on their first frame and
+  jump on the later ones, so they settle. `SceneRendererStats::PreExposure` reports P; `GetExposureBuffer()` exposes the
+  exposure for tests.
 
 **D8 Point and spot shadows in an atlas.**
 - Storage: one D32 2D atlas (`SceneRendererSpecification::LocalShadowAtlasSize`, 4096, 64 MiB; 2048 for the renderers
@@ -598,6 +605,16 @@ per-fragment path, and it adds a full-screen read and write); volumetric froxels
   readback.
 - Rejected: a separate atmosphere component (two sky sources to arbitrate); regenerating the cube every frame (2.5);
   per-pixel atmosphere ray marching for the background (cost).
+- As built in S7: the sky-view table is bound in the scene set at SRV 27 (a black texture without the atmosphere), so
+  the background variant and the fog read it: `ColorFromSky` fog takes the atmosphere's horizon toward each ray's
+  azimuth on the GPU (`FogLight.w` 2) instead of a CPU horizon value. `FrameConstants` gained `SunDiskDirection` and
+  `SunDiskColor` (the disk's direction, angular radius and illuminance through the atmosphere). The tables and the
+  environment hold the sky per lux of sun (`EnvironmentParams.x` is `Intensity` times the light's illuminance), so the
+  light's intensity changes cost nothing; without a directional light a 1 lux sun at the default direction lights it.
+  `BackgroundBlur` is inactive under the atmosphere (its background is the sharp table). The feature scene's "Atmosphere
+  Sky" is inactive, like its "Procedural Sky". The Open World keeps its 3 lux sun (the atmosphere is linear in the
+  sun's illuminance, and its lantern and campfires keep their look) and `DayNight` turns the same light into a dim
+  moon at night, so the atmosphere shows a moonlit sky rather than black.
 
 **D11 Reflection probes baked into texture assets.**
 - `ReflectionProbeComponent`: `Capture` (texture asset), `Extents` (half extents of the influence box, 5 5 5),
@@ -717,7 +734,8 @@ result, 19 scene-color copy, 20 previous instances and 21 previous palette (stor
 without motion). The shadow pass's binding set (cascades and local views) binds a dummy D32 texture at SRV 8, as it
 binds `m_DummyShadowMap` at SRV 7, so no pass samples the atlas it renders into. The light-culling layout gains the
 light-to-shadow-slot table (storage, D8). Samplers stay at 9 of 16 (the probes use the linear clamp sampler, the atlas
-the comparison sampler); the scene set's storage buffers go from 8 to 12 of 31.
+the comparison sampler); the scene set's storage buffers go from 8 to 12 of 31. As built in S7: SRV 27 is the
+atmosphere's sky-view table (D10).
 
 ## 6. Per feature: tests, coverage and the editor
 
