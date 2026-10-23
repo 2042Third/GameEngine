@@ -2079,6 +2079,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   one undo step that removes the files. `world.cook`, `world.create`, `world.loadCells` and `world.setLayers` defer
   (`MayDefer`), and
   `world.info`, which reads the World asset by path, waits for a background asset scan (`WaitsForAssets`).
+- **`lighting.bakeProbes`** (`Editor/EditorLightingCommands.cpp`, deferred: it renders, reads back, encodes, writes and
+  imports over frames) bakes reflection probes' captures into texture assets and sets them, in one undo step (Rendering,
+  "Reflections"); refused while playing, as `prefab.apply` is, because it renders and writes from the edited scene; needs
+  a GPU.
 - **`world.setLayers`** replaces a world's layer list (matched by id or name; a rename moves the layer's cell folder,
   handles kept); removing or re-gridding a layer with cells needs `deleteCells` (cells to the trash, never loaded ones).
   One undo step, after the saves in flight (`AfterSaves`, `MayDefer`): `MoveFolder` and `MoveToTrash` refuse documents a
@@ -2944,6 +2948,22 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   lights nothing meanwhile; without it (captures, thumbnails, the bake) every loaded one converts in the frame.
   `SceneRendererStats::ReflectionProbes` (shaded with), `ReflectionProbeConversions` and `ReflectionProbesPending`
   (kept in view, waiting for their capture to load or convert: captures and the project's picture wait for them).
+- **The bake** (`lighting.bakeProbes`, `Editor/EditorLightingCommands.cpp` and `Editor/ProbeBake.h`): a renderer of its own
+  for the bake (`ProbeBake::GetRendererSpecification`: no entity IDs, TAA, texture streaming or `SpreadLightingUpdates`, so
+  it waits for every level and draws every shadow view and probe conversion at once) renders each probe's six 90-degree
+  views (256 texels, `ProbeBake::GetFaceCamera`) of the edited scene with `SceneRenderOptions::HDROutput` (the frame ends
+  with its HDR target: no exposure, bloom, tone mapping or overlays) and a forced power-of-two pre-exposure from the
+  scene's brightest directional light (`ProbeBake::ChoosePreExposure`), one probe per frame, again on the next frames
+  (at most 300) while what they show loads; reads them back (`TextureReadback`, polled), puts them together into a
+  1024x512 equirectangular image divided by the pre-exposure (`ProbeBake::AssembleEquirect`) and encodes it
+  (`ImageWriter::EncodeHDR`) on jobs, writes it to `.strata/Bake/<bake>/<probe id>.hdr` on an I/O job, and imports the
+  files as `Assets/Lighting/<scene>/<probe id>.hdr` through `EditorAssetManager::ImportExternal` (" (n)" when a name is
+  taken; names are the entities' IDs since names are unique only among siblings). Once imported, one undo step
+  (`EditorActionGroup`): an `AssetCreateAction` per file, the probes' `Capture` in a `SceneEditTransaction`, and an
+  `AssetTrashAction` for each earlier capture that a bake made for that probe (its ID's name in that folder) and nothing
+  else uses; any other texture a `Capture` named stays untouched. The staging folder goes with the command, also on
+  failure; a scene change or Play before the import leaves nothing behind, after it the imported files go to the trash.
+  A probe bakes what is drawn at its position, other probes' current captures included: baking twice adds a bounce.
 - Bindings: scene-set SRV 9 is the cube array (a one-slot black cube array, `Renderer::GetBlackCubeArrayTexture`, without
   probes in view; the device's `imageCubeArray` is required, "Building") and SRV 10 the probe buffer
   (`RenderData::ReflectionProbeBuffer`, 3.6 KB made with the renderer: the slots' coefficients, written on the GPU, then
@@ -3194,7 +3214,7 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
 - **Toolsets:** MCP clients take a limited number of tools (some 128) and pay for every tool definition in tokens, so
   `StrataCLI mcp` lists only the commands of its enabled toolsets (`CLI/McpToolsets`): `core` by default, the commands
   a game is made and tested with (`McpToolsets::GetCoreCommands`), plus one toolset per command group: `scene`
-  (`scene.`, `entity.`, `component.`, `prefab.`, `selection.`, `edit.`), `assets` (`asset.`, `material.`, `project.`),
+  (`scene.`, `entity.`, `component.`, `prefab.`, `selection.`, `edit.`, `lighting.`), `assets` (`asset.`, `material.`, `project.`),
   `play` (`play.`, `input.`, `audio.`: game-ui's `input.click` and `input.type` too), `scripts`, `animation`, `viewport`
   (`viewport.`, `camera.`), `streaming` (`asset.stats`, `asset.setBudget`), `perf` (`editor.perf`), `editor` (`editor.`,
   `log.`), `ui` (`ui.create`, `ui.layout`, `ui.hitTest`) and `world` (`world.`, `physics.`). Exact names win over

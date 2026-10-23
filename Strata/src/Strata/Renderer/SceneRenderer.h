@@ -303,6 +303,10 @@ namespace Strata
 		// nearest one in stops; zero, negative or non-finite values to 1). Tests, bakes and renderers whose images are compared
 		// with each other's set it, so their HDR values match without waiting for each one's metering.
 		std::optional<float> PreExposure;
+		// The frame ends with its HDR image (GetHDRTexture): no exposure, bloom, tone mapping, text, overlays or output texture,
+		// and no target (Render fails with one). Tools that read the scene's light back (the reflection probe bake) set it with
+		// a forced PreExposure, which they divide out.
+		bool HDROutput = false;
 
 		// The overlays below are drawn over the finished image (after tone mapping and anti-aliasing) with exact display
 		// colors; all of them are off by default.

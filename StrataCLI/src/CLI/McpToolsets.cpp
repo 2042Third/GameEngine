@@ -36,7 +36,7 @@ namespace Strata::CLI::McpToolsets
 
 		constexpr std::pair<std::string_view, std::string_view> c_PrefixToolsets[] = {
 			{ "scene.", "scene" }, { "entity.", "scene" }, { "component.", "scene" }, { "prefab.", "scene" }, { "selection.", "scene" },
-			{ "edit.", "scene" },
+			{ "edit.", "scene" }, { "lighting.", "scene" },
 			{ "asset.", "assets" }, { "material.", "assets" }, { "project.", "assets" },
 			{ "play.", "play" }, { "input.", "play" }, { "audio.", "play" },
 			{ "script.", "scripts" },
@@ -48,7 +48,7 @@ namespace Strata::CLI::McpToolsets
 
 		constexpr ToolsetInfo c_Toolsets[] = {
 			{ "core", "Making and testing a game: project, scene, entities, components, prefabs, assets, scripts, play, input sequences, captures" },
-			{ "scene", "Scenes, entities, components, prefabs, the selection and undo" },
+			{ "scene", "Scenes, entities, components, prefabs, baked lighting, the selection and undo" },
 			{ "assets", "Assets, materials, imports, projects and exports" },
 			{ "play", "Play mode, stepping, simulated input and sound" },
 			{ "scripts", "Script classes, builds, fields and the external code editor" },

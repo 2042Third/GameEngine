@@ -2459,6 +2459,15 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   `ViewportSettings::AllColliders`; circles take their points from tables.
   `ViewportRenderer` keeps the selection's subtrees until the selection or the scene's hierarchy changes, and
   `SceneRenderer` keeps the sorted outline IDs and their upload while the same entities stay selected.
+- **Reflection probes** are baked, never captured at run time. `lighting.bakeProbes` (editor) renders each probe's six
+  views of the edited scene with a renderer of its own, HDR only, one probe per frame and again while what it sees loads
+  -> GPU readbacks, polled -> a job puts the views together into an equirectangular image and encodes it as Radiance HDR
+  -> an I/O job writes it to `.strata/Bake` -> `EditorAssetManager::ImportExternal` copies it into
+  `Assets/Lighting/<scene>/` and imports it in the background -> the command sets the probes' `Capture` in one undo step
+  (the earlier bake's file to the trash). The texture is then an ordinary asset (references, exports, packs). At run time
+  each renderer gathers the probes in view, requests their captures through the frame's resolve cache, holds each whole
+  until it converted it into a slot of its cube array (the probe cache, beside the environment cache and the glyph
+  atlases), and the forward pass reads the frame's list (DeveloperGuide, "Reflections").
 
 ## Animation
 

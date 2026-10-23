@@ -2552,6 +2552,11 @@ namespace Strata
 		}
 		if (target && !ValidateTarget(target))
 			return false;
+		if (target && options.HDROutput)
+		{
+			m_Errors.Report("a frame with HDROutput has no target: its result is the HDR texture");
+			return false;
+		}
 
 		// The scene's render proxies follow what changed since the last frame (world transforms included), and their mesh
 		// layouts what the asset manager loaded.
@@ -3005,6 +3010,30 @@ namespace Strata
 				commandList->endMarker();
 				m_TemporalResolved = true;
 			}
+		}
+		if (options.HDROutput)
+		{
+			// The HDR image is the result: what loads counts as for any frame, nothing is post-processed or composed.
+			const AssetResolveStats& assetStats = m_Assets.GetStats();
+			m_Stats.PendingAssets = assetStats.Pending;
+			m_Stats.RequestsByVisibility = assetStats.Requested;
+			m_Stats.PrefetchRequests = assetStats.Prefetched;
+			m_Stats.GetAssetCalls = assetStats.GetAssetCalls;
+			gpuTimer.End();
+			commandList->endMarker();
+			commandList->close();
+			m_Device->executeCommandList(commandList);
+			if (m_GPUDrivenFrame)
+				SubmitCullReadback();
+			CommitShadowCache();
+			CommitLocalShadows();
+			if (m_TemporalResolved)
+				m_TemporalRender = m_RenderCount + 1;
+			m_Stats.Rendered = true;
+			m_HasRenderedFrame = true;
+			if (!degraded)
+				m_Errors.Clear();
+			return true;
 		}
 		// Post-processing reads the resolved image with temporal anti-aliasing (the history's newest texture).
 		const bool resolved = m_TemporalResolved;

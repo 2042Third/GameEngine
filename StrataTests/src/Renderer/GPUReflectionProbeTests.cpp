@@ -164,6 +164,41 @@ TEST_SUITE("GPU.SceneRenderer.ReflectionProbes")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A frame with HDROutput ends with its pre-exposed HDR image and makes no output")
+	{
+		// What the probe bake reads back: luminance times the forced pre-exposure, before exposure and tone mapping.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		Entity wall = AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(Emitting(3.0f)), glm::vec3(0.0f), "Wall");
+		wall.GetComponent<TransformComponent>().Rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+		wall.GetComponent<TransformComponent>().Scale = glm::vec3(10.0f);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f));
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		SceneRenderOptions options;
+		options.HDROutput = true;
+		options.PreExposure = 0.25f;
+		REQUIRE(renderer.Render(scene, camera, nullptr, options));
+		CHECK(renderer.GetOutputTexture() == nullptr);
+		CHECK(renderer.GetStats().PreExposure == 0.25f);
+		ReadbackImage hdr;
+		REQUIRE(Strata::Renderer::ReadTexture(renderer.GetHDRTexture(), hdr));
+		const glm::vec4 texel = ReadHalfTexel(hdr, c_Size / 2, c_Size / 2);
+		CHECK(texel.r == doctest::Approx(0.75f).epsilon(0.002));
+		CHECK(texel.g == doctest::Approx(0.75f).epsilon(0.002));
+		// A frame with HDROutput has no target.
+		Scope<SceneRenderer> other = CreateScope<SceneRenderer>(ExactSpecification());
+		other->SetViewportSize(c_Size, c_Size);
+		REQUIRE(other->Render(scene, camera));
+		nvrhi::FramebufferHandle target = gpu.GetDevice().GetDevice()->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(other->GetOutputTexture()));
+		REQUIRE(target);
+		CHECK_FALSE(renderer.Render(scene, camera, target, options));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A mirror ball inside a probe's box reflects the probe's capture, and one outside it the sky")
 	{
 		GPUContext gpu;

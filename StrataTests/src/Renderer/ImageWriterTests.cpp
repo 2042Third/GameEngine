@@ -7,6 +7,11 @@
 
 #include <stb_image.h>
 
+#include <limits>
+#include <optional>
+#include <string>
+#include <vector>
+
 using namespace Strata;
 
 namespace
@@ -81,6 +86,35 @@ TEST_SUITE("Renderer")
 		error.clear();
 		CHECK_FALSE(ImageWriter::EncodePNG(ReadbackImage(), true, &error).has_value());
 		CHECK_FALSE(error.empty());
+	}
+
+	TEST_CASE("ImageWriter encodes linear floats as Radiance HDR")
+	{
+		// Values above 1 survive (RGBE: 8 bits of mantissa per channel, one exponent per pixel), negative and non-finite ones
+		// become 0.
+		const std::vector<float> rgb = { 0.5f, 2.0f, 1.0f, 1000.0f, -1.0f, std::numeric_limits<float>::quiet_NaN() };
+		std::string error;
+		const std::optional<std::vector<uint8_t>> hdr = ImageWriter::EncodeHDR(2, 1, rgb, &error);
+		REQUIRE_MESSAGE(hdr, error);
+		REQUIRE(stbi_is_hdr_from_memory(hdr->data(), static_cast<int>(hdr->size())));
+		int width = 0;
+		int height = 0;
+		int channels = 0;
+		float* pixels = stbi_loadf_from_memory(hdr->data(), static_cast<int>(hdr->size()), &width, &height, &channels, 3);
+		REQUIRE(pixels != nullptr);
+		CHECK(width == 2);
+		CHECK(height == 1);
+		CHECK(pixels[0] == doctest::Approx(0.5f).epsilon(0.01));
+		CHECK(pixels[1] == doctest::Approx(2.0f).epsilon(0.01));
+		CHECK(pixels[2] == doctest::Approx(1.0f).epsilon(0.01));
+		CHECK(pixels[3] == doctest::Approx(1000.0f).epsilon(0.01));
+		CHECK(pixels[4] == 0.0f);
+		CHECK(pixels[5] == 0.0f);
+		stbi_image_free(pixels);
+
+		CHECK_FALSE(ImageWriter::EncodeHDR(0, 1, rgb, &error));
+		CHECK_FALSE(ImageWriter::EncodeHDR(4, 1, rgb, &error));
+		CHECK(error.find("less pixel data") != std::string::npos);
 	}
 
 	TEST_CASE("ImageWriter saves PNG files")
