@@ -321,7 +321,7 @@ Features are ordered by dependency first, then by what the owner sees, then by s
 
 | Feature | Kind | Settings | Inspector | Script reach |
 | --- | --- | --- | --- | --- |
-| TAA | post-process | `PostProcessComponent::AntiAliasingMethod` {FXAA, TAA} | generic; inactive while `AntiAliasing` is off | `SetProperty("PostProcess", ...)` |
+| TAA | post-process | `PostProcessComponent::AntiAliasingMethod` {FXAA, TAA}; `TAAPreset` {Sharp, Original, Custom} and 10 tunables (D17) | generic; inactive while `AntiAliasing` is off; tunables inactive unless Custom; `TAAPreset` has a row drawer | `SetProperty("PostProcess", ...)` |
 | Motion vectors | renderer | none (made when a consumer needs them); viewport debug view `motion` (`SceneRenderOptions::ShowMotionVectors`) | Viewport debug chip | none |
 | Cascade blending | directional light | `DirectionalLightComponent::CascadeBlend` | generic; inactive without shadows | generic |
 | Units | documentation, tooltips | none new | tooltips name the unit | none |
@@ -445,6 +445,9 @@ frame: 2.3).
   saved `"AntiAliasing": true` would fail: `Reflection/PropertyJson.cpp:464-476`); TAA as the component's default (it
   would change every scene without a `PostProcess`, every `GPU.SceneRenderer.GPUDriven` comparison and the scenes of the
   measured budgets). `AddNeutralPostProcess` already turns `AntiAliasing` off, so exact-pixel tests never jitter.
+- From T1/T2 (D17): this resolve with S7's two pre-exposure terms is the preset Original (`c_TAAOriginalSettings`
+  holds its constants), Sharp and Custom add variance clipping, a resampling term, a reactive mask, disocclusion
+  rejection and sharpening in the tone mapping, and the history's alpha holds the signed view distance.
 
 **D5 Renderers of single images and the editor's overlays.**
 - `SceneRendererSpecification::TemporalAntiAliasing` (default true): `ThumbnailCache`'s renderer turns it off, and a
@@ -474,6 +477,9 @@ frame: 2.3).
   outline in the history (it lags behind a dragged object).
 - With TAA, PCSS and GTAO rotate their per-pixel noise by the frame index (frames since the last reset, so captures are
   deterministic), and the history accumulates their samples; their sample counts do not change in this stream.
+- From T1/T2 (D17): every preset settles after `c_TemporalSettleFrames` (Sharp keeps the least weight at 1/8), captures
+  and the project picture show the default preset's sharpening, and T2 adds `viewport.capture {live}` for what a view
+  presented in motion.
 
 **D6 Cascade blending.** `DirectionalLightComponent::CascadeBlend` (fraction of a slice's depth range, 0 to 0.5,
 default 0.1). The blend band of cascade c is the last `CascadeBlend` of its slice, before the split:
@@ -724,7 +730,8 @@ existing pyramid keeps the farthest depth for occlusion; deferred); full resolut
   downsampled into a half-resolution texture with mips (roughness picks the level), in `GPU.Transparent`: B10G11R11
   where the device has extended storage formats (`SupportsExtendedStorageFormats`), RGBA16F otherwise, as
   half-resolution AO falls back. Refraction offsets the lookup by the view-space normal, `IOR` and `Thickness`;
-  attenuation follows Beer's law.
+  attenuation follows Beer's law. Transmissive draws are drawn without blending and write their own
+  depth and velocity, so they write HDR alpha 1 and are not reactive to the TAA (D17).
 - glTF: `KHR_materials_clearcoat`, `KHR_materials_transmission`, `KHR_materials_volume`, `KHR_materials_ior` join
   `c_SupportedExtensions`; their textures import with `TextureUsage::Data` or `NormalMap`; `GltfImporter::GetVersion()`
   becomes 10 (every glTF re-imports once).
@@ -748,6 +755,363 @@ binds `m_DummyShadowMap` at SRV 7, so no pass samples the atlas it renders into.
 light-to-shadow-slot table (storage, D8). Samplers stay at 9 of 16 (the probes use the linear clamp sampler, the atlas
 the comparison sampler); the scene set's storage buffers go from 8 to 12 of 31. As built in S7: SRV 27 is the
 atmosphere's sky-view table (D10).
+
+**D17 TAA quality presets and tuning (T1, T2).** The owner (2026-10-22) "really really hated the blurry mess in
+Unreal Engine", asked how many frames the TAA keeps and whether it trails in motion, then asked for sharpening, tighter
+clipping, a reactive mask for transparents, disocclusion rejection, and the TAA tunable with two defaults: the new look
+and the original. T1 builds the settings and every technique, reachable through Custom, with Original (S2's look) as the
+default, so stopping after T1 ships nothing untuned; T2 adds the step-synchronized live capture, takes the evidence,
+tunes Sharp, makes it the default, measures and documents. Both come after S8 and before S9, whose SSR reads the history
+and its alpha. These presets are one component's settings, not the renderer quality presets section 1 leaves out.
+
+#### D17: Where T1 starts
+
+| What | State before T1 |
+| --- | --- |
+| Resolve (`SH/PostProcess/TAA.comp`) | S2 as described in D4 |
+| S7's additions to the resolve | The history multiplied by `HistoryScale` (P / P_prev, exact); the luminance weights' exposure times `InversePreExposure` |
+| Push constants | `RenderData::TemporalParameters`, 32 B, two padding floats |
+| History textures | Two RGBA16F; alpha always 1, read by nothing |
+| HDR alpha | Clear, opaque surfaces and the sky write 1; the transparent pass blends alpha with `SrcBlendAlpha One`; read by nothing |
+| Tone mapping | Reads the resolved image with a point sampler; its 32 B push constants are full |
+
+"**Original**" is S2's resolve plus S7's two pre-exposure terms. Without those terms the image would flash at every
+pre-exposure step.
+
+#### D17: Settings
+
+`PostProcessComponent` gains two enums and ten tunables, registered right after `AntiAliasingMethod` in the order below.
+
+- `TAAPreset`: enum `TemporalAntiAliasingPreset : uint8_t`, `Sharp` = 0, `Original` = 1, `Custom` = 2. The default is
+  Original in T1 and Sharp from T2 on.
+- `TAAHistoryClamp`: enum `TemporalHistoryClamp : uint8_t`, `MinMax` = 0 (display "Range"), `Variance` = 1 (display
+  "Tight (variance)").
+- These integer values and names are script and file API from now on and never change.
+
+| Preset | Meaning |
+| --- | --- |
+| Sharp | The new look: tighter history clipping, slow pans resampled less, uncovered surfaces drop their history, transparent surfaces take mostly the current frame, a faster response to motion, and a light sharpening of the displayed image only. |
+| Original | The TAA as S2 built it, for comparison and for scenes that prefer its softer, steadier look. |
+| Custom | Every tunable below. |
+
+**The tunables** (inactive unless Custom, see "Inspector"):
+
+| Property (display) | Plain words (tooltip and Manual) | Type, range | Original | Sharp: proposal (bounds) |
+| --- | --- | --- | --- | --- |
+| `TAAHistoryFrames` | About how many frames the image averages: the current frame weighs at least 1 / this. At 8, every jitter position counts once. More is smoother and steadier but lags behind lighting changes; fewer reacts faster but edges crawl. | uint, 2-32, step 1 | 8 | 8 (fixed: D5's settling and the noise accumulation rely on it) |
+| `TAAMotionResponse` | How quickly moving surfaces let go of the history. At 0.0625, motion of 8 px per frame weighs the current frame 0.5. Higher keeps moving things crisper and their trails shorter, but they get less anti-aliasing while they move. 0: motion does not matter. | float, 0-0.25, speed 0.001 | 0.03125 | 0.0625 (0.03125-0.125) |
+| `TAAMaxMotionWeight` | The most the current frame weighs, however fast things move. 1 lets very fast motion drop the history: sharp, but aliased. | float slider, 0-1 | 0.5 | 0.5 (0.5-0.75) |
+| `TAAResampleWeight` | The current frame's least weight where the history is read between pixels, as in slow pans; it is largest halfway between them. Higher keeps slowly moving texture crisper, but its edges get less anti-aliasing while they move. 0: off. | float slider, 0-1 | 0 | 0.25 (0.125-0.5) |
+| `TAAHistoryClamp` | How the history is kept consistent with what the pixel shows now. Range limits it to the range of the colors around the pixel. Tight limits it to a narrower box around their average, which removes more ghosting and trails, most where the surroundings are smooth and less beside glints. | enum | MinMax | Variance |
+| `TAAClipWidth` | Tight only: the box's half width, in standard deviations of the colors around the pixel. Lower removes more trails, but lets edges flicker and lets noise through. | float, 0.5-4, speed 0.05 | not used | 1.25 (1.0-1.5) |
+| `TAATransparentWeight` | The current frame's least weight where a blended transparent surface covers the pixel (half cover or more counts as full). Transparent surfaces have no motion vectors of their own. 0 treats them like everything else, so they ghost when they move; 1 drops their history, so they never ghost, but their edges shimmer. | float slider, 0-1 | 0 | 0.5 (0.3-0.75) |
+| `TAADisocclusionRejection` | Drop the history where a surface was just uncovered (something nearer covered it in the previous frame), so moving objects leave no ghost on what they uncover. | bool | false | true |
+| `TAADisocclusionThreshold` | How much nearer the previous frame's surface must have been, as a fraction of the distance, for the pixel to count as uncovered. Lower catches thin gaps, such as a hand in front of a wall, but may drop the history of surfaces moving fast away from the camera. | float, 0.01-0.5, speed 0.005 | not used | 0.05 (0.02-0.1) |
+| `TAASharpening` | Sharpens the displayed image after TAA, never the history, to restore texture detail the averaging softens. Strong edges are sharpened much less and overshoot is bounded, so halos stay faint. 0 is off. | float slider, 0-1 | 0 | 0.5 (0.25-0.75) |
+
+**Rules for these values**
+- Every range contains Original's values exactly (1/32 is exact in binary) and an exact off value.
+- Sharp keeps the least weight at 1/8, so captures and the project picture still settle after `c_TemporalSettleFrames`
+  (8) frames: under Original the result is the mean of the eight phases (D4), under Sharp that mean wherever the clip
+  leaves the samples alone.
+- History Frames below 8 (Custom only): a capture at frame 8 holds the exponential mix of the last frames instead of the
+  even mean. That is deterministic, and the Manual says so.
+
+**One source of truth.** `R/RendererComponents.h` declares above `PostProcessComponent`, whose defaults use them:
+- the two enums;
+- `struct TemporalAntiAliasingSettings`: the ten fields, `operator==` defaulted;
+- `inline constexpr TemporalAntiAliasingSettings c_TAAOriginalSettings` and `c_TAASharpSettings`.
+
+`RendererComponents.cpp` defines:
+- `GetTemporalAntiAliasingSettings(const PostProcessComponent&)`: a preset's table, or the stored fields under Custom.
+  It normalizes its result by writing 0 to every field the chosen modes do not read (`ClipWidth` under MinMax,
+  `DisocclusionThreshold` with rejection off), so Custom set to Original's values equals Original whatever its inactive
+  fields hold.
+- `GetTemporalAntiAliasingCustomStart(const PostProcessComponent&)`: the values Custom starts from (see "How Custom
+  starts").
+- `SetTemporalAntiAliasingSettings(PostProcessComponent&, const TemporalAntiAliasingSettings&)`: writes the tunables.
+
+Only these read the tables: the tunables' C++ defaults (from `c_TAASharpSettings`; a test checks equality), the
+renderer (through `GetTemporalAntiAliasingSettings`), the Custom start and the inactive reasons.
+`c_TemporalMinWeight`, `c_TemporalMotionWeightScale` and `c_TemporalMaxMotionWeight` leave `SceneRenderer.cpp`.
+
+**The preset and the tunables are independent stored fields.** No setter writes another property. JSON loads, Paste
+Values, Reset, undo and prefab overrides apply keys through `ComponentAccess::Deserialize` (sorted key order); cooked
+scenes set each value with `PropertyInfo::SetValue` in column order. Neither order matters.
+
+#### D17: How Custom starts
+
+The `TAAPreset` row gets its own drawer through a small generic slot: `UI::PropertyDrawers`, registered by component
+type and property name, which `InspectorPanel::DrawProperties` calls in place of that property's generic row (same
+label, prefab override marks and menu through `ComponentDrawOverrides`). A component drawer cannot do it: those draw
+above all the rows. The drawer runs one `component.set` on the selection, so each choice is one undo step:
+- **Sharp or Original** sets `TAAPreset` only. Tuned values survive a look at a preset, and undo returns to them.
+- **Custom** also writes `GetTemporalAntiAliasingCustomStart`, through a copy of the component
+  (`SetTemporalAntiAliasingSettings`) whose ten tunables the registry serializes. That is the table of the preset in
+  effect while the stored tunables (normalized as under Custom) equal one of the two tables, and the stored values
+  otherwise, because they are the person's tuning. So Original → Custom keeps Original's look, Sharp → Custom keeps
+  Sharp's, and Custom → Original → Custom returns to the tuning.
+- A selection whose entities would start from different values sets `TAAPreset` only.
+
+Files, scripts and agents' `component.set` apply keys as given. The Manual and strata-make-a-game give the call that
+starts Custom from Original:
+
+```json
+{"TAAPreset": "Custom", "TAAHistoryFrames": 8, "TAAMotionResponse": 0.03125, "TAAMaxMotionWeight": 0.5,
+ "TAAResampleWeight": 0, "TAAHistoryClamp": "MinMax", "TAATransparentWeight": 0, "TAADisocclusionRejection": false,
+ "TAASharpening": 0}
+```
+
+Rejected:
+- **A preset setter that copies values into the tunables.** Keys load in sorted order, so it would overwrite stored
+  tunables on load.
+- **Writing a preset's table when Sharp or Original is chosen.** It would erase the person's tuning on every look at a
+  preset.
+
+#### D17: The resolve (`SH/PostProcess/TAA.comp`)
+
+Every new term runs in a branch on a push constant, uniform across the dispatch. Original's settings take S2's path
+through each step below (per-component clamp, no moments, no resampling, reactive or rejection term), plus S7's terms.
+One thing is added for every preset: the history's alpha stores the pixel's view distance (see "History alpha"), which
+nothing reads under Original.
+
+The 3x3 loop skips the center, whose color and depth are fetched before it. Both color fetches become `.rgba`, and every
+sum below (moments, reactive coverage) adds the center explicitly.
+
+**Variance clipping (`ClampMode` 1).** This replaces the per-component clamp with a clip toward the neighborhood's mean.
+1. **Compressed space.** The moments are taken in the space of the blend weights: each tap becomes
+   `t = YCoCg(c / (1 + Luminance(c) * e))`, where `e = u_Exposure[MULT] * InversePreExposure`, the `e` the weights use.
+   Without this, one bright texel (a glint, a sunlit leaf) would widen the box of a whole neighborhood.
+2. **Moments.** `m1 += t`, `m2 += t * t` over the nine taps. `mu = m1 / 9`, `sigma = sqrt(max(m2 / 9 - mu * mu, 0))`.
+3. **The box.** `B = [max(mu - ClipWidth * sigma, tmin), min(mu + ClipWidth * sigma, tmax)]`, where `tmin` and `tmax`
+   are the compressed taps' per-component range. B always contains `mu`.
+4. **The history in the same space.** `th`: the history, already times `HistoryScale`, compressed the same way.
+5. **The clip.** `d = th - mu`. `f = min(1, min over k with d_k != 0 of (bound_k - mu_k) / d_k)`, where `bound_k` is
+   B's side in the direction of `d_k`, and `th = mu + f * d`. The history moves along the line toward the mean, so its
+   hue relative to the mean is kept; a history inside B is unchanged. The test is `!= 0`, not an absolute epsilon: `t`
+   scales exactly with a power-of-two pre-exposure, so the same components are chosen at every pre-exposure (S7's
+   no-flash case compares exactly).
+6. **Back to linear.** `c = YCoCgToRGB(th)`, then `h = c / max(1 - e * Luminance(c), 1e-6)`, with the same Rec. 709
+   `Luminance` as step 1. This is safe: `mu` and the history both have `e * L < 1`, and `th` lies on the segment between
+   them.
+
+It cannot produce NaN: `ClipWidth` and every tap are finite (`SanitizeHDR` writers, the existing `max(..., 0)`), and a
+flat neighborhood gives `sigma = 0`, so B is `{mu}` and the history becomes `mu`, which is correct.
+
+**Resampling term (`ResampleWeight` > 0).** Where the history is read through the Catmull-Rom filter (motion is not
+zero), its fractional position `f` (`SampleHistory`'s `position - center`, in [0, 1)) gives
+`weight = max(weight, ResampleWeight * 4 * max(f.x * (1 - f.x), f.y * (1 - f.y)))`.
+- **Why.** Below 2 px per frame (Sharp; 4 under Original) the motion term stays under the 1/8 floor, so 7/8 of every
+  frame is the history resampled again. Halfway between texels the filter passes 0% at Nyquist and 88% at a 4 px period,
+  so a steady pan keeps `w / (1 - (1 - w) * a)` of the detail: 55% under Original, 74% with 0.25. Sharpening cannot
+  restore it.
+- A still pixel (motion exactly 0) still reads its own texel, and integer motion has `f = 0`: the term adds nothing.
+
+**Reactive mask (`TransparentWeight` > 0).**
+- **What transparents write.** The transparent pipeline's alpha blend changes from `SrcBlendAlpha One` to
+  `SrcBlendAlpha Zero` (with `DestBlendAlpha InvSrcAlpha`). After the transparent pass the HDR alpha is the
+  transmittance through blended surfaces, Π(1 - a_i), and 1 where there are none.
+  - The clear, `Forward.frag`'s opaque variant and the sky keep writing 1.
+  - A material without alpha blending drawn in the transparent pass outputs alpha 1, which the blend turns into a
+    stored transmittance of 0: its pixel is fully reactive, rightly, since it has no depth or velocity in the prepass.
+  - No target, attachment, clear, pipeline key or shader variant is added. FXAA scenes draw through the same pipelines;
+    their colors are unchanged, because nothing but the TAA reads HDR alpha.
+- **Glass (S11).** Transmissive draws are drawn without blending and write their own depth and velocity, so they write
+  alpha 1 (not reactive). D14 says so.
+- **Particles.** Strata has none; alpha-blended quads are its particles and are covered.
+- **In the resolve.** `r = min(1, 2 * max over the 3x3 of (1 - a))`: the coverage, saturated so that a surface of alpha
+  0.5 or more counts fully, and dilated over its aliased edges. After the motion and resampling terms:
+  `weight = max(weight, r * TransparentWeight)`. It stays partial: D4 rejected bypassing the history, because
+  transparent surfaces would then alias and shimmer.
+- Where a transparent surface was and no longer is, `r` is 0, and the clip removes its trail like any moving object's.
+  Transparent draws are CPU-built and CPU-sorted on both paths, so the alpha products match bit for bit.
+
+**History alpha: the previous frame's distance.**
+- **What is written, every preset**, also on reset frames and off-screen pixels: the pixel's view distance along the
+  camera's forward axis, `dot(p.xyz / p.w, CameraForward.xyz)` with
+  `p = InverseViewProjection * vec4(UVToNDC(uv), depth, 1)` (the jittered inverse, matching the jittered raster). It is
+  signed: an orthographic camera with a negative near plane sees surfaces at negative distances.
+- It is clamped to ±`c_SkyDistance` (65504, the largest half float). Depth 0 (the sky, or nothing drawn) stores
+  `c_SkyDistance`.
+- `HistoryScale` multiplies `.rgb` only: this distance is not a color.
+- **Precision.** A half float holds the distance to 2^-11 of its value, far below the threshold's 0.01. Worlds are
+  supported within 20 km of the origin in X and in Z (`WorldData::c_SupportedExtent`), so views reach about 57 km, and
+  cells up to `c_MaxExtent` (1,000 km) are allowed with a warning: hence both sides are clamped to `c_SkyDistance`.
+- **Zero memory.** The history pair keeps its size, and no copy of the depth target is made.
+- **Readers.** Exposure metering, bloom and tone mapping read `.rgb`. S9's SSR may read the alpha as the previous
+  frame's distance; DG says so.
+
+**Disocclusion rejection (`DisocclusionThreshold` > 0).**
+1. **The expected previous distance.** Take the surface whose motion the pixel uses, the nearest of the 3x3, and
+   reconstruct its camera-relative position `p` as above.
+   - `expected = min(dot(p, PreviousForward.xyz) + PreviousDepthOffset, c_SkyDistance)`; an all-sky neighborhood expects
+     `c_SkyDistance`.
+   - `PreviousForward` is the previous motion camera's forward, and `PreviousDepthOffset` is
+     `dot(cameraPosition - previousCameraPosition, PreviousForward)`, subtracted in double on the CPU. Both are taken
+     where `PreviousViewProjection` is built from `m_MotionCamera` (the `m_Stats.MotionHistory` block), which
+     `RenderFrame` overwrites before `ResolveTemporal` runs. Without motion history: the current forward and 0.
+2. **The stored distances.** `textureGather(sampler2D(u_History, u_LinearClampSampler), previousUV, 3)`: the alpha of
+   the 2x2 texels around the previous position, one fetch through the bound sampler at slot 8, never through the
+   Catmull-Rom filter. `stored` is the farthest of the four.
+3. **The test.** The pixel is disoccluded when
+   `stored < expected - DisocclusionThreshold * max(abs(expected), DepthScale)`. `DepthScale` (`PreviousForward.w`) is
+   the near distance for perspective cameras (at least 0.001) and the view's height (`SceneCamera::VerticalFOV`) for
+   orthographic ones, so the margin is positive for every camera, including an orthographic one whose near plane is
+   negative.
+   - The comparison is one-sided. Taking the nearest current surface against the farthest stored one absorbs the jitter
+     at still edges and the depth gradient of grazing surfaces.
+   - Uncovered sky counts as disoccluded; sky over sky does not.
+4. **The result.** A disoccluded pixel skips the blend and takes the current frame exactly, as S2's off-screen path
+   does.
+5. **Known limits** (the Manual states both):
+   - Velocity has no z, so a surface moving away from the camera faster than the threshold per frame looks disoccluded
+     and loses its history meanwhile: about 0.5 m per frame at 10 m with 0.05.
+   - The uncovered band holds one jittered frame, then blends at 1/8, so its edges stay less smooth than the rest for
+     about 17 frames (90% of the way). A per-pixel "fresh" flag that would speed this up is left out until the evidence
+     shows the band.
+
+**Order of the weights**
+1. `weight = max(max(CurrentWeight, MinWeight), min(motionPixels * MotionWeightScale, MaxMotionWeight))`: S2's weight,
+   with `MinWeight = 1 / HistoryFrames`.
+2. The resampling term raises it.
+3. The reactive term raises it.
+4. A disoccluded pixel takes the current frame and skips step 5.
+5. The luminance-weighted blend as built (every preset), then `SanitizeHDR`.
+
+#### D17: Sharpening (in `SH/PostProcess/Tonemap.frag`)
+
+It runs in the tone-mapping pass, which already reads the resolved image at viewport size: no new pass, texture or
+binding set. The history, the exposure metering, bloom, SSR and `GetResolvedHDRTexture` never see it.
+
+**The parameter.** `TonemapParameters` grows from 32 to 48 B: `float Sharpening` plus three padding floats. The CPU
+writes `Sharpening` only on frames the TAA resolved, and 0 otherwise, so FXAA frames and renderers without TAA skip a
+uniform branch and stay bit-identical.
+
+**The computation**, inside `if (Sharpening > 0)`, after the exposure and the NaN clamp and before bloom:
+1. **Taps.** Four `texelFetch(sampler2D(u_SceneColor, u_PointSampler), ...)` taps (left, right, up, down) at
+   `ivec2(gl_FragCoord.xy)`, clamped to `textureSize - 1` (combined-sampler `texelFetch` needs no extension). They are
+   exposed exactly as the center is, including S7's inverse pre-exposure. The viewport starts at 0,0, so `gl_FragCoord`
+   lines up with the texels.
+2. **Compressed luminance.** For each of the five taps: `y = L / (1 + L)`, where `L` is the exposed luminance.
+3. **Amount.** `R = ymax - ymin` over the five taps, `s = Sharpening * (1 - R)^n`. Low-contrast texture detail gets most
+   of the amount and edges little, so the anti-aliasing and D4's still-edge oscillation are not undone.
+4. **Sharpened luminance.** `y' = clamp(yc + s * (yc - mean(y of the four)), max(ymin - s * R, 0), min(ymax + s * R,
+   (1 + ymax) / 2))`. The bounded overshoot lets local extrema (thin lines, glints, texture at 2-6 px periods) sharpen,
+   which a clamp to `[ymin, ymax]` would forbid; the upper limit keeps `y' < 1`.
+5. **Back to color.** `L' = y' / (1 - y')`. If `Lc > 0`, `color *= L' / Lc`: luminance only, so no color fringes, and a
+   black pixel stays black.
+
+**The exponent `n` (start: 4) and Sharp's bounds** come from a CPU prototype of steps 2-5 (a test helper), run before
+the shader is written against two profiles:
+- A black-to-white edge (L 0 to 1) as TAA resolves it: overshoot at most 2% of the edge's range at Sharp's value and 5%
+  at 1. The five taps of a resolved edge see about half its contrast, so 2% at 1 would need `n` above 6 and would halve
+  the texture gain.
+- The texture pattern of 6.14: amplitude at least 8% above unsharpened at Sharp's value.
+If both cannot hold, the prototype's numbers go in the report.
+
+**Where it shows.** Captures and the project picture are sharpened under Sharp. Asset thumbnails render with FXAA (D5),
+so `ThumbnailCache::c_Version` stays.
+
+#### D17: Data, plumbing and cost
+
+**`RenderData::TemporalParameters`** grows from 32 to 64 B (NVRHI's limit is 128 B):
+- `CurrentWeight`, `MinWeight`, `MotionWeightScale`, `MaxMotionWeight`
+- `HistoryScale`, `InversePreExposure`, `uint ClampMode`, `ClipWidth`
+- `TransparentWeight`, `DisocclusionThreshold`, `PreviousDepthOffset`, `ResampleWeight`
+- `glm::vec4 PreviousForward` at offset 48 (w: `DepthScale`)
+
+The C++ struct and the GLSL block change together, with `static_assert`s on the size and that offset; the layout's
+`PushConstants(1, sizeof)` follows. No new binding, slot, texture or sampler: HDR alpha comes through SRV 22, the
+history's alpha through SRV 25 with sampler 8.
+
+**`SceneRenderer`**
+- `RenderFrame` computes `GetTemporalAntiAliasingSettings(postProcess)` once; `ResolveTemporal(commandList, settings)`
+  packs it. Normalized fields stay 0, so equal settings give equal bytes.
+- The tone-mapping parameters take `Sharpening` when the frame was resolved.
+- **History resets** are unchanged. Settings changes never reset the history and take effect on the next frame: the
+  history's colors stay valid under any settings, and every preset writes the distance into its alpha.
+- **Draw paths.** The resolve and the tone mapping do not depend on the draw path. Of T1's two inputs, the reactive
+  alpha comes from CPU-built transparent draws on both paths, and both paths rasterize the same depth (the both-paths
+  case covers it).
+- `SceneRendererStats` gains nothing: tests judge by images, and `GetTemporalAntiAliasingSettings` is public.
+
+**Memory.** Zero new memory: no target, binding set or pipeline. `TAALocalShadowsPeakMemory` is reported unchanged.
+
+**GPU cost**
+
+| Pass | What it gains | Stage |
+| --- | --- | --- |
+| Resolve | The moments, the compression, the resampling term, one gather and two reconstructions | `GPU.TAA` |
+| Tone mapping | Four cached fetches and about 25 ALU | `GPU.Post` |
+
+Neither reaches a scene without TAA. **Target:** Sharp's `GPU.TAA` is at most 1.5 times Original's on the Mac; above
+that, profile and reduce before T2 lands (for example, compute each tap's luminance once for the compression and the
+reactive term).
+
+#### D17: Editor, files and scripts
+
+**Inspector.** The tunables' rows are generic. Their reasons are capturing lambdas through
+`ComponentRegistry::SetInactiveReason` (a `std::function`), one per property or a template over the property, checked in
+this order:
+
+| Order | Condition | Reason |
+| --- | --- | --- |
+| 1 | `AntiAliasing` is off | "Anti Aliasing is off" |
+| 2 | The method is FXAA | "Only TAA uses it (Anti Aliasing Method is FXAA)" |
+| 3 | Tunables only: the preset is not Custom | "The Sharp preset sets it (0.0625): choose Custom to tune it", quoting the table |
+| 4 | `TAAClipWidth` under Custom with Range | "Only Tight clipping uses it (TAA History Clamp is Range)" |
+| 5 | `TAADisocclusionThreshold` under Custom with rejection off | "TAA Disocclusion Rejection is off" |
+
+- Fields a preset normalizes away get their own words instead of "(0)": under Original, `ClipWidth` reads "The Original
+  preset clamps to the colors' range: choose Custom to tune it", and `DisocclusionThreshold` "The Original preset does
+  not reject uncovered surfaces: choose Custom to tune it".
+- `AntiAliasingMethod`'s tooltip drops "a slight blur of what moves" and says the TAA's look is chosen by TAA Preset.
+
+**Serialization**
+- A `PostProcess` without `TAAPreset` loads as the default preset, without a warning. That covers every scene S2's
+  branch saved (the samples, the template's output, `Feature.stscene`); no released scene has TAA.
+- Unknown names or integers warn and keep the default. Out-of-range tunables are clamped (files) or refused (commands).
+- Cooked scenes match properties by name, so they need no format bump.
+- Scenes are saved with every property, so a file the editor saves during T1 holds `"TAAPreset": "Original"`. T2's
+  flip checks `git grep '"TAAPreset"'` and moves to Sharp the files that meant the default.
+
+**`StrataTests/Architecture/ComponentSchema.json`** is regenerated (`--strata-test-helper=write-component-schema`) on
+top of S8's version.
+
+**Scripts** reach the new properties through `Entity::GetProperty`/`SetProperty` (enums as int32, `TAAHistoryFrames` as
+uint32). The ABI is unchanged.
+
+**Feature test (`Feature.stscene`).** Every value lies outside Sharp's tuning bounds, so T2's tuning cannot turn a
+default into the scene's value.
+
+| Entity | Values |
+| --- | --- |
+| "Environment" (active, TAA) | Custom; History Frames 12, Motion Response 0.2, Max Motion Weight 0.9, Resample Weight 0.8, Clip Width 2.5, Transparent Weight 0.9, Threshold 0.25, Sharpening 0.9; clamp and rejection at their defaults. `GPU.FeatureTest` runs the Custom path with every technique on. |
+| "Alternate Grading" (inactive, FXAA) | `TAAHistoryClamp` MinMax, `TAADisocclusionRejection` false; the preset at its default |
+
+Together they give every new property a non-default value, before and after T2's flip. No new log message is added.
+
+**Samples and template.** No scene file changes in T1 (the default is S2's look). From T2 the Basic 3D template and the
+three TAA samples take Sharp by default; each sample's command script and `Editor.Templates` check `TAAPreset` == Sharp.
+Tetris stays on FXAA.
+
+**T2's command additions**, for the evidence:
+- **`play.start {paused: true}`** (default false): the game starts paused before its first step (`fixedSteps` 0), also
+  when it builds the scripts first.
+- **`viewport.capture {live: true}`** (default false) returns what a view presented, with its history as it is. It
+  renders nothing of its own and does not settle.
+  - **`camera` is required:** `"editor"` is the Scene view (`EditorViewport::m_Renderer`), `"scene"` the Game view
+    (`m_GameRenderer`). The size is the view's own.
+  - It refuses `width`, `height`, `overlays`, `position`, `target`, `fov`, `debugView` and `waitForAssets`.
+  - **`atFixedStep: N`** waits for the first frame the view renders after the game's `fixedSteps` reached N, and fails
+    when step N already ran, play stops, or the view stops rendering.
+  - **`frames: n`** (1-16, default 1) records that frame and the n - 1 following ones, each read back from the view's
+    output before it renders again. Results: one image per frame (with `path`, numbered files), each with its
+    `fixedSteps` and `temporalFrames`.
+  - It fails with the reason when the view does not render (hidden, minimized or headless).
+  - It is a query that may defer (`MayDefer`). The description and the strata-editor-automation skill say what it is
+    for: seeing motion as it plays (trails, smearing, crawling) at exact game steps, armed before `input.sequence` or
+    `play.step`.
 
 ## 6. Per feature: tests, coverage and the editor
 
@@ -993,6 +1357,180 @@ A sample adopts a feature in the step that lands it. The campfires are lit only 
 the owner how to see their shadows (Play and wait about 225 s, or set the Sun's `DayNight` `TimeOfDay` to 18.5 before
 Play), while the lantern near the start shows a shadowed local light in the editor at once.
 
+### 6.14 TAA quality (T1, T2)
+
+**Where the cases live.** New cases go in `StrataTests/src/Renderer/GPUSceneTAAQualityTests.cpp`, in the existing suite
+`GPU.SceneRenderer.TAA` (no new shard).
+- S2's file-local helpers and scenes (`CreateRenderer`, `ReadHDR`, `ReadIDs`, `CheckReset`, `EdgeScene`,
+  `TemporalScene`, `LoadAssets`, `FinishFrame`) move into `StrataTests/src/Renderer/TAATestUtils.h`.
+- `AddTemporalPostProcess(scene, preset)` moves to `SceneRendererTestUtils.h`, and the two scenes take the preset.
+- S2's cases pass Original, and their assertions are unchanged. Three S2 bodies run per preset: still edge, PCSS/GTAO
+  noise, and resets. Original keeps S2's bounds; Sharp (T2) gets the bounds below.
+- Every GPU case uses `AddNeutralPostProcess` and ends with `CHECK(gpu.GetNewErrorCount() == 0)`. Each technique's case
+  sets Custom with only that technique differing from Original.
+- **Glints:** a mid-gray plane with small emissive squares, 2 px across and 6 px apart, built from geometry: sparse
+  outliers, as sunlit foliage gives.
+- **Texture detail:** an in-memory texture of 3-6 px periods at low contrast (R about 0.1-0.2 in compressed luminance)
+  on a fronto-parallel plane mapped 1:1 to pixels, with `TextureStreaming = false`.
+
+**Original and Custom (T1)**
+- **Original equals Custom with Original's values.** 16 frames of a moving scene with a moving transparent quad: the
+  resolved history's RGB bytes and the output bytes are identical.
+- **CPU (`Renderer.Components`).** `GetTemporalAntiAliasingSettings` returns equal settings for those two, also when
+  Custom's inactive `ClipWidth` and `DisocclusionThreshold` hold other values. `GetTemporalAntiAliasingCustomStart`
+  returns Original's table from Original with untouched tunables, Sharp's from Sharp, and tuned values unchanged.
+
+**Variance clipping**
+- **Trail.** A cube crosses the glints at 6 px per frame under a still camera. Six frames after it left, measure the
+  crossed strip's mean absolute luminance difference from the converged background.
+  - The gray, square and cube luminances are pinned from a CPU computation of both clips over the pattern. They are
+    chosen where the predicted Variance/MinMax ratio is at most 0.35.
+  - MinMax at least 0.02 (the trail exists); Variance (`ClipWidth` 1.25) at most half of MinMax.
+- **Noise.** S2's PCSS/GTAO case under Variance: the converged roughness (squared second differences) stays below 0.6
+  of one frame's (S2 asserts 0.5 under Original).
+
+**Resampling**
+- **Slow pan.** The camera translates parallel to the texture plane at 0.5 and at 1.5 px per frame for 32 frames. The
+  measure is the resolved detail amplitude (standard deviation of luminance over the plane) relative to the still
+  converged image's. With 0.25 it is at least 1.2 times Original's and at least 0.9 of the CPU model's prediction for
+  the pattern (`w / (1 - (1 - w) * a)` per period: 0.74 with 0.25 and 0.55 under Original at a 4 px period).
+- **Integer motion.** At 1.0 px per frame, `ResampleWeight` 0.25 equals 0 bit for bit.
+
+**Reactive mask**
+- **HDR alpha.** Two overlapping blended quads with alpha 0.5 and 0.25 leave 0.375 where they overlap and 1 elsewhere,
+  read through `GetHDRTexture` within 1/1024, on both paths.
+- **Moving quad.** A red quad with alpha 0.5 moves at 4 px per frame over the still texture plane. Pixels it has covered
+  for exactly 2 frames: their error against the current composite with `TransparentWeight` 0.5 is at most half the
+  error at 0 (the formula gives (0.5 / 0.875)^2 = 0.33 before the clip). The trail behind it does not grow.
+- **Still quad.** A still transparent quad's edge pixels vary over frames 9-40 by less than the jittered frames
+  themselves do (no history), so the mask is not a bypass.
+
+**Disocclusion rejection**
+- **True positive.** A near red box moves sideways at 20 px per frame in front of a wall textured red and white.
+  - In the first frame after the uncovering, pixels at least 2 px from the box's new silhouette equal the current frame
+    exactly with rejection on (0.05).
+  - Without rejection, the mean luminance difference over the band's white texels is at least 0.05.
+  - Uncovered sky is rejected too.
+- **No false positives at the lowest bound, 0.02.** Rejection on equals rejection off bit for bit in each of these:
+  - A camera rotating in place over boxes, a ground plane and the sky.
+  - A dolly backward at 0.2 m per frame at 5 m over a grazing ground plane (twice the threshold per frame).
+  - A still jittered view over 40 frames.
+  - An orthographic camera with Near -10 panning over boxes that lie between its near plane and its position.
+  - A perspective camera moving 20 km from the origin.
+- **Pre-exposure.** Across forced pre-exposure steps up and down, the history alpha is unchanged and rejection on equals
+  rejection off bit for bit.
+
+**Sharpening**
+- **Detail.** On the texture plane (still, at 8 frames), the output amplitude at Sharp's value is at least 8% above the
+  amplitude at 0.
+- **No feedback.** Over 32 frames of a moving scene, the resolved history is bit-identical with sharpening 1 and 0.
+- **Halos.** On a resolved black-to-white edge, no output pixel exceeds its unsharpened five-tap range by more than 2%
+  of the edge's range at Sharp's value, or 5% at 1.
+- **Stability.** On a still view, the output's per-pixel temporal standard deviation over frames 9-40 is at most 1.5
+  times the value without sharpening.
+- **Off elsewhere.** An FXAA scene and a renderer without TAA render identically with `TAASharpening` 1 and 0.
+
+**Sharp (T2, with the tuned values)**
+- **Convergence.** On S2's still-edge scene, at frame 8 edge pixels are on average within 5% of their spread from the
+  eight-phase mean, and every pixel within 25%. Over frames 9-40, every resolved pixel stays within 30% of its spread
+  (Original: 15%), and the output's per-pixel temporal standard deviation is at most 1.5 times Original's. These bounds
+  are fixed: if Sharp misses them, its values move within their bounds.
+- **Trail regression.** On the trail case, Sharp's residual is at most half of Original's.
+- **Resets.** `CheckReset` (cuts, resizes, `ResetHistory`) passes under Sharp.
+- **Both paths.** Over 16 moving frames with a transparent quad, the two paths agree within 1/255, with identical IDs.
+- **Pre-exposure.** S7's "follows a pre-exposure step without a flash" runs under the default preset, Sharp.
+- **Other suites** keep passing under Sharp: overlays, `GPU.Editor.Viewport` (the capture still equals the 8th frame of
+  the view), thumbnails, game UI, the game renderer, the feature test.
+
+**Components and editor**
+- **`Reflection`.** The enums' names, values and defaults. Ranges and tooltips. The tunables' defaults equal
+  `c_TAASharpSettings`. `Scene.InactiveProperties` covers every reason above.
+- **`Scene.Serialization`.** A TAA `PostProcess` without the key loads as the default preset without warnings.
+  `"Original"` and 1 both load as Original. An unknown name warns and keeps the default. Out-of-range tunables are
+  clamped.
+- **`Editor.Commands`.** `component.set` to Custom with tunables is one undo step. Out-of-range values are refused
+  without side effects. The exact `inactive` maps (`EditorCommandTests.cpp`) are extended, not weakened: the new rows
+  are inactive under FXAA and with anti-aliasing off.
+- **Inspector (`ImGuiHarness`).** Through the `TAAPreset` row:
+  - Original → Custom writes Original's table in one undo step.
+  - Sharp → Custom changes no tunable.
+  - Tuned Custom → Original → Custom keeps the tuning.
+- **`GPU.Editor.Viewport` (T2).**
+  - `viewport.capture {live, camera: "scene", atFixedStep: N, frames: 2}` equals the Game view renderer's output read
+    back in the frames that ran step N and the next.
+  - A paused frame after them differs from the last one (the history moved on).
+  - It refuses a missing `camera`, each refused parameter, a step already run, and a view that did not render.
+  - After `play.start {paused: true}` and five frames, `fixedSteps` is 0.
+
+**Must-fail checks.** Each change below must make the named case fail:
+
+| Change | Case that fails |
+| --- | --- |
+| The MinMax clamp used under Variance | the trail case |
+| No resampling term | the slow-pan case |
+| `f` measured from texel corners instead of centers | the integer-motion case |
+| The transparent alpha blend left at One | the HDR alpha and moving-quad cases |
+| Coverage not saturated (`r = max(1 - a)`) | the moving-quad case |
+| `TransparentWeight` treated as a full bypass | the still-quad case |
+| The pixel's own depth against the per-pixel stored depth (no nearest or farthest) | the still jittered view |
+| The current distance compared without the previous camera | the dolly case |
+| The margin `Threshold * max(expected, Near)` | the orthographic case |
+| The stored distance multiplied by `HistoryScale` | the pre-exposure rejection case |
+| Settings not normalized | the Original/Custom CPU case |
+| Sharpening written into the history | the no-feedback case |
+| Overshoot unbounded (no limiter) | the halo case |
+| Sharpening on FXAA frames | the off-elsewhere case |
+
+**Visual evidence (T2).**
+
+**Where the files go.** `/Users/mikeyang/Documents/gameengine/.worktrees/render-quality/build/taa-evidence/`
+(`/build/` is git-ignored). Each sample is copied there (never opened in place) and opened in a windowed editor. The
+Game view is shown at a fixed 1920x1080 (`viewport.setSettings {gameView}`), so crops are 1:1 and motion has a known
+speed in pixels per frame. Hidden views skip frames and reset their history (D4).
+
+**Each motion run, per mode** (FXAA, Original, Sharp):
+1. Set the edited scene's `PostProcess` with `component.set`.
+2. `play.start {paused: true}`.
+3. Send `viewport.capture {live: true, camera: "scene", atFixedStep: N, frames: 8, path}`. It answers later.
+4. Once it is pending (the automation status counts pending requests), run `input.sequence` with N + 8 steps.
+5. Read both answers, then `play.stop`.
+
+Every mode then shows the same game state at each captured step; only the jitter phase can differ.
+
+| Run | Input, as the sample's own controls define it | N |
+| --- | --- | --- |
+| Third-Person | Forward held while the mouse turns the camera at a constant rate | 90 |
+| Open World, slow pan | The camera turned by the mouse at about 0.5, then 1.5 px per frame at the screen's center, the player still | 90 |
+| Physics Playground | Bodies falling from the start, or the sample's spawn input | 45 |
+| Each sample's still view | A settled `viewport.capture`; then, after `editor.wait {frames: 40}`, `viewport.capture {live, camera: "scene", frames: 2}`, whose absolute difference times 8 is the flicker map | — |
+
+**What to produce.** A standard-library Python script, kept in the evidence folder and not committed, writes:
+- every image;
+- side-by-side sheets in the order FXAA | Original | Sharp;
+- 3-4x nearest-neighbor crops of the same rectangles in all three modes, as 8-frame strips for motion (crawling cannot
+  be judged from one frame):
+  - a high-contrast silhouette against the sky;
+  - foliage or thin detail (grass, branches, fences, rails);
+  - texture detail during the slow pan;
+  - a moving object's trailing edge, including the band it uncovers;
+  - a transparent surface. Where a sample shows none (glass arrives with S11), use the moving-quad case's frames from a
+    run of the GPU test.
+
+The implementer opens every image and writes one sentence per image on edges, texture detail, trails, ghosting, halos
+and flicker. The report names the sheets and strips for the orchestrator to send to the owner. It also gives the
+three-step A/B in the editor: open a sample, Play, and switch TAA Preset in the Inspector while moving (settings never
+reset the history).
+
+**Sharp's final values** are chosen within their bounds so that the captures show all of these:
+- Texture detail visibly crisper than Original, in still views and slow pans, close to FXAA.
+- Edges as smooth as Original's: no stair-steps, and no crawling in the flicker map or the strips.
+- No trail behind the running character or the falling bodies beyond what FXAA shows plus 2 px.
+- No smeared foliage while panning.
+- No visible halo around sunlit silhouettes.
+
+If no values within the bounds achieve all of these, the report says which goal is missed and why; the bounds are not
+exceeded. The values and the reasons go in the tuning commit's message.
+
 ## 7. Deliverables and acceptance
 
 Each step is one or more commits that build and pass every suite with the lint clean; `ctest` runs use the `macos-debug`
@@ -1014,8 +1552,15 @@ with `CHECK(gpu.GetNewErrorCount() == 0)`) and `StrataTests.FeatureTest`.
   7.1. Push `ci/render-quality`: **the core is complete here.**
 - *Cut line.*
 - **S7 Pre-exposure and atmosphere**: D7's pre-exposure, D10, the captures' exposure wait (D5), 6.7.
-  **S8 Reflection probes**: D11, D16, the required `imageCubeArray`, 6.8, `GPU.Reflections`. **S9 SSR**: D12, 6.9.
-  **S10 Sun extraction**: D13, 6.10. **S11 Clearcoat and transmission**: D14, 6.11.
+  **S8 Reflection probes**: D11, D16, the required `imageCubeArray`, 6.8, `GPU.Reflections`.
+- **T1 TAA quality presets and tuning**: D17's settings and every technique, reachable through Custom; the default
+  stays Original (S2's look). *Accept:* 6.14's T1 cases and must-fail checks; `StrataTests.GPU` under validation; the
+  FXAA-scene perf comparison of 7.1.
+- **T2 Sharp tuned and made the default**: `play.start {paused}` and `viewport.capture {live, atFixedStep, frames}`;
+  the evidence (6.14) and Sharp's tuning within its bounds; Sharp as the default in the template and the three TAA
+  samples; the per-preset perf; the Manual page, DG and skills (section 8). *Accept:* 6.14's T2 cases; the evidence
+  sheets and strips, each described, for the owner.
+- **S9 SSR**: D12, 6.9. **S10 Sun extraction**: D13, 6.10. **S11 Clearcoat and transmission**: D14, 6.11.
 - **S12 Finish**: A/Bs of 7.1 on the final branch, docs and skills (section 8), the Roadmap's Status, CI green on
   `ci/render-quality`.
 
@@ -1044,6 +1589,16 @@ with `CHECK(gpu.GetNewErrorCount() == 0)`) and `StrataTests.FeatureTest`.
   commit message and the final report.
 - `PerfGPU.Samples.OpenWorldTour.*` (provisional) runs before and after the Open World adopts its features; the report
   gives both.
+- T1 and T2 (D17), on the Mac: a Release build under `Tools/PerfLock.py`, three or more interleaved pairs, ratio of the
+  medians. No Mac number becomes a budget.
+  - **T1: FXAA scenes.** `Render100kCubes` and the measured `PerfGPU.Renderer.*` and `EditFrame*`/`PlayFrame*` are
+    compared against the branch before T1: ratio at most 1.02.
+  - **T2: per preset.** Medians of `GPU.TAA` and `GPU.Post` for FXAA, Original, Sharp, and Custom with each technique
+    alone, at 1920x1080 in the 100,000-cube TAA scene, stated in the tuning commit's message and the report.
+  - **T2: new metrics.** `RendererPerfTests.cpp` gains `PerfGPU.Renderer.Render100kCubesTAAOriginal` and `...GPU` as
+    provisional entries in `Budgets.json`. `Render100kCubesTAA` then measures Sharp, the default, and its entry is
+    untouched.
+  - **Memory.** `TAALocalShadowsPeakMemory` is reported unchanged.
 
 ## 8. Docs and skills
 
@@ -1070,11 +1625,39 @@ with `CHECK(gpu.GetNewErrorCount() == 0)`) and `StrataTests.FeatureTest`.
   `strata-editor-automation` (`lighting.*`, the `motion` debug view, what captures wait for), `strata-scripting` (the
   new properties a script may drive, e.g. fog density or the sun for time of day).
 
+**T1 and T2 (D17).**
+
+**DG "Motion vectors and TAA"** (T1, completed in T2): the presets and their tables; each technique as built; the HDR
+alpha convention (writers before the TAA write 1, blended transparent surfaces multiply by 1 - a, glass writes 1); the
+history's alpha holds the signed view distance; sharpening lives in the tone mapping and never enters the history; the
+resolve's constants paragraph points to `c_TAAOriginalSettings`; the tests.
+
+**DG elsewhere:** "Feature test" (the new values), "Inspectors" (the reasons and `UI::PropertyDrawers`), "View commands"
+and "Play" (`live`, `atFixedStep`, `frames`, `play.start {paused}`; T2).
+
+**`Docs/Manual/AntiAliasing.md`** (T2; new, linked under "Manual" in `Docs/README.md`), in plain words:
+- FXAA versus TAA.
+- How many frames TAA keeps. Frames 1-8 after a reset are averaged evenly. After that, at 1/8 per frame, the newest 6
+  frames hold more than half of the weight and the newest 18 more than 90%. Motion and Sharp's terms shorten this.
+- When trails appear and what removes them; that Tight clipping gains most where the surroundings are smooth.
+- Each preset (Original is S2's TAA, unchanged), each tunable, and how Custom starts, with the `component.set` that
+  starts Custom from Original.
+- The limits: fast receding surfaces, the uncovered band's few softer frames, and slow pans under Original.
+
+**Skills** (T2)
+- strata-make-a-game: TAA Sharp for 3D games, Original for a softer and steadier look, Custom with Transparent Weight
+  when effects ghost, FXAA for 2D and pixel art.
+- strata-editor-automation: `play.start {paused}`, `viewport.capture {live, atFixedStep, frames}`, and that captures
+  show Sharp's sharpening.
+
+**What stays as it is:** `AGENTS.md` (39,724 of 40,000 characters; the details belong to DG) and `Docs/Architecture.md`
+(the pass order is unchanged).
+
 ## 9. Risks
 
 | Risk | Mitigation |
 | --- | --- |
-| TAA blurs or ghosts, and the owner judges by eye | trail and convergence tests; the `motion` debug view; samples checked in the editor at each step; sharpening deferred but cheap to add |
+| TAA blurs or ghosts, and the owner judges by eye | trail and convergence tests; the `motion` debug view; samples checked in the editor at each step; T1/T2 |
 | Temporal state breaks the CPU/GPU comparisons (draw order, occlusion phases) | jitter and history are per renderer, order-independent and counted in frames; the comparisons run with TAA in S2; one forced pre-exposure on both renderers |
 | The selection outline and overlays under TAA | D5's mask pass and D3's overlay bias, with their own stability tests |
 | Captures and thumbnails show unsettled frames | settle waits with bounds (TAA, pre-exposure); lighting drawn at once without `SpreadLightingUpdates`; tests of each |
@@ -1091,6 +1674,17 @@ with `CHECK(gpu.GetNewErrorCount() == 0)`) and `StrataTests.FeatureTest`.
 | `GltfImporter` version 10 re-imports every model once | stated in the release notes; the samples' first open re-imports in the background |
 | Fog or the atmosphere fails the Open World's green check | tune the scene, never the check |
 | `AGENTS.md` headroom shared with `project-settings` | one rule at most, replacing words |
+| T1/T2: Variance clipping pulls still edges off the mean of their phases, so they flicker | The clip runs in the weights' compressed space, intersected with the min/max box, with `ClipWidth` at least 1.0 for Sharp. The convergence and flicker checks fix the bounds. Original keeps S2's semantics. |
+| T1/T2: Slow pans stay soft (the owner's complaint) | The resampling term, the slow-pan case and the slow-pan evidence. The Manual says Original stays soft there. |
+| T1/T2: Sharpening amplifies what TAA leaves (the still-edge oscillation, PCSS/GTAO noise, LOD dither) or makes halos | Luminance only, in compressed space. The amount falls steeply with local contrast, and overshoot is bounded by a CPU-prototyped formula. The halo and stability cases. |
+| T1/T2: A future writer of the HDR target breaks the alpha convention (glass in S11, a new effect) | DG states it, D14 says it for glass, and the HDR-alpha case fails on a wrong writer. |
+| T1/T2: False disocclusion (surfaces receding fast, orthographic cameras, far views) | One-sided test, nearest against farthest, a margin positive for every camera, both sides clamped to `c_SkyDistance`. Documented. The no-false-positive cases at the lowest bound. |
+| T1/T2: A driver compiles Original's unchanged math differently once the shader grows | S2's bounds have tolerances. The exact comparisons (reset passthrough, Original against Custom) hold by construction. |
+| T1/T2: Greyed rows show stored values, not the preset's | The reasons quote the preset's values, and choosing Custom in the Inspector starts from the preset in effect. |
+| T1/T2: Evidence compares different moments | Paused start and step-armed captures: identical game states, only the jitter phase differs. |
+| T1/T2: Untuned Sharp ships as the default | The default stays Original until T2's tuning. |
+| T1/T2: The cost of Sharp on the reference machine is unknown | Provisional metrics for both presets and the 1.5x target on the Mac. Measured again when the reference machine returns. |
+| T1/T2: The owner finds Sharp too soft or too sharp | The sheets and strips go to the owner, plus Custom and values within stated bounds, so they can ask for another point. |
 | The usage limit | the cut line; small visible steps before the largest; each step lands alone |
 
 ## 10. Deferred
@@ -1127,11 +1721,42 @@ with `CHECK(gpu.GetNewErrorCount() == 0)`) and `StrataTests.FeatureTest`.
    `AutoExposureMaxEV` 16; the atmosphere; the Open World's sky).
 8. S8 reflection probes (commits: the required `imageCubeArray` and the cube array; runtime probes and their cache;
    `lighting.bakeProbes`; Inspector; the Third-Person's probes).
-9. S9 SSR, the Third-Person's SSR.
-10. S10 sun extraction, the Third-Person's sun.
-11. S11 clearcoat and transmission (commits: material model; shading, glass's attachments and scene-color copy; glTF;
+9. T1 TAA quality presets and tuning (D17), commits:
+   1. D17 and 6.14 added to this plan (with sections 4, 7, 7.1, 8, 9 and 11, D4, D5 and D14).
+   2. **Settings and plumbing.**
+      - The enums and fields (C++ only, not registered; default Original).
+      - The settings struct, the tables and the three functions.
+      - `ResolveTemporal(settings)`, the 64 B push constants and the distance in the history's alpha.
+      - `TonemapParameters` at 48 B.
+      - The test helpers moved to shared headers; `AddTemporalPostProcess(scene, preset)`.
+      - The Original/Custom cases.
+   3. Variance clipping (with the CPU computation of the trail's luminances), with its cases.
+   4. The resampling term, with its cases.
+   5. The reactive mask (the transparent alpha blend and the resolve term), with its cases.
+   6. Disocclusion rejection (the previous camera's forward, offset and depth scale), with its cases.
+   7. Sharpening: the CPU prototype first, then the tone mapping, with its cases.
+   8. **Registration.**
+      - The properties, tooltips, ranges and inactive reasons; `UI::PropertyDrawers` and the `TAAPreset` drawer.
+      - The `Reflection`, `Scene.Serialization`, `Editor.Commands` and Inspector cases.
+      - `ComponentSchema.json` and the feature test's values.
+      - DG for what T1 adds.
+      - The FXAA-scene perf comparison.
+   If time runs short, stop after T1: every technique is usable through Custom, and the default is S2's look.
+10. T2 Sharp tuned and made the default (D17), commits:
+    1. `play.start {paused}` and `viewport.capture {live, atFixedStep, frames}`, with their cases, descriptions and skill
+       lines.
+    2. **Evidence and tuning.**
+       - The captures. Sharp's final values go in `c_TAASharpSettings`, and the defaults follow.
+       - Sharp becomes the default, and files that meant the default move to Sharp.
+       - The template's and samples' command-script checks.
+       - The Sharp cases.
+    3. The perf entries and comparisons, with the numbers in the message.
+    4. The Manual page, the rest of DG, the skills, and the plan's "As built in T1/T2" lines.
+11. S9 SSR, the Third-Person's SSR.
+12. S10 sun extraction, the Third-Person's sun.
+13. S11 clearcoat and transmission (commits: material model; shading, glass's attachments and scene-color copy; glTF;
     the Playground).
-12. S12 finish: A/Bs, docs and skills, Roadmap Status, full Debug and Release suites, lint, CI green on
+14. S12 finish: A/Bs, docs and skills, Roadmap Status, full Debug and Release suites, lint, CI green on
     `ci/render-quality`, report.
 
 If time runs short, stop after a complete step; every step from S1 on leaves the branch mergeable.
