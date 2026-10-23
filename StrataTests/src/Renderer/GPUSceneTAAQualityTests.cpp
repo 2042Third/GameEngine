@@ -258,6 +258,57 @@ namespace
 		}
 	}
 
+	TemporalAntiAliasingSettings WithSharpening(float amount)
+	{
+		TemporalAntiAliasingSettings settings = c_TAAOriginalSettings;
+		settings.Sharpening = amount;
+		return settings;
+	}
+
+	// A renderer's output into a 16-bit target (no 8-bit rounding), read as display-referred linear luminance.
+	struct DisplayTarget
+	{
+		nvrhi::TextureHandle Texture;
+		nvrhi::FramebufferHandle Framebuffer;
+
+		explicit DisplayTarget(GPUContext& gpu)
+		{
+			nvrhi::TextureDesc desc;
+			desc.width = c_Size;
+			desc.height = c_Size;
+			desc.format = nvrhi::Format::RGBA16_UNORM;
+			desc.isRenderTarget = true;
+			desc.initialState = nvrhi::ResourceStates::RenderTarget;
+			desc.keepInitialState = true;
+			desc.debugName = "DisplayTarget";
+			Texture = gpu.GetNvrhiDevice()->createTexture(desc);
+			REQUIRE(Texture);
+			Framebuffer = gpu.GetNvrhiDevice()->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(Texture));
+			REQUIRE(Framebuffer);
+		}
+
+		std::vector<float> Render(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
+		{
+			REQUIRE(renderer.Render(scene, camera, Framebuffer));
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(Texture, image));
+			REQUIRE(image.BytesPerPixel == 8);
+			const auto linear = [](uint16_t value)
+			{
+				const float encoded = static_cast<float>(value) / 65535.0f;
+				return encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
+			};
+			std::vector<float> luminance(static_cast<size_t>(c_Size) * c_Size);
+			for (size_t pixel = 0; pixel < luminance.size(); pixel++)
+			{
+				uint16_t texel[4];
+				std::memcpy(texel, image.Pixels.data() + pixel * image.BytesPerPixel, sizeof(texel));
+				luminance[pixel] = Luminance(glm::vec3(linear(texel[0]), linear(texel[1]), linear(texel[2])));
+			}
+			return luminance;
+		}
+	};
+
 	// What a steady pan between texels keeps of a sinusoid of `period` texels, relative to a still view: the current frame
 	// weighs `weight`, and the history, read halfway between texels every frame, passes the Catmull-Rom filter's response
 	// there (its taps at 1.5 and 0.5 texels weigh -0.0625 and 0.5625 on each side), so w / (1 - (1 - w) a).
@@ -932,6 +983,226 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 			REQUIRE(steps.Render(scene.Contents, scene.Camera, nullptr, options));
 			CHECK(ReadAlphaBits(steady.GetResolvedHDRTexture()) == ReadAlphaBits(steps.GetResolvedHDRTexture()));
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Sharpening adds at least 8% to the amplitude of texture detail as the TAA resolves it")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		DisplayTarget target(gpu);
+		const SceneCamera camera = DetailScene::Camera(0.0f);
+		const auto amplitude = [&](float amount)
+		{
+			DetailScene scene(assets, WithSharpening(amount));
+			SceneRenderer renderer = CreateRenderer("Detail");
+			renderer.SetViewportSize(c_Size, c_Size);
+			std::vector<float> image;
+			for (uint32_t frame = 0; frame < SceneRenderer::c_TemporalJitterPhases; frame++)
+				image = target.Render(renderer, scene.Contents, camera);
+			// The plane's bands, away from their borders and the view's sides.
+			double sum = 0.0;
+			double squares = 0.0;
+			uint32_t count = 0;
+			for (uint32_t band = 0; band < c_DetailPeriods.size(); band++)
+			{
+				for (uint32_t y = band * c_DetailBandRows + 3; y < (band + 1) * c_DetailBandRows - 3; y++)
+				{
+					for (uint32_t x = 2; x < c_Size - 2; x++)
+					{
+						const double value = image[static_cast<size_t>(y) * c_Size + x];
+						sum += value;
+						squares += value * value;
+						count++;
+					}
+				}
+			}
+			const double mean = sum / count;
+			return std::sqrt(std::max(squares / count - mean * mean, 0.0));
+		};
+		const double plain = amplitude(0.0f);
+		const double sharpened = amplitude(c_TAASharpSettings.Sharpening);
+		INFO("amplitude " << plain << " -> " << sharpened);
+		CHECK(sharpened >= 1.08 * plain);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Sharpening never enters the history")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		TemporalScene scene(TemporalAntiAliasingPreset::Custom);
+		Entity quad = AddTransparentQuad(scene.Contents, assets, { 1.0f, 0.2f, 0.1f, 0.5f }, glm::vec3(-3.0f, 1.5f, -1.0f), 2.0f);
+		PostProcessComponent& postProcess = GetPostProcess(scene.Contents);
+		SceneRenderer sharpened = CreateRenderer("Sharpened");
+		SceneRenderer plain = CreateRenderer("Plain");
+		sharpened.SetViewportSize(c_Size, c_Size);
+		plain.SetViewportSize(c_Size, c_Size);
+		bool outputsDiffer = false;
+		for (uint32_t frame = 0; frame < 32; frame++)
+		{
+			CAPTURE(frame);
+			SetTemporalAntiAliasingSettings(postProcess, WithSharpening(1.0f));
+			const ReadbackImage sharpenedImage = RenderToImage(sharpened, scene.Contents, scene.Camera);
+			SetTemporalAntiAliasingSettings(postProcess, WithSharpening(0.0f));
+			const ReadbackImage plainImage = RenderToImage(plain, scene.Contents, scene.Camera);
+			CHECK(ReadHDRBits(sharpened.GetResolvedHDRTexture()) == ReadHDRBits(plain.GetResolvedHDRTexture()));
+			outputsDiffer = outputsDiffer || sharpenedImage.Pixels != plainImage.Pixels;
+			Animate(scene, quad, frame);
+		}
+		CHECK(outputsDiffer);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Sharpening overshoots a resolved black-to-white edge's five taps by at most 2% of its range, and at 1 by 5%")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		// Black and white unlit planes meeting along a slanted edge, seen from above. Reinhard's curve shows the compressed
+		// luminance the sharpening works in (white: 0.5).
+		Scene scene;
+		PostProcessComponent& postProcess = AddTemporalPostProcess(scene, TemporalAntiAliasingPreset::Custom);
+		postProcess.Tonemapper = TonemapOperator::Reinhard;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(UnlitColor({ 0.0f, 0.0f, 0.0f, 1.0f })), glm::vec3(0.0f), "Black")
+			.GetComponent<TransformComponent>().Scale = glm::vec3(20.0f);
+		for (const float angle : { 30.0f, 45.0f })
+		{
+			CAPTURE(angle);
+			const glm::quat rotation = glm::angleAxis(glm::radians(angle), glm::vec3(0.0f, 1.0f, 0.0f));
+			Entity white = AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(UnlitColor({ 1.0f, 1.0f, 1.0f, 1.0f })),
+				rotation * glm::vec3(5.0f, 0.0f, 0.0f) + glm::vec3(0.0f, 0.01f, 0.0f), "White");
+			white.GetComponent<TransformComponent>().Rotation = rotation;
+			white.GetComponent<TransformComponent>().Scale = glm::vec3(10.0f);
+			const SceneCamera camera = OrthographicLookAt(glm::vec3(0.0f, 10.0f, 0.0f), glm::vec3(0.0f), 3.0f);
+			for (const float amount : { c_TAASharpSettings.Sharpening, 1.0f })
+			{
+				CAPTURE(amount);
+				DisplayTarget sharpenedTarget(gpu);
+				DisplayTarget plainTarget(gpu);
+				SceneRenderer sharpened = CreateRenderer("Sharpened");
+				SceneRenderer plain = CreateRenderer("Plain");
+				sharpened.SetViewportSize(c_Size, c_Size);
+				plain.SetViewportSize(c_Size, c_Size);
+				std::vector<float> sharpenedImage;
+				std::vector<float> plainImage;
+				for (uint32_t frame = 0; frame < SceneRenderer::c_TemporalJitterPhases; frame++)
+				{
+					SetTemporalAntiAliasingSettings(postProcess, WithSharpening(amount));
+					sharpenedImage = sharpenedTarget.Render(sharpened, scene, camera);
+					SetTemporalAntiAliasingSettings(postProcess, WithSharpening(0.0f));
+					plainImage = plainTarget.Render(plain, scene, camera);
+				}
+				double worst = 0.0;
+				uint32_t edgePixels = 0;
+				for (uint32_t y = 1; y + 1 < c_Size; y++)
+				{
+					for (uint32_t x = 1; x + 1 < c_Size; x++)
+					{
+						const auto at = [&](uint32_t px, uint32_t py) { return static_cast<double>(plainImage[static_cast<size_t>(py) * c_Size + px]); };
+						const double low = std::min({ at(x, y), at(x - 1, y), at(x + 1, y), at(x, y - 1), at(x, y + 1) });
+						const double high = std::max({ at(x, y), at(x - 1, y), at(x + 1, y), at(x, y - 1), at(x, y + 1) });
+						const double value = sharpenedImage[static_cast<size_t>(y) * c_Size + x];
+						worst = std::max({ worst, (value - high) / 0.5, (low - value) / 0.5 });
+						edgePixels += high - low > 0.05 ? 1u : 0u;
+					}
+				}
+				INFO("worst overshoot " << worst << " over " << edgePixels << " edge pixels");
+				CHECK(edgePixels >= c_Size);
+				CHECK(worst <= (amount < 1.0f ? 0.02 : 0.05));
+			}
+			scene.DestroyEntity(white);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Sharpening adds at most half again to the flicker of a still view")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		TemporalScene scene(TemporalAntiAliasingPreset::Custom);
+		PostProcessComponent& postProcess = GetPostProcess(scene.Contents);
+		postProcess.Exposure = -2.0f; // The lit boxes within the display's range
+		DisplayTarget sharpenedTarget(gpu);
+		DisplayTarget plainTarget(gpu);
+		SceneRenderer sharpened = CreateRenderer("Sharpened");
+		SceneRenderer plain = CreateRenderer("Plain");
+		sharpened.SetViewportSize(c_Size, c_Size);
+		plain.SetViewportSize(c_Size, c_Size);
+		const size_t pixels = static_cast<size_t>(c_Size) * c_Size;
+		std::vector<glm::dvec2> sharpenedMoments(pixels, glm::dvec2(0.0));
+		std::vector<glm::dvec2> plainMoments(pixels, glm::dvec2(0.0));
+		constexpr uint32_t c_Frames = 32;
+		for (uint32_t frame = 0; frame < 8 + c_Frames; frame++)
+		{
+			SetTemporalAntiAliasingSettings(postProcess, WithSharpening(c_TAASharpSettings.Sharpening));
+			const std::vector<float> sharpenedImage = sharpenedTarget.Render(sharpened, scene.Contents, scene.Camera);
+			SetTemporalAntiAliasingSettings(postProcess, WithSharpening(0.0f));
+			const std::vector<float> plainImage = plainTarget.Render(plain, scene.Contents, scene.Camera);
+			if (frame < 8)
+				continue;
+			for (size_t pixel = 0; pixel < pixels; pixel++)
+			{
+				sharpenedMoments[pixel] += glm::dvec2(sharpenedImage[pixel], static_cast<double>(sharpenedImage[pixel]) * sharpenedImage[pixel]);
+				plainMoments[pixel] += glm::dvec2(plainImage[pixel], static_cast<double>(plainImage[pixel]) * plainImage[pixel]);
+			}
+		}
+		const auto deviation = [](const glm::dvec2& moments)
+		{
+			const glm::dvec2 mean = moments / static_cast<double>(c_Frames);
+			return std::sqrt(std::max(mean.y - mean.x * mean.x, 0.0));
+		};
+		double sharpenedDeviation = 0.0;
+		double plainDeviation = 0.0;
+		for (size_t pixel = 0; pixel < pixels; pixel++)
+		{
+			sharpenedDeviation += deviation(sharpenedMoments[pixel]);
+			plainDeviation += deviation(plainMoments[pixel]);
+		}
+		INFO("mean temporal deviation " << plainDeviation / pixels << " -> " << sharpenedDeviation / pixels);
+		CHECK(plainDeviation > 0.0);
+		CHECK(sharpenedDeviation <= 1.5 * plainDeviation);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Sharpening is off with FXAA and in renderers without TAA")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		TemporalScene scene(TemporalAntiAliasingPreset::Custom);
+		PostProcessComponent& postProcess = GetPostProcess(scene.Contents);
+		const auto render = [&](SceneRenderer& renderer, float amount)
+		{
+			SetTemporalAntiAliasingSettings(postProcess, WithSharpening(amount));
+			ReadbackImage image;
+			for (uint32_t frame = 0; frame < 3; frame++)
+				image = RenderToImage(renderer, scene.Contents, scene.Camera);
+			return image;
+		};
+		// A scene with FXAA.
+		postProcess.AntiAliasingMethod = AntiAliasingMode::FXAA;
+		SceneRenderer fxaaSharpened = CreateRenderer("FXAASharpened");
+		SceneRenderer fxaaPlain = CreateRenderer("FXAAPlain");
+		fxaaSharpened.SetViewportSize(c_Size, c_Size);
+		fxaaPlain.SetViewportSize(c_Size, c_Size);
+		CHECK(render(fxaaSharpened, 1.0f).Pixels == render(fxaaPlain, 0.0f).Pixels);
+		// A TAA scene in renderers of single images, which draw it with FXAA.
+		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
+		SceneRenderer singleSharpened = CreateRenderer("SingleSharpened", GPUDrivenMode::Off, false);
+		SceneRenderer singlePlain = CreateRenderer("SinglePlain", GPUDrivenMode::Off, false);
+		singleSharpened.SetViewportSize(c_Size, c_Size);
+		singlePlain.SetViewportSize(c_Size, c_Size);
+		CHECK(render(singleSharpened, 1.0f).Pixels == render(singlePlain, 0.0f).Pixels);
+		CHECK_FALSE(singleSharpened.GetStats().TemporalAntiAliasing);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

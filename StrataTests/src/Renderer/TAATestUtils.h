@@ -2,6 +2,9 @@
 
 #include "Renderer/SceneRendererTestUtils.h"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -114,6 +117,34 @@ namespace Strata::Tests::TAA
 		REQUIRE(renderer.GetTemporalHistoryTexture());
 		CHECK(renderer.GetResolvedHDRTexture() == renderer.GetTemporalHistoryTexture());
 		CHECK(ReadHDR(renderer.GetResolvedHDRTexture()) == ReadHDR(renderer.GetHDRTexture()));
+	}
+
+	// The CPU prototype of the TAA's sharpening (PostProcess/Tonemap.frag, Sharpen), from which its exponent comes: the sharpened
+	// exposed luminance of a pixel from its own and its four neighbors' exposed luminances, at `amount`. `limited` false leaves
+	// out the bounds of the result (to show what they prevent).
+	constexpr double c_SharpeningContrastExponent = 8.0; // Tonemap.frag's
+
+	inline double SharpenLuminance(double center, const std::array<double, 4>& neighbors, double amount, bool limited = true)
+	{
+		const auto compress = [](double luminance) { return luminance / (1.0 + luminance); };
+		const double y = compress(center);
+		double low = y;
+		double high = y;
+		double mean = 0.0;
+		for (const double neighbor : neighbors)
+		{
+			low = std::min(low, compress(neighbor));
+			high = std::max(high, compress(neighbor));
+			mean += 0.25 * compress(neighbor);
+		}
+		const double range = high - low;
+		const double scaled = amount * std::pow(1.0 - range, c_SharpeningContrastExponent);
+		double sharpened = y + scaled * (y - mean);
+		if (limited)
+			sharpened = std::clamp(sharpened, std::max(low - scaled * range, 0.0), std::min(high + scaled * range, 0.5 * (1.0 + high)));
+		if (center <= 0.0)
+			return center;
+		return sharpened / std::max(1.0 - sharpened, 1e-7);
 	}
 
 	// Rows of boxes on a ground under a shadowed sun, seen from above at an angle.

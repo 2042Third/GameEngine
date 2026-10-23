@@ -42,8 +42,54 @@ layout(push_constant) uniform TonemapParameters
 // intermediate products stay finite in 32-bit floats.
 const float c_MaxExposedValue = 1.0e8;
 
+// How steeply the TAA's sharpening falls with the local contrast (the luminance range of its five taps, in [0, 1]): texture
+// detail of low contrast keeps most of the amount and edges little, so the anti-aliasing is not undone and halos stay faint.
+// From the CPU prototype of the sharpening (StrataTests, TAATestUtils.h), which bounds the overshoot at edges.
+const float c_SharpeningContrastExponent = 8.0;
+
 layout(location = 0) in vec2 v_UV;
 layout(location = 0) out vec4 o_Color;
+
+// An exposed scene color, with Inf and NaN cleared, within the tone curves' range.
+vec3 ExposeSceneColor(vec3 color)
+{
+	color *= u_Exposure[ST_EXPOSURE_MULTIPLIER] * u_Parameters.InversePreExposure;
+	return clamp(mix(color, vec3(0.0), isnan(color)), vec3(0.0), vec3(c_MaxExposedValue));
+}
+
+// The TAA's sharpening of the displayed image (never of the history): the center's luminance moves away from the mean of its
+// four neighbors, in compressed luminance (L / (1 + L)), by an amount falling steeply with the five taps' range, bounded to
+// that range widened by the amount times the range (so thin lines, glints and fine texture can still sharpen) and below 1.
+// Only the luminance changes, so edges get no color fringes, and a black pixel stays black.
+vec3 Sharpen(vec3 color)
+{
+	ivec2 pixel = ivec2(gl_FragCoord.xy); // The viewport starts at 0, 0: fragments line up with the scene color's texels
+	ivec2 last = textureSize(sampler2D(u_SceneColor, u_PointSampler), 0) - 1;
+	float neighbors[4] = float[4](
+		Luminance(ExposeSceneColor(texelFetch(sampler2D(u_SceneColor, u_PointSampler), clamp(pixel + ivec2(-1, 0), ivec2(0), last), 0).rgb)),
+		Luminance(ExposeSceneColor(texelFetch(sampler2D(u_SceneColor, u_PointSampler), clamp(pixel + ivec2(1, 0), ivec2(0), last), 0).rgb)),
+		Luminance(ExposeSceneColor(texelFetch(sampler2D(u_SceneColor, u_PointSampler), clamp(pixel + ivec2(0, -1), ivec2(0), last), 0).rgb)),
+		Luminance(ExposeSceneColor(texelFetch(sampler2D(u_SceneColor, u_PointSampler), clamp(pixel + ivec2(0, 1), ivec2(0), last), 0).rgb)));
+	float centerLuminance = Luminance(color);
+	float center = centerLuminance / (1.0 + centerLuminance);
+	float low = center;
+	float high = center;
+	float mean = 0.0;
+	for (int index = 0; index < 4; index++)
+	{
+		float neighbor = neighbors[index] / (1.0 + neighbors[index]);
+		low = min(low, neighbor);
+		high = max(high, neighbor);
+		mean += 0.25 * neighbor;
+	}
+	float range = high - low;
+	float amount = u_Parameters.Sharpening * pow(1.0 - range, c_SharpeningContrastExponent);
+	float sharpened = clamp(center + amount * (center - mean), max(low - amount * range, 0.0), min(high + amount * range, 0.5 * (1.0 + high)));
+	if (centerLuminance <= 0.0)
+		return color;
+	// Compressed luminance this close to 1 comes from the largest exposed values only: kept finite.
+	return color * ((sharpened / max(1.0 - sharpened, 1e-7)) / centerLuminance);
+}
 
 // ACES filmic curve fitted by Stephen Hill (RRT + ODT, sRGB primaries).
 vec3 TonemapACES(vec3 color)
@@ -113,8 +159,9 @@ void main()
 {
 	// Inf or NaN (from a broken input or an extreme exposure) would make every tone curve return NaN.
 	// The exposure multiplies luminance; the scene color is pre-exposed, so its factor is divided out (exactly).
-	vec3 color = texture(sampler2D(u_SceneColor, u_PointSampler), v_UV).rgb * (u_Exposure[ST_EXPOSURE_MULTIPLIER] * u_Parameters.InversePreExposure);
-	color = clamp(mix(color, vec3(0.0), isnan(color)), vec3(0.0), vec3(c_MaxExposedValue));
+	vec3 color = ExposeSceneColor(texture(sampler2D(u_SceneColor, u_PointSampler), v_UV).rgb);
+	if (u_Parameters.Sharpening > 0.0)
+		color = min(Sharpen(color), vec3(c_MaxExposedValue));
 	if (u_Parameters.BloomIntensity > 0.0)
 	{
 		// The bloom is already exposed. Without a threshold it holds all the light, and a small fraction of it
