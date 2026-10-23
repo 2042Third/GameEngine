@@ -235,12 +235,15 @@ extern "C"
 		StrataScriptWindowMode_Borderless = 2  /* A window covering the display at the desktop's resolution */
 	} StrataScriptWindowMode;
 
-	/* The game UI's actions (UIIsActionPressed, UIIsActionDown); the engine's UIAction values. */
+	/*
+	 * The game UI's actions (UIIsActionPressed, UIIsActionDown); the engine's UIAction values. They are the input actions of
+	 * the project's map UI (UI/Submit, UI/Cancel, UI/Up...), whose bindings the project and the players may change.
+	 */
 	typedef enum StrataScriptUIAction
 	{
-		StrataScriptUIAction_Submit = 0, /* Enter, keypad Enter, Space, gamepad A */
-		StrataScriptUIAction_Cancel = 1, /* Escape, gamepad B */
-		StrataScriptUIAction_Up = 2,     /* Arrow keys, the d-pad and the left stick of any gamepad */
+		StrataScriptUIAction_Submit = 0,
+		StrataScriptUIAction_Cancel = 1,
+		StrataScriptUIAction_Up = 2,
 		StrataScriptUIAction_Down = 3,
 		StrataScriptUIAction_Left = 4,
 		StrataScriptUIAction_Right = 5
@@ -562,8 +565,8 @@ extern "C"
 		 * the others of its group off). Values set here raise no OnUIValueChanged: the callbacks report the player's input.
 		 * UIGetText follows the text buffer protocol; colors are display (sRGB) RGBA from 0 to 1. UISetFocus focuses an
 		 * interactable selectable shown on a canvas that receives input (0 clears the focus). The pointer and the actions
-		 * (StrataScriptUIAction: Submit, Cancel, Up, Down, Left, Right, from keys, gamepad buttons and the left stick) are
-		 * those of the UI's latest update, which runs before the scripts' OnUpdate.
+		 * (StrataScriptUIAction: Submit, Cancel, Up, Down, Left, Right, the input actions of the map UI) are those of the UI's
+		 * latest update, which runs before the scripts' OnUpdate.
 		 */
 		uint64_t (*UIGetText)(StrataScriptContext* context, StrataScriptEntityID entity, char* buffer, uint64_t capacity);
 		bool (*UISetText)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString text);
@@ -604,6 +607,32 @@ extern "C"
 		bool (*WorldIsLoadedAround)(StrataScriptContext* context, const float* position, float radius);
 		bool (*WorldSetLayerEnabled)(StrataScriptContext* context, StrataScriptString layer, bool enabled);
 		int32_t (*WorldIsLayerEnabled)(StrataScriptContext* context, StrataScriptString layer);
+
+		/*
+		 * Input actions (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use): the project's
+		 * named controls, which the players may rebind. An action is named "<Map>/<Action>", or by its bare name when no other
+		 * map has an action of that name (ignoring case); unknown and ambiguous names fail and are reported. The state is that
+		 * of the current input frame: Down, Pressed (down from this frame on) and Released (up from this frame on).
+		 * InputGetActionValue writes (x, y): a Button's x is 1 while down, an Axis' x is its value (-1 to 1), a Vector2 is the
+		 * vector (+Y up); zeros on failure. A disabled map's actions read as up; InputIsActionMapEnabled answers 1, 0, or -1 for
+		 * an unknown map. InputGetActionBindings copies the bindings the action uses (the players' when they replaced the
+		 * project's), each followed by '\n' (the text buffer protocol); InputSetActionBindings replaces them for the players
+		 * from the next input frame on, given as bindings each followed by '\n' (the last one's may be left out; empty text
+		 * unbinds the action), and refuses the whole list, changing nothing, when one is no binding, one the action's kind
+		 * cannot use, or there are more than 8. InputResetActionBindings restores the project's bindings of an action, or of
+		 * every action for an empty name. InputSaveBindings writes the players' bindings into the game's save directory (the
+		 * engine's file, outside the save files), from which the program running the game reads them when the game starts.
+		 */
+		bool (*InputIsActionDown)(StrataScriptContext* context, StrataScriptString action);
+		bool (*InputIsActionPressed)(StrataScriptContext* context, StrataScriptString action);
+		bool (*InputIsActionReleased)(StrataScriptContext* context, StrataScriptString action);
+		bool (*InputGetActionValue)(StrataScriptContext* context, StrataScriptString action, float outValue[2]);
+		bool (*InputSetActionMapEnabled)(StrataScriptContext* context, StrataScriptString map, bool enabled);
+		int32_t (*InputIsActionMapEnabled)(StrataScriptContext* context, StrataScriptString map);
+		uint64_t (*InputGetActionBindings)(StrataScriptContext* context, StrataScriptString action, char* buffer, uint64_t capacity);
+		bool (*InputSetActionBindings)(StrataScriptContext* context, StrataScriptString action, StrataScriptString bindings);
+		bool (*InputResetActionBindings)(StrataScriptContext* context, StrataScriptString action);
+		bool (*InputSaveBindings)(StrataScriptContext* context);
 
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;

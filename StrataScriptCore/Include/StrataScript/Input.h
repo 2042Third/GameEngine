@@ -5,7 +5,10 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace Strata
 {
@@ -361,6 +364,120 @@ namespace Strata
 			if (!host)
 				return {};
 			return Detail::ReadHostString([&](char* buffer, uint64_t capacity) { return host->GetTypedText(Detail::GetContext(), buffer, capacity); });
+		}
+
+		// Input actions: the project's named controls (Project Settings > Input Actions), which players can rebind. Name an
+		// action "<Map>/<Action>" ("Gameplay/Jump"), or by its bare name ("Jump") when no other map has an action of that name;
+		// unknown and ambiguous names read as up and the engine logs a warning. Read actions rather than keys wherever a player
+		// could want another control. The state is the current frame's, like keys': read Pressed and Released in OnUpdate.
+		static bool IsActionDown(std::string_view action)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputIsActionDown);
+			return host && host->InputIsActionDown(Detail::GetContext(), Detail::ToABIString(action));
+		}
+
+		static bool IsActionPressed(std::string_view action)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputIsActionPressed);
+			return host && host->InputIsActionPressed(Detail::GetContext(), Detail::ToABIString(action));
+		}
+
+		static bool IsActionReleased(std::string_view action)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputIsActionReleased);
+			return host && host->InputIsActionReleased(Detail::GetContext(), Detail::ToABIString(action));
+		}
+
+		// A Vector2 action's vector (+X right, +Y up, length at most 1, its dead zone applied); an Axis action's value in x (-1
+		// to 1); a Button action's x is 1 while it is down.
+		static glm::vec2 GetActionValue(std::string_view action)
+		{
+			float value[2] = { 0.0f, 0.0f };
+			if (const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputGetActionValue))
+				host->InputGetActionValue(Detail::GetContext(), Detail::ToABIString(action), value);
+			return glm::vec2(value[0], value[1]);
+		}
+
+		// An Axis action's value (-1 to 1): the x of GetActionValue.
+		static float GetActionAxis(std::string_view action)
+		{
+			return GetActionValue(action).x;
+		}
+
+		// A disabled map's actions read as up (a vehicle's controls while walking). Maps start as the project says, in every
+		// session. False for a map the project does not have.
+		static bool SetActionMapEnabled(std::string_view map, bool enabled)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputSetActionMapEnabled);
+			return host && host->InputSetActionMapEnabled(Detail::GetContext(), Detail::ToABIString(map), enabled);
+		}
+
+		// Nothing for a map the project does not have.
+		static std::optional<bool> IsActionMapEnabled(std::string_view map)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputIsActionMapEnabled);
+			const int32_t enabled = host ? host->InputIsActionMapEnabled(Detail::GetContext(), Detail::ToABIString(map)) : -1;
+			if (enabled < 0)
+				return std::nullopt;
+			return enabled != 0;
+		}
+
+		// The bindings an action uses ("Key/Space", "Gamepad/A", "2D:Key/W,Key/S,Key/A,Key/D"...): the players' when they
+		// rebound it, else the project's. A rebinding menu shows them.
+		static std::vector<std::string> GetActionBindings(std::string_view action)
+		{
+			std::vector<std::string> bindings;
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputGetActionBindings);
+			if (!host)
+				return bindings;
+			const std::string text = Detail::ReadHostString([&](char* buffer, uint64_t capacity)
+			{
+				return host->InputGetActionBindings(Detail::GetContext(), Detail::ToABIString(action), buffer, capacity);
+			});
+			size_t start = 0;
+			for (size_t end = text.find('\n'); end != std::string::npos; end = text.find('\n', start))
+			{
+				bindings.push_back(text.substr(start, end - start));
+				start = end + 1;
+			}
+			return bindings;
+		}
+
+		// Replaces an action's bindings for the players (at most 8, in the text GetActionBindings returns; none unbinds it),
+		// from the next frame on. False, changing nothing, when one is no binding or one the action's kind cannot use (a Button
+		// takes keys, mouse and gamepad buttons and half axes such as "Gamepad/LeftX+"; an Axis also whole axes and
+		// "1D:<negative>,<positive>"; a Vector2 sticks and "2D:<up>,<down>,<left>,<right>"). Players keep them for the session;
+		// SaveBindings keeps them for the next.
+		static bool SetActionBindings(std::string_view action, const std::vector<std::string>& bindings)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputSetActionBindings);
+			if (!host)
+				return false;
+			std::string text;
+			for (const std::string& binding : bindings)
+			{
+				// One binding per line: a line break inside one would make two.
+				if (binding.find('\n') != std::string::npos)
+					return false;
+				text += binding;
+				text += '\n';
+			}
+			return host->InputSetActionBindings(Detail::GetContext(), Detail::ToABIString(action), Detail::ToABIString(text));
+		}
+
+		// Restores the project's bindings of an action, or of every action without a name (a menu's "Reset to defaults").
+		static bool ResetActionBindings(std::string_view action = {})
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputResetActionBindings);
+			return host && host->InputResetActionBindings(Detail::GetContext(), Detail::ToABIString(action));
+		}
+
+		// Keeps the players' bindings for later sessions (a file of the engine's in the game's save directory, never among the
+		// save files): call it when a rebinding menu closes. False when the game has no save directory or the write failed.
+		static bool SaveBindings()
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputSaveBindings);
+			return host && host->InputSaveBindings(Detail::GetContext());
 		}
 	};
 

@@ -237,7 +237,8 @@ reserved map `UI` of the input actions) and repeats held ones. Input actions
 mouse buttons, gamepad controls and composites, the project settings section `Input.Actions` (read through
 `IProjectSettings`, the default set without one), evaluated once per input frame in Application's Input stage after the
 window's events, with the players' bindings (`<save directory>/InputBindings.json`), map enables, simulated actions and
-binding capture (DeveloperGuide.md, "Input actions").
+binding capture (DeveloperGuide.md, "Input actions"). Scripts read and rebind them by name through the host functions
+`InputIsActionDown` to `InputSaveBindings`.
 
 **Math** (`Math/`). Engine conventions in `Math.h`: right-handed, +Y up, -Z forward, reversed-Z projections, Euler
 angles in degrees. `AABB`, `Frustum`, `Ray`, and `Random` (thread-local generators).

@@ -1092,6 +1092,17 @@ section; the composition root runs it first, and Input is a module every engine 
   control it took stays up for actions until an input frame went by with it released, so the captured press triggers
   nothing, also when it was pressed and released while play was paused (Input keeps those transitions for the game's next
   input frame).
+- **Scripts** read and rebind actions by name (`StrataScript/Input.h`; host functions `InputIsActionDown` to
+  `InputSaveBindings`, appended to ABI version 1): `Input::IsActionDown`, `IsActionPressed`, `IsActionReleased`,
+  `GetActionValue` (a Button's x is 1 while down, an Axis' x its value) and `GetActionAxis`, `SetActionMapEnabled` and
+  `IsActionMapEnabled` (nullopt for an unknown map: an answer, not misuse), `GetActionBindings`, `SetActionBindings`,
+  `ResetActionBindings` (without a name: every action) and `SaveBindings`, which the game calls when its rebinding menu
+  closes. Bindings cross the ABI as text, each followed by `'\n'` (the last one's optional on the way in; empty text
+  unbinds); the host refuses the whole list, changing nothing, when one is no binding or one the action's kind cannot use.
+  Unknown and ambiguous names, refused lists, unreadable text and a missing save directory are misuse: reported through
+  `ScriptSystem::ReportProblem`, which logs each message once per script and entity, with failure values. Tests:
+  `Scripting.InputActions` (the API module's `InputActionScripts.cpp`); the feature scripts' `InputFeatures` rebinds, saves
+  and resets around the simulated press.
 
 ### Preferences
 
@@ -1387,7 +1398,8 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
 - Input: gamepads (`Input::IsGamepadConnected`, `IsGamepadButtonDown/Pressed/Released`, `GetGamepadAxis` and
   `GetGamepadStick` with dead zones) and the cursor (`Input::SetCursorMode`: Normal, Hidden, Locked for mouse look, which
   `Input::SetGameCursorMode` applies while the game has the input; play mode stopping gives it back). `Input::GetTypedText`
-  (host function `GetTypedText`) reads the frame's typed text.
+  (host function `GetTypedText`) reads the frame's typed text. The project's input actions: `Input::IsActionDown` to
+  `SaveBindings` (host functions `InputIsActionDown` to `InputSaveBindings`, [Input actions](#input-actions)).
 - Game UI (host functions `UIGetText` to `UIIsActionDown`, then `GetUnscaledDeltaTime`, `GetRealTime` and
   `GetTypedText`, appended to ABI version 1 after `PhysicsGetLayerIndex`): `UIElement` (`Entity::GetUI`: text, image,
   color, interactability, a slider's or toggle's value, the focus) and `UI` (the focus, `IsPointerOverUI`, the UI
@@ -1412,7 +1424,8 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   a project and calls `InputActions::Update()` after its frame's input ([Input actions](#input-actions)).
 - Host function order: the character controller, gamepad, cursor, window, save file and collision layer functions
   (`CharacterMove` to `PhysicsGetLayerIndex`) are appended to ABI version 1 after the Animator functions, then wave 4's
-  world streaming functions (`WorldRequestCellsAround` to `WorldIsLayerEnabled`).
+  world streaming functions (`WorldRequestCellsAround` to `WorldIsLayerEnabled`), then wave 6's input action functions
+  (`InputIsActionDown` to `InputSaveBindings`).
 - World streaming: `World::RequestCellsAround` (a `WorldCellRequest`, released with `Release`), `IsLoadedAround`,
   `SetLayerEnabled` and `IsLayerEnabled` (`StrataScript/World.h`) go through the scene service `IWorldStreaming` the
   World system offers in every running scene; in a scene that streams no world (`IWorldStreaming::IsStreaming` false)

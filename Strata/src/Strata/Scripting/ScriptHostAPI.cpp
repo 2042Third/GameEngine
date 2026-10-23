@@ -5,7 +5,9 @@
 #include "Strata/Core/EngineServices.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/SaveFiles.h"
+#include "Strata/Core/StringUtils.h"
 #include "Strata/Input/Input.h"
+#include "Strata/Input/InputActions.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/ComponentAccess.h"
@@ -22,6 +24,7 @@
 
 #include <glm/gtc/type_ptr.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -29,6 +32,8 @@
 #include <exception>
 #include <iterator>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -2739,6 +2744,219 @@ namespace Strata
 		}
 
 		////////////////////////////////////////////////////////////////////////////////
+		// Input actions
+		////////////////////////////////////////////////////////////////////////////////
+
+		// The project's actions as of the current input frame (InputActions, which the program running the game updates after the
+		// frame's input). Unknown and ambiguous names are misuse: ReportProblem logs each distinct message once, so a script that
+		// asks for the same wrong name every frame is reported once per function.
+
+		std::optional<InputActionState> ReadActionState(ScriptSystem& system, StrataScriptString action, const char* function)
+		{
+			std::string error;
+			std::optional<InputActionState> state = InputActions::GetState(ScriptStringView(action), &error);
+			if (!state)
+				system.ReportProblem(function, error);
+			return state;
+		}
+
+		template<typename Query>
+		bool QueryAction(StrataScriptContext* context, StrataScriptString action, const char* function, Query&& query)
+		{
+			return HostCall(function, false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, function);
+				const std::optional<InputActionState> state = system ? ReadActionState(*system, action, function) : std::nullopt;
+				return state && query(*state);
+			});
+		}
+
+		bool HostInputIsActionDown(StrataScriptContext* context, StrataScriptString action)
+		{
+			return QueryAction(context, action, "InputIsActionDown", [](const InputActionState& state) { return state.Down; });
+		}
+
+		bool HostInputIsActionPressed(StrataScriptContext* context, StrataScriptString action)
+		{
+			return QueryAction(context, action, "InputIsActionPressed", [](const InputActionState& state) { return state.Pressed; });
+		}
+
+		bool HostInputIsActionReleased(StrataScriptContext* context, StrataScriptString action)
+		{
+			return QueryAction(context, action, "InputIsActionReleased", [](const InputActionState& state) { return state.Released; });
+		}
+
+		bool HostInputGetActionValue(StrataScriptContext* context, StrataScriptString action, float outValue[2])
+		{
+			return HostCall("InputGetActionValue", false, [&]()
+			{
+				if (outValue)
+					WriteVector2(glm::vec2(0.0f), outValue);
+				ScriptSystem* system = ResolveContext(context, "InputGetActionValue");
+				if (!system)
+					return false;
+				if (!outValue)
+				{
+					system->ReportProblem("InputGetActionValue", "the output pointer is null");
+					return false;
+				}
+				const std::optional<InputActionState> state = ReadActionState(*system, action, "InputGetActionValue");
+				if (!state)
+					return false;
+				WriteVector2(state->Value, outValue);
+				return true;
+			});
+		}
+
+		bool HostInputSetActionMapEnabled(StrataScriptContext* context, StrataScriptString map, bool enabled)
+		{
+			return HostCall("InputSetActionMapEnabled", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "InputSetActionMapEnabled");
+				if (!system)
+					return false;
+				std::string error;
+				if (!InputActions::SetMapEnabled(ScriptStringView(map), enabled, &error))
+				{
+					system->ReportProblem("InputSetActionMapEnabled", error);
+					return false;
+				}
+				return true;
+			});
+		}
+
+		int32_t HostInputIsActionMapEnabled(StrataScriptContext* context, StrataScriptString map)
+		{
+			return HostCall("InputIsActionMapEnabled", int32_t(-1), [&]() -> int32_t
+			{
+				if (!ResolveContext(context, "InputIsActionMapEnabled"))
+					return -1;
+				// An unknown map is an answer (-1), not misuse, as for world and collision layers.
+				const std::optional<bool> enabled = InputActions::IsMapEnabled(ScriptStringView(map));
+				return enabled ? (*enabled ? 1 : 0) : -1;
+			});
+		}
+
+		uint64_t HostInputGetActionBindings(StrataScriptContext* context, StrataScriptString action, char* buffer, uint64_t capacity)
+		{
+			return HostCall("InputGetActionBindings", uint64_t(0), [&]() -> uint64_t
+			{
+				ScriptSystem* system = ResolveContext(context, "InputGetActionBindings");
+				if (!system)
+					return 0;
+				std::string error;
+				const std::optional<std::vector<InputBinding>> bindings = InputActions::GetBindings(ScriptStringView(action), &error);
+				if (!bindings)
+				{
+					system->ReportProblem("InputGetActionBindings", error);
+					return 0;
+				}
+				std::string text;
+				for (const InputBinding& binding : *bindings)
+				{
+					text += binding.ToString();
+					text += '\n';
+				}
+				return CopyText(text, buffer, capacity);
+			});
+		}
+
+		// Bindings each followed by '\n', the last one's optional (what InputGetActionBindings copies reads back); empty text is
+		// no binding. Nullopt, with the reason, for a text that is no binding.
+		std::optional<std::vector<InputBinding>> ParseScriptBindings(std::string_view text, std::string& outError)
+		{
+			std::vector<InputBinding> bindings;
+			size_t start = 0;
+			while (start < text.size())
+			{
+				const size_t end = std::min(text.find('\n', start), text.size());
+				const std::string_view line = text.substr(start, end - start);
+				std::string problem;
+				const std::optional<InputBinding> binding = InputBinding::Parse(line, &problem);
+				if (!binding)
+				{
+					// Quoted up to the longest binding there is: the rest of a longer line says nothing more.
+					const bool cut = line.size() > InputBinding::c_MaxTextBytes;
+					outError = fmt::format("'{}{}' is no binding: {}", StringUtils::MakeValidUTF8(line.substr(0, InputBinding::c_MaxTextBytes)),
+						cut ? "..." : "", problem);
+					return std::nullopt;
+				}
+				bindings.push_back(*binding);
+				start = end + 1;
+			}
+			return bindings;
+		}
+
+		bool HostInputSetActionBindings(StrataScriptContext* context, StrataScriptString action, StrataScriptString bindings)
+		{
+			return HostCall("InputSetActionBindings", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "InputSetActionBindings");
+				if (!system)
+					return false;
+				if (bindings.Size > 0 && ScriptStringView(bindings).empty())
+				{
+					system->ReportProblem("InputSetActionBindings", "the bindings text is not readable (a null pointer, or too long)");
+					return false;
+				}
+				std::string error;
+				const std::optional<std::string> name = InputActions::GetQualifiedName(ScriptStringView(action), &error);
+				const std::optional<std::vector<InputBinding>> parsed = name ? ParseScriptBindings(ScriptStringView(bindings), error) : std::nullopt;
+				if (!parsed)
+				{
+					system->ReportProblem("InputSetActionBindings", name ? fmt::format("{}: {}", *name, error) : error);
+					return false;
+				}
+				if (!InputActions::SetBindings(*name, *parsed, &error))
+				{
+					system->ReportProblem("InputSetActionBindings", error);
+					return false;
+				}
+				return true;
+			});
+		}
+
+		bool HostInputResetActionBindings(StrataScriptContext* context, StrataScriptString action)
+		{
+			return HostCall("InputResetActionBindings", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "InputResetActionBindings");
+				if (!system)
+					return false;
+				// An empty name resets every action: a name that cannot be read must not become one.
+				if (action.Size > 0 && ScriptStringView(action).empty())
+				{
+					system->ReportProblem("InputResetActionBindings", "the action name is not readable (a null pointer, or too long)");
+					return false;
+				}
+				std::string error;
+				if (!InputActions::ResetBindings(ScriptStringView(action), &error))
+				{
+					system->ReportProblem("InputResetActionBindings", error);
+					return false;
+				}
+				return true;
+			});
+		}
+
+		bool HostInputSaveBindings(StrataScriptContext* context)
+		{
+			return HostCall("InputSaveBindings", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "InputSaveBindings");
+				if (!system)
+					return false;
+				std::string error;
+				if (!InputActions::SaveBindings(&error))
+				{
+					system->ReportProblem("InputSaveBindings", error);
+					return false;
+				}
+				return true;
+			});
+		}
+
+		////////////////////////////////////////////////////////////////////////////////
 		// The table
 		////////////////////////////////////////////////////////////////////////////////
 
@@ -2888,7 +3106,17 @@ namespace Strata
 	X(WorldReleaseCells) \
 	X(WorldIsLoadedAround) \
 	X(WorldSetLayerEnabled) \
-	X(WorldIsLayerEnabled)
+	X(WorldIsLayerEnabled) \
+	X(InputIsActionDown) \
+	X(InputIsActionPressed) \
+	X(InputIsActionReleased) \
+	X(InputGetActionValue) \
+	X(InputSetActionMapEnabled) \
+	X(InputIsActionMapEnabled) \
+	X(InputGetActionBindings) \
+	X(InputSetActionBindings) \
+	X(InputResetActionBindings) \
+	X(InputSaveBindings)
 
 		struct HostFunctionEntry
 		{

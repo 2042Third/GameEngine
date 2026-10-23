@@ -106,6 +106,28 @@ presets hold paths of your machine: the `.gitignore` the editor writes next to t
 and the editor rewrites them when the engine or its compiler changes (unless you removed the `strata.dev/editor` vendor
 entry to keep your own).
 
+## Input actions and rebinding
+
+Read the player's controls through the project's input actions (**Project Settings > Input Actions**) rather than fixed
+keys, so that players can choose other controls:
+
+```cpp
+if (Input::IsActionPressed("Jump"))                          // A Button: also IsActionDown, IsActionReleased
+	controller.Jump(5.0f);
+const glm::vec2 move = Input::GetActionValue("Gameplay/Move"); // A Vector2: WASD or a stick, length at most 1
+const float steer = Input::GetActionAxis("Steer");            // An Axis: -1 to 1
+Input::SetActionMapEnabled("Vehicle", true);                  // A disabled map's actions read as up
+```
+
+Name an action `<Map>/<Action>`, or by its bare name when no other map has an action of that name: the map **UI** has
+`Left`, so a game's own `Left` needs its map's name (`Gameplay/Left`). A misspelled or ambiguous name reads as up, and
+the Console says which script asked. A rebinding menu shows `Input::GetActionBindings("Jump")` (texts such as
+`Key/Space` or `Gamepad/A`), sets the player's choice with `Input::SetActionBindings("Jump", {"Key/J"})` (refused when the
+action's kind cannot use it), offers `Input::ResetActionBindings()` to go back to the project's bindings, and calls
+`Input::SaveBindings()` when it closes: the next session starts with them. In the editor they are kept in the project's
+`.strata/Saves` folder, beside the game's save files, and replace the project's bindings of those actions at every Play
+until the game saves others.
+
 ## Hot reload
 
 Build while the game plays and the new code takes over: every script instance is recreated with its fields kept, and

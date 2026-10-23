@@ -132,6 +132,9 @@ ST_SCRIPT_CLASS(Turret)
 - `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`,
   `GetUnscaledDeltaTime` and `GetRealTime` (they go on at time scale 0: pause menus, fades).
 - `Input::GetTypedText()`: the UTF-8 text typed this frame (name entry, chat).
+- Input actions (the project's named controls, rebindable by players): `Input::IsActionDown/Pressed/Released("Jump")`,
+  `GetActionValue`, `GetActionAxis`, `SetActionMapEnabled`, `GetActionBindings`/`SetActionBindings`,
+  `ResetActionBindings`, `SaveBindings`: see [Input actions and rebinding](#input-actions-and-rebinding).
 - `UIElement` (`entity.GetUI()`) and `UI`: the game UI, see [Game UI](#game-ui).
 - `Log::Info/Warn/Error/Trace(args...)` - arguments are concatenated (`Log::Info("Health ", health)`).
 - `RigidBody` (`GetEntity().GetRigidBody()`), `Physics` (raycasts, overlaps), `Collision` (contact callbacks),
@@ -312,7 +315,7 @@ Entity PauseMenu;
 void OnUpdate(float) override
 {
 	ScoreLabel.GetUI().SetText("Score: " + std::to_string(score)); // Setting the same text again costs nothing
-	if (UI::IsActionPressed(UIAction::Cancel))       // Escape or gamepad B
+	if (UI::IsActionPressed(UIAction::Cancel))       // UI/Cancel: Escape or gamepad B unless rebound
 	{
 		const bool paused = !PauseMenu.IsActive();
 		PauseMenu.SetActive(paused);
@@ -352,7 +355,8 @@ void OnUISubmit(Entity widget) override             // Enter in an input field (
 - `UI`: `GetFocused`, `ClearFocus`, `IsPointerOverUI` (ignore gameplay mouse aiming while it is true),
   `IsActionPressed/IsActionDown(UIAction::Submit/Cancel/Up/Down/Left/Right)`.
 - The UI takes the clicks and scrolling that start over it: `Input`'s mouse buttons report nothing for them. Keyboard and
-  gamepad navigation (arrows, d-pad, left stick; Enter, Space or gamepad A clicks) moves the focus by itself.
+  gamepad navigation (the map `UI`'s actions: by default arrows, d-pad, left stick; Enter, Space or gamepad A clicks)
+  moves the focus by itself.
 - A widget's callbacks reach the scripts on its entity and on its `EventTarget` (one controller script for a whole menu).
 - `Motion::SmoothDamp(current, target, velocity, smoothTime, deltaTime)` eases values (cameras, health bars) without
   overshooting; `Motion::LookAt(from, to)` is the rotation that points -Z at a target.
@@ -431,6 +435,32 @@ Input::SetCursorMode(CursorMode::Normal);  // Menus (Hidden hides it over the ga
 game has the input: in the editor while the Game view is focused (Shift+F1 frees the cursor, clicking the game view
 takes it again, stopping play gives it back). Tools press buttons and move sticks with `input.gamepadButton` and
 `input.gamepadAxis`.
+
+### Input actions and rebinding
+
+Read player controls through the project's input actions (Project Settings > Input Actions, or the
+`inputActions.setMap`/`setAction` commands; define them before the scripts that read them), not fixed keys, wherever a
+player could want another control:
+
+```cpp
+if (Input::IsActionPressed("Jump"))                     // Button: IsActionDown/Pressed/Released, like keys (read in OnUpdate)
+	controller.Jump(5.0f);
+const glm::vec2 move = Input::GetActionValue("Move");   // Vector2: sticks or 2D:Key/W,Key/S,Key/A,Key/D; dead zone applied, length <= 1
+const float steer = Input::GetActionAxis("Steer");      // Axis: -1 to 1 (1D:Key/A,Key/D, Gamepad/LeftX...)
+Input::SetActionMapEnabled("Vehicle", inCar);           // A disabled map's actions read as up; maps start as the project says
+```
+
+- Names: `"<Map>/<Action>"`, or the bare name when no other map has an action of that name (case is ignored). The map
+  `UI` (`Submit`, `Cancel`, `Up`, `Down`, `Left`, `Right`: what menus navigate with) always exists, so a game's own `Left`
+  is read as `"Gameplay/Left"`. Unknown and ambiguous names read as up and log one warning naming the script.
+- A rebinding menu: `Input::GetActionBindings("Jump")` lists the binding texts (`Key/Space`, `Mouse/Left`, `Gamepad/A`,
+  `Gamepad/LeftX+`, `Gamepad/LeftStick`, `1D:...`, `2D:...`); `Input::SetActionBindings("Jump", {"Key/J", "Gamepad/B"})`
+  replaces them for the player from the next frame on (false, changing nothing, when one is no binding or one the kind
+  cannot use: a Button takes keys, buttons and half axes; an Axis also whole axes and 1D composites; a Vector2 sticks
+  and 2D composites; at most 8; `{}` unbinds); `Input::ResetActionBindings("Jump")` (no name: every action) restores the
+  project's. Call `Input::SaveBindings()` when the menu closes: the engine keeps them in the game's save directory (not
+  among `ListSaveFiles`) and loads them when the game starts (in the editor at every Play, from `<project>/.strata/Saves`).
+- Tools press actions' bindings with the `input.*` commands (`input.key`, `input.gamepadButton`...).
 
 ### The window and save files
 
