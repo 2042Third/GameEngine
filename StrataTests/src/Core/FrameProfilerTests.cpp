@@ -617,8 +617,17 @@ TEST_SUITE("Core.FrameProfiler")
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 		while (started.load() < 2 && std::chrono::steady_clock::now() < deadline)
 			std::this_thread::yield();
-		// Never a job of this test on the waiting thread: Wait would run one no worker started, which counts for no pool.
-		REQUIRE(started.load() == 2);
+		// Never a job of this test on the waiting thread: Wait would run one no worker started, which counts for no pool. When
+		// not both started, the jobs are stopped and waited for before the test fails: one that spins would keep the job
+		// system's shutdown waiting for ever.
+		const bool bothStarted = started.load() == 2;
+		if (!bothStarted)
+		{
+			stop.store(true);
+			first.Wait();
+			second.Wait();
+		}
+		REQUIRE(bothStarted);
 		profiler.BeginFrame();
 		std::this_thread::sleep_for(std::chrono::milliseconds(30));
 		stop.store(true);
