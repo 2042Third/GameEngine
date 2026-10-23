@@ -538,11 +538,12 @@ Open items and deferrals later waves own:
   command can make (a key name, `input.click`'s hit test) releases its holds and resumes the game, but the step's
   earlier events have already reached the game's input (checking every value up front needs a dry run of each
   `input.*` command); the Game view at a fixed resolution reports the editor's UI scale as the game's content scale.
-- Flaky tests seen once, not reproduced since: Windows `CrashGuard`'s "repeated faults on other threads" and the
-  Mac's `GPU.AssetResidency` "Arrivals that need room...".
+- Flaky tests seen once, not reproduced since: Windows `CrashGuard`'s "repeated faults on other threads", the
+  Mac's `GPU.AssetResidency` "Arrivals that need room..." and, in full parallel runs while the other wave-6 stream
+  loaded the Mac, `GPU.TextureStreaming`'s tight-budget case and `GPU.SceneRenderer`'s "Resizing right after a frame
+  keeps its render targets..." (8 validation errors; it passed alone three times, and in the whole GPU suite run alone).
 - Game UI (wave 4's `game-ui`): world-space canvases draw unlit, after post-processing, and the game's hit tests on
-  them ignore scene geometry in front (the editor's picks check meshes); UI action bindings use the engine's input
-  names (`Key/KPEnter`, `Gamepad/A`) until an input-actions asset names actions (`project-settings`).
+  them ignore scene geometry in front (the editor's picks check meshes).
 - Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
   `GameRuntime`, the editor and many tests use the script engine directly; physics, audio and animation can be left
   out (`STRATA_WITH_PHYSICS`, `STRATA_WITH_AUDIO`, `STRATA_WITH_ANIMATION`, wave 4's `engine-modules`).
@@ -724,6 +725,19 @@ Open items and deferrals later waves own:
     where the cases before it warmed the process): its view draws the texture whole, as main did, and its windows end
     once the texture is whole (later attempts 2.97-5.23 ms), so the first attempt's hold is not the upload's. Platform
     code only CI compiles: the POSIX `Platform::FindProgram` and symbolizer (function names only on Linux and macOS).
+- Project settings and input actions (wave 6's `project-settings`), left for later: game-shell's macOS app bundle (the
+  Finder's icon, the version and copyright in `Info.plist`), installing desktop entries, signing exports, quality
+  presets (a project section registered in `SettingsRegistry`) and input only while the game's window has the focus
+  (gamepads are still read while a shipped game is in the background, as in 0.5.0); local multiplayer (devices assigned
+  to players, an action state per player) and per-world input contexts; input processors (invert, sensitivity, curves),
+  modifiers and chords, and mouse motion and scroll as action sources; binding names that follow the keyboard layout in
+  games (`Window::GetLayoutKey` is out of scripts' reach); scripts reading the game's title and version; moving the
+  Physics Playground, the Open World and Tetris onto actions, and a rebinding row in the Third-Person Adventure's
+  Settings menu; copying settings sections between projects, rebinding editor shortcuts and theme variants; the fixed
+  timestep and gravity as project settings (they change every scene's behaviour: the owner's choice). Opening a scene
+  clears the undo history, the project's steps with it (the project file was written at each step, so nothing is lost).
+  `Platform.DockIcon` needs a window server, so it runs on the Mac only (`StrataTests.DockIcon`, label `gpu`) and CI
+  never runs it; no Linux desktop has listed an exported game's desktop entry yet (CI's Linux jobs check the file).
 - Waiting for the Windows reference machine (i7-13700K, RTX 5090), away since 2026-10-13 while work goes on on a Mac
   (Apple M2 Max, MoltenVK): nothing here may be decided from the Mac's numbers.
   - Budgets: every `Budgets.json` entry stays the reference machine's; a change on the Mac that makes a metric cheaper
@@ -792,9 +806,44 @@ Open items and deferrals later waves own:
     build before them (3 interleaved pairs, ratios of medians): `Perf.Scene.IdlePlayFrame1M` 1.04 (0.057 to 0.059 us, the
     game UI's check for changed actions), `Perf.GameUI.IdleFrame10k` 0.82, `Layout10k` 1.00, `PerfGPU.GameUI.Render10k`
     1.02 and `RenderIdle10k` 0.93; the editor frames (`PerfGPU.Editor.{Edit,Play}FrameNested{100k,1M}`, 0.82-1.04) wait
-    for the display on the Mac and are for the reference machine to judge.
+    for the display on the Mac and are for the reference machine to judge. A person has not yet looked at an exported
+    game's icon and Properties in Windows Explorer (CI reads them back through Win32).
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
+
+### Wave 6
+
+Wave 6's two streams, `project-settings` and `render-quality`, each planned in a spec that an independent review
+corrected before work began, branched from release 0.5.0 (6425b57b) on 2026-10-22 and ran at the same time on the Mac
+(Apple M2 Max), the Windows reference machine still away. `project-settings` lands first; `render-quality` adds its part
+here when it lands.
+
+- `project-settings`: settings are sections that modules register (`SettingsRegistry`), read through `IProjectSettings`
+  on the main thread. The project file (version 3) keeps them, sections the build does not know included; exports carry
+  them in the game's manifest (version 5), which the runtime validates before the game starts; the editor writes the
+  project file on a job (`SettingsFileWriter`) and refuses to release a project whose last write failed unless forced.
+  Project changes are undo steps that leave the scene saved (`project.settings`, `project.setSettings` and the rest of
+  the MCP toolset `settings`); preferences (`Preferences.json` in the user's data folder: the external editor, imported
+  once from 0.5.0's `EditorSettings.json`, and the interface scale) are Session commands. File > Project Settings... is
+  a panel of pages (Game, Export, Collision Layers, Input Actions, and a generic page for any other section), File >
+  Preferences... a dialog. Collision layers are the project's: one table for every scene, prefab, world cell and
+  exported game (`project.setCollisionLayers`), a working copy per scene applied on the main thread; a 0.5.0 project
+  migrates once when it opens (the start scene's names first, a pair any scene kept apart stays apart, disagreements
+  logged), and the samples and the feature test project did. Input actions are maps of Button, Axis and Vector2 actions
+  bound to keys, mouse buttons, gamepad controls and 1D and 2D composites, evaluated once per input frame in the Input
+  stage; the game UI navigates with the reserved map `UI`; players rebind from scripts (a capture takes the next control
+  pressed) and their bindings stay in the game's save directory; thirteen host functions were appended (155 in all; the
+  ABI keeps version 1). The editor's Input Actions page captures bindings, `input.action` holds an action whatever its
+  bindings, and the Third-Person Adventure reads its controls as actions (on the way, pushing its left stick forward no
+  longer walks backward, nor does pushing its right stick up look down). The game's identity, a title, version, company,
+  copyright and icon (`project.setGameInfo`), reaches the exported game's window, log and manifest; on Windows the
+  executable's version information and icon, which Strata's own resource writer stamps into the copied runtime (CI reads
+  them back through Win32); on macOS the Dock's icon; on Linux a desktop entry beside the game. Every sample has a
+  title, a version and an icon. Fixed on the way: meshes that an unbudgeted wait finalized failed when the geometry pool
+  had to grow in their batch (scripted Open World starts logged "Finalization did not finish without an upload budget"
+  under load, and those terrain tiles did not draw; it happened on 0.5.0 too), and `Core.FrameProfiler`'s busy-workers
+  case failed on CI's Windows Debug runner. On the Mac `Perf.Input.Actions256` measured 6.76 us against its 20 us
+  target; the A/Bs are in the reference machine's list in the open items.
 
 ## Waves
 
