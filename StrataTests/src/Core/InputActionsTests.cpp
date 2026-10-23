@@ -908,6 +908,30 @@ TEST_SUITE("Core.InputActions")
 		Input::ProcessKey(Key::Space, true);
 		Step();
 		CHECK(InputActions::IsPressed("Jump"));
+
+		// A captured key pressed and released while play is paused (events arrive after BeginFrame, as in Application's frame):
+		// its press waits in Input for the game's next update, and the action does not see it there either.
+		const auto pausedFrame = [](KeyCode key, bool down)
+		{
+			Input::BeginFrame();
+			Input::ProcessKey(key, down);
+			InputActions::Update();
+		};
+		Input::SetSuspended(true);
+		Step();
+		REQUIRE(InputActions::BeginCapture({}));
+		pausedFrame(Key::Escape, true);
+		REQUIRE(InputActions::TakeCapturedBinding() == std::optional<std::string>("Key/Escape"));
+		pausedFrame(Key::Escape, false);
+		Input::SetSuspended(false);
+		Step();
+		CHECK_FALSE(InputActions::IsPressed("UI/Cancel"));
+		CHECK_FALSE(InputActions::IsReleased("UI/Cancel"));
+		// The next press is the game's.
+		Input::BeginFrame();
+		Input::ProcessKey(Key::Escape, true);
+		InputActions::Update();
+		CHECK(InputActions::IsPressed("UI/Cancel"));
 	}
 
 	TEST_CASE("A new project version reparses the set at the next update")

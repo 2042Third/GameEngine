@@ -106,7 +106,7 @@ namespace Strata
 			std::vector<SimulatedEvent> SimulatedQueue;
 			uint64_t EvaluatedFrame = 0;
 			CaptureState Capture;
-			std::optional<InputControl> Suppressed; // What a capture took: up for actions until it is released
+			std::optional<InputControl> Suppressed; // What a capture took: up for actions until an input frame went by with it released
 		};
 
 		ActionsState s_State;
@@ -519,7 +519,9 @@ namespace Strata
 			}
 		}
 
-		// Lets the control a capture took count for actions again once it is released.
+		// Lets the control a capture took count for actions again once an evaluated input frame saw it released. Not sooner: a
+		// press and release while input frames are suspended reach the game's next input frame as transitions (Input keeps them
+		// for it), and that frame must not report the captured press.
 		void UpdateSuppression()
 		{
 			if (!s_State.Suppressed)
@@ -646,13 +648,15 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 		Refresh();
-		UpdateSuppression();
 		UpdateCapture(false);
 		const uint64_t frame = Input::GetFrameIndex();
 		if (frame == s_State.EvaluatedFrame)
 			return;
 		s_State.EvaluatedFrame = frame;
 		Evaluate();
+		// After the evaluation: the input frame in which the captured control was released (and the press Input kept for it
+		// while frames were suspended) went by without it.
+		UpdateSuppression();
 	}
 
 	void InputActions::Reset()

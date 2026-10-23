@@ -114,8 +114,9 @@ namespace Strata
 
 		// Listens for the next control the player presses on the devices given (a key, a mouse button, a gamepad button, or an
 		// axis pushed beyond 0.5 from rest), whether or not input is enabled and also while input frames are suspended. While it
-		// listens every action reads as up, and the control it captured reads as up for actions until it is released, so the
-		// press that is captured triggers nothing. False when no device is given.
+		// listens every action reads as up, and the control it captured reads as up for actions until an input frame went by with
+		// it released, so the press that is captured triggers nothing (also when it is released while input frames are
+		// suspended). False when no device is given.
 		static bool BeginCapture(const InputCaptureDevices& devices);
 		static bool IsCapturing();
 		// The captured control's binding text ("Key/Space", "Gamepad/LeftX-") once, after which the capture is over; nullopt

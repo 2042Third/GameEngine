@@ -1089,7 +1089,9 @@ section; the composition root runs it first, and Input is a module every engine 
   that goes down on the devices given (keys, mouse buttons, gamepad buttons, an axis beyond 0.5 from rest as its half),
   comparing the raw state (`Input::IsRawKeyDown` and friends: whether or not input is enabled) at every `Update` call, also
   while input frames are suspended, so it works while play is paused. While it listens every action reads as up, and the
-  control it took stays up for actions until it is released, so the captured press triggers nothing.
+  control it took stays up for actions until an input frame went by with it released, so the captured press triggers
+  nothing, also when it was pressed and released while play was paused (Input keeps those transitions for the game's next
+  input frame).
 
 ### Preferences
 
