@@ -116,7 +116,7 @@ if (Input::IsActionPressed("Jump"))                          // A Button: also I
 	controller.Jump(5.0f);
 const glm::vec2 move = Input::GetActionValue("Gameplay/Move"); // A Vector2: WASD or a stick, length at most 1
 const float steer = Input::GetActionAxis("Steer");            // An Axis: -1 to 1
-Input::SetActionMapEnabled("Vehicle", true);                  // A disabled map's actions read as up
+Input::SetActionMapEnabled("Vehicle", true);                  // A disabled map's actions read as up (held ones release once)
 ```
 
 Name an action `<Map>/<Action>`, or by its bare name when no other map has an action of that name: the map **UI** has

@@ -635,7 +635,7 @@ TEST_SUITE("Core.InputActions")
 		CHECK(InputActions::IsPressed("Jump"));
 	}
 
-	TEST_CASE("Disabled maps' actions read as up")
+	TEST_CASE("A map disabled while its action is held releases it once, then reads as up")
 	{
 		nlohmann::json actions = MakeGameplayActions();
 		actions["Maps"].push_back({ { "Name", "Vehicle" }, { "Enabled", false }, { "Actions", nlohmann::json::array({ { { "Name", "Horn" },
@@ -653,14 +653,26 @@ TEST_SUITE("Core.InputActions")
 		Step();
 		CHECK_FALSE(InputActions::IsDown("Horn"));
 		CHECK(InputActions::IsPressed("Jump"));
-		// Disabling a map takes effect at once; enabling it again presses what is held.
+		// Disabling a map applies from the next input frame on, as a key let go would: the rest of this frame reads what it
+		// evaluated, the next one reports the release once (code waiting for it to end a charge is not left waiting), and the
+		// action reads as up after that while the key stays held.
 		CHECK(InputActions::SetMapEnabled("Gameplay", false));
+		CHECK(InputActions::IsDown("Jump"));
+		CHECK(InputActions::IsPressed("Jump"));
+		Step();
 		CHECK_FALSE(InputActions::IsDown("Jump"));
 		CHECK_FALSE(InputActions::IsPressed("Jump"));
+		CHECK(InputActions::IsReleased("Jump"));
 		CHECK(InputActions::GetValue("Jump") == glm::vec2(0.0f));
 		Step();
 		CHECK_FALSE(InputActions::IsDown("Jump"));
 		CHECK_FALSE(InputActions::IsReleased("Jump"));
+		// Enabled and disabled again before an input frame went by, the map's actions stay up and release nothing.
+		CHECK(InputActions::SetMapEnabled("Gameplay", true));
+		CHECK(InputActions::SetMapEnabled("Gameplay", false));
+		Step();
+		CHECK_FALSE(InputActions::IsReleased("Jump"));
+		// Enabling it again presses what is held.
 		CHECK(InputActions::SetMapEnabled("Gameplay", true));
 		CHECK(InputActions::SetMapEnabled("Vehicle", true));
 		Step();

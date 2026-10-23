@@ -612,6 +612,10 @@ map enables, the players' bindings, simulated actions and the capture.
   reach a running game at once); without a provider, or without the section, the default set (the UI map) applies. So
   **every program evaluates the UI map every input frame** (section 6's A/B measures it).
 - Reads go through the gameplay queries, so keyboard and pointer capture by the game UI hide bindings as they hide keys.
+- Map enables apply from the next input frame on. A map disabled while one of its actions is held lets go of it there: the
+  action reports Released once, as a key let go would, and reads as up after that, so a script waiting for the release to
+  end a charge or a held state is never left waiting (the owner's decision in S9; S7 read a disabled map's actions as up
+  at once, without a release).
 - **In-process loops** that start input frames themselves call `InputActions::Update()` where `Application` does, after
   the frame's input is in: the feature test's `PlayFeatureScene` (after `Input::BeginFrame` and its simulated input),
   and every loop among the 13 test files of 2.5 that reads actions or UI navigation. Those that run a project also
@@ -1000,8 +1004,9 @@ where the composition root starts registering the section. *Accept:*
   action named Left coexists with UI/Left, and an ambiguous bare name is refused naming both", "A set at every limit
   fits its section bound and round-trips through the project file", "Button, Axis and Vector2 values combine bindings
   as specified", "Dead zones are radial for sticks and rescaled", "Half axes press at 0.5 and release at 0.35",
-  "Pressed and Released last one input frame and survive suspended frames", "Disabled maps' actions read as up",
-  "Keyboard capture hides key bindings", "Players' bindings replace an action's list and reset restores it", "The
+  "Pressed and Released last one input frame and survive suspended frames", "A map disabled while its action is held
+  releases it once, then reads as up" (S9's renaming of S7's "Disabled maps' actions read as up"), "Keyboard capture
+  hides key bindings", "Players' bindings replace an action's list and reset restores it", "The
   bindings file round-trips, drops unknown actions and invalid bindings with one warning, and a garbage file changes
   nothing", "A capture returns the first control and no action sees it", "The captured control stays up for actions
   until it is released", "A capture runs while input frames are suspended", "A new project version reparses the set at

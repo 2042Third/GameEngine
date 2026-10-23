@@ -178,20 +178,24 @@ TEST_SUITE("Scripting.InputActions")
 		CHECK(GetBindings(scene, jump) == "Key/J;Gamepad/B;");
 		CHECK(IsState(scene, jump, true, false, false));
 
-		// Space no longer jumps; the horn's map is disabled again.
+		// Space no longer jumps; the horn's map is disabled again while H holds the horn, which the script still reads as down
+		// in this frame: the map lets go of it in the next input frame.
 		Ask(scene, horn, c_DisableMap);
 		Step(scene, { { Key::D, false } });
 		CHECK(IsState(scene, jump, false, false, true));
 		CHECK(IsState(scene, steer, false, false, true));
 		CHECK(GetField<float>(system, steer, "ActionReader", "Axis") == 0.0f);
 		CHECK(GetField<int32_t>(system, horn, "ActionReader", "MapEnabled") == 0);
+		CHECK(IsState(scene, horn, true, false, false));
+		// H is still held, but the map is disabled: the horn reports its release once, as a key let go would, then reads as up.
 		Step(scene, { { Key::J, true } });
 		CHECK(IsState(scene, jump, true, true, false));
-		CHECK(IsState(scene, horn, false, false, false)); // H is still held, but its map is disabled
+		CHECK(IsState(scene, horn, false, false, true));
 
 		// Resetting gives the action the project's bindings back from the next frame on, where Space, still held, presses it.
 		Ask(scene, jump, c_ResetBindings);
 		Step(scene, { { Key::J, false } });
+		CHECK(IsState(scene, horn, false, false, false));
 		CHECK(WasAccepted(scene, jump));
 		CHECK(GetBindings(scene, jump) == "Key/Space;Gamepad/A;");
 		CHECK(IsState(scene, jump, false, false, true));

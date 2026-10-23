@@ -404,8 +404,9 @@ namespace Strata
 			return GetActionValue(action).x;
 		}
 
-		// A disabled map's actions read as up (a vehicle's controls while walking). Maps start as the project says, in every
-		// session. False for a map the project does not have.
+		// A disabled map's actions read as up (a vehicle's controls while walking). The change applies from the next input
+		// frame on, where an action held when its map was disabled reports IsActionReleased once, as a key let go would. Maps
+		// start as the project says, in every session. False for a map the project does not have.
 		static bool SetActionMapEnabled(std::string_view map, bool enabled)
 		{
 			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputSetActionMapEnabled);

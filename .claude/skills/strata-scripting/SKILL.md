@@ -448,7 +448,7 @@ if (Input::IsActionPressed("Jump"))                     // Button: IsActionDown/
 	controller.Jump(5.0f);
 const glm::vec2 move = Input::GetActionValue("Move");   // Vector2: sticks or 2D:Key/W,Key/S,Key/A,Key/D; dead zone applied, length <= 1
 const float steer = Input::GetActionAxis("Steer");      // Axis: -1 to 1 (1D:Key/A,Key/D, Gamepad/LeftX...)
-Input::SetActionMapEnabled("Vehicle", inCar);           // A disabled map's actions read as up; maps start as the project says
+Input::SetActionMapEnabled("Vehicle", inCar);           // Off: held actions release once, then read as up; maps start as the project says
 ```
 
 - Names: `"<Map>/<Action>"`, or the bare name when no other map has an action of that name (case is ignored). The map

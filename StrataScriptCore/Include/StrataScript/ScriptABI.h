@@ -614,8 +614,9 @@ extern "C"
 		 * map has an action of that name (ignoring case); unknown and ambiguous names fail and are reported. The state is that
 		 * of the current input frame: Down, Pressed (down from this frame on) and Released (up from this frame on).
 		 * InputGetActionValue writes (x, y): a Button's x is 1 while down, an Axis' x is its value (-1 to 1), a Vector2 is the
-		 * vector (+Y up); zeros on failure. A disabled map's actions read as up; InputIsActionMapEnabled answers 1, 0, or -1 for
-		 * an unknown map. InputGetActionBindings copies the bindings the action uses (the players' when they replaced the
+		 * vector (+Y up); zeros on failure. A disabled map's actions read as up from the next input frame, which reports the
+		 * release of those held when it was disabled; InputIsActionMapEnabled answers 1, 0, or -1 for an unknown map.
+		 * InputGetActionBindings copies the bindings the action uses (the players' when they replaced the
 		 * project's), each followed by '\n' (the text buffer protocol); InputSetActionBindings replaces them for the players
 		 * from the next input frame on, given as bindings each followed by '\n' (the last one's may be left out; empty text
 		 * unbinds the action), and refuses the whole list, changing nothing, when one is no binding, one the action's kind

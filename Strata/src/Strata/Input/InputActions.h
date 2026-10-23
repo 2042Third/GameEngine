@@ -42,8 +42,9 @@ namespace Strata
 	//
 	// Values: a Button is down while any binding is (half axes from 0.5, until below 0.35); an Axis takes the binding of the
 	// largest magnitude, a Vector2 the largest length (2D composites normalized), both apply the action's dead zone and are
-	// down from 0.5 until below 0.35. A disabled map's actions read as up, and so does every action while a binding capture
-	// runs. Docs/DeveloperGuide.md, "Input actions".
+	// down from 0.5 until below 0.35. A map disabled while one of its actions is held lets go of it in the next input frame,
+	// which reports its Released as a key let go would, and its actions read as up after that. Every action reads as up while
+	// a binding capture runs. Docs/DeveloperGuide.md, "Input actions".
 	class InputActions
 	{
 	public:
@@ -82,7 +83,8 @@ namespace Strata
 		// replaced, a map enabled or disabled, a capture begun or ended. Never 0.
 		static uint64_t GetStateVersion();
 
-		// Maps start enabled as the set says; a disabled map's actions read as up until it is enabled again.
+		// Maps start enabled as the set says. Enabling or disabling one applies from the next input frame on: disabling it lets
+		// go of its held actions there (each reports Released once), and they read as up until the map is enabled again.
 		static bool SetMapEnabled(std::string_view map, bool enabled, std::string* outError = nullptr);
 		// Nullopt for a map the set does not have.
 		static std::optional<bool> IsMapEnabled(std::string_view map);

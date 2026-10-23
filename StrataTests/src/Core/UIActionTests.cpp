@@ -208,7 +208,8 @@ TEST_SUITE("Core.UIActions")
 		CHECK_FALSE(actions.IsDown(UIAction::Submit));
 		CHECK_FALSE(actions.IsDown(UIAction::Cancel));
 
-		// Updates without an input frame or a change read what the last one did; a map disabled meanwhile reads as up.
+		// Updates without an input frame or a change read what the last one did; a map disabled meanwhile lets go of the held
+		// action in the next input frame.
 		Input::SimulateKey(Key::Down, true);
 		Step(actions, 0.016f);
 		CHECK(actions.IsPressed(UIAction::Down));
@@ -216,6 +217,8 @@ TEST_SUITE("Core.UIActions")
 		CHECK(actions.IsDown(UIAction::Down));
 		CHECK(InputActions::SetMapEnabled("UI", false));
 		actions.Update(0.016f);
+		CHECK(actions.IsDown(UIAction::Down));
+		Step(actions, 0.016f);
 		CHECK_FALSE(actions.IsDown(UIAction::Down));
 		Input::Reset();
 	}

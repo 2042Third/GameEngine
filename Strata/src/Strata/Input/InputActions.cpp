@@ -289,10 +289,11 @@ namespace Strata
 			return nullptr;
 		}
 
-		// What a query reports: a disabled map's actions, and every action while a capture listens, read as up.
+		// What a query reports: every action reads as up while a capture listens. A disabled map's actions need no masking here:
+		// the input frame after the map was disabled lets them go (Evaluate).
 		InputActionState GetReported(const ActionRecord& record)
 		{
-			if (s_State.Capture.Active || !s_State.MapEnabled[record.Map])
+			if (s_State.Capture.Active)
 				return {};
 			return record.State;
 		}
@@ -468,7 +469,11 @@ namespace Strata
 				const bool wasDown = state.Down;
 				if (s_State.Capture.Active || !s_State.MapEnabled[record.Map])
 				{
+					// Let go as a released key would be: an action held when its map was disabled reports Released in this input
+					// frame and reads as up after it, so code waiting for the release (a charge, a held state) is never left
+					// waiting. While a capture listens the release is hidden with everything else (GetReported).
 					state = {};
+					state.Released = wasDown;
 					record.ValueHeld = false;
 					for (uint32_t binding = record.FirstBinding; binding < record.FirstBinding + record.BindingCount; binding++)
 					{

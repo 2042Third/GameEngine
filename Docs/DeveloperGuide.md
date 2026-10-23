@@ -1040,8 +1040,10 @@ section; the composition root runs it first, and Input is a module every engine 
   Button is down while any binding is (half axes from 0.5 until below 0.35, per gamepad; a press and release within a
   frame reports both); an Axis takes the binding of the largest magnitude (buttons 1, half axes their value), a Vector2
   the largest length (2D composites normalized: a diagonal has length 1); both apply the action's dead zone (default
-  0.15, by length, rescaled as the script SDK's `GetGamepadStick`) and are down from 0.5 until below 0.35. A disabled map's
-  actions read as up. Each `Update` first compares `IProjectSettings::GetVersion()` and reads the set again when it
+  0.15, by length, rescaled as the script SDK's `GetGamepadStick`) and are down from 0.5 until below 0.35. Enabling or
+  disabling a map applies from the next input frame on; an action held when its map is disabled reports Released in that
+  frame, as a key let go would (a script waiting for the release to end a charge is never left waiting), and its map's
+  actions read as up after it. Each `Update` first compares `IProjectSettings::GetVersion()` and reads the set again when it
   changed, keeping the state of actions that keep their qualified name, so an edit reaches a running game in its next
   frame without pressing held actions again; without a provider or a section the default set (the UI map) applies, so
   every program evaluates the UI map. The compiled form is flat arrays; `Perf.Input.Actions256` measures 256 actions of
