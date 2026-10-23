@@ -2188,6 +2188,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   becomes the Dock's icon while the game runs, below; Wayland windows take the desktop entry's), and the
   window's application id is the executable's name (`WindowSpecification::AppId`: X11's `WM_CLASS`, Wayland's app id).
   `StrataRuntime.Identity` runs a SmokeGame exported with an identity and checks its log and icon.
+- **The desktop entry on Linux** (`Editor/DesktopEntry`): Linux desktops list applications by desktop entries, so a Linux
+  host's export with the runtime writes `<Game>.desktop` next to the game: `Type=Application`, `Name` (the title), `Exec`
+  and `Icon` (the export's absolute paths), `StartupWMClass` (the executable's name, the class the runtime gives its
+  windows), `Terminal=false` and `Categories=Game;`. Values are escaped as the specification's strings (`\s` for spaces
+  at either end, `\n`, `\t`, `\r`, `\\`) and `Exec`'s program is quoted (`"`, `` ` ``, `$` and `\` escaped, `%` doubled),
+  so any path reads back; an entry that cannot be written (a path that is not UTF-8) is left out with a warning in the
+  export's result. Installing it (`~/.local/share/applications`) is the person's, and moving the folder means editing
+  it (the release README says so). The text is platform-independent: `Editor.Export.DesktopEntry` reads it back on every
+  platform, and `Editor.Export` checks that only Linux hosts write it.
 - **The Dock icon on macOS** (`Platform/GLFW/GLFWApplicationIcon`): exports are bare executables (their ad-hoc signature
   must not change, and an application bundle is a later wave's), so they have no icon of their own. `GLFWWindow::SetIcon`
   gives the largest of its images (at most 1,024 pixels) to `SetApplicationIcon`, which makes it `NSApplication`'s icon

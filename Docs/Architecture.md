@@ -3965,6 +3965,7 @@ It writes:
 | `<Game>.stgame` | `GameManifest` (version 5): name, the game's identity (title, version, company, copyright, icon file: `project.setGameInfo`), pack, start scene, loading scene (`Export.LoadingScene`, optional), module, window settings, the project's settings sections (those this build's modules claim validated, the others as stored) |
 | `<Game>.png` | The game's icon, 256 x 256 pixels, made from its texture's source image by `GameIcon` (only with an icon) |
 | `<Game>[.exe]`, `ThirdPartyNotices.md` | `StrataRuntime` from the editor's directory, renamed (`includeRuntime`) |
+| `<Game>.desktop` | On Linux hosts, with the runtime: the desktop entry (`Editor/DesktopEntry`: the title, the executable's and the icon's absolute paths, the window class), for a person to install |
 
 The module's PDB is copied when it exists, except in Dist builds or with `includeScriptSymbols: false`
 (`GameExportOptions::IncludeScriptSymbols`). Pruning is off by default: scripts may load assets by path, which no scene

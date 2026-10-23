@@ -1,6 +1,7 @@
 #include "Editor/GameExport.h"
 
 #include "Editor/AssetEdit.h"
+#include "Editor/DesktopEntry.h"
 #include "Editor/EditorContext.h"
 #include "Editor/GameIcon.h"
 #include "Editor/PEResources.h"
@@ -709,6 +710,26 @@ namespace Strata
 					std::error_code permissionError;
 					std::filesystem::permissions(result.Executable, std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec
 						| std::filesystem::perms::others_exec, std::filesystem::perm_options::add, permissionError);
+#endif
+#if defined(ST_PLATFORM_LINUX)
+					// Linux desktops list applications by their desktop entries: one next to the game, for a person to install. Its
+					// window class is the runtime's application id (GamePresentation: the executable's name).
+					DesktopEntry entry;
+					entry.Name = data->Manifest.GetDisplayTitle();
+					entry.Executable = result.Executable;
+					entry.Icon = result.Icon;
+					entry.WindowClass = FileSystem::ToUTF8(result.Executable.stem());
+					std::string entryError;
+					if (const std::optional<std::string> text = entry.ToText(&entryError))
+					{
+						result.DesktopEntryFile = options.Directory / FileSystem::FromUTF8(data->FileName + ".desktop");
+						if (!FileSystem::WriteText(result.DesktopEntryFile, *text))
+							return end(GameExportState::Failed, DescribeWriteFailure("the desktop entry", result.DesktopEntryFile));
+					}
+					else
+					{
+						result.Warnings.push_back(fmt::format("No desktop entry was written: {}", entryError));
+					}
 #endif
 				}
 				shared->DoneBytes = shared->TotalBytes.load();

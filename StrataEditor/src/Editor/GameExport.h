@@ -54,6 +54,7 @@ namespace Strata
 		std::filesystem::path AssetPack;
 		std::filesystem::path ScriptModule; // Empty for games without scripts
 		std::filesystem::path Icon;         // The game's icon, <File>.png (GameIcon); empty without one
+		std::filesystem::path DesktopEntryFile; // <File>.desktop (Editor/DesktopEntry): on Linux hosts, with the runtime
 		std::vector<std::string> Warnings;  // What a person should know about the export (an enlarged icon)
 		size_t AssetCount = 0;              // Assets in the pack
 		std::vector<AssetMetadata> ExcludedAssets; // Left out by pruning

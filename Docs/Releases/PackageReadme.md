@@ -94,7 +94,9 @@ and get its exit code, pipe its output, e.g. `.\StrataEditor --version | Write-O
    and rebuilding while the game plays reloads them without stopping it. The Game view shows the game as a player sees
    it, at the resolution you pick (`Docs/Manual/GameView.md`). `Docs/Manual/Scripting.md` describes the SDK.
 4. Choose the start scene (**File > Set as Start Scene**) and export with **File > Export Game...**. The export folder
-   holds everything the game needs: run the game's executable there.
+   holds everything the game needs: run the game's executable there. On Linux it also holds `<Game>.desktop`, which lists
+   the game among your applications once copied into `~/.local/share/applications`; it names the folder's absolute paths,
+   so after moving the folder, edit its `Exec` and `Icon` lines (or export again).
 
 ## Connect an AI agent
 

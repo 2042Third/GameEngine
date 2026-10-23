@@ -3,11 +3,13 @@
 #include "Asset/AssetTestUtils.h"
 #include "Core/SettingsTestUtils.h"
 #include "Editor/CommandTestUtils.h"
+#include "Editor/DesktopEntry.h"
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/GameExport.h"
 #include "Editor/GameIcon.h"
+#include "Editor/TestPEImage.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
 
@@ -607,6 +609,49 @@ TEST_SUITE("Editor.Export")
 		CHECK(topLeft[0] > 240);
 		CHECK(topLeft[1] < 16);
 		CHECK(topLeft[3] == 255);
+	}
+
+	TEST_CASE("On Linux hosts the export writes the desktop entry")
+	{
+		ExportHarness harness("EditorExportDesktopEntry");
+		// Any file stands in for the runtime (on Windows an executable, which the export stamps), with its notices beside it.
+		const std::filesystem::path runtimeDirectory = CreateTemporaryDirectory("EditorExportDesktopEntryRuntime");
+		const std::filesystem::path runtime = runtimeDirectory / "FakeRuntime.bin";
+#if defined(ST_PLATFORM_WINDOWS)
+		REQUIRE(FileSystem::WriteBytes(runtime, Tests::BuildTestPEImage()));
+#else
+		REQUIRE(FileSystem::WriteText(runtime, "runtime"));
+#endif
+		REQUIRE(FileSystem::WriteText(runtimeDirectory / "ThirdPartyNotices.md", "notices"));
+		const std::filesystem::path source = CreateTemporaryDirectory("EditorExportDesktopEntrySource") / "Icon.png";
+		REQUIRE(FileSystem::WriteBytes(source, EncodePNG(256, 256, MakeQuadrants(256, 256))));
+		const std::string icon = harness.Run("asset.import", { { "file", FileSystem::ToUTF8(source) }, { "directory", "Textures" } })["asset"].get<std::string>();
+		harness.Run("project.setGameInfo", { { "title", "Desktop \"Adventure\" 100%" }, { "icon", icon } });
+
+		const std::filesystem::path output = harness.Directory / "With Runtime";
+		const nlohmann::json result = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(output) }, { "runtime", FileSystem::ToUTF8(runtime) } });
+		CHECK(result["warnings"].empty());
+		const nlohmann::json withoutRuntime = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(harness.Directory / "Without Runtime") },
+			{ "includeRuntime", false } });
+		// Without the runtime there is no program to name.
+		CHECK(withoutRuntime["desktopEntry"].is_null());
+		CHECK_FALSE(FileSystem::Exists(harness.Directory / "Without Runtime" / "Export Game.desktop"));
+#if defined(ST_PLATFORM_LINUX)
+		REQUIRE(result["desktopEntry"].is_string());
+		const std::filesystem::path file = FileSystem::FromUTF8(result["desktopEntry"].get<std::string>());
+		CHECK(file == output / "Export Game.desktop");
+		// The title, and the export's absolute paths: the executable, the icon next to it, and its name as the window class
+		// the runtime gives its windows.
+		DesktopEntry expected;
+		expected.Name = "Desktop \"Adventure\" 100%";
+		expected.Executable = output / "Export Game";
+		expected.Icon = output / "Export Game.png";
+		expected.WindowClass = "Export Game";
+		CHECK(FileSystem::ReadText(file) == expected.ToText());
+#else
+		CHECK(result["desktopEntry"].is_null());
+		CHECK_FALSE(FileSystem::Exists(output / "Export Game.desktop"));
+#endif
 	}
 
 	TEST_CASE("Deleting the icon texture is refused while the project names it")

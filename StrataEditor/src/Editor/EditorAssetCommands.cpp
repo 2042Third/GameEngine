@@ -461,8 +461,9 @@ namespace Strata
 			"project's Export.AlwaysInclude names (project.setExportSettings), and excludedAssets lists what it left out. The game runs the script module "
 			"the editor has loaded (build it first with script.build). The manifest carries the game's identity (project.setGameInfo: the title its window "
 			"shows, version, company, copyright) and, with an icon, icon names <File>.png next to it, 256 x 256 pixels, made from the icon's image (it "
-			"fails when that does not decode). Returns the files (icon: null without one), assetCount, the pack's size, seconds, warnings (an enlarged "
-			"icon) and frameTimes (the editor's frames from the one that started the export to its end, like editor.wait's).",
+			"fails when that does not decode). On Linux hosts a game with the runtime gets <File>.desktop too, a desktop entry naming the export's "
+			"absolute paths. Returns the files (icon and desktopEntry: null without one), assetCount, the pack's size, seconds, warnings (an enlarged "
+			"icon, a desktop entry left out) and frameTimes (the editor's frames from the one that started the export to its end, like editor.wait's).",
 			ObjectSchema({
 				{ "directory", StringSchema("Absolute output directory outside the project (created when missing)") },
 				{ "includeRuntime", BoolSchema("Copy the runtime executable (default true)") },
@@ -520,6 +521,7 @@ namespace Strata
 						{ "assetPack", FileSystem::ToUTF8(result.AssetPack) },
 						{ "scriptModule", result.ScriptModule.empty() ? nlohmann::json(nullptr) : nlohmann::json(FileSystem::ToUTF8(result.ScriptModule)) },
 						{ "icon", result.Icon.empty() ? nlohmann::json(nullptr) : nlohmann::json(FileSystem::ToUTF8(result.Icon)) },
+						{ "desktopEntry", result.DesktopEntryFile.empty() ? nlohmann::json(nullptr) : nlohmann::json(FileSystem::ToUTF8(result.DesktopEntryFile)) },
 						{ "warnings", result.Warnings },
 						{ "assetCount", result.AssetCount },
 						{ "excludedAssets", std::move(excluded) },
