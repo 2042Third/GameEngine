@@ -6,6 +6,9 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <functional>
+#include <optional>
 #include <vector>
 
 // The TAA's presets and tunables (PostProcessComponent::TAAPreset, TemporalAntiAliasingSettings): each technique of the
@@ -207,6 +210,52 @@ namespace
 	glm::vec2 PixelToWorld(uint32_t x, uint32_t y, float panPixels = 0.0f)
 	{
 		return glm::vec2((static_cast<float>(x) + 0.5f + panPixels) / 8.0f - 4.0f, (static_cast<float>(y) + 0.5f) / 8.0f - 4.0f);
+	}
+
+	TemporalAntiAliasingSettings WithDisocclusionRejection(float threshold)
+	{
+		TemporalAntiAliasingSettings settings = c_TAAOriginalSettings;
+		settings.DisocclusionRejection = true;
+		settings.DisocclusionThreshold = threshold;
+		return settings;
+	}
+
+	// The half-float bits of an RGBA16_FLOAT image's alpha, row by row.
+	std::vector<uint16_t> ReadAlphaBits(nvrhi::ITexture* texture)
+	{
+		const ReadbackImage image = ReadHalfImage(texture);
+		const size_t texels = static_cast<size_t>(image.Width) * image.Height;
+		std::vector<uint16_t> bits(texels);
+		for (size_t texel = 0; texel < texels; texel++)
+			std::memcpy(&bits[texel], image.Pixels.data() + texel * image.BytesPerPixel + 3 * sizeof(uint16_t), sizeof(uint16_t));
+		return bits;
+	}
+
+	// Renders `scene` with disocclusion rejection at its lowest threshold and without it, frame by frame from `camera(frame)`
+	// with the pre-exposure `preExposure(frame)` (automatic when empty): nothing may be rejected, so both resolve the same bits.
+	void CheckNothingRejected(GPUContext& gpu, Scene& scene, uint32_t frames, const std::function<SceneCamera(uint32_t)>& camera,
+		const std::function<std::optional<float>(uint32_t)>& preExposure = nullptr)
+	{
+		PostProcessComponent& postProcess = GetPostProcess(scene);
+		postProcess.TAAPreset = TemporalAntiAliasingPreset::Custom;
+		SceneRenderer on = CreateRenderer("Rejection");
+		SceneRenderer off = CreateRenderer("NoRejection");
+		on.SetViewportSize(c_Size, c_Size);
+		off.SetViewportSize(c_Size, c_Size);
+		for (uint32_t frame = 0; frame < frames; frame++)
+		{
+			CAPTURE(frame);
+			SceneRenderOptions options;
+			if (preExposure)
+				options.PreExposure = preExposure(frame);
+			SetTemporalAntiAliasingSettings(postProcess, WithDisocclusionRejection(c_TAAMinDisocclusionThreshold * 2.0f));
+			REQUIRE(on.Render(scene, camera(frame), nullptr, options));
+			SetTemporalAntiAliasingSettings(postProcess, c_TAAOriginalSettings);
+			REQUIRE(off.Render(scene, camera(frame), nullptr, options));
+			REQUIRE(on.GetStats().TemporalFrames == frame + 1);
+			CHECK(ReadHDRBits(on.GetResolvedHDRTexture()) == ReadHDRBits(off.GetResolvedHDRTexture()));
+			FinishFrame(gpu);
+		}
 	}
 
 	// What a steady pan between texels keeps of a sinusoid of `period` texels, relative to a still view: the current frame
@@ -682,6 +731,207 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		INFO("edge pixels " << edges << ", deviation " << currentDeviation / edges << " -> " << resolvedDeviation / edges);
 		CHECK(edges >= 4u * 16u);
 		CHECK(resolvedDeviation <= 0.8 * currentDeviation);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Disocclusion rejection: a box moving sideways leaves no ghost on the wall or the sky it uncovers")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		// A wall of red and white texels (about 2.7 pixels each) 10 units away, its top edge above the view's middle, and a red
+		// box 5 units away across that edge, moving 1.8 units (20 pixels at its distance) to the side.
+		const glm::vec3 red(0.8f, 0.1f, 0.1f);
+		const glm::vec3 white(0.9f, 0.9f, 0.9f);
+		std::vector<uint8_t> pixels;
+		for (uint32_t y = 0; y < 24; y++)
+		{
+			for (uint32_t x = 0; x < 24; x++)
+			{
+				const glm::u8vec3 color = glm::u8vec3(glm::round(((x + y) % 2 == 0 ? red : white) * 255.0f));
+				pixels.insert(pixels.end(), { color.r, color.g, color.b, 255 });
+			}
+		}
+		MaterialProperties wallMaterial = UnlitColor({ 1.0f, 1.0f, 1.0f, 1.0f });
+		wallMaterial.BaseColorMap = assets.AddTexture(24, 24, pixels, TextureFormat::RGBA8, TextureFilter::Nearest, TextureWrap::Clamp);
+		const AssetHandle wallHandle = assets.AddMaterial(wallMaterial);
+		const AssetHandle boxHandle = assets.AddMaterial(UnlitColor(glm::vec4(red, 1.0f)));
+		const SceneCamera camera = LookAt(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -10.0f));
+		const auto measure = [&](const TemporalAntiAliasingSettings& settings, bool rejecting)
+		{
+			Scene scene;
+			SetTemporalAntiAliasingSettings(AddTemporalPostProcess(scene, TemporalAntiAliasingPreset::Custom), settings);
+			Entity wall = AddMesh(scene, BuiltinAssets::PlaneMesh, wallHandle, glm::vec3(0.0f, -4.0f, -10.0f), "Wall");
+			wall.GetComponent<TransformComponent>().Rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+			wall.GetComponent<TransformComponent>().Scale = glm::vec3(12.0f);
+			Entity box = AddMesh(scene, BuiltinAssets::CubeMesh, boxHandle, glm::vec3(-1.6f, 1.25f, -5.0f), "Box");
+			box.GetComponent<TransformComponent>().Scale = glm::vec3(1.5f);
+			SceneRenderer renderer = CreateRenderer("Uncovered");
+			renderer.SetViewportSize(c_Size, c_Size);
+			for (uint32_t frame = 0; frame < 8; frame++)
+			{
+				REQUIRE(renderer.Render(scene, camera));
+				FinishFrame(gpu);
+			}
+			const std::vector<uint32_t> before = ReadIDs(renderer);
+			box.GetComponent<TransformComponent>().Translation.x += 1.8f;
+			box.MarkModified<TransformComponent>();
+			REQUIRE(renderer.Render(scene, camera));
+			const std::vector<uint32_t> after = ReadIDs(renderer);
+			const std::vector<uint16_t> resolvedBits = ReadHDRBits(renderer.GetResolvedHDRTexture());
+			const std::vector<uint16_t> currentBits = ReadHDRBits(renderer.GetHDRTexture());
+			const std::vector<glm::vec3> resolved = ReadHDR(renderer.GetResolvedHDRTexture());
+			const std::vector<glm::vec3> current = ReadHDR(renderer.GetHDRTexture());
+			// The band the box uncovered, 2 pixels or more from where it is now and inside where it was (the rejection compares
+			// with the farthest of the four stored texels around a pixel, which reach one pixel past its own).
+			uint32_t band = 0;
+			uint32_t sky = 0;
+			uint32_t exact = 0;
+			double ghost = 0.0;
+			uint32_t whiteTexels = 0;
+			for (uint32_t y = 0; y < c_Size; y++)
+			{
+				for (uint32_t x = 0; x < c_Size; x++)
+				{
+					const size_t pixel = static_cast<size_t>(y) * c_Size + x;
+					if (before[pixel] != GetID(box) || after[pixel] == GetID(box))
+						continue;
+					bool inside = true;
+					for (uint32_t ny = y > 1 ? y - 1 : 0; ny <= std::min(y + 1, c_Size - 1); ny++)
+					{
+						for (uint32_t nx = x > 1 ? x - 1 : 0; nx <= std::min(x + 1, c_Size - 1); nx++)
+							inside = inside && before[static_cast<size_t>(ny) * c_Size + nx] == GetID(box);
+					}
+					if (!inside)
+						continue;
+					bool nearBox = false;
+					for (uint32_t ny = y > 2 ? y - 2 : 0; ny <= std::min(y + 2, c_Size - 1) && !nearBox; ny++)
+					{
+						for (uint32_t nx = x > 2 ? x - 2 : 0; nx <= std::min(x + 2, c_Size - 1) && !nearBox; nx++)
+							nearBox = after[static_cast<size_t>(ny) * c_Size + nx] == GetID(box);
+					}
+					if (nearBox)
+						continue;
+					band++;
+					sky += after[pixel] == 0 ? 1u : 0u;
+					exact += std::memcmp(&resolvedBits[pixel * 3], &currentBits[pixel * 3], 3 * sizeof(uint16_t)) == 0 ? 1u : 0u;
+					if (after[pixel] == GetID(wall) && Luminance(current[pixel]) > 0.7f)
+					{
+						ghost += std::abs(static_cast<double>(Luminance(resolved[pixel])) - static_cast<double>(Luminance(current[pixel])));
+						whiteTexels++;
+					}
+				}
+			}
+			INFO("band " << band << " (sky " << sky << ", white texels " << whiteTexels << "), exact " << exact << ", ghost " << ghost / std::max(whiteTexels, 1u));
+			CHECK(band >= 150u);
+			CHECK(sky >= 20u);
+			CHECK(whiteTexels >= 20u);
+			if (rejecting)
+				CHECK(exact == band);
+			else
+				CHECK(ghost / whiteTexels >= 0.05);
+		};
+		measure(WithDisocclusionRejection(0.05f), true);
+		measure(c_TAAOriginalSettings, false);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Disocclusion rejection at its lowest threshold rejects nothing where nothing was uncovered")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		SUBCASE("A camera turning in place over boxes, a ground and the sky")
+		{
+			TemporalScene scene(TemporalAntiAliasingPreset::Custom);
+			CheckNothingRejected(gpu, scene.Contents, 24, [](uint32_t frame)
+			{
+				const float angle = glm::radians(1.5f * static_cast<float>(frame));
+				return LookAt(glm::vec3(0.0f, 2.0f, 6.0f), glm::vec3(0.0f, 2.0f, 6.0f) + glm::vec3(std::sin(angle), -0.25f, -std::cos(angle)));
+			});
+		}
+		// A ground grazed from 0.3 units above it, its horizon in view under the sky; nothing stands on it, so moving the camera
+		// uncovers nothing.
+		const auto addGrazedGround = [](Scene& scene, const glm::vec3& origin)
+		{
+			AddTemporalPostProcess(scene, TemporalAntiAliasingPreset::Custom);
+			AddSun(scene, glm::normalize(glm::vec3(-0.3f, -1.0f, -0.4f)), 3.0f);
+			AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), origin, "Ground").GetComponent<TransformComponent>().Scale = glm::vec3(200.0f);
+		};
+		SUBCASE("A dolly backward at 0.2 units a frame over a grazed ground, which is 5 units away mid-view")
+		{
+			Scene scene;
+			addGrazedGround(scene, glm::vec3(0.0f));
+			CheckNothingRejected(gpu, scene, 16, [](uint32_t frame)
+			{
+				const glm::vec3 position(0.0f, 0.3f, 0.2f * static_cast<float>(frame));
+				return LookAt(position, position + glm::vec3(0.0f, -0.3f, -5.0f));
+			});
+		}
+		SUBCASE("A still jittered view over 40 frames")
+		{
+			TemporalScene scene(TemporalAntiAliasingPreset::Custom);
+			CheckNothingRejected(gpu, scene.Contents, 40, [&scene](uint32_t) { return scene.Camera; });
+		}
+		SUBCASE("An orthographic camera with its near plane behind it, over boxes between that plane and the camera")
+		{
+			TemporalScene scene(TemporalAntiAliasingPreset::Custom);
+			CheckNothingRejected(gpu, scene.Contents, 16, [](uint32_t frame)
+			{
+				// 8 units across 64 pixels: 0.15 units are 1.2 pixels a frame. The boxes' tops lie 1.5 units above the camera.
+				const float x = 0.15f * static_cast<float>(frame);
+				SceneCamera camera = OrthographicLookAt(glm::vec3(x, -1.0f, -2.5f), glm::vec3(x, -2.0f, -2.5f), 8.0f);
+				camera.Projection = Math::OrthographicReverseZ(-4.0f, 4.0f, -4.0f, 4.0f, -10.0f, 100.0f);
+				camera.Near = -10.0f;
+				return camera;
+			});
+		}
+		SUBCASE("A perspective camera moving over a grazed ground 20 km from the origin")
+		{
+			Scene scene;
+			const glm::vec3 origin(20000.0f, 0.0f, 20000.0f);
+			addGrazedGround(scene, origin);
+			CheckNothingRejected(gpu, scene, 16, [origin](uint32_t frame)
+			{
+				const glm::vec3 position = origin + glm::vec3(0.1f * static_cast<float>(frame), 0.3f, -0.15f * static_cast<float>(frame));
+				return LookAt(position, position + glm::vec3(0.0f, -0.3f, -5.0f));
+			});
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Across pre-exposure steps the history's distances stay, and disocclusion rejection rejects nothing more")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		TemporalScene scene(TemporalAntiAliasingPreset::Custom);
+		const auto stepping = [](uint32_t frame) -> std::optional<float>
+		{
+			constexpr std::array<float, 4> c_Steps = { 1.0f, 1.0f / 16.0f, 4.0f, 0.5f };
+			return c_Steps[(frame / 3) % c_Steps.size()];
+		};
+		CheckNothingRejected(gpu, scene.Contents, 16, [&scene](uint32_t) { return scene.Camera; }, stepping);
+
+		// The distances do not depend on the pre-exposure.
+		SetTemporalAntiAliasingSettings(GetPostProcess(scene.Contents), WithDisocclusionRejection(0.05f));
+		SceneRenderer steady = CreateRenderer("Steady");
+		SceneRenderer steps = CreateRenderer("Steps");
+		steady.SetViewportSize(c_Size, c_Size);
+		steps.SetViewportSize(c_Size, c_Size);
+		for (uint32_t frame = 0; frame < 12; frame++)
+		{
+			CAPTURE(frame);
+			SceneRenderOptions options;
+			options.PreExposure = 1.0f;
+			REQUIRE(steady.Render(scene.Contents, scene.Camera, nullptr, options));
+			options.PreExposure = stepping(frame);
+			REQUIRE(steps.Render(scene.Contents, scene.Camera, nullptr, options));
+			CHECK(ReadAlphaBits(steady.GetResolvedHDRTexture()) == ReadAlphaBits(steps.GetResolvedHDRTexture()));
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

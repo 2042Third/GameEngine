@@ -1567,7 +1567,8 @@ namespace Strata
 		return true;
 	}
 
-	void SceneRenderer::ResolveTemporal(nvrhi::ICommandList* commandList, const TemporalAntiAliasingSettings& settings)
+	void SceneRenderer::ResolveTemporal(nvrhi::ICommandList* commandList, const TemporalAntiAliasingSettings& settings, const glm::vec4& previousForward,
+		float previousDepthOffset)
 	{
 		// Fields the settings do not use are 0 (normalized), so equal settings give equal bytes.
 		RenderData::TemporalParameters parameters = {};
@@ -1581,6 +1582,12 @@ namespace Strata
 		parameters.ClipWidth = settings.ClipWidth;
 		parameters.TransparentWeight = settings.TransparentWeight;
 		parameters.ResampleWeight = settings.ResampleWeight;
+		if (settings.DisocclusionRejection)
+		{
+			parameters.DisocclusionThreshold = settings.DisocclusionThreshold;
+			parameters.PreviousDepthOffset = previousDepthOffset;
+			parameters.PreviousForward = previousForward;
+		}
 		m_HistoryPreExposure = m_PreExposure;
 		nvrhi::ComputeState state;
 		state.pipeline = m_TemporalPipeline;
@@ -2694,6 +2701,21 @@ namespace Strata
 		frame.CameraPosition = glm::vec4(camera.Position, camera.Near);
 		const glm::vec3 forward = -glm::vec3(frame.InverseView[2]);
 		frame.CameraForward = glm::vec4(glm::length(forward) > 1e-6f ? glm::normalize(forward) : glm::vec3(0.0f, 0.0f, -1.0f), camera.Orthographic ? 1.0f : 0.0f);
+		// The TAA's disocclusion rejection compares a surface's distance along the previous camera's forward axis with the one the
+		// history stored: that axis, how much farther along it this camera stands (in double: worlds are large), and the scale of
+		// its margin (the near distance, or an orthographic view's height: positive for every camera).
+		glm::vec4 temporalPreviousForward(glm::vec3(frame.CameraForward), camera.Orthographic ? camera.VerticalFOV : std::max(camera.Near, 0.001f));
+		float temporalPreviousDepthOffset = 0.0f;
+		if (m_Stats.MotionHistory)
+		{
+			const glm::dvec3 previousForward = -glm::dvec3(glm::inverse(glm::dmat4(m_MotionCamera.RelativeView))[2]);
+			if (glm::length(previousForward) > 1e-6)
+			{
+				const glm::dvec3 axis = glm::normalize(previousForward);
+				temporalPreviousForward = glm::vec4(glm::vec3(axis), temporalPreviousForward.w);
+				temporalPreviousDepthOffset = static_cast<float>(glm::dot(glm::dvec3(camera.Position) - glm::dvec3(m_MotionCamera.Position), axis));
+			}
+		}
 		frame.ViewportSize = glm::vec4(glm::vec2(m_ViewportSize), 1.0f / glm::vec2(m_ViewportSize));
 		frame.TimeParams = glm::vec4(static_cast<float>(scene.GetTime()), 0.0f, 0.0f, 0.0f);
 		// Preview lighting only stands in for lighting the scene does not have at all.
@@ -3008,7 +3030,7 @@ namespace Strata
 			if (m_TemporalFrame)
 			{
 				commandList->beginMarker("TAA");
-				ResolveTemporal(commandList, temporalSettings);
+				ResolveTemporal(commandList, temporalSettings, temporalPreviousForward, temporalPreviousDepthOffset);
 				commandList->endMarker();
 				m_TemporalResolved = true;
 			}

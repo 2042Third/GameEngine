@@ -14,7 +14,7 @@
 // by their exposed luminance (1 / (1 + L)), so a bright sample among dark ones does not flicker as the jitter moves it. The
 // current frame's weight is the largest of CurrentWeight (1 / the frames in the history: the frames after a reset are
 // averaged evenly), MinWeight and a weight growing with the motion's length in pixels; a pixel whose surface was outside the
-// previous frame takes the current frame alone.
+// previous frame (or, with disocclusion rejection, hidden in it) takes the current frame alone.
 // The settings (TemporalAntiAliasingSettings) choose further terms, each in a branch on a push constant. The history's alpha
 // holds the pixel's signed view distance (whatever the settings), which the next frame's resolve may compare with.
 
@@ -105,6 +105,25 @@ vec3 ClipHistoryToVariance(vec3 history, vec3 sum, vec3 squares, vec3 low, vec3 
 			fraction = min(fraction, ((offset[component] > 0.0 ? boxHigh[component] : boxLow[component]) - mean[component]) / offset[component]);
 	}
 	return ExpandColor(mean + max(fraction, 0.0) * offset, exposure);
+}
+
+// Whether the pixel's surface was uncovered since the previous frame: the history at `previousUV` stored (in its alpha) a
+// distance along the previous camera's forward axis shorter than this surface's from that camera, by more than the
+// threshold's fraction of it. The surface is the nearest of the neighborhood (whose motion the pixel takes), against the
+// farthest of the four stored texels around the previous position: one-sided, so the jitter at still edges and the depth
+// gradient of grazing surfaces are not mistaken for it. Uncovered sky counts; sky over sky does not.
+bool IsDisoccluded(vec2 previousUV, ivec2 nearestPixel, float nearestDepth)
+{
+	float expected = c_SkyDistance;
+	if (nearestDepth > 0.0)
+	{
+		vec2 nearestUV = (vec2(nearestPixel) + 0.5) * u_Frame.ViewportSize.zw;
+		vec4 point = u_Frame.InverseViewProjection * vec4(UVToNDC(nearestUV), nearestDepth, 1.0);
+		expected = min(dot(point.xyz / point.w, u_Temporal.PreviousForward.xyz) + u_Temporal.PreviousDepthOffset, c_SkyDistance);
+	}
+	vec4 stored = textureGather(sampler2D(u_History, u_LinearClampSampler), previousUV, 3);
+	float farthest = max(max(stored.x, stored.y), max(stored.z, stored.w));
+	return farthest < expected - u_Temporal.DisocclusionThreshold * max(abs(expected), u_Temporal.PreviousForward.w);
 }
 
 vec3 SampleHistoryBilinear(vec2 position)
@@ -215,7 +234,9 @@ void main()
 		// Nothing drawn in the neighborhood (the sky, which has no geometry): the camera's motion of its direction.
 		vec2 motion = nearestDepth > 0.0 ? texelFetch(u_Velocity, nearestPixel, 0).rg : GetCameraMotion(uv, 0.0);
 		vec2 previousUV = uv - motion;
-		if (all(greaterThanEqual(previousUV, vec2(0.0))) && all(lessThanEqual(previousUV, vec2(1.0))))
+		// Outside the previous frame, or uncovered since (disocclusion rejection): the current frame alone.
+		bool inside = all(greaterThanEqual(previousUV, vec2(0.0))) && all(lessThanEqual(previousUV, vec2(1.0)));
+		if (inside && !(u_Temporal.DisocclusionThreshold > 0.0 && IsDisoccluded(previousUV, nearestPixel, nearestDepth)))
 		{
 			// A still pixel reads its own texel; otherwise the filter reads the history between texels by `fraction`.
 			vec2 fraction = vec2(0.0);
