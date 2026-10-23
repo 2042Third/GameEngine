@@ -934,6 +934,31 @@ TEST_SUITE("Core.InputActions")
 		CHECK_FALSE(InputActions::TakeCapturedBinding());
 	}
 
+	TEST_CASE("Every capture has its own number, and its binding reads before it is taken")
+	{
+		ActionsProject project(MakeGameplayActions());
+		// A refused capture starts none; each one that starts gets the next number, also after a reset of the input state.
+		const uint64_t before = InputActions::GetCaptureId();
+		CHECK_FALSE(InputActions::BeginCapture({ false, false, false }));
+		CHECK(InputActions::GetCaptureId() == before);
+		REQUIRE(InputActions::BeginCapture({}));
+		const uint64_t first = InputActions::GetCaptureId();
+		CHECK(first == before + 1);
+		Input::Reset();
+		REQUIRE(InputActions::BeginCapture({}));
+		CHECK(InputActions::GetCaptureId() == first + 1);
+
+		// The binding reads as long as nobody took it (code that copies it into a buffer takes it once it fits).
+		CHECK_FALSE(InputActions::GetCapturedBinding());
+		Input::SimulateKey(Key::K, true);
+		Step();
+		REQUIRE(InputActions::GetCapturedBinding());
+		CHECK(*InputActions::GetCapturedBinding() == "Key/K");
+		CHECK(InputActions::GetCapturedBinding() == std::optional<std::string>("Key/K"));
+		CHECK(InputActions::TakeCapturedBinding() == std::optional<std::string>("Key/K"));
+		CHECK_FALSE(InputActions::GetCapturedBinding());
+	}
+
 	TEST_CASE("The captured control stays up for actions until it is released")
 	{
 		ActionsProject project(MakeGameplayActions());

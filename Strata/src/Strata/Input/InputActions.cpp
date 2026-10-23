@@ -89,6 +89,7 @@ namespace Strata
 			InputActionSet Set;
 			uint64_t Version = 0;
 			uint64_t StateVersion = 1; // GetStateVersion
+			uint64_t CaptureId = 0;    // GetCaptureId: the number of the last BeginCapture
 
 			std::vector<bool> MapEnabled;
 			std::vector<uint32_t> MapFirstAction;
@@ -723,9 +724,11 @@ namespace Strata
 		// The versions go on counting: code that kept an index or a state version notices the reset.
 		const uint64_t version = s_State.Version;
 		const uint64_t stateVersion = s_State.StateVersion;
+		const uint64_t captureId = s_State.CaptureId;
 		s_State = ActionsState();
 		s_State.Version = version;
 		s_State.StateVersion = stateVersion + 1;
+		s_State.CaptureId = captureId;
 	}
 
 	void InputActions::ResetSession()
@@ -1023,6 +1026,7 @@ namespace Strata
 			return false;
 		EnsureParsed();
 		s_State.StateVersion++;
+		s_State.CaptureId++;
 		s_State.Capture = CaptureState();
 		s_State.Capture.Active = true;
 		s_State.Capture.Devices = devices;
@@ -1033,6 +1037,16 @@ namespace Strata
 	bool InputActions::IsCapturing()
 	{
 		return s_State.Capture.Active;
+	}
+
+	uint64_t InputActions::GetCaptureId()
+	{
+		return s_State.CaptureId;
+	}
+
+	const std::optional<std::string>& InputActions::GetCapturedBinding()
+	{
+		return s_State.Capture.Result;
 	}
 
 	std::optional<std::string> InputActions::TakeCapturedBinding()

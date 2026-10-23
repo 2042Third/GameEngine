@@ -14,6 +14,7 @@ namespace Strata
 		struct CaptureState
 		{
 			std::string Owner;        // Empty when the UI runs no capture
+			uint64_t Id = 0;          // InputActions::GetCaptureId of the capture it began (a game's later one replaces it)
 			double StartTime = 0.0;   // ImGui::GetTime when it began
 			int AskedFrame = 0;       // ImGui::GetFrameCount when the owner last asked after it
 			bool KeyboardHeld = false; // Until every key is up after the capture
@@ -59,11 +60,20 @@ namespace Strata
 		// its press clicks nothing. BeginFrame does this first in the frame of the press (the capture reads the devices before
 		// the editor's UI): the owner asks only when it is drawn, after windows that act on a press (the viewport picks with
 		// it, the content browser deselects).
+		// Whether InputActions' capture is still the one the UI began: a game's rebinding menu may have replaced it.
+		bool IsOwnCapture()
+		{
+			return InputActions::GetCaptureId() == s_Capture.Id;
+		}
+
 		void Collect()
 		{
-			if (s_Capture.Owner.empty() || s_Capture.Ended || InputActions::IsCapturing())
+			if (s_Capture.Owner.empty() || s_Capture.Ended || (IsOwnCapture() && InputActions::IsCapturing()))
 				return;
 			s_Capture.Ended = true;
+			// A replaced capture ended without a binding: what the other one takes is not the UI's.
+			if (!IsOwnCapture())
+				return;
 			s_Capture.Result = InputActions::TakeCapturedBinding();
 			if (s_Capture.Result && s_Capture.Result->starts_with("Mouse/"))
 			{
@@ -80,6 +90,7 @@ namespace Strata
 			return false;
 		ClearCapture();
 		s_Capture.Owner = owner;
+		s_Capture.Id = InputActions::GetCaptureId();
 		s_Capture.StartTime = ImGui::GetTime();
 		s_Capture.AskedFrame = ImGui::GetFrameCount();
 		s_Capture.KeyboardHeld = true;
@@ -89,7 +100,7 @@ namespace Strata
 
 	bool BindingCapture::IsListening(std::string_view owner)
 	{
-		if (s_Capture.Owner.empty() || s_Capture.Owner != owner || s_Capture.Ended || !InputActions::IsCapturing())
+		if (s_Capture.Owner.empty() || s_Capture.Owner != owner || s_Capture.Ended || !IsOwnCapture() || !InputActions::IsCapturing())
 			return false;
 		s_Capture.AskedFrame = ImGui::GetFrameCount();
 		return true;
@@ -112,7 +123,7 @@ namespace Strata
 	{
 		if (s_Capture.Owner.empty() || s_Capture.Owner != owner)
 			return;
-		if (!s_Capture.Ended) // Once collected, InputActions' capture is over: a later one is not this owner's
+		if (!s_Capture.Ended && IsOwnCapture()) // Once collected or replaced, InputActions' capture is not this owner's
 			InputActions::CancelCapture();
 		ClearCapture();
 	}
@@ -131,10 +142,10 @@ namespace Strata
 			// The owner asks every frame it draws: one that skipped a frame is gone (another page, a closed panel).
 			const bool abandoned = ImGui::GetFrameCount() - s_Capture.AskedFrame > 1;
 			const bool timedOut = ImGui::GetTime() - s_Capture.StartTime >= c_TimeoutSeconds;
-			if (abandoned || (timedOut && !s_Capture.Ended && InputActions::IsCapturing()))
+			if (abandoned || (timedOut && !s_Capture.Ended && IsOwnCapture() && InputActions::IsCapturing()))
 			{
 				// Also a binding taken but never collected: nobody will.
-				if (!s_Capture.Ended)
+				if (!s_Capture.Ended && IsOwnCapture())
 					InputActions::CancelCapture();
 				ClearCapture();
 			}

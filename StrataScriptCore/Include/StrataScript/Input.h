@@ -216,6 +216,17 @@ namespace Strata
 		Locked = StrataScriptCursorMode_Locked  // Hidden and kept in the window; GetMouseDelta keeps reporting movement (mouse look)
 	};
 
+	// The devices a binding capture listens to (Input::BeginBindingCapture). The values are the ABI's bits: other
+	// combinations are static_cast<InputDevices>(bits).
+	enum class InputDevices : uint32_t
+	{
+		Keyboard = StrataScriptInputDevices_Keyboard,
+		Mouse = StrataScriptInputDevices_Mouse,
+		Gamepad = StrataScriptInputDevices_Gamepad,
+		KeyboardAndMouse = StrataScriptInputDevices_Keyboard | StrataScriptInputDevices_Mouse,
+		All = StrataScriptInputDevices_Keyboard | StrataScriptInputDevices_Mouse | StrataScriptInputDevices_Gamepad
+	};
+
 	// Keyboard, mouse and gamepad state of the current frame. "Down" is the current state; "Pressed"/"Released" report a
 	// transition during this frame. While the game view has no input focus every query reports nothing.
 	class Input
@@ -479,6 +490,41 @@ namespace Strata
 		{
 			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputSaveBindings);
 			return host && host->InputSaveBindings(Detail::GetContext());
+		}
+
+		// A rebinding menu's "press a control": listens for the next control the player presses on the devices given (a key, a
+		// mouse button, a gamepad button, or a stick or trigger pushed beyond half its range). While it listens every action
+		// reads as up, and the control captured reads as up for actions until it is let go, so the press triggers nothing (not
+		// even the menu's Cancel). There is one capture: a later one replaces it, and play stopping cancels it. False when the
+		// engine lacks it.
+		static bool BeginBindingCapture(InputDevices devices = InputDevices::All)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputBeginBindingCapture);
+			return host && host->InputBeginBindingCapture(Detail::GetContext(), static_cast<uint32_t>(devices));
+		}
+
+		// The captured control's binding ("Key/K", "Mouse/Right", "Gamepad/LeftX+"), once: the capture is then over, and
+		// SetActionBindings takes the text. Nothing while it listens, after it was cancelled or replaced, or when none runs:
+		// poll it every frame until a binding comes (and give up after a while with CancelBindingCapture).
+		static std::optional<std::string> PollBindingCapture()
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputPollBindingCapture);
+			if (!host)
+				return std::nullopt;
+			std::string binding = Detail::ReadHostString([&](char* buffer, uint64_t capacity)
+			{
+				return host->InputPollBindingCapture(Detail::GetContext(), buffer, capacity);
+			});
+			if (binding.empty())
+				return std::nullopt;
+			return binding;
+		}
+
+		// Ends the capture BeginBindingCapture started (a menu's timeout or its Cancel button). False when it was not listening.
+		static bool CancelBindingCapture()
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputCancelBindingCapture);
+			return host && host->InputCancelBindingCapture(Detail::GetContext());
 		}
 	};
 

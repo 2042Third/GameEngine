@@ -9,6 +9,7 @@
 #include "Strata/Input/Input.h"
 #include "Strata/Input/InputActions.h"
 #include "Strata/Input/InputActionSet.h"
+#include "StrataScript/ScriptABI.h"
 #include "TestHelpers.h"
 
 #include <nlohmann/json.hpp>
@@ -123,6 +124,15 @@ namespace
 	bool WasAccepted(Scene& scene, Entity reader)
 	{
 		return GetField<bool>(GetScriptSystem(scene), reader, "ActionReader", "Accepted");
+	}
+
+	// Asks the capturer to do something in its next update (BindingCapturer's Request: 1 begins a capture on `devices`, 2
+	// cancels it).
+	void AskCapture(Scene& scene, Entity capturer, int32_t request, int32_t devices = StrataScriptInputDevices_Keyboard)
+	{
+		ScriptSystem& system = GetScriptSystem(scene);
+		REQUIRE(system.SetFieldValue(capturer, "BindingCapturer", "Request", PropertyValue(request)));
+		REQUIRE(system.SetFieldValue(capturer, "BindingCapturer", "Devices", PropertyValue(devices)));
 	}
 
 	size_t CountLogged(const std::vector<LogEntry>& entries, std::string_view text)
@@ -347,6 +357,95 @@ TEST_SUITE("Scripting.InputActions")
 		CHECK(CountLogged(entries, "the output pointer is null") == 1);
 		CHECK(CountLogged(entries, "An action name is empty") == 1);
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A capture driven by simulated input returns its binding")
+	{
+		ScriptActionsProject project;
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		Scene scene;
+		Entity capturer = scene.CreateEntity("Capturer");
+		AddScriptEntry(capturer, "BindingCapturer");
+		LogCapture log;
+		scene.OnRuntimeStart();
+		ScriptSystem& system = GetScriptSystem(scene);
+		const auto isSet = [&](const char* name) { return GetField<bool>(system, capturer, "BindingCapturer", name); };
+		const auto number = [&](const char* name) { return GetField<int32_t>(system, capturer, "BindingCapturer", name); };
+		const auto text = [&](const char* name) { return GetField<std::string>(system, capturer, "BindingCapturer", name); };
+
+		// Space, which jumps, is held when the capture begins: only a control that goes down is captured, and while the capture
+		// listens every action reads as up.
+		Step(scene, { { Key::Space, true } });
+		CHECK(isSet("Down"));
+		AskCapture(scene, capturer, 1, StrataScriptInputDevices_Keyboard | StrataScriptInputDevices_Gamepad);
+		Step(scene);
+		CHECK(isSet("Accepted"));
+		CHECK(InputActions::IsCapturing());
+		CHECK_FALSE(isSet("Down"));
+		Step(scene);
+		CHECK(number("Polls") == 0);
+		CHECK_FALSE(isSet("Down"));
+
+		// K goes down: the capture takes it, the script's poll returns it once, and Space, held all along, jumps again.
+		Step(scene, { { Key::K, true } });
+		CHECK(text("Binding") == "Key/K");
+		CHECK(number("Polls") == 1);
+		CHECK_FALSE(InputActions::IsCapturing());
+		CHECK(isSet("Down"));
+		Step(scene, { { Key::K, false } });
+		CHECK(number("Polls") == 1);
+
+		// A buffer too small gets nothing and the binding stays for the poll with room for it.
+		REQUIRE(system.SetFieldValue(capturer, "BindingCapturer", "SmallBuffer", PropertyValue(true)));
+		AskCapture(scene, capturer, 1);
+		Step(scene);
+		Step(scene, { { Key::L, true } });
+		CHECK(number("SmallBufferSize") == 5);
+		CHECK(text("Binding") == "Key/L");
+		CHECK(number("Polls") == 2);
+		REQUIRE(system.SetFieldValue(capturer, "BindingCapturer", "SmallBuffer", PropertyValue(false)));
+		Step(scene, { { Key::L, false } });
+
+		// Cancelling ends a capture that listens, once; a capture another took over (the editor's Input Actions page) is not the
+		// script's: its poll never returns that one's binding.
+		AskCapture(scene, capturer, 1);
+		Step(scene);
+		AskCapture(scene, capturer, 2);
+		Step(scene);
+		CHECK(isSet("Accepted"));
+		CHECK_FALSE(InputActions::IsCapturing());
+		AskCapture(scene, capturer, 2);
+		Step(scene);
+		CHECK_FALSE(isSet("Accepted"));
+		AskCapture(scene, capturer, 1);
+		Step(scene);
+		REQUIRE(InputActions::BeginCapture(InputCaptureDevices {}));
+		Step(scene, { { Key::M, true } });
+		CHECK(number("Polls") == 2);
+		CHECK(InputActions::TakeCapturedBinding() == "Key/M");
+		AskCapture(scene, capturer, 2);
+		Step(scene, { { Key::M, false } });
+		CHECK_FALSE(isSet("Accepted"));
+
+		// Devices it does not know are misuse, reported once.
+		AskCapture(scene, capturer, 1, 0);
+		Step(scene);
+		CHECK_FALSE(isSet("Accepted"));
+		AskCapture(scene, capturer, 1, 8);
+		Step(scene);
+		CHECK_FALSE(isSet("Accepted"));
+		CHECK_FALSE(InputActions::IsCapturing());
+		const std::vector<LogEntry> entries = log.GetEntries();
+		CHECK(CountLogged(entries, "the devices 0x0 are not a combination of Keyboard (1), Mouse (2) and Gamepad (4)") == 1);
+		CHECK(CountLogged(entries, "the devices 0x8 are not a combination") == 1);
+		CHECK(entries.size() == 2);
+
+		// Play stopping ends a capture the scripts left listening: actions would read as up for whatever runs next.
+		AskCapture(scene, capturer, 1);
+		Step(scene);
+		REQUIRE(InputActions::IsCapturing());
+		scene.OnRuntimeStop();
+		CHECK_FALSE(InputActions::IsCapturing());
 	}
 
 	TEST_CASE("SaveBindings writes through IGameSaves and a new session reads it")

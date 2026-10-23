@@ -107,6 +107,58 @@ ST_SCRIPT_CLASS(ActionReader)
 	ST_SCRIPT_FIELD(MapEnabled);
 }
 
+// A rebinding menu's capture, driven by the test through Request (then cleared): 1 begins one on Devices (the ABI's bits),
+// 2 cancels it. Accepted is the request's result. Every update polls it: Binding is the last binding a poll returned and
+// Polls counts them; with SmallBuffer a raw poll into a 2-byte buffer comes first, whose answer is SmallBufferSize. Down
+// reads Gameplay/Jump.
+class BindingCapturer : public Script
+{
+public:
+	int32_t Request = 0;
+	int32_t Devices = StrataScriptInputDevices_Keyboard;
+	bool Accepted = false;
+	bool SmallBuffer = false;
+	int32_t SmallBufferSize = 0;
+	std::string Binding;
+	int32_t Polls = 0;
+	bool Down = false;
+
+	void OnUpdate(float) override
+	{
+		switch (Request)
+		{
+			case 1: Accepted = Input::BeginBindingCapture(static_cast<InputDevices>(static_cast<uint32_t>(Devices))); break;
+			case 2: Accepted = Input::CancelBindingCapture(); break;
+			default: break;
+		}
+		Request = 0;
+
+		if (SmallBuffer)
+		{
+			char start[2] = {};
+			SmallBufferSize = static_cast<int32_t>(Detail::GetHost()->InputPollBindingCapture(Detail::GetContext(), start, sizeof(start)));
+		}
+		if (const std::optional<std::string> binding = Input::PollBindingCapture())
+		{
+			Binding = *binding;
+			Polls++;
+		}
+		Down = Input::IsActionDown("Jump");
+	}
+};
+
+ST_SCRIPT_CLASS(BindingCapturer)
+{
+	ST_SCRIPT_FIELD(Request);
+	ST_SCRIPT_FIELD(Devices);
+	ST_SCRIPT_FIELD(Accepted);
+	ST_SCRIPT_FIELD(SmallBuffer);
+	ST_SCRIPT_FIELD(SmallBufferSize);
+	ST_SCRIPT_FIELD(Binding);
+	ST_SCRIPT_FIELD(Polls);
+	ST_SCRIPT_FIELD(Down);
+}
+
 // The binding text protocol through the raw host functions, the SDK's own refusals and an engine without the input action
 // functions, in OnCreate (Gameplay/Jump ends with the project's bindings).
 class ActionAPIChecks : public CheckingScript
@@ -159,6 +211,16 @@ public:
 			Expect(!Input::SetActionMapEnabled("Vehicle", true) && !Input::IsActionMapEnabled("Vehicle").has_value(), "older engine: maps");
 			Expect(Input::GetActionBindings("Jump").empty() && !Input::SetActionBindings("Jump", { "Key/J" }), "older engine: bindings");
 			Expect(!Input::ResetActionBindings("Jump") && !Input::ResetActionBindings() && !Input::SaveBindings(), "older engine: reset and save");
+			Expect(!Input::BeginBindingCapture() && !Input::PollBindingCapture() && !Input::CancelBindingCapture(), "older engine: capture");
+		}
+		// An engine with the input actions but not yet the binding capture.
+		older = *host;
+		older.StructSize = static_cast<uint32_t>(offsetof(StrataScriptHostAPI, InputBeginBindingCapture));
+		{
+			const ScopedHost scope(&older);
+			Expect(Input::GetActionBindings("Jump").size() == 2, "an engine without the capture reads bindings");
+			Expect(!Input::BeginBindingCapture(InputDevices::KeyboardAndMouse) && !Input::PollBindingCapture() && !Input::CancelBindingCapture(),
+				"an engine without the capture");
 		}
 		Expect(bindings() == "Key/Space;Gamepad/A;" && Input::IsActionMapEnabled("Vehicle") == false, "the older engine changed nothing");
 		Done = true;

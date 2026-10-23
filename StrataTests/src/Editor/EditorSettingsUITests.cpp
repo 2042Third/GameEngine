@@ -765,6 +765,30 @@ TEST_SUITE("Editor.UI.InputActions")
 		CHECK(page.Bindings("Gameplay/Jump") == std::vector<std::string> { "Key/Space" });
 	}
 
+	TEST_CASE("A capture a game starts meanwhile replaces the page's, which takes nothing of it")
+	{
+		CapturePage page("InputActionsCaptureReplaced");
+		page.StartCapture();
+		// A game's rebinding menu begins its own capture (the script API's InputBeginBindingCapture): there is one capture.
+		REQUIRE(InputActions::BeginCapture(InputCaptureDevices {}));
+		page.SetKey(Key::K, ImGuiKey_K, true);
+		InputFrame(page.Editor);
+		page.SetKey(Key::K, ImGuiKey_K, false);
+		InputFrame(page.Editor);
+		// The page's capture ended without a binding; K is the game's to take.
+		CHECK_FALSE(IsDrawn(CapturePage::Key("Capture")));
+		CHECK(page.Bindings("Gameplay/Jump") == std::vector<std::string> { "Key/Space" });
+		CHECK(InputActions::TakeCapturedBinding() == "Key/K");
+
+		// Cancelling the page's capture leaves the game's listening.
+		page.StartCapture();
+		REQUIRE(InputActions::BeginCapture(InputCaptureDevices {}));
+		page.Editor.Frames(1);
+		CHECK_FALSE(IsDrawn(CapturePage::Key("Capture")));
+		CHECK(InputActions::IsCapturing());
+		InputActions::CancelCapture();
+	}
+
 	TEST_CASE("A captured mouse press clicks nothing, also in windows drawn before the page")
 	{
 		Input::Reset();

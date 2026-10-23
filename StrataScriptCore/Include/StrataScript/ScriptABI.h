@@ -249,6 +249,14 @@ extern "C"
 		StrataScriptUIAction_Right = 5
 	} StrataScriptUIAction;
 
+	/* The devices a binding capture listens to (InputBeginBindingCapture): bits, combined with |. */
+	typedef enum StrataScriptInputDevices
+	{
+		StrataScriptInputDevices_Keyboard = 1,
+		StrataScriptInputDevices_Mouse = 2,
+		StrataScriptInputDevices_Gamepad = 4
+	} StrataScriptInputDevices;
+
 	/*
 	 * Engine services for scripts. Unless noted otherwise, functions taking a context only work while the engine is
 	 * calling into the module for that context, on the engine's main thread; otherwise they fail (returning false, 0
@@ -634,6 +642,21 @@ extern "C"
 		bool (*InputSetActionBindings)(StrataScriptContext* context, StrataScriptString action, StrataScriptString bindings);
 		bool (*InputResetActionBindings)(StrataScriptContext* context, StrataScriptString action);
 		bool (*InputSaveBindings)(StrataScriptContext* context);
+
+		/*
+		 * Binding capture (added after InputSaveBindings, ABI version 1: check ST_SCRIPT_HAS_MEMBER before use), a rebinding
+		 * menu's "press a control". InputBeginBindingCapture listens for the next control the player presses on the devices
+		 * given (StrataScriptInputDevices bits; none, or bits it does not know, fail and are reported): a key, a mouse button,
+		 * a gamepad button, or a stick or trigger pushed beyond half its range. While it listens every action reads as up, and
+		 * the control captured reads as up for actions until it is let go, so the press triggers no action. There is one
+		 * capture: a later one (the scripts' or the editor's) replaces it. InputPollBindingCapture copies the captured
+		 * binding's text (the text buffer protocol), after which the capture is over: 0 while it listens, after it was
+		 * cancelled or replaced, or when none runs; a buffer too small for it gets nothing and keeps it for the next call.
+		 * InputCancelBindingCapture ends the scripts' capture (false when it was not listening). Play stopping cancels it.
+		 */
+		bool (*InputBeginBindingCapture)(StrataScriptContext* context, uint32_t devices);
+		uint64_t (*InputPollBindingCapture)(StrataScriptContext* context, char* buffer, uint64_t capacity);
+		bool (*InputCancelBindingCapture)(StrataScriptContext* context);
 
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;

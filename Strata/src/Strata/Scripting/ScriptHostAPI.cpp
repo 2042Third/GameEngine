@@ -2956,6 +2956,75 @@ namespace Strata
 			});
 		}
 
+		// The binding capture is InputActions' one capture, shared with the editor's Input Actions page: the scripts poll and
+		// cancel only the capture they started, while it is still the one that runs (ScriptSystem::GetBindingCapture).
+		bool OwnsBindingCapture(const ScriptSystem& system)
+		{
+			return system.GetBindingCapture() != 0 && system.GetBindingCapture() == InputActions::GetCaptureId();
+		}
+
+		bool HostInputBeginBindingCapture(StrataScriptContext* context, uint32_t devices)
+		{
+			return HostCall("InputBeginBindingCapture", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "InputBeginBindingCapture");
+				if (!system)
+					return false;
+				constexpr uint32_t c_KnownDevices = StrataScriptInputDevices_Keyboard | StrataScriptInputDevices_Mouse | StrataScriptInputDevices_Gamepad;
+				if (devices == 0 || (devices & ~c_KnownDevices) != 0)
+				{
+					system->ReportProblem("InputBeginBindingCapture", fmt::format("the devices {:#x} are not a combination of Keyboard (1), Mouse (2) and "
+						"Gamepad (4)", devices));
+					return false;
+				}
+				InputCaptureDevices captureDevices;
+				captureDevices.Keyboard = (devices & StrataScriptInputDevices_Keyboard) != 0;
+				captureDevices.Mouse = (devices & StrataScriptInputDevices_Mouse) != 0;
+				captureDevices.Gamepad = (devices & StrataScriptInputDevices_Gamepad) != 0;
+				if (!InputActions::BeginCapture(captureDevices))
+					return false;
+				system->SetBindingCapture(InputActions::GetCaptureId());
+				return true;
+			});
+		}
+
+		uint64_t HostInputPollBindingCapture(StrataScriptContext* context, char* buffer, uint64_t capacity)
+		{
+			return HostCall("InputPollBindingCapture", uint64_t(0), [&]() -> uint64_t
+			{
+				ScriptSystem* system = ResolveContext(context, "InputPollBindingCapture");
+				if (!system || !OwnsBindingCapture(*system))
+					return 0;
+				const std::optional<std::string>& binding = InputActions::GetCapturedBinding();
+				if (!binding)
+					return 0;
+				const uint64_t size = binding->size();
+				// The text buffer protocol: a caller without room for it asks again with a larger buffer, so it stays until then.
+				if (!buffer || capacity < size)
+					return size;
+				CopyText(*binding, buffer, capacity);
+				InputActions::TakeCapturedBinding();
+				system->SetBindingCapture(0);
+				return size;
+			});
+		}
+
+		bool HostInputCancelBindingCapture(StrataScriptContext* context)
+		{
+			return HostCall("InputCancelBindingCapture", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "InputCancelBindingCapture");
+				if (!system)
+					return false;
+				const bool listening = OwnsBindingCapture(*system) && InputActions::IsCapturing();
+				// Also a binding captured but not polled: the scripts gave up on it.
+				if (OwnsBindingCapture(*system))
+					InputActions::CancelCapture();
+				system->SetBindingCapture(0);
+				return listening;
+			});
+		}
+
 		////////////////////////////////////////////////////////////////////////////////
 		// The table
 		////////////////////////////////////////////////////////////////////////////////
@@ -3116,7 +3185,10 @@ namespace Strata
 	X(InputGetActionBindings) \
 	X(InputSetActionBindings) \
 	X(InputResetActionBindings) \
-	X(InputSaveBindings)
+	X(InputSaveBindings) \
+	X(InputBeginBindingCapture) \
+	X(InputPollBindingCapture) \
+	X(InputCancelBindingCapture)
 
 		struct HostFunctionEntry
 		{

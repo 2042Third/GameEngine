@@ -128,8 +128,14 @@ namespace Strata
 		// suspended). False when no device is given.
 		static bool BeginCapture(const InputCaptureDevices& devices);
 		static bool IsCapturing();
-		// The captured control's binding text ("Key/Space", "Gamepad/LeftX-") once, after which the capture is over; nullopt
-		// while it listens or when none ran.
+		// The number of the capture BeginCapture started last (from 1; 0 before any). There is one capture, which a later
+		// BeginCapture replaces: code that shares it with others (the editor's Input Actions page, a game's rebinding menu)
+		// remembers the number its own got and takes or cancels only while it is still that.
+		static uint64_t GetCaptureId();
+		// The captured control's binding text ("Key/Space", "Gamepad/LeftX-") while the capture is over and the text not taken
+		// (code that copies it into a caller's buffer takes it once it fits); nullopt while it listens or when none ran.
+		static const std::optional<std::string>& GetCapturedBinding();
+		// That text once, after which the capture is over; nullopt while it listens or when none ran.
 		static std::optional<std::string> TakeCapturedBinding();
 		static void CancelCapture();
 	};

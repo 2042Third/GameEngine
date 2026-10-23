@@ -17,7 +17,8 @@ using namespace FeatureTest;
 //                    gamepad 0 connects with A down, the left stick at (0.6, 0.8) and the right trigger at 0.5
 //   PressFrame + 1   nothing happens (all stay down)
 //   PressFrame + 2   Space, the left mouse button and A go up
-// Around it the player rebinds actions, keeps the bindings, and resets them (UpdateActions).
+// Around it the player rebinds actions, keeps the bindings, and resets them (UpdateActions), and a rebinding menu captures the
+// mouse button pressed (UpdateCapture).
 class InputFeatures : public FeatureScript
 {
 public:
@@ -89,8 +90,27 @@ public:
 			Completed = true;
 		}
 		UpdateActions(frame);
+		UpdateCapture(frame);
 	}
 private:
+	// A rebinding menu listens to the mouse from the frame before the press: the button pressed is its binding (no action is
+	// bound to the mouse, so the actions above see the press frame as they would without it). Then a capture on every device
+	// is cancelled.
+	void UpdateCapture(int32_t frame)
+	{
+		if (frame == PressFrame - 1)
+		{
+			Expect(Input::BeginBindingCapture(InputDevices::Mouse), "BeginBindingCapture");
+			Expect(!Input::PollBindingCapture().has_value(), "PollBindingCapture returns nothing while the capture listens");
+		}
+		else if (frame == PressFrame)
+		{
+			Expect(Input::PollBindingCapture() == "Mouse/Left", "PollBindingCapture returns the button pressed");
+			Expect(!Input::PollBindingCapture().has_value(), "a captured binding is returned once");
+			Expect(Input::BeginBindingCapture() && Input::CancelBindingCapture() && !Input::CancelBindingCapture(), "CancelBindingCapture");
+		}
+	}
+
 	// Input actions read the same input through the project's bindings, which a player rebinds before the press frame: Jump
 	// to W, which nobody presses, and the disabled map's Horn to gamepad A. The press then does not jump; resetting Jump and
 	// enabling the map let the held keys press both in the next frame.

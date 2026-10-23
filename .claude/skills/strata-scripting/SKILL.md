@@ -134,7 +134,8 @@ ST_SCRIPT_CLASS(Turret)
 - `Input::GetTypedText()`: the UTF-8 text typed this frame (name entry, chat).
 - Input actions (the project's named controls, rebindable by players): `Input::IsActionDown/Pressed/Released("Jump")`,
   `GetActionValue`, `GetActionAxis`, `SetActionMapEnabled`/`IsActionMapEnabled`,
-  `GetActionBindings`/`SetActionBindings`, `ResetActionBindings`, `SaveBindings`: see
+  `GetActionBindings`/`SetActionBindings`, `ResetActionBindings`, `SaveBindings`, the capture
+  `BeginBindingCapture(InputDevices)`/`PollBindingCapture`/`CancelBindingCapture`: see
   [Input actions and rebinding](#input-actions-and-rebinding).
 - `UIElement` (`entity.GetUI()`) and `UI`: the game UI, see [Game UI](#game-ui).
 - `Log::Info/Warn/Error/Trace(args...)` - arguments are concatenated (`Log::Info("Health ", health)`).
@@ -462,6 +463,12 @@ Input::SetActionMapEnabled("Vehicle", inCar);           // Off: held actions rel
   and 2D composites; at most 8; `{}` unbinds); `Input::ResetActionBindings("Jump")` (no name: every action) restores the
   project's. Call `Input::SaveBindings()` when the menu closes: the engine keeps them in the game's save directory (not
   among `ListSaveFiles`) and loads them when the game starts (in the editor at every Play, from `<project>/.strata/Saves`).
+- "Press a control": `Input::BeginBindingCapture(InputDevices::All)` (`Keyboard`, `Mouse`, `Gamepad`,
+  `KeyboardAndMouse`), then `Input::PollBindingCapture()` every frame until it returns the binding (once; nullopt while it
+  listens), which goes to `SetActionBindings`. Meanwhile every action reads as up and the captured control stays up for
+  actions until released, so the press does nothing else (Escape does not close the menu). Give up with
+  `Input::CancelBindingCapture()` after a timeout; play stopping cancels it. A test drives it with `input.key` or
+  `input.gamepadButton` while the menu listens.
 - Tools press actions' bindings with the `input.*` commands (`input.key`, `input.gamepadButton`...).
 
 ### The window and save files
