@@ -77,7 +77,8 @@ namespace Strata::HDRSun
 	std::optional<Sun> Find(std::span<const float> pixels, uint32_t width, uint32_t height, std::string* outReason = nullptr);
 
 	// Replaces the region's texels by the sky around them: each one the average of the region's border texels (those next
-	// to it, not in it, at most Threshold bright), weighted by the inverse square of their distance in texels. Alpha stays.
+	// to it, not in it, at most Threshold bright), weighted by the inverse square of their distance (the chord between their
+	// directions, not texels: rows near a pole are narrow). Alpha stays.
 	// Afterwards no texel of the region is above Threshold.
 	void Remove(std::span<float> pixels, uint32_t width, uint32_t height, const Sun& sun);
 

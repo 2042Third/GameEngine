@@ -11,6 +11,7 @@
 
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Project/Project.h>
@@ -20,12 +21,12 @@
 #include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Scene/Scene.h>
 
-#include <Strata/Core/Base64.h>
-
 #include <glm/glm.hpp>
 #include <stb_image.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <optional>
