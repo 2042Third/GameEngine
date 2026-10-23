@@ -105,6 +105,12 @@ namespace Strata
 		m_ReflectionProbeConversions.clear();
 	}
 
+	void SceneRenderer::ReleaseStaleReflectionProbeHolds()
+	{
+		const uint64_t frame = Renderer::GetFrameNumber();
+		std::erase_if(m_ReflectionProbeHolds, [frame](const auto& entry) { return entry.second.Frame + 1 < frame; });
+	}
+
 	bool SceneRenderer::EnsureReflectionProbeResources()
 	{
 		const uint32_t slots = std::min(m_Specification.MaxReflectionProbes, RenderData::c_MaxReflectionProbes);
@@ -211,7 +217,7 @@ namespace Strata
 		}
 		if (candidates.empty())
 		{
-			m_ReflectionProbeHolds.clear(); // Nothing in view waits for its capture
+			ReleaseStaleReflectionProbeHolds(); // Nothing in this view waits for its capture
 			return true;
 		}
 		if (!EnsureReflectionProbeResources())
@@ -228,18 +234,17 @@ namespace Strata
 		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
 		TextureStreamer* streamer = manager ? TextureStreamer::Find(*manager) : nullptr;
 		uint32_t conversionsLeft = m_Specification.SpreadLightingUpdates ? c_ReflectionProbeConversionsPerFrame : std::numeric_limits<uint32_t>::max();
-		// The holds the frame keeps: those of captures still waiting (the others end).
-		std::vector<AssetHandle> waiting;
+		// The holds of captures still waiting, renewed for this frame.
 		auto hold = [&](AssetHandle capture)
 		{
-			waiting.push_back(capture);
 			if (!streamer)
 				return;
-			Ref<TextureHold>& held = m_ReflectionProbeHolds[capture];
-			if (!held)
-				held = CreateRef<TextureHold>(TextureHold { capture });
+			ReflectionProbeHold& held = m_ReflectionProbeHolds[capture];
+			if (!held.Hold)
+				held.Hold = CreateRef<TextureHold>(TextureHold { capture });
+			held.Frame = Renderer::GetFrameNumber();
 			// Again in every frame it waits: a hold placed in another manager's streamer (a project opened since) lapsed with it.
-			streamer->Hold(held);
+			streamer->Hold(held.Hold);
 		};
 
 		const glm::dvec3 cameraPosition = glm::dvec3(camera.Position);
@@ -303,8 +308,9 @@ namespace Strata
 			data.Parameters = glm::vec4(candidate.Intensity, candidate.BoxProjection ? 1.0f : 0.0f, static_cast<float>(slot), 0.0f);
 			m_ReflectionProbeList.push_back(data);
 		}
-		// Captures converted (or no longer wanted) are held no more: their levels may drop to their tail.
-		std::erase_if(m_ReflectionProbeHolds, [&](const auto& entry) { return std::find(waiting.begin(), waiting.end(), entry.first) == waiting.end(); });
+		// Captures converted (or no longer wanted) are held no more once no view of this frame or the previous one waited for
+		// them: their levels may drop to their tail.
+		ReleaseStaleReflectionProbeHolds();
 		m_Stats.ReflectionProbes = static_cast<uint32_t>(m_ReflectionProbeList.size());
 		m_Stats.ReflectionProbeConversions = static_cast<uint32_t>(m_ReflectionProbeConversions.size());
 		return true;

@@ -1172,6 +1172,8 @@ namespace Strata
 		void ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options);
 		// After the executed command list of a frame that recorded the exposure's copy: the copy is pending.
 		void SubmitExposureReadback();
+		// Ends the holds of captures no gather of this frame or the previous one waited for.
+		void ReleaseStaleReflectionProbeHolds();
 		// Pacing of the volatile FrameConstants buffer. NVRHI gives each write a version that stays in use until the GPU
 		// finishes the command list, and fails a write when every version is in use. A program's frame loop keeps the GPU at
 		// most GraphicsDevice::GetMaxFramesInFlight frames behind, but callers that render back to back (tests, tools,
@@ -1534,7 +1536,15 @@ namespace Strata
 		uint64_t m_ReflectionProbeGathers = 0;
 		nvrhi::BindingLayoutHandle m_ProbeIrradianceLayout;
 		nvrhi::ComputePipelineHandle m_ProbeIrradiancePipeline;
-		std::unordered_map<AssetHandle, Ref<TextureHold>> m_ReflectionProbeHolds;
+		// A hold lasts until the frame after the last one whose gathers waited for its capture (Renderer::GetFrameNumber): a
+		// renderer drawing several views per frame (a probe bake's six) keeps what any of them waits for until the streamer's
+		// next update, which runs between frames.
+		struct ReflectionProbeHold
+		{
+			Ref<TextureHold> Hold;
+			uint64_t Frame = 0;
+		};
+		std::unordered_map<AssetHandle, ReflectionProbeHold> m_ReflectionProbeHolds;
 		std::vector<RenderData::ReflectionProbeData> m_ReflectionProbeList;
 		std::vector<ReflectionProbeConversion> m_ReflectionProbeConversions;
 		uint32_t m_UploadedReflectionProbes = 0;

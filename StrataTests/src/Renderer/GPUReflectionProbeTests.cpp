@@ -524,6 +524,46 @@ TEST_SUITE("GPU.SceneRenderer.ReflectionProbes")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture only the first of a frame's views waits for is still held whole until the streamer raises it")
+	{
+		// A probe bake renders six views per frame with one renderer. The view that sees the probe holds its capture whole; the
+		// next view, which sees no probe, must not end that hold before the streamer's update between frames raises it.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr AssetHandle c_CaptureHandle = AssetHandle(0xA3101);
+		const std::filesystem::path pack = WriteStreamingPack({ StreamingPackAsset { c_CaptureHandle, AssetType::Texture, "Lighting/Probe.hdr",
+			CookEnvironmentMap(512, 256) } });
+		std::string error;
+		Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(pack, &error);
+		REQUIRE_MESSAGE(manager, error);
+		Scope<Scene> scene = CreateScope<Scene>("Probe");
+		AddNeutralPostProcess(*scene);
+		AddProbe(*scene, c_CaptureHandle, glm::vec3(0.0f), glm::vec3(5.0f));
+		AddMesh(*scene, BuiltinAssets::SphereMesh, BuiltinAssets::DefaultMaterial, glm::vec3(0.0f), "Ball");
+		const SceneCamera toward = LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f));
+		const SceneCamera away = LookAt(glm::vec3(0.0f, 0.0f, 30.0f), glm::vec3(0.0f, 0.0f, 60.0f));
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+
+		// By the clock, as slow machines take many frames to read the levels on I/O jobs.
+		uint32_t conversions = 0;
+		const auto start = std::chrono::steady_clock::now();
+		while (conversions == 0 && std::chrono::steady_clock::now() - start < std::chrono::seconds(30))
+		{
+			RunFrame(gpu, manager, renderer, *scene, toward);
+			conversions += renderer.GetStats().ReflectionProbeConversions;
+			REQUIRE(renderer.Render(*scene, away)); // In the same frame (Renderer::GetFrameNumber)
+			CHECK(renderer.GetStats().ReflectionProbes == 0);
+		}
+		CHECK(conversions == 1);
+
+		AssetManager::SetActive(nullptr);
+		scene.reset();
+		manager.reset();
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A probe's capture is held whole until converted, then drops to its tail")
 	{
 		// The capture streams like any texture: requested through the frame's resolve cache, it arrives with its tail; nothing

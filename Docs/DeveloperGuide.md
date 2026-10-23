@@ -3545,7 +3545,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   probe, kept across resizes) holds each capture in a slot, given to another capture only when the frame does not use it,
   least recently used first. A capture is requested through the frame's `AssetResolveCache` (High) and held whole in the texture
   streamer (`TextureStreamer::Hold`: nothing draws it, so nothing else raises its levels) until it is converted, then
-  released, so it drops to its tail while the slot keeps lighting; a reload of the texture converts it again. A
+  released, so it drops to its tail while the slot keeps lighting; a reload of the texture converts it again. A hold
+  lasts until the frame after the last one in which a view waited for its capture (`Renderer::GetFrameNumber`), never
+  ending with one view: the streamer raises levels between frames, and a renderer drawing several views per frame (a
+  probe bake's six) would otherwise end in its last view the holds its first ones placed. A
   conversion (`GPU.Reflections`, between `GPU.AO` and `GPU.Opaque`): `IBL/EquirectToCube.comp` into a scratch cube of
   128 with its levels, `IBL/Prefilter.comp` into the slot's six levels, `IBL/ProbeIrradiance.comp` (one work group over
   the cube's 32-texel level) into the slot's coefficients in the probe buffer. With `SpreadLightingUpdates`
