@@ -30,5 +30,5 @@ void main()
 		}
 		color = ApplyHeightFogToSky(color, start, direction);
 	}
-	o_Color = vec4(SanitizeHDR(color), 1.0);
+	o_Color = vec4(SanitizeHDR(color * u_Frame.TemporalParams.y), 1.0); // Pre-exposed, like the surfaces
 }

@@ -174,5 +174,6 @@ void main()
 #else
 	const float alpha = 1.0;
 #endif
-	o_Color = vec4(SanitizeHDR(color), alpha);
+	// Pre-exposed (TemporalParams.y, a power of two: exact unless a value overflows or becomes subnormal).
+	o_Color = vec4(SanitizeHDR(color * u_Frame.TemporalParams.y), alpha);
 }

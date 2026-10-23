@@ -61,8 +61,9 @@ namespace Strata
 			glm::vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 			glm::vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
 			glm::vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
-			// x: 1 when the motion history holds the renderer's previous frame; y: reserved; z: the frame's rotation of per-pixel
-			// noise (PCSS, ambient occlusion) in turns, 0 without temporal anti-aliasing
+			// x: 1 when the motion history holds the renderer's previous frame; y: the pre-exposure, the power of two every writer of
+			// the HDR target multiplies its luminance by (SceneRendererStats::PreExposure); z: the frame's rotation of per-pixel noise
+			// (PCSS, ambient occlusion) in turns, 0 without temporal anti-aliasing
 			glm::vec4 TemporalParams;
 			// Temporal anti-aliasing's offset of the frame's samples in clip units (added to Projection, ViewProjection and their
 			// inverses; 0 without it): xy this frame's, zw the renderer's previous frame's
@@ -290,7 +291,7 @@ namespace Strata
 			float Contrast;
 			int32_t Operator;
 			uint32_t BloomAdditive; // 1: the bloom holds only light above a threshold and is added instead of mixed
-			float Padding;
+			float InversePreExposure; // 1 / the pre-exposure the scene color carries (FrameConstants::TemporalParams.y)
 		};
 		static_assert(sizeof(TonemapParameters) == 32);
 
@@ -309,8 +310,8 @@ namespace Strata
 			float Compensation;
 			float LowPercentile;
 			float HighPercentile;
-			float Padding0;
-			float Padding1;
+			float InversePreExposure; // 1 / the pre-exposure the scene color carries: the histogram meters luminance
+			float Padding;
 		};
 		static_assert(sizeof(ExposureParameters) == 32);
 
@@ -368,7 +369,7 @@ namespace Strata
 			float Threshold;
 			float Knee;
 			uint32_t Mode;
-			float Padding;
+			float InversePreExposure; // 1 / the pre-exposure the scene color carries
 		};
 		static_assert(sizeof(BloomParameters) == 16);
 
@@ -379,8 +380,13 @@ namespace Strata
 			float MinWeight;         // The current frame's least weight
 			float MotionWeightScale; // The current frame's weight per pixel of motion...
 			float MaxMotionWeight;   // ...up to this
+			// The frame's pre-exposure over the history's (a power of two, exact): the history is brought to the frame's scale.
+			float HistoryScale;
+			float InversePreExposure; // 1 / the frame's pre-exposure: the luminance weights are of exposed values
+			float Padding0;
+			float Padding1;
 		};
-		static_assert(sizeof(TemporalParameters) == 16);
+		static_assert(sizeof(TemporalParameters) == 32);
 
 		// Scene/MotionCopy.comp: copies the listed elements of a buffer into a renderer's motion history.
 		struct MotionCopyParameters

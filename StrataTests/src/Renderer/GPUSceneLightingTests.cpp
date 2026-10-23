@@ -76,8 +76,10 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 	{
 		// Lux, candela and nits are linked by the shading without a factor (DeveloperGuide, "Light units and exposure"), and
 		// manual exposure multiplies by 2^Exposure: scaling every light by a power of two and the exposure by its inverse is
-		// exact while no value nears the half-float limit or its subnormals. The scene is closed (the floor fills the view)
-		// and its sky black, since the clear color does not scale with the lights.
+		// exact while no value nears the half-float limit or its subnormals, which the pre-exposure (the power of two nearest
+		// the exposure's multiplier) keeps for the sun's highlight on a glossy sphere too (over 65,504 nits at 65,536 lux; the
+		// Reinhard curve shows what would be clamped). The scene is closed (the floor fills the view) and its sky black, since
+		// the clear color does not scale with the lights.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
@@ -85,15 +87,24 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 		matte.BaseColor = glm::vec4(0.5f, 0.6f, 0.7f, 1.0f);
 		matte.Roughness = 1.0f;
 		const AssetHandle material = assets.AddMaterial(matte);
+		MaterialProperties glossy;
+		glossy.BaseColor = glm::vec4(0.9f, 0.8f, 0.6f, 1.0f);
+		glossy.Metallic = 1.0f;
+		glossy.Roughness = 0.2f;
+		const AssetHandle glossyMaterial = assets.AddMaterial(glossy);
+		float brightestDim = 0.0f;
 
 		const auto render = [&](float scale, float exposure)
 		{
 			Scene scene;
-			AddNeutralPostProcess(scene).Exposure = exposure;
+			PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+			postProcess.Exposure = exposure;
+			postProcess.Tonemapper = TonemapOperator::Reinhard;
 			SkyLightComponent& sky = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
 			sky.AmbientColor = glm::vec3(0.0f);
 			AddMesh(scene, BuiltinAssets::PlaneMesh, material, glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(100.0f);
 			AddMesh(scene, BuiltinAssets::CubeMesh, material, glm::vec3(0.0f, 0.5f, 0.0f), "Box");
+			AddMesh(scene, BuiltinAssets::SphereMesh, glossyMaterial, glm::vec3(-1.5f, 0.5f, 1.5f), "Sphere");
 			AddSun(scene, glm::vec3(1.0f, -2.0f, 0.5f), scale, true);
 			AddPointLight(scene, glm::vec3(-3.0f, 2.0f, 2.5f), glm::vec3(1.0f, 0.9f, 0.8f), 4.0f * scale, 100.0f);
 			Entity spot = scene.CreateEntity("Spot");
@@ -104,13 +115,26 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 			light.Range = 100.0f;
 			SceneRenderer renderer;
 			renderer.SetViewportSize(c_Size, c_Size);
-			return RenderToImage(renderer, scene, LookAt(glm::vec3(2.0f, 7.0f, 3.0f), glm::vec3(0.0f)));
+			ReadbackImage image = RenderToImage(renderer, scene, LookAt(glm::vec3(2.0f, 7.0f, 3.0f), glm::vec3(0.0f)));
+			CHECK(renderer.GetStats().PreExposure == std::ldexp(1.0f, static_cast<int>(exposure)));
+			if (scale == 1.0f)
+			{
+				ReadbackImage hdr;
+				REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), hdr));
+				for (uint32_t y = 0; y < c_Size; y++)
+				{
+					for (uint32_t x = 0; x < c_Size; x++)
+						brightestDim = std::max(brightestDim, ReadHalfTexel(hdr, x, y).r);
+				}
+			}
+			return image;
 		};
 
 		constexpr float c_Sun = 65536.0f; // 2^16 lux: a sunlit scene, below the half-float limit on a matte surface
 		const ReadbackImage dim = render(1.0f, 0.0f);
 		const ReadbackImage bright = render(c_Sun, -16.0f);
 		CHECK(bright.Pixels == dim.Pixels);
+		CHECK(brightestDim > 1.0f); // The highlight, which would pass 65,504 nits at 65,536 lux
 		// Lit, and the comparison sees a stop of difference.
 		uint32_t litPixels = 0;
 		for (uint32_t y = 0; y < c_Size; y++)

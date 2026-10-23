@@ -111,6 +111,7 @@ namespace
 			PathFrame frame;
 			SceneRenderOptions options;
 			options.MotionVectors = true;
+			options.PreExposure = 1.0f; // Both paths' images at one scale, whatever each one metered
 			REQUIRE(renderer.Render(scene, camera, nullptr, options));
 			REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), frame.Color));
 			REQUIRE(Renderer::ReadTexture(renderer.GetEntityIDTexture(), frame.IDs));
@@ -918,7 +919,10 @@ namespace
 	FadeFrame RenderFadeFrame(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
 	{
 		FadeFrame frame;
-		frame.Color = RenderToImage(renderer, scene, camera);
+		SceneRenderOptions options;
+		options.PreExposure = 1.0f; // Renderers compared with each other's images
+		REQUIRE(renderer.Render(scene, camera, nullptr, options));
+		REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), frame.Color));
 		REQUIRE(Renderer::ReadTexture(renderer.GetEntityIDTexture(), frame.IDs));
 		frame.Counts = GetDrawnCounts(renderer);
 		return frame;

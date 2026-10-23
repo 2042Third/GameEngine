@@ -31,7 +31,7 @@ layout(push_constant) uniform TonemapParameters
 	float Contrast;
 	int Operator;
 	uint BloomAdditive;   // 1: the bloom holds only the light above a threshold and is added
-	float Padding;
+	float InversePreExposure; // 1 / the pre-exposure the scene color carries (a power of two)
 } u_Parameters;
 
 // Largest exposed value passed to the tone curves: far beyond where every curve saturates, small enough that their
@@ -108,7 +108,8 @@ vec3 TonemapKhronosNeutral(vec3 color)
 void main()
 {
 	// Inf or NaN (from a broken input or an extreme exposure) would make every tone curve return NaN.
-	vec3 color = texture(sampler2D(u_SceneColor, u_PointSampler), v_UV).rgb * u_Exposure[ST_EXPOSURE_MULTIPLIER];
+	// The exposure multiplies luminance; the scene color is pre-exposed, so its factor is divided out (exactly).
+	vec3 color = texture(sampler2D(u_SceneColor, u_PointSampler), v_UV).rgb * (u_Exposure[ST_EXPOSURE_MULTIPLIER] * u_Parameters.InversePreExposure);
 	color = clamp(mix(color, vec3(0.0), isnan(color)), vec3(0.0), vec3(c_MaxExposedValue));
 	if (u_Parameters.BloomIntensity > 0.0)
 	{

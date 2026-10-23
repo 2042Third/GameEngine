@@ -39,10 +39,13 @@ light), which look right at a manual exposure of 0; new scenes and most samples 
 Both work: what matters is that the lights of a scene agree with each other, and that the exposure matches them. A
 scene twice as bright at one stop less exposure looks exactly the same.
 
-The renderer stores brightness as it is, up to about 65,000 nits: under a real 100,000 lux sun, white surfaces reach
-about 32,000 nits and shiny highlights are cut off. For daylight scenes, use a fraction of the real values (all of them
-divided by the same number) with the exposure raised to match: a 100 lux sun at exposure -5 looks like a 100,000 lux sun
-at -15.
+Real daylight values work too: the renderer scales the brightness it stores by a power of two that follows the exposure
+(its *pre-exposure*), so a real 100,000 lux sun, its shiny highlights and even the sun's own disk keep their detail
+instead of being cut off at the 65,000 nits half floats can hold. The scaling is exact, so it changes nothing else: a
+scene lit by a fraction of the real values (all of them divided by the same number, with the exposure raised to match,
+e.g. a 100 lux sun at exposure -5) still looks exactly like the real one at -15. With automatic exposure a sunlit scene
+meters around 15 stops, so its **Auto Exposure Max EV** must reach that (16, its highest value). The pre-exposure takes
+a few frames to find its value after a scene loads.
 
 ## Exposure
 

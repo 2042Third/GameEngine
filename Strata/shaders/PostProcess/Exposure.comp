@@ -26,8 +26,8 @@ layout(push_constant) uniform ExposureParameters
 	float Compensation;   // Linear exposure compensation
 	float LowPercentile;  // Pixels below this fraction (darkest) and above HighPercentile (brightest) are ignored
 	float HighPercentile;
-	float Padding0;
-	float Padding1;
+	float InversePreExposure; // Read by Histogram.comp
+	float Padding;
 } u_Parameters;
 
 const float c_MiddleGray = 0.18;

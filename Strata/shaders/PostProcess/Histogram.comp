@@ -6,7 +6,8 @@
 #include "Include/Exposure.glsl"
 
 // Luminance histogram of the HDR scene color (input of Exposure.comp). Each workgroup counts its 16x16 pixels in
-// shared memory and adds them to the global histogram, which is cleared before the pass.
+// shared memory and adds them to the global histogram, which is cleared before the pass. The scene color is pre-exposed:
+// the luminance is its value divided by the pre-exposure (exact, a power of two).
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in; // One thread per bin
 
@@ -15,6 +16,19 @@ layout(set = 0, binding = ST_UAV(0), std430) buffer HistogramBuffer
 {
 	uint u_Histogram[];
 };
+
+// RenderData::ExposureParameters (only the pre-exposure is read here).
+layout(push_constant) uniform ExposureParameters
+{
+	float MinLog2;
+	float MaxLog2;
+	float AdaptFactor;
+	float Compensation;
+	float LowPercentile;
+	float HighPercentile;
+	float InversePreExposure;
+	float Padding;
+} u_Parameters;
 
 shared uint s_Bins[ST_HISTOGRAM_BINS];
 
@@ -25,7 +39,7 @@ void main()
 
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	if (all(lessThan(pixel, textureSize(u_SceneColor, 0))))
-		atomicAdd(s_Bins[LuminanceToHistogramBin(Luminance(texelFetch(u_SceneColor, pixel, 0).rgb))], 1u);
+		atomicAdd(s_Bins[LuminanceToHistogramBin(Luminance(texelFetch(u_SceneColor, pixel, 0).rgb) * u_Parameters.InversePreExposure)], 1u);
 	barrier();
 
 	uint count = s_Bins[gl_LocalInvocationIndex];

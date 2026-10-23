@@ -59,8 +59,9 @@ struct FrameConstants
 	vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 	vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
 	vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
-	// x: 1 when u_PreviousInstances and u_PreviousJoints hold the renderer's previous frame; y: reserved; z: the frame's rotation
-	// of per-pixel noise (PCSS, ambient occlusion) in turns, 0 without temporal anti-aliasing
+	// x: 1 when u_PreviousInstances and u_PreviousJoints hold the renderer's previous frame; y: the pre-exposure, a power of two
+	// every writer of the HDR target multiplies its luminance by (SceneRenderer: values near 100,000 lux stay within half
+	// floats); z: the frame's rotation of per-pixel noise (PCSS, ambient occlusion) in turns, 0 without temporal anti-aliasing
 	vec4 TemporalParams;
 	// Temporal anti-aliasing's offset of the frame's samples in clip units (in Projection, ViewProjection and their inverses; 0
 	// without it): xy this frame's, zw the renderer's previous frame's

@@ -291,6 +291,10 @@ namespace Strata
 		// (SceneRendererStats::MotionHistory) and no motion. An instance slot another entity held in the previous frame, and a new
 		// instance, move with the camera only. The image is the same with and without motion vectors.
 		bool MotionVectors = false;
+		// Forces the frame's pre-exposure (SceneRendererStats::PreExposure): a power of two (another value is rounded to the
+		// nearest one in stops; zero, negative or non-finite values to 1). Tests, bakes and renderers whose images are compared
+		// with each other's set it, so their HDR values match without waiting for each one's metering.
+		std::optional<float> PreExposure;
 
 		// The overlays below are drawn over the finished image (after tone mapping and anti-aliasing) with exact display
 		// colors; all of them are off by default.
@@ -447,6 +451,16 @@ namespace Strata
 		// GPU: SceneRendererGPUStats::LocalShadowInstances, LocalShadowDraws, AddGPUCounts).
 		uint32_t LocalShadowCasters = 0;
 		uint32_t LocalShadowDrawCalls = 0;
+		// The pre-exposure: the power of two every writer of the frame's HDR target multiplied its luminance by (shading, the sky,
+		// fog and the clear color; the temporal history holds the same scale), so real luminance such as a 100,000 lux sun stays
+		// within half floats (the exposure divides it out again). Forced (SceneRenderOptions::PreExposure); with manual exposure
+		// the power of two nearest 2^Exposure; with automatic exposure the one nearest a quarter of the renderer's own metered
+		// multiplier (two stops of headroom: the sun's disk), read back frames later without a stall, changed only when off by
+		// more than a stop; 1 after ResetExposureAdaptation until a readback arrived. Settled when forced, with manual exposure,
+		// or once a readback of the renderer's metering of a frame drawn with the current value arrived and kept it: until
+		// then the brightest and darkest values of the frame may have overflowed or lost precision (captures wait for it).
+		float PreExposure = 1.0f;
+		bool PreExposureSettled = false;
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -554,6 +568,7 @@ namespace Strata
 		// RGBA8 UNORM with sRGB-encoded values (display-ready), valid after Render without a target (null until a frame
 		// needed it, see Render).
 		nvrhi::ITexture* GetOutputTexture() const { return m_OutputTexture; }
+		// The frame's HDR scene color (RGBA16_FLOAT): luminance times the frame's pre-exposure (SceneRendererStats::PreExposure).
 		nvrhi::ITexture* GetHDRTexture() const { return m_HDRTexture; }
 		nvrhi::ITexture* GetDepthTexture() const { return m_DepthTexture; }
 		nvrhi::ITexture* GetNormalTexture() const { return m_NormalTexture; }
@@ -566,6 +581,9 @@ namespace Strata
 		nvrhi::ITexture* GetBRDFLut() const { return m_BRDFLut; }
 
 		nvrhi::ITexture* GetBloomTexture() const { return m_BloomTexture; } // Level 0 of the bloom chain (half resolution)
+		// The exposure of the latest frame (Include/Exposure.glsl): the adapted log2 average luminance and the multiplier of
+		// luminance the tone mapping applies.
+		nvrhi::IBuffer* GetExposureBuffer() const { return m_ExposureBuffer; }
 		// The view's depth pyramid occlusion culling tests against (R32_FLOAT, every level): null without the GPU-driven path.
 		nvrhi::ITexture* GetDepthPyramid() const { return m_DepthPyramid; }
 		// The motion vectors of the latest frame that asked for them (SceneRenderOptions::MotionVectors): RG16_FLOAT, in UV units
@@ -607,9 +625,22 @@ namespace Strata
 		// without a camera.
 		bool HasOverlayContent(Scene& scene) const;
 
-		// Automatic exposure adapts gradually; this makes the next frame jump to the scene's brightness (camera cuts,
-		// scene loads).
-		void ResetExposureAdaptation() { m_ResetExposure = true; }
+		// Automatic exposure adapts gradually; this makes the next frame jump to the scene's brightness (camera cuts, scene loads,
+		// a capture's first frame) and starts the pre-exposure again from 1 (SceneRendererStats::PreExposure).
+		void ResetExposureAdaptation()
+		{
+			m_ResetExposure = true;
+			m_ResetPreExposure = true;
+		}
+		// Only the jump of ResetExposureAdaptation: the next frame's automatic exposure is the brightness it meters, and the
+		// pre-exposure keeps its value (the later frames of a capture, each metered alone, wait for it to settle).
+		void JumpExposureAdaptation() { m_ResetExposure = true; }
+		// Stops of headroom the automatic pre-exposure keeps above the metered exposure (SceneRendererStats::PreExposure).
+		static constexpr int32_t c_PreExposureHeadroomStops = 2;
+		// The pre-exposure stays within 2^-c_MaxPreExposureStops and 2^c_MaxPreExposureStops.
+		static constexpr int32_t c_MaxPreExposureStops = 24;
+		// The power of two nearest 2^stops within that range (0 for a non-finite value).
+		static float GetPreExposureFor(float stops);
 		// Temporal anti-aliasing starts its history again with the next frame (scene loads; SceneRendererSpecification::
 		// TemporalAntiAliasing).
 		void ResetHistory() { m_ResetHistory = true; }
@@ -944,6 +975,10 @@ namespace Strata
 		// Meters the HDR image (automatic exposure) through `bindingSet` (the HDR target's or the resolved image's) or writes the
 		// manual exposure into the exposure buffer.
 		void UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* bindingSet);
+		// The frame's pre-exposure (m_PreExposure) from the options, the settings and the readbacks of earlier frames' metering.
+		void ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options);
+		// After the executed command list of a frame that recorded the exposure's copy: the copy is pending.
+		void SubmitExposureReadback();
 		// The bloom chain of the image `prefilterSet` reads (the first downsample: the HDR target's or the resolved image's).
 		void RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet);
 		// The scene's first active post-processing settings, or the defaults.
@@ -1359,6 +1394,27 @@ namespace Strata
 		nvrhi::BufferHandle m_HistogramBuffer;
 		nvrhi::BufferHandle m_ExposureBuffer; // See Include/Exposure.glsl
 		bool m_ResetExposure = true;
+		// The pre-exposure (SceneRendererStats::PreExposure): the value frames are drawn with; whether it settled; a reset asked
+		// for; the readbacks of the exposure buffer after the automatic exposure of a frame (its RenderCount + 1, the epoch and
+		// pre-exposure it was drawn with: readbacks of an earlier epoch, before a reset or a stretch of frames without automatic
+		// exposure, are ignored), in turn, and the newest frame whose readback was read.
+		float m_PreExposure = 1.0f;
+		bool m_PreExposureSettled = false;
+		bool m_ResetPreExposure = false;
+		bool m_PreExposureAutomatic = false; // The latest frame's came from automatic exposure
+		uint64_t m_PreExposureEpoch = 1;
+		struct ExposureReadback
+		{
+			Scope<BufferReadback> Readback;
+			uint64_t Render = 0;
+			uint64_t Epoch = 0;
+			float PreExposure = 1.0f;
+		};
+		std::array<ExposureReadback, c_GPURecordCount> m_ExposureReadbacks;
+		uint32_t m_ExposureReadbackIndex = 0;
+		bool m_ExposureReadbackRecorded = false; // The frame being recorded copies the exposure (SubmitExposureReadback)
+		uint64_t m_ExposureReadbackSeen = 0;
+		float m_HistoryPreExposure = 1.0f; // The pre-exposure of the temporal history's newest image
 		// Temporal anti-aliasing (SceneRendererSpecification::TemporalAntiAliasing): the frame being rendered uses it; the frames
 		// the history holds (0: none); the frame that resolved it last (RenderCount + 1; 0: none, or not since a frame failed),
 		// the device frame, render scene and jitter (clip units) of that frame; a reset asked for, and the resets so far.

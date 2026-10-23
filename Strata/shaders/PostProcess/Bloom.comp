@@ -28,7 +28,7 @@ layout(push_constant) uniform BloomParameters
 	float Threshold; // On the exposed color; 0 lets every pixel scatter
 	float Knee;      // Width of the soft transition around the threshold
 	uint Mode;
-	float Padding;
+	float InversePreExposure; // 1 / the pre-exposure the scene color carries
 } u_Parameters;
 
 vec3 SampleSource(vec2 uv)
@@ -121,7 +121,7 @@ void main()
 	}
 	else if (u_Parameters.Mode == ST_BLOOM_PREFILTER)
 	{
-		color = ApplyThreshold(Downsample(uv, texel, true) * u_Exposure[ST_EXPOSURE_MULTIPLIER]);
+		color = ApplyThreshold(Downsample(uv, texel, true) * (u_Exposure[ST_EXPOSURE_MULTIPLIER] * u_Parameters.InversePreExposure));
 		// Non-finite scene colors (a broken material) must not spread over the whole screen.
 		if (any(isnan(color)) || any(isinf(color)))
 			color = vec3(0.0);

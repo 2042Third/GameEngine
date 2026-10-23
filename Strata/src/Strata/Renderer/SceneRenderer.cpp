@@ -498,6 +498,11 @@ namespace Strata
 			.setInitialState(nvrhi::ResourceStates::ShaderResource)
 			.setKeepInitialState(true)
 			.setDebugName(m_Specification.DebugName + ".Exposure"));
+		// The automatic exposure's results come back to choose the pre-exposure: two floats (Include/Exposure.glsl).
+		for (ExposureReadback& entry : m_ExposureReadbacks)
+			entry.Readback = CreateScope<BufferReadback>(m_Device, 2 * sizeof(float), m_Specification.DebugName + ".ExposureReadback");
+		const bool exposureReadbacks = std::all_of(m_ExposureReadbacks.begin(), m_ExposureReadbacks.end(),
+			[](const ExposureReadback& entry) { return entry.Readback->IsValid(); });
 
 		nvrhi::BindingLayoutDesc bloomLayout;
 		bloomLayout.visibility = nvrhi::ShaderType::Compute;
@@ -538,7 +543,8 @@ namespace Strata
 			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_DummyLocalShadowAtlas
 			&& m_LocalShadowBuffer && m_ClusterBuffer
 			&& m_ClusterBindingLayout && m_ClusterPipeline && m_AOBindingLayout && m_GTAOPipeline && m_AOBlurPipeline && m_ExposureBindingLayout
-			&& m_HistogramPipeline && m_ExposurePipeline && m_HistogramBuffer && m_ExposureBuffer && m_BloomBindingLayout && m_BloomPipeline && m_FXAABindingLayout
+			&& m_HistogramPipeline && m_ExposurePipeline && m_HistogramBuffer && m_ExposureBuffer && exposureReadbacks && m_BloomBindingLayout && m_BloomPipeline
+			&& m_FXAABindingLayout
 			&& m_TemporalBindingLayout && m_TemporalPipeline, "SceneRenderer: failed to create GPU resources");
 		CreateIBLResources();
 		CreateOverlayResources();
@@ -1286,6 +1292,7 @@ namespace Strata
 		// The darkest and brightest 10% of the pixels (deep shadows, light sources) do not move the exposure.
 		parameters.LowPercentile = 0.1f;
 		parameters.HighPercentile = 0.9f;
+		parameters.InversePreExposure = 1.0f / m_PreExposure;
 		m_ResetExposure = false;
 
 		commandList->clearBufferUInt(m_HistogramBuffer, 0);
@@ -1303,6 +1310,94 @@ namespace Strata
 		commandList->setComputeState(state);
 		commandList->setPushConstants(&parameters, sizeof(parameters));
 		commandList->dispatch(1, 1, 1);
+
+		// The metered exposure comes back frames later to choose the pre-exposure (ChoosePreExposure). A readback whose earlier
+		// copy is still under way is left to finish: the frame's is skipped.
+		ExposureReadback& readback = m_ExposureReadbacks[m_ExposureReadbackIndex];
+		if (readback.Readback->IsPending() && !readback.Readback->IsReady())
+			return;
+		readback.Readback->Record(commandList, m_ExposureBuffer, 0, 2 * sizeof(float));
+		readback.Render = m_RenderCount + 1;
+		readback.Epoch = m_PreExposureEpoch;
+		readback.PreExposure = m_PreExposure;
+		m_ExposureReadbackRecorded = true;
+	}
+
+	void SceneRenderer::SubmitExposureReadback()
+	{
+		if (!m_ExposureReadbackRecorded)
+			return;
+		m_ExposureReadbacks[m_ExposureReadbackIndex].Readback->Submit();
+		m_ExposureReadbackIndex = (m_ExposureReadbackIndex + 1) % c_GPURecordCount;
+		m_ExposureReadbackRecorded = false;
+	}
+
+	float SceneRenderer::GetPreExposureFor(float stops)
+	{
+		if (!std::isfinite(stops))
+			return 1.0f;
+		const float rounded = std::round(std::clamp(stops, static_cast<float>(-c_MaxPreExposureStops), static_cast<float>(c_MaxPreExposureStops)));
+		return std::ldexp(1.0f, static_cast<int>(rounded));
+	}
+
+	void SceneRenderer::ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options)
+	{
+		if (m_ResetPreExposure)
+		{
+			m_ResetPreExposure = false;
+			m_PreExposure = 1.0f;
+			m_PreExposureSettled = false;
+			m_PreExposureEpoch++;
+		}
+		const bool automatic = !options.PreExposure && settings.AutoExposure;
+		if (!automatic)
+		{
+			// Readbacks of the automatic exposure before this stretch say nothing about the frames after it.
+			if (m_PreExposureAutomatic)
+				m_PreExposureEpoch++;
+			m_PreExposureAutomatic = false;
+			if (options.PreExposure)
+				m_PreExposure = *options.PreExposure > 0.0f ? GetPreExposureFor(std::log2(*options.PreExposure)) : 1.0f;
+			else
+				m_PreExposure = GetPreExposureFor(std::clamp(settings.Exposure, -20.0f, 20.0f)); // The power of two nearest 2^Exposure
+			m_PreExposureSettled = true;
+			return;
+		}
+		if (!m_PreExposureAutomatic)
+		{
+			m_PreExposureAutomatic = true;
+			m_PreExposureSettled = false; // Until a readback of this stretch arrives
+		}
+
+		// The newest readback of this epoch that completed and was not read yet.
+		ExposureReadback* newest = nullptr;
+		for (ExposureReadback& entry : m_ExposureReadbacks)
+		{
+			if (entry.Readback->IsPending() && entry.Epoch == m_PreExposureEpoch && entry.Render > m_ExposureReadbackSeen && entry.Readback->IsReady()
+				&& (!newest || entry.Render > newest->Render))
+				newest = &entry;
+		}
+		if (!newest)
+			return;
+		m_ExposureReadbackSeen = newest->Render;
+		float values[2] = {};
+		if (!newest->Readback->Read(values, sizeof(values)))
+			return;
+		const float multiplier = values[RenderData::c_ExposureMultiplier];
+		if (!(multiplier > 0.0f) || !std::isfinite(multiplier))
+			return; // Nothing to follow (an image that metered nothing keeps its exposure)
+		// A target beyond the pre-exposure's range keeps the limit it reached.
+		const float target = std::log2(multiplier) - static_cast<float>(c_PreExposureHeadroomStops);
+		const float candidate = GetPreExposureFor(target);
+		if (std::abs(std::log2(m_PreExposure) - target) > 1.0f && candidate != m_PreExposure)
+		{
+			m_PreExposure = candidate;
+			m_PreExposureSettled = false;
+		}
+		else if (newest->PreExposure == m_PreExposure)
+		{
+			m_PreExposureSettled = true;
+		}
 	}
 
 	void SceneRenderer::RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet)
@@ -1310,6 +1405,7 @@ namespace Strata
 		RenderData::BloomParameters parameters = {};
 		parameters.Threshold = std::max(settings.BloomThreshold, 0.0f);
 		parameters.Knee = parameters.Threshold * 0.5f;
+		parameters.InversePreExposure = 1.0f / m_PreExposure;
 
 		const nvrhi::TextureDesc& desc = m_BloomTexture->getDesc();
 		auto dispatch = [&](nvrhi::IBindingSet* bindingSet, uint32_t mode, uint32_t level)
@@ -1422,6 +1518,9 @@ namespace Strata
 		parameters.MinWeight = c_TemporalMinWeight;
 		parameters.MotionWeightScale = c_TemporalMotionWeightScale;
 		parameters.MaxMotionWeight = c_TemporalMaxMotionWeight;
+		parameters.HistoryScale = parameters.CurrentWeight < 1.0f ? m_PreExposure / m_HistoryPreExposure : 1.0f;
+		parameters.InversePreExposure = 1.0f / m_PreExposure;
+		m_HistoryPreExposure = m_PreExposure;
 		nvrhi::ComputeState state;
 		state.pipeline = m_TemporalPipeline;
 		state.bindings = { m_TemporalResolveSets[m_HistoryIndex] };
@@ -2430,6 +2529,9 @@ namespace Strata
 
 		// Temporal anti-aliasing (below) blends along the motion vectors.
 		const PostProcessComponent postProcess = GetPostProcessSettings(scene);
+		ChoosePreExposure(postProcess, options);
+		m_Stats.PreExposure = m_PreExposure;
+		m_Stats.PreExposureSettled = m_PreExposureSettled;
 		const bool temporalWanted = m_Specification.TemporalAntiAliasing && postProcess.AntiAliasing && postProcess.AntiAliasingMethod == AntiAliasingMode::TAA;
 
 		// Motion: the history holds the renderer's previous frame when that frame copied it (its latest frame asked for motion
@@ -2516,7 +2618,7 @@ namespace Strata
 		// Per-pixel noise turns by the golden ratio's fraction of a turn each frame of the history (from its reset on, so captures
 		// are deterministic): the frames the history averages sample the turn evenly.
 		const double noiseTurn = m_TemporalFrame ? std::fmod(static_cast<double>(m_TemporalFrames - 1) * 0.6180339887498949, 1.0) : 0.0;
-		frame.TemporalParams = glm::vec4(m_Stats.MotionHistory ? 1.0f : 0.0f, 0.0f, static_cast<float>(noiseTurn), 0.0f);
+		frame.TemporalParams = glm::vec4(m_Stats.MotionHistory ? 1.0f : 0.0f, m_PreExposure, static_cast<float>(noiseTurn), 0.0f);
 		frame.CameraPosition = glm::vec4(camera.Position, camera.Near);
 		const glm::vec3 forward = -glm::vec3(frame.InverseView[2]);
 		frame.CameraForward = glm::vec4(glm::length(forward) > 1e-6f ? glm::normalize(forward) : glm::vec3(0.0f, 0.0f, -1.0f), camera.Orthographic ? 1.0f : 0.0f);
@@ -2743,7 +2845,9 @@ namespace Strata
 			commandList->clearTextureUInt(m_EntityIDTexture, nvrhi::AllSubresources, 0);
 		if (m_MotionFrame)
 			commandList->clearTextureFloat(m_VelocityTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f));
-		commandList->clearTextureFloat(m_HDRTexture, nvrhi::AllSubresources, nvrhi::Color(SRGBToLinear(clear.r), SRGBToLinear(clear.g), SRGBToLinear(clear.b), 1.0f));
+		// The clear color is a luminance too: pre-exposed like everything drawn over it.
+		commandList->clearTextureFloat(m_HDRTexture, nvrhi::AllSubresources,
+			nvrhi::Color(SRGBToLinear(clear.r) * m_PreExposure, SRGBToLinear(clear.g) * m_PreExposure, SRGBToLinear(clear.b) * m_PreExposure, 1.0f));
 
 		commandList->beginMarker("Prepass");
 		if (m_GPUDrivenFrame)
@@ -2845,6 +2949,7 @@ namespace Strata
 		tonemap.Contrast = std::clamp(postProcess.Contrast, 0.1f, 4.0f);
 		tonemap.Operator = static_cast<int32_t>(postProcess.Tonemapper);
 		tonemap.BloomAdditive = postProcess.BloomThreshold > 0.0f ? 1u : 0u;
+		tonemap.InversePreExposure = 1.0f / m_PreExposure;
 
 		TextRenderStats textStats;
 		m_FontAtlases->BeginFrame(TextRenderer::c_FrameRasterBudget);
@@ -2874,6 +2979,7 @@ namespace Strata
 			m_Device->executeCommandList(commandList); // Keeps the uploads that were recorded
 			if (m_GPUDrivenFrame)
 				SubmitCullReadback();
+			SubmitExposureReadback();
 			m_Stats = {};
 			return false;
 		}
@@ -2939,6 +3045,7 @@ namespace Strata
 		m_Device->executeCommandList(commandList);
 		if (m_GPUDrivenFrame)
 			SubmitCullReadback();
+		SubmitExposureReadback();
 		CommitShadowCache();
 		CommitLocalShadows();
 

@@ -2801,8 +2801,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     0.5.0's scenes keep their values and render as before. The defaults (a 3 lux sun, 10 cd point and 20 cd spot
     lights, a procedural sky of under 1 nit) are a dim scene that exposure 0 shows at about middle gray; a scene may use
     real values instead, with the exposure to match.
-- Exposure: the tonemapper sees `L * M`, L the HDR target's luminance in nits and M the multiplier of the exposure
-  buffer (`SceneRenderer::UpdateExposure`). Manual exposure: `M = 2^Exposure` (registered within [-16, 16]). Automatic
+- Exposure: the tonemapper sees `L * M`, L the scene's luminance in nits and M the multiplier of the exposure buffer
+  (`SceneRenderer::UpdateExposure`; the HDR target holds `L * P`, see the pre-exposure below, and the tone mapping applies
+  `M / P`). Manual exposure: `M = 2^Exposure` (registered within [-16, 16]). Automatic
   exposure: `M = 2^Exposure * 0.18 / 2^a`, where `a` is the log2 average luminance metered by `Exposure.comp`'s
   histogram (`Include/Exposure.glsl`: [-12, 16] in 254 bins of 0.11 EV, the darkest and brightest tenth of the pixels
   left out), adapted at `AutoExposureSpeed` and clamped to [`AutoExposureMinEV`, `AutoExposureMaxEV`]: the average lands
@@ -2823,12 +2824,25 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   | Household lamp of 800 lumens | 64 cd | |
   | Candle | 1 cd | |
   | Computer monitor, lit sign | 100 to 300 nits, about 1,000 nits | |
-- The HDR targets store absolute luminance in RGBA16F (at most 65,504; `SanitizeHDR` clamps at 65,000; below 2^-14
-  values lose bits): a 100,000 lux sun on a white matte surface gives about 32,000 nits, its specular highlights clamp,
-  and a real sun's disk cannot be stored. Scaling every light, the sky and emission by one power of two and the
-  exposure by its inverse renders the same image bit for bit while no value nears those limits
-  (`GPU.SceneRenderer.Lighting`: a closed matte scene lit by 65,536 lux at exposure -16 and by 1 lux at exposure 0), so
-  a daylight scene works at a fraction of its real values, e.g. a 100 lux sun at about -5.
+- Pre-exposure: the HDR targets are RGBA16F (at most 65,504; `SanitizeHDR` clamps at 65,000; below 2^-14 values lose
+  bits), where a 100,000 lux sun on a white surface (about 32,000 nits), its highlights and a real sun's disk (about
+  1.3 billion nits) do not fit. So every writer of the HDR target multiplies its luminance by the frame's pre-exposure P,
+  a power of two (`FrameConstants::TemporalParams.y`): the forward passes (opaque and transparent, fog included), the
+  sky and the clear color; the luminance histogram and bloom's threshold divide it out, the tone mapping applies `M / P`
+  and the temporal history is rescaled by `P / P_previous`. Multiplying by a power of two is exact unless a value
+  overflows or becomes subnormal, so P changes no image otherwise (`GPU.SceneRenderer.PostProcess`; `.Lighting`: a closed
+  scene with a glossy sphere lit by 65,536 lux at exposure -16 and by 1 lux at exposure 0 render bit-identically).
+  - Choice (`SceneRenderer::ChoosePreExposure`, `SceneRendererStats::PreExposure`): forced by
+    `SceneRenderOptions::PreExposure` (tests, bakes, renderers whose images are compared with each other's: they set it
+    on both sides); with manual exposure the power of two nearest `2^Exposure` (1 at 0); with automatic exposure the
+    power of two nearest a quarter of the renderer's own metered multiplier (`c_PreExposureHeadroomStops` 2, for the
+    sun's disk in view), which a ring of `BufferReadback`s copies after the exposure pass (in `GPU.Post`) and the next
+    frames poll without a stall; P changes only when it is off by more than one stop, within 2^-24 to 2^24.
+  - A renderer starts at P = 1, and again after `ResetExposureAdaptation` (`JumpExposureAdaptation` only jumps the
+    adaptation and keeps P). `PreExposureSettled` is true when P is forced or manual, or once a readback of the
+    renderer's metering of a frame drawn with the current P arrived and kept it: until then the frame's brightest and
+    darkest values may have clamped or lost bits.
+  - A real sunlit scene meters around EV 15 (`AutoExposureMaxEV` is registered up to 16); P is then about 2^-17.
 
 ### Height fog
 

@@ -1,6 +1,9 @@
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Renderer/RendererComponents.h"
 
+#include <cstring>
+#include <optional>
+
 using namespace Strata;
 using namespace Strata::Tests;
 
@@ -30,6 +33,63 @@ namespace
 		glm::vec3 CreasePoint() const { return glm::vec3(0.0f, 0.0f, 0.56f); } // Floor at the box's front face
 		glm::vec3 OpenFloorPoint() const { return glm::vec3(1.3f, 0.0f, 1.2f); } // More than the occlusion radius from the box
 	};
+
+	// Renders a frame with the pre-exposure forced (or chosen by the renderer) and reads the output back.
+	ReadbackImage RenderPreExposed(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, std::optional<float> preExposure)
+	{
+		SceneRenderOptions options;
+		options.PreExposure = preExposure;
+		REQUIRE(renderer.Render(scene, camera, nullptr, options));
+		ReadbackImage image;
+		REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), image));
+		return image;
+	}
+
+	ReadbackImage ReadHDRImage(SceneRenderer& renderer)
+	{
+		ReadbackImage image;
+		REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+		REQUIRE(image.BytesPerPixel == 8);
+		return image;
+	}
+
+	// The exposure buffer's floats (Include/Exposure.glsl): the adapted log2 luminance and the multiplier.
+	glm::vec2 ReadExposure(GPUContext& gpu, SceneRenderer& renderer)
+	{
+		const std::vector<uint8_t> bytes = ReadBufferRange(gpu, renderer.GetExposureBuffer(), 0, 2 * sizeof(float));
+		REQUIRE(bytes.size() == 2 * sizeof(float));
+		glm::vec2 values;
+		std::memcpy(&values, bytes.data(), sizeof(values));
+		return values;
+	}
+
+	// Pixels of an HDR image with a channel at SanitizeHDR's clamp.
+	uint32_t CountClampedPixels(const ReadbackImage& hdr)
+	{
+		uint32_t count = 0;
+		for (uint32_t y = 0; y < hdr.Height; y++)
+		{
+			for (uint32_t x = 0; x < hdr.Width; x++)
+			{
+				const glm::vec4 texel = ReadHalfTexel(hdr, x, y);
+				count += std::max({ texel.r, texel.g, texel.b }) >= 64000.0f ? 1u : 0u;
+			}
+		}
+		return count;
+	}
+
+	// The automatic pre-exposure settles from readbacks of the renderer's own metering, frames later: frames until it did (each
+	// waited for, as RenderToImage does), at most `frames`.
+	uint32_t RenderUntilPreExposureSettled(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, uint32_t frames)
+	{
+		for (uint32_t frame = 1; frame <= frames; frame++)
+		{
+			RenderToImage(renderer, scene, camera);
+			if (renderer.GetStats().PreExposureSettled)
+				return frame;
+		}
+		return frames + 1;
+	}
 
 }
 
@@ -386,6 +446,276 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 		const glm::uvec2 lampPixel = ProjectToPixel(camera, glm::vec3(0.7f, 0.2f, 0.0f), c_Size);
 		CHECK(Red(internal, lampPixel.x, lampPixel.y - 8) > 0);
 		CHECK(Red(internal, ProjectToPixel(camera, glm::vec3(-0.6f, 0.0f, 0.5f), c_Size)) > 60);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The pre-exposure is a power of two that changes no image: forced values, the clear color and the sky")
+	{
+		// Multiplying by a power of two is exact, so a scene renders the same at any pre-exposure while no value overflows or
+		// becomes subnormal; the clear color is a luminance like the rest (a skyless view), and so is the sky.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		MaterialProperties matte;
+		matte.BaseColor = glm::vec4(0.6f, 0.5f, 0.4f, 1.0f);
+		matte.Roughness = 0.6f;
+		const AssetHandle material = assets.AddMaterial(matte);
+		const auto build = [&](Scene& scene, bool sky)
+		{
+			AddNeutralPostProcess(scene);
+			AddMesh(scene, BuiltinAssets::PlaneMesh, material, glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(4.0f);
+			AddMesh(scene, BuiltinAssets::SphereMesh, material, glm::vec3(0.0f, 0.5f, 0.0f), "Sphere");
+			AddSun(scene, glm::vec3(0.4f, -1.0f, -0.3f), 2.0f);
+			SkyLightComponent& light = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+			light.AmbientColor = glm::vec3(0.2f); // Keeps the shadows far from subnormal values at 2^-8
+			if (sky)
+			{
+				light.Source = SkyLightSource::Procedural;
+				light.Intensity = 0.5f;
+			}
+		};
+		// The floor covers the lower part of the view, the sky or the clear color the upper part.
+		SceneCamera camera = LookAt(glm::vec3(0.0f, 1.2f, 3.5f), glm::vec3(0.0f, 0.8f, 0.0f));
+		camera.ClearColor = glm::vec4(0.35f, 0.45f, 0.6f, 1.0f);
+		for (const bool sky : { false, true })
+		{
+			CAPTURE(sky);
+			Scene scene;
+			build(scene, sky);
+			SceneRenderer renderer;
+			renderer.SetViewportSize(c_Size, c_Size);
+			const ReadbackImage eight = RenderPreExposed(renderer, scene, camera, 8.0f);
+			CHECK(renderer.GetStats().PreExposure == 8.0f);
+			CHECK(renderer.GetStats().PreExposureSettled);
+			const ReadbackImage eightHDR = ReadHDRImage(renderer);
+			const ReadbackImage sixteen = RenderPreExposed(renderer, scene, camera, 16.0f);
+			CHECK(renderer.GetStats().PreExposure == 16.0f);
+			const ReadbackImage sixteenHDR = ReadHDRImage(renderer);
+			CHECK(sixteen.Pixels == eight.Pixels);
+			// The HDR target holds the luminance times the pre-exposure, to the bit: twice as much at 2^4 as at 2^3.
+			uint32_t doubled = 0;
+			for (uint32_t y = 0; y < c_Size; y++)
+			{
+				for (uint32_t x = 0; x < c_Size; x++)
+					doubled += ReadHalfTexel(sixteenHDR, x, y) == ReadHalfTexel(eightHDR, x, y) * glm::vec4(2.0f, 2.0f, 2.0f, 1.0f) ? 1u : 0u;
+			}
+			CHECK(doubled == c_Size * c_Size);
+			// The neutral image at 2^-8 and 1 as well; values that are not powers of two are rounded to the nearest one.
+			CHECK(RenderPreExposed(renderer, scene, camera, 1.0f / 256.0f).Pixels == eight.Pixels);
+			CHECK(RenderPreExposed(renderer, scene, camera, 1.0f).Pixels == eight.Pixels);
+			CHECK(RenderPreExposed(renderer, scene, camera, 11.0f).Pixels == eight.Pixels);
+			CHECK(renderer.GetStats().PreExposure == 8.0f);
+			RenderPreExposed(renderer, scene, camera, 0.0f);
+			CHECK(renderer.GetStats().PreExposure == 1.0f);
+			// The upper part shows the clear color or the sky.
+			CHECK(eight.Pixels[(4 * c_Size + c_Size / 2) * 4 + 2] > 60);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A 100,000 lux sun with its disk in view reaches no HDR clamp once the pre-exposure settled")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		// A glossy metal floor toward the sun, low over the horizon: its disk above the horizon, its highlight on the floor below.
+		MaterialProperties glossy;
+		glossy.BaseColor = glm::vec4(0.8f, 0.8f, 0.8f, 1.0f);
+		glossy.Metallic = 1.0f;
+		glossy.Roughness = 0.15f;
+
+		Scene scene;
+		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.AutoExposure = true;
+		postProcess.AutoExposureMaxEV = 16.0f;
+		const glm::vec3 toSun = glm::normalize(glm::vec3(0.0f, 0.15f, -1.0f));
+		AddSun(scene, -toSun, 100000.0f);
+		SkyLightComponent& sky = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+		sky.Source = SkyLightSource::Procedural;
+		sky.Intensity = 4000.0f; // A daylight sky: thousands of nits, its disk 80,000
+		sky.SunSize = 3.0f;      // Wider than the test image's pixels
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(glossy), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(400.0f);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 1.0f, -1.0f));
+		const glm::uvec2 sunPixel = ProjectToPixel(camera, camera.Position + toSun * 100.0f, c_Size);
+		REQUIRE(sunPixel.x < c_Size);
+		REQUIRE(sunPixel.y < c_Size / 2);
+		const auto brightestNearSun = [&](const ReadbackImage& hdr)
+		{
+			float brightest = 0.0f;
+			for (uint32_t y = sunPixel.y - 2; y <= sunPixel.y + 2; y++)
+			{
+				for (uint32_t x = sunPixel.x - 2; x <= sunPixel.x + 2; x++)
+					brightest = std::max(brightest, ReadHalfTexel(hdr, x, y).g);
+			}
+			return brightest;
+		};
+
+		// Without pre-exposure the disk and the highlight would be clamped.
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		RenderPreExposed(renderer, scene, camera, 1.0f);
+		CHECK(CountClampedPixels(ReadHDRImage(renderer)) > 0);
+
+		renderer.ResetExposureAdaptation();
+		const uint32_t frames = RenderUntilPreExposureSettled(renderer, scene, camera, 8);
+		CHECK(frames <= 4);
+		CHECK(renderer.GetStats().PreExposure <= 1.0f / 4096.0f);
+		const ReadbackImage hdr = ReadHDRImage(renderer);
+		CHECK(CountClampedPixels(hdr) == 0);
+		// The disk: tens of thousands of nits.
+		CHECK(brightestNearSun(hdr) > 20000.0f * renderer.GetStats().PreExposure);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Automatic exposure meters a 65,536 lux scene 16 stops below a 1 lux one, whatever the pre-exposure")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		MaterialProperties matte;
+		matte.BaseColor = glm::vec4(0.5f, 0.6f, 0.7f, 1.0f);
+		matte.Roughness = 1.0f;
+		const AssetHandle material = assets.AddMaterial(matte);
+		const SceneCamera camera = LookAt(glm::vec3(2.0f, 7.0f, 3.0f), glm::vec3(0.0f));
+		const auto build = [&](Scene& scene, float sun)
+		{
+			PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+			postProcess.AutoExposure = true;
+			postProcess.AutoExposureMaxEV = 16.0f;
+			scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.0f);
+			AddMesh(scene, BuiltinAssets::PlaneMesh, material, glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(100.0f);
+			AddMesh(scene, BuiltinAssets::CubeMesh, material, glm::vec3(0.0f, 0.5f, 0.0f), "Box");
+			AddSun(scene, glm::vec3(1.0f, -2.0f, 0.5f), sun);
+		};
+		struct Metered
+		{
+			glm::vec2 Exposure;
+			ReadbackImage Image;
+		};
+		const auto meter = [&](float sun)
+		{
+			Scene scene;
+			build(scene, sun);
+			SceneRenderer renderer;
+			renderer.SetViewportSize(c_Size, c_Size);
+			CHECK(RenderUntilPreExposureSettled(renderer, scene, camera, 8) <= 4);
+			Metered result;
+			result.Image = RenderToImage(renderer, scene, camera);
+			result.Exposure = ReadExposure(gpu, renderer);
+			// The pre-exposure follows the metering: within a stop of a quarter of its multiplier.
+			const float stops = std::log2(renderer.GetStats().PreExposure);
+			CHECK(std::abs(stops - (std::log2(result.Exposure.y) - SceneRenderer::c_PreExposureHeadroomStops)) <= 1.0f);
+			return result;
+		};
+		const Metered dim = meter(1.0f);
+		const Metered bright = meter(65536.0f);
+		// Half a histogram bin (0.11 EV) at most, and images that agree within the brightness it implies.
+		CHECK(std::abs(std::log2(dim.Exposure.y) - std::log2(bright.Exposure.y) - 16.0f) <= 0.055f);
+		const auto decode = [](uint8_t value)
+		{
+			const float encoded = static_cast<float>(value) / 255.0f;
+			return encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
+		};
+		uint32_t disagreeing = 0;
+		for (size_t index = 0; index < dim.Image.Pixels.size(); index++)
+		{
+			if (index % 4 == 3)
+				continue;
+			const float a = decode(dim.Image.Pixels[index]);
+			const float b = decode(bright.Image.Pixels[index]);
+			disagreeing += std::abs(a - b) > 0.04f * std::max(a, b) + 1.0f / 255.0f ? 1u : 0u;
+		}
+		CHECK(disagreeing == 0);
+
+		// The adapted value does not depend on the pre-exposure the frame was drawn with.
+		Scene scene;
+		build(scene, 65536.0f);
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		RenderPreExposed(renderer, scene, camera, 1.0f / 65536.0f);
+		const glm::vec2 low = ReadExposure(gpu, renderer);
+		renderer.ResetExposureAdaptation();
+		RenderPreExposed(renderer, scene, camera, 1.0f / 1024.0f);
+		CHECK(ReadExposure(gpu, renderer) == low);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A fresh renderer settles its pre-exposure within a few frames, and starts again from 1 after a reset")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.AutoExposure = true;
+		postProcess.AutoExposureMaxEV = 16.0f;
+		AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(Emitting(20000.0f)), glm::vec3(0.0f), "Wall").GetComponent<TransformComponent>().Scale = glm::vec3(20.0f);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f));
+
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const int first = Red(RenderToImage(renderer, scene, camera), c_Size / 2, c_Size / 2);
+		CHECK(renderer.GetStats().PreExposure == 1.0f);
+		CHECK_FALSE(renderer.GetStats().PreExposureSettled);
+		CHECK(RenderUntilPreExposureSettled(renderer, scene, camera, 8) <= 3);
+		// 20,000 nits metered to middle gray: a multiplier of 2^-16.8, pre-exposed two stops below it.
+		CHECK(renderer.GetStats().PreExposure == std::ldexp(1.0f, -19));
+		CHECK(std::abs(Red(RenderToImage(renderer, scene, camera), c_Size / 2, c_Size / 2) - first) <= 1);
+
+		// Manual exposure settles at once, at the power of two nearest its multiplier.
+		postProcess.AutoExposure = false;
+		postProcess.Exposure = -14.4f;
+		RenderToImage(renderer, scene, camera);
+		CHECK(renderer.GetStats().PreExposure == std::ldexp(1.0f, -14));
+		CHECK(renderer.GetStats().PreExposureSettled);
+
+		postProcess.AutoExposure = true;
+		postProcess.Exposure = 0.0f;
+		RenderToImage(renderer, scene, camera);
+		CHECK_FALSE(renderer.GetStats().PreExposureSettled);
+		renderer.ResetExposureAdaptation();
+		RenderToImage(renderer, scene, camera);
+		CHECK(renderer.GetStats().PreExposure == 1.0f);
+		CHECK_FALSE(renderer.GetStats().PreExposureSettled);
+		CHECK(RenderUntilPreExposureSettled(renderer, scene, camera, 8) <= 3);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The temporal history follows a pre-exposure step without a flash")
+	{
+		// The history is brought to the frame's pre-exposure (exactly: a power of two), so a renderer whose pre-exposure steps
+		// shows what one whose pre-exposure stays shows, frame by frame.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		MaterialProperties light;
+		light.BaseColor = glm::vec4(0.9f, 0.8f, 0.7f, 1.0f);
+		MaterialProperties dark;
+		dark.BaseColor = glm::vec4(0.05f, 0.1f, 0.2f, 1.0f);
+		Scene scene;
+		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.AntiAliasing = true;
+		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(dark), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(10.0f);
+		const AssetHandle lightMaterial = assets.AddMaterial(light);
+		for (int index = 0; index < 5; index++)
+			AddMesh(scene, BuiltinAssets::CubeMesh, lightMaterial, glm::vec3(static_cast<float>(index) - 2.0f, 0.5f, static_cast<float>(index % 2)), "Box");
+		AddSun(scene, glm::vec3(0.5f, -1.0f, -0.4f), 3.0f);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.3f);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 3.0f, 5.0f), glm::vec3(0.0f, 0.3f, 0.0f));
+
+		SceneRenderer steady;
+		SceneRenderer stepping;
+		steady.SetViewportSize(c_Size, c_Size);
+		stepping.SetViewportSize(c_Size, c_Size);
+		for (uint32_t frame = 0; frame < 12; frame++)
+		{
+			CAPTURE(frame);
+			const ReadbackImage expected = RenderPreExposed(steady, scene, camera, 1.0f);
+			const ReadbackImage actual = RenderPreExposed(stepping, scene, camera, frame < 6 ? 1.0f : 1.0f / 16.0f);
+			REQUIRE(stepping.GetStats().TemporalFrames == frame + 1);
+			CHECK(MaxDifference(expected, actual) == 0);
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

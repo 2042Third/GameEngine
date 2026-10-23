@@ -34,6 +34,10 @@ layout(push_constant) uniform TemporalParameters
 	float MinWeight;         // The current frame's least weight
 	float MotionWeightScale; // The current frame's weight per pixel of motion...
 	float MaxMotionWeight;   // ...up to this
+	float HistoryScale;      // The frame's pre-exposure over the history's: the history at the frame's scale (exact)
+	float InversePreExposure; // 1 / the frame's pre-exposure: the luminance weights are of exposed values
+	float Padding0;
+	float Padding1;
 } u_Temporal;
 
 vec3 RGBToYCoCg(vec3 color)
@@ -122,11 +126,11 @@ void main()
 		vec2 previousUV = uv - motion;
 		if (all(greaterThanEqual(previousUV, vec2(0.0))) && all(lessThanEqual(previousUV, vec2(1.0))))
 		{
-			vec3 history = motion == vec2(0.0) ? texelFetch(u_History, pixel, 0).rgb : SampleHistory(previousUV);
+			vec3 history = (motion == vec2(0.0) ? texelFetch(u_History, pixel, 0).rgb : SampleHistory(previousUV)) * u_Temporal.HistoryScale;
 			history = YCoCgToRGB(clamp(RGBToYCoCg(history), low, high));
 			float motionPixels = length(motion * u_Frame.ViewportSize.xy);
 			float weight = max(max(u_Temporal.CurrentWeight, u_Temporal.MinWeight), min(motionPixels * u_Temporal.MotionWeightScale, u_Temporal.MaxMotionWeight));
-			float exposure = u_Exposure[ST_EXPOSURE_MULTIPLIER];
+			float exposure = u_Exposure[ST_EXPOSURE_MULTIPLIER] * u_Temporal.InversePreExposure;
 			float currentWeight = weight / (1.0 + Luminance(current) * exposure);
 			float historyWeight = (1.0 - weight) / (1.0 + Luminance(max(history, vec3(0.0))) * exposure);
 			result = (current * currentWeight + history * historyWeight) / max(currentWeight + historyWeight, 1e-6);
