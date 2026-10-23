@@ -2109,7 +2109,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   "Reflections"); refused while playing, as `prefab.apply` is, because it renders and writes from the edited scene; needs
   a GPU.
 - **`lighting.extractSun`** (`Editor/EditorLightingCommands.cpp`, deferred: the sky's map is read on an I/O job and
-  searched on a worker, `HDRSun`) writes the sun of the sky's environment map into the scene's directional light (`light`,
+  searched on a background thread, `HDRSun`) writes the sun of the sky's environment map into the scene's directional light (`light`,
   else the brightest active one, the renderer's, else a new "Sun"), in one undo step (none when the light already is that
   sun): only its rotation, so that its -Z axis points away from the sun as the sky shows it (the map's direction turned
   back by the sky's `Rotation`, through the inverse of a parent's linear part and turned around by a negative Z scale),

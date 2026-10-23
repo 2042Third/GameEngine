@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -33,12 +34,20 @@ namespace Strata::HDRSun
 	constexpr float c_FlatTolerance = 0.01f;
 	constexpr uint32_t c_MinFlatTexels = 3;
 
-	// Linear RGBA floats, 4 per texel, rows from the top.
+	// Linear RGBA floats, 4 per texel, rows from the top, in the decoder's own buffer: a large sky's floats take hundreds of
+	// megabytes, so they are handed over rather than copied.
 	struct Image
 	{
+		struct Deleter
+		{
+			void operator()(float* pixels) const;
+		};
+
 		uint32_t Width = 0;
 		uint32_t Height = 0;
-		std::vector<float> Pixels;
+		std::unique_ptr<float[], Deleter> Data;
+
+		std::span<const float> GetPixels() const { return { Data.get(), Data ? static_cast<size_t>(Width) * Height * 4 : 0 }; }
 	};
 
 	struct Sun

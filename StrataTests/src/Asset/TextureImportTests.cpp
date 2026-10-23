@@ -721,7 +721,7 @@ TEST_SUITE("Asset.TextureImport")
 		std::string error;
 		const std::optional<HDRSun::Image> decoded = HDRSun::Decode(encoded, &error);
 		REQUIRE_MESSAGE(decoded, error);
-		const std::optional<HDRSun::Sun> found = HDRSun::Find(decoded->Pixels, c_Width, c_Height);
+		const std::optional<HDRSun::Sun> found = HDRSun::Find(decoded->GetPixels(), c_Width, c_Height);
 		REQUIRE(found);
 
 		const nlohmann::json plain = { { "Usage", "HDR" }, { "Wrap", "Clamp" } };

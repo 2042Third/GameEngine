@@ -10,6 +10,7 @@
 #include <limits>
 #include <numbers>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -192,10 +193,11 @@ TEST_SUITE("Asset.HDRSun")
 		REQUIRE_MESSAGE(image, error);
 		CHECK(image->Width == 256);
 		CHECK(image->Height == 128);
-		REQUIRE(image->Pixels.size() == sky.size());
+		const std::span<const float> pixels = image->GetPixels();
+		REQUIRE(pixels.size() == sky.size());
 		// RGBE keeps about 1% of each value.
-		CHECK(image->Pixels[4 * 1000] == doctest::Approx(sky[4 * 1000]).epsilon(0.01));
-		CHECK(image->Pixels[4 * 1000 + 3] == 1.0f);
+		CHECK(pixels[4 * 1000] == doctest::Approx(sky[4 * 1000]).epsilon(0.01));
+		CHECK(pixels[4 * 1000 + 3] == 1.0f);
 
 		const std::vector<uint8_t> garbage = { 1, 2, 3, 4, 5, 6, 7, 8 };
 		CHECK_FALSE(HDRSun::Decode(garbage, &error));

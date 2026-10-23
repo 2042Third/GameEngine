@@ -14,6 +14,7 @@
 #include <memory>
 #include <numbers>
 #include <unordered_set>
+#include <utility>
 
 namespace Strata::HDRSun
 {
@@ -25,11 +26,6 @@ namespace Strata::HDRSun
 		constexpr uint64_t c_MaxDecodedPixels = 1ull << 28;
 		// Fewer sky texels than this around the sun (a map of a few texels) measure the sky over the whole map instead.
 		constexpr size_t c_MinBackgroundTexels = 8;
-
-		struct StbImageDeleter
-		{
-			void operator()(void* pixels) const { stbi_image_free(pixels); }
-		};
 
 		float Channel(float value)
 		{
@@ -90,6 +86,11 @@ namespace Strata::HDRSun
 			return *middle;
 		}
 
+	}
+
+	void Image::Deleter::operator()(float* pixels) const
+	{
+		stbi_image_free(pixels);
 	}
 
 	glm::vec3 TexelDirection(uint32_t x, uint32_t y, uint32_t width, uint32_t height)
@@ -317,7 +318,7 @@ namespace Strata::HDRSun
 			return fail(fmt::format("image size {}x{} is not supported", width, height));
 		int decodedWidth = 0;
 		int decodedHeight = 0;
-		std::unique_ptr<float, StbImageDeleter> decoded(stbi_loadf_from_memory(data, length, &decodedWidth, &decodedHeight, &channels, 4));
+		std::unique_ptr<float[], Image::Deleter> decoded(stbi_loadf_from_memory(data, length, &decodedWidth, &decodedHeight, &channels, 4));
 		if (!decoded)
 		{
 			const char* reason = stbi_failure_reason();
@@ -328,7 +329,7 @@ namespace Strata::HDRSun
 		Image image;
 		image.Width = static_cast<uint32_t>(width);
 		image.Height = static_cast<uint32_t>(height);
-		image.Pixels.assign(decoded.get(), decoded.get() + static_cast<size_t>(width) * static_cast<size_t>(height) * 4);
+		image.Data = std::move(decoded);
 		return image;
 	}
 

@@ -456,7 +456,8 @@ namespace Strata
 		}
 
 
-		// lighting.extractSun on its way: the map's source read on an I/O job, decoded and searched on a worker.
+		// lighting.extractSun on its way: the map's source read on an I/O job, decoded and searched on a background thread (long
+		// work no frame waits for, as an import's).
 		struct ExtractResult
 		{
 			std::vector<uint8_t> Bytes;
@@ -599,10 +600,10 @@ namespace Strata
 						result->Error = fmt::format("'{}' does not decode: {}", path, error);
 						return;
 					}
-					result->Sun = HDRSun::Find(image->Pixels, image->Width, image->Height, &error);
+					result->Sun = HDRSun::Find(image->GetPixels(), image->Width, image->Height, &error);
 					if (!result->Sun)
 						result->Error = fmt::format("'{}' has no sun to extract: {}", path, error);
-				});
+				}, JobPriority::Background);
 				return std::nullopt;
 			}
 			if (!state.FindJob.IsComplete())
