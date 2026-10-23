@@ -488,6 +488,35 @@ TEST_SUITE("GPU.Editor.Lighting")
 		CHECK(local.Scale == glm::vec3(1.0f, 3.0f, 1.0f));
 		const glm::vec3 shines = glm::normalize(glm::vec3(scene->GetWorldTransform(rigLight) * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
 		CHECK(glm::dot(shines, -toward) > 0.99999f);
+
+		// A light mirrored along its own Z axis (a negative Z scale) still shines away from the sun: the renderer takes the -Z
+		// axis of its world matrix, which the scale turns around.
+		const std::string mirrored = harness.Run("entity.create", { { "name", "Mirrored Light" },
+			{ "components", { { "Transform", { { "Scale", { 1.0, 1.0, -2.0 } } } }, { "DirectionalLight", nlohmann::json::object() } } } })["id"]
+			.get<std::string>();
+		const EditorCommandResult flipped = harness.RunFrames("lighting.extractSun", { { "light", mirrored } });
+		INFO(flipped.Error);
+		REQUIRE(flipped.Success);
+		const Entity mirroredLight = scene->GetEntityByUUID(*UUIDFromJson(mirrored));
+		CHECK(mirroredLight.GetComponent<TransformComponent>().Scale == glm::vec3(1.0f, 1.0f, -2.0f));
+		const glm::vec3 mirroredShines = glm::normalize(glm::vec3(scene->GetWorldTransform(mirroredLight) * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
+		CHECK(glm::dot(mirroredShines, -toward) > 0.99999f);
+
+		// A light flattened along Z shines nowhere (the renderer skips it): asked for, it is refused without a step; brightest of
+		// all, it is passed over for the light the renderer uses.
+		const std::string flat = harness.Run("entity.create", { { "name", "Flat Light" },
+			{ "components", { { "Transform", { { "Scale", { 1.0, 1.0, 0.0 } } } }, { "DirectionalLight", { { "Intensity", 1000.0 } } } } } })["id"]
+			.get<std::string>();
+		const size_t beforeFlat = harness.Context.GetUndoStack().GetPosition();
+		const EditorCommandResult flattened = harness.RunFrames("lighting.extractSun", { { "light", flat } });
+		CHECK_FALSE(flattened.Success);
+		CHECK(flattened.Error.find("scale") != std::string::npos);
+		CHECK(harness.Context.GetUndoStack().GetPosition() == beforeFlat);
+		const EditorCommandResult brightest = harness.RunFrames("lighting.extractSun", nlohmann::json::object());
+		INFO(brightest.Error);
+		REQUIRE(brightest.Success);
+		CHECK(brightest.Value["light"] != flat);
+		CHECK(scene->GetEntityByUUID(*UUIDFromJson(flat)).GetComponent<DirectionalLightComponent>().Intensity == 1000.0f);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

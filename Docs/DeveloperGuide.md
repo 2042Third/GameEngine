@@ -2112,10 +2112,12 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   searched on a worker, `HDRSun`) writes the sun of the sky's environment map into the scene's directional light (`light`,
   else the brightest active one, the renderer's, else a new "Sun"), in one undo step (none when the light already is that
   sun): only its rotation, so that its -Z axis points away from the sun as the sky shows it (the map's direction turned
-  back by the sky's `Rotation`, through the inverse of a parent's linear part), `Color` (largest channel 1) and
-  `Intensity` (the sun's illuminance times the sky's `Intensity`): `Color` times `Intensity` is the light the map's disk
-  gave. The sky is read again when the result is applied. Refused while playing, for procedural and atmosphere skies, for
-  maps without a sun and maps that are no texture file of the project; a clipped sun answers with a `warning`. The
+  back by the sky's `Rotation`, through the inverse of a parent's linear part and turned around by a negative Z scale),
+  `Color` (largest channel 1) and `Intensity` (the sun's illuminance times the sky's `Intensity`): `Color` times
+  `Intensity` is the light the map's disk gave. The sky is read again when the result is applied. Refused while playing,
+  for procedural and atmosphere skies, for maps without a sun, maps that are no texture file of the project and lights
+  scaled to nothing along Z (the renderer skips them, and so does the default choice); a clipped sun answers with a
+  `warning`. The
   Inspector's Extract Sun runs it, then `asset.setImportSettings` with `RemoveSun` once it succeeded: two steps.
 - **`world.setLayers`** replaces a world's layer list (matched by id or name; a rename moves the layer's cell folder,
   handles kept); removing or re-gridding a layer with cells needs `deleteCells` (cells to the trash, never loaded ones).

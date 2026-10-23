@@ -490,18 +490,20 @@ namespace Strata
 			return glm::normalize(glm::vec3(c * direction.x - s * direction.z, y, s * direction.x + c * direction.z));
 		}
 
-		// The light the renderer uses: the brightest active directional light (its first one among equals).
+		// The light the renderer uses (SceneRenderer's choice): the brightest active directional light that shines somewhere (its
+		// world -Z axis has a length), the first one among equals.
 		Entity FindSceneSun(Scene& scene)
 		{
 			Entity sun;
 			float brightest = -1.0f;
 			for (auto [entity, light, world] : scene.GetRegistry().view<DirectionalLightComponent, WorldTransformComponent>().each())
 			{
-				if (world.ActiveInHierarchy && light.Intensity > brightest)
-				{
-					brightest = light.Intensity;
-					sun = Entity(entity, &scene);
-				}
+				if (!world.ActiveInHierarchy || light.Intensity <= brightest)
+					continue;
+				if (!(glm::length(glm::vec3(world.Matrix * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f))) > 1e-6f))
+					continue;
+				brightest = light.Intensity;
+				sun = Entity(entity, &scene);
 			}
 			return sun;
 		}
@@ -529,9 +531,16 @@ namespace Strata
 			{
 				transaction.Track(light.GetUUID());
 			}
-			// The light shines along its world -Z axis, away from the sun. Only its rotation changes (its translation and scale stay
-			// as stored): under a parent, its -Z axis is the direction the parent's linear part maps onto the world's.
-			glm::vec3 localDirection = -towardSun;
+			// The light shines along its world -Z axis, away from the sun: the parent's linear part times its rotation times its own
+			// scale along Z. Only its rotation changes (its translation and scale stay as stored): the rotation's -Z axis is the
+			// direction the parent's linear part maps onto the world's, turned around by a negative Z scale (a mirrored light).
+			const float scaleZ = light.GetComponent<TransformComponent>().Scale.z;
+			if (!std::isfinite(scaleZ) || scaleZ == 0.0f)
+			{
+				transaction.Rollback();
+				return EditorCommandResult::Fail(fmt::format("'{}' cannot point at the sun: its scale along Z is zero or not finite, so it shines nowhere", light.GetName()));
+			}
+			glm::vec3 localDirection = scaleZ < 0.0f ? towardSun : -towardSun;
 			if (const Entity parent = light.GetParent())
 			{
 				const glm::mat3 linear(scene.GetWorldTransform(parent));
