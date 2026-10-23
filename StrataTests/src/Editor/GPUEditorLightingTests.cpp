@@ -6,6 +6,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "FeatureTest/FeatureTestUtils.h"
+#include "Editor/SaveTestUtils.h"
 #include "Renderer/GPUTestUtils.h"
 #include "TestHelpers.h"
 
@@ -262,6 +263,76 @@ TEST_SUITE("GPU.Editor.Lighting")
 		REQUIRE(kept);
 		CHECK(*kept == *sky);
 
+		harness.Runner.CancelAll("The test ends");
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("lighting.bakeProbes waits by the clock, not a count of frames, for what a probe sees to load")
+	{
+		// A fresh session's loads can take more frames than any count allows: the I/O threads, which read the assets, are held
+		// for 400 frames while the bake waits, and its probe still bakes complete once they run.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Tests::GatedJobSystem jobs;
+		std::string probe;
+		std::filesystem::path directory;
+		{
+			LightingGPUHarness setup;
+			setup.DeviceFrames = &gpu;
+			directory = Tests::CreateTemporaryDirectory("GPUEditorBakeWait") / "Game";
+			setup.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+			const std::filesystem::path external = Tests::CreateTemporaryDirectory("GPUEditorBakeWaitTexture") / "Wall.png";
+			REQUIRE(FileSystem::WriteBytes(external, Tests::CreateSolidPNG(2048, 2048, 200, 40, 40)));
+			const std::string texture = setup.Run("asset.import", { { "file", FileSystem::ToUTF8(external) }, { "directory", "Textures" } })["asset"].get<std::string>();
+			const std::string material = setup.Run("material.create", { { "path", "Materials/Wall.stmat" },
+				{ "properties", { { "BaseColorMap", texture }, { "Unlit", true } } } })["asset"].get<std::string>();
+			setup.Run("entity.create", { { "name", "Wall" }, { "components", {
+				{ "Transform", { { "Translation", { 3, 0, 0 } }, { "Scale", { 0.5, 8, 8 } } } },
+				{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) }, { "Material", material } } } } } });
+			probe = setup.Run("entity.create", { { "name", "Probe" },
+				{ "components", { { "ReflectionProbe", { { "Extents", { 2, 2, 2 } } } } } } })["id"].get<std::string>();
+			setup.Run("scene.saveAs", { { "path", "Scenes/Room.stscene" } });
+			setup.Run("project.setStartScene", { { "scene", "Scenes/Room.stscene" } });
+			setup.Runner.CancelAll("The session ends");
+		}
+
+		// A new session: the scene's large texture has no more than its smallest levels loaded until something draws it, and
+		// the bake's renderer streams nothing (it waits for every level).
+		LightingGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		const EditorCommandResult opened = harness.RunFrames("project.open", { { "path", FileSystem::ToUTF8(directory) } });
+		REQUIRE_MESSAGE(opened.Success, opened.Error);
+
+		auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+		int frames = 0;
+		{
+			Tests::IOGate gate;
+			harness.Runner.Run(harness.Context, harness.Commands, "lighting.bakeProbes", nlohmann::json::object(),
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			for (; frames < 400 && !*completed; frames++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				harness.Context.Update(Timestep(1.0f / 60.0f));
+				harness.Runner.Update(harness.Context);
+				gpu.GetDevice().EndFrame();
+			}
+			REQUIRE_FALSE(*completed);
+		}
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+		for (; !*completed && std::chrono::steady_clock::now() < deadline; frames++)
+		{
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			harness.Context.Update(Timestep(1.0f / 60.0f));
+			harness.Runner.Update(harness.Context);
+			gpu.GetDevice().EndFrame();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		REQUIRE(*completed);
+		INFO((*completed)->Error);
+		REQUIRE((*completed)->Success);
+		CHECK(FindProbe((*completed)->Value, probe)["complete"] == true);
 		harness.Runner.CancelAll("The test ends");
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

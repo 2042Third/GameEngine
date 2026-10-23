@@ -3560,7 +3560,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   views (256 texels, `ProbeBake::GetFaceCamera`) of the edited scene with `SceneRenderOptions::HDROutput` (the frame ends
   with its HDR target: no exposure, bloom, tone mapping or overlays) and a forced power-of-two pre-exposure from the
   scene's brightest directional light (`ProbeBake::ChoosePreExposure`), one probe per frame, again on the next frames
-  (at most 300) while what they show loads; reads them back (`TextureReadback`, polled), puts them together into a
+  while what they show loads (by the clock, at most two minutes from the bake's start: `c_MaxBakeWait`; a fresh session's
+  imports take that long whatever the frame rate); reads them back (`TextureReadback`, polled), puts them together into a
   1024x512 equirectangular image divided by the pre-exposure (`ProbeBake::AssembleEquirect`) and encodes it
   (`ImageWriter::EncodeHDR`) on jobs, writes it to `.strata/Bake/<bake>/<probe id>.hdr` on an I/O job, and imports the
   files as `Assets/Lighting/<scene>/<probe id>.hdr` through `EditorAssetManager::ImportExternal` (" (n)" when a name is

@@ -50,9 +50,11 @@ namespace Strata
 	namespace
 	{
 
-		// Frames a probe's views may render again while what they show is still loading (every level of every texture: the
-		// bake's renderer streams nothing), shadow views or other probes' captures are pending, or animators lag their pose.
-		constexpr uint32_t c_MaxBakeWaitFrames = 300;
+		// How long a bake renders its probes' views again while what they show is still loading (every level of every texture:
+		// the bake's renderer streams nothing), shadow views or other probes' captures are pending, or animators lag their pose:
+		// by the clock from the bake's start, since that (a fresh session's imports and loads among it) takes as long as it
+		// takes whatever the frame rate. Probes whose views still wait then are baked as they are (complete: false).
+		constexpr std::chrono::seconds c_MaxBakeWait { 120 };
 		// A bake whose GPU readbacks have not finished after this long fails (a lost or hung device).
 		constexpr std::chrono::seconds c_BakeReadbackTimeout { 30 };
 
@@ -70,7 +72,7 @@ namespace Strata
 			UUID Entity;
 			std::string Name;
 			glm::vec3 Position = glm::vec3(0.0f);
-			bool Complete = true; // Its views waited for nothing beyond c_MaxBakeWaitFrames
+			bool Complete = true; // Its views waited for nothing after c_MaxBakeWait
 			std::array<Scope<TextureReadback>, 6> Readbacks;
 			Ref<BakeFile> File;
 			JobHandle EncodeJob;
@@ -97,7 +99,7 @@ namespace Strata
 			glm::vec4 ClearColor = glm::vec4(0.0f);
 			std::vector<BakeProbe> Probes;
 			size_t NextProbe = 0;
-			uint32_t WaitFrames = 0;
+			std::chrono::steady_clock::time_point WaitDeadline; // The bake's start plus c_MaxBakeWait
 			BakeStage Stage = BakeStage::Render;
 			std::chrono::steady_clock::time_point Submitted;
 			JobHandle WriteJob;
@@ -198,13 +200,12 @@ namespace Strata
 				if (!probe.Readbacks[face])
 					return EditorCommandResult::Fail(fmt::format("Reading what '{}' sees back failed: {}", probe.Name, error));
 			}
-			if (!complete && ++state.WaitFrames < c_MaxBakeWaitFrames)
+			if (!complete && std::chrono::steady_clock::now() < state.WaitDeadline)
 			{
 				probe.Readbacks = {};
 				return std::nullopt;
 			}
 			probe.Complete = complete;
-			state.WaitFrames = 0;
 			if (++state.NextProbe == state.Probes.size())
 			{
 				// Every view is on its way back: the renderer is done.
@@ -647,7 +648,7 @@ namespace Strata
 			"saved file still names it); any other texture Capture named stays. One undo "
 			"step for the files and the captures. Answers once the textures are imported (a few frames; the editor keeps running). Needs a "
 			"GPU; refused while playing (it renders and writes from the edited scene). Returns {directory, probes: [{entity, name, capture, "
-			"path, complete (false when something it sees was still loading after 300 frames), previous (the capture before, or null), "
+			"path, complete (false when something it sees was still loading after two minutes), previous (the capture before, or null), "
 			"trashed}]}.",
 			ObjectSchema({ { "entities", EntityArraySchema("Probes to bake (entities with a ReflectionProbe component); default: every active "
 				"probe of the scene") } }),
@@ -697,6 +698,7 @@ namespace Strata
 				state->TargetDirectory = GetCaptureDirectory(context, *scene);
 				state->StagingDirectory = context.GetProject()->GetIntermediateDirectory() / "Bake" / FileSystem::FromUTF8(UUID().ToString());
 				state->PreExposure = ProbeBake::ChoosePreExposure(*scene);
+				state->WaitDeadline = std::chrono::steady_clock::now() + c_MaxBakeWait;
 				// The background where nothing is drawn and no sky shows: the scene camera's, as the game shows it.
 				const Entity camera = scene->GetPrimaryCameraEntity();
 				state->ClearColor = camera ? SceneCamera::FromEntity(*scene, camera, 1.0f).ClearColor : SceneCamera().ClearColor;
