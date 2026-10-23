@@ -77,6 +77,7 @@ struct FrameConstants
 	// The atmosphere's sun disk: xyz toward the sun, w its angular radius (0: none); rgb its illuminance at the ground (lux)
 	vec4 SunDiskDirection;
 	vec4 SunDiskColor;
+	vec4 ReflectionParams; // x: 1 when the frame traced screen-space reflections (Forward.frag's u_ScreenReflections)
 };
 
 layout(set = 0, binding = ST_CBV(0), std140) uniform FrameBuffer

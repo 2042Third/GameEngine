@@ -33,25 +33,11 @@ layout(location = 5) flat in uint v_LODFade;
 
 layout(location = 0) out vec4 o_Color;
 
-vec3 GetShadingNormal(MaterialData material, vec2 uv)
-{
-	// Back faces (double-sided materials) use the negated tangent frame: T, B and N all flip (glTF).
-	float side = gl_FrontFacing ? 1.0 : -1.0;
-	vec3 normal = normalize(v_Normal);
-	vec3 tangent = v_Tangent.xyz - normal * dot(normal, v_Tangent.xyz);
-	float tangentLength = length(tangent);
-	if (tangentLength < 1e-5)
-		return normal * side;
-
-	tangent /= tangentLength;
-	vec3 bitangent = cross(normal, tangent) * (v_Tangent.w < 0.0 ? -1.0 : 1.0);
-	// Normal maps store X and Y (BC5 keeps only those); Z is reconstructed from them, so every format shades alike.
-	vec2 sampledXY = SampleMaterialTexture(material.NormalMap, uv).xy * 2.0 - 1.0;
-	vec3 sampled = vec3(sampledXY * material.NormalScale, sqrt(clamp(1.0 - dot(sampledXY, sampledXY), 0.0, 1.0)));
-	vec3 mapped = mat3(tangent, bitangent, normal) * sampled;
-	float mappedLength = length(mapped);
-	return (mappedLength > 1e-5 ? mapped / mappedLength : normal) * side;
-}
+#ifndef ST_FORWARD_TRANSPARENT
+// The frame's screen-space reflections (ReflectionParams.x, Effects/ScreenSpaceReflections.comp), at half resolution: rgb the
+// reflected luminance, pre-exposed; a the confidence. Of the opaque surfaces the prepass drew: transparent surfaces have none.
+layout(set = 0, binding = ST_SRV(18)) uniform texture2D u_ScreenReflections;
+#endif
 
 // The lit surface's color: the sun with its shadow, the punctual lights of the pixel's cluster (those with shadows through
 // their views, Include/LocalShadows.glsl), the reflection probes' and the sky's image-based light (or the constant ambient)
@@ -128,8 +114,18 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 	probes.Weight = 0.0;
 	if (u_ProbeCounts.x > 0u)
 		probes = EvaluateReflectionProbes(surface.Position, surface.Normal, reflected, surface.Roughness);
+	// Screen-space reflections replace the probes' and the sky's specular light by their confidence (the scene's luminance as
+	// the previous frame showed it, which no intensity of the sky scales).
+	vec4 screenReflection = vec4(0.0);
+#ifndef ST_FORWARD_TRANSPARENT
+	if (u_Frame.ReflectionParams.x > 0.0)
+	{
+		screenReflection = textureLod(sampler2D(u_ScreenReflections, u_LinearClampSampler), gl_FragCoord.xy * u_Frame.ViewportSize.zw, 0.0);
+		screenReflection.rgb /= u_Frame.TemporalParams.y;
+	}
+#endif
 	bool environment = u_Frame.EnvironmentParams.w > 0.0;
-	if (environment || probes.Weight > 0.0)
+	if (environment || probes.Weight > 0.0 || screenReflection.a > 0.0)
 	{
 		// Image-based lighting: diffuse irradiance plus split-sum specular (prefiltered radiance x environment BRDF).
 		float NoV = max(dot(surface.Normal, surface.View), 1e-4);
@@ -152,12 +148,22 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 			float sky = 1.0 - probes.Weight;
 			irradiance = probes.Irradiance + (environment ? irradiance * u_Frame.EnvironmentParams.x * sky : vec3(0.0));
 			radiance = probes.Radiance + radiance * (environment ? u_Frame.EnvironmentParams.x * sky : 0.0);
+			if (screenReflection.a > 0.0)
+				radiance = mix(radiance, screenReflection.rgb, screenReflection.a);
 			vec3 diffuse = irradiance * surface.Albedo * (1.0 - surface.Metallic) * (1.0 - specularColor);
 			// The constant ambient's share as the constant ambient lights alone (below: diffuse only, no specular share), so
 			// that a probe fading out meets it without a step at its box's faces.
 			if (!environment)
 				diffuse += u_Frame.AmbientColor.rgb * sky * surface.Albedo * (1.0 - surface.Metallic);
 			color += diffuse * diffuseOcclusion + radiance * specularColor * specularOcclusion;
+		}
+		else if (screenReflection.a > 0.0)
+		{
+			// Without the sky the constant ambient lights the diffuse part, as it does without reflections (below).
+			vec3 diffuse = environment ? irradiance * surface.Albedo * (1.0 - surface.Metallic) * (1.0 - specularColor) * u_Frame.EnvironmentParams.x
+				: u_Frame.AmbientColor.rgb * surface.Albedo * (1.0 - surface.Metallic);
+			vec3 specular = mix(radiance * (environment ? u_Frame.EnvironmentParams.x : 0.0), screenReflection.rgb, screenReflection.a);
+			color += diffuse * diffuseOcclusion + specular * specularColor * specularOcclusion;
 		}
 		else
 		{
@@ -188,7 +194,7 @@ void main()
 	if ((material.Flags & ST_MATERIAL_UNLIT) == 0u)
 	{
 		vec4 metallicRoughness = SampleMaterialTexture(material.MetallicRoughnessMap, uv);
-		vec3 shadingNormal = GetShadingNormal(material, uv);
+		vec3 shadingNormal = GetShadingNormal(material, uv, v_Normal, v_Tangent, gl_FrontFacing);
 		float occlusion = mix(1.0, SampleMaterialTexture(material.OcclusionMap, uv).r, material.OcclusionStrength);
 		color = ShadeLitSurface(baseColor.rgb, baseColor.a, emissive, metallicRoughness, shadingNormal, occlusion, material);
 	}

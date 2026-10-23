@@ -2448,7 +2448,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   light clustering, directional shadow cascades and point and spot lights' shadow views ("Local light shadows"),
   depth/normal/entity-ID prepass (with motion vectors when asked or for
   TAA: "Motion vectors and TAA"), ground-truth ambient
-  occlusion, the reflection probes' conversions ("Reflections"), forward PBR (opaque surfaces with an EQUAL depth test
+  occlusion, the reflection probes' conversions and the screen-space reflections' trace ("Reflections"), forward PBR
+  (opaque surfaces with an EQUAL depth test
   and forced early depth testing), sky,
   transparent surfaces (back to front), each fogged by the scene's height fog ("Fog and atmosphere"), the temporal
   anti-aliasing resolve when the scene chooses it, then
@@ -2751,8 +2752,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   sky); blended transparent surfaces multiply it by 1 - a (`SrcBlendAlpha Zero`, `DestBlendAlpha InvSrcAlpha`), so after
   the transparent pass it is their transmittance; glass, drawn without blending with its own depth and velocity, will
   write 1. A new writer keeps this or the reactive mask goes wrong (the HDR-alpha case of `GPU.SceneRenderer.TAA`
-  fails). Only the TAA reads it. The history's alpha holds the signed view distance (above); SSR may read it as the
-  previous frame's distance.
+  fails). Only the TAA reads it. The history's alpha holds the signed view distance (above); screen-space reflections
+  fetch only the history's color ("Reflections").
 - **Sharpening** lives in the tone mapping (`Tonemap.frag`, `TonemapParameters::Sharpening`, written only on frames the
   TAA resolved): four `texelFetch` neighbors, in compressed luminance the center moves from their mean by
   `Sharpening * (1 - R)^8` (R the five taps' range), bounded to the range widened by that amount times R and below
@@ -3042,14 +3043,43 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `AssetTrashAction` for each earlier capture that a bake made for that probe (its ID's name in that folder) and nothing
   else uses (the open scene counts as it is in memory, `AssetReferences::IgnoreSavedOpenScene`: its saved file naming the
   earlier capture until the next save keeps nothing, also on redo); any other texture a `Capture` named stays untouched. The staging folder goes with the command, also on
-  failure; a scene change or Play before the import leaves nothing behind, after it the imported files go to the trash.
+  failure, on an I/O job after the job writing it (`ProbeBake::RemoveStaging`: a bake cancelled while it writes would
+  otherwise remove the folder beside the writer on the other I/O thread); a scene change or Play before the import leaves
+  nothing behind, after it the imported files go to the trash.
   A probe bakes what is drawn at its position, other probes' current captures included: baking twice adds a bounce.
+- **Screen-space reflections** (`PostProcessComponent::ScreenSpaceReflections`, `SceneRendererScreenReflections.cpp`)
+  need TAA (the setting is inactive without it): the trace fetches the previous frame's resolved image, the TAA's
+  history, and leaves its noise to the TAA. From the history's second frame on (`SceneRendererStats::
+  ScreenSpaceReflections`), the prepass's surface variant (`ST_PREPASS_SURFACE`, `Scene/DepthPrepassSurface.frag`,
+  pipelines with `PipelineKey::Surface`, after the velocity target) also writes the surface target: RGBA16F at full
+  resolution, the normal-mapped view-space normal (octahedral; `GetShadingNormal` of `Include/MaterialTextures.glsl`, as
+  the forward pass shades it), the roughness and the metallic factor, the maps sampled before any discard; unlit surfaces
+  write roughness 1. `Effects/ScreenSpaceReflections.comp` (in `GPU.Reflections`, after the probes' conversions) then
+  traces at half resolution, each texel from one pixel of its 2x2 block (another each frame): the view reflected about
+  that normal, cut where it leaves the screen, passes the far plane or (toward the camera) nears the near plane, is
+  marched in screen space, where UV and depth change linearly along it, in 24 steps closer together near its start
+  (offset by interleaved gradient noise that turns each frame, `TemporalParams.z`), then refined by six bisections. It
+  hits the first surface it passes behind by less than its step's depth (at least 5 cm or 2% of the distance), and
+  fetches the history (bilinear) where that surface was, along the velocity at the hit pixel, scaled to the frame's
+  pre-exposure: rgb the reflected luminance, pre-exposed; alpha the confidence, `ScreenSpaceReflectionsIntensity` times
+  fades over the last quarter below `ScreenSpaceReflectionsMaxRoughness`, the screen's outer 10% and hits on surfaces the
+  ray meets from behind (the depth buffer holds front faces). Rays that a normal map turns into their surface, rays that
+  leave the screen or meet only the sky, and hits whose surface was outside the previous frame get none.
+  `Scene/Forward.frag` samples the result bilinearly (scene-set SRV 18, when `FrameConstants::ReflectionParams.x` is 1)
+  and mixes it over the probes' and the sky's specular radiance before the split-sum BRDF; without a sky the constant
+  ambient still lights the diffuse part. Transparent surfaces get none, and the trace reads no nearest-depth pyramid
+  (both deferred). Memory: the surface target's 8 and the result's 2 bytes per pixel (about 20 MiB at 1920x1080), made by
+  the first frame that traces, released with the targets. Pixels that find nothing render bit for bit as without
+  reflections (`GPU.SceneRenderer.SSR`: a rough floor and a cube above the view; its other cases are the mirror floor
+  against the CPU's prediction on both paths, a moving cube's reflection that keeps up only when fetched along the hit's
+  motion, and that nothing traces without TAA).
 - Bindings: scene-set SRV 9 is the cube array (a one-slot black cube array, `Renderer::GetBlackCubeArrayTexture`, without
   probes in view; the device's `imageCubeArray` is required, "Building") and SRV 10 the probe buffer
   (`RenderData::ReflectionProbeBuffer`, 3.6 KB made with the renderer: the slots' coefficients, written on the GPU, then
   the frame's list with camera-relative centers, written by the CPU only when it has probes or the previous upload had
   some). A scene without probes in view makes nothing and renders bit-identically to one without the component
-  (`GPU.SceneRenderer.ReflectionProbes`).
+  (`GPU.SceneRenderer.ReflectionProbes`). SRV 18 is the screen-space reflections' result (`Renderer::GetBlackTexture` until
+  a frame traced them).
 
 ### Streaming and uploads
 

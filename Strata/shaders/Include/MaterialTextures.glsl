@@ -42,4 +42,26 @@ vec4 SampleMaterialTexture(uint textureIndex, vec2 uv)
 	return (packedSlot & ST_TEXTURE_SLOT_GRAYSCALE) != 0u ? vec4(value.rrr, 1.0) : value;
 }
 
+// The normal-mapped normal of a surface (world space) from its interpolated vertex normal and tangent (w: the bitangent's sign,
+// already flipped for mirrored instances), as the forward pass shades it and the prepass's surface target stores it.
+vec3 GetShadingNormal(MaterialData material, vec2 uv, vec3 vertexNormal, vec4 vertexTangent, bool frontFacing)
+{
+	// Back faces (double-sided materials) use the negated tangent frame: T, B and N all flip (glTF).
+	float side = frontFacing ? 1.0 : -1.0;
+	vec3 normal = normalize(vertexNormal);
+	vec3 tangent = vertexTangent.xyz - normal * dot(normal, vertexTangent.xyz);
+	float tangentLength = length(tangent);
+	if (tangentLength < 1e-5)
+		return normal * side;
+
+	tangent /= tangentLength;
+	vec3 bitangent = cross(normal, tangent) * (vertexTangent.w < 0.0 ? -1.0 : 1.0);
+	// Normal maps store X and Y (BC5 keeps only those); Z is reconstructed from them, so every format shades alike.
+	vec2 sampledXY = SampleMaterialTexture(material.NormalMap, uv).xy * 2.0 - 1.0;
+	vec3 sampled = vec3(sampledXY * material.NormalScale, sqrt(clamp(1.0 - dot(sampledXY, sampledXY), 0.0, 1.0)));
+	vec3 mapped = mat3(tangent, bitangent, normal) * sampled;
+	float mappedLength = length(mapped);
+	return (mappedLength > 1e-5 ? mapped / mappedLength : normal) * side;
+}
+
 #endif

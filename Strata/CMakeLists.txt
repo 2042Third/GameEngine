@@ -100,6 +100,7 @@ strata_add_shaders(Strata_Renderer
 		IBL/BRDFLut.comp
 		Effects/GTAO.comp
 		Effects/AOBlur.comp
+		Effects/ScreenSpaceReflections.comp
 		PostProcess/Fullscreen.vert
 		PostProcess/Tonemap.frag
 		PostProcess/Histogram.comp
@@ -128,6 +129,8 @@ strata_add_shaders(Strata_Renderer
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassVelocity.frag|ST_VELOCITY"
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassNoEntityIDsVelocity.frag|ST_NO_ENTITY_IDS,ST_VELOCITY"
 		"Scene/DepthPrepass.frag|Scene/SelectionMask.frag|ST_SELECTION_MASK"
+		"Scene/DepthPrepass.frag|Scene/DepthPrepassSurface.frag|ST_VELOCITY,ST_PREPASS_SURFACE"
+		"Scene/DepthPrepass.frag|Scene/DepthPrepassNoEntityIDsSurface.frag|ST_NO_ENTITY_IDS,ST_VELOCITY,ST_PREPASS_SURFACE"
 		"Overlay/Outline.frag|Overlay/OutlineMask.frag|ST_OUTLINE_MASK"
 		"Scene/Mesh.vert|Scene/MeshSkinned.vert|ST_SKINNED"
 		"Scene/Mesh.vert|Scene/MeshVelocity.vert|ST_VELOCITY"

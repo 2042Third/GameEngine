@@ -1216,7 +1216,8 @@ namespace Strata
 			const uint32_t slots = GetBucketSlots(bucket);
 			if (slots == 0 && !count)
 				continue;
-			const PipelineKey key { pass, parts.DoubleSided, parts.Mirrored, parts.Geometry == RenderData::c_CullGeometrySkinned, m_MotionFrame };
+			const PipelineKey key { pass, parts.DoubleSided, parts.Mirrored, parts.Geometry == RenderData::c_CullGeometrySkinned, m_MotionFrame,
+				m_ReflectionFrame && pass == Pass::Prepass };
 			const GeometryArena arena = parts.Geometry == RenderData::c_CullGeometryStatic ? GeometryArena::Static : GeometryArena::Skinned;
 			state.pipeline = GetScenePipeline(key);
 			state.vertexBuffers = {

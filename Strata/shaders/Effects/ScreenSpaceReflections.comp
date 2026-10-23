@@ -1,0 +1,171 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/Scene.glsl"
+
+// Screen-space reflections (SceneRenderer, in GPU.Reflections, after the prepass): for each texel of a half-resolution target,
+// a ray from one pixel of its 2x2 block (each in turn, frame by frame) along the view reflected about the surface target's
+// normal, marched in screen space against the frame's depth in c_Steps steps (offset by per-pixel noise that turns each frame)
+// and refined by bisection. Where it passes behind a surface by less than the step's depth, it hit it: the previous frame's
+// resolved image (the TAA's history) is fetched where that surface was, along the hit pixel's motion, at the frame's
+// pre-exposure. rgb: the reflected luminance, pre-exposed; a: the confidence, which fades with roughness up to MaxRoughness,
+// toward the screen's edges and for surfaces the ray meets from behind. Rays that leave the screen, pass the far plane or meet
+// nothing, and hits whose surface was outside the previous frame, have none: Forward.frag keeps the probes' and the sky's
+// specular light there and mixes the reflection over it elsewhere. The TAA averages the noise of the frames.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Slots above the scene set's (Include/Scene.glsl, whose frame constants and linear clamp sampler this pass binds too).
+layout(set = 0, binding = ST_SRV(22)) uniform texture2D u_Depth;
+layout(set = 0, binding = ST_SRV(23)) uniform texture2D u_Surface; // xy: octahedral view-space normal (normal-mapped), z: roughness
+layout(set = 0, binding = ST_SRV(24)) uniform texture2D u_Velocity;
+layout(set = 0, binding = ST_SRV(25)) uniform texture2D u_History;
+layout(set = 0, binding = ST_SRV(26)) uniform texture2D u_Normals; // The prepass's geometric view-space normals (octahedral)
+layout(set = 0, binding = ST_UAV(0), rgba16f) uniform writeonly image2D o_Reflections;
+
+layout(push_constant) uniform ReflectionParameters
+{
+	float Intensity;    // The confidence's scale
+	float MaxRoughness; // Rougher surfaces reflect nothing; the confidence fades over the last quarter below it
+	float HistoryScale; // The frame's pre-exposure over the history's
+	uint Frame;         // The history's frame count: which pixel of each block traces
+} u_Reflections;
+
+const uint c_Steps = 24u;
+const uint c_RefineSteps = 6u;
+const float c_FarDistance = 10000.0; // How far rays away from the camera reach before the screen's edges cut them
+const float c_MinThickness = 0.05;   // Meters a ray may pass behind a surface and still hit it, at least...
+const float c_ThicknessScale = 0.02; // ...or this fraction of its distance, or the depth of its step if that is more
+const float c_EdgeFade = 0.1;        // Hits within this fraction of the screen's size from its edges fade
+
+// The view distance (along the camera's forward axis) of a depth: the inverse projection's z and w rows do not depend on x and
+// y (the jitter only offsets them). Only for depths in front of the far plane (above 0, reversed-Z).
+float GetViewDistance(float depth)
+{
+	mat4 inverse = u_Frame.InverseProjection;
+	return -(inverse[2].z * depth + inverse[3].z) / (inverse[2].w * depth + inverse[3].w);
+}
+
+// Whether the ray's point (UV and depth) lies behind the depth buffer's surface there (reversed-Z: smaller is farther), and by
+// how much (meters).
+float GetDistanceBehind(vec3 point, ivec2 size, out float sceneDepth)
+{
+	ivec2 pixel = clamp(ivec2(point.xy * u_Frame.ViewportSize.xy), ivec2(0), size - 1);
+	sceneDepth = texelFetch(u_Depth, pixel, 0).r;
+	if (sceneDepth <= 0.0)
+		return -1.0; // Nothing drawn (the sky): nothing to hit
+	return GetViewDistance(point.z) - GetViewDistance(sceneDepth);
+}
+
+vec4 TraceReflection(ivec2 pixel, ivec2 size)
+{
+	float depth = texelFetch(u_Depth, pixel, 0).r;
+	if (depth <= 0.0)
+		return vec4(0.0);
+	vec4 surface = texelFetch(u_Surface, pixel, 0);
+	float roughnessFade = clamp((u_Reflections.MaxRoughness - surface.z) / max(0.25 * u_Reflections.MaxRoughness, 1e-4), 0.0, 1.0);
+	if (roughnessFade <= 0.0 || u_Reflections.Intensity <= 0.0)
+		return vec4(0.0);
+
+	vec2 uv = (vec2(pixel) + 0.5) * u_Frame.ViewportSize.zw;
+	vec4 viewPoint = u_Frame.InverseProjection * vec4(UVToNDC(uv), depth, 1.0);
+	vec3 position = viewPoint.xyz / viewPoint.w;
+	bool orthographic = u_Frame.CameraForward.w > 0.5;
+	vec3 incident = orthographic ? vec3(0.0, 0.0, -1.0) : normalize(position);
+	vec3 direction = reflect(incident, OctahedralDecode(surface.xy));
+	// A normal map may turn the reflection into the surface itself: nothing in front of it to reflect.
+	if (dot(direction, OctahedralDecode(texelFetch(u_Normals, pixel, 0).rg)) <= 0.0)
+		return vec4(0.0);
+
+	// The ray's far end: far away from the camera, or (toward it) just before the near plane.
+	float rayLength = c_FarDistance;
+	if (direction.z > 1e-6)
+		rayLength = min(rayLength, 0.999 * (-u_Frame.CameraPosition.w - position.z) / direction.z);
+	if (rayLength <= 0.0)
+		return vec4(0.0);
+	vec4 startClip = u_Frame.Projection * vec4(position, 1.0);
+	vec4 endClip = u_Frame.Projection * vec4(position + direction * rayLength, 1.0);
+	// In screen space (UV and depth) the ray is a straight line along which the depth changes linearly.
+	vec3 start = vec3(NDCToUV(startClip.xy / startClip.w), startClip.z / startClip.w);
+	vec3 delta = vec3(NDCToUV(endClip.xy / endClip.w), endClip.z / endClip.w) - start;
+	// Cut where it leaves the screen or passes the far plane (depth 0).
+	float extent = 1.0;
+	for (int axis = 0; axis < 2; axis++)
+	{
+		if (delta[axis] > 0.0)
+			extent = min(extent, (1.0 - start[axis]) / delta[axis]);
+		else if (delta[axis] < 0.0)
+			extent = min(extent, -start[axis] / delta[axis]);
+	}
+	if (delta.z < 0.0)
+		extent = min(extent, -start.z / delta.z);
+	delta *= max(extent, 0.0);
+	float pixels = length(delta.xy * u_Frame.ViewportSize.xy);
+	if (pixels < 1.0)
+		return vec4(0.0);
+
+	// Steps closer together near the start (contact reflections), the first at least a pixel away (the surface itself).
+	float noise = fract(InterleavedGradientNoise(vec2(pixel)) + u_Frame.TemporalParams.z);
+	float minStep = 1.0 / pixels;
+	float previousStep = 0.0;
+	float previousDistance = GetViewDistance(start.z);
+	float hitStep = -1.0;
+	for (uint index = 0u; index < c_Steps; index++)
+	{
+		float fraction = (float(index) + noise) / float(c_Steps);
+		float along = max(fraction * fraction, minStep);
+		vec3 point = start + delta * along;
+		float sceneDepth;
+		float behind = GetDistanceBehind(point, size, sceneDepth);
+		float rayDistance = GetViewDistance(point.z);
+		float thickness = max(max(c_MinThickness, c_ThicknessScale * rayDistance), abs(rayDistance - previousDistance));
+		if (behind > 0.0 && behind < thickness)
+		{
+			hitStep = along;
+			break;
+		}
+		previousStep = along;
+		previousDistance = rayDistance;
+	}
+	if (hitStep < 0.0)
+		return vec4(0.0);
+	// Where between the last point in front and the first behind the ray crosses the surface.
+	float low = previousStep;
+	float high = hitStep;
+	for (uint index = 0u; index < c_RefineSteps; index++)
+	{
+		float middle = 0.5 * (low + high);
+		float sceneDepth;
+		if (GetDistanceBehind(start + delta * middle, size, sceneDepth) > 0.0)
+			high = middle;
+		else
+			low = middle;
+	}
+	vec2 hitUV = (start + delta * high).xy;
+	ivec2 hitPixel = clamp(ivec2(hitUV * u_Frame.ViewportSize.xy), ivec2(0), size - 1);
+
+	// The depth buffer holds front faces only: a surface the ray meets from behind is not what it would see.
+	float facing = clamp(-4.0 * dot(OctahedralDecode(texelFetch(u_Normals, hitPixel, 0).rg), direction), 0.0, 1.0);
+	vec2 edges = min(hitUV, 1.0 - hitUV);
+	float edgeFade = clamp(min(edges.x, edges.y) / c_EdgeFade, 0.0, 1.0);
+	// The hit surface where the previous frame showed it.
+	vec2 previousUV = hitUV - texelFetch(u_Velocity, hitPixel, 0).rg;
+	if (any(lessThan(previousUV, vec2(0.0))) || any(greaterThan(previousUV, vec2(1.0))))
+		return vec4(0.0);
+	vec3 color = textureLod(sampler2D(u_History, u_LinearClampSampler), previousUV, 0.0).rgb * u_Reflections.HistoryScale;
+	float confidence = roughnessFade * facing * edgeFade * min(u_Reflections.Intensity, 1.0);
+	return vec4(SanitizeHDR(color), confidence);
+}
+
+void main()
+{
+	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = ivec2(u_Frame.ViewportSize.xy);
+	ivec2 halfSize = (size + 1) / 2;
+	if (texel.x >= halfSize.x || texel.y >= halfSize.y)
+		return;
+	// The pixel of the block traced this frame: each of the four in turn.
+	ivec2 pixel = min(texel * 2 + ivec2(int(u_Reflections.Frame & 1u), int((u_Reflections.Frame >> 1u) & 1u)), size - 1);
+	imageStore(o_Reflections, texel, TraceReflection(pixel, size));
+}

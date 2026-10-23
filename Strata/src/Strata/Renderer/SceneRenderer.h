@@ -479,6 +479,9 @@ namespace Strata
 		uint32_t ReflectionProbes = 0;
 		uint32_t ReflectionProbeConversions = 0;
 		uint32_t ReflectionProbesPending = 0;
+		// Whether the frame traced screen-space reflections (PostProcessComponent::ScreenSpaceReflections): only with temporal
+		// anti-aliasing, from the second frame of its history on (they read the previous frame's resolved image).
+		bool ScreenSpaceReflections = false;
 		// Instances drawn into shadow views (summed over views) and their draw calls (the GPU-driven path's are counted on the
 		// GPU: SceneRendererGPUStats::LocalShadowInstances, LocalShadowDraws, AddGPUCounts).
 		uint32_t LocalShadowCasters = 0;
@@ -631,6 +634,12 @@ namespace Strata
 		// (current minus previous position), 0 where nothing was drawn. Null until a frame asks, and again once the render
 		// targets are released.
 		nvrhi::ITexture* GetVelocityTexture() const { return m_VelocityTexture; }
+		// Screen-space reflections' targets (SceneRendererStats::ScreenSpaceReflections): the surface target the prepass writes for
+		// them (RGBA16F: the normal-mapped view-space normal, octahedral, the roughness and the metallic factor) and their
+		// half-resolution result (RGBA16F: the reflected luminance, pre-exposed, and the confidence). Null until a frame traces
+		// them; released with the other targets.
+		nvrhi::ITexture* GetSurfaceTexture() const { return m_SurfaceTexture; }
+		nvrhi::ITexture* GetScreenReflectionTexture() const { return m_ScreenReflectionTexture; }
 		// The motion history (SceneRenderOptions::MotionVectors): the render scene's instances (RenderData::InstanceData) and
 		// joint matrices as this renderer's latest frame with motion drew them, indexed like the scene's GPU copy. Null until a
 		// frame asks for motion, and again once the render targets are released.
@@ -746,6 +755,8 @@ namespace Strata
 			// The prepass and the forward pass of a frame with motion vectors: the velocity vertex shaders (both passes, so their
 			// depths agree), and the prepass writes the velocity target.
 			bool Velocity = false;
+			// The prepass of a frame with screen-space reflections (always with Velocity): it writes the surface target too.
+			bool Surface = false;
 			bool operator==(const PipelineKey&) const = default;
 		};
 
@@ -1101,8 +1112,19 @@ namespace Strata
 		// the slot's levels, and projected into the slot's irradiance coefficients.
 		void ConvertReflectionProbes(nvrhi::ICommandList* commandList);
 		void ReleaseReflectionProbes();
-		// The prepass's framebuffer of the frame: with the velocity target in a frame with motion vectors.
-		nvrhi::IFramebuffer* GetPrepassFramebuffer() const { return m_MotionFrame ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get(); }
+		// The prepass's framebuffer of the frame: with the velocity target in a frame with motion vectors, and the surface target
+		// in one with screen-space reflections.
+		nvrhi::IFramebuffer* GetPrepassFramebuffer() const
+		{
+			return m_ReflectionFrame ? m_SurfacePrepassFramebuffer.Get() : m_MotionFrame ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get();
+		}
+		// Screen-space reflections' targets, their prepass framebuffer, the trace's layout, pipeline and binding sets (per history
+		// texture), made by the first frame that traces them; false (reported) when they cannot be created.
+		bool EnsureScreenReflectionResources();
+		// Traces the frame's screen-space reflections into their target (Effects/ScreenSpaceReflections.comp, GPU.Reflections).
+		void TraceScreenReflections(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
+		// What the scene binding sets bind at SRV 18: the reflections' target once made, else a black texture.
+		nvrhi::ITexture* GetBoundScreenReflections() const;
 		// The motion history's buffers (SceneRenderOptions::MotionVectors) at the size of the scene's GPU copy's, and the velocity
 		// target with its prepass framebuffer; with `keepContents` a buffer that grows keeps what it held (copied at the frame's
 		// start, RecordMotionGrowth). False (logged) when they cannot be created.
@@ -1912,6 +1934,18 @@ namespace Strata
 		nvrhi::ShaderHandle m_MeshVelocityVertexShader;
 		nvrhi::ShaderHandle m_SkinnedMeshVelocityVertexShader;
 		nvrhi::ShaderHandle m_PrepassVelocityPixelShader;
+		// Screen-space reflections (PostProcessComponent::ScreenSpaceReflections): the frame traces them (with TAA, its history
+		// holding the previous frame), their targets and the prepass framebuffer writing the surface target, the trace's
+		// pipeline and its binding sets by the history texture it reads, and the texture the scene binding sets name at SRV 18.
+		bool m_ReflectionFrame = false;
+		nvrhi::TextureHandle m_SurfaceTexture;
+		nvrhi::TextureHandle m_ScreenReflectionTexture;
+		nvrhi::FramebufferHandle m_SurfacePrepassFramebuffer;
+		nvrhi::ShaderHandle m_PrepassSurfacePixelShader;
+		nvrhi::BindingLayoutHandle m_ScreenReflectionLayout;
+		nvrhi::ComputePipelineHandle m_ScreenReflectionPipeline;
+		std::array<nvrhi::BindingSetHandle, 2> m_ScreenReflectionSets;
+		nvrhi::ITexture* m_BoundScreenReflections = nullptr;
 		// The motion debug view (DrawMotionView): its binding set names the velocity target and the depth.
 		nvrhi::BindingLayoutHandle m_MotionViewLayout;
 		nvrhi::BindingSetHandle m_MotionViewBindingSet;

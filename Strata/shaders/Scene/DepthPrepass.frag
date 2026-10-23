@@ -11,7 +11,10 @@
 // previous frame (Scene/MeshVelocity.vert), in UV units, into the attachment after the others. With ST_SELECTION_MASK
 // (Scene/SelectionMask.frag) it writes only 1 into a mask where a surface is drawn, with the same tests: the selection mask
 // SceneRenderer draws the selected instances into, with the camera's own matrices, for their outline under temporal
-// anti-aliasing.
+// anti-aliasing. With ST_PREPASS_SURFACE (Scene/DepthPrepassSurface.frag, DepthPrepassNoEntityIDsSurface.frag; always with
+// ST_VELOCITY) it also writes the surface target screen-space reflections trace from, after the velocity: the normal-mapped
+// view-space normal (octahedral), the roughness and the metallic factor, as the forward pass shades them (unlit surfaces:
+// roughness 1, nothing to reflect).
 
 layout(location = 0) in vec3 v_RelativePosition;
 layout(location = 1) in vec3 v_Normal;
@@ -36,6 +39,11 @@ layout(location = 1) out vec2 o_Velocity;
 #elif defined(ST_VELOCITY)
 layout(location = 2) out vec2 o_Velocity;
 #endif
+#if defined(ST_PREPASS_SURFACE) && defined(ST_NO_ENTITY_IDS)
+layout(location = 2) out vec4 o_Surface;
+#elif defined(ST_PREPASS_SURFACE)
+layout(location = 3) out vec4 o_Surface;
+#endif
 #endif
 
 void main()
@@ -48,6 +56,17 @@ void main()
 	float alpha = 1.0;
 	if (masked)
 		alpha = material.BaseColor.a * SampleMaterialTexture(material.BaseColorMap, TransformUV(material, v_TexCoord)).a;
+#ifdef ST_PREPASS_SURFACE
+	vec4 surface = vec4(0.0, 0.0, 1.0, 0.0);
+	if ((material.Flags & ST_MATERIAL_UNLIT) == 0u)
+	{
+		vec2 uv = TransformUV(material, v_TexCoord);
+		vec4 metallicRoughness = SampleMaterialTexture(material.MetallicRoughnessMap, uv);
+		vec3 shadingNormal = GetShadingNormal(material, uv, v_Normal, v_Tangent, gl_FrontFacing);
+		surface = vec4(OctahedralEncode(normalize(mat3(u_Frame.View) * shadingNormal)), clamp(material.Roughness * metallicRoughness.g, 0.0, 1.0),
+			clamp(material.Metallic * metallicRoughness.b, 0.0, 1.0));
+	}
+#endif
 	if (!IsLODFadeDrawn(v_LODFade, gl_FragCoord.xy))
 		discard;
 	if (masked && alpha < material.AlphaCutoff)
@@ -65,6 +84,9 @@ void main()
 #endif
 #ifdef ST_VELOCITY
 	o_Velocity = GetClipMotion(v_CurrentClip, v_PreviousClip);
+#endif
+#ifdef ST_PREPASS_SURFACE
+	o_Surface = surface;
 #endif
 #endif
 }

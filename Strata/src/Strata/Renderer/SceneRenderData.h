@@ -81,8 +81,9 @@ namespace Strata
 			// w its angular radius (0: no disk); rgb its illuminance at the ground in lux, through the atmosphere.
 			glm::vec4 SunDiskDirection;
 			glm::vec4 SunDiskColor;
+			glm::vec4 ReflectionParams; // x: 1 when the frame traced screen-space reflections (SRV 18 holds them)
 		};
-		static_assert(sizeof(FrameConstants) == 8 * 64 + 25 * 16);
+		static_assert(sizeof(FrameConstants) == 8 * 64 + 26 * 16);
 
 		// A directional shadow cascade as shaders read it (u_Cascades, Include/Scene.glsl): written on the GPU by
 		// Scene/CascadeFit.comp, which fits its depth range to the casters (CascadeFitConstants).
@@ -351,6 +352,16 @@ namespace Strata
 			uint32_t SliceCount;
 			uint32_t StepsPerSide;
 		};
+
+		// Effects/ScreenSpaceReflections.comp: the trace of a frame's screen-space reflections.
+		struct ScreenReflectionParameters
+		{
+			float Intensity;    // PostProcessComponent::ScreenSpaceReflectionsIntensity: the confidence's scale
+			float MaxRoughness; // PostProcessComponent::ScreenSpaceReflectionsMaxRoughness: rougher surfaces reflect nothing
+			float HistoryScale; // The frame's pre-exposure over the TAA history's (what the trace fetches is the previous frame)
+			uint32_t Frame;     // The TAA history's frame count: which pixel of each 2x2 block traces, and the steps' offset
+		};
+		static_assert(sizeof(ScreenReflectionParameters) == 16);
 
 		struct TonemapParameters
 		{

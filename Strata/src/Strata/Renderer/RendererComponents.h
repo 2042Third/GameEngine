@@ -255,6 +255,11 @@ namespace Strata
 		bool TAADisocclusionRejection = c_TAASharpSettings.DisocclusionRejection;
 		float TAADisocclusionThreshold = c_TAASharpSettings.DisocclusionThreshold;
 		float TAASharpening = c_TAASharpSettings.Sharpening;
+		// Screen-space reflections, with TAA only (they read its history and leave their noise to it): what the previous frame
+		// showed where the view's reflection meets the depth buffer, over the probes' and the sky's specular light.
+		bool ScreenSpaceReflections = false;
+		float ScreenSpaceReflectionsIntensity = 1.0f;    // How much they replace the probes' and the sky's reflection, 0 to 1
+		float ScreenSpaceReflectionsMaxRoughness = 0.5f; // Rougher surfaces reflect nothing; the last quarter below it fades
 		float Vignette = 0.2f;
 		float Saturation = 1.0f;
 		float Contrast = 1.0f; // Around middle gray; 1 = unchanged

@@ -288,6 +288,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(15), // Joint matrices (only the skinned vertex shaders read them)
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(16), // The texture table (material data names textures by its indices)
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(17), // The shadow cascades (Scene/CascadeFit.comp)
+			nvrhi::BindingLayoutItem::Texture_SRV(18),          // Screen-space reflections (Scene/Forward.frag)
 			// The motion history's instances and joint matrices (SceneRenderOptions::MotionVectors): the previous frame's.
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(20),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(21),
@@ -958,6 +959,7 @@ namespace Strata
 		nvrhi::IBuffer* previousPalette = m_PreviousPalette ? m_PreviousPalette.Get() : m_SceneGPU->GetPaletteBuffer();
 		nvrhi::ITexture* skyView = GetBoundSkyView();
 		nvrhi::ITexture* probeArray = GetBoundReflectionProbes();
+		nvrhi::ITexture* screenReflections = GetBoundScreenReflections();
 
 		// The shadow pass reads the same resources except for its own draw list (and never the shadow maps it draws into).
 		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap, nvrhi::ITexture* boundAtlas)
@@ -970,6 +972,7 @@ namespace Strata
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(15, m_SceneGPU->GetPaletteBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(16, Renderer::GetTextureTable().GetBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(17, m_CascadeBuffer),
+				nvrhi::BindingSetItem::Texture_SRV(18, screenReflections),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(20, previousInstances),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(21, previousPalette),
 				nvrhi::BindingSetItem::Texture_SRV(27, skyView),
@@ -1019,6 +1022,7 @@ namespace Strata
 		m_BoundPreviousPalette = previousPalette;
 		m_BoundSkyView = skyView;
 		m_BoundReflectionProbes = probeArray;
+		m_BoundScreenReflections = screenReflections;
 		if (!m_SceneBindingSet || !m_ShadowBindingSet || !m_ClusterBindingSet || (gpuSets && (!m_GPUSceneBindingSet || !m_GPUShadowBindingSet)))
 		{
 			m_SceneBindingSet = nullptr; // Recreated next frame
@@ -1911,6 +1915,12 @@ namespace Strata
 		release(m_VelocityTexture);
 		release(m_MotionPrepassFramebuffer);
 		release(m_MotionViewBindingSet);
+		// Screen-space reflections' targets (made again by the next frame that traces them).
+		release(m_SurfaceTexture);
+		release(m_ScreenReflectionTexture);
+		release(m_SurfacePrepassFramebuffer);
+		for (nvrhi::BindingSetHandle& set : m_ScreenReflectionSets)
+			release(set);
 		release(m_PreviousInstances);
 		release(m_PreviousPalette);
 		release(m_GrownPreviousInstances);
@@ -2139,7 +2149,7 @@ namespace Strata
 			desc.VS = shadowPass ? m_ShadowVertexShader : (key.Velocity ? m_MeshVelocityVertexShader : m_MeshVertexShader);
 		switch (key.PassType)
 		{
-			case Pass::Prepass:      desc.PS = key.Velocity ? m_PrepassVelocityPixelShader : m_PrepassPixelShader; break;
+			case Pass::Prepass:      desc.PS = key.Surface ? m_PrepassSurfacePixelShader : (key.Velocity ? m_PrepassVelocityPixelShader : m_PrepassPixelShader); break;
 			case Pass::ShadowMasked:
 			case Pass::LocalShadowMasked: desc.PS = m_ShadowMaskPixelShader; break;
 			case Pass::Shadow:
@@ -2202,7 +2212,7 @@ namespace Strata
 		}
 
 		nvrhi::IFramebuffer* framebuffer = localShadowPass ? m_LocalShadowFramebuffer.Get() : shadowPass ? m_ShadowFramebuffers[0].Get()
-			: (key.PassType == Pass::Prepass ? (key.Velocity ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get())
+			: (key.PassType == Pass::Prepass ? (key.Surface ? m_SurfacePrepassFramebuffer.Get() : key.Velocity ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get())
 			: (selectionMask ? m_SelectionMaskFramebuffer.Get() : m_ForwardFramebuffer.Get()));
 		nvrhi::GraphicsPipelineHandle pipeline = m_Device->createGraphicsPipeline(desc, framebuffer->getFramebufferInfo());
 		ST_CORE_VERIFY(pipeline, "SceneRenderer: failed to create a scene pipeline");
@@ -2380,9 +2390,13 @@ namespace Strata
 		const uint32_t firstArgument = transparent ? static_cast<uint32_t>(m_OpaqueBatches.size()) : 0u;
 		// Transparent surfaces have no EQUAL test to agree with and write no motion: the plain shaders.
 		const bool velocity = m_MotionFrame && pass != Pass::Transparent;
+		const bool surface = m_ReflectionFrame && pass == Pass::Prepass;
 		DrawBuckets(commandList, state, batches, firstArgument,
-			[pass, velocity](const SceneDrawBatch& batch) { return PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned, velocity }; }, nullptr,
-			nullptr);
+			[pass, velocity, surface](const SceneDrawBatch& batch)
+			{
+				return PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned, velocity, surface };
+			},
+			nullptr, nullptr);
 		if (pass == Pass::Prepass)
 			return;
 		for (const SceneDrawBatch& batch : batches)
@@ -2671,6 +2685,10 @@ namespace Strata
 		m_Stats.TemporalAntiAliasing = m_TemporalFrame;
 		m_Stats.TemporalFrames = m_TemporalFrame ? m_TemporalFrames : 0u;
 		m_Stats.HistoryResets = m_HistoryResets;
+		// Screen-space reflections fetch the previous frame's resolved image: with TAA, once its history holds that frame.
+		const bool reflectionsWanted = m_TemporalFrame && m_TemporalFrames > 1 && postProcess.ScreenSpaceReflections;
+		m_ReflectionFrame = reflectionsWanted && EnsureScreenReflectionResources();
+		m_Stats.ScreenSpaceReflections = m_ReflectionFrame;
 
 		// Scene shaders work camera-relative (Include/Scene.glsl): the view's translation is left out of its matrices. The jitter
 		// is only in the frame's copy of the projection: what the CPU culls, chooses levels of detail and fits the cascades with
@@ -2698,6 +2716,7 @@ namespace Strata
 		// are deterministic): the frames the history averages sample the turn evenly.
 		const double noiseTurn = m_TemporalFrame ? std::fmod(static_cast<double>(m_TemporalFrames - 1) * 0.6180339887498949, 1.0) : 0.0;
 		frame.TemporalParams = glm::vec4(m_Stats.MotionHistory ? 1.0f : 0.0f, m_PreExposure, static_cast<float>(noiseTurn), 0.0f);
+		frame.ReflectionParams = glm::vec4(m_ReflectionFrame ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 		frame.CameraPosition = glm::vec4(camera.Position, camera.Near);
 		const glm::vec3 forward = -glm::vec3(frame.InverseView[2]);
 		frame.CameraForward = glm::vec4(glm::length(forward) > 1e-6f ? glm::normalize(forward) : glm::vec3(0.0f, 0.0f, -1.0f), camera.Orthographic ? 1.0f : 0.0f);
@@ -2753,7 +2772,7 @@ namespace Strata
 		// The local shadow views' casters: the CPU's on frames that walk the view (both paths), else bounds for the GPU's culling.
 		FindLocalShadowCasters(renderScene, camera, frustum, !m_FeedbackFrame, !m_FeedbackFrame);
 		// Rendered with a reported limitation: keep the error so it is not logged every frame.
-		bool degraded = motionFailed || temporalFailed;
+		bool degraded = motionFailed || temporalFailed || (reflectionsWanted && !m_ReflectionFrame);
 		if (!m_LocalShadowLights.empty() && !EnsureLocalShadowAtlas())
 		{
 			ResetLocalShadows(); // Reported; no light casts a local shadow this frame
@@ -2849,7 +2868,7 @@ namespace Strata
 		TextureTable& textureTable = Renderer::GetTextureTable();
 		const bool tableUploaded = textureTable.RecordUploads(commandList);
 		const bool rebind = buffersRecreated || m_BoundEnvironment != GetEnvironmentCube() || m_BoundSkyView != GetBoundSkyView()
-			|| m_BoundReflectionProbes != GetBoundReflectionProbes()
+			|| m_BoundReflectionProbes != GetBoundReflectionProbes() || m_BoundScreenReflections != GetBoundScreenReflections()
 			|| m_BoundTextureTableVersion != textureTable.GetBufferVersion();
 		if (!tableUploaded || (rebind && !CreateSceneBindingSets()))
 		{
@@ -2972,11 +2991,13 @@ namespace Strata
 			RenderAmbientOcclusion(commandList, postProcess);
 			commandList->endMarker();
 		}
-		if (!m_ReflectionProbeConversions.empty())
+		if (!m_ReflectionProbeConversions.empty() || m_ReflectionFrame)
 		{
 			gpuTimer.Next(gpuStages.Reflections);
 			commandList->beginMarker("Reflections");
 			ConvertReflectionProbes(commandList);
+			if (m_ReflectionFrame)
+				TraceScreenReflections(commandList, postProcess);
 			commandList->endMarker();
 		}
 		gpuTimer.Next(gpuStages.Opaque);

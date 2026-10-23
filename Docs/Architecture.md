@@ -291,7 +291,9 @@ the oldest first, at least one) and every release as many as it hands over, whic
 frames) and the blocking `ReadTexture`. `RenderScene` keeps a scene's render proxies in a `SpatialIndex`,
 and `SceneRenderer` extracts each frame's draws from it (`SceneRendererExtraction.cpp`, resolving assets through its
 `AssetResolveCache`; see [Render scene](#render-scene)). `SceneRenderer` draws a scene (light clustering, shadow cascades and
-point and spot lights' shadow views, depth/normal/entity-ID prepass, GTAO, forward PBR, sky, transparents, exposure, bloom, tone mapping, FXAA, then overlays
+point and spot lights' shadow views, depth/normal/entity-ID prepass (with motion vectors and, for screen-space reflections, the
+surface target), GTAO, reflection probes' conversions and the screen-space reflections' trace, forward PBR, sky, transparents,
+the TAA resolve, exposure, bloom, tone mapping, FXAA, then overlays
 and text) into render targets of its viewport size, which it hands to the `DeferredReleaseQueue` when it is resized
 (the viewport panel, the game window) or freed (captures); its output texture exists only once a frame needed it (one
 without a target, or composing overlays or text before copying into the target), so a game without text renders
@@ -855,6 +857,7 @@ The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStage
 | `GPU.Setup` | a scene renderer's environment maps, scene data uploads and light clusters |
 | `GPU.Cull` | culling dispatches and depth pyramids |
 | `GPU.Shadows`, `GPU.Prepass`, `GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent` | the scene passes |
+| `GPU.Reflections` | reflection probes' conversions and the screen-space reflections' trace, between `GPU.AO` and `GPU.Opaque` |
 | `GPU.TAA` | the motion history's copy (`Scene/MotionCopy.comp`) and the temporal anti-aliasing resolve |
 | `GPU.Post` | exposure, bloom, tone mapping and FXAA |
 | `GPU.Overlays` | grid, tints, outline, debug lines, text and the copy into a target |
