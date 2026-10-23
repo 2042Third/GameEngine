@@ -147,7 +147,8 @@ editor started with `--no-gpu` (use `--headless`):
   `texturesBelowWanted` what was still blurrier than
   wanted, e.g. under a texture budget, `stalePoses` the animators drawn in an older pose). A scene with temporal
   anti-aliasing (`PostProcess` `AntiAliasingMethod: "TAA"`) renders 8 frames of the complete view, also with
-  `waitForAssets: false`, so the picture is the converged one the viewport shows (`temporalFrames`: 8). `position` +
+  `waitForAssets: false`, so the picture is the converged one the viewport shows (`temporalFrames`: 8; under the default
+  `TAAPreset` `"Sharp"` with its light sharpening of the displayed image, as the game shows it). `position` +
   `target` (and `fov`) look from your own camera: the
   person's view (`camera.get`) does not move, and the result's `camera` is `"custom"`. `camera: "scene"` without a size
   takes the Game view's resolution when it has one (`viewport.setSettings {"gameView": {"mode": "1280x720"}}`, or

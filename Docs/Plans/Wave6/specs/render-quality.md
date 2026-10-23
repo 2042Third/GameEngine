@@ -1153,6 +1153,42 @@ T2 builds on these; each differs from the text above where the code or the measu
   property, shared value, mixed, disabled, probe key); the TAAPreset drawer draws the generic enum widget and runs its own
   `component.set`. `InspectorPanel::DrawProperties` takes the command registry.
 
+#### D17: As built in T2
+
+Each differs from the text above where the code or the measurements required it.
+- **Live captures.** `ViewportRenderer::GetRenderStamp` pairs each render of a view with the play session and the fixed
+  steps it showed. Command polls run before the views render in their frame, so a poll reads back the frame the view
+  rendered in the previous one (a `TextureReadback` submitted before the view renders again). `atFixedStep` is at least 1,
+  and "step N already ran" means `fixedSteps` >= N when the command is given. A poll that finds no new frame of the view
+  fails the capture (except the first poll of a command given after the view rendered in its frame), as does a render
+  of another play session. `frames` above 1 needs `path` (files `<name>-1.png` to `<name>-n.png`, no inline images); one
+  frame also returns `Image`. Results: `{live, camera, images: [{fixedSteps, temporalFrames, width, height, path}]}`.
+- **Sharp's values are the proposal**: `c_TAASharpSettings` did not change. Within the bounds, Resample Weight 0.375 and
+  0.5 (with Motion Response 0.09375 and 0.125) made the 0.5 px pan crisper but brought the stair-steps of tree edges
+  back, which the goal "edges as smooth as Original's" forbids; Sharpening is at 0.5, the most T1's 2% overshoot allows.
+  Every goal of 6.14's "Sharp's final values" holds in the captures; texture detail in slow pans is clearly crisper than
+  Original's and somewhat below FXAA's (the forest's Laplacian energy at 0.5 px a frame: FXAA 13.8, Original 9.2, Sharp
+  12.4), which is the price of the smooth edges.
+- **The evidence runs.** The Open World's runs press the right mouse button at step 1 (ending the tour; the player
+  stays where it ended), its still view holds it for 91 steps without moving the mouse; the Playground's run presses
+  Start Dominoes, Pour 100 Balls, Feed Goal and Drop Ghosts at steps 2 to 32, so balls, dominoes and its transparent
+  ghost boxes move through steps 46 to 53. The ghost boxes are the transparent surface, so no GPU-test frames were
+  needed. Scripts and sheets live in `build/taa-evidence/` (not committed).
+- **Cost.** Sharp's `GPU.TAA` was 1.62 times Original's on the Mac. Variance clipping's second pass over the taps now also
+  gives the reactive mask's coverage (one pass where there were two): 1.52 times (0.475 against 0.313 ms, 6 interleaved
+  rounds of 120 frames, 100,000 cubes at 1920x1080, loaded Mac). Moving the moments into the range clamp's loop made it
+  1.8 times (registers kept across the history's filter), compressing by YCoCg's luma instead of the Rec. 709 luminance
+  changed nothing, and ordering the work for fewer live registers measured 1.50, within the noise of the kept version:
+  the 1.5 target is missed by about 2% on the loaded Mac, and the reference machine measures it again. Per preset
+  (`GPU.TAA`, `GPU.Post`, GPU busy, ms): FXAA 0, 0.372, 3.121; Original 0.313, 0.304, 3.605; Sharp 0.475, 0.322,
+  3.789; Original plus one technique: variance clipping 0.436, 0.302, 3.727; resampling 0.313, 0.304, 3.611 (a still
+  view resamples nothing); reactive mask 0.359, 0.305, 3.647; disocclusion rejection 0.346, 0.306, 3.632; sharpening
+  0.313, 0.325, 3.614.
+- **The Sharp cases** measured: the still edge at its eighth frame 0.009% of its spread from the mean on average and 0.6%
+  at most, then within 9%, its displayed flicker 1.004 times Original's (the edge's colors have equal luminance, which
+  the sharpening leaves alone); the glint trail 0.022 against Original's 0.774. The moving-quad case also runs under
+  variance clipping, whose coverage comes from the shared fetches (0.025 -> 0.011, at most 0.8 times).
+
 ## 6. Per feature: tests, coverage and the editor
 
 Every new component and property is tested as the strata-add-component skill says (2.7): `Reflection` (the property

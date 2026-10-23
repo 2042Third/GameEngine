@@ -2280,7 +2280,17 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   capture renderer's previous frame, so it renders a second frame, and a still scene shows none); it defaults to the
   viewport's size, camera, overlays and debug view and fails without a GPU. `position`, `target` and `fov` render through a camera of the capture's own (a copy
   of the editor camera with those changes; `camera.get` is unchanged, the result's camera is `"custom"`), so agents look
-  around without moving the person's view. `viewport.getSettings` and
+  around without moving the person's view. **Live captures** (`viewport.capture {live: true, camera, atFixedStep?,
+  frames?, path?}`) render nothing: they read back what the Scene view (`"editor"`) or the Game view (`"scene"`) presented, its
+  temporal history as it is, to see motion as it plays (trails, smearing, crawling). Every command poll runs before the
+  views render in its frame, so a poll reads back the frame the view rendered in the previous one before it renders
+  again; `ViewportRenderer::GetRenderStamp` pairs each render with the play session and the fixed steps it showed.
+  `atFixedStep` waits for the first frame rendered once `fixedSteps` reached it, `frames` (up to 16, numbered files
+  `<name>-1.png`... beside `path`, which more than one frame needs) records the next ones; a live capture fails when the
+  view does not render or stops (a poll without a new frame, except the first poll of a command given after the view
+  rendered), when play stops or starts, or when the step already ran, and refuses the parameters of rendered captures.
+  Armed after `play.start {paused: true}` and before `input.sequence` or `play.step`, every run of the same steps shows
+  the same game state, whatever the mode (only the jitter phase differs). `viewport.getSettings` and
   `viewport.setSettings {grid, selectionOutline, sceneGizmos, allColliders, stats, previewLighting, gameUI, gizmo, space,
   snap, translateSnap, rotateSnap, scaleSnap, debugView}` read and change the view settings (validated as a whole: an
   invalid value changes nothing; the debug view is saved with them); `allColliders` draws the collider shapes of every
@@ -2331,7 +2341,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   game asks for carries pending steps over. While steps are pending the editor lifts its frame-rate cap (headless editors'
   60 frames per second and the idle throttling: `EditorLayer::UpdateSteppingFrameRate`), so 600 steps take the frames'
   work rather than ten seconds; each frame still runs exactly one step. `wait: false` answers at once with
-  `pendingSteps`; `frames` is an accepted older name of `steps`.
+  `pendingSteps`; `frames` is an accepted older name of `steps`. `play.start {paused: true}` pauses the game before its
+  first step (`fixedSteps` 0, also after the scripts' build), so tools drive it from step 0.
 
 ### Simulated input
 
@@ -2667,12 +2678,12 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   plus 0.1% of the motion, 0.05 px 20 km out), that asking for motion leaves the image bit-identical on both paths, and
   `GPU.SceneRenderer.GPUDriven` compares the paths' velocity targets bit for bit.
 - **Temporal anti-aliasing** (`PostProcessComponent::AntiAliasingMethod` `TAA`, with `AntiAliasing` on; the Basic 3D
-  template and the 3D samples use it, FXAA stays the default): each frame offsets its samples by a sub-pixel jitter,
-  eight phases of a Halton (2, 3) sequence counted from the history's latest reset (`SceneRenderer::GetTemporalJitter`,
-  `SceneRendererStats::Jitter`), **only in the frame's copy of the camera** (`FrameConstants::Projection`,
-  `ViewProjection`, their inverses, `JitterParams`). Culling, levels of detail, the cascades and the shadow cache key,
-  the motion vectors' matrices and the overlays keep the camera's own; jittering `SceneCamera::Projection` would redraw
-  every cascade every frame. A frame with TAA makes motion vectors.
+  template and the 3D samples use it with the default preset, Sharp; FXAA stays the default method): each frame offsets
+  its samples by a sub-pixel jitter, eight phases of a Halton (2, 3) sequence counted from the history's latest reset
+  (`SceneRenderer::GetTemporalJitter`, `SceneRendererStats::Jitter`), **only in the frame's copy of the camera**
+  (`FrameConstants::Projection`, `ViewProjection`, their inverses, `JitterParams`). Culling, levels of detail, the
+  cascades and the shadow cache key, the motion vectors' matrices and the overlays keep the camera's own; jittering
+  `SceneCamera::Projection` would redraw every cascade every frame. A frame with TAA makes motion vectors.
 - `PostProcess/TAA.comp` (in `GPU.TAA`, after the motion history's copy) blends the jittered HDR image into the
   renderer's own history, a ping-pong pair of RGBA16F textures that exposure, bloom and tone mapping read through binding
   sets made per texture (nothing is copied; FXAA is skipped): `GetTemporalHistoryTexture`, `GetResolvedHDRTexture`. The
@@ -2718,10 +2729,17 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   Custom's tunables clamped to their ranges and normalized (0 in `ClipWidth` under MinMax and in the threshold without
   rejection), so equal looks give equal push constants. The preset and the tunables are independent stored fields (no
   setter writes another; keys load in any order). Both presets keep the least weight at 1/8, so captures settle after
-  `c_TemporalSettleFrames` either way; settings changes never reset the history.
+  `c_TemporalSettleFrames` either way; settings changes never reset the history. **Sharp is the default**: a
+  `PostProcess` without `TAAPreset` (every scene saved before the presets) loads as Sharp. Its values were chosen from
+  step-synchronized captures of the samples (`viewport.capture {live}`, FXAA | Original | Sharp in motion and still):
+  within their bounds, a Resample Weight of 0.375 or 0.5 or a Motion Response of 0.09375 or 0.125 kept slow pans
+  crisper but brought the stair-steps of edges back at 0.5 px a frame, so Sharp keeps 0.25 and 0.0625; Sharpening stays
+  at 0.5, the most the 2% overshoot bound allows (Docs/Manual/AntiAliasing.md describes the look and every tunable).
 - The resolve's terms, each in a uniform branch on its push constant (`RenderData::TemporalParameters`, 64 bytes):
   **variance clipping** clips the history toward the mean of the 3x3's colors in the luminance weights' compressed space
-  (YCoCg of `c / (1 + L e)`), into `ClipWidth` standard deviations within the taps' range, along the line to the mean;
+  (YCoCg of `c / (1 + L e)`), into `ClipWidth` standard deviations within the taps' range, along the line to the mean,
+  fetching the taps again after the history's filter (the moments gathered in the range clamp's loop, kept across the
+  filter, made the resolve slower on Apple GPUs) and taking the reactive mask's coverage from the same fetches;
   the **resampling term** raises the current frame's weight to `ResampleWeight * 4 * max(f (1 - f))` of the Catmull-Rom
   fetch's fractional position (slow pans; nothing for a still pixel or integer motion); the **reactive mask** raises it
   to `min(1, 2 * max(1 - a)) * TransparentWeight` over the 3x3 of the HDR alpha; **disocclusion rejection** takes the
@@ -2748,8 +2766,14 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `PredictTrail`), S2's noise case under variance clipping, slow pans against the resampling model, integer motion bit
   for bit, the HDR alpha on both paths, a moving and a still transparent quad, a box uncovering a wall and the sky,
   no rejection at 0.02 for turning, dollying, still, orthographic and far cameras and across pre-exposure steps, and
-  sharpening's detail, history, halos, flicker and its absence with FXAA. `Renderer.Components` checks the settings
-  functions.
+  sharpening's detail, history, halos, flicker and its absence with FXAA. Sharp itself, with fixed bounds its values
+  must meet: S2's still edge at eight frames within 5% of its spread from the eight phases' mean on average and 25%
+  everywhere, then within 30%, flickering on screen at most 1.5 times Original; at most half of Original's trail; the
+  resets; the noise case; both paths with a moving transparent quad; the moving quad's reactive mask under variance
+  clipping (its coverage from the clip's fetches). `Renderer.Components` checks the settings functions. Cost on the Mac
+  (100,000 cubes at 1920x1080): `GPU.TAA` 0.31 ms under Original and 0.48 ms under Sharp, whose sharpening adds 0.02 ms
+  to `GPU.Post`; `PerfGPU.Renderer.Render100kCubesTAA` measures Sharp, `Render100kCubesTAAOriginal` Original (both
+  provisional).
 
 ### Skinned meshes
 

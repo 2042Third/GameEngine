@@ -277,6 +277,10 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
   unlit; judge the look from `{"camera": "scene"}` captures. A scene with only point or spot lights shows as the game
   does: as dark as they leave it.
 - Dark scenes: add a `PostProcess` with `AutoExposure: false` (automatic exposure brightens a dark backdrop to gray).
+- Anti-aliasing (`PostProcess`): 3D games use `"AntiAliasingMethod": "TAA"` with the default `TAAPreset` `"Sharp"`
+  (crisp, smooth edges); `"Original"` gives a softer, steadier look; when transparent effects ghost as they move, set
+  `"TAAPreset": "Custom"` with a higher `TAATransparentWeight`. 2D games and pixel art keep `"FXAA"` (TAA softens
+  their pixels). See Docs/Manual/AntiAliasing.md.
 - HUD and menus: a canvas, so they keep their proportions on every screen. An entity with `UICanvas`
   (`"ScaleMode": "ScaleWithScreen"`, `"ReferenceResolution": [1280, 720]`, `"MatchWidthOrHeight": 1`, and
   `"ReceivesInput": false` for a HUD that must never block clicks) and children with `UIRect` (anchors and pivot 0..1 of
