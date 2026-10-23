@@ -1226,6 +1226,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		CHECK_FALSE(singleSharpened.GetStats().TemporalAntiAliasing);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
 	TEST_CASE("Under Sharp a still edge settles in eight frames, then stays near the mean and flickers at most half again as Original")
 	{
 		// Sharp keeps the least weight at 1/8, so its eighth frame is the eight phases' mean where the clip leaves the samples

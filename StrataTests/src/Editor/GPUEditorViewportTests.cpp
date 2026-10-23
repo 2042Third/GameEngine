@@ -1673,6 +1673,16 @@ TEST_SUITE("GPU.Editor.Viewport")
 				[completed](const EditorCommandResult& result) { *completed = result; });
 			CHECK(pending);
 		};
+		// Runs frames until the capture answered: its encoding and saving run on worker threads, so by the clock.
+		auto runUntil = [&](const std::shared_ptr<std::optional<EditorCommandResult>>& completed)
+		{
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+			while (!*completed)
+			{
+				REQUIRE(std::chrono::steady_clock::now() < deadline);
+				runFrame();
+			}
+		};
 		auto sameImage = [](const ReadbackImage& expected, const DecodedImage& image)
 		{
 			REQUIRE(static_cast<int>(expected.Width) == image.Width);
@@ -1701,9 +1711,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		start({ { "live", true }, { "camera", "scene" }, { "atFixedStep", 3 }, { "frames", 2 }, { "path", FileSystem::ToUTF8(directory / "Strip.png") } },
 			completed);
 		harness.Run("play.step", { { "steps", 4 }, { "wait", false } });
-		for (int frame = 0; frame < 600 && !*completed; frame++)
-			runFrame();
-		REQUIRE(*completed);
+		runUntil(completed);
 		INFO((*completed)->Error);
 		REQUIRE((*completed)->Success);
 		const nlohmann::json& result = (*completed)->Value;
@@ -1740,9 +1748,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		auto single = std::make_shared<std::optional<EditorCommandResult>>();
 		const size_t shownBefore = shown.size();
 		start({ { "live", true }, { "camera", "scene" } }, single);
-		for (int frame = 0; frame < 600 && !*single; frame++)
-			runFrame();
-		REQUIRE(*single);
+		runUntil(single);
 		REQUIRE((*single)->Success);
 		CHECK((*single)->Value["images"][0]["fixedSteps"] == 4);
 		const std::optional<std::vector<uint8_t>> singlePng = Base64::Decode((*single)->Value["Image"]["Data"].get<std::string>());
@@ -1802,12 +1808,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		runFrame();
 		REQUIRE_FALSE(*between);
 		harness.Run("play.stop");
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-		while (!*between)
-		{
-			REQUIRE(std::chrono::steady_clock::now() < deadline);
-			runFrame();
-		}
+		runUntil(between);
 		CHECK_FALSE((*between)->Success);
 		CHECK_MESSAGE((*between)->Error.find("Play mode started") != std::string::npos, (*between)->Error);
 		CHECK(gpu.GetNewErrorCount() == 0);
