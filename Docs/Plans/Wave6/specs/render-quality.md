@@ -1143,7 +1143,12 @@ T2 builds on these; each differs from the text above where the code or the measu
   behind it, the sky's 65504).
 - **The resolve** gathers variance clipping's moments and the reactive coverage in loops of their own, run only where the
   history is read, so Original's loop is S2's. Original's GPU cost against the tree before T1: the 100,000-cube TAA
-  scene's GPU busy 3.611 -> 3.678 ms (+1.9%, 10 interleaved pairs, loaded Mac); FXAA scenes unchanged within 2%.
+  scene's GPU busy 3.611 -> 3.678 ms (+1.9%, 10 interleaved pairs, loaded Mac); FXAA scenes' GPU busy unchanged within
+  2%. Their CPU metrics (`Render100kCubes`, `EditFrame*`/`PlayFrame*`) scattered from 0.62 to 1.15 on the loaded Mac, so
+  7.1's ratio of at most 1.02 is not established for them in T1: S12's quiet-machine A/B measures it.
+- **The slow-pan case** measures the detail per period band. Every band keeps at least 0.9 of the model's prediction;
+  the 1.2 times Original's holds at the 3 and 4 px periods only (measured 0.64 against 0.38, 0.85 against 0.64), since
+  at 5 and 6 px both keep most of the detail (0.88 against 0.76, 0.94 against 0.87).
 - **The Inspector:** `UI::PropertyDrawers` passes a `UI::PropertyDrawContext` (commands, entities, component and
   property, shared value, mixed, disabled, probe key); the TAAPreset drawer draws the generic enum widget and runs its own
   `component.set`. `InspectorPanel::DrawProperties` takes the command registry.
