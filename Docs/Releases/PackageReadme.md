@@ -17,7 +17,7 @@ project's releases page: https://github.com/2042Third/GameEngine/releases
 | `StrataCLI` | Command-line client of a running editor, and an MCP server for AI agents (`StrataCLI mcp`). |
 | `Samples/` | Finished games to learn from, made by an AI agent through the editor: Third-Person Adventure, Open World, Physics Playground and Tetris, each with a `README.md` of what it shows and a `CREDITS.md` of its assets. The editor opens copies of them (Open Sample). |
 | `StrataScriptCore/` | The script SDK: the headers your scripts include and the CMake package their build uses. |
-| `Docs/Manual/` | Guides for making games: `Scripting.md`, `Worlds.md`, `Prefabs.md`, `GameView.md`, `GameUI.md` and `Settings.md`. |
+| `Docs/Manual/` | Guides for making games: `Scripting.md`, `Worlds.md`, `Prefabs.md`, `GameView.md`, `GameUI.md`, `Lighting.md`, `AntiAliasing.md` and `Settings.md`. |
 | `Skills/` | Guides for AI agents that make games with the editor (see "Connect an AI agent"). |
 | `StrataInstall.json` | Marks this folder as a Strata installation. Keep it next to the executables. |
 | `ThirdPartyNotices.md` | The third-party components Strata contains (box3d for physics, among others) and their licenses, and the samples' asset packs with the attributions games made from them must show. |
@@ -29,7 +29,9 @@ samples next to itself.
 
 Every platform needs a GPU with a Vulkan 1.2 driver to show the editor and play games. Started without one, the editor
 (and a game) shows a message that says so, what to install and where its log is. Without a GPU the editor still runs
-headless (`StrataEditor --no-gpu`, for automation and exports) and games run with `--headless`.
+headless (`StrataEditor --no-gpu`, for automation and exports) and games run with `--headless`. The GPU must also
+support cube map arrays (`imageCubeArray`, for reflection probes), which every desktop GPU with a Vulkan 1.2 driver
+has: a GPU without them is refused, and the log says what it lacks.
 
 - **Windows 10 or 11, x64.** The Vulkan runtime comes with the graphics driver of NVIDIA, AMD and Intel GPUs; update the
   driver if the editor reports that Vulkan is not available. Nothing else is needed to run Strata.
@@ -87,16 +89,19 @@ and get its exit code, pipe its output, e.g. `.\StrataEditor --version | Write-O
 2. Build the scene with the Scene view, the Hierarchy and the Inspector. Drop models, textures and sounds onto the
    window to import them. Menus and HUDs are UI elements (**Hierarchy > + > UI**, see `Docs/Manual/GameUI.md`); a level
    too large to keep loaded is a world of streamed cells (**New > World** in the Content Browser, see
-   `Docs/Manual/Worlds.md`).
+   `Docs/Manual/Worlds.md`). `Docs/Manual/Lighting.md` explains the lights and their units, the sky, fog, shadows and
+   reflections, and `Docs/Manual/AntiAliasing.md` TAA.
 3. Write scripts in the project's `Scripts` folder (**Scripts > New Script...** starts one) and build them with
    **Scripts > Build Scripts** (Ctrl+B). Build errors are listed in the Problems panel; a double click opens the line.
    Attach a script in the Inspector (**Add Component > Script**) and press **Play**: Play builds changed scripts first,
    and rebuilding while the game plays reloads them without stopping it. The Game view shows the game as a player sees
-   it, at the resolution you pick (`Docs/Manual/GameView.md`). `Docs/Manual/Scripting.md` describes the SDK.
-4. Choose the start scene (**File > Set as Start Scene**) and export with **File > Export Game...**. The export folder
-   holds everything the game needs: run the game's executable there. On Linux it also holds `<Game>.desktop`, which lists
-   the game among your applications once copied into `~/.local/share/applications`; it names the folder's absolute paths,
-   so after moving the folder, edit its `Exec` and `Icon` lines (or export again).
+   it, at the resolution you pick (`Docs/Manual/GameView.md`). `Docs/Manual/Scripting.md` describes the SDK; read the
+   player's controls as input actions (**File > Project Settings...**, Input Actions) so that players can rebind them.
+4. Choose the start scene (**File > Set as Start Scene**), give the game a title, a version and an icon (**File >
+   Project Settings...**, Game, see `Docs/Manual/Settings.md`) and export with **File > Export Game...**. The export
+   folder holds everything the game needs: run the game's executable there. On Linux it also holds `<Game>.desktop`,
+   which lists the game among your applications once copied into `~/.local/share/applications`; it names the folder's
+   absolute paths, so after moving the folder, edit its `Exec` and `Icon` lines (or export again).
 
 ## Connect an AI agent
 

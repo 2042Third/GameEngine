@@ -320,7 +320,7 @@ ship gets an install rule there and an entry in the layout `StrataEditor.Install
 
 ### Releases
 
-**Releases** (`.github/workflows/release.yml`) are cut at the end of every wave (0.4.0 for wave 4, 0.5.0 for wave 5;
+**Releases** (`.github/workflows/release.yml`) are cut at the end of every wave (0.5.0 for wave 5, 0.6.0 for wave 6;
 fixes get patch versions):
 
 1. Bump `project(Strata VERSION)` in `CMakeLists.txt`; the About dialog, the launcher, `editor.status`, `--version` and

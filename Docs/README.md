@@ -33,13 +33,18 @@ Guides for people making games in the editor:
   the sky, height fog, shadows, reflection probes and screen-space reflections.
 - [Manual/AntiAliasing.md](Manual/AntiAliasing.md): FXAA and TAA, how many frames TAA keeps and when it trails, the
   Sharp and Original presets and every tunable of Custom, and TAA's limits.
-- [Manual/Settings.md](Manual/Settings.md): the Project Settings panel (the start and loading scenes, what exports keep,
-  the settings the engine and the game define) and the Preferences window (the external editor), undo and saving.
+- [Manual/Settings.md](Manual/Settings.md): the Project Settings panel (the start and loading scenes, the game's title,
+  version and icon, what exports keep, collision layers, input actions and the settings the engine and the game define)
+  and the Preferences window (the external editor, the size of the interface), undo, saving and moving from 0.5.0.
 
 ## Releases
 
 What each release of Strata delivers, for the people who download it, and what the archives hold:
 
+- [Releases/0.6.0.md](Releases/0.6.0.md): Strata 0.6.0 (wave 6: temporal anti-aliasing, shadows of point and spot
+  lights, reflection probes and screen-space reflections, height fog, a physical atmosphere, light units, clear coat and
+  glass; Project Settings and Preferences, input actions with rebinding, collision layers for the whole project and the
+  game's identity in exported games).
 - [Releases/0.5.0.md](Releases/0.5.0.md): Strata 0.5.0 (wave 5: physics on box3d instead of Jolt, and three sample
   games beside Tetris: the Third-Person Adventure, the Open World and the Physics Playground).
 - [Releases/0.4.0.md](Releases/0.4.0.md): Strata 0.4.0 (wave 4: worlds streamed in cells, GPU-driven rendering, game
