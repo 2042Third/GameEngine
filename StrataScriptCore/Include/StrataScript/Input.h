@@ -494,9 +494,10 @@ namespace Strata
 
 		// A rebinding menu's "press a control": listens for the next control the player presses on the devices given (a key, a
 		// mouse button, a gamepad button, or a stick or trigger pushed beyond half its range). While it listens every action
-		// reads as up, and the control captured reads as up for actions until it is let go, so the press triggers nothing (not
-		// even the menu's Cancel). There is one capture: a later one replaces it, and play stopping cancels it. False when the
-		// engine lacks it.
+		// reads as up, and the control captured reads as up for actions until it is let go, so the press triggers no action (not
+		// even the menu's Cancel) and a left click captured presses no UI widget; IsKeyPressed and the other device reads see it
+		// as any press. There is one capture: a later one replaces it, and play stopping cancels it. False when the engine lacks
+		// it.
 		static bool BeginBindingCapture(InputDevices devices = InputDevices::All)
 		{
 			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(InputBeginBindingCapture);

@@ -138,6 +138,10 @@ namespace Strata
 		// That text once, after which the capture is over; nullopt while it listens or when none ran.
 		static std::optional<std::string> TakeCapturedBinding();
 		static void CancelCapture();
+		// The control the last capture took while it reads as up for actions (until an input frame went by with it released),
+		// or nothing. Code that reads the devices rather than actions ignores its press too: the game's UI clicks nothing with
+		// a mouse button captured as a binding.
+		static const std::optional<InputControl>& GetCapturedControl();
 	};
 
 }

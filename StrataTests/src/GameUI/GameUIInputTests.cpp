@@ -594,6 +594,30 @@ TEST_SUITE("GameUI.Events")
 		CHECK(scene.Count(UIEventType::Click) == 3);
 	}
 
+	TEST_CASE("A left button a binding capture takes presses no widget and stays hidden from the game")
+	{
+		// A rebinding menu's "press a control" (Input::BeginBindingCapture in scripts) with the pointer still over its button:
+		// the press is the binding, not a click that would start the capture again.
+		UIInputScene scene;
+		Entity button = scene.AddButton(scene.Canvas, "Button", { 100.0f, 100.0f }, { 200.0f, 100.0f });
+		scene.Play();
+		scene.MoveTo({ 150.0f, 150.0f });
+		REQUIRE(InputActions::BeginCapture({ false, true, false }));
+		scene.Press();
+		CHECK(InputActions::TakeCapturedBinding() == std::optional<std::string>("Mouse/Left"));
+		CHECK(scene.Focused().empty());
+		CHECK(scene.State(button) != UIVisualState::Pressed);
+		// Over the UI it stays the UI's gesture: the game does not see it either.
+		CHECK_FALSE(Input::IsMouseButtonPressed(Mouse::ButtonLeft));
+		scene.Release();
+		CHECK(scene.Count(UIEventType::Click) == 0);
+
+		// Once released, the button clicks again.
+		scene.Click({ 150.0f, 150.0f });
+		CHECK(scene.Count(UIEventType::Click) == 1);
+		CHECK(scene.Focused() == "Button");
+	}
+
 	TEST_CASE("Toggles flip on click, one at a time within a group, and report each change once")
 	{
 		UIInputScene scene;

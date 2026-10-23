@@ -466,7 +466,8 @@ Input::SetActionMapEnabled("Vehicle", inCar);           // Off: held actions rel
 - "Press a control": `Input::BeginBindingCapture(InputDevices::All)` (`Keyboard`, `Mouse`, `Gamepad`,
   `KeyboardAndMouse`), then `Input::PollBindingCapture()` every frame until it returns the binding (once; nullopt while it
   listens), which goes to `SetActionBindings`. Meanwhile every action reads as up and the captured control stays up for
-  actions until released, so the press does nothing else (Escape does not close the menu). Give up with
+  actions until released, so the press moves no action (Escape does not close a menu that closes on `UI/Cancel`) and a
+  left click captured presses no UI button; `Input::IsKeyPressed` and the other device reads see it as any press. Give up with
   `Input::CancelBindingCapture()` after a timeout; play stopping cancels it. A test drives it with `input.key` or
   `input.gamepadButton` while the menu listens.
 - Tools press actions' bindings with the `input.*` commands (`input.key`, `input.gamepadButton`...).

@@ -127,8 +127,9 @@ action's kind cannot use it), offers `Input::ResetActionBindings()` to go back t
 `Input::SaveBindings()` when it closes: the next session starts with them. To let the player press the new control,
 call `Input::BeginBindingCapture()` (or `BeginBindingCapture(InputDevices::Gamepad)` for a gamepad's row) and then
 `Input::PollBindingCapture()` every frame: it returns the binding of the first control pressed, which you pass to
-`SetActionBindings`. While it listens no action reacts, so the key the player presses (even Escape) does not also close
-the menu; `Input::CancelBindingCapture()` stops listening, for a timeout or a Cancel button. In the editor they are kept in the project's
+`SetActionBindings`. While it listens no action reacts and a mouse click it captures presses no button of the game's UI,
+so the control the player presses (even Escape, when the menu closes on an action) does not also close the menu; code
+that reads the keys themselves (`Input::IsKeyPressed`) still sees it. `Input::CancelBindingCapture()` stops listening, for a timeout or a Cancel button. In the editor they are kept in the project's
 `.strata/Saves` folder, beside the game's save files, and replace the project's bindings of those actions at every Play
 until the game saves others.
 

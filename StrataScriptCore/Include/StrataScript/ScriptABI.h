@@ -648,7 +648,8 @@ extern "C"
 		 * menu's "press a control". InputBeginBindingCapture listens for the next control the player presses on the devices
 		 * given (StrataScriptInputDevices bits; none, or bits it does not know, fail and are reported): a key, a mouse button,
 		 * a gamepad button, or a stick or trigger pushed beyond half its range. While it listens every action reads as up, and
-		 * the control captured reads as up for actions until it is let go, so the press triggers no action. There is one
+		 * the control captured reads as up for actions until it is let go, so the press triggers no action (and a left mouse
+		 * button captured presses no UI widget; the device reads report it as any press). There is one
 		 * capture: a later one (the scripts' or the editor's) replaces it. InputPollBindingCapture copies the captured
 		 * binding's text (the text buffer protocol), after which the capture is over: 0 while it listens, after it was
 		 * cancelled or replaced, or when none runs; a buffer too small for it gets nothing and keeps it for the next call.

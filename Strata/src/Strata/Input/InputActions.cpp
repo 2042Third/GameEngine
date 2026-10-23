@@ -1049,6 +1049,11 @@ namespace Strata
 		return s_State.Capture.Result;
 	}
 
+	const std::optional<InputControl>& InputActions::GetCapturedControl()
+	{
+		return s_State.Suppressed;
+	}
+
 	std::optional<std::string> InputActions::TakeCapturedBinding()
 	{
 		std::optional<std::string> result = std::move(s_State.Capture.Result);

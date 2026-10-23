@@ -1118,8 +1118,10 @@ section; the composition root runs it first, and Input is a module every engine 
   comparing the raw state (`Input::IsRawKeyDown` and friends: whether or not input is enabled) at every `Update` call, also
   while input frames are suspended, so it works while play is paused. While it listens every action reads as up, and the
   control it took stays up for actions until an input frame went by with it released, so the captured press triggers
-  nothing, also when it was pressed and released while play was paused (Input keeps those transitions for the game's next
-  input frame). There is one capture, which a later `BeginCapture` replaces, so code sharing it (the editor's page, a
+  no action, also when it was pressed and released while play was paused (Input keeps those transitions for the game's next
+  input frame). Meanwhile `GetCapturedControl` names it for code that reads the devices: the game's UI presses no widget
+  with a left button captured (a rebinding menu's button under the pointer would start the capture again), while
+  `Input::IsKeyPressed` and the other device reads report it as any press. There is one capture, which a later `BeginCapture` replaces, so code sharing it (the editor's page, a
   game's rebinding menu) keeps the number its own got (`GetCaptureId`) and takes or cancels only while it is still that:
   `UI/BindingCapture` ends its capture without a binding when a game's replaced it. `GetCapturedBinding` reads the binding
   without taking it (the script host copies it into a buffer only once it fits).
