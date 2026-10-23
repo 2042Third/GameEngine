@@ -2180,11 +2180,14 @@ namespace Strata
 			case Pass::Transparent:
 			{
 				depth.setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
+				// The HDR target's alpha becomes the transmittance through the blended surfaces, the product of their 1 - alpha
+				// (1 where there are none: everything before writes 1), which the TAA reads as how much of a pixel has no motion
+				// of its own.
 				nvrhi::BlendState::RenderTarget blend;
 				blend.setBlendEnable(true)
 					.setSrcBlend(nvrhi::BlendFactor::SrcAlpha)
 					.setDestBlend(nvrhi::BlendFactor::InvSrcAlpha)
-					.setSrcBlendAlpha(nvrhi::BlendFactor::One)
+					.setSrcBlendAlpha(nvrhi::BlendFactor::Zero)
 					.setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
 				desc.renderState.blendState.setRenderTarget(0, blend);
 				break;

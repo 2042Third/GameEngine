@@ -195,6 +195,20 @@ namespace
 		}
 	};
 
+	TemporalAntiAliasingSettings WithTransparentWeight(float weight)
+	{
+		TemporalAntiAliasingSettings settings = c_TAAOriginalSettings;
+		settings.TransparentWeight = weight;
+		return settings;
+	}
+
+	// The world position (y 0) at the center of a pixel of DetailScene::Camera(pixels) and of the trail case's camera (8 pixels
+	// per unit, x to the right and z down from the view's corner).
+	glm::vec2 PixelToWorld(uint32_t x, uint32_t y, float panPixels = 0.0f)
+	{
+		return glm::vec2((static_cast<float>(x) + 0.5f + panPixels) / 8.0f - 4.0f, (static_cast<float>(y) + 0.5f) / 8.0f - 4.0f);
+	}
+
 	// What a steady pan between texels keeps of a sinusoid of `period` texels, relative to a still view: the current frame
 	// weighs `weight`, and the history, read halfway between texels every frame, passes the Catmull-Rom filter's response
 	// there (its taps at 1.5 and 0.5 texels weigh -0.0625 and 0.5625 on each side), so w / (1 - (1 - w) a).
@@ -479,6 +493,195 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 			CHECK(ReadHDRBits(offRenderer.GetResolvedHDRTexture()) == ReadHDRBits(onRenderer.GetResolvedHDRTexture()));
 			CHECK(offImage.Pixels == onImage.Pixels);
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Blended transparent surfaces leave the transmittance in the HDR image's alpha on both paths")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(UnlitColor({ 0.3f, 0.3f, 0.3f, 1.0f })), glm::vec3(0.0f), "Ground")
+			.GetComponent<TransformComponent>().Scale = glm::vec3(40.0f);
+		// x and z from -3 to 1, and from -1 to 3: they overlap from -1 to 1.
+		AddTransparentQuad(scene, assets, { 1.0f, 0.2f, 0.1f, 0.5f }, glm::vec3(-1.0f, 0.5f, -1.0f), 4.0f);
+		AddTransparentQuad(scene, assets, { 0.1f, 0.2f, 1.0f, 0.25f }, glm::vec3(1.0f, 1.0f, 1.0f), 4.0f);
+		const SceneCamera camera = DetailScene::Camera(0.0f);
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(PathName(mode));
+			SceneRenderer renderer = CreateRenderer("Alpha", mode);
+			renderer.SetViewportSize(c_Size, c_Size);
+			REQUIRE(renderer.Render(scene, camera));
+			const std::vector<glm::vec4> texels = ReadHDRA(renderer.GetHDRTexture());
+			uint32_t overlapping = 0;
+			for (uint32_t y = 0; y < c_Size; y++)
+			{
+				for (uint32_t x = 0; x < c_Size; x++)
+				{
+					const glm::vec2 position = PixelToWorld(x, y);
+					const auto inside = [&](float low, float high, bool& result)
+					{
+						const glm::vec2 near = glm::min(position - low, high - position);
+						result = glm::all(glm::greaterThan(near, glm::vec2(0.0f)));
+						return glm::all(glm::greaterThan(glm::abs(near), glm::vec2(0.1f)));
+					};
+					bool inFirst = false;
+					bool inSecond = false;
+					// Pixels at an edge are left out.
+					if (!inside(-3.0f, 1.0f, inFirst) || !inside(-1.0f, 3.0f, inSecond))
+						continue;
+					const float expected = (inFirst ? 0.5f : 1.0f) * (inSecond ? 0.75f : 1.0f);
+					CAPTURE(x);
+					CAPTURE(y);
+					CHECK(std::abs(texels[static_cast<size_t>(y) * c_Size + x].a - expected) <= 1.0f / 1024.0f);
+					overlapping += inFirst && inSecond ? 1u : 0u;
+				}
+			}
+			CHECK(overlapping >= 14u * 14u);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Under a moving transparent quad the current frame weighs more, and the trail behind it does not grow")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		// A red quad of alpha 0.5, 2 units (16 pixels) across, moves 0.5 units (4 pixels) a frame over the still texture, its
+		// edges on texel boundaries. The errors are against the composite as it converges where the quad stays: the same scene
+		// with the quad still at its last position, rendered in step (the same jitter phases).
+		struct Errors
+		{
+			double Covered = 0.0; // Pixels covered for exactly two frames
+			double Trail = 0.0;   // Pixels it left one or two frames ago
+		};
+		const auto measure = [&](float transparentWeight)
+		{
+			DetailScene scene(assets, WithTransparentWeight(transparentWeight));
+			DetailScene still(assets, WithTransparentWeight(transparentWeight));
+			Entity quad = AddTransparentQuad(scene.Contents, assets, { 1.0f, 0.1f, 0.1f, 0.5f }, glm::vec3(-2.0f, 0.5f, 0.0f), 2.0f);
+			AddTransparentQuad(still.Contents, assets, { 1.0f, 0.1f, 0.1f, 0.5f }, glm::vec3(2.0f, 0.5f, 0.0f), 2.0f);
+			SceneRenderer renderer = CreateRenderer("Reactive");
+			SceneRenderer stillRenderer = CreateRenderer("Converged");
+			renderer.SetViewportSize(c_Size, c_Size);
+			stillRenderer.SetViewportSize(c_Size, c_Size);
+			const SceneCamera camera = DetailScene::Camera(0.0f);
+			for (uint32_t frame = 0; frame < 16; frame++)
+			{
+				if (frame >= 8)
+				{
+					quad.GetComponent<TransformComponent>().Translation.x += 0.5f;
+					quad.MarkModified<TransformComponent>();
+				}
+				REQUIRE(renderer.Render(scene.Contents, camera));
+				REQUIRE(stillRenderer.Render(still.Contents, camera));
+				FinishFrame(gpu);
+			}
+			// The quad now spans x from 1 to 3, from 0.5 to 2.5 in the previous frame and from 0 to 2 two frames ago.
+			const float left = quad.GetComponent<TransformComponent>().Translation.x - 1.0f;
+			REQUIRE(left == 1.0f);
+			const std::vector<glm::vec3> resolved = ReadHDR(renderer.GetResolvedHDRTexture());
+			const std::vector<glm::vec3> current = ReadHDR(stillRenderer.GetResolvedHDRTexture());
+			Errors errors;
+			uint32_t covered = 0;
+			uint32_t trail = 0;
+			for (uint32_t y = 0; y < c_Size; y++)
+			{
+				for (uint32_t x = 0; x < c_Size; x++)
+				{
+					const glm::vec2 position = PixelToWorld(x, y);
+					if (std::abs(position.y) > 0.9f)
+						continue;
+					const size_t pixel = static_cast<size_t>(y) * c_Size + x;
+					const glm::vec3 difference = glm::abs(resolved[pixel] - current[pixel]);
+					const double error = static_cast<double>(difference.r + difference.g + difference.b) / 3.0;
+					if (position.x > left + 1.0f && position.x < left + 1.5f)
+					{
+						errors.Covered += error;
+						covered++;
+					}
+					else if (position.x > left - 1.0f && position.x < left)
+					{
+						errors.Trail += error;
+						trail++;
+					}
+				}
+			}
+			REQUIRE(covered == 4u * 14u);
+			REQUIRE(trail == 8u * 14u);
+			errors.Covered /= covered;
+			errors.Trail /= trail;
+			return errors;
+		};
+		const Errors original = measure(0.0f);
+		const Errors reactive = measure(0.5f);
+		INFO("covered for two frames: " << original.Covered << " -> " << reactive.Covered << "; trail: " << original.Trail << " -> " << reactive.Trail);
+		CHECK(original.Covered > 0.01);
+		CHECK(reactive.Covered <= 0.5 * original.Covered);
+		CHECK(reactive.Trail <= original.Trail * 1.05 + 1e-3);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The reactive mask is not a bypass: a still transparent quad's edges vary less than its jittered frames")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		// Over a plain ground, so only the quad's edges change with the jitter; its edges lie near texel centers.
+		Scene scene;
+		SetTemporalAntiAliasingSettings(AddTemporalPostProcess(scene, TemporalAntiAliasingPreset::Custom), WithTransparentWeight(0.5f));
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(UnlitColor({ 0.4f, 0.4f, 0.4f, 1.0f })), glm::vec3(0.0f), "Ground")
+			.GetComponent<TransformComponent>().Scale = glm::vec3(40.0f);
+		AddTransparentQuad(scene, assets, { 1.0f, 0.1f, 0.1f, 0.5f }, glm::vec3(0.06f, 0.5f, 0.06f), 3.0f);
+		SceneRenderer renderer = CreateRenderer("Still");
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = DetailScene::Camera(0.0f);
+		const size_t pixels = static_cast<size_t>(c_Size) * c_Size;
+		std::vector<glm::dvec2> resolvedMoments(pixels, glm::dvec2(0.0));
+		std::vector<glm::dvec2> currentMoments(pixels, glm::dvec2(0.0));
+		constexpr uint32_t c_Frames = 32;
+		for (uint32_t frame = 0; frame < 8 + c_Frames; frame++)
+		{
+			REQUIRE(renderer.Render(scene, camera));
+			if (frame < 8)
+				continue;
+			const std::vector<glm::vec3> resolved = ReadHDR(renderer.GetResolvedHDRTexture());
+			const std::vector<glm::vec3> current = ReadHDR(renderer.GetHDRTexture());
+			for (size_t pixel = 0; pixel < pixels; pixel++)
+			{
+				const double resolvedValue = Luminance(resolved[pixel]);
+				const double currentValue = Luminance(current[pixel]);
+				resolvedMoments[pixel] += glm::dvec2(resolvedValue, resolvedValue * resolvedValue);
+				currentMoments[pixel] += glm::dvec2(currentValue, currentValue * currentValue);
+			}
+		}
+		const auto deviation = [](const glm::dvec2& moments)
+		{
+			const glm::dvec2 mean = moments / static_cast<double>(c_Frames);
+			return std::sqrt(std::max(mean.y - mean.x * mean.x, 0.0));
+		};
+		// The quad's edges: the pixels the jitter changes.
+		double resolvedDeviation = 0.0;
+		double currentDeviation = 0.0;
+		uint32_t edges = 0;
+		for (size_t pixel = 0; pixel < pixels; pixel++)
+		{
+			const double jittered = deviation(currentMoments[pixel]);
+			if (jittered < 0.02)
+				continue;
+			currentDeviation += jittered;
+			resolvedDeviation += deviation(resolvedMoments[pixel]);
+			edges++;
+		}
+		INFO("edge pixels " << edges << ", deviation " << currentDeviation / edges << " -> " << resolvedDeviation / edges);
+		CHECK(edges >= 4u * 16u);
+		CHECK(resolvedDeviation <= 0.8 * currentDeviation);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

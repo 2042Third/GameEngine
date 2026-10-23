@@ -152,7 +152,12 @@ void main()
 	// The luminance weights' exposure: of exposed values.
 	float exposure = u_Exposure[ST_EXPOSURE_MULTIPLIER] * u_Temporal.InversePreExposure;
 	bool variance = u_Temporal.ClampMode == 1u;
-	vec3 current = texelFetch(u_Current, pixel, 0).rgb;
+	bool reactive = u_Temporal.TransparentWeight > 0.0;
+	// The HDR image's alpha is the transmittance through blended transparent surfaces (1 without them), which have no motion
+	// of their own: the coverage is the largest of the neighborhood's 1 - alpha, dilated over their aliased edges.
+	vec4 currentTexel = texelFetch(u_Current, pixel, 0).rgba;
+	vec3 current = currentTexel.rgb;
+	float coverage = reactive ? 1.0 - currentTexel.a : 0.0;
 	vec3 low = RGBToYCoCg(current);
 	vec3 high = low;
 	// Variance clipping: the moments and range of the compressed colors.
@@ -180,7 +185,10 @@ void main()
 			if (x == 0 && y == 0)
 				continue;
 			ivec2 neighbor = clamp(pixel + ivec2(x, y), ivec2(0), size - 1);
-			vec3 neighborColor = texelFetch(u_Current, neighbor, 0).rgb;
+			vec4 neighborTexel = texelFetch(u_Current, neighbor, 0).rgba;
+			vec3 neighborColor = neighborTexel.rgb;
+			if (reactive)
+				coverage = max(coverage, 1.0 - neighborTexel.a);
 			vec3 color = RGBToYCoCg(neighborColor);
 			low = min(low, color);
 			high = max(high, color);
@@ -226,6 +234,10 @@ void main()
 				vec2 between = fraction * (1.0 - fraction);
 				weight = max(weight, u_Temporal.ResampleWeight * 4.0 * max(between.x, between.y));
 			}
+			// Transparent surfaces: the current frame weighs at least TransparentWeight where one covers the pixel, a surface of
+			// alpha 0.5 or more fully. Never a bypass: they would alias and shimmer with the jitter.
+			if (reactive)
+				weight = max(weight, min(1.0, 2.0 * coverage) * u_Temporal.TransparentWeight);
 			float currentWeight = weight / (1.0 + Luminance(current) * exposure);
 			float historyWeight = (1.0 - weight) / (1.0 + Luminance(max(history, vec3(0.0))) * exposure);
 			result = (current * currentWeight + history * historyWeight) / max(currentWeight + historyWeight, 1e-6);
