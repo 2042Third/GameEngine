@@ -43,6 +43,23 @@ namespace Strata
 		AssetHandle NormalMap = UUID::Null();            // Tangent-space normal map
 		AssetHandle OcclusionMap = UUID::Null();         // Linear: R = ambient occlusion
 		AssetHandle EmissiveMap = UUID::Null();          // sRGB emissive color
+
+		// A clear coat over the base (KHR_materials_clearcoat): a second, dielectric specular layer (IOR 1.5) with its own
+		// roughness and normal; the light it reflects no longer reaches the base.
+		float Clearcoat = 0.0f;          // The coat's strength, times ClearcoatMap's red channel
+		float ClearcoatRoughness = 0.0f; // Perceptual, times ClearcoatRoughnessMap's green channel
+		AssetHandle ClearcoatMap = UUID::Null();          // Linear: R = coat strength
+		AssetHandle ClearcoatRoughnessMap = UUID::Null(); // Linear: G = coat roughness
+		AssetHandle ClearcoatNormalMap = UUID::Null();    // Tangent-space normal map of the coat (the vertex normal without one)
+
+		// Light passing through the surface (KHR_materials_transmission, _ior, _volume): a transmissive material is drawn as
+		// glass, which shows what lies behind it refracted, tinted by the base color and, through its thickness, absorbed.
+		float Transmission = 0.0f;                  // The share of light passed through, times TransmissionMap's red channel
+		AssetHandle TransmissionMap = UUID::Null(); // Linear: R = transmission
+		float IOR = 1.5f;                           // Index of refraction (1: no bending; glass 1.5, water 1.33, diamond 2.42)
+		float Thickness = 0.0f;                     // Of the volume behind the surface, in the mesh's units (0: a thin wall)
+		glm::vec3 AttenuationColor = { 1.0f, 1.0f, 1.0f }; // Linear color white light has after AttenuationDistance in the volume
+		float AttenuationDistance = 0.0f;           // World units; 0: the volume absorbs nothing
 	};
 
 	// Material asset. Stored as JSON (".stmat"):

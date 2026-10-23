@@ -285,7 +285,11 @@ namespace Strata
 				{ "MetallicRoughnessMap", properties.MetallicRoughnessMap, TextureUsage::Data, false },
 				{ "NormalMap", properties.NormalMap, TextureUsage::NormalMap, false },
 				{ "OcclusionMap", properties.OcclusionMap, TextureUsage::Data, false },
-				{ "EmissiveMap", properties.EmissiveMap, TextureUsage::Color, true } };
+				{ "EmissiveMap", properties.EmissiveMap, TextureUsage::Color, true },
+				{ "ClearcoatMap", properties.ClearcoatMap, TextureUsage::Data, false },
+				{ "ClearcoatRoughnessMap", properties.ClearcoatRoughnessMap, TextureUsage::Data, false },
+				{ "ClearcoatNormalMap", properties.ClearcoatNormalMap, TextureUsage::NormalMap, false },
+				{ "TransmissionMap", properties.TransmissionMap, TextureUsage::Data, false } };
 			for (const auto& slot : slots)
 			{
 				if (!slot.Texture.IsValid())

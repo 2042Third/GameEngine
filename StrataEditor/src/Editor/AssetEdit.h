@@ -28,7 +28,7 @@ namespace Strata
 	// A texture in a material slot whose import usage does not fit the slot (AssetEdit::FindTextureUsageMismatches).
 	struct TextureUsageMismatch
 	{
-		std::string Property;  // The slot: "NormalMap", "MetallicRoughnessMap", "OcclusionMap", "BaseColorMap", "EmissiveMap"
+		std::string Property;  // The slot: a material's map property, "NormalMap", "BaseColorMap", "ClearcoatMap"...
 		AssetHandle Texture = UUID::Null();
 		TextureUsage Usage = TextureUsage::Color;    // As the texture is imported
 		TextureUsage Expected = TextureUsage::Color; // What the slot reads it as

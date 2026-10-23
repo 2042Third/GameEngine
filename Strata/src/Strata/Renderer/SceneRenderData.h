@@ -17,6 +17,8 @@ namespace Strata
 		constexpr uint32_t c_MaterialAlphaBlend = 2u;
 		constexpr uint32_t c_MaterialUnlit = 4u;
 		constexpr uint32_t c_MaterialDoubleSided = 8u;
+		constexpr uint32_t c_MaterialClearcoat = 16u;    // Clearcoat > 0 (and lit): the coat's lobe is evaluated
+		constexpr uint32_t c_MaterialTransmissive = 32u; // Transmission > 0 (and lit): drawn as glass
 
 		// InstanceData::Flags
 		constexpr uint32_t c_InstanceMirrored = 1u; // Negative determinant: winding and tangent handedness are flipped
@@ -188,9 +190,20 @@ namespace Strata
 			uint32_t NormalMap;
 			uint32_t OcclusionMap;
 			uint32_t EmissiveMap;
-			uint32_t Padding;
+			uint32_t ClearcoatMap;
+			float Clearcoat;           // 0 without a coat (c_MaterialClearcoat)
+			float ClearcoatRoughness;
+			float Transmission;        // 0 when not transmissive (c_MaterialTransmissive)
+			float IOR;
+			float Thickness;           // In the mesh's units
+			uint32_t ClearcoatRoughnessMap;
+			uint32_t ClearcoatNormalMap;
+			uint32_t TransmissionMap;
+			// rgb: what the volume absorbs per world unit (Beer's law: -ln(AttenuationColor) / AttenuationDistance; 0 absorbs
+			// nothing), w: unused.
+			glm::vec4 Absorption;
 		};
-		static_assert(sizeof(MaterialData) == 96);
+		static_assert(sizeof(MaterialData) == 144);
 
 		struct LightData
 		{

@@ -4,6 +4,7 @@
 #include "Strata/Renderer/GPUSceneData.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/GPUUploadQueue.h"
+#include "Strata/Renderer/MaterialData.h"
 #include "Strata/Renderer/SceneRenderData.h"
 
 #include <nvrhi/nvrhi.h>
@@ -264,8 +265,8 @@ namespace Strata
 		std::vector<uint8_t> m_MaterialUsesDefault;    // Drawn with the default material while its own is not loaded
 		// Per material slot the distinct textures its data was built with, and each one's place in its m_TextureUsers list
 		// (so that a slot leaves the lists in constant time).
-		std::vector<std::array<AssetHandle, 5>> m_MaterialTextures;
-		std::vector<std::array<uint32_t, 5>> m_MaterialTexturePositions;
+		std::vector<std::array<AssetHandle, MaterialGPU::c_TextureMapCount>> m_MaterialTextures;
+		std::vector<std::array<uint32_t, MaterialGPU::c_TextureMapCount>> m_MaterialTexturePositions;
 		std::unordered_map<AssetHandle, std::vector<uint32_t>> m_TextureUsers; // Texture -> material slots naming it
 		uint32_t m_DoubleSidedMaterials = 0;
 		uint32_t m_AlphaMaskedMaterials = 0;

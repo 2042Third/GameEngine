@@ -5,6 +5,7 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/PropertyBuilder.h"
 #include "Strata/Reflection/PropertyJson.h"
+#include "Strata/Reflection/PropertyOptions.h"
 
 namespace Strata
 {
@@ -48,7 +49,35 @@ namespace Strata
 					{ .DisplayName = "Metal/Rough Map", .Tooltip = "Metallic-roughness map: green = roughness, blue = metallic" })
 				.AssetProperty("NormalMap", &MaterialProperties::NormalMap, AssetType::Texture)
 				.AssetProperty("OcclusionMap", &MaterialProperties::OcclusionMap, AssetType::Texture)
-				.AssetProperty("EmissiveMap", &MaterialProperties::EmissiveMap, AssetType::Texture);
+				.AssetProperty("EmissiveMap", &MaterialProperties::EmissiveMap, AssetType::Texture)
+				.Property("Clearcoat", &MaterialProperties::Clearcoat,
+					WithTooltip(range(0.0f, 1.0f), "Strength of a clear coat over the base: a second specular layer, as on car paint or varnished "
+						"wood; the light it reflects no longer reaches the base"))
+				.Property("ClearcoatRoughness", &MaterialProperties::ClearcoatRoughness,
+					WithTooltip(range(0.0f, 1.0f), "Perceptual roughness of the clear coat"))
+				.AssetProperty("ClearcoatMap", &MaterialProperties::ClearcoatMap, AssetType::Texture,
+					{ .Tooltip = "Clear coat strength map: red = strength (times Clearcoat)" })
+				.AssetProperty("ClearcoatRoughnessMap", &MaterialProperties::ClearcoatRoughnessMap, AssetType::Texture,
+					{ .DisplayName = "Clearcoat Rough Map", .Tooltip = "Clear coat roughness map: green = roughness (times Clearcoat Roughness)" })
+				.AssetProperty("ClearcoatNormalMap", &MaterialProperties::ClearcoatNormalMap, AssetType::Texture,
+					{ .Tooltip = "Tangent-space normal map of the clear coat (without one the coat follows the mesh's own normal)" })
+				.Property("Transmission", &MaterialProperties::Transmission,
+					WithTooltip(range(0.0f, 1.0f), "Share of light passing through the surface (glass, water): a transmissive material is drawn "
+						"as glass, which shows what lies behind it refracted and tinted by the base color"))
+				.AssetProperty("TransmissionMap", &MaterialProperties::TransmissionMap, AssetType::Texture,
+					{ .Tooltip = "Transmission map: red = transmission (times Transmission)" })
+				.Property("IOR", &MaterialProperties::IOR,
+					PropertyOptions { .DisplayName = "IOR", .Tooltip = "Index of refraction: how much light bends entering the surface (1 none, water "
+						"1.33, glass 1.5, diamond 2.42)", .Min = 1.0f, .Max = 3.0f, .Speed = 0.01f })
+				.Property("Thickness", &MaterialProperties::Thickness,
+					PropertyOptions { .Tooltip = "Thickness of the volume behind a transmissive surface, in the mesh's units: how far what lies "
+						"behind it is displaced and how much the volume absorbs (0: a thin wall)", .Min = 0.0f, .Max = 1000.0f, .Speed = 0.01f })
+				.Property("AttenuationColor", &MaterialProperties::AttenuationColor,
+					PropertyOptions { .Tooltip = "Color white light takes after traveling Attenuation Distance through a transmissive volume",
+						.Color = true })
+				.Property("AttenuationDistance", &MaterialProperties::AttenuationDistance,
+					PropertyOptions { .Tooltip = "World units after which light in a transmissive volume has the attenuation color (0: the volume "
+						"absorbs nothing)", .Min = 0.0f, .Max = c_Unbounded, .Speed = 0.01f });
 			return properties;
 		}();
 		return s_Properties;
@@ -143,7 +172,8 @@ namespace Strata
 	std::vector<AssetHandle> Material::GetTextureHandles() const
 	{
 		std::vector<AssetHandle> textures;
-		for (AssetHandle handle : { m_Properties.BaseColorMap, m_Properties.MetallicRoughnessMap, m_Properties.NormalMap, m_Properties.OcclusionMap, m_Properties.EmissiveMap })
+		for (AssetHandle handle : { m_Properties.BaseColorMap, m_Properties.MetallicRoughnessMap, m_Properties.NormalMap, m_Properties.OcclusionMap, m_Properties.EmissiveMap,
+			m_Properties.ClearcoatMap, m_Properties.ClearcoatRoughnessMap, m_Properties.ClearcoatNormalMap, m_Properties.TransmissionMap })
 		{
 			if (handle.IsValid())
 				textures.push_back(handle);

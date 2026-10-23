@@ -3138,6 +3138,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   layout) after `TextureTable::RecordUploads` ran in its frame. Normal maps are read as X
   and Y with Z reconstructed (`Forward.frag`), so BC5 and RGBA8 normal maps shade alike; a shader that reads a normal map
   must do the same.
+- A material has nine maps (`MaterialGPU::GetTextureMaps`, `c_TextureMapCount`, the order `MaterialGPU::Build` resolves
+  them in): base color, metallic-roughness, normal, occlusion, emission, the clear coat's strength (R), roughness (G) and
+  normal, and transmission (R). A list of a material's maps (`Material::GetTextureHandles`, `RenderSceneGPU`'s reverse
+  index, the material editor's usage warnings in `AssetEdit::FindTextureUsageMismatches`) takes a new one in every place.
+  `RenderData::MaterialData` (144 bytes, `Include/Scene.glsl`) holds the clear coat's strength and roughness, the
+  transmission, `IOR`, `Thickness` and the volume's absorption per world unit (`MaterialGPU::GetAbsorption`: Beer's law
+  from `AttenuationColor` and `AttenuationDistance`, 0 for none); its flags `c_MaterialClearcoat` (16) and
+  `c_MaterialTransmissive` (32) are set for lit materials whose `Clearcoat` or `Transmission` is above 0. New `.stmat`
+  keys keep format version 1: they have defaults, and 0.5.0's reader only warns on keys it does not know.
 
 ### Overlays
 

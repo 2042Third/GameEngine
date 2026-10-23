@@ -16,6 +16,7 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/MaterialData.h>
 
 #include <imgui.h>
 
@@ -39,8 +40,7 @@ namespace Strata
 
 	const std::vector<TextureUsageMismatch>& MaterialEditor::GetMismatches(EditorContext& context, AssetHandle material, const MaterialProperties& properties)
 	{
-		const std::array<AssetHandle, 5> maps = { properties.BaseColorMap, properties.MetallicRoughnessMap, properties.NormalMap, properties.OcclusionMap,
-			properties.EmissiveMap };
+		const std::array<AssetHandle, MaterialGPU::c_TextureMapCount> maps = MaterialGPU::GetTextureMaps(properties);
 		const EditorAssetManager* assets = context.GetAssetManager();
 		const uint64_t version = assets ? assets->GetChangeVersion() : 0;
 		if (m_Mismatches.Material != material || m_Mismatches.Maps != maps || m_Mismatches.AssetsVersion != version)

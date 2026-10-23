@@ -32,8 +32,16 @@ namespace Strata
 		constexpr uint32_t c_RecordRunGap = 16;
 		constexpr uint32_t c_TableRunGap = 16;
 		// A material slot's textures before it names any (AssetHandle's default constructor makes a random handle).
-		constexpr std::array<AssetHandle, 5> c_NoTextures = { AssetHandle::Null(), AssetHandle::Null(), AssetHandle::Null(), AssetHandle::Null(),
-			AssetHandle::Null() };
+		const std::array<AssetHandle, MaterialGPU::c_TextureMapCount>& GetNoTextures()
+		{
+			static const std::array<AssetHandle, MaterialGPU::c_TextureMapCount> s_NoTextures = []()
+			{
+				std::array<AssetHandle, MaterialGPU::c_TextureMapCount> textures;
+				textures.fill(AssetHandle::Null());
+				return textures;
+			}();
+			return s_NoTextures;
+		}
 
 		// Buffer versions are unique in the process (main thread only), so a mirror made again for a scene never repeats one a
 		// renderer's binding sets were made for.
@@ -328,7 +336,7 @@ namespace Strata
 
 	void RenderSceneGPU::RemoveTextureUsers(uint32_t slot)
 	{
-		std::array<AssetHandle, 5>& textures = m_MaterialTextures[slot];
+		std::array<AssetHandle, MaterialGPU::c_TextureMapCount>& textures = m_MaterialTextures[slot];
 		for (size_t map = 0; map < textures.size(); map++)
 		{
 			const AssetHandle texture = textures[map];
@@ -415,7 +423,7 @@ namespace Strata
 				const std::array<AssetHandle, MaterialGPU::c_TextureMapCount> maps = MaterialGPU::GetTextureMaps(material->GetProperties());
 				if (std::any_of(maps.begin(), maps.end(), [](AssetHandle map) { return map.IsValid(); }))
 					flags |= RenderData::c_CullMaterialTextured;
-				std::array<AssetHandle, 5>& textures = m_MaterialTextures[slot];
+				std::array<AssetHandle, MaterialGPU::c_TextureMapCount>& textures = m_MaterialTextures[slot];
 				for (size_t map = 0; map < maps.size(); map++)
 				{
 					const AssetHandle texture = maps[map];
@@ -463,8 +471,8 @@ namespace Strata
 		m_MaterialData.resize(materialSlots, RenderData::MaterialData {});
 		m_MaterialFlags.resize(materialSlots, 0u);
 		m_MaterialUsesDefault.resize(materialSlots, 0);
-		m_MaterialTextures.resize(materialSlots, c_NoTextures);
-		m_MaterialTexturePositions.resize(materialSlots, std::array<uint32_t, 5> {});
+		m_MaterialTextures.resize(materialSlots, GetNoTextures());
+		m_MaterialTexturePositions.resize(materialSlots, std::array<uint32_t, MaterialGPU::c_TextureMapCount> {});
 		m_TransparentPositions.resize(materialSlots, c_NotListed);
 
 		// Another manager (or none) means other objects for every handle; so does a manager that no longer remembers the

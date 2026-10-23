@@ -166,6 +166,13 @@ TEST_SUITE("Editor.Commands")
 		const nlohmann::json created = harness.Run("material.create", { { "path", "Materials/Odd.stmat" }, { "properties", { { "BaseColorMap", texture } } } });
 		REQUIRE(created["warnings"].size() == 1);
 		CHECK(created["warnings"][0]["expected"] == "Color");
+
+		// The clear coat's maps read data and a normal map: a normal map as the coat's strength warns, as the coat's normal map not.
+		const nlohmann::json coated = harness.Run("material.create", { { "path", "Materials/Coated.stmat" }, { "properties", {
+			{ "ClearcoatMap", texture }, { "ClearcoatNormalMap", texture } } } });
+		REQUIRE(coated["warnings"].size() == 1);
+		CHECK(coated["warnings"][0]["property"] == "ClearcoatMap");
+		CHECK(coated["warnings"][0]["expected"] == "Data");
 	}
 
 	TEST_CASE("Saving a scene records what it references as its file shows")

@@ -12,6 +12,8 @@
 #define ST_MATERIAL_ALPHA_BLEND  2u
 #define ST_MATERIAL_UNLIT        4u
 #define ST_MATERIAL_DOUBLE_SIDED 8u
+#define ST_MATERIAL_CLEARCOAT    16u
+#define ST_MATERIAL_TRANSMISSIVE 32u
 
 #define ST_INSTANCE_MIRRORED 1u // Negative determinant: winding and tangent handedness are flipped
 #define ST_INSTANCE_SKINNED  2u // Posed: SkinPalette is the first joint matrix of its palette (the skinned pipelines)
@@ -256,7 +258,16 @@ struct MaterialData
 	uint NormalMap;
 	uint OcclusionMap;
 	uint EmissiveMap;
-	uint Padding;
+	uint ClearcoatMap;
+	float Clearcoat;         // 0 without a coat (ST_MATERIAL_CLEARCOAT)
+	float ClearcoatRoughness;
+	float Transmission;      // 0 when not transmissive (ST_MATERIAL_TRANSMISSIVE)
+	float IOR;
+	float Thickness;         // In the mesh's units
+	uint ClearcoatRoughnessMap;
+	uint ClearcoatNormalMap;
+	uint TransmissionMap;
+	vec4 Absorption;         // rgb: absorbed per world unit inside a transmissive volume (Beer's law), w: unused
 };
 
 layout(set = 0, binding = ST_SRV(1), std430) readonly buffer MaterialBuffer

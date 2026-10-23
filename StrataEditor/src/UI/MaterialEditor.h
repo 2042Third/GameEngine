@@ -3,6 +3,7 @@
 #include "Editor/AssetEdit.h"
 
 #include <Strata/Asset/AssetTypes.h>
+#include <Strata/Renderer/MaterialData.h>
 
 #include <array>
 #include <cstdint>
@@ -47,7 +48,7 @@ namespace Strata
 		struct MismatchCache
 		{
 			AssetHandle Material = UUID::Null();
-			std::array<AssetHandle, 5> Maps = {};
+			std::array<AssetHandle, MaterialGPU::c_TextureMapCount> Maps = {};
 			uint64_t AssetsVersion = UINT64_MAX;
 			std::vector<TextureUsageMismatch> Mismatches;
 		};
