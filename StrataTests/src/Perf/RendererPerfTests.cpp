@@ -61,8 +61,6 @@ namespace
 		return measurement;
 	}
 
-	// Render100kCubes' scene with the post-processing's defaults but TAA under `preset`: its jitter, motion vectors, motion
-	// history and resolve, measured as `key` (its CPU median) and `key`GPU (the GPU's median busy time).
 	// The median over the profiler's recorded frames (the measured ones) of a GPU stage's time, in milliseconds.
 	double MedianGPUStageMs(const char* name)
 	{
@@ -85,8 +83,9 @@ namespace
 		return samples[samples.size() / 2];
 	}
 
-	// 100,000 cubes with TAA of `preset`; with `reflections`, screen-space reflections traced from every surface (the maximum
-	// roughness 1).
+	// Render100kCubes' scene with the post-processing's defaults but TAA under `preset`: its jitter, motion vectors, motion
+	// history and resolve, measured as `key` (its CPU median) and `key`GPU (the GPU's median busy time); with `reflections`,
+	// screen-space reflections traced from every surface (the maximum roughness 1).
 	void MeasureTemporalCubes(TemporalAntiAliasingPreset preset, const std::string& key, bool reflections = false)
 	{
 		GPUContext gpu;
