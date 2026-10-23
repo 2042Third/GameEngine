@@ -336,6 +336,18 @@ TEST_SUITE("Core.InputActions")
 		while (actions.size() <= InputActionSet::c_MaxActions)
 			actions.push_back({ { "Name", MakeName('b', actions.size()) } });
 		CHECK(Refusal(OneMap(actions)).find("more than 256 actions") != std::string::npos);
+
+		// The largest dead zone is accepted as the project file writes it (0.9) and as a float holds it, and round-trips.
+		for (const double zone : { 0.9, static_cast<double>(0.9f) })
+		{
+			CAPTURE(zone);
+			std::string error;
+			const std::optional<InputActionSet> widest = InputActionSet::FromJson(OneMap(nlohmann::json::array({ { { "Name", "Steer" }, { "Kind", "Axis" },
+				{ "DeadZone", zone } } })), &error);
+			REQUIRE_MESSAGE(widest, error);
+			CHECK(widest->GetAction(*widest->FindAction("Steer")).DeadZone == 0.9f);
+			CHECK(InputActionSet::FromJson(widest->ToJson()) == widest);
+		}
 	}
 
 	TEST_CASE("The UI map is added when missing and cannot lose an action")

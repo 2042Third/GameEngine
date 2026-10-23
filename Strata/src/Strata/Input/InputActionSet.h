@@ -136,7 +136,8 @@ namespace Strata
 		static constexpr size_t c_MaxBindings = 8;  // Per action
 		static constexpr size_t c_MaxNameLength = 64;
 		static constexpr float c_DefaultDeadZone = 0.15f;
-		static constexpr float c_MaxDeadZone = 0.9f;
+		// A double: values are checked as JSON holds them, where 0.9 is more than 0.9f, and kept as floats (0.9f).
+		static constexpr double c_MaxDeadZone = 0.9;
 
 		std::vector<InputActionMap> Maps;
 

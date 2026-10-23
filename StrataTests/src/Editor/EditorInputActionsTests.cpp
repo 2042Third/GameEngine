@@ -223,6 +223,10 @@ TEST_SUITE("Editor.InputActions")
 		CHECK(harness.Bindings("Move") == std::vector<std::string> { "Gamepad/LeftX", "1D:Key/A,Key/D" });
 		// Other refusals, each naming what is wrong.
 		CHECK(harness.Refuse("inputActions.setAction", { { "action", "Move" }, { "deadZone", 1.5 } }).find("deadZone") != std::string::npos);
+		// The largest dead zone, as agents write it and as the page's slider sends it (a float).
+		CHECK(harness.Run("inputActions.setAction", { { "action", "Move" }, { "deadZone", 0.9 } })["action"]["deadZone"] == 0.9);
+		harness.Run("inputActions.setAction", { { "action", "Move" }, { "deadZone", 0.2 } });
+		CHECK(harness.Run("inputActions.setAction", { { "action", "Move" }, { "deadZone", 0.9f } })["action"]["deadZone"] == 0.9);
 		CHECK(harness.Refuse("inputActions.setAction", { { "action", "Move" }, { "kind", "Trigger" } }).find("kind") != std::string::npos);
 		CHECK(harness.Refuse("inputActions.setAction", { { "action", "Fly" } }).find("name the map") != std::string::npos);
 		CHECK(harness.Refuse("inputActions.setAction", { { "action", "Air/Fly" } }).find("no map 'Air'") != std::string::npos);

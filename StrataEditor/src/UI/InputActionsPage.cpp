@@ -403,7 +403,7 @@ namespace Strata
 					UI::PropertyLabel("Dead zone", "Values within it read 0; the rest is rescaled to reach 1 (round for sticks)", zoneKey);
 					float zone = m_EditKey == zoneKey ? m_EditDeadZone : action.DeadZone;
 					ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-					ImGui::SliderFloat("##DeadZone", &zone, 0.0f, InputActionSet::c_MaxDeadZone, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+					ImGui::SliderFloat("##DeadZone", &zone, 0.0f, static_cast<float>(InputActionSet::c_MaxDeadZone), "%.2f", ImGuiSliderFlags_AlwaysClamp);
 					UI::ItemProbe::Record(zoneKey, true, 0, fmt::format("{:.2f}", zone));
 					if (ImGui::IsItemActive())
 					{
