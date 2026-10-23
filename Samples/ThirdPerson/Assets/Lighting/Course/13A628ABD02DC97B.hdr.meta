@@ -1,5 +1,5 @@
 {
-	"Handle": "EFFEE8D8C4FBAD7B",
+	"Handle": "72562008E19C39B4",
 	"ImportSettings": {
 		"Compression": "Auto",
 		"Filter": "Linear",
@@ -8,6 +8,7 @@
 		"GenerateMips": true,
 		"MaxSize": 0,
 		"Quality": "High",
+		"RemoveSun": false,
 		"Usage": "HDR",
 		"Wrap": "Clamp"
 	},
