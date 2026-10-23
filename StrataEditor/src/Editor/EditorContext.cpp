@@ -1609,6 +1609,7 @@ namespace Strata
 	void EditorContext::ResetSimulatedInput()
 	{
 		Input::ClearSimulated();
+		InputActions::ClearSimulated();
 		m_SimulatedInput.Reset();
 	}
 

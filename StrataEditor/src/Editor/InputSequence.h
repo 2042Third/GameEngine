@@ -36,7 +36,8 @@ namespace Strata
 			Axis,       // A gamepad axis value (null: back to the device's)
 			MouseMove,
 			Scroll,
-			Command     // An input.* command run with wait: false
+			Command,    // An input.* command run with wait: false
+			Action      // An input action: press, release or tap, with a value
 		};
 
 		enum class ButtonAction : uint8_t
@@ -59,6 +60,8 @@ namespace Strata
 			GamepadAxis Axis = GamepadAxis::LeftX;
 			std::optional<float> AxisValue;
 			glm::vec2 Vector = glm::vec2(0.0f); // Pointer position or scroll offset
+			std::string ActionName;             // An input action's qualified name
+			glm::vec2 ActionValue = glm::vec2(1.0f, 0.0f);
 			std::string Command;
 			nlohmann::json Parameters;
 		};

@@ -2735,7 +2735,18 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   source pressing a key the other holds is no transition) and reach the game even while the viewport has no focus. Holds
   belong to commands (`SimulatedInput`, owned by `EditorContext`): a tap ends only its own hold, overlapping holds of a
   button keep it down until the last ends, a release ends every hold of its button, and `input.releaseAll` ends all of
-  them and drops presses still queued (`Input::ReleaseAllSimulated`).
+  them and drops presses still queued (`Input::ReleaseAllSimulated`, `InputActions::ReleaseAllSimulated`).
+- **`input.action {action, mode: tap|press|release, steps | seconds, value, wait}`** holds an input action directly,
+  whatever its bindings (`SimulatedInput::HoldAction`, `InputActions::SimulateAction`): named as scripts name it
+  (qualified or unambiguous, reported as the qualified name), down from the next input frame with its value (a Button's
+  1, an Axis' `[x, 0]`, default `[1, 0]`; a Vector2's `[x, y]`, required, of length at most 1, as its bindings give; a
+  value that does not fit the kind is refused). An action has one value, so like a gamepad axis a new hold replaces the
+  one before (ending it, interrupted when it was a tap) without letting the action go; it reads as up while its map is
+  disabled or a capture listens. Simulated keys reach actions through their bindings without it. `input.state` lists the
+  held actions (`simulatedActions`, also in every answer's `held`), every action as the game reads it (`actions: [{action,
+  map, kind, down, value}]`, in the set's order, also in Edit mode), the maps' enables (`maps`), the players' bindings
+  that replace the project's (`playerBindings`, `EditorContext::GetPlayerBindings`) and whether a binding capture
+  listens (`capture`).
 - **Durations count fixed steps**, the game's own time base (`EditorContext::GetInputStepCount`: its fixed steps, plus
   each frame a running game updates at time scale 0 without a step, so that a pause menu's buttons can be clicked; a
   paused game's taps still wait for its next step), never frames: a tap of
@@ -2753,8 +2764,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - **`input.sequence {events, steps, observe, keepHeld, wait}`** (`Editor/InputSequence`, owned and driven by
   `EditorContext` after the game's update every frame) plays a script of input timed in fixed steps: it pauses the game
   (resumed at the end if it ran) and runs exactly one step per frame, giving each step its events (`key`, `mouseButton`,
-  `gamepadButton` with `action` and a tap's `steps`; `gamepadAxis`; `mouseMove`; `scroll`; `command`: any `input.*`
-  command, run with `wait: false`), so the game ends in the same state whatever the frame rate (`Editor.Input` compares
+  `gamepadButton` with `action` and a tap's `steps`; `gamepadAxis`; `mouseMove`; `scroll`; `action`: an input action with
+  `mode`, a tap's `steps` and `value`, as `input.action` takes them, where `action` names the input action because no
+  button names the event; `command`: any `input.*` command, run with `wait: false`), so the game ends in the same state whatever the frame rate (`Editor.Input` compares
   frames of 1, 16.7 and 50 ms bit for bit; CTests `StrataEditor.InputSequence` and `InputSequenceWindowed` walk a character
   exactly 1.5 m with a 30-step W through the real editor, headless and in a window). `observe` samples
   component properties, script fields or world transforms every few steps and at the end. Its holds are its own, released

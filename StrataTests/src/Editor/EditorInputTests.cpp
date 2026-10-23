@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -9,6 +10,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Input/Input.h>
+#include <Strata/Input/InputActions.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scripting/ScriptSystem.h>
 
@@ -24,7 +26,7 @@ namespace
 {
 
 	// A project playing the API test module's InputProbe (it samples the input queries every update into its fields), with
-	// frames run the way the application runs them: input frame, editor update, then the pending commands.
+	// frames run the way the application runs them: input frame, input actions, editor update, then the pending commands.
 	struct InputHarness
 	{
 		EditorContext Context { EditorContextSpecification { false, false } };
@@ -75,8 +77,24 @@ namespace
 		void Frame(float seconds = 1.0f / 60.0f)
 		{
 			Input::BeginFrame();
+			InputActions::Update();
 			Context.Update(Timestep(seconds));
 			Runner.Update(Context);
+		}
+
+		// The project's input actions: Gameplay (Jump on J, Steer an Axis on A and D, Move a Vector2 on the left stick, Left on
+		// Q beside UI/Left) and Vehicle (Horn on H), disabled at start.
+		void AddActions()
+		{
+			RunCommandToCompletion(Context, Commands, "inputActions.setMap", { { "map", "Gameplay" } });
+			RunCommandToCompletion(Context, Commands, "inputActions.setAction", { { "action", "Gameplay/Jump" }, { "bindings", { "Key/J" } } });
+			RunCommandToCompletion(Context, Commands, "inputActions.setAction", { { "action", "Gameplay/Steer" }, { "kind", "Axis" },
+				{ "bindings", { "1D:Key/A,Key/D" } } });
+			RunCommandToCompletion(Context, Commands, "inputActions.setAction", { { "action", "Gameplay/Move" }, { "kind", "Vector2" },
+				{ "bindings", { "Gamepad/LeftStick" } } });
+			RunCommandToCompletion(Context, Commands, "inputActions.setAction", { { "action", "Gameplay/Left" }, { "bindings", { "Key/Q" } } });
+			RunCommandToCompletion(Context, Commands, "inputActions.setMap", { { "map", "Vehicle" }, { "enabled", false } });
+			RunCommandToCompletion(Context, Commands, "inputActions.setAction", { { "action", "Vehicle/Horn" }, { "bindings", { "Key/H" } } });
 		}
 
 		// A ground (a static box whose top is y = 0) and "Hero", a character controller at the origin walked by the API
@@ -108,6 +126,18 @@ namespace
 			Ref<Scene> scene = Context.GetActiveScene();
 			Entity probe = scene->GetEntityByUUID(*UUIDFromJson(Probe));
 			return GetField<bool>(GetScriptSystem(*scene), probe, "InputProbe", field);
+		}
+
+		// The entry of input.state's actions for an action, or null.
+		nlohmann::json FindActionState(std::string_view action)
+		{
+			const nlohmann::json state = Run("input.state");
+			for (const nlohmann::json& entry : state["actions"])
+			{
+				if (entry["action"] == std::string(action))
+					return entry;
+			}
+			return nullptr;
 		}
 
 		glm::vec2 ProbeVector(std::string_view field)
@@ -642,5 +672,204 @@ TEST_SUITE("Editor.Input")
 		REQUIRE(sequence);
 		CHECK_FALSE(sequence->Success);
 		CHECK(sequence->ErrorData["stepsRun"] == 2);
+	}
+
+	TEST_CASE("input.action taps, presses and releases an action for the given steps")
+	{
+		InputHarness harness;
+		harness.AddActions();
+		CHECK(harness.Fail("input.action", { { "action", "Jump" } }).ErrorKind == EditorCommandError::Failed); // No game runs
+		harness.Run("play.start");
+		harness.Frame();
+
+		// Refused, changing nothing: unknown and ambiguous names, values the kind cannot take, durations of other modes.
+		const auto refuse = [&harness](const nlohmann::json& parameters)
+		{
+			INFO(parameters.dump());
+			const EditorCommandResult result = harness.Fail("input.action", parameters);
+			CHECK(result.ErrorKind == EditorCommandError::InvalidParameters);
+			return result.Error;
+		};
+		CHECK(refuse({ { "action", "Fly" } }).find("There is no action 'Fly'") != std::string::npos);
+		CHECK(refuse({ { "action", "Left" } }).find("Gameplay/Left, UI/Left") != std::string::npos);
+		CHECK(refuse({ { "action", "Jump" }, { "value", { 1, 0 } } }).find("Button action takes no value") != std::string::npos);
+		CHECK(refuse({ { "action", "Steer" }, { "value", { 0.5, 0.5 } } }).find("[x, 0]") != std::string::npos);
+		CHECK(refuse({ { "action", "Steer" }, { "value", { 2, 0 } } }).find("-1 to 1") != std::string::npos);
+		CHECK(refuse({ { "action", "Move" } }).find("needs a value") != std::string::npos);
+		CHECK(refuse({ { "action", "Move" }, { "value", { 1, 1 } } }).find("length of at most 1") != std::string::npos);
+		CHECK(refuse({ { "action", "Move" }, { "mode", "release" }, { "value", { 0, 1 } } }).find("release takes no value") != std::string::npos);
+		CHECK(refuse({ { "action", "Jump" }, { "mode", "press" }, { "steps", 2 } }).find("mode tap") != std::string::npos);
+		CHECK(refuse({ { "action", "Jump" }, { "mode", "hold" } }).find("'mode'") != std::string::npos);
+		CHECK(refuse(nlohmann::json::object()).find("action") != std::string::npos);
+		harness.Frame();
+		CHECK_FALSE(InputActions::IsDown("Jump"));
+		CHECK(harness.Run("input.state")["simulatedActions"].empty());
+
+		// A tap of two steps, named in any case: down from the next frame for two steps, answered once the game saw the release.
+		std::optional<EditorCommandResult> result;
+		harness.Start("input.action", { { "action", "gameplay/jump" }, { "steps", 2 } }, result);
+		harness.Frame();
+		CHECK(InputActions::IsPressed("Jump"));
+		CHECK_FALSE(result);
+		harness.Frame();
+		CHECK(InputActions::IsDown("Jump"));
+		CHECK_FALSE(InputActions::IsPressed("Jump"));
+		CHECK_FALSE(result);
+		harness.Frame();
+		CHECK_FALSE(InputActions::IsDown("Jump"));
+		CHECK(InputActions::IsReleased("Jump"));
+		REQUIRE(result);
+		REQUIRE(result->Success);
+		CHECK(result->Value["action"] == "Gameplay/Jump");
+		CHECK(result->Value["kind"] == "Button");
+		CHECK(result->Value["mode"] == "tap");
+		CHECK(result->Value["steps"] == 2);
+		CHECK(result->Value["interrupted"] == false);
+		CHECK(result->Value["held"]["simulatedActions"].empty());
+
+		// A press holds a value until released; a new press of the action replaces it without letting the action go.
+		harness.Start("input.action", { { "action", "Move" }, { "mode", "press" }, { "value", { 0, 1 } } }, result);
+		harness.Frame();
+		REQUIRE(result);
+		CHECK(result->Value["seen"] == true);
+		CHECK(InputActions::IsPressed("Move"));
+		CHECK(InputActions::GetValue("Move") == glm::vec2(0.0f, 1.0f));
+		harness.Run("input.action", { { "action", "Move" }, { "mode", "press" }, { "value", { -0.5, 0 } }, { "wait", false } });
+		harness.Frame();
+		CHECK(InputActions::IsDown("Move"));
+		CHECK_FALSE(InputActions::IsPressed("Move"));
+		CHECK(InputActions::GetValue("Move") == glm::vec2(-0.5f, 0.0f));
+		const nlohmann::json held = harness.Run("input.state")["simulatedActions"];
+		REQUIRE(held.size() == 1);
+		CHECK(held[0]["action"] == "Gameplay/Move");
+		// An Axis is held at 1 unless a value is given.
+		harness.Run("input.action", { { "action", "Steer" }, { "mode", "press" }, { "wait", false } });
+		harness.Frame();
+		CHECK(InputActions::GetValue("Steer") == glm::vec2(1.0f, 0.0f));
+		const nlohmann::json released = harness.Run("input.action", { { "action", "Move" }, { "mode", "release" }, { "wait", false } });
+		CHECK(released["released"] == true);
+		harness.Frame();
+		CHECK(InputActions::IsReleased("Move"));
+		CHECK(InputActions::GetValue("Move") == glm::vec2(0.0f));
+		// input.releaseAll lets go of held actions too.
+		CHECK(harness.Run("input.releaseAll", { { "wait", false } })["released"]["simulatedActions"].size() == 1);
+		harness.Frame();
+		CHECK(InputActions::IsReleased("Steer"));
+
+		// A tap ended early by a release answers interrupted.
+		harness.Start("input.action", { { "action", "Jump" }, { "steps", 10 } }, result);
+		harness.Frame();
+		harness.Run("input.action", { { "action", "Jump" }, { "mode", "release" }, { "wait", false } });
+		harness.Frame();
+		harness.Frame();
+		REQUIRE(result);
+		CHECK(result->Value["interrupted"] == true);
+		CHECK_FALSE(InputActions::IsDown("Jump"));
+
+		// A held action's map disabled: the game reads it as up. Play stopping drops the hold.
+		harness.Run("input.action", { { "action", "Horn" }, { "mode", "press" }, { "wait", false } });
+		harness.Frame();
+		CHECK_FALSE(InputActions::IsDown("Horn"));
+		CHECK(InputActions::SetMapEnabled("Vehicle", true));
+		harness.Frame();
+		CHECK(InputActions::IsPressed("Horn"));
+		harness.Run("play.stop");
+		harness.Run("play.start");
+		harness.Frame();
+		harness.Frame();
+		CHECK_FALSE(InputActions::IsDown("Horn"));
+		CHECK(harness.Run("input.state")["simulatedActions"].empty());
+	}
+
+	TEST_CASE("input.sequence runs action steps")
+	{
+		InputHarness harness;
+		harness.AddActions();
+		harness.Run("play.start");
+		harness.Frame();
+		// Checked before anything runs; a button event's "action" is still its tap, press or release.
+		EditorCommandResult refused = harness.Fail("input.sequence", { { "steps", 2 }, { "events", { { { "step", 0 }, { "action", "Fly" } } } } });
+		CHECK(refused.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(refused.Error.find("events[0]: 'action': There is no action 'Fly'") != std::string::npos);
+		refused = harness.Fail("input.sequence", { { "steps", 2 }, { "events", { { { "step", 0 }, { "action", "Move" }, { "mode", "press" } } } } });
+		CHECK(refused.Error.find("events[0]: 'value': a Vector2 action needs a value") != std::string::npos);
+		refused = harness.Fail("input.sequence", { { "steps", 2 }, { "events", { { { "step", 0 }, { "action", "Jump" }, { "key", "W" } } } } });
+		CHECK(refused.Error.find("must be press, release or tap, not 'Jump'") != std::string::npos);
+
+		// Move held up from step 0 to 3, Jump tapped for two steps from step 1, W tapped at step 1: one step per frame.
+		std::optional<EditorCommandResult> result;
+		harness.Start("input.sequence", { { "steps", 4 }, { "events", {
+			{ { "step", 0 }, { "action", "Move" }, { "mode", "press" }, { "value", { 0, 1 } } },
+			{ { "step", 1 }, { "action", "Jump" }, { "steps", 2 } },
+			{ { "step", 1 }, { "key", "W" }, { "action", "tap" } },
+			{ { "step", 3 }, { "action", "Gameplay/Move" }, { "mode", "release" } } } } }, result);
+		harness.Frame();
+		CHECK(InputActions::IsPressed("Move"));
+		CHECK(InputActions::GetValue("Move") == glm::vec2(0.0f, 1.0f));
+		CHECK_FALSE(InputActions::IsDown("Jump"));
+		harness.Frame();
+		CHECK(InputActions::IsPressed("Jump"));
+		CHECK(harness.ProbeField("WPressed"));
+		harness.Frame();
+		CHECK(InputActions::IsDown("Jump"));
+		CHECK_FALSE(InputActions::IsPressed("Jump"));
+		CHECK(InputActions::IsDown("Move"));
+		harness.Frame();
+		CHECK(InputActions::IsReleased("Jump"));
+		CHECK(InputActions::IsReleased("Move"));
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (!result && std::chrono::steady_clock::now() < deadline)
+			harness.Frame();
+		REQUIRE(result);
+		INFO(result->Error);
+		REQUIRE(result->Success);
+		CHECK(result->Value["stepsRun"] == 4);
+		CHECK(result->Value["seen"].size() == 4);
+		CHECK(result->Value["interrupted"] == false);
+		CHECK(harness.Run("input.state")["simulatedActions"].empty());
+	}
+
+	TEST_CASE("input.state reports actions, maps and player bindings")
+	{
+		InputHarness harness;
+		harness.AddActions();
+		// Also in Edit mode: the project's actions, in the set's order, as the game would read them.
+		nlohmann::json state = harness.Run("input.state");
+		CHECK(state["actions"].size() == 11);
+		CHECK(state["actions"][0]["action"] == "UI/Submit");
+		CHECK(harness.FindActionState("Gameplay/Jump") == nlohmann::json { { "action", "Gameplay/Jump" }, { "map", "Gameplay" }, { "kind", "Button" },
+			{ "down", false }, { "value", { 0.0f, 0.0f } } });
+		CHECK(state["maps"] == nlohmann::json::array({ { { "map", "UI" }, { "enabled", true } }, { { "map", "Gameplay" }, { "enabled", true } },
+			{ { "map", "Vehicle" }, { "enabled", false } } }));
+		CHECK(state["playerBindings"] == nlohmann::json::object());
+		CHECK(state["capture"] == false);
+
+		harness.Run("play.start");
+		harness.Frame();
+		harness.Run("input.action", { { "action", "Move" }, { "mode", "press" }, { "value", { 0.6, 0.8 } }, { "wait", false } });
+		harness.Frame();
+		const nlohmann::json move = harness.FindActionState("Gameplay/Move");
+		CHECK(move["down"] == true);
+		CHECK(move["kind"] == "Vector2");
+		CHECK(move["value"][0].get<float>() == doctest::Approx(0.6f));
+		CHECK(move["value"][1].get<float>() == doctest::Approx(0.8f));
+		state = harness.Run("input.state");
+		REQUIRE(state["holds"].size() == 1);
+		CHECK(state["holds"][0]["type"] == "action");
+		CHECK(state["holds"][0]["name"] == "Gameplay/Move");
+		CHECK(state["holds"][0]["lastStep"].is_null());
+
+		// A script enables the Vehicle map and rebinds Jump; a binding capture listens.
+		CHECK(InputActions::SetMapEnabled("Vehicle", true));
+		REQUIRE(InputActions::SetBindings("Gameplay/Jump", std::vector<InputBinding> { *InputBinding::Parse("Key/K") }));
+		REQUIRE(InputActions::BeginCapture({}));
+		harness.Frame();
+		state = harness.Run("input.state");
+		CHECK(state["maps"][2] == nlohmann::json { { "map", "Vehicle" }, { "enabled", true } });
+		CHECK(state["playerBindings"] == nlohmann::json { { "Gameplay/Jump", { "Key/K" } } });
+		CHECK(state["capture"] == true);
+		CHECK(harness.FindActionState("Gameplay/Move")["down"] == false); // Every action reads as up while a capture listens
+		InputActions::CancelCapture();
+		harness.Run("play.stop");
 	}
 }

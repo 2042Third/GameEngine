@@ -1057,6 +1057,11 @@ function", "Unknown names fail and are reported once", "Qualified names resolve 
   `EditorContext::GetPlayerBindings` (while playing the running game's, else the file's through
   `InputActions::ReadSavedBindings`); `inputActions.resetPlayerBindings` (Session) runs `EditorContext::ResetPlayerBindings`
   (`InputActions::DeleteSavedBindings`, and `ResetBindings("")` while playing) and returns `reset`, the actions dropped.
+  `input.action` holds through `SimulatedInput::HoldAction` (one hold per action, replaced like a gamepad axis' value;
+  a Button takes no value, an Axis `[x, 0]`, a Vector2 `[x, y]` of length at most 1); sequence events are `{step,
+  action, mode, steps, value}` (a button event's `action` stays its tap, press or release); `input.state` reports the
+  held ones as `simulatedActions` (also in every answer's `held`) beside `actions`, `maps`, `playerBindings` and
+  `capture`.
 
 **S10 Third-Person Adventure on actions.** Through the editor's commands: an `Input.Actions` section for ThirdPerson
 (`Gameplay` map: Move as Vector2 with `2D:Key/W,Key/S,Key/A,Key/D`, `2D:Key/Up,...` and `Gamepad/LeftStick`; Jump, Run,

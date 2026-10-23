@@ -510,6 +510,8 @@ input.scroll      {"delta": [0, 1]}
 input.gamepadButton {"button": "A"}                       # gamepad 0 unless "gamepad": 0..3; same actions as keys
 input.gamepadAxis {"axis": "LeftY", "value": 1}           # stick up, held until replaced, "value": null or play.stop
 input.gamepadAxis {"axis": "RightTrigger", "value": 1, "steps": 30} # 30 fixed steps, then back to rest
+input.action      {"action": "Gameplay/Jump"}             # an input action, whatever its bindings; mode tap|press|release
+input.action      {"action": "Move", "mode": "press", "value": [0, 1]} # a Vector2's value (an Axis' [x, 0]), until released
 input.state       {}                                      # what simulated input holds; input.releaseAll lets go of it
 input.click       {"entity": "<button id>"}               # a UI element where the player sees it: clicked, events
 input.type        {"text": "Player 1"}                    # typed text (Input::GetTypedText), UTF-8, at most 1,024 bytes
@@ -544,6 +546,11 @@ and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
   lists them in a pill that releases them when a person clicks it.
 - A tap of 1 step is one key press for games that act on `IsKeyPressed` or `KeyRepeat`; use `steps` (or press/release) to
   hold a key for repeats.
+- Games that read input actions (`Input::IsActionPressed("Jump")`) see `input.key` through the actions' bindings; to
+  drive an action whatever its bindings use `input.action` (`mode` instead of `action`, a `value` for an Axis or a Vector2;
+  a new press of an action replaces the one before), or `{"step": 0, "action": "Jump", "steps": 10}` in an `input.sequence`.
+  `input.state` lists every action as the game reads it (`actions: [{action, down, value}]`), the maps' enables, the
+  players' saved bindings (`playerBindings`) and the actions it holds (`simulatedActions`).
 - Menus: `input.click {"entity": ...}` moves the pointer to the center of a UI element's rect at the Game view's size and taps
   the button there (for `steps`, default 1, like `input.mouseButton`). It fails, changing nothing, when the element is hidden, on a canvas that does not receive input, or
   covered (the error names what a click would hit, `errorData.cover`); the answer says whether the button clicked or the

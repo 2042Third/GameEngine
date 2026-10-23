@@ -1,6 +1,8 @@
 #include "Editor/SimulatedInput.h"
 
+#include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
+#include <Strata/Input/InputActions.h>
 #include <Strata/Input/InputNames.h>
 
 #include <spdlog/fmt/fmt.h>
@@ -32,6 +34,8 @@ namespace Strata
 					if (!down)
 						Input::ReleaseSimulatedGamepadAxis(SimulatedInput::GetGamepad(code), static_cast<GamepadAxis>(SimulatedInput::GetGamepadControl(code)));
 					break;
+				case SimulatedControlType::Action:
+					break; // By name (End)
 			}
 		}
 
@@ -80,6 +84,47 @@ namespace Strata
 		return hold;
 	}
 
+	Ref<const SimulatedHold> SimulatedInput::HoldAction(const std::string& action, const glm::vec2& value, uint32_t steps, uint64_t fixedSteps)
+	{
+		const uint64_t nextFrame = Input::GetFrameIndex() + 1;
+		// The action takes the new value: the hold before ends without letting the action go.
+		for (const Ref<SimulatedHold>& previous : m_Holds)
+		{
+			if (previous->Type == SimulatedControlType::Action && StringUtils::EqualsIgnoreCase(previous->Action, action))
+			{
+				previous->Ended = true;
+				previous->Interrupted = previous->IsTap();
+				previous->EndFrame = nextFrame;
+			}
+		}
+		m_Holds.erase(std::remove_if(m_Holds.begin(), m_Holds.end(), [](const Ref<SimulatedHold>& hold) { return hold->Ended; }), m_Holds.end());
+
+		Ref<SimulatedHold> hold = CreateRef<SimulatedHold>();
+		hold->Type = SimulatedControlType::Action;
+		hold->Action = action;
+		hold->ActionValue = value;
+		hold->FirstFrame = nextFrame;
+		hold->FirstStep = fixedSteps + 1;
+		hold->LastStep = steps > 0 ? fixedSteps + steps : 0;
+		// The command checked the name; an action the set lost since is nothing to hold.
+		InputActions::SimulateAction(action, true, value);
+		m_Holds.push_back(hold);
+		return hold;
+	}
+
+	bool SimulatedInput::ReleaseAction(const std::string& action)
+	{
+		std::vector<Ref<SimulatedHold>> holds;
+		for (const Ref<SimulatedHold>& hold : m_Holds)
+		{
+			if (hold->Type == SimulatedControlType::Action && StringUtils::EqualsIgnoreCase(hold->Action, action))
+				holds.push_back(hold);
+		}
+		for (const Ref<SimulatedHold>& hold : holds)
+			End(hold, hold->IsTap());
+		return !holds.empty();
+	}
+
 	bool SimulatedInput::Release(SimulatedControlType type, uint16_t code)
 	{
 		bool released = false;
@@ -119,6 +164,7 @@ namespace Strata
 		}
 		m_Holds.clear();
 		Input::ReleaseAllSimulated();
+		InputActions::ReleaseAllSimulated();
 	}
 
 	void SimulatedInput::Reset()
@@ -150,11 +196,22 @@ namespace Strata
 		std::vector<uint16_t> codes;
 		for (const Ref<SimulatedHold>& hold : m_Holds)
 		{
-			if (hold->Type == type && std::find(codes.begin(), codes.end(), hold->Code) == codes.end())
+			if (hold->Type == type && type != SimulatedControlType::Action && std::find(codes.begin(), codes.end(), hold->Code) == codes.end())
 				codes.push_back(hold->Code);
 		}
 		std::sort(codes.begin(), codes.end());
 		return codes;
+	}
+
+	std::vector<Ref<const SimulatedHold>> SimulatedInput::GetHeldActions() const
+	{
+		std::vector<Ref<const SimulatedHold>> actions;
+		for (const Ref<SimulatedHold>& hold : m_Holds)
+		{
+			if (hold->Type == SimulatedControlType::Action)
+				actions.push_back(hold);
+		}
+		return actions;
 	}
 
 	float SimulatedInput::GetAxisValue(uint16_t code) const
@@ -170,7 +227,7 @@ namespace Strata
 	size_t SimulatedInput::GetHeldCount() const
 	{
 		return GetHeld(SimulatedControlType::Key).size() + GetHeld(SimulatedControlType::MouseButton).size()
-			+ GetHeld(SimulatedControlType::GamepadButton).size() + GetHeld(SimulatedControlType::GamepadAxis).size();
+			+ GetHeld(SimulatedControlType::GamepadButton).size() + GetHeld(SimulatedControlType::GamepadAxis).size() + GetHeldActions().size();
 	}
 
 	std::string SimulatedInput::DescribeHolds() const
@@ -200,7 +257,17 @@ namespace Strata
 			const char* name = InputNames::GetGamepadAxisName(static_cast<GamepadAxis>(GetGamepadControl(code)));
 			append(fmt::format("Gamepad {} {} {:.2f}", GetGamepad(code) + 1, name ? name : std::to_string(GetGamepadControl(code)), GetAxisValue(code)));
 		}
+		for (const Ref<const SimulatedHold>& hold : GetHeldActions())
+			append(hold->Action);
 		return text;
+	}
+
+	bool SimulatedInput::IsActionHeld(const std::string& action) const
+	{
+		return std::any_of(m_Holds.begin(), m_Holds.end(), [&](const Ref<SimulatedHold>& hold)
+		{
+			return hold->Type == SimulatedControlType::Action && StringUtils::EqualsIgnoreCase(hold->Action, action);
+		});
 	}
 
 	bool SimulatedInput::IsHeld(SimulatedControlType type, uint16_t code) const
@@ -214,6 +281,13 @@ namespace Strata
 		hold->Interrupted = interrupted;
 		hold->EndFrame = Input::GetFrameIndex() + 1;
 		m_Holds.erase(std::remove(m_Holds.begin(), m_Holds.end(), hold), m_Holds.end());
+		if (hold->Type == SimulatedControlType::Action)
+		{
+			// An action the set lost since (an edit while playing) has nothing to let go of.
+			if (!IsActionHeld(hold->Action))
+				InputActions::SimulateAction(hold->Action, false);
+			return;
+		}
 		if (!IsHeld(hold->Type, hold->Code))
 			SimulateControl(hold->Type, hold->Code, false);
 	}

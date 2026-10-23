@@ -1848,7 +1848,7 @@ namespace Strata
 			const bool clicked = UI::Pill("Status.InputHolds", Icons::Keyboard, StatusPillText(Icons::Keyboard, text, compact), colors.Warning);
 			if (UI::IsTooltipDue())
 			{
-				ImGui::SetTooltip("Held: %s.\nKeys and mouse buttons a tool holds down in the running game (input.* commands). They stay down until "
+				ImGui::SetTooltip("Held: %s.\nKeys, buttons and input actions a tool holds down in the running game (input.* commands). They stay down until "
 					"the tool releases them, also after it disconnected, or until play stops. Click to release them all.", held.c_str());
 			}
 			if (clicked)
