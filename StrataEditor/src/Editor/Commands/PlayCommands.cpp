@@ -29,7 +29,18 @@ namespace Strata
 			uint64_t WaitingFor = 0;   // The build that has to finish before anything else happens (0: none)
 			uint64_t OwnBuild = 0;     // The build play.start started itself (it starts at most one)
 			std::string Reason;        // Why it built
+			bool Paused = false;       // Start paused before the first step (play.start {paused})
 		};
+
+		// Plays, and with `paused` pauses the game before its first step runs: steps run in the frames' updates, never in Play.
+		bool StartPlay(EditorContext& context, bool paused, std::string* outError)
+		{
+			if (!context.Play(outError))
+				return false;
+			if (paused)
+				context.SetPaused(true);
+			return true;
+		}
 
 		// Plays once the build play.start waited for finished: a failed build (or a module that cannot load) fails play.start
 		// with its first diagnostics and asks the UI for the Problems panel; a cancelled one only ends play.start (Cancelled).
@@ -76,7 +87,7 @@ namespace Strata
 			}
 
 			std::string error;
-			if (!context.Play(&error))
+			if (!StartPlay(context, state.Paused, &error))
 				return EditorCommandResult::Fail(error);
 			nlohmann::json value = DescribePlayState(context);
 			if (state.OwnBuild != 0)
@@ -85,9 +96,10 @@ namespace Strata
 		}
 
 		// play.start when the scripts need a build (or one runs): builds them (or waits for the running build), then plays.
-		EditorCommandResult StartPlayAfterBuild(EditorContext& context)
+		EditorCommandResult StartPlayAfterBuild(EditorContext& context, bool paused)
 		{
 			Ref<PlayBuildState> state = CreateRef<PlayBuildState>();
+			state->Paused = paused;
 			const ScriptBuilder& builder = context.GetScriptBuilder();
 			if (builder.IsRunning())
 			{
@@ -121,21 +133,25 @@ namespace Strata
 			"scripts need building first (their sources changed since the module was built, or scenes use scripts that are not built or "
 			"loaded), it builds them, then plays the new code: the answer comes once the build finished (a failed build fails play.start with "
 			"its first errors; script.status lists every diagnostic). A build already running is waited for. While a scene is being opened "
-			"(scene.open) it fails at once, building nothing. Returns the play state and, when it built, built: {build, seconds, reason}.",
-			ObjectSchema({ { "build", BoolSchema("Build the scripts first when they need it (default true); false plays what is loaded") } }),
+			"(scene.open) it fails at once, building nothing. paused: true starts the game paused before its first fixed step (fixedSteps 0, also "
+			"after a build), so play.step, input.sequence and viewport.capture {live, atFixedStep} see it from its first step. Returns the play "
+			"state and, when it built, built: {build, seconds, reason}.",
+			ObjectSchema({ { "build", BoolSchema("Build the scripts first when they need it (default true); false plays what is loaded") },
+				{ "paused", BoolSchema("Start paused before the first fixed step (default false)") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const bool build = arguments.GetBool("build", true);
+				const bool paused = arguments.GetBool("paused", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				// A running scene, and a scene being opened, refuse (Play says why) before anything is built: a build would take
 				// its time only for the play to be refused after it.
 				if (build && !context.IsPlaying() && !context.IsSceneLoading()
 					&& (context.GetScriptBuilder().IsRunning() || context.GetPlayBuildReason()))
-					return StartPlayAfterBuild(context);
+					return StartPlayAfterBuild(context, paused);
 				std::string error;
-				if (!context.Play(&error))
+				if (!StartPlay(context, paused, &error))
 					return EditorCommandResult::Fail(error);
 				return EditorCommandResult::Ok(DescribePlayState(context));
 			}, EditorCommandKind::Session }));

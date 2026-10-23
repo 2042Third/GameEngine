@@ -69,6 +69,15 @@ namespace Strata
 	// project's picture render their still view again until then.
 	constexpr uint32_t c_TemporalSettleFrames = SceneRenderer::c_TemporalJitterPhases;
 
+	// What a view's last successful Render showed of the game: live captures (viewport.capture {live}) pair a view's frames
+	// with the game's fixed steps.
+	struct ViewportRenderStamp
+	{
+		uint64_t RenderCount = 0; // SceneRenderer::GetRenderCount after that Render (0: none yet)
+		uint64_t PlaySession = 0; // EditorContext::GetPlaySession while the game ran, 0 while editing
+		uint64_t FixedSteps = 0;  // EditorContext::GetFixedStepCount then: the steps the frame shows
+	};
+
 	// Renders the editor's active scene for the viewport or a capture, with the overlays the viewport settings enable:
 	// the ground grid, the selection outline (selected entities and their descendants) and the light, camera and collider
 	// shapes; editor views also get the settings' preview lighting and game UI (GetViewportRenderOptions). The settings'
@@ -107,6 +116,8 @@ namespace Strata
 		bool HasOverlayContent(Scene& scene) const { return m_Renderer->HasOverlayContent(scene); }
 		// The scene of the last successful Render.
 		const std::weak_ptr<Scene>& GetRenderedScene() const { return m_RenderedScene; }
+		// The game's state the last successful Render showed.
+		const ViewportRenderStamp& GetRenderStamp() const { return m_RenderStamp; }
 		// Frees the render targets until the next Render, once the GPU has finished the work submitted with them
 		// (Renderer::ReleaseDeferred).
 		void ReleaseTargets() { m_Renderer->SetViewportSize(0, 0); }
@@ -119,6 +130,8 @@ namespace Strata
 		// The selected entities and their descendants (outlined, and whose colliders are drawn), collected again only when
 		// the selection, the scene or its hierarchy changed.
 		void UpdateSelectionSubtrees(EditorContext& context, const Ref<Scene>& scene);
+		// Records a successful Render of the active scene (m_RenderedScene and m_RenderStamp).
+		void OnRendered(EditorContext& context);
 	private:
 		Scope<SceneRenderer> m_Renderer;
 		DebugDraw m_DebugDraw;
@@ -130,6 +143,7 @@ namespace Strata
 		uint64_t m_OutlinedHierarchyVersion = 0;
 		bool m_OutlinedValid = false;
 		std::weak_ptr<Scene> m_RenderedScene;
+		ViewportRenderStamp m_RenderStamp;
 		// What an OverlayOnly view renders under the scene's UI: nothing, with neutral post-processing (made on first use).
 		Scope<Scene> m_EmptyScene;
 	};

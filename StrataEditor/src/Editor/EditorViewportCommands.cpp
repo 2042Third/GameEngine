@@ -64,6 +64,10 @@ namespace Strata
 		constexpr uint32_t c_MaxCaptureExposureFrames = 8;
 		// Polls a finished capture waits for its frame's GPU times (they are resolved 1-3 frames after the GPU finished it).
 		constexpr uint32_t c_MaxCaptureGPUStatsPolls = 8;
+		// The most frames one live capture records (viewport.capture {live, frames}).
+		constexpr int64_t c_MaxLiveCaptureFrames = 16;
+		// The largest step a live capture waits for: the largest integer JSON numbers hold exactly.
+		constexpr int64_t c_MaxLiveCaptureStep = 9'007'199'254'740'991;
 
 		nlohmann::json ToJson(const glm::vec3& value)
 		{
@@ -291,6 +295,279 @@ namespace Strata
 			return view;
 		}
 
+		// Encodes a captured image as PNG, and as Base64 for the result when `base64`, on a worker thread (compressing a large
+		// image would hitch the frame).
+		JobHandle SubmitEncode(const Ref<EncodedCapture>& encoded, bool base64)
+		{
+			return JobSystem::Submit([encoded, base64]()
+			{
+				std::string error;
+				std::optional<std::vector<uint8_t>> png = ImageWriter::EncodePNG(encoded->Image, true, &error);
+				if (!png)
+				{
+					encoded->Error = fmt::format("Encoding the capture as PNG failed: {}", error);
+					return;
+				}
+				if (base64)
+					encoded->Base64 = Base64::Encode(*png);
+				encoded->Png = std::move(*png);
+			});
+		}
+
+		// Saves an encoded capture on an I/O thread.
+		JobHandle SubmitSave(const Ref<EncodedCapture>& encoded, const std::filesystem::path& path, bool overwrite)
+		{
+			return JobSystem::SubmitIO([encoded, path, overwrite]()
+			{
+				// Checked again: the file may have appeared since the command was given.
+				if (!overwrite && FileSystem::Exists(path))
+					encoded->SaveError = fmt::format("'{}' already exists (pass overwrite: true to replace it)", FileSystem::ToUTF8(path));
+				else if (!FileSystem::CreateDirectories(path.parent_path()) || !FileSystem::WriteBytes(path, encoded->Png))
+					encoded->SaveError = fmt::format("Cannot write the capture to '{}'", FileSystem::ToUTF8(path));
+			});
+		}
+
+		// viewport.capture {live}: what a view presents, read back from its own output, with its history as it is.
+		struct LiveCaptureRequest
+		{
+			ViewportCameraSource Camera = ViewportCameraSource::Scene; // Editor: the Scene view; Scene: the Game view
+			std::optional<uint64_t> AtFixedStep;
+			uint32_t Frames = 1;
+			uint64_t PlaySession = 0; // The game's session when the capture was armed (0: editing)
+			std::vector<std::filesystem::path> Paths; // Empty, or one per frame
+			bool Overwrite = false;
+		};
+
+		struct LiveCaptureFrame
+		{
+			Scope<TextureReadback> Readback;
+			uint64_t FixedSteps = 0;
+			uint32_t TemporalFrames = 0;
+			std::chrono::steady_clock::time_point Submitted;
+			Ref<EncodedCapture> Encoded; // Set once the pixels are on the CPU
+			JobHandle EncodeJob;
+			JobHandle SaveJob;
+			bool SaveStarted = false;
+		};
+
+		struct LiveCaptureProgress
+		{
+			uint64_t SeenRenders = 0; // The view's render count at the last poll (or when the capture was armed)
+			bool Polled = false;
+			std::vector<LiveCaptureFrame> Frames;
+		};
+
+		const char* GetLiveViewName(ViewportCameraSource camera)
+		{
+			return camera == ViewportCameraSource::Editor ? "Scene view" : "Game view";
+		}
+
+		// The view's renderer, never created here: a view that never rendered has none.
+		const ViewportRenderer* FindLiveRenderer(const EditorContext& context, ViewportCameraSource camera)
+		{
+			const EditorViewport& viewport = context.GetViewport();
+			return camera == ViewportCameraSource::Editor ? viewport.FindRenderer() : viewport.FindGameRenderer();
+		}
+
+		// Every poll (one per frame) runs before the views render in that frame, so the view's output still holds the frame it
+		// rendered in the previous one: a new frame is read back then, before the view renders again. A poll that finds no new
+		// frame means the view stopped rendering, except at the first poll of a command given after the view rendered in its
+		// frame.
+		std::optional<EditorCommandResult> PollLiveCapture(EditorContext& context, const LiveCaptureRequest& request, LiveCaptureProgress& progress)
+		{
+			if (progress.Frames.size() < request.Frames)
+			{
+				const char* view = GetLiveViewName(request.Camera);
+				const uint64_t session = context.IsPlaying() ? context.GetPlaySession() : 0;
+				if (session != request.PlaySession)
+				{
+					return EditorCommandResult::Fail(fmt::format("Play mode {} before the capture recorded its {} frames ({} recorded)",
+						request.PlaySession != 0 ? "stopped" : "started", request.Frames, progress.Frames.size()));
+				}
+				const ViewportRenderer* renderer = FindLiveRenderer(context, request.Camera);
+				const uint64_t renders = renderer ? renderer->GetRenderStamp().RenderCount : 0;
+				const bool firstPoll = !progress.Polled;
+				progress.Polled = true;
+				if (!renderer || renders == progress.SeenRenders)
+				{
+					if (renderer && firstPoll)
+						return std::nullopt;
+					return EditorCommandResult::Fail(fmt::format("The {} stopped rendering (hidden, collapsed, closed or minimized) before the capture "
+						"recorded its {} frames ({} recorded)", view, request.Frames, progress.Frames.size()));
+				}
+				if (renders != progress.SeenRenders + 1)
+				{
+					return EditorCommandResult::Fail(fmt::format("The {} rendered {} frames between two editor frames, so they cannot all be read back",
+						view, renders - progress.SeenRenders));
+				}
+				progress.SeenRenders = renders;
+				const ViewportRenderStamp& stamp = renderer->GetRenderStamp();
+				if (progress.Frames.empty() && request.AtFixedStep && stamp.FixedSteps < *request.AtFixedStep)
+					return std::nullopt;
+
+				std::string error;
+				LiveCaptureFrame frame;
+				frame.Readback = TextureReadback::Create(renderer->GetOutputTexture(), {}, &error);
+				if (!frame.Readback)
+					return EditorCommandResult::Fail(fmt::format("Reading the {} back failed: {}", view, error));
+				frame.FixedSteps = stamp.FixedSteps;
+				frame.TemporalFrames = renderer->GetStats().TemporalFrames;
+				frame.Submitted = std::chrono::steady_clock::now();
+				progress.Frames.push_back(std::move(frame));
+			}
+
+			// Each frame's copy is waited for, encoded on a worker thread and saved on an I/O thread, while later frames record.
+			bool finished = progress.Frames.size() == request.Frames;
+			for (size_t index = 0; index < progress.Frames.size(); index++)
+			{
+				LiveCaptureFrame& frame = progress.Frames[index];
+				if (!frame.Encoded)
+				{
+					finished = false;
+					if (!frame.Readback->IsReady())
+					{
+						if (std::chrono::steady_clock::now() - frame.Submitted > c_CaptureReadbackTimeout)
+							return EditorCommandResult::Fail(fmt::format("The GPU did not finish the capture within {} seconds", c_CaptureReadbackTimeout.count()));
+						continue;
+					}
+					Ref<EncodedCapture> encoded = CreateRef<EncodedCapture>();
+					if (!frame.Readback->GetResult(encoded->Image))
+						return EditorCommandResult::Fail("Mapping the captured image failed");
+					frame.Readback.reset();
+					frame.Encoded = encoded;
+					frame.EncodeJob = SubmitEncode(encoded, request.Frames == 1); // Several frames go to files only
+					continue;
+				}
+				if (!frame.EncodeJob.IsComplete())
+				{
+					finished = false;
+					continue;
+				}
+				if (!frame.Encoded->Error.empty())
+					return EditorCommandResult::Fail(frame.Encoded->Error);
+				if (request.Paths.empty())
+					continue;
+				if (!frame.SaveStarted)
+				{
+					frame.SaveStarted = true;
+					frame.SaveJob = SubmitSave(frame.Encoded, request.Paths[index], request.Overwrite);
+					finished = false;
+					continue;
+				}
+				if (!frame.SaveJob.IsComplete())
+				{
+					finished = false;
+					continue;
+				}
+				if (!frame.Encoded->SaveError.empty())
+					return EditorCommandResult::Fail(frame.Encoded->SaveError);
+			}
+			if (!finished)
+				return std::nullopt;
+
+			nlohmann::json images = nlohmann::json::array();
+			for (size_t index = 0; index < progress.Frames.size(); index++)
+			{
+				const LiveCaptureFrame& frame = progress.Frames[index];
+				nlohmann::json image = { { "fixedSteps", frame.FixedSteps }, { "temporalFrames", frame.TemporalFrames },
+					{ "width", frame.Encoded->Image.Width }, { "height", frame.Encoded->Image.Height } };
+				if (!request.Paths.empty())
+					image["path"] = FileSystem::ToUTF8(request.Paths[index]);
+				images.push_back(std::move(image));
+			}
+			nlohmann::json result = { { "live", true }, { "camera", request.Camera == ViewportCameraSource::Editor ? "editor" : "scene" },
+				{ "images", std::move(images) } };
+			if (request.Frames == 1)
+				result["Image"] = { { "MimeType", "image/png" }, { "Data", std::move(progress.Frames.front().Encoded->Base64) } };
+			return EditorCommandResult::Ok(std::move(result));
+		}
+
+		// viewport.capture {live}: checks the parameters and the view, then polls PollLiveCapture from the next frame on.
+		EditorCommandResult StartLiveCapture(EditorContext& context, const nlohmann::json& parameters)
+		{
+			CommandArguments arguments(parameters);
+			for (const char* refused : { "width", "height", "overlays", "position", "target", "fov", "debugView", "waitForAssets" })
+			{
+				if (arguments.Has(refused) && arguments.IsValid())
+					arguments.SetError(fmt::format("Parameter '{}' does not apply to live captures, which return what the view presented", refused));
+			}
+			LiveCaptureRequest request;
+			const std::string camera = arguments.GetString("camera", "");
+			if (camera == "editor")
+				request.Camera = ViewportCameraSource::Editor;
+			else if (camera == "scene")
+				request.Camera = ViewportCameraSource::Scene;
+			else if (arguments.IsValid())
+				arguments.SetError("Live captures need parameter 'camera': \"editor\" (the Scene view) or \"scene\" (the Game view)");
+			if (arguments.Has("atFixedStep"))
+				request.AtFixedStep = static_cast<uint64_t>(arguments.GetInt("atFixedStep", 1, 1, c_MaxLiveCaptureStep));
+			request.Frames = static_cast<uint32_t>(arguments.GetInt("frames", 1, 1, c_MaxLiveCaptureFrames));
+			request.Overwrite = arguments.GetBool("overwrite", false);
+			if (arguments.Has("path"))
+			{
+				const std::string path = arguments.GetString("path");
+				std::string error;
+				if (arguments.IsValid())
+				{
+					if (std::optional<std::filesystem::path> resolved = ResolveOutputPath(context, path, ".png", request.Overwrite, &error))
+					{
+						if (request.Frames == 1)
+						{
+							request.Paths.push_back(std::move(*resolved));
+						}
+						else
+						{
+							// Numbered files beside the path: <name>-1.png to <name>-<frames>.png.
+							for (uint32_t index = 1; index <= request.Frames && arguments.IsValid(); index++)
+							{
+								const std::filesystem::path numbered = resolved->parent_path()
+									/ FileSystem::FromUTF8(fmt::format("{}-{}.png", FileSystem::ToUTF8(resolved->stem()), index));
+								if (std::optional<std::filesystem::path> file = ResolveOutputPath(context, FileSystem::ToUTF8(numbered), ".png", request.Overwrite, &error))
+									request.Paths.push_back(std::move(*file));
+								else
+									arguments.SetError(fmt::format("Parameter 'path': {}", error));
+							}
+						}
+					}
+					else
+					{
+						arguments.SetError(fmt::format("Parameter 'path': {}", error));
+					}
+				}
+			}
+			else if (request.Frames > 1 && arguments.IsValid())
+			{
+				arguments.SetError("Parameter 'frames' above 1 needs 'path': the images are saved as numbered files");
+			}
+			if (!arguments.IsValid())
+				return arguments.Fail();
+			if (!Renderer::IsInitialized())
+				return EditorCommandResult::Fail("viewport.capture needs a GPU, but this editor runs without a graphics device (--no-gpu or no usable GPU)");
+
+			const char* view = GetLiveViewName(request.Camera);
+			const EditorViewport& viewport = context.GetViewport();
+			const glm::uvec2 size = request.Camera == ViewportCameraSource::Editor ? viewport.GetSize() : viewport.GetGameViewSize();
+			const ViewportRenderer* renderer = FindLiveRenderer(context, request.Camera);
+			if (!renderer || size.x == 0 || size.y == 0)
+				return EditorCommandResult::Fail(fmt::format("The {} does not render (hidden behind another tab, collapsed, closed or minimized): show it first", view));
+			request.PlaySession = context.IsPlaying() ? context.GetPlaySession() : 0;
+			if (request.AtFixedStep)
+			{
+				if (!context.IsPlaying())
+					return EditorCommandResult::Fail("atFixedStep needs a running game (play.start, with paused: true to arm the capture before the first step)");
+				const uint64_t steps = context.GetFixedStepCount();
+				if (steps >= *request.AtFixedStep)
+					return EditorCommandResult::Fail(fmt::format("Step {} already ran (fixedSteps is {})", *request.AtFixedStep, steps));
+			}
+
+			auto progress = std::make_shared<LiveCaptureProgress>();
+			progress->SeenRenders = renderer->GetRenderStamp().RenderCount;
+			return EditorCommandResult::Defer([request, progress](EditorContext& context) -> std::optional<EditorCommandResult>
+			{
+				return PollLiveCapture(context, request, *progress);
+			});
+		}
+
 		// First poll (the frame after the command): renders the image and starts reading it back. While glyphs of the
 		// scene's text are still being rasterized, or (waitForAssets) assets of the view are still loading, textures it draws
 		// lack the levels the view wants or new mesh renderers wait for their upload to the GPU, the image would lack them: the
@@ -431,18 +708,7 @@ namespace Strata
 					return EditorCommandResult::Fail("Mapping the captured image failed");
 				progress.Readback.reset();
 				progress.Encoded = encoded;
-				progress.EncodeJob = JobSystem::Submit([encoded]()
-				{
-					std::string error;
-					std::optional<std::vector<uint8_t>> png = ImageWriter::EncodePNG(encoded->Image, true, &error);
-					if (!png)
-					{
-						encoded->Error = fmt::format("Encoding the capture as PNG failed: {}", error);
-						return;
-					}
-					encoded->Base64 = Base64::Encode(*png);
-					encoded->Png = std::move(*png);
-				});
+				progress.EncodeJob = SubmitEncode(encoded, true);
 				return std::nullopt;
 			}
 
@@ -454,14 +720,7 @@ namespace Strata
 			if (!request.Path.empty() && !progress.SaveStarted)
 			{
 				progress.SaveStarted = true;
-				progress.SaveJob = JobSystem::SubmitIO([encodedRef = progress.Encoded, path = request.Path, overwrite = request.Overwrite]()
-				{
-					// Checked again: the file may have appeared since the command was given.
-					if (!overwrite && FileSystem::Exists(path))
-						encodedRef->SaveError = fmt::format("'{}' already exists (pass overwrite: true to replace it)", FileSystem::ToUTF8(path));
-					else if (!FileSystem::CreateDirectories(path.parent_path()) || !FileSystem::WriteBytes(path, encodedRef->Png))
-						encodedRef->SaveError = fmt::format("Cannot write the capture to '{}'", FileSystem::ToUTF8(path));
-				});
+				progress.SaveJob = SubmitSave(progress.Encoded, request.Path, request.Overwrite);
 				return std::nullopt;
 			}
 			if (!progress.SaveJob.IsComplete())
@@ -738,7 +997,10 @@ namespace Strata
 			"entitiesPerMipShortfall: [at the wanted level, 1 level coarser, 2, 3+ or loading]} among the entities in view. renderStats is what the "
 			"captured frame drew, as editor.perf's renderStats (draws, instances, shadow casters, triangles, proxies, lights, timings), with gpuMs: "
 			"the GPU's milliseconds per stage of the captured frame (empty, with gpuStatsFrame null, where the GPU writes no timestamps). "
-			"Needs a GPU (fails in editors started with --no-gpu).",
+			"Needs a GPU (fails in editors started with --no-gpu). live: true renders nothing: it reads back what the Scene view (camera "
+			"\"editor\") or the Game view (\"scene\") presented, as it played, to see motion (trails, smearing, crawling) at exact steps: arm it "
+			"after play.start {paused: true}, then run input.sequence or play.step. It fails when the view does not render, play stops or step "
+			"atFixedStep already ran; images: [{fixedSteps, temporalFrames, width, height, path}].",
 			ObjectSchema({
 				{ "width", IntegerSchema("Image width in pixels; without height the viewport's aspect ratio is kept", c_MinCaptureSize, c_MaxCaptureSize) },
 				{ "height", IntegerSchema("Image height in pixels; without width the viewport's aspect ratio is kept", c_MinCaptureSize, c_MaxCaptureSize) },
@@ -756,10 +1018,20 @@ namespace Strata
 					"previous frame (rendered twice for it: still scenes show none), \"none\" not at all (default: the viewport's debug view)") },
 				{ "path", StringSchema("Also save the PNG to this .png file: relative to the project directory (needs an open project) or absolute; folders are "
 					"created, network and device paths are refused") },
-				{ "overwrite", BoolSchema("Replace an existing file at path (default false: an existing file is an error)") } }),
+				{ "overwrite", BoolSchema("Replace an existing file at path (default false: an existing file is an error)") },
+				{ "live", BoolSchema("Return what the view (camera: required) presented, with its history as it is, instead of rendering") },
+				{ "atFixedStep", IntegerSchema("live: the first frame the view renders once the game's fixedSteps reached this", 1, c_MaxLiveCaptureStep) },
+				{ "frames", IntegerSchema("live: that frame and the next ones, as numbered files beside path above 1 (default 1)", 1, c_MaxLiveCaptureFrames) } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
+				if (arguments.GetBool("live", false) && arguments.IsValid())
+					return StartLiveCapture(context, parameters);
+				for (const char* liveOnly : { "atFixedStep", "frames" })
+				{
+					if (arguments.Has(liveOnly) && arguments.IsValid())
+						arguments.SetError(fmt::format("Parameter '{}' needs live: true", liveOnly));
+				}
 				const int64_t width = arguments.GetInt("width", 0, c_MinCaptureSize, c_MaxCaptureSize);
 				const int64_t height = arguments.GetInt("height", 0, c_MinCaptureSize, c_MaxCaptureSize);
 				CaptureRequest request;

@@ -1606,4 +1606,182 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(invalid.Error.find("debugView") != std::string::npos);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("A live capture returns the Game view's frames at exact steps of a game started paused")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.AddScene();
+		EditorContext& context = harness.Context;
+		// Temporal anti-aliasing, so a frame of an unchanged game differs from the one before it (another jitter phase).
+		PostProcessComponent& postProcess = context.GetActiveScene()->FindEntityByName("PostProcess").GetComponent<PostProcessComponent>();
+		postProcess.AntiAliasing = true;
+		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", { { "Primary", true } } },
+			{ "Transform", { { "Translation", { 0, 0, 5 } } } } } } });
+		// A body that falls from the first step on: every step changes the picture.
+		harness.Run("entity.create", { { "name", "Falling" }, { "components", { { "Transform", { { "Translation", { 1.2, 1.0, 0 } },
+			{ "Scale", { 0.4, 0.4, 0.4 } } } }, { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } },
+			{ "RigidBody", nlohmann::json::object() }, { "BoxCollider", nlohmann::json::object() } } } });
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ViewportLiveCapture");
+
+		EditorViewport& viewport = context.GetViewport();
+		const glm::uvec2 size(160, 90);
+		harness.Run("viewport.setSettings", { { "gameView", { { "mode", "custom" }, { "width", size.x }, { "height", size.y } } } });
+		ViewportRenderer* game = viewport.GetGameRenderer();
+		REQUIRE(game);
+
+		// The editor's frames as the Game view panel shows them: the context's update, the commands' polls, then the view's
+		// render, read back here (with the steps it shows) to compare with what the live capture returned.
+		struct ShownFrame
+		{
+			uint64_t FixedSteps = 0;
+			ReadbackImage Image;
+		};
+		std::vector<ShownFrame> shown;
+		bool render = true;
+		auto runFrame = [&]()
+		{
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			context.Update(Timestep(1.0f / 60.0f));
+			harness.Runner.Update(context);
+			viewport.SetGameViewSize(render ? size : glm::uvec2(0));
+			if (render)
+			{
+				const std::optional<ViewportView> view = ResolveGameView(context, *game, static_cast<float>(size.x) / static_cast<float>(size.y));
+				REQUIRE(view);
+				REQUIRE(game->Render(context, size, *view, viewport.GetSettings(), false));
+				ShownFrame frame;
+				frame.FixedSteps = context.GetFixedStepCount();
+				REQUIRE(Renderer::ReadTexture(game->GetOutputTexture(), frame.Image));
+				shown.push_back(std::move(frame));
+			}
+			gpu.GetDevice().EndFrame();
+		};
+		auto start = [&](const nlohmann::json& parameters, std::shared_ptr<std::optional<EditorCommandResult>> completed)
+		{
+			const bool pending = harness.Runner.Run(context, harness.Commands, "viewport.capture", parameters,
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			CHECK(pending);
+		};
+		auto sameImage = [](const ReadbackImage& expected, const DecodedImage& image)
+		{
+			REQUIRE(static_cast<int>(expected.Width) == image.Width);
+			REQUIRE(static_cast<int>(expected.Height) == image.Height);
+			int difference = 0;
+			for (size_t index = 0; index < image.Pixels.size(); index++)
+			{
+				if (index % 4 != 3) // Captures are encoded opaque
+					difference = std::max(difference, std::abs(static_cast<int>(expected.Pixels[index]) - static_cast<int>(image.Pixels[index])));
+			}
+			return difference;
+		};
+
+		// A game started paused runs no step until it is stepped.
+		runFrame();
+		CHECK(harness.Run("play.start", { { "paused", true } })["paused"] == true);
+		for (int frame = 0; frame < 5; frame++)
+			runFrame();
+		CHECK(harness.Run("play.state")["fixedSteps"] == 0);
+
+		// Armed before the steps run: step 3's frame and the next, read back from the view's own output.
+		auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+		start({ { "live", true }, { "camera", "scene" }, { "atFixedStep", 3 }, { "frames", 2 }, { "path", FileSystem::ToUTF8(directory / "Strip.png") } },
+			completed);
+		harness.Run("play.step", { { "steps", 4 }, { "wait", false } });
+		for (int frame = 0; frame < 600 && !*completed; frame++)
+			runFrame();
+		REQUIRE(*completed);
+		INFO((*completed)->Error);
+		REQUIRE((*completed)->Success);
+		const nlohmann::json& result = (*completed)->Value;
+		CHECK(result["live"] == true);
+		CHECK(result["camera"] == "scene");
+		CHECK_FALSE(result.contains("Image")); // Several frames go to files only
+		REQUIRE(result["images"].size() == 2);
+		for (uint64_t index = 0; index < 2; index++)
+		{
+			const nlohmann::json& image = result["images"][index];
+			CHECK(image["fixedSteps"] == 3 + index);
+			CHECK(image["temporalFrames"].get<uint32_t>() > 0);
+			CHECK(image["width"] == size.x);
+			CHECK(image["height"] == size.y);
+			const std::filesystem::path path = directory / fmt::format("Strip-{}.png", index + 1);
+			CHECK(FileSystem::FromUTF8(image["path"].get<std::string>()) == path);
+			const std::optional<std::vector<uint8_t>> png = FileSystem::ReadBytes(path);
+			REQUIRE(png);
+			const auto frame = std::find_if(shown.begin(), shown.end(), [index](const ShownFrame& candidate) { return candidate.FixedSteps == 3 + index; });
+			REQUIRE(frame != shown.end());
+			CHECK(sameImage(frame->Image, DecodePNG(*png)) == 0);
+		}
+		// The game is paused at step 4 again; the view's next frame shows the same state with its history moved on.
+		while (context.GetPendingSteps() > 0)
+			runFrame();
+		runFrame();
+		REQUIRE(shown.back().FixedSteps == 4);
+		const std::optional<std::vector<uint8_t>> last = FileSystem::ReadBytes(directory / "Strip-2.png");
+		REQUIRE(last);
+		CHECK(sameImage(shown.back().Image, DecodePNG(*last)) > 0);
+
+		// Without atFixedStep, one frame: the view's next one, returned as the image.
+		auto single = std::make_shared<std::optional<EditorCommandResult>>();
+		const size_t shownBefore = shown.size();
+		start({ { "live", true }, { "camera", "scene" } }, single);
+		for (int frame = 0; frame < 600 && !*single; frame++)
+			runFrame();
+		REQUIRE(*single);
+		REQUIRE((*single)->Success);
+		CHECK((*single)->Value["images"][0]["fixedSteps"] == 4);
+		const std::optional<std::vector<uint8_t>> singlePng = Base64::Decode((*single)->Value["Image"]["Data"].get<std::string>());
+		REQUIRE(singlePng);
+		const DecodedImage singleImage = DecodePNG(*singlePng);
+		CHECK(std::any_of(shown.begin() + static_cast<std::ptrdiff_t>(shownBefore), shown.end(),
+			[&](const ShownFrame& frame) { return sameImage(frame.Image, singleImage) == 0; }));
+
+		// Refused: no camera, what live captures do not take, frames above 1 without a path, a step already run, and live-only
+		// parameters without live.
+		auto refuse = [&](const nlohmann::json& parameters, EditorCommandError kind, std::string_view words)
+		{
+			const EditorCommandResult refused = Tests::CompleteCommand(context, harness.Commands.Execute(context, "viewport.capture", parameters));
+			CHECK_FALSE(refused.Success);
+			CHECK(refused.ErrorKind == kind);
+			CHECK_MESSAGE(refused.Error.find(words) != std::string::npos, refused.Error);
+		};
+		refuse({ { "live", true } }, EditorCommandError::InvalidParameters, "camera");
+		const nlohmann::json refusedParameters = { { "width", 64 }, { "height", 64 }, { "overlays", true }, { "position", { 0, 0, 1 } },
+			{ "target", { 0, 0, 0 } }, { "fov", 40.0 }, { "debugView", "lod" }, { "waitForAssets", false } };
+		for (const auto& [name, value] : refusedParameters.items())
+			refuse({ { "live", true }, { "camera", "scene" }, { name, value } }, EditorCommandError::InvalidParameters, name);
+		refuse({ { "live", true }, { "camera", "scene" }, { "frames", 2 } }, EditorCommandError::InvalidParameters, "path");
+		refuse({ { "live", true }, { "camera", "scene" }, { "atFixedStep", 4 } }, EditorCommandError::Failed, "already ran");
+		refuse({ { "atFixedStep", 9 } }, EditorCommandError::InvalidParameters, "live");
+		refuse({ { "frames", 2 } }, EditorCommandError::InvalidParameters, "live");
+		// A view that does not render: the Scene view never did here.
+		refuse({ { "live", true }, { "camera", "editor" } }, EditorCommandError::Failed, "Scene view does not render");
+
+		// A view that stops rendering while the capture waits fails it, as stopping play does.
+		auto hidden = std::make_shared<std::optional<EditorCommandResult>>();
+		start({ { "live", true }, { "camera", "scene" }, { "atFixedStep", 100 } }, hidden);
+		render = false;
+		for (int frame = 0; frame < 10 && !*hidden; frame++)
+			runFrame();
+		REQUIRE(*hidden);
+		CHECK_FALSE((*hidden)->Success);
+		CHECK((*hidden)->Error.find("stopped rendering") != std::string::npos);
+		render = true;
+		runFrame();
+		auto stopped = std::make_shared<std::optional<EditorCommandResult>>();
+		start({ { "live", true }, { "camera", "scene" }, { "atFixedStep", 100 } }, stopped);
+		runFrame();
+		harness.Run("play.stop");
+		for (int frame = 0; frame < 10 && !*stopped; frame++)
+			runFrame();
+		REQUIRE(*stopped);
+		CHECK_FALSE((*stopped)->Success);
+		CHECK((*stopped)->Error.find("Play mode stopped") != std::string::npos);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

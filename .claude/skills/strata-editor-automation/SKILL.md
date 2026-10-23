@@ -152,6 +152,16 @@ editor started with `--no-gpu` (use `--headless`):
   person's view (`camera.get`) does not move, and the result's `camera` is `"custom"`. `camera: "scene"` without a size
   takes the Game view's resolution when it has one (`viewport.setSettings {"gameView": {"mode": "1280x720"}}`, or
   `"16:9"`, `"4:3"`, `"custom"` with `width` and `height`; `"free"` follows the panel).
+- **Motion as it plays** (trails, smearing, crawling edges): `viewport.capture {"live": true, "camera": "scene"}` renders
+  nothing of its own: it returns what the Game view (`"editor"`: the Scene view) presented, its temporal history as it
+  is, unsettled. `atFixedStep: N` waits for the first frame the view renders once the game's `fixedSteps` reached N, and
+  `frames: n` (up to 16, with `path`: numbered files `<name>-1.png`...) records that frame and the next ones; the result's
+  `images: [{fixedSteps, temporalFrames, width, height, path}]`. Start the game with `play.start {"paused": true}`
+  (`fixedSteps` 0), send the capture from a second client or in the background (it answers once its frames ran;
+  `editor.status {"sections": ["automation"]}` counts it among the pending requests), then run `input.sequence` or
+  `play.step` with enough steps: every run of the same steps shows the same game state. It fails when
+  the view does not render (hidden, collapsed, minimized, headless), play stops, or step N already ran; it refuses the
+  parameters of rendered captures (`width`, `overlays`, `position`, `debugView`, `waitForAssets`...).
 - The editor shows two views as tabs: the Scene view (the editor camera, also on the running game while playing: what
   you select and move there changes the running copy) and the Game view (the game through its primary camera, as it
   ships). `editor.showPanel {"panel": "Game"}` shows the person the game; `{"panel": "Scene"}` the Scene view.
@@ -269,7 +279,8 @@ editor started with `--no-gpu` (use `--headless`):
 - **Play mode**: `play.start` runs a copy of the scene, after building the scripts when their sources changed or they
   are not built while scenes use them (it answers once the game plays, with `built`; a failed build fails it with the
   errors; `{"build": false}` plays what is loaded; while a scene is being opened it fails at once, so wait for
-  `scene.open` first). Changes made while playing apply to that copy, carry a
+  `scene.open` first; `{"paused": true}` starts it paused before its first fixed step, for `play.step`, `input.sequence`
+  and live captures from step 0). Changes made while playing apply to that copy, carry a
   `warning` in the result, and are discarded by `play.stop`; commands made for the running game (`scene.loadAdditive`,
   `scene.unloadAdditive`, `script.add`/`remove`/`setField` on live scripts) are discarded too, without the warning. Undo and redo are not available while playing;
   `scene.save` saves the edited scene, never the running copy.

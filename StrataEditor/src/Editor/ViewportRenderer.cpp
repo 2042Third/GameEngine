@@ -141,7 +141,7 @@ namespace Strata
 			options.ScreenView = view.ScreenView;
 			const bool rendered = m_Renderer->Render(*m_EmptyScene, view.Camera, nullptr, options);
 			if (rendered)
-				m_RenderedScene = scene;
+				OnRendered(context);
 			return rendered;
 		}
 
@@ -192,8 +192,16 @@ namespace Strata
 
 		const bool rendered = m_Renderer->Render(*scene, view.Camera, nullptr, options);
 		if (rendered)
-			m_RenderedScene = scene;
+			OnRendered(context);
 		return rendered;
+	}
+
+	void ViewportRenderer::OnRendered(EditorContext& context)
+	{
+		m_RenderedScene = context.GetActiveScene();
+		m_RenderStamp.RenderCount = m_Renderer->GetRenderCount();
+		m_RenderStamp.PlaySession = context.IsPlaying() ? context.GetPlaySession() : 0;
+		m_RenderStamp.FixedSteps = context.GetFixedStepCount();
 	}
 
 	void ViewportRenderer::DrawCellBounds(EditorContext& context, const ViewportView& view)
