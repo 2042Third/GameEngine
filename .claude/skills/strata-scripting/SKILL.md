@@ -109,6 +109,10 @@ ST_SCRIPT_CLASS(Turret)
   ("Camera", "MeshRenderer", "Text", "RigidBody", ...; names and properties as in the inspector, case-insensitive),
   `GetComponent(name)` proxy, `GetScript<T>/AddScript<T>/HasScript/RemoveScript`.
   Enum properties are integers, colors are `glm::vec3/vec4`, rotations `glm::quat`.
+  Lighting a script may drive the same way: a time of day turns the `DirectionalLight` entity (`SetEulerAngles` on its
+  transform; with a `SkyLight` whose `Source` is Atmosphere the sky, its light and the sunset colors follow at once) and
+  sets its `Intensity` (lux); `SetProperty("HeightFog", "Density", 0.08f)` thickens the fog (night, a storm). Reflection
+  probes keep what they were baked with: a moving sun does not relight them (Docs/Manual/Lighting.md).
 - `TransformComponent`: local `Get/SetTranslation`, `Get/SetRotation`, `Get/SetScale`, `Get/SetEulerAngles` (radians),
   world `Get/SetWorldPosition`, `Get/SetWorldRotation`, `GetWorldScale`, `GetForward/Right/Up` (-Z is forward).
 - `Scene`: `CreateEntity(name, parent)`, `GetEntity(id)`, `FindEntityByName`, `FindEntitiesByTag`, `GetRootEntities`,

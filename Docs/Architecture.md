@@ -304,7 +304,13 @@ point and spot lights' shadow views, depth/normal/entity-ID prepass (with motion
 surface target), GTAO, reflection probes' conversions and the screen-space reflections' trace, forward PBR, sky, a copy of the
 image so far for glass, transparents (glass first),
 the TAA resolve, exposure, bloom, tone mapping, FXAA, then overlays
-and text) into render targets of its viewport size, which it hands to the `DeferredReleaseQueue` when it is resized
+and text) into render targets of its viewport size. Temporal state belongs to the renderer, never to the scene or the
+camera: each renderer jitters only its frame's copy of the camera and keeps its own motion history (the previous frame's
+instance records and palettes), TAA history and pre-exposure (the histories start again after a camera cut, a resize,
+another render scene or a frame it skipped), so the editor's views, the Game view, captures and
+thumbnails never disturb each other; renderers of single images (captures, project thumbnails) render until their
+history and exposure settled, and the probe bake's renderer has TAA off (DeveloperGuide, "Motion vectors and TAA"). It
+hands its render targets to the `DeferredReleaseQueue` when it is resized
 (the viewport panel, the game window) or freed (captures); its output texture exists only once a frame needed it (one
 without a target, or composing overlays or text before copying into the target), so a game without text renders
 straight into the back buffer and never allocates one. Its image-based lighting comes from the sky light's

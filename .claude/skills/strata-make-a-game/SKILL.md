@@ -294,6 +294,16 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
   or sky light) is shown with *preview lighting* (`"previewLighting": true` in the capture result). The game renders it
   unlit; judge the look from `{"camera": "scene"}` captures. A scene with only point or spot lights shows as the game
   does: as dark as they leave it.
+- Units: a directional light's `Intensity` is lux, a point or spot light's candela, a sky's nits. Small values (a 3 lux
+  sun, 10 cd lamps) look the same as real ones (100,000 lux) at a matching exposure; real values need automatic
+  exposure (`AutoExposureMaxEV` 16) or the atmosphere sky (`"Source": "Atmosphere"`, a 120,000 lux sun). Lamps and
+  torches that should cast shadows set `CastShadows` on their point or spot light: each costs shadow views (six for a
+  point light) every time something in its range moves, so keep it to the few that matter (at most 16 in view).
+- Fog and depth: a `HeightFog` entity (`Density`, `HeightFalloff`, color from the sky) fades the distance and fills
+  valleys; the sky's Inspector section has "Add Height Fog".
+- Reflection probes: a `ReflectionProbe` box (`Extents`) around a room or an area gives shiny surfaces there the
+  reflections of what is around them; `lighting.bakeProbes` bakes them (again after moving lights or walls; one undo
+  step). See Docs/Manual/Lighting.md.
 - Dark scenes: add a `PostProcess` with `AutoExposure: false` (automatic exposure brightens a dark backdrop to gray).
 - Anti-aliasing (`PostProcess`): 3D games use `"AntiAliasingMethod": "TAA"` with the default `TAAPreset` `"Sharp"`
   (crisp, smooth edges); `"Original"` gives a softer, steadier look; when transparent effects ghost as they move, set
