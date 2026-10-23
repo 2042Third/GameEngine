@@ -528,9 +528,9 @@ namespace Strata
 							// Numbered files beside the path: <name>-1.png to <name>-<frames>.png.
 							for (uint32_t index = 1; index <= request.Frames && arguments.IsValid(); index++)
 							{
-								const std::filesystem::path numbered = resolved->parent_path()
+								const std::filesystem::path numberedPath = resolved->parent_path()
 									/ FileSystem::FromUTF8(fmt::format("{}-{}.png", FileSystem::ToUTF8(resolved->stem()), index));
-								if (std::optional<std::filesystem::path> file = ResolveOutputPath(context, FileSystem::ToUTF8(numbered), ".png", request.Overwrite, &error))
+								if (std::optional<std::filesystem::path> file = ResolveOutputPath(context, FileSystem::ToUTF8(numberedPath), ".png", request.Overwrite, &error))
 									request.Paths.push_back(std::move(*file));
 								else
 									arguments.SetError(fmt::format("Parameter 'path': {}", error));
