@@ -329,7 +329,7 @@ TEST_SUITE("GPU.SceneRenderer.Materials")
 			scene.Contents.DestroyEntity(scene.Pane);
 			SceneRenderer renderer = CreateMaterialRenderer("Wall", false);
 			renderer.SetViewportSize(c_ViewSize, c_ViewSize);
-		RenderSettled(gpu, renderer, scene.Contents, scene.Camera, false);
+			RenderSettled(gpu, renderer, scene.Contents, scene.Camera, false);
 			CHECK(renderer.GetStats().SceneColorCopies == 0u);
 			CHECK(renderer.GetSceneColorTexture() == nullptr);
 			wallEdge = GlassScene::FindEdge(ReadHDR(renderer.GetHDRTexture()), 1, c_ViewSize - 2);
@@ -342,7 +342,7 @@ TEST_SUITE("GPU.SceneRenderer.Materials")
 			GlassScene scene(assets, Glass(ior, c_Thickness));
 			SceneRenderer renderer = CreateMaterialRenderer("Glass", false);
 			renderer.SetViewportSize(c_ViewSize, c_ViewSize);
-		RenderSettled(gpu, renderer, scene.Contents, scene.Camera, false);
+			RenderSettled(gpu, renderer, scene.Contents, scene.Camera, false);
 			CHECK(renderer.GetStats().SceneColorCopies == 1u);
 			const auto [first, last] = GetPaneColumns(renderer, scene.Pane);
 			const std::vector<glm::vec3> image = ReadHDR(renderer.GetHDRTexture());
@@ -552,7 +552,7 @@ TEST_SUITE("GPU.SceneRenderer.Materials")
 			GlassScene scene(assets, ghost);
 			SceneRenderer renderer = CreateMaterialRenderer("Blended", false);
 			renderer.SetViewportSize(c_ViewSize, c_ViewSize);
-		RenderSettled(gpu, renderer, scene.Contents, scene.Camera, false);
+			RenderSettled(gpu, renderer, scene.Contents, scene.Camera, false);
 			CHECK(renderer.GetStats().SceneColorCopies == 0u);
 			CHECK(renderer.GetSceneColorTexture() == nullptr);
 		}
@@ -564,7 +564,7 @@ TEST_SUITE("GPU.SceneRenderer.Materials")
 			GlassScene scene(assets, Glass(1.5f, 0.5f));
 			SceneRenderer renderer = CreateMaterialRenderer("Copy", false, extended);
 			renderer.SetViewportSize(c_ViewSize, c_ViewSize);
-		RenderSettled(gpu, renderer, scene.Contents, scene.Camera, false);
+			RenderSettled(gpu, renderer, scene.Contents, scene.Camera, false);
 			CHECK(renderer.GetStats().SceneColorCopies == 1u);
 			nvrhi::ITexture* copy = renderer.GetSceneColorTexture();
 			REQUIRE(copy);
