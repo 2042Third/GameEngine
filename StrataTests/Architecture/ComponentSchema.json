@@ -484,7 +484,7 @@
 		},
 		{
 			"Category": "Lighting",
-			"Description": "Light shining in every direction from the entity's position (casts no shadows); its intensity is luminous intensity in candela",
+			"Description": "Light shining in every direction from the entity's position, with shadows in six directions when it casts them; its intensity is luminous intensity in candela",
 			"DisplayName": "Point Light",
 			"Extra": false,
 			"Flags": 0,
@@ -525,12 +525,60 @@
 					"Speed": 0.10000000149011612,
 					"Tooltip": "Light fades to zero at this distance",
 					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Cast Shadows",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "CastShadows",
+					"Speed": 0.0,
+					"Tooltip": "Casts shadows: the renderer gives the most relevant shadowed lights in view (16) tiles of its shadow atlas, six for a point light, one for a spot light; each costs drawing its casters again when they move",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Shadow Bias",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10.0,
+					"Min": 0.0,
+					"Name": "ShadowBias",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Depth offset toward the light, in texels of the light's shadow tiles: raise it if lit surfaces show stripes of shadow (acne)",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Shadow Normal Bias",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10.0,
+					"Min": 0.0,
+					"Name": "ShadowNormalBias",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Offset along the surface normal, in texels of the light's shadow tiles: raise it against acne on surfaces lit at grazing angles; too much detaches shadows from their casters",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Shadow Filter Radius",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 8.0,
+					"Min": 0.0,
+					"Name": "ShadowFilterRadius",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Radius of the shadow's soft edge, in texels of the light's shadow tiles (0 to 8)",
+					"Type": "Float"
 				}
 			]
 		},
 		{
 			"Category": "Lighting",
-			"Description": "Cone light shining along the entity's forward (-Z) direction (casts no shadows); its intensity is luminous intensity in candela along its axis",
+			"Description": "Cone light shining along the entity's forward (-Z) direction, with shadows when it casts them; its intensity is luminous intensity in candela along its axis",
 			"DisplayName": "Spot Light",
 			"Extra": false,
 			"Flags": 0,
@@ -594,6 +642,54 @@
 					"Name": "OuterConeAngle",
 					"Speed": 0.10000000149011612,
 					"Tooltip": "Half angle in degrees",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Cast Shadows",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "CastShadows",
+					"Speed": 0.0,
+					"Tooltip": "Casts shadows: the renderer gives the most relevant shadowed lights in view (16) tiles of its shadow atlas, six for a point light, one for a spot light; each costs drawing its casters again when they move",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Shadow Bias",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10.0,
+					"Min": 0.0,
+					"Name": "ShadowBias",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Depth offset toward the light, in texels of the light's shadow tiles: raise it if lit surfaces show stripes of shadow (acne)",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Shadow Normal Bias",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10.0,
+					"Min": 0.0,
+					"Name": "ShadowNormalBias",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Offset along the surface normal, in texels of the light's shadow tiles: raise it against acne on surfaces lit at grazing angles; too much detaches shadows from their casters",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Shadow Filter Radius",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 8.0,
+					"Min": 0.0,
+					"Name": "ShadowFilterRadius",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Radius of the shadow's soft edge, in texels of the light's shadow tiles (0 to 8)",
 					"Type": "Float"
 				}
 			]

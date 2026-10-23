@@ -180,13 +180,17 @@
 						"Name": "Lamp"
 					},
 					"PointLight": {
+						"CastShadows": true,
 						"Color": [
 							1,
 							0.6,
 							0.3
 						],
 						"Intensity": 25,
-						"Range": 7
+						"Range": 7,
+						"ShadowBias": 1.25,
+						"ShadowFilterRadius": 2,
+						"ShadowNormalBias": 1.25
 					},
 					"Transform": {
 						"Rotation": [
@@ -215,6 +219,7 @@
 						"Name": "Spot"
 					},
 					"SpotLight": {
+						"CastShadows": true,
 						"Color": [
 							0.5,
 							0.8,
@@ -223,7 +228,10 @@
 						"InnerConeAngle": 18,
 						"Intensity": 60,
 						"OuterConeAngle": 28,
-						"Range": 14
+						"Range": 14,
+						"ShadowBias": 0.75,
+						"ShadowFilterRadius": 3,
+						"ShadowNormalBias": 2
 					},
 					"Transform": {
 						"Rotation": [

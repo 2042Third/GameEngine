@@ -60,8 +60,16 @@ namespace
 		DirectionalLightComponent& sun = lights.AddComponent<DirectionalLightComponent>();
 		sun.Intensity = 5.0f;
 		sun.CascadeBlend = 0.3f;
-		lights.AddComponent<PointLightComponent>().Range = 42.0f;
-		lights.AddComponent<SpotLightComponent>().OuterConeAngle = 45.0f;
+		PointLightComponent& lamp = lights.AddComponent<PointLightComponent>();
+		lamp.Range = 42.0f;
+		lamp.CastShadows = true;
+		lamp.ShadowBias = 2.5f;
+		lamp.ShadowNormalBias = 0.75f;
+		lamp.ShadowFilterRadius = 4.0f;
+		SpotLightComponent& spot = lights.AddComponent<SpotLightComponent>();
+		spot.OuterConeAngle = 45.0f;
+		spot.CastShadows = true;
+		spot.ShadowFilterRadius = 0.5f;
 		lights.AddComponent<SkyLightComponent>().EnvironmentMap = UUID(99);
 		HeightFogComponent& fog = lights.AddComponent<HeightFogComponent>();
 		fog.Density = 0.05f;
@@ -214,6 +222,14 @@ TEST_SUITE("Scene.Serialization")
 
 		CHECK(loaded.FindEntityByName("Lights").GetComponent<PostProcessComponent>().AntiAliasingMethod == AntiAliasingMode::TAA);
 		CHECK(loaded.FindEntityByName("Lights").GetComponent<DirectionalLightComponent>().CascadeBlend == doctest::Approx(0.3f));
+		const PointLightComponent& lamp = loaded.FindEntityByName("Lights").GetComponent<PointLightComponent>();
+		CHECK(lamp.CastShadows);
+		CHECK(lamp.ShadowBias == doctest::Approx(2.5f));
+		CHECK(lamp.ShadowNormalBias == doctest::Approx(0.75f));
+		CHECK(lamp.ShadowFilterRadius == doctest::Approx(4.0f));
+		const SpotLightComponent& spot = loaded.FindEntityByName("Lights").GetComponent<SpotLightComponent>();
+		CHECK(spot.CastShadows);
+		CHECK(spot.ShadowFilterRadius == doctest::Approx(0.5f));
 		const HeightFogComponent& fog = loaded.FindEntityByName("Lights").GetComponent<HeightFogComponent>();
 		CHECK(fog.Density == doctest::Approx(0.05f));
 		CHECK(fog.HeightFalloff == doctest::Approx(0.4f));
@@ -410,6 +426,43 @@ TEST_SUITE("Scene.Serialization")
 		loaded = load({ { "CascadeBlend", "wide" } }, warnings);
 		CHECK(CountWarnings(warnings, "CascadeBlend") == 1);
 		CHECK(loaded.CascadeBlend == doctest::Approx(0.1f));
+	}
+
+	TEST_CASE("Point and spot lights saved before their shadows load without them; invalid shadow settings are clamped or warn")
+	{
+		const auto load = []<typename Light>(const char* component, const nlohmann::json& light, std::vector<std::string>& warnings, const Light*)
+		{
+			const nlohmann::json document = {
+				{ "Strata", { { "Format", "Scene" }, { "Version", 1 } } },
+				{ "Scene", { { "Name", "Old" }, { "Entities", { { { "ID", "00000000000000AB" }, { "Components", {
+					{ "Name", { { "Name", "Lamp" } } }, { component, light } } } } } } } }
+			};
+			Scene scene;
+			std::string error;
+			REQUIRE_MESSAGE(SceneSerializer::Deserialize(scene, document, &error, &warnings), error);
+			return scene.GetEntityByUUID(UUID(0xAB)).GetComponent<Light>();
+		};
+		const PointLightComponent* point = nullptr;
+		const SpotLightComponent* spotLight = nullptr;
+		// As 0.5.0 saved them: no shadow settings, and so no shadows.
+		std::vector<std::string> warnings;
+		PointLightComponent lamp = load("PointLight", { { "Color", { 1, 0.8, 0.6 } }, { "Intensity", 12 }, { "Range", 8 } }, warnings, point);
+		CHECK(warnings.empty());
+		CHECK_FALSE(lamp.CastShadows);
+		CHECK(lamp.ShadowFilterRadius == doctest::Approx(1.5f));
+		SpotLightComponent spot = load("SpotLight", { { "Intensity", 20 }, { "Range", 15 }, { "InnerConeAngle", 20 }, { "OuterConeAngle", 30 } }, warnings,
+			spotLight);
+		CHECK(warnings.empty());
+		CHECK_FALSE(spot.CastShadows);
+		// Out of range: clamped; not a number: a warning, and the default.
+		lamp = load("PointLight", { { "CastShadows", true }, { "ShadowFilterRadius", 20 }, { "ShadowBias", -2 } }, warnings, point);
+		CHECK(warnings.empty());
+		CHECK(lamp.CastShadows);
+		CHECK(lamp.ShadowFilterRadius == doctest::Approx(8.0f));
+		CHECK(lamp.ShadowBias == 0.0f);
+		spot = load("SpotLight", { { "CastShadows", true }, { "ShadowNormalBias", "large" } }, warnings, spotLight);
+		CHECK(CountWarnings(warnings, "ShadowNormalBias") == 1);
+		CHECK(spot.ShadowNormalBias == doctest::Approx(1.5f));
 	}
 
 	TEST_CASE("Height fog loads its defaults for keys it lacks; out-of-range values are clamped, values of another type warn")

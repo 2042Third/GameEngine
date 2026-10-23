@@ -10,8 +10,7 @@ Strata's lights use the units of real light, on one scale, so values taken from 
 reference work as they are. Hover a light's **Intensity** in the Inspector to see its unit.
 
 - A **Directional Light** is the sun or the moon: it lights the whole scene from one direction (the entity's forward
-  axis). Its **Intensity** is illuminance in **lux**: how much light falls on a surface facing it. It is the only light
-  that casts shadows.
+  axis). Its **Intensity** is illuminance in **lux**: how much light falls on a surface facing it.
 - A **Point Light** shines in every direction from its position, a **Spot Light** in a cone. Their **Intensity** is
   luminous intensity in **candela** (cd): how bright the light looks from one direction. A lamp sold as P lumens has
   P / 12.57 cd as a point light (an 800 lumen bulb is about 64 cd). A spot light's candela is the brightness along its
@@ -88,3 +87,20 @@ camera. **Cascade Blend** hides the seams between the cascades and fades the sha
 Softness** is the light's apparent size (the sun is about 0.5 degrees), which softens shadows further from their casters.
 **Shadow Bias** and **Shadow Normal Bias** remove the speckles ("acne") a surface can cast on itself: raise them a little
 when lit surfaces show dark stripes, lower them when shadows detach from their casters.
+
+Point and spot lights cast shadows when **Cast Shadows** is on (it is off by default). A spot light's shadow covers its
+cone, a point light's every direction (the renderer draws it as the six faces of a cube). **Shadow Filter Radius** softens
+the shadow's edge (0 is sharp, 8 the softest), and **Shadow Bias** and **Shadow Normal Bias** work as for the sun; all
+three are measured in texels of the light's shadow map, whose detail follows how large the light's range looks on
+screen.
+
+They cost more than the sun's shadows, so use them where they show:
+
+- At most 16 point and spot lights in view cast shadows at a time, the most relevant ones (those around the camera, then
+  those whose range looks largest); a light that drops out of the 16 fades its shadow out rather than losing it at once.
+- A light's shadow is drawn again only when something in its range moves or changes, or the light itself does: a still
+  lantern over a still room costs nothing after its first frame, while a light carried around, or one over moving
+  characters, redraws every frame. A point light costs six times what a spot light costs. A few lights redraw per frame;
+  the others keep their previous shadow meanwhile, and a light just switched on fades its shadow in over a few frames.
+- Keep the lamp's own model out of its light's shadow: turn **Cast Shadows** off on the lamp's mesh (Mesh Renderer), or
+  place the light outside it, or the model darkens everything around.

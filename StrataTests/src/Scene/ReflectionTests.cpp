@@ -132,6 +132,42 @@ TEST_SUITE("Reflection")
 		CHECK_FALSE(blend->SetValue(&sun, std::numeric_limits<float>::quiet_NaN()));
 		CHECK(sun.CascadeBlend == doctest::Approx(0.5f));
 
+		// Point and spot lights' shadows: off by default; biases within [0, 10], the filter radius within [0, 8] (texels).
+		for (const char* component : { "PointLight", "SpotLight" })
+		{
+			CAPTURE(component);
+			const ComponentInfo* lightInfo = ComponentRegistry::Find(component);
+			REQUIRE(lightInfo);
+			const PropertyInfo* cast = lightInfo->FindProperty("CastShadows");
+			REQUIRE(cast);
+			CHECK(cast->Type == PropertyType::Bool);
+			for (const auto& [property, maximum] : { std::pair { "ShadowBias", 10.0f }, std::pair { "ShadowNormalBias", 10.0f },
+				std::pair { "ShadowFilterRadius", PointLightComponent::c_MaxShadowFilterRadius } })
+			{
+				CAPTURE(property);
+				const PropertyInfo* found = lightInfo->FindProperty(property);
+				REQUIRE(found);
+				CHECK(found->Type == PropertyType::Float);
+				CHECK(found->Min == 0.0f);
+				CHECK(found->Max == maximum);
+				CHECK_FALSE(found->Tooltip.empty());
+			}
+		}
+		PointLightComponent lamp;
+		CHECK_FALSE(lamp.CastShadows);
+		CHECK(lamp.ShadowBias == 1.0f);
+		CHECK(lamp.ShadowNormalBias == 1.5f);
+		CHECK(lamp.ShadowFilterRadius == 1.5f);
+		SpotLightComponent spot;
+		CHECK_FALSE(spot.CastShadows);
+		CHECK(spot.ShadowFilterRadius == 1.5f);
+		const PropertyInfo* filter = ComponentRegistry::Find<PointLightComponent>()->FindProperty("ShadowFilterRadius");
+		CHECK(filter->SetValue(&lamp, PropertyValue(12.0f)));
+		CHECK(lamp.ShadowFilterRadius == 8.0f);
+		CHECK_FALSE(filter->SetValue(&lamp, std::numeric_limits<float>::quiet_NaN()));
+		CHECK(lamp.ShadowFilterRadius == 8.0f);
+		CHECK_FALSE(filter->IsInRange(PropertyValue(8.5f)));
+
 		// Height fog: its defaults, and ranges that keep it a fog (no negative density or distance, a falloff above 0,
 		// opacities and scattering strengths within [0, 1]).
 		const ComponentInfo* fogInfo = ComponentRegistry::Find<HeightFogComponent>();
@@ -294,9 +330,29 @@ TEST_SUITE("Scene.InactiveProperties")
 		// The directional light's cascade blend while it casts no shadows.
 		DirectionalLightComponent& sun = entity.AddComponent<DirectionalLightComponent>();
 		CHECK(reason("DirectionalLight", "CascadeBlend").empty());
+		CHECK(reason("DirectionalLight", "ShadowBias").empty());
 		sun.CastShadows = false;
-		CHECK(reason("DirectionalLight", "CascadeBlend") == "Cast Shadows is off");
+		for (const char* property : { "ShadowDistance", "ShadowSoftness", "ShadowBias", "ShadowNormalBias", "CascadeBlend" })
+			CHECK_MESSAGE(reason("DirectionalLight", property) == "Cast Shadows is off", property);
 		CHECK(reason("DirectionalLight", "Intensity").empty()); // Always active
+
+		// Point and spot lights' shadow settings while they cast none (by default).
+		PointLightComponent& lamp = entity.AddComponent<PointLightComponent>();
+		SpotLightComponent& spot = entity.AddComponent<SpotLightComponent>();
+		for (const char* component : { "PointLight", "SpotLight" })
+		{
+			for (const char* property : { "ShadowBias", "ShadowNormalBias", "ShadowFilterRadius" })
+				CHECK_MESSAGE(reason(component, property) == "Cast Shadows is off", component, ".", property);
+			CHECK(reason(component, "Range").empty());
+			CHECK(reason(component, "CastShadows").empty());
+		}
+		lamp.CastShadows = true;
+		spot.CastShadows = true;
+		for (const char* component : { "PointLight", "SpotLight" })
+		{
+			for (const char* property : { "ShadowBias", "ShadowNormalBias", "ShadowFilterRadius" })
+				CHECK_MESSAGE(reason(component, property).empty(), component, ".", property);
+		}
 
 		// The sky: the map's properties with the procedural sky, the procedural sky's with a map, the ambient color with either.
 		SkyLightComponent& sky = entity.AddComponent<SkyLightComponent>();

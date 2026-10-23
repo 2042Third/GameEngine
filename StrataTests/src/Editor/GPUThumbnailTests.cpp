@@ -741,6 +741,60 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A prefab's thumbnail draws every shadow view of its point and spot lights in the frame")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUThumbnailLocalShadows") / "Game";
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		const auto run = [&](std::string_view name, const nlohmann::json& parameters)
+		{
+			return Tests::RunCommandToCompletion(context, commands, name, parameters);
+		};
+		const auto frameUntil = [&](const std::function<bool()>& condition)
+		{
+			for (int frame = 0; frame < 3000 && !condition(); frame++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				context.Update(Timestep(1.0f / 60.0f));
+				gpu.GetDevice().EndFrame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return condition();
+		};
+		run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+
+		// A cube under three shadowed point lights: 18 views, more than a frame draws where lighting updates are spread.
+		nlohmann::json entities = nlohmann::json::array();
+		entities.push_back(run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } })["id"]);
+		for (int lamp = 0; lamp < 3; lamp++)
+		{
+			entities.push_back(run("entity.create", { { "name", "Lamp" }, { "components", { { "PointLight", { { "CastShadows", true }, { "Range", 6.0 } } },
+				{ "Transform", { { "Translation", { static_cast<double>(lamp) - 1.0, 2.0, 0.5 } } } } } } })["id"]);
+		}
+		const std::optional<UUID> prefabHandle = UUIDFromJson(run("prefab.create", { { "entities", entities }, { "path", "Prefabs/Lamps.stprefab" } })["asset"]);
+		REQUIRE(prefabHandle);
+		ThumbnailCache& thumbnails = *context.GetThumbnails();
+		REQUIRE(frameUntil([&]()
+		{
+			thumbnails.Request(*prefabHandle);
+			return thumbnails.GetState(*prefabHandle) == ThumbnailState::Ready || thumbnails.GetState(*prefabHandle) == ThumbnailState::Unavailable;
+		}));
+		CHECK(thumbnails.GetState(*prefabHandle) == ThumbnailState::Ready);
+		const SceneRenderer* renderer = thumbnails.GetRenderer();
+		REQUIRE(renderer);
+		CHECK_FALSE(renderer->GetSpecification().SpreadLightingUpdates);
+		CHECK(renderer->GetSpecification().LocalShadowAtlasSize == 2048);
+		// Its frames draw every view that is not up to date (the last one may have had none left to draw).
+		CHECK(renderer->GetStats().LocalShadowLights == 3);
+		CHECK(renderer->GetStats().LocalShadowViewsPending == 0);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The project's picture of a TAA scene settles its history also after waiting its frames for what stays incomplete")
 	{
 		Tests::GPUContext gpu;

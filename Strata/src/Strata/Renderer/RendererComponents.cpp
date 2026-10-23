@@ -44,10 +44,21 @@ namespace Strata
 			return {};
 		}
 
-		std::string WithShadows(const DirectionalLightComponent& light)
+		template<typename Light>
+		std::string WithShadows(const Light& light)
 		{
 			return light.CastShadows ? std::string() : "Cast Shadows is off";
 		}
+
+		// The shadow settings of point and spot lights (their units: texels of the light's shadow tiles, which follow how large
+		// the light looks on screen).
+		constexpr const char* c_LocalShadowBiasTooltip = "Depth offset toward the light, in texels of the light's shadow tiles: raise it if lit "
+			"surfaces show stripes of shadow (acne)";
+		constexpr const char* c_LocalShadowNormalBiasTooltip = "Offset along the surface normal, in texels of the light's shadow tiles: raise it "
+			"against acne on surfaces lit at grazing angles; too much detaches shadows from their casters";
+		constexpr const char* c_LocalShadowFilterTooltip = "Radius of the shadow's soft edge, in texels of the light's shadow tiles (0 to 8)";
+		constexpr const char* c_LocalShadowCastTooltip = "Casts shadows: the renderer gives the most relevant shadowed lights in view (16) tiles "
+			"of its shadow atlas, six for a point light, one for a spot light; each costs drawing its casters again when they move";
 
 		std::string WithAutoExposure(const PostProcessComponent& post)
 		{
@@ -96,31 +107,44 @@ namespace Strata
 			.Property("CascadeBlend", &DirectionalLightComponent::CascadeBlend,
 				WithTooltip(Slider(0.0f, DirectionalLightComponent::c_MaxCascadeBlend), "Fraction of each shadow cascade's depth range over which it blends into the next one, "
 					"hiding the seams between them; the last one fades out by the Shadow Distance. 0 switches at once"));
-		SetInactiveReasons<DirectionalLightComponent>({ "CascadeBlend" }, &WithShadows);
+		SetInactiveReasons<DirectionalLightComponent>({ "ShadowDistance", "ShadowSoftness", "ShadowBias", "ShadowNormalBias", "CascadeBlend" },
+			&WithShadows<DirectionalLightComponent>);
 
 		ComponentRegistry::Register<PointLightComponent>("PointLight")
 			.DisplayName("Point Light")
 			.Category("Lighting")
-			.Description("Light shining in every direction from the entity's position (casts no shadows); its intensity is luminous intensity in "
-				"candela")
+			.Description("Light shining in every direction from the entity's position, with shadows in six directions when it casts them; its "
+				"intensity is luminous intensity in candela")
 			.Property("Color", &PointLightComponent::Color, Color())
 			.Property("Intensity", &PointLightComponent::Intensity,
 				WithTooltip(Range(0.0f, c_Unbounded, 0.1f), "Luminous intensity in candela, times Color, falling off with the square of the distance: a "
 					"bulb of P lumens has P / 12.57 cd (800 lm, about 64 cd), a candle about 1"))
-			.Property("Range", &PointLightComponent::Range, WithTooltip(Range(0.01f, c_Unbounded, 0.1f), "Light fades to zero at this distance"));
+			.Property("Range", &PointLightComponent::Range, WithTooltip(Range(0.01f, c_Unbounded, 0.1f), "Light fades to zero at this distance"))
+			.Property("CastShadows", &PointLightComponent::CastShadows, WithTooltip({}, c_LocalShadowCastTooltip))
+			.Property("ShadowBias", &PointLightComponent::ShadowBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), c_LocalShadowBiasTooltip))
+			.Property("ShadowNormalBias", &PointLightComponent::ShadowNormalBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), c_LocalShadowNormalBiasTooltip))
+			.Property("ShadowFilterRadius", &PointLightComponent::ShadowFilterRadius,
+				WithTooltip(Range(0.0f, PointLightComponent::c_MaxShadowFilterRadius, 0.01f), c_LocalShadowFilterTooltip));
+		SetInactiveReasons<PointLightComponent>({ "ShadowBias", "ShadowNormalBias", "ShadowFilterRadius" }, &WithShadows<PointLightComponent>);
 
 		ComponentRegistry::Register<SpotLightComponent>("SpotLight")
 			.DisplayName("Spot Light")
 			.Category("Lighting")
-			.Description("Cone light shining along the entity's forward (-Z) direction (casts no shadows); its intensity is luminous intensity in "
-				"candela along its axis")
+			.Description("Cone light shining along the entity's forward (-Z) direction, with shadows when it casts them; its intensity is "
+				"luminous intensity in candela along its axis")
 			.Property("Color", &SpotLightComponent::Color, Color())
 			.Property("Intensity", &SpotLightComponent::Intensity,
 				WithTooltip(Range(0.0f, c_Unbounded, 0.1f), "Luminous intensity in candela along the axis, times Color, falling off with the square of "
 					"the distance; a narrower cone does not make it brighter"))
 			.Property("Range", &SpotLightComponent::Range, Range(0.01f, c_Unbounded, 0.1f))
 			.Property("InnerConeAngle", &SpotLightComponent::InnerConeAngle, WithTooltip(Range(0.0f, 89.0f, 0.1f), "Half angle in degrees"))
-			.Property("OuterConeAngle", &SpotLightComponent::OuterConeAngle, WithTooltip(Range(0.1f, 89.9f, 0.1f), "Half angle in degrees"));
+			.Property("OuterConeAngle", &SpotLightComponent::OuterConeAngle, WithTooltip(Range(0.1f, 89.9f, 0.1f), "Half angle in degrees"))
+			.Property("CastShadows", &SpotLightComponent::CastShadows, WithTooltip({}, c_LocalShadowCastTooltip))
+			.Property("ShadowBias", &SpotLightComponent::ShadowBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), c_LocalShadowBiasTooltip))
+			.Property("ShadowNormalBias", &SpotLightComponent::ShadowNormalBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), c_LocalShadowNormalBiasTooltip))
+			.Property("ShadowFilterRadius", &SpotLightComponent::ShadowFilterRadius,
+				WithTooltip(Range(0.0f, PointLightComponent::c_MaxShadowFilterRadius, 0.01f), c_LocalShadowFilterTooltip));
+		SetInactiveReasons<SpotLightComponent>({ "ShadowBias", "ShadowNormalBias", "ShadowFilterRadius" }, &WithShadows<SpotLightComponent>);
 
 		ComponentRegistry::Register<SkyLightComponent>("SkyLight")
 			.DisplayName("Sky Light")

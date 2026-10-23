@@ -62,7 +62,7 @@ namespace Strata
 		bool CastShadows = false;
 		float ShadowBias = 1.0f;         // As PointLightComponent's
 		float ShadowNormalBias = 1.5f;
-		float ShadowFilterRadius = 1.5f;
+		float ShadowFilterRadius = 1.5f; // At most PointLightComponent::c_MaxShadowFilterRadius
 	};
 
 	enum class SkyLightSource : uint8_t

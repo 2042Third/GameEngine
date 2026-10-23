@@ -809,7 +809,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Run("entity.get", { { "entity", copy } })["children"].size() == 2);
 		CHECK(harness.Run("scene.info")["entityCount"] == 6);
 
-		harness.Run("component.add", { { "entity", c }, { "component", "SpotLight" }, { "values", { { "OuterConeAngle", 40.0 } } } });
+		harness.Run("component.add", { { "entity", c }, { "component", "SpotLight" }, { "values", { { "OuterConeAngle", 40.0 }, { "CastShadows", true } } } });
 		CHECK(harness.Run("component.get", { { "entity", c }, { "component", "SpotLight" } })["values"]["OuterConeAngle"] == 40.0);
 		// Properties another one turns off are listed with why; none: no inactive key.
 		CHECK_FALSE(harness.Run("component.get", { { "entity", c }, { "component", "SpotLight" } }).contains("inactive"));
@@ -849,8 +849,35 @@ TEST_SUITE("Editor.Commands")
 		CHECK_FALSE(harness.Error("component.set", { { "entity", c }, { "component", "DirectionalLight" }, { "values", { { "CascadeBlend", 0.6 } } } }).empty());
 		CHECK(blend() == doctest::Approx(0.25));
 		harness.Run("component.set", { { "entity", c }, { "component", "DirectionalLight" }, { "values", { { "CastShadows", false } } } });
-		CHECK(light()["inactive"] == nlohmann::json { { "CascadeBlend", "Cast Shadows is off" } });
+		CHECK(light()["inactive"] == nlohmann::json { { "CascadeBlend", "Cast Shadows is off" }, { "ShadowBias", "Cast Shadows is off" },
+			{ "ShadowDistance", "Cast Shadows is off" }, { "ShadowNormalBias", "Cast Shadows is off" }, { "ShadowSoftness", "Cast Shadows is off" } });
 		harness.Run("component.remove", { { "entity", c }, { "component", "DirectionalLight" } });
+
+		// Point and spot lights' shadows: added with values, set, undone; the filter radius refused beyond 8; their settings
+		// inactive while they cast none (a light saved before them casts none).
+		harness.Run("component.add", { { "entity", c }, { "component", "PointLight" }, { "values", { { "CastShadows", true }, { "ShadowBias", 2.0 },
+			{ "ShadowNormalBias", 0.5 }, { "ShadowFilterRadius", 3.0 } } } });
+		const auto lamp = [&]() { return harness.Run("component.get", { { "entity", c }, { "component", "PointLight" } }); };
+		CHECK(lamp()["values"]["CastShadows"] == true);
+		CHECK(lamp()["values"]["ShadowBias"].get<double>() == doctest::Approx(2.0));
+		CHECK(lamp()["values"]["ShadowNormalBias"].get<double>() == doctest::Approx(0.5));
+		CHECK(lamp()["values"]["ShadowFilterRadius"].get<double>() == doctest::Approx(3.0));
+		CHECK_FALSE(lamp().contains("inactive"));
+		harness.Run("component.set", { { "entity", c }, { "component", "PointLight" }, { "values", { { "ShadowFilterRadius", 6.5 } } } });
+		CHECK(lamp()["values"]["ShadowFilterRadius"].get<double>() == doctest::Approx(6.5));
+		harness.Run("edit.undo");
+		CHECK(lamp()["values"]["ShadowFilterRadius"].get<double>() == doctest::Approx(3.0));
+		CHECK_FALSE(harness.Error("component.set", { { "entity", c }, { "component", "PointLight" }, { "values", { { "ShadowFilterRadius", 9.0 } } } }).empty());
+		CHECK_FALSE(harness.Error("component.set", { { "entity", c }, { "component", "PointLight" }, { "values", { { "ShadowBias", -1.0 } } } }).empty());
+		CHECK(lamp()["values"]["ShadowFilterRadius"].get<double>() == doctest::Approx(3.0));
+		harness.Run("component.set", { { "entity", c }, { "component", "PointLight" }, { "values", { { "CastShadows", false } } } });
+		CHECK(lamp()["inactive"] == nlohmann::json { { "ShadowBias", "Cast Shadows is off" }, { "ShadowFilterRadius", "Cast Shadows is off" },
+			{ "ShadowNormalBias", "Cast Shadows is off" } });
+		harness.Run("edit.undo");
+		CHECK(lamp()["values"]["CastShadows"] == true);
+		harness.Run("component.remove", { { "entity", c }, { "component", "PointLight" } });
+		harness.Run("component.set", { { "entity", c }, { "component", "SpotLight" }, { "values", { { "CastShadows", false } } } });
+		CHECK(harness.Run("component.get", { { "entity", c }, { "component", "SpotLight" } })["inactive"].size() == 3);
 		harness.Run("component.remove", { { "entity", c }, { "component", "SpotLight" } });
 		CHECK_FALSE(harness.Error("component.get", { { "entity", c }, { "component", "SpotLight" } }).empty());
 
