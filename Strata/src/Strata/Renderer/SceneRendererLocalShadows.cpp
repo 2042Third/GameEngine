@@ -232,7 +232,9 @@ namespace Strata
 		{
 			return a.Relevance != b.Relevance ? a.Relevance > b.Relevance : a.Record < b.Record;
 		});
-		const bool spread = m_Specification.SpreadLightingUpdates;
+		// Spread over frames, with fades, only where the cache keeps views: without it every view is drawn every frame, so
+		// nothing waits and nothing fades.
+		const bool spread = m_Specification.SpreadLightingUpdates && m_Specification.CacheLocalShadows;
 		const size_t kept = std::min<size_t>(candidates.size(), m_Specification.MaxShadowedLocalLights);
 		const std::optional<float> firstLeftOut = kept < candidates.size() ? std::optional<float>(candidates[kept].Relevance) : std::nullopt;
 
@@ -492,7 +494,7 @@ namespace Strata
 		// The views the frame draws: those not up to date (every view without the cache), the nearest lights' first, at most
 		// LocalShadowViewsPerFrame of them where lighting updates are spread.
 		const bool cache = m_Specification.CacheLocalShadows;
-		const uint32_t budget = spread && cache ? std::max(m_Specification.LocalShadowViewsPerFrame, 1u) : std::numeric_limits<uint32_t>::max();
+		const uint32_t budget = spread ? std::max(m_Specification.LocalShadowViewsPerFrame, 1u) : std::numeric_limits<uint32_t>::max();
 		std::vector<uint32_t> byDistance(m_LocalShadowLights.size());
 		for (uint32_t index = 0; index < byDistance.size(); index++)
 			byDistance[index] = index;

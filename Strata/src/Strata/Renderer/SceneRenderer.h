@@ -215,7 +215,7 @@ namespace Strata
 		// range, cone, tile or filter), a shadow caster whose bounds before or after its change reach the light's range and
 		// view, or what the casters are drawn with (the scene's GPU copy's mesh and material tables and new proxies, the
 		// geometry pool's content and, while materials are alpha-masked, the texture table's entries). Off: every view of
-		// every shadowed light is drawn every frame (perf tests measure that).
+		// every shadowed light is drawn every frame (perf tests measure that), and nothing fades (SpreadLightingUpdates).
 		bool CacheLocalShadows = true;
 		// Lighting work is spread over frames, for renderers that draw views continuously: at most LocalShadowViewsPerFrame
 		// shadow views are drawn per frame, the nearest lights' first; a light whose views were not all drawn yet casts no

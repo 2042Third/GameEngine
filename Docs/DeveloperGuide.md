@@ -2766,8 +2766,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   their margin over it. Off (renderers of single images: the editor's capture renderer, which also draws the project's
   picture, and the thumbnails' renderer, both with a 2048 atlas, 16 MiB), every view that is not up to date is drawn in the
   frame and nothing fades; captures and the project's picture still count views left pending as incomplete.
-  `CacheLocalShadows` off draws every view of every shadowed light every frame (the perf tests' worst case).
-  `SceneRendererStats::LocalShadowLights`, `LocalShadowViewsDrawn` and `LocalShadowViewsPending` say what a frame did.
+  `CacheLocalShadows` off draws every view of every shadowed light every frame (the perf tests' worst case), and nothing
+  fades. `SceneRendererStats::LocalShadowLights`, `LocalShadowViewsDrawn` and `LocalShadowViewsPending` say what a frame
+  did.
 - Which views a frame draws is the CPU's decision on both paths (`FindLocalShadowCasters`, one job per drawn light: a
   sphere query of its range, then the exact tests per view on the CPU path); what each view draws is decided twice
   ("GPU-driven path"). The views draw in `GPU.Shadows` with `Scene/LocalShadowMesh(Skinned).vert` (perspective, no

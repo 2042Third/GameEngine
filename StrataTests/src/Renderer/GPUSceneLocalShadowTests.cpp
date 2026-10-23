@@ -669,6 +669,13 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 			CHECK(values.back() == doctest::Approx(full).epsilon(0.02));
 			for (size_t frame = 1; frame < values.size(); frame++)
 				CHECK(values[frame] <= values[frame - 1] + 1e-3f);
+
+			// Without the cache every view is drawn in every frame, and nothing fades: whole shadows from the first frame.
+			SceneRendererSpecification uncachedSpecification = LocalShadowSpecification(mode);
+			uncachedSpecification.CacheLocalShadows = false;
+			SceneRenderer uncached(uncachedSpecification);
+			uncached.SetViewportSize(c_Size, c_Size);
+			CHECK(red(RenderHDR(uncached, scene, camera), shadowCenters[15]) == doctest::Approx(full).epsilon(0.02));
 			gpu.GetDevice().WaitForIdle();
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
