@@ -7,6 +7,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Reflection/PropertyOptions.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RendererComponents.h"
@@ -28,6 +29,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -46,9 +48,11 @@ namespace Strata
 		// anything reads them (GltfImport::DecodeCompressedViews); KHR_mesh_quantization's normalized and integer accessors
 		// are read by cgltf's unpacking.
 		constexpr const char* c_SupportedExtensions[] = {
-			"KHR_lights_punctual", "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_texture_transform", "KHR_mesh_quantization",
-			"EXT_meshopt_compression"
+			"KHR_lights_punctual", "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_materials_clearcoat", "KHR_materials_transmission",
+			"KHR_materials_volume", "KHR_materials_ior", "KHR_texture_transform", "KHR_mesh_quantization", "EXT_meshopt_compression"
 		};
+		// The largest index of refraction a material takes (MaterialProperties::IOR's range).
+		constexpr float c_MaxImportedIOR = 3.0f;
 
 		// What a model's compressed buffer views may decode to, in all: hostile files must not exhaust memory.
 		constexpr uint64_t c_MaxDecodedBytes = 1ull << 30;
@@ -816,6 +820,7 @@ namespace Strata
 				if (source.occlusion_texture.texture)
 					properties.OcclusionStrength = std::clamp(source.occlusion_texture.scale, 0.0f, 1.0f);
 				properties.EmissiveMap = ImportTexture(source.emissive_texture, TextureUsage::Color, "emissive", name);
+				ImportClearcoatAndTransmission(source, name, properties);
 
 				// Strata materials have one UV transform; it comes from the base color texture (the common case).
 				const cgltf_texture_view& transformSource = pbr.base_color_texture.texture ? pbr.base_color_texture : source.normal_texture;
@@ -836,6 +841,54 @@ namespace Strata
 				subAsset.Data.assign(document.begin(), document.end());
 				m_Result.SubAssets.push_back(std::move(subAsset));
 				m_MaterialHandles[&source] = DeriveSubAssetHandle(m_Context.Handle, key);
+			}
+
+			// KHR_materials_clearcoat, _transmission, _volume and _ior: the coat's factors and maps (strength in red, roughness in
+			// green, a normal map), transmission with its map (red), the volume's thickness and attenuation and the index of
+			// refraction.
+			void ImportClearcoatAndTransmission(const cgltf_material& source, const std::string& name, MaterialProperties& properties)
+			{
+				if (source.has_clearcoat)
+				{
+					const cgltf_clearcoat& coat = source.clearcoat;
+					properties.Clearcoat = std::clamp(coat.clearcoat_factor, 0.0f, 1.0f);
+					properties.ClearcoatRoughness = std::clamp(coat.clearcoat_roughness_factor, 0.0f, 1.0f);
+					properties.ClearcoatMap = ImportTexture(coat.clearcoat_texture, TextureUsage::Data, "clearcoat", name);
+					properties.ClearcoatRoughnessMap = ImportTexture(coat.clearcoat_roughness_texture, TextureUsage::Data, "clearcoat roughness", name);
+					properties.ClearcoatNormalMap = ImportTexture(coat.clearcoat_normal_texture, TextureUsage::NormalMap, "clearcoat normal", name);
+					// The coat's normal map is read at its full strength.
+					if (coat.clearcoat_normal_texture.texture && coat.clearcoat_normal_texture.scale != 1.0f)
+						m_SkippedFeatures.insert("clearcoat normal texture scale (KHR_materials_clearcoat)");
+				}
+				if (source.has_transmission)
+				{
+					properties.Transmission = std::clamp(source.transmission.transmission_factor, 0.0f, 1.0f);
+					properties.TransmissionMap = ImportTexture(source.transmission.transmission_texture, TextureUsage::Data, "transmission", name);
+				}
+				if (source.has_volume)
+				{
+					const cgltf_volume& volume = source.volume;
+					properties.Thickness = std::isfinite(volume.thickness_factor) ? std::max(volume.thickness_factor, 0.0f) : 0.0f;
+					if (volume.thickness_texture.texture)
+						m_SkippedFeatures.insert("thickness texture (KHR_materials_volume)");
+					properties.AttenuationColor = glm::clamp(glm::make_vec3(volume.attenuation_color), glm::vec3(0.0f), glm::vec3(1.0f));
+					// glTF's default distance is infinite: nothing absorbed, which Strata writes as 0.
+					const float distance = volume.attenuation_distance;
+					properties.AttenuationDistance = std::isfinite(distance) && distance > 0.0f && distance < c_Unbounded ? distance : 0.0f;
+				}
+				if (source.has_ior)
+				{
+					// 0 is glTF's value for a specular reflectance of 1, which the material model has no index for.
+					const float ior = source.ior.ior;
+					if (std::isfinite(ior) && ior >= 1.0f)
+					{
+						properties.IOR = std::min(ior, c_MaxImportedIOR);
+						if (ior > c_MaxImportedIOR)
+							m_SkippedFeatures.insert(fmt::format("index of refraction {} (KHR_materials_ior; {} is used)", ior, c_MaxImportedIOR));
+					}
+					else
+						m_SkippedFeatures.insert(fmt::format("index of refraction {} (KHR_materials_ior; 1 to {} are imported)", ior, c_MaxImportedIOR));
+				}
 			}
 
 			AssetHandle GetMaterialHandle(const cgltf_material* material) const

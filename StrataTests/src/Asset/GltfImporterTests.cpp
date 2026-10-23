@@ -1163,6 +1163,76 @@ TEST_SUITE("Asset.Gltf")
 		CHECK(HasWarningContaining(transformed.Result, "TEXCOORD_2"));
 	}
 
+	TEST_CASE("Clear coat, transmission, volume and index of refraction import from their extensions")
+	{
+		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfMaterialExtensions");
+		// The test model's material with one extension's values (its textures name the model's one image).
+		auto import = [&](const std::string& file, const std::string& extension, const nlohmann::json& values)
+		{
+			nlohmann::json document = ParseDocument(CreateGltf({ .ImageUri = "embedded" }));
+			document["extensionsUsed"].push_back(extension);
+			document["materials"][0]["extensions"][extension] = values;
+			ImportOutput output = RunImport(assets, file, ToBytes(document));
+			REQUIRE_MESSAGE(output.Success, output.Error);
+			CHECK_FALSE(HasWarningContaining(output.Result, "extension " + extension));
+			return output;
+		};
+		auto properties = [](const ImportOutput& output)
+		{
+			const ImportedSubAsset* material = output.Find("Material/0");
+			REQUIRE(material);
+			const Ref<Material> loaded = Material::Deserialize(material->Data);
+			REQUIRE(loaded);
+			return loaded->GetProperties();
+		};
+
+		const ImportOutput coated = import("Coated.gltf", "KHR_materials_clearcoat", { { "clearcoatFactor", 0.75 }, { "clearcoatRoughnessFactor", 0.25 },
+			{ "clearcoatTexture", { { "index", 0 } } }, { "clearcoatRoughnessTexture", { { "index", 0 } } },
+			{ "clearcoatNormalTexture", { { "index", 0 }, { "scale", 0.5 } } } });
+		const MaterialProperties coat = properties(coated);
+		CHECK(coat.Clearcoat == 0.75f);
+		CHECK(coat.ClearcoatRoughness == 0.25f);
+		CHECK(coat.ClearcoatMap.IsValid());
+		CHECK(coat.ClearcoatMap == coated.HandleOf("Texture/0/Data"));
+		CHECK(coat.ClearcoatRoughnessMap == coated.HandleOf("Texture/0/Data"));
+		CHECK(coat.ClearcoatNormalMap.IsValid());
+		CHECK(coat.ClearcoatNormalMap == coated.HandleOf("Texture/0/NormalMap"));
+		CHECK(HasWarningContaining(coated.Result, "clearcoat normal texture scale"));
+
+		const ImportOutput transmissive = import("Transmissive.gltf", "KHR_materials_transmission", { { "transmissionFactor", 0.9 },
+			{ "transmissionTexture", { { "index", 0 } } } });
+		const MaterialProperties transmission = properties(transmissive);
+		CHECK(transmission.Transmission == doctest::Approx(0.9f));
+		CHECK(transmission.TransmissionMap.IsValid());
+		CHECK(transmission.TransmissionMap == transmissive.HandleOf("Texture/0/Data"));
+		CHECK(transmission.Clearcoat == 0.0f);
+
+		const ImportOutput thick = import("Volume.gltf", "KHR_materials_volume", { { "thicknessFactor", 0.4 }, { "attenuationColor", { 0.5, 0.6, 0.7 } },
+			{ "attenuationDistance", 2.5 }, { "thicknessTexture", { { "index", 0 } } } });
+		const MaterialProperties volume = properties(thick);
+		CHECK(volume.Thickness == doctest::Approx(0.4f));
+		CHECK(volume.AttenuationColor == glm::vec3(0.5f, 0.6f, 0.7f));
+		CHECK(volume.AttenuationDistance == 2.5f);
+		CHECK(HasWarningContaining(thick.Result, "thickness texture"));
+		// glTF's default distance is infinite: nothing is absorbed.
+		CHECK(properties(import("Clear.gltf", "KHR_materials_volume", { { "thicknessFactor", 1.0 } })).AttenuationDistance == 0.0f);
+
+		CHECK(properties(import("Water.gltf", "KHR_materials_ior", { { "ior", 1.33 } })).IOR == doctest::Approx(1.33f));
+		const ImportOutput dense = import("Dense.gltf", "KHR_materials_ior", { { "ior", 5.0 } });
+		CHECK(properties(dense).IOR == 3.0f);
+		CHECK(HasWarningContaining(dense.Result, "index of refraction 5"));
+		const ImportOutput zero = import("ZeroIOR.gltf", "KHR_materials_ior", { { "ior", 0.0 } });
+		CHECK(properties(zero).IOR == 1.5f);
+		CHECK(HasWarningContaining(zero.Result, "index of refraction 0"));
+
+		// Material extensions the importer does not read still warn.
+		nlohmann::json document = ParseDocument(CreateGltf({}));
+		document["extensionsUsed"].push_back("KHR_materials_sheen");
+		const ImportOutput sheen = RunImport(assets, "Sheen.gltf", ToBytes(document));
+		REQUIRE_MESSAGE(sheen.Success, sheen.Error);
+		CHECK(HasWarningContaining(sheen.Result, "extension KHR_materials_sheen"));
+	}
+
 	TEST_CASE("The import scale applies to camera clip planes and light ranges")
 	{
 		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfScale");

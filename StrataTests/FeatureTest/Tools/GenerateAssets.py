@@ -23,7 +23,8 @@ only files whose content changed on purpose; the .meta files keep the handles ei
     Assets/Audio/Blip.wav          0.1 s mono 16-bit PCM tone
     Assets/Fonts/FeatureBlocks.ttf TrueType font: every printable ASCII character is a solid block
     Assets/Models/Platform.gltf    glTF 2.0 model: a 4 x 0.5 x 4 platform with a pyramid "Beacon" child node,
-                                   two materials (one textured with Checker.png), buffers embedded as a data URI
+                                   two materials (one textured with Checker.png and clear-coated, the Beacon's glass:
+                                   transmission, volume and index of refraction), buffers embedded as a data URI
     Assets/Models/Arm.gltf         glTF 2.0 skinned model: a 104-vertex tube skinned to a three-joint arm (Shoulder,
                                    Elbow, Wrist below an "Armature" node) with two animations, "Wave" (linear, baked at
                                    30 keys per second) and "Swing" (linear root travel, a cubic spline turn, a step
@@ -382,13 +383,24 @@ def make_platform_gltf():
             {
                 "name": "PlatformMaterial",
                 "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}, "metallicFactor": 0.0, "roughnessFactor": 0.8},
+                "extensions": {
+                    "KHR_materials_clearcoat": {
+                        "clearcoatFactor": 0.6, "clearcoatRoughnessFactor": 0.15, "clearcoatTexture": {"index": 0},
+                    },
+                },
             },
             {
                 "name": "BeaconMaterial",
-                "pbrMetallicRoughness": {"baseColorFactor": [0.2, 0.6, 1.0, 1.0], "metallicFactor": 0.5, "roughnessFactor": 0.3},
+                "pbrMetallicRoughness": {"baseColorFactor": [0.2, 0.6, 1.0, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.3},
                 "emissiveFactor": [0.1, 0.3, 0.6],
+                "extensions": {
+                    "KHR_materials_transmission": {"transmissionFactor": 0.8},
+                    "KHR_materials_volume": {"thicknessFactor": 0.2, "attenuationColor": [0.6, 0.8, 1.0], "attenuationDistance": 1.0},
+                    "KHR_materials_ior": {"ior": 1.45},
+                },
             },
         ],
+        "extensionsUsed": ["KHR_materials_clearcoat", "KHR_materials_transmission", "KHR_materials_volume", "KHR_materials_ior"],
         "textures": [{"source": 0, "sampler": 0}],
         "images": [{"uri": "../Textures/Checker.png"}],
         "samplers": [{"magFilter": 9728, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497}],

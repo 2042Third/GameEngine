@@ -34,8 +34,9 @@ namespace Strata
 		// 6: skins, animations and skinned meshes; 7: buffer views compressed with EXT_meshopt_compression too.
 		// 8: the import scale is baked into the content instead of the model root's scale.
 		// 9: levels of detail are simplified with their normals and texture coordinates, with their errors (cooked meshes
-		// version 3).
-		uint32_t GetVersion() const override { return 9; }
+		// version 3). 10: clear coat, transmission, volume and index of refraction (KHR_materials_clearcoat, _transmission,
+		// _volume, _ior).
+		uint32_t GetVersion() const override { return 10; }
 		bool ReadsExternalFiles() const override { return true; }
 		// The URIs of the model's buffers and images that name files (data URIs and buffers in a .glb are no files); fails for
 		// URLs and absolute paths.

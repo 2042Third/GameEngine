@@ -3163,6 +3163,11 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   frame's jittered matrices, at the level `roughness * (levels - 1)`; Beer's law absorbs `MaterialData::Absorption`
   along the thickness, the base color tints it, and the surface's reflectance (split sum) and coat take their share. The
   transmitted light is not fogged again: the copy holds what lies behind with the fog in front of it.
+- **glTF** (`GltfImporter` version 10, so every model imports once more): `KHR_materials_clearcoat` (factors; the coat's
+  strength and roughness maps import as `TextureUsage::Data`, its normal map as `NormalMap`), `KHR_materials_transmission`
+  (factor, map as `Data`), `KHR_materials_volume` (thickness factor, attenuation color and distance; glTF's infinite
+  distance is 0) and `KHR_materials_ior` (1 to 3). What the model cannot hold is reported as not imported: a coat normal
+  map's scale other than 1, a thickness texture, an index of refraction outside [1, 3] (glTF's 0 among them).
 - **Limits:** the copy holds no transparent surface, so glass behind glass and blended surfaces behind glass are not
   seen through it; glass gets no ambient occlusion (GTAO runs on the prepass's depth, which glass is not in: its depth
   would hide what lies behind from the forward pass and from the copy) and casts no shadow (transparent materials cast
