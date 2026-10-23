@@ -30,6 +30,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 // lighting.bakeProbes: reflection probes' captures rendered from the edited scene (ProbeBake.h), written as HDR textures of
@@ -482,11 +483,14 @@ namespace Strata
 				std::vector<Entity> entities;
 				if (arguments.Has("entities"))
 				{
-					entities = arguments.GetEntities(*scene, "entities");
-					for (const Entity entity : entities)
+					// A probe named twice is baked once (twice would import its capture twice and trash the first copy in the step).
+					std::unordered_set<UUID> named;
+					for (const Entity entity : arguments.GetEntities(*scene, "entities"))
 					{
 						if (arguments.IsValid() && !entity.HasComponent<ReflectionProbeComponent>())
 							arguments.SetError(fmt::format("Parameter 'entities': '{}' has no ReflectionProbe component", entity.GetName()));
+						if (named.insert(entity.GetUUID()).second)
+							entities.push_back(entity);
 					}
 				}
 				else

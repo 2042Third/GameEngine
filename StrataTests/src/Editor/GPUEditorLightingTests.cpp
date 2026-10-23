@@ -243,8 +243,10 @@ TEST_SUITE("GPU.Editor.Lighting")
 		harness.Run("asset.import", { { "file", FileSystem::ToUTF8(skySource) }, { "directory", "Imported" } });
 		const std::string skyMap = UUIDToJson(assets.FindAssetByPath("Imported/Sky.hdr")).get<std::string>();
 		harness.Run("component.set", { { "entity", probes[0] }, { "component", "ReflectionProbe" }, { "values", { { "Capture", skyMap } } } });
-		const nlohmann::json third = harness.Bake({ { "entities", { probes[0] } } });
+		// The probe named twice is baked once.
+		const nlohmann::json third = harness.Bake({ { "entities", { probes[0], probes[0] } } });
 		REQUIRE(third["probes"].size() == 1);
+		CHECK(third["probes"][0]["path"].get<std::string>() == "Lighting/Room/" + probes[0] + ".hdr");
 		CHECK(third["probes"][0]["previous"] == skyMap);
 		CHECK(third["probes"][0]["trashed"] == false);
 		CHECK(assets.GetMetadata(*UUIDFromJson(skyMap)));
