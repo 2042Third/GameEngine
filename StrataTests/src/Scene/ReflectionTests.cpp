@@ -164,7 +164,9 @@ TEST_SUITE("Reflection")
 		const PropertyInfo* fogColor = fogInfo->FindProperty("Color");
 		REQUIRE(fogColor);
 		CHECK(fogColor->Type == PropertyType::Color3);
-		CHECK(fogInfo->FindProperty("ColorFromSky")->Type == PropertyType::Bool);
+		const PropertyInfo* colorFromSky = fogInfo->FindProperty("ColorFromSky");
+		REQUIRE(colorFromSky);
+		CHECK(colorFromSky->Type == PropertyType::Bool);
 		HeightFogComponent fog;
 		CHECK_FALSE(fogInfo->FindProperty("Density")->IsInRange(PropertyValue(-0.1f)));
 		CHECK_FALSE(fogInfo->FindProperty("HeightFalloff")->IsInRange(PropertyValue(0.0f)));
