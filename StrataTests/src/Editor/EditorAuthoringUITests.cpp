@@ -1124,6 +1124,57 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(component().TAAHistoryFrames == 12);
 	}
 
+	TEST_CASE("Choosing Custom as TAA Preset for several entities writes the start they share, or the preset alone")
+	{
+		AuthoringEditor editor({ ImVec2(1600.0f, 1600.0f), 1.0f });
+		const nlohmann::json taa = { { "components", { { "PostProcess", { { "AntiAliasingMethod", "TAA" } } } } } };
+		const UUID first = editor.Create("First", taa);
+		const UUID second = editor.Create("Second", taa);
+		editor.Context().Select(first);
+		editor.Context().Select(second, true);
+		editor.Frames(3);
+		const auto chooseCustom = [&]()
+		{
+			REQUIRE(editor.Click("Inspector.PostProcess.TAAPreset"));
+			editor.Frames(3); // The list opens
+			REQUIRE(editor.Click("Inspector.PostProcess.TAAPreset.Custom"));
+			editor.Frames(2);
+		};
+		const auto component = [&](UUID id) { return editor.Get(id).GetComponent<PostProcessComponent>(); };
+		const auto stored = [&](UUID id)
+		{
+			PostProcessComponent custom = component(id);
+			custom.TAAPreset = TemporalAntiAliasingPreset::Custom;
+			return GetTemporalAntiAliasingSettings(custom);
+		};
+
+		// Both untouched under Original: both start from Original's table, in one undo step.
+		size_t position = editor.UndoPosition();
+		chooseCustom();
+		CHECK(editor.UndoPosition() == position + 1);
+		for (const UUID id : { first, second })
+		{
+			CAPTURE(id.ToString());
+			CHECK(component(id).TAAPreset == TemporalAntiAliasingPreset::Custom);
+			CHECK(GetTemporalAntiAliasingSettings(component(id)) == c_TAAOriginalSettings);
+		}
+		editor.Run("edit.undo");
+		REQUIRE(component(first).TAAPreset == TemporalAntiAliasingPreset::Original);
+		REQUIRE(component(second).TAAPreset == TemporalAntiAliasingPreset::Original);
+
+		// One of them tuned: their starts differ, so the choice sets the preset alone and each keeps its tunables.
+		editor.Run("component.set", { { "entity", UUIDToJson(second) }, { "component", "PostProcess" }, { "values", { { "TAAHistoryFrames", 12 } } } });
+		const TemporalAntiAliasingSettings tuned = stored(second);
+		REQUIRE(tuned.HistoryFrames == 12);
+		position = editor.UndoPosition();
+		chooseCustom();
+		CHECK(editor.UndoPosition() == position + 1);
+		CHECK(component(first).TAAPreset == TemporalAntiAliasingPreset::Custom);
+		CHECK(component(second).TAAPreset == TemporalAntiAliasingPreset::Custom);
+		CHECK(stored(first) == c_TAASharpSettings);
+		CHECK(stored(second) == tuned);
+	}
+
 	TEST_CASE("Clicking the X-axis label resets only X")
 	{
 		AuthoringEditor editor;
