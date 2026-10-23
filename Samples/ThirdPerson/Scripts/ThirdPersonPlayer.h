@@ -6,11 +6,12 @@
 #include <vector>
 
 // The player, on the "Player" entity (a CharacterController whose child "Robot" is the animated model), driven by the
-// project's input actions (the Gameplay map, which players may rebind): it walks where the camera looks (Move: WASD, the
-// arrow keys or the left stick), runs while Run (Shift, the right bumper) is held, jumps (Jump: Space, gamepad A) with a
-// short coyote time after leaving a ledge, waves (Wave: 1) and dances (Dance: 2) while it stands, and lands with a sound.
-// It goes back to its last checkpoint ("Checkpoint1", "Checkpoint2"... markers it reached) when it falls off the islands
-// or with Respawn (R). In the attract mode it walks itself along the "AttractPoint1", "AttractPoint2"... markers.
+// project's input actions (the Gameplay map of its settings): it walks where the camera looks (Move: WASD, the arrow
+// keys or the left stick), runs while Run (Shift, the right bumper) is held, jumps (Jump: Space, gamepad A) with a
+// short coyote time after leaving a ledge, waves (Wave: 1) and dances (Dance: 2) while it stands, and lands with a
+// sound. It goes back to its last checkpoint ("Checkpoint1", "Checkpoint2"... markers it reached) when it falls off the
+// islands or with Respawn (R). In the attract mode it walks itself along the "AttractPoint1", "AttractPoint2"...
+// markers.
 class ThirdPersonPlayer : public Strata::Script
 {
 public:

@@ -183,8 +183,8 @@ glm::vec3 ThirdPersonPlayer::GetViewForward() const
 
 glm::vec3 ThirdPersonPlayer::GetMoveInput(bool& outRunning) const
 {
-	// The project's Move action (the keys or the left stick, players may rebind it): +Y walks forward, and its length is at
-	// most 1 (a diagonal of keys too).
+	// The project's Move action (the keys or the left stick, bound in the project's settings): +Y walks forward, and
+	// its length is at most 1 (a diagonal of keys too).
 	const glm::vec2 input = Input::GetActionValue("Gameplay/Move");
 	outRunning = Input::IsActionDown("Gameplay/Run");
 	const glm::vec3 forward = GetViewForward();
