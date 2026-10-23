@@ -7,6 +7,7 @@
 #include "Strata/Core/Log.h"
 #include "Strata/Core/SettingsRegistry.h"
 #include "Strata/GameUI/GameUIRegistration.h"
+#include "Strata/Input/InputRegistration.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/RendererRegistration.h"
 #include "Strata/Scene/SceneRegistration.h"
@@ -58,6 +59,7 @@ namespace Strata::Engine
 		// order themselves against other modules' systems with soft constraints (SceneSystemDescriptor::AfterIfPresent,
 		// BeforeIfPresent), which apply whatever the registration order and whichever modules are present.
 		constexpr BuiltinModule c_BuiltinModules[] = {
+			{ "Input", RegisterInputModule },
 			{ "Scene", RegisterSceneModule },
 			{ "Renderer", RegisterRendererModule },
 #if ST_WITH_PHYSICS
@@ -74,8 +76,8 @@ namespace Strata::Engine
 			{ "GameUI", RegisterGameUIModule },
 		};
 
-		// Every engine has these: the others reach the scene and the renderer directly.
-		constexpr std::array<std::string_view, 2> c_RequiredModules = { "Scene", "Renderer" };
+		// Every engine has these: every program reads input, and the others reach the scene and the renderer directly.
+		constexpr std::array<std::string_view, 3> c_RequiredModules = { "Input", "Scene", "Renderer" };
 
 		bool IsBuiltinModule(std::string_view name)
 		{

@@ -1013,7 +1013,8 @@ two members). A layer's name means the same in every scene and prefab.
 
 A game's input actions are one set, the project section `Input.Actions` (`Input/InputActionSet`): an asset would load
 asynchronously, and the game UI navigates from its first frame. The Input layer holds the model, the grammar and the
-evaluation (`Input/InputActions`); it includes only Core.
+evaluation (`Input/InputActions`); it includes only Core. `RegisterInputModule` (`Input/InputRegistration.cpp`) registers the
+section; the composition root runs it first, and Input is a module every engine has (it cannot be excluded).
 
 - **Model.** `InputActionSet { Maps }`, `InputActionMap { Name, Enabled, Actions }` (`Enabled`: when the game starts),
   `InputAction { Name, Kind, Bindings, DeadZone }`; `Kind` is `Button`, `Axis` (one value, -1 to 1) or `Vector2` (+Y up).
@@ -1065,6 +1066,20 @@ evaluation (`Input/InputActions`); it includes only Core.
   left stick's halves. `Read` adds a missing UI map or action with its defaults and refuses another kind; their bindings
   can change, their names, kinds and map cannot. The map may hold a game's own actions too. Text fields keep their
   hard-coded Enter, keypad Enter and Escape (text editing, not navigation).
+- **Editing.** `inputActions.setMap {map, rename?, remove?, enabled?}` adds an unknown map or changes, renames or removes
+  one; `inputActions.setAction {action, map?, rename?, remove?, kind?, deadZone?, bindings?}` adds an unknown action (to the
+  map its qualified name or `map` names) or changes, renames, moves (`map`) or removes one, `bindings` replacing the whole
+  list. Both are Edit commands of the `settings` toolset, check parameters first (names, binding texts and kinds, with the
+  parameter named) and the whole set through the section's `Read`, and record one project step (`ChangeProjectSection`; the
+  default set is no section); the UI map refuses renames and removal, its six actions renames, moves, removal and other
+  kinds. While playing, the running game reads the change in its next frame; a map's `Enabled` applies from the next
+  session. The Input Actions page (`UI/InputActionsPage`) lists the maps (the UI map marked as the game UI's navigation;
+  the selected one's name, enable at start and removal) and the selected map's actions (name, kind, dead zone, bindings
+  as chips with remove buttons, "+" to add one from lists of controls, composites part by part; the UI map's actions
+  "Used by game UI navigation"), one command per edit, refused with the reason while the project is not ready; probe keys
+  under `ProjectSettings.Input.Actions.` (`Summary`, `Map.<i>`, `AddMap`, `MapName`, `MapEnabled`, `RemoveMap`,
+  `AddAction`, `Action.<a>.Name|Reserved|Remove|Kind|DeadZone|Binding.<b>|RemoveBinding.<b>|AddBinding`,
+  `AddBinding.Shape`, `AddBinding.Part.<p>`, `AddBinding.Add`, `Error`).
 - **Simulated actions** (`SimulateAction`, `ReleaseAllSimulated`, `ClearSimulated`): held down from the next input frame,
   whatever the bindings, with a value (Button: 1); for tools that play the game.
 - **Capture** (`BeginCapture(InputCaptureDevices)`, `TakeCapturedBinding`, `CancelCapture`): listens for the next control
@@ -3236,7 +3251,7 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   (`viewport.`, `camera.`), `streaming` (`asset.stats`, `asset.setBudget`), `perf` (`editor.perf`), `editor` (`editor.`,
   `log.`), `ui` (`ui.create`, `ui.layout`, `ui.hitTest`), `world` (`world.`, `physics.`) and `settings` (the project's
   settings: `project.settings`, `project.setSettings`, `project.setCollisionLayers`, `project.setGameInfo`, `project.save`, the project's other
-  commands staying in `assets`;
+  commands staying in `assets`; the input actions, `inputActions.`;
   and the preferences, `preferences.`). Exact names win over
   prefixes; a group the table does not know gets a toolset named after it, but a new built-in group goes into the table
   (`CLI.McpToolsets` checks that every command maps to a toolset it names, and what the `ui`, `play` and `settings`

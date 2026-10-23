@@ -50,7 +50,7 @@ namespace Strata::CLI::McpToolsets
 			{ "editor.", "editor" }, { "log.", "editor" },
 			{ "ui.", "ui" },
 			{ "world.", "world" }, { "physics.", "world" },
-			{ "preferences.", "settings" } };
+			{ "preferences.", "settings" }, { "inputActions.", "settings" } };
 
 		constexpr ToolsetInfo c_Toolsets[] = {
 			{ "core", "Making and testing a game: project, scene, entities, components, prefabs, assets, scripts, play, input sequences, captures" },

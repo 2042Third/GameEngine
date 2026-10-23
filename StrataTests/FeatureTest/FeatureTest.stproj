@@ -16,6 +16,127 @@
 		"StartScene": "F7A0000000000001"
 	},
 	"Settings": {
+		"Input.Actions": {
+			"Value": {
+				"Maps": [
+					{
+						"Actions": [
+							{
+								"Bindings": [
+									"Key/Enter",
+									"Key/KPEnter",
+									"Key/Space",
+									"Gamepad/A"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Submit"
+							},
+							{
+								"Bindings": [
+									"Key/Escape",
+									"Gamepad/B"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Cancel"
+							},
+							{
+								"Bindings": [
+									"Key/Up",
+									"Gamepad/DPadUp",
+									"Gamepad/LeftY+"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Up"
+							},
+							{
+								"Bindings": [
+									"Key/Down",
+									"Gamepad/DPadDown",
+									"Gamepad/LeftY-"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Down"
+							},
+							{
+								"Bindings": [
+									"Key/Left",
+									"Gamepad/DPadLeft",
+									"Gamepad/LeftX-"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Left"
+							},
+							{
+								"Bindings": [
+									"Key/Right",
+									"Gamepad/DPadRight",
+									"Gamepad/LeftX+"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Right"
+							}
+						],
+						"Enabled": true,
+						"Name": "UI"
+					},
+					{
+						"Actions": [
+							{
+								"Bindings": [
+									"Key/Space",
+									"Gamepad/A"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Jump"
+							},
+							{
+								"Bindings": [
+									"1D:Key/A,Key/D",
+									"Gamepad/LeftX"
+								],
+								"DeadZone": 0.2,
+								"Kind": "Axis",
+								"Name": "Steer"
+							},
+							{
+								"Bindings": [
+									"Gamepad/LeftStick",
+									"2D:Key/W,Key/S,Key/A,Key/D"
+								],
+								"DeadZone": 0.25,
+								"Kind": "Vector2",
+								"Name": "Move"
+							}
+						],
+						"Enabled": true,
+						"Name": "Gameplay"
+					},
+					{
+						"Actions": [
+							{
+								"Bindings": [
+									"Key/H",
+									"Gamepad/RightBumper"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Horn"
+							}
+						],
+						"Enabled": false,
+						"Name": "Vehicle"
+					}
+				]
+			},
+			"Version": 1
+		},
 		"Scene.CollisionLayers": {
 			"Value": {
 				"Names": {

@@ -22,6 +22,7 @@
 #include "Panels/ViewportPanel.h"
 #include "Panels/WelcomePanel.h"
 #include "UI/CollisionLayersPage.h"
+#include "UI/InputActionsPage.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/FileDialogs.h"
@@ -39,6 +40,7 @@
 #include <Strata/Events/ApplicationEvent.h>
 #include <Strata/Events/KeyEvent.h>
 #include <Strata/Events/MouseEvent.h>
+#include <Strata/Input/InputActionSet.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Scene/ProjectCollisionLayers.h>
@@ -141,6 +143,10 @@ namespace Strata
 		m_SettingsPages.Register(ProjectCollisionLayers::c_SectionId, [](EditorContext&, const SettingsSection&, SettingsWindowKind)
 		{
 			return CreateScope<CollisionLayersPage>();
+		});
+		m_SettingsPages.Register(InputActionSet::c_SectionId, [](EditorContext&, const SettingsSection&, SettingsWindowKind)
+		{
+			return CreateScope<InputActionsPage>();
 		});
 		RegisterBuiltinPanels();
 		RegisterPanelCommands();

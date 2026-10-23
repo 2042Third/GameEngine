@@ -1017,6 +1017,17 @@ where the composition root starts registering the section. *Accept:*
 - `Engine.Modules`: the module list has Input first and refuses excluding it. `Perf.Input.Actions256` provisional
   (section 6). FeatureTest passes (the section is set with non-default values; the in-process loop updates actions).
 - A/B (section 6): GameUI and editor frame metrics against the base build.
+- *As built (what later steps build on):* `Input/InputActionSet` (the model, `InputBinding::Parse/ToString/FitsKind`,
+  `InputActionSet::FromJson/ToJson/FindAction/GetQualifiedName/IsReservedAction/MakeSection/GetDefaultUIActions`,
+  `InputPlayerBindings::Read/Write` for `InputBindings.json`); `Input/InputActions` (static: `Update`, `Reset`, which
+  `Input::Reset` calls, `ResetSession`; `GetState`, `IsDown`, `IsPressed`, `IsReleased`, `GetValue` and
+  `GetQualifiedName` by name with the reason on failure; `SetMapEnabled`/`IsMapEnabled`; `GetBindings`, `SetBindings`,
+  `ResetBindings` (empty name: every action), `GetPlayerBindings` (those that apply, for S9's marks), `SaveBindings`,
+  `LoadBindings`; `SimulateAction(name, down, value)`, `ReleaseAllSimulated`, `ClearSimulated` for S9's `input.action`;
+  `BeginCapture(InputCaptureDevices { Keyboard, Mouse, Gamepad })`, `IsCapturing`, `TakeCapturedBinding` (the text once),
+  `CancelCapture` for S9 and S11, whose `StrataScriptInputDevices` bits map to that struct); the capture reads
+  `Input::IsRawKeyDown`, `IsRawMouseButtonDown`, `IsRawGamepadButtonDown` and `GetRawGamepadAxis`. The commands live in
+  `Editor/EditorInputActionsCommands.cpp`, the page in `UI/InputActionsPage` (S9 adds the capture there).
 
 **S8 The script API.** The ten reading and rebinding host functions, the SDK names, `InputActionScripts.cpp` in the API
 module, `Scripting.InputActions`, `InputFeatures.cpp` reading `FeatureTest.stproj`'s actions, with a rebind, a save and a

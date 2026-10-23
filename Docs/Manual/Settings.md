@@ -34,6 +34,15 @@ to find a page or a field), the selected page on the right:
   layers are the project's, the same in every scene and prefab; the Inspector shows how many are named when nothing is
   selected, with a link to this page. Scripts can change which layers collide while the game plays, until the next scene
   starts.
+- **Input Actions** (under Input): the game's named controls, which scripts read by name and players can rebind. Actions
+  sit in maps (a set the game turns on and off together, such as Gameplay or Vehicle): **Add Map** adds one, and the
+  selected map's name, whether it works when the game starts, and the bin to remove it are below the list. **Add Action**
+  adds an action to the selected map; name it in place, choose its **Kind** (a Button is down or up, an Axis is one value
+  from -1 to 1 such as steering, a Vector2 two values such as walking) and, for an Axis or a Vector2, its **Dead zone**
+  (small stick movements that read as none). Its bindings are the controls that drive it: **+** adds one from the list of
+  keys, mouse buttons and gamepad controls, or a composite made of two keys (an Axis: the negative and the positive one)
+  or four (a Vector2: up, down, left, right); the cross removes one. The map **UI** holds the actions the game's menus
+  navigate with (Submit, Cancel and the four directions): you can rebind them, but not rename or remove them.
 - A page for each kind of setting the engine and your game define, grouped by category. **Reset to Defaults** sets a page
   back to the values it starts with.
 

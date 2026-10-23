@@ -619,6 +619,14 @@ exported games, and keep the assets they name from being deleted. The project fi
 `project.save` answers once it is written. When a write fails, `editor.status`' `project.fileState` is `"unwritten"`
 (`project.info`'s `fileError` says why): fix the cause and run `project.save`, because closing or switching the project
 refuses until then (`force: true` discards the settings, reported as `discardedSettings`).
+**Input actions** (toolset `settings`) are the game's named controls, which scripts read by name and players can rebind:
+`inputActions.setMap {"map": "Gameplay"}` adds a map (`rename`, `enabled` at start, `remove`);
+`inputActions.setAction {"action": "Gameplay/Jump", "kind": "Button", "bindings": ["Key/Space", "Gamepad/A"]}` adds or
+changes an action (`kind` Button, Axis or Vector2; `deadZone`; `bindings` replaces the list: `Key/<key>`,
+`Mouse/<button>`, `Gamepad/<button>`, `Gamepad/<axis>` or `<axis>+`/`-`, `Gamepad/LeftStick`, `1D:<neg>,<pos>`,
+`2D:<up>,<down>,<left>,<right>`; `rename`, `map` to move, `remove`). Name actions `<Map>/<Action>`; a bare name works when
+no other map has it. The map `UI` (Submit, Cancel, Up, Down, Left, Right) is the game UI's navigation: rebind it, never
+rename or remove it. `project.settings {"section": "Input.Actions"}` shows the whole set. Each change is an undo step.
 **Preferences** (toolset `settings`) are the person's, for every project, not the project's: `preferences.get` lists them
 like `project.settings` does (the external editor is `Editor.ExternalEditor`, `{"Command": "..."}`), and
 `preferences.set {"section", "value" | "reset": true}` changes one; they are no undo steps. Change them only when asked:

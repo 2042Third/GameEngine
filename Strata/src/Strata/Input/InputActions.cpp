@@ -658,7 +658,8 @@ namespace Strata
 
 	void InputActions::ResetSession()
 	{
-		EnsureParsed();
+		// The session starts from the project's set as it is now.
+		Refresh();
 		s_State.Players.Actions.clear();
 		s_State.SimulatedQueue.clear();
 		s_State.Capture = CaptureState();

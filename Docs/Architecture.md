@@ -589,8 +589,10 @@ order but for those `ModuleRegistrationOptions::Exclude` names; `Engine::GetBuil
 
 ```text
 open the registries (BeginRegistration; not the importers')
+RegisterInputModule        Input/InputRegistration.cpp         the project settings section Input.Actions (the game's input
+                                                               actions)
 RegisterSceneModule        Scene/SceneRegistration.cpp         its components (ComponentRegistration.cpp); Scene, Prefab, Model
-                                                               loaders
+                                                               loaders; the section Scene.CollisionLayers
 RegisterRendererModule     Renderer/RendererRegistration.cpp   its components (RendererComponents.cpp: MeshRenderer, lights, sky,
                                                                post-processing, text); Texture (with its prefix), Mesh, Material,
                                                                Font loaders; built-in meshes and material; the texture streamer
@@ -616,7 +618,7 @@ log the registered modules, the scene systems' update order and the soft constra
 - **Leaving modules out.** A build without an optional module has no row for it in the table (`#if ST_WITH_<MODULE>`, the
   only place outside the asset pipeline, the runtime program and tests that tests one). In a full build,
   `ModuleRegistrationOptions::Exclude` registers the engine without some of its modules, as a game without them would run
-  (tests: `--strata-test-helper=register-without`). Scene and Renderer are part of every
+  (tests: `--strata-test-helper=register-without`). Input, Scene and Renderer are part of every
   engine: excluding them is refused with an error, as is a name the table does not hold. Nothing else changes for the
   absent modules: their components load as unknown components and save back unchanged, the other modules' soft
   constraints ignore their systems, and scripts calling into their services are told that the scene plays without them

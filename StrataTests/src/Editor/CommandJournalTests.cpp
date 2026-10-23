@@ -108,6 +108,7 @@ namespace
 		"editor.batch",
 		"entity.create", "entity.delete", "entity.dropToGround", "entity.duplicate", "entity.paste", "entity.rename", "entity.setActive",
 		"entity.setParent",
+		"inputActions.setAction", "inputActions.setMap",
 		"material.create", "material.set",
 		"prefab.apply", "prefab.create", "prefab.instantiate", "prefab.revert", "prefab.unpack",
 		"project.save", "project.setCollisionLayers", "project.setExportSettings", "project.setGameInfo", "project.setSettings", "project.setStartScene",

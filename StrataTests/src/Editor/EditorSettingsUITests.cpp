@@ -7,12 +7,14 @@
 #include "Editor/HarnessEditor.h"
 #include "Editor/UndoStack.h"
 #include "TestHelpers.h"
+#include "UI/InputActionsPage.h"
 #include "UI/ItemProbe.h"
 #include "UI/SettingsPages.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/ProjectSettings.h>
 #include <Strata/Core/SettingsRegistry.h>
+#include <Strata/Input/InputActionSet.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Reflection/PropertyJson.h>
 
@@ -22,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -103,7 +106,8 @@ namespace
 		CHECK(conflicts == 0);
 	}
 
-	// A registry of the editor's sections and the test sections: Test.Simple and Test.Complex (project), Test.Preferences (user).
+	// A registry of the editor's sections, the input actions and the test sections: Test.Simple and Test.Complex (project),
+	// Test.Preferences (user).
 	struct UIRegistry
 	{
 		SettingsRegistry Registry;
@@ -113,6 +117,7 @@ namespace
 			EditorPreferences::RegisterSections(Registry);
 			RegisterTestSections(Registry);
 			REQUIRE(Registry.Register(MakeUserTestSection()));
+			REQUIRE(Registry.Register(InputActionSet::MakeSection()));
 			Registry.Freeze();
 		}
 	};
@@ -304,6 +309,103 @@ TEST_SUITE("Editor.UI.ProjectSettings")
 		CHECK(editor.Context().GetUndoStack().GetCount() == before);
 	}
 
+	TEST_CASE("The Input Actions page edits maps, actions and bindings through the commands")
+	{
+		HarnessEditor editor;
+		editor.Frames(1);
+		CreateProject(editor, "ProjectSettingsInputActions");
+		OpenProjectSettings(editor);
+		const auto key = [](std::string_view item) { return std::string(InputActionsPage::c_ProbePrefix) + std::string(item); };
+		const auto text = [](const std::string& probe)
+		{
+			const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(probe);
+			REQUIRE_MESSAGE(item.has_value(), "No ", probe, " in the last frame");
+			return item->Text;
+		};
+		const auto actions = [&editor]()
+		{
+			const nlohmann::json* value = editor.Context().GetProject()->GetSettings().FindSection(InputActionSet::c_SectionId);
+			const std::optional<InputActionSet> set = value ? InputActionSet::FromJson(*value) : std::optional<InputActionSet>(InputActionSet::MakeDefault());
+			REQUIRE(set);
+			return *set;
+		};
+		const auto bindings = [&actions](std::string_view name)
+		{
+			const InputActionSet set = actions();
+			const std::optional<InputActionLocation> location = set.FindAction(name);
+			REQUIRE(location);
+			std::vector<std::string> texts;
+			for (const InputBinding& binding : set.GetAction(*location).Bindings)
+				texts.push_back(binding.ToString());
+			return texts;
+		};
+		const auto click = [&editor](const std::string& probe)
+		{
+			INFO(probe);
+			REQUIRE(editor.Click(probe));
+			editor.Frames(2);
+		};
+		REQUIRE(editor.Click("ProjectSettings.Page.Input.Actions"));
+		REQUIRE(editor.FramesUntil([&key]() { return IsDrawn(key("Summary")); }));
+		CHECK(text(key("Summary")) == "1 map \xC2\xB7 6 actions");
+		// Without a game map the UI map shows: its actions are the game UI's and keep their names.
+		CHECK(text(key("Action.0.Reserved")) == "Used by game UI navigation");
+		CHECK_FALSE(UI::ItemProbe::Find(key("Action.0.Remove"))->Enabled);
+		CHECK_FALSE(UI::ItemProbe::Find(key("RemoveMap"))->Enabled);
+		const size_t steps = editor.Context().GetUndoStack().GetCount();
+
+		// A map, named in place; an action, named in place.
+		click(key("AddMap"));
+		CHECK(actions().FindMap("New Map"));
+		REQUIRE(editor.ReplaceText(key("MapName"), "Gameplay"));
+		Press(editor, ImGuiKey_Enter);
+		CHECK(actions().FindMap("Gameplay"));
+		click(key("AddAction"));
+		REQUIRE(actions().FindAction("Gameplay/New Action"));
+		REQUIRE(editor.ReplaceText(key("Action.0.Name"), "Jump"));
+		Press(editor, ImGuiKey_Enter);
+		REQUIRE(actions().FindAction("Gameplay/Jump"));
+
+		// A binding chosen from the list of controls.
+		click(key("Action.0.AddBinding"));
+		click(key("AddBinding.Part.0"));
+		click(key("AddBinding.Part.0.Key/Comma"));
+		click(key("AddBinding.Add"));
+		CHECK(bindings("Gameplay/Jump") == std::vector<std::string> { "Key/Comma" });
+		CHECK(text(key("Action.0.Binding.0")) == "Key/Comma");
+
+		// Another kind keeps the bindings that fit it; a 2D composite is put together part by part.
+		click(key("Action.0.Kind"));
+		click(key("Action.0.Kind.Vector2"));
+		CHECK(actions().GetAction(*actions().FindAction("Jump")).Kind == InputActionKind::Vector2);
+		CHECK(bindings("Gameplay/Jump").empty());
+		click(key("Action.0.AddBinding"));
+		click(key("AddBinding.Shape"));
+		click(key("AddBinding.Shape.2D"));
+		const char* parts[] = { "Key/Apostrophe", "Key/Comma", "Key/Minus", "Key/Period" };
+		for (size_t part = 0; part < 4; part++)
+		{
+			click(key(fmt::format("AddBinding.Part.{}", part)));
+			click(key(fmt::format("AddBinding.Part.{}.{}", part, parts[part])));
+		}
+		click(key("AddBinding.Add"));
+		CHECK(bindings("Gameplay/Jump") == std::vector<std::string> { "2D:Key/Apostrophe,Key/Comma,Key/Minus,Key/Period" });
+
+		// Removing the binding, the action, the map; the map's enable at start.
+		click(key("Action.0.RemoveBinding.0"));
+		CHECK(bindings("Gameplay/Jump").empty());
+		click(key("Action.0.Remove"));
+		CHECK_FALSE(actions().FindAction("Gameplay/Jump"));
+		click(key("MapEnabled"));
+		CHECK_FALSE(actions().Maps[*actions().FindMap("Gameplay")].Enabled);
+		click(key("RemoveMap"));
+		CHECK_FALSE(actions().FindMap("Gameplay"));
+		// One step per edit: the map, its name, the action, its name, two bindings, the kind, three removals and the enable.
+		CHECK(editor.Context().GetUndoStack().GetCount() == steps + 11);
+		CHECK(text(key("Summary")) == "1 map \xC2\xB7 6 actions");
+		CHECK_FALSE(IsDrawn(key("Error")));
+	}
+
 	TEST_CASE("Every registered section has a page")
 	{
 		HarnessEditor editor;
@@ -340,8 +442,10 @@ TEST_SUITE("Editor.UI.ProjectSettings")
 			editor.Frames(1);
 			CreateProject(editor, "ProjectSettingsIds");
 			editor.Run("project.setExportSettings", { { "alwaysInclude", { "Scenes" } } });
+			editor.Run("inputActions.setAction", { { "action", "UI/Pause" }, { "kind", "Axis" }, { "bindings", { "Key/P", "1D:Key/A,Key/D" } } });
 			OpenProjectSettings(editor);
-			for (const char* page : { "ProjectSettings.Page.Game", "ProjectSettings.Page.Export", "ProjectSettings.Page.Test.Simple" })
+			for (const char* page : { "ProjectSettings.Page.Game", "ProjectSettings.Page.Export", "ProjectSettings.Page.Test.Simple",
+				"ProjectSettings.Page.Input.Actions" })
 			{
 				CAPTURE(page);
 				REQUIRE(editor.Click(page));
