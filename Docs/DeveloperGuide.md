@@ -1059,6 +1059,12 @@ evaluation (`Input/InputActions`); it includes only Core.
   lists it. `LoadBindings` reads at most 64 KiB and forgives per entry: unknown actions and bindings their kind cannot use
   are dropped with one warning, and a file that is no bindings file is ignored with a warning (the project's bindings
   apply).
+- **The UI map.** Every set has the map `UI` with the Buttons `Submit`, `Cancel`, `Up`, `Down`, `Left` and `Right`, which
+  the game UI navigates with (`UIActionState`, [UI input](#ui-input)); their defaults
+  (`InputActionSet::GetDefaultUIActions`) are Enter, keypad Enter, Space and A; Escape and B; the arrows, the d-pad and the
+  left stick's halves. `Read` adds a missing UI map or action with its defaults and refuses another kind; their bindings
+  can change, their names, kinds and map cannot. The map may hold a game's own actions too. Text fields keep their
+  hard-coded Enter, keypad Enter and Escape (text editing, not navigation).
 - **Simulated actions** (`SimulateAction`, `ReleaseAllSimulated`, `ClearSimulated`): held down from the next input frame,
   whatever the bindings, with a value (Button: 1); for tools that play the game.
 - **Capture** (`BeginCapture(InputCaptureDevices)`, `TakeCapturedBinding`, `CancelCapture`): listens for the next control
@@ -1781,9 +1787,11 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `OnUpdate`. A button clicks on a release over the button the press started on, or on Submit while focused; disabled
   selectables (`Interactable` off, or inactive) never hover, press, focus or raise events, but still block what is under
   them.
-- Keyboard and gamepad navigation reads the fixed action set `Input/UIActions.h` (`c_UIActionMap`: Submit, Cancel and the
-  four directions on keys, the d-pad and the left stick, with repeat after `c_RepeatDelay` then every `c_RepeatInterval`
-  and stick hysteresis). `Automatic` navigation picks the selectable ahead with the lowest `along + 2 x |across|` between
+- Keyboard and gamepad navigation reads the UI map of the game's input actions ([Input actions](#input-actions)):
+  `UI/Submit`, `UI/Cancel` and the four directions, by their qualified names (a game's own `Left` never interferes),
+  bound by default to keys, the d-pad and the left stick and rebindable like any action. `UIActionState`
+  (`Input/UIActions.h`) adds the repeat, after `c_RepeatDelay` then every `c_RepeatInterval` on unscaled time, and
+  updates also while no canvas exists, so a press is never reported after its update. `Automatic` navigation picks the selectable ahead with the lowest `along + 2 x |across|` between
   centers (screen pixels; ties keep draw order); `Explicit` uses the neighbours; `None` is never navigated to or from.
   The first Submit or direction without a focus focuses the topmost input canvas's `FirstSelected`, else its top-left
   selectable. A focused slider steps along its direction by `KeyboardStep` (0: a tenth of the range).

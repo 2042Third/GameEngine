@@ -1,22 +1,24 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Input/Input.h"
-#include "Strata/Input/InputNames.h"
+#include "Strata/Input/InputActions.h"
+#include "Strata/Input/InputActionSet.h"
 #include "Strata/Input/UIActions.h"
 
 #include <limits>
 #include <string>
-#include <string_view>
+#include <vector>
 
 using namespace Strata;
 
 namespace
 {
 
-	// Starts an input frame and updates the actions with it.
+	// Starts an input frame, lets the input actions take it (as Application does) and updates the UI actions with it.
 	void Step(UIActionState& actions, float deltaSeconds)
 	{
 		Input::BeginFrame();
+		InputActions::Update();
 		actions.Update(deltaSeconds);
 	}
 
@@ -24,37 +26,32 @@ namespace
 
 TEST_SUITE("Core.UIActions")
 {
-	TEST_CASE("The UI action map lists every action in order, with controls Input knows")
+	TEST_CASE("The UI map's defaults list every action in order, as Buttons with the controls the game UI navigated with")
 	{
+		const std::vector<InputAction>& defaults = InputActionSet::GetDefaultUIActions();
+		REQUIRE(defaults.size() == c_UIActionCount);
 		for (uint32_t action = 0; action < c_UIActionCount; action++)
 		{
-			const UIActionBinding& entry = c_UIActionMap[action];
-			CHECK(std::string(entry.Action) == GetUIActionName(static_cast<UIAction>(action))); // Strings: MSVC's doctest prints no string_view
-			uint32_t sticks = 0;
-			for (const std::string_view binding : entry.Bindings)
-			{
-				if (binding.empty())
-					continue;
-				INFO("Binding ", std::string(binding)); // A string: doctest prints no std::string_view without <ostream>
-				if (binding.starts_with("Key/"))
-				{
-					CHECK(InputNames::FindKey(binding.substr(4)).has_value());
-					continue;
-				}
-				REQUIRE(binding.starts_with("Gamepad/"));
-				const std::string_view name = binding.substr(8);
-				if (name.ends_with('+') || name.ends_with('-'))
-				{
-					sticks++;
-					CHECK(InputNames::FindGamepadAxis(name.substr(0, name.size() - 1)).has_value());
-				}
-				else
-				{
-					CHECK(InputNames::FindGamepadButton(name).has_value());
-				}
-			}
-			CHECK(sticks <= 1);
+			const UIAction uiAction = static_cast<UIAction>(action);
+			CHECK(defaults[action].Name == GetUIActionName(uiAction));
+			CHECK(std::string(GetUIActionQualifiedName(uiAction)) == std::string("UI/") + GetUIActionName(uiAction));
+			CHECK(defaults[action].Kind == InputActionKind::Button);
+			for (const InputBinding& binding : defaults[action].Bindings)
+				CHECK(binding.FitsKind(InputActionKind::Button));
 		}
+		const auto texts = [&defaults](UIAction action)
+		{
+			std::vector<std::string> bindings;
+			for (const InputBinding& binding : defaults[static_cast<size_t>(action)].Bindings)
+				bindings.push_back(binding.ToString());
+			return bindings;
+		};
+		CHECK(texts(UIAction::Submit) == std::vector<std::string> { "Key/Enter", "Key/KPEnter", "Key/Space", "Gamepad/A" });
+		CHECK(texts(UIAction::Cancel) == std::vector<std::string> { "Key/Escape", "Gamepad/B" });
+		CHECK(texts(UIAction::Up) == std::vector<std::string> { "Key/Up", "Gamepad/DPadUp", "Gamepad/LeftY+" });
+		CHECK(texts(UIAction::Down) == std::vector<std::string> { "Key/Down", "Gamepad/DPadDown", "Gamepad/LeftY-" });
+		CHECK(texts(UIAction::Left) == std::vector<std::string> { "Key/Left", "Gamepad/DPadLeft", "Gamepad/LeftX-" });
+		CHECK(texts(UIAction::Right) == std::vector<std::string> { "Key/Right", "Gamepad/DPadRight", "Gamepad/LeftX+" });
 	}
 
 	TEST_CASE("A held key presses its action once, repeats after the delay and then at the interval")

@@ -181,6 +181,10 @@ namespace Strata
 
 	void GameUISystem::OnUpdate(Timestep)
 	{
+		// Menus work at time scale 0: everything here runs on unscaled time. The actions follow the input also while there is no
+		// UI, so a press from before a canvas appeared is not reported as this update's (UI::IsActionPressed).
+		const float deltaTime = m_Scene.GetUnscaledDeltaTime();
+		m_Actions.Update(deltaTime);
 		if (m_CanvasStorage->empty())
 		{
 			// No UI: the game gets every click (one storage-size check per frame).
@@ -205,13 +209,10 @@ namespace Strata
 				Input::SetKeyboardCapture(false);
 		}
 
-		// Menus work at time scale 0: everything here runs on unscaled time.
-		const float deltaTime = m_Scene.GetUnscaledDeltaTime();
 		GameUIScene& ui = GameUIScene::Get(m_Scene);
 		const UIInputScreen screen = GameUIScene::GetInputScreen();
 		RefreshViews(ui, screen.Screen);
 		const bool layoutChanged = m_HitTester.Update(ui, m_Views);
-		m_Actions.Update(deltaTime);
 
 		// A focus that became unusable (disabled, hidden, gone) is dropped.
 		if (m_Focused != entt::null)

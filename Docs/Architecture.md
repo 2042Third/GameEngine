@@ -231,8 +231,8 @@ frees it and Ctrl+P stops the game) and Shift+F1 frees it. `InputNames` maps key
 the `input.*` commands. Text typed in an input frame (`GetTypedText`: the window's character events, `ProcessText`, and
 `SimulateText`) comes as UTF-8, at most 1,024 bytes a frame. Pointer capture (`SetPointerCapture`, which the game UI's
 system sets while the UI owns the pointer) hides mouse buttons and scrolling from gameplay queries; `GetPointerState`
-reads the pointer regardless. `UIActions.h` maps keys, gamepad buttons and stick directions to the game UI's fixed
-actions (Submit, Cancel, Up, Down, Left, Right) with key repeat and stick hysteresis. Input actions
+reads the pointer regardless. `UIActions.h` reads the game UI's actions (Submit, Cancel, Up, Down, Left, Right: the
+reserved map `UI` of the input actions) and repeats held ones. Input actions
 (`InputActionSet`, `InputActions`) are the game's named controls: maps of Button, Axis and Vector2 actions bound to keys,
 mouse buttons, gamepad controls and composites, the project settings section `Input.Actions` (read through
 `IProjectSettings`, the default set without one), evaluated once per input frame in Application's Input stage after the
@@ -2979,9 +2979,9 @@ pointer is the UI's while a press that started over a target is held and while i
 `Input::SetPointerCapture` hides mouse buttons and scrolling from gameplay (`Input::GetPointerState` reads them for the
 UI), and a press that started elsewhere stays the game's until its release. Buttons click on a release over the button
 the press started on; toggles flip (one on per group); sliders follow the pointer while dragged and snap to whole
-numbers. Values change through `registry.patch` (the running scene, without undo). The fixed action set
-(`c_UIActionMap`: Submit, Cancel and four directions on keys, the d-pad and the left stick with hysteresis, repeating after
-0.4 s every 0.1 s) moves the focus: explicit neighbours, or automatically the selectable ahead with the lowest along + 2 x
+numbers. Values change through `registry.patch` (the running scene, without undo). The UI map of the game's input actions
+(`UI/Submit`, `UI/Cancel` and four directions, by default on keys, the d-pad and the left stick with hysteresis, rebindable;
+`UIActionState` repeats them after 0.4 s every 0.1 s, and follows them also while no canvas exists) moves the focus: explicit neighbours, or automatically the selectable ahead with the lowest along + 2 x
 across distance between centers. Selectable states (disabled, pressed, hovered, focused, normal) fade their tints over
 unscaled time (`Scene::GetUnscaledDeltaTime`, which time scale 0 does not stop), and only selectables showing a state
 keep a record, so an idle frame does no work. Events (`IUIEvents`: click, value changed, focus changed) are dispatched

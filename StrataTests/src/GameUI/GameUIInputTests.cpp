@@ -6,7 +6,11 @@
 #include "Strata/GameUI/GameUIHitTest.h"
 #include "Strata/GameUI/GameUIScene.h"
 #include "Strata/GameUI/GameUISystem.h"
+#include "Strata/Core/ProjectSettings.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Input/Input.h"
+#include "Strata/Input/InputActions.h"
+#include "Strata/Input/InputActionSet.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
@@ -117,9 +121,11 @@ namespace
 			CHECK(events->AddUIEventListener([this](const UIEventInfo& event) { Events.push_back(event); }) != 0);
 		}
 
+		// An input frame as Application runs one: the input actions take the frame's input before the scene updates.
 		void Frame(float deltaTime = c_FrameTime)
 		{
 			Input::BeginFrame();
+			InputActions::Update();
 			Target.OnUpdateRuntime(deltaTime);
 		}
 
@@ -987,6 +993,63 @@ TEST_SUITE("GameUI.Navigation")
 		scene.Frame();
 		CHECK(scene.Events.size() == count);
 		CHECK(scene.Focused() == "Toggle");
+	}
+
+	TEST_CASE("Rebinding Submit to another key submits with it")
+	{
+		// The project binds Submit to J alone (validated through a local registry: the process registers the section with its
+		// editor page).
+		SettingsRegistry registry;
+		REQUIRE(registry.Register(InputActionSet::MakeSection()));
+		ProjectSettingsValues settings;
+		std::string error;
+		const nlohmann::json actions = { { "Maps", nlohmann::json::array({ { { "Name", "UI" }, { "Actions", nlohmann::json::array({
+			{ { "Name", "Submit" }, { "Bindings", { "Key/J" } } } }) } } }) } };
+		REQUIRE_MESSAGE(settings.Set(InputActionSet::c_SectionId, actions, registry, &error), error);
+		EngineServices::ScopedProvider<IProjectSettings> provider(settings);
+
+		UIInputScene scene;
+		scene.AddButton(scene.Canvas, "Button", { 100.0f, 100.0f }, { 200.0f, 100.0f });
+		scene.Play();
+		REQUIRE(scene.System().SetFocus(scene.Target.FindEntityByName("Button")));
+		scene.Frame();
+		scene.Events.clear();
+		scene.Key(Key::Enter);
+		CHECK(scene.Count(UIEventType::Click) == 0);
+		scene.Key(Key::J);
+		CHECK(scene.Count(UIEventType::Click) == 1);
+
+		// A player's binding replaces the project's.
+		REQUIRE(InputActions::SetBindings("UI/Submit", std::vector<InputBinding> { *InputBinding::Parse("Gamepad/X") }));
+		scene.Key(Key::J);
+		CHECK(scene.Count(UIEventType::Click) == 1);
+		Input::SimulateGamepadButton(0, GamepadButton::X, true);
+		scene.Frame();
+		Input::SimulateGamepadButton(0, GamepadButton::X, false);
+		scene.Frame();
+		CHECK(scene.Count(UIEventType::Click) == 2);
+	}
+
+	TEST_CASE("UI actions do not stay pressed while no canvas exists")
+	{
+		UIInputScene scene;
+		scene.Play();
+		const uint32_t submit = static_cast<uint32_t>(UIAction::Submit);
+		Input::SimulateKey(Key::Enter, true);
+		scene.Frame();
+		CHECK(scene.System().IsActionPressed(submit));
+		// The last canvas goes while Enter is held: the press was that update's, not every later one's.
+		scene.Target.DestroyEntity(scene.Canvas);
+		scene.Frame();
+		CHECK_FALSE(scene.System().IsActionPressed(submit));
+		CHECK(scene.System().IsActionDown(submit));
+		Input::SimulateKey(Key::Enter, false);
+		scene.Frame();
+		CHECK_FALSE(scene.System().IsActionDown(submit));
+		// A press while there is no UI is still reported, for scripts that read UI::IsActionPressed.
+		Input::SimulateKey(Key::Enter, true);
+		scene.Frame();
+		CHECK(scene.System().IsActionPressed(submit));
 	}
 }
 
