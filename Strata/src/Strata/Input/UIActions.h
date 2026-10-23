@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace Strata
@@ -28,7 +29,9 @@ namespace Strata
 	// The UI actions of the current input frame, read from InputActions (the UI map, by qualified name, so a game's own Left
 	// never interferes) once per update: down, pressed (this update) and repeated (pressed, then again after c_RepeatDelay
 	// seconds held and every c_RepeatInterval after that). Deterministic for given input and deltas (the game UI passes
-	// unscaled time, so menus repeat at time scale 0). Main thread only.
+	// unscaled time, so menus repeat at time scale 0). It finds the actions again only when the set changes, and an update
+	// in which no action was held and nothing changed (InputActions::GetStateVersion) costs a comparison: every scene
+	// updates its UI, also without a canvas. Main thread only.
 	class UIActionState
 	{
 	public:
@@ -54,6 +57,10 @@ namespace Strata
 		static size_t Index(UIAction action) { return static_cast<size_t>(action); }
 	private:
 		std::array<ActionRecord, c_UIActionCount> m_Actions = {};
+		std::array<std::optional<uint32_t>, c_UIActionCount> m_Indices = {}; // In the set of m_SetVersion (InputActions::FindIndex)
+		uint64_t m_SetVersion = 0;   // InputActions::GetVersion when m_Indices were found; 0: never
+		uint64_t m_StateVersion = 0; // InputActions::GetStateVersion at the last full update; 0: none
+		bool m_Active = false;       // Whether an action was down, pressed or repeated in the last update
 	};
 
 }

@@ -38,11 +38,25 @@ namespace Strata
 
 	void UIActionState::Update(float deltaSeconds)
 	{
+		// Nothing held and nothing changed since the last update: this one would read the same.
+		const uint64_t stateVersion = InputActions::GetStateVersion();
+		if (stateVersion == m_StateVersion && !m_Active)
+			return;
+		m_StateVersion = stateVersion;
+		const uint64_t setVersion = InputActions::GetVersion();
+		if (setVersion != m_SetVersion)
+		{
+			// Every set has the UI map's actions (InputActionSet::FromJson adds them), so the lookups find them.
+			m_SetVersion = setVersion;
+			for (uint32_t action = 0; action < c_UIActionCount; action++)
+				m_Indices[action] = InputActions::FindIndex(GetUIActionQualifiedName(static_cast<UIAction>(action)));
+		}
+
 		const float delta = std::isfinite(deltaSeconds) && deltaSeconds > 0.0f ? deltaSeconds : 0.0f;
+		m_Active = false;
 		for (uint32_t action = 0; action < c_UIActionCount; action++)
 		{
-			// Every set has the UI map's actions (InputActionSet::FromJson adds them), so the lookup finds them.
-			const InputActionState state = InputActions::GetState(GetUIActionQualifiedName(static_cast<UIAction>(action))).value_or(InputActionState());
+			const InputActionState state = m_Indices[action] ? InputActions::GetStateAt(*m_Indices[action]) : InputActionState();
 			ActionRecord& record = m_Actions[action];
 			record.Pressed = state.Pressed;
 			record.Down = state.Down;
@@ -68,12 +82,15 @@ namespace Strata
 			{
 				record.HeldTime = 0.0f;
 			}
+			m_Active = m_Active || record.Down || record.Pressed || record.Repeated;
 		}
 	}
 
 	void UIActionState::Reset()
 	{
 		m_Actions = {};
+		m_StateVersion = 0;
+		m_Active = false;
 	}
 
 }

@@ -1021,7 +1021,8 @@ where the composition root starts registering the section. *Accept:*
   `InputActionSet::FromJson/ToJson/FindAction/GetQualifiedName/IsReservedAction/MakeSection/GetDefaultUIActions`,
   `InputPlayerBindings::Read/Write` for `InputBindings.json`); `Input/InputActions` (static: `Update`, `Reset`, which
   `Input::Reset` calls, `ResetSession`; `GetState`, `IsDown`, `IsPressed`, `IsReleased`, `GetValue` and
-  `GetQualifiedName` by name with the reason on failure; `SetMapEnabled`/`IsMapEnabled`; `GetBindings`, `SetBindings`,
+  `GetQualifiedName` by name with the reason on failure; `FindIndex`/`GetStateAt` and `GetStateVersion` for code that
+  reads the same actions every update; `SetMapEnabled`/`IsMapEnabled`; `GetBindings`, `SetBindings`,
   `ResetBindings` (empty name: every action), `GetPlayerBindings` (those that apply, for S9's marks), `SaveBindings`,
   `LoadBindings`; `SimulateAction(name, down, value)`, `ReleaseAllSimulated`, `ClearSimulated` for S9's `input.action`;
   `BeginCapture(InputCaptureDevices { Keyboard, Mouse, Gamepad })`, `IsCapturing`, `TakeCapturedBinding` (the text once),

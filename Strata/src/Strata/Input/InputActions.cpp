@@ -88,6 +88,7 @@ namespace Strata
 			uint64_t ProviderVersion = 0;
 			InputActionSet Set;
 			uint64_t Version = 0;
+			uint64_t StateVersion = 1; // GetStateVersion
 
 			std::vector<bool> MapEnabled;
 			std::vector<uint32_t> MapFirstAction;
@@ -204,6 +205,7 @@ namespace Strata
 			}
 			s_State.SimulatedQueue = std::move(queue);
 			s_State.Version++;
+			s_State.StateVersion++;
 		}
 
 		// Reads the project's set again when the provider or its settings changed.
@@ -416,6 +418,7 @@ namespace Strata
 		void Evaluate()
 		{
 			ST_PROFILE_FUNCTION();
+			s_State.StateVersion++;
 			for (ActionRecord& record : s_State.Actions)
 				record.SimulatedPressed = false;
 			for (const SimulatedEvent& event : s_State.SimulatedQueue)
@@ -552,6 +555,7 @@ namespace Strata
 
 		void FinishCapture(const InputControl& control)
 		{
+			s_State.StateVersion++;
 			InputBinding binding;
 			binding.Controls[0] = control;
 			s_State.Capture.Active = false;
@@ -653,7 +657,12 @@ namespace Strata
 
 	void InputActions::Reset()
 	{
+		// The versions go on counting: code that kept an index or a state version notices the reset.
+		const uint64_t version = s_State.Version;
+		const uint64_t stateVersion = s_State.StateVersion;
 		s_State = ActionsState();
+		s_State.Version = version;
+		s_State.StateVersion = stateVersion + 1;
 	}
 
 	void InputActions::ResetSession()
@@ -727,6 +736,26 @@ namespace Strata
 		return s_State.Set.GetQualifiedName(*location);
 	}
 
+	std::optional<uint32_t> InputActions::FindIndex(std::string_view action, std::string* outError)
+	{
+		const ActionRecord* record = FindRecord(action, outError);
+		if (!record)
+			return std::nullopt;
+		return static_cast<uint32_t>(record - s_State.Actions.data());
+	}
+
+	InputActionState InputActions::GetStateAt(uint32_t index)
+	{
+		if (index >= s_State.Actions.size())
+			return {};
+		return GetReported(s_State.Actions[index]);
+	}
+
+	uint64_t InputActions::GetStateVersion()
+	{
+		return s_State.StateVersion;
+	}
+
 	bool InputActions::SetMapEnabled(std::string_view map, bool enabled, std::string* outError)
 	{
 		EnsureParsed();
@@ -738,6 +767,7 @@ namespace Strata
 			return false;
 		}
 		s_State.MapEnabled[*index] = enabled;
+		s_State.StateVersion++;
 		return true;
 	}
 
@@ -910,6 +940,7 @@ namespace Strata
 		if (!devices.Keyboard && !devices.Mouse && !devices.Gamepad)
 			return false;
 		EnsureParsed();
+		s_State.StateVersion++;
 		s_State.Capture = CaptureState();
 		s_State.Capture.Active = true;
 		s_State.Capture.Devices = devices;
@@ -931,6 +962,7 @@ namespace Strata
 
 	void InputActions::CancelCapture()
 	{
+		s_State.StateVersion++;
 		s_State.Capture = CaptureState();
 	}
 

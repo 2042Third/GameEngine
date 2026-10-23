@@ -74,6 +74,14 @@ namespace Strata
 		// "<Map>/<Action>" as the set spells it, or nullopt with the reason.
 		static std::optional<std::string> GetQualifiedName(std::string_view action, std::string* outError = nullptr);
 
+		// For code that reads the same actions every update (the game UI): an action's index in the set in use, valid until
+		// GetVersion changes, and the state at an index as GetState reports it (an index out of range reads as up).
+		static std::optional<uint32_t> FindIndex(std::string_view action, std::string* outError = nullptr);
+		static InputActionState GetStateAt(uint32_t index);
+		// Changes whenever what an action reports may have changed: an input frame evaluated, the set or the players' bindings
+		// replaced, a map enabled or disabled, a capture begun or ended. Never 0.
+		static uint64_t GetStateVersion();
+
 		// Maps start enabled as the set says; a disabled map's actions read as up until it is enabled again.
 		static bool SetMapEnabled(std::string_view map, bool enabled, std::string* outError = nullptr);
 		// Nullopt for a map the set does not have.

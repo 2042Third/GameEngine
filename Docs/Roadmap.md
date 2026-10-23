@@ -788,7 +788,11 @@ Open items and deferrals later waves own:
     `FrameWorkMedianMs` 1.434, `FrameWorkP95Ms` 2.710 and `GPUBusyMedianMs` 4.369 over 958 frames; the frame interval,
     8.3 ms, is the display's).
   - Wave 6's `project-settings`: `Perf.Input.Actions256` (an input frame evaluating 256 actions of 4 bindings with every
-    gamepad connected) is provisional against its 20 us target (Mac median 6.76 us).
+    gamepad connected) is provisional against its 20 us target (Mac median 6.76 us). Input actions' Mac A/B against the
+    build before them (3 interleaved pairs, ratios of medians): `Perf.Scene.IdlePlayFrame1M` 1.04 (0.057 to 0.059 us, the
+    game UI's check for changed actions), `Perf.GameUI.IdleFrame10k` 0.82, `Layout10k` 1.00, `PerfGPU.GameUI.Render10k`
+    1.02 and `RenderIdle10k` 0.93; the editor frames (`PerfGPU.Editor.{Edit,Play}FrameNested{100k,1M}`, 0.82-1.04) wait
+    for the display on the Mac and are for the reference machine to judge.
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
 

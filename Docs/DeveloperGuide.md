@@ -1045,7 +1045,10 @@ section; the composition root runs it first, and Input is a module every engine 
   changed, keeping the state of actions that keep their qualified name, so an edit reaches a running game in its next
   frame without pressing held actions again; without a provider or a section the default set (the UI map) applies, so
   every program evaluates the UI map. The compiled form is flat arrays; `Perf.Input.Actions256` measures 256 actions of
-  4 bindings.
+  4 bindings. Queries by name hash the name; code that reads the same actions every update keeps their indices
+  (`FindIndex`, valid until `GetVersion` changes; `GetStateAt`) and skips updates while `GetStateVersion` is unchanged and
+  nothing is held, as `UIActionState` does: every scene updates its UI, also without a canvas
+  (`Perf.Scene.IdlePlayFrame1M`).
 - **In-process loops.** Code that starts input frames itself (the feature test's `PlayFeatureScene`, tests that drive
   actions) calls `InputActions::Update()` where Application does, after `Input::BeginFrame` and its simulated input, and
   provides `IProjectSettings` when it runs a project. `Input::Reset` resets the actions too (`InputActions::Reset`).

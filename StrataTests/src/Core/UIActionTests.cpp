@@ -1,9 +1,14 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Core/EngineServices.h"
+#include "Strata/Core/ProjectSettings.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Input/InputActions.h"
 #include "Strata/Input/InputActionSet.h"
 #include "Strata/Input/UIActions.h"
+
+#include <nlohmann/json.hpp>
 
 #include <limits>
 #include <string>
@@ -168,6 +173,50 @@ TEST_SUITE("Core.UIActions")
 		Input::ReleaseSimulatedGamepadAxis(1, GamepadAxis::LeftX);
 		Step(actions, 0.016f);
 		CHECK_FALSE(actions.IsDown(UIAction::Left));
+		Input::Reset();
+	}
+
+	TEST_CASE("The UI actions follow the set when the project changes it, and idle updates read nothing new")
+	{
+		SettingsRegistry registry;
+		REQUIRE(registry.Register(InputActionSet::MakeSection()));
+		ProjectSettingsValues settings;
+		EngineServices::ScopedProvider<IProjectSettings> provider(settings);
+		Input::Reset();
+		UIActionState actions;
+		Input::SimulateKey(Key::Enter, true);
+		Step(actions, 0.016f);
+		CHECK(actions.IsPressed(UIAction::Submit));
+
+		// The UI map moves behind a game's map: every UI action has another place in the set now.
+		const nlohmann::json moved = { { "Maps", nlohmann::json::array({
+			{ { "Name", "Gameplay" }, { "Actions", nlohmann::json::array({ { { "Name", "Jump" }, { "Bindings", { "Key/Escape" } } },
+				{ { "Name", "Fire" }, { "Bindings", { "Key/Enter" } } } }) } },
+			{ { "Name", "UI" } } }) } };
+		std::string error;
+		REQUIRE_MESSAGE(settings.Set(InputActionSet::c_SectionId, moved, registry, &error), error);
+		Step(actions, 0.016f);
+		CHECK(actions.IsDown(UIAction::Submit));
+		CHECK_FALSE(actions.IsPressed(UIAction::Submit));
+		Input::SimulateKey(Key::Escape, true);
+		Step(actions, 0.016f);
+		CHECK(actions.IsPressed(UIAction::Cancel));
+		CHECK(actions.IsDown(UIAction::Submit));
+		Input::SimulateKey(Key::Enter, false);
+		Input::SimulateKey(Key::Escape, false);
+		Step(actions, 0.016f);
+		CHECK_FALSE(actions.IsDown(UIAction::Submit));
+		CHECK_FALSE(actions.IsDown(UIAction::Cancel));
+
+		// Updates without an input frame or a change read what the last one did; a map disabled meanwhile reads as up.
+		Input::SimulateKey(Key::Down, true);
+		Step(actions, 0.016f);
+		CHECK(actions.IsPressed(UIAction::Down));
+		actions.Update(0.016f);
+		CHECK(actions.IsDown(UIAction::Down));
+		CHECK(InputActions::SetMapEnabled("UI", false));
+		actions.Update(0.016f);
+		CHECK_FALSE(actions.IsDown(UIAction::Down));
 		Input::Reset();
 	}
 }
