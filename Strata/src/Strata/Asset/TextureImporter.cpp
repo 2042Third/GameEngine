@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Asset/TextureImporter.h"
 
+#include "Strata/Asset/HDRSun.h"
 #include "Strata/Asset/TextureCooker.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
@@ -182,6 +183,7 @@ namespace Strata
 		json["MaxSize"] = MaxSize;
 		json["FlipVertically"] = FlipVertically;
 		json["FlipGreen"] = FlipGreen;
+		json["RemoveSun"] = RemoveSun;
 		return json;
 	}
 
@@ -241,6 +243,7 @@ namespace Strata
 		settings.GenerateMips = JsonUtils::GetBool(json, "GenerateMips", settings.GenerateMips);
 		settings.FlipVertically = JsonUtils::GetBool(json, "FlipVertically", settings.FlipVertically);
 		settings.FlipGreen = JsonUtils::GetBool(json, "FlipGreen", settings.FlipGreen);
+		settings.RemoveSun = JsonUtils::GetBool(json, "RemoveSun", settings.RemoveSun);
 		const uint64_t maxSize = JsonUtils::GetUInt(json, "MaxSize", settings.MaxSize);
 		if (maxSize > TextureImporter::c_MaxImageDimension)
 			warn(fmt::format("MaxSize {} exceeds the engine limit of {}", maxSize, TextureImporter::c_MaxImageDimension));
@@ -357,6 +360,8 @@ namespace Strata
 			return "HDR textures stay 16-bit float: they are not block-compressed yet";
 		if (setting == "FlipGreen" && values.Usage != TextureUsage::NormalMap)
 			return "Flip Green applies to normal maps only (Usage NormalMap)";
+		if (setting == "RemoveSun" && values.Usage != TextureUsage::HDR)
+			return "Remove Sun applies to HDR environment maps only (Usage HDR)";
 		if (setting == "Quality")
 		{
 			if (values.Usage == TextureUsage::HDR)
@@ -397,7 +402,11 @@ namespace Strata
 				.Tooltip("Store the image upside down (for images whose rows start at the bottom)")
 			.Bool("FlipGreen", defaults.FlipGreen).DisplayName("Flip Green (DirectX normal map)")
 				.Tooltip("Invert the green channel: normal maps made for DirectX (+Y down, names with \"dx\" such as \"rocks_nor_dx_2k\") "
-					"store it the other way round from the OpenGL convention Strata reads");
+					"store it the other way round from the OpenGL convention Strata reads")
+			.Bool("RemoveSun", defaults.RemoveSun).DisplayName("Remove Sun")
+				.Tooltip("Paint the sun's disk out of the sky (with the sky around it), for scenes whose directional light gives the sun's "
+					"light instead: the Sky section's Extract Sun makes that light from this map and turns this on, so the sun does "
+					"not light the scene twice");
 		return properties;
 	}
 
@@ -460,7 +469,7 @@ namespace Strata
 		}
 
 		const TextureImportSettings settings = TextureImportSettings::FromJson(context.Settings, &result.Warnings);
-		Ref<Texture> texture = Decode(*encoded, settings, FileSystem::ToUTF8(context.SourcePath.filename()), outError, context.Cancel);
+		Ref<Texture> texture = Decode(*encoded, settings, FileSystem::ToUTF8(context.SourcePath.filename()), outError, context.Cancel, &result.Warnings);
 		if (!texture)
 			return false;
 
@@ -469,7 +478,7 @@ namespace Strata
 	}
 
 	Ref<Texture> TextureImporter::Decode(std::span<const uint8_t> encoded, const TextureImportSettings& settings, const std::string& debugName, std::string* outError,
-		const std::atomic<bool>* cancel)
+		const std::atomic<bool>* cancel, std::vector<std::string>* outWarnings)
 	{
 		auto fail = [outError, &debugName](const std::string& message) -> Ref<Texture>
 		{
@@ -524,6 +533,18 @@ namespace Strata
 				return fail("decoded size differs from the image header");
 			if (cancelled())
 				return fail(TextureCooker::c_CancelledError);
+			// The sun goes before the resize and the clamp to half floats: both would spread or cut what it gives.
+			if (settings.RemoveSun)
+			{
+				const std::span<float> pixels(decoded.get(), static_cast<size_t>(sourceWidth) * sourceHeight * 4);
+				std::string reason;
+				if (const std::optional<HDRSun::Sun> sun = HDRSun::Find(pixels, sourceWidth, sourceHeight, &reason))
+					HDRSun::Remove(pixels, sourceWidth, sourceHeight, *sun);
+				else if (outWarnings)
+					outWarnings->push_back(fmt::format("Remove Sun found no sun to remove: {}", reason));
+				if (cancelled())
+					return fail(TextureCooker::c_CancelledError);
+			}
 
 			TextureCooker::FloatImage level0;
 			level0.Width = targetSize.x;

@@ -60,6 +60,9 @@ namespace Strata
 		bool FlipVertically = false;
 		// Inverts green, for normal maps of DirectX's convention (+Y down): only with Usage NormalMap.
 		bool FlipGreen = false;
+		// Fills the sun's disk of an equirectangular HDR sky with the sky around it (HDRSun::Remove), for a scene whose
+		// directional light gives the sun's light instead (lighting.extractSun): only with Usage HDR.
+		bool RemoveSun = false;
 
 		nlohmann::json ToJson() const;
 		// Missing or invalid values keep their defaults (each invalid value adds a warning).
@@ -85,9 +88,10 @@ namespace Strata
 		// 5: FlipGreen.
 		uint32_t GetVersion() const override { return 5; }
 		nlohmann::json GetDefaultSettings(const std::filesystem::path& sourcePath) const override;
-		// Usage, MaxSize, Filter, Wrap, GenerateMips, FlipVertically, FlipGreen (TextureImportSettings).
+		// Usage, MaxSize, Filter, Wrap, GenerateMips, FlipVertically, FlipGreen, RemoveSun (TextureImportSettings).
 		std::vector<PropertyInfo> GetSettingsProperties() const override;
-		// Compression has no effect on HDR textures (they stay RGBA16F), Quality none but on color that is compressed.
+		// Compression has no effect on HDR textures (they stay RGBA16F), Quality none but on color that is compressed, FlipGreen
+		// none but on normal maps and RemoveSun none but on HDR textures.
 		std::string GetInactiveReason(std::string_view setting, const nlohmann::json& settings) const override;
 		bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const override;
 		// From the image's header: its pixels decoded (4 bytes each) and their working copies (16 bytes each: the float mip
@@ -107,9 +111,9 @@ namespace Strata
 		// (a Mitchell filter; sRGB color in linear space with alpha weighting, normal maps renormalized per level) and every
 		// level stored in the format ChooseFormat picks (block-compressed on worker threads). Thread-safe; used by model
 		// importers for embedded images too. Fails once `cancel` is set (ImportContext::Cancel), checked after decoding,
-		// between mip levels and between blocks.
+		// between mip levels and between blocks. RemoveSun on an HDR image without a sun adds a warning to `outWarnings`.
 		static Ref<Texture> Decode(std::span<const uint8_t> encoded, const TextureImportSettings& settings, const std::string& debugName,
-			std::string* outError = nullptr, const std::atomic<bool>* cancel = nullptr);
+			std::string* outError = nullptr, const std::atomic<bool>* cancel = nullptr, std::vector<std::string>* outWarnings = nullptr);
 
 		// The stored format of an image with `channels` channels (1 to 4; 2 is gray and alpha) whose alpha is below 255
 		// somewhere (`hasAlpha`):

@@ -8,6 +8,7 @@
 		"GenerateMips": true,
 		"MaxSize": 0,
 		"Quality": "High",
+		"RemoveSun": false,
 		"Usage": "Color",
 		"Wrap": "Repeat"
 	},

@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
+#include "Asset/SyntheticSky.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
@@ -844,7 +845,7 @@ TEST_SUITE("Editor.ImportSettings")
 		// Every setting with what it accepts, for the inspector and for agents.
 		const nlohmann::json info = harness.Run("asset.info", { { "asset", texture } });
 		const nlohmann::json& properties = info["importSettingsProperties"];
-		REQUIRE(properties.size() == 9);
+		REQUIRE(properties.size() == 10);
 		CHECK(properties[0]["Name"] == "Usage");
 		CHECK(properties[0]["Options"] == nlohmann::json { "Color", "NormalMap", "Data", "HDR" });
 		CHECK(properties[1]["Name"] == "Compression");
@@ -853,6 +854,31 @@ TEST_SUITE("Editor.ImportSettings")
 		CHECK(properties[2]["Options"] == nlohmann::json { "High", "Fast" });
 		CHECK(properties[3]["Name"] == "MaxSize");
 		CHECK(harness.Run("asset.info", { { "asset", material } })["importSettingsProperties"].empty());
+	}
+
+	TEST_CASE("asset.setImportSettings takes RemoveSun on an HDR sky and refuses a value that is no boolean")
+	{
+		ImportHarness harness("EditorImportRemoveSun");
+		Tests::SyntheticSun sun;
+		const std::string sky = harness.Add("Textures/Sky.hdr", Tests::EncodeSyntheticSky(256, 128, Tests::MakeSyntheticSky(256, 128, sun)));
+		const nlohmann::json before = harness.Run("asset.info", { { "asset", sky } })["importSettings"];
+		CHECK(before["RemoveSun"] == false);
+		CHECK(before["Usage"] == "HDR");
+
+		const EditorCommandResult wrong = harness.Commands.Execute(harness.Context, "asset.setImportSettings",
+			{ { "asset", sky }, { "settings", { { "RemoveSun", "yes" } } } });
+		CHECK_FALSE(wrong.Success);
+		CHECK(wrong.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(wrong.Error.find("RemoveSun") != std::string::npos);
+		CHECK(harness.Run("asset.info", { { "asset", sky } })["importSettings"] == before);
+
+		const EditorCommandResult result = harness.Finish(harness.Start("asset.setImportSettings", { { "asset", sky }, { "settings", { { "RemoveSun", true } } } }));
+		INFO(result.Error);
+		REQUIRE(result.Success);
+		CHECK(result.Value["importSettings"]["RemoveSun"] == true);
+		CHECK(result.Value["importError"] == "");
+		CHECK(result.Value["importWarnings"].empty());
+		CHECK(harness.Run("asset.info", { { "asset", sky } })["importSettings"]["RemoveSun"] == true);
 	}
 }
 

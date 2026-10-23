@@ -80,7 +80,7 @@ TEST_SUITE("Asset.ImportSettings")
 		const AssetImporter& textures = GetImporter(".png");
 		const std::vector<PropertyInfo> properties = textures.GetSettingsProperties();
 		CHECK(GetNames(properties) == std::vector<std::string> { "Usage", "Compression", "Quality", "MaxSize", "Filter", "Wrap", "GenerateMips",
-			"FlipVertically", "FlipGreen" });
+			"FlipVertically", "FlipGreen", "RemoveSun" });
 		CHECK(GetOptions(Find(properties, "Usage")) == std::vector<std::string> { "Color", "NormalMap", "Data", "HDR" });
 		CHECK(GetOptions(Find(properties, "Compression")) == std::vector<std::string> { "Auto", "Uncompressed" });
 		CHECK(GetOptions(Find(properties, "Quality")) == std::vector<std::string> { "High", "Fast" });

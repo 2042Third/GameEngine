@@ -1,20 +1,25 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
+#include "Asset/SyntheticSky.h"
+#include "Strata/Asset/HDRSun.h"
 #include "Strata/Asset/TextureCooker.h"
 #include "Strata/Asset/TextureImporter.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Renderer/BlockCompression.h"
 #include "TestHelpers.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/packing.hpp>
+#include <nlohmann/json.hpp>
 #include <stb_image_write.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <numbers>
 #include <optional>
 #include <string>
@@ -669,5 +674,93 @@ TEST_SUITE("Asset.TextureImport")
 				CHECK(greenTotal / static_cast<double>(texels) <= (compressed ? 2.0 : 1.0));
 			}
 		}
+	}
+
+	TEST_CASE("RemoveSun is described, off by default, inactive but on HDR textures, and kept by the settings")
+	{
+		TextureImporter importer;
+		const std::vector<PropertyInfo> properties = importer.GetSettingsProperties();
+		const auto property = std::find_if(properties.begin(), properties.end(), [](const PropertyInfo& info) { return info.Name == "RemoveSun"; });
+		REQUIRE(property != properties.end());
+		CHECK(property->Type == PropertyType::Bool);
+		CHECK(property->DisplayName == "Remove Sun");
+		CHECK_FALSE(property->Tooltip.empty());
+		const nlohmann::json empty = nlohmann::json::object();
+		CHECK(std::get<bool>(property->GetValue(&empty)) == false);
+		// Every texture's defaults name it, off.
+		for (const char* source : { "Sky.hdr", "Albedo.png", "Brick_normal.png" })
+		{
+			CAPTURE(source);
+			const nlohmann::json defaults = importer.GetDefaultSettings(source);
+			REQUIRE(defaults.contains("RemoveSun"));
+			CHECK(defaults["RemoveSun"] == false);
+		}
+		for (const char* usage : { "Color", "NormalMap", "Data", "HDR" })
+		{
+			CAPTURE(usage);
+			const nlohmann::json values = { { "Usage", usage }, { "RemoveSun", true } };
+			CHECK(importer.GetInactiveReason("RemoveSun", values).empty() == (std::string(usage) == "HDR"));
+		}
+		TextureImportSettings settings;
+		settings.RemoveSun = true;
+		CHECK(TextureImportSettings::FromJson(settings.ToJson()).RemoveSun);
+		CHECK_FALSE(TextureImportSettings::FromJson(nlohmann::json::object()).RemoveSun);
+	}
+
+	TEST_CASE("RemoveSun leaves no texel of the cooked sky above the sun's threshold, and off cooks the same bytes as before the setting")
+	{
+		constexpr uint32_t c_Width = 1024;
+		constexpr uint32_t c_Height = 512;
+		Tests::SyntheticSun sun;
+		sun.Direction = glm::normalize(glm::vec3(-0.3f, 0.5f, 0.8f));
+		sun.RadiusDegrees = 1.0f;
+		const std::vector<float> sky = Tests::MakeSyntheticSky(c_Width, c_Height, sun);
+		const std::vector<uint8_t> encoded = Tests::EncodeSyntheticSky(c_Width, c_Height, sky);
+		REQUIRE_FALSE(encoded.empty());
+		// The threshold of the sky as the file stores it.
+		std::string error;
+		const std::optional<HDRSun::Image> decoded = HDRSun::Decode(encoded, &error);
+		REQUIRE_MESSAGE(decoded, error);
+		const std::optional<HDRSun::Sun> found = HDRSun::Find(decoded->Pixels, c_Width, c_Height);
+		REQUIRE(found);
+
+		const nlohmann::json plain = { { "Usage", "HDR" }, { "Wrap", "Clamp" } };
+		nlohmann::json removed = plain;
+		removed["RemoveSun"] = true;
+		std::vector<std::string> warnings;
+		const Ref<Texture> without = TextureImporter::Decode(encoded, TextureImportSettings::FromJson(removed), "Sky.hdr", &error, nullptr, &warnings);
+		REQUIRE_MESSAGE(without, error);
+		CHECK(warnings.empty());
+		REQUIRE(without->GetSpecification().Format == TextureFormat::RGBA16F);
+		const std::span<const uint8_t> level = without->GetMipData(0);
+		REQUIRE(level.size() == static_cast<size_t>(c_Width) * c_Height * 8);
+		float brightest = 0.0f;
+		for (size_t texel = 0; texel < static_cast<size_t>(c_Width) * c_Height; texel++)
+		{
+			uint16_t half[4];
+			std::memcpy(half, level.data() + texel * sizeof(half), sizeof(half));
+			const glm::vec3 color(glm::unpackHalf1x16(half[0]), glm::unpackHalf1x16(half[1]), glm::unpackHalf1x16(half[2]));
+			brightest = std::max(brightest, 0.2126f * color.r + 0.7152f * color.g + 0.0722f * color.b);
+		}
+		// Half floats round by up to one part in 2048.
+		CHECK(brightest <= found->Threshold * 1.001f);
+		CHECK(brightest > 1.0f); // The sky stays
+
+		// Off, with or without the key: the bytes of a texture imported before the setting existed.
+		const Ref<Texture> before = Import(encoded, TextureImportSettings::FromJson(plain), "Sky.hdr");
+		nlohmann::json off = plain;
+		off["RemoveSun"] = false;
+		const Ref<Texture> after = Import(encoded, TextureImportSettings::FromJson(off), "Sky.hdr");
+		CHECK(before->Serialize() == after->Serialize());
+		CHECK(before->Serialize() != without->Serialize());
+
+		// A sky without a sun imports as it is, with a warning that says so.
+		const std::vector<float> overcast(static_cast<size_t>(64) * 32 * 4, 1.0f);
+		warnings.clear();
+		const Ref<Texture> plainSky = TextureImporter::Decode(Tests::EncodeSyntheticSky(64, 32, overcast), TextureImportSettings::FromJson(removed), "Overcast.hdr",
+			&error, nullptr, &warnings);
+		REQUIRE_MESSAGE(plainSky, error);
+		REQUIRE(warnings.size() == 1);
+		CHECK(warnings[0].find("Remove Sun found no sun") != std::string::npos);
 	}
 }

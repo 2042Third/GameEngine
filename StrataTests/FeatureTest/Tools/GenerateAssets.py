@@ -16,7 +16,8 @@ only files whose content changed on purpose; the .meta files keep the handles ei
                                    resident, so its finer levels stream)
     Assets/Textures/Bumps_normal.png 16x16 RGB normal map of a grid of bumps (cooks to BC5)
     Assets/Textures/Roughness.png  16x16 grayscale ramp (one-channel data: cooks to BC4, sampled as gray)
-    Assets/Textures/Sky.hdr        16x8 Radiance HDR sky gradient (equirectangular environment map)
+    Assets/Textures/Sky.hdr        16x8 Radiance HDR sky gradient (equirectangular environment map) with a sun: one texel
+                                   of 900 nits (lighting.extractSun makes it a light; its .meta's RemoveSun paints it out)
     Assets/Lighting/Feature/Probe.hdr 32x16 Radiance HDR capture of a room (a reflection probe's, as lighting.bakeProbes
                                    writes them: warm walls, a bright window toward +X, a dark floor)
     Assets/Audio/Blip.wav          0.1 s mono 16-bit PCM tone
@@ -103,6 +104,11 @@ def to_rgbe(color):
     return bytes((int(color[0] * scale), int(color[1] * scale), int(color[2] * scale), exponent + 128))
 
 
+# The sun of Sky.hdr: a texel 34 degrees up (row 2 of 8), far brighter than the sky around it.
+SKY_SUN_TEXEL = (3, 2)
+SKY_SUN_RADIANCE = (900.0, 850.0, 760.0)
+
+
 def make_sky_hdr():
     width, height = 16, 8
     zenith = (0.25, 0.45, 1.2)
@@ -117,7 +123,10 @@ def make_sky_hdr():
         else:
             color = ground
         for x in range(width):
-            # A slightly warmer band around the "sun" columns, so the map is not rotationally symmetric.
+            if (x, y) == SKY_SUN_TEXEL:
+                pixels.extend(to_rgbe(SKY_SUN_RADIANCE))
+                continue
+            # A slightly warmer band around the sun's columns, so the map is not rotationally symmetric.
             warmth = 1.5 if x in (3, 4) and y == 2 else 1.0
             pixels.extend(to_rgbe((color[0] * warmth, color[1] * warmth, color[2])))
     # Rows narrower than 8 pixels or not starting with the 2, 2 run-length marker are stored flat.
