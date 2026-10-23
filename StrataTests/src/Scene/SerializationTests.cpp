@@ -393,6 +393,17 @@ TEST_SUITE("Scene.Serialization")
 		loaded = load({ { "AntiAliasingMethod", 7 } }, warnings);
 		CHECK(CountWarnings(warnings, "AntiAliasingMethod") == 1);
 		CHECK(loaded.AntiAliasingMethod == AntiAliasingMode::FXAA);
+
+		// Automatic exposure's brightest average defaults to 16 (sunlit scenes in real units meter around 15); a file that
+		// stores another value, as 0.5.0 saved its default of 12, keeps it.
+		warnings.clear();
+		loaded = load({ { "AutoExposure", true } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.AutoExposureMaxEV == 16.0f);
+		CHECK(PostProcessComponent().AutoExposureMaxEV == 16.0f);
+		loaded = load({ { "AutoExposure", true }, { "AutoExposureMaxEV", 12 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.AutoExposureMaxEV == 12.0f);
 	}
 
 	TEST_CASE("Directional lights saved before cascade blending load with the default blend; invalid blends are clamped or warn")

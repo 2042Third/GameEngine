@@ -2846,7 +2846,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     renderer's metering of a frame drawn with the current P arrived and kept it: until then the frame's brightest and
     darkest values may have clamped or lost bits, so `viewport.capture` and the project's picture (`ProjectThumbnail`,
     `c_MaxExposureFrames`) wait for it, bounded by 8 frames, and their incomplete frames start TAA's history again.
-  - A real sunlit scene meters around EV 15 (`AutoExposureMaxEV` is registered up to 16); P is then about 2^-17.
+  - A real sunlit scene meters around EV 15, so `AutoExposureMaxEV` defaults to 16, the top of its range (12 until 0.5.0:
+    files that store 12, as 0.5.0 saved the default, keep it; `component.add` and the Basic 3D template give 16, which
+    changes a scene without a `Post Process` only where its metered average exceeds 2^12 nits). P is then about 2^-17.
 
 ### Height fog
 

@@ -144,10 +144,11 @@ namespace Strata
 		TonemapOperator Tonemapper = TonemapOperator::ACES;
 		float Exposure = 0.0f; // Exposure compensation in EV (stops); the only exposure without AutoExposure
 		// Automatic exposure maps the average luminance of the image's non-black pixels to middle gray. The average is
-		// clamped to [2^MinEV, 2^MaxEV] and approached at AutoExposureSpeed per second (0 = instantly).
+		// clamped to [2^MinEV, 2^MaxEV] and approached at AutoExposureSpeed per second (0 = instantly). MaxEV reaches what
+		// a scene lit by a real sun meters (around 15); scenes saved with another value keep it.
 		bool AutoExposure = true;
 		float AutoExposureMinEV = -4.0f;
-		float AutoExposureMaxEV = 12.0f;
+		float AutoExposureMaxEV = 16.0f;
 		float AutoExposureSpeed = 1.5f;
 		bool Bloom = true;
 		float BloomIntensity = 0.04f; // Fraction of the light scattered into the glow
