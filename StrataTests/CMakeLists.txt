@@ -509,11 +509,19 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataRuntime.Identity PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 	set_tests_properties(StrataRuntime.Smoke PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
-	# The exported game's executable (the runtime, renamed) carries the strata mark as its icon (StrataRuntime.rc.in).
+	# The exported game's executable (the runtime, stamped with the game's version: PEResources) carries the strata mark as
+	# its icon when the game has none (StrataRuntime.rc.in), and the game's icon and version information when it has them,
+	# as Windows reads them.
 	if(WIN32)
 		add_test(NAME StrataRuntime.Icon COMMAND StrataTests --strata-test-helper=check-icon "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}"
 			"${PROJECT_SOURCE_DIR}/StrataEditor/Resources/Brand/StrataMark.ico")
-		set_tests_properties(StrataRuntime.Icon PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+		add_test(NAME StrataRuntime.GameIcon COMMAND StrataTests --strata-test-helper=check-icon
+			"${STRATA_EXPORT_TEST_DIR}/BuildIdentity/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" "${CMAKE_CURRENT_SOURCE_DIR}/FeatureTest/Assets/Textures/Checker.png")
+		add_test(NAME StrataRuntime.VersionInfo COMMAND StrataTests --strata-test-helper=check-version
+			"${STRATA_EXPORT_TEST_DIR}/BuildIdentity/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" "FILEVERSION=2.0.1.0" "PRODUCTVERSION=2.0.1.0"
+			"FileDescription=Smoke Adventure" "ProductName=Smoke Adventure" "FileVersion=2.0.1" "ProductVersion=2.0.1" "CompanyName=Strata Tests"
+			"LegalCopyright=(c) 2026 Strata Tests" "InternalName=SmokeGame" "OriginalFilename=SmokeGame.exe")
+		set_tests_properties(StrataRuntime.Icon StrataRuntime.GameIcon StrataRuntime.VersionInfo PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 	endif()
 	# Headless games run at 60 frames per second, so 180 frames are three seconds of game time (and of the clock), not a burst.
 	add_test(NAME StrataRuntime.HeadlessPacing

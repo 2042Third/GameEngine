@@ -2055,7 +2055,13 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `StrataRuntime.Identity` runs a SmokeGame exported with an identity and checks its log and icon.
 - **Windows executables' resources** (`Editor/PEResources`): exported games copy the prebuilt runtime, so the game's
   version information and icon are written into the copy by engine code, without the Win32 API, which builds and is tested
-  on every platform. `PEResources::Read` checks everything it reads of a PE32+ image (AMD64 or ARM64): the MZ header and
+  on every platform. On Windows the export reads the runtime, stamps it in memory (`PEResources::StampGame`: the title,
+  version, company and copyright of the manifest, the project's name, `<Game>.exe` and the icon's images) and writes the
+  game's executable once; a runtime it cannot stamp fails the export with the reason. The subsystem, the manifest and the
+  code stay, so a game without an icon keeps the strata mark (`StrataRuntime.Icon`); `StrataRuntime.GameIcon`
+  (`--strata-test-helper=check-icon <exe> <png>`: every image against `GameIcon`'s conversion of the PNG) and
+  `StrataRuntime.VersionInfo` (`check-version`, through `GetFileVersionInfoW`) check the SmokeGame exported with an
+  identity, and `StrataRuntime.Smoke` runs a stamped game. `PEResources::Read` checks everything it reads of a PE32+ image (AMD64 or ARM64): the MZ header and
   `e_lfanew`, the PE signature, the COFF header, the optional header and its data directory count, the section table
   within `SizeOfHeaders`, each section's data within the file and the resource tree (three levels, each directory reached
   once, entry counts, names and data within the resource section); any violation is an error naming the field, nothing

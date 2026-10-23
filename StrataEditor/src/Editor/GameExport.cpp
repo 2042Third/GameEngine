@@ -3,6 +3,7 @@
 #include "Editor/AssetEdit.h"
 #include "Editor/EditorContext.h"
 #include "Editor/GameIcon.h"
+#include "Editor/PEResources.h"
 
 #include <Strata/Asset/Asset.h>
 #include <Strata/Core/FileSystem.h>
@@ -591,11 +592,12 @@ namespace Strata
 				}
 				GameExportResult result;
 				// The icon first: an image that does not decode fails the export before the pack is written.
+				std::optional<GameIcon::Images> icon;
 				std::optional<std::vector<uint8_t>> iconPNG;
 				if (!data->IconSource.empty())
 				{
 					std::string iconError;
-					const std::optional<GameIcon::Images> icon = GameIcon::ConvertFile(data->IconSource, &iconError);
+					icon = GameIcon::ConvertFile(data->IconSource, &iconError);
 					if (icon)
 						iconPNG = GameIcon::EncodePNG(icon->GetLargest(), &iconError);
 					if (!iconPNG)
@@ -660,11 +662,38 @@ namespace Strata
 				if (options.IncludeRuntime)
 				{
 					result.Executable = options.Directory / FileSystem::FromUTF8(GetExecutableFileName(data->FileName));
+#if defined(ST_PLATFORM_WINDOWS)
+					// A Windows game shows its version and icon in Explorer, the taskbar and its window from its executable's
+					// resources: the runtime is stamped in memory and written once (Editor/PEResources).
+					const std::optional<std::vector<uint8_t>> runtime = FileSystem::ReadBytes(data->Runtime);
+					if (!runtime)
+						return end(GameExportState::Failed, fmt::format("Could not read the runtime '{}'", FileSystem::ToUTF8(data->Runtime)));
+					PEResources::GameVersionInfo version;
+					version.Title = data->Manifest.GetDisplayTitle();
+					version.Version = data->Manifest.Version;
+					version.Company = data->Manifest.Company;
+					version.Copyright = data->Manifest.Copyright;
+					version.InternalName = data->Manifest.Name;
+					version.OriginalFilename = GetExecutableFileName(data->FileName);
+					std::string stampError;
+					const std::optional<std::vector<uint8_t>> game = PEResources::StampGame(*runtime, version, icon ? &*icon : nullptr, &stampError);
+					if (!game)
+					{
+						return end(GameExportState::Failed, fmt::format("Could not write the game's version and icon into the runtime '{}': {}",
+							FileSystem::ToUTF8(data->Runtime), stampError));
+					}
+					if (!FileSystem::WriteBytes(result.Executable, *game))
+					{
+						return end(GameExportState::Failed, fmt::format("{} (is the game running from there? close it first)",
+							DescribeWriteFailure("the game's executable", result.Executable)));
+					}
+#else
 					if (!FileSystem::Copy(data->Runtime, result.Executable, true))
 					{
 						return end(GameExportState::Failed, fmt::format("{} from '{}' (is the game running from there? close it first)",
 							DescribeWriteFailure("the runtime", result.Executable), FileSystem::ToUTF8(data->Runtime)));
 					}
+#endif
 					if (!FileSystem::Copy(data->Runtime.parent_path() / c_NoticesFile, options.Directory / c_NoticesFile, true))
 						return end(GameExportState::Failed, fmt::format("Could not copy '{}'", c_NoticesFile));
 #if !defined(ST_PLATFORM_WINDOWS)

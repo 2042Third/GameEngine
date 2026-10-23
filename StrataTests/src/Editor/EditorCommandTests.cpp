@@ -5,6 +5,8 @@
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/PEResources.h"
+#include "Editor/TestPEImage.h"
 #include "Editor/UndoStack.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "TestHelpers.h"
@@ -25,8 +27,11 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneSerializer.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <utility>
+#include <vector>
 
 using namespace Strata;
 
@@ -993,13 +998,37 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Error("project.export", { { "directory", "relative/path" }, { "includeRuntime", false } }).find("absolute") != std::string::npos);
 		CHECK(harness.Error("project.export", { { "directory", FileSystem::ToUTF8(output) }, { "runtime", FileSystem::ToUTF8(directory / "Missing.exe") } }).find("runtime") != std::string::npos);
 
-		// Any file can stand in for the runtime executable: it is copied and named after the game, with the notices.
+		// Any file can stand in for the runtime executable: it is copied and named after the game, with the notices. On Windows
+		// it must be an executable, which the export writes the game's version into (PEResources).
 		REQUIRE(FileSystem::WriteText(directory / "FakeRuntime.bin", "runtime"));
 		CHECK(harness.Error("project.export", { { "directory", FileSystem::ToUTF8(directory / "WithRuntime") }, { "runtime", FileSystem::ToUTF8(directory / "FakeRuntime.bin") } })
 			.find("ThirdPartyNotices") != std::string::npos);
 		REQUIRE(FileSystem::WriteText(directory / "ThirdPartyNotices.md", "notices"));
+#if defined(ST_PLATFORM_WINDOWS)
+		CHECK(harness.Error("project.export", { { "directory", FileSystem::ToUTF8(directory / "WithRuntime") }, { "runtime", FileSystem::ToUTF8(directory / "FakeRuntime.bin") } })
+			.find("Could not write the game's version and icon into the runtime") != std::string::npos);
+		REQUIRE(FileSystem::WriteBytes(directory / "FakeRuntime.bin", Tests::BuildTestPEImage()));
+#endif
 		const nlohmann::json withRuntime = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.export", { { "directory", FileSystem::ToUTF8(directory / "WithRuntime") }, { "runtime", FileSystem::ToUTF8(directory / "FakeRuntime.bin") } });
+#if defined(ST_PLATFORM_WINDOWS)
+		const std::optional<std::vector<uint8_t>> executable = FileSystem::ReadBytes(FileSystem::FromUTF8(withRuntime["executable"].get<std::string>()));
+		REQUIRE(executable);
+		std::string stampError;
+		const std::optional<std::vector<PEResources::Resource>> resources = PEResources::Read(*executable, &stampError);
+		REQUIRE_MESSAGE(resources, stampError);
+		const auto version = std::find_if(resources->begin(), resources->end(), [](const PEResources::Resource& resource)
+		{
+			return resource.Type.Number == PEResources::c_TypeVersion && resource.Name.Number == PEResources::c_VersionResource;
+		});
+		REQUIRE(version != resources->end());
+		// A game without a title or version shows its project's name and 1.0.0.
+		const PEResources::GameVersionInfo expected { "My Game!", "1.0.0", "", "", "My Game!", "My Game_.exe" };
+		const std::optional<std::vector<uint8_t>> expectedData = PEResources::BuildVersionInfo(expected);
+		REQUIRE(expectedData);
+		CHECK(version->Data == *expectedData);
+#else
 		CHECK(FileSystem::ReadText(FileSystem::FromUTF8(withRuntime["executable"].get<std::string>())) == "runtime");
+#endif
 		CHECK(FileSystem::FromUTF8(withRuntime["executable"].get<std::string>()).stem() == "My Game_");
 		CHECK(FileSystem::ReadText(directory / "WithRuntime" / "ThirdPartyNotices.md") == "notices");
 
