@@ -830,10 +830,11 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		FIXTURES_REQUIRED "StrataOpenWorldExport;StrataPerfResults"
 		ENVIRONMENT "STRATA_OPEN_WORLD_GAME=${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX}")
 	# The Third-Person Adventure: the main menu's Play loads the course (Game::LoadScene); the robot walks where the camera looks
-	# (its animator in Walk or Run while it moves, Idle after), with W and with the left stick pushed forward (its input
-	# actions), the right stick pushed up looks up, and it jumps, pushes the crate, collects a coin, pauses at time scale 0
-	# and saves a setting from the pause menu, and completes the course at the goal. The exported games wait in the main menu
-	# until its attract mode loads the course from the cooked pack, behind the loading scene, and walks to a coin.
+	# (its animator in Walk or Run while it moves, Idle after), with W and, back at its start, with the left stick pushed
+	# forward (its input actions; neither walk reaches the first coin, so the coin it collects later is its first), the right
+	# stick pushed up looks up, and it jumps, pushes the crate, collects a coin, pauses at time scale 0 and saves a setting
+	# from the pause menu, and completes the course at the goal. The exported games wait in the main menu until its attract
+	# mode loads the course from the cooked pack, behind the loading scene, and walks to a coin.
 	add_test(NAME StrataEditor.ThirdPerson
 		COMMAND "${CMAKE_COMMAND}"
 			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
