@@ -503,15 +503,21 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		CHECK(reason->find("changed after the scripts were built") != std::string::npos);
 		CHECK(harness.Run("script.status")["playBuildsFirst"].is_string());
 
-		// play.start answers once the build finished and the game plays.
+		// play.start answers once the build finished and the game plays; paused, before its first step.
 		const uint64_t buildsBefore = harness.Context.GetScriptBuilder().GetLastResult().ID;
-		const EditorCommandResult played = harness.Complete("play.start");
+		const EditorCommandResult played = harness.Complete("play.start", { { "paused", true } });
 		REQUIRE_MESSAGE(played.Success, played.Error);
 		CHECK(harness.Context.IsPlaying());
 		CHECK(harness.Context.GetScriptBuilder().GetLastResult().ID == buildsBefore + 1);
 		REQUIRE(played.Value.contains("built"));
 		CHECK(played.Value["built"]["reason"] == *reason);
+		CHECK(played.Value["paused"] == true);
 		CHECK(harness.Context.GetPlayBuildID() == 0);
+		// Updates of a paused game run no step.
+		for (int update = 0; update < 3; update++)
+			harness.Context.Update(Timestep(1.0f / 60.0f));
+		CHECK(harness.Context.IsPaused());
+		CHECK(harness.Context.GetFixedStepCount() == 0);
 		harness.Run("play.stop");
 
 		// The build compiled what changed: although it left the module as it was (as an up-to-date build does), the next play
