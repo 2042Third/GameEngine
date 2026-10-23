@@ -4,6 +4,8 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Process.h"
 #include "Strata/Core/UUID.h"
+#include "Strata/Renderer/ImageReader.h"
+#include "Strata/Renderer/Renderer.h"
 
 #include <doctest/doctest.h>
 #include <nlohmann/json.hpp>
@@ -22,8 +24,10 @@
 #if defined(ST_PLATFORM_WINDOWS)
 	#include <Windows.h>
 	#include <winioctl.h>
+	#include <winver.h>
 
 	#include <cstring>
+	#include <cwchar>
 	#include <string>
 #else
 	#include <sys/mman.h>
@@ -309,6 +313,124 @@ namespace Strata::Tests
 		return created != FALSE;
 	}
 
+	namespace
+	{
+
+		// The resource functions of an executable loaded as a data file (its resources readable, nothing of it run).
+		class ResourceModule
+		{
+		public:
+			explicit ResourceModule(const std::filesystem::path& executable)
+				: m_Module(LoadLibraryExW(executable.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE)), m_Error(GetLastError())
+			{
+			}
+			~ResourceModule()
+			{
+				if (m_Module)
+					FreeLibrary(m_Module);
+			}
+			ResourceModule(const ResourceModule&) = delete;
+			ResourceModule& operator=(const ResourceModule&) = delete;
+
+			HMODULE Get() const { return m_Module; }
+			std::string DescribeLoadError() const { return "it cannot be loaded as a data file (error " + std::to_string(m_Error) + ")"; }
+
+			// A resource's bytes, nothing when it is missing.
+			std::optional<std::vector<uint8_t>> Find(LPCWSTR name, LPCWSTR type) const
+			{
+				HRSRC resource = FindResourceW(m_Module, name, type);
+				HGLOBAL loaded = resource ? LoadResource(m_Module, resource) : nullptr;
+				const uint8_t* data = loaded ? static_cast<const uint8_t*>(LockResource(loaded)) : nullptr;
+				if (!data)
+					return std::nullopt;
+				return std::vector<uint8_t>(data, data + SizeofResource(m_Module, resource));
+			}
+
+			// The first icon group, which Explorer shows for the executable.
+			std::optional<std::vector<uint8_t>> FindFirstIconGroup() const
+			{
+				struct FirstGroup
+				{
+					bool Found = false;
+					std::wstring Name;
+					WORD Id = 0;
+				} group;
+				EnumResourceNamesW(m_Module, MAKEINTRESOURCEW(14) /* RT_GROUP_ICON */, [](HMODULE, LPCWSTR, LPWSTR name, LONG_PTR parameter) -> BOOL
+				{
+					FirstGroup& first = *reinterpret_cast<FirstGroup*>(parameter);
+					first.Found = true;
+					if (IS_INTRESOURCE(name))
+						first.Id = static_cast<WORD>(reinterpret_cast<ULONG_PTR>(name));
+					else
+						first.Name = name;
+					return FALSE; // Stop after the first one
+				}, reinterpret_cast<LONG_PTR>(&group));
+				if (!group.Found)
+					return std::nullopt;
+				return Find(group.Name.empty() ? MAKEINTRESOURCEW(group.Id) : group.Name.c_str(), MAKEINTRESOURCEW(14));
+			}
+
+		private:
+			HMODULE m_Module = nullptr;
+			DWORD m_Error = 0;
+		};
+
+		struct IconGroupEntry
+		{
+			uint32_t Size = 0; // 256 for a width of 0
+			WORD Id = 0;
+		};
+
+		// GRPICONDIR: reserved, type (1: icon), count (WORD each), then 14-byte entries: width, height, colors, reserved,
+		// planes, bits per pixel, bytes, id.
+		std::optional<std::vector<IconGroupEntry>> ParseIconGroup(const std::vector<uint8_t>& data)
+		{
+			if (data.size() < 6)
+				return std::nullopt;
+			WORD count = 0;
+			std::memcpy(&count, data.data() + 4, sizeof(count));
+			if (data.size() < 6 + static_cast<size_t>(count) * 14)
+				return std::nullopt;
+			std::vector<IconGroupEntry> entries;
+			for (WORD index = 0; index < count; index++)
+			{
+				IconGroupEntry entry;
+				const uint8_t width = data[6 + index * 14];
+				entry.Size = width == 0 ? 256u : width;
+				std::memcpy(&entry.Id, data.data() + 6 + index * 14 + 12, sizeof(entry.Id));
+				entries.push_back(entry);
+			}
+			return entries;
+		}
+
+		// A 32-bit icon bitmap (BITMAPINFOHEADER, BGRA rows bottom first, then the mask) as RGBA rows top first.
+		std::optional<std::vector<uint8_t>> DecodeIconBitmap(const std::vector<uint8_t>& data, uint32_t size)
+		{
+			BITMAPINFOHEADER header = {};
+			if (data.size() < sizeof(header))
+				return std::nullopt;
+			std::memcpy(&header, data.data(), sizeof(header));
+			if (header.biSize != sizeof(header) || header.biWidth != static_cast<LONG>(size) || header.biHeight != static_cast<LONG>(size * 2)
+				|| header.biBitCount != 32 || header.biCompression != BI_RGB || data.size() < sizeof(header) + static_cast<size_t>(size) * size * 4)
+				return std::nullopt;
+			std::vector<uint8_t> pixels(static_cast<size_t>(size) * size * 4);
+			for (uint32_t row = 0; row < size; row++)
+			{
+				const uint8_t* source = data.data() + sizeof(header) + static_cast<size_t>(size - 1 - row) * size * 4;
+				uint8_t* target = pixels.data() + static_cast<size_t>(row) * size * 4;
+				for (uint32_t column = 0; column < size; column++)
+				{
+					target[column * 4] = source[column * 4 + 2];
+					target[column * 4 + 1] = source[column * 4 + 1];
+					target[column * 4 + 2] = source[column * 4];
+					target[column * 4 + 3] = source[column * 4 + 3];
+				}
+			}
+			return pixels;
+		}
+
+	}
+
 	std::optional<std::vector<uint32_t>> ReadExecutableIconSizes(const std::filesystem::path& executable, std::string* outError)
 	{
 		auto fail = [outError](std::string message) -> std::optional<std::vector<uint32_t>>
@@ -317,57 +439,103 @@ namespace Strata::Tests
 				*outError = std::move(message);
 			return std::nullopt;
 		};
-		// As a data file: its resources are readable, nothing of it runs.
-		HMODULE module = LoadLibraryExW(executable.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
-		if (!module)
-			return fail("it cannot be loaded as a data file (error " + std::to_string(GetLastError()) + ")");
-
-		// The first icon group, which Explorer shows for the executable.
-		struct FirstGroup
-		{
-			bool Found = false;
-			std::wstring Name;
-			WORD Id = 0;
-		} group;
-		EnumResourceNamesW(module, MAKEINTRESOURCEW(14) /* RT_GROUP_ICON */, [](HMODULE, LPCWSTR, LPWSTR name, LONG_PTR parameter) -> BOOL
-		{
-			FirstGroup& first = *reinterpret_cast<FirstGroup*>(parameter);
-			first.Found = true;
-			if (IS_INTRESOURCE(name))
-				first.Id = static_cast<WORD>(reinterpret_cast<ULONG_PTR>(name));
-			else
-				first.Name = name;
-			return FALSE; // Stop after the first one
-		}, reinterpret_cast<LONG_PTR>(&group));
-		std::optional<std::vector<uint32_t>> sizes;
-		if (group.Found)
-		{
-			HRSRC resource = FindResourceW(module, group.Name.empty() ? MAKEINTRESOURCEW(group.Id) : group.Name.c_str(), MAKEINTRESOURCEW(14));
-			HGLOBAL loaded = resource ? LoadResource(module, resource) : nullptr;
-			const uint8_t* data = loaded ? static_cast<const uint8_t*>(LockResource(loaded)) : nullptr;
-			const DWORD size = resource ? SizeofResource(module, resource) : 0;
-			// GRPICONDIR: reserved, type (1: icon), count (WORD each), then 14-byte entries starting with the width.
-			if (data && size >= 6)
-			{
-				WORD count = 0;
-				std::memcpy(&count, data + 4, sizeof(count));
-				if (size >= 6 + static_cast<DWORD>(count) * 14)
-				{
-					sizes.emplace();
-					for (WORD index = 0; index < count; index++)
-					{
-						const uint8_t width = data[6 + index * 14];
-						sizes->push_back(width == 0 ? 256u : width);
-					}
-				}
-			}
-		}
-		FreeLibrary(module);
-		if (!group.Found)
+		const ResourceModule loaded(executable);
+		if (!loaded.Get())
+			return fail(loaded.DescribeLoadError());
+		const std::optional<std::vector<uint8_t>> group = loaded.FindFirstIconGroup();
+		if (!group)
 			return fail("it has no icon group (RT_GROUP_ICON)");
-		if (!sizes)
+		const std::optional<std::vector<IconGroupEntry>> entries = ParseIconGroup(*group);
+		if (!entries)
 			return fail("its icon group cannot be read");
+		std::vector<uint32_t> sizes;
+		for (const IconGroupEntry& entry : *entries)
+			sizes.push_back(entry.Size);
 		return sizes;
+	}
+
+	std::optional<std::vector<ExecutableIconImage>> ReadExecutableIconImages(const std::filesystem::path& executable, std::string* outError)
+	{
+		auto fail = [outError](std::string message) -> std::optional<std::vector<ExecutableIconImage>>
+		{
+			if (outError)
+				*outError = std::move(message);
+			return std::nullopt;
+		};
+		const ResourceModule loaded(executable);
+		if (!loaded.Get())
+			return fail(loaded.DescribeLoadError());
+		const std::optional<std::vector<uint8_t>> group = loaded.FindFirstIconGroup();
+		if (!group)
+			return fail("it has no icon group (RT_GROUP_ICON)");
+		const std::optional<std::vector<IconGroupEntry>> entries = ParseIconGroup(*group);
+		if (!entries)
+			return fail("its icon group cannot be read");
+		std::vector<ExecutableIconImage> images;
+		for (const IconGroupEntry& entry : *entries)
+		{
+			const std::optional<std::vector<uint8_t>> data = loaded.Find(MAKEINTRESOURCEW(entry.Id), MAKEINTRESOURCEW(3) /* RT_ICON */);
+			if (!data)
+				return fail(fmt::format("its icon group names the image {}, which it does not have", entry.Id));
+			ExecutableIconImage image;
+			image.Size = entry.Size;
+			constexpr uint8_t c_PNGSignature[] = { 0x89, 'P', 'N', 'G' };
+			if (data->size() >= sizeof(c_PNGSignature) && std::equal(std::begin(c_PNGSignature), std::end(c_PNGSignature), data->begin()))
+			{
+				std::string decodeError;
+				std::optional<ReadbackImage> decoded = ImageReader::DecodeRGBA8(*data, &decodeError);
+				if (!decoded || decoded->Width != entry.Size || decoded->Height != entry.Size)
+					return fail(fmt::format("its {} pixel PNG image does not decode at that size: {}", entry.Size, decodeError));
+				image.Pixels = std::move(decoded->Pixels);
+			}
+			else
+			{
+				std::optional<std::vector<uint8_t>> pixels = DecodeIconBitmap(*data, entry.Size);
+				if (!pixels)
+					return fail(fmt::format("its {} pixel image is no 32-bit bitmap of that size", entry.Size));
+				image.Pixels = std::move(*pixels);
+			}
+			images.push_back(std::move(image));
+		}
+		return images;
+	}
+
+	std::optional<ExecutableVersion> ReadExecutableVersion(const std::filesystem::path& executable, std::string* outError)
+	{
+		auto fail = [outError](std::string message) -> std::optional<ExecutableVersion>
+		{
+			if (outError)
+				*outError = std::move(message);
+			return std::nullopt;
+		};
+		DWORD handle = 0;
+		const DWORD size = GetFileVersionInfoSizeW(executable.c_str(), &handle);
+		if (size == 0)
+			return fail("it has no version information (error " + std::to_string(GetLastError()) + ")");
+		std::vector<uint8_t> block(size);
+		if (!GetFileVersionInfoW(executable.c_str(), 0, size, block.data()))
+			return fail("its version information cannot be read (error " + std::to_string(GetLastError()) + ")");
+
+		ExecutableVersion version;
+		VS_FIXEDFILEINFO* fixed = nullptr;
+		UINT fixedSize = 0;
+		if (!VerQueryValueW(block.data(), L"\\", reinterpret_cast<void**>(&fixed), &fixedSize) || fixedSize < sizeof(VS_FIXEDFILEINFO))
+			return fail("its version information has no VS_FIXEDFILEINFO");
+		version.FileVersion = { HIWORD(fixed->dwFileVersionMS), LOWORD(fixed->dwFileVersionMS), HIWORD(fixed->dwFileVersionLS), LOWORD(fixed->dwFileVersionLS) };
+		version.ProductVersion = { HIWORD(fixed->dwProductVersionMS), LOWORD(fixed->dwProductVersionMS), HIWORD(fixed->dwProductVersionLS),
+			LOWORD(fixed->dwProductVersionLS) };
+		for (const wchar_t* key : { L"CompanyName", L"FileDescription", L"FileVersion", L"InternalName", L"LegalCopyright", L"OriginalFilename", L"ProductName",
+				 L"ProductVersion" })
+		{
+			const std::wstring query = std::wstring(L"\\StringFileInfo\\040904B0\\") + key;
+			wchar_t* text = nullptr;
+			UINT length = 0;
+			if (!VerQueryValueW(block.data(), query.c_str(), reinterpret_cast<void**>(&text), &length) || !text)
+				continue;
+			const std::wstring value(text, wcsnlen(text, length));
+			version.Strings[FileSystem::ToUTF8(std::filesystem::path(key))] = FileSystem::ToUTF8(std::filesystem::path(value));
+		}
+		return version;
 	}
 
 	namespace

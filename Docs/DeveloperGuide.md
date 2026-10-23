@@ -2053,6 +2053,30 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (`WindowSpecification::IconPath`: X11 and Windows show it; Cocoa and Wayland windows have no icons of their own), and the
   window's application id is the executable's name (`WindowSpecification::AppId`: X11's `WM_CLASS`, Wayland's app id).
   `StrataRuntime.Identity` runs a SmokeGame exported with an identity and checks its log and icon.
+- **Windows executables' resources** (`Editor/PEResources`): exported games copy the prebuilt runtime, so the game's
+  version information and icon are written into the copy by engine code, without the Win32 API, which builds and is tested
+  on every platform. `PEResources::Read` checks everything it reads of a PE32+ image (AMD64 or ARM64): the MZ header and
+  `e_lfanew`, the PE signature, the COFF header, the optional header and its data directory count, the section table
+  within `SizeOfHeaders`, each section's data within the file and the resource tree (three levels, each directory reached
+  once, entry counts, names and data within the resource section); any violation is an error naming the field, nothing
+  asserts. `PEResources::Write` rebuilds the resource section in place from a list of resources (directories, data
+  entries, names, then the data on 8-byte boundaries, entries in the loader's order: names, then numbers); the section
+  after it moves by the growth with its file offset, RVA and data directory entry, and `SizeOfImage`,
+  `SizeOfInitializedData`, the resource directory's size and the checksum follow. The supported layout is the linker's:
+  only the base relocations (`.reloc`) may follow `.rsrc`, they may name only RVAs before it (so moving `.reloc` changes
+  none of them), and no other data directory may lie in or after it. Anything else fails with the
+  reason instead of writing a damaged executable: another section after `.rsrc`, data after the last section (overlay), a
+  certificate table (a signed runtime: sign the game after exporting it). `PEResources::StampGame` replaces `RT_VERSION`
+  1 with the game's `VS_VERSIONINFO` (`FILEVERSION` and `PRODUCTVERSION` from `Version`, missing parts 0; a US English
+  Unicode string table with `CompanyName` and `LegalCopyright` when set, `FileDescription` and `ProductName` (the title),
+  `FileVersion`, `ProductVersion`, `InternalName` (the project's name) and `OriginalFilename`, converted from UTF-8 to
+  UTF-16; the translation 0x409, 1200) and, with an icon, the group `GLFW_ICON` (Explorer's icon and, through GLFW, the
+  window's) and the `RT_ICON` images only it names, by one image per size (32-bit bitmaps with an AND mask, the 256-pixel
+  one a PNG) under the lowest ids no kept image has. Every other resource, `CMake/Strata.manifest`'s `RT_MANIFEST` above
+  all, and every other byte stay; stamping a stamped image again gives the same bytes. `Editor.Export.ExecutableResources`
+  tests it on images of `Tests::BuildTestPEImage` (`StrataTests/src/Editor/TestPEImage.h`: `.text`, `.rsrc` and `.reloc`
+  as the linker lays them out, its own resource tree layout) and, on Windows, stamps the built runtime, reads it back with
+  `GetFileVersionInfoW` and the resource functions and runs it; its `.Sweep` truncates and flips the headers and the tree.
 
 ### Play mode and scene switches
 

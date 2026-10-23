@@ -191,6 +191,8 @@ endif()
 
 if(WIN32)
 	target_sources(StrataTests PRIVATE "${PROJECT_SOURCE_DIR}/CMake/Strata.manifest")
+	# The tests read stamped executables' version information as Windows does (GetFileVersionInfoW: Tests::ReadExecutableVersion).
+	target_link_libraries(StrataTests PRIVATE version)
 endif()
 
 # The feature test (FeatureTest/, see Docs/DeveloperGuide.md, "Feature test") runs as its own test; its GPU suite runs
