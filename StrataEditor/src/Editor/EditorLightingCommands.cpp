@@ -24,9 +24,7 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 
-#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/packing.hpp>
-#include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -531,24 +529,32 @@ namespace Strata
 			{
 				transaction.Track(light.GetUUID());
 			}
-			// The light shines along its -Z axis, away from the sun; its position and scale stay.
-			const glm::mat4 world = scene.GetWorldTransform(light);
-			const glm::vec3 scale(glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])), glm::length(glm::vec3(world[2])));
-			const glm::mat4 oriented = glm::translate(glm::mat4(1.0f), glm::vec3(world[3])) * glm::mat4_cast(Math::LookRotation(-towardSun))
-				* glm::scale(glm::mat4(1.0f), glm::max(scale, glm::vec3(1.0e-6f)));
-			if (!scene.SetWorldTransform(light, oriented))
+			// The light shines along its world -Z axis, away from the sun. Only its rotation changes (its translation and scale stay
+			// as stored): under a parent, its -Z axis is the direction the parent's linear part maps onto the world's.
+			glm::vec3 localDirection = -towardSun;
+			if (const Entity parent = light.GetParent())
 			{
-				transaction.Rollback();
-				return EditorCommandResult::Fail(fmt::format("'{}' cannot point at the sun: its parent's transform has no inverse", light.GetName()));
+				const glm::mat3 linear(scene.GetWorldTransform(parent));
+				const float determinant = glm::determinant(linear);
+				if (!std::isfinite(determinant) || std::abs(determinant) < 1.0e-12f)
+				{
+					transaction.Rollback();
+					return EditorCommandResult::Fail(fmt::format("'{}' cannot point at the sun: its parent's transform has no inverse", light.GetName()));
+				}
+				localDirection = glm::normalize(glm::inverse(linear) * localDirection);
 			}
+			light.GetComponent<TransformComponent>().Rotation = Math::LookRotation(localDirection);
+			light.MarkModified<TransformComponent>();
 			DirectionalLightComponent& component = light.GetComponent<DirectionalLightComponent>();
 			component.Color = color;
 			component.Intensity = intensity;
 			light.MarkModified<DirectionalLightComponent>();
-			if (!context.CommitEdit(transaction))
+			// No step when the light already was the sun (extracted twice); none either, and the edit undone, while a scene opens.
+			const bool recorded = context.CommitEdit(transaction);
+			if (!recorded && (context.IsSceneLoading() || context.IsPlaying()))
 				return EditorCommandResult::Fail("The scene could not be changed (it is being opened, or Play started)");
 
-			nlohmann::json result = { { "light", UUIDToJson(light.GetUUID()) }, { "created", created }, { "map", UUIDToJson(state.Map) },
+			nlohmann::json result = { { "light", UUIDToJson(light.GetUUID()) }, { "created", created }, { "changed", recorded }, { "map", UUIDToJson(state.Map) },
 				{ "direction", { towardSun.x, towardSun.y, towardSun.z } }, { "color", { color.r, color.g, color.b } }, { "intensity", intensity },
 				{ "illuminance", sun.Luminance }, { "angularDiameter", sun.AngularDiameter }, { "texels", sun.Region.size() }, { "clipped", sun.Clipped } };
 			if (sun.Clipped)
@@ -696,9 +702,9 @@ namespace Strata
 			"brightest texel and the texels around it at least 4 times as bright as the sky there, at most 3 degrees across) and writes "
 			"the light's rotation (pointing away from the sun as the sky shows it, the sky's Rotation applied), Color (the sun's color, "
 			"its largest channel 1) and Intensity (the sun's illuminance in lux, times the sky's Intensity). The light is `light`, else "
-			"the brightest active directional light, else a new entity 'Sun'. One undo step. Run asset.setImportSettings "
+			"the brightest active directional light, else a new entity 'Sun'. One undo step (none when the light already is that sun). Run asset.setImportSettings "
 			"{\"RemoveSun\": true} on the map afterwards so the sun does not light the scene twice (the Sky section's Extract Sun does "
-			"both). Reads the file in the background and answers in a few frames; refused while playing. Returns {light, created, map, "
+			"both). Reads the file in the background and answers in a few frames; refused while playing. Returns {light, created, changed, map, "
 			"direction (toward the sun), color, intensity, illuminance (the sun's luminance per unit of the sky's Intensity), "
 			"angularDiameter (degrees), texels, clipped (the file clipped the sun: its light is a lower bound, and warning says so)}.",
 			ObjectSchema({ { "sky", EntitySchema("The entity with the SkyLight whose environment map holds the sun; default: the scene's "

@@ -386,6 +386,7 @@ TEST_SUITE("GPU.Editor.Lighting")
 		REQUIRE(extracted.Success);
 		CHECK(frames >= 1);
 		CHECK(extracted.Value["created"] == true);
+		CHECK(extracted.Value["changed"] == true);
 		CHECK(extracted.Value["clipped"] == false);
 		CHECK(extracted.Value["map"] == map);
 		CHECK_FALSE(extracted.Value.contains("warning"));
@@ -403,6 +404,14 @@ TEST_SUITE("GPU.Editor.Lighting")
 		const glm::vec3 reported(extracted.Value["direction"][0].get<float>(), extracted.Value["direction"][1].get<float>(),
 			extracted.Value["direction"][2].get<float>());
 		CHECK(glm::dot(toward, reported) > 0.99999f);
+		// Again: the light already is the sun, so nothing changes and no step is recorded.
+		const EditorCommandResult again = harness.RunFrames("lighting.extractSun", nlohmann::json::object());
+		INFO(again.Error);
+		REQUIRE(again.Success);
+		CHECK(again.Value["light"] == extracted.Value["light"]);
+		CHECK(again.Value["created"] == false);
+		CHECK(again.Value["changed"] == false);
+		CHECK(harness.Context.GetUndoStack().GetPosition() == steps + 1);
 
 		// Where the sky shows the sun: a capture looking that way has the disk's saturated pixels around its center.
 		harness.Run("camera.set", { { "position", { 0.0, 0.0, 0.0 } }, { "target", { toward.x * 10.0f, toward.y * 10.0f, toward.z * 10.0f } }, { "fov", 20.0 } });
@@ -463,6 +472,22 @@ TEST_SUITE("GPU.Editor.Lighting")
 		const Entity key = scene->GetEntityByUUID(*UUIDFromJson(lamp));
 		CHECK(glm::vec3(scene->GetWorldTransform(key)[3]) == glm::vec3(1.0f, 2.0f, 3.0f));
 		CHECK(key.GetComponent<DirectionalLightComponent>().Intensity == doctest::Approx(component.Intensity).epsilon(0.001));
+
+		// Under a turned, unevenly scaled parent only the rotation changes, and the light still comes from the sun.
+		const std::string rig = harness.Run("entity.create", { { "name", "Rig" },
+			{ "components", { { "Transform", { { "Rotation", { 0.258819, 0.0, 0.0, 0.9659258 } }, { "Scale", { 2.0, 1.0, 0.5 } } } } } } })["id"].get<std::string>();
+		const std::string child = harness.Run("entity.create", { { "name", "Rig Light" }, { "parent", rig },
+			{ "components", { { "Transform", { { "Translation", { 0.5, 0.25, 0.0 } }, { "Scale", { 1.0, 3.0, 1.0 } } } }, { "DirectionalLight", nlohmann::json::object() } } } })["id"]
+			.get<std::string>();
+		const EditorCommandResult rigged = harness.RunFrames("lighting.extractSun", { { "light", child } });
+		INFO(rigged.Error);
+		REQUIRE(rigged.Success);
+		const Entity rigLight = scene->GetEntityByUUID(*UUIDFromJson(child));
+		const TransformComponent& local = rigLight.GetComponent<TransformComponent>();
+		CHECK(local.Translation == glm::vec3(0.5f, 0.25f, 0.0f));
+		CHECK(local.Scale == glm::vec3(1.0f, 3.0f, 1.0f));
+		const glm::vec3 shines = glm::normalize(glm::vec3(scene->GetWorldTransform(rigLight) * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
+		CHECK(glm::dot(shines, -toward) > 0.99999f);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
