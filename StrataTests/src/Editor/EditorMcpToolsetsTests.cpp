@@ -50,6 +50,7 @@ TEST_SUITE("CLI.McpToolsets")
 
 		// Baked lighting belongs with the scene it changes.
 		CHECK(McpToolsets::GetGroupToolset("lighting.bakeProbes") == "scene");
+		CHECK(McpToolsets::GetGroupToolset("lighting.extractSun") == "scene");
 		// Every command maps to a toolset the table names, and every core command exists.
 		std::set<std::string> known;
 		for (const McpToolsets::ToolsetInfo& toolset : McpToolsets::GetKnownToolsets())

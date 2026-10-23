@@ -57,5 +57,16 @@
 		"expect": { "/values/Translation": { "equals": [ -4, 4, 0 ] } } },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000087", "component": "UIInputField" },
 		"expect": { "/values/Text": { "equals": "Strata" } } },
+	{ "command": "lighting.extractSun",
+		"expect": {
+			"/light": { "equals": "F7E0000000000003" },
+			"/created": { "equals": false },
+			"/clipped": { "equals": false },
+			"/intensity": { "min": 78, "max": 82 } } },
+	{ "command": "component.get", "parameters": { "entity": "F7E0000000000003", "component": "DirectionalLight" },
+		"expect": { "/values/Intensity": { "min": 78, "max": 82 } } },
+	{ "command": "edit.undo" },
+	{ "command": "component.get", "parameters": { "entity": "F7E0000000000003", "component": "DirectionalLight" },
+		"expect": { "/values/Intensity": { "equals": 4 } } },
 	{ "command": "project.export", "parameters": { "directory": "@STRATA_FEATURE_RUN_DIR@/Build" } }
 ]

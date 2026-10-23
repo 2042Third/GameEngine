@@ -8,9 +8,12 @@
 #include "Editor/UndoStack.h"
 
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Asset/HDRSun.h>
+#include <Strata/Asset/TextureImporter.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Math/Math.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/ImageWriter.h>
@@ -21,11 +24,15 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/packing.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -34,7 +41,8 @@
 #include <vector>
 
 // lighting.bakeProbes: reflection probes' captures rendered from the edited scene (ProbeBake.h), written as HDR textures of
-// the project and set as the probes' Capture, in one undo step.
+// the project and set as the probes' Capture, in one undo step. lighting.extractSun: the sun of the sky's environment map
+// (Asset/HDRSun.h) written as the scene's directional light, in one undo step.
 
 namespace Strata
 {
@@ -449,6 +457,158 @@ namespace Strata
 			return EditorCommandResult::Fail("The bake is in an unknown state");
 		}
 
+
+		// lighting.extractSun on its way: the map's source read on an I/O job, decoded and searched on a worker.
+		struct ExtractResult
+		{
+			std::vector<uint8_t> Bytes;
+			std::optional<HDRSun::Sun> Sun;
+			std::string Error;
+		};
+
+		struct ExtractState
+		{
+			std::weak_ptr<Scene> EditScene;
+			std::weak_ptr<AssetManagerBase> Assets;
+			UUID Sky;
+			UUID Light; // Null: a new "Sun" is made
+			AssetHandle Map = 0;
+			std::string MapPath;
+			bool FlipVertically = false;
+			Ref<ExtractResult> Result = CreateRef<ExtractResult>();
+			JobHandle ReadJob;
+			JobHandle FindJob;
+			bool Searching = false; // The find job was submitted (a job system that is not running runs it inline: no handle)
+		};
+
+		// The map's direction toward the sun in the world: the renderer samples the map at the world direction turned by the
+		// sky's Rotation around +Y (RotateEnvironmentDirection), so the world direction is the map's turned back.
+		glm::vec3 MapToWorldDirection(const glm::vec3& direction, float rotationDegrees, bool flipVertically)
+		{
+			const float radians = glm::radians(rotationDegrees);
+			const float c = std::cos(radians);
+			const float s = std::sin(radians);
+			const float y = flipVertically ? -direction.y : direction.y;
+			return glm::normalize(glm::vec3(c * direction.x - s * direction.z, y, s * direction.x + c * direction.z));
+		}
+
+		// The light the renderer uses: the brightest active directional light (its first one among equals).
+		Entity FindSceneSun(Scene& scene)
+		{
+			Entity sun;
+			float brightest = -1.0f;
+			for (auto [entity, light, world] : scene.GetRegistry().view<DirectionalLightComponent, WorldTransformComponent>().each())
+			{
+				if (world.ActiveInHierarchy && light.Intensity > brightest)
+				{
+					brightest = light.Intensity;
+					sun = Entity(entity, &scene);
+				}
+			}
+			return sun;
+		}
+
+		// The sky as it is now (its Rotation and Intensity may have changed while the map was read).
+		EditorCommandResult ApplyExtractedSun(EditorContext& context, ExtractState& state, Scene& scene, const SkyLightComponent& sky, const HDRSun::Sun& sun)
+		{
+			const glm::vec3 towardSun = MapToWorldDirection(sun.Direction, std::isfinite(sky.Rotation) ? sky.Rotation : 0.0f, state.FlipVertically);
+			const glm::vec3 color = sun.Color;
+			const float skyIntensity = std::isfinite(sky.Intensity) ? std::max(sky.Intensity, 0.0f) : 1.0f;
+			const float intensity = std::max({ sun.Illuminance.r, sun.Illuminance.g, sun.Illuminance.b }) * skyIntensity;
+			if (!std::isfinite(intensity) || !std::isfinite(towardSun.x) || !std::isfinite(towardSun.y) || !std::isfinite(towardSun.z))
+				return EditorCommandResult::Fail(fmt::format("The sun of '{}' gives no finite light", state.MapPath));
+
+			SceneEditTransaction transaction(scene, "Extract Sun", {});
+			Entity light = state.Light.IsValid() ? scene.GetEntityByUUID(state.Light) : Entity();
+			const bool created = !light;
+			if (created)
+			{
+				light = scene.CreateEntity("Sun");
+				light.AddComponent<DirectionalLightComponent>();
+				transaction.TrackCreated(light.GetUUID());
+			}
+			else
+			{
+				transaction.Track(light.GetUUID());
+			}
+			// The light shines along its -Z axis, away from the sun; its position and scale stay.
+			const glm::mat4 world = scene.GetWorldTransform(light);
+			const glm::vec3 scale(glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])), glm::length(glm::vec3(world[2])));
+			const glm::mat4 oriented = glm::translate(glm::mat4(1.0f), glm::vec3(world[3])) * glm::mat4_cast(Math::LookRotation(-towardSun))
+				* glm::scale(glm::mat4(1.0f), glm::max(scale, glm::vec3(1.0e-6f)));
+			if (!scene.SetWorldTransform(light, oriented))
+			{
+				transaction.Rollback();
+				return EditorCommandResult::Fail(fmt::format("'{}' cannot point at the sun: its parent's transform has no inverse", light.GetName()));
+			}
+			DirectionalLightComponent& component = light.GetComponent<DirectionalLightComponent>();
+			component.Color = color;
+			component.Intensity = intensity;
+			light.MarkModified<DirectionalLightComponent>();
+			if (!context.CommitEdit(transaction))
+				return EditorCommandResult::Fail("The scene could not be changed (it is being opened, or Play started)");
+
+			nlohmann::json result = { { "light", UUIDToJson(light.GetUUID()) }, { "created", created }, { "map", UUIDToJson(state.Map) },
+				{ "direction", { towardSun.x, towardSun.y, towardSun.z } }, { "color", { color.r, color.g, color.b } }, { "intensity", intensity },
+				{ "illuminance", sun.Luminance }, { "angularDiameter", sun.AngularDiameter }, { "texels", sun.Region.size() }, { "clipped", sun.Clipped } };
+			if (sun.Clipped)
+			{
+				result["warning"] = fmt::format("The sun of '{}' is clipped in the file (its brightest texels are all alike): its light is at least "
+					"Intensity, probably more", state.MapPath);
+			}
+			return EditorCommandResult::Ok(std::move(result));
+		}
+
+		std::optional<EditorCommandResult> PollExtract(EditorContext& context, ExtractState& state)
+		{
+			const Ref<Scene> scene = state.EditScene.lock();
+			const Ref<AssetManagerBase> manager = state.Assets.lock();
+			if (!scene || scene != context.GetEditScene() || !manager || manager.get() != context.GetAssetManager())
+				return EditorCommandResult::Fail("The scene changed before the sun was found; nothing was changed");
+			if (context.IsPlaying())
+				return EditorCommandResult::Fail("Play started before the sun was found; nothing was changed (extract it again once stopped)");
+			if (!state.ReadJob.IsComplete())
+				return std::nullopt;
+			if (!state.Searching)
+			{
+				if (!state.Result->Error.empty())
+					return EditorCommandResult::Fail(state.Result->Error);
+				state.Searching = true;
+				state.FindJob = JobSystem::Submit([result = state.Result, path = state.MapPath]()
+				{
+					std::string error;
+					const std::optional<HDRSun::Image> image = HDRSun::Decode(result->Bytes, &error);
+					result->Bytes = {};
+					if (!image)
+					{
+						result->Error = fmt::format("'{}' does not decode: {}", path, error);
+						return;
+					}
+					result->Sun = HDRSun::Find(image->Pixels, image->Width, image->Height, &error);
+					if (!result->Sun)
+						result->Error = fmt::format("'{}' has no sun to extract: {}", path, error);
+				});
+				return std::nullopt;
+			}
+			if (!state.FindJob.IsComplete())
+				return std::nullopt;
+			if (!state.Result->Sun)
+				return EditorCommandResult::Fail(state.Result->Error);
+			std::string editable;
+			if (!context.CheckSceneEditable(&editable))
+				return EditorCommandResult::Fail(std::move(editable));
+			const Entity sky = scene->GetEntityByUUID(state.Sky);
+			if (!sky || !sky.HasComponent<SkyLightComponent>() || sky.GetComponent<SkyLightComponent>().EnvironmentMap != state.Map)
+				return EditorCommandResult::Fail("The sky or its map changed before its sun was found; nothing was changed");
+			if (state.Light.IsValid())
+			{
+				const Entity light = scene->GetEntityByUUID(state.Light);
+				if (!light || !light.HasComponent<DirectionalLightComponent>())
+					return EditorCommandResult::Fail("The light was deleted before the sun was found; nothing was changed");
+			}
+			return ApplyExtractedSun(context, state, *scene, sky.GetComponent<SkyLightComponent>(), *state.Result->Sun);
+		}
+
 	}
 
 	void RegisterLightingCommands(EditorCommandRegistry& registry)
@@ -528,6 +688,85 @@ namespace Strata
 				return EditorCommandResult::Defer([state](EditorContext& pollContext) -> std::optional<EditorCommandResult>
 				{
 					return PollBake(pollContext, *state);
+				});
+			} }));
+
+		registry.Register(MayDefer({ "lighting.extractSun",
+			"Makes the scene's directional light the sun of its sky's environment map: finds the map's sun in its source file (the "
+			"brightest texel and the texels around it at least 4 times as bright as the sky there, at most 3 degrees across) and writes "
+			"the light's rotation (pointing away from the sun as the sky shows it, the sky's Rotation applied), Color (the sun's color, "
+			"its largest channel 1) and Intensity (the sun's illuminance in lux, times the sky's Intensity). The light is `light`, else "
+			"the brightest active directional light, else a new entity 'Sun'. One undo step. Run asset.setImportSettings "
+			"{\"RemoveSun\": true} on the map afterwards so the sun does not light the scene twice (the Sky section's Extract Sun does "
+			"both). Reads the file in the background and answers in a few frames; refused while playing. Returns {light, created, map, "
+			"direction (toward the sun), color, intensity, illuminance (the sun's luminance per unit of the sky's Intensity), "
+			"angularDiameter (degrees), texels, clipped (the file clipped the sun: its light is a lower bound, and warning says so)}.",
+			ObjectSchema({ { "sky", EntitySchema("The entity with the SkyLight whose environment map holds the sun; default: the scene's "
+					"first active sky light") },
+				{ "light", EntitySchema("The entity with a DirectionalLight to write; default: the brightest active one, or a new 'Sun'") } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				std::string error;
+				EditorAssetManager* assets = context.GetAssetManager();
+				if (!assets)
+					return EditorCommandResult::Fail("No project is open (project.open or project.create)");
+				if (context.IsPlaying())
+					return EditorCommandResult::Fail("Stop playing first: lighting.extractSun writes the edited scene's light");
+				if (!context.CheckSceneEditable(&error))
+					return EditorCommandResult::Fail(std::move(error));
+				const Ref<Scene>& scene = context.GetEditScene();
+				CommandArguments arguments(parameters);
+				Entity sky = arguments.FindEntity(*scene, "sky");
+				Entity light = arguments.FindEntity(*scene, "light");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (sky && !sky.HasComponent<SkyLightComponent>())
+					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'sky': '{}' has no SkyLight component", sky.GetName()));
+				if (light && !light.HasComponent<DirectionalLightComponent>())
+					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'light': '{}' has no DirectionalLight component", light.GetName()));
+				if (!sky)
+				{
+					for (auto [handle, component, world] : scene->GetRegistry().view<SkyLightComponent, WorldTransformComponent>().each())
+					{
+						if (world.ActiveInHierarchy)
+						{
+							sky = Entity(handle, scene.get());
+							break;
+						}
+					}
+					if (!sky)
+						return EditorCommandResult::Fail("The scene has no active sky light (add a SkyLight with an environment map)");
+				}
+				const SkyLightComponent& skyLight = sky.GetComponent<SkyLightComponent>();
+				if (skyLight.Source != SkyLightSource::EnvironmentMap)
+					return EditorCommandResult::Fail(fmt::format("'{}' is a {} sky: only an environment map holds a sun to extract (the procedural "
+						"sky and the atmosphere follow the directional light)", sky.GetName(), skyLight.Source == SkyLightSource::Procedural ? "procedural" : "atmosphere"));
+				const std::optional<AssetMetadata> metadata = assets->GetMetadata(skyLight.EnvironmentMap);
+				const std::filesystem::path source = assets->GetAbsolutePath(skyLight.EnvironmentMap);
+				if (!metadata || metadata->Type != AssetType::Texture || metadata->Parent.IsValid() || source.empty())
+					return EditorCommandResult::Fail(fmt::format("'{}' has no environment map of the project to read", sky.GetName()));
+				if (!light)
+					light = FindSceneSun(*scene);
+
+				Ref<ExtractState> state = CreateRef<ExtractState>();
+				state->EditScene = scene;
+				state->Assets = assets->weak_from_this();
+				state->Sky = sky.GetUUID();
+				state->Light = light ? light.GetUUID() : UUID::Null();
+				state->Map = skyLight.EnvironmentMap;
+				state->MapPath = metadata->Path;
+				state->FlipVertically = TextureImportSettings::FromJson(assets->GetImportSettings(skyLight.EnvironmentMap)).FlipVertically;
+				state->ReadJob = JobSystem::SubmitIO([result = state->Result, source, path = metadata->Path]()
+				{
+					std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(source);
+					if (bytes)
+						result->Bytes = std::move(*bytes);
+					else
+						result->Error = fmt::format("'{}' could not be read", path);
+				});
+				return EditorCommandResult::Defer([state](EditorContext& pollContext) -> std::optional<EditorCommandResult>
+				{
+					return PollExtract(pollContext, *state);
 				});
 			} }));
 	}

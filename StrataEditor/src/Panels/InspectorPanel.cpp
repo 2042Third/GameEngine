@@ -1,5 +1,6 @@
 #include "Panels/InspectorPanel.h"
 
+#include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/EditorWorld.h"
@@ -1562,6 +1563,35 @@ namespace Strata
 				ImGui::PushID("Sky");
 				DrawProperties(context, commands, entities, *info, nullptr);
 				ImGui::PopID();
+			}
+			// A map's sun becomes the scene's directional light, then leaves the map so that it does not light the scene twice: two
+			// steps with their own meanings (lighting.extractSun, then asset.setImportSettings with RemoveSun once the light is in).
+			const SkyLightComponent& skyLight = sky.GetComponent<SkyLightComponent>();
+			if (skyLight.Source == SkyLightSource::EnvironmentMap && skyLight.EnvironmentMap.IsValid())
+			{
+				const bool playing = context.IsPlaying();
+				ImGui::BeginDisabled(playing);
+				if (UI::ToolbarButton("Inspector.ExtractSun", Icons::Sun, "Extract Sun", playing ? "Stop playing to extract the sun: it writes the edited scene's light"
+						: "Make the scene's directional light the map's sun (its direction, color and brightness), then paint the sun out of the map "
+						  "(the map's Remove Sun) so that it does not light the scene twice"))
+				{
+					EditorCommandRunner& runner = panelContext.Runner;
+					const AssetHandle map = skyLight.EnvironmentMap;
+					runner.Run(context, commands, "lighting.extractSun", { { "sky", UUIDToJson(sky.GetUUID()) } },
+						[&runner, &context, &commands, map](const EditorCommandResult& result)
+						{
+							if (result.Success)
+							{
+								RunEditorCommandDeferred(runner, context, commands, "asset.setImportSettings",
+									{ { "asset", UUIDToJson(map) }, { "settings", { { "RemoveSun", true } } } });
+							}
+							else if (result.ErrorKind != EditorCommandError::Cancelled)
+							{
+								ST_ERROR("lighting.extractSun: {}", result.Error);
+							}
+						}, CommandOrigin { CommandSource::UI });
+				}
+				ImGui::EndDisabled();
 			}
 		}
 		// The fog the sky lights, offered here while the scene has none; the entity that holds it edits it.

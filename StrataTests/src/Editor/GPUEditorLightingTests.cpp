@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Asset/SyntheticSky.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
@@ -16,7 +17,12 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/Renderer.h>
+#include <Strata/Renderer/RendererComponents.h>
+#include <Strata/Scene/Scene.h>
 
+#include <Strata/Core/Base64.h>
+
+#include <glm/glm.hpp>
 #include <stb_image.h>
 
 #include <chrono>
@@ -332,6 +338,179 @@ TEST_SUITE("GPU.Editor.Lighting")
 		CHECK(assets.GetMetadata(firstHandle));
 
 		harness.Runner.CancelAll("The test ends");
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("lighting.extractSun points the light where the sky shows the sun, the sky's Rotation applied, in one undo step")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		LightingGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("GPUEditorExtractSun");
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(root / "Game") }, { "name", "Game" } });
+		// A sky whose sun, 2 degrees across, stands 30 degrees up toward -X and +Z in the map; the sky turns it 70 degrees.
+		Tests::SyntheticSun sun;
+		sun.Direction = glm::normalize(glm::vec3(-0.6f, 0.58f, 0.55f));
+		sun.RadiusDegrees = 1.0f;
+		constexpr uint32_t c_Width = 1024;
+		constexpr uint32_t c_Height = 512;
+		REQUIRE(FileSystem::WriteBytes(root / "Sky.hdr", Tests::EncodeSyntheticSky(c_Width, c_Height, Tests::MakeSyntheticSky(c_Width, c_Height, sun))));
+		const std::string map = harness.Run("asset.import", { { "file", FileSystem::ToUTF8(root / "Sky.hdr") }, { "directory", "Textures" } })["asset"]
+			.get<std::string>();
+		const std::string sky = harness.Run("entity.create", { { "name", "Sky" },
+			{ "components", { { "SkyLight", { { "EnvironmentMap", map }, { "Rotation", 70.0 }, { "Intensity", 2.0 } } } } } })["id"].get<std::string>();
+		const std::string wall = harness.Run("entity.create", { { "name", "Wall" } })["id"].get<std::string>();
+		const Ref<Scene> scene = harness.Context.GetEditScene();
+
+		// Refused for entities without the components and while playing, without a trace.
+		const size_t steps = harness.Context.GetUndoStack().GetPosition();
+		for (const char* parameter : { "sky", "light" })
+		{
+			CAPTURE(parameter);
+			const EditorCommandResult wrong = harness.RunFrames("lighting.extractSun", { { parameter, wall } });
+			CHECK_FALSE(wrong.Success);
+			CHECK(wrong.ErrorKind == EditorCommandError::InvalidParameters);
+		}
+		harness.RunFrames("play.start", { { "build", false } });
+		const EditorCommandResult playing = harness.RunFrames("lighting.extractSun", nlohmann::json::object());
+		CHECK_FALSE(playing.Success);
+		CHECK(playing.Error.find("Stop playing") != std::string::npos);
+		harness.Run("play.stop");
+		CHECK(harness.Context.GetUndoStack().GetPosition() == steps);
+
+		// Without a directional light it makes a "Sun", in one step, after reading the map in the background.
+		int frames = 0;
+		const EditorCommandResult extracted = harness.RunFrames("lighting.extractSun", nlohmann::json::object(), &frames);
+		INFO(extracted.Error);
+		REQUIRE(extracted.Success);
+		CHECK(frames >= 1);
+		CHECK(extracted.Value["created"] == true);
+		CHECK(extracted.Value["clipped"] == false);
+		CHECK(extracted.Value["map"] == map);
+		CHECK_FALSE(extracted.Value.contains("warning"));
+		CHECK(harness.Context.GetUndoStack().GetPosition() == steps + 1);
+		const Entity light = scene->GetEntityByUUID(*UUIDFromJson(extracted.Value["light"]));
+		REQUIRE(light);
+		CHECK(light.GetName() == "Sun");
+		const DirectionalLightComponent& component = light.GetComponent<DirectionalLightComponent>();
+		// The disk's illuminance times the sky's Intensity (the file keeps each texel within about 1%), in the sun's color.
+		CHECK(component.Intensity == doctest::Approx(2.0 * Tests::SyntheticSunIlluminance(sun)).epsilon(0.02));
+		CHECK(component.Color.r == doctest::Approx(1.0f));
+		CHECK(component.Color.b == doctest::Approx(sun.Color.b).epsilon(0.02));
+		// It shines along its -Z axis, away from the sun the result names.
+		const glm::vec3 toward = -glm::normalize(glm::vec3(scene->GetWorldTransform(light) * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
+		const glm::vec3 reported(extracted.Value["direction"][0].get<float>(), extracted.Value["direction"][1].get<float>(),
+			extracted.Value["direction"][2].get<float>());
+		CHECK(glm::dot(toward, reported) > 0.99999f);
+
+		// Where the sky shows the sun: a capture looking that way has the disk's saturated pixels around its center.
+		harness.Run("camera.set", { { "position", { 0.0, 0.0, 0.0 } }, { "target", { toward.x * 10.0f, toward.y * 10.0f, toward.z * 10.0f } }, { "fov", 20.0 } });
+		constexpr int c_Size = 256;
+		nlohmann::json capture;
+		for (int attempt = 0; attempt < 100; attempt++)
+		{
+			const EditorCommandResult result = harness.RunFrames("viewport.capture", { { "width", c_Size }, { "height", c_Size } });
+			INFO(result.Error);
+			REQUIRE(result.Success);
+			capture = result.Value;
+			if (capture["pendingAssets"] == 0)
+				break;
+		}
+		REQUIRE(capture["pendingAssets"] == 0);
+		const std::optional<std::vector<uint8_t>> png = Base64::Decode(capture["Image"]["Data"].get<std::string>());
+		REQUIRE(png);
+		int width = 0;
+		int height = 0;
+		int channels = 0;
+		stbi_uc* pixels = stbi_load_from_memory(png->data(), static_cast<int>(png->size()), &width, &height, &channels, 4);
+		REQUIRE(pixels != nullptr);
+		REQUIRE(width == c_Size);
+		REQUIRE(height == c_Size);
+		glm::dvec2 sum(0.0);
+		int saturated = 0;
+		for (int y = 0; y < height; y++)
+		{
+			for (int x = 0; x < width; x++)
+			{
+				const stbi_uc* pixel = pixels + (static_cast<size_t>(y) * width + x) * 4;
+				if (std::min({ pixel[0], pixel[1], pixel[2] }) >= 250)
+				{
+					sum += glm::dvec2(x + 0.5, y + 0.5);
+					saturated++;
+				}
+			}
+		}
+		stbi_image_free(pixels);
+		REQUIRE(saturated > 0);
+		const glm::dvec2 center = sum / static_cast<double>(saturated);
+		CAPTURE(center);
+		CAPTURE(saturated);
+		// 20 degrees over 256 pixels: 3 pixels are a quarter of a degree.
+		CHECK(std::abs(center.x - c_Size * 0.5) < 3.0);
+		CHECK(std::abs(center.y - c_Size * 0.5) < 3.0);
+
+		// Undo takes the new light away; with a light it writes that one, keeping its position.
+		harness.Run("edit.undo");
+		CHECK_FALSE(scene->GetEntityByUUID(*UUIDFromJson(extracted.Value["light"])));
+		const std::string lamp = harness.Run("entity.create", { { "name", "Key Light" },
+			{ "components", { { "Transform", { { "Translation", { 1.0, 2.0, 3.0 } } } }, { "DirectionalLight", { { "Intensity", 5.0 } } } } } })["id"].get<std::string>();
+		const EditorCommandResult into = harness.RunFrames("lighting.extractSun", { { "sky", sky } });
+		INFO(into.Error);
+		REQUIRE(into.Success);
+		CHECK(into.Value["created"] == false);
+		CHECK(into.Value["light"] == lamp);
+		const Entity key = scene->GetEntityByUUID(*UUIDFromJson(lamp));
+		CHECK(glm::vec3(scene->GetWorldTransform(key)[3]) == glm::vec3(1.0f, 2.0f, 3.0f));
+		CHECK(key.GetComponent<DirectionalLightComponent>().Intensity == doctest::Approx(component.Intensity).epsilon(0.001));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("lighting.extractSun refuses skies without a map's sun and reports a clipped one")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		LightingGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("GPUEditorExtractSunRefusals");
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(root / "Game") }, { "name", "Game" } });
+		const auto import = [&](const std::string& name, const std::vector<float>& rgba, uint32_t width, uint32_t height)
+		{
+			REQUIRE(FileSystem::WriteBytes(root / FileSystem::FromUTF8(name), Tests::EncodeSyntheticSky(width, height, rgba)));
+			return harness.Run("asset.import", { { "file", FileSystem::ToUTF8(root / FileSystem::FromUTF8(name)) }, { "directory", "Textures" } })["asset"]
+				.get<std::string>();
+		};
+
+		// No sky at all, a procedural one, a map without a sun.
+		const size_t steps = harness.Context.GetUndoStack().GetPosition();
+		const EditorCommandResult noSky = harness.RunFrames("lighting.extractSun", nlohmann::json::object());
+		CHECK_FALSE(noSky.Success);
+		CHECK(noSky.Error.find("no active sky light") != std::string::npos);
+		const std::string sky = harness.Run("entity.create", { { "name", "Sky" }, { "components", { { "SkyLight", { { "Source", "Procedural" } } } } } })["id"]
+			.get<std::string>();
+		const EditorCommandResult procedural = harness.RunFrames("lighting.extractSun", nlohmann::json::object());
+		CHECK_FALSE(procedural.Success);
+		CHECK(procedural.Error.find("procedural") != std::string::npos);
+		const std::string overcast = import("Overcast.hdr", std::vector<float>(static_cast<size_t>(64) * 32 * 4, 1.0f), 64, 32);
+		harness.Run("component.set", { { "entity", sky }, { "component", "SkyLight" }, { "values", { { "Source", "EnvironmentMap" }, { "EnvironmentMap", overcast } } } });
+		const size_t afterSky = harness.Context.GetUndoStack().GetPosition();
+		CHECK(afterSky == steps + 2);
+		const EditorCommandResult noSun = harness.RunFrames("lighting.extractSun", nlohmann::json::object());
+		CHECK_FALSE(noSun.Success);
+		CHECK(noSun.Error.find("has no sun to extract") != std::string::npos);
+		CHECK(harness.Context.GetUndoStack().GetPosition() == afterSky);
+
+		// A clipped sun is extracted with a warning: its light is a lower bound.
+		Tests::SyntheticSun sun;
+		sun.ClipAt = 0.2f * sun.Radiance;
+		sun.RadiusDegrees = 1.2f;
+		const std::string clipped = import("Clipped.hdr", Tests::MakeSyntheticSky(512, 256, sun), 512, 256);
+		harness.Run("component.set", { { "entity", sky }, { "component", "SkyLight" }, { "values", { { "EnvironmentMap", clipped } } } });
+		const EditorCommandResult result = harness.RunFrames("lighting.extractSun", nlohmann::json::object());
+		INFO(result.Error);
+		REQUIRE(result.Success);
+		CHECK(result.Value["clipped"] == true);
+		CHECK(result.Value["warning"].get<std::string>().find("clipped") != std::string::npos);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

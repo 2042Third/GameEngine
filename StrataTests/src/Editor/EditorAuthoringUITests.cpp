@@ -1611,6 +1611,48 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(editor.Context().GetPrimarySelection().HasComponent<SkyLightComponent>());
 	}
 
+	TEST_CASE("Extract Sun shows for map skies, makes the map's sun the scene's light, then turns the map's Remove Sun on")
+	{
+		// The feature scene's first sky ("Environment") is Sky.hdr, whose sun the feature project's .meta already removes.
+		AuthoringEditor editor({}, WithFeatureProject("EditorAuthoringExtractSun"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle map = assets->FindAssetByPath("Textures/Sky.hdr");
+		REQUIRE(map.IsValid());
+		editor.Run("asset.setImportSettings", { { "asset", UUIDToJson(map) }, { "settings", { { "RemoveSun", false } } } });
+		REQUIRE(assets->GetImportSettings(map)["RemoveSun"] == false);
+		const Ref<Scene> scene = editor.Context().GetEditScene();
+		const Entity sun = scene->GetEntityByUUID(*UUIDFromJson("F7E0000000000003"));
+		REQUIRE(sun);
+		editor.Context().ClearSelection();
+		editor.Frames(2);
+		if (!UI::ItemProbe::Find("Inspector.ExtractSun").has_value())
+			REQUIRE(editor.Click("Inspector.Sky"));
+		editor.Frames(1);
+
+		const size_t steps = editor.Context().GetUndoStack().GetPosition();
+		REQUIRE(editor.Click("Inspector.ExtractSun"));
+		REQUIRE(editor.FramesUntil([&]() { return assets->GetImportSettings(map)["RemoveSun"] == true && assets->GetImportInfo(map).Imported; },
+			std::chrono::seconds(30)));
+		// The light took the map's sun (Sky.hdr's 900-nit texel times its solid angle and the sky's Intensity of 0.7), one step.
+		CHECK(sun.GetComponent<DirectionalLightComponent>().Intensity == doctest::Approx(80.3f).epsilon(0.02));
+		CHECK(editor.Context().GetUndoStack().GetPosition() > steps);
+		std::vector<std::string> commands;
+		for (const CommandJournalEntry& entry : editor.Context().GetJournal().GetEntries())
+		{
+			if (!entry.Event && entry.Source == CommandSource::UI)
+				commands.push_back(entry.Command);
+		}
+		REQUIRE(commands.size() >= 2);
+		CHECK(commands[commands.size() - 2] == "lighting.extractSun");
+		CHECK(commands.back() == "asset.setImportSettings");
+
+		// Other skies have no button: their sun follows the light.
+		editor.Run("component.set", { { "entity", "F7E0000000000007" }, { "component", "SkyLight" }, { "values", { { "Source", "Procedural" } } } });
+		editor.Frames(2);
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.ExtractSun").has_value());
+	}
+
 	TEST_CASE("The scene's settings set the physics world's capacities, one undo step each, within their limits")
 	{
 		AuthoringEditor editor;
