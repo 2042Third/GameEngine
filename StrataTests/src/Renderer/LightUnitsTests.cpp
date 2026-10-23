@@ -55,7 +55,8 @@ TEST_SUITE("Renderer.LightUnits")
 		REQUIRE(sky);
 		for (const char* name : { "AmbientColor", "ZenithColor", "HorizonColor", "GroundColor", "SunIntensity" })
 		{
-			CAPTURE(name);
+			const std::string propertyName = name; // A captured const char* prints as a bool
+			CAPTURE(propertyName);
 			const PropertyInfo* property = sky->FindProperty(name);
 			REQUIRE(property);
 			CHECK(NamesUnit(property->Tooltip, "nits"));
@@ -67,7 +68,8 @@ TEST_SUITE("Renderer.LightUnits")
 		const std::vector<PropertyInfo>& properties = Material::GetPropertyInfos();
 		for (const char* name : { "EmissiveColor", "EmissiveIntensity" })
 		{
-			CAPTURE(name);
+			const std::string propertyName = name; // A captured const char* prints as a bool
+			CAPTURE(propertyName);
 			const auto found = std::find_if(properties.begin(), properties.end(), [name](const PropertyInfo& property) { return property.Name == name; });
 			REQUIRE(found != properties.end());
 			CHECK(NamesUnit(found->Tooltip, "nits"));
