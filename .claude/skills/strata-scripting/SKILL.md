@@ -1,6 +1,6 @@
 ---
 name: strata-scripting
-description: How to write, build, attach, debug and ship Strata game scripts (C++ script classes in a game project's script module, built against the StrataScriptCore SDK) through the editor's script.* commands - the lifecycle, the whole gameplay API (entities, components, transforms, input with keyboard, mouse, gamepads and the cursor, time, physics bodies, raycasts, contacts and collision layers, character controllers, audio, quitting and loading scenes, the game window, save files, random numbers, timers, key repeat) and how to test it. Use when creating gameplay logic or whole games for a project, adding script classes or fields, spawning prefabs from scripts, iterating with hot reload, diagnosing script build errors or crashes, or exporting a scripted game.
+description: How to write, build, attach, debug and ship Strata game scripts (C++ script classes in a game project's script module, built against the StrataScriptCore SDK) through the editor's script.* commands - the lifecycle, the whole gameplay API (entities, components, transforms, input with keyboard, mouse, gamepads and the cursor, the project's rebindable input actions, time, physics bodies, raycasts, contacts and collision layers, character controllers, audio, quitting and loading scenes, the game window, save files, random numbers, timers, key repeat) and how to test it. Use when creating gameplay logic or whole games for a project, adding script classes or fields, spawning prefabs from scripts, iterating with hot reload, diagnosing script build errors or crashes, or exporting a scripted game.
 ---
 
 # Writing Strata game scripts
@@ -133,8 +133,9 @@ ST_SCRIPT_CLASS(Turret)
   `GetUnscaledDeltaTime` and `GetRealTime` (they go on at time scale 0: pause menus, fades).
 - `Input::GetTypedText()`: the UTF-8 text typed this frame (name entry, chat).
 - Input actions (the project's named controls, rebindable by players): `Input::IsActionDown/Pressed/Released("Jump")`,
-  `GetActionValue`, `GetActionAxis`, `SetActionMapEnabled`, `GetActionBindings`/`SetActionBindings`,
-  `ResetActionBindings`, `SaveBindings`: see [Input actions and rebinding](#input-actions-and-rebinding).
+  `GetActionValue`, `GetActionAxis`, `SetActionMapEnabled`/`IsActionMapEnabled`,
+  `GetActionBindings`/`SetActionBindings`, `ResetActionBindings`, `SaveBindings`: see
+  [Input actions and rebinding](#input-actions-and-rebinding).
 - `UIElement` (`entity.GetUI()`) and `UI`: the game UI, see [Game UI](#game-ui).
 - `Log::Info/Warn/Error/Trace(args...)` - arguments are concatenated (`Log::Info("Health ", health)`).
 - `RigidBody` (`GetEntity().GetRigidBody()`), `Physics` (raycasts, overlaps), `Collision` (contact callbacks),
@@ -452,7 +453,8 @@ Input::SetActionMapEnabled("Vehicle", inCar);           // A disabled map's acti
 
 - Names: `"<Map>/<Action>"`, or the bare name when no other map has an action of that name (case is ignored). The map
   `UI` (`Submit`, `Cancel`, `Up`, `Down`, `Left`, `Right`: what menus navigate with) always exists, so a game's own `Left`
-  is read as `"Gameplay/Left"`. Unknown and ambiguous names read as up and log one warning naming the script.
+  is read as `"Gameplay/Left"`. Unknown and ambiguous names read as up and log a warning naming the script (once per
+  function).
 - A rebinding menu: `Input::GetActionBindings("Jump")` lists the binding texts (`Key/Space`, `Mouse/Left`, `Gamepad/A`,
   `Gamepad/LeftX+`, `Gamepad/LeftStick`, `1D:...`, `2D:...`); `Input::SetActionBindings("Jump", {"Key/J", "Gamepad/B"})`
   replaces them for the player from the next frame on (false, changing nothing, when one is no binding or one the kind

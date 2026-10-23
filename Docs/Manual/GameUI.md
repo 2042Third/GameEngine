@@ -101,8 +101,9 @@ shows while the field is empty; text longer than the field scrolls to keep the c
   (`UI::IsPointerOverUI` tells a script the pointer is over it).
 - **Keyboard and gamepad**: the arrow keys, the d-pad and the left stick move the focus between selectables (the nearest
   one in that direction, or the neighbours you set under **Navigation**), Enter, Space or gamepad A clicks, and Escape or
-  gamepad B is **Cancel** for scripts to close a menu (`UI::IsActionPressed(UIAction::Cancel)`). The canvas's **First
-  Selected** is where the focus starts.
+  gamepad B is **Cancel** for scripts to close a menu (`UI::IsActionPressed(UIAction::Cancel)`). These are the default
+  bindings of the input actions of the map **UI** (**Project Settings > Input Actions**), which the project and the
+  players may rebind. The canvas's **First Selected** is where the focus starts.
 - **Pause menus** work at time scale 0: the UI animates on real time (`Time::GetUnscaledDeltaTime` for your own fades).
 
 ## UI in the world
