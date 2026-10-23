@@ -673,11 +673,14 @@ namespace Strata
 				m_LocalShadowBounds[proxy] = renderScene.GetWorldBounds(proxy);
 			}
 		}
+		m_LocalShadowDrawEpoch = m_LocalShadowEpoch;
 		if (overflowed)
 		{
-			// Too many proxies to follow: views drawn from now on start the following over.
+			// Too many proxies to follow: views drawn from now on start the following over. The views drawn now are not followed
+			// either (no epoch is 0), so that a change of a proxy that is not followed draws every view again.
 			m_LocalShadowBounds.clear();
 			m_LocalShadowEpoch++;
+			m_LocalShadowDrawEpoch = 0;
 		}
 	}
 
@@ -875,7 +878,7 @@ namespace Strata
 				LocalShadowView& view = light.Views[face];
 				view.DrawnKey = view.Key;
 				view.DrawnPlanes = Frustum(GetLocalShadowViewProjection(view.Key, glm::dvec3(0.0))).GetPlanes();
-				view.DrawnEpoch = m_LocalShadowEpoch;
+				view.DrawnEpoch = m_LocalShadowDrawEpoch;
 				view.HasContent = true;
 				view.Dirty = false;
 			}

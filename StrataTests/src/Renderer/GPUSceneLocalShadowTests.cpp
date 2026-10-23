@@ -719,4 +719,38 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("With more proxies in the lights' ranges than it follows, a caster that leaves a view still redraws it")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(60.0f);
+		AddShadowedPointLight(scene, glm::vec3(0.0f, 3.0f, 0.0f), 20.0f, 40.0f);
+		Entity caster = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(1.5f, 3.0f, 0.0f), "Caster");
+		caster.GetComponent<TransformComponent>().Scale = glm::vec3(0.4f);
+		// More than the 65,536 proxies the renderer follows, within the lamp's range, behind the camera and casting no shadows.
+		constexpr uint32_t c_Side = 260;
+		for (uint32_t index = 0; index < c_Side * c_Side; index++)
+		{
+			const glm::vec3 position(static_cast<float>(index % c_Side) * 0.05f - 6.5f, 0.5f, 20.0f + static_cast<float>(index / c_Side) * 0.05f);
+			Entity grain = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), position, "Grain");
+			grain.GetComponent<TransformComponent>().Scale = glm::vec3(0.01f);
+			grain.GetComponent<MeshRendererComponent>().CastShadows = false;
+		}
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 8.0f, 8.0f), glm::vec3(0.0f));
+		SceneRenderer renderer(AtOnceSpecification(GPUDrivenMode::Off));
+		renderer.SetViewportSize(c_Size, c_Size);
+		REQUIRE(renderer.Render(scene, camera));
+		CHECK(renderer.GetStats().LocalShadowViewsDrawn == 6);
+		REQUIRE(renderer.Render(scene, camera));
+		CHECK(renderer.GetStats().LocalShadowViewsDrawn == 0);
+		// The caster leaves the lamp's range: the view that showed it is drawn again.
+		Move(caster, glm::vec3(100.0f, 3.0f, 0.0f));
+		REQUIRE(renderer.Render(scene, camera));
+		CHECK(renderer.GetStats().LocalShadowViewsDrawn > 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

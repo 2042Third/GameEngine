@@ -1291,6 +1291,7 @@ namespace Strata
 		LocalShadowContent m_LocalShadowContent;
 		uint64_t m_LocalShadowProxyVersion = 0;
 		uint64_t m_LocalShadowEpoch = 1;
+		uint64_t m_LocalShadowDrawEpoch = 0; // The epoch of the frame's drawn views: 0 when their proxies could not all be followed
 		std::unordered_map<uint32_t, AABB> m_LocalShadowBounds;
 		std::vector<uint32_t> m_LocalShadowChanges;
 		std::array<CascadeBox, RenderData::c_MaxCascades> m_Cascades = {};
