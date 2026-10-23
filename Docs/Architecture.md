@@ -2267,7 +2267,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   `RenderSceneGPUCache::c_UnusedFrames` (300) frames go too, and a later frame of their scene uploads it again.
   The mirror also holds the scene's asset tables, by slot: the mesh table (per mesh slot the `GeometryHandle` of the
   loaded mesh, with its arena; 0 while it is not loaded or not in the geometry pool), and per material slot its GPU data
-  (`RenderData::MaterialData`, `MaterialGPU::Build`) and flags (available, double-sided, alpha-masked, transparent), of
+  (`RenderData::MaterialData`, `MaterialGPU::Build`) and flags (available, double-sided, alpha-masked, transparent, and
+  transmissive: glass, which the transparent pass draws first), of
   the loaded material or, while it is not loaded, of the default material. They follow the asset manager's content
   changes (`AssetManagerBase::GetContentChanges`; another manager, or one that no longer remembers that far back,
   builds every slot) and the scene's slots (`RenderScene::GetSlotsVersion`, `FindMeshSlot`, `FindMaterialSlot`): a

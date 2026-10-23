@@ -932,6 +932,76 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A click on glass selects it, and its outline is drawn, with and without TAA")
+	{
+		// Glass is drawn in the transparent pass, not the prepass, but writes depth and entity ids there: it is picked and
+		// outlined like an opaque surface (alpha-blended surfaces are neither).
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(Tests::CreateTemporaryDirectory("ViewportGlass") / "Game") }, { "name", "Game" } });
+		harness.AddScene();
+		harness.Run("material.create", { { "path", "Materials/Glass.stmat" }, { "properties", { { "Transmission", 1.0 }, { "Roughness", 0.1 } } } });
+		EditorContext& context = harness.Context;
+		Entity cube = context.GetActiveScene()->FindEntityByName("Cube");
+		REQUIRE(cube);
+		harness.Run("component.set", { { "entity", UUIDToJson(cube.GetUUID()) }, { "component", "MeshRenderer" },
+			{ "values", { { "Material", "Materials/Glass.stmat" } } } });
+		EditorViewport& viewport = context.GetViewport();
+		ViewportRenderer* renderer = viewport.GetRenderer();
+		REQUIRE(renderer);
+		ViewportSettings& settings = viewport.GetSettings();
+		settings.ShowGrid = false;
+		settings.ShowSceneGizmos = false;
+		settings.SelectionColor = glm::vec4(1.0f, 0.0f, 1.0f, 1.0f);
+		const glm::uvec2 size(64, 64);
+		auto render = [&]()
+		{
+			const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, 1.0f);
+			REQUIRE(view);
+			REQUIRE(renderer->Render(context, size, *view, settings, view->EditorOverlays));
+		};
+		// The material loads in the context's updates: rendered until the cube is drawn as glass.
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		do
+		{
+			context.Update(Timestep(1.0f / 60.0f));
+			render();
+		} while (renderer->GetStats().SceneColorCopies == 0 && std::chrono::steady_clock::now() < deadline);
+		REQUIRE(renderer->GetStats().SceneColorCopies == 1);
+
+		for (const bool temporal : { false, true })
+		{
+			CAPTURE(temporal);
+			Entity postProcess = context.GetActiveScene()->FindEntityByName("PostProcess");
+			REQUIRE(postProcess);
+			PostProcessComponent& settingsComponent = postProcess.GetComponent<PostProcessComponent>();
+			settingsComponent.AntiAliasing = temporal;
+			settingsComponent.AntiAliasingMethod = AntiAliasingMode::TAA;
+			context.ClearSelection();
+			render();
+			REQUIRE(viewport.RequestPick(glm::uvec2(32, 32), size, ViewportPickMode::Replace));
+			for (int frame = 0; frame < 5000 && viewport.IsPickPending(); frame++)
+			{
+				viewport.UpdatePicking(context);
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			CHECK_FALSE(viewport.IsPickPending());
+			REQUIRE(context.GetSelection() == std::vector<UUID> { cube.GetUUID() });
+
+			render();
+			CHECK(renderer->GetStats().TemporalAntiAliasing == temporal);
+			CHECK(renderer->GetStats().OutlinedEntities == 1);
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer->GetOutputTexture(), image));
+			int outline = 0;
+			for (size_t index = 0; index + 3 < image.Pixels.size(); index += 4)
+				outline += image.Pixels[index] == 255 && image.Pixels[index + 1] == 0 && image.Pixels[index + 2] == 255 ? 1 : 0;
+			CHECK(outline > 20);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("While the game plays, the Scene view's editor camera picks the running scene's entities")
 	{
 		Tests::GPUContext gpu;

@@ -1,0 +1,34 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/Common.glsl"
+
+// One level of the scene-color copy transmissive surfaces read (SceneRenderer::CopySceneColor): each texel the mean of the
+// 2x2 texels it covers in the level above, the HDR target for the first level, so each level is half the size of the one
+// above and twice as blurred (rough glass reads coarser levels). The copy is B10G11R11 where the device stores it; with
+// ST_SCENE_COLOR_FALLBACK (registered as Effects/SceneColorCopyFallback.comp) it is RGBA16F.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(0)) uniform texture2D u_Source;
+#ifdef ST_SCENE_COLOR_FALLBACK
+layout(set = 0, binding = ST_UAV(0), rgba16f) uniform writeonly image2D o_Destination;
+#else
+layout(set = 0, binding = ST_UAV(0), r11f_g11f_b10f) uniform writeonly image2D o_Destination;
+#endif
+
+void main()
+{
+	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize(o_Destination);
+	if (texel.x >= size.x || texel.y >= size.y)
+		return;
+	// A source of odd size has no texel after its last: the last row or column takes it again.
+	ivec2 last = textureSize(u_Source, 0) - 1;
+	ivec2 first = texel * 2;
+	vec3 sum = texelFetch(u_Source, min(first, last), 0).rgb + texelFetch(u_Source, min(first + ivec2(1, 0), last), 0).rgb
+		+ texelFetch(u_Source, min(first + ivec2(0, 1), last), 0).rgb + texelFetch(u_Source, min(first + ivec2(1, 1), last), 0).rgb;
+	// The HDR target holds no negative values (SanitizeHDR); B10G11R11 could not store them.
+	imageStore(o_Destination, texel, vec4(max(sum * 0.25, vec3(0.0)), 1.0));
+}

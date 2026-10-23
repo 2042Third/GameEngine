@@ -83,6 +83,7 @@ TEST_SUITE("GPU.FeatureTest")
 		CHECK(stats.ReflectionProbes == 1); // The Probe entity's, its capture converted
 		CHECK(stats.ReflectionProbesPending == 0);
 		CHECK(stats.ScreenSpaceReflections); // The TAA Post Process's, traced from the history's second frame on
+		CHECK(stats.SceneColorCopies == 1);  // For the Glass Pane (FeatureGlass.stmat's transmission)
 		CHECK(GetLightCounts(renderer).Lights >= 2); // The sun, plus the point and spot lights in view (the GPU's count on its path)
 		CHECK(GetDrawnCounts(renderer).Instances >= 8);
 		CHECK(stats.Texts == 2); // The HUD (with the project's font) and the world-space sign
@@ -101,6 +102,7 @@ TEST_SUITE("GPU.FeatureTest")
 			{ "Crate", { 6.0f, 2.0f, 2.0f } },       // Prefab instance
 			{ "Pill Visual", { 2.0f, 3.1f, 0.0f } },
 			{ "Compound Box Visual", { 5.0f, 3.25f, -2.0f } },
+			{ "Glass Pane", { -1.5f, 1.5f, 4.05f } }, // Glass writes its entity ids
 		};
 		for (const VisiblePoint& point : points)
 		{

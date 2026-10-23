@@ -390,6 +390,59 @@ TEST_SUITE("PerfGPU.Renderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Render cost of 100,000 cubes seen through glass")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		// Render100kCubes' scene through a glass pane over the whole view, near the camera: the scene-color copy and its levels,
+		// and every pixel shaded as glass reading it, against Render100kCubes (provisional: the reference machine sets the
+		// budgets).
+		constexpr size_t c_Count = 100'000;
+		Scene scene("GlassCubes");
+		Perf::AddCameraAndLight(scene);
+		Perf::CreateCubeGrid(scene, c_Count);
+		const SceneCamera camera = GridView(c_Count);
+		MaterialProperties glass;
+		glass.BaseColor = glm::vec4(0.9f, 0.95f, 1.0f, 1.0f);
+		glass.Roughness = 0.1f;
+		glass.Transmission = 1.0f;
+		glass.Thickness = 0.05f;
+		glass.DoubleSided = true;
+		{
+			// A tenth of the way to the grid's center, facing the camera, larger than the view there.
+			const float distance = glm::length(camera.Position) * 0.1f;
+			const glm::vec3 forward = -glm::normalize(camera.Position);
+			Entity pane = scene.CreateEntity("Pane");
+			TransformComponent& transform = pane.GetComponent<TransformComponent>();
+			transform.Translation = camera.Position + forward * distance;
+			transform.Rotation = Math::LookRotation(forward);
+			transform.Scale = glm::vec3(distance * 4.0f);
+			MeshRendererComponent& meshRenderer = pane.AddComponent<MeshRendererComponent>();
+			meshRenderer.Mesh = BuiltinAssets::QuadMesh;
+			meshRenderer.Material = assets.AddMaterial(glass);
+			meshRenderer.CastShadows = false;
+		}
+		SceneRenderer renderer(Perf::MeasuredRendererSpecification());
+		renderer.SetViewportSize(c_Width, c_Height);
+		const bool measuresGPU = Perf::MeasuresGPU();
+		std::vector<std::string> keys = { "PerfGPU.Renderer.Transmission" };
+		if (measuresGPU)
+			keys.push_back("PerfGPU.Renderer.TransmissionGPU");
+		Perf::CheckBudgetsConfirmed(keys, [&]
+		{
+			const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, camera, "100k cubes through glass");
+			CHECK(GetDrawnCounts(renderer).Instances == c_Count + 1);
+			CHECK(renderer.GetStats().SceneColorCopies == 1u);
+			Perf::MetricValues values { { "PerfGPU.Renderer.Transmission", measurement.CPU.MedianMs } };
+			if (measuresGPU)
+				values.emplace("PerfGPU.Renderer.TransmissionGPU", Perf::MeasureGPU(measurement));
+			return values;
+		});
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Render cost of 100,000 cubes under the atmosphere, with a still sun and with a moving one")
 	{
 		GPUContext gpu;

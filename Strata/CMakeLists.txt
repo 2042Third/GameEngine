@@ -101,6 +101,7 @@ strata_add_shaders(Strata_Renderer
 		Effects/GTAO.comp
 		Effects/AOBlur.comp
 		Effects/ScreenSpaceReflections.comp
+		Effects/SceneColorCopy.comp
 		PostProcess/Fullscreen.vert
 		PostProcess/Tonemap.frag
 		PostProcess/Histogram.comp
@@ -125,6 +126,10 @@ strata_add_shaders(Strata_Renderer
 		GameUI/UIQuad.frag
 	VARIANTS
 		"Scene/Forward.frag|Scene/ForwardTransparent.frag|ST_FORWARD_TRANSPARENT"
+		"Scene/Forward.frag|Scene/ForwardGlass.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS"
+		"Scene/Forward.frag|Scene/ForwardGlassNoEntityIDs.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS,ST_NO_ENTITY_IDS"
+		"Scene/Forward.frag|Scene/ForwardGlassVelocity.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS,ST_VELOCITY"
+		"Scene/Forward.frag|Scene/ForwardGlassNoEntityIDsVelocity.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS,ST_NO_ENTITY_IDS,ST_VELOCITY"
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassNoEntityIDs.frag|ST_NO_ENTITY_IDS"
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassVelocity.frag|ST_VELOCITY"
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassNoEntityIDsVelocity.frag|ST_NO_ENTITY_IDS,ST_VELOCITY"
@@ -142,7 +147,8 @@ strata_add_shaders(Strata_Renderer
 		"Scene/HZBBuild.comp|Scene/HZBBuildArray.comp|ST_HZB_ARRAY"
 		"Effects/GTAO.comp|Effects/GTAOHalf.comp|ST_AO_HALF"
 		"Scene/Skybox.frag|Scene/SkyboxAtmosphere.frag|ST_ATMOSPHERE"
-		"Effects/AOBlur.comp|Effects/AOBlurHalf.comp|ST_AO_HALF")
+		"Effects/AOBlur.comp|Effects/AOBlurHalf.comp|ST_AO_HALF"
+		"Effects/SceneColorCopy.comp|Effects/SceneColorCopyFallback.comp|ST_SCENE_COLOR_FALLBACK")
 
 # The default font of text rendering (Roboto Medium, Apache License 2.0; see ThirdPartyNotices.md).
 strata_embed_file(Strata_Renderer "${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/misc/fonts/Roboto-Medium.ttf" GetDefaultFont)

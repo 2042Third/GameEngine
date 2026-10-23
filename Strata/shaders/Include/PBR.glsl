@@ -47,9 +47,9 @@ struct SurfaceData
 	vec3 Emissive;
 };
 
-// Radiance reflected toward the viewer from light arriving along `lightDirection` (surface to light) with the
-// given irradiance at normal incidence.
-vec3 EvaluateLight(SurfaceData surface, vec3 lightDirection, vec3 radiance)
+// EvaluateLight with its diffuse part weighted by `diffuseWeight`: a transmissive surface passes the rest of the light its
+// diffuse part would scatter through itself (Scene/Forward.frag's glass).
+vec3 EvaluateLightWeighted(SurfaceData surface, vec3 lightDirection, vec3 radiance, float diffuseWeight)
 {
 	vec3 H = normalize(surface.View + lightDirection);
 	float NoL = clamp(dot(surface.Normal, lightDirection), 0.0, 1.0);
@@ -65,8 +65,50 @@ vec3 EvaluateLight(SurfaceData surface, vec3 lightDirection, vec3 radiance)
 
 	vec3 F = FresnelSchlick(f0, VoH);
 	vec3 specular = DistributionGGX(NoH, alpha) * VisibilitySmithGGXCorrelated(NoV, NoL, alpha) * F;
-	vec3 diffuse = (1.0 - F) * (1.0 - surface.Metallic) * surface.Albedo * INV_PI;
+	vec3 diffuse = (1.0 - F) * (1.0 - surface.Metallic) * surface.Albedo * INV_PI * diffuseWeight;
 	return (diffuse + specular) * radiance * NoL;
+}
+
+// Radiance reflected toward the viewer from light arriving along `lightDirection` (surface to light) with the
+// given irradiance at normal incidence.
+vec3 EvaluateLight(SurfaceData surface, vec3 lightDirection, vec3 radiance)
+{
+	return EvaluateLightWeighted(surface, lightDirection, radiance, 1.0);
+}
+
+// A clear coat over a surface (MaterialProperties::Clearcoat): a dielectric layer of index 1.5 (reflecting 4% at normal
+// incidence) with its own roughness and normal.
+struct ClearcoatData
+{
+	float Strength;  // 0: no coat
+	float Roughness; // Perceptual
+	vec3 Normal;
+};
+
+const float c_ClearcoatF0 = 0.04;
+
+// The coat's Fresnel reflectance at the angle `cosine` (between its normal, or the half vector, and the view), times its
+// strength: what the coat reflects, and what of the light no longer reaches the base below.
+float ClearcoatFresnel(ClearcoatData coat, float cosine)
+{
+	return coat.Strength * (c_ClearcoatF0 + (1.0 - c_ClearcoatF0) * pow(1.0 - clamp(cosine, 0.0, 1.0), 5.0));
+}
+
+// Radiance the coat reflects toward the viewer (`view`, surface to camera) from light arriving along `lightDirection`; with
+// `baseWeight` what of that light passes the coat to the base (1 - the coat's Fresnel at the half vector).
+vec3 EvaluateClearcoat(ClearcoatData coat, vec3 view, vec3 lightDirection, vec3 radiance, out float baseWeight)
+{
+	vec3 H = normalize(view + lightDirection);
+	float fresnel = ClearcoatFresnel(coat, dot(view, H));
+	baseWeight = 1.0 - fresnel;
+	float NoL = clamp(dot(coat.Normal, lightDirection), 0.0, 1.0);
+	if (NoL <= 0.0)
+		return vec3(0.0);
+	float NoV = max(dot(coat.Normal, view), 1e-4);
+	float NoH = clamp(dot(coat.Normal, H), 0.0, 1.0);
+	float roughness = max(coat.Roughness, c_MinRoughness);
+	float alpha = roughness * roughness;
+	return DistributionGGX(NoH, alpha) * VisibilitySmithGGXCorrelated(NoV, NoL, alpha) * fresnel * radiance * NoL;
 }
 
 // Smooth distance falloff for punctual lights: inverse square, windowed to reach zero at the range.

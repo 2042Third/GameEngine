@@ -54,9 +54,12 @@ namespace Strata
 		// It has loaded texture maps, which stream at the level the screen needs: only its draws work out how finely their
 		// texture coordinates show (VisibleMaterialUse::UVPixels).
 		constexpr uint32_t c_MaterialTextured = 1u << 4;
+		// Transmissive (always with c_MaterialTransparent): drawn as glass, first in the transparent pass.
+		constexpr uint32_t c_MaterialTransmissive = 1u << 5;
 		// The GPU's culling reads these flags from the material table (Include/Culling.glsl).
 		static_assert(c_MaterialAvailable == RenderData::c_CullMaterialAvailable && c_MaterialDoubleSided == RenderData::c_CullMaterialDoubleSided
-			&& c_MaterialAlphaMask == RenderData::c_CullMaterialAlphaMask && c_MaterialTransparent == RenderData::c_CullMaterialTransparent);
+			&& c_MaterialAlphaMask == RenderData::c_CullMaterialAlphaMask && c_MaterialTransparent == RenderData::c_CullMaterialTransparent
+			&& c_MaterialTextured == RenderData::c_CullMaterialTextured && c_MaterialTransmissive == RenderData::c_CullMaterialTransmissive);
 
 		// Shadow casters further than this toward the light than a cascade's bounding sphere are flattened onto the cascade's
 		// near plane (ShadowMesh.vert) instead of extending its depth range.
@@ -922,8 +925,9 @@ namespace Strata
 			{
 				const uint32_t instance = first + submeshIndex;
 				const uint32_t materialFlags = m_MaterialFlags[instances[instance].MaterialIndex];
-				// Alpha-blended surfaces are not in the depth prepass: as the entity-ID outline, the mask leaves them out.
-				if ((materialFlags & c_MaterialAvailable) == 0 || (materialFlags & c_MaterialTransparent) != 0)
+				// Alpha-blended surfaces are not in the depth prepass: as the entity-ID outline, the mask leaves them out. Glass writes
+				// its depth and entity ids: outlined like an opaque surface.
+				if ((materialFlags & c_MaterialAvailable) == 0 || (materialFlags & (c_MaterialTransparent | c_MaterialTransmissive)) == c_MaterialTransparent)
 					continue;
 				const uint32_t lod = SelectLOD(*mesh, submeshes[submeshIndex], fraction);
 				if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
@@ -1036,7 +1040,8 @@ namespace Strata
 						skinnedInstances += skinned ? 1u : 0u;
 					if (transparent)
 					{
-						output.Transparent.push_back(TransparentDraw { viewDepth, renderScene.GetEntityID(proxy), submeshIndex, instance, meshSlot, lod, doubleSided, mirrored, skinned });
+						output.Transparent.push_back(TransparentDraw { viewDepth, renderScene.GetEntityID(proxy), submeshIndex, instance, meshSlot, lod, doubleSided, mirrored, skinned,
+							(materialFlags & c_MaterialTransmissive) != 0 });
 						continue;
 					}
 					if (opaqueDraws)
@@ -1092,13 +1097,17 @@ namespace Strata
 
 		const auto sortStart = std::chrono::steady_clock::now();
 		RadixSort(m_Draws, m_SortScratch);
-		// Back to front; equal depths by entity, then submesh, so the order does not depend on the proxies' order.
+		// Glass first (it writes depth and reads the copy of what the frame drew before it), then the blended surfaces; each back to
+		// front, equal depths by entity, then submesh, so the order does not depend on the proxies' order.
 		std::sort(m_Transparent.begin(), m_Transparent.end(), [](const TransparentDraw& a, const TransparentDraw& b)
 		{
+			if (a.Transmissive != b.Transmissive)
+				return a.Transmissive;
 			if (a.ViewDepth != b.ViewDepth)
 				return a.ViewDepth > b.ViewDepth;
 			return a.EntityID != b.EntityID ? a.EntityID < b.EntityID : a.SubmeshIndex < b.SubmeshIndex;
 		});
+		m_GlassBatchCount = static_cast<uint32_t>(std::count_if(m_Transparent.begin(), m_Transparent.end(), [](const TransparentDraw& draw) { return draw.Transmissive; }));
 		m_DrawInstancesBuild.clear();
 		BuildBatches(m_Draws, m_OpaqueBatches, m_DrawInstancesBuild);
 		m_TransparentBatches.clear();

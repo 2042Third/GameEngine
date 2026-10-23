@@ -87,6 +87,8 @@ namespace Strata::RenderData
 	constexpr uint32_t c_CullMaterialAlphaMask = 1u << 2;
 	constexpr uint32_t c_CullMaterialTransparent = 1u << 3;
 	constexpr uint32_t c_CullMaterialTextured = 1u << 4; // Names texture maps: feedback works out its UV pixels
+	// Transmissive, always with c_CullMaterialTransparent (which leaves it to the CPU's transparent pass): drawn there as glass.
+	constexpr uint32_t c_CullMaterialTransmissive = 1u << 5;
 
 	// Visibility feedback (Scene/Cull.comp's counting passes, packed by CullFeedback.comp, read back frames later): how the
 	// frame uses each mesh and material slot it touched. The use bits are SceneRenderer's request marks.

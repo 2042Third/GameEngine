@@ -211,6 +211,7 @@ namespace Strata
 		m_PrepassPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/DepthPrepass.frag" : "Scene/DepthPrepassNoEntityIDs.frag");
 		m_ForwardPixelShader = shaders.Get("Scene/Forward.frag");
 		m_ForwardTransparentPixelShader = shaders.Get("Scene/ForwardTransparent.frag");
+		m_GlassPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlass.frag" : "Scene/ForwardGlassNoEntityIDs.frag");
 		m_FullscreenVertexShader = shaders.Get("PostProcess/Fullscreen.vert");
 		m_TonemapPixelShader = shaders.Get("PostProcess/Tonemap.frag");
 		m_SkyboxPixelShader = shaders.Get("Scene/Skybox.frag");
@@ -221,7 +222,7 @@ namespace Strata
 		m_SelectionMaskPixelShader = shaders.Get("Scene/SelectionMask.frag");
 		m_LocalShadowVertexShader = shaders.Get("Scene/LocalShadowMesh.vert");
 		m_SkinnedLocalShadowVertexShader = shaders.Get("Scene/LocalShadowMeshSkinned.vert");
-		ST_CORE_VERIFY(m_MeshVertexShader && m_PrepassPixelShader && m_ForwardPixelShader && m_ForwardTransparentPixelShader && m_FullscreenVertexShader
+		ST_CORE_VERIFY(m_MeshVertexShader && m_PrepassPixelShader && m_ForwardPixelShader && m_ForwardTransparentPixelShader && m_GlassPixelShader && m_FullscreenVertexShader
 			&& m_TonemapPixelShader && m_SkyboxPixelShader && m_AtmosphereSkyboxPixelShader && m_ShadowVertexShader && m_ShadowMaskPixelShader && m_FXAAPixelShader && m_SkinnedMeshVertexShader
 			&& m_SkinnedShadowVertexShader && m_SelectionMaskPixelShader && m_LocalShadowVertexShader && m_SkinnedLocalShadowVertexShader,
 			"SceneRenderer shaders are missing");
@@ -289,6 +290,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(16), // The texture table (material data names textures by its indices)
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(17), // The shadow cascades (Scene/CascadeFit.comp)
 			nvrhi::BindingLayoutItem::Texture_SRV(18),          // Screen-space reflections (Scene/Forward.frag)
+			nvrhi::BindingLayoutItem::Texture_SRV(19),          // The scene-color copy glass reads (Scene/ForwardGlass.frag)
 			// The motion history's instances and joint matrices (SceneRenderOptions::MotionVectors): the previous frame's.
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(20),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(21),
@@ -434,7 +436,7 @@ namespace Strata
 			ST_CORE_VERIFY(desc.CS, "SceneRenderer: shader {} is missing", name);
 			return m_Device->createComputePipeline(desc);
 		};
-		const bool halfAO = Renderer::GetGraphicsDevice().GetInfo().SupportsExtendedStorageFormats;
+		const bool halfAO = m_Specification.ExtendedStorageFormats && Renderer::GetGraphicsDevice().GetInfo().SupportsExtendedStorageFormats;
 		m_AOFormat = halfAO ? c_AOFormat : c_AOFallbackFormat;
 		m_GTAOPipeline = createComputePipeline(halfAO ? "Effects/GTAOHalf.comp" : "Effects/GTAO.comp", m_AOBindingLayout);
 		m_AOBlurPipeline = createComputePipeline(halfAO ? "Effects/AOBlurHalf.comp" : "Effects/AOBlur.comp", m_AOBindingLayout);
@@ -960,6 +962,7 @@ namespace Strata
 		nvrhi::ITexture* skyView = GetBoundSkyView();
 		nvrhi::ITexture* probeArray = GetBoundReflectionProbes();
 		nvrhi::ITexture* screenReflections = GetBoundScreenReflections();
+		nvrhi::ITexture* sceneColor = GetBoundSceneColor();
 
 		// The shadow pass reads the same resources except for its own draw list (and never the shadow maps it draws into).
 		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap, nvrhi::ITexture* boundAtlas)
@@ -973,6 +976,7 @@ namespace Strata
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(16, Renderer::GetTextureTable().GetBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(17, m_CascadeBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(18, screenReflections),
+				nvrhi::BindingSetItem::Texture_SRV(19, sceneColor),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(20, previousInstances),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(21, previousPalette),
 				nvrhi::BindingSetItem::Texture_SRV(27, skyView),
@@ -1023,6 +1027,7 @@ namespace Strata
 		m_BoundSkyView = skyView;
 		m_BoundReflectionProbes = probeArray;
 		m_BoundScreenReflections = screenReflections;
+		m_BoundSceneColor = sceneColor;
 		if (!m_SceneBindingSet || !m_ShadowBindingSet || !m_ClusterBindingSet || (gpuSets && (!m_GPUSceneBindingSet || !m_GPUShadowBindingSet)))
 		{
 			m_SceneBindingSet = nullptr; // Recreated next frame
@@ -1054,7 +1059,8 @@ namespace Strata
 			m_MeshVelocityVertexShader = shaders.Get("Scene/MeshVelocity.vert");
 			m_SkinnedMeshVelocityVertexShader = shaders.Get("Scene/MeshSkinnedVelocity.vert");
 			m_PrepassVelocityPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/DepthPrepassVelocity.frag" : "Scene/DepthPrepassNoEntityIDsVelocity.frag");
-			ST_CORE_VERIFY(m_MeshVelocityVertexShader && m_SkinnedMeshVelocityVertexShader && m_PrepassVelocityPixelShader,
+			m_GlassVelocityPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlassVelocity.frag" : "Scene/ForwardGlassNoEntityIDsVelocity.frag");
+			ST_CORE_VERIFY(m_MeshVelocityVertexShader && m_SkinnedMeshVelocityVertexShader && m_PrepassVelocityPixelShader && m_GlassVelocityPixelShader,
 				"SceneRenderer: the velocity shaders are missing");
 		}
 		if (!m_VelocityTexture)
@@ -1069,11 +1075,20 @@ namespace Strata
 				desc.addColorAttachment(m_VelocityTexture);
 				desc.setDepthAttachment(m_DepthTexture);
 				m_MotionPrepassFramebuffer = m_Device->createFramebuffer(desc);
+				// Glass writes its motion after its color and entity ids, as the prepass does after its normals.
+				nvrhi::FramebufferDesc glassDesc;
+				glassDesc.addColorAttachment(m_HDRTexture);
+				if (m_EntityIDTexture)
+					glassDesc.addColorAttachment(m_EntityIDTexture);
+				glassDesc.addColorAttachment(m_VelocityTexture);
+				glassDesc.setDepthAttachment(m_DepthTexture);
+				m_GlassMotionFramebuffer = m_Device->createFramebuffer(glassDesc);
 			}
-			if (!m_VelocityTexture || !m_MotionPrepassFramebuffer)
+			if (!m_VelocityTexture || !m_MotionPrepassFramebuffer || !m_GlassMotionFramebuffer)
 			{
 				m_VelocityTexture = nullptr;
 				m_MotionPrepassFramebuffer = nullptr;
+				m_GlassMotionFramebuffer = nullptr;
 				m_Errors.Report(fmt::format("failed to create the velocity target for a {}x{} viewport; rendering without motion", m_ViewportSize.x, m_ViewportSize.y));
 				return false;
 			}
@@ -1882,6 +1897,7 @@ namespace Strata
 		release(m_AOBlurBindingSet);
 		release(m_PrepassFramebuffer);
 		release(m_ForwardFramebuffer);
+		release(m_GlassFramebuffer);
 		release(m_OutputFramebuffer);
 		release(m_ExposureBindingSet);
 		release(m_BloomTexture);
@@ -1914,6 +1930,7 @@ namespace Strata
 		// The motion history goes with the targets: the next frame that asks starts without one.
 		release(m_VelocityTexture);
 		release(m_MotionPrepassFramebuffer);
+		release(m_GlassMotionFramebuffer);
 		release(m_MotionViewBindingSet);
 		// Screen-space reflections' targets (made again by the next frame that traces them).
 		release(m_SurfaceTexture);
@@ -1921,6 +1938,11 @@ namespace Strata
 		release(m_SurfacePrepassFramebuffer);
 		for (nvrhi::BindingSetHandle& set : m_ScreenReflectionSets)
 			release(set);
+		// The scene-color copy (made again by the next frame that draws glass).
+		release(m_SceneColorTexture);
+		for (nvrhi::BindingSetHandle& set : m_SceneColorSets)
+			release(set);
+		m_SceneColorSets.clear();
 		release(m_PreviousInstances);
 		release(m_PreviousPalette);
 		release(m_GrownPreviousInstances);
@@ -2014,8 +2036,14 @@ namespace Strata
 		m_ForwardFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc()
 			.addColorAttachment(m_HDRTexture)
 			.setDepthAttachment(m_DepthTexture));
+		nvrhi::FramebufferDesc glassDesc;
+		glassDesc.addColorAttachment(m_HDRTexture);
+		if (m_EntityIDTexture)
+			glassDesc.addColorAttachment(m_EntityIDTexture);
+		glassDesc.setDepthAttachment(m_DepthTexture);
+		m_GlassFramebuffer = m_Device->createFramebuffer(glassDesc);
 		m_LDRFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(m_LDRTexture));
-		if (!m_GTAOBindingSet || !m_AOBlurBindingSet || !m_PrepassFramebuffer || !m_ForwardFramebuffer || !m_LDRFramebuffer)
+		if (!m_GTAOBindingSet || !m_AOBlurBindingSet || !m_PrepassFramebuffer || !m_ForwardFramebuffer || !m_GlassFramebuffer || !m_LDRFramebuffer)
 			return fail("framebuffers");
 		if (!CreateDepthPyramid())
 			return fail("depth pyramid");
@@ -2155,6 +2183,7 @@ namespace Strata
 			case Pass::Shadow:
 			case Pass::LocalShadow:  desc.PS = nullptr; break; // Depth only
 			case Pass::Transparent:  desc.PS = m_ForwardTransparentPixelShader; break;
+			case Pass::Glass:        desc.PS = key.Velocity ? m_GlassVelocityPixelShader : m_GlassPixelShader; break;
 			case Pass::Opaque:       desc.PS = m_ForwardPixelShader; break;
 			case Pass::SelectionMask: desc.PS = m_SelectionMaskPixelShader; break;
 		}
@@ -2188,6 +2217,11 @@ namespace Strata
 			case Pass::Opaque:
 				depth.setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::Equal);
 				break;
+			case Pass::Glass:
+				// Not in the prepass (its depth would hide what lies behind from the scene-color copy): it writes its own, so the
+				// blended surfaces behind it stay hidden and the TAA and the overlays see it. No blending: HDR alpha 1.
+				depth.setDepthWriteEnable(true).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
+				break;
 			case Pass::SelectionMask:
 				// The selected surfaces where nothing is in front of them, drawn with the camera's own matrices against the
 				// jittered depth: with its bias.
@@ -2213,7 +2247,8 @@ namespace Strata
 
 		nvrhi::IFramebuffer* framebuffer = localShadowPass ? m_LocalShadowFramebuffer.Get() : shadowPass ? m_ShadowFramebuffers[0].Get()
 			: (key.PassType == Pass::Prepass ? (key.Surface ? m_SurfacePrepassFramebuffer.Get() : key.Velocity ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get())
-			: (selectionMask ? m_SelectionMaskFramebuffer.Get() : m_ForwardFramebuffer.Get()));
+			: (selectionMask ? m_SelectionMaskFramebuffer.Get()
+			: (key.PassType == Pass::Glass ? (key.Velocity ? m_GlassMotionFramebuffer.Get() : m_GlassFramebuffer.Get()) : m_ForwardFramebuffer.Get())));
 		nvrhi::GraphicsPipelineHandle pipeline = m_Device->createGraphicsPipeline(desc, framebuffer->getFramebufferInfo());
 		ST_CORE_VERIFY(pipeline, "SceneRenderer: failed to create a scene pipeline");
 		m_ScenePipelines.emplace_back(key, pipeline);
@@ -2387,11 +2422,27 @@ namespace Strata
 		state.framebuffer = pass == Pass::Prepass ? GetPrepassFramebuffer() : m_ForwardFramebuffer.Get();
 		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y)));
 		state.bindings = { m_SceneBindingSet, Renderer::GetBindlessTextures().GetTable() };
-		const uint32_t firstArgument = transparent ? static_cast<uint32_t>(m_OpaqueBatches.size()) : 0u;
-		// Transparent surfaces have no EQUAL test to agree with and write no motion: the plain shaders.
+		uint32_t firstArgument = transparent ? static_cast<uint32_t>(m_OpaqueBatches.size()) : 0u;
+		std::span<const SceneDrawBatch> drawn = batches;
+		if (pass == Pass::Transparent && m_GlassBatchCount > 0)
+		{
+			// Glass first, unblended, into its own attachments (with its motion in a frame with motion vectors).
+			nvrhi::GraphicsState glassState = state;
+			glassState.framebuffer = GetGlassFramebuffer();
+			const bool glassVelocity = m_MotionFrame;
+			DrawBuckets(commandList, glassState, drawn.first(m_GlassBatchCount), firstArgument,
+				[glassVelocity](const SceneDrawBatch& batch)
+				{
+					return PipelineKey { Pass::Glass, batch.DoubleSided, batch.Mirrored, batch.Skinned, glassVelocity, false };
+				},
+				nullptr, nullptr);
+			firstArgument += m_GlassBatchCount;
+			drawn = drawn.subspan(m_GlassBatchCount);
+		}
+		// Blended transparent surfaces have no EQUAL test to agree with and write no motion: the plain shaders.
 		const bool velocity = m_MotionFrame && pass != Pass::Transparent;
 		const bool surface = m_ReflectionFrame && pass == Pass::Prepass;
-		DrawBuckets(commandList, state, batches, firstArgument,
+		DrawBuckets(commandList, state, drawn, firstArgument,
 			[pass, velocity, surface](const SceneDrawBatch& batch)
 			{
 				return PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned, velocity, surface };
@@ -2798,6 +2849,9 @@ namespace Strata
 		if (!GatherReflectionProbes(scene, camera))
 			degraded = true;
 		GatherDraws(renderScene, camera, !m_GPUDrivenFrame);
+		// Glass reads a copy of the frame before its transparent surfaces; without one it would show black behind it.
+		if (m_GlassBatchCount > 0 && !EnsureSceneColorResources())
+			degraded = true;
 		GatherShadowDraws(renderScene, camera, frame, !m_GPUDrivenFrame);
 		GatherLocalShadowDraws(renderScene, !m_GPUDrivenFrame);
 		BuildLocalShadowData(camera);
@@ -2868,7 +2922,7 @@ namespace Strata
 		TextureTable& textureTable = Renderer::GetTextureTable();
 		const bool tableUploaded = textureTable.RecordUploads(commandList);
 		const bool rebind = buffersRecreated || m_BoundEnvironment != GetEnvironmentCube() || m_BoundSkyView != GetBoundSkyView()
-			|| m_BoundReflectionProbes != GetBoundReflectionProbes() || m_BoundScreenReflections != GetBoundScreenReflections()
+			|| m_BoundReflectionProbes != GetBoundReflectionProbes() || m_BoundScreenReflections != GetBoundScreenReflections() || m_BoundSceneColor != GetBoundSceneColor()
 			|| m_BoundTextureTableVersion != textureTable.GetBufferVersion();
 		if (!tableUploaded || (rebind && !CreateSceneBindingSets()))
 		{
@@ -3036,6 +3090,13 @@ namespace Strata
 			commandList->endMarker();
 		}
 		gpuTimer.Next(gpuStages.Transparent);
+		if (m_GlassBatchCount > 0 && m_SceneColorTexture)
+		{
+			commandList->beginMarker("SceneColorCopy");
+			CopySceneColor(commandList);
+			commandList->endMarker();
+			m_Stats.SceneColorCopies = 1;
+		}
 		commandList->beginMarker("Transparent");
 		DrawBatches(commandList, Pass::Transparent, true);
 		commandList->endMarker();

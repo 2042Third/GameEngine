@@ -95,6 +95,7 @@ stays under 40,000 characters (the test `Docs.AgentGuide` fails beyond). How the
   - [Skinned meshes](#skinned-meshes)
   - [Lights, shadows and HDR](#lights-shadows-and-hdr)
   - [Streaming and uploads](#streaming-and-uploads)
+  - [Clear coat and glass](#clear-coat-and-glass)
   - [Material texture slots](#material-texture-slots)
   - [Overlays](#overlays)
   - [Text and fonts](#text-and-fonts)
@@ -262,7 +263,8 @@ on an Apple M2 Max with MoltenVK 1.4.2 (Homebrew), where every test of the `gpu`
   two: indirect draws without a count from the GPU (culled draws get no instances), depth pyramids reduced without
   min/max samplers.
 - **Tight limits**: 31 storage buffers per shader stage and 32 KiB of compute shared memory, and 16 samplers per stage.
-  The scene set uses 12 storage buffers (the reflection probes' among them) and 9 samplers, the GPU culling's layout 23
+  The scene set uses 12 storage buffers (the reflection probes' among them), 9 samplers and the scene-color copy as one
+  more sampled image (SRV 19), the GPU culling's layout 23
   storage buffers (the local shadow views' among them): a new binding counts against these.
 - **Bindless tables**: the descriptor set support query rejects any set beyond `maxPerSetDescriptors` (1,212), also
   update-after-bind sets within the update-after-bind limits (a million sampled images), and MoltenVK samples every slot
@@ -629,7 +631,8 @@ exercised by it.
   - `GPU.FeatureTest` (in `StrataTests.GPU`) renders the scene for 4 frames without playing it (no scripts) and checks
     entities in the ID buffer, text and stats (its post-processing is TAA under Custom with every technique on, values
     outside Sharp's tuning bounds: the history grows, and screen-space reflections at intensity 0.8 up to roughness 0.6;
-    the inactive "Alternate Grading" holds the clamp and rejection off);
+    the inactive "Alternate Grading" holds the clamp and rejection off; the Ground's `Feature.stmat` has a clear coat and
+    the Glass Pane's `FeatureGlass.stmat` is glass, picked through its own entity ids and making the scene-color copy);
   - `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` (label `feature`): the real executables open a copy of
     the project, load the feature scripts (`script.load`), lay out and hit-test the menu (`ui.layout`, `ui.hitTest`),
     step the physics, click the Play Button and type into the Name Field while playing (`input.click`, `input.type`, and
@@ -2478,7 +2481,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   occlusion, the reflection probes' conversions and the screen-space reflections' trace ("Reflections"), forward PBR
   (opaque surfaces with an EQUAL depth test
   and forced early depth testing), sky,
-  transparent surfaces (back to front), each fogged by the scene's height fog ("Fog and atmosphere"), the temporal
+  transparent surfaces: glass first after a copy of the image so far, then the blended ones back to front ("Clear coat
+  and glass"), each fogged by the scene's height fog ("Fog and atmosphere"), the temporal
   anti-aliasing resolve when the scene chooses it, then
   post-processing from the scene's `PostProcessComponent` (exposure, bloom, tone mapping and grading, FXAA without
   TAA). A target framebuffer must match the viewport size and have a non-sRGB UNORM color format; `Render` returns false
@@ -2777,8 +2781,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `DisocclusionThreshold * max(|expected|, scale)` (the near distance, or an orthographic view's height).
 - **HDR alpha convention:** every writer of the HDR target before the TAA writes alpha 1 (the clear, opaque surfaces, the
   sky); blended transparent surfaces multiply it by 1 - a (`SrcBlendAlpha Zero`, `DestBlendAlpha InvSrcAlpha`), so after
-  the transparent pass it is their transmittance; glass, drawn without blending with its own depth and velocity, will
-  write 1. A new writer keeps this or the reactive mask goes wrong (the HDR-alpha case of `GPU.SceneRenderer.TAA`
+  the transparent pass it is their transmittance; glass, drawn without blending with its own depth and velocity, writes
+  1. A new writer keeps this or the reactive mask goes wrong (the HDR-alpha case of `GPU.SceneRenderer.TAA`
   fails). Only the TAA reads it. The history's alpha holds the signed view distance (above); screen-space reflections
   fetch only the history's color ("Reflections").
 - **Sharpening** lives in the tone mapping (`Tonemap.frag`, `TonemapParameters::Sharpening`, written only on frames the
@@ -3129,6 +3133,47 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   into the back buffer calls `Renderer::PrepareBackBuffer()` first (the application and the runtime do): the GPU waits
   for the display's image only from there on, so the frame's uploads never queue behind the display.
 
+### Clear coat and glass
+
+- **Clear coat** (`MaterialProperties::Clearcoat`, `ClearcoatRoughness`, the coat's strength, roughness and normal maps;
+  `Include/PBR.glsl`'s `EvaluateClearcoat`): a dielectric layer of index 1.5 over the base with its own GGX lobe. Per
+  light the coat reflects `D * V * F` with its own normal and roughness and the base keeps `1 - F` (F the coat's Fresnel
+  at the half vector times its strength); the image-based light gets a second prefiltered lookup along the coat's
+  reflection (the probes' and the sky's, `SampleSpecularLight`, or the constant ambient as a uniform sky), the split-sum
+  reflectance from the BRDF table, and the base's image-based light and emission keep `1 - reflectance`. Screen-space
+  reflections replace only the base's specular light (the surface target holds the base's normal and roughness). Every
+  forward variant shades it behind a branch on `c_MaterialClearcoat`, the same for a whole draw; surfaces without a coat
+  compute what they did before up to the shader compiler's rounding (measured on the Mac: images identical or one
+  half-float step apart at single values; a TAA history carries such a step on, to at most 2% at a few texels).
+- **Glass** (`Transmission` above 0, with `IOR`, `Thickness` in the mesh's units and the volume's attenuation): the
+  material's flags add `c_CullMaterialTransmissive` to `c_CullMaterialTransparent`, so both paths leave it to the
+  CPU-sorted transparent pass, which draws the transmissive batches first (`m_GlassBatchCount`, back to front) with
+  `Pass::Glass`: no blending (HDR alpha 1), depth written (the blended surfaces behind it stay hidden, overlays and the
+  TAA see it), entity ids when the renderer has them and the velocity in a frame with motion vectors, as further
+  attachments of `m_GlassFramebuffer` and `m_GlassMotionFramebuffer` (`Scene/ForwardGlass*.frag`, the four variants of
+  `Forward.frag` with `ST_FORWARD_GLASS`). It is picked and outlined like an opaque surface. Its alpha mode's blending
+  does not apply (Mask still cuts).
+- **The scene-color copy** (`SceneRendererGlass.cpp`, `Effects/SceneColorCopy.comp`, in `GPU.Transparent`): when the
+  frame draws glass, the HDR image after the sky is box-filtered into a texture of half the viewport's size with 6
+  levels (B10G11R11, or RGBA16F without `SupportsExtendedStorageFormats`, as half-resolution AO falls back;
+  `SceneRendererSpecification::ExtendedStorageFormats` false forces the fallback for tests), made by the first such
+  frame and released with the targets (about 2.7 MB at 1920x1080). `SceneRendererStats::SceneColorCopies` is 1 in frames
+  that made it. Glass reads it at SRV 19 where the ray refracted by its normal and `IOR` leaves its volume after
+  `Thickness` (times the instance's mean axis scale; 0 is a thin wall, read behind the pixel itself), projected with the
+  frame's jittered matrices, at the level `roughness * (levels - 1)`; Beer's law absorbs `MaterialData::Absorption`
+  along the thickness, the base color tints it, and the surface's reflectance (split sum) and coat take their share. The
+  transmitted light is not fogged again: the copy holds what lies behind with the fog in front of it.
+- **Limits:** the copy holds no transparent surface, so glass behind glass and blended surfaces behind glass are not
+  seen through it; glass gets no ambient occlusion (GTAO runs on the prepass's depth, which glass is not in: its depth
+  would hide what lies behind from the forward pass and from the copy) and casts no shadow (transparent materials cast
+  none); a transmissive material without lighting (`Unlit`) is not glass.
+- **Tests:** `GPU.SceneRenderer.Materials` (the coat's second highlight from its own normal map, its energy: every pixel
+  at most 96.5% of the uncoated surface plus the coat alone; the background displaced where the CPU predicts the exit
+  point's projection, unmoved at IOR 1; glass's depth, ids and velocity equal to an opaque cube's, blended surfaces
+  behind it hidden, HDR alpha 1; the copy only for glass and both formats alike), the glass in
+  `GPU.SceneRenderer.GPUDriven`'s transparent scene, `GPU.Editor.Viewport`'s click on glass with and without TAA, and
+  `PerfGPU.Renderer.Transmission` (provisional: 100,000 cubes through a pane over the whole view).
+
 ### Material texture slots
 
 - Material maps hold texture table indices (`Renderer/TextureTable.h`: 0-2 white, black and flat normal); the table's
@@ -3152,7 +3197,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 - Overlays (`SceneRenderOptions`, all off by default) are drawn after post-processing with exact display
   colors into the output texture (then copied into an external target): the infinite ground grid, the
-  selection outline (from the entity-ID buffer, so alpha-blended surfaces get none) and `DebugDraw` line
+  selection outline (from the entity-ID buffer, so alpha-blended surfaces get none; glass writes its ids and is
+  outlined) and `DebugDraw` line
   lists, depth-tested against the scene or always on top. Fill a `DebugDraw` each frame (gameplay
   debugging, or `DrawSceneGizmos` for light, camera and collider shapes) and pass it to `Render`. Collider shapes come
   from the components' registrations (`ComponentInfoBuilder::Gizmo`, `Reflection/ComponentGizmo.h`: a function of the

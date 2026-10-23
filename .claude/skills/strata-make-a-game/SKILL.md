@@ -66,7 +66,10 @@ Design the code for verification before writing it:
 - Materials: `material.create {"path": "Materials/Red.stmat", "properties": {...}}`. Properties: `BaseColor` [r,g,b,a],
   `Metallic`, `Roughness`, `EmissiveColor` [r,g,b], `EmissiveIntensity`, `AlphaMode` (`Opaque`, `Mask`, `Blend`; with an
   alpha below 1 for see-through), `AlphaCutoff`, `DoubleSided`, `Unlit`, texture maps by asset (`BaseColorMap`, ...),
-  `UVTiling`, `UVOffset`. `material.get {"material": "Builtin/DefaultMaterial"}` describes them all.
+  `UVTiling`, `UVOffset`; `Clearcoat` (0-1) with `ClearcoatRoughness` for car paint, lacquer or a wet look; `Transmission`
+  (1 for clear glass, water) with `IOR` (glass 1.5) and `Thickness` (0 for a window pane, more for solid glass that
+  bends what lies behind it), tinted by `BaseColor` and `AttenuationColor`. Glass shows what is behind it, not other
+  glass or `Blend` surfaces behind it. `material.get {"material": "Builtin/DefaultMaterial"}` describes them all.
 - Sounds: write a small 16-bit PCM WAV with a script of your own (outside the project), then
   `asset.import {"file": "<absolute>", "directory": "Sounds"}` (it answers once the import is done, and fails, removing
   the copy, when the file cannot be imported). Models, textures and fonts import the same way; a `.gltf` brings the

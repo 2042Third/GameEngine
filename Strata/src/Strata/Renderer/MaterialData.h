@@ -20,7 +20,8 @@ namespace Strata
 	namespace MaterialGPU
 	{
 
-		// How a frame draws a material (RenderData::c_CullMaterial*: available, double-sided, alpha-masked, transparent).
+		// How a frame draws a material (RenderData::c_CullMaterial*: available, double-sided, alpha-masked, transparent, and
+		// transmissive, always with transparent).
 		uint32_t GetFlags(const MaterialProperties& properties);
 
 		// The material's texture maps (invalid handles where it has none): base color, metallic-roughness, normal, occlusion,

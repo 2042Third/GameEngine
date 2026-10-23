@@ -392,9 +392,17 @@ namespace
 		glass.BaseColor = glm::vec4(0.9f, 0.3f, 0.2f, 0.45f);
 		glass.AlphaMode = MaterialAlphaMode::Blend;
 		const AssetHandle transparent = assets.AddMaterial(glass);
+		// Glass too: drawn first in the transparent pass, refracting the scene-color copy, by both paths alike.
+		MaterialProperties transmissive;
+		transmissive.BaseColor = glm::vec4(0.8f, 0.95f, 0.9f, 1.0f);
+		transmissive.Roughness = 0.2f;
+		transmissive.Transmission = 1.0f;
+		transmissive.Thickness = 0.5f;
+		const AssetHandle refracting = assets.AddMaterial(transmissive);
 		for (uint32_t index = 0; index < 12; index++)
 		{
-			AddMesh(scene, index % 3 == 0 ? BuiltinAssets::SphereMesh : BuiltinAssets::CubeMesh, index % 2 == 0 ? transparent : opaque,
+			const AssetHandle material = index % 4 == 1 ? refracting : index % 2 == 0 ? transparent : opaque;
+			AddMesh(scene, index % 3 == 0 ? BuiltinAssets::SphereMesh : BuiltinAssets::CubeMesh, material,
 				glm::vec3(static_cast<float>(index % 4) * 1.5f - 2.25f, 0.0f, -static_cast<float>(index / 4) * 1.5f), "Mixed");
 		}
 		return View(glm::vec3(0.0f, 3.0f, 6.0f), glm::vec3(0.0f, 0.0f, -1.5f));
@@ -531,7 +539,7 @@ namespace
 
 TEST_SUITE("GPU.SceneRenderer.GPUDriven")
 {
-	TEST_CASE("The GPU path draws what the CPU path draws: meshes, masks, mirrors, skins, shadows, transparency and levels of detail")
+	TEST_CASE("The GPU path draws what the CPU path draws: meshes, masks, mirrors, skins, shadows, transparency, glass and levels of detail")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());

@@ -144,6 +144,10 @@ namespace Strata
 		// ReadEntityIDAsync), the selection outline and entity tints read it. Renderers that do none of these (games) turn it
 		// off; outlines and tints asked of them are then left out, with an error.
 		bool EntityIDs = true;
+		// Storage images of the extended formats where the device has them (GraphicsDeviceInfo::SupportsExtendedStorageFormats):
+		// the half-precision ambient occlusion and the B10G11R11 scene-color copy transmissive surfaces read. False uses their
+		// fallbacks (R32F, RGBA16F) on every device: tests compare them.
+		bool ExtendedStorageFormats = true;
 
 		// Asset requests follow visibility: mesh renderers in the view request their mesh and materials at High priority
 		// when their projected size (bounding sphere diameter / viewport height) exceeds this fraction, at Normal priority
@@ -482,6 +486,8 @@ namespace Strata
 		// Whether the frame traced screen-space reflections (PostProcessComponent::ScreenSpaceReflections): only with temporal
 		// anti-aliasing, from the second frame of its history on (they read the previous frame's resolved image).
 		bool ScreenSpaceReflections = false;
+		// Copies of the scene's color the frame made for transmissive surfaces (CopySceneColor: 1 when it draws one, else 0).
+		uint32_t SceneColorCopies = 0;
 		// Instances drawn into shadow views (summed over views) and their draw calls (the GPU-driven path's are counted on the
 		// GPU: SceneRendererGPUStats::LocalShadowInstances, LocalShadowDraws, AddGPUCounts).
 		uint32_t LocalShadowCasters = 0;
@@ -640,6 +646,10 @@ namespace Strata
 		// confidence). Null until a frame traces them; released with the other targets.
 		nvrhi::ITexture* GetSurfaceTexture() const { return m_SurfaceTexture; }
 		nvrhi::ITexture* GetScreenReflectionTexture() const { return m_ScreenReflectionTexture; }
+		// The scene-color copy transmissive surfaces read (SceneRendererStats::SceneColorCopies): the HDR image before the
+		// transparent pass, at half resolution with mips, B10G11R11 or RGBA16F (SceneRendererSpecification::
+		// ExtendedStorageFormats). Null until a frame draws a transmissive surface; released with the other targets.
+		nvrhi::ITexture* GetSceneColorTexture() const { return m_SceneColorTexture; }
 		// The motion history (SceneRenderOptions::MotionVectors): the render scene's instances (RenderData::InstanceData) and
 		// joint matrices as this renderer's latest frame with motion drew them, indexed like the scene's GPU copy. Null until a
 		// frame asks for motion, and again once the render targets are released.
@@ -742,6 +752,7 @@ namespace Strata
 			Shadow,
 			ShadowMasked,
 			SelectionMask, // The selected instances into the selection mask (temporal anti-aliasing's outline)
+			Glass,         // Transmissive surfaces: the transparent pass's first draws, unblended, writing depth, entity ids and motion
 			LocalShadow,   // Into a point or spot light's shadow view (a tile of the local shadows' atlas)
 			LocalShadowMasked
 		};
@@ -783,6 +794,7 @@ namespace Strata
 			bool DoubleSided = false;
 			bool Mirrored = false;
 			bool Skinned = false;
+			bool Transmissive = false; // Drawn as glass, before the blended surfaces (m_GlassBatchCount)
 		};
 
 		// A render proxy found by the shadow cascade queries.
@@ -1125,6 +1137,16 @@ namespace Strata
 		void TraceScreenReflections(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
 		// What the scene binding sets bind at SRV 18: the reflections' target once made, else a black texture.
 		nvrhi::ITexture* GetBoundScreenReflections() const;
+		// The scene-color copy, its layout, pipeline and binding sets (one per level), made by the first frame that draws a
+		// transmissive surface; false (reported) when they cannot be created.
+		bool EnsureSceneColorResources();
+		// Copies the HDR image (the opaque surfaces and the sky) into the scene-color copy's levels (Effects/SceneColorCopy.comp,
+		// in GPU.Transparent), before the glass that reads it.
+		void CopySceneColor(nvrhi::ICommandList* commandList);
+		// What the scene binding sets bind at SRV 19: the scene-color copy once made, else a black texture.
+		nvrhi::ITexture* GetBoundSceneColor() const;
+		// The framebuffer glass draws into: with the velocity target in a frame with motion vectors.
+		nvrhi::IFramebuffer* GetGlassFramebuffer() const { return m_MotionFrame ? m_GlassMotionFramebuffer.Get() : m_GlassFramebuffer.Get(); }
 		// The motion history's buffers (SceneRenderOptions::MotionVectors) at the size of the scene's GPU copy's, and the velocity
 		// target with its prepass framebuffer; with `keepContents` a buffer that grows keeps what it held (copied at the frame's
 		// start, RecordMotionGrowth). False (logged) when they cannot be created.
@@ -1431,6 +1453,7 @@ namespace Strata
 		nvrhi::ShaderHandle m_PrepassPixelShader;
 		nvrhi::ShaderHandle m_ForwardPixelShader;
 		nvrhi::ShaderHandle m_ForwardTransparentPixelShader;
+		nvrhi::ShaderHandle m_GlassPixelShader; // With or without entity ids, as the renderer writes them
 		nvrhi::ShaderHandle m_FullscreenVertexShader;
 		nvrhi::ShaderHandle m_TonemapPixelShader;
 		nvrhi::ShaderHandle m_SkyboxPixelShader;
@@ -1575,6 +1598,7 @@ namespace Strata
 		nvrhi::ComputePipelineHandle m_AOBlurPipeline;
 		nvrhi::FramebufferHandle m_PrepassFramebuffer;
 		nvrhi::FramebufferHandle m_ForwardFramebuffer;
+		nvrhi::FramebufferHandle m_GlassFramebuffer; // The HDR target, the entity ids (when the renderer has them) and the depth
 		nvrhi::FramebufferHandle m_OutputFramebuffer;
 
 		// Post-processing
@@ -1741,7 +1765,10 @@ namespace Strata
 		std::vector<SortItem> m_SlotSortItems; // The used slots' sort (ResolveAssets)
 		std::vector<TransparentDraw> m_Transparent;
 		std::vector<SceneDrawBatch> m_OpaqueBatches;
+		// The transparent pass's batches: the transmissive ones (m_GlassBatchCount, drawn first as glass), then the blended
+		// ones, each back to front.
 		std::vector<SceneDrawBatch> m_TransparentBatches;
+		uint32_t m_GlassBatchCount = 0;
 		std::vector<uint32_t> m_DrawInstances;          // The view's draw list (what m_DrawListBuffer holds after the upload)
 		std::vector<uint32_t> m_DrawInstancesBuild;     // The draw list being built
 		std::vector<uint32_t> m_ShadowDrawInstances;
@@ -1934,6 +1961,8 @@ namespace Strata
 		nvrhi::ShaderHandle m_MeshVelocityVertexShader;
 		nvrhi::ShaderHandle m_SkinnedMeshVelocityVertexShader;
 		nvrhi::ShaderHandle m_PrepassVelocityPixelShader;
+		nvrhi::ShaderHandle m_GlassVelocityPixelShader;
+		nvrhi::FramebufferHandle m_GlassMotionFramebuffer; // The glass framebuffer's attachments and the velocity target
 		// Screen-space reflections (PostProcessComponent::ScreenSpaceReflections): the frame traces them (with TAA, its history
 		// holding the previous frame), their targets and the prepass framebuffer writing the surface target, the trace's
 		// pipeline and its binding sets by the history texture it reads, and the texture the scene binding sets name at SRV 18.
@@ -1946,6 +1975,14 @@ namespace Strata
 		nvrhi::ComputePipelineHandle m_ScreenReflectionPipeline;
 		std::array<nvrhi::BindingSetHandle, 2> m_ScreenReflectionSets;
 		nvrhi::ITexture* m_BoundScreenReflections = nullptr;
+		// The scene-color copy transmissive surfaces read (SRV 19): its format (B10G11R11, or RGBA16F without the extended
+		// storage formats), the copy's pipeline and its binding sets, one per level, and the texture the scene binding sets name.
+		nvrhi::TextureHandle m_SceneColorTexture;
+		nvrhi::Format m_SceneColorFormat = nvrhi::Format::RGBA16_FLOAT;
+		nvrhi::BindingLayoutHandle m_SceneColorLayout;
+		nvrhi::ComputePipelineHandle m_SceneColorPipeline;
+		std::vector<nvrhi::BindingSetHandle> m_SceneColorSets;
+		nvrhi::ITexture* m_BoundSceneColor = nullptr;
 		// The motion debug view (DrawMotionView): its binding set names the velocity target and the depth.
 		nvrhi::BindingLayoutHandle m_MotionViewLayout;
 		nvrhi::BindingSetHandle m_MotionViewBindingSet;

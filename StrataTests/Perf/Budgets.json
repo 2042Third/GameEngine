@@ -202,6 +202,8 @@
 	"PerfGPU.Renderer.ReflectionProbes16GPU": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.SSR": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.SSRGPU": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Renderer.Transmission": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Renderer.TransmissionGPU": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.LocalShadows16Lights": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.LocalShadows16LightsGPU": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.LocalShadows16LightsCached": { "Unit": "ms", "Provisional": true },

@@ -5503,6 +5503,37 @@
 					}
 				},
 				"ID": "F7E0000000000069"
+			},
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": false,
+						"Material": "F7A0000000000010",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Glass Pane"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1.6,
+							1.6,
+							0.1
+						],
+						"Translation": [
+							-1.5,
+							1.5,
+							4
+						]
+					}
+				},
+				"ID": "F7E000000000006A"
 			}
 		],
 		"Name": "Feature",

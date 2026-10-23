@@ -2,6 +2,12 @@
 	"Material": {
 		"AlphaCutoff": 0.5,
 		"AlphaMode": "Opaque",
+		"AttenuationColor": [
+			1.0,
+			1.0,
+			1.0
+		],
+		"AttenuationDistance": 0.0,
 		"BaseColor": [
 			0.9,
 			0.85,
@@ -9,6 +15,11 @@
 			1.0
 		],
 		"BaseColorMap": "F7A0000000000005",
+		"Clearcoat": 0.3,
+		"ClearcoatMap": "0000000000000000",
+		"ClearcoatNormalMap": "0000000000000000",
+		"ClearcoatRoughness": 0.15,
+		"ClearcoatRoughnessMap": "0000000000000000",
 		"DoubleSided": false,
 		"EmissiveColor": [
 			0.0,
@@ -17,6 +28,7 @@
 		],
 		"EmissiveIntensity": 1.0,
 		"EmissiveMap": "0000000000000000",
+		"IOR": 1.5,
 		"Metallic": 0.1,
 		"MetallicRoughnessMap": "F7A000000000000A",
 		"NormalMap": "F7A0000000000009",
@@ -24,6 +36,9 @@
 		"OcclusionMap": "0000000000000000",
 		"OcclusionStrength": 1.0,
 		"Roughness": 0.7,
+		"Thickness": 0.0,
+		"Transmission": 0.0,
+		"TransmissionMap": "0000000000000000",
 		"UVOffset": [
 			0.0,
 			0.0

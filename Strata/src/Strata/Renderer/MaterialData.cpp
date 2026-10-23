@@ -13,9 +13,12 @@ namespace Strata::MaterialGPU
 
 	uint32_t GetFlags(const MaterialProperties& properties)
 	{
+		// Glass is drawn by the transparent pass (after the copy of what lies behind it), whatever its alpha mode.
+		const bool transmissive = IsTransmissive(properties);
 		return RenderData::c_CullMaterialAvailable | (properties.DoubleSided ? RenderData::c_CullMaterialDoubleSided : 0u)
 			| (properties.AlphaMode == MaterialAlphaMode::Mask ? RenderData::c_CullMaterialAlphaMask : 0u)
-			| (properties.AlphaMode == MaterialAlphaMode::Blend ? RenderData::c_CullMaterialTransparent : 0u);
+			| (properties.AlphaMode == MaterialAlphaMode::Blend || transmissive ? RenderData::c_CullMaterialTransparent : 0u)
+			| (transmissive ? RenderData::c_CullMaterialTransmissive : 0u);
 	}
 
 	std::array<AssetHandle, c_TextureMapCount> GetTextureMaps(const MaterialProperties& properties)
