@@ -673,10 +673,10 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 			double Covered = 0.0; // Pixels covered for exactly two frames
 			double Trail = 0.0;   // Pixels it left one or two frames ago
 		};
-		const auto measure = [&](float transparentWeight)
+		const auto measure = [&](const TemporalAntiAliasingSettings& settings)
 		{
-			DetailScene scene(assets, WithTransparentWeight(transparentWeight));
-			DetailScene still(assets, WithTransparentWeight(transparentWeight));
+			DetailScene scene(assets, settings);
+			DetailScene still(assets, settings);
 			Entity quad = AddTransparentQuad(scene.Contents, assets, { 1.0f, 0.1f, 0.1f, 0.5f }, glm::vec3(-2.0f, 0.5f, 0.0f), 2.0f);
 			AddTransparentQuad(still.Contents, assets, { 1.0f, 0.1f, 0.1f, 0.5f }, glm::vec3(2.0f, 0.5f, 0.0f), 2.0f);
 			SceneRenderer renderer = CreateRenderer("Reactive");
@@ -731,12 +731,20 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 			errors.Trail /= trail;
 			return errors;
 		};
-		const Errors original = measure(0.0f);
-		const Errors reactive = measure(0.5f);
-		INFO("covered for two frames: " << original.Covered << " -> " << reactive.Covered << "; trail: " << original.Trail << " -> " << reactive.Trail);
+		const Errors original = measure(WithTransparentWeight(0.0f));
+		const Errors reactive = measure(WithTransparentWeight(0.5f));
+		// With variance clipping (as under Sharp) the coverage comes from the clip's fetches: it weighs the current frame more
+		// there too.
+		TemporalAntiAliasingSettings tight = WithVarianceClipping(1.25f);
+		const Errors tightOriginal = measure(tight);
+		tight.TransparentWeight = 0.5f;
+		const Errors tightReactive = measure(tight);
+		INFO("covered for two frames: " << original.Covered << " -> " << reactive.Covered << "; trail: " << original.Trail << " -> " << reactive.Trail
+			<< "; with variance clipping: " << tightOriginal.Covered << " -> " << tightReactive.Covered);
 		CHECK(original.Covered > 0.01);
 		CHECK(reactive.Covered <= 0.5 * original.Covered);
 		CHECK(reactive.Trail <= original.Trail * 1.05 + 1e-3);
+		CHECK(tightReactive.Covered <= 0.8 * tightOriginal.Covered);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

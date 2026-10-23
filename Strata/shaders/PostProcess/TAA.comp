@@ -88,19 +88,24 @@ vec3 ExpandColor(vec3 compressed, float exposure)
 
 // The history clipped toward the mean of the compressed colors of the pixel's 3x3 neighborhood, into a box `ClipWidth`
 // standard deviations wide around the mean within their range. The history moves along the line toward the mean, so its hue
-// relative to the mean is kept; a history inside the box is kept. The taps are fetched again (from the cache) rather than in
-// the range clamp's loop, which then needs no more registers than without variance clipping.
-vec3 ClipHistoryToVariance(vec3 history, ivec2 pixel, ivec2 size, float exposure)
+// relative to the mean is kept; a history inside the box is kept. The taps are fetched again (from the cache) after the
+// history's filter rather than in the range clamp's loop: on Apple GPUs the moments gathered there, kept across the filter,
+// cost more than the second fetches. The same fetches give the reactive mask's coverage (GetTransparentCoverage) in
+// `coverage`.
+vec3 ClipHistoryToVariance(vec3 history, ivec2 pixel, ivec2 size, float exposure, out float coverage)
 {
 	vec3 sum = vec3(0.0);
 	vec3 squares = vec3(0.0);
 	vec3 low = vec3(3.0e38);
 	vec3 high = vec3(-3.0e38);
+	coverage = 0.0;
 	for (int y = -1; y <= 1; y++)
 	{
 		for (int x = -1; x <= 1; x++)
 		{
-			vec3 compressed = CompressColor(texelFetch(u_Current, clamp(pixel + ivec2(x, y), ivec2(0), size - 1), 0).rgb, exposure);
+			vec4 texel = texelFetch(u_Current, clamp(pixel + ivec2(x, y), ivec2(0), size - 1), 0);
+			coverage = max(coverage, 1.0 - texel.a);
+			vec3 compressed = CompressColor(texel.rgb, exposure);
 			sum += compressed;
 			squares += compressed * compressed;
 			low = min(low, compressed);
@@ -239,8 +244,10 @@ void main()
 			vec3 history = (motion == vec2(0.0) ? texelFetch(u_History, pixel, 0).rgb : SampleHistory(previousUV, fraction)) * u_Temporal.HistoryScale;
 			// The luminance weights' exposure: of exposed values.
 			float exposure = u_Exposure[ST_EXPOSURE_MULTIPLIER] * u_Temporal.InversePreExposure;
+			// The reactive mask's coverage: from variance clipping's fetches when it runs (negative: still to be found).
+			float coverage = -1.0;
 			if (u_Temporal.ClampMode == 1u)
-				history = ClipHistoryToVariance(history, pixel, size, exposure);
+				history = ClipHistoryToVariance(history, pixel, size, exposure, coverage);
 			else
 				history = YCoCgToRGB(clamp(RGBToYCoCg(history), low, high));
 			float motionPixels = length(motion * u_Frame.ViewportSize.xy);
@@ -257,7 +264,11 @@ void main()
 			// the neighborhood, a surface of alpha 0.5 or more fully (dilated over its aliased edges). Never a bypass: they would
 			// alias and shimmer with the jitter.
 			if (u_Temporal.TransparentWeight > 0.0)
-				weight = max(weight, min(1.0, 2.0 * GetTransparentCoverage(pixel, size)) * u_Temporal.TransparentWeight);
+			{
+				if (coverage < 0.0)
+					coverage = GetTransparentCoverage(pixel, size);
+				weight = max(weight, min(1.0, 2.0 * coverage) * u_Temporal.TransparentWeight);
+			}
 			float currentWeight = weight / (1.0 + Luminance(current) * exposure);
 			float historyWeight = (1.0 - weight) / (1.0 + Luminance(max(history, vec3(0.0))) * exposure);
 			result = (current * currentWeight + history * historyWeight) / max(currentWeight + historyWeight, 1e-6);

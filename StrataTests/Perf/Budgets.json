@@ -190,6 +190,8 @@
 	"Perf.World.DriveFrameP95": { "Unit": "ms", "Provisional": true, "Target": 16.7 },
 	"PerfGPU.Renderer.Render100kCubesTAA": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.Render100kCubesTAAGPU": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Renderer.Render100kCubesTAAOriginal": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Renderer.Render100kCubesTAAOriginalGPU": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.HeightFog": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.HeightFogGPU": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.Atmosphere": { "Unit": "ms", "Provisional": true },
