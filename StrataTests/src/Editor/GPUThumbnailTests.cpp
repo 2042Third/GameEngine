@@ -741,6 +741,68 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The project's picture of a 100,000 lux scene waits for its pre-exposure to settle")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUThumbnailPreExposure") / "Game";
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		const auto run = [&](std::string_view name, const nlohmann::json& parameters)
+		{
+			return Tests::RunCommandToCompletion(context, commands, name, parameters);
+		};
+		const auto frameUntil = [&](const std::function<bool()>& condition)
+		{
+			for (int frame = 0; frame < 3000 && !condition(); frame++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				context.Update(Timestep(1.0f / 60.0f));
+				gpu.GetDevice().EndFrame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return condition();
+		};
+		run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+
+		// Without temporal anti-aliasing the picture would be its first complete frame, drawn at a pre-exposure of 1.
+		Scene& scene = *context.GetActiveScene();
+		Entity postProcessEntity = scene.FindEntityByName("Post Process");
+		if (!postProcessEntity)
+		{
+			postProcessEntity = scene.CreateEntity("Post Process");
+			postProcessEntity.AddComponent<PostProcessComponent>();
+		}
+		PostProcessComponent& postProcess = postProcessEntity.GetComponent<PostProcessComponent>();
+		postProcess.AntiAliasing = false;
+		postProcess.AutoExposure = true;
+		postProcess.AutoExposureMaxEV = 16.0f;
+		uint32_t suns = 0;
+		for (auto [entity, light] : scene.GetRegistry().view<DirectionalLightComponent>().each())
+		{
+			light.Intensity = 100000.0f;
+			scene.GetRegistry().patch<DirectionalLightComponent>(entity);
+			suns++;
+		}
+		if (suns == 0)
+			Tests::AddSun(scene, glm::vec3(0.3f, -1.0f, 0.2f), 100000.0f);
+		Tests::AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Cube");
+		Tests::AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f, -0.5f, 0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(200.0f);
+		run("camera.set", { { "position", { 0.0, 1.0, 4.0 } }, { "target", { 0.0, 0.0, 0.0 } } });
+		run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+		REQUIRE(FileSystem::Exists(ProjectThumbnail::GetFile(directory)));
+		ViewportRenderer* captureRenderer = context.GetViewport().GetCaptureRenderer();
+		REQUIRE(captureRenderer);
+		CHECK_FALSE(captureRenderer->GetStats().TemporalAntiAliasing);
+		CHECK(captureRenderer->GetStats().PreExposureSettled);
+		CHECK(captureRenderer->GetStats().PreExposure <= 1.0f / 64.0f); // Far from the 1 it started at
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A prefab's thumbnail draws every shadow view of its point and spot lights in the frame")
 	{
 		Tests::GPUContext gpu;

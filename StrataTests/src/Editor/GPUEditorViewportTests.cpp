@@ -1307,6 +1307,40 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture of a 100,000 lux scene waits for its pre-exposure to settle")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.Run("entity.create", { { "name", "PostProcess" }, { "components", { { "PostProcess", { { "Tonemapper", "None" }, { "AutoExposure", true },
+			{ "AutoExposureMaxEV", 16.0 }, { "Vignette", 0.0 }, { "Bloom", false }, { "AmbientOcclusion", false }, { "AntiAliasing", false } } } } } });
+		Scene& scene = *harness.Context.GetActiveScene();
+		Entity floor = scene.CreateEntity("Floor");
+		floor.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		floor.GetComponent<TransformComponent>().Scale = glm::vec3(60.0f, 1.0f, 60.0f);
+		floor.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		Entity sun = scene.CreateEntity("Sun");
+		sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::normalize(glm::vec3(0.3f, -1.0f, 0.2f)));
+		sun.AddComponent<DirectionalLightComponent>().Intensity = 100000.0f;
+		harness.Run("camera.set", { { "position", { 0, 6, 8 } }, { "target", { 0, 0, 0 } } });
+
+		// The first frame starts at a pre-exposure of 1; the capture renders again until its metering came back and kept it.
+		nlohmann::json result;
+		const DecodedImage image = harness.CaptureLoaded({ { "width", 128 }, { "height", 128 }, { "overlays", false } }, &result);
+		CHECK(result["preExposureSettled"] == true);
+		CHECK(result["waitedFrames"] >= 1);
+		ViewportRenderer* capture = harness.Context.GetViewport().GetCaptureRenderer();
+		REQUIRE(capture);
+		const SceneRendererStats& stats = capture->GetSceneRenderer().GetStats();
+		CHECK(stats.PreExposureSettled);
+		CHECK(stats.PreExposure <= 1.0f / 4096.0f);
+		// The sunlit floor, metered to middle gray.
+		const size_t center = (static_cast<size_t>(image.Height / 2) * image.Width + image.Width / 2) * 4;
+		CHECK(std::abs(static_cast<int>(image.Pixels[center]) - 118) <= 12);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A capture of a scene with sixteen shadowed point lights shows every light's shadow in its first complete frame")
 	{
 		Tests::GPUContext gpu;

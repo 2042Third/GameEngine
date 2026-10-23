@@ -57,6 +57,10 @@ namespace Strata
 		// Frames a capture may render again while shadow views of point and spot lights wait to be drawn: none for the capture
 		// renderer, which draws every view in its first frame (SceneRendererSpecification::SpreadLightingUpdates is off).
 		constexpr uint32_t c_MaxCaptureLightingFrames = 16;
+		// Frames a capture may render again while its pre-exposure settles (SceneRendererStats::PreExposureSettled): automatic
+		// exposure reads its metering back frames later, and a scene far from 1 nit (daylight in real units) needs a second
+		// readback once its pre-exposure moved.
+		constexpr uint32_t c_MaxCaptureExposureFrames = 8;
 		// Polls a finished capture waits for its frame's GPU times (they are resolved 1-3 frames after the GPU finished it).
 		constexpr uint32_t c_MaxCaptureGPUStatsPolls = 8;
 
@@ -247,6 +251,8 @@ namespace Strata
 			uint32_t MotionFrames = 0;   // Renders repeated for the motion view's previous frame
 			uint32_t TemporalFrames = 0; // Renders repeated while temporal anti-aliasing settled
 			uint32_t LightingFrames = 0; // Renders repeated while shadow views of point and spot lights waited to be drawn
+			uint32_t ExposureFrames = 0; // Renders repeated while the pre-exposure settled
+			bool Rendered = false;       // A first frame was rendered (it started the exposure again)
 			uint32_t TexturesBelowWanted = 0;
 			uint32_t StalePoses = 0;
 			uint32_t DeferredProxies = 0;
@@ -310,8 +316,13 @@ namespace Strata
 				settings.DebugView = *request.DebugView;
 			progress.DebugView = settings.DebugView;
 
-			// A capture is a single frame: its exposure is metered from this frame alone, not adapted from an earlier one.
-			renderer->GetSceneRenderer().ResetExposureAdaptation();
+			// A capture's exposure is metered from its own frames alone, not adapted from an earlier one; its first frame starts the
+			// pre-exposure again too, which the later ones keep while it settles.
+			if (progress.Rendered)
+				renderer->GetSceneRenderer().JumpExposureAdaptation();
+			else
+				renderer->GetSceneRenderer().ResetExposureAdaptation();
+			progress.Rendered = true;
 			if (!renderer->Render(context, request.Size, *view, settings, progress.Overlays))
 			{
 				renderer->ReleaseTargets();
@@ -342,7 +353,10 @@ namespace Strata
 			// The motion view shows the motion since the capture renderer's previous frame, which its first frame lacks.
 			const bool motionPending = progress.DebugView == ViewportDebugView::Motion && !stats.MotionHistory && progress.MotionFrames == 0;
 			const bool lightingPending = progress.LocalShadowViewsPending > 0 && progress.LightingFrames < c_MaxCaptureLightingFrames;
-			const bool contentPending = textPending || assetsPending || mipsPending || posesPending || instancesPending || motionPending || lightingPending;
+			// Until its pre-exposure settled the frame's brightest and darkest values may have clamped or lost bits.
+			const bool exposurePending = !stats.PreExposureSettled && progress.ExposureFrames < c_MaxCaptureExposureFrames;
+			const bool contentPending = textPending || assetsPending || mipsPending || posesPending || instancesPending || motionPending || lightingPending
+				|| exposurePending;
 			// Temporal anti-aliasing: the mean of the jitter's phases of the complete view, as the viewport shows a still view once it
 			// settled. A frame still incomplete starts the history again (the capture's targets are released after each picture,
 			// so each one starts it anyway), so the picture blends complete frames only.
@@ -354,6 +368,7 @@ namespace Strata
 					renderer->GetSceneRenderer().ResetHistory();
 				progress.MotionFrames += motionPending ? 1 : 0;
 				progress.LightingFrames += lightingPending ? 1 : 0;
+				progress.ExposureFrames += exposurePending ? 1 : 0;
 				progress.TemporalFrames += temporalPending ? 1 : 0;
 				progress.TextFrames += textPending ? 1 : 0;
 				progress.AssetFrames += assetsPending ? 1 : 0;
@@ -457,7 +472,7 @@ namespace Strata
 				{ "camera", request.OwnCamera.IsSet() ? "custom" : (progress.View.FromScene ? "scene" : "editor") },
 				{ "view", DescribeView(progress.View.Camera) },
 				{ "waitedFrames", std::max({ progress.TextFrames, progress.AssetFrames, progress.MipFrames, progress.PoseFrames, progress.InstanceFrames,
-					progress.MotionFrames, progress.TemporalFrames, progress.LightingFrames }) },
+					progress.MotionFrames, progress.TemporalFrames, progress.LightingFrames, progress.ExposureFrames }) },
 				{ "temporalFrames", progress.Stats.TemporalFrames },
 				{ "overlays", progress.Overlays },
 				{ "pendingAssets", progress.PendingAssets },
@@ -465,6 +480,7 @@ namespace Strata
 				{ "stalePoses", progress.StalePoses },
 				{ "pendingTextGlyphs", progress.PendingTextGlyphs },
 				{ "localShadowViewsPending", progress.LocalShadowViewsPending },
+				{ "preExposureSettled", progress.Stats.PreExposureSettled },
 				{ "previewLighting", progress.PreviewLighting },
 				{ "screenSpaceTexts", progress.ScreenSpaceTexts },
 				{ "hiddenScreenSpaceTexts", progress.HiddenScreenSpaceTexts },
@@ -702,7 +718,9 @@ namespace Strata
 			"(waitForAssets, default true: up to about five seconds of frames; waitedFrames counts the extra renders), and textures it draws that still "
 			"lack the finer mip levels the view wants (up to about two seconds, as a texture budget may keep them out), and animators that animate only "
 			"while seen (WhenVisible) until they show the pose of their time (a few frames, also while paused), and mesh renderers the scene just "
-			"gained until they reached the GPU (a few frames for a million; renderStats.deferredInstanceBytes says what still waited), and a scene "
+			"gained until they reached the GPU (a few frames for a million; renderStats.deferredInstanceBytes says what still waited), and the "
+			"renderer's pre-exposure (the power of two its HDR values are scaled by, chosen from automatic exposure's metering read back frames "
+			"later) until it settled (a few frames, also without waitForAssets; preExposureSettled false if it did not within 8), and a scene "
 			"drawn with temporal anti-aliasing (PostProcess AntiAliasingMethod TAA), also without waitForAssets, until 8 frames of the complete "
 			"view, the mean of its jitter's phases (temporalFrames: the frames the picture's history holds, 0 without it). Reports what was still "
 			"loading when the picture was taken (pendingAssets), the textures drawn coarser than the view wants (texturesBelowWanted), animators "

@@ -2239,7 +2239,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?,
   fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion", waitForAssets?, path?, overwrite?}` renders on the
   next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still
-  being rasterized, so text is never half drawn, for a scene drawn with temporal anti-aliasing until its history holds
+  being rasterized, so text is never half drawn, up to `c_MaxCaptureExposureFrames` until its pre-exposure settled (the
+  first frame starts it again from 1 with `ResetExposureAdaptation`, the later ones only jump the adaptation:
+  `PreExposureSettled`, "Light units and exposure"), for a scene drawn with temporal anti-aliasing until its history holds
   `c_TemporalSettleFrames` frames of the complete view, up to `c_MaxCaptureTemporalFrames`, and with `waitForAssets`
   (default true) up to `c_MaxCaptureAssetFrames` while assets of the view are loading, so the first capture after
   opening or playing a scene shows its materials, and up
@@ -2249,7 +2251,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `SpreadLightingUpdates`, so `c_MaxCaptureLightingFrames` and `localShadowViewsPending` stay unused there), reads
   the image back without stalling, encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data":
   <base64>}, "width", "height", "camera", "view": {"position", "forward", "fov"}, "waitedFrames", "temporalFrames", "overlays",
-  "pendingAssets", "texturesBelowWanted", "stalePoses", "pendingTextGlyphs", "localShadowViewsPending", "previewLighting",
+  "pendingAssets", "texturesBelowWanted", "stalePoses", "pendingTextGlyphs", "localShadowViewsPending", "preExposureSettled",
+  "previewLighting",
   "screenSpaceTexts", "hiddenScreenSpaceTexts", "ui": {"canvases",
   "hiddenCanvases", "elements", "drawCalls", "pendingGlyphs"}, "debugView":
   {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD",
@@ -2841,7 +2844,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   - A renderer starts at P = 1, and again after `ResetExposureAdaptation` (`JumpExposureAdaptation` only jumps the
     adaptation and keeps P). `PreExposureSettled` is true when P is forced or manual, or once a readback of the
     renderer's metering of a frame drawn with the current P arrived and kept it: until then the frame's brightest and
-    darkest values may have clamped or lost bits.
+    darkest values may have clamped or lost bits, so `viewport.capture` and the project's picture (`ProjectThumbnail`,
+    `c_MaxExposureFrames`) wait for it, bounded by 8 frames, and their incomplete frames start TAA's history again.
   - A real sunlit scene meters around EV 15 (`AutoExposureMaxEV` is registered up to 16); P is then about 2^-17.
 
 ### Height fog

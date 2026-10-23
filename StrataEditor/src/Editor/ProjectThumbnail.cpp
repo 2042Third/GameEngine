@@ -83,6 +83,8 @@ namespace Strata
 		m_RequestedAgain = false;
 		m_Frames = 0;
 		m_TemporalFrames = 0;
+		m_ExposureFrames = 0;
+		m_Rendered = false;
 		m_Readback.reset();
 	}
 
@@ -128,7 +130,12 @@ namespace Strata
 			// As the game shows it: no editor overlays, no preview lighting of its own.
 			ViewportSettings settings = context.GetViewport().GetSettings();
 			settings.DebugView = ViewportDebugView::None;
-			renderer->GetSceneRenderer().ResetExposureAdaptation();
+			// Metered from its own frames alone; the first one starts the pre-exposure again, which the later ones keep.
+			if (m_Rendered)
+				renderer->GetSceneRenderer().JumpExposureAdaptation();
+			else
+				renderer->GetSceneRenderer().ResetExposureAdaptation();
+			m_Rendered = true;
 			if (!renderer->Render(context, size, *view, settings, false))
 			{
 				renderer->ReleaseTargets();
@@ -138,13 +145,16 @@ namespace Strata
 			// Complete, as captures wait for it: what loads, glyphs still being prepared (the scene's text and the game UI's),
 			// the finer levels of textures the view wants (a texture counts as loaded with its mip tail), mesh renderers still
 			// on their way to the GPU and point and spot lights' shadow views not drawn yet (none for the capture renderer, which
-			// draws them at once), for at most c_MaxFrames frames (a texture budget may keep levels out for good). An
-			// incomplete frame starts temporal anti-aliasing's history again, so that it holds the jitter's phases of the
-			// complete view, or of the view as it is once that wait ended: the picture then waits for the history too.
+			// draws them at once), for at most c_MaxFrames frames (a texture budget may keep levels out for good), and the
+			// pre-exposure until it settled, for at most c_MaxExposureFrames. An incomplete frame starts temporal
+			// anti-aliasing's history again, so that it holds the jitter's phases of the complete view, or of the view as it is
+			// once that wait ended: the picture then waits for the history too.
 			const SceneRendererStats& stats = renderer->GetStats();
 			const bool incomplete = stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || stats.Overlays.PendingGlyphs > 0 || stats.DeferredProxies > 0
 				|| stats.LocalShadowViewsPending > 0 || renderer->CountTexturesBelowWanted() > 0;
-			if (incomplete && ++m_Frames < c_MaxFrames)
+			const bool waiting = incomplete && ++m_Frames < c_MaxFrames;
+			const bool exposureWaiting = !stats.PreExposureSettled && ++m_ExposureFrames < c_MaxExposureFrames;
+			if (waiting || exposureWaiting)
 			{
 				renderer->GetSceneRenderer().ResetHistory();
 				return;
@@ -172,6 +182,8 @@ namespace Strata
 		m_Readback.reset();
 		m_Frames = 0;
 		m_TemporalFrames = 0;
+		m_ExposureFrames = 0;
+		m_Rendered = false;
 		m_Requested = m_RequestedAgain;
 		m_RequestedAgain = false;
 		if (!read)

@@ -45,7 +45,7 @@ instead of being cut off at the 65,000 nits half floats can hold. The scaling is
 scene lit by a fraction of the real values (all of them divided by the same number, with the exposure raised to match,
 e.g. a 100 lux sun at exposure -5) still looks exactly like the real one at -15. With automatic exposure a sunlit scene
 meters around 15 stops, so its **Auto Exposure Max EV** must reach that (16, its highest value). The pre-exposure takes
-a few frames to find its value after a scene loads.
+a few frames to find its value after a scene loads; viewport captures and the project's picture wait for it.
 
 ## Exposure
 
