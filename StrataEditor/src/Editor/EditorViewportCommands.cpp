@@ -640,8 +640,9 @@ namespace Strata
 			const bool instancesPending = request.WaitForAssets && progress.DeferredProxies > 0 && progress.InstanceFrames < c_MaxCaptureInstanceFrames;
 			// The motion view shows the motion since the capture renderer's previous frame, which its first frame lacks.
 			const bool motionPending = progress.DebugView == ViewportDebugView::Motion && !stats.MotionHistory && progress.MotionFrames == 0;
-			const bool lightingPending = progress.LocalShadowViewsPending + progress.ReflectionProbesPending > 0
-				&& progress.LightingFrames < c_MaxCaptureLightingFrames;
+			// Probes wait only for their captures to load (the capture renderer converts every one at once): an asset wait.
+			const uint32_t probesPending = request.WaitForAssets ? progress.ReflectionProbesPending : 0u;
+			const bool lightingPending = progress.LocalShadowViewsPending + probesPending > 0 && progress.LightingFrames < c_MaxCaptureLightingFrames;
 			// Until its pre-exposure settled the frame's brightest and darkest values may have clamped or lost bits.
 			const bool exposurePending = !stats.PreExposureSettled && progress.ExposureFrames < c_MaxCaptureExposureFrames;
 			const bool contentPending = textPending || assetsPending || mipsPending || posesPending || instancesPending || motionPending || lightingPending
@@ -998,7 +999,8 @@ namespace Strata
 			"loading when the picture was taken (pendingAssets), the textures drawn coarser than the view wants (texturesBelowWanted), animators "
 			"drawn with an older pose (stalePoses), glyphs that could not be prepared in time (pendingTextGlyphs) and point and spot lights' shadow "
 			"views not drawn (localShadowViewsPending; captures draw them all at once) and reflection probes whose capture was not loaded "
-			"(reflectionProbesPending; captures convert loaded ones at once). debugView colors the picture "
+			"(reflectionProbesPending; waited for as assets are, with waitForAssets; captures convert loaded ones at once). debugView colors "
+			"the picture "
 			"by streaming state, level of detail or mip levels (default: the viewport's, viewport.setSettings) and the result's debugView says what it "
 			"found: {view, tintedEntities, pendingEntities, failedEntities, placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], "
 			"lodErrorPixels: [the largest error drawn at each of those, in pixels, where levels are chosen by their errors; else 0], "

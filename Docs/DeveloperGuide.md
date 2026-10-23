@@ -2266,7 +2266,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   capture renderer draws every shadow view of every shadowed point and spot light and converts every loaded reflection
   probe capture in its first frame, without `SpreadLightingUpdates`, so `c_MaxCaptureLightingFrames`,
   `localShadowViewsPending` and `reflectionProbesPending` stay unused there unless a capture still loads, which counts in
-  `pendingAssets` too), reads
+  `pendingAssets` too and is waited for only with `waitForAssets`), reads
   the image back without stalling, encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data":
   <base64>}, "width", "height", "camera", "view": {"position", "forward", "fov"}, "waitedFrames", "temporalFrames", "overlays",
   "pendingAssets", "texturesBelowWanted", "stalePoses", "pendingTextGlyphs", "localShadowViewsPending",

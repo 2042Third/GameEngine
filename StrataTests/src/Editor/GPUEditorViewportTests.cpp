@@ -23,6 +23,7 @@
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/SceneRenderer.h>
@@ -34,6 +35,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -1402,6 +1404,41 @@ TEST_SUITE("GPU.Editor.Viewport")
 			CAPTURE(index);
 			CHECK(MeanLumaAround(shadowed, camera, shadowCenters[index]) < MeanLumaAround(lit, camera, shadowCenters[index]) * 0.7);
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture waits for reflection probes whose captures are loading only with waitForAssets")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ViewportCaptureProbe") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		// The probe's capture: a texture of the project no render requested yet, so it is still loading in the first frame.
+		const std::optional<std::vector<uint8_t>> hdr = ImageWriter::EncodeHDR(4, 2, std::vector<float>(24, 0.5f));
+		REQUIRE(hdr);
+		const std::filesystem::path source = Tests::CreateTemporaryDirectory("ViewportCaptureProbeSource") / "Probe.hdr";
+		REQUIRE(FileSystem::WriteBytes(source, *hdr));
+		harness.Run("asset.import", { { "file", FileSystem::ToUTF8(source) }, { "directory", "Lighting" } });
+		const AssetHandle capture = harness.Context.GetAssetManager()->FindAssetByPath("Lighting/Probe.hdr");
+		REQUIRE(capture.IsValid());
+		harness.Run("entity.create", { { "name", "PostProcess" }, { "components", { { "PostProcess", { { "Tonemapper", "None" }, { "AutoExposure", false },
+			{ "Vignette", 0.0 }, { "Bloom", false }, { "AmbientOcclusion", false }, { "AntiAliasing", false } } } } } });
+		harness.Run("entity.create", { { "name", "Probe" }, { "components", { { "ReflectionProbe", { { "Extents", { 5, 5, 5 } },
+			{ "Capture", UUIDToJson(capture) } } } } } });
+		harness.Run("entity.create", { { "name", "Ball" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::SphereMesh) } } } } } });
+		harness.Run("camera.set", { { "position", { 0, 0, 3 } }, { "target", { 0, 0, 0 } } });
+
+		// Without waitForAssets the picture is taken at once, the probe reported as pending.
+		nlohmann::json result;
+		harness.Capture({ { "width", 64 }, { "height", 64 }, { "overlays", false }, { "waitForAssets", false } }, &result);
+		CHECK(result["reflectionProbesPending"] == 1);
+		CHECK(result["waitedFrames"] == 0);
+		// With it, the capture renders again until the probe's capture loaded and was converted.
+		harness.Capture({ { "width", 64 }, { "height", 64 }, { "overlays", false } }, &result);
+		CHECK(result["reflectionProbesPending"] == 0);
+		CHECK(result["renderStats"]["reflectionProbes"] == 1);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
