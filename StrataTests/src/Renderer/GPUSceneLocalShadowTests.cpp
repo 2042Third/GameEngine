@@ -2,6 +2,7 @@
 
 #include "Animation/SkinnedMeshTestUtils.h"
 #include "Animation/TestSkinningPoses.h"
+#include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/RendererComponents.h"
 
 #include <glm/gtc/packing.hpp>
@@ -670,6 +671,52 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 				CHECK(values[frame] <= values[frame - 1] + 1e-3f);
 			gpu.GetDevice().WaitForIdle();
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A renderer that drew a scene with more light records shadows only the shadowed lights of the next one")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		// The GPU's light culling names the lights' shadow slots from the renderer's table of light records.
+		if (!Renderer::GetGraphicsDevice().GetInfo().SupportsDrawIndirectFirstInstance)
+			return;
+		SceneTestAssets assets;
+		const AssetHandle matte = MatteMaterial(assets);
+		// Eight lamps in one place over a caster (eight light records, in whatever order), `shadowed` of them casting shadows.
+		const auto addLamps = [&](Scene& scene, int lamps, int shadowed)
+		{
+			AddNeutralPostProcess(scene);
+			AddBox(scene, matte, glm::vec3(-10.0f, -1.0f, -10.0f), glm::vec3(10.0f, 0.0f, 10.0f), "Floor");
+			AddBox(scene, matte, glm::vec3(-0.3f, 1.2f, -0.3f), glm::vec3(0.3f, 1.8f, 0.3f), "Caster");
+			for (int index = 0; index < lamps; index++)
+				AddPointLight(scene, glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(1.0f), 5.0f, 8.0f).GetComponent<PointLightComponent>().CastShadows = index < shadowed;
+		};
+		// Every lamp casting shadows; then a scene of one lamp (fewer records); then one lamp of eight casting shadows.
+		Scene many;
+		addLamps(many, 8, 8);
+		Scene one;
+		addLamps(one, 1, 0);
+		Scene other;
+		addLamps(other, 8, 1);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 7.0f, 6.0f), glm::vec3(0.0f));
+
+		SceneRenderer reused(AtOnceSpecification(GPUDrivenMode::Auto));
+		reused.SetViewportSize(c_Size, c_Size);
+		REQUIRE(reused.Render(many, camera));
+		CHECK(reused.GetStats().LocalShadowLights == 8);
+		REQUIRE(reused.Render(one, camera));
+		const ReadbackImage after = RenderHDR(reused, other, camera);
+		CHECK(reused.GetStats().LocalShadowLights == 1);
+		SceneRenderer fresh(AtOnceSpecification(GPUDrivenMode::Auto));
+		fresh.SetViewportSize(c_Size, c_Size);
+		const ReadbackImage expected = RenderHDR(fresh, other, camera);
+		// In the caster's shadow the unshadowed lamps' light, as a renderer that drew nothing before shows it.
+		const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(0.0f), c_Size);
+		const size_t index = static_cast<size_t>(pixel.y) * c_Size + pixel.x;
+		CHECK(ReadRed(expected, index) > 0.01f);
+		CHECK(ReadRed(after, index) == doctest::Approx(ReadRed(expected, index)).epsilon(0.02));
+		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

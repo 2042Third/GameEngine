@@ -1528,7 +1528,7 @@ namespace Strata
 		nvrhi::BufferHandle m_LightGroupCountBuffer; // Per work group of records: its lights in view
 		std::array<const nvrhi::IBuffer*, 7> m_LightCullBound = {}; // The buffers the binding sets name
 		// Per light record its shadow slot plus one (Scene/LightCompact.comp): what the buffer holds, the records set in it, and
-		// how many of its entries were written since it was made.
+		// how many of its first entries are up to date (the records of the latest frame that culled lights on the GPU).
 		nvrhi::BufferHandle m_LightShadowSlotBuffer;
 		std::vector<uint32_t> m_LightShadowSlots;
 		std::vector<uint32_t> m_LightShadowSlotRecords;

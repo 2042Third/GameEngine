@@ -455,19 +455,17 @@ namespace Strata
 	void SceneRenderer::UploadLightShadowSlots(nvrhi::ICommandList* commandList)
 	{
 		// The records of the previous frame's shadowed lights are cleared, the frame's set, and the range between the first and
-		// the last change written; entries the buffer never held are written as zeros first.
+		// the last change written. Entries the buffer does not hold up to date are written as zeros first: those of a new
+		// buffer, and those beyond the records of a frame that had fewer (another scene's), which that frame could not clear.
 		const uint32_t records = m_GPULightRecords;
 		if (m_LightShadowSlots.size() < records)
 			m_LightShadowSlots.resize(records, 0u);
-		uint32_t first = std::min(m_LightShadowSlotsWritten, records);
-		uint32_t end = records;
-		if (first == records)
+		uint32_t first = records;
+		uint32_t end = 0;
+		if (m_LightShadowSlotsWritten < records)
 		{
-			first = records;
-			end = 0;
-		}
-		else
-		{
+			first = m_LightShadowSlotsWritten;
+			end = records;
 			std::fill(m_LightShadowSlots.begin() + first, m_LightShadowSlots.begin() + records, 0u);
 		}
 		const auto change = [&](uint32_t record, uint32_t value)
@@ -490,7 +488,7 @@ namespace Strata
 		}
 		if (end > first)
 			commandList->writeBuffer(m_LightShadowSlotBuffer, m_LightShadowSlots.data() + first, (end - first) * sizeof(uint32_t), first * sizeof(uint32_t));
-		m_LightShadowSlotsWritten = std::max(m_LightShadowSlotsWritten, records);
+		m_LightShadowSlotsWritten = records;
 	}
 
 	uint32_t SceneRenderer::GetBucketSlots(uint32_t bucket) const
