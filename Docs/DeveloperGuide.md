@@ -1064,7 +1064,8 @@ section; the composition root runs it first, and Input is a module every engine 
   map-qualified; `InputPlayerBindings`), atomically, outside `SaveFiles`' `*.save` names, so `Game::ListSaveFiles` never
   lists it. `LoadBindings` reads at most 64 KiB and forgives per entry: unknown actions and bindings their kind cannot use
   are dropped with one warning, and a file that is no bindings file is ignored with a warning (the project's bindings
-  apply).
+  apply). `ReadSavedBindings` reads the file as `LoadBindings` would apply it, without applying or warning, and
+  `DeleteSavedBindings` removes it.
 - **The UI map.** Every set has the map `UI` with the Buttons `Submit`, `Cancel`, `Up`, `Down`, `Left` and `Right`, which
   the game UI navigates with (`UIActionState`, [UI input](#ui-input)); their defaults
   (`InputActionSet::GetDefaultUIActions`) are Enter, keypad Enter, Space and A; Escape and B; the arrows, the d-pad and the
@@ -1082,9 +1083,30 @@ section; the composition root runs it first, and Input is a module every engine 
   the selected one's name, enable at start and removal) and the selected map's actions (name, kind, dead zone, bindings
   as chips with remove buttons, "+" to add one from lists of controls, composites part by part; the UI map's actions
   "Used by game UI navigation"), one command per edit, refused with the reason while the project is not ready; probe keys
-  under `ProjectSettings.Input.Actions.` (`Summary`, `Map.<i>`, `AddMap`, `MapName`, `MapEnabled`, `RemoveMap`,
-  `AddAction`, `Action.<a>.Name|Reserved|Remove|Kind|DeadZone|Binding.<b>|RemoveBinding.<b>|AddBinding`,
-  `AddBinding.Shape`, `AddBinding.Part.<p>`, `AddBinding.Add`, `Error`).
+  under `ProjectSettings.Input.Actions.` (`Summary`, `PlayerBindings`, `ResetPlayerBindings`, `Map.<i>`, `AddMap`,
+  `MapName`, `MapEnabled`, `RemoveMap`, `AddAction`,
+  `Action.<a>.Name|Reserved|Remove|Kind|DeadZone|Binding.<b>|RemoveBinding.<b>|AddBinding|CaptureBinding|PlayerBindings`,
+  `AddBinding.Shape`, `AddBinding.Part.<p>`, `AddBinding.Capture.<p>`, `AddBinding.Add`, `Capture`, `Capture.Cancel`,
+  `Error`).
+- **Binding by pressing.** A row's capture button binds the next key, mouse button or gamepad control pressed at once (a
+  Button's or an Axis'; a Vector2 takes sticks and 2D composites), and the binding popup's capture button fills in a part
+  the same way; the listening line counts down its 10 s and has a Cancel button. The page runs it through
+  `UI/BindingCapture` (`InputActions::BeginCapture` for an owner), which `EditorLayer` calls at the start of its UI each
+  frame, before any shortcut: it ends a capture that timed out or whose owner did not ask after it during the last frame
+  (another map shown, the popup closed, the window gone), and while one runs, and after it until every key is up, it
+  takes every keyboard and gamepad key from ImGui (`SetKeyOwner` with `LockUntilRelease`, which ImGui keeps for a key
+  pressed in the next frame before its navigation reads it), so the captured key runs no shortcut, no navigation and no
+  widget (Ctrl captured, then Z, is no undo). The capture hears the mouse too: a press on its Cancel button cancels, and a
+  mouse press it captured clicks nothing (the mouse buttons stay locked until released). It reads the devices, so it works
+  while play is paused.
+- **Players' bindings in the editor.** Play mode loads the players' file from the project's `.strata/Saves` at every
+  start, so a session that saved bindings would silently override later edits of those actions.
+  `EditorContext::GetPlayerBindings` reports the bindings that replace the project's (while playing the running game's,
+  saved or not; otherwise the file's, read again when play starts or stops, the project or its actions change, or the
+  bindings are reset); the page marks those actions ("In play", with the players' bindings) and offers "Reset Player
+  Bindings": `inputActions.resetPlayerBindings` (Session, `settings` toolset) deletes the file through
+  `InputActions::DeleteSavedBindings` and, while playing, restores the project's bindings in the running game, returning
+  the actions reset.
 - **Simulated actions** (`SimulateAction`, `ReleaseAllSimulated`, `ClearSimulated`): held down from the next input frame,
   whatever the bindings, with a value (Button: 1); for tools that play the game.
 - **Capture** (`BeginCapture(InputCaptureDevices)`, `TakeCapturedBinding`, `CancelCapture`): listens for the next control

@@ -41,8 +41,13 @@ to find a page or a field), the selected page on the right:
   from -1 to 1 such as steering, a Vector2 two values such as walking) and, for an Axis or a Vector2, its **Dead zone**
   (small stick movements that read as none). Its bindings are the controls that drive it: **+** adds one from the list of
   keys, mouse buttons and gamepad controls, or a composite made of two keys (an Axis: the negative and the positive one)
-  or four (a Vector2: up, down, left, right); the cross removes one. The map **UI** holds the actions the game's menus
-  navigate with (Submit, Cancel and the four directions): you can rebind them, but not rename or remove them.
+  or four (a Vector2: up, down, left, right); the cross removes one. The button beside **+** binds the next control you
+  press (a key, mouse button or gamepad control), and so does the one beside each part of a composite; **Cancel**, or ten
+  seconds without a press, stops listening, and the keys you press meanwhile trigger no editor shortcut. The map **UI**
+  holds the actions the game's menus navigate with (Submit, Cancel and the four directions): you can rebind them, but not
+  rename or remove them. When your game saved a player's rebinding while you played it, that player's bindings replace
+  the project's in every play session after: those actions are marked **In play**, and **Reset Player Bindings** deletes
+  the saved bindings so that your edits apply again.
 - A page for each kind of setting the engine and your game define, grouped by category. **Reset to Defaults** sets a page
   back to the values it starts with.
 

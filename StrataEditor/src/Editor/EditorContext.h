@@ -21,6 +21,7 @@
 #include <Strata/Core/EngineServices.h>
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Timestep.h>
+#include <Strata/Input/InputActionSet.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneLoader.h>
@@ -381,6 +382,15 @@ namespace Strata
 		EditorGameWindow& GetGameWindow() { return m_GameWindow; }
 		const EditorGameWindow& GetGameWindow() const { return m_GameWindow; }
 		std::optional<std::filesystem::path> GetGameSaveDirectory() const;
+		// The players' bindings that replace the project's, by qualified action name: while playing, those of the running game
+		// (InputActions::GetPlayerBindings, saved or not); otherwise those of the players' bindings file in the save directory
+		// (InputBindings.json, which a game's rebinding menu wrote with Input::SaveBindings while playing here), which the next
+		// play session starts with, so edits of those actions' bindings do not reach it. Read again when play starts or stops,
+		// the project or its actions change, or the bindings are reset; empty without a project.
+		const InputPlayerBindings& GetPlayerBindings();
+		// Deletes the players' bindings file (InputActions::DeleteSavedBindings) and, while playing, gives the running game the
+		// project's bindings from its next input frame. False, changing nothing, without a project or when the file stays.
+		bool ResetPlayerBindings(std::string* outError = nullptr);
 
 		//////////////////////////////////////////////////////////////////////////
 		// Selection (entities of the active scene)
@@ -855,6 +865,15 @@ namespace Strata
 		};
 		EditorGameWindow m_GameWindow;
 		ProjectGameSaves m_GameSaves { *this };
+		// GetPlayerBindings' answer, and what it was read for.
+		InputPlayerBindings m_PlayerBindings;
+		bool m_PlayerBindingsRead = false;
+		bool m_PlayerBindingsPlaying = false;
+		uint64_t m_PlayerBindingsProject = 0;  // m_ProjectGeneration, 0 without a project
+		uint64_t m_PlayerBindingsSession = 0;  // m_PlaySession
+		uint64_t m_PlayerBindingsActions = 0;  // InputActions::GetVersion
+		uint64_t m_PlayerBindingsResets = 0;   // m_PlayerBindingsResetCount
+		uint64_t m_PlayerBindingsResetCount = 0;
 		OpenProjectSettings m_OpenProjectSettings { *this };
 		Scope<EngineServices::ScopedProvider<IGameWindow>> m_GameWindowProvider;
 		Scope<EngineServices::ScopedProvider<IGameSaves>> m_GameSavesProvider;

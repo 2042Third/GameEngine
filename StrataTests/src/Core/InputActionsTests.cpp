@@ -837,6 +837,52 @@ TEST_SUITE("Core.InputActions")
 		}
 	}
 
+	TEST_CASE("The bindings file is read without applying it, and deleted")
+	{
+		ActionsProject project(MakeGameplayActions());
+		std::string error;
+		// Without a save directory there is nothing to read or delete.
+		CHECK(InputActions::ReadSavedBindings().Actions.empty());
+		CHECK_FALSE(InputActions::DeleteSavedBindings(&error));
+		CHECK(error.find("no save directory") != std::string::npos);
+
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("InputBindingsRead");
+		SaveDirectory saves(directory);
+		EngineServices::ScopedProvider<IGameSaves> savesProvider(saves);
+		const std::filesystem::path file = directory / InputPlayerBindings::c_FileName;
+		CHECK(InputActions::ReadSavedBindings().Actions.empty());
+		CHECK(InputActions::DeleteSavedBindings(&error)); // No file to delete is no failure
+		REQUIRE(InputActions::SetBindings("Gameplay/Jump", ParseAll({ "Key/J" })));
+		REQUIRE_MESSAGE(InputActions::SaveBindings(&error), error);
+		InputActions::ResetSession();
+		{
+			// What the next session starts with, without applying it.
+			Tests::LogCapture log;
+			const InputPlayerBindings read = InputActions::ReadSavedBindings();
+			REQUIRE(read.Actions.size() == 1);
+			CHECK(read.Actions.at("Gameplay/Jump") == ParseAll({ "Key/J" }));
+			CHECK(InputActions::GetPlayerBindings().Actions.empty());
+			// Entries the set has no place for are left out and a file that is no bindings file reads as none, without the
+			// warnings LoadBindings gives.
+			REQUIRE(FileSystem::WriteText(file, R"({"Strata": {"Format": "InputBindings", "Version": 1}, "Actions": {"Gameplay/Fly": ["Key/F"], "Jump": ["Key/U"]}})"));
+			CHECK(InputActions::ReadSavedBindings().Actions.empty());
+			REQUIRE(FileSystem::WriteText(file, "not json"));
+			CHECK(InputActions::ReadSavedBindings().Actions.empty());
+			CHECK(log.GetEntries().empty());
+		}
+
+		// Deleting the file keeps the bindings in use; the next session starts with the project's.
+		REQUIRE(InputActions::SetBindings("Gameplay/Jump", ParseAll({ "Key/K" })));
+		REQUIRE_MESSAGE(InputActions::SaveBindings(&error), error);
+		CHECK_MESSAGE(InputActions::DeleteSavedBindings(&error), error);
+		CHECK_FALSE(FileSystem::Exists(file));
+		CHECK(InputActions::GetBindings("Jump") == ParseAll({ "Key/K" }));
+		InputActions::ResetSession();
+		InputActions::LoadBindings();
+		CHECK(InputActions::GetPlayerBindings().Actions.empty());
+		CHECK(InputActions::ReadSavedBindings().Actions.empty());
+	}
+
 	TEST_CASE("A capture returns the first control and no action sees it")
 	{
 		ActionsProject project(MakeGameplayActions());

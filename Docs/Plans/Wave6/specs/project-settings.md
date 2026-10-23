@@ -1050,6 +1050,13 @@ function", "Unknown names fail and are reported once", "Qualified names resolve 
   steps", "input.state reports actions, maps and player bindings".
 - `Editor.UI.InputActions`: "The capture binds the next key and runs setAction", "Keys pressed while capturing run no
   shortcut", "Cancel and the timeout end a capture", "A capture while play is paused binds the next key".
+- *As built (what later steps build on):* the page captures through `UI/BindingCapture` (one capture per owner, ended
+  when its owner stops asking or after 10 s; `EditorLayer` calls `BindingCapture::BeginFrame` before any shortcut, and
+  the keyboard stays held until every key is up; a captured mouse press clicks nothing). A row's capture button adds a
+  Button's or Axis' binding at once, the binding popup's fills in a part (a press on Cancel cancels). The marks read
+  `EditorContext::GetPlayerBindings` (while playing the running game's, else the file's through
+  `InputActions::ReadSavedBindings`); `inputActions.resetPlayerBindings` (Session) runs `EditorContext::ResetPlayerBindings`
+  (`InputActions::DeleteSavedBindings`, and `ResetBindings("")` while playing) and returns `reset`, the actions dropped.
 
 **S10 Third-Person Adventure on actions.** Through the editor's commands: an `Input.Actions` section for ThirdPerson
 (`Gameplay` map: Move as Vector2 with `2D:Key/W,Key/S,Key/A,Key/D`, `2D:Key/Up,...` and `Gamepad/LeftStick`; Jump, Run,

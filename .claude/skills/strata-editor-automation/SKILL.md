@@ -627,6 +627,9 @@ changes an action (`kind` Button, Axis or Vector2; `deadZone`; `bindings` replac
 `2D:<up>,<down>,<left>,<right>`; `rename`, `map` to move, `remove`). Name actions `<Map>/<Action>`; a bare name works when
 no other map has it. The map `UI` (Submit, Cancel, Up, Down, Left, Right) is the game UI's navigation: rebind it, never
 rename or remove it. `project.settings {"section": "Input.Actions"}` shows the whole set. Each change is an undo step.
+Bindings a game's rebinding menu saved while playing (`Input::SaveBindings`, into `.strata/Saves/InputBindings.json`)
+replace the project's at every play start, so `setAction`'s bindings do not reach play for those actions:
+`inputActions.resetPlayerBindings {}` deletes that file (and, while playing, gives the game the project's bindings back).
 **Preferences** (toolset `settings`) are the person's, for every project, not the project's: `preferences.get` lists them
 like `project.settings` does (the external editor is `Editor.ExternalEditor`, `{"Command": "..."}`), and
 `preferences.set {"section", "value" | "reset": true}` changes one; they are no undo steps. Change them only when asked:

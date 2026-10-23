@@ -457,6 +457,26 @@ namespace Strata
 					return EditorCommandResult::Fail(fmt::format("The action '{}' is not in the project's input actions after the change", qualified));
 				return EditorCommandResult::Ok({ { "action", DescribeAction(applied, *appliedLocation) }, { "created", created } });
 			} });
+
+		registry.Register({ "inputActions.resetPlayerBindings",
+			"Deletes the players' bindings of the project's game: the file <project>/.strata/Saves/InputBindings.json that a rebinding menu "
+			"wrote with Input::SaveBindings while the game played here, and that every play session starts with, so that the project's "
+			"bindings apply again (while the file rebinds an action, inputActions.setAction's bindings do not reach play mode for it; the Input "
+			"Actions page marks those actions). While playing, the running game also gets the project's bindings back from its next frame. "
+			"Not undoable, like the game's saves. Returns reset: the actions whose players' bindings were dropped.",
+			ObjectSchema({}),
+			[](EditorContext& context, const nlohmann::json&) -> EditorCommandResult
+			{
+				if (!context.HasProject())
+					return EditorCommandResult::Fail("No project is open: the players' bindings belong to a project's game (project.open or project.create first)");
+				nlohmann::json reset = nlohmann::json::array();
+				for (const auto& [action, bindings] : context.GetPlayerBindings().Actions)
+					reset.push_back(action);
+				std::string error;
+				if (!context.ResetPlayerBindings(&error))
+					return EditorCommandResult::Fail(error);
+				return EditorCommandResult::Ok({ { "reset", std::move(reset) } });
+			}, EditorCommandKind::Session });
 	}
 
 }

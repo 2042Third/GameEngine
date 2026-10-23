@@ -275,4 +275,66 @@ TEST_SUITE("Editor.InputActions")
 		CHECK(InputActions::IsMapEnabled("Gameplay") == std::optional<bool>(false));
 		harness.Run("play.stop");
 	}
+
+	TEST_CASE("Player bindings saved in play are shown and can be reset")
+	{
+		ActionCommands harness("InputActionsPlayerBindings");
+		harness.Run("inputActions.setMap", { { "map", "Gameplay" } });
+		harness.Run("inputActions.setAction", { { "action", "Gameplay/Jump" }, { "bindings", { "Key/Space" } } });
+		harness.Run("inputActions.setAction", { { "action", "Gameplay/Fire" }, { "bindings", { "Mouse/Left" } } });
+		CHECK(harness.Context.GetPlayerBindings().Actions.empty());
+		// Nothing to reset is no failure.
+		CHECK(harness.Run("inputActions.resetPlayerBindings")["reset"] == nlohmann::json::array());
+
+		// A game's rebinding menu rebinds Jump and keeps it; while playing the marks follow the running game.
+		harness.Run("play.start", { { "build", false } });
+		std::string error;
+		REQUIRE(InputActions::SetBindings("Gameplay/Jump", std::vector<InputBinding> { *InputBinding::Parse("Key/J") }));
+		CHECK(harness.Context.GetPlayerBindings().Actions.count("Gameplay/Jump") == 1);
+		REQUIRE_MESSAGE(InputActions::SaveBindings(&error), error);
+		harness.Run("play.stop");
+		const std::filesystem::path file = *harness.Context.GetGameSaveDirectory() / InputPlayerBindings::c_FileName;
+		REQUIRE(FileSystem::Exists(file));
+
+		// After play the file shows: edits of Jump's bindings would not reach the next session.
+		const InputPlayerBindings& shown = harness.Context.GetPlayerBindings();
+		REQUIRE(shown.Actions.size() == 1);
+		CHECK(shown.Actions.at("Gameplay/Jump") == std::vector<InputBinding> { *InputBinding::Parse("Key/J") });
+		harness.Run("inputActions.setAction", { { "action", "Jump" }, { "bindings", { "Key/Space", "Key/W" } } });
+		harness.Run("play.start", { { "build", false } });
+		CHECK(InputActions::GetBindings("Jump") == std::vector<InputBinding> { *InputBinding::Parse("Key/J") });
+
+		// Reset while playing: the file goes and the running game gets the project's bindings back.
+		const size_t position = harness.Position();
+		CHECK(harness.Run("inputActions.resetPlayerBindings")["reset"] == nlohmann::json::array({ "Gameplay/Jump" }));
+		CHECK(harness.Position() == position); // Not undoable, like the game's saves
+		CHECK_FALSE(FileSystem::Exists(file));
+		CHECK(harness.Context.GetPlayerBindings().Actions.empty());
+		CHECK(InputActions::GetBindings("Jump") == std::vector<InputBinding> { *InputBinding::Parse("Key/Space"), *InputBinding::Parse("Key/W") });
+		harness.Run("play.stop");
+		CHECK(harness.Context.GetPlayerBindings().Actions.empty());
+
+		// Saved again and reset in Edit mode: the next session starts with the project's bindings.
+		harness.Run("play.start", { { "build", false } });
+		REQUIRE(InputActions::SetBindings("Gameplay/Fire", std::vector<InputBinding> { *InputBinding::Parse("Key/F") }));
+		REQUIRE_MESSAGE(InputActions::SaveBindings(&error), error);
+		harness.Run("play.stop");
+		CHECK(harness.Context.GetPlayerBindings().Actions.count("Gameplay/Fire") == 1);
+		CHECK(harness.Run("inputActions.resetPlayerBindings")["reset"] == nlohmann::json::array({ "Gameplay/Fire" }));
+		CHECK(harness.Context.GetPlayerBindings().Actions.empty());
+		harness.Run("play.start", { { "build", false } });
+		CHECK(InputActions::GetBindings("Fire") == std::vector<InputBinding> { *InputBinding::Parse("Mouse/Left") });
+		harness.Run("play.stop");
+
+		// Without a project there are no players' bindings, nor any to reset.
+		harness.Run("play.start", { { "build", false } });
+		REQUIRE(InputActions::SetBindings("Gameplay/Fire", std::vector<InputBinding> { *InputBinding::Parse("Key/F") }));
+		REQUIRE_MESSAGE(InputActions::SaveBindings(&error), error);
+		harness.Run("play.stop");
+		REQUIRE(harness.Context.GetPlayerBindings().Actions.size() == 1);
+		harness.Run("project.close");
+		CHECK(harness.Context.GetPlayerBindings().Actions.empty());
+		const EditorCommandResult refused = harness.Commands.Execute(harness.Context, "inputActions.resetPlayerBindings", nlohmann::json::object());
+		CHECK_FALSE(refused.Success);
+	}
 }

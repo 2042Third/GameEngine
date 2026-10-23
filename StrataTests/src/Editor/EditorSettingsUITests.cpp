@@ -14,6 +14,8 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/ProjectSettings.h>
 #include <Strata/Core/SettingsRegistry.h>
+#include <Strata/Input/Input.h>
+#include <Strata/Input/InputActions.h>
 #include <Strata/Input/InputActionSet.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -105,6 +107,73 @@ namespace
 		}
 		CHECK(conflicts == 0);
 	}
+
+	// A frame as the editor application runs one: an input frame, the input actions (and a binding capture), then the editor.
+	void InputFrame(HarnessEditor& editor, float seconds = ImGuiHarness::c_DeltaTime)
+	{
+		Input::BeginFrame();
+		InputActions::Update();
+		editor.Frames(1, seconds);
+	}
+
+	// A project with the map Gameplay (Jump on Space), shown on the Input Actions page.
+	struct CapturePage
+	{
+		HarnessEditor Editor;
+
+		explicit CapturePage(const std::string& name)
+		{
+			Input::Reset();
+			Editor.Frames(1);
+			CreateProject(Editor, name);
+			Editor.Run("inputActions.setMap", { { "map", "Gameplay" } });
+			Editor.Run("inputActions.setAction", { { "action", "Gameplay/Jump" }, { "bindings", { "Key/Space" } } });
+			OpenProjectSettings(Editor);
+			REQUIRE(Editor.Click("ProjectSettings.Page.Input.Actions"));
+			REQUIRE(Editor.FramesUntil([]() { return IsDrawn(Key("Map.1")); }));
+			REQUIRE(Editor.Click(Key("Map.1")));
+			REQUIRE(Editor.FramesUntil([]() { return IsDrawn(Key("Action.0.CaptureBinding")); }));
+		}
+
+		~CapturePage()
+		{
+			Input::Reset();
+		}
+
+		static std::string Key(std::string_view item)
+		{
+			return std::string(InputActionsPage::c_ProbePrefix) + std::string(item);
+		}
+
+		std::vector<std::string> Bindings(std::string_view action)
+		{
+			const nlohmann::json* value = Editor.Context().GetProject()->GetSettings().FindSection(InputActionSet::c_SectionId);
+			REQUIRE(value);
+			const std::optional<InputActionSet> set = InputActionSet::FromJson(*value);
+			REQUIRE(set);
+			const std::optional<InputActionLocation> location = set->FindAction(action);
+			REQUIRE(location);
+			std::vector<std::string> texts;
+			for (const InputBinding& binding : set->GetAction(*location).Bindings)
+				texts.push_back(binding.ToString());
+			return texts;
+		}
+
+		void StartCapture()
+		{
+			REQUIRE(Editor.Click(Key("Action.0.CaptureBinding")));
+			REQUIRE(InputActions::IsCapturing());
+			Editor.Frames(1);
+			REQUIRE(IsDrawn(Key("Capture")));
+		}
+
+		// A key going down or up on the keyboard: the devices (what the capture reads) and ImGui (what shortcuts read).
+		void SetKey(KeyCode key, ImGuiKey imguiKey, bool down)
+		{
+			Input::ProcessKey(key, down);
+			Editor.Harness.SetKey(imguiKey, down);
+		}
+	};
 
 	// A registry of the editor's sections, the input actions and the test sections: Test.Simple and Test.Complex (project),
 	// Test.Preferences (user).
@@ -537,5 +606,158 @@ TEST_SUITE("Editor.UI.Preferences")
 		editor.Frames(2);
 		CHECK(UI::ItemProbe::Find("ExternalEditor.Program")->Text == "Files open in the system's default application.");
 		CHECK_FALSE(UI::ItemProbe::Find("ExternalEditor.Apply")->Enabled);
+	}
+}
+
+TEST_SUITE("Editor.UI.InputActions")
+{
+	TEST_CASE("The capture binds the next key and runs setAction")
+	{
+		CapturePage page("InputActionsCaptureKey");
+		const size_t steps = page.Editor.Context().GetUndoStack().GetCount();
+		page.StartCapture();
+		CHECK(UI::ItemProbe::Find(CapturePage::Key("Capture"))->Text.starts_with("Press a key, mouse button or gamepad control to bind (10 s)"));
+		// While it listens every action reads as up; the key it takes is bound with one undo step.
+		page.SetKey(Key::K, ImGuiKey_K, true);
+		InputFrame(page.Editor);
+		CHECK(page.Bindings("Gameplay/Jump") == std::vector<std::string> { "Key/Space", "Key/K" });
+		CHECK(page.Editor.Context().GetUndoStack().GetCount() == steps + 1);
+		CHECK_FALSE(InputActions::IsCapturing());
+		page.SetKey(Key::K, ImGuiKey_K, false);
+		InputFrame(page.Editor);
+		CHECK_FALSE(IsDrawn(CapturePage::Key("Capture")));
+		CHECK(IsDrawn(CapturePage::Key("Action.0.Binding.1")));
+
+		// A part of a composite: the binding popup's part takes the key, and Add adds the composite.
+		page.Editor.Run("inputActions.setAction", { { "action", "Gameplay/Steer" }, { "kind", "Axis" } });
+		REQUIRE(page.Editor.FramesUntil([]() { return IsDrawn(CapturePage::Key("Action.1.AddBinding")); }));
+		// A Vector2 takes no single pressed control.
+		page.Editor.Run("inputActions.setAction", { { "action", "Gameplay/Move" }, { "kind", "Vector2" } });
+		REQUIRE(page.Editor.FramesUntil([]() { return IsDrawn(CapturePage::Key("Action.2.CaptureBinding")); }));
+		CHECK_FALSE(UI::ItemProbe::Find(CapturePage::Key("Action.2.CaptureBinding"))->Enabled);
+		REQUIRE(page.Editor.Click(CapturePage::Key("Action.1.AddBinding")));
+		page.Editor.Frames(2);
+		REQUIRE(page.Editor.Click(CapturePage::Key("AddBinding.Shape")));
+		page.Editor.Frames(1);
+		REQUIRE(page.Editor.Click(CapturePage::Key("AddBinding.Shape.1D")));
+		page.Editor.Frames(1);
+		REQUIRE(page.Editor.Click(CapturePage::Key("AddBinding.Capture.1")));
+		page.Editor.Frames(1);
+		CHECK(IsDrawn(CapturePage::Key("Capture")));
+		page.SetKey(Key::L, ImGuiKey_L, true);
+		InputFrame(page.Editor);
+		page.SetKey(Key::L, ImGuiKey_L, false);
+		InputFrame(page.Editor);
+		CHECK(UI::ItemProbe::Find(CapturePage::Key("AddBinding.Part.1"))->Text == "Key/L");
+		REQUIRE(page.Editor.Click(CapturePage::Key("AddBinding.Add")));
+		page.Editor.Frames(2);
+		CHECK(page.Bindings("Gameplay/Steer") == std::vector<std::string> { "1D:Key/Space,Key/L" });
+		CHECK_FALSE(IsDrawn(CapturePage::Key("Error")));
+	}
+
+	TEST_CASE("Keys pressed while capturing run no shortcut")
+	{
+		CapturePage page("InputActionsCaptureShortcut");
+		const size_t position = page.Editor.Context().GetUndoStack().GetPosition();
+		page.StartCapture();
+		// Ctrl is the key pressed first: it is captured. Z pressed with it is no undo, as long as a key captured with it is held.
+		page.SetKey(Key::LeftControl, ImGuiMod_Ctrl, true);
+		InputFrame(page.Editor);
+		CHECK(page.Bindings("Gameplay/Jump") == std::vector<std::string> { "Key/Space", "Key/LeftControl" });
+		page.SetKey(Key::Z, ImGuiKey_Z, true);
+		InputFrame(page.Editor);
+		page.SetKey(Key::Z, ImGuiKey_Z, false);
+		InputFrame(page.Editor);
+		CHECK(page.Editor.Context().GetUndoStack().GetPosition() == position + 1);
+		CHECK(page.Bindings("Gameplay/Jump") == std::vector<std::string> { "Key/Space", "Key/LeftControl" });
+		page.SetKey(Key::LeftControl, ImGuiMod_Ctrl, false);
+		InputFrame(page.Editor);
+
+		// Keys pressed together: the first in code order is captured.
+		page.StartCapture();
+		page.SetKey(Key::Escape, ImGuiKey_Escape, true);
+		page.SetKey(Key::Tab, ImGuiKey_Tab, true);
+		InputFrame(page.Editor);
+		CHECK(page.Bindings("Gameplay/Jump") == std::vector<std::string> { "Key/Space", "Key/LeftControl", "Key/Escape" });
+		page.SetKey(Key::Escape, ImGuiKey_Escape, false);
+		page.SetKey(Key::Tab, ImGuiKey_Tab, false);
+		InputFrame(page.Editor);
+
+		// Once every key is up the keyboard is the editor's again: Ctrl+Z undoes the capture's step.
+		page.Editor.Harness.SetKey(ImGuiMod_Ctrl, true);
+		page.Editor.Frames(1);
+		page.Editor.Harness.SetKey(ImGuiKey_Z, true);
+		page.Editor.Frames(1);
+		page.Editor.Harness.SetKey(ImGuiKey_Z, false);
+		page.Editor.Harness.SetKey(ImGuiMod_Ctrl, false);
+		page.Editor.Frames(2);
+		CHECK(page.Bindings("Gameplay/Jump") == std::vector<std::string> { "Key/Space", "Key/LeftControl" });
+	}
+
+	TEST_CASE("Cancel and the timeout end a capture")
+	{
+		CapturePage page("InputActionsCaptureCancel");
+		page.StartCapture();
+		REQUIRE(page.Editor.Click(CapturePage::Key("Capture.Cancel")));
+		page.Editor.Frames(1);
+		CHECK_FALSE(InputActions::IsCapturing());
+		CHECK_FALSE(IsDrawn(CapturePage::Key("Capture")));
+
+		// The capture hears the mouse too: the press of a click on Cancel cancels, it binds nothing.
+		page.StartCapture();
+		page.Editor.Harness.MoveMouse(UI::ItemProbe::Find(CapturePage::Key("Capture.Cancel"))->GetCenter());
+		page.Editor.Frames(1);
+		Input::ProcessMouseButton(Mouse::ButtonLeft, true);
+		page.Editor.Harness.SetMouseButton(ImGuiMouseButton_Left, true);
+		InputFrame(page.Editor);
+		Input::ProcessMouseButton(Mouse::ButtonLeft, false);
+		page.Editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+		InputFrame(page.Editor);
+		CHECK_FALSE(InputActions::IsCapturing());
+		CHECK_FALSE(IsDrawn(CapturePage::Key("Capture")));
+		CHECK(page.Bindings("Gameplay/Jump") == std::vector<std::string> { "Key/Space" });
+
+		// Ten seconds without a control end it.
+		page.StartCapture();
+		page.Editor.Frames(1, 5.0f);
+		CHECK(UI::ItemProbe::Find(CapturePage::Key("Capture"))->Text.find("(5 s)") != std::string::npos);
+		page.Editor.Frames(2, 5.0f);
+		CHECK_FALSE(InputActions::IsCapturing());
+		CHECK_FALSE(IsDrawn(CapturePage::Key("Capture")));
+
+		// So does showing another map: nobody sees it listen.
+		page.StartCapture();
+		REQUIRE(page.Editor.Click(CapturePage::Key("Map.0")));
+		CHECK_FALSE(InputActions::IsCapturing());
+		page.SetKey(Key::K, ImGuiKey_K, true);
+		InputFrame(page.Editor);
+		page.SetKey(Key::K, ImGuiKey_K, false);
+		InputFrame(page.Editor);
+		CHECK(page.Bindings("Gameplay/Jump") == std::vector<std::string> { "Key/Space" });
+	}
+
+	TEST_CASE("A capture while play is paused binds the next key")
+	{
+		CapturePage page("InputActionsCapturePaused");
+		page.Editor.Run("play.start", { { "build", false } });
+		page.Editor.Run("play.pause", { { "paused", true } });
+		page.Editor.Frames(2);
+		REQUIRE(Input::IsSuspended());
+		page.StartCapture();
+		page.SetKey(Key::K, ImGuiKey_K, true);
+		InputFrame(page.Editor);
+		CHECK(page.Bindings("Gameplay/Jump") == std::vector<std::string> { "Key/Space", "Key/K" });
+		CHECK_FALSE(InputActions::IsCapturing());
+		page.SetKey(Key::K, ImGuiKey_K, false);
+		InputFrame(page.Editor);
+
+		// Play resumes, and the running game jumps with K (simulated input reaches it without the Game view's focus).
+		page.Editor.Run("play.pause", { { "paused", false } });
+		InputFrame(page.Editor);
+		Input::SimulateKey(Key::K, true);
+		InputFrame(page.Editor);
+		CHECK(InputActions::IsPressed("Jump"));
+		Input::SimulateKey(Key::K, false);
+		page.Editor.Run("play.stop");
 	}
 }

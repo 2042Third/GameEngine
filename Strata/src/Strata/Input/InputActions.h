@@ -105,6 +105,13 @@ namespace Strata
 		// what the program running a game calls when the game starts. Entries of unknown actions and bindings their kind
 		// cannot use are dropped with one warning; a file that is no bindings file is ignored with a warning.
 		static void LoadBindings();
+		// The bindings file as LoadBindings would apply it to the set in use, without applying it or warning (the editor shows
+		// what the next play session starts with): empty without a file, a save directory, or with a file LoadBindings ignores.
+		static InputPlayerBindings ReadSavedBindings();
+		// Removes the bindings file, so that sessions from then on start with the project's bindings; the bindings in use stay.
+		// True when there is no file afterwards (also when there was none); false, with the reason, without a save directory
+		// or when the file cannot be removed.
+		static bool DeleteSavedBindings(std::string* outError = nullptr);
 
 		// Holds an action down (or lets it go) from the next input frame, whatever its bindings: tools that play the game. While
 		// held, its value is `value` (Button: 1). False for an unknown action.

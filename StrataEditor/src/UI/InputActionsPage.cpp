@@ -2,6 +2,7 @@
 
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "UI/BindingCapture.h"
 #include "UI/EditorFonts.h"
 #include "UI/Icons.h"
 #include "UI/ItemProbe.h"
@@ -19,6 +20,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 #include <vector>
 
@@ -233,6 +235,8 @@ namespace Strata
 		if (!context.Context.HasProject())
 			return;
 		Refresh(context.Context);
+		UpdateCapture(context);
+		m_CaptureShown = false;
 		Caption("The game's named controls: scripts read actions by name (\"<Map>/<Action>\", or a name no other map has) and players can rebind "
 			"them. A Button is down or up, an Axis is one value from -1 to 1, a Vector2 two (+Y up). The map UI holds the actions the game UI "
 			"navigates with.", colors.TextSecondary, width);
@@ -242,10 +246,17 @@ namespace Strata
 		ImGui::TextUnformatted(summary.c_str());
 		UI::ItemProbe::Record(ProbeKey("Summary"), true, 0, summary);
 		ImGui::Spacing();
+		DrawPlayerBindings(context, width);
 		// Each part runs at most one command, which replaces the project's settings: the next frame draws the new set.
 		DrawMaps(context);
 		ImGui::Spacing();
 		DrawActions(context);
+		// A capture whose listening line was not drawn (another map selected, the binding popup closed) ends: nobody sees it.
+		if (!m_CaptureOwner.empty() && !m_CaptureShown)
+		{
+			BindingCapture::Cancel(m_CaptureOwner);
+			m_CaptureOwner.clear();
+		}
 		if (!m_Error.empty())
 		{
 			Caption(m_Error, colors.Error, width);
@@ -420,6 +431,19 @@ namespace Strata
 				UI::PropertyLabel("Bindings", "The controls that drive the action (players can rebind them)", ProbeKey(prefix + "Bindings"));
 				if (!edit)
 					DrawBindings(context, index, ImGui::GetContentRegionAvail().x);
+
+				const InputPlayerBindings& players = context.Context.GetPlayerBindings();
+				if (const auto player = players.Actions.find(qualified); player != players.Actions.end())
+				{
+					const std::string playerKey = ProbeKey(prefix + "PlayerBindings");
+					UI::PropertyLabel("In play", "The players' bindings replace the project's in play until they are reset", playerKey);
+					std::string texts;
+					for (const InputBinding& binding : player->second)
+						texts += (texts.empty() ? "" : ", ") + binding.ToString();
+					const std::string text = "Players' bindings: " + (texts.empty() ? std::string("none") : texts);
+					Caption(text, colors.Warning, ImGui::GetContentRegionAvail().x);
+					UI::ItemProbe::Record(playerKey, true, 0, text);
+				}
 				UI::EndPropertyTable();
 			}
 			ImGui::PopID();
@@ -481,17 +505,33 @@ namespace Strata
 			used += chipWidth;
 		}
 		const bool full = current.Bindings.size() >= InputActionSet::c_MaxBindings;
-		if (!current.Bindings.empty() && used + style.ItemSpacing.x + ImGui::GetFrameHeight() <= width)
-			ImGui::SameLine();
-		const std::string addKey = ProbeKey(prefix + "AddBinding");
-		if (UI::IconButton(addKey.c_str(), Icons::Plus, full ? "An action has at most 8 bindings" : "Add a binding", !full))
+		if (IsCapturing(qualified, -1))
 		{
-			m_AddAction = qualified;
-			m_AddShape = InputBinding::Shape::Control;
-			m_AddParts[0] = GetPartControls(current.Kind, m_AddShape).front();
-			for (size_t part = 1; part < m_AddParts.size(); part++)
-				m_AddParts[part] = GetControlLists().ButtonLike.front();
-			ImGui::OpenPopup("AddBinding");
+			DrawCaptureListening(width);
+		}
+		else
+		{
+			if (!current.Bindings.empty() && used + 2.0f * (style.ItemSpacing.x + ImGui::GetFrameHeight()) <= width)
+				ImGui::SameLine();
+			const std::string addKey = ProbeKey(prefix + "AddBinding");
+			if (UI::IconButton(addKey.c_str(), Icons::Plus, full ? "An action has at most 8 bindings" : "Add a binding", !full))
+			{
+				m_AddAction = qualified;
+				m_AddShape = InputBinding::Shape::Control;
+				m_AddParts[0] = GetPartControls(current.Kind, m_AddShape).front();
+				for (size_t part = 1; part < m_AddParts.size(); part++)
+					m_AddParts[part] = GetControlLists().ButtonLike.front();
+				ImGui::OpenPopup("AddBinding");
+			}
+			// A pressed control is one control: a Vector2 takes sticks and 2D composites, whose parts the popup captures.
+			ImGui::SameLine();
+			const bool capturable = current.Kind != InputActionKind::Vector2;
+			const std::string captureKey = ProbeKey(prefix + "CaptureBinding");
+			const char* captureTip = full ? "An action has at most 8 bindings"
+				: (capturable ? "Bind the next key, mouse button or gamepad control pressed" : "A Vector2 takes a stick or a 2D composite: add one with +, "
+					"where each part can be pressed");
+			if (UI::IconButton(captureKey.c_str(), Icons::Radar, captureTip, !full && capturable))
+				BeginCapture(qualified, -1);
 		}
 		DrawAddBinding(context, action);
 		if (removed)
@@ -567,6 +607,17 @@ namespace Strata
 			{
 				m_AddParts[part] = std::move(*picked);
 			}
+			// Sticks are chosen from the list; every other part can be pressed.
+			ImGui::SameLine();
+			const bool capturable = m_AddShape != InputBinding::Shape::Control || current.Kind != InputActionKind::Vector2;
+			const std::string captureKey = ProbeKey(fmt::format("AddBinding.Capture.{}", part));
+			const char* captureTip = capturable ? "Use the next key, mouse button or gamepad control pressed" : "Sticks are chosen from the list";
+			if (UI::IconButton(captureKey.c_str(), Icons::Radar, captureTip, capturable))
+			{
+				BeginCapture(m_AddAction, static_cast<int32_t>(part));
+			}
+			if (IsCapturing(m_AddAction, static_cast<int32_t>(part)))
+				DrawCaptureListening(width);
 			ImGui::PopID();
 		}
 
@@ -590,6 +641,123 @@ namespace Strata
 				ImGui::CloseCurrentPopup();
 		}
 		ImGui::EndPopup();
+	}
+
+	void InputActionsPage::DrawPlayerBindings(EditorPanelContext& context, float width)
+	{
+		const InputPlayerBindings& players = context.Context.GetPlayerBindings();
+		if (players.Actions.empty())
+			return;
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const size_t count = players.Actions.size();
+		const std::string text = context.Context.IsPlaying()
+			? fmt::format("The running game's players rebound {} {} (marked \"In play\")", count, count == 1 ? "action" : "actions")
+			: fmt::format("The players' saved bindings replace those of {} {} in play (marked \"In play\"): changes to their bindings here reach play "
+				"once the players' bindings are reset", count, count == 1 ? "action" : "actions");
+		Caption(text, colors.Warning, width);
+		UI::ItemProbe::Record(ProbeKey("PlayerBindings"), true, 0, text);
+		const std::string resetKey = ProbeKey("ResetPlayerBindings");
+		if (UI::ToolbarButton(resetKey.c_str(), Icons::RotateCcw, "Reset Player Bindings", "Delete the bindings players saved (the project's "
+			".strata/Saves/InputBindings.json), so that play uses the project's bindings"))
+		{
+			Run(context, "inputActions.resetPlayerBindings", nlohmann::json::object());
+		}
+		ImGui::Spacing();
+	}
+
+	void InputActionsPage::BeginCapture(const std::string& action, int32_t part)
+	{
+		// One capture at a time: a new one replaces the page's earlier one.
+		if (!m_CaptureOwner.empty())
+			BindingCapture::Cancel(m_CaptureOwner);
+		m_CaptureOwner.clear();
+		const std::string owner = fmt::format("{}Capture:{}:{}", c_ProbePrefix, action, part);
+		if (!BindingCapture::Begin(owner))
+		{
+			m_Error = "The binding capture could not start";
+			return;
+		}
+		m_CaptureOwner = owner;
+		m_CaptureAction = action;
+		m_CapturePart = part;
+		m_CaptureShown = true; // Its listening line is drawn from the next frame on
+		m_CancelRect = {};
+		m_Error.clear();
+	}
+
+	bool InputActionsPage::IsCapturing(const std::string& action, int32_t part) const
+	{
+		return !m_CaptureOwner.empty() && m_CapturePart == part && StringUtils::EqualsIgnoreCase(m_CaptureAction, action);
+	}
+
+	void InputActionsPage::UpdateCapture(EditorPanelContext& context)
+	{
+		if (m_CaptureOwner.empty())
+			return;
+		std::optional<std::string> binding = BindingCapture::Take(m_CaptureOwner);
+		if (!binding)
+		{
+			// Still listening (asking keeps it), or it ended without a binding: timed out, or play started or stopped.
+			if (!BindingCapture::IsListening(m_CaptureOwner))
+				m_CaptureOwner.clear();
+			return;
+		}
+		m_CaptureOwner.clear();
+		// The capture listens to the mouse too: the press of a click on Cancel is that click, not a binding.
+		const ImVec2 cancelMin(m_CancelRect[0], m_CancelRect[1]);
+		const ImVec2 cancelMax(m_CancelRect[2], m_CancelRect[3]);
+		if (binding->starts_with("Mouse/") && cancelMax.x > cancelMin.x && ImGui::IsMouseHoveringRect(cancelMin, cancelMax, false))
+			return;
+		if (m_CapturePart < 0)
+		{
+			AddBinding(context, m_CaptureAction, *binding);
+			return;
+		}
+		// A part of the binding popup, while it is open for the action.
+		if (StringUtils::EqualsIgnoreCase(m_AddAction, m_CaptureAction) && static_cast<size_t>(m_CapturePart) < m_AddParts.size())
+			m_AddParts[static_cast<size_t>(m_CapturePart)] = std::move(*binding);
+	}
+
+	void InputActionsPage::DrawCaptureListening(float width)
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		m_CaptureShown = true;
+		const int seconds = static_cast<int>(std::ceil(BindingCapture::GetRemainingSeconds()));
+		const std::string text = fmt::format("Press a key, mouse button or gamepad control to bind ({} s)", seconds);
+		Caption(text, colors.Accent, width);
+		UI::ItemProbe::Record(ProbeKey("Capture"), true, 0, text);
+		const std::string cancelKey = ProbeKey("Capture.Cancel");
+		if (UI::DialogButton(cancelKey.c_str(), "Cancel"))
+		{
+			BindingCapture::Cancel(m_CaptureOwner);
+			m_CaptureOwner.clear();
+		}
+		const ImVec2 min = ImGui::GetItemRectMin();
+		const ImVec2 max = ImGui::GetItemRectMax();
+		m_CancelRect = { min.x, min.y, max.x, max.y };
+	}
+
+	void InputActionsPage::AddBinding(EditorPanelContext& context, const std::string& action, const std::string& binding)
+	{
+		const std::optional<InputActionLocation> location = m_Set.FindAction(action);
+		if (!location)
+		{
+			m_Error = fmt::format("The action '{}' is gone: {} was not bound", action, binding);
+			return;
+		}
+		nlohmann::json bindings = nlohmann::json::array();
+		for (const InputBinding& existing : m_Set.GetAction(*location).Bindings)
+		{
+			const std::string text = existing.ToString();
+			if (StringUtils::EqualsIgnoreCase(text, binding))
+			{
+				m_Error = fmt::format("{} is bound to {} already", binding, action);
+				return;
+			}
+			bindings.push_back(text);
+		}
+		bindings.push_back(binding);
+		Run(context, "inputActions.setAction", { { "action", action }, { "bindings", std::move(bindings) } });
 	}
 
 }

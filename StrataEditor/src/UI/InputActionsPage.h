@@ -18,14 +18,18 @@ namespace Strata
 
 	// The Input Actions page of the Project Settings window (the project section Input.Actions): the maps as a list (the
 	// selected one's name, whether it is enabled at start, removing it), the selected map's actions with their name, kind, dead
-	// zone and bindings as chips, and a binding added from lists of controls, composites part by part. The UI map's actions are
-	// marked as the game UI's navigation and keep their names and kind. Every edit is one inputActions.setMap or
-	// inputActions.setAction (one undo step); while the project is not ready for edits (EditorContext::IsWaitingForAssets) an
-	// edit is refused with the reason. Probe keys, under "ProjectSettings.Input.Actions.": Summary, Map.<i>, AddMap, MapName,
-	// MapEnabled, RemoveMap, AddAction, and per action of the selected map Action.<a>.Name, .Reserved, .Remove, .Kind (and
-	// .Kind.<kind> while its list is open), .DeadZone, .Binding.<b>, .RemoveBinding.<b>, .AddBinding; in the binding popup
-	// AddBinding.Shape (.Shape.<Control|1D|2D>), AddBinding.Part.<p> (.Part.<p>.<binding text>) and AddBinding.Add; Error (why
-	// the last edit was refused).
+	// zone and bindings as chips, and a binding added from lists of controls, composites part by part, or by pressing the
+	// control (BindingCapture: a Button's or Axis' binding is added at once, a part of the binding popup is filled in; a click
+	// on Cancel cancels, any other press is captured). The UI map's actions are marked as the game UI's navigation and keep
+	// their names and kind. Actions the players' bindings replace (EditorContext::GetPlayerBindings) are marked, with a button
+	// that resets them (inputActions.resetPlayerBindings). Every edit is one inputActions.setMap or inputActions.setAction (one
+	// undo step); while the project is not ready for edits (EditorContext::IsWaitingForAssets) an edit is refused with the
+	// reason. Probe keys, under "ProjectSettings.Input.Actions.": Summary, PlayerBindings, ResetPlayerBindings, Map.<i>,
+	// AddMap, MapName, MapEnabled, RemoveMap, AddAction, and per action of the selected map Action.<a>.Name, .Reserved,
+	// .Remove, .Kind (and .Kind.<kind> while its list is open), .DeadZone, .Binding.<b>, .RemoveBinding.<b>, .AddBinding,
+	// .CaptureBinding, .PlayerBindings; in the binding popup AddBinding.Shape (.Shape.<Control|1D|2D>), AddBinding.Part.<p>
+	// (.Part.<p>.<binding text>), AddBinding.Capture.<p> and AddBinding.Add; Capture (what a capture listens for) and
+	// Capture.Cancel; Error (why the last edit was refused).
 	class InputActionsPage final : public SettingsPage
 	{
 	public:
@@ -39,6 +43,16 @@ namespace Strata
 		void DrawActions(EditorPanelContext& context);
 		void DrawBindings(EditorPanelContext& context, uint32_t action, float width);
 		void DrawAddBinding(EditorPanelContext& context, uint32_t action);
+		void DrawPlayerBindings(EditorPanelContext& context, float width);
+		// Starts capturing a binding for an action: added at once (part -1) or put into a part of the binding popup.
+		void BeginCapture(const std::string& action, int32_t part);
+		bool IsCapturing(const std::string& action, int32_t part) const;
+		// Applies what a capture took, or forgets one that ended without a binding; at the start of Draw.
+		void UpdateCapture(EditorPanelContext& context);
+		// The listening line with its countdown and Cancel button, where the capture was asked for.
+		void DrawCaptureListening(float width);
+		// Appends a binding to an action's through inputActions.setAction.
+		void AddBinding(EditorPanelContext& context, const std::string& action, const std::string& binding);
 		// A name's text field: edits a copy while it is typed in and returns the text when the edit ends with a change.
 		std::optional<std::string> NameField(const std::string& key, const std::string& name, bool readOnly);
 		bool Run(EditorPanelContext& context, const char* command, const nlohmann::json& parameters);
@@ -56,6 +70,13 @@ namespace Strata
 		std::string m_AddAction;
 		InputBinding::Shape m_AddShape = InputBinding::Shape::Control;
 		std::array<std::string, 4> m_AddParts;
+		// The binding capture this page runs: its owner id (empty while none runs), for which action and part (-1: added at
+		// once), whether its listening line was drawn this frame (a capture nobody sees ends), and where its Cancel button was.
+		std::string m_CaptureOwner;
+		std::string m_CaptureAction;
+		int32_t m_CapturePart = -1;
+		bool m_CaptureShown = false;
+		std::array<float, 4> m_CancelRect = {}; // Min x, min y, max x, max y
 		std::string m_Error; // Why the last edit was refused
 	};
 

@@ -1627,6 +1627,47 @@ namespace Strata
 		return m_Project->GetIntermediateDirectory() / "Saves";
 	}
 
+	const InputPlayerBindings& EditorContext::GetPlayerBindings()
+	{
+		const bool playing = IsPlaying();
+		const uint64_t project = m_Project ? m_ProjectGeneration : 0; // Generations count from 1
+		// What a game saves while it plays is read once it stopped (a new session): the file is read only on these changes.
+		if (m_PlayerBindingsRead && m_PlayerBindingsPlaying == playing && m_PlayerBindingsProject == project
+			&& m_PlayerBindingsSession == m_PlaySession && m_PlayerBindingsActions == InputActions::GetVersion()
+			&& m_PlayerBindingsResets == m_PlayerBindingsResetCount)
+		{
+			return m_PlayerBindings;
+		}
+		if (playing)
+			m_PlayerBindings = InputActions::GetPlayerBindings();
+		else
+			m_PlayerBindings = m_Project ? InputActions::ReadSavedBindings() : InputPlayerBindings();
+		m_PlayerBindingsRead = true;
+		m_PlayerBindingsPlaying = playing;
+		m_PlayerBindingsProject = project;
+		m_PlayerBindingsSession = m_PlaySession;
+		// After the reading, which reads the project's actions first when they changed.
+		m_PlayerBindingsActions = InputActions::GetVersion();
+		m_PlayerBindingsResets = m_PlayerBindingsResetCount;
+		return m_PlayerBindings;
+	}
+
+	bool EditorContext::ResetPlayerBindings(std::string* outError)
+	{
+		if (!m_Project)
+		{
+			if (outError)
+				*outError = "No project is open: the players' bindings belong to a project's game";
+			return false;
+		}
+		if (!InputActions::DeleteSavedBindings(outError))
+			return false;
+		if (IsPlaying())
+			InputActions::ResetBindings("");
+		m_PlayerBindingsResetCount++;
+		return true;
+	}
+
 	////////////////////////////////////////////////////////////////////////////////
 	// Selection
 	////////////////////////////////////////////////////////////////////////////////

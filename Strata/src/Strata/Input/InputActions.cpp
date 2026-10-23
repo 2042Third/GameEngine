@@ -676,6 +676,31 @@ namespace Strata
 			return *directory / FileSystem::FromUTF8(InputPlayerBindings::c_FileName);
 		}
 
+		// The bindings file read against the set in use.
+		struct BindingsFile
+		{
+			std::string Path;
+			std::optional<InputPlayerBindings> Bindings; // Nullopt when the file is ignored, for the reason in Error
+			std::string Error;
+			std::vector<std::string> Dropped;            // Entries the set no longer has a place for
+		};
+
+		// Nullopt without a save directory or a file.
+		std::optional<BindingsFile> ReadBindingsFile()
+		{
+			const std::optional<std::filesystem::path> file = GetBindingsFile(nullptr);
+			if (!file || !FileSystem::Exists(*file))
+				return std::nullopt;
+			BindingsFile read;
+			read.Path = FileSystem::ToUTF8(*file);
+			const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytesPrefix(*file, InputPlayerBindings::c_MaxFileBytes + 1);
+			if (!bytes)
+				read.Error = "it cannot be read";
+			else
+				read.Bindings = InputPlayerBindings::Read(std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()), s_State.Set, &read.Dropped, &read.Error);
+			return read;
+		}
+
 	}
 
 	void InputActions::Update()
@@ -922,29 +947,42 @@ namespace Strata
 	{
 		Refresh();
 		s_State.Players.Actions.clear();
-		const std::optional<std::filesystem::path> file = GetBindingsFile(nullptr);
-		if (file && FileSystem::Exists(*file))
+		if (std::optional<BindingsFile> file = ReadBindingsFile())
 		{
-			const std::string path = FileSystem::ToUTF8(*file);
-			const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytesPrefix(*file, InputPlayerBindings::c_MaxFileBytes + 1);
-			std::string error;
-			std::vector<std::string> dropped;
-			std::optional<InputPlayerBindings> players;
-			if (!bytes)
-				error = "it cannot be read";
+			if (file->Bindings)
+				s_State.Players = std::move(*file->Bindings);
 			else
-				players = InputPlayerBindings::Read(std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()), s_State.Set, &dropped, &error);
-			if (players)
-				s_State.Players = std::move(*players);
-			else
-				ST_CORE_WARN("The players' input bindings '{}' are ignored ({}): the project's bindings apply", path, error);
-			if (!dropped.empty())
+				ST_CORE_WARN("The players' input bindings '{}' are ignored ({}): the project's bindings apply", file->Path, file->Error);
+			if (!file->Dropped.empty())
 			{
 				ST_CORE_WARN("The players' input bindings '{}' name what the game's actions no longer have ({} dropped; the project's bindings apply "
-					"there): {}", path, dropped.size(), dropped.front());
+					"there): {}", file->Path, file->Dropped.size(), file->Dropped.front());
 			}
 		}
 		Compile(InputActionSet(s_State.Set), true);
+	}
+
+	InputPlayerBindings InputActions::ReadSavedBindings()
+	{
+		Refresh();
+		std::optional<BindingsFile> file = ReadBindingsFile();
+		if (!file || !file->Bindings)
+			return {};
+		return std::move(*file->Bindings);
+	}
+
+	bool InputActions::DeleteSavedBindings(std::string* outError)
+	{
+		const std::optional<std::filesystem::path> file = GetBindingsFile(outError);
+		if (!file)
+			return false;
+		if (!FileSystem::Remove(*file) || FileSystem::Exists(*file))
+		{
+			if (outError)
+				*outError = fmt::format("Removing the players' bindings '{}' failed", FileSystem::ToUTF8(*file));
+			return false;
+		}
+		return true;
 	}
 
 	bool InputActions::SimulateAction(std::string_view action, bool down, const glm::vec2& value, std::string* outError)

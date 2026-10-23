@@ -21,6 +21,7 @@
 #include "Panels/StreamingPanel.h"
 #include "Panels/ViewportPanel.h"
 #include "Panels/WelcomePanel.h"
+#include "UI/BindingCapture.h"
 #include "UI/CollisionLayersPage.h"
 #include "UI/InputActionsPage.h"
 #include "UI/EditorActions.h"
@@ -676,6 +677,8 @@ namespace Strata
 	{
 		m_UIDrawn = true;
 		TrackInput();
+		// Before any shortcut reads the keyboard: a binding capture the Project Settings window runs keeps it.
+		BindingCapture::BeginFrame();
 		EditorPanelContext panelContext = MakePanelContext();
 		if (IsLauncherShown())
 		{
