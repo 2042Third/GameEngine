@@ -47,6 +47,9 @@ namespace Strata
 		// The factor of the window's content scale the UI is drawn at (the Editor.Interface preference: 1.25 for 125%), kept
 		// on every display; --ui-scale wins over it for its session.
 		virtual void SetUIScaleFactor(float factor) = 0;
+		// The UI scale without that factor: the window's content scale, or the --ui-scale override. The game's content scale
+		// in play mode (the factor is the size of the editor's interface, not the game's).
+		virtual float GetDisplayUIScale() const = 0;
 
 		// Frames per second the application does not exceed from the next frame on (0: unlimited).
 		virtual void SetMaxFrameRate(uint32_t framesPerSecond) = 0;

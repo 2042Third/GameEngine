@@ -591,8 +591,9 @@ namespace Strata
 			m_AppliedPreferencesVersion = version;
 			m_Host->SetUIScaleFactor(EditorInterface::GetScaleFactor(m_Context.GetPreferences()));
 		}
-		// The game's content scale in play mode is the editor's (UI scaled to a physical size matches the editor's UI).
-		m_Context.GetGameWindow().SetContentScale(m_Host->GetUIScale());
+		// The game's content scale in play mode is the display's as the editor's UI takes it (UI scaled to a physical size
+		// matches the editor's UI at Automatic), without the person's interface scale: that sizes the editor, not the game.
+		m_Context.GetGameWindow().SetContentScale(m_Host->GetDisplayUIScale());
 		m_Context.Update(timestep);
 		// Between frames: the system's fonts for Chinese, Japanese and Korean text join the editor's once read.
 		if (!m_Options.Headless)

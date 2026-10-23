@@ -353,6 +353,31 @@ TEST_SUITE("Editor.Preferences")
 		CHECK(layer.GetUIScale() == doctest::Approx(2.25f));
 	}
 
+	TEST_CASE("The interface scale sizes the editor, not the game in play mode")
+	{
+		// A display at 150% and the person's 200%: the editor's UI doubles, while the game keeps the display's content scale,
+		// so the person's choice does not resize the game's canvases of constant physical size.
+		HarnessEditor editor;
+		editor.Host->UIScale = 1.5f;
+		editor.Frames(1);
+		CHECK(editor.Context().GetGameWindow().GetState().ContentScale == doctest::Approx(1.5f));
+		editor.Run("preferences.set", { { "section", EditorInterface::c_SettingsSection }, { "value", { { "Scale", "200%" } } } });
+		editor.Frames(1);
+		REQUIRE(editor.Host->UIScaleFactor == doctest::Approx(2.0f));
+		CHECK(editor.Context().GetGameWindow().GetState().ContentScale == doctest::Approx(1.5f));
+
+		// The layer's scale without the factor: the content scale, or the override --ui-scale sets.
+		ImGuiLayer layer;
+		layer.SetContentScale(1.5f);
+		layer.SetContentScaleFactor(2.0f);
+		CHECK(layer.GetUIScale() == doctest::Approx(3.0f));
+		CHECK(layer.GetDisplayUIScale() == doctest::Approx(1.5f));
+		layer.SetContentScaleOverride(1.25f);
+		CHECK(layer.GetDisplayUIScale() == doctest::Approx(1.25f));
+		layer.SetContentScaleOverride(0.0f);
+		CHECK(layer.GetDisplayUIScale() == doctest::Approx(1.5f));
+	}
+
 	TEST_CASE("Preference commands are Session commands and record no undo")
 	{
 		const EditorCommandRegistry registry;

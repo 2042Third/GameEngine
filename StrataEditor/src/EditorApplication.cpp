@@ -173,6 +173,13 @@ namespace Strata
 			return layer ? layer->GetUIScale() : 1.0f;
 		}
 
+		float GetDisplayUIScale() const override
+		{
+			const ImGuiModule* imgui = m_Application.GetModules().Find<ImGuiModule>();
+			const ImGuiLayer* layer = imgui ? imgui->GetLayer() : nullptr;
+			return layer ? layer->GetDisplayUIScale() : 1.0f;
+		}
+
 		void SetUIScaleFactor(float factor) override
 		{
 			// The layer's override (--ui-scale) wins over the factor.

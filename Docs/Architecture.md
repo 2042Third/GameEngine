@@ -509,7 +509,8 @@ rasterizes its fonts at the framebuffer's density, so its UI scale is 1; where w
 and X11, it is the content scale). The style is rebuilt from ImGui's dark defaults by the application's style callback
 (`SetStyleCallback`; the editor installs its Bedrock theme) and the fonts' DPI scale (`ImGuiStyle::FontScaleDpi`)
 follows; `SetContentScaleFactor` multiplies the content scale (the editor's `Editor.Interface` preference) and
-`SetContentScaleOverride` fixes the scale (`--ui-scale`), winning over both.
+`SetContentScaleOverride` fixes the scale (`--ui-scale`), winning over both. `GetDisplayUIScale` is the scale without the
+factor, the game's content scale in the editor's play mode.
 `ImGuiPlatform` is the platform backend, written for the engine (the vendored GLFW backend is not built): ImGui's input
 comes from the window's events (keys by what they type in the keyboard layout, `Window::GetLayoutKey`, with their
 modifiers; typed text, also from input methods; the mouse, its wheel and `MouseLeaveEvent`; focus), its clipboard and

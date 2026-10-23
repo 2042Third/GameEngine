@@ -1186,7 +1186,9 @@ registration (and the tests'), and any a module registers. They hold for every p
   `200%`. Whenever the preferences' version changes (and on the first frame) `EditorLayer` gives the factor to the host
   (`EditorHost::SetUIScaleFactor`), which gives it to `ImGuiLayer::SetContentScaleFactor`: the UI scale is the content
   scale times the factor (clamped to `c_MinScale`..`c_MaxScale`), so the choice holds on every display, and
-  `--ui-scale`'s override (`SetContentScaleOverride`) wins over it for its session.
+  `--ui-scale`'s override (`SetContentScaleOverride`) wins over it for its session. The factor sizes the editor, not the
+  game: the game's content scale in play mode is the UI scale without it (`EditorHost::GetDisplayUIScale`,
+  `ImGuiLayer::GetDisplayUIScale`), so the person's choice does not resize a canvas of constant physical size.
 
 ## Asset pipeline
 

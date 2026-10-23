@@ -66,6 +66,9 @@ namespace Strata
 		void SetContentScaleFactor(float factor);
 		// The scale the UI is styled for: the override, else the content scale times its factor.
 		float GetUIScale() const;
+		// The UI scale without the factor: the override, else the content scale. The factor sizes the application's own UI,
+		// not what it shows of the display (the content scale a game sees in the editor's play mode).
+		float GetDisplayUIScale() const { return m_ContentScaleOverride > 0.0f ? m_ContentScaleOverride : m_ContentScale; }
 		// The UI scale of a window's content scale: what the window system does not apply to window coordinates already.
 		// Where windows are measured in points (macOS, Wayland: a Retina window's framebuffer has twice its size in pixels),
 		// ImGui lays out in points and draws its fonts at the framebuffer's density, so the content scale of 2 is there
