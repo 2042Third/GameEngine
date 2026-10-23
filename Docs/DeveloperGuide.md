@@ -2737,7 +2737,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   radiance; and the directional light's through a Henyey-Greenstein phase function whose asymmetry is `SunScattering`
   times 0.9 (`HeightFogComponent::c_MaxSunAsymmetry`), so looking toward the sun shows a glow. It is not a volume: no
   shadows or light shafts in it, and local lights do not light it. The clear color of a scene without a sky background
-  is not fogged.
+  is not fogged, nor are world-space text and canvases, which the overlay pass draws after tone mapping.
 
 ### Streaming and uploads
 
