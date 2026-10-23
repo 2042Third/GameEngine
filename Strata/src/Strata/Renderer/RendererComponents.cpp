@@ -113,6 +113,86 @@ namespace Strata
 			return post.AntiAliasing ? std::string() : "Anti Aliasing is off";
 		}
 
+		// The TAA's look: inactive without anti-aliasing or with FXAA.
+		std::string WithTemporalAntiAliasing(const PostProcessComponent& post)
+		{
+			if (!post.AntiAliasing)
+				return "Anti Aliasing is off";
+			return post.AntiAliasingMethod == AntiAliasingMode::TAA ? std::string() : "Only TAA uses it (Anti Aliasing Method is FXAA)";
+		}
+
+		const char* GetPresetName(TemporalAntiAliasingPreset preset)
+		{
+			return preset == TemporalAntiAliasingPreset::Sharp ? "Sharp" : "Original";
+		}
+
+		// A TAA tunable: inactive as the look is, and unless Custom, where the reason quotes the value the preset uses (the
+		// row shows the stored one). `presetValue` formats a table's field, or returns nothing where the preset does not use it
+		// (`unused` then says why).
+		template<typename Value>
+		std::string WithCustomTemporalAntiAliasing(const PostProcessComponent& post, Value (*presetValue)(const TemporalAntiAliasingSettings&),
+			std::string (*unused)(TemporalAntiAliasingPreset))
+		{
+			std::string reason = WithTemporalAntiAliasing(post);
+			if (!reason.empty() || post.TAAPreset == TemporalAntiAliasingPreset::Custom)
+				return reason;
+			const TemporalAntiAliasingSettings& table = post.TAAPreset == TemporalAntiAliasingPreset::Sharp ? c_TAASharpSettings : c_TAAOriginalSettings;
+			if (unused)
+			{
+				reason = unused(post.TAAPreset);
+				if (!reason.empty())
+					return reason;
+			}
+			return fmt::format("The {} preset sets it ({}): choose Custom to tune it", GetPresetName(post.TAAPreset), presetValue(table));
+		}
+
+		// The tunables' reasons, one function per property (SetInactiveReason takes a function of the component).
+		template<typename Value, Value TemporalAntiAliasingSettings::*Field>
+		std::string WithCustomTunable(const PostProcessComponent& post)
+		{
+			return WithCustomTemporalAntiAliasing<Value>(post, [](const TemporalAntiAliasingSettings& settings) { return settings.*Field; }, nullptr);
+		}
+
+		std::string WithCustomBool(const PostProcessComponent& post)
+		{
+			return WithCustomTemporalAntiAliasing<const char*>(post,
+				[](const TemporalAntiAliasingSettings& settings) { return settings.DisocclusionRejection ? "on" : "off"; }, nullptr);
+		}
+
+		std::string WithCustomClamp(const PostProcessComponent& post)
+		{
+			return WithCustomTemporalAntiAliasing<const char*>(post,
+				[](const TemporalAntiAliasingSettings& settings) { return settings.HistoryClamp == TemporalHistoryClamp::Variance ? "Tight" : "Range"; }, nullptr);
+		}
+
+		// Read only by tight clipping.
+		std::string WithTightClipping(const PostProcessComponent& post)
+		{
+			std::string reason = WithCustomTemporalAntiAliasing<float>(post, [](const TemporalAntiAliasingSettings& settings) { return settings.ClipWidth; },
+				[](TemporalAntiAliasingPreset preset)
+				{
+					return preset == TemporalAntiAliasingPreset::Original ? std::string("The Original preset clamps to the colors' range: choose Custom to tune it")
+																		 : std::string();
+				});
+			if (reason.empty() && post.TAAHistoryClamp != TemporalHistoryClamp::Variance)
+				reason = "Only Tight clipping uses it (TAA History Clamp is Range)";
+			return reason;
+		}
+
+		// Read only with disocclusion rejection.
+		std::string WithDisocclusionRejection(const PostProcessComponent& post)
+		{
+			std::string reason = WithCustomTemporalAntiAliasing<float>(post, [](const TemporalAntiAliasingSettings& settings) { return settings.DisocclusionThreshold; },
+				[](TemporalAntiAliasingPreset preset)
+				{
+					return preset == TemporalAntiAliasingPreset::Original ? std::string("The Original preset does not reject uncovered surfaces: choose Custom to tune it")
+																		 : std::string();
+				});
+			if (reason.empty() && !post.TAADisocclusionRejection)
+				reason = "TAA Disocclusion Rejection is off";
+			return reason;
+		}
+
 	}
 
 	void RegisterRendererComponents()
@@ -286,8 +366,49 @@ namespace Strata
 			.Property("AntiAliasing", &PostProcessComponent::AntiAliasing, WithTooltip({}, "Smooths jagged edges, by the method below"))
 			.EnumProperty("AntiAliasingMethod", &PostProcessComponent::AntiAliasingMethod, { { "FXAA", 0 }, { "TAA", 1 } },
 				{ .Tooltip = "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another "
-					"sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion, "
-					"a slight blur of what moves" })
+					"sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion. "
+					"TAA Preset chooses how the TAA looks" })
+			.EnumProperty("TAAPreset", &PostProcessComponent::TAAPreset, { { "Sharp", 0 }, { "Original", 1 }, { "Custom", 2 } },
+				{ .Tooltip = "How the TAA looks. Sharp: tighter history clipping, slow pans resampled less, uncovered surfaces drop their "
+					"history, transparent surfaces take mostly the current frame, a faster response to motion and a light sharpening of the "
+					"displayed image. Original: the first TAA, softer and steadier. Custom: the tunables below (choosing it in the "
+					"Inspector starts from the look in effect)" })
+			.Property("TAAHistoryFrames", &PostProcessComponent::TAAHistoryFrames,
+				WithTooltip(Range(static_cast<float>(c_TAAMinHistoryFrames), static_cast<float>(c_TAAMaxHistoryFrames), 1.0f),
+					"About how many frames the image averages: the current frame weighs at least 1 / this. At 8, every jitter position counts "
+					"once. More is smoother and steadier but lags behind lighting changes; fewer reacts faster but edges crawl"))
+			.Property("TAAMotionResponse", &PostProcessComponent::TAAMotionResponse,
+				WithTooltip(Range(0.0f, c_TAAMaxMotionResponse, 0.001f), "How quickly moving surfaces let go of the history. At 0.0625, motion of "
+					"8 pixels a frame weighs the current frame 0.5. Higher keeps moving things crisper and their trails shorter, but they get "
+					"less anti-aliasing while they move. 0: motion does not matter"))
+			.Property("TAAMaxMotionWeight", &PostProcessComponent::TAAMaxMotionWeight,
+				WithTooltip(Slider(0.0f, 1.0f), "The most the current frame weighs, however fast things move. 1 lets very fast motion drop the "
+					"history: sharp, but aliased"))
+			.Property("TAAResampleWeight", &PostProcessComponent::TAAResampleWeight,
+				WithTooltip(Slider(0.0f, 1.0f), "The current frame's least weight where the history is read between pixels, as in slow pans; it is "
+					"largest halfway between them. Higher keeps slowly moving texture crisper, but its edges get less anti-aliasing while they "
+					"move. 0: off"))
+			.EnumProperty("TAAHistoryClamp", &PostProcessComponent::TAAHistoryClamp, { { "MinMax", 0, "Range" }, { "Variance", 1, "Tight (variance)" } },
+				{ .Tooltip = "How the history is kept consistent with what the pixel shows now. Range limits it to the range of the colors "
+					"around the pixel. Tight limits it to a narrower box around their average, which removes more ghosting and trails, most "
+					"where the surroundings are smooth and less beside glints" })
+			.Property("TAAClipWidth", &PostProcessComponent::TAAClipWidth,
+				WithTooltip(Range(c_TAAMinClipWidth, c_TAAMaxClipWidth, 0.05f), "Tight only: the box's half width, in standard deviations of the "
+					"colors around the pixel. Lower removes more trails, but lets edges flicker and lets noise through"))
+			.Property("TAATransparentWeight", &PostProcessComponent::TAATransparentWeight,
+				WithTooltip(Slider(0.0f, 1.0f), "The current frame's least weight where a blended transparent surface covers the pixel (half "
+					"cover or more counts as full). Transparent surfaces have no motion vectors of their own. 0 treats them like everything "
+					"else, so they ghost when they move; 1 drops their history, so they never ghost, but their edges shimmer"))
+			.Property("TAADisocclusionRejection", &PostProcessComponent::TAADisocclusionRejection,
+				WithTooltip({}, "Drop the history where a surface was just uncovered (something nearer covered it in the previous frame), so "
+					"moving objects leave no ghost on what they uncover"))
+			.Property("TAADisocclusionThreshold", &PostProcessComponent::TAADisocclusionThreshold,
+				WithTooltip(Range(c_TAAMinDisocclusionThreshold, c_TAAMaxDisocclusionThreshold, 0.005f), "How much nearer the previous frame's "
+					"surface must have been, as a fraction of the distance, for the pixel to count as uncovered. Lower catches thin gaps, such "
+					"as a hand in front of a wall, but may drop the history of surfaces moving fast away from the camera"))
+			.Property("TAASharpening", &PostProcessComponent::TAASharpening,
+				WithTooltip(Slider(0.0f, 1.0f), "Sharpens the displayed image after TAA, never the history, to restore texture detail the "
+					"averaging softens. Strong edges are sharpened much less and overshoot is bounded, so halos stay faint. 0 is off"))
 			.Property("Vignette", &PostProcessComponent::Vignette, Slider(0.0f, 1.0f))
 			.Property("Saturation", &PostProcessComponent::Saturation, Slider(0.0f, 2.0f))
 			.Property("Contrast", &PostProcessComponent::Contrast, WithTooltip(Slider(0.5f, 2.0f), "Around middle gray; 1 = unchanged"));
@@ -296,6 +417,17 @@ namespace Strata
 		SetInactiveReasons<PostProcessComponent>({ "BloomIntensity", "BloomThreshold" }, &WithBloom);
 		SetInactiveReasons<PostProcessComponent>({ "AmbientOcclusionRadius", "AmbientOcclusionIntensity" }, &WithAmbientOcclusion);
 		SetInactiveReasons<PostProcessComponent>({ "AntiAliasingMethod" }, &WithAntiAliasing);
+		SetInactiveReasons<PostProcessComponent>({ "TAAPreset" }, &WithTemporalAntiAliasing);
+		SetInactiveReasons<PostProcessComponent>({ "TAAHistoryFrames" }, &WithCustomTunable<uint32_t, &TemporalAntiAliasingSettings::HistoryFrames>);
+		SetInactiveReasons<PostProcessComponent>({ "TAAMotionResponse" }, &WithCustomTunable<float, &TemporalAntiAliasingSettings::MotionResponse>);
+		SetInactiveReasons<PostProcessComponent>({ "TAAMaxMotionWeight" }, &WithCustomTunable<float, &TemporalAntiAliasingSettings::MaxMotionWeight>);
+		SetInactiveReasons<PostProcessComponent>({ "TAAResampleWeight" }, &WithCustomTunable<float, &TemporalAntiAliasingSettings::ResampleWeight>);
+		SetInactiveReasons<PostProcessComponent>({ "TAAHistoryClamp" }, &WithCustomClamp);
+		SetInactiveReasons<PostProcessComponent>({ "TAAClipWidth" }, &WithTightClipping);
+		SetInactiveReasons<PostProcessComponent>({ "TAATransparentWeight" }, &WithCustomTunable<float, &TemporalAntiAliasingSettings::TransparentWeight>);
+		SetInactiveReasons<PostProcessComponent>({ "TAADisocclusionRejection" }, &WithCustomBool);
+		SetInactiveReasons<PostProcessComponent>({ "TAADisocclusionThreshold" }, &WithDisocclusionRejection);
+		SetInactiveReasons<PostProcessComponent>({ "TAASharpening" }, &WithCustomTunable<float, &TemporalAntiAliasingSettings::Sharpening>);
 
 		ComponentRegistry::Register<TextComponent>("Text")
 			.Category("UI")

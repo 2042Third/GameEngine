@@ -9,11 +9,13 @@
 #include <cstdint>
 #include <functional>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace Strata
 {
 
+	class EditorCommandRegistry;
 	class EditorContext;
 
 	namespace UI
@@ -56,6 +58,39 @@ namespace Strata
 			static bool Draw(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const ComponentDrawOverrides* overrides,
 				ComponentDrawResult& result);
 		};
+
+		// One property's row that a property drawer draws the value of: the Inspector draws its label (with the prefab override
+		// mark and menu, and the inactive reason) as for any row.
+		struct PropertyDrawContext
+		{
+			const EditorCommandRegistry& Commands;
+			std::span<const Entity> Entities; // The selected entities, all with the component
+			const ComponentInfo& Info;
+			const PropertyInfo& Property;
+			const PropertyValue& Value; // The first entity's value
+			bool Mixed = false;         // The entities hold different values
+			bool Disabled = false;      // Read-only or inactive: drawn disabled
+			std::string_view ProbeKey;  // The row's ItemProbe key ("Inspector.<Component>.<Property>")
+		};
+
+		// Draws a property's value in place of its generic widget, where an edit means more than setting the property (a
+		// generic slot: a component drawer draws above all the rows instead).
+		using PropertyDrawer = std::function<void(EditorContext& context, const PropertyDrawContext& row)>;
+
+		// The drawers by component type (ComponentInfo::TypeId) and property name: the editor's own (PostProcess's TAAPreset)
+		// and those registered later.
+		class PropertyDrawers
+		{
+		public:
+			static void Register(entt::id_type type, std::string_view property, PropertyDrawer drawer);
+			// The property's drawer, or null.
+			static const PropertyDrawer* Find(entt::id_type type, std::string_view property);
+		};
+
+		// PostProcess's TAAPreset: one component.set per choice (one undo step). Sharp and Original set the preset alone, so
+		// tuned values survive a look at a preset; Custom also writes where Custom starts from
+		// (GetTemporalAntiAliasingCustomStart), unless the selected entities would start from different values.
+		void DrawTemporalAntiAliasingPreset(EditorContext& context, const PropertyDrawContext& row);
 
 		// The UIRect's drawer: notices (outside a canvas, a nested canvas), the anchor preset grid with its Pivot and Position
 		// toggles, and the rect in pixels at the game's screen. While the selection stretches along an axis it places the

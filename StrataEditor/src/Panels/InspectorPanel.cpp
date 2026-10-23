@@ -798,7 +798,7 @@ namespace Strata
 						{ DrawPropertyOverrideMenu(*prefab, info, properties, probeKey); };
 				}
 				UI::ComponentDrawers::Draw(context, entities, info, overrides ? &*overrides : nullptr, drawn);
-				DrawProperties(context, entities, info, prefab, &drawn);
+				DrawProperties(context, commands, entities, info, prefab, &drawn);
 			}
 			if (info.TypeId == entt::type_id<MeshRendererComponent>().hash())
 				DrawMaterialSection(panelContext, entities);
@@ -921,8 +921,8 @@ namespace Strata
 		ImGui::PopID();
 	}
 
-	void InspectorPanel::DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PrefabView* prefab,
-		const UI::ComponentDrawResult* drawn)
+	void InspectorPanel::DrawProperties(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
+		const PrefabView* prefab, const UI::ComponentDrawResult* drawn)
 	{
 		if (!UI::BeginPropertyTable("Properties"))
 			return;
@@ -947,6 +947,13 @@ namespace Strata
 			{
 				const std::string_view name = property.Name;
 				DrawPropertyOverrideMenu(*prefab, info, std::span(&name, 1), probe);
+			}
+			// A row whose edit means more than setting the property draws its own value.
+			if (const UI::PropertyDrawer* drawer = UI::PropertyDrawers::Find(info.TypeId, property.Name))
+			{
+				const UI::PropertyDrawContext row { commands, entities, info, property, shared->Value, shared->Mixed, property.IsReadOnly() || !inactive.empty(), probe };
+				(*drawer)(context, row);
+				continue;
 			}
 			PropertyWidgetOptions options;
 			options.Mixed = shared->Mixed;
@@ -1553,7 +1560,7 @@ namespace Strata
 			{
 				const Entity entities[] = { sky };
 				ImGui::PushID("Sky");
-				DrawProperties(context, entities, *info, nullptr);
+				DrawProperties(context, commands, entities, *info, nullptr);
 				ImGui::PopID();
 			}
 		}

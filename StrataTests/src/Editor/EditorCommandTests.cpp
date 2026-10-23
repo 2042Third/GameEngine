@@ -66,6 +66,17 @@ namespace
 		}
 	};
 
+	// The TAA's preset and tunables, all inactive for `reason` (without anti-aliasing, or with FXAA), added to `rows`.
+	nlohmann::json WithTemporalRows(nlohmann::json rows, const char* reason)
+	{
+		for (const char* property : { "TAAPreset", "TAAHistoryFrames", "TAAMotionResponse", "TAAMaxMotionWeight", "TAAResampleWeight", "TAAHistoryClamp",
+				 "TAAClipWidth", "TAATransparentWeight", "TAADisocclusionRejection", "TAADisocclusionThreshold", "TAASharpening" })
+			rows[property] = reason;
+		return rows;
+	}
+
+	constexpr const char* c_OnlyTAA = "Only TAA uses it (Anti Aliasing Method is FXAA)";
+
 }
 
 TEST_SUITE("Editor.Commands")
@@ -815,7 +826,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK_FALSE(harness.Run("component.get", { { "entity", c }, { "component", "SpotLight" } }).contains("inactive"));
 		harness.Run("component.add", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "Bloom", false } } } });
 		const nlohmann::json post = harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } });
-		CHECK(post["inactive"] == nlohmann::json { { "BloomIntensity", "Bloom is off" }, { "BloomThreshold", "Bloom is off" } });
+		CHECK(post["inactive"] == WithTemporalRows({ { "BloomIntensity", "Bloom is off" }, { "BloomThreshold", "Bloom is off" } }, c_OnlyTAA));
 		CHECK(harness.Run("entity.get", { { "entity", c } })["inactive"] == nlohmann::json { { "PostProcess", post["inactive"] } });
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 		CHECK_FALSE(harness.Run("entity.get", { { "entity", c } }).contains("inactive"));
@@ -832,7 +843,50 @@ TEST_SUITE("Editor.Commands")
 		CHECK(method() == "TAA");
 		harness.Run("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "AntiAliasing", false } } } });
 		CHECK(harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } })["inactive"]
-			== nlohmann::json { { "AntiAliasingMethod", "Anti Aliasing is off" } });
+			== WithTemporalRows({ { "AntiAliasingMethod", "Anti Aliasing is off" } }, "Anti Aliasing is off"));
+		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
+
+		// The TAA's preset and tunables: Custom with tunables in one step, undone in one; out-of-range values refused without
+		// side effects; the tunables inactive unless Custom, quoting the preset's value.
+		harness.Run("component.add", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "AntiAliasingMethod", "TAA" } } } });
+		const auto postValues = [&]() { return harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } })["values"]; };
+		const auto postInactive = [&]() { return harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } })["inactive"]; };
+		CHECK(postValues()["TAAPreset"] == "Original");
+		CHECK(postInactive()["TAAMotionResponse"] == "The Original preset sets it (0.03125): choose Custom to tune it");
+		CHECK(postInactive()["TAAClipWidth"] == "The Original preset clamps to the colors' range: choose Custom to tune it");
+		CHECK(postInactive()["TAADisocclusionThreshold"] == "The Original preset does not reject uncovered surfaces: choose Custom to tune it");
+		CHECK(postInactive()["TAAHistoryClamp"] == "The Original preset sets it (Range): choose Custom to tune it");
+		CHECK_FALSE(postInactive().contains("TAAPreset"));
+		const size_t undoDepth = harness.Context.GetUndoStack().GetPosition();
+		harness.Run("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "TAAPreset", "Custom" }, { "TAAHistoryFrames", 12 },
+			{ "TAAMotionResponse", 0.125 }, { "TAAHistoryClamp", "MinMax" }, { "TAADisocclusionRejection", false }, { "TAASharpening", 0.25 } } } });
+		CHECK(harness.Context.GetUndoStack().GetPosition() == undoDepth + 1);
+		nlohmann::json values = postValues();
+		CHECK(values["TAAPreset"] == "Custom");
+		CHECK(values["TAAHistoryFrames"] == 12);
+		CHECK(values["TAAMotionResponse"] == 0.125);
+		CHECK(values["TAASharpening"] == 0.25);
+		CHECK(postInactive() == nlohmann::json { { "TAAClipWidth", "Only Tight clipping uses it (TAA History Clamp is Range)" },
+			{ "TAADisocclusionThreshold", "TAA Disocclusion Rejection is off" } });
+		for (const auto& [property, value] : { std::pair<const char*, nlohmann::json> { "TAAHistoryFrames", 40 }, { "TAAHistoryFrames", 1 },
+				 { "TAAMotionResponse", 0.5 }, { "TAAClipWidth", 0.25 }, { "TAADisocclusionThreshold", 0.6 }, { "TAASharpening", 1.5 }, { "TAAHistoryClamp", "Box" },
+				 { "TAAPreset", "Blurry" } })
+		{
+			CAPTURE(property);
+			CHECK_FALSE(harness.Error("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "Vignette", 0.5 }, { property, value } } } })
+				.empty());
+			CHECK(postValues() == values);
+		}
+		CHECK(harness.Context.GetUndoStack().GetPosition() == undoDepth + 1);
+		harness.Run("edit.undo");
+		values = postValues();
+		CHECK(values["TAAPreset"] == "Original");
+		CHECK(values["TAAHistoryFrames"] == 8);
+		CHECK(values["TAASharpening"] == 0.5);
+		harness.Run("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "TAAPreset", "Sharp" } } } });
+		CHECK(postInactive()["TAAMotionResponse"] == "The Sharp preset sets it (0.0625): choose Custom to tune it");
+		CHECK(postInactive()["TAAClipWidth"] == "The Sharp preset sets it (1.25): choose Custom to tune it");
+		CHECK(postInactive()["TAADisocclusionRejection"] == "The Sharp preset sets it (on): choose Custom to tune it");
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 
 		// The directional light's cascade blend: added with a value, set, undone; refused outside [0, 0.5]; inactive while the

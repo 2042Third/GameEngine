@@ -1065,6 +1065,65 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(label("Inspector.UICanvas.ReferenceResolution").Enabled);
 	}
 
+	TEST_CASE("Choosing Custom as TAA Preset starts from the look in effect in one undo step, and keeps a tuning")
+	{
+		AuthoringEditor editor({ ImVec2(1600.0f, 1600.0f), 1.0f });
+		const UUID post = editor.Create("Post", { { "components", { { "PostProcess", { { "AntiAliasingMethod", "TAA" } } } } } });
+		editor.Context().Select(post);
+		editor.Frames(3);
+		const auto choose = [&](const char* preset)
+		{
+			CAPTURE(preset);
+			REQUIRE(editor.Click("Inspector.PostProcess.TAAPreset"));
+			editor.Frames(3); // The list opens
+			REQUIRE(editor.Click(std::string("Inspector.PostProcess.TAAPreset.") + preset));
+			editor.Frames(2);
+		};
+		const auto component = [&]() { return editor.Get(post).GetComponent<PostProcessComponent>(); };
+		const auto stored = [&]()
+		{
+			PostProcessComponent custom = component();
+			custom.TAAPreset = TemporalAntiAliasingPreset::Custom;
+			return GetTemporalAntiAliasingSettings(custom);
+		};
+		REQUIRE(component().TAAPreset == TemporalAntiAliasingPreset::Original);
+		// The tunables' rows are inactive until Custom, quoting the preset's values.
+		REQUIRE(UI::ItemProbe::Find("Inspector.PostProcess.TAAMotionResponse.Inactive").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.PostProcess.TAAMotionResponse.Inactive")->Text == "The Original preset sets it (0.03125): choose Custom to tune it");
+
+		// Original -> Custom: Original's table, in one step; undone in one.
+		size_t position = editor.UndoPosition();
+		choose("Custom");
+		CHECK(editor.UndoPosition() == position + 1);
+		CHECK(component().TAAPreset == TemporalAntiAliasingPreset::Custom);
+		CHECK(GetTemporalAntiAliasingSettings(component()) == c_TAAOriginalSettings);
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PostProcess.TAAMotionResponse.Inactive").has_value());
+		editor.Run("edit.undo");
+		CHECK(component().TAAPreset == TemporalAntiAliasingPreset::Original);
+		CHECK(stored() == c_TAASharpSettings);
+
+		// Sharp -> Custom: no tunable changes.
+		choose("Sharp");
+		CHECK(component().TAAPreset == TemporalAntiAliasingPreset::Sharp);
+		position = editor.UndoPosition();
+		choose("Custom");
+		CHECK(editor.UndoPosition() == position + 1);
+		CHECK(component().TAAPreset == TemporalAntiAliasingPreset::Custom);
+		CHECK(stored() == c_TAASharpSettings);
+
+		// A tuning survives a look at a preset: Custom -> Original -> Custom keeps it.
+		editor.Run("component.set", { { "entity", UUIDToJson(post) }, { "component", "PostProcess" }, { "values", { { "TAAHistoryFrames", 12 },
+			{ "TAASharpening", 0.3 } } } });
+		const TemporalAntiAliasingSettings tuned = stored();
+		choose("Original");
+		CHECK(component().TAAPreset == TemporalAntiAliasingPreset::Original);
+		CHECK(stored() == tuned);
+		choose("Custom");
+		CHECK(component().TAAPreset == TemporalAntiAliasingPreset::Custom);
+		CHECK(stored() == tuned);
+		CHECK(component().TAAHistoryFrames == 12);
+	}
+
 	TEST_CASE("Clicking the X-axis label resets only X")
 	{
 		AuthoringEditor editor;

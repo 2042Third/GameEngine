@@ -627,7 +627,9 @@ exercised by it.
     `FeatureTest`, `src/FeatureTest/`), through editor commands in-process, and in the exported game in `GameRuntime`
     (suite `Editor.FeatureTest`);
   - `GPU.FeatureTest` (in `StrataTests.GPU`) renders the scene for 4 frames without playing it (no scripts) and checks
-    entities in the ID buffer, text and stats (its post-processing is TAA: the history grows);
+    entities in the ID buffer, text and stats (its post-processing is TAA under Custom with every technique on, values
+    outside Sharp's tuning bounds: the history grows; the inactive "Alternate Grading" holds the clamp and rejection
+    off);
   - `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` (label `feature`): the real executables open a copy of
     the project, load the feature scripts (`script.load`), lay out and hit-test the menu (`ui.layout`, `ui.hitTest`),
     step the physics, click the Play Button and type into the Name Field while playing (`input.click`, `input.type`, and
@@ -2003,7 +2005,13 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `Scene/ComponentRegistration.cpp`, `Renderer/RendererComponents.cpp`, `Animation/AnimationComponents.cpp` and
   `GameUI/GameUIComponents.cpp`: the canvas's scale settings by scale and render mode, an image's slices, fill, texture
   part and border, a text's outline color, a selectable's transition states and explicit navigation, a layout's grid;
-  each following the code that reads the property); `component.get` and `entity.get` list them as `inactive`. It shows the scene's settings (gravity, the fixed step, the physics
+  each following the code that reads the property); `component.get` and `entity.get` list them as `inactive`. The TAA's
+  tunables say which preset sets them and to what ("The Sharp preset sets it (0.0625): choose Custom to tune it"). A
+  property whose edit means more than setting it draws its value through `UI::PropertyDrawers` (by component type and
+  property name; `InspectorPanel::DrawProperties` calls it in place of the generic widget, after the same label, override
+  mark and menu): `TAAPreset`'s drawer runs one `component.set` per choice, Sharp and Original setting the preset alone
+  and Custom also where it starts from (`GetTemporalAntiAliasingCustomStart`: the preset in effect while the tunables
+  hold a table, else the tuning), unless the selected entities would start from different values. It shows the scene's settings (gravity, the fixed step, the physics
   world's capacities and the collision layers: names and a compact matrix, long names elided; bodies and controllers
   choose their layer among layer 0 and the named ones; how many entities sub-scenes create per frame) and sky (with an
   "Add Height Fog" button while the scene has no height fog, and "Bake Reflection Probes" while it has probes; a
@@ -2700,6 +2708,48 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   frame's own image; slow frames keep the history; both paths resolve the same image over sixteen moving frames; the
   noise turns and the converged penumbra is smoother. Overlays, the outline, captures and thumbnails have theirs
   (`GPU.SceneRenderer.Overlays`, `GPU.GameUI`, `GPU.Editor.Viewport`, `GPU.Editor.Thumbnails`).
+- **The TAA's look** (`PostProcessComponent::TAAPreset`): `Sharp` (0), `Original` (1) or `Custom` (2), and ten tunables
+  read only under Custom (`TAAHistoryFrames`, `TAAMotionResponse`, `TAAMaxMotionWeight`, `TAAResampleWeight`,
+  `TAAHistoryClamp` {`MinMax` "Range", `Variance` "Tight (variance)"}, `TAAClipWidth`, `TAATransparentWeight`,
+  `TAADisocclusionRejection`, `TAADisocclusionThreshold`, `TAASharpening`); the enums' names and values are file and
+  script API. `Renderer/RendererComponents.h` holds `TemporalAntiAliasingSettings`, the tables `c_TAAOriginalSettings`
+  (the first TAA: 1/8, 1/32 per pixel up to 1/2, the range clamp, nothing else) and `c_TAASharpSettings` (the tunables'
+  defaults), and the ranges. `GetTemporalAntiAliasingSettings` is what the renderer resolves with: a preset's table, or
+  Custom's tunables clamped to their ranges and normalized (0 in `ClipWidth` under MinMax and in the threshold without
+  rejection), so equal looks give equal push constants. The preset and the tunables are independent stored fields (no
+  setter writes another; keys load in any order). Both presets keep the least weight at 1/8, so captures settle after
+  `c_TemporalSettleFrames` either way; settings changes never reset the history.
+- The resolve's terms, each in a uniform branch on its push constant (`RenderData::TemporalParameters`, 64 bytes):
+  **variance clipping** clips the history toward the mean of the 3x3's colors in the luminance weights' compressed space
+  (YCoCg of `c / (1 + L e)`), into `ClipWidth` standard deviations within the taps' range, along the line to the mean;
+  the **resampling term** raises the current frame's weight to `ResampleWeight * 4 * max(f (1 - f))` of the Catmull-Rom
+  fetch's fractional position (slow pans; nothing for a still pixel or integer motion); the **reactive mask** raises it
+  to `min(1, 2 * max(1 - a)) * TransparentWeight` over the 3x3 of the HDR alpha; **disocclusion rejection** takes the
+  current frame where the farthest distance the history stored in the 2x2 around the previous position (one
+  `textureGather` of its alpha) is nearer than the nearest surface of the 3x3's distance from the previous camera
+  (`PreviousForward`, `PreviousDepthOffset` from the motion camera, subtracted in double) by more than
+  `DisocclusionThreshold * max(|expected|, scale)` (the near distance, or an orthographic view's height).
+- **HDR alpha convention:** every writer of the HDR target before the TAA writes alpha 1 (the clear, opaque surfaces, the
+  sky); blended transparent surfaces multiply it by 1 - a (`SrcBlendAlpha Zero`, `DestBlendAlpha InvSrcAlpha`), so after
+  the transparent pass it is their transmittance; glass, drawn without blending with its own depth and velocity, will
+  write 1. A new writer keeps this or the reactive mask goes wrong (the HDR-alpha case of `GPU.SceneRenderer.TAA`
+  fails). Only the TAA reads it. The history's alpha holds the signed view distance (above); SSR may read it as the
+  previous frame's distance.
+- **Sharpening** lives in the tone mapping (`Tonemap.frag`, `TonemapParameters::Sharpening`, written only on frames the
+  TAA resolved): four `texelFetch` neighbors, in compressed luminance the center moves from their mean by
+  `Sharpening * (1 - R)^8` (R the five taps' range), bounded to the range widened by that amount times R and below
+  `(1 + ymax) / 2`, luminance only. It never enters the history, exposure, bloom or `GetResolvedHDRTexture`; captures and
+  the project picture show it. The exponent comes from the CPU prototype `Tests::TAA::SharpenLuminance`
+  (`Renderer.TAASharpening`): a resolved black-to-white edge of any orientation overshoots its five taps by at most 2%
+  of its range at Sharp's 0.5 and 4% at 1, texture detail gains about 9%.
+- Tests of the look (`GPU.SceneRenderer.TAA`, `GPUSceneTAAQualityTests.cpp`, helpers in `TAATestUtils.h`;
+  `AddTemporalPostProcess(scene, preset)`): Original equals Custom with Original's values bit for bit; each technique
+  against Original (Custom differing in it alone): the trail behind a cube crossing glints (luminances from the CPU model
+  `PredictTrail`), S2's noise case under variance clipping, slow pans against the resampling model, integer motion bit
+  for bit, the HDR alpha on both paths, a moving and a still transparent quad, a box uncovering a wall and the sky,
+  no rejection at 0.02 for turning, dollying, still, orthographic and far cameras and across pre-exposure steps, and
+  sharpening's detail, history, halos, flicker and its absence with FXAA. `Renderer.Components` checks the settings
+  functions.
 
 ### Skinned meshes
 

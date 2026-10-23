@@ -93,9 +93,10 @@ namespace Strata
 		// several). The generic rows and the component drawers' rows share it.
 		void DrawPropertyOverrideMenu(const PrefabView& prefab, const ComponentInfo& info, std::span<const std::string_view> properties,
 			std::string_view probeKey);
-		// The generic rows of a component's properties, without those a component drawer showed (`drawn`).
-		void DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PrefabView* prefab,
-			const UI::ComponentDrawResult* drawn = nullptr);
+		// The generic rows of a component's properties, without those a component drawer showed (`drawn`); a property with a
+		// property drawer (UI::PropertyDrawers) draws its value through it.
+		void DrawProperties(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
+			const PrefabView* prefab, const UI::ComponentDrawResult* drawn = nullptr);
 		// An edit of a rotation shared by several entities: continues the edit in progress, or begins one from the angles the
 		// widget showed (RotationAnglesEdit keeps each entity's own angles through a drag).
 		bool UpdateRotationEdit(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PropertyInfo& property,

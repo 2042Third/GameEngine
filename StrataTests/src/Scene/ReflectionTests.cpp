@@ -17,6 +17,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <iterator>
 #include <limits>
 #include <utility>
 
@@ -111,6 +113,57 @@ TEST_SUITE("Reflection")
 		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::TAA);
 		CHECK_FALSE(method->SetValue(&postProcess, int32_t(2)));
 		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::TAA);
+
+		// The TAA's preset and tunables, right after the method: the enums' names and values (file and script API), the
+		// tunables' ranges and tooltips, and their defaults, Sharp's table.
+		const ComponentInfo* post = ComponentRegistry::Find<PostProcessComponent>();
+		const PropertyInfo* preset = post->FindProperty("TAAPreset");
+		REQUIRE(preset);
+		CHECK(preset->Type == PropertyType::Enum);
+		REQUIRE(preset->EnumValues.size() == 3);
+		CHECK((preset->EnumValues[0].Name == "Sharp" && preset->EnumValues[0].Value == 0));
+		CHECK((preset->EnumValues[1].Name == "Original" && preset->EnumValues[1].Value == 1));
+		CHECK((preset->EnumValues[2].Name == "Custom" && preset->EnumValues[2].Value == 2));
+		CHECK(PostProcessComponent().TAAPreset == TemporalAntiAliasingPreset::Original);
+		const PropertyInfo* clamp = post->FindProperty("TAAHistoryClamp");
+		REQUIRE(clamp);
+		REQUIRE(clamp->EnumValues.size() == 2);
+		CHECK((clamp->EnumValues[0].Name == "MinMax" && clamp->EnumValues[0].Value == 0 && clamp->EnumValues[0].DisplayName == "Range"));
+		CHECK((clamp->EnumValues[1].Name == "Variance" && clamp->EnumValues[1].Value == 1 && clamp->EnumValues[1].DisplayName == "Tight (variance)"));
+		const char* const order[] = { "AntiAliasingMethod", "TAAPreset", "TAAHistoryFrames", "TAAMotionResponse", "TAAMaxMotionWeight", "TAAResampleWeight",
+			"TAAHistoryClamp", "TAAClipWidth", "TAATransparentWeight", "TAADisocclusionRejection", "TAADisocclusionThreshold", "TAASharpening" };
+		const auto first = std::find_if(post->Properties.begin(), post->Properties.end(), [](const PropertyInfo& property) { return property.Name == "AntiAliasingMethod"; });
+		REQUIRE(std::distance(first, post->Properties.end()) >= static_cast<std::ptrdiff_t>(std::size(order)));
+		for (size_t index = 0; index < std::size(order); index++)
+		{
+			CHECK(first[index].Name == order[index]);
+			CHECK_MESSAGE(!first[index].Tooltip.empty(), order[index]);
+		}
+		struct TunableRange
+		{
+			const char* Property;
+			float Min;
+			float Max;
+		};
+		for (const TunableRange& range : { TunableRange { "TAAHistoryFrames", 2.0f, 32.0f }, TunableRange { "TAAMotionResponse", 0.0f, 0.25f },
+				 TunableRange { "TAAMaxMotionWeight", 0.0f, 1.0f }, TunableRange { "TAAResampleWeight", 0.0f, 1.0f }, TunableRange { "TAAClipWidth", 0.5f, 4.0f },
+				 TunableRange { "TAATransparentWeight", 0.0f, 1.0f }, TunableRange { "TAADisocclusionThreshold", 0.01f, 0.5f },
+				 TunableRange { "TAASharpening", 0.0f, 1.0f } })
+		{
+			CAPTURE(range.Property);
+			const PropertyInfo* property = post->FindProperty(range.Property);
+			REQUIRE(property);
+			CHECK(property->Min == range.Min);
+			CHECK(property->Max == range.Max);
+		}
+		CHECK(post->FindProperty("TAAHistoryFrames")->Type == PropertyType::UInt);
+		CHECK(post->FindProperty("TAADisocclusionRejection")->Type == PropertyType::Bool);
+		// The defaults equal Sharp's table, which holds Original's values within every range.
+		PostProcessComponent tunables;
+		tunables.TAAPreset = TemporalAntiAliasingPreset::Custom;
+		CHECK(GetTemporalAntiAliasingSettings(tunables) == c_TAASharpSettings);
+		post->FindProperty("TAAHistoryFrames")->SetValue(&tunables, uint32_t(40));
+		CHECK(tunables.TAAHistoryFrames == 32); // Editors clamp; commands refuse
 
 		// The directional light's cascade blend: 0.1 by default, within [0, 0.5]; commands refuse values outside, editors clamp.
 		const PropertyInfo* blend = ComponentRegistry::Find<DirectionalLightComponent>()->FindProperty("CascadeBlend");
@@ -463,6 +516,43 @@ TEST_SUITE("Scene.InactiveProperties")
 		for (const char* property : { "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed", "BloomIntensity", "BloomThreshold",
 			"AmbientOcclusionRadius", "AmbientOcclusionIntensity", "AntiAliasingMethod" })
 			CHECK_MESSAGE(reason("PostProcess", property).empty(), property);
+
+		// The TAA's preset and tunables: inactive without anti-aliasing, with FXAA, and (the tunables) unless Custom, quoting the
+		// preset's value or why it reads none; under Custom, the clip width only for tight clipping and the threshold only with
+		// rejection.
+		const char* const temporal[] = { "TAAPreset", "TAAHistoryFrames", "TAAMotionResponse", "TAAMaxMotionWeight", "TAAResampleWeight", "TAAHistoryClamp",
+			"TAAClipWidth", "TAATransparentWeight", "TAADisocclusionRejection", "TAADisocclusionThreshold", "TAASharpening" };
+		post.AntiAliasing = false;
+		for (const char* property : temporal)
+			CHECK_MESSAGE(reason("PostProcess", property) == "Anti Aliasing is off", property);
+		post.AntiAliasing = true;
+		for (const char* property : temporal)
+			CHECK_MESSAGE(reason("PostProcess", property) == "Only TAA uses it (Anti Aliasing Method is FXAA)", property);
+		post.AntiAliasingMethod = AntiAliasingMode::TAA;
+		CHECK(reason("PostProcess", "TAAPreset").empty());
+		post.TAAPreset = TemporalAntiAliasingPreset::Sharp;
+		CHECK(reason("PostProcess", "TAAHistoryFrames") == "The Sharp preset sets it (8): choose Custom to tune it");
+		CHECK(reason("PostProcess", "TAAMotionResponse") == "The Sharp preset sets it (0.0625): choose Custom to tune it");
+		CHECK(reason("PostProcess", "TAAMaxMotionWeight") == "The Sharp preset sets it (0.5): choose Custom to tune it");
+		CHECK(reason("PostProcess", "TAAResampleWeight") == "The Sharp preset sets it (0.25): choose Custom to tune it");
+		CHECK(reason("PostProcess", "TAAHistoryClamp") == "The Sharp preset sets it (Tight): choose Custom to tune it");
+		CHECK(reason("PostProcess", "TAAClipWidth") == "The Sharp preset sets it (1.25): choose Custom to tune it");
+		CHECK(reason("PostProcess", "TAATransparentWeight") == "The Sharp preset sets it (0.5): choose Custom to tune it");
+		CHECK(reason("PostProcess", "TAADisocclusionRejection") == "The Sharp preset sets it (on): choose Custom to tune it");
+		CHECK(reason("PostProcess", "TAADisocclusionThreshold") == "The Sharp preset sets it (0.05): choose Custom to tune it");
+		CHECK(reason("PostProcess", "TAASharpening") == "The Sharp preset sets it (0.5): choose Custom to tune it");
+		post.TAAPreset = TemporalAntiAliasingPreset::Original;
+		CHECK(reason("PostProcess", "TAAMotionResponse") == "The Original preset sets it (0.03125): choose Custom to tune it");
+		CHECK(reason("PostProcess", "TAAClipWidth") == "The Original preset clamps to the colors' range: choose Custom to tune it");
+		CHECK(reason("PostProcess", "TAADisocclusionThreshold") == "The Original preset does not reject uncovered surfaces: choose Custom to tune it");
+		CHECK(reason("PostProcess", "TAASharpening") == "The Original preset sets it (0): choose Custom to tune it");
+		post.TAAPreset = TemporalAntiAliasingPreset::Custom;
+		for (const char* property : temporal)
+			CHECK_MESSAGE(reason("PostProcess", property).empty(), property);
+		post.TAAHistoryClamp = TemporalHistoryClamp::MinMax;
+		post.TAADisocclusionRejection = false;
+		CHECK(reason("PostProcess", "TAAClipWidth") == "Only Tight clipping uses it (TAA History Clamp is Range)");
+		CHECK(reason("PostProcess", "TAADisocclusionThreshold") == "TAA Disocclusion Rejection is off");
 
 		// The camera's other projection; the animator's clip under a controller.
 		CameraComponent& camera = entity.AddComponent<CameraComponent>();

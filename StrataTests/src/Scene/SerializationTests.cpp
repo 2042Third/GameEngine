@@ -408,6 +408,38 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(CountWarnings(warnings, "AntiAliasingMethod") == 1);
 		CHECK(loaded.AntiAliasingMethod == AntiAliasingMode::FXAA);
 
+		// The TAA's preset: absent (every file saved before it) loads as the default without a warning; by name or integer;
+		// unknown names and integers warn and keep the default; out-of-range tunables are clamped.
+		warnings.clear();
+		loaded = load({ { "AntiAliasing", true }, { "AntiAliasingMethod", "TAA" } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.TAAPreset == PostProcessComponent().TAAPreset);
+		for (const nlohmann::json& original : { nlohmann::json("Original"), nlohmann::json(1) })
+		{
+			loaded = load({ { "TAAPreset", original } }, warnings);
+			CHECK(warnings.empty());
+			CHECK(loaded.TAAPreset == TemporalAntiAliasingPreset::Original);
+		}
+		loaded = load({ { "TAAPreset", "Custom" }, { "TAAHistoryClamp", "MinMax" } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.TAAPreset == TemporalAntiAliasingPreset::Custom);
+		CHECK(loaded.TAAHistoryClamp == TemporalHistoryClamp::MinMax);
+		for (const nlohmann::json& unknown : { nlohmann::json("Blurry"), nlohmann::json(3) })
+		{
+			warnings.clear();
+			loaded = load({ { "TAAPreset", unknown } }, warnings);
+			CHECK(CountWarnings(warnings, "TAAPreset") == 1);
+			CHECK(loaded.TAAPreset == PostProcessComponent().TAAPreset);
+		}
+		warnings.clear();
+		loaded = load({ { "TAAHistoryFrames", 100 }, { "TAAMotionResponse", -1.0 }, { "TAAClipWidth", 9.0 }, { "TAADisocclusionThreshold", 0.0 },
+			{ "TAASharpening", 2.0 } }, warnings);
+		CHECK(loaded.TAAHistoryFrames == c_TAAMaxHistoryFrames);
+		CHECK(loaded.TAAMotionResponse == 0.0f);
+		CHECK(loaded.TAAClipWidth == c_TAAMaxClipWidth);
+		CHECK(loaded.TAADisocclusionThreshold == c_TAAMinDisocclusionThreshold);
+		CHECK(loaded.TAASharpening == 1.0f);
+
 		// Automatic exposure's brightest average defaults to 16 (sunlit scenes in real units meter around 15); a file that
 		// stores another value, as 0.5.0 saved its default of 12, keeps it.
 		warnings.clear();

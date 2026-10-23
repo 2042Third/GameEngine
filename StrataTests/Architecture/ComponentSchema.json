@@ -1110,8 +1110,167 @@
 					"Min": 0.0,
 					"Name": "AntiAliasingMethod",
 					"Speed": 0.0,
-					"Tooltip": "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion, a slight blur of what moves",
+					"Tooltip": "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion. TAA Preset chooses how the TAA looks",
 					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "TAA Preset",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "Sharp",
+							"Value": 0
+						},
+						{
+							"DisplayName": "",
+							"Name": "Original",
+							"Value": 1
+						},
+						{
+							"DisplayName": "",
+							"Name": "Custom",
+							"Value": 2
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "TAAPreset",
+					"Speed": 0.0,
+					"Tooltip": "How the TAA looks. Sharp: tighter history clipping, slow pans resampled less, uncovered surfaces drop their history, transparent surfaces take mostly the current frame, a faster response to motion and a light sharpening of the displayed image. Original: the first TAA, softer and steadier. Custom: the tunables below (choosing it in the Inspector starts from the look in effect)",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "TAA History Frames",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 32.0,
+					"Min": 2.0,
+					"Name": "TAAHistoryFrames",
+					"Speed": 1.0,
+					"Tooltip": "About how many frames the image averages: the current frame weighs at least 1 / this. At 8, every jitter position counts once. More is smoother and steadier but lags behind lighting changes; fewer reacts faster but edges crawl",
+					"Type": "UInt"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "TAA Motion Response",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.25,
+					"Min": 0.0,
+					"Name": "TAAMotionResponse",
+					"Speed": 0.0010000000474974513,
+					"Tooltip": "How quickly moving surfaces let go of the history. At 0.0625, motion of 8 pixels a frame weighs the current frame 0.5. Higher keeps moving things crisper and their trails shorter, but they get less anti-aliasing while they move. 0: motion does not matter",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "TAA Max Motion Weight",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "TAAMaxMotionWeight",
+					"Speed": 0.0,
+					"Tooltip": "The most the current frame weighs, however fast things move. 1 lets very fast motion drop the history: sharp, but aliased",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "TAA Resample Weight",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "TAAResampleWeight",
+					"Speed": 0.0,
+					"Tooltip": "The current frame's least weight where the history is read between pixels, as in slow pans; it is largest halfway between them. Higher keeps slowly moving texture crisper, but its edges get less anti-aliasing while they move. 0: off",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "TAA History Clamp",
+					"EnumValues": [
+						{
+							"DisplayName": "Range",
+							"Name": "MinMax",
+							"Value": 0
+						},
+						{
+							"DisplayName": "Tight (variance)",
+							"Name": "Variance",
+							"Value": 1
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "TAAHistoryClamp",
+					"Speed": 0.0,
+					"Tooltip": "How the history is kept consistent with what the pixel shows now. Range limits it to the range of the colors around the pixel. Tight limits it to a narrower box around their average, which removes more ghosting and trails, most where the surroundings are smooth and less beside glints",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "TAA Clip Width",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 4.0,
+					"Min": 0.5,
+					"Name": "TAAClipWidth",
+					"Speed": 0.05000000074505806,
+					"Tooltip": "Tight only: the box's half width, in standard deviations of the colors around the pixel. Lower removes more trails, but lets edges flicker and lets noise through",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "TAA Transparent Weight",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "TAATransparentWeight",
+					"Speed": 0.0,
+					"Tooltip": "The current frame's least weight where a blended transparent surface covers the pixel (half cover or more counts as full). Transparent surfaces have no motion vectors of their own. 0 treats them like everything else, so they ghost when they move; 1 drops their history, so they never ghost, but their edges shimmer",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "TAA Disocclusion Rejection",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "TAADisocclusionRejection",
+					"Speed": 0.0,
+					"Tooltip": "Drop the history where a surface was just uncovered (something nearer covered it in the previous frame), so moving objects leave no ghost on what they uncover",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "TAA Disocclusion Threshold",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.5,
+					"Min": 0.009999999776482582,
+					"Name": "TAADisocclusionThreshold",
+					"Speed": 0.004999999888241291,
+					"Tooltip": "How much nearer the previous frame's surface must have been, as a fraction of the distance, for the pixel to count as uncovered. Lower catches thin gaps, such as a hand in front of a wall, but may drop the history of surfaces moving fast away from the camera",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "TAA Sharpening",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "TAASharpening",
+					"Speed": 0.0,
+					"Tooltip": "Sharpens the displayed image after TAA, never the history, to restore texture detail the averaging softens. Strong edges are sharpened much less and overshoot is bounded, so halos stay faint. 0 is off",
+					"Type": "Float"
 				},
 				{
 					"AssetFilter": 0,
