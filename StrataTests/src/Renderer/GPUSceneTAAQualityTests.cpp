@@ -625,9 +625,9 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 					const glm::vec2 position = PixelToWorld(x, y);
 					const auto inside = [&](float low, float high, bool& result)
 					{
-						const glm::vec2 near = glm::min(position - low, high - position);
-						result = glm::all(glm::greaterThan(near, glm::vec2(0.0f)));
-						return glm::all(glm::greaterThan(glm::abs(near), glm::vec2(0.1f)));
+						const glm::vec2 margin = glm::min(position - low, high - position);
+						result = glm::all(glm::greaterThan(margin, glm::vec2(0.0f)));
+						return glm::all(glm::greaterThan(glm::abs(margin), glm::vec2(0.1f)));
 					};
 					bool inFirst = false;
 					bool inSecond = false;
