@@ -2,7 +2,9 @@
 
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Renderer/GeometryPool.h"
+#include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Renderer/MeshFactory.h"
+#include "Strata/Renderer/StagingPool.h"
 
 #include <cstring>
 #include <initializer_list>
@@ -233,6 +235,48 @@ TEST_SUITE("GPU.Renderer.GeometryPool")
 		CHECK(never.Handle == c_InvalidGeometry);
 		CHECK_FALSE(never.Retry);
 		gpu.GetDevice().WaitForIdle();
+		for (const Filled& entry : filled)
+			CHECK(HoldsPattern(gpu, *pool, entry));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The pool grows at once under an upload batch whose command list is open")
+	{
+		// A batch opens its graphics command list with its first upload (a texture's, say) and keeps it open while the
+		// frame's assets finalize; a mesh finalized after it may need the pool to grow before the batch wrote into the pool's
+		// buffers. NVRHI lets one immediate command list be open at a time: the growth's copies must run all the same.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const Ref<GeometryPool> pool = GeometryPool::Create(gpu.GetNvrhiDevice(), SmallPool());
+		REQUIRE(pool);
+		std::vector<Filled> filled;
+		for (uint32_t index = 0; index < 3; index++)
+			filled.push_back(AllocateFilled(gpu, *pool, index, 60, 200));
+		const uint64_t version = pool->GetBufferVersion();
+		nvrhi::TextureDesc desc;
+		desc.width = 4;
+		desc.height = 4;
+		desc.format = nvrhi::Format::RGBA8_UNORM;
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		desc.debugName = "BatchSource";
+		const nvrhi::TextureHandle source = gpu.GetNvrhiDevice()->createTexture(desc);
+		desc.debugName = "BatchDestination";
+		const nvrhi::TextureHandle destination = gpu.GetNvrhiDevice()->createTexture(desc);
+		REQUIRE(source);
+		REQUIRE(destination);
+		{
+			StagingPool staging(gpu.GetNvrhiDevice());
+			GPUUploadQueue queue(gpu.GetDevice(), staging);
+			queue.BeginBatch();
+			// The batch's first recording opens its graphics command list, as a texture's upload step does.
+			queue.CopyTextureLevels(destination, 0, source, 0, 1);
+			const GeometryPool::AllocateResult large = pool->Allocate(GeometryArena::Static, 1000, 4000, queue.GetOpenBatch());
+			CHECK(large.Handle != c_InvalidGeometry);
+			CHECK(pool->GetBufferVersion() > version);
+			queue.SubmitBatch();
+			gpu.GetDevice().WaitForIdle();
+		}
 		for (const Filled& entry : filled)
 			CHECK(HoldsPattern(gpu, *pool, entry));
 		CHECK(gpu.GetNewErrorCount() == 0);

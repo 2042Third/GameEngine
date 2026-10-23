@@ -90,7 +90,12 @@ namespace Strata
 	nvrhi::ICommandList* GeometryPool::OpenCommandList()
 	{
 		if (!m_CommandList)
-			m_CommandList = m_Device->createCommandList();
+		{
+			// Not an immediate command list: NVRHI's validation lets only one of those be open at a time, and growth under an
+			// upload batch opens this list while the batch's graphics list is open (GPUUploadQueue::GetList). On Vulkan the
+			// flag changes nothing else: the list still runs where it is executed, ahead of the batch's.
+			m_CommandList = m_Device->createCommandList(nvrhi::CommandListParameters().setEnableImmediateExecution(false));
+		}
 		if (!m_CommandList)
 			return nullptr;
 		if (!m_CommandListOpen)

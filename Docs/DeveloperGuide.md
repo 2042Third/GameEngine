@@ -732,7 +732,11 @@ short. Their full wording:
   and freed memory in use can lose the device). Drop render targets, and what references them, through
   `Renderer::ReleaseDeferred` (`DeferredReleaseQueue`: held until the GPU finished the work submitted
   before, never waiting, then destroyed within a frame's budget, `c_FrameDestroyBudget`, since a texture costs the
-  driver about 0.1 ms), as `SceneRenderer` does when it is resized.
+  driver about 0.1 ms), as `SceneRenderer` does when it is resized. Command lists are immediate unless created with
+  `setEnableImmediateExecution(false)`, and NVRHI's validation layer refuses to open a second immediate list while one is
+  open (recording into the unopened list does nothing, and timing it with a `GPUPassTimer` crashes): a list that may open
+  while another is, as the upload batch's transfer list and the geometry pool's growth under a batch do, is not
+  immediate (on Vulkan the flag changes nothing else).
 - **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous; code must handle
   "not loaded yet" every frame instead of blocking (see [Asset pipeline](#asset-pipeline)). New code that works for a
   scene (scene systems, loading into it, rendering it) reaches the asset manager through `Scene::GetAssetManager()`
