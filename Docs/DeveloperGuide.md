@@ -3230,8 +3230,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   keeps it), after a resize, after a device frame (`Renderer::GetFrameNumber`, advanced by `Renderer::BeginFrame`) in
   which the renderer did not render (hidden views), and after `SceneRenderer::ResetHistory` (`GameRenderer` calls it
   where it calls `ResetExposureAdaptation`). It is counted in frames, never in time: slow frames never reset it. Tests
-  that render many frames without reading anything back finish each as a device frame would (wait, then NVRHI's garbage
-  collection), or the frame constants' versions run out.
+  may render many frames back to back without device frames: the renderer waits for its own oldest frames before its
+  frame constants' versions run out (`SceneRenderer::ReserveFrameConstantVersions`; Architecture rules, NVRHI pitfalls).
 - With TAA, PCSS and GTAO turn their per-pixel noise by the golden ratio's fraction of a turn per frame of the history
   (`TemporalParams.z`, counted from the reset so captures are deterministic), and the history averages it; without TAA the
   turn is 0 and the images are unchanged.
