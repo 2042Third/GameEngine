@@ -83,8 +83,9 @@ namespace Strata::ProbeBake
 
 	std::vector<float> AssembleEquirect(const std::array<std::vector<float>, 6>& faces, float scale)
 	{
-		for (const std::vector<float>& face : faces)
-			ST_CORE_ASSERT(face.size() == static_cast<size_t>(c_FaceSize) * c_FaceSize * 3, "A face has {} values", face.size());
+		// One expression: in Dist the assertion is compiled out, and a loop around it would leave its variable unused.
+		ST_CORE_ASSERT(std::all_of(faces.begin(), faces.end(), [](const std::vector<float>& face) { return face.size() == static_cast<size_t>(c_FaceSize) * c_FaceSize * 3; }),
+			"A face does not hold {} values", static_cast<size_t>(c_FaceSize) * c_FaceSize * 3);
 		std::vector<float> image(static_cast<size_t>(c_CaptureWidth) * c_CaptureHeight * 3);
 		const float size = static_cast<float>(c_FaceSize);
 		for (uint32_t y = 0; y < c_CaptureHeight; y++)
