@@ -9,11 +9,12 @@
 // history of earlier frames into the history's other texture. The history is fetched where the pixel's surface was in the
 // previous frame - along the motion of the nearest surface in the pixel's 3x3 neighborhood, so an edge moves with its
 // foreground, or the camera's where nothing was drawn - with a Catmull-Rom filter (a still pixel reads its own texel), then
-// clamped to the colors of the neighborhood in this frame (in YCoCg, luma and chroma), which rejects what the history holds of
-// surfaces that moved away or were uncovered. Both colors are weighted by their exposed luminance (1 / (1 + L)), so a bright
-// sample among dark ones does not flicker as the jitter moves it. The current frame's weight is the largest of
-// CurrentWeight (1 / the frames in the history: the frames after a reset are averaged evenly), MinWeight and a weight growing
-// with the motion's length in pixels; a pixel whose surface was outside the previous frame takes the current frame alone.
+// clamped to the colors of the neighborhood in this frame (in YCoCg, luma and chroma; with variance clipping, clipped toward
+// their mean), which rejects what the history holds of surfaces that moved away or were uncovered. Both colors are weighted
+// by their exposed luminance (1 / (1 + L)), so a bright sample among dark ones does not flicker as the jitter moves it. The
+// current frame's weight is the largest of CurrentWeight (1 / the frames in the history: the frames after a reset are
+// averaged evenly), MinWeight and a weight growing with the motion's length in pixels; a pixel whose surface was outside the
+// previous frame takes the current frame alone.
 // The settings (TemporalAntiAliasingSettings) choose further terms, each in a branch on a push constant. The history's alpha
 // holds the pixel's signed view distance (whatever the settings), which the next frame's resolve may compare with.
 
@@ -71,6 +72,41 @@ vec3 YCoCgToRGB(vec3 color)
 	return vec3(base + color.y, color.x + color.z, base - color.y);
 }
 
+// A color in the space of the luminance weights (each divided by 1 + its exposed luminance), in YCoCg: there one bright
+// texel (a glint) widens the spread of its neighborhood far less than it does in linear values.
+vec3 CompressColor(vec3 color, float exposure)
+{
+	return RGBToYCoCg(color / (1.0 + Luminance(color) * exposure));
+}
+
+// The linear color of a compressed one: the inverse of CompressColor wherever its exposed luminance is below 1.
+vec3 ExpandColor(vec3 compressed, float exposure)
+{
+	vec3 color = YCoCgToRGB(compressed);
+	return color / max(1.0 - exposure * Luminance(color), 1e-6);
+}
+
+// The history clipped toward the mean of the neighborhood's compressed colors (`sum`, `squares`: their sums over the nine
+// taps; `low`, `high`: their range), into a box `ClipWidth` standard deviations wide around the mean within that range. The
+// history moves along the line toward the mean, so its hue relative to the mean is kept; a history inside the box is kept.
+vec3 ClipHistoryToVariance(vec3 history, vec3 sum, vec3 squares, vec3 low, vec3 high, float exposure)
+{
+	vec3 mean = sum / 9.0;
+	vec3 deviation = sqrt(max(squares / 9.0 - mean * mean, vec3(0.0)));
+	vec3 boxLow = max(mean - u_Temporal.ClipWidth * deviation, low);
+	vec3 boxHigh = min(mean + u_Temporal.ClipWidth * deviation, high);
+	vec3 offset = CompressColor(history, exposure) - mean;
+	// Compared with 0, not an epsilon: compressed colors scale exactly with a power-of-two pre-exposure, so the same
+	// components are chosen at every pre-exposure.
+	float fraction = 1.0;
+	for (int component = 0; component < 3; component++)
+	{
+		if (offset[component] != 0.0)
+			fraction = min(fraction, ((offset[component] > 0.0 ? boxHigh[component] : boxLow[component]) - mean[component]) / offset[component]);
+	}
+	return ExpandColor(mean + max(fraction, 0.0) * offset, exposure);
+}
+
 vec3 SampleHistoryBilinear(vec2 position)
 {
 	return textureLod(sampler2D(u_History, u_LinearClampSampler), position * u_Frame.ViewportSize.zw, 0.0).rgb;
@@ -112,9 +148,25 @@ void main()
 	if (pixel.x >= size.x || pixel.y >= size.y)
 		return;
 
+	// The luminance weights' exposure: of exposed values.
+	float exposure = u_Exposure[ST_EXPOSURE_MULTIPLIER] * u_Temporal.InversePreExposure;
+	bool variance = u_Temporal.ClampMode == 1u;
 	vec3 current = texelFetch(u_Current, pixel, 0).rgb;
 	vec3 low = RGBToYCoCg(current);
 	vec3 high = low;
+	// Variance clipping: the moments and range of the compressed colors.
+	vec3 compressedSum = vec3(0.0);
+	vec3 compressedSquares = vec3(0.0);
+	vec3 compressedLow = vec3(0.0);
+	vec3 compressedHigh = vec3(0.0);
+	if (variance)
+	{
+		vec3 compressed = CompressColor(current, exposure);
+		compressedSum = compressed;
+		compressedSquares = compressed * compressed;
+		compressedLow = compressed;
+		compressedHigh = compressed;
+	}
 	vec2 uv = (vec2(pixel) + 0.5) * u_Frame.ViewportSize.zw;
 	float depth = texelFetch(u_Depth, pixel, 0).r;
 	// The nearest surface (reversed-Z: the largest depth) of the neighborhood, the pixel's own on ties.
@@ -127,13 +179,22 @@ void main()
 			if (x == 0 && y == 0)
 				continue;
 			ivec2 neighbor = clamp(pixel + ivec2(x, y), ivec2(0), size - 1);
-			vec3 color = RGBToYCoCg(texelFetch(u_Current, neighbor, 0).rgb);
+			vec3 neighborColor = texelFetch(u_Current, neighbor, 0).rgb;
+			vec3 color = RGBToYCoCg(neighborColor);
 			low = min(low, color);
 			high = max(high, color);
-			float depth = texelFetch(u_Depth, neighbor, 0).r;
-			if (depth > nearestDepth)
+			if (variance)
 			{
-				nearestDepth = depth;
+				vec3 compressed = CompressColor(neighborColor, exposure);
+				compressedSum += compressed;
+				compressedSquares += compressed * compressed;
+				compressedLow = min(compressedLow, compressed);
+				compressedHigh = max(compressedHigh, compressed);
+			}
+			float neighborDepth = texelFetch(u_Depth, neighbor, 0).r;
+			if (neighborDepth > nearestDepth)
+			{
+				nearestDepth = neighborDepth;
 				nearestPixel = neighbor;
 			}
 		}
@@ -148,10 +209,12 @@ void main()
 		if (all(greaterThanEqual(previousUV, vec2(0.0))) && all(lessThanEqual(previousUV, vec2(1.0))))
 		{
 			vec3 history = (motion == vec2(0.0) ? texelFetch(u_History, pixel, 0).rgb : SampleHistory(previousUV)) * u_Temporal.HistoryScale;
-			history = YCoCgToRGB(clamp(RGBToYCoCg(history), low, high));
+			if (variance)
+				history = ClipHistoryToVariance(history, compressedSum, compressedSquares, compressedLow, compressedHigh, exposure);
+			else
+				history = YCoCgToRGB(clamp(RGBToYCoCg(history), low, high));
 			float motionPixels = length(motion * u_Frame.ViewportSize.xy);
 			float weight = max(max(u_Temporal.CurrentWeight, u_Temporal.MinWeight), min(motionPixels * u_Temporal.MotionWeightScale, u_Temporal.MaxMotionWeight));
-			float exposure = u_Exposure[ST_EXPOSURE_MULTIPLIER] * u_Temporal.InversePreExposure;
 			float currentWeight = weight / (1.0 + Luminance(current) * exposure);
 			float historyWeight = (1.0 - weight) / (1.0 + Luminance(max(history, vec3(0.0))) * exposure);
 			result = (current * currentWeight + history * historyWeight) / max(currentWeight + historyWeight, 1e-6);

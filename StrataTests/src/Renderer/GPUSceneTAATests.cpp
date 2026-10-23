@@ -17,6 +17,142 @@ using namespace Strata;
 using namespace Strata::Tests;
 using namespace Strata::Tests::TAA;
 
+namespace
+{
+
+	// The shadows' and the ambient occlusion's noise turns every frame with TAA, and the history smooths it: the converged
+	// penumbra's roughness stays below `bound` times one frame's. `custom` (when set) is the look, under Custom.
+	void CheckNoiseSmoothed(const TemporalAntiAliasingSettings* custom, double bound)
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		Scene scene;
+		PostProcessComponent& postProcess = AddTemporalPostProcess(scene, custom ? TemporalAntiAliasingPreset::Custom : TemporalAntiAliasingPreset::Original);
+		if (custom)
+			SetTemporalAntiAliasingSettings(postProcess, *custom);
+		postProcess.AmbientOcclusion = true;
+		postProcess.Exposure = -2.0f;
+		Entity sun = AddSun(scene, glm::normalize(glm::vec3(-0.3f, -1.0f, 0.0f)), 1.0f);
+		sun.GetComponent<DirectionalLightComponent>().ShadowSoftness = 6.0f; // A wide penumbra
+		Entity ground = AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f), "Ground");
+		ground.GetComponent<TransformComponent>().Scale = glm::vec3(30.0f);
+		// A roof above the camera (seen from below it is culled) whose shadow's edge crosses the view, and a box in the
+		// penumbra whose contact with the ground the ambient occlusion darkens.
+		Entity roof = AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(5.0f, 4.0f, 0.0f), "Roof");
+		roof.GetComponent<TransformComponent>().Scale = glm::vec3(10.0f);
+		AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(-1.2f, 0.25f, 1.0f), "Box").GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
+		const SceneCamera camera = OrthographicLookAt(glm::vec3(-1.2f, 3.0f, 0.0f), glm::vec3(-1.2f, 0.0f, 0.0f), 4.0f);
+		SceneRenderer renderer = CreateRenderer("Noise");
+		renderer.SetViewportSize(c_Size, c_Size);
+
+		// Luminance of the ground's pixels away from other surfaces (no geometric edge in their neighborhood); NaN elsewhere.
+		const auto groundLuminance = [&](const std::vector<glm::vec3>& image)
+		{
+			const std::vector<uint32_t> ids = ReadIDs(renderer);
+			std::vector<float> luminance(image.size(), std::numeric_limits<float>::quiet_NaN());
+			for (uint32_t y = 1; y + 1 < c_Size; y++)
+			{
+				for (uint32_t x = 1; x + 1 < c_Size; x++)
+				{
+					bool interior = true;
+					for (int dy = -1; dy <= 1; dy++)
+					{
+						for (int dx = -1; dx <= 1; dx++)
+							interior = interior && ids[(y + dy) * c_Size + x + dx] == GetID(ground);
+					}
+					if (interior)
+						luminance[y * c_Size + x] = glm::dot(image[y * c_Size + x], c_LuminanceWeights);
+				}
+			}
+			return luminance;
+		};
+		// How rough the shading of the ground's penumbra (`penumbra`) is: the squared second differences along rows and columns,
+		// which a smooth penumbra (a ramp) keeps small and noise does not.
+		std::vector<bool> penumbra(static_cast<size_t>(c_Size) * c_Size, false);
+		const auto roughness = [&penumbra](const std::vector<float>& luminance)
+		{
+			double energy = 0.0;
+			for (uint32_t y = 1; y + 1 < c_Size; y++)
+			{
+				for (uint32_t x = 1; x + 1 < c_Size; x++)
+				{
+					const size_t pixel = static_cast<size_t>(y) * c_Size + x;
+					if (!penumbra[pixel])
+						continue;
+					for (const size_t step : { size_t(1), size_t(c_Size) })
+					{
+						const float curve = luminance[pixel - step] + luminance[pixel + step] - 2.0f * luminance[pixel];
+						if (!std::isnan(curve))
+							energy += static_cast<double>(curve) * curve;
+					}
+				}
+			}
+			return energy;
+		};
+		const auto readOcclusion = [&]()
+		{
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetAmbientOcclusionTexture(), image));
+			return image.Pixels;
+		};
+
+		// Frames 1 and 9 have the same jitter phase: only the noise's turn tells them apart.
+		std::vector<float> first;
+		std::vector<float> ninth;
+		std::vector<uint8_t> firstOcclusion;
+		std::vector<uint8_t> ninthOcclusion;
+		for (uint32_t frame = 0; frame < 16; frame++)
+		{
+			REQUIRE(renderer.Render(scene, camera));
+			if (frame == 0 || frame == SceneRenderer::c_TemporalJitterPhases)
+			{
+				(frame == 0 ? first : ninth) = groundLuminance(ReadHDR(renderer.GetHDRTexture()));
+				(frame == 0 ? firstOcclusion : ninthOcclusion) = readOcclusion();
+			}
+		}
+		uint32_t groundPixels = 0;
+		uint32_t changed = 0;
+		for (size_t pixel = 0; pixel < first.size(); pixel++)
+		{
+			if (std::isnan(first[pixel]))
+				continue;
+			groundPixels++;
+			changed += first[pixel] != ninth[pixel] ? 1u : 0u;
+		}
+		REQUIRE(groundPixels > c_Size * c_Size / 2);
+		CHECK(changed > c_Size);
+		CHECK(firstOcclusion != ninthOcclusion);
+
+		const std::vector<float> converged = groundLuminance(ReadHDR(renderer.GetResolvedHDRTexture()));
+		// The penumbra: the ground between its shadowed and its lit brightness.
+		float shadowed = std::numeric_limits<float>::max();
+		float lit = 0.0f;
+		for (const float value : converged)
+		{
+			if (!std::isnan(value))
+			{
+				shadowed = std::min(shadowed, value);
+				lit = std::max(lit, value);
+			}
+		}
+		uint32_t penumbraPixels = 0;
+		for (size_t pixel = 0; pixel < converged.size(); pixel++)
+		{
+			penumbra[pixel] = converged[pixel] > shadowed + 0.05f * (lit - shadowed) && converged[pixel] < lit - 0.05f * (lit - shadowed);
+			penumbraPixels += penumbra[pixel] ? 1u : 0u;
+		}
+		CHECK(penumbraPixels > c_Size * 2);
+		const double singleEnergy = roughness(first);
+		const double convergedEnergy = roughness(converged);
+		INFO("changed " << changed << " of " << groundPixels << ", penumbra " << penumbraPixels << ", roughness " << singleEnergy << " -> " << convergedEnergy);
+		CHECK(convergedEnergy < bound * singleEnergy);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+}
+
 TEST_SUITE("GPU.SceneRenderer.TAA")
 {
 	TEST_CASE("The jitter's eight phases are distinct sub-pixel offsets that cover the pixel evenly")
@@ -357,129 +493,15 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 
 	TEST_CASE("With TAA the shadows' and the ambient occlusion's noise turns every frame, and the history smooths it")
 	{
-		GPUContext gpu;
-		REQUIRE(gpu.IsValid());
-		SceneTestAssets assets;
-		LoadAssets(assets);
-		Scene scene;
-		PostProcessComponent& postProcess = AddTemporalPostProcess(scene, TemporalAntiAliasingPreset::Original);
-		postProcess.AmbientOcclusion = true;
-		postProcess.Exposure = -2.0f;
-		Entity sun = AddSun(scene, glm::normalize(glm::vec3(-0.3f, -1.0f, 0.0f)), 1.0f);
-		sun.GetComponent<DirectionalLightComponent>().ShadowSoftness = 6.0f; // A wide penumbra
-		Entity ground = AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f), "Ground");
-		ground.GetComponent<TransformComponent>().Scale = glm::vec3(30.0f);
-		// A roof above the camera (seen from below it is culled) whose shadow's edge crosses the view, and a box in the
-		// penumbra whose contact with the ground the ambient occlusion darkens.
-		Entity roof = AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(5.0f, 4.0f, 0.0f), "Roof");
-		roof.GetComponent<TransformComponent>().Scale = glm::vec3(10.0f);
-		AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(-1.2f, 0.25f, 1.0f), "Box").GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
-		const SceneCamera camera = OrthographicLookAt(glm::vec3(-1.2f, 3.0f, 0.0f), glm::vec3(-1.2f, 0.0f, 0.0f), 4.0f);
-		SceneRenderer renderer = CreateRenderer("Noise");
-		renderer.SetViewportSize(c_Size, c_Size);
+		CheckNoiseSmoothed(nullptr, 0.5);
+	}
 
-		// Luminance of the ground's pixels away from other surfaces (no geometric edge in their neighborhood); NaN elsewhere.
-		const auto groundLuminance = [&](const std::vector<glm::vec3>& image)
-		{
-			const std::vector<uint32_t> ids = ReadIDs(renderer);
-			std::vector<float> luminance(image.size(), std::numeric_limits<float>::quiet_NaN());
-			for (uint32_t y = 1; y + 1 < c_Size; y++)
-			{
-				for (uint32_t x = 1; x + 1 < c_Size; x++)
-				{
-					bool interior = true;
-					for (int dy = -1; dy <= 1; dy++)
-					{
-						for (int dx = -1; dx <= 1; dx++)
-							interior = interior && ids[(y + dy) * c_Size + x + dx] == GetID(ground);
-					}
-					if (interior)
-						luminance[y * c_Size + x] = glm::dot(image[y * c_Size + x], c_LuminanceWeights);
-				}
-			}
-			return luminance;
-		};
-		// How rough the shading of the ground's penumbra (`penumbra`) is: the squared second differences along rows and columns,
-		// which a smooth penumbra (a ramp) keeps small and noise does not.
-		std::vector<bool> penumbra(static_cast<size_t>(c_Size) * c_Size, false);
-		const auto roughness = [&penumbra](const std::vector<float>& luminance)
-		{
-			double energy = 0.0;
-			for (uint32_t y = 1; y + 1 < c_Size; y++)
-			{
-				for (uint32_t x = 1; x + 1 < c_Size; x++)
-				{
-					const size_t pixel = static_cast<size_t>(y) * c_Size + x;
-					if (!penumbra[pixel])
-						continue;
-					for (const size_t step : { size_t(1), size_t(c_Size) })
-					{
-						const float curve = luminance[pixel - step] + luminance[pixel + step] - 2.0f * luminance[pixel];
-						if (!std::isnan(curve))
-							energy += static_cast<double>(curve) * curve;
-					}
-				}
-			}
-			return energy;
-		};
-		const auto readOcclusion = [&]()
-		{
-			ReadbackImage image;
-			REQUIRE(Renderer::ReadTexture(renderer.GetAmbientOcclusionTexture(), image));
-			return image.Pixels;
-		};
-
-		// Frames 1 and 9 have the same jitter phase: only the noise's turn tells them apart.
-		std::vector<float> first;
-		std::vector<float> ninth;
-		std::vector<uint8_t> firstOcclusion;
-		std::vector<uint8_t> ninthOcclusion;
-		for (uint32_t frame = 0; frame < 16; frame++)
-		{
-			REQUIRE(renderer.Render(scene, camera));
-			if (frame == 0 || frame == SceneRenderer::c_TemporalJitterPhases)
-			{
-				(frame == 0 ? first : ninth) = groundLuminance(ReadHDR(renderer.GetHDRTexture()));
-				(frame == 0 ? firstOcclusion : ninthOcclusion) = readOcclusion();
-			}
-		}
-		uint32_t groundPixels = 0;
-		uint32_t changed = 0;
-		for (size_t pixel = 0; pixel < first.size(); pixel++)
-		{
-			if (std::isnan(first[pixel]))
-				continue;
-			groundPixels++;
-			changed += first[pixel] != ninth[pixel] ? 1u : 0u;
-		}
-		REQUIRE(groundPixels > c_Size * c_Size / 2);
-		CHECK(changed > c_Size);
-		CHECK(firstOcclusion != ninthOcclusion);
-
-		const std::vector<float> converged = groundLuminance(ReadHDR(renderer.GetResolvedHDRTexture()));
-		// The penumbra: the ground between its shadowed and its lit brightness.
-		float shadowed = std::numeric_limits<float>::max();
-		float lit = 0.0f;
-		for (const float value : converged)
-		{
-			if (!std::isnan(value))
-			{
-				shadowed = std::min(shadowed, value);
-				lit = std::max(lit, value);
-			}
-		}
-		uint32_t penumbraPixels = 0;
-		for (size_t pixel = 0; pixel < converged.size(); pixel++)
-		{
-			penumbra[pixel] = converged[pixel] > shadowed + 0.05f * (lit - shadowed) && converged[pixel] < lit - 0.05f * (lit - shadowed);
-			penumbraPixels += penumbra[pixel] ? 1u : 0u;
-		}
-		CHECK(penumbraPixels > c_Size * 2);
-		const double singleEnergy = roughness(first);
-		const double convergedEnergy = roughness(converged);
-		INFO("changed " << changed << " of " << groundPixels << ", penumbra " << penumbraPixels << ", roughness " << singleEnergy << " -> " << convergedEnergy);
-		CHECK(convergedEnergy < 0.5 * singleEnergy);
-		CHECK(gpu.GetNewErrorCount() == 0);
+	TEST_CASE("Variance clipping keeps the history smoothing the shadows' and the ambient occlusion's noise")
+	{
+		TemporalAntiAliasingSettings settings = c_TAAOriginalSettings;
+		settings.HistoryClamp = TemporalHistoryClamp::Variance;
+		settings.ClipWidth = 1.25f;
+		CheckNoiseSmoothed(&settings, 0.6);
 	}
 
 	TEST_CASE("Both paths resolve the same image over sixteen frames of a moving scene")
