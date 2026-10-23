@@ -104,7 +104,8 @@ namespace Strata
 			~BakeState();
 		};
 
-		// Lets go of the bake's renderer (its targets once the GPU is done with them) and of its staging files, on an I/O job.
+		// Lets go of the bake's renderer (its targets once the GPU is done with them) and of its staging files, on an I/O job after
+		// the job writing them (a bake cancelled while it writes).
 		void ReleaseBake(BakeState& state)
 		{
 			if (state.Renderer)
@@ -112,11 +113,7 @@ namespace Strata
 			state.Renderer.reset();
 			if (!state.StagingDirectory.empty())
 			{
-				JobSystem::SubmitIO([directory = state.StagingDirectory]()
-				{
-					std::error_code error;
-					std::filesystem::remove_all(directory, error); // A leftover staging folder holds nothing the project uses
-				});
+				ProbeBake::RemoveStaging(state.StagingDirectory, state.WriteJob);
 				state.StagingDirectory.clear();
 			}
 		}

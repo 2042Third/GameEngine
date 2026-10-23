@@ -1,11 +1,13 @@
 #pragma once
 
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Renderer/SceneRenderer.h>
 
 #include <glm/glm.hpp>
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -41,6 +43,11 @@ namespace Strata
 		// The renderer a bake renders with: no entity IDs, temporal anti-aliasing or texture streaming (it waits for every level),
 		// every shadow view and probe conversion in its first frame, no fades.
 		SceneRendererSpecification GetRendererSpecification();
+
+		// Removes a bake's staging folder on an I/O job once `writer`, the job writing the bake's files into it (or none), has
+		// completed. Run beside the writer on the other I/O thread, the removal could come before the folder is made and leave it
+		// behind, or delete files while they are written.
+		JobHandle RemoveStaging(const std::filesystem::path& directory, const JobHandle& writer);
 
 	}
 

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <system_error>
 
 namespace Strata::ProbeBake
 {
@@ -143,6 +144,17 @@ namespace Strata::ProbeBake
 		specification.FadeLevelsOfDetail = false;
 		specification.LocalShadowAtlasSize = 2048;
 		return specification;
+	}
+
+	JobHandle RemoveStaging(const std::filesystem::path& directory, const JobHandle& writer)
+	{
+		return JobSystem::SubmitIO([directory, writer]()
+		{
+			// A writer no thread has started yet runs here (JobSystem::Wait), so waiting on an I/O thread cannot deadlock.
+			JobSystem::Wait(writer);
+			std::error_code error;
+			std::filesystem::remove_all(directory, error); // A leftover staging folder holds nothing the project uses
+		});
 	}
 
 }

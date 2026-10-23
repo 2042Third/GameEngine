@@ -1,7 +1,11 @@
 #include <doctest/doctest.h>
 
+#include "Asset/AssetTestUtils.h"
 #include "Editor/ProbeBake.h"
+#include "TestHelpers.h"
 
+#include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Math/Math.h>
 #include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Scene/Entity.h>
@@ -10,7 +14,12 @@
 #include <glm/gtc/constants.hpp>
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <memory>
+#include <thread>
 #include <vector>
 
 using namespace Strata;
@@ -106,5 +115,41 @@ TEST_SUITE("Editor.ProbeBake")
 		CHECK_FALSE(specification.SpreadLightingUpdates);
 		CHECK_FALSE(specification.FadeTextureLevels);
 		CHECK_FALSE(specification.FadeLevelsOfDetail);
+	}
+
+	TEST_CASE("A bake's staging folder is removed only once the job writing it completed")
+	{
+		// A bake cancelled while its files are written: the writer is held until the removal had time to run beside it on the
+		// other I/O thread. A removal that did not wait would find no folder yet and leave the one the writer then makes.
+		Tests::ScopedJobSystem jobs(1, 2);
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ProbeBakeStaging") / "Bake";
+		struct Gate
+		{
+			std::atomic<bool> Started { false };
+			std::atomic<bool> Released { false };
+		};
+		const auto gate = std::make_shared<Gate>(); // Shared with the writer, which may outlive a failed check
+		const JobHandle writer = JobSystem::SubmitIO([gate, directory]()
+		{
+			gate->Started = true;
+			while (!gate->Released)
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			if (FileSystem::CreateDirectories(directory))
+				FileSystem::WriteBytes(directory / "Probe.hdr", std::vector<uint8_t>(64, 1));
+		});
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (!gate->Started && std::chrono::steady_clock::now() < deadline)
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		const bool started = gate->Started;
+		const JobHandle removal = ProbeBake::RemoveStaging(directory, writer);
+		const auto grace = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+		while (!removal.IsComplete() && std::chrono::steady_clock::now() < grace)
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		CHECK(started);
+		CHECK_FALSE(removal.IsComplete()); // It waits for the writer
+		gate->Released = true;
+		JobSystem::Wait(removal);
+		CHECK(writer.IsComplete());
+		CHECK_FALSE(FileSystem::Exists(directory));
 	}
 }
