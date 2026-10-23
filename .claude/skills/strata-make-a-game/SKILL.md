@@ -187,8 +187,9 @@ so mouse look reads `Input::GetMouseDelta()`. The map `UI` already holds the men
   Register the fields with `ST_SCRIPT_FIELD`. Test it with `input.key {"key": "W", "steps": 60}` (the binding a player
   presses; `input.gamepadAxis {"axis": "LeftY", "value": 1, "steps": 60}` the stick's) or with `input.action {"action":
   "Gameplay/Move", "mode": "press", "value": [0, 1]}` (whatever its bindings, until `"mode": "release"`) and read the
-  player's `Translation` with `component.get`: it walks on the template's ground and stops at walls. In the editor the cursor stays locked only while the Game view has the focus
-  (Shift+F1 frees it); `input.mouseMove` moves the simulated pointer, so mouse look works from commands too.
+  player's `Translation` with `component.get`: it walks on the template's ground and stops at walls. In the editor the
+  cursor stays locked only while the Game view has the focus (Shift+F1 frees it); `input.mouseMove` moves the simulated
+  pointer, so mouse look works from commands too.
 - A third-person player and a follow camera: the player entity has a `CharacterController` and the model (the root of
   a model instance, or a child holding it); the primary camera is a separate entity (not a child) with the second
   script, its `Target` field set to the player. Movement is relative to the camera, and the model turns to face where it
