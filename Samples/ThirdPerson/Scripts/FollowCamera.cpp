@@ -1,7 +1,7 @@
 // The third-person camera, on the course's camera: it orbits its target (the player) with the mouse (the cursor is
-// locked while the course plays) or the right stick, zooms with the scroll wheel, and shortens its arm where a wall or an
-// island would come between it and the player (a ray from the player's head). The settings' mouse sensitivity and
-// invert-Y apply. In the attract mode it swings behind the walking player by itself.
+// locked while the course plays) or the Look action (the right stick), zooms with the scroll wheel, and shortens its arm
+// where a wall or an island would come between it and the player (a ray from the player's head). The settings' mouse
+// sensitivity and invert-Y apply. In the attract mode it swings behind the walking player by itself.
 
 #include "ThirdPerson.h"
 
@@ -51,8 +51,10 @@ public:
 				Yaw -= delta.x * MouseDegreesPerPixel * settings.MouseSensitivity;
 				Pitch -= delta.y * MouseDegreesPerPixel * settings.MouseSensitivity * invert;
 			}
-			Yaw -= Input::GetGamepadAxis(GamepadAxis::RightX) * StickDegreesPerSecond * deltaTime;
-			Pitch -= Input::GetGamepadAxis(GamepadAxis::RightY) * StickDegreesPerSecond * deltaTime * invert;
+			// The project's Look action (the right stick, +Y up): pushed up it looks up, as the mouse moved up does.
+			const glm::vec2 look = Input::GetActionValue("Gameplay/Look");
+			Yaw -= look.x * StickDegreesPerSecond * deltaTime;
+			Pitch += look.y * StickDegreesPerSecond * deltaTime * invert;
 			Pitch = std::clamp(Pitch, MinPitch, MaxPitch);
 			Distance = std::clamp(Distance - Input::GetScrollDelta().y * ZoomStep, MinDistance, MaxDistance);
 			if (ThirdPerson::IsAttractMode() && Target.IsValid())

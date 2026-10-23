@@ -19,6 +19,159 @@
 		},
 		"StartScene": "755D4CAD3809AF61"
 	},
+	"Settings": {
+		"Input.Actions": {
+			"Value": {
+				"Maps": [
+					{
+						"Actions": [
+							{
+								"Bindings": [
+									"Key/Enter",
+									"Key/KPEnter",
+									"Key/Space",
+									"Gamepad/A"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Submit"
+							},
+							{
+								"Bindings": [
+									"Key/Escape",
+									"Gamepad/B"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Cancel"
+							},
+							{
+								"Bindings": [
+									"Key/Up",
+									"Gamepad/DPadUp",
+									"Gamepad/LeftY+"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Up"
+							},
+							{
+								"Bindings": [
+									"Key/Down",
+									"Gamepad/DPadDown",
+									"Gamepad/LeftY-"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Down"
+							},
+							{
+								"Bindings": [
+									"Key/Left",
+									"Gamepad/DPadLeft",
+									"Gamepad/LeftX-"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Left"
+							},
+							{
+								"Bindings": [
+									"Key/Right",
+									"Gamepad/DPadRight",
+									"Gamepad/LeftX+"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Right"
+							}
+						],
+						"Enabled": true,
+						"Name": "UI"
+					},
+					{
+						"Actions": [
+							{
+								"Bindings": [
+									"2D:Key/W,Key/S,Key/A,Key/D",
+									"2D:Key/Up,Key/Down,Key/Left,Key/Right",
+									"Gamepad/LeftStick"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Vector2",
+								"Name": "Move"
+							},
+							{
+								"Bindings": [
+									"Gamepad/RightStick"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Vector2",
+								"Name": "Look"
+							},
+							{
+								"Bindings": [
+									"Key/Space",
+									"Gamepad/A"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Jump"
+							},
+							{
+								"Bindings": [
+									"Key/LeftShift",
+									"Key/RightShift",
+									"Gamepad/RightBumper"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Run"
+							},
+							{
+								"Bindings": [
+									"Key/D1",
+									"Gamepad/X"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Wave"
+							},
+							{
+								"Bindings": [
+									"Key/D2",
+									"Gamepad/Y"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Dance"
+							},
+							{
+								"Bindings": [
+									"Key/R"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Respawn"
+							},
+							{
+								"Bindings": [
+									"Key/Escape",
+									"Gamepad/Start"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Pause"
+							}
+						],
+						"Enabled": true,
+						"Name": "Gameplay"
+					}
+				]
+			},
+			"Version": 1
+		}
+	},
 	"Strata": {
 		"Format": "Project",
 		"Version": 3
