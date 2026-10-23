@@ -257,6 +257,51 @@ TEST_SUITE("Asset.Registration")
 		CHECK(StateCountsMatch(manager));
 	}
 
+	TEST_CASE("An external import cancelled while its copy job waits for an I/O thread copies nothing into the project")
+	{
+		// The third state CancelExternalImport accepts: the copy job is submitted (it holds the copy's turn) but no I/O thread
+		// has run it yet. The cancel cannot end the import at once: the job still runs, sees the cancel and leaves nothing.
+		GatedJobSystem jobs;
+		const std::filesystem::path root = CreateTemporaryDirectory("RegistrationCancelQueuedImport");
+		const std::string material = JsonUtils::Dump(Material::Create(MaterialProperties())->Serialize(), 1, '\t');
+		const std::filesystem::path source = root / "Outside" / "Queued.stmat";
+		REQUIRE(FileSystem::WriteText(source, material));
+		REQUIRE(FileSystem::CreateDirectories(root / "Project" / "Assets"));
+		EditorAssetManager manager(MakeSpecification(root / "Project"));
+		manager.Scan();
+
+		std::string error;
+		ExternalImportRequest request;
+		request.Files = { source };
+		request.TargetDirectory = "Cancelled";
+		Ref<ExternalImport> import;
+		{
+			IOGate gate;
+			import = manager.ImportExternal(request, &error);
+			REQUIRE_MESSAGE(import, error);
+			REQUIRE(import->GetCopyJob().IsValid());
+			CHECK_FALSE(import->GetCopyJob().IsComplete());
+			CHECK(manager.CancelExternalImport(*import));
+			manager.Update();
+			CHECK_FALSE(import->IsFinished()); // Its job owns the copy until it ran
+			CHECK(manager.GetExternalImportCount() == 1);
+		}
+
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+		while (manager.GetExternalImportCount() > 0 || manager.HasPendingImports())
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			manager.Update();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		CHECK(import->IsFinished());
+		CHECK_FALSE(import->GetError().empty());
+		CHECK(import->GetItems().empty());
+		CHECK_FALSE(FileSystem::Exists(root / "Project" / "Assets" / "Cancelled"));
+		CHECK_FALSE(manager.FindAssetByPath("Cancelled/Queued.stmat").IsValid());
+		CHECK(StateCountsMatch(manager));
+	}
+
 	TEST_CASE("Closing the manager during a scan ends it at once; the job stops on its own")
 	{
 		GatedJobSystem jobs;
