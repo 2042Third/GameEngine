@@ -318,10 +318,11 @@ namespace Strata
 		// watcher leaves the files of a copy alone until the import registers them complete. Fails at once (null) for a target
 		// outside the asset directory and once closed. Closing ends it: a copy that has not finished removes what it copied.
 		Ref<ExternalImport> ImportExternal(const ExternalImportRequest& request, std::string* outError = nullptr);
-		// Cancels an import of external files that is still copying: a copy not started never runs, and what a started one
+		// Cancels an import of external files that is still copying (ExternalImportState::Copying: its copy waits, runs, or
+		// finished without the manager having registered what it wrote): a copy not started never runs, and what a started one
 		// copied is taken back before the import finishes with an error (the file watcher leaving it alone until then). False
-		// once the copy is done (what it copied is the project's: remove it like any asset) or the import finished. Wait for
-		// its GetCopyJob before changing or removing the sources.
+		// once the manager registered the copy (Importing: what it copied is the project's, removed like any asset) or the
+		// import finished. Wait for its GetCopyJob before changing or removing the sources.
 		bool CancelExternalImport(ExternalImport& import);
 		// Imports of external files that have not finished (ImportExternal).
 		uint32_t GetExternalImportCount() const { return static_cast<uint32_t>(m_ExternalImports.size()); }
