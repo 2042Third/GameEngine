@@ -74,7 +74,7 @@ linker. Vendor and system libraries attach to the layers that use them (`strata_
 | Layer | Links |
 | --- | --- |
 | Core | `PUBLIC` glm, EnTT, spdlog, nlohmann_json, Tracy when enabled; `PRIVATE` shell32, ole32, bcrypt, dbghelp (Windows), CoreFoundation (Apple), Threads and dl (Linux); the generated `Version.h` and `VersionCommit.h` (`StrataVersionCommit`) |
-| App | `PRIVATE` glfw, Vulkan headers (`VulkanLoader`), stb (window icon) |
+| App | `PRIVATE` glfw, Vulkan headers (`VulkanLoader`), stb (window icon), AppKit and the Objective-C runtime (Apple: the Dock icon) |
 | Asset | `PRIVATE` zstd_decompress |
 | Renderer | `PUBLIC` nvrhi; `PRIVATE` nvrhi_vk, Vulkan headers, glfw, stb, MikkTSpace, meshoptimizer; the shaders (`strata_add_shaders(Strata_Renderer ...)`) and the default font |
 | Physics | `PRIVATE` box3d |
@@ -112,7 +112,7 @@ when the commit does).
 | `StrataScriptCore` | interface library | Script C ABI and header-only C++ SDK; links glm only (`StrataScriptCore/`). |
 | `StrataEditorCore` | static library | The editor without UI (`StrataEditor/src/Editor/`); links `Strata`, `Strata::AssetPipeline` and `Strata::Network`. |
 | `StrataEditorUI` | static library | The ImGui interface on the core: `EditorLayer`, panels, widget kit, theme, embedded fonts; links `Strata::ImGui`, and `ImGuizmo` and `nfd` privately (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer.*`). |
-| `StrataEditor` | executable | Runs the UI: `EditorApplication` (options, theme and fonts, `EditorHost`) (`StrataEditor/src/EditorApplication.cpp`). Embeds the window icon (`EditorIcon.h`); on Windows `StrataEditor.rc.in` adds the `.ico` and version information. |
+| `StrataEditor` | executable | Runs the UI: `EditorApplication` (options, theme and fonts, `EditorHost`) (`StrataEditor/src/EditorApplication.cpp`). Embeds the window icon (`EditorIcon.h`; the 256-pixel mark, decoded at startup, is the Dock's on macOS); on Windows `StrataEditor.rc.in` adds the `.ico` and version information. |
 | `StrataRuntime` | executable | Plays exported games (`StrataRuntime/src/RuntimeApplication.cpp`); links `Strata` only; on Windows `StrataRuntime.rc.in` gives it the `.ico`, and the export writes each game's version information and icon into its copy (`Editor/PEResources`). |
 | `StrataCLILib`, `StrataCLI` | static library, executable | Automation client and MCP server (`StrataCLI/src/`); links `Strata::Network` only (Core comes with it). |
 | `StrataTests` | executable | doctest suites; builds the test script modules as dependencies (`StrataTests/`). |
@@ -189,8 +189,8 @@ subsystems.
 (`Core/EngineModule.h`: the graphics device, audio, ImGui, the project; see
 [Application and frame loop](#application-and-frame-loop)) and the main-thread queue and runs the frame loop;
 `Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
-`Platform/GLFW/GLFWWindow` (`SetIcon` takes RGBA images of several sizes; macOS and Wayland windows have no icon of
-their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`; the console and
+`Platform/GLFW/GLFWWindow` (`SetIcon` takes RGBA images of several sizes; macOS windows have no icon of their own, so the
+largest image becomes the Dock's while the program runs, `Platform/GLFW/GLFWApplicationIcon`; Wayland ignores it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`; the console and
 the log file are written by the `BackgroundLogSink`'s thread, so a log call waits for them only for warnings and errors,
 which are flushed before the call returns, and while 65,536 messages are queued (a burst the writer cannot keep up
 with): writing a line to a console, a pipe or a file blocked the frame for milliseconds), `Assert`, `JobSystem`,

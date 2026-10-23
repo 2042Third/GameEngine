@@ -360,7 +360,7 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 ### Shards, sweeps and locks
 
 - **Shards.** CTest runs the suites that have no CTest of their own (`GPU*`, `EndToEnd*`, `Package*`, `Perf.*`,
-  `PerfGPU.*`, `FeatureTest`, `Editor.FeatureTest`) in shards, one CTest `StrataTests.Core.<Shard>` each (label `core`;
+  `PerfGPU.*`, `FeatureTest`, `Editor.FeatureTest`, `Platform.DockIcon`) in shards, one CTest `StrataTests.Core.<Shard>` each (label `core`;
   `ctest -R StrataTests.Core` selects them all): Core, Asset, Scene, Systems, LoaderFaults, Renderer, Network, EditorUI,
   EditorData and Editor. LoaderFaults holds `Scripting.LoaderFaults`, the tests that load modules crashing in their
   static initialization in the test process: on Linux the crash leaves the dynamic loader's lock held by the main thread,
@@ -390,6 +390,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 ### GPU tests
 
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the CTest label `gpu`.
+  `Platform.DockIcon` needs the window server but no device: it has a CTest of its own on the Mac only,
+  `StrataTests.DockIcon`, with the same label (CI, which skips `gpu`, never runs it), and reads the Dock icon back by
+  drawing it.
   They share one device per process through `Tests::GPUContext` (never create devices in tests) and end with
   `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the test. Run them under the Khronos validation layer
   locally by pointing `VK_ADD_LAYER_PATH` at its build (on macOS with Homebrew, at the manifest copy
@@ -2175,9 +2178,18 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   outcome, the log); one that does not decode fails the export before the pack is written. The runtime presents the game
   from its manifest before anything starts (`Runtime/GamePresentation`): the window's title and fatal-error dialogs show
   the title, the log's first line names title and version, the window icon is the manifest's icon file
-  (`WindowSpecification::IconPath`: X11 and Windows show it; Cocoa and Wayland windows have no icons of their own), and the
+  (`WindowSpecification::IconPath`: X11 and Windows show it; on macOS, whose windows have no icons of their own, it
+  becomes the Dock's icon while the game runs, below; Wayland windows take the desktop entry's), and the
   window's application id is the executable's name (`WindowSpecification::AppId`: X11's `WM_CLASS`, Wayland's app id).
   `StrataRuntime.Identity` runs a SmokeGame exported with an identity and checks its log and icon.
+- **The Dock icon on macOS** (`Platform/GLFW/GLFWApplicationIcon`): exports are bare executables (their ad-hoc signature
+  must not change, and an application bundle is a later wave's), so they have no icon of their own. `GLFWWindow::SetIcon`
+  gives the largest of its images (at most 1,024 pixels) to `SetApplicationIcon`, which makes it `NSApplication`'s icon
+  image for as long as the program runs; the editor's Dock icon is the 256-pixel strata mark that way. It lives in the App
+  layer, which links AppKit and the Objective-C runtime on Apple, so programs without a window (StrataCLI) load neither.
+  It includes only `<objc/runtime.h>` and `<objc/message.h>`, no framework header and no Objective-C++ (CompatLint's GCC
+  compiles it), and casts `objc_msgSend` to the exact signature of each call: arm64 passes arguments by that signature.
+  Finder's icon and version need the bundle.
 - **Windows executables' resources** (`Editor/PEResources`): exported games copy the prebuilt runtime, so the game's
   version information and icon are written into the copy by engine code, without the Win32 API, which builds and is tested
   on every platform. On Windows the export reads the runtime, stamps it in memory (`PEResources::StampGame`: the title,

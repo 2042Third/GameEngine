@@ -117,8 +117,9 @@ namespace Strata
 		// lists by it): the HWND on Windows; null elsewhere, where the window system places them itself.
 		virtual void* GetPlatformHandle() const = 0;
 		// Sets the window's icon from images of several sizes (the system picks the sizes it shows); the pixels are copied.
-		// Images whose pixel count does not match their size are skipped with a warning. Platforms whose windows have no
-		// icon of their own (macOS: the application bundle's; Wayland: the desktop entry's) ignore it.
+		// Images whose pixel count does not match their size are skipped with a warning. On macOS, whose windows have no icon
+		// of their own, the largest image becomes the Dock's icon while the program runs (a bare executable has no bundle to
+		// give it one); Wayland, whose windows take the desktop entry's icon, ignores it.
 		virtual void SetIcon(std::span<const WindowIconImage> images) = 0;
 
 		virtual void* GetNativeWindow() const = 0;

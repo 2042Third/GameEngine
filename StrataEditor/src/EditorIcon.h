@@ -22,6 +22,8 @@ namespace Strata::EmbeddedFiles
 	std::span<const uint8_t> GetStrataMark48();
 	std::span<const uint8_t> GetStrataMark56();
 	std::span<const uint8_t> GetStrataMark64();
+	// StrataEditor/Resources/Brand/StrataMark256.png, the mark at 256 pixels (macOS's Dock icon), encoded.
+	std::span<const uint8_t> GetStrataMark256Png();
 
 }
 

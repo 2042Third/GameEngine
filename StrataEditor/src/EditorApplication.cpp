@@ -14,6 +14,7 @@
 #include <Strata/Project/ProjectModule.h>
 #include <Strata/Renderer/GraphicsDevice.h>
 #include <Strata/Renderer/GraphicsModule.h>
+#include <Strata/Renderer/ImageReader.h>
 #include <Strata/Renderer/Renderer.h>
 
 #include "Editor/EditorPreferences.h"
@@ -32,6 +33,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Strata
 {
@@ -41,6 +43,22 @@ namespace Strata
 
 	namespace
 	{
+
+		// The window icon at every size of c_EditorIconSizes, and the strata mark at 256 pixels for systems that show the
+		// program's icon larger than a window's (macOS's Dock takes the largest image), decoded from its PNG: well under a
+		// millisecond, and 252 KiB of raw pixels fewer in the executable.
+		void SetEditorWindowIcon(Window& window)
+		{
+			const auto sizes = GetEditorWindowIcon();
+			std::vector<WindowIconImage> images(sizes.begin(), sizes.end());
+			std::string error;
+			const std::optional<ReadbackImage> large = ImageReader::DecodeRGBA8(EmbeddedFiles::GetStrataMark256Png(), &error);
+			if (large)
+				images.push_back({ large->Width, large->Height, large->Pixels });
+			else
+				ST_ERROR("The editor's 256-pixel icon does not decode: {}", error);
+			window.SetIcon(images);
+		}
 
 		// Every option the editor understands (its usage, and what CommandLineOptions::FindUnknownArgument accepts).
 		constexpr CommandLineOption c_Arguments[] = {
@@ -186,7 +204,7 @@ namespace Strata
 			: Application(specification)
 		{
 			if (Window* window = GetWindow())
-				window->SetIcon(GetEditorWindowIcon());
+				SetEditorWindowIcon(*window);
 			if (!IsRunning())
 				return;
 			// The editor's look: the Bedrock theme at the UI scale, and its own fonts (ImGui's built-in font is never used).

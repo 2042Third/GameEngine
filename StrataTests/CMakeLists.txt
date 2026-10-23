@@ -318,6 +318,15 @@ add_test(NAME StrataTests.GPU
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
 set_tests_properties(StrataTests.GPU PROPERTIES LABELS "gpu")
 
+# The Dock icon (Platform.DockIcon) needs the window server but no GPU: a test of its own on the Mac, labelled gpu like the
+# other tests that need a display.
+if(APPLE)
+	add_test(NAME StrataTests.DockIcon
+		COMMAND StrataTests --test-suite=Platform.DockIcon --no-intro=true
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+	set_tests_properties(StrataTests.DockIcon PROPERTIES LABELS "gpu")
+endif()
+
 # The version in the release archives' names: empty follows the project's version, other values must be it with an
 # optional pre-release suffix (CMake/StrataPackageVersion.cmake).
 add_test(NAME StrataPackaging.Version COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/Packaging/PackageVersionTests.cmake")
