@@ -922,8 +922,8 @@ namespace Strata
 			bool operator==(const LocalShadowContent&) const = default;
 		};
 
-		// What an atmosphere's tables are computed for (SkyLightSource::Atmosphere): its settings and the sun's color over its
-		// largest component (the tables hold the sky per lux of it).
+		// What an atmosphere's tables are computed for (SkyLightSource::Atmosphere): its settings and the light's color (not
+		// its intensity) over its largest component (the tables hold the sky per lux of it).
 		struct AtmosphereSettings
 		{
 			float Density = 1.0f;
@@ -1373,7 +1373,8 @@ namespace Strata
 
 		// Directional light and shadows
 		ShadowLight m_ShadowLight;
-		glm::vec3 m_SunColor = glm::vec3(1.0f); // Color of the directional light the scene is lit by (the procedural sun's tint)
+		// Color of the directional light the scene is lit by (the procedural sun's tint; the atmosphere's sun color)
+		glm::vec3 m_SunColor = glm::vec3(1.0f);
 		// The frame's procedural sky's horizon radiance (its HorizonColor times its intensity), which lights height fog; unset
 		// when no procedural sky lights the scene (UpdateEnvironment).
 		std::optional<glm::vec3> m_SkyHorizon;

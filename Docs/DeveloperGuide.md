@@ -2879,10 +2879,11 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   - Tables (RGBA16F, `IBL/Atmosphere*.comp` in `GPU.Setup`): transmittance (256x64, by height and direction, 40 midpoint
     steps to the top) and multiple scattering (32x32, by height and the sun's height: the second scattering order with an
     even phase over 64 directions, the ground's reflection included, summed with all higher orders as a geometric
-    series), computed when the settings or the sun's chromaticity change (`AtmosphereTableUpdates`); the sky-view table
-    (192x108, around the vertical and by elevation, rows crowding toward the horizon; per lux of sun), when the sun's
-    direction or the camera's 250 m height band (`c_AtmosphereHeightBand`, viewed from the band's middle) changes
-    (`AtmosphereSkyViewUpdates`). Scene shaders sample it at SRV 27 (a black texture without the atmosphere).
+    series), computed when the settings or the light's color change, never with its intensity
+    (`AtmosphereTableUpdates`); the sky-view table (192x108, around the vertical and by elevation, rows crowding toward
+    the horizon; per lux of sun), when the sun's direction or the camera's 250 m height band (`c_AtmosphereHeightBand`,
+    viewed from the band's middle) changes (`AtmosphereSkyViewUpdates`). Scene shaders sample it at SRV 27 (a black
+    texture without the atmosphere).
   - Background: `Scene/SkyboxAtmosphere.frag` (`ST_ATMOSPHERE`) draws the sky-view table times `EnvironmentParams.x`
     (the sky's `Intensity` times the sun's illuminance) and the sun's disk analytically: the light's illuminance at the
     ground over the disk's solid angle (about 1.3 billion nits for a real sun, which the pre-exposure keeps in range),

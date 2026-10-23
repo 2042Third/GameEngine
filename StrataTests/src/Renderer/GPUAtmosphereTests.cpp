@@ -282,4 +282,44 @@ TEST_SUITE("GPU.Atmosphere")
 		CHECK(renderer.GetAtmosphereSkyViewTable() == nullptr);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("Changes of the light's intensity alone recompute none of the atmosphere's tables and refresh none of its environment")
+	{
+		// The tables hold the sky per lux of the light's color, which its intensity only scales: a light fading out at the
+		// horizon, down to 0, changes none of them. (Its color times its intensity over the largest component is not always
+		// the color's own to the bit, and an intensity of 0 has no largest component.)
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddAtmosphere(scene);
+		Entity sun = AddSun(scene, -TowardSun(20.0f), 3.0f, false);
+		sun.GetComponent<DirectionalLightComponent>().Color = glm::vec3(0.85f, 1.0f, 1.0f);
+		sun.MarkModified<DirectionalLightComponent>();
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 1.0f, -1.0f));
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneRenderOptions options = Forced(1.0f / 256.0f);
+		REQUIRE(renderer.Render(scene, camera, nullptr, options));
+		CHECK(renderer.GetStats().AtmosphereTableUpdates == 1);
+
+		uint32_t tableUpdates = 0;
+		uint32_t skyViewUpdates = 0;
+		uint32_t refreshSteps = 0;
+		for (int frame = 1; frame <= 50; frame++)
+		{
+			sun.GetComponent<DirectionalLightComponent>().Intensity = 3.0f * (1.0f - static_cast<float>(frame) / 50.0f);
+			sun.MarkModified<DirectionalLightComponent>();
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			const SceneRendererStats& stats = renderer.GetStats();
+			CHECK(stats.Atmosphere);
+			tableUpdates += stats.AtmosphereTableUpdates;
+			skyViewUpdates += stats.AtmosphereSkyViewUpdates;
+			refreshSteps += stats.EnvironmentRefreshSteps;
+		}
+		CHECK(tableUpdates == 0);
+		CHECK(skyViewUpdates == 0);
+		CHECK(refreshSteps == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

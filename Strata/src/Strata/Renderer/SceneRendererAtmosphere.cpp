@@ -211,12 +211,20 @@ namespace Strata
 		light = glm::max(light, glm::vec3(0.0f));
 		const float largest = std::max({ light.r, light.g, light.b });
 		m_AtmosphereSunIlluminance = largest;
+		// The tables' sun color comes from the light's color alone, so that its intensity changes none of them: the color
+		// times the intensity over its largest component differs from the color's own in the last bit for some intensities,
+		// and an intensity of 0 has no largest component.
+		glm::vec3 color = hasSun ? m_SunColor : glm::vec3(1.0f);
+		if (!std::isfinite(color.r + color.g + color.b))
+			color = glm::vec3(0.0f);
+		color = glm::max(color, glm::vec3(0.0f));
+		const float colorLargest = std::max({ color.r, color.g, color.b });
 
 		AtmosphereSettings settings;
 		settings.Density = FiniteAtLeastZero(sky.AtmosphereDensity, 1.0f);
 		settings.Haze = FiniteAtLeastZero(sky.AtmosphereHaze, 1.0f);
 		settings.GroundAlbedo = std::min(FiniteAtLeastZero(sky.GroundAlbedo, 0.3f), 1.0f);
-		settings.SunColor = largest > 0.0f ? light / largest : glm::vec3(1.0f);
+		settings.SunColor = colorLargest > 0.0f ? color / colorLargest : glm::vec3(1.0f);
 
 		const float height = std::isfinite(frame.CameraPosition.y) ? std::clamp(frame.CameraPosition.y, 0.0f, c_MaxAtmosphereViewHeight) : 0.0f;
 		const int32_t band = static_cast<int32_t>(height / c_AtmosphereHeightBand);
