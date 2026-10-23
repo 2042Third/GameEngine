@@ -658,6 +658,18 @@ per-fragment path, and it adds a full-screen read and write); volumetric froxels
   cube array into every scene shader, and SPIR-V's `SampledCubeArray` capability is valid only with the feature
   enabled. No `GraphicsDeviceInfo` flag is added. Without probes, SRV 9 holds a one-slot black cube array. Every desktop
   GPU with Vulkan 1.2 has the feature, MoltenVK included; DG "Building" lists it among the requirements.
+- As built in S8: scene-set SRV 9 is the cube array (`Renderer::GetBlackCubeArrayTexture` without probes in view) and
+  SRV 10 the probe buffer (`RenderData::ReflectionProbeBuffer`: the slots' 9 SH coefficients, written on the GPU, then the
+  frame's list); 18 and 19 stay free for S9 and S11. The cache is per renderer (not shared like map environments): a cube
+  array of `MaxReflectionProbes` slots of 128 with six roughness levels, kept across resizes, released with
+  `SetViewportSize(0, 0)` or once the scene has no probe. Ranking: priority, then the smaller box (the more specific
+  place), then the entity. Conversions (EquirectToCube, Prefilter at 256 samples, `IBL/ProbeIrradiance.comp`) are the
+  only work of `GPU.Reflections` so far, so the stage records time only in frames that convert; S9's trace joins it.
+  The bake renders through `SceneRenderOptions::HDROutput` (the frame ends with its HDR target) with a forced
+  pre-exposure, one probe (six 256 views) per frame; the result lists `{directory, probes: [{entity, name, capture,
+  path, complete, previous, trashed}]}`. Command scripts run the editor with `--no-gpu`, so
+  `FeatureCommands.json.in` cannot bake: `GPU.Editor.Lighting` bakes a copy of the feature project instead. The
+  Third-Person course has four probes (`Reflection Probes`), `BoxProjection` off (open islands).
 - Rejected: run-time capture (six scene renders per probe with their own culling and shadows, and the Open World's
   moving sun would recapture constantly); cube texture assets (an asset pipeline change: cooked format, streaming,
   residency; deferred); clustered probe lists (16 box tests are cheap; deferred until scenes need more); a run-time

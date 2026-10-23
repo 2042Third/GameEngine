@@ -17,3 +17,4 @@ domain; the authors are named as thanks, and the game's credits (Main Menu > Cre
 | `Assets/Sounds/UI/` | https://kenney.nl/assets/ui-pack (version 2.0) | Kenney | CC0-1.0 | | `click-a.ogg`, `tap-a.ogg` and `switch-a.ogg`, renamed `Click.ogg`, `Hover.ogg` and `Toggle.ogg` |
 | `Assets/UI/` | https://kenney.nl/assets/ui-pack (version 2.0) | Kenney | CC0-1.0 | | 2 of 870 PNGs: `Blue/Default/button_rectangle_depth_gradient.png` and `Grey/Default/button_square_flat.png` (the buttons' and panels' sliced images) |
 | `Assets/Fonts/KenneyFuture.ttf` | https://kenney.nl/assets/kenney-fonts | Kenney | CC0-1.0 | | `Kenney Future.ttf`, renamed |
+| `Assets/Lighting/Course/` | Baked in the editor from `Scenes/Course.stscene` (`lighting.bakeProbes`): what its reflection probes see of the models and sky above | Strata | Strata | | none: the bake's output as it writes it |

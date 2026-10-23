@@ -12,6 +12,8 @@
 	{"command": "component.get", "parameters": {"entity": "4BC76BF041EAD086", "component": "PostProcess"}, "expect": {"/values/AntiAliasingMethod": {"equals": "TAA"}}},
 	{"command": "component.get", "parameters": {"entity": "51829A25B89802F9", "component": "PointLight"}, "expect": {"/values/CastShadows": {"equals": true}}},
 	{"command": "component.get", "parameters": {"entity": "CFB8703236E38ABF", "component": "PointLight"}, "expect": {"/values/CastShadows": {"equals": true}}},
+	{"command": "component.get", "parameters": {"entity": "13A628ABD02DC97B", "component": "ReflectionProbe"}, "expect": {"/values/Capture": {"equals": "EFFEE8D8C4FBAD7B"}, "/values/BoxProjection": {"equals": false}}},
+	{"command": "component.get", "parameters": {"entity": "967AEF4D0E9D11ED", "component": "ReflectionProbe"}, "expect": {"/values/Capture": {"equals": "513AF3C2BD764823"}}},
 	{"command": "play.pause", "parameters": {"paused": true}},
 	{"command": "physics.stats", "expect": {"/waitingForMeshes": {"equals": false}, "/pendingOther": {"equals": 0}}, "until": {"seconds": 300}},
 	{"command": "entity.find", "parameters": {"name": "Player"}, "bind": {"player": "/entities/0"}},
