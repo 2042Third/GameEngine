@@ -34,11 +34,11 @@ message with what to install and where its log is); [Docs/Releases/](Docs/Releas
   Saves run in the background, large projects open while their assets are scanned, and exports cook scenes into a
   binary form.
 - **Rendering:** physically based shading with clear coat and glass, image-based lighting from HDR environment maps
-  (whose sun becomes a shadow-casting light), a procedural sky or a physical atmosphere, reflection probes baked in the
-  editor and screen-space reflections, clustered point and spot lights that cast shadows, cascaded soft shadows (PCSS)
-  blended between cascades, height fog, ground-truth ambient occlusion, HDR in real light units (lux, candela, nits)
-  with a pre-exposure and automatic exposure, bloom, tone mapping, color grading, FXAA or temporal anti-aliasing with
-  motion vectors, GPU skinning, signed-distance-field text, and editor overlays (grid, selection outlines, debug
+  (whose sun can become a shadow-casting light), a procedural sky or a physical atmosphere, reflection probes baked in
+  the editor and screen-space reflections, clustered point and spot lights that cast shadows, cascaded soft shadows
+  (PCSS) blended between cascades, height fog, ground-truth ambient occlusion, HDR in real light units (lux, candela,
+  nits) with a pre-exposure and automatic exposure, bloom, tone mapping, color grading, FXAA or temporal anti-aliasing
+  with motion vectors, GPU skinning, signed-distance-field text, and editor overlays (grid, selection outlines, debug
   shapes). The scene is kept on the GPU, which culls it (frustum, size and two-phase occlusion, for the view and the
   shadow cascades) and draws it indirectly from one geometry pool; what the GPU sees decides which textures and mip
   levels stream in, rendering is camera-relative so far-away worlds keep their precision, and levels of detail are
