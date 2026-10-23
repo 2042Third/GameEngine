@@ -508,6 +508,38 @@ the wave added is provisional (the open items' "Waiting for the Windows referenc
   says which forms replace a prefab root's scale. The script ABI keeps version 1 and its 142 host functions. Release
   0.5.0 holds the wave.
 
+**Wave 6 (under way).** Its two streams, `project-settings` and `render-quality`, each planned in a spec that an
+independent review corrected before work began, branched from release 0.5.0 (6425b57b) on 2026-10-22 and ran at the
+same time on the Mac (Apple M2 Max), the Windows reference machine still away. `project-settings` lands first;
+`render-quality` adds its part here when it lands, and the wave's landing makes this entry "Wave 6 landed".
+
+- `project-settings`: settings are sections that modules register (`SettingsRegistry`), read through `IProjectSettings`
+  on the main thread. The project file (version 3) keeps them, sections the build does not know included; exports carry
+  them in the game's manifest (version 5), which the runtime validates before the game starts; the editor writes the
+  project file on a job (`SettingsFileWriter`) and refuses to release a project whose last write failed unless forced.
+  Project changes are undo steps that leave the scene saved (`project.settings`, `project.setSettings` and the rest of
+  the MCP toolset `settings`); preferences (`Preferences.json` in the user's data folder: the external editor, imported
+  once from 0.5.0's `EditorSettings.json`, and the interface scale) are Session commands. File > Project Settings... is
+  a panel of pages (Game, Export, Collision Layers, Input Actions, and a generic page for any other section), File >
+  Preferences... a dialog. Collision layers are the project's: one table for every scene, prefab, world cell and
+  exported game (`project.setCollisionLayers`), a working copy per scene applied on the main thread; a 0.5.0 project
+  migrates once when it opens (the start scene's names first, a pair any scene kept apart stays apart, disagreements
+  logged), and the samples and the feature test project did. Input actions are maps of Button, Axis and Vector2 actions
+  bound to keys, mouse buttons, gamepad controls and 1D and 2D composites, evaluated once per input frame in the Input
+  stage; the game UI navigates with the reserved map `UI`; players rebind from scripts (a capture takes the next control
+  pressed) and their bindings stay in the game's save directory; thirteen host functions were appended (155 in all; the
+  ABI keeps version 1). The editor's Input Actions page captures bindings, `input.action` holds an action whatever its
+  bindings, and the Third-Person Adventure reads its controls as actions (on the way, pushing its left stick forward no
+  longer walks backward, nor does pushing its right stick up look down). The game's identity, a title, version, company,
+  copyright and icon (`project.setGameInfo`), reaches the exported game's window, log and manifest; on Windows the
+  executable's version information and icon, which Strata's own resource writer stamps into the copied runtime (CI reads
+  them back through Win32); on macOS the Dock's icon; on Linux a desktop entry beside the game. Every sample has a
+  title, a version and an icon. Fixed on the way: meshes that an unbudgeted wait finalized failed when the geometry pool
+  had to grow in their batch (scripted Open World starts logged "Finalization did not finish without an upload budget"
+  under load, and those terrain tiles did not draw; it happened on 0.5.0 too), and `Core.FrameProfiler`'s busy-workers
+  case failed on CI's Windows Debug runner. On the Mac `Perf.Input.Actions256` measured 6.76 us against its 20 us
+  target; the A/Bs are in the reference machine's list in the open items.
+
 Open items and deferrals later waves own:
 
 - GPU-driven rendering (wave 4's `gpu-driven-rendering`): skinning still runs per draw (compute skinning once per
@@ -810,40 +842,6 @@ Open items and deferrals later waves own:
     game's icon and Properties in Windows Explorer (CI reads them back through Win32).
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
-
-### Wave 6
-
-Wave 6's two streams, `project-settings` and `render-quality`, each planned in a spec that an independent review
-corrected before work began, branched from release 0.5.0 (6425b57b) on 2026-10-22 and ran at the same time on the Mac
-(Apple M2 Max), the Windows reference machine still away. `project-settings` lands first; `render-quality` adds its part
-here when it lands.
-
-- `project-settings`: settings are sections that modules register (`SettingsRegistry`), read through `IProjectSettings`
-  on the main thread. The project file (version 3) keeps them, sections the build does not know included; exports carry
-  them in the game's manifest (version 5), which the runtime validates before the game starts; the editor writes the
-  project file on a job (`SettingsFileWriter`) and refuses to release a project whose last write failed unless forced.
-  Project changes are undo steps that leave the scene saved (`project.settings`, `project.setSettings` and the rest of
-  the MCP toolset `settings`); preferences (`Preferences.json` in the user's data folder: the external editor, imported
-  once from 0.5.0's `EditorSettings.json`, and the interface scale) are Session commands. File > Project Settings... is
-  a panel of pages (Game, Export, Collision Layers, Input Actions, and a generic page for any other section), File >
-  Preferences... a dialog. Collision layers are the project's: one table for every scene, prefab, world cell and
-  exported game (`project.setCollisionLayers`), a working copy per scene applied on the main thread; a 0.5.0 project
-  migrates once when it opens (the start scene's names first, a pair any scene kept apart stays apart, disagreements
-  logged), and the samples and the feature test project did. Input actions are maps of Button, Axis and Vector2 actions
-  bound to keys, mouse buttons, gamepad controls and 1D and 2D composites, evaluated once per input frame in the Input
-  stage; the game UI navigates with the reserved map `UI`; players rebind from scripts (a capture takes the next control
-  pressed) and their bindings stay in the game's save directory; thirteen host functions were appended (155 in all; the
-  ABI keeps version 1). The editor's Input Actions page captures bindings, `input.action` holds an action whatever its
-  bindings, and the Third-Person Adventure reads its controls as actions (on the way, pushing its left stick forward no
-  longer walks backward, nor does pushing its right stick up look down). The game's identity, a title, version, company,
-  copyright and icon (`project.setGameInfo`), reaches the exported game's window, log and manifest; on Windows the
-  executable's version information and icon, which Strata's own resource writer stamps into the copied runtime (CI reads
-  them back through Win32); on macOS the Dock's icon; on Linux a desktop entry beside the game. Every sample has a
-  title, a version and an icon. Fixed on the way: meshes that an unbudgeted wait finalized failed when the geometry pool
-  had to grow in their batch (scripted Open World starts logged "Finalization did not finish without an upload budget"
-  under load, and those terrain tiles did not draw; it happened on 0.5.0 too), and `Core.FrameProfiler`'s busy-workers
-  case failed on CI's Windows Debug runner. On the Mac `Perf.Input.Actions256` measured 6.76 us against its 20 us
-  target; the A/Bs are in the reference machine's list in the open items.
 
 ## Waves
 
