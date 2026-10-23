@@ -2746,10 +2746,11 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (`SceneRendererSpecification::LocalShadowAtlasSize`: 4096 texels, 64 MiB; made with the first shadowed light it draws,
   released with its render targets, `GetLocalShadowAtlas`): a spot light one perspective view (at most 80 degrees each way
   from its axis), a point light six, a cube's faces, which the shader picks by the major axis toward the pixel. Each view
-  is widened by a guard band of its filter's reach (`ceil(ShadowFilterRadius) + 1` texels), so the filter never leaves the
-  face it samples and faces meet without a seam. Tiles are 128 to 1024 texels from a quadtree (`ShadowAtlasAllocator`),
-  sized by the light's range on screen with hysteresis; while they do not fit, the least relevant lights' tiles step down
-  first, in rounds (`FitTileSizes`), and lights that do not fit even at 128 cast none.
+  is widened by a guard band of what its lookups reach (`ceil(ShadowFilterRadius + 1.42 ShadowNormalBias) + 1` texels: the
+  normal bias moves a lookup by up to sqrt(2) times its texels across the view), so neither the offset nor the filter
+  leaves the face it samples and faces meet without a seam. Tiles are 128 to 1024 texels from a quadtree
+  (`ShadowAtlasAllocator`), sized by the light's range on screen with hysteresis; while they do not fit, the least relevant
+  lights' tiles step down first, in rounds (`FitTileSizes`), and lights that do not fit even at 128 cast none.
 - Views are cached like the cascades: a view is drawn again only when its key changes (the light's position, direction,
   range and cone, its tile, its guard band), when what casters are drawn with changes (`LocalShadowContent`: the scene's
   GPU copy's tables and deferred proxies, the geometry pool's content, the texture table's entries while materials are

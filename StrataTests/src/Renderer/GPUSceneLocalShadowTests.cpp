@@ -674,6 +674,36 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A point light's views meet without a seam also where its normal bias reaches beyond its filter")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		// The six-directions case's table and plate, whose shadow crosses where the light's -Y view meets its +X view, under the
+		// largest normal bias and a sharp filter: the lookups of the table's points beside that line move up to the bias's texels
+		// toward the other view.
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		const AssetHandle matte = MatteMaterial(assets);
+		AddBox(scene, matte, glm::vec3(-4.8f, -2.7f, -4.8f), glm::vec3(4.8f, -2.5f, 4.8f), "Table");
+		AddBox(scene, matte, glm::vec3(1.2f, -1.55f, -0.6f), glm::vec3(2.2f, -1.45f, 0.6f), "Plate");
+		Entity lamp = AddShadowedPointLight(scene, glm::vec3(0.0f), 60.0f, 12.0f);
+		PointLightComponent& light = lamp.GetComponent<PointLightComponent>();
+		light.ShadowNormalBias = 10.0f;
+		light.ShadowFilterRadius = 0.0f;
+		lamp.MarkModified<PointLightComponent>();
+		SceneRenderer renderer(AtOnceSpecification(GPUDrivenMode::Off));
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(2.8f, -0.5f, 2.5f), glm::vec3(2.8f, -2.5f, 0.0f));
+		const LightFraction table = RenderLightFraction(renderer, scene, camera, lamp);
+		for (float x = 2.25f; x <= 3.3f; x += 0.025f)
+		{
+			CAPTURE(x);
+			CHECK(table.At(ProjectToPixel(camera, glm::vec3(x, -2.5f, 0.0f), c_Size)) < 0.25f);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A renderer that drew a scene with more light records shadows only the shadowed lights of the next one")
 	{
 		GPUContext gpu;

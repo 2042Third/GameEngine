@@ -21,11 +21,11 @@
 
 // Shadows of point and spot lights (SceneRendererSpecification::LocalShadowAtlasSize). The most relevant shadowed lights in
 // view get tiles of the renderer's depth atlas: a spot light one perspective view, a point light six (a cube's faces), each
-// view widened by a guard band of its filter's reach so that filtering never leaves the face it samples. A view is drawn
-// again only when what it shows changed (its key, a caster reaching it, what casters are drawn with), at most
-// LocalShadowViewsPerFrame of them per frame (nearest lights first) where SpreadLightingUpdates spreads them; a light casts
-// its shadow once all its views hold content, from the matrices they were drawn with. Which views are drawn is the CPU's
-// decision on both paths; what each draws is decided by the CPU path here and by the GPU path's culling.
+// view widened by a guard band of what its lookups reach (the normal bias and the filter) so that they never leave the face
+// they sample. A view is drawn again only when what it shows changed (its key, a caster reaching it, what casters are drawn
+// with), at most LocalShadowViewsPerFrame of them per frame (nearest lights first) where SpreadLightingUpdates spreads them; a
+// light casts its shadow once all its views hold content, from the matrices they were drawn with. Which views are drawn is
+// the CPU's decision on both paths; what each draws is decided by the CPU path here and by the GPU path's culling.
 
 namespace Strata
 {
@@ -50,6 +50,10 @@ namespace Strata
 		constexpr float c_LocalShadowNearScale = 0.001f;
 		constexpr float c_MinLocalShadowNear = 0.005f;
 		constexpr float c_MaxLocalShadowNear = 0.1f;
+		// How far the normal bias can move a lookup across a view, in texels per texel of bias: the offset along the normal has a
+		// part across the view and a part along its axis, which at the view's edge also moves the projection outward; their sum
+		// is at most sqrt(2) times the offset (a normal at 45 degrees between them).
+		constexpr float c_NormalBiasReach = 1.4142136f;
 		// Casters spanning less than this many texels of a view are left out of it, as for the cascades.
 		constexpr float c_MinCasterTexels = 1.0f;
 		// The CPU's query for a light's casters reaches this much beyond its range, so that it finds every proxy the exact test
@@ -348,8 +352,10 @@ namespace Strata
 			const LightShadowSettings& settings = lights.GetShadowSettings(light.Record);
 			light.ShadowSettings = glm::vec3(settings.Bias, settings.NormalBias, settings.FilterRadius);
 			const float range = record.PositionRange.w;
-			// The guard band: the filter's reach (and one texel more) on every side of what the view must cover.
-			const float guard = std::ceil(settings.FilterRadius) + 1.0f;
+			// The guard band: what a lookup reaches (and one texel more) on every side of what the view must cover. The normal bias
+			// moves a lookup by up to its texels times c_NormalBiasReach toward a neighbouring face, the filter's taps reach their
+			// radius beyond that.
+			const float guard = std::ceil(settings.FilterRadius + settings.NormalBias * c_NormalBiasReach) + 1.0f;
 			const float tileSize = static_cast<float>(light.TileSize);
 			const float widen = tileSize / std::max(tileSize - 2.0f * guard, 1.0f);
 			float tanHalfAngle = 1.0f; // A cube face's 45 degrees
