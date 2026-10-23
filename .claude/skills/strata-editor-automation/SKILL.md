@@ -310,7 +310,11 @@ scene.save          {}
 `scene.new {"template": "basic3d"}` starts another scene the same way (save it with `scene.saveAs`). Move the camera or
 sun with `component.set` (find their IDs with `entity.find {"name": "Main Camera"}`). The sky is a `SkyLight` with
 `"Source": "Procedural"`: `ZenithColor`, `HorizonColor`, `GroundColor` (linear colors), `SunSize` (degrees) and
-`SunIntensity`; its sun follows the scene's directional light.
+`SunIntensity`; its sun follows the scene's directional light. A sky of `"Source": "EnvironmentMap"` (an HDR image)
+keeps its own sun: `lighting.extractSun {"sky"?, "light"?}` (it reads the map in the background, a few frames; one undo
+step) turns the scene's directional light toward it, with its color and illuminance, and
+`asset.setImportSettings {"settings": {"RemoveSun": true}}` on the map paints it out of the sky (the Inspector's Sky
+section has Extract Sun for both). `lighting.bakeProbes` bakes reflection probes from the scene as it is.
 
 **Assets**: `asset.import {"file": "<absolute path>", "directory": "Models"}` copies a file into the project and
 imports it: models `.gltf`/`.glb` (also meshopt-compressed), textures `.png`/`.jpg`/`.tga`/`.bmp`/`.psd`/`.gif`/`.hdr`,

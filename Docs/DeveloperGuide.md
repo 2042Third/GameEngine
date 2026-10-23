@@ -634,8 +634,9 @@ exercised by it.
     the project, load the feature scripts (`script.load`), lay out and hit-test the menu (`ui.layout`, `ui.hitTest`),
     step the physics, click the Play Button and type into the Name Field while playing (`input.click`, `input.type`, and
     `input.click` again as an event of `input.sequence`;
-    `expect` conditions on the rects, the ball, the clicks, the field's text and `script.status`), export it with the
-    module and run it headless; they must exit cleanly and print what the scripts log
+    `expect` conditions on the rects, the ball, the clicks, the field's text and `script.status`), extract the sun of
+    `Sky.hdr` (a 900-nit texel its generator writes, which its `.meta`'s `RemoveSun` paints out of the cooked map) into
+    the Sun with `lighting.extractSun` and undo it, export it with the module and run it headless; they must exit cleanly and print what the scripts log
     (`StrataTests/Editor/RunAndExpect.cmake`). A new editor command a game relies on gets a step there.
 - **The feature test enforces coverage.** It fails when:
   - a registered component is missing from the feature scene, or a property has its default value on every entity
@@ -958,6 +959,20 @@ short. Their full wording:
   (whole 4x4 blocks) and `GetTextureFormatInfo`; read cooked data through `ParseCookedTexture`, which validates it. A
   change to the cooked output bumps the importers' versions (`TextureImporter` and `GltfImporter`). Devices without BC
   support get the blocks decoded at load time (`Texture::IsBlockCompressionSupported`, `BlockCompression`).
+- **An HDR sky's sun** (`Asset/HDRSun.h`, AssetPipeline layer: pure functions over the decoded floats, in the mapping
+  `DirectionToEquirect` samples): `Find` takes the brightest texel, the sky around it (the median luminance 3 to 6
+  degrees away; the whole map's for maps too coarse to have such texels), refuses a peak under 8 times that sky, and
+  takes the texels connected to the peak (wrapping at the seam and over the poles) at least 4 times as bright as the sky,
+  within 1.5 degrees of their center: their illuminance per channel (radiance times solid angle), light-weighted
+  direction, color and angular size, and whether the peak is flat (a quarter of them within 1% of it: clipped in the
+  file, so the light is a lower bound). A threshold this low takes the disk's partly covered edge texels and its glow,
+  which a removal would otherwise leave as a bright ring. `Remove` fills those texels from the ones around them (at most
+  as bright as the threshold), each weighted by the inverse square of its distance. `TextureImportSettings::RemoveSun`
+  (HDR only; inactive otherwise) runs both on stb's floats before the resize and the half-float clamp and warns when
+  there is no sun; off, the cooked bytes are those of 0.5.0 (`TextureImporter` stays at version 5). Adding a key to an
+  importer's defaults changes every asset's merged settings, so each of its assets imports once more in a project opened
+  by the new build (the records hash the merged settings). `lighting.extractSun` (Editor, "Commands by group") turns the
+  sun into a directional light.
 
 ### Residency
 
@@ -2015,7 +2030,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   hold a table, else the tuning), unless the selected entities would start from different values. It shows the scene's settings (gravity, the fixed step, the physics
   world's capacities and the collision layers: names and a compact matrix, long names elided; bodies and controllers
   choose their layer among layer 0 and the named ones; how many entities sub-scenes create per frame) and sky (with an
-  "Add Height Fog" button while the scene has no height fog, and "Bake Reflection Probes" while it has probes; a
+  "Extract Sun" button for environment-map skies, an "Add Height Fog" button while the scene has no height fog, and "Bake Reflection Probes" while it has probes; a
   probe's own section has Bake, both running `lighting.bakeProbes` through the runner) with nothing selected, in sections that start closed with a summary on their headers
   (`UI::SectionHeader`'s summary: live widgets cost frame time while they are drawn); the
   Asset tab edits materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings
@@ -2093,6 +2108,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   imports over frames) bakes reflection probes' captures into texture assets and sets them, in one undo step (Rendering,
   "Reflections"); refused while playing, as `prefab.apply` is, because it renders and writes from the edited scene; needs
   a GPU.
+- **`lighting.extractSun`** (`Editor/EditorLightingCommands.cpp`, deferred: the sky's map is read on an I/O job and
+  searched on a worker, `HDRSun`) writes the sun of the sky's environment map into the scene's directional light (`light`,
+  else the brightest active one, the renderer's, else a new "Sun"), in one undo step (none when the light already is that
+  sun): only its rotation, so that its -Z axis points away from the sun as the sky shows it (the map's direction turned
+  back by the sky's `Rotation`, through the inverse of a parent's linear part), `Color` (largest channel 1) and
+  `Intensity` (the sun's illuminance times the sky's `Intensity`): `Color` times `Intensity` is the light the map's disk
+  gave. The sky is read again when the result is applied. Refused while playing, for procedural and atmosphere skies, for
+  maps without a sun and maps that are no texture file of the project; a clipped sun answers with a `warning`. The
+  Inspector's Extract Sun runs it, then `asset.setImportSettings` with `RemoveSun` once it succeeded: two steps.
 - **`world.setLayers`** replaces a world's layer list (matched by id or name; a rename moves the layer's cell folder,
   handles kept); removing or re-gridding a layer with cells needs `deleteCells` (cells to the trash, never loaded ones).
   One undo step, after the saves in flight (`AfterSaves`, `MayDefer`): `MoveFolder` and `MoveToTrash` refuse documents a

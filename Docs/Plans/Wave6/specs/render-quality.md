@@ -721,6 +721,16 @@ existing pyramid keeps the farthest depth for occlusion; deferred); full resolut
 - Rejected: a GPU reduction at render time (the stored map is clamped and the answer arrives frames late while the
   cascades need the direction on the CPU now); a light the renderer derives at run time (needs metadata in cooked
   textures, a format change, and hides an editable light from the user and scripts).
+- As built (S10): `Asset/HDRSun` sits in the Asset folder but in the AssetPipeline layer (it decodes with stb, beside the
+  importer; `Layers.json` lists it there). The sky is the median luminance 3 to 6 degrees from the peak, a peak under 8
+  times it is no sun, the region is the texels at least 4 times as bright (a threshold between sky and peak left the
+  disk's edge texels as a bright ring after `Remove`), and a peak is flat when a quarter of the region lies within 1% of
+  it. `Color` has its largest channel 1 and `Intensity` is that channel's illuminance times the sky's `Intensity`. The
+  command changes only the light's rotation (through the inverse of a parent's linear part). `RemoveSun` in every
+  texture's defaults changes the merged settings the import records hash, so standalone textures import once more
+  under the new build. The Third-Person's course probes were baked again after its sun changed. S10 also moved the Open
+  World's lantern into the tour's opening view (8, 20.6, 131), so the windowed run's local shadows show whatever the
+  display's rate.
 
 **D14 Clearcoat and transmission.**
 - `MaterialProperties` gains `Clearcoat`, `ClearcoatRoughness`, `ClearcoatMap` (R), `ClearcoatRoughnessMap` (G),

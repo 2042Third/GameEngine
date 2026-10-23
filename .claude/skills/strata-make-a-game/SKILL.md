@@ -271,7 +271,10 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
   `+Z` looking at the origin needs no rotation. Rotations are Euler degrees `[pitch, yaw, roll]`.
 - Light: a `DirectionalLight` (Intensity ~3, pitch -35) plus a `SkyLight`: `"Source": "Procedural"` for a sky (its sun
   follows the directional light; `ZenithColor`, `HorizonColor`, `GroundColor`, `SunSize`, `SunIntensity`), or an
-  environment map, or just an `AmbientColor` for fill (`ShowBackground: false` keeps the camera's clear color).
+  environment map, or just an `AmbientColor` for fill (`ShowBackground: false` keeps the camera's clear color). With
+  an HDR sky that shows a sun, `lighting.extractSun` points the directional light where the sky's sun is, with its color
+  and brightness, and `asset.setImportSettings {"asset": <map>, "settings": {"RemoveSun": true}}` then paints the sun out
+  of the map, so it does not light the scene twice (unshadowed); bake Reflection Probes again afterwards.
 - Lighting you see in editor-camera captures may not be the game's: a scene without any light (directional, point, spot
   or sky light) is shown with *preview lighting* (`"previewLighting": true` in the capture result). The game renders it
   unlit; judge the look from `{"camera": "scene"}` captures. A scene with only point or spot lights shows as the game

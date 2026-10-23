@@ -72,7 +72,13 @@ scene, or offers **Add Procedural Sky** when there is none (the scene is then li
   where the directional light comes from (**Sun Size** degrees across, **Sun Intensity** nits times the light's color).
   The colors are luminances in nits.
 - **Environment Map**: an HDR image (an equirectangular `.hdr` texture) around the scene, turned by **Rotation**.
-  Without a map, **Ambient Color** lights the scene evenly instead.
+  Without a map, **Ambient Color** lights the scene evenly instead. A map photographed under the sun holds the sun
+  too, but light from the sky casts no shadows: press **Extract Sun** in the Sky section to make the scene's directional
+  light that sun (it comes from where the sky shows it, in its color, as bright as the map's disk times the sky's
+  **Intensity**, or a new "Sun" when the scene has no directional light), and the map's **Remove Sun** import setting is
+  turned on, which paints the sun's disk out of the sky with the sky around it so that it does not light the scene a
+  second time. A map whose sun is clipped (all its brightest pixels alike) gives a light that is at least that bright,
+  and the editor says so. Bake the reflection probes again afterwards.
 - **Atmosphere**: Earth's sky, computed from the directional light the way air and haze scatter sunlight: deep blue
   overhead and paler toward the horizon at noon, orange and red around a low sun, dark once it has set. The light's
   **Intensity** is the sun's illuminance above the air (about 120,000 lux for the real sun); the atmosphere dims and
