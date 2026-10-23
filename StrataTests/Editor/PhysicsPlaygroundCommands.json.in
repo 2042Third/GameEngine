@@ -1,5 +1,8 @@
 [
 	{ "command": "component.get", "parameters": { "entity": "8B22F284D166ECC6", "component": "PostProcess" }, "expect": { "/values/AntiAliasingMethod": { "equals": "TAA" }, "/values/TAAPreset": { "equals": "Sharp" } } },
+	{ "command": "material.get", "parameters": { "material": "Materials/PlasticBlue.stmat" }, "expect": { "/values/Clearcoat": { "equals": 1 }, "/values/ClearcoatRoughness": { "max": 0.1 } } },
+	{ "command": "material.get", "parameters": { "material": "Materials/Glass.stmat" }, "expect": { "/values/Transmission": { "equals": 1 }, "/values/Thickness": { "equals": 1 }, "/values/IOR": { "equals": 1.5 } } },
+	{ "command": "component.get", "parameters": { "entity": "4D1F098278E4467B", "component": "MeshRenderer" }, "expect": { "/values/Material": { "equals": "E44912B6F503DC83" } } },
 	{ "command": "entity.find", "parameters": { "name": "Game" }, "bind": { "game": "/entities/0" } },
 	{ "command": "entity.find", "parameters": { "name": "StartDominoes" }, "bind": { "start": "/entities/0" } },
 	{ "command": "entity.find", "parameters": { "name": "FeedGoal" }, "bind": { "feed": "/entities/0" } },

@@ -757,6 +757,22 @@ existing pyramid keeps the farthest depth for occlusion; deferred); full resolut
 - Rejected: a separate refraction pass after transparents (sorted transparency would be wrong behind glass); a
   full-resolution copy (bandwidth; rough glass blurs anyway); glass in the prepass (its depth would hide what lies
   behind it from the forward pass and from the copy).
+- As built (S11): `MaterialData` holds the volume's absorption per world unit, worked out on the CPU from the attenuation
+  color and distance (`MaterialGPU::GetAbsorption`; distance 0 is glTF's infinite one: nothing absorbed). `Thickness` is
+  in the mesh's units along its normal: the shader scales it by `|M^T n|`, so `Thickness` 1 is a scaled cube's whole
+  depth (the first version took the axes' mean, which made a 0.3 m wall refract as if it were 4 m thick). The copy has 6
+  levels from half the viewport's size and is read at `roughness * 5`; `SceneRendererSpecification::
+  ExtendedStorageFormats` also forces the AO's fallback. The coat's direct light and image-based light follow the
+  bullets above; screen-space reflections replace only the base's specular light. Shading of surfaces without a coat
+  or glass changed only by the Metal compiler's rounding (one half-float step at single values, which a TAA history
+  carries to at most 2% at a few texels), so `ThumbnailCache::c_Version` stays 4. The energy case checks a stronger
+  bound than "the coat's and base's sum", which forgetting the coat's Fresnel on the base cannot exceed: every pixel is
+  at most 96.5% of the uncoated surface plus the coat alone (the coat reflects at least 4%), and the sum too. The glTF
+  importer also reports a coat normal map's scale, a thickness texture and an index of refraction outside [1, 3]. The
+  Physics Playground's glass blocks are the ball pit's four walls (static, their colliders unchanged, so the command
+  script's physics is as before) in `Materials/Glass.stmat`; its plastic balls (`PlasticBlue.stmat`) have the coat.
+  `PerfGPU.Renderer.Transmission` (a pane over the whole 1920x1080 view of the 100,000 cubes): 0.43 ms CPU, 4.82 ms GPU
+  busy on the quiet Mac (Release), against about 3.1 ms without it.
 
 **D15 GPU stages.** Two new stages, registered in pass order: `GPU.Reflections` between `GPU.AO` and `GPU.Opaque` (probe
 conversion, SSR trace; registered by S8) and `GPU.TAA` between `GPU.Transparent` and `GPU.Post` (motion copy, resolve;

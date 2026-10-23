@@ -17,6 +17,7 @@ through the balls, and a ramp that sends balls into ten pins. An AI agent made i
 | Raycasts and impulses: shoot a ball through the cursor, grab a body and pull it | `Scripts/Playground.cpp` (`Shoot`, `UpdateGrab`) |
 | Spawning many at once: a pour of 100 balls in one `Scene::InstantiateMany` call, at the ball prefab's scale (an instance's root takes the scale it is given) | `Playground::SpawnBalls` |
 | GPU-driven rendering: hundreds of instanced bodies with shadows; PBR materials from ambientCG | `Materials/`, `Textures/` |
+| Clear coat and glass: the plastic balls' glossy coat over their matte base, and the pit's glass walls, which show the balls behind them refracted through their 30 cm of slightly green glass | `Materials/PlasticBlue.stmat`, `Materials/Glass.stmat` |
 | Game UI: a tool panel of buttons drawn with sliced images (Kenney UI Pack: corners kept, edges and middle stretched), a slow-motion toggle (`Time::SetTimeScale`), a shot-power slider and a HUD ([Game UI](https://github.com/2042Third/GameEngine/blob/main/Docs/Manual/GameUI.md)) | `UI` in the scene, `Assets/UI/` |
 | Audio: one-shots heard where bodies meet, louder the harder they hit, within a budget of voices | `Scripts/Impact.cpp` |
 | Hot reload: the fields keep their values when the scripts are rebuilt while playing | `Playground::OnReload` |
