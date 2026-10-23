@@ -1015,7 +1015,7 @@ namespace Strata
 		{
 			AssetHandle Capture = 0;             // 0: free
 			std::weak_ptr<const Texture> Source; // The texture object converted into it (expired or another: not converted)
-			uint64_t LastUsed = 0;               // The latest frame (m_RenderCount) that used it
+			uint64_t LastUsed = 0;               // The latest gather (m_ReflectionProbeGathers) that used it
 		};
 		struct ReflectionProbeState
 		{
@@ -1471,8 +1471,10 @@ namespace Strata
 		nvrhi::BufferHandle m_ReflectionProbeBuffer;  // RenderData::ReflectionProbeBuffer
 		// Reflection probes: the cube array and its slots (null without probes), the conversion's layout and pipeline (made with
 		// the first probe), the holds that keep captures whole until converted (by capture), the frame's list and conversions,
-		// and how many probes the latest upload listed.
+		// and how many probes the latest upload listed. Gathers are counted on their own: a frame that fails after its gather
+		// does not advance m_RenderCount, and the next gather must not see the slots that one marked as its own.
 		std::optional<ReflectionProbeState> m_ReflectionProbes;
+		uint64_t m_ReflectionProbeGathers = 0;
 		nvrhi::BindingLayoutHandle m_ProbeIrradianceLayout;
 		nvrhi::ComputePipelineHandle m_ProbeIrradiancePipeline;
 		std::unordered_map<AssetHandle, Ref<TextureHold>> m_ReflectionProbeHolds;

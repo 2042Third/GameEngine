@@ -224,7 +224,7 @@ namespace Strata
 			candidates.resize(maxProbes);
 
 		ReflectionProbeState& state = *m_ReflectionProbes;
-		const uint64_t frame = m_RenderCount + 1; // This frame's, once it renders
+		const uint64_t gather = ++m_ReflectionProbeGathers;
 		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
 		TextureStreamer* streamer = manager ? TextureStreamer::Find(*manager) : nullptr;
 		uint32_t conversionsLeft = m_Specification.SpreadLightingUpdates ? c_ReflectionProbeConversionsPerFrame : std::numeric_limits<uint32_t>::max();
@@ -250,7 +250,7 @@ namespace Strata
 			// slot and counts as pending for nobody, so captures and bakes do not wait for it.
 			if (!texture && (!manager || manager->GetAssetState(candidate.Capture) != AssetState::Loading))
 				continue;
-			// The capture's slot: the one holding it, else a free one, else the least recently used one the frame does not use.
+			// The capture's slot: the one holding it, else a free one, else the least recently used one this gather does not use.
 			uint32_t slot = std::numeric_limits<uint32_t>::max();
 			uint32_t replaceable = std::numeric_limits<uint32_t>::max();
 			for (uint32_t index = 0; index < state.Slots.size(); index++)
@@ -261,7 +261,7 @@ namespace Strata
 					slot = index;
 					break;
 				}
-				if (candidateSlot.LastUsed == frame)
+				if (candidateSlot.LastUsed == gather)
 					continue;
 				if (replaceable == std::numeric_limits<uint32_t>::max() || !candidateSlot.Capture.IsValid()
 					|| (state.Slots[replaceable].Capture.IsValid() && candidateSlot.LastUsed < state.Slots[replaceable].LastUsed))
@@ -269,13 +269,13 @@ namespace Strata
 			}
 			if (slot == std::numeric_limits<uint32_t>::max())
 			{
-				// At most as many probes as slots are kept, so a slot the frame does not use is left.
+				// At most as many probes as slots are kept, so a slot this gather does not use is left.
 				ST_CORE_ASSERT(replaceable != std::numeric_limits<uint32_t>::max(), "No reflection probe slot left");
 				slot = replaceable;
 				state.Slots[slot] = ReflectionProbeSlot { candidate.Capture, {}, 0 };
 			}
 			ReflectionProbeSlot& probeSlot = state.Slots[slot];
-			probeSlot.LastUsed = frame;
+			probeSlot.LastUsed = gather;
 
 			const bool converted = texture && probeSlot.Source.lock() == texture;
 			const bool convertingNow = std::any_of(m_ReflectionProbeConversions.begin(), m_ReflectionProbeConversions.end(),
