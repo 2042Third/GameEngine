@@ -129,6 +129,9 @@ namespace Strata
 				players.emplace(StringUtils::ToLower(name), &bindings);
 
 			std::vector<ActionRecord> previous = std::move(s_State.Actions);
+			const std::vector<InputControl> previousControls = std::move(s_State.Controls);
+			const std::vector<CompiledBinding> previousBindings = std::move(s_State.Bindings);
+			const std::vector<std::array<bool, c_MaxGamepads>> previousHalfAxisHeld = std::move(s_State.HalfAxisHeld);
 			s_State.Set = std::move(set);
 			s_State.Actions.clear();
 			s_State.Controls.clear();
@@ -192,6 +195,32 @@ namespace Strata
 				}
 			}
 			s_State.HalfAxisHeld.assign(s_State.Controls.size(), {});
+			// Half axes holding a Button keep their hysteresis where the action keeps its bindings: a stick resting between the
+			// release and the press thresholds keeps it held through an edit of another action.
+			for (uint32_t index = 0; index < previous.size(); index++)
+			{
+				if (moved[index] < 0)
+					continue;
+				const ActionRecord& old = previous[index];
+				const ActionRecord& record = s_State.Actions[static_cast<size_t>(moved[index])];
+				if (record.Kind != InputActionKind::Button || old.BindingCount != record.BindingCount)
+					continue;
+				bool same = true;
+				for (uint32_t binding = 0; binding < record.BindingCount && same; binding++)
+				{
+					const CompiledBinding& before = previousBindings[old.FirstBinding + binding];
+					const CompiledBinding& now = s_State.Bindings[record.FirstBinding + binding];
+					same = before.Shape == now.Shape && previousControls[before.FirstControl] == s_State.Controls[now.FirstControl];
+				}
+				if (!same)
+					continue;
+				// Buttons take single controls (FitsKind), so each binding has one control slot.
+				for (uint32_t binding = 0; binding < record.BindingCount; binding++)
+				{
+					s_State.HalfAxisHeld[s_State.Bindings[record.FirstBinding + binding].FirstControl] =
+						previousHalfAxisHeld[previousBindings[old.FirstBinding + binding].FirstControl];
+				}
+			}
 
 			// Simulated events still queued follow their actions.
 			std::vector<SimulatedEvent> queue;
@@ -684,6 +713,7 @@ namespace Strata
 			record.SimulatedDown = false;
 			record.SimulatedPressed = false;
 		}
+		s_State.HalfAxisHeld.assign(s_State.HalfAxisHeld.size(), {});
 		Compile(InputActionSet(s_State.Set), false);
 	}
 

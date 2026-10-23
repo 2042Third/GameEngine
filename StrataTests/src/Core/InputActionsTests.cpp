@@ -997,6 +997,23 @@ TEST_SUITE("Core.InputActions")
 		project.Set(rebound);
 		Step();
 		CHECK(InputActions::GetVersion() == unchanged);
+
+		// A stick held between the release and the press thresholds keeps the UI's Down held through an edit of another action:
+		// the edit neither releases it nor presses it again.
+		Input::SimulateGamepadAxis(0, GamepadAxis::LeftY, -0.6f);
+		Step();
+		REQUIRE(InputActions::IsPressed("UI/Down"));
+		Input::SimulateGamepadAxis(0, GamepadAxis::LeftY, -0.4f);
+		Step();
+		REQUIRE(InputActions::IsDown("UI/Down"));
+		rebound["Maps"][0]["Actions"][0]["Bindings"] = { "Key/Space" };
+		project.Set(rebound);
+		Step();
+		CHECK(InputActions::IsDown("UI/Down"));
+		CHECK_FALSE(InputActions::IsReleased("UI/Down"));
+		Input::SimulateGamepadAxis(0, GamepadAxis::LeftY, -0.3f);
+		Step();
+		CHECK(InputActions::IsReleased("UI/Down"));
 	}
 
 	TEST_CASE("A simulated action is down from the next input frame, whatever its bindings")
