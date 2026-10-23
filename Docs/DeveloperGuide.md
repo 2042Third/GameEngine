@@ -3159,8 +3159,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `SceneRendererSpecification::ExtendedStorageFormats` false forces the fallback for tests), made by the first such
   frame and released with the targets (about 2.7 MB at 1920x1080). `SceneRendererStats::SceneColorCopies` is 1 in frames
   that made it. Glass reads it at SRV 19 where the ray refracted by its normal and `IOR` leaves its volume after
-  `Thickness` (times the instance's mean axis scale; 0 is a thin wall, read behind the pixel itself), projected with the
-  frame's jittered matrices, at the level `roughness * (levels - 1)`; Beer's law absorbs `MaterialData::Absorption`
+  `Thickness` (in the mesh's units along its normal: times `|M^T n|` for the world matrix M and the world normal n, so
+  a cube scaled into a thin wall with `Thickness` 1 is as thick as the wall; 0 is a thin wall, read behind the pixel
+  itself), projected with the frame's jittered matrices, at the level `roughness * (levels - 1)`; Beer's law absorbs
+  `MaterialData::Absorption`
   along the thickness, the base color tints it, and the surface's reflectance (split sum) and coat take their share. The
   transmitted light is not fogged again: the copy holds what lies behind with the fog in front of it.
 - **glTF** (`GltfImporter` version 10, so every model imports once more): `KHR_materials_clearcoat` (factors; the coat's

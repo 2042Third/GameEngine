@@ -270,11 +270,12 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 }
 
 #ifdef ST_FORWARD_GLASS
-// How much the instance scales lengths, on average over its axes (a material's Thickness is in the mesh's units).
-float GetInstanceScale(InstanceData instance)
+// How much the instance scales distances along the surface's world normal `normal` (unit): a material's Thickness is in the
+// mesh's units, measured along its normal. Planes `t` apart along a mesh normal are `t * |M^T normal|` apart in the world (M the
+// instance's world matrix, whose rows the instance holds), so a box scaled to a thin wall is as thick as the wall.
+float GetScaleAlongNormal(InstanceData instance, vec3 normal)
 {
-	return (length(TransformDirection(instance, vec3(1.0, 0.0, 0.0))) + length(TransformDirection(instance, vec3(0.0, 1.0, 0.0)))
-		+ length(TransformDirection(instance, vec3(0.0, 0.0, 1.0)))) / 3.0;
+	return length(normal.x * instance.WorldRows[0].xyz + normal.y * instance.WorldRows[1].xyz + normal.z * instance.WorldRows[2].xyz);
 }
 
 // The light a transmissive surface passes through from behind it: the scene-color copy where the ray refracted by the surface
@@ -284,7 +285,7 @@ float GetInstanceScale(InstanceData instance)
 vec3 TransmitLight(InstanceData instance, MaterialData material, vec3 normal, vec3 view, vec3 albedo, float metallic, float roughness, float transmission)
 {
 	vec3 refracted = refract(-view, normal, 1.0 / material.IOR);
-	float thickness = material.Thickness * GetInstanceScale(instance);
+	float thickness = material.Thickness * GetScaleAlongNormal(instance, normalize(v_Normal));
 	vec3 exitPoint = v_RelativePosition + refracted * thickness;
 	vec4 clip = u_Frame.ViewProjection * vec4(exitPoint, 1.0);
 	vec2 uv = clip.w > 1e-6 ? NDCToUV(clip.xy / clip.w) : gl_FragCoord.xy * u_Frame.ViewportSize.zw;

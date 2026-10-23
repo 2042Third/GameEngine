@@ -57,7 +57,7 @@ namespace Strata
 		float Transmission = 0.0f;                  // The share of light passed through, times TransmissionMap's red channel
 		AssetHandle TransmissionMap = UUID::Null(); // Linear: R = transmission
 		float IOR = 1.5f;                           // Index of refraction (1: no bending; glass 1.5, water 1.33, diamond 2.42)
-		float Thickness = 0.0f;                     // Of the volume behind the surface, in the mesh's units (0: a thin wall)
+		float Thickness = 0.0f;                     // Of the volume behind the surface, in the mesh's units along its normal (0: a thin wall)
 		glm::vec3 AttenuationColor = { 1.0f, 1.0f, 1.0f }; // Linear color white light has after AttenuationDistance in the volume
 		float AttenuationDistance = 0.0f;           // World units; 0: the volume absorbs nothing
 	};

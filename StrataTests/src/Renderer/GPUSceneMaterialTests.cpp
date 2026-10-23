@@ -103,11 +103,13 @@ namespace
 	}
 
 	// A wall red left of x = 0 and blue right of it, 3 units behind a glass pane turned 35 degrees about Y, seen from 3 units in
-	// front of the pane.
+	// front of the pane. The pane is a quad scaled 2 across and 4 along its normal: its glass is 4 times its material's
+	// Thickness thick (the scale along the normal, not the axes' mean).
 	struct GlassScene
 	{
 		static constexpr float c_PaneAngle = glm::radians(35.0f);
 		static constexpr float c_PaneScale = 2.0f;
+		static constexpr float c_PaneDepthScale = 4.0f;
 
 		Scene Contents;
 		Entity Pane;
@@ -123,7 +125,7 @@ namespace
 			Pane = AddMesh(Contents, BuiltinAssets::QuadMesh, assets.AddMaterial(glass), glm::vec3(0.0f), "Pane");
 			TransformComponent& transform = Pane.GetComponent<TransformComponent>();
 			transform.Rotation = glm::quat(glm::vec3(0.0f, c_PaneAngle, 0.0f));
-			transform.Scale = glm::vec3(c_PaneScale);
+			transform.Scale = glm::vec3(c_PaneScale, c_PaneScale, c_PaneDepthScale);
 			Camera = LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f, 0.0f, -1.0f));
 		}
 
@@ -159,7 +161,7 @@ namespace
 			const float distance = -glm::dot(Camera.Position, normal) / glm::dot(direction, normal);
 			const glm::vec3 point = Camera.Position + direction * distance;
 			const glm::vec3 refracted = glm::refract(direction, normal, 1.0f / ior);
-			const glm::vec3 exit = point + refracted * thickness * c_PaneScale;
+			const glm::vec3 exit = point + refracted * thickness * c_PaneDepthScale;
 			const glm::vec4 clip = Camera.Projection * Camera.View * glm::vec4(exit, 1.0f);
 			return (clip.x / clip.w * 0.5f + 0.5f) * static_cast<float>(c_ViewSize);
 		}
@@ -318,7 +320,7 @@ TEST_SUITE("GPU.SceneRenderer.Materials")
 		SceneTestAssets assets;
 		LoadAssets(assets);
 		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::QuadMesh));
-		constexpr float c_Thickness = 0.5f;
+		constexpr float c_Thickness = 0.25f;
 
 		// Without the pane: where the wall's edge is.
 		std::optional<float> wallEdge;
