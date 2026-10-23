@@ -146,12 +146,13 @@ namespace Strata::ProbeBake
 		return specification;
 	}
 
-	JobHandle RemoveStaging(const std::filesystem::path& directory, const JobHandle& writer)
+	JobHandle RemoveStaging(const std::filesystem::path& directory, const JobHandle& writer, const JobHandle& reader)
 	{
-		return JobSystem::SubmitIO([directory, writer]()
+		return JobSystem::SubmitIO([directory, writer, reader]()
 		{
-			// A writer no thread has started yet runs here (JobSystem::Wait), so waiting on an I/O thread cannot deadlock.
+			// A job no thread has started yet runs here (JobSystem::Wait), so waiting on an I/O thread cannot deadlock.
 			JobSystem::Wait(writer);
+			JobSystem::Wait(reader);
 			std::error_code error;
 			std::filesystem::remove_all(directory, error); // A leftover staging folder holds nothing the project uses
 		});

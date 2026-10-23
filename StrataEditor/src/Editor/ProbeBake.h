@@ -44,10 +44,11 @@ namespace Strata
 		// every shadow view and probe conversion in its first frame, no fades.
 		SceneRendererSpecification GetRendererSpecification();
 
-		// Removes a bake's staging folder on an I/O job once `writer`, the job writing the bake's files into it (or none), has
-		// completed. Run beside the writer on the other I/O thread, the removal could come before the folder is made and leave it
-		// behind, or delete files while they are written.
-		JobHandle RemoveStaging(const std::filesystem::path& directory, const JobHandle& writer);
+		// Removes a bake's staging folder on an I/O job once `writer`, the job writing the bake's files into it, and `reader`, the
+		// import's copy reading them (EditorAssetManager's ImportExternal), have completed (either may be none). Run beside them
+		// on another I/O thread, the removal could come before the folder is made and leave it behind, delete files while they
+		// are written, or take them from a copy still reading them.
+		JobHandle RemoveStaging(const std::filesystem::path& directory, const JobHandle& writer, const JobHandle& reader);
 
 	}
 

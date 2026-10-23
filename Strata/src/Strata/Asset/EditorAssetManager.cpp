@@ -585,6 +585,29 @@ namespace Strata
 			std::function<void(const std::string& relativePath)> m_Claim;
 		};
 
+		// Takes back what an external copy wrote: its files with the .meta files preparing them for registration wrote (all new:
+		// the copy chose free names), then the folders it created while they are empty (deepest first).
+		void RemoveCopied(const std::filesystem::path& assetDirectory, const std::vector<ExternalImportItem>& items, const std::vector<std::string>& createdFolders)
+		{
+			for (const ExternalImportItem& item : items)
+			{
+				for (const std::string& file : item.Files)
+				{
+					const std::filesystem::path path = assetDirectory / FileSystem::FromUTF8(file);
+					FileSystem::Remove(path);
+					if (GetExtension(path) != EditorAssetManager::c_MetaExtension)
+						FileSystem::Remove(GetMetaPath(path));
+				}
+			}
+			for (auto it = createdFolders.rbegin(); it != createdFolders.rend(); ++it)
+			{
+				std::error_code error;
+				std::filesystem::remove(assetDirectory / FileSystem::FromUTF8(*it), error); // Only while empty
+			}
+		}
+
+		constexpr const char* c_ExternalImportCancelled = "The import was cancelled before it finished copying";
+
 	}
 
 	bool ExternalImport::HasFailures() const
@@ -3401,6 +3424,23 @@ namespace Strata
 		return import;
 	}
 
+	bool EditorAssetManager::CancelExternalImport(ExternalImport& import)
+	{
+		if (import.m_State != ExternalImportState::Copying)
+			return false;
+		if (import.m_Cancelled)
+			return true;
+		import.m_Task->Cancel.store(true);
+		import.m_Cancelled = true;
+		if (!import.m_CopyStarted)
+		{
+			import.m_Error = c_ExternalImportCancelled;
+			import.m_State = ExternalImportState::Finished;
+		}
+		MarkChanged();
+		return true;
+	}
+
 	bool EditorAssetManager::StartExternalCopy(ExternalImport& import, std::string* outError)
 	{
 		// The job uses only what it shares with the import: the manager may close while it copies.
@@ -3420,17 +3460,9 @@ namespace Strata
 				items.push_back(copier.CopyExternalFolder(folder, directory));
 			if (copier.IsCancelled())
 			{
-				// Nobody registers what was copied: it goes again, so the next scan finds no half import.
-				for (const ExternalImportItem& item : items)
-				{
-					for (const std::string& file : item.Files)
-						FileSystem::Remove(assetDirectory / FileSystem::FromUTF8(file));
-				}
-				for (auto it = createdFolders.rbegin(); it != createdFolders.rend(); ++it)
-				{
-					std::error_code error;
-					std::filesystem::remove(assetDirectory / FileSystem::FromUTF8(*it), error); // Only while empty
-				}
+				// Nobody registers what was copied: it goes again, so the next scan finds no half import (a cancel after this point
+				// is taken back by the manager, CancelExternalImport).
+				RemoveCopied(assetDirectory, items, createdFolders);
 			}
 			// What it copied is prepared for registration here, so the main thread only inserts it (its own asset first, then the
 			// files it reads that are assets themselves, in the order each item lists them).
@@ -3461,7 +3493,7 @@ namespace Strata
 		};
 		try
 		{
-			JobSystem::SubmitIO(std::move(copy), JobPriority::Normal);
+			import.m_CopyJob = JobSystem::SubmitIO(std::move(copy), JobPriority::Normal);
 		}
 		catch (const std::exception& exception)
 		{
@@ -3513,6 +3545,38 @@ namespace Strata
 				std::scoped_lock<std::mutex> lock(import.m_Task->Mutex);
 				if (!import.m_Task->Done)
 				{
+					index++;
+					continue;
+				}
+				if (import.m_Cancelled)
+				{
+					// What the copy wrote goes again on an I/O job (nothing when the job saw the cancel and took it back itself);
+					// the import stays here meanwhile, so the file watcher leaves those files alone and the next copy waits.
+					if (!import.m_RemoveStarted)
+					{
+						import.m_RemoveStarted = true;
+						auto remove = [assetDirectory = m_Specification.AssetDirectory, task = import.m_Task]()
+						{
+							RemoveCopied(assetDirectory, task->Items, task->CreatedFolders);
+						};
+						try
+						{
+							import.m_RemoveJob = JobSystem::SubmitIO(std::move(remove), JobPriority::Normal);
+						}
+						catch (const std::exception& exception)
+						{
+							ST_CORE_ERROR("A cancelled import's files stay in the project: their removal could not start ({})", exception.what());
+							import.m_Error = c_ExternalImportCancelled;
+							import.m_State = ExternalImportState::Finished;
+							MarkChanged();
+						}
+					}
+					else if (import.m_RemoveJob.IsComplete())
+					{
+						import.m_Error = c_ExternalImportCancelled;
+						import.m_State = ExternalImportState::Finished;
+						MarkChanged();
+					}
 					index++;
 					continue;
 				}

@@ -1268,7 +1268,10 @@ registration (and the tests'), and any a module registers. They hold for every p
   the texture cooker checks per block) and read project files through `ReadImportSource`/`ReadImportDependency` (under the
   manager's file lock, nothing once cancelled). Docs/Architecture.md, "Cancelling imports". `asset.import` never imports
   in a frame either (`EditorAssetManager::ImportExternal`: copies on an I/O job, imports in the background, rolls back
-  failed items, logs a failure once); an importer whose files name others (a glTF's buffers and images) lists them in
+  failed items, logs a failure once; `CancelExternalImport` ends one that is still copying, a copy not started never
+  running and what a started one wrote, with the .meta files its preparation wrote, taken back before the import
+  finishes, while the file watcher still leaves those files alone; callers wait for `ExternalImport::GetCopyJob` before
+  they change or remove the sources); an importer whose files name others (a glTF's buffers and images) lists them in
   `FindExternalFiles` (with `ReadsExternalFiles`), so the copy brings them along, and messages that can quote file bytes
   are made valid UTF-8 (`StringUtils::MakeValidUTF8`).
   **Registering and applying touch no file on the main thread.** A scan prepares every file on jobs
@@ -3565,10 +3568,13 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (`EditorActionGroup`): an `AssetCreateAction` per file, the probes' `Capture` in a `SceneEditTransaction`, and an
   `AssetTrashAction` for each earlier capture that a bake made for that probe (its ID's name in that folder) and nothing
   else uses (the open scene counts as it is in memory, `AssetReferences::IgnoreSavedOpenScene`: its saved file naming the
-  earlier capture until the next save keeps nothing, also on redo); any other texture a `Capture` named stays untouched. The staging folder goes with the command, also on
-  failure, on an I/O job after the job writing it (`ProbeBake::RemoveStaging`: a bake cancelled while it writes would
-  otherwise remove the folder beside the writer on the other I/O thread); a scene change or Play before the import leaves
-  nothing behind, after it the imported files go to the trash.
+  earlier capture until the next save keeps nothing, also on redo); any other texture a `Capture` named stays untouched.
+  The staging folder goes with the command, also on failure, on an I/O job after the job writing it and the import's
+  copy reading it (`ProbeBake::RemoveStaging`: a bake cancelled while it writes or copies would otherwise remove the folder
+  beside them on the other I/O thread); a bake that ends while its import copies (cancelled by the runner, `CancelAll`)
+  cancels the import, so nothing reaches the project (one that ends once the copy is done leaves its captures there,
+  unused); a scene change or Play before the import leaves nothing behind,
+  after it the imported files go to the trash.
   A probe bakes what is drawn at its position, other probes' current captures included: baking twice adds a bounce.
 - **Screen-space reflections** (`PostProcessComponent::ScreenSpaceReflections`, `SceneRendererScreenReflections.cpp`)
   need TAA (the setting is inactive without it): the trace fetches the previous frame's resolved image, the TAA's

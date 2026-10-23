@@ -110,8 +110,11 @@ namespace Strata
 		const std::vector<ExternalImportItem>& GetItems() const { return m_Items; }
 		// Whether an item failed (its Error is set).
 		bool HasFailures() const;
-		// Why the import ended before its items were done (the project closed); empty otherwise.
+		// Why the import ended before its items were done (the project closed, or it was cancelled); empty otherwise.
 		const std::string& GetError() const { return m_Error; }
+		// The job copying the sources, once the copy started (an empty handle before): wait for it before changing or removing
+		// the sources.
+		const JobHandle& GetCopyJob() const { return m_CopyJob; }
 	private:
 		friend class EditorAssetManager;
 
@@ -123,6 +126,10 @@ namespace Strata
 		std::string m_Error;
 		ExternalImportState m_State = ExternalImportState::Copying;
 		bool m_CopyStarted = false; // Its copy job was submitted (copies run one at a time)
+		bool m_Cancelled = false;   // EditorAssetManager::CancelExternalImport while it copied
+		JobHandle m_CopyJob;
+		bool m_RemoveStarted = false;
+		JobHandle m_RemoveJob;      // Takes back what a cancelled copy wrote (complete at once without a job system)
 		std::vector<ExternalImportItem> m_Items;
 		std::vector<std::string> m_CreatedFolders; // Folders the copy created, relative, parents first
 		Ref<CopyTask> m_Task;
@@ -311,6 +318,11 @@ namespace Strata
 		// watcher leaves the files of a copy alone until the import registers them complete. Fails at once (null) for a target
 		// outside the asset directory and once closed. Closing ends it: a copy that has not finished removes what it copied.
 		Ref<ExternalImport> ImportExternal(const ExternalImportRequest& request, std::string* outError = nullptr);
+		// Cancels an import of external files that is still copying: a copy not started never runs, and what a started one
+		// copied is taken back before the import finishes with an error (the file watcher leaving it alone until then). False
+		// once the copy is done (what it copied is the project's: remove it like any asset) or the import finished. Wait for
+		// its GetCopyJob before changing or removing the sources.
+		bool CancelExternalImport(ExternalImport& import);
 		// Imports of external files that have not finished (ImportExternal).
 		uint32_t GetExternalImportCount() const { return static_cast<uint32_t>(m_ExternalImports.size()); }
 		// Writes a new engine-native asset (".stmat", ".stprefab", ".stscene") at a relative path that must not exist.

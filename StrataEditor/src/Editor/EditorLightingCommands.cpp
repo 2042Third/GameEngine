@@ -111,15 +111,25 @@ namespace Strata
 		};
 
 		// Lets go of the bake's renderer (its targets once the GPU is done with them) and of its staging files, on an I/O job after
-		// the job writing them (a bake cancelled while it writes).
+		// the job writing them (a bake cancelled while it writes) and the import's copy reading them. A bake that ends while its
+		// import copies cancels it, so nothing of it reaches the project.
 		void ReleaseBake(BakeState& state)
 		{
 			if (state.Renderer)
 				state.Renderer->SetViewportSize(0, 0);
 			state.Renderer.reset();
+			JobHandle reader;
+			if (state.Import)
+			{
+				// The project's manager, while open, is the editor's (EditorAssetManager); closing it cancelled the import already.
+				const Ref<AssetManagerBase> manager = state.Assets.lock();
+				if (manager && !state.Import->IsFinished())
+					static_cast<EditorAssetManager&>(*manager).CancelExternalImport(*state.Import);
+				reader = state.Import->GetCopyJob();
+			}
 			if (!state.StagingDirectory.empty())
 			{
-				ProbeBake::RemoveStaging(state.StagingDirectory, state.WriteJob);
+				ProbeBake::RemoveStaging(state.StagingDirectory, state.WriteJob, reader);
 				state.StagingDirectory.clear();
 			}
 		}

@@ -190,6 +190,73 @@ TEST_SUITE("Asset.Registration")
 		CHECK(StateCountsMatch(manager));
 	}
 
+	TEST_CASE("A cancelled external import takes back what it copied, whether its copy finished or never started")
+	{
+		ScopedJobSystem jobs(4, 2);
+		const std::filesystem::path root = CreateTemporaryDirectory("RegistrationCancelImport");
+		const std::string material = JsonUtils::Dump(Material::Create(MaterialProperties())->Serialize(), 1, '\t');
+		const std::filesystem::path first = root / "Outside" / "First.stmat";
+		const std::filesystem::path second = root / "Outside" / "Second.stmat";
+		REQUIRE((FileSystem::WriteText(first, material) && FileSystem::WriteText(second, material)));
+		REQUIRE(FileSystem::CreateDirectories(root / "Project" / "Assets"));
+		EditorAssetManager manager(MakeSpecification(root / "Project"));
+		manager.Scan();
+		auto updateUntilDone = [&manager]()
+		{
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+			while (manager.GetExternalImportCount() > 0 || manager.HasPendingImports())
+			{
+				REQUIRE(std::chrono::steady_clock::now() < deadline);
+				manager.Update();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+		};
+
+		// The first copies at once; the second waits for it, so it has not started when it is cancelled: it never runs.
+		std::string error;
+		ExternalImportRequest request;
+		request.Files = { first };
+		request.TargetDirectory = "Cancelled";
+		const Ref<ExternalImport> copied = manager.ImportExternal(request, &error);
+		REQUIRE_MESSAGE(copied, error);
+		request.Files = { second };
+		const Ref<ExternalImport> waiting = manager.ImportExternal(request, &error);
+		REQUIRE_MESSAGE(waiting, error);
+		CHECK_FALSE(waiting->GetCopyJob().IsValid());
+		CHECK(manager.CancelExternalImport(*waiting));
+		CHECK(waiting->IsFinished());
+		CHECK_FALSE(waiting->GetError().empty());
+
+		// The first's copy finished before the cancel, but nothing registered it yet: the manager takes the files back.
+		JobSystem::Wait(copied->GetCopyJob());
+		CHECK(FileSystem::Exists(root / "Project" / "Assets" / "Cancelled" / "First.stmat"));
+		CHECK(manager.CancelExternalImport(*copied));
+		CHECK(manager.CancelExternalImport(*copied)); // Already cancelled
+		updateUntilDone();
+		CHECK(copied->IsFinished());
+		CHECK_FALSE(copied->GetError().empty());
+		CHECK(copied->GetItems().empty());
+		CHECK_FALSE(FileSystem::Exists(root / "Project" / "Assets" / "Cancelled"));
+		CHECK_FALSE(manager.FindAssetByPath("Cancelled/First.stmat").IsValid());
+		CHECK_FALSE(manager.FindAssetByPath("Cancelled/Second.stmat").IsValid());
+
+		// Once copied and registered, an import is the project's: cancelling it is refused.
+		const Ref<ExternalImport> kept = manager.ImportExternal(request, &error);
+		REQUIRE_MESSAGE(kept, error);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+		while (kept->GetState() == ExternalImportState::Copying)
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			manager.Update();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		CHECK_FALSE(manager.CancelExternalImport(*kept));
+		updateUntilDone();
+		CHECK(kept->GetError().empty());
+		CHECK(manager.FindAssetByPath("Cancelled/Second.stmat").IsValid());
+		CHECK(StateCountsMatch(manager));
+	}
+
 	TEST_CASE("Closing the manager during a scan ends it at once; the job stops on its own")
 	{
 		GatedJobSystem jobs;

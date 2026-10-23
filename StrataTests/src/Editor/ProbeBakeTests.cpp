@@ -117,39 +117,50 @@ TEST_SUITE("Editor.ProbeBake")
 		CHECK_FALSE(specification.FadeLevelsOfDetail);
 	}
 
-	TEST_CASE("A bake's staging folder is removed only once the job writing it completed")
+	TEST_CASE("A bake's staging folder is removed only once the jobs writing and reading it completed")
 	{
-		// A bake cancelled while its files are written: the writer is held until the removal had time to run beside it on the
-		// other I/O thread. A removal that did not wait would find no folder yet and leave the one the writer then makes.
+		// A bake cancelled while its files are written, or while its import's copy reads them: the job is held until the removal
+		// had time to run beside it on the other I/O thread. A removal that did not wait would find no folder yet and leave the
+		// one the writer then makes, or take the files from the copy.
+		bool reading = false;
+		SUBCASE("The writer") {}
+		SUBCASE("The import's copy") { reading = true; }
 		Tests::ScopedJobSystem jobs(1, 2);
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ProbeBakeStaging") / "Bake";
+		const std::filesystem::path file = directory / "Probe.hdr";
+		if (reading)
+			REQUIRE((FileSystem::CreateDirectories(directory) && FileSystem::WriteBytes(file, std::vector<uint8_t>(64, 1))));
 		struct Gate
 		{
 			std::atomic<bool> Started { false };
 			std::atomic<bool> Released { false };
+			std::atomic<bool> Read { false };
 		};
-		const auto gate = std::make_shared<Gate>(); // Shared with the writer, which may outlive a failed check
-		const JobHandle writer = JobSystem::SubmitIO([gate, directory]()
+		const auto gate = std::make_shared<Gate>(); // Shared with the job, which may outlive a failed check
+		const JobHandle held = JobSystem::SubmitIO([gate, directory, file, reading]()
 		{
 			gate->Started = true;
 			while (!gate->Released)
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
-			if (FileSystem::CreateDirectories(directory))
-				FileSystem::WriteBytes(directory / "Probe.hdr", std::vector<uint8_t>(64, 1));
+			if (reading)
+				gate->Read = FileSystem::ReadBytes(file).has_value();
+			else if (FileSystem::CreateDirectories(directory))
+				FileSystem::WriteBytes(file, std::vector<uint8_t>(64, 1));
 		});
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
 		while (!gate->Started && std::chrono::steady_clock::now() < deadline)
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		const bool started = gate->Started;
-		const JobHandle removal = ProbeBake::RemoveStaging(directory, writer);
+		const JobHandle removal = reading ? ProbeBake::RemoveStaging(directory, {}, held) : ProbeBake::RemoveStaging(directory, held, {});
 		const auto grace = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
 		while (!removal.IsComplete() && std::chrono::steady_clock::now() < grace)
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		CHECK(started);
-		CHECK_FALSE(removal.IsComplete()); // It waits for the writer
+		CHECK_FALSE(removal.IsComplete()); // It waits for the held job
 		gate->Released = true;
 		JobSystem::Wait(removal);
-		CHECK(writer.IsComplete());
+		CHECK(held.IsComplete());
+		CHECK(gate->Read == reading);
 		CHECK_FALSE(FileSystem::Exists(directory));
 	}
 }

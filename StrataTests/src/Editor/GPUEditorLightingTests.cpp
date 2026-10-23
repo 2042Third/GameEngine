@@ -266,6 +266,56 @@ TEST_SUITE("GPU.Editor.Lighting")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A bake ended while its captures are copied in leaves nothing in the project, its staging removed after the copy")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		LightingGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUEditorBakeCancel") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		const std::string probe = harness.Run("entity.create", { { "name", "Probe" },
+			{ "components", { { "ReflectionProbe", { { "Extents", { 2, 2, 2 } } } } } } })["id"].get<std::string>();
+		harness.Run("scene.saveAs", { { "path", "Scenes/Room.stscene" } });
+		const std::string capture = harness.GetCapture(probe);
+		EditorAssetManager& assets = *harness.Context.GetAssetManager();
+		auto frame = [&harness, &gpu]()
+		{
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			harness.Context.Update(Timestep(1.0f / 60.0f));
+			harness.Runner.Update(harness.Context);
+			gpu.GetDevice().EndFrame();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		};
+
+		// Editor frames until the bake hands its captures to the import (EditorAssetManager::ImportExternal); the bake then
+		// ends before a later frame's asset update could register what the import copies.
+		auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+		harness.Runner.Run(harness.Context, harness.Commands, "lighting.bakeProbes", nlohmann::json::object(),
+			[completed](const EditorCommandResult& result) { *completed = result; });
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+		while (!*completed && assets.GetExternalImportCount() == 0 && std::chrono::steady_clock::now() < deadline)
+			frame();
+		REQUIRE_FALSE(*completed);
+		REQUIRE(assets.GetExternalImportCount() == 1);
+		harness.Runner.CancelAll("The test ends the bake");
+		REQUIRE(*completed);
+		CHECK_FALSE((*completed)->Success);
+
+		// What the copy wrote goes again, and the staging folder once the copy no longer reads it.
+		const std::filesystem::path staging = harness.Context.GetProject()->GetIntermediateDirectory() / "Bake";
+		auto stagingEmpty = [&staging]() { return !FileSystem::IsDirectory(staging) || std::filesystem::is_empty(staging); };
+		while ((assets.GetExternalImportCount() > 0 || assets.HasPendingImports() || !stagingEmpty()) && std::chrono::steady_clock::now() < deadline)
+			frame();
+		CHECK(assets.GetExternalImportCount() == 0);
+		CHECK(stagingEmpty());
+		CHECK_FALSE(FileSystem::Exists(harness.GetAssetPath("Lighting/Room")));
+		CHECK_FALSE(assets.FindAssetByPath("Lighting/Room/" + probe + ".hdr").IsValid());
+		CHECK(harness.GetCapture(probe) == capture);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("lighting.bakeProbes bakes the feature scene's probe on a copy of the project, keeping its committed capture")
 	{
 		Tests::GPUContext gpu;
