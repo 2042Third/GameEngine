@@ -22,7 +22,7 @@ itself when nobody touches the menu. An AI agent made it through the editor alon
 | Save files: the settings (`settings.json`) and the best time, read when the game starts | `Scripts/ThirdPerson.cpp`, `Scripts/CourseState.cpp` |
 | Display options: fullscreen and vsync from the settings (`Game::SetWindowMode`, `Game::SetVSync`) and the master volume (`Audio::SetMasterVolume`) | `Scripts/ThirdPerson.cpp` |
 | An object in a hand: the menu robot holds a flag through an `AttachToJoint` component | `Scenes/MainMenu.stscene` |
-| Image-based lighting from an HDR sky, a sun with cascaded shadows, post-processing (ambient occlusion, bloom, ACES) | the scenes' `Sky`, `Sun` and `Post Process` |
+| Image-based lighting from an HDR sky, a sun with cascaded shadows, post-processing (ambient occlusion, bloom, ACES, TAA) and screen-space reflections, which show on smooth surfaces only (the kit's materials are rough: roughness 0.9 to 1) | the scenes' `Sky`, `Sun` and `Post Process` |
 | Point lights that cast shadows: two lanterns under trees of the course, lighting their canopies from below | `Scenes/Course.stscene` (`Lantern A`, `Lantern B`), `Materials/LanternGlow.stmat` |
 | Reflection probes baked in the editor (`lighting.bakeProbes`): four boxes along the course, so the robot's metal and the coins reflect the islands around them rather than the open sky | `Scenes/Course.stscene` (`Reflection Probes`), `Lighting/Course/` |
 | Sound: footsteps and landings at the robot (3D), coins, jumps, jump pads, the goal and the menus' clicks | `Sounds/` |

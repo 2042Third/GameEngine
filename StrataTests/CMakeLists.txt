@@ -836,7 +836,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
 	set_tests_properties(StrataEditor.ThirdPerson PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataThirdPersonExport)
 	# The exported game in a window: its main menu, the robot dancing on its island under the title and the menu; the perf
-	# log shows the robot's animation, the menu's UI and the GPU at work.
+	# log shows the robot's animation, the menu's UI and the GPU at work (its TAA and screen-space reflections).
 	set(STRATA_THIRD_PERSON_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/ThirdPerson/$<CONFIG>")
 	add_test(NAME StrataRuntime.ThirdPersonWindowed
 		COMMAND "${STRATA_THIRD_PERSON_DIR}/Build/ThirdPerson${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1280x720 --frames 300
@@ -848,7 +848,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataRuntime.ThirdPersonWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonWindowed)
 	add_test(NAME StrataRuntime.ThirdPersonWindowedPerf
 		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_THIRD_PERSON_DIR}/Windowed.csv" 300 --nonzero Scene.Animation
-			--nonzero Scene.UI --nonzero GPUBusyMs --nonzero GPU.TAA)
+			--nonzero Scene.UI --nonzero GPUBusyMs --nonzero GPU.TAA --nonzero GPU.Reflections)
 	set_tests_properties(StrataRuntime.ThirdPersonWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonWindowed)
 endif()
 
