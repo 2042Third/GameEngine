@@ -47,6 +47,7 @@ namespace Strata
 	struct PostProcessComponent;
 	struct SkyLightComponent;
 	struct Submesh;
+	struct TemporalAntiAliasingSettings;
 	struct TextureHold;
 
 	// The view a scene is rendered from.
@@ -1113,8 +1114,9 @@ namespace Strata
 		// The temporal anti-aliasing history's textures and the binding sets that read them, made by the first frame with TAA;
 		// false (reported) when they cannot be created.
 		bool EnsureTemporalResources();
-		// Blends the frame's HDR image into the history's other texture, which becomes its newest (PostProcess/TAA.comp).
-		void ResolveTemporal(nvrhi::ICommandList* commandList);
+		// Blends the frame's HDR image into the history's other texture, which becomes its newest (PostProcess/TAA.comp), with
+		// the settings of the scene's TAA (GetTemporalAntiAliasingSettings).
+		void ResolveTemporal(nvrhi::ICommandList* commandList, const TemporalAntiAliasingSettings& settings);
 		void RenderAmbientOcclusion(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
 		// Meters the HDR image (automatic exposure) through `bindingSet` (the HDR target's or the resolved image's) or writes the
 		// manual exposure into the exposure buffer.

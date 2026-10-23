@@ -136,6 +136,24 @@ namespace Strata::Tests
 		return postProcess;
 	}
 
+	// The neutral post-processing (exact colors) with temporal anti-aliasing of the given look.
+	inline PostProcessComponent& AddTemporalPostProcess(Scene& scene, TemporalAntiAliasingPreset preset)
+	{
+		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.AntiAliasing = true;
+		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
+		postProcess.TAAPreset = preset;
+		return postProcess;
+	}
+
+	// The scene's PostProcess component (the first).
+	inline PostProcessComponent& GetPostProcess(Scene& scene)
+	{
+		auto view = scene.GetRegistry().view<PostProcessComponent>();
+		REQUIRE(view.begin() != view.end());
+		return scene.GetRegistry().get<PostProcessComponent>(view.front());
+	}
+
 	inline Entity AddMesh(Scene& scene, AssetHandle mesh, AssetHandle material, const glm::vec3& position, const std::string& name)
 	{
 		Entity entity = scene.CreateEntity(name);

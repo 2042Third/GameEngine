@@ -75,13 +75,6 @@ namespace Strata
 		constexpr int c_ShadowDepthBias = -16;
 		constexpr float c_ShadowSlopeDepthBias = -1.5f;
 
-		// Temporal anti-aliasing (PostProcess/TAA.comp): the current frame's least weight once the history holds eight frames (a
-		// still pixel then follows the mean of the jitter's eight phases, within 13% of their spread whatever their order), and
-		// its weight per pixel of motion, up to the largest, which keeps moving surfaces sharp at the cost of anti-aliasing.
-		constexpr float c_TemporalMinWeight = 1.0f / 8.0f;
-		constexpr float c_TemporalMotionWeightScale = 1.0f / 32.0f;
-		constexpr float c_TemporalMaxMotionWeight = 0.5f;
-
 		// Elevation and azimuth (from +X toward +Z), in degrees, of SceneRenderer::GetDefaultSunDirection.
 		constexpr float c_DefaultSunElevation = 45.0f;
 		constexpr float c_DefaultSunAzimuth = 37.0f;
@@ -1574,15 +1567,20 @@ namespace Strata
 		return true;
 	}
 
-	void SceneRenderer::ResolveTemporal(nvrhi::ICommandList* commandList)
+	void SceneRenderer::ResolveTemporal(nvrhi::ICommandList* commandList, const TemporalAntiAliasingSettings& settings)
 	{
+		// Fields the settings do not use are 0 (normalized), so equal settings give equal bytes.
 		RenderData::TemporalParameters parameters = {};
 		parameters.CurrentWeight = 1.0f / static_cast<float>(m_TemporalFrames);
-		parameters.MinWeight = c_TemporalMinWeight;
-		parameters.MotionWeightScale = c_TemporalMotionWeightScale;
-		parameters.MaxMotionWeight = c_TemporalMaxMotionWeight;
+		parameters.MinWeight = 1.0f / static_cast<float>(settings.HistoryFrames);
+		parameters.MotionWeightScale = settings.MotionResponse;
+		parameters.MaxMotionWeight = settings.MaxMotionWeight;
 		parameters.HistoryScale = parameters.CurrentWeight < 1.0f ? m_PreExposure / m_HistoryPreExposure : 1.0f;
 		parameters.InversePreExposure = 1.0f / m_PreExposure;
+		parameters.ClampMode = static_cast<uint32_t>(settings.HistoryClamp);
+		parameters.ClipWidth = settings.ClipWidth;
+		parameters.TransparentWeight = settings.TransparentWeight;
+		parameters.ResampleWeight = settings.ResampleWeight;
 		m_HistoryPreExposure = m_PreExposure;
 		nvrhi::ComputeState state;
 		state.pipeline = m_TemporalPipeline;
@@ -2603,6 +2601,7 @@ namespace Strata
 		m_Stats.PreExposure = m_PreExposure;
 		m_Stats.PreExposureSettled = m_PreExposureSettled;
 		const bool temporalWanted = m_Specification.TemporalAntiAliasing && postProcess.AntiAliasing && postProcess.AntiAliasingMethod == AntiAliasingMode::TAA;
+		const TemporalAntiAliasingSettings temporalSettings = GetTemporalAntiAliasingSettings(postProcess);
 
 		// Motion: the history holds the renderer's previous frame when that frame copied it (its latest frame asked for motion
 		// too) and drew this render scene or the one it is a clone of (the same slots).
@@ -3006,7 +3005,7 @@ namespace Strata
 			if (m_TemporalFrame)
 			{
 				commandList->beginMarker("TAA");
-				ResolveTemporal(commandList);
+				ResolveTemporal(commandList, temporalSettings);
 				commandList->endMarker();
 				m_TemporalResolved = true;
 			}
@@ -3059,6 +3058,9 @@ namespace Strata
 		tonemap.Operator = static_cast<int32_t>(postProcess.Tonemapper);
 		tonemap.BloomAdditive = postProcess.BloomThreshold > 0.0f ? 1u : 0u;
 		tonemap.InversePreExposure = 1.0f / m_PreExposure;
+		// Only the TAA's image is sharpened (it softens texture detail), and only on the way to the display: frames with FXAA, or
+		// without TAA, skip the branch and stay as they were.
+		tonemap.Sharpening = resolved ? temporalSettings.Sharpening : 0.0f;
 
 		TextRenderStats textStats;
 		m_FontAtlases->BeginFrame(TextRenderer::c_FrameRasterBudget);

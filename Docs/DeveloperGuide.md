@@ -2671,10 +2671,13 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   history is fetched along the motion of the nearest surface of the pixel's 3x3 neighborhood (the camera's motion of the
   sky's direction where nothing was drawn) through a Catmull-Rom filter (a still pixel reads its own texel), clamped to
   the neighborhood's colors in YCoCg, and both colors are weighted by their exposed luminance (1 / (1 + L), the previous
-  frame's exposure). The current frame weighs the most of 1 / `TemporalFrames`, 1/8 (`c_TemporalMinWeight`) and 1/32 per
-  pixel of motion up to 1/2: the eight frames after a reset are averaged evenly, then the history is exponential and a
-  still pixel stays within 13% of its eight samples' spread around their mean. Transparent surfaces are resolved with the
-  rest. A renderer with TAA holds, besides the motion history, two history textures (8 bytes per pixel each) and the
+  frame's exposure). The current frame weighs the most of 1 / `TemporalFrames`, 1/8 and 1/32 per pixel of motion up to
+  1/2 (the Original preset's table, `c_TAAOriginalSettings`; the resolve takes the scene's settings from
+  `GetTemporalAntiAliasingSettings`): the eight frames after a reset are averaged evenly, then the history is exponential
+  and a still pixel stays within 13% of its eight samples' spread around their mean. Transparent surfaces are resolved
+  with the rest. The history's alpha holds each pixel's signed view distance along the camera's forward axis (computed
+  from the jittered depth, within +/-`RenderData::c_TemporalSkyDistance`, which the sky stores); readers of the resolved
+  image use its RGB. A renderer with TAA holds, besides the motion history, two history textures (8 bytes per pixel each) and the
   velocity target (4 bytes per pixel), made by its first TAA frame and released with the render targets.
 - The history (`SceneRendererStats::TemporalFrames`, 1 on a reset frame; `HistoryResets`) starts again on the renderer's
   first frame, after a camera cut, with a render scene that is neither the previous one nor a clone of it (entering Play

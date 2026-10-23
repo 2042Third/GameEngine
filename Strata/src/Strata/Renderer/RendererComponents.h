@@ -166,6 +166,60 @@ namespace Strata
 		TAA
 	};
 
+	// How the TAA looks (PostProcessComponent::TAAPreset). The values are script and file API: they never change.
+	enum class TemporalAntiAliasingPreset : uint8_t
+	{
+		Sharp = 0,    // c_TAASharpSettings: tighter clipping, less resampling, reactive transparents, rejection, sharpening
+		Original = 1, // c_TAAOriginalSettings: the softer, steadier first TAA
+		Custom = 2    // The component's TAA tunables
+	};
+
+	// How the TAA keeps the history consistent with what the pixel shows now (TemporalAntiAliasingSettings::HistoryClamp).
+	// The values are script and file API: they never change.
+	enum class TemporalHistoryClamp : uint8_t
+	{
+		MinMax = 0,  // Clamped to the per-component range of the neighborhood's colors
+		Variance = 1 // Clipped toward the neighborhood's mean, into a box ClipWidth standard deviations wide (within the range)
+	};
+
+	// What the TAA resolves with (GetTemporalAntiAliasingSettings): a preset's table, or a component's tunables under
+	// Custom. Fields the chosen modes do not read are 0 in a normalized value.
+	struct TemporalAntiAliasingSettings
+	{
+		uint32_t HistoryFrames = 8;      // The current frame weighs at least 1 / this
+		float MotionResponse = 0.0f;     // The current frame's weight per pixel of motion...
+		float MaxMotionWeight = 0.0f;    // ...up to this
+		float ResampleWeight = 0.0f;     // Its least weight where the history is read halfway between texels; 0 = off
+		TemporalHistoryClamp HistoryClamp = TemporalHistoryClamp::MinMax;
+		float ClipWidth = 0.0f;          // Variance only: the box's half width, in standard deviations
+		float TransparentWeight = 0.0f;  // Its least weight under blended transparent surfaces; 0 = off
+		bool DisocclusionRejection = false;
+		float DisocclusionThreshold = 0.0f; // With rejection: how much nearer, as a fraction of the distance, counts as covered
+		float Sharpening = 0.0f;         // Of the displayed image only, never the history; 0 = off
+
+		bool operator==(const TemporalAntiAliasingSettings&) const = default;
+	};
+
+	// The tunables' ranges (the properties' and those GetTemporalAntiAliasingSettings clamps Custom's values to). Weights
+	// and the sharpening lie in [0, 1].
+	inline constexpr uint32_t c_TAAMinHistoryFrames = 2;
+	inline constexpr uint32_t c_TAAMaxHistoryFrames = 32;
+	inline constexpr float c_TAAMaxMotionResponse = 0.25f;
+	inline constexpr float c_TAAMinClipWidth = 0.5f;
+	inline constexpr float c_TAAMaxClipWidth = 4.0f;
+	inline constexpr float c_TAAMinDisocclusionThreshold = 0.01f;
+	inline constexpr float c_TAAMaxDisocclusionThreshold = 0.5f;
+
+	// The presets' tables (normalized). Original is the first TAA: the current frame weighs at least 1/8 and 1/32 more per
+	// pixel of motion up to 1/2, the history is clamped to the neighborhood's range, and nothing else applies.
+	inline constexpr TemporalAntiAliasingSettings c_TAAOriginalSettings = { .HistoryFrames = 8, .MotionResponse = 1.0f / 32.0f, .MaxMotionWeight = 0.5f,
+		.ResampleWeight = 0.0f, .HistoryClamp = TemporalHistoryClamp::MinMax, .ClipWidth = 0.0f, .TransparentWeight = 0.0f, .DisocclusionRejection = false,
+		.DisocclusionThreshold = 0.0f, .Sharpening = 0.0f };
+	// Sharp keeps the least weight at 1/8, so captures settle after the same eight frames as under Original.
+	inline constexpr TemporalAntiAliasingSettings c_TAASharpSettings = { .HistoryFrames = 8, .MotionResponse = 0.0625f, .MaxMotionWeight = 0.5f,
+		.ResampleWeight = 0.25f, .HistoryClamp = TemporalHistoryClamp::Variance, .ClipWidth = 1.25f, .TransparentWeight = 0.5f, .DisocclusionRejection = true,
+		.DisocclusionThreshold = 0.05f, .Sharpening = 0.5f };
+
 	// Post-processing of the camera image. The first active entity with this component in a scene applies; scenes
 	// without one use the defaults.
 	struct PostProcessComponent
@@ -187,10 +241,34 @@ namespace Strata
 		float AmbientOcclusionIntensity = 1.0f;
 		bool AntiAliasing = true;
 		AntiAliasingMode AntiAliasingMethod = AntiAliasingMode::FXAA;
+		// The TAA's look: a preset, or the tunables below under Custom. The preset and the tunables are independent: choosing
+		// a preset writes no tunable (GetTemporalAntiAliasingCustomStart is where Custom starts from in the Inspector).
+		TemporalAntiAliasingPreset TAAPreset = TemporalAntiAliasingPreset::Original;
+		uint32_t TAAHistoryFrames = c_TAASharpSettings.HistoryFrames;
+		float TAAMotionResponse = c_TAASharpSettings.MotionResponse;
+		float TAAMaxMotionWeight = c_TAASharpSettings.MaxMotionWeight;
+		float TAAResampleWeight = c_TAASharpSettings.ResampleWeight;
+		TemporalHistoryClamp TAAHistoryClamp = c_TAASharpSettings.HistoryClamp;
+		float TAAClipWidth = c_TAASharpSettings.ClipWidth;
+		float TAATransparentWeight = c_TAASharpSettings.TransparentWeight;
+		bool TAADisocclusionRejection = c_TAASharpSettings.DisocclusionRejection;
+		float TAADisocclusionThreshold = c_TAASharpSettings.DisocclusionThreshold;
+		float TAASharpening = c_TAASharpSettings.Sharpening;
 		float Vignette = 0.2f;
 		float Saturation = 1.0f;
 		float Contrast = 1.0f; // Around middle gray; 1 = unchanged
 	};
+
+	// The settings the TAA resolves with: the preset's table, or the component's tunables under Custom, clamped to their
+	// ranges and normalized (0 in ClipWidth under MinMax and in DisocclusionThreshold without rejection), so equal looks
+	// compare equal whatever the unused fields hold.
+	TemporalAntiAliasingSettings GetTemporalAntiAliasingSettings(const PostProcessComponent& postProcess);
+	// The values Custom starts from when chosen in the Inspector: the table of the preset in effect while the stored tunables
+	// (normalized) equal one of the two tables, otherwise the stored tunables, which are then someone's tuning.
+	TemporalAntiAliasingSettings GetTemporalAntiAliasingCustomStart(const PostProcessComponent& postProcess);
+	// Writes the settings into the component's tunables; a field the settings normalized away (ClipWidth under MinMax,
+	// DisocclusionThreshold without rejection) keeps its stored value.
+	void SetTemporalAntiAliasingSettings(PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& settings);
 
 	enum class TextAlignment : uint8_t
 	{

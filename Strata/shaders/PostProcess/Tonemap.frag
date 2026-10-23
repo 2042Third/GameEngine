@@ -32,6 +32,10 @@ layout(push_constant) uniform TonemapParameters
 	int Operator;
 	uint BloomAdditive;   // 1: the bloom holds only the light above a threshold and is added
 	float InversePreExposure; // 1 / the pre-exposure the scene color carries (a power of two)
+	float Sharpening;     // Of the displayed image, on frames the TAA resolved; 0 = off
+	float Padding0;
+	float Padding1;
+	float Padding2;
 } u_Parameters;
 
 // Largest exposed value passed to the tone curves: far beyond where every curve saturates, small enough that their

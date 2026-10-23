@@ -8,6 +8,7 @@
 
 #include <spdlog/fmt/fmt.h>
 
+#include <algorithm>
 #include <string>
 
 namespace Strata
@@ -307,6 +308,88 @@ namespace Strata
 			.Property("ScreenAnchor", &TextComponent::ScreenAnchor, WithTooltip(Range(0.0f, 1.0f, 0.005f), "Normalized viewport position; (0,0) is the top-left corner"))
 			.Property("ScreenOffset", &TextComponent::ScreenOffset, WithTooltip({}, "Pixel offset from the anchor (+Y down)"))
 			.EnumProperty("Alignment", &TextComponent::Alignment, { { "Left", 0 }, { "Center", 1 }, { "Right", 2 } });
+	}
+
+	namespace
+	{
+
+		// A tunable within its range; NaN (which no comparison orders) becomes the range's low end.
+		float ClampTunable(float value, float low, float high)
+		{
+			return value >= low ? std::min(value, high) : low;
+		}
+
+		// The component's tunables as stored, unclamped.
+		TemporalAntiAliasingSettings GetStoredTemporalAntiAliasingSettings(const PostProcessComponent& postProcess)
+		{
+			TemporalAntiAliasingSettings settings;
+			settings.HistoryFrames = postProcess.TAAHistoryFrames;
+			settings.MotionResponse = postProcess.TAAMotionResponse;
+			settings.MaxMotionWeight = postProcess.TAAMaxMotionWeight;
+			settings.ResampleWeight = postProcess.TAAResampleWeight;
+			settings.HistoryClamp = postProcess.TAAHistoryClamp;
+			settings.ClipWidth = postProcess.TAAClipWidth;
+			settings.TransparentWeight = postProcess.TAATransparentWeight;
+			settings.DisocclusionRejection = postProcess.TAADisocclusionRejection;
+			settings.DisocclusionThreshold = postProcess.TAADisocclusionThreshold;
+			settings.Sharpening = postProcess.TAASharpening;
+			return settings;
+		}
+
+		// Clamped to the ranges, with 0 in the fields the chosen modes do not read.
+		TemporalAntiAliasingSettings NormalizeTemporalAntiAliasingSettings(TemporalAntiAliasingSettings settings)
+		{
+			settings.HistoryFrames = std::clamp(settings.HistoryFrames, c_TAAMinHistoryFrames, c_TAAMaxHistoryFrames);
+			settings.MotionResponse = ClampTunable(settings.MotionResponse, 0.0f, c_TAAMaxMotionResponse);
+			settings.MaxMotionWeight = ClampTunable(settings.MaxMotionWeight, 0.0f, 1.0f);
+			settings.ResampleWeight = ClampTunable(settings.ResampleWeight, 0.0f, 1.0f);
+			if (settings.HistoryClamp != TemporalHistoryClamp::Variance)
+				settings.HistoryClamp = TemporalHistoryClamp::MinMax;
+			settings.ClipWidth = settings.HistoryClamp == TemporalHistoryClamp::Variance ? ClampTunable(settings.ClipWidth, c_TAAMinClipWidth, c_TAAMaxClipWidth) : 0.0f;
+			settings.TransparentWeight = ClampTunable(settings.TransparentWeight, 0.0f, 1.0f);
+			settings.DisocclusionThreshold = settings.DisocclusionRejection
+				? ClampTunable(settings.DisocclusionThreshold, c_TAAMinDisocclusionThreshold, c_TAAMaxDisocclusionThreshold) : 0.0f;
+			settings.Sharpening = ClampTunable(settings.Sharpening, 0.0f, 1.0f);
+			return settings;
+		}
+
+	}
+
+	TemporalAntiAliasingSettings GetTemporalAntiAliasingSettings(const PostProcessComponent& postProcess)
+	{
+		switch (postProcess.TAAPreset)
+		{
+			case TemporalAntiAliasingPreset::Sharp: return c_TAASharpSettings;
+			case TemporalAntiAliasingPreset::Original: return c_TAAOriginalSettings;
+			case TemporalAntiAliasingPreset::Custom: break;
+		}
+		return NormalizeTemporalAntiAliasingSettings(GetStoredTemporalAntiAliasingSettings(postProcess));
+	}
+
+	TemporalAntiAliasingSettings GetTemporalAntiAliasingCustomStart(const PostProcessComponent& postProcess)
+	{
+		const TemporalAntiAliasingSettings stored = NormalizeTemporalAntiAliasingSettings(GetStoredTemporalAntiAliasingSettings(postProcess));
+		// Tunables that hold a preset's table were not tuned (they are the defaults, or a preset's start): Custom starts from
+		// the look in effect. Anything else is someone's tuning, kept.
+		if (stored == c_TAAOriginalSettings || stored == c_TAASharpSettings)
+			return GetTemporalAntiAliasingSettings(postProcess);
+		return GetStoredTemporalAntiAliasingSettings(postProcess);
+	}
+
+	void SetTemporalAntiAliasingSettings(PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& settings)
+	{
+		postProcess.TAAHistoryFrames = settings.HistoryFrames;
+		postProcess.TAAMotionResponse = settings.MotionResponse;
+		postProcess.TAAMaxMotionWeight = settings.MaxMotionWeight;
+		postProcess.TAAResampleWeight = settings.ResampleWeight;
+		postProcess.TAAHistoryClamp = settings.HistoryClamp;
+		if (settings.HistoryClamp == TemporalHistoryClamp::Variance)
+			postProcess.TAAClipWidth = settings.ClipWidth;
+		postProcess.TAATransparentWeight = settings.TransparentWeight;
+		postProcess.TAADisocclusionRejection = settings.DisocclusionRejection;
+		if (settings.DisocclusionRejection)
+			postProcess.TAADisocclusionThreshold = settings.DisocclusionThreshold;
+		postProcess.TAASharpening = settings.Sharpening;
 	}
 
 }

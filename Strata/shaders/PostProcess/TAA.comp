@@ -14,6 +14,8 @@
 // sample among dark ones does not flicker as the jitter moves it. The current frame's weight is the largest of
 // CurrentWeight (1 / the frames in the history: the frames after a reset are averaged evenly), MinWeight and a weight growing
 // with the motion's length in pixels; a pixel whose surface was outside the previous frame takes the current frame alone.
+// The settings (TemporalAntiAliasingSettings) choose further terms, each in a branch on a push constant. The history's alpha
+// holds the pixel's signed view distance (whatever the settings), which the next frame's resolve may compare with.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -36,9 +38,27 @@ layout(push_constant) uniform TemporalParameters
 	float MaxMotionWeight;   // ...up to this
 	float HistoryScale;      // The frame's pre-exposure over the history's: the history at the frame's scale (exact)
 	float InversePreExposure; // 1 / the frame's pre-exposure: the luminance weights are of exposed values
-	float Padding0;
-	float Padding1;
+	uint ClampMode;           // TemporalHistoryClamp
+	float ClipWidth;          // Variance clipping's half width, in standard deviations
+	float TransparentWeight;  // The current frame's least weight under blended transparent surfaces; 0 = off
+	float DisocclusionThreshold; // A surface nearer by this fraction of the distance in the previous frame covered the pixel; 0 = off
+	float PreviousDepthOffset;   // dot(camera position - the previous camera's, PreviousForward.xyz)
+	float ResampleWeight;        // The current frame's least weight halfway between the history's texels; 0 = off
+	vec4 PreviousForward;        // xyz: the previous camera's forward; w: the depth scale of the rejection's margin
 } u_Temporal;
+
+// The history's alpha for the sky (nothing drawn), and the bound of every distance it holds: the largest half float.
+const float c_SkyDistance = 65504.0;
+
+// The signed distance along the camera's forward axis of the surface at `uv` and `depth` (camera-relative, as the jittered
+// raster drew it); the sky's for depth 0.
+float GetViewDistance(vec2 uv, float depth)
+{
+	if (depth <= 0.0)
+		return c_SkyDistance;
+	vec4 point = u_Frame.InverseViewProjection * vec4(UVToNDC(uv), depth, 1.0);
+	return clamp(dot(point.xyz / point.w, u_Frame.CameraForward.xyz), -c_SkyDistance, c_SkyDistance);
+}
 
 vec3 RGBToYCoCg(vec3 color)
 {
@@ -95,8 +115,10 @@ void main()
 	vec3 current = texelFetch(u_Current, pixel, 0).rgb;
 	vec3 low = RGBToYCoCg(current);
 	vec3 high = low;
+	vec2 uv = (vec2(pixel) + 0.5) * u_Frame.ViewportSize.zw;
+	float depth = texelFetch(u_Depth, pixel, 0).r;
 	// The nearest surface (reversed-Z: the largest depth) of the neighborhood, the pixel's own on ties.
-	float nearestDepth = texelFetch(u_Depth, pixel, 0).r;
+	float nearestDepth = depth;
 	ivec2 nearestPixel = pixel;
 	for (int y = -1; y <= 1; y++)
 	{
@@ -120,7 +142,6 @@ void main()
 	vec3 result = current;
 	if (u_Temporal.CurrentWeight < 1.0)
 	{
-		vec2 uv = (vec2(pixel) + 0.5) * u_Frame.ViewportSize.zw;
 		// Nothing drawn in the neighborhood (the sky, which has no geometry): the camera's motion of its direction.
 		vec2 motion = nearestDepth > 0.0 ? texelFetch(u_Velocity, nearestPixel, 0).rg : GetCameraMotion(uv, 0.0);
 		vec2 previousUV = uv - motion;
@@ -136,5 +157,5 @@ void main()
 			result = (current * currentWeight + history * historyWeight) / max(currentWeight + historyWeight, 1e-6);
 		}
 	}
-	imageStore(o_History, pixel, vec4(SanitizeHDR(result), 1.0));
+	imageStore(o_History, pixel, vec4(SanitizeHDR(result), GetViewDistance(uv, depth)));
 }

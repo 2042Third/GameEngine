@@ -362,8 +362,12 @@ namespace Strata
 			int32_t Operator;
 			uint32_t BloomAdditive; // 1: the bloom holds only light above a threshold and is added instead of mixed
 			float InversePreExposure; // 1 / the pre-exposure the scene color carries (FrameConstants::TemporalParams.y)
+			float Sharpening;         // Of the displayed image, on frames the TAA resolved; 0 = off
+			float Padding0;
+			float Padding1;
+			float Padding2;
 		};
-		static_assert(sizeof(TonemapParameters) == 32);
+		static_assert(sizeof(TonemapParameters) == 48);
 
 		// Include/Exposure.glsl: the exposure buffer and the luminance histogram.
 		constexpr uint32_t c_ExposureLogLuminance = 0;
@@ -443,20 +447,27 @@ namespace Strata
 		};
 		static_assert(sizeof(BloomParameters) == 16);
 
-		// PostProcess/TAA.comp: how the frame's image and the temporal history are blended.
+		// PostProcess/TAA.comp: how the frame's image and the temporal history are blended (TemporalAntiAliasingSettings).
 		struct TemporalParameters
 		{
 			float CurrentWeight;     // 1 / the frames the history holds with this one (1: the history is not read)
-			float MinWeight;         // The current frame's least weight
+			float MinWeight;         // The current frame's least weight: 1 / HistoryFrames
 			float MotionWeightScale; // The current frame's weight per pixel of motion...
 			float MaxMotionWeight;   // ...up to this
 			// The frame's pre-exposure over the history's (a power of two, exact): the history is brought to the frame's scale.
 			float HistoryScale;
 			float InversePreExposure; // 1 / the frame's pre-exposure: the luminance weights are of exposed values
-			float Padding0;
-			float Padding1;
+			uint32_t ClampMode;       // TemporalHistoryClamp
+			float ClipWidth;          // Variance clipping's half width, in standard deviations
+			float TransparentWeight;  // The current frame's least weight under blended transparent surfaces; 0 = off
+			float DisocclusionThreshold; // A surface nearer by this fraction of the distance in the previous frame covered the pixel; 0 = off
+			float PreviousDepthOffset;   // dot(camera position - the previous camera's, PreviousForward)
+			float ResampleWeight;        // The current frame's least weight halfway between the history's texels; 0 = off
+			glm::vec4 PreviousForward;   // xyz: the previous camera's forward; w: the depth scale of the rejection's margin
 		};
-		static_assert(sizeof(TemporalParameters) == 32);
+		static_assert(sizeof(TemporalParameters) == 64 && offsetof(TemporalParameters, PreviousForward) == 48);
+		// The history's alpha holds the pixel's signed view distance within this (the largest half float), the sky's.
+		constexpr float c_TemporalSkyDistance = 65504.0f;
 
 		// Scene/MotionCopy.comp: copies the listed elements of a buffer into a renderer's motion history.
 		struct MotionCopyParameters

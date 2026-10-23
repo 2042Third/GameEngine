@@ -1,4 +1,4 @@
-#include "Renderer/SceneRendererTestUtils.h"
+#include "Renderer/TAATestUtils.h"
 
 #include "Strata/Renderer/RenderScene.h"
 
@@ -6,9 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cmath>
-#include <cstring>
 #include <limits>
-#include <string>
 #include <thread>
 #include <vector>
 
@@ -17,148 +15,7 @@
 
 using namespace Strata;
 using namespace Strata::Tests;
-
-namespace
-{
-
-	constexpr uint32_t c_Size = 64;
-
-	const char* PathName(GPUDrivenMode mode)
-	{
-		return mode == GPUDrivenMode::Off ? "CPU path" : "GPU-driven path";
-	}
-
-	SceneRenderer CreateRenderer(const char* name, GPUDrivenMode mode = GPUDrivenMode::Off, bool temporal = true)
-	{
-		SceneRendererSpecification specification;
-		specification.TextureStreaming = false;
-		specification.GPUDriven = mode;
-		specification.TemporalAntiAliasing = temporal;
-		specification.DebugName = name;
-		return SceneRenderer(specification);
-	}
-
-	// The neutral post-processing (exact colors) with temporal anti-aliasing.
-	PostProcessComponent& AddTemporalPostProcess(Scene& scene)
-	{
-		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
-		postProcess.AntiAliasing = true;
-		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
-		return postProcess;
-	}
-
-	// Rows of boxes on a ground under a shadowed sun, seen from above at an angle.
-	struct TemporalScene
-	{
-		Scene Contents;
-		std::vector<Entity> Boxes;
-		Entity Ground;
-		SceneCamera Camera;
-
-		TemporalScene()
-		{
-			AddTemporalPostProcess(Contents);
-			AddSun(Contents, glm::normalize(glm::vec3(-0.3f, -1.0f, -0.4f)), 3.0f);
-			for (uint32_t index = 0; index < 12; index++)
-				Boxes.push_back(AddMesh(Contents, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(static_cast<float>(index % 4) * 2.0f - 3.0f, 0.0f,
-					-static_cast<float>(index / 4) * 2.5f), "Box"));
-			Ground = AddMesh(Contents, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f, -0.5f, 0.0f), "Ground");
-			Ground.GetComponent<TransformComponent>().Scale = glm::vec3(40.0f);
-			Camera = LookAt(glm::vec3(0.0f, 9.0f, 8.0f), glm::vec3(0.0f, 0.0f, -2.5f));
-		}
-	};
-
-	void LoadAssets(SceneTestAssets& assets)
-	{
-		for (const AssetHandle builtin : { BuiltinAssets::CubeMesh, BuiltinAssets::PlaneMesh, BuiltinAssets::DefaultMaterial })
-			REQUIRE(assets.Manager->LoadAssetSync(builtin));
-	}
-
-	// What an application's device frame does after its work (GraphicsDevice::EndFrame): the GPU is done with it, and NVRHI
-	// learns so (the frame constants' versions are used again). Tests that render many frames without reading anything back
-	// need it.
-	void FinishFrame(GPUContext& gpu)
-	{
-		gpu.GetDevice().WaitForIdle();
-		gpu.GetNvrhiDevice()->runGarbageCollection();
-	}
-
-	// An RGBA16_FLOAT image's colors, row by row.
-	std::vector<glm::vec3> ReadHDR(nvrhi::ITexture* texture)
-	{
-		REQUIRE(texture);
-		ReadbackImage image;
-		REQUIRE(Renderer::ReadTexture(texture, image));
-		REQUIRE(image.BytesPerPixel == 8);
-		std::vector<glm::vec3> colors;
-		colors.reserve(static_cast<size_t>(image.Width) * image.Height);
-		for (uint32_t y = 0; y < image.Height; y++)
-		{
-			for (uint32_t x = 0; x < image.Width; x++)
-				colors.push_back(glm::vec3(ReadHalfTexel(image, x, y)));
-		}
-		return colors;
-	}
-
-	std::vector<uint32_t> ReadIDs(SceneRenderer& renderer)
-	{
-		ReadbackImage image;
-		REQUIRE(Renderer::ReadTexture(renderer.GetEntityIDTexture(), image));
-		REQUIRE(image.BytesPerPixel == 4);
-		std::vector<uint32_t> ids(static_cast<size_t>(image.Width) * image.Height);
-		std::memcpy(ids.data(), image.Pixels.data(), ids.size() * sizeof(uint32_t));
-		return ids;
-	}
-
-	uint32_t GetID(Entity entity)
-	{
-		return static_cast<uint32_t>(entity.GetHandle()) + 1;
-	}
-
-	// The temporal statistics of a frame that started the history again (the first frame, jitter phase 0), whose resolved
-	// image is the frame's own.
-	void CheckReset(SceneRenderer& renderer, uint32_t resets)
-	{
-		const SceneRendererStats& stats = renderer.GetStats();
-		CHECK(stats.TemporalAntiAliasing);
-		CHECK(stats.TemporalFrames == 1);
-		CHECK(stats.HistoryResets == resets);
-		CHECK(stats.Jitter == SceneRenderer::GetTemporalJitter(0));
-		REQUIRE(renderer.GetTemporalHistoryTexture());
-		CHECK(renderer.GetResolvedHDRTexture() == renderer.GetTemporalHistoryTexture());
-		CHECK(ReadHDR(renderer.GetResolvedHDRTexture()) == ReadHDR(renderer.GetHDRTexture()));
-	}
-
-	constexpr glm::vec3 c_LuminanceWeights(0.2126f, 0.7152f, 0.0722f); // Include/Exposure.glsl
-
-	// An unlit ground and an unlit plane over it of the same luminance (the resolve's luminance weights are then equal), meeting
-	// along a slanted edge through the middle of the view from above.
-	struct EdgeScene
-	{
-		Scene Contents;
-		SceneCamera Camera;
-		glm::vec3 Ground = glm::vec3(0.6f, 0.3f, 0.3f);
-		glm::vec3 Top;
-
-		explicit EdgeScene(SceneTestAssets& assets)
-		{
-			AddTemporalPostProcess(Contents);
-			const float luminance = glm::dot(Ground, c_LuminanceWeights);
-			Top = glm::vec3(0.2f, (luminance - 0.2126f * 0.2f - 0.0722f * 0.6f) / 0.7152f, 0.6f);
-			Entity ground = AddMesh(Contents, BuiltinAssets::PlaneMesh, assets.AddMaterial(UnlitColor(glm::vec4(Ground, 1.0f))), glm::vec3(0.0f), "Ground");
-			ground.GetComponent<TransformComponent>().Scale = glm::vec3(20.0f);
-			// Its edge at local x = -5 passes through the origin.
-			const glm::quat rotation = glm::angleAxis(glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-			Entity top = AddMesh(Contents, BuiltinAssets::PlaneMesh, assets.AddMaterial(UnlitColor(glm::vec4(Top, 1.0f))),
-				rotation * glm::vec3(5.0f, 0.0f, 0.0f) + glm::vec3(0.0f, 0.01f, 0.0f), "Top");
-			TransformComponent& transform = top.GetComponent<TransformComponent>();
-			transform.Rotation = rotation;
-			transform.Scale = glm::vec3(10.0f);
-			Camera = OrthographicLookAt(glm::vec3(0.0f, 10.0f, 0.0f), glm::vec3(0.0f), 3.0f);
-		}
-	};
-
-}
+using namespace Strata::Tests::TAA;
 
 TEST_SUITE("GPU.SceneRenderer.TAA")
 {
@@ -189,7 +46,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
 		{
 			CAPTURE(PathName(mode));
-			TemporalScene scene;
+			TemporalScene scene(TemporalAntiAliasingPreset::Original);
 			// The same scene drawn with FXAA: a renderer that does not do temporal anti-aliasing.
 			SceneRenderer temporal = CreateRenderer("Temporal", mode);
 			SceneRenderer plain = CreateRenderer("Plain", mode, false);
@@ -235,7 +92,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
 		LoadAssets(assets);
-		TemporalScene scene;
+		TemporalScene scene(TemporalAntiAliasingPreset::Original);
 		SceneRenderer renderer = CreateRenderer("Resets");
 		renderer.SetViewportSize(c_Size, c_Size);
 		const auto render = [&](Scene& contents, uint32_t frames)
@@ -265,13 +122,13 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		CHECK(renderer.GetStats().TemporalFrames == 3);
 
 		// Another render scene, then back; a copy of the scene (entering Play) goes on from its source.
-		TemporalScene other;
+		TemporalScene other(TemporalAntiAliasingPreset::Original);
 		render(other.Contents, 1);
 		CheckReset(renderer, 4);
 		render(scene.Contents, 1);
 		CheckReset(renderer, 5);
 		Ref<Scene> source = CreateRef<Scene>("Source");
-		AddTemporalPostProcess(*source);
+		AddTemporalPostProcess(*source, TemporalAntiAliasingPreset::Original);
 		AddMesh(*source, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Box");
 		render(*source, 2);
 		CHECK(renderer.GetStats().HistoryResets == 6);
@@ -305,7 +162,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 
 		// A frame without temporal anti-aliasing leaves the history behind.
 		render(scene.Contents, 1);
-		PostProcessComponent& postProcess = scene.Contents.GetRegistry().get<PostProcessComponent>(scene.Contents.GetRegistry().view<PostProcessComponent>().front());
+		PostProcessComponent& postProcess = GetPostProcess(scene.Contents);
 		postProcess.AntiAliasingMethod = AntiAliasingMode::FXAA;
 		render(scene.Contents, 1);
 		CHECK_FALSE(renderer.GetStats().TemporalAntiAliasing);
@@ -333,7 +190,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
 		LoadAssets(assets);
-		EdgeScene scene(assets);
+		EdgeScene scene(assets, TemporalAntiAliasingPreset::Original);
 		SceneRenderer renderer = CreateRenderer("Edge");
 		renderer.SetViewportSize(c_Size, c_Size);
 
@@ -400,7 +257,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		SceneTestAssets assets;
 		LoadAssets(assets);
 		Scene scene;
-		AddTemporalPostProcess(scene);
+		AddTemporalPostProcess(scene, TemporalAntiAliasingPreset::Original);
 		const glm::vec3 background(0.05f, 0.05f, 0.05f);
 		Entity ground = AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(UnlitColor(glm::vec4(background, 1.0f))), glm::vec3(0.0f), "Ground");
 		ground.GetComponent<TransformComponent>().Scale = glm::vec3(40.0f);
@@ -459,10 +316,10 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
 		LoadAssets(assets);
-		TemporalScene scene;
+		TemporalScene scene(TemporalAntiAliasingPreset::Original);
 		// FXAA chosen: no history, no motion, no jitter.
-		TemporalScene fxaa;
-		PostProcessComponent& postProcess = fxaa.Contents.GetRegistry().get<PostProcessComponent>(fxaa.Contents.GetRegistry().view<PostProcessComponent>().front());
+		TemporalScene fxaa(TemporalAntiAliasingPreset::Original);
+		PostProcessComponent& postProcess = GetPostProcess(fxaa.Contents);
 		postProcess.AntiAliasingMethod = AntiAliasingMode::FXAA;
 		SceneRenderer renderer = CreateRenderer("FXAA");
 		renderer.SetViewportSize(c_Size, c_Size);
@@ -505,7 +362,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		SceneTestAssets assets;
 		LoadAssets(assets);
 		Scene scene;
-		PostProcessComponent& postProcess = AddTemporalPostProcess(scene);
+		PostProcessComponent& postProcess = AddTemporalPostProcess(scene, TemporalAntiAliasingPreset::Original);
 		postProcess.AmbientOcclusion = true;
 		postProcess.Exposure = -2.0f;
 		Entity sun = AddSun(scene, glm::normalize(glm::vec3(-0.3f, -1.0f, 0.0f)), 1.0f);
@@ -631,7 +488,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
 		LoadAssets(assets);
-		TemporalScene scene;
+		TemporalScene scene(TemporalAntiAliasingPreset::Original);
 		SceneRenderer cpu = CreateRenderer("CPU", GPUDrivenMode::Off);
 		SceneRenderer gpuDriven = CreateRenderer("GPU", GPUDrivenMode::Auto);
 		cpu.SetViewportSize(c_Size, c_Size);
