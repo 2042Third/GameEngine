@@ -2120,6 +2120,7 @@ namespace Strata
 		m_LightCandidates.clear();
 		m_Lights.clear();
 		m_LightBounds.clear();
+		m_LightRecordIndices.clear();
 		const RenderLights& lights = renderScene.GetLights();
 		m_GPULightsFrame = m_GPUDrivenFrame && m_LightCullPipeline && m_LightCompactPipeline;
 		if (m_GPULightsFrame)
@@ -2187,6 +2188,7 @@ namespace Strata
 			RenderData::LightData light = candidate.Data;
 			light.PositionRange = glm::vec4(glm::vec3(glm::dvec3(glm::vec3(light.PositionRange)) - cameraPosition), light.PositionRange.w);
 			m_Lights.push_back(light);
+			m_LightRecordIndices.push_back(candidate.Order);
 			const glm::vec3 relativeCenter(glm::dvec3(glm::vec3(candidate.Bounds)) - cameraPosition);
 			m_LightBounds.push_back(RenderData::LightBounds { glm::vec4(viewRotation * relativeCenter, candidate.Bounds.w) });
 		}
@@ -2563,6 +2565,18 @@ namespace Strata
 			m_Stats.LocalShadowViewsDrawn = 0;
 			m_Stats.LocalShadowViewsPending = 0;
 			degraded = true;
+		}
+		// The CPU's lights name their shadow slots (the GPU-driven path's light culling reads them from a table).
+		if (!m_GPULightsFrame && !m_LocalShadowLights.empty())
+		{
+			for (size_t index = 0; index < m_Lights.size(); index++)
+			{
+				for (uint32_t slot = 0; slot < m_LocalShadowLights.size(); slot++)
+				{
+					if (m_LocalShadowLights[slot].Record == m_LightRecordIndices[index] && m_LocalShadowLights[slot].Strength > 0.0f)
+						m_Lights[index].SpotAngles.z = static_cast<float>(slot + 1);
+				}
+			}
 		}
 		ResolveAssets(renderScene);
 		GatherDraws(renderScene, camera, !m_GPUDrivenFrame);

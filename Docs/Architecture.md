@@ -290,8 +290,8 @@ texture costs the driver about 0.1 ms, so every frame destroys what completed wi
 the oldest first, at least one) and every release as many as it hands over, which keeps the queue bounded without
 frames) and the blocking `ReadTexture`. `RenderScene` keeps a scene's render proxies in a `SpatialIndex`,
 and `SceneRenderer` extracts each frame's draws from it (`SceneRendererExtraction.cpp`, resolving assets through its
-`AssetResolveCache`; see [Render scene](#render-scene)). `SceneRenderer` draws a scene (light clustering, shadow cascades,
-depth/normal/entity-ID prepass, GTAO, forward PBR, sky, transparents, exposure, bloom, tone mapping, FXAA, then overlays
+`AssetResolveCache`; see [Render scene](#render-scene)). `SceneRenderer` draws a scene (light clustering, shadow cascades and
+point and spot lights' shadow views, depth/normal/entity-ID prepass, GTAO, forward PBR, sky, transparents, exposure, bloom, tone mapping, FXAA, then overlays
 and text) into render targets of its viewport size, which it hands to the `DeferredReleaseQueue` when it is resized
 (the viewport panel, the game window) or freed (captures); its output texture exists only once a frame needed it (one
 without a target, or composing overlays or text before copying into the target), so a game without text renders

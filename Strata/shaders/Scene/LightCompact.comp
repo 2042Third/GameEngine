@@ -18,6 +18,12 @@ layout(set = 0, binding = ST_SRV(20), std430) readonly buffer LightGroupCountBuf
 {
 	uint u_LightGroupCounts[];
 };
+// Per light record its shadow slot plus one (0: no shadow): the renderer's shadowed point and spot lights (SceneRenderer's
+// local shadows).
+layout(set = 0, binding = ST_SRV(21), std430) readonly buffer LightShadowSlotBuffer
+{
+	uint u_LightShadowSlots[];
+};
 layout(set = 0, binding = ST_UAV(3), std430) writeonly buffer VisibleLightBuffer
 {
 	LightData o_Lights[];
@@ -84,7 +90,7 @@ void main()
 		data.PositionRange = vec4(light.PositionRange.xyz - u_Frame.CameraPosition.xyz, light.PositionRange.w);
 		data.Color = light.Color;
 		data.DirectionType = light.DirectionType;
-		data.SpotAngles = vec4(light.SpotAngles.xy, 0.0, 0.0);
+		data.SpotAngles = vec4(light.SpotAngles.xy, float(u_LightShadowSlots[record]), 0.0);
 		o_Lights[position] = data;
 		vec3 center = light.Bounds.xyz - u_Frame.CameraPosition.xyz;
 		o_LightBounds[position] = vec4(mat3(u_Frame.View) * center, light.Bounds.w);

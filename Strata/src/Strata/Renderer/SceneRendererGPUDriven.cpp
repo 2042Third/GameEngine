@@ -347,6 +347,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(18),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(19),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(20),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(21), // Per record its shadow slot plus one
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(3),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(4),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(5),
@@ -377,14 +378,18 @@ namespace Strata
 	{
 		const uint32_t groups = (m_GPULightRecords + RenderData::c_LightGroupSize - 1) / RenderData::c_LightGroupSize;
 		bool recreated = false;
+		bool slotsRecreated = false;
 		if (!EnsureBufferCapacity(m_LightVisibleBuffer, m_GPULightRecords, sizeof(uint32_t), "LightVisible", recreated, BufferKind::StructuredUAV)
-			|| !EnsureBufferCapacity(m_LightGroupCountBuffer, groups, sizeof(uint32_t), "LightGroupCounts", recreated, BufferKind::StructuredUAV))
+			|| !EnsureBufferCapacity(m_LightGroupCountBuffer, groups, sizeof(uint32_t), "LightGroupCounts", recreated, BufferKind::StructuredUAV)
+			|| !EnsureBufferCapacity(m_LightShadowSlotBuffer, m_GPULightRecords, sizeof(uint32_t), "LightShadowSlots", slotsRecreated))
 			return false;
+		if (slotsRecreated)
+			m_LightShadowSlotsWritten = 0; // A new buffer holds nothing yet
 		nvrhi::IBuffer* records = m_SceneGPU->GetLightRecordBuffer();
 		if (!records)
 			return false;
-		const std::array<const nvrhi::IBuffer*, 6> bound = { records, m_LightVisibleBuffer.Get(), m_LightGroupCountBuffer.Get(), m_LightBuffer.Get(),
-			m_LightBoundsBuffer.Get(), m_LightCountBuffer.Get() };
+		const std::array<const nvrhi::IBuffer*, 7> bound = { records, m_LightVisibleBuffer.Get(), m_LightGroupCountBuffer.Get(), m_LightBuffer.Get(),
+			m_LightBoundsBuffer.Get(), m_LightCountBuffer.Get(), m_LightShadowSlotBuffer.Get() };
 		if (m_LightCullBindingSet && m_LightCompactBindingSet && bound == m_LightCullBound)
 			return true;
 		nvrhi::BindingSetDesc cullSet;
@@ -403,6 +408,7 @@ namespace Strata
 			nvrhi::BindingSetItem::StructuredBuffer_SRV(18, records),
 			nvrhi::BindingSetItem::StructuredBuffer_SRV(19, m_LightVisibleBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_SRV(20, m_LightGroupCountBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_SRV(21, m_LightShadowSlotBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_LightBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(4, m_LightBoundsBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(5, m_LightCountBuffer),
@@ -424,6 +430,7 @@ namespace Strata
 			commandList->clearBufferUInt(m_LightCountBuffer, 0);
 			return;
 		}
+		UploadLightShadowSlots(commandList);
 		RenderData::LightCullParameters parameters;
 		// The view in camera-relative space, as the light records are tested (their positions minus the camera's).
 		const Frustum relativeFrustum(camera.Projection * GetRelativeView(camera));
@@ -443,6 +450,47 @@ namespace Strata
 		commandList->setComputeState(state);
 		commandList->setPushConstants(&parameters, sizeof(parameters));
 		commandList->dispatch(parameters.GroupCount, 1, 1);
+	}
+
+	void SceneRenderer::UploadLightShadowSlots(nvrhi::ICommandList* commandList)
+	{
+		// The records of the previous frame's shadowed lights are cleared, the frame's set, and the range between the first and
+		// the last change written; entries the buffer never held are written as zeros first.
+		const uint32_t records = m_GPULightRecords;
+		if (m_LightShadowSlots.size() < records)
+			m_LightShadowSlots.resize(records, 0u);
+		uint32_t first = std::min(m_LightShadowSlotsWritten, records);
+		uint32_t end = records;
+		if (first == records)
+		{
+			first = records;
+			end = 0;
+		}
+		else
+		{
+			std::fill(m_LightShadowSlots.begin() + first, m_LightShadowSlots.begin() + records, 0u);
+		}
+		const auto change = [&](uint32_t record, uint32_t value)
+		{
+			if (record >= records || m_LightShadowSlots[record] == value)
+				return;
+			m_LightShadowSlots[record] = value;
+			first = std::min(first, record);
+			end = std::max(end, record + 1);
+		};
+		for (const uint32_t record : m_LightShadowSlotRecords)
+			change(record, 0u);
+		m_LightShadowSlotRecords.clear();
+		for (uint32_t slot = 0; slot < m_LocalShadowLights.size(); slot++)
+		{
+			if (m_LocalShadowLights[slot].Strength <= 0.0f)
+				continue;
+			change(m_LocalShadowLights[slot].Record, slot + 1);
+			m_LightShadowSlotRecords.push_back(m_LocalShadowLights[slot].Record);
+		}
+		if (end > first)
+			commandList->writeBuffer(m_LightShadowSlotBuffer, m_LightShadowSlots.data() + first, (end - first) * sizeof(uint32_t), first * sizeof(uint32_t));
+		m_LightShadowSlotsWritten = std::max(m_LightShadowSlotsWritten, records);
 	}
 
 	uint32_t SceneRenderer::GetBucketSlots(uint32_t bucket) const

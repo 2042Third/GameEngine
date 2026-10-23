@@ -190,7 +190,7 @@ namespace Strata
 			glm::vec4 PositionRange; // xyz: camera-relative world position (as uploaded), w: range
 			glm::vec4 Color;         // rgb: color * intensity, w: 1 / range^2
 			glm::vec4 DirectionType; // xyz: direction the light travels, w: type
-			glm::vec4 SpotAngles;    // x: cos(inner), y: cos(outer)
+			glm::vec4 SpotAngles;    // x: cos(inner), y: cos(outer), z: its shadow slot plus one (0: no shadow; LocalShadowData)
 		};
 		static_assert(sizeof(LightData) == 64);
 

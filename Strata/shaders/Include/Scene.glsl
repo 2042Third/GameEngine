@@ -263,7 +263,7 @@ struct LightData
 	vec4 PositionRange;  // xyz: camera-relative world position, w: range
 	vec4 Color;          // rgb: color * intensity, w: 1 / range^2
 	vec4 DirectionType;  // xyz: direction the light travels, w: type (ST_LIGHT_*)
-	vec4 SpotAngles;     // x: cos(inner cone), y: cos(outer cone)
+	vec4 SpotAngles;     // x: cos(inner cone), y: cos(outer cone), z: its shadow slot plus one (0: no shadow; Include/LocalShadows.glsl)
 };
 
 layout(set = 0, binding = ST_SRV(2), std430) readonly buffer LightBuffer

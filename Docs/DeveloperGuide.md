@@ -2407,7 +2407,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 ### Scene renderer and lighting
 
 - `SceneRenderer` draws a `Scene` from a `SceneCamera` into its output texture or a given framebuffer:
-  light clustering, directional shadow cascades, depth/normal/entity-ID prepass (with motion vectors when asked or for
+  light clustering, directional shadow cascades and point and spot lights' shadow views ("Local light shadows"),
+  depth/normal/entity-ID prepass (with motion vectors when asked or for
   TAA: "Motion vectors and TAA"), ground-truth ambient
   occlusion, forward PBR (opaque surfaces with an EQUAL depth test and forced early depth testing), sky,
   transparent surfaces (back to front), each fogged by the scene's height fog ("Height fog"), the temporal
@@ -2700,7 +2701,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   slices), a full cluster keeping its most relevant ones (on the GPU-driven path ranked in the shader:
   `GetLightRelevance`, `Include/Clusters.glsl`), and `Forward.frag` loops only over its pixel's cluster. The GPU's light
   counts come back with its other counts (`SceneRendererGPUStats::Lights`, `CulledLights`; `Tests::GetLightCounts`).
-  Only the directional light casts shadows.
+  The directional light's shadows are cascades; point and spot lights' are views in an atlas ("Local light shadows").
 - Shadows: cascade depth ranges are fitted to the casters toward the light (casters beyond
   `c_MaxShadowCasterDistance` are pancaked onto the near plane), on the GPU on both paths (`Scene/CascadeFit.comp` writes
   `u_Cascades`, which the shadow and forward shaders read: never put cascade projections back into `FrameConstants`; the
@@ -2730,6 +2731,47 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   Multiply coverage into the result and discard once at the end, as `GameUI/UIQuad.frag` does, or sample every texture
   before the discards, as `Scene/Forward.frag` and `Scene/DepthPrepass.frag` do. `Architecture.Shaders` checks every
   fragment shader's source.
+
+### Local light shadows
+
+- Point and spot lights cast shadows with `CastShadows` (off by default, so scenes saved before it render as they did), with
+  `ShadowBias` and `ShadowNormalBias` (texels of the light's tiles) and `ShadowFilterRadius` (texels, at most 8). A renderer
+  gives the `MaxShadowedLocalLights` most relevant shadowed lights in view (16, at most `RenderData::
+  c_MaxShadowedLocalLights`; ranked as the light clusters rank lights) tiles of one D32 atlas
+  (`SceneRendererSpecification::LocalShadowAtlasSize`: 4096 texels, 64 MiB; made with the first shadowed light it draws,
+  released with its render targets, `GetLocalShadowAtlas`): a spot light one perspective view (at most 80 degrees each way
+  from its axis), a point light six, a cube's faces, which the shader picks by the major axis toward the pixel. Each view
+  is widened by a guard band of its filter's reach (`ceil(ShadowFilterRadius) + 1` texels), so the filter never leaves the
+  face it samples and faces meet without a seam. Tiles are 128 to 1024 texels from a quadtree (`ShadowAtlasAllocator`),
+  sized by the light's range on screen with hysteresis; while they do not fit, the least relevant lights' tiles step down
+  first, in rounds (`FitTileSizes`), and lights that do not fit even at 128 cast none.
+- Views are cached like the cascades: a view is drawn again only when its key changes (the light's position, direction,
+  range and cone, its tile, its guard band), when what casters are drawn with changes (`LocalShadowContent`: the scene's
+  GPU copy's tables and deferred proxies, the geometry pool's content, the texture table's entries while materials are
+  alpha-masked, read through `TextureTable::GetEntryVersion` so renderers of one scene decide alike), or when a proxy whose
+  bounds before or after its change reach the view changes. The bounds of every proxy within a light's range are recorded
+  when its views are drawn, so even a caster's first move redraws only the views it reaches; beyond 65,536 followed
+  proxies the following starts over. The camera is not part of a view's key: the matrices that draw and sample a tile are
+  made relative to the frame's camera in double from what the tile was drawn with, so a light that moved keeps its old
+  shadow until its views are drawn again.
+- `SpreadLightingUpdates` (on by default) draws at most `LocalShadowViewsPerFrame` (12) views per frame, the nearest
+  lights' first; a light casts its shadow once all its views hold content and then fades it in over
+  `SceneRenderer::c_LocalShadowFadeFrames` frames, and the lights ranked just above the most relevant one left out fade by
+  their margin over it. Off (renderers of single images), every view that is not up to date is drawn in the frame and
+  nothing fades. `CacheLocalShadows` off draws every view of every shadowed light every frame (the perf tests' worst case).
+  `SceneRendererStats::LocalShadowLights`, `LocalShadowViewsDrawn` and `LocalShadowViewsPending` say what a frame did.
+- Which views a frame draws is the CPU's decision on both paths (`FindLocalShadowCasters`, one job per drawn light: a
+  sphere query of its range, then the exact tests per view on the CPU path); what each view draws is decided twice
+  ("GPU-driven path"). The views draw in `GPU.Shadows` with `Scene/LocalShadowMesh(Skinned).vert` (perspective, no
+  pancaking) from `RenderData::LocalShadowData` (scene set SRV 13, a slot per light: six camera-relative matrices, the
+  tiles, the biases and the light's strength); a redrawn tile is first cleared by a quad at depth 0, since a clear would
+  also clear the cached tiles. The forward passes sample the atlas (SRV 8; the shadow passes bind a dummy) through the
+  cascades' comparison sampler, 16 rotated taps kept inside the tile, for lights whose `LightData::SpotAngles.z` names their
+  slot plus one: the CPU path writes it with the frame's lights, `Scene/LightCompact.comp` from the renderer's slot table per
+  light record (light-culling SRV 21). The depth bias moves the lookup toward the light and the normal bias off the surface,
+  both in texels at the surface's depth.
+- Cost: the views drawn (none in a still scene), their casters' culling (a sphere query per drawn light on the CPU, or the
+  GPU's tests per view), and 16 comparison taps per pixel for each shadowed light reaching it.
 
 ### Light units and exposure
 

@@ -6,6 +6,8 @@
 #include "Include/MaterialTextures.glsl"
 #include "Include/PBR.glsl"
 #include "Include/Shadows.glsl"
+#define ST_LOCAL_SHADOW_SAMPLING
+#include "Include/LocalShadows.glsl"
 #include "Include/Clusters.glsl"
 #include "Include/Fog.glsl"
 
@@ -49,8 +51,8 @@ vec3 GetShadingNormal(MaterialData material, vec2 uv)
 	return (mappedLength > 1e-5 ? mapped / mappedLength : normal) * side;
 }
 
-// The lit surface's color: the sun with its shadow, the punctual lights of the pixel's cluster, image-based or constant
-// ambient light and the emission.
+// The lit surface's color: the sun with its shadow, the punctual lights of the pixel's cluster (those with shadows through
+// their views, Include/LocalShadows.glsl), image-based or constant ambient light and the emission.
 vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicRoughness, vec3 shadingNormal, float occlusion, MaterialData material)
 {
 	SurfaceData surface;
@@ -96,6 +98,13 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 				attenuation *= SpotAttenuation(-toLight, light.DirectionType.xyz, light.SpotAngles.x, light.SpotAngles.y);
 			if (attenuation <= 0.0)
 				continue;
+			// A shadowed light's slot plus one (SceneRenderer's local shadows).
+			uint shadowSlot = uint(light.SpotAngles.z + 0.5);
+			if (shadowSlot > 0u)
+			{
+				vec3 geometricNormal = normalize(v_Normal) * (gl_FrontFacing ? 1.0 : -1.0);
+				attenuation *= SampleLocalShadow(shadowSlot - 1u, surface.Position, geometricNormal, gl_FragCoord.xy);
+			}
 			color += EvaluateLight(surface, normalize(toLight), light.Color.rgb * attenuation);
 		}
 	}

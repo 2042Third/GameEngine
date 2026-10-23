@@ -1131,6 +1131,8 @@ namespace Strata
 		void CreateLightCullResources();
 		bool EnsureLightCullBindingSets();
 		void RunGPULightCulling(nvrhi::ICommandList* commandList, const SceneCamera& camera);
+		// Writes what changed of the light records' shadow slots (the frame's shadowed lights) into their table.
+		void UploadLightShadowSlots(nvrhi::ICommandList* commandList);
 		// After the first phase's prepass: the depth pyramid, the view's second phase (what the first did not draw that is
 		// visible against it) and its prepass draws; then copies the counters for the statistics.
 		void RunOcclusionPhase(nvrhi::ICommandList* commandList);
@@ -1448,6 +1450,7 @@ namespace Strata
 		// Lights gathered per frame (kept between frames to reuse the allocations)
 		std::vector<RenderData::LightData> m_Lights;
 		std::vector<RenderData::LightBounds> m_LightBounds;
+		std::vector<uint32_t> m_LightRecordIndices; // Per entry of m_Lights: its RenderLights record
 		std::vector<LightCandidate> m_LightCandidates;
 
 		// Extraction (see SceneRendererExtraction.cpp). Slots are those of the render scene the state belongs to.
@@ -1523,7 +1526,13 @@ namespace Strata
 		nvrhi::BindingSetHandle m_LightCompactBindingSet;
 		nvrhi::BufferHandle m_LightVisibleBuffer;    // Per light record: whether it is in view
 		nvrhi::BufferHandle m_LightGroupCountBuffer; // Per work group of records: its lights in view
-		std::array<const nvrhi::IBuffer*, 6> m_LightCullBound = {}; // The buffers the binding sets name
+		std::array<const nvrhi::IBuffer*, 7> m_LightCullBound = {}; // The buffers the binding sets name
+		// Per light record its shadow slot plus one (Scene/LightCompact.comp): what the buffer holds, the records set in it, and
+		// how many of its entries were written since it was made.
+		nvrhi::BufferHandle m_LightShadowSlotBuffer;
+		std::vector<uint32_t> m_LightShadowSlots;
+		std::vector<uint32_t> m_LightShadowSlotRecords;
+		uint32_t m_LightShadowSlotsWritten = 0;
 		bool m_GPULightsFrame = false;               // The frame's point and spot lights are culled on the GPU
 		uint32_t m_GPULightRecords = 0;              // The light records the frame's culling reads
 		nvrhi::BufferHandle m_GPUDrawListBuffer;     // The draw list culling writes (view and cascades)
