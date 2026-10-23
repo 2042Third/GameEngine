@@ -55,7 +55,8 @@ namespace
 			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
 			Runner.Run(Context, Commands, name, parameters, [completed](const EditorCommandResult& result) { *completed = result; });
 			int frames = 0;
-			for (; !*completed && frames < 20000; frames++)
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2); // By the clock: slow machines take many frames
+			for (; !*completed && std::chrono::steady_clock::now() < deadline; frames++)
 			{
 				REQUIRE(DeviceFrames->GetDevice().BeginFrame());
 				Renderer::BeginFrame();

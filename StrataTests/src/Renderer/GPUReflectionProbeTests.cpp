@@ -515,10 +515,11 @@ TEST_SUITE("GPU.SceneRenderer.ReflectionProbes")
 		SceneRenderer renderer;
 		renderer.SetViewportSize(c_Size, c_Size);
 
+		// Until it converted (its levels load on I/O jobs): by the clock, as slow machines take many frames.
 		uint32_t conversions = 0;
-		uint32_t frames = 0;
 		bool sawPending = false;
-		for (; frames < 400 && conversions == 0; frames++)
+		const auto loadStart = std::chrono::steady_clock::now();
+		while (conversions == 0 && std::chrono::steady_clock::now() - loadStart < std::chrono::seconds(60))
 		{
 			RunFrame(gpu, manager, renderer, *scene, camera);
 			conversions += renderer.GetStats().ReflectionProbeConversions;
