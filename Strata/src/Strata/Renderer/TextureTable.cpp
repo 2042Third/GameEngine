@@ -36,10 +36,17 @@ namespace Strata
 
 	void TextureTable::MarkDirtyLocked(uint32_t index)
 	{
+		m_EntryVersion++;
 		if (m_Dirty[index])
 			return;
 		m_Dirty[index] = 1;
 		m_DirtyList.push_back(index);
+	}
+
+	uint64_t TextureTable::GetEntryVersion() const
+	{
+		std::scoped_lock lock(m_Mutex);
+		return m_EntryVersion;
 	}
 
 	uint32_t TextureTable::Allocate(uint32_t entry)

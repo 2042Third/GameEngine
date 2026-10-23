@@ -181,6 +181,7 @@ namespace Strata
 		ST_PROFILE_STAGE("Render.Extract");
 		m_LocalShadowViews.clear();
 		m_LocalShadowCasters.clear();
+		m_LocalShadowCandidates.clear();
 		// The atlas holds the shadows of one render scene: another one (also a clone, entering Play) starts without them.
 		if (renderScene.GetId() != m_LocalShadowSceneId)
 		{
@@ -371,7 +372,9 @@ namespace Strata
 		content.RenderSceneId = renderScene.GetId();
 		content.TablesVersion = m_SceneGPU->GetTablesVersion();
 		content.PoolContentVersion = Renderer::GetGeometryPool()->GetContentVersion();
-		content.TextureUploadVersion = m_SceneGPU->HasAlphaMaskedMaterials() ? Renderer::GetTextureTable().GetUploadVersion() : 0;
+		// Entries as the frame's uploads will write them: what changed since another renderer's frame uploaded them is seen
+		// alike by every renderer of the scene.
+		content.TextureEntryVersion = m_SceneGPU->HasAlphaMaskedMaterials() ? Renderer::GetTextureTable().GetEntryVersion() : 0;
 		// New proxies whose upload waits (NewInstanceBytesPerFrame) appear later without a change of their own.
 		content.DeferredFrame = m_SceneGPU->GetDeferredProxies() > 0 ? m_RenderCount + 1 : 0;
 		const bool contentChanged = !(content == m_LocalShadowContent);
@@ -574,7 +577,16 @@ namespace Strata
 				spatialIndex.QuerySphere(glm::vec3(position), position.w * c_CasterQueryScale + c_CasterQueryMargin, job.Candidates);
 				job.ViewCasters.resize(viewCount);
 				if (!exactCasters)
+				{
+					// The GPU's culling finds the casters: the animators of the skinned proxies within the range are reported
+					// (their shadows may move).
+					for (const uint32_t proxy : job.Candidates)
+					{
+						if (skins && renderScene.GetSkinAnimator(proxy) != entt::null)
+							job.Animators.push_back(renderScene.GetSkinAnimator(proxy));
+					}
 					continue;
+				}
 				// Camera-relative, in float, as the GPU's culling takes them (Scene/Cull.comp).
 				const glm::vec3 lightRelative(glm::dvec3(glm::vec3(position)) - origin);
 				const float range = position.w;
@@ -620,15 +632,20 @@ namespace Strata
 			}
 		});
 
-		// Merged in order: the views' casters, the marks, the animators and the proxies to follow.
+		// Merged in order: the views' casters, the marks, the animators and the proxies to follow (and to bound the GPU's draws
+		// with).
 		bool overflowed = false;
 		for (uint32_t group = 0; group < lightGroups.size(); group++)
 		{
 			LocalShadowJob& job = jobs[group];
 			const auto [firstView, viewCount] = lightGroups[group];
+			const uint32_t firstCandidate = static_cast<uint32_t>(m_LocalShadowCandidates.size());
+			m_LocalShadowCandidates.insert(m_LocalShadowCandidates.end(), job.Candidates.begin(), job.Candidates.end());
 			for (uint32_t offset = 0; offset < viewCount; offset++)
 			{
 				LocalShadowDrawView& drawView = m_LocalShadowViews[firstView + offset];
+				drawView.FirstCandidate = firstCandidate;
+				drawView.CandidateCount = static_cast<uint32_t>(job.Candidates.size());
 				drawView.FirstCaster = static_cast<uint32_t>(m_LocalShadowCasters.size());
 				drawView.CasterCount = static_cast<uint32_t>(job.ViewCasters[offset].size());
 				for (const auto& [proxy, fraction] : job.ViewCasters[offset])
@@ -663,12 +680,12 @@ namespace Strata
 		}
 	}
 
-	void SceneRenderer::GatherLocalShadowDraws(RenderScene& renderScene)
+	void SceneRenderer::GatherLocalShadowDraws(RenderScene& renderScene, bool casterDraws)
 	{
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Extract");
 		m_LocalShadowBatches.clear();
-		if (m_LocalShadowViews.empty())
+		if (m_LocalShadowViews.empty() || !casterDraws)
 			return;
 		const std::span<const RenderData::InstanceData> instances = renderScene.GetInstances();
 		const bool batchAcrossMaterials = m_Specification.BatchAcrossMaterials;
@@ -788,6 +805,12 @@ namespace Strata
 
 	void SceneRenderer::ClearLocalShadowTile(nvrhi::ICommandList* commandList, const ShadowAtlasTile& tile)
 	{
+		if (!m_LocalShadowAtlasCleared)
+		{
+			// A new atlas: its tiles hold nothing yet (the far plane everywhere).
+			commandList->clearDepthStencilTexture(m_LocalShadowAtlas, nvrhi::AllSubresources, true, 0.0f, false, 0);
+			m_LocalShadowAtlasCleared = true;
+		}
 		if (!m_LocalShadowClearPipeline)
 		{
 			// The fullscreen triangle lies at depth 0, the far plane (reversed-Z): written into the tile whatever it held.
@@ -810,12 +833,6 @@ namespace Strata
 
 	void SceneRenderer::DrawLocalShadows(nvrhi::ICommandList* commandList)
 	{
-		if (!m_LocalShadowAtlasCleared)
-		{
-			// A new atlas: its tiles hold nothing yet (the far plane everywhere).
-			commandList->clearDepthStencilTexture(m_LocalShadowAtlas, nvrhi::AllSubresources, true, 0.0f, false, 0);
-			m_LocalShadowAtlasCleared = true;
-		}
 		const uint32_t firstArgument = static_cast<uint32_t>(m_OpaqueBatches.size() + m_TransparentBatches.size() + m_ShadowBatches.size() + m_SelectionBatches.size());
 		for (const LocalShadowDrawView& drawView : m_LocalShadowViews)
 		{

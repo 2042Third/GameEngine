@@ -184,6 +184,66 @@ TEST_SUITE("GPU.SceneRenderer.Feedback")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Feedback marks the casters of point and spot lights' shadow views outside the view as the CPU's walk does")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		FeedbackWorld world;
+		// A shadowed lamp at the view's left edge: its range reaches into the view, and over the cube of the second row's first
+		// column, which lies out of view and beyond the prefetch distance (its material is looked up only as a caster's).
+		Entity lamp = AddPointLight(world.World, glm::vec3(-12.0f, 1.5f, -6.0f), glm::vec3(1.0f), 20.0f, 5.0f);
+		lamp.GetComponent<PointLightComponent>().CastShadows = true;
+		// Every view drawn every frame, so that every frame marks its casters.
+		SceneRendererSpecification feedbackSpecification = Specification(true);
+		SceneRendererSpecification marksSpecification = Specification(false);
+		feedbackSpecification.CacheLocalShadows = false;
+		marksSpecification.CacheLocalShadows = false;
+		SceneRenderer feedback(feedbackSpecification);
+		SceneRenderer marks(marksSpecification);
+		feedback.SetViewportSize(c_Size, c_Size);
+		marks.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = View(glm::vec3(0.0f, 7.0f, 9.0f), glm::vec3(0.0f, 0.0f, -8.0f));
+		const glm::vec3 outside = world.Cubes[6].GetComponent<TransformComponent>().Translation;
+		REQUIRE(outside == glm::vec3(-15.0f, 0.0f, -6.0f));
+		REQUIRE_FALSE(Frustum(camera.Projection * camera.View).IsAABBVisible(AABB(outside - 0.5f, outside + 0.5f)));
+		REQUIRE(glm::length(outside - camera.Position) > c_PrefetchDistance + 1.0f);
+
+		const auto settle = [&]()
+		{
+			bool settled = false;
+			for (int frame = 0; frame < 600 && !settled; frame++)
+			{
+				Frame(gpu, world, { &feedback, &marks }, camera);
+				feedback.ResolveGPUStats(true);
+				settled = feedback.GetStats().FeedbackRequests && feedback.GetStats().PendingAssets == 0 && marks.GetStats().PendingAssets == 0
+					&& !world.Manager->HasPendingLoads();
+			}
+			REQUIRE(settled);
+			Frame(gpu, world, { &feedback, &marks }, camera);
+		};
+		settle();
+		REQUIRE(feedback.GetStats().FeedbackRequests);
+		CHECK(marks.GetStats().LocalShadowViewsDrawn == 6);
+		CHECK(feedback.GetStats().LocalShadowViewsDrawn == 6);
+		const uint32_t withShadows = marks.GetStats().GetAssetCalls;
+		CHECK(feedback.GetStats().GetAssetCalls == withShadows);
+
+		// Without the lamp's shadows its casters are not looked up: fewer lookups, on both.
+		lamp.GetComponent<PointLightComponent>().CastShadows = false;
+		lamp.MarkModified<PointLightComponent>();
+		for (int frame = 0; frame < 6; frame++)
+		{
+			Frame(gpu, world, { &feedback, &marks }, camera);
+			feedback.ResolveGPUStats(true);
+		}
+		REQUIRE(feedback.GetStats().FeedbackRequests);
+		CHECK(marks.GetStats().GetAssetCalls < withShadows);
+		CHECK(feedback.GetStats().GetAssetCalls == marks.GetStats().GetAssetCalls);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Camera cuts and assets loaded since the feedback's frame run the CPU's walk until feedback has seen them")
 	{
 		GPUContext gpu;

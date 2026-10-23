@@ -2575,6 +2575,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   proxy change does. Tests that count shadow draws expect at most the CPU path's counts once
   `SceneRendererStats::CachedCascadeMask` is not 0, and tests of the cascades' culling turn caching off. The occlusion test must stay conservative: a new shadow bias toward the light, or anything
   else that lets a hidden caster change the map, breaks it.
+- Point and spot lights' shadow views ("Local light shadows") are culled by `ST_CULL_SHADOW` after the cascades. Which views a
+  frame draws is the CPU's decision on both paths (`FindLocalShadowCasters`, uploaded as `RenderData::CullLocalShadowView` to
+  `u_LocalShadowViews`); what each draws (the light's range, the view's frustum, sub-texel casters, levels of detail for a
+  viewport of the tile's height) exists twice like the cascades' tests, camera-relative on both. Their buckets come last
+  (`c_CullLocalShadowBucketsPerView` per place in a batch of `c_CullMaxLocalShadowViews`): a frame that draws more views culls
+  them a batch at a time between the batches' draws (`RunLocalShadowCulling`: `CullBuild.comp`'s reset mode clears the
+  local buckets, and the feedback is packed after the last batch's counting). Their draw slots are bounded by the records
+  of the meshes within each light's range (the CPU's sphere query per drawn light); `SceneRendererGPUStats::
+  LocalShadowInstances` and `LocalShadowDraws` count what they drew (`Tests::DrawnCounts`), with no occlusion phases.
 - Buckets the frame cannot have get no storage: the CPU lists the present ones (mirrored proxies, double-sided and
   alpha-masked materials, the arenas of its meshes, posed proxies; `RenderSceneStats::MirroredProxies`, `PosedProxies`)
   and gives each a dense index; a bucket's draw slots are its arena's LOD records among the meshes the CPU's marks found

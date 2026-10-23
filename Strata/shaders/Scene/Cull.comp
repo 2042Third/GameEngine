@@ -6,7 +6,8 @@
 #include "Include/TextureStreaming.glsl"
 
 // GPU culling, one thread per render proxy: the view's frustum and screen-size tests, or with ST_CULL_SHADOW
-// (registered as Scene/CullShadow.comp) the shadow cascades' boxes and sub-texel test, then per instance its material
+// (registered as Scene/CullShadow.comp) the shadow cascades' boxes and sub-texel test and the local shadow views' (point and
+// spot lights: range, frustum and sub-texel tests, a batch of views per pass), then per instance its material
 // (transparent ones are the CPU's), its level of detail (ChooseLOD, Include/LODSelection.glsl) and its bucket. The decisions are the
 // CPU path's (SceneRendererExtraction.cpp: CullView, FindShadowCasters, GatherDraws, GatherShadowDraws) on the same data.
 //
@@ -24,17 +25,24 @@
 // distance, in the view (frustum and size tests) or casting into a cascade, whether their meshes are loaded or not
 // (unloaded ones are placed by their recorded bounds), with the largest projected size and, for textured materials, UV
 // pixels. CullFeedback.comp packs the touched slots for the CPU's requests (SceneRenderer::ApplyFeedback).
+//
+// The local shadow views a frame draws (u_LocalShadowViews) are culled in batches of at most ST_CULL_MAX_LOCAL_VIEWS: the
+// first with the cascades, later ones (frames that draw more views) by passes over the local views alone (ST_CULL_MODE_LOCAL),
+// each batch's draws made after the previous batch's were drawn.
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform CullParameters
 {
-	uint Mode; // Bit 0: write the draw list (else count); bit 1: the second phase (occlusion culling) of the view or the cascades
+	// Bit 0: write the draw list (else count); bit 1: the second phase (occlusion culling) of the view or the cascades; bit 3: the
+	// local shadow views alone (no cascades); bits 8-15: the batch's first local shadow view, bits 16-23 its views
+	uint Mode;
 } u_Parameters;
 
 #define ST_CULL_MODE_WRITE        1u
 #define ST_CULL_MODE_SECOND_PHASE 2u
-#define ST_SHARED_COUNTERS (ST_COUNTER_OCCLUDED_CASTERS + 1)
+#define ST_CULL_MODE_LOCAL        8u
+#define ST_SHARED_COUNTERS (ST_COUNTER_LOCAL_SHADOW_INSTANCES + 1)
 
 bool IsCounting()
 {
@@ -321,6 +329,101 @@ void EmitShadowInstances(GPUProxy proxy, GeometryEntry entry, float fraction, ui
 		}
 	}
 }
+
+// A caster's draws into the local shadow view `view` of the batch, its levels chosen as for a viewport of the view's tile
+// (`errorThreshold`).
+void EmitLocalShadowInstances(GPUProxy proxy, GeometryEntry entry, float fraction, float errorThreshold, uint geometry, uint mirrored, uint view)
+{
+	for (uint submesh = 0u; submesh < proxy.InstanceCount; submesh++)
+	{
+		uint instance = proxy.FirstInstance + submesh;
+		uint materialSlot = u_CullInstances[instance].MaterialIndex;
+		uint material = materialSlot < u_Cull.MaterialSlotCount ? u_MaterialFlags[materialSlot] : 0u;
+		if ((material & ST_CULL_MATERIAL_AVAILABLE) == 0u || (material & ST_CULL_MATERIAL_TRANSPARENT) != 0u)
+			continue;
+		GeometrySubmesh geometrySubmesh = u_GeometrySubmeshes[entry.FirstSubmesh + submesh];
+		uint lod = ChooseLODFor(geometrySubmesh, fraction, errorThreshold);
+		uint bucket = mirrored | ((material & ST_CULL_MATERIAL_DOUBLE_SIDED) != 0u ? 2u : 0u) | (geometry << 2)
+			| ((material & ST_CULL_MATERIAL_ALPHA_MASK) != 0u ? ST_CULL_SHADOW_ALPHA_MASK_BUCKET : 0u);
+		Emit(instance, ST_CULL_FIRST_LOCAL_BUCKET + view * ST_CULL_LOCAL_BUCKETS + bucket, geometrySubmesh.FirstLOD + lod);
+		Count(ST_COUNTER_LOCAL_SHADOW_INSTANCES);
+	}
+}
+
+// The local shadow views of the pass's batch a caster is drawn into, as SceneRenderer::FindLocalShadowCasters decides on the CPU
+// path: its box reaches the light's range and lies in the view's frustum (camera-relative), and spans at least a texel of the
+// view's tile (casters marked for feedback like the cascades', whether their meshes are loaded or not).
+void CullLocalShadowViews(GPUProxy proxy, bool meshDrawable, GeometryEntry entry, uint geometry, uint mirrored, bool feedback)
+{
+	uint first = (u_Parameters.Mode >> 8) & 0xFFu;
+	uint count = (u_Parameters.Mode >> 16) & 0xFFu;
+	if (count == 0u)
+		return;
+	vec3 relativeMin = proxy.WorldMin - u_Cull.CameraPosition.xyz;
+	vec3 relativeMax = proxy.WorldMax - u_Cull.CameraPosition.xyz;
+	vec3 center = (proxy.WorldMin + proxy.WorldMax) * 0.5;
+	float radius = length((proxy.WorldMax - proxy.WorldMin) * 0.5);
+	bool marked = false;
+	for (uint index = 0u; index < count; index++)
+	{
+		CullLocalShadowView view = u_LocalShadowViews[first + index];
+		vec3 offset = clamp(view.RelativeLight.xyz, relativeMin, relativeMax) - view.RelativeLight.xyz;
+		if (dot(offset, offset) > view.Light.w * view.Light.w || !IsBoxInPlanes(relativeMin, relativeMax, view.Planes))
+			continue;
+		float fraction = radius / (max(length(center - view.Light.xyz), view.RelativeLight.w) * view.Parameters.x);
+		if (fraction * view.Parameters.y < 1.0)
+		{
+			Count(ST_COUNTER_SUB_TEXEL_CASTERS);
+			continue;
+		}
+		if (feedback && !marked)
+		{
+			MarkMeshFeedback(proxy.MeshSlot, ST_FEEDBACK_SHADOW, 0.0);
+			MarkProxyMaterials(proxy, ST_FEEDBACK_SHADOW, false, 0.0, entry);
+			marked = true;
+		}
+		if (meshDrawable)
+			EmitLocalShadowInstances(proxy, entry, fraction, view.Parameters.z, geometry, mirrored, index);
+	}
+}
+
+// The cascades' part of a caster's culling (the first phase, or every cascade without occlusion culling).
+void CullCascades(uint proxyIndex, GPUProxy proxy, bool meshDrawable, GeometryEntry entry, float fraction, uint geometry, uint mirrored, bool feedback)
+{
+	vec3 lightMin;
+	vec3 lightMax;
+	uint cascadeMask = GetCasterCascades(proxy, true, lightMin, lightMax);
+	if (cascadeMask == 0u)
+		return;
+	if (feedback)
+	{
+		// Casters are kept resident, not requested (as FindShadowCasters marks them).
+		MarkMeshFeedback(proxy.MeshSlot, ST_FEEDBACK_SHADOW, 0.0);
+		MarkProxyMaterials(proxy, ST_FEEDBACK_SHADOW, false, 0.0, entry);
+	}
+	if (!meshDrawable)
+		return;
+	if (IsCounting())
+	{
+		// Every drawn caster extends the depth range of its cascades toward the light (Scene/CascadeFit.comp), in both phases'
+		// cascades: the projections are known before the first phase draws.
+		uint nearZ = EncodeOrderedFloat(lightMax.z);
+		for (uint cascade = 0u; cascade < u_Cull.CascadeCount; cascade++)
+		{
+			if ((cascadeMask & (1u << cascade)) != 0u && u_CasterDepths[cascade] < nearZ)
+				atomicMax(u_CasterDepths[cascade], nearZ);
+		}
+	}
+	// Occlusion culled: the first phase draws into each cascade what it held in the previous frame; the second the other
+	// casters it finds visible against the first phase's depth (CullShadowSecondPhase). Frames that draw the cascades whole
+	// record what they drew as the next frame's history (the culling pauses while it does not pay). Cascades that keep their
+	// layer from the previous frame get no draws.
+	if (u_Cull.ShadowOcclusion != 0u)
+		cascadeMask &= GetCascadeVisibility(u_Visibility[proxyIndex], u_Cull.VisibilityParity);
+	else if (IsCounting())
+		SetCascadeVisibility(proxyIndex, cascadeMask);
+	EmitShadowInstances(proxy, entry, fraction, geometry, mirrored, cascadeMask & ~u_Cull.CachedCascades, 0u);
+}
 #endif
 
 // Whether the mesh table holds a drawable mesh for the proxy: loaded, with the layout its instances were made for.
@@ -393,39 +496,9 @@ void CullProxy(uint proxyIndex)
 #else
 	if ((proxy.Flags & ST_PROXY_CAST_SHADOWS) == 0u || (proxy.Flags & ST_PROXY_MESH_BOUNDS) == 0u || proxy.InstanceCount == 0u)
 		return;
-	vec3 lightMin;
-	vec3 lightMax;
-	uint cascadeMask = GetCasterCascades(proxy, true, lightMin, lightMax);
-	if (cascadeMask == 0u)
-		return;
-	if (feedback)
-	{
-		// Casters are kept resident, not requested (as FindShadowCasters marks them).
-		MarkMeshFeedback(proxy.MeshSlot, ST_FEEDBACK_SHADOW, 0.0);
-		MarkProxyMaterials(proxy, ST_FEEDBACK_SHADOW, false, 0.0, entry);
-	}
-	if (!meshDrawable)
-		return;
-	if (IsCounting())
-	{
-		// Every drawn caster extends the depth range of its cascades toward the light (Scene/CascadeFit.comp), in both phases'
-		// cascades: the projections are known before the first phase draws.
-		uint nearZ = EncodeOrderedFloat(lightMax.z);
-		for (uint cascade = 0u; cascade < u_Cull.CascadeCount; cascade++)
-		{
-			if ((cascadeMask & (1u << cascade)) != 0u && u_CasterDepths[cascade] < nearZ)
-				atomicMax(u_CasterDepths[cascade], nearZ);
-		}
-	}
-	// Occlusion culled: the first phase draws into each cascade what it held in the previous frame; the second the other
-	// casters it finds visible against the first phase's depth (CullShadowSecondPhase). Frames that draw the cascades whole
-	// record what they drew as the next frame's history (the culling pauses while it does not pay). Cascades that keep their
-	// layer from the previous frame get no draws.
-	if (u_Cull.ShadowOcclusion != 0u)
-		cascadeMask &= GetCascadeVisibility(u_Visibility[proxyIndex], u_Cull.VisibilityParity);
-	else if (IsCounting())
-		SetCascadeVisibility(proxyIndex, cascadeMask);
-	EmitShadowInstances(proxy, entry, fraction, geometry, mirrored, cascadeMask & ~u_Cull.CachedCascades, 0u);
+	if ((u_Parameters.Mode & ST_CULL_MODE_LOCAL) == 0u)
+		CullCascades(proxyIndex, proxy, meshDrawable, entry, fraction, geometry, mirrored, feedback);
+	CullLocalShadowViews(proxy, meshDrawable, entry, geometry, mirrored, feedback);
 #endif
 }
 

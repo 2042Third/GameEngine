@@ -78,7 +78,10 @@ namespace
 		SceneRenderer GPU;
 		DrawnCounts LastReference; // The CPU path's counts of the latest Check
 
-		static SceneRendererSpecification Specification(GPUDrivenMode mode, IndirectDrawMode indirect, float lodErrorPixels, uint32_t maxDrawsPerCall = 0)
+		// `everyLocalShadowView`: every shadow view of every shadowed point and spot light drawn every frame (neither spread
+		// over frames nor cached), so that a frame culls more views than one batch of them.
+		static SceneRendererSpecification Specification(GPUDrivenMode mode, IndirectDrawMode indirect, float lodErrorPixels, uint32_t maxDrawsPerCall = 0,
+			bool everyLocalShadowView = false)
 		{
 			SceneRendererSpecification specification;
 			specification.GPUDriven = mode;
@@ -86,12 +89,17 @@ namespace
 			specification.LODErrorPixels = lodErrorPixels;
 			specification.MaxDrawsPerIndirectCall = maxDrawsPerCall;
 			specification.TextureStreaming = false; // Every level of every texture, on both paths
+			if (everyLocalShadowView)
+			{
+				specification.SpreadLightingUpdates = false;
+				specification.CacheLocalShadows = false;
+			}
 			return specification;
 		}
 
-		explicit Comparison(IndirectDrawMode indirect, float lodErrorPixels = 1.0f, uint32_t maxDrawsPerCall = 0)
-			: CPU(Specification(GPUDrivenMode::Off, IndirectDrawMode::Auto, lodErrorPixels)),
-			GPU(Specification(GPUDrivenMode::Auto, indirect, lodErrorPixels, maxDrawsPerCall))
+		explicit Comparison(IndirectDrawMode indirect, float lodErrorPixels = 1.0f, uint32_t maxDrawsPerCall = 0, bool everyLocalShadowView = false)
+			: CPU(Specification(GPUDrivenMode::Off, IndirectDrawMode::Auto, lodErrorPixels, 0, everyLocalShadowView)),
+			GPU(Specification(GPUDrivenMode::Auto, indirect, lodErrorPixels, maxDrawsPerCall, everyLocalShadowView))
 		{
 			CPU.SetViewportSize(c_Size, c_Size);
 			GPU.SetViewportSize(c_Size, c_Size);
@@ -154,6 +162,12 @@ namespace
 				CHECK(frame.Counts.ShadowCasters <= reference.Counts.ShadowCasters);
 				CHECK(frame.Counts.ShadowDraws <= reference.Counts.ShadowDraws);
 			}
+			// Point and spot lights' shadow views: the CPU decides which views both paths draw, and each path what they draw.
+			CHECK(GPU.GetStats().LocalShadowViewsDrawn == CPU.GetStats().LocalShadowViewsDrawn);
+			CHECK(GPU.GetStats().LocalShadowLights == CPU.GetStats().LocalShadowLights);
+			CHECK(frame.Counts.LocalShadowCasters == reference.Counts.LocalShadowCasters);
+			CHECK(frame.Counts.LocalShadowDraws == reference.Counts.LocalShadowDraws);
+			CHECK(frame.Counts.SubTexelCasters == reference.Counts.SubTexelCasters);
 			return frame;
 		}
 	};
@@ -313,6 +327,61 @@ namespace
 		return camera;
 	}
 
+	// Shadowed point and spot lights over shapes of every kind of draw: plain, mirrored, alpha-masked, posed skinned and too
+	// small for a texel of their views.
+	SceneCamera BuildLocalShadowed(Scene& scene, SceneTestAssets& assets, TestSkinningPoses& poses)
+	{
+		AddNeutralPostProcess(scene);
+		const AssetHandle material = LitMaterial(assets, glm::vec4(0.7f, 0.7f, 0.75f, 1.0f));
+		AddMesh(scene, BuiltinAssets::PlaneMesh, material, glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(24.0f);
+		const AssetHandle meshes[] = { BuiltinAssets::CubeMesh, BuiltinAssets::SphereMesh, BuiltinAssets::TorusMesh, BuiltinAssets::ConeMesh };
+		for (uint32_t index = 0; index < 12; index++)
+		{
+			Entity shape = AddMesh(scene, meshes[index % std::size(meshes)], material,
+				glm::vec3(static_cast<float>(index % 4) * 1.8f - 2.7f, 0.6f, static_cast<float>(index / 4) * 1.8f - 1.8f), "Shape");
+			shape.GetComponent<TransformComponent>().Rotation = glm::vec3(0.3f, static_cast<float>(index) * 0.7f, 0.0f);
+			if (index % 3 == 1)
+				shape.GetComponent<TransformComponent>().Scale = glm::vec3(-0.8f, 0.8f, 0.8f); // Mirrored
+		}
+		std::vector<uint8_t> pixels;
+		for (uint32_t y = 0; y < 8; y++)
+		{
+			for (uint32_t x = 0; x < 8; x++)
+				AppendPixel(pixels, 230, 120, 40, ((x + y) % 2) == 0 ? 255 : 0);
+		}
+		MaterialProperties masked;
+		masked.BaseColorMap = assets.AddTexture(8, 8, pixels, TextureFormat::RGBA8SRGB);
+		masked.AlphaMode = MaterialAlphaMode::Mask;
+		masked.AlphaCutoff = 0.5f;
+		masked.DoubleSided = true;
+		Entity screen = AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(masked), glm::vec3(0.5f, 1.4f, 2.4f), "Screen");
+		screen.GetComponent<TransformComponent>().Scale = glm::vec3(1.6f);
+		const AssetHandle tube = assets.Add(CreateSkinnedTube({ .Joints = 3, .RingsPerJoint = 4, .Sides = 12, .JointLength = 0.6f, .Radius = 0.15f }), "Tube");
+		Entity arm = AddMesh(scene, tube, material, glm::vec3(-3.5f, 0.2f, 2.0f), "Arm");
+		arm.AddComponent<SkinComponent>().Animator = arm.GetComponent<IDComponent>().ID;
+		poses.Poses[arm.GetHandle()] = BentChain(3, 1);
+		poses.Version++;
+		REQUIRE(scene.RegisterService<ISkinningPoses>(poses));
+		AddMesh(scene, BuiltinAssets::SphereMesh, material, glm::vec3(2.0f, 0.2f, 3.0f), "Grain").GetComponent<TransformComponent>().Scale = glm::vec3(0.002f);
+
+		Entity lamp = AddPointLight(scene, glm::vec3(0.0f, 2.2f, 0.5f), glm::vec3(1.0f, 0.9f, 0.8f), 30.0f, 7.0f);
+		lamp.GetComponent<PointLightComponent>().CastShadows = true;
+		const std::pair<glm::vec3, glm::vec3> spots[] = { { glm::vec3(-3.0f, 4.0f, 3.0f), glm::vec3(0.3f, -1.0f, -0.4f) },
+			{ glm::vec3(3.5f, 3.0f, -1.0f), glm::vec3(-0.5f, -1.0f, 0.3f) } };
+		for (const auto& [position, direction] : spots)
+		{
+			Entity spot = scene.CreateEntity("Spot");
+			spot.GetComponent<TransformComponent>().Translation = position;
+			spot.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::normalize(direction));
+			SpotLightComponent& light = spot.AddComponent<SpotLightComponent>();
+			light.Intensity = 60.0f;
+			light.Range = 10.0f;
+			light.OuterConeAngle = 40.0f;
+			light.CastShadows = true;
+		}
+		return View(glm::vec3(0.0f, 6.0f, 9.0f), glm::vec3(0.0f, 0.5f, 0.0f));
+	}
+
 	SceneCamera BuildTransparent(Scene& scene, SceneTestAssets& assets, TestSkinningPoses&)
 	{
 		AddNeutralPostProcess(scene);
@@ -396,6 +465,7 @@ namespace
 		{ "LODs", BuildLODs },
 		{ "LODs by error", BuildLODsByError, c_LODSceneErrorPixels },
 		{ "Occluded", BuildOccluded },
+		{ "Local shadows", BuildLocalShadowed },
 	};
 
 	void CompareScenes(GPUContext& gpu, IndirectDrawMode indirect, uint32_t maxDrawsPerCall = 0)
@@ -422,6 +492,13 @@ namespace
 				CHECK(frame.Counts.InstancesPerLOD[1] == 1);
 				CHECK(frame.Counts.InstancesPerLOD[2] == 2);
 			}
+			if (name == "Local shadows")
+			{
+				// Every view of the point light and both spot lights in the first frame, with casters of every kind.
+				CHECK(comparison.GPU.GetStats().LocalShadowViewsDrawn == 8);
+				CHECK(frame.Counts.LocalShadowCasters > 0);
+				CHECK(frame.Counts.SubTexelCasters > 0);
+			}
 			// The GPU path's second frame takes its requests from the first one's visibility feedback, and looks at only
 			// the transparent and skinned proxies of the view itself: it draws the same.
 			CHECK_FALSE(comparison.GPU.GetStats().FeedbackRequests);
@@ -440,7 +517,8 @@ namespace
 			comparison.Check(scene, turned);
 			if (scene.GetService<ISkinningPoses>())
 			{
-				CHECK(frame.Counts.SkinnedInstances == 3);
+				if (name == "Posed skinned")
+					CHECK(frame.Counts.SkinnedInstances == 3);
 				scene.UnregisterService<ISkinningPoses>(poses);
 			}
 			gpu.GetDevice().WaitForIdle();
@@ -603,6 +681,45 @@ TEST_SUITE("GPU.SceneRenderer.IndirectFallback")
 		{
 			CAPTURE(static_cast<int>(mode));
 			CompareScenes(gpu, mode);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Frames that draw more local shadow views than a batch cull them a batch at a time, drawing what the CPU path draws")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		for (const IndirectDrawMode mode : { IndirectDrawMode::Auto, IndirectDrawMode::NoCount, IndirectDrawMode::PerDraw })
+		{
+			CAPTURE(static_cast<int>(mode));
+			SceneTestAssets assets;
+			for (const AssetHandle mesh : { BuiltinAssets::CubeMesh, BuiltinAssets::SphereMesh, BuiltinAssets::PlaneMesh, BuiltinAssets::QuadMesh,
+				BuiltinAssets::TorusMesh, BuiltinAssets::ConeMesh, BuiltinAssets::DefaultMaterial })
+				REQUIRE(assets.Manager->LoadAssetSync(mesh));
+			TestSkinningPoses poses;
+			Scene scene;
+			const SceneCamera camera = BuildLocalShadowed(scene, assets, poses);
+			// Two more point lights: 20 views, two batches.
+			for (const glm::vec3& position : { glm::vec3(-2.5f, 1.8f, -1.0f), glm::vec3(2.5f, 1.8f, 1.5f) })
+				AddPointLight(scene, position, glm::vec3(1.0f), 20.0f, 6.0f).GetComponent<PointLightComponent>().CastShadows = true;
+			Entity mover = scene.CreateEntity("Mover");
+			mover.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+			Comparison comparison(mode, 1.0f, 0, true);
+			for (uint32_t frame = 0; frame < 3; frame++)
+			{
+				CAPTURE(frame);
+				mover.GetComponent<TransformComponent>().Translation = glm::vec3(-1.0f + static_cast<float>(frame) * 0.4f, 1.0f, 0.5f);
+				mover.MarkModified<TransformComponent>();
+				const PathFrame drawn = comparison.Check(scene, camera);
+				CHECK(comparison.GPU.GetStats().LocalShadowViewsDrawn == 20);
+				CHECK(drawn.Counts.LocalShadowCasters > 0);
+			}
+			// The second and third frames took their requests from the feedback, which every batch's casters reached.
+			CHECK(comparison.GPU.GetStats().FeedbackRequests);
+			scene.UnregisterService<ISkinningPoses>(poses);
+			gpu.GetDevice().WaitForIdle();
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

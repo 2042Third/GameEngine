@@ -2552,7 +2552,8 @@ namespace Strata
 			m_MarksRender = m_RenderCount + 1;
 		}
 		FindShadowCasters(renderScene, camera, frustum, frame, !m_FeedbackFrame);
-		FindLocalShadowCasters(renderScene, camera, frustum, true, true);
+		// The local shadow views' casters: the CPU's on frames that walk the view (both paths), else bounds for the GPU's culling.
+		FindLocalShadowCasters(renderScene, camera, frustum, !m_FeedbackFrame, !m_FeedbackFrame);
 		// Rendered with a reported limitation: keep the error so it is not logged every frame.
 		bool degraded = motionFailed || temporalFailed;
 		if (!m_LocalShadowLights.empty() && !EnsureLocalShadowAtlas())
@@ -2566,7 +2567,7 @@ namespace Strata
 		ResolveAssets(renderScene);
 		GatherDraws(renderScene, camera, !m_GPUDrivenFrame);
 		GatherShadowDraws(renderScene, camera, frame, !m_GPUDrivenFrame);
-		GatherLocalShadowDraws(renderScene);
+		GatherLocalShadowDraws(renderScene, !m_GPUDrivenFrame);
 		BuildLocalShadowData(camera);
 		// With the jitter the selection outline comes from a mask of the selected instances drawn without it.
 		m_SelectionBatches.clear();
@@ -2676,7 +2677,7 @@ namespace Strata
 			}
 			gpuTimer.Next(gpuStages.Cull);
 			commandList->beginMarker("Cull");
-			RunGPUCulling(commandList, frame.ShadowParams.w > 0.0f);
+			RunGPUCulling(commandList, frame.ShadowParams.w > 0.0f || !m_LocalShadowViews.empty());
 			commandList->endMarker();
 		}
 
@@ -2711,7 +2712,10 @@ namespace Strata
 			if (!m_LocalShadowViews.empty())
 			{
 				commandList->beginMarker("LocalShadows");
-				DrawLocalShadows(commandList);
+				if (m_GPUDrivenFrame)
+					DrawGPULocalShadows(commandList);
+				else
+					DrawLocalShadows(commandList);
 				commandList->endMarker();
 			}
 			commandList->endMarker();

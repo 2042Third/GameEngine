@@ -8,14 +8,20 @@
 // place in the geometry pool, firstInstance the range's start, which the vertex shaders read the draw list from), and
 // its bucket's draw count (u_BucketCounts) grows by one. Records the draw list or the arguments have no room for are
 // counted as overflow and not drawn. With occlusion culling it runs once per phase, each time over that phase's buckets
-// (the view's second-phase buckets, the cascades' second-phase buckets, or all others).
+// (the view's second-phase buckets, the cascades' second-phase buckets, or all others); the local shadow views' buckets are
+// built by a run of their own, once per batch of views.
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform BuildParameters
 {
-	uint Mode; // Bit 1: the view's second phase (Cull.comp's modes); bit 2: the cascades' second phase
+	// Bit 1: the view's second phase (Cull.comp's modes); bit 2: the cascades' second phase; bit 3: the local shadow views' buckets;
+	// bit 4: clears the local shadow views' buckets for the next batch of views instead (counts, draws and arguments)
+	uint Mode;
 } u_Parameters;
+
+#define ST_BUILD_LOCAL_PHASE 8u
+#define ST_BUILD_RESET_LOCAL 16u
 
 void WriteArguments(uint dense, uint slot, uint indexCount, uint instanceCount, uint firstIndex, uint baseVertex, uint firstInstance)
 {
@@ -27,8 +33,27 @@ void WriteArguments(uint dense, uint slot, uint indexCount, uint instanceCount, 
 	u_Arguments[argument + 4u] = firstInstance;
 }
 
+// Clears the local shadow views' buckets (word `index` of their counts, arguments and draw counts) for the next batch of views:
+// the previous batch's draws were recorded before.
+void ResetLocalBuckets(uint index)
+{
+	uint buckets = u_Cull.BucketCount - u_Cull.FirstLocalBucket;
+	if (index < buckets * u_Cull.LODCapacity)
+		u_Counts[u_Cull.FirstLocalBucket * u_Cull.LODCapacity + index] = 0u;
+	if (index < buckets * u_Cull.ArgumentsPerBucket * 5u)
+		u_Arguments[u_Cull.FirstLocalBucket * u_Cull.ArgumentsPerBucket * 5u + index] = 0u;
+	if (index < buckets)
+		u_BucketCounts[u_Cull.FirstLocalBucket + index] = 0u;
+}
+
 void main()
 {
+	if ((u_Parameters.Mode & ST_BUILD_RESET_LOCAL) != 0u)
+	{
+		// Dispatched in rows of at most 65,535 work groups.
+		ResetLocalBuckets(gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x);
+		return;
+	}
 	uint key = gl_GlobalInvocationID.x;
 	if (key >= u_Cull.BucketCount * u_Cull.LODCapacity)
 		return;
@@ -40,9 +65,11 @@ void main()
 	uint phase = 0u;
 	if (dense >= u_Cull.FirstPhaseViewBuckets && dense < u_Cull.ViewBucketCount)
 		phase = 2u;
+	else if (dense >= u_Cull.FirstLocalBucket)
+		phase = ST_BUILD_LOCAL_PHASE;
 	else if (dense >= u_Cull.SecondPhaseShadowBuckets)
 		phase = 4u;
-	if (phase != (u_Parameters.Mode & 6u))
+	if (phase != (u_Parameters.Mode & 14u))
 		return;
 	uint offset = atomicAdd(u_Counters[ST_COUNTER_DRAW_LIST_USED], count);
 	uint slot = atomicAdd(u_BucketCounts[dense], 1u);
@@ -74,6 +101,10 @@ void main()
 			high++;
 		if (high != 0u)
 			atomicAdd(u_Counters[ST_COUNTER_TRIANGLES_HIGH], high);
+	}
+	else if (phase == ST_BUILD_LOCAL_PHASE)
+	{
+		atomicAdd(u_Counters[ST_COUNTER_LOCAL_SHADOW_DRAWS], 1u);
 	}
 	else
 	{

@@ -468,6 +468,8 @@ namespace Strata
 		// Of ShadowDraws, those of the cascades' second occlusion phase: of casters a cascade did not draw the frame before (new to
 		// it, or found visible again). A record drawn in both phases is two draws where the CPU path makes one.
 		uint32_t SecondPhaseShadowDraws = 0;
+		uint32_t LocalShadowInstances = 0; // Instances drawn into the local shadow views (summed over views)
+		uint32_t LocalShadowDraws = 0;
 		uint32_t VisibleProxies = 0;   // Mesh renderers that passed the view's frustum and size tests
 		uint32_t SizeCulledProxies = 0; // In the frustum, below SceneRendererSpecification::MinProjectedPixels
 		uint32_t OccludedProxies = 0;  // In the frustum, hidden behind what the view draws (SceneRendererSpecification::OcclusionCulling)
@@ -846,6 +848,8 @@ namespace Strata
 			uint32_t CasterCount = 0;
 			uint32_t FirstBatch = 0;              // m_LocalShadowBatches
 			uint32_t BatchCount = 0;
+			uint32_t FirstCandidate = 0;          // m_LocalShadowCandidates: the proxies within its light's range
+			uint32_t CandidateCount = 0;
 		};
 		// A shadow caster the CPU found in a view, with its screen fraction there (projected diameter over the view's height).
 		struct LocalShadowCaster
@@ -860,7 +864,7 @@ namespace Strata
 			uint64_t RenderSceneId = 0;
 			uint64_t TablesVersion = 0;
 			uint64_t PoolContentVersion = 0;
-			uint64_t TextureUploadVersion = 0; // While the scene has alpha-masked materials (0 otherwise)
+			uint64_t TextureEntryVersion = 0;  // While the scene has alpha-masked materials (0 otherwise)
 			uint64_t DeferredFrame = 0;        // The frame while the scene's GPU copy defers new proxies (0 otherwise)
 			bool operator==(const LocalShadowContent&) const = default;
 		};
@@ -1050,14 +1054,21 @@ namespace Strata
 		// their casters: with `exactCasters` each view's (the CPU path; their meshes and materials marked with `markCasters`),
 		// else only what bounds the GPU's culling of them.
 		void FindLocalShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, bool exactCasters, bool markCasters);
-		// The CPU path's draws of the views (m_LocalShadowBatches), after the frame's assets are resolved.
-		void GatherLocalShadowDraws(RenderScene& renderScene);
+		// The CPU path's draws of the views (m_LocalShadowBatches), after the frame's assets are resolved (none with
+		// `casterDraws` false: the GPU's culling draws them).
+		void GatherLocalShadowDraws(RenderScene& renderScene, bool casterDraws);
 		// The shaders' data of the shadowed lights (m_LocalShadowData), relative to the frame's camera.
 		void BuildLocalShadowData(const SceneCamera& camera);
 		// Creates the atlas with its framebuffer once a frame has shadowed lights; false (reported) when that fails.
 		bool EnsureLocalShadowAtlas();
 		// Clears the views' tiles and draws their casters (the CPU's draws).
 		void DrawLocalShadows(nvrhi::ICommandList* commandList);
+		// The GPU-driven path's: the views in batches of RenderData::c_CullMaxLocalShadowViews, the first culled with the
+		// cascades (RunGPUCulling), each later one culled after the previous one's draws (RunLocalShadowCulling).
+		void DrawGPULocalShadows(nvrhi::ICommandList* commandList);
+		void RunLocalShadowCulling(nvrhi::ICommandList* commandList, uint32_t firstView, uint32_t viewCount, bool lastBatch);
+		// The culling's mode bits of a batch of local shadow views (Scene/Cull.comp).
+		static uint32_t GetLocalShadowCullMode(uint32_t firstView, uint32_t viewCount);
 		// Clears a view's tile (a quad at depth 0: the atlas's other tiles keep their shadows).
 		void ClearLocalShadowTile(nvrhi::ICommandList* commandList, const ShadowAtlasTile& tile);
 		// After the frame's command list was executed: its views hold what their keys describe.
@@ -1271,6 +1282,7 @@ namespace Strata
 		std::vector<LocalShadowLight> m_LocalShadowScratch;
 		std::vector<LocalShadowDrawView> m_LocalShadowViews;
 		std::vector<LocalShadowCaster> m_LocalShadowCasters;
+		std::vector<uint32_t> m_LocalShadowCandidates;
 		std::vector<SceneDrawBatch> m_LocalShadowBatches;
 		std::vector<RenderData::LocalShadowData> m_LocalShadowData;
 		uint64_t m_LocalShadowSceneId = 0;
@@ -1534,6 +1546,13 @@ namespace Strata
 		std::array<std::array<uint32_t, 2>, RenderData::c_CullMaxCascades> m_CullShadowSlots = {};
 		std::array<std::vector<uint32_t>, RenderData::c_CullMaxCascades> m_CullCasterStamps; // Per mesh slot: counted for the cascade
 		uint32_t m_CullCasterStamp = 0;
+		// The local shadow views' draw slots by their place in a batch (the most any batch's view there can draw), the views as
+		// the culling reads them, and per mesh slot the view it was counted for last.
+		std::array<std::array<uint32_t, 2>, RenderData::c_CullMaxLocalShadowViews> m_CullLocalSlots = {};
+		std::vector<RenderData::CullLocalShadowView> m_CullLocalViews;
+		nvrhi::BufferHandle m_CullLocalViewBuffer;
+		std::vector<uint32_t> m_CullLocalStamps;
+		uint32_t m_CullLocalStamp = 0;
 		struct CounterReadback
 		{
 			Scope<BufferReadback> Readback;

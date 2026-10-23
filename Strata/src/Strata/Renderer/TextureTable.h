@@ -88,6 +88,10 @@ namespace Strata
 		uint64_t GetBufferVersion() const { return m_BufferVersion; }
 		// Changes with every RecordUploads that wrote entries: what the GPU samples changed (main thread).
 		uint64_t GetUploadVersion() const { return m_UploadVersion; }
+		// Changes with every change of an entry (or of the level a fading texture is sampled with) that the next RecordUploads
+		// writes: a renderer that decides before its frame's uploads what depends on the entries (the local light shadows' cache)
+		// sees the changes of earlier frames whichever renderer uploaded them.
+		uint64_t GetEntryVersion() const;
 	private:
 		void MarkDirtyLocked(uint32_t index);
 		void EndFadeLocked(uint32_t index);
@@ -125,6 +129,7 @@ namespace Strata
 		uint64_t m_BufferCapacity = 0; // Entries
 		uint64_t m_BufferVersion = 0;
 		uint64_t m_UploadVersion = 0;
+		uint64_t m_EntryVersion = 0; // Guarded by m_Mutex
 		std::vector<GPUEntry> m_UploadScratch;
 		std::vector<uint32_t> m_DirtyScratch;
 	};

@@ -41,7 +41,10 @@
 #define ST_CULL_SHADOW_BUCKETS         64u
 #define ST_CULL_SHADOW_ALPHA_MASK_BUCKET 16u // MakeShadowBucket's alpha-masked bit
 #define ST_CULL_SHADOW_SECOND_PHASE_BUCKET 32u // MakeShadowBucket's second-phase bit
-#define ST_CULL_BUCKETS                288u // c_CullBuckets: the bucket table's bucket -> dense index part
+#define ST_CULL_FIRST_LOCAL_BUCKET     288u // c_CullFirstLocalShadowBucket
+#define ST_CULL_LOCAL_BUCKETS          32u  // c_CullLocalShadowBucketsPerView
+#define ST_CULL_MAX_LOCAL_VIEWS        12u  // c_CullMaxLocalShadowViews
+#define ST_CULL_BUCKETS                672u // c_CullBuckets: the bucket table's bucket -> dense index part
 #define ST_CULL_MAX_CASCADES           4u
 #define ST_VISIBILITY_CASCADE_SHIFT    2u   // RenderData::c_VisibilityCascadeShift
 #define ST_CULL_NONE                   0xFFFFFFFFu
@@ -64,6 +67,8 @@
 #define ST_COUNTER_OCCLUDED           20
 #define ST_COUNTER_OCCLUDED_CASTERS   23
 #define ST_COUNTER_SECOND_PHASE_SHADOW_DRAWS 24
+#define ST_COUNTER_LOCAL_SHADOW_INSTANCES 25
+#define ST_COUNTER_LOCAL_SHADOW_DRAWS 26
 
 struct GPUProxy
 {
@@ -147,9 +152,18 @@ struct CullConstants
 	uint ShadowMapSize;      // Each cascade's texels each way
 	uint ShadowPyramidLevels;
 	uint CachedCascades;     // The cascades that keep their layer: nothing is drawn into them
-	uint Reserved0;
+	uint FirstLocalBucket;   // The dense index of the first local shadow view bucket (they come last)
 	uint Reserved1;
 	uint Reserved2;
+};
+
+// A point or spot light's shadow view (RenderData::CullLocalShadowView).
+struct CullLocalShadowView
+{
+	vec4 Planes[6];      // Its frustum, camera-relative, inward
+	vec4 Light;          // xyz: the light's world position, w: its range
+	vec4 RelativeLight;  // xyz: the light's camera-relative position, w: the near plane
+	vec4 Parameters;     // x: tan(half its field of view), y: its tile's texels, z: the level-of-detail error threshold of its tile
 };
 
 struct CullCascade
@@ -205,19 +219,27 @@ layout(set = 0, binding = ST_SRV(8)) uniform texture2D u_DepthPyramid;
 layout(set = 0, binding = ST_SRV(9)) uniform texture2DArray u_ShadowPyramid;
 // The cascades' projections (Scene/CascadeFit.comp), fitted after the counting pass.
 layout(set = 0, binding = ST_SRV(10), std430) readonly buffer CullCascadeBuffer { CullCascade u_CullCascades[]; };
+// The frame's local shadow views (those it draws), in the order of their batches.
+layout(set = 0, binding = ST_SRV(11), std430) readonly buffer LocalShadowViewBuffer { CullLocalShadowView u_LocalShadowViews[]; };
 
 #define ST_LOD_RELATIVE_ERROR(record) u_GeometryLODs[record].RelativeError
 #include "Include/LODSelection.glsl"
 
 #define ST_GEOMETRY_SUBMESH_LOD_ERRORS 1u // RenderData::c_GeometrySubmeshLODErrors
 
-// The level of detail drawn of a submesh at a screen fraction (LODSelection::SelectLOD): by its levels' errors where they are
-// known, else by halving the fraction.
-uint ChooseLOD(GeometrySubmesh submesh, float screenFraction)
+// The level of detail drawn of a submesh at a screen fraction (LODSelection::SelectLOD) for a view with this error threshold
+// (LODSelection::GetErrorThreshold): by its levels' errors where they are known, else by halving the fraction.
+uint ChooseLODFor(GeometrySubmesh submesh, float screenFraction, float errorThreshold)
 {
 	if ((submesh.Flags & ST_GEOMETRY_SUBMESH_LOD_ERRORS) != 0u)
-		return SelectLODByError(screenFraction, submesh.FirstLOD, submesh.LODCount, u_Cull.LODErrorThreshold);
+		return SelectLODByError(screenFraction, submesh.FirstLOD, submesh.LODCount, errorThreshold);
 	return SelectLOD(screenFraction, u_Cull.LODParameters.x, submesh.LODCount);
+}
+
+// The level for the view.
+uint ChooseLOD(GeometrySubmesh submesh, float screenFraction)
+{
+	return ChooseLODFor(submesh, screenFraction, u_Cull.LODErrorThreshold);
 }
 
 // The projected diameter of a bounding sphere as a fraction of the viewport height, as LODSelection::GetScreenFraction
@@ -246,16 +268,21 @@ int GetPyramidFootprint(vec2 minPixel, vec2 maxPixel, vec2 size, int levels, int
 }
 
 // Frustum::IsAABBVisible: the corner furthest along each plane's normal is inside.
-bool IsBoxInFrustum(vec3 boxMin, vec3 boxMax)
+bool IsBoxInPlanes(vec3 boxMin, vec3 boxMax, vec4 planes[6])
 {
 	for (int index = 0; index < 6; index++)
 	{
-		vec4 plane = u_Cull.Planes[index];
+		vec4 plane = planes[index];
 		vec3 positive = vec3(plane.x >= 0.0 ? boxMax.x : boxMin.x, plane.y >= 0.0 ? boxMax.y : boxMin.y, plane.z >= 0.0 ? boxMax.z : boxMin.z);
 		if (dot(plane.xyz, positive) + plane.w < 0.0)
 			return false;
 	}
 	return true;
+}
+
+bool IsBoxInFrustum(vec3 boxMin, vec3 boxMax)
+{
+	return IsBoxInPlanes(boxMin, boxMax, u_Cull.Planes);
 }
 
 #endif

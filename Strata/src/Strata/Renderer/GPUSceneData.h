@@ -111,15 +111,20 @@ namespace Strata::RenderData
 	// Draw buckets: one per pipeline state and vertex arena. A view bucket's index: mirrored (bit 0), double-sided (bit 1),
 	// geometry (bits 2-3, c_CullGeometry*), the occlusion culling's second phase (bit 4: what the first phase did not draw,
 	// found visible against the depth pyramid); shadow buckets follow the view's, c_CullShadowBucketsPerCascade per
-	// cascade, alpha-masked in bit 4 and the cascade's second phase in bit 5. Buckets the frame cannot have get no storage:
-	// the bucket table maps the present ones to dense indices (c_CullNoBucket for the others).
+	// cascade, alpha-masked in bit 4 and the cascade's second phase in bit 5; then the local shadow views' (point and spot
+	// lights), c_CullLocalShadowBucketsPerView per view of a batch of at most c_CullMaxLocalShadowViews, alpha-masked in bit
+	// 4. Buckets the frame cannot have get no storage: the bucket table maps the present ones to dense indices
+	// (c_CullNoBucket for the others).
 	constexpr uint32_t c_CullGeometryStatic = 0;       // Static arena, unskinned pipelines
 	constexpr uint32_t c_CullGeometrySkinnedArena = 1; // Skinned arena drawn in its bind pose: unskinned pipelines
 	constexpr uint32_t c_CullGeometrySkinned = 2;      // Skinned arena, posed: the skinned pipelines
 	constexpr uint32_t c_CullViewBuckets = 32;
 	constexpr uint32_t c_CullShadowBucketsPerCascade = 64;
 	constexpr uint32_t c_CullMaxCascades = 4;
-	constexpr uint32_t c_CullBuckets = c_CullViewBuckets + c_CullMaxCascades * c_CullShadowBucketsPerCascade;
+	constexpr uint32_t c_CullLocalShadowBucketsPerView = 32;
+	constexpr uint32_t c_CullMaxLocalShadowViews = 12; // A batch of views: frames that draw more cull them a batch at a time
+	constexpr uint32_t c_CullFirstLocalShadowBucket = c_CullViewBuckets + c_CullMaxCascades * c_CullShadowBucketsPerCascade;
+	constexpr uint32_t c_CullBuckets = c_CullFirstLocalShadowBucket + c_CullMaxLocalShadowViews * c_CullLocalShadowBucketsPerView;
 	constexpr uint32_t c_CullNoBucket = ~0u;
 
 	constexpr uint32_t MakeViewBucket(bool mirrored, bool doubleSided, uint32_t geometry, bool secondPhase = false)
@@ -135,6 +140,26 @@ namespace Strata::RenderData
 		return c_CullViewBuckets + cascade * c_CullShadowBucketsPerCascade + MakeViewBucket(mirrored, doubleSided, geometry)
 			+ (alphaMask ? c_CullShadowAlphaMask : 0u) + (secondPhase ? c_CullShadowSecondPhase : 0u);
 	}
+
+	// The bucket of a local shadow view's draws: its place in its batch (`view`), then as a view bucket, alpha-masked in bit 4.
+	constexpr uint32_t MakeLocalShadowBucket(uint32_t view, bool mirrored, bool doubleSided, uint32_t geometry, bool alphaMask)
+	{
+		return c_CullFirstLocalShadowBucket + view * c_CullLocalShadowBucketsPerView + MakeViewBucket(mirrored, doubleSided, geometry)
+			+ (alphaMask ? c_CullShadowAlphaMask : 0u);
+	}
+
+	// A local shadow view as the GPU's culling tests it (u_LocalShadowViews, Include/Culling.glsl): the CPU's decisions for a
+	// view (SceneRendererLocalShadows.cpp) on the same values.
+	struct CullLocalShadowView
+	{
+		glm::vec4 Planes[6] = {};                    // Its frustum, camera-relative, inward
+		glm::vec4 Light = glm::vec4(0.0f);           // xyz: the light's world position (screen fractions), w: its range
+		glm::vec4 RelativeLight = glm::vec4(0.0f);   // xyz: the light's camera-relative position (the range test), w: the near plane
+		// x: tan(half the view's field of view), y: its tile's texels, z: LODSelection::GetErrorThreshold for a viewport of the
+		// tile's height
+		glm::vec4 Parameters = glm::vec4(0.0f);
+	};
+	static_assert(sizeof(CullLocalShadowView) == 9 * 16);
 
 	// The visibility buffer's bits per proxy (occlusion culling), two sets alternating frame by frame (CullConstants::
 	// VisibilityParity: the previous frame's): the view's bit `parity`, and each cascade's bit c_VisibilityCascadeShift +
@@ -187,7 +212,8 @@ namespace Strata::RenderData
 		// The cascades (a bit each) that keep their shadow map layer from the previous frame (SceneRendererSpecification::
 		// CacheShadowCascades): nothing is drawn into them, though their casters still fit their depth ranges.
 		uint32_t CachedCascades = 0;
-		uint32_t Reserved0 = 0; // std140 padding of the last vector
+		// The dense index of the first local shadow view bucket (they come last; BucketCount without)
+		uint32_t FirstLocalBucket = 0;
 		uint32_t Reserved1 = 0;
 		uint32_t Reserved2 = 0;
 	};
@@ -214,14 +240,17 @@ namespace Strata::RenderData
 		uint32_t DrawnLights = 0;      // Point and spot lights that are drawn somewhere (in the view or not)
 		uint32_t OccludedCasters = 0;  // Casters hidden in a cascade behind what it draws, summed over cascades (its second phase's test)
 		uint32_t SecondPhaseShadowDraws = 0; // Of ShadowDraws, the cascades' second phase's
-		uint32_t Reserved[7] = {};
+		uint32_t LocalShadowInstances = 0;   // Instances drawn into local shadow views, summed over views
+		uint32_t LocalShadowDraws = 0;       // Records drawn into local shadow views
+		uint32_t Reserved[5] = {};
 	};
 	static_assert(sizeof(CullCounters) == 128);
 	// Include/Lights.glsl's ST_COUNTER_VISIBLE_LIGHTS and ST_COUNTER_DRAWN_LIGHTS.
 	static_assert(offsetof(CullCounters, VisibleLights) == 21 * sizeof(uint32_t) && offsetof(CullCounters, DrawnLights) == 22 * sizeof(uint32_t));
 	// Include/Culling.glsl's ST_COUNTER_OCCLUDED_CASTERS.
 	static_assert(offsetof(CullCounters, OccludedCasters) == 23 * sizeof(uint32_t));
-	// Include/Culling.glsl's ST_COUNTER_SECOND_PHASE_SHADOW_DRAWS.
+	// Include/Culling.glsl's ST_COUNTER_SECOND_PHASE_SHADOW_DRAWS, ST_COUNTER_LOCAL_SHADOW_INSTANCES and ST_COUNTER_LOCAL_SHADOW_DRAWS.
 	static_assert(offsetof(CullCounters, SecondPhaseShadowDraws) == 24 * sizeof(uint32_t));
+	static_assert(offsetof(CullCounters, LocalShadowInstances) == 25 * sizeof(uint32_t) && offsetof(CullCounters, LocalShadowDraws) == 26 * sizeof(uint32_t));
 
 }

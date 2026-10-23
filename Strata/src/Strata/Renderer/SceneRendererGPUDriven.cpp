@@ -35,6 +35,9 @@ namespace Strata
 		constexpr uint32_t c_CullModeWrite = 1;
 		constexpr uint32_t c_CullModeSecondPhase = 2;
 		constexpr uint32_t c_CullModeShadowSecondPhase = 4;
+		// Cull.comp: the local shadow views alone; CullBuild.comp: their buckets, or clearing them for the next batch of views.
+		constexpr uint32_t c_CullModeLocal = 8;
+		constexpr uint32_t c_CullModeResetLocal = 16;
 		// A cascade's depth pyramid starts at a quarter of its shadow map each way (an eighth of the memory a half would take).
 		constexpr uint32_t c_ShadowPyramidReduction = 4;
 		// The cascades' occlusion culling costs GPU time (their pyramids, a second culling pass over the proxies, and the wait
@@ -80,10 +83,11 @@ namespace Strata
 			commandList->dispatch(x, y, 1);
 		}
 
-		// A bucket's parts (RenderData::MakeViewBucket, MakeShadowBucket).
+		// A bucket's parts (RenderData::MakeViewBucket, MakeShadowBucket, MakeLocalShadowBucket).
 		struct BucketParts
 		{
 			bool Shadow = false;
+			bool Local = false;    // A local shadow view's (Cascade: its place in its batch)
 			uint32_t Cascade = 0;
 			bool Mirrored = false;
 			bool DoubleSided = false;
@@ -95,7 +99,14 @@ namespace Strata
 		{
 			BucketParts parts;
 			uint32_t local = bucket;
-			if (bucket >= RenderData::c_CullViewBuckets)
+			if (bucket >= RenderData::c_CullFirstLocalShadowBucket)
+			{
+				parts.Local = true;
+				parts.Cascade = (bucket - RenderData::c_CullFirstLocalShadowBucket) / RenderData::c_CullLocalShadowBucketsPerView;
+				local = (bucket - RenderData::c_CullFirstLocalShadowBucket) % RenderData::c_CullLocalShadowBucketsPerView;
+				parts.AlphaMask = (local & RenderData::c_CullShadowAlphaMask) != 0;
+			}
+			else if (bucket >= RenderData::c_CullViewBuckets)
 			{
 				parts.Shadow = true;
 				parts.Cascade = (bucket - RenderData::c_CullViewBuckets) / RenderData::c_CullShadowBucketsPerCascade;
@@ -120,6 +131,8 @@ namespace Strata
 		combined.OpaqueDrawCalls = gpu.Draws;
 		combined.ShadowDrawCalls = gpu.ShadowDraws;
 		combined.ShadowCasters = gpu.ShadowInstances;
+		combined.LocalShadowCasters = gpu.LocalShadowInstances;
+		combined.LocalShadowDrawCalls = gpu.LocalShadowDraws;
 		combined.SubTexelCasters = gpu.SubTexelCasters;
 		combined.SkinnedInstances += gpu.SkinnedInstances;
 		combined.Triangles += gpu.Triangles;
@@ -189,6 +202,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(8),
 			nvrhi::BindingLayoutItem::Texture_SRV(9),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(10),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(11),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2),
@@ -261,6 +275,12 @@ namespace Strata
 			&& EnsureBufferCapacity(m_CullBucketCountBuffer, RenderData::c_CullBuckets, sizeof(uint32_t), "CullBucketCounts", recreated, BufferKind::IndirectArgumentsUAV)
 			&& EnsureBufferCapacity(m_CullCounterBuffer, sizeof(RenderData::CullCounters) / sizeof(uint32_t), sizeof(uint32_t), "CullCounters", recreated,
 				BufferKind::StructuredUAV);
+		m_CullLocalViewBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
+			.setByteSize(RenderData::c_MaxShadowedLocalLights * RenderData::c_LocalShadowFaces * sizeof(RenderData::CullLocalShadowView))
+			.setStructStride(sizeof(RenderData::CullLocalShadowView))
+			.setInitialState(nvrhi::ResourceStates::ShaderResource)
+			.setKeepInitialState(true)
+			.setDebugName(m_Specification.DebugName + ".CullLocalShadowViews"));
 		m_CullConstantBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
 			.setByteSize(sizeof(RenderData::CullConstants))
 			.setIsConstantBuffer(true)
@@ -271,7 +291,7 @@ namespace Strata
 			m_CounterReadbacks[index].Readback = CreateScope<BufferReadback>(m_Device, sizeof(RenderData::CullCounters), m_Specification.DebugName + ".CullCounterReadback");
 		const bool readbacks = std::all_of(m_CounterReadbacks.begin(), m_CounterReadbacks.end(), [](const CounterReadback& entry) { return entry.Readback->IsValid(); });
 		if (!m_CullViewPipeline || !m_CullShadowPipeline || !m_CullBuildPipeline || !m_CullFeedbackPipeline || !m_DepthPyramidPipeline || !m_DepthPyramidSampler
-			|| !m_ShadowPyramidPipeline || !m_DummyShadowPyramid || !created || !m_CullConstantBuffer || !readbacks)
+			|| !m_ShadowPyramidPipeline || !m_DummyShadowPyramid || !created || !m_CullConstantBuffer || !m_CullLocalViewBuffer || !readbacks)
 		{
 			// The CPU path draws instead.
 			ST_CORE_ERROR("{}: the GPU-driven path is unavailable (its pipelines or buffers could not be created); the CPU culls and draws",
@@ -297,6 +317,7 @@ namespace Strata
 		m_CullBucketCountBuffer = nullptr;
 		m_CullCounterBuffer = nullptr;
 		m_CullConstantBuffer = nullptr;
+		m_CullLocalViewBuffer = nullptr;
 		for (CounterReadback& entry : m_CounterReadbacks)
 			entry.Readback.reset();
 	}
@@ -428,6 +449,8 @@ namespace Strata
 	{
 		const BucketParts parts = DecodeBucket(bucket);
 		const size_t arena = parts.Geometry == RenderData::c_CullGeometryStatic ? 0 : 1;
+		if (parts.Local)
+			return m_CullLocalSlots[parts.Cascade][arena];
 		return parts.Shadow ? m_CullShadowSlots[parts.Cascade][arena] : m_CullViewSlots[arena];
 	}
 
@@ -511,8 +534,11 @@ namespace Strata
 		m_CullBucketTable.assign(RenderData::c_CullBuckets, RenderData::c_CullNoBucket);
 		// A bucket of the frame's geometry with nothing to draw (no mesh of its arena in view, or casting into its cascade)
 		// still gets its index: the GPU may draw there what the CPU's bound did not foresee (counted as overflow).
-		const auto addBuckets = [&](bool shadow, uint32_t cascade)
+		// The buckets of the view, a cascade or a local shadow view (`cascade`: its place in its batch).
+		enum class BucketKind : uint8_t { View, Cascade, LocalView };
+		const auto addBuckets = [&](BucketKind kind, uint32_t cascade)
 		{
+			const bool shadow = kind != BucketKind::View;
 			for (uint32_t geometry = 0; geometry < geometries.size(); geometry++)
 			{
 				if (!geometries[geometry])
@@ -523,8 +549,11 @@ namespace Strata
 					{
 						for (uint32_t mirror = 0; mirror < (mirrored ? 2u : 1u); mirror++)
 						{
-							const uint32_t bucket = shadow ? RenderData::MakeShadowBucket(cascade, mirror != 0, sided != 0, geometry, masked != 0)
-								: RenderData::MakeViewBucket(mirror != 0, sided != 0, geometry);
+							uint32_t bucket = RenderData::MakeViewBucket(mirror != 0, sided != 0, geometry);
+							if (kind == BucketKind::Cascade)
+								bucket = RenderData::MakeShadowBucket(cascade, mirror != 0, sided != 0, geometry, masked != 0);
+							else if (kind == BucketKind::LocalView)
+								bucket = RenderData::MakeLocalShadowBucket(cascade, mirror != 0, sided != 0, geometry, masked != 0);
 							m_CullBucketTable[bucket] = static_cast<uint32_t>(m_CullBuckets.size());
 							m_CullBuckets.push_back(bucket);
 						}
@@ -532,7 +561,7 @@ namespace Strata
 				}
 			}
 		};
-		addBuckets(false, 0);
+		addBuckets(BucketKind::View, 0);
 		const uint32_t firstPhaseViewBuckets = static_cast<uint32_t>(m_CullBuckets.size());
 		const bool occlusion = IsOcclusionCulled();
 		if (occlusion)
@@ -548,7 +577,7 @@ namespace Strata
 		}
 		const uint32_t viewBuckets = static_cast<uint32_t>(m_CullBuckets.size());
 		for (uint32_t cascade = 0; cascade < m_CascadeCount; cascade++)
-			addBuckets(true, cascade);
+			addBuckets(BucketKind::Cascade, cascade);
 		const uint32_t firstPhaseBuckets = static_cast<uint32_t>(m_CullBuckets.size());
 		const uint64_t frame = m_RenderCount + 1;
 		// Without history (a camera cut, the first frame) the first phase would draw nothing: the cascades are drawn whole, and
@@ -566,6 +595,54 @@ namespace Strata
 				m_CullBucketTable[bucket] = static_cast<uint32_t>(m_CullBuckets.size());
 				m_CullBuckets.push_back(bucket);
 			}
+		}
+		// The local shadow views' buckets, last: one set per place in a batch of views. Their draw slots are the records of the
+		// meshes within each view's light's range (the CPU's query, which the GPU's exact tests stay within), the most any
+		// batch's view at that place has; their instances bound the draw list.
+		const uint32_t firstLocalBucket = static_cast<uint32_t>(m_CullBuckets.size());
+		const uint32_t localViews = static_cast<uint32_t>(m_LocalShadowViews.size());
+		for (uint32_t view = 0; view < std::min(localViews, RenderData::c_CullMaxLocalShadowViews); view++)
+			addBuckets(BucketKind::LocalView, view);
+		m_CullLocalSlots = {};
+		m_CullLocalViews.clear();
+		uint64_t localEntries = 0;
+		m_CullLocalStamps.resize(meshSlots, 0u);
+		const glm::dvec3 cameraPosition(camera.Position);
+		for (uint32_t index = 0; index < localViews; index++)
+		{
+			const LocalShadowDrawView& view = m_LocalShadowViews[index];
+			if (++m_CullLocalStamp == 0)
+			{
+				std::fill(m_CullLocalStamps.begin(), m_CullLocalStamps.end(), 0u);
+				m_CullLocalStamp = 1;
+			}
+			std::array<uint32_t, 2> records = {};
+			for (uint32_t item = view.FirstCandidate; item < view.FirstCandidate + view.CandidateCount; item++)
+			{
+				const uint32_t proxy = m_LocalShadowCandidates[item];
+				if ((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::CastShadows) == 0)
+					continue;
+				const uint32_t slot = renderScene.GetMeshSlot(proxy);
+				if (slot >= meshSlots || mirror.GetMeshRecords(slot) == 0)
+					continue;
+				localEntries += renderScene.GetInstanceCount(proxy);
+				if (m_CullLocalStamps[slot] == m_CullLocalStamp)
+					continue;
+				m_CullLocalStamps[slot] = m_CullLocalStamp;
+				records[arenaOf(slot)] += mirror.GetMeshRecords(slot);
+			}
+			std::array<uint32_t, 2>& slots = m_CullLocalSlots[index % RenderData::c_CullMaxLocalShadowViews];
+			for (size_t arena = 0; arena < slots.size(); arena++)
+				slots[arena] = std::max(slots[arena], records[arena]);
+
+			const LocalShadowViewKey& key = m_LocalShadowLights[view.Light].Views[view.Face].Key;
+			RenderData::CullLocalShadowView record;
+			for (size_t plane = 0; plane < 6; plane++)
+				record.Planes[plane] = view.Planes[plane];
+			record.Light = glm::vec4(key.Position, key.Range);
+			record.RelativeLight = glm::vec4(glm::vec3(glm::dvec3(key.Position) - cameraPosition), key.Near);
+			record.Parameters = glm::vec4(key.TanHalfAngle, static_cast<float>(key.Tile.Size), view.LOD.ErrorThreshold, 0.0f);
+			m_CullLocalViews.push_back(record);
 		}
 
 		RenderData::CullConstants& constants = m_CullConstants;
@@ -599,7 +676,8 @@ namespace Strata
 		constants.MaterialSlotCount = mirror.GetMaterialSlotCount();
 		// A view instance whose level cross-fades is drawn twice.
 		const uint64_t viewEntries = m_Specification.FadeLevelsOfDetail ? 2ull : 1ull;
-		constants.DrawListCapacity = static_cast<uint32_t>(std::min<uint64_t>(renderScene.GetInstances().size() * (viewEntries + m_CascadeCount), 0xFFFFFFF0ull));
+		constants.DrawListCapacity = static_cast<uint32_t>(std::min<uint64_t>(renderScene.GetInstances().size() * (viewEntries + m_CascadeCount) + localEntries,
+			0xFFFFFFF0ull));
 		m_CullInstanceCount = static_cast<uint32_t>(renderScene.GetInstances().size());
 		constants.ArgumentsPerBucket = std::max({ mirror.GetArenaRecords(0), mirror.GetArenaRecords(1), 1u });
 		constants.BucketCount = static_cast<uint32_t>(m_CullBuckets.size());
@@ -615,6 +693,7 @@ namespace Strata
 		constants.SecondPhaseShadowBuckets = firstPhaseBuckets;
 		constants.ShadowMapSize = m_Specification.ShadowMapSize;
 		constants.ShadowPyramidLevels = m_ShadowPyramidLevels;
+		constants.FirstLocalBucket = firstLocalBucket;
 		// The bucket table's second part: each dense bucket's draw slots.
 		for (const uint32_t bucket : m_CullBuckets)
 			m_CullBucketTable.push_back(GetBucketSlots(bucket));
@@ -724,6 +803,7 @@ namespace Strata
 			nvrhi::BindingSetItem::Texture_SRV(8, m_DepthPyramid),
 			nvrhi::BindingSetItem::Texture_SRV(9, m_ShadowPyramid ? m_ShadowPyramid.Get() : m_DummyShadowPyramid.Get()),
 			nvrhi::BindingSetItem::StructuredBuffer_SRV(10, m_CascadeBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_SRV(11, m_CullLocalViewBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_CullCountBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_CullOffsetBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_CullArgumentBuffer),
@@ -768,6 +848,8 @@ namespace Strata
 			m_CullBucketTableUploaded = m_CullBucketTable;
 		}
 		commandList->writeBuffer(m_CullConstantBuffer, &m_CullConstants, sizeof(m_CullConstants));
+		if (!m_CullLocalViews.empty())
+			commandList->writeBuffer(m_CullLocalViewBuffer, m_CullLocalViews.data(), m_CullLocalViews.size() * sizeof(RenderData::CullLocalShadowView));
 		m_CullTablesUploaded = true;
 		return true;
 	}
@@ -806,6 +888,10 @@ namespace Strata
 
 		nvrhi::ComputeState state;
 		state.bindings = { m_CullBindingSet };
+		// The cascades and the first batch of local shadow views are culled together; later batches after the first's draws
+		// (DrawGPULocalShadows).
+		const uint32_t localViews = static_cast<uint32_t>(m_LocalShadowViews.size());
+		const uint32_t localMode = GetLocalShadowCullMode(0, std::min(localViews, RenderData::c_CullMaxLocalShadowViews));
 		const auto cullPasses = [&](uint32_t mode)
 		{
 			state.pipeline = m_CullViewPipeline;
@@ -816,7 +902,8 @@ namespace Strata
 				return;
 			state.pipeline = m_CullShadowPipeline;
 			commandList->setComputeState(state);
-			commandList->setPushConstants(&mode, sizeof(mode));
+			const uint32_t shadowMode = mode | localMode;
+			commandList->setPushConstants(&shadowMode, sizeof(shadowMode));
 			Dispatch(commandList, constants.ProxyCount);
 		};
 		const auto barrier = [&]() { CullBarrier(commandList); };
@@ -828,7 +915,13 @@ namespace Strata
 		const uint32_t mode = c_CullModeCount;
 		commandList->setPushConstants(&mode, sizeof(mode));
 		Dispatch(commandList, static_cast<uint64_t>(constants.BucketCount) * constants.LODCapacity);
-		if (feedback)
+		if (localViews > 0)
+		{
+			commandList->setPushConstants(&c_CullModeLocal, sizeof(c_CullModeLocal));
+			Dispatch(commandList, static_cast<uint64_t>(constants.BucketCount) * constants.LODCapacity);
+		}
+		// The feedback is packed once every counting pass ran: after the last batch of local shadow views.
+		if (feedback && localViews <= RenderData::c_CullMaxLocalShadowViews)
 		{
 			// The touched slots' feedback, packed (it reads the counting passes' writes, as the build does).
 			state.pipeline = m_CullFeedbackPipeline;
@@ -1238,7 +1331,7 @@ namespace Strata
 		{
 			// What the first phase did not draw, found visible against its depth, in the same frame.
 			RunShadowOcclusionPhase(commandList);
-			DrawGPUShadowBuckets(commandList, constants.SecondPhaseShadowBuckets, constants.BucketCount);
+			DrawGPUShadowBuckets(commandList, constants.SecondPhaseShadowBuckets, constants.FirstLocalBucket);
 		}
 	}
 
@@ -1279,6 +1372,105 @@ namespace Strata
 		}
 	}
 
+	uint32_t SceneRenderer::GetLocalShadowCullMode(uint32_t firstView, uint32_t viewCount)
+	{
+		ST_CORE_ASSERT(firstView < 256 && viewCount <= RenderData::c_CullMaxLocalShadowViews, "a batch of local shadow views out of range");
+		return (firstView << 8) | (viewCount << 16);
+	}
+
+	void SceneRenderer::RunLocalShadowCulling(nvrhi::ICommandList* commandList, uint32_t firstView, uint32_t viewCount, bool lastBatch)
+	{
+		ST_PROFILE_FUNCTION();
+		const RenderData::CullConstants& constants = m_CullConstants;
+		const auto barrier = [&]() { CullBarrier(commandList); };
+		nvrhi::ComputeState state;
+		state.bindings = { m_CullBindingSet };
+		// The previous batch's counts, draws and arguments were recorded into its draws: cleared for this batch's.
+		state.pipeline = m_CullBuildPipeline;
+		commandList->setComputeState(state);
+		commandList->setPushConstants(&c_CullModeResetLocal, sizeof(c_CullModeResetLocal));
+		const uint64_t localBuckets = constants.BucketCount - constants.FirstLocalBucket;
+		Dispatch(commandList, localBuckets * std::max<uint64_t>(constants.LODCapacity, static_cast<uint64_t>(constants.ArgumentsPerBucket) * c_ArgumentWords));
+		barrier();
+		const uint32_t viewMode = GetLocalShadowCullMode(firstView, viewCount) | c_CullModeLocal;
+		const uint32_t countMode = viewMode | c_CullModeCount;
+		state.pipeline = m_CullShadowPipeline;
+		commandList->setComputeState(state);
+		commandList->setPushConstants(&countMode, sizeof(countMode));
+		Dispatch(commandList, constants.ProxyCount);
+		barrier();
+		state.pipeline = m_CullBuildPipeline;
+		commandList->setComputeState(state);
+		commandList->setPushConstants(&c_CullModeLocal, sizeof(c_CullModeLocal));
+		Dispatch(commandList, static_cast<uint64_t>(constants.BucketCount) * constants.LODCapacity);
+		if (lastBatch && constants.Feedback != 0)
+		{
+			// Every counting pass ran: the touched slots' feedback, packed.
+			state.pipeline = m_CullFeedbackPipeline;
+			commandList->setComputeState(state);
+			commandList->setPushConstants(&c_CullModeCount, sizeof(c_CullModeCount));
+			Dispatch(commandList, 1 + static_cast<uint64_t>(constants.MeshSlotCount) + constants.MaterialSlotCount);
+		}
+		barrier();
+		const uint32_t writeMode = viewMode | c_CullModeWrite;
+		state.pipeline = m_CullShadowPipeline;
+		commandList->setComputeState(state);
+		commandList->setPushConstants(&writeMode, sizeof(writeMode));
+		Dispatch(commandList, constants.ProxyCount);
+		barrier();
+	}
+
+	void SceneRenderer::DrawGPULocalShadows(nvrhi::ICommandList* commandList)
+	{
+		const RenderData::CullConstants& constants = m_CullConstants;
+		const GeometryPool& pool = *Renderer::GetGeometryPool();
+		const bool count = GetGPUIndirectPath() == GPUIndirectPath::Count;
+		const uint32_t views = static_cast<uint32_t>(m_LocalShadowViews.size());
+		for (uint32_t first = 0; first < views; first += RenderData::c_CullMaxLocalShadowViews)
+		{
+			const uint32_t batchViews = std::min(views - first, RenderData::c_CullMaxLocalShadowViews);
+			if (first > 0)
+				RunLocalShadowCulling(commandList, first, batchViews, first + batchViews == views);
+			for (uint32_t place = 0; place < batchViews; place++)
+			{
+				const LocalShadowDrawView& drawView = m_LocalShadowViews[first + place];
+				const ShadowAtlasTile& tile = m_LocalShadowLights[drawView.Light].Views[drawView.Face].Key.Tile;
+				ClearLocalShadowTile(commandList, tile);
+				nvrhi::GraphicsState state;
+				state.framebuffer = m_LocalShadowFramebuffer;
+				state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(tile.X), static_cast<float>(tile.X + tile.Size),
+					static_cast<float>(tile.Y), static_cast<float>(tile.Y + tile.Size), 0.0f, 1.0f));
+				state.bindings = { m_GPUShadowBindingSet, Renderer::GetBindlessTextures().GetTable(), m_ShadowPushBindingSet };
+				state.indexBuffer = nvrhi::IndexBufferBinding { pool.GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
+				state.indirectParams = m_CullArgumentBuffer;
+				state.indirectCountBuffer = count ? m_CullBucketCountBuffer.Get() : nullptr;
+				// The view's matrix is its light's slot's (a push constant after the state).
+				const uint32_t viewIndex = drawView.Light * RenderData::c_LocalShadowFaces + drawView.Face;
+				for (uint32_t dense = constants.FirstLocalBucket; dense < constants.BucketCount; dense++)
+				{
+					const uint32_t bucket = m_CullBuckets[dense];
+					const BucketParts parts = DecodeBucket(bucket);
+					const uint32_t slots = GetBucketSlots(bucket);
+					if (parts.Cascade != place || (slots == 0 && !count))
+						continue;
+					const PipelineKey key { parts.AlphaMask ? Pass::LocalShadowMasked : Pass::LocalShadow, parts.DoubleSided, parts.Mirrored,
+						parts.Geometry == RenderData::c_CullGeometrySkinned };
+					const GeometryArena arena = parts.Geometry == RenderData::c_CullGeometryStatic ? GeometryArena::Static : GeometryArena::Skinned;
+					state.pipeline = GetScenePipeline(key);
+					state.vertexBuffers = {
+						nvrhi::VertexBufferBinding { pool.GetPositionBuffer(arena), 0, 0 },
+						nvrhi::VertexBufferBinding { pool.GetAttributeBuffer(arena), 1, 0 }
+					};
+					if (key.Skinned)
+						state.vertexBuffers.push_back(nvrhi::VertexBufferBinding { pool.GetSkinBuffer(), 2, 0 });
+					commandList->setGraphicsState(state);
+					commandList->setPushConstants(&viewIndex, sizeof(viewIndex));
+					DrawGPUBucket(commandList, dense, slots);
+				}
+			}
+		}
+	}
+
 	void SceneRenderer::ResolveCullCounters(bool wait)
 	{
 		// The newest readback whose copy completed; with `wait`, the newest one submitted.
@@ -1305,6 +1497,8 @@ namespace Strata
 		stats.Draws = counters.ViewDraws;
 		stats.ShadowDraws = counters.ShadowDraws;
 		stats.SecondPhaseShadowDraws = counters.SecondPhaseShadowDraws;
+		stats.LocalShadowInstances = counters.LocalShadowInstances;
+		stats.LocalShadowDraws = counters.LocalShadowDraws;
 		stats.VisibleProxies = counters.VisibleProxies;
 		stats.SizeCulledProxies = counters.SizeCulled;
 		stats.SubTexelCasters = counters.SubTexelCasters;

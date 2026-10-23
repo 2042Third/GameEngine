@@ -196,6 +196,8 @@ namespace Strata::Tests
 		uint32_t ShadowDraws = 0;
 		uint32_t SubTexelCasters = 0;
 		uint32_t VisibleProxies = 0; // Mesh renderers in the view frustum (also those too small to draw)
+		uint32_t LocalShadowCasters = 0; // Instances drawn into point and spot lights' shadow views, summed over views
+		uint32_t LocalShadowDraws = 0;
 	};
 
 	inline DrawnCounts GetDrawnCounts(SceneRenderer& renderer)
@@ -211,6 +213,8 @@ namespace Strata::Tests
 		counts.ShadowDraws = stats.ShadowDrawCalls;
 		counts.SubTexelCasters = stats.SubTexelCasters;
 		counts.VisibleProxies = stats.VisibleProxies;
+		counts.LocalShadowCasters = stats.LocalShadowCasters;
+		counts.LocalShadowDraws = stats.LocalShadowDrawCalls;
 		if (!stats.GPUDriven)
 			return counts;
 		renderer.ResolveGPUStats(true);
@@ -227,6 +231,8 @@ namespace Strata::Tests
 		counts.ShadowCasters = gpu.ShadowInstances;
 		counts.ShadowDraws = gpu.ShadowDraws;
 		counts.SubTexelCasters = gpu.SubTexelCasters;
+		counts.LocalShadowCasters = gpu.LocalShadowInstances;
+		counts.LocalShadowDraws = gpu.LocalShadowDraws;
 		// The GPU counts every drawable proxy in view (a feedback frame's CPU looked at some of them only).
 		counts.VisibleProxies = gpu.VisibleProxies + gpu.SizeCulledProxies;
 		return counts;
