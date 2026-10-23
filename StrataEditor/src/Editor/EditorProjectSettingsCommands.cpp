@@ -380,8 +380,9 @@ namespace Strata
 			"Sets the game's identity, which exported games show: title (the window's title, the log, dialogs; empty: the project's name), "
 			"version (one to four whole numbers from 0 to 65535 separated by dots, e.g. \"1.2.0\"), company and copyright (optional), at most "
 			"128 characters of text each without line breaks, and icon: a texture of the project whose source is a PNG, JPEG, TGA or BMP image "
-			"(at least 256 x 256 pixels, square or centered on transparent pixels), or null for none (the strata mark). Fields left out keep "
-			"their values. The project's name stays the game's name for its save and log directories, so a new title or company never moves "
+			"(at least 256 x 256 pixels, square or centered on transparent pixels), or null for none (the game shows what its platform gives "
+			"it: on Windows, the runtime's strata mark). Fields left out keep their values. The project's name stays the game's name for its "
+			"save and log directories, so a new title or company never moves "
 			"players' saves. One undo step that leaves the scene saved; writes the project file in the background (project.save waits for "
 			"it); allowed while playing. An invalid field changes nothing. Returns game (title, version, company, copyright, icon).",
 			ObjectSchema({

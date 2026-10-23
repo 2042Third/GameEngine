@@ -210,6 +210,27 @@ TEST_SUITE("Editor.UI.ProjectSettings")
 		CHECK(IsDrawn("ProjectSettings.Game.Title"));
 	}
 
+	TEST_CASE("The Export dialog says when the game has no icon and when its icon is missing")
+	{
+		HarnessEditor editor;
+		editor.Frames(1);
+		CreateProject(editor, "ExportIdentityIcon");
+		REQUIRE(editor.Click("Toolbar.Export"));
+		editor.Frames(2);
+		REQUIRE(IsDrawn("Export.Identity"));
+		CHECK(UI::ItemProbe::Find("Export.Identity")->Text == "Game 1.0.0, without an icon of its own");
+
+		// An icon the project names but no longer has fails the export: the summary says so rather than name a fallback.
+		const std::filesystem::path source = CreateTemporaryDirectory("ExportIdentityIconSource") / "Icon.png";
+		REQUIRE(FileSystem::WriteBytes(source, CreateSolidPNG(16, 16, 40, 120, 220)));
+		const std::string icon = editor.Run("asset.import", { { "file", FileSystem::ToUTF8(source) }, { "directory", "Textures" } })["asset"].get<std::string>();
+		editor.Run("project.setGameInfo", { { "icon", icon } });
+		editor.Run("asset.delete", { { "asset", icon }, { "force", true } });
+		editor.Frames(2);
+		REQUIRE(editor.Layer->GetExportDialog().IsOpen());
+		CHECK(UI::ItemProbe::Find("Export.Identity")->Text == "Game 1.0.0, with the missing icon " + icon + ": choose another or none");
+	}
+
 	TEST_CASE("The Export page lists what pruned exports keep and changes it through project.setExportSettings")
 	{
 		HarnessEditor editor;

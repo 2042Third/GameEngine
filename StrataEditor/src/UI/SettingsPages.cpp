@@ -279,7 +279,7 @@ namespace Strata
 				m_Icon.Name = "Icon";
 				m_Icon.DisplayName = "Icon";
 				m_Icon.Tooltip = "A texture of the project whose PNG, JPEG, TGA or BMP image becomes the exported game's icon, at least 256 x "
-					"256 pixels; none: the strata mark";
+					"256 pixels; none: what the platform gives the game (on Windows, the runtime's strata mark)";
 				m_Icon.Type = PropertyType::Asset;
 				m_Icon.AssetFilter = AssetType::Texture;
 			}

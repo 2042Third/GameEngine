@@ -6,8 +6,8 @@
 #include "Editor/GameExport.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
-#include "UI/FileDialogs.h"
 #include "UI/EditorShell.h"
+#include "UI/FileDialogs.h"
 #include "UI/Icons.h"
 #include "UI/ItemProbe.h"
 #include "UI/SettingsPages.h"
@@ -332,11 +332,28 @@ namespace Strata
 		std::string summary = fmt::format("{} {}", game.Title.empty() ? config.Name : game.Title, game.Version);
 		if (!game.Company.empty())
 			summary += fmt::format(" by {}", game.Company);
-		std::optional<AssetMetadata> icon;
-		if (game.Icon.IsValid() && context.Context.GetAssetManager())
-			icon = context.Context.GetAssetManager()->GetMetadata(game.Icon);
-		summary += icon ? fmt::format(", with the icon {}", icon->Path) : std::string(", with the strata mark as its icon");
-		Caption(summary, colors.Text, width);
+		// Without an icon the game shows what its platform gives it (on Windows, the runtime's strata mark); an icon the project
+		// names but no longer has fails the export, so the summary says so.
+		ImVec4 color = colors.Text;
+		if (!game.Icon.IsValid())
+		{
+			summary += ", without an icon of its own";
+		}
+		else
+		{
+			const EditorAssetManager* assets = context.Context.GetAssetManager();
+			const std::optional<AssetMetadata> icon = assets ? assets->GetMetadata(game.Icon) : std::nullopt;
+			if (icon)
+			{
+				summary += fmt::format(", with the icon {}", icon->Path);
+			}
+			else
+			{
+				summary += fmt::format(", with the missing icon {}: choose another or none", game.Icon.ToString());
+				color = colors.Warning;
+			}
+		}
+		Caption(summary, color, width);
 		UI::ItemProbe::Record("Export.Identity", true, 0, summary);
 		if (UI::LinkButton("Export.EditIdentity", "Title, version and icon in Project Settings", Icons::ArrowRight) && context.Shell)
 		{
