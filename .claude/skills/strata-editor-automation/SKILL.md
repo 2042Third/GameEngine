@@ -477,8 +477,9 @@ time: presenting, and the wait for the display's image at the back buffer's firs
 
 **Render statistics and GPU time**: `editor.perf` also has `gpu` (`frames` with GPU times, `latencyFrames`: they arrive
 2-3 frames late, `busy`, `stages` per GPU stage: `GPU.Uploads`, `GPU.Setup`, `GPU.Cull`, `GPU.Shadows`, `GPU.Prepass`,
-`GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent`, `GPU.TAA` (motion vectors' history, temporal anti-aliasing),
-`GPU.Post`, `GPU.Overlays`, `GPU.UI` (the game UI), `GPU.ImGui`) and `boundBy`: `"gpu"`
+`GPU.AO`, `GPU.Reflections` (reflection probes' conversions, screen-space reflections), `GPU.Opaque` (with the sky),
+`GPU.Transparent`, `GPU.TAA` (motion vectors' history, temporal anti-aliasing), `GPU.Post`, `GPU.Overlays`, `GPU.UI` (the
+game UI), `GPU.ImGui`) and `boundBy`: `"gpu"`
 (the GPU's median busy time takes at least 90% of the frame interval and exceeds the CPU's frame time: make the scene
 cheaper to draw), `"cpu"` (the CPU's frame time does: look at `stages`), `"capped"` (vsync or a frame-rate cap sets the
 pace: neither is the limit) or `"unknown"` (no GPU times: `--no-gpu`, or a driver without timestamps). Its `renderStats`
