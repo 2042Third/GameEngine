@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Audio/AudioTestUtils.h"
+#include "Editor/CommandJournal.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/ImGuiHarness.h"
@@ -1453,6 +1454,39 @@ TEST_SUITE("Editor.UI.Inspector")
 		REQUIRE(fog);
 		CHECK(fog.HasComponent<HeightFogComponent>());
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.AddHeightFog").has_value());
+
+		// With reflection probes, a button bakes them all (lighting.bakeProbes, through the runner: it takes frames); the probe's
+		// own section bakes the selected ones.
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.BakeProbes").has_value());
+		const std::string probe = editor.Run("entity.create", { { "name", "Probe" }, { "components", { { "ReflectionProbe", nlohmann::json::object() } } } })["id"]
+			.get<std::string>();
+		editor.Context().ClearSelection();
+		editor.Frames(2);
+		const auto lastCommand = [&]() -> const CommandJournalEntry*
+		{
+			const auto& entries = editor.Context().GetJournal().GetEntries();
+			for (auto entry = entries.rbegin(); entry != entries.rend(); ++entry)
+			{
+				if (!entry->Event)
+					return &*entry;
+			}
+			return nullptr;
+		};
+		REQUIRE(editor.Click("Inspector.BakeProbes"));
+		editor.Frames(2);
+		REQUIRE(lastCommand());
+		CHECK(lastCommand()->Command == "lighting.bakeProbes");
+		CHECK(lastCommand()->Source == CommandSource::UI);
+		CHECK(lastCommand()->Parameters.empty());
+		editor.Context().Select(*UUIDFromJson(probe));
+		editor.Frames(2);
+		REQUIRE(editor.Click("Inspector.ReflectionProbe.Bake"));
+		editor.Frames(2);
+		REQUIRE(lastCommand());
+		CHECK(lastCommand()->Command == "lighting.bakeProbes");
+		CHECK(lastCommand()->Parameters["entities"] == nlohmann::json::array({ probe }));
+		editor.Context().ClearSelection();
+		editor.Frames(2);
 
 		// The atmosphere reads as such.
 		const Entity skyEntity = editor.Context().GetActiveScene()->FindEntityByName("Sky");

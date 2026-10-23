@@ -2006,7 +2006,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   each following the code that reads the property); `component.get` and `entity.get` list them as `inactive`. It shows the scene's settings (gravity, the fixed step, the physics
   world's capacities and the collision layers: names and a compact matrix, long names elided; bodies and controllers
   choose their layer among layer 0 and the named ones; how many entities sub-scenes create per frame) and sky (with an
-  "Add Height Fog" button while the scene has no height fog) with nothing selected, in sections that start closed with a summary on their headers
+  "Add Height Fog" button while the scene has no height fog, and "Bake Reflection Probes" while it has probes; a
+  probe's own section has Bake, both running `lighting.bakeProbes` through the runner) with nothing selected, in sections that start closed with a summary on their headers
   (`UI::SectionHeader`'s summary: live widgets cost frame time while they are drawn); the
   Asset tab edits materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings
   (Apply runs `asset.setImportSettings` through the runner; why the last import failed, and its warnings, show above

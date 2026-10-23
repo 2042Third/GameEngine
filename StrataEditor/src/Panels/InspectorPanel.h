@@ -112,7 +112,9 @@ namespace Strata
 		void DrawSceneSettings(EditorContext& context, const EditorCommandRegistry& commands);
 		// The scene's collision layers: their names and the matrix of which collide (scene.setSettings, one step per edit).
 		void DrawCollisionLayers(EditorContext& context, const EditorCommandRegistry& commands);
-		void DrawSky(EditorContext& context, const EditorCommandRegistry& commands);
+		void DrawSky(EditorPanelContext& panelContext);
+		// The Bake button of reflection probes (lighting.bakeProbes for the selected ones).
+		void DrawReflectionProbeBake(EditorPanelContext& panelContext, std::span<const Entity> entities);
 		// The values new components of the type have (what axis labels reset to), computed once per type.
 		const std::vector<std::optional<PropertyValue>>& GetDefaults(const ComponentInfo& info);
 	private:

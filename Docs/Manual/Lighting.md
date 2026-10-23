@@ -127,7 +127,8 @@ a cave, add a **Reflection Probe** (Add Component, Rendering) where a viewer wou
 the scene all around the probe (an HDR texture); inside its box (**Extents**, the half size along the entity's axes),
 surfaces reflect that picture and take their ambient light from it instead of from the sky.
 
-Baking (the editor command `lighting.bakeProbes`) takes the picture: the editor renders what the probe sees, saves it as
+**Bake**, in the probe's section of the Inspector (or **Bake Reflection Probes** in the Sky section, with nothing
+selected, for all of them; agents use `lighting.bakeProbes`), takes the picture: the editor renders what the probe sees, saves it as
 `Assets/Lighting/<scene>/<probe>.hdr` and sets **Capture** to it, in one step you can undo. Bake again after you change
 the lighting or move things: the new picture replaces the probe's earlier one (which goes to the project's trash). Probes
 see each other's pictures, so a second bake adds light that bounced twice. Pictures are not taken while the game runs:

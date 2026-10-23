@@ -429,6 +429,7 @@ namespace Strata
 		{
 			m_MaterialEditor.CommitPending(context);
 			DrawSceneSettings(context, commands);
+			DrawSky(panelContext);
 			return;
 		}
 
@@ -803,6 +804,8 @@ namespace Strata
 				DrawMaterialSection(panelContext, entities);
 			if (info.TypeId == entt::type_id<AnimatorComponent>().hash() && entities.size() == 1)
 				DrawAnimatorState(context, entities.front());
+			if (info.TypeId == entt::type_id<ReflectionProbeComponent>().hash())
+				DrawReflectionProbeBake(panelContext, entities);
 			ImGui::Spacing();
 		}
 		ImGui::PopID();
@@ -1336,7 +1339,6 @@ namespace Strata
 				{ "maxEntitiesDestroyedPerFrame", settings.MaxEntitiesDestroyedPerFrame },
 				{ "physicsCapacity", { { "maxBodies", capacity.MaxBodies }, { "maxContactConstraints", capacity.MaxContactConstraints } } } });
 		}
-		DrawSky(context, commands);
 	}
 
 	void InspectorPanel::DrawCollisionLayers(EditorContext& context, const EditorCommandRegistry& commands)
@@ -1497,8 +1499,23 @@ namespace Strata
 		}
 	}
 
-	void InspectorPanel::DrawSky(EditorContext& context, const EditorCommandRegistry& commands)
+	void InspectorPanel::DrawReflectionProbeBake(EditorPanelContext& panelContext, std::span<const Entity> entities)
 	{
+		// Baking renders and writes from the edited scene: not while playing (lighting.bakeProbes refuses it too).
+		const bool playing = panelContext.Context.IsPlaying();
+		ImGui::BeginDisabled(playing);
+		const char* tooltip = playing ? "Stop playing to bake: the bake renders the edited scene"
+			: "Render what the probe sees into a new HDR texture and make it the Capture (one undo step; the earlier bake's file goes "
+			  "to the trash)";
+		if (UI::ToolbarButton("Inspector.ReflectionProbe.Bake", Icons::Aperture, "Bake", tooltip))
+			RunEditorCommandDeferred(panelContext.Runner, panelContext.Context, panelContext.Commands, "lighting.bakeProbes", { { "entities", ToJson(entities) } });
+		ImGui::EndDisabled();
+	}
+
+	void InspectorPanel::DrawSky(EditorPanelContext& panelContext)
+	{
+		EditorContext& context = panelContext.Context;
+		const EditorCommandRegistry& commands = panelContext.Commands;
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		Scene& scene = *context.GetActiveScene();
 		// The sky the renderer uses: the first active sky light.
@@ -1544,6 +1561,16 @@ namespace Strata
 		if (!SceneRenderer::FindHeightFog(scene)
 			&& UI::ToolbarButton("Inspector.AddHeightFog", Icons::CloudFog, "Add Height Fog", "Create an entity with height fog: fog that thickens toward the ground"))
 			RunEditorCommand(context, commands, "entity.create", { { "name", "Height Fog" }, { "components", { { "HeightFog", nlohmann::json::object() } } } });
+		// The scene's reflection probes, all baked at once (the probe's own section bakes one).
+		if (!scene.GetRegistry().view<ReflectionProbeComponent>().empty())
+		{
+			const bool playing = context.IsPlaying();
+			ImGui::BeginDisabled(playing);
+			if (UI::ToolbarButton("Inspector.BakeProbes", Icons::Aperture, "Bake Reflection Probes", playing ? "Stop playing to bake: the bake renders the edited scene"
+					: "Render what every active reflection probe sees into its Capture (one undo step)"))
+				RunEditorCommandDeferred(panelContext.Runner, context, commands, "lighting.bakeProbes");
+			ImGui::EndDisabled();
+		}
 	}
 
 }
