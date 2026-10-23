@@ -1562,8 +1562,8 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   `Update` finalizes completions on the main thread: `Asset::FinalizeOnMainThread` creates GPU resources in one batch of
   the upload context (see the upload seam below), in steps, until the frame's upload or time budget is used up (`AssetFinalizeResult::Pending`: the asset
   continues next frame, first in line). Generations discard results of loads that were superseded by a reload, unload
-  or cancellation. `LoadAssetSync` is for tools and tests (unbudgeted: it finishes at once; scenes load through
-  `SceneLoader`, which never waits);
+  or cancellation. `LoadAssetSync` is for tools and tests (unbudgeted: it finishes at once, an asset the open batch
+  cannot take getting a batch of its own; scenes load through `SceneLoader`, which never waits);
   `ReplaceLoadedAsset` publishes an object made in memory for a registered asset at once (editors' document edits).
   Budgets,
   eviction, uploads and the queue are described in [Streaming and residency](#streaming-and-residency).

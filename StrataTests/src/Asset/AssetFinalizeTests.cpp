@@ -21,6 +21,8 @@ namespace
 {
 
 	constexpr uint64_t c_MB = 1000 * 1000;
+	// The stored form's step count of a BatchBoundAsset.
+	constexpr uint64_t c_BatchBound = std::numeric_limits<uint64_t>::max();
 
 	// Records what the manager asks of an upload context.
 	class FakeUploadContext final : public AssetUploadContext
@@ -50,6 +52,7 @@ namespace
 		}
 
 		bool IsOpen() const { return m_Open > 0; }
+		bool HasRecorded() const { return m_BatchSteps > 0; } // The open batch recorded a step
 		void RecordStep() { m_BatchSteps++; }
 
 		uint32_t Begins = 0;
@@ -158,8 +161,43 @@ namespace
 		std::vector<FinalizeCall>& m_Calls;
 	};
 
+	// An asset that, like a mesh whose geometry needs the geometry pool to grow, cannot finish in a batch something was
+	// recorded in (the pool grows between batches once one wrote into it): Pending then, whatever the budget; in a batch of
+	// its own it records one step and is done.
+	class BatchBoundAsset final : public Asset
+	{
+	public:
+		explicit BatchBoundAsset(std::vector<FinalizeCall>& calls)
+			: m_Calls(calls)
+		{
+		}
+
+		AssetType GetType() const override { return c_FakeAssetType; }
+
+		AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override
+		{
+			auto* upload = dynamic_cast<FakeUploadContext*>(context.Upload);
+			FinalizeCall call;
+			call.Handle = Handle;
+			call.Frame = context.Manager ? context.Manager->GetFrameIndex() : 0;
+			call.FirstOfFrame = context.FirstOfFrame;
+			call.HadUpload = upload && upload->IsOpen();
+			const bool fits = !upload || !upload->HasRecorded();
+			if (fits)
+			{
+				if (upload)
+					upload->RecordStep();
+				call.Steps = 1;
+			}
+			m_Calls.push_back(call);
+			return fits ? AssetFinalizeResult::Done : AssetFinalizeResult::Pending;
+		}
+	private:
+		std::vector<FinalizeCall>& m_Calls;
+	};
+
 	// Loads c_FakeAssetType as stepped assets while it lives: the stored form is (steps, step bytes); (0, waits) is an asset
-	// awaiting the GPU for that many calls.
+	// awaiting the GPU for that many calls, (c_BatchBound, 0) a BatchBoundAsset.
 	class ScopedSteppedLoader
 	{
 	public:
@@ -180,6 +218,8 @@ namespace
 				std::memcpy(description, data.data(), sizeof(description));
 				if (description[0] == 0)
 					return CreateRef<AwaitingAsset>(static_cast<uint32_t>(description[1]), calls);
+				if (description[0] == c_BatchBound)
+					return CreateRef<BatchBoundAsset>(calls);
 				return CreateRef<SteppedAsset>(static_cast<uint32_t>(description[0]), description[1], calls);
 			});
 		}
@@ -392,6 +432,41 @@ TEST_SUITE("Asset.Finalize")
 		CHECK(calls.back().HadUpload);
 		CHECK(upload->Begins - begins == 3);
 		CHECK(upload->Submits == upload->Begins);
+		CHECK_FALSE(upload->IsOpen());
+		CHECK(StateCountsMatch(*manager));
+	}
+
+	TEST_CASE("A load without a budget that the open batch cannot take finishes in a batch of its own")
+	{
+		// Waiting for loads finalizes them without a budget (the editor's scripted start waits for its scene's), and a mesh
+		// whose geometry needs the geometry pool to grow cannot finish in a batch that wrote into the pool. Behind another
+		// arrival's upload such a mesh failed to load: "Finalization did not finish without an upload budget".
+		std::vector<FinalizeCall> calls;
+		ScopedSteppedLoader loader(calls);
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const Ref<FakeUploadContext> upload = CreateRef<FakeUploadContext>();
+		manager->SetUploadContext(upload);
+		const AssetHandle first = manager->AddStored(0x95000, c_FakeAssetType, EncodeStepped(2, c_MB));
+		const AssetHandle bound = manager->AddStored(0x95001, c_FakeAssetType, EncodeStepped(c_BatchBound, 0));
+		const AssetHandle behind = manager->AddStored(0x95002, c_FakeAssetType, EncodeStepped(1, c_MB));
+		// Without a job system the loads are read and decoded right here: the wait finalizes the three in one call.
+		for (AssetHandle handle : { first, bound, behind })
+			manager->RequestLoad(handle);
+		const uint32_t begins = upload->Begins;
+		REQUIRE(manager->WaitForPendingLoads(std::chrono::milliseconds(10000)));
+		CHECK(manager->GetAssetState(first) == AssetState::Ready);
+		CHECK(manager->GetAssetState(bound) == AssetState::Ready);
+		CHECK(manager->GetAssetState(behind) == AssetState::Ready);
+
+		// The batch with the first arrival's steps was submitted, and the asset was finalized again in a new batch, which the
+		// arrival behind it joined.
+		std::vector<AssetHandle> order;
+		for (const FinalizeCall& call : calls)
+			order.push_back(call.Handle);
+		CHECK(order == std::vector<AssetHandle> { first, bound, bound, behind });
+		CHECK(upload->Begins - begins == 2);
+		CHECK(upload->Submits == upload->Begins);
+		CHECK(upload->SubmittedSteps == 4);
 		CHECK_FALSE(upload->IsOpen());
 		CHECK(StateCountsMatch(*manager));
 	}
