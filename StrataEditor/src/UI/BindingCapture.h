@@ -32,8 +32,10 @@ namespace Strata
 		static void Cancel(std::string_view owner);
 		// The seconds left before the capture times out.
 		static double GetRemainingSeconds();
-		// At the start of the editor's UI each frame, before any shortcut: ends a capture that timed out or whose owner did not
-		// ask after it during the last frame, and holds the keyboard while one runs and until every key is up after it.
+		// At the start of the editor's UI each frame, before any shortcut or window: ends a capture that timed out or whose owner
+		// did not ask after it during the last frame, collects what one that ended took for its owner's Take (locking a mouse
+		// button it took before any window sees the press), and holds the keyboard while one runs and until every key is up
+		// after it.
 		static void BeginFrame();
 	};
 

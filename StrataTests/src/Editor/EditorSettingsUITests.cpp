@@ -5,8 +5,10 @@
 #include "Editor/EditorPreferences.h"
 #include "Editor/ExternalEditor.h"
 #include "Editor/HarnessEditor.h"
+#include "Editor/ImGuiHarness.h"
 #include "Editor/UndoStack.h"
 #include "TestHelpers.h"
+#include "UI/BindingCapture.h"
 #include "UI/InputActionsPage.h"
 #include "UI/ItemProbe.h"
 #include "UI/SettingsPages.h"
@@ -20,6 +22,7 @@
 #include <Strata/Project/Project.h>
 #include <Strata/Reflection/PropertyJson.h>
 
+#include <imgui.h>
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
@@ -734,6 +737,60 @@ TEST_SUITE("Editor.UI.InputActions")
 		page.SetKey(Key::K, ImGuiKey_K, false);
 		InputFrame(page.Editor);
 		CHECK(page.Bindings("Gameplay/Jump") == std::vector<std::string> { "Key/Space" });
+	}
+
+	TEST_CASE("A captured mouse press clicks nothing, also in windows drawn before the page")
+	{
+		Input::Reset();
+		ImGuiHarness harness;
+		// Frames as the editor runs them: the input frame and the capture, then the editor's UI, which starts with the capture's
+		// frame, draws a window that acts on a press (as the viewport picks) and then the page, which asks after its capture.
+		bool clicked = false;
+		std::optional<std::string> taken;
+		const auto frame = [&]()
+		{
+			Input::BeginFrame();
+			InputActions::Update();
+			harness.Frame([&]()
+			{
+				BindingCapture::BeginFrame();
+				clicked = clicked || ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+				if (!BindingCapture::IsListening("Test"))
+				{
+					if (std::optional<std::string> binding = BindingCapture::Take("Test"))
+						taken = std::move(binding);
+				}
+			});
+		};
+		const auto setMouse = [&](bool down)
+		{
+			Input::ProcessMouseButton(Mouse::ButtonLeft, down);
+			harness.SetMouseButton(ImGuiMouseButton_Left, down);
+		};
+		harness.MoveMouse(ImVec2(100.0f, 100.0f));
+		frame();
+		bool begun = false;
+		harness.Frame([&]() { begun = BindingCapture::Begin("Test"); });
+		REQUIRE(begun);
+		frame();
+		CHECK(InputActions::IsCapturing());
+
+		// The press the capture takes: no window sees it, not even one drawn before the page collects the binding.
+		setMouse(true);
+		frame();
+		CHECK(taken == std::optional<std::string>("Mouse/Left"));
+		CHECK_FALSE(clicked);
+		setMouse(false);
+		frame();
+		CHECK_FALSE(clicked);
+
+		// The next press is the editor's again.
+		setMouse(true);
+		frame();
+		CHECK(clicked);
+		setMouse(false);
+		frame();
+		Input::Reset();
 	}
 
 	TEST_CASE("A capture while play is paused binds the next key")

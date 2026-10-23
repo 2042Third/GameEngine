@@ -1097,8 +1097,9 @@ section; the composition root runs it first, and Input is a module every engine 
   takes every keyboard and gamepad key from ImGui (`SetKeyOwner` with `LockUntilRelease`, which ImGui keeps for a key
   pressed in the next frame before its navigation reads it), so the captured key runs no shortcut, no navigation and no
   widget (Ctrl captured, then Z, is no undo). The capture hears the mouse too: a press on its Cancel button cancels, and a
-  mouse press it captured clicks nothing (the mouse buttons stay locked until released). It reads the devices, so it works
-  while play is paused.
+  mouse press it captured clicks nothing (`BeginFrame` collects the binding and locks the mouse buttons until released
+  before any window sees the press: the viewport would pick with it). It reads the devices, so it works while play is
+  paused.
 - **Players' bindings in the editor.** Play mode loads the players' file from the project's `.strata/Saves` at every
   start, so a session that saved bindings would silently override later edits of those actions.
   `EditorContext::GetPlayerBindings` reports the bindings that replace the project's (while playing the running game's,
