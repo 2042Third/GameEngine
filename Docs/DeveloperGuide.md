@@ -3177,7 +3177,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - **Tests:** `GPU.SceneRenderer.Materials` (the coat's second highlight from its own normal map, its energy: every pixel
   at most 96.5% of the uncoated surface plus the coat alone; the background displaced where the CPU predicts the exit
   point's projection, unmoved at IOR 1; glass's depth, ids and velocity equal to an opaque cube's, blended surfaces
-  behind it hidden, HDR alpha 1; the copy only for glass and both formats alike), the glass in
+  behind it hidden, HDR alpha 1; the variants without entity ids, which games, thumbnails and probe bakes draw with,
+  writing the same depth, color and velocity; the copy only for glass and both formats alike), the glass in
   `GPU.SceneRenderer.GPUDriven`'s transparent scene, `GPU.Editor.Viewport`'s click on glass with and without TAA, and
   `PerfGPU.Renderer.Transmission` (provisional: 100,000 cubes through a pane over the whole view).
 

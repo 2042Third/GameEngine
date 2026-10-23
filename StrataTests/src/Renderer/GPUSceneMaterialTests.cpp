@@ -427,6 +427,116 @@ TEST_SUITE("GPU.SceneRenderer.Materials")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Glass draws alike in renderers without entity ids (games, thumbnails, probe bakes), with and without motion")
+	{
+		// Scene/ForwardGlassNoEntityIDs.frag and ForwardGlassNoEntityIDsVelocity.frag write the color and the motion into a
+		// framebuffer without the entity-ID attachment: what they write must match the variants with ids.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::QuadMesh));
+		MaterialProperties stone;
+		stone.BaseColor = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+		const AssetHandle glass = assets.AddMaterial(Glass(1.5f, 0.2f));
+		const AssetHandle opaque = assets.AddMaterial(stone);
+
+		struct GlassFrame
+		{
+			std::vector<uint32_t> IDs; // Empty without entity ids
+			std::vector<float> Depth;
+			std::vector<uint32_t> Velocity; // The velocity target's half-float bits; empty without motion
+			std::vector<glm::vec4> HDR;
+			uint32_t CubeID = 0;
+			uint32_t SceneColorCopies = 0;
+		};
+		// A glass cube in front of a wall, moved between two frames (with motion vectors when `temporal`).
+		auto render = [&](bool entityIDs, bool temporal)
+		{
+			Scene scene;
+			if (temporal)
+				AddTemporalPostProcess(scene, TemporalAntiAliasingPreset::Sharp);
+			else
+				AddNeutralPostProcess(scene);
+			AddSun(scene, glm::normalize(glm::vec3(-0.3f, -1.0f, -0.5f)), 3.0f, false);
+			AddMesh(scene, BuiltinAssets::QuadMesh, opaque, glm::vec3(0.0f, 0.0f, -2.0f), "Wall").GetComponent<TransformComponent>().Scale = glm::vec3(8.0f);
+			Entity cube = AddMesh(scene, BuiltinAssets::CubeMesh, glass, glm::vec3(0.0f), "Cube");
+			cube.GetComponent<TransformComponent>().Rotation = glm::quat(glm::vec3(0.3f, 0.5f, 0.0f));
+			const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f));
+			SceneRendererSpecification specification;
+			specification.TextureStreaming = false;
+			specification.TemporalAntiAliasing = temporal;
+			specification.EntityIDs = entityIDs;
+			specification.DebugName = entityIDs ? "GlassWithIDs" : "GlassWithoutIDs";
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_ViewSize, c_ViewSize);
+			REQUIRE(renderer.Render(scene, camera));
+			FinishFrame(gpu);
+			cube.GetComponent<TransformComponent>().Translation.x = 0.15f;
+			cube.MarkModified<TransformComponent>();
+			REQUIRE(renderer.Render(scene, camera));
+			FinishFrame(gpu);
+
+			GlassFrame frame;
+			frame.CubeID = GetID(cube);
+			frame.SceneColorCopies = renderer.GetStats().SceneColorCopies;
+			CHECK((renderer.GetEntityIDTexture() != nullptr) == entityIDs);
+			if (entityIDs)
+				frame.IDs = ReadIDs(renderer);
+			ReadbackImage depth;
+			REQUIRE(Renderer::ReadTexture(renderer.GetDepthTexture(), depth));
+			frame.Depth.resize(static_cast<size_t>(c_ViewSize) * c_ViewSize);
+			REQUIRE(depth.Pixels.size() == frame.Depth.size() * sizeof(float));
+			std::memcpy(frame.Depth.data(), depth.Pixels.data(), depth.Pixels.size());
+			CHECK((renderer.GetVelocityTexture() != nullptr) == temporal);
+			if (temporal && renderer.GetVelocityTexture())
+			{
+				ReadbackImage velocity;
+				REQUIRE(Renderer::ReadTexture(renderer.GetVelocityTexture(), velocity));
+				frame.Velocity.resize(frame.Depth.size());
+				REQUIRE(velocity.Pixels.size() == frame.Velocity.size() * sizeof(uint32_t));
+				std::memcpy(frame.Velocity.data(), velocity.Pixels.data(), velocity.Pixels.size());
+			}
+			frame.HDR = ReadHDRA(renderer.GetHDRTexture());
+			return frame;
+		};
+
+		for (const bool temporal : { false, true })
+		{
+			CAPTURE(temporal);
+			const GlassFrame withIDs = render(true, temporal);
+			const GlassFrame withoutIDs = render(false, temporal);
+			CHECK(withIDs.SceneColorCopies == 1u);
+			CHECK(withoutIDs.SceneColorCopies == 1u);
+			uint32_t cubePixels = 0;
+			uint32_t moving = 0;
+			float worst = 0.0f;
+			for (size_t pixel = 0; pixel < withIDs.IDs.size(); pixel++)
+			{
+				if (withIDs.IDs[pixel] != withIDs.CubeID)
+					continue;
+				cubePixels++;
+				CHECK(withoutIDs.Depth[pixel] == withIDs.Depth[pixel]);
+				CHECK(withoutIDs.HDR[pixel].a == 1.0f);
+				// The same shading, compiled once more: equal up to the shader compiler's rounding.
+				const glm::vec3 difference = glm::abs(glm::vec3(withoutIDs.HDR[pixel]) - glm::vec3(withIDs.HDR[pixel]));
+				const float scale = std::max(0.05f, std::max(withIDs.HDR[pixel].r, std::max(withIDs.HDR[pixel].g, withIDs.HDR[pixel].b)));
+				worst = std::max(worst, std::max(difference.r, std::max(difference.g, difference.b)) / scale);
+				if (temporal)
+				{
+					CHECK(withoutIDs.Velocity[pixel] == withIDs.Velocity[pixel]);
+					moving += withoutIDs.Velocity[pixel] != 0u ? 1u : 0u;
+				}
+			}
+			CAPTURE(worst);
+			CHECK(cubePixels > 500u);
+			CHECK(worst < 0.01f);
+			if (temporal)
+				CHECK(moving == cubePixels);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The scene-color copy is made only for glass, as B10G11R11 where the device stores it and RGBA16F otherwise")
 	{
 		GPUContext gpu;
