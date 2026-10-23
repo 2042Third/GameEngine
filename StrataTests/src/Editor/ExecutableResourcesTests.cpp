@@ -10,6 +10,8 @@
 #include <Strata/Core/PlatformDetection.h>
 #include <Strata/Core/Process.h>
 
+#include <spdlog/fmt/fmt.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -111,6 +113,16 @@ namespace
 	{
 		return text.find(part) != std::string::npos;
 	}
+
+	void Patch32(std::vector<uint8_t>& image, size_t offset, uint32_t value)
+	{
+		for (size_t index = 0; index < 4; index++)
+			image[offset + index] = static_cast<uint8_t>(value >> (8 * index));
+	}
+
+	// Where Tests::BuildTestPEImage puts the data directories and the section table (its headers start at 0x80).
+	constexpr size_t c_TestDataDirectories = 0x80 + 4 + 20 + 112;
+	constexpr size_t c_TestSectionTable = c_TestDataDirectories + 16 * 8;
 
 }
 
@@ -328,6 +340,41 @@ TEST_SUITE("Editor.Export.ExecutableResources")
 		signedImage.CertificateTable = true;
 		const std::string signedError = StampError(signedImage);
 		CHECK_MESSAGE(Contains(signedError, "signed (it has a certificate table)"), signedError);
+
+		// Moving .reloc must change nothing that names an address: its relocations name only addresses before .rsrc, no other
+		// directory lies in or after .rsrc, and .reloc follows .rsrc directly.
+		const std::vector<uint8_t> image = BuildTestPEImage();
+		const TestPEHeaders headers = ReadTestPEHeaders(image);
+		const TestPESection& resourceSection = headers.Sections[1];
+		const TestPESection& relocationSection = headers.Sections[2];
+		const auto layoutError = [](const std::vector<uint8_t>& changed)
+		{
+			std::string error;
+			CHECK_FALSE(PEResources::StampGame(changed, MakeVersionInfo(), &GetTestIcon(), &error));
+			return error;
+		};
+		std::vector<uint8_t> relocatedResources = image;
+		Patch32(relocatedResources, relocationSection.PointerToRawData, resourceSection.VirtualAddress); // The block's page
+		const std::string relocatedError = layoutError(relocatedResources);
+		CHECK_MESSAGE(Contains(relocatedError, fmt::format("a base relocation names RVA 0x{:x}, in or after the resource section", resourceSection.VirtualAddress + 0x10)),
+			relocatedError);
+		std::vector<uint8_t> debugAfter = image;
+		Patch32(debugAfter, c_TestDataDirectories + 6 * 8, relocationSection.VirtualAddress);
+		Patch32(debugAfter, c_TestDataDirectories + 6 * 8 + 4, 28);
+		const std::string debugError = layoutError(debugAfter);
+		CHECK_MESSAGE(Contains(debugError, fmt::format("the debug directory (RVA 0x{:x}, 0x1c bytes) reaches into or past the resource section",
+			relocationSection.VirtualAddress)), debugError);
+		std::vector<uint8_t> gap = image;
+		Patch32(gap, c_TestSectionTable + 2 * 40 + 12, relocationSection.VirtualAddress + 0x1000);
+		Patch32(gap, c_TestDataDirectories + 5 * 8, headers.Directories[5].first + 0x1000);
+		const std::string gapError = layoutError(gap);
+		CHECK_MESSAGE(Contains(gapError, "the section '.reloc' does not directly follow the resource section '.rsrc'"), gapError);
+		std::vector<uint8_t> withoutRelocations = image;
+		Patch32(withoutRelocations, c_TestDataDirectories + 5 * 8, 0);
+		Patch32(withoutRelocations, c_TestDataDirectories + 5 * 8 + 4, 0);
+		const std::string withoutRelocationsError = layoutError(withoutRelocations);
+		CHECK_MESSAGE(Contains(withoutRelocationsError, "the section '.reloc' after the resource section '.rsrc' holds no base relocations"),
+			withoutRelocationsError);
 
 		// What is no 64-bit Windows executable is refused naming the field.
 		TestPEImageOptions x86;
