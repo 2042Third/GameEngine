@@ -13,6 +13,7 @@
 #include "Strata/Renderer/GPUSceneData.h"
 #include "Strata/Renderer/SceneOverlay.h"
 #include "Strata/Renderer/SceneRenderData.h"
+#include "Strata/Renderer/ShadowAtlasAllocator.h"
 #include "Strata/Renderer/TextureReadback.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
@@ -201,6 +202,29 @@ namespace Strata
 		// did not render, and after ResetHistory. Off: such scenes are drawn with FXAA (renderers of single images that do not
 		// render a view several times, such as thumbnails).
 		bool TemporalAntiAliasing = true;
+
+		// Point and spot lights with CastShadows: the renderer's depth atlas of this many texels each way (a power of two from
+		// 512 to 8192; made when the first such light is drawn, released with the render targets: 64 MiB at 4096). The
+		// MaxShadowedLocalLights most relevant of them in view (at most RenderData::c_MaxShadowedLocalLights; ranked as the
+		// light clusters rank lights) get tiles of it, a spot light one, a point light six (the faces of a cube), of 128 to
+		// 1024 texels following how large the light's range looks on screen; when they do not fit, the less relevant lights'
+		// tiles get smaller first (SceneRendererStats::LocalShadowLights).
+		uint32_t LocalShadowAtlasSize = 4096;
+		uint32_t MaxShadowedLocalLights = RenderData::c_MaxShadowedLocalLights;
+		// A shadow view (a light's tile) is drawn again only when what it shows changed: the light (its position, direction,
+		// range, cone, tile or filter), a shadow caster whose bounds before or after its change reach the light's range and
+		// view, or what the casters are drawn with (the scene's GPU copy's mesh and material tables and new proxies, the
+		// geometry pool's content and, while materials are alpha-masked, the texture table's entries). Off: every view of
+		// every shadowed light is drawn every frame (perf tests measure that).
+		bool CacheLocalShadows = true;
+		// Lighting work is spread over frames, for renderers that draw views continuously: at most LocalShadowViewsPerFrame
+		// shadow views are drawn per frame, the nearest lights' first; a light whose views were not all drawn yet casts no
+		// shadow, then fades its shadow in over c_LocalShadowFadeFrames frames, and the lights ranked just above the ones left
+		// out (MaxShadowedLocalLights) fade by their margin over them, so shadows do not pop. Off (renderers of single images:
+		// captures, thumbnails): each frame draws every view that is not up to date, and nothing fades
+		// (SceneRendererStats::LocalShadowViewsPending is 0 after every frame).
+		bool SpreadLightingUpdates = true;
+		uint32_t LocalShadowViewsPerFrame = 12;
 	};
 
 	// A material the last frame drew, for streaming its textures at the resolution the screen needs.
@@ -413,6 +437,16 @@ namespace Strata
 		uint32_t TemporalFrames = 0;
 		uint32_t HistoryResets = 0;
 		glm::vec2 Jitter = glm::vec2(0.0f);
+		// Local light shadows (SceneRendererSpecification::LocalShadowAtlasSize): the point and spot lights with atlas tiles,
+		// the shadow views (tiles) drawn this frame, and those of these lights still waiting to be drawn (their lights cast no
+		// shadow until all of theirs are drawn, or keep the shadows drawn before they changed).
+		uint32_t LocalShadowLights = 0;
+		uint32_t LocalShadowViewsDrawn = 0;
+		uint32_t LocalShadowViewsPending = 0;
+		// Instances drawn into shadow views (summed over views) and their draw calls (the GPU-driven path's are counted on the
+		// GPU: SceneRendererGPUStats::LocalShadowInstances, LocalShadowDraws, AddGPUCounts).
+		uint32_t LocalShadowCasters = 0;
+		uint32_t LocalShadowDrawCalls = 0;
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -547,6 +581,12 @@ namespace Strata
 		nvrhi::ITexture* GetTemporalHistoryTexture() const { return m_HistoryTextures[m_HistoryIndex]; }
 		// The HDR image the latest frame's post-processing read: the resolved one with temporal anti-aliasing, else the HDR target.
 		nvrhi::ITexture* GetResolvedHDRTexture() const { return m_TemporalResolved ? m_HistoryTextures[m_HistoryIndex].Get() : m_HDRTexture.Get(); }
+		// The local light shadows' depth atlas (SceneRendererSpecification::LocalShadowAtlasSize): null until a frame draws a
+		// point or spot light that casts shadows, and again once the render targets are released.
+		nvrhi::ITexture* GetLocalShadowAtlas() const { return m_LocalShadowAtlas; }
+		// Frames over which a light's shadow fades in once all its views are drawn (SceneRendererSpecification::
+		// SpreadLightingUpdates).
+		static constexpr uint32_t c_LocalShadowFadeFrames = 8;
 
 		// Entity visible at a pixel of the last rendered frame (invalid when none, when no frame was rendered since the last
 		// resize, or without an entity-ID buffer). Blocks until the GPU is done; meant for tests and tools (editors use
@@ -612,7 +652,9 @@ namespace Strata
 			Transparent,
 			Shadow,
 			ShadowMasked,
-			SelectionMask // The selected instances into the selection mask (temporal anti-aliasing's outline)
+			SelectionMask, // The selected instances into the selection mask (temporal anti-aliasing's outline)
+			LocalShadow,   // Into a point or spot light's shadow view (a tile of the local shadows' atlas)
+			LocalShadowMasked
 		};
 
 		struct PipelineKey
@@ -750,6 +792,77 @@ namespace Strata
 			glm::vec4 Bounds; // World-space bounding sphere of the lit region (xyz: center, w: radius)
 			float Relevance = 0.0f;
 			uint32_t Order = 0; // Registry order, which breaks ties between equally relevant lights
+		};
+
+		// Local light shadows (SceneRendererLocalShadows.cpp). What a shadow view shows, in world space (the camera is not part
+		// of it: the matrices that draw and sample a view are made relative to the frame's camera from it).
+		struct LocalShadowViewKey
+		{
+			glm::vec3 Position = glm::vec3(0.0f);  // The light's
+			glm::vec3 Direction = glm::vec3(0.0f); // The view's axis: the spot light's, or a cube face's
+			float Range = 0.0f;                    // The far plane
+			float Near = 0.0f;
+			float TanHalfAngle = 0.0f;             // Of the view's field of view, widened by the tile's guard band
+			ShadowAtlasTile Tile;
+			bool operator==(const LocalShadowViewKey&) const = default;
+		};
+		// A shadow view's tile: what it should show this frame, what it holds, and whether a caster's change reached what it holds.
+		struct LocalShadowView
+		{
+			LocalShadowViewKey Key;
+			LocalShadowViewKey DrawnKey;      // Valid while HasContent
+			std::array<glm::vec4, 6> DrawnPlanes = {}; // DrawnKey's frustum in world space (what changes it)
+			uint64_t DrawnEpoch = 0;          // m_LocalShadowEpoch when it was drawn
+			bool HasContent = false;
+			bool Dirty = false;
+		};
+		// A point or spot light with shadows: its tiles and views, kept from frame to frame while it stays among the shadowed
+		// lights, with the atlas tiles it holds.
+		struct LocalShadowLight
+		{
+			entt::entity Entity = entt::null; // With Type, which light it is
+			uint32_t Type = 0;
+			uint32_t Record = 0;              // RenderLights' record this frame
+			float Relevance = 0.0f;
+			float RankFade = 1.0f;            // Its margin over the most relevant light left out (SpreadLightingUpdates)
+			uint32_t WantedSize = 0;          // The tile size its size on screen asks for (with hysteresis)
+			uint32_t TileSize = 0;            // The size of its tiles (0: none)
+			uint32_t ViewCount = 0;
+			std::array<ShadowAtlasTile, RenderData::c_LocalShadowFaces> Tiles = {};
+			std::array<LocalShadowView, RenderData::c_LocalShadowFaces> Views = {};
+			glm::vec3 ShadowSettings = glm::vec3(0.0f); // LightShadowSettings: depth bias, normal bias, filter radius
+			uint32_t FadeFrames = 0;          // Frames its views have all held content since they last did not
+			bool Complete = false;            // This frame: every view holds content (or is drawn)
+			float Strength = 0.0f;            // This frame's (RenderData::LocalShadowData::Parameters.w)
+		};
+		// A shadow view the frame draws: its light (shadow slot) and face, the casters the CPU found in it, and its batches.
+		struct LocalShadowDrawView
+		{
+			uint32_t Light = 0;
+			uint32_t Face = 0;
+			std::array<glm::vec4, 6> Planes = {}; // Its frustum, camera-relative (as the culling's positions are)
+			LODCriteria LOD;                      // Levels of detail chosen as for a viewport of its tile's height
+			uint32_t FirstCaster = 0;             // m_LocalShadowCasters
+			uint32_t CasterCount = 0;
+			uint32_t FirstBatch = 0;              // m_LocalShadowBatches
+			uint32_t BatchCount = 0;
+		};
+		// A shadow caster the CPU found in a view, with its screen fraction there (projected diameter over the view's height).
+		struct LocalShadowCaster
+		{
+			uint32_t Proxy = 0;
+			float Fraction = 0.0f;
+		};
+		// What the shadow views' content depends on beyond the casters' placement (see SceneRendererSpecification::
+		// CacheLocalShadows): a change redraws every view.
+		struct LocalShadowContent
+		{
+			uint64_t RenderSceneId = 0;
+			uint64_t TablesVersion = 0;
+			uint64_t PoolContentVersion = 0;
+			uint64_t TextureUploadVersion = 0; // While the scene has alpha-masked materials (0 otherwise)
+			uint64_t DeferredFrame = 0;        // The frame while the scene's GPU copy defers new proxies (0 otherwise)
+			bool operator==(const LocalShadowContent&) const = default;
 		};
 
 		struct EnvironmentMaps
@@ -932,6 +1045,28 @@ namespace Strata
 		uint64_t UploadChangedRange(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, std::vector<T>& list, std::vector<T>& uploaded, bool full);
 
 		bool EnsureShadowMap();
+		// Local light shadows (SceneRendererLocalShadows.cpp). Chooses the shadowed point and spot lights of the frame and their
+		// tiles, follows what changed what their views hold, chooses the views the frame draws (m_LocalShadowViews) and finds
+		// their casters: with `exactCasters` each view's (the CPU path; their meshes and materials marked with `markCasters`),
+		// else only what bounds the GPU's culling of them.
+		void FindLocalShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, bool exactCasters, bool markCasters);
+		// The CPU path's draws of the views (m_LocalShadowBatches), after the frame's assets are resolved.
+		void GatherLocalShadowDraws(RenderScene& renderScene);
+		// The shaders' data of the shadowed lights (m_LocalShadowData), relative to the frame's camera.
+		void BuildLocalShadowData(const SceneCamera& camera);
+		// Creates the atlas with its framebuffer once a frame has shadowed lights; false (reported) when that fails.
+		bool EnsureLocalShadowAtlas();
+		// Clears the views' tiles and draws their casters (the CPU's draws).
+		void DrawLocalShadows(nvrhi::ICommandList* commandList);
+		// Clears a view's tile (a quad at depth 0: the atlas's other tiles keep their shadows).
+		void ClearLocalShadowTile(nvrhi::ICommandList* commandList, const ShadowAtlasTile& tile);
+		// After the frame's command list was executed: its views hold what their keys describe.
+		void CommitLocalShadows();
+		// Forgets every shadowed light and what the atlas holds (another render scene, released targets).
+		void ResetLocalShadows();
+		void FreeLocalShadowTiles(LocalShadowLight& light);
+		// A view's matrix from camera-relative world space to its clip space (reversed-Z), relative to `origin` (in double).
+		static glm::mat4 GetLocalShadowViewProjection(const LocalShadowViewKey& key, const glm::dvec3& origin);
 		// The level drawn of a submesh of a mesh at a screen fraction, by the frame's m_LODCriteria (LODSelection::SelectLOD).
 		uint32_t SelectLOD(const Mesh& mesh, const Submesh& submesh, float screenFraction) const;
 		static float GetScreenFraction(const SceneCamera& camera, const glm::vec3& center, float radius);
@@ -1117,6 +1252,33 @@ namespace Strata
 		nvrhi::ShaderHandle m_ShadowVertexShader;
 		nvrhi::ShaderHandle m_ShadowMaskPixelShader;
 		std::vector<SceneDrawBatch> m_ShadowBatches;
+		// Local light shadows (SceneRendererSpecification::LocalShadowAtlasSize): the atlas and what hands out its tiles, the
+		// shadowed lights of the frame (in order of relevance: their shadow slots), the views it draws with their casters and
+		// batches, the shaders' data per slot, and how the views' content is followed (the render scene, the content they were
+		// drawn with, the proxy log's version read, and the bounds of the proxies within their lights' ranges when they were
+		// drawn, whose changes redraw what they reach; complete for views drawn in m_LocalShadowEpoch).
+		ShadowAtlasAllocator m_LocalShadowAllocator;
+		nvrhi::TextureHandle m_LocalShadowAtlas;
+		nvrhi::FramebufferHandle m_LocalShadowFramebuffer;
+		nvrhi::TextureHandle m_DummyLocalShadowAtlas; // Bound while there is no atlas
+		nvrhi::ITexture* m_BoundLocalShadowAtlas = nullptr;
+		bool m_LocalShadowAtlasCleared = false;
+		nvrhi::BufferHandle m_LocalShadowBuffer;      // RenderData::LocalShadowData per slot
+		nvrhi::GraphicsPipelineHandle m_LocalShadowClearPipeline;
+		nvrhi::ShaderHandle m_LocalShadowVertexShader;
+		nvrhi::ShaderHandle m_SkinnedLocalShadowVertexShader;
+		std::vector<LocalShadowLight> m_LocalShadowLights;
+		std::vector<LocalShadowLight> m_LocalShadowScratch;
+		std::vector<LocalShadowDrawView> m_LocalShadowViews;
+		std::vector<LocalShadowCaster> m_LocalShadowCasters;
+		std::vector<SceneDrawBatch> m_LocalShadowBatches;
+		std::vector<RenderData::LocalShadowData> m_LocalShadowData;
+		uint64_t m_LocalShadowSceneId = 0;
+		LocalShadowContent m_LocalShadowContent;
+		uint64_t m_LocalShadowProxyVersion = 0;
+		uint64_t m_LocalShadowEpoch = 1;
+		std::unordered_map<uint32_t, AABB> m_LocalShadowBounds;
+		std::vector<uint32_t> m_LocalShadowChanges;
 		std::array<CascadeBox, RenderData::c_MaxCascades> m_Cascades = {};
 		glm::mat4 m_LightView = glm::mat4(1.0f);
 		uint32_t m_CascadeCount = 0;

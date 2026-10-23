@@ -18,6 +18,17 @@ namespace Strata
 	// SpotLightComponent has two), kept from component signals and the scene's world transform changes like the mesh
 	// proxies, with a change log the mirror follows. Records of inactive or unlit lights stay, marked not drawn
 	// (RenderData::c_LightRecordDrawn), so that lights switched on and off cost no allocation. Main thread.
+	// How a light record that casts shadows (RenderData::c_LightRecordShadowed) is shadowed: its component's settings, finite
+	// and within their ranges.
+	struct LightShadowSettings
+	{
+		float Bias = 1.0f;
+		float NormalBias = 1.5f;
+		float FilterRadius = 1.5f;
+
+		bool operator==(const LightShadowSettings&) const = default;
+	};
+
 	class RenderLights
 	{
 	public:
@@ -50,6 +61,11 @@ namespace Strata
 		// The record of an entity's point (RenderData::c_LightPoint) or spot light, or c_InvalidIndex.
 		uint32_t Find(entt::entity entity, uint32_t type) const;
 		entt::entity GetEntity(uint32_t record) const { return m_Entities[record]; }
+		uint32_t GetType(uint32_t record) const { return m_Types[record]; }
+		// The records of drawn lights that cast shadows (SpotAngles.w is RenderData::c_LightRecordShadowed), in no particular
+		// order, and a record's shadow settings (those of a record that casts none are the defaults).
+		std::span<const uint32_t> GetShadowedRecords() const { return m_Shadowed; }
+		const LightShadowSettings& GetShadowSettings(uint32_t record) const { return m_ShadowSettings[record]; }
 
 		// Changes with every change of a record. Readers take it to read the changes after it later (GetChanges).
 		uint64_t GetVersion() const { return m_Version; }
@@ -69,14 +85,20 @@ namespace Strata
 		void Queue(entt::entity entity, uint32_t type);
 		// Brings an entity's record of `type` up to date with the registry: created, updated or freed.
 		bool UpdateRecord(const entt::registry& registry, entt::entity entity, uint32_t type);
-		bool ComputeRecord(const entt::registry& registry, entt::entity entity, uint32_t type, RenderData::LightRecord& outRecord) const;
+		bool ComputeRecord(const entt::registry& registry, entt::entity entity, uint32_t type, RenderData::LightRecord& outRecord,
+			LightShadowSettings& outShadow) const;
 		void Free(entt::entity entity, uint32_t type);
+		// Keeps m_Shadowed in step with a record's SpotAngles.w.
+		void UpdateShadowed(uint32_t record);
 		void LogChange(uint32_t record);
 		static size_t GetKey(entt::entity entity, uint32_t type);
 	private:
 		std::vector<RenderData::LightRecord> m_Records;
 		std::vector<entt::entity> m_Entities;  // Per record (null: free)
 		std::vector<uint32_t> m_Types;         // Per record
+		std::vector<LightShadowSettings> m_ShadowSettings; // Per record
+		std::vector<uint32_t> m_Shadowed;      // The records that cast shadows
+		std::vector<uint32_t> m_ShadowedIndex; // Per record: its place in m_Shadowed, or c_InvalidIndex
 		std::vector<uint32_t> m_FreeRecords;
 		std::vector<uint32_t> m_ByKey;         // Per entity index and type (GetKey): its record
 		uint32_t m_Count = 0;

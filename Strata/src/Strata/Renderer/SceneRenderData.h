@@ -202,12 +202,34 @@ namespace Strata
 			glm::vec4 PositionRange = glm::vec4(0.0f); // xyz: world position, w: range
 			glm::vec4 Color = glm::vec4(0.0f);         // rgb: color * intensity, w: 1 / range^2
 			glm::vec4 DirectionType = glm::vec4(0.0f); // xyz: direction the light travels, w: type
-			glm::vec4 SpotAngles = glm::vec4(0.0f);    // x: cos(inner), y: cos(outer), z: c_LightRecordDrawn or 0
+			// x: cos(inner), y: cos(outer), z: c_LightRecordDrawn or 0, w: c_LightRecordShadowed or 0
+			glm::vec4 SpotAngles = glm::vec4(0.0f);
 			glm::vec4 Bounds = glm::vec4(0.0f);        // xyz: world center, w: radius of the region it reaches
 		};
 		static_assert(sizeof(LightRecord) == 80);
 		// LightRecord::SpotAngles.z of a light that is drawn (active, lit, with a range).
 		constexpr float c_LightRecordDrawn = 1.0f;
+		// LightRecord::SpotAngles.w of a drawn light that casts shadows (its component's CastShadows).
+		constexpr float c_LightRecordShadowed = 1.0f;
+
+		// Shadows of point and spot lights (SceneRenderer's local shadows): at most this many lights per view have them, a spot
+		// light with one view of the light's atlas, a point light with six (a cube's faces: +X, -X, +Y, -Y, +Z, -Z).
+		constexpr uint32_t c_MaxShadowedLocalLights = 16;
+		constexpr uint32_t c_LocalShadowFaces = 6;
+		// A shadowed light as the shaders read it (u_LocalShadows, Include/LocalShadows.glsl), by its shadow slot: the shadow
+		// pass draws view `slot * c_LocalShadowFaces + face` with its matrix, the forward pass samples the views' tiles.
+		struct LocalShadowData
+		{
+			glm::mat4 ViewProjection[c_LocalShadowFaces]; // Camera-relative world space to the view's clip space (reversed-Z)
+			// Per view: xy its tile's corner and z its size in atlas UV, w the world size of a texel at unit depth along the view
+			// (2 tan(half its field of view) / its tile's texels)
+			glm::vec4 Tiles[c_LocalShadowFaces];
+			// x: depth bias, y: normal bias (texels of the light's tiles), z: filter radius (texels), w: strength (0: unshadowed,
+			// 1: full shadow; between while it fades)
+			glm::vec4 Parameters;
+			glm::vec4 Light; // xyz: the light's camera-relative position, w: 1 for a point light (six views), 0 for a spot light
+		};
+		static_assert(sizeof(LocalShadowData) == c_LocalShadowFaces * 64 + c_LocalShadowFaces * 16 + 2 * 16);
 
 		// The push constants of the GPU's light culling passes (Include/Lights.glsl).
 		struct LightCullParameters

@@ -36,12 +36,19 @@ namespace Strata
 		static constexpr float c_MaxCascadeBlend = 0.5f;
 	};
 
-	// Point and spot lights cast no shadows (only the directional light does).
+	// Point and spot lights cast shadows with CastShadows (off by default): a renderer gives the most relevant ones in view
+	// (SceneRendererSpecification::MaxShadowedLocalLights) tiles of its shadow atlas, six for a point light, one for a spot light.
 	struct PointLightComponent
 	{
 		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };
 		float Intensity = 10.0f; // Luminous intensity in candela, times Color (P lumens in every direction: P / 4pi cd)
 		float Range = 10.0f; // Light fades to zero at this distance
+		bool CastShadows = false;
+		float ShadowBias = 1.0f;         // Depth offset toward the light, in texels of the light's shadow tiles
+		float ShadowNormalBias = 1.5f;   // Offset along the surface normal, in texels of the light's shadow tiles
+		float ShadowFilterRadius = 1.5f; // Radius of the shadow edge's filter, in texels of the light's shadow tiles (at most 8)
+
+		static constexpr float c_MaxShadowFilterRadius = 8.0f;
 	};
 
 	// Shines along the entity's forward (-Z) direction.
@@ -52,6 +59,10 @@ namespace Strata
 		float Range = 15.0f;
 		float InnerConeAngle = 20.0f; // Degrees, half angle: full intensity inside
 		float OuterConeAngle = 30.0f; // Degrees, half angle: no light outside
+		bool CastShadows = false;
+		float ShadowBias = 1.0f;         // As PointLightComponent's
+		float ShadowNormalBias = 1.5f;
+		float ShadowFilterRadius = 1.5f;
 	};
 
 	enum class SkyLightSource : uint8_t

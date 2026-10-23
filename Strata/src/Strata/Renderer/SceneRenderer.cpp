@@ -222,13 +222,21 @@ namespace Strata
 		m_ShadowMaskPixelShader = shaders.Get("Scene/ShadowMask.frag");
 		m_FXAAPixelShader = shaders.Get("PostProcess/FXAA.frag");
 		m_SelectionMaskPixelShader = shaders.Get("Scene/SelectionMask.frag");
+		m_LocalShadowVertexShader = shaders.Get("Scene/LocalShadowMesh.vert");
+		m_SkinnedLocalShadowVertexShader = shaders.Get("Scene/LocalShadowMeshSkinned.vert");
 		ST_CORE_VERIFY(m_MeshVertexShader && m_PrepassPixelShader && m_ForwardPixelShader && m_ForwardTransparentPixelShader && m_FullscreenVertexShader
 			&& m_TonemapPixelShader && m_SkyboxPixelShader && m_ShadowVertexShader && m_ShadowMaskPixelShader && m_FXAAPixelShader && m_SkinnedMeshVertexShader
-			&& m_SkinnedShadowVertexShader && m_SelectionMaskPixelShader, "SceneRenderer shaders are missing");
+			&& m_SkinnedShadowVertexShader && m_SelectionMaskPixelShader && m_LocalShadowVertexShader && m_SkinnedLocalShadowVertexShader,
+			"SceneRenderer shaders are missing");
 
 		m_Specification.ShadowCascades = std::clamp<uint32_t>(m_Specification.ShadowCascades, 1, RenderData::c_MaxCascades);
 		m_Specification.ShadowMapSize = std::clamp<uint32_t>(m_Specification.ShadowMapSize, 256, 8192);
 		m_Specification.MaxLights = std::max(m_Specification.MaxLights, 1u);
+		// The local shadows' atlas: a power of two within its range; at most the shaders' slots of shadowed lights.
+		m_Specification.LocalShadowAtlasSize = ShadowAtlasAllocator::FloorPowerOfTwo(std::clamp<uint32_t>(m_Specification.LocalShadowAtlasSize, 512, 8192));
+		m_Specification.MaxShadowedLocalLights = std::min(m_Specification.MaxShadowedLocalLights, RenderData::c_MaxShadowedLocalLights);
+		m_Specification.LocalShadowViewsPerFrame = std::max(m_Specification.LocalShadowViewsPerFrame, 1u);
+		m_LocalShadowAllocator.Reset(m_Specification.LocalShadowAtlasSize, 128);
 		glm::uvec3& grid = m_Specification.LightClusterGrid;
 		grid = glm::clamp(grid, glm::uvec3(1), glm::uvec3(c_MaxClusterGridSize));
 		m_Specification.MaxLightsPerCluster = std::clamp(m_Specification.MaxLightsPerCluster, 1u, c_MaxLightsPerCluster);
@@ -273,8 +281,10 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(5),
 			nvrhi::BindingLayoutItem::Texture_SRV(6),
 			nvrhi::BindingLayoutItem::Texture_SRV(7),
+			nvrhi::BindingLayoutItem::Texture_SRV(8),            // The local shadows' atlas
 			nvrhi::BindingLayoutItem::Texture_SRV(11),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(13),  // The shadowed point and spot lights (RenderData::LocalShadowData)
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(14),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(15), // Joint matrices (only the skinned vertex shaders read them)
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(16), // The texture table (material data names textures by its indices)
@@ -350,6 +360,17 @@ namespace Strata
 		dummyShadowDesc.initialState = nvrhi::ResourceStates::ShaderResource;
 		dummyShadowDesc.keepInitialState = true;
 		m_DummyShadowMap = m_Device->createTexture(dummyShadowDesc);
+		nvrhi::TextureDesc dummyAtlasDesc = dummyShadowDesc;
+		dummyAtlasDesc.arraySize = 1;
+		dummyAtlasDesc.dimension = nvrhi::TextureDimension::Texture2D;
+		dummyAtlasDesc.debugName = m_Specification.DebugName + ".NoLocalShadows";
+		m_DummyLocalShadowAtlas = m_Device->createTexture(dummyAtlasDesc);
+		m_LocalShadowBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
+			.setByteSize(RenderData::c_MaxShadowedLocalLights * sizeof(RenderData::LocalShadowData))
+			.setStructStride(sizeof(RenderData::LocalShadowData))
+			.setInitialState(nvrhi::ResourceStates::ShaderResource)
+			.setKeepInitialState(true)
+			.setDebugName(m_Specification.DebugName + ".LocalShadows"));
 
 		m_FrameConstantBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
 			.setByteSize(sizeof(RenderData::FrameConstants))
@@ -514,7 +535,8 @@ namespace Strata
 		m_FXAABindingLayout = m_Device->createBindingLayout(fxaaLayout);
 
 		ST_CORE_VERIFY(m_InputLayout && m_SceneBindingLayout && m_TonemapBindingLayout && m_FrameConstantBuffer && m_CommandList && m_ShadowPushBindingSet
-			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_ClusterBuffer
+			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_DummyLocalShadowAtlas
+			&& m_LocalShadowBuffer && m_ClusterBuffer
 			&& m_ClusterBindingLayout && m_ClusterPipeline && m_AOBindingLayout && m_GTAOPipeline && m_AOBlurPipeline && m_ExposureBindingLayout
 			&& m_HistogramPipeline && m_ExposurePipeline && m_HistogramBuffer && m_ExposureBuffer && m_BloomBindingLayout && m_BloomPipeline && m_FXAABindingLayout
 			&& m_TemporalBindingLayout && m_TemporalPipeline, "SceneRenderer: failed to create GPU resources");
@@ -877,12 +899,13 @@ namespace Strata
 		nvrhi::ITexture* environmentCube = GetEnvironmentCube();
 		const bool hasEnvironment = environmentCube != nullptr;
 		nvrhi::ITexture* shadowMap = m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get();
+		nvrhi::ITexture* localShadowAtlas = m_LocalShadowAtlas ? m_LocalShadowAtlas.Get() : m_DummyLocalShadowAtlas.Get();
 		// Without a motion history the scene's own buffers stand in (nothing reads them then).
 		nvrhi::IBuffer* previousInstances = m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer();
 		nvrhi::IBuffer* previousPalette = m_PreviousPalette ? m_PreviousPalette.Get() : m_SceneGPU->GetPaletteBuffer();
 
-		// The shadow pass reads the same resources except for its own draw list (and never the shadow map).
-		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap)
+		// The shadow pass reads the same resources except for its own draw list (and never the shadow maps it draws into).
+		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap, nvrhi::ITexture* boundAtlas)
 		{
 			nvrhi::BindingSetDesc desc;
 			desc.bindings = {
@@ -901,8 +924,10 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(5, m_BRDFLut),
 				nvrhi::BindingSetItem::Texture_SRV(6, hasEnvironment ? environmentCube : blackCube),
 				nvrhi::BindingSetItem::Texture_SRV(7, boundShadowMap),
+				nvrhi::BindingSetItem::Texture_SRV(8, boundAtlas),
 				nvrhi::BindingSetItem::Texture_SRV(11, m_AOTexture),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(12, m_ClusterBuffer),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(13, m_LocalShadowBuffer),
 				nvrhi::BindingSetItem::Sampler(8, m_LinearClampSampler),
 				nvrhi::BindingSetItem::Sampler(9, m_ShadowCompareSampler),
 				nvrhi::BindingSetItem::Sampler(10, m_PointClampSampler)
@@ -911,12 +936,12 @@ namespace Strata
 				desc.bindings.push_back(nvrhi::BindingSetItem::Sampler(0, m_MaterialSamplers[index]).setArrayElement(index));
 			return m_Device->createBindingSet(desc, m_SceneBindingLayout);
 		};
-		m_SceneBindingSet = create(m_DrawListBuffer, shadowMap);
-		m_ShadowBindingSet = create(m_ShadowDrawListBuffer, m_DummyShadowMap);
+		m_SceneBindingSet = create(m_DrawListBuffer, shadowMap, localShadowAtlas);
+		m_ShadowBindingSet = create(m_ShadowDrawListBuffer, m_DummyShadowMap, m_DummyLocalShadowAtlas);
 		// The GPU-driven path's passes read the draw list its culling writes.
 		const bool gpuSets = m_GPUDrawListBuffer != nullptr;
-		m_GPUSceneBindingSet = gpuSets ? create(m_GPUDrawListBuffer, shadowMap) : nullptr;
-		m_GPUShadowBindingSet = gpuSets ? create(m_GPUDrawListBuffer, m_DummyShadowMap) : nullptr;
+		m_GPUSceneBindingSet = gpuSets ? create(m_GPUDrawListBuffer, shadowMap, localShadowAtlas) : nullptr;
+		m_GPUShadowBindingSet = gpuSets ? create(m_GPUDrawListBuffer, m_DummyShadowMap, m_DummyLocalShadowAtlas) : nullptr;
 
 		nvrhi::BindingSetDesc clusterSet;
 		clusterSet.bindings = {
@@ -929,6 +954,7 @@ namespace Strata
 
 		m_BoundEnvironment = environmentCube;
 		m_BoundShadowMap = shadowMap;
+		m_BoundLocalShadowAtlas = localShadowAtlas;
 		m_BoundSceneGPUVersion = m_SceneGPU->GetBufferVersion();
 		m_BoundTextureTableVersion = Renderer::GetTextureTable().GetBufferVersion();
 		m_BoundPreviousInstances = previousInstances;
@@ -1481,8 +1507,8 @@ namespace Strata
 			arguments.startInstanceLocation = batch.FirstInstance;
 			m_DrawArgumentsBuild.push_back(arguments);
 		};
-		// Opaque batches (the prepass and the opaque pass draw them alike), transparent ones, the shadow batches, then the
-		// selection mask's.
+		// Opaque batches (the prepass and the opaque pass draw them alike), transparent ones, the shadow batches, the selection
+		// mask's, then the local shadow views'.
 		for (const SceneDrawBatch& batch : m_OpaqueBatches)
 			append(batch);
 		for (const SceneDrawBatch& batch : m_TransparentBatches)
@@ -1490,6 +1516,8 @@ namespace Strata
 		for (const SceneDrawBatch& batch : m_ShadowBatches)
 			append(batch);
 		for (const SceneDrawBatch& batch : m_SelectionBatches)
+			append(batch);
+		for (const SceneDrawBatch& batch : m_LocalShadowBatches)
 			append(batch);
 	}
 
@@ -1736,6 +1764,10 @@ namespace Strata
 		m_TemporalResolved = false;
 		m_TemporalFrames = 0;
 		m_TemporalRender = 0;
+		// The local shadows' atlas goes with them: the views are drawn again in a new one.
+		release(m_LocalShadowAtlas);
+		release(m_LocalShadowFramebuffer);
+		ResetLocalShadows();
 		Renderer::ReleaseDeferred(std::move(released));
 	}
 
@@ -1924,20 +1956,25 @@ namespace Strata
 				return pipeline;
 		}
 
-		const bool shadowPass = key.PassType == Pass::Shadow || key.PassType == Pass::ShadowMasked;
+		const bool localShadowPass = key.PassType == Pass::LocalShadow || key.PassType == Pass::LocalShadowMasked;
+		const bool shadowPass = key.PassType == Pass::Shadow || key.PassType == Pass::ShadowMasked || localShadowPass;
 		const bool selectionMask = key.PassType == Pass::SelectionMask;
 		nvrhi::GraphicsPipelineDesc desc;
 		desc.primType = nvrhi::PrimitiveType::TriangleList;
 		desc.inputLayout = key.Skinned ? m_SkinnedInputLayout : m_InputLayout;
-		if (key.Skinned)
+		if (localShadowPass)
+			desc.VS = key.Skinned ? m_SkinnedLocalShadowVertexShader : m_LocalShadowVertexShader;
+		else if (key.Skinned)
 			desc.VS = shadowPass ? m_SkinnedShadowVertexShader : (key.Velocity ? m_SkinnedMeshVelocityVertexShader : m_SkinnedMeshVertexShader);
 		else
 			desc.VS = shadowPass ? m_ShadowVertexShader : (key.Velocity ? m_MeshVelocityVertexShader : m_MeshVertexShader);
 		switch (key.PassType)
 		{
 			case Pass::Prepass:      desc.PS = key.Velocity ? m_PrepassVelocityPixelShader : m_PrepassPixelShader; break;
-			case Pass::ShadowMasked: desc.PS = m_ShadowMaskPixelShader; break;
-			case Pass::Shadow:       desc.PS = nullptr; break; // Depth only
+			case Pass::ShadowMasked:
+			case Pass::LocalShadowMasked: desc.PS = m_ShadowMaskPixelShader; break;
+			case Pass::Shadow:
+			case Pass::LocalShadow:  desc.PS = nullptr; break; // Depth only
 			case Pass::Transparent:  desc.PS = m_ForwardTransparentPixelShader; break;
 			case Pass::Opaque:       desc.PS = m_ForwardPixelShader; break;
 			case Pass::SelectionMask: desc.PS = m_SelectionMaskPixelShader; break;
@@ -1962,6 +1999,8 @@ namespace Strata
 				break;
 			case Pass::Shadow:
 			case Pass::ShadowMasked:
+			case Pass::LocalShadow:
+			case Pass::LocalShadowMasked:
 				depth.setDepthWriteEnable(true).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
 				// Push stored depth away from the light against shadow acne. NVRHI enables the depth bias only with a
 				// non-zero constant part, which also keeps the slope part working.
@@ -1990,7 +2029,7 @@ namespace Strata
 			}
 		}
 
-		nvrhi::IFramebuffer* framebuffer = shadowPass ? m_ShadowFramebuffers[0].Get()
+		nvrhi::IFramebuffer* framebuffer = localShadowPass ? m_LocalShadowFramebuffer.Get() : shadowPass ? m_ShadowFramebuffers[0].Get()
 			: (key.PassType == Pass::Prepass ? (key.Velocity ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get())
 			: (selectionMask ? m_SelectionMaskFramebuffer.Get() : m_ForwardFramebuffer.Get()));
 		nvrhi::GraphicsPipelineHandle pipeline = m_Device->createGraphicsPipeline(desc, framebuffer->getFramebufferInfo());
@@ -2513,16 +2552,27 @@ namespace Strata
 			m_MarksRender = m_RenderCount + 1;
 		}
 		FindShadowCasters(renderScene, camera, frustum, frame, !m_FeedbackFrame);
+		FindLocalShadowCasters(renderScene, camera, frustum, true, true);
+		// Rendered with a reported limitation: keep the error so it is not logged every frame.
+		bool degraded = motionFailed || temporalFailed;
+		if (!m_LocalShadowLights.empty() && !EnsureLocalShadowAtlas())
+		{
+			ResetLocalShadows(); // Reported; no light casts a local shadow this frame
+			m_Stats.LocalShadowLights = 0;
+			m_Stats.LocalShadowViewsDrawn = 0;
+			m_Stats.LocalShadowViewsPending = 0;
+			degraded = true;
+		}
 		ResolveAssets(renderScene);
 		GatherDraws(renderScene, camera, !m_GPUDrivenFrame);
 		GatherShadowDraws(renderScene, camera, frame, !m_GPUDrivenFrame);
+		GatherLocalShadowDraws(renderScene);
+		BuildLocalShadowData(camera);
 		// With the jitter the selection outline comes from a mask of the selected instances drawn without it.
 		m_SelectionBatches.clear();
 		if (m_TemporalFrame && m_EntityIDTexture && !options.SelectedEntities.empty())
 			GatherSelectionDraws(renderScene, camera, scene, options.SelectedEntities);
 		BuildDrawArguments();
-		// Rendered with a reported limitation: keep the error so it is not logged every frame.
-		bool degraded = motionFailed || temporalFailed;
 		// Before the GPU's culling is prepared: the cascades' occlusion culling needs their pyramids, made with the map.
 		if (frame.ShadowParams.w > 0.0f && !EnsureShadowMap())
 		{
@@ -2538,6 +2588,7 @@ namespace Strata
 		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
+			|| m_BoundLocalShadowAtlas != (m_LocalShadowAtlas ? m_LocalShadowAtlas.Get() : m_DummyLocalShadowAtlas.Get())
 			|| m_BoundSceneGPUVersion != m_SceneGPU->GetBufferVersion()
 			|| m_BoundPreviousInstances != (m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer())
 			|| m_BoundPreviousPalette != (m_PreviousPalette ? m_PreviousPalette.Get() : m_SceneGPU->GetPaletteBuffer());
@@ -2598,6 +2649,8 @@ namespace Strata
 
 		commandList->writeBuffer(m_FrameConstantBuffer, &frame, sizeof(frame));
 		UploadSceneData(commandList, drawListsRecreated);
+		if (!m_LocalShadowData.empty())
+			commandList->writeBuffer(m_LocalShadowBuffer, m_LocalShadowData.data(), m_LocalShadowData.size() * sizeof(RenderData::LocalShadowData));
 		if (!m_Lights.empty())
 		{
 			commandList->writeBuffer(m_LightBuffer, m_Lights.data(), m_Lights.size() * sizeof(RenderData::LightData));
@@ -2640,17 +2693,26 @@ namespace Strata
 			commandList->endMarker();
 		}
 
-		if (frame.ShadowParams.w > 0.0f)
+		if (frame.ShadowParams.w > 0.0f || !m_LocalShadowViews.empty())
 		{
 			gpuTimer.Next(gpuStages.Shadows);
 			commandList->beginMarker("Shadows");
-			FitCascades(commandList);
-			if (m_GPUDrivenFrame)
-				DrawGPUShadows(commandList);
-			else
+			if (frame.ShadowParams.w > 0.0f)
 			{
-				m_ShadowCacheValid = 0; // The CPU path redraws every layer
-				DrawShadows(commandList, static_cast<uint32_t>(frame.ShadowParams.w));
+				FitCascades(commandList);
+				if (m_GPUDrivenFrame)
+					DrawGPUShadows(commandList);
+				else
+				{
+					m_ShadowCacheValid = 0; // The CPU path redraws every layer
+					DrawShadows(commandList, static_cast<uint32_t>(frame.ShadowParams.w));
+				}
+			}
+			if (!m_LocalShadowViews.empty())
+			{
+				commandList->beginMarker("LocalShadows");
+				DrawLocalShadows(commandList);
+				commandList->endMarker();
 			}
 			commandList->endMarker();
 		}
@@ -2860,6 +2922,7 @@ namespace Strata
 		if (m_GPUDrivenFrame)
 			SubmitCullReadback();
 		CommitShadowCache();
+		CommitLocalShadows();
 
 		if (m_TemporalResolved)
 			m_TemporalRender = m_RenderCount + 1;

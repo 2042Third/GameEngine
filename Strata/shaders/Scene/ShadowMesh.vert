@@ -2,9 +2,14 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "Include/Scene.glsl"
+#ifdef ST_LOCAL_SHADOW
+#include "Include/LocalShadows.glsl"
+#endif
 
 // Shadow map rendering: positions in the light space of one cascade. With ST_SKINNED (registered as
-// Scene/ShadowMeshSkinned.vert) skinned meshes cast the shadow of their pose.
+// Scene/ShadowMeshSkinned.vert) skinned meshes cast the shadow of their pose. With ST_LOCAL_SHADOW (Scene/LocalShadowMesh.vert,
+// Scene/LocalShadowMeshSkinned.vert) the view is a point or spot light's shadow view instead: a perspective view whose near
+// plane clips (casters that close to a light are inside it).
 
 layout(location = 0) in vec3 a_Position;
 layout(location = 1) in vec3 a_Normal;
@@ -20,7 +25,7 @@ layout(location = 1) flat out uint v_InstanceIndex;
 
 layout(push_constant) uniform ShadowParameters
 {
-	uint Cascade;
+	uint Cascade; // ST_LOCAL_SHADOW: the shadow view, its light's slot times ST_LOCAL_SHADOW_FACES plus its face
 } u_Shadow;
 
 void main()
@@ -34,9 +39,15 @@ void main()
 #else
 	vec3 localPosition = a_Position;
 #endif
+#ifdef ST_LOCAL_SHADOW
+	uint view = u_Shadow.Cascade;
+	gl_Position = u_LocalShadows[view / ST_LOCAL_SHADOW_FACES].ViewProjection[view % ST_LOCAL_SHADOW_FACES]
+		* vec4(TransformPositionRelative(instance, localPosition), 1.0);
+#else
 	vec4 position = u_Cascades[u_Shadow.Cascade].ViewProjection * vec4(TransformPositionRelative(instance, localPosition), 1.0);
 	// Pancaking: casters between the light and the cascade's near plane are flattened onto it (reversed-Z: the near
 	// plane is depth 1) instead of being clipped, so they still shadow the cascade. The projection is orthographic.
 	position.z = min(position.z, position.w);
 	gl_Position = position;
+#endif
 }

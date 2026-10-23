@@ -128,6 +128,8 @@ strata_add_shaders(Strata_Renderer
 		"Scene/Mesh.vert|Scene/MeshVelocity.vert|ST_VELOCITY"
 		"Scene/Mesh.vert|Scene/MeshSkinnedVelocity.vert|ST_SKINNED,ST_VELOCITY"
 		"Scene/ShadowMesh.vert|Scene/ShadowMeshSkinned.vert|ST_SKINNED"
+		"Scene/ShadowMesh.vert|Scene/LocalShadowMesh.vert|ST_LOCAL_SHADOW"
+		"Scene/ShadowMesh.vert|Scene/LocalShadowMeshSkinned.vert|ST_SKINNED,ST_LOCAL_SHADOW"
 		"Scene/Cull.comp|Scene/CullShadow.comp|ST_CULL_SHADOW"
 		"Scene/HZBBuild.comp|Scene/HZBBuildArray.comp|ST_HZB_ARRAY"
 		"Effects/GTAO.comp|Effects/GTAOHalf.comp|ST_AO_HALF"

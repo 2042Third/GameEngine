@@ -146,13 +146,27 @@ namespace Strata
 		return record != c_InvalidIndex && m_Entities[record] == entity ? record : c_InvalidIndex;
 	}
 
-	bool RenderLights::ComputeRecord(const entt::registry& registry, entt::entity entity, uint32_t type, RenderData::LightRecord& outRecord) const
+	bool RenderLights::ComputeRecord(const entt::registry& registry, entt::entity entity, uint32_t type, RenderData::LightRecord& outRecord,
+		LightShadowSettings& outShadow) const
 	{
 		if (!registry.valid(entity))
 			return false;
 		const WorldTransformComponent* world = registry.try_get<WorldTransformComponent>(entity);
 		if (!world)
 			return false;
+		// A drawn light that casts shadows is marked, with its settings within their registered ranges (values that are not
+		// finite take the defaults).
+		const auto setShadows = [&outRecord, &outShadow](bool castShadows, float bias, float normalBias, float filterRadius)
+		{
+			outShadow = LightShadowSettings {};
+			if (!castShadows || outRecord.SpotAngles.z == 0.0f)
+				return;
+			outRecord.SpotAngles.w = RenderData::c_LightRecordShadowed;
+			const auto sanitize = [](float value, float fallback, float maximum) { return std::isfinite(value) ? std::clamp(value, 0.0f, maximum) : fallback; };
+			outShadow.Bias = sanitize(bias, outShadow.Bias, 10.0f);
+			outShadow.NormalBias = sanitize(normalBias, outShadow.NormalBias, 10.0f);
+			outShadow.FilterRadius = sanitize(filterRadius, outShadow.FilterRadius, PointLightComponent::c_MaxShadowFilterRadius);
+		};
 		if (type == RenderData::c_LightSpot)
 		{
 			const SpotLightComponent* light = registry.try_get<SpotLightComponent>(entity);
@@ -160,19 +174,42 @@ namespace Strata
 				return false;
 			outRecord = MakeRecord(world->Matrix, world->ActiveInHierarchy, light->Color, light->Intensity, light->Range, type, light->InnerConeAngle,
 				light->OuterConeAngle);
+			setShadows(light->CastShadows, light->ShadowBias, light->ShadowNormalBias, light->ShadowFilterRadius);
 			return true;
 		}
 		const PointLightComponent* light = registry.try_get<PointLightComponent>(entity);
 		if (!light)
 			return false;
 		outRecord = MakeRecord(world->Matrix, world->ActiveInHierarchy, light->Color, light->Intensity, light->Range, type, 0.0f, 0.0f);
+		setShadows(light->CastShadows, light->ShadowBias, light->ShadowNormalBias, light->ShadowFilterRadius);
 		return true;
+	}
+
+	void RenderLights::UpdateShadowed(uint32_t record)
+	{
+		const bool shadowed = m_Records[record].SpotAngles.w == RenderData::c_LightRecordShadowed;
+		const uint32_t place = m_ShadowedIndex[record];
+		if (shadowed && place == c_InvalidIndex)
+		{
+			m_ShadowedIndex[record] = static_cast<uint32_t>(m_Shadowed.size());
+			m_Shadowed.push_back(record);
+		}
+		else if (!shadowed && place != c_InvalidIndex)
+		{
+			// The last one takes its place.
+			const uint32_t last = m_Shadowed.back();
+			m_Shadowed[place] = last;
+			m_ShadowedIndex[last] = place;
+			m_Shadowed.pop_back();
+			m_ShadowedIndex[record] = c_InvalidIndex;
+		}
 	}
 
 	bool RenderLights::UpdateRecord(const entt::registry& registry, entt::entity entity, uint32_t type)
 	{
 		RenderData::LightRecord record;
-		if (!ComputeRecord(registry, entity, type, record))
+		LightShadowSettings shadow;
+		if (!ComputeRecord(registry, entity, type, record, shadow))
 		{
 			const bool existed = Find(entity, type) != c_InvalidIndex;
 			Free(entity, type);
@@ -192,6 +229,8 @@ namespace Strata
 				m_Records.emplace_back();
 				m_Entities.push_back(entt::null);
 				m_Types.push_back(0);
+				m_ShadowSettings.emplace_back();
+				m_ShadowedIndex.push_back(c_InvalidIndex);
 			}
 			m_Entities[index] = entity;
 			m_Types[index] = type;
@@ -201,11 +240,13 @@ namespace Strata
 			m_ByKey[key] = index;
 			m_Count++;
 		}
-		else if (RecordsEqual(m_Records[index], record))
+		else if (RecordsEqual(m_Records[index], record) && m_ShadowSettings[index] == shadow)
 		{
 			return false;
 		}
 		m_Records[index] = record;
+		m_ShadowSettings[index] = shadow;
+		UpdateShadowed(index);
 		LogChange(index);
 		return true;
 	}
@@ -218,6 +259,8 @@ namespace Strata
 		m_ByKey[GetKey(entity, type)] = c_InvalidIndex;
 		m_Entities[index] = entt::null;
 		m_Records[index] = RenderData::LightRecord {};
+		m_ShadowSettings[index] = LightShadowSettings {};
+		UpdateShadowed(index);
 		m_FreeRecords.push_back(index);
 		m_Count--;
 		LogChange(index);
@@ -303,15 +346,23 @@ namespace Strata
 			}
 			count++;
 			RenderData::LightRecord expected;
-			if (!ComputeRecord(registry, entity, m_Types[index], expected))
+			LightShadowSettings expectedShadow;
+			if (!ComputeRecord(registry, entity, m_Types[index], expected, expectedShadow))
 				return fail("light record " + std::to_string(index) + " names an entity without its light component");
-			if (!RecordsEqual(expected, m_Records[index]))
+			if (!RecordsEqual(expected, m_Records[index]) || !(expectedShadow == m_ShadowSettings[index]))
 				return fail("light record " + std::to_string(index) + " differs from its entity's light and transform");
+			if ((m_ShadowedIndex[index] != c_InvalidIndex) != (m_Records[index].SpotAngles.w == RenderData::c_LightRecordShadowed))
+				return fail("light record " + std::to_string(index) + " is listed among the shadowed lights wrongly");
 			if (Find(entity, m_Types[index]) != index)
 				return fail("light record " + std::to_string(index) + " is not found by its entity");
 		}
 		if (count != m_Count)
 			return fail("the light count differs from the records");
+		for (uint32_t place = 0; place < m_Shadowed.size(); place++)
+		{
+			if (m_Shadowed[place] >= m_ShadowedIndex.size() || m_ShadowedIndex[m_Shadowed[place]] != place)
+				return fail("the shadowed lights' list is out of step with its records");
+		}
 		for (const entt::entity entity : registry.view<PointLightComponent, WorldTransformComponent>())
 		{
 			if (Find(entity, RenderData::c_LightPoint) == c_InvalidIndex)
