@@ -457,6 +457,24 @@ TEST_SUITE("Scene.Serialization")
 		loaded = load({ { "AutoExposure", true }, { "AutoExposureMaxEV", 12 } }, warnings);
 		CHECK(warnings.empty());
 		CHECK(loaded.AutoExposureMaxEV == 12.0f);
+
+		// Screen-space reflections: off in every file saved before them (0.5.0's TAA scenes included); their settings round-trip
+		// and are clamped.
+		warnings.clear();
+		loaded = load({ { "AntiAliasing", true }, { "AntiAliasingMethod", "TAA" }, { "TAAPreset", "Sharp" } }, warnings);
+		CHECK(warnings.empty());
+		CHECK_FALSE(loaded.ScreenSpaceReflections);
+		CHECK(loaded.ScreenSpaceReflectionsIntensity == 1.0f);
+		CHECK(loaded.ScreenSpaceReflectionsMaxRoughness == 0.5f);
+		loaded = load({ { "ScreenSpaceReflections", true }, { "ScreenSpaceReflectionsIntensity", 0.75 }, { "ScreenSpaceReflectionsMaxRoughness", 0.3 } },
+			warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.ScreenSpaceReflections);
+		CHECK(loaded.ScreenSpaceReflectionsIntensity == 0.75f);
+		CHECK(loaded.ScreenSpaceReflectionsMaxRoughness == 0.3f);
+		loaded = load({ { "ScreenSpaceReflectionsIntensity", 3.0 }, { "ScreenSpaceReflectionsMaxRoughness", -1.0 } }, warnings);
+		CHECK(loaded.ScreenSpaceReflectionsIntensity == 1.0f);
+		CHECK(loaded.ScreenSpaceReflectionsMaxRoughness == 0.0f);
 	}
 
 	TEST_CASE("Directional lights saved before cascade blending load with the default blend; invalid blends are clamped or warn")

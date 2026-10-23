@@ -121,6 +121,22 @@ namespace Strata
 			return post.AntiAliasingMethod == AntiAliasingMode::TAA ? std::string() : "Only TAA uses it (Anti Aliasing Method is FXAA)";
 		}
 
+		// Screen-space reflections read the TAA's history: inactive without it.
+		std::string WithTemporalHistory(const PostProcessComponent& post)
+		{
+			if (!post.AntiAliasing)
+				return "Needs TAA (Anti Aliasing is off)";
+			return post.AntiAliasingMethod == AntiAliasingMode::TAA ? std::string() : "Needs TAA (Anti Aliasing Method is FXAA)";
+		}
+
+		std::string WithScreenSpaceReflections(const PostProcessComponent& post)
+		{
+			std::string reason = WithTemporalHistory(post);
+			if (reason.empty() && !post.ScreenSpaceReflections)
+				reason = "Screen Space Reflections is off";
+			return reason;
+		}
+
 		const char* GetPresetName(TemporalAntiAliasingPreset preset)
 		{
 			return preset == TemporalAntiAliasingPreset::Sharp ? "Sharp" : "Original";
@@ -346,7 +362,7 @@ namespace Strata
 		ComponentRegistry::Register<PostProcessComponent>("PostProcess")
 			.DisplayName("Post Process")
 			.Category("Rendering")
-			.Description("Tonemapping, exposure, bloom, ambient occlusion and anti-aliasing settings")
+			.Description("Tonemapping, exposure, bloom, ambient occlusion, anti-aliasing and screen-space reflection settings")
 			.EnumProperty("Tonemapper", &PostProcessComponent::Tonemapper, { { "None", 0 }, { "Reinhard", 1 }, { "ACES", 2 }, { "AgX", 3 },
 				{ "KhronosNeutral", 4, "Khronos Neutral" } })
 			.Property("Exposure", &PostProcessComponent::Exposure, WithTooltip(Range(-16.0f, 16.0f, 0.05f), "Exposure compensation in EV"))
@@ -409,6 +425,15 @@ namespace Strata
 			.Property("TAASharpening", &PostProcessComponent::TAASharpening,
 				WithTooltip(Slider(0.0f, 1.0f), "Sharpens the displayed image after TAA, never the history, to restore texture detail the "
 					"averaging softens. Strong edges are sharpened much less and overshoot is bounded, so halos stay faint. 0 is off"))
+			.Property("ScreenSpaceReflections", &PostProcessComponent::ScreenSpaceReflections,
+				WithTooltip({}, "Reflections of what the screen shows, found each frame: smooth floors, water and metal reflect what stands near "
+					"them. Needs TAA. Where they find nothing (off screen, hidden, the sky) the reflection probes and the sky reflect as before"))
+			.Property("ScreenSpaceReflectionsIntensity", &PostProcessComponent::ScreenSpaceReflectionsIntensity,
+				WithTooltip(Slider(0.0f, 1.0f), "How much the screen-space reflections replace the probes' and the sky's reflection where they "
+					"find something; 1: fully"))
+			.Property("ScreenSpaceReflectionsMaxRoughness", &PostProcessComponent::ScreenSpaceReflectionsMaxRoughness,
+				WithTooltip(Slider(0.0f, 1.0f), "Surfaces rougher than this get none, and they fade out over the last quarter below it: rough "
+					"surfaces blur what they reflect, which screen-space reflections do not"))
 			.Property("Vignette", &PostProcessComponent::Vignette, Slider(0.0f, 1.0f))
 			.Property("Saturation", &PostProcessComponent::Saturation, Slider(0.0f, 2.0f))
 			.Property("Contrast", &PostProcessComponent::Contrast, WithTooltip(Slider(0.5f, 2.0f), "Around middle gray; 1 = unchanged"));
@@ -428,6 +453,8 @@ namespace Strata
 		SetInactiveReasons<PostProcessComponent>({ "TAADisocclusionRejection" }, &WithCustomBool);
 		SetInactiveReasons<PostProcessComponent>({ "TAADisocclusionThreshold" }, &WithDisocclusionRejection);
 		SetInactiveReasons<PostProcessComponent>({ "TAASharpening" }, &WithCustomTunable<float, &TemporalAntiAliasingSettings::Sharpening>);
+		SetInactiveReasons<PostProcessComponent>({ "ScreenSpaceReflections" }, &WithTemporalHistory);
+		SetInactiveReasons<PostProcessComponent>({ "ScreenSpaceReflectionsIntensity", "ScreenSpaceReflectionsMaxRoughness" }, &WithScreenSpaceReflections);
 
 		ComponentRegistry::Register<TextComponent>("Text")
 			.Category("UI")

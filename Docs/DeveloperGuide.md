@@ -628,8 +628,8 @@ exercised by it.
     (suite `Editor.FeatureTest`);
   - `GPU.FeatureTest` (in `StrataTests.GPU`) renders the scene for 4 frames without playing it (no scripts) and checks
     entities in the ID buffer, text and stats (its post-processing is TAA under Custom with every technique on, values
-    outside Sharp's tuning bounds: the history grows; the inactive "Alternate Grading" holds the clamp and rejection
-    off);
+    outside Sharp's tuning bounds: the history grows, and screen-space reflections at intensity 0.8 up to roughness 0.6;
+    the inactive "Alternate Grading" holds the clamp and rejection off);
   - `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` (label `feature`): the real executables open a copy of
     the project, load the feature scripts (`script.load`), lay out and hit-test the menu (`ui.layout`, `ui.hitTest`),
     step the physics, click the Play Button and type into the Name Field while playing (`input.click`, `input.type`, and
@@ -2006,7 +2006,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `GameUI/GameUIComponents.cpp`: the canvas's scale settings by scale and render mode, an image's slices, fill, texture
   part and border, a text's outline color, a selectable's transition states and explicit navigation, a layout's grid;
   each following the code that reads the property); `component.get` and `entity.get` list them as `inactive`. The TAA's
-  tunables say which preset sets them and to what ("The Sharp preset sets it (0.0625): choose Custom to tune it"). A
+  tunables say which preset sets them and to what ("The Sharp preset sets it (0.0625): choose Custom to tune it"), and
+  the screen-space reflections' settings that they need TAA ("Needs TAA (Anti Aliasing Method is FXAA)"). A
   property whose edit means more than setting it draws its value through `UI::PropertyDrawers` (by component type and
   property name; `InspectorPanel::DrawProperties` calls it in place of the generic widget, after the same label, override
   mark and menu): `TAAPreset`'s drawer runs one `component.set` per choice, Sharp and Original setting the preset alone

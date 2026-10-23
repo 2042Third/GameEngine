@@ -902,7 +902,7 @@
 		},
 		{
 			"Category": "Rendering",
-			"Description": "Tonemapping, exposure, bloom, ambient occlusion and anti-aliasing settings",
+			"Description": "Tonemapping, exposure, bloom, ambient occlusion, anti-aliasing and screen-space reflection settings",
 			"DisplayName": "Post Process",
 			"Extra": false,
 			"Flags": 0,
@@ -1270,6 +1270,42 @@
 					"Name": "TAASharpening",
 					"Speed": 0.0,
 					"Tooltip": "Sharpens the displayed image after TAA, never the history, to restore texture detail the averaging softens. Strong edges are sharpened much less and overshoot is bounded, so halos stay faint. 0 is off",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Screen Space Reflections",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ScreenSpaceReflections",
+					"Speed": 0.0,
+					"Tooltip": "Reflections of what the screen shows, found each frame: smooth floors, water and metal reflect what stands near them. Needs TAA. Where they find nothing (off screen, hidden, the sky) the reflection probes and the sky reflect as before",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Screen Space Reflections Intensity",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "ScreenSpaceReflectionsIntensity",
+					"Speed": 0.0,
+					"Tooltip": "How much the screen-space reflections replace the probes' and the sky's reflection where they find something; 1: fully",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Screen Space Reflections Max Roughness",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "ScreenSpaceReflectionsMaxRoughness",
+					"Speed": 0.0,
+					"Tooltip": "Surfaces rougher than this get none, and they fade out over the last quarter below it: rough surfaces blur what they reflect, which screen-space reflections do not",
 					"Type": "Float"
 				},
 				{

@@ -131,7 +131,8 @@ TEST_SUITE("Reflection")
 		CHECK((clamp->EnumValues[0].Name == "MinMax" && clamp->EnumValues[0].Value == 0 && clamp->EnumValues[0].DisplayName == "Range"));
 		CHECK((clamp->EnumValues[1].Name == "Variance" && clamp->EnumValues[1].Value == 1 && clamp->EnumValues[1].DisplayName == "Tight (variance)"));
 		const char* const order[] = { "AntiAliasingMethod", "TAAPreset", "TAAHistoryFrames", "TAAMotionResponse", "TAAMaxMotionWeight", "TAAResampleWeight",
-			"TAAHistoryClamp", "TAAClipWidth", "TAATransparentWeight", "TAADisocclusionRejection", "TAADisocclusionThreshold", "TAASharpening" };
+			"TAAHistoryClamp", "TAAClipWidth", "TAATransparentWeight", "TAADisocclusionRejection", "TAADisocclusionThreshold", "TAASharpening",
+			"ScreenSpaceReflections", "ScreenSpaceReflectionsIntensity", "ScreenSpaceReflectionsMaxRoughness" };
 		const auto first = std::find_if(post->Properties.begin(), post->Properties.end(), [](const PropertyInfo& property) { return property.Name == "AntiAliasingMethod"; });
 		REQUIRE(std::distance(first, post->Properties.end()) >= static_cast<std::ptrdiff_t>(std::size(order)));
 		for (size_t index = 0; index < std::size(order); index++)
@@ -148,7 +149,8 @@ TEST_SUITE("Reflection")
 		for (const TunableRange& range : { TunableRange { "TAAHistoryFrames", 2.0f, 32.0f }, TunableRange { "TAAMotionResponse", 0.0f, 0.25f },
 				 TunableRange { "TAAMaxMotionWeight", 0.0f, 1.0f }, TunableRange { "TAAResampleWeight", 0.0f, 1.0f }, TunableRange { "TAAClipWidth", 0.5f, 4.0f },
 				 TunableRange { "TAATransparentWeight", 0.0f, 1.0f }, TunableRange { "TAADisocclusionThreshold", 0.01f, 0.5f },
-				 TunableRange { "TAASharpening", 0.0f, 1.0f } })
+				 TunableRange { "TAASharpening", 0.0f, 1.0f }, TunableRange { "ScreenSpaceReflectionsIntensity", 0.0f, 1.0f },
+				 TunableRange { "ScreenSpaceReflectionsMaxRoughness", 0.0f, 1.0f } })
 		{
 			CAPTURE(range.Property);
 			const PropertyInfo* property = post->FindProperty(range.Property);
@@ -158,6 +160,11 @@ TEST_SUITE("Reflection")
 		}
 		CHECK(post->FindProperty("TAAHistoryFrames")->Type == PropertyType::UInt);
 		CHECK(post->FindProperty("TAADisocclusionRejection")->Type == PropertyType::Bool);
+		// Screen-space reflections: off unless a scene turns them on.
+		CHECK(post->FindProperty("ScreenSpaceReflections")->Type == PropertyType::Bool);
+		CHECK_FALSE(PostProcessComponent().ScreenSpaceReflections);
+		CHECK(PostProcessComponent().ScreenSpaceReflectionsIntensity == 1.0f);
+		CHECK(PostProcessComponent().ScreenSpaceReflectionsMaxRoughness == 0.5f);
 		// The defaults equal Sharp's table, which holds Original's values within every range.
 		PostProcessComponent tunables;
 		tunables.TAAPreset = TemporalAntiAliasingPreset::Custom;
@@ -553,6 +560,24 @@ TEST_SUITE("Scene.InactiveProperties")
 		post.TAADisocclusionRejection = false;
 		CHECK(reason("PostProcess", "TAAClipWidth") == "Only Tight clipping uses it (TAA History Clamp is Range)");
 		CHECK(reason("PostProcess", "TAADisocclusionThreshold") == "TAA Disocclusion Rejection is off");
+
+		// Screen-space reflections read the TAA's history: inactive without it, and their settings while they are off.
+		const char* const reflections[] = { "ScreenSpaceReflections", "ScreenSpaceReflectionsIntensity", "ScreenSpaceReflectionsMaxRoughness" };
+		post.AntiAliasing = false;
+		for (const char* property : reflections)
+			CHECK_MESSAGE(reason("PostProcess", property) == "Needs TAA (Anti Aliasing is off)", property);
+		post.AntiAliasing = true;
+		post.AntiAliasingMethod = AntiAliasingMode::FXAA;
+		for (const char* property : reflections)
+			CHECK_MESSAGE(reason("PostProcess", property) == "Needs TAA (Anti Aliasing Method is FXAA)", property);
+		post.AntiAliasingMethod = AntiAliasingMode::TAA;
+		post.ScreenSpaceReflections = false;
+		CHECK(reason("PostProcess", "ScreenSpaceReflections").empty());
+		CHECK(reason("PostProcess", "ScreenSpaceReflectionsIntensity") == "Screen Space Reflections is off");
+		CHECK(reason("PostProcess", "ScreenSpaceReflectionsMaxRoughness") == "Screen Space Reflections is off");
+		post.ScreenSpaceReflections = true;
+		for (const char* property : reflections)
+			CHECK_MESSAGE(reason("PostProcess", property).empty(), property);
 
 		// The camera's other projection; the animator's clip under a controller.
 		CameraComponent& camera = entity.AddComponent<CameraComponent>();

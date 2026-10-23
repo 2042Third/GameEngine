@@ -66,16 +66,20 @@ namespace
 		}
 	};
 
-	// The TAA's preset and tunables, all inactive for `reason` (without anti-aliasing, or with FXAA), added to `rows`.
-	nlohmann::json WithTemporalRows(nlohmann::json rows, const char* reason)
+	// The TAA's preset and tunables, all inactive for `reason`, and the screen-space reflections' settings, which need TAA, for
+	// `reflectionsReason` (without anti-aliasing, or with FXAA), added to `rows`.
+	nlohmann::json WithTemporalRows(nlohmann::json rows, const char* reason, const char* reflectionsReason)
 	{
 		for (const char* property : { "TAAPreset", "TAAHistoryFrames", "TAAMotionResponse", "TAAMaxMotionWeight", "TAAResampleWeight", "TAAHistoryClamp",
 				 "TAAClipWidth", "TAATransparentWeight", "TAADisocclusionRejection", "TAADisocclusionThreshold", "TAASharpening" })
 			rows[property] = reason;
+		for (const char* property : { "ScreenSpaceReflections", "ScreenSpaceReflectionsIntensity", "ScreenSpaceReflectionsMaxRoughness" })
+			rows[property] = reflectionsReason;
 		return rows;
 	}
 
 	constexpr const char* c_OnlyTAA = "Only TAA uses it (Anti Aliasing Method is FXAA)";
+	constexpr const char* c_ReflectionsNeedTAA = "Needs TAA (Anti Aliasing Method is FXAA)";
 
 }
 
@@ -826,7 +830,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK_FALSE(harness.Run("component.get", { { "entity", c }, { "component", "SpotLight" } }).contains("inactive"));
 		harness.Run("component.add", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "Bloom", false } } } });
 		const nlohmann::json post = harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } });
-		CHECK(post["inactive"] == WithTemporalRows({ { "BloomIntensity", "Bloom is off" }, { "BloomThreshold", "Bloom is off" } }, c_OnlyTAA));
+		CHECK(post["inactive"] == WithTemporalRows({ { "BloomIntensity", "Bloom is off" }, { "BloomThreshold", "Bloom is off" } }, c_OnlyTAA, c_ReflectionsNeedTAA));
 		CHECK(harness.Run("entity.get", { { "entity", c } })["inactive"] == nlohmann::json { { "PostProcess", post["inactive"] } });
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 		CHECK_FALSE(harness.Run("entity.get", { { "entity", c } }).contains("inactive"));
@@ -843,7 +847,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK(method() == "TAA");
 		harness.Run("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "AntiAliasing", false } } } });
 		CHECK(harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } })["inactive"]
-			== WithTemporalRows({ { "AntiAliasingMethod", "Anti Aliasing is off" } }, "Anti Aliasing is off"));
+			== WithTemporalRows({ { "AntiAliasingMethod", "Anti Aliasing is off" } }, "Anti Aliasing is off", "Needs TAA (Anti Aliasing is off)"));
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 
 		// The TAA's preset and tunables: Custom with tunables in one step, undone in one; out-of-range values refused without
@@ -866,10 +870,11 @@ TEST_SUITE("Editor.Commands")
 		CHECK(values["TAAMotionResponse"] == 0.125);
 		CHECK(values["TAASharpening"] == 0.25);
 		CHECK(postInactive() == nlohmann::json { { "TAAClipWidth", "Only Tight clipping uses it (TAA History Clamp is Range)" },
-			{ "TAADisocclusionThreshold", "TAA Disocclusion Rejection is off" } });
+			{ "TAADisocclusionThreshold", "TAA Disocclusion Rejection is off" }, { "ScreenSpaceReflectionsIntensity", "Screen Space Reflections is off" },
+			{ "ScreenSpaceReflectionsMaxRoughness", "Screen Space Reflections is off" } });
 		for (const auto& [property, value] : { std::pair<const char*, nlohmann::json> { "TAAHistoryFrames", 40 }, { "TAAHistoryFrames", 1 },
 				 { "TAAMotionResponse", 0.5 }, { "TAAClipWidth", 0.25 }, { "TAADisocclusionThreshold", 0.6 }, { "TAASharpening", 1.5 }, { "TAAHistoryClamp", "Box" },
-				 { "TAAPreset", "Blurry" } })
+				 { "TAAPreset", "Blurry" }, { "ScreenSpaceReflectionsIntensity", 1.5 }, { "ScreenSpaceReflectionsMaxRoughness", -0.1 } })
 		{
 			CAPTURE(property);
 			CHECK_FALSE(harness.Error("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "Vignette", 0.5 }, { property, value } } } })
