@@ -661,7 +661,7 @@ namespace Strata
 		static constexpr int32_t c_PreExposureHeadroomStops = 2;
 		// The pre-exposure stays within 2^-c_MaxPreExposureStops and 2^c_MaxPreExposureStops.
 		static constexpr int32_t c_MaxPreExposureStops = 24;
-		// The power of two nearest 2^stops within that range (0 for a non-finite value).
+		// The power of two nearest 2^stops within that range (1 for a non-finite value).
 		static float GetPreExposureFor(float stops);
 		// Temporal anti-aliasing starts its history again with the next frame (scene loads; SceneRendererSpecification::
 		// TemporalAntiAliasing).

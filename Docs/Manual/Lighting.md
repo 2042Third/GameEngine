@@ -78,8 +78,9 @@ scene, or offers **Add Procedural Sky** when there is none (the scene is then li
   reddens it on its way down, so the scene's sunlight turns warm at sunset by itself, and the sun's disk (**Sun Size**
   degrees across) carries its light. **Atmosphere Density** thickens the air (1 is Earth's), **Atmosphere Haze** adds
   haze, the whitish glow around the sun, and **Ground Albedo** is how much light the ground sends back up into the sky.
-  Use real values with it: a 120,000 lux sun and automatic exposure (**Max EV** 16). A sun that moves keeps the sky up to
-  date at once; the light it casts on the scene follows every half degree, blended in over a few frames.
+  Use real values with it: a 120,000 lux sun and automatic exposure (**Max EV** 16). A sun that moves keeps the sky and
+  its own light up to date at once; the light the sky casts on the scene follows every half degree, computed over a few
+  frames and then switched to.
 
 **Show Background** draws the sky behind the scene (otherwise the background is the clear color) and **Background
 Blur** softens it (the atmosphere's background is always sharp).
