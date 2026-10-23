@@ -79,13 +79,16 @@ namespace Strata
 			}
 			ProjectGameInfo identity;
 			identity.Title = JsonUtils::GetString(*game, "Title");
-			identity.Version = JsonUtils::GetString(*game, "Version", identity.Version);
+			// An empty version names none, as before version 5: a manifest read from an older one is saved with an empty one.
+			const std::string gameVersion = JsonUtils::GetString(*game, "Version", identity.Version);
+			if (!gameVersion.empty())
+				identity.Version = gameVersion;
 			identity.Company = JsonUtils::GetString(*game, "Company");
 			identity.Copyright = JsonUtils::GetString(*game, "Copyright");
 			if (std::optional<std::string> problem = identity.Validate())
 				return fail(fmt::format("The game's identity is invalid: {}", *problem));
 			manifest.Title = std::move(identity.Title);
-			manifest.Version = std::move(identity.Version);
+			manifest.Version = gameVersion.empty() ? std::string() : std::move(identity.Version);
 			manifest.Company = std::move(identity.Company);
 			manifest.Copyright = std::move(identity.Copyright);
 			manifest.Icon = JsonUtils::GetString(*game, "Icon");

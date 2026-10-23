@@ -39,7 +39,8 @@ namespace Strata
 		// the title or the company changes.
 		std::string Name = "Game";
 		// The game's identity (ProjectGameInfo): what its window, log and dialogs show; checked like the project's. Manifests
-		// before version 5 have none: an empty Title shows Name, and their Version is empty.
+		// before version 5 have none: an empty Title shows Name, and their Version is empty (an empty Version names none in
+		// any version, so that such a manifest saved again still loads).
 		std::string Title;
 		std::string Version = std::string(ProjectGameInfo::c_DefaultVersion);
 		std::string Company;

@@ -346,6 +346,11 @@ TEST_SUITE("Project.GameManifest")
 		CHECK(loaded->GetDisplayTitle() == "Adventure");
 		CHECK(loaded->Version.empty());
 		CHECK(loaded->Icon.empty());
+		// Saved again (as version 5), it loads and still names no version.
+		const std::optional<GameManifest> resaved = GameManifest::FromJson(loaded->ToJson(), &error);
+		REQUIRE_MESSAGE(resaved, error);
+		CHECK(resaved->Version.empty());
+		CHECK(resaved->GetDisplayTitle() == "Adventure");
 	}
 
 	TEST_CASE("Manifest settings over 1 MiB are refused")
