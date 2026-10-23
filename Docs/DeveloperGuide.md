@@ -3060,7 +3060,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   that normal, cut where it leaves the screen, passes the far plane or (toward the camera) nears the near plane, is
   marched in screen space, where UV and depth change linearly along it, in 24 steps closer together near its start
   (offset by interleaved gradient noise that turns each frame, `TemporalParams.z`), then refined by six bisections. It
-  hits the first surface it passes behind by less than its step's depth (at least 5 cm or 2% of the distance), and
+  hits the first surface it passes behind by less than its step's change of depth plus the larger of 5 cm and 2% of the
+  distance (the surface's own depth changes between the step's pixels: without that margin rays miss faces they cross,
+  `GPU.SceneRenderer.SSR`'s "whole" case), and
   fetches the history (bilinear) where that surface was, along the velocity at the hit pixel, scaled to the frame's
   pre-exposure: rgb the reflected luminance, pre-exposed; alpha the confidence, `ScreenSpaceReflectionsIntensity` times
   fades over the last quarter below `ScreenSpaceReflectionsMaxRoughness`, the screen's outer 10% and hits on surfaces the

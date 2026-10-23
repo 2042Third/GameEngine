@@ -35,8 +35,11 @@ layout(push_constant) uniform ReflectionParameters
 const uint c_Steps = 24u;
 const uint c_RefineSteps = 6u;
 const float c_FarDistance = 10000.0; // How far rays away from the camera reach before the screen's edges cut them
-const float c_MinThickness = 0.05;   // Meters a ray may pass behind a surface and still hit it, at least...
-const float c_ThicknessScale = 0.02; // ...or this fraction of its distance, or the depth of its step if that is more
+// How far behind a surface a ray may be at the first point behind it and still hit it: what the ray's depth changed by
+// since its previous point (it crossed the surface in between), plus the larger of these margins (the surface's own depth
+// changes between the two points' pixels) in meters and as a fraction of the ray's distance.
+const float c_MinThickness = 0.05;
+const float c_ThicknessScale = 0.02;
 const float c_EdgeFade = 0.1;        // Hits within this fraction of the screen's size from its edges fade
 
 // The view distance (along the camera's forward axis) of a depth: the inverse projection's z and w rows do not depend on x and
@@ -119,7 +122,7 @@ vec4 TraceReflection(ivec2 pixel, ivec2 size)
 		float sceneDepth;
 		float behind = GetDistanceBehind(point, size, sceneDepth);
 		float rayDistance = GetViewDistance(point.z);
-		float thickness = max(max(c_MinThickness, c_ThicknessScale * rayDistance), abs(rayDistance - previousDistance));
+		float thickness = abs(rayDistance - previousDistance) + max(c_MinThickness, c_ThicknessScale * rayDistance);
 		if (behind > 0.0 && behind < thickness)
 		{
 			hitStep = along;

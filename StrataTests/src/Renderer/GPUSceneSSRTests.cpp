@@ -186,6 +186,56 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The reflection of a face the rays cross is whole in every frame, without holes")
+	{
+		// Seen from low over the floor, the rays from the floor cross the cube's front face between two of their points: each
+		// must hit it, whatever the per-pixel noise places those points, though the face's own depth changes between them.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		MirrorScene scene(assets, 0.0f);
+		scene.Camera = LookAt(glm::vec3(0.0f, 1.2f, 6.0f), glm::vec3(0.0f, 0.4f, 0.0f));
+		SceneRenderer renderer = CreateRenderer("Holes");
+		renderer.SetViewportSize(c_ViewSize, c_ViewSize);
+		// The mirrored front face's texels of the half-resolution target, away from its edges: rays that cross the face near an
+		// edge may step past it (its edges are ragged in a frame and smooth only over frames), most toward its top edge, which
+		// the rays reach last and in the longest steps (the bottom of its reflection).
+		glm::vec2 low(1e9f);
+		glm::vec2 high(-1e9f);
+		for (const glm::vec3& corner : { glm::vec3(-0.5f, 0.5f, 0.5f), glm::vec3(0.5f, 0.5f, 0.5f), glm::vec3(-0.5f, 1.5f, 0.5f), glm::vec3(0.5f, 1.5f, 0.5f) })
+		{
+			const glm::vec2 pixel = glm::vec2(MirrorPixel(scene.Camera, corner)) * 0.5f;
+			low = glm::min(low, pixel);
+			high = glm::max(high, pixel);
+		}
+		const glm::uvec2 first = glm::uvec2(low + glm::vec2(2.5f, 1.5f));
+		const glm::uvec2 last = glm::uvec2(high - glm::vec2(2.5f, 4.5f));
+		REQUIRE(last.x >= first.x + 4);
+		REQUIRE(last.y >= first.y + 3);
+		REQUIRE(renderer.Render(scene.Contents, scene.Camera));
+		FinishFrame(gpu);
+		for (uint32_t frame = 1; frame < 9; frame++)
+		{
+			CAPTURE(frame);
+			REQUIRE(renderer.Render(scene.Contents, scene.Camera));
+			FinishFrame(gpu);
+			REQUIRE(renderer.GetStats().ScreenSpaceReflections);
+			const ReadbackImage image = ReadHalfImage(renderer.GetScreenReflectionTexture());
+			uint32_t holes = 0;
+			for (uint32_t y = first.y; y <= last.y; y++)
+			{
+				for (uint32_t x = first.x; x <= last.x; x++)
+				{
+					const glm::vec4 texel = ReadHalfTexel(image, x, y);
+					holes += texel.a > 0.5f && texel.r > 0.5f ? 0u : 1u;
+				}
+			}
+			CHECK(holes == 0u);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Rough surfaces and rays that leave the screen keep the sky's reflection")
 	{
 		GPUContext gpu;
