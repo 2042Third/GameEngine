@@ -4,6 +4,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/GameUI/GameUIScene.h"
 #include "Strata/Input/Input.h"
+#include "Strata/Input/InputActions.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
@@ -318,6 +319,8 @@ namespace Strata::Tests
 		std::string error;
 		m_Project = Project::Load(CopyFeatureProject(m_Directory), &error);
 		REQUIRE_MESSAGE(m_Project, error);
+		REQUIRE(m_Project->GetSettingsProblems().empty());
+		m_SettingsProvider = CreateScope<EngineServices::ScopedProvider<IProjectSettings>>(m_Project->GetSettings());
 
 		EditorAssetManagerSpecification specification;
 		specification.AssetDirectory = m_Project->GetAssetDirectory();
@@ -390,6 +393,8 @@ namespace Strata::Tests
 			Input::BeginFrame();
 			SimulateInput(frame, pressFrame);
 			SimulateUIInput(scene, frame, clickFrame);
+			// Where Application updates them: after the frame's input is in.
+			InputActions::Update();
 			advanceFrame();
 			REQUIRE_FALSE(engine.IsFaulted());
 			// The scene's caches (world transforms, activity, hierarchy links, lookup indices) match a full recomputation after
@@ -443,9 +448,9 @@ namespace Strata::Tests
 		CHECK(physicsStats.BodyOverflowCount == 0);
 		CHECK(physicsStats.GrowthCount == 0);
 
-		// The scene's collision layers (names and a matrix that is not the default, so they prove that they serialize) reached
-		// the running scene; the feature scripts read them (PhysicsApiFeatures).
-		const PhysicsLayerSettings& layers = scene.GetSettings().PhysicsLayers;
+		// The project's collision layers (names and a matrix that is not the default) reached the running scene: Feature.stscene
+		// stores none, so they came from FeatureTest.stproj; the feature scripts read them (PhysicsApiFeatures).
+		const PhysicsLayerSettings& layers = scene.GetPhysicsLayers();
 		CHECK(layers.Names[3] == "Triggers");
 		CHECK_FALSE(layers.IsDefaultMatrix());
 		CHECK_FALSE(physics->DoLayersCollide(7, 7));

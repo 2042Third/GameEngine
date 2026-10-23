@@ -67,7 +67,6 @@ namespace Strata
 		// c_MaxEntitiesInstantiatedLimit.
 		uint32_t MaxEntitiesInstantiatedPerFrame = 5000;
 		static constexpr uint32_t c_MaxEntitiesInstantiatedLimit = 1u << 20;
-		PhysicsLayerSettings PhysicsLayers; // Layer names and which layers collide
 		// Entities sub-scenes being unloaded may destroy per update of the scene, all of them together; each update also stops
 		// destroying once Scene::c_MaxSubSceneMillisecondsPerFrame went by (shared with creation). From 1 to
 		// c_MaxEntitiesDestroyedLimit.
@@ -562,6 +561,29 @@ namespace Strata
 		SceneSettings& GetSettings() { return m_Settings; }
 		const SceneSettings& GetSettings() const { return m_Settings; }
 
+		// The scene's collision layers: a working copy of the project's (ProjectCollisionLayers), which the physics system,
+		// scripts and the editor read, and scripts change (Physics::SetLayersCollide; the change lasts as long as the scene).
+		// Not saved, and not part of the scene's undo or recovery. ApplyProjectLayers makes the project's table the copy on the
+		// main thread when a scene is handed over; a program without a project keeps what the scene's document stores
+		// (GetStoredPhysicsLayers), as 0.5.0 did. Copies keep it.
+		PhysicsLayerSettings& GetPhysicsLayers() { return m_PhysicsLayers; }
+		const PhysicsLayerSettings& GetPhysicsLayers() const { return m_PhysicsLayers; }
+		// The collision layers the scene's document stores (0.5.0 wrote them into every scene; SceneSerializer reads them and
+		// no writer writes them): nothing when it stores none or the default table.
+		const std::optional<PhysicsLayerSettings>& GetStoredPhysicsLayers() const { return m_StoredPhysicsLayers; }
+		// Sets the document's stored layers (a default table counts as none) and makes them the working copy. For readers of
+		// scene documents, on the thread that builds the scene.
+		void SetStoredPhysicsLayers(std::optional<PhysicsLayerSettings> layers);
+		// Makes the project's table (ProjectCollisionLayers::Find) the working copy unless the copy came from that table
+		// already, so that a script's change stays until the table itself changes (an edit of another settings section keeps
+		// it). Returns whether the copy was replaced; without a project nothing changes. Main thread: the scene asset's
+		// hand-over (SceneAsset::TakePreparedScene and CreateScene, so every SceneLoader load before its preparation) and
+		// SceneLoadRequest::TakeScene call it, and the editor for every scene it adopts and after every change of the table.
+		bool ApplyProjectLayers();
+		// Whether the document stores layers (GetStoredPhysicsLayers) other than the project's table the working copy came from:
+		// a 0.5.0 scene whose layers the project's replaced. The editor warns of it once per scene and session.
+		bool DoStoredLayersDiffer() const { return m_StoredLayersDiffer; }
+
 		entt::registry& GetRegistry() { return m_Registry; }
 		const entt::registry& GetRegistry() const { return m_Registry; }
 
@@ -700,6 +722,10 @@ namespace Strata
 		std::deque<EntityChange> m_HierarchyMoves; // The latest moves, oldest first
 		uint64_t m_HierarchyMovesFloor = 0;        // Moves up to this version may be missing from m_HierarchyMoves
 		SceneSettings m_Settings;
+		PhysicsLayerSettings m_PhysicsLayers;
+		std::optional<PhysicsLayerSettings> m_StoredPhysicsLayers;
+		uint64_t m_ProjectLayersVersion = 0; // The ProjectCollisionLayers table the working copy came from (0: none)
+		bool m_StoredLayersDiffer = false;
 
 		// Hierarchy links of the root list (the roots' HierarchyComponents link the rest).
 		entt::entity m_FirstRoot = entt::null;

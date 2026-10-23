@@ -126,6 +126,11 @@ TEST_SUITE("Editor.FeatureTest")
 		const nlohmann::json exported = Tests::RunCommandToCompletion(editor.Context, editor.Commands, "project.export", { { "directory", FileSystem::ToUTF8(directory / "Build") }, { "includeRuntime", false } });
 		REQUIRE(exported["scriptModule"].is_string());
 		CHECK(FileSystem::FromUTF8(exported["scriptModule"].get<std::string>()).filename() == GetFeatureScriptModule().filename());
+		// The project's identity goes with the game: its icon (Textures/Checker.png, 64 x 64 pixels: enlarged, with a warning)
+		// lies next to the manifest, which names the title and version.
+		REQUIRE(exported["icon"].is_string());
+		CHECK(FileSystem::FromUTF8(exported["icon"].get<std::string>()).filename() == "FeatureTest.png");
+		CHECK(exported["warnings"].size() == 1);
 		const std::filesystem::path manifest = FileSystem::FromUTF8(exported["manifest"].get<std::string>());
 		std::string error;
 		// The pack holds the scenes, prefabs and models in their cooked form (project.export's default), which the game reads.
@@ -154,6 +159,8 @@ TEST_SUITE("Editor.FeatureTest")
 		const uint64_t cookedReads = CookedSceneReader::GetReadCount();
 		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, gameOptions);
 		REQUIRE_MESSAGE(game, error);
+		CHECK(game->GetManifest().GetDisplayTitle() == "Strata Feature Test");
+		CHECK(game->GetManifest().Version == "6.1.2.3");
 		REQUIRE(game->WaitForStart());
 		CHECK(CookedSceneReader::GetReadCount() > cookedReads); // The start scene, read cooked
 		const Ref<ScriptEngine> gameEngine = game->GetScriptEngine();
@@ -172,8 +179,8 @@ TEST_SUITE("Editor.FeatureTest")
 		CheckFeatureJournal(*gameScene, *gameEngine);
 
 		// The game runtime starts its scene right away and streams assets in (it has no loading screen yet), so the
-		// platform's mesh collider waits for its mesh at first.
-		constexpr std::string_view c_Tolerated[] = { "the mesh collider of 'Platform' waits for mesh" };
+		// platform's mesh collider waits for its mesh at first; the export enlarges the project's small icon.
+		constexpr std::string_view c_Tolerated[] = { "the mesh collider of 'Platform' waits for mesh", "The game's icon is 64 x 64 pixels" };
 		CheckFeatureLog(log.GetEntries(), 2, c_Tolerated);
 	}
 }

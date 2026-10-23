@@ -2,13 +2,17 @@
 
 #include "Editor/ExternalEditor.h"
 #include "UI/EditorPanelRegistry.h"
+#include "UI/SettingsPages.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace Strata
 {
+
+	class EditorContext;
 
 	// Scripts > New Script...: a class name and a template (a behaviour with OnCreate, OnUpdate and a field, or an empty
 	// class). The name is checked as it is typed (ValidateNewScriptClass, which reads the script directory: only when the
@@ -35,25 +39,24 @@ namespace Strata
 		std::string m_Outcome;
 	};
 
-	// Scripts > External Editor...: the command that opens script sources (script.setExternalEditor), the program it starts
-	// (or why it cannot start), the code editors found on this machine (ExternalEditor::FindChoices; examples without any),
-	// each a click away, and whether STRATA_EXTERNAL_EDITOR overrides it. Drawn by EditorLayer.
-	class ExternalEditorDialog
+	// The External Editor page of the Preferences dialog (the Editor.ExternalEditor section; Scripts > External Editor...
+	// opens it): the command that opens script sources (script.setExternalEditor, which also checks that its program is
+	// there), the program it starts (or why it cannot start), the code editors found on this machine
+	// (ExternalEditor::FindChoices, looked for once per page; examples without any), each a click away, and whether
+	// STRATA_EXTERNAL_EDITOR overrides it.
+	class ExternalEditorPage final : public SettingsPage
 	{
 	public:
-		static constexpr const char* c_Popup = "External Editor";
+		explicit ExternalEditorPage(EditorContext& context);
 
-		void Open(EditorPanelContext& context);
-		void Draw(EditorPanelContext& context);
-		bool IsOpen() const { return m_Open; }
+		void Draw(EditorPanelContext& context, float width) override;
 		const std::vector<ExternalEditorChoice>& GetChoices() const { return m_Choices; }
 	private:
 		void DrawChoices(float width);
 	private:
-		bool m_OpenRequested = false;
-		bool m_Open = false;
 		std::string m_Command;
 		std::string m_Error;
+		uint64_t m_PreferencesVersion = 0; // Of the preferences m_Command was read from (EditorPreferences::GetVersion)
 		// The command the program was looked for, and the program (or why there is none).
 		std::optional<std::string> m_CheckedCommand;
 		std::string m_Program;

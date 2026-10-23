@@ -5,6 +5,7 @@
 #include "Strata/Core/Log.h"
 #include "Strata/GameUI/GameUIComponents.h"
 #include "Strata/Input/Input.h"
+#include "Strata/Input/InputActions.h"
 #include "Strata/Input/KeyCodes.h"
 #include "Strata/Input/MouseCodes.h"
 #include "Strata/Scene/Components.h"
@@ -181,6 +182,10 @@ namespace Strata
 
 	void GameUISystem::OnUpdate(Timestep)
 	{
+		// Menus work at time scale 0: everything here runs on unscaled time. The actions follow the input also while there is no
+		// UI, so a press from before a canvas appeared is not reported as this update's (UI::IsActionPressed).
+		const float deltaTime = m_Scene.GetUnscaledDeltaTime();
+		m_Actions.Update(deltaTime);
 		if (m_CanvasStorage->empty())
 		{
 			// No UI: the game gets every click (one storage-size check per frame).
@@ -205,13 +210,10 @@ namespace Strata
 				Input::SetKeyboardCapture(false);
 		}
 
-		// Menus work at time scale 0: everything here runs on unscaled time.
-		const float deltaTime = m_Scene.GetUnscaledDeltaTime();
 		GameUIScene& ui = GameUIScene::Get(m_Scene);
 		const UIInputScreen screen = GameUIScene::GetInputScreen();
 		RefreshViews(ui, screen.Screen);
 		const bool layoutChanged = m_HitTester.Update(ui, m_Views);
-		m_Actions.Update(deltaTime);
 
 		// A focus that became unusable (disabled, hidden, gone) is dropped.
 		if (m_Focused != entt::null)
@@ -277,11 +279,15 @@ namespace Strata
 		}
 
 		constexpr uint32_t c_Left = 1u << Mouse::ButtonLeft;
+		// A left press a binding capture took (a rebinding menu's "press a control") is the binding: it presses no widget, as
+		// it moves no action, which would start the capture again with the menu's button still under the pointer.
+		const std::optional<InputControl>& captured = InputActions::GetCapturedControl();
+		const bool leftCaptured = captured && captured->Type == InputControlType::MouseButton && captured->Code == Mouse::ButtonLeft;
 		// A press starts a gesture: the UI's when it is over the UI, else the game's, each until every button is released.
 		if (pointer.Pressed != 0 && m_Gesture == Gesture::None)
 		{
 			m_Gesture = m_PointerOverUI ? Gesture::UI : Gesture::Game;
-			if (m_Gesture == Gesture::UI && (pointer.Pressed & c_Left) != 0 && m_Hovered != entt::null)
+			if (m_Gesture == Gesture::UI && (pointer.Pressed & c_Left) != 0 && m_Hovered != entt::null && !leftCaptured)
 			{
 				m_Pressed = m_Hovered;
 				Focus(m_Pressed); // A click on a selectable focuses it

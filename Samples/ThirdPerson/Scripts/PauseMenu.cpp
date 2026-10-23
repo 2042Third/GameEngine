@@ -1,6 +1,6 @@
-// The course's pause menu, on its "Game" entity (the menu's buttons send it their clicks): Esc or the gamepad's Start
-// stops time (Time::SetTimeScale(0)) and shows the menu with the cursor free: Resume, Settings (the settings panel beside
-// it), Restart, Main Menu and Quit. Esc again closes the settings, then resumes.
+// The course's pause menu, on its "Game" entity (the menu's buttons send it their clicks): the Pause action (Esc or the
+// gamepad's Start) stops time (Time::SetTimeScale(0)) and shows the menu with the cursor free: Resume, Settings (the
+// settings panel beside it), Restart, Main Menu and Quit. Pause again closes the settings, then resumes.
 
 #include "CourseState.h"
 #include "SettingsMenu.h"
@@ -37,7 +37,7 @@ public:
 
 	void OnUpdate(float) override
 	{
-		const bool pausePressed = Input::IsKeyPressed(Key::Escape) || Input::IsGamepadButtonPressed(GamepadButton::Start);
+		const bool pausePressed = Input::IsActionPressed("Gameplay/Pause");
 		if (pausePressed && !ThirdPerson::IsAttractMode() && !IsCourseComplete())
 		{
 			SettingsMenu* settings = GetEntity().GetScript<SettingsMenu>();

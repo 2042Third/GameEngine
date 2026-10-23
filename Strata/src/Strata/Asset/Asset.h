@@ -48,7 +48,10 @@ namespace Strata
 	enum class AssetFinalizeResult : uint8_t
 	{
 		Done = 0, // Finalized: the asset can be published
-		Pending,  // The call's upload budget ran out first: the asset continues in the next call (a later frame)
+		// The call's upload budget ran out first: the asset continues in the next call (a later frame). Without a budget a
+		// call ends Pending only when the open batch cannot take what it needs (a mesh whose geometry needs the geometry pool
+		// to grow after the batch wrote into the pool): the manager submits the batch and calls again once, in a new one.
+		Pending,
 		Failed,
 		// Every upload is recorded, but on a queue the GPU runs beside the frame's work (the renderer's transfer queue): the
 		// asset continues in a later frame, once the GPU completed them, and the arrivals behind it go on meanwhile. Only when

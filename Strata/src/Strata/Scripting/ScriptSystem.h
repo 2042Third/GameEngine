@@ -142,7 +142,12 @@ namespace Strata
 		float GetAssetLoadProgress(AssetManagerBase& manager, AssetHandle asset);
 		// Logs a problem with a script's use of the API, naming the calling script; each distinct message is logged once.
 		void ReportProblem(std::string_view function, const std::string& message);
+		// The binding capture the scripts started (InputActions::GetCaptureId; 0: none): theirs to poll and cancel while it is
+		// still the one that runs, and cancelled when play stops while it listens.
+		uint64_t GetBindingCapture() const { return m_BindingCapture; }
+		void SetBindingCapture(uint64_t capture) { m_BindingCapture = capture; }
 	private:
+		void EndBindingCapture();
 		struct Instance
 		{
 			UUID Entity = UUID::Null();
@@ -289,6 +294,7 @@ namespace Strata
 		// Closures the scripts asked the progress of (GetAssetLoadProgress), pinned like m_AssetPins.
 		std::unordered_map<AssetHandle, AssetGroupRequest> m_AssetGroups;
 		std::unordered_set<std::string> m_ReportedProblems;
+		uint64_t m_BindingCapture = 0; // GetBindingCapture
 		CollisionListenerID m_CollisionListener = c_InvalidCollisionListener; // Registered with the scene's ICollisionEventSource while running
 		AnimationEventListenerID m_AnimationListener = 0; // Registered with the scene's IAnimationEventSource while running (0: none)
 		UIEventListenerID m_UIListener = 0;               // Registered with the scene's IUIEvents while running (0: none)

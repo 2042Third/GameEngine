@@ -13,5 +13,12 @@
 	{ "command": "entity.create", "parameters": { "name": "Box", "components": { "MeshRenderer": { "Mesh": "0000000000000001", "Material": "Materials/Blue.stmat" } } } },
 	{ "command": "scene.saveAs", "parameters": { "path": "Scenes/NoCamera.stscene" } },
 	{ "command": "project.setStartScene", "parameters": { "scene": "Scenes/NoCamera.stscene" } },
-	{ "command": "project.export", "parameters": { "directory": "@STRATA_EXPORT_TEST_DIR@/BuildNoCamera" } }
+	{ "command": "project.export", "parameters": { "directory": "@STRATA_EXPORT_TEST_DIR@/BuildNoCamera" } },
+	{ "command": "project.setStartScene", "parameters": { "scene": "Scenes/Main.stscene" } },
+	{ "command": "asset.import", "parameters": { "file": "@CMAKE_CURRENT_SOURCE_DIR@/FeatureTest/Assets/Textures/Checker.png", "directory": "Textures" } },
+	{ "command": "project.setGameInfo",
+		"parameters": { "title": "Smoke Adventure", "version": "2.0.1", "company": "Strata Tests", "copyright": "(c) 2026 Strata Tests", "icon": "Textures/Checker.png" },
+		"expect": { "/game/title": { "equals": "Smoke Adventure" }, "/game/version": { "equals": "2.0.1" } } },
+	{ "command": "project.export", "parameters": { "directory": "@STRATA_EXPORT_TEST_DIR@/BuildIdentity" },
+		"expect": { "/warnings": { "equals": [ "The game's icon is 64 x 64 pixels, so its 256 x 256 image is enlarged and may look blurred: use an image of at least 256 x 256 pixels" ] } } }
 ]

@@ -105,24 +105,24 @@ void ThirdPersonPlayer::OnUpdate(float deltaTime)
 	const float groundSpeed = glm::length(glm::vec2(velocity.x, velocity.z));
 	if (!Attract)
 	{
-		const bool jumpPressed = Input::IsKeyPressed(Key::Space) || Input::IsGamepadButtonPressed(GamepadButton::A);
+		const bool jumpPressed = Input::IsActionPressed("Gameplay/Jump");
 		if (jumpPressed && !m_Jumping && m_JumpCooldown <= 0.0f && (Grounded || m_AirSeconds <= CoyoteSeconds))
 			StartJump(JumpSpeed, position, true);
 		const bool standing = Grounded && groundSpeed < 0.1f && glm::length(move) < 0.05f;
 		if (standing && Robot.IsValid())
 		{
-			if (Input::IsKeyPressed(Key::D1) || Input::IsGamepadButtonPressed(GamepadButton::X))
+			if (Input::IsActionPressed("Gameplay/Wave"))
 			{
 				animator.SetTrigger("Wave");
 				Log::Info("ThirdPerson: wave");
 			}
-			if (Input::IsKeyPressed(Key::D2) || Input::IsGamepadButtonPressed(GamepadButton::Y))
+			if (Input::IsActionPressed("Gameplay/Dance"))
 			{
 				animator.SetTrigger("Dance");
 				Log::Info("ThirdPerson: dance");
 			}
 		}
-		if (Input::IsKeyPressed(Key::R))
+		if (Input::IsActionPressed("Gameplay/Respawn"))
 			Respawn();
 	}
 
@@ -183,16 +183,10 @@ glm::vec3 ThirdPersonPlayer::GetViewForward() const
 
 glm::vec3 ThirdPersonPlayer::GetMoveInput(bool& outRunning) const
 {
-	glm::vec2 input(0.0f);
-	if (Input::IsKeyDown(Key::W) || Input::IsKeyDown(Key::Up)) input.y += 1.0f;
-	if (Input::IsKeyDown(Key::S) || Input::IsKeyDown(Key::Down)) input.y -= 1.0f;
-	if (Input::IsKeyDown(Key::D) || Input::IsKeyDown(Key::Right)) input.x += 1.0f;
-	if (Input::IsKeyDown(Key::A) || Input::IsKeyDown(Key::Left)) input.x -= 1.0f;
-	input.x += Input::GetGamepadAxis(GamepadAxis::LeftX);
-	input.y -= Input::GetGamepadAxis(GamepadAxis::LeftY); // The stick's Y grows downward
-	if (glm::length(input) > 1.0f)
-		input = glm::normalize(input);
-	outRunning = Input::IsKeyDown(Key::LeftShift) || Input::IsKeyDown(Key::RightShift) || Input::IsGamepadButtonDown(GamepadButton::RightBumper);
+	// The project's Move action (the keys or the left stick, bound in the project's settings): +Y walks forward, and
+	// its length is at most 1 (a diagonal of keys too).
+	const glm::vec2 input = Input::GetActionValue("Gameplay/Move");
+	outRunning = Input::IsActionDown("Gameplay/Run");
 	const glm::vec3 forward = GetViewForward();
 	const glm::vec3 right = glm::normalize(glm::cross(forward, c_Up));
 	return forward * input.y + right * input.x;

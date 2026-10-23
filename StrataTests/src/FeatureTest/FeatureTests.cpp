@@ -7,7 +7,9 @@
 #include "Strata/Core/EngineServices.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/ProjectSettings.h"
 #include "Strata/Core/SaveFiles.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Runtime/GameWindowService.h"
@@ -124,6 +126,26 @@ TEST_SUITE("FeatureTest")
 			CHECK(texture->GetSpecification().Format == format);
 			CHECK(texture->GetSpecification().Grayscale == (format == TextureFormat::BC4));
 		}
+	}
+
+	TEST_CASE("Every registered project section is set in FeatureTest.stproj with a non-default value")
+	{
+		FeatureProject project;
+		const ProjectSettingsValues& values = project.GetProject()->GetSettings();
+		size_t sections = 0;
+		for (const SettingsSection& section : SettingsRegistry::GetProcessRegistry().GetAll())
+		{
+			if (section.Scope != SettingsScope::Project)
+				continue;
+			CAPTURE(section.Id);
+			sections++;
+			// Stored, valid (provided) and not the default: the project exercises what the section can say.
+			const nlohmann::json* value = values.FindSection(section.Id);
+			REQUIRE(value != nullptr);
+			CHECK(*value != section.GetDefault());
+			CHECK(EngineServices::Get<IProjectSettings>()->FindSection(section.Id) == value);
+		}
+		CHECK(sections > 0);
 	}
 
 	TEST_CASE("The feature scene contains every component with non-default values")

@@ -255,10 +255,11 @@ namespace Strata
 			}));
 		}
 
-		// Collision layers: RigidBody and CharacterController layers (0 to 31) collide only when the scene's layer matrix
-		// lets them. SetLayersCollide changes the playing scene's matrix (both ways; physics applies it before its next step
-		// and wakes resting bodies) and returns false for layers outside 0 to 31. GetLayerIndex finds a layer by the name the
-		// scene gives it (ignoring case; "Layer 5" for a layer without a name): its index, or -1. A mask of a layer for the
+		// Collision layers: RigidBody and CharacterController layers (0 to 31) collide only when the scene's copy of the
+		// project's layer matrix lets them. SetLayersCollide changes the playing scene's matrix until the next scene starts
+		// (both ways; physics applies it before its next step and wakes resting bodies) and returns false for layers outside 0
+		// to 31. GetLayerIndex finds a layer by the name the project gives it (ignoring case; "Layer 5" for a layer without a
+		// name): its index, or -1. A mask of a layer for the
 		// queries above: 1u << layer.
 		static bool SetLayersCollide(uint32_t layerA, uint32_t layerB, bool collide)
 		{

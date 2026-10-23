@@ -6,6 +6,7 @@
 #include "Editor/EditorGameWindow.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/PrefabSync.h"
+#include "Editor/ProjectMigration.h"
 #include "Editor/ProjectTemplates.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
@@ -18,7 +19,9 @@
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/Crypto.h>
 #include <Strata/Core/EngineServices.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Timestep.h>
+#include <Strata/Input/InputActionSet.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneLoader.h>
@@ -29,12 +32,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -47,12 +52,15 @@ namespace Strata
 
 	// Used by reference, pointer or owning pointer only: their headers stay out of every file that includes this one.
 	class CommandJournal;
+	class EditorPreferences;
 	class ExternalEditorLauncher;
 	class GameExport;
 	struct GameExportOptions;
 	class InputSequence;
 	class ProjectThumbnail;
 	class SceneRecovery;
+	class SettingsFileWriter;
+	enum class SettingsFileState : uint8_t;
 	struct RecoveryData;
 	struct RecoverySaveToken;
 	enum class DiscardOutcome : uint8_t;
@@ -95,8 +103,11 @@ namespace Strata
 		// RecentProjects::GetDefaultFile). Empty: in memory only, as tests need. Read-only: read but never written.
 		std::filesystem::path RecentProjectsFile;
 		bool RecentProjectsReadOnly = false;
-		// Where the user's editor settings are kept, such as the external code editor (ExternalEditorLauncher; the editor
-		// application passes ExternalEditor::GetDefaultSettingsFile). Empty: in memory only, as tests need.
+		// Where the user's preferences are kept (EditorPreferences, such as the external code editor; the editor application
+		// passes EditorPreferences::GetDefaultFile). Empty: in memory only, and nothing is imported, as tests need.
+		std::filesystem::path PreferencesFile;
+		// 0.5.0's editor settings (ExternalEditor::GetDefaultSettingsFile), whose external editor is imported once while
+		// PreferencesFile does not exist. Read only, never written.
 		std::filesystem::path EditorSettingsFile;
 		// Where project.samples and project.openSample find the samples (ProjectSamples); empty: next to the executable
 		// (ProjectSamples::GetDefaultDirectory).
@@ -109,6 +120,9 @@ namespace Strata
 		// frames go on while textures compress, the assets arriving as their imports finish. The editor turns it on for
 		// interactive and automation sessions; off by default, so that tests and scripted runs find every asset imported.
 		bool ImportInBackground = false;
+		// The settings sections the project's settings are validated with (project.open, project.settings, project.setSettings,
+		// the export); null: the process's registry (SettingsRegistry::GetProcessRegistry). Tests pass a local one.
+		const SettingsRegistry* Settings = nullptr;
 	};
 
 	// What became of the module of the last finished script build.
@@ -182,6 +196,32 @@ namespace Strata
 		// Changes whenever a project opens or closes. UI state kept per project compares it rather than the manager's address,
 		// which the next project's manager may take over.
 		uint64_t GetProjectGeneration() const { return m_ProjectGeneration; }
+		// The project file is written in the background (SettingsFileWriter), never on the main thread: a change of the
+		// project's settings (ProjectSettingsAction) queues a write of the project as it is then, and writes coalesce. A write
+		// that fails keeps the change in memory and is reported (a notification, the project's fileState in project.info and
+		// editor.status); the next change, or project.save, tries again. Nothing happens without a project.
+		void SaveProjectFile();
+		// Where the project file stands (Written without a project) and, while it is Unwritten, why its last write failed.
+		SettingsFileState GetProjectFileState() const;
+		std::string GetProjectFileError() const;
+		// The project file's last write failed and none succeeded since: what changed is only in memory, and the commands that
+		// release the project refuse to unless forced (CommandUtils::CheckUnsavedChanges).
+		bool HasUnwrittenProjectSettings() const;
+		// The project file's writer, for tests (SettingsFileWriter::SetTestHook); null without a project.
+		SettingsFileWriter* GetProjectFileWriter() const { return m_ProjectFileWriter.get(); }
+		// Applies the project's collision layers (Scene::ApplyProjectLayers) to the edited scene and the running one, as every
+		// change of the project's settings does (ProjectSettingsAction, its undo and redo too): a new table reaches a running
+		// game at once, replacing what its scripts changed, and a change of another section changes nothing.
+		void ApplyProjectLayers();
+		// Whether the open project, saved by 0.5.0 or older (Project::GetFileVersion below 3), is being migrated: its scenes'
+		// collision layers are read on a job, then become the project's (ProjectMigration), before its start scene opens.
+		bool IsMigratingProject() const { return m_ProjectMigration != nullptr; }
+		// What the open project's migration did ({collisionLayers: {scenes, conflicts, unreadable}}: the scenes whose layers
+		// were taken, start scene first, and the disagreements and unreadable scenes the log warned of), or null when it needed
+		// none or has not finished. The project file is written as version 3 in every case, so a project migrates once.
+		const nlohmann::json& GetProjectMigrationResult() const { return m_ProjectMigrationResult; }
+		// The settings sections the project's settings are validated with (EditorContextSpecification::Settings).
+		const SettingsRegistry& GetSettingsRegistry() const;
 
 		//////////////////////////////////////////////////////////////////////////
 		// Scene
@@ -222,8 +262,9 @@ namespace Strata
 		// start scene opens once it ended (it counts as the scene being opened meanwhile).
 		bool IsScanningAssets() const;
 		std::optional<AssetScanProgress> GetAssetScanProgress() const;
-		// The scan runs, or the start scene that waited for it is still being opened: commands that need the whole registry
-		// (and every edit, which the start scene would replace) wait until the project is ready.
+		// The scan runs, the migration of a project saved by 0.5.0 or older runs (IsMigratingProject), or the start scene that
+		// waited for them is still being opened: commands that need the whole registry (and every edit, which the start scene
+		// or the migrated settings would replace) wait until the project is ready.
 		bool IsWaitingForAssets() const;
 		// Starts saving the edited scene to its asset in the background (DocumentSaver) and returns the save's ID, or 0 with
 		// the reason (no project; a scene never saved needs BeginSaveSceneAs). The frame only takes a snapshot of the scene
@@ -241,8 +282,9 @@ namespace Strata
 		// failed.
 		bool SaveScene(std::string* outError = nullptr);
 		bool SaveSceneAs(const std::string& relativePath, std::string* outError = nullptr);
-		// Saves that have not ended (writing, waiting behind another or not published yet).
-		bool HasSavesInFlight() const { return m_DocumentSaver.IsBusy(); }
+		// Saves that have not ended (writing, waiting behind another or not published yet): the documents' (DocumentSaver), the
+		// project file's (SaveProjectFile) and the preferences file's.
+		bool HasSavesInFlight() const;
 		// The save in flight that holds the edited scene as it is now (DocumentSaver::GetStatus tells how it ended; once it
 		// is published the scene is unmodified, unless edited meanwhile), or 0 without one.
 		uint64_t FindSaveOfCurrentState() const;
@@ -340,6 +382,15 @@ namespace Strata
 		EditorGameWindow& GetGameWindow() { return m_GameWindow; }
 		const EditorGameWindow& GetGameWindow() const { return m_GameWindow; }
 		std::optional<std::filesystem::path> GetGameSaveDirectory() const;
+		// The players' bindings that replace the project's, by qualified action name: while playing, those of the running game
+		// (InputActions::GetPlayerBindings, saved or not); otherwise those of the players' bindings file in the save directory
+		// (InputBindings.json, which a game's rebinding menu wrote with Input::SaveBindings while playing here), which the next
+		// play session starts with, so edits of those actions' bindings do not reach it. Read again when play starts or stops,
+		// the project or its actions change, or the bindings are reset; empty without a project.
+		const InputPlayerBindings& GetPlayerBindings();
+		// Deletes the players' bindings file (InputActions::DeleteSavedBindings) and, while playing, gives the running game the
+		// project's bindings from its next input frame. False, changing nothing, without a project or when the file stays.
+		bool ResetPlayerBindings(std::string* outError = nullptr);
 
 		//////////////////////////////////////////////////////////////////////////
 		// Selection (entities of the active scene)
@@ -512,7 +563,14 @@ namespace Strata
 		bool StartPlayBuild(std::string* outError = nullptr);
 		uint64_t GetPlayBuildID() const { return m_PlayBuildID; }
 		void ClearPlayBuild() { m_PlayBuildID = 0; }
-		// The person's code editor (script.open, script.setExternalEditor).
+		// The person's preferences (preferences.get, preferences.set): the settings registry's user sections, validated with
+		// GetSettingsRegistry and written in the background like the project file. A write that fails keeps the change in memory
+		// and is reported (a notification); editor.quit refuses meanwhile unless forced.
+		EditorPreferences& GetPreferences() { return *m_Preferences; }
+		const EditorPreferences& GetPreferences() const { return *m_Preferences; }
+		// The preferences file's last write failed and none succeeded since (EditorPreferences::HasUnwrittenPreferences).
+		bool HasUnwrittenPreferences() const;
+		// The person's code editor (script.open, script.setExternalEditor), kept in the preferences.
 		ExternalEditorLauncher& GetExternalEditor() { return *m_ExternalEditor; }
 		const ExternalEditorLauncher& GetExternalEditor() const { return *m_ExternalEditor; }
 		// Opens a source file at a line and column (0: unknown) in the external editor: a path relative to the project
@@ -662,8 +720,17 @@ namespace Strata
 		void OnSceneSaved();
 		// Opens the project's start scene as the load with this ID (the one the project's opening announced).
 		void OpenStartScene(AssetHandle startScene, uint64_t id);
-		// Once the asset scan ended: what waited for the whole registry (the start scene, the script usage scan).
+		// Once the asset scan ended: what waited for the whole registry (the start scene, the script usage scan). The start
+		// scene also waits for the project's migration.
 		void FinishAssetScan();
+		// Starts the migration of a project saved by 0.5.0 or older: the scan of its scenes' layers on an I/O job.
+		void BeginProjectMigration();
+		// Finishes the migration once its scan is done (with `wait`, waiting for it), on the main thread: the project's
+		// collision layers, the project file written as version 3, the log.
+		void UpdateProjectMigration(bool wait);
+		// Takes the project's layers for a scene the editor adopts (edited or running) and warns, once per scene asset and
+		// session, when its document stores other layers: the project's apply, and saving the scene drops the scene's.
+		void AdoptProjectLayers(Scene& scene, AssetHandle handle);
 		// What a save of the edited scene restores when it fails (BeginSaveSceneAs).
 		struct SceneSaveRestore
 		{
@@ -703,6 +770,10 @@ namespace Strata
 		void StartScriptUsageScan();
 		// Takes the finished scan's answer: a project whose scenes use scripts that are not built is told so once.
 		void UpdateScriptUsageScan();
+		// A write of the project file ended (its writer's completion): a failure is logged and posted.
+		void OnProjectFileWritten(const std::string& error);
+		// The same for the preferences file.
+		void OnPreferencesWritten(const std::string& error);
 		// Posts how the game export ended (EditorNotifications).
 		void NotifyExportFinished(const GameExport& exporter);
 		// Posts the imports that failed while nobody waited for them (EditorAssetManager::TakeImportFailures): one toast for
@@ -774,10 +845,39 @@ namespace Strata
 		private:
 			const EditorContext& m_Context;
 		};
+		// The open project's settings, the engine service IProjectSettings (none set without a project). It lives as long as
+		// the context, like the game's services, so that providers of several contexts end in the reverse order of their start.
+		class OpenProjectSettings final : public IProjectSettings
+		{
+		public:
+			explicit OpenProjectSettings(const EditorContext& context)
+				: m_Context(context)
+			{
+			}
+
+			const nlohmann::json* FindSection(std::string_view id) const override { return GetValues().FindSection(id); }
+			uint64_t GetVersion() const override { return GetValues().GetVersion(); }
+		private:
+			const ProjectSettingsValues& GetValues() const { return m_Context.m_Project ? m_Context.m_Project->GetSettings() : m_None; }
+		private:
+			const EditorContext& m_Context;
+			ProjectSettingsValues m_None;
+		};
 		EditorGameWindow m_GameWindow;
 		ProjectGameSaves m_GameSaves { *this };
+		// GetPlayerBindings' answer, and what it was read for.
+		InputPlayerBindings m_PlayerBindings;
+		bool m_PlayerBindingsRead = false;
+		bool m_PlayerBindingsPlaying = false;
+		uint64_t m_PlayerBindingsProject = 0;  // m_ProjectGeneration, 0 without a project
+		uint64_t m_PlayerBindingsSession = 0;  // m_PlaySession
+		uint64_t m_PlayerBindingsActions = 0;  // InputActions::GetVersion
+		uint64_t m_PlayerBindingsResets = 0;   // m_PlayerBindingsResetCount
+		uint64_t m_PlayerBindingsResetCount = 0;
+		OpenProjectSettings m_OpenProjectSettings { *this };
 		Scope<EngineServices::ScopedProvider<IGameWindow>> m_GameWindowProvider;
 		Scope<EngineServices::ScopedProvider<IGameSaves>> m_GameSavesProvider;
+		Scope<EngineServices::ScopedProvider<IProjectSettings>> m_ProjectSettingsProvider;
 
 		std::vector<UUID> m_Selection;
 		std::unordered_set<UUID> m_SelectionSet; // The same entities, for IsSelected
@@ -815,6 +915,9 @@ namespace Strata
 		std::optional<BuiltScriptSources> m_BuiltScriptSources;
 		uint64_t m_ProblemsPanelRequests = 0;
 		bool m_ScriptFaultLocationPending = false; // m_LastScriptFault waits for its symbolization
+		// Declared after the notifications its writer's completion posts to (the writer finishes when it goes), and before the
+		// launcher that reads it.
+		Scope<EditorPreferences> m_Preferences;
 		Scope<ExternalEditorLauncher> m_ExternalEditor;
 		// The scan of the project's scene and prefab files for scripts (see DoScenesUseScripts), shared with its I/O job.
 		struct ScriptUsageScan
@@ -855,9 +958,23 @@ namespace Strata
 		AssetHandle m_StartSceneAfterScan = UUID::Null();
 		uint64_t m_StartSceneAfterScanID = 0; // Its load, once it began
 		bool m_AfterAssetScan = false;
+		// The migration of a project saved by 0.5.0 or older, while its scan runs (the job writes only Scan; Cancel ends it
+		// early when the project goes).
+		struct PendingMigration
+		{
+			JobHandle Job;
+			std::shared_ptr<std::atomic<bool>> Cancel;
+			std::shared_ptr<ProjectMigration::SceneLayerScan> Scan;
+		};
+		Scope<PendingMigration> m_ProjectMigration;
+		nlohmann::json m_ProjectMigrationResult;
+		std::unordered_set<AssetHandle> m_StoredLayersWarned; // Scenes whose stored layers were warned of in this session
 		// Declared after what its completions use (the undo stack, the recovery journal, the notifications); idle by the time
 		// the context goes (ReleaseProject finishes every save).
 		DocumentSaver m_DocumentSaver;
+		// The open project's file (SaveProjectFile); declared after the notifications its completion posts to, and finished by
+		// ReleaseProject before the project goes.
+		Scope<SettingsFileWriter> m_ProjectFileWriter;
 		Ref<WorldCookCache> m_WorldCookCache;
 		uint64_t m_WorldCookCacheGeneration = 0; // The project the cache belongs to (GetProjectGeneration)
 		// Declared after the undo stack and the edited scene, which it observes and streams into: it goes first.

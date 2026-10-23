@@ -191,7 +191,7 @@ TEST_SUITE("Scripting.Physics")
 	{
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
 		Scene scene;
-		PhysicsLayerSettings& layers = scene.GetSettings().PhysicsLayers;
+		PhysicsLayerSettings& layers = scene.GetPhysicsLayers();
 		layers.Names[2] = "Crates";
 		layers.Names[3] = "Zones";
 		const Entity tester = CreatePhysicsScene(scene, "PhysicsLayersAPI");
@@ -202,10 +202,10 @@ TEST_SUITE("Scripting.Physics")
 		CHECK(GetField<bool>(system, tester, "PhysicsLayersAPI", "Done"));
 		CheckScriptChecks(system, tester, "PhysicsLayersAPI", 10);
 		CHECK_FALSE(engine->IsFaulted());
-		// The scene's settings hold the change (what the inspector shows of a playing scene), and the crate fell through the
-		// ground instead of landing on it.
-		CHECK_FALSE(scene.GetSettings().PhysicsLayers.DoCollide(0, 2));
-		CHECK(scene.GetSettings().PhysicsLayers.DoCollide(2, 3));
+		// The scene's copy of the layers holds the change (what scene.info shows of a playing scene), and the crate fell through
+		// the ground instead of landing on it.
+		CHECK_FALSE(scene.GetPhysicsLayers().DoCollide(0, 2));
+		CHECK(scene.GetPhysicsLayers().DoCollide(2, 3));
 		CHECK(glm::vec3(scene.GetWorldTransform(scene.FindEntityByName("Crate"))[3]).y < -2.0f);
 		scene.OnRuntimeStop();
 	}

@@ -7,6 +7,7 @@
 #include "Strata/Core/Profiling.h"
 #include "Strata/Core/Timer.h"
 #include "Strata/Input/Input.h"
+#include "Strata/Input/InputActions.h"
 
 #include <algorithm>
 #include <chrono>
@@ -287,6 +288,8 @@ namespace Strata
 				m_Window->ProcessEvents();
 				m_Minimized = m_Window->IsMinimized();
 			}
+			// The frame's input is in: the actions take it (once per input frame; a binding capture at every call).
+			InputActions::Update();
 		}
 
 		if (m_Minimized)

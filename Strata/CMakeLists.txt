@@ -51,6 +51,9 @@ if(WIN32)
 	strata_layer_link(Network PRIVATE ws2_32)
 elseif(APPLE)
 	strata_layer_link(Core PRIVATE "-framework CoreFoundation")
+	# The Dock icon (Platform/GLFW/GLFWApplicationIcon.cpp), through the Objective-C runtime: App, not Core, so that programs
+	# without a window (StrataCLI) do not load AppKit.
+	strata_layer_link(App PRIVATE "-framework AppKit" objc)
 else()
 	find_package(Threads REQUIRED)
 	strata_layer_link(Core PRIVATE Threads::Threads ${CMAKE_DL_LIBS})

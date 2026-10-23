@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
+#include "Core/SettingsTestUtils.h"
 #include "Runtime/PerfLogReader.h"
 #include "Scene/SceneTestUtils.h"
 #include "Strata/Asset/AssetPackWriter.h"
@@ -8,11 +9,19 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/Platform.h"
+#include "Strata/Core/ProjectSettings.h"
+#include "Strata/Core/SettingsRegistry.h"
+#include "Strata/Input/Input.h"
+#include "Strata/Input/InputActions.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Renderer/RenderScene.h"
+#include "Strata/Core/SaveFiles.h"
+#include "Strata/Runtime/GamePresentation.h"
 #include "Strata/Runtime/GameRuntime.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/ProjectCollisionLayers.h"
 #include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/World/WorldComponents.h"
@@ -113,6 +122,21 @@ namespace
 		manifest.LoadingScene = loadingScene;
 		REQUIRE_MESSAGE(manifest.Save(directory / "Game.stgame", &error), error);
 		return directory / "Game.stgame";
+	}
+
+	// Rewrites a manifest written by WriteGame: its format version and its settings (none when null).
+	void RewriteManifest(const std::filesystem::path& manifest, uint32_t version, const nlohmann::json& settings)
+	{
+		const std::optional<std::string> text = FileSystem::ReadText(manifest);
+		REQUIRE(text);
+		std::optional<nlohmann::json> json = JsonUtils::Parse(*text);
+		REQUIRE(json);
+		(*json)["Strata"]["Version"] = version;
+		if (settings.is_null())
+			json->erase("Settings");
+		else
+			(*json)["Settings"] = settings;
+		REQUIRE(FileSystem::WriteText(manifest, JsonUtils::Dump(*json, 1, '\t')));
 	}
 
 	// Frames until the condition holds (REQUIREd), sleeping a little between them for the loads on other threads.
@@ -302,6 +326,47 @@ TEST_SUITE("Runtime.Game")
 		CHECK(next->GetStats().BodyCount == 20);
 		CHECK(next->GetStats().PreparedSlices >= 1);
 	}
+
+	TEST_CASE("An exported game's second scene collides by the project's table")
+	{
+		ScopedJobSystem jobs(2, 2);
+		// The second scene's document stores its own table (0.5.0's form) where every layer collides; the project's keeps
+		// layers 0 and 4 apart.
+		Scene next("Next");
+		next.CreateEntity("Camera").AddComponent<CameraComponent>().Primary = true;
+		Entity ground = next.CreateEntity("Ground");
+		ground.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		ground.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(20.0f, 0.5f, 20.0f);
+		Entity ghost = next.CreateEntity("Ghost");
+		ghost.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 1.0f, 0.0f);
+		ghost.AddComponent<RigidBodyComponent>().Layer = 4;
+		ghost.AddComponent<BoxColliderComponent>();
+		nlohmann::json document = SceneSerializer::Serialize(next);
+		document["Scene"]["Settings"]["PhysicsLayers"] = { { "Names", { { "4", "Solid" } } }, { "NoCollisions", nlohmann::json::array() } };
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeProjectLayers");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 1) }, { 0x1012, ToBytes(JsonUtils::Dump(document)) } },
+			UUID(0x1010));
+		PhysicsLayerSettings project;
+		project.Names[4] = "Ghosts";
+		project.SetCollide(0, 4, false);
+		RewriteManifest(manifest, 5, { { ProjectCollisionLayers::c_SectionId, { { "Version", 1 }, { "Value", project.ToJson() } } } });
+
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		REQUIRE(game->WaitForStart());
+		CHECK(game->GetScene()->GetPhysicsLayers() == project);
+		game->GetScene()->RequestSceneLoad(UUID(0x1012));
+		UpdateUntil(*game, [&]() { return game->GetSceneHandle() == UUID(0x1012); });
+		Scene& running = *game->GetScene();
+		CHECK(running.GetPhysicsLayers() == project);
+		CHECK(running.DoStoredLayersDiffer());
+		const PhysicsSystem* physics = running.GetSystem<PhysicsSystem>();
+		REQUIRE(physics);
+		CHECK_FALSE(physics->DoLayersCollide(0, 4));
+		const Entity falling = running.FindEntityByName("Ghost");
+		UpdateUntil(*game, [&]() { return glm::vec3(running.GetWorldTransform(falling)[3]).y < -2.0f; });
+	}
 #endif
 
 	TEST_CASE("A world game starts with its start cells in, paces the frames that show nothing and logs its streaming")
@@ -468,5 +533,178 @@ TEST_SUITE("Runtime.Game")
 		CHECK(game->GetScene()->GetEntityCount() == 30'001);
 		CHECK_FALSE(game->IsShowingLoadingScene());
 		CHECK_FALSE(game->IsLoadingScene());
+	}
+
+	TEST_CASE("An exported game provides its manifest's settings while it runs, and a version-4 manifest none")
+	{
+		SettingsRegistry registry;
+		Tests::RegisterTestSections(registry);
+		GameRuntimeOptions options;
+		options.Settings = &registry;
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeSettings");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 1) } }, UUID(0x1010));
+		RewriteManifest(manifest, 5, {
+			{ "Test.Simple", { { "Version", 1 }, { "Value", { { "Count", 2 } } } } },
+			{ "Test.Complex", { { "Version", 1 }, { "Value", { { "Name", "Upgraded" } } } } },
+			{ "Game.Unknown", { { "Version", 9 }, { "Value", { { "Anything", true } } } } } });
+		REQUIRE_FALSE(EngineServices::Get<IProjectSettings>());
+
+		std::string error;
+		{
+			Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, options);
+			REQUIRE_MESSAGE(game, error);
+			UpdateUntil(*game, [&]() { return game->HasStarted(); });
+			const IProjectSettings* settings = EngineServices::Get<IProjectSettings>();
+			REQUIRE(settings);
+			REQUIRE(settings->FindSection("Test.Simple"));
+			CHECK((*settings->FindSection("Test.Simple"))["Count"] == 2);
+			CHECK((*settings->FindSection("Test.Simple"))["Mode"] == "Fast");
+			// Validated as the registry reads it: upgraded to the section's version.
+			REQUIRE(settings->FindSection("Test.Complex"));
+			CHECK((*settings->FindSection("Test.Complex"))["Names"] == nlohmann::json::array({ "Upgraded" }));
+			// A section no registered module claims is not provided, and does not stop the game.
+			CHECK_FALSE(settings->FindSection("Game.Unknown"));
+		}
+		CHECK_FALSE(EngineServices::Get<IProjectSettings>());
+
+		// A version-4 manifest has no settings to provide: modules keep their defaults (and scenes their stored settings).
+		RewriteManifest(manifest, 4, nullptr);
+		Scope<GameRuntime> old = GameRuntime::Create(manifest, &error, options);
+		REQUIRE_MESSAGE(old, error);
+		CHECK_FALSE(old->GetManifest().Settings.has_value());
+		CHECK_FALSE(EngineServices::Get<IProjectSettings>());
+		UpdateUntil(*old, [&]() { return old->HasStarted(); });
+		CHECK_FALSE(EngineServices::Get<IProjectSettings>());
+	}
+
+	TEST_CASE("An exported game loads the players' input bindings with its manifest's actions, and they end with it")
+	{
+		SettingsRegistry registry;
+		REQUIRE(registry.Register(InputActionSet::MakeSection()));
+		GameRuntimeOptions options;
+		options.Settings = &registry;
+		options.SaveFilesDirectory = CreateTemporaryDirectory("RuntimeBindingsSaves");
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeBindings");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 1) } }, UUID(0x1010));
+		const nlohmann::json actions = { { "Maps", nlohmann::json::array({ { { "Name", "Gameplay" }, { "Actions", nlohmann::json::array({
+			{ { "Name", "Jump" }, { "Bindings", { "Key/Space" } } } }) } } }) } };
+		RewriteManifest(manifest, 5, { { InputActionSet::c_SectionId, { { "Version", 1 }, { "Value", actions } } } });
+		InputPlayerBindings players;
+		players.Actions["Gameplay/Jump"] = { *InputBinding::Parse("Key/J") };
+		REQUIRE(FileSystem::WriteText(options.SaveFilesDirectory / InputPlayerBindings::c_FileName, players.Write()));
+
+		std::string error;
+		{
+			Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, options);
+			REQUIRE_MESSAGE(game, error);
+			CHECK(InputActions::GetPlayerBindings() == players);
+			CHECK(InputActions::GetBindings("Jump") == std::vector<InputBinding> { *InputBinding::Parse("Key/J") });
+		}
+		CHECK(InputActions::GetPlayerBindings().Actions.empty());
+		Input::Reset();
+	}
+
+	TEST_CASE("The window title is the game's title")
+	{
+		GameManifest manifest;
+		manifest.Name = "Adventure";
+		manifest.Title = "Star Adventure";
+		manifest.Version = "1.2.0";
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeTitle");
+		const GamePresentation presentation = GamePresentation::Make(manifest, directory / "Adventure.stgame", directory / "Adventure Game.exe");
+		CHECK(presentation.Title == "Star Adventure");
+		CHECK(presentation.Banner.rfind("Star Adventure 1.2.0 (Strata ", 0) == 0);
+		CHECK(presentation.AppId == "Adventure Game");
+		WindowSpecification window;
+		presentation.ApplyTo(window);
+		CHECK(window.Title == "Star Adventure");
+		CHECK(window.AppId == "Adventure Game");
+
+		// A game without a title shows its name; one without a version (before version 5) names none.
+		manifest.Title.clear();
+		manifest.Version.clear();
+		const GamePresentation untitled = GamePresentation::Make(manifest, directory / "Adventure.stgame", directory / "Adventure");
+		CHECK(untitled.Title == "Adventure");
+		CHECK(untitled.Banner.rfind("Adventure (Strata ", 0) == 0);
+	}
+
+	TEST_CASE("Changing the title or the company keeps the save and log directories")
+	{
+		// A name of its own: the save directory is resolved in the player's data, and removed again below.
+		const std::string name = "Strata Test Identity Saves";
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeIdentitySaves");
+		const std::filesystem::path manifestPath = WriteGame(directory, { { 0x1010, MakeScene("Start", 1) } }, UUID(0x1010));
+		std::string error;
+		std::optional<GameManifest> manifest = GameManifest::Load(manifestPath, &error);
+		REQUIRE_MESSAGE(manifest, error);
+		manifest->Name = name;
+
+		std::vector<std::filesystem::path> saveDirectories;
+		std::vector<std::string> dataDirectories;
+		for (const auto& [title, company] : { std::pair<const char*, const char*>("First Title", "First Studio"), { "Second Title", "Second Studio" } })
+		{
+			manifest->Title = title;
+			manifest->Company = company;
+			REQUIRE_MESSAGE(manifest->Save(manifestPath, &error), error);
+			dataDirectories.push_back(GamePresentation::Make(*manifest, manifestPath, directory / "Game").DataDirectoryName);
+			Scope<GameRuntime> game = GameRuntime::Create(manifestPath, &error);
+			REQUIRE_MESSAGE(game, error);
+			const std::optional<std::filesystem::path> saves = game->GetSaveDirectory();
+			REQUIRE(saves);
+			saveDirectories.push_back(*saves);
+		}
+		CHECK(dataDirectories[0] == SaveFiles::MakeGameDirectoryName(name));
+		CHECK(dataDirectories[1] == dataDirectories[0]);
+		CHECK(saveDirectories[1] == saveDirectories[0]);
+		CHECK(FileSystem::ToUTF8(saveDirectories[0].parent_path().filename()) == dataDirectories[0]);
+		// Resolving the save directory created the game's data directory (not its Saves, which the first save creates).
+		CHECK_FALSE(FileSystem::Exists(saveDirectories[0]));
+		std::error_code ignored;
+		std::filesystem::remove(saveDirectories[0].parent_path(), ignored);
+	}
+
+	TEST_CASE("The window icon comes from the manifest's icon file")
+	{
+		GameManifest manifest;
+		manifest.Name = "Adventure";
+		manifest.Icon = "Adventure.png";
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeIcon");
+		const GamePresentation presentation = GamePresentation::Make(manifest, directory / "Adventure.stgame", directory / "Adventure");
+		CHECK(presentation.IconFile == directory / "Adventure.png");
+		WindowSpecification window;
+		presentation.ApplyTo(window);
+		CHECK(window.IconPath == directory / "Adventure.png");
+
+		// Without an icon the window keeps none (on Windows, the executable's).
+		manifest.Icon.clear();
+		WindowSpecification plain;
+		GamePresentation::Make(manifest, directory / "Adventure.stgame", directory / "Adventure").ApplyTo(plain);
+		CHECK(plain.IconPath.empty());
+	}
+
+	TEST_CASE("A manifest section that fails Read stops the game naming it")
+	{
+		SettingsRegistry registry;
+		Tests::RegisterTestSections(registry);
+		GameRuntimeOptions options;
+		options.Settings = &registry;
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeSettingsInvalid");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 1) } }, UUID(0x1010));
+		RewriteManifest(manifest, 5, {
+			{ "Test.Complex", { { "Version", 2 }, { "Value", { { "Names", { "A" } } } } } },
+			{ "Test.Simple", { { "Version", 1 }, { "Value", { { "Count", 50 } } } } } });
+
+		std::string error;
+		CHECK_FALSE(GameRuntime::Create(manifest, &error, options));
+		CHECK(error == "The game's settings section 'Test.Simple' is invalid: 'Count' must be a whole number from 1 to 8");
+		CHECK_FALSE(EngineServices::Get<IProjectSettings>());
+
+		// Read refuses a newer version of a section too.
+		RewriteManifest(manifest, 5, { { "Test.Complex", { { "Version", 3 }, { "Value", nlohmann::json::object() } } } });
+		CHECK_FALSE(GameRuntime::Create(manifest, &error, options));
+		CHECK(error.find("'Test.Complex' is invalid") != std::string::npos);
+		// Once valid, the same game starts.
+		RewriteManifest(manifest, 5, { { "Test.Simple", { { "Version", 1 }, { "Value", { { "Count", 5 } } } } } });
+		CHECK(GameRuntime::Create(manifest, &error, options));
 	}
 }

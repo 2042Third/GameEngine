@@ -25,6 +25,11 @@ namespace Strata::Tests
 	//                                   then plays a scene whose script calls physics (the API test module's
 	//                                   PhysicsWithoutSystem) and prints how it went and how often the absent module was
 	//                                   reported; exits with 0 unless something could not run
+	//   settings-section <doctest options>
+	//                                   registers the modules with the asset pipeline and, through
+	//                                   ModuleRegistrationOptions::Extra, a game's settings section (Tests::MakeGameTestSection),
+	//                                   then runs the test cases the options name (Tests::RunInSettingsSectionProcess) and exits
+	//                                   with doctest's result
 	// Returns nothing for other modes.
 	std::optional<int> RunModuleRegistrationHelper(std::string_view mode, int argc, char** argv);
 

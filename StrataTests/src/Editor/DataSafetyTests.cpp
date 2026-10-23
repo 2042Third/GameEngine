@@ -3,12 +3,15 @@
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorPreferences.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/SceneRecovery.h"
+#include "Editor/SettingsFileWriter.h"
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Scene/Scene.h>
@@ -16,9 +19,14 @@
 
 #include <nlohmann/json.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <filesystem>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 // No silent data loss: every command that replaces the edited scene refuses to discard its unsaved changes unless told to
@@ -28,6 +36,27 @@ using namespace Strata;
 
 namespace
 {
+
+	// Job threads for a test that holds a settings file's write on its job (without them, a write runs where it is submitted).
+	struct WriterJobSystem
+	{
+		WriterJobSystem()
+		{
+			JobSystemSpecification specification;
+			specification.WorkerThreadCount = 2;
+			specification.IOThreadCount = 2;
+			specification.BackgroundThreadCount = 1;
+			JobSystem::Init(specification);
+		}
+
+		~WriterJobSystem()
+		{
+			JobSystem::Shutdown();
+		}
+
+		WriterJobSystem(const WriterJobSystem&) = delete;
+		WriterJobSystem& operator=(const WriterJobSystem&) = delete;
+	};
 
 	struct SafetyHarness
 	{
@@ -250,6 +279,147 @@ TEST_SUITE("Editor.DataSafety")
 		CHECK(editor.Context().GetEditScene()->GetName() == "Untitled");
 		CHECK_FALSE(editor.Context().GetEditScene()->FindEntityByName("Unsaved"));
 		CHECK_FALSE(editor.Context().IsSceneModified());
+	}
+
+	TEST_CASE("Closing the project after a failed project file write asks about it, and Retry writes it first")
+	{
+		Tests::HarnessEditor editor;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("DataSafetyUnwrittenSettings") / "Game";
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" }, { "template", "basic3d" } });
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Context().GetProjectFileState() != SettingsFileState::Writing; }));
+		const std::filesystem::path projectFile = editor.Context().GetProject()->GetProjectFile();
+		// A directory in the project file's place makes its writes fail.
+		REQUIRE(FileSystem::Remove(projectFile));
+		REQUIRE(FileSystem::CreateDirectories(projectFile));
+		editor.Run("project.setExportSettings", { { "alwaysInclude", { "Scenes" } } });
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Context().HasUnwrittenProjectSettings(); }));
+		REQUIRE_FALSE(editor.Context().IsSceneModified());
+
+		// File > Close Project asks; Cancel keeps the project open.
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.CloseProject"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnwrittenSettings.Dialog").has_value());
+		REQUIRE(editor.Click("UnwrittenSettings.Cancel"));
+		editor.Frames(2);
+		CHECK_FALSE(UI::ItemProbe::Find("UnwrittenSettings.Dialog").has_value());
+		CHECK(editor.Context().HasProject());
+
+		// Retry writes the file once its cause is gone, and the project closes after it.
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.CloseProject"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnwrittenSettings.Dialog").has_value());
+		REQUIRE(FileSystem::Remove(projectFile));
+		REQUIRE(editor.Click("UnwrittenSettings.Retry"));
+		REQUIRE(editor.FramesUntil([&editor]() { return !editor.Context().HasProject(); }));
+		std::string error;
+		const Ref<Project> written = Project::Load(projectFile, &error);
+		REQUIRE(written);
+		CHECK(written->GetConfig().Export.AlwaysInclude == std::vector<std::string> { "Scenes" });
+	}
+
+	TEST_CASE("Quitting after a failed preferences write asks about it, and Retry writes it first")
+	{
+		// A directory in the preferences file's place makes its writes fail.
+		const std::filesystem::path file = Tests::CreateTemporaryDirectory("DataSafetyUnwrittenPreferences") / "Preferences.json";
+		REQUIRE(FileSystem::CreateDirectories(file));
+		EditorOptions options;
+		options.PreferencesFile = file;
+		Tests::HarnessEditor editor({}, options);
+		editor.Run("preferences.set", { { "section", "Editor.ExternalEditor" }, { "value", { { "Command", "code {file}" } } } });
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Context().HasUnwrittenPreferences(); }));
+
+		// File > Exit asks; Cancel keeps the editor running.
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.Exit"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnwrittenPreferences.Dialog").has_value());
+		REQUIRE(editor.Click("UnwrittenPreferences.Cancel"));
+		editor.Frames(2);
+		CHECK_FALSE(UI::ItemProbe::Find("UnwrittenPreferences.Dialog").has_value());
+		CHECK(editor.Host->Running);
+
+		// Retry writes the file once its cause is gone, and the editor closes after it.
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.Exit"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnwrittenPreferences.Dialog").has_value());
+		REQUIRE(FileSystem::Remove(file));
+		REQUIRE(editor.Click("UnwrittenPreferences.Retry"));
+		REQUIRE(editor.FramesUntil([&editor]() { return !editor.Host->Running; }));
+		const std::optional<nlohmann::json> written = JsonUtils::Parse(FileSystem::ReadText(file).value_or(""));
+		REQUIRE(written);
+		CHECK((*written)["Settings"]["Editor.ExternalEditor"]["Value"]["Command"] == "code {file}");
+	}
+
+	TEST_CASE("Quitting waits for a preferences write in flight, naming it")
+	{
+		const std::filesystem::path file = Tests::CreateTemporaryDirectory("DataSafetyPreferencesInFlight") / "Preferences.json";
+		EditorOptions options;
+		options.PreferencesFile = file;
+		WriterJobSystem jobs; // Before the editor, which it outlives
+		Tests::HarnessEditor editor({}, options);
+		editor.Frames(1);
+		// The write is held on its job until the test lets it go.
+		auto release = std::make_shared<std::atomic<bool>>(false);
+		editor.Context().GetPreferences().GetWriter().SetTestHook([release]()
+		{
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+			while (!release->load() && std::chrono::steady_clock::now() < deadline)
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		});
+		editor.Run("preferences.set", { { "section", "Editor.ExternalEditor" }, { "value", { { "Command", "code {file}" } } } });
+		REQUIRE(editor.Context().GetPreferences().IsWriting());
+
+		// File > Exit waits in the Saving dialog, which says what it waits for.
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.Exit"));
+		REQUIRE(editor.FramesUntil([]() { return UI::ItemProbe::Find("Saving.Preferences").has_value(); }));
+		CHECK(UI::ItemProbe::Find("Saving.Preferences")->Text == "Writing 'Preferences.json'...");
+		CHECK(editor.Host->Running);
+		release->store(true);
+		REQUIRE(editor.FramesUntil([&editor]() { return !editor.Host->Running; }));
+		CHECK(FileSystem::Exists(file));
+	}
+
+	TEST_CASE("Scene changes made while the unwritten settings question waits are asked about before the project closes")
+	{
+		Tests::HarnessEditor editor;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("DataSafetyUnwrittenMeanwhile") / "Game";
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" }, { "template", "basic3d" } });
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Context().GetProjectFileState() != SettingsFileState::Writing; }));
+		const std::filesystem::path projectFile = editor.Context().GetProject()->GetProjectFile();
+		REQUIRE(FileSystem::Remove(projectFile));
+		REQUIRE(FileSystem::CreateDirectories(projectFile));
+		editor.Run("project.setExportSettings", { { "alwaysInclude", { "Scenes" } } });
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Context().HasUnwrittenProjectSettings(); }));
+		REQUIRE_FALSE(editor.Context().IsSceneModified());
+
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.CloseProject"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnwrittenSettings.Dialog").has_value());
+		// An agent edits the scene while the person reads the question.
+		editor.Run("entity.create", { { "name", "Meanwhile" } });
+		REQUIRE(editor.Context().IsSceneModified());
+
+		// Don't Save answers for the settings: the scene's new changes are asked about, and Cancel keeps them and the project.
+		REQUIRE(editor.Click("UnwrittenSettings.Discard"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnsavedChanges.Cancel").has_value());
+		CHECK(editor.Context().HasProject());
+		REQUIRE(editor.Click("UnsavedChanges.Cancel"));
+		editor.Frames(2);
+		CHECK(editor.Context().HasProject());
+		CHECK(editor.Context().GetEditScene()->FindEntityByName("Meanwhile"));
+		CHECK(editor.Context().HasUnwrittenProjectSettings());
 	}
 
 	TEST_CASE("File > Open Scene asks about unsaved changes, then opens a scene file of the asset directory")

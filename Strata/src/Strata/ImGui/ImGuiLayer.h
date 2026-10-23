@@ -57,11 +57,18 @@ namespace Strata
 		// so the style is rebuilt for it and the fonts' DPI scale set to it. Scales outside [c_MinScale, c_MaxScale] are
 		// clamped; zero, negative or non-finite ones are ignored.
 		void SetContentScale(float scale);
-		// A UI scale that replaces the content scale (0: follow the content scale again), e.g. a user's choice. Clamped and
+		// A UI scale that replaces the content scale (0: follow the content scale again), e.g. a command line's. Clamped and
 		// validated like SetContentScale.
 		void SetContentScaleOverride(float scale);
-		// The scale the UI is styled for.
-		float GetUIScale() const { return m_ContentScaleOverride > 0.0f ? m_ContentScaleOverride : m_ContentScale; }
+		// A factor of the content scale the UI is drawn at while no override is set (a person's choice relative to the
+		// display's, 1.25 for 125%), so the UI keeps it on every display. 1 by default; zero, negative or non-finite factors
+		// are ignored, and the product is clamped to [c_MinScale, c_MaxScale].
+		void SetContentScaleFactor(float factor);
+		// The scale the UI is styled for: the override, else the content scale times its factor.
+		float GetUIScale() const;
+		// The UI scale without the factor: the override, else the content scale. The factor sizes the application's own UI,
+		// not what it shows of the display (the content scale a game sees in the editor's play mode).
+		float GetDisplayUIScale() const { return m_ContentScaleOverride > 0.0f ? m_ContentScaleOverride : m_ContentScale; }
 		// The UI scale of a window's content scale: what the window system does not apply to window coordinates already.
 		// Where windows are measured in points (macOS, Wayland: a Retina window's framebuffer has twice its size in pixels),
 		// ImGui lays out in points and draws its fonts at the framebuffer's density, so the content scale of 2 is there
@@ -83,6 +90,7 @@ namespace Strata
 		Window* m_Window = nullptr; // While attached
 		float m_ContentScale = 1.0f;
 		float m_ContentScaleOverride = 0.0f;
+		float m_ContentScaleFactor = 1.0f;
 		bool m_BlockEvents = true;
 		bool m_Initialized = false;
 	};

@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Input/Input.h"
 
+#include "Strata/Input/InputActions.h"
 #include "Strata/Input/InputWindow.h"
 
 #include <algorithm>
@@ -432,6 +433,33 @@ namespace Strata
 		return state;
 	}
 
+	bool Input::IsRawKeyDown(KeyCode key)
+	{
+		return key < c_MaxKeyCode && (s_State.Keys.Down.test(key) || s_State.Simulated.Keys.Down.test(key));
+	}
+
+	bool Input::IsRawMouseButtonDown(MouseCode button)
+	{
+		return button < c_MaxMouseButtons && (s_State.MouseButtons.Down.test(button) || s_State.Simulated.MouseButtons.Down.test(button));
+	}
+
+	bool Input::IsRawGamepadButtonDown(uint32_t gamepad, GamepadButton button)
+	{
+		const size_t index = static_cast<size_t>(button);
+		return gamepad < c_MaxGamepads && index < c_GamepadButtonCount
+			&& (s_State.Gamepads[gamepad].Buttons.Down.test(index) || s_State.Simulated.Gamepads[gamepad].Buttons.Down.test(index));
+	}
+
+	float Input::GetRawGamepadAxis(uint32_t gamepad, GamepadAxis axis)
+	{
+		const uint32_t index = static_cast<uint32_t>(axis);
+		if (gamepad >= c_MaxGamepads || index >= c_GamepadAxisCount)
+			return 0.0f;
+		if (const std::optional<float>& simulated = s_State.Simulated.Gamepads[gamepad].Axes[index])
+			return *simulated;
+		return s_State.Gamepads[gamepad].Axes[index];
+	}
+
 	PointerState Input::GetPointerState()
 	{
 		PointerState state;
@@ -562,6 +590,7 @@ namespace Strata
 		InputWindow* window = s_State.TargetWindow;
 		s_State = InputState();
 		s_State.TargetWindow = window;
+		InputActions::Reset();
 	}
 
 	void Input::SetSuspended(bool suspended)

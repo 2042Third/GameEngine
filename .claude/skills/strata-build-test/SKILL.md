@@ -143,7 +143,9 @@ ctest --preset macos-debug -LE perf
   launcher, `Editor/LauncherCommands.json`), `StrataEditor.Replay` (`Editor/ReplaySession.cmake`: a session exported
   with `editor.activity.export` and run on a copy of the project makes the same scene and assets), `StrataEditor.Icon`
   and `StrataRuntime.Icon` (Windows: the editor and the exported game's executable carry the strata mark, checked with
-  `StrataTests --strata-test-helper=check-icon <exe> <.ico>`),
+  `StrataTests --strata-test-helper=check-icon <exe> <.ico>`), `StrataRuntime.GameIcon` and `StrataRuntime.VersionInfo`
+  (Windows: the SmokeGame exported with an identity carries its icon, `check-icon <exe> <png>`, and its version
+  information, `check-version <exe> <Key=Value>...`, as Windows reads them),
   the editor script checks (`StrataEditor.FailingScript`, `WaitingScript`,
   `UnfinishedScript`, `QuitScript`, `QuitBeforeScriptEnds`, `CaptureWithoutGPU`), the export chain `StrataExport.Clean`
   → `StrataEditor.Export` (`--no-gpu`; it exports the smoke game twice, the second time starting in a scene without a

@@ -1,6 +1,6 @@
 ---
 name: strata-scripting
-description: How to write, build, attach, debug and ship Strata game scripts (C++ script classes in a game project's script module, built against the StrataScriptCore SDK) through the editor's script.* commands - the lifecycle, the whole gameplay API (entities, components, transforms, input with keyboard, mouse, gamepads and the cursor, time, physics bodies, raycasts, contacts and collision layers, character controllers, audio, quitting and loading scenes, the game window, save files, random numbers, timers, key repeat) and how to test it. Use when creating gameplay logic or whole games for a project, adding script classes or fields, spawning prefabs from scripts, iterating with hot reload, diagnosing script build errors or crashes, or exporting a scripted game.
+description: How to write, build, attach, debug and ship Strata game scripts (C++ script classes in a game project's script module, built against the StrataScriptCore SDK) through the editor's script.* commands - the lifecycle, the whole gameplay API (entities, components, transforms, input with keyboard, mouse, gamepads and the cursor, the project's rebindable input actions, time, physics bodies, raycasts, contacts and collision layers, character controllers, audio, quitting and loading scenes, the game window, save files, random numbers, timers, key repeat) and how to test it. Use when creating gameplay logic or whole games for a project, adding script classes or fields, spawning prefabs from scripts, iterating with hot reload, diagnosing script build errors or crashes, or exporting a scripted game.
 ---
 
 # Writing Strata game scripts
@@ -132,6 +132,11 @@ ST_SCRIPT_CLASS(Turret)
 - `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`,
   `GetUnscaledDeltaTime` and `GetRealTime` (they go on at time scale 0: pause menus, fades).
 - `Input::GetTypedText()`: the UTF-8 text typed this frame (name entry, chat).
+- Input actions (the project's named controls, rebindable by players): `Input::IsActionDown/Pressed/Released("Jump")`,
+  `GetActionValue`, `GetActionAxis`, `SetActionMapEnabled`/`IsActionMapEnabled`,
+  `GetActionBindings`/`SetActionBindings`, `ResetActionBindings`, `SaveBindings`, the capture
+  `BeginBindingCapture(InputDevices)`/`PollBindingCapture`/`CancelBindingCapture`: see
+  [Input actions and rebinding](#input-actions-and-rebinding).
 - `UIElement` (`entity.GetUI()`) and `UI`: the game UI, see [Game UI](#game-ui).
 - `Log::Info/Warn/Error/Trace(args...)` - arguments are concatenated (`Log::Info("Health ", health)`).
 - `RigidBody` (`GetEntity().GetRigidBody()`), `Physics` (raycasts, overlaps), `Collision` (contact callbacks),
@@ -170,11 +175,12 @@ std::vector<Entity> nearby = Physics::OverlapSphere(center, 3.0f);
 - `Physics`: `Raycast` (closest hit), `RaycastAll` (sorted by distance), `OverlapSphere`, `OverlapBox`; triggers are
   skipped unless `includeTriggers` is set, `ignore` skips one entity (usually the caster).
 - Collision layers: every body and character controller is on one layer (0-31, `Layer`), and two of them collide only
-  when the scene's layer matrix lets their layers (everything collides by default). Name layers and set the matrix in
-  the editor (Inspector with nothing selected, Collision Layers; or `scene.setSettings {layerNames, layerCollisions}`),
-  then use names in code: `Physics::GetLayerIndex("Debris")` (-1 for a name the scene lacks), `1u << layer` as a query
-  mask, `Physics::SetLayersCollide(a, b, false)` to let two layers pass through each other while the scene plays (e.g.
-  a ghost power-up), `Physics::GetLayersCollide(a, b)`.
+  when the project's layer matrix lets their layers (everything collides by default). The layers are the project's, the
+  same in every scene and prefab: name them and set the matrix in the editor (Project Settings > Collision Layers; or
+  `project.setCollisionLayers {layerNames, layerCollisions}`), then use names in code: `Physics::GetLayerIndex("Debris")`
+  (-1 for a name the project lacks), `1u << layer` as a query mask, `Physics::SetLayersCollide(a, b, false)` to let two
+  layers pass through each other while the scene plays (e.g. a ghost power-up; it lasts until the next scene starts),
+  `Physics::GetLayersCollide(a, b)`.
 - Worlds (a scene whose World component names a World asset streams its cells around the streaming sources): before a
   teleport or a spawn far away, prefetch and wait, so the ground there exists and has collision:
 
@@ -311,7 +317,7 @@ Entity PauseMenu;
 void OnUpdate(float) override
 {
 	ScoreLabel.GetUI().SetText("Score: " + std::to_string(score)); // Setting the same text again costs nothing
-	if (UI::IsActionPressed(UIAction::Cancel))       // Escape or gamepad B
+	if (UI::IsActionPressed(UIAction::Cancel))       // UI/Cancel: Escape or gamepad B unless rebound
 	{
 		const bool paused = !PauseMenu.IsActive();
 		PauseMenu.SetActive(paused);
@@ -351,7 +357,8 @@ void OnUISubmit(Entity widget) override             // Enter in an input field (
 - `UI`: `GetFocused`, `ClearFocus`, `IsPointerOverUI` (ignore gameplay mouse aiming while it is true),
   `IsActionPressed/IsActionDown(UIAction::Submit/Cancel/Up/Down/Left/Right)`.
 - The UI takes the clicks and scrolling that start over it: `Input`'s mouse buttons report nothing for them. Keyboard and
-  gamepad navigation (arrows, d-pad, left stick; Enter, Space or gamepad A clicks) moves the focus by itself.
+  gamepad navigation (the map `UI`'s actions: by default arrows, d-pad, left stick; Enter, Space or gamepad A clicks)
+  moves the focus by itself.
 - A widget's callbacks reach the scripts on its entity and on its `EventTarget` (one controller script for a whole menu).
 - `Motion::SmoothDamp(current, target, velocity, smoothTime, deltaTime)` eases values (cameras, health bars) without
   overshooting; `Motion::LookAt(from, to)` is the rotation that points -Z at a target.
@@ -431,6 +438,40 @@ game has the input: in the editor while the Game view is focused (Shift+F1 frees
 takes it again, stopping play gives it back). Tools press buttons and move sticks with `input.gamepadButton` and
 `input.gamepadAxis`.
 
+### Input actions and rebinding
+
+Read player controls through the project's input actions (Project Settings > Input Actions, or the
+`inputActions.setMap`/`setAction` commands; define them before the scripts that read them), not fixed keys, wherever a
+player could want another control:
+
+```cpp
+if (Input::IsActionPressed("Jump"))                     // Button: IsActionDown/Pressed/Released, like keys (read in OnUpdate)
+	controller.Jump(5.0f);
+const glm::vec2 move = Input::GetActionValue("Move");   // Vector2: sticks or 2D:Key/W,Key/S,Key/A,Key/D; dead zone applied, length <= 1
+const float steer = Input::GetActionAxis("Steer");      // Axis: -1 to 1 (1D:Key/A,Key/D, Gamepad/LeftX...)
+Input::SetActionMapEnabled("Vehicle", inCar);           // Off: held actions release once, then read as up; maps start as the project says
+```
+
+- Names: `"<Map>/<Action>"`, or the bare name when no other map has an action of that name (case is ignored). The map
+  `UI` (`Submit`, `Cancel`, `Up`, `Down`, `Left`, `Right`: what menus navigate with) always exists, so a game's own `Left`
+  is read as `"Gameplay/Left"`. Unknown and ambiguous names read as up and log a warning naming the script (once per
+  function).
+- A rebinding menu: `Input::GetActionBindings("Jump")` lists the binding texts (`Key/Space`, `Mouse/Left`, `Gamepad/A`,
+  `Gamepad/LeftX+`, `Gamepad/LeftStick`, `1D:...`, `2D:...`); `Input::SetActionBindings("Jump", {"Key/J", "Gamepad/B"})`
+  replaces them for the player from the next frame on (false, changing nothing, when one is no binding or one the kind
+  cannot use: a Button takes keys, buttons and half axes; an Axis also whole axes and 1D composites; a Vector2 sticks
+  and 2D composites; at most 8; `{}` unbinds); `Input::ResetActionBindings("Jump")` (no name: every action) restores the
+  project's. Call `Input::SaveBindings()` when the menu closes: the engine keeps them in the game's save directory (not
+  among `ListSaveFiles`) and loads them when the game starts (in the editor at every Play, from `<project>/.strata/Saves`).
+- "Press a control": `Input::BeginBindingCapture(InputDevices::All)` (`Keyboard`, `Mouse`, `Gamepad`,
+  `KeyboardAndMouse`), then `Input::PollBindingCapture()` every frame until it returns the binding (once; nullopt while it
+  listens), which goes to `SetActionBindings`. Meanwhile every action reads as up and the captured control stays up for
+  actions until released, so the press moves no action (Escape does not close a menu that closes on `UI/Cancel`) and a
+  left click captured presses no UI button; `Input::IsKeyPressed` and the other device reads see it as any press. Give up with
+  `Input::CancelBindingCapture()` after a timeout; play stopping cancels it. A test drives it with `input.key` or
+  `input.gamepadButton` while the menu listens.
+- Tools press actions' bindings with the `input.*` commands (`input.key`, `input.gamepadButton`...).
+
 ### The window and save files
 
 ```cpp
@@ -471,8 +512,9 @@ moments (checkpoints, menus) and keep saves small.
 
 ### Recipes
 
-A platformer player: a dynamic capsule body with `LockRotationX/Y/Z` set (so it does not tip over), friction 0, and a
-`Text` entity named "HUD" for the score.
+A platformer player: a dynamic capsule body with `LockRotationX/Y/Z` set (so it does not tip over), friction 0, a
+`Text` entity named "HUD" for the score, and the input actions `Gameplay/Move` (Axis: `1D:Key/A,Key/D`,
+`Gamepad/LeftX`) and `Gameplay/Jump` (Button: `Key/Space`, `Gamepad/A`).
 
 ```cpp
 class Player : public Script
@@ -489,7 +531,7 @@ public:
 	{
 		RigidBody body = GetEntity().GetRigidBody();
 		glm::vec3 velocity = body.GetLinearVelocity();
-		velocity.x = (Input::IsKeyDown(Key::D) ? Speed : 0.0f) - (Input::IsKeyDown(Key::A) ? Speed : 0.0f);
+		velocity.x = Input::GetActionAxis("Gameplay/Move") * Speed; // Held state: safe to read in OnFixedUpdate
 		body.SetLinearVelocity(velocity);
 	}
 
@@ -498,7 +540,7 @@ public:
 		const glm::vec3 feet = GetTransform().GetWorldPosition();
 		const glm::vec3 down(0.0f, -1.0f, 0.0f);
 		const bool grounded = Physics::Raycast(feet, down, 1.1f, Physics::c_AllLayers, GetEntity()).has_value();
-		if (grounded && Input::IsKeyPressed(Key::Space))
+		if (grounded && Input::IsActionPressed("Gameplay/Jump")) // A press: read in OnUpdate
 		{
 			RigidBody body = GetEntity().GetRigidBody();
 			glm::vec3 velocity = body.GetLinearVelocity();
@@ -646,7 +688,7 @@ every step below is a command, and source files are written with your own file t
 The UI does the same with Scripts > New Script... (which starts a build, so that the new class can be attached once it
 finished), Scripts > Build Scripts (Ctrl+B), the toolbar's Play (which builds first when the sources changed since the last
 build) and Build Scripts buttons, the Problems panel (build errors and crashes; a double click opens the line in the
-external editor, Scripts > External Editor..., which lists the editors found on the machine), the Content Browser's
+external editor, Scripts > External Editor..., the Preferences page that lists the editors found on the machine), the Content Browser's
 Scripts root (the script files with their classes, below the asset folders; what `script.list` returns) and the
 inspector's Script section (add a class from the module, edit fields with their default shown and a reset button). People's guide:
 `Docs/Manual/Scripting.md` in the Strata folder (a download or a source checkout).

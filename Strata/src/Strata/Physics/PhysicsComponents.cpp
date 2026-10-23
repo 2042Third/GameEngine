@@ -22,7 +22,7 @@ namespace Strata
 	namespace
 	{
 
-		// A collision layer: an index the inspector offers by the scene's layer names.
+		// A collision layer: an index the inspector offers by the project's layer names (the scene's copy of its table).
 		PropertyOptions PhysicsLayer(std::string tooltip)
 		{
 			PropertyOptions options = WithTooltip(Range(0.0f, static_cast<float>(c_PhysicsLayerCount - 1)), std::move(tooltip));
@@ -133,7 +133,7 @@ namespace Strata
 			.Property("LockRotationX", &RigidBodyComponent::LockRotationX)
 			.Property("LockRotationY", &RigidBodyComponent::LockRotationY)
 			.Property("LockRotationZ", &RigidBodyComponent::LockRotationZ)
-			.Property("Layer", &RigidBodyComponent::Layer, PhysicsLayer("Collision layer: it collides with the layers the scene's layer matrix lets it"));
+			.Property("Layer", &RigidBodyComponent::Layer, PhysicsLayer("Collision layer: it collides with the layers the project's layer matrix lets it"));
 
 		ComponentRegistry::Register<BoxColliderComponent>("BoxCollider")
 			.DisplayName("Box Collider")
@@ -176,7 +176,7 @@ namespace Strata
 				WithTooltip(Range(0.0f, 100.0f, 0.01f), "Highest step it walks up, and how far it follows the ground down (world units)"))
 			.Property("MaxSlopeDegrees", &CharacterControllerComponent::MaxSlopeDegrees,
 				WithTooltip(Range(0.0f, 89.0f, 0.5f), "Steepest slope it walks up, in degrees from the horizontal"))
-			.Property("Layer", &CharacterControllerComponent::Layer, PhysicsLayer("Collision layer: it collides with the layers the scene's layer matrix lets it"))
+			.Property("Layer", &CharacterControllerComponent::Layer, PhysicsLayer("Collision layer: it collides with the layers the project's layer matrix lets it"))
 			.Property("GravityScale", &CharacterControllerComponent::GravityScale, WithTooltip(Range(-100.0f, 100.0f, 0.05f), "Times the scene's gravity"))
 			.Property("PushStrength", &CharacterControllerComponent::PushStrength,
 				WithTooltip(Range(0.0f, c_Unbounded, 1.0f), "Largest force with which it pushes dynamic bodies, in newtons"))

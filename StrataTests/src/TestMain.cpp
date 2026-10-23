@@ -24,6 +24,8 @@
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Process.h"
+#include "Strata/Core/SettingsRegistry.h"
+#include "Strata/Core/StringUtils.h"
 #include "Strata/Engine/BuiltinModules.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Renderer/GraphicsDevice.h"
@@ -42,12 +44,15 @@
 #endif
 
 #if ST_TESTS_HAVE_EDITOR
+	#include "Editor/EditorPreferences.h"
+	#include "Editor/GameIcon.h"
 	#include "Editor/WorldSaveMeasurement.h"
 #endif
 
 #include <stb_image.h>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -1041,7 +1046,8 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	if (mode == "check-icon")
 	{
 		// <executable> <icon file>: succeeds if the executable's icon (the first RT_GROUP_ICON) holds an image of every size
-		// the .ico file has (StrataEditor/Resources/Brand/StrataMark.ico: the strata mark).
+		// the .ico file has (StrataEditor/Resources/Brand/StrataMark.ico: the strata mark); for a PNG, if it holds the images
+		// GameIcon makes of it, as the export makes a game's icon.
 		if (argc != 4)
 			return 2;
 		std::string error;
@@ -1055,6 +1061,53 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		for (uint32_t size : *sizes)
 			std::printf(" %u", size);
 		std::printf("\n");
+#if ST_TESTS_HAVE_EDITOR
+		if (Strata::StringUtils::EndsWith(Strata::StringUtils::ToLower(argv[3]), ".png"))
+		{
+			// An image the export made the game's icon from: the executable holds GameIcon's conversion of it, every size, as
+			// Windows' resource functions find it. Within one step per channel: the editor and this program convert with the
+			// same code, but nothing makes floating-point results agree between programs.
+			const std::optional<Strata::GameIcon::Images> expected = Strata::GameIcon::ConvertFile(Strata::FileSystem::FromUTF8(argv[3]), &error);
+			if (!expected)
+			{
+				std::fprintf(stderr, "'%s': %s\n", argv[3], error.c_str());
+				return 1;
+			}
+			const std::optional<std::vector<Strata::Tests::ExecutableIconImage>> images =
+				Strata::Tests::ReadExecutableIconImages(Strata::FileSystem::FromUTF8(argv[2]), &error);
+			if (!images)
+			{
+				std::fprintf(stderr, "'%s': %s\n", argv[2], error.c_str());
+				return 1;
+			}
+			if (images->size() != expected->Sizes.size())
+			{
+				std::fprintf(stderr, "The icon has %zu images, not %zu\n", images->size(), expected->Sizes.size());
+				return 1;
+			}
+			for (size_t index = 0; index < images->size(); index++)
+			{
+				const Strata::GameIcon::Image& want = expected->Sizes[index];
+				const Strata::Tests::ExecutableIconImage& have = (*images)[index];
+				if (have.Size != want.Size || have.Pixels.size() != want.Pixels.size())
+				{
+					std::fprintf(stderr, "Image %zu is %u pixels, not %u\n", index, have.Size, want.Size);
+					return 1;
+				}
+				for (size_t channel = 0; channel < have.Pixels.size(); channel++)
+				{
+					if (std::abs(int(have.Pixels[channel]) - int(want.Pixels[channel])) > 1)
+					{
+						std::fprintf(stderr, "The %u pixel image differs at pixel %zu (channel %zu): %u, not %u\n", have.Size, channel / 4, channel % 4,
+							unsigned(have.Pixels[channel]), unsigned(want.Pixels[channel]));
+						return 1;
+					}
+				}
+			}
+			std::printf("'%s' holds the icon made from '%s'\n", argv[2], argv[3]);
+			return 0;
+		}
+#endif
 		const std::optional<std::vector<uint32_t>> expectedSizes = Strata::Tests::ReadIconFileSizes(Strata::FileSystem::FromUTF8(argv[3]), &error);
 		if (!expectedSizes || expectedSizes->empty())
 		{
@@ -1066,6 +1119,48 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 			if (std::find(sizes->begin(), sizes->end(), expected) == sizes->end())
 			{
 				std::fprintf(stderr, "The icon has no %u pixel image\n", expected);
+				return 1;
+			}
+		}
+		return 0;
+	}
+	if (mode == "check-version")
+	{
+		// <executable> <Key=Value>...: succeeds if Windows reads the executable's version information (GetFileVersionInfoW)
+		// with every string given (US English, Unicode), FILEVERSION and PRODUCTVERSION given as a.b.c.d.
+		if (argc < 4)
+			return 2;
+		std::string error;
+		const std::optional<Strata::Tests::ExecutableVersion> version = Strata::Tests::ReadExecutableVersion(Strata::FileSystem::FromUTF8(argv[2]), &error);
+		if (!version)
+		{
+			std::fprintf(stderr, "'%s': %s\n", argv[2], error.c_str());
+			return 1;
+		}
+		const auto formatQuad = [](const std::array<uint16_t, 4>& quad) { return fmt::format("{}.{}.{}.{}", quad[0], quad[1], quad[2], quad[3]); };
+		std::printf("'%s': FILEVERSION %s, PRODUCTVERSION %s\n", argv[2], formatQuad(version->FileVersion).c_str(), formatQuad(version->ProductVersion).c_str());
+		for (const auto& [key, value] : version->Strings)
+			std::printf("  %s: %s\n", key.c_str(), value.c_str());
+		for (int index = 3; index < argc; index++)
+		{
+			const std::string_view expected = argv[index];
+			const size_t separator = expected.find('=');
+			if (separator == std::string_view::npos)
+				return 2;
+			const std::string key(expected.substr(0, separator));
+			const std::string value(expected.substr(separator + 1));
+			std::string actual;
+			if (key == "FILEVERSION")
+				actual = formatQuad(version->FileVersion);
+			else if (key == "PRODUCTVERSION")
+				actual = formatQuad(version->ProductVersion);
+			else if (const auto found = version->Strings.find(key); found != version->Strings.end())
+				actual = found->second;
+			else
+				actual = "(missing)";
+			if (actual != value)
+			{
+				std::fprintf(stderr, "%s is '%s', not '%s'\n", key.c_str(), actual.c_str(), value.c_str());
 				return 1;
 			}
 		}
@@ -1165,6 +1260,10 @@ int main(int argc, char** argv)
 	// Like every program that uses the engine, before anything touches a registry; with the asset pipeline, like the editor.
 	Strata::Engine::ModuleRegistrationOptions modules;
 	modules.AssetPipeline = Strata::RegisterAssetPipeline;
+#if ST_TESTS_HAVE_EDITOR
+	// And the editor's preference sections, as the editor registers them.
+	modules.Extra.push_back([]() { Strata::EditorPreferences::RegisterSections(Strata::SettingsRegistry::GetProcessRegistry()); });
+#endif
 	Strata::Engine::RegisterBuiltinModules(modules);
 
 	if (isHelper)

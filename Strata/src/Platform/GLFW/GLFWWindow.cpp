@@ -6,6 +6,7 @@
 #include "Strata/Events/KeyEvent.h"
 #include "Strata/Events/MouseEvent.h"
 #include "Strata/Input/Input.h"
+#include "Platform/GLFW/GLFWApplicationIcon.h"
 #include "Platform/Vulkan/VulkanLoader.h"
 
 // The Vulkan header comes first so GLFW declares its Vulkan functions (glfwInitVulkanLoader).
@@ -73,6 +74,12 @@ namespace Strata
 		glfwWindowHint(GLFW_VISIBLE, specification.Visible ? GLFW_TRUE : GLFW_FALSE);
 		const bool sizeInPixels = specification.SizeInPixels && !specification.Fullscreen;
 		glfwWindowHint(GLFW_SCALE_TO_MONITOR, sizeInPixels ? GLFW_FALSE : GLFW_TRUE);
+		if (!specification.AppId.empty())
+		{
+			glfwWindowHintString(GLFW_X11_CLASS_NAME, specification.AppId.c_str());
+			glfwWindowHintString(GLFW_X11_INSTANCE_NAME, specification.AppId.c_str());
+			glfwWindowHintString(GLFW_WAYLAND_APP_ID, specification.AppId.c_str());
+		}
 
 		GLFWmonitor* monitor = nullptr;
 		int width = static_cast<int>(specification.Width);
@@ -556,13 +563,14 @@ namespace Strata
 
 	void GLFWWindow::SetIcon(std::span<const WindowIconImage> images)
 	{
-		// Windows there have no icons of their own: GLFW would report the call as an error.
+		// Wayland's windows have no icons of their own (the desktop entry's): GLFW would report the call as an error.
 		const int platform = glfwGetPlatform();
-		if (platform == GLFW_PLATFORM_COCOA || platform == GLFW_PLATFORM_WAYLAND)
+		if (platform == GLFW_PLATFORM_WAYLAND)
 			return;
 
 		std::vector<GLFWimage> glfwImages;
 		glfwImages.reserve(images.size());
+		const WindowIconImage* largest = nullptr;
 		for (const WindowIconImage& image : images)
 		{
 			const uint64_t expectedBytes = static_cast<uint64_t>(image.Width) * image.Height * 4;
@@ -571,11 +579,22 @@ namespace Strata
 				ST_CORE_WARN("Window icon image {} x {} has {} bytes of pixels, expected {}; it is skipped", image.Width, image.Height, image.Pixels.size(), expectedBytes);
 				continue;
 			}
+			const bool applicationIconSize = image.Width <= c_MaxApplicationIconSize && image.Height <= c_MaxApplicationIconSize;
+			if (applicationIconSize && (!largest || static_cast<uint64_t>(image.Width) * image.Height > static_cast<uint64_t>(largest->Width) * largest->Height))
+				largest = &image;
 			GLFWimage& glfwImage = glfwImages.emplace_back();
 			glfwImage.width = static_cast<int>(image.Width);
 			glfwImage.height = static_cast<int>(image.Height);
 			// GLFW only reads the pixels (it copies them into the platform's icon).
 			glfwImage.pixels = const_cast<unsigned char*>(image.Pixels.data());
+		}
+		// Cocoa's windows have no icons of their own either: the program's icon in the Dock stands for them all. A bare
+		// executable has none (no bundle), so the largest image becomes it while the program runs.
+		if (platform == GLFW_PLATFORM_COCOA)
+		{
+			if (largest && !SetApplicationIcon(largest->Width, largest->Height, largest->Pixels))
+				ST_CORE_WARN("The window icon could not become the Dock's");
+			return;
 		}
 		if (!glfwImages.empty())
 			glfwSetWindowIcon(m_Window, static_cast<int>(glfwImages.size()), glfwImages.data());

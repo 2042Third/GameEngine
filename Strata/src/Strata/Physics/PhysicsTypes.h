@@ -13,15 +13,15 @@
 namespace Strata
 {
 
-	// c_PhysicsLayerCount (the user collision layers) comes with the scene's layer settings (Scene/PhysicsLayerSettings.h).
+	// c_PhysicsLayerCount (the user collision layers) comes with the layer settings (Scene/PhysicsLayerSettings.h).
 	// Query layer mask that accepts every layer.
 	constexpr uint32_t c_AllPhysicsLayers = 0xFFFFFFFFu;
 
 	// Configuration of a physics world. Capacities are the room a world reserves when it is created; 0 sizes one
 	// automatically from the bodies the scene has then (see PhysicsWorld::ResolveCapacities), and a scene's
 	// SceneSettings::PhysicsCapacity overrides these. A world whose bodies outgrow its room grows (see PhysicsWorld,
-	// "Capacities") up to GrowthLimit. The layer matrix is the scene's (SceneSettings::PhysicsLayers, which PhysicsSystem
-	// applies when it creates the world and when it changes); PhysicsWorld::SetLayerCollisionMasks changes it at runtime.
+	// "Capacities") up to GrowthLimit. The layer matrix is the scene's copy of the project's (Scene::GetPhysicsLayers,
+	// which PhysicsSystem applies when it creates the world and when it changes); PhysicsWorld::SetLayerCollisionMasks changes it at runtime.
 	struct PhysicsSettings
 	{
 		uint32_t MaxBodies = 0;                  // Bodies the world reserves room for

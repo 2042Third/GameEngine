@@ -239,13 +239,13 @@ namespace Strata
 			return result;
 		}
 
-		// A collision layer (PropertyFlags::PhysicsLayer), chosen by the names the scene gives its layers: the default layer
-		// 0, the named ones and the value itself when it has no name ("Layer <index>"), then where more are named. The probe
-		// records each layer's entry under "<key>.<index>" and the hint under "<key>.Hint".
+		// A collision layer (PropertyFlags::PhysicsLayer), chosen by the names the project gives its layers (the scene's copy of
+		// its table): the default layer 0, the named ones and the value itself when it has no name ("Layer <index>"), then
+		// where more are named. The probe records each layer's entry under "<key>.<index>" and the hint under "<key>.Hint".
 		PropertyEditResult DrawPhysicsLayer(uint32_t& value, const Scene& scene, const PropertyWidgetOptions& options)
 		{
 			PropertyEditResult result;
-			const PhysicsLayerSettings& layers = scene.GetSettings().PhysicsLayers;
+			const PhysicsLayerSettings& layers = scene.GetPhysicsLayers();
 			const std::string preview = options.Mixed ? std::string(c_MixedText) : layers.GetDisplayName(value);
 			if (BeginChoice(preview, options.ProbeKey))
 			{
@@ -260,16 +260,17 @@ namespace Strata
 						value = layer;
 					}
 				}
-				// Unnamed layers would only be numbers to pick from: a layer is offered once the scene names it.
+				// Unnamed layers would only be numbers to pick from: a layer is offered once the project names it.
+				constexpr const char* c_Hint = "Name more layers in Project Settings > Collision Layers";
 				ImGui::Separator();
-				ImGui::TextDisabled("Name more layers in the scene's settings");
+				ImGui::TextDisabled("%s", c_Hint);
 				if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
 				{
-					ImGui::SetTooltip("Select nothing: the Inspector shows the scene's settings, whose Collision Layers section names layers "
-						"(Name a Layer) and says which of them collide");
+					ImGui::SetTooltip("File > Project Settings, Collision Layers (or the link in the Inspector with nothing selected) names the "
+						"project's layers (Name a Layer) and says which of them collide");
 				}
 				if (!options.ProbeKey.empty())
-					UI::ItemProbe::Record(ProbeKey(options.ProbeKey, "Hint"), false, 0, "Name more layers in the scene's settings");
+					UI::ItemProbe::Record(ProbeKey(options.ProbeKey, "Hint"), false, 0, c_Hint);
 				ImGui::EndCombo();
 			}
 			return result;

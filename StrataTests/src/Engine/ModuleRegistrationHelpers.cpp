@@ -1,5 +1,7 @@
 #include "Engine/ModuleRegistrationHelpers.h"
 
+#include "Core/SettingsTestUtils.h"
+
 #include "Strata/Asset/AssetDependencies.h"
 #include "Strata/Asset/AssetImporter.h"
 #include "Strata/Asset/AssetManager.h"
@@ -26,7 +28,12 @@
 #include "Strata/Scripting/ScriptSystem.h"
 #include "Strata/Scripting/ScriptingComponents.h"
 #include "Strata/Core/Platform.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Core/JsonUtils.h"
+
+#if ST_TESTS_HAVE_EDITOR
+	#include "Editor/EditorPreferences.h"
+#endif
 
 #include <algorithm>
 #include <cstdint>
@@ -573,6 +580,22 @@ namespace Strata::Tests
 
 	std::optional<int> RunModuleRegistrationHelper(std::string_view mode, int argc, char** argv)
 	{
+		if (mode == "settings-section")
+		{
+			Engine::ModuleRegistrationOptions modules;
+			modules.AssetPipeline = RegisterAssetPipeline;
+			modules.Extra.push_back([]() { SettingsRegistry::GetProcessRegistry().Register(MakeGameTestSection()); });
+#if ST_TESTS_HAVE_EDITOR
+			// Like the test process, which this child stands in for.
+			modules.Extra.push_back([]() { EditorPreferences::RegisterSections(SettingsRegistry::GetProcessRegistry()); });
+#endif
+			Engine::RegisterBuiltinModules(modules);
+			// The test cases run here like in the test process (whose environment this child inherits), with the game's section.
+			doctest::Context context(argc - 1, argv + 1);
+			const int result = context.run();
+			CleanupTemporaryDirectories();
+			return result;
+		}
 		if (mode == "custom-component")
 		{
 			LogSpecification logSpecification;

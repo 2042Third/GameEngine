@@ -323,6 +323,9 @@ namespace Strata
 		if (m_State != SceneLoadState::Ready || m_Taken)
 			return nullptr;
 		m_Taken = true;
+		// The scene took the project's collision layers when it arrived (SceneAsset::TakePreparedScene), before its
+		// preparation; a table changed since replaces them now.
+		m_Prepared->ApplyProjectLayers();
 		return std::move(m_Prepared);
 	}
 

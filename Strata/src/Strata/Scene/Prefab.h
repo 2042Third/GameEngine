@@ -145,10 +145,11 @@ namespace Strata
 		// reads the document again. A copy kept for later callers would double a large scene's memory; one made from the
 		// taken scene would hold whatever the game did to it meanwhile. What the loader could not read as written (unknown
 		// properties, components this build does not register) is logged as warnings once, by the first call of this or of
-		// CreateScene.
+		// CreateScene. The scene takes the project's collision layers (Scene::ApplyProjectLayers).
 		Ref<Scene> TakePreparedScene(std::string* outError = nullptr);
 		// A new scene: a copy (Scene::Copy) of the prepared scene, which the asset keeps, for tools and tests that make
-		// several scenes of one asset. Fails once the scene was taken.
+		// several scenes of one asset; main thread, taking the project's collision layers like TakePreparedScene. Fails once
+		// the scene was taken.
 		Ref<Scene> CreateScene(std::string* outError = nullptr) const;
 		bool IsTaken() const { return m_Prepared == nullptr; }
 		// What the loader could not read as written, in the order it found it.

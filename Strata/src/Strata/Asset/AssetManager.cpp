@@ -1188,7 +1188,17 @@ namespace Strata
 				context.MayWait = applyBudget;
 				context.FirstOfFrame = finalizations == 0;
 				finalizations++;
-				const AssetFinalizeResult result = completion.LoadedAsset->FinalizeOnMainThread(context);
+				AssetFinalizeResult result = completion.LoadedAsset->FinalizeOnMainThread(context);
+				// Without a budget an asset has to finish in its call, but what it needs may not happen in the open batch: a mesh
+				// whose geometry needs the geometry pool to grow after the batch wrote into the pool waits for the next batch
+				// (GeometryPool::Allocate). It gets that batch at once: what the open one recorded is submitted, and the asset
+				// is finalized again in a new one.
+				if (result == AssetFinalizeResult::Pending && !applyBudget && upload)
+				{
+					upload->Submit();
+					upload->Begin();
+					result = completion.LoadedAsset->FinalizeOnMainThread(context);
+				}
 				if (result == AssetFinalizeResult::Pending && applyBudget)
 					break; // Stays in line
 				if (result == AssetFinalizeResult::AwaitingGPU && applyBudget)
@@ -1199,7 +1209,7 @@ namespace Strata
 				}
 				if (result != AssetFinalizeResult::Done)
 				{
-					// Without a budget an asset has to finish: one that still asks for more is broken.
+					// Without a budget an asset has to finish: one that still asks for more in a batch of its own is broken.
 					completion.Error = result == AssetFinalizeResult::Failed ? "Failed to create GPU resources"
 						: "Finalization did not finish without an upload budget";
 					completion.LoadedAsset = nullptr;

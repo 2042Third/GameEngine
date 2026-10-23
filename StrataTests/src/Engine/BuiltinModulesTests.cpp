@@ -212,7 +212,7 @@ TEST_SUITE("Engine.Modules")
 
 	TEST_CASE("The composition root registers the engine's modules in its table's order")
 	{
-		std::vector<std::string> expected = { "Scene", "Renderer" };
+		std::vector<std::string> expected = { "Input", "Scene", "Renderer" };
 #if ST_WITH_PHYSICS
 		expected.push_back("Physics");
 #endif
@@ -239,7 +239,7 @@ TEST_SUITE("Engine.Modules")
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
 		CHECK(result.ExitCode == 0);
-		CHECK(result.Output.find("modules: Scene Renderer Audio Animation Scripting World GameUI\n") != std::string::npos);
+		CHECK(result.Output.find("modules: Input Scene Renderer Audio Animation Scripting World GameUI\n") != std::string::npos);
 		// The others' soft constraints order them as in a full engine.
 		CHECK(result.Output.find("systems: UI Scripting Animation World Audio\n") != std::string::npos);
 		// The feature scene's physics components stay unknown components and save back unchanged.
@@ -268,18 +268,19 @@ TEST_SUITE("Engine.Modules")
 #endif
 
 #if ST_TESTS_HAVE_EVERY_MODULE
-	TEST_CASE("Excluding the scene, the renderer or a module that does not exist is refused")
+	TEST_CASE("Excluding the input module, the scene, the renderer or a module that does not exist is refused")
 	{
 		const std::filesystem::path scene = FileSystem::FromUTF8(STRATA_FEATURE_TEST_DIR) / "Assets" / "Scenes" / "FeatureSub.stscene";
-		const Process::RunResult result = RunHelper({ "--strata-test-helper=register-without", "Scene,Renderer,Teleportation,Audio", FileSystem::ToUTF8(scene) });
+		const Process::RunResult result = RunHelper({ "--strata-test-helper=register-without", "Input,Scene,Renderer,Teleportation,Audio", FileSystem::ToUTF8(scene) });
 		INFO("Output: ", result.Output);
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
 		CHECK(result.ExitCode == 0);
+		CHECK(result.Output.find("the Input module cannot be excluded (every engine has it); it is registered") != std::string::npos);
 		CHECK(result.Output.find("the Scene module cannot be excluded (every engine has it); it is registered") != std::string::npos);
 		CHECK(result.Output.find("the Renderer module cannot be excluded (every engine has it); it is registered") != std::string::npos);
 		CHECK(result.Output.find("'Teleportation' is no engine module of this build and cannot be excluded") != std::string::npos);
-		CHECK(result.Output.find("modules: Scene Renderer Physics Animation Scripting World GameUI\n") != std::string::npos);
+		CHECK(result.Output.find("modules: Input Scene Renderer Physics Animation Scripting World GameUI\n") != std::string::npos);
 		CHECK(result.Output.find("systems: UI Scripting Animation World Physics\n") != std::string::npos);
 	}
 #endif
@@ -294,7 +295,7 @@ TEST_SUITE("Engine.Modules")
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
 		CHECK(result.ExitCode == 0);
-		CHECK(result.Output.find("modules: Scene Renderer Physics Audio Animation World GameUI\n") != std::string::npos);
+		CHECK(result.Output.find("modules: Input Scene Renderer Physics Audio Animation World GameUI\n") != std::string::npos);
 		CHECK(result.Output.find("systems: Animation World Physics Audio UI\n") != std::string::npos);
 	}
 #endif
@@ -309,7 +310,7 @@ TEST_SUITE("Engine.Modules")
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
 		CHECK(result.ExitCode == 0);
-		CHECK(result.Output.find("modules: Scene Renderer Physics Audio Animation Scripting World\n") != std::string::npos);
+		CHECK(result.Output.find("modules: Input Scene Renderer Physics Audio Animation Scripting World\n") != std::string::npos);
 		CHECK(result.Output.find("systems: Scripting Animation World Physics Audio\n") != std::string::npos);
 		const size_t unknown = result.Output.find("unknown components: ");
 		REQUIRE(unknown != std::string::npos);

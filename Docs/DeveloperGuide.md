@@ -31,6 +31,7 @@ stays under 40,000 characters (the test `Docs.AgentGuide` fails beyond). How the
   - [Script modules and package tests](#script-modules-and-package-tests)
 - [Code style](#code-style)
 - [Architecture rules](#architecture-rules)
+- [Project settings](#project-settings)
 - [Asset pipeline](#asset-pipeline)
   - [Asset files](#asset-files)
   - [Importers](#importers)
@@ -366,7 +367,7 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 ### Shards, sweeps and locks
 
 - **Shards.** CTest runs the suites that have no CTest of their own (`GPU*`, `EndToEnd*`, `Package*`, `Perf.*`,
-  `PerfGPU.*`, `FeatureTest`, `Editor.FeatureTest`) in shards, one CTest `StrataTests.Core.<Shard>` each (label `core`;
+  `PerfGPU.*`, `FeatureTest`, `Editor.FeatureTest`, `Platform.DockIcon`) in shards, one CTest `StrataTests.Core.<Shard>` each (label `core`;
   `ctest -R StrataTests.Core` selects them all): Core, Asset, Scene, Systems, LoaderFaults, Renderer, Network, EditorUI,
   EditorData and Editor. LoaderFaults holds `Scripting.LoaderFaults`, the tests that load modules crashing in their
   static initialization in the test process: on Linux the crash leaves the dynamic loader's lock held by the main thread,
@@ -406,6 +407,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `SceneRendererSpecification::GPUDriven` to `Off`.
   `GPU.Startup` needs a desktop rather than the device, like the label's other windowed tests: it starts the editor in a
   window with a Vulkan loader that finds no driver and reads what its error dialog says.
+  `Platform.DockIcon` needs the window server too, and no device (no `GPUContext`): it has a CTest of its own on the Mac
+  only, `StrataTests.DockIcon`, with the same label (CI, which skips `gpu`, never runs it), and reads the Dock icon back
+  by drawing it.
 
 ### Perf tests
 
@@ -617,8 +621,12 @@ The feature test keeps [golden rule 6](../AGENTS.md#golden-rules): every compone
 exercised by it.
 
 - **Feature test** (golden rule 6): `StrataTests/FeatureTest/` is a real project (`FeatureTest.stproj`, `Assets/`
-  with committed `.meta` files). Its scene `Scenes/Feature.stscene` contains every registered component, the project
-  has assets of every type (the tiny binary ones come from `Tools/GenerateAssets.py`, whose outputs are committed), and
+  with committed `.meta` files). Its scene `Scenes/Feature.stscene` contains every registered component, its project
+  file sets every registered project settings section to a value other than the default (the collision layers the
+  scene and scripts use come from there: `FeatureProject` provides the project's settings as `IProjectSettings`, as a
+  program that runs a project does, and the scene stores none), it gives the game an identity (title, version, company,
+  copyright and `Textures/Checker.png` as its icon, which `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` find in
+  the export, its log and `FeatureTest.png`), the project has assets of every type (the tiny binary ones come from `Tools/GenerateAssets.py`, whose outputs are committed), and
   its script module `Scripts/` (target `StrataTestScriptsFeatureTest`) exercises the whole script SDK. Feature scripts
   derive from `FeatureTest::FeatureScript`: `Expect(condition, "description")` counts checks and keeps the first
   failure, `Completed` marks the end of a scenario, and `Journal()` records events in the scene's "Journal" entity.
@@ -661,13 +669,15 @@ exercised by it.
     count together; calls on receivers of unknown type do not count, and the failure lists them;
   - a feature script fails a check or does not complete, a script class never runs, or the run logs a warning or error
     other than the messages the scripts log on purpose (`c_ExpectedLogMessages` in `FeatureTestUtils.cpp`);
-  - an asset type has no asset in the project, an asset imports with warnings, or importing rewrites a `.meta` file.
+  - an asset type has no asset in the project, an asset imports with warnings, or importing rewrites a `.meta` file;
+  - a registered project settings section is not set in `FeatureTest.stproj`, or set to its default.
 - **Extending the feature test:** a new component gets an entity (or joins one) in `Feature.stscene` with a non-default
   value for every property; edit the JSON, or open a copy of the project in the editor, edit and save, and copy the
   scene back. A new script API is called from a feature script (extend the matching `Scripts/*Features.cpp`, or add a
   class with an entity in the scene and journal its `OnCreate`) that `Expect`s its effect; a new host function is also
-  listed in `ST_SCRIPT_HOST_FUNCTIONS`. A new asset type gets a small asset with its `.meta` in `Assets/`. Messages
-  scripts log on purpose go into `c_ExpectedLogMessages`.
+  listed in `ST_SCRIPT_HOST_FUNCTIONS`. A new asset type gets a small asset with its `.meta` in `Assets/`. A new project
+  settings section gets a value in `FeatureTest.stproj` (set it in a copy opened in the editor and copy the file back).
+  Messages scripts log on purpose go into `c_ExpectedLogMessages`.
 
 ### Script modules and package tests
 
@@ -775,7 +785,9 @@ short. Their full wording:
   layer or library, and `StrataRuntime.NoTooling` reads its linker map. Details: Docs/Architecture.md, "Targets and
   dependencies" and "Layers".
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers,
-  built-in asset objects, scene systems), never through lower layers calling functions of higher ones. A component lives in
+  built-in asset objects, scene systems, settings sections: a module reads its project settings only on the main thread,
+  through the engine service `IProjectSettings`, [Project settings](#project-settings)), never through lower layers
+  calling functions of higher ones. A component lives in
   the module that owns it: declared in `<Module>/<Module>Components.h` and registered by `<Module>Components.cpp`, which its
   `Register<Module>Module` calls (with a `Category` for Add Component). `Scene/Components.h` holds only the scene's own
   components (ID, Name, Transform, Relationship, Tag, Inactive, PrefabInstance, Camera) and the types of components
@@ -833,6 +845,367 @@ short. Their full wording:
   `Scene::GetSiblingIndex` (cached), never by searching the child list, and remove many entities with one
   `DestroyEntities` call. A registry holds at most `Scene::c_MaxEntities` (1,048,575) live entities; creating more
   fails with an error.
+
+## Project settings
+
+Project settings (kept with the project, carried into the games it exports) and the user's preferences (the editor's)
+are *sections* that the module owning them registers in a `SettingsRegistry` (`Strata/Core/SettingsRegistry.h`): a new
+setting is one registration, and no other code learns of it.
+
+- **Sections.** A section has an id `<Module>.<Name>` (`Scene.CollisionLayers`: two PascalCase identifiers,
+  `SettingsRegistry::IsValidSectionId`), a title, a category and a description written for agents, a scope (`Project`
+  or `User`) and a version, stored with its value. A *simple* section lists `Fields` (Bool, Int, Float, String, Enum or
+  Asset, each with a title, a description, its range, length, options or asset type, and a default): its value is an
+  object of them, which the section validates, describes (`GetValueSchema`, a JSON Schema) and defaults from them. A
+  *complex* section has no fields and gives `Schema`, `MakeDefault` and `Read`, and `References` when its value names
+  assets.
+- **One validation.** `SettingsSection::Validate` is the only check of a value: loading a project, the runtime's
+  manifest, commands and pages all call it, and it never asserts (values come from files and agents). It refuses a value
+  over 512 KiB (compact JSON) and a version newer than the section's, upgrades an older one (`Read` does; in a simple
+  section, fields added since take their defaults and members of fields removed since are dropped), then checks the
+  fields, naming the first bad one in the order of `Fields` (members that name no field are refused), or calls `Read`.
+- **Registering.** Modules register their sections in their registration function (`Register<Module>Module`), games and
+  the editor theirs through `ModuleRegistrationOptions::Extra`, into `SettingsRegistry::GetProcessRegistry()`, which
+  `Engine::RegisterBuiltinModules` freezes with the component registry. `Register` refuses, with the reason logged, an
+  invalid or taken id, a section without title, category or description, a simple section that also gives `Read`,
+  `MakeDefault`, `Schema` or `References`, a complex section without them, and a default its own validation refuses.
+- **The registry parameter.** Code that validates takes the registry it validates with (`ProjectSettingsValues::Validate`,
+  `Set`, `GetReferences`; the editor's `EditorContextSpecification::Settings`, null for the process's, which its commands,
+  the project referencer and the export use). Unit tests register their sections in a local registry
+  (`StrataTests/src/Core/SettingsTestUtils.h`: `Test.Simple`, a field of every type; `Test.Complex`, version 2 with an
+  upgrade and references); only what must go through the process registry registers in a child process: a test case
+  about a section a game registers starts with `if (!IsSettingsSectionProcess()) return RunInSettingsSectionProcess();`,
+  which runs that case again in `--strata-test-helper=settings-section`, whose `Extra` registers `Game.Tuning`
+  (`MakeGameTestSection`: an enum, an int and a texture).
+- **Reading.** Modules pull their settings: on the main thread, a consumer reads its section through the engine service
+  `IProjectSettings` (`Strata/Core/ProjectSettings.h`; `EngineServices::Get` is null while no program provides one, and
+  `FindSection` null while the project does not set the section: the default applies) and keeps what it made of the
+  value until `GetVersion()` changes. Versions are unique across the process, so a provider replaced by another is
+  noticed as well. Worker threads never read the service. `ProjectSettingsValues` is the implementation every provider
+  uses: it keeps every stored section, also those no registered section claims (a build without the module) and those
+  whose value its section refuses (both written back unchanged), and provides only validated ones.
+- **References.** A simple section's Asset fields name their handle, a complex section's `References` what its value
+  names; `ProjectSettingsValues::GetReferences` lists every validated section's, each valid handle once. The editor
+  counts the project as a referencer (`AssetReferences::Find`: its start scene, its loading scene, the game's icon and
+  what its sections name, `type: "Project"` in `asset.findReferences`), so deletes refuse those assets, and the export adds what the
+  sections name to a pruned pack's roots beside the start scene, the loading scene and `Export.AlwaysInclude` (built-in
+  assets need none; a handle that names no asset of the project fails the export).
+- **The project file.** `.stproj` version 3 stores the sections a project sets as
+  `"Settings": { "<Id>": { "Version": n, "Value": ... } }` (`Project::GetSettings`); a section is stored once set, and
+  resetting it removes it. Its `"Project"` object also holds the game's identity, `"Game"` (`ProjectGameInfo`,
+  `Project/GameInfo.h`: title, version, company, copyright, icon; written once it differs from the defaults), which
+  `ProjectGameInfo::Validate` checks when the file is read and written. The version went up with them because 0.5.0 rewrites the whole file from what it knows when it
+  saves: it refuses a version-3 file instead of dropping its sections. Versions 1 and 2 still load (without settings) and
+  are saved as version 3. `Project::Load` validates the sections with the registry it is given (null: the process's): one
+  its section refuses keeps its stored value, its default applies, it is logged as a warning and listed by
+  `GetSettingsProblems`; a stored form of the wrong shape refuses the file. What this version does not know is written
+  back as it was read: sections no registered module claims and members of `"Project"` a later version added. A project
+  file holds at most 1 MiB (`Project::c_MaxFileBytes`): `Load` refuses a larger one without reading it whole, and `Save`
+  refuses to write one.
+- **Writing the project file.** The editor never writes the project file on the main thread: a change of the project's
+  settings queues a write (`EditorContext::SaveProjectFile`), whose snapshot is a copy of the project's small in-memory
+  values, and `Editor/SettingsFileWriter` serializes and writes it atomically on an I/O job and publishes the outcome in
+  `EditorContext::Update`. Writes coalesce: one runs at a time and only the newest waiting one runs next. A failed write
+  keeps the change in memory, logs an error and posts a notification; until a later write succeeds the file has
+  *unwritten settings* (`HasUnwrittenProjectSettings`; `project.info` and `editor.status` report the project's
+  `fileState`: written, writing or unwritten, with `fileError`), and the next change or `project.save` (which answers once
+  the file is written, or fails with the reason) tries again. The commands that release the project refuse meanwhile
+  ([No silent data loss](#no-silent-data-loss)). `EditorContext::ReleaseProject` is the only path that may write on the
+  main thread: it finishes a write in flight, running one that has not started itself, and is reached by commands only
+  once nothing was in flight, otherwise only when the editor goes away.
+- **Commands.** `project.settings` (Query) describes the project's own fields and every registered project section (id,
+  title, category, description, version, `schema`, the `value` that applies, `isDefault`, the `problem` of a stored value
+  its section refuses) and lists the stored sections no module claims (`unclaimed`); `section` narrows it to one.
+  `project.setSettings {section, value | reset: true}` replaces one section's value, checked first on copies (the
+  section's validation, the settings' bound and the project file's 1 MiB, `Project::MakeFileText`), so a refused value
+  changes nothing; preferences are refused. `project.setGameInfo {title, version, company, copyright, icon}` sets the
+  game's identity (fields left out keep their values; `project.info` and `project.settings` report it as `game`): text of
+  at most 128 characters without control characters, a version of one to four numbers up to 65535, and an icon that
+  `GameIcon::FindSource` accepts from the asset's metadata alone (a texture of the project, not a sub-asset, whose source
+  is PNG, JPEG, TGA or BMP), else `InvalidParameters` naming the field. `project.open` and `project.openSample` report `settingsProblems`. While a
+  project is open the editor provides its sections as `IProjectSettings` (a provider the context owns for its life,
+  forwarding to the open project's values).
+- **Changes are undo steps.** Every command that changes the project's settings (`project.setStartScene`,
+  `project.setExportSettings`, `project.setGameInfo`, `project.setSettings`, `project.setCollisionLayers`) records one
+  `ProjectSettingsAction` (`Editor/ProjectSettingsAction.h`,
+  made with `ChangeProjectSettings` or `ChangeProjectSection`, which first refuse, on a copy, a change the project file
+  could not be written with, such as one over its 1 MiB; a section's step keeps its stored entries,
+  `ProjectSettingsValues::GetStoredEntry`, and puts them back with `RestoreStoredEntry`, also a value its section
+  refuses): it sets the values and queues a write when it runs and when it is undone, changes no scene
+  (`ChangesScene() == false`, so the scene stays saved) and goes with the rest of the history when a scene opens. Such
+  commands are allowed while playing: the change is the project's, not the running copy's, so it stays after `play.stop`
+  and reports neither a `warning` nor `RunningCopy`; its step is undone once play stops (Undo and Redo refuse while
+  playing).
+- **Exported games.** The export copies the project's sections into the game's manifest (`.stgame` version 5,
+  `"Settings"` in the project file's form), refusing to export while a section a registered module claims is invalid;
+  sections no module of the build claims go as they are stored. `GameManifest` keeps them unvalidated (bounded at 1 MiB),
+  because the runtime reads the manifest in `CreateApplication`, before the modules register. `GameRuntime::Create`
+  validates them with the process's registry (`GameRuntimeOptions::Settings` for tests): a section its module refuses stops
+  the game, naming the section (`Application::ReportFatalError`: the export wrote a valid one, so the install is damaged,
+  and a game must not run with settings it cannot read); sections no registered module claims are ignored. While the
+  runtime lives it provides them as `IProjectSettings`. A version-4 manifest has no settings and gets no provider.
+
+### Settings pages
+
+The editor draws the settings in two windows, both a `SettingsBrowser` (`UI/SettingsPages`: the pages listed on the left, grouped by
+category in registration order, with a search field over titles, categories and field titles; the selected page on the
+right): the **Project Settings** panel (`Panels/ProjectSettingsPanel`, id `ProjectSettings`, not open by default, docked
+beside the Scene view; File > Project Settings..., `editor.showPanel`), a panel so that it can stay open while the game
+plays, and the **Preferences** dialog ([Preferences](#preferences)).
+
+- **Pages.** The Project Settings window starts with the project's own fields: **Game** (the start scene,
+  `project.setStartScene`, and the loading scene, `project.setExportSettings`, picked with the asset picker; the title,
+  version, company and copyright, each running `project.setGameInfo` when its edit ends, and the icon, picked with the
+  asset picker and shown as its thumbnail; the Export dialog sums them up with a link to the page) and
+  **Export** (`Export.AlwaysInclude`, `project.setExportSettings`). A simple section gets a *generic page*: its fields in
+  a property table drawn with `DrawPropertyWidget` (an Asset field with the asset picker of its type), each finished edit
+  running the section's command (`project.setSettings` for a project section, `preferences.set` for a user one) with the
+  whole value, and Reset to Defaults (`reset: true`). A complex section needs a *custom page* (`UI::SettingsPage`), which
+  the editor UI registers in the `EditorSettingsPageRegistry` (`EditorLayer::GetSettingsPages`) under the section's id;
+  `Editor.UI.ProjectSettings` fails for a complex section of the process's registry without one, so a section and its
+  page land together: the External Editor's (`ExternalEditorPage`, `UI/ScriptDialogs`) and Collision Layers
+  (`CollisionLayersPage`, [Collision layers](#collision-layers)). `EditorShell::ShowProjectSettings(page)` brings the
+  panel forward at a page (the Inspector's link to the collision layers).
+- **Rules.** Pages change nothing themselves: every edit runs a command with `CommandOrigin { CommandSource::UI }`
+  (project steps are undoable, preferences are not). They draw from copies of the values, read again only when the
+  values' version changes (`ProjectSettingsValues::GetVersion`, `EditorPreferences::GetVersion`), never parsing per
+  frame; colors come from the theme and sizes from the font. Probe keys: `<Window>.Page.<Id>` for the list,
+  `<Window>.<Id>.<Field>` for a generic page's fields and `<Window>.Title`, `<Window>` being `ProjectSettings` or
+  `Preferences`; the Game page's `ProjectSettings.Game.StartScene`, `.LoadingScene`, `.Title`, `.Version`, `.Company`,
+  `.Copyright`, `.Icon` and `.IconPreview`, the Export dialog's `Export.Identity` and `Export.EditIdentity`, the Export page's
+  `ProjectSettings.Export.Path`, `.Add`, `.AlwaysInclude.<n>` and `.Remove.<n>`.
+- **Adding a section.** Register it in the module's registration function ([Project settings](#project-settings)); a
+  simple one is drawn without more, a complex one registers its page in `EditorLayer`'s constructor beside the External
+  Editor's.
+
+### Collision layers
+
+Collision layers are the project's: one table, the project section `Scene.CollisionLayers` (`Scene/ProjectCollisionLayers`,
+registered by `RegisterSceneModule`, so a build or game without physics keeps the names), whose value is
+`PhysicsLayerSettings`' stored form, `{"Names": {"<index>": name}, "NoCollisions": [[a, b]]}` (`ToJson`/`FromJson`; names
+unique ignoring case, at most 64 characters; the section's `Read` refuses what `FromJson` reports and anything but those
+two members). A layer's name means the same in every scene and prefab.
+
+- **The working copy.** Each scene works on a copy, `Scene::GetPhysicsLayers()`: physics (ANDed with the process default
+  `PhysicsSettings::LayerCollisionMasks`, which only tests set), scripts, `component.set`'s layer names, the Inspector's
+  layer choice and `scene.info`'s `physicsLayers` read it, and scripts' `Physics::SetLayersCollide` changes it for as long
+  as the scene runs (the next scene starts from the project's). It is not saved and not part of scene undo or recovery;
+  `Scene::Copy` keeps it.
+- **Hand-over, on the main thread.** Scenes are built on the loader's worker, which never reads `IProjectSettings`: it
+  makes the document's stored layers the copy, which is all a program without a provider gets (tools, tests, a version-4
+  manifest: 0.5.0's behaviour). `Scene::ApplyProjectLayers()` then replaces the copy with the project's table
+  (`ProjectCollisionLayers::Find`: parsed again only when the provider's version changes, with a table version that
+  changes only when the table does, so an edit of another section never replaces a script's change). It runs when the
+  scene asset hands its scene over (`SceneAsset::TakePreparedScene` and `CreateScene`: every `SceneLoader` load takes the
+  table before its preparation, where physics creates bodies), in `SceneLoadRequest::TakeScene` when the table changed
+  meanwhile, in `EditorContext::ResetScene` and when play mode switches scenes, and after every change of the project's
+  settings, its undo and redo (`ProjectSettingsAction`: the edited scene and the running copy, whose script changes the
+  new table replaces). Sub-scenes and world cells are the host's entities and collide by its copy.
+- **Stored tables.** 0.5.0 wrote a table into every scene; no writer writes one now, and `SceneSerializer` still reads it
+  (`Scene::GetStoredPhysicsLayers`; `ReadStoredPhysicsLayers` reports invalid entries as warnings). A stored table equal to
+  the default counts as none. When the project's table replaces another stored one, `Scene::DoStoredLayersDiffer` says so
+  and the editor warns once per scene and session (saving the scene drops its table); exported games apply the project's
+  without a word.
+- **Editing.** `project.setCollisionLayers {layerNames, resetLayerCollisions, layerCollisions}` (layers by index or name,
+  applied in that order; the default table is no section) records one project step; `scene.setSettings` refuses those
+  parameters with `InvalidParameters` naming it, and `project.setSettings` sets the whole value. The Collision Layers page
+  (`UI/CollisionLayersPage`) names layers in place and edits a compact matrix of the layers shown (layer 0, the named ones,
+  those with a pair kept apart), one command per edit, refused with the reason while the project is not ready
+  (`DescribeAssetScanWait`); probe keys under `ProjectSettings.Scene.CollisionLayers.` (`Summary`, `Name.<i>`,
+  `Clear.<i>`, `Add`, `Label.<i>`, `Cell.<a>.<b>`, `Error`). The Inspector's scene settings show
+  "Collision layers: <n> named" with a link to the page (`Inspector.Layers`, `Inspector.Layers.Open`).
+- **Migration.** A project file of version 1 or 2 (`Project::GetFileVersion`) is migrated once when it opens, by every
+  path: an I/O job (`Editor/ProjectMigration`) walks the asset directory and reads each scene's settings with
+  `SceneDocumentReader`, stopping at the first entity when they came first; the start scene, Edit commands and those
+  marked `WaitsForAssets` (the export) wait for it (`EditorContext::IsWaitingForAssets`, also in a project without a
+  start scene), so no edit is made on the table it replaces. On the main
+  thread the names come from the start scene, then the others by path (another name for an index, or a name another
+  layer has, is a conflict and the first stays); a pair any scene keeps apart is kept apart (matrices that differ are a
+  conflict). The section is set without an undo step when a scene stored a table, and the project file is written as
+  version 3 in every case, so the version records the migration: a version-3 file never migrates (new projects, a
+  section reset later). Conflicts (the names, and the pairs on which matrices differ) are logged as one warning, and
+  `project.open` reports `migrated: {collisionLayers: {scenes, conflicts, unreadable}}` (null when nothing migrated).
+  Scene files are not touched.
+
+### Input actions
+
+A game's input actions are one set, the project section `Input.Actions` (`Input/InputActionSet`): an asset would load
+asynchronously, and the game UI navigates from its first frame. The Input layer holds the model, the grammar and the
+evaluation (`Input/InputActions`); it includes only Core. `RegisterInputModule` (`Input/InputRegistration.cpp`) registers the
+section; the composition root runs it first, and Input is a module every engine has (it cannot be excluded).
+
+- **Model.** `InputActionSet { Maps }`, `InputActionMap { Name, Enabled, Actions }` (`Enabled`: when the game starts),
+  `InputAction { Name, Kind, Bindings, DeadZone }`; `Kind` is `Button`, `Axis` (one value, -1 to 1) or `Vector2` (+Y up).
+  Names are 1 to 64 ASCII letters, digits, spaces, `_`, `-` and `.`, without a leading or trailing space; map names are
+  unique in the set and action names in their map, ignoring case. At most 32 maps, 256 actions (the UI map's six
+  included) and 8 bindings per action; a set at every limit is about 220 KB compact, inside the section's 512 KiB.
+  `InputActionSet::FromJson` is the section's `Read` (then `ToJson`): it refuses a bad name, kind, dead zone (0 to 0.9),
+  binding or unknown member with the reason and adds the reserved UI map where it is missing.
+- **Names.** An action is named `<Map>/<Action>`, or by its bare name when no other map has an action of that name
+  (`FindAction`; ignoring case). An ambiguous bare name is refused naming every match ("'Left' is ambiguous:
+  Gameplay/Left, UI/Left"), so a game's `Left` never mixes with the UI map's.
+- **Bindings** (`InputBinding::Parse`/`ToString`, one grammar for the project file, commands, scripts and the players'
+  file, at most 96 bytes): `Key/<key>`, `Mouse/<button>`, `Gamepad/<button>` (InputNames' names; gamepad bindings read
+  every gamepad), `Gamepad/<axis>` (whole), `Gamepad/<axis>+` or `-` (half; triggers only `+`), `Gamepad/LeftStick` and
+  `RightStick`, and the composites `1D:<negative>,<positive>` and `2D:<up>,<down>,<left>,<right>` of button-like controls
+  (keys, mouse and gamepad buttons, half axes). Button takes button-like controls; Axis those, whole axes and 1D
+  composites; Vector2 sticks and 2D composites (`FitsKind`). No modifiers or chords; mouse motion and scroll stay on the
+  raw API.
+- **Evaluation.** `InputActions` (static, main thread, like `Input`) evaluates the set once per input frame:
+  `InputActions::Update()` runs in Application's Input stage after `ProcessEvents`, and evaluates only when
+  `Input::GetFrameIndex()` advanced, so Pressed and Released last one input frame and survive suspended (paused) frames,
+  as keys' do. It reads bindings through the gameplay queries, so the game UI's keyboard and pointer capture hide them. A
+  Button is down while any binding is (half axes from 0.5 until below 0.35, per gamepad; a press and release within a
+  frame reports both); an Axis takes the binding of the largest magnitude (buttons 1, half axes their value), a Vector2
+  the largest length (2D composites normalized: a diagonal has length 1); both apply the action's dead zone (default
+  0.15, by length, rescaled as the script SDK's `GetGamepadStick`) and are down from 0.5 until below 0.35. Enabling or
+  disabling a map applies from the next input frame on; an action held when its map is disabled reports Released in that
+  frame, as a key let go would (a script waiting for the release to end a charge is never left waiting), and its map's
+  actions read as up after it. Each `Update` first compares `IProjectSettings::GetVersion()` and reads the set again when it
+  changed, keeping the state of actions that keep their qualified name, so an edit reaches a running game in its next
+  frame without pressing held actions again; without a provider or a section the default set (the UI map) applies, so
+  every program evaluates the UI map. The compiled form is flat arrays; `Perf.Input.Actions256` measures 256 actions of
+  4 bindings. Queries by name hash the name; code that reads the same actions every update keeps their indices
+  (`FindIndex`, valid until `GetVersion` changes; `GetStateAt`) and skips updates while `GetStateVersion` is unchanged and
+  nothing is held, as `UIActionState` does: every scene updates its UI, also without a canvas
+  (`Perf.Scene.IdlePlayFrame1M`).
+- **In-process loops.** Code that starts input frames itself (the feature test's `PlayFeatureScene`, tests that drive
+  actions) calls `InputActions::Update()` where Application does, after `Input::BeginFrame` and its simulated input, and
+  provides `IProjectSettings` when it runs a project. `Input::Reset` resets the actions too (`InputActions::Reset`).
+- **Sessions.** `InputActions::ResetSession` drops what a game session leaves (map enables back to the set's, the players'
+  bindings, simulated actions, a capture): `EditorContext` calls it when play starts and stops and loads the players'
+  bindings at play start; `GameRuntime` loads them when it opens and resets the session when it ends.
+- **Players' bindings.** `SetBindings` replaces an action's list for the players (validated by its kind; an empty list
+  unbinds it), `ResetBindings` restores the project's (an empty name: every action). `SaveBindings` writes them, when the
+  game decides (a rebinding menu closing), to `<IGameSaves directory>/InputBindings.json`
+  (`{"Strata": {"Format": "InputBindings", "Version": 1}, "Actions": {"Gameplay/Jump": ["Key/Space"]}}`, keys always
+  map-qualified; `InputPlayerBindings`), atomically, outside `SaveFiles`' `*.save` names, so `Game::ListSaveFiles` never
+  lists it. `LoadBindings` reads at most 64 KiB and forgives per entry: unknown actions and bindings their kind cannot use
+  are dropped with one warning, and a file that is no bindings file is ignored with a warning (the project's bindings
+  apply). `ReadSavedBindings` reads the file as `LoadBindings` would apply it, without applying or warning, and
+  `DeleteSavedBindings` removes it.
+- **The UI map.** Every set has the map `UI` with the Buttons `Submit`, `Cancel`, `Up`, `Down`, `Left` and `Right`, which
+  the game UI navigates with (`UIActionState`, [UI input](#ui-input)); their defaults
+  (`InputActionSet::GetDefaultUIActions`) are Enter, keypad Enter, Space and A; Escape and B; the arrows, the d-pad and the
+  left stick's halves. `Read` adds a missing UI map or action with its defaults and refuses another kind; their bindings
+  can change, their names, kinds and map cannot. The map may hold a game's own actions too. Text fields keep their
+  hard-coded Enter, keypad Enter and Escape (text editing, not navigation).
+- **Editing.** `inputActions.setMap {map, rename?, remove?, enabled?}` adds an unknown map or changes, renames or removes
+  one; `inputActions.setAction {action, map?, rename?, remove?, kind?, deadZone?, bindings?}` adds an unknown action (to the
+  map its qualified name or `map` names) or changes, renames, moves (`map`) or removes one, `bindings` replacing the whole
+  list. Both are Edit commands of the `settings` toolset, check parameters first (names, binding texts and kinds, with the
+  parameter named) and the whole set through the section's `Read`, and record one project step (`ChangeProjectSection`; the
+  default set is no section); the UI map refuses renames and removal, its six actions renames, moves, removal and other
+  kinds. While playing, the running game reads the change in its next frame; a map's `Enabled` applies from the next
+  session. The Input Actions page (`UI/InputActionsPage`) lists the maps (the UI map marked as the game UI's navigation;
+  the selected one's name, enable at start and removal) and the selected map's actions (name, kind, dead zone, bindings
+  as chips with remove buttons, "+" to add one from lists of controls, composites part by part; the UI map's actions
+  "Used by game UI navigation"), one command per edit, refused with the reason while the project is not ready; probe keys
+  under `ProjectSettings.Input.Actions.` (`Summary`, `PlayerBindings`, `ResetPlayerBindings`, `Map.<i>`, `AddMap`,
+  `MapName`, `MapEnabled`, `RemoveMap`, `AddAction`,
+  `Action.<a>.Name|Reserved|Remove|Kind|DeadZone|Binding.<b>|RemoveBinding.<b>|AddBinding|CaptureBinding|PlayerBindings`,
+  `AddBinding.Shape`, `AddBinding.Part.<p>`, `AddBinding.Capture.<p>`, `AddBinding.Add`, `Capture`, `Capture.Cancel`,
+  `Error`).
+- **Binding by pressing.** A row's capture button binds the next key, mouse button or gamepad control pressed at once (a
+  Button's or an Axis'; a Vector2 takes sticks and 2D composites), and the binding popup's capture button fills in a part
+  the same way; the listening line counts down its 10 s and has a Cancel button. The page runs it through
+  `UI/BindingCapture` (`InputActions::BeginCapture` for an owner), which `EditorLayer` calls at the start of its UI each
+  frame, before any shortcut: it ends a capture that timed out or whose owner did not ask after it during the last frame
+  (another map shown, the popup closed, the window gone), and while one runs, and after it until every key is up, it
+  takes every keyboard and gamepad key from ImGui (`SetKeyOwner` with `LockUntilRelease`, which ImGui keeps for a key
+  pressed in the next frame before its navigation reads it), so the captured key runs no shortcut, no navigation and no
+  widget (Ctrl captured, then Z, is no undo). The capture hears the mouse too: a press on its Cancel button cancels, and a
+  mouse press it captured clicks nothing (`BeginFrame` collects the binding and locks the mouse buttons until released
+  before any window sees the press: the viewport would pick with it). It reads the devices, so it works while play is
+  paused.
+- **Players' bindings in the editor.** Play mode loads the players' file from the project's `.strata/Saves` at every
+  start, so a session that saved bindings would silently override later edits of those actions.
+  `EditorContext::GetPlayerBindings` reports the bindings that replace the project's (while playing the running game's,
+  saved or not; otherwise the file's, read again when play starts or stops, the project or its actions change, or the
+  bindings are reset); the page marks those actions ("In play", with the players' bindings) and offers "Reset Player
+  Bindings": `inputActions.resetPlayerBindings` (Session, `settings` toolset) deletes the file through
+  `InputActions::DeleteSavedBindings` and, while playing, restores the project's bindings in the running game, returning
+  the actions reset.
+- **Simulated actions** (`SimulateAction`, `ReleaseAllSimulated`, `ClearSimulated`): held down from the next input frame,
+  whatever the bindings, with a value (Button: 1); for tools that play the game.
+- **Capture** (`BeginCapture(InputCaptureDevices)`, `TakeCapturedBinding`, `CancelCapture`): listens for the next control
+  that goes down on the devices given (keys, mouse buttons, gamepad buttons, an axis beyond 0.5 from rest as its half),
+  comparing the raw state (`Input::IsRawKeyDown` and friends: whether or not input is enabled) at every `Update` call, also
+  while input frames are suspended, so it works while play is paused. While it listens every action reads as up, and the
+  control it took stays up for actions until an input frame went by with it released, so the captured press triggers
+  no action, also when it was pressed and released while play was paused (Input keeps those transitions for the game's next
+  input frame). Meanwhile `GetCapturedControl` names it for code that reads the devices: the game's UI presses no widget
+  with a left button captured (a rebinding menu's button under the pointer would start the capture again), while
+  `Input::IsKeyPressed` and the other device reads report it as any press. There is one capture, which a later `BeginCapture` replaces, so code sharing it (the editor's page, a
+  game's rebinding menu) keeps the number its own got (`GetCaptureId`) and takes or cancels only while it is still that:
+  `UI/BindingCapture` ends its capture without a binding when a game's replaced it. `GetCapturedBinding` reads the binding
+  without taking it (the script host copies it into a buffer only once it fits).
+- **Scripts** read and rebind actions by name (`StrataScript/Input.h`; host functions `InputIsActionDown` to
+  `InputSaveBindings`, appended to ABI version 1): `Input::IsActionDown`, `IsActionPressed`, `IsActionReleased`,
+  `GetActionValue` (a Button's x is 1 while down, an Axis' x its value) and `GetActionAxis`, `SetActionMapEnabled` and
+  `IsActionMapEnabled` (nullopt for an unknown map: an answer, not misuse), `GetActionBindings`, `SetActionBindings`,
+  `ResetActionBindings` (without a name: every action) and `SaveBindings`, which the game calls when its rebinding menu
+  closes. Bindings cross the ABI as text, each followed by `'\n'` (the last one's optional on the way in; empty text
+  unbinds); the host refuses the whole list, changing nothing, when one is no binding or one the action's kind cannot use.
+  Unknown and ambiguous names, refused lists, unreadable text and a missing save directory are misuse: reported through
+  `ScriptSystem::ReportProblem`, which logs each message once per script and entity, with failure values. A rebinding
+  menu's "press a control" is the capture (host functions `InputBeginBindingCapture`, `InputPollBindingCapture`,
+  `InputCancelBindingCapture`, appended after them, with the ABI's `StrataScriptInputDevices` bits): `Input::BeginBindingCapture(InputDevices)`,
+  `PollBindingCapture` (the binding once, nullopt while it listens) and `CancelBindingCapture`. The scripts' capture is
+  `ScriptSystem::GetBindingCapture` (its `InputActions::GetCaptureId`): they poll and cancel only it, never one the editor
+  started meanwhile, and play stopping cancels it while it listens, since every action reads as up meanwhile. Devices
+  that are no combination of the three bits are misuse. Tests: `Scripting.InputActions` (the API module's
+  `InputActionScripts.cpp`); the feature scripts' `InputFeatures` rebinds, saves and resets around the simulated press,
+  and captures the mouse button pressed.
+
+### Preferences
+
+The person's preferences are the registry's *user* sections (`SettingsScope::User`): the editor's own (the external
+editor, `Editor.ExternalEditor`, and the interface, `Editor.Interface`), registered by `EditorPreferences::RegisterSections` in the editor's `Extra`
+registration (and the tests'), and any a module registers. They hold for every project and never reach a game.
+
+- **The store.** `Editor/EditorPreferences` keeps them in `<user data>/Strata/Preferences.json`
+  (`EditorPreferences::GetDefaultFile`, found with `Platform::FindUserDataDirectory`, so never in a shared temporary
+  folder): `{ "Strata": { "Format": "Preferences", "Version": 1 }, "Settings": { "<Id>": { "Version": n, "Value": ... } } }`,
+  the project file's envelope. It is read once, when the editor starts, through `Platform::ReadTrustedFile` (at most
+  64 KiB, `c_MaxFileBytes`: the preferences name a program the editor runs, so a file others could have written is not
+  read) and written through `Platform::WritePrivateFile` by its own `SettingsFileWriter`, in the background like the
+  project file. A file that cannot be read (too large, not trusted, not JSON) is ignored with a warning and replaced by
+  the next change. A later editor's file (a later format) is ignored too but left as it is, so that editor keeps its
+  preferences: `GetReadOnlyReason` (`preferences.get`'s `readOnly`) says why, and `preferences.set`, `preferences.save`
+  and `script.setExternalEditor` refuse. A stored value its section refuses keeps its stored value (its default
+  applies, the warning and `preferences.get`'s `problem` say why) and sections no registered section claims are written
+  back as they were read. `Set` validates through the section (`SettingsSection::Validate`) and refuses a change the file could not
+  hold. A failed write keeps the change in memory and is reported (an error in the log, a notification,
+  `preferences.get`'s `fileState` and `fileError`); `preferences.save` writes again, and `editor.quit` refuses meanwhile
+  unless forced ([No silent data loss](#no-silent-data-loss)). `EditorContextSpecification::PreferencesFile` names the
+  file; empty, as in tests, keeps the preferences in memory.
+- **The import.** 0.5.0 kept the external editor as the top-level `"ExternalEditor"` of
+  `<user data>/Strata/EditorSettings.json` (`EditorContextSpecification::EditorSettingsFile`), which every editor version
+  on the machine shares. While `Preferences.json` does not exist, the store imports that value once (read only, checked
+  by the section) and writes `Preferences.json` at once, so later starts read only it: a 0.5.0 editor on the same
+  machine keeps its own setting, and what it writes later changes nothing here. Nothing to import writes nothing.
+- **Commands.** `preferences.get` (Query, session results) describes every user section like `project.settings` does,
+  with `unclaimed`, `file`, `fileState`, `fileError` and `readOnly`; `preferences.set {section, value | reset: true}` (Session)
+  validates the whole value first and changes nothing when it is refused; `preferences.save` (Session, deferred) writes
+  the file and answers once it is written. Preference changes are not undo steps: they are the person's environment,
+  not the project's content (`project.setSettings` refuses a user section, `preferences.set` a project section).
+- **The window.** File > Preferences... (also from the launcher, where docked panels are not drawn) opens
+  `UI/PreferencesDialog`, a modal dialog drawn by `EditorLayer` (`EditorShell::ShowPreferencesDialog`, `editor.showDialog
+  {dialog: "preferences", section?}`) with the same list and pages as the Project Settings panel
+  ([Settings pages](#settings-pages)); its edits run `preferences.set` and apply at once.
+- **The external editor.** `ExternalEditorLauncher` reads and writes its command through the store (the section's value
+  `{ "Command": ... }`); `STRATA_EXTERNAL_EDITOR` still wins. The section checks the template's form only; whether its
+  program is there depends on the machine and the PATH the editor started with, so `script.setExternalEditor` (and the
+  External Editor page) check that when the person sets one.
+- **The interface scale.** `Editor.Interface` (`Editor/EditorInterface`, a simple section on the generic page) holds
+  `Scale`, a percentage of the automatic UI scale: `Automatic` (100%), `75%`, `90%`, `110%`, `125%`, `150%`, `175%` or
+  `200%`. Whenever the preferences' version changes (and on the first frame) `EditorLayer` gives the factor to the host
+  (`EditorHost::SetUIScaleFactor`), which gives it to `ImGuiLayer::SetContentScaleFactor`: the UI scale is the content
+  scale times the factor (clamped to `c_MinScale`..`c_MaxScale`), so the choice holds on every display, and
+  `--ui-scale`'s override (`SetContentScaleOverride`) wins over it for its session. The factor sizes the editor, not the
+  game: the game's content scale in play mode is the UI scale without it (`EditorHost::GetDisplayUIScale`,
+  `ImGuiLayer::GetDisplayUIScale`), so the person's choice does not resize a canvas of constant physical size.
 
 ## Asset pipeline
 
@@ -938,7 +1311,7 @@ short. Their full wording:
   script fields of asset type, material texture maps); importers add what their stored form does not show
   (`ImportResult::References`, e.g. a glTF mesh's materials) and mesh bounds (`Bounds`). A new asset property is found
   automatically; a new document type or a stored form with references needs `AssetDependencies::Scan` or the importer to
-  record them (each valid handle once, never the asset itself: `AssetManagerBase::NormalizeReferences`, which code that
+  record them (the project's settings name theirs through their sections: [Project settings](#project-settings)) (each valid handle once, never the asset itself: `AssetManagerBase::NormalizeReferences`, which code that
   compares scanned references with recorded ones uses too). Reads of requested assets other than scenes, prefabs and
   models prefetch their direct dependencies (only into the budgets' headroom beside what is on its way and a window of
   loads in flight, never evicting, not chaining: a finalizer must not request what an asset that arrives only prefetched
@@ -1067,8 +1440,9 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
 - Physics: `RigidBody` (velocities, forces, impulses, `Teleport`) and `Physics` (raycasts, overlaps) go through the scene
   services the scene's `PhysicsSystem` offers (`IBodyMotionQuery`, `IBodyControl`, `IPhysicsQueries`), also in `OnCreate`:
   scenes start every system before the scripts (`SceneSystem::OnRuntimeStarted`). `Physics::SetLayersCollide`,
-  `GetLayersCollide` and `GetLayerIndex` read and change the playing scene's collision layers
-  (`SceneSettings::PhysicsLayers`; physics applies a change before its next step). Contacts reach scripts as
+  `GetLayersCollide` and `GetLayerIndex` read and change the playing scene's copy of the project's collision layers
+  (`Scene::GetPhysicsLayers`, [Collision layers](#collision-layers); physics applies a change before its next step, and it
+  lasts for that scene). Contacts reach scripts as
   `OnCollisionEnter/Exit` and `OnTriggerEnter/Exit` (class descriptor callbacks taking a `StrataScriptCollision`):
   `ScriptSystem` listens to the scene's `ICollisionEventSource` while it runs and calls the scripts of both entities,
   skipping removed, disabled and not yet started instances; contacts begin only for active entities, and each instance
@@ -1100,7 +1474,14 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
 - Input: gamepads (`Input::IsGamepadConnected`, `IsGamepadButtonDown/Pressed/Released`, `GetGamepadAxis` and
   `GetGamepadStick` with dead zones) and the cursor (`Input::SetCursorMode`: Normal, Hidden, Locked for mouse look, which
   `Input::SetGameCursorMode` applies while the game has the input; play mode stopping gives it back). `Input::GetTypedText`
-  (host function `GetTypedText`) reads the frame's typed text.
+  (host function `GetTypedText`) reads the frame's typed text. The project's input actions: `Input::IsActionDown` to
+  `SaveBindings` and the binding capture, `BeginBindingCapture` to `CancelBindingCapture` (host functions
+  `InputIsActionDown` to `InputCancelBindingCapture`, [Input actions](#input-actions)). Gameplay and the game UI read every
+  control a player could want to change through input actions, not fixed keys or gamepad buttons, so players can rebind
+  it (the Third-Person sample's `Gameplay` map and the skills' examples show how; the other samples still read devices);
+  device reads stay for what no player rebinds (mouse look, text entry, a debug key). Only `InputActions` touches the
+  players' bindings file (`SaveBindings`, `LoadBindings`, `DeleteSavedBindings`): scripts' save files cannot name it and
+  editor code goes through those functions.
 - Game UI (host functions `UIGetText` to `UIIsActionDown`, then `GetUnscaledDeltaTime`, `GetRealTime` and
   `GetTypedText`, appended to ABI version 1 after `PhysicsGetLayerIndex`): `UIElement` (`Entity::GetUI`: text, image,
   color, interactability, a slider's or toggle's value, the focus) and `UI` (the focus, `IsPointerOverUI`, the UI
@@ -1121,10 +1502,13 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   `ReadSaveFile`/`ReadSaveText`, `DeleteSaveFile`, `ListSaveFiles`) to `IGameSaves` (`<user data>/<Game>/Saves` in a
   shipped game, `<project>/.strata/Saves` in the editor). Save names are checked in the engine before any path is formed
   (`SaveFiles::ValidateName`: no separators, no "..", no device names) and writes are atomic. Code that runs a game
-  in-process (tests, tools) provides both, or the calls fail and are reported.
+  in-process (tests, tools) provides both, or the calls fail and are reported, and provides `IProjectSettings` when it runs
+  a project and calls `InputActions::Update()` after its frame's input ([Input actions](#input-actions)).
 - Host function order: the character controller, gamepad, cursor, window, save file and collision layer functions
   (`CharacterMove` to `PhysicsGetLayerIndex`) are appended to ABI version 1 after the Animator functions, then wave 4's
-  world streaming functions (`WorldRequestCellsAround` to `WorldIsLayerEnabled`).
+  world streaming functions (`WorldRequestCellsAround` to `WorldIsLayerEnabled`), then wave 6's input action functions
+  (`InputIsActionDown` to `InputSaveBindings`, then the capture's `InputBeginBindingCapture` to
+  `InputCancelBindingCapture`).
 - World streaming: `World::RequestCellsAround` (a `WorldCellRequest`, released with `Release`), `IsLoadedAround`,
   `SetLayerEnabled` and `IsLayerEnabled` (`StrataScript/World.h`) go through the scene service `IWorldStreaming` the
   World system offers in every running scene; in a scene that streams no world (`IWorldStreaming::IsStreaming` false)
@@ -1519,9 +1903,11 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `OnUpdate`. A button clicks on a release over the button the press started on, or on Submit while focused; disabled
   selectables (`Interactable` off, or inactive) never hover, press, focus or raise events, but still block what is under
   them.
-- Keyboard and gamepad navigation reads the fixed action set `Input/UIActions.h` (`c_UIActionMap`: Submit, Cancel and the
-  four directions on keys, the d-pad and the left stick, with repeat after `c_RepeatDelay` then every `c_RepeatInterval`
-  and stick hysteresis). `Automatic` navigation picks the selectable ahead with the lowest `along + 2 x |across|` between
+- Keyboard and gamepad navigation reads the UI map of the game's input actions ([Input actions](#input-actions)):
+  `UI/Submit`, `UI/Cancel` and the four directions, by their qualified names (a game's own `Left` never interferes),
+  bound by default to keys, the d-pad and the left stick and rebindable like any action. `UIActionState`
+  (`Input/UIActions.h`) adds the repeat, after `c_RepeatDelay` then every `c_RepeatInterval` on unscaled time, and
+  updates also while no canvas exists, so a press is never reported after its update. `Automatic` navigation picks the selectable ahead with the lowest `along + 2 x |across|` between
   centers (screen pixels; ties keep draw order); `Explicit` uses the neighbours; `None` is never navigated to or from.
   The first Submit or direction without a focus focuses the topmost input canvas's `FirstSelected`, else its top-left
   selectable. A focused slider steps along its direction by `KeyboardStep` (0: a tenth of the range).
@@ -1567,7 +1953,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     selected row keeps the accent under the mouse.
   - Sizes are relative to the font (multiples of `ImGui::GetFontSize()` or `GetFrameHeight()`, or the style's sizes),
     never fixed pixels above 16, so the UI follows the UI scale (the window's content scale less what window coordinates
-    in points apply already, `ImGuiLayer::ToUIScale`, or `--ui-scale`). The default layout gives the side panels at least
+    in points apply already, `ImGuiLayer::ToUIScale`, times the person's `Editor.Interface` scale, or `--ui-scale`). The default layout gives the side panels at least
     16 (Hierarchy) and 18 (Inspector) text heights at large UI scales, each at most 30% of the width. The scan
     judges every value passed to size-taking calls by the product it is part of, and follows names that hold sizes
     (`const float width = 200.0f` used later is found too). `UI::ApplyTheme` sets every size ImGui scales to an even
@@ -1592,7 +1978,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     widget records its rectangle in `UI::ItemProbe` under its id.
   - UI tests draw the real `EditorLayer` without a window or GPU through `StrataTests/src/Editor/ImGuiHarness.h` (a fake
     `EditorHost`, ImGui's texture requests honored without a renderer, injected input and typed text, a clipboard of its
-    own, `ClickItem` by probe key) and `HarnessEditor.h` (an editor on that harness, `ReplaceText` for kit text fields).
+    own, `ClickItem` by probe key) and `HarnessEditor.h` (an editor on that harness, `ReplaceText` for kit text fields,
+    and a temporary directory as `EditorOptions::DefaultProjectLocation`, so the project dialogs never read the user's
+    projects folder).
   - Idle throttling: a windowed editor runs at the full rate while anything happens (input in the last 0.5 s, a running
     unpaused scene or pending steps, loading assets, pending commands, an automation request in the last second, a
     script build, a panel's `IsAnimating`) and otherwise at 30 frames per second (10 without the focus), through
@@ -1633,10 +2021,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     closed. Widgets drawn every frame write tooltips that take work (formatted statistics) only while they show
     (`UI::IsTooltipDue`). `editor.showPanel {panel, scripts?, search?}` (registered by
     `EditorLayer`, like `editor.showDialog {dialog: "export" | "newProject" | "openSample" | "recovery" | "newScript" |
-    "externalEditor" | "about"}`, the commands of the window itself) opens a docked panel and brings it to the front, so
-    agents can show the person what they look at (`scripts`: the Content Browser's Scripts root or its asset folders;
-    `search`: the Hierarchy's search text, as if typed, e.g. a world's `l:Props`; `UI::SearchField`'s `reload` makes a
-    field being typed in show it); it fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
+    "preferences" | "externalEditor" | "about", section?}`, the commands of the window itself) opens a docked panel and
+    brings it to the front, so agents can show the person what they look at (`scripts`: the Content Browser's Scripts
+    root or its asset folders; `search`: the Hierarchy's search text, as if typed, e.g. a world's `l:Props`;
+    `UI::SearchField`'s `reload` makes a field being typed in show it); it fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
     stays open through a layout reset and the saved open states read at the first frame, and is asked for again until its
     tab shows; while a modal dialog waits for the person it opens behind it (focusing it would close the dialog). Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
     icons), and check panels with `ImGuiHarness::CountFallbackGlyphs`.
@@ -1707,7 +2095,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   state is `Failed` (`EditorCommandResult::Fail`). Automation reports them with different error codes.
 - **Commands wait for the asset scan.** A project opened in the background (the editor's interactive and automation
   runs: `EditorContextSpecification::ImportInBackground`) is open at once while its assets are scanned
-  (`EditorAssetManager::BeginScan`), and its start scene opens after the scan. Until both are done
+  (`EditorAssetManager::BeginScan`), and its start scene opens after the scan (and after the migration of a project saved
+  by 0.5.0, [Collision layers](#collision-layers)). Until all are done
   (`EditorContext::IsWaitingForAssets`), `EditorCommandRegistry::Execute` defers every Edit command and every command
   marked `EditorCommand::WaitsForAssets` before its handler runs: a new command that answers from the whole asset
   registry (asset, material, prefab and animation queries, the export, recovery) sets the flag, and joins
@@ -1724,20 +2113,32 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `project.create`, `project.close`, `project.openSample`, `editor.quit`) starts with the shared guard
   `CommandUtils::CheckUnsavedChanges`: while the edited scene has unsaved changes (also while a copy of it plays) it fails
   (`Failed`, naming the scene and how to proceed) and changes nothing, unless `force: true`; results report
-  `discardedChanges`. A new command that replaces the scene uses the same guard. The UI keeps asking (the unsaved-changes
+  `discardedChanges`. A new command that replaces the scene uses the same guard, with the `DiscardScope` it has: one that
+  releases the project (`DiscardScope::Project`: the project commands above and `editor.quit`) also fails while the
+  project file has unwritten settings (its last write failed: [Project settings](#project-settings)), naming the file,
+  its error and `project.save`, and reports `discardedSettings`; one that keeps the project open (`DiscardScope::Scene`)
+  loses no settings and is not refused for them. Quitting (`DiscardScope::Editor`: `editor.quit`) also fails while the
+  preferences file has unwritten preferences ([Preferences](#preferences)), naming `preferences.save`, and reports
+  `discardedPreferences`. The UI asks before releasing the project with `EditorShell::RequestReleaseProject`: after the
+  question about the scene, a question about the unwritten settings offers Retry (`project.save`, then the action), Don't
+  Save and Cancel (changes of the scene made while it waits are asked about before the action runs); before quitting
+  with `EditorShell::RequestQuit`, which then asks the same about unwritten preferences (Retry runs `preferences.save`). The UI keeps asking (the unsaved-changes
   dialog, `EditorShell::RequestDiscardChanges`) and passes `force` once the person has answered, for the changes they were
   asked about only: the question's Don't Save asks again when the scene changed while it waited, a dialog that runs the
   command later asks again when the scene changed since (`UndoStack::GetVersion`), a modal dialog asks over itself
   (`EditorShell::DrawDiscardQuestion` between its `BeginModal` and `EndModal`), and a recorded `force` is never repeated
-  for the person (the Activity panel's Re-run asks).
-- **Saves are never lost and never hold a frame:** the edited scene and every engine-native document a command or a
+  for the person (the Activity panel's Re-run asks, through `RequestReleaseProject` for a command that releases the
+  project and `RequestQuit` for `editor.quit`).
+- **Saves are never lost and never hold a frame:** the project file goes through `Editor/SettingsFileWriter`
+  ([Project settings](#project-settings)), and the edited scene and every engine-native document a command or a
   panel writes as a whole go through `Editor/DocumentSaver` (`EditorContext::BeginSaveScene`, `BeginSaveSceneAs`; world
   cells too), which serializes, scans and writes on a background job and publishes on the main thread; never serialize a
   document on the main thread for a save (the blocking `SaveScene`/`SaveSceneAs` are for tools, tests and a template's
   start scene). `scene.save` and `scene.saveAs` take `wait` (default true: they answer once the file is published; false:
   at once, with `saveId`), and `editor.status` lists `saving`. The commands that replace the edited scene, close the
   project or quit wrap their handlers in `CommandUtils::AfterSaves`, so they defer while saves are in flight and then
-  decide as above (`force` never discards a save in flight); a new command of that kind does the same and, like
+  decide as above (`force` never discards a save in flight; `EditorContext::HasSavesInFlight` counts the project file's
+  writes too); a new command of that kind does the same and, like
   `scene.save` and `scene.saveAs`, is registered with `MayDefer` (`editor.batch` refuses it). UI code saves
   through the command runner (the result comes in a later frame), `RequestDiscardChanges` waits for saves in a saving
   dialog, and `EditorContext::ReleaseProject` finishes every save before the project goes.
@@ -1770,7 +2171,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 - Undo works on entity snapshots: a `SceneEditTransaction` captures the entities an edit touches
   (`Track`, `TrackSubtree` before changing or deleting them, `TrackCreated` after creating them) and
-  `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded. Continuous edits merge
+  `EditorContext::CommitEdit` records the difference. Scene edits while playing are not recorded (they change the running
+  copy); steps of the project's settings and of assets are recorded in play too and undone after it, as Undo and Redo
+  refuse while playing. Continuous edits merge
   into one step (`EditorAction::MergeWith`); a merged step that ends where it started (`IsNoOp`) is dropped. Capturing
   reads cached sibling positions and applying a step removes and places entities in batches (`Scene::DestroyEntities`,
   `Scene::PlaceEntities`), so edits of many entities in long sibling lists stay linear. Commands that act on several
@@ -1806,7 +2209,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - `project.export` writes a playable game outside the project in the background (`GameExport`; the command answers when
   it finished, so command scripts that export need frames: `--quit-after-commands`): the asset pack (`<Game>.stpak`,
   ordered by first use; `prune` leaves out what neither the scenes nor `Export.AlwaysInclude` use and lists it in
-  `excludedAssets`), the script module, the manifest (`<Game>.stgame`, start scene, script module and window settings)
+  `excludedAssets`), the script module, the manifest (`<Game>.stgame`, start scene, script module, window settings, the
+  game's identity and the project's settings sections: [Project settings](#project-settings)), the game's icon
   and the runtime executable renamed after the game. It checks what it can before it starts (a usable directory outside
   the project, among others) and fails at once otherwise; the editor stays editable meanwhile, and a document saved
   during the export that references what its plan did not hold fails it, naming the document (export again).
@@ -1817,6 +2221,70 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   dialog (`UI/ExportDialog`: File > Export Game..., the toolbar's Export button), which also picks the loading scene and
   shows and cancels exports that commands and agents started. CTest exports a small game
   (`StrataEditor --no-gpu`) and runs it headless; `StrataEditor.Tetris` also exports Tetris pruned and runs it.
+- **The game's identity** (`ProjectGameInfo`, set with `project.setGameInfo`: [Project settings](#project-settings))
+  travels in the version-5 manifest (`Title`, the project's name when it has none, `Version`, `Company`, `Copyright`,
+  `Icon`). The manifest's `Name` stays the project's name: it keys the game's log and save directories, so a new title or
+  company never moves players' saves. With an icon, the export makes `<Game>.png` next to the manifest, whether or not the
+  pack holds the texture: `Editor/GameIcon` reads the texture's source file (at most 16 MiB; `GameIcon::FindSource`
+  refuses sub-assets and formats other than PNG, JPEG, TGA and BMP), decodes it with `ImageReader` (at most 4,096 pixels a
+  side), centers it on transparent pixels to make it square and resizes it with stb_image_resize2 in linear light with
+  premultiplied alpha to 16, 20, 24, 28, 32, 40, 48, 56, 64 and 256 pixels (the brand icon's sizes; the 256-pixel image
+  is the PNG). A source under 256 pixels is enlarged with a warning (`project.export`'s `warnings`, the Export dialog's
+  outcome, the log); one that does not decode fails the export before the pack is written. The runtime presents the game
+  from its manifest before anything starts (`Runtime/GamePresentation`): the window's title and fatal-error dialogs show
+  the title, the log's first line names title and version, the window icon is the manifest's icon file
+  (`WindowSpecification::IconPath`: X11 and Windows show it; on macOS, whose windows have no icons of their own, it
+  becomes the Dock's icon while the game runs, below; Wayland windows take the desktop entry's), and the
+  window's application id is the executable's name (`WindowSpecification::AppId`: X11's `WM_CLASS`, Wayland's app id).
+  `StrataRuntime.Identity` runs a SmokeGame exported with an identity and checks its log and icon.
+- **The desktop entry on Linux** (`Editor/DesktopEntry`): Linux desktops list applications by desktop entries, so a Linux
+  host's export with the runtime writes `<Game>.desktop` next to the game: `Type=Application`, `Name` (the title), `Exec`
+  and `Icon` (the export's absolute paths), `StartupWMClass` (the executable's name, the class the runtime gives its
+  windows), `Terminal=false` and `Categories=Game;`. Values are escaped as the specification's strings (`\s` for spaces
+  at either end, `\n`, `\t`, `\r`, `\\`) and `Exec`'s program is quoted (`"`, `` ` ``, `$` and `\` escaped, `%` doubled),
+  so any path reads back; an entry that cannot be written (a path that is not UTF-8) is left out with a warning in the
+  export's result. Installing it (`~/.local/share/applications`) is the person's, and moving the folder means editing
+  it (the release README says so). The text is platform-independent: `Editor.Export.DesktopEntry` reads it back on every
+  platform, and `Editor.Export` checks that only Linux hosts write it.
+- **The Dock icon on macOS** (`Platform/GLFW/GLFWApplicationIcon`): exports are bare executables (their ad-hoc signature
+  must not change, and an application bundle is a later wave's), so they have no icon of their own. `GLFWWindow::SetIcon`
+  gives the largest of its images (at most 1,024 pixels) to `SetApplicationIcon`, which makes it `NSApplication`'s icon
+  image for as long as the program runs; the editor's Dock icon is the 256-pixel strata mark that way. It lives in the App
+  layer, which links AppKit and the Objective-C runtime on Apple, so programs without a window (StrataCLI) load neither.
+  It includes only `<objc/runtime.h>` and `<objc/message.h>`, no framework header and no Objective-C++ (CompatLint's GCC
+  compiles it), and casts `objc_msgSend` to the exact signature of each call: arm64 passes arguments by that signature.
+  Finder's icon and version need the bundle.
+- **Windows executables' resources** (`Editor/PEResources`): exported games copy the prebuilt runtime, so the game's
+  version information and icon are written into the copy by engine code, without the Win32 API, which builds and is tested
+  on every platform. On Windows the export reads the runtime, stamps it in memory (`PEResources::StampGame`: the title,
+  version, company and copyright of the manifest, the project's name, `<Game>.exe` and the icon's images) before it
+  writes the pack, and writes the game's executable once at the end; a runtime it cannot stamp fails the export with the
+  reason before anything is written. The subsystem, the manifest and the code stay, so a game without an icon keeps the
+  strata mark (`StrataRuntime.Icon`); `StrataRuntime.GameIcon` (`--strata-test-helper=check-icon <exe> <png>`: every
+  image against `GameIcon`'s conversion of the PNG) and `StrataRuntime.VersionInfo` (`check-version`, through
+  `GetFileVersionInfoW`) check the SmokeGame exported with an identity, and `StrataRuntime.Smoke` runs a stamped game.
+  `PEResources::Read` checks everything it reads of a PE32+ image (AMD64 or ARM64): the MZ header and
+  `e_lfanew`, the PE signature, the COFF header, the optional header and its data directory count, the section table
+  within `SizeOfHeaders`, each section's data within the file and the resource tree (three levels, each directory reached
+  once, entry counts, names and data within the resource section); any violation is an error naming the field, nothing
+  asserts. `PEResources::Write` rebuilds the resource section in place from a list of resources (directories, data
+  entries, names, then the data on 8-byte boundaries, entries in the loader's order: names, then numbers); the section
+  after it moves by the growth with its file offset, RVA and data directory entry, and `SizeOfImage`,
+  `SizeOfInitializedData`, the resource directory's size and the checksum follow. The supported layout is the linker's:
+  only the base relocations (`.reloc`) may follow `.rsrc`, they may name only RVAs before it (so moving `.reloc` changes
+  none of them), and no other data directory may lie in or after it. Anything else fails with the
+  reason instead of writing a damaged executable: another section after `.rsrc`, data after the last section (overlay), a
+  certificate table (a signed runtime: sign the game after exporting it). `PEResources::StampGame` replaces `RT_VERSION`
+  1 with the game's `VS_VERSIONINFO` (`FILEVERSION` and `PRODUCTVERSION` from `Version`, missing parts 0; a US English
+  Unicode string table with `CompanyName` and `LegalCopyright` when set, `FileDescription` and `ProductName` (the title),
+  `FileVersion`, `ProductVersion`, `InternalName` (the project's name) and `OriginalFilename`, converted from UTF-8 to
+  UTF-16; the translation 0x409, 1200) and, with an icon, the group `GLFW_ICON` (Explorer's icon and, through GLFW, the
+  window's) and the `RT_ICON` images only it names, by one image per size (32-bit bitmaps with an AND mask, the 256-pixel
+  one a PNG) under the lowest ids no kept image has. Every other resource, `CMake/Strata.manifest`'s `RT_MANIFEST` above
+  all, and every other byte stay; stamping a stamped image again gives the same bytes. `Editor.Export.ExecutableResources`
+  tests it on images of `Tests::BuildTestPEImage` (`StrataTests/src/Editor/TestPEImage.h`: `.text`, `.rsrc` and `.reloc`
+  as the linker lays them out, its own resource tree layout) and, on Windows, stamps the built runtime, reads it back with
+  `GetFileVersionInfoW` and the resource functions and runs it; its `.Sweep` truncates and flips the headers and the tree.
 
 ### Play mode and scene switches
 
@@ -1873,9 +2341,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `script.setExternalEditor {command}` (`Editor/ExternalEditor`:
   a template such as `code -g {file}:{line}:{column}`, split into a program and arguments and started without a shell;
   the program is a path or a name found in PATH, `Platform::FindProgram`, and one that is not there is refused; batch
-  files are refused, except VS Code's launcher in PATH, which starts `Code.exe` beside it; the user's setting in
-  `<user data>/Strata/EditorSettings.json`, written private and read
-  only when trusted, `EditorContextSpecification::EditorSettingsFile`; `STRATA_EXTERNAL_EDITOR` overrides it; projects
+  files are refused, except VS Code's launcher in PATH, which starts `Code.exe` beside it; the user's setting, kept in
+  their preferences as the `Editor.ExternalEditor` section ([Preferences](#preferences)); `STRATA_EXTERNAL_EDITOR`
+  overrides it; projects
   cannot name one, as a shared project must not choose what runs; without one, the default application), `script.add
   {entity, class, fields}`, `script.remove {entity, class}`, `script.setField {entity, class, field, value}` (null
   resets to the default) and `script.get {entity, class?}` (the field values: the live instances' while playing, which
@@ -1884,8 +2352,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   one. Script edits are undoable (`ScriptEdit`, shared with the inspector's Script drawer) and reach the live
   instances while playing. The UI builds with Scripts > Build Scripts (Ctrl+B) or the toolbar, and has Scripts > New
   Script... (`UI/ScriptDialogs`, also `EditorShell::ShowNewScriptDialog` for panels; it starts a build, as the Inspector
-  offers the loaded module's classes), Open Scripts Folder, External Editor... (the program a command starts, and the
-  editors found on the machine, `ExternalEditor::FindChoices`) and Show Problems. `UI/ScriptBrowser` is the view of the
+  offers the loaded module's classes), Open Scripts Folder, External Editor... (the Preferences dialog's External Editor
+  page, `ExternalEditorPage`: the program a command starts, and the editors found on the machine,
+  `ExternalEditor::FindChoices`) and Show Problems. `UI/ScriptBrowser` is the view of the
   script sources a panel draws (the Content Browser's Scripts root, below the asset folders, with New Script... also in the
   browser's New menu): the files with their classes, listed on an I/O thread when it
   is drawn and every second while it is, never while it is not (`ScriptSourceList`, whose version changes only with the
@@ -1958,7 +2427,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   exits 3 with the usage, and so does a value an option does not take (`--frames abc`, `--frames 0`: `CheckValues`; the
   table of arguments is `c_Arguments` in `EditorApplication.cpp`: add new ones there; the runtime's is in
   `RuntimeApplication.cpp`, and both check and print theirs through `Core/CommandLineOptions`). `--ui-scale <factor>` draws the
-  UI at a fixed scale instead of the display's (e.g. 1 to check it at 100% on a 150% display), `--layout <file>` keeps
+  UI at a fixed scale instead of the display's and the person's preference (e.g. 1 to check it at 100% on a 150%
+  display), `--layout <file>` keeps
   the panel layout in that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers
   ImGui's demo window (Help menu) for UI work.
   Without `--frames`, a headless editor runs until `editor.quit` (which, like the other commands that replace the scene,
@@ -2030,11 +2500,13 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   property name; `InspectorPanel::DrawProperties` calls it in place of the generic widget, after the same label, override
   mark and menu): `TAAPreset`'s drawer runs one `component.set` per choice, Sharp and Original setting the preset alone
   and Custom also where it starts from (`GetTemporalAntiAliasingCustomStart`: the preset in effect while the tunables
-  hold a table, else the tuning), unless the selected entities would start from different values. It shows the scene's settings (gravity, the fixed step, the physics
-  world's capacities and the collision layers: names and a compact matrix, long names elided; bodies and controllers
-  choose their layer among layer 0 and the named ones; how many entities sub-scenes create per frame) and sky (with an
-  "Extract Sun" button for environment-map skies, an "Add Height Fog" button while the scene has no height fog, and "Bake Reflection Probes" while it has probes; a
-  probe's own section has Bake, both running `lighting.bakeProbes` through the runner) with nothing selected, in sections that start closed with a summary on their headers
+  hold a table, else the tuning), unless the selected entities would start from different values. It shows the scene's
+  settings (gravity, the fixed step, the physics world's capacities, how many collision layers the project names with a
+  link to their page, bodies and controllers choosing their layer among layer 0 and the named ones; how many entities
+  sub-scenes create per frame) and sky (with an "Extract Sun" button for environment-map skies, an "Add Height Fog"
+  button while the scene has no height fog, and "Bake Reflection Probes" while it has probes; a probe's own section has
+  Bake, both running `lighting.bakeProbes` through the runner) with nothing selected, in sections that start closed with
+  a summary on their headers
   (`UI::SectionHeader`'s summary: live widgets cost frame time while they are drawn); the
   Asset tab edits materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings
   (Apply runs `asset.setImportSettings` through the runner; why the last import failed, and its warnings, show above
@@ -2141,9 +2613,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 ### Edits while playing and value ranges
 
-- Mutating commands report a `warning` in their result while the scene is playing (and set
+- Mutating commands of the scene report a `warning` in their result while the scene is playing (and set
   `EditorCommandResult::RunningCopy`, which replays read): such changes apply
-  to the running copy and are discarded by `play.stop`. Commands whose only target is the running game set
+  to the running copy and are discarded by `play.stop`. Changes of the project's settings are the project's and stay, so
+  they report neither ([Project settings](#project-settings)). Commands whose only target is the running game set
   `RunningCopy` without the warning, which would only repeat what they are for: `scene.loadAdditive`,
   `scene.unloadAdditive` and, while playing, `script.add`, `script.remove` and `script.setField` (live scripts). Unknown or missing parameters are errors, and so are values out of
   a property's range (`PropertyInfo::IsInRange`, checked by `CommandUtils::ApplyComponents` for `component.set`,
@@ -2388,7 +2861,18 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   source pressing a key the other holds is no transition) and reach the game even while the viewport has no focus. Holds
   belong to commands (`SimulatedInput`, owned by `EditorContext`): a tap ends only its own hold, overlapping holds of a
   button keep it down until the last ends, a release ends every hold of its button, and `input.releaseAll` ends all of
-  them and drops presses still queued (`Input::ReleaseAllSimulated`).
+  them and drops presses still queued (`Input::ReleaseAllSimulated`, `InputActions::ReleaseAllSimulated`).
+- **`input.action {action, mode: tap|press|release, steps | seconds, value, wait}`** holds an input action directly,
+  whatever its bindings (`SimulatedInput::HoldAction`, `InputActions::SimulateAction`): named as scripts name it
+  (qualified or unambiguous, reported as the qualified name), down from the next input frame with its value (a Button's
+  1, an Axis' `[x, 0]`, default `[1, 0]`; a Vector2's `[x, y]`, required, of length at most 1, as its bindings give; a
+  value that does not fit the kind is refused). An action has one value, so like a gamepad axis a new hold replaces the
+  one before (ending it, interrupted when it was a tap) without letting the action go; it reads as up while its map is
+  disabled or a capture listens. Simulated keys reach actions through their bindings without it. `input.state` lists the
+  held actions (`simulatedActions`, also in every answer's `held`), every action as the game reads it (`actions: [{action,
+  map, kind, down, value}]`, in the set's order, also in Edit mode), the maps' enables (`maps`), the players' bindings
+  that replace the project's (`playerBindings`, `EditorContext::GetPlayerBindings`) and whether a binding capture
+  listens (`capture`).
 - **Durations count fixed steps**, the game's own time base (`EditorContext::GetInputStepCount`: its fixed steps, plus
   each frame a running game updates at time scale 0 without a step, so that a pause menu's buttons can be clicked; a
   paused game's taps still wait for its next step), never frames: a tap of
@@ -2406,8 +2890,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - **`input.sequence {events, steps, observe, keepHeld, wait}`** (`Editor/InputSequence`, owned and driven by
   `EditorContext` after the game's update every frame) plays a script of input timed in fixed steps: it pauses the game
   (resumed at the end if it ran) and runs exactly one step per frame, giving each step its events (`key`, `mouseButton`,
-  `gamepadButton` with `action` and a tap's `steps`; `gamepadAxis`; `mouseMove`; `scroll`; `command`: any `input.*`
-  command, run with `wait: false`), so the game ends in the same state whatever the frame rate (`Editor.Input` compares
+  `gamepadButton` with `action` and a tap's `steps`; `gamepadAxis`; `mouseMove`; `scroll`; `action`: an input action with
+  `mode`, a tap's `steps` and `value`, as `input.action` takes them, where `action` names the input action because no
+  button names the event; `command`: any `input.*` command, run with `wait: false`), so the game ends in the same state whatever the frame rate (`Editor.Input` compares
   frames of 1, 16.7 and 50 ms bit for bit; CTests `StrataEditor.InputSequence` and `InputSequenceWindowed` walk a character
   exactly 1.5 m with a 30-step W through the real editor, headless and in a window). `observe` samples
   component properties, script fields or world transforms every few steps and at the end. Its holds are its own, released
@@ -3422,9 +3907,13 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   (`scene.`, `entity.`, `component.`, `prefab.`, `selection.`, `edit.`, `lighting.`), `assets` (`asset.`, `material.`, `project.`),
   `play` (`play.`, `input.`, `audio.`: game-ui's `input.click` and `input.type` too), `scripts`, `animation`, `viewport`
   (`viewport.`, `camera.`), `streaming` (`asset.stats`, `asset.setBudget`), `perf` (`editor.perf`), `editor` (`editor.`,
-  `log.`), `ui` (`ui.create`, `ui.layout`, `ui.hitTest`) and `world` (`world.`, `physics.`). Exact names win over
+  `log.`), `ui` (`ui.create`, `ui.layout`, `ui.hitTest`), `world` (`world.`, `physics.`) and `settings` (the project's
+  settings: `project.settings`, `project.setSettings`, `project.setCollisionLayers`, `project.setGameInfo`, `project.save`, the project's other
+  commands staying in `assets`; the input actions, `inputActions.`;
+  and the preferences, `preferences.`). Exact names win over
   prefixes; a group the table does not know gets a toolset named after it, but a new built-in group goes into the table
-  (`CLI.McpToolsets` checks that every command maps to a toolset it names, and what the `ui` and `play` toolsets hold).
+  (`CLI.McpToolsets` checks that every command maps to a toolset it names, and what the `ui`, `play` and `settings`
+  toolsets hold).
   `--toolsets <a,b>|all` picks them at start, the generic tool `strata_toolsets {enable, disable}` while it runs (the
   client hears `notifications/tools/list_changed`), `strata_describe` lists the toolsets, a toolset's commands (one line
   each) or one command's full description and schema, and `strata_call` runs any command. Tools of commands outside the
@@ -3484,7 +3973,10 @@ project and then imported. Each sample has:
   once the start scene looks right; the launcher shows it), and optionally up to three PNGs in `Screenshots/` (3 MB
   together) that the README shows;
 - an entry in `Samples.json` (one or two sentences for people) and a CTest on `StrataTests/Editor/SampleProject.cmake`
-  (label `package`) that plays it by its command script, exports it in full and pruned and runs both games headless.
+  (label `package`) that plays it by its command script, exports it in full and pruned and runs both games headless;
+- the game's identity (`project.setGameInfo`): its title, a version and `Assets/Icon.png`, a 256 x 256 `viewport.capture`
+  of the sample imported as a texture and credited as a render of it (`Strata`). Captures of a world need its cells
+  loaded around the view first (`world.loadCells`). Exports carry them ([Exporting games](#exporting-games)).
 
 Assets made by others are CC0 or CC-BY 4.0 with the attribution it asks for; anything whose license is unclear stays
 out. Downloads are untrusted data: each goes into a new, empty scratch directory, scripts that inspect or trim them run

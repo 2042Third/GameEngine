@@ -1,13 +1,20 @@
 #include <doctest/doctest.h>
 
 #include "Physics/PhysicsTestUtils.h"
+#include "Strata/Core/EngineServices.h"
+#include "Strata/Core/ProjectSettings.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/PhysicsLayerSettings.h"
+#include "Strata/Scene/ProjectCollisionLayers.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "TestHelpers.h"
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -93,33 +100,58 @@ TEST_SUITE("Physics.Layers")
 		CHECK(layers.Names[1] == "Player");
 	}
 
-	TEST_CASE("Layer names and the matrix round trip through scene files")
+	TEST_CASE("Layers round-trip through the project section (PhysicsLayerSettings::ToJson/FromJson), and saved scenes store none")
 	{
-		Scene scene("Layers");
-		PhysicsLayerSettings& layers = scene.GetSettings().PhysicsLayers;
+		PhysicsLayerSettings layers;
 		layers.Names[1] = "Player";
 		layers.Names[30] = "Debris \xE2\x9C\x93";
 		layers.SetCollide(1, 30, false);
 		layers.SetCollide(30, 30, false);
 		layers.SetCollide(0, 5, false);
 
-		const nlohmann::json json = SceneSerializer::Serialize(scene);
-		const nlohmann::json& stored = json["Scene"]["Settings"]["PhysicsLayers"];
+		const nlohmann::json stored = layers.ToJson();
 		CHECK(stored["Names"] == nlohmann::json { { "1", "Player" }, { "30", "Debris \xE2\x9C\x93" } });
 		CHECK(stored["NoCollisions"] == nlohmann::json::array({ { 0, 5 }, { 1, 30 }, { 30, 30 } }));
+		std::vector<std::string> problems;
+		CHECK(PhysicsLayerSettings::FromJson(stored, &problems) == layers);
+		CHECK(problems.empty());
+		CHECK(PhysicsLayerSettings().ToJson() == nlohmann::json { { "Names", nlohmann::json::object() }, { "NoCollisions", nlohmann::json::array() } });
+		CHECK(PhysicsLayerSettings().IsDefault());
+		CHECK_FALSE(layers.IsDefault());
 
-		Scene loaded;
+		// The section validates through the same reader and stores the canonical form; anything else is refused.
+		const SettingsSection section = ProjectCollisionLayers::MakeSection();
 		std::string error;
+		const nlohmann::json unordered = { { "Names", { { "30", "Debris \xE2\x9C\x93" }, { "1", "Player" } } },
+			{ "NoCollisions", nlohmann::json::array({ { 30, 1 }, { 5, 0 }, { 30, 30 }, { 0, 5 } }) } };
+		const std::optional<nlohmann::json> valid = section.Validate(unordered, 1, &error);
+		REQUIRE_MESSAGE(valid, error);
+		CHECK(*valid == stored);
+		CHECK(section.GetDefault() == PhysicsLayerSettings().ToJson());
+		for (const nlohmann::json& invalid : { nlohmann::json(5), nlohmann::json { { "Names", { { "1", "A" }, { "2", "a" } } } },
+			nlohmann::json { { "Names", { { "01", "Leading Zero" } } } }, nlohmann::json { { "NoCollisions", nlohmann::json::array({ { 0, 32 } }) } },
+			nlohmann::json { { "Names", nlohmann::json::object() }, { "Extra", true } } })
+		{
+			CAPTURE(invalid.dump());
+			error.clear();
+			CHECK_FALSE(section.Validate(invalid, 1, &error));
+			CHECK_FALSE(error.empty());
+		}
+
+		// A scene, saved, stores no layers: they are the project's. A copy (what play mode runs) keeps its working copy.
+		Scene scene("Layers");
+		scene.GetPhysicsLayers() = layers;
+		const nlohmann::json json = SceneSerializer::Serialize(scene);
+		CHECK_FALSE(json["Scene"]["Settings"].contains("PhysicsLayers"));
+		Scene loaded;
 		std::vector<std::string> warnings;
 		REQUIRE_MESSAGE(SceneSerializer::Deserialize(loaded, json, &error, &warnings), error);
 		CHECK(warnings.empty());
-		CHECK(loaded.GetSettings().PhysicsLayers == layers);
-		CHECK(SceneSerializer::Serialize(loaded) == json);
-
-		// A copy (what play mode runs) keeps them.
+		CHECK(loaded.GetPhysicsLayers() == PhysicsLayerSettings());
+		CHECK_FALSE(loaded.GetStoredPhysicsLayers().has_value());
 		Ref<Scene> source = CreateRef<Scene>();
-		source->GetSettings().PhysicsLayers = layers;
-		CHECK(Scene::Copy(source)->GetSettings().PhysicsLayers == layers);
+		source->GetPhysicsLayers() = layers;
+		CHECK(Scene::Copy(source)->GetPhysicsLayers() == layers);
 	}
 
 	TEST_CASE("Scenes saved before layer settings load with every layer colliding, and invalid entries are reported")
@@ -129,7 +161,8 @@ TEST_SUITE("Physics.Layers")
 		std::string error;
 		REQUIRE_MESSAGE(SceneSerializer::Deserialize(old, MakeSceneDocument({ { "FixedTimestep", 0.02 } }), &error, &warnings), error);
 		CHECK(warnings.empty());
-		CHECK(old.GetSettings().PhysicsLayers == PhysicsLayerSettings());
+		CHECK(old.GetPhysicsLayers() == PhysicsLayerSettings());
+		CHECK_FALSE(old.GetStoredPhysicsLayers().has_value());
 
 		// Each invalid entry is skipped with a warning; the valid ones load.
 		const nlohmann::json invalid = { { "PhysicsLayers", {
@@ -141,7 +174,10 @@ TEST_SUITE("Physics.Layers")
 		for (const std::string& warning : warnings)
 			reported += warning + '\n';
 		INFO(invalid.dump(), '\n', reported);
-		const PhysicsLayerSettings& layers = scene.GetSettings().PhysicsLayers;
+		// What a 0.5.0 document stores is still read (and becomes the working copy where no project replaces it).
+		REQUIRE(scene.GetStoredPhysicsLayers().has_value());
+		CHECK(*scene.GetStoredPhysicsLayers() == scene.GetPhysicsLayers());
+		const PhysicsLayerSettings& layers = scene.GetPhysicsLayers();
 		CHECK(layers.Names[1] == "Player");
 		CHECK(layers.Names[2].empty());
 		CHECK(layers.Names[3].empty());
@@ -158,7 +194,7 @@ TEST_SUITE("Physics.Layers")
 			warnings.clear();
 			Scene other;
 			REQUIRE_MESSAGE(SceneSerializer::Deserialize(other, MakeSceneDocument({ { "PhysicsLayers", value } }), &error, &warnings), error);
-			CHECK(other.GetSettings().PhysicsLayers == PhysicsLayerSettings());
+			CHECK(other.GetPhysicsLayers() == PhysicsLayerSettings());
 			CHECK(warnings.size() == 1);
 		}
 	}
@@ -169,7 +205,7 @@ TEST_SUITE("Physics.Layers")
 		CreateGround(scene); // Layer 0
 		Entity ghost = CreateBoxAbove(scene, "Ghost", 0.0f, 4);
 		Entity solid = CreateBoxAbove(scene, "Solid", 3.0f, 5);
-		scene.GetSettings().PhysicsLayers.SetCollide(0, 4, false);
+		scene.GetPhysicsLayers().SetCollide(0, 4, false);
 
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
@@ -193,27 +229,27 @@ TEST_SUITE("Physics.Layers")
 		StepScene(scene, 60);
 		REQUIRE(GetWorldPosition(scene, box).y == doctest::Approx(0.5f).epsilon(0.03));
 
-		// As scene.setSettings, undo or the inspector change it: the settings only.
-		scene.GetSettings().PhysicsLayers.SetCollide(2, 0, false);
+		// As the project's table, applied again (a change in Project Settings, its undo), changes it: the scene's copy only.
+		scene.GetPhysicsLayers().SetCollide(2, 0, false);
 		CHECK_FALSE(physics.DoLayersCollide(0, 2));
 		StepScene(scene, 20);
 		const float sinking = GetWorldPosition(scene, box).y;
 		CHECK(sinking < 0.0f);
 
 		// Colliding again: the box, now inside the ground, is pushed out or keeps falling, but the world uses the matrix.
-		scene.GetSettings().PhysicsLayers.SetCollide(2, 0, true);
+		scene.GetPhysicsLayers().SetCollide(2, 0, true);
 		StepScene(scene, 1);
 		REQUIRE(physics.GetWorld() != nullptr);
 		CHECK(physics.GetWorld()->DoLayersCollide(0, 2));
 
-		// PhysicsSystem::SetLayersCollide changes the scene's matrix, and the world at once.
+		// PhysicsSystem::SetLayersCollide changes the scene's copy, and the world at once.
 		physics.SetLayersCollide(1, 2, false);
-		CHECK_FALSE(scene.GetSettings().PhysicsLayers.DoCollide(2, 1));
+		CHECK_FALSE(scene.GetPhysicsLayers().DoCollide(2, 1));
 		CHECK_FALSE(physics.GetWorld()->DoLayersCollide(1, 2));
 		physics.SetLayersCollide(1, 2, true);
 		CHECK(physics.GetWorld()->DoLayersCollide(2, 1));
 		physics.SetLayersCollide(1, 40, false); // Refused with a warning
-		CHECK(scene.GetSettings().PhysicsLayers.DoCollide(1, 31));
+		CHECK(scene.GetPhysicsLayers().DoCollide(1, 31));
 		CHECK(ground.IsValid());
 		scene.OnRuntimeStop();
 	}
@@ -278,7 +314,7 @@ TEST_SUITE("Physics.Layers")
 		CreateGround(scene); // Layer 0
 		Entity box = CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 6.0f, 0.0f));
 		box.GetComponent<RigidBodyComponent>().Layer = 4;
-		scene.GetSettings().PhysicsLayers.SetCollide(0, 4, false);
+		scene.GetPhysicsLayers().SetCollide(0, 4, false);
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
 
@@ -286,7 +322,7 @@ TEST_SUITE("Physics.Layers")
 		StepScene(scene, 10);
 		REQUIRE(GetWorldPosition(scene, box).y > 3.0f);
 		physics.SetLayersCollide(0, 4, true);
-		CHECK(scene.GetSettings().PhysicsLayers.DoCollide(4, 0));
+		CHECK(scene.GetPhysicsLayers().DoCollide(4, 0));
 		StepScene(scene, 120);
 		CHECK(GetWorldPosition(scene, box).y == doctest::Approx(0.5f).epsilon(0.03));
 		scene.OnRuntimeStop();
@@ -302,10 +338,52 @@ TEST_SUITE("Physics.Layers")
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
 		CHECK_FALSE(physics.DoLayersCollide(6, 7));
-		// The scene's matrix allows the pair, but the default settings do not.
-		CHECK(scene.GetSettings().PhysicsLayers.DoCollide(6, 7));
+		// The scene's copy of the project's matrix allows the pair, but the default settings do not.
+		CHECK(scene.GetPhysicsLayers().DoCollide(6, 7));
 		REQUIRE(physics.GetWorld() != nullptr);
 		CHECK_FALSE(physics.GetWorld()->DoLayersCollide(6, 7));
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Sub-scenes and world cells collide by the host's table")
+	{
+		ScopedJobSystem jobs(2);
+		SettingsRegistry registry;
+		REQUIRE(registry.Register(ProjectCollisionLayers::MakeSection()));
+		ProjectSettingsValues values;
+		PhysicsLayerSettings project;
+		project.SetCollide(0, 4, false);
+		std::string error;
+		REQUIRE_MESSAGE(values.Set(ProjectCollisionLayers::c_SectionId, project.ToJson(), registry, &error), error);
+		EngineServices::ScopedProvider<IProjectSettings> provider(values);
+
+		Scene host("Host");
+		REQUIRE(host.ApplyProjectLayers());
+		CreateGround(host); // Layer 0
+		// The sub-scene's document lets every layer collide (as a cell, or a 0.5.0 scene loaded additively, could say): its
+		// table is not the one its bodies collide by once they are the host's.
+		Ref<Scene> part = CreateRef<Scene>("Part");
+		CreateBoxAbove(*part, "Ghost", 0.0f, 4);
+		CreateBoxAbove(*part, "Solid", 3.0f, 5);
+		PhysicsLayerSettings partLayers;
+		partLayers.Names[4] = "Ghosts";
+		part->SetStoredPhysicsLayers(partLayers);
+		REQUIRE(part->GetPhysicsLayers().DoCollide(0, 4));
+
+		host.OnRuntimeStart();
+		const SubSceneID id = host.BeginAdditiveLoad(part, &error);
+		REQUIRE_MESSAGE(id != 0, error);
+		REQUIRE(WaitUntil([&]()
+		{
+			host.OnUpdateRuntime(host.GetSettings().FixedTimestep);
+			const SubSceneStatus* status = host.GetSubSceneStatus(id);
+			REQUIRE(status);
+			return status->State == SubSceneState::Loaded;
+		}, std::chrono::seconds(60)));
+		StepScene(host, 90);
+		CHECK(GetWorldPosition(host, host.FindEntityByName("Ghost")).y < -2.0f);
+		CHECK(GetWorldPosition(host, host.FindEntityByName("Solid")).y == doctest::Approx(0.5f).epsilon(0.03));
+		CHECK(host.GetPhysicsLayers() == project);
+		host.OnRuntimeStop();
 	}
 }

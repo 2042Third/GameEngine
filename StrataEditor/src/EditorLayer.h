@@ -9,9 +9,11 @@
 #include "UI/EditorPanelRegistry.h"
 #include "UI/EditorShell.h"
 #include "UI/ExportDialog.h"
-#include "UI/ScriptDialogs.h"
+#include "UI/PreferencesDialog.h"
 #include "UI/ProjectDialogs.h"
 #include "UI/RecoveryDialog.h"
+#include "UI/ScriptDialogs.h"
+#include "UI/SettingsPages.h"
 
 #include <Strata/Core/Base.h>
 #include <Strata/Core/Layer.h>
@@ -55,9 +57,14 @@ namespace Strata
 		// read-only for scripted runs (--frames, --commands), which are not the user's sessions.
 		std::filesystem::path RecentProjectsFile;
 		bool RecentProjectsReadOnly = false;
-		// The user's editor settings, such as the external code editor (EditorContextSpecification::EditorSettingsFile):
-		// empty keeps them in memory.
+		// The user's preferences, such as the external code editor (EditorContextSpecification::PreferencesFile): empty keeps
+		// them in memory; and 0.5.0's editor settings, imported once while the preferences file does not exist
+		// (EditorContextSpecification::EditorSettingsFile).
+		std::filesystem::path PreferencesFile;
 		std::filesystem::path EditorSettingsFile;
+		// The settings sections the editor validates and draws (EditorContextSpecification::Settings); null: the process's.
+		// Tests pass a local registry.
+		const SettingsRegistry* Settings = nullptr;
 		// Watch the project's assets and script module for changes made outside the editor (hot reload). UI tests turn it off:
 		// they need no watcher threads.
 		bool WatchFiles = true;
@@ -69,6 +76,10 @@ namespace Strata
 		// so that automation starts at once. The editor application turns it on for sessions that are not scripted (--frames,
 		// --commands): those and tests expect the project's scene once the editor started.
 		bool OpenStartSceneInBackground = false;
+		// Where the New Project and Open Sample dialogs suggest projects before a location is remembered; empty:
+		// ProjectDialogs::GetDefaultLocation, the user's projects folder. Tests pass a temporary directory: what the user keeps
+		// in that folder must not change the names the dialogs suggest.
+		std::filesystem::path DefaultProjectLocation;
 		// The toolchain script builds use instead of the engine's (EditorContextSpecification::ScriptBuild); UI tests build
 		// with a stand-in for CMake.
 		std::optional<ScriptBuildSettings> ScriptBuild;
@@ -90,6 +101,7 @@ namespace Strata
 		constexpr const char* c_Performance = "Performance"; // PerformancePanel, opened from the status bar's frame pill
 		constexpr const char* c_Problems = "Problems";       // ProblemsPanel: script build diagnostics and crashes
 		constexpr const char* c_Activity = "Activity";       // ActivityPanel, opened from the viewport's agent chip or the View menu
+		constexpr const char* c_ProjectSettings = "ProjectSettings"; // ProjectSettingsPanel, opened from File > Project Settings...
 		constexpr const char* c_Welcome = "Welcome"; // The launcher (WelcomePanel)
 	}
 
@@ -152,7 +164,9 @@ namespace Strata
 		const AboutDialog& GetAboutDialog() const { return m_AboutDialog; }
 		const ExportDialog& GetExportDialog() const { return m_ExportDialog; }
 		NewScriptDialog& GetNewScriptDialog() { return m_NewScriptDialog; }
-		ExternalEditorDialog& GetExternalEditorDialog() { return m_ExternalEditorDialog; }
+		PreferencesDialog& GetPreferencesDialog() { return m_PreferencesDialog; }
+		// The custom pages of the settings windows (EditorSettingsPageRegistry).
+		const EditorSettingsPageRegistry& GetSettingsPages() const { return m_SettingsPages; }
 		const RecoveryDialog& GetRecoveryDialog() const { return m_RecoveryDialog; }
 		// File > Open Scene... (Ctrl+O) once its file dialog chose `file`: a scene file of the project's asset directory opens
 		// (scene.open through the runner) after the question about the edited scene's unsaved changes. False, with the reason
@@ -161,12 +175,16 @@ namespace Strata
 
 		// EditorShell
 		void RequestDiscardChanges(std::function<void()> action) override;
+		void RequestReleaseProject(std::function<void()> action) override;
+		void RequestQuit(std::function<void()> action) override;
 		void DrawDiscardQuestion() override;
 		void ShowNewProjectDialog(const std::string& templateId) override;
 		void ShowOpenSampleDialog(const std::string& sampleId) override;
 		void ShowOpenProjectDialog() override;
 		void ShowAboutDialog() override;
 		void ShowNewScriptDialog() override;
+		void ShowPreferencesDialog(const std::string& section) override;
+		void ShowProjectSettings(const std::string& page) override;
 		void DismissLauncher() override;
 		void RenameEntity(UUID entity) override;
 		void ShowPanel(std::string_view panel) override;
@@ -206,11 +224,19 @@ namespace Strata
 		// The text a status bar pill shows: `text`, or `compact` (when given) while the pills' full texts do not fit side by
 		// side; counts the full text's width for that decision. Returns one of the two views.
 		std::string_view StatusPillText(const char* icon, std::string_view text, std::string_view compact = {});
-		// Tool panels (Streaming, Performance) opened in a layout saved before they existed join the Console's dock node.
+		// Tool panels (Streaming, Performance) opened in a layout saved before they existed join the Console's dock node, the
+		// Project Settings the Scene view's.
 		void DockNewToolPanels();
 		// The question about unsaved changes (RequestDiscardChanges), at the popup level it is called at: over the whole window,
 		// or over the dialog that calls DrawDiscardQuestion. Drawn once per frame, by whichever call comes first.
 		void DrawUnsavedChangesModal();
+		// The question of RequestReleaseProject about the project's unwritten settings, inside its modal.
+		void DrawUnwrittenSettingsQuestion();
+		// The question of RequestQuit about the unwritten preferences, inside its modal.
+		void DrawUnwrittenPreferencesQuestion();
+		// Runs the action that waited for the answer about unwritten settings, or first asks about the scene's changes made
+		// while it waited.
+		void RunPendingReleaseAction();
 		void HandleShortcuts();
 		void UpdateWindowTitle();
 		// Advances the startup command script; once it finished, reports the result (a failed script fails the process).
@@ -256,7 +282,6 @@ namespace Strata
 		// File > Export Game... and the toolbar's Export button: the Export dialog, showing a running export.
 		void ShowExportDialog();
 		// Scripts > External Editor... and editor.showDialog: the program that opens script files, and the editors found.
-		void ShowExternalEditorDialog();
 	private:
 		EditorOptions m_Options;
 		Scope<EditorHost> m_Host;
@@ -268,13 +293,15 @@ namespace Strata
 		EditorCommandRunner m_CommandRunner;
 		// Declared after what it serves, so it stops before they go away.
 		EditorAutomation m_Automation;
+		// Declared before the panels that draw its pages.
+		EditorSettingsPageRegistry m_SettingsPages;
 		EditorPanelRegistry m_Panels;
 		ProjectDialogs m_ProjectDialogs;
 		AboutDialog m_AboutDialog;
 		// Completions of its exports refer to it: OnDetach cancels the runner's commands while it still exists.
 		ExportDialog m_ExportDialog;
 		NewScriptDialog m_NewScriptDialog;
-		ExternalEditorDialog m_ExternalEditorDialog;
+		PreferencesDialog m_PreferencesDialog;
 		// The context's requests for the Problems panel this layer has shown (EditorContext::GetProblemsPanelRequests).
 		uint64_t m_ShownProblemsRequests = 0;
 		// Like the Export dialog, its completions refer to it.
@@ -295,6 +322,18 @@ namespace Strata
 		uint64_t m_DiscardQuestionVersion = 0;
 		bool m_SceneChangedSinceQuestion = false;
 		bool m_OpenUnsavedChangesModal = false;
+		// An action that releases the project (RequestReleaseProject) waiting for the answer about the project's unwritten
+		// settings, and whether the question's Retry (project.save) is writing.
+		std::function<void()> m_PendingReleaseAction;
+		uint64_t m_ReleaseQuestionVersion = 0; // The undo stack's version when that question was asked
+		bool m_OpenUnwrittenSettingsModal = false;
+		bool m_RetryingProjectWrite = false;
+		// A quit (RequestQuit) waiting for the answer about the unwritten preferences, and whether the question's Retry
+		// (preferences.save) is writing.
+		std::function<void()> m_PendingQuitAction;
+		uint64_t m_QuitQuestionVersion = 0; // The undo stack's version when that question was asked
+		bool m_OpenUnwrittenPreferencesModal = false;
+		bool m_RetryingPreferencesWrite = false;
 		int m_UnsavedChangesModalFrame = -1; // ImGui's frame the question was drawn in last
 		bool m_ShowImGuiDemo = false;
 		bool m_ResetLayout = false;
@@ -304,6 +343,8 @@ namespace Strata
 		bool m_UIDrawn = false; // OnImGuiRender ran at least once
 		// The inspection target the inspector tabs show (EditorContext::GetInspectionVersion): a new one brings its tab forward.
 		uint64_t m_ShownInspectionVersion = 0;
+		// The preferences' version whose interface scale the host has (EditorPreferences::GetVersion never returns 0).
+		uint64_t m_AppliedPreferencesVersion = 0;
 		std::string m_WindowTitle;
 		std::string m_AutomationError; // Why automation did not start (when it was asked for)
 		// The automation pill's text, made again only when the connected clients change (EditorAutomation::GetClientsVersion).

@@ -542,8 +542,8 @@ namespace Strata
 			"\"code -g {file}:{line}:{column}\" or \"\\\"C:/Program Files/.../devenv.exe\\\" /Edit {file}\" (whitespace separates arguments, double "
 			"quotes group them; {file}, {line}, {column} and {directory} are filled in; without {file} the file goes last). The program runs "
 			"directly, never through a shell: a path, or a name found in PATH (VS Code's code launcher starts Code.exe), not a .cmd or .bat; a "
-			"program that is not there is refused. An empty command goes back to the default application. Saved in the user's editor "
-			"settings (not the project); STRATA_EXTERNAL_EDITOR overrides it. Returns the command in use and the program the person's command "
+			"program that is not there is refused. An empty command goes back to the default application. Kept in the person's preferences "
+			"(the Editor.ExternalEditor section of preferences.get, not the project); STRATA_EXTERNAL_EDITOR overrides it. Returns the command in use and the program the person's command "
 			"starts (program).",
 			ObjectSchema({ { "command", StringSchema("The command template, or empty for none") } }, { "command" }),
 			[](EditorContext& context, const nlohmann::json& parameters)

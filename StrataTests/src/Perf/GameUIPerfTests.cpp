@@ -8,6 +8,7 @@
 #include <Strata/GameUI/GameUIScene.h>
 #include <Strata/GameUI/GameUISystem.h>
 #include <Strata/Input/Input.h>
+#include <Strata/Input/InputActions.h>
 
 #include <chrono>
 #include <string>
@@ -105,6 +106,7 @@ TEST_SUITE("Perf.GameUI")
 		for (int frame = 0; frame < 30; frame++)
 		{
 			Input::BeginFrame();
+			InputActions::Update();
 			scene->OnUpdateRuntime(1.0f / 60.0f);
 		}
 		REQUIRE(system->GetHovered() == widgets.Buttons[40]);
@@ -118,6 +120,7 @@ TEST_SUITE("Perf.GameUI")
 				for (uint32_t frame = 0; frame < c_FramesPerBatch; frame++)
 				{
 					Input::BeginFrame();
+					InputActions::Update();
 					system->OnUpdate(1.0f / 60.0f);
 				}
 			});

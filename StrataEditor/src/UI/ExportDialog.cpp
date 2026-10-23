@@ -6,9 +6,11 @@
 #include "Editor/GameExport.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
+#include "UI/EditorShell.h"
 #include "UI/FileDialogs.h"
 #include "UI/Icons.h"
 #include "UI/ItemProbe.h"
+#include "UI/SettingsPages.h"
 #include "UI/TextFormat.h"
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
@@ -155,6 +157,8 @@ namespace Strata
 		}
 		const GameExportResult& result = watched->GetResult();
 		m_Outcome = DescribeExport(result.AssetCount, result.Pack.FileSize, result.Seconds, m_ExportedDirectory, result.ExcludedAssets.size());
+		for (const std::string& warning : result.Warnings)
+			m_Outcome += fmt::format(" {}.", warning);
 	}
 
 	const std::string& ExportDialog::GetDirectoryProblem(EditorPanelContext& context)
@@ -245,6 +249,11 @@ namespace Strata
 				StartExport(context);
 		}
 
+		if (m_CloseRequested)
+		{
+			open = false;
+			m_CloseRequested = false;
+		}
 		if (!open)
 			ImGui::CloseCurrentPopup();
 		UI::EndModal();
@@ -290,6 +299,10 @@ namespace Strata
 		DrawLoadingScene(context, width);
 		ImGui::Spacing();
 
+		// Who the game is.
+		DrawIdentity(context, width);
+		ImGui::Spacing();
+
 		// What goes with it.
 		Option("Export.IncludeRuntime", "Copy the runtime", &m_IncludeRuntime,
 			"Copy StrataRuntime as the game's executable, with the third-party notices; without it, only the game's data is written");
@@ -309,6 +322,44 @@ namespace Strata
 			Caption(fmt::format("Writes the game to {}: an asset pack ordered by first use{}, the scripts the editor runs, a manifest{}. The editor keeps "
 				"running while it works.", m_Directory, m_Prune ? " (only the assets in use)" : "", m_IncludeRuntime ? " and the runtime" : ""),
 				colors.TextSecondary, width);
+	}
+
+	void ExportDialog::DrawIdentity(EditorPanelContext& context, float width)
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const ProjectConfig& config = context.Context.GetProject()->GetConfig();
+		const ProjectGameInfo& game = config.Game;
+		std::string summary = fmt::format("{} {}", game.Title.empty() ? config.Name : game.Title, game.Version);
+		if (!game.Company.empty())
+			summary += fmt::format(" by {}", game.Company);
+		// Without an icon the game shows what its platform gives it (on Windows, the runtime's strata mark); an icon the project
+		// names but no longer has fails the export, so the summary says so.
+		ImVec4 color = colors.Text;
+		if (!game.Icon.IsValid())
+		{
+			summary += ", without an icon of its own";
+		}
+		else
+		{
+			const EditorAssetManager* assets = context.Context.GetAssetManager();
+			const std::optional<AssetMetadata> icon = assets ? assets->GetMetadata(game.Icon) : std::nullopt;
+			if (icon)
+			{
+				summary += fmt::format(", with the icon {}", icon->Path);
+			}
+			else
+			{
+				summary += fmt::format(", with the missing icon {}: choose another or none", game.Icon.ToString());
+				color = colors.Warning;
+			}
+		}
+		Caption(summary, color, width);
+		UI::ItemProbe::Record("Export.Identity", true, 0, summary);
+		if (UI::LinkButton("Export.EditIdentity", "Title, version and icon in Project Settings", Icons::ArrowRight) && context.Shell)
+		{
+			context.Shell->ShowProjectSettings(SettingsBrowser::c_GamePage);
+			m_CloseRequested = true;
+		}
 	}
 
 	void ExportDialog::DrawLoadingScene(EditorPanelContext& context, float width)
@@ -431,6 +482,14 @@ namespace Strata
 			const size_t excluded = excludedAssets && excludedAssets->is_array() ? excludedAssets->size() : 0;
 			m_Outcome = DescribeExport(JsonUtils::GetUInt(value, "assetCount", 0), JsonUtils::GetUInt(value, "packBytes", 0),
 				JsonUtils::GetFloat(value, "seconds", 0.0f), m_ExportedDirectory, excluded);
+			if (const nlohmann::json* warnings = JsonUtils::Find(value, "warnings"); warnings && warnings->is_array())
+			{
+				for (const nlohmann::json& warning : *warnings)
+				{
+					if (warning.is_string())
+						m_Outcome += fmt::format(" {}.", warning.get<std::string>());
+				}
+			}
 		}, CommandOrigin { CommandSource::UI });
 	}
 

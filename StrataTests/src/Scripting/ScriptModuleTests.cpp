@@ -106,7 +106,7 @@ TEST_SUITE("Scripting.Module")
 			"GameFlow", "GameFlowMisuse", "HelperChecks", "KeyRepeatProbe", "LateContactProbe", "AssetHolder", "SubSceneStreamer", "StreamingMisuse",
 			"AnimatorAPI", "AnimatorMisuse", "AnimatorUnavailable", "CharacterAPI", "CharacterMisuse", "GamepadProbe", "CursorProbe", "WindowRequests",
 			"SaveRoundTrip", "SaveLoader", "PhysicsLayersAPI", "KeyboardWalker", "MotionChecks", "UIControlAPI", "UIMisuse", "UIUnavailable", "UIEventRecorder",
-			"UIFrameProbe", "WorldAPI", "WorldWithoutWorld"
+			"UIFrameProbe", "WorldAPI", "WorldWithoutWorld", "ActionReader", "ActionAPIChecks", "BindingCapturer"
 		};
 		std::set<std::string> classes;
 		for (const ScriptClassInfo& info : engine.GetClasses())

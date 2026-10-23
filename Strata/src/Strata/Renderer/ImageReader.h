@@ -10,8 +10,9 @@
 namespace Strata
 {
 
-	// Decodes small encoded images the engine wrote itself (ImageWriter's PNGs, e.g. the editor's thumbnail cache) into
-	// RGBA8 pixels. Not for asset import: textures go through TextureImporter.
+	// Decodes small encoded images into RGBA8 pixels: those the engine wrote itself (ImageWriter's PNGs, e.g. the editor's
+	// thumbnail cache) and the image an export makes the game's icon from (the editor's GameIcon). Not for asset import:
+	// textures go through TextureImporter.
 	class ImageReader
 	{
 	public:

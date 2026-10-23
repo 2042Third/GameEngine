@@ -201,7 +201,7 @@ TEST_SUITE("Editor.UI.Dialogs")
 		CHECK(editor.Layer->GetRecoveryDialog().IsOpen());
 	}
 
-	TEST_CASE("editor.showDialog opens the script dialogs: New Script for a project's scripts, External Editor without one too")
+	TEST_CASE("editor.showDialog opens the script dialogs: New Script for a project's scripts, External Editor's preferences without one too")
 	{
 		{
 			HarnessEditor editor;
@@ -212,9 +212,12 @@ TEST_SUITE("Editor.UI.Dialogs")
 				== EditorCommandError::Failed);
 			editor.Frames(2);
 			CHECK_FALSE(editor.Layer->GetNewScriptDialog().IsOpen());
-			CHECK(editor.Run("editor.showDialog", { { "dialog", "externalEditor" } })["dialog"] == "externalEditor");
+			const nlohmann::json shown = editor.Run("editor.showDialog", { { "dialog", "externalEditor" } });
+			CHECK(shown["dialog"] == "externalEditor");
+			CHECK(shown["section"] == "Editor.ExternalEditor");
 			editor.Frames(2);
-			CHECK(editor.Layer->GetExternalEditorDialog().IsOpen());
+			CHECK(editor.Layer->GetPreferencesDialog().IsOpen());
+			CHECK(editor.Layer->GetPreferencesDialog().GetSelected() == "Editor.ExternalEditor");
 		}
 		{
 			HarnessEditor editor({}, WithFeatureProject("ShowScriptDialogs"));
@@ -223,7 +226,7 @@ TEST_SUITE("Editor.UI.Dialogs")
 			editor.Run("editor.showDialog", { { "dialog", "newScript" } });
 			editor.Frames(2);
 			CHECK(editor.Layer->GetNewScriptDialog().IsOpen());
-			CHECK_FALSE(editor.Layer->GetExternalEditorDialog().IsOpen());
+			CHECK_FALSE(editor.Layer->GetPreferencesDialog().IsOpen());
 		}
 	}
 

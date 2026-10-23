@@ -17,7 +17,7 @@ project's releases page: https://github.com/2042Third/GameEngine/releases
 | `StrataCLI` | Command-line client of a running editor, and an MCP server for AI agents (`StrataCLI mcp`). |
 | `Samples/` | Finished games to learn from, made by an AI agent through the editor: Third-Person Adventure, Open World, Physics Playground and Tetris, each with a `README.md` of what it shows and a `CREDITS.md` of its assets. The editor opens copies of them (Open Sample). |
 | `StrataScriptCore/` | The script SDK: the headers your scripts include and the CMake package their build uses. |
-| `Docs/Manual/` | Guides for making games: `Scripting.md`, `Worlds.md`, `Prefabs.md`, `GameView.md` and `GameUI.md`. |
+| `Docs/Manual/` | Guides for making games: `Scripting.md`, `Worlds.md`, `Prefabs.md`, `GameView.md`, `GameUI.md` and `Settings.md`. |
 | `Skills/` | Guides for AI agents that make games with the editor (see "Connect an AI agent"). |
 | `StrataInstall.json` | Marks this folder as a Strata installation. Keep it next to the executables. |
 | `ThirdPartyNotices.md` | The third-party components Strata contains (box3d for physics, among others) and their licenses, and the samples' asset packs with the attributions games made from them must show. |
@@ -94,7 +94,9 @@ and get its exit code, pipe its output, e.g. `.\StrataEditor --version | Write-O
    and rebuilding while the game plays reloads them without stopping it. The Game view shows the game as a player sees
    it, at the resolution you pick (`Docs/Manual/GameView.md`). `Docs/Manual/Scripting.md` describes the SDK.
 4. Choose the start scene (**File > Set as Start Scene**) and export with **File > Export Game...**. The export folder
-   holds everything the game needs: run the game's executable there.
+   holds everything the game needs: run the game's executable there. On Linux it also holds `<Game>.desktop`, which lists
+   the game among your applications once copied into `~/.local/share/applications`; it names the folder's absolute paths,
+   so after moving the folder, edit its `Exec` and `Icon` lines (or export again).
 
 ## Connect an AI agent
 

@@ -3,6 +3,7 @@
 
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/Prefetch.h"
+#include "Strata/Input/InputActions.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneHierarchy.h"
 #include "Strata/Scripting/ScriptEngine.h"
@@ -63,6 +64,7 @@ namespace Strata
 		{
 			m_CreationBlocked = true;
 			DestroyAllInstances(false);
+			EndBindingCapture();
 		}
 		m_Connections.clear();
 		if (m_Engine)
@@ -136,6 +138,14 @@ namespace Strata
 		SyncPoint();
 	}
 
+	void ScriptSystem::EndBindingCapture()
+	{
+		// A rebinding menu's capture ends with its scripts: while it listens every action reads as up, and nobody would poll it.
+		if (m_BindingCapture != 0 && InputActions::GetCaptureId() == m_BindingCapture && InputActions::IsCapturing())
+			InputActions::CancelCapture();
+		m_BindingCapture = 0;
+	}
+
 	void ScriptSystem::OnRuntimeStop()
 	{
 		ST_PROFILE_FUNCTION();
@@ -177,6 +187,7 @@ namespace Strata
 		m_CreationCursor = 0;
 		m_DeferredDestroys.clear();
 		m_ReconcileAll = false;
+		EndBindingCapture();
 		m_Running = false;
 		m_CreationBlocked = false;
 	}

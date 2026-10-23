@@ -1,6 +1,13 @@
 {
 	"Project": {
 		"AssetDirectory": "Assets",
+		"Game": {
+			"Company": "",
+			"Copyright": "",
+			"Icon": "F8DFB22B97ABAE5B",
+			"Title": "Tetris",
+			"Version": "1.0.0"
+		},
 		"Name": "Tetris",
 		"Scripts": {
 			"ModuleName": "TetrisScripts",
@@ -10,6 +17,6 @@
 	},
 	"Strata": {
 		"Format": "Project",
-		"Version": 2
+		"Version": 3
 	}
 }

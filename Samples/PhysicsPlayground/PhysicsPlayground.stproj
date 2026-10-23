@@ -7,6 +7,13 @@
 				"Sounds/Impacts"
 			]
 		},
+		"Game": {
+			"Company": "",
+			"Copyright": "",
+			"Icon": "07CDCBEC2D80821C",
+			"Title": "Physics Playground",
+			"Version": "1.0.0"
+		},
 		"Name": "PhysicsPlayground",
 		"Scripts": {
 			"ModuleName": "PhysicsPlaygroundScripts",
@@ -14,8 +21,25 @@
 		},
 		"StartScene": "51ED0D2229085C4F"
 	},
+	"Settings": {
+		"Scene.CollisionLayers": {
+			"Value": {
+				"Names": {
+					"1": "Ball",
+					"2": "Ghost"
+				},
+				"NoCollisions": [
+					[
+						1,
+						2
+					]
+				]
+			},
+			"Version": 1
+		}
+	},
 	"Strata": {
 		"Format": "Project",
-		"Version": 2
+		"Version": 3
 	}
 }

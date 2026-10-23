@@ -74,7 +74,7 @@ linker. Vendor and system libraries attach to the layers that use them (`strata_
 | Layer | Links |
 | --- | --- |
 | Core | `PUBLIC` glm, EnTT, spdlog, nlohmann_json, Tracy when enabled; `PRIVATE` shell32, ole32, bcrypt, dbghelp (Windows), CoreFoundation (Apple), Threads and dl (Linux); the generated `Version.h` and `VersionCommit.h` (`StrataVersionCommit`) |
-| App | `PRIVATE` glfw, Vulkan headers (`VulkanLoader`), stb (window icon) |
+| App | `PRIVATE` glfw, Vulkan headers (`VulkanLoader`), stb (window icon), AppKit and the Objective-C runtime (Apple: the Dock icon) |
 | Asset | `PRIVATE` zstd_decompress |
 | Renderer | `PUBLIC` nvrhi; `PRIVATE` nvrhi_vk, Vulkan headers, glfw, stb, MikkTSpace, meshoptimizer; the shaders (`strata_add_shaders(Strata_Renderer ...)`) and the default font |
 | Physics | `PRIVATE` box3d |
@@ -112,8 +112,8 @@ when the commit does).
 | `StrataScriptCore` | interface library | Script C ABI and header-only C++ SDK; links glm only (`StrataScriptCore/`). |
 | `StrataEditorCore` | static library | The editor without UI (`StrataEditor/src/Editor/`); links `Strata`, `Strata::AssetPipeline` and `Strata::Network`. |
 | `StrataEditorUI` | static library | The ImGui interface on the core: `EditorLayer`, panels, widget kit, theme, embedded fonts; links `Strata::ImGui`, and `ImGuizmo` and `nfd` privately (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer.*`). |
-| `StrataEditor` | executable | Runs the UI: `EditorApplication` (options, theme and fonts, `EditorHost`) (`StrataEditor/src/EditorApplication.cpp`). Embeds the window icon (`EditorIcon.h`); on Windows `StrataEditor.rc.in` adds the `.ico` and version information. |
-| `StrataRuntime` | executable | Plays exported games (`StrataRuntime/src/RuntimeApplication.cpp`); links `Strata` only; on Windows `StrataRuntime.rc.in` gives it (and every exported game) the `.ico`. |
+| `StrataEditor` | executable | Runs the UI: `EditorApplication` (options, theme and fonts, `EditorHost`) (`StrataEditor/src/EditorApplication.cpp`). Embeds the window icon (`EditorIcon.h`; the 256-pixel mark, decoded at startup, is the Dock's on macOS); on Windows `StrataEditor.rc.in` adds the `.ico` and version information. |
+| `StrataRuntime` | executable | Plays exported games (`StrataRuntime/src/RuntimeApplication.cpp`); links `Strata` only; on Windows `StrataRuntime.rc.in` gives it the `.ico`, and the export writes each game's version information and icon into its copy (`Editor/PEResources`). |
 | `StrataCLILib`, `StrataCLI` | static library, executable | Automation client and MCP server (`StrataCLI/src/`); links `Strata::Network` only (Core comes with it). |
 | `StrataTests` | executable | doctest suites; builds the test script modules as dependencies (`StrataTests/`). |
 | script modules | `MODULE` libraries | Game code: the tests' modules and every game project's `Scripts/`. |
@@ -189,8 +189,8 @@ subsystems.
 (`Core/EngineModule.h`: the graphics device, audio, ImGui, the project; see
 [Application and frame loop](#application-and-frame-loop)) and the main-thread queue and runs the frame loop;
 `Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
-`Platform/GLFW/GLFWWindow` (`SetIcon` takes RGBA images of several sizes; macOS and Wayland windows have no icon of
-their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`; the console and
+`Platform/GLFW/GLFWWindow` (`SetIcon` takes RGBA images of several sizes; macOS windows have no icon of their own, so the
+largest image becomes the Dock's while the program runs, `Platform/GLFW/GLFWApplicationIcon`; Wayland ignores it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`; the console and
 the log file are written by the `BackgroundLogSink`'s thread, so a log call waits for them only for warnings and errors,
 which are flushed before the call returns, and while 65,536 messages are queued (a burst the writer cannot keep up
 with): writing a line to a console, a pipe or a file blocked the frame for milliseconds), `Assert`, `JobSystem`,
@@ -201,7 +201,9 @@ process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime
 them), `Crypto` (SHA-256, peer authentication), `Base64`, `CommandLine`, `Timer`/`FramePacer`, `JsonUtils`
 (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the audio thread), `EngineServices` (process-wide
 interfaces a module or the program running a game offers the modules that may not include it, such as the audio output's
-master volume, `IAudioOutput`, the game's window, `IGameWindow`, and its save directory, `IGameSaves`), `SaveFiles` (a
+master volume, `IAudioOutput`, the game's window, `IGameWindow`, and its save directory, `IGameSaves`),
+`SettingsRegistry` and `ProjectSettings` (the settings sections modules register, and the project's values of them, read
+through the engine service `IProjectSettings`: DeveloperGuide.md, "Project settings"), `SaveFiles` (a
 game's save files: names checked before any path is formed, atomic writes; `SaveDirectory`), `FrameProfiler` (the
 always-on timer of the main thread's frame stages, see [Frame profiler](#frame-profiler)) and `Profiling`
 (`ST_PROFILE_STAGE`; Tracy with `STRATA_ENABLE_TRACY`).
@@ -229,8 +231,15 @@ frees it and Ctrl+P stops the game) and Shift+F1 frees it. `InputNames` maps key
 the `input.*` commands. Text typed in an input frame (`GetTypedText`: the window's character events, `ProcessText`, and
 `SimulateText`) comes as UTF-8, at most 1,024 bytes a frame. Pointer capture (`SetPointerCapture`, which the game UI's
 system sets while the UI owns the pointer) hides mouse buttons and scrolling from gameplay queries; `GetPointerState`
-reads the pointer regardless. `UIActions.h` maps keys, gamepad buttons and stick directions to the game UI's fixed
-actions (Submit, Cancel, Up, Down, Left, Right) with key repeat and stick hysteresis.
+reads the pointer regardless. `UIActions.h` reads the game UI's actions (Submit, Cancel, Up, Down, Left, Right: the
+reserved map `UI` of the input actions) and repeats held ones. Input actions
+(`InputActionSet`, `InputActions`) are the game's named controls: maps of Button, Axis and Vector2 actions bound to keys,
+mouse buttons, gamepad controls and composites, the project settings section `Input.Actions` (read through
+`IProjectSettings`, the default set without one), evaluated once per input frame in Application's Input stage after the
+window's events, with the players' bindings (`<save directory>/InputBindings.json`), map enables, simulated actions and
+binding capture (DeveloperGuide.md, "Input actions"). Scripts read and rebind them by name through the host functions
+`InputIsActionDown` to `InputSaveBindings`, and capture a binding through `InputBeginBindingCapture`,
+`InputPollBindingCapture` and `InputCancelBindingCapture`.
 
 **Math** (`Math/`). Engine conventions in `Math.h`: right-handed, +Y up, -Z forward, reversed-Z projections, Euler
 angles in degrees. `AABB`, `Frustum`, `Ray`, and `Random` (thread-local generators).
@@ -340,11 +349,17 @@ refuses a round mesh at 64: its hulls have at most 128 faces and edges), triangl
 only; a mesh collider away from its static body's origin is a baked compound, whose mesh takes the body's friction and
 restitution as its material), and dynamic bodies get the component's mass with the shapes' distribution. Triggers see
 convex shapes and characters only: box3d's sensors skip triangle meshes, so a moving trigger crossing a mesh collider
-reports nothing (Jolt's did). Collision layers are the scene's (`SceneSettings::PhysicsLayers`,
-`Scene/PhysicsLayerSettings.h`: names for up to 32 layers and a symmetric matrix of which collide, everything by default);
-`PhysicsSystem` gives its world that matrix, restricted by the default settings' (`GetDefaultSettings`), when it creates
-the world and before every step after it changed (`scene.setSettings`, undo, the inspector, scripts'
-`Physics::SetLayersCollide`, `PhysicsSystem::SetLayersCollide`; `PhysicsWorld::SetLayerCollisionMasks` gives the shapes
+reports nothing (Jolt's did). Collision layers are the project's: one table (`Scene/PhysicsLayerSettings.h`: names for up
+to 32 layers and a symmetric matrix of which collide, everything by default), the project settings section
+`Scene.CollisionLayers` (`Scene/ProjectCollisionLayers`), of which each scene runs a working copy
+(`Scene::GetPhysicsLayers`). The copy is taken on the main thread when a scene is handed over (`Scene::ApplyProjectLayers`:
+the scene asset's hand-over, so every `SceneLoader` load before its preparation, `SceneLoadRequest::TakeScene`, the editor's
+adopted scenes and every change of the project's settings); the loader's worker never reads `IProjectSettings`, and a
+program without a project keeps what a 0.5.0 scene document stores. Scripts change the copy for as long as their scene
+runs; sub-scenes and world cells collide by their host's. `PhysicsSystem` gives its world that matrix, restricted by the
+default settings' (`GetDefaultSettings`), when it creates the world and before every step after it changed (the project's
+table applied again, scripts' `Physics::SetLayersCollide`, `PhysicsSystem::SetLayersCollide`;
+`PhysicsWorld::SetLayerCollisionMasks` gives the shapes
 of the changed layers their new filters and wakes the bodies, and character controllers read the world's live matrix;
 box3d drops those shapes' contacts and finds them again, so their pairs wait for the next step like a rebuilt body's and
 only the pairs the change parts end). Each shape's box3d filter
@@ -467,10 +482,14 @@ callbacks), `ScriptHostAPI` (the host function table), `ScriptValue` (ABI value 
 (class, field and fault descriptions) and `ScriptWatchdog`. See [Scripting](#scripting).
 
 **Project** (`Project/`). `Project` is a game project: the `.stproj` file (with the export settings,
-`Export.AlwaysInclude` and `Export.LoadingScene`), the asset directory, the script sources and the intermediate
-directory `.strata/` (`Cache/`, `Scripts/Build/`, `Scripts/Bin/`), plus the process-wide active project. `GameManifest`
-is the `.stgame` file of an exported game (name, asset pack and patch packs, start scene, loading scene, script module,
-window settings).
+`Export.AlwaysInclude` and `Export.LoadingScene`, and the settings sections the project sets, which it keeps whether or
+not this build's modules know them: DeveloperGuide.md, "Project settings"), the asset directory, the script sources and
+the intermediate directory `.strata/` (`Cache/`, `Scripts/Build/`, `Scripts/Bin/`), plus the process-wide active
+project. `GameManifest` is the `.stgame` file of an exported game (name, the game's identity, asset pack and patch packs,
+start scene, loading scene, script module, window settings, and the project's settings sections as stored, which the
+runtime validates once the modules registered). The name keys the game's log and save directories; the title, version and
+icon are what it shows (`GamePresentation`), and on Windows the export also writes them into the game's executable, where
+Explorer reads them (`Editor/PEResources`).
 
 **Runtime** (`Runtime/`). `GameRuntime` runs an exported game without depending on windowing or rendering: it opens
 the pack, loads the script module, starts scenes and honors their requests. `GameRenderer` draws the running scene
@@ -492,7 +511,9 @@ Retina window of 1600 x 900 points has 3200 x 1800 pixels and content scale 2, a
 rasterizes its fonts at the framebuffer's density, so its UI scale is 1; where windows are measured in pixels, Windows
 and X11, it is the content scale). The style is rebuilt from ImGui's dark defaults by the application's style callback
 (`SetStyleCallback`; the editor installs its Bedrock theme) and the fonts' DPI scale (`ImGuiStyle::FontScaleDpi`)
-follows; `SetContentScaleOverride` fixes the scale (`--ui-scale`).
+follows; `SetContentScaleFactor` multiplies the content scale (the editor's `Editor.Interface` preference) and
+`SetContentScaleOverride` fixes the scale (`--ui-scale`), winning over both. `GetDisplayUIScale` is the scale without the
+factor, the game's content scale in the editor's play mode.
 `ImGuiPlatform` is the platform backend, written for the engine (the vendored GLFW backend is not built): ImGui's input
 comes from the window's events (keys by what they type in the keyboard layout, `Window::GetLayoutKey`, with their
 modifiers; typed text, also from input methods; the mouse, its wheel and `MouseLeaveEvent`; focus), its clipboard and
@@ -567,16 +588,18 @@ The engine is extended through registries rather than through code that knows it
 `AssetImporterRegistry` (source files to stored bytes), `AssetManagerExtensionRegistry` (work modules do for every asset
 manager: the texture streamer), `BuiltinAssets` (objects of the built-in assets), `MeshGeometryRegistry` (the triangles of
 mesh assets for modules that do not draw them: physics), `SceneSystemRegistry` (runtime systems of playing scenes) and
-`SceneOverlayRegistry` (passes every `SceneRenderer` draws over the scene: the game UI's, see [Game UI](#game-ui)).
-`Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`) fills them, once per process, before anything reads
+`SceneOverlayRegistry` (passes every `SceneRenderer` draws over the scene: the game UI's, see [Game UI](#game-ui)) and
+the process's `SettingsRegistry` (project settings and preference sections). `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`) fills them, once per process, before anything reads
 them. Its modules are a table (`c_BuiltinModules`: a name and a registration function each, lower layers first), run in
 order but for those `ModuleRegistrationOptions::Exclude` names; `Engine::GetBuiltinModuleNames` lists the table and
 `Engine::GetRegisteredModules` what registered:
 
 ```text
 open the registries (BeginRegistration; not the importers')
+RegisterInputModule        Input/InputRegistration.cpp         the project settings section Input.Actions (the game's input
+                                                               actions)
 RegisterSceneModule        Scene/SceneRegistration.cpp         its components (ComponentRegistration.cpp); Scene, Prefab, Model
-                                                               loaders
+                                                               loaders; the section Scene.CollisionLayers
 RegisterRendererModule     Renderer/RendererRegistration.cpp   its components (RendererComponents.cpp: MeshRenderer, lights, sky,
                                                                post-processing, text); Texture (with its prefix), Mesh, Material,
                                                                Font loaders; built-in meshes and material; the texture streamer
@@ -595,14 +618,14 @@ RegisterGameUIModule       GameUI/GameUIRegistration.cpp       its components (G
                                                                (SceneOverlayRegistry); "UI" system
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
-ComponentRegistry::Freeze
+ComponentRegistry::Freeze, then the process's SettingsRegistry
 log the registered modules, the scene systems' update order and the soft constraints naming absent systems
 ```
 
 - **Leaving modules out.** A build without an optional module has no row for it in the table (`#if ST_WITH_<MODULE>`, the
   only place outside the asset pipeline, the runtime program and tests that tests one). In a full build,
   `ModuleRegistrationOptions::Exclude` registers the engine without some of its modules, as a game without them would run
-  (tests: `--strata-test-helper=register-without`). Scene and Renderer are part of every
+  (tests: `--strata-test-helper=register-without`). Input, Scene and Renderer are part of every
   engine: excluding them is refused with an error, as is a name the table does not hold. Nothing else changes for the
   absent modules: their components load as unknown components and save back unchanged, the other modules' soft
   constraints ignore their systems, and scripts calling into their services are told that the scene plays without them
@@ -732,6 +755,7 @@ and the runtime's modules:
  1  ExecuteMainThreadQueue           functions queued with Application::SubmitToMainThread
  2  Input::BeginFrame                new input frame; queued simulated input applies
  3  Window::ProcessEvents            glfwPollEvents: Input::Process*, events through the modules and the layers
+    InputActions::Update             the project's input actions take the frame's input (once per input frame)
                                      window minimized: sleep 16 ms, frame skipped (not counted)
  4  EngineModule::OnBeginFrame       Graphics: vsync, GraphicsDevice::BeginFrame (cannot begin, e.g. mid-resize: Skip,
                                      sleep 16 ms; device lost: Close), Renderer::BeginFrame
@@ -803,7 +827,7 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 
 | Stage | Where |
 | --- | --- |
-| `Input` | `Input::BeginFrame` and the window's events (`Application::RunFrame`) |
+| `Input` | `Input::BeginFrame`, the window's events and `InputActions::Update` (`Application::RunFrame`) |
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
 | `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (the systems' `PrepareLoadedScene`: physics' bodies; `SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
@@ -969,11 +993,11 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
 - `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame`, `MaxEntitiesInstantiatedPerFrame` (see
   additive scenes below), the physics world's capacities
   (`PhysicsCapacity`: the room for bodies and contacts box3d reserves; 0, the default, sizes it automatically; each up to
-  a limit; 0.4.0's body pairs are read and ignored) and the collision layers (`PhysicsLayers`: names, unique ignoring case,
-  and the pairs that do not collide; saved as `"PhysicsLayers": {"Names": {"<index>": name}, "NoCollisions": [[a, b]]}`,
-  which scenes from before load as all colliding, without a format change). All of it is saved with the scene and
-  changed with `scene.setSettings` (one undo step); capacities apply when a world is created, at play start, the layer
-  matrix at the next step.
+  a limit; 0.4.0's body pairs are read and ignored). All of it is saved with the scene and changed with
+  `scene.setSettings` (one undo step); capacities apply when a world is created, at play start. The collision layers left
+  the scene settings for the project's (`Scene.CollisionLayers`, above): a 0.5.0 scene's `"PhysicsLayers"` is still read
+  (`Scene::GetStoredPhysicsLayers`), never written, and the editor migrates 0.5.0 projects' tables into the project when it
+  opens them (`Editor/ProjectMigration`).
 - **Scene assets are read once.** The scene loader (`SceneAsset::Deserialize`, on the loading worker) reads the
   document into a scene, which validates it, and keeps that *prepared scene* instead of the parsed JSON, which is dropped
   at once. `SceneAsset::TakePreparedScene` hands it over without a copy (the first call; the asset is spent afterwards,
@@ -1139,6 +1163,7 @@ the game (`EngineServices::ScopedProvider`, which restores the provider it repla
 | --- | --- | --- |
 | `IGameWindow`: window mode, resolution, vsync, the size the game renders at | StrataRuntime's `GameWindowService` (applied after the frame, `ApplyRequests`; headless: accepted and reported back), the editor's `EditorGameWindow` (recorded and reported, never applied: `editor.status`, a notice over the Game view and its "Game's request" resolution) | script host (`Game::SetWindowMode` and friends) |
 | `IGameSaves`: the save directory | `GameRuntime` (`<user data>/<game>/Saves`, `GameRuntimeOptions::SaveFilesDirectory`), `EditorContext` (`<project>/.strata/Saves`) | script host (`Game::WriteSaveFile` and friends, through `SaveFiles`) |
+| `IProjectSettings`: the project's settings sections, validated (DeveloperGuide.md, "Project settings") | `GameRuntime` (its manifest's, version 5 manifests; none for older ones), `EditorContext` (the open project's; none set without one) | the modules that register sections (Scene: `ProjectCollisionLayers`), on the main thread |
 
 ### Scene caches
 
@@ -1545,8 +1570,8 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   `Update` finalizes completions on the main thread: `Asset::FinalizeOnMainThread` creates GPU resources in one batch of
   the upload context (see the upload seam below), in steps, until the frame's upload or time budget is used up (`AssetFinalizeResult::Pending`: the asset
   continues next frame, first in line). Generations discard results of loads that were superseded by a reload, unload
-  or cancellation. `LoadAssetSync` is for tools and tests (unbudgeted: it finishes at once; scenes load through
-  `SceneLoader`, which never waits);
+  or cancellation. `LoadAssetSync` is for tools and tests (unbudgeted: it finishes at once, an asset the open batch
+  cannot take getting a batch of its own; scenes load through `SceneLoader`, which never waits);
   `ReplaceLoadedAsset` publishes an object made in memory for a registered asset at once (editors' document edits).
   Budgets,
   eviction, uploads and the queue are described in [Streaming and residency](#streaming-and-residency).
@@ -2976,9 +3001,9 @@ pointer is the UI's while a press that started over a target is held and while i
 `Input::SetPointerCapture` hides mouse buttons and scrolling from gameplay (`Input::GetPointerState` reads them for the
 UI), and a press that started elsewhere stays the game's until its release. Buttons click on a release over the button
 the press started on; toggles flip (one on per group); sliders follow the pointer while dragged and snap to whole
-numbers. Values change through `registry.patch` (the running scene, without undo). The fixed action set
-(`c_UIActionMap`: Submit, Cancel and four directions on keys, the d-pad and the left stick with hysteresis, repeating after
-0.4 s every 0.1 s) moves the focus: explicit neighbours, or automatically the selectable ahead with the lowest along + 2 x
+numbers. Values change through `registry.patch` (the running scene, without undo). The UI map of the game's input actions
+(`UI/Submit`, `UI/Cancel` and four directions, by default on keys, the d-pad and the left stick with hysteresis, rebindable;
+`UIActionState` repeats them after 0.4 s every 0.1 s, and follows them also while no canvas exists) moves the focus: explicit neighbours, or automatically the selectable ahead with the lowest along + 2 x
 across distance between centers. Selectable states (disabled, pressed, hovered, focused, normal) fade their tints over
 unscaled time (`Scene::GetUnscaledDeltaTime`, which time scale 0 does not stop), and only selectables showing a state
 keep a record, so an idle frame does no work. Events (`IUIEvents`: click, value changed, focus changed) are dispatched
@@ -3127,7 +3152,8 @@ is the `strata-scripting` skill. The layers:
   used is kept in imgui.ini, `StrataLauncher`, first `<home>/StrataProjects`), About Strata (`UI/AboutDialog`: build,
   GPU, startup time, and `ThirdPartyNotices.md` compiled in and shown through `UI/Markdown`), Export Game
   (`UI/ExportDialog`, see [Export and the runtime](#export-and-the-runtime)), Recover Unsaved Changes
-  (`UI/RecoveryDialog`), New Script and External Editor (`UI/ScriptDialogs`) and the unsaved-changes question. Panels
+  (`UI/RecoveryDialog`), New Script (`UI/ScriptDialogs`), Preferences (`UI/PreferencesDialog`, whose External Editor page
+  is `UI/ScriptDialogs`' `ExternalEditorPage`) and the unsaved-changes question. Panels
   reach them through `EditorPanelContext::Shell` (`UI/EditorShell.h`, implemented by `EditorLayer`), and agents through
   `editor.showDialog`.
   The question is the UI's half of a rule the commands enforce themselves: every command that replaces the edited scene
@@ -3370,6 +3396,16 @@ is the `strata-scripting` skill. The layers:
   windowed sessions that are not scripted; scripted runs, headless editors and tests wait in `OpenProject`, so their first
   command finds the scene). With a 1,000,000-entity start scene the window's first frame comes after 1.0 s instead of 6.8 s
   (Release; the scene follows about 7 s later, while frames go on).
+- **The project file's writes** (`Editor/SettingsFileWriter.h`). Changes of the project's settings (its own fields and its
+  settings sections: `project.setSettings`, which `project.settings` describes) are undo steps (`ProjectSettingsAction`)
+  that queue a write of the project file: the frame copies the project's small values, an I/O
+  job serializes and writes them atomically, and `EditorContext::Update` publishes the outcome; writes coalesce (one in
+  flight, the newest next). A failed write keeps the change in memory and leaves the file with unwritten settings, which
+  the commands that release the project refuse to discard unless forced; only `EditorContext::ReleaseProject` may write
+  on the main thread (it finishes a write in flight before the project goes). The person's preferences
+  (`Editor/EditorPreferences.h`: the registry's user sections, in `<user data>/Strata/Preferences.json`, which imports
+  0.5.0's `EditorSettings.json` once) are written the same way by a writer of their own; their changes are not undo
+  steps, and `editor.quit` refuses to discard unwritten ones unless forced.
 - **Background saves** (`Editor/DocumentSaver.h`). The one path that saves engine-native documents without holding a
   frame: the main thread takes a snapshot (`Scene::Copy` with `SerializedOnly`) and submits a `DocumentSaveRequest` (the
   snapshot, its undo `SavePoint`, a label and its items); a background job writes each item through `SceneDocumentWriter`
@@ -3709,13 +3745,14 @@ is the `strata-scripting` skill. The layers:
     component's menu copies and pastes its settable values through the clipboard as JSON
     (`EditorActions::CopyComponentValues`) and runs `component.set`/`component.remove {entities}`. With nothing selected
     it shows the scene's settings (gravity, the fixed step, and the physics world's capacities: 0, automatic sizing,
-    reads "Auto", `PropertyWidgetOptions::ZeroLabel`), applied by one `scene.setSettings` when a drag ends, the
-    collision layers (the named ones edited in place, "Name a Layer" for the next one without a name, and a matrix of
-    check boxes, one per pair of the layers shown: layer 0, the named ones and those with a pair that does not collide;
-    every edit is one `scene.setSettings`), how many entities sub-scenes create per frame (Streaming,
+    reads "Auto", `PropertyWidgetOptions::ZeroLabel`), applied by one `scene.setSettings` when a drag ends, a row
+    "Collision layers: <n> named" whose link opens the project's Collision Layers page (`CollisionLayersPage`: the named
+    layers edited in place, "Name a Layer" for the next one without a name, and a matrix of check boxes, one per pair of
+    the layers shown: layer 0, the named ones and those with a pair that does not collide; every edit is one
+    `project.setCollisionLayers`), how many entities sub-scenes create per frame (Streaming,
     `MaxEntitiesInstantiatedPerFrame`) and the first active sky light (the renderer's), in sections that start
-    closed: their headers sum them up ("Gravity 9.81 m/s² · 60 steps/s", "2 named · 1 pair passes through", the sky's
-    source; the summaries are formatted again only when their values change), and their rows,
+    closed: their headers sum them up ("Gravity 9.81 m/s² · 60 steps/s", the sky's source; the summaries are formatted
+    again only when their values change), and their rows,
     live widgets that cost frame time while they are drawn, show once a section is opened (it stays open while the
     editor runs).
   - The **Asset** inspector is tabbed with the Inspector: `EditorLayer` brings the tab of the inspection target forward
@@ -3901,10 +3938,10 @@ drawn at each level chosen by errors (`StreamingViewStats::MaxErrorPixelsPerLOD`
   crash. The project's files show relative to it, other paths cut at their start where the column is narrow, so file
   names stay readable, the cut texts computed again only when the column's width changes. Sources open in the person's
   code editor (`Editor/ExternalEditor`: `ExternalEditorLauncher` starts the command template's program directly, without a
-  shell, from the user's settings or `STRATA_EXTERNAL_EDITOR`, else the default application). The program is found as
+  shell, from the user's preferences or `STRATA_EXTERNAL_EDITOR`, else the default application). The program is found as
   the system finds programs (`Platform::FindProgram`: a path, or a name in the folders of PATH, on Windows with the
   extensions of PATHEXT), and VS Code's launcher in PATH (`bin/code.cmd`, a batch file) stands for `Code.exe` beside it;
-  `script.setExternalEditor` refuses a program it cannot find, and the External Editor dialog shows the program a command
+  `script.setExternalEditor` refuses a program it cannot find, and the Preferences' External Editor page shows the program a command
   starts and offers the editors found on the machine (`ExternalEditor::FindChoices`: VS Code, the Visual Studio of the
   engine's toolchain, CLion). The Problems panel's double click, the Console's click on a message naming a source line
   (`FindSourceReference`) and `script.open` go through `EditorContext::OpenScriptSource`, which opens only code, CMake
@@ -3943,8 +3980,10 @@ It writes:
 | --- | --- |
 | `<Game>.stpak` | `EditorAssetManager::WriteAssetPack` of the plan: every project asset, or with `prune` what the scenes and `Export.AlwaysInclude` use, ordered by first use; scenes, prefabs and models cooked (`cookDocuments`, default true: `AssetPackCook`, binary documents that load without parsing JSON, [Scene documents](#scene-documents)) |
 | script module (and its PDB) | `EditorContext::ReadRunningScriptModule`: the loaded module, checked by digest |
-| `<Game>.stgame` | `GameManifest` (version 4): name, pack, start scene, loading scene (`Export.LoadingScene`, optional), module, window settings |
+| `<Game>.stgame` | `GameManifest` (version 5): name, the game's identity (title, version, company, copyright, icon file: `project.setGameInfo`), pack, start scene, loading scene (`Export.LoadingScene`, optional), module, window settings, the project's settings sections (those this build's modules claim validated, the others as stored) |
+| `<Game>.png` | The game's icon, 256 x 256 pixels, made from its texture's source image by `GameIcon` (only with an icon) |
 | `<Game>[.exe]`, `ThirdPartyNotices.md` | `StrataRuntime` from the editor's directory, renamed (`includeRuntime`) |
+| `<Game>.desktop` | On Linux hosts, with the runtime: the desktop entry (`Editor/DesktopEntry`: the title, the executable's and the icon's absolute paths, the window class), for a person to install |
 
 The module's PDB is copied when it exists, except in Dist builds or with `includeScriptSymbols: false`
 (`GameExportOptions::IncludeScriptSymbols`). Pruning is off by default: scripts may load assets by path, which no scene
@@ -3994,7 +4033,8 @@ times arrived) and `GPUBusyMs`. A row describes one frame: what the frame left i
 columns belong together. `Create` registers every scene system's stage first, so `Scene.Animation` and every module's system
 get columns; a stage registered after the header gets none and is warned about once, by name. A log that cannot be written
 fails the run (exit code 1).
-`GameRuntime::Create` loads the manifest, makes a
+`GameRuntime::Create` loads the manifest, validates its settings sections (version 5; a section a registered module
+claims that its module refuses stops the game, naming it) and provides them as `IProjectSettings` while it lives, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
 `PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module
 into its own `ScriptEngine` without hot reload and makes it active, and starts loading the start scene (`SceneLoader`) and

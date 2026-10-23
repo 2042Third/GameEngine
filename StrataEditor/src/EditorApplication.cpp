@@ -5,6 +5,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
+#include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Core/Timer.h>
 #include <Strata/Core/Version.h>
 #include <Strata/Engine/EntryPoint.h>
@@ -13,8 +14,10 @@
 #include <Strata/Project/ProjectModule.h>
 #include <Strata/Renderer/GraphicsDevice.h>
 #include <Strata/Renderer/GraphicsModule.h>
+#include <Strata/Renderer/ImageReader.h>
 #include <Strata/Renderer/Renderer.h>
 
+#include "Editor/EditorPreferences.h"
 #include "Editor/ExternalEditor.h"
 #include "EditorHost.h"
 #include "EditorIcon.h"
@@ -30,6 +33,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Strata
 {
@@ -39,6 +43,22 @@ namespace Strata
 
 	namespace
 	{
+
+		// The window icon at every size of c_EditorIconSizes, and the strata mark at 256 pixels for systems that show the
+		// program's icon larger than a window's (macOS's Dock takes the largest image), decoded from its PNG: well under a
+		// millisecond, and 252 KiB of raw pixels fewer in the executable.
+		void SetEditorWindowIcon(Window& window)
+		{
+			const auto sizes = GetEditorWindowIcon();
+			std::vector<WindowIconImage> images(sizes.begin(), sizes.end());
+			std::string error;
+			const std::optional<ReadbackImage> large = ImageReader::DecodeRGBA8(EmbeddedFiles::GetStrataMark256Png(), &error);
+			if (large)
+				images.push_back({ large->Width, large->Height, large->Pixels });
+			else
+				ST_ERROR("The editor's 256-pixel icon does not decode: {}", error);
+			window.SetIcon(images);
+		}
 
 		// Every option the editor understands (its usage, and what CommandLineOptions::FindUnknownArgument accepts).
 		constexpr CommandLineOption c_Arguments[] = {
@@ -153,6 +173,21 @@ namespace Strata
 			return layer ? layer->GetUIScale() : 1.0f;
 		}
 
+		float GetDisplayUIScale() const override
+		{
+			const ImGuiModule* imgui = m_Application.GetModules().Find<ImGuiModule>();
+			const ImGuiLayer* layer = imgui ? imgui->GetLayer() : nullptr;
+			return layer ? layer->GetDisplayUIScale() : 1.0f;
+		}
+
+		void SetUIScaleFactor(float factor) override
+		{
+			// The layer's override (--ui-scale) wins over the factor.
+			const ImGuiModule* imgui = m_Application.GetModules().Find<ImGuiModule>();
+			if (ImGuiLayer* layer = imgui ? imgui->GetLayer() : nullptr)
+				layer->SetContentScaleFactor(factor);
+		}
+
 		void SetMaxFrameRate(uint32_t framesPerSecond) override { m_Application.SetMaxFrameRate(framesPerSecond); }
 		uint32_t GetMaxFrameRate() const override { return m_Application.GetMaxFrameRate(); }
 		double GetLastFrameWorkTime() const override { return m_Application.GetLastFrameWorkTime(); }
@@ -184,7 +219,7 @@ namespace Strata
 			: Application(specification)
 		{
 			if (Window* window = GetWindow())
-				window->SetIcon(GetEditorWindowIcon());
+				SetEditorWindowIcon(*window);
 			if (!IsRunning())
 				return;
 			// The editor's look: the Bedrock theme at the UI scale, and its own fonts (ImGui's built-in font is never used).
@@ -265,7 +300,8 @@ namespace Strata
 		// The projects a person or an agent opens go to the user's recent projects; scripted runs only read them.
 		options.RecentProjectsFile = RecentProjects::GetDefaultFile().value_or(std::filesystem::path());
 		options.RecentProjectsReadOnly = !options.CommandScript.empty() || commandLine.GetIntOption("--frames").has_value();
-		// The person's code editor for script sources (script.setExternalEditor).
+		// The person's preferences, such as the code editor for script sources; 0.5.0's settings file is only imported from.
+		options.PreferencesFile = EditorPreferences::GetDefaultFile().value_or(std::filesystem::path());
 		options.EditorSettingsFile = ExternalEditor::GetDefaultSettingsFile().value_or(std::filesystem::path());
 
 		// Automation (StrataCLI, MCP): on by default, on a free loopback port unless --automation-port picks one. The values
@@ -323,6 +359,8 @@ namespace Strata
 		// The editor imports assets: the composition root registers the modules with the asset pipeline.
 		ApplicationLaunch launch;
 		launch.Registration.AssetPipeline = RegisterAssetPipeline;
+		// The editor's preference sections, beside the modules' settings sections.
+		launch.Registration.Extra.push_back([]() { EditorPreferences::RegisterSections(SettingsRegistry::GetProcessRegistry()); });
 		launch.Create = [specification, options]() -> Scope<Application> { return CreateScope<EditorApplication>(specification, options); };
 		return launch;
 	}

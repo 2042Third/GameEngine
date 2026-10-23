@@ -191,6 +191,8 @@ endif()
 
 if(WIN32)
 	target_sources(StrataTests PRIVATE "${PROJECT_SOURCE_DIR}/CMake/Strata.manifest")
+	# The tests read stamped executables' version information as Windows does (GetFileVersionInfoW: Tests::ReadExecutableVersion).
+	target_link_libraries(StrataTests PRIVATE version)
 endif()
 
 # The feature test (FeatureTest/, see Docs/DeveloperGuide.md, "Feature test") runs as its own test; its GPU suite runs
@@ -315,6 +317,15 @@ add_test(NAME StrataTests.GPU
 	COMMAND StrataTests --test-suite=GPU* --no-intro=true
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
 set_tests_properties(StrataTests.GPU PROPERTIES LABELS "gpu")
+
+# The Dock icon (Platform.DockIcon) needs the window server but no GPU: a test of its own on the Mac, labelled gpu like the
+# other tests that need a display.
+if(APPLE)
+	add_test(NAME StrataTests.DockIcon
+		COMMAND StrataTests --test-suite=Platform.DockIcon --no-intro=true
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+	set_tests_properties(StrataTests.DockIcon PROPERTIES LABELS "gpu")
+endif()
 
 # The version in the release archives' names: empty follows the project's version, other values must be it with an
 # optional pre-release suffix (CMake/StrataPackageVersion.cmake).
@@ -499,12 +510,27 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataEditor.Export PROPERTIES FIXTURES_REQUIRED StrataExportClean FIXTURES_SETUP StrataExportedGame)
 
 	add_test(NAME StrataRuntime.Smoke COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 30)
+	# The third export carries the game's identity: its log names the title and version, and its icon lies next to it.
+	add_test(NAME StrataRuntime.Identity
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_EXPORT_TEST_DIR}/BuildIdentity/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DARGUMENTS=--headless|--frames|30" "-DEXPECT=Smoke Adventure 2.0.1 (Strata "
+			"-DEXPECT_PATHS=${STRATA_EXPORT_TEST_DIR}/BuildIdentity/SmokeGame.png|${STRATA_EXPORT_TEST_DIR}/BuildIdentity/SmokeGame.stgame"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataRuntime.Identity PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 	set_tests_properties(StrataRuntime.Smoke PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
-	# The exported game's executable (the runtime, renamed) carries the strata mark as its icon (StrataRuntime.rc.in).
+	# The exported game's executable (the runtime, stamped with the game's version: PEResources) carries the strata mark as
+	# its icon when the game has none (StrataRuntime.rc.in), and the game's icon and version information when it has them,
+	# as Windows reads them.
 	if(WIN32)
 		add_test(NAME StrataRuntime.Icon COMMAND StrataTests --strata-test-helper=check-icon "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}"
 			"${PROJECT_SOURCE_DIR}/StrataEditor/Resources/Brand/StrataMark.ico")
-		set_tests_properties(StrataRuntime.Icon PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+		add_test(NAME StrataRuntime.GameIcon COMMAND StrataTests --strata-test-helper=check-icon
+			"${STRATA_EXPORT_TEST_DIR}/BuildIdentity/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" "${CMAKE_CURRENT_SOURCE_DIR}/FeatureTest/Assets/Textures/Checker.png")
+		add_test(NAME StrataRuntime.VersionInfo COMMAND StrataTests --strata-test-helper=check-version
+			"${STRATA_EXPORT_TEST_DIR}/BuildIdentity/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" "FILEVERSION=2.0.1.0" "PRODUCTVERSION=2.0.1.0"
+			"FileDescription=Smoke Adventure" "ProductName=Smoke Adventure" "FileVersion=2.0.1" "ProductVersion=2.0.1" "CompanyName=Strata Tests"
+			"LegalCopyright=(c) 2026 Strata Tests" "InternalName=SmokeGame" "OriginalFilename=SmokeGame.exe")
+		set_tests_properties(StrataRuntime.Icon StrataRuntime.GameIcon StrataRuntime.VersionInfo PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 	endif()
 	# Headless games run at 60 frames per second, so 180 frames are three seconds of game time (and of the clock), not a burst.
 	add_test(NAME StrataRuntime.HeadlessPacing
@@ -643,12 +669,13 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 
 	# The game runs longer than the in-process feature scenario (200 frames), where nothing may end it: its scripts quit only
 	# when a test runner asks them to. Its save files go into the build tree (--save-directory), never into the user's data,
-	# where the runs of other build trees would meet them.
+	# where the runs of other build trees would meet them. Its log names the project's title and version, and its icon lies
+	# next to it.
 	add_test(NAME StrataRuntime.FeatureTest
 		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_FEATURE_RUN_DIR}/Build/FeatureTest${CMAKE_EXECUTABLE_SUFFIX}"
 			"-DARGUMENTS=--headless|--frames|240|--save-directory|${STRATA_FEATURE_RUN_DIR}/Saves"
-			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}|Keeping the game's save files in ${STRATA_FEATURE_RUN_DIR}/Saves"
-			"-DEXPECT_PATHS=${STRATA_FEATURE_RUN_DIR}/Saves" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}|Keeping the game's save files in ${STRATA_FEATURE_RUN_DIR}/Saves|Strata Feature Test 6.1.2.3 (Strata "
+			"-DEXPECT_PATHS=${STRATA_FEATURE_RUN_DIR}/Saves|${STRATA_FEATURE_RUN_DIR}/Build/FeatureTest.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataRuntime.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestGame LABELS "feature")
 endif()
 
@@ -814,9 +841,11 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		FIXTURES_REQUIRED "StrataOpenWorldExport;StrataPerfResults"
 		ENVIRONMENT "STRATA_OPEN_WORLD_GAME=${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX}")
 	# The Third-Person Adventure: the main menu's Play loads the course (Game::LoadScene); the robot walks where the camera looks
-	# (its animator in Walk or Run while it moves, Idle after), jumps, pushes the crate, collects a coin, pauses at time scale
-	# 0 and saves a setting from the pause menu, and completes the course at the goal. The exported games wait in the main
-	# menu until its attract mode loads the course from the cooked pack, behind the loading scene, and walks to a coin.
+	# (its animator in Walk or Run while it moves, Idle after), with W and, back at its start, with the left stick pushed
+	# forward (its input actions; neither walk reaches the first coin, so the coin it collects later is its first), the right
+	# stick pushed up looks up, and it jumps, pushes the crate, collects a coin, pauses at time scale 0 and saves a setting
+	# from the pause menu, and completes the course at the goal. The exported games wait in the main menu until its attract
+	# mode loads the course from the cooked pack, behind the loading scene, and walks to a coin.
 	add_test(NAME StrataEditor.ThirdPerson
 		COMMAND "${CMAKE_COMMAND}"
 			"-DEDITOR=$<TARGET_FILE:StrataEditor>"

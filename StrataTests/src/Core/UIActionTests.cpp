@@ -1,22 +1,29 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Core/EngineServices.h"
+#include "Strata/Core/ProjectSettings.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Input/Input.h"
-#include "Strata/Input/InputNames.h"
+#include "Strata/Input/InputActions.h"
+#include "Strata/Input/InputActionSet.h"
 #include "Strata/Input/UIActions.h"
+
+#include <nlohmann/json.hpp>
 
 #include <limits>
 #include <string>
-#include <string_view>
+#include <vector>
 
 using namespace Strata;
 
 namespace
 {
 
-	// Starts an input frame and updates the actions with it.
+	// Starts an input frame, lets the input actions take it (as Application does) and updates the UI actions with it.
 	void Step(UIActionState& actions, float deltaSeconds)
 	{
 		Input::BeginFrame();
+		InputActions::Update();
 		actions.Update(deltaSeconds);
 	}
 
@@ -24,37 +31,32 @@ namespace
 
 TEST_SUITE("Core.UIActions")
 {
-	TEST_CASE("The UI action map lists every action in order, with controls Input knows")
+	TEST_CASE("The UI map's defaults list every action in order, as Buttons with the controls the game UI navigated with")
 	{
+		const std::vector<InputAction>& defaults = InputActionSet::GetDefaultUIActions();
+		REQUIRE(defaults.size() == c_UIActionCount);
 		for (uint32_t action = 0; action < c_UIActionCount; action++)
 		{
-			const UIActionBinding& entry = c_UIActionMap[action];
-			CHECK(std::string(entry.Action) == GetUIActionName(static_cast<UIAction>(action))); // Strings: MSVC's doctest prints no string_view
-			uint32_t sticks = 0;
-			for (const std::string_view binding : entry.Bindings)
-			{
-				if (binding.empty())
-					continue;
-				INFO("Binding ", std::string(binding)); // A string: doctest prints no std::string_view without <ostream>
-				if (binding.starts_with("Key/"))
-				{
-					CHECK(InputNames::FindKey(binding.substr(4)).has_value());
-					continue;
-				}
-				REQUIRE(binding.starts_with("Gamepad/"));
-				const std::string_view name = binding.substr(8);
-				if (name.ends_with('+') || name.ends_with('-'))
-				{
-					sticks++;
-					CHECK(InputNames::FindGamepadAxis(name.substr(0, name.size() - 1)).has_value());
-				}
-				else
-				{
-					CHECK(InputNames::FindGamepadButton(name).has_value());
-				}
-			}
-			CHECK(sticks <= 1);
+			const UIAction uiAction = static_cast<UIAction>(action);
+			CHECK(defaults[action].Name == GetUIActionName(uiAction));
+			CHECK(std::string(GetUIActionQualifiedName(uiAction)) == std::string("UI/") + GetUIActionName(uiAction));
+			CHECK(defaults[action].Kind == InputActionKind::Button);
+			for (const InputBinding& binding : defaults[action].Bindings)
+				CHECK(binding.FitsKind(InputActionKind::Button));
 		}
+		const auto texts = [&defaults](UIAction action)
+		{
+			std::vector<std::string> bindings;
+			for (const InputBinding& binding : defaults[static_cast<size_t>(action)].Bindings)
+				bindings.push_back(binding.ToString());
+			return bindings;
+		};
+		CHECK(texts(UIAction::Submit) == std::vector<std::string> { "Key/Enter", "Key/KPEnter", "Key/Space", "Gamepad/A" });
+		CHECK(texts(UIAction::Cancel) == std::vector<std::string> { "Key/Escape", "Gamepad/B" });
+		CHECK(texts(UIAction::Up) == std::vector<std::string> { "Key/Up", "Gamepad/DPadUp", "Gamepad/LeftY+" });
+		CHECK(texts(UIAction::Down) == std::vector<std::string> { "Key/Down", "Gamepad/DPadDown", "Gamepad/LeftY-" });
+		CHECK(texts(UIAction::Left) == std::vector<std::string> { "Key/Left", "Gamepad/DPadLeft", "Gamepad/LeftX-" });
+		CHECK(texts(UIAction::Right) == std::vector<std::string> { "Key/Right", "Gamepad/DPadRight", "Gamepad/LeftX+" });
 	}
 
 	TEST_CASE("A held key presses its action once, repeats after the delay and then at the interval")
@@ -171,6 +173,53 @@ TEST_SUITE("Core.UIActions")
 		Input::ReleaseSimulatedGamepadAxis(1, GamepadAxis::LeftX);
 		Step(actions, 0.016f);
 		CHECK_FALSE(actions.IsDown(UIAction::Left));
+		Input::Reset();
+	}
+
+	TEST_CASE("The UI actions follow the set when the project changes it, and idle updates read nothing new")
+	{
+		SettingsRegistry registry;
+		REQUIRE(registry.Register(InputActionSet::MakeSection()));
+		ProjectSettingsValues settings;
+		EngineServices::ScopedProvider<IProjectSettings> provider(settings);
+		Input::Reset();
+		UIActionState actions;
+		Input::SimulateKey(Key::Enter, true);
+		Step(actions, 0.016f);
+		CHECK(actions.IsPressed(UIAction::Submit));
+
+		// The UI map moves behind a game's map: every UI action has another place in the set now.
+		const nlohmann::json moved = { { "Maps", nlohmann::json::array({
+			{ { "Name", "Gameplay" }, { "Actions", nlohmann::json::array({ { { "Name", "Jump" }, { "Bindings", { "Key/Escape" } } },
+				{ { "Name", "Fire" }, { "Bindings", { "Key/Enter" } } } }) } },
+			{ { "Name", "UI" } } }) } };
+		std::string error;
+		REQUIRE_MESSAGE(settings.Set(InputActionSet::c_SectionId, moved, registry, &error), error);
+		Step(actions, 0.016f);
+		CHECK(actions.IsDown(UIAction::Submit));
+		CHECK_FALSE(actions.IsPressed(UIAction::Submit));
+		Input::SimulateKey(Key::Escape, true);
+		Step(actions, 0.016f);
+		CHECK(actions.IsPressed(UIAction::Cancel));
+		CHECK(actions.IsDown(UIAction::Submit));
+		Input::SimulateKey(Key::Enter, false);
+		Input::SimulateKey(Key::Escape, false);
+		Step(actions, 0.016f);
+		CHECK_FALSE(actions.IsDown(UIAction::Submit));
+		CHECK_FALSE(actions.IsDown(UIAction::Cancel));
+
+		// Updates without an input frame or a change read what the last one did; a map disabled meanwhile lets go of the held
+		// action in the next input frame.
+		Input::SimulateKey(Key::Down, true);
+		Step(actions, 0.016f);
+		CHECK(actions.IsPressed(UIAction::Down));
+		actions.Update(0.016f);
+		CHECK(actions.IsDown(UIAction::Down));
+		CHECK(InputActions::SetMapEnabled("UI", false));
+		actions.Update(0.016f);
+		CHECK(actions.IsDown(UIAction::Down));
+		Step(actions, 0.016f);
+		CHECK_FALSE(actions.IsDown(UIAction::Down));
 		Input::Reset();
 	}
 }

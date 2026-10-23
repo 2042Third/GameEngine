@@ -61,6 +61,12 @@ namespace Strata
 					else
 						input.Release(SimulatedControlType::GamepadAxis, SimulatedInput::MakeGamepadCode(event.Gamepad, static_cast<uint32_t>(event.Axis)));
 					break;
+				case EventType::Action:
+					if (event.Action == ButtonAction::Release)
+						input.ReleaseAction(event.ActionName);
+					else
+						m_Holds.push_back(input.HoldAction(event.ActionName, event.ActionValue, event.Action == ButtonAction::Tap ? event.TapSteps : 0, fixedSteps));
+					break;
 				case EventType::MouseMove:
 					Input::SimulateMouseMove(event.Vector);
 					break;

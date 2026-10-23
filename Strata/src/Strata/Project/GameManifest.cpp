@@ -29,8 +29,14 @@ namespace Strata
 	{
 		return {
 			{ "Strata", { { "Format", "Game" }, { "Version", c_FormatVersion } } },
+			{ "Settings", Settings ? Settings->ToJson() : nlohmann::json::object() },
 			{ "Game", {
 				{ "Name", Name },
+				{ "Title", Title },
+				{ "Version", Version },
+				{ "Company", Company },
+				{ "Copyright", Copyright },
+				{ "Icon", Icon },
 				{ "AssetPack", AssetPack },
 				{ "PatchPacks", PatchPacks },
 				{ "StartScene", UUIDToJson(StartScene) },
@@ -60,6 +66,35 @@ namespace Strata
 
 		GameManifest manifest;
 		manifest.Name = JsonUtils::GetString(*game, "Name", manifest.Name);
+		// Version 5: the game's identity, checked as the project checks it (the export wrote it from there). Older games have
+		// none: their name is their title, and they name no version.
+		manifest.Version.clear();
+		if (version >= 5)
+		{
+			for (const char* field : { "Title", "Version", "Company", "Copyright", "Icon" })
+			{
+				const nlohmann::json* member = JsonUtils::Find(*game, field);
+				if (member && !member->is_string())
+					return fail(fmt::format("\"{}\" must be a string", field));
+			}
+			ProjectGameInfo identity;
+			identity.Title = JsonUtils::GetString(*game, "Title");
+			// An empty version names none, as before version 5: a manifest read from an older one is saved with an empty one.
+			const std::string gameVersion = JsonUtils::GetString(*game, "Version", identity.Version);
+			if (!gameVersion.empty())
+				identity.Version = gameVersion;
+			identity.Company = JsonUtils::GetString(*game, "Company");
+			identity.Copyright = JsonUtils::GetString(*game, "Copyright");
+			if (std::optional<std::string> problem = identity.Validate())
+				return fail(fmt::format("The game's identity is invalid: {}", *problem));
+			manifest.Title = std::move(identity.Title);
+			manifest.Version = gameVersion.empty() ? std::string() : std::move(identity.Version);
+			manifest.Company = std::move(identity.Company);
+			manifest.Copyright = std::move(identity.Copyright);
+			manifest.Icon = JsonUtils::GetString(*game, "Icon");
+			if (!manifest.Icon.empty() && !IsPlainFileName(manifest.Icon))
+				return fail("\"Icon\" must be the file name of the game's icon next to the manifest");
+		}
 		manifest.AssetPack = JsonUtils::GetString(*game, "AssetPack");
 		if (!IsPlainFileName(manifest.AssetPack))
 			return fail("\"AssetPack\" must be the file name of the asset pack next to the manifest");
@@ -97,6 +132,21 @@ namespace Strata
 			manifest.WindowHeight = static_cast<uint32_t>(std::clamp<uint64_t>(JsonUtils::GetUInt(*window, "Height", manifest.WindowHeight), 1, c_MaxWindowSize));
 			manifest.Fullscreen = JsonUtils::GetBool(*window, "Fullscreen", manifest.Fullscreen);
 			manifest.VSync = JsonUtils::GetBool(*window, "VSync", manifest.VSync);
+		}
+
+		// Version 5: the project's settings, checked for their shape and size only (GameRuntime validates their values).
+		manifest.Settings.reset();
+		if (version >= 5)
+		{
+			manifest.Settings = ProjectSettingsValues();
+			if (const nlohmann::json* settings = JsonUtils::Find(json, "Settings"))
+			{
+				std::string settingsError;
+				std::optional<ProjectSettingsValues> values = ProjectSettingsValues::FromJson(*settings, &settingsError);
+				if (!values)
+					return fail(fmt::format("The manifest's settings are invalid: {}", settingsError));
+				manifest.Settings = std::move(*values);
+			}
 		}
 		return manifest;
 	}

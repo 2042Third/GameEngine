@@ -13,6 +13,8 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_EDITOR_CORE_S
 target_include_directories(StrataEditorCore PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 # The engine, and the tooling only editors contain: the asset pipeline and the network (automation).
 target_link_libraries(StrataEditorCore PUBLIC Strata Strata::AssetPipeline Strata::Network)
+# The game icon's conversion (Editor/GameIcon) resizes with stb_image_resize2.
+target_link_libraries(StrataEditorCore PRIVATE stb)
 strata_precompile_headers(StrataEditorCore "${CMAKE_CURRENT_SOURCE_DIR}/src/EditorPch.h")
 
 # Script builds (script.build) configure game script modules with the engine's own toolchain and configuration and the
@@ -83,11 +85,13 @@ if(WIN32)
 	target_sources(StrataEditor PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Generated/StrataEditor.rc")
 endif()
 
-# The window icon: the strata mark as raw RGBA at every size of c_EditorIconSizes (Tools/GenerateBrandAssets.py), so
-# nothing is decoded at startup. Declared in src/EditorIcon.h.
+# The window icon: the strata mark as raw RGBA at every size of c_EditorIconSizes (Tools/GenerateBrandAssets.py), which
+# needs no decoding, and its 256-pixel PNG, decoded at startup for macOS's Dock (EditorApplication.cpp). Declared in
+# src/EditorIcon.h.
 foreach(size IN ITEMS 16 20 24 28 32 40 48 56 64)
 	strata_embed_file(StrataEditor "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Brand/StrataMark${size}.rgba" GetStrataMark${size})
 endforeach()
+strata_embed_file(StrataEditor "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Brand/StrataMark256.png" GetStrataMark256Png)
 
 # The sample projects next to the executables, where the editor's launcher offers them (Open Sample copies one into a
 # folder the user picks). Synced at every build, without local editor data (CMake/StrataCopySamples.cmake).

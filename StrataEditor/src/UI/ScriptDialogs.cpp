@@ -2,6 +2,7 @@
 
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorPreferences.h"
 #include "Editor/ExternalEditor.h"
 #include "Editor/ScriptProject.h"
 #include "UI/EditorFonts.h"
@@ -157,43 +158,38 @@ namespace Strata
 	// External Editor
 	////////////////////////////////////////////////////////////////////////////////
 
-	void ExternalEditorDialog::Open(EditorPanelContext& context)
+	ExternalEditorPage::ExternalEditorPage(EditorContext& context)
+		: m_Command(context.GetExternalEditor().GetUserCommand()), m_PreferencesVersion(context.GetPreferences().GetVersion())
 	{
-		m_Command = context.Context.GetExternalEditor().GetUserCommand();
-		m_Error.clear();
-		m_CheckedCommand.reset();
-		// The editors on this machine are looked for once per opening (the file system is read).
-		const ScriptBuildSettings& toolchain = context.Context.GetScriptBuildSettings();
+		// The editors on this machine are looked for once per page (the file system is read).
+		const ScriptBuildSettings& toolchain = context.GetScriptBuildSettings();
 		const std::filesystem::path toolchainFiles[] = { toolchain.CXXCompiler, toolchain.MakeProgram };
 		m_Choices = ExternalEditor::FindChoices(toolchainFiles);
 		m_ChoicesFound = !m_Choices.empty();
 		if (!m_ChoicesFound)
 			m_Choices = ExternalEditor::GetExampleChoices();
-		m_OpenRequested = true;
 	}
 
-	void ExternalEditorDialog::Draw(EditorPanelContext& context)
+	void ExternalEditorPage::Draw(EditorPanelContext& context, float width)
 	{
-		if (m_OpenRequested)
-		{
-			UI::OpenModal(c_Popup);
-			m_OpenRequested = false;
-		}
-		bool open = true;
-		m_Open = UI::BeginModal(c_Popup, "External Editor", &open);
-		if (!m_Open)
-			return;
-		// Escape leaves the field first, then closes the dialog.
-		const bool editing = ImGui::IsAnyItemActive();
-		const float width = ImGui::GetFontSize() * c_WidthInFontSizes;
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		const ExternalEditorLauncher& launcher = context.Context.GetExternalEditor();
+		// Set elsewhere meanwhile (preferences.set, script.setExternalEditor): the field shows it, unless it is being typed in.
+		if (const uint64_t version = context.Context.GetPreferences().GetVersion(); version != m_PreferencesVersion && !ImGui::IsAnyItemActive())
+		{
+			m_PreferencesVersion = version;
+			m_Command = launcher.GetUserCommand();
+		}
 
 		Caption("The command that opens script sources at a line: from the Problems panel, crash reports and New Script. {file}, {line}, "
 			"{column} and {directory} are filled in; without {file}, the file goes last. Empty: the system's default application.", colors.TextSecondary, width);
 		ImGui::Spacing();
-		UI::TextField("ExternalEditor.Command", "Command", m_Command, "code -g {file}:{line}:{column}", width);
+		const float applyWidth = UI::DialogButtonWidth("Apply");
+		UI::TextField("ExternalEditor.Command", "Command", m_Command, "code -g {file}:{line}:{column}",
+			std::max(width - applyWidth - ImGui::GetStyle().ItemSpacing.x, 1.0f));
 		const bool submitted = ImGui::IsItemDeactivatedAfterEdit() && IsEnterPressed();
+		ImGui::SameLine();
+		const bool apply = UI::DialogButton("ExternalEditor.Apply", "Apply", true, m_Command != launcher.GetUserCommand()) || submitted;
 		// The program the command starts, looked for again only when the command changed (the file system is read then).
 		if (!m_CheckedCommand || *m_CheckedCommand != m_Command)
 		{
@@ -221,27 +217,15 @@ namespace Strata
 		if (!m_Error.empty())
 			Caption(m_Error, colors.Error, width);
 
-		ImGui::Spacing();
-		PlaceButtons(width, { "Cancel", "Save" });
-		const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-		if (UI::DialogButton("ExternalEditor.Cancel", "Cancel") || (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !editing && focused))
-			open = false;
-		ImGui::SameLine();
-		if (UI::DialogButton("ExternalEditor.Save", "Save", true) || (submitted && open))
+		if (apply)
 		{
 			const EditorCommandResult result = context.Commands.Execute(context.Context, "script.setExternalEditor", { { "command", m_Command } },
 				CommandOrigin { CommandSource::UI });
-			if (result.Success)
-				open = false;
-			else
-				m_Error = result.Error;
+			m_Error = result.Success ? std::string() : result.Error;
 		}
-		if (!open)
-			ImGui::CloseCurrentPopup();
-		UI::EndModal();
 	}
 
-	void ExternalEditorDialog::DrawChoices(float width)
+	void ExternalEditorPage::DrawChoices(float width)
 	{
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		const float nameWidth = ImGui::GetFontSize() * c_ChoiceNameWidthInFontSizes;

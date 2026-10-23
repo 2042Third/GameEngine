@@ -104,10 +104,11 @@ namespace Strata
 		// Sets the scene's gravity (SceneSettings::Gravity) and applies it immediately. Non-finite values are rejected.
 		bool SetGravity(const glm::vec3& gravity);
 		glm::vec3 GetGravity() const;
-		// Whether two layers collide: both the scene's layer matrix (SceneSettings::PhysicsLayers) and the default settings'
-		// (GetDefaultSettings, all layers collide unless a program changes them) must allow it. SetLayersCollide changes the
-		// scene's matrix, so the change is what the scene shows (and saves), and applies it to the running simulation at once;
-		// changes of the scene's matrix made elsewhere (scene.setSettings, undo) apply at the next fixed step.
+		// Whether two layers collide: both the scene's copy of the project's layer matrix (Scene::GetPhysicsLayers) and the
+		// default settings' (GetDefaultSettings, all layers collide unless a program changes them) must allow it.
+		// SetLayersCollide changes the scene's copy, so the change is what the scene shows (for as long as it runs: the copy is
+		// not saved), and applies it to the running simulation at once; changes of the copy made elsewhere (the project's
+		// table applied again, Scene::ApplyProjectLayers) apply at the next fixed step.
 		void SetLayersCollide(uint32_t layerA, uint32_t layerB, bool collide);
 		bool DoLayersCollide(uint32_t layerA, uint32_t layerB) const;
 		PhysicsStats GetStats() const;
@@ -188,7 +189,7 @@ namespace Strata
 		void SyncGravity();
 		// The matrix the world uses: the scene's and the default settings' masks together.
 		std::array<uint32_t, c_PhysicsLayerCount> GetEffectiveLayerMasks() const;
-		// Applies the scene's layer matrix to the world when it changed (scene.setSettings, a script, the inspector).
+		// Applies the scene's layer matrix to the world when it changed (the project's table applied again, a script).
 		void SyncLayers();
 		void DispatchCollisionEvents();
 		// Tells the world which contacts to track: all of them while a listener of every entity is registered.

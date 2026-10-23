@@ -10,6 +10,8 @@
 #include <Strata/GameUI/GameUIHitTest.h>
 #include <Strata/GameUI/GameUIScene.h>
 #include <Strata/Input/Input.h>
+#include <Strata/Input/InputActions.h>
+#include <Strata/Input/InputActionSet.h>
 #include <Strata/Input/InputNames.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -23,6 +25,8 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace Strata
@@ -113,28 +117,30 @@ namespace Strata
 			return { { "type", "array" }, { "items", { { "type", "number" } } }, { "minItems", 2 }, { "maxItems", 2 }, { "description", std::move(description) } };
 		}
 
-		std::optional<ButtonAction> ReadAction(CommandArguments& arguments)
+		// tap, press or release, in the parameter `name` (input.key's "action", input.action's "mode").
+		std::optional<ButtonAction> ReadAction(CommandArguments& arguments, const char* name)
 		{
-			const std::string action = arguments.GetString("action", "tap");
+			const std::string action = arguments.GetString(name, "tap");
 			if (action == "tap")
 				return ButtonAction::Tap;
 			if (action == "press")
 				return ButtonAction::Press;
 			if (action == "release")
 				return ButtonAction::Release;
-			arguments.SetError(fmt::format("Parameter 'action' must be tap, press or release, not '{}'", action));
+			arguments.SetError(fmt::format("Parameter '{}' must be tap, press or release, not '{}'", name, action));
 			return std::nullopt;
 		}
 
-		// Reads action and its duration in fixed steps (steps, seconds or frames); a duration only means something for taps.
+		// Reads tap, press or release (in `name`) and its duration in fixed steps (steps, seconds or frames); a duration only
+		// means something for taps.
 		std::optional<ButtonAction> ReadButtonAction(const nlohmann::json& parameters, CommandArguments& arguments, const EditorContext& context,
-			int64_t& outSteps)
+			int64_t& outSteps, const char* name = "action")
 		{
-			const std::optional<ButtonAction> action = ReadAction(arguments);
+			const std::optional<ButtonAction> action = ReadAction(arguments, name);
 			const std::optional<int64_t> steps = ReadDuration(parameters, arguments, context);
 			outSteps = steps.value_or(1);
 			if (action && *action != ButtonAction::Tap && steps)
-				arguments.SetError("Parameters 'steps', 'seconds' and 'frames' only apply to action tap");
+				arguments.SetError(fmt::format("Parameters 'steps', 'seconds' and 'frames' only apply to {} tap", name));
 			return action;
 		}
 
@@ -220,6 +226,15 @@ namespace Strata
 			return axes;
 		}
 
+		// [{"action": "Gameplay/Move", "value": [0, 1]}, ...]
+		nlohmann::json DescribeHeldActions(const SimulatedInput& input)
+		{
+			nlohmann::json actions = nlohmann::json::array();
+			for (const Ref<const SimulatedHold>& hold : input.GetHeldActions())
+				actions.push_back({ { "action", hold->Action }, { "value", { hold->ActionValue.x, hold->ActionValue.y } } });
+			return actions;
+		}
+
 		// What the commands hold, and where the simulated pointer is.
 		nlohmann::json DescribeSimulatedInput(const EditorContext& context)
 		{
@@ -230,6 +245,7 @@ namespace Strata
 				{ "mouseButtons", DescribeButtons(input, SimulatedControlType::MouseButton) },
 				{ "gamepadButtons", DescribeGamepadButtons(input) },
 				{ "gamepadAxes", DescribeGamepadAxes(input) },
+				{ "simulatedActions", DescribeHeldActions(input) },
 				{ "mousePosition", position ? nlohmann::json { position->x, position->y } : nlohmann::json(nullptr) } };
 		}
 
@@ -270,6 +286,27 @@ namespace Strata
 			});
 		}
 
+		// A tap answers once the game has seen its end: the input frame after the frame that ran its last step (unless another
+		// hold keeps the button down), or at once without `wait`.
+		EditorCommandResult AnswerWhenTapEnds(EditorContext& context, bool wait, Ref<const SimulatedHold> hold, nlohmann::json result, std::string what)
+		{
+			if (!wait)
+				return AnswerNow(context, std::move(result));
+			return EditorCommandResult::Defer([hold, result = std::move(result), what = std::move(what)](EditorContext& pollContext) -> std::optional<EditorCommandResult>
+			{
+				if (!IsGameRunning(pollContext))
+					return EditorCommandResult::Fail(fmt::format("Play mode stopped before the {} was released", what));
+				if (!hold->Ended || Input::GetFrameIndex() < hold->EndFrame)
+					return std::nullopt;
+				nlohmann::json answer = result;
+				answer["seen"] = true;
+				// Ended early by a release, another hold replacing it, input.releaseAll or a restart of play mode.
+				answer["interrupted"] = hold->Interrupted;
+				answer["held"] = DescribeSimulatedInput(pollContext);
+				return EditorCommandResult::Ok(std::move(answer));
+			});
+		}
+
 		// Shared by input.key, input.mouseButton and input.gamepadButton.
 		EditorCommandResult RunButtonAction(EditorContext& context, SimulatedControlType type, uint16_t code, ButtonAction action, int64_t steps,
 			bool wait, nlohmann::json result, std::string what)
@@ -286,24 +323,8 @@ namespace Strata
 				return AnswerWhenSeen(context, wait, hold->FirstFrame, std::move(result), std::move(what));
 			}
 
-			// A tap answers once the game has seen its end: the input frame after the frame that ran its last step (unless
-			// another hold keeps the button down).
 			Ref<const SimulatedHold> hold = input.Press(type, code, static_cast<uint32_t>(steps), context.GetInputStepCount());
-			if (!wait)
-				return AnswerNow(context, std::move(result));
-			return EditorCommandResult::Defer([hold, result = std::move(result), what = std::move(what)](EditorContext& pollContext) -> std::optional<EditorCommandResult>
-			{
-				if (!IsGameRunning(pollContext))
-					return EditorCommandResult::Fail(fmt::format("Play mode stopped before the {} was released", what));
-				if (!hold->Ended || Input::GetFrameIndex() < hold->EndFrame)
-					return std::nullopt;
-				nlohmann::json answer = result;
-				answer["seen"] = true;
-				// Ended early by a release of the button, input.releaseAll or a restart of play mode.
-				answer["interrupted"] = hold->Interrupted;
-				answer["held"] = DescribeSimulatedInput(pollContext);
-				return EditorCommandResult::Ok(std::move(answer));
-			});
+			return AnswerWhenTapEnds(context, wait, std::move(hold), std::move(result), std::move(what));
 		}
 
 	}
@@ -334,6 +355,57 @@ namespace Strata
 			return glm::vec2(static_cast<float>(x), static_cast<float>(y));
 		}
 
+		// The value input.action and an action event give an input action of this kind: none for a Button (1 while held), [x, 0]
+		// for an Axis (default [1, 0]), [x, y] of length at most 1 for a Vector2 (required, as its bindings give at most that); a
+		// release takes none. Nullopt, with the reason, for a value that does not fit.
+		std::optional<glm::vec2> ReadActionValue(InputActionKind kind, const nlohmann::json* value, bool release, std::string& outError)
+		{
+			if (release || kind == InputActionKind::Button)
+			{
+				if (!value)
+					return glm::vec2(1.0f, 0.0f);
+				outError = release ? "a release takes no value" : "a Button action takes no value (it is 1 while held)";
+				return std::nullopt;
+			}
+			if (!value)
+			{
+				if (kind == InputActionKind::Axis)
+					return glm::vec2(1.0f, 0.0f);
+				outError = "a Vector2 action needs a value [x, y]";
+				return std::nullopt;
+			}
+			const std::optional<glm::vec2> pair = ReadPair(*value);
+			if (!pair || std::abs(pair->x) > 1.0f || std::abs(pair->y) > 1.0f)
+			{
+				outError = "the value must be [x, y], two numbers from -1 to 1";
+				return std::nullopt;
+			}
+			if (kind == InputActionKind::Axis && pair->y != 0.0f)
+			{
+				outError = "an Axis action's value is [x, 0]";
+				return std::nullopt;
+			}
+			if (kind == InputActionKind::Vector2 && glm::length(*pair) > 1.0f + 1.0e-4f)
+			{
+				outError = "a Vector2 action's value has a length of at most 1, as its bindings give";
+				return std::nullopt;
+			}
+			return pair;
+		}
+
+		// An input action of the set in use by name, with its kind; nullopt with the reason (unknown, ambiguous).
+		std::optional<std::pair<std::string, InputActionKind>> FindInputAction(std::string_view name, std::string& outError)
+		{
+			const std::optional<std::string> qualified = InputActions::GetQualifiedName(name, &outError);
+			if (!qualified)
+				return std::nullopt;
+			const InputActionSet& set = InputActions::GetSet();
+			const std::optional<InputActionLocation> location = set.FindAction(*qualified, &outError);
+			if (!location)
+				return std::nullopt;
+			return std::make_pair(*qualified, set.GetAction(*location).Kind);
+		}
+
 		// One event of input.sequence's events; the error says what is wrong with it.
 		std::optional<InputSequence::Event> ReadSequenceEvent(const nlohmann::json& json, size_t index, int64_t steps, const EditorCommandRegistry& registry,
 			std::string& outError)
@@ -351,20 +423,24 @@ namespace Strata
 			if (!step)
 				return fail(fmt::format("'step' must be an integer from 0 to {} (one below steps)", steps - 1));
 			event.Step = static_cast<uint32_t>(*step);
-			const char* kinds[] = { "key", "mouseButton", "gamepadButton", "gamepadAxis", "mouseMove", "scroll", "command" };
+			const char* kinds[] = { "key", "mouseButton", "gamepadButton", "gamepadAxis", "mouseMove", "scroll", "command", "action" };
+			// A button event's "action" is its tap, press or release; an event with "action" alone holds an input action.
+			const bool buttonEvent = json.contains("key") || json.contains("mouseButton") || json.contains("gamepadButton");
 			const char* kind = nullptr;
 			for (const char* candidate : kinds)
 			{
-				if (json.contains(candidate))
+				if (json.contains(candidate) && !(buttonEvent && std::string_view(candidate) == "action"))
 				{
 					if (kind)
-						return fail(fmt::format("give one of key, mouseButton, gamepadButton, gamepadAxis, mouseMove, scroll or command, not both {} and {}",
-							kind, candidate));
+					{
+						return fail(fmt::format("give one of key, mouseButton, gamepadButton, gamepadAxis, mouseMove, scroll, command or action, not both {} "
+							"and {}", kind, candidate));
+					}
 					kind = candidate;
 				}
 			}
 			if (!kind)
-				return fail("give one of key, mouseButton, gamepadButton, gamepadAxis, mouseMove, scroll or command");
+				return fail("give one of key, mouseButton, gamepadButton, gamepadAxis, mouseMove, scroll, command or action");
 			const std::string what = kind;
 			std::vector<std::string> allowed = { "step", what };
 			if (what == "key" || what == "mouseButton" || what == "gamepadButton")
@@ -438,6 +514,44 @@ namespace Strata
 				event.Gamepad = static_cast<uint32_t>(gamepad);
 				if (!value->is_null())
 					event.AxisValue = static_cast<float>(value->get<double>());
+			}
+			else if (what == "action")
+			{
+				allowed.insert(allowed.end(), { "mode", "steps", "value" });
+				const nlohmann::json& name = json[what];
+				if (!name.is_string())
+					return fail("'action' must name an input action");
+				std::string error;
+				const std::optional<std::pair<std::string, InputActionKind>> action = FindInputAction(name.get<std::string>(), error);
+				if (!action)
+					return fail(fmt::format("'action': {}", error));
+				const auto mode = json.find("mode");
+				const std::string modeName = mode != json.end() && mode->is_string() ? mode->get<std::string>() : std::string("tap");
+				if (mode != json.end() && !mode->is_string())
+					return fail("'mode' must be press, release or tap");
+				if (modeName == "tap")
+					event.Action = InputSequence::ButtonAction::Tap;
+				else if (modeName == "press")
+					event.Action = InputSequence::ButtonAction::Press;
+				else if (modeName == "release")
+					event.Action = InputSequence::ButtonAction::Release;
+				else
+					return fail(fmt::format("'mode' must be press, release or tap, not '{}'", modeName));
+				if (json.contains("steps"))
+				{
+					const std::optional<int64_t> tapSteps = ReadIndex(json, "steps", 1, c_MaxHoldSteps);
+					if (!tapSteps || event.Action != InputSequence::ButtonAction::Tap)
+						return fail(fmt::format("'steps' is a tap's length, 1 to {}", c_MaxHoldSteps));
+					event.TapSteps = static_cast<uint32_t>(*tapSteps);
+				}
+				const auto value = json.find("value");
+				const std::optional<glm::vec2> actionValue = ReadActionValue(action->second, value != json.end() ? &*value : nullptr,
+					event.Action == InputSequence::ButtonAction::Release, error);
+				if (!actionValue)
+					return fail(fmt::format("'value': {}", error));
+				event.Type = InputSequence::EventType::Action;
+				event.ActionName = action->first;
+				event.ActionValue = *actionValue;
 			}
 			else if (what == "mouseMove" || what == "scroll")
 			{
@@ -565,7 +679,8 @@ namespace Strata
 			"Plays a script of input in the running game, timed in its fixed steps (play mode): pauses the game (and resumes it at the end if it "
 			"ran), then every frame runs exactly one step with the events of that step, so the result is the same whatever the frame rate. "
 			"events: [{step (0-based, below steps), then one of: key | mouseButton | gamepadButton (+ gamepad) with action press | release | tap "
-			"(+ steps, a tap's length); gamepadAxis (+ gamepad) with value (null: back to the device); mouseMove [x, y]; scroll [x, y]; command "
+			"(+ steps, a tap's length); gamepadAxis (+ gamepad) with value (null: back to the device); mouseMove [x, y]; scroll [x, y]; action "
+			"(an input action, as input.action takes it) with mode press | release | tap (+ steps) and value; command "
 			"(an input.* command, run with wait: false; its parameters checked against its schema before anything runs) with parameters}]; "
 			"events of one step apply in order, and one that fails ends the sequence with its error (holds released, the game resumed if it "
 			"ran). steps: fixed steps to run (at "
@@ -640,6 +755,71 @@ namespace Strata
 						return EditorCommandResult::Fail(result.Error, DescribeSequenceResult(result));
 					return EditorCommandResult::Ok(DescribeSequenceResult(result));
 				});
+			}, EditorCommandKind::Session }));
+
+		registry.Register(MayDefer({ "input.action",
+			"Holds an input action of the running game (play mode) directly, whatever its bindings, as if a player used its controls: scripts "
+			"see it through Input::IsActionDown/IsActionPressed/IsActionReleased and GetActionValue, and the game UI navigates with the UI map's "
+			"(UI/Submit, UI/Cancel, UI/Up...). tap (default) holds it for 'steps' fixed steps of the game (or 'seconds' of game time), press "
+			"until a release (or input.releaseAll, play.stop), release ends its hold. An action has one hold: a new tap or press replaces the "
+			"one before (ending it, interrupted when it was a tap) without letting the action go. value: an Axis' [x, 0] (default [1, 0]), a "
+			"Vector2's [x, y] (required, length at most 1); a Button takes none. The game still reads it as up while its map is disabled or a "
+			"binding capture listens. Keys given with input.key reach actions through their bindings instead. Answers once the game has seen "
+			"the input (a tap: its release), or at once with wait false (the default while paused). Returns action (its qualified name), kind, "
+			"mode, value, seen, and what is still held.",
+			WithDurations(ObjectSchema({
+				{ "action", StringSchema("The action: \"<Map>/<Action>\", or its bare name when no other map has an action so named (input.state "
+					"lists them)") },
+				{ "mode", { { "type", "string" }, { "enum", { "tap", "press", "release" } },
+					{ "description", "tap (default): hold the action for 'steps' fixed steps of the game (or 'seconds' of game time), then let go; "
+						"press: hold it until a release, input.releaseAll or play.stop; release: end its hold (a tap's too)" } } },
+				{ "value", Vec2Schema("The action's value while held: an Axis' [x, 0] (x from -1 to 1, default [1, 0]), a Vector2's [x, y] "
+					"(required, +Y up, length at most 1); none for a Button or a release") },
+				{ "wait", WaitSchema() } }, { "action" }), "a tap", true),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const std::string name = arguments.GetString("action");
+				int64_t steps = 1;
+				const std::optional<ButtonAction> mode = ReadButtonAction(parameters, arguments, context, steps, "mode");
+				const bool wait = ReadWait(arguments);
+				std::string error;
+				std::optional<std::pair<std::string, InputActionKind>> action;
+				if (arguments.IsValid())
+				{
+					action = FindInputAction(name, error);
+					if (!action)
+						arguments.SetError(fmt::format("Parameter 'action': {}", error));
+				}
+				std::optional<glm::vec2> value;
+				if (arguments.IsValid())
+				{
+					const auto given = parameters.find("value");
+					value = ReadActionValue(action->second, given != parameters.end() ? &*given : nullptr, *mode == ButtonAction::Release, error);
+					if (!value)
+						arguments.SetError(fmt::format("Parameter 'value': {}", error));
+				}
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!IsGameRunning(context))
+					return NoGameError();
+
+				SimulatedInput& input = context.GetSimulatedInput();
+				nlohmann::json result = { { "action", action->first }, { "kind", InputActionKindToString(action->second) }, { "mode", ActionToString(*mode) } };
+				if (*mode == ButtonAction::Release)
+				{
+					result["released"] = input.ReleaseAction(action->first);
+					return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, std::move(result), "action's release");
+				}
+				result["value"] = { value->x, value->y };
+				if (*mode == ButtonAction::Press)
+				{
+					Ref<const SimulatedHold> hold = input.HoldAction(action->first, *value, 0, context.GetInputStepCount());
+					return AnswerWhenSeen(context, wait, hold->FirstFrame, std::move(result), "action");
+				}
+				result["steps"] = steps;
+				Ref<const SimulatedHold> hold = input.HoldAction(action->first, *value, static_cast<uint32_t>(steps), context.GetInputStepCount());
+				return AnswerWhenTapEnds(context, wait, std::move(hold), std::move(result), "action");
 			}, EditorCommandKind::Session }));
 
 		registry.Register(MayDefer({ "input.key",
@@ -852,8 +1032,8 @@ namespace Strata
 			}, EditorCommandKind::Session }));
 
 		registry.Register(MayDefer({ "input.releaseAll",
-			"Ends every hold of simulated input in the running game (play mode): held keys, mouse buttons and gamepad buttons go up and held "
-			"gamepad axes return to the device's values in the game's next frame, "
+			"Ends every hold of simulated input in the running game (play mode): held keys, mouse buttons, gamepad buttons and input actions go "
+			"up and held gamepad axes return to the device's values in the game's next frame, "
 			"unfinished taps end there (their commands answer with interrupted true), and presses still waiting for a game frame are dropped. "
 			"Answers once the game has seen it, or at once with wait false (the default while paused), with what was released.",
 			ObjectSchema({ { "wait", WaitSchema() } }),
@@ -870,18 +1050,22 @@ namespace Strata
 					{ "keys", DescribeButtons(input, SimulatedControlType::Key) },
 					{ "mouseButtons", DescribeButtons(input, SimulatedControlType::MouseButton) },
 					{ "gamepadButtons", DescribeGamepadButtons(input) },
-					{ "gamepadAxes", DescribeGamepadAxes(input) } };
+					{ "gamepadAxes", DescribeGamepadAxes(input) },
+					{ "simulatedActions", DescribeHeldActions(input) } };
 				input.ReleaseAll();
 				return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, { { "released", std::move(released) } }, "releases");
 			}, EditorCommandKind::Session }));
 
 		registry.Register({ "input.state",
 			"Simulated input in the running game: the keys, mouse buttons and gamepad buttons the input.* commands hold, the gamepad axes they "
-			"hold with their values, the gamepads simulated input connected (gamepads), the pointer position the game sees "
-			"(null until input.mouseMove), whether the game is paused so input waits for its next frame (paused), whether input is "
-			"waiting for that frame (queued), every hold with the fixed steps it covers (holds: [{type, name, firstStep, lastStep (null until "
-			"released)}]), the game's fixed steps so far (fixedSteps) and whether an input.sequence runs (sequenceRunning). Device input (a person "
-			"at the keyboard) is not included.",
+			"hold with their values, the input actions input.action holds with theirs (simulatedActions), the gamepads simulated input connected "
+			"(gamepads), the pointer position the game sees (null until input.mouseMove), whether the game is paused so input waits for its next "
+			"frame (paused), whether input is waiting for that frame (queued), every hold with the fixed steps it covers (holds: [{type, name, "
+			"firstStep, lastStep (null until released)}]), the game's fixed steps so far (fixedSteps) and whether an input.sequence runs "
+			"(sequenceRunning). Device input (a person at the keyboard) is not included in those. The game's input actions as it reads them now "
+			"(actions: [{action, map, kind, down, value}], device input included), "
+			"the maps' enables (maps: [{map, enabled}]), the players' bindings that replace the project's (playerBindings: {action: [bindings]}, "
+			"see inputActions.resetPlayerBindings) and whether a binding capture listens (capture: every action reads as up meanwhile).",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
@@ -901,10 +1085,11 @@ namespace Strata
 				for (const Ref<const SimulatedHold>& hold : context.GetSimulatedInput().GetHolds())
 				{
 					const char* type = hold->Type == SimulatedControlType::Key ? "key" : hold->Type == SimulatedControlType::MouseButton ? "mouseButton"
-						: hold->Type == SimulatedControlType::GamepadButton ? "gamepadButton" : "gamepadAxis";
+						: hold->Type == SimulatedControlType::GamepadButton ? "gamepadButton" : hold->Type == SimulatedControlType::GamepadAxis ? "gamepadAxis" : "action";
 					const char* name = nullptr;
 					switch (hold->Type)
 					{
+						case SimulatedControlType::Action: name = hold->Action.c_str(); break;
 						case SimulatedControlType::Key: name = InputNames::GetKeyName(hold->Code); break;
 						case SimulatedControlType::MouseButton: name = InputNames::GetMouseButtonName(hold->Code); break;
 						case SimulatedControlType::GamepadButton:
@@ -921,6 +1106,34 @@ namespace Strata
 				state["fixedSteps"] = context.GetFixedStepCount();
 				state["inputSteps"] = context.GetInputStepCount(); // What the holds' steps count in
 				state["sequenceRunning"] = context.IsInputSequenceRunning();
+
+				// The game's input actions as it reads them now, in the order of the set.
+				const InputActionSet& set = InputActions::GetSet();
+				nlohmann::json actions = nlohmann::json::array();
+				nlohmann::json maps = nlohmann::json::array();
+				for (uint32_t map = 0; map < set.Maps.size(); map++)
+				{
+					maps.push_back({ { "map", set.Maps[map].Name }, { "enabled", InputActions::IsMapEnabled(set.Maps[map].Name).value_or(false) } });
+					for (uint32_t index = 0; index < set.Maps[map].Actions.size(); index++)
+					{
+						const std::string qualified = set.GetQualifiedName({ map, index });
+						const InputActionState action = InputActions::GetState(qualified).value_or(InputActionState());
+						actions.push_back({ { "action", qualified }, { "map", set.Maps[map].Name }, { "kind", InputActionKindToString(set.Maps[map].Actions[index].Kind) },
+							{ "down", action.Down }, { "value", { action.Value.x, action.Value.y } } });
+					}
+				}
+				state["actions"] = std::move(actions);
+				state["maps"] = std::move(maps);
+				nlohmann::json players = nlohmann::json::object();
+				for (const auto& [action, bindings] : context.GetPlayerBindings().Actions)
+				{
+					nlohmann::json texts = nlohmann::json::array();
+					for (const InputBinding& binding : bindings)
+						texts.push_back(binding.ToString());
+					players[action] = std::move(texts);
+				}
+				state["playerBindings"] = std::move(players);
+				state["capture"] = InputActions::IsCapturing();
 				return EditorCommandResult::Ok(std::move(state));
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 	}

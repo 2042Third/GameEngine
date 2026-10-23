@@ -215,8 +215,6 @@ The threading model, frame loop and pipelines these rules protect are described 
   `setBufferState`/`setTextureState(..., UnorderedAccess)` plus `commitBarriers()`. Drop render targets, and what
   references them, through `Renderer::ReleaseDeferred` (the Vulkan backend does not keep the textures of clears and
   resolves alive).
-- **Scripting isolation:** game scripts only see `StrataScriptCore`. Every call into script code goes
-  through `CrashGuard`; anything crossing the ABI is plain data (no STL types, no exceptions).
 - **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous; code must handle
   "not loaded yet" every frame instead of blocking. See [Asset pipeline](#asset-pipeline). New code that works for a
   scene (scene systems, loading into it, rendering it) reaches the asset manager through `Scene::GetAssetManager()`,
@@ -229,7 +227,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   `MayInclude`, with the reason in the layer's `Notes`. Removing an exception lowers `MaxAllowlistEntries`. The table is
   the build (a library per layer); games link no `Tooling` layer.
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers, scene
-  systems...), never through lower layers calling functions of higher ones. A component lives in its module
+  systems, settings sections read through `IProjectSettings` on the main thread...), never through lower layers
+  calling functions of higher ones. A component lives in its module
   (`<Module>/<Module>Components.h`); `Scene/Components.h` only holds Scene's and those sibling layers must read. Each
   module has one registration function (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`), called only by
   the composition root, `Engine::RegisterBuiltinModules`, in dependency order, before anything reads a registry. Tooling
@@ -249,9 +248,10 @@ The threading model, frame loop and pipelines these rules protect are described 
   Hierarchy changes go through `Scene` (`SetParent`, `SetSiblingIndex`, `PlaceEntities`, `DestroyEntities`...), never by
   editing `RelationshipComponent` or `HierarchyComponent`. Read sibling positions with `Scene::GetSiblingIndex`, remove
   many entities with one `DestroyEntities` call, and stay within `Scene::c_MaxEntities` live entities.
+- **Collision layers** are the project's (`Scene.CollisionLayers`); `Scene::GetPhysicsLayers` is a working copy applied
+  on the main thread ([details](Docs/DeveloperGuide.md#collision-layers)).
 
-The threading, NVRHI, asset, layer, registration, engine module and transform rules in full:
-[Architecture rules](Docs/DeveloperGuide.md#architecture-rules).
+These rules in full: [Architecture rules](Docs/DeveloperGuide.md#architecture-rules).
 
 ## Asset pipeline
 
@@ -290,9 +290,8 @@ Details: [Asset pipeline](Docs/DeveloperGuide.md#asset-pipeline).
 
 ## Scripting
 
-Game logic is C++ script classes in a script module built against `StrataScriptCore` only; writing scripts:
-`.claude/skills/strata-scripting/SKILL.md`; the gameplay API, builds, hot reload and crashes:
-[Scripting](Docs/DeveloperGuide.md#scripting).
+Game logic is C++ script classes in a module built against `StrataScriptCore` only (writing them: skill
+`strata-scripting`; the gameplay API, builds, hot reload, crashes: [Scripting](Docs/DeveloperGuide.md#scripting)).
 
 - Only plain C data crosses the ABI: no STL or engine types, no exceptions
   ([ABI rules](Docs/DeveloperGuide.md#abi-rules)).
@@ -306,9 +305,10 @@ Game logic is C++ script classes in a script module built against `StrataScriptC
 - Appending keeps `ST_SCRIPT_ABI_VERSION`; an incompatible change bumps it.
 - Script code never runs while engine state it could invalidate is in use: entity destruction goes through
   `ScriptSystem::DestroyEntity`.
-- Save files go through `IGameSaves`: names pass `SaveFiles::ValidateName` before any path is formed, and writes are
-  atomic; code that runs a game in-process provides `IGameWindow` and `IGameSaves`
-  ([Gameplay API](Docs/DeveloperGuide.md#gameplay-api)).
+- Save files go through `IGameSaves` (names pass `SaveFiles::ValidateName` before any path is formed; atomic writes);
+  in-process game loops provide `IGameWindow`, `IGameSaves` and `IProjectSettings` and update input actions after their
+  frame's input. Gameplay and UI read rebindable controls as input actions, and only `InputActions` touches the players'
+  bindings file ([Gameplay API](Docs/DeveloperGuide.md#gameplay-api)).
 - SDK helpers named like engine classes (`Random`, `Timer`) are tested only inside a script module.
 
 ## Audio
@@ -362,21 +362,23 @@ reaches the application only through `EditorHost`. Every command family, panel a
 [Editor](Docs/DeveloperGuide.md#editor).
 
 - **Every change to the scene or project goes through a command** (or `SceneEditTransaction`/`SetPropertyWithUndo` for
-  continuous UI edits); panels only draw state and call commands, and never write, move or remove files.
+  continuous UI edits; project settings: `ProjectSettingsAction` steps, preferences: Session commands); panels only draw
+  state and call commands, and never write, move or remove files.
 - Commands (`<group>.<action>`) have a description written for agents, a complete JSON Schema and a kind
   (`EditorCommandKind`: mark every query and session command, and queries whose results follow the session as
   `EditorCommandResults::Session`); they read parameters with `CommandArguments`, reject invalid or
   out-of-range input without side effects (`InvalidParameters` or `Failed`), track entities in a
   `SceneEditTransaction` (`Track` before changing or deleting, `TrackCreated` after creating), record one undo step per
-  successful mutation (`EditorActionGroup` for several actions) and, while playing, report a `warning` and set
-  `RunningCopy` ([Command conventions](Docs/DeveloperGuide.md#command-conventions)).
+  successful mutation (`EditorActionGroup` for several actions) and, for scene changes while playing, report a
+  `warning` and set `RunningCopy` ([Command conventions](Docs/DeveloperGuide.md#command-conventions)).
 - Files commands write for clients go through `CommandUtils::ResolveOutputPath`
   ([Output paths](Docs/DeveloperGuide.md#output-paths)).
-- A command that replaces the edited scene starts with `CommandUtils::CheckUnsavedChanges` (fails unless `force`); UI
-  code passes `force` only once the person answered `EditorShell::RequestDiscardChanges`, for the changes asked about.
-- Saves never serialize on the main thread: documents go through `Editor/DocumentSaver` (a snapshot in the frame, the
-  writing on a background job), commands that replace the scene, close the project or quit wrap their handler in
-  `CommandUtils::AfterSaves`, and UI code saves through the command runner
+- A command that replaces the edited scene starts with `CommandUtils::CheckUnsavedChanges` (fails unless `force`, also
+  on unwritten settings files it would release); UI code passes `force` only once the person answered
+  `EditorShell::RequestDiscardChanges` or its release and quit forms, for the changes asked about.
+- Saves never serialize on the main thread: documents go through `Editor/DocumentSaver`, settings files through
+  `SettingsFileWriter` (a snapshot in the frame, the writing on a background job), commands that replace the scene,
+  close the project or quit wrap their handler in `CommandUtils::AfterSaves`, and UI code saves through the command runner
   ([No silent data loss](Docs/DeveloperGuide.md#no-silent-data-loss)).
 - Asset deletes go to the trash and refuse while something uses the asset; steps that change files check them first
   and fail with the reason when they no longer fit (never overwriting), and asset steps never mark the scene unsaved.
@@ -407,26 +409,26 @@ reaches the application only through `EditorHost`. Every command family, panel a
 
 ## Rendering
 
-`SceneRenderer` draws a scene through its `RenderScene`; passes, batching, skinning,
-lights, overlays and text: [Rendering](Docs/DeveloperGuide.md#rendering).
+`SceneRenderer` draws a scene through its `RenderScene`; every pass and feature:
+[Rendering](Docs/DeveloperGuide.md#rendering).
 
 - Never block a frame on an asset: what is loading is skipped or drawn with a fallback, and uploads go in budgeted
-  steps through `Renderer::GetUploadQueue()` (command lists with copies from released staging are executed before
-  its `SubmitBatch`); code that renders into the back buffer calls `Renderer::PrepareBackBuffer()` first.
+  steps through `Renderer::GetUploadQueue()` (command lists copying from released staging execute before its
+  `SubmitBatch`); code that renders into the back buffer calls `Renderer::PrepareBackBuffer()` first.
 - Never resolve assets per entity: go through the proxies and the frame's `AssetResolveCache`, whose references end
   with the frame; loaded materials are never changed in place (`ReplaceLoadedAsset`).
-- Every pass draws skinned instances with the `ST_SKINNED` variants (the prepass and the forward pass agree to the bit;
-  unskinned scenes pay nothing: `RenderScene::HasSkinProxies`) and mirrored ones (`c_InstanceMirrored`) with clockwise
-  pipelines and flipped tangents; shaders derive normals with `TransformNormal`. Draw list entries carry a fade code:
-  mask the instance out, and opaque passes test `IsLODFadeDrawn`.
+- Every pass draws skinned instances with the `ST_SKINNED` variants (prepass and forward pass agree to the bit;
+  unskinned scenes pay nothing: `HasSkinProxies`) and mirrored ones (`c_InstanceMirrored`) with clockwise pipelines and
+  flipped tangents; shaders derive normals with `TransformNormal`. Draw list entries carry a fade code: mask the
+  instance out; opaque passes test `IsLODFadeDrawn`.
 - Shaders writing HDR targets clamp with `SanitizeHDR`; normal maps are read as X and Y with Z reconstructed.
-- Temporal effects jitter only the frame's copy of the camera and keep their history per renderer; renderers of single
-  images settle or turn TAA off.
+- Temporal effects jitter only the frame's camera copy and keep history per renderer; single images settle or turn TAA
+  off.
 - Font files are untrusted input: extend `Renderer/FontValidation.h`, with crafted-font tests, before calling another
   stb_truetype function. Text is measured with `ShapeText`, never by rasterizing; passes that draw glyphs share the
   renderer's `FontAtlasCache`.
 - Read GPU data back with `TextureReadback`, polled per frame; `Renderer::ReadTexture` blocks (tests and tools only).
-- Wrap every new pass in a GPU stage (`GPUPassTimer`) and register stages when the module registers
+- Wrap every new pass in a GPU stage (`GPUPassTimer`) registered with its module
   ([GPU timing](Docs/DeveloperGuide.md#gpu-timing)).
 - Read mesh geometry only through the geometry pool, every frame (`Mesh::GetGeometry`: compaction moves it)
   ([Batching](Docs/DeveloperGuide.md#batching)).
@@ -434,10 +436,10 @@ lights, overlays and text: [Rendering](Docs/DeveloperGuide.md#rendering).
   (`RecordInstanceChanges`, `RecordProxyChange`) so its GPU copy follows ([Render scene](Docs/DeveloperGuide.md#render-scene)).
 - Scene shaders work in camera-relative space (`TransformPositionRelative`; rotation-only view matrices): upload anything
   positioned relative to the camera, subtracting in double ([Camera-relative space](Docs/DeveloperGuide.md#camera-relative-space)).
-- Shadow views are kept while nothing reaching them changed (`PrepareShadowCache`, `FindLocalShadowCasters`): a new input
-  of what casters are drawn with changes a version they compare. What is drawn and what is requested are decided twice, by
-  the CPU path (`SceneRendererExtraction.cpp`) and the GPU's culling and visibility feedback (`Cull.comp`): change both,
-  keep shading independent of draw order (no screen-space derivatives there), and keep `GPU.SceneRenderer.GPUDriven` and
+- Shadow views are kept while nothing reaching them changed (`PrepareShadowCache`, `FindLocalShadowCasters`): a new
+  input of how casters are drawn changes a version they compare. What is drawn and requested is decided twice, by the
+  CPU path (`SceneRendererExtraction.cpp`) and the GPU's culling and visibility feedback (`Cull.comp`): change both, keep
+  shading independent of draw order (no screen-space derivatives), and keep `GPU.SceneRenderer.GPUDriven` and
   `.Feedback` passing ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
 
 ## Automation (editor RPC + MCP)

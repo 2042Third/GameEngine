@@ -53,6 +53,9 @@ namespace Strata
 		std::filesystem::path Manifest;
 		std::filesystem::path AssetPack;
 		std::filesystem::path ScriptModule; // Empty for games without scripts
+		std::filesystem::path Icon;         // The game's icon, <File>.png (GameIcon); empty without one
+		std::filesystem::path DesktopEntryFile; // <File>.desktop (Editor/DesktopEntry): on Linux hosts, with the runtime
+		std::vector<std::string> Warnings;  // What a person should know about the export (an enlarged icon)
 		size_t AssetCount = 0;              // Assets in the pack
 		std::vector<AssetMetadata> ExcludedAssets; // Left out by pruning
 		AssetPackWriteStats Pack;
@@ -77,7 +80,8 @@ namespace Strata
 	// (WorldCook, for cells whose files changed since), an asset pack (EditorAssetManager::PlanAssetPack,
 	// ordered by first use from the project's start scene, or the open scene when none is set), the script module the editor
 	// runs (the loaded module, exactly as it was loaded: see EditorContext::ReadRunningScriptModule), a game manifest naming
-	// the start scene and the module, and the runtime executable with the third-party notices found next to it.
+	// the start scene, the module and the game's identity (ProjectGameInfo), the game's icon as a 256-pixel PNG (GameIcon),
+	// and the runtime executable with the third-party notices found next to it.
 	//
 	// Start checks at once what it can without reading the project's files (a saved scene that is not running, no script
 	// build, the loaded script module unchanged, a usable output directory outside the project, what AlwaysInclude names)
@@ -160,6 +164,7 @@ namespace Strata
 		std::string m_FileName; // Of the pack, manifest and executable, without extension
 		std::filesystem::path m_Runtime;
 		std::filesystem::path m_ScriptModulePath;   // Empty without scripts
+		std::filesystem::path m_IconSource;         // The game's icon's image (GameIcon::FindSource); empty without one
 		std::vector<uint8_t> m_ScriptModuleBytes;
 		std::chrono::steady_clock::time_point m_StartTime;
 

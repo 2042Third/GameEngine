@@ -1,7 +1,9 @@
 #include "Editor/CommandUtils.h"
 
 #include "Editor/EditorContext.h"
+#include "Editor/EditorPreferences.h"
 #include "Editor/SceneEdit.h"
+#include "Editor/SettingsFileWriter.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/AssetRegistration.h>
@@ -210,7 +212,20 @@ namespace Strata
 				{ "directory", FileSystem::ToUTF8(project->GetProjectDirectory()) },
 				{ "assetDirectory", FileSystem::ToUTF8(project->GetAssetDirectory()) },
 				{ "startScene", config.StartScene.IsValid() ? UUIDToJson(config.StartScene) : nlohmann::json(nullptr) },
-				{ "export", { { "alwaysInclude", config.Export.AlwaysInclude } } } };
+				{ "export", { { "alwaysInclude", config.Export.AlwaysInclude } } },
+				{ "game", DescribeGameInfo(config.Game) },
+				{ "fileState", SettingsFileStateToString(context.GetProjectFileState()) },
+				{ "fileError", context.HasUnwrittenProjectSettings() ? nlohmann::json(context.GetProjectFileError()) : nlohmann::json(nullptr) } };
+		}
+
+		nlohmann::json DescribeGameInfo(const ProjectGameInfo& game)
+		{
+			return {
+				{ "title", game.Title },
+				{ "version", game.Version },
+				{ "company", game.Company },
+				{ "copyright", game.Copyright },
+				{ "icon", game.Icon.IsValid() ? UUIDToJson(game.Icon) : nlohmann::json(nullptr) } };
 		}
 
 		nlohmann::json DescribeFrameTimes(std::vector<double> frameTimes)
@@ -257,19 +272,47 @@ namespace Strata
 				"discarded them");
 		}
 
-		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action)
+		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action, DiscardScope scope)
 		{
-			if (force || !context.IsSceneModified())
+			if (force)
 				return std::nullopt;
+			// Both are named when both are at stake, so that one answer covers what force would discard.
+			std::string settings;
+			if (scope != DiscardScope::Scene && context.HasUnwrittenProjectSettings())
+			{
+				settings = fmt::format("The project file '{}' could not be written ({}): the project's settings changed since are only in the "
+					"editor, and {} would discard them. Write it with project.save once the cause is fixed, or pass force: true to discard them",
+					FileSystem::ToUTF8(context.GetProject()->GetProjectFile()), context.GetProjectFileError(), action);
+			}
+			if (scope == DiscardScope::Editor && context.HasUnwrittenPreferences())
+			{
+				const EditorPreferences& preferences = context.GetPreferences();
+				settings += fmt::format("{}The preferences file '{}' could not be written ({}): the preferences changed since are only in the "
+					"editor, and {} would discard them. Write it with preferences.save once the cause is fixed, or pass force: true to discard them",
+					settings.empty() ? "" : ". ", FileSystem::ToUTF8(preferences.GetFile()), preferences.GetFileError(), action);
+			}
+			if (!context.IsSceneModified())
+			{
+				if (settings.empty())
+					return std::nullopt;
+				return EditorCommandResult::Fail(std::move(settings));
+			}
 			const std::string& scene = context.GetEditScene()->GetName();
+			std::string message;
 			if (!context.HasProject())
 			{
-				return EditorCommandResult::Fail(fmt::format("The scene '{}' has unsaved changes, which {} would discard; without a project they cannot be "
-					"saved: pass force: true to discard them", scene, action));
+				message = fmt::format("The scene '{}' has unsaved changes, which {} would discard; without a project they cannot be saved: pass "
+					"force: true to discard them", scene, action);
 			}
-			const char* save = context.GetSceneHandle().IsValid() ? "scene.save" : "scene.saveAs, as the scene was never saved";
-			return EditorCommandResult::Fail(fmt::format("The scene '{}' has unsaved changes, which {} would discard: save them first ({}) or pass "
-				"force: true to discard them (they are kept as recovery data, scene.recoveryStatus)", scene, action, save));
+			else
+			{
+				const char* save = context.GetSceneHandle().IsValid() ? "scene.save" : "scene.saveAs, as the scene was never saved";
+				message = fmt::format("The scene '{}' has unsaved changes, which {} would discard: save them first ({}) or pass force: true to "
+					"discard them (they are kept as recovery data, scene.recoveryStatus)", scene, action, save);
+			}
+			if (!settings.empty())
+				message += ". " + settings;
+			return EditorCommandResult::Fail(std::move(message));
 		}
 
 		EditorCommandHandler AfterSaves(EditorCommandHandler handler)
@@ -509,11 +552,14 @@ namespace Strata
 					}
 					else if (HasFlag(property->Flags, PropertyFlags::PhysicsLayer) && value.is_string())
 					{
-						// Collision layers can be given by the names the scene's settings give them.
-						const PhysicsLayerSettings& layers = entity.GetScene()->GetSettings().PhysicsLayers;
+						// Collision layers can be given by the names the project gives them (the scene's copy of its table).
+						const PhysicsLayerSettings& layers = entity.GetScene()->GetPhysicsLayers();
 						const std::optional<uint32_t> layer = layers.FindLayer(value.get<std::string>());
 						if (!layer)
-							return fail(fmt::format("{}.{}: the scene has no layer named {} (scene.info lists them)", name, property->Name, value.dump()));
+						{
+							return fail(fmt::format("{}.{}: the project has no collision layer named {} (scene.info lists them; name one with "
+								"project.setCollisionLayers)", name, property->Name, value.dump()));
+						}
 						converted = *layer;
 					}
 					// Commands refuse values out of a property's range, where the inspector clamps as it drags: an agent learns its

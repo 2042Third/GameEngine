@@ -600,16 +600,15 @@ TEST_SUITE("Core.FrameProfiler")
 	{
 		ScopedJobSystem jobs(2, 1);
 		FrameProfiler profiler(FrameProfilerSpecification { 16, nullptr, true });
-		profiler.BeginFrame();
-		// Both workers spin for 30 ms; the frame waits for them. It waits only once both started: a job no worker has started
-		// yet runs on the waiting thread (Wait helps), which counts for no pool, and under load (parallel test processes)
-		// the workers may not have picked them up yet.
+		// Both workers run a job for the whole frame: they spin until the frame has lasted 30 ms. The frame begins only once
+		// both started, so that the time a loaded machine takes to start them (parallel test processes, CI's small runners)
+		// is not part of it: busy time counts a running job's wall time, whatever the scheduler gives its thread.
 		std::atomic<int> started = 0;
-		const auto spin = [&started]()
+		std::atomic<bool> stop = false;
+		const auto spin = [&started, &stop]()
 		{
 			started.fetch_add(1);
-			const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(30);
-			while (std::chrono::steady_clock::now() < end)
+			while (!stop.load())
 			{
 			}
 		};
@@ -618,13 +617,26 @@ TEST_SUITE("Core.FrameProfiler")
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 		while (started.load() < 2 && std::chrono::steady_clock::now() < deadline)
 			std::this_thread::yield();
+		// Never a job of this test on the waiting thread: Wait would run one no worker started, which counts for no pool. When
+		// not both started, the jobs are stopped and waited for before the test fails: one that spins would keep the job
+		// system's shutdown waiting for ever.
+		const bool bothStarted = started.load() == 2;
+		if (!bothStarted)
+		{
+			stop.store(true);
+			first.Wait();
+			second.Wait();
+		}
+		REQUIRE(bothStarted);
+		profiler.BeginFrame();
+		std::this_thread::sleep_for(std::chrono::milliseconds(30));
+		stop.store(true);
 		first.Wait();
 		second.Wait();
 		profiler.EndFrame(0.03);
 
 		const FrameSample frame = profiler.GetFrame(0);
-		CHECK(started.load() == 2);
-		CHECK(frame.WorkerBusyPercent > 10.0f);
+		CHECK(frame.WorkerBusyPercent > 50.0f); // Both busy for the whole frame, but for the moments around its ends
 		CHECK(frame.WorkerBusyPercent <= 100.0f);
 		CHECK(frame.IOBusyPercent == 0.0f);
 		const FrameProfileSummary summary = profiler.Summarize(1);

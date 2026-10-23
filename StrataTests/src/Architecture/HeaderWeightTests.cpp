@@ -29,12 +29,13 @@ namespace
 		std::string_view Reason;
 	};
 
-	constexpr std::array<FullJsonHeader, 13> c_FullJsonHeaders = { {
+	constexpr std::array<FullJsonHeader, 14> c_FullJsonHeaders = { {
 		{ "stpch.h", "the precompiled header: each library parses it once" },
 		{ "Strata/Asset/AssetImporter.h", "ImportContext::Settings is a JSON member" },
 		{ "Strata/Asset/AssetRegistration.h", "AssetMeta::Settings is a JSON member with an initializer" },
 		{ "Strata/Core/JsonEvents.h", "ParseJsonEvents runs nlohmann's parser template inline" },
 		{ "Strata/Core/JsonUtils.h", "the JSON helpers: every user reads JSON values" },
+		{ "Strata/Core/SettingsRegistry.h", "SettingsField::Default and SettingsSection::Schema are JSON members" },
 		{ "Strata/Network/JsonRpc.h", "JSON default arguments and RequestValidation::Id" },
 		{ "Strata/Network/RpcClient.h", "JSON default arguments" },
 		{ "Strata/Network/RpcServer.h", "JSON members and default member initializers" },
@@ -45,10 +46,20 @@ namespace
 		{ "Strata/Scene/UnknownComponents.h", "a JSON member with an initializer and inline code" },
 	} };
 
+	// Headers of the project and its settings, which much of the engine, the editor and the runtime include: they reach the
+	// settings' JSON through ProjectSettingsValues, whose JSON lives in its implementation, so they include none of the
+	// headers that need the complete type (SettingsRegistry.h among them).
+	constexpr std::array<std::string_view, 3> c_SettingsDeclaringHeaders = {
+		"Strata/Core/ProjectSettings.h",
+		"Strata/Project/GameManifest.h",
+		"Strata/Project/Project.h",
+	};
+
 	// The headers EditorContext.h (included by about a hundred editor and test objects) declares instead of including:
 	// it uses their types only by reference, pointer or owning pointer, so an edit of one rebuilds only its own users.
-	constexpr std::array<std::string_view, 6> c_EditorContextDeclares = {
+	constexpr std::array<std::string_view, 7> c_EditorContextDeclares = {
 		"Editor/CommandJournal.h",
+		"Editor/EditorPreferences.h",
 		"Editor/ExternalEditor.h",
 		"Editor/GameExport.h",
 		"Editor/ProjectThumbnail.h",
@@ -139,6 +150,25 @@ TEST_SUITE("Architecture.HeaderWeight")
 				if (include.Path == declared)
 					FAIL_CHECK(fmt::format("EditorContext.h:{} includes {}: declare its types instead (EditorContext.cpp includes it), and hold "
 						"values of them through Scope<> with the destructor in the .cpp", include.Line, declared));
+			}
+		}
+	}
+
+	TEST_CASE("The project and settings headers include no header that needs the complete JSON type")
+	{
+		const std::filesystem::path sourceRoot = FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Strata" / "src";
+		for (std::string_view header : c_SettingsDeclaringHeaders)
+		{
+			CAPTURE(header);
+			const std::optional<std::string> source = FileSystem::ReadText(sourceRoot / FileSystem::FromUTF8(header));
+			REQUIRE(source);
+			for (const Tests::Layering::IncludeDirective& include : Tests::Layering::ParseIncludes(*source))
+			{
+				if (include.Path == "nlohmann/json.hpp" || NeedsFullJson(include.Path))
+				{
+					FAIL_CHECK(fmt::format("{}:{} includes {}: declare what it needs and include it in the .cpp", header, include.Line,
+						include.Path));
+				}
 			}
 		}
 	}

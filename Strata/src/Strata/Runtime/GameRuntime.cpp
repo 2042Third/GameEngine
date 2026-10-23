@@ -4,6 +4,8 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Profiling.h"
+#include "Strata/Core/SettingsRegistry.h"
+#include "Strata/Input/InputActions.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneWorkBudget.h"
@@ -33,6 +35,21 @@ namespace Strata
 		Scope<GameRuntime> runtime(new GameRuntime());
 		runtime->m_Opened = std::chrono::steady_clock::now();
 		runtime->m_Manifest = std::move(*manifest);
+		// The export validated the settings, so a section its module refuses is a damaged install, and the game must not run
+		// with settings it cannot read (bindings that do nothing, layers that collide wrongly). Sections no registered module
+		// claims are not provided.
+		if (runtime->m_Manifest.Settings)
+		{
+			const SettingsRegistry& registry = options.Settings ? *options.Settings : SettingsRegistry::GetProcessRegistry();
+			const std::vector<SettingsProblem> problems = runtime->m_Manifest.Settings->Validate(registry);
+			if (!problems.empty())
+			{
+				if (outError)
+					*outError = fmt::format("The game's settings section '{}' is invalid: {}", problems.front().Section, problems.front().Message);
+				return nullptr;
+			}
+			runtime->m_SettingsProvider = CreateScope<EngineServices::ScopedProvider<IProjectSettings>>(*runtime->m_Manifest.Settings);
+		}
 		const std::filesystem::path packPath = manifestPath.parent_path() / FileSystem::FromUTF8(runtime->m_Manifest.AssetPack);
 		runtime->m_AssetManager = RuntimeAssetManager::Create(packPath, outError);
 		if (!runtime->m_AssetManager)
@@ -81,6 +98,9 @@ namespace Strata
 		// The game's save files, from its first script call on (OnCreate may load a save).
 		runtime->m_Saves = options.SaveFilesDirectory.empty() ? SaveDirectory::ForGame(runtime->m_Manifest.Name) : CreateScope<SaveDirectory>(options.SaveFilesDirectory);
 		runtime->m_SavesProvider = CreateScope<EngineServices::ScopedProvider<IGameSaves>>(*runtime->m_Saves);
+		// The bindings the players chose in an earlier session (InputActions::SaveBindings), with the manifest's actions.
+		InputActions::ResetSession();
+		InputActions::LoadBindings();
 
 		// The loading scene first, so that it plays while the start scene loads (both load in the background).
 		const AssetHandle loadingScene = runtime->m_Manifest.LoadingScene;
@@ -122,6 +142,8 @@ namespace Strata
 		m_ScriptEngine.reset();
 		if (m_AssetManager && AssetManager::GetActive() == m_AssetManager)
 			AssetManager::SetActive(nullptr);
+		// The game's players' bindings, map enables and simulated actions end with it.
+		InputActions::ResetSession();
 	}
 
 	bool GameRuntime::LoadScene(AssetHandle scene, std::string* outError)

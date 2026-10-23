@@ -111,7 +111,22 @@ pack in `ThirdPartyNotices.md`'s "Sample assets" table; `Samples.Content` checks
 
 Write the sources (`script.create {"class": "Player"}` starts a class), then `script.build` (configures CMake on the
 first run and after files were added or removed; answers with compiler diagnostics on failure) and `script.status`
-(classes, fields, defaults); `play.start` also builds changed sources first. Patterns that worked:
+(classes, fields, defaults); `play.start` also builds changed sources first.
+
+Define the game's controls as input actions first, before the scripts that read them: scripts read an action by name,
+one action takes the keyboard's and every gamepad's controls, and players can rebind it (the scripting skill's "Input
+actions and rebinding"). The commands are in the `settings` toolset (through MCP: `strata_toolsets {"enable":
+["settings"]}`); a walking player needs a map and three actions:
+
+```text
+inputActions.setMap {"map": "Gameplay"}
+inputActions.setAction {"action": "Gameplay/Move", "kind": "Vector2", "bindings": ["2D:Key/W,Key/S,Key/A,Key/D", "Gamepad/LeftStick"]}
+inputActions.setAction {"action": "Gameplay/Look", "kind": "Vector2", "bindings": ["Gamepad/RightStick"]}
+inputActions.setAction {"action": "Gameplay/Jump", "kind": "Button", "bindings": ["Key/Space", "Gamepad/A"]}
+```
+
+A Vector2 reads +Y up (forward for Move, looking up for Look) and at most 1 long; mouse motion is no action's binding,
+so mouse look reads `Input::GetMouseDelta()`. The map `UI` already holds the menus' navigation. Patterns that worked:
 
 - Many visuals: create the entities once in `OnCreate` (`Scene::CreateEntity(name, GetEntity())`,
   `AddComponent("MeshRenderer")`, `SetProperty("MeshRenderer", "Mesh", mesh)`, `GetTransform().SetTranslation(...)`), then
@@ -127,13 +142,15 @@ first run and after files were added or removed; answers with compiler diagnosti
 - A main menu: a scene without a camera whose canvas holds the title and the buttons (the game shows its UI over black);
   the Play button's script calls `Game::LoadScene(level)`. A pause screen: a panel set active with `Time::SetTimeScale(0)`;
   the UI keeps working (it runs on unscaled time) and `Time::GetUnscaledDeltaTime()` animates what the script fades.
-- Input: `Input::IsKeyPressed` for one-shot actions, `KeyRepeat` for held movement (construct it from fields in
-  `OnCreate`), and update both keys of a pair every frame (`a.Update(dt) || b.Update(dt)` would skip `b`).
+- Input: the actions above (`Input::IsActionPressed("Gameplay/Jump")` once per press, `IsActionDown` while held,
+  `GetActionValue` for a Vector2). Keys a player never rebinds may be read directly: `KeyRepeat` repeats a held key
+  (construct it from fields in `OnCreate`; update both keys of a pair every frame, `a.Update(dt) || b.Update(dt)` would
+  skip `b`).
 - Sounds: `Assets::RequestLoad` in `OnCreate`, `Audio::PlayOneShot(clip)` later.
 - A walking player (first person, mouse look, keyboard and gamepad): an entity "Player" with a `CharacterController`
   (no `RigidBody`) and this script, and the primary camera as its child at eye height (`Translation [0, 1.6, 0]`); set the
   script's `Camera` field to the camera's ID. The controller moves the entity; the script turns the entity (yaw) and the
-  camera (pitch):
+  camera (pitch), reading the actions defined above:
 
   ```cpp
   class PlayerController : public Script
@@ -151,22 +168,18 @@ first run and after files were added or removed; answers with compiler diagnosti
 
   	void OnUpdate(float deltaTime) override
   	{
-  		const glm::vec2 look = Input::GetGamepadStick(GamepadStick::Right);
+  		const glm::vec2 look = Input::GetActionValue("Gameplay/Look");   // +Y: pushed up looks up
   		Yaw -= Input::GetMouseDelta().x * MouseSensitivity + look.x * StickTurnSpeed * deltaTime;
   		Pitch = glm::clamp(Pitch - Input::GetMouseDelta().y * MouseSensitivity + look.y * StickTurnSpeed * deltaTime, -85.0f, 85.0f);
   		GetTransform().SetEulerAngles(glm::vec3(0.0f, glm::radians(Yaw), 0.0f));
   		if (Camera)
   			Camera.GetTransform().SetEulerAngles(glm::vec3(glm::radians(Pitch), 0.0f, 0.0f));
 
-  		glm::vec2 move = Input::GetGamepadStick(GamepadStick::Left);    // +y forward
-  		move.x += (Input::IsKeyDown(Key::D) ? 1.0f : 0.0f) - (Input::IsKeyDown(Key::A) ? 1.0f : 0.0f);
-  		move.y += (Input::IsKeyDown(Key::W) ? 1.0f : 0.0f) - (Input::IsKeyDown(Key::S) ? 1.0f : 0.0f);
-  		if (glm::length(move) > 1.0f)
-  			move = glm::normalize(move);
+  		const glm::vec2 move = Input::GetActionValue("Gameplay/Move");   // +Y forward, at most 1 long
   		const glm::vec3 forward = GetTransform().GetForward(), right = GetTransform().GetRight();
   		CharacterController controller = GetEntity().GetCharacterController();
   		controller.Move((glm::normalize(glm::vec3(forward.x, 0.0f, forward.z)) * move.y + right * move.x) * Speed);
-  		if (controller.IsGrounded() && (Input::IsKeyPressed(Key::Space) || Input::IsGamepadButtonPressed(GamepadButton::A)))
+  		if (controller.IsGrounded() && Input::IsActionPressed("Gameplay/Jump"))
   			controller.Jump(JumpSpeed);
   		if (Input::IsKeyPressed(Key::Escape))
   			Input::SetCursorMode(CursorMode::Normal); // A menu would go here
@@ -174,10 +187,12 @@ first run and after files were added or removed; answers with compiler diagnosti
   };
   ```
 
-  Register the fields with `ST_SCRIPT_FIELD`. Test it with `input.key {"key": "W", "steps": 60}` (or `input.gamepadAxis
-  {"axis": "LeftY", "value": 1, "steps": 60}`) and read the player's `Translation` with `component.get`: it walks on the
-  template's ground and stops at walls. In the editor the cursor stays locked only while the Game view has the focus
-  (Shift+F1 frees it); `input.mouseMove` moves the simulated pointer, so mouse look works from commands too.
+  Register the fields with `ST_SCRIPT_FIELD`. Test it with `input.key {"key": "W", "steps": 60}` (the binding a player
+  presses; `input.gamepadAxis {"axis": "LeftY", "value": 1, "steps": 60}` the stick's) or with `input.action {"action":
+  "Gameplay/Move", "mode": "press", "value": [0, 1]}` (whatever its bindings, until `"mode": "release"`) and read the
+  player's `Translation` with `component.get`: it walks on the template's ground and stops at walls. In the editor the
+  cursor stays locked only while the Game view has the focus (Shift+F1 frees it); `input.mouseMove` moves the simulated
+  pointer, so mouse look works from commands too.
 - A third-person player and a follow camera: the player entity has a `CharacterController` and the model (the root of
   a model instance, or a child holding it); the primary camera is a separate entity (not a child) with the second
   script, its `Target` field set to the player. Movement is relative to the camera, and the model turns to face where it
@@ -193,11 +208,7 @@ first run and after files were added or removed; answers with compiler diagnosti
 
   	void OnUpdate(float) override
   	{
-  		glm::vec2 input = Input::GetGamepadStick(GamepadStick::Left);    // +y forward
-  		input.x += (Input::IsKeyDown(Key::D) ? 1.0f : 0.0f) - (Input::IsKeyDown(Key::A) ? 1.0f : 0.0f);
-  		input.y += (Input::IsKeyDown(Key::W) ? 1.0f : 0.0f) - (Input::IsKeyDown(Key::S) ? 1.0f : 0.0f);
-  		if (glm::length(input) > 1.0f)
-  			input = glm::normalize(input);
+  		const glm::vec2 input = Input::GetActionValue("Gameplay/Move");   // +Y forward, at most 1 long
   		// The camera's forward and right, flattened onto the ground.
   		glm::vec3 forward = Camera ? Camera.GetTransform().GetForward() : glm::vec3(0.0f, 0.0f, -1.0f);
   		forward = glm::normalize(glm::vec3(forward.x, 0.0f, forward.z));
@@ -208,7 +219,7 @@ first run and after files were added or removed; answers with compiler diagnosti
   		// Face the walking direction. glTF models face +Z: yaw = atan2(x, z) turns +Z onto it.
   		if (glm::length(direction) > 0.01f)
   			GetTransform().SetEulerAngles(glm::vec3(0.0f, std::atan2(direction.x, direction.z), 0.0f));
-  		if (controller.IsGrounded() && (Input::IsKeyPressed(Key::Space) || Input::IsGamepadButtonPressed(GamepadButton::A)))
+  		if (controller.IsGrounded() && Input::IsActionPressed("Gameplay/Jump"))
   			controller.Jump(JumpSpeed);
   		GetEntity().GetAnimator().SetFloat("Speed", glm::length(controller.GetVelocity())); // False without an Animator
   	}
@@ -221,13 +232,13 @@ first run and after files were added or removed; answers with compiler diagnosti
   	float Distance = 6.0f;
   	float Height = 3.0f;
   	float Smoothing = 8.0f; // Higher follows faster
-  	float Yaw = 0.0f;       // Degrees around the target; the right stick turns it
+  	float Yaw = 0.0f;       // Degrees around the target; the Look action turns it
 
   	void OnUpdate(float deltaTime) override
   	{
   		if (!Target)
   			return;
-  		Yaw -= Input::GetGamepadStick(GamepadStick::Right).x * 120.0f * deltaTime;
+  		Yaw -= Input::GetActionValue("Gameplay/Look").x * 120.0f * deltaTime;
   		const glm::vec3 target = Target.GetTransform().GetWorldPosition() + glm::vec3(0.0f, 1.0f, 0.0f);
   		const float yaw = glm::radians(Yaw);
   		const glm::vec3 wanted = target + glm::vec3(std::sin(yaw) * Distance, Height, std::cos(yaw) * Distance);
@@ -266,10 +277,11 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
   to apply or revert one of them.
 
 - Collision layers keep groups apart (bullets that pass through their shooter, debris the player walks through): name
-  them and set which pairs collide with `scene.setSettings {"layerNames": {"1": "Player", "2": "Debris"},
-  "layerCollisions": [{"layers": ["Player", "Debris"], "collide": false}]}`, then put bodies and controllers on them by
-  name (`component.set {"entity", "component": "RigidBody", "values": {"Layer": "Debris"}}`). Scripts change pairs while
-  the game plays (`Physics::SetLayersCollide`) and mask queries by layer (`1u << Physics::GetLayerIndex("Player")`).
+  them and set which pairs collide for the whole project with `project.setCollisionLayers {"layerNames": {"1":
+  "Player", "2": "Debris"}, "layerCollisions": [{"layers": ["Player", "Debris"], "collide": false}]}`, then put bodies
+  and controllers on them by name (`component.set {"entity", "component": "RigidBody", "values": {"Layer": "Debris"}}`).
+  Scripts change pairs while the game plays (`Physics::SetLayersCollide`, until the next scene) and mask queries by
+  layer (`1u << Physics::GetLayerIndex("Player")`).
 - Camera: `{"Camera": {"Primary": true, "PerspectiveFOV": 45}}`; cameras and lights look along their -Z, so a camera at
   `+Z` looking at the origin needs no rotation. Rotations are Euler degrees `[pitch, yaw, roll]`.
 - Light: a `DirectionalLight` (Intensity ~3, pitch -35) plus a `SkyLight`: `"Source": "Procedural"` for a sky (its sun
@@ -400,7 +412,10 @@ In a source checkout, `StrataTests/Editor/TetrisCommands.json.in` and `SamplePro
 ## 8. Export and check the game
 
 ```text
-project.export {"directory": "<absolute, outside the project>"}   # <Game>[.exe], .stgame, .stpak, the script module
+viewport.capture {"width": 256, "height": 256, "camera": "scene", "path": "<absolute, outside the project>/Icon.png"}
+asset.import {"file": "<that Icon.png>"}                           # the icon's image, a texture of the project
+project.setGameInfo {"title": "<Game title>", "version": "1.0.0", "icon": "Icon.png"}   # what the exported game shows
+project.export {"directory": "<absolute, outside the project>"}   # <Game>[.exe], .stgame, .stpak, the script module, <Game>.png
 project.export {"directory": "<another one>", "prune": true}       # smaller: only what the scenes use (see below)
 <dir>/<Game> --headless --frames 600       # 10 s of game time at 60 frames per second; exit code 0, the scripts' log lines
 <dir>/<Game> --windowed --frames 120 --screenshot shot.png        # look at shot.png
@@ -427,7 +442,7 @@ is each one's regression:
 - **PhysicsPlayground**: ~600 bodies placed with `prefab.instantiate {instances}`; shooting through the cursor (the camera's
   field of view and the window size give the ray), grabbing (a velocity toward a point in front of the camera each fixed
   step), impact sounds by material with a voice budget shared by every body, a trigger that counts balls, a collision
-  layer that passes through another (`scene.setSettings {layerNames, layerCollisions}`), R reloading the scene to reset.
+  layer that passes through another (`project.setCollisionLayers {layerNames, layerCollisions}`), R reloading the scene to reset.
 - **OpenWorld**: a generated terrain (`Tools/GenerateIslandTerrain.py`) kept in a world's persistent scene with static
   mesh colliders; 20,000 props scattered into a world layer (`world.edit {editLayer}`, `world.loadCells` to pin the
   region first, then `prefab.instantiate {instances}` steps); foxes with an animation controller; teleports that prefetch

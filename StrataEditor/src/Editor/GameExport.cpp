@@ -1,12 +1,18 @@
 #include "Editor/GameExport.h"
 
 #include "Editor/AssetEdit.h"
+#include "Editor/DesktopEntry.h"
 #include "Editor/EditorContext.h"
+#include "Editor/GameIcon.h"
+#include "Editor/PEResources.h"
 
+#include <Strata/Asset/Asset.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
+#include <Strata/Core/ProjectSettings.h>
+#include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/World/WorldAsset.h>
@@ -221,12 +227,53 @@ namespace Strata
 			}
 		}
 
+		// The project's settings travel in the manifest (games read no project file). A section a registered module claims must
+		// be valid, or the game would refuse to start; sections no module of this build claims go as they are stored.
+		const SettingsRegistry& registry = context.GetSettingsRegistry();
+		ProjectSettingsValues settings = project.GetSettings();
+		if (const std::vector<SettingsProblem> problems = settings.Validate(registry); !problems.empty())
+		{
+			return fail(fmt::format("The project's settings section '{}' is invalid ({}): set it again or reset it before exporting",
+				problems.front().Section, problems.front().Message));
+		}
+
+		// The game's icon is made from its texture's image, which need not be in the pack: the export writes it next to the
+		// manifest. A texture that can no longer be the icon (moved into a model, another format) fails now.
+		std::filesystem::path iconSource;
+		const ProjectGameInfo& game = project.GetConfig().Game;
+		// A game without a title shows the project's name, which the runtime checks as a title.
+		const std::string title = game.Title.empty() ? project.GetConfig().Name : game.Title;
+		if (std::optional<std::string> problem = ProjectGameInfo::ValidateText(title))
+			return fail(fmt::format("The game's title '{}' cannot be used: {}; set one with project.setGameInfo", StringUtils::MakeValidUTF8(title), *problem));
+		if (game.Icon.IsValid())
+		{
+			std::string iconError;
+			std::optional<std::filesystem::path> source = GameIcon::FindSource(*assets, game.Icon, &iconError);
+			if (!source)
+				return fail(fmt::format("The game's icon cannot be used: {}; set another or none with project.setGameInfo", iconError));
+			iconSource = std::move(*source);
+		}
+
 		AssetPackBuildOptions packOptions;
 		packOptions.StartScene = startScene;
 		packOptions.Prune = options.Prune;
 		packOptions.AlwaysInclude = project.GetConfig().Export.AlwaysInclude;
 		if (loadingSceneMetadata)
 			packOptions.AlwaysInclude.push_back(loadingSceneMetadata->Path);
+		// What the settings name is used by the game as the scenes' assets are: a pruned pack keeps it with what it uses (built-in
+		// assets come with every game).
+		for (const UUID handle : settings.GetReferences(registry))
+		{
+			if (IsBuiltinAssetHandle(handle))
+				continue;
+			const std::optional<AssetMetadata> metadata = assets->GetMetadata(handle);
+			if (!metadata)
+			{
+				return fail(fmt::format("The project's settings name the asset {}, which is not in the project: set them again (project.setSettings) "
+					"before exporting", handle.ToString()));
+			}
+			packOptions.AlwaysInclude.push_back(metadata->Path);
+		}
 		if (options.Prune)
 		{
 			// What AlwaysInclude names is checked now, without planning: the plan that is packed is made once, when imports
@@ -250,7 +297,15 @@ namespace Strata
 		exporter->m_Runtime = runtime;
 		exporter->m_ScriptModulePath = scriptModule.Path;
 		exporter->m_ScriptModuleBytes = std::move(scriptModule.Bytes);
+		exporter->m_IconSource = iconSource;
+		// The name keys the game's save and log directories; the title is what it shows.
 		exporter->m_Manifest.Name = project.GetConfig().Name;
+		exporter->m_Manifest.Title = title;
+		exporter->m_Manifest.Version = game.Version;
+		exporter->m_Manifest.Company = game.Company;
+		exporter->m_Manifest.Copyright = game.Copyright;
+		if (!iconSource.empty())
+			exporter->m_Manifest.Icon = exporter->m_FileName + ".png";
 		exporter->m_Manifest.AssetPack = exporter->m_FileName + ".stpak";
 		exporter->m_Manifest.StartScene = startScene;
 		exporter->m_Manifest.LoadingScene = loadingScene;
@@ -259,6 +314,7 @@ namespace Strata
 		exporter->m_Manifest.WindowWidth = options.WindowWidth;
 		exporter->m_Manifest.WindowHeight = options.WindowHeight;
 		exporter->m_Manifest.Fullscreen = options.Fullscreen;
+		exporter->m_Manifest.Settings = std::move(settings);
 		exporter->m_StartTime = std::chrono::steady_clock::now();
 		exporter->m_Shared = CreateRef<Shared>();
 		ST_INFO("Exporting '{}' to {}", project.GetConfig().Name, FileSystem::ToUTF8(options.Directory));
@@ -502,11 +558,12 @@ namespace Strata
 			std::filesystem::path Runtime;
 			std::filesystem::path ScriptModulePath;
 			std::vector<uint8_t> ScriptModuleBytes;
+			std::filesystem::path IconSource;
 			uint64_t PackBytes = 0;
 			std::unordered_map<AssetHandle, uint32_t> WorldCapacities;
 		};
 		Ref<JobData> data = CreateRef<JobData>(JobData { std::move(plan), m_Options, m_Manifest, m_FileName, m_Runtime, m_ScriptModulePath,
-			std::move(m_ScriptModuleBytes), packBytes, m_WorldCapacities });
+			std::move(m_ScriptModuleBytes), m_IconSource, packBytes, m_WorldCapacities });
 		Ref<Shared> shared = m_Shared;
 		EditorAssetManager* assets = m_Assets.get();
 
@@ -535,6 +592,46 @@ namespace Strata
 					}
 				}
 				GameExportResult result;
+				// The icon first: an image that does not decode fails the export before the pack is written.
+				std::optional<GameIcon::Images> icon;
+				std::optional<std::vector<uint8_t>> iconPNG;
+				if (!data->IconSource.empty())
+				{
+					std::string iconError;
+					icon = GameIcon::ConvertFile(data->IconSource, &iconError);
+					if (icon)
+						iconPNG = GameIcon::EncodePNG(icon->GetLargest(), &iconError);
+					if (!iconPNG)
+						return end(GameExportState::Failed, fmt::format("{} (set another icon or none with project.setGameInfo)", iconError));
+					result.Warnings = icon->Warnings;
+				}
+#if defined(ST_PLATFORM_WINDOWS)
+				// A Windows game shows its version and icon in Explorer, the taskbar and its window from its executable's
+				// resources: the runtime is stamped in memory (Editor/PEResources) and written once at the end. Stamped before the
+				// pack is written, so that a runtime the stamp refuses (signed, or laid out otherwise) fails the export before it
+				// writes anything, rather than after the pack, next to an executable of an earlier export.
+				std::optional<std::vector<uint8_t>> executable;
+				if (options.IncludeRuntime)
+				{
+					const std::optional<std::vector<uint8_t>> runtime = FileSystem::ReadBytes(data->Runtime);
+					if (!runtime)
+						return end(GameExportState::Failed, fmt::format("Could not read the runtime '{}'", FileSystem::ToUTF8(data->Runtime)));
+					PEResources::GameVersionInfo version;
+					version.Title = data->Manifest.GetDisplayTitle();
+					version.Version = data->Manifest.Version;
+					version.Company = data->Manifest.Company;
+					version.Copyright = data->Manifest.Copyright;
+					version.InternalName = data->Manifest.Name;
+					version.OriginalFilename = GetExecutableFileName(data->FileName);
+					std::string stampError;
+					executable = PEResources::StampGame(*runtime, version, icon ? &*icon : nullptr, &stampError);
+					if (!executable)
+					{
+						return end(GameExportState::Failed, fmt::format("Could not write the game's version and icon into the runtime '{}': {}",
+							FileSystem::ToUTF8(data->Runtime), stampError));
+					}
+				}
+#endif
 				result.AssetPack = options.Directory / FileSystem::FromUTF8(data->Manifest.AssetPack);
 				AssetPackWriteOptions writeOptions;
 				writeOptions.CookDocuments = options.CookDocuments;
@@ -579,6 +676,12 @@ namespace Strata
 				if (cancelled())
 					return end(GameExportState::Cancelled, "The export was cancelled");
 
+				if (iconPNG)
+				{
+					result.Icon = options.Directory / FileSystem::FromUTF8(data->Manifest.Icon);
+					if (!FileSystem::WriteBytes(result.Icon, *iconPNG))
+						return end(GameExportState::Failed, DescribeWriteFailure("the game's icon", result.Icon));
+				}
 				result.Manifest = options.Directory / FileSystem::FromUTF8(data->FileName + std::string(GameManifest::c_FileExtension));
 				std::string manifestError;
 				if (!data->Manifest.Save(result.Manifest, &manifestError))
@@ -587,17 +690,46 @@ namespace Strata
 				if (options.IncludeRuntime)
 				{
 					result.Executable = options.Directory / FileSystem::FromUTF8(GetExecutableFileName(data->FileName));
+#if defined(ST_PLATFORM_WINDOWS)
+					// The runtime stamped before the pack (above).
+					if (!FileSystem::WriteBytes(result.Executable, *executable))
+					{
+						return end(GameExportState::Failed, fmt::format("{} (is the game running from there? close it first)",
+							DescribeWriteFailure("the game's executable", result.Executable)));
+					}
+#else
 					if (!FileSystem::Copy(data->Runtime, result.Executable, true))
 					{
 						return end(GameExportState::Failed, fmt::format("{} from '{}' (is the game running from there? close it first)",
 							DescribeWriteFailure("the runtime", result.Executable), FileSystem::ToUTF8(data->Runtime)));
 					}
+#endif
 					if (!FileSystem::Copy(data->Runtime.parent_path() / c_NoticesFile, options.Directory / c_NoticesFile, true))
 						return end(GameExportState::Failed, fmt::format("Could not copy '{}'", c_NoticesFile));
 #if !defined(ST_PLATFORM_WINDOWS)
 					std::error_code permissionError;
 					std::filesystem::permissions(result.Executable, std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec
 						| std::filesystem::perms::others_exec, std::filesystem::perm_options::add, permissionError);
+#endif
+#if defined(ST_PLATFORM_LINUX)
+					// Linux desktops list applications by their desktop entries: one next to the game, for a person to install. Its
+					// window class is the runtime's application id (GamePresentation: the executable's name).
+					DesktopEntry entry;
+					entry.Name = data->Manifest.GetDisplayTitle();
+					entry.Executable = result.Executable;
+					entry.Icon = result.Icon;
+					entry.WindowClass = FileSystem::ToUTF8(result.Executable.stem());
+					std::string entryError;
+					if (const std::optional<std::string> text = entry.ToText(&entryError))
+					{
+						result.DesktopEntryFile = options.Directory / FileSystem::FromUTF8(data->FileName + ".desktop");
+						if (!FileSystem::WriteText(result.DesktopEntryFile, *text))
+							return end(GameExportState::Failed, DescribeWriteFailure("the desktop entry", result.DesktopEntryFile));
+					}
+					else
+					{
+						result.Warnings.push_back(fmt::format("No desktop entry was written: {}", entryError));
+					}
 #endif
 				}
 				shared->DoneBytes = shared->TotalBytes.load();
@@ -645,6 +777,8 @@ namespace Strata
 		{
 			ST_INFO("Exported '{}' to {} ({} assets, {:.1f} MB pack, {:.1f} s)", m_Manifest.Name, FileSystem::ToUTF8(m_Options.Directory), m_Result.AssetCount,
 				static_cast<double>(m_Result.Pack.FileSize) / (1024.0 * 1024.0), m_Result.Seconds);
+			for (const std::string& warning : m_Result.Warnings)
+				ST_WARN("Exporting '{}': {}", m_Manifest.Name, warning);
 		}
 		else if (state == GameExportState::Failed)
 		{

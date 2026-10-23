@@ -235,16 +235,27 @@ extern "C"
 		StrataScriptWindowMode_Borderless = 2  /* A window covering the display at the desktop's resolution */
 	} StrataScriptWindowMode;
 
-	/* The game UI's actions (UIIsActionPressed, UIIsActionDown); the engine's UIAction values. */
+	/*
+	 * The game UI's actions (UIIsActionPressed, UIIsActionDown); the engine's UIAction values. They are the input actions of
+	 * the project's map UI (UI/Submit, UI/Cancel, UI/Up...), whose bindings the project and the players may change.
+	 */
 	typedef enum StrataScriptUIAction
 	{
-		StrataScriptUIAction_Submit = 0, /* Enter, keypad Enter, Space, gamepad A */
-		StrataScriptUIAction_Cancel = 1, /* Escape, gamepad B */
-		StrataScriptUIAction_Up = 2,     /* Arrow keys, the d-pad and the left stick of any gamepad */
+		StrataScriptUIAction_Submit = 0,
+		StrataScriptUIAction_Cancel = 1,
+		StrataScriptUIAction_Up = 2,
 		StrataScriptUIAction_Down = 3,
 		StrataScriptUIAction_Left = 4,
 		StrataScriptUIAction_Right = 5
 	} StrataScriptUIAction;
+
+	/* The devices a binding capture listens to (InputBeginBindingCapture): bits, combined with |. */
+	typedef enum StrataScriptInputDevices
+	{
+		StrataScriptInputDevices_Keyboard = 1,
+		StrataScriptInputDevices_Mouse = 2,
+		StrataScriptInputDevices_Gamepad = 4
+	} StrataScriptInputDevices;
 
 	/*
 	 * Engine services for scripts. Unless noted otherwise, functions taking a context only work while the engine is
@@ -543,12 +554,12 @@ extern "C"
 		/*
 		 * Collision layers (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). Bodies and
 		 * character controllers are on one of the layers 0 to 31 and collide only when the playing scene's layer matrix (its
-		 * settings, which the editor's scene inspector edits) lets their layers collide. PhysicsSetLayersCollide changes the
-		 * playing scene's matrix (symmetric; a layer may be paired with itself); physics applies it before its next step and
-		 * wakes resting bodies. It lasts while the scene plays (play mode's copy is discarded when play stops) and fails for
-		 * layers outside 0 to 31. PhysicsGetLayersCollide reads the matrix (false outside the range). PhysicsGetLayerIndex
-		 * finds a layer by its name (ignoring case; "Layer <index>" names a layer without a name of its own): its index, or
-		 * -1 when the scene has no such layer.
+		 * copy of the project's collision layers, which the editor's Project Settings edit) lets their layers collide.
+		 * PhysicsSetLayersCollide changes the playing scene's matrix (symmetric; a layer may be paired with itself); physics
+		 * applies it before its next step and wakes resting bodies. It lasts while the scene plays (the next scene starts with
+		 * the project's matrix again) and fails for layers outside 0 to 31. PhysicsGetLayersCollide reads the matrix (false
+		 * outside the range). PhysicsGetLayerIndex finds a layer by its name (ignoring case; "Layer <index>" names a layer
+		 * without a name of its own): its index, or -1 when the project has no such layer.
 		 */
 		bool (*PhysicsSetLayersCollide)(StrataScriptContext* context, uint32_t layerA, uint32_t layerB, bool collide);
 		bool (*PhysicsGetLayersCollide)(StrataScriptContext* context, uint32_t layerA, uint32_t layerB);
@@ -562,8 +573,8 @@ extern "C"
 		 * the others of its group off). Values set here raise no OnUIValueChanged: the callbacks report the player's input.
 		 * UIGetText follows the text buffer protocol; colors are display (sRGB) RGBA from 0 to 1. UISetFocus focuses an
 		 * interactable selectable shown on a canvas that receives input (0 clears the focus). The pointer and the actions
-		 * (StrataScriptUIAction: Submit, Cancel, Up, Down, Left, Right, from keys, gamepad buttons and the left stick) are
-		 * those of the UI's latest update, which runs before the scripts' OnUpdate.
+		 * (StrataScriptUIAction: Submit, Cancel, Up, Down, Left, Right, the input actions of the map UI) are those of the UI's
+		 * latest update, which runs before the scripts' OnUpdate.
 		 */
 		uint64_t (*UIGetText)(StrataScriptContext* context, StrataScriptEntityID entity, char* buffer, uint64_t capacity);
 		bool (*UISetText)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString text);
@@ -604,6 +615,49 @@ extern "C"
 		bool (*WorldIsLoadedAround)(StrataScriptContext* context, const float* position, float radius);
 		bool (*WorldSetLayerEnabled)(StrataScriptContext* context, StrataScriptString layer, bool enabled);
 		int32_t (*WorldIsLayerEnabled)(StrataScriptContext* context, StrataScriptString layer);
+
+		/*
+		 * Input actions (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use): the project's
+		 * named controls, which the players may rebind. An action is named "<Map>/<Action>", or by its bare name when no other
+		 * map has an action of that name (ignoring case); unknown and ambiguous names fail and are reported. The state is that
+		 * of the current input frame: Down, Pressed (down from this frame on) and Released (up from this frame on).
+		 * InputGetActionValue writes (x, y): a Button's x is 1 while down, an Axis' x is its value (-1 to 1), a Vector2 is the
+		 * vector (+Y up); zeros on failure. A disabled map's actions read as up from the next input frame, which reports the
+		 * release of those held when it was disabled; InputIsActionMapEnabled answers 1, 0, or -1 for an unknown map.
+		 * InputGetActionBindings copies the bindings the action uses (the players' when they replaced the
+		 * project's), each followed by '\n' (the text buffer protocol); InputSetActionBindings replaces them for the players
+		 * from the next input frame on, given as bindings each followed by '\n' (the last one's may be left out; empty text
+		 * unbinds the action), and refuses the whole list, changing nothing, when one is no binding, one the action's kind
+		 * cannot use, or there are more than 8. InputResetActionBindings restores the project's bindings of an action, or of
+		 * every action for an empty name. InputSaveBindings writes the players' bindings into the game's save directory (the
+		 * engine's file, outside the save files), from which the program running the game reads them when the game starts.
+		 */
+		bool (*InputIsActionDown)(StrataScriptContext* context, StrataScriptString action);
+		bool (*InputIsActionPressed)(StrataScriptContext* context, StrataScriptString action);
+		bool (*InputIsActionReleased)(StrataScriptContext* context, StrataScriptString action);
+		bool (*InputGetActionValue)(StrataScriptContext* context, StrataScriptString action, float outValue[2]);
+		bool (*InputSetActionMapEnabled)(StrataScriptContext* context, StrataScriptString map, bool enabled);
+		int32_t (*InputIsActionMapEnabled)(StrataScriptContext* context, StrataScriptString map);
+		uint64_t (*InputGetActionBindings)(StrataScriptContext* context, StrataScriptString action, char* buffer, uint64_t capacity);
+		bool (*InputSetActionBindings)(StrataScriptContext* context, StrataScriptString action, StrataScriptString bindings);
+		bool (*InputResetActionBindings)(StrataScriptContext* context, StrataScriptString action);
+		bool (*InputSaveBindings)(StrataScriptContext* context);
+
+		/*
+		 * Binding capture (added after InputSaveBindings, ABI version 1: check ST_SCRIPT_HAS_MEMBER before use), a rebinding
+		 * menu's "press a control". InputBeginBindingCapture listens for the next control the player presses on the devices
+		 * given (StrataScriptInputDevices bits; none, or bits it does not know, fail and are reported): a key, a mouse button,
+		 * a gamepad button, or a stick or trigger pushed beyond half its range. While it listens every action reads as up, and
+		 * the control captured reads as up for actions until it is let go, so the press triggers no action (and a left mouse
+		 * button captured presses no UI widget; the device reads report it as any press). There is one
+		 * capture: a later one (the scripts' or the editor's) replaces it. InputPollBindingCapture copies the captured
+		 * binding's text (the text buffer protocol), after which the capture is over: 0 while it listens, after it was
+		 * cancelled or replaced, or when none runs; a buffer too small for it gets nothing and keeps it for the next call.
+		 * InputCancelBindingCapture ends the scripts' capture (false when it was not listening). Play stopping cancels it.
+		 */
+		bool (*InputBeginBindingCapture)(StrataScriptContext* context, uint32_t devices);
+		uint64_t (*InputPollBindingCapture)(StrataScriptContext* context, char* buffer, uint64_t capacity);
+		bool (*InputCancelBindingCapture)(StrataScriptContext* context);
 
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;

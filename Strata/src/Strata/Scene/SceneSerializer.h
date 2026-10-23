@@ -2,6 +2,7 @@
 
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/PhysicsLayerSettings.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneDocumentReader.h"
 
@@ -9,6 +10,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -54,6 +56,13 @@ namespace Strata
 		// object holds that is not a valid setting is reported and leaves the setting as it was.
 		static nlohmann::json SerializeSettings(const SceneSettings& settings);
 		static void DeserializeSettings(const nlohmann::json& settings, SceneSettings& outSettings, std::vector<std::string>* outWarnings = nullptr);
+		// Reads a document's settings into a scene: its SceneSettings and the collision layers the document stores
+		// (Scene::SetStoredPhysicsLayers).
+		static void DeserializeSettings(const nlohmann::json& settings, Scene& scene, std::vector<std::string>* outWarnings = nullptr);
+		// The collision layers a document's settings store ("PhysicsLayers", PhysicsLayerSettings' stored form): 0.5.0 wrote
+		// them into every scene; nothing writes them since they are the project's (ProjectCollisionLayers). Invalid entries
+		// are skipped and reported as warnings. Nothing when the document stores none or the default table.
+		static std::optional<PhysicsLayerSettings> ReadStoredPhysicsLayers(const nlohmann::json& settings, std::vector<std::string>* outWarnings = nullptr);
 		// Loads into an empty scene. Returns false (with an error) for structurally invalid documents.
 		static bool Deserialize(Scene& scene, const nlohmann::json& json, std::string* outError = nullptr, std::vector<std::string>* outWarnings = nullptr,
 			const EntityReadProgress& progress = {});

@@ -2,6 +2,7 @@
 
 #include "Editor/CommandJournal.h"
 #include "Editor/CommandUtils.h"
+#include "Editor/EditorPreferences.h"
 #include "Editor/EditorWorld.h"
 #include "Editor/ExternalEditor.h"
 #include "Editor/GameExport.h"
@@ -9,6 +10,7 @@
 #include "Editor/ProjectSamples.h"
 #include "Editor/ProjectThumbnail.h"
 #include "Editor/SceneRecovery.h"
+#include "Editor/SettingsFileWriter.h"
 #include "Editor/ScriptProject.h"
 #include "Editor/ThumbnailCache.h"
 #include "Editor/WorldCook.h"
@@ -24,8 +26,10 @@
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Profiling.h>
+#include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
+#include <Strata/Input/InputActions.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/Renderer.h>
@@ -33,6 +37,7 @@
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/PrefabInstances.h>
 #include <Strata/Scene/PrefabOverrides.h>
+#include <Strata/Scene/ProjectCollisionLayers.h>
 #include <Strata/Scene/SceneLoader.h>
 #include <Strata/Scene/SceneSerializer.h>
 #include <Strata/Scene/SceneWorkBudget.h>
@@ -133,7 +138,9 @@ namespace Strata
 	EditorContext::EditorContext(const EditorContextSpecification& specification)
 		: m_Specification(specification), m_EditScene(CreateRef<Scene>()), m_Journal(CreateRef<CommandJournal>()),
 		  m_Recovery(CreateScope<SceneRecovery>()), m_ProjectThumbnail(CreateScope<ProjectThumbnail>()),
-		  m_ExternalEditor(CreateScope<ExternalEditorLauncher>(specification.EditorSettingsFile)),
+		  m_Preferences(CreateScope<EditorPreferences>(GetSettingsRegistry(), specification.PreferencesFile, specification.EditorSettingsFile,
+			  [this](const std::string& error) { OnPreferencesWritten(error); })),
+		  m_ExternalEditor(CreateScope<ExternalEditorLauncher>(*m_Preferences)),
 		  m_RecentProjects(specification.RecentProjectsFile, specification.RecentProjectsReadOnly)
 	{
 		ActivateBuiltinAssets();
@@ -141,6 +148,7 @@ namespace Strata
 			m_ScriptBuilder.SetToolchainEnvironment(specification.ToolchainEnvironment);
 		m_GameWindowProvider = CreateScope<EngineServices::ScopedProvider<IGameWindow>>(m_GameWindow);
 		m_GameSavesProvider = CreateScope<EngineServices::ScopedProvider<IGameSaves>>(m_GameSaves);
+		m_ProjectSettingsProvider = CreateScope<EngineServices::ScopedProvider<IProjectSettings>>(m_OpenProjectSettings);
 		// What the game asked of its shell: window requests (recorded, not applied), its cursor, where its saves go.
 		SetStatusProvider("game", [this]()
 		{
@@ -212,6 +220,8 @@ namespace Strata
 	EditorContext::~EditorContext()
 	{
 		ReleaseProject(false);
+		// A preferences write still in flight ends here, while everything its completion uses (the notifications) is there.
+		m_Preferences->Finish();
 		if (m_BuiltinAssets && AssetManager::GetActive() == m_BuiltinAssets)
 			AssetManager::SetActive(nullptr);
 	}
@@ -266,15 +276,71 @@ namespace Strata
 				*outError = fmt::format("The project was created, but its start scene could not be saved: {}", error);
 			return false;
 		}
-		Project& project = *m_Project;
-		project.GetConfig().StartScene = m_SceneHandle;
-		if (!project.Save(&error))
-		{
-			if (outError)
-				*outError = fmt::format("The project was created, but its start scene could not be set: {}", error);
-			return false;
-		}
+		// Written in the background like every change of the project's settings; a failure is reported as theirs are.
+		m_Project->GetConfig().StartScene = m_SceneHandle;
+		SaveProjectFile();
 		return true;
+	}
+
+	void EditorContext::SaveProjectFile()
+	{
+		if (!m_Project)
+			return;
+		// The snapshot: a copy of the project's small in-memory values, serialized and written on the writer's job.
+		Ref<const Project> snapshot = CreateRef<Project>(*m_Project);
+		m_ProjectFileWriter->Submit([snapshot](std::string* outError) { return snapshot->Save(outError); });
+	}
+
+	SettingsFileState EditorContext::GetProjectFileState() const
+	{
+		return m_ProjectFileWriter ? m_ProjectFileWriter->GetState() : SettingsFileState::Written;
+	}
+
+	std::string EditorContext::GetProjectFileError() const
+	{
+		return GetProjectFileState() == SettingsFileState::Unwritten ? m_ProjectFileWriter->GetLastError() : std::string();
+	}
+
+	bool EditorContext::HasUnwrittenProjectSettings() const
+	{
+		return GetProjectFileState() == SettingsFileState::Unwritten;
+	}
+
+	const SettingsRegistry& EditorContext::GetSettingsRegistry() const
+	{
+		return m_Specification.Settings ? *m_Specification.Settings : SettingsRegistry::GetProcessRegistry();
+	}
+
+	bool EditorContext::HasSavesInFlight() const
+	{
+		return m_DocumentSaver.IsBusy() || (m_ProjectFileWriter && m_ProjectFileWriter->IsBusy()) || m_Preferences->IsWriting();
+	}
+
+	bool EditorContext::HasUnwrittenPreferences() const
+	{
+		return m_Preferences->HasUnwrittenPreferences();
+	}
+
+	void EditorContext::OnPreferencesWritten(const std::string& error)
+	{
+		if (error.empty())
+			return;
+		const std::string file = FileSystem::ToUTF8(m_Preferences->GetFile().filename());
+		ST_ERROR("Writing the preferences file '{}' failed: {} (the change is kept in memory; the next change or preferences.save writes it "
+			"again)", FileSystem::ToUTF8(m_Preferences->GetFile()), error);
+		NotifySaveFailed(file, fmt::format("{}. The preferences are kept in memory: the next change, or preferences.save, writes them again.", error),
+			UUID::Null());
+	}
+
+	void EditorContext::OnProjectFileWritten(const std::string& error)
+	{
+		if (error.empty())
+			return;
+		const std::string file = FileSystem::ToUTF8(m_Project->GetProjectFile().filename());
+		ST_ERROR("Writing the project file '{}' failed: {} (the change is kept in memory; the next change or project.save writes it again)", file,
+			error);
+		NotifySaveFailed(file, fmt::format("{}. The project's settings are kept in memory: the next change, or project.save, writes them again.",
+			error), UUID::Null());
 	}
 
 	bool EditorContext::BeginOpenProject(const std::filesystem::path& path, std::string* outError)
@@ -300,7 +366,7 @@ namespace Strata
 			if (projectFile.empty())
 				return false;
 		}
-		Ref<Project> project = Project::Load(projectFile, outError);
+		Ref<Project> project = Project::Load(projectFile, outError, &GetSettingsRegistry());
 		if (!project)
 			return false;
 
@@ -308,6 +374,7 @@ namespace Strata
 		m_Project = project;
 		m_ProjectGeneration++;
 		Project::SetActive(m_Project);
+		m_ProjectFileWriter = CreateScope<SettingsFileWriter>([this](const std::string& error) { OnProjectFileWritten(error); });
 
 		// The editor camera and viewport settings continue where they were when the project was last closed.
 		const std::filesystem::path viewportState = GetViewportStateFile();
@@ -342,30 +409,34 @@ namespace Strata
 		else
 			m_Recovery->Scan();
 		OpenScriptEngine(created);
+		// A project saved by 0.5.0 or older kept its collision layers in its scenes: they are read on a job before the start
+		// scene opens, so that it opens with the project's.
+		if (m_Project->GetFileVersion() < Project::c_FormatVersion)
+			BeginProjectMigration();
 
 		// Continue with the start scene when the project has one: it loads in the background (UpdateSceneLoad warns when it
-		// cannot be opened), once the assets are registered. Meanwhile it counts as the scene being opened (IsSceneLoading).
+		// cannot be opened), once the assets are registered and the migration is done. Meanwhile it counts as the scene being
+		// opened (IsSceneLoading).
 		const AssetHandle startScene = m_Project->GetConfig().StartScene;
-		if (m_AssetManager->IsScanning())
-		{
+		const bool scanning = m_AssetManager->IsScanning();
+		if (scanning)
 			m_AfterAssetScan = true;
-			if (startScene.IsValid())
-			{
-				CancelSceneLoad();
-				m_StartSceneAfterScan = startScene;
-				m_SceneLoadStatus = EditorSceneLoadStatus();
-				m_SceneLoadStatus.ID = m_NextSceneLoadID++;
-				m_SceneLoadStatus.Scene = startScene;
-				m_SceneLoadStatus.State = SceneLoadState::LoadingScene;
-				m_SceneLoadStatus.StartScene = true;
-				m_SceneLoadStatus.Started = std::chrono::steady_clock::now();
-			}
-		}
 		else
-		{
 			StartScriptUsageScan();
-			if (startScene.IsValid())
-				OpenStartScene(startScene, m_NextSceneLoadID);
+		if (startScene.IsValid() && (scanning || m_ProjectMigration))
+		{
+			CancelSceneLoad();
+			m_StartSceneAfterScan = startScene;
+			m_SceneLoadStatus = EditorSceneLoadStatus();
+			m_SceneLoadStatus.ID = m_NextSceneLoadID++;
+			m_SceneLoadStatus.Scene = startScene;
+			m_SceneLoadStatus.State = SceneLoadState::LoadingScene;
+			m_SceneLoadStatus.StartScene = true;
+			m_SceneLoadStatus.Started = std::chrono::steady_clock::now();
+		}
+		else if (startScene.IsValid())
+		{
+			OpenStartScene(startScene, m_NextSceneLoadID);
 		}
 		m_RecentProjects.Add(m_Project->GetConfig().Name, m_Project->GetProjectFile());
 		return true;
@@ -392,16 +463,99 @@ namespace Strata
 
 	void EditorContext::FinishAssetScan()
 	{
-		if (!m_AfterAssetScan || !m_AssetManager || m_AssetManager->IsScanning())
-			return;
-		m_AfterAssetScan = false;
-		m_Recovery->Scan();
-		StartScriptUsageScan();
-		if (const AssetHandle startScene = std::exchange(m_StartSceneAfterScan, UUID::Null()); startScene.IsValid())
+		if (m_AfterAssetScan && m_AssetManager && !m_AssetManager->IsScanning())
 		{
-			OpenStartScene(startScene, m_SceneLoadStatus.ID);
-			m_StartSceneAfterScanID = m_SceneLoadStatus.ID;
+			m_AfterAssetScan = false;
+			m_Recovery->Scan();
+			StartScriptUsageScan();
 		}
+		// The start scene waits for the whole registry and for the migration of a project saved by 0.5.0 or older.
+		if (m_AfterAssetScan || m_ProjectMigration || !m_StartSceneAfterScan.IsValid())
+			return;
+		const AssetHandle startScene = std::exchange(m_StartSceneAfterScan, UUID::Null());
+		OpenStartScene(startScene, m_SceneLoadStatus.ID);
+		m_StartSceneAfterScanID = m_SceneLoadStatus.ID;
+	}
+
+	void EditorContext::BeginProjectMigration()
+	{
+		// Without the section (a test's own registry) the layers have nowhere to go: the project stays as it is.
+		if (!GetSettingsRegistry().Find(ProjectCollisionLayers::c_SectionId))
+			return;
+		m_ProjectMigration = CreateScope<PendingMigration>();
+		m_ProjectMigration->Cancel = std::make_shared<std::atomic<bool>>(false);
+		m_ProjectMigration->Scan = std::make_shared<ProjectMigration::SceneLayerScan>();
+		ST_INFO("The project '{}' was saved by 0.5.0 or older (project file version {}): reading its scenes' collision layers to make them the "
+			"project's", m_Project->GetConfig().Name, m_Project->GetFileVersion());
+		m_ProjectMigration->Job = JobSystem::SubmitIO([directory = m_Project->GetAssetDirectory(), cancel = m_ProjectMigration->Cancel,
+			scan = m_ProjectMigration->Scan]()
+		{
+			*scan = ProjectMigration::ScanSceneLayers(directory, cancel.get());
+		});
+	}
+
+	void EditorContext::UpdateProjectMigration(bool wait)
+	{
+		if (!m_ProjectMigration)
+			return;
+		if (wait)
+			JobSystem::Wait(m_ProjectMigration->Job);
+		else if (!m_ProjectMigration->Job.IsComplete())
+			return;
+		const Scope<PendingMigration> migration = std::move(m_ProjectMigration);
+		const ProjectMigration::SceneLayerScan& scan = *migration->Scan;
+		const ProjectMigration::LayerMerge merge = ProjectMigration::MergeSceneLayers(scan.Scenes, m_Project->GetConfig().StartScene);
+		std::vector<std::string> unreadable = scan.Problems;
+		// No undo step: the project had no table to go back to.
+		if (merge.Layers && !merge.Layers->IsDefault())
+		{
+			std::string error;
+			if (!m_Project->GetSettings().Set(ProjectCollisionLayers::c_SectionId, merge.Layers->ToJson(), GetSettingsRegistry(), &error))
+				unreadable.push_back(fmt::format("The scenes' collision layers could not become the project's: {}", error));
+		}
+		// The version records that the migration ran, so the file is written as version 3 also when no table resulted: a
+		// project migrates once, and a table reset later never comes back from the scenes.
+		SaveProjectFile();
+		auto list = [](const std::vector<std::string>& items, std::string_view separator)
+		{
+			std::string text;
+			for (const std::string& item : items)
+				text += (text.empty() ? "" : std::string(separator)) + item;
+			return text;
+		};
+		if (!merge.Scenes.empty())
+		{
+			ST_INFO("The collision layers of {} scene(s) are the project's now (Project Settings > Collision Layers): {}", merge.Scenes.size(),
+				list(merge.Scenes, ", "));
+		}
+		if (!merge.Conflicts.empty() || !unreadable.empty())
+		{
+			std::vector<std::string> problems = merge.Conflicts;
+			problems.insert(problems.end(), unreadable.begin(), unreadable.end());
+			ST_WARN("Making the scenes' collision layers the project's: {}", list(problems, "; "));
+		}
+		m_ProjectMigrationResult = { { "collisionLayers", {
+			{ "scenes", merge.Scenes },
+			{ "conflicts", merge.Conflicts },
+			{ "unreadable", unreadable } } } };
+		ApplyProjectLayers();
+	}
+
+	void EditorContext::ApplyProjectLayers()
+	{
+		m_EditScene->ApplyProjectLayers();
+		if (m_RuntimeScene)
+			m_RuntimeScene->ApplyProjectLayers();
+	}
+
+	void EditorContext::AdoptProjectLayers(Scene& scene, AssetHandle handle)
+	{
+		scene.ApplyProjectLayers();
+		if (!scene.DoStoredLayersDiffer() || !handle.IsValid() || !m_StoredLayersWarned.insert(handle).second)
+			return;
+		const std::string path = GetSceneFile(handle).second;
+		ST_WARN("The scene '{}'{} stores collision layers of its own, as 0.5.0 kept them: the project's apply (Project Settings > Collision "
+			"Layers), and saving the scene drops the scene's", scene.GetName(), path.empty() ? std::string() : fmt::format(" ({})", path));
 	}
 
 	bool EditorContext::IsScanningAssets() const
@@ -411,7 +565,10 @@ namespace Strata
 
 	bool EditorContext::IsWaitingForAssets() const
 	{
-		return IsScanningAssets() || m_StartSceneAfterScan.IsValid() || (m_SceneLoad && m_SceneLoadStatus.ID == m_StartSceneAfterScanID);
+		// The migration of a project saved by 0.5.0 sets the project's collision layers when it ends: an edit or an export made
+		// before would be built on the table it replaces (also in a project without a start scene, which nothing else holds).
+		return IsScanningAssets() || IsMigratingProject() || m_StartSceneAfterScan.IsValid()
+			|| (m_SceneLoad && m_SceneLoadStatus.ID == m_StartSceneAfterScanID);
 	}
 
 	std::optional<AssetScanProgress> EditorContext::GetAssetScanProgress() const
@@ -440,6 +597,10 @@ namespace Strata
 		// Saves in flight are written and published before anything of the project goes: closing never loses one. Through
 		// commands and the UI the project closes only once they ended, so this blocks only when the editor goes away.
 		m_DocumentSaver.FinishAll();
+		// So is a write of the project file: the only path that may write it on the main thread (a write that has not started
+		// runs here), reached by commands only once nothing was in flight, otherwise only when the editor goes away.
+		if (m_ProjectFileWriter)
+			m_ProjectFileWriter->Finish();
 		// The export reads the project's assets on an I/O thread: it stops before they go.
 		if (m_GameExport && !m_GameExport->IsFinished())
 		{
@@ -448,6 +609,13 @@ namespace Strata
 		}
 		CancelSceneLoad();
 		m_AfterAssetScan = false;
+		// A migration's scan stops reading the project's scenes; nothing of it is applied.
+		if (m_ProjectMigration)
+		{
+			m_ProjectMigration->Cancel->store(true);
+			m_ProjectMigration.reset();
+		}
+		m_ProjectMigrationResult = nullptr;
 		Stop();
 		// The world reads the project's assets: it goes before them.
 		m_World.reset();
@@ -490,8 +658,11 @@ namespace Strata
 		{
 			if (Project::GetActive() == m_Project)
 				Project::SetActive(nullptr);
+			m_ProjectFileWriter.reset();
 			m_Project.reset();
 			m_ProjectGeneration++;
+			// The scene that stays takes the layers of no project.
+			ApplyProjectLayers();
 		}
 		if (activateBuiltinAssets)
 			ActivateBuiltinAssets();
@@ -518,6 +689,7 @@ namespace Strata
 		m_AnimationPreview.reset(); // Of the scene that goes, which it refers to: before the scene is released
 		m_World.reset();             // Likewise
 		Ref<Scene> previous = std::exchange(m_EditScene, std::move(scene));
+		AdoptProjectLayers(*m_EditScene, handle);
 		CreateAnimationPreview();
 		m_SceneHandle = handle;
 		ClearSelection();
@@ -644,12 +816,12 @@ namespace Strata
 
 	bool EditorContext::WaitForSceneLoad(std::chrono::milliseconds timeout)
 	{
-		// A start scene waiting for the asset scan: the scan finishes here (it inserts everything at once).
+		// A start scene waiting for the asset scan or the project's migration: both finish here (the scan inserts everything
+		// at once).
 		if (m_AfterAssetScan && m_AssetManager)
-		{
 			m_AssetManager->Scan(ScanImports::InBackground);
-			FinishAssetScan();
-		}
+		UpdateProjectMigration(true);
+		FinishAssetScan();
 		if (!m_SceneLoad)
 			return m_SceneLoadStatus.State == SceneLoadState::Ready;
 		const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -1205,6 +1377,8 @@ namespace Strata
 		// Keys a tool held down in an earlier session (input.* commands) must not leak into this one.
 		ResetSimulatedInput();
 		ResetGameShell();
+		// The bindings players saved in an earlier session (the project's .strata/Saves), as an exported game loads them.
+		InputActions::LoadBindings();
 		m_RuntimeScene->SetTimeDilation(m_Specification.TimeDilation);
 		m_RuntimeScene->OnRuntimeStart(mode);
 		// Cells with unsaved edits stay for the session: their documents on disk are older than what plays.
@@ -1345,6 +1519,7 @@ namespace Strata
 		Scene::ReleaseInBackground(std::move(m_RuntimeScene));
 		m_RuntimeScene = std::move(next);
 		m_RuntimeSceneAsset = asset;
+		AdoptProjectLayers(*m_RuntimeScene, asset);
 		m_RuntimeScene->SetTimeDilation(m_Specification.TimeDilation);
 		m_RuntimeScene->OnRuntimeStart(mode);
 		if (paused)
@@ -1434,6 +1609,7 @@ namespace Strata
 	void EditorContext::ResetSimulatedInput()
 	{
 		Input::ClearSimulated();
+		InputActions::ClearSimulated();
 		m_SimulatedInput.Reset();
 	}
 
@@ -1441,6 +1617,8 @@ namespace Strata
 	{
 		m_GameWindow.Clear();
 		Input::SetGameCursorMode(CursorMode::Normal);
+		// Map enables, players' bindings, simulated actions and a capture belong to the game session.
+		InputActions::ResetSession();
 	}
 
 	std::optional<std::filesystem::path> EditorContext::GetGameSaveDirectory() const
@@ -1448,6 +1626,47 @@ namespace Strata
 		if (!m_Project)
 			return std::nullopt;
 		return m_Project->GetIntermediateDirectory() / "Saves";
+	}
+
+	const InputPlayerBindings& EditorContext::GetPlayerBindings()
+	{
+		const bool playing = IsPlaying();
+		const uint64_t project = m_Project ? m_ProjectGeneration : 0; // Generations count from 1
+		// What a game saves while it plays is read once it stopped (a new session): the file is read only on these changes.
+		if (m_PlayerBindingsRead && m_PlayerBindingsPlaying == playing && m_PlayerBindingsProject == project
+			&& m_PlayerBindingsSession == m_PlaySession && m_PlayerBindingsActions == InputActions::GetVersion()
+			&& m_PlayerBindingsResets == m_PlayerBindingsResetCount)
+		{
+			return m_PlayerBindings;
+		}
+		if (playing)
+			m_PlayerBindings = InputActions::GetPlayerBindings();
+		else
+			m_PlayerBindings = m_Project ? InputActions::ReadSavedBindings() : InputPlayerBindings();
+		m_PlayerBindingsRead = true;
+		m_PlayerBindingsPlaying = playing;
+		m_PlayerBindingsProject = project;
+		m_PlayerBindingsSession = m_PlaySession;
+		// After the reading, which reads the project's actions first when they changed.
+		m_PlayerBindingsActions = InputActions::GetVersion();
+		m_PlayerBindingsResets = m_PlayerBindingsResetCount;
+		return m_PlayerBindings;
+	}
+
+	bool EditorContext::ResetPlayerBindings(std::string* outError)
+	{
+		if (!m_Project)
+		{
+			if (outError)
+				*outError = "No project is open: the players' bindings belong to a project's game";
+			return false;
+		}
+		if (!InputActions::DeleteSavedBindings(outError))
+			return false;
+		if (IsPlaying())
+			InputActions::ResetBindings("");
+		m_PlayerBindingsResetCount++;
+		return true;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -2420,7 +2639,11 @@ namespace Strata
 		}
 		// Saves written in the background are published (and their completions run) between frames.
 		m_DocumentSaver.Update();
-		// The asset scan ended: what waited for the whole registry goes on (the start scene, the script usage scan).
+		if (m_ProjectFileWriter)
+			m_ProjectFileWriter->Update();
+		m_Preferences->Update();
+		// The asset scan or the project's migration ended: what waited for them goes on (the start scene, the script usage scan).
+		UpdateProjectMigration(false);
 		FinishAssetScan();
 		// One budget for the frame's loading work: a scene being opened, the running game's switch and the updated scene's
 		// sub-scenes draw from it.

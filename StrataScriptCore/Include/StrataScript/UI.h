@@ -13,8 +13,9 @@
 namespace Strata
 {
 
-	// The game UI's actions: what menus react to, from the keyboard and every gamepad (Submit: Enter, keypad Enter, Space,
-	// gamepad A; Cancel: Escape, gamepad B; the directions: arrow keys, the d-pad and the left stick).
+	// The game UI's actions: what menus react to, the input actions of the project's map UI ("UI/Submit", "UI/Cancel",
+	// "UI/Up"...). By default Submit is Enter, keypad Enter, Space or gamepad A, Cancel Escape or gamepad B, and the
+	// directions the arrow keys, the d-pad and the left stick of every gamepad; the project and the players may rebind them.
 	enum class UIAction : uint32_t
 	{
 		Submit = StrataScriptUIAction_Submit,

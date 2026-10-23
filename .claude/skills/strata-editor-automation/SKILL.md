@@ -85,7 +85,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
   `scene.open`/`save`/`info`/`hierarchy`, `entity.create`/`get`/`find`/`delete`, `component.add`/`set`,
   `prefab.instantiate`, `asset.list`/`info`/`import`, `material.create`, `script.build`/`status`, `play.start`/`stop`/
   `step`, `input.sequence` and `viewport.capture`. The others are in `scene`, `assets`, `play`, `scripts`, `animation`,
-  `viewport`, `streaming`, `perf`, `editor`, `ui` and `world`.
+  `viewport`, `streaming`, `perf`, `editor`, `ui`, `world` and `settings` (the project's settings and the preferences).
 - `strata_describe` lists the toolsets (`{}`), a toolset's commands (`{"toolset": "scene"}`) or one command's full
   description and schema (`{"command": "entity.rename"}`); read it before a command whose short description leaves you
   unsure. `strata_toolsets {"enable": ["scene"]}` lists a toolset's commands as tools too (`"all"` for every command;
@@ -404,10 +404,13 @@ at once up to 131,072 bodies), for scenes that spawn many bodies while they play
 a cost); 0 sizes it from the bodies the
 scene starts with; set it in edit mode: it applies when play starts; 0.4.0's `maxBodyPairs` is ignored with a `warning`; `maxEntitiesInstantiatedPerFrame` and `maxEntitiesDestroyedPerFrame` bound how many entities sub-scenes create
 and destroy per frame, 5000 each by default).
-Collision layers: `scene.setSettings {"layerNames": {"1": "Player", "2": "Debris"}, "layerCollisions":
-[{"layers": ["Player", "Debris"], "collide": false}]}` names layers and keeps pairs apart (`resetLayerCollisions: true`
-lets everything collide again first; `scene.info` lists `physicsLayers`), and `RigidBody.Layer` and
-`CharacterController.Layer` take a layer's name as well as its index (`component.set {"values": {"Layer": "Debris"}}`).
+Collision layers are the project's, the same in every scene (the `settings` toolset): `project.setCollisionLayers
+{"layerNames": {"1": "Player", "2": "Debris"}, "layerCollisions": [{"layers": ["Player", "Debris"], "collide": false}]}`
+names layers and keeps pairs apart as one undo step that leaves the scene saved (`resetLayerCollisions: true` lets
+everything collide again first; `scene.info` lists `physicsLayers`; `scene.setSettings` refuses these parameters since
+0.6.0), and `RigidBody.Layer` and `CharacterController.Layer` take a layer's name as well as its index
+(`component.set {"values": {"Layer": "Debris"}}`). Opening a 0.5.0 project makes its scenes' layers the project's once
+(`project.open`'s `migrated`).
 
 **Materials**: `material.set {"material": "Materials/Red.stmat", "properties": {"Roughness": 0.3}}` saves the material
 file and is one undo step (`edit.undo` restores the file and what entities show); entities using it show the change in
@@ -507,10 +510,11 @@ person at the editor sees the same in the Performance panel (click the frame pil
 `asset.stats` in the Streaming panel (click the assets pill); `editor.showPanel {"panel": "Streaming"}` (or
 `"Performance"`, `"Console"`, `"Activity"`, ...) brings one to the front for them, also as the first command of a script
 (it fails while no project is open: the editor then shows its launcher instead of panels); `{"panel": "ContentBrowser",
-"scripts": true}` shows the browser's Scripts root, the script files you wrote with their classes. `editor.showDialog {"dialog":
-"export" | "newProject" | "openSample" | "recovery" | "newScript" | "externalEditor" | "about"}` opens a dialog of the
-window the same way ("recovery" lets the person choose what to recover or discard, instead of you choosing for them;
-"newScript" and "externalEditor" let them name a script class or pick the program that opens scripts).
+"scripts": true}` shows the browser's Scripts root, the script files you wrote with their classes; `{"panel":
+"ProjectSettings"}` the project's settings, page by page. `editor.showDialog {"dialog": "export" | "newProject" |
+"openSample" | "recovery" | "newScript" | "preferences" | "externalEditor" | "about"}` opens a dialog of the window the same
+way ("recovery" lets the person choose what to recover or discard, instead of you choosing for them; "newScript" and
+"externalEditor" let them name a script class or pick the program that opens scripts; "preferences" takes a `section`).
 
 **Play it (simulated input)**: while the game runs (`play.start`), the `input.*` commands press keys and buttons the way a
 player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyReleased` (also while the viewport has no focus).
@@ -527,6 +531,8 @@ input.scroll      {"delta": [0, 1]}
 input.gamepadButton {"button": "A"}                       # gamepad 0 unless "gamepad": 0..3; same actions as keys
 input.gamepadAxis {"axis": "LeftY", "value": 1}           # stick up, held until replaced, "value": null or play.stop
 input.gamepadAxis {"axis": "RightTrigger", "value": 1, "steps": 30} # 30 fixed steps, then back to rest
+input.action      {"action": "Gameplay/Jump"}             # an input action, whatever its bindings; mode tap|press|release
+input.action      {"action": "Move", "mode": "press", "value": [0, 1]} # a Vector2's value (an Axis' [x, 0]), until released
 input.state       {}                                      # what simulated input holds; input.releaseAll lets go of it
 input.click       {"entity": "<button id>"}               # a UI element where the player sees it: clicked, events
 input.type        {"text": "Player 1"}                    # typed text (Input::GetTypedText), UTF-8, at most 1,024 bytes
@@ -561,6 +567,11 @@ and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
   lists them in a pill that releases them when a person clicks it.
 - A tap of 1 step is one key press for games that act on `IsKeyPressed` or `KeyRepeat`; use `steps` (or press/release) to
   hold a key for repeats.
+- Games that read input actions (`Input::IsActionPressed("Jump")`) see `input.key` through the actions' bindings; to
+  drive an action whatever its bindings use `input.action` (`mode` instead of `action`, a `value` for an Axis or a Vector2;
+  a new press of an action replaces the one before), or `{"step": 0, "action": "Jump", "steps": 10}` in an `input.sequence`.
+  `input.state` lists every action as the game reads it (`actions: [{action, down, value}]`), the maps' enables, the
+  players' saved bindings (`playerBindings`) and the actions it holds (`simulatedActions`).
 - Menus: `input.click {"entity": ...}` moves the pointer to the center of a UI element's rect at the Game view's size and taps
   the button there (for `steps`, default 1, like `input.mouseButton`). It fails, changing nothing, when the element is hidden, on a canvas that does not receive input, or
   covered (the error names what a click would hit, `errorData.cover`); the answer says whether the button clicked or the
@@ -625,6 +636,34 @@ from the frame that started it); a large project takes a while, so give the call
 `project.setExportSettings {"loadingScene": "Scenes/Loading.stscene"}` names a scene the game plays while its start scene
 loads (null: none; the game shows black until its start scene is in; never the start scene itself, which is refused, and
 `project.setStartScene` of the loading scene clears that setting); exports keep it, also pruned ones.
+**Project settings** (toolset `settings`): `project.settings` lists the project's own fields and every settings section
+the engine's modules and the game register, with each section's `schema`, the `value` that applies and `isDefault`;
+`project.setSettings {"section": "<Module>.<Name>", "value": {...}}` (or `"reset": true`) replaces one section's value,
+which the section checks first (a bad field changes nothing and is named). `project.setGameInfo {"title", "version",
+"company", "copyright", "icon"}` sets what exported games show of themselves (fields left out stay; `icon`: a texture of
+the project made from a PNG, JPEG, TGA or BMP file of at least 256 x 256 pixels, not a texture inside a model; the
+project's name keeps naming the save folder). These changes, like the start scene and the export settings, are undo steps that leave the scene saved, work while playing (they stay after `play.stop`), go into
+exported games, and keep the assets they name from being deleted. The project file is written in the background:
+`project.save` answers once it is written. When a write fails, `editor.status`' `project.fileState` is `"unwritten"`
+(`project.info`'s `fileError` says why): fix the cause and run `project.save`, because closing or switching the project
+refuses until then (`force: true` discards the settings, reported as `discardedSettings`).
+**Input actions** (toolset `settings`) are the game's named controls, which scripts read by name and players can rebind:
+`inputActions.setMap {"map": "Gameplay"}` adds a map (`rename`, `enabled` at start, `remove`);
+`inputActions.setAction {"action": "Gameplay/Jump", "kind": "Button", "bindings": ["Key/Space", "Gamepad/A"]}` adds or
+changes an action (`kind` Button, Axis or Vector2; `deadZone`; `bindings` replaces the list: `Key/<key>`,
+`Mouse/<button>`, `Gamepad/<button>`, `Gamepad/<axis>` or `<axis>+`/`-`, `Gamepad/LeftStick`, `1D:<neg>,<pos>`,
+`2D:<up>,<down>,<left>,<right>`; `rename`, `map` to move, `remove`). Name actions `<Map>/<Action>`; a bare name works when
+no other map has it. The map `UI` (Submit, Cancel, Up, Down, Left, Right) is the game UI's navigation: rebind it, never
+rename or remove it. `project.settings {"section": "Input.Actions"}` shows the whole set. Each change is an undo step.
+Bindings a game's rebinding menu saved while playing (`Input::SaveBindings`, into `.strata/Saves/InputBindings.json`)
+replace the project's at every play start, so `setAction`'s bindings do not reach play for those actions:
+`inputActions.resetPlayerBindings {}` deletes that file (and, while playing, gives the game the project's bindings back).
+**Preferences** (toolset `settings`) are the person's, for every project, not the project's: `preferences.get` lists them
+like `project.settings` does (the external editor is `Editor.ExternalEditor`, `{"Command": "..."}`; the interface scale
+`Editor.Interface`, `{"Scale": "125%"}`), and
+`preferences.set {"section", "value" | "reset": true}` changes one; they are no undo steps. Change them only when asked:
+they are someone's environment. A failed write shows as `preferences.get`'s `fileState` `"unwritten"`; `preferences.save`
+writes again, and `editor.quit` refuses until then (`force: true` reports `discardedPreferences`).
 Check the result headless: `<dir>/<Game> --headless --frames 120` (exit code 0). Games load scenes in the background
 too: the first frames run before the start scene is in, so give short checks enough `--frames`.
 

@@ -35,28 +35,8 @@ namespace Strata
 	namespace
 	{
 
-		// Named layers by index, and the pairs of layers that do not collide by their names ("Layer <index>" without one).
-		nlohmann::json DescribeLayers(const PhysicsLayerSettings& layers)
-		{
-			nlohmann::json names = nlohmann::json::object();
-			for (uint32_t layer = 0; layer < c_PhysicsLayerCount; layer++)
-			{
-				if (!layers.Names[layer].empty())
-					names[std::to_string(layer)] = layers.Names[layer];
-			}
-			nlohmann::json noCollisions = nlohmann::json::array();
-			for (uint32_t a = 0; a < c_PhysicsLayerCount; a++)
-			{
-				for (uint32_t b = a; b < c_PhysicsLayerCount; b++)
-				{
-					if (!layers.DoCollide(a, b))
-						noCollisions.push_back({ layers.GetDisplayName(a), layers.GetDisplayName(b) });
-				}
-			}
-			return { { "names", std::move(names) }, { "noCollisions", std::move(noCollisions) } };
-		}
-
-		nlohmann::json DescribeSettings(const SceneSettings& settings)
+		// The scene's settings and the collision layers it runs with (its copy of the project's).
+		nlohmann::json DescribeSettings(const SceneSettings& settings, const PhysicsLayerSettings& layers)
 		{
 			return {
 				{ "gravity", { settings.Gravity.x, settings.Gravity.y, settings.Gravity.z } },
@@ -67,92 +47,8 @@ namespace Strata
 				{ "physicsCapacity", {
 					{ "maxBodies", settings.PhysicsCapacity.MaxBodies },
 					{ "maxContactConstraints", settings.PhysicsCapacity.MaxContactConstraints } } },
-				{ "physicsLayers", DescribeLayers(settings.PhysicsLayers) }
+				{ "physicsLayers", DescribePhysicsLayers(layers) }
 			};
-		}
-
-		// A layer given by index (0 to c_PhysicsLayerCount - 1) or by name (its name, or "Layer <index>" without one).
-		std::optional<uint32_t> ReadLayer(const nlohmann::json& value, const PhysicsLayerSettings& layers)
-		{
-			if (value.is_number_unsigned() || (value.is_number_integer() && value.get<int64_t>() >= 0))
-			{
-				const uint64_t index = value.get<uint64_t>();
-				return index < c_PhysicsLayerCount ? std::optional<uint32_t>(static_cast<uint32_t>(index)) : std::nullopt;
-			}
-			if (value.is_string())
-				return layers.FindLayer(value.get<std::string>());
-			return std::nullopt;
-		}
-
-		// Reads scene.setSettings' "layerNames" ({"<index>": name}; "" or null clears a name) into `layers`. The names are
-		// checked once all of them are in place, so layers can swap names in one call. Returns an error message, empty on
-		// success.
-		std::string ReadLayerNames(const nlohmann::json& value, PhysicsLayerSettings& layers)
-		{
-			if (!value.is_object())
-				return R"(Parameter 'layerNames' must be an object of layer indices to names, e.g. {"3": "Player"})";
-			std::vector<std::pair<uint32_t, std::string>> names;
-			for (const auto& [key, name] : value.items())
-			{
-				// Indices without leading zeros, so that one layer cannot be named twice ("3" and "03").
-				const bool isIndex = !key.empty() && key.size() <= 2 && (key.size() == 1 || key[0] != '0')
-					&& std::all_of(key.begin(), key.end(), [](char character) { return character >= '0' && character <= '9'; });
-				uint32_t layer = c_PhysicsLayerCount;
-				if (isIndex)
-				{
-					layer = 0;
-					for (const char character : key)
-						layer = layer * 10 + static_cast<uint32_t>(character - '0');
-				}
-				if (layer >= c_PhysicsLayerCount)
-					return fmt::format("Parameter 'layerNames': '{}' is no layer index (0 to {})", key, c_PhysicsLayerCount - 1);
-				if (!name.is_string() && !name.is_null())
-					return fmt::format("Parameter 'layerNames.{}' must be a string (empty or null clears the name)", key);
-				names.emplace_back(layer, name.is_string() ? name.get<std::string>() : std::string());
-				layers.Names[layer].clear();
-			}
-			for (const auto& [layer, name] : names)
-			{
-				if (std::optional<std::string> error = layers.ValidateName(layer, name))
-					return fmt::format("Parameter 'layerNames.{}': {}", layer, *error);
-				layers.Names[layer] = name;
-			}
-			return {};
-		}
-
-		// Reads scene.setSettings' "layerCollisions" ([{"layers": [a, b], "collide": bool}], layers by index or name, applied
-		// in order) into `layers`. Returns an error message, empty on success.
-		std::string ReadLayerCollisions(const nlohmann::json& value, PhysicsLayerSettings& layers)
-		{
-			constexpr std::string_view c_Form = R"({"layers": [a, b], "collide": true | false})";
-			if (!value.is_array())
-				return fmt::format("Parameter 'layerCollisions' must be an array of {}", c_Form);
-			for (const nlohmann::json& entry : value)
-			{
-				if (!entry.is_object())
-					return fmt::format("Parameter 'layerCollisions': {} is not of the form {}", entry.dump(), c_Form);
-				for (const auto& [key, unused] : entry.items())
-				{
-					if (key != "layers" && key != "collide")
-						return fmt::format("Parameter 'layerCollisions': unknown key '{}' (entries are {})", key, c_Form);
-				}
-				const auto pair = entry.find("layers");
-				const auto collide = entry.find("collide");
-				if (pair == entry.end() || !pair->is_array() || pair->size() != 2 || collide == entry.end() || !collide->is_boolean())
-					return fmt::format("Parameter 'layerCollisions': {} is not of the form {}", entry.dump(), c_Form);
-				std::optional<uint32_t> found[2];
-				for (size_t side = 0; side < 2; side++)
-				{
-					found[side] = ReadLayer((*pair)[side], layers);
-					if (!found[side])
-					{
-						return fmt::format("Parameter 'layerCollisions': no layer {} (layers are indices from 0 to {} or their names)", (*pair)[side].dump(),
-							c_PhysicsLayerCount - 1);
-					}
-				}
-				layers.SetCollide(*found[0], *found[1], collide->get<bool>());
-			}
-			return {};
 		}
 
 		// Reads scene.setSettings' "physicsCapacity" object into `capacity` (only the fields it names change). Returns an error
@@ -417,7 +313,8 @@ namespace Strata
 
 		registry.Register({ "scene.info", "Name, asset, modification and play state, entity count and settings of the edited scene, and what runs "
 			"while playing (running: the running scene, which a game's scene switch makes another than the edited one; null in edit mode; see "
-			"play.state). entityCount counts the active scene's entities (the running one while playing).", ObjectSchema({}),
+			"play.state). entityCount counts the active scene's entities (the running one while playing); settings.physicsLayers are the "
+			"project's collision layers as the active scene runs them.", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				const Ref<Scene>& scene = context.GetActiveScene();
@@ -428,7 +325,7 @@ namespace Strata
 					{ "state", SceneStateToString(context.GetSceneState()) },
 					{ "paused", context.IsPaused() },
 					{ "entityCount", scene->GetEntityCount() },
-					{ "settings", DescribeSettings(scene->GetSettings()) },
+					{ "settings", DescribeSettings(scene->GetSettings(), scene->GetPhysicsLayers()) },
 					{ "running", DescribeRunningScene(context) } });
 			}, EditorCommandKind::Query });
 
@@ -491,7 +388,7 @@ namespace Strata
 					arguments.SetError(fmt::format("Unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "starting a new scene"))
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "starting a new scene", DiscardScope::Scene))
 					return std::move(*refused);
 				const bool discarded = context.IsSceneModified();
 				if (!context.NewScene(name, templateId))
@@ -515,7 +412,7 @@ namespace Strata
 				const bool force = arguments.GetBool("force", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the scene {}", parameters["scene"].dump())))
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the scene {}", parameters["scene"].dump()), DiscardScope::Scene))
 					return std::move(*refused);
 				return OpenSceneAndWait(context, handle, context.IsSceneModified());
 			}) }));
@@ -656,31 +553,16 @@ namespace Strata
 		capacitySchema["description"] = "Physics world room (only the given values change), reserved when play starts (up to 131072 bodies and "
 			"262144 contacts at once; beyond that it counts for growth only); raise it for scenes that create many bodies while they play, so "
 			"that the world does not grow during play";
-		const nlohmann::json layerNamesSchema = {
-			{ "type", "object" },
-			{ "description", R"(Names of collision layers by index ("0" to "31"), e.g. {"1": "Player", "2": "Debris"}; "" or null clears )"
-				"a name. Names are unique (ignoring case), at most 64 characters, and RigidBody.Layer, CharacterController.Layer and "
-				"layerCollisions accept them" },
-			{ "propertyNames", { { "pattern", "^([0-9]|[1-2][0-9]|3[0-1])$" } } },
-			{ "additionalProperties", { { "type", nlohmann::json::array({ "string", "null" }) } } } };
-		const nlohmann::json layerCollisionsSchema = {
-			{ "type", "array" },
-			{ "description", "Changes of the layer matrix, applied in order after layerNames: whether two layers (indices 0-31 or names) collide. "
-				"Every pair collides by default; bodies and character controllers collide only when their layers do" },
-			{ "items", {
-				{ "type", "object" },
-				{ "properties", {
-					{ "layers", { { "type", "array" }, { "minItems", 2 }, { "maxItems", 2 }, { "description", "The two layers (the same twice: a layer with itself)" },
-						{ "items", { { "type", nlohmann::json::array({ "integer", "string" }) } } } } },
-					{ "collide", BoolSchema("Whether they collide") } } },
-				{ "required", nlohmann::json::array({ "layers", "collide" }) },
-				{ "additionalProperties", false } } } };
+		// 0.5.0's collision layer parameters, declared so that a request with them is refused naming the command that took them
+		// over rather than as unknown.
+		const nlohmann::json movedLayerParameter = { { "deprecated", true },
+			{ "description", "Refused since 0.6.0: collision layers are the project's, set with project.setCollisionLayers (same parameter)" } };
 		registry.Register({ "scene.setSettings",
-			"Changes settings of the edited scene: gravity, the fixed step, the physics world's capacities, the collision layers' names and "
-			"matrix, and how many entities additive loads (sub-scenes) create per frame (undoable, one step). Capacities take effect when a "
-			"physics world is created, at the next play start, so set them in edit mode; the layer matrix applies at once, also to a running "
-			"game. While playing, changes go to the running copy only and play.stop discards them (the result then has a warning). Returns the "
-			"settings (scene.info shows them too).",
+			"Changes settings of the edited scene: gravity, the fixed step, the physics world's capacities, and how many entities additive loads "
+			"(sub-scenes) create per frame (undoable, one step). Capacities take effect when a physics world is created, at the next play start, "
+			"so set them in edit mode. While playing, changes go to the running copy only and play.stop discards them (the result then has a "
+			"warning). Collision layers are the project's: set them with project.setCollisionLayers. Returns the settings with the collision "
+			"layers the scene runs with (scene.info shows them too).",
 			ObjectSchema({
 				{ "gravity", Vec3Schema("Gravity in m/s^2") },
 				{ "fixedTimestep", NumberSchema("Fixed simulation step in seconds (1/1000 to 1/10)") },
@@ -692,11 +574,21 @@ namespace Strata
 					"world's cells) may destroy per frame, all together (default 5000); creation and destruction together stop after about 2 ms a frame",
 					1, SceneSettings::c_MaxEntitiesDestroyedLimit) },
 				{ "physicsCapacity", std::move(capacitySchema) },
-				{ "layerNames", layerNamesSchema },
-				{ "resetLayerCollisions", BoolSchema("Lets every pair of layers collide again before layerCollisions applies") },
-				{ "layerCollisions", layerCollisionsSchema } }),
+				{ "layerNames", movedLayerParameter },
+				{ "resetLayerCollisions", movedLayerParameter },
+				{ "layerCollisions", movedLayerParameter } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
+				// 0.5.0 set the scene's collision layers here; they are the project's now, and a scene command does not write the
+				// project file: one command per change.
+				for (const char* layerParameter : { "layerNames", "resetLayerCollisions", "layerCollisions" })
+				{
+					if (parameters.contains(layerParameter))
+					{
+						return EditorCommandResult::InvalidParameters(fmt::format("Parameter '{}': collision layers are the project's since 0.6.0; set them "
+							"with project.setCollisionLayers, which takes the same parameter", layerParameter));
+					}
+				}
 				Scene& scene = *context.GetActiveScene();
 				const SceneSettings before = scene.GetSettings();
 				SceneSettings after = before;
@@ -720,37 +612,25 @@ namespace Strata
 					if (std::string error = ReadPhysicsCapacity(*capacity, after.PhysicsCapacity, capacityWarning); !error.empty())
 						return EditorCommandResult::InvalidParameters(error);
 				}
-				if (auto names = parameters.find("layerNames"); names != parameters.end())
-				{
-					if (std::string error = ReadLayerNames(*names, after.PhysicsLayers); !error.empty())
-						return EditorCommandResult::InvalidParameters(error);
-				}
 				CommandArguments arguments(parameters);
 				after.MaxFixedStepsPerFrame = static_cast<uint32_t>(arguments.GetInt("maxFixedStepsPerFrame", before.MaxFixedStepsPerFrame, 1, 64));
 				after.MaxEntitiesInstantiatedPerFrame = static_cast<uint32_t>(arguments.GetInt("maxEntitiesInstantiatedPerFrame", before.MaxEntitiesInstantiatedPerFrame,
 					1, SceneSettings::c_MaxEntitiesInstantiatedLimit));
 				after.MaxEntitiesDestroyedPerFrame = static_cast<uint32_t>(arguments.GetInt("maxEntitiesDestroyedPerFrame", before.MaxEntitiesDestroyedPerFrame,
 					1, SceneSettings::c_MaxEntitiesDestroyedLimit));
-				if (arguments.GetBool("resetLayerCollisions", false))
-					after.PhysicsLayers.ResetMatrix();
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (auto collisions = parameters.find("layerCollisions"); collisions != parameters.end())
-				{
-					if (std::string error = ReadLayerCollisions(*collisions, after.PhysicsLayers); !error.empty())
-						return EditorCommandResult::InvalidParameters(error);
-				}
 				if (std::string error; !context.CheckSceneEditable(&error))
 					return EditorCommandResult::Fail(std::move(error));
 
 				const bool changed = after.Gravity != before.Gravity || after.FixedTimestep != before.FixedTimestep
 					|| after.MaxFixedStepsPerFrame != before.MaxFixedStepsPerFrame || after.PhysicsCapacity != before.PhysicsCapacity
 					|| after.MaxEntitiesInstantiatedPerFrame != before.MaxEntitiesInstantiatedPerFrame
-					|| after.MaxEntitiesDestroyedPerFrame != before.MaxEntitiesDestroyedPerFrame || after.PhysicsLayers != before.PhysicsLayers;
+					|| after.MaxEntitiesDestroyedPerFrame != before.MaxEntitiesDestroyedPerFrame;
 				scene.GetSettings() = after;
 				if (changed && !context.IsPlaying())
 					context.GetUndoStack().Record(CreateScope<SceneSettingsAction>(scene, before, after));
-				nlohmann::json result = { { "settings", DescribeSettings(after) } };
+				nlohmann::json result = { { "settings", DescribeSettings(after, scene.GetPhysicsLayers()) } };
 				if (context.IsPlaying())
 				{
 					// Like the other mutating commands; capacities do not even reach the running copy's world, which exists already.

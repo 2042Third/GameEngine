@@ -4,10 +4,13 @@
 #include "Strata/Core/DynamicLibrary.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/Log.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Core/StringUtils.h"
 #include "Strata/Reflection/PropertyJson.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 
 namespace Strata
@@ -15,6 +18,9 @@ namespace Strata
 
 	namespace
 	{
+
+		// The members of "Project" this version reads; Load keeps the others for Save.
+		constexpr std::array<std::string_view, 6> c_KnownProjectMembers = { "Name", "AssetDirectory", "StartScene", "Scripts", "Export", "Game" };
 
 		Ref<Project>& GetActiveProjectStorage()
 		{
@@ -87,6 +93,61 @@ namespace Strata
 			return true;
 		}
 
+		// Reads "Game" (ProjectGameInfo): missing members keep their defaults. The reason when it is not of that form or a field
+		// is invalid.
+		std::optional<std::string> ReadGameInfo(const nlohmann::json& value, ProjectGameInfo& outInfo)
+		{
+			if (!value.is_object())
+				return std::string("\"Game\" must be an object");
+			for (const char* field : { "Title", "Version", "Company", "Copyright" })
+			{
+				const nlohmann::json* member = JsonUtils::Find(value, field);
+				if (member && !member->is_string())
+					return fmt::format("\"Game.{}\" must be a string", field);
+			}
+			outInfo.Title = JsonUtils::GetString(value, "Title", outInfo.Title);
+			outInfo.Version = JsonUtils::GetString(value, "Version", outInfo.Version);
+			outInfo.Company = JsonUtils::GetString(value, "Company", outInfo.Company);
+			outInfo.Copyright = JsonUtils::GetString(value, "Copyright", outInfo.Copyright);
+			if (const nlohmann::json* icon = JsonUtils::Find(value, "Icon"); icon && !icon->is_null())
+			{
+				const std::optional<UUID> handle = UUIDFromJson(*icon);
+				if (!handle)
+					return std::string("\"Game.Icon\" must be a texture handle or null");
+				outInfo.Icon = *handle;
+			}
+			if (std::optional<std::string> problem = outInfo.Validate())
+				return fmt::format("\"Game\" is invalid: {}", *problem);
+			return std::nullopt;
+		}
+
+	}
+
+	Project::Project()
+		: m_UnknownMembers(CreateScope<nlohmann::json>(nlohmann::json::object()))
+	{
+	}
+
+	Project::~Project() = default;
+
+	Project::Project(const Project& other)
+		: m_ProjectFile(other.m_ProjectFile), m_Config(other.m_Config), m_Settings(other.m_Settings), m_SettingsProblems(other.m_SettingsProblems),
+		  m_FileVersion(other.m_FileVersion), m_UnknownMembers(CreateScope<nlohmann::json>(*other.m_UnknownMembers))
+	{
+	}
+
+	Project& Project::operator=(const Project& other)
+	{
+		if (this != &other)
+		{
+			m_ProjectFile = other.m_ProjectFile;
+			m_Config = other.m_Config;
+			m_Settings = other.m_Settings;
+			m_SettingsProblems = other.m_SettingsProblems;
+			m_FileVersion = other.m_FileVersion;
+			*m_UnknownMembers = *other.m_UnknownMembers;
+		}
+		return *this;
 	}
 
 	bool Project::IsValidName(std::string_view name)
@@ -144,7 +205,7 @@ namespace Strata
 		return project;
 	}
 
-	Ref<Project> Project::Load(const std::filesystem::path& projectFile, std::string* outError)
+	Ref<Project> Project::Load(const std::filesystem::path& projectFile, std::string* outError, const SettingsRegistry* registry)
 	{
 		auto fail = [outError, &projectFile](const std::string& message) -> Ref<Project>
 		{
@@ -153,12 +214,15 @@ namespace Strata
 			return nullptr;
 		};
 
-		std::optional<std::string> text = FileSystem::ReadText(projectFile);
-		if (!text)
+		const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytesPrefix(projectFile, c_MaxFileBytes + 1);
+		if (!bytes)
 			return fail("cannot read the project file");
+		if (bytes->size() > c_MaxFileBytes)
+			return fail(fmt::format("the project file is larger than the {} MiB a project file may take", c_MaxFileBytes / (1024 * 1024)));
+		const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
 
 		std::string parseError;
-		std::optional<nlohmann::json> document = JsonUtils::Parse(*text, &parseError);
+		std::optional<nlohmann::json> document = JsonUtils::Parse(text, &parseError);
 		if (!document || !document->is_object())
 			return fail(fmt::format("invalid JSON ({})", parseError));
 
@@ -174,6 +238,7 @@ namespace Strata
 			return fail("missing \"Project\" object");
 
 		Ref<Project> project(new Project());
+		project->m_FileVersion = static_cast<uint32_t>(version);
 		std::error_code error;
 		project->m_ProjectFile = std::filesystem::absolute(projectFile, error).lexically_normal();
 		if (error)
@@ -229,6 +294,32 @@ namespace Strata
 				projectConfig.Export.LoadingScene = *handle;
 			}
 		}
+		if (const nlohmann::json* game = JsonUtils::Find(*config, "Game"))
+		{
+			if (std::optional<std::string> problem = ReadGameInfo(*game, projectConfig.Game))
+				return fail(*problem);
+		}
+		for (const auto& [name, member] : config->items())
+		{
+			if (std::find(c_KnownProjectMembers.begin(), c_KnownProjectMembers.end(), name) == c_KnownProjectMembers.end())
+				(*project->m_UnknownMembers)[name] = member;
+		}
+
+		// Versions 1 and 2 have no settings.
+		if (const nlohmann::json* settings = JsonUtils::Find(*document, "Settings"))
+		{
+			std::string settingsError;
+			std::optional<ProjectSettingsValues> values = ProjectSettingsValues::FromJson(*settings, &settingsError);
+			if (!values)
+				return fail(settingsError);
+			project->m_Settings = std::move(*values);
+		}
+		project->m_SettingsProblems = project->m_Settings.Validate(registry ? *registry : SettingsRegistry::GetProcessRegistry());
+		for (const SettingsProblem& problem : project->m_SettingsProblems)
+		{
+			ST_CORE_WARN("{}: the project's settings section '{}' is invalid, so its default applies (the stored value is kept): {}",
+				FileSystem::ToUTF8(projectFile), problem.Section, problem.Message);
+		}
 		return project;
 	}
 
@@ -258,30 +349,40 @@ namespace Strata
 
 	bool Project::Save(std::string* outError) const
 	{
-		if (HasControlCharacters(m_Config.Name))
+		const std::optional<std::string> text = MakeFileText(outError);
+		if (!text)
+			return false;
+		if (!FileSystem::WriteText(m_ProjectFile, *text))
 		{
 			if (outError)
-				*outError = "The project name contains control characters";
+				*outError = fmt::format("Could not write '{}'", FileSystem::ToUTF8(m_ProjectFile));
 			return false;
 		}
-		if (!IsValidProjectSubdirectory(m_Config.AssetDirectory))
-		{
-			if (outError)
-				*outError = fmt::format("Asset directory '{}' must be a relative path inside the project", m_Config.AssetDirectory);
-			return false;
-		}
+		return true;
+	}
 
+	std::optional<std::string> Project::MakeFileText(std::string* outError) const
+	{
+		auto fail = [outError](std::string message) -> std::optional<std::string>
+		{
+			if (outError)
+				*outError = std::move(message);
+			return std::nullopt;
+		};
+
+		if (HasControlCharacters(m_Config.Name))
+			return fail("The project name contains control characters");
+		if (!IsValidProjectSubdirectory(m_Config.AssetDirectory))
+			return fail(fmt::format("Asset directory '{}' must be a relative path inside the project", m_Config.AssetDirectory));
 		if (!ValidateScriptSettings(m_Config.Scripts, outError))
-			return false;
+			return std::nullopt;
 		for (const std::string& entry : m_Config.Export.AlwaysInclude)
 		{
 			if (!IsValidProjectSubdirectory(entry))
-			{
-				if (outError)
-					*outError = fmt::format("'{}' in Export.AlwaysInclude is not a path relative to the asset directory", entry);
-				return false;
-			}
+				return fail(fmt::format("'{}' in Export.AlwaysInclude is not a path relative to the asset directory", entry));
 		}
+		if (std::optional<std::string> problem = m_Config.Game.Validate())
+			return fail(fmt::format("The game's {}", *problem));
 
 		nlohmann::json document = nlohmann::json::object();
 		document["Strata"] = { { "Format", "Project" }, { "Version", c_FormatVersion } };
@@ -298,15 +399,28 @@ namespace Strata
 				exportSettings["LoadingScene"] = UUIDToJson(m_Config.Export.LoadingScene);
 			config["Export"] = std::move(exportSettings);
 		}
-		document["Project"] = std::move(config);
-
-		if (!FileSystem::WriteText(m_ProjectFile, JsonUtils::Dump(document, 1, '\t') + "\n"))
+		if (!m_Config.Game.IsDefault())
 		{
-			if (outError)
-				*outError = fmt::format("Could not write '{}'", FileSystem::ToUTF8(m_ProjectFile));
-			return false;
+			const ProjectGameInfo& game = m_Config.Game;
+			config["Game"] = { { "Title", game.Title }, { "Version", game.Version }, { "Company", game.Company }, { "Copyright", game.Copyright },
+				{ "Icon", game.Icon.IsValid() ? UUIDToJson(game.Icon) : nlohmann::json(nullptr) } };
 		}
-		return true;
+		for (const auto& [name, member] : m_UnknownMembers->items())
+		{
+			if (!config.contains(name))
+				config[name] = member;
+		}
+		document["Project"] = std::move(config);
+		if (!m_Settings.IsEmpty())
+			document["Settings"] = m_Settings.ToJson();
+
+		std::string text = JsonUtils::Dump(document, 1, '\t') + "\n";
+		if (text.size() > c_MaxFileBytes)
+		{
+			return fail(fmt::format("The project file would take {} bytes, more than the {} MiB a project file may take", text.size(),
+				c_MaxFileBytes / (1024 * 1024)));
+		}
+		return text;
 	}
 
 	std::filesystem::path Project::GetAssetDirectory() const

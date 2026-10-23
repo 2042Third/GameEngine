@@ -73,8 +73,9 @@ Console has the whole build output; messages that name a file and line open it w
 
 ## Your code editor
 
-Strata opens script files in the editor you choose under **Scripts > External Editor...**: a command with placeholders.
-The dialog lists the editors it finds on your machine (VS Code, the Visual Studio the engine builds with, CLion); click
+Strata opens script files in the editor you choose under **Scripts > External Editor...** (the External Editor page of
+**File > Preferences...**, see [Settings.md](Settings.md)): a command with placeholders. The page lists the editors it
+finds on your machine (VS Code, the Visual Studio the engine builds with, CLion); click
 one to use it. Commands look like
 
 ```text
@@ -84,11 +85,11 @@ clion --line {line} {file}
 ```
 
 `{file}`, `{line}`, `{column}` and `{directory}` (the project's `Scripts` folder) are filled in; without `{file}` the file
-is passed last. The program is a path, or a name found in the folders of `PATH` like a command prompt finds it; the dialog
-shows which program the command starts, and refuses one it cannot find. It is started directly, not through a shell, so
+is passed last. The program is a path, or a name found in the folders of `PATH` like a command prompt finds it; the page
+shows which program the command starts, and **Apply** refuses one it cannot find. It is started directly, not through a shell, so
 it cannot be a `.cmd` or `.bat` file: VS Code's `code` in `PATH` (a batch file on Windows) starts `Code.exe` beside it
-instead. Without a command, files open in the application your system uses for them. The setting is yours (kept in your
-user data, not in the project); the environment variable `STRATA_EXTERNAL_EDITOR` overrides it.
+instead. Without a command, files open in the application your system uses for them. The setting is yours (one of your
+preferences, kept in your user data, not in the project); the environment variable `STRATA_EXTERNAL_EDITOR` overrides it.
 
 ### IntelliSense and building in the IDE
 
@@ -104,6 +105,33 @@ A build from the IDE writes the module where the editor loads it, so the editor 
 presets hold paths of your machine: the `.gitignore` the editor writes next to them keeps them out of version control,
 and the editor rewrites them when the engine or its compiler changes (unless you removed the `strata.dev/editor` vendor
 entry to keep your own).
+
+## Input actions and rebinding
+
+Read the player's controls through the project's input actions (**Project Settings > Input Actions**) rather than fixed
+keys, so that players can choose other controls:
+
+```cpp
+if (Input::IsActionPressed("Jump"))                          // A Button: also IsActionDown, IsActionReleased
+	controller.Jump(5.0f);
+const glm::vec2 move = Input::GetActionValue("Gameplay/Move"); // A Vector2: WASD or a stick, length at most 1
+const float steer = Input::GetActionAxis("Steer");            // An Axis: -1 to 1
+Input::SetActionMapEnabled("Vehicle", true);                  // A disabled map's actions read as up (held ones release once)
+```
+
+Name an action `<Map>/<Action>`, or by its bare name when no other map has an action of that name: the map **UI** has
+`Left`, so a game's own `Left` needs its map's name (`Gameplay/Left`). A misspelled or ambiguous name reads as up, and
+the Console says which script asked. A rebinding menu shows `Input::GetActionBindings("Jump")` (texts such as
+`Key/Space` or `Gamepad/A`), sets the player's choice with `Input::SetActionBindings("Jump", {"Key/J"})` (refused when the
+action's kind cannot use it), offers `Input::ResetActionBindings()` to go back to the project's bindings, and calls
+`Input::SaveBindings()` when it closes: the next session starts with them. To let the player press the new control,
+call `Input::BeginBindingCapture()` (or `BeginBindingCapture(InputDevices::Gamepad)` for a gamepad's row) and then
+`Input::PollBindingCapture()` every frame: it returns the binding of the first control pressed, which you pass to
+`SetActionBindings`. While it listens no action reacts and a mouse click it captures presses no button of the game's UI,
+so the control the player presses (even Escape, when the menu closes on an action) does not also close the menu; code
+that reads the keys themselves (`Input::IsKeyPressed`) still sees it. `Input::CancelBindingCapture()` stops listening, for a timeout or a Cancel button. In the editor they are kept in the project's
+`.strata/Saves` folder, beside the game's save files, and replace the project's bindings of those actions at every Play
+until the game saves others.
 
 ## Hot reload
 

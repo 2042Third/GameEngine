@@ -32,6 +32,8 @@ namespace Strata
 	struct FrameProfileSummary;
 	struct ImportMemoryStats;
 	struct JobSystemStats;
+	struct PhysicsLayerSettings;
+	struct ProjectGameInfo;
 	struct SceneRendererGPUStats;
 	struct SceneRendererStats;
 
@@ -76,6 +78,9 @@ namespace Strata
 
 		// {"open": false} without a project, else {"open": true, "name", "directory", "assetDirectory", "startScene"}.
 		nlohmann::json DescribeProject(const EditorContext& context);
+		// The game's identity as project.info, project.settings and project.setGameInfo report it: title (as set, empty for the
+		// project's name), version, company, copyright and icon (a handle, or null).
+		nlohmann::json DescribeGameInfo(const ProjectGameInfo& game);
 
 		// Applies component values (as in scene files) to the entity, adding missing components. Validated like the
 		// inspector: unknown components or properties, read-only properties, invalid values and references to missing
@@ -86,6 +91,10 @@ namespace Strata
 		nlohmann::json DescribeAssetStats(const AssetManagerStats& stats);
 		// physics.stats' answer for a scene (EditorWorldCommands.cpp): {running: false} for none or one that does not run.
 		nlohmann::json DescribePhysicsStats(const Scene* scene);
+		// Collision layers as scene.info and project.setCollisionLayers report them (EditorProjectSettingsCommands.cpp): names,
+		// the named layers by index, and noCollisions, the pairs of layers that do not collide by their names ("Layer <index>"
+		// without one).
+		nlohmann::json DescribePhysicsLayers(const PhysicsLayerSettings& layers);
 		// scene.loadStatus's world streaming (EditorWorldCommands.cpp): the editor's world (editor) and, while playing, the
 		// running game's (game), each {cellsWanted, cellsLoading, cellsLoaded, cellsUnloading, cellsPinned, cellsFailed} or
 		// null; null when neither streams a world.
@@ -145,12 +154,22 @@ namespace Strata
 
 		// The "force" parameter of the commands that replace the edited scene (see CheckUnsavedChanges).
 		nlohmann::json ForceSchema();
-		// The guard of every command that replaces the edited scene (scene.open, scene.new, project.open, project.create,
-		// project.close, project.openSample): while the edited scene has unsaved changes (also while a copy of it plays: the
-		// edited scene is what is at stake), the command fails, changing nothing, unless `force` is true. `action` says what the
-		// command would do, e.g. "opening the scene 'Level2'". Returns the failure (naming the scene and how to proceed), or
-		// nullopt when the command may go on. A forced discard keeps the changes as recovery data (EditorContext::ResetScene).
-		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action);
+		// What a command that replaces the edited scene lets go of (CheckUnsavedChanges).
+		enum class DiscardScope : uint8_t
+		{
+			Scene,   // The edited scene (scene.open, scene.new, scene.recover): the project stays open
+			Project, // The project too (project.open, project.create, project.close, project.openSample)
+			Editor   // The project and the person's preferences (editor.quit)
+		};
+		// The guard of every command that replaces the edited scene: while the edited scene has unsaved changes (also while a
+		// copy of it plays: the edited scene is what is at stake), for a command that releases the project while the project
+		// file has unwritten settings (EditorContext::HasUnwrittenProjectSettings: its last write failed), and for quitting while
+		// the preferences file has unwritten preferences (EditorContext::HasUnwrittenPreferences), the command fails, changing
+		// nothing, unless `force` is true. `action` says what the command would do, e.g. "opening the scene
+		// 'Level2'". Returns the failure (naming the scene or the file, and how to proceed), or nullopt when the command may go
+		// on. A forced discard keeps the scene's changes as recovery data (EditorContext::ResetScene); unwritten settings are
+		// lost.
+		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action, DiscardScope scope);
 		// A command handler that runs `handler` once no save is in flight (EditorContext::HasSavesInFlight): at once when none
 		// is, otherwise deferred until the saves are published (then it runs as the command's poll and decides as it would
 		// have, CheckUnsavedChanges included). The commands that replace the edited scene, close the project or quit the editor

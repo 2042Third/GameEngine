@@ -3,6 +3,7 @@
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Core/Base.h"
 #include "Strata/Core/EngineServices.h"
+#include "Strata/Core/ProjectSettings.h"
 #include "Strata/Core/SaveFiles.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Project/GameManifest.h"
@@ -40,6 +41,8 @@ namespace Strata
 		// RenderScene::PrepareLoadedScene), for applications that render the game (StrataRuntime with a window): otherwise the
 		// first frame that draws a scene builds all of them. Off for headless runs, where nothing draws them.
 		bool PrepareRenderScenes = false;
+		// The sections the manifest's settings are validated with (tests' local registries); null: the process's.
+		const SettingsRegistry* Settings = nullptr;
 	};
 
 	// Runs an exported game: opens its asset pack (the active asset manager while the runtime lives), loads its script
@@ -53,12 +56,15 @@ namespace Strata
 	//
 	// When the scripts crash, the module is disabled for the rest of the session (the scene keeps running without them):
 	// the crash is logged once and reported by GetScriptFault, so the application can decide what to do.
+	//
+	// The game's project settings (the manifest's, version 5) are the engine service IProjectSettings while the runtime
+	// lives; a section a registered module claims that its module refuses stops the game (Create fails naming it).
 	class GameRuntime
 	{
 	public:
-		// Loads the manifest, opens the asset pack and the script module next to it and starts loading the start scene (and
-		// the loading scene, which plays meanwhile). Null (with an error) when any of that fails or the manifest names scenes
-		// the pack does not have. The start scene's load can still fail later (GetStartError).
+		// Loads the manifest, validates its settings, opens the asset pack and the script module next to it and starts loading
+		// the start scene (and the loading scene, which plays meanwhile). Null (with an error) when any of that fails or the
+		// manifest names scenes the pack does not have. The start scene's load can still fail later (GetStartError).
 		static Scope<GameRuntime> Create(const std::filesystem::path& manifestPath, std::string* outError = nullptr, const GameRuntimeOptions& options = {});
 		~GameRuntime();
 
@@ -143,6 +149,8 @@ namespace Strata
 		void HandleSceneRequests();
 	private:
 		GameManifest m_Manifest;
+		// Provides m_Manifest.Settings (version 5 manifests); ends before the manifest.
+		Scope<EngineServices::ScopedProvider<IProjectSettings>> m_SettingsProvider;
 		Ref<RuntimeAssetManager> m_AssetManager;
 		Ref<Scene> m_Scene;
 		AssetHandle m_SceneHandle = UUID::Null();

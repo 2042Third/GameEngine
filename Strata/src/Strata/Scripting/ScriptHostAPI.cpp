@@ -5,7 +5,9 @@
 #include "Strata/Core/EngineServices.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/SaveFiles.h"
+#include "Strata/Core/StringUtils.h"
 #include "Strata/Input/Input.h"
+#include "Strata/Input/InputActions.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/ComponentAccess.h"
@@ -22,6 +24,7 @@
 
 #include <glm/gtc/type_ptr.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -29,6 +32,8 @@
 #include <exception>
 #include <iterator>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -2342,8 +2347,8 @@ namespace Strata
 		// Collision layers
 		////////////////////////////////////////////////////////////////////////////////
 
-		// The layer matrix lives in the scene's settings; the physics system applies changes before its next step (also when
-		// the scene plays without physics yet: a world created later starts with the matrix).
+		// The layer matrix is the scene's copy of the project's (Scene::GetPhysicsLayers); the physics system applies changes
+		// before its next step (also when the scene plays without physics yet: a world created later starts with the matrix).
 		bool HostPhysicsSetLayersCollide(StrataScriptContext* context, uint32_t layerA, uint32_t layerB, bool collide)
 		{
 			return HostCall("PhysicsSetLayersCollide", false, [&]()
@@ -2357,7 +2362,7 @@ namespace Strata
 						fmt::format("layers {} and {}: layers range from 0 to {}", layerA, layerB, c_PhysicsLayerCount - 1));
 					return false;
 				}
-				system->GetScene().GetSettings().PhysicsLayers.SetCollide(layerA, layerB, collide);
+				system->GetScene().GetPhysicsLayers().SetCollide(layerA, layerB, collide);
 				return true;
 			});
 		}
@@ -2367,7 +2372,7 @@ namespace Strata
 			return HostCall("PhysicsGetLayersCollide", false, [&]()
 			{
 				ScriptSystem* system = ResolveContext(context, "PhysicsGetLayersCollide");
-				return system && system->GetScene().GetSettings().PhysicsLayers.DoCollide(layerA, layerB);
+				return system && system->GetScene().GetPhysicsLayers().DoCollide(layerA, layerB);
 			});
 		}
 
@@ -2378,8 +2383,8 @@ namespace Strata
 				ScriptSystem* system = ResolveContext(context, "PhysicsGetLayerIndex");
 				if (!system)
 					return -1;
-				// An unknown name is an answer (-1), not misuse: games look layers up that a scene may not have.
-				const std::optional<uint32_t> layer = system->GetScene().GetSettings().PhysicsLayers.FindLayer(ScriptStringView(name));
+				// An unknown name is an answer (-1), not misuse: games look layers up that a project may not name.
+				const std::optional<uint32_t> layer = system->GetScene().GetPhysicsLayers().FindLayer(ScriptStringView(name));
 				return layer ? static_cast<int32_t>(*layer) : -1;
 			});
 		}
@@ -2739,6 +2744,288 @@ namespace Strata
 		}
 
 		////////////////////////////////////////////////////////////////////////////////
+		// Input actions
+		////////////////////////////////////////////////////////////////////////////////
+
+		// The project's actions as of the current input frame (InputActions, which the program running the game updates after the
+		// frame's input). Unknown and ambiguous names are misuse: ReportProblem logs each distinct message once, so a script that
+		// asks for the same wrong name every frame is reported once per function.
+
+		std::optional<InputActionState> ReadActionState(ScriptSystem& system, StrataScriptString action, const char* function)
+		{
+			std::string error;
+			std::optional<InputActionState> state = InputActions::GetState(ScriptStringView(action), &error);
+			if (!state)
+				system.ReportProblem(function, error);
+			return state;
+		}
+
+		template<typename Query>
+		bool QueryAction(StrataScriptContext* context, StrataScriptString action, const char* function, Query&& query)
+		{
+			return HostCall(function, false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, function);
+				const std::optional<InputActionState> state = system ? ReadActionState(*system, action, function) : std::nullopt;
+				return state && query(*state);
+			});
+		}
+
+		bool HostInputIsActionDown(StrataScriptContext* context, StrataScriptString action)
+		{
+			return QueryAction(context, action, "InputIsActionDown", [](const InputActionState& state) { return state.Down; });
+		}
+
+		bool HostInputIsActionPressed(StrataScriptContext* context, StrataScriptString action)
+		{
+			return QueryAction(context, action, "InputIsActionPressed", [](const InputActionState& state) { return state.Pressed; });
+		}
+
+		bool HostInputIsActionReleased(StrataScriptContext* context, StrataScriptString action)
+		{
+			return QueryAction(context, action, "InputIsActionReleased", [](const InputActionState& state) { return state.Released; });
+		}
+
+		bool HostInputGetActionValue(StrataScriptContext* context, StrataScriptString action, float outValue[2])
+		{
+			return HostCall("InputGetActionValue", false, [&]()
+			{
+				if (outValue)
+					WriteVector2(glm::vec2(0.0f), outValue);
+				ScriptSystem* system = ResolveContext(context, "InputGetActionValue");
+				if (!system)
+					return false;
+				if (!outValue)
+				{
+					system->ReportProblem("InputGetActionValue", "the output pointer is null");
+					return false;
+				}
+				const std::optional<InputActionState> state = ReadActionState(*system, action, "InputGetActionValue");
+				if (!state)
+					return false;
+				WriteVector2(state->Value, outValue);
+				return true;
+			});
+		}
+
+		bool HostInputSetActionMapEnabled(StrataScriptContext* context, StrataScriptString map, bool enabled)
+		{
+			return HostCall("InputSetActionMapEnabled", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "InputSetActionMapEnabled");
+				if (!system)
+					return false;
+				std::string error;
+				if (!InputActions::SetMapEnabled(ScriptStringView(map), enabled, &error))
+				{
+					system->ReportProblem("InputSetActionMapEnabled", error);
+					return false;
+				}
+				return true;
+			});
+		}
+
+		int32_t HostInputIsActionMapEnabled(StrataScriptContext* context, StrataScriptString map)
+		{
+			return HostCall("InputIsActionMapEnabled", int32_t(-1), [&]() -> int32_t
+			{
+				if (!ResolveContext(context, "InputIsActionMapEnabled"))
+					return -1;
+				// An unknown map is an answer (-1), not misuse, as for world and collision layers.
+				const std::optional<bool> enabled = InputActions::IsMapEnabled(ScriptStringView(map));
+				return enabled ? (*enabled ? 1 : 0) : -1;
+			});
+		}
+
+		uint64_t HostInputGetActionBindings(StrataScriptContext* context, StrataScriptString action, char* buffer, uint64_t capacity)
+		{
+			return HostCall("InputGetActionBindings", uint64_t(0), [&]() -> uint64_t
+			{
+				ScriptSystem* system = ResolveContext(context, "InputGetActionBindings");
+				if (!system)
+					return 0;
+				std::string error;
+				const std::optional<std::vector<InputBinding>> bindings = InputActions::GetBindings(ScriptStringView(action), &error);
+				if (!bindings)
+				{
+					system->ReportProblem("InputGetActionBindings", error);
+					return 0;
+				}
+				std::string text;
+				for (const InputBinding& binding : *bindings)
+				{
+					text += binding.ToString();
+					text += '\n';
+				}
+				return CopyText(text, buffer, capacity);
+			});
+		}
+
+		// Bindings each followed by '\n', the last one's optional (what InputGetActionBindings copies reads back); empty text is
+		// no binding. Nullopt, with the reason, for a text that is no binding.
+		std::optional<std::vector<InputBinding>> ParseScriptBindings(std::string_view text, std::string& outError)
+		{
+			std::vector<InputBinding> bindings;
+			size_t start = 0;
+			while (start < text.size())
+			{
+				const size_t end = std::min(text.find('\n', start), text.size());
+				const std::string_view line = text.substr(start, end - start);
+				std::string problem;
+				const std::optional<InputBinding> binding = InputBinding::Parse(line, &problem);
+				if (!binding)
+				{
+					// Quoted up to the longest binding there is: the rest of a longer line says nothing more.
+					const bool cut = line.size() > InputBinding::c_MaxTextBytes;
+					outError = fmt::format("'{}{}' is no binding: {}", StringUtils::MakeValidUTF8(line.substr(0, InputBinding::c_MaxTextBytes)),
+						cut ? "..." : "", problem);
+					return std::nullopt;
+				}
+				bindings.push_back(*binding);
+				start = end + 1;
+			}
+			return bindings;
+		}
+
+		bool HostInputSetActionBindings(StrataScriptContext* context, StrataScriptString action, StrataScriptString bindings)
+		{
+			return HostCall("InputSetActionBindings", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "InputSetActionBindings");
+				if (!system)
+					return false;
+				if (bindings.Size > 0 && ScriptStringView(bindings).empty())
+				{
+					system->ReportProblem("InputSetActionBindings", "the bindings text is not readable (a null pointer, or too long)");
+					return false;
+				}
+				std::string error;
+				const std::optional<std::string> name = InputActions::GetQualifiedName(ScriptStringView(action), &error);
+				const std::optional<std::vector<InputBinding>> parsed = name ? ParseScriptBindings(ScriptStringView(bindings), error) : std::nullopt;
+				if (!parsed)
+				{
+					system->ReportProblem("InputSetActionBindings", name ? fmt::format("{}: {}", *name, error) : error);
+					return false;
+				}
+				if (!InputActions::SetBindings(*name, *parsed, &error))
+				{
+					system->ReportProblem("InputSetActionBindings", error);
+					return false;
+				}
+				return true;
+			});
+		}
+
+		bool HostInputResetActionBindings(StrataScriptContext* context, StrataScriptString action)
+		{
+			return HostCall("InputResetActionBindings", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "InputResetActionBindings");
+				if (!system)
+					return false;
+				// An empty name resets every action: a name that cannot be read must not become one.
+				if (action.Size > 0 && ScriptStringView(action).empty())
+				{
+					system->ReportProblem("InputResetActionBindings", "the action name is not readable (a null pointer, or too long)");
+					return false;
+				}
+				std::string error;
+				if (!InputActions::ResetBindings(ScriptStringView(action), &error))
+				{
+					system->ReportProblem("InputResetActionBindings", error);
+					return false;
+				}
+				return true;
+			});
+		}
+
+		bool HostInputSaveBindings(StrataScriptContext* context)
+		{
+			return HostCall("InputSaveBindings", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "InputSaveBindings");
+				if (!system)
+					return false;
+				std::string error;
+				if (!InputActions::SaveBindings(&error))
+				{
+					system->ReportProblem("InputSaveBindings", error);
+					return false;
+				}
+				return true;
+			});
+		}
+
+		// The binding capture is InputActions' one capture, shared with the editor's Input Actions page: the scripts poll and
+		// cancel only the capture they started, while it is still the one that runs (ScriptSystem::GetBindingCapture).
+		bool OwnsBindingCapture(const ScriptSystem& system)
+		{
+			return system.GetBindingCapture() != 0 && system.GetBindingCapture() == InputActions::GetCaptureId();
+		}
+
+		bool HostInputBeginBindingCapture(StrataScriptContext* context, uint32_t devices)
+		{
+			return HostCall("InputBeginBindingCapture", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "InputBeginBindingCapture");
+				if (!system)
+					return false;
+				constexpr uint32_t c_KnownDevices = StrataScriptInputDevices_Keyboard | StrataScriptInputDevices_Mouse | StrataScriptInputDevices_Gamepad;
+				if (devices == 0 || (devices & ~c_KnownDevices) != 0)
+				{
+					system->ReportProblem("InputBeginBindingCapture", fmt::format("the devices {:#x} are not a combination of Keyboard (1), Mouse (2) and "
+						"Gamepad (4)", devices));
+					return false;
+				}
+				InputCaptureDevices captureDevices;
+				captureDevices.Keyboard = (devices & StrataScriptInputDevices_Keyboard) != 0;
+				captureDevices.Mouse = (devices & StrataScriptInputDevices_Mouse) != 0;
+				captureDevices.Gamepad = (devices & StrataScriptInputDevices_Gamepad) != 0;
+				if (!InputActions::BeginCapture(captureDevices))
+					return false;
+				system->SetBindingCapture(InputActions::GetCaptureId());
+				return true;
+			});
+		}
+
+		uint64_t HostInputPollBindingCapture(StrataScriptContext* context, char* buffer, uint64_t capacity)
+		{
+			return HostCall("InputPollBindingCapture", uint64_t(0), [&]() -> uint64_t
+			{
+				ScriptSystem* system = ResolveContext(context, "InputPollBindingCapture");
+				if (!system || !OwnsBindingCapture(*system))
+					return 0;
+				const std::optional<std::string>& binding = InputActions::GetCapturedBinding();
+				if (!binding)
+					return 0;
+				const uint64_t size = binding->size();
+				// The text buffer protocol: a caller without room for it asks again with a larger buffer, so it stays until then.
+				if (!buffer || capacity < size)
+					return size;
+				CopyText(*binding, buffer, capacity);
+				InputActions::TakeCapturedBinding();
+				system->SetBindingCapture(0);
+				return size;
+			});
+		}
+
+		bool HostInputCancelBindingCapture(StrataScriptContext* context)
+		{
+			return HostCall("InputCancelBindingCapture", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "InputCancelBindingCapture");
+				if (!system)
+					return false;
+				const bool listening = OwnsBindingCapture(*system) && InputActions::IsCapturing();
+				// Also a binding captured but not polled: the scripts gave up on it.
+				if (OwnsBindingCapture(*system))
+					InputActions::CancelCapture();
+				system->SetBindingCapture(0);
+				return listening;
+			});
+		}
+
+		////////////////////////////////////////////////////////////////////////////////
 		// The table
 		////////////////////////////////////////////////////////////////////////////////
 
@@ -2888,7 +3175,20 @@ namespace Strata
 	X(WorldReleaseCells) \
 	X(WorldIsLoadedAround) \
 	X(WorldSetLayerEnabled) \
-	X(WorldIsLayerEnabled)
+	X(WorldIsLayerEnabled) \
+	X(InputIsActionDown) \
+	X(InputIsActionPressed) \
+	X(InputIsActionReleased) \
+	X(InputGetActionValue) \
+	X(InputSetActionMapEnabled) \
+	X(InputIsActionMapEnabled) \
+	X(InputGetActionBindings) \
+	X(InputSetActionBindings) \
+	X(InputResetActionBindings) \
+	X(InputSaveBindings) \
+	X(InputBeginBindingCapture) \
+	X(InputPollBindingCapture) \
+	X(InputCancelBindingCapture)
 
 		struct HostFunctionEntry
 		{

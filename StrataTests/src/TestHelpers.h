@@ -3,11 +3,13 @@
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -117,6 +119,24 @@ namespace Strata::Tests
 	// read with the executable loaded as a data file. Nullopt (outError says why) when it cannot be loaded or has no
 	// icon group.
 	std::optional<std::vector<uint32_t>> ReadExecutableIconSizes(const std::filesystem::path& executable, std::string* outError = nullptr);
+	// The images of an executable's first icon group as Windows' resource functions find them, decoded (32-bit bitmaps and
+	// PNGs) to RGBA8 rows top first. Nullopt (outError says why) when it cannot be loaded, has no icon group or an image
+	// that does not decode.
+	struct ExecutableIconImage
+	{
+		uint32_t Size = 0;
+		std::vector<uint8_t> Pixels;
+	};
+	std::optional<std::vector<ExecutableIconImage>> ReadExecutableIconImages(const std::filesystem::path& executable, std::string* outError = nullptr);
+	// The version information of an executable as Windows reads it (GetFileVersionInfoW): the fixed file and product versions
+	// and the strings of its US English Unicode table (040904B0) in UTF-8. Nullopt (outError says why) when it has none.
+	struct ExecutableVersion
+	{
+		std::array<uint16_t, 4> FileVersion = {};
+		std::array<uint16_t, 4> ProductVersion = {};
+		std::map<std::string, std::string> Strings;
+	};
+	std::optional<ExecutableVersion> ReadExecutableVersion(const std::filesystem::path& executable, std::string* outError = nullptr);
 
 	// What a program printed into a console and the code it ended with.
 	struct ConsoleRun

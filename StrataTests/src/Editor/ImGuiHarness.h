@@ -38,7 +38,8 @@ namespace Strata::Tests
 			uint64_t FrameCount = 0;
 			double Time = 0.0;
 			bool WindowFocused = true;
-			float UIScale = 1.0f;
+			float UIScale = 1.0f;        // The display's UI scale (GetDisplayUIScale)
+			float UIScaleFactor = 1.0f;  // What the layer last set (SetUIScaleFactor); GetUIScale is UIScale times it
 			uint32_t MaxFrameRate = 0;
 			uint32_t FrameRateChanges = 0; // SetMaxFrameRate calls that changed the rate
 			double FrameWorkTime = 0.0;    // Reported as the last frame's work time
@@ -67,7 +68,9 @@ namespace Strata::Tests
 		void SetWindowTitle(const std::string& title) override { m_State->WindowTitle = title; }
 		glm::uvec2 GetWindowSize() const override { return glm::uvec2(0); }
 		bool IsWindowFocused() const override { return m_State->WindowFocused; }
-		float GetUIScale() const override { return m_State->UIScale; }
+		float GetUIScale() const override { return m_State->UIScale * m_State->UIScaleFactor; }
+		void SetUIScaleFactor(float factor) override { m_State->UIScaleFactor = factor; }
+		float GetDisplayUIScale() const override { return m_State->UIScale; }
 		void SetMaxFrameRate(uint32_t framesPerSecond) override
 		{
 			if (framesPerSecond != m_State->MaxFrameRate)

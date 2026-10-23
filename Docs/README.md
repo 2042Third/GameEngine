@@ -33,6 +33,8 @@ Guides for people making games in the editor:
   the sky, height fog, shadows, reflection probes and screen-space reflections.
 - [Manual/AntiAliasing.md](Manual/AntiAliasing.md): FXAA and TAA, how many frames TAA keeps and when it trails, the
   Sharp and Original presets and every tunable of Custom, and TAA's limits.
+- [Manual/Settings.md](Manual/Settings.md): the Project Settings panel (the start and loading scenes, what exports keep,
+  the settings the engine and the game define) and the Preferences window (the external editor), undo and saving.
 
 ## Releases
 

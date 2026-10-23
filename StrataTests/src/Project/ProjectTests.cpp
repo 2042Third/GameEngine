@@ -199,7 +199,7 @@ TEST_SUITE("Project")
 		REQUIRE_MESSAGE(project->Save(&error), error);
 		const std::optional<std::string> saved = FileSystem::ReadText(file);
 		REQUIRE(saved);
-		CHECK(saved->find("\"Version\": 2") != std::string::npos);
+		CHECK(saved->find("\"Version\": 3") != std::string::npos);
 		CHECK(saved->find("\"ModuleName\": \"OldGameScripts\"") != std::string::npos);
 	}
 

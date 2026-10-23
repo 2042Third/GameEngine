@@ -25,8 +25,9 @@
 namespace Strata::Tests
 {
 
-	// An EditorLayer drawn by an ImGuiHarness through a fake host: no file watchers, no native dialogs, and no automation
-	// unless asked for. The log starts empty, as in a new editor process (the Console reads the log from its start).
+	// An EditorLayer drawn by an ImGuiHarness through a fake host: no file watchers, no native dialogs, no automation unless
+	// asked for, and the project dialogs suggest a new temporary directory, never the user's projects folder (unless the
+	// options name another). The log starts empty, as in a new editor process (the Console reads the log from its start).
 	struct HarnessEditor
 	{
 		Ref<FakeEditorHost::State> Host = CreateRef<FakeEditorHost::State>();
@@ -43,6 +44,8 @@ namespace Strata::Tests
 			options.EnableAutomation = automation;
 			options.WatchFiles = false;
 			options.ImportInBackground = importInBackground;
+			if (options.DefaultProjectLocation.empty())
+				options.DefaultProjectLocation = CreateTemporaryDirectory("HarnessProjects");
 			options.OpenStartSceneInBackground = options.OpenStartSceneInBackground || importInBackground;
 			Host->UIScale = specification.ContentScale;
 			Log::GetBuffer().Clear();

@@ -188,6 +188,7 @@
 	"PerfGPU.Samples.OpenWorldTour.GPUBusyMedianMs": { "Unit": "ms", "Provisional": true },
 	"Perf.World.DrivePeakPrivate": { "Unit": "MB", "Provisional": true, "Target": 2048.0 },
 	"Perf.World.DriveFrameP95": { "Unit": "ms", "Provisional": true, "Target": 16.7 },
+	"Perf.Input.Actions256": { "Unit": "us", "Provisional": true, "Target": 20 },
 	"PerfGPU.Renderer.Render100kCubesTAA": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.Render100kCubesTAAGPU": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.Render100kCubesTAAOriginal": { "Unit": "ms", "Provisional": true },
