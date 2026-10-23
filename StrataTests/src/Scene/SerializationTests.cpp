@@ -420,6 +420,13 @@ TEST_SUITE("Scene.Serialization")
 			CHECK(warnings.empty());
 			CHECK(loaded.TAAPreset == TemporalAntiAliasingPreset::Original);
 		}
+		// A preset other than the default, so the name and the integer are shown to be read.
+		for (const nlohmann::json& sharp : { nlohmann::json("Sharp"), nlohmann::json(0) })
+		{
+			loaded = load({ { "TAAPreset", sharp } }, warnings);
+			CHECK(warnings.empty());
+			CHECK(loaded.TAAPreset == TemporalAntiAliasingPreset::Sharp);
+		}
 		loaded = load({ { "TAAPreset", "Custom" }, { "TAAHistoryClamp", "MinMax" } }, warnings);
 		CHECK(warnings.empty());
 		CHECK(loaded.TAAPreset == TemporalAntiAliasingPreset::Custom);
