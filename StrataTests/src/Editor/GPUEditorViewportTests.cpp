@@ -1687,7 +1687,10 @@ TEST_SUITE("GPU.Editor.Viewport")
 			runFrame();
 		CHECK(harness.Run("play.state")["fixedSteps"] == 0);
 
-		// Armed before the steps run: step 3's frame and the next, read back from the view's own output.
+		// Armed before the steps run: step 3's frame and the next, read back from the view's own output. A file at the path
+		// itself stays as it is: several frames are written only beside it, as numbered files.
+		const std::vector<uint8_t> existing = { 1, 2, 3 };
+		REQUIRE(FileSystem::WriteBytes(directory / "Strip.png", existing));
 		auto completed = std::make_shared<std::optional<EditorCommandResult>>();
 		start({ { "live", true }, { "camera", "scene" }, { "atFixedStep", 3 }, { "frames", 2 }, { "path", FileSystem::ToUTF8(directory / "Strip.png") } },
 			completed);
@@ -1717,6 +1720,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 			REQUIRE(frame != shown.end());
 			CHECK(sameImage(frame->Image, DecodePNG(*png)) == 0);
 		}
+		CHECK(FileSystem::ReadBytes(directory / "Strip.png") == existing);
 		// The game is paused at step 4 again; the view's next frame shows the same state with its history moved on.
 		while (context.GetPendingSteps() > 0)
 			runFrame();

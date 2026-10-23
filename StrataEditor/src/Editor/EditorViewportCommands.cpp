@@ -509,9 +509,12 @@ namespace Strata
 				std::string error;
 				if (arguments.IsValid())
 				{
-					if (std::optional<std::filesystem::path> resolved = ResolveOutputPath(context, path, ".png", request.Overwrite, &error))
+					// Several frames never write the path itself, only the numbered files beside it (checked below), so a file
+					// already there is no reason to refuse.
+					const bool numbered = request.Frames > 1;
+					if (std::optional<std::filesystem::path> resolved = ResolveOutputPath(context, path, ".png", request.Overwrite || numbered, &error))
 					{
-						if (request.Frames == 1)
+						if (!numbered)
 						{
 							request.Paths.push_back(std::move(*resolved));
 						}
