@@ -2900,8 +2900,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     set of maps is computed in `c_AtmosphereRefreshSteps` (14) steps, the six faces, the cube's levels, the irradiance and
     the six prefiltered levels, one per frame with `SpreadLightingUpdates` (all at once without it: captures and
     thumbnails), and takes over when complete (`EnvironmentRefreshSteps`, `EnvironmentRefreshPending`,
-    `EnvironmentUpdates`). Memory: the tables about 0.3 MiB, each set of maps about 21 MiB, so a renderer with the
-    atmosphere holds two (42 MiB); nothing exists without the atmosphere.
+    `EnvironmentUpdates`); a change meanwhile waits for the next refresh, which follows at once, so settings that change
+    every frame still update the environment every 14 frames. Memory: the tables about 0.3 MiB, each set of maps about
+    21 MiB, so a renderer with the atmosphere holds two (42 MiB); nothing exists without the atmosphere.
 
 ### Streaming and uploads
 

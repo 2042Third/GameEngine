@@ -285,13 +285,9 @@ namespace Strata
 		}
 		else
 		{
-			if (atmosphere.Refresh && atmosphere.Refresh->Atmosphere != settings)
-			{
-				// What it computed so far is out of date: from its first step again.
-				atmosphere.Refresh->Atmosphere = settings;
-				atmosphere.Refresh->AtmosphereSun = towardSun;
-				atmosphere.RefreshStep = 0;
-			}
+			// A refresh under way runs to its end even when the settings change meanwhile (starting it again would keep settings
+			// that change every frame from ever updating the environment): it keeps the settings it started with, so the next
+			// one starts when it is done, as it does for a sun that kept moving.
 			if (!atmosphere.Refresh && (m_Environment->Atmosphere != settings || AngleBetweenDegrees(m_Environment->AtmosphereSun, towardSun) > c_AtmosphereRefreshAngle))
 			{
 				atmosphere.Refresh = takeMaps();

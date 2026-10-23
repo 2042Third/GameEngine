@@ -322,4 +322,53 @@ TEST_SUITE("GPU.Atmosphere")
 		CHECK(refreshSteps == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("An environment refresh finishes while the atmosphere's settings keep changing, and the next one catches up")
+	{
+		// A refresh under way when the settings change runs to its end (a script that changes them every frame must not keep
+		// the environment from ever updating); the next one starts from the settings of then.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		Entity sky = scene.CreateEntity("Sky");
+		sky.AddComponent<SkyLightComponent>().Source = SkyLightSource::Atmosphere;
+		AddSun(scene, -TowardSun(30.0f), 3.0f, false);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 1.0f, -1.0f));
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneRenderOptions options = Forced(1.0f / 256.0f);
+		REQUIRE(renderer.Render(scene, camera, nullptr, options));
+		REQUIRE(renderer.GetStats().EnvironmentUpdates == 1);
+
+		constexpr uint32_t c_Steps = SceneRenderer::c_AtmosphereRefreshSteps;
+		uint32_t updates = 0;
+		for (uint32_t frame = 1; frame <= 2 * c_Steps; frame++)
+		{
+			CAPTURE(frame);
+			sky.GetComponent<SkyLightComponent>().AtmosphereHaze = 1.0f + 0.01f * static_cast<float>(frame);
+			sky.MarkModified<SkyLightComponent>();
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			const SceneRendererStats& stats = renderer.GetStats();
+			CHECK(stats.AtmosphereTableUpdates == 1);
+			CHECK(stats.EnvironmentRefreshSteps == 1);
+			updates += stats.EnvironmentUpdates;
+			if (frame % c_Steps == 0)
+				CHECK(updates == frame / c_Steps);
+		}
+		CHECK(updates == 2);
+
+		// Once they stay, the refresh then started brings the environment to them, and none follows.
+		for (uint32_t frame = 1; frame <= c_Steps; frame++)
+		{
+			CAPTURE(frame);
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			CHECK(renderer.GetStats().EnvironmentRefreshSteps == 1);
+			CHECK(renderer.GetStats().EnvironmentUpdates == (frame == c_Steps ? 1u : 0u));
+		}
+		REQUIRE(renderer.Render(scene, camera, nullptr, options));
+		CHECK(renderer.GetStats().EnvironmentRefreshSteps == 0);
+		CHECK_FALSE(renderer.GetStats().EnvironmentRefreshPending);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

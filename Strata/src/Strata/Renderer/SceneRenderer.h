@@ -948,7 +948,8 @@ namespace Strata
 		// does not. Its tables (Include/Atmosphere.glsl) are computed when what they depend on changes; its environment is
 		// double-buffered: while the sun moved more than c_AtmosphereRefreshAngle since the current one was computed, or the
 		// settings changed, the other set of maps is computed in c_AtmosphereRefreshSteps steps (one per frame with
-		// SceneRendererSpecification::SpreadLightingUpdates, else all at once) and then takes over.
+		// SceneRendererSpecification::SpreadLightingUpdates, else all at once) and then takes over; changes meanwhile wait for
+		// the next refresh, which starts once it is done.
 		struct AtmosphereState
 		{
 			nvrhi::BindingLayoutHandle Layout;
