@@ -68,11 +68,14 @@ namespace Strata
 	enum class SkyLightSource : uint8_t
 	{
 		EnvironmentMap = 0, // An equirectangular HDR texture
-		Procedural          // A sky gradient with the sun's disk, computed from the colors below and the directional light
+		Procedural,         // A sky gradient with the sun's disk, computed from the colors below and the directional light
+		// Earth's atmosphere lit by the directional light: the sky its air and haze scatter, the sun's disk, and the light's
+		// color at the ground (Renderer/Atmosphere.h)
+		Atmosphere
 	};
 
-	// Image-based lighting and sky background, from an HDR environment map (equirectangular texture) or a procedural
-	// sky. Both go through the same filtering, so they light the scene the same way.
+	// Image-based lighting and sky background, from an HDR environment map (equirectangular texture), a procedural sky or
+	// a physical atmosphere. All of them go through the same filtering, so they light the scene the same way.
 	struct SkyLightComponent
 	{
 		AssetHandle EnvironmentMap = UUID::Null();
@@ -88,8 +91,16 @@ namespace Strata
 		glm::vec3 ZenithColor = { 0.18f, 0.32f, 0.62f };
 		glm::vec3 HorizonColor = { 0.66f, 0.74f, 0.84f };
 		glm::vec3 GroundColor = { 0.22f, 0.20f, 0.18f };
-		float SunSize = 0.53f;
+		float SunSize = 0.53f; // Degrees across (the procedural sky's and the atmosphere's disk)
 		float SunIntensity = 20.0f;
+		// Atmosphere: the directional light is the sun above the atmosphere (its Intensity the illuminance there, about
+		// 120,000 lux for the real sun), dimmed and reddened on its way to the ground; the sky is the light its air and
+		// aerosols scatter, in nits per lux of sun times Intensity. AtmosphereDensity scales the air and the aerosols (1:
+		// Earth's), AtmosphereHaze the aerosols once more (haze, the whitish glow around the sun), GroundAlbedo is the
+		// planet's ground's diffuse reflectance (the light it sends back up into the sky).
+		float AtmosphereDensity = 1.0f;
+		float AtmosphereHaze = 1.0f;
+		float GroundAlbedo = 0.3f;
 	};
 
 	// Exponential height fog over the scene's surfaces and its sky. The first active entity with this component in a scene

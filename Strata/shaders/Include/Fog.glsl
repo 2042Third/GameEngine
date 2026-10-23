@@ -2,6 +2,7 @@
 #define STRATA_FOG_GLSL
 
 #include "Include/Scene.glsl"
+#include "Include/Atmosphere.glsl"
 
 // Exponential height fog (HeightFogComponent; SceneRenderer::SetHeightFog fills the frame's Fog* constants). Its extinction
 // at a height h above the base height is density * exp(-falloff * h); along a view ray it is integrated analytically from
@@ -32,7 +33,15 @@ float GetFogOpticalDepth(float startHeight, float rise, float distance)
 vec3 GetFogInscattering(vec3 direction)
 {
 	vec3 light = u_Frame.FogLight.rgb;
-	if (u_Frame.FogLight.w > 0.0)
+	if (u_Frame.FogLight.w > 1.5)
+	{
+		// The atmosphere's sky at the horizon toward the ray, so fog that hides the distance meets the sky there without a seam.
+		vec2 horizontal = direction.xz;
+		horizontal = dot(horizontal, horizontal) > 1.0e-8 ? normalize(horizontal) : vec2(1.0, 0.0);
+		vec2 uv = DirectionToSkyViewUV(vec3(horizontal.x, 0.0, horizontal.y));
+		light += textureLod(sampler2D(u_SkyViewTable, u_Samplers[0]), uv, 0.0).rgb * u_Frame.EnvironmentParams.x;
+	}
+	else if (u_Frame.FogLight.w > 0.0)
 	{
 		// An environment map's irradiance from above (its radiance where it is uniform), taken for the light from every
 		// direction, as if the ground below the fog were as bright as the sky: the light the fog scatters within itself makes

@@ -1,0 +1,20 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "Include/AtmospherePass.glsl"
+
+// The atmosphere's transmittance table (Include/Atmosphere.glsl): from each height along each direction to the top of the
+// atmosphere, ignoring the ground. Computed when the sky light's atmosphere settings change.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_UAV(0), rgba16f) uniform writeonly image2D o_Table;
+
+void main()
+{
+	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+	if (any(greaterThanEqual(texel, ivec2(ST_TRANSMITTANCE_SIZE))))
+		return;
+	vec2 radiusMu = TransmittanceUVToRadiusMu((vec2(texel) + 0.5) / ST_TRANSMITTANCE_SIZE);
+	imageStore(o_Table, texel, vec4(ComputeTransmittance(GetMedium(), radiusMu.x, radiusMu.y), 1.0));
+}

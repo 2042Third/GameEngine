@@ -70,9 +70,13 @@ struct FrameConstants
 	vec4 FogDensity; // x: density at the base height (per meter), y: height falloff, z: the camera's height above the base, w: start distance
 	vec4 FogColor;   // rgb: the scattering's albedo, w: maximum opacity
 	// rgb: light the fog scatters besides the sun's (the procedural sky's horizon, the ambient color, or 1 when ColorFromSky
-	// is off), w: 1 when an environment map's irradiance from above lights it instead
+	// is off), w: 1 when an environment map's irradiance from above lights it instead, 2 when the atmosphere's sky at the
+	// horizon does (toward the ray's azimuth)
 	vec4 FogLight;
 	vec4 FogParams;  // x: 1 when the scene has fog, y: the asymmetry of its scattering of the directional light
+	// The atmosphere's sun disk: xyz toward the sun, w its angular radius (0: none); rgb its illuminance at the ground (lux)
+	vec4 SunDiskDirection;
+	vec4 SunDiskColor;
 };
 
 layout(set = 0, binding = ST_CBV(0), std140) uniform FrameBuffer
@@ -281,6 +285,9 @@ layout(set = 0, binding = ST_SRV(4)) uniform textureCube u_PrefilteredMap;
 layout(set = 0, binding = ST_SRV(5)) uniform texture2D u_BRDFLut;
 layout(set = 0, binding = ST_SRV(6)) uniform textureCube u_EnvironmentMap;
 layout(set = 0, binding = ST_SAMPLER(8)) uniform sampler u_LinearClampSampler;
+// The atmosphere's sky seen from the viewer, per lux of sun (SkyLightSource::Atmosphere; Include/Atmosphere.glsl maps it;
+// valid while the sky uses the atmosphere, black otherwise). Sampled with u_Samplers[0] (linear, repeating around).
+layout(set = 0, binding = ST_SRV(27)) uniform texture2D u_SkyViewTable;
 
 // Screen-space ambient occlusion of the current frame (valid when AOParams.x > 0).
 layout(set = 0, binding = ST_SRV(11)) uniform texture2D u_AmbientOcclusion;

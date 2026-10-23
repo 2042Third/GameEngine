@@ -696,7 +696,7 @@
 		},
 		{
 			"Category": "Lighting",
-			"Description": "Image-based lighting and sky background from an HDR environment map or a procedural sky; its radiance is luminance in nits (cd/m²) times its intensity",
+			"Description": "Image-based lighting and sky background from an HDR environment map, a procedural sky or a physical atmosphere lit by the directional light; its radiance is luminance in nits (cd/m²) times its intensity (the atmosphere's: per lux of the light's illuminance)",
 			"DisplayName": "Sky Light",
 			"Extra": false,
 			"Flags": 0,
@@ -715,6 +715,11 @@
 							"DisplayName": "",
 							"Name": "Procedural",
 							"Value": 1
+						},
+						{
+							"DisplayName": "",
+							"Name": "Atmosphere",
+							"Value": 2
 						}
 					],
 					"Flags": 0,
@@ -722,7 +727,7 @@
 					"Min": 0.0,
 					"Name": "Source",
 					"Speed": 0.0,
-					"Tooltip": "EnvironmentMap: an HDR texture; Procedural: a sky computed from the colors below and the directional light",
+					"Tooltip": "EnvironmentMap: an HDR texture; Procedural: a sky computed from the colors below and the directional light; Atmosphere: Earth's sky lit by the directional light, which it dims and reddens toward the horizon",
 					"Type": "Enum"
 				},
 				{
@@ -746,7 +751,7 @@
 					"Min": 0.0,
 					"Name": "Intensity",
 					"Speed": 0.009999999776482582,
-					"Tooltip": "Multiplies the sky's luminance in nits (cd/m²): an environment map's values, the procedural colors and the ambient color",
+					"Tooltip": "Multiplies the sky's luminance in nits (cd/m²): an environment map's values, the procedural colors, the ambient color, and the atmosphere's sky (nits per lux of the directional light)",
 					"Type": "Float"
 				},
 				{
@@ -842,7 +847,7 @@
 					"Min": 0.0,
 					"Name": "SunSize",
 					"Speed": 0.009999999776482582,
-					"Tooltip": "Procedural sky: angular diameter of the sun's disk in degrees (0 hides it)",
+					"Tooltip": "Procedural sky and atmosphere: angular diameter of the sun's disk in degrees (0 hides it)",
 					"Type": "Float"
 				},
 				{
@@ -855,6 +860,42 @@
 					"Name": "SunIntensity",
 					"Speed": 0.10000000149011612,
 					"Tooltip": "Procedural sky: luminance of the sun's disk in nits, times the directional light's color (not its intensity) and this sky's Intensity",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Atmosphere Density",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10.0,
+					"Min": 0.0,
+					"Name": "AtmosphereDensity",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Atmosphere: density of its air and aerosols (1: Earth's); thicker air reddens the sun sooner",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Atmosphere Haze",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10.0,
+					"Min": 0.0,
+					"Name": "AtmosphereHaze",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Atmosphere: amount of aerosols (1: a clear day), the whitish haze and glow around the sun",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Ground Albedo",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "GroundAlbedo",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Atmosphere: diffuse reflectance of the planet's ground, which lights the sky from below",
 					"Type": "Float"
 				}
 			]

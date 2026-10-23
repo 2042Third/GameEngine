@@ -72,9 +72,17 @@ scene, or offers **Add Procedural Sky** when there is none (the scene is then li
   The colors are luminances in nits.
 - **Environment Map**: an HDR image (an equirectangular `.hdr` texture) around the scene, turned by **Rotation**.
   Without a map, **Ambient Color** lights the scene evenly instead.
+- **Atmosphere**: Earth's sky, computed from the directional light the way air and haze scatter sunlight: deep blue
+  overhead and paler toward the horizon at noon, orange and red around a low sun, dark once it has set. The light's
+  **Intensity** is the sun's illuminance above the air (about 120,000 lux for the real sun); the atmosphere dims and
+  reddens it on its way down, so the scene's sunlight turns warm at sunset by itself, and the sun's disk (**Sun Size**
+  degrees across) carries its light. **Atmosphere Density** thickens the air (1 is Earth's), **Atmosphere Haze** adds
+  haze, the whitish glow around the sun, and **Ground Albedo** is how much light the ground sends back up into the sky.
+  Use real values with it: a 120,000 lux sun and automatic exposure (**Max EV** 16). A sun that moves keeps the sky up to
+  date at once; the light it casts on the scene follows every half degree, blended in over a few frames.
 
 **Show Background** draws the sky behind the scene (otherwise the background is the clear color) and **Background
-Blur** softens it.
+Blur** softens it (the atmosphere's background is always sharp).
 
 ## Height fog
 
@@ -82,7 +90,8 @@ Blur** softens it.
 (**Height Falloff**). **Density** says how much it hides (0.02 hides half of what lies 35 m away), **Start Distance**
 keeps it away from the camera and **Max Opacity** caps it, so the sky at the horizon shows through. With **Color From
 Sky** the fog takes the sky's light, so it meets the horizon without a seam; **Sun Scattering** makes it glow toward the
-sun. The first active height fog in a scene applies.
+sun (with the atmosphere, fog takes the sky's color at the horizon in each direction, brighter toward the sun). The first
+active height fog in a scene applies.
 
 ## Shadows
 

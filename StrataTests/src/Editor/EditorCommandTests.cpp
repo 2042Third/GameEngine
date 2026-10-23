@@ -1141,6 +1141,34 @@ TEST_SUITE("Editor.Commands")
 		CHECK(fog(entity)["values"]["Density"].get<double>() == doctest::Approx(0.1));
 	}
 
+	TEST_CASE("A sky light switches to the atmosphere with its settings, undone; out-of-range settings refused; inactive ones named")
+	{
+		CommandHarness harness;
+		const std::string entity = harness.Run("entity.create", { { "name", "Sky" } })["id"].get<std::string>();
+		const auto sky = [&]() { return harness.Run("component.get", { { "entity", entity }, { "component", "SkyLight" } }); };
+		harness.Run("component.add", { { "entity", entity }, { "component", "SkyLight" }, { "values", { { "Source", "Atmosphere" }, { "AtmosphereHaze", 2.5 } } } });
+		CHECK(sky()["values"]["Source"] == "Atmosphere");
+		CHECK(sky()["values"]["AtmosphereHaze"].get<double>() == doctest::Approx(2.5));
+		// Under the atmosphere the other sources' properties are inactive, and its own are not.
+		REQUIRE(sky().contains("inactive"));
+		CHECK(sky()["inactive"].contains("ZenithColor"));
+		CHECK(sky()["inactive"].contains("EnvironmentMap"));
+		CHECK_FALSE(sky()["inactive"].contains("GroundAlbedo"));
+		harness.Run("component.set", { { "entity", entity }, { "component", "SkyLight" }, { "values", { { "AtmosphereDensity", 0.5 }, { "GroundAlbedo", 0.6 } } } });
+		CHECK(sky()["values"]["AtmosphereDensity"].get<double>() == doctest::Approx(0.5));
+		harness.Run("edit.undo");
+		CHECK(sky()["values"]["AtmosphereDensity"].get<double>() == doctest::Approx(1.0));
+		CHECK(sky()["values"]["GroundAlbedo"].get<double>() == doctest::Approx(0.3));
+		for (const auto& [property, value] : { std::pair("AtmosphereDensity", -1.0), std::pair("AtmosphereHaze", 11.0), std::pair("GroundAlbedo", 1.5) })
+		{
+			CAPTURE(property);
+			CHECK_FALSE(harness.Error("component.set", { { "entity", entity }, { "component", "SkyLight" }, { "values", { { property, value } } } }).empty());
+		}
+		// Back to the procedural sky: the atmosphere's settings are inactive.
+		harness.Run("component.set", { { "entity", entity }, { "component", "SkyLight" }, { "values", { { "Source", "Procedural" } } } });
+		CHECK(sky()["inactive"].contains("AtmosphereHaze"));
+	}
+
 	TEST_CASE("Scene settings changes are undoable")
 	{
 		CommandHarness harness;

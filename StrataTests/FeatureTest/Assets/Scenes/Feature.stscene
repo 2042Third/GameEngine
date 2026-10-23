@@ -468,6 +468,50 @@
 			},
 			{
 				"Components": {
+					"Inactive": {},
+					"Name": {
+						"Name": "Atmosphere Sky"
+					},
+					"SkyLight": {
+						"AmbientColor": [
+							0.03,
+							0.03,
+							0.04
+						],
+						"AtmosphereDensity": 1.2,
+						"AtmosphereHaze": 1.6,
+						"BackgroundBlur": 0,
+						"EnvironmentMap": "0000000000000000",
+						"GroundAlbedo": 0.4,
+						"Intensity": 1,
+						"Rotation": 0,
+						"ShowBackground": true,
+						"Source": "Atmosphere",
+						"SunSize": 0.6
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E000000000008E"
+			},
+			{
+				"Components": {
 					"BoxCollider": {
 						"HalfExtents": [
 							0.5,

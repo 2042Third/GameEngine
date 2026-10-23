@@ -213,6 +213,38 @@ TEST_SUITE("Reflection")
 		CHECK(fogInfo->FindProperty("SunScattering")->SetValue(&fog, PropertyValue(2.0f)));
 		CHECK(fog.SunScattering == 1.0f);
 		CHECK_FALSE(fogInfo->FindProperty("Density")->SetValue(&fog, std::numeric_limits<float>::quiet_NaN()));
+
+		// The atmosphere: a third sky source after the two of 0.5.0, and its settings' defaults and ranges.
+		const ComponentInfo* skyInfo = ComponentRegistry::Find<SkyLightComponent>();
+		REQUIRE(skyInfo);
+		const PropertyInfo* source = skyInfo->FindProperty("Source");
+		REQUIRE(source);
+		REQUIRE(source->EnumValues.size() == 3);
+		CHECK(source->EnumValues[2].Name == "Atmosphere");
+		CHECK(source->EnumValues[2].Value == 2);
+		CHECK(static_cast<int>(SkyLightSource::Atmosphere) == 2);
+		const SkyLightComponent skyDefaults;
+		CHECK(skyDefaults.Source == SkyLightSource::EnvironmentMap);
+		CHECK(skyDefaults.AtmosphereDensity == 1.0f);
+		CHECK(skyDefaults.AtmosphereHaze == 1.0f);
+		CHECK(skyDefaults.GroundAlbedo == doctest::Approx(0.3f));
+		const auto skyRange = [&](const char* name) -> std::pair<float, float>
+		{
+			const PropertyInfo* property = skyInfo->FindProperty(name);
+			REQUIRE_MESSAGE(property, name);
+			CHECK(property->Type == PropertyType::Float);
+			return { property->Min, property->Max };
+		};
+		CHECK(skyRange("AtmosphereDensity") == std::pair(0.0f, 10.0f));
+		CHECK(skyRange("AtmosphereHaze") == std::pair(0.0f, 10.0f));
+		CHECK(skyRange("GroundAlbedo") == std::pair(0.0f, 1.0f));
+		SkyLightComponent sky;
+		CHECK_FALSE(skyInfo->FindProperty("AtmosphereDensity")->IsInRange(PropertyValue(-0.5f)));
+		CHECK_FALSE(skyInfo->FindProperty("GroundAlbedo")->IsInRange(PropertyValue(1.5f)));
+		CHECK(skyInfo->FindProperty("GroundAlbedo")->SetValue(&sky, PropertyValue(1.5f))); // Editors clamp
+		CHECK(sky.GroundAlbedo == 1.0f);
+		CHECK_FALSE(skyInfo->FindProperty("AtmosphereHaze")->SetValue(&sky, std::numeric_limits<float>::quiet_NaN()));
+		CHECK(sky.AtmosphereHaze == 1.0f);
 		CHECK(fog.Density == doctest::Approx(0.02f));
 
 		const PropertyInfo* rotation = ComponentRegistry::Find<TransformComponent>()->FindProperty("Rotation");
@@ -369,6 +401,21 @@ TEST_SUITE("Scene.InactiveProperties")
 		CHECK(reason("SkyLight", "AmbientColor").empty()); // No map set: the ambient color lights the scene
 		sky.EnvironmentMap = AssetHandle(0x5C7);
 		CHECK_FALSE(reason("SkyLight", "AmbientColor").empty());
+		// The atmosphere: its settings and the sun's size; neither source's own properties, the ambient color or the blur.
+		for (const char* property : { "AtmosphereDensity", "AtmosphereHaze", "GroundAlbedo" })
+			CHECK_MESSAGE(reason("SkyLight", property) == "Only the atmosphere uses it (Source is Environment Map)", property);
+		CHECK_FALSE(reason("SkyLight", "SunSize").empty());
+		CHECK(reason("SkyLight", "BackgroundBlur").empty());
+		sky.Source = SkyLightSource::Atmosphere;
+		for (const char* property : { "AtmosphereDensity", "AtmosphereHaze", "GroundAlbedo", "SunSize", "Intensity", "ShowBackground" })
+			CHECK_MESSAGE(reason("SkyLight", property).empty(), property);
+		for (const char* property : { "EnvironmentMap", "Rotation", "ZenithColor", "HorizonColor", "GroundColor", "SunIntensity", "AmbientColor",
+				 "BackgroundBlur" })
+			CHECK_MESSAGE(!reason("SkyLight", property).empty(), property);
+		CHECK(reason("SkyLight", "ZenithColor") == "Only the procedural sky uses it (Source is Atmosphere)");
+		sky.Source = SkyLightSource::Procedural;
+		CHECK(reason("SkyLight", "SunSize").empty());
+		CHECK(reason("SkyLight", "AtmosphereHaze") == "Only the atmosphere uses it (Source is Procedural)");
 
 		// Post-processing: each effect's settings while it is off; Exposure always.
 		PostProcessComponent& post = entity.AddComponent<PostProcessComponent>();

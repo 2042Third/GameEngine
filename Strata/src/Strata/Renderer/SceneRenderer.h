@@ -403,6 +403,19 @@ namespace Strata
 		// or the procedural sky's parameters (colors, sun size and intensity, the sun's direction and color) changed. An
 		// environment map's environment that another renderer computed is taken over, not computed (0).
 		uint32_t EnvironmentUpdates = 0;
+		// The atmosphere (SkyLightSource::Atmosphere): whether the frame's sky is it; its tables computed this frame (1 when
+		// its settings or the sun's color changed: transmittance and multiple scattering) and its sky-view tables (when the
+		// sun moved, the camera changed height band or the settings changed); the steps of an environment refresh recorded
+		// this frame (SceneRenderer::c_AtmosphereRefreshSteps make one: the cube's six faces, its levels, the irradiance and
+		// each prefiltered level; at most 1 a frame with SceneRendererSpecification::SpreadLightingUpdates), and whether one
+		// is still under way. The directional light's color is multiplied by SunTransmittance, the share of its light that
+		// reaches the ground through the atmosphere (1 without one).
+		bool Atmosphere = false;
+		uint32_t AtmosphereTableUpdates = 0;
+		uint32_t AtmosphereSkyViewUpdates = 0;
+		uint32_t EnvironmentRefreshSteps = 0;
+		bool EnvironmentRefreshPending = false;
+		glm::vec3 SunTransmittance = glm::vec3(1.0f);
 		bool PreviewLighting = false;     // SceneRenderOptions::PreviewEnvironment lit the scene (it has no light of its own)
 		bool HeightFog = false;           // The scene's height fog (SceneRenderer::FindHeightFog) was drawn
 		uint32_t ShadowCasters = 0;       // Instances drawn into shadow cascades (summed over cascades)
@@ -574,6 +587,15 @@ namespace Strata
 		nvrhi::ITexture* GetNormalTexture() const { return m_NormalTexture; }
 		nvrhi::ITexture* GetEntityIDTexture() const { return m_EntityIDTexture; } // Null without one (SceneRendererSpecification::EntityIDs)
 		nvrhi::ITexture* GetAmbientOcclusionTexture() const { return m_AOTexture; } // 1 = unoccluded
+		// The atmosphere's transmittance and sky-view tables (RGBA16_FLOAT, Include/Atmosphere.glsl): null while the sky is not
+		// the atmosphere.
+		nvrhi::ITexture* GetAtmosphereTransmittanceTable() const { return m_Atmosphere ? m_Atmosphere->Transmittance.Get() : nullptr; }
+		nvrhi::ITexture* GetAtmosphereSkyViewTable() const { return m_Atmosphere ? m_Atmosphere->SkyView.Get() : nullptr; }
+		// The atmosphere's environment is computed again once the sun moved more than this many degrees, in this many steps.
+		static constexpr float c_AtmosphereRefreshAngle = 0.5f;
+		static constexpr uint32_t c_AtmosphereRefreshSteps = 6 + 2 + 6; // Faces, the cube's levels and irradiance, prefiltered levels
+		// The sky-view table follows the camera's height above the ground in bands of this many meters.
+		static constexpr float c_AtmosphereHeightBand = 250.0f;
 		// Image-based lighting data of the current environment (null without one); the BRDF lookup table always exists.
 		nvrhi::ITexture* GetEnvironmentCube() const { return m_Environment ? m_Environment->Cube.Get() : nullptr; }
 		nvrhi::ITexture* GetIrradianceMap() const { return m_Environment ? m_Environment->Irradiance.Get() : nullptr; }
@@ -900,13 +922,62 @@ namespace Strata
 			bool operator==(const LocalShadowContent&) const = default;
 		};
 
+		// What an atmosphere's tables are computed for (SkyLightSource::Atmosphere): its settings and the sun's color over its
+		// largest component (the tables hold the sky per lux of it).
+		struct AtmosphereSettings
+		{
+			float Density = 1.0f;
+			float Haze = 1.0f;
+			float GroundAlbedo = 0.3f;
+			glm::vec3 SunColor = glm::vec3(1.0f);
+
+			bool operator==(const AtmosphereSettings&) const = default;
+		};
 		struct EnvironmentMaps
 		{
 			Ref<Texture> Source; // Equirectangular HDR texture the maps were computed from (null for a procedural sky)
 			std::optional<RenderData::ProceduralSkyParameters> Procedural; // The procedural sky the maps were computed from
+			// The atmosphere the maps were computed from, and its sun's direction (toward it) then
+			std::optional<AtmosphereSettings> Atmosphere;
+			glm::vec3 AtmosphereSun = glm::vec3(0.0f);
 			nvrhi::TextureHandle Cube;        // Radiance cubemap with mips (background, irradiance source)
 			nvrhi::TextureHandle Irradiance;  // Diffuse irradiance
 			nvrhi::TextureHandle Prefiltered; // Specular radiance, one mip per roughness level
+		};
+		// The atmosphere (SceneRendererAtmosphere.cpp): made with the first frame whose sky uses it, released with the first that
+		// does not. Its tables (Include/Atmosphere.glsl) are computed when what they depend on changes; its environment is
+		// double-buffered: while the sun moved more than c_AtmosphereRefreshAngle since the current one was computed, or the
+		// settings changed, the other set of maps is computed in c_AtmosphereRefreshSteps steps (one per frame with
+		// SceneRendererSpecification::SpreadLightingUpdates, else all at once) and then takes over.
+		struct AtmosphereState
+		{
+			nvrhi::BindingLayoutHandle Layout;
+			nvrhi::ComputePipelineHandle TransmittancePipeline;
+			nvrhi::ComputePipelineHandle MultipleScatteringPipeline;
+			nvrhi::ComputePipelineHandle SkyViewPipeline;
+			nvrhi::ComputePipelineHandle CubePipeline;
+			nvrhi::SamplerHandle Sampler; // Linear, repeating along u (the sky view's azimuth), clamped along v
+			nvrhi::BufferHandle Constants; // RenderData::AtmosphereConstants
+			nvrhi::TextureHandle Transmittance;
+			nvrhi::TextureHandle MultipleScattering;
+			nvrhi::TextureHandle SkyView;
+			nvrhi::BindingSetHandle TransmittanceSet;
+			nvrhi::BindingSetHandle MultipleScatteringSet;
+			nvrhi::BindingSetHandle SkyViewSet;
+			std::optional<AtmosphereSettings> TableSettings; // What the transmittance and multiple-scattering tables hold
+			glm::vec3 SkyViewSun = glm::vec3(0.0f);          // What the sky-view table holds, with TableSettings
+			int32_t SkyViewBand = -1;
+			bool SkyViewValid = false;
+			// The sun's transmittance to the ground (Atmosphere::ComputeSunTransmittance) for these, computed once per change.
+			std::optional<AtmosphereSettings> SunSettings;
+			glm::vec3 SunDirection = glm::vec3(0.0f);
+			float SunRadius = 0.0f;
+			glm::vec3 SunTransmittance = glm::vec3(1.0f);
+			// The environment being computed (its settings and sun in Atmosphere and AtmosphereSun) and its next step; the
+			// maps of the set not in use, which a refresh writes into.
+			std::optional<EnvironmentMaps> Refresh;
+			uint32_t RefreshStep = 0;
+			std::optional<EnvironmentMaps> Spare;
 		};
 		// The environments computed from environment map textures, by texture, while a renderer lights with them
 		// (FindSharedEnvironment); defined with the functions that use it.
@@ -949,13 +1020,25 @@ namespace Strata
 		// The environment maps of a procedural sky, computed into the current procedural sky's textures when there are
 		// some (parameter changes, such as a moving sun, then allocate nothing).
 		void GenerateProceduralSky(nvrhi::ICommandList* commandList, const RenderData::ProceduralSkyParameters& parameters);
-		// Mips of the radiance cube from its mip 0, then the irradiance and prefiltered maps from the cube.
+		// Mips of the radiance cube from its mip 0, then the irradiance and prefiltered maps from the cube: all of
+		// c_EnvironmentFilterSteps steps, or one of them (the cube's mips, the irradiance, each prefiltered level).
 		void FilterEnvironment(nvrhi::ICommandList* commandList, const EnvironmentMaps& maps);
+		void FilterEnvironmentStep(nvrhi::ICommandList* commandList, const EnvironmentMaps& maps, uint32_t step);
+		// The atmosphere's tables, light and environment for the frame (SceneRendererAtmosphere.cpp): false (reported) when its
+		// resources could not be made, and the scene then has no environment.
+		bool UpdateAtmosphere(const SkyLightComponent& sky, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList);
+		bool EnsureAtmosphereResources();
+		void WriteAtmosphereConstants(nvrhi::ICommandList* commandList, const AtmosphereSettings& settings, const glm::vec3& towardSun, int32_t band);
+		// Step `step` of computing an atmosphere environment into `maps`: a face of the cube's level 0 from the sky-view table
+		// (steps 0 to 5), then FilterEnvironmentStep.
+		void RecordAtmosphereEnvironmentStep(nvrhi::ICommandList* commandList, const EnvironmentMaps& maps, uint32_t step);
 		RenderData::ProceduralSkyParameters GetProceduralSkyParameters(const SkyLightComponent& sky, const RenderData::FrameConstants& frame) const;
 		void DispatchIBL(nvrhi::ICommandList* commandList, nvrhi::IComputePipeline* pipeline, nvrhi::ITexture* source, const nvrhi::TextureSubresourceSet& sourceSubresources,
 			nvrhi::TextureDimension sourceDimension, nvrhi::ITexture* output, uint32_t outputMip, nvrhi::TextureDimension outputDimension,
 			const RenderData::IBLParameters& parameters, uint32_t layers);
 		bool CreateSceneBindingSets();
+		// What the scene binding sets bind as the sky-view table: the atmosphere's in its frames, else a black texture.
+		nvrhi::ITexture* GetBoundSkyView() const;
 		// The prepass's framebuffer of the frame: with the velocity target in a frame with motion vectors.
 		nvrhi::IFramebuffer* GetPrepassFramebuffer() const { return m_MotionFrame ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get(); }
 		// The motion history's buffers (SceneRenderOptions::MotionVectors) at the size of the scene's GPU copy's, and the velocity
@@ -1264,13 +1347,19 @@ namespace Strata
 		nvrhi::ShaderHandle m_FullscreenVertexShader;
 		nvrhi::ShaderHandle m_TonemapPixelShader;
 		nvrhi::ShaderHandle m_SkyboxPixelShader;
+		nvrhi::ShaderHandle m_AtmosphereSkyboxPixelShader;
 		nvrhi::InputLayoutHandle m_InputLayout;
 		nvrhi::GraphicsPipelineHandle m_SkyboxPipeline;
+		nvrhi::GraphicsPipelineHandle m_AtmosphereSkyboxPipeline;
 
 		// Image-based lighting
 		Ref<const EnvironmentMaps> m_Environment; // Null without an environment; a map's is shared (FindSharedEnvironment)
 		Ref<TextureHold> m_EnvironmentHold; // While the environment map's environment is still to be computed (HoldEnvironmentMap)
 		nvrhi::ITexture* m_BoundEnvironment = nullptr; // Environment cube referenced by m_SceneBindingSet
+		Scope<AtmosphereState> m_Atmosphere; // While the sky is the atmosphere
+		bool m_AtmosphereFrame = false;      // The frame's sky is the atmosphere
+		float m_AtmosphereSunIlluminance = 0.0f; // Its sun's illuminance above it: the largest component of the light's color times intensity
+		nvrhi::ITexture* m_BoundSkyView = nullptr; // The sky-view table (or a black texture) referenced by m_SceneBindingSet
 		nvrhi::BindingLayoutHandle m_IBLBindingLayout;
 		nvrhi::ComputePipelineHandle m_EquirectToCubePipeline;
 		nvrhi::BindingLayoutHandle m_ProceduralSkyBindingLayout;

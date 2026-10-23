@@ -54,6 +54,9 @@ namespace Strata
 		constexpr uint32_t c_IrradianceSize = 32;
 		constexpr uint32_t c_PrefilteredSize = 256;
 		constexpr uint32_t c_PrefilteredMipCount = 6; // Roughness 0, 0.2, ... 1.0
+		// FilterEnvironmentStep: the cube's levels, the irradiance, then each prefiltered level.
+		constexpr uint32_t c_EnvironmentFilterSteps = 2 + c_PrefilteredMipCount;
+		static_assert(SceneRenderer::c_AtmosphereRefreshSteps == 6 + c_EnvironmentFilterSteps);
 		constexpr uint32_t c_IrradianceSamples = 256;
 		constexpr uint32_t c_PrefilterSamples = 512;
 		constexpr uint32_t c_BRDFLutSize = 128;
@@ -218,6 +221,7 @@ namespace Strata
 		m_FullscreenVertexShader = shaders.Get("PostProcess/Fullscreen.vert");
 		m_TonemapPixelShader = shaders.Get("PostProcess/Tonemap.frag");
 		m_SkyboxPixelShader = shaders.Get("Scene/Skybox.frag");
+		m_AtmosphereSkyboxPixelShader = shaders.Get("Scene/SkyboxAtmosphere.frag");
 		m_ShadowVertexShader = shaders.Get("Scene/ShadowMesh.vert");
 		m_ShadowMaskPixelShader = shaders.Get("Scene/ShadowMask.frag");
 		m_FXAAPixelShader = shaders.Get("PostProcess/FXAA.frag");
@@ -225,7 +229,7 @@ namespace Strata
 		m_LocalShadowVertexShader = shaders.Get("Scene/LocalShadowMesh.vert");
 		m_SkinnedLocalShadowVertexShader = shaders.Get("Scene/LocalShadowMeshSkinned.vert");
 		ST_CORE_VERIFY(m_MeshVertexShader && m_PrepassPixelShader && m_ForwardPixelShader && m_ForwardTransparentPixelShader && m_FullscreenVertexShader
-			&& m_TonemapPixelShader && m_SkyboxPixelShader && m_ShadowVertexShader && m_ShadowMaskPixelShader && m_FXAAPixelShader && m_SkinnedMeshVertexShader
+			&& m_TonemapPixelShader && m_SkyboxPixelShader && m_AtmosphereSkyboxPixelShader && m_ShadowVertexShader && m_ShadowMaskPixelShader && m_FXAAPixelShader && m_SkinnedMeshVertexShader
 			&& m_SkinnedShadowVertexShader && m_SelectionMaskPixelShader && m_LocalShadowVertexShader && m_SkinnedLocalShadowVertexShader,
 			"SceneRenderer shaders are missing");
 
@@ -292,6 +296,7 @@ namespace Strata
 			// The motion history's instances and joint matrices (SceneRenderOptions::MotionVectors): the previous frame's.
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(20),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(21),
+			nvrhi::BindingLayoutItem::Texture_SRV(27),          // The atmosphere's sky-view table (Include/Atmosphere.glsl)
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -763,24 +768,37 @@ namespace Strata
 
 	void SceneRenderer::FilterEnvironment(nvrhi::ICommandList* commandList, const EnvironmentMaps& maps)
 	{
+		for (uint32_t step = 0; step < c_EnvironmentFilterSteps; step++)
+			FilterEnvironmentStep(commandList, maps, step);
+	}
+
+	void SceneRenderer::FilterEnvironmentStep(nvrhi::ICommandList* commandList, const EnvironmentMaps& maps, uint32_t step)
+	{
 		const uint32_t cubeMips = MipCountFor(c_EnvironmentCubeSize);
-		for (uint32_t mip = 1; mip < cubeMips; mip++)
+		if (step == 0)
 		{
-			const uint32_t size = std::max(1u, c_EnvironmentCubeSize >> mip);
-			DispatchIBL(commandList, m_CubeDownsamplePipeline, maps.Cube, nvrhi::TextureSubresourceSet(mip - 1, 1, 0, 6), nvrhi::TextureDimension::Texture2DArray,
-				maps.Cube, mip, nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { size, size * 2, 0.0f, 1 }, 6);
+			for (uint32_t mip = 1; mip < cubeMips; mip++)
+			{
+				const uint32_t size = std::max(1u, c_EnvironmentCubeSize >> mip);
+				DispatchIBL(commandList, m_CubeDownsamplePipeline, maps.Cube, nvrhi::TextureSubresourceSet(mip - 1, 1, 0, 6), nvrhi::TextureDimension::Texture2DArray,
+					maps.Cube, mip, nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { size, size * 2, 0.0f, 1 }, 6);
+			}
+			return;
 		}
 
 		const nvrhi::TextureSubresourceSet wholeCube(0, cubeMips, 0, 6);
-		DispatchIBL(commandList, m_IrradiancePipeline, maps.Cube, wholeCube, nvrhi::TextureDimension::TextureCube, maps.Irradiance, 0,
-			nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { c_IrradianceSize, c_EnvironmentCubeSize, 0.0f, c_IrradianceSamples }, 6);
-		for (uint32_t mip = 0; mip < c_PrefilteredMipCount; mip++)
+		if (step == 1)
 		{
-			const uint32_t size = std::max(1u, c_PrefilteredSize >> mip);
-			const float roughness = static_cast<float>(mip) / static_cast<float>(c_PrefilteredMipCount - 1);
-			DispatchIBL(commandList, m_PrefilterPipeline, maps.Cube, wholeCube, nvrhi::TextureDimension::TextureCube, maps.Prefiltered, mip,
-				nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { size, c_EnvironmentCubeSize, roughness, c_PrefilterSamples }, 6);
+			DispatchIBL(commandList, m_IrradiancePipeline, maps.Cube, wholeCube, nvrhi::TextureDimension::TextureCube, maps.Irradiance, 0,
+				nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { c_IrradianceSize, c_EnvironmentCubeSize, 0.0f, c_IrradianceSamples }, 6);
+			return;
 		}
+		const uint32_t mip = step - 2;
+		ST_CORE_ASSERT(mip < c_PrefilteredMipCount, "Environment filter step {} out of range", step);
+		const uint32_t size = std::max(1u, c_PrefilteredSize >> mip);
+		const float roughness = static_cast<float>(mip) / static_cast<float>(c_PrefilteredMipCount - 1);
+		DispatchIBL(commandList, m_PrefilterPipeline, maps.Cube, wholeCube, nvrhi::TextureDimension::TextureCube, maps.Prefiltered, mip,
+			nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { size, c_EnvironmentCubeSize, roughness, c_PrefilterSamples }, 6);
 	}
 
 	RenderData::ProceduralSkyParameters SceneRenderer::GetProceduralSkyParameters(const SkyLightComponent& sky, const RenderData::FrameConstants& frame) const
@@ -805,7 +823,10 @@ namespace Strata
 	{
 		frame.EnvironmentParams = glm::vec4(0.0f);
 		frame.SkyParams = glm::vec4(0.0f);
+		frame.SunDiskDirection = glm::vec4(0.0f);
+		frame.SunDiskColor = glm::vec4(0.0f);
 		m_SkyHorizon.reset();
+		m_AtmosphereFrame = false;
 
 		const SkyLightComponent* skyLight = nullptr;
 		for (auto [entity, sky, world] : scene.GetRegistry().view<SkyLightComponent, WorldTransformComponent>().each())
@@ -824,15 +845,33 @@ namespace Strata
 			skyLight = &previewSky;
 		}
 		const bool procedural = skyLight && skyLight->Source == SkyLightSource::Procedural;
-		if (!skyLight || (!procedural && !skyLight->EnvironmentMap.IsValid()))
+		const bool atmosphere = skyLight && skyLight->Source == SkyLightSource::Atmosphere;
+		// The atmosphere's tables and its second set of maps exist only while the sky is the atmosphere.
+		if (!atmosphere)
+			m_Atmosphere.reset();
+		if (!skyLight || (!procedural && !atmosphere && !skyLight->EnvironmentMap.IsValid()))
 		{
 			m_Environment = nullptr; // Release the maps of a removed environment
 			m_EnvironmentHold = nullptr;
 			return;
 		}
 
-		float rotation = 0.0f; // The procedural sky is computed in world space: its sun follows the light
-		if (procedural)
+		float rotation = 0.0f; // The procedural sky and the atmosphere are computed in world space: their sun follows the light
+		float intensity = std::max(skyLight->Intensity, 0.0f);
+		if (atmosphere)
+		{
+			m_EnvironmentHold = nullptr;
+			if (!UpdateAtmosphere(*skyLight, frame, commandList))
+			{
+				m_Environment = nullptr;
+				m_Atmosphere.reset();
+				return;
+			}
+			m_AtmosphereFrame = true;
+			// The tables and the environment hold the sky per lux of sun: times the light's illuminance above the atmosphere.
+			intensity *= m_AtmosphereSunIlluminance;
+		}
+		else if (procedural)
 		{
 			m_EnvironmentHold = nullptr;
 			const RenderData::ProceduralSkyParameters parameters = GetProceduralSkyParameters(*skyLight, frame);
@@ -873,11 +912,13 @@ namespace Strata
 			rotation = glm::radians(skyLight->Rotation);
 		}
 
-		frame.EnvironmentParams = glm::vec4(std::max(skyLight->Intensity, 0.0f), rotation, static_cast<float>(c_PrefilteredMipCount - 1), 1.0f);
+		frame.EnvironmentParams = glm::vec4(std::isfinite(intensity) ? intensity : 0.0f, rotation, static_cast<float>(c_PrefilteredMipCount - 1), 1.0f);
 		if (procedural)
 			m_SkyHorizon = glm::vec3(SanitizeRadiance(skyLight->HorizonColor * frame.EnvironmentParams.x));
 		const float backgroundMips = static_cast<float>(MipCountFor(c_EnvironmentCubeSize) - 1);
-		frame.SkyParams = glm::vec4(std::clamp(skyLight->BackgroundBlur, 0.0f, 1.0f) * backgroundMips, skyLight->ShowBackground ? 1.0f : 0.0f, 0.0f, 0.0f);
+		// The atmosphere's background is drawn from its sky-view table, sharp.
+		const float blur = atmosphere ? 0.0f : std::clamp(skyLight->BackgroundBlur, 0.0f, 1.0f);
+		frame.SkyParams = glm::vec4(blur * backgroundMips, skyLight->ShowBackground ? 1.0f : 0.0f, 0.0f, 0.0f);
 		m_Stats.EnvironmentLighting = true;
 	}
 
@@ -909,6 +950,7 @@ namespace Strata
 		// Without a motion history the scene's own buffers stand in (nothing reads them then).
 		nvrhi::IBuffer* previousInstances = m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer();
 		nvrhi::IBuffer* previousPalette = m_PreviousPalette ? m_PreviousPalette.Get() : m_SceneGPU->GetPaletteBuffer();
+		nvrhi::ITexture* skyView = GetBoundSkyView();
 
 		// The shadow pass reads the same resources except for its own draw list (and never the shadow maps it draws into).
 		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap, nvrhi::ITexture* boundAtlas)
@@ -923,6 +965,7 @@ namespace Strata
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(17, m_CascadeBuffer),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(20, previousInstances),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(21, previousPalette),
+				nvrhi::BindingSetItem::Texture_SRV(27, skyView),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
@@ -965,6 +1008,7 @@ namespace Strata
 		m_BoundTextureTableVersion = Renderer::GetTextureTable().GetBufferVersion();
 		m_BoundPreviousInstances = previousInstances;
 		m_BoundPreviousPalette = previousPalette;
+		m_BoundSkyView = skyView;
 		if (!m_SceneBindingSet || !m_ShadowBindingSet || !m_ClusterBindingSet || (gpuSets && (!m_GPUSceneBindingSet || !m_GPUShadowBindingSet)))
 		{
 			m_SceneBindingSet = nullptr; // Recreated next frame
@@ -1226,6 +1270,8 @@ namespace Strata
 		// lights the scene's surfaces then (the ambient color). Without ColorFromSky, Color itself is the fog's radiance.
 		if (!fog->ColorFromSky)
 			frame.FogLight = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
+		else if (m_AtmosphereFrame)
+			frame.FogLight = glm::vec4(0.0f, 0.0f, 0.0f, 2.0f); // Its sky-view table at the horizon, read on the GPU
 		else if (m_SkyHorizon)
 			frame.FogLight = glm::vec4(*m_SkyHorizon, 0.0f);
 		else if (frame.EnvironmentParams.w > 0.0f)
@@ -2751,7 +2797,8 @@ namespace Strata
 		// samples them; a table that grew has a new buffer, which the binding sets follow.
 		TextureTable& textureTable = Renderer::GetTextureTable();
 		const bool tableUploaded = textureTable.RecordUploads(commandList);
-		const bool rebind = buffersRecreated || m_BoundEnvironment != GetEnvironmentCube() || m_BoundTextureTableVersion != textureTable.GetBufferVersion();
+		const bool rebind = buffersRecreated || m_BoundEnvironment != GetEnvironmentCube() || m_BoundSkyView != GetBoundSkyView()
+			|| m_BoundTextureTableVersion != textureTable.GetBufferVersion();
 		if (!tableUploaded || (rebind && !CreateSceneBindingSets()))
 		{
 			gpuTimer.End();
@@ -2882,21 +2929,23 @@ namespace Strata
 
 		if (frame.EnvironmentParams.w > 0.0f && frame.SkyParams.y > 0.0f)
 		{
-			if (!m_SkyboxPipeline)
+			// The atmosphere's background comes from its sky-view table (the variant), the other skies' from the environment cube.
+			nvrhi::GraphicsPipelineHandle& skyboxPipeline = m_AtmosphereFrame ? m_AtmosphereSkyboxPipeline : m_SkyboxPipeline;
+			if (!skyboxPipeline)
 			{
 				nvrhi::GraphicsPipelineDesc desc;
 				desc.primType = nvrhi::PrimitiveType::TriangleList;
 				desc.VS = m_FullscreenVertexShader;
-				desc.PS = m_SkyboxPixelShader;
+				desc.PS = m_AtmosphereFrame ? m_AtmosphereSkyboxPixelShader : m_SkyboxPixelShader;
 				desc.bindingLayouts = { m_SceneBindingLayout, Renderer::GetBindlessTextures().GetLayout() };
 				desc.renderState.rasterState.setCullNone();
 				// The fullscreen triangle lies at depth 0 (the far plane with reversed-Z): it covers only empty pixels.
 				desc.renderState.depthStencilState.setDepthTestEnable(true).setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
-				m_SkyboxPipeline = m_Device->createGraphicsPipeline(desc, m_ForwardFramebuffer->getFramebufferInfo());
-				ST_CORE_VERIFY(m_SkyboxPipeline, "SceneRenderer: failed to create the skybox pipeline");
+				skyboxPipeline = m_Device->createGraphicsPipeline(desc, m_ForwardFramebuffer->getFramebufferInfo());
+				ST_CORE_VERIFY(skyboxPipeline, "SceneRenderer: failed to create the skybox pipeline");
 			}
 			nvrhi::GraphicsState skyState;
-			skyState.pipeline = m_SkyboxPipeline;
+			skyState.pipeline = skyboxPipeline;
 			skyState.framebuffer = m_ForwardFramebuffer;
 			skyState.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y)));
 			skyState.bindings = { m_SceneBindingSet, Renderer::GetBindlessTextures().GetTable() };

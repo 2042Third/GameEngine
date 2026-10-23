@@ -73,11 +73,15 @@ namespace Strata
 			glm::vec4 FogColor;    // rgb: Color (the scattering's albedo), w: MaxOpacity
 			// rgb: the light the fog scatters besides the sun's (the procedural sky's HorizonColor times its intensity, the
 			// ambient color without an environment, 1 when ColorFromSky is off), w: 1 when an environment map's irradiance from
-			// above lights it instead
+			// above lights it instead, 2 when the atmosphere's sky at the horizon does (toward the ray's azimuth)
 			glm::vec4 FogLight;
 			glm::vec4 FogParams;   // x: 1 when the scene has fog, y: the asymmetry of its scattering of the directional light
+			// The atmosphere's sun disk (SkyLightSource::Atmosphere; Scene/Skybox.frag's atmosphere variant): xyz toward the sun,
+			// w its angular radius (0: no disk); rgb its illuminance at the ground in lux, through the atmosphere.
+			glm::vec4 SunDiskDirection;
+			glm::vec4 SunDiskColor;
 		};
-		static_assert(sizeof(FrameConstants) == 8 * 64 + 23 * 16);
+		static_assert(sizeof(FrameConstants) == 8 * 64 + 25 * 16);
 
 		// A directional shadow cascade as shaders read it (u_Cascades, Include/Scene.glsl): written on the GPU by
 		// Scene/CascadeFit.comp, which fits its depth range to the casters (CascadeFitConstants).
@@ -273,6 +277,30 @@ namespace Strata
 			bool operator==(const ProceduralSkyParameters&) const = default;
 		};
 		static_assert(sizeof(ProceduralSkyParameters) == 96);
+
+		// IBL/Atmosphere*.comp (Include/AtmospherePass.glsl): the atmosphere's medium (Atmosphere::GetMedium), the sun and the
+		// viewer the tables are computed for.
+		struct AtmosphereConstants
+		{
+			glm::vec4 RayleighScattering; // rgb: per kilometer
+			glm::vec4 MieScattering;
+			glm::vec4 MieExtinction;
+			glm::vec4 OzoneAbsorption;
+			glm::vec4 GroundAlbedo;       // rgb
+			glm::vec4 SunDirection;       // xyz: toward the sun
+			glm::vec4 SunColor;           // rgb: the sun's color over its largest component
+			glm::vec4 Viewer;             // x: the viewer's distance from the planet's center (km)
+		};
+		static_assert(sizeof(AtmosphereConstants) == 8 * 16);
+
+		struct AtmospherePassParameters
+		{
+			uint32_t FirstFace; // IBL/AtmosphereCube.comp: the cube face of the dispatch's first layer
+			uint32_t FaceSize;
+			uint32_t Padding0;
+			uint32_t Padding1;
+		};
+		static_assert(sizeof(AtmospherePassParameters) == 16);
 
 		struct AOParameters
 		{

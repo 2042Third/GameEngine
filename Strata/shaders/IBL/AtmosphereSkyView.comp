@@ -1,0 +1,66 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "Include/AtmospherePass.glsl"
+
+// The sky seen from the viewer (Include/Atmosphere.glsl's sky-view table), per lux of sun of the sun's color: along each
+// direction, the sun's light scattered toward the viewer once (Rayleigh and Mie phase functions, the sun's transmittance
+// from the transmittance table, zero in the planet's shadow) and that of all higher orders (the multiple-scattering table),
+// dimmed by what lies between, and where the ray meets the ground the ground's diffuse reflection of the sun. Steps grow
+// with the square of their index, small near the viewer where the air is densest. Computed when the sun's direction, the
+// viewer's height band or the atmosphere settings change; the background and the environment cube read it.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_UAV(0), rgba16f) uniform writeonly image2D o_Table;
+
+const uint c_Steps = 40u;
+
+void main()
+{
+	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+	if (any(greaterThanEqual(texel, ivec2(ST_SKY_VIEW_SIZE))))
+		return;
+	vec3 direction = SkyViewUVToDirection((vec2(texel) + 0.5) / ST_SKY_VIEW_SIZE);
+	float radius = u_Atmosphere.Viewer.x;
+	float mu = direction.y; // The viewer's zenith is the world's +Y
+	vec3 toSun = u_Atmosphere.SunDirection.xyz;
+	AtmosphereMedium medium = GetMedium();
+
+	bool ground = RayMeetsGround(radius, mu);
+	float length = ground ? DistanceToGround(radius, mu) : DistanceToAtmosphereTop(radius, mu);
+	float cosTheta = dot(direction, toSun);
+	float rayleighPhase = RayleighPhase(cosTheta);
+	float miePhase = MiePhase(cosTheta);
+	vec3 transmittance = vec3(1.0);
+	vec3 light = vec3(0.0);
+	float previous = 0.0;
+	for (uint index = 0u; index < c_Steps; index++)
+	{
+		float next = length * float((index + 1u) * (index + 1u)) / float(c_Steps * c_Steps);
+		float step = next - previous;
+		float t = 0.5 * (previous + next);
+		previous = next;
+		float pointRadius = RadiusAlongRay(radius, mu, t);
+		float height = pointRadius - c_AtmosphereBottomRadius;
+		vec3 rayleigh = medium.RayleighScattering * exp(-max(height, 0.0) / c_RayleighScaleHeight);
+		vec3 mie = medium.MieScattering * exp(-max(height, 0.0) / c_MieScaleHeight);
+		vec3 extinction = GetAtmosphereExtinction(medium, height);
+		vec3 position = vec3(0.0, radius, 0.0) + direction * t;
+		float sunMu = dot(position, toSun) / pointRadius;
+		vec3 sun = GetSunTransmittance(pointRadius, sunMu);
+		vec3 multiple = GetMultipleScattering(pointRadius, sunMu);
+		vec3 scattered = rayleigh * (rayleighPhase * sun + multiple) + mie * (miePhase * sun + multiple);
+		vec3 stepTransmittance = exp(-extinction * step);
+		light += transmittance * (1.0 - stepTransmittance) / max(extinction, vec3(1.0e-9)) * scattered;
+		transmittance *= stepTransmittance;
+	}
+	if (ground)
+	{
+		vec3 groundPosition = vec3(0.0, radius, 0.0) + direction * length;
+		float sunMu = dot(normalize(groundPosition), toSun);
+		light += transmittance * GetSunTransmittance(c_AtmosphereBottomRadius, sunMu) * max(sunMu, 0.0) * u_Atmosphere.GroundAlbedo.rgb / PI;
+	}
+	// Finite and within half floats, like every sky.
+	imageStore(o_Table, texel, vec4(clamp(light * u_Atmosphere.SunColor.rgb, vec3(0.0), vec3(65000.0)), 1.0));
+}

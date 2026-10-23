@@ -2419,7 +2419,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   depth/normal/entity-ID prepass (with motion vectors when asked or for
   TAA: "Motion vectors and TAA"), ground-truth ambient
   occlusion, forward PBR (opaque surfaces with an EQUAL depth test and forced early depth testing), sky,
-  transparent surfaces (back to front), each fogged by the scene's height fog ("Height fog"), the temporal
+  transparent surfaces (back to front), each fogged by the scene's height fog ("Fog and atmosphere"), the temporal
   anti-aliasing resolve when the scene chooses it, then
   post-processing from the scene's `PostProcessComponent` (exposure, bloom, tone mapping and grading, FXAA without
   TAA). A target framebuffer must match the viewport size and have a non-sRGB UNORM color format; `Render` returns false
@@ -2850,7 +2850,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     files that store 12, as 0.5.0 saved the default, keep it; `component.add` and the Basic 3D template give 16, which
     changes a scene without a `Post Process` only where its metered average exceeds 2^12 nits). P is then about 2^-17.
 
-### Height fog
+### Fog and atmosphere
 
 - The first active `HeightFogComponent` fogs the scene (`SceneRenderer::FindHeightFog`;
   `SceneRendererStats::HeightFog`). Its extinction is `Density` at `BaseHeight` and
@@ -2868,7 +2868,39 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   radiance; and the directional light's through a Henyey-Greenstein phase function whose asymmetry is `SunScattering`
   times 0.9 (`HeightFogComponent::c_MaxSunAsymmetry`), so looking toward the sun shows a glow. It is not a volume: no
   shadows or light shafts in it, and local lights do not light it. The clear color of a scene without a sky background
-  is not fogged, nor are world-space text and canvases, which the overlay pass draws after tone mapping.
+  is not fogged, nor are world-space text and canvases, which the overlay pass draws after tone mapping. Under the
+  atmosphere `ColorFromSky` takes its sky at the horizon toward each ray's azimuth, read from its sky-view table
+  (`FogLight.w` 2), so the fog is brighter toward the sun as the sky is.
+- The atmosphere (`SkyLightSource::Atmosphere`, `SceneRendererAtmosphere.cpp`): Earth's, a planet whose ground is the
+  world's y = 0 plane, its constants in `Renderer/Atmosphere.h`, mirrored by `Include/Atmosphere.glsl` (kilometers;
+  Rayleigh, Mie and ozone coefficients; `AtmosphereDensity` scales the air and the aerosols, `AtmosphereHaze` the aerosols
+  again, `GroundAlbedo` the ground's reflection into the sky). The directional light is the sun above the atmosphere:
+  its color times intensity is the illuminance there; without one, a sun of 1 lux at `GetDefaultSunDirection`.
+  - Tables (RGBA16F, `IBL/Atmosphere*.comp` in `GPU.Setup`): transmittance (256x64, by height and direction, 40 midpoint
+    steps to the top) and multiple scattering (32x32, by height and the sun's height: the second scattering order with an
+    even phase over 64 directions, the ground's reflection included, summed with all higher orders as a geometric
+    series), computed when the settings or the sun's chromaticity change (`AtmosphereTableUpdates`); the sky-view table
+    (192x108, around the vertical and by elevation, rows crowding toward the horizon; per lux of sun), when the sun's
+    direction or the camera's 250 m height band (`c_AtmosphereHeightBand`, viewed from the band's middle) changes
+    (`AtmosphereSkyViewUpdates`). Scene shaders sample it at SRV 27 (a black texture without the atmosphere).
+  - Background: `Scene/SkyboxAtmosphere.frag` (`ST_ATMOSPHERE`) draws the sky-view table times `EnvironmentParams.x`
+    (the sky's `Intensity` times the sun's illuminance) and the sun's disk analytically: the light's illuminance at the
+    ground over the disk's solid angle (about 1.3 billion nits for a real sun, which the pre-exposure keeps in range),
+    its edge smoothed over a pixel; `BackgroundBlur` is inactive.
+  - Light: the CPU evaluates the transmittance from the ground toward the sun with the same quadrature in double
+    (`Atmosphere::ComputeSunTransmittance`, once per change; the disk's share above the horizon fades it out at sunset)
+    and multiplies it into `FrameConstants::DirectionalLightColor`, so the lighting, its shadows, the fog's sun glow and
+    the sky agree without a readback (`SceneRendererStats::SunTransmittance`; `GPU.Atmosphere` checks the table against
+    `ComputeTransmittance` within 1%).
+  - Environment: the cube's level 0 is the sky-view table without the disk (`IBL/AtmosphereCube.comp`), then
+    `FilterEnvironment`, per lux of sun (`EnvironmentParams.x` scales it, so the light's intensity changes nothing
+    here). The first one is computed at once. It is double-buffered: once the sun moved more than
+    `c_AtmosphereRefreshAngle` (0.5 degrees) from where the current one was computed, or the settings changed, the other
+    set of maps is computed in `c_AtmosphereRefreshSteps` (14) steps, the six faces, the cube's levels, the irradiance and
+    the six prefiltered levels, one per frame with `SpreadLightingUpdates` (all at once without it: captures and
+    thumbnails), and takes over when complete (`EnvironmentRefreshSteps`, `EnvironmentRefreshPending`,
+    `EnvironmentUpdates`). Memory: the tables about 0.3 MiB, each set of maps about 21 MiB, so a renderer with the
+    atmosphere holds two (42 MiB); nothing exists without the atmosphere.
 
 ### Streaming and uploads
 

@@ -286,6 +286,72 @@ TEST_SUITE("PerfGPU.Renderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Render cost of 100,000 cubes under the atmosphere, with a still sun and with a moving one")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		// Render100kCubes' scene under the atmosphere (provisional: the reference machine sets the budgets). Still: its
+		// background and the light through it, the tables computed once. Moving: the sun turns 0.1 degrees a frame, so the
+		// sky-view table is computed every frame and the environment refreshes a step a frame, a new one every 0.5 degrees;
+		// the slowest frame is the metric (a hitch is a maximum by nature: the refresh's costliest step).
+		constexpr size_t c_Count = 100'000;
+		Scene scene("AtmosphereCubes");
+		Perf::AddCameraAndLight(scene);
+		Perf::CreateCubeGrid(scene, c_Count);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().Source = SkyLightSource::Atmosphere;
+		Entity sun;
+		for (auto [entity, light] : scene.GetRegistry().view<DirectionalLightComponent>().each())
+			sun = Entity(entity, &scene);
+		REQUIRE(sun);
+		sun.GetComponent<DirectionalLightComponent>().Intensity = 100000.0f;
+		sun.MarkModified<DirectionalLightComponent>();
+		SceneRenderer renderer(Perf::MeasuredRendererSpecification());
+		renderer.SetViewportSize(c_Width, c_Height);
+		const bool measuresGPU = Perf::MeasuresGPU();
+		std::vector<std::string> keys = { "PerfGPU.Renderer.Atmosphere", "PerfGPU.Renderer.AtmosphereSunMovingMaxFrame" };
+		if (measuresGPU)
+		{
+			keys.push_back("PerfGPU.Renderer.AtmosphereGPU");
+			keys.push_back("PerfGPU.Renderer.AtmosphereSunMovingMaxFrameGPU");
+		}
+		Perf::CheckBudgetsConfirmed(keys, [&]
+		{
+			const SceneCamera camera = GridView(c_Count);
+			const Perf::FrameMeasurement still = MeasureRender(gpu, renderer, scene, camera, "100k cubes under the atmosphere");
+			CHECK(GetDrawnCounts(renderer).Instances == c_Count);
+			CHECK(renderer.GetStats().Atmosphere);
+			CHECK(renderer.GetStats().AtmosphereSkyViewUpdates == 0);
+
+			float angle = -50.0f;
+			uint32_t refreshSteps = 0;
+			uint32_t updates = 0;
+			const Perf::FrameMeasurement moving = Perf::MeasureFrames(gpu, c_WarmupFrames, c_MeasuredFrames, [&]
+			{
+				angle -= 0.1f;
+				sun.GetComponent<TransformComponent>().Rotation = glm::angleAxis(glm::radians(angle), glm::vec3(1.0f, 0.0f, 0.0f));
+				sun.MarkModified<TransformComponent>();
+				REQUIRE(renderer.Render(scene, camera));
+				refreshSteps += renderer.GetStats().EnvironmentRefreshSteps;
+				updates += renderer.GetStats().EnvironmentUpdates;
+			});
+			MESSAGE("100k cubes under the atmosphere with the sun moving: ", moving.CPU.MaxMs, " ms slowest frame, GPU ", moving.GPU ? moving.GPU->MaxMs : 0.0,
+				" ms slowest busy; ", refreshSteps, " refresh steps, ", updates, " new environments");
+			CHECK(updates > 0);
+			Perf::MetricValues values { { "PerfGPU.Renderer.Atmosphere", still.CPU.MedianMs },
+				{ "PerfGPU.Renderer.AtmosphereSunMovingMaxFrame", moving.CPU.MaxMs } };
+			if (measuresGPU)
+			{
+				values.emplace("PerfGPU.Renderer.AtmosphereGPU", Perf::MeasureGPU(still));
+				Perf::MeasureGPU(moving); // Checks that its frames' times arrived
+				values.emplace("PerfGPU.Renderer.AtmosphereSunMovingMaxFrameGPU", moving.GPU->MaxMs);
+			}
+			return values;
+		});
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Render cost of 100,000 cubes under 16 shadowed point lights, every view drawn each frame and cached")
 	{
 		GPUContext gpu;

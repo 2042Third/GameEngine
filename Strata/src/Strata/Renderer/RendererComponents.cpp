@@ -6,6 +6,8 @@
 #include "Strata/Renderer/RendererRegistration.h"
 #include "Strata/Scene/Components.h"
 
+#include <spdlog/fmt/fmt.h>
+
 #include <string>
 
 namespace Strata
@@ -24,21 +26,51 @@ namespace Strata
 				ComponentRegistry::SetInactiveReason<T>(property, reason);
 		}
 
+		const char* GetSourceName(SkyLightSource source)
+		{
+			switch (source)
+			{
+				case SkyLightSource::EnvironmentMap: return "Environment Map";
+				case SkyLightSource::Procedural: return "Procedural";
+				case SkyLightSource::Atmosphere: return "Atmosphere";
+			}
+			return "unknown";
+		}
+
 		std::string ProceduralSkyOnly(const SkyLightComponent& sky)
 		{
-			return sky.Source == SkyLightSource::Procedural ? std::string() : "Only the procedural sky uses it (Source is Environment Map)";
+			return sky.Source == SkyLightSource::Procedural ? std::string() : fmt::format("Only the procedural sky uses it (Source is {})", GetSourceName(sky.Source));
 		}
 
 		std::string EnvironmentMapOnly(const SkyLightComponent& sky)
 		{
-			return sky.Source == SkyLightSource::EnvironmentMap ? std::string() : "Only an environment map uses it (Source is Procedural)";
+			return sky.Source == SkyLightSource::EnvironmentMap ? std::string() : fmt::format("Only an environment map uses it (Source is {})", GetSourceName(sky.Source));
 		}
 
-		// The renderer lights with the environment once there is one: the procedural sky, or a map that is set.
+		std::string AtmosphereOnly(const SkyLightComponent& sky)
+		{
+			return sky.Source == SkyLightSource::Atmosphere ? std::string() : fmt::format("Only the atmosphere uses it (Source is {})", GetSourceName(sky.Source));
+		}
+
+		// The sun's disk: the procedural sky's and the atmosphere's.
+		std::string WithSunDisk(const SkyLightComponent& sky)
+		{
+			return sky.Source != SkyLightSource::EnvironmentMap ? std::string() : "Only the procedural sky and the atmosphere draw a sun (Source is Environment Map)";
+		}
+
+		// The atmosphere's background is drawn from its sky-view table, never blurred.
+		std::string WithoutAtmosphere(const SkyLightComponent& sky)
+		{
+			return sky.Source != SkyLightSource::Atmosphere ? std::string() : "The atmosphere's background is always sharp (Source is Atmosphere)";
+		}
+
+		// The renderer lights with the environment once there is one: the procedural sky, the atmosphere, or a map that is set.
 		std::string WithoutEnvironmentOnly(const SkyLightComponent& sky)
 		{
 			if (sky.Source == SkyLightSource::Procedural)
 				return "The procedural sky lights the scene: the ambient color applies only without an environment";
+			if (sky.Source == SkyLightSource::Atmosphere)
+				return "The atmosphere lights the scene: the ambient color applies only without an environment";
 			if (sky.EnvironmentMap.IsValid())
 				return "The environment map lights the scene: the ambient color applies only without one";
 			return {};
@@ -149,14 +181,16 @@ namespace Strata
 		ComponentRegistry::Register<SkyLightComponent>("SkyLight")
 			.DisplayName("Sky Light")
 			.Category("Lighting")
-			.Description("Image-based lighting and sky background from an HDR environment map or a procedural sky; its radiance is luminance in nits "
-				"(cd/m\xC2\xB2) times its intensity")
-			.EnumProperty("Source", &SkyLightComponent::Source, { { "EnvironmentMap", 0, "Environment Map" }, { "Procedural", 1 } },
-				{ .Tooltip = "EnvironmentMap: an HDR texture; Procedural: a sky computed from the colors below and the directional light" })
+			.Description("Image-based lighting and sky background from an HDR environment map, a procedural sky or a physical atmosphere lit by the "
+				"directional light; its radiance is luminance in nits (cd/m\xC2\xB2) times its intensity (the atmosphere's: per lux of the light's "
+				"illuminance)")
+			.EnumProperty("Source", &SkyLightComponent::Source, { { "EnvironmentMap", 0, "Environment Map" }, { "Procedural", 1 }, { "Atmosphere", 2 } },
+				{ .Tooltip = "EnvironmentMap: an HDR texture; Procedural: a sky computed from the colors below and the directional light; Atmosphere: "
+					"Earth's sky lit by the directional light, which it dims and reddens toward the horizon" })
 			.AssetProperty("EnvironmentMap", &SkyLightComponent::EnvironmentMap, AssetType::Texture, { .Tooltip = "Equirectangular HDR texture" })
 			.Property("Intensity", &SkyLightComponent::Intensity,
 				WithTooltip(Range(0.0f, c_Unbounded, 0.01f), "Multiplies the sky's luminance in nits (cd/m\xC2\xB2): an environment map's values, the "
-					"procedural colors and the ambient color"))
+					"procedural colors, the ambient color, and the atmosphere's sky (nits per lux of the directional light)"))
 			.Property("Rotation", &SkyLightComponent::Rotation, WithTooltip(Range(-360.0f, 360.0f, 0.5f), "Degrees around +Y (environment maps only)"))
 			.Property("ShowBackground", &SkyLightComponent::ShowBackground)
 			.Property("BackgroundBlur", &SkyLightComponent::BackgroundBlur, Slider(0.0f, 1.0f))
@@ -168,12 +202,22 @@ namespace Strata
 				WithTooltip(Color(), "Procedural sky: luminance at the horizon in nits (linear, times Intensity)"))
 			.Property("GroundColor", &SkyLightComponent::GroundColor,
 				WithTooltip(Color(), "Procedural sky: luminance below the horizon in nits (linear, times Intensity)"))
-			.Property("SunSize", &SkyLightComponent::SunSize, WithTooltip(Range(0.0f, 20.0f, 0.01f), "Procedural sky: angular diameter of the sun's disk in degrees (0 hides it)"))
+			.Property("SunSize", &SkyLightComponent::SunSize,
+				WithTooltip(Range(0.0f, 20.0f, 0.01f), "Procedural sky and atmosphere: angular diameter of the sun's disk in degrees (0 hides it)"))
 			.Property("SunIntensity", &SkyLightComponent::SunIntensity,
 				WithTooltip(Range(0.0f, 60000.0f, 0.1f), "Procedural sky: luminance of the sun's disk in nits, times the directional light's color (not its "
-					"intensity) and this sky's Intensity"));
+					"intensity) and this sky's Intensity"))
+			.Property("AtmosphereDensity", &SkyLightComponent::AtmosphereDensity,
+				WithTooltip(Range(0.0f, 10.0f, 0.01f), "Atmosphere: density of its air and aerosols (1: Earth's); thicker air reddens the sun sooner"))
+			.Property("AtmosphereHaze", &SkyLightComponent::AtmosphereHaze,
+				WithTooltip(Range(0.0f, 10.0f, 0.01f), "Atmosphere: amount of aerosols (1: a clear day), the whitish haze and glow around the sun"))
+			.Property("GroundAlbedo", &SkyLightComponent::GroundAlbedo,
+				WithTooltip(Range(0.0f, 1.0f, 0.01f), "Atmosphere: diffuse reflectance of the planet's ground, which lights the sky from below"));
 		SetInactiveReasons<SkyLightComponent>({ "EnvironmentMap", "Rotation" }, &EnvironmentMapOnly);
-		SetInactiveReasons<SkyLightComponent>({ "ZenithColor", "HorizonColor", "GroundColor", "SunSize", "SunIntensity" }, &ProceduralSkyOnly);
+		SetInactiveReasons<SkyLightComponent>({ "ZenithColor", "HorizonColor", "GroundColor", "SunIntensity" }, &ProceduralSkyOnly);
+		SetInactiveReasons<SkyLightComponent>({ "SunSize" }, &WithSunDisk);
+		SetInactiveReasons<SkyLightComponent>({ "AtmosphereDensity", "AtmosphereHaze", "GroundAlbedo" }, &AtmosphereOnly);
+		SetInactiveReasons<SkyLightComponent>({ "BackgroundBlur" }, &WithoutAtmosphere);
 		SetInactiveReasons<SkyLightComponent>({ "AmbientColor" }, &WithoutEnvironmentOnly);
 
 		ComponentRegistry::Register<HeightFogComponent>("HeightFog")

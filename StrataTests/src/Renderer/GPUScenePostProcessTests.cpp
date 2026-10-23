@@ -523,18 +523,8 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 		glossy.BaseColor = glm::vec4(0.8f, 0.8f, 0.8f, 1.0f);
 		glossy.Metallic = 1.0f;
 		glossy.Roughness = 0.15f;
-
-		Scene scene;
-		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
-		postProcess.AutoExposure = true;
-		postProcess.AutoExposureMaxEV = 16.0f;
+		const AssetHandle material = assets.AddMaterial(glossy);
 		const glm::vec3 toSun = glm::normalize(glm::vec3(0.0f, 0.15f, -1.0f));
-		AddSun(scene, -toSun, 100000.0f);
-		SkyLightComponent& sky = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
-		sky.Source = SkyLightSource::Procedural;
-		sky.Intensity = 4000.0f; // A daylight sky: thousands of nits, its disk 80,000
-		sky.SunSize = 3.0f;      // Wider than the test image's pixels
-		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(glossy), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(400.0f);
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 1.0f, -1.0f));
 		const glm::uvec2 sunPixel = ProjectToPixel(camera, camera.Position + toSun * 100.0f, c_Size);
 		REQUIRE(sunPixel.x < c_Size);
@@ -550,20 +540,40 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 			return brightest;
 		};
 
-		// Without pre-exposure the disk and the highlight would be clamped.
-		SceneRenderer renderer;
-		renderer.SetViewportSize(c_Size, c_Size);
-		RenderPreExposed(renderer, scene, camera, 1.0f);
-		CHECK(CountClampedPixels(ReadHDRImage(renderer)) > 0);
+		// The procedural sky's disk is a luminance of its own (80,000 nits here, a bright sky of thousands); the atmosphere's
+		// carries the light's illuminance over the real sun's solid angle, about a billion nits, below a pixel here.
+		for (const SkyLightSource source : { SkyLightSource::Procedural, SkyLightSource::Atmosphere })
+		{
+			CAPTURE(static_cast<int>(source));
+			const bool atmosphere = source == SkyLightSource::Atmosphere;
+			Scene scene;
+			PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+			postProcess.AutoExposure = true;
+			postProcess.AutoExposureMaxEV = 16.0f;
+			AddSun(scene, -toSun, 100000.0f);
+			SkyLightComponent& sky = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+			sky.Source = source;
+			if (!atmosphere)
+			{
+				sky.Intensity = 4000.0f;
+				sky.SunSize = 3.0f; // Wider than the test image's pixels
+			}
+			AddMesh(scene, BuiltinAssets::PlaneMesh, material, glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(400.0f);
 
-		renderer.ResetExposureAdaptation();
-		const uint32_t frames = RenderUntilPreExposureSettled(renderer, scene, camera, 8);
-		CHECK(frames <= 4);
-		CHECK(renderer.GetStats().PreExposure <= 1.0f / 4096.0f);
-		const ReadbackImage hdr = ReadHDRImage(renderer);
-		CHECK(CountClampedPixels(hdr) == 0);
-		// The disk: tens of thousands of nits.
-		CHECK(brightestNearSun(hdr) > 20000.0f * renderer.GetStats().PreExposure);
+			// Without pre-exposure the disk and the highlight would be clamped.
+			SceneRenderer renderer;
+			renderer.SetViewportSize(c_Size, c_Size);
+			RenderPreExposed(renderer, scene, camera, 1.0f);
+			CHECK(CountClampedPixels(ReadHDRImage(renderer)) > 0);
+
+			renderer.ResetExposureAdaptation();
+			const uint32_t frames = RenderUntilPreExposureSettled(renderer, scene, camera, 8);
+			CHECK(frames <= 4);
+			CHECK(renderer.GetStats().PreExposure <= 1.0f / 4096.0f);
+			const ReadbackImage hdr = ReadHDRImage(renderer);
+			CHECK(CountClampedPixels(hdr) == 0);
+			CHECK(brightestNearSun(hdr) > (atmosphere ? 1.0e6f : 20000.0f) * renderer.GetStats().PreExposure);
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

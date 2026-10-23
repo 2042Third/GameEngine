@@ -304,6 +304,8 @@ namespace Strata
 			const SkyLightComponent& light = sky.GetComponent<SkyLightComponent>();
 			if (light.Source == SkyLightSource::Procedural)
 				return "Procedural";
+			if (light.Source == SkyLightSource::Atmosphere)
+				return "Atmosphere";
 			// Without a map, the sky light adds its ambient color.
 			return light.EnvironmentMap.IsValid() ? "Environment map" : "Ambient color";
 		}

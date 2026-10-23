@@ -476,6 +476,70 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(spot.ShadowNormalBias == doctest::Approx(1.5f));
 	}
 
+	TEST_CASE("Sky lights saved before the atmosphere load unchanged; atmosphere settings round-trip, are clamped or warn")
+	{
+		const auto load = [](const nlohmann::json& sky, std::vector<std::string>& warnings)
+		{
+			const nlohmann::json document = {
+				{ "Strata", { { "Format", "Scene" }, { "Version", 1 } } },
+				{ "Scene", { { "Name", "Old" }, { "Entities", { { { "ID", "00000000000000AC" }, { "Components", {
+					{ "Name", { { "Name", "Sky" } } }, { "SkyLight", sky } } } } } } } }
+			};
+			Scene scene;
+			std::string error;
+			REQUIRE_MESSAGE(SceneSerializer::Deserialize(scene, document, &error, &warnings), error);
+			return scene.GetEntityByUUID(UUID(0xAC)).GetComponent<SkyLightComponent>();
+		};
+		// As 0.5.0 saved a procedural sky: every key but the atmosphere's.
+		std::vector<std::string> warnings;
+		SkyLightComponent loaded = load({ { "Source", "Procedural" }, { "Intensity", 2 }, { "SunSize", 0.6 }, { "SunIntensity", 30 },
+			{ "ZenithColor", { 0.1, 0.2, 0.5 } } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.Source == SkyLightSource::Procedural);
+		CHECK(loaded.Intensity == 2.0f);
+		CHECK(loaded.AtmosphereDensity == 1.0f);
+		CHECK(loaded.AtmosphereHaze == 1.0f);
+		CHECK(loaded.GroundAlbedo == doctest::Approx(0.3f));
+		// The atmosphere with its settings; out of range clamped; not a number: a warning, and the default.
+		loaded = load({ { "Source", "Atmosphere" }, { "AtmosphereDensity", 1.5 }, { "AtmosphereHaze", 3 }, { "GroundAlbedo", 0.1 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.Source == SkyLightSource::Atmosphere);
+		CHECK(loaded.AtmosphereDensity == 1.5f);
+		CHECK(loaded.AtmosphereHaze == 3.0f);
+		CHECK(loaded.GroundAlbedo == doctest::Approx(0.1f));
+		loaded = load({ { "Source", 2 }, { "AtmosphereDensity", -1 }, { "GroundAlbedo", 4 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.Source == SkyLightSource::Atmosphere);
+		CHECK(loaded.AtmosphereDensity == 0.0f);
+		CHECK(loaded.GroundAlbedo == 1.0f);
+		loaded = load({ { "AtmosphereHaze", "thick" } }, warnings);
+		CHECK(CountWarnings(warnings, "AtmosphereHaze") == 1);
+		CHECK(loaded.AtmosphereHaze == 1.0f);
+		warnings.clear();
+		loaded = load({ { "Source", "Nebula" } }, warnings);
+		CHECK(CountWarnings(warnings, "Source") == 1);
+		CHECK(loaded.Source == SkyLightSource::EnvironmentMap);
+
+		// A round trip keeps every value.
+		Scene scene;
+		SkyLightComponent& sky = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+		sky.Source = SkyLightSource::Atmosphere;
+		sky.AtmosphereDensity = 0.7f;
+		sky.AtmosphereHaze = 4.5f;
+		sky.GroundAlbedo = 0.55f;
+		const nlohmann::json saved = SceneSerializer::Serialize(scene);
+		Scene reloaded;
+		std::string error;
+		warnings.clear();
+		REQUIRE_MESSAGE(SceneSerializer::Deserialize(reloaded, saved, &error, &warnings), error);
+		CHECK(warnings.empty());
+		const SkyLightComponent& again = reloaded.FindEntityByName("Sky").GetComponent<SkyLightComponent>();
+		CHECK(again.Source == SkyLightSource::Atmosphere);
+		CHECK(again.AtmosphereDensity == 0.7f);
+		CHECK(again.AtmosphereHaze == 4.5f);
+		CHECK(again.GroundAlbedo == 0.55f);
+	}
+
 	TEST_CASE("Height fog loads its defaults for keys it lacks; out-of-range values are clamped, values of another type warn")
 	{
 		const auto load = [](const nlohmann::json& fog, std::vector<std::string>& warnings)

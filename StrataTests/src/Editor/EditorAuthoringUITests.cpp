@@ -1413,7 +1413,10 @@ TEST_SUITE("Editor.UI.Inspector")
 
 	TEST_CASE("With nothing selected the Inspector shows the scene's settings and sky")
 	{
-		AuthoringEditor editor;
+		// Tall enough for every section open at once, the sky light's properties (three sources' worth) among them.
+		ImGuiHarness::Specification display;
+		display.DisplaySize = ImVec2(1600.0f, 1400.0f);
+		AuthoringEditor editor(display);
 		editor.Context().ClearSelection();
 		editor.Frames(2);
 		REQUIRE(UI::ItemProbe::Find("Inspector.SceneSettings").has_value());
@@ -1450,6 +1453,14 @@ TEST_SUITE("Editor.UI.Inspector")
 		REQUIRE(fog);
 		CHECK(fog.HasComponent<HeightFogComponent>());
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.AddHeightFog").has_value());
+
+		// The atmosphere reads as such.
+		const Entity skyEntity = editor.Context().GetActiveScene()->FindEntityByName("Sky");
+		REQUIRE(skyEntity);
+		editor.Run("component.set", { { "entity", UUIDToJson(skyEntity.GetUUID()) }, { "component", "SkyLight" }, { "values", { { "Source", "Atmosphere" } } } });
+		editor.Context().ClearSelection();
+		editor.Frames(2);
+		CHECK(editor.ProbeText("Inspector.Sky") == "Atmosphere");
 
 		REQUIRE(editor.Click("Inspector.SelectSky"));
 		REQUIRE(editor.Context().GetPrimarySelection());
