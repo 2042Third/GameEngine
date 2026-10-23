@@ -146,8 +146,8 @@ namespace Strata
 				WithTooltip(Color(), "Procedural sky: luminance below the horizon in nits (linear, times Intensity)"))
 			.Property("SunSize", &SkyLightComponent::SunSize, WithTooltip(Range(0.0f, 20.0f, 0.01f), "Procedural sky: angular diameter of the sun's disk in degrees (0 hides it)"))
 			.Property("SunIntensity", &SkyLightComponent::SunIntensity,
-				WithTooltip(Range(0.0f, 60000.0f, 0.1f), "Procedural sky: luminance of the sun's disk in nits, times the directional light's color and "
-					"Intensity"));
+				WithTooltip(Range(0.0f, 60000.0f, 0.1f), "Procedural sky: luminance of the sun's disk in nits, times the directional light's color (not its "
+					"intensity) and this sky's Intensity"));
 		SetInactiveReasons<SkyLightComponent>({ "EnvironmentMap", "Rotation" }, &EnvironmentMapOnly);
 		SetInactiveReasons<SkyLightComponent>({ "ZenithColor", "HorizonColor", "GroundColor", "SunSize", "SunIntensity" }, &ProceduralSkyOnly);
 		SetInactiveReasons<SkyLightComponent>({ "AmbientColor" }, &WithoutEnvironmentOnly);

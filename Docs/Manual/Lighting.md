@@ -35,9 +35,10 @@ Some real values, with the exposure that suits a scene lit by them (see below):
 | Household lamp (800 lumens) | 64 cd | |
 | Candle | 1 cd | |
 
-New scenes and the samples use small values instead (a 3 lux sun, 10 cd point lights, a sky under 1 nit), which look
-right at exposure 0. Both work: what matters is that the lights of a scene agree with each other, and that the exposure
-matches them. A scene twice as bright at one stop less exposure looks exactly the same.
+New lights, new scenes and the samples use small values instead (a 3 lux sun, a sky under 1 nit, 10 cd for a new point
+light), which look right at a manual exposure of 0; new scenes and most samples turn on automatic exposure (see below).
+Both work: what matters is that the lights of a scene agree with each other, and that the exposure matches them. A
+scene twice as bright at one stop less exposure looks exactly the same.
 
 The renderer stores brightness as it is, up to about 65,000 nits: under a real 100,000 lux sun, white surfaces reach
 about 32,000 nits and shiny highlights are cut off. For daylight scenes, use a fraction of the real values (all of them

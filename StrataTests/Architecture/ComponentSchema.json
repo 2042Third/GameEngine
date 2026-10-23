@@ -758,7 +758,7 @@
 					"Min": 0.0,
 					"Name": "SunIntensity",
 					"Speed": 0.10000000149011612,
-					"Tooltip": "Procedural sky: luminance of the sun's disk in nits, times the directional light's color and Intensity",
+					"Tooltip": "Procedural sky: luminance of the sun's disk in nits, times the directional light's color (not its intensity) and this sky's Intensity",
 					"Type": "Float"
 				}
 			]
