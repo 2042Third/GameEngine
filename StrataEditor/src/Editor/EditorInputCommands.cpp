@@ -425,11 +425,11 @@ namespace Strata
 			event.Step = static_cast<uint32_t>(*step);
 			const char* kinds[] = { "key", "mouseButton", "gamepadButton", "gamepadAxis", "mouseMove", "scroll", "command", "action" };
 			// A button event's "action" is its tap, press or release; an event with "action" alone holds an input action.
-			const bool button = json.contains("key") || json.contains("mouseButton") || json.contains("gamepadButton");
+			const bool buttonEvent = json.contains("key") || json.contains("mouseButton") || json.contains("gamepadButton");
 			const char* kind = nullptr;
 			for (const char* candidate : kinds)
 			{
-				if (json.contains(candidate) && !(button && std::string_view(candidate) == "action"))
+				if (json.contains(candidate) && !(buttonEvent && std::string_view(candidate) == "action"))
 				{
 					if (kind)
 					{
