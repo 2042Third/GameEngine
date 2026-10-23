@@ -292,7 +292,8 @@ frames) and the blocking `ReadTexture`. `RenderScene` keeps a scene's render pro
 and `SceneRenderer` extracts each frame's draws from it (`SceneRendererExtraction.cpp`, resolving assets through its
 `AssetResolveCache`; see [Render scene](#render-scene)). `SceneRenderer` draws a scene (light clustering, shadow cascades and
 point and spot lights' shadow views, depth/normal/entity-ID prepass (with motion vectors and, for screen-space reflections, the
-surface target), GTAO, reflection probes' conversions and the screen-space reflections' trace, forward PBR, sky, transparents,
+surface target), GTAO, reflection probes' conversions and the screen-space reflections' trace, forward PBR, sky, a copy of the
+image so far for glass, transparents (glass first),
 the TAA resolve, exposure, bloom, tone mapping, FXAA, then overlays
 and text) into render targets of its viewport size, which it hands to the `DeferredReleaseQueue` when it is resized
 (the viewport panel, the game window) or freed (captures); its output texture exists only once a frame needed it (one
@@ -2448,7 +2449,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   that differ and spends passes and histograms on those only (draws of one mesh share a key: nothing to sort). The
   material is not in the key, so the instances of a mesh share a draw call whatever their materials: shaders read
   `u_Materials[instance.MaterialIndex]` (`SceneRendererSpecification::BatchAcrossMaterials` off splits batches by
-  material, for comparisons). Transparent surfaces stay one draw each, back to front. Material data (by slot) is the
+  material, for comparisons). Transparent surfaces stay one draw each, back to front, glass (transmissive materials) before
+  the blended ones. Material data (by slot) is the
   render scene's GPU copy's, built and uploaded where a material or its textures changed.
 - **A still frame** updates no proxy and uploads no instance, proxy record, material or draw list
   (`SceneRendererStats::ProxyUpdates`, `InstanceBytesUploaded`, `ProxyBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
