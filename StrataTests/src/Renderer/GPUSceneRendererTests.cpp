@@ -789,6 +789,35 @@ TEST_SUITE("GPU.SceneRenderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Frames rendered back to back wait for the GPU before their constants run out of versions")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		// No frame loop paces these frames (GraphicsDevice::BeginFrame), and each costs the GPU far more than recording it
+		// costs the CPU: large, with ambient occlusion, bloom and screen-space reflections, under TAA with overlays (two
+		// FrameConstants writes per frame). Without the renderer's own pacing the CPU runs ahead until NVRHI has no version
+		// of the volatile buffer left and reports an error for each write.
+		Scene scene;
+		PostProcessComponent& postProcess = AddTemporalPostProcess(scene, TemporalAntiAliasingPreset::Sharp);
+		postProcess.AmbientOcclusion = true;
+		postProcess.Bloom = true;
+		postProcess.ScreenSpaceReflections = true;
+		Entity floor = AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(UnlitColor(glm::vec4(0.5f, 0.5f, 0.5f, 1.0f))), glm::vec3(0.0f), "Floor");
+		floor.GetComponent<TransformComponent>().Scale = glm::vec3(8.0f, 0.1f, 8.0f);
+		AddSun(scene, glm::vec3(0.3f, -1.0f, 0.2f), 3.0f);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 2.0f, 4.0f), glm::vec3(0.0f));
+
+		SceneRenderer renderer;
+		renderer.SetViewportSize(2048, 2048);
+		SceneRenderOptions options;
+		options.ShowGrid = true;
+		for (int frame = 0; frame < 48; frame++)
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Metallic-roughness, emissive, occlusion and base color maps modulate their factors")
 	{
 		GPUContext gpu;

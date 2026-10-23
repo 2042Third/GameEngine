@@ -50,6 +50,11 @@ namespace Strata
 		constexpr nvrhi::Format c_AOFormat = nvrhi::Format::R16_FLOAT;
 		constexpr nvrhi::Format c_AOFallbackFormat = nvrhi::Format::R32_FLOAT;
 
+		// Versions of the volatile FrameConstants buffer, and the most a frame writes: the frame's constants and, under TAA,
+		// the overlays' unjittered copy. ReserveFrameConstantVersions waits only when a caller outruns the GPU by more.
+		constexpr uint32_t c_FrameConstantVersions = 16;
+		constexpr uint32_t c_MaxFrameConstantWrites = 2;
+		static_assert(c_MaxFrameConstantWrites <= c_FrameConstantVersions);
 		constexpr uint32_t c_EnvironmentCubeSize = 512;
 		constexpr uint32_t c_IrradianceSize = 32;
 		constexpr uint32_t c_PrefilteredSize = 256;
@@ -387,7 +392,7 @@ namespace Strata
 			.setByteSize(sizeof(RenderData::FrameConstants))
 			.setIsConstantBuffer(true)
 			.setIsVolatile(true)
-			.setMaxVersions(16)
+			.setMaxVersions(c_FrameConstantVersions)
 			.setDebugName(m_Specification.DebugName + ".FrameConstants"));
 
 		bool recreated = false;
@@ -1396,6 +1401,62 @@ namespace Strata
 		readback.Epoch = m_PreExposureEpoch;
 		readback.PreExposure = m_PreExposure;
 		m_ExposureReadbackRecorded = true;
+	}
+
+	void SceneRenderer::ReserveFrameConstantVersions()
+	{
+		ST_PROFILE_FUNCTION();
+		// Frames the GPU finished release their versions; while the frame could still need more than are free, the renderer
+		// waits for its oldest frame (only callers that outrun the GPU by about 8 frames get there).
+		while (!m_SubmittedFrameConstants.empty() && m_Device->pollEventQuery(m_SubmittedFrameConstants.front().Done))
+			ReleaseOldestFrameConstants();
+		while (!m_SubmittedFrameConstants.empty() && m_SubmittedFrameConstantWrites + c_MaxFrameConstantWrites > c_FrameConstantVersions)
+		{
+			// The poll after the wait matters: NVRHI's Vulkan wait leaves behind the queue's completion value that the buffer's
+			// versions are checked against, and a poll brings it up to date.
+			nvrhi::IEventQuery* oldest = m_SubmittedFrameConstants.front().Done;
+			m_Device->waitEventQuery(oldest);
+			m_Device->pollEventQuery(oldest);
+			ReleaseOldestFrameConstants();
+		}
+		m_FrameConstantWrites = 0;
+	}
+
+	void SceneRenderer::WriteFrameConstants(nvrhi::ICommandList* commandList, const RenderData::FrameConstants& frame)
+	{
+		ST_CORE_ASSERT(m_FrameConstantWrites < c_MaxFrameConstantWrites, "SceneRenderer: a frame writes FrameConstants at most {} times", c_MaxFrameConstantWrites);
+		commandList->writeBuffer(m_FrameConstantBuffer, &frame, sizeof(frame));
+		m_FrameConstantWrites++;
+	}
+
+	void SceneRenderer::ExecuteFrame(nvrhi::ICommandList* commandList)
+	{
+		m_Device->executeCommandList(commandList);
+		if (m_FrameConstantWrites == 0)
+			return;
+		nvrhi::EventQueryHandle done;
+		if (!m_FreeFrameConstantQueries.empty())
+		{
+			done = std::move(m_FreeFrameConstantQueries.back());
+			m_FreeFrameConstantQueries.pop_back();
+			m_Device->resetEventQuery(done);
+		}
+		else
+		{
+			done = m_Device->createEventQuery();
+		}
+		m_Device->setEventQuery(done, nvrhi::CommandQueue::Graphics);
+		m_SubmittedFrameConstants.push_back({ std::move(done), m_FrameConstantWrites });
+		m_SubmittedFrameConstantWrites += m_FrameConstantWrites;
+		m_FrameConstantWrites = 0;
+	}
+
+	void SceneRenderer::ReleaseOldestFrameConstants()
+	{
+		SubmittedFrameConstants& oldest = m_SubmittedFrameConstants.front();
+		m_SubmittedFrameConstantWrites -= oldest.Writes;
+		m_FreeFrameConstantQueries.push_back(std::move(oldest.Done));
+		m_SubmittedFrameConstants.pop_front();
 	}
 
 	void SceneRenderer::SubmitExposureReadback()
@@ -2908,6 +2969,7 @@ namespace Strata
 		m_Stats.Lights = static_cast<uint32_t>(m_Lights.size()) + (frame.DirectionalLightDirection.w > 0.0f ? 1u : 0u);
 
 		nvrhi::ICommandList* commandList = m_CommandList;
+		ReserveFrameConstantVersions();
 		commandList->open();
 		commandList->beginMarker(m_Specification.DebugName.c_str());
 		// The GPU's time per pass: each stage runs from its first command to the next stage's.
@@ -2929,14 +2991,14 @@ namespace Strata
 			gpuTimer.End();
 			commandList->endMarker();
 			commandList->close();
-			m_Device->executeCommandList(commandList); // Keeps the environment processing that was recorded
+			ExecuteFrame(commandList); // Keeps the environment processing that was recorded
 			m_Errors.Report(tableUploaded ? "failed to create the scene binding sets" : "the texture table could not be uploaded (see the previous error)");
 			m_FullUpload = m_FullUpload || drawListsRecreated;
 			m_Stats = {};
 			return false;
 		}
 
-		commandList->writeBuffer(m_FrameConstantBuffer, &frame, sizeof(frame));
+		WriteFrameConstants(commandList, frame);
 		UploadSceneData(commandList, drawListsRecreated);
 		if (!m_LocalShadowData.empty())
 			commandList->writeBuffer(m_LocalShadowBuffer, m_LocalShadowData.data(), m_LocalShadowData.size() * sizeof(RenderData::LocalShadowData));
@@ -2959,7 +3021,7 @@ namespace Strata
 				gpuTimer.End();
 				commandList->endMarker();
 				commandList->close();
-				m_Device->executeCommandList(commandList); // Keeps the uploads that were recorded
+				ExecuteFrame(commandList); // Keeps the uploads that were recorded
 				m_Errors.Report("the GPU's culling tables could not be uploaded (see the previous error)");
 				m_Stats = {};
 				return false;
@@ -3128,7 +3190,7 @@ namespace Strata
 			gpuTimer.End();
 			commandList->endMarker();
 			commandList->close();
-			m_Device->executeCommandList(commandList);
+			ExecuteFrame(commandList);
 			if (m_GPUDrivenFrame)
 				SubmitCullReadback();
 			CommitShadowCache();
@@ -3194,7 +3256,7 @@ namespace Strata
 			gpuTimer.End();
 			commandList->endMarker();
 			commandList->close();
-			m_Device->executeCommandList(commandList); // Keeps the uploads that were recorded
+			ExecuteFrame(commandList); // Keeps the uploads that were recorded
 			if (m_GPUDrivenFrame)
 				SubmitCullReadback();
 			SubmitExposureReadback();
@@ -3242,7 +3304,7 @@ namespace Strata
 				overlayFrame.ViewProjection = camera.Projection * frame.View;
 				overlayFrame.InverseProjection = glm::inverse(camera.Projection);
 				overlayFrame.InverseViewProjection = glm::inverse(overlayFrame.ViewProjection);
-				commandList->writeBuffer(m_FrameConstantBuffer, &overlayFrame, sizeof(overlayFrame));
+				WriteFrameConstants(commandList, overlayFrame);
 			}
 			commandList->beginMarker("Overlays");
 			const bool overlaysDrawn = RenderOverlays(commandList, scene, camera, options, text, overlayPasses);
@@ -3260,7 +3322,7 @@ namespace Strata
 		gpuTimer.End();
 		commandList->endMarker();
 		commandList->close();
-		m_Device->executeCommandList(commandList);
+		ExecuteFrame(commandList);
 		if (m_GPUDrivenFrame)
 			SubmitCullReadback();
 		SubmitExposureReadback();

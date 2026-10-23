@@ -23,6 +23,7 @@
 
 #include <array>
 #include <chrono>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -1171,6 +1172,17 @@ namespace Strata
 		void ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options);
 		// After the executed command list of a frame that recorded the exposure's copy: the copy is pending.
 		void SubmitExposureReadback();
+		// Pacing of the volatile FrameConstants buffer. NVRHI gives each write a version that stays in use until the GPU
+		// finishes the command list, and fails a write when every version is in use. A program's frame loop keeps the GPU at
+		// most GraphicsDevice::GetMaxFramesInFlight frames behind, but callers that render back to back (tests, tools,
+		// renderers drawing several views per frame) do not: before a frame is recorded, the renderer waits for its own
+		// oldest frames until the frame's writes have versions free (a renderer drawing one frame per frame loop's frame never
+		// waits).
+		void ReserveFrameConstantVersions();
+		void WriteFrameConstants(nvrhi::ICommandList* commandList, const RenderData::FrameConstants& frame);
+		// Executes the frame's command list, after which its FrameConstants versions stay in use until the GPU finishes it.
+		void ExecuteFrame(nvrhi::ICommandList* commandList);
+		void ReleaseOldestFrameConstants();
 		// The bloom chain of the image `prefilterSet` reads (the first downsample: the HDR target's or the resolved image's).
 		void RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet);
 		// The scene's first active post-processing settings, or the defaults.
@@ -1562,6 +1574,16 @@ namespace Strata
 		nvrhi::SamplerHandle m_PointClampSampler;
 
 		nvrhi::BufferHandle m_FrameConstantBuffer;
+		// Submitted frames that wrote FrameConstants, oldest first, with how many versions each holds until the GPU finishes it.
+		struct SubmittedFrameConstants
+		{
+			nvrhi::EventQueryHandle Done;
+			uint32_t Writes = 0;
+		};
+		std::deque<SubmittedFrameConstants> m_SubmittedFrameConstants;
+		std::vector<nvrhi::EventQueryHandle> m_FreeFrameConstantQueries;
+		uint32_t m_SubmittedFrameConstantWrites = 0; // Of m_SubmittedFrameConstants
+		uint32_t m_FrameConstantWrites = 0; // Of the frame being recorded
 		nvrhi::BufferHandle m_DrawListBuffer; // Instance indices of the view's draws
 		// The render scene's GPU copy (instances, palettes, culling records, mesh and material tables) during a frame, and the
 		// buffer version

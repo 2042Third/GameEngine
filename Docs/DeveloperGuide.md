@@ -757,7 +757,14 @@ short. Their full wording:
   `setEnableImmediateExecution(false)`, and NVRHI's validation layer refuses to open a second immediate list while one is
   open (recording into the unopened list does nothing, and timing it with a `GPUPassTimer` crashes): a list that may open
   while another is, as the upload batch's transfer list and the geometry pool's growth under a batch do, is not
-  immediate (on Vulkan the flag changes nothing else).
+  immediate (on Vulkan the flag changes nothing else). A volatile constant buffer has a fixed number of versions, each in
+  use until the GPU finishes the command list that wrote it, and NVRHI reports an error for a write that finds none
+  free. A program's frame loop bounds how far the CPU runs ahead (`GraphicsDevice::BeginFrame`); callers that render back
+  to back (tests, tools, a renderer drawing several views in a frame) do not, so the owner of a volatile buffer paces its
+  own writes: `SceneRenderer::ReserveFrameConstantVersions` keeps an event query per submitted frame and waits for its
+  oldest frames only when the next frame's writes (at most `c_MaxFrameConstantWrites`) would find no version free. NVRHI's
+  Vulkan `waitEventQuery` leaves the queue's completion value, which the versions are checked against, stale: poll the
+  query after waiting.
 - **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous; code must handle
   "not loaded yet" every frame instead of blocking (see [Asset pipeline](#asset-pipeline)). New code that works for a
   scene (scene systems, loading into it, rendering it) reaches the asset manager through `Scene::GetAssetManager()`

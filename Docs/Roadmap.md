@@ -572,10 +572,7 @@ Open items and deferrals later waves own:
   `input.*` command); the Game view at a fixed resolution reports the editor's UI scale as the game's content scale.
 - Flaky tests seen once, not reproduced since: Windows `CrashGuard`'s "repeated faults on other threads", the
   Mac's `GPU.AssetResidency` "Arrivals that need room..." and, in full parallel runs while the other wave-6 stream
-  loaded the Mac, `GPU.TextureStreaming`'s tight-budget case and `GPU.SceneRenderer`'s "Resizing right after a frame
-  keeps its render targets..." (NVRHI reported 8 times that the volatile constant buffer `SceneRenderer.FrameConstants`
-  had run out of its 16 versions: the case renders 24 frames without waiting for a GPU the other stream kept busy; it
-  passed alone three times, and in the whole GPU suite run alone).
+  loaded the Mac, `GPU.TextureStreaming`'s tight-budget case.
 - Game UI (wave 4's `game-ui`): world-space canvases draw unlit, after post-processing, and the game's hit tests on
   them ignore scene geometry in front (the editor's picks check meshes).
 - Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
