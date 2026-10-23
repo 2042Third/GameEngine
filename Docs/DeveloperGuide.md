@@ -1009,6 +1009,64 @@ two members). A layer's name means the same in every scene and prefab.
   `project.open` reports `migrated: {collisionLayers: {scenes, conflicts, unreadable}}` (null when nothing migrated).
   Scene files are not touched.
 
+### Input actions
+
+A game's input actions are one set, the project section `Input.Actions` (`Input/InputActionSet`): an asset would load
+asynchronously, and the game UI navigates from its first frame. The Input layer holds the model, the grammar and the
+evaluation (`Input/InputActions`); it includes only Core.
+
+- **Model.** `InputActionSet { Maps }`, `InputActionMap { Name, Enabled, Actions }` (`Enabled`: when the game starts),
+  `InputAction { Name, Kind, Bindings, DeadZone }`; `Kind` is `Button`, `Axis` (one value, -1 to 1) or `Vector2` (+Y up).
+  Names are 1 to 64 ASCII letters, digits, spaces, `_`, `-` and `.`, without a leading or trailing space; map names are
+  unique in the set and action names in their map, ignoring case. At most 32 maps, 256 actions (the UI map's six
+  included) and 8 bindings per action; a set at every limit is about 220 KB compact, inside the section's 512 KiB.
+  `InputActionSet::FromJson` is the section's `Read` (then `ToJson`): it refuses a bad name, kind, dead zone (0 to 0.9),
+  binding or unknown member with the reason and adds the reserved UI map where it is missing.
+- **Names.** An action is named `<Map>/<Action>`, or by its bare name when no other map has an action of that name
+  (`FindAction`; ignoring case). An ambiguous bare name is refused naming every match ("'Left' is ambiguous:
+  Gameplay/Left, UI/Left"), so a game's `Left` never mixes with the UI map's.
+- **Bindings** (`InputBinding::Parse`/`ToString`, one grammar for the project file, commands, scripts and the players'
+  file, at most 96 bytes): `Key/<key>`, `Mouse/<button>`, `Gamepad/<button>` (InputNames' names; gamepad bindings read
+  every gamepad), `Gamepad/<axis>` (whole), `Gamepad/<axis>+` or `-` (half; triggers only `+`), `Gamepad/LeftStick` and
+  `RightStick`, and the composites `1D:<negative>,<positive>` and `2D:<up>,<down>,<left>,<right>` of button-like controls
+  (keys, mouse and gamepad buttons, half axes). Button takes button-like controls; Axis those, whole axes and 1D
+  composites; Vector2 sticks and 2D composites (`FitsKind`). No modifiers or chords; mouse motion and scroll stay on the
+  raw API.
+- **Evaluation.** `InputActions` (static, main thread, like `Input`) evaluates the set once per input frame:
+  `InputActions::Update()` runs in Application's Input stage after `ProcessEvents`, and evaluates only when
+  `Input::GetFrameIndex()` advanced, so Pressed and Released last one input frame and survive suspended (paused) frames,
+  as keys' do. It reads bindings through the gameplay queries, so the game UI's keyboard and pointer capture hide them. A
+  Button is down while any binding is (half axes from 0.5 until below 0.35, per gamepad; a press and release within a
+  frame reports both); an Axis takes the binding of the largest magnitude (buttons 1, half axes their value), a Vector2
+  the largest length (2D composites normalized: a diagonal has length 1); both apply the action's dead zone (default
+  0.15, by length, rescaled as the script SDK's `GetGamepadStick`) and are down from 0.5 until below 0.35. A disabled map's
+  actions read as up. Each `Update` first compares `IProjectSettings::GetVersion()` and reads the set again when it
+  changed, keeping the state of actions that keep their qualified name, so an edit reaches a running game in its next
+  frame without pressing held actions again; without a provider or a section the default set (the UI map) applies, so
+  every program evaluates the UI map. The compiled form is flat arrays; `Perf.Input.Actions256` measures 256 actions of
+  4 bindings.
+- **In-process loops.** Code that starts input frames itself (the feature test's `PlayFeatureScene`, tests that drive
+  actions) calls `InputActions::Update()` where Application does, after `Input::BeginFrame` and its simulated input, and
+  provides `IProjectSettings` when it runs a project. `Input::Reset` resets the actions too (`InputActions::Reset`).
+- **Sessions.** `InputActions::ResetSession` drops what a game session leaves (map enables back to the set's, the players'
+  bindings, simulated actions, a capture): `EditorContext` calls it when play starts and stops and loads the players'
+  bindings at play start; `GameRuntime` loads them when it opens and resets the session when it ends.
+- **Players' bindings.** `SetBindings` replaces an action's list for the players (validated by its kind; an empty list
+  unbinds it), `ResetBindings` restores the project's (an empty name: every action). `SaveBindings` writes them, when the
+  game decides (a rebinding menu closing), to `<IGameSaves directory>/InputBindings.json`
+  (`{"Strata": {"Format": "InputBindings", "Version": 1}, "Actions": {"Gameplay/Jump": ["Key/Space"]}}`, keys always
+  map-qualified; `InputPlayerBindings`), atomically, outside `SaveFiles`' `*.save` names, so `Game::ListSaveFiles` never
+  lists it. `LoadBindings` reads at most 64 KiB and forgives per entry: unknown actions and bindings their kind cannot use
+  are dropped with one warning, and a file that is no bindings file is ignored with a warning (the project's bindings
+  apply).
+- **Simulated actions** (`SimulateAction`, `ReleaseAllSimulated`, `ClearSimulated`): held down from the next input frame,
+  whatever the bindings, with a value (Button: 1); for tools that play the game.
+- **Capture** (`BeginCapture(InputCaptureDevices)`, `TakeCapturedBinding`, `CancelCapture`): listens for the next control
+  that goes down on the devices given (keys, mouse buttons, gamepad buttons, an axis beyond 0.5 from rest as its half),
+  comparing the raw state (`Input::IsRawKeyDown` and friends: whether or not input is enabled) at every `Update` call, also
+  while input frames are suspended, so it works while play is paused. While it listens every action reads as up, and the
+  control it took stays up for actions until it is released, so the captured press triggers nothing.
+
 ### Preferences
 
 The person's preferences are the registry's *user* sections (`SettingsScope::User`): the editor's own (the external
@@ -1324,7 +1382,8 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   `ReadSaveFile`/`ReadSaveText`, `DeleteSaveFile`, `ListSaveFiles`) to `IGameSaves` (`<user data>/<Game>/Saves` in a
   shipped game, `<project>/.strata/Saves` in the editor). Save names are checked in the engine before any path is formed
   (`SaveFiles::ValidateName`: no separators, no "..", no device names) and writes are atomic. Code that runs a game
-  in-process (tests, tools) provides both, or the calls fail and are reported.
+  in-process (tests, tools) provides both, or the calls fail and are reported, and provides `IProjectSettings` when it runs
+  a project and calls `InputActions::Update()` after its frame's input ([Input actions](#input-actions)).
 - Host function order: the character controller, gamepad, cursor, window, save file and collision layer functions
   (`CharacterMove` to `PhysicsGetLayerIndex`) are appended to ABI version 1 after the Animator functions, then wave 4's
   world streaming functions (`WorldRequestCellsAround` to `WorldIsLayerEnabled`).

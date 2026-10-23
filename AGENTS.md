@@ -291,9 +291,8 @@ Details: [Asset pipeline](Docs/DeveloperGuide.md#asset-pipeline).
 
 ## Scripting
 
-Game logic is C++ script classes in a script module built against `StrataScriptCore` only; writing scripts:
-`.claude/skills/strata-scripting/SKILL.md`; the gameplay API, builds, hot reload and crashes:
-[Scripting](Docs/DeveloperGuide.md#scripting).
+Game logic is C++ script classes in a module built against `StrataScriptCore` only (writing them: skill
+`strata-scripting`; the gameplay API, builds, hot reload, crashes: [Scripting](Docs/DeveloperGuide.md#scripting)).
 
 - Only plain C data crosses the ABI: no STL or engine types, no exceptions
   ([ABI rules](Docs/DeveloperGuide.md#abi-rules)).
@@ -307,9 +306,9 @@ Game logic is C++ script classes in a script module built against `StrataScriptC
 - Appending keeps `ST_SCRIPT_ABI_VERSION`; an incompatible change bumps it.
 - Script code never runs while engine state it could invalidate is in use: entity destruction goes through
   `ScriptSystem::DestroyEntity`.
-- Save files go through `IGameSaves`: names pass `SaveFiles::ValidateName` before any path is formed, and writes are
-  atomic; code that runs a game in-process provides `IGameWindow` and `IGameSaves`
-  ([Gameplay API](Docs/DeveloperGuide.md#gameplay-api)).
+- Save files go through `IGameSaves` (names pass `SaveFiles::ValidateName` before any path is formed; atomic writes);
+  code that runs a game in-process provides `IGameWindow`, `IGameSaves` and `IProjectSettings` and updates input actions
+  after its frame's input ([Gameplay API](Docs/DeveloperGuide.md#gameplay-api)).
 - SDK helpers named like engine classes (`Random`, `Timer`) are tested only inside a script module.
 
 ## Audio

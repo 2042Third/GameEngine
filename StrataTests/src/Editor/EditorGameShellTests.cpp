@@ -15,6 +15,7 @@
 #include <Strata/Core/SaveFiles.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Input/Input.h>
+#include <Strata/Input/InputActions.h>
 #include <Strata/Input/InputWindow.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Runtime/GameRuntime.h>
@@ -24,6 +25,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -79,6 +81,7 @@ namespace
 		void Frame()
 		{
 			Input::BeginFrame();
+			InputActions::Update();
 			Context.Update(Timestep(1.0f / 60.0f));
 			Runner.Update(Context);
 		}
@@ -319,6 +322,36 @@ TEST_SUITE("Scripting.Game")
 		harness.Run("project.close", { { "force", true } });
 		CHECK_FALSE(harness.Context.GetGameSaveDirectory());
 		CHECK(harness.Run("editor.status", { { "sections", { "game" } } })["game"]["saveDirectory"].is_null());
+	}
+
+	TEST_CASE("Play loads the players' input bindings from the project's saves, and a session's changes end with it")
+	{
+		ShellHarness harness;
+		const std::filesystem::path saves = harness.Directory / ".strata" / "Saves";
+		InputPlayerBindings players;
+		players.Actions["UI/Submit"] = { *InputBinding::Parse("Key/J") };
+		REQUIRE(FileSystem::WriteText(saves / InputPlayerBindings::c_FileName, players.Write()));
+
+		harness.Run("play.start");
+		CHECK(InputActions::GetPlayerBindings() == players);
+		Input::SimulateKey(Key::J, true);
+		harness.Frame();
+		CHECK(InputActions::IsPressed("UI/Submit"));
+		CHECK(InputActions::SetMapEnabled("UI", false));
+		harness.Run("play.stop");
+		CHECK(InputActions::GetPlayerBindings().Actions.empty());
+		CHECK(InputActions::IsMapEnabled("UI") == std::optional<bool>(true));
+
+		// Bindings the game saved in one session apply in the next.
+		harness.Run("play.start");
+		REQUIRE(InputActions::SetBindings("UI/Cancel", std::vector<InputBinding> { *InputBinding::Parse("Key/Q") }));
+		std::string error;
+		REQUIRE_MESSAGE(InputActions::SaveBindings(&error), error);
+		harness.Run("play.stop");
+		harness.Run("play.start");
+		CHECK(InputActions::GetBindings("UI/Cancel") == std::vector<InputBinding> { *InputBinding::Parse("Key/Q") });
+		CHECK(InputActions::GetBindings("UI/Submit") == std::vector<InputBinding> { *InputBinding::Parse("Key/J") });
+		harness.Run("play.stop");
 	}
 
 	TEST_CASE("An exported game saves in the player's data directory, or where the program running it says")

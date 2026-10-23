@@ -107,6 +107,13 @@ namespace Strata
 		static KeyState GetKeyState(KeyCode key);
 		static std::string GetUncapturedTypedText();
 
+		// The controls as the devices and simulated input hold them, whether or not input is enabled, captured or suspended: what
+		// a binding capture compares (InputActions::BeginCapture). A gamepad's axis is at rest while it is not connected.
+		static bool IsRawKeyDown(KeyCode key);
+		static bool IsRawMouseButtonDown(MouseCode button);
+		static bool IsRawGamepadButtonDown(uint32_t gamepad, GamepadButton button);
+		static float GetRawGamepadAxis(uint32_t gamepad, GamepadAxis axis);
+
 		//////////////////////////////////////////////////////////////////////////
 		// Engine integration (application, window backends, editor, automation)
 		//////////////////////////////////////////////////////////////////////////
@@ -114,6 +121,7 @@ namespace Strata
 		// Starts a new input frame: clears per-frame transitions and deltas and applies queued simulated events. While input
 		// frames are suspended it only ends the frame the game has seen.
 		static void BeginFrame();
+		// Every state back to the start, input actions' included (InputActions::Reset).
 		static void Reset();
 
 		// Input frames follow the game's updates: while the game does not update (the editor's play mode is paused without a

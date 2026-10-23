@@ -787,6 +787,8 @@ Open items and deferrals later waves own:
   - Wave 5's `showcase-samples`: the `PerfGPU.Samples.OpenWorldTour.*` metrics are provisional (Mac, 1920x1080:
     `FrameWorkMedianMs` 1.434, `FrameWorkP95Ms` 2.710 and `GPUBusyMedianMs` 4.369 over 958 frames; the frame interval,
     8.3 ms, is the display's).
+  - Wave 6's `project-settings`: `Perf.Input.Actions256` (an input frame evaluating 256 actions of 4 bindings with every
+    gamepad connected) is provisional against its 20 us target (Mac median 6.76 us).
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
 

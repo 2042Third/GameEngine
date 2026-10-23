@@ -5,6 +5,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Profiling.h"
 #include "Strata/Core/SettingsRegistry.h"
+#include "Strata/Input/InputActions.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneWorkBudget.h"
@@ -97,6 +98,9 @@ namespace Strata
 		// The game's save files, from its first script call on (OnCreate may load a save).
 		runtime->m_Saves = options.SaveFilesDirectory.empty() ? SaveDirectory::ForGame(runtime->m_Manifest.Name) : CreateScope<SaveDirectory>(options.SaveFilesDirectory);
 		runtime->m_SavesProvider = CreateScope<EngineServices::ScopedProvider<IGameSaves>>(*runtime->m_Saves);
+		// The bindings the players chose in an earlier session (InputActions::SaveBindings), with the manifest's actions.
+		InputActions::ResetSession();
+		InputActions::LoadBindings();
 
 		// The loading scene first, so that it plays while the start scene loads (both load in the background).
 		const AssetHandle loadingScene = runtime->m_Manifest.LoadingScene;
@@ -138,6 +142,8 @@ namespace Strata
 		m_ScriptEngine.reset();
 		if (m_AssetManager && AssetManager::GetActive() == m_AssetManager)
 			AssetManager::SetActive(nullptr);
+		// The game's players' bindings, map enables and simulated actions end with it.
+		InputActions::ResetSession();
 	}
 
 	bool GameRuntime::LoadScene(AssetHandle scene, std::string* outError)

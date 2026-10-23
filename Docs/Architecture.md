@@ -232,7 +232,12 @@ the `input.*` commands. Text typed in an input frame (`GetTypedText`: the window
 `SimulateText`) comes as UTF-8, at most 1,024 bytes a frame. Pointer capture (`SetPointerCapture`, which the game UI's
 system sets while the UI owns the pointer) hides mouse buttons and scrolling from gameplay queries; `GetPointerState`
 reads the pointer regardless. `UIActions.h` maps keys, gamepad buttons and stick directions to the game UI's fixed
-actions (Submit, Cancel, Up, Down, Left, Right) with key repeat and stick hysteresis.
+actions (Submit, Cancel, Up, Down, Left, Right) with key repeat and stick hysteresis. Input actions
+(`InputActionSet`, `InputActions`) are the game's named controls: maps of Button, Axis and Vector2 actions bound to keys,
+mouse buttons, gamepad controls and composites, the project settings section `Input.Actions` (read through
+`IProjectSettings`, the default set without one), evaluated once per input frame in Application's Input stage after the
+window's events, with the players' bindings (`<save directory>/InputBindings.json`), map enables, simulated actions and
+binding capture (DeveloperGuide.md, "Input actions").
 
 **Math** (`Math/`). Engine conventions in `Math.h`: right-handed, +Y up, -Z forward, reversed-Z projections, Euler
 angles in degrees. `AABB`, `Frustum`, `Ray`, and `Random` (thread-local generators).
@@ -741,6 +746,7 @@ and the runtime's modules:
  1  ExecuteMainThreadQueue           functions queued with Application::SubmitToMainThread
  2  Input::BeginFrame                new input frame; queued simulated input applies
  3  Window::ProcessEvents            glfwPollEvents: Input::Process*, events through the modules and the layers
+    InputActions::Update             the project's input actions take the frame's input (once per input frame)
                                      window minimized: sleep 16 ms, frame skipped (not counted)
  4  EngineModule::OnBeginFrame       Graphics: vsync, GraphicsDevice::BeginFrame (cannot begin, e.g. mid-resize: Skip,
                                      sleep 16 ms; device lost: Close), Renderer::BeginFrame
@@ -812,7 +818,7 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 
 | Stage | Where |
 | --- | --- |
-| `Input` | `Input::BeginFrame` and the window's events (`Application::RunFrame`) |
+| `Input` | `Input::BeginFrame`, the window's events and `InputActions::Update` (`Application::RunFrame`) |
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
 | `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (the systems' `PrepareLoadedScene`: physics' bodies; `SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |

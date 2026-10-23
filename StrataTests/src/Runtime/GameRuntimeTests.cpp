@@ -12,6 +12,8 @@
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/ProjectSettings.h"
 #include "Strata/Core/SettingsRegistry.h"
+#include "Strata/Input/Input.h"
+#include "Strata/Input/InputActions.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Core/SaveFiles.h"
@@ -573,6 +575,33 @@ TEST_SUITE("Runtime.Game")
 		CHECK_FALSE(EngineServices::Get<IProjectSettings>());
 		UpdateUntil(*old, [&]() { return old->HasStarted(); });
 		CHECK_FALSE(EngineServices::Get<IProjectSettings>());
+	}
+
+	TEST_CASE("An exported game loads the players' input bindings with its manifest's actions, and they end with it")
+	{
+		SettingsRegistry registry;
+		REQUIRE(registry.Register(InputActionSet::MakeSection()));
+		GameRuntimeOptions options;
+		options.Settings = &registry;
+		options.SaveFilesDirectory = CreateTemporaryDirectory("RuntimeBindingsSaves");
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeBindings");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 1) } }, UUID(0x1010));
+		const nlohmann::json actions = { { "Maps", nlohmann::json::array({ { { "Name", "Gameplay" }, { "Actions", nlohmann::json::array({
+			{ { "Name", "Jump" }, { "Bindings", { "Key/Space" } } } }) } } }) } };
+		RewriteManifest(manifest, 5, { { InputActionSet::c_SectionId, { { "Version", 1 }, { "Value", actions } } } });
+		InputPlayerBindings players;
+		players.Actions["Gameplay/Jump"] = { *InputBinding::Parse("Key/J") };
+		REQUIRE(FileSystem::WriteText(options.SaveFilesDirectory / InputPlayerBindings::c_FileName, players.Write()));
+
+		std::string error;
+		{
+			Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, options);
+			REQUIRE_MESSAGE(game, error);
+			CHECK(InputActions::GetPlayerBindings() == players);
+			CHECK(InputActions::GetBindings("Jump") == std::vector<InputBinding> { *InputBinding::Parse("Key/J") });
+		}
+		CHECK(InputActions::GetPlayerBindings().Actions.empty());
+		Input::Reset();
 	}
 
 	TEST_CASE("The window title is the game's title")

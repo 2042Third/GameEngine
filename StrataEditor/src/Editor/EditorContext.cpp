@@ -29,6 +29,7 @@
 #include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
+#include <Strata/Input/InputActions.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/Renderer.h>
@@ -1376,6 +1377,8 @@ namespace Strata
 		// Keys a tool held down in an earlier session (input.* commands) must not leak into this one.
 		ResetSimulatedInput();
 		ResetGameShell();
+		// The bindings players saved in an earlier session (the project's .strata/Saves), as an exported game loads them.
+		InputActions::LoadBindings();
 		m_RuntimeScene->SetTimeDilation(m_Specification.TimeDilation);
 		m_RuntimeScene->OnRuntimeStart(mode);
 		// Cells with unsaved edits stay for the session: their documents on disk are older than what plays.
@@ -1613,6 +1616,8 @@ namespace Strata
 	{
 		m_GameWindow.Clear();
 		Input::SetGameCursorMode(CursorMode::Normal);
+		// Map enables, players' bindings, simulated actions and a capture belong to the game session.
+		InputActions::ResetSession();
 	}
 
 	std::optional<std::filesystem::path> EditorContext::GetGameSaveDirectory() const

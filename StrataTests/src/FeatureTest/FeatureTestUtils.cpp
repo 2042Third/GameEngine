@@ -4,6 +4,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/GameUI/GameUIScene.h"
 #include "Strata/Input/Input.h"
+#include "Strata/Input/InputActions.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
@@ -392,6 +393,8 @@ namespace Strata::Tests
 			Input::BeginFrame();
 			SimulateInput(frame, pressFrame);
 			SimulateUIInput(scene, frame, clickFrame);
+			// Where Application updates them: after the frame's input is in.
+			InputActions::Update();
 			advanceFrame();
 			REQUIRE_FALSE(engine.IsFaulted());
 			// The scene's caches (world transforms, activity, hierarchy links, lookup indices) match a full recomputation after
