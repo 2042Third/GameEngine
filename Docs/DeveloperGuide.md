@@ -2948,7 +2948,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (`c_ReflectionProbeConversionsPerFrame`, 2) at most two captures convert per frame and a probe waiting for its capture
   lights nothing meanwhile; without it (captures, thumbnails, the bake) every loaded one converts in the frame.
   `SceneRendererStats::ReflectionProbes` (shaded with), `ReflectionProbeConversions` and `ReflectionProbesPending`
-  (kept in view, waiting for their capture to load or convert: captures and the project's picture wait for them).
+  (kept in view, waiting for their capture to load or convert: captures and the project's picture wait for them; a
+  capture that is not on its way, an unknown or failed handle or another type of asset, takes no slot and is not waited for).
 - **The bake** (`lighting.bakeProbes`, `Editor/EditorLightingCommands.cpp` and `Editor/ProbeBake.h`): a renderer of its own
   for the bake (`ProbeBake::GetRendererSpecification`: no entity IDs, TAA, texture streaming or `SpreadLightingUpdates`, so
   it waits for every level and draws every shadow view and probe conversion at once) renders each probe's six 90-degree

@@ -245,6 +245,11 @@ namespace Strata
 		const glm::dvec3 cameraPosition = glm::dvec3(camera.Position);
 		for (const ProbeCandidate& candidate : candidates)
 		{
+			const Ref<Texture> texture = m_Assets.Resolve<Texture>(candidate.Capture, AssetPriority::High);
+			// A capture that is not on its way (an unknown or failed handle, another type of asset) lights nothing: it takes no
+			// slot and counts as pending for nobody, so captures and bakes do not wait for it.
+			if (!texture && (!manager || manager->GetAssetState(candidate.Capture) != AssetState::Loading))
+				continue;
 			// The capture's slot: the one holding it, else a free one, else the least recently used one the frame does not use.
 			uint32_t slot = std::numeric_limits<uint32_t>::max();
 			uint32_t replaceable = std::numeric_limits<uint32_t>::max();
@@ -272,7 +277,6 @@ namespace Strata
 			ReflectionProbeSlot& probeSlot = state.Slots[slot];
 			probeSlot.LastUsed = frame;
 
-			const Ref<Texture> texture = m_Assets.Resolve<Texture>(candidate.Capture, AssetPriority::High);
 			const bool converted = texture && probeSlot.Source.lock() == texture;
 			const bool convertingNow = std::any_of(m_ReflectionProbeConversions.begin(), m_ReflectionProbeConversions.end(),
 				[slot](const ReflectionProbeConversion& conversion) { return conversion.Slot == slot; });

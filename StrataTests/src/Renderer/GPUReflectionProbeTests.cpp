@@ -164,6 +164,38 @@ TEST_SUITE("GPU.SceneRenderer.ReflectionProbes")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A probe whose capture is missing or not a texture lights nothing and waits for nothing")
+	{
+		// Only captures on their way count as pending (captures, the project's picture and the bake wait for those): an unknown
+		// handle (a deleted texture) or another type of asset never loads as a capture.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddMesh(scene, BuiltinAssets::SphereMesh, BuiltinAssets::DefaultMaterial, glm::vec3(0.0f), "Ball");
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f));
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		const ReadbackImage reference = RenderToImage(renderer, scene, camera);
+
+		AddProbe(scene, AssetHandle(0x5EC0DE), glm::vec3(0.0f), glm::vec3(5.0f));
+		MaterialProperties red;
+		red.BaseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+		AddProbe(scene, assets.AddMaterial(red), glm::vec3(0.0f), glm::vec3(4.0f));
+		for (int frame = 0; frame < 3; frame++)
+		{
+			const ReadbackImage image = RenderToImage(renderer, scene, camera);
+			const SceneRendererStats stats = renderer.GetStats();
+			CHECK(stats.ReflectionProbes == 0);
+			CHECK(stats.ReflectionProbeConversions == 0);
+			CHECK(stats.ReflectionProbesPending == 0);
+			CHECK(stats.PendingAssets == 0);
+			CHECK(image.Pixels == reference.Pixels);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A frame with HDROutput ends with its pre-exposed HDR image and makes no output")
 	{
 		// What the probe bake reads back: luminance times the forced pre-exposure, before exposure and tone mapping.
