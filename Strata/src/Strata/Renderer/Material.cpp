@@ -29,8 +29,12 @@ namespace Strata
 				.Property("BaseColor", &MaterialProperties::BaseColor, color)
 				.Property("Metallic", &MaterialProperties::Metallic, range(0.0f, 1.0f))
 				.Property("Roughness", &MaterialProperties::Roughness, range(0.0f, 1.0f))
-				.Property("EmissiveColor", &MaterialProperties::EmissiveColor, color)
-				.Property("EmissiveIntensity", &MaterialProperties::EmissiveIntensity, PropertyOptions { .Min = 0.0f, .Max = 1.0e6f, .Speed = 0.1f })
+				.Property("EmissiveColor", &MaterialProperties::EmissiveColor,
+					PropertyOptions { .Tooltip = "Linear color of the emitted light: times Emissive Intensity (and the emissive map) it is luminance in "
+						"nits (cd/m\xC2\xB2)", .Color = true })
+				.Property("EmissiveIntensity", &MaterialProperties::EmissiveIntensity,
+					PropertyOptions { .Tooltip = "Luminance in nits (cd/m\xC2\xB2) emitted where the emissive color is white: a monitor about 200, a lit "
+						"sign about 1,000", .Min = 0.0f, .Max = 1.0e6f, .Speed = 0.1f })
 				.Property("NormalScale", &MaterialProperties::NormalScale, PropertyOptions { .Min = 0.0f, .Max = 10.0f, .Speed = 0.01f })
 				.Property("OcclusionStrength", &MaterialProperties::OcclusionStrength, range(0.0f, 1.0f))
 				.EnumProperty("AlphaMode", &MaterialProperties::AlphaMode, { { "Opaque", 0 }, { "Mask", 1 }, { "Blend", 2 } })

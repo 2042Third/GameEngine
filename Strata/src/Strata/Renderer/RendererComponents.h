@@ -14,10 +14,14 @@ namespace Strata
 	// The renderer module's components: lights, the sky, post-processing and text (registered by RegisterRendererComponents,
 	// with MeshRendererComponent, whose type is in Scene/Components.h).
 
+	// Light units (DeveloperGuide "Light units and exposure"): the shading computes physical quantities on one scale, so a
+	// directional light's intensity is illuminance in lux, a point or spot light's luminous intensity in candela and the
+	// sky's and emissive surfaces' radiance luminance in nits (cd/m^2). Nothing rescales them: exposure maps them to the
+	// display.
 	struct DirectionalLightComponent
 	{
 		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };
-		float Intensity = 3.0f;
+		float Intensity = 3.0f; // Illuminance in lux on a surface facing the light, times Color
 		bool CastShadows = true;
 		float ShadowDistance = 80.0f;   // Shadows are rendered up to this distance from the camera
 		float ShadowSoftness = 1.0f;    // Angular diameter of the light in degrees (the sun is about 0.5): penumbra size
@@ -36,7 +40,7 @@ namespace Strata
 	struct PointLightComponent
 	{
 		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };
-		float Intensity = 10.0f;
+		float Intensity = 10.0f; // Luminous intensity in candela, times Color (P lumens in every direction: P / 4pi cd)
 		float Range = 10.0f; // Light fades to zero at this distance
 	};
 
@@ -44,7 +48,7 @@ namespace Strata
 	struct SpotLightComponent
 	{
 		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };
-		float Intensity = 20.0f;
+		float Intensity = 20.0f; // Luminous intensity in candela along the axis, times Color (not spread over the cone)
 		float Range = 15.0f;
 		float InnerConeAngle = 20.0f; // Degrees, half angle: full intensity inside
 		float OuterConeAngle = 30.0f; // Degrees, half angle: no light outside
@@ -61,15 +65,15 @@ namespace Strata
 	struct SkyLightComponent
 	{
 		AssetHandle EnvironmentMap = UUID::Null();
-		float Intensity = 1.0f;
+		float Intensity = 1.0f; // Multiplies the sky's luminance: the map's values and the colors below are in nits
 		float Rotation = 0.0f; // Degrees around +Y (environment maps only: the procedural sun follows the light)
 		bool ShowBackground = true;
 		float BackgroundBlur = 0.0f; // 0 = sharp, 1 = fully blurred
-		glm::vec3 AmbientColor = { 0.03f, 0.03f, 0.04f }; // Used when there is no environment (no map assigned)
+		glm::vec3 AmbientColor = { 0.03f, 0.03f, 0.04f }; // Luminance in nits, used when there is no environment (no map)
 		SkyLightSource Source = SkyLightSource::EnvironmentMap;
-		// Procedural sky: linear radiance straight up, at the horizon and below it. The sun's disk sits where the scene's
-		// directional light comes from (45 degrees above the horizon without one), SunSize degrees across, with the light's
-		// color times SunIntensity as its radiance.
+		// Procedural sky: linear luminance in nits straight up, at the horizon and below it. The sun's disk sits where the
+		// scene's directional light comes from (45 degrees above the horizon without one), SunSize degrees across, with the
+		// light's color times SunIntensity as its luminance.
 		glm::vec3 ZenithColor = { 0.18f, 0.32f, 0.62f };
 		glm::vec3 HorizonColor = { 0.66f, 0.74f, 0.84f };
 		glm::vec3 GroundColor = { 0.22f, 0.20f, 0.18f };

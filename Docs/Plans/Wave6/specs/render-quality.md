@@ -812,7 +812,8 @@ the previous state; `component.get` reports the inactive reason). The steps belo
   tooltip names its unit (lux, candela, nits), and so do the emissive properties of the material.
 - `GPU.SceneRenderer.Lighting`: a closed scene of matte materials (geometry covers every pixel; the clear color and the
   sky black, since they do not scale with the light) lit by a 65,536 lux sun with manual exposure -16 renders
-  bit-identical to the same scene at 1 lux with exposure 0 (powers of two, no value near the half-float limit).
+  bit-identical to the same scene at 1 lux with exposure 0 (powers of two, no value near the half-float limit). As
+  landed, the scene also holds a point and a spot light scaled alike (4 and 8 cd at 1 lux), so candela shares the scale.
 - Must-fail: a description without its unit (the suite fails).
 
 ### 6.6 Point and spot shadows (S6)

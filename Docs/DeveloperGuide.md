@@ -2429,10 +2429,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   stays dark) with a preview sun (`SceneRenderer::GetPreviewSunDirection`) and the default procedural sky
   (`SceneRendererStats::PreviewLighting`); `DrawScreenSpaceText = false` leaves the HUD out (`ScreenSpaceTexts`,
   `HiddenScreenSpaceTexts`). The defaults render a scene exactly as a game shows it.
-- Light units are relative but physically consistent: directional intensity acts like illuminance,
-  point and spot intensity like luminous intensity with inverse-square falloff (cut off at `Range`).
-  Automatic exposure maps the average luminance of the non-black pixels to middle gray; tests that
-  compare exact colors disable it (see `AddNeutralPostProcess` in `SceneRendererTestUtils.h`).
+- Lights, the sky and emission have physical units on one scale, and exposure maps them to the display ("Light units
+  and exposure"). Tests that compare exact colors turn automatic exposure off (`AddNeutralPostProcess` in
+  `SceneRendererTestUtils.h`).
 
 ### Render scene
 
@@ -2722,6 +2721,54 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   Multiply coverage into the result and discard once at the end, as `GameUI/UIQuad.frag` does, or sample every texture
   before the discards, as `Scene/Forward.frag` and `Scene/DepthPrepass.frag` do. `Architecture.Shaders` checks every
   fragment shader's source.
+
+### Light units and exposure
+
+- The shading computes photometric quantities without a factor between them, so every intensity has a unit (the
+  descriptions and the Inspector's tooltips name it; `Renderer.LightUnits` checks them):
+  - `DirectionalLightComponent::Intensity` is illuminance in lux on a surface facing the light, times `Color`
+    (`Forward.frag` shades `Color * Intensity * NoL * BRDF`).
+  - `PointLightComponent::Intensity` and `SpotLightComponent::Intensity` are luminous intensity in candela, times
+    `Color`, with an inverse-square falloff windowed to zero at `Range` (`Include/PBR.glsl`). A point light emitting P
+    lumens has P / 4pi cd. A spot light's candela is along its axis and is not spread over its cone: narrowing the cone
+    does not brighten it (P lumens in a cone of half angle t would be P / (2pi (1 - cos t)) cd).
+  - Luminance in nits (cd/m^2): the sky, which is an environment map's values (or the procedural `ZenithColor`,
+    `HorizonColor`, `GroundColor`, and the sun's disk, `SunIntensity` times the directional light's color) times
+    `SkyLightComponent::Intensity`; `AmbientColor` times `Intensity`, the luminance of a uniform sky lighting the scene
+    while there is no environment; and emission, `EmissiveColor * EmissiveIntensity` times the emissive map. A uniform
+    sky of L nits gives pi L lux on the ground, and a white matte surface under E lux shows E / pi nits.
+  - The glTF importer reads `KHR_lights_punctual` (candela, lux) and the emissive strength 1:1. Nothing is rescaled:
+    0.5.0's scenes keep their values and render as before. The defaults (a 3 lux sun, 10 cd point and 20 cd spot
+    lights, a procedural sky of under 1 nit) are a dim scene that exposure 0 shows at about middle gray; a scene may use
+    real values instead, with the exposure to match.
+- Exposure: the tonemapper sees `L * M`, L the HDR target's luminance in nits and M the multiplier of the exposure
+  buffer (`SceneRenderer::UpdateExposure`). Manual exposure: `M = 2^Exposure` (registered within [-16, 16]). Automatic
+  exposure: `M = 2^Exposure * 0.18 / 2^a`, where `a` is the log2 average luminance metered by `Exposure.comp`'s
+  histogram (`Include/Exposure.glsl`: [-12, 16] in 254 bins of 0.11 EV, the darkest and brightest tenth of the pixels
+  left out), adapted at `AutoExposureSpeed` and clamped to [`AutoExposureMinEV`, `AutoExposureMaxEV`]: the average lands
+  on middle gray, and `Exposure` compensates.
+- A camera: a reflected-light meter calibrated with K = 12.5 reads EV100 = log2(L * 100 / 12.5) = log2(L) + 3 for an
+  average luminance L, and the manual exposure that puts L at middle gray is log2(0.18 / L) = 0.53 - EV100. So
+  `Exposure` is about 0.5 - EV100 (a "sunny 16" scene, EV100 15, is about -14.5), and `AutoExposureMinEV` and `MaxEV`
+  are EV100 - 3.
+- Reference values (an average albedo of 0.18 gives the manual exposures):
+
+  | Light | Value | Exposure |
+  | --- | --- | --- |
+  | Direct sun, mid-morning to noon | 32,000 to 100,000 lux | -13 to -15 |
+  | Clear blue sky, away from the sun | 3,000 to 8,000 nits (10,000 to 25,000 lux on the ground) | -12 |
+  | Overcast day | 1,000 to 10,000 lux (a sky of 300 to 3,000 nits) | -8 to -12 |
+  | Office lighting | 300 to 500 lux | -7 |
+  | Full moon | 0.1 to 0.3 lux | +3.5 to +5 |
+  | Household lamp of 800 lumens | 64 cd | |
+  | Candle | 1 cd | |
+  | Computer monitor, lit sign | 100 to 300 nits, about 1,000 nits | |
+- The HDR targets store absolute luminance in RGBA16F (at most 65,504; `SanitizeHDR` clamps at 65,000; below 2^-14
+  values lose bits): a 100,000 lux sun on a white matte surface gives about 32,000 nits, its specular highlights clamp,
+  and a real sun's disk cannot be stored. Scaling every light, the sky and emission by one power of two and the
+  exposure by its inverse renders the same image bit for bit while no value nears those limits
+  (`GPU.SceneRenderer.Lighting`: a closed matte scene lit by 65,536 lux at exposure -16 and by 1 lux at exposure 0), so
+  a daylight scene works at a fraction of its real values, e.g. a 100 lux sun at about -5.
 
 ### Height fog
 

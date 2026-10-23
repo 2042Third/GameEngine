@@ -72,6 +72,57 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Light units share one scale: a 65,536 lux scene at exposure -16 renders as a 1 lux scene at exposure 0")
+	{
+		// Lux, candela and nits are linked by the shading without a factor (DeveloperGuide, "Light units and exposure"), and
+		// manual exposure multiplies by 2^Exposure: scaling every light by a power of two and the exposure by its inverse is
+		// exact while no value nears the half-float limit or its subnormals. The scene is closed (the floor fills the view)
+		// and its sky black, since the clear color does not scale with the lights.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		MaterialProperties matte;
+		matte.BaseColor = glm::vec4(0.5f, 0.6f, 0.7f, 1.0f);
+		matte.Roughness = 1.0f;
+		const AssetHandle material = assets.AddMaterial(matte);
+
+		const auto render = [&](float scale, float exposure)
+		{
+			Scene scene;
+			AddNeutralPostProcess(scene).Exposure = exposure;
+			SkyLightComponent& sky = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+			sky.AmbientColor = glm::vec3(0.0f);
+			AddMesh(scene, BuiltinAssets::PlaneMesh, material, glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(100.0f);
+			AddMesh(scene, BuiltinAssets::CubeMesh, material, glm::vec3(0.0f, 0.5f, 0.0f), "Box");
+			AddSun(scene, glm::vec3(1.0f, -2.0f, 0.5f), scale, true);
+			AddPointLight(scene, glm::vec3(-3.0f, 2.0f, 2.5f), glm::vec3(1.0f, 0.9f, 0.8f), 4.0f * scale, 100.0f);
+			Entity spot = scene.CreateEntity("Spot");
+			spot.GetComponent<TransformComponent>().Translation = glm::vec3(2.5f, 3.0f, -1.5f);
+			spot.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::vec3(0.0f, -1.0f, 0.0f));
+			SpotLightComponent& light = spot.AddComponent<SpotLightComponent>();
+			light.Intensity = 8.0f * scale;
+			light.Range = 100.0f;
+			SceneRenderer renderer;
+			renderer.SetViewportSize(c_Size, c_Size);
+			return RenderToImage(renderer, scene, LookAt(glm::vec3(2.0f, 7.0f, 3.0f), glm::vec3(0.0f)));
+		};
+
+		constexpr float c_Sun = 65536.0f; // 2^16 lux: a sunlit scene, below the half-float limit on a matte surface
+		const ReadbackImage dim = render(1.0f, 0.0f);
+		const ReadbackImage bright = render(c_Sun, -16.0f);
+		CHECK(bright.Pixels == dim.Pixels);
+		// Lit, and the comparison sees a stop of difference.
+		uint32_t litPixels = 0;
+		for (uint32_t y = 0; y < c_Size; y++)
+		{
+			for (uint32_t x = 0; x < c_Size; x++)
+				litPixels += Red(dim, x, y) > 40 ? 1u : 0u;
+		}
+		CHECK(litPixels > c_Size * c_Size / 2);
+		CHECK(render(c_Sun, -15.0f).Pixels != dim.Pixels);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Spot lights light a cone with a smooth edge between the inner and outer angle")
 	{
 		GPUContext gpu;

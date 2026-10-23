@@ -83,9 +83,11 @@ namespace Strata
 		ComponentRegistry::Register<DirectionalLightComponent>("DirectionalLight")
 			.DisplayName("Directional Light")
 			.Category("Lighting")
-			.Description("Sun-like light shining along the entity's forward (-Z) direction")
+			.Description("Sun-like light shining along the entity's forward (-Z) direction; its intensity is illuminance in lux")
 			.Property("Color", &DirectionalLightComponent::Color, Color())
-			.Property("Intensity", &DirectionalLightComponent::Intensity, Range(0.0f, c_Unbounded, 0.05f))
+			.Property("Intensity", &DirectionalLightComponent::Intensity,
+				WithTooltip(Range(0.0f, c_Unbounded, 0.05f), "Illuminance in lux on a surface facing the light, times Color: direct sun about 100,000, an "
+					"overcast day 1,000 to 10,000, a full moon 0.25"))
 			.Property("CastShadows", &DirectionalLightComponent::CastShadows)
 			.Property("ShadowDistance", &DirectionalLightComponent::ShadowDistance, Range(1.0f, 10000.0f, 1.0f))
 			.Property("ShadowSoftness", &DirectionalLightComponent::ShadowSoftness, Range(0.0f, 10.0f, 0.01f))
@@ -99,17 +101,23 @@ namespace Strata
 		ComponentRegistry::Register<PointLightComponent>("PointLight")
 			.DisplayName("Point Light")
 			.Category("Lighting")
-			.Description("Light shining in every direction from the entity's position (casts no shadows)")
+			.Description("Light shining in every direction from the entity's position (casts no shadows); its intensity is luminous intensity in "
+				"candela")
 			.Property("Color", &PointLightComponent::Color, Color())
-			.Property("Intensity", &PointLightComponent::Intensity, Range(0.0f, c_Unbounded, 0.1f))
+			.Property("Intensity", &PointLightComponent::Intensity,
+				WithTooltip(Range(0.0f, c_Unbounded, 0.1f), "Luminous intensity in candela, times Color, falling off with the square of the distance: a "
+					"bulb of P lumens has P / 12.57 cd (800 lm, about 64 cd), a candle about 1"))
 			.Property("Range", &PointLightComponent::Range, WithTooltip(Range(0.01f, c_Unbounded, 0.1f), "Light fades to zero at this distance"));
 
 		ComponentRegistry::Register<SpotLightComponent>("SpotLight")
 			.DisplayName("Spot Light")
 			.Category("Lighting")
-			.Description("Cone light shining along the entity's forward (-Z) direction (casts no shadows)")
+			.Description("Cone light shining along the entity's forward (-Z) direction (casts no shadows); its intensity is luminous intensity in "
+				"candela along its axis")
 			.Property("Color", &SpotLightComponent::Color, Color())
-			.Property("Intensity", &SpotLightComponent::Intensity, Range(0.0f, c_Unbounded, 0.1f))
+			.Property("Intensity", &SpotLightComponent::Intensity,
+				WithTooltip(Range(0.0f, c_Unbounded, 0.1f), "Luminous intensity in candela along the axis, times Color, falling off with the square of "
+					"the distance; a narrower cone does not make it brighter"))
 			.Property("Range", &SpotLightComponent::Range, Range(0.01f, c_Unbounded, 0.1f))
 			.Property("InnerConeAngle", &SpotLightComponent::InnerConeAngle, WithTooltip(Range(0.0f, 89.0f, 0.1f), "Half angle in degrees"))
 			.Property("OuterConeAngle", &SpotLightComponent::OuterConeAngle, WithTooltip(Range(0.1f, 89.9f, 0.1f), "Half angle in degrees"));
@@ -117,21 +125,29 @@ namespace Strata
 		ComponentRegistry::Register<SkyLightComponent>("SkyLight")
 			.DisplayName("Sky Light")
 			.Category("Lighting")
-			.Description("Image-based lighting and sky background from an HDR environment map or a procedural sky")
+			.Description("Image-based lighting and sky background from an HDR environment map or a procedural sky; its radiance is luminance in nits "
+				"(cd/m\xC2\xB2) times its intensity")
 			.EnumProperty("Source", &SkyLightComponent::Source, { { "EnvironmentMap", 0, "Environment Map" }, { "Procedural", 1 } },
 				{ .Tooltip = "EnvironmentMap: an HDR texture; Procedural: a sky computed from the colors below and the directional light" })
 			.AssetProperty("EnvironmentMap", &SkyLightComponent::EnvironmentMap, AssetType::Texture, { .Tooltip = "Equirectangular HDR texture" })
-			.Property("Intensity", &SkyLightComponent::Intensity, Range(0.0f, c_Unbounded, 0.01f))
+			.Property("Intensity", &SkyLightComponent::Intensity,
+				WithTooltip(Range(0.0f, c_Unbounded, 0.01f), "Multiplies the sky's luminance in nits (cd/m\xC2\xB2): an environment map's values, the "
+					"procedural colors and the ambient color"))
 			.Property("Rotation", &SkyLightComponent::Rotation, WithTooltip(Range(-360.0f, 360.0f, 0.5f), "Degrees around +Y (environment maps only)"))
 			.Property("ShowBackground", &SkyLightComponent::ShowBackground)
 			.Property("BackgroundBlur", &SkyLightComponent::BackgroundBlur, Slider(0.0f, 1.0f))
-			.Property("AmbientColor", &SkyLightComponent::AmbientColor, WithTooltip(Color(), "Ambient light while there is no environment (no map set)"))
-			.Property("ZenithColor", &SkyLightComponent::ZenithColor, WithTooltip(Color(), "Procedural sky: color straight up (linear radiance)"))
-			.Property("HorizonColor", &SkyLightComponent::HorizonColor, WithTooltip(Color(), "Procedural sky: color at the horizon (linear radiance)"))
-			.Property("GroundColor", &SkyLightComponent::GroundColor, WithTooltip(Color(), "Procedural sky: color below the horizon (linear radiance)"))
+			.Property("AmbientColor", &SkyLightComponent::AmbientColor,
+				WithTooltip(Color(), "Ambient sky luminance in nits (linear, times Intensity) while there is no environment (no map set)"))
+			.Property("ZenithColor", &SkyLightComponent::ZenithColor,
+				WithTooltip(Color(), "Procedural sky: luminance straight up in nits (linear, times Intensity)"))
+			.Property("HorizonColor", &SkyLightComponent::HorizonColor,
+				WithTooltip(Color(), "Procedural sky: luminance at the horizon in nits (linear, times Intensity)"))
+			.Property("GroundColor", &SkyLightComponent::GroundColor,
+				WithTooltip(Color(), "Procedural sky: luminance below the horizon in nits (linear, times Intensity)"))
 			.Property("SunSize", &SkyLightComponent::SunSize, WithTooltip(Range(0.0f, 20.0f, 0.01f), "Procedural sky: angular diameter of the sun's disk in degrees (0 hides it)"))
 			.Property("SunIntensity", &SkyLightComponent::SunIntensity,
-				WithTooltip(Range(0.0f, 60000.0f, 0.1f), "Procedural sky: radiance of the sun's disk, times the directional light's color"));
+				WithTooltip(Range(0.0f, 60000.0f, 0.1f), "Procedural sky: luminance of the sun's disk in nits, times the directional light's color and "
+					"Intensity"));
 		SetInactiveReasons<SkyLightComponent>({ "EnvironmentMap", "Rotation" }, &EnvironmentMapOnly);
 		SetInactiveReasons<SkyLightComponent>({ "ZenithColor", "HorizonColor", "GroundColor", "SunSize", "SunIntensity" }, &ProceduralSkyOnly);
 		SetInactiveReasons<SkyLightComponent>({ "AmbientColor" }, &WithoutEnvironmentOnly);

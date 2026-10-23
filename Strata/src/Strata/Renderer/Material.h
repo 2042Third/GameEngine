@@ -26,6 +26,7 @@ namespace Strata
 		glm::vec4 BaseColor = { 1.0f, 1.0f, 1.0f, 1.0f }; // Linear RGBA
 		float Metallic = 0.0f;
 		float Roughness = 0.5f;
+		// Emitted luminance in nits (cd/m^2): EmissiveColor * EmissiveIntensity, times the emissive map.
 		glm::vec3 EmissiveColor = { 0.0f, 0.0f, 0.0f };
 		float EmissiveIntensity = 1.0f;
 		float NormalScale = 1.0f;

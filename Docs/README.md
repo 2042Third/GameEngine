@@ -29,6 +29,8 @@ Guides for people making games in the editor:
   game input and the mouse, pausing and stepping.
 - [Manual/GameUI.md](Manual/GameUI.md): menus and HUDs: canvases, anchors and scale modes, the look of images, texts and
   widgets, buttons and sliders in scripts, keyboard and gamepad navigation, testing UI with commands.
+- [Manual/Lighting.md](Manual/Lighting.md): lights and their units (lux, candela, nits) with reference values, exposure,
+  the sky, height fog and the sun's shadows.
 
 ## Releases
 

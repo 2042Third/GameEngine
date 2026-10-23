@@ -378,7 +378,7 @@
 		},
 		{
 			"Category": "Lighting",
-			"Description": "Sun-like light shining along the entity's forward (-Z) direction",
+			"Description": "Sun-like light shining along the entity's forward (-Z) direction; its intensity is illuminance in lux",
 			"DisplayName": "Directional Light",
 			"Extra": false,
 			"Flags": 0,
@@ -405,7 +405,7 @@
 					"Min": 0.0,
 					"Name": "Intensity",
 					"Speed": 0.05000000074505806,
-					"Tooltip": "",
+					"Tooltip": "Illuminance in lux on a surface facing the light, times Color: direct sun about 100,000, an overcast day 1,000 to 10,000, a full moon 0.25",
 					"Type": "Float"
 				},
 				{
@@ -484,7 +484,7 @@
 		},
 		{
 			"Category": "Lighting",
-			"Description": "Light shining in every direction from the entity's position (casts no shadows)",
+			"Description": "Light shining in every direction from the entity's position (casts no shadows); its intensity is luminous intensity in candela",
 			"DisplayName": "Point Light",
 			"Extra": false,
 			"Flags": 0,
@@ -511,7 +511,7 @@
 					"Min": 0.0,
 					"Name": "Intensity",
 					"Speed": 0.10000000149011612,
-					"Tooltip": "",
+					"Tooltip": "Luminous intensity in candela, times Color, falling off with the square of the distance: a bulb of P lumens has P / 12.57 cd (800 lm, about 64 cd), a candle about 1",
 					"Type": "Float"
 				},
 				{
@@ -530,7 +530,7 @@
 		},
 		{
 			"Category": "Lighting",
-			"Description": "Cone light shining along the entity's forward (-Z) direction (casts no shadows)",
+			"Description": "Cone light shining along the entity's forward (-Z) direction (casts no shadows); its intensity is luminous intensity in candela along its axis",
 			"DisplayName": "Spot Light",
 			"Extra": false,
 			"Flags": 0,
@@ -557,7 +557,7 @@
 					"Min": 0.0,
 					"Name": "Intensity",
 					"Speed": 0.10000000149011612,
-					"Tooltip": "",
+					"Tooltip": "Luminous intensity in candela along the axis, times Color, falling off with the square of the distance; a narrower cone does not make it brighter",
 					"Type": "Float"
 				},
 				{
@@ -600,7 +600,7 @@
 		},
 		{
 			"Category": "Lighting",
-			"Description": "Image-based lighting and sky background from an HDR environment map or a procedural sky",
+			"Description": "Image-based lighting and sky background from an HDR environment map or a procedural sky; its radiance is luminance in nits (cd/m²) times its intensity",
 			"DisplayName": "Sky Light",
 			"Extra": false,
 			"Flags": 0,
@@ -650,7 +650,7 @@
 					"Min": 0.0,
 					"Name": "Intensity",
 					"Speed": 0.009999999776482582,
-					"Tooltip": "",
+					"Tooltip": "Multiplies the sky's luminance in nits (cd/m²): an environment map's values, the procedural colors and the ambient color",
 					"Type": "Float"
 				},
 				{
@@ -698,7 +698,7 @@
 					"Min": 0.0,
 					"Name": "AmbientColor",
 					"Speed": 0.0,
-					"Tooltip": "Ambient light while there is no environment (no map set)",
+					"Tooltip": "Ambient sky luminance in nits (linear, times Intensity) while there is no environment (no map set)",
 					"Type": "Color3"
 				},
 				{
@@ -710,7 +710,7 @@
 					"Min": 0.0,
 					"Name": "ZenithColor",
 					"Speed": 0.0,
-					"Tooltip": "Procedural sky: color straight up (linear radiance)",
+					"Tooltip": "Procedural sky: luminance straight up in nits (linear, times Intensity)",
 					"Type": "Color3"
 				},
 				{
@@ -722,7 +722,7 @@
 					"Min": 0.0,
 					"Name": "HorizonColor",
 					"Speed": 0.0,
-					"Tooltip": "Procedural sky: color at the horizon (linear radiance)",
+					"Tooltip": "Procedural sky: luminance at the horizon in nits (linear, times Intensity)",
 					"Type": "Color3"
 				},
 				{
@@ -734,7 +734,7 @@
 					"Min": 0.0,
 					"Name": "GroundColor",
 					"Speed": 0.0,
-					"Tooltip": "Procedural sky: color below the horizon (linear radiance)",
+					"Tooltip": "Procedural sky: luminance below the horizon in nits (linear, times Intensity)",
 					"Type": "Color3"
 				},
 				{
@@ -758,7 +758,7 @@
 					"Min": 0.0,
 					"Name": "SunIntensity",
 					"Speed": 0.10000000149011612,
-					"Tooltip": "Procedural sky: radiance of the sun's disk, times the directional light's color",
+					"Tooltip": "Procedural sky: luminance of the sun's disk in nits, times the directional light's color and Intensity",
 					"Type": "Float"
 				}
 			]
