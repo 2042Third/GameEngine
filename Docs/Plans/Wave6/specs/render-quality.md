@@ -1113,6 +1113,41 @@ Tetris stays on FXAA.
     for: seeing motion as it plays (trails, smearing, crawling) at exact game steps, armed before `input.sequence` or
     `play.step`.
 
+#### D17: As built in T1
+
+T2 builds on these; each differs from the text above where the code or the measurements required it.
+- **Sharpening's exponent is 8, not 4.** The CPU prototype (`Tests::TAA::SharpenLuminance`, `Renderer.TAASharpening`)
+  resolves black-to-white edges of every orientation: diagonal ones overshoot the most (exponent 4: 4.0% at 0.5 and 8.0%
+  at 1; 6: 2.8% and 5.6%; 8: 1.97% and 3.95%). With 8 the detail texture gains 9.4% at 0.5. **Sharp's sharpening is
+  therefore bounded to about 0.43-0.50**, not 0.25-0.75: 8% of gain needs 0.43, 2% of overshoot allows 0.50 (0.75
+  overshoots 3.0%). T2 tunes within that, or reports which goal it gives up.
+- **The overshoot bound cannot fail the halo case.** `y' <= ymax + s R` follows from the formula itself (the center lies
+  in the range and differs from the mean by at most R); the bound binds only near y = 1, where it keeps L' <= 1 + 2 Lmax
+  and the display cannot show it. The prototype's case checks it ("Overshoot unbounded" fails there, not on the GPU).
+  The GPU cases read displayed values from a 16-bit UNORM target (no 8-bit rounding).
+- **The trail case** uses glints of 2 texels at a period of 6 (the spec's "6 px apart" read as their period) aligned
+  with texels, a cube brighter than the glints (gray 0.2, glints 16, cube 24), and measures the band the cube uncovered
+  in its last six frames against the same scene without the cube rendered in step. No luminances give a ratio of 0.35
+  six frames after uncovering in the model (`PredictTrail`): it settles near 0.53 there, the side neighbors of a 2-texel
+  glint keep the most, and 0.35 holds one frame after; the band's predicted ratio is 0.38 and the GPU measures 0.17
+  (0.77 -> 0.13). The cube's edges stop where the column it uncovers next to itself never holds a glint: such a glint
+  reads its history along the cube's motion and loses it alike under both clamps (a disocclusion). T2's trail regression
+  (Sharp at most half of Original) runs on this case.
+- **The moving-quad case** measures against the composite where the quad stays (the scene with a still quad in its last
+  place, rendered in step), not the jittered current frame, whose texture carries the TAA's own jitter difference: 0.020
+  -> 0.0059 at 0.5. The still quad lies over a plain ground, so only its edges change with the jitter.
+- **Rejection's cases:** the uncovered band excludes the pixel next to the old silhouette (the farthest of the 2x2 stored
+  texels reaches one pixel past a pixel); the dolly and the 20 km camera move over a grazed ground without boxes (a
+  moving camera uncovers parallax around boxes: true disocclusions). Every must-fail of rejection was run and fails its
+  case. A case checks the history's alpha itself (distances, negative under an orthographic camera with its near plane
+  behind it, the sky's 65504).
+- **The resolve** gathers variance clipping's moments and the reactive coverage in loops of their own, run only where the
+  history is read, so Original's loop is S2's. Original's GPU cost against the tree before T1: the 100,000-cube TAA
+  scene's GPU busy 3.611 -> 3.678 ms (+1.9%, 10 interleaved pairs, loaded Mac); FXAA scenes unchanged within 2%.
+- **The Inspector:** `UI::PropertyDrawers` passes a `UI::PropertyDrawContext` (commands, entities, component and
+  property, shared value, mixed, disabled, probe key); the TAAPreset drawer draws the generic enum widget and runs its own
+  `component.set`. `InspectorPanel::DrawProperties` takes the command registry.
+
 ## 6. Per feature: tests, coverage and the editor
 
 Every new component and property is tested as the strata-add-component skill says (2.7): `Reflection` (the property
@@ -1462,6 +1497,8 @@ Play), while the lantern near the start shows a shadowed local light in the edit
   - It refuses a missing `camera`, each refused parameter, a step already run, and a view that did not render.
   - After `play.start {paused: true}` and five frames, `fixedSteps` is 0.
 
+As built in T1, the cases differ in measures and scenes where D17's "As built in T1" says.
+
 **Must-fail checks.** Each change below must make the named case fail:
 
 | Change | Case that fails |
@@ -1478,7 +1515,7 @@ Play), while the lantern near the start shows a shadowed local light in the edit
 | The stored distance multiplied by `HistoryScale` | the pre-exposure rejection case |
 | Settings not normalized | the Original/Custom CPU case |
 | Sharpening written into the history | the no-feedback case |
-| Overshoot unbounded (no limiter) | the halo case |
+| Overshoot unbounded (no limiter) | the prototype's bounds case (`Renderer.TAASharpening`; the GPU halo case cannot fail, D17 "As built in T1") |
 | Sharpening on FXAA frames | the off-elsewhere case |
 
 **Visual evidence (T2).**
