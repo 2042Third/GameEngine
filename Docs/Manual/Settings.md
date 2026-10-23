@@ -22,7 +22,9 @@ to find a page or a field), the selected page on the right:
   made from a PNG, JPEG, TGA or BMP image, at least 256 x 256 pixels and square (a narrower image is centered on
   transparent pixels). A texture inside a model cannot be the icon: import its image as a texture of its own. The
   project's name keeps naming the folders the game keeps its saves and logs in, so changing the title or the company never
-  loses a player's saves. The **Export Game** dialog sums them up, with a link to this page.
+  loses a player's saves. On Windows the export also writes the game's identity into its executable: Explorer shows the
+  icon, and the executable's Properties the title, version, company and copyright. The **Export Game** dialog sums them
+  up, with a link to this page.
 - **Export**: what an export that packs only what the scenes use keeps anyway: assets and folders your scripts load by
   path. Type a path relative to the `Assets` folder (`Prefabs/Enemy.stprefab`, or a folder such as `Prefabs`) and press
   **Add**; the cross removes one.
