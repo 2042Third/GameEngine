@@ -27,7 +27,8 @@ vec3 CubeTexelDirection(uvec2 texel, uint face, uint size)
 // to -Y (bottom row).
 vec2 DirectionToEquirect(vec3 direction)
 {
-	float u = atan(direction.z, direction.x) / TWO_PI + 0.5;
+	// atan(0, 0) is undefined: straight up or down, where every column is the same direction, the middle one is read.
+	float u = (direction.x != 0.0 || direction.z != 0.0 ? atan(direction.z, direction.x) : 0.0) / TWO_PI + 0.5;
 	float v = acos(clamp(direction.y, -1.0, 1.0)) / PI;
 	return vec2(u, v);
 }

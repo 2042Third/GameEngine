@@ -113,6 +113,48 @@ TEST_SUITE("GPU.Atmosphere")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Straight up and straight down, the sky shows no hole where the view's direction has no horizontal part")
+	{
+		// The sky-view table's column is the azimuth atan(z, x), which is undefined at (0, 0): the pixel at the center of an
+		// odd-sized view looking straight up or down looks exactly along the vertical axis, and must show what its neighbors do.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddAtmosphere(scene);
+		AddSun(scene, -TowardSun(40.0f), 100000.0f, false);
+		constexpr uint32_t c_OddSize = 33;
+		constexpr uint32_t c_Center = c_OddSize / 2;
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_OddSize, c_OddSize);
+		SceneRenderOptions options = Forced(1.0f / 65536.0f);
+		options.HDROutput = true;
+		for (const float vertical : { 1.0f, -1.0f })
+		{
+			CAPTURE(vertical);
+			const glm::vec3 eye(0.0f, 1.7f, 0.0f);
+			REQUIRE(renderer.Render(scene, LookAt(eye, eye + glm::vec3(0.0f, vertical, 0.0f)), nullptr, options));
+			uint32_t width = 0;
+			uint32_t height = 0;
+			const std::vector<glm::vec4> image = ReadHalfImage(renderer.GetHDRTexture(), width, height);
+			REQUIRE(width == c_OddSize);
+			REQUIRE(height == c_OddSize);
+			const auto at = [&](uint32_t x, uint32_t y) { return glm::vec3(image[static_cast<size_t>(y) * width + x]); };
+			const glm::vec3 middle = at(c_Center, c_Center);
+			const glm::vec3 around = (at(c_Center - 1, c_Center) + at(c_Center + 1, c_Center) + at(c_Center, c_Center - 1) + at(c_Center, c_Center + 1)) * 0.25f;
+			CAPTURE(middle);
+			CAPTURE(around);
+			for (int channel = 0; channel < 3; channel++)
+			{
+				CHECK(std::isfinite(middle[channel]));
+				CHECK(std::abs(middle[channel] - around[channel]) <= 0.05f * std::max(around[channel], 1.0e-4f));
+			}
+			if (vertical > 0.0f)
+				CHECK(middle.b > 0.0f); // The zenith's blue
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The GPU's transmittance table matches the CPU's evaluation within 1%")
 	{
 		GPUContext gpu;

@@ -130,7 +130,8 @@ vec3 SkyViewUVToDirection(vec2 uv)
 
 vec2 DirectionToSkyViewUV(vec3 direction)
 {
-	float azimuth = atan(direction.z, direction.x);
+	// atan(0, 0) is undefined: straight up or down, where every column shows the same sky, the first one is read.
+	float azimuth = direction.x != 0.0 || direction.z != 0.0 ? atan(direction.z, direction.x) : 0.0;
 	float u = fract(azimuth / TWO_PI);
 	float elevation = asin(clamp(direction.y, -1.0, 1.0));
 	float t = sign(elevation) * sqrt(abs(elevation) / (0.5 * PI));
