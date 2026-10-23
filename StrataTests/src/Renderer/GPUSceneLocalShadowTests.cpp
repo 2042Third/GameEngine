@@ -453,6 +453,31 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A shadowed light of a range below the views' least near plane still casts its shadow")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		// A millimeter-sized scene: a lamp reaching 4 mm (below the registered least range, as code may set it), a floor 3 mm
+		// below it and a cube 2.5 mm below it. Its views' near plane stays below the range (half of it here).
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		const AssetHandle matte = MatteMaterial(assets);
+		AddBox(scene, matte, glm::vec3(-0.01f, -0.004f, -0.01f), glm::vec3(0.01f, -0.003f, 0.01f), "Floor");
+		AddBox(scene, matte, glm::vec3(-0.0002f, -0.0027f, -0.0002f), glm::vec3(0.0002f, -0.0023f, 0.0002f), "Caster");
+		Entity lamp = AddShadowedPointLight(scene, glm::vec3(0.0f), 0.001f, 0.004f);
+		SceneCamera camera = LookAt(glm::vec3(0.0f, 0.001f, 0.006f), glm::vec3(0.0f, -0.003f, 0.0f));
+		camera.Projection = Math::PerspectiveReverseZ(glm::radians(60.0f), 1.0f, 0.0001f, 1.0f);
+		camera.Near = 0.0001f;
+		camera.Far = 1.0f;
+		SceneRenderer renderer(AtOnceSpecification(GPUDrivenMode::Off));
+		renderer.SetViewportSize(c_Size, c_Size);
+		const LightFraction fraction = RenderLightFraction(renderer, scene, camera, lamp);
+		CHECK(fraction.At(ProjectToPixel(camera, glm::vec3(0.0f, -0.003f, 0.0f), c_Size)) < 0.3f);
+		CHECK(fraction.At(ProjectToPixel(camera, glm::vec3(0.0015f, -0.003f, 0.0f), c_Size)) > 0.8f);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A spot light's shadow lies where the light's projection puts it, and surfaces at grazing angles show no acne")
 	{
 		GPUContext gpu;

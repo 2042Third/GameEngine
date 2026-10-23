@@ -361,7 +361,8 @@ namespace Strata
 				key.Position = glm::vec3(record.PositionRange);
 				key.Direction = light.Type == RenderData::c_LightSpot ? glm::vec3(record.DirectionType) : c_FaceDirections[view];
 				key.Range = range;
-				key.Near = std::clamp(range * c_LocalShadowNearScale, c_MinLocalShadowNear, std::min(c_MaxLocalShadowNear, range * 0.5f));
+				// Within its bounds, and below half the range for tiny lights (std::clamp would need the bounds in order).
+				key.Near = std::min(std::max(range * c_LocalShadowNearScale, c_MinLocalShadowNear), std::min(c_MaxLocalShadowNear, range * 0.5f));
 				key.TanHalfAngle = tanHalfAngle * widen;
 				key.Tile = light.Tiles[view];
 			}
