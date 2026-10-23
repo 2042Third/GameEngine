@@ -390,9 +390,6 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 ### GPU tests
 
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the CTest label `gpu`.
-  `Platform.DockIcon` needs the window server but no device: it has a CTest of its own on the Mac only,
-  `StrataTests.DockIcon`, with the same label (CI, which skips `gpu`, never runs it), and reads the Dock icon back by
-  drawing it.
   They share one device per process through `Tests::GPUContext` (never create devices in tests) and end with
   `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the test. Run them under the Khronos validation layer
   locally by pointing `VK_ADD_LAYER_PATH` at its build (on macOS with Homebrew, at the manifest copy
@@ -403,6 +400,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `SceneRendererSpecification::GPUDriven` to `Off`.
   `GPU.Startup` needs a desktop rather than the device, like the label's other windowed tests: it starts the editor in a
   window with a Vulkan loader that finds no driver and reads what its error dialog says.
+  `Platform.DockIcon` needs the window server too, and no device (no `GPUContext`): it has a CTest of its own on the Mac
+  only, `StrataTests.DockIcon`, with the same label (CI, which skips `gpu`, never runs it), and reads the Dock icon back
+  by drawing it.
 
 ### Perf tests
 
