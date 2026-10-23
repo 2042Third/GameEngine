@@ -1642,12 +1642,18 @@ TEST_SUITE("GPU.Editor.Viewport")
 		};
 		std::vector<ShownFrame> shown;
 		bool render = true;
+		bool playBeforeRender = false; // Start play after the polls, before the view renders (as a UI command may)
 		auto runFrame = [&]()
 		{
 			REQUIRE(gpu.GetDevice().BeginFrame());
 			Renderer::BeginFrame();
 			context.Update(Timestep(1.0f / 60.0f));
 			harness.Runner.Update(context);
+			if (playBeforeRender)
+			{
+				harness.Run("play.start");
+				playBeforeRender = false;
+			}
 			viewport.SetGameViewSize(render ? size : glm::uvec2(0));
 			if (render)
 			{
@@ -1786,6 +1792,24 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(*stopped);
 		CHECK_FALSE((*stopped)->Success);
 		CHECK((*stopped)->Error.find("Play mode stopped") != std::string::npos);
+
+		// A session that started and stopped between two polls (here: started after them, stopped before the next frame, as a
+		// game quitting in its first update is) leaves the session the capture was armed in, but the view's frame is the
+		// game's: a capture armed while editing fails on it.
+		auto between = std::make_shared<std::optional<EditorCommandResult>>();
+		start({ { "live", true }, { "camera", "scene" } }, between);
+		playBeforeRender = true;
+		runFrame();
+		REQUIRE_FALSE(*between);
+		harness.Run("play.stop");
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (!*between)
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			runFrame();
+		}
+		CHECK_FALSE((*between)->Success);
+		CHECK_MESSAGE((*between)->Error.find("Play mode started") != std::string::npos, (*between)->Error);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

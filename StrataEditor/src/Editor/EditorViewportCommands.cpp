@@ -378,12 +378,13 @@ namespace Strata
 			if (progress.Frames.size() < request.Frames)
 			{
 				const char* view = GetLiveViewName(request.Camera);
-				const uint64_t session = context.IsPlaying() ? context.GetPlaySession() : 0;
-				if (session != request.PlaySession)
+				const auto sessionChanged = [&]()
 				{
 					return EditorCommandResult::Fail(fmt::format("Play mode {} before the capture recorded its {} frames ({} recorded)",
 						request.PlaySession != 0 ? "stopped" : "started", request.Frames, progress.Frames.size()));
-				}
+				};
+				if ((context.IsPlaying() ? context.GetPlaySession() : 0) != request.PlaySession)
+					return sessionChanged();
 				const ViewportRenderer* renderer = FindLiveRenderer(context, request.Camera);
 				const uint64_t renders = renderer ? renderer->GetRenderStamp().RenderCount : 0;
 				const bool firstPoll = !progress.Polled;
@@ -402,6 +403,10 @@ namespace Strata
 				}
 				progress.SeenRenders = renders;
 				const ViewportRenderStamp& stamp = renderer->GetRenderStamp();
+				// A session that started and ended between two polls (a game quitting in its first update, a UI command after
+				// the views rendered) leaves the current session as it was, but not the frame's.
+				if (stamp.PlaySession != request.PlaySession)
+					return sessionChanged();
 				if (progress.Frames.empty() && request.AtFixedStep && stamp.FixedSteps < *request.AtFixedStep)
 					return std::nullopt;
 
