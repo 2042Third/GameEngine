@@ -604,6 +604,33 @@ namespace Strata
 						return end(GameExportState::Failed, fmt::format("{} (set another icon or none with project.setGameInfo)", iconError));
 					result.Warnings = icon->Warnings;
 				}
+#if defined(ST_PLATFORM_WINDOWS)
+				// A Windows game shows its version and icon in Explorer, the taskbar and its window from its executable's
+				// resources: the runtime is stamped in memory (Editor/PEResources) and written once at the end. Stamped before the
+				// pack is written, so that a runtime the stamp refuses (signed, or laid out otherwise) fails the export before it
+				// writes anything, rather than after the pack, next to an executable of an earlier export.
+				std::optional<std::vector<uint8_t>> executable;
+				if (options.IncludeRuntime)
+				{
+					const std::optional<std::vector<uint8_t>> runtime = FileSystem::ReadBytes(data->Runtime);
+					if (!runtime)
+						return end(GameExportState::Failed, fmt::format("Could not read the runtime '{}'", FileSystem::ToUTF8(data->Runtime)));
+					PEResources::GameVersionInfo version;
+					version.Title = data->Manifest.GetDisplayTitle();
+					version.Version = data->Manifest.Version;
+					version.Company = data->Manifest.Company;
+					version.Copyright = data->Manifest.Copyright;
+					version.InternalName = data->Manifest.Name;
+					version.OriginalFilename = GetExecutableFileName(data->FileName);
+					std::string stampError;
+					executable = PEResources::StampGame(*runtime, version, icon ? &*icon : nullptr, &stampError);
+					if (!executable)
+					{
+						return end(GameExportState::Failed, fmt::format("Could not write the game's version and icon into the runtime '{}': {}",
+							FileSystem::ToUTF8(data->Runtime), stampError));
+					}
+				}
+#endif
 				result.AssetPack = options.Directory / FileSystem::FromUTF8(data->Manifest.AssetPack);
 				AssetPackWriteOptions writeOptions;
 				writeOptions.CookDocuments = options.CookDocuments;
@@ -663,26 +690,8 @@ namespace Strata
 				{
 					result.Executable = options.Directory / FileSystem::FromUTF8(GetExecutableFileName(data->FileName));
 #if defined(ST_PLATFORM_WINDOWS)
-					// A Windows game shows its version and icon in Explorer, the taskbar and its window from its executable's
-					// resources: the runtime is stamped in memory and written once (Editor/PEResources).
-					const std::optional<std::vector<uint8_t>> runtime = FileSystem::ReadBytes(data->Runtime);
-					if (!runtime)
-						return end(GameExportState::Failed, fmt::format("Could not read the runtime '{}'", FileSystem::ToUTF8(data->Runtime)));
-					PEResources::GameVersionInfo version;
-					version.Title = data->Manifest.GetDisplayTitle();
-					version.Version = data->Manifest.Version;
-					version.Company = data->Manifest.Company;
-					version.Copyright = data->Manifest.Copyright;
-					version.InternalName = data->Manifest.Name;
-					version.OriginalFilename = GetExecutableFileName(data->FileName);
-					std::string stampError;
-					const std::optional<std::vector<uint8_t>> game = PEResources::StampGame(*runtime, version, icon ? &*icon : nullptr, &stampError);
-					if (!game)
-					{
-						return end(GameExportState::Failed, fmt::format("Could not write the game's version and icon into the runtime '{}': {}",
-							FileSystem::ToUTF8(data->Runtime), stampError));
-					}
-					if (!FileSystem::WriteBytes(result.Executable, *game))
+					// The runtime stamped before the pack (above).
+					if (!FileSystem::WriteBytes(result.Executable, *executable))
 					{
 						return end(GameExportState::Failed, fmt::format("{} (is the game running from there? close it first)",
 							DescribeWriteFailure("the game's executable", result.Executable)));

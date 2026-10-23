@@ -1007,6 +1007,10 @@ TEST_SUITE("Editor.Commands")
 #if defined(ST_PLATFORM_WINDOWS)
 		CHECK(harness.Error("project.export", { { "directory", FileSystem::ToUTF8(directory / "WithRuntime") }, { "runtime", FileSystem::ToUTF8(directory / "FakeRuntime.bin") } })
 			.find("Could not write the game's version and icon into the runtime") != std::string::npos);
+		// The runtime is stamped before anything is written: the refused export left the directory empty (no pack, no manifest).
+		std::error_code emptyError;
+		CHECK(std::filesystem::is_empty(directory / "WithRuntime", emptyError));
+		CHECK_FALSE(emptyError);
 		REQUIRE(FileSystem::WriteBytes(directory / "FakeRuntime.bin", Tests::BuildTestPEImage()));
 #endif
 		const nlohmann::json withRuntime = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.export", { { "directory", FileSystem::ToUTF8(directory / "WithRuntime") }, { "runtime", FileSystem::ToUTF8(directory / "FakeRuntime.bin") } });
