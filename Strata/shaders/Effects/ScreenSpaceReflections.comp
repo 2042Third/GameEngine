@@ -7,12 +7,14 @@
 // Screen-space reflections (SceneRenderer, in GPU.Reflections, after the prepass): for each texel of a half-resolution target,
 // a ray from one pixel of its 2x2 block (each in turn, frame by frame) along the view reflected about the surface target's
 // normal, marched in screen space against the frame's depth in c_Steps steps (offset by per-pixel noise that turns each frame)
-// and refined by bisection. Where it passes behind a surface by less than the step's depth, it hit it: the previous frame's
-// resolved image (the TAA's history) is fetched where that surface was, along the hit pixel's motion, at the frame's
-// pre-exposure. rgb: the reflected luminance, pre-exposed; a: the confidence, which fades with roughness up to MaxRoughness,
-// toward the screen's edges and for surfaces the ray meets from behind. Rays that leave the screen, pass the far plane or meet
-// nothing, and hits whose surface was outside the previous frame, have none: Forward.frag keeps the probes' and the sky's
-// specular light there and mixes the reflection over it elsewhere. The TAA averages the noise of the frames.
+// and refined by bisection. Where it passes behind a surface by less than its step's change of depth plus a margin, it hit
+// it: the previous frame's resolved image (the TAA's history) is fetched where that surface was, along the hit pixel's
+// motion, at the frame's pre-exposure. a: the confidence, which fades with roughness up to MaxRoughness, toward the screen's
+// edges and for surfaces the ray meets from behind; rgb: the reflected luminance, pre-exposed and multiplied by the
+// confidence, so that the forward pass's bilinear lookup blends a reflection's edges with what it replaces rather than with
+// black. Rays that leave the screen, pass the far plane or meet nothing, and hits whose surface was outside the previous
+// frame, have none: Forward.frag keeps the probes' and the sky's specular light there and mixes the reflection over it
+// elsewhere. The TAA averages the noise of the frames.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -158,7 +160,7 @@ vec4 TraceReflection(ivec2 pixel, ivec2 size)
 		return vec4(0.0);
 	vec3 color = textureLod(sampler2D(u_History, u_LinearClampSampler), previousUV, 0.0).rgb * u_Reflections.HistoryScale;
 	float confidence = roughnessFade * facing * edgeFade * min(u_Reflections.Intensity, 1.0);
-	return vec4(SanitizeHDR(color), confidence);
+	return vec4(SanitizeHDR(color) * confidence, confidence);
 }
 
 void main()

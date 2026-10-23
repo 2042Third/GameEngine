@@ -236,6 +236,81 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A reflection's edges blend into the probes' or the sky's reflection without darkening")
+	{
+		// The forward pass samples the half-resolution reflections bilinearly: where texels that hit the cube and texels that
+		// found nothing meet, its pixels must show a mix of the cube's reflection and the probe's or the sky's. Mixed by the
+		// filtered confidence over a color the filter had blended with the misses' black, they lost a fifth of both.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		for (const bool probe : { false, true })
+		{
+			CAPTURE(probe);
+			MirrorScene scene(assets, 0.0f);
+			if (probe)
+			{
+				// A green probe whose box holds everything in view, in place of the sky's reflection.
+				ReflectionProbeComponent& component = scene.Contents.CreateEntity("Probe").AddComponent<ReflectionProbeComponent>();
+				component.Capture = assets.Add(CreateEnvironmentTexture(glm::vec3(0.0f, 0.6f, 0.0f), glm::vec3(0.0f, 0.6f, 0.0f)), "Probe");
+				component.Extents = glm::vec3(40.0f);
+			}
+			SceneRenderer renderer = CreateRenderer("Edges");
+			renderer.SetViewportSize(c_ViewSize, c_ViewSize);
+			auto ready = [&renderer, probe]()
+			{
+				const SceneRendererStats& stats = renderer.GetStats();
+				return stats.EnvironmentLighting && (!probe || (stats.ReflectionProbes == 1 && stats.ReflectionProbesPending == 0));
+			};
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+			do
+			{
+				REQUIRE(renderer.Render(scene.Contents, scene.Camera));
+				FinishFrame(gpu);
+			} while (!ready() && std::chrono::steady_clock::now() < deadline);
+			REQUIRE(ready());
+			renderer.ResetHistory();
+			RenderFrames(gpu, renderer, scene.Contents, scene.Camera, c_SettleFrames);
+			REQUIRE(renderer.GetStats().ScreenSpaceReflections);
+			// The forward pass's own image, before the TAA's resolve blends it with the history.
+			const std::vector<glm::vec3> image = ReadHDR(renderer.GetHDRTexture());
+
+			// A row across the middle of the cube's reflection: the probe's or the sky's reflection beside it (outside), the
+			// cube's red in its middle (inside). Each pixel between is outside * a + inside * b with a + b = 1.
+			const glm::uvec2 left = MirrorPixel(scene.Camera, glm::vec3(-1.6f, 1.0f, 0.5f));
+			const glm::uvec2 middle = MirrorPixel(scene.Camera, glm::vec3(0.0f, 1.0f, 0.5f));
+			const glm::uvec2 right = MirrorPixel(scene.Camera, glm::vec3(1.6f, 1.0f, 0.5f));
+			const glm::vec3 outside = TexelAt(image, left);
+			const glm::vec3 inside = TexelAt(image, middle);
+			CAPTURE(outside);
+			CAPTURE(inside);
+			CHECK(inside.r > 0.6f);
+			if (probe)
+				CHECK((outside.g > 0.3f && outside.r < 0.1f && outside.b < 0.1f));
+			else
+				CHECK((outside.b > 0.2f && outside.r < 0.2f));
+			REQUIRE(left.x + 8 < right.x);
+			// a and b by least squares over the pixel's three channels.
+			const double aa = glm::dot(outside, outside);
+			const double ab = glm::dot(outside, inside);
+			const double bb = glm::dot(inside, inside);
+			const double determinant = aa * bb - ab * ab;
+			REQUIRE(determinant > 1e-6);
+			double lowest = 1e9;
+			for (uint32_t x = left.x; x <= right.x; x++)
+			{
+				const glm::vec3 pixel = TexelAt(image, glm::uvec2(x, middle.y));
+				const double pa = glm::dot(pixel, outside);
+				const double pb = glm::dot(pixel, inside);
+				lowest = std::min(lowest, ((pa * bb - pb * ab) + (pb * aa - pa * ab)) / determinant);
+			}
+			CAPTURE(lowest);
+			CHECK(lowest > 0.9);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Rough surfaces and rays that leave the screen keep the sky's reflection")
 	{
 		GPUContext gpu;

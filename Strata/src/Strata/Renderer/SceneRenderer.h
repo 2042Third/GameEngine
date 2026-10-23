@@ -636,8 +636,8 @@ namespace Strata
 		nvrhi::ITexture* GetVelocityTexture() const { return m_VelocityTexture; }
 		// Screen-space reflections' targets (SceneRendererStats::ScreenSpaceReflections): the surface target the prepass writes for
 		// them (RGBA16F: the normal-mapped view-space normal, octahedral, the roughness and the metallic factor) and their
-		// half-resolution result (RGBA16F: the reflected luminance, pre-exposed, and the confidence). Null until a frame traces
-		// them; released with the other targets.
+		// half-resolution result (RGBA16F: the reflected luminance, pre-exposed and multiplied by the confidence, and the
+		// confidence). Null until a frame traces them; released with the other targets.
 		nvrhi::ITexture* GetSurfaceTexture() const { return m_SurfaceTexture; }
 		nvrhi::ITexture* GetScreenReflectionTexture() const { return m_ScreenReflectionTexture; }
 		// The motion history (SceneRenderOptions::MotionVectors): the render scene's instances (RenderData::InstanceData) and

@@ -25,7 +25,8 @@ namespace Strata
 
 		// The normal-mapped view-space normal (octahedral), the roughness and the metallic factor of the prepass's surfaces.
 		constexpr nvrhi::Format c_SurfaceFormat = nvrhi::Format::RGBA16_FLOAT;
-		// The reflected luminance (pre-exposed, within half floats as the HDR target is) and the confidence.
+		// The reflected luminance (pre-exposed, within half floats as the HDR target is) multiplied by the confidence, and the
+		// confidence.
 		constexpr nvrhi::Format c_ScreenReflectionFormat = nvrhi::Format::RGBA16_FLOAT;
 
 	}

@@ -3064,13 +3064,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   distance (the surface's own depth changes between the step's pixels: without that margin rays miss faces they cross,
   `GPU.SceneRenderer.SSR`'s "whole" case), and
   fetches the history (bilinear) where that surface was, along the velocity at the hit pixel, scaled to the frame's
-  pre-exposure: rgb the reflected luminance, pre-exposed; alpha the confidence, `ScreenSpaceReflectionsIntensity` times
-  fades over the last quarter below `ScreenSpaceReflectionsMaxRoughness`, the screen's outer 10% and hits on surfaces the
-  ray meets from behind (the depth buffer holds front faces). Rays that a normal map turns into their surface, rays that
-  leave the screen or meet only the sky, and hits whose surface was outside the previous frame get none.
-  `Scene/Forward.frag` samples the result bilinearly (scene-set SRV 18, when `FrameConstants::ReflectionParams.x` is 1)
-  and mixes it over the probes' and the sky's specular radiance before the split-sum BRDF; without a sky the constant
-  ambient still lights the diffuse part. Transparent surfaces get none, and the trace reads no nearest-depth pyramid
+  pre-exposure: alpha the confidence, `ScreenSpaceReflectionsIntensity` times fades over the last quarter below
+  `ScreenSpaceReflectionsMaxRoughness`, the screen's outer 10% and hits on surfaces the ray meets from behind (the depth
+  buffer holds front faces); rgb the reflected luminance, pre-exposed and multiplied by the confidence. Rays that a normal
+  map turns into their surface, rays that leave the screen or meet only the sky, and hits whose surface was outside the
+  previous frame get none. `Scene/Forward.frag` samples the result bilinearly (scene-set SRV 18, when
+  `FrameConstants::ReflectionParams.x` is 1) and mixes it over the probes' and the sky's specular radiance before the
+  split-sum BRDF, as `radiance * (1 - a) + rgb`: premultiplied, a texel that found nothing adds no black to the pixels
+  beside a reflection (`GPU.SceneRenderer.SSR`'s edge case); without a sky the constant ambient still lights the diffuse
+  part. Transparent surfaces get none, and the trace reads no nearest-depth pyramid
   (both deferred). Memory: the surface target's 8 and the result's 2 bytes per pixel (about 20 MiB at 1920x1080), made by
   the first frame that traces, released with the targets. Pixels that find nothing render bit for bit as without
   reflections (`GPU.SceneRenderer.SSR`: a rough floor and a cube above the view; its other cases are the mirror floor
