@@ -150,9 +150,13 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 		{
 			// The probes' captures hold the scene's luminance (their intensities applied); the sky's share is scaled here.
 			float sky = 1.0 - probes.Weight;
-			irradiance = probes.Irradiance + (environment ? irradiance * u_Frame.EnvironmentParams.x : u_Frame.AmbientColor.rgb) * sky;
+			irradiance = probes.Irradiance + (environment ? irradiance * u_Frame.EnvironmentParams.x * sky : vec3(0.0));
 			radiance = probes.Radiance + radiance * (environment ? u_Frame.EnvironmentParams.x * sky : 0.0);
 			vec3 diffuse = irradiance * surface.Albedo * (1.0 - surface.Metallic) * (1.0 - specularColor);
+			// The constant ambient's share as the constant ambient lights alone (below: diffuse only, no specular share), so
+			// that a probe fading out meets it without a step at its box's faces.
+			if (!environment)
+				diffuse += u_Frame.AmbientColor.rgb * sky * surface.Albedo * (1.0 - surface.Metallic);
 			color += diffuse * diffuseOcclusion + radiance * specularColor * specularOcclusion;
 		}
 		else

@@ -367,6 +367,55 @@ TEST_SUITE("GPU.SceneRenderer.ReflectionProbes")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A probe fading out into the constant ambient meets it without a step")
+	{
+		// Without an environment the sky light's constant ambient lights diffuse surfaces only (no specular share). A probe of
+		// almost no weight (its blend distance far beyond its box) must leave a matte ball as the ambient alone lights it, so
+		// that its box's faces show no seam.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		MaterialProperties matte;
+		matte.BaseColor = glm::vec4(1.0f);
+		matte.Metallic = 0.0f;
+		matte.Roughness = 1.0f;
+		const AssetHandle material = assets.AddMaterial(matte);
+		const AssetHandle black = AddCapture(assets, glm::vec3(0.0f));
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		SkyLightComponent& sky = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+		sky.AmbientColor = glm::vec3(0.6f);
+		AddMesh(scene, BuiltinAssets::SphereMesh, material, glm::vec3(0.0f), "Ball");
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f));
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		const ReadbackImage reference = RenderToImage(renderer, scene, camera);
+		const glm::vec3 lit = LinearPixel(reference, glm::uvec2(c_Size / 2, c_Size / 2));
+		CAPTURE(lit);
+		REQUIRE(lit.r > 0.3f);
+
+		AddProbe(scene, black, glm::vec3(0.0f), glm::vec3(10.0f), 1.0e5f);
+		const ReadbackImage image = RenderToImage(renderer, scene, camera);
+		CHECK(renderer.GetStats().ReflectionProbes == 1);
+		uint32_t compared = 0;
+		for (uint32_t y = 0; y < c_Size; y++)
+		{
+			for (uint32_t x = 0; x < c_Size; x++)
+			{
+				const glm::vec3 expected = LinearPixel(reference, glm::uvec2(x, y));
+				if (expected.r < 0.1f)
+					continue; // The background
+				const glm::vec3 actual = LinearPixel(image, glm::uvec2(x, y));
+				CAPTURE(x);
+				CAPTURE(y);
+				CHECK(std::abs(actual.r - expected.r) <= 0.01f * expected.r + 1.0f / 255.0f);
+				compared++;
+			}
+		}
+		CHECK(compared > 100);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("With more probes in view than slots the strongest are kept")
 	{
 		GPUContext gpu;
