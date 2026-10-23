@@ -725,6 +725,20 @@ TEST_SUITE("Core.InputActions")
 		CHECK(InputActions::GetPlayerBindings().Actions.empty());
 		CHECK(InputActions::GetBindings("UI/Submit") == InputActionSet::GetDefaultUIActions()[0].Bindings);
 		CHECK_FALSE(InputActions::ResetBindings("Fly", &error));
+
+		// The editor changes the case of the map's name while the game runs: a later rebind replaces the earlier one, whatever
+		// spelling either was made with.
+		REQUIRE(InputActions::SetBindings("Gameplay/Jump", ParseAll({ "Key/J" })));
+		nlohmann::json renamed = MakeGameplayActions();
+		renamed["Maps"][0]["Name"] = "gameplay";
+		project.Set(renamed);
+		Step();
+		REQUIRE(InputActions::GetQualifiedName("Jump") == std::optional<std::string>("gameplay/Jump"));
+		REQUIRE(InputActions::SetBindings("Jump", ParseAll({ "Key/K" })));
+		CHECK(InputActions::GetBindings("Jump") == ParseAll({ "Key/K" }));
+		const InputPlayerBindings players = InputActions::GetPlayerBindings();
+		CHECK(players.Actions.size() == 1);
+		CHECK(players.Actions.at("gameplay/Jump") == ParseAll({ "Key/K" }));
 	}
 
 	TEST_CASE("The bindings file round-trips, drops unknown actions and invalid bindings with one warning, and a garbage file changes nothing")

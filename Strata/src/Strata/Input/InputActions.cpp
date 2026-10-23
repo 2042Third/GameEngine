@@ -823,7 +823,12 @@ namespace Strata
 				return fail(fmt::format("{} is {} action, which cannot use '{}'", s_State.Set.GetQualifiedName(*location), DescribeInputActionKind(definition.Kind),
 					binding.ToString()));
 		}
-		s_State.Players.Actions[s_State.Set.GetQualifiedName(*location)] = std::vector<InputBinding>(bindings.begin(), bindings.end());
+		// One entry per action: an earlier one spelled as the set spelled the action then (the editor may have changed a name's
+		// case since) would otherwise stay beside it, and Compile would apply whichever sorts first.
+		const std::string qualified = s_State.Set.GetQualifiedName(*location);
+		const std::string key = StringUtils::ToLower(qualified);
+		std::erase_if(s_State.Players.Actions, [&key](const auto& entry) { return StringUtils::ToLower(entry.first) == key; });
+		s_State.Players.Actions[qualified] = std::vector<InputBinding>(bindings.begin(), bindings.end());
 		Compile(InputActionSet(s_State.Set), true);
 		return true;
 	}
