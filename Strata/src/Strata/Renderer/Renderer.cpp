@@ -40,17 +40,21 @@ namespace Strata
 			nvrhi::TextureHandle BlackTexture;
 			nvrhi::TextureHandle FlatNormalTexture;
 			nvrhi::TextureHandle BlackCubeTexture;
+			nvrhi::TextureHandle BlackCubeArrayTexture;
 		};
 
 		Scope<RendererData> s_Data;
 
-		nvrhi::TextureHandle CreateSolidTexture(nvrhi::ICommandList* commandList, uint32_t rgba, const char* name, bool cube)
+		// A 1x1 texture of one color: 2D, a cube (six faces) or a cube array of one cube.
+		nvrhi::TextureHandle CreateSolidTexture(nvrhi::ICommandList* commandList, uint32_t rgba, const char* name,
+			nvrhi::TextureDimension dimension = nvrhi::TextureDimension::Texture2D)
 		{
+			const bool cube = dimension == nvrhi::TextureDimension::TextureCube || dimension == nvrhi::TextureDimension::TextureCubeArray;
 			nvrhi::TextureDesc desc;
 			desc.width = 1;
 			desc.height = 1;
 			desc.format = nvrhi::Format::RGBA8_UNORM;
-			desc.dimension = cube ? nvrhi::TextureDimension::TextureCube : nvrhi::TextureDimension::Texture2D;
+			desc.dimension = dimension;
 			desc.arraySize = cube ? 6 : 1;
 			desc.debugName = name;
 			desc.initialState = nvrhi::ResourceStates::ShaderResource;
@@ -87,16 +91,17 @@ namespace Strata
 
 		nvrhi::CommandListHandle commandList = nvrhiDevice->createCommandList();
 		commandList->open();
-		s_Data->WhiteTexture = CreateSolidTexture(commandList, 0xFFFFFFFFu, "WhiteTexture", false);
-		s_Data->BlackTexture = CreateSolidTexture(commandList, 0xFF000000u, "BlackTexture", false);
-		s_Data->FlatNormalTexture = CreateSolidTexture(commandList, 0xFFFF8080u, "FlatNormalTexture", false); // (0.5, 0.5, 1.0)
-		s_Data->BlackCubeTexture = CreateSolidTexture(commandList, 0xFF000000u, "BlackCubeTexture", true);
+		s_Data->WhiteTexture = CreateSolidTexture(commandList, 0xFFFFFFFFu, "WhiteTexture");
+		s_Data->BlackTexture = CreateSolidTexture(commandList, 0xFF000000u, "BlackTexture");
+		s_Data->FlatNormalTexture = CreateSolidTexture(commandList, 0xFFFF8080u, "FlatNormalTexture"); // (0.5, 0.5, 1.0)
+		s_Data->BlackCubeTexture = CreateSolidTexture(commandList, 0xFF000000u, "BlackCubeTexture", nvrhi::TextureDimension::TextureCube);
+		s_Data->BlackCubeArrayTexture = CreateSolidTexture(commandList, 0xFF000000u, "BlackCubeArrayTexture", nvrhi::TextureDimension::TextureCubeArray);
 		commandList->close();
 		nvrhiDevice->executeCommandList(commandList);
 
 		s_Data->FrameCommandList = nvrhiDevice->createCommandList();
 		if (!s_Data->LinearClamp || !s_Data->LinearWrap || !s_Data->AnisotropicWrap || !s_Data->PointClamp || !s_Data->WhiteTexture
-			|| !s_Data->BlackTexture || !s_Data->FlatNormalTexture || !s_Data->BlackCubeTexture || !s_Data->FrameCommandList)
+			|| !s_Data->BlackTexture || !s_Data->FlatNormalTexture || !s_Data->BlackCubeTexture || !s_Data->BlackCubeArrayTexture || !s_Data->FrameCommandList)
 		{
 			ST_CORE_ERROR("Renderer: failed to create shared GPU resources");
 			Shutdown();
@@ -280,6 +285,7 @@ namespace Strata
 	nvrhi::ITexture* Renderer::GetBlackTexture() { return s_Data->BlackTexture; }
 	nvrhi::ITexture* Renderer::GetFlatNormalTexture() { return s_Data->FlatNormalTexture; }
 	nvrhi::ITexture* Renderer::GetBlackCubeTexture() { return s_Data->BlackCubeTexture; }
+	nvrhi::ITexture* Renderer::GetBlackCubeArrayTexture() { return s_Data->BlackCubeArrayTexture; }
 
 	bool Renderer::ReadTexture(nvrhi::ITexture* texture, ReadbackImage& outImage, uint32_t mipLevel, uint32_t arraySlice)
 	{

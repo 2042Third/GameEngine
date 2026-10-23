@@ -649,6 +649,13 @@ namespace Strata
 				reject("no anisotropic filtering");
 				continue;
 			}
+			// The scene passes' one binding layout holds the reflection probes' cube array, which SPIR-V may sample only with
+			// the feature enabled.
+			if (!features.features.imageCubeArray)
+			{
+				reject("no cube map arrays (imageCubeArray)");
+				continue;
+			}
 
 			uint32_t familyCount = 0;
 			dispatch.vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount, nullptr);
@@ -779,7 +786,7 @@ namespace Strata
 		enabled.features.depthClamp = core.depthClamp;
 		enabled.features.depthBiasClamp = core.depthBiasClamp;
 		enabled.features.independentBlend = core.independentBlend;
-		enabled.features.imageCubeArray = core.imageCubeArray;
+		enabled.features.imageCubeArray = VK_TRUE;
 		enabled.features.textureCompressionBC = core.textureCompressionBC;
 		enabled.features.multiDrawIndirect = core.multiDrawIndirect;
 		enabled.features.drawIndirectFirstInstance = core.drawIndirectFirstInstance;

@@ -140,7 +140,10 @@ The commands, configurations and CI rules are in AGENTS.md, [Building](../AGENTS
 CMake options and CI's jobs:
 
 Requirements: CMake 3.25+, a C++20 compiler (MSVC 19.40+, GCC 13+, Clang 17+/Apple Clang 15+),
-a Vulkan 1.2+ driver. The Vulkan SDK is **not** required to build (headers and the shader compiler
+a Vulkan 1.2+ driver whose device has dynamic rendering, synchronization2, timeline semaphores, descriptor indexing,
+anisotropic filtering and cube map arrays (`imageCubeArray`, which every scene shader's reflection probes need; every
+desktop Vulkan 1.2 GPU has them, MoltenVK included): device selection rejects a device without one and logs which it
+lacks. The Vulkan SDK is **not** required to build (headers and the shader compiler
 are vendored), but installing it enables the Khronos validation layers used by Debug builds.
 Linux also needs: `libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev
 libxkbcommon-dev libgtk-3-dev` (window system + native file dialogs).
@@ -259,8 +262,8 @@ on an Apple M2 Max with MoltenVK 1.4.2 (Homebrew), where every test of the `gpu`
   two: indirect draws without a count from the GPU (culled draws get no instances), depth pyramids reduced without
   min/max samplers.
 - **Tight limits**: 31 storage buffers per shader stage and 32 KiB of compute shared memory, and 16 samplers per stage.
-  The scene set uses 11 storage buffers and 9 samplers, the GPU culling's layout 23 storage buffers (the local shadow
-  views' among them): a new binding counts against these.
+  The scene set uses 12 storage buffers (the reflection probes' among them) and 9 samplers, the GPU culling's layout 23
+  storage buffers (the local shadow views' among them): a new binding counts against these.
 - **Bindless tables**: the descriptor set support query rejects any set beyond `maxPerSetDescriptors` (1,212), also
   update-after-bind sets within the update-after-bind limits (a million sampled images), and MoltenVK samples every slot
   of far larger tables. The table takes its size from those limits, at most `GraphicsDevice::c_MaxBindlessTextures`

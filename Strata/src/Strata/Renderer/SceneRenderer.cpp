@@ -286,6 +286,8 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(6),
 			nvrhi::BindingLayoutItem::Texture_SRV(7),
 			nvrhi::BindingLayoutItem::Texture_SRV(8),            // The local shadows' atlas
+			nvrhi::BindingLayoutItem::Texture_SRV(9),            // The reflection probes' cube array
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(10),  // The reflection probes (RenderData::ReflectionProbeBuffer)
 			nvrhi::BindingLayoutItem::Texture_SRV(11),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(13),  // The shadowed point and spot lights (RenderData::LocalShadowData)
@@ -376,6 +378,14 @@ namespace Strata
 			.setInitialState(nvrhi::ResourceStates::ShaderResource)
 			.setKeepInitialState(true)
 			.setDebugName(m_Specification.DebugName + ".LocalShadows"));
+		// Fixed size: the slots' irradiance (written on the GPU) and the frame's list (zero probes until a frame has some).
+		m_ReflectionProbeBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
+			.setByteSize(sizeof(RenderData::ReflectionProbeBuffer))
+			.setStructStride(sizeof(glm::vec4))
+			.setCanHaveUAVs(true)
+			.setInitialState(nvrhi::ResourceStates::ShaderResource)
+			.setKeepInitialState(true)
+			.setDebugName(m_Specification.DebugName + ".ReflectionProbes"));
 
 		m_FrameConstantBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
 			.setByteSize(sizeof(RenderData::FrameConstants))
@@ -546,7 +556,7 @@ namespace Strata
 
 		ST_CORE_VERIFY(m_InputLayout && m_SceneBindingLayout && m_TonemapBindingLayout && m_FrameConstantBuffer && m_CommandList && m_ShadowPushBindingSet
 			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_DummyLocalShadowAtlas
-			&& m_LocalShadowBuffer && m_ClusterBuffer
+			&& m_LocalShadowBuffer && m_ReflectionProbeBuffer && m_ClusterBuffer
 			&& m_ClusterBindingLayout && m_ClusterPipeline && m_AOBindingLayout && m_GTAOPipeline && m_AOBlurPipeline && m_ExposureBindingLayout
 			&& m_HistogramPipeline && m_ExposurePipeline && m_HistogramBuffer && m_ExposureBuffer && exposureReadbacks && m_BloomBindingLayout && m_BloomPipeline
 			&& m_FXAABindingLayout
@@ -621,6 +631,9 @@ namespace Strata
 		ST_CORE_VERIFY(m_BRDFLut, "SceneRenderer: failed to create the BRDF lookup table");
 
 		m_CommandList->open();
+		// No probe in the list (and no slot's irradiance) until a frame has some.
+		const RenderData::ReflectionProbeBuffer noProbes = {};
+		m_CommandList->writeBuffer(m_ReflectionProbeBuffer, &noProbes, sizeof(noProbes));
 		DispatchIBL(m_CommandList, brdfPipeline, Renderer::GetWhiteTexture(), nvrhi::AllSubresources, nvrhi::TextureDimension::Texture2D, m_BRDFLut, 0,
 			nvrhi::TextureDimension::Texture2D, RenderData::IBLParameters { c_BRDFLutSize, 0, 0.0f, c_BRDFLutSamples }, 1);
 		m_CommandList->close();
@@ -951,6 +964,7 @@ namespace Strata
 		nvrhi::IBuffer* previousInstances = m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer();
 		nvrhi::IBuffer* previousPalette = m_PreviousPalette ? m_PreviousPalette.Get() : m_SceneGPU->GetPaletteBuffer();
 		nvrhi::ITexture* skyView = GetBoundSkyView();
+		nvrhi::ITexture* probeArray = GetBoundReflectionProbes();
 
 		// The shadow pass reads the same resources except for its own draw list (and never the shadow maps it draws into).
 		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap, nvrhi::ITexture* boundAtlas)
@@ -974,6 +988,8 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(6, hasEnvironment ? environmentCube : blackCube),
 				nvrhi::BindingSetItem::Texture_SRV(7, boundShadowMap),
 				nvrhi::BindingSetItem::Texture_SRV(8, boundAtlas),
+				nvrhi::BindingSetItem::Texture_SRV(9, probeArray, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::TextureCubeArray),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(10, m_ReflectionProbeBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(11, m_AOTexture),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(12, m_ClusterBuffer),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(13, m_LocalShadowBuffer),
@@ -1009,12 +1025,18 @@ namespace Strata
 		m_BoundPreviousInstances = previousInstances;
 		m_BoundPreviousPalette = previousPalette;
 		m_BoundSkyView = skyView;
+		m_BoundReflectionProbes = probeArray;
 		if (!m_SceneBindingSet || !m_ShadowBindingSet || !m_ClusterBindingSet || (gpuSets && (!m_GPUSceneBindingSet || !m_GPUShadowBindingSet)))
 		{
 			m_SceneBindingSet = nullptr; // Recreated next frame
 			return false;
 		}
 		return true;
+	}
+
+	nvrhi::ITexture* SceneRenderer::GetBoundReflectionProbes() const
+	{
+		return Renderer::GetBlackCubeArrayTexture();
 	}
 
 	bool SceneRenderer::EnsureMotionResources(bool keepContents)
@@ -2798,6 +2820,7 @@ namespace Strata
 		TextureTable& textureTable = Renderer::GetTextureTable();
 		const bool tableUploaded = textureTable.RecordUploads(commandList);
 		const bool rebind = buffersRecreated || m_BoundEnvironment != GetEnvironmentCube() || m_BoundSkyView != GetBoundSkyView()
+			|| m_BoundReflectionProbes != GetBoundReflectionProbes()
 			|| m_BoundTextureTableVersion != textureTable.GetBufferVersion();
 		if (!tableUploaded || (rebind && !CreateSceneBindingSets()))
 		{

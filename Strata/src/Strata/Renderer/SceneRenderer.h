@@ -1040,6 +1040,8 @@ namespace Strata
 		bool CreateSceneBindingSets();
 		// What the scene binding sets bind as the sky-view table: the atmosphere's in its frames, else a black texture.
 		nvrhi::ITexture* GetBoundSkyView() const;
+		// What the scene binding sets bind as the reflection probes' cube array: a one-slot black array without probes.
+		nvrhi::ITexture* GetBoundReflectionProbes() const;
 		// The prepass's framebuffer of the frame: with the velocity target in a frame with motion vectors.
 		nvrhi::IFramebuffer* GetPrepassFramebuffer() const { return m_MotionFrame ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get(); }
 		// The motion history's buffers (SceneRenderOptions::MotionVectors) at the size of the scene's GPU copy's, and the velocity
@@ -1361,6 +1363,7 @@ namespace Strata
 		bool m_AtmosphereFrame = false;      // The frame's sky is the atmosphere
 		float m_AtmosphereSunIlluminance = 0.0f; // Its sun's illuminance above it: the largest component of the light's color times intensity
 		nvrhi::ITexture* m_BoundSkyView = nullptr; // The sky-view table (or a black texture) referenced by m_SceneBindingSet
+		nvrhi::ITexture* m_BoundReflectionProbes = nullptr; // The probes' cube array (or the black one) referenced by m_SceneBindingSet
 		nvrhi::BindingLayoutHandle m_IBLBindingLayout;
 		nvrhi::ComputePipelineHandle m_EquirectToCubePipeline;
 		nvrhi::BindingLayoutHandle m_ProceduralSkyBindingLayout;
@@ -1403,6 +1406,7 @@ namespace Strata
 		nvrhi::ITexture* m_BoundLocalShadowAtlas = nullptr;
 		bool m_LocalShadowAtlasCleared = false;
 		nvrhi::BufferHandle m_LocalShadowBuffer;      // RenderData::LocalShadowData per slot
+		nvrhi::BufferHandle m_ReflectionProbeBuffer;  // RenderData::ReflectionProbeBuffer
 		nvrhi::GraphicsPipelineHandle m_LocalShadowClearPipeline;
 		nvrhi::ShaderHandle m_LocalShadowVertexShader;
 		nvrhi::ShaderHandle m_SkinnedLocalShadowVertexShader;
