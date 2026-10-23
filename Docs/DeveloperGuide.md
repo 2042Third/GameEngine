@@ -2962,7 +2962,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   taken; names are the entities' IDs since names are unique only among siblings). Once imported, one undo step
   (`EditorActionGroup`): an `AssetCreateAction` per file, the probes' `Capture` in a `SceneEditTransaction`, and an
   `AssetTrashAction` for each earlier capture that a bake made for that probe (its ID's name in that folder) and nothing
-  else uses; any other texture a `Capture` named stays untouched. The staging folder goes with the command, also on
+  else uses (the open scene counts as it is in memory, `AssetReferences::IgnoreSavedOpenScene`: its saved file naming the
+  earlier capture until the next save keeps nothing, also on redo); any other texture a `Capture` named stays untouched. The staging folder goes with the command, also on
   failure; a scene change or Play before the import leaves nothing behind, after it the imported files go to the trash.
   A probe bakes what is drawn at its position, other probes' current captures included: baking twice adds a bounce.
 - Bindings: scene-set SRV 9 is the cube array (a one-slot black cube array, `Renderer::GetBlackCubeArrayTexture`, without

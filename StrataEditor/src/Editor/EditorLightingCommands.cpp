@@ -345,16 +345,23 @@ namespace Strata
 				if (oldMetadata)
 				{
 					entry["previous"] = UUIDToJson(old);
-					// Only a file an earlier bake made for this probe, and only once nothing uses it any more (the scene in memory
-					// names the new capture now); any other texture the probe named stays as it is.
-					if (IsBakedCaptureOf(oldMetadata->Path, state.TargetDirectory, probe.Entity)
-						&& AssetReferences::Find(context, AssetReferences::WithSubAssets(context, { old }), {}).empty())
+					// Only a file an earlier bake made for this probe, and only once nothing uses it any more: the open scene counts
+					// as it is in memory, which names the new capture now (its saved file names the earlier one until its next save);
+					// any other texture the probe named stays as it is.
+					std::vector<AssetReferencer> users;
+					const bool baked = IsBakedCaptureOf(oldMetadata->Path, state.TargetDirectory, probe.Entity);
+					if (baked)
+					{
+						users = AssetReferences::Find(context, AssetReferences::WithSubAssets(context, { old }), {});
+						AssetReferences::IgnoreSavedOpenScene(users);
+					}
+					if (baked && users.empty())
 					{
 						TrashedAssets trashed;
 						std::string error;
 						if (assets.MoveToTrash(oldMetadata->Path, trashed, &error))
 						{
-							step->Add(CreateScope<AssetTrashAction>(context, assets, fmt::format("Delete {}", oldMetadata->Path), trashed, false));
+							step->Add(CreateScope<AssetTrashAction>(context, assets, fmt::format("Delete {}", oldMetadata->Path), trashed, false, true));
 							entry["trashed"] = true;
 						}
 						else
@@ -452,7 +459,8 @@ namespace Strata
 			"Bakes reflection probes: renders what each one sees from its position (the edited scene as it is: lights, sky, fog and the "
 			"other probes' current captures, so baking twice adds a second bounce) into a new equirectangular HDR texture, "
 			"Assets/Lighting/<scene>/<probe id>.hdr (' (n)' added when the name is taken), and sets the probe's Capture to it. The capture "
-			"an earlier bake made for the probe goes to the trash once nothing else uses it; any other texture Capture named stays. One undo "
+			"an earlier bake made for the probe goes to the trash once nothing else uses it (the open scene as it is in memory, even while its "
+			"saved file still names it); any other texture Capture named stays. One undo "
 			"step for the files and the captures. Answers once the textures are imported (a few frames; the editor keeps running). Needs a "
 			"GPU; refused while playing (it renders and writes from the edited scene). Returns {directory, probes: [{entity, name, capture, "
 			"path, complete (false when something it sees was still loading after 300 frames), previous (the capture before, or null), "

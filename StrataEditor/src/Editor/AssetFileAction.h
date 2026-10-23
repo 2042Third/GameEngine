@@ -36,11 +36,13 @@ namespace Strata
 
 	// Assets moved to the trash: undo restores them with their handles (failing while something else is at their path), redo
 	// moves them there again when the path still holds exactly those assets and the command would delete them now (not the
-	// open scene; nothing uses them unless the delete was forced).
+	// open scene; nothing uses them unless the delete was forced). With `openSceneFromMemory` the open scene uses them only
+	// when its entities in memory do (AssetReferences::IgnoreSavedOpenScene: a step that replaced the scene's use of them).
 	class AssetTrashAction final : public AssetFileAction
 	{
 	public:
-		AssetTrashAction(EditorContext& context, EditorAssetManager& assets, std::string name, TrashedAssets trashed, bool force);
+		AssetTrashAction(EditorContext& context, EditorAssetManager& assets, std::string name, TrashedAssets trashed, bool force,
+			bool openSceneFromMemory = false);
 
 		bool Execute(std::string* outError) override;
 		bool Undo(std::string* outError) override;
@@ -51,6 +53,7 @@ namespace Strata
 		EditorContext& m_Context; // Owns the history that owns this step
 		TrashedAssets m_Trashed;
 		bool m_Force;
+		bool m_OpenSceneFromMemory;
 	};
 
 	// An asset moved or renamed (with a handle), or a folder moved (without one): undo moves it back.

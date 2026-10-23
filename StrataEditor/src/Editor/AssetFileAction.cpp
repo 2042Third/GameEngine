@@ -53,8 +53,9 @@ namespace Strata
 	// AssetTrashAction
 	////////////////////////////////////////////////////////////////////////////////
 
-	AssetTrashAction::AssetTrashAction(EditorContext& context, EditorAssetManager& assets, std::string name, TrashedAssets trashed, bool force)
-		: AssetFileAction(assets, std::move(name)), m_Context(context), m_Trashed(std::move(trashed)), m_Force(force)
+	AssetTrashAction::AssetTrashAction(EditorContext& context, EditorAssetManager& assets, std::string name, TrashedAssets trashed, bool force,
+		bool openSceneFromMemory)
+		: AssetFileAction(assets, std::move(name)), m_Context(context), m_Trashed(std::move(trashed)), m_Force(force), m_OpenSceneFromMemory(openSceneFromMemory)
 	{
 	}
 
@@ -81,7 +82,9 @@ namespace Strata
 		if (!m_Force)
 		{
 			const std::vector<AssetHandle> targets = AssetReferences::WithSubAssets(m_Context, m_Trashed.Handles);
-			const std::vector<AssetReferencer> referencers = AssetReferences::Find(m_Context, targets, { targets.begin(), targets.end() });
+			std::vector<AssetReferencer> referencers = AssetReferences::Find(m_Context, targets, { targets.begin(), targets.end() });
+			if (m_OpenSceneFromMemory)
+				AssetReferences::IgnoreSavedOpenScene(referencers);
 			if (!referencers.empty())
 				return Fail(outError, fmt::format("'{}' is used by {} now", m_Trashed.Path, AssetReferences::Describe(referencers)));
 		}

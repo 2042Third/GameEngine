@@ -167,6 +167,11 @@ namespace Strata
 			return referencers;
 		}
 
+		void IgnoreSavedOpenScene(std::vector<AssetReferencer>& referencers)
+		{
+			std::erase_if(referencers, [](const AssetReferencer& entry) { return entry.OpenScene && entry.Entities.empty(); });
+		}
+
 		nlohmann::json ToJson(const std::vector<AssetReferencer>& referencers)
 		{
 			nlohmann::json list = nlohmann::json::array();

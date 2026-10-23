@@ -278,4 +278,57 @@ TEST_SUITE("GPU.Editor.Lighting")
 		harness.Runner.CancelAll("The test ends");
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("lighting.bakeProbes trashes the earlier bake's file also when the saved scene names it, and undo and redo follow")
+	{
+		// Bake, save, bake again: the scene's file names the first capture until it is saved again, but the probe in memory
+		// names the new one, so the earlier file goes to the trash as the bake promises.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		LightingGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUEditorRebakeSaved") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		const std::string probe = harness.Run("entity.create", { { "name", "Probe" },
+			{ "components", { { "ReflectionProbe", { { "Extents", { 2, 2, 2 } } } } } } })["id"].get<std::string>();
+		harness.Run("scene.saveAs", { { "path", "Scenes/Hall.stscene" } });
+		EditorAssetManager& assets = *harness.Context.GetAssetManager();
+		const AssetHandle scene = harness.Context.GetSceneHandle();
+
+		const std::string first = FindProbe(harness.Bake(), probe)["capture"].get<std::string>();
+		const AssetHandle firstHandle = *UUIDFromJson(first);
+		harness.Run("scene.save");
+		// The saved scene's recorded references name the first capture.
+		const std::vector<AssetHandle> referencers = assets.GetReferencers(firstHandle);
+		REQUIRE(std::find(referencers.begin(), referencers.end(), scene) != referencers.end());
+
+		const nlohmann::json second = harness.Bake();
+		const nlohmann::json& entry = FindProbe(second, probe);
+		CHECK(entry["previous"] == first);
+		CHECK(entry["trashed"] == true);
+		CHECK_FALSE(assets.GetMetadata(firstHandle));
+		CHECK_FALSE(FileSystem::Exists(harness.GetAssetPath("Lighting/Hall/" + probe + ".hdr")));
+
+		// Undo restores the earlier file and capture; redo trashes it again although the saved scene still names it.
+		harness.Run("edit.undo");
+		CHECK(harness.GetCapture(probe) == first);
+		CHECK(FileSystem::Exists(harness.GetAssetPath("Lighting/Hall/" + probe + ".hdr")));
+		harness.Run("edit.redo");
+		CHECK(harness.GetCapture(probe) == entry["capture"].get<std::string>());
+		CHECK_FALSE(FileSystem::Exists(harness.GetAssetPath("Lighting/Hall/" + probe + ".hdr")));
+		CHECK(FileSystem::Exists(harness.GetAssetPath("Lighting/Hall/" + probe + " (1).hdr")));
+
+		// Another scene that names the earlier capture keeps it: a copy saved with it, then the first scene again.
+		harness.Run("edit.undo");
+		harness.Run("scene.saveAs", { { "path", "Scenes/Copy.stscene" } });
+		harness.Run("scene.open", { { "scene", "Scenes/Hall.stscene" } });
+		REQUIRE(harness.Context.GetSceneHandle() == scene);
+		const nlohmann::json third = harness.Bake();
+		CHECK(FindProbe(third, probe)["previous"] == first);
+		CHECK(FindProbe(third, probe)["trashed"] == false);
+		CHECK(assets.GetMetadata(firstHandle));
+
+		harness.Runner.CancelAll("The test ends");
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

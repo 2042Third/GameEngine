@@ -48,6 +48,10 @@ namespace Strata
 		// a folder that is deleted, or a model's own sub-assets). The edited scene is reported from memory: with the entities
 		// that use the targets, and also when its file does not show them yet. Sub-assets that reference come with their file.
 		std::vector<AssetReferencer> Find(EditorContext& context, const std::vector<AssetHandle>& targets, const std::unordered_set<AssetHandle>& ignored);
+		// Leaves the edited scene out of Find's referencers when only its file names the targets (none of its entities in memory
+		// does, so its next save drops them): for steps that replace the scene's use of a file they made with another, as
+		// lighting.bakeProbes replaces a probe's earlier capture, and then move that file to the trash.
+		void IgnoreSavedOpenScene(std::vector<AssetReferencer>& referencers);
 		// The targets with the sub-assets of those that are files (a model's meshes, materials and textures), which go with them;
 		// a target that is a sub-asset stands alone.
 		std::vector<AssetHandle> WithSubAssets(const EditorContext& context, const std::vector<AssetHandle>& targets);
