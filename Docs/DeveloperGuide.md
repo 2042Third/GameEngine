@@ -3073,7 +3073,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   the first frame that traces, released with the targets. Pixels that find nothing render bit for bit as without
   reflections (`GPU.SceneRenderer.SSR`: a rough floor and a cube above the view; its other cases are the mirror floor
   against the CPU's prediction on both paths, a moving cube's reflection that keeps up only when fetched along the hit's
-  motion, and that nothing traces without TAA).
+  motion, and that nothing traces without TAA). `PerfGPU.Renderer.SSR` and `...GPU` (provisional) measure
+  `Render100kCubesTAA`'s scene with them traced from every surface (maximum roughness 1), and report the stage's median.
 - Bindings: scene-set SRV 9 is the cube array (a one-slot black cube array, `Renderer::GetBlackCubeArrayTexture`, without
   probes in view; the device's `imageCubeArray` is required, "Building") and SRV 10 the probe buffer
   (`RenderData::ReflectionProbeBuffer`, 3.6 KB made with the renderer: the slots' coefficients, written on the GPU, then

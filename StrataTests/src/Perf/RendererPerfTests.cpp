@@ -63,7 +63,31 @@ namespace
 
 	// Render100kCubes' scene with the post-processing's defaults but TAA under `preset`: its jitter, motion vectors, motion
 	// history and resolve, measured as `key` (its CPU median) and `key`GPU (the GPU's median busy time).
-	void MeasureTemporalCubes(TemporalAntiAliasingPreset preset, const std::string& key)
+	// The median over the profiler's recorded frames (the measured ones) of a GPU stage's time, in milliseconds.
+	double MedianGPUStageMs(const char* name)
+	{
+		const FrameProfiler& profiler = FrameProfiler::Get();
+		std::vector<float> samples;
+		for (FrameStageID stage = 0; stage < profiler.GetStageCount(); stage++)
+		{
+			if (profiler.GetStageName(stage) != name)
+				continue;
+			for (uint32_t age = 0; age < std::min<uint32_t>(profiler.GetRecordedFrameCount(), c_MeasuredFrames); age++)
+			{
+				const FrameSample frame = profiler.GetFrame(age);
+				if (frame.HasGPU)
+					samples.push_back(frame.GPUStageMs[stage]);
+			}
+		}
+		if (samples.empty())
+			return 0.0;
+		std::sort(samples.begin(), samples.end());
+		return samples[samples.size() / 2];
+	}
+
+	// 100,000 cubes with TAA of `preset`; with `reflections`, screen-space reflections traced from every surface (the maximum
+	// roughness 1).
+	void MeasureTemporalCubes(TemporalAntiAliasingPreset preset, const std::string& key, bool reflections = false)
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -76,6 +100,8 @@ namespace
 		PostProcessComponent& postProcess = scene.CreateEntity("Post Process").AddComponent<PostProcessComponent>();
 		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
 		postProcess.TAAPreset = preset;
+		postProcess.ScreenSpaceReflections = reflections;
+		postProcess.ScreenSpaceReflectionsMaxRoughness = 1.0f;
 		SceneRenderer renderer(Perf::MeasuredRendererSpecification());
 		renderer.SetViewportSize(c_Width, c_Height);
 		const bool measuresGPU = Perf::MeasuresGPU();
@@ -90,6 +116,9 @@ namespace
 			CHECK(renderer.GetStats().TemporalAntiAliasing);
 			CHECK(renderer.GetStats().TemporalFrames > static_cast<uint32_t>(c_MeasuredFrames));
 			CHECK(renderer.GetStats().MotionCopiedInstances == 0);
+			CHECK(renderer.GetStats().ScreenSpaceReflections == reflections);
+			if (measuresGPU)
+				MESSAGE(key, ": GPU.Reflections ", MedianGPUStageMs("GPU.Reflections"), " ms, GPU.Opaque ", MedianGPUStageMs("GPU.Opaque"), " ms");
 			Perf::MetricValues values { { key, measurement.CPU.MedianMs } };
 			if (measuresGPU)
 				values.emplace(key + "GPU", Perf::MeasureGPU(measurement));
@@ -266,6 +295,14 @@ TEST_SUITE("PerfGPU.Renderer")
 	{
 		// The first TAA, without Sharp's techniques: what Sharp costs against it (provisional).
 		MeasureTemporalCubes(TemporalAntiAliasingPreset::Original, "PerfGPU.Renderer.Render100kCubesTAAOriginal");
+	}
+
+	TEST_CASE("Render cost of 100,000 cubes with temporal anti-aliasing and screen-space reflections")
+	{
+		// Render100kCubesTAA's scene with screen-space reflections traced from every surface: the prepass's surface target, the
+		// half-resolution trace (GPU.Reflections) and the forward pass's lookups, against Render100kCubesTAA (provisional: the
+		// reference machine sets the budgets).
+		MeasureTemporalCubes(TemporalAntiAliasingPreset::Sharp, "PerfGPU.Renderer.SSR", true);
 	}
 
 	TEST_CASE("Render cost of 100,000 cubes in height fog")
