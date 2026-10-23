@@ -49,18 +49,6 @@ namespace
 		return camera;
 	}
 
-	// The CPU time of SceneRenderer::Render and the GPU's busy time, frames run like an application's (Perf::MeasureFrames).
-	Perf::FrameMeasurement MeasureRender(GPUContext& gpu, SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, std::string_view name)
-	{
-		const Perf::FrameMeasurement measurement = Perf::MeasureFrames(gpu, c_WarmupFrames, c_MeasuredFrames, [&] { REQUIRE(renderer.Render(scene, camera)); });
-		const SceneRendererStats& stats = renderer.GetStats();
-		const DrawnCounts drawn = GetDrawnCounts(renderer);
-		MESSAGE(name, ": ", measurement.CPU.MedianMs, " ms median, GPU ", measurement.GPU ? measurement.GPU->MedianMs : 0.0, " ms busy (",
-			std::string(stats.GPUDriven ? "GPU-driven, " : ""), std::string(stats.FeedbackRequests ? "requests from feedback, " : ""), drawn.Instances, " instances, ", drawn.Draws, " draws, ", stats.DrawCommands, " draw commands, ", drawn.Triangles,
-			" triangles, extract ", stats.ExtractMs, " ms, sort ", stats.SortMs, " ms; GPU timer ", measurement.TimerCost.MedianMs, " ms per frame)");
-		return measurement;
-	}
-
 	// The median over the profiler's recorded frames (the measured ones) of a GPU stage's time, in milliseconds.
 	double MedianGPUStageMs(const char* name)
 	{
@@ -81,6 +69,28 @@ namespace
 			return 0.0;
 		std::sort(samples.begin(), samples.end());
 		return samples[samples.size() / 2];
+	}
+
+	// The CPU time of SceneRenderer::Render and the GPU's busy time, frames run like an application's (Perf::MeasureFrames).
+	Perf::FrameMeasurement MeasureRender(GPUContext& gpu, SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, std::string_view name)
+	{
+		const Perf::FrameMeasurement measurement = Perf::MeasureFrames(gpu, c_WarmupFrames, c_MeasuredFrames, [&] { REQUIRE(renderer.Render(scene, camera)); });
+		const SceneRendererStats& stats = renderer.GetStats();
+		const DrawnCounts drawn = GetDrawnCounts(renderer);
+		MESSAGE(name, ": ", measurement.CPU.MedianMs, " ms median, GPU ", measurement.GPU ? measurement.GPU->MedianMs : 0.0, " ms busy (",
+			std::string(stats.GPUDriven ? "GPU-driven, " : ""), std::string(stats.FeedbackRequests ? "requests from feedback, " : ""), drawn.Instances, " instances, ", drawn.Draws, " draws, ", stats.DrawCommands, " draw commands, ", drawn.Triangles,
+			" triangles, extract ", stats.ExtractMs, " ms, sort ", stats.SortMs, " ms; GPU timer ", measurement.TimerCost.MedianMs, " ms per frame)");
+		// The GPU stages' medians over the measured frames, to compare builds pass by pass.
+		std::string stages;
+		const FrameProfiler& profiler = FrameProfiler::Get();
+		for (FrameStageID stage = 0; stage < profiler.GetStageCount(); stage++)
+		{
+			const std::string& stageName = profiler.GetStageName(stage);
+			if (stageName.starts_with("GPU."))
+				stages += fmt::format(" {} {:.4f}", stageName, MedianGPUStageMs(stageName.c_str()));
+		}
+		MESSAGE(name, " GPU stages (median ms):", stages);
+		return measurement;
 	}
 
 	// Render100kCubes' scene with the post-processing's defaults but TAA under `preset`: its jitter, motion vectors, motion
