@@ -3122,7 +3122,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   pyramids, culling set and cascade cache) when their resolved size or count changed, the local shadows' atlas (tiles,
   views and their cache) when its size changed; a new tile cap draws every light's views again; the level-of-detail and
   size knobs apply from the next frame on both paths, through what already compares them (the cascade cache's key
-  holds the LOD criteria). It returns whether the cascades or the atlas were released, and then restarts the temporal
+  holds the LOD criteria, the local shadows' `LocalShadowContent` holds `LODErrorPixels`: a new error draws every
+  light's views again in their tiles, as a caster's change does). A knob that changes what a cached shadow view shows
+  goes into one of them. It returns whether the cascades or the atlas were released, and then restarts the temporal
   history. Callers apply the quality right after `SetViewportSize` in a frame, so Auto resolves for its rows; equal
   knobs cost one comparison. An allocation that fails halves the cascades (down to 1024) or the atlas (down to 2048),
   reports it once, and is tried at the requested size again by the next resize or change of that knob.

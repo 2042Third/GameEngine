@@ -1587,3 +1587,6 @@ the streams must know:
   more under the physical sky alone (`lookdev.contact`, `lookdev.thin`); one 4K TAA shot by one code value in 13 pixels
   (run to run); GPU busy per shot at a median ratio of 1.003 (0.83-1.64, small 1080p shots). Step 0's tip at the
   projects' quality (High) is `lookdev/step0`, the streams' baseline.
+- **After the second review.** `LocalShadowContent` holds the quality's `LODErrorPixels`, which 7.5 left out: a Custom
+  quality that changed only it kept the cached point and spot views at their old levels of detail; a new error draws
+  them again in their tiles.

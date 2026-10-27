@@ -215,15 +215,26 @@ TEST_SUITE("GPU.SceneRenderer.Quality")
 			checkKept();
 			RenderFrames(renderer, scene, 1);
 			checkKept();
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 0); // The lamp's views are cached
 
-			// Knobs that size nothing apply from the next frame.
-			quality.LODErrorPixels = 2.0f;
+			// Knobs that size nothing apply from the next frame. These two leave the lamp's views as they are.
 			quality.MinProjectedPixels = 1.0f;
 			quality.MaxShadowedLocalLights = 8;
 			CHECK_FALSE(renderer.SetQuality(quality));
 			CHECK(renderer.GetQuality() == quality);
 			scene.CheckShadow(RenderFrames(renderer, scene, 1));
 			checkKept();
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 0);
+			// A new level-of-detail error draws the lamp's six views again in their tiles, once: they chose their casters'
+			// levels by it.
+			quality.LODErrorPixels = 2.0f;
+			CHECK_FALSE(renderer.SetQuality(quality));
+			CHECK(renderer.GetQuality() == quality);
+			scene.CheckShadow(RenderFrames(renderer, scene, 1));
+			checkKept();
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 6);
+			RenderFrames(renderer, scene, 1);
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 0);
 
 			// Fewer cascades: a new array of their layers, the atlas kept.
 			quality.ShadowCascades = 2;

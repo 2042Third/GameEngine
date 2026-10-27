@@ -403,6 +403,7 @@ namespace Strata
 		content.TextureEntryVersion = m_SceneGPU->HasAlphaMaskedMaterials() ? Renderer::GetTextureTable().GetEntryVersion() : 0;
 		// New proxies whose upload waits (NewInstanceBytesPerFrame) appear later without a change of their own.
 		content.DeferredFrame = m_SceneGPU->GetDeferredProxies() > 0 ? m_RenderCount + 1 : 0;
+		content.LODErrorPixels = m_Specification.Quality.LODErrorPixels;
 		const bool contentChanged = !(content == m_LocalShadowContent);
 		m_LocalShadowContent = content;
 

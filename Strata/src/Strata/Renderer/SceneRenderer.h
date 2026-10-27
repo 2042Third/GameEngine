@@ -732,7 +732,8 @@ namespace Strata
 		// the renderer lives. Only what a changed knob sizes is made again, released through Renderer::ReleaseDeferred: the
 		// cascades (their ShadowCascades layers at the resolved size, framebuffers, occlusion pyramids and cache) when the
 		// resolved size or the count changed, the local shadows' atlas (with its tiles, views and cache) when its size
-		// changed; a changed tile cap draws every light's views again; the other knobs apply from the next frame. Returns
+		// changed; a changed tile cap draws every light's views again in new tiles, and a changed LODErrorPixels in
+		// theirs (as a caster's change does: LocalShadowContent); the other knobs apply from the next frame. Returns
 		// whether the cascades or the atlas were released (the temporal history then starts again). Call it after
 		// SetViewportSize in a frame, so that Auto resolves for the rows the frame draws at. GetQuality() is the result.
 		bool SetQuality(const RendererQualitySettings& quality);
@@ -992,6 +993,7 @@ namespace Strata
 			uint64_t PoolContentVersion = 0;
 			uint64_t TextureEntryVersion = 0;  // While the scene has alpha-masked materials (0 otherwise)
 			uint64_t DeferredFrame = 0;        // The frame while the scene's GPU copy defers new proxies (0 otherwise)
+			float LODErrorPixels = 0.0f;       // The quality's (SetQuality): the views chose their casters' levels by it
 			bool operator==(const LocalShadowContent&) const = default;
 		};
 
