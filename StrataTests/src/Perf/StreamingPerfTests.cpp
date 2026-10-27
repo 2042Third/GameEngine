@@ -216,8 +216,9 @@ namespace
 	{
 		ProcessSpecification runtime;
 		runtime.Executable = GetRuntimePath();
+		// At Medium, 0.6.0's costs (Docs/DeveloperGuide.md, "Perf tests").
 		runtime.Arguments = { "--game", FileSystem::ToUTF8(manifest), "--resolution", fmt::format("{}x{}", c_RuntimeWidth, c_RuntimeHeight), "--frames",
-			std::to_string(frames), "--perf-log", FileSystem::ToUTF8(perfLog) };
+			std::to_string(frames), "--perf-log", FileSystem::ToUTF8(perfLog), "--quality", "medium" };
 		if (textureBudget)
 		{
 			runtime.Arguments.push_back("--asset-budget-mb");

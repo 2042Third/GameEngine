@@ -1,7 +1,13 @@
 #include "Renderer/SceneRendererTestUtils.h"
 
+#include "Strata/Core/EngineServices.h"
+#include "Strata/Core/ProjectSettings.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Renderer/RendererComponents.h"
+#include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Runtime/GameRenderer.h"
+
+#include <nlohmann/json.hpp>
 
 #include <functional>
 #include <sstream>
@@ -283,6 +289,67 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 			REQUIRE(renderer.Render(scene, targets[index].Framebuffer, sizes[index]));
 			CHECK(renderer.IsShowingMessage());
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A game follows the project's quality by its version, and an override wins")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		WindowTarget target(gpu.GetNvrhiDevice());
+		Ref<Scene> scene = CreateRef<Scene>("Level");
+		AddNeutralPostProcess(*scene);
+		AddMesh(*scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Cube");
+		AddSun(*scene, glm::normalize(glm::vec3(-0.3f, -1.0f, -0.2f)), 2.0f);
+		Entity camera = scene->CreateEntity("Camera");
+		camera.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, 3.0f);
+		camera.AddComponent<CameraComponent>();
+		const glm::uvec2 size(c_Size, c_Size);
+		GameRenderer renderer;
+
+		// Without a provider (tests and tools): Medium, SceneRendererSpecification's default.
+		REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+		CHECK(renderer.GetQuality().Preset == RendererQualityPreset::Medium);
+		CHECK(renderer.GetStats().ShadowMapSize == 2048);
+		{
+			// A project's Custom value; the section in a registry of the test's own.
+			SettingsRegistry registry;
+			REQUIRE(registry.Register(RendererQuality::MakeSection()));
+			ProjectSettingsValues values;
+			EngineServices::ScopedProvider<IProjectSettings> provider(values);
+			const auto set = [&](const nlohmann::json& value)
+			{
+				std::string error;
+				REQUIRE_MESSAGE(values.Set(RendererQuality::c_SectionId, value, registry, &error), error);
+			};
+			set({ { "Preset", "Custom" }, { "ShadowResolution", "1024" } });
+			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+			CHECK(renderer.GetQuality().Preset == RendererQualityPreset::Custom);
+			CHECK(renderer.GetStats().ShadowMapSize == 1024);
+			// A change of the project's value: the next frame follows it, also an empty one.
+			set({ { "Preset", "Low" } });
+			REQUIRE(renderer.RenderEmpty(target.Framebuffer, size));
+			CHECK(renderer.GetQuality() == RendererQuality::GetPreset(RendererQualityPreset::Low));
+			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+			CHECK(renderer.GetStats().ShadowMapSize == 1024);
+			CHECK(renderer.GetStats().Quality.ShadowCascades == 3);
+
+			// An override wins over the project, whatever it changes to, until it is cleared.
+			renderer.SetQualityOverride(RendererQuality::GetPreset(RendererQualityPreset::Ultra), "--quality");
+			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+			CHECK(renderer.GetQuality() == RendererQuality::GetPreset(RendererQualityPreset::Ultra));
+			set({ { "Preset", "Medium" } });
+			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+			CHECK(renderer.GetQuality().Preset == RendererQualityPreset::Ultra);
+			renderer.SetQualityOverride(std::nullopt);
+			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+			CHECK(renderer.GetQuality() == RendererQuality::GetPreset(RendererQualityPreset::Medium));
+		}
+		// The provider gone: Medium again.
+		REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+		CHECK(renderer.GetQuality().Preset == RendererQualityPreset::Medium);
+		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

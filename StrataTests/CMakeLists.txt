@@ -658,6 +658,27 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEXPECTED_OUTPUT=--resolution needs the pixels of the window"
 			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidResolution PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+	# --quality draws one run at a named Graphics Quality preset (logged when the game renderer applies it); Custom, unknown
+	# names and a headless run, which draws nothing, are refused.
+	foreach(quality extreme custom)
+		add_test(NAME StrataRuntime.InvalidQuality.${quality}
+			COMMAND "${CMAKE_COMMAND}"
+				"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--windowed;--frames;5;--quality;${quality}"
+				"-DEXPECTED_OUTPUT=--quality needs one of low, medium, high or ultra"
+				-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+		set_tests_properties(StrataRuntime.InvalidQuality.${quality} PROPERTIES FIXTURES_REQUIRED StrataExportedGame TIMEOUT 60)
+	endforeach()
+	add_test(NAME StrataRuntime.QualityHeadless
+		COMMAND "${CMAKE_COMMAND}"
+			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--headless;--frames;5;--quality;low"
+			"-DEXPECTED_OUTPUT=--quality needs a window"
+			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+	set_tests_properties(StrataRuntime.QualityHeadless PROPERTIES FIXTURES_REQUIRED StrataExportedGame TIMEOUT 60)
+	add_test(NAME StrataRuntime.Quality
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DARGUMENTS=--windowed|--resolution|640x360|--frames|30|--quality|ultra" "-DEXPECT=Graphics quality: Ultra (--quality)"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataRuntime.Quality PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataExportedGame TIMEOUT 60)
 	# In a window the perf log also times rendering and presenting.
 	add_test(NAME StrataRuntime.PerfLogWindowed
 		COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --windowed --frames 10 --perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLogWindowed.csv")

@@ -13,6 +13,7 @@
 #include <Strata/Renderer/GraphicsModule.h>
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/Renderer.h>
+#include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/StagingPool.h>
 #include <Strata/Runtime/FramePerfLog.h>
 #include <Strata/Runtime/GamePresentation.h>
@@ -55,6 +56,7 @@ namespace Strata
 		std::optional<uint64_t> TextureBudget; // --asset-budget-mb: the GPU texture budget of the game's assets, in bytes
 		std::filesystem::path PerfLogPath;     // --perf-log: a CSV row per frame (FramePerfLog)
 		std::filesystem::path SaveDirectory;   // --save-directory: where the game keeps its save files (empty: the player's data)
+		std::optional<RendererQualityPreset> Quality; // --quality: the Graphics Quality preset of this run (none: the project's)
 	};
 
 	// Runs the game of a manifest and, with a window, renders it every frame. Startup failures end the process with exit
@@ -99,7 +101,11 @@ namespace Strata
 				return;
 			}
 			if (renders)
+			{
 				m_Renderer = CreateScope<GameRenderer>();
+				if (m_Options.Quality)
+					m_Renderer->SetQualityOverride(RendererQuality::GetPreset(*m_Options.Quality), "--quality");
+			}
 			// The game's pacing (vsync, uncapped), which loading caps (GameRuntime::GetFrameRateCap).
 			m_GamePacing = Application::Get().GetMaxFrameRate();
 			if (!m_Options.PerfLogPath.empty())
@@ -341,7 +347,18 @@ namespace Strata
 			{ "--asset-budget-mb", "<megabytes>", "The GPU texture budget of the game's assets" },
 			{ "--perf-log", "<file.csv>", "Write a row of frame timings per frame" },
 			{ "--save-directory", "<folder>", "Keep the game's save files in this folder (default: the player's data)" },
+			{ "--quality", "<low|medium|high|ultra>", "Draw with this Graphics Quality preset for this run (default: the project's); "
+				"nothing is saved" },
 			{ "--help", nullptr, "Print this help and exit" } };
+
+		// --quality's value: a named preset, any case (Custom is the project's values, never a run's).
+		std::optional<RendererQualityPreset> ParseQuality(const std::string& name)
+		{
+			const std::optional<RendererQualityPreset> preset = RendererQuality::PresetFromString(name, true);
+			if (!preset || *preset == RendererQualityPreset::Custom)
+				return std::nullopt;
+			return preset;
+		}
 
 		// The usage under the executable's name (an exported game is the runtime renamed after it).
 		std::string GetUsage()
@@ -380,6 +397,13 @@ namespace Strata
 				return std::string("--perf-log needs the path of the CSV file to write");
 			if (commandLine.HasFlag("--save-directory") && commandLine.GetOption("--save-directory").value_or(std::string()).empty())
 				return std::string("--save-directory needs the folder to keep the game's save files in");
+			if (commandLine.HasFlag("--quality") || commandLine.GetOption("--quality"))
+			{
+				if (!ParseQuality(commandLine.GetOption("--quality").value_or(std::string())))
+					return std::string("--quality needs one of low, medium, high or ultra");
+				if (commandLine.HasFlag("--headless"))
+					return std::string("--quality needs a window: a headless run draws nothing");
+			}
 			return CommandLineOptions::FindUnknownArgument(commandLine, c_Arguments);
 		}
 
@@ -487,6 +511,8 @@ namespace Strata
 			options.ScreenshotPath = FileSystem::FromUTF8(*screenshot);
 		if (std::optional<std::string> perfLog = commandLine.GetOption("--perf-log"))
 			options.PerfLogPath = FileSystem::FromUTF8(*perfLog);
+		if (std::optional<std::string> quality = commandLine.GetOption("--quality"))
+			options.Quality = ParseQuality(*quality);
 		if (std::optional<std::string> saves = commandLine.GetOption("--save-directory"))
 		{
 			// Saves somewhere else than the player's data directory: tests and tools that must not touch it.

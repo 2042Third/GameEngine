@@ -48,10 +48,32 @@ namespace Strata
 
 	GameRenderer::~GameRenderer() = default;
 
+	void GameRenderer::SetQualityOverride(std::optional<RendererQualitySettings> quality, std::string_view source)
+	{
+		m_QualityOverride = std::move(quality);
+		m_QualitySource = source;
+		m_LoggedPreset.reset();
+	}
+
+	void GameRenderer::ApplyQuality()
+	{
+		const bool overridden = m_QualityOverride.has_value();
+		const RendererQualitySettings& quality = overridden ? *m_QualityOverride : RendererQuality::GetProjectQuality();
+		// Equal knobs cost one comparison; a change makes again only what it sizes (SceneRenderer::SetQuality).
+		m_Renderer->SetQuality(quality);
+		if (m_LoggedPreset != quality.Preset || m_LoggedOverride != overridden)
+		{
+			ST_CORE_INFO("Graphics quality: {} ({})", RendererQuality::PresetToString(quality.Preset), overridden ? m_QualitySource : "the project's");
+			m_LoggedPreset = quality.Preset;
+			m_LoggedOverride = overridden;
+		}
+	}
+
 	bool GameRenderer::Render(const Ref<Scene>& scene, nvrhi::IFramebuffer* target, const glm::uvec2& size)
 	{
 		ST_PROFILE_FUNCTION();
 		m_Renderer->SetViewportSize(size.x, size.y);
+		ApplyQuality();
 		if (!scene || !target || size.x == 0 || size.y == 0)
 			return false;
 
@@ -107,6 +129,7 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 		m_Renderer->SetViewportSize(size.x, size.y);
+		ApplyQuality();
 		m_ShowingMessage = false;
 		m_LastScene.reset();
 		if (!target || size.x == 0 || size.y == 0)

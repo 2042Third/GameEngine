@@ -68,8 +68,9 @@ TEST_SUITE("PerfGPU.Samples")
 			const std::filesystem::path perfLog = directory / "Tour.csv";
 			ProcessSpecification process;
 			process.Executable = FileSystem::FromUTF8(*game);
+			// At Medium, 0.6.0's costs (Docs/DeveloperGuide.md, "Perf tests"), whatever the sample's project chooses.
 			process.Arguments = { "--resolution", "1920x1080", "--seconds", std::to_string(c_TourSeconds), "--perf-log", FileSystem::ToUTF8(perfLog),
-				"--save-directory", FileSystem::ToUTF8(directory / "Saves") };
+				"--save-directory", FileSystem::ToUTF8(directory / "Saves"), "--quality", "medium" };
 			const Process::RunResult run = Process::Run(process, std::chrono::minutes(10));
 			INFO("Game output:\n", run.Output);
 			REQUIRE_MESSAGE(run.Started, run.Error);

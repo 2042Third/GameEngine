@@ -13,6 +13,7 @@
 #include <Strata/Core/Process.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/RenderScene.h>
+#include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/TextureStreamer.h>
 
 #include <spdlog/fmt/fmt.h>
@@ -630,6 +631,51 @@ TEST_SUITE("PerfGPU.Renderer")
 				CHECK(drawn.ShadowCasters >= count / 10);
 				MESSAGE("shadow casters ", drawn.ShadowCasters, ", left out below a texel ", drawn.SubTexelCasters, ", shadow draws ", drawn.ShadowDraws);
 				return measurement.CPU.MedianMs;
+			});
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Render cost of 100,000 cubes whose shadows cover a 4K view, at Medium and at High")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+
+		// Render100kCubesShadowed's scene at 3840x2160 with every cascade drawn each frame (no cascade cache): Medium draws
+		// 2048-texel cascades (0.6.0's), High 4096 from 1440 rows. Medium is the reference High's GPU time is held to.
+		constexpr size_t c_Count = 100'000;
+		constexpr uint32_t c_Width4K = 3840;
+		constexpr uint32_t c_Height4K = 2160;
+		const float halfExtent = static_cast<float>(std::ceil(std::sqrt(static_cast<double>(c_Count)))) * Perf::c_GridSpacing * 0.5f;
+		Scene scene("ShadowedCubes4K");
+		Perf::AddCameraAndLight(scene, 4.0f * halfExtent);
+		Perf::CreateCubeGrid(scene, c_Count);
+		const bool measuresGPU = Perf::MeasuresGPU();
+		for (const RendererQualityPreset preset : { RendererQualityPreset::Medium, RendererQualityPreset::High })
+		{
+			CAPTURE(RendererQuality::PresetToString(preset));
+			SceneRendererSpecification specification = Perf::MeasuredRendererSpecification();
+			specification.CacheShadowCascades = false;
+			specification.Quality = RendererQuality::GetPreset(preset);
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Width4K, c_Height4K);
+			CHECK(renderer.GetShadowMapSize() == (preset == RendererQualityPreset::High ? 4096u : 2048u));
+			const std::string key = preset == RendererQualityPreset::High ? "PerfGPU.Renderer.Render100kCubesShadowedHigh4K"
+				: "PerfGPU.Renderer.Render100kCubesShadowed4K";
+			std::vector<std::string> keys = { key };
+			if (measuresGPU)
+				keys.push_back(key + "GPU");
+			Perf::CheckBudgetsConfirmed(keys, [&]
+			{
+				const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(c_Count), key);
+				CHECK(GetDrawnCounts(renderer).Instances == c_Count);
+				CHECK(renderer.GetStats().CachedCascadeMask == 0u);
+				Perf::MetricValues values { { key, measurement.CPU.MedianMs } };
+				if (measuresGPU)
+					values.emplace(key + "GPU", Perf::MeasureGPU(measurement));
+				return values;
 			});
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);

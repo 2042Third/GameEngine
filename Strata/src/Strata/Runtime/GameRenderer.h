@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Core/Base.h"
+#include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Runtime/FramePerfLog.h"
 #include "Strata/Scene/Entity.h"
@@ -9,7 +10,9 @@
 #include <nvrhi/nvrhi.h>
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace Strata
 {
@@ -46,6 +49,13 @@ namespace Strata
 		// the log.
 		static FramePerfColumnGroup MakePerfLogColumns(const GameRenderer* renderer);
 
+		// The quality the game draws with: the project's Renderer.Quality section (RendererQuality::GetProjectQuality, followed
+		// every frame by its version), unless an override is set (StrataRuntime --quality; players' graphics options); nullopt
+		// clears it. `source` names the override in the log line each change of the preset or its source writes ("Graphics
+		// quality: Ultra (--quality)").
+		void SetQualityOverride(std::optional<RendererQualitySettings> quality, std::string_view source = "override");
+		const RendererQualitySettings& GetQuality() const { return m_Renderer->GetQuality(); }
+
 		// Whether the last frame showed the missing-camera message.
 		bool IsShowingMessage() const { return m_ShowingMessage; }
 		const SceneRendererStats& GetStats() const { return m_Renderer->GetStats(); }
@@ -53,6 +63,9 @@ namespace Strata
 		const SceneRenderer& GetSceneRenderer() const { return *m_Renderer; }
 		SceneRenderer& GetSceneRenderer() { return *m_Renderer; }
 	private:
+		// Applies the project's quality or the override to the renderer, after its SetViewportSize (Auto resolves for the
+		// frame's rows).
+		void ApplyQuality();
 		void UpdateMessage(const Scene& scene, const glm::uvec2& size);
 	private:
 		Scope<SceneRenderer> m_Renderer;
@@ -60,6 +73,11 @@ namespace Strata
 		Entity m_MessageText;
 		std::weak_ptr<Scene> m_LastScene;
 		bool m_ShowingMessage = false;
+		std::optional<RendererQualitySettings> m_QualityOverride;
+		std::string m_QualitySource;
+		// What the log said last: the preset, and whether an override set it (none: nothing logged since the override changed).
+		std::optional<RendererQualityPreset> m_LoggedPreset;
+		bool m_LoggedOverride = false;
 	};
 
 }

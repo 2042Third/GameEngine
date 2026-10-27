@@ -12,8 +12,10 @@
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/Process.h>
+#include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Physics/PhysicsComponents.h>
 #include <Strata/Project/Project.h>
+#include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
@@ -213,6 +215,9 @@ TEST_SUITE("PerfGPU.Editor")
 		std::string error;
 		const Ref<Project> project = Project::Create(directory / "Project", "PerfFrames", &error);
 		REQUIRE_MESSAGE(project, error);
+		// Perf tests measure Medium, 0.6.0's costs (Docs/DeveloperGuide.md, "Perf tests"): the project's Graphics Quality.
+		REQUIRE_MESSAGE(project->GetSettings().Set(RendererQuality::c_SectionId, { { "Preset", "Medium" } }, SettingsRegistry::GetProcessRegistry(), &error), error);
+		REQUIRE_MESSAGE(project->Save(&error), error);
 		const std::filesystem::path scenes = project->GetAssetDirectory() / "Scenes";
 		REQUIRE(FileSystem::CreateDirectories(scenes));
 		const std::vector<std::filesystem::path> sceneFiles = { scenes / "Nested100k.stscene", scenes / "Nested1M.stscene", scenes / "Cubes100k.stscene" };
@@ -378,6 +383,9 @@ TEST_SUITE("PerfGPU.Editor")
 		std::string error;
 		const Ref<Project> project = Project::Create(directory / "Project", "PerfWorld", &error);
 		REQUIRE_MESSAGE(project, error);
+		// Perf tests measure Medium, 0.6.0's costs (Docs/DeveloperGuide.md, "Perf tests"): the project's Graphics Quality.
+		REQUIRE_MESSAGE(project->GetSettings().Set(RendererQuality::c_SectionId, { { "Preset", "Medium" } }, SettingsRegistry::GetProcessRegistry(), &error), error);
+		REQUIRE_MESSAGE(project->Save(&error), error);
 		WriteGridWorld(*project);
 
 		// The persistent scene opens; the editor camera goes to the middle of the world, and world.loadCells answers once the

@@ -12,6 +12,7 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Core/Timer.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Project/Project.h"
@@ -19,6 +20,7 @@
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/RendererComponents.h"
+#include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
@@ -479,6 +481,10 @@ namespace Strata::Tests
 
 		Ref<Project> projectFile = Project::Create(directory, "Stress", &error);
 		if (!projectFile)
+			return std::nullopt;
+		// Perf tests measure Medium, 0.6.0's costs (Docs/DeveloperGuide.md, "Perf tests"): the project's Graphics Quality.
+		if (!projectFile->GetSettings().Set(RendererQuality::c_SectionId, { { "Preset", "Medium" } }, SettingsRegistry::GetProcessRegistry(), &error)
+			|| !projectFile->Save(&error))
 			return std::nullopt;
 
 		StressProject project;
