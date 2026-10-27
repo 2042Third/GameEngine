@@ -3114,9 +3114,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows (`Renderer.Quality` checks it).
   Custom is the section's fields (High's values by default). `RendererQuality::Clamp` keeps every knob in its range.
 - **Auto by rows:** `RendererQuality::ResolveShadowMapSize` resolves Auto and AutoFine for the renderer's viewport rows
-  (its output: the Scene and Game views' panel pixels, the window's back buffer, a capture's image), limited by the
-  device and `SceneRendererSpecification::MaxShadowMapSize` (tests set it low). A resize across 1440 rows releases the
-  cascades, which the next frame makes again (`SceneRenderer::GetShadowMapSize`).
+  (its output: the Scene and Game views' panel pixels, the window's back buffer, a capture's image), limited to
+  `RendererQuality::c_MaxShadowMapSize` (8192), by the device and by `SceneRendererSpecification::MaxShadowMapSize`
+  (tests set it low). A resize across 1440 rows releases the cascades, which the next frame makes again
+  (`SceneRenderer::GetShadowMapSize`).
 - **`SceneRenderer::SetQuality`** changes the knobs while the renderer lives and makes again only what a changed knob
   sizes, through `Renderer::ReleaseDeferred`: the cascades (their `ShadowCascades` layers, framebuffers, occlusion
   pyramids, culling set and cascade cache) when their resolved size or count changed, the local shadows' atlas (tiles,

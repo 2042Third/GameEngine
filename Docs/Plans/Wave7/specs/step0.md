@@ -1594,3 +1594,4 @@ the streams must know:
   `GetSceneViewQuality`, which the panel and `viewport.capture` share. A minimized game keeps its cascades, as 0.6.0
   kept its targets (7.5 said it frees them): `Application::RunFrame` skips a minimized window's frames, so no zero
   viewport reaches its renderer; the comments and the guide name the editor's hidden Game view instead.
+  `SceneRenderer::ResolveShadowMapSize` applies `RendererQuality::c_MaxShadowMapSize`, which nothing read.

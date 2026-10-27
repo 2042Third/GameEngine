@@ -1632,7 +1632,7 @@ namespace Strata
 
 	uint32_t SceneRenderer::ResolveShadowMapSize(const RendererQualitySettings& quality) const
 	{
-		uint32_t size = RendererQuality::ResolveShadowMapSize(quality.ShadowResolution, m_ViewportSize.y);
+		uint32_t size = std::min(RendererQuality::ResolveShadowMapSize(quality.ShadowResolution, m_ViewportSize.y), RendererQuality::c_MaxShadowMapSize);
 		size = std::min(size, ShadowAtlasAllocator::FloorPowerOfTwo(Renderer::GetGraphicsDevice().GetInfo().MaxTextureDimension2D));
 		if (m_Specification.MaxShadowMapSize != 0)
 			size = std::min(size, ShadowAtlasAllocator::FloorPowerOfTwo(std::max(m_Specification.MaxShadowMapSize, c_MinShadowMapSizeLimit)));
