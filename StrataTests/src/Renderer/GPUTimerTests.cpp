@@ -136,8 +136,10 @@ TEST_SUITE("GPU.Renderer.Timers")
 		MESSAGE("Timestamp intervals (ms): draws " << intervals[0] << ", " << intervals[1] << ", " << intervals[2] << "; clear " << intervals[3]);
 		CHECK(intervals[0] + intervals[1] + intervals[2] > 0.0);
 
-		// A reset makes them unavailable again.
+		// A reset makes them unavailable again, once the GPU ran it: until then Read may still return the earlier values
+		// (GPUTimestampPool::Reset).
 		pool->Reset(0, 5);
+		gpu.GetDevice().WaitForIdle();
 		CHECK_FALSE(pool->Read(0, 5, ticks));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
