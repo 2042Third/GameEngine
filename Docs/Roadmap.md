@@ -814,104 +814,43 @@ Open items and deferrals later waves own:
   clears the undo history, the project's steps with it (the project file was written at each step, so nothing is lost).
   `Platform.DockIcon` needs a window server, so it runs on the Mac only (`StrataTests.DockIcon`, label `gpu`) and CI
   never runs it; no Linux desktop has listed an exported game's desktop entry yet (CI's Linux jobs check the file).
-- Waiting for the Windows reference machine (i7-13700K, RTX 5090), away since 2026-10-13 while work goes on on a Mac
-  (Apple M2 Max, MoltenVK): nothing here may be decided from the Mac's numbers.
-  - Budgets: every `Budgets.json` entry stays the reference machine's; a change on the Mac that makes a metric cheaper
-    lists it here, measured A/B on the Mac, until the reference machine confirms it. Wave 3's finishing round left three
-    perf findings for it: `RuntimeMaxFinalizeStage` (its budget lies below the engine's designed frame-0 cost),
-    `ThumbnailsMaxFrame` (redefined with a cold first attempt, its `Measured` not taken again) and
-    `SceneOpenOver1MMaxFrame` (still over its budget in some runs).
-  - GPU tests on Windows and NVIDIA: CI runs no test of the `gpu` label, so renderer changes are validated on the Mac
-    alone until `ctest --preset windows-debug` runs under the validation layer there again (drivers differ: NVIDIA has
-    `drawIndirectCount`, a transfer queue and min/max samplers, which MoltenVK lacks).
-  - Wave 4's `engine-modules`: the `Perf.Jobs` metrics are provisional (the Mac measured `SubmitWait` 3.14 us,
-    `SubmitMany` 0.41 us, `ParallelForOverhead` 95.9 us and `WakeLatency` 19.6 us), and its throughput targets are
-    stated in the reference machine's numbers: a clean Debug build 30% below 3,099 CPU-seconds, Debug `ctest -j 8` in
-    at most half of 658 s, and at most 28 threads in an editor.
-  - Wave 4's `game-ui`: the `Perf.GameUI.*` and `PerfGPU.GameUI.*` metrics are provisional.
-  - Wave 4's `authoring-and-playtest`: `Perf.Editor.PrefabApply10kInstances` (Mac median 701.7 ms) and the prefab drag
-    metrics (`DragInPrefabInstance5kMedian`, `DragPrefabInstanceRoot5kMedian`, `Drag100PrefabInstancesMedian`) are
-    provisional, and the idle editor frame's criterion (`PerfGPU.Editor`) cannot be shown on the Mac, where frames wait
-    for the display (8.3 ms).
-  - Wave 4's `world-io`: its metrics are provisional (`Perf.Editor.ImportFolder24x4kPeakPrivate` measured 571-574 MB
-    on the Mac against a 1,280 MB target), and `PerfGPU.Editor.SceneOpenOver1MMaxFrame` measured 1.08 times the step-0
-    base (8.51-9.21 ms over 10 pairs), on a Mac where that frame mostly waits for the display.
-  - Wave 4's `gpu-driven-rendering`: its metrics are provisional, among them `PlayStartRender1MCubes` (target 5 ms;
-    the whole copy measured 22-27 ms on the Mac) and `Render10kUniqueMeshes` (MoltenVK turns each indirect draw into
-    a Metal draw); `Render10kMaterials` measured 1.15 times the step-0 base on the Mac (0.844 against 0.737 ms, 7
-    pairs), with the GPU busy 2.3-2.5 ms a frame; the `drawIndirectCount`, min/max sampler and device-minimum
-    `maxDrawIndirectCount` paths are chosen by device features but run only on drivers that have them.
-  - Wave 4's `world-partition`: its metrics are provisional (Mac: `Perf.World.CellUnloadMaxFrame` 2.6-2.7 ms against
-    4 ms, `CellDriveMaxFrame` 2.65-5.5 ms and `PerfGPU.World.CellDriveMaxFrame` 9.5 ms against 8 ms,
-    `Perf.World.DrivePeakPrivate` 280 MB against 2,048 MB, `DriveFrameP95` 4.2 ms, `Perf.Physics.Create100kStaticBodies`
-    29.1 ms against 25 ms, `PerfGPU.Editor.PlayStartWorldMaxFrame` 37-61 ms against 50 ms); the editor-frame
-    no-regression A/Bs (`PerfGPU.Editor.{Edit,Play}FrameNested{100k,1M}`, `SceneOpen*`) cannot be judged on the Mac,
-    and `Perf.Physics.Boxes30kTracked.StrataStepTime` measured 1.022 times the step-0 base (36 pairs).
-  - Wave 5's `physics-box3d` (physics on box3d instead of Jolt; Mac A/Bs against 0.4.0's build, 3 interleaved pairs,
-    ratios of medians): busy frames 0.58-0.63 (`Boxes70k.ActiveFrame` 24.7 to 14.4 ms, `Boxes10k` 3.53 to 2.23,
-    `Boxes30kTracked` 11.0 to 6.9), whole steps 0.60-0.63, `Boxes30k.StartAnd30Frames` 0.66, `Characters1000Step` 0.41,
-    `PerfGPU.World.CellDriveMaxFrame` 0.73 and `Perf.World.DrivePeakPrivate` 0.74, no body waiting and no dropped
-    contact. Creating and removing bodies costs more, because box3d inserts every shape into its trees one at a time on
-    the main thread (its API allows no other thread), where Jolt built them in parallel and in bulk:
-    `Create100kStaticBodies` 3.40 (28.8 to 98 ms; box3d's `b3InsertLeaf` alone is 54% of it, and box3d by itself takes
-    69-73 ms for those bodies), `Create10kBodies` 2.89 (3.4 to 9.7 ms; box3d alone 6.3 ms; this one has a confirmed
-    budget, 11.99 ms from Jolt's 7.995 ms on the reference machine, which box3d is expected to exceed there at about
-    23 ms, so `-L perf` will fail on it there; the owner chose to leave creation as it is, so it needs measuring again on
-    box3d on the reference machine), `CellUnloadMaxFrame` 1.66
-    (2.6 to 4.4 ms; box3d alone disables 25,000 static bodies in 2.0-2.5 ms), `CellDriveMaxFrame` 1.31 and
-    `DriveFrameP95` 1.23 (both noisy), and `Grow65kMaxFrame` (65,536 bodies created in one frame) 73-80 ms against its
-    16.7 ms target. The port keeps the rule that every body gets its collision at once (a body a frame leaves without
-    collision is a gameplay defect, a slow frame of a large spawn is not), so the way down is bulk insertion and removal
-    in box3d (its trees already build in bulk, `b3DynamicTree_Rebuild`, but its API inserts every shape), taken with a
-    later box3d bump. Strata's own part of creating the 100,000 static bodies grew from about 17 to 27 ms in sampled
-    runs, mostly allocations per body: a follow-up, since removing all of it would still leave about 2.5 times Jolt's
-    time.
-    A world now reserves a scene's own room in box3d at once, up to 131,072 bodies (it reserved only the automatic room
-    of the starting bodies before the review round): Mac A/B of that change, 4 interleaved pairs, `CellDriveMaxFrame`
-    0.85 (noisy), `CellUnloadMaxFrame` 0.94, `Create100kStaticBodies` and `Grow65kMaxFrame` 1.00, and the pages
-    touched at play start for the largest room 0.7 to 25.9 MB (Windows commits the whole reservation: up to 343 MB by
-    the estimate, below the 1,033 MB budget). New provisional metrics: `StrataToLibraryStep`
-    (Mac: `Boxes10k` 0.45, `Boxes30kTracked` 0.92, `Boxes70k` 0.61) and `Grow65kMaxFrame` (the median of 5 fresh
-    worlds' growth frames); the reference machine measures them and checks `StrataStepTime` against its existing
-    budgets (Mac ratios 0.87, 1.01 and 0.87) and `Create10kBodies` against its budget (above).
-  - Wave 5's `showcase-samples`: the `PerfGPU.Samples.OpenWorldTour.*` metrics are provisional (Mac, 1920x1080:
-    `FrameWorkMedianMs` 1.434, `FrameWorkP95Ms` 2.710 and `GPUBusyMedianMs` 4.369 over 958 frames; the frame interval,
-    8.3 ms, is the display's).
-  - Wave 6's `project-settings`: `Perf.Input.Actions256` (an input frame evaluating 256 actions of 4 bindings with every
-    gamepad connected) is provisional against its 20 us target (Mac median 6.76 us). Input actions' Mac A/B against the
-    build before them (3 interleaved pairs, ratios of medians): `Perf.Scene.IdlePlayFrame1M` 1.04 (0.057 to 0.059 us, the
-    game UI's check for changed actions), `Perf.GameUI.IdleFrame10k` 0.82, `Layout10k` 1.00, `PerfGPU.GameUI.Render10k`
-    1.02 and `RenderIdle10k` 0.93; the editor frames (`PerfGPU.Editor.{Edit,Play}FrameNested{100k,1M}`, 0.82-1.04) wait
-    for the display on the Mac and are for the reference machine to judge. Project-wide collision layers' Mac A/B
-    against the build before them (3 interleaved pairs, ratios of medians): `Perf.Physics.*`'s times 0.90-1.01 (the
-    `StrataToLibraryStep` ratios 1.04-1.13), `Perf.Scene.*` 0.93-1.07 except `CancelLoad1M` 1.44 (one attempt per run,
-    the slowest of three cancellations: 3.0-7.3 ms before, 4.6-9.5 ms after, slower in each pair, against a 100 ms
-    target), and the 1M world's open (`PerfGPU.Editor.WorldOpen1M*`) 0.96-1.01. A person has not yet looked at an
-    exported game's icon and Properties in Windows Explorer (CI reads them back through Win32).
-  - Wave 6's `render-quality`: its GPU suites (`StrataTests.GPU`, the samples' windowed and image checks) have run on the
-    Mac's MoltenVK only, never on Windows or NVIDIA (nor the GPU-driven path's count-indirect draws, which MoltenVK
-    lacks). Mac A/Bs of the final branch against main 0584ce47's Release build, under `Tools/PerfLock.py`, interleaved,
-    ratios of medians: `Render100kCubes` 1.03 over 8 pairs (1.05 and 1.08 in runs of 6 and 3; cascade blending accounts
-    for 3%, measured on one build at blend 0.1 against 0), `Render300kCubes` 1.02-1.08, `Render1MCubes` 1.02-1.04,
-    `Render10kMaterials` 0.99-1.03, `IdleFrame3kStreamedTextures` 0.99, the renderer's `EditFrame*` 0.95-1.06
-    (`EditFrameMaterials10k` 1.12 over 3), and `Skinned1000` 1.05-1.07, which came with the steps before TAA's presets
-    (1.07 from main to that point, 1.00 after); these CPU medians scatter by 10% between runs of one build. The GPU's
-    busy time grew by 4-5% for `Render100kCubesGPU` and 1-2% for `Render1MCubesGPU`, all of it in `GPU.Opaque` (100,000
-    cubes: 1.146 ms on main, 1.172 before TAA's presets, 1.232 at the end; every other stage within 1%): the forward
-    shader's paths for cascade blending, probes, local shadows, screen-space reflections, clear coat and transmission
-    cost registers whether a material takes them or not. Variants of the forward shader per material feature would win
-    that back but split the GPU-driven path's batches; the reference machine measures whether it matters. The editor's
-    nested-entity frames (1.01-1.06) wait for the display on the Mac. Sharp's `GPU.TAA` costs 1.52 times Original's
-    (0.477 against 0.313 ms at 1920x1080; `GPU.Post` 0.321 against 0.296 with its sharpening). New provisional metrics,
-    Mac medians of 5 runs (CPU / GPU busy, ms; `Tools/PerfStability.py` found all of them passing in 5 of 5):
-    `Render100kCubesTAA` 0.548 / 3.998, `Render100kCubesTAAOriginal` 0.551 / 3.783, `HeightFog` 0.502 / 3.381,
-    `Atmosphere` 0.534 / 3.542, `AtmosphereSunMovingMaxFrame` 1.249 / 5.087 (spread 0.98-2.56), `ReflectionProbes16`
-    0.593 / 4.336, `SSR` 0.588 / 4.454, `Transmission` 0.597 / 4.871, `LocalShadows16Lights` 1.333 / 6.510 and
-    `LocalShadows16LightsCached` 0.751 / 3.821, `TAALocalShadowsPeakMemory` 564 MiB. The Open World tour against
-    main's (4 pairs): frame work median 0.894 to 0.945 ms (1.06), its 95th percentile 1.25 to 1.31 ms, GPU busy 4.67 to
-    5.65 ms (1.21: the TAA, fog, atmosphere and shadowed lantern and campfires it adopted).
-  - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
-    wave 4, but shows nothing).
+- Waiting for the Windows reference machine (i7-13700K, RTX 5090), which came back on 2026-10-26 with its CPU replaced
+  by the same model (the canary `Perf.Harness.Sort200k` at 9.95-10.03 ms against its 10 ms reference). Wave 7's step 0
+  ran the GPU suites there under the validation layer, the first time on NVIDIA since wave 3, and a campaign of five
+  `-L perf` runs on bc6ee123's Release build (`Tools/PerfStability.py`, the machine 19-24% busy), whose medians gave the
+  Mac's provisional metrics their `Measured` and `Budget` and lowered the cheaper ones (the step-0 commit lists every
+  entry). The Mac's numbers that waited here are in git history (this file at bc6ee123). What stays open:
+  - Blockers of 0.7.0, over budget in every attempt when measured alone and, interleaved with wave 3's Release build
+    (3b87411c, built on 2026-10-13 under these budgets; 3 pairs, medians), within budget there: regressions of waves 4-6
+    (3b87411c..bc6ee123), not the machine. `Perf.EditorPanels.Performance600FramesP95` 0.0993 ms against wave 3's 0.069
+    (budget 0.0924); `Perf.Physics.Create10kBodies` 16.50 against 9.07 ms (budget 11.99: wave 5's box3d inserts every
+    shape into its trees one at a time on the main thread, about 6 ms of box3d's own on the Mac, where Jolt built them
+    in bulk; the way down is bulk insertion with a later box3d bump, and Strata's allocations per body);
+    `PerfGPU.Editor.ThumbnailsMaxFrame` 2.073 against 0.978 ms (budget 1.149); `PerfGPU.Editor.SceneOpenOver1MMaxFrame`
+    1.839 against 0.664 ms (budget 1.143); and `PerfGPU.Editor.EditFrameNested100k`, within its budget alone on
+    bc6ee123 (0.2769 ms against 0.2808) but 1.26 times wave 3's build in the same pairs (0.2708 against 0.2153 ms) and
+    over budget in every attempt of step 0's `-L perf` run (0.287-0.299 ms). Each is fixed before the release, not
+    budgeted; `PlayFrameNested100k` (1.43 times wave 3's, within its budget) goes with the last.
+  - Over budget in the loaded campaign only, within budget alone, entry unchanged:
+    `Perf.EditorPanels.Streaming10kAssetsRefreshFrame` (0.1933 ms against 0.2205).
+  - Unstable in the campaign (a spread above 25% of the median; entries unchanged, to measure alone):
+    `Perf.Runtime.SceneSwitch100kMaxFrame`, `Perf.Jobs.WakeLatency`, `Perf.Editor.SaveMaxFrame250k` (its helper crashed
+    once, 0xC0000005, in the campaign's second run: not investigated yet), `Perf.Scene.CancelLoad1M`,
+    `Perf.Runtime.QuitDuringLoad1M`, `Perf.Editor.SceneOpen10kPrefabInstancesMaxFrame`,
+    `Perf.Physics.Boxes10k.ActiveFrame` and `.StrataStepTime`, `PerfGPU.Editor.ImportSettings4kMaxFrame` and
+    `...10kCubes`, `SceneOpen100kMaxFrame`, `ExportMaxFrameStress`, `PerfGPU.Renderer.EditFrameCubes300k`,
+    `Render300kCubes`, `PlayStartRender1MCubes`, `GPUTimerCost`, `Render100kCubesShadowed`, `Render300kCubesShadowed`,
+    `AtmosphereSunMovingMaxFrame`, `ReflectionProbes16`, `PerfGPU.Streaming.MaxFinalizeTime`,
+    `PerfGPU.Streaming.Mips.MaxFrameRatio` and `PerfGPU.GameUI.RenderIdle10k`.
+  - Targets not met, kept below their new budgets (medians of 5): `Perf.Asset.FirstScan10k` 5,567 ms against 5,000,
+    `PerfGPU.Editor.WorldOpen1MMaxFrame` 44.06 against 20.56, `Perf.Physics.Grow65kMaxFrame` 132.6 against 16.7 and
+    `Create100kStaticBodies` 166.7 against 25 (box3d's insertion, above), `Perf.World.CellUnloadMaxFrame` 7.92 against
+    4, `PerfGPU.Editor.EditFrameWorldIdle` 0.334 against 0.281 and `PerfGPU.World.CellDriveMaxFrame` 8.885 against 8.
+  - Provisional until the integration's campaign: the Open World tour's three metrics (the campaign's tour ended early
+    in two runs, fixed since: 12 seconds of game time; alone: work median 0.416 ms, GPU busy 0.669 ms) and step 0's
+    `PerfGPU.Renderer.Render100kCubesShadowed4K` and `...High4K` with their GPU times.
+  - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since wave
+    4, but shows nothing).
 
 ## Waves
 

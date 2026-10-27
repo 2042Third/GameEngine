@@ -450,7 +450,19 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   down:** a change that makes a metric cheaper
   lowers its entry in the same commit, a metric over budget is a regression to fix rather than a budget to raise, and
   commits that add or lower budgets state the measured values. Lower must be better (time per item, not items per
-  second). **Stability:** `Tools/PerfStability.py --runs 5` runs `-L perf` five times and reports per metric the
+  second). **The one way a budget goes up** is a change of the machine, shown on it: the metric's suite measured alone
+  (under `Tools/PerfLock.py`) on the current build, then interleaved with the Release build of the commit that set the
+  budget (`git log -S"<metric>" -- StrataTests/Perf/Budgets.json`), three pairs. That build as far over its own budget
+  (the median ratio within 1.10) is a machine change: `Tools/PerfStability.py --propose-budgets <file> --rebaseline
+  <metric>="<the commit, both medians>"` re-baselines it (`Measured` the new median, `Budget` 1.5 times it) and the
+  roadmap's open items list it. That build within its budget is a regression between the two commits: fixed, or the
+  budget stays, the test keeps failing and the roadmap's open items name it as a blocker of the next release.
+  `--propose-budgets` (with `--results <runs>`) applies the rules to kept runs (at least three valid ones: the canary
+  within 1.10 of its reference, the machine at most 30% busy) and writes the proposed `Budgets.json`: provisional entries
+  get `Measured` (the median) and `Budget` (1.5 times it, or their `Target` when every run met it), cheaper ones (below
+  0.9 of `Measured`) are lowered, dearer ones within budget get their new `Measured`, counts their value; unstable ones
+  (a spread above 25%) and those over budget stay as they are. `--baseline <files>` compares two builds' results per
+  metric (medians and their ratio; `--max-ratio` flags rises above it, within `--slack` ms below `--slack-below` ms). **Stability:** `Tools/PerfStability.py --runs 5` runs `-L perf` five times and reports per metric the
   minimum, median and maximum, the pass rate and how often it needed confirmation, and per run how busy the machine
   was, the attempts of every confirmed metric and the canary `Perf.Harness.Sort200k` against its reference. **Load or
   regression:** a check's attempts follow each other within about a minute, so other work that lasts longer (a build)
