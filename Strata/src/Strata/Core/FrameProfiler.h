@@ -72,7 +72,7 @@ namespace Strata
 		{ "Scene.Scripts", true },    // The "Scripting" scene system's callbacks (SceneSystemDescriptor::ProfileStage)
 		{ "Scene.Physics", true },    // The "Physics" scene system: stepping and contact callbacks
 		{ "Scene.Audio", true },      // The "Audio" scene system
-		{ "Scene.Transforms", true }, // Scene::UpdateWorldTransforms
+		{ "Scene.Transforms", true }, // Scene::UpdateWorldTransforms (and Debug builds' check of the caches it keeps)
 		{ "Render.Extract", true },   // SceneRenderer gathering lights, draws and shadow casters from the scene
 		{ "Render.Submit", true },    // SceneRenderer recording and submitting its command list
 		{ "Editor.UI", true },        // ImGui: the layers' OnImGuiRender and drawing the UI (ImGuiModule::OnRenderUI)

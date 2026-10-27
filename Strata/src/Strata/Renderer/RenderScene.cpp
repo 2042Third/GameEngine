@@ -169,6 +169,9 @@ namespace Strata
 		clone->m_RenderTransformsVersion = ~0ull;
 		clone->m_PosesProvider = nullptr;
 		clone->m_SkinDirty = true;
+		// A new render scene: Debug builds validate it at its first sync.
+		clone->m_ValidationCheck = AmortizedCheck(c_ValidatedProxiesPerSync);
+		clone->m_ValidationCount = 0;
 		clone->ConnectListeners(registry);
 		clone->m_Stats.CloneMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start).count();
 		registry.ctx().emplace<RenderSceneContext>().Instance = std::move(clone);
@@ -356,10 +359,17 @@ namespace Strata
 
 #ifdef ST_DEBUG
 		// Entities a partial sync left queued have no proxies yet (or older ones): the proxies match the scene once all are read.
-		std::string error;
-		if (m_Pending.empty() && !Validate(&error))
-			ST_CORE_ASSERT(false, "The render proxies of scene '{}' differ from the scene (was a MeshRendererComponent written without a signal?): {}",
-				m_Scene->GetName(), error);
+		// Paced by the render scene's size (c_ValidatedProxiesPerSync).
+		if (m_Pending.empty() && m_ValidationCheck.IsDue(m_Entities.size()))
+		{
+			m_ValidationCount++;
+			std::string error;
+			if (!Validate(&error))
+			{
+				ST_CORE_ASSERT(false, "The render proxies of scene '{}' differ from the scene (was a MeshRendererComponent written without a signal?): {}",
+					m_Scene->GetName(), error);
+			}
+		}
 #endif
 		return m_SyncUpdates;
 	}

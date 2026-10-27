@@ -91,6 +91,32 @@ TEST_SUITE("Scene.Transforms")
 		CHECK(changes.empty());
 	}
 
+	TEST_CASE("Debug builds check a small scene's caches after every update and a large one's every few updates")
+	{
+		// 1,111 entities, more than two updates' budget: checked at the first update, then once three more updates' budget
+		// covers them. 13 entities are checked at every update.
+		Scene large;
+		CreateTree(large, 10, 3);
+		Scene small;
+		CreateTree(small, 3, 2);
+		REQUIRE(large.GetEntityCount() > Scene::c_CacheCheckEntitiesPerUpdate * 2);
+		REQUIRE(large.GetEntityCount() <= Scene::c_CacheCheckEntitiesPerUpdate * 3);
+		constexpr uint64_t c_Updates = 9;
+		for (uint64_t update = 0; update < c_Updates; update++)
+		{
+			large.OnUpdateEditor(0.016f);
+			small.OnUpdateEditor(0.016f);
+		}
+#if defined(ST_DEBUG)
+		CHECK(small.GetCacheCheckCount() == c_Updates);
+		CHECK(large.GetCacheCheckCount() == 3); // Updates 1, 4 and 7
+#else
+		CHECK(small.GetCacheCheckCount() == 0);
+		CHECK(large.GetCacheCheckCount() == 0);
+#endif
+		CheckSceneCaches(large);
+	}
+
 	TEST_CASE("Only the subtrees of changed entities are recomputed")
 	{
 		Scene scene;

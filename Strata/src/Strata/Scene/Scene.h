@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Asset/AssetTypes.h"
+#include "Strata/Core/AmortizedCheck.h"
 #include "Strata/Core/Base.h"
 #include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/Timestep.h"
@@ -96,7 +97,8 @@ namespace Strata
 	// Entity::MarkModified<TransformComponent>() or registry.patch (ComponentAccess, Scene::SetWorldTransform and the script
 	// API do), or through MarkTransformChanged where an on_update signal is unwanted (physics write-back). The same holds
 	// for NameComponent and TagComponent, whose values the name and tag lookups index. Entities created since the last
-	// UpdateWorldTransforms are recomputed anyway. Debug builds validate the caches after every runtime and editor update.
+	// UpdateWorldTransforms are recomputed anyway. Debug builds validate the caches after runtime and editor updates: after
+	// every one for scenes of up to c_CacheCheckEntitiesPerUpdate entities, every few for larger ones.
 	class Scene
 	{
 	public:
@@ -384,6 +386,14 @@ namespace Strata
 		// indices agree with the RelationshipComponents, the UUID map and the components. Returns false with the first
 		// inconsistency.
 		bool ValidateHierarchy(std::string* outError = nullptr) const;
+		// Debug builds assert after runtime and editor updates that both pass: after every update for scenes of up to
+		// c_CacheCheckEntitiesPerUpdate entities, every few updates for larger ones (Core/AmortizedCheck). The check recomputes
+		// every world transform and walks the whole hierarchy, about 10 microseconds per entity in Debug: after every update
+		// it took a world of 11,000 entities 100 ms a frame, and paced it costs about 5 ms per update on average whatever the
+		// scene's size. An unsignaled write, which leaves a cache stale until something else touches the entity, is caught a few
+		// updates later. GetCacheCheckCount counts these checks (0 in other builds).
+		static constexpr uint64_t c_CacheCheckEntitiesPerUpdate = 512;
+		uint64_t GetCacheCheckCount() const { return m_CacheCheckCount; }
 
 		// Diagnostics (cumulative since the scene was created): world transforms recomputed by UpdateWorldTransforms (and the
 		// number of its calls that recomputed some of them on the job system), full hierarchy order computations, entities
@@ -693,6 +703,8 @@ namespace Strata
 		void RecordTransformChanges(uint64_t version, std::span<const entt::entity> entities, bool overflowed);
 		// Debug builds: asserts that ValidateWorldTransforms and ValidateHierarchy pass.
 		void AssertCachesValid() const;
+		// Debug builds, after an update: AssertCachesValid when m_CacheCheck says it is due, in the Scene.Transforms stage.
+		void CheckCachesAfterUpdate();
 
 		// Lookup indices (caches, hence const)
 		void BuildLookupIndex(LookupIndex& index, bool names) const;
@@ -747,6 +759,9 @@ namespace Strata
 		uint64_t m_TransformChangesFloor = 0;        // Changes up to this version may be missing from m_TransformChanges
 		std::vector<entt::entity> m_ChangeScratch;
 		mutable std::vector<entt::entity> m_PathScratch;
+		// Debug builds' check of the caches after updates (CheckCachesAfterUpdate); in every configuration, for one layout.
+		AmortizedCheck m_CacheCheck { c_CacheCheckEntitiesPerUpdate };
+		uint64_t m_CacheCheckCount = 0;
 
 		// Queries (caches, hence mutable)
 		mutable std::vector<Entity> m_HierarchyOrder;

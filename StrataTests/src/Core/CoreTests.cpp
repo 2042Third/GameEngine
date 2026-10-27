@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Core/AmortizedCheck.h"
 #include "Strata/Core/CommandLine.h"
 #include "Strata/Core/CommandLineOptions.h"
 #include "Strata/Core/Hash.h"
@@ -35,6 +36,39 @@ TEST_SUITE("Core")
 			CHECK(uuid.IsValid());
 			CHECK(generated.insert(static_cast<uint64_t>(uuid)).second);
 		}
+	}
+
+	TEST_CASE("AmortizedCheck checks what fits its budget at every call and more only once enough calls paid for it")
+	{
+		AmortizedCheck small(100);
+		for (int call = 0; call < 5; call++)
+			CHECK(small.IsDue(100));
+
+		// 250 elements need three calls' budget: the first call checks at once, then every third.
+		AmortizedCheck large(100);
+		std::vector<bool> due;
+		for (int call = 0; call < 7; call++)
+			due.push_back(large.IsDue(250));
+		CHECK(due == std::vector<bool> { true, false, false, true, false, false, true });
+
+		// A structure that grows is checked once the budget covers its new size; one that shrinks, sooner.
+		AmortizedCheck changing(100);
+		CHECK(changing.IsDue(1000));
+		CHECK_FALSE(changing.IsDue(150));
+		CHECK(changing.IsDue(150));
+		CHECK_FALSE(changing.IsDue(1000));
+		CHECK_FALSE(changing.IsDue(1000));
+		CHECK(changing.IsDue(50));
+
+		// Nothing to check is always due, and a budget of 0 counts as 1.
+		AmortizedCheck empty(100);
+		CHECK(empty.IsDue(0));
+		CHECK(empty.IsDue(0));
+		AmortizedCheck zero(0);
+		CHECK(zero.GetElementsPerCall() == 1);
+		CHECK(zero.IsDue(2));
+		CHECK_FALSE(zero.IsDue(2));
+		CHECK(zero.IsDue(2));
 	}
 
 	TEST_CASE("UUID string round trip")

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Asset/AssetTypes.h"
+#include "Strata/Core/AmortizedCheck.h"
 #include "Strata/Core/Base.h"
 #include "Strata/Math/AABB.h"
 #include "Strata/Renderer/RenderLights.h"
@@ -76,7 +77,8 @@ namespace Strata
 	// and entities whose world transform or activity changed (Scene::GetWorldTransformChanges; a full comparison when the
 	// scene no longer knows). The contract is the transform contract's: code that writes MeshRendererComponent fields of an
 	// entity created before the last sync must signal it (Entity::MarkModified, registry.patch; ComponentAccess does);
-	// Debug builds validate the proxies after every Sync (Validate).
+	// Debug builds validate the proxies after syncs (Validate): after every one for render scenes of up to
+	// c_ValidatedProxiesPerSync proxies, every few for larger ones.
 	//
 	// Mesh layouts (bounds, submeshes and their materials) are learned from loaded meshes (SetMeshLayout) and kept when
 	// a mesh is evicted, so proxies keep their bounds and instance slots. Sync keeps them current with the asset manager
@@ -180,6 +182,12 @@ namespace Strata
 		// Compares every proxy, the spatial index and the instance data with what a rebuild from the scene would produce.
 		// Returns false with the first difference.
 		bool Validate(std::string* outError = nullptr) const;
+		// Debug builds assert after syncs that Validate passes: after every sync for render scenes of up to
+		// c_ValidatedProxiesPerSync proxies, every few syncs for larger ones (Core/AmortizedCheck). It costs about as much
+		// as rebuilding the proxies: after every sync it took the Open World sample 25 ms a frame in Debug, and paced its
+		// cost per sync stays bounded whatever the size. GetValidationCount counts these validations (0 in other builds).
+		static constexpr uint64_t c_ValidatedProxiesPerSync = 1024;
+		uint64_t GetValidationCount() const { return m_ValidationCount; }
 
 		//////////////////////////////////////////////////////////////////////////
 		// Proxies (indices below GetProxyCapacity; free ones have a null entity)
@@ -450,6 +458,9 @@ namespace Strata
 		uint64_t m_TransformsVersion = 0;
 		std::vector<entt::entity> m_Pending; // Entities whose MeshRendererComponent was created or signaled since the last sync
 		std::vector<uint32_t> m_PendingPositions; // By entt::to_entity: the entity's place in m_Pending
+		// Debug builds' Validate after syncs (c_ValidatedProxiesPerSync); in every configuration, for one layout.
+		AmortizedCheck m_ValidationCheck { c_ValidatedProxiesPerSync };
+		uint64_t m_ValidationCount = 0;
 
 		// Proxies (structure of arrays)
 		std::vector<entt::entity> m_Entities;

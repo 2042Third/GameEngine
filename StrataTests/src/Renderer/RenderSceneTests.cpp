@@ -418,7 +418,7 @@ TEST_SUITE("Renderer.RenderScene")
 		CHECK(renderScene.GetInstances()[changes[0]].World.Rows[1].w == doctest::Approx(1.5f));
 		CheckProxies(renderScene);
 
-		// A write that is not signaled is noticed by the validation (Debug builds assert it after every sync).
+		// A write that is not signaled is noticed by the validation (Debug builds assert it after syncs).
 		version = renderScene.GetInstanceVersion();
 		moved.GetComponent<MeshRendererComponent>().CastShadows = false;
 		std::string error;
@@ -428,6 +428,35 @@ TEST_SUITE("Renderer.RenderScene")
 		CHECK(renderScene.Sync(nullptr) == 1);
 		CHECK((renderScene.GetProxyFlags(1234) & RenderProxyFlags::CastShadows) == 0);
 		CheckProxies(renderScene);
+	}
+
+	TEST_CASE("Debug builds validate a small render scene after every sync and a large one every few syncs")
+	{
+		// Three syncs' budget of proxies (less one): validated at the first sync, then once three more syncs' budget covers it.
+		Scene small("Small");
+		for (int index = 0; index < 10; index++)
+			AddCube(small, glm::vec3(static_cast<float>(index), 0.0f, 0.0f));
+		Scene large("Large");
+		const uint64_t cubes = RenderScene::c_ValidatedProxiesPerSync * 3 - 1;
+		for (uint64_t index = 0; index < cubes; index++)
+			AddCube(large, glm::vec3(static_cast<float>(index % 100), 0.0f, static_cast<float>(index / 100)));
+		RenderScene& smallScene = RenderScene::Get(small);
+		RenderScene& largeScene = RenderScene::Get(large);
+		constexpr uint64_t c_Syncs = 7;
+		for (uint64_t sync = 0; sync < c_Syncs; sync++)
+		{
+			smallScene.Sync(nullptr);
+			largeScene.Sync(nullptr);
+		}
+		REQUIRE(largeScene.GetProxyCapacity() == cubes);
+#if defined(ST_DEBUG)
+		CHECK(smallScene.GetValidationCount() == c_Syncs);
+		CHECK(largeScene.GetValidationCount() == 3); // Syncs 1, 4 and 7
+#else
+		CHECK(smallScene.GetValidationCount() == 0);
+		CHECK(largeScene.GetValidationCount() == 0);
+#endif
+		CheckProxies(largeScene);
 	}
 
 	TEST_CASE("Mesh renderers beyond the instance limit get no instances until there is room")

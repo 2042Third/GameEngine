@@ -967,8 +967,12 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   goes, every system gets `OnEntityDestroying` (descendants first), so scripts receive `OnDestroy` with the entity
   still valid (`Scene.cpp`). The deferred requests of an update are destroyed in one batch, like `DestroyEntities`.
 - Systems react to edits through EnTT signals; `ComponentAccess` and `Entity::MarkModified` emit `on_update`.
-- Debug builds end every `OnUpdateRuntime` and `OnUpdateEditor` by asserting that the scene's caches match a full
-  recomputation (`Scene::ValidateWorldTransforms`, `ValidateHierarchy`; see [Scene caches](#scene-caches)).
+- Debug builds end `OnUpdateRuntime` and `OnUpdateEditor` by asserting that the scene's caches match a full
+  recomputation (`Scene::ValidateWorldTransforms`, `ValidateHierarchy`; see [Scene caches](#scene-caches)), in the
+  `Scene.Transforms` stage: after every update for scenes of up to `c_CacheCheckEntitiesPerUpdate` (512) entities, every
+  few updates for larger ones (`Core/AmortizedCheck`: the check costs about 10 microseconds per entity in Debug, which
+  after every update made a world of 11,000 entities take 100 ms a frame). `RenderScene::Sync` paces its `Validate` the
+  same way (`c_ValidatedProxiesPerSync`, 1,024 proxies).
 - Gameplay asks the scene's owner to quit or to switch scenes (`Scene::RequestQuit`, `RequestSceneLoad`); owners honor
   the requests after the update. The owners are the editor's play mode (`EditorContext::StartRuntime` plays a
   `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`. The game's shell (its window and save files,

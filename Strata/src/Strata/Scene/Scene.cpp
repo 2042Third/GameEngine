@@ -1936,6 +1936,18 @@ namespace Strata
 			ST_CORE_ASSERT(false, "Scene '{}' has inconsistent caches: {}", m_Name, error);
 	}
 
+#ifdef ST_DEBUG
+	void Scene::CheckCachesAfterUpdate()
+	{
+		if (!m_CacheCheck.IsDue(m_EntityMap.size()))
+			return;
+		// Part of keeping the caches UpdateWorldTransforms keeps, timed with it.
+		ST_PROFILE_STAGE("Scene.Transforms");
+		m_CacheCheckCount++;
+		AssertCachesValid();
+	}
+#endif
+
 	////////////////////////////////////////////////////////////////////////////////
 	// Signals
 	////////////////////////////////////////////////////////////////////////////////
@@ -2115,7 +2127,7 @@ namespace Strata
 		{
 			UpdateWorldTransforms();
 #ifdef ST_DEBUG
-			AssertCachesValid();
+			CheckCachesAfterUpdate();
 #endif
 			return;
 		}
@@ -2133,7 +2145,7 @@ namespace Strata
 				UpdateWorldTransforms();
 			}
 #ifdef ST_DEBUG
-			AssertCachesValid();
+			CheckCachesAfterUpdate();
 #endif
 			return;
 		}
@@ -2212,7 +2224,7 @@ namespace Strata
 		FlushPendingDestroys();
 		UpdateWorldTransforms();
 #ifdef ST_DEBUG
-		AssertCachesValid();
+		CheckCachesAfterUpdate();
 #endif
 	}
 
@@ -2242,7 +2254,7 @@ namespace Strata
 		}
 		UpdateWorldTransforms();
 #ifdef ST_DEBUG
-		AssertCachesValid();
+		CheckCachesAfterUpdate();
 #endif
 	}
 
