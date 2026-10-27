@@ -1186,15 +1186,21 @@ TEST_SUITE("GPU.Editor.ImportSettings")
 		REQUIRE(FileSystem::Remove(projectDirectory / ".strata" / "Cache"));
 
 		// The editor opens its project and start scene before its first frame (EditorContext::OpenProject) while the unused
-		// asset's import is held: the scene opens, its render proxies built, without waiting for that import (released after
-		// 15 s, so that a wait shows as a slow open rather than a hang).
+		// asset's import is held: the scene opens, its render proxies built, without waiting for that import. The import is
+		// still pending when the open returns: an open that waited for it would have found it done, since the gate opens once
+		// the open returned or after a minute, so that a wait shows as a slow open with the import done rather than a hang.
+		// (How long the open takes depends on the machine's load, so it is reported, not checked.)
 		EditorContextSpecification specification { false };
 		specification.ImportInBackground = true;
 		EditorContext context { specification };
 		GatedImporter::SetGate(false);
-		std::thread opener([]()
+		std::mutex gateMutex;
+		std::condition_variable gateReleased;
+		bool openReturned = false;
+		std::thread opener([&]()
 		{
-			std::this_thread::sleep_for(std::chrono::seconds(15));
+			std::unique_lock lock(gateMutex);
+			gateReleased.wait_for(lock, std::chrono::minutes(1), [&]() { return openReturned; });
 			GatedImporter::SetGate(true);
 		});
 		const auto start = std::chrono::steady_clock::now();
@@ -1202,9 +1208,14 @@ TEST_SUITE("GPU.Editor.ImportSettings")
 		const bool opened = context.OpenProject(projectDirectory, &error);
 		const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 		const bool stillImporting = context.GetAssetManager() && context.GetAssetManager()->IsImportPending(unused);
+		{
+			std::lock_guard lock(gateMutex);
+			openReturned = true;
+		}
+		gateReleased.notify_one();
 		opener.join();
 		REQUIRE_MESSAGE(opened, error);
-		CHECK_MESSAGE(seconds < 10.0, "Opening took ", seconds, " s");
+		MESSAGE("Opening took ", seconds, " s");
 		CHECK(stillImporting);
 		const RenderScene* renderScene = RenderScene::Find(*context.GetEditScene());
 		REQUIRE(renderScene);
