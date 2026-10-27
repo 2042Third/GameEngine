@@ -212,6 +212,52 @@ TEST_SUITE("Runtime.Game")
 		CHECK_FALSE(loading->IsRunning());
 	}
 
+	TEST_CASE("A game's played time counts its scenes' fixed steps from its start, not the loading scene's")
+	{
+		ScopedJobSystem jobs(2, 2);
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimePlayedTime");
+		// The start scene takes many frames to read; the next one steps at 20 Hz, the others at the default 60 Hz.
+		Scene next("Next");
+		next.CreateEntity("Camera").AddComponent<CameraComponent>().Primary = true;
+		next.GetSettings().FixedTimestep = 0.05f;
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 30'000) }, { 0x1011, MakeScene("Loading", 1) },
+			{ 0x1012, ToBytes(JsonUtils::Dump(SceneSerializer::Serialize(next))) } }, UUID(0x1010), UUID(0x1011));
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		CHECK(game->GetPlayedSeconds() == 0.0);
+
+		// The loading scene steps (its first frame runs a step), but the game has not started playing.
+		UpdateUntil(*game, [&]() { return game->GetScene() != nullptr; });
+		REQUIRE(game->IsShowingLoadingScene());
+		CHECK(game->GetScene()->GetFixedStepCount() >= 1);
+		CHECK(game->GetPlayedSeconds() == 0.0);
+
+		UpdateUntil(*game, [&]() { return game->HasStarted(); });
+		const Ref<Scene> start = game->GetScene();
+		// The frame that started the scene ran its first step; each frame of a 60th of a second runs one more.
+		CHECK(start->GetFixedStepCount() == 1);
+		for (int frame = 0; frame < 59; frame++)
+			game->Update(c_Frame);
+		CHECK(start->GetFixedStepCount() == 60);
+		CHECK(game->GetPlayedSeconds() == doctest::Approx(1.0));
+		// Time the game stops is not played.
+		start->SetTimeScale(0.0f);
+		for (int frame = 0; frame < 30; frame++)
+			game->Update(c_Frame);
+		CHECK(start->GetFixedStepCount() == 60);
+		CHECK(game->GetPlayedSeconds() == doctest::Approx(1.0));
+		start->SetTimeScale(1.0f);
+
+		// The scenes after a switch add their steps at their own timestep (the start scene steps while the next one loads).
+		start->RequestSceneLoad(UUID(0x1012));
+		UpdateUntil(*game, [&]() { return game->GetSceneHandle() == UUID(0x1012) && game->GetScene()->GetFixedStepCount() >= 3; });
+		const double startSeconds = static_cast<double>(start->GetFixedStepCount()) * static_cast<double>(1.0f / 60.0f);
+		const double nextSeconds = static_cast<double>(game->GetScene()->GetFixedStepCount()) * static_cast<double>(0.05f);
+		CHECK(start->GetFixedStepCount() > 60);
+		CHECK(game->GetPlayedSeconds() == doctest::Approx(startSeconds + nextSeconds));
+	}
+
 	TEST_CASE("A game whose start scene cannot be loaded does not start")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeBrokenStart");

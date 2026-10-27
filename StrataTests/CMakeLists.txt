@@ -550,7 +550,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEXPECTED_OUTPUT=asset-budget-mb needs a whole number of megabytes"
 			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidAssetBudget PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
-	# A frame count that is not a positive whole number is refused, so a mistyped check cannot run forever.
+	# A frame count or a game time that is not a positive whole number is refused, so a mistyped check cannot run forever.
 	foreach(frames abc 0 -5)
 		add_test(NAME StrataRuntime.InvalidFrames.${frames}
 			COMMAND "${CMAKE_COMMAND}"
@@ -558,7 +558,27 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 				"-DEXPECTED_OUTPUT=--frames needs a positive whole number of frames"
 				-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 		set_tests_properties(StrataRuntime.InvalidFrames.${frames} PROPERTIES FIXTURES_REQUIRED StrataExportedGame TIMEOUT 60)
+		add_test(NAME StrataRuntime.InvalidSeconds.${frames}
+			COMMAND "${CMAKE_COMMAND}"
+				"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--headless;--seconds;${frames}"
+				"-DEXPECTED_OUTPUT=--seconds needs a positive whole number of seconds"
+				-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+		set_tests_properties(StrataRuntime.InvalidSeconds.${frames} PROPERTIES FIXTURES_REQUIRED StrataExportedGame TIMEOUT 60)
 	endforeach()
+	# The screenshot is the last frame of a run that ends by itself: without --frames or --seconds there is none.
+	add_test(NAME StrataRuntime.InvalidScreenshot
+		COMMAND "${CMAKE_COMMAND}"
+			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--windowed;--screenshot;${STRATA_EXPORT_TEST_DIR}/Never.png"
+			"-DEXPECTED_OUTPUT=--screenshot needs --frames <count> or --seconds <count>"
+			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+	set_tests_properties(StrataRuntime.InvalidScreenshot PROPERTIES FIXTURES_REQUIRED StrataExportedGame TIMEOUT 60)
+	# --seconds ends the run with the frame by which the game played that long in fixed steps (180 of them, or a step or a
+	# few more when a late frame runs several), however many frames that takes; headless at 60 frames per second, that is
+	# three seconds of the clock too.
+	add_test(NAME StrataRuntime.Seconds
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" "-DARGUMENTS=--headless|--seconds|3"
+			"-DEXPECT=The game played 3." -DMIN_SECONDS=2 -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataRuntime.Seconds PROPERTIES FIXTURES_REQUIRED StrataExportedGame TIMEOUT 120)
 	# --perf-log writes a CSV row per frame (FramePerfLog), also headless; the check reads it back (Runtime/PerfLogReader.h).
 	add_test(NAME StrataRuntime.PerfLog
 		COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 30 --perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLog.csv")
@@ -762,18 +782,18 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
 	set_tests_properties(StrataEditor.PhysicsPlayground PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain
 		FIXTURES_SETUP StrataPhysicsPlaygroundExport)
-	# The exported Playground in a window: its demo plays for ten seconds, the last frame shows the arena, and its physics
-	# took time every frame (Scene.Physics in the perf log).
+	# The exported Playground in a window: its demo plays for ten seconds of game time (--seconds, however many frames that
+	# takes), the last frame shows the arena, and its physics took time (Scene.Physics in the perf log).
 	set(STRATA_PLAYGROUND_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/PhysicsPlayground/$<CONFIG>")
 	add_test(NAME StrataRuntime.PhysicsPlaygroundWindowed
-		COMMAND "${STRATA_PLAYGROUND_DIR}/Build/PhysicsPlayground${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1280x720 --frames 600
+		COMMAND "${STRATA_PLAYGROUND_DIR}/Build/PhysicsPlayground${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1280x720 --seconds 10
 			--screenshot "${STRATA_PLAYGROUND_DIR}/Windowed.png" --perf-log "${STRATA_PLAYGROUND_DIR}/Windowed.csv" --save-directory "${STRATA_PLAYGROUND_DIR}/WindowedSaves")
 	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataPhysicsPlaygroundExport
 		FIXTURES_SETUP StrataPhysicsPlaygroundWindowed)
 	add_test(NAME StrataRuntime.PhysicsPlaygroundWindowedImage COMMAND StrataTests --strata-test-helper=check-image "${STRATA_PLAYGROUND_DIR}/Windowed.png" --size 1280x720)
 	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataPhysicsPlaygroundWindowed)
 	add_test(NAME StrataRuntime.PhysicsPlaygroundWindowedPerf
-		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_PLAYGROUND_DIR}/Windowed.csv" 600 --nonzero Scene.Physics --nonzero GPU.TAA)
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_PLAYGROUND_DIR}/Windowed.csv" any --nonzero Scene.Physics --nonzero GPU.TAA)
 	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataPhysicsPlaygroundWindowed)
 	# The Open World: a streamed island (a world of three layers over 97 terrain tiles in the persistent scene, 20,000 props,
 	# 30 foxes, five camps). The explorer streams cells in, walks on the terrain, teleports 500 m once the cells and the ground
@@ -807,13 +827,14 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEDITOR_ALLOWED_MESSAGES=\\[warning\\] Strata: Physics: scene 'Island' starts simulating after waiting 10 s for meshes"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
 	set_tests_properties(StrataEditor.OpenWorld PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataOpenWorldExport)
-	# In a window at 1920 x 1080 with a small texture budget (mip streaming under pressure): the island fills the picture,
-	# and the perf log shows cells loaded, streaming and the GPU at work (TAA, and the shadow views of the lantern, which the
-	# tour sees for its first two seconds: the tour runs by the clock, so a fast display's 1200 frames see less of it), no
-	# body waiting at the growth limit and none left waiting for its collider at the end.
+	# In a window at 1920 x 1080 with a small texture budget (mip streaming under pressure), for 30 s of game time (--seconds,
+	# however fast the frames come: the 24 s tour has ended over the island in the morning of a 600 s day that begins at 9:00):
+	# the island fills the lower half of the picture, and the perf log shows cells loaded, streaming and the GPU at work (TAA,
+	# and the shadow views of the lantern, which the tour sees in its first two seconds), no body waiting at the growth limit
+	# and none left waiting for its collider at the end.
 	set(STRATA_OPEN_WORLD_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/OpenWorld/$<CONFIG>")
 	add_test(NAME StrataRuntime.OpenWorldWindowed
-		COMMAND "${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1920x1080 --frames 1200 --asset-budget-mb 128
+		COMMAND "${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1920x1080 --seconds 30 --asset-budget-mb 128
 			--screenshot "${STRATA_OPEN_WORLD_DIR}/Windowed.png" --perf-log "${STRATA_OPEN_WORLD_DIR}/Windowed.csv"
 			--save-directory "${STRATA_OPEN_WORLD_DIR}/WindowedSaves")
 	set_tests_properties(StrataRuntime.OpenWorldWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldExport FIXTURES_SETUP StrataOpenWorldWindowed)
@@ -821,7 +842,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		COMMAND StrataTests --strata-test-helper=check-image "${STRATA_OPEN_WORLD_DIR}/Windowed.png" --size 1920x1080 --dominant green 5)
 	set_tests_properties(StrataRuntime.OpenWorldWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
 	add_test(NAME StrataRuntime.OpenWorldWindowedPerf
-		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_OPEN_WORLD_DIR}/Windowed.csv" 1200 --nonzero WorldCellsLoaded
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_OPEN_WORLD_DIR}/Windowed.csv" any --nonzero WorldCellsLoaded
 			--nonzero World.Streaming --nonzero GPUBusyMs --nonzero GPU.TAA --nonzero LocalShadowViewsDrawn --max PhysicsBodiesWaiting 0
 			--last-max PhysicsBodiesPending 0)
 	set_tests_properties(StrataRuntime.OpenWorldWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
@@ -865,11 +886,12 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'ThirdPerson' are not built yet|\\[warning\\] Strata: Import 'Models/Robot/RobotExpressive.glb': Not imported: morph target"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
 	set_tests_properties(StrataEditor.ThirdPerson PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataThirdPersonExport)
-	# The exported game in a window: its main menu, the robot dancing on its island under the title and the menu; the perf
-	# log shows the robot's animation, the menu's UI and the GPU at work (its TAA and screen-space reflections).
+	# The exported game in a window for five seconds of game time (--seconds: the attract mode starts after ten, however many
+	# frames they take): its main menu, the robot dancing on its island under the title and the menu; the perf log shows the
+	# robot's animation, the menu's UI and the GPU at work (its TAA and screen-space reflections).
 	set(STRATA_THIRD_PERSON_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/ThirdPerson/$<CONFIG>")
 	add_test(NAME StrataRuntime.ThirdPersonWindowed
-		COMMAND "${STRATA_THIRD_PERSON_DIR}/Build/ThirdPerson${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1280x720 --frames 300
+		COMMAND "${STRATA_THIRD_PERSON_DIR}/Build/ThirdPerson${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1280x720 --seconds 5
 			--screenshot "${STRATA_THIRD_PERSON_DIR}/Windowed.png" --perf-log "${STRATA_THIRD_PERSON_DIR}/Windowed.csv"
 			--save-directory "${STRATA_THIRD_PERSON_DIR}/WindowedSaves")
 	set_tests_properties(StrataRuntime.ThirdPersonWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonExport FIXTURES_SETUP StrataThirdPersonWindowed)
@@ -877,7 +899,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		COMMAND StrataTests --strata-test-helper=check-image "${STRATA_THIRD_PERSON_DIR}/Windowed.png" --size 1280x720)
 	set_tests_properties(StrataRuntime.ThirdPersonWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonWindowed)
 	add_test(NAME StrataRuntime.ThirdPersonWindowedPerf
-		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_THIRD_PERSON_DIR}/Windowed.csv" 300 --nonzero Scene.Animation
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_THIRD_PERSON_DIR}/Windowed.csv" any --nonzero Scene.Animation
 			--nonzero Scene.UI --nonzero GPUBusyMs --nonzero GPU.TAA --nonzero GPU.Reflections)
 	set_tests_properties(StrataRuntime.ThirdPersonWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonWindowed)
 endif()

@@ -665,7 +665,8 @@ like `project.settings` does (the external editor is `Editor.ExternalEditor`, `{
 they are someone's environment. A failed write shows as `preferences.get`'s `fileState` `"unwritten"`; `preferences.save`
 writes again, and `editor.quit` refuses until then (`force: true` reports `discardedPreferences`).
 Check the result headless: `<dir>/<Game> --headless --frames 120` (exit code 0). Games load scenes in the background
-too: the first frames run before the start scene is in, so give short checks enough `--frames`.
+too: the first frames run before the start scene is in, so give short checks enough `--frames`, or use `--seconds 2`,
+which counts game time from the start scene's start (fixed steps, whatever the frame rate: what screenshots should use).
 
 **Repeat a session** (a regression script without writing one): note `journal.latest` of `editor.activity {"limit": 1}` (the newest
 entry) before you start, work, then `editor.activity.export {"path": "Session.json", "since": <that latest>}`. It writes your successful

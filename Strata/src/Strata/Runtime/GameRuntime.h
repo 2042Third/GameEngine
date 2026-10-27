@@ -81,6 +81,11 @@ namespace Strata
 		bool IsShowingLoadingScene() const { return m_ShowingLoadingScene; }
 		// The game's first scene started (it may have switched since).
 		bool HasStarted() const { return m_Started; }
+		// The game time played since the game's first scene started, in seconds: the fixed steps its scenes ran
+		// (Scene::GetFixedStepCount, of the running scene and of those it replaced), each at its scene's fixed timestep. The
+		// loading scene's steps do not count (how long the start takes depends on the machine), and nor does time the game
+		// stops (pauses, time scale 0). What runs that end after a span of game time count in (StrataRuntime --seconds).
+		double GetPlayedSeconds() const { return m_PlayedSeconds; }
 		// Why the start scene could not be loaded: the game cannot start (StrataRuntime exits).
 		const std::optional<std::string>& GetStartError() const { return m_StartError; }
 		// The game's script engine (null for games without scripts).
@@ -156,6 +161,7 @@ namespace Strata
 		AssetHandle m_SceneHandle = UUID::Null();
 		bool m_ShowingLoadingScene = false;
 		bool m_Started = false;
+		double m_PlayedSeconds = 0.0; // GetPlayedSeconds
 		// When the game began opening: its start is logged with the time it took ("Started '<game>' in N s").
 		std::chrono::steady_clock::time_point m_Opened;
 		std::optional<std::string> m_StartError;

@@ -693,8 +693,7 @@ namespace Strata
 		}
 		else
 		{
-			const float fixedTimestep = m_Scene.GetSettings().FixedTimestep > 0.0f ? m_Scene.GetSettings().FixedTimestep : 1.0f / 60.0f;
-			if (motion.TimeSinceMove > c_StopAfterFixedSteps * fixedTimestep)
+			if (motion.TimeSinceMove > c_StopAfterFixedSteps * m_Scene.GetFixedTimestep())
 				motion.Velocity = glm::vec3(0.0f);
 		}
 		return motion.Velocity;

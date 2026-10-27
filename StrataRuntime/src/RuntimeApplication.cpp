@@ -48,8 +48,10 @@ namespace Strata
 	struct RuntimeOptions
 	{
 		std::filesystem::path ManifestPath;
-		std::filesystem::path ScreenshotPath; // Saves the window to this PNG on the last of MaxFrames frames
+		std::filesystem::path ScreenshotPath; // Saves the window to this PNG on the run's last frame (MaxFrames, MaxSeconds)
 		std::optional<uint64_t> MaxFrames;
+		// --seconds: the run ends with the frame by which the game played this long (GameRuntime::GetPlayedSeconds)
+		std::optional<uint64_t> MaxSeconds;
 		std::optional<uint64_t> TextureBudget; // --asset-budget-mb: the GPU texture budget of the game's assets, in bytes
 		std::filesystem::path PerfLogPath;     // --perf-log: a CSV row per frame (FramePerfLog)
 		std::filesystem::path SaveDirectory;   // --save-directory: where the game keeps its save files (empty: the player's data)
@@ -69,8 +71,8 @@ namespace Strata
 		{
 			// The other budgets keep their defaults, which depend on the graphics device (initialized by now).
 			GameRuntimeOptions runtimeOptions;
-			// A game runs on the wall clock; runs of a fixed number of frames (--frames: checks, screenshots) keep every step.
-			runtimeOptions.TimeDilation = !m_Options.MaxFrames;
+			// A game runs on the wall clock; runs that end by themselves (--frames, --seconds: checks, screenshots) keep every step.
+			runtimeOptions.TimeDilation = !m_Options.MaxFrames && !m_Options.MaxSeconds;
 			runtimeOptions.SaveFilesDirectory = m_Options.SaveDirectory;
 			// Headless runs (servers, CI) have no window to render to; with one, scenes have their render proxies built before
 			// they start, so the frame that shows one does not build them all.
@@ -169,7 +171,18 @@ namespace Strata
 						m_Renderer->RenderEmpty(backBuffer, device.GetBackBufferSize());
 				}
 			}
-			RequestScreenshot();
+			// The run's last frame: the last of --frames (the application closes after it), or the first by which the game
+			// played --seconds of game time, however many frames that took.
+			Application& application = Application::Get();
+			const bool lastOfFrames = m_Options.MaxFrames && application.GetFrameCount() + 1 == *m_Options.MaxFrames;
+			const bool playedEnough = m_Options.MaxSeconds && m_Runtime->GetPlayedSeconds() >= static_cast<double>(*m_Options.MaxSeconds);
+			if (playedEnough)
+			{
+				ST_INFO("The game played {:.3f} s of game time in {} frames: stopping", m_Runtime->GetPlayedSeconds(), application.GetFrameCount() + 1);
+				application.Close();
+			}
+			if (lastOfFrames || playedEnough)
+				RequestScreenshot();
 		}
 	private:
 		// Every frame from the first one on gets a row: what the frame left is captured when the frame profiler records it
@@ -244,12 +257,12 @@ namespace Strata
 			m_PerfLog.reset();
 		}
 
+		// Saves this frame, the run's last, when a screenshot was asked for.
 		void RequestScreenshot()
 		{
-			Application& application = Application::Get();
-			const bool lastFrame = m_Options.MaxFrames && application.GetFrameCount() + 1 == *m_Options.MaxFrames;
-			if (!lastFrame || m_Options.ScreenshotPath.empty())
+			if (m_Options.ScreenshotPath.empty())
 				return;
+			Application& application = Application::Get();
 			// CheckOptions refused a screenshot without a window, so the game renders with the Graphics module.
 			GraphicsModule* graphics = application.GetModules().Find<GraphicsModule>();
 			if (!graphics)
@@ -318,7 +331,9 @@ namespace Strata
 			{ "--windowed", nullptr, "Open a window even when the game asks for fullscreen" },
 			{ "--resolution", "<width>x<height>", "Open a window of exactly this many pixels" },
 			{ "--frames", "<count>", "Stop after this many frames (every fixed step runs: checks, screenshots)" },
-			{ "--screenshot", "<file.png>", "Save the last frame (with --frames and a window)" },
+			{ "--seconds", "<count>", "Stop once the game played this many seconds of game time, in fixed steps from its start "
+				"(every fixed step runs: checks, screenshots)" },
+			{ "--screenshot", "<file.png>", "Save the last frame (with --frames or --seconds, and a window)" },
 			{ "--asset-budget-mb", "<megabytes>", "The GPU texture budget of the game's assets" },
 			{ "--perf-log", "<file.csv>", "Write a row of frame timings per frame" },
 			{ "--save-directory", "<folder>", "Keep the game's save files in this folder (default: the player's data)" },
@@ -347,13 +362,16 @@ namespace Strata
 				if (!megabytes || *megabytes <= 0 || *megabytes > c_MaxAssetBudgetMB)
 					return fmt::format("--asset-budget-mb needs a whole number of megabytes from 1 to {}", c_MaxAssetBudgetMB);
 			}
-			// A run meant to end by itself must not run forever because its frame count was mistyped.
+			// A run meant to end by itself must not run forever because its frame count or game time was mistyped.
 			const std::optional<int64_t> frames = commandLine.GetIntOption("--frames");
 			if ((commandLine.HasFlag("--frames") || commandLine.GetOption("--frames")) && (!frames || *frames <= 0))
 				return std::string("--frames needs a positive whole number of frames");
-			// The screenshot is taken on the last frame, so it needs a frame count and a window.
-			if (commandLine.GetOption("--screenshot") && (!frames || *frames <= 0 || commandLine.HasFlag("--headless")))
-				return std::string("--screenshot needs --frames <count> and a window (not --headless)");
+			const std::optional<int64_t> seconds = commandLine.GetIntOption("--seconds");
+			if ((commandLine.HasFlag("--seconds") || commandLine.GetOption("--seconds")) && (!seconds || *seconds <= 0))
+				return std::string("--seconds needs a positive whole number of seconds");
+			// The screenshot is taken on the last frame, so it needs a run that ends by itself and a window.
+			if (commandLine.GetOption("--screenshot") && ((!frames && !seconds) || commandLine.HasFlag("--headless")))
+				return std::string("--screenshot needs --frames <count> or --seconds <count>, and a window (not --headless)");
 			if (commandLine.HasFlag("--perf-log") && commandLine.GetOption("--perf-log").value_or(std::string()).empty())
 				return std::string("--perf-log needs the path of the CSV file to write");
 			if (commandLine.HasFlag("--save-directory") && commandLine.GetOption("--save-directory").value_or(std::string()).empty())
@@ -367,7 +385,8 @@ namespace Strata
 	{
 		// Runs that end by themselves (servers, checks, screenshots, perf logs) and command lines with a mistake print into
 		// the terminal that started them; a person playing in a window leaves it alone.
-		if (AsksForHelp(commandLine) || commandLine.HasFlag("--headless") || commandLine.HasFlag("--frames") || CheckOptions(commandLine))
+		if (AsksForHelp(commandLine) || commandLine.HasFlag("--headless") || commandLine.HasFlag("--frames") || commandLine.HasFlag("--seconds")
+			|| CheckOptions(commandLine))
 			return ProgramRun::Console;
 		return ProgramRun::Interactive;
 	}
@@ -454,6 +473,9 @@ namespace Strata
 		if (std::optional<int64_t> frames = commandLine.GetIntOption("--frames"); frames && *frames > 0)
 			specification.MaxFrames = static_cast<uint64_t>(*frames);
 		options.MaxFrames = specification.MaxFrames;
+		// The layer ends a run of game time (the application only counts frames); with --frames too, whichever comes first.
+		if (std::optional<int64_t> seconds = commandLine.GetIntOption("--seconds"); seconds && *seconds > 0)
+			options.MaxSeconds = static_cast<uint64_t>(*seconds);
 		// Megabytes of GPU texture memory the game's assets may keep resident (1 MB = 1048576 bytes).
 		if (const std::optional<int64_t> megabytes = commandLine.GetIntOption("--asset-budget-mb"))
 			options.TextureBudget = static_cast<uint64_t>(*megabytes) << 20;

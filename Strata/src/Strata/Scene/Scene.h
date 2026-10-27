@@ -421,6 +421,8 @@ namespace Strata
 		// Fixed steps run since OnRuntimeStart, stepped (Step) or due on the clock: the game's own time base, which tools
 		// that must be exact (play.step, simulated input) count in instead of frames.
 		uint64_t GetFixedStepCount() const { return m_FixedSteps; }
+		// The simulation time of one fixed step: SceneSettings::FixedTimestep, or 1/60 s when that is not positive.
+		float GetFixedTimestep() const { return m_Settings.FixedTimestep > 0.0f ? m_Settings.FixedTimestep : 1.0f / 60.0f; }
 
 		// Simulation time since OnRuntimeStart (seconds) and number of runtime updates.
 		double GetTime() const { return m_Time; }

@@ -2138,7 +2138,7 @@ namespace Strata
 			return;
 		}
 
-		const float fixedTimestep = m_Settings.FixedTimestep > 0.0f ? m_Settings.FixedTimestep : 1.0f / 60.0f;
+		const float fixedTimestep = GetFixedTimestep();
 		const float deltaTime = stepping ? fixedTimestep : static_cast<float>(timestep) * m_TimeScale;
 		// Unscaled time goes on at time scale 0 (a pause menu's fades): the frame's timestep before the time scale, the fixed
 		// step while stepping.

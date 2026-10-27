@@ -273,7 +273,12 @@ namespace Strata
 		UpdateSceneLoads(&budget);
 		if (!m_Scene)
 			return;
+		// The steps this update runs, each simulating the timestep the scene reads as the update begins.
+		const uint64_t stepsBefore = m_Scene->GetFixedStepCount();
+		const double fixedTimestep = m_Scene->GetFixedTimestep();
 		m_Scene->OnUpdateRuntime(timestep, &budget);
+		if (m_Started)
+			m_PlayedSeconds += static_cast<double>(m_Scene->GetFixedStepCount() - stepsBefore) * fixedTimestep;
 		CheckScriptFault();
 		HandleSceneRequests();
 	}

@@ -428,7 +428,7 @@ project.setGameInfo {"title": "<Game title>", "version": "1.0.0", "icon": "Icon.
 project.export {"directory": "<absolute, outside the project>"}   # <Game>[.exe], .stgame, .stpak, the script module, <Game>.png
 project.export {"directory": "<another one>", "prune": true}       # smaller: only what the scenes use (see below)
 <dir>/<Game> --headless --frames 600       # 10 s of game time at 60 frames per second; exit code 0, the scripts' log lines
-<dir>/<Game> --windowed --frames 120 --screenshot shot.png        # look at shot.png
+<dir>/<Game> --windowed --seconds 2 --screenshot shot.png        # look at shot.png: 2 s of game time, whatever the frame rate
 ```
 
 In PowerShell pipe a game's or the editor's output (`... | Write-Output`) to wait for it and get its exit code: they are

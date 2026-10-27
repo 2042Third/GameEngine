@@ -991,7 +991,7 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   Systems starting must not walk the hierarchy either: `ScriptSystem` sorts the scripted entities into hierarchy order
   when they are few (`c_SortedScriptStartRatio`) instead of walking a million entities for them.
 - **Time dilation** (`Scene::SetTimeDilation`): owners driven by the wall clock (the editor's play mode outside scripted
-  runs, `EditorContextSpecification::TimeDilation`; exported games outside `--frames` runs,
+  runs, `EditorContextSpecification::TimeDilation`; exported games outside `--frames` and `--seconds` runs,
   `GameRuntimeOptions::TimeDilation`) let a simulation that cannot keep up with real time slow down: an update stops its
   catch-up fixed steps once they took longer, in wall time, than the time they simulated, and drops the steps still due
   (`GetDroppedFixedStepCount`, also `PhysicsStats::DroppedSteps`). Otherwise a frame that runs eight expensive steps
@@ -4008,10 +4008,12 @@ accepts the requests and reports them back. `--headless` disables
 the window and the renderer and paces at 60 frames per second; `--windowed` overrides a fullscreen manifest,
 `--resolution <width>x<height>` opens a window of exactly that many pixels whatever the display's scale (the manifest's
 window size is in screen coordinates, which the display's scale multiplies: 1280x720 is 1920x1080 pixels at 150%;
-`WindowSpecification::SizeInPixels`), so perf logs and screenshots compare across displays, `--frames N` with
-`--screenshot out.png` saves the last frame, `--asset-budget-mb <n>` sets the GPU texture budget
-of the game's assets (the other budgets keep their defaults), and `--perf-log <csv>` writes a row for every frame, also
-headless (`Runtime/FramePerfLog`, a frame profiler listener, so writing costs the measured frame nothing): the frame's
+`WindowSpecification::SizeInPixels`), so perf logs and screenshots compare across displays, `--frames N` or `--seconds S`
+(the frame by which the game played S seconds of game time in fixed steps, `GameRuntime::GetPlayedSeconds`, so that
+what it shows does not depend on the frame rate) with `--screenshot out.png` saves the last frame,
+`--asset-budget-mb <n>` sets the GPU texture budget of the game's assets (the other budgets keep their defaults), and
+`--perf-log <csv>` writes a row for every frame, also headless (`Runtime/FramePerfLog`, a frame profiler listener, so
+writing costs the measured frame nothing): the frame's
 work time and interval, each stage's milliseconds, the job threads' busy percentages and the asset manager's streaming
 numbers after the frame (loading, queued and in-flight loads, uploaded MB, finalization ms and its upload steps' ms,
 resident MB per pool, evictions), the texture streamer's (`StreamedMB`: bytes read for raised mip levels in the frame,
