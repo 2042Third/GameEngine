@@ -1,8 +1,11 @@
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/RendererQuality.h"
+#include "Strata/Renderer/ShadowAtlasAllocator.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -59,6 +62,40 @@ namespace
 		nvrhi::ITexture* shadowMap = renderer.GetShadowMap();
 		REQUIRE(shadowMap);
 		return shadowMap->getDesc().arraySize;
+	}
+
+	uint32_t GetShadowMapWidth(const SceneRenderer& renderer)
+	{
+		nvrhi::ITexture* shadowMap = renderer.GetShadowMap();
+		REQUIRE(shadowMap);
+		return shadowMap->getDesc().width;
+	}
+
+	// The quality scene with a shadowed point light beside the box: the renderer makes both the cascades and the atlas.
+	void AddShadowedLamp(QualityScene& scene)
+	{
+		Entity lamp = AddPointLight(scene.SceneData, glm::vec3(1.5f, 2.0f, 1.0f), glm::vec3(1.0f, 0.8f, 0.6f), 30.0f, 8.0f);
+		lamp.GetComponent<PointLightComponent>().CastShadows = true;
+	}
+
+	ReadbackImage RenderFrames(SceneRenderer& renderer, QualityScene& scene, int frames)
+	{
+		ReadbackImage image;
+		for (int frame = 0; frame < frames; frame++)
+			image = RenderToImage(renderer, scene.SceneData, scene.Camera);
+		return image;
+	}
+
+	// A quality that differs from Medium in every knob that sizes something.
+	RendererQualitySettings MakeCostlyQuality()
+	{
+		RendererQualitySettings quality = RendererQuality::GetPreset(RendererQualityPreset::Medium);
+		quality.Preset = RendererQualityPreset::Custom;
+		quality.ShadowResolution = ShadowMapResolution::Size4096;
+		quality.ShadowCascades = 2;
+		quality.LocalShadowAtlasSize = 2048;
+		quality.LocalShadowMaxTile = 512;
+		return quality;
 	}
 
 }
@@ -138,6 +175,253 @@ TEST_SUITE("GPU.SceneRenderer.Quality")
 			CHECK(GetShadowMapLayers(renderer) == 4);
 			scene.CheckShadow(again);
 			CHECK(MaxDifference(first, again) == 0);
+		}
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("SetQuality makes again only what a changed knob sizes")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		QualityScene scene;
+		AddShadowedLamp(scene);
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(static_cast<int>(mode));
+			SceneRendererSpecification specification = MakeSpecification(mode);
+			specification.SpreadLightingUpdates = false;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Size, c_Size);
+			RenderFrames(renderer, scene, 2);
+			nvrhi::ITexture* shadowMap = renderer.GetShadowMap();
+			nvrhi::ITexture* atlas = renderer.GetLocalShadowAtlas();
+			REQUIRE(shadowMap);
+			REQUIRE(atlas);
+			const auto checkKept = [&]()
+			{
+				CHECK(renderer.GetShadowMap() == shadowMap);
+				CHECK(renderer.GetLocalShadowAtlas() == atlas);
+			};
+
+			// The same knobs under another label: nothing changes but the label.
+			RendererQualitySettings quality = renderer.GetQuality();
+			quality.Preset = RendererQualityPreset::Custom;
+			CHECK_FALSE(renderer.SetQuality(quality));
+			CHECK(renderer.GetQuality().Preset == RendererQualityPreset::Custom);
+			checkKept();
+			RenderFrames(renderer, scene, 1);
+			checkKept();
+
+			// Knobs that size nothing apply from the next frame.
+			quality.LODErrorPixels = 2.0f;
+			quality.MinProjectedPixels = 1.0f;
+			quality.MaxShadowedLocalLights = 8;
+			CHECK_FALSE(renderer.SetQuality(quality));
+			CHECK(renderer.GetQuality() == quality);
+			scene.CheckShadow(RenderFrames(renderer, scene, 1));
+			checkKept();
+
+			// Fewer cascades: a new array of their layers, the atlas kept.
+			quality.ShadowCascades = 2;
+			CHECK(renderer.SetQuality(quality));
+			CHECK(renderer.GetShadowMap() == nullptr);
+			CHECK(renderer.GetLocalShadowAtlas() == atlas);
+			scene.CheckShadow(RenderFrames(renderer, scene, 1));
+			CHECK(GetShadowMapLayers(renderer) == 2);
+			CHECK(GetShadowMapWidth(renderer) == 2048);
+			CHECK(renderer.GetLocalShadowAtlas() == atlas);
+
+			// A finer resolution: a new array of that size.
+			quality.ShadowResolution = ShadowMapResolution::Size4096;
+			CHECK(renderer.SetQuality(quality));
+			CHECK(renderer.GetShadowMapSize() == 4096);
+			scene.CheckShadow(RenderFrames(renderer, scene, 1));
+			CHECK(GetShadowMapWidth(renderer) == 4096);
+			CHECK(GetShadowMapLayers(renderer) == 2);
+			CHECK(renderer.GetLocalShadowAtlas() == atlas);
+			shadowMap = renderer.GetShadowMap();
+
+			// A smaller atlas: a new atlas, the cascades kept.
+			quality.LocalShadowAtlasSize = 2048;
+			CHECK(renderer.SetQuality(quality));
+			CHECK(renderer.GetLocalShadowAtlas() == nullptr);
+			CHECK(renderer.GetShadowMap() == shadowMap);
+			scene.CheckShadow(RenderFrames(renderer, scene, 1));
+			REQUIRE(renderer.GetLocalShadowAtlas());
+			CHECK(renderer.GetLocalShadowAtlas()->getDesc().width == 2048);
+			CHECK(renderer.GetShadowMap() == shadowMap);
+			atlas = renderer.GetLocalShadowAtlas();
+
+			// A tile cap draws the views again in the same atlas.
+			quality.LocalShadowMaxTile = 512;
+			CHECK_FALSE(renderer.SetQuality(quality));
+			RenderFrames(renderer, scene, 1);
+			checkKept();
+			CHECK(renderer.GetStats().LocalShadowLights == 1);
+			CHECK(renderer.GetStats().LocalShadowViewsPending == 0);
+		}
+		// Validation stays clean: everything released was released after the frames that used it.
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Changing the quality and back draws the same image")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		QualityScene scene;
+		AddShadowedLamp(scene);
+		std::vector<ReadbackImage> firstImages;
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(static_cast<int>(mode));
+			SceneRendererSpecification specification = MakeSpecification(mode);
+			// Every local shadow view is drawn in the frame after the views were reset.
+			specification.SpreadLightingUpdates = false;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Size, c_Size);
+			const ReadbackImage first = RenderFrames(renderer, scene, 3);
+			scene.CheckShadow(first);
+			CHECK(renderer.SetQuality(MakeCostlyQuality()));
+			const ReadbackImage costly = RenderFrames(renderer, scene, 3);
+			scene.CheckShadow(costly);
+			CHECK(renderer.SetQuality(RendererQuality::GetPreset(RendererQualityPreset::Medium)));
+			const ReadbackImage again = RenderFrames(renderer, scene, 3);
+			CHECK(MaxDifference(first, again) == 0);
+			firstImages.push_back(first);
+		}
+		// The two paths agree as they do without a change (GPU.SceneRenderer.GPUDriven).
+		if (Renderer::GetGraphicsDevice().GetInfo().SupportsDrawIndirectFirstInstance)
+			CHECK(MaxDifference(firstImages[0], firstImages[1]) <= 1);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The cascade cache's exact case holds across a quality change")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!Renderer::GetGraphicsDevice().GetInfo().SupportsDrawIndirectFirstInstance)
+			return; // Caching is the GPU-driven path's
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		QualityScene scene;
+		SceneRendererSpecification specification = MakeSpecification(GPUDrivenMode::Auto);
+		SceneRenderer cached(specification);
+		specification.CacheShadowCascades = false;
+		SceneRenderer redrawn(specification);
+		cached.SetViewportSize(c_Size, c_Size);
+		redrawn.SetViewportSize(c_Size, c_Size);
+		const auto frame = [&]()
+		{
+			const ReadbackImage expected = RenderToImage(redrawn, scene.SceneData, scene.Camera);
+			const ReadbackImage image = RenderToImage(cached, scene.SceneData, scene.Camera);
+			CHECK(MaxDifference(expected, image) <= 1);
+			REQUIRE(cached.GetStats().GPUDriven);
+			return cached.GetStats().CachedCascadeMask;
+		};
+		const uint32_t allCascades = (1u << cached.GetQuality().ShadowCascades) - 1u;
+		frame();
+		CHECK(frame() == allCascades);
+		// A finer resolution: the cache starts again, then keeps the new cascades.
+		RendererQualitySettings quality = cached.GetQuality();
+		quality.ShadowResolution = ShadowMapResolution::Size4096;
+		CHECK(cached.SetQuality(quality));
+		CHECK(redrawn.SetQuality(quality));
+		CHECK(frame() == 0u);
+		CHECK(frame() == allCascades);
+		// Fewer cascades: likewise.
+		quality.ShadowCascades = 3;
+		CHECK(cached.SetQuality(quality));
+		CHECK(redrawn.SetQuality(quality));
+		CHECK(frame() == 0u);
+		CHECK(frame() == 0b111u);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Auto follows the viewport's rows")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		QualityScene scene;
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(static_cast<int>(mode));
+			SceneRendererSpecification specification = MakeSpecification(mode);
+			specification.Quality.Preset = RendererQualityPreset::Custom;
+			specification.Quality.ShadowResolution = ShadowMapResolution::Auto;
+			specification.Quality.ShadowCascades = 1; // 64 MiB at 4096
+			SceneRenderer renderer(specification);
+			CHECK(renderer.GetShadowMapSize() == 2048); // No rows yet: below the threshold
+			const auto render = [&](uint32_t rows)
+			{
+				renderer.SetViewportSize(64, rows);
+				REQUIRE(renderer.Render(scene.SceneData, scene.Camera));
+				return GetShadowMapWidth(renderer);
+			};
+			CHECK(render(RendererQuality::c_HighResolutionRows - 1) == 2048);
+			CHECK(renderer.GetShadowMapSize() == 2048);
+			CHECK(render(RendererQuality::c_HighResolutionRows) == 4096);
+			CHECK(renderer.GetShadowMapSize() == 4096);
+			CHECK(render(RendererQuality::c_HighResolutionRows + 720) == 4096);
+			CHECK(render(RendererQuality::c_HighResolutionRows - 1) == 2048);
+			// A zero viewport releases them; the rows of the next size decide again.
+			renderer.SetViewportSize(0, 0);
+			CHECK(renderer.GetShadowMap() == nullptr);
+			CHECK(render(RendererQuality::c_HighResolutionRows) == 4096);
+		}
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The cascades' size is limited")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		QualityScene scene;
+		SceneRendererSpecification specification = MakeSpecification(GPUDrivenMode::Auto);
+		specification.Quality.Preset = RendererQualityPreset::Custom;
+		specification.Quality.ShadowResolution = ShadowMapResolution::Size8192;
+		specification.Quality.ShadowCascades = 1;
+		// Without a limit: 8192, or the device's limit below it (nothing is made until a frame draws).
+		{
+			SceneRenderer unlimited(specification);
+			const uint32_t deviceLimit = ShadowAtlasAllocator::FloorPowerOfTwo(Renderer::GetGraphicsDevice().GetInfo().MaxTextureDimension2D);
+			CHECK(unlimited.GetShadowMapSize() == std::min(8192u, deviceLimit));
+		}
+		// A limit, floored to a power of two.
+		for (const uint32_t limit : { 2048u, 3000u })
+		{
+			CAPTURE(limit);
+			specification.MaxShadowMapSize = limit;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Size, c_Size);
+			CHECK(renderer.GetShadowMapSize() == 2048);
+			scene.CheckShadow(RenderToImage(renderer, scene.SceneData, scene.Camera));
+			CHECK(GetShadowMapWidth(renderer) == 2048);
+			// A quality change within the limit releases nothing; Size2048 is what the limit made.
+			RendererQualitySettings quality = renderer.GetQuality();
+			quality.ShadowResolution = ShadowMapResolution::Size4096;
+			CHECK_FALSE(renderer.SetQuality(quality));
+			CHECK(renderer.GetShadowMap() != nullptr);
+			quality.ShadowResolution = ShadowMapResolution::Size1024;
+			CHECK(renderer.SetQuality(quality));
+			CHECK(renderer.GetShadowMapSize() == 1024);
 		}
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);

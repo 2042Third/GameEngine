@@ -61,6 +61,11 @@ namespace Strata
 		constexpr uint32_t c_BRDFLutSize = 128;
 		constexpr uint32_t c_BRDFLutSamples = 512;
 
+		// The sun's shadow cascades: the smallest size SceneRendererSpecification::MaxShadowMapSize limits them to, and the
+		// smallest an allocation that failed falls back to (smaller ones fail as the size asked for).
+		constexpr uint32_t c_MinShadowMapSizeLimit = 256;
+		constexpr uint32_t c_MinFallbackShadowMapSize = 1024;
+
 		// Light clusters: grid limits and the largest cluster buffer the renderer allocates.
 		constexpr uint32_t c_MaxClusterGridSize = 64;
 		constexpr uint32_t c_MaxLightsPerCluster = 1024;
@@ -279,7 +284,9 @@ namespace Strata
 		// The knobs within their ranges: cascades 1 to 4, the local shadows' atlas a power of two from 512 to 8192, at most
 		// RenderData::c_MaxShadowedLocalLights shadowed lights.
 		m_Specification.Quality = RendererQuality::Clamp(m_Specification.Quality);
-		m_ShadowMapSize = RendererQuality::ResolveShadowMapSize(m_Specification.Quality.ShadowResolution, 0);
+		// The cascades' size for an empty viewport (below 1440 rows); the first resize resolves it for its rows.
+		m_RequestedShadowMapSize = ResolveShadowMapSize(m_Specification.Quality);
+		m_ShadowMapSize = m_RequestedShadowMapSize;
 		m_Specification.MaxLights = std::max(m_Specification.MaxLights, 1u);
 		m_Specification.LocalShadowViewsPerFrame = std::max(m_Specification.LocalShadowViewsPerFrame, 1u);
 		m_LocalShadowAllocator.Reset(m_Specification.Quality.LocalShadowAtlasSize, 128);
@@ -1545,8 +1552,8 @@ namespace Strata
 		nvrhi::TextureDesc desc;
 		// A layer per cascade the quality draws (a renderer drawing one cascade, thumbnails, keeps a quarter of four).
 		const uint32_t layers = m_Specification.Quality.ShadowCascades;
-		desc.width = m_ShadowMapSize;
-		desc.height = m_ShadowMapSize;
+		desc.width = m_RequestedShadowMapSize;
+		desc.height = m_RequestedShadowMapSize;
 		desc.arraySize = layers;
 		desc.dimension = nvrhi::TextureDimension::Texture2DArray;
 		desc.format = nvrhi::Format::D32;
@@ -1555,8 +1562,23 @@ namespace Strata
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		nvrhi::TextureHandle shadowMap = m_Device->createTexture(desc);
+		// Large sizes (Ultra's 8192: 1 GiB for four layers) may not fit the device's memory: half the size each way, down to
+		// 1024, rather than no shadows. The size made is the one every reader uses until a resize or a change of the
+		// resolution tries the requested one again.
+		while (!shadowMap && desc.width > c_MinFallbackShadowMapSize)
+		{
+			desc.width /= 2;
+			desc.height /= 2;
+			shadowMap = m_Device->createTexture(desc);
+		}
 		if (!shadowMap)
 			return false;
+		if (desc.width != m_RequestedShadowMapSize && !m_ShadowMapFallbackReported)
+		{
+			m_ShadowMapFallbackReported = true;
+			m_Errors.Report(fmt::format("the {}-texel sun shadow cascades could not be allocated; using {}", m_RequestedShadowMapSize, desc.width));
+		}
+		m_ShadowMapSize = desc.width;
 
 		std::vector<nvrhi::FramebufferHandle> framebuffers;
 		for (uint32_t cascade = 0; cascade < layers; cascade++)
@@ -1606,6 +1628,59 @@ namespace Strata
 		m_ShadowOcclusionPays = true;
 		m_ShadowOcclusionRender = 0;
 		m_ResetVisibility = true;
+	}
+
+	uint32_t SceneRenderer::ResolveShadowMapSize(const RendererQualitySettings& quality) const
+	{
+		uint32_t size = RendererQuality::ResolveShadowMapSize(quality.ShadowResolution, m_ViewportSize.y);
+		size = std::min(size, ShadowAtlasAllocator::FloorPowerOfTwo(Renderer::GetGraphicsDevice().GetInfo().MaxTextureDimension2D));
+		if (m_Specification.MaxShadowMapSize != 0)
+			size = std::min(size, ShadowAtlasAllocator::FloorPowerOfTwo(std::max(m_Specification.MaxShadowMapSize, c_MinShadowMapSizeLimit)));
+		return size;
+	}
+
+	void SceneRenderer::UpdateShadowMapSize()
+	{
+		const uint32_t size = ResolveShadowMapSize(m_Specification.Quality);
+		if (size == m_RequestedShadowMapSize && size == m_ShadowMapSize)
+			return;
+		ReleaseShadowMap();
+		m_RequestedShadowMapSize = size;
+		m_ShadowMapSize = size;
+	}
+
+	bool SceneRenderer::SetQuality(const RendererQualitySettings& requested)
+	{
+		const RendererQualitySettings quality = RendererQuality::Clamp(requested);
+		RendererQualitySettings& current = m_Specification.Quality;
+		if (quality.HasSameKnobs(current))
+		{
+			current.Preset = quality.Preset;
+			return false;
+		}
+
+		// The cascades: made again at the new size or layer count by the next frame with a shadowed sun.
+		const uint32_t size = ResolveShadowMapSize(quality);
+		const bool cascades = size != m_RequestedShadowMapSize || quality.ShadowCascades != current.ShadowCascades;
+		if (cascades)
+			ReleaseShadowMap();
+		// The local shadows' atlas: made again at its new size; a new tile cap draws every light's views again at their sizes.
+		const bool atlas = quality.LocalShadowAtlasSize != current.LocalShadowAtlasSize;
+		if (atlas)
+			ReleaseLocalShadowAtlas(quality.LocalShadowAtlasSize);
+		else if (quality.LocalShadowMaxTile != current.LocalShadowMaxTile)
+			ResetLocalShadows();
+
+		current = quality;
+		if (cascades)
+		{
+			m_RequestedShadowMapSize = size;
+			m_ShadowMapSize = size;
+		}
+		if (!cascades && !atlas)
+			return false;
+		ResetHistory();
+		return true;
 	}
 
 	void SceneRenderer::InvalidateShadowCache()
@@ -1841,6 +1916,8 @@ namespace Strata
 			return;
 		}
 		m_TargetsValid = CreateRenderTargets();
+		// The cascades follow the rows (Auto) and try a size an allocation failed at again.
+		UpdateShadowMapSize();
 	}
 
 	void SceneRenderer::ReleaseRenderTargets()
@@ -1919,10 +1996,13 @@ namespace Strata
 		m_TemporalResolved = false;
 		m_TemporalFrames = 0;
 		m_TemporalRender = 0;
-		// The local shadows' atlas goes with them: the views are drawn again in a new one.
+		// The local shadows' atlas goes with them: the views are drawn again in a new one, of the quality's size (also after an
+		// allocation made it smaller).
 		release(m_LocalShadowAtlas);
 		release(m_LocalShadowFramebuffer);
 		ResetLocalShadows();
+		if (m_LocalShadowAllocator.GetAtlasSize() != m_Specification.Quality.LocalShadowAtlasSize)
+			m_LocalShadowAllocator.Reset(m_Specification.Quality.LocalShadowAtlasSize, m_LocalShadowAllocator.GetMinTileSize());
 		Renderer::ReleaseDeferred(std::move(released));
 	}
 

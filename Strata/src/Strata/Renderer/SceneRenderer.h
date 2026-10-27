@@ -101,7 +101,8 @@ namespace Strata
 		std::string DebugName = "SceneRenderer";
 		// The costly knobs (Renderer/RendererQuality.h): the sun's shadow resolution and cascades, the point and spot
 		// lights' shadow atlas, its largest tile and how many lights cast shadows, the levels of detail's error and the
-		// smallest size drawn. Medium, Strata 0.6.0's costs, by default.
+		// smallest size drawn. Medium, Strata 0.6.0's costs, by default; SceneRenderer::SetQuality changes them while the
+		// renderer lives (the programs follow the project's Graphics Quality through it).
 		RendererQualitySettings Quality;
 		// Levels without errors (meshes cooked before they had them, levels made by other means): screen fraction (projected
 		// bounding sphere diameter / viewport height) below which each further level is used: LOD n is chosen while the
@@ -137,6 +138,10 @@ namespace Strata
 		// frame whose buckets could hold more draws than the limit draws without a GPU-written count (NoCount, split alike).
 		// Tests set it low to check the splits.
 		uint32_t MaxDrawsPerIndirectCall = 0;
+		// The most texels each way of the sun's shadow cascades, whatever the quality resolves to (a power of two from 256; 0:
+		// no limit beyond RendererQuality::c_MaxShadowMapSize and the device's texture limit, which always bound it). Tests
+		// set it low to check the limit.
+		uint32_t MaxShadowMapSize = 0;
 		// The depth prepass writes the entity-ID buffer (a 32-bit render target of the viewport's size): picking (GetEntityAt,
 		// ReadEntityIDAsync), the selection outline and entity tints read it. Renderers that do none of these (games) turn it
 		// off; outlines and tints asked of them are then left out, with an error.
@@ -715,6 +720,19 @@ namespace Strata
 		static glm::vec2 GetTemporalJitter(uint32_t phase);
 
 		const SceneRendererSpecification& GetSpecification() const { return m_Specification; }
+		// Changes the quality knobs (RendererQualitySettings, clamped as the constructor clamps the specification's) while
+		// the renderer lives. Only what a changed knob sizes is made again, released through Renderer::ReleaseDeferred: the
+		// cascades (their ShadowCascades layers at the resolved size, framebuffers, occlusion pyramids and cache) when the
+		// resolved size or the count changed, the local shadows' atlas (with its tiles, views and cache) when its size
+		// changed; a changed tile cap draws every light's views again; the other knobs apply from the next frame. Returns
+		// whether the cascades or the atlas were released (the temporal history then starts again). Call it after
+		// SetViewportSize in a frame, so that Auto resolves for the rows the frame draws at. GetQuality() is the result.
+		bool SetQuality(const RendererQualitySettings& quality);
+		const RendererQualitySettings& GetQuality() const { return m_Specification.Quality; }
+		// The cascades' texels each way at the current viewport: the quality's resolution resolved for the viewport's rows
+		// (RendererQuality::ResolveShadowMapSize), limited by MaxShadowMapSize and the device, or less once an allocation of
+		// that size failed (the next resize or change of the resolution tries it again).
+		uint32_t GetShadowMapSize() const { return m_ShadowMapSize; }
 		// What the renderer chooses levels of detail by at its viewport size (LODSelection::SelectLOD): tools showing the level
 		// it draws use these.
 		LODCriteria GetLODCriteria() const;
@@ -1323,6 +1341,12 @@ namespace Strata
 		void ReleaseShadowMap();
 		// The cascade cache holds nothing: every cascade is drawn again.
 		void InvalidateShadowCache();
+		// The cascades' size for a quality at the current viewport: its resolution resolved for the rows, limited by the
+		// specification's MaxShadowMapSize and the device.
+		uint32_t ResolveShadowMapSize(const RendererQualitySettings& quality) const;
+		// After a resize: the cascades are released when the size they resolve to changed (Auto across
+		// RendererQuality::c_HighResolutionRows rows) or when an allocation made them smaller than asked.
+		void UpdateShadowMapSize();
 		// Local light shadows (SceneRendererLocalShadows.cpp). Chooses the shadowed point and spot lights of the frame and their
 		// tiles, follows what changed what their views hold, chooses the views the frame draws (m_LocalShadowViews) and finds
 		// their casters: with `exactCasters` each view's (the CPU path; their meshes and materials marked with `markCasters`),
@@ -1349,6 +1373,9 @@ namespace Strata
 		void CommitLocalShadows();
 		// Forgets every shadowed light and what the atlas holds (another render scene, released targets).
 		void ResetLocalShadows();
+		// Releases the local shadows' atlas (through Renderer::ReleaseDeferred) and forgets its lights; the next frame with a
+		// shadowed point or spot light makes one of `atlasSize` texels each way.
+		void ReleaseLocalShadowAtlas(uint32_t atlasSize);
 		void FreeLocalShadowTiles(LocalShadowLight& light);
 		// A view's matrix from camera-relative world space to its clip space (reversed-Z), relative to `origin` (in double).
 		static glm::mat4 GetLocalShadowViewProjection(const LocalShadowViewKey& key, const glm::dvec3& origin);
@@ -1552,8 +1579,14 @@ namespace Strata
 		nvrhi::ShaderHandle m_ShadowVertexShader;
 		nvrhi::ShaderHandle m_ShadowMaskPixelShader;
 		std::vector<SceneDrawBatch> m_ShadowBatches;
-		// Texels each way of the sun's shadow cascades (Quality.ShadowResolution resolved).
+		// Texels each way of the sun's shadow cascades: what the quality's resolution resolves to at the viewport's rows and
+		// within the limits (ResolveShadowMapSize; what SetQuality and resizes compare, so a failed allocation is not tried
+		// again by every change), and what EnsureShadowMap made (the requested size, or less after a failed allocation),
+		// which every reader of the size uses.
+		uint32_t m_RequestedShadowMapSize = 2048;
 		uint32_t m_ShadowMapSize = 2048;
+		bool m_ShadowMapFallbackReported = false;
+		bool m_LocalShadowAtlasFallbackReported = false;
 		// Local light shadows (RendererQualitySettings::LocalShadowAtlasSize): the atlas and what hands out its tiles, the
 		// shadowed lights of the frame (in order of relevance: their shadow slots), the views it draws with their casters and
 		// batches, the shaders' data per slot, and how the views' content is followed (the render scene, the content they were

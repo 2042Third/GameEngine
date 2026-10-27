@@ -34,6 +34,8 @@ namespace Strata
 	{
 
 		constexpr uint32_t c_MinLocalShadowTile = 128;
+		// The smallest atlas an allocation that failed falls back to (smaller ones fail as the atlas asked for).
+		constexpr uint32_t c_MinFallbackLocalShadowAtlasSize = 2048;
 		constexpr uint32_t c_MaxLocalShadowTile = 1024;
 		// A light's tile size follows the pixels its range spans on screen, halved (the receivers its views must resolve lie
 		// within the range, on average halfway), as a power of two; it changes only once that leaves this band around the
@@ -177,6 +179,22 @@ namespace Strata
 		m_LocalShadowBounds.clear();
 		m_LocalShadowContent = {};
 		m_LocalShadowEpoch++;
+	}
+
+	void SceneRenderer::ReleaseLocalShadowAtlas(uint32_t atlasSize)
+	{
+		std::vector<nvrhi::ResourceHandle> released;
+		if (m_LocalShadowAtlas)
+			released.emplace_back(m_LocalShadowAtlas.Get());
+		if (m_LocalShadowFramebuffer)
+			released.emplace_back(m_LocalShadowFramebuffer.Get());
+		m_LocalShadowAtlas = nullptr;
+		m_LocalShadowFramebuffer = nullptr;
+		Renderer::ReleaseDeferred(std::move(released));
+		// The scene's binding sets, which read the atlas, are made again by the next frame's comparison.
+		m_BoundLocalShadowAtlas = nullptr;
+		m_LocalShadowAllocator.Reset(atlasSize, c_MinLocalShadowTile);
+		ResetLocalShadows();
 	}
 
 	void SceneRenderer::FindLocalShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, bool exactCasters, bool markCasters)
@@ -803,15 +821,38 @@ namespace Strata
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
 		nvrhi::TextureHandle atlas = m_Device->createTexture(desc);
+		// Large atlases (Ultra's 8192: 256 MiB) may not fit the device's memory: half the size each way, down to 2048, rather
+		// than no shadows.
+		while (!atlas && desc.width > c_MinFallbackLocalShadowAtlasSize)
+		{
+			desc.width /= 2;
+			desc.height /= 2;
+			atlas = m_Device->createTexture(desc);
+		}
 		nvrhi::FramebufferHandle framebuffer = atlas ? m_Device->createFramebuffer(nvrhi::FramebufferDesc().setDepthAttachment(atlas)) : nullptr;
 		if (!atlas || !framebuffer)
 		{
-			m_Errors.Report(fmt::format("failed to create the {0}x{0} shadow atlas of point and spot lights; they cast no shadows", desc.width));
+			m_Errors.Report(fmt::format("failed to create the {0}x{0} shadow atlas of point and spot lights; they cast no shadows", m_LocalShadowAllocator.GetAtlasSize()));
 			return false;
 		}
 		m_LocalShadowAtlas = std::move(atlas);
 		m_LocalShadowFramebuffer = std::move(framebuffer);
 		m_LocalShadowAtlasCleared = false;
+		if (desc.width != m_LocalShadowAllocator.GetAtlasSize())
+		{
+			// The frame's tiles were placed for the larger atlas (FindLocalShadowCasters ran before): this frame draws no local
+			// shadows, as a failure does, and the next places its tiles in the atlas made. Released targets try the
+			// quality's size again.
+			if (!m_LocalShadowAtlasFallbackReported)
+			{
+				m_LocalShadowAtlasFallbackReported = true;
+				m_Errors.Report(fmt::format("the {}-texel shadow atlas of point and spot lights could not be allocated; using {}",
+					m_LocalShadowAllocator.GetAtlasSize(), desc.width));
+			}
+			m_LocalShadowAllocator.Reset(desc.width, c_MinLocalShadowTile);
+			ResetLocalShadows();
+			return false;
+		}
 		return true;
 	}
 
