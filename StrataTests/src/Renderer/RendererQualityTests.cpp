@@ -116,6 +116,40 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(RendererQuality::ResolveShadowMapSize(high.ShadowResolution, 1440) != RendererQuality::ResolveShadowMapSize(medium.ShadowResolution, 1440));
 	}
 
+	TEST_CASE("The thumbnails' and the bake's renderers keep their own quality, 0.6.0's")
+	{
+		// Thumbnails: one 1024-texel cascade and a 2048 atlas, the rest Medium's.
+		const RendererQualitySettings thumbnails = SceneRendererSpecification::ForThumbnails().Quality;
+		CHECK(thumbnails.Preset == RendererQualityPreset::Custom);
+		RendererQualitySettings expected = RendererQuality::GetPreset(RendererQualityPreset::Medium);
+		expected.Preset = RendererQualityPreset::Custom;
+		expected.ShadowResolution = ShadowMapResolution::Size1024;
+		expected.ShadowCascades = 1;
+		expected.LocalShadowAtlasSize = 2048;
+		CHECK(thumbnails == expected);
+		CHECK(RendererQuality::Clamp(thumbnails) == thumbnails);
+
+		// The bake: Medium's cascades and a 2048 atlas (its views draw every shadow view in their first frame).
+		const RendererQualitySettings bake = SceneRendererSpecification::ForBake().Quality;
+		expected = RendererQuality::GetPreset(RendererQualityPreset::Medium);
+		expected.Preset = RendererQualityPreset::Custom;
+		expected.LocalShadowAtlasSize = 2048;
+		CHECK(bake == expected);
+		CHECK(RendererQuality::Clamp(bake) == bake);
+
+		// What else they set: single images without entity IDs, fades or temporal anti-aliasing.
+		const SceneRendererSpecification thumbnailRenderer = SceneRendererSpecification::ForThumbnails();
+		CHECK(thumbnailRenderer.DebugName == "Thumbnails");
+		CHECK_FALSE(thumbnailRenderer.EntityIDs);
+		CHECK(thumbnailRenderer.PrefetchDistance == 0.0f);
+		CHECK_FALSE(thumbnailRenderer.FadeTextureLevels);
+		CHECK_FALSE(thumbnailRenderer.FadeLevelsOfDetail);
+		CHECK_FALSE(thumbnailRenderer.TemporalAntiAliasing);
+		CHECK_FALSE(thumbnailRenderer.SpreadLightingUpdates);
+		CHECK(thumbnailRenderer.TextureStreaming);
+		CHECK(SceneRendererSpecification::ForBake().DebugName == "ProbeBake");
+	}
+
 	TEST_CASE("Clamp keeps every knob in range")
 	{
 		RendererQualitySettings wild;

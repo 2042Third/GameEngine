@@ -132,20 +132,6 @@ namespace Strata::ProbeBake
 		return std::exp2(-stops);
 	}
 
-	SceneRendererSpecification GetRendererSpecification()
-	{
-		SceneRendererSpecification specification;
-		specification.DebugName = "ProbeBake";
-		specification.EntityIDs = false;
-		specification.TemporalAntiAliasing = false;
-		specification.TextureStreaming = false;
-		specification.SpreadLightingUpdates = false;
-		specification.FadeTextureLevels = false;
-		specification.FadeLevelsOfDetail = false;
-		specification.Quality.LocalShadowAtlasSize = 2048;
-		return specification;
-	}
-
 	JobHandle RemoveStaging(const std::filesystem::path& directory, const JobHandle& writer, const JobHandle& reader)
 	{
 		return JobSystem::SubmitIO([directory, writer, reader]()

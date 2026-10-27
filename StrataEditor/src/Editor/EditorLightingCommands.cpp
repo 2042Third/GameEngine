@@ -710,7 +710,7 @@ namespace Strata
 					probe.Position = glm::vec3(entity.GetComponent<WorldTransformComponent>().Matrix[3]);
 					state->Probes.push_back(std::move(probe));
 				}
-				state->Renderer = CreateScope<SceneRenderer>(ProbeBake::GetRendererSpecification());
+				state->Renderer = CreateScope<SceneRenderer>(SceneRendererSpecification::ForBake());
 				state->Renderer->SetViewportSize(ProbeBake::c_FaceSize, ProbeBake::c_FaceSize);
 				// The poll owns the state: the bake's renderer and staging files go with it, whatever ends it.
 				return EditorCommandResult::Defer([state](EditorContext& pollContext) -> std::optional<EditorCommandResult>

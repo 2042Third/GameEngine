@@ -197,6 +197,47 @@ namespace Strata
 		return m_Device->createComputePipeline(desc);
 	}
 
+	SceneRendererSpecification SceneRendererSpecification::ForThumbnails()
+	{
+		SceneRendererSpecification specification;
+		specification.DebugName = "Thumbnails";
+		specification.EntityIDs = false;
+		specification.PrefetchDistance = 0.0f;
+		// Thumbnails wait for their textures' levels and show them at once, and draw their levels of detail as they are.
+		specification.FadeTextureLevels = false;
+		specification.FadeLevelsOfDetail = false;
+		// Thumbnails are single frames of one scene after another: a scene with temporal anti-aliasing draws with FXAA, and
+		// every shadow view of every shadowed point and spot light is drawn in the frame (into a smaller atlas).
+		specification.TemporalAntiAliasing = false;
+		specification.SpreadLightingUpdates = false;
+		RendererQualitySettings& quality = specification.Quality;
+		quality = RendererQuality::GetPreset(RendererQualityPreset::Medium);
+		quality.Preset = RendererQualityPreset::Custom;
+		quality.ShadowResolution = ShadowMapResolution::Size1024;
+		quality.ShadowCascades = 1;
+		quality.LocalShadowAtlasSize = 2048;
+		return specification;
+	}
+
+	SceneRendererSpecification SceneRendererSpecification::ForBake()
+	{
+		// No entity IDs, temporal anti-aliasing or texture streaming (a bake waits for every level), every shadow view and
+		// probe conversion in its first frame, no fades.
+		SceneRendererSpecification specification;
+		specification.DebugName = "ProbeBake";
+		specification.EntityIDs = false;
+		specification.TemporalAntiAliasing = false;
+		specification.TextureStreaming = false;
+		specification.SpreadLightingUpdates = false;
+		specification.FadeTextureLevels = false;
+		specification.FadeLevelsOfDetail = false;
+		RendererQualitySettings& quality = specification.Quality;
+		quality = RendererQuality::GetPreset(RendererQualityPreset::Medium);
+		quality.Preset = RendererQualityPreset::Custom;
+		quality.LocalShadowAtlasSize = 2048;
+		return specification;
+	}
+
 	SceneRenderer::SceneRenderer(const SceneRendererSpecification& specification)
 		: m_Specification(specification), m_Errors("SceneRenderer '" + specification.DebugName + "'")
 	{

@@ -40,10 +40,6 @@ namespace Strata
 		// (lux) to about 1, so sunlit surfaces stay well within half floats (1 for scenes lit by less).
 		float ChoosePreExposure(Scene& scene);
 
-		// The renderer a bake renders with: no entity IDs, temporal anti-aliasing or texture streaming (it waits for every level),
-		// every shadow view and probe conversion in its first frame, no fades.
-		SceneRendererSpecification GetRendererSpecification();
-
 		// Removes a bake's staging folder on an I/O job once `writer`, the job writing the bake's files into it, and `reader`, the
 		// import's copy reading them (EditorAssetManager's ImportExternal), have completed (either may be none). Run beside them
 		// on another I/O thread, the removal could come before the folder is made and leave it behind, delete files while they

@@ -8,6 +8,7 @@
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Math/Math.h>
 #include <Strata/Renderer/RendererComponents.h>
+#include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
 
@@ -108,7 +109,7 @@ TEST_SUITE("Editor.ProbeBake")
 
 	TEST_CASE("The bake's renderer draws single pictures at full resolution")
 	{
-		const SceneRendererSpecification specification = ProbeBake::GetRendererSpecification();
+		const SceneRendererSpecification specification = SceneRendererSpecification::ForBake();
 		CHECK_FALSE(specification.EntityIDs);
 		CHECK_FALSE(specification.TemporalAntiAliasing);
 		CHECK_FALSE(specification.TextureStreaming);

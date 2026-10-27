@@ -227,6 +227,13 @@ namespace Strata
 		// array (made with the first probe in view, released with the render targets or once the scene has none: about 1 MiB a
 		// slot). 0: no probes.
 		uint32_t MaxReflectionProbes = RenderData::c_MaxReflectionProbes;
+
+		// The editor's renderers of fixed purpose, whose quality is their own (Custom; they never follow the project's):
+		// Thumbnails draws asset thumbnails and previews (one 1024-texel cascade, every shadow view in the frame into a
+		// 2048 atlas, no fades or temporal anti-aliasing); ProbeBake draws a reflection probe bake's views at Strata
+		// 0.6.0's values, so that a bake's result never depends on a person's settings.
+		static SceneRendererSpecification ForThumbnails();
+		static SceneRendererSpecification ForBake();
 	};
 
 	// A material the last frame drew, for streaming its textures at the resolution the screen needs.

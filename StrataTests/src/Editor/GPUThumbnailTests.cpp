@@ -849,7 +849,7 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		const SceneRenderer* renderer = thumbnails.GetRenderer();
 		REQUIRE(renderer);
 		CHECK_FALSE(renderer->GetSpecification().SpreadLightingUpdates);
-		CHECK(renderer->GetSpecification().Quality.LocalShadowAtlasSize == 2048);
+		CHECK(renderer->GetSpecification().Quality.HasSameKnobs(SceneRendererSpecification::ForThumbnails().Quality));
 		// Its frames draw every view that is not up to date (the last one may have had none left to draw).
 		CHECK(renderer->GetStats().LocalShadowLights == 3);
 		CHECK(renderer->GetStats().LocalShadowViewsPending == 0);
