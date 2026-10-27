@@ -1900,8 +1900,9 @@ namespace Strata
 		m_HasRenderedFrame = false;
 		if (width == 0 || height == 0)
 		{
-			// Released altogether (a capture renderer between pictures, a minimized game): the probes' cube array and the sun's
-			// cascades too, which a resize keeps.
+			// Released altogether (a capture renderer between pictures, the editor's hidden Game view): the probes' cube array
+			// and the sun's cascades too, which a resize keeps. A minimized window never gets here: the application skips its
+			// frames, and its renderers keep what they hold.
 			ReleaseRenderTargets();
 			ReleaseReflectionProbes();
 			ReleaseShadowMap();

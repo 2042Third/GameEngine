@@ -3128,8 +3128,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   history. Callers apply the quality right after `SetViewportSize` in a frame, so Auto resolves for its rows; equal
   knobs cost one comparison. An allocation that fails halves the cascades (down to 1024) or the atlas (down to 2048),
   reports it once, and is tried at the requested size again by the next resize or change of that knob.
-- **Single images release their cascades:** a zero viewport (a capture renderer between pictures, a minimized game)
-  releases them with the render targets; thumbnails keep one 1024-texel layer.
+- **Single images release their cascades:** a zero viewport (a capture renderer between pictures, the editor's hidden
+  Game view) releases them with the render targets; thumbnails keep one 1024-texel layer. A minimized window keeps
+  them, as it keeps its render targets: the application skips its frames, so no zero viewport reaches its renderers.
 - **Who follows what:** games follow the project's section (`RendererQuality::GetProjectQuality`, the section read
   through `IProjectSettings` and cached by its version; Medium without a provider, which only tests and tools lack)
   unless `GameRenderer::SetQualityOverride` sets one (`StrataRuntime --quality <low|medium|high|ultra>` for a run,
@@ -3482,8 +3483,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   The directional light's shadows are cascades; point and spot lights' are views in an atlas ("Local light shadows").
 - The cascades are one D32 array (`SceneRenderer::GetShadowMap`) of a layer per cascade the quality draws
   (`RendererQualitySettings::ShadowCascades`; thumbnails draw one), made by the first frame with a shadowed sun and kept
-  across resizes; a zero viewport (a capture renderer between pictures, a minimized game) releases it, with the
-  cascades' depth pyramids and cache, as it releases the render targets.
+  across resizes; a zero viewport (a capture renderer between pictures, the editor's hidden Game view) releases it,
+  with the cascades' depth pyramids and cache, as it releases the render targets (a minimized window, whose frames are
+  skipped, keeps both).
 - Shadows: cascade depth ranges are fitted to the casters toward the light (casters beyond
   `c_MaxShadowCasterDistance` are pancaked onto the near plane), on the GPU on both paths (`Scene/CascadeFit.comp` writes
   `u_Cascades`, which the shadow and forward shaders read: never put cascade projections back into `FrameConstants`; the

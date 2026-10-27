@@ -163,8 +163,8 @@ TEST_SUITE("GPU.SceneRenderer.Quality")
 			renderer.SetViewportSize(c_Size / 2, c_Size / 2);
 			CHECK(renderer.GetShadowMap() == kept);
 
-			// Released altogether (a capture renderer between pictures, a minimized game): the cascades go too, and the next
-			// frame makes them again and draws the same picture.
+			// Released altogether (a capture renderer between pictures, the editor's hidden Game view): the cascades go too, and
+			// the next frame makes them again and draws the same picture.
 			renderer.SetViewportSize(0, 0);
 			CHECK(renderer.GetShadowMap() == nullptr);
 			renderer.SetViewportSize(c_Size, c_Size);
