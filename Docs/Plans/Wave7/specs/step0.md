@@ -1549,11 +1549,15 @@ the streams must know:
 - **S0.8a.** `PerfStability.py` decides "over budget" before the spread: a metric failing every attempt is over budget
   even when its runs scatter. The four entries still over budget alone were not measured against builds of the commits
   that set their budgets (9e9cbd92, ebc2792e, 1f44d522) but against wave 3's finishing build (3b87411c, built on this
-  machine on 2026-10-13 with the same budgets), which is within every one of them: regressions of waves 4-6, blockers
-  of 0.7.0 in the roadmap's open items. `PerfGPU.Editor.EditFrameNested100k`, within its budget alone on bc6ee123 but
-  1.26 times wave 3's build, failed every attempt of step 0's own `-L perf` run and joined them. The campaign's
-  second run once crashed the 250k world's save helper
-  (0xC0000005); not investigated yet, listed with the unstable metrics in the roadmap.
+  machine on 2026-10-13 with the same budgets), which is within every one of them: regressions of waves 4-6, blockers of
+  0.7.0 in the roadmap's open items. `PerfGPU.Editor.EditFrameNested100k`, within its budget alone on bc6ee123 but 1.26
+  times wave 3's build, failed every attempt of step 0's own `-L perf` run and joined them. The campaign's second run
+  once crashed the 250k world's save helper (0xC0000005) and Windows kept no report of it; 220 runs of the helper since
+  (100 on one project with step 0's build, one at a time; 60 on fresh projects with it and 60 with bc6ee123's, two at a
+  time) did not crash, so it stays listed with the unstable metrics in the roadmap. `Perf.Physics.Create10kBodies`,
+  timed around box3d's calls in a scratch build: 11.4 of its 18.1 ms are box3d's own creation calls (`b3CreateBody`, the
+  shapes, the mass), more than wave 3's 9.07 ms for all of it with Jolt; Strata's part is 6.7 ms (1.6 around those
+  calls, 5.1 gathering the records and building the shapes on jobs).
 - **S0.8b.** Five interleaved pairs of `PerfGPU.Renderer` (bc6ee123 against step 0's tip, both with bc6ee123's budget
   entries so neither confirms more attempts; `PerfStability.py --baseline --max-ratio 1.02`): 43 metrics, geometric mean
   0.994; above 1.02 `Skinned1000` 1.032, `Render10kMaterials` 1.038, `IdleFrame3kStreamedTextures` 1.024 (0.011 ms, the

@@ -858,26 +858,29 @@ Open items and deferrals later waves own:
     (3b87411c, built on 2026-10-13 under these budgets; 3 pairs, medians), within budget there: regressions of waves 4-6
     (3b87411c..bc6ee123), not the machine. `Perf.EditorPanels.Performance600FramesP95` 0.0993 ms against wave 3's 0.069
     (budget 0.0924); `Perf.Physics.Create10kBodies` 16.50 against 9.07 ms (budget 11.99: wave 5's box3d inserts every
-    shape into its trees one at a time on the main thread, about 6 ms of box3d's own on the Mac, where Jolt built them
-    in bulk; the way down is bulk insertion with a later box3d bump, and Strata's allocations per body);
+    shape into its trees one at a time on the main thread, where Jolt built them in bulk. Timed around its calls on this
+    machine, box3d's own creation (`b3CreateBody`, the shapes, the mass) takes 11.4 of the 18.1 ms, more than wave 3's
+    9.07 for all of it, and Strata's part 6.7 ms (1.6 around those calls, 5.1 gathering the records and building the
+    shapes on jobs); the way down is bulk insertion with a later box3d bump, then Strata's allocations per body);
     `PerfGPU.Editor.ThumbnailsMaxFrame` 2.073 against 0.978 ms (budget 1.149); `PerfGPU.Editor.SceneOpenOver1MMaxFrame`
-    1.839 against 0.664 ms (budget 1.143); and `PerfGPU.Editor.EditFrameNested100k`, within its budget alone on
-    bc6ee123 (0.2769 ms against 0.2808) but 1.26 times wave 3's build in the same pairs (0.2708 against 0.2153 ms) and
-    over budget in every attempt of step 0's `-L perf` run (0.287-0.299 ms). Each is fixed before the release, not
-    budgeted; `PlayFrameNested100k` (1.43 times wave 3's, within its budget) goes with the last.
+    1.839 against 0.664 ms (budget 1.143); and `PerfGPU.Editor.EditFrameNested100k`, within its budget alone on bc6ee123
+    (0.2769 ms against 0.2808) but 1.26 times wave 3's build in the same pairs (0.2708 against 0.2153 ms) and over
+    budget in every attempt of step 0's `-L perf` run (0.287-0.299 ms). Each is fixed before the release, not budgeted;
+    `PlayFrameNested100k` (1.43 times wave 3's, within its budget) goes with the last.
   - Over budget in the loaded campaign only, within budget alone, entry unchanged:
     `Perf.EditorPanels.Streaming10kAssetsRefreshFrame` (0.1933 ms against 0.2205).
   - Unstable in the campaign (a spread above 25% of the median; entries unchanged, to measure alone):
     `Perf.Runtime.SceneSwitch100kMaxFrame`, `Perf.Jobs.WakeLatency`, `Perf.Editor.SaveMaxFrame250k` (its helper crashed
-    once, 0xC0000005, in the campaign's second run: not investigated yet), `Perf.Scene.CancelLoad1M`,
+    once, 0xC0000005, in the campaign's second run and left no crash report; 220 runs since, of bc6ee123's and step 0's
+    builds, on one project and on fresh ones, one and two at a time, did not crash), `Perf.Scene.CancelLoad1M`,
     `Perf.Runtime.QuitDuringLoad1M`, `Perf.Editor.SceneOpen10kPrefabInstancesMaxFrame`,
     `Perf.Physics.Boxes10k.ActiveFrame` and `.StrataStepTime`, `PerfGPU.Editor.ImportSettings4kMaxFrame` and
     `...10kCubes`, `SceneOpen100kMaxFrame`, `ExportMaxFrameStress`, `PerfGPU.Renderer.EditFrameCubes300k`,
     `Render300kCubes`, `PlayStartRender1MCubes`, `GPUTimerCost`, `Render100kCubesShadowed`, `Render300kCubesShadowed`,
     `AtmosphereSunMovingMaxFrame`, `ReflectionProbes16`, `PerfGPU.Streaming.MaxFinalizeTime`,
     `PerfGPU.Streaming.Mips.MaxFrameRatio` and `PerfGPU.GameUI.RenderIdle10k`. `PerfGPU.Renderer.Render1MCubes` has two
-    states on every build, 0.27 and 0.55-0.65 ms: the campaign's runs met the first (its budget, 0.4275 ms, is
-    theirs), its case run alone starts in the second and reaches the first by its third attempt.
+    states on every build, 0.27 and 0.55-0.65 ms: the campaign's runs met the first (its budget, 0.4275 ms, is theirs),
+    its case run alone starts in the second and reaches the first by its third attempt.
   - Targets not met, kept below their new budgets (medians of 5): `Perf.Asset.FirstScan10k` 5,567 ms against 5,000,
     `PerfGPU.Editor.WorldOpen1MMaxFrame` 44.06 against 20.56, `Perf.Physics.Grow65kMaxFrame` 132.6 against 16.7 and
     `Create100kStaticBodies` 166.7 against 25 (box3d's insertion, above), `Perf.World.CellUnloadMaxFrame` 7.92 against
