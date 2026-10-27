@@ -21,7 +21,9 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 #include <GLFW/glfw3.h>
 
 #include <atomic>
+#include <optional>
 #include <queue>
+#include <string>
 
 namespace Strata
 {
@@ -529,22 +531,35 @@ namespace Strata
 		m_DebugMessengerState.CreatingInstanceWithLayers = !layers.empty();
 		VkResult result = dispatch.vkCreateInstance(&instanceInfo, nullptr, &m_Instance);
 		m_DebugMessengerState.CreatingInstanceWithLayers = false;
-		if (result == VK_ERROR_LAYER_NOT_PRESENT && !layers.empty())
+		std::optional<VkResult> resultWithLayers;
+		if (result != VK_SUCCESS && !layers.empty())
 		{
-			// The loader lists the layer but cannot load its library: its manifest names a library outside the loader's
-			// search path (Homebrew's on macOS names it without its directory). Run without it rather than not at all.
-			ST_CORE_WARN("Vulkan validation requested but {} could not be loaded (the Vulkan loader found its manifest, not its library); "
-				"using NVRHI validation only", c_ValidationLayerName);
+			// The loader lists the layer but may not load its library: its manifest names a library outside the loader's search
+			// path (Homebrew's on macOS names it without its directory) or one that is missing. Loaders fail differently then
+			// (VK_ERROR_LAYER_NOT_PRESENT on macOS, VK_ERROR_OUT_OF_HOST_MEMORY on Windows), so any failure with the layer tries
+			// again without it, which tells whether the layer was the cause: run without it rather than not at all. The retry
+			// chains no messenger, so the loader's reports of it are not taken for those of the layer it could not load.
+			resultWithLayers = result;
+			m_Instance = VK_NULL_HANDLE; // A failed vkCreateInstance leaves its handle undefined
 			layers.clear();
 			instanceInfo.enabledLayerCount = 0;
 			instanceInfo.ppEnabledLayerNames = nullptr;
 			instanceInfo.pNext = nullptr;
 			result = dispatch.vkCreateInstance(&instanceInfo, nullptr, &m_Instance);
+			if (result == VK_SUCCESS)
+			{
+				ST_CORE_WARN("Vulkan validation requested but {} could not be loaded (the Vulkan loader found its manifest, but creating the "
+					"instance with it failed: {}); using NVRHI validation only", c_ValidationLayerName, nvrhi::vulkan::resultToString(*resultWithLayers));
+			}
 		}
 		if (result != VK_SUCCESS)
 		{
-			// VK_ERROR_INCOMPATIBLE_DRIVER: a loader without a driver (e.g. without MoltenVK on macOS).
-			ST_CORE_ERROR("vkCreateInstance failed: {}. {}", nvrhi::vulkan::resultToString(result), VulkanLoader::GetInstallAdvice());
+			m_Instance = VK_NULL_HANDLE;
+			// VK_ERROR_INCOMPATIBLE_DRIVER: a loader without a driver (e.g. without MoltenVK on macOS). The layer was not the cause
+			// when the instance cannot be created without it either; what it failed with is part of the report.
+			const std::string withLayers = resultWithLayers
+				? fmt::format(" (with {}: {})", c_ValidationLayerName, nvrhi::vulkan::resultToString(*resultWithLayers)) : std::string();
+			ST_CORE_ERROR("vkCreateInstance failed: {}{}. {}", nvrhi::vulkan::resultToString(result), withLayers, VulkanLoader::GetInstallAdvice());
 			return false;
 		}
 		VULKAN_HPP_DEFAULT_DISPATCHER.init(vk::Instance(m_Instance));

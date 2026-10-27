@@ -153,7 +153,8 @@ libxkbcommon-dev libgtk-3-dev` (window system + native file dialogs).
 macOS runs Vulkan on Metal through MoltenVK: the LunarG Vulkan SDK, or Homebrew's `molten-vk` and `vulkan-loader` (with
 `vulkan-validationlayers` for the validation layer). Homebrew's layer manifest names its library without a directory,
 which the macOS loader does not look for in Homebrew's `lib`: Debug builds then warn that the layer could not be loaded
-and run without it. To validate, point `VK_ADD_LAYER_PATH` at a directory holding a copy of
+and run without it (as on every platform when the loader lists a layer it cannot load, whatever error it reports). To
+validate, point `VK_ADD_LAYER_PATH` at a directory holding a copy of
 `$(brew --prefix)/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json` whose `library_path` is the library's
 full path, `$(brew --prefix)/lib/libVkLayer_khronos_validation.dylib` (the build-test skill has the commands).
 
