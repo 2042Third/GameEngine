@@ -1,12 +1,24 @@
 #include "stpch.h"
 #include "Strata/Renderer/RendererQuality.h"
 
+#include "Strata/Core/EngineServices.h"
+#include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/ProjectSettings.h"
+#include "Strata/Core/SettingsRegistry.h"
+
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
+#include <system_error>
+#include <vector>
 
 namespace Strata
 {
@@ -31,6 +43,10 @@ namespace Strata
 		constexpr uint32_t c_MaxLocalShadowAtlasSize = 8192;
 		constexpr uint32_t c_MinLocalShadowTile = 128;
 		constexpr float c_MaxPixels = 8.0f;
+
+		// The sizes the section offers for the local shadows' atlas and its largest tile, stored as their names.
+		constexpr uint32_t c_AtlasSizeOptions[] = { 1024, 2048, 4096, 8192 };
+		constexpr uint32_t c_MaxTileOptions[] = { 256, 512, 1024, 2048 };
 
 		struct PresetName
 		{
@@ -68,6 +84,77 @@ namespace Strata
 			{
 				return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
 			});
+		}
+
+		// A member of a validated value into a knob; a missing or unreadable member keeps the knob's value.
+		void ReadField(const nlohmann::json& value, std::string_view name, ShadowMapResolution& knob)
+		{
+			const nlohmann::json* member = JsonUtils::Find(value, name);
+			if (member && member->is_string())
+			{
+				if (std::optional<ShadowMapResolution> resolution = RendererQuality::ShadowResolutionFromString(member->get_ref<const std::string&>()))
+					knob = *resolution;
+			}
+		}
+
+		void ReadField(const nlohmann::json& value, std::string_view name, uint32_t& knob)
+		{
+			const nlohmann::json* member = JsonUtils::Find(value, name);
+			if (!member)
+				return;
+			// The atlas and tile sizes are stored as the names of their options ("4096"), the counts as numbers.
+			if (member->is_string())
+			{
+				const std::string& text = member->get_ref<const std::string&>();
+				uint32_t parsed = 0;
+				const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), parsed);
+				if (error == std::errc() && end == text.data() + text.size())
+					knob = parsed;
+			}
+			else if (member->is_number_integer() && member->get<int64_t>() >= 0)
+			{
+				knob = static_cast<uint32_t>(std::min<int64_t>(member->get<int64_t>(), UINT32_MAX));
+			}
+		}
+
+		void ReadField(const nlohmann::json& value, std::string_view name, float& knob)
+		{
+			const nlohmann::json* member = JsonUtils::Find(value, name);
+			if (member && member->is_number())
+				knob = member->get<float>();
+		}
+
+		SettingsField EnumField(const char* name, const char* title, std::string description, std::vector<std::string> options, std::string defaultValue)
+		{
+			SettingsField field;
+			field.Name = name;
+			field.Title = title;
+			field.Description = std::move(description);
+			field.Type = SettingsFieldType::Enum;
+			field.Options = std::move(options);
+			field.Default = std::move(defaultValue);
+			return field;
+		}
+
+		SettingsField NumberField(const char* name, const char* title, std::string description, SettingsFieldType type, double min, double max, double defaultValue)
+		{
+			SettingsField field;
+			field.Name = name;
+			field.Title = title;
+			field.Description = std::move(description);
+			field.Type = type;
+			field.Min = min;
+			field.Max = max;
+			field.Default = type == SettingsFieldType::Int ? nlohmann::json(static_cast<int64_t>(defaultValue)) : nlohmann::json(defaultValue);
+			return field;
+		}
+
+		std::vector<std::string> SizeOptions(std::span<const uint32_t> sizes)
+		{
+			std::vector<std::string> options;
+			for (const uint32_t size : sizes)
+				options.push_back(std::to_string(size));
+			return options;
 		}
 
 	}
@@ -183,6 +270,117 @@ namespace Strata
 					return entry.Resolution;
 			}
 			return std::nullopt;
+		}
+
+
+		SettingsSection MakeSection()
+		{
+			const RendererQualitySettings high = GetPreset(RendererQualityPreset::High);
+			SettingsSection section;
+			section.Id = std::string(c_SectionId);
+			section.Title = "Graphics Quality";
+			section.Category = "Rendering";
+			section.Description = "The rendering quality of the project's games and of the editor's views and captures: the costly knobs every "
+				"renderer draws with, as a preset or as Custom values. Medium keeps Strata 0.6.0's costs; High, the default, draws 4096-texel "
+				"sun shadow cascades from 1440 output rows (as Medium below them). Scenes keep their look on lights, Post Process and the sky; "
+				"no setting renders below the output's resolution. Set it with project.setSettings; players may change it in games that offer "
+				"graphics options, and StrataRuntime --quality for one run.";
+			section.Scope = SettingsScope::Project;
+			section.Version = c_SectionVersion;
+
+			std::vector<std::string> presets;
+			for (const PresetName& entry : c_PresetNames)
+				presets.emplace_back(entry.Name);
+			section.Fields.push_back(EnumField("Preset", "Preset", "The preset: Low, Medium (Strata 0.6.0's costs), High (the default), Ultra, or "
+				"Custom, which uses the fields below. Under a preset the fields are ignored.", std::move(presets), "High"));
+			std::vector<std::string> resolutions;
+			for (const ResolutionName& entry : c_ResolutionNames)
+				resolutions.emplace_back(entry.Name);
+			// One field per knob, in the rows' order, each defaulting to High's value: choosing Custom from High changes nothing.
+			section.Fields.push_back(EnumField("ShadowResolution", "Shadow resolution", "Custom only: texels each way of every sun shadow cascade. "
+				"Auto: 2048 below 1440 output rows, 4096 from 1440 (about one texel per screen pixel at each cascade's far end); AutoFine: 4096 and "
+				"8192. Memory per view: cascades x size x size x 4 bytes (4 x 4096: 256 MiB).", std::move(resolutions),
+				ShadowResolutionToString(high.ShadowResolution)));
+			section.Fields.push_back(NumberField("ShadowCascades", "Shadow cascades", "Custom only: sun shadow cascades. Fewer cost less but spread the "
+				"same texels over the shadow distance.", SettingsFieldType::Int, 1, RenderData::c_MaxCascades, high.ShadowCascades));
+			section.Fields.push_back(EnumField("LocalShadowAtlasSize", "Point and spot shadow atlas", "Custom only: texels each way of the shadow "
+				"atlas point and spot lights share (4096: 64 MiB per view).", SizeOptions(c_AtlasSizeOptions), std::to_string(high.LocalShadowAtlasSize)));
+			section.Fields.push_back(EnumField("LocalShadowMaxTile", "Largest point and spot shadow tile", "Custom only: the largest tile a point or "
+				"spot light's shadow view gets (at most the atlas); tiles follow how large the light looks on screen.", SizeOptions(c_MaxTileOptions),
+				std::to_string(high.LocalShadowMaxTile)));
+			section.Fields.push_back(NumberField("MaxShadowedLocalLights", "Shadowed point and spot lights", "Custom only: point and spot lights "
+				"that cast shadows in a view, the most relevant first.", SettingsFieldType::Int, 0, RenderData::c_MaxShadowedLocalLights,
+				high.MaxShadowedLocalLights));
+			section.Fields.push_back(NumberField("LODErrorPixels", "Level of detail error (pixels)", "Custom only: levels of detail are chosen so "
+				"that their error spans at most this many pixels on screen (0: full detail).", SettingsFieldType::Float, 0.0, c_MaxPixels,
+				high.LODErrorPixels));
+			section.Fields.push_back(NumberField("MinProjectedPixels", "Smallest drawn size (pixels)", "Custom only: meshes smaller on screen than "
+				"this many pixels are not drawn (0: all).", SettingsFieldType::Float, 0.0, c_MaxPixels, high.MinProjectedPixels));
+			return section;
+		}
+
+		RendererQualitySettings FromSectionValue(const nlohmann::json* value)
+		{
+			// The preset: the value's, else the section's default (High). Members are read with JsonUtils::Find; a missing or
+			// unreadable member keeps the struct's value (callers pass validated values, which have every field).
+			RendererQualityPreset preset = RendererQualityPreset::High;
+			if (value)
+			{
+				const nlohmann::json* member = JsonUtils::Find(*value, "Preset");
+				if (member && member->is_string())
+					preset = PresetFromString(member->get_ref<const std::string&>()).value_or(RendererQualityPreset::High);
+			}
+			RendererQualitySettings settings = GetPreset(preset);
+			if (value && preset == RendererQualityPreset::Custom)
+			{
+				// One line per knob that follows the preset, in the rows' order.
+				ReadField(*value, "ShadowResolution", settings.ShadowResolution);
+				ReadField(*value, "ShadowCascades", settings.ShadowCascades);
+				ReadField(*value, "LocalShadowAtlasSize", settings.LocalShadowAtlasSize);
+				ReadField(*value, "LocalShadowMaxTile", settings.LocalShadowMaxTile);
+				ReadField(*value, "MaxShadowedLocalLights", settings.MaxShadowedLocalLights);
+				ReadField(*value, "LODErrorPixels", settings.LODErrorPixels);
+				ReadField(*value, "MinProjectedPixels", settings.MinProjectedPixels);
+			}
+			// Knobs read under every preset (players' comfort rows) follow here, one line each.
+			return Clamp(settings);
+		}
+
+		nlohmann::json ToSectionValue(const RendererQualitySettings& settings)
+		{
+			return nlohmann::json {
+				{ "Preset", PresetToString(settings.Preset) },
+				{ "ShadowResolution", ShadowResolutionToString(settings.ShadowResolution) },
+				{ "ShadowCascades", settings.ShadowCascades },
+				{ "LocalShadowAtlasSize", std::to_string(settings.LocalShadowAtlasSize) },
+				{ "LocalShadowMaxTile", std::to_string(settings.LocalShadowMaxTile) },
+				{ "MaxShadowedLocalLights", settings.MaxShadowedLocalLights },
+				{ "LODErrorPixels", settings.LODErrorPixels },
+				{ "MinProjectedPixels", settings.MinProjectedPixels }
+			};
+		}
+
+		const RendererQualitySettings& GetProjectQuality()
+		{
+			static const RendererQualitySettings s_WithoutProvider = GetPreset(RendererQualityPreset::Medium);
+			struct Cache
+			{
+				bool Valid = false;
+				uint64_t SettingsVersion = 0;
+				RendererQualitySettings Quality;
+			};
+			static Cache s_Cache;
+			const IProjectSettings* settings = EngineServices::Get<IProjectSettings>();
+			if (!settings)
+				return s_WithoutProvider;
+			const uint64_t version = settings->GetVersion();
+			if (s_Cache.Valid && s_Cache.SettingsVersion == version)
+				return s_Cache.Quality;
+			// The provider holds validated values only (a value its section refuses is not provided: the default applies).
+			s_Cache.Quality = FromSectionValue(settings->FindSection(c_SectionId));
+			s_Cache.Valid = true;
+			s_Cache.SettingsVersion = version;
+			return s_Cache.Quality;
 		}
 
 	}

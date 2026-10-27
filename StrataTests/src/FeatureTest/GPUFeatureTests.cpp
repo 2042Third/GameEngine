@@ -6,6 +6,7 @@
 #include "Strata/Animation/AnimationPreview.h"
 #include "Strata/Core/FrameProfiler.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Scene/Entity.h"
 
@@ -46,8 +47,20 @@ TEST_SUITE("GPU.FeatureTest")
 		CHECK(cameraEntity.GetName() == "Main Camera");
 		const SceneCamera camera = SceneCamera::FromEntity(*scene, cameraEntity, static_cast<float>(c_Width) / static_cast<float>(c_Height));
 
+		// The project's Graphics Quality (FeatureTest.stproj's Custom value), applied as programs apply it.
+		const RendererQualitySettings& quality = RendererQuality::GetProjectQuality();
+		CHECK(quality.Preset == RendererQualityPreset::Custom);
+		CHECK(quality.ShadowResolution == ShadowMapResolution::Size1024);
+		CHECK(quality.ShadowCascades == 3);
+		CHECK(quality.LocalShadowAtlasSize == 2048);
+		CHECK(quality.LocalShadowMaxTile == 512);
+		CHECK(quality.MaxShadowedLocalLights == 8);
+		CHECK(quality.LODErrorPixels == 1.5f);
+		CHECK(quality.MinProjectedPixels == 0.75f);
+
 		SceneRenderer renderer;
 		renderer.SetViewportSize(c_Width, c_Height);
+		renderer.SetQuality(quality);
 		// A few frames, as an application renders them: assets finish uploading and the environment is prepared. The scene's
 		// post-processing is temporal anti-aliasing: the still view's history grows with each frame.
 		for (uint32_t frame = 0; frame < 4; frame++)
@@ -61,6 +74,8 @@ TEST_SUITE("GPU.FeatureTest")
 		const SceneRendererStats& stats = renderer.GetStats();
 		CHECK(stats.Rendered);
 		CHECK(stats.PendingAssets == 0);
+		CHECK(stats.Quality == quality);
+		CHECK(stats.ShadowMapSize == 1024);
 		// The GPU culls the scene and builds its draws wherever the device can (the default).
 		CHECK(stats.GPUDriven == gpu.GetDevice().GetInfo().SupportsDrawIndirectFirstInstance);
 

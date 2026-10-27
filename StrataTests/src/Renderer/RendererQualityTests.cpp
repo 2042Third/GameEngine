@@ -1,11 +1,17 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Core/EngineServices.h"
+#include "Strata/Core/ProjectSettings.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/SceneRenderer.h"
+
+#include <nlohmann/json.hpp>
 
 #include <array>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <string>
 
 using namespace Strata;
@@ -14,8 +20,8 @@ namespace
 {
 
 	// The presets as Docs/DeveloperGuide.md, "Quality settings", lays them out, one knob per line in preset order (Low,
-	// Medium, High, Ultra): the test's own copy of RendererQuality.cpp's rows, so a knob GetPreset leaves out fails in
-	// every column that differs from Medium's.
+	// Medium, High, Ultra): the test's own copy of RendererQuality.cpp's rows, so a knob GetPreset or the section's
+	// conversions leave out fails in every column that differs from Medium's.
 	constexpr std::array<ShadowMapResolution, 4> c_ShadowResolution = { ShadowMapResolution::Size1024, ShadowMapResolution::Size2048, ShadowMapResolution::Auto, ShadowMapResolution::AutoFine };
 	constexpr std::array<uint32_t, 4> c_ShadowCascades = { 3, 4, 4, 4 };
 	constexpr std::array<uint32_t, 4> c_LocalShadowAtlasSize = { 2048, 4096, 4096, 8192 };
@@ -39,6 +45,24 @@ namespace
 	constexpr RendererQualityPreset c_Presets[] = { RendererQualityPreset::Low, RendererQualityPreset::Medium, RendererQualityPreset::High,
 		RendererQualityPreset::Ultra };
 
+	// The section in a registry of its own, and the values a project would keep.
+	struct QualityProject
+	{
+		SettingsRegistry Registry;
+		ProjectSettingsValues Values;
+
+		QualityProject()
+		{
+			REQUIRE(Registry.Register(RendererQuality::MakeSection()));
+		}
+
+		void Set(const nlohmann::json& value)
+		{
+			std::string error;
+			REQUIRE_MESSAGE(Values.Set(RendererQuality::c_SectionId, value, Registry, &error), error);
+		}
+	};
+
 }
 
 TEST_SUITE("Renderer.Quality")
@@ -50,11 +74,23 @@ TEST_SUITE("Renderer.Quality")
 		CheckColumn(SceneRendererSpecification {}.Quality, 1);
 		CHECK(RendererQualitySettings {}.Preset == RendererQualityPreset::Medium);
 
+		const SettingsSection section = RendererQuality::MakeSection();
 		for (size_t column = 0; column < std::size(c_Presets); column++)
 		{
 			const RendererQualitySettings preset = RendererQuality::GetPreset(c_Presets[column]);
 			CHECK(preset.Preset == c_Presets[column]);
 			CheckColumn(preset, column);
+
+			// The same knobs as Custom values survive the section: a knob ToSectionValue or FromSectionValue leaves out comes
+			// back as the field's default (High's), which Low's column differs from.
+			RendererQualitySettings custom = preset;
+			custom.Preset = RendererQualityPreset::Custom;
+			std::string error;
+			const std::optional<nlohmann::json> value = section.Validate(RendererQuality::ToSectionValue(custom), RendererQuality::c_SectionVersion, &error);
+			REQUIRE_MESSAGE(value.has_value(), error);
+			const RendererQualitySettings back = RendererQuality::FromSectionValue(&*value);
+			CHECK(back.Preset == RendererQualityPreset::Custom);
+			CHECK(back.HasSameKnobs(custom));
 		}
 		// Custom without values is High's knobs.
 		const RendererQualitySettings custom = RendererQuality::GetPreset(RendererQualityPreset::Custom);
@@ -114,6 +150,98 @@ TEST_SUITE("Renderer.Quality")
 			CHECK(resolved.HasSameKnobs(medium));
 		}
 		CHECK(RendererQuality::ResolveShadowMapSize(high.ShadowResolution, 1440) != RendererQuality::ResolveShadowMapSize(medium.ShadowResolution, 1440));
+	}
+
+	TEST_CASE("The section validates its fields")
+	{
+		SettingsRegistry registry;
+		REQUIRE(registry.Register(RendererQuality::MakeSection()));
+		const SettingsSection& section = *registry.Find(RendererQuality::c_SectionId);
+		CHECK(section.Title == "Graphics Quality");
+		CHECK(section.Category == "Rendering");
+		CHECK(section.Version == RendererQuality::c_SectionVersion);
+		const nlohmann::json defaults = section.GetDefault();
+		CHECK(defaults["Preset"] == "High");
+		RendererQualitySettings fromDefaults = RendererQuality::FromSectionValue(&defaults);
+		CHECK(fromDefaults.Preset == RendererQualityPreset::High);
+		CHECK(fromDefaults.HasSameKnobs(RendererQuality::GetPreset(RendererQualityPreset::High)));
+
+		const auto refused = [&](const nlohmann::json& changes)
+		{
+			nlohmann::json value = RendererQuality::ToSectionValue(RendererQuality::GetPreset(RendererQualityPreset::Custom));
+			value.update(changes);
+			std::string error;
+			const bool accepted = section.Validate(value, RendererQuality::c_SectionVersion, &error).has_value();
+			CAPTURE(changes.dump());
+			CHECK_FALSE(accepted);
+			CHECK_FALSE(error.empty());
+		};
+		refused({ { "Preset", "Extreme" } });
+		refused({ { "ShadowCascades", 5 } });
+		refused({ { "ShadowCascades", 0 } });
+		refused({ { "ShadowResolution", "3000" } });
+		refused({ { "LocalShadowMaxTile", "4096" } });
+		refused({ { "LODErrorPixels", -1.0 } });
+		refused({ { "LODErrorPixels", 9.0 } });
+		refused({ { "Unknown", 1 } });
+
+		const nlohmann::json custom = { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LocalShadowAtlasSize", "2048" },
+			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 } };
+		std::string error;
+		CHECK_MESSAGE(section.Validate(custom, RendererQuality::c_SectionVersion, &error).has_value(), error);
+	}
+
+	TEST_CASE("Presets ignore the fields, Custom uses them")
+	{
+		const nlohmann::json low = { { "Preset", "Low" }, { "ShadowCascades", 1 } };
+		const RendererQualitySettings lowSettings = RendererQuality::FromSectionValue(&low);
+		CHECK(lowSettings.Preset == RendererQualityPreset::Low);
+		CHECK(lowSettings.HasSameKnobs(RendererQuality::GetPreset(RendererQualityPreset::Low)));
+
+		const nlohmann::json custom = { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LocalShadowAtlasSize", "2048" },
+			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 } };
+		const RendererQualitySettings customSettings = RendererQuality::FromSectionValue(&custom);
+		CHECK(customSettings.Preset == RendererQualityPreset::Custom);
+		CHECK(customSettings.ShadowResolution == ShadowMapResolution::Size4096);
+		CHECK(customSettings.ShadowCascades == 2);
+		CHECK(customSettings.LocalShadowAtlasSize == 2048);
+		CHECK(customSettings.LocalShadowMaxTile == 512);
+		CHECK(customSettings.MaxShadowedLocalLights == 8);
+		CHECK(customSettings.LODErrorPixels == 1.5f);
+		CHECK(customSettings.MinProjectedPixels == 0.75f);
+
+		const RendererQualitySettings none = RendererQuality::FromSectionValue(nullptr);
+		CHECK(none.Preset == RendererQualityPreset::High);
+		CHECK(none.HasSameKnobs(RendererQuality::GetPreset(RendererQualityPreset::High)));
+	}
+
+	TEST_CASE("A value without a field takes the field's default")
+	{
+		// What later landings rely on: a value saved before a row's field existed is read with the field's default.
+		const SettingsSection section = RendererQuality::MakeSection();
+		std::string error;
+		const std::optional<nlohmann::json> value = section.Validate({ { "Preset", "Custom" } }, 1, &error);
+		REQUIRE_MESSAGE(value.has_value(), error);
+		const nlohmann::json high = RendererQuality::ToSectionValue(RendererQuality::GetPreset(RendererQualityPreset::Custom));
+		CHECK(*value == high);
+	}
+
+	TEST_CASE("The project's quality follows IProjectSettings by its version")
+	{
+		// Without a provider (tests, tools): Medium, SceneRendererSpecification's default.
+		CHECK(RendererQuality::GetProjectQuality().Preset == RendererQualityPreset::Medium);
+		{
+			QualityProject project;
+			EngineServices::ScopedProvider<IProjectSettings> provider(project.Values);
+			// A project that does not set the section: its default.
+			CHECK(RendererQuality::GetProjectQuality().Preset == RendererQualityPreset::High);
+			project.Set({ { "Preset", "Low" } });
+			CHECK(RendererQuality::GetProjectQuality().Preset == RendererQualityPreset::Low);
+			CHECK(RendererQuality::GetProjectQuality().HasSameKnobs(RendererQuality::GetPreset(RendererQualityPreset::Low)));
+			project.Set({ { "Preset", "Ultra" } });
+			CHECK(RendererQuality::GetProjectQuality().Preset == RendererQualityPreset::Ultra);
+		}
+		CHECK(RendererQuality::GetProjectQuality().Preset == RendererQualityPreset::Medium);
 	}
 
 	TEST_CASE("The thumbnails' and the bake's renderers keep their own quality, 0.6.0's")

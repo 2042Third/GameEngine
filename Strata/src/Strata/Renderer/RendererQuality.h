@@ -3,6 +3,8 @@
 #include "Strata/Core/Base.h"
 #include "Strata/Renderer/SceneRenderData.h"
 
+#include <nlohmann/json_fwd.hpp>
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -10,6 +12,8 @@
 
 namespace Strata
 {
+
+	struct SettingsSection;
 
 	// The presets of RendererQualitySettings. The numbers are stored and passed by scripts (graphics options): never
 	// renumber them; a new preset takes the next number.
@@ -70,6 +74,8 @@ namespace Strata
 
 	namespace RendererQuality
 	{
+		constexpr std::string_view c_SectionId = "Renderer.Quality";
+		constexpr uint32_t c_SectionVersion = 1; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
 		constexpr uint32_t c_HighResolutionRows = 1440;
 		constexpr uint32_t c_MaxShadowMapSize = 8192;
 
@@ -85,6 +91,19 @@ namespace Strata
 		std::optional<RendererQualityPreset> PresetFromString(std::string_view name, bool ignoreCase = false);
 		const char* ShadowResolutionToString(ShadowMapResolution resolution); // "Auto", "AutoFine", "1024" ...
 		std::optional<ShadowMapResolution> ShadowResolutionFromString(std::string_view name);
+
+		// The Renderer.Quality section (simple; registered by RegisterRendererModule).
+		SettingsSection MakeSection();
+		// The settings a validated value of the section stands for (null: the section's default, High): a preset's values,
+		// or the fields' with Preset Custom.
+		RendererQualitySettings FromSectionValue(const nlohmann::json* value);
+		// A value of the section for these settings: their Preset and every field (a preset's own fields hold its values).
+		nlohmann::json ToSectionValue(const RendererQualitySettings& settings);
+		// The project's quality: the section read through IProjectSettings, kept until its version changes (a project that
+		// does not set the section: its default, High). Medium, SceneRendererSpecification's default, while no program
+		// provides the service: only tests and tools render so (the editor provides it whenever it runs, the game from its
+		// manifest). Main thread only.
+		const RendererQualitySettings& GetProjectQuality();
 	}
 
 }
