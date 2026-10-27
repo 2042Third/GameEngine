@@ -571,6 +571,37 @@ same time on the Mac (Apple M2 Max), the Windows reference machine still away. `
   script ABI keeps version 1 and 155 host functions, and its `AGENTS.md` lines were shortened to fit. Release 0.6.0
   holds the wave.
 
+**Wave 7 in progress (step 0 landed).** The owner asked for the wave on 2026-10-26 ("### Wave 7" below); its plan and
+reviewed specs are in `Docs/Plans/Wave7/` until it lands. Step 0 ran on the Windows reference machine, back with a
+replaced CPU, and landed on main before the four streams branch from its tip:
+
+- The GPU suites ran on NVIDIA under the validation layer for the first time since wave 3: the atmosphere's
+  environment cube, irradiance and prefiltered maps lost their earlier levels when made in a frame whose multiple
+  scattering ran too (per-level transitions from an undefined layout on driver 617.42), so mirrors stayed black after a
+  sky switch until the sun moved; they are now made whole in the UnorderedAccess state first. A timer check that read a
+  reset before the GPU ran it, and a test that waited for an import by the clock, were fixed.
+- `AGENTS.md` made room for the streams (37,213 of its 40,000 code points with step 0's own lines); post-processing
+  and ambient occlusion moved into `SceneRendererPost.cpp` and `SceneRendererAmbientOcclusion.cpp` without changing a
+  pixel; the scene layout's slots and the streams' GPU stage positions were assigned (`Include/Scene.glsl`, DG "GPU
+  timing").
+- The renderer's costly knobs became `RendererQualitySettings` and the `Renderer.Quality` project section: Low, Medium
+  (0.6.0's costs), High (the default: 4096-texel sun cascades from 1440 output rows, Medium below) and Ultra, or Custom
+  values. Games, the editor's views and captures follow it and change it while they run (`SceneRenderer::SetQuality`
+  makes again only what a changed knob sizes), the Scene view can use a preset of its own (`viewport.setSettings
+  {quality}`), captures draw at their view's quality and match it (0.6.0's captures used half the local shadows'
+  atlas), and `StrataRuntime --quality` plays a run at a preset. Thumbnails and the probe bake keep 0.6.0's values.
+- `Tools/LookDev.py` captures 23 shots of the samples and a look-dev scene at 1920x1080 and 3840x2160, stills and live,
+  with their GPU stages. The 0.6.0 baseline (bc6ee123, 122 stills of 5 repeats) is kept on the reference machine in
+  `.worktrees/wave7-plan/lookdev/0.6.0`, beside step 0's tip at Medium and at the projects' quality
+  (`lookdev/step0-medium`, `lookdev/step0`).
+- The perf budgets were measured again (five runs on bc6ee123's Release build): the Mac's provisional metrics got
+  budgets and the cheaper ones went down; five metrics over budget are regressions of waves 4-6, blockers of 0.7.0
+  (the open items' "Waiting for the Windows reference machine"). Step 0 at Medium against 0.6.0 (bc6ee123), in five
+  interleaved pairs: `PerfGPU.Renderer`'s 43 metrics at a geometric mean of 0.994, four above 1.02 (the open items);
+  the look-dev stills identical but where the captures' atlas changed (shots with shadowed point and spot lights) and
+  under the physical sky (the atmosphere's fix), their GPU busy time at a median ratio of 1.003. High at 3840x2160 costs
+  the samples' scene cameras 0 to 0.52 ms of GPU time over Medium.
+
 Open items and deferrals later waves own:
 
 - GPU-driven rendering (wave 4's `gpu-driven-rendering`): skinning still runs per draw (compute skinning once per
@@ -794,13 +825,14 @@ Open items and deferrals later waves own:
   from the material, not a thickness map; screen-space reflections cover a clear coat's base only and trace no
   transparent surface; TAA keeps a few softer frames where a surface uncovers what it hid, cannot reject surfaces that
   recede fast, and Original stays soft in slow pans; probes are baked, so a moving sun does not relight them; at most 16
-  shadowed point and spot lights per view. Left for later (also in "Later" below): render scaling, dynamic resolution
-  and TAA as an upscaler, MSAA; project-wide renderer defaults (a `Renderer.Defaults` settings section, with
-  `game-shell`'s quality presets); layered shadow rendering, occlusion culling of local shadow views, more than 16
-  shadowed lights, sized local lights (PCSS) and contact shadows; run-time probe capture, cube texture assets and
-  clustered probe lists; SSR on a nearest-depth pyramid and for transparent surfaces; volumetric fog, light shafts and
-  aerial perspective, the atmosphere from altitude; thickness maps, sheen, specular, iridescence and anisotropy, EXR
-  import and area lights; fewer GTAO samples accumulated by TAA; shadows of a second directional light (the moon).
+  shadowed point and spot lights per view. Left for later (also in "Later" below): MSAA (rendering below native
+  resolution and temporal upscaling are ruled out: the owner's direction of 2026-10-26, in "Later"); project-wide
+  quality presets (wave 7's `Renderer.Quality` section, in place of the `Renderer.Defaults` section planned with
+  `game-shell`); layered shadow rendering, occlusion culling of local shadow views, more than 16 shadowed lights, sized
+  local lights (PCSS) and contact shadows; run-time probe capture, cube texture assets and clustered probe lists; SSR on
+  a nearest-depth pyramid and for transparent surfaces; volumetric fog, light shafts and aerial perspective, the
+  atmosphere from altitude; thickness maps, sheen, specular, iridescence and anisotropy, EXR import and area lights;
+  shadows of a second directional light (the moon).
 - Project settings and input actions (wave 6's `project-settings`), left for later: game-shell's macOS app bundle (the
   Finder's icon, the version and copyright in `Info.plist`), installing desktop entries, signing exports, quality
   presets (a project section registered in `SettingsRegistry`) and input only while the game's window has the focus
@@ -846,6 +878,13 @@ Open items and deferrals later waves own:
     `PerfGPU.Editor.WorldOpen1MMaxFrame` 44.06 against 20.56, `Perf.Physics.Grow65kMaxFrame` 132.6 against 16.7 and
     `Create100kStaticBodies` 166.7 against 25 (box3d's insertion, above), `Perf.World.CellUnloadMaxFrame` 7.92 against
     4, `PerfGPU.Editor.EditFrameWorldIdle` 0.334 against 0.281 and `PerfGPU.World.CellDriveMaxFrame` 8.885 against 8.
+  - Step 0's A/B against 0.6.0 at Medium (five interleaved pairs of `PerfGPU.Renderer`, medians; the rule allows 1.02):
+    `Skinned1000` 1.032 (0.7243 to 0.7475 ms), `Render10kMaterials` 1.038 (0.4607 to 0.478), `IdleFrame3kStreamedTextures`
+    1.024 (0.4622 to 0.4733) and `AtmosphereSunMovingMaxFrame` 1.094 (a maximum, bimodal on both builds: unstable in the
+    campaign). Six rounds of bc6ee123, step 0 after its seams (e84fde21) and step 0's tip put `Skinned1000` at 1.001 and
+    1.021 and `Render10kMaterials` at 1.013 and 1.039: the quality commits, whose per-frame work is a copy of the
+    quality into the stats and a loop over at most 16 tile sizes, about 12-15 us a frame in all; a code layout effect is
+    suspected (Perf tests: "compare the builds' profiles"), not shown. To explain or win back before 0.7.0.
   - Provisional until the integration's campaign: the Open World tour's three metrics (the campaign's tour ended early
     in two runs, fixed since: 12 seconds of game time; alone: work median 0.416 ms, GPU busy 0.669 ms) and step 0's
     `PerfGPU.Renderer.Render100kCubesShadowed4K` and `...High4K` with their GPU times.
@@ -1090,18 +1129,106 @@ later waves).
   - Collision layers for the whole project, migrated once from 0.5.0's scenes.
   - The game's title, version, company and icon in the exported game and its executable.
 
-### Later (wave 7 and beyond)
+### Wave 7
 
-The wave-4 audits ranked these first; wave 5 took the owner's request instead, and wave 6 took `render-quality` and
-`project-settings`, so the rest lead for wave 7:
-- **Rendering after `render-quality`** (wave 6 landed TAA, local shadows, probes, SSR, fog, the atmosphere, light units,
-  clear coat and glass): render scaling and TAA as an upscaler with `game-shell`'s quality presets and a project-wide
-  `Renderer.Defaults` section; volumetric fog and light shafts; more shadowed lights with occlusion culling of their
-  views; run-time probe capture for moving suns; the rest of the open items' list.
+Asked for by the owner on 2026-10-26, when the Windows reference machine came back with a new CPU and showed the engine
+at 3840x2160: "the current image quality is simply not great. The shadows are very pixelated, maybe add more settings
+to improve that"; never upscaling through TAA ("The blurry mess that current gen engine has (like unreal) is completely
+the opposite of what this engine is planning to be"); "great realistic graphics, which doesn't mean sharp or clinical",
+with the Fox Engine of Metal Gear Solid V as the baseline look; and a graphical showcase after the wave. Five audits
+measured the image on the reference machine (shadows; anti-aliasing, tone and the camera; lighting and materials;
+quality settings; architecture and cost) and planned the wave from their numbers: one shadow texel spanned 2.2 to 8.7
+screen pixels, the soft-shadow filter left 4.6% noise without TAA and blurred contacts over three texels on a sun twice
+its real size, every scene needed +1 EV because the tone curve showed middle gray at sRGB 91, the template's sky lit it
+like an overcast day (sun to sky 1.6), rough metals lost up to 69% of their light, ambient occlusion and reflections
+leaned on TAA, and no person, project or player could change any of it. Step 0 runs on main first: the GPU and Release
+tests on NVIDIA for the first time since wave 3, with fixes for what fails there; room in AGENTS.md; the atmosphere's
+black reflections after a sky switch; post-processing and ambient occlusion in files of their own; the `Renderer.Quality`
+project section with Low, Medium (0.6.0's costs), High (the new default: 4096-texel cascades from 1440 rows) and Ultra
+presets that every renderer follows and changes while it runs (`viewport.setSettings {quality}`, `viewport.capture
+{quality}`, `StrataRuntime --quality`), with captures that match the views; a look-dev capture harness
+(`Tools/LookDev.py`) with the 0.6.0 baseline; and the perf budgets measured again after the CPU replacement. The four
+streams branch from step 0's tip and merge in the order listed, each with a cut line below which its steps move to
+"Later" if they did not land. What every stream keeps: native resolution only, nothing that needs TAA to look right
+(every screen-space effect has a spatial filter and is judged with FXAA and without anti-aliasing too), nothing that
+costs anything when off, the CPU and GPU-driven paths and the shadow caches in agreement, and Medium at 0.6.0's costs.
+The wave is accepted on the reference machine against the harness's baseline: about one shadow texel per screen pixel
+where receivers are, no shadow noise without anti-aliasing, middle gray where a camera puts it at Exposure 0, at most
+5 ms of GPU time for each 3D sample at 3840x2160 on High, and Medium at 1920x1080 within 1.15 times step 0's.
+
+- **`graphics-options`: graphics options for people, agents and players.** Quality is found where people look for it,
+  set by agents with one command and changed by players in the game's options menu.
+  - A Graphics Quality page in Project Settings: a preset picker and a table of every row by preset, Custom editable,
+    with costs; a quality chip in the Scene view's toolbar.
+  - `IGameGraphics`, an engine service beside `IGameWindow`, provided by the runtime and the editor's play mode; the
+    player's choices saved by the engine in `GraphicsOptions.json` in the game's save directory.
+  - Host functions appended for named options, with the SDK's `StrataScript/Graphics.h`, so the rows later waves add
+    reach scripts without changing the ABI; `graphics.resetPlayerOptions` and `editor.status`'s `game.graphics`.
+  - A Graphics row in the Third-Person Adventure's settings menu; Post Process grouped into sections in the Inspector,
+    the sun's properties described with their units and linked to the page; `Docs/Manual/Graphics.md`.
+  - Below the cut: supersampled stills (`viewport.capture {supersample}`) and a showcase budget class for samples.
+- **`sun-shadows`: shadows of a real sun.** At 3840x2160 the sun's shadows are as fine as the screen where receivers
+  are, sharp at contact and softening by the sun's real size, the same in every frame without TAA, and grounded below
+  the shadow map's resolution.
+  - A `shadows` debug view of cascades and screen pixels per shadow texel, with statistics for agents.
+  - A physical, deterministic filter: the penumbra at its physical width on a 0.53 degree sun (the new default), a fixed
+    tent instead of rotated noise where the penumbra is narrow, a blocker search over a conservative depth pyramid that
+    never misses thin casters, and wide penumbrae on a disk of 16 to 32 taps by quality.
+  - The sun's shadow evaluated once per pixel in a screen-space pass after the depth prepass, with an edge-aware blur
+    sized by the penumbra; transparent surfaces keep the per-pixel filter.
+  - Contact shadows in that pass (`ContactShadowLength`, on at High and Ultra).
+  - Cascades fitted to the depth range of what the camera sees (SDSM), with a per-light split distribution.
+  - Below the cut: sized point and spot lights with the same filter, up to 8 cascades, distant shadows for open worlds,
+    16-bit depth for far cascades, and cascades kept while the camera moves.
+- **`camera-and-tone`: the image of a camera.** What the renderer shows reads like a photograph from a good camera,
+  restrained by default.
+  - A dithered 8-bit output (no banding) and FXAA that keeps more texture.
+  - Filmic, a tone curve of Strata's own that rolls highlights to white without skewing hues, calibrated so that new
+    projects and the samples need no +1 EV; white balance and slope, offset and power.
+  - Exposure that adapts like an eye (brighter faster than darker, center-weighted metering, a key that keeps interiors
+    darker than sunlight), bloom of the same size at every resolution, a lens's vignette.
+  - Motion blur of the camera and of moving objects, on at 180 degrees in the template and the samples, with quality
+    rows and players' comfort switches.
+  - Below the cut: depth of field with a physical lens, film grain and chromatic aberration, a morphological
+    anti-aliasing of Strata's own, 3D LUTs and lens flares.
+- **`light-and-materials`: believable light.** A new project opens sunny with a real sun to sky ratio, rough metals keep
+  their energy, occlusion grounds every object without TAA, highlights hold at 4K without sparkle, and distance fades
+  into the atmosphere's haze.
+  - Lighting debug views (lighting only, ambient occlusion, indirect light, luminance in EV, albedo range).
+  - Multiple-scattering energy compensation, checked by a white-furnace test.
+  - GTAO by quality, denoised spatially without TAA, with a 1 m radius and multi-bounce.
+  - The template under the physical atmosphere with a 100,000 lux sun, sun and sky presets (`lighting.applySkyPreset`),
+    the samples' skies and suns balanced and the Open World's leaves corrected.
+  - Specular anti-aliasing, a 512 prefiltered sky at High, and aerial perspective from the atmosphere.
+  - Below the cut: screen-space reflections without TAA, volumetric fog and light shafts, a baked irradiance volume for
+    sky visibility and bounce light, bent normals, and alpha cutouts that hold at distance.
+
+### Later (wave 8 and beyond)
+
+The owner's direction for rendering (2026-10-26): realistic, filmic images at native resolution, with the Fox Engine of
+Metal Gear Solid V as the baseline look; neither the smear of temporal upscaling ("The blurry mess that current gen
+engine has (like unreal) is completely the opposite of what this engine is planning to be") nor a sharp, clinical image.
+Strata never renders below native resolution: no render scaling below 1, no dynamic resolution, no TAA or other temporal
+upscaling, and nothing may need temporal accumulation to look right (TAA stays one anti-aliasing choice).
+
+- **Wave 8 starts with `showcase`: a graphical showcase sample, asked for by the owner after wave 7.** "High Desert
+  Outpost": a rocky valley of about 300 m with a hut, crates, barrels, a covered car, a lantern and a fire pit among
+  boulders and cliffs, made through the editor from Poly Haven's CC0 scans (about 60 MB of source assets, in a showcase
+  budget class of its own) under the physical atmosphere through a time of day. Five shots with a camera tour between
+  them: a dawn vista, the outpost's contact detail, the hut's interior with light shafts, dusk to night with the lantern
+  and the fire, and a macro of a rock; a photo mode with free camera, time of day, exposure, focus and the Graphics
+  options; High by default, screenshots at Ultra and supersampled. `PerfGPU.Samples.Showcase.{High,Ultra}` at
+  3840x2160 and image checks at its fixed shots. It needs wave 7's streams, the items below their cut lines that the
+  shots use (depth of field, light shafts, the irradiance volume, alpha cutouts, distant shadows, supersampled stills),
+  terrain material blending or detail normal maps, and one baked time of day for its probes or run-time probe capture.
+- **Rendering after wave 7:** what fell below wave 7's cut lines; MSAA; virtual shadow maps if the shadows debug view
+  shows cascades falling short; frame-level variants of the forward shader if `GPU.Opaque` shows the need; more shadowed
+  lights with occlusion culling of their views; run-time probe capture for moving suns; render scale above 1 for live
+  views; area lights; the rest of the open items' list.
 - **`game-shell`:**
   - Crash reports in shipped games.
-  - Game settings with quality presets mapped to the renderer.
   - Exports per platform and configuration, with a macOS app bundle.
+  - Texture quality and the other options wave 7's graphics options leave to later.
 - **`manual-and-samples`:** a people's manual reachable from the Help menu and playable templates (the 3D samples came
   with wave 5; what they left open is in Status).
 - **`scene-contexts`:** per-scene asset managers and script engines instead of process-wide active ones.
