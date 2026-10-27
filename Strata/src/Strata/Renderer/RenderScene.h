@@ -184,8 +184,10 @@ namespace Strata
 		bool Validate(std::string* outError = nullptr) const;
 		// Debug builds assert after syncs that Validate passes: after every sync for render scenes of up to
 		// c_ValidatedProxiesPerSync proxies, every few syncs for larger ones (Core/AmortizedCheck). It costs about as much
-		// as rebuilding the proxies: after every sync it took the Open World sample 25 ms a frame in Debug, and paced its
-		// cost per sync stays bounded whatever the size. GetValidationCount counts these validations (0 in other builds).
+		// as rebuilding the proxies: after every sync it took the Open World sample 25 ms a frame in Debug; paced, its cost
+		// per sync is bounded on average whatever the size (a sync that validates still pays for every proxy). A missed
+		// signal is caught at the next validation unless a signaled change of the entity repaired its proxy first.
+		// GetValidationCount counts these validations (0 in other builds).
 		static constexpr uint64_t c_ValidatedProxiesPerSync = 1024;
 		uint64_t GetValidationCount() const { return m_ValidationCount; }
 

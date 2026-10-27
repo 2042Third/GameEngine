@@ -6,11 +6,12 @@ namespace Strata
 {
 
 	// Paces a check whose cost grows with the size of what it checks (a whole-structure validation in Debug builds), so that
-	// calling it every frame costs a bounded amount per call whatever that size: each call earns a budget of
+	// calling it every frame costs a bounded amount per call on average whatever that size: each call earns a budget of
 	// `elementsPerCall` elements, and the check is due once the budget earned since the last one covers the elements there
 	// are now. Structures of up to `elementsPerCall` elements are checked at every call, larger ones every few calls (one of
-	// 10,000 elements with a budget of 500, every 20th), and the first call always checks. Deterministic: it counts calls,
-	// never time. Not thread-safe.
+	// 10,000 elements with a budget of 500, every 20th), and the first call always checks. The call that checks still pays
+	// for the whole structure, so do not pace work that a frame's deadline must bound. Deterministic: it counts calls, never
+	// time. Not thread-safe.
 	class AmortizedCheck
 	{
 	public:

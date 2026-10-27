@@ -851,8 +851,10 @@ short. Their full wording:
   assertion names the entity whose write was not signaled. They also compare the render proxies with the scene after
   `RenderScene::Sync` ("The render proxies of scene ... differ"). Both checks cost as much as rebuilding what they
   check, so they run after every update or sync for scenes of up to 512 entities and render scenes of up to 1,024
-  proxies, and every few for larger ones (`Core/AmortizedCheck`): an unsignaled write is still caught, a few frames
-  later, and a large scene stays playable in Debug. Tests check at once with `Tests::CheckSceneCaches`. Read sibling
+  proxies, and every few for larger ones (`Core/AmortizedCheck`, bounded per update on average; the update that checks
+  pays for everything), so a large scene stays playable in Debug. There an unsignaled write is caught at the next check,
+  a few frames later, unless a signaled write to the entity or an ancestor repaired the cache before it, and the
+  assertion may come several updates after the write. Tests check at once with `Tests::CheckSceneCaches`. Read sibling
   positions with `Scene::GetSiblingIndex` (cached), never by searching the child list, and remove many entities with one
   `DestroyEntities` call. A registry holds at most `Scene::c_MaxEntities` (1,048,575) live entities; creating more
   fails with an error.

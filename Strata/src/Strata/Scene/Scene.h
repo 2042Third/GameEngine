@@ -390,8 +390,9 @@ namespace Strata
 		// c_CacheCheckEntitiesPerUpdate entities, every few updates for larger ones (Core/AmortizedCheck). The check recomputes
 		// every world transform and walks the whole hierarchy, about 10 microseconds per entity in Debug: after every update
 		// it took a world of 11,000 entities 100 ms a frame, and paced it costs about 5 ms per update on average whatever the
-		// scene's size. An unsignaled write, which leaves a cache stale until something else touches the entity, is caught a few
-		// updates later. GetCacheCheckCount counts these checks (0 in other builds).
+		// scene's size (an update that checks still pays for every entity). An unsignaled write leaves a cache stale until
+		// something else touches the entity: it is caught at the next check, a few updates later, unless a signaled write to
+		// the entity or an ancestor repaired the cache first. GetCacheCheckCount counts these checks (0 in other builds).
 		static constexpr uint64_t c_CacheCheckEntitiesPerUpdate = 512;
 		uint64_t GetCacheCheckCount() const { return m_CacheCheckCount; }
 

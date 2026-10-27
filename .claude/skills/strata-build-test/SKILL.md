@@ -190,10 +190,13 @@ ctest --preset macos-debug -LE perf
 - To look at rendering changes, read those PNGs, or run `StrataEditor --windowed --frames N --commands <script>
   --screenshot out.png` with a script that builds a scene and uses `camera.set`/`camera.focus`.
 - GPU tests must end with `CHECK(gpu.GetNewErrorCount() == 0)` so validation errors fail them.
-- Debug builds assert after every `Scene::OnUpdateRuntime`/`OnUpdateEditor` that the scene's caches match a full
-  recomputation. A test aborting with "Scene '...' has inconsistent caches: entity '...'" wrote that entity's
+- Debug builds assert after `Scene::OnUpdateRuntime`/`OnUpdateEditor` that the scene's caches match a full
+  recomputation: after every update for scenes of up to `Scene::c_CacheCheckEntitiesPerUpdate` (512) entities, every
+  few updates for larger ones (`Core/AmortizedCheck`; render proxies likewise after `RenderScene::Sync`, 1,024 per
+  sync). A test aborting with "Scene '...' has inconsistent caches: entity '...'" wrote that entity's
   `TransformComponent` (or name or tag) without `MarkModified` after the scene was updated (AGENTS.md, "Architecture
-  rules"); in Release the same test would render or simulate stale world transforms.
+  rules"), in a large scene possibly some updates before the one that asserted; call `Tests::CheckSceneCaches` after
+  each step to find it. In Release the same test would render or simulate stale world transforms.
 - Run both Debug and Release before committing: some bugs (uninitialized memory, timing) only show in one.
 
 ## Debugging a crash in a test

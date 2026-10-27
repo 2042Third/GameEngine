@@ -838,7 +838,7 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
 | `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (the systems' `PrepareLoadedScene`: physics' bodies; `SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
 | `Scene.UI`, `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays, or by `FramePerfLog::Create`; `World.Streaming`, the World system's, when the World module registers, so that perf logs created before a scene plays have its column; `Scene.UI` is the game UI's input) |
-| `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
+| `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty, and in Debug builds the paced check of the scene's caches after an update (`Scene::CheckCachesAfterUpdate`: on the updates that check, about 10 microseconds per entity) |
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView` (or `ApplyFeedback`), `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
 | `Render.UI` | the game UI pass (`GameUIRenderer`): its `Prepare` (layout, quads, uploads, glyphs) and `Draw` recording, nested in `Render.Submit` |
@@ -2176,7 +2176,9 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   from `Scene::GetWorldTransformChanges` (every proxy is compared when the scene no longer knows). Writes to
   `MeshRendererComponent` (and light component) fields must therefore signal, like transform writes (AGENTS.md,
   "Architecture rules"); Debug
-  builds compare the proxies with the scene after every `Sync` (`RenderScene::Validate`). Signaled entities wait for the
+  builds compare the proxies with the scene after syncs (`RenderScene::Validate`): after every `Sync` for render scenes of
+  up to `c_ValidatedProxiesPerSync` (1,024) proxies, every few for larger ones (`Core/AmortizedCheck`, as the scene's
+  cache check above), so a missed signal may be reported a few syncs after it. Signaled entities wait for the
   next `Sync` in a queue that holds each entity once (destroyed ones leave it), so a scene that changes while nothing
   renders it (a hidden view, an agent capturing now and then) queues no more than its entities. A scene's first sync
   builds every proxy (about 36 ms for 100,000 mesh renderers, Release), so a loaded scene is prepared before it is shown:
