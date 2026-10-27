@@ -25,10 +25,12 @@ namespace
 	constexpr const char* c_TourGPUMedian = "PerfGPU.Samples.OpenWorldTour.GPUBusyMedianMs";
 
 	// The tour's frames measured: those of its first c_TourWindowMs, from the first frame with a cell of the island loaded
-	// (what comes before is the loading scene's). The game runs with the display's vsync, as players see it, so the frame
-	// rate follows the display: c_TourFrames covers the window on displays of up to 240 Hz.
+	// (what comes before is the loading scene's). The game runs as players see it, its frame rate the display's or, where
+	// the driver does not pace the window, as fast as it draws (a frame every millisecond here), so the run's length is game
+	// time (StrataRuntime --seconds), never a count of frames: c_TourSeconds of game time take at least as long on the
+	// clock, and cover the window once the first cell arrived within the seconds left.
 	constexpr double c_TourWindowMs = 8'000.0;
-	constexpr uint32_t c_TourFrames = 3'000;
+	constexpr uint32_t c_TourSeconds = 12;
 
 	// The value at `fraction` (0.5 the median, 0.95 the 95th percentile) of the finite values, nearest rank.
 	double Percentile(std::vector<double> values, double fraction)
@@ -66,7 +68,7 @@ TEST_SUITE("PerfGPU.Samples")
 			const std::filesystem::path perfLog = directory / "Tour.csv";
 			ProcessSpecification process;
 			process.Executable = FileSystem::FromUTF8(*game);
-			process.Arguments = { "--resolution", "1920x1080", "--frames", std::to_string(c_TourFrames), "--perf-log", FileSystem::ToUTF8(perfLog),
+			process.Arguments = { "--resolution", "1920x1080", "--seconds", std::to_string(c_TourSeconds), "--perf-log", FileSystem::ToUTF8(perfLog),
 				"--save-directory", FileSystem::ToUTF8(directory / "Saves") };
 			const Process::RunResult run = Process::Run(process, std::chrono::minutes(10));
 			INFO("Game output:\n", run.Output);
@@ -78,7 +80,8 @@ TEST_SUITE("PerfGPU.Samples")
 			std::string error;
 			const std::optional<Tests::PerfLogTable> table = Tests::ReadPerfLog(perfLog, error);
 			REQUIRE_MESSAGE(table, error);
-			REQUIRE_MESSAGE(Tests::ValidatePerfLog(*table, c_TourFrames, error), error);
+			REQUIRE_MESSAGE(!table->Rows.empty(), "the perf log has no rows");
+			REQUIRE_MESSAGE(Tests::ValidatePerfLog(*table, table->Rows.size(), error), error);
 			const size_t cellsColumn = RequireColumn(*table, "WorldCellsLoaded");
 			const size_t workColumn = RequireColumn(*table, "WorkMs");
 			const size_t intervalColumn = RequireColumn(*table, "IntervalMs");
@@ -98,7 +101,7 @@ TEST_SUITE("PerfGPU.Samples")
 				elapsedMs += (*row)[intervalColumn];
 			}
 			REQUIRE_MESSAGE(elapsedMs >= c_TourWindowMs, "the run ended ", elapsedMs / 1000.0, " s into the tour, before its ", c_TourWindowMs / 1000.0,
-				" s (a display above 240 Hz needs more than c_TourFrames frames)");
+				" s (the first cell arrived too late for c_TourSeconds of game time)");
 			const double workMedian = Percentile(work, 0.5);
 			const double workP95 = Percentile(work, 0.95);
 			const double gpuMedian = Percentile(gpu, 0.5);
