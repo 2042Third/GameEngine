@@ -480,6 +480,20 @@ if(TARGET StrataEditor AND TARGET StrataCLI)
 		COMMAND StrataTests --test-suite=EndToEnd* --no-intro=true
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
 	set_tests_properties(StrataEditor.Automation PROPERTIES ENVIRONMENT "${STRATA_END_TO_END_ENVIRONMENT}" TIMEOUT 600)
+
+	# The look-dev harness (Tools/LookDev.py) keeps working: it builds the look-dev project with this build's editor,
+	# captures one shot small twice and checks every output (Docs/DeveloperGuide.md, "Look-dev harness"). The StrataTools.*
+	# tests need Python 3; without it at configure time the test still exists and fails saying so.
+	find_package(Python3 3.10 COMPONENTS Interpreter)
+	if(Python3_Interpreter_FOUND)
+		add_test(NAME StrataTools.LookDev
+			COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/LookDev.py" selftest --build "$<TARGET_FILE_DIR:StrataEditor>"
+				--output "${CMAKE_CURRENT_BINARY_DIR}/LookDevSelfTest/$<CONFIG>")
+	else()
+		add_test(NAME StrataTools.LookDev
+			COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.LookDev" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
+	endif()
+	set_tests_properties(StrataTools.LookDev PROPERTIES LABELS "gpu;tools" TIMEOUT 900)
 endif()
 
 # The runtime's command line, before any game is looked for: --help prints the usage and exits 0, an argument it does not

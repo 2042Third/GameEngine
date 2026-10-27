@@ -124,8 +124,8 @@ Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
   property's non-default value, a settings section, a script field type, callback, host function or SDK name, an asset
   type) goes unexercised, a feature script fails, or the run logs a warning or error it does not expect ([Feature
   test](Docs/DeveloperGuide.md#feature-test): what counts, how to extend it).
-- Package tests (label `package`) need CMake and a compiler; a change to a sample must keep its
-  `Editor/<Sample>Commands.json.in` passing.
+- Package tests (label `package`) need CMake and a compiler, `StrataTools.*` tests Python 3; a change to a sample must
+  keep its `Editor/<Sample>Commands.json.in` passing.
 
 ## Code style (Hazel conventions)
 

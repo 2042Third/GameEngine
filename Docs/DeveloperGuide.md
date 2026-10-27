@@ -25,6 +25,7 @@ stays under 40,000 characters (the test `Docs.AgentGuide` fails beyond). How the
   - [Shards, sweeps and locks](#shards-sweeps-and-locks)
   - [GPU tests](#gpu-tests)
   - [Perf tests](#perf-tests)
+  - [Look-dev harness](#look-dev-harness)
   - [End-to-end tests](#end-to-end-tests)
   - [Test rules and helper processes](#test-rules-and-helper-processes)
   - [Feature test](#feature-test)
@@ -125,7 +126,7 @@ modules:
 | `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU at 60 frames per second (servers, CI); `--frames N` stops after N frames (a count that is not a positive whole number exits 3, so a mistyped check cannot run forever); `--seconds S` stops at the frame by which the game played S seconds of game time (`GameRuntime::GetPlayedSeconds`: the fixed steps of its scenes from its start on, not the loading scene's; refused like `--frames`; with both, the first reached ends the run), the length of a check whose outcome depends on how far the game got (a picture, a tour), which a count of frames is not: the frame rate differs by machine and configuration; both keep every fixed step (no time dilation, and a frame longer than the scene's `MaxFixedStepsPerFrame` steps plays only the time they simulate, `GameRuntimeOptions::KeepEveryFixedStep`, so the scene's clock and its scripts' frame time agree with the steps counted); `--screenshot out.png` with `--frames N` or `--seconds S` saves the last frame (and fails the run when it shows the missing-camera message, or a black frame because the start scene still loads: scenes load in the background, the manifest's optional `LoadingScene` plays meanwhile); `--asset-budget-mb <n>` sets the GPU texture budget of the game's assets; `--resolution <width>x<height>` renders in a window of exactly that many pixels whatever the display's scale (instead of the manifest's window, which scales with the display; implies `--windowed`); `--perf-log <csv>` writes a row per frame (frame time, frame profiler stages, job threads, asset streaming and mip streaming, the upload queue, the device's memory and its staging, the process's private memory and its peak, the GPU's stages and busy time of the same frame, then a world's streaming and physics columns and what the renderer
 drew: draw calls, instances, triangles, visible and occluded proxies, instance uploads), also headless; `--save-directory <dir>` keeps the game's save files there instead of the player's data directory (tests); `--help` prints the options (`c_Arguments`), and an argument it does not understand or a bad value ends the run with the problem and the usage on stderr and exit code 3, as in the editor (`Core/CommandLineOptions`: `FindUnknownArgument`, `FormatUsage`, `c_UsageExitCode`). Patch packs the manifest lists (`PatchPacks`) are mounted over the game's pack. |
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `ThirdPerson`, `OpenWorld`, `PhysicsPlayground` and `Tetris` (played and exported by the CTests `StrataEditor.ThirdPerson`, `StrataEditor.OpenWorld`, `StrataEditor.PhysicsPlayground` and `StrataEditor.Tetris`), each with `README.md`, `CREDITS.md` and `Picture.png` ([Samples](#samples): how they are made, credited and kept within budgets). `Samples.json` lists them; the build copies them next to the executables (`StrataSamples`), where the launcher's Open Sample and `project.openSample` offer them as copies. Open one in place only to change the sample: `StrataEditor --project Samples/<Game>`. |
-| `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables; `GenerateIslandTerrain.py` makes the Open World sample's island: its terrain tiles and palette, and the command script that scatters its vegetation), `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)), `PerfLock.py` (runs a command under a lock in the user's temporary directory, so that the measurements of agents run by one user never overlap) `CompatLint.py` (compiles changed files with GCC 14 and LLVM 16, the compilers closest to CI's, without precompiled headers, before a push: AGENTS.md, "CI before main") and `CIStatus.py` (the state of a commit's CI runs and the failure annotations its jobs left, readable without a job log). |
+| `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables; `GenerateIslandTerrain.py` makes the Open World sample's island: its terrain tiles and palette, and the command script that scatters its vegetation), `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)), `PerfLock.py` (runs a command under a lock in the user's temporary directory, so that the measurements of agents run by one user never overlap) `CompatLint.py` (compiles changed files with GCC 14 and LLVM 16, the compilers closest to CI's, without precompiled headers, before a push: AGENTS.md, "CI before main") and `CIStatus.py` (the state of a commit's CI runs and the failure annotations its jobs left, readable without a job log) and `LookDev.py` (pictures of fixed shots through headless editors and their comparison between builds, see [Look-dev harness](#look-dev-harness)). |
 | `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, render scene, animation, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands), `Manual/` (guides for people making games in the editor: `Scripting.md`), `Releases/` (the notes of each release, `<version>.md`, and the README of the release archives, `PackageReadme.md`). |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
 
@@ -347,6 +348,7 @@ ctest --preset windows-debug -j 8       # all tests (Windows, Debug), eight at a
 ctest --preset linux-debug -LE gpu      # skip tests that need a GPU
 ctest --preset windows-debug -L core -j 8   # the unit test shards only
 ctest --preset windows-release -L perf  # perf tests against their budgets (Release and Dist only)
+ctest --preset windows-release -L tools # the tools' tests (Python 3: the look-dev harness)
 build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset directly (doctest filters)
 ```
 
@@ -579,6 +581,47 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   a perf difference between builds of identical sources points at such a layout effect; compare the builds' profiles
   before blaming noise.
 
+### Look-dev harness
+
+- `Tools/LookDev.py` (standard library only: `python -I Tools/LookDev.py ...`) shows what a change does to images: it
+  captures fixed shots with a build's editor and compares two sets of them. Every image change is shown with it
+  (before and after, the GPU stage times beside them), and the owner's before/after sheet of a wave is its comparison.
+  - `capture --build <bin dir>` copies the three 3D samples (never opening them in place) and makes two projects in a
+    work directory: `Basic3D`, a new project of the `basic3d` template, and `LookDev`, built by the command script
+    `Tools/LookDev/LookDevScene.json` from the `empty` template (a room with a window and a shadowed lamp, a white-furnace
+    row of spheres over roughness and metalness in `Scenes/Furnace.stscene`, poles, a fence and a 5 cm plate as thin
+    casters, an alpha-masked leaf card whose texture the tool draws, the physical sky; every look property at its
+    component's default, so each build shows what new content gets). A headless editor per project
+    (`StrataCLI launch`, a private `STRATA_SESSION_DIR` of the work directory) captures every shot of
+    `Tools/LookDev/Shots.json` (the scenes' cameras, the editor's opening views, the audits' close-ups) at each size
+    (`--sizes`, default 3840x2160 and 1920x1080), anti-aliasing mode (`--aa`: TAA, FXAA and none, set on the scenes'
+    Post Process components without saving) and repeat (`--repeat`, default 5), at the project's Graphics Quality or
+    `--quality <preset>` (refused with a build whose `viewport.capture` has no `quality`). `--live` adds the live shots:
+    windowed editors play the scene and read back what the Game view presented (`viewport.capture {live}`), to judge
+    motion. `--work <dir>` keeps the copies and their imported assets for the next run (`--fresh-work` makes them
+    again); `run.json` reports the time each project took to make and open apart from the captures.
+  - Outputs (`--output`, default `<temp>/StrataLookDev/<date>-<label>`, never inside the tracked tree: build trees and
+    `.worktrees` are allowed): `shots/<shot>-<W>x<H>-<aa>.png` (the first repeat), `crops/` (each shot's regions of
+    interest enlarged 4 times), `stats/` (every repeat's `renderStats` with `gpuMs` and the repeats' differing pixels from
+    the first, 0 on a deterministic driver), `stages.csv` (per picture the median GPU busy time and stage times, triangles,
+    draws, shadow draws, cached cascades and, where the build reports them, the quality preset and shadow map size),
+    `index.html` and `run.json` (the build's version line, the editor's GPU, every shot's outcome). Exit code 1 when a
+    shot failed.
+  - `compare <before> <after> --output <dir>`: per picture the two sets share, the differing pixels, the largest and the
+    mean channel difference and a difference image (eight times the difference), the crops side by side, and per picture
+    the ratio of the GPU times; `compare.json` and `index.html`. It reports differences without failing; exit code 1 only
+    when one side has a picture the other lacks.
+  - Shots and look-dev content are appended, never changed, so that captures of every build keep comparing. GPU times
+    are kept only from runs alone on the machine, under `python Tools/PerfLock.py --label lookdev-<label> --limit 90 -- ...`
+    (a full run takes longer than the lock's default limit); the pictures are read and cropped on every core after the
+    editors quit.
+  - `StrataTools.LookDev` (labels `gpu` and `tools`) runs `selftest` with the build's editor: the look-dev project from its
+    command script, one shot at 320x180 with FXAA twice, every output checked (sizes, crops, stats with no pending asset,
+    no difference between the repeats, the page, `compare` of the set with itself), and the PNG reader and writer round
+    trip. It needs Python 3.10 or later found at configure time; without it the test fails saying so.
+  - Baselines: Strata 0.6.0's set (bc6ee123's Release build, every shot, both sizes, all modes, 5 repeats) lies in
+    `.worktrees/wave7-plan/lookdev/0.6.0/` on the reference machine, outside the repository, with wave 7's step 0 beside it.
+
 ### End-to-end tests
 
 - Suites whose names start with `EndToEnd` start the built `StrataEditor`, `StrataCLI` and `StrataRuntime` (paths in
@@ -588,6 +631,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 
 ### Test rules and helper processes
 
+- Tests depend on no program outside the build, with two exceptions: the package tests (label `package`) need CMake and
+  the compiler, and the `StrataTools.*` tests (label `tools`) Python 3 to run the repository's tools.
 - Tests hold on any machine CI runs them on, the slowest included (its macOS runners have 3 hardware threads): waits go
   by the clock (`Tests::WaitUntil`) or by a condition, never by a count of frames or updates; tests size their own job
   pools (`Tests::ScopedJobSystem`) instead of relying on the application's defaults, which follow the hardware; a thread
