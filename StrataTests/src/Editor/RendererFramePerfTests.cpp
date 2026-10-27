@@ -10,9 +10,11 @@
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/Process.h>
+#include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
@@ -151,6 +153,14 @@ namespace
 		return Command("editor.wait", { { "frames", frames } });
 	}
 
+	// A step that fails the run unless the Scene view's latest frame drew at Medium, which perf tests measure.
+	nlohmann::json ExpectMedium()
+	{
+		nlohmann::json step = Command("editor.perf", { { "frames", 1 } });
+		step["expect"] = { { "/renderStats/quality/Preset", { { "equals", "Medium" } } } };
+		return step;
+	}
+
 }
 
 TEST_SUITE("PerfGPU.Renderer")
@@ -164,6 +174,9 @@ TEST_SUITE("PerfGPU.Renderer")
 		std::string error;
 		const Ref<Project> project = Project::Create(directory / "Project", "PerfRenderer", &error);
 		REQUIRE_MESSAGE(project, error);
+		// Perf tests measure Medium, 0.6.0's costs (Docs/DeveloperGuide.md, "Perf tests"): the project's Graphics Quality.
+		REQUIRE_MESSAGE(project->GetSettings().Set(RendererQuality::c_SectionId, { { "Preset", "Medium" } }, SettingsRegistry::GetProcessRegistry(), &error), error);
+		REQUIRE_MESSAGE(project->Save(&error), error);
 		const std::filesystem::path scenes = project->GetAssetDirectory() / "Scenes";
 		REQUIRE(FileSystem::CreateDirectories(scenes));
 
@@ -199,7 +212,7 @@ TEST_SUITE("PerfGPU.Renderer")
 		// of the grid, under 200 of its 50,000 cubes in any window shape up to 4:1.
 		const nlohmann::json narrowCamera = { { "position", { 0.0, 30.0, 0.01 } }, { "target", { 0.0, 0.0, 0.0 } }, { "fov", 20.0 } };
 		const nlohmann::json script = nlohmann::json::array({
-			Command("scene.open", { { "scene", "Scenes/Cubes100k.stscene" } }), Wait(c_SettleFrames), Wait(c_WaitFrames),
+			Command("scene.open", { { "scene", "Scenes/Cubes100k.stscene" } }), Wait(c_SettleFrames), Wait(c_WaitFrames), ExpectMedium(),
 			// The streaming debug view over all 100,000 cubes in view (it looks at what the renderer culls, every frame).
 			Command("viewport.setSettings", { { "debugView", "streaming" } }), Wait(c_SettleFrames), Wait(c_WaitFrames),
 			Command("viewport.setSettings", { { "debugView", "none" } }),

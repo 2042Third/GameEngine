@@ -1595,3 +1595,5 @@ the streams must know:
   kept its targets (7.5 said it frees them): `Application::RunFrame` skips a minimized window's frames, so no zero
   viewport reaches its renderer; the comments and the guide name the editor's hidden Game view instead.
   `SceneRenderer::ResolveShadowMapSize` applies `RendererQuality::c_MaxShadowMapSize`, which nothing read.
+  `PerfGPU.Renderer`'s editor frames (`T/Editor/RendererFramePerfTests.cpp`, which 7.9 did not list) store Medium too,
+  and their script fails unless the Scene view drew at Medium.
