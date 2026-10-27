@@ -1555,16 +1555,26 @@ the streams must know:
   second run once crashed the 250k world's save helper
   (0xC0000005); not investigated yet, listed with the unstable metrics in the roadmap.
 - **S0.8b.** Five interleaved pairs of `PerfGPU.Renderer` (bc6ee123 against step 0's tip, both with bc6ee123's budget
-  entries so neither confirms more attempts; `PerfStability.py --baseline --max-ratio 1.02`): 43 metrics, geometric
-  mean 0.994; above 1.02 `Skinned1000` 1.032, `Render10kMaterials` 1.038, `IdleFrame3kStreamedTextures` 1.024 (0.011
-  ms, the slack's edge) and the unstable maximum `AtmosphereSunMovingMaxFrame` 1.094. Six rounds of three builds
-  (bc6ee123, e84fde21 after S0.3, the tip) place `Skinned1000`'s 2% and `Render10kMaterials`' 2.5% in S0.4's commits,
-  whose per-frame additions (the quality copied into the stats, the tile sizes' loop) do not explain 12-15 us; left in
-  the roadmap's open items. One pair of `PerfGPU.Editor` (information): the editor frames 0.94-0.96, the open, export
-  and play-start maxima 0.85-1.69 (maxima the campaign found unstable), the 1M world's open 1.04 and saved open 1.15.
-  The harness at Medium (`lookdev/step0-medium`, 5 repeats): 52 of 122 stills identical to 0.6.0's; 57 differ in shots
-  whose 0.6.0 frame drew shadowed point and spot lights (its 2048 atlas; tiles now as the views draw them), those of the
-  look-dev project and the Open World also under the physical sky (S0.2's fix, which the captures taken right after it
-  already showed); 12 more under the physical sky alone (`lookdev.contact`, `lookdev.thin`); one 4K TAA shot by one
-  code value in 13 pixels (run to run); GPU busy per shot at a median ratio of 1.003 (0.83-1.64,
-  small 1080p shots). Step 0's tip at the projects' quality (High) is `lookdev/step0`, the streams' baseline.
+  entries so neither confirms more attempts; `PerfStability.py --baseline --max-ratio 1.02`): 43 metrics, geometric mean
+  0.994; above 1.02 `Skinned1000` 1.032, `Render10kMaterials` 1.038, `IdleFrame3kStreamedTextures` 1.024 (0.011 ms, the
+  slack's edge) and the unstable maximum `AtmosphereSunMovingMaxFrame` 1.094. Six rounds of three builds (bc6ee123,
+  e84fde21 after S0.3, the tip) placed `Skinned1000`'s 2% and `Render10kMaterials`' 2.5% in S0.4's commits, whose
+  per-frame additions (a copy of the quality into the stats, a loop over at most 16 tile sizes) take well under a
+  microsecond. They are the code's layout: the tip built again with its engine code 16, 32 and 48 bytes further on (a
+  function of `__nop()`s before `main` in `TestMain.cpp`, nothing else changed) measured `Skinned1000` at 1.000 to 1.018
+  of bc6ee123 (10 rounds); five rounds of the whole suite pinned to the P-cores put two builds of the tip 48 bytes apart
+  at 0.932 to 1.067 of each other over its 19 CPU metrics (the two-state `Render300kCubes` and `Render1MCubes` left out;
+  geometric mean 1.000; six above 1.02, among them `Render10kMaterials` 1.032), and both at a geometric mean of 0.977 of
+  bc6ee123, with `Skinned1000` 1.014, `Render10kMaterials` 1.008 and `IdleFrame3kStreamedTextures` 0.994 but other
+  metrics above 1.02 (`Render100kCubes` 1.109 and 1.115, while the ten other 100,000-cube frames, which add a feature to
+  its path, scatter from 0.915 to 1.053); every GPU time within 0.974 to 1.008. A cost of step 0's would raise the
+  metrics that share its path together, in every layout; these rises change metric with the layout and the run. The 1.02
+  rule cannot tell such small CPU costs from layout; DG "Perf tests" says how an A/B is read now. One pair of
+  `PerfGPU.Editor` (information): the editor frames 0.94-0.96, the open, export and play-start maxima 0.85-1.69 (maxima
+  the campaign found unstable), the 1M world's open 1.04 and saved open 1.15. The harness at Medium
+  (`lookdev/step0-medium`, 5 repeats): 52 of 122 stills identical to 0.6.0's; 57 differ in shots whose 0.6.0 frame drew
+  shadowed point and spot lights (its 2048 atlas; tiles now as the views draw them), those of the look-dev project and
+  the Open World also under the physical sky (S0.2's fix, which the captures taken right after it already showed); 12
+  more under the physical sky alone (`lookdev.contact`, `lookdev.thin`); one 4K TAA shot by one code value in 13 pixels
+  (run to run); GPU busy per shot at a median ratio of 1.003 (0.83-1.64, small 1080p shots). Step 0's tip at the
+  projects' quality (High) is `lookdev/step0`, the streams' baseline.

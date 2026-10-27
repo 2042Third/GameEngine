@@ -597,10 +597,12 @@ replaced CPU, and landed on main before the four streams branch from its tip:
 - The perf budgets were measured again (five runs on bc6ee123's Release build): the Mac's provisional metrics got
   budgets and the cheaper ones went down; five metrics over budget are regressions of waves 4-6, blockers of 0.7.0
   (the open items' "Waiting for the Windows reference machine"). Step 0 at Medium against 0.6.0 (bc6ee123), in five
-  interleaved pairs: `PerfGPU.Renderer`'s 43 metrics at a geometric mean of 0.994, four above 1.02 (the open items);
-  the look-dev stills identical but where the captures' atlas changed (shots with shadowed point and spot lights) and
-  under the physical sky (the atmosphere's fix), their GPU busy time at a median ratio of 1.003. High at 3840x2160 costs
-  the samples' scene cameras 0 to 0.52 ms of GPU time over Medium.
+  interleaved pairs: `PerfGPU.Renderer`'s 43 metrics at a geometric mean of 0.994, four CPU medians above 1.02, as far
+  as two builds of step 0's own sources whose code lies 48 bytes apart differ (up to 1.067): the code's layout, not a
+  cost of step 0's (`Docs/Plans/Wave7/specs/step0.md`, "As built"); the look-dev stills identical but where the
+  captures' atlas changed (shots with shadowed point and spot lights) and under the physical sky (the atmosphere's
+  fix), their GPU busy time at a median ratio of 1.003. High at 3840x2160 costs the samples' scene cameras 0 to 0.52 ms
+  of GPU time over Medium.
 
 Open items and deferrals later waves own:
 
@@ -873,18 +875,13 @@ Open items and deferrals later waves own:
     `...10kCubes`, `SceneOpen100kMaxFrame`, `ExportMaxFrameStress`, `PerfGPU.Renderer.EditFrameCubes300k`,
     `Render300kCubes`, `PlayStartRender1MCubes`, `GPUTimerCost`, `Render100kCubesShadowed`, `Render300kCubesShadowed`,
     `AtmosphereSunMovingMaxFrame`, `ReflectionProbes16`, `PerfGPU.Streaming.MaxFinalizeTime`,
-    `PerfGPU.Streaming.Mips.MaxFrameRatio` and `PerfGPU.GameUI.RenderIdle10k`.
+    `PerfGPU.Streaming.Mips.MaxFrameRatio` and `PerfGPU.GameUI.RenderIdle10k`. `PerfGPU.Renderer.Render1MCubes` has two
+    states on every build, 0.27 and 0.55-0.65 ms: the campaign's runs met the first (its budget, 0.4275 ms, is
+    theirs), its case run alone starts in the second and reaches the first by its third attempt.
   - Targets not met, kept below their new budgets (medians of 5): `Perf.Asset.FirstScan10k` 5,567 ms against 5,000,
     `PerfGPU.Editor.WorldOpen1MMaxFrame` 44.06 against 20.56, `Perf.Physics.Grow65kMaxFrame` 132.6 against 16.7 and
     `Create100kStaticBodies` 166.7 against 25 (box3d's insertion, above), `Perf.World.CellUnloadMaxFrame` 7.92 against
     4, `PerfGPU.Editor.EditFrameWorldIdle` 0.334 against 0.281 and `PerfGPU.World.CellDriveMaxFrame` 8.885 against 8.
-  - Step 0's A/B against 0.6.0 at Medium (five interleaved pairs of `PerfGPU.Renderer`, medians; the rule allows 1.02):
-    `Skinned1000` 1.032 (0.7243 to 0.7475 ms), `Render10kMaterials` 1.038 (0.4607 to 0.478), `IdleFrame3kStreamedTextures`
-    1.024 (0.4622 to 0.4733) and `AtmosphereSunMovingMaxFrame` 1.094 (a maximum, bimodal on both builds: unstable in the
-    campaign). Six rounds of bc6ee123, step 0 after its seams (e84fde21) and step 0's tip put `Skinned1000` at 1.001 and
-    1.021 and `Render10kMaterials` at 1.013 and 1.039: the quality commits, whose per-frame work is a copy of the
-    quality into the stats and a loop over at most 16 tile sizes, about 12-15 us a frame in all; a code layout effect is
-    suspected (Perf tests: "compare the builds' profiles"), not shown. To explain or win back before 0.7.0.
   - Provisional until the integration's campaign: the Open World tour's three metrics (the campaign's tour ended early
     in two runs, fixed since: 12 seconds of game time; alone: work median 0.416 ms, GPU busy 0.669 ms) and step 0's
     `PerfGPU.Renderer.Render100kCubesShadowed4K` and `...High4K` with their GPU times.

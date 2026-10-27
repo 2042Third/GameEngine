@@ -462,7 +462,13 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   get `Measured` (the median) and `Budget` (1.5 times it, or their `Target` when every run met it), cheaper ones (below
   0.9 of `Measured`) are lowered, dearer ones within budget get their new `Measured`, counts their value; unstable ones
   (a spread above 25%) and those over budget stay as they are. `--baseline <files>` compares two builds' results per
-  metric (medians and their ratio; `--max-ratio` flags rises above it, within `--slack` ms below `--slack-below` ms). **Stability:** `Tools/PerfStability.py --runs 5` runs `-L perf` five times and reports per metric the
+  metric (medians and their ratio; `--max-ratio` flags rises above it, within `--slack` ms below `--slack-below` ms).
+  **Between builds** the CPU medians of frames under a millisecond move by several percent with where the code lands
+  alone: step 0's tip built twice, its engine code 48 bytes apart (a function of `__nop()`s before `main` in
+  `TestMain.cpp`), measured `PerfGPU.Renderer`'s CPU metrics at 0.93 to 1.07 of each other (geometric mean 1.000). A
+  CPU ratio above an A/B's rule is a regression when it holds against such a moved build of the same sources too and
+  the metrics that share the changed path rise with it; GPU times move by a fraction of that. **Stability:**
+  `Tools/PerfStability.py --runs 5` runs `-L perf` five times and reports per metric the
   minimum, median and maximum, the pass rate and how often it needed confirmation, and per run how busy the machine
   was, the attempts of every confirmed metric and the canary `Perf.Harness.Sort200k` against its reference. **Load or
   regression:** a check's attempts follow each other within about a minute, so other work that lasts longer (a build)
