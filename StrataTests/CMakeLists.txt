@@ -783,12 +783,14 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataEditor.PhysicsPlayground PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain
 		FIXTURES_SETUP StrataPhysicsPlaygroundExport)
 	# The exported Playground in a window: its demo plays for ten seconds of game time (--seconds, however many frames that
-	# takes), the last frame shows the arena, and its physics took time (Scene.Physics in the perf log).
+	# takes), the last frame shows the arena, and its physics took time (Scene.Physics in the perf log). A run that ends after
+	# game time never ends while the game cannot play (a start scene that never finishes loading, a paused game), so the
+	# windowed sample runs have timeouts (six to ten times their Debug length here).
 	set(STRATA_PLAYGROUND_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/PhysicsPlayground/$<CONFIG>")
 	add_test(NAME StrataRuntime.PhysicsPlaygroundWindowed
 		COMMAND "${STRATA_PLAYGROUND_DIR}/Build/PhysicsPlayground${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1280x720 --seconds 10
 			--screenshot "${STRATA_PLAYGROUND_DIR}/Windowed.png" --perf-log "${STRATA_PLAYGROUND_DIR}/Windowed.csv" --save-directory "${STRATA_PLAYGROUND_DIR}/WindowedSaves")
-	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataPhysicsPlaygroundExport
+	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowed PROPERTIES LABELS "gpu" TIMEOUT 150 FIXTURES_REQUIRED StrataPhysicsPlaygroundExport
 		FIXTURES_SETUP StrataPhysicsPlaygroundWindowed)
 	add_test(NAME StrataRuntime.PhysicsPlaygroundWindowedImage COMMAND StrataTests --strata-test-helper=check-image "${STRATA_PLAYGROUND_DIR}/Windowed.png" --size 1280x720)
 	set_tests_properties(StrataRuntime.PhysicsPlaygroundWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataPhysicsPlaygroundWindowed)
@@ -837,7 +839,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		COMMAND "${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1920x1080 --seconds 30 --asset-budget-mb 128
 			--screenshot "${STRATA_OPEN_WORLD_DIR}/Windowed.png" --perf-log "${STRATA_OPEN_WORLD_DIR}/Windowed.csv"
 			--save-directory "${STRATA_OPEN_WORLD_DIR}/WindowedSaves")
-	set_tests_properties(StrataRuntime.OpenWorldWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldExport FIXTURES_SETUP StrataOpenWorldWindowed)
+	set_tests_properties(StrataRuntime.OpenWorldWindowed PROPERTIES LABELS "gpu" TIMEOUT 300 FIXTURES_REQUIRED StrataOpenWorldExport
+		FIXTURES_SETUP StrataOpenWorldWindowed)
 	add_test(NAME StrataRuntime.OpenWorldWindowedImage
 		COMMAND StrataTests --strata-test-helper=check-image "${STRATA_OPEN_WORLD_DIR}/Windowed.png" --size 1920x1080 --dominant green 5)
 	set_tests_properties(StrataRuntime.OpenWorldWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
@@ -895,7 +898,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		COMMAND "${STRATA_THIRD_PERSON_DIR}/Build/ThirdPerson${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1280x720 --seconds 5
 			--screenshot "${STRATA_THIRD_PERSON_DIR}/Windowed.png" --perf-log "${STRATA_THIRD_PERSON_DIR}/Windowed.csv"
 			--save-directory "${STRATA_THIRD_PERSON_DIR}/WindowedSaves")
-	set_tests_properties(StrataRuntime.ThirdPersonWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonExport FIXTURES_SETUP StrataThirdPersonWindowed)
+	set_tests_properties(StrataRuntime.ThirdPersonWindowed PROPERTIES LABELS "gpu" TIMEOUT 60 FIXTURES_REQUIRED StrataThirdPersonExport
+		FIXTURES_SETUP StrataThirdPersonWindowed)
 	add_test(NAME StrataRuntime.ThirdPersonWindowedImage
 		COMMAND StrataTests --strata-test-helper=check-image "${STRATA_THIRD_PERSON_DIR}/Windowed.png" --size 1280x720)
 	set_tests_properties(StrataRuntime.ThirdPersonWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataThirdPersonWindowed)
