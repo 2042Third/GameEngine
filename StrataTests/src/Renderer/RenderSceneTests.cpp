@@ -459,6 +459,34 @@ TEST_SUITE("Renderer.RenderScene")
 		CheckProxies(largeScene);
 	}
 
+	TEST_CASE("Debug builds validate a copied scene's render scene at its first sync, whatever its source's pacing")
+	{
+		// Three syncs' budget of proxies (less one): the source, validated at its first sync, is not due at its second, and a
+		// clone that kept its pacing would not be due at its own first sync either.
+		Ref<Scene> source = CreateRef<Scene>("Source");
+		const uint64_t cubes = RenderScene::c_ValidatedProxiesPerSync * 3 - 1;
+		for (uint64_t index = 0; index < cubes; index++)
+			AddCube(*source, glm::vec3(static_cast<float>(index % 100), 0.0f, static_cast<float>(index / 100)));
+		RenderScene& renderScene = RenderScene::Get(*source);
+		renderScene.Sync(nullptr);
+		renderScene.Sync(nullptr);
+
+		Ref<Scene> copy = Scene::Copy(source);
+		RenderScene* clone = RenderScene::Find(*copy);
+		REQUIRE(clone != nullptr);
+		// The clone counts its own validations.
+		CHECK(clone->GetValidationCount() == 0);
+		clone->Sync(nullptr);
+#if defined(ST_DEBUG)
+		CHECK(renderScene.GetValidationCount() == 1);
+		CHECK(clone->GetValidationCount() == 1);
+#else
+		CHECK(renderScene.GetValidationCount() == 0);
+		CHECK(clone->GetValidationCount() == 0);
+#endif
+		CheckProxies(*clone);
+	}
+
 	TEST_CASE("Mesh renderers beyond the instance limit get no instances until there is room")
 	{
 		// Draw list entries name at most RenderData::c_MaxRenderInstances instances; a lowered limit stands for it here.
