@@ -799,7 +799,11 @@ short. Their full wording:
   and freed memory in use can lose the device). Drop render targets, and what references them, through
   `Renderer::ReleaseDeferred` (`DeferredReleaseQueue`: held until the GPU finished the work submitted
   before, never waiting, then destroyed within a frame's budget, `c_FrameDestroyBudget`, since a texture costs the
-  driver about 0.1 ms), as `SceneRenderer` does when it is resized. Command lists are immediate unless created with
+  driver about 0.1 ms), as `SceneRenderer` does when it is resized. A texture that keeps what compute passes write into
+  its levels or slices in the frame it was made (environment maps) first leaves its undefined layout whole
+  (`setTextureState(texture, AllSubresources, UnorderedAccess)` and `commitBarriers()`): otherwise each level leaves it
+  in a barrier of its own that waits for nothing, recorded between the writes of the others, and on NVIDIA such a
+  barrier could land after levels already written and lose them (`SceneRenderer::CreateEnvironmentMaps`). Command lists are immediate unless created with
   `setEnableImmediateExecution(false)`, and NVRHI's validation layer refuses to open a second immediate list while one is
   open (recording into the unopened list does nothing, and timing it with a `GPUPassTimer` crashes): a list that may open
   while another is, as the upload batch's transfer list and the geometry pool's growth under a batch do, is not
@@ -3565,14 +3569,20 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     `ComputeTransmittance` within 1%).
   - Environment: the cube's level 0 is the sky-view table without the disk (`IBL/AtmosphereCube.comp`), then
     `FilterEnvironment`, per lux of sun (`EnvironmentParams.x` scales it, so the light's intensity changes nothing
-    here). The first one is computed at once. It is double-buffered: once the sun moved more than
+    here). The first one is computed at once, and so is the next one after a sun was turned on or off
+    (`AtmosphereState::HadSun`: the sky's light changes whole; the maps in hand become the spare, so nothing is allocated)
+    and after the sky came back to the atmosphere from another source, which released the atmosphere's state. It is
+    double-buffered: once the sun moved more than
     `c_AtmosphereRefreshAngle` (0.5 degrees) from where the current one was computed, or the settings changed, the other
     set of maps is computed in `c_AtmosphereRefreshSteps` (14) steps, the six faces, the cube's levels, the irradiance and
     the six prefiltered levels, one per frame with `SpreadLightingUpdates` (all at once without it: captures and
     thumbnails), and takes over when complete (`EnvironmentRefreshSteps`, `EnvironmentRefreshPending`,
     `EnvironmentUpdates`); a change meanwhile waits for the next refresh, which follows at once, so settings that change
-    every frame still update the environment every 14 frames. Memory: the tables about 0.3 MiB, each set of maps about
-    21 MiB, so a renderer with the atmosphere holds two (42 MiB); nothing exists without the atmosphere.
+    every frame still update the environment every 14 frames. An intensity change recomputes nothing, also from and to 0.
+    The scene's binding sets follow each of the three maps (cube, irradiance, prefiltered). Memory: the tables about
+    0.3 MiB, each set of maps about 21 MiB, so a renderer with the atmosphere holds two (42 MiB); nothing exists without
+    the atmosphere. `GPU.Atmosphere` switches the sky's source and the sun back and forth and compares the reflections
+    with a fresh renderer's.
 
 ### Reflections
 

@@ -266,7 +266,7 @@ namespace Strata
 		// lighting updates spread over frames, and take over when complete.
 		const auto takeMaps = [&]()
 		{
-			EnvironmentMaps maps = atmosphere.Spare ? std::move(*atmosphere.Spare) : CreateEnvironmentMaps();
+			EnvironmentMaps maps = atmosphere.Spare ? std::move(*atmosphere.Spare) : CreateEnvironmentMaps(commandList);
 			atmosphere.Spare.reset();
 			maps.Source = nullptr;
 			maps.Procedural.reset();
@@ -274,9 +274,26 @@ namespace Strata
 			maps.AtmosphereSun = towardSun;
 			return maps;
 		};
-		if (!m_Environment || !m_Environment->Atmosphere)
+		// A sun turned on or off changes the light of the whole sky at once: it is computed at once too, as the first
+		// environment is, instead of over a refresh's frames lit by the environment of the sun that was (or of none).
+		const bool sunChanged = atmosphere.HadSun && *atmosphere.HadSun != hasSun;
+		atmosphere.HadSun = hasSun;
+		if (!m_Environment || !m_Environment->Atmosphere || sunChanged)
 		{
-			atmosphere.Refresh.reset();
+			// The maps in hand are kept, never dropped: a refresh under way gives its maps to the spare, and otherwise the
+			// current atmosphere maps become the spare (commands that still read them were recorded earlier on this queue), so
+			// takeMaps allocates nothing.
+			if (atmosphere.Refresh)
+			{
+				atmosphere.Spare = std::move(*atmosphere.Refresh);
+				atmosphere.Refresh.reset();
+			}
+			else if (m_Environment && m_Environment->Atmosphere && !atmosphere.Spare)
+			{
+				EnvironmentMaps previous = *m_Environment;
+				previous.Atmosphere.reset();
+				atmosphere.Spare = std::move(previous);
+			}
 			EnvironmentMaps maps = takeMaps();
 			for (uint32_t step = 0; step < c_AtmosphereRefreshSteps; step++)
 				RecordAtmosphereEnvironmentStep(commandList, maps, step);

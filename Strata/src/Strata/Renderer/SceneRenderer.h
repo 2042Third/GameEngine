@@ -1028,6 +1028,9 @@ namespace Strata
 			std::optional<EnvironmentMaps> Refresh;
 			uint32_t RefreshStep = 0;
 			std::optional<EnvironmentMaps> Spare;
+			// Whether the previous atmosphere frame had a sun (empty before the first): a sun turned on or off computes the next
+			// environment at once instead of lighting the scene with the old one for a refresh's frames.
+			std::optional<bool> HadSun;
 		};
 		// The environments computed from environment map textures, by texture, while a renderer lights with them
 		// (FindSharedEnvironment); defined with the functions that use it.
@@ -1077,7 +1080,7 @@ namespace Strata
 		// Reports what the frame drew to the active asset manager's texture streamer, for the levels its textures need.
 		void ReportTextureUse(const SceneCamera& camera);
 		// New environment textures (radiance cube with mips, irradiance, prefiltered).
-		EnvironmentMaps CreateEnvironmentMaps();
+		EnvironmentMaps CreateEnvironmentMaps(nvrhi::ICommandList* commandList);
 		// The environment maps of an equirectangular texture (new textures, so maps of the previous source are never
 		// overwritten while it may still be in use), shared with the renderers that start lighting with the same texture.
 		void ProcessEnvironment(nvrhi::ICommandList* commandList, const Ref<Texture>& source);
@@ -1479,7 +1482,10 @@ namespace Strata
 		// Image-based lighting
 		Ref<const EnvironmentMaps> m_Environment; // Null without an environment; a map's is shared (FindSharedEnvironment)
 		Ref<TextureHold> m_EnvironmentHold; // While the environment map's environment is still to be computed (HoldEnvironmentMap)
-		nvrhi::ITexture* m_BoundEnvironment = nullptr; // Environment cube referenced by m_SceneBindingSet
+		// The environment's maps referenced by m_SceneBindingSet: the scene sets are made again when any of them changes.
+		nvrhi::ITexture* m_BoundEnvironmentCube = nullptr;
+		nvrhi::ITexture* m_BoundIrradiance = nullptr;
+		nvrhi::ITexture* m_BoundPrefiltered = nullptr;
 		Scope<AtmosphereState> m_Atmosphere; // While the sky is the atmosphere
 		bool m_AtmosphereFrame = false;      // The frame's sky is the atmosphere
 		float m_AtmosphereSunIlluminance = 0.0f; // Its sun's illuminance above it: the largest component of the light's color times intensity

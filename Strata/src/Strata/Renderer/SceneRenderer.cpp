@@ -663,7 +663,7 @@ namespace Strata
 		commandList->dispatch(DispatchGroups(parameters.OutputSize), DispatchGroups(parameters.OutputSize), layers);
 	}
 
-	SceneRenderer::EnvironmentMaps SceneRenderer::CreateEnvironmentMaps()
+	SceneRenderer::EnvironmentMaps SceneRenderer::CreateEnvironmentMaps(nvrhi::ICommandList* commandList)
 	{
 		auto createCube = [&](uint32_t size, uint32_t mips, const char* name)
 		{
@@ -687,13 +687,22 @@ namespace Strata
 		maps.Cube = createCube(c_EnvironmentCubeSize, MipCountFor(c_EnvironmentCubeSize), "EnvironmentCube");
 		maps.Irradiance = createCube(c_IrradianceSize, 1, "Irradiance");
 		maps.Prefiltered = createCube(c_PrefilteredSize, c_PrefilteredMipCount, "Prefiltered");
+		// The new maps leave their undefined layout whole, before any level is written. Left to the passes, each level would
+		// leave it in a barrier of its own that waits for nothing (there is nothing to wait for in a new texture), recorded
+		// between the writes of the other levels; on the RTX 5090 (driver 617.42) such a barrier could land after levels
+		// already written and lose them: the atmosphere's first environment kept a black prefiltered map (its levels 0 to 3)
+		// whenever the long multiple-scattering pass ran before it in the frame, so mirrors and rough metals reflected
+		// nothing until the sun moved.
+		for (nvrhi::ITexture* texture : { maps.Cube.Get(), maps.Irradiance.Get(), maps.Prefiltered.Get() })
+			commandList->setTextureState(texture, nvrhi::AllSubresources, nvrhi::ResourceStates::UnorderedAccess);
+		commandList->commitBarriers();
 		return maps;
 	}
 
 	void SceneRenderer::ProcessEnvironment(nvrhi::ICommandList* commandList, const Ref<Texture>& source)
 	{
 		ST_PROFILE_FUNCTION();
-		EnvironmentMaps maps = CreateEnvironmentMaps();
+		EnvironmentMaps maps = CreateEnvironmentMaps(commandList);
 		maps.Source = source;
 
 		commandList->beginMarker("Environment");
@@ -755,7 +764,7 @@ namespace Strata
 		// The textures of the current procedural sky are rewritten in place: commands that still read them were recorded
 		// earlier on the same queue, and the state tracking orders the writes after them. They are this renderer's own
 		// (only maps computed from environment map textures are shared).
-		EnvironmentMaps maps = m_Environment && m_Environment->Procedural ? *m_Environment : CreateEnvironmentMaps();
+		EnvironmentMaps maps = m_Environment && m_Environment->Procedural ? *m_Environment : CreateEnvironmentMaps(commandList);
 		maps.Source = nullptr;
 		maps.Procedural = parameters;
 
@@ -1022,7 +1031,9 @@ namespace Strata
 		};
 		m_ClusterBindingSet = m_Device->createBindingSet(clusterSet, m_ClusterBindingLayout);
 
-		m_BoundEnvironment = environmentCube;
+		m_BoundEnvironmentCube = environmentCube;
+		m_BoundIrradiance = GetIrradianceMap();
+		m_BoundPrefiltered = GetPrefilteredMap();
 		m_BoundShadowMap = shadowMap;
 		m_BoundLocalShadowAtlas = localShadowAtlas;
 		m_BoundSceneGPUVersion = m_SceneGPU->GetBufferVersion();
@@ -2983,7 +2994,8 @@ namespace Strata
 		// samples them; a table that grew has a new buffer, which the binding sets follow.
 		TextureTable& textureTable = Renderer::GetTextureTable();
 		const bool tableUploaded = textureTable.RecordUploads(commandList);
-		const bool rebind = buffersRecreated || m_BoundEnvironment != GetEnvironmentCube() || m_BoundSkyView != GetBoundSkyView()
+		const bool rebind = buffersRecreated || m_BoundEnvironmentCube != GetEnvironmentCube() || m_BoundIrradiance != GetIrradianceMap()
+			|| m_BoundPrefiltered != GetPrefilteredMap() || m_BoundSkyView != GetBoundSkyView()
 			|| m_BoundReflectionProbes != GetBoundReflectionProbes() || m_BoundScreenReflections != GetBoundScreenReflections() || m_BoundSceneColor != GetBoundSceneColor()
 			|| m_BoundTextureTableVersion != textureTable.GetBufferVersion();
 		if (!tableUploaded || (rebind && !CreateSceneBindingSets()))

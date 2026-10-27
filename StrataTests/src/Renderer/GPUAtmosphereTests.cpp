@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
+#include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -411,6 +413,148 @@ TEST_SUITE("GPU.Atmosphere")
 		REQUIRE(renderer.Render(scene, camera, nullptr, options));
 		CHECK(renderer.GetStats().EnvironmentRefreshSteps == 0);
 		CHECK_FALSE(renderer.GetStats().EnvironmentRefreshPending);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Switching the sky's source and the sun back and forth lights the scene as a fresh renderer does")
+	{
+		// A mirror and a rough metal sphere reflect the environment: after any sequence of sky sources and suns that ends with
+		// the atmosphere and its sun, they look as they do to a renderer that saw only the end (0.6.0 could leave the mirror
+		// black after a switch to the procedural sky and back, until the sun moved).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		MaterialProperties mirror;
+		mirror.BaseColor = glm::vec4(1.0f);
+		mirror.Metallic = 1.0f;
+		mirror.Roughness = 0.0f;
+		MaterialProperties rough = mirror;
+		rough.Roughness = 0.4f;
+		const AssetHandle mirrorMaterial = assets.AddMaterial(mirror);
+		const AssetHandle roughMaterial = assets.AddMaterial(rough);
+		constexpr float c_SunLux = 50000.0f;
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 1.0f, -3.0f));
+		// The spheres' centers on screen: 0.75 m either side at 3 m, with a 60 degree field of view.
+		const glm::uvec2 mirrorPixel(36, 64);
+		const glm::uvec2 roughPixel(92, 64);
+
+		struct TestWorld
+		{
+			Scene Contents;
+			Entity Sky;
+			Entity Sun;
+		};
+		const auto makeWorld = [&](TestWorld& world, bool withSun)
+		{
+			// Exposure for the sky's reflection: a 50,000 lux sun's sky is thousands of nits.
+			AddNeutralPostProcess(world.Contents).Exposure = -14.0f;
+			world.Sky = world.Contents.CreateEntity("Sky");
+			world.Sky.AddComponent<SkyLightComponent>().Source = SkyLightSource::Atmosphere;
+			if (withSun)
+				world.Sun = AddSun(world.Contents, -TowardSun(30.0f), c_SunLux, false);
+			AddMesh(world.Contents, BuiltinAssets::SphereMesh, mirrorMaterial, glm::vec3(-0.75f, 1.0f, -3.0f), "Mirror");
+			AddMesh(world.Contents, BuiltinAssets::SphereMesh, roughMaterial, glm::vec3(0.75f, 1.0f, -3.0f), "Rough");
+		};
+
+		enum class Step { Procedural, Atmosphere, SunOff, SunOn, IntensityZero, IntensityBack, AddSun };
+		struct Sequence
+		{
+			const char* Name;
+			bool StartsWithSun;
+			std::vector<Step> Steps;
+		};
+		const Sequence sequences[] = {
+			{ "procedural, sun off, sun on, atmosphere", true, { Step::Procedural, Step::SunOff, Step::SunOn, Step::Atmosphere } },
+			{ "sun off, procedural, atmosphere, sun on", true, { Step::SunOff, Step::Procedural, Step::Atmosphere, Step::SunOn } },
+			{ "intensity 0, procedural, atmosphere, intensity back", true, { Step::IntensityZero, Step::Procedural, Step::Atmosphere, Step::IntensityBack } },
+			{ "a sun added to an atmosphere without one", false, { Step::AddSun } },
+		};
+		const SceneRenderOptions options = Forced(1.0f / 65536.0f);
+
+		for (const Sequence& sequence : sequences)
+		{
+			for (const bool spread : { true, false })
+			{
+				const std::string name = sequence.Name;
+				CAPTURE(name);
+				CAPTURE(spread);
+				SceneRendererSpecification specification;
+				specification.SpreadLightingUpdates = spread;
+				TestWorld world;
+				makeWorld(world, sequence.StartsWithSun);
+				SceneRenderer renderer(specification);
+				renderer.SetViewportSize(c_Size, c_Size);
+				REQUIRE(renderer.Render(world.Contents, camera, nullptr, options));
+				uint32_t frames = 1;
+				for (const Step step : sequence.Steps)
+				{
+					SkyLightComponent& sky = world.Sky.GetComponent<SkyLightComponent>();
+					switch (step)
+					{
+						case Step::Procedural: sky.Source = SkyLightSource::Procedural; world.Sky.MarkModified<SkyLightComponent>(); break;
+						case Step::Atmosphere: sky.Source = SkyLightSource::Atmosphere; world.Sky.MarkModified<SkyLightComponent>(); break;
+						case Step::SunOff: world.Sun.SetActive(false); break;
+						case Step::SunOn: world.Sun.SetActive(true); break;
+						case Step::IntensityZero:
+						case Step::IntensityBack:
+							world.Sun.GetComponent<DirectionalLightComponent>().Intensity = step == Step::IntensityZero ? 0.0f : c_SunLux;
+							world.Sun.MarkModified<DirectionalLightComponent>();
+							break;
+						case Step::AddSun: world.Sun = AddSun(world.Contents, -TowardSun(30.0f), c_SunLux, false); break;
+					}
+					world.Contents.UpdateWorldTransforms();
+					REQUIRE(renderer.Render(world.Contents, camera, nullptr, options));
+					frames++;
+					// A sun turned on or off under the atmosphere lights the scene from that frame on (no refresh over frames).
+					const bool sunTurned = step == Step::SunOff || step == Step::SunOn || step == Step::AddSun;
+					if (sunTurned && sky.Source == SkyLightSource::Atmosphere)
+					{
+						CHECK(renderer.GetStats().EnvironmentUpdates == 1);
+						CHECK_FALSE(renderer.GetStats().EnvironmentRefreshPending);
+					}
+				}
+				// A refresh the last steps started runs to its end.
+				for (uint32_t frame = 0; frame <= SceneRenderer::c_AtmosphereRefreshSteps && renderer.GetStats().EnvironmentRefreshPending; frame++)
+				{
+					REQUIRE(renderer.Render(world.Contents, camera, nullptr, options));
+					frames++;
+				}
+				REQUIRE_FALSE(renderer.GetStats().EnvironmentRefreshPending);
+				ReadbackImage image;
+				REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), image));
+
+				TestWorld fresh;
+				makeWorld(fresh, true);
+				SceneRenderer freshRenderer(specification);
+				freshRenderer.SetViewportSize(c_Size, c_Size);
+				for (uint32_t frame = 0; frame < frames; frame++)
+					REQUIRE(freshRenderer.Render(fresh.Contents, camera, nullptr, options));
+				ReadbackImage expected;
+				REQUIRE(Renderer::ReadTexture(freshRenderer.GetOutputTexture(), expected));
+				REQUIRE(image.BytesPerPixel == 4);
+
+				int largest = 0;
+				for (const glm::uvec2& center : { mirrorPixel, roughPixel })
+				{
+					for (uint32_t y = center.y - 2; y <= center.y + 2; y++)
+					{
+						for (uint32_t x = center.x - 2; x <= center.x + 2; x++)
+						{
+							for (uint32_t channel = 0; channel < 3; channel++)
+							{
+								const size_t index = (static_cast<size_t>(y) * image.Width + x) * 4 + channel;
+								largest = std::max(largest, std::abs(static_cast<int>(image.Pixels[index]) - static_cast<int>(expected.Pixels[index])));
+							}
+						}
+					}
+				}
+				CHECK(largest <= 1);
+				// Not black: the mirror shows the sky (above 0.05 of the display's white in its brightest channel).
+				const size_t mirrorIndex = (static_cast<size_t>(mirrorPixel.y) * image.Width + mirrorPixel.x) * 4;
+				const int brightest = std::max({ image.Pixels[mirrorIndex], image.Pixels[mirrorIndex + 1], image.Pixels[mirrorIndex + 2] });
+				CHECK(brightest > 13);
+			}
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
