@@ -99,23 +99,19 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 
 Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
 
-- Unit tests live in `StrataTests/src/<Module>/*Tests.cpp` (doctest), in suites named after the module
-  (`TEST_SUITE("Scene.Serialization")`); a new suite prefix gets a shard (`StrataTests/CoreShards.json`) and corruption
-  sweeps go in `*.Sweep` suites ([Shards, sweeps and locks](Docs/DeveloperGuide.md#shards-sweeps-and-locks)). Deferred
-  commands run with `Tests::RunCommandToCompletion`, UI tests (headless, `ImGuiHarness`) click in a tab only once it
-  shows, and a test's own component is registered in a child process (`--strata-test-helper=custom-component`).
+- Unit tests live in `StrataTests/src/<Module>/*Tests.cpp` (doctest), in suites named after the module; a new suite
+  prefix gets a shard (`StrataTests/CoreShards.json`) and corruption sweeps go in `*.Sweep` suites ([Unit
+  tests](Docs/DeveloperGuide.md#unit-tests), [Shards, sweeps and locks](Docs/DeveloperGuide.md#shards-sweeps-and-locks)).
 - `GPU*` suites (label `gpu`) share one device through `Tests::GPUContext` (never create devices in tests) and end with
   `CHECK(gpu.GetNewErrorCount() == 0)`: validation errors fail them. Exact-pixel tests set
   `SceneRendererSpecification::TextureStreaming = false` and `AddNeutralPostProcess`, tests of whole-asset residency
   `SetPartialLoads(false)`; text tests render until no glyph is pending. Count what a frame drew with
   `Tests::GetDrawnCounts` (the GPU-driven path counts on the GPU, frames later).
-- **Perf tests** (`Perf.*`, `PerfGPU.*`, label `perf`, Release and Dist; CI skips them, so run `-L perf` on the
-  reference machine before merging a change that can affect performance): limits live only in
+- **Perf tests** (`Perf.*`, `PerfGPU.*`, label `perf`, Release and Dist; CI skips them): limits live only in
   `StrataTests/Perf/Budgets.json`, measured on the reference machine (else `Provisional`); **budgets only go down** (at
-  most 1.5 times the measurement, lower is better; commits that add or lower one state the measured values; a metric
-  over budget is a regression to fix); check medians (maxima only for maxima by nature, saying why), peak memory in a
-  helper process; run `Tools/PerfStability.py --runs 5` there before merging changes to budgets or perf tests ([Perf
-  tests](Docs/DeveloperGuide.md#perf-tests)).
+  most 1.5 times the measurement; commits that add or lower one state the measured values); there, run `-L perf` before
+  merging what can change performance, `Tools/PerfStability.py --runs 5` before merging changes to budgets or perf tests
+  ([Perf tests](Docs/DeveloperGuide.md#perf-tests)).
 - `EndToEnd*` suites start the built executables (no GPU) with private session directories, free ports and timeouts,
   and terminate what they started when they fail.
 - Tests follow the transform contract, use `Tests::CreateTemporaryDirectory()` for files (never the source tree), never
@@ -124,11 +120,10 @@ Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
   that a new regression test fails without its fix. Tests hold on CI's slowest machines: they wait
   by the clock or a condition, never by a count of frames, and size their own job pools.
 - Expectations that differ in Dist say so with `#if defined(ST_DIST)` ([Releases](Docs/DeveloperGuide.md#releases)).
-- The **feature test** (golden rule 6, `StrataTests/FeatureTest/`) fails when a registered component, a property's
-  non-default value, a script field type, callback, host function or class, or a public SDK name goes unexercised in
-  `Feature.stscene` and its scripts, a feature script fails a check or does not complete, the run logs a warning or
-  error not in `c_ExpectedLogMessages`, or an asset type has no asset, imports with warnings or has its `.meta`
-  rewritten ([Feature test](Docs/DeveloperGuide.md#feature-test): what counts, how to extend it).
+- The **feature test** (golden rule 6, `StrataTests/FeatureTest/`) fails when something registered (a component, a
+  property's non-default value, a settings section, a script field type, callback, host function or SDK name, an asset
+  type) goes unexercised, a feature script fails, or the run logs a warning or error it does not expect ([Feature
+  test](Docs/DeveloperGuide.md#feature-test): what counts, how to extend it).
 - Package tests (label `package`) need CMake and a compiler; a change to a sample must keep its
   `Editor/<Sample>Commands.json.in` passing.
 
@@ -219,35 +214,24 @@ The threading model, frame loop and pipelines these rules protect are described 
   "not loaded yet" every frame instead of blocking. See [Asset pipeline](#asset-pipeline). New code that works for a
   scene (scene systems, loading into it, rendering it) reaches the asset manager through `Scene::GetAssetManager()`,
   never through `AssetManager`'s static functions, which use the process's active manager.
-- **Layers:** every file under `Strata/src` belongs to one layer of `StrataTests/Architecture/Layers.json`, and an
-  include that crosses layers must be allowed there; `Architecture.Layering` fails on any other include, on files in no
-  layer and on stale lines of `LayeringAllowlist.txt`. Never add a line or widen `MayInclude` to make a sideways or
-  upward include pass: invert the dependency (an interface in the lower layer, a registry, a scene service,
-  `Scene/SceneServices.h`, or an engine service, `Core/EngineServices.h`); only a proven downward dependency widens
-  `MayInclude`, with the reason in the layer's `Notes`. Removing an exception lowers `MaxAllowlistEntries`. The table is
-  the build (a library per layer); games link no `Tooling` layer.
+- **Layers:** every file under `Strata/src` belongs to a layer of `StrataTests/Architecture/Layers.json` and includes
+  across layers only what it allows (`Architecture.Layering`). Never add a `LayeringAllowlist.txt` line or widen
+  `MayInclude` to make a sideways or upward include pass: invert the dependency (an interface below, a registry, a scene
+  or engine service); games link no `Tooling` layer.
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers, scene
-  systems, settings sections read through `IProjectSettings` on the main thread...), never through lower layers
-  calling functions of higher ones. A component lives in its module
-  (`<Module>/<Module>Components.h`); `Scene/Components.h` only holds Scene's and those sibling layers must read. Each
-  module has one registration function (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`), called only by
-  the composition root, `Engine::RegisterBuiltinModules`, in dependency order, before anything reads a registry. Tooling
-  is handed in (`ModuleRegistrationOptions::AssetPipeline`); games and tests pass their components in
-  `ModuleRegistrationOptions::Extra`. Scene systems declare their order (`After`/`Before` within their module or toward
-  one it needs, `AfterIfPresent`/`BeforeIfPresent` toward others) and are made with `MakeSceneSystemDescriptor<T>`
-  (overrides public). Scenes keep the components of modules a build lacks (`UnknownComponentsComponent`).
+  systems, settings sections), never through lower layers calling higher ones. A component lives in its module
+  (`<Module>/<Module>Components.h`); each module has one `Register<Module>Module`, called only by the composition root,
+  `Engine::RegisterBuiltinModules`; games and tests pass theirs in `ModuleRegistrationOptions::Extra`; scene systems
+  declare their order and are made with `MakeSceneSystemDescriptor<T>`.
 - **Engine modules:** a service a program runs for its whole life is an `EngineModule` (`Core/EngineModule.h`) in its
   module's folder, listed by the programs that run it (`ApplicationSpecification::Modules`); `Application` never calls
   module code, and other code finds a module with `GetModules().Find<T>()` (null when absent)
   ([details](Docs/DeveloperGuide.md#architecture-rules)).
 - **Scene caches and the transform contract:** `Scene` caches world transforms, the hierarchy, activity and the name and
-  tag indexes, so **code that writes `TransformComponent` fields directly must signal the change**:
-  `Entity::MarkModified<TransformComponent>()` or `registry.patch`, or `Scene::MarkTransformChanged` where listeners
-  must not hear an `on_update`. Writes to `NameComponent::Name`, `TagComponent::Tag`, `MeshRendererComponent` and light
-  component fields signal the same way (Debug builds assert); values written right after `AddComponent` need none.
-  Hierarchy changes go through `Scene` (`SetParent`, `SetSiblingIndex`, `PlaceEntities`, `DestroyEntities`...), never by
-  editing `RelationshipComponent` or `HierarchyComponent`. Read sibling positions with `Scene::GetSiblingIndex`, remove
-  many entities with one `DestroyEntities` call, and stay within `Scene::c_MaxEntities` live entities.
+  tag indexes, so **code that writes `TransformComponent` fields directly must signal the change**
+  (`Entity::MarkModified<TransformComponent>()`, `registry.patch` or `Scene::MarkTransformChanged`), and so must writes
+  to names, tags, `MeshRendererComponent` and light fields. Hierarchy changes go through `Scene` (`SetParent`,
+  `DestroyEntities`...), never by editing `RelationshipComponent` or `HierarchyComponent`.
 - **Collision layers** are the project's (`Scene.CollisionLayers`); `Scene::GetPhysicsLayers` is a working copy applied
   on the main thread ([details](Docs/DeveloperGuide.md#collision-layers)).
 
@@ -262,11 +246,8 @@ Details: [Asset pipeline](Docs/DeveloperGuide.md#asset-pipeline).
   `EditorAssetManager::MoveAsset`/`MoveFolder`, delete through `MoveToTrash`, and read folders and referencers from the
   manager's indexes, never from the disk per frame.
 - **Bump an importer's `GetVersion()` whenever its output changes** (cooked textures: `TextureImporter` and
-  `GltfImporter`). Importers read their source through `ReadImportSource` and other files only through
-  `ReadImportDependency`, list in `FindExternalFiles` the files their sources name, make messages quoting file bytes
-  valid UTF-8 (`MakeValidUTF8`), check `ImportContext::IsCancelled` in long loops, describe every setting in
-  `GetSettingsProperties` and derive sub-asset handles with `DeriveSubAssetHandle`
-  ([Importers](Docs/DeveloperGuide.md#importers)).
+  `GltfImporter`); importers read files only through `ReadImportSource` and `ReadImportDependency`
+  ([Importers](Docs/DeveloperGuide.md#importers): what else they must do).
 - Nothing in the editor waits for a background import: imports are cancelled instead, and editor code re-imports in
   the background (the blocking forms are for tools and tests). Registering and applying touch no file on the main
   thread: jobs prepare (`BeginScan`, outcomes carry cache sizes), `Update` inserts in time slices.
@@ -282,11 +263,9 @@ Details: [Asset pipeline](Docs/DeveloperGuide.md#asset-pipeline).
   `ParseCookedTexture`.
 - Hold `AssetHandle`s across frames, not `Ref`s, request what you use every frame,
   pin what must stay and never block on a load ([Residency](Docs/DeveloperGuide.md#residency)).
-- GPU uploads go in steps of at most `c_AssetUploadStepBytes` within the frame's budget
-  ([Adding an asset type](Docs/DeveloperGuide.md#adding-an-asset-type)). Resolve bindless slots every frame
-  (`Texture::GetBindlessSlot`): mip streaming changes them; material data names textures by texture table index
-  (`Texture::GetTableIndex`), which stays. A texture only requested keeps its mip tail (more through `RequestLevel` or
-  `TextureStreamer::Hold`: [Mip streaming](Docs/DeveloperGuide.md#mip-streaming)).
+- GPU uploads go in steps of at most `c_AssetUploadStepBytes` within the frame's budget, and bindless slots are resolved
+  every frame (`Texture::GetBindlessSlot`: mip streaming changes them; [Mip
+  streaming](Docs/DeveloperGuide.md#mip-streaming)).
 
 ## Scripting
 
@@ -365,12 +344,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
   continuous UI edits; project settings: `ProjectSettingsAction` steps, preferences: Session commands); panels only draw
   state and call commands, and never write, move or remove files.
 - Commands (`<group>.<action>`) have a description written for agents, a complete JSON Schema and a kind
-  (`EditorCommandKind`: mark every query and session command, and queries whose results follow the session as
-  `EditorCommandResults::Session`); they read parameters with `CommandArguments`, reject invalid or
-  out-of-range input without side effects (`InvalidParameters` or `Failed`), track entities in a
-  `SceneEditTransaction` (`Track` before changing or deleting, `TrackCreated` after creating), record one undo step per
-  successful mutation (`EditorActionGroup` for several actions) and, for scene changes while playing, report a
-  `warning` and set `RunningCopy` ([Command conventions](Docs/DeveloperGuide.md#command-conventions)).
+  (`EditorCommandKind`); they reject invalid input without side effects, track entities in a `SceneEditTransaction` and
+  record one undo step per successful mutation ([Command conventions](Docs/DeveloperGuide.md#command-conventions)).
 - Files commands write for clients go through `CommandUtils::ResolveOutputPath`
   ([Output paths](Docs/DeveloperGuide.md#output-paths)).
 - A command that replaces the edited scene starts with `CommandUtils::CheckUnsavedChanges` (fails unless `force`, also
@@ -382,12 +357,10 @@ reaches the application only through `EditorHost`. Every command family, panel a
   ([No silent data loss](Docs/DeveloperGuide.md#no-silent-data-loss)).
 - Asset deletes go to the trash and refuse while something uses the asset; steps that change files check them first
   and fail with the reason when they no longer fit (never overwriting), and asset steps never mark the scene unsaved.
-- A scene being opened is read-only: code that edits the scene outside `CommitEdit` checks
-  `EditorContext::CheckSceneEditable`. Code that writes a prefab sets `PrefabSync::SetBaseline`, code that gives an
-  instance its prefab's values calls `PrefabInstances::MarkSynced`, and an undo action that changes the scene
-  describes it as entity states (`GetSceneChange`), or the recovery journal snapshots the whole scene. A scene step
-  recorded outside `CommitEdit` calls `EditorContext::UpdatePrefabOverrides`
-  ([Prefab instances](Docs/DeveloperGuide.md#prefab-instances)).
+- A scene being opened is read-only (`EditorContext::CheckSceneEditable` guards edits outside `CommitEdit`); code that
+  writes a prefab, syncs its instances or records scene undo steps keeps them exact (`PrefabSync::SetBaseline`,
+  `PrefabInstances::MarkSynced`, `GetSceneChange`, `UpdatePrefabOverrides`: [Prefab
+  instances](Docs/DeveloperGuide.md#prefab-instances)).
 - Projects never choose what runs: the external editor is the user's setting (or `STRATA_EXTERNAL_EDITOR`), started
   without a shell, and `script.open` opens only code, CMake and text files of the project or engine.
 - Commands never block a frame: one that waits returns `EditorCommandResult::Defer(poll)`, whose poll owns its data and
