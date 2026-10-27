@@ -3041,7 +3041,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   draw into targets without overlays (games without text) never hold one.
 - `SceneRenderer.cpp` holds the frame (`RenderFrame`) and what its passes share; features live in files of their own:
   `SceneRendererPost.cpp` the post-processing from the HDR image to the display (`RenderPostHDR`: exposure and bloom;
-  `RenderPostDisplay`: tone mapping and FXAA; their resources, targets and passes), `SceneRendererGlass.cpp`,
+  `RenderPostDisplay`: tone mapping and FXAA; their resources, targets and passes), `SceneRendererAmbientOcclusion.cpp`
+  the ambient occlusion (GTAO and its blur, their resources and targets), `SceneRendererGlass.cpp`,
   `SceneRendererScreenReflections.cpp`, `SceneRendererReflectionProbes.cpp`, `SceneRendererAtmosphere.cpp`,
   `SceneRendererLocalShadows.cpp`, `SceneRendererExtraction.cpp` and `SceneRendererGPUDriven.cpp`. Their members stay
   declared in `SceneRenderer.h`, grouped under a comment naming their file. A feature's new pass goes into its file

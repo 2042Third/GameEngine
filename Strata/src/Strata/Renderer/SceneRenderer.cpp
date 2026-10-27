@@ -43,10 +43,6 @@ namespace Strata
 		// Motion vectors in UV units: 11 significant bits keep a motion to about 2^-11 of its length.
 		constexpr nvrhi::Format c_VelocityFormat = nvrhi::Format::RG16_FLOAT;
 		constexpr nvrhi::Format c_EnvironmentFormat = nvrhi::Format::RGBA16_FLOAT;
-		// Ambient occlusion lies in [0, 1]: half precision holds it, where the device can store r16f images (an optional
-		// feature); r32f storage needs none.
-		constexpr nvrhi::Format c_AOFormat = nvrhi::Format::R16_FLOAT;
-		constexpr nvrhi::Format c_AOFallbackFormat = nvrhi::Format::R32_FLOAT;
 
 		// Versions of the volatile FrameConstants buffer, and the most a frame writes: the frame's constants and, under TAA,
 		// the overlays' unjittered copy. ReserveFrameConstantVersions waits only when a caller outruns the GPU by more.
@@ -416,22 +412,7 @@ namespace Strata
 		m_ClusterBindingLayout = m_Device->createBindingLayout(clusterLayout);
 
 		m_CommandList = m_Device->createCommandList();
-		nvrhi::BindingLayoutDesc aoLayout;
-		aoLayout.visibility = nvrhi::ShaderType::Compute;
-		aoLayout.bindings = {
-			nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-			nvrhi::BindingLayoutItem::Texture_SRV(8),
-			nvrhi::BindingLayoutItem::Texture_SRV(9),
-			nvrhi::BindingLayoutItem::Texture_SRV(10),
-			nvrhi::BindingLayoutItem::Texture_UAV(0),
-			nvrhi::BindingLayoutItem::PushConstants(1, sizeof(RenderData::AOParameters))
-		};
-		m_AOBindingLayout = m_Device->createBindingLayout(aoLayout);
-
-		const bool halfAO = m_Specification.ExtendedStorageFormats && Renderer::GetGraphicsDevice().GetInfo().SupportsExtendedStorageFormats;
-		m_AOFormat = halfAO ? c_AOFormat : c_AOFallbackFormat;
-		m_GTAOPipeline = CreateComputePipeline(halfAO ? "Effects/GTAOHalf.comp" : "Effects/GTAO.comp", m_AOBindingLayout);
-		m_AOBlurPipeline = CreateComputePipeline(halfAO ? "Effects/AOBlurHalf.comp" : "Effects/AOBlur.comp", m_AOBindingLayout);
+		CreateAmbientOcclusionResources();
 		m_ClusterPipeline = CreateComputePipeline("Scene/LightClusters.comp", m_ClusterBindingLayout);
 
 		// The shadow cascades, fitted on the GPU (both paths), and what the fit reads.
@@ -498,7 +479,7 @@ namespace Strata
 		ST_CORE_VERIFY(m_InputLayout && m_SceneBindingLayout && m_FrameConstantBuffer && m_CommandList && m_ShadowPushBindingSet
 			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_DummyLocalShadowAtlas
 			&& m_LocalShadowBuffer && m_ReflectionProbeBuffer && m_ClusterBuffer
-			&& m_ClusterBindingLayout && m_ClusterPipeline && m_AOBindingLayout && m_GTAOPipeline && m_AOBlurPipeline
+			&& m_ClusterBindingLayout && m_ClusterPipeline
 			&& m_TemporalBindingLayout && m_TemporalPipeline, "SceneRenderer: failed to create GPU resources");
 		CreateIBLResources();
 		CreateOverlayResources();
@@ -1276,27 +1257,6 @@ namespace Strata
 		return PostProcessComponent();
 	}
 
-	void SceneRenderer::RenderAmbientOcclusion(nvrhi::ICommandList* commandList, const PostProcessComponent& settings)
-	{
-		const RenderData::AOParameters parameters = { std::clamp(settings.AmbientOcclusionRadius, 0.01f, 10.0f),
-			std::clamp(settings.AmbientOcclusionIntensity, 0.0f, 8.0f), 2, 6 };
-		const uint32_t groupsX = DispatchGroups(m_ViewportSize.x);
-		const uint32_t groupsY = DispatchGroups(m_ViewportSize.y);
-
-		nvrhi::ComputeState state;
-		state.pipeline = m_GTAOPipeline;
-		state.bindings = { m_GTAOBindingSet };
-		commandList->setComputeState(state);
-		commandList->setPushConstants(&parameters, sizeof(parameters));
-		commandList->dispatch(groupsX, groupsY, 1);
-
-		state.pipeline = m_AOBlurPipeline;
-		state.bindings = { m_AOBlurBindingSet };
-		commandList->setComputeState(state);
-		commandList->setPushConstants(&parameters, sizeof(parameters));
-		commandList->dispatch(groupsX, groupsY, 1);
-	}
-
 	void SceneRenderer::ReserveFrameConstantVersions()
 	{
 		ST_PROFILE_FUNCTION();
@@ -1811,10 +1771,7 @@ namespace Strata
 		release(m_EntityIDTexture);
 		release(m_HDRTexture);
 		release(m_OutputTexture);
-		release(m_AORawTexture);
-		release(m_AOTexture);
-		release(m_GTAOBindingSet);
-		release(m_AOBlurBindingSet);
+		ReleaseAmbientOcclusionTargets(released);
 		release(m_PrepassFramebuffer);
 		release(m_ForwardFramebuffer);
 		release(m_GlassFramebuffer);
@@ -1898,39 +1855,10 @@ namespace Strata
 		if (m_Specification.EntityIDs)
 			m_EntityIDTexture = CreateRenderTarget(m_Device, width, height, c_EntityIDFormat, name + ".EntityIDs", false);
 		m_HDRTexture = CreateRenderTarget(m_Device, width, height, c_HDRFormat, name + ".HDR", false);
-		auto createStorage = [&](const std::string& debugName)
-		{
-			nvrhi::TextureDesc desc;
-			desc.width = width;
-			desc.height = height;
-			desc.format = m_AOFormat;
-			desc.isUAV = true;
-			desc.debugName = debugName;
-			desc.initialState = nvrhi::ResourceStates::ShaderResource;
-			desc.keepInitialState = true;
-			return m_Device->createTexture(desc);
-		};
-		m_AORawTexture = createStorage(name + ".AORaw");
-		m_AOTexture = createStorage(name + ".AO");
-		if (!m_DepthTexture || !m_NormalTexture || (m_Specification.EntityIDs && !m_EntityIDTexture) || !m_HDRTexture || !m_AORawTexture || !m_AOTexture)
+		if (!m_DepthTexture || !m_NormalTexture || (m_Specification.EntityIDs && !m_EntityIDTexture) || !m_HDRTexture)
 			return fail("render targets");
-
-		auto createAOSet = [&](nvrhi::ITexture* input, nvrhi::ITexture* output)
-		{
-			nvrhi::BindingSetDesc desc;
-			desc.bindings = {
-				nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
-				nvrhi::BindingSetItem::Texture_SRV(8, m_DepthTexture),
-				nvrhi::BindingSetItem::Texture_SRV(9, m_NormalTexture),
-				nvrhi::BindingSetItem::Texture_SRV(10, input),
-				nvrhi::BindingSetItem::Texture_UAV(0, output),
-				nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::AOParameters))
-			};
-			return m_Device->createBindingSet(desc, m_AOBindingLayout);
-		};
-		// The GTAO pass reads nothing through slot 10; it binds the blurred texture there, which it does not write.
-		m_GTAOBindingSet = createAOSet(m_AOTexture, m_AORawTexture);
-		m_AOBlurBindingSet = createAOSet(m_AORawTexture, m_AOTexture);
+		if (!CreateAmbientOcclusionTargets(width, height))
+			return fail("ambient occlusion targets");
 
 		nvrhi::FramebufferDesc prepassDesc;
 		prepassDesc.addColorAttachment(m_NormalTexture);
@@ -1947,7 +1875,7 @@ namespace Strata
 			glassDesc.addColorAttachment(m_EntityIDTexture);
 		glassDesc.setDepthAttachment(m_DepthTexture);
 		m_GlassFramebuffer = m_Device->createFramebuffer(glassDesc);
-		if (!m_GTAOBindingSet || !m_AOBlurBindingSet || !m_PrepassFramebuffer || !m_ForwardFramebuffer || !m_GlassFramebuffer)
+		if (!m_PrepassFramebuffer || !m_ForwardFramebuffer || !m_GlassFramebuffer)
 			return fail("framebuffers");
 		if (!CreateDepthPyramid())
 			return fail("depth pyramid");

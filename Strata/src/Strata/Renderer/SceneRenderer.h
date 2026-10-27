@@ -1167,7 +1167,6 @@ namespace Strata
 		// `previousForward` (xyz: the previous camera's forward, w: the scale of the margin), offset by `previousDepthOffset`.
 		void ResolveTemporal(nvrhi::ICommandList* commandList, const TemporalAntiAliasingSettings& settings, const glm::vec4& previousForward,
 			float previousDepthOffset);
-		void RenderAmbientOcclusion(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
 		// Meters the HDR image (automatic exposure) through `bindingSet` (the HDR target's or the resolved image's) or writes the
 		// manual exposure into the exposure buffer.
 		void UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* bindingSet);
@@ -1188,6 +1187,12 @@ namespace Strata
 		// Executes the frame's command list, after which its FrameConstants versions stay in use until the GPU finishes it.
 		void ExecuteFrame(nvrhi::ICommandList* commandList);
 		void ReleaseOldestFrameConstants();
+		// Ambient occlusion (SceneRendererAmbientOcclusion.cpp): its layout and pipelines (verified), its targets of the viewport's
+		// size (false when they cannot be made), and its passes (GTAO, then the blur).
+		void CreateAmbientOcclusionResources();
+		bool CreateAmbientOcclusionTargets(uint32_t width, uint32_t height);
+		void ReleaseAmbientOcclusionTargets(std::vector<nvrhi::ResourceHandle>& released);
+		void RenderAmbientOcclusion(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
 		// Post-processing (SceneRendererPost.cpp). The pipelines and layouts of the exposure, bloom, tone mapping and FXAA,
 		// verified (CreateResources).
 		void CreatePostResources();
@@ -1645,18 +1650,20 @@ namespace Strata
 		nvrhi::TextureHandle m_EntityIDTexture;
 		nvrhi::TextureHandle m_HDRTexture;
 		nvrhi::TextureHandle m_OutputTexture;
+		nvrhi::FramebufferHandle m_PrepassFramebuffer;
+		nvrhi::FramebufferHandle m_ForwardFramebuffer;
+		nvrhi::FramebufferHandle m_GlassFramebuffer; // The HDR target, the entity ids (when the renderer has them) and the depth
+		nvrhi::FramebufferHandle m_OutputFramebuffer;
+
+		// Ambient occlusion (SceneRendererAmbientOcclusion.cpp)
 		nvrhi::TextureHandle m_AORawTexture; // Noisy GTAO output
 		nvrhi::TextureHandle m_AOTexture;    // Blurred
-		nvrhi::Format m_AOFormat = nvrhi::Format::R32_FLOAT; // Of both: R16_FLOAT where the device stores it (CreateResources)
+		nvrhi::Format m_AOFormat = nvrhi::Format::R32_FLOAT; // Of both: R16_FLOAT where the device stores it (CreateAmbientOcclusionResources)
 		nvrhi::BindingLayoutHandle m_AOBindingLayout;
 		nvrhi::BindingSetHandle m_GTAOBindingSet;
 		nvrhi::BindingSetHandle m_AOBlurBindingSet;
 		nvrhi::ComputePipelineHandle m_GTAOPipeline;
 		nvrhi::ComputePipelineHandle m_AOBlurPipeline;
-		nvrhi::FramebufferHandle m_PrepassFramebuffer;
-		nvrhi::FramebufferHandle m_ForwardFramebuffer;
-		nvrhi::FramebufferHandle m_GlassFramebuffer; // The HDR target, the entity ids (when the renderer has them) and the depth
-		nvrhi::FramebufferHandle m_OutputFramebuffer;
 
 		// Post-processing (SceneRendererPost.cpp; the temporal history's own post sets below belong to the TAA's resources)
 		nvrhi::BindingLayoutHandle m_TonemapBindingLayout;
