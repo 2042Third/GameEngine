@@ -787,17 +787,29 @@ def compare_task(task):
 
 
 def side_by_side(before, after):
+    """The two images next to each other, 4 pixels apart (RGB)."""
     height = max(before.height, after.height)
     out = Image(before.width + after.width + 4, height, 3)
     for y in range(height):
         for image, x0 in ((before, 0), (after, before.width + 4)):
             if y >= image.height:
                 continue
-            for x in range(image.width):
-                source = (y * image.width + x) * image.channels
-                target = (y * out.width + x0 + x) * 3
-                out.data[target:target + 3] = image.data[source:source + 3]
+            row = image.row(y)
+            if image.channels == 4:
+                rgb = bytearray(image.width * 3)
+                rgb[0::3] = row[0::4]
+                rgb[1::3] = row[1::4]
+                rgb[2::3] = row[2::4]
+                row = rgb
+            start = (y * out.width + x0) * 3
+            out.data[start:start + image.width * 3] = row
     return out
+
+
+def crop_task(task):
+    before, after, target = task
+    write_png(target, side_by_side(read_png(before), read_png(after)))
+    return target
 
 
 def compare_command(args):
@@ -817,13 +829,15 @@ def compare_command(args):
     tasks = [(name, str(before / "shots" / name), str(after / "shots" / name), str(output / "diff" / name)) for name in sorted(before_shots & after_shots)]
     with multiprocessing.Pool(max(1, min(len(tasks), (os.cpu_count() or 2) - 1))) as pool:
         pictures = dict(pool.map(compare_task, tasks)) if tasks else {}
-    crops = []
+    # The crops of the pictures that differ, side by side (the crops of identical pictures are identical).
+    differing = [Path(name).stem for name, numbers in pictures.items() if numbers["differingPixels"]]
+    crop_tasks = []
     for path in sorted((before / "crops").glob("*.png")):
         other = after / "crops" / path.name
-        if other.is_file():
-            target = output / "crops" / path.name
-            write_png(target, side_by_side(read_png(path), read_png(other)))
-            crops.append(str(target))
+        if other.is_file() and any(path.stem.startswith(stem + "-") for stem in differing):
+            crop_tasks.append((str(path), str(other), str(output / "crops" / path.name)))
+    with multiprocessing.Pool(max(1, min(len(crop_tasks), (os.cpu_count() or 2) - 1))) as pool:
+        crops = pool.map(crop_task, crop_tasks) if crop_tasks else []
     before_stages = read_stages(before / "stages.csv")
     after_stages = read_stages(after / "stages.csv")
     ratios = {}
