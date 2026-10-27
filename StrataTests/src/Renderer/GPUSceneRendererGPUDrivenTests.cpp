@@ -86,7 +86,7 @@ namespace
 			SceneRendererSpecification specification;
 			specification.GPUDriven = mode;
 			specification.IndirectMode = indirect;
-			specification.LODErrorPixels = lodErrorPixels;
+			specification.Quality.LODErrorPixels = lodErrorPixels;
 			specification.MaxDrawsPerIndirectCall = maxDrawsPerCall;
 			specification.TextureStreaming = false; // Every level of every texture, on both paths
 			if (everyLocalShadowView)
@@ -206,7 +206,7 @@ namespace
 	{
 		const char* Name;
 		std::function<SceneCamera(Scene&, SceneTestAssets&, TestSkinningPoses&)> Build;
-		float LODErrorPixels = 1.0f; // SceneRendererSpecification::LODErrorPixels of both paths
+		float LODErrorPixels = 1.0f; // RendererQualitySettings::LODErrorPixels of both paths
 	};
 
 	// The error-based levels' scene draws them with errors of at most this many pixels: small enough that the sphere's
@@ -616,7 +616,7 @@ TEST_SUITE("GPU.SceneRenderer.GPUDriven")
 		CHECK(comparison.CPU.GetStats().SizeCulledProxies == sizeCulled);
 
 		SceneRendererSpecification everything = Comparison::Specification(GPUDrivenMode::Auto, IndirectDrawMode::Auto, 1.0f);
-		everything.MinProjectedPixels = 0.0f;
+		everything.Quality.MinProjectedPixels = 0.0f;
 		SceneRenderer all(everything);
 		all.SetViewportSize(c_Size, c_Size);
 		const PathFrame allFrame = Comparison::Capture(all, scene, camera);
@@ -1082,7 +1082,7 @@ TEST_SUITE("GPU.SceneRenderer.LODFade")
 			SceneRendererSpecification still = Comparison::Specification(mode, IndirectDrawMode::Auto, c_LODSceneErrorPixels);
 			still.FadeLevelsOfDetail = false;
 			SceneRendererSpecification detailed = still;
-			detailed.LODErrorPixels = 0.0f;
+			detailed.Quality.LODErrorPixels = 0.0f;
 			SceneRenderer full(detailed);
 			SceneRenderer chosen(still);
 			SceneRenderer fading(Comparison::Specification(mode, IndirectDrawMode::Auto, c_LODSceneErrorPixels));

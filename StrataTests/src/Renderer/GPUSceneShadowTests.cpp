@@ -515,7 +515,7 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		SceneCamera camera = LookAt(glm::vec3(0.0f, 4.0f, 6.0f), glm::vec3(0.0f, 1.0f, -20.0f));
 		camera.Projection = Math::PerspectiveReverseZ(glm::radians(60.0f), 1.0f, 0.1f, 500.0f);
 		camera.Far = 500.0f;
-		const uint32_t allCascades = (1u << specification.ShadowCascades) - 1u;
+		const uint32_t allCascades = (1u << specification.Quality.ShadowCascades) - 1u;
 
 		// A frame of each: the same image whatever the cached renderer kept; the cascades it kept.
 		ReadbackImage image;
@@ -537,7 +537,7 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		CHECK(frame() == allCascades);  // Nothing changed
 		// The box's first move: the cache did not follow it before, so its old bounds are not known and every cascade is
 		// redrawn. From then on only the cascades its old or new bounds reach are: the last one, not the first.
-		const uint32_t last = 1u << (specification.ShadowCascades - 1);
+		const uint32_t last = 1u << (specification.Quality.ShadowCascades - 1);
 		move(cacheScene.Mover, glm::vec3(2.0f, 0.0f, 0.0f));
 		CHECK(frame() == 0u);
 		const ReadbackImage before = image;

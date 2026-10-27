@@ -11,6 +11,7 @@
 #include "Strata/Renderer/GeometryPool.h"
 #include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/GPUSceneData.h"
+#include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/SceneOverlay.h"
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Renderer/ShadowAtlasAllocator.h"
@@ -98,9 +99,10 @@ namespace Strata
 	struct SceneRendererSpecification
 	{
 		std::string DebugName = "SceneRenderer";
-		// Levels of detail with errors (MeshLOD::Error, which generated levels have): the most simplified level whose error,
-		// projected onto the screen, spans at most this many pixels of the viewport height is drawn. 0 draws full detail.
-		float LODErrorPixels = 1.0f;
+		// The costly knobs (Renderer/RendererQuality.h): the sun's shadow resolution and cascades, the point and spot
+		// lights' shadow atlas, its largest tile and how many lights cast shadows, the levels of detail's error and the
+		// smallest size drawn. Medium, Strata 0.6.0's costs, by default.
+		RendererQualitySettings Quality;
 		// Levels without errors (meshes cooked before they had them, levels made by other means): screen fraction (projected
 		// bounding sphere diameter / viewport height) below which each further level is used: LOD n is chosen while the
 		// fraction is below LODThreshold / 2^(n-1).
@@ -135,12 +137,6 @@ namespace Strata
 		// frame whose buckets could hold more draws than the limit draws without a GPU-written count (NoCount, split alike).
 		// Tests set it low to check the splits.
 		uint32_t MaxDrawsPerIndirectCall = 0;
-		// Mesh renderers whose projected size (bounding sphere diameter) is below this many pixels of the viewport height are
-		// not drawn in the view, by either path: they add moire and GPU time, not information. 0 draws them all. Shadow
-		// cascades leave out casters below a texel (SceneRendererStats::SubTexelCasters).
-		float MinProjectedPixels = 0.5f;
-		uint32_t ShadowMapSize = 2048; // Resolution of each directional shadow cascade
-		uint32_t ShadowCascades = 4;   // 1-4
 		// The depth prepass writes the entity-ID buffer (a 32-bit render target of the viewport's size): picking (GetEntityAt,
 		// ReadEntityIDAsync), the selection outline and entity tints read it. Renderers that do none of these (games) turn it
 		// off; outlines and tints asked of them are then left out, with an error.
@@ -189,7 +185,7 @@ namespace Strata
 		// other proxy in the frustum, and the second phase draws those found visible (in the same frame: nothing appears a
 		// frame late). Camera cuts and a renderer's first frame start without history (the first phase draws nothing).
 		// The shadow cascades are culled alike, each against a pyramid of its own first phase's shadow map (a quarter of
-		// ShadowMapSize each way): casters hidden from the light behind other casters are left out. That costs GPU time of
+		// the cascades' size each way): casters hidden from the light behind other casters are left out. That costs GPU time of
 		// its own, so it runs while it pays: while the latest frame that culled the cascades found at least a sixteenth of
 		// their casters hidden, otherwise once every 16 frames to look again (SceneRendererStats::ShadowOcclusionCulled).
 		bool OcclusionCulling = true;
@@ -210,14 +206,6 @@ namespace Strata
 		// render a view several times, such as thumbnails).
 		bool TemporalAntiAliasing = true;
 
-		// Point and spot lights with CastShadows: the renderer's depth atlas of this many texels each way (a power of two from
-		// 512 to 8192; made when the first such light is drawn, released with the render targets: 64 MiB at 4096). The
-		// MaxShadowedLocalLights most relevant of them in view (at most RenderData::c_MaxShadowedLocalLights; ranked as the
-		// light clusters rank lights) get tiles of it, a spot light one, a point light six (the faces of a cube), of 128 to
-		// 1024 texels following how large the light's range looks on screen; when they do not fit, the less relevant lights'
-		// tiles get smaller first (SceneRendererStats::LocalShadowLights).
-		uint32_t LocalShadowAtlasSize = 4096;
-		uint32_t MaxShadowedLocalLights = RenderData::c_MaxShadowedLocalLights;
 		// A shadow view (a light's tile) is drawn again only when what it shows changed: the light (its position, direction,
 		// range, cone, tile or filter), a shadow caster whose bounds before or after its change reach the light's range and
 		// view, or what the casters are drawn with (the scene's GPU copy's mesh and material tables and new proxies, the
@@ -227,7 +215,7 @@ namespace Strata
 		// Lighting work is spread over frames, for renderers that draw views continuously: at most LocalShadowViewsPerFrame
 		// shadow views are drawn per frame, the nearest lights' first; a light whose views were not all drawn yet casts no
 		// shadow, then fades its shadow in over c_LocalShadowFadeFrames frames, and the lights ranked just above the ones left
-		// out (MaxShadowedLocalLights) fade by their margin over them, so shadows do not pop. Off (renderers of single images:
+		// out (Quality.MaxShadowedLocalLights) fade by their margin over them, so shadows do not pop. Off (renderers of single images:
 		// captures, thumbnails): each frame draws every view that is not up to date, and nothing fades
 		// (SceneRendererStats::LocalShadowViewsPending is 0 after every frame). Reflection probes likewise: at most
 		// SceneRenderer::c_ReflectionProbeConversionsPerFrame captures are converted per frame, else every one in view at once
@@ -374,7 +362,7 @@ namespace Strata
 		uint32_t DrawCommands = 0;    // Draw commands the CPU recorded for the scene's meshes in every pass (shadows, prepass, forward)
 		uint32_t Instances = 0;       // Drawn submesh instances
 		uint32_t CulledInstances = 0; // Mesh renderers outside the view frustum
-		// CPU path: mesh renderers in the view smaller than SceneRendererSpecification::MinProjectedPixels (not drawn).
+		// CPU path: mesh renderers in the view smaller than RendererQualitySettings::MinProjectedPixels (not drawn).
 		uint32_t SizeCulledProxies = 0;
 		// GPU-driven frames: mesh renderers in the frustum hidden behind what the view draws (OcclusionCulling; with
 		// AddGPUCounts).
@@ -472,7 +460,7 @@ namespace Strata
 		uint32_t TemporalFrames = 0;
 		uint32_t HistoryResets = 0;
 		glm::vec2 Jitter = glm::vec2(0.0f);
-		// Local light shadows (SceneRendererSpecification::LocalShadowAtlasSize): the point and spot lights with atlas tiles,
+		// Local light shadows (RendererQualitySettings::LocalShadowAtlasSize): the point and spot lights with atlas tiles,
 		// the shadow views (tiles) drawn this frame, and those of these lights still waiting to be drawn (their lights cast no
 		// shadow until all of theirs are drawn, or keep the shadows drawn before they changed).
 		uint32_t LocalShadowLights = 0;
@@ -527,7 +515,7 @@ namespace Strata
 		uint32_t LocalShadowInstances = 0; // Instances drawn into the local shadow views (summed over views)
 		uint32_t LocalShadowDraws = 0;
 		uint32_t VisibleProxies = 0;   // Mesh renderers that passed the view's frustum and size tests
-		uint32_t SizeCulledProxies = 0; // In the frustum, below SceneRendererSpecification::MinProjectedPixels
+		uint32_t SizeCulledProxies = 0; // In the frustum, below RendererQualitySettings::MinProjectedPixels
 		uint32_t OccludedProxies = 0;  // In the frustum, hidden behind what the view draws (SceneRendererSpecification::OcclusionCulling)
 		uint32_t OccludedCasters = 0;  // In a cascade's box, hidden behind what the cascade draws (summed over cascades)
 		uint32_t SubTexelCasters = 0;
@@ -662,7 +650,7 @@ namespace Strata
 		nvrhi::ITexture* GetTemporalHistoryTexture() const { return m_HistoryTextures[m_HistoryIndex]; }
 		// The HDR image the latest frame's post-processing read: the resolved one with temporal anti-aliasing, else the HDR target.
 		nvrhi::ITexture* GetResolvedHDRTexture() const { return m_TemporalResolved ? m_HistoryTextures[m_HistoryIndex].Get() : m_HDRTexture.Get(); }
-		// The local light shadows' depth atlas (SceneRendererSpecification::LocalShadowAtlasSize): null until a frame draws a
+		// The local light shadows' depth atlas (RendererQualitySettings::LocalShadowAtlasSize): null until a frame draws a
 		// point or spot light that casts shadows, and again once the render targets are released.
 		nvrhi::ITexture* GetLocalShadowAtlas() const { return m_LocalShadowAtlas; }
 		// Frames over which a light's shadow fades in once all its views are drawn (SceneRendererSpecification::
@@ -885,7 +873,7 @@ namespace Strata
 			std::vector<entt::entity> Animators; // Animators of the chunk's visible Skin proxies (WhenVisible culling), or of its casters
 			std::vector<ShadowCaster> Casters;   // The chunk's shadow casters (FindShadowCasters)
 			uint32_t SubTexelCasters = 0;
-			uint32_t SizeCulled = 0;             // Visible proxies below SceneRendererSpecification::MinProjectedPixels
+			uint32_t SizeCulled = 0;             // Visible proxies below RendererQualitySettings::MinProjectedPixels
 			AABB Receivers; // The world bounds of the chunk's visible proxies (scenes with Skin proxies only)
 			uint32_t SkinnedInstances = 0;
 		};
@@ -1547,7 +1535,9 @@ namespace Strata
 		nvrhi::ShaderHandle m_ShadowVertexShader;
 		nvrhi::ShaderHandle m_ShadowMaskPixelShader;
 		std::vector<SceneDrawBatch> m_ShadowBatches;
-		// Local light shadows (SceneRendererSpecification::LocalShadowAtlasSize): the atlas and what hands out its tiles, the
+		// Texels each way of the sun's shadow cascades (Quality.ShadowResolution resolved).
+		uint32_t m_ShadowMapSize = 2048;
+		// Local light shadows (RendererQualitySettings::LocalShadowAtlasSize): the atlas and what hands out its tiles, the
 		// shadowed lights of the frame (in order of relevance: their shadow slots), the views it draws with their casters and
 		// batches, the shaders' data per slot, and how the views' content is followed (the render scene, the content they were
 		// drawn with, the proxy log's version read, and the bounds of the proxies within their lights' ranges when they were

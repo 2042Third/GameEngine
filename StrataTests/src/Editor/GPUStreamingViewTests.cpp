@@ -465,7 +465,7 @@ TEST_SUITE("GPU.Editor.StreamingView")
 			CAPTURE(level);
 			CHECK(stats.EntitiesPerLOD[level] == rendererLODs[level]);
 			CHECK(stats.MaxErrorPixelsPerLOD[level] == doctest::Approx(expected[level]));
-			CHECK(stats.MaxErrorPixelsPerLOD[level] <= renderer.GetSpecification().LODErrorPixels);
+			CHECK(stats.MaxErrorPixelsPerLOD[level] <= renderer.GetSpecification().Quality.LODErrorPixels);
 			levelsUsed += stats.EntitiesPerLOD[level] > 0 ? 1 : 0;
 		}
 		// The cubes are at three levels, the simplified ones with an error to show.

@@ -288,7 +288,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 			SceneRenderer plain = CreateRenderer("Plain", mode, false);
 			temporal.SetViewportSize(c_Size, c_Size);
 			plain.SetViewportSize(c_Size, c_Size);
-			const uint32_t allCascades = (1u << temporal.GetSpecification().ShadowCascades) - 1u;
+			const uint32_t allCascades = (1u << temporal.GetSpecification().Quality.ShadowCascades) - 1u;
 			for (uint32_t frame = 0; frame < 12; frame++)
 			{
 				CAPTURE(frame);

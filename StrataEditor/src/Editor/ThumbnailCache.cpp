@@ -854,8 +854,8 @@ namespace Strata
 			SceneRendererSpecification specification;
 			specification.DebugName = "Thumbnails";
 			specification.EntityIDs = false;
-			specification.ShadowMapSize = 1024;
-			specification.ShadowCascades = 1;
+			specification.Quality.ShadowResolution = ShadowMapResolution::Size1024;
+			specification.Quality.ShadowCascades = 1;
 			specification.PrefetchDistance = 0.0f;
 			// Thumbnails wait for their textures' levels and show them at once, and draw their levels of detail as they are.
 			specification.FadeTextureLevels = false;
@@ -864,7 +864,7 @@ namespace Strata
 			// every shadow view of every shadowed point and spot light is drawn in the frame (into a smaller atlas).
 			specification.TemporalAntiAliasing = false;
 			specification.SpreadLightingUpdates = false;
-			specification.LocalShadowAtlasSize = 2048;
+			specification.Quality.LocalShadowAtlasSize = 2048;
 			m_Renderer = CreateScope<SceneRenderer>(specification);
 		}
 		// Thumbnails and the preview share the renderer: its targets follow the image's size (they change only when a preview

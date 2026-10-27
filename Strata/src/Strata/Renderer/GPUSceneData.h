@@ -235,7 +235,7 @@ namespace Strata::RenderData
 		uint32_t TrianglesLow = 0;     // View triangles, the low and the high 32 bits
 		uint32_t TrianglesHigh = 0;
 		uint32_t SkinnedInstances = 0; // Posed skinned instances drawn in the view
-		uint32_t SizeCulled = 0;       // Proxies in the frustum smaller than SceneRendererSpecification::MinProjectedPixels
+		uint32_t SizeCulled = 0;       // Proxies in the frustum smaller than RendererQualitySettings::MinProjectedPixels
 		uint32_t InstancesPerLOD[8] = {}; // View instances per level of detail, the last counting all higher levels
 		uint32_t Occluded = 0;         // Proxies in the frustum hidden behind what the view draws (the second phase's test)
 		uint32_t VisibleLights = 0;    // Point and spot lights in the view (Scene/LightCompact.comp: the GPU-driven path's lights)

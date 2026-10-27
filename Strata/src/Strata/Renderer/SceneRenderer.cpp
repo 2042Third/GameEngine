@@ -235,14 +235,13 @@ namespace Strata
 			&& m_SkinnedShadowVertexShader && m_SelectionMaskPixelShader && m_LocalShadowVertexShader && m_SkinnedLocalShadowVertexShader,
 			"SceneRenderer shaders are missing");
 
-		m_Specification.ShadowCascades = std::clamp<uint32_t>(m_Specification.ShadowCascades, 1, RenderData::c_MaxCascades);
-		m_Specification.ShadowMapSize = std::clamp<uint32_t>(m_Specification.ShadowMapSize, 256, 8192);
+		// The knobs within their ranges: cascades 1 to 4, the local shadows' atlas a power of two from 512 to 8192, at most
+		// RenderData::c_MaxShadowedLocalLights shadowed lights.
+		m_Specification.Quality = RendererQuality::Clamp(m_Specification.Quality);
+		m_ShadowMapSize = RendererQuality::ResolveShadowMapSize(m_Specification.Quality.ShadowResolution, 0);
 		m_Specification.MaxLights = std::max(m_Specification.MaxLights, 1u);
-		// The local shadows' atlas: a power of two within its range; at most the shaders' slots of shadowed lights.
-		m_Specification.LocalShadowAtlasSize = ShadowAtlasAllocator::FloorPowerOfTwo(std::clamp<uint32_t>(m_Specification.LocalShadowAtlasSize, 512, 8192));
-		m_Specification.MaxShadowedLocalLights = std::min(m_Specification.MaxShadowedLocalLights, RenderData::c_MaxShadowedLocalLights);
 		m_Specification.LocalShadowViewsPerFrame = std::max(m_Specification.LocalShadowViewsPerFrame, 1u);
-		m_LocalShadowAllocator.Reset(m_Specification.LocalShadowAtlasSize, 128);
+		m_LocalShadowAllocator.Reset(m_Specification.Quality.LocalShadowAtlasSize, 128);
 		glm::uvec3& grid = m_Specification.LightClusterGrid;
 		grid = glm::clamp(grid, glm::uvec3(1), glm::uvec3(c_MaxClusterGridSize));
 		m_Specification.MaxLightsPerCluster = std::clamp(m_Specification.MaxLightsPerCluster, 1u, c_MaxLightsPerCluster);
@@ -1503,8 +1502,8 @@ namespace Strata
 			return true;
 
 		nvrhi::TextureDesc desc;
-		desc.width = m_Specification.ShadowMapSize;
-		desc.height = m_Specification.ShadowMapSize;
+		desc.width = m_ShadowMapSize;
+		desc.height = m_ShadowMapSize;
 		desc.arraySize = RenderData::c_MaxCascades;
 		desc.dimension = nvrhi::TextureDimension::Texture2DArray;
 		desc.format = nvrhi::Format::D32;
@@ -1541,7 +1540,7 @@ namespace Strata
 	LODCriteria SceneRenderer::GetLODCriteria() const
 	{
 		const float height = static_cast<float>(m_ViewportSize.y);
-		return LODCriteria { m_Specification.LODThreshold, LODSelection::GetErrorThreshold(m_Specification.LODErrorPixels, height), height };
+		return LODCriteria { m_Specification.LODThreshold, LODSelection::GetErrorThreshold(m_Specification.Quality.LODErrorPixels, height), height };
 	}
 
 	float SceneRenderer::GetScreenFraction(const SceneCamera& camera, const glm::vec3& center, float radius)
@@ -1654,7 +1653,7 @@ namespace Strata
 	void SceneRenderer::DrawShadows(nvrhi::ICommandList* commandList, uint32_t cascadeCount)
 	{
 		commandList->clearDepthStencilTexture(m_ShadowMap, nvrhi::AllSubresources, true, 0.0f, false, 0);
-		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
+		const float mapSize = static_cast<float>(m_ShadowMapSize);
 		// Batches are sorted by cascade first: the ones of cascades beyond the count (none) end the list.
 		size_t count = 0;
 		while (count < m_ShadowBatches.size() && m_ShadowBatches[count].Cascade < cascadeCount)

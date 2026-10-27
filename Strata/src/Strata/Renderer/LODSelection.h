@@ -27,7 +27,7 @@ namespace Strata::LODSelection
 	uint32_t SelectLOD(float screenFraction, float lodThreshold, uint32_t lodCount);
 
 	// The screen fraction times relative error (MeshUtils::GetRelativeLODError) a level may reach and still be drawn: an error
-	// of errorPixels (SceneRendererSpecification::LODErrorPixels) in a viewport this many pixels high, as the fraction is of
+	// of errorPixels (RendererQualitySettings::LODErrorPixels) in a viewport this many pixels high, as the fraction is of
 	// the viewport height and the relative error of the bounds' radius (half the diameter the fraction measures). 0 (full
 	// detail always) when either is not positive.
 	float GetErrorThreshold(float errorPixels, float viewportHeight);

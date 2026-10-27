@@ -37,7 +37,7 @@ namespace Strata
 	};
 
 	// Point and spot lights cast shadows with CastShadows (off by default): a renderer gives the most relevant ones in view
-	// (SceneRendererSpecification::MaxShadowedLocalLights) tiles of its shadow atlas, six for a point light, one for a spot light.
+	// (RendererQualitySettings::MaxShadowedLocalLights) tiles of its shadow atlas, six for a point light, one for a spot light.
 	struct PointLightComponent
 	{
 		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };

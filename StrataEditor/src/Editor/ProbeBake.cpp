@@ -142,7 +142,7 @@ namespace Strata::ProbeBake
 		specification.SpreadLightingUpdates = false;
 		specification.FadeTextureLevels = false;
 		specification.FadeLevelsOfDetail = false;
-		specification.LocalShadowAtlasSize = 2048;
+		specification.Quality.LocalShadowAtlasSize = 2048;
 		return specification;
 	}
 

@@ -1458,7 +1458,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(result["renderStats"]["localShadowViewsDrawn"] == 96);
 		ViewportRenderer* capture = harness.Context.GetViewport().GetCaptureRenderer();
 		REQUIRE(capture);
-		CHECK(capture->GetSceneRenderer().GetSpecification().LocalShadowAtlasSize == 2048);
+		CHECK(capture->GetSceneRenderer().GetSpecification().Quality.LocalShadowAtlasSize == 2048);
 		CHECK_FALSE(capture->GetSceneRenderer().GetSpecification().SpreadLightingUpdates);
 		CHECK(capture->GetSceneRenderer().GetLocalShadowAtlas() == nullptr); // Released with the targets after the picture
 

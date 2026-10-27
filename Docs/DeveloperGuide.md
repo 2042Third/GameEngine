@@ -3425,9 +3425,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 - Point and spot lights cast shadows with `CastShadows` (off by default, so scenes saved before it render as they did), with
   `ShadowBias` and `ShadowNormalBias` (texels of the light's tiles) and `ShadowFilterRadius` (texels, at most 8). A renderer
-  gives the `MaxShadowedLocalLights` most relevant shadowed lights in view (16, at most `RenderData::
+  gives the `Quality.MaxShadowedLocalLights` most relevant shadowed lights in view (16, at most `RenderData::
   c_MaxShadowedLocalLights`; ranked as the light clusters rank lights) tiles of one D32 atlas
-  (`SceneRendererSpecification::LocalShadowAtlasSize`: 4096 texels, 64 MiB; made with the first shadowed light it draws,
+  (`RendererQualitySettings::LocalShadowAtlasSize`: 4096 texels, 64 MiB; made with the first shadowed light it draws,
   released with its render targets, `GetLocalShadowAtlas`): a spot light one perspective view (at most 80 degrees each way
   from its axis), a point light six, a cube's faces, which the shader picks by the major axis toward the pixel. Each view
   is widened by a guard band of what its lookups reach (`ceil(ShadowFilterRadius + 1.42 ShadowNormalBias) + 1` texels: the
@@ -3802,7 +3802,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   outlines. Code that needs the level of detail the renderer draws uses `LODSelection`
   (`Renderer/LODSelection.h`), the functions `SceneRenderer` calls, with the renderer's `GetLODCriteria()`.
 - Levels of detail: generated levels (`MeshUtils::GenerateLODs`) carry their error (`MeshLOD::Error`, in the mesh's
-  units) and are chosen by it (`SceneRendererSpecification::LODErrorPixels`); levels without one (cooked meshes before
+  units) and are chosen by it (`RendererQualitySettings::LODErrorPixels`); levels without one (cooked meshes before
   version 3, meshes made in code) by halving the screen fraction (`LODThreshold`). A change to either rule changes
   `LODSelection.cpp` and `Include/LODSelection.glsl` together: `GPU.Renderer.LODSelection` compares them on 10,000
   fractions, and the CPU form multiplies once and compares, as the shader's `precise` product does. Meshes made in code

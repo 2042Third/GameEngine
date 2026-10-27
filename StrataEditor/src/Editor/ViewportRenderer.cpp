@@ -84,7 +84,7 @@ namespace Strata
 		// into a smaller atlas (released with its targets after each picture).
 		specification.SpreadLightingUpdates = fades;
 		if (!fades)
-			specification.LocalShadowAtlasSize = 2048;
+			specification.Quality.LocalShadowAtlasSize = 2048;
 		m_Renderer = CreateScope<SceneRenderer>(specification);
 	}
 

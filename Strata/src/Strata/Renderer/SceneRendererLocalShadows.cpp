@@ -19,7 +19,7 @@
 #include <cmath>
 #include <limits>
 
-// Shadows of point and spot lights (SceneRendererSpecification::LocalShadowAtlasSize). The most relevant shadowed lights in
+// Shadows of point and spot lights (RendererQualitySettings::LocalShadowAtlasSize). The most relevant shadowed lights in
 // view get tiles of the renderer's depth atlas: a spot light one perspective view, a point light six (a cube's faces), each
 // view widened by a guard band of what its lookups reach (the normal bias and the filter) so that they never leave the face
 // they sample. A view is drawn again only when what it shows changed (its key, a caster reaching it, what casters are drawn
@@ -235,7 +235,7 @@ namespace Strata
 		// Spread over frames, with fades, only where the cache keeps views: without it every view is drawn every frame, so
 		// nothing waits and nothing fades.
 		const bool spread = m_Specification.SpreadLightingUpdates && m_Specification.CacheLocalShadows;
-		const size_t kept = std::min<size_t>(candidates.size(), m_Specification.MaxShadowedLocalLights);
+		const size_t kept = std::min<size_t>(candidates.size(), m_Specification.Quality.MaxShadowedLocalLights);
 		const std::optional<float> firstLeftOut = kept < candidates.size() ? std::optional<float>(candidates[kept].Relevance) : std::nullopt;
 
 		// The lights keep their state (tiles, views, sizes) by entity and type; those that left the ranks give their tiles back.
@@ -559,7 +559,7 @@ namespace Strata
 			const LocalShadowViewKey& key = light.Views[drawView.Face].Key;
 			drawView.Planes = Frustum(GetLocalShadowViewProjection(key, origin)).GetPlanes();
 			const float height = static_cast<float>(key.Tile.Size);
-			drawView.LOD = LODCriteria { m_Specification.LODThreshold, LODSelection::GetErrorThreshold(m_Specification.LODErrorPixels, height), height };
+			drawView.LOD = LODCriteria { m_Specification.LODThreshold, LODSelection::GetErrorThreshold(m_Specification.Quality.LODErrorPixels, height), height };
 		}
 
 		// The casters of each light with drawn views: one job per light queries the proxies within its range (followed from now

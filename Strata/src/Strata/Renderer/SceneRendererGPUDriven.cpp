@@ -702,7 +702,7 @@ namespace Strata
 		constants.CameraPosition = glm::vec4(camera.Position, camera.Orthographic ? 1.0f : 0.0f);
 		// As LODSelection::GetScreenFraction computes them.
 		const float viewExtent = camera.Orthographic ? std::max(camera.VerticalFOV, 1e-4f) : std::tan(std::max(camera.VerticalFOV, 1e-3f) * 0.5f);
-		constants.LODParameters = glm::vec4(m_Specification.LODThreshold, viewExtent, camera.Near, std::max(m_Specification.MinProjectedPixels, 0.0f));
+		constants.LODParameters = glm::vec4(m_Specification.LODThreshold, viewExtent, camera.Near, std::max(m_Specification.Quality.MinProjectedPixels, 0.0f));
 		constants.ViewParameters = glm::vec4(static_cast<float>(m_ViewportSize.y), std::max(camera.Near, 1e-4f), std::max(m_Specification.PrefetchDistance, 0.0f),
 			m_Specification.HighPriorityScreenFraction);
 		constants.LightView = m_LightView;
@@ -737,7 +737,7 @@ namespace Strata
 		constants.LODFade = m_Specification.FadeLevelsOfDetail ? 1u : 0u;
 		constants.ShadowOcclusion = shadowOcclusion ? 1u : 0u;
 		constants.SecondPhaseShadowBuckets = firstPhaseBuckets;
-		constants.ShadowMapSize = m_Specification.ShadowMapSize;
+		constants.ShadowMapSize = m_ShadowMapSize;
 		constants.ShadowPyramidLevels = m_ShadowPyramidLevels;
 		constants.FirstLocalBucket = firstLocalBucket;
 		// The bucket table's second part: each dense bucket's draw slots.
@@ -1037,7 +1037,7 @@ namespace Strata
 	{
 		if (m_ShadowPyramid || !m_ShadowPyramidPipeline || !m_CullShadowPipeline || !m_ShadowMap)
 			return true; // Made, or not needed (no GPU-driven path; made with the shadow map)
-		const uint32_t size = std::max((m_Specification.ShadowMapSize + c_ShadowPyramidReduction - 1) / c_ShadowPyramidReduction, 1u);
+		const uint32_t size = std::max((m_ShadowMapSize + c_ShadowPyramidReduction - 1) / c_ShadowPyramidReduction, 1u);
 		uint32_t levels = 1;
 		while ((size >> levels) > 0)
 			levels++;
@@ -1087,7 +1087,7 @@ namespace Strata
 		const bool minimumSampler = Renderer::GetGraphicsDevice().GetInfo().SupportsSamplerMinMax;
 		nvrhi::ComputeState pyramidState;
 		pyramidState.pipeline = m_ShadowPyramidPipeline;
-		glm::uvec2 source(m_Specification.ShadowMapSize);
+		glm::uvec2 source(m_ShadowMapSize);
 		glm::uvec2 destination(m_ShadowPyramidSize);
 		for (uint32_t level = 0; level < m_ShadowPyramidLevels; level++)
 		{
@@ -1286,7 +1286,7 @@ namespace Strata
 			key.LightView = m_LightView;
 			key.Box = m_Cascades[cascade];
 			key.CascadeCount = m_CascadeCount;
-			key.ShadowMapSize = m_Specification.ShadowMapSize;
+			key.ShadowMapSize = m_ShadowMapSize;
 			key.LOD = m_LODCriteria;
 		}
 
@@ -1386,7 +1386,7 @@ namespace Strata
 	{
 		const GeometryPool& pool = *Renderer::GetGeometryPool();
 		const bool count = GetGPUIndirectPath() == GPUIndirectPath::Count;
-		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
+		const float mapSize = static_cast<float>(m_ShadowMapSize);
 		nvrhi::GraphicsState state;
 		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(mapSize, mapSize));
 		state.bindings = { m_GPUShadowBindingSet, Renderer::GetBindlessTextures().GetTable(), m_ShadowPushBindingSet };

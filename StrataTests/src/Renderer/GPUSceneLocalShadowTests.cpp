@@ -376,14 +376,14 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 30.0f, 22.0f), glm::vec3(0.0f));
 
 		SceneRendererSpecification fewer = LocalShadowSpecification(GPUDrivenMode::Off);
-		fewer.MaxShadowedLocalLights = 3;
+		fewer.Quality.MaxShadowedLocalLights = 3;
 		SceneRenderer limited(fewer);
 		limited.SetViewportSize(c_Size, c_Size);
 		REQUIRE(limited.Render(scene, camera));
 		CHECK(limited.GetStats().LocalShadowLights == 3);
 
 		SceneRendererSpecification small = LocalShadowSpecification(GPUDrivenMode::Off);
-		small.LocalShadowAtlasSize = 2048;
+		small.Quality.LocalShadowAtlasSize = 2048;
 		small.SpreadLightingUpdates = false;
 		SceneRenderer renderer(small);
 		renderer.SetViewportSize(c_Size, c_Size);
@@ -628,7 +628,7 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 			CAPTURE(static_cast<int>(mode));
 			// Sixteen point lights' 96 views in a 2048 atlas: their tiles step down, every light keeps its shadow.
 			SceneRendererSpecification small = AtOnceSpecification(mode);
-			small.LocalShadowAtlasSize = 2048;
+			small.Quality.LocalShadowAtlasSize = 2048;
 			SceneRenderer renderer(small);
 			renderer.SetViewportSize(c_Size, c_Size);
 			const ReadbackImage withShadows = RenderHDR(renderer, scene, camera);
@@ -642,7 +642,7 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 
 			// At most three: the three nearest the camera (the last row's last three).
 			SceneRendererSpecification fewer = AtOnceSpecification(mode);
-			fewer.MaxShadowedLocalLights = 3;
+			fewer.Quality.MaxShadowedLocalLights = 3;
 			SceneRenderer limited(fewer);
 			limited.SetViewportSize(c_Size, c_Size);
 			const ReadbackImage limitedImage = RenderHDR(limited, scene, camera);

@@ -322,7 +322,7 @@ first overlay, `Overlay/StatusTint.frag`, blends the listed entities' colors ove
 buffer, found by binary search in a sorted (id, color) buffer like the selection outline's). How a mesh's level of
 detail is chosen is a pure function (`LODSelection::GetScreenFraction`, `SelectLOD`), so tools show the level the
 renderer draws: a submesh whose simplified levels all have errors (`MeshLOD::Error`, `MeshUtils::HasLODErrors`) draws
-the coarsest level whose error, projected, spans at most `SceneRendererSpecification::LODErrorPixels` (1) pixels of the
+the coarsest level whose error, projected, spans at most `RendererQualitySettings::LODErrorPixels` (1) pixels of the
 viewport height (`SelectLODByError`: the screen fraction times the error relative to the mesh's bounding radius,
 `MeshUtils::GetRelativeLODError`, against `GetErrorThreshold`, one multiplication the GPU's culling repeats bit for bit);
 levels without errors halve the screen fraction against `LODThreshold` as before. A level that changes cross-fades

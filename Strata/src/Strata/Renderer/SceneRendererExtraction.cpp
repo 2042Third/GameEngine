@@ -422,7 +422,7 @@ namespace Strata
 		if (!m_ShadowLight.Enabled)
 			return;
 
-		const uint32_t cascadeCount = m_Specification.ShadowCascades;
+		const uint32_t cascadeCount = m_Specification.Quality.ShadowCascades;
 		const float nearClip = std::max(camera.Near, 0.01f);
 		const float farClip = std::clamp(m_ShadowLight.Distance, nearClip + 0.1f, std::max(camera.Far, nearClip + 0.1f));
 		const float aspect = static_cast<float>(m_ViewportSize.x) / static_cast<float>(m_ViewportSize.y);
@@ -436,7 +436,7 @@ namespace Strata
 		m_LightView = glm::lookAt(glm::vec3(0.0f), lightDirection, up);
 		const glm::dmat3 lightRotation = glm::dmat3(glm::mat3(m_LightView));
 		m_CameraLightPosition = lightRotation * glm::dvec3(camera.Position);
-		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
+		const float mapSize = static_cast<float>(m_ShadowMapSize);
 
 		// Each cascade's square covers the bounding sphere of a view frustum slice; its depth range is fitted to the casters
 		// (GatherShadowDraws). A cascade blends into the next one over the last CascadeBlend of its slice, before its split
@@ -959,7 +959,7 @@ namespace Strata
 		const TextureStreamingPolicy::ViewScale viewScale = TextureStreamingPolicy::GetViewScale(camera, viewportHeight);
 		const bool skins = renderScene.HasSkinProxies(); // Scenes without skinned meshes skip the per-proxy checks
 		// Mesh renderers smaller than this many pixels on screen are not drawn (the GPU's culling leaves out the same ones).
-		const float minPixels = m_Specification.MinProjectedPixels;
+		const float minPixels = m_Specification.Quality.MinProjectedPixels;
 		// Levels of detail that change cross-fade (LODSelection::UpdateLODFade): each opaque instance's state, written only by
 		// the chunk that draws it.
 		const bool fades = opaqueDraws && m_Specification.FadeLevelsOfDetail;
@@ -1171,7 +1171,7 @@ namespace Strata
 			fit.Depths[cascade] = glm::vec4(box.RelativeFarZ, box.RelativeSphereNearZ, box.WorldPerTexel, box.Radius);
 			fit.CasterNearZ[cascade] = box.RelativeSphereNearZ;
 		}
-		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
+		const float mapSize = static_cast<float>(m_ShadowMapSize);
 		const float halfAngle = glm::radians(std::clamp(m_ShadowLight.Softness, 0.0f, 10.0f)) * 0.5f;
 		frame.ShadowParams = glm::vec4(2.0f * std::tan(halfAngle), 1.0f / mapSize, m_ShadowLight.CascadeBlend, static_cast<float>(cascadeCount));
 		frame.ShadowBias = glm::vec4(m_ShadowLight.Bias, m_ShadowLight.NormalBias, 0.0f, 0.0f);
