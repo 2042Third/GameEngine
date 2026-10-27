@@ -3391,6 +3391,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `GetLightRelevance`, `Include/Clusters.glsl`), and `Forward.frag` loops only over its pixel's cluster. The GPU's light
   counts come back with its other counts (`SceneRendererGPUStats::Lights`, `CulledLights`; `Tests::GetLightCounts`).
   The directional light's shadows are cascades; point and spot lights' are views in an atlas ("Local light shadows").
+- The cascades are one D32 array (`SceneRenderer::GetShadowMap`) of a layer per cascade the quality draws
+  (`RendererQualitySettings::ShadowCascades`; thumbnails draw one), made by the first frame with a shadowed sun and kept
+  across resizes; a zero viewport (a capture renderer between pictures, a minimized game) releases it, with the
+  cascades' depth pyramids and cache, as it releases the render targets.
 - Shadows: cascade depth ranges are fitted to the casters toward the light (casters beyond
   `c_MaxShadowCasterDistance` are pancaked onto the near plane), on the GPU on both paths (`Scene/CascadeFit.comp` writes
   `u_Cascades`, which the shadow and forward shaders read: never put cascade projections back into `FrameConstants`; the

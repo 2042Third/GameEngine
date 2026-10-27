@@ -1044,7 +1044,7 @@ namespace Strata
 		nvrhi::TextureDesc desc;
 		desc.width = size;
 		desc.height = size;
-		desc.arraySize = RenderData::c_MaxCascades;
+		desc.arraySize = m_ShadowMapLayers;
 		desc.dimension = nvrhi::TextureDimension::Texture2DArray;
 		desc.mipLevels = levels;
 		desc.format = nvrhi::Format::R32_FLOAT;
@@ -1056,7 +1056,7 @@ namespace Strata
 		if (!pyramid)
 			return false;
 		// A binding set per level, over every layer (a dispatch builds the level of each cascade): level 0 reads the shadow map.
-		const nvrhi::ArraySlice layers = RenderData::c_MaxCascades;
+		const nvrhi::ArraySlice layers = m_ShadowMapLayers;
 		std::vector<nvrhi::BindingSetHandle> sets;
 		for (uint32_t level = 0; level < levels; level++)
 		{

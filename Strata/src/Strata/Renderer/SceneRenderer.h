@@ -660,6 +660,9 @@ namespace Strata
 		// The local light shadows' depth atlas (RendererQualitySettings::LocalShadowAtlasSize): null until a frame draws a
 		// point or spot light that casts shadows, and again once the render targets are released.
 		nvrhi::ITexture* GetLocalShadowAtlas() const { return m_LocalShadowAtlas; }
+		// The sun's shadow cascades' depth array (Quality.ShadowCascades layers): null until a frame draws a shadowed sun, and
+		// again once the cascades were released (a zero viewport releases them with the render targets).
+		nvrhi::ITexture* GetShadowMap() const { return m_ShadowMap; }
 		// Frames over which a light's shadow fades in once all its views are drawn (SceneRendererSpecification::
 		// SpreadLightingUpdates).
 		static constexpr uint32_t c_LocalShadowFadeFrames = 8;
@@ -1313,7 +1316,13 @@ namespace Strata
 		template<typename T>
 		uint64_t UploadChangedRange(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, std::vector<T>& list, std::vector<T>& uploaded, bool full);
 
+		// Makes the cascades' depth array (Quality.ShadowCascades layers of m_ShadowMapSize) and their framebuffers once.
 		bool EnsureShadowMap();
+		// Releases the cascades' depth array with what references it (framebuffers, depth pyramids and their sets, the cached
+		// cascades), through Renderer::ReleaseDeferred; the next frame that draws a shadowed sun makes them again.
+		void ReleaseShadowMap();
+		// The cascade cache holds nothing: every cascade is drawn again.
+		void InvalidateShadowCache();
 		// Local light shadows (SceneRendererLocalShadows.cpp). Chooses the shadowed point and spot lights of the frame and their
 		// tiles, follows what changed what their views hold, chooses the views the frame draws (m_LocalShadowViews) and finds
 		// their casters: with `exactCasters` each view's (the CPU path; their meshes and materials marked with `markCasters`),
@@ -1531,6 +1540,7 @@ namespace Strata
 		// when no procedural sky lights the scene (UpdateEnvironment).
 		std::optional<glm::vec3> m_SkyHorizon;
 		nvrhi::TextureHandle m_ShadowMap;      // Depth array, one layer per cascade (created on first use)
+		uint32_t m_ShadowMapLayers = 0;        // Its layers (the cascades it was made for)
 		nvrhi::TextureHandle m_DummyShadowMap; // Bound while no shadows are rendered
 		nvrhi::ITexture* m_BoundShadowMap = nullptr;
 		std::vector<nvrhi::FramebufferHandle> m_ShadowFramebuffers;

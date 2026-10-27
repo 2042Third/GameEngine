@@ -1543,9 +1543,11 @@ namespace Strata
 			return true;
 
 		nvrhi::TextureDesc desc;
+		// A layer per cascade the quality draws (a renderer drawing one cascade, thumbnails, keeps a quarter of four).
+		const uint32_t layers = m_Specification.Quality.ShadowCascades;
 		desc.width = m_ShadowMapSize;
 		desc.height = m_ShadowMapSize;
-		desc.arraySize = RenderData::c_MaxCascades;
+		desc.arraySize = layers;
 		desc.dimension = nvrhi::TextureDimension::Texture2DArray;
 		desc.format = nvrhi::Format::D32;
 		desc.isRenderTarget = true;
@@ -1557,7 +1559,7 @@ namespace Strata
 			return false;
 
 		std::vector<nvrhi::FramebufferHandle> framebuffers;
-		for (uint32_t cascade = 0; cascade < RenderData::c_MaxCascades; cascade++)
+		for (uint32_t cascade = 0; cascade < layers; cascade++)
 		{
 			nvrhi::FramebufferDesc framebuffer;
 			framebuffer.setDepthAttachment(nvrhi::FramebufferAttachment().setTexture(shadowMap).setArraySlice(cascade));
@@ -1566,11 +1568,56 @@ namespace Strata
 				return false;
 		}
 		m_ShadowMap = shadowMap;
+		m_ShadowMapLayers = layers;
 		m_ShadowFramebuffers = std::move(framebuffers);
 		// Without the cascades' pyramids the cascades are drawn whole (no occlusion culling): a limitation, not a failure.
 		if (!EnsureShadowPyramid())
 			ST_CORE_WARN("{}: the shadow cascades' depth pyramids could not be created; the cascades are not occlusion culled", m_Specification.DebugName);
 		return true;
+	}
+
+	void SceneRenderer::ReleaseShadowMap()
+	{
+		std::vector<nvrhi::ResourceHandle> released;
+		auto release = [&released](auto& handle)
+		{
+			if (handle)
+				released.emplace_back(handle.Get());
+			handle = nullptr;
+		};
+		release(m_ShadowMap);
+		for (nvrhi::FramebufferHandle& framebuffer : m_ShadowFramebuffers)
+			release(framebuffer);
+		m_ShadowFramebuffers.clear();
+		m_ShadowMapLayers = 0;
+		release(m_ShadowPyramid);
+		for (nvrhi::BindingSetHandle& set : m_ShadowPyramidSets)
+			release(set);
+		m_ShadowPyramidSets.clear();
+		m_ShadowPyramidSize = 0;
+		m_ShadowPyramidLevels = 0;
+		release(m_CullBindingSet); // References the pyramids
+		Renderer::ReleaseDeferred(std::move(released));
+		InvalidateShadowCache();
+		// The scene's binding sets, which read the cascades, are made again by the next frame's comparison, even when a new
+		// texture gets the released one's address.
+		m_BoundShadowMap = nullptr;
+		// The cascades' occlusion culling starts again: its history named the released layers.
+		m_ShadowOcclusionPays = true;
+		m_ShadowOcclusionRender = 0;
+		m_ResetVisibility = true;
+	}
+
+	void SceneRenderer::InvalidateShadowCache()
+	{
+		m_ShadowCacheValid = 0;
+		m_ShadowCachePending = false;
+		m_ShadowCacheKeys = {};
+		m_ShadowCachePendingKeys = {};
+		m_ShadowCacheContent = {};
+		m_ShadowCachePendingContent = {};
+		m_ShadowCacheBounds.clear();
+		m_ShadowCacheProxyVersion = 0;
 	}
 
 	uint32_t SceneRenderer::SelectLOD(const Mesh& mesh, const Submesh& submesh, float screenFraction) const
@@ -1778,9 +1825,11 @@ namespace Strata
 		m_HasRenderedFrame = false;
 		if (width == 0 || height == 0)
 		{
-			// Released altogether (a capture renderer between pictures): the probes' cube array too, which a resize keeps.
+			// Released altogether (a capture renderer between pictures, a minimized game): the probes' cube array and the sun's
+			// cascades too, which a resize keeps.
 			ReleaseRenderTargets();
 			ReleaseReflectionProbes();
+			ReleaseShadowMap();
 			return;
 		}
 
