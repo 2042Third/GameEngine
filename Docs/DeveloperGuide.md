@@ -290,8 +290,8 @@ Windows, so that no console window opens with them; `StrataCLI` and `StrataTests
 `CreateApplication` in `Engine/ApplicationLaunch.h`: `ProgramRun` in `Core/Platform.h`) and calls `Platform::ConnectStandardStreams` with it: pipes and
 files their callers pass are kept, so tests and tools read their output and exit codes as before. A *Console* run
 (output is the point: `--version`, `--help`, usage errors, headless and scripted runs: the editor's `--headless`,
-`--no-gpu`, `--frames`, `--commands`, `--quit-after-commands`, the runtime's `--headless`, `--frames` and option
-mistakes) prints into the terminal that started it; an *Interactive* run (a person's window) leaves that terminal alone,
+`--no-gpu`, `--frames`, `--commands`, `--quit-after-commands`, the runtime's `--headless`, `--frames`, `--seconds` and
+option mistakes) prints into the terminal that started it; an *Interactive* run (a person's window) leaves that terminal alone,
 so its Ctrl+C or closing it does not end the program and the log does not run into the shell's prompt. Then
 `Platform::InstallInterruptHandler` turns Ctrl+C, Ctrl+Break and the console closing (Windows) or SIGINT and SIGTERM
 (POSIX) into an orderly quit through the main loop (`Platform::IsInterruptRequested`; exit code
