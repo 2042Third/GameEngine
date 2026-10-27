@@ -15,6 +15,7 @@
 #include <Strata/Math/Math.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Renderer.h>
+#include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
@@ -70,7 +71,7 @@ TEST_SUITE("GPU.World")
 		{
 			const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, 1.0f);
 			REQUIRE(view);
-			REQUIRE(renderer->Render(context, size, *view, viewport.GetSettings(), view->EditorOverlays));
+			REQUIRE(renderer->Render(context, size, *view, viewport.GetSettings(), view->EditorOverlays, RendererQuality::GetProjectQuality()));
 		};
 		auto pick = [&](const glm::uvec2& pixel)
 		{
@@ -111,7 +112,7 @@ TEST_SUITE("GPU.World")
 		{
 			const std::optional<ViewportView> view = ResolveViewportView(project.Context, ViewportCameraSource::Scene, 16.0f / 9.0f);
 			REQUIRE(view);
-			REQUIRE(game->Render(project.Context, size, *view, viewport.GetSettings(), false));
+			REQUIRE(game->Render(project.Context, size, *view, viewport.GetSettings(), false, RendererQuality::GetProjectQuality()));
 			game->GetSceneRenderer().ResolveGPUStats(true);
 			const auto renderers = std::as_const(running->GetRegistry()).storage<MeshRendererComponent>();
 			REQUIRE(renderers);

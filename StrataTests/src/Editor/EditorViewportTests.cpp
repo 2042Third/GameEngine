@@ -427,6 +427,7 @@ TEST_SUITE("Editor.Viewport")
 		settings.RotateSnap = 45.0f;
 		settings.ScaleSnap = 0.5f;
 		settings.DebugView = ViewportDebugView::LOD;
+		settings.Quality = ViewportQuality::Ultra;
 		ViewportSettings restored;
 		std::string error;
 		REQUIRE_MESSAGE(restored.FromJson(settings.ToJson(), &error), error);
@@ -434,6 +435,9 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(restored.Snap);
 		CHECK(restored.DebugView == ViewportDebugView::LOD);
 		CHECK(settings.ToJson()["DebugView"] == "lod");
+		CHECK(restored.Quality == ViewportQuality::Ultra);
+		CHECK(settings.ToJson()["Quality"] == "ultra");
+		CHECK(ViewportSettings().ToJson()["Quality"] == "project");
 		settings.DebugView = ViewportDebugView::Mip;
 		REQUIRE_MESSAGE(restored.FromJson(settings.ToJson(), &error), error);
 		CHECK(restored.DebugView == ViewportDebugView::Mip);
@@ -450,7 +454,8 @@ TEST_SUITE("Editor.Viewport")
 		for (const nlohmann::json& invalid : { nlohmann::json("x"), nlohmann::json { { "ShowGrid", 1 } }, nlohmann::json { { "Snap", "yes" } },
 			nlohmann::json { { "Gizmo", "Move" } }, nlohmann::json { { "DebugView", "LOD" } }, nlohmann::json { { "DebugView", 1 } },
 			nlohmann::json { { "Space", "Global" } }, nlohmann::json { { "RotateSnap", 0 } }, nlohmann::json { { "TranslateSnap", 1e9 } },
-			nlohmann::json { { "ScaleSnap", -1 } }, nlohmann::json { { "ScaleSnap", 1e300 } }, nlohmann::json { { "ShowStats", false }, { "ScaleSnap", "big" } } })
+			nlohmann::json { { "ScaleSnap", -1 } }, nlohmann::json { { "ScaleSnap", 1e300 } }, nlohmann::json { { "ShowStats", false }, { "ScaleSnap", "big" } },
+			nlohmann::json { { "Quality", "extreme" } }, nlohmann::json { { "Quality", "Ultra" } }, nlohmann::json { { "Quality", 3 } } })
 		{
 			CAPTURE(invalid.dump());
 			CHECK_FALSE(restored.FromJson(invalid, &error));
@@ -640,12 +645,13 @@ TEST_SUITE("Editor.Viewport")
 			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
 			nlohmann::json settings = harness.Run("viewport.getSettings");
 			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "allColliders", "stats", "previewLighting", "gameUI", "canvasMode", "gizmo",
-				"space", "snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView", "gameView", "pilotGameCamera", "editPose", "cellBounds" })
+				"space", "snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView", "gameView", "pilotGameCamera", "editPose", "cellBounds", "quality" })
 			{
 				CAPTURE(key);
 				CHECK(settings.contains(key));
 			}
-			CHECK(settings.size() == 19);
+			CHECK(settings.size() == 20);
+			CHECK(settings["quality"] == "project");
 			CHECK(settings["canvasMode"] == false);
 			CHECK(settings["editPose"] == "rest");
 			CHECK(settings["gameView"] == nlohmann::json { { "mode", "free" }, { "width", 1280 }, { "height", 720 } });
@@ -705,6 +711,13 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(harness.Context.GetAnimationPreview().GetEditPose() == AnimationEditPose::ClipStart);
 			CHECK(harness.Error("viewport.setSettings", { { "editPose", "firstFrame" } }).find("'editPose'") != std::string::npos);
 
+			// The Scene view's quality: a preset of this editor's, or the project's again; an unknown one changes nothing.
+			settings = harness.Run("viewport.setSettings", { { "quality", "low" } });
+			CHECK(settings["quality"] == "low");
+			CHECK(harness.Context.GetViewport().GetSettings().Quality == ViewportQuality::Low);
+			CHECK(harness.Error("viewport.setSettings", { { "quality", "extreme" }, { "grid", true } }).find("'quality'") != std::string::npos);
+			CHECK(harness.Run("viewport.getSettings") == settings);
+
 			// An invalid value names the parameter and changes nothing, not even the valid values next to it.
 			const std::string error = harness.Error("viewport.setSettings", { { "grid", true }, { "scaleSnap", 0 } });
 			CHECK(error.find("'scaleSnap'") != std::string::npos);
@@ -729,6 +742,7 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(harness.Context.GetViewport().GetSettings().CanvasMode);
 		CHECK(harness.Context.GetViewport().GetSettings().GameView.Width == 800);
 		CHECK(harness.Context.GetViewport().GetSettings().EditPose == AnimationEditPose::ClipStart);
+		CHECK(harness.Context.GetViewport().GetSettings().Quality == ViewportQuality::Low);
 	}
 
 	TEST_CASE("The Game view's image: the panel, the largest rectangle of an aspect ratio, or a fixed size scaled to fit")

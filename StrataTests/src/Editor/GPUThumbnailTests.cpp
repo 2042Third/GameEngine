@@ -829,6 +829,8 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
 		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
 
+		// Thumbnails draw at their own quality whatever the project's: Ultra here.
+		run("project.setSettings", { { "section", "Renderer.Quality" }, { "value", { { "Preset", "Ultra" } } } });
 		// A cube under three shadowed point lights: 18 views, more than a frame draws where lighting updates are spread.
 		nlohmann::json entities = nlohmann::json::array();
 		entities.push_back(run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } })["id"]);
@@ -849,7 +851,8 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		const SceneRenderer* renderer = thumbnails.GetRenderer();
 		REQUIRE(renderer);
 		CHECK_FALSE(renderer->GetSpecification().SpreadLightingUpdates);
-		CHECK(renderer->GetSpecification().Quality.HasSameKnobs(SceneRendererSpecification::ForThumbnails().Quality));
+		CHECK(renderer->GetQuality() == SceneRendererSpecification::ForThumbnails().Quality);
+		CHECK(renderer->GetStats().ShadowMapSize == 1024);
 		// Its frames draw every view that is not up to date (the last one may have had none left to draw).
 		CHECK(renderer->GetStats().LocalShadowLights == 3);
 		CHECK(renderer->GetStats().LocalShadowViewsPending == 0);

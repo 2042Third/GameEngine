@@ -238,7 +238,9 @@ namespace Strata
 		// The canvas mode draws the game UI, without the editor's overlays, in the letterboxed area.
 		ViewportSettings renderSettings = settings;
 		renderSettings.ShowGameUI = renderSettings.ShowGameUI || canvasMode;
-		const bool rendered = renderer && view && renderer->Render(context, size, *view, renderSettings, view->EditorOverlays && !canvasMode);
+		// The Scene view draws at its own quality setting (the project's by default).
+		const bool rendered = renderer && view && renderer->Render(context, size, *view, renderSettings, view->EditorOverlays && !canvasMode,
+			ResolveViewportQuality(settings.Quality));
 		if (rendered)
 		{
 			if (canvasMode)

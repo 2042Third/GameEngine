@@ -26,6 +26,7 @@
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/Renderer.h>
+#include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Components.h>
 
@@ -342,7 +343,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(viewport);
 		const std::optional<ViewportView> view = ResolveViewportView(harness.Context, ViewportCameraSource::Editor, 4.0f / 3.0f);
 		REQUIRE(view);
-		REQUIRE(viewport->Render(harness.Context, glm::uvec2(64, 48), *view, harness.Context.GetViewport().GetSettings(), true));
+		REQUIRE(viewport->Render(harness.Context, glm::uvec2(64, 48), *view, harness.Context.GetViewport().GetSettings(), true, RendererQuality::GetProjectQuality()));
 		// The GPU-driven path's counts are known once the GPU ran the frame's culling.
 		viewport->GetSceneRenderer().ResolveGPUStats(true);
 		const nlohmann::json perf = harness.Run("editor.perf");
@@ -599,7 +600,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 			const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic,
 				static_cast<float>(panelSize.x) / static_cast<float>(panelSize.y));
 			REQUIRE(view);
-			REQUIRE(panel->Render(context, panelSize, *view, viewport.GetSettings(), view->EditorOverlays));
+			REQUIRE(panel->Render(context, panelSize, *view, viewport.GetSettings(), view->EditorOverlays, RendererQuality::GetProjectQuality()));
 			CHECK(panel->GetStats().Instances == 0);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -850,7 +851,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		{
 			const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, 1.0f);
 			REQUIRE(view);
-			REQUIRE(renderer->Render(context, glm::uvec2(64, 64), *view, context.GetViewport().GetSettings(), view->EditorOverlays));
+			REQUIRE(renderer->Render(context, glm::uvec2(64, 64), *view, context.GetViewport().GetSettings(), view->EditorOverlays, RendererQuality::GetProjectQuality()));
 			return renderer->GetStats().OutlinedEntities;
 		};
 		Entity cube = context.GetActiveScene()->FindEntityByName("Cube");
@@ -889,7 +890,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		{
 			const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, 1.0f);
 			REQUIRE(view);
-			REQUIRE(renderer->Render(context, size, *view, viewport.GetSettings(), view->EditorOverlays));
+			REQUIRE(renderer->Render(context, size, *view, viewport.GetSettings(), view->EditorOverlays, RendererQuality::GetProjectQuality()));
 			CHECK(renderer->GetSize() == size);
 			CHECK(renderer->GetOutputTexture() != nullptr);
 		};
@@ -959,7 +960,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		{
 			const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, 1.0f);
 			REQUIRE(view);
-			REQUIRE(renderer->Render(context, size, *view, settings, view->EditorOverlays));
+			REQUIRE(renderer->Render(context, size, *view, settings, view->EditorOverlays, RendererQuality::GetProjectQuality()));
 		};
 		// The material loads in the context's updates: rendered until the cube is drawn as glass.
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
@@ -1023,7 +1024,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(view);
 		CHECK_FALSE(view->FromScene);
 		CHECK(view->EditorView);
-		REQUIRE(renderer->Render(context, size, *view, viewport.GetSettings(), view->EditorOverlays));
+		REQUIRE(renderer->Render(context, size, *view, viewport.GetSettings(), view->EditorOverlays, RendererQuality::GetProjectQuality()));
 		CHECK(renderer->GetRenderedScene().lock() == running);
 		REQUIRE(viewport.RequestPick(glm::uvec2(32, 32), size, ViewportPickMode::Replace));
 		for (int frame = 0; frame < 5000 && viewport.IsPickPending(); frame++)
@@ -1060,7 +1061,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(game);
 		CHECK(game != viewport.GetRenderer());
 		CHECK(game != viewport.GetCaptureRenderer());
-		REQUIRE(game->Render(context, frame.RenderSize, *view, viewport.GetSettings(), false));
+		REQUIRE(game->Render(context, frame.RenderSize, *view, viewport.GetSettings(), false, RendererQuality::GetProjectQuality()));
 		CHECK(game->GetSize() == glm::uvec2(1280, 720));
 		REQUIRE(game->GetOutputTexture());
 		CHECK(game->GetOutputTexture()->getDesc().width == 1280);
@@ -1097,7 +1098,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(game->GetSize() == glm::uvec2(0));
 		CHECK(viewport.GetGameViewSize() == glm::uvec2(0));
 		CHECK(harness.Run("editor.perf")["gameRenderStats"].is_null());
-		REQUIRE(game->Render(context, frame.RenderSize, *view, viewport.GetSettings(), false));
+		REQUIRE(game->Render(context, frame.RenderSize, *view, viewport.GetSettings(), false, RendererQuality::GetProjectQuality()));
 		REQUIRE(game->GetSize() == glm::uvec2(1280, 720));
 		panel.OnDetach(panelContext);
 		CHECK(game->GetSize() == glm::uvec2(0));
@@ -1130,7 +1131,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		const std::optional<ViewportView> view = ResolveGameView(context, *game, aspectRatio);
 		REQUIRE(view);
 		CHECK(view->OverlayOnly);
-		REQUIRE(game->Render(context, size, *view, viewport.GetSettings(), false));
+		REQUIRE(game->Render(context, size, *view, viewport.GetSettings(), false, RendererQuality::GetProjectQuality()));
 		ReadbackImage readback;
 		REQUIRE(Renderer::ReadTexture(game->GetOutputTexture(), readback));
 		REQUIRE(readback.BytesPerPixel == 4);
@@ -1313,7 +1314,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		for (uint32_t frame = 0; frame < 2 * SceneRenderer::c_TemporalJitterPhases; frame++)
 		{
 			CAPTURE(frame);
-			REQUIRE(renderer->Render(context, glm::uvec2(64, 64), *view, settings, true));
+			REQUIRE(renderer->Render(context, glm::uvec2(64, 64), *view, settings, true, RendererQuality::GetProjectQuality()));
 			REQUIRE(renderer->GetStats().TemporalAntiAliasing);
 			CHECK(renderer->GetStats().OutlinedEntities == 1);
 			ReadbackImage image;
@@ -1364,7 +1365,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(view);
 		renderer->GetSceneRenderer().ResetHistory();
 		for (uint32_t frame = 0; frame < c_TemporalSettleFrames; frame++)
-			REQUIRE(renderer->Render(context, glm::uvec2(64, 64), *view, context.GetViewport().GetSettings(), false));
+			REQUIRE(renderer->Render(context, glm::uvec2(64, 64), *view, context.GetViewport().GetSettings(), false, RendererQuality::GetProjectQuality()));
 		CHECK(renderer->GetStats().TemporalFrames == c_TemporalSettleFrames);
 		ReadbackImage viewport;
 		REQUIRE(Renderer::ReadTexture(renderer->GetOutputTexture(), viewport));
@@ -1448,7 +1449,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		harness.Run("camera.set", { { "position", { 1, 24, 14 } }, { "target", { 0, 0, 0 } } });
 		const nlohmann::json parameters = { { "width", 256 }, { "height", 256 }, { "overlays", false } };
 
-		// The capture renderer draws every view of every light in its first frame, into its smaller atlas: nothing to wait for.
+		// The capture renderer draws every view of every light in its first frame: nothing to wait for.
 		nlohmann::json result;
 		const DecodedImage shadowed = harness.CaptureLoaded(parameters, &result);
 		CHECK(result["localShadowViewsPending"] == 0);
@@ -1458,7 +1459,9 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(result["renderStats"]["localShadowViewsDrawn"] == 96);
 		ViewportRenderer* capture = harness.Context.GetViewport().GetCaptureRenderer();
 		REQUIRE(capture);
-		CHECK(capture->GetSceneRenderer().GetSpecification().Quality.LocalShadowAtlasSize == 2048);
+		// The capture draws at the quality of the view it shows (the Scene view's, the project's by default), with that view's
+		// atlas: captures match their views.
+		CHECK(capture->GetSceneRenderer().GetQuality().HasSameKnobs(ResolveViewportQuality(harness.Context.GetViewport().GetSettings().Quality)));
 		CHECK_FALSE(capture->GetSceneRenderer().GetSpecification().SpreadLightingUpdates);
 		CHECK(capture->GetSceneRenderer().GetLocalShadowAtlas() == nullptr); // Released with the targets after the picture
 
@@ -1766,7 +1769,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 			{
 				const std::optional<ViewportView> view = ResolveGameView(context, *game, static_cast<float>(size.x) / static_cast<float>(size.y));
 				REQUIRE(view);
-				REQUIRE(game->Render(context, size, *view, viewport.GetSettings(), false));
+				REQUIRE(game->Render(context, size, *view, viewport.GetSettings(), false, RendererQuality::GetProjectQuality()));
 				ShownFrame frame;
 				frame.FixedSteps = context.GetFixedStepCount();
 				REQUIRE(Renderer::ReadTexture(game->GetOutputTexture(), frame.Image));
@@ -1918,6 +1921,173 @@ TEST_SUITE("GPU.Editor.Viewport")
 		runUntil(between);
 		CHECK_FALSE((*between)->Success);
 		CHECK_MESSAGE((*between)->Error.find("Play mode started") != std::string::npos, (*between)->Error);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture equals the Game view for a scene with a shadowed point light near the camera")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(Tests::CreateTemporaryDirectory("ViewportCaptureMatchesGame") / "Game") }, { "name", "Game" } });
+		// FXAA, manual exposure and no bloom: the image depends on the frame alone.
+		harness.Run("entity.create", { { "name", "PostProcess" }, { "components", { { "PostProcess", { { "Tonemapper", "None" }, { "AutoExposure", false },
+			{ "Vignette", 0.0 }, { "Bloom", false }, { "AmbientOcclusion", false }, { "AntiAliasing", true }, { "AntiAliasingMethod", "FXAA" } } } } } });
+		Scene& scene = *harness.Context.GetActiveScene();
+		Entity floor = scene.CreateEntity("Floor");
+		floor.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		floor.GetComponent<TransformComponent>().Scale = glm::vec3(30.0f, 1.0f, 30.0f);
+		floor.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		for (const glm::vec3& position : { glm::vec3(-1.2f, 0.4f, -2.0f), glm::vec3(1.0f, 0.4f, -2.5f), glm::vec3(0.0f, 0.4f, -4.0f), glm::vec3(-2.5f, 0.4f, -5.0f) })
+		{
+			Entity box = scene.CreateEntity("Box");
+			box.GetComponent<TransformComponent>().Translation = position;
+			box.GetComponent<TransformComponent>().Scale = glm::vec3(0.8f);
+			box.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		}
+		// The game's camera, and a shadowed point light 1.5 m in front of it whose 10 m range fills the view: both renderers want
+		// 1024-texel faces, six of which a 2048 atlas (0.6.0's captures) could not hold.
+		const glm::vec3 eye(0.0f, 2.0f, 2.5f);
+		const glm::vec3 forward = glm::normalize(glm::vec3(0.0f, 0.0f, -3.0f) - eye);
+		Entity camera = scene.CreateEntity("Camera");
+		camera.GetComponent<TransformComponent>().Translation = eye;
+		camera.GetComponent<TransformComponent>().Rotation = Math::LookRotation(forward);
+		camera.AddComponent<CameraComponent>().Primary = true;
+		Entity lamp = scene.CreateEntity("Lamp");
+		lamp.GetComponent<TransformComponent>().Translation = eye + forward * 1.5f;
+		PointLightComponent& light = lamp.AddComponent<PointLightComponent>();
+		light.Intensity = 20.0f;
+		light.Range = 10.0f;
+		light.CastShadows = true;
+
+		// The Game view at 1280 x 720 until every shadow view is drawn and its fade is done.
+		EditorContext& context = harness.Context;
+		EditorViewport& viewport = context.GetViewport();
+		const glm::uvec2 size(1280, 720);
+		ViewportRenderer* game = viewport.GetGameRenderer();
+		REQUIRE(game);
+		int settled = 0;
+		for (int frame = 0; frame < 600 && settled < static_cast<int>(SceneRenderer::c_LocalShadowFadeFrames) + 2; frame++)
+		{
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			context.Update(Timestep(1.0f / 60.0f));
+			const std::optional<ViewportView> view = ResolveGameView(context, *game, static_cast<float>(size.x) / static_cast<float>(size.y));
+			REQUIRE(view);
+			REQUIRE(game->Render(context, size, *view, viewport.GetSettings(), false, RendererQuality::GetProjectQuality()));
+			gpu.GetDevice().EndFrame();
+			const SceneRendererStats& stats = game->GetStats();
+			settled = stats.LocalShadowLights == 1 && stats.LocalShadowViewsPending == 0 && stats.PendingAssets == 0 ? settled + 1 : 0;
+		}
+		REQUIRE(settled > 0);
+		const SceneRendererStats gameStats = game->GetStats();
+		CHECK(gameStats.LocalShadowTileSizes[0] == 1024);
+		ReadbackImage gameImage;
+		REQUIRE(Renderer::ReadTexture(game->GetOutputTexture(), gameImage));
+
+		nlohmann::json result;
+		const DecodedImage captured = harness.CaptureLoaded({ { "camera", "scene" }, { "width", size.x }, { "height", size.y }, { "overlays", false } }, &result);
+		CHECK(result["renderStats"]["localShadowLights"] == 1);
+		CHECK(result["renderStats"]["localShadowTileSizes"] == nlohmann::json::array({ gameStats.LocalShadowTileSizes[0] }));
+		CHECK(result["renderStats"]["quality"] == RendererQuality::ToSectionValue(game->GetSceneRenderer().GetQuality()));
+		REQUIRE(captured.Width == static_cast<int>(gameImage.Width));
+		REQUIRE(captured.Height == static_cast<int>(gameImage.Height));
+		int largest = 0;
+		for (uint32_t y = 0; y < gameImage.Height; y++)
+		{
+			for (uint32_t x = 0; x < gameImage.Width; x++)
+			{
+				const glm::ivec4 difference = glm::abs(captured.At(static_cast<int>(x), static_cast<int>(y)) - glm::ivec4(Tests::GetPixelRGBA8(gameImage, x, y)));
+				largest = std::max({ largest, difference.r, difference.g, difference.b });
+			}
+		}
+		CHECK(largest <= 1);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("viewport.capture draws at the quality asked for, else the view's")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(Tests::CreateTemporaryDirectory("ViewportCaptureQuality") / "Game") }, { "name", "Game" } });
+		harness.AddScene();
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", { { "Primary", true } } },
+			{ "Transform", { { "Translation", { 0, 0, 5 } } } } } } });
+		const nlohmann::json small = { { "width", 64 }, { "height", 64 }, { "overlays", false } };
+
+		// A preset for one picture: the view's setting is unchanged.
+		nlohmann::json result;
+		nlohmann::json parameters = small;
+		parameters["quality"] = "low";
+		harness.Capture(parameters, &result);
+		CHECK(result["renderStats"]["quality"]["Preset"] == "Low");
+		CHECK(result["renderStats"]["shadowMapSize"] == 1024);
+		CHECK(harness.Context.GetViewport().GetSettings().Quality == ViewportQuality::Project);
+
+		// Without it: the Scene view's setting for the editor camera, the project's for the scene's camera.
+		harness.Run("viewport.setSettings", { { "quality", "medium" } });
+		parameters = small;
+		parameters["camera"] = "editor";
+		harness.Capture(parameters, &result);
+		CHECK(result["renderStats"]["quality"]["Preset"] == "Medium");
+		harness.Run("project.setSettings", { { "section", "Renderer.Quality" }, { "value", { { "Preset", "Ultra" } } } });
+		parameters["camera"] = "scene";
+		harness.Capture(parameters, &result);
+		CHECK(result["renderStats"]["quality"]["Preset"] == "Ultra");
+		CHECK(result["renderStats"]["quality"] == RendererQuality::ToSectionValue(RendererQuality::GetPreset(RendererQualityPreset::Ultra)));
+		CHECK(result["renderStats"]["shadowMapSize"] == 4096); // AutoFine below 1440 rows
+
+		// Refused with nothing changed: an unknown preset, and a quality for a live capture (which renders nothing).
+		for (const nlohmann::json& refused : { nlohmann::json { { "quality", "extreme" } }, nlohmann::json { { "quality", "low" }, { "live", true },
+				 { "camera", "editor" } } })
+		{
+			CAPTURE(refused.dump());
+			const EditorCommandResult failed = harness.RunFrames("viewport.capture", refused);
+			CHECK_FALSE(failed.Success);
+			CHECK(failed.Error.find("quality") != std::string::npos);
+		}
+		CHECK(harness.Context.GetViewport().GetSettings().Quality == ViewportQuality::Medium);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The Scene view follows its quality setting and the Game view the project")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(Tests::CreateTemporaryDirectory("ViewportViewQuality") / "Game") }, { "name", "Game" } });
+		harness.AddScene();
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", { { "Primary", true } } },
+			{ "Transform", { { "Translation", { 0, 0, 5 } } } } } } });
+		EditorContext& context = harness.Context;
+		EditorViewport& viewport = context.GetViewport();
+		harness.Run("project.setSettings", { { "section", "Renderer.Quality" }, { "value", { { "Preset", "Low" } } } });
+		harness.Run("viewport.setSettings", { { "quality", "ultra" } });
+
+		// As the panels render them (ViewportPanel, GameViewPanel).
+		ViewportRenderer* sceneView = viewport.GetRenderer();
+		REQUIRE(sceneView);
+		const std::optional<ViewportView> editorView = ResolveViewportView(context, ViewportCameraSource::Editor, 1.0f);
+		REQUIRE(editorView);
+		REQUIRE(sceneView->Render(context, glm::uvec2(64, 64), *editorView, viewport.GetSettings(), true, ResolveViewportQuality(viewport.GetSettings().Quality)));
+		CHECK(sceneView->GetSceneRenderer().GetQuality() == RendererQuality::GetPreset(RendererQualityPreset::Ultra));
+		ViewportRenderer* gameView = viewport.GetGameRenderer();
+		REQUIRE(gameView);
+		const std::optional<ViewportView> gameCamera = ResolveGameView(context, *gameView, 1.0f);
+		REQUIRE(gameCamera);
+		REQUIRE(gameView->Render(context, glm::uvec2(64, 64), *gameCamera, viewport.GetSettings(), false, RendererQuality::GetProjectQuality()));
+		CHECK(gameView->GetSceneRenderer().GetQuality() == RendererQuality::GetPreset(RendererQualityPreset::Low));
+
+		// The project's default once the view follows it again.
+		harness.Run("viewport.setSettings", { { "quality", "project" } });
+		REQUIRE(sceneView->Render(context, glm::uvec2(64, 64), *editorView, viewport.GetSettings(), true, ResolveViewportQuality(viewport.GetSettings().Quality)));
+		CHECK(sceneView->GetSceneRenderer().GetQuality() == RendererQuality::GetPreset(RendererQualityPreset::Low));
+		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

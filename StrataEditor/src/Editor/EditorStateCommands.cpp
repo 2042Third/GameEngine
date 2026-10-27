@@ -9,6 +9,7 @@
 
 #include <Strata/Renderer/RenderSceneGPU.h>
 #include <Strata/Renderer/Renderer.h>
+#include <Strata/Renderer/RendererQuality.h>
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/FrameProfiler.h>
@@ -213,7 +214,15 @@ namespace Strata
 			nlohmann::json gpuMs = nlohmann::json::object();
 			for (const GPUStageTime& stage : gpu.StageMs)
 				gpuMs[FrameProfiler::Get().GetStageName(stage.Stage)] = stage.Milliseconds;
+			nlohmann::json tileSizes = nlohmann::json::array();
+			for (uint32_t light = 0; light < stats.LocalShadowLights && light < stats.LocalShadowTileSizes.size(); light++)
+				tileSizes.push_back(stats.LocalShadowTileSizes[light]);
 			return {
+				// What the frame drew with: the Renderer.Quality section's fields and values (project.setSettings takes them), the
+				// sun's cascades' size and each shadowed point and spot light's tile.
+				{ "quality", RendererQuality::ToSectionValue(stats.Quality) },
+				{ "shadowMapSize", stats.ShadowMapSize },
+				{ "localShadowTileSizes", std::move(tileSizes) },
 				{ "gpuDriven", stats.GPUDriven },
 				{ "gpuCounts", stats.GPUDriven && gpu.HasCounters },
 				{ "feedbackRequests", stats.FeedbackRequests },
@@ -883,7 +892,9 @@ namespace Strata
 			"GPU.Opaque (with the sky), GPU.Transparent, GPU.TAA (motion vectors' history and temporal anti-aliasing), GPU.Post, "
 			"GPU.Overlays, GPU.UI (the game UI), GPU.ImGui) and boundBy: gpu when the GPU's median busy time takes at least 90% of the median frame interval and exceeds "
 			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
-			"times. renderStats is the viewport's latest frame (null while it renders none): gpuDriven (the GPU culled the frame and built its draws: "
+			"times. renderStats is the viewport's latest frame (null while it renders none): quality (the Graphics Quality it drew with, as "
+			"project.settings shows Renderer.Quality), shadowMapSize (the sun's cascades' texels), localShadowTileSizes (each shadowed point and spot "
+			"light's tile), gpuDriven (the GPU culled the frame and built its draws: "
 			"its counts are the GPU's, of a frame 2-3 frames older, once gpuCounts is true; transparent surfaces are the CPU's), feedbackRequests (its "
 			"asset requests came from the GPU's visibility feedback of an earlier frame, not from the CPU walking the view), drawCommands (draw "
 			"calls the CPU recorded), draws (instanced draws of the view), opaqueDraws, shadowDraws, instances, shadowCasters, triangles, "

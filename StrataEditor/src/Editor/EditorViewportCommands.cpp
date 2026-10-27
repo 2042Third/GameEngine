@@ -10,6 +10,7 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/Renderer.h>
+#include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Renderer/TextureReadback.h>
 #include <Strata/Scene/Scene.h>
@@ -124,8 +125,14 @@ namespace Strata
 			{ "debugView", "DebugView" },
 			{ "pilotGameCamera", "PilotGameCamera" },
 			{ "editPose", "EditPose" },
-			{ "cellBounds", "CellBounds" }
+			{ "cellBounds", "CellBounds" },
+			{ "quality", "Quality" }
 		};
+
+		nlohmann::json QualitySchema(std::string description)
+		{
+			return { { "type", "string" }, { "enum", { "project", "low", "medium", "high", "ultra" } }, { "description", std::move(description) } };
+		}
 
 		nlohmann::json DebugViewSchema(std::string description)
 		{
@@ -220,6 +227,7 @@ namespace Strata
 			bool WaitForAssets = true;
 			std::optional<bool> Overlays;
 			std::optional<ViewportDebugView> DebugView; // Unset: the viewport's
+			std::optional<ViewportQuality> Quality;     // Unset: the view's (the Scene view's setting, the project's for the scene's camera)
 			std::filesystem::path Path; // Empty: the image is only returned
 			bool Overwrite = false;
 		};
@@ -491,7 +499,7 @@ namespace Strata
 		EditorCommandResult StartLiveCapture(EditorContext& context, const nlohmann::json& parameters)
 		{
 			CommandArguments arguments(parameters);
-			for (const char* refused : { "width", "height", "overlays", "position", "target", "fov", "debugView", "waitForAssets" })
+			for (const char* refused : { "width", "height", "overlays", "position", "target", "fov", "debugView", "quality", "waitForAssets" })
 			{
 				if (arguments.Has(refused) && arguments.IsValid())
 					arguments.SetError(fmt::format("Parameter '{}' does not apply to live captures, which return what the view presented", refused));
@@ -610,7 +618,10 @@ namespace Strata
 			else
 				renderer->GetSceneRenderer().ResetExposureAdaptation();
 			progress.Rendered = true;
-			if (!renderer->Render(context, request.Size, *view, settings, progress.Overlays))
+			// The view's quality, as the panel showing it draws: the Scene view's setting for the editor camera and cameras of the
+			// capture's own, the project's for the scene's camera.
+			const ViewportQuality quality = request.Quality.value_or(view->FromScene ? ViewportQuality::Project : viewport.GetSettings().Quality);
+			if (!renderer->Render(context, request.Size, *view, settings, progress.Overlays, ResolveViewportQuality(quality)))
 			{
 				renderer->ReleaseTargets();
 				return EditorCommandResult::Fail("Rendering the capture failed (see the log)");
@@ -926,7 +937,10 @@ namespace Strata
 						"else the Animator's Clip; the rest pose without either). animation.preview requests win over both, and play mode is "
 						"unchanged" } } },
 				{ "cellBounds", BoolSchema("While a world is open (or the game streams one), draw the squares of its cells loading (Sulfur), loaded (Ochre) "
-					"and unloading (gray) around the camera") } }),
+					"and unloading (gray) around the camera") },
+				{ "quality", QualitySchema("What the Scene view draws with: the project's Graphics Quality (Renderer.Quality, the default) or a preset "
+					"of this editor's for the view (a view setting, saved with the editor's state, no undo step); the Game view and the scene's camera "
+					"always draw at the project's") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				nlohmann::json changes = nlohmann::json::object();
@@ -1006,7 +1020,8 @@ namespace Strata
 			"lodErrorPixels: [the largest error drawn at each of those, in pixels, where levels are chosen by their errors; else 0], "
 			"entitiesPerMipShortfall: [at the wanted level, 1 level coarser, 2, 3+ or loading]} among the entities in view. renderStats is what the "
 			"captured frame drew, as editor.perf's renderStats (draws, instances, shadow casters, triangles, proxies, lights, timings), with gpuMs: "
-			"the GPU's milliseconds per stage of the captured frame (empty, with gpuStatsFrame null, where the GPU writes no timestamps). "
+			"the GPU's milliseconds per stage of the captured frame (empty, with gpuStatsFrame null, where the GPU writes no timestamps). quality "
+			"draws the picture at a preset (default: the view's); renderStats.quality says what it drew with. "
 			"Needs a GPU (fails in editors started with --no-gpu). live: true renders nothing: it reads back what the Scene view (camera "
 			"\"editor\") or the Game view (\"scene\") presented, as it played, to see motion (trails, smearing, crawling) at exact steps: arm it "
 			"after play.start {paused: true}, then run input.sequence or play.step. It fails when the view does not render, play stops or step "
@@ -1026,6 +1041,8 @@ namespace Strata
 				{ "debugView", DebugViewSchema("\"streaming\" tints entities by streaming state (pending Sulfur, failed Cinnabar, missing meshes as boxes), "
 					"\"lod\" by level of detail, \"mip\" by the mip levels their textures lack, \"motion\" colors pixels by their motion since the capture's "
 					"previous frame (rendered twice for it: still scenes show none), \"none\" not at all (default: the viewport's debug view)") },
+				{ "quality", QualitySchema("The quality the picture is drawn at (default: the quality of the view it shows: the Scene view's for the "
+					"editor camera and cameras of the capture's own, the project's for the scene's camera)") },
 				{ "path", StringSchema("Also save the PNG to this .png file: relative to the project directory (needs an open project) or absolute; folders are "
 					"created, network and device paths are refused") },
 				{ "overwrite", BoolSchema("Replace an existing file at path (default false: an existing file is an error)") },
@@ -1071,6 +1088,12 @@ namespace Strata
 					request.DebugView = ViewportDebugViewFromString(arguments.GetString("debugView"));
 					if (!request.DebugView && arguments.IsValid())
 						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\", \"lod\", \"mip\" or \"motion\"");
+				}
+				if (arguments.Has("quality"))
+				{
+					request.Quality = ViewportQualityFromString(arguments.GetString("quality"));
+					if (!request.Quality && arguments.IsValid())
+						arguments.SetError("Parameter 'quality' must be \"project\", \"low\", \"medium\", \"high\" or \"ultra\"");
 				}
 				request.Overwrite = arguments.GetBool("overwrite", false);
 				if (arguments.Has("path"))

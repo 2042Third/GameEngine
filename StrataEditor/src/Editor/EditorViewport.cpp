@@ -51,7 +51,8 @@ namespace Strata
 			{ "GameView", { { "Mode", GameViewModeToString(GameView.Mode) }, { "Width", GameView.Width }, { "Height", GameView.Height } } },
 			{ "PilotGameCamera", PilotGameCamera },
 			{ "EditPose", AnimationEditPoseToString(EditPose) },
-			{ "CellBounds", CellBounds }
+			{ "CellBounds", CellBounds },
+			{ "Quality", ViewportQualityToString(Quality) }
 		};
 	}
 
@@ -133,6 +134,13 @@ namespace Strata
 			if (!pose)
 				return fail("'EditPose' must be \"rest\" or \"clipStart\"");
 			result.EditPose = *pose;
+		}
+		if (const auto it = json.find("Quality"); it != json.end())
+		{
+			const std::optional<ViewportQuality> quality = it->is_string() ? ViewportQualityFromString(it->get<std::string>()) : std::nullopt;
+			if (!quality)
+				return fail("'Quality' must be \"project\", \"low\", \"medium\", \"high\" or \"ultra\"");
+			result.Quality = *quality;
 		}
 		for (const auto& [key, value, maximum] : { std::tuple<const char*, float*, float> { "TranslateSnap", &result.TranslateSnap, c_MaxTranslateSnap },
 			{ "RotateSnap", &result.RotateSnap, c_MaxRotateSnap }, { "ScaleSnap", &result.ScaleSnap, c_MaxScaleSnap } })

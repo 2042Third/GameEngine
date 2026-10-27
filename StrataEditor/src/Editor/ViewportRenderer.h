@@ -5,6 +5,7 @@
 
 #include <Strata/Core/Base.h>
 #include <Strata/Renderer/DebugDraw.h>
+#include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Entity.h>
 
@@ -14,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Strata
@@ -64,6 +66,21 @@ namespace Strata
 	// settings for editor views (ViewportView::EditorView), as the game shows them otherwise.
 	SceneRenderOptions GetViewportRenderOptions(const ViewportView& view, const ViewportSettings& settings);
 
+	// What quality an editor view draws with: the project's Renderer.Quality section, or a preset of the person's for the
+	// view (ViewportSettings::Quality, viewport.capture's quality). The numbers are saved: never renumber them.
+	enum class ViewportQuality : uint8_t
+	{
+		Project = 0,
+		Low,
+		Medium,
+		High,
+		Ultra
+	};
+	const char* ViewportQualityToString(ViewportQuality quality); // "project", "low", "medium", "high", "ultra"
+	std::optional<ViewportQuality> ViewportQualityFromString(std::string_view name);
+	// The settings a view's quality stands for: Project is RendererQuality::GetProjectQuality(), the others their preset's.
+	RendererQualitySettings ResolveViewportQuality(ViewportQuality quality);
+
 	// Frames of temporal anti-aliasing a single picture of a view settles over (SceneRendererStats::TemporalFrames): the
 	// jitter's eight phases, after which the image is their mean, as the viewport's converged view shows it. Captures and the
 	// project's picture render their still view again until then.
@@ -87,16 +104,18 @@ namespace Strata
 	{
 	public:
 		// `fades`: SceneRendererSpecification::FadeTextureLevels, FadeLevelsOfDetail and SpreadLightingUpdates (off for the
-		// capture renderer, whose images wait for the levels they need and show them and every light's shadow at once; it also
-		// draws local light shadows into a 2048 atlas).
+		// capture renderer, whose images wait for the levels they need and show them and every light's shadow at once).
 		explicit ViewportRenderer(const std::string& debugName, bool fades = true);
 
 		ViewportRenderer(const ViewportRenderer&) = delete;
 		ViewportRenderer& operator=(const ViewportRenderer&) = delete;
 
-		// Renders into the output texture at `size` (render targets are recreated only when the size changes). Returns
-		// false when nothing was rendered: a zero size, or a failure the scene renderer logged.
-		bool Render(EditorContext& context, const glm::uvec2& size, const ViewportView& view, const ViewportSettings& settings, bool overlays);
+		// Renders into the output texture at `size` (render targets are recreated only when the size changes) at `quality`
+		// (SceneRenderer::SetQuality, applied after the size, so Auto resolves for the image's rows): the Scene view's
+		// ResolveViewportQuality(settings.Quality), the project's for the Game view and the project's picture, the request's
+		// for captures. Returns false when nothing was rendered: a zero size, or a failure the scene renderer logged.
+		bool Render(EditorContext& context, const glm::uvec2& size, const ViewportView& view, const ViewportSettings& settings, bool overlays,
+			const RendererQualitySettings& quality);
 
 		// Display-ready RGBA8 image of the last Render (null before the first one or after a failed resize).
 		nvrhi::ITexture* GetOutputTexture() const { return m_Renderer->GetOutputTexture(); }

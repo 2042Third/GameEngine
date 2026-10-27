@@ -10,6 +10,7 @@
 #include <Strata/Project/Project.h>
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/Renderer.h>
+#include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Renderer/TextureReadback.h>
 
@@ -136,7 +137,7 @@ namespace Strata
 			else
 				renderer->GetSceneRenderer().ResetExposureAdaptation();
 			m_Rendered = true;
-			if (!renderer->Render(context, size, *view, settings, false))
+			if (!renderer->Render(context, size, *view, settings, false, RendererQuality::GetProjectQuality()))
 			{
 				renderer->ReleaseTargets();
 				Cancel();

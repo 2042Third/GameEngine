@@ -74,6 +74,47 @@ namespace Strata
 		return options;
 	}
 
+	namespace
+	{
+
+		constexpr std::pair<ViewportQuality, const char*> c_ViewportQualityNames[] = { { ViewportQuality::Project, "project" },
+			{ ViewportQuality::Low, "low" }, { ViewportQuality::Medium, "medium" }, { ViewportQuality::High, "high" }, { ViewportQuality::Ultra, "ultra" } };
+
+	}
+
+	const char* ViewportQualityToString(ViewportQuality quality)
+	{
+		for (const auto& [value, name] : c_ViewportQualityNames)
+		{
+			if (value == quality)
+				return name;
+		}
+		return "project";
+	}
+
+	std::optional<ViewportQuality> ViewportQualityFromString(std::string_view name)
+	{
+		for (const auto& [value, text] : c_ViewportQualityNames)
+		{
+			if (name == text)
+				return value;
+		}
+		return std::nullopt;
+	}
+
+	RendererQualitySettings ResolveViewportQuality(ViewportQuality quality)
+	{
+		switch (quality)
+		{
+			case ViewportQuality::Low: return RendererQuality::GetPreset(RendererQualityPreset::Low);
+			case ViewportQuality::Medium: return RendererQuality::GetPreset(RendererQualityPreset::Medium);
+			case ViewportQuality::High: return RendererQuality::GetPreset(RendererQualityPreset::High);
+			case ViewportQuality::Ultra: return RendererQuality::GetPreset(RendererQualityPreset::Ultra);
+			case ViewportQuality::Project: break;
+		}
+		return RendererQuality::GetProjectQuality();
+	}
+
 	ViewportRenderer::ViewportRenderer(const std::string& debugName, bool fades)
 	{
 		SceneRendererSpecification specification;
@@ -81,10 +122,8 @@ namespace Strata
 		specification.FadeTextureLevels = fades;
 		specification.FadeLevelsOfDetail = fades;
 		// The capture renderer draws single pictures: every shadow view of every shadowed light in its first frame (no fades),
-		// into a smaller atlas (released with its targets after each picture).
+		// at the quality of the view it captures (its atlas is released with its targets after each picture).
 		specification.SpreadLightingUpdates = fades;
-		if (!fades)
-			specification.Quality.LocalShadowAtlasSize = 2048;
 		m_Renderer = CreateScope<SceneRenderer>(specification);
 	}
 
@@ -113,10 +152,12 @@ namespace Strata
 		m_OutlinedValid = true;
 	}
 
-	bool ViewportRenderer::Render(EditorContext& context, const glm::uvec2& size, const ViewportView& view, const ViewportSettings& settings, bool overlays)
+	bool ViewportRenderer::Render(EditorContext& context, const glm::uvec2& size, const ViewportView& view, const ViewportSettings& settings, bool overlays,
+		const RendererQualitySettings& quality)
 	{
 		const Ref<Scene>& scene = context.GetActiveScene();
 		m_Renderer->SetViewportSize(size.x, size.y);
+		m_Renderer->SetQuality(quality);
 		if (size.x == 0 || size.y == 0)
 			return false;
 
