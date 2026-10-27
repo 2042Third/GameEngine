@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -262,6 +263,60 @@ TEST_SUITE("GPU.Editor.Lighting")
 		const std::optional<std::vector<uint8_t>> kept = FileSystem::ReadBytes(harness.GetAssetPath("Imported/Sky.hdr"));
 		REQUIRE(kept);
 		CHECK(*kept == *sky);
+
+		harness.Runner.CancelAll("The test ends");
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("lighting.bakeProbes bakes at its own quality, never the project's")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		LightingGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUEditorBakeQuality") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		// What the qualities draw differently around the probe: a sun's shadow of a box on a floor (Low's cascades are 1024
+		// texels and three, Ultra's 4096 and four at the bake's face size) and a shadowed point light's (their atlases).
+		harness.Run("entity.create", { { "name", "Sun" }, { "components", {
+			{ "Transform", { { "Rotation", { -50.0, 30.0, 0.0 } } } },
+			{ "DirectionalLight", { { "Intensity", 5.0 }, { "ShadowSoftness", 0.5 } } } } } });
+		harness.Run("entity.create", { { "name", "Floor" }, { "components", {
+			{ "Transform", { { "Translation", { 0.0, -1.5, 0.0 } }, { "Scale", { 12.0, 0.2, 12.0 } } } },
+			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } });
+		harness.Run("entity.create", { { "name", "Box" }, { "components", {
+			{ "Transform", { { "Translation", { 1.5, -0.9, 0.5 } } } },
+			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } });
+		harness.Run("entity.create", { { "name", "Lamp" }, { "components", {
+			{ "Transform", { { "Translation", { -1.5, 0.5, -1.0 } } } },
+			{ "PointLight", { { "CastShadows", true }, { "Range", 6.0 } } } } } });
+		const std::string probe = harness.Run("entity.create", { { "name", "Probe" },
+			{ "components", { { "ReflectionProbe", { { "Extents", { 3, 3, 3 } } } } } } })["id"].get<std::string>();
+		harness.Run("scene.saveAs", { { "path", "Scenes/Yard.stscene" } });
+
+		// The same bake with the project at Low and at Ultra: the same file, drawn at SceneRendererSpecification::ForBake()'s
+		// quality, so that a bake never depends on a person's settings. Each bake is undone once its file is read, so the next
+		// one sees the scene without the capture (a probe's capture lights what the next bake sees) and writes the same path.
+		// A bake renderer made to follow the project's quality writes other bytes at both presets.
+		const std::string noCapture = harness.GetCapture(probe);
+		std::vector<std::vector<uint8_t>> captures;
+		for (const char* preset : { "Low", "Ultra" })
+		{
+			CAPTURE(preset);
+			harness.Run("project.setSettings", { { "section", "Renderer.Quality" }, { "value", { { "Preset", preset } } } });
+			const nlohmann::json bake = harness.Bake();
+			REQUIRE(bake["probes"].size() == 1);
+			const nlohmann::json& baked = FindProbe(bake, probe);
+			CHECK(baked["complete"] == true);
+			const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(harness.GetAssetPath(baked["path"].get<std::string>()));
+			REQUIRE(bytes);
+			captures.push_back(*bytes);
+			harness.Run("edit.undo");
+			CHECK(harness.GetCapture(probe) == noCapture);
+		}
+		// Compared as a whole (doctest would print every byte of differing files).
+		const bool same = captures[0] == captures[1];
+		CHECK(same);
 
 		harness.Runner.CancelAll("The test ends");
 		CHECK(gpu.GetNewErrorCount() == 0);

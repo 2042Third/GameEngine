@@ -1530,8 +1530,9 @@ the streams must know:
   line gives its source ("--quality"); `SceneRendererSpecification::MaxShadowMapSize` is floored to a power of two of at
   least 256; a failed cascade allocation keeps the frame (its cascades were fitted for the larger size, one frame), a
   failed atlas allocation skips the frame's local shadows as 7.5 says; `ProbeBake::GetRendererSpecification` is gone
-  (`ForBake()`); `GPU.Editor.Lighting` does not check the bake renderer's quality (it lives in the command's state; the
-  bake constructs from `ForBake()` and never calls `SetQuality`, and `Renderer.Quality` checks the profile);
+  (`ForBake()`); `GPU.Editor.Lighting` checks the bake renderer's quality by what it writes, since the renderer lives in
+  the command's state: the same bake with the project at Low and at Ultra writes the same file (a bake renderer made to
+  follow the project writes other bytes at both);
   `GPU.Runtime.GameRenderer` does not read the log line (the test process logs warnings only; `StrataRuntime.Quality`
   does). On this machine High's 4096-texel cascades cost `GPU.Shadows` 0.142 -> 0.633 ms at 3840x2160 for 100,000
   shadowed cubes (`Render100kCubesShadowedHigh4KGPU` 2.476 against Medium's 1.763 ms): above the plan's 0.6 ms in that
