@@ -3934,6 +3934,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
 - Every GPU pass is timed in a GPU stage (`FrameStageKind::GPU`, Docs/Architecture.md, "Frame profiler"): a command list's
   passes with one `GPUPassTimer` (constructed where the first pass begins, `Next(stage)` where each next one begins, `End()`
   before the command list closes, on every path that closes it). A new pass goes into the stage it belongs to, or a new stage.
+- A new GPU stage is registered where its pass runs in the frame (`RendererGPUStages::Get` registers in frame order, near
+  the stage its pass follows), and added at the same position to the five lists that name the stages: `editor.perf`'s
+  description (`EditorStateCommands.cpp`), `EditorProfilerTests.cpp`, `FramePerfLogTests.cpp`, Architecture.md's stage
+  table and the editor-automation skill. Registration order sets the stages' ids and perf-log columns, so inserting one
+  moves the later ones; nothing depends on that, since ids are compared only within a build and perf-log readers find
+  columns by name. A new resource of the scene layout takes the next free slot that `Include/Scene.glsl`'s comment
+  lists (assigned slots included), and a pass that does not run binds a dummy there.
 - Register a module's GPU stages when the module registers (`RegisterRendererModule` registers `RendererGPUStages`), so they
   exist before a perf log writes its header (`GPU.UI` by `RegisterGameUIModule`), and so are the CPU stages its passes
   time (`Render.UI`): a stage `ST_PROFILE_STAGE` first registers in a frame after the header gets no column; a stage of a
