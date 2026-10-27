@@ -3135,9 +3135,11 @@ lights, Post Process and the sky), and never a resolution below the output's.
   unless `GameRenderer::SetQualityOverride` sets one (`StrataRuntime --quality <low|medium|high|ultra>` for a run,
   logged as "Graphics quality: Ultra (--quality)"). In the editor the Game view and the project's picture draw at the
   project's, the Scene view at `ViewportSettings::Quality` (`viewport.setSettings {quality}`: the project's by default,
-  or a preset of the person's for that view), captures at the quality of the view they show unless `viewport.capture
-  {quality}` asks for one. Thumbnails and the probe bake draw with `SceneRendererSpecification::ForThumbnails()` and
-  `ForBake()`, 0.6.0's values, whatever anyone chose: a bake never depends on a person's settings.
+  or a preset of the person's for that view) for the editor camera and at the project's for the scene's camera ("Game
+  camera", the canvas mode: `GetSceneViewQuality`), captures at the quality of the view they show unless
+  `viewport.capture {quality}` asks for one. Thumbnails and the probe bake draw with
+  `SceneRendererSpecification::ForThumbnails()` and `ForBake()`, 0.6.0's values, whatever anyone chose: a bake never
+  depends on a person's settings.
 - **Stats:** `SceneRendererStats::Quality`, `ShadowMapSize` (after the limits and a fallback) and
   `LocalShadowTileSizes`; `renderStats.quality` (the section's fields and values, which `project.setSettings` takes),
   `renderStats.shadowMapSize` and `renderStats.localShadowTileSizes` in `editor.perf` and every capture.

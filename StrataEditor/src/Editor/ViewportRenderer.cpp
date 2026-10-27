@@ -115,6 +115,11 @@ namespace Strata
 		return RendererQuality::GetProjectQuality();
 	}
 
+	ViewportQuality GetSceneViewQuality(const ViewportView& view, ViewportQuality setting)
+	{
+		return view.FromScene ? ViewportQuality::Project : setting;
+	}
+
 	ViewportRenderer::ViewportRenderer(const std::string& debugName, bool fades)
 	{
 		SceneRendererSpecification specification;

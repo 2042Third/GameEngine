@@ -132,9 +132,10 @@ namespace Strata
 		// What skinned characters of the edited scene show while it does not play (AnimationPreview::SetEditPose): their
 		// skeleton's rest pose, or the first frame of what they play on start. Every view of the edited scene follows it.
 		AnimationEditPose EditPose = AnimationEditPose::Rest;
-		// What the Scene view draws with (ResolveViewportQuality): the project's Graphics Quality, or a preset of this
-		// editor's for the view, the person's machine apart from the project's choice. The Game view and the scene's camera
-		// always draw at the project's.
+		// What the Scene view draws the editor camera with (ResolveViewportQuality): the project's Graphics Quality, or a
+		// preset of this editor's for the view, the person's machine apart from the project's choice. The Game view and the
+		// scene's camera always draw at the project's, also in the Scene view ("Game camera", the canvas mode:
+		// GetSceneViewQuality).
 		ViewportQuality Quality = ViewportQuality::Project;
 
 		nlohmann::json ToJson() const;

@@ -6,14 +6,17 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/EditorViewport.h"
+#include "Editor/ImGuiHarness.h"
 #include "Editor/ProjectThumbnail.h"
 #include "Editor/ViewportRenderer.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/GameViewPanel.h"
+#include "Panels/ViewportPanel.h"
 #include "Renderer/GPUTestUtils.h"
 #include "Renderer/MeshTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
 #include "TestHelpers.h"
+#include "UI/EditorPanelRegistry.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
@@ -30,6 +33,7 @@
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Components.h>
 
+#include <imgui.h>
 #include <stb_image.h>
 
 #include <algorithm>
@@ -2082,6 +2086,36 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(gameCamera);
 		REQUIRE(gameView->Render(context, glm::uvec2(64, 64), *gameCamera, viewport.GetSettings(), false, RendererQuality::GetProjectQuality()));
 		CHECK(gameView->GetSceneRenderer().GetQuality() == RendererQuality::GetPreset(RendererQualityPreset::Low));
+
+		// The Scene view's panel: the editor camera at the view's setting, the scene's camera ("Game camera") at the project's,
+		// as the Game view and captures of the scene's camera draw it.
+		{
+			Tests::ImGuiHarness ui;
+			ViewportPanel panel;
+			EditorPanelContext panelContext { context, harness.Commands, harness.Runner };
+			const auto drawPanel = [&]()
+			{
+				ui.Frame([&]()
+				{
+					ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+					ImGui::SetNextWindowSize(ImVec2(320.0f, 240.0f));
+					ImGui::Begin("Scene", nullptr, ImGuiWindowFlags_NoSavedSettings);
+					panel.OnUpdate(panelContext);
+					panel.OnImGuiRender(panelContext);
+					ImGui::End();
+				});
+				REQUIRE(sceneView->GetSize().x > 0);
+				return sceneView->GetSceneRenderer().GetQuality();
+			};
+			CHECK(drawPanel() == RendererQuality::GetPreset(RendererQualityPreset::Ultra));
+			CHECK_FALSE(panel.IsPiloting());
+			harness.Run("viewport.setSettings", { { "pilotGameCamera", true } });
+			CHECK(drawPanel() == RendererQuality::GetPreset(RendererQualityPreset::Low));
+			CHECK(panel.IsPiloting());
+			harness.Run("viewport.setSettings", { { "pilotGameCamera", false } });
+			CHECK(drawPanel() == RendererQuality::GetPreset(RendererQualityPreset::Ultra));
+			panel.OnDetach(panelContext);
+		}
 
 		// The project's default once the view follows it again.
 		harness.Run("viewport.setSettings", { { "quality", "project" } });

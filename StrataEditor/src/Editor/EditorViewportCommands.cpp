@@ -620,7 +620,7 @@ namespace Strata
 			progress.Rendered = true;
 			// The view's quality, as the panel showing it draws: the Scene view's setting for the editor camera and cameras of the
 			// capture's own, the project's for the scene's camera.
-			const ViewportQuality quality = request.Quality.value_or(view->FromScene ? ViewportQuality::Project : viewport.GetSettings().Quality);
+			const ViewportQuality quality = request.Quality.value_or(GetSceneViewQuality(*view, viewport.GetSettings().Quality));
 			if (!renderer->Render(context, request.Size, *view, settings, progress.Overlays, ResolveViewportQuality(quality)))
 			{
 				renderer->ReleaseTargets();

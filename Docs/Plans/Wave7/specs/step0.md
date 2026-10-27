@@ -1589,4 +1589,6 @@ the streams must know:
   projects' quality (High) is `lookdev/step0`, the streams' baseline.
 - **After the second review.** `LocalShadowContent` holds the quality's `LODErrorPixels`, which 7.5 left out: a Custom
   quality that changed only it kept the cached point and spot views at their old levels of detail; a new error draws
-  them again in their tiles.
+  them again in their tiles. The Scene view draws the scene's camera ("Game camera", the canvas mode) at the project's
+  quality, as 7.8's schema text says and captures of it draw (7.7 passed the view's setting for every camera):
+  `GetSceneViewQuality`, which the panel and `viewport.capture` share.

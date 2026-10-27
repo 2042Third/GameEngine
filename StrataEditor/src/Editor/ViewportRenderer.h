@@ -80,6 +80,11 @@ namespace Strata
 	std::optional<ViewportQuality> ViewportQualityFromString(std::string_view name);
 	// The settings a view's quality stands for: Project is RendererQuality::GetProjectQuality(), the others their preset's.
 	RendererQualitySettings ResolveViewportQuality(ViewportQuality quality);
+	// What the Scene view draws `view` with: the project's quality for the scene's camera (ViewportView::FromScene, with
+	// "Game camera" or behind the canvas mode: as the Game view and the game draw it), `setting`
+	// (ViewportSettings::Quality) for the editor camera. viewport.capture draws its view with it unless the request names
+	// a quality.
+	ViewportQuality GetSceneViewQuality(const ViewportView& view, ViewportQuality setting);
 
 	// Frames of temporal anti-aliasing a single picture of a view settles over (SceneRendererStats::TemporalFrames): the
 	// jitter's eight phases, after which the image is their mean, as the viewport's converged view shows it. Captures and the
