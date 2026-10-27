@@ -999,7 +999,9 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   `GameRuntimeOptions::TimeDilation`) let a simulation that cannot keep up with real time slow down: an update stops its
   catch-up fixed steps once they took longer, in wall time, than the time they simulated, and drops the steps still due
   (`GetDroppedFixedStepCount`, also `PhysicsStats::DroppedSteps`). Otherwise a frame that runs eight expensive steps
-  makes the next one owe even more. Tests and tools keep the default, every due step up to `MaxFixedStepsPerFrame`.
+  makes the next one owe even more. Tests and tools keep the default, every due step up to `MaxFixedStepsPerFrame`;
+  exported games' `--frames` and `--seconds` runs also limit each update's timestep to what those steps simulate
+  (`GameRuntimeOptions::KeepEveryFixedStep`), so they drop no step and their scenes' clocks keep up with the steps.
 - `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame`, `MaxEntitiesInstantiatedPerFrame` (see
   additive scenes below), the physics world's capacities
   (`PhysicsCapacity`: the room for bodies and contacts box3d reserves; 0, the default, sizes it automatically; each up to
@@ -4014,7 +4016,8 @@ the window and the renderer and paces at 60 frames per second; `--windowed` over
 window size is in screen coordinates, which the display's scale multiplies: 1280x720 is 1920x1080 pixels at 150%;
 `WindowSpecification::SizeInPixels`), so perf logs and screenshots compare across displays, `--frames N` or `--seconds S`
 (the frame by which the game played S seconds of game time in fixed steps, `GameRuntime::GetPlayedSeconds`, so that
-what it shows does not depend on the frame rate) with `--screenshot out.png` saves the last frame,
+what it shows does not depend on the frame rate: such runs drop no step, a frame longer than its scene's
+`MaxFixedStepsPerFrame` steps playing only the time they simulate) with `--screenshot out.png` saves the last frame,
 `--asset-budget-mb <n>` sets the GPU texture budget of the game's assets (the other budgets keep their defaults), and
 `--perf-log <csv>` writes a row for every frame, also headless (`Runtime/FramePerfLog`, a frame profiler listener, so
 writing costs the measured frame nothing): the frame's

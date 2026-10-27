@@ -34,6 +34,12 @@ namespace Strata
 		// (Scene::SetTimeDilation): for games driven by the wall clock. Off by default, so that tools and tests that drive
 		// the runtime with chosen timesteps step deterministically.
 		bool TimeDilation = false;
+		// Each update's timestep is limited to what its scene's fixed steps simulate in one update (MaxFixedStepsPerFrame
+		// steps, at its time scale), so no step is dropped and the scene's clock, its scripts' frame time and
+		// GetPlayedSeconds agree whatever the frame rate: for runs that end after a span of game time or a number of frames
+		// (StrataRuntime --seconds, --frames), whose last frame must not depend on the machine. A longer frame then plays
+		// less game time than it took. Off by default: a game follows the wall clock.
+		bool KeepEveryFixedStep = false;
 		// Where the game keeps its save files (scripts' Game::WriteSaveFile: the engine service IGameSaves while the runtime
 		// lives); empty: the player's, <user data>/<game name>/Saves.
 		std::filesystem::path SaveFilesDirectory;
@@ -84,7 +90,9 @@ namespace Strata
 		// The game time played since the game's first scene started, in seconds: the fixed steps its scenes ran
 		// (Scene::GetFixedStepCount, of the running scene and of those it replaced), each at its scene's fixed timestep. The
 		// loading scene's steps do not count (how long the start takes depends on the machine), and nor does time the game
-		// stops (pauses, time scale 0). What runs that end after a span of game time count in (StrataRuntime --seconds).
+		// stops (pauses, time scale 0). What runs that end after a span of game time count in (StrataRuntime --seconds), with
+		// GameRuntimeOptions::KeepEveryFixedStep: without it, a frame longer than its scene's MaxFixedStepsPerFrame steps drops
+		// steps that the scene's clock and its scripts' frame time still count.
 		double GetPlayedSeconds() const { return m_PlayedSeconds; }
 		// Why the start scene could not be loaded: the game cannot start (StrataRuntime exits).
 		const std::optional<std::string>& GetStartError() const { return m_StartError; }
@@ -168,6 +176,7 @@ namespace Strata
 		Scope<PendingScene> m_SceneLoad;
 		Scope<PendingScene> m_LoadingSceneLoad;
 		bool m_TimeDilation = false; // GameRuntimeOptions::TimeDilation, for every scene the game plays
+		bool m_KeepEveryFixedStep = false; // GameRuntimeOptions::KeepEveryFixedStep
 		SceneLoadOptions m_LoadOptions; // Of every scene the game loads (GameRuntimeOptions::PrepareRenderScenes)
 		std::optional<int32_t> m_QuitRequest;
 		Ref<ScriptEngine> m_ScriptEngine;

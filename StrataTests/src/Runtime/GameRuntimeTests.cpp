@@ -258,6 +258,84 @@ TEST_SUITE("Runtime.Game")
 		CHECK(game->GetPlayedSeconds() == doctest::Approx(startSeconds + nextSeconds));
 	}
 
+	TEST_CASE("A run that keeps every fixed step plays its scene's clock on frames too long for its steps")
+	{
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeKeepSteps");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 10) } }, UUID(0x1010));
+		// A frame of a quarter second (Application's longest timestep) is longer than the 8 steps of a 60th an update runs
+		// by default.
+		const Timestep longFrame(0.25f);
+		const double step = static_cast<double>(1.0f / 60.0f);
+		struct LongFrame
+		{
+			double Played = 0.0;
+			double SceneTime = 0.0;
+			uint64_t Steps = 0;
+			uint64_t Dropped = 0;
+			float UnscaledDelta = 0.0f;
+		};
+		// The game time, the scene's clock and the steps one long frame adds, at a time scale.
+		auto runLongFrame = [&](bool keepEveryFixedStep, float timeScale)
+		{
+			GameRuntimeOptions options;
+			options.KeepEveryFixedStep = keepEveryFixedStep;
+			std::string error;
+			Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, options);
+			REQUIRE_MESSAGE(game, error);
+			UpdateUntil(*game, [&]() { return game->HasStarted(); });
+			Scene& scene = *game->GetScene();
+			scene.SetTimeScale(timeScale);
+			const double played = game->GetPlayedSeconds();
+			const double time = scene.GetTime();
+			const uint64_t steps = scene.GetFixedStepCount();
+			const uint64_t dropped = scene.GetDroppedFixedStepCount();
+			game->Update(longFrame);
+			return LongFrame { game->GetPlayedSeconds() - played, scene.GetTime() - time, scene.GetFixedStepCount() - steps,
+				scene.GetDroppedFixedStepCount() - dropped, scene.GetUnscaledDeltaTime() };
+		};
+
+		SUBCASE("Without it, the scene's clock runs ahead of the steps it dropped")
+		{
+			const LongFrame update = runLongFrame(false, 1.0f);
+			CHECK(update.Steps == 8);
+			CHECK(update.Dropped > 0);
+			CHECK(update.Played == doctest::Approx(8.0 * step));
+			CHECK(update.SceneTime == doctest::Approx(0.25));
+		}
+		SUBCASE("With it, the frame plays what its steps simulate, and the clocks agree")
+		{
+			const LongFrame update = runLongFrame(true, 1.0f);
+			CHECK(update.Steps == 8);
+			CHECK(update.Dropped == 0);
+			CHECK(update.Played == doctest::Approx(8.0 * step));
+			// The scene's clock and its scripts' frame time (scaled and unscaled) see the same limited frame.
+			CHECK(update.SceneTime == doctest::Approx(8.0 * step));
+			CHECK(static_cast<double>(update.UnscaledDelta) == doctest::Approx(8.0 * step));
+		}
+		SUBCASE("With it, a faster time scale limits the frame's wall time instead of its steps")
+		{
+			const LongFrame update = runLongFrame(true, 2.0f);
+			CHECK(update.Steps == 8);
+			CHECK(update.Dropped == 0);
+			CHECK(update.Played == doctest::Approx(8.0 * step));
+			CHECK(update.SceneTime == doctest::Approx(8.0 * step));
+			CHECK(static_cast<double>(update.UnscaledDelta) == doctest::Approx(4.0 * step));
+		}
+		SUBCASE("With it, a frame short enough for its steps is not changed")
+		{
+			GameRuntimeOptions options;
+			options.KeepEveryFixedStep = true;
+			std::string error;
+			Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, options);
+			REQUIRE_MESSAGE(game, error);
+			UpdateUntil(*game, [&]() { return game->HasStarted(); });
+			const double time = game->GetScene()->GetTime();
+			game->Update(Timestep(0.1f));
+			CHECK(game->GetScene()->GetTime() - time == doctest::Approx(0.1));
+			CHECK(game->GetScene()->GetDroppedFixedStepCount() == 0);
+		}
+	}
+
 	TEST_CASE("A game whose start scene cannot be loaded does not start")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeBrokenStart");

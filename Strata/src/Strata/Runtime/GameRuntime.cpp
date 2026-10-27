@@ -24,6 +24,21 @@ namespace Strata
 			return bytes == AssetResidencyBudgets::c_Unlimited ? std::string("unlimited") : fmt::format("{} MB", bytes >> 20);
 		}
 
+		// The longest timestep the scene simulates in one update without dropping a fixed step (GameRuntimeOptions::
+		// KeepEveryFixedStep). The scene's accumulator holds at most one step between updates and an update runs up to
+		// MaxFixedStepsPerFrame steps, dropping the backlog only when more than one step is left after them: a scaled
+		// timestep of at most MaxFixedStepsPerFrame steps never leaves more.
+		Timestep LimitToFixedSteps(const Scene& scene, Timestep timestep)
+		{
+			const float timeScale = scene.GetTimeScale();
+			// Paused or stopped time runs no steps (and stepping a paused scene runs one per update): nothing to limit.
+			if (timeScale <= 0.0f || scene.IsPaused())
+				return timestep;
+			const float maxSteps = static_cast<float>(std::max(1u, scene.GetSettings().MaxFixedStepsPerFrame));
+			const float limit = maxSteps * scene.GetFixedTimestep() / timeScale;
+			return Timestep(std::min(static_cast<float>(timestep), limit));
+		}
+
 	}
 
 	Scope<GameRuntime> GameRuntime::Create(const std::filesystem::path& manifestPath, std::string* outError, const GameRuntimeOptions& options)
@@ -69,6 +84,7 @@ namespace Strata
 		if (options.AssetBudgets)
 			runtime->m_AssetManager->SetResidencyBudgets(*options.AssetBudgets);
 		runtime->m_TimeDilation = options.TimeDilation;
+		runtime->m_KeepEveryFixedStep = options.KeepEveryFixedStep;
 		if (options.PrepareRenderScenes)
 			runtime->m_LoadOptions.Prepare = &RenderScene::PrepareLoadedScene;
 		// Every scene the game loads will run: its systems prepare it (physics' bodies, a world's first cells), so that its
@@ -276,7 +292,7 @@ namespace Strata
 		// The steps this update runs, each simulating the timestep the scene reads as the update begins.
 		const uint64_t stepsBefore = m_Scene->GetFixedStepCount();
 		const double fixedTimestep = m_Scene->GetFixedTimestep();
-		m_Scene->OnUpdateRuntime(timestep, &budget);
+		m_Scene->OnUpdateRuntime(m_KeepEveryFixedStep ? LimitToFixedSteps(*m_Scene, timestep) : timestep, &budget);
 		if (m_Started)
 			m_PlayedSeconds += static_cast<double>(m_Scene->GetFixedStepCount() - stepsBefore) * fixedTimestep;
 		CheckScriptFault();

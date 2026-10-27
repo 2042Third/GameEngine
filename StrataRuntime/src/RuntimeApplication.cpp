@@ -71,8 +71,12 @@ namespace Strata
 		{
 			// The other budgets keep their defaults, which depend on the graphics device (initialized by now).
 			GameRuntimeOptions runtimeOptions;
-			// A game runs on the wall clock; runs that end by themselves (--frames, --seconds: checks, screenshots) keep every step.
-			runtimeOptions.TimeDilation = !m_Options.MaxFrames && !m_Options.MaxSeconds;
+			// A game runs on the wall clock; runs that end by themselves (--frames, --seconds: checks, screenshots) keep every
+			// step, also on frames too long for the scene's MaxFixedStepsPerFrame, so their last frame shows the same game time
+			// on every machine.
+			const bool endsByItself = m_Options.MaxFrames || m_Options.MaxSeconds;
+			runtimeOptions.TimeDilation = !endsByItself;
+			runtimeOptions.KeepEveryFixedStep = endsByItself;
 			runtimeOptions.SaveFilesDirectory = m_Options.SaveDirectory;
 			// Headless runs (servers, CI) have no window to render to; with one, scenes have their render proxies built before
 			// they start, so the frame that shows one does not build them all.
