@@ -1558,7 +1558,11 @@ the streams must know:
   time) did not crash, so it stays listed with the unstable metrics in the roadmap. `Perf.Physics.Create10kBodies`,
   timed around box3d's calls in a scratch build: 11.4 of its 18.1 ms are box3d's own creation calls (`b3CreateBody`, the
   shapes, the mass), more than wave 3's 9.07 ms for all of it with Jolt; Strata's part is 6.7 ms (1.6 around those
-  calls, 5.1 gathering the records and building the shapes on jobs).
+  calls, 5.1 gathering the records and building the shapes on jobs). After the owner's ruling of 2026-10-27
+  (`decisions.md`, `physics-runtime` Q1: whoever lands first), step 0 re-baselined it once with `--rebaseline` at the
+  campaign's median, `Measured` 15.76 ms and `Budget` 23.64, Jolt's 7.995 ms kept as its `Target` (alone on step 0's tip
+  15.63-15.78 ms, three runs): not a blocker; the four others stay blockers. DG "Perf tests" names the owner's ruling as
+  the only other way a budget goes up.
 - **S0.8b.** Five interleaved pairs of `PerfGPU.Renderer` (bc6ee123 against step 0's tip, both with bc6ee123's budget
   entries so neither confirms more attempts; `PerfStability.py --baseline --max-ratio 1.02`): 43 metrics, geometric mean
   0.994; above 1.02 `Skinned1000` 1.032, `Render10kMaterials` 1.038, `IdleFrame3kStreamedTextures` 1.024 (0.011 ms, the

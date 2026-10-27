@@ -44,8 +44,8 @@ over M; Measured keeps four significant digits rounded to nearest, Budget four r
 - same (M within 0.9 to 1.1 times Measured): unchanged;
 - dearer within (M above 1.1 times Measured, every value within the budget): Measured M, the budget unchanged;
 - over budget (a value over the budget: a failure its confirmed check measured in every attempt): unchanged, unless
-  --rebaseline <metric>=<reason> names it after the procedure of the guide showed a machine change (Measured M, Budget
-  1.5 M); a regression is fixed, never budgeted;
+  --rebaseline <metric>=<reason> names it after the procedure of the guide showed a machine change, or for a cost the
+  owner accepted by name (Measured M, Budget 1.5 M, a target below it kept); a regression is fixed, never budgeted;
 - counts (unit count) whose values are all equal: Measured and Budget that count;
 - not recorded (fewer than three values): unchanged.
 
@@ -489,7 +489,8 @@ def main():
     parser.add_argument("--results", nargs="+", metavar="FILE", help="report on these results files instead of running the tests")
     parser.add_argument("--propose-budgets", metavar="FILE", help="with --results: write Budgets.json as the rules would change it")
     parser.add_argument("--rebaseline", action="append", metavar="METRIC=REASON", help="with --propose-budgets: re-baseline this metric "
-                        "over its budget, for the reason given (a machine change the guide's procedure showed)")
+                        "over its budget, for the reason given (a machine change the guide's procedure showed, or a cost the "
+                        "owner accepted by name)")
     parser.add_argument("--baseline", nargs="+", metavar="FILE", help="with --results: compare them with these results files")
     parser.add_argument("--max-ratio", type=float, help="with --baseline: flag metrics whose median rose by more than this ratio")
     parser.add_argument("--slack", type=float, default=0.01, help="with --baseline: ms within which medians below --slack-below are equal")

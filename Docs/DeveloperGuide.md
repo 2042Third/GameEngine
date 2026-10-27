@@ -450,13 +450,16 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   down:** a change that makes a metric cheaper
   lowers its entry in the same commit, a metric over budget is a regression to fix rather than a budget to raise, and
   commits that add or lower budgets state the measured values. Lower must be better (time per item, not items per
-  second). **The one way a budget goes up** is a change of the machine, shown on it: the metric's suite measured alone
-  (under `Tools/PerfLock.py`) on the current build, then interleaved with the Release build of the commit that set the
-  budget (`git log -S"<metric>" -- StrataTests/Perf/Budgets.json`), three pairs. That build as far over its own budget
-  (the median ratio within 1.10) is a machine change: `Tools/PerfStability.py --propose-budgets <file> --rebaseline
+  second). **A budget goes up** for a change of the machine, shown on it: the metric's suite measured alone (under
+  `Tools/PerfLock.py`) on the current build, then interleaved with the Release build of the commit that set the budget
+  (`git log -S"<metric>" -- StrataTests/Perf/Budgets.json`), three pairs. That build as far over its own budget (the
+  median ratio within 1.10) is a machine change: `Tools/PerfStability.py --propose-budgets <file> --rebaseline
   <metric>="<the commit, both medians>"` re-baselines it (`Measured` the new median, `Budget` 1.5 times it) and the
   roadmap's open items list it. That build within its budget is a regression between the two commits: fixed, or the
-  budget stays, the test keeps failing and the roadmap's open items name it as a blocker of the next release.
+  budget stays, the test keeps failing and the roadmap's open items name it as a blocker of the next release. The only
+  other way is the owner's: a cost the owner accepted by name is re-baselined once the same way, with the ruling as its
+  reason and its old `Measured` kept as its `Target` (`Perf.Physics.Create10kBodies`, slower since wave 5 moved to box3d
+  at the owner's request: "I don't think physics object creation performance is a big deal", 2026-10-27).
   `--propose-budgets` (with `--results <runs>`) applies the rules to kept runs (at least three valid ones: the canary
   within 1.10 of its reference, the machine at most 30% busy) and writes the proposed `Budgets.json`: provisional entries
   get `Measured` (the median) and `Budget` (1.5 times it, or their `Target` when every run met it), cheaper ones (below

@@ -595,8 +595,9 @@ replaced CPU, and landed on main before the wave's streams branch from its tip:
   `.worktrees/wave7-plan/lookdev/0.6.0`, beside step 0's tip at Medium and at the projects' quality
   (`lookdev/step0-medium`, `lookdev/step0`).
 - The perf budgets were measured again (five runs on bc6ee123's Release build): the Mac's provisional metrics got
-  budgets and the cheaper ones went down; five metrics over budget are regressions of waves 4-6, blockers of 0.7.0
-  (the open items' "Waiting for the Windows reference machine"). Step 0 at Medium against 0.6.0 (bc6ee123), in five
+  budgets and the cheaper ones went down; four metrics over budget are regressions of waves 4-6, blockers of 0.7.0,
+  and creating bodies, slower on box3d, was re-baselined by the owner's ruling (the open items' "Waiting for the Windows
+  reference machine"). Step 0 at Medium against 0.6.0 (bc6ee123), in five
   interleaved pairs: `PerfGPU.Renderer`'s 43 metrics at a geometric mean of 0.994, four CPU medians above 1.02, as far
   as two builds of step 0's own sources whose code lies 48 bytes apart differ (up to 1.067): the code's layout, not a
   cost of step 0's (`Docs/Plans/Wave7/specs/step0.md`, "As built"); the look-dev stills identical but where the
@@ -857,16 +858,22 @@ Open items and deferrals later waves own:
   - Blockers of 0.7.0, over budget in every attempt when measured alone and, interleaved with wave 3's Release build
     (3b87411c, built on 2026-10-13 under these budgets; 3 pairs, medians), within budget there: regressions of waves 4-6
     (3b87411c..bc6ee123), not the machine. `Perf.EditorPanels.Performance600FramesP95` 0.0993 ms against wave 3's 0.069
-    (budget 0.0924); `Perf.Physics.Create10kBodies` 16.50 against 9.07 ms (budget 11.99: wave 5's box3d inserts every
-    shape into its trees one at a time on the main thread, where Jolt built them in bulk. Timed around its calls on this
-    machine, box3d's own creation (`b3CreateBody`, the shapes, the mass) takes 11.4 of the 18.1 ms, more than wave 3's
-    9.07 for all of it, and Strata's part 6.7 ms (1.6 around those calls, 5.1 gathering the records and building the
-    shapes on jobs); the way down is bulk insertion with a later box3d bump, then Strata's allocations per body);
-    `PerfGPU.Editor.ThumbnailsMaxFrame` 2.073 against 0.978 ms (budget 1.149); `PerfGPU.Editor.SceneOpenOver1MMaxFrame`
-    1.839 against 0.664 ms (budget 1.143); and `PerfGPU.Editor.EditFrameNested100k`, within its budget alone on bc6ee123
-    (0.2769 ms against 0.2808) but 1.26 times wave 3's build in the same pairs (0.2708 against 0.2153 ms) and over
-    budget in every attempt of step 0's `-L perf` run (0.287-0.299 ms). Each is fixed before the release, not budgeted;
-    `PlayFrameNested100k` (1.43 times wave 3's, within its budget) goes with the last.
+    (budget 0.0924); `PerfGPU.Editor.ThumbnailsMaxFrame` 2.073 against 0.978 ms (budget 1.149);
+    `PerfGPU.Editor.SceneOpenOver1MMaxFrame` 1.839 against 0.664 ms (budget 1.143); and
+    `PerfGPU.Editor.EditFrameNested100k`, within its budget alone on bc6ee123 (0.2769 ms against 0.2808) but 1.26 times
+    wave 3's build in the same pairs (0.2708 against 0.2153 ms) and over budget in every attempt of step 0's `-L perf`
+    run (0.287-0.299 ms). Each is fixed before the release, not budgeted; `PlayFrameNested100k` (1.43 times wave 3's,
+    within its budget) goes with the last.
+  - Re-baselined by the owner's ruling, not a blocker: `Perf.Physics.Create10kBodies`, 16.50 ms against wave 3's 9.07 in
+    the same pairs (budget 11.99, set on Jolt). Wave 5's box3d inserts every shape into its trees one at a time on the
+    main thread, where Jolt built them in bulk; timed around its calls on this machine, box3d's own creation
+    (`b3CreateBody`, the shapes, the mass) takes 11.4 of the 18.1 ms, more than wave 3's 9.07 for all of it, and
+    Strata's part 6.7 ms (1.6 around those calls, 5.1 gathering the records and building the shapes on jobs). The owner
+    on 2026-10-27: "I don't think physics object creation performance is a big deal. But i care about runtime
+    performance" (`Docs/Plans/Wave7/specs/decisions.md`), so step 0 re-baselined it once at the campaign's median
+    (`Measured` 15.76 ms, `Budget` 23.64; alone on step 0's tip 15.63-15.78) with Jolt's 7.995 ms as its `Target`. The
+    way down stays bulk insertion with a later box3d bump, then Strata's allocations per body; wave 7's
+    `physics-runtime` records it and does not optimize it.
   - Over budget in the loaded campaign only, within budget alone, entry unchanged:
     `Perf.EditorPanels.Streaming10kAssetsRefreshFrame` (0.1933 ms against 0.2205).
   - Unstable in the campaign (a spread above 25% of the median; entries unchanged, to measure alone):
