@@ -123,7 +123,8 @@ Binaries land in `build/<preset>/bin/<Config>/`:
    `project.export` command). The output folder contains everything the game needs. Run it with
    `<Game> --headless --frames 600` (in PowerShell add `| Write-Output` to wait for it) to check that it plays without
    errors, or with `--windowed --seconds 2 --screenshot shot.png` to see it (after two seconds of game time, however
-   many frames that takes).
+   many frames that takes); `--quality low` (to `ultra`) plays a run at another Graphics Quality preset than the
+   project's.
 
 Games can be play-tested without a person: while a game runs in the editor, the `input.key`, `input.mouseButton`,
 `input.mouseMove` and `input.scroll` commands press keys and buttons the way a player would, and `viewport.capture`

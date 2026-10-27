@@ -76,7 +76,8 @@ leaves the terminal alone (closing the terminal or pressing Ctrl+C in it does no
 your user data folder: `Strata/Logs/StrataEditor.log` for the editor and `<Game>/Logs/Game.log` for a game, under
 `%LOCALAPPDATA%` on Windows, `~/.local/share` on Linux and `~/Library/Application Support` on macOS. `--version`,
 `--help` and runs without a window or of a fixed length (`--headless`, `--no-gpu`, `--frames`, `--seconds`, `--commands`)
-print into the terminal, and Ctrl+C ends them in order. PowerShell does not wait for windowed programs: to wait for one
+print into the terminal, and Ctrl+C ends them in order. A game's `--quality low` (or `medium`, `high`, `ultra`) plays one
+run at a Graphics Quality preset without saving anything. PowerShell does not wait for windowed programs: to wait for one
 and get its exit code, pipe its output, e.g. `.\StrataEditor --version | Write-Output`.
 
 ## Make a game

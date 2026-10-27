@@ -136,7 +136,7 @@ appear in `editor.commands` and as tools automatically. The viewport commands ne
 editor started with `--no-gpu` (use `--headless`):
 
 - `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?, fov?, overlays?, debugView?,
-  waitForAssets?, path?}` returns `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, view, waitedFrames,
+  quality?, waitForAssets?, path?}` returns `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, view, waitedFrames,
   temporalFrames, overlays, pendingAssets, texturesBelowWanted, stalePoses, pendingTextGlyphs, previewLighting, screenSpaceTexts,
   hiddenScreenSpaceTexts, ui: {canvases, hiddenCanvases, elements, drawCalls, pendingGlyphs}, debugView, notice?, path?}`. Text is complete in the picture, and so are the view's meshes,
   materials and textures: the capture renders again for up to about five seconds of frames while they load, up to about
@@ -194,8 +194,12 @@ editor started with `--no-gpu` (use `--headless`):
   hidden (`hiddenScreenSpaceTexts` and `ui.hiddenCanvases` count it; `gameUI` shows it, and a click then selects a UI
   element). To see what a player sees, capture with `{"camera": "scene"}` (or while playing).
   `viewport.getSettings` / `viewport.setSettings {previewLighting?, gameUI?, grid?, selectionOutline?, sceneGizmos?,
-  allColliders?, stats?, gizmo?, space?, debugView?, editPose?, ...}` change these view settings (no undo step; saved
-  with the project's editor state). Collider shapes show for the selection only unless `allColliders` is on; far away lights and
+  allColliders?, stats?, gizmo?, space?, debugView?, editPose?, quality?, ...}` change these view settings (no undo step;
+  saved with the project's editor state). `quality` is the Scene view's Graphics Quality: "project" (the default) or a
+  preset of this editor's ("low" to "ultra"); the Game view and the scene's camera draw at the project's (the
+  `Renderer.Quality` section: `project.setSettings {"section": "Renderer.Quality", "value": {"Preset": "Medium"}}`), and a
+  capture at its view's unless `viewport.capture {"quality": "ultra"}` asks for one.
+  Collider shapes show for the selection only unless `allColliders` is on; far away lights and
   cameras show as small icons.
 - **Opening a scene takes frames.** `scene.open` reads the scene and loads everything it uses in the background while the
   editor goes on showing the edited scene; it answers once the opened scene replaced it (`entities`, `seconds`, and the
@@ -491,7 +495,9 @@ game UI), `GPU.ImGui`) and `boundBy`: `"gpu"`
 cheaper to draw), `"cpu"` (the CPU's frame time does: look at `stages`), `"capped"` (vsync or a frame-rate cap sets the
 pace: neither is the limit) or `"unknown"` (no GPU times: `--no-gpu`, or a driver without timestamps). Its `renderStats`
 (`gameRenderStats` for the Game view's frame, null while it is hidden; and every `viewport.capture` result's, for the
-captured frame) says what a frame drew: `gpuDriven` (the GPU culled it
+captured frame) says what a frame drew: `quality` (the Graphics Quality it drew with, as `project.setSettings` takes
+it), `shadowMapSize` (the sun's cascades' texels), `localShadowTileSizes` (each shadowed point and spot light's tile),
+`gpuDriven` (the GPU culled it
 and built its draws: its counts are the GPU's, of a frame 2-3 frames older in `editor.perf` and of the captured frame in
 captures, once `gpuCounts` is true), `feedbackRequests` (its asset requests came from the GPU's visibility feedback of a
 frame 2-3 frames older: the CPU walks the view itself only on first frames, camera cuts and frames after assets loaded),

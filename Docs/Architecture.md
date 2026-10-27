@@ -500,7 +500,10 @@ Explorer reads them (`Editor/PEResources`).
 **Runtime** (`Runtime/`). `GameRuntime` runs an exported game without depending on windowing or rendering: it opens
 the pack, loads the script module, starts scenes and honors their requests. `GameRenderer` draws the running scene
 from its primary camera, or a message frame that names the problem, with a scene renderer that writes no entity-ID
-buffer (`SceneRendererSpecification::EntityIDs`: games do not pick by pixel). See
+buffer (`SceneRendererSpecification::EntityIDs`: games do not pick by pixel), at the project's Graphics Quality: the
+specification's `Quality` (`RendererQualitySettings`, Medium by default) is the renderer's costly knobs, which
+`SceneRenderer::SetQuality` changes while it lives, making again only what a changed knob sizes (the editor's views
+follow the project or the person's preset alike; DeveloperGuide.md, "Quality settings"). See
 [Export and the runtime](#export-and-the-runtime).
 
 **Network** (`Network/`). `TcpSocket`/`TcpListener`/`SocketPoller` (`Socket.h`, implemented in

@@ -431,6 +431,10 @@ project.export {"directory": "<another one>", "prune": true}       # smaller: on
 <dir>/<Game> --windowed --seconds 2 --screenshot shot.png        # look at shot.png: 2 s of game time, whatever the frame rate
 ```
 
+Games draw at the project's Graphics Quality, High unless it chooses (`project.setSettings {"section":
+"Renderer.Quality", "value": {"Preset": "Medium"}}` keeps Strata 0.6.0's costs); `<Game> --quality low` tries a preset for
+one run.
+
 In PowerShell pipe a game's or the editor's output (`... | Write-Output`) to wait for it and get its exit code: they are
 windowed programs on Windows, which PowerShell does not wait for otherwise.
 

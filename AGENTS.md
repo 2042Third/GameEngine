@@ -394,6 +394,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
   unskinned scenes pay nothing: `HasSkinProxies`) and mirrored ones (`c_InstanceMirrored`) with clockwise pipelines and
   flipped tangents; shaders derive normals with `TransformNormal`. Draw list entries carry a fade code: mask the
   instance out; opaque passes test `IsLODFadeDrawn`.
+- Costly knobs are rows of `RendererQualitySettings` and fields of the `Renderer.Quality` section (a row per line, its four
+  presets on it); Medium keeps 0.6.0's costs ([Quality settings](Docs/DeveloperGuide.md#quality-settings)).
 - Shaders writing HDR targets clamp with `SanitizeHDR`; normal maps are read as X and Y with Z reconstructed.
 - Temporal effects jitter only the frame's camera copy and keep history per renderer; single images settle or turn TAA
   off.
