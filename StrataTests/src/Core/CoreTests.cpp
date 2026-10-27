@@ -212,7 +212,8 @@ TEST_SUITE("Core")
 
 	TEST_CASE("CommandLineOptions find what a program does not understand and format its usage")
 	{
-		constexpr CommandLineOption c_Options[] = {
+		// Static: MSVC 14.50 does not capture a local constexpr array by reference (C2326), and a static needs no capture.
+		static constexpr CommandLineOption c_Options[] = {
 			{ "--frames", "<count>", "Stop after this many frames" },
 			{ "--headless", nullptr, "Run without a window" } };
 		auto check = [&](std::vector<std::string> arguments) { return CommandLineOptions::FindUnknownArgument(CommandLine(std::move(arguments)), c_Options); };
