@@ -67,7 +67,9 @@ namespace Strata
 
 	void RegisterGameUIRenderer()
 	{
-		// Registered with the module, after the renderer's stages: its perf log column exists before a log writes its header.
+		// Registered with the module, after the renderer's stages: their perf log columns exist before a log writes its
+		// header. The pass's CPU stage too, which its first frame would otherwise register after the header, without a column.
+		FrameProfiler::Get().RegisterStage("Render.UI");
 		GetUIGPUStage();
 		const bool registered = SceneOverlayRegistry::Register("GameUI", [](const SceneOverlayPassContext& context) -> Scope<ISceneOverlayPass>
 		{

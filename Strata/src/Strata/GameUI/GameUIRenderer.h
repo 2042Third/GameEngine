@@ -148,7 +148,8 @@ namespace Strata
 		GPUPassTimer* m_GPUTimer = nullptr;         // The frame's (SceneOverlayFrame::GPUTimer), set by Prepare for its draws
 	};
 
-	// Registers the pass with SceneOverlayRegistry and its GPU stage, GPU.UI, with the frame profiler (RegisterGameUIModule).
+	// Registers the pass with SceneOverlayRegistry and its stages, Render.UI and GPU.UI, with the frame profiler
+	// (RegisterGameUIModule).
 	void RegisterGameUIRenderer();
 
 }

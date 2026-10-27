@@ -3795,8 +3795,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   passes with one `GPUPassTimer` (constructed where the first pass begins, `Next(stage)` where each next one begins, `End()`
   before the command list closes, on every path that closes it). A new pass goes into the stage it belongs to, or a new stage.
 - Register a module's GPU stages when the module registers (`RegisterRendererModule` registers `RendererGPUStages`), so they
-  exist before a perf log writes its header (`GPU.UI` by `RegisterGameUIModule`); a stage of a program that only some
-  programs have (`GPU.ImGui`) registers where it is first used.
+  exist before a perf log writes its header (`GPU.UI` by `RegisterGameUIModule`), and so are the CPU stages its passes
+  time (`Render.UI`): a stage `ST_PROFILE_STAGE` first registers in a frame after the header gets no column; a stage of a
+  program that only some programs have (`GPU.ImGui`) registers where it is first used.
 - An overlay pass (`ISceneOverlayPass`) times its draws with the renderer's timer, `SceneOverlayFrame::GPUTimer`:
   `Next(its stage)` before them and `Next` back to the stage the timer had after them, as `GameUIRenderer` does.
 - Timed command lists are executed in the frame they were recorded in: the profiler resolves a frame's timestamps once the
