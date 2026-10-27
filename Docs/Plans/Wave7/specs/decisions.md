@@ -69,3 +69,34 @@ its spec's copy in `Docs/Plans/Wave7/specs/`.
 - The Open World's real sun and moon values go to "Later". Accepted.
 - Alpha sharpening in the prepass is dropped (no alpha to coverage without MSAA); coverage-preserving mips stay below
   the cut. Accepted.
+
+## The owner on physics (2026-10-27, verbatim)
+
+"I don't think physics object creation performance is a big deal. But i care about runtime performance. For large
+box3d physics be sure to use box3d's contact recycling. With a contact recycling of 0.7 or something will put more
+entities in sleep and making something more stable"
+
+So: physics metrics of body creation and loading (`Perf.Physics.Create10kBodies`, `Create100kStaticBodies`) are not
+release blockers; record their box3d-port cost in the open items with the measurements, and do not spend wave 7's effort
+on them. Runtime is what counts: the step, Strata's glue around it (`StrataToLibraryStep` ratios), frame hitches while
+playing (`Grow65kMaxFrame`, cell streaming), sleeping and stability. Contact recycling: box3d has it on by default
+(`b3BodyDef::enableContactRecycling`, world distance `B3_CONTACT_RECYCLE_DISTANCE` = 10 x the 5 mm linear slop = 5 cm,
+angle 10 degrees); Strata uses the defaults and exposes nothing. A fifth stream, `physics-runtime`, measures and tunes it
+(the owner's "0.7 or something" is to be found by measurement: box3d's parameter is a distance in meters, so the stream
+sweeps it and reports what each value does to sleeping, stacking stability and step time), exposes it as a project
+physics setting, turns it off for character controllers (box3d: recycling "may lead to ghost collision that should be
+avoided on characters"), and brings the runtime costs above down.
+
+## `physics-runtime` (`physics-runtime.md`)
+
+- Q1: `Perf.Physics.Create10kBodies` is re-baselined once (`PerfStability.py --rebaseline`), citing wave 5's move to box3d
+  and the owner's ruling of 2026-10-27; its budget becomes the box3d median (within the 1.5x rule) and Jolt's value stays
+  as its `Target`. Whoever lands first does it (step 0 if it has not marked the metric a release blocker in a way that
+  needs undoing; otherwise this stream's first commit), and the roadmap's open items say so. Not a release blocker.
+- Q2: the sweep measures every reading of "0.7" and the default is chosen by the spec's stated rule; the report to the
+  owner names each reading's numbers.
+- Q5: `Grow65kMaxFrame` keeps its 16.7 ms target as a goal (creation is out of scope); the stream is judged on the new
+  `Perf.Physics.Grow65k.GrowthMs` (target 4 ms).
+- Q6: `Perf.World.CellUnloadMaxFrame` keeps its 4 ms target as an open item if box3d alone exceeds it; the stream cuts
+  Strata's share to at most 1.25x box3d's own removal time.
+- The stream's AGENTS.md bullet is shortened to its first clause if room runs out.

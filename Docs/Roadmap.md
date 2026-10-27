@@ -573,7 +573,7 @@ same time on the Mac (Apple M2 Max), the Windows reference machine still away. `
 
 **Wave 7 in progress (step 0 landed).** The owner asked for the wave on 2026-10-26 ("### Wave 7" below); its plan and
 reviewed specs are in `Docs/Plans/Wave7/` until it lands. Step 0 ran on the Windows reference machine, back with a
-replaced CPU, and landed on main before the four streams branch from its tip:
+replaced CPU, and landed on main before the wave's streams branch from its tip:
 
 - The GPU suites ran on NVIDIA under the validation layer for the first time since wave 3: the atmosphere's
   environment cube, irradiance and prefiltered maps lost their earlier levels when made in a frame whose multiple
@@ -1148,13 +1148,15 @@ project section with Low, Medium (0.6.0's costs), High (the new default: 4096-te
 presets that every renderer follows and changes while it runs (`viewport.setSettings {quality}`, `viewport.capture
 {quality}`, `StrataRuntime --quality`), with captures that match the views; a look-dev capture harness
 (`Tools/LookDev.py`) with the 0.6.0 baseline; and the perf budgets measured again after the CPU replacement. The four
-streams branch from step 0's tip and merge in the order listed, each with a cut line below which its steps move to
-"Later" if they did not land. What every stream keeps: native resolution only, nothing that needs TAA to look right
-(every screen-space effect has a spatial filter and is judged with FXAA and without anti-aliasing too), nothing that
-costs anything when off, the CPU and GPU-driven paths and the shadow caches in agreement, and Medium at 0.6.0's costs.
-The wave is accepted on the reference machine against the harness's baseline: about one shadow texel per screen pixel
-where receivers are, no shadow noise without anti-aliasing, middle gray where a camera puts it at Exposure 0, at most
-5 ms of GPU time for each 3D sample at 3840x2160 on High, and Medium at 1920x1080 within 1.15 times step 0's.
+rendering streams branch from step 0's tip and merge in the order listed, each with a cut line below which its steps
+move to "Later" if they did not land; a fifth, `physics-runtime`, added on 2026-10-27 after the owner's words on
+physics, touches no renderer file and lands when it is ready. What every rendering stream keeps: native resolution only,
+nothing that needs TAA to look right (every screen-space effect has a spatial filter and is judged with FXAA and without
+anti-aliasing too), nothing that costs anything when off, the CPU and GPU-driven paths and the shadow caches in
+agreement, and Medium at 0.6.0's costs. The wave is accepted on the reference machine against the harness's baseline:
+about one shadow texel per screen pixel where receivers are, no shadow noise without anti-aliasing, middle gray where a
+camera puts it at Exposure 0, at most 5 ms of GPU time for each 3D sample at 3840x2160 on High, and Medium at 1920x1080
+within 1.15 times step 0's.
 
 - **`graphics-options`: graphics options for people, agents and players.** Quality is found where people look for it,
   set by agents with one command and changed by players in the game's options menu.
@@ -1202,6 +1204,22 @@ where receivers are, no shadow noise without anti-aliasing, middle gray where a 
   - Specular anti-aliasing, a 512 prefiltered sky at High, and aerial perspective from the atmosphere.
   - Below the cut: screen-space reflections without TAA, volumetric fog and light shafts, a baked irradiance volume for
     sky visibility and bounce light, bent normals, and alpha cutouts that hold at distance.
+- **`physics-runtime`: physics that runs fast and settles.** The owner on 2026-10-27: "I don't think physics object
+  creation performance is a big deal. But i care about runtime performance. For large box3d physics be sure to use
+  box3d's contact recycling."
+  - Strata's part of a fixed step from 0.60, 0.97 and 0.74 of box3d's own step (10,000 boxes, 30,000 with tracked
+    contacts, 70,000) to at most 0.45, 0.75 and 0.55; the busiest frame of 70,000 falling boxes from 16.05 to at most
+    13.5 ms, 1,000 walking characters from 0.86 to at most 0.70 ms a step, and sleeping bodies at no measurable cost.
+  - Contact recycling at a distance chosen by measurement on piles, towers and the Physics Playground (each reading of
+    the owner's "0.7" answered with numbers); the distance and the sleep threshold in a `Physics.Simulation` project
+    section, changed while the game plays; character controllers' bodies never recycle contacts.
+  - No physics hitch while playing beyond creating bodies: of the frame that brings a world to 65,536 bodies, at most
+    4 ms grow its storage; Strata's part of a cell's unload at most 1.25 times box3d's own removal.
+  - Sleeping bodies, islands, contacts, box3d's stage times and how piles settle in `physics.stats`, `editor.status`,
+    the runtime's perf log, the Streaming panel and the perf lab.
+  - Creating and loading bodies recorded with box3d's share, not optimized (the owner's ruling).
+  - Below the cut: the scene's world matrices from physics, rolling resistance, deferred removal of an unloading cell's
+    static bodies, a per-scene override of the section, and requests to box3d upstream.
 
 ### Later (wave 8 and beyond)
 
