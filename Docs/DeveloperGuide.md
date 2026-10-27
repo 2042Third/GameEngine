@@ -3039,6 +3039,13 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (and logs once) instead of rescaling. The output
   texture is created by the first frame that needs it (no target, or overlays or text to compose), so renderers that
   draw into targets without overlays (games without text) never hold one.
+- `SceneRenderer.cpp` holds the frame (`RenderFrame`) and what its passes share; features live in files of their own:
+  `SceneRendererPost.cpp` the post-processing from the HDR image to the display (`RenderPostHDR`: exposure and bloom;
+  `RenderPostDisplay`: tone mapping and FXAA; their resources, targets and passes), `SceneRendererGlass.cpp`,
+  `SceneRendererScreenReflections.cpp`, `SceneRendererReflectionProbes.cpp`, `SceneRendererAtmosphere.cpp`,
+  `SceneRendererLocalShadows.cpp`, `SceneRendererExtraction.cpp` and `SceneRendererGPUDriven.cpp`. Their members stay
+  declared in `SceneRenderer.h`, grouped under a comment naming their file. A feature's new pass goes into its file
+  and is called from `RenderFrame`, which times it in its GPU stage.
 - Image-based lighting comes from the first active `SkyLightComponent`: an equirectangular HDR map (`EnvironmentMap`) or,
   with `Source = Procedural`, `IBL/ProceduralSky.comp` (zenith, horizon and ground colors as linear radiance, and the
   sun's disk where the directional light the scene is lit by comes from, 45 degrees up without one). Either source only

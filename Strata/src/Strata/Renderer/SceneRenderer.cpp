@@ -42,8 +42,6 @@ namespace Strata
 		constexpr nvrhi::Format c_EntityIDFormat = nvrhi::Format::R32_UINT;
 		// Motion vectors in UV units: 11 significant bits keep a motion to about 2^-11 of its length.
 		constexpr nvrhi::Format c_VelocityFormat = nvrhi::Format::RG16_FLOAT;
-		constexpr nvrhi::Format c_HDRFormat = nvrhi::Format::RGBA16_FLOAT;
-		constexpr nvrhi::Format c_OutputFormat = nvrhi::Format::RGBA8_UNORM;
 		constexpr nvrhi::Format c_EnvironmentFormat = nvrhi::Format::RGBA16_FLOAT;
 		// Ambient occlusion lies in [0, 1]: half precision holds it, where the device can store r16f images (an optional
 		// feature); r32f storage needs none.
@@ -127,19 +125,6 @@ namespace Strata
 			return value <= 0.04045f ? value / 12.92f : std::pow((value + 0.055f) / 1.055f, 2.4f);
 		}
 
-		nvrhi::TextureHandle CreateRenderTarget(nvrhi::IDevice* device, uint32_t width, uint32_t height, nvrhi::Format format, const std::string& name, bool depth)
-		{
-			nvrhi::TextureDesc desc;
-			desc.width = width;
-			desc.height = height;
-			desc.format = format;
-			desc.debugName = name;
-			desc.isRenderTarget = true;
-			desc.initialState = depth ? nvrhi::ResourceStates::DepthWrite : nvrhi::ResourceStates::RenderTarget;
-			desc.keepInitialState = true;
-			return device->createTexture(desc);
-		}
-
 		template<typename Component>
 		bool HasActiveComponent(Scene& scene)
 		{
@@ -192,6 +177,28 @@ namespace Strata
 		camera.VerticalFOV = camera.Orthographic ? component.OrthographicSize : glm::radians(component.PerspectiveFOV);
 		camera.ClearColor = component.ClearColor;
 		return camera;
+	}
+
+	nvrhi::TextureHandle SceneRenderer::CreateRenderTarget(nvrhi::IDevice* device, uint32_t width, uint32_t height, nvrhi::Format format, const std::string& name, bool depth)
+	{
+		nvrhi::TextureDesc desc;
+		desc.width = width;
+		desc.height = height;
+		desc.format = format;
+		desc.debugName = name;
+		desc.isRenderTarget = true;
+		desc.initialState = depth ? nvrhi::ResourceStates::DepthWrite : nvrhi::ResourceStates::RenderTarget;
+		desc.keepInitialState = true;
+		return device->createTexture(desc);
+	}
+
+	nvrhi::ComputePipelineHandle SceneRenderer::CreateComputePipeline(const char* shader, nvrhi::IBindingLayout* layout)
+	{
+		nvrhi::ComputePipelineDesc desc;
+		desc.CS = Renderer::GetShaderLibrary().Get(shader);
+		desc.bindingLayouts = { layout };
+		ST_CORE_VERIFY(desc.CS, "SceneRenderer: shader {} is missing", shader);
+		return m_Device->createComputePipeline(desc);
 	}
 
 	SceneRenderer::SceneRenderer(const SceneRendererSpecification& specification)
@@ -316,18 +323,6 @@ namespace Strata
 		shadowPushSet.bindings = { nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t)) };
 		m_ShadowPushBindingSet = m_Device->createBindingSet(shadowPushSet, m_ShadowPushLayout);
 
-		nvrhi::BindingLayoutDesc tonemapLayout;
-		tonemapLayout.visibility = nvrhi::ShaderType::Pixel;
-		tonemapLayout.bindings = {
-			nvrhi::BindingLayoutItem::Texture_SRV(0),
-			nvrhi::BindingLayoutItem::Sampler(0),
-			nvrhi::BindingLayoutItem::Texture_SRV(1),
-			nvrhi::BindingLayoutItem::Sampler(1),
-			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
-			nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::TonemapParameters))
-		};
-		m_TonemapBindingLayout = m_Device->createBindingLayout(tonemapLayout);
-
 		// Material samplers, indexed by TextureFilter * 3 + TextureWrap.
 		for (TextureFilter filter : { TextureFilter::Linear, TextureFilter::Nearest })
 		{
@@ -433,19 +428,11 @@ namespace Strata
 		};
 		m_AOBindingLayout = m_Device->createBindingLayout(aoLayout);
 
-		auto createComputePipeline = [&](const char* name, nvrhi::IBindingLayout* layout)
-		{
-			nvrhi::ComputePipelineDesc desc;
-			desc.CS = shaders.Get(name);
-			desc.bindingLayouts = { layout };
-			ST_CORE_VERIFY(desc.CS, "SceneRenderer: shader {} is missing", name);
-			return m_Device->createComputePipeline(desc);
-		};
 		const bool halfAO = m_Specification.ExtendedStorageFormats && Renderer::GetGraphicsDevice().GetInfo().SupportsExtendedStorageFormats;
 		m_AOFormat = halfAO ? c_AOFormat : c_AOFallbackFormat;
-		m_GTAOPipeline = createComputePipeline(halfAO ? "Effects/GTAOHalf.comp" : "Effects/GTAO.comp", m_AOBindingLayout);
-		m_AOBlurPipeline = createComputePipeline(halfAO ? "Effects/AOBlurHalf.comp" : "Effects/AOBlur.comp", m_AOBindingLayout);
-		m_ClusterPipeline = createComputePipeline("Scene/LightClusters.comp", m_ClusterBindingLayout);
+		m_GTAOPipeline = CreateComputePipeline(halfAO ? "Effects/GTAOHalf.comp" : "Effects/GTAO.comp", m_AOBindingLayout);
+		m_AOBlurPipeline = CreateComputePipeline(halfAO ? "Effects/AOBlurHalf.comp" : "Effects/AOBlur.comp", m_AOBindingLayout);
+		m_ClusterPipeline = CreateComputePipeline("Scene/LightClusters.comp", m_ClusterBindingLayout);
 
 		// The shadow cascades, fitted on the GPU (both paths), and what the fit reads.
 		m_CascadeBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
@@ -476,7 +463,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1)
 		};
 		m_CascadeFitBindingLayout = m_Device->createBindingLayout(fitLayout);
-		m_CascadeFitPipeline = createComputePipeline("Scene/CascadeFit.comp", m_CascadeFitBindingLayout);
+		m_CascadeFitPipeline = CreateComputePipeline("Scene/CascadeFit.comp", m_CascadeFitBindingLayout);
 		nvrhi::BindingSetDesc fitSet;
 		fitSet.bindings = {
 			nvrhi::BindingSetItem::ConstantBuffer(0, m_CascadeFitConstantBuffer),
@@ -488,49 +475,7 @@ namespace Strata
 			"SceneRenderer: failed to create the shadow cascades' resources");
 		CreateCullResources();
 		CreateLightCullResources();
-
-		nvrhi::BindingLayoutDesc exposureLayout;
-		exposureLayout.visibility = nvrhi::ShaderType::Compute;
-		exposureLayout.bindings = {
-			nvrhi::BindingLayoutItem::Texture_SRV(0),
-			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0),
-			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1),
-			nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::ExposureParameters))
-		};
-		m_ExposureBindingLayout = m_Device->createBindingLayout(exposureLayout);
-		m_HistogramPipeline = createComputePipeline("PostProcess/Histogram.comp", m_ExposureBindingLayout);
-		m_ExposurePipeline = createComputePipeline("PostProcess/Exposure.comp", m_ExposureBindingLayout);
-		m_HistogramBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
-			.setByteSize(RenderData::c_HistogramBins * sizeof(uint32_t))
-			.setStructStride(sizeof(uint32_t))
-			.setCanHaveUAVs(true)
-			.setInitialState(nvrhi::ResourceStates::UnorderedAccess)
-			.setKeepInitialState(true)
-			.setDebugName(m_Specification.DebugName + ".LuminanceHistogram"));
-		m_ExposureBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
-			.setByteSize(4 * sizeof(float))
-			.setStructStride(sizeof(float))
-			.setCanHaveUAVs(true)
-			.setInitialState(nvrhi::ResourceStates::ShaderResource)
-			.setKeepInitialState(true)
-			.setDebugName(m_Specification.DebugName + ".Exposure"));
-		// The automatic exposure's results come back to choose the pre-exposure: two floats (Include/Exposure.glsl).
-		for (ExposureReadback& entry : m_ExposureReadbacks)
-			entry.Readback = CreateScope<BufferReadback>(m_Device, 2 * sizeof(float), m_Specification.DebugName + ".ExposureReadback");
-		const bool exposureReadbacks = std::all_of(m_ExposureReadbacks.begin(), m_ExposureReadbacks.end(),
-			[](const ExposureReadback& entry) { return entry.Readback->IsValid(); });
-
-		nvrhi::BindingLayoutDesc bloomLayout;
-		bloomLayout.visibility = nvrhi::ShaderType::Compute;
-		bloomLayout.bindings = {
-			nvrhi::BindingLayoutItem::Texture_SRV(0),
-			nvrhi::BindingLayoutItem::Sampler(0),
-			nvrhi::BindingLayoutItem::Texture_UAV(0),
-			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
-			nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::BloomParameters))
-		};
-		m_BloomBindingLayout = m_Device->createBindingLayout(bloomLayout);
-		m_BloomPipeline = createComputePipeline("PostProcess/Bloom.comp", m_BloomBindingLayout);
+		CreatePostResources();
 
 		// Temporal anti-aliasing's resolve: the frame constants and the linear clamp sampler at the scene set's slots, its images
 		// above them (PostProcess/TAA.comp).
@@ -548,19 +493,12 @@ namespace Strata
 			nvrhi::BindingLayoutItem::PushConstants(1, sizeof(RenderData::TemporalParameters))
 		};
 		m_TemporalBindingLayout = m_Device->createBindingLayout(temporalLayout);
-		m_TemporalPipeline = createComputePipeline("PostProcess/TAA.comp", m_TemporalBindingLayout);
+		m_TemporalPipeline = CreateComputePipeline("PostProcess/TAA.comp", m_TemporalBindingLayout);
 
-		nvrhi::BindingLayoutDesc fxaaLayout;
-		fxaaLayout.visibility = nvrhi::ShaderType::Pixel;
-		fxaaLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Sampler(0) };
-		m_FXAABindingLayout = m_Device->createBindingLayout(fxaaLayout);
-
-		ST_CORE_VERIFY(m_InputLayout && m_SceneBindingLayout && m_TonemapBindingLayout && m_FrameConstantBuffer && m_CommandList && m_ShadowPushBindingSet
+		ST_CORE_VERIFY(m_InputLayout && m_SceneBindingLayout && m_FrameConstantBuffer && m_CommandList && m_ShadowPushBindingSet
 			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_DummyLocalShadowAtlas
 			&& m_LocalShadowBuffer && m_ReflectionProbeBuffer && m_ClusterBuffer
-			&& m_ClusterBindingLayout && m_ClusterPipeline && m_AOBindingLayout && m_GTAOPipeline && m_AOBlurPipeline && m_ExposureBindingLayout
-			&& m_HistogramPipeline && m_ExposurePipeline && m_HistogramBuffer && m_ExposureBuffer && exposureReadbacks && m_BloomBindingLayout && m_BloomPipeline
-			&& m_FXAABindingLayout
+			&& m_ClusterBindingLayout && m_ClusterPipeline && m_AOBindingLayout && m_GTAOPipeline && m_AOBlurPipeline
 			&& m_TemporalBindingLayout && m_TemporalPipeline, "SceneRenderer: failed to create GPU resources");
 		CreateIBLResources();
 		CreateOverlayResources();
@@ -1359,61 +1297,6 @@ namespace Strata
 		commandList->dispatch(groupsX, groupsY, 1);
 	}
 
-	void SceneRenderer::UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* bindingSet)
-	{
-		const auto now = std::chrono::steady_clock::now();
-		// Rendering pauses (breakpoints, minimized windows) must not turn into one huge adaptation step.
-		const float deltaTime = m_LastExposureTime ? std::clamp(std::chrono::duration<float>(now - *m_LastExposureTime).count(), 0.0f, 0.25f) : 0.0f;
-		m_LastExposureTime = now;
-		const float compensation = std::exp2(std::clamp(settings.Exposure, -20.0f, 20.0f));
-
-		if (!settings.AutoExposure)
-		{
-			const float values[4] = { 0.0f, compensation, 0.0f, 0.0f };
-			commandList->writeBuffer(m_ExposureBuffer, values, sizeof(values));
-			m_ResetExposure = true; // Automatic exposure starts from the scene's brightness when turned on
-			return;
-		}
-
-		RenderData::ExposureParameters parameters = {};
-		parameters.MinLog2 = std::clamp(settings.AutoExposureMinEV, RenderData::c_HistogramMinLog2, RenderData::c_HistogramMaxLog2);
-		parameters.MaxLog2 = std::clamp(settings.AutoExposureMaxEV, parameters.MinLog2, RenderData::c_HistogramMaxLog2);
-		parameters.AdaptFactor = m_ResetExposure || settings.AutoExposureSpeed <= 0.0f ? 1.0f : 1.0f - std::exp(-deltaTime * settings.AutoExposureSpeed);
-		parameters.Compensation = compensation;
-		// The darkest and brightest 10% of the pixels (deep shadows, light sources) do not move the exposure.
-		parameters.LowPercentile = 0.1f;
-		parameters.HighPercentile = 0.9f;
-		parameters.InversePreExposure = 1.0f / m_PreExposure;
-		m_ResetExposure = false;
-
-		commandList->clearBufferUInt(m_HistogramBuffer, 0);
-		nvrhi::ComputeState state;
-		state.pipeline = m_HistogramPipeline;
-		state.bindings = { bindingSet };
-		commandList->setComputeState(state);
-		commandList->setPushConstants(&parameters, sizeof(parameters));
-		commandList->dispatch((m_ViewportSize.x + 15) / 16, (m_ViewportSize.y + 15) / 16, 1);
-
-		// NVRHI places barriers only when the binding sets change: the histogram must be complete before it is read.
-		commandList->setBufferState(m_HistogramBuffer, nvrhi::ResourceStates::UnorderedAccess);
-		commandList->commitBarriers();
-		state.pipeline = m_ExposurePipeline;
-		commandList->setComputeState(state);
-		commandList->setPushConstants(&parameters, sizeof(parameters));
-		commandList->dispatch(1, 1, 1);
-
-		// The metered exposure comes back frames later to choose the pre-exposure (ChoosePreExposure). A readback whose earlier
-		// copy is still under way is left to finish: the frame's is skipped.
-		ExposureReadback& readback = m_ExposureReadbacks[m_ExposureReadbackIndex];
-		if (readback.Readback->IsPending() && !readback.Readback->IsReady())
-			return;
-		readback.Readback->Record(commandList, m_ExposureBuffer, 0, 2 * sizeof(float));
-		readback.Render = m_RenderCount + 1;
-		readback.Epoch = m_PreExposureEpoch;
-		readback.PreExposure = m_PreExposure;
-		m_ExposureReadbackRecorded = true;
-	}
-
 	void SceneRenderer::ReserveFrameConstantVersions()
 	{
 		ST_PROFILE_FUNCTION();
@@ -1468,15 +1351,6 @@ namespace Strata
 		m_SubmittedFrameConstantWrites -= oldest.Writes;
 		m_FreeFrameConstantQueries.push_back(std::move(oldest.Done));
 		m_SubmittedFrameConstants.pop_front();
-	}
-
-	void SceneRenderer::SubmitExposureReadback()
-	{
-		if (!m_ExposureReadbackRecorded)
-			return;
-		m_ExposureReadbacks[m_ExposureReadbackIndex].Readback->Submit();
-		m_ExposureReadbackIndex = (m_ExposureReadbackIndex + 1) % c_GPURecordCount;
-		m_ExposureReadbackRecorded = false;
 	}
 
 	float SceneRenderer::GetPreExposureFor(float stops)
@@ -1545,32 +1419,6 @@ namespace Strata
 		{
 			m_PreExposureSettled = true;
 		}
-	}
-
-	void SceneRenderer::RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet)
-	{
-		RenderData::BloomParameters parameters = {};
-		parameters.Threshold = std::max(settings.BloomThreshold, 0.0f);
-		parameters.Knee = parameters.Threshold * 0.5f;
-		parameters.InversePreExposure = 1.0f / m_PreExposure;
-
-		const nvrhi::TextureDesc& desc = m_BloomTexture->getDesc();
-		auto dispatch = [&](nvrhi::IBindingSet* bindingSet, uint32_t mode, uint32_t level)
-		{
-			nvrhi::ComputeState state;
-			state.pipeline = m_BloomPipeline;
-			state.bindings = { bindingSet };
-			commandList->setComputeState(state);
-			parameters.Mode = mode;
-			commandList->setPushConstants(&parameters, sizeof(parameters));
-			commandList->dispatch(DispatchGroups(std::max(1u, desc.width >> level)), DispatchGroups(std::max(1u, desc.height >> level)), 1);
-		};
-
-		dispatch(prefilterSet, RenderData::c_BloomPrefilter, 0);
-		for (uint32_t level = 1; level < m_BloomLevels; level++)
-			dispatch(m_BloomDownsampleSets[level], RenderData::c_BloomDownsample, level);
-		for (uint32_t level = m_BloomLevels - 1; level-- > 0;)
-			dispatch(m_BloomUpsampleSets[level], RenderData::c_BloomUpsample, level);
 	}
 
 	bool SceneRenderer::EnsureTemporalResources()
@@ -1971,19 +1819,7 @@ namespace Strata
 		release(m_ForwardFramebuffer);
 		release(m_GlassFramebuffer);
 		release(m_OutputFramebuffer);
-		release(m_ExposureBindingSet);
-		release(m_BloomTexture);
-		m_BloomLevels = 0;
-		for (std::vector<nvrhi::BindingSetHandle>* sets : { &m_BloomDownsampleSets, &m_BloomUpsampleSets })
-		{
-			for (nvrhi::BindingSetHandle& set : *sets)
-				release(set);
-			sets->clear();
-		}
-		release(m_TonemapBindingSet);
-		release(m_LDRTexture);
-		release(m_LDRFramebuffer);
-		release(m_FXAABindingSet);
+		ReleasePostTargets(released);
 		release(m_SceneBindingSet); // References the ambient occlusion texture
 		release(m_ShadowBindingSet);
 		release(m_OverlayFramebuffer);
@@ -2062,8 +1898,6 @@ namespace Strata
 		if (m_Specification.EntityIDs)
 			m_EntityIDTexture = CreateRenderTarget(m_Device, width, height, c_EntityIDFormat, name + ".EntityIDs", false);
 		m_HDRTexture = CreateRenderTarget(m_Device, width, height, c_HDRFormat, name + ".HDR", false);
-		// Tone mapping writes here when FXAA follows.
-		m_LDRTexture = CreateRenderTarget(m_Device, width, height, c_OutputFormat, name + ".LDR", false);
 		auto createStorage = [&](const std::string& debugName)
 		{
 			nvrhi::TextureDesc desc;
@@ -2078,8 +1912,7 @@ namespace Strata
 		};
 		m_AORawTexture = createStorage(name + ".AORaw");
 		m_AOTexture = createStorage(name + ".AO");
-		if (!m_DepthTexture || !m_NormalTexture || (m_Specification.EntityIDs && !m_EntityIDTexture) || !m_HDRTexture || !m_LDRTexture || !m_AORawTexture
-			|| !m_AOTexture)
+		if (!m_DepthTexture || !m_NormalTexture || (m_Specification.EntityIDs && !m_EntityIDTexture) || !m_HDRTexture || !m_AORawTexture || !m_AOTexture)
 			return fail("render targets");
 
 		auto createAOSet = [&](nvrhi::ITexture* input, nvrhi::ITexture* output)
@@ -2114,83 +1947,13 @@ namespace Strata
 			glassDesc.addColorAttachment(m_EntityIDTexture);
 		glassDesc.setDepthAttachment(m_DepthTexture);
 		m_GlassFramebuffer = m_Device->createFramebuffer(glassDesc);
-		m_LDRFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(m_LDRTexture));
-		if (!m_GTAOBindingSet || !m_AOBlurBindingSet || !m_PrepassFramebuffer || !m_ForwardFramebuffer || !m_GlassFramebuffer || !m_LDRFramebuffer)
+		if (!m_GTAOBindingSet || !m_AOBlurBindingSet || !m_PrepassFramebuffer || !m_ForwardFramebuffer || !m_GlassFramebuffer)
 			return fail("framebuffers");
 		if (!CreateDepthPyramid())
 			return fail("depth pyramid");
-
-		// Automatic exposure meters the HDR image.
-		nvrhi::BindingSetDesc exposureSet;
-		exposureSet.bindings = {
-			nvrhi::BindingSetItem::Texture_SRV(0, m_HDRTexture),
-			nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_HistogramBuffer),
-			nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_ExposureBuffer),
-			nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::ExposureParameters))
-		};
-		m_ExposureBindingSet = m_Device->createBindingSet(exposureSet, m_ExposureBindingLayout);
-
-		// Bloom chain at half resolution, down to levels of a few pixels.
-		const uint32_t bloomWidth = std::max(1u, (width + 1) / 2);
-		const uint32_t bloomHeight = std::max(1u, (height + 1) / 2);
-		uint32_t bloomLevels = 1;
-		while (bloomLevels < RenderData::c_MaxBloomLevels && (std::min(bloomWidth, bloomHeight) >> bloomLevels) >= 4)
-			bloomLevels++;
-		nvrhi::TextureDesc bloomDesc;
-		bloomDesc.width = bloomWidth;
-		bloomDesc.height = bloomHeight;
-		bloomDesc.mipLevels = bloomLevels;
-		bloomDesc.format = c_HDRFormat;
-		bloomDesc.isUAV = true;
-		bloomDesc.debugName = name + ".Bloom";
-		bloomDesc.initialState = nvrhi::ResourceStates::ShaderResource;
-		bloomDesc.keepInitialState = true;
-		m_BloomTexture = m_Device->createTexture(bloomDesc);
-		if (!m_ExposureBindingSet || !m_BloomTexture)
-			return fail("post-processing targets");
-		m_BloomLevels = bloomLevels;
-
-		auto createBloomSet = [&](nvrhi::ITexture* source, uint32_t sourceLevel, uint32_t destinationLevel)
-		{
-			nvrhi::BindingSetDesc desc;
-			desc.bindings = {
-				nvrhi::BindingSetItem::Texture_SRV(0, source, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(sourceLevel, 1, 0, 1)),
-				nvrhi::BindingSetItem::Sampler(0, m_LinearClampSampler),
-				nvrhi::BindingSetItem::Texture_UAV(0, m_BloomTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(destinationLevel, 1, 0, 1)),
-				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_ExposureBuffer),
-				nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::BloomParameters))
-			};
-			return m_Device->createBindingSet(desc, m_BloomBindingLayout);
-		};
-		m_BloomDownsampleSets.push_back(createBloomSet(m_HDRTexture, 0, 0));
-		for (uint32_t level = 1; level < m_BloomLevels; level++)
-			m_BloomDownsampleSets.push_back(createBloomSet(m_BloomTexture, level - 1, level));
-		for (uint32_t level = 0; level + 1 < m_BloomLevels; level++)
-			m_BloomUpsampleSets.push_back(createBloomSet(m_BloomTexture, level + 1, level));
-		for (const std::vector<nvrhi::BindingSetHandle>* sets : { &m_BloomDownsampleSets, &m_BloomUpsampleSets })
-		{
-			for (const nvrhi::BindingSetHandle& set : *sets)
-			{
-				if (!set)
-					return fail("bloom bindings");
-			}
-		}
-
-		nvrhi::BindingSetDesc tonemapSet;
-		tonemapSet.bindings = {
-			nvrhi::BindingSetItem::Texture_SRV(0, m_HDRTexture),
-			nvrhi::BindingSetItem::Sampler(0, m_PointClampSampler),
-			nvrhi::BindingSetItem::Texture_SRV(1, m_BloomTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
-			nvrhi::BindingSetItem::Sampler(1, m_LinearClampSampler),
-			nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_ExposureBuffer),
-			nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::TonemapParameters))
-		};
-		m_TonemapBindingSet = m_Device->createBindingSet(tonemapSet, m_TonemapBindingLayout);
-		nvrhi::BindingSetDesc fxaaSet;
-		fxaaSet.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, m_LDRTexture), nvrhi::BindingSetItem::Sampler(0, m_LinearClampSampler) };
-		m_FXAABindingSet = m_Device->createBindingSet(fxaaSet, m_FXAABindingLayout);
-		if (!m_TonemapBindingSet || !m_FXAABindingSet)
-			return fail("post-processing bindings");
+		std::string failure;
+		if (!CreatePostTargets(width, height, failure))
+			return fail(failure.c_str());
 		return true;
 	}
 
@@ -3218,30 +2981,7 @@ namespace Strata
 		// Post-processing reads the resolved image with temporal anti-aliasing (the history's newest texture).
 		const bool resolved = m_TemporalResolved;
 		gpuTimer.Next(gpuStages.Post);
-		commandList->beginMarker("Exposure");
-		UpdateExposure(commandList, postProcess, resolved ? m_TemporalExposureSets[m_HistoryIndex].Get() : m_ExposureBindingSet.Get());
-		commandList->endMarker();
-		const bool bloom = postProcess.Bloom && postProcess.BloomIntensity > 0.0f;
-		if (bloom)
-		{
-			commandList->beginMarker("Bloom");
-			RenderBloom(commandList, postProcess, resolved ? m_TemporalBloomSets[m_HistoryIndex].Get() : m_BloomDownsampleSets[0].Get());
-			commandList->endMarker();
-		}
-
-		// Tone mapping into the display target, or into the intermediate target FXAA reads.
-		RenderData::TonemapParameters tonemap = {};
-		tonemap.BloomIntensity = bloom ? std::min(postProcess.BloomIntensity, 1.0f) : 0.0f;
-		tonemap.BloomScale = 1.0f / static_cast<float>(m_BloomLevels);
-		tonemap.Saturation = std::max(postProcess.Saturation, 0.0f);
-		tonemap.Vignette = std::clamp(postProcess.Vignette, 0.0f, 1.0f);
-		tonemap.Contrast = std::clamp(postProcess.Contrast, 0.1f, 4.0f);
-		tonemap.Operator = static_cast<int32_t>(postProcess.Tonemapper);
-		tonemap.BloomAdditive = postProcess.BloomThreshold > 0.0f ? 1u : 0u;
-		tonemap.InversePreExposure = 1.0f / m_PreExposure;
-		// Only the TAA's image is sharpened (it softens texture detail), and only on the way to the display: frames with FXAA, or
-		// without TAA, skip the branch and stay as they were.
-		tonemap.Sharpening = resolved ? temporalSettings.Sharpening : 0.0f;
+		const bool bloom = RenderPostHDR(commandList, postProcess, resolved);
 
 		TextRenderStats textStats;
 		m_FontAtlases->BeginFrame(TextRenderer::c_FrameRasterBudget);
@@ -3276,33 +3016,7 @@ namespace Strata
 			return false;
 		}
 		nvrhi::IFramebuffer* output = target && !overlays ? target : m_OutputFramebuffer.Get();
-		auto drawFullscreen = [&](nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* bindingSet, const void* pushConstants,
-			size_t pushConstantSize)
-		{
-			nvrhi::GraphicsState state;
-			state.pipeline = pipeline;
-			state.framebuffer = framebuffer;
-			state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y)));
-			state.bindings = { bindingSet };
-			commandList->setGraphicsState(state);
-			if (pushConstants)
-				commandList->setPushConstants(pushConstants, pushConstantSize);
-			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
-		};
-
-		// FXAA unless the image was resolved temporally.
-		const bool fxaa = postProcess.AntiAliasing && !resolved;
-		nvrhi::IFramebuffer* tonemapTarget = fxaa ? m_LDRFramebuffer.Get() : output;
-		commandList->beginMarker("Tonemap");
-		drawFullscreen(GetFullscreenPipeline(m_TonemapPipelines, m_TonemapPixelShader, m_TonemapBindingLayout, tonemapTarget->getFramebufferInfo()),
-			tonemapTarget, resolved ? m_TemporalTonemapSets[m_HistoryIndex].Get() : m_TonemapBindingSet.Get(), &tonemap, sizeof(tonemap));
-		commandList->endMarker();
-		if (fxaa)
-		{
-			commandList->beginMarker("FXAA");
-			drawFullscreen(GetFullscreenPipeline(m_FXAAPipelines, m_FXAAPixelShader, m_FXAABindingLayout, output->getFramebufferInfo()), output, m_FXAABindingSet, nullptr, 0);
-			commandList->endMarker();
-		}
+		RenderPostDisplay(commandList, postProcess, temporalSettings, resolved, bloom, output);
 
 		if (overlays)
 		{
@@ -3326,7 +3040,8 @@ namespace Strata
 			if (target)
 			{
 				commandList->beginMarker("Copy");
-				drawFullscreen(GetFullscreenPipeline(m_CopyPipelines, m_CopyPixelShader, m_FXAABindingLayout, target->getFramebufferInfo()), target, m_CopyBindingSet, nullptr, 0);
+				DrawFullscreen(commandList, GetFullscreenPipeline(m_CopyPipelines, m_CopyPixelShader, m_FXAABindingLayout, target->getFramebufferInfo()), target,
+					m_CopyBindingSet, nullptr, 0);
 				commandList->endMarker();
 			}
 		}

@@ -1188,8 +1188,29 @@ namespace Strata
 		// Executes the frame's command list, after which its FrameConstants versions stay in use until the GPU finishes it.
 		void ExecuteFrame(nvrhi::ICommandList* commandList);
 		void ReleaseOldestFrameConstants();
+		// Post-processing (SceneRendererPost.cpp). The pipelines and layouts of the exposure, bloom, tone mapping and FXAA,
+		// verified (CreateResources).
+		void CreatePostResources();
+		// The LDR target and the post passes' bindings and bloom chain for the viewport; false with what failed.
+		bool CreatePostTargets(uint32_t width, uint32_t height, std::string& outFailure);
+		void ReleasePostTargets(std::vector<nvrhi::ResourceHandle>& released);
+		// The exposure and the bloom of the HDR image (the resolved one when `resolved`); returns whether bloom ran.
+		bool RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, bool resolved);
+		// Tone mapping into `output`, or into the LDR target and FXAA from it into `output`.
+		void RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
+			bool resolved, bool bloom, nvrhi::IFramebuffer* output);
 		// The bloom chain of the image `prefilterSet` reads (the first downsample: the HDR target's or the resolved image's).
 		void RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet);
+		// A fullscreen triangle with `pipeline` into `framebuffer` (post passes, the overlays' copy).
+		void DrawFullscreen(nvrhi::ICommandList* commandList, nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* bindingSet,
+			const void* pushConstants, size_t pushConstantSize);
+		// A compute pipeline of the shader library's `shader` with one binding layout (verified: the shader exists).
+		nvrhi::ComputePipelineHandle CreateComputePipeline(const char* shader, nvrhi::IBindingLayout* layout);
+		// A render target of the viewport's kind (depth or color, in its render state).
+		static nvrhi::TextureHandle CreateRenderTarget(nvrhi::IDevice* device, uint32_t width, uint32_t height, nvrhi::Format format, const std::string& name, bool depth);
+		// The formats of the HDR image (and of the bloom chain and the temporal history) and of the display images.
+		static constexpr nvrhi::Format c_HDRFormat = nvrhi::Format::RGBA16_FLOAT;
+		static constexpr nvrhi::Format c_OutputFormat = nvrhi::Format::RGBA8_UNORM;
 		// The scene's first active post-processing settings, or the defaults.
 		static PostProcessComponent GetPostProcessSettings(Scene& scene);
 		nvrhi::IGraphicsPipeline* GetScenePipeline(const PipelineKey& key);
@@ -1583,9 +1604,7 @@ namespace Strata
 		nvrhi::BufferHandle m_ClusterBuffer;     // Per cluster: light count, then light indices (Include/Clusters.glsl)
 
 		nvrhi::BindingLayoutHandle m_SceneBindingLayout;
-		nvrhi::BindingLayoutHandle m_TonemapBindingLayout;
 		nvrhi::BindingSetHandle m_SceneBindingSet;
-		nvrhi::BindingSetHandle m_TonemapBindingSet;
 		std::vector<nvrhi::SamplerHandle> m_MaterialSamplers;
 		nvrhi::SamplerHandle m_PointClampSampler;
 
@@ -1639,13 +1658,28 @@ namespace Strata
 		nvrhi::FramebufferHandle m_GlassFramebuffer; // The HDR target, the entity ids (when the renderer has them) and the depth
 		nvrhi::FramebufferHandle m_OutputFramebuffer;
 
-		// Post-processing
+		// Post-processing (SceneRendererPost.cpp; the temporal history's own post sets below belong to the TAA's resources)
+		nvrhi::BindingLayoutHandle m_TonemapBindingLayout;
+		nvrhi::BindingSetHandle m_TonemapBindingSet;
+		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_TonemapPipelines;
+		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_FXAAPipelines;
 		nvrhi::BindingLayoutHandle m_ExposureBindingLayout;
 		nvrhi::BindingSetHandle m_ExposureBindingSet;
 		nvrhi::ComputePipelineHandle m_HistogramPipeline;
 		nvrhi::ComputePipelineHandle m_ExposurePipeline;
 		nvrhi::BufferHandle m_HistogramBuffer;
 		nvrhi::BufferHandle m_ExposureBuffer; // See Include/Exposure.glsl
+		nvrhi::BindingLayoutHandle m_BloomBindingLayout;
+		nvrhi::ComputePipelineHandle m_BloomPipeline;
+		nvrhi::TextureHandle m_BloomTexture;
+		uint32_t m_BloomLevels = 0;
+		std::vector<nvrhi::BindingSetHandle> m_BloomDownsampleSets; // [0]: scene color -> level 0, [n]: level n-1 -> n
+		std::vector<nvrhi::BindingSetHandle> m_BloomUpsampleSets;   // [n]: level n+1 -> n
+		nvrhi::ShaderHandle m_FXAAPixelShader;
+		nvrhi::BindingLayoutHandle m_FXAABindingLayout;
+		nvrhi::BindingSetHandle m_FXAABindingSet;
+		nvrhi::TextureHandle m_LDRTexture; // Tone-mapped image before anti-aliasing
+		nvrhi::FramebufferHandle m_LDRFramebuffer;
 		bool m_ResetExposure = true;
 		// The pre-exposure (SceneRendererStats::PreExposure): the value frames are drawn with; whether it settled; a reset asked
 		// for; the readbacks of the exposure buffer after the automatic exposure of a frame (its RenderCount + 1, the epoch and
@@ -1692,21 +1726,8 @@ namespace Strata
 		std::array<nvrhi::BindingSetHandle, 2> m_TemporalBloomSets;
 		std::array<nvrhi::BindingSetHandle, 2> m_TemporalTonemapSets;
 		std::optional<std::chrono::steady_clock::time_point> m_LastExposureTime;
-		nvrhi::BindingLayoutHandle m_BloomBindingLayout;
-		nvrhi::ComputePipelineHandle m_BloomPipeline;
-		nvrhi::TextureHandle m_BloomTexture;
-		uint32_t m_BloomLevels = 0;
-		std::vector<nvrhi::BindingSetHandle> m_BloomDownsampleSets; // [0]: scene color -> level 0, [n]: level n-1 -> n
-		std::vector<nvrhi::BindingSetHandle> m_BloomUpsampleSets;   // [n]: level n+1 -> n
-		nvrhi::ShaderHandle m_FXAAPixelShader;
-		nvrhi::BindingLayoutHandle m_FXAABindingLayout;
-		nvrhi::BindingSetHandle m_FXAABindingSet;
-		nvrhi::TextureHandle m_LDRTexture; // Tone-mapped image before anti-aliasing
-		nvrhi::FramebufferHandle m_LDRFramebuffer;
 
 		std::vector<std::pair<PipelineKey, nvrhi::GraphicsPipelineHandle>> m_ScenePipelines;
-		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_TonemapPipelines;
-		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_FXAAPipelines;
 
 		// Overlays (SceneRenderOptions)
 		nvrhi::ShaderHandle m_GridPixelShader;
