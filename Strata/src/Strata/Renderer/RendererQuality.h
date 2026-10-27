@@ -49,7 +49,7 @@ namespace Strata
 		// MaxShadowedLocalLights most relevant of them in view (at most RenderData::c_MaxShadowedLocalLights; ranked as the
 		// light clusters rank lights) get tiles of it, a spot light one, a point light six (the faces of a cube), of 128 to
 		// LocalShadowMaxTile texels following how large the light's range looks on screen; when they do not fit, the less
-		// relevant lights' tiles get smaller first (SceneRendererStats::LocalShadowLights).
+		// relevant lights' tiles get smaller first (SceneRendererStats::LocalShadowLights, LocalShadowTileSizes).
 		uint32_t LocalShadowAtlasSize = 4096;
 		uint32_t LocalShadowMaxTile = 1024; // A power of two from 128 to the atlas size
 		uint32_t MaxShadowedLocalLights = RenderData::c_MaxShadowedLocalLights;

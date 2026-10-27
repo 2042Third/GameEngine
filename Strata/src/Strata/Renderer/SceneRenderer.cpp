@@ -2760,6 +2760,7 @@ namespace Strata
 		{
 			ResetLocalShadows(); // Reported; no light casts a local shadow this frame
 			m_Stats.LocalShadowLights = 0;
+			m_Stats.LocalShadowTileSizes = {};
 			m_Stats.LocalShadowViewsDrawn = 0;
 			m_Stats.LocalShadowViewsPending = 0;
 			degraded = true;
@@ -2838,6 +2839,9 @@ namespace Strata
 		}
 
 		m_Stats.Lights = static_cast<uint32_t>(m_Lights.size()) + (frame.DirectionalLightDirection.w > 0.0f ? 1u : 0u);
+		// What the frame drew with: the quality, and the cascades' size after the limits and an allocation's fallback.
+		m_Stats.Quality = m_Specification.Quality;
+		m_Stats.ShadowMapSize = m_ShadowMapSize;
 
 		nvrhi::ICommandList* commandList = m_CommandList;
 		ReserveFrameConstantVersions();

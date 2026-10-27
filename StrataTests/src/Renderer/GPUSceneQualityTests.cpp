@@ -426,4 +426,97 @@ TEST_SUITE("GPU.SceneRenderer.Quality")
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("A light's tile follows LocalShadowMaxTile")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		QualityScene scene;
+		// A shadowed point light 1.5 m from the camera with a range of 10 m: it fills the view, and wants the largest tiles.
+		const glm::vec3 eye(0.0f, 8.0f, 8.0f);
+		const glm::vec3 lamp = eye + glm::normalize(glm::vec3(0.0f) - eye) * 1.5f;
+		AddPointLight(scene.SceneData, lamp, glm::vec3(1.0f), 20.0f, 10.0f).GetComponent<PointLightComponent>().CastShadows = true;
+		constexpr uint32_t size = 256;
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(static_cast<int>(mode));
+			SceneRendererSpecification specification = MakeSpecification(mode);
+			specification.SpreadLightingUpdates = false;
+			specification.Quality.Preset = RendererQualityPreset::Custom;
+			specification.Quality.LocalShadowAtlasSize = 8192;
+			specification.Quality.LocalShadowMaxTile = 512;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(size, size);
+			REQUIRE(renderer.Render(scene.SceneData, scene.Camera));
+			REQUIRE(renderer.GetStats().LocalShadowLights == 1);
+			CHECK(renderer.GetStats().LocalShadowTileSizes[0] == 512);
+			CHECK(renderer.GetStats().LocalShadowTileSizes[1] == 0);
+
+			// A larger cap: the light's views are drawn again in larger tiles of the same atlas (0.6.0 stopped at 1024).
+			RendererQualitySettings quality = renderer.GetQuality();
+			quality.LocalShadowMaxTile = 2048;
+			nvrhi::ITexture* atlas = renderer.GetLocalShadowAtlas();
+			CHECK_FALSE(renderer.SetQuality(quality));
+			REQUIRE(renderer.Render(scene.SceneData, scene.Camera));
+			REQUIRE(renderer.GetStats().LocalShadowLights == 1);
+			CHECK(renderer.GetStats().LocalShadowTileSizes[0] == 2048);
+			CHECK(renderer.GetStats().LocalShadowViewsPending == 0);
+			CHECK(renderer.GetLocalShadowAtlas() == atlas);
+
+			// The cap is at most the atlas.
+			quality.LocalShadowAtlasSize = 1024;
+			CHECK(renderer.SetQuality(quality));
+			CHECK(renderer.GetQuality().LocalShadowMaxTile == 1024);
+			REQUIRE(renderer.Render(scene.SceneData, scene.Camera));
+			REQUIRE(renderer.GetStats().LocalShadowLights == 1);
+			// Six faces of 1024 do not fit an atlas of 1024: they step down to fit.
+			CHECK(renderer.GetStats().LocalShadowTileSizes[0] <= 512);
+		}
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The stats report the effective quality")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		QualityScene scene;
+		AddShadowedLamp(scene);
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(static_cast<int>(mode));
+			SceneRendererSpecification specification = MakeSpecification(mode);
+			specification.SpreadLightingUpdates = false;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Size, c_Size);
+			REQUIRE(renderer.Render(scene.SceneData, scene.Camera));
+			CHECK(renderer.GetStats().Quality == RendererQualitySettings {});
+			CHECK(renderer.GetStats().ShadowMapSize == 2048);
+			CHECK(renderer.GetStats().LocalShadowLights == 1);
+			CHECK(renderer.GetStats().LocalShadowTileSizes[0] >= 128);
+
+			const RendererQualitySettings costly = MakeCostlyQuality();
+			CHECK(renderer.SetQuality(costly));
+			REQUIRE(renderer.Render(scene.SceneData, scene.Camera));
+			CHECK(renderer.GetStats().Quality == costly);
+			CHECK(renderer.GetStats().ShadowMapSize == 4096);
+			CHECK(renderer.GetStats().LocalShadowTileSizes[0] <= 512);
+
+			// Auto at the viewport's rows, and the label of equal knobs.
+			RendererQualitySettings high = RendererQuality::GetPreset(RendererQualityPreset::High);
+			CHECK(renderer.SetQuality(high));
+			REQUIRE(renderer.Render(scene.SceneData, scene.Camera));
+			CHECK(renderer.GetStats().Quality == high);
+			CHECK(renderer.GetStats().Quality.Preset == RendererQualityPreset::High);
+			CHECK(renderer.GetStats().ShadowMapSize == 2048);
+		}
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

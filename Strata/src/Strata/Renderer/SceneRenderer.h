@@ -478,6 +478,14 @@ namespace Strata
 		uint32_t LocalShadowLights = 0;
 		uint32_t LocalShadowViewsDrawn = 0;
 		uint32_t LocalShadowViewsPending = 0;
+		// The tile size of each of those lights, by rank (the first LocalShadowLights entries; 128 to
+		// RendererQualitySettings::LocalShadowMaxTile texels).
+		std::array<uint16_t, RenderData::c_MaxShadowedLocalLights> LocalShadowTileSizes = {};
+		// The quality the frame drew with (SceneRenderer::GetQuality), and the sun's cascades' texels each way
+		// (SceneRenderer::GetShadowMapSize: the resolution resolved for the viewport's rows, after the limits and an
+		// allocation's fallback).
+		RendererQualitySettings Quality;
+		uint32_t ShadowMapSize = 0;
 		// Reflection probes (SceneRendererSpecification::MaxReflectionProbes): those the frame shaded with, the captures it
 		// converted into the renderer's cube array, and the probes kept in view still waiting for their capture to load or be
 		// converted (the sky lights their surfaces meanwhile).

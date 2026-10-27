@@ -36,7 +36,6 @@ namespace Strata
 		constexpr uint32_t c_MinLocalShadowTile = 128;
 		// The smallest atlas an allocation that failed falls back to (smaller ones fail as the atlas asked for).
 		constexpr uint32_t c_MinFallbackLocalShadowAtlasSize = 2048;
-		constexpr uint32_t c_MaxLocalShadowTile = 1024;
 		// A light's tile size follows the pixels its range spans on screen, halved (the receivers its views must resolve lie
 		// within the range, on average halfway), as a power of two; it changes only once that leaves this band around the
 		// size it has, so sizes do not toggle while the camera moves.
@@ -296,7 +295,7 @@ namespace Strata
 		// Tile sizes: as large as the light looks (with hysteresis), stepped down from the least relevant light while they do not
 		// fit; lights that do not fit even at the smallest size go without shadows.
 		const uint32_t atlasSize = m_LocalShadowAllocator.GetAtlasSize();
-		const uint32_t maxTile = std::min(c_MaxLocalShadowTile, atlasSize);
+		const uint32_t maxTile = std::min(m_Specification.Quality.LocalShadowMaxTile, atlasSize);
 		const uint32_t minTile = std::min(c_MinLocalShadowTile, maxTile);
 		const float viewportHeight = static_cast<float>(m_ViewportSize.y);
 		std::vector<uint32_t> sizes;
@@ -564,6 +563,8 @@ namespace Strata
 				light.Strength = std::min(static_cast<float>(light.FadeFrames + 1) / static_cast<float>(c_LocalShadowFadeFrames), 1.0f) * light.RankFade;
 		}
 		m_Stats.LocalShadowLights = static_cast<uint32_t>(m_LocalShadowLights.size());
+		for (size_t index = 0; index < m_LocalShadowLights.size() && index < m_Stats.LocalShadowTileSizes.size(); index++)
+			m_Stats.LocalShadowTileSizes[index] = static_cast<uint16_t>(m_LocalShadowLights[index].TileSize);
 		m_Stats.LocalShadowViewsDrawn = static_cast<uint32_t>(m_LocalShadowViews.size());
 		m_Stats.LocalShadowViewsPending = pending;
 		if (m_LocalShadowViews.empty())
