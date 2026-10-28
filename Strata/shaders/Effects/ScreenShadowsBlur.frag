@@ -26,13 +26,6 @@ layout(location = 0) out vec2 o_Mask;
 
 const float c_ScreenShadowMaxBlurPixels = 8.0;
 
-vec3 PositionAt(ivec2 pixel, float depth)
-{
-	vec2 uv = (vec2(pixel) + 0.5) * u_Frame.ViewportSize.zw;
-	vec4 point = u_Frame.InverseViewProjection * vec4(UVToNDC(uv), depth, 1.0);
-	return point.xyz / point.w;
-}
-
 vec3 NormalAt(ivec2 pixel)
 {
 	return OctahedralDecode(texelFetch(u_Normals, pixel, 0).xy); // View space: only compared with each other
@@ -49,13 +42,28 @@ void main()
 		o_Mask = center;
 		return;
 	}
-	vec3 position = PositionAt(pixel, depth);
+	// The camera-relative position the depth holds, as the shading reconstructs it.
+	vec2 ndc = UVToNDC((vec2(pixel) + 0.5) * u_Frame.ViewportSize.zw);
+	vec4 point = u_Frame.InverseViewProjection * vec4(ndc, depth, 1.0);
+	vec3 position = point.xyz / point.w;
 	vec3 normal = NormalAt(pixel);
 	vec3 worldNormal = mat3(u_Frame.InverseView) * normal;
 	float tolerance = u_Blur.PlaneTolerance * max(-(u_Frame.View * vec4(position, 1.0)).z, 1e-3);
 	float sigma = max(radius * 0.5, 0.5);
 	int taps = min(int(ceil(radius)), int(c_ScreenShadowMaxBlurPixels));
 	ivec2 last = ivec2(u_Frame.ViewportSize.xy) - 1;
+
+	// A tap's distance from the pixel's plane, n . (p' - p), without reconstructing its position: with p' the projection of
+	// x = (ndc', depth', 1) through InverseViewProjection M, it is dot(plane, M x) / (M x).w for plane = (n, -n . p), that is
+	// dot(M^T plane, x) / dot(w row of M, x), and along the blur's direction both are linear in the tap's offset and depth.
+	mat4 toWorld = u_Frame.InverseViewProjection;
+	vec4 plane = transpose(toWorld) * vec4(worldNormal, -dot(worldNormal, position));
+	vec4 rowW = vec4(toWorld[0][3], toWorld[1][3], toWorld[2][3], toWorld[3][3]);
+	vec2 ndcStep = vec2(u_Blur.Direction) * vec2(2.0, -2.0) * u_Frame.ViewportSize.zw; // One pixel along the direction
+	float planeBase = dot(plane.xy, ndc) + plane.w;
+	float planeStep = dot(plane.xy, ndcStep);
+	float wBase = dot(rowW.xy, ndc) + rowW.w;
+	float wStep = dot(rowW.xy, ndcStep);
 
 	float weightSum = 1.0;
 	float visibilitySum = center.r * center.r;
@@ -69,9 +77,14 @@ void main()
 		float otherDepth = texelFetch(u_Depth, other, 0).r;
 		if (!(otherDepth > 0.0))
 			continue;
-		float plane = clamp(1.0 - abs(dot(worldNormal, PositionAt(other, otherDepth) - position)) / tolerance, 0.0, 1.0);
-		float facing = pow(max(dot(normal, NormalAt(other)), 0.0), 8.0);
-		float weight = exp(-float(tap * tap) / (2.0 * sigma * sigma)) * plane * facing;
+		float offset = float(tap);
+		float distance = (planeBase + offset * planeStep + plane.z * otherDepth) / (wBase + offset * wStep + rowW.z * otherDepth);
+		float onPlane = clamp(1.0 - abs(distance) / tolerance, 0.0, 1.0);
+		float facing = max(dot(normal, NormalAt(other)), 0.0);
+		facing *= facing;
+		facing *= facing;
+		facing *= facing; // The eighth power
+		float weight = exp(-offset * offset / (2.0 * sigma * sigma)) * onPlane * facing;
 		if (weight <= 0.0)
 			continue;
 		float encoded = texelFetch(u_Source, other, 0).r;
