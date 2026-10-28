@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Core/Base.h"
+#include "Strata/Core/EngineServices.h"
 #include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Runtime/FramePerfLog.h"
@@ -49,10 +50,12 @@ namespace Strata
 		// the log.
 		static FramePerfColumnGroup MakePerfLogColumns(const GameRenderer* renderer);
 
-		// The quality the game draws with: the project's Renderer.Quality section (RendererQuality::GetProjectQuality, followed
-		// every frame by its version), unless an override is set (StrataRuntime --quality; players' graphics options); nullopt
-		// clears it. `source` names the override in the log line each change of the preset or its source writes ("Graphics
-		// quality: Ultra (--quality)").
+		// The quality the game draws with: the game's graphics options while an IGameGraphics with a section is provided (the
+		// project's Graphics Quality, the players' choices over it and StrataRuntime --quality over both: GameRuntime and the
+		// editor's play mode provide it), else the project's Renderer.Quality section (RendererQuality::GetProjectQuality);
+		// both followed every frame by their version. An override (tests and tools) wins over both; nullopt clears it.
+		// `source` names the override in the log line each change of the preset or its source writes ("Graphics quality: Low
+		// (the player's)", "Ultra (--quality)").
 		void SetQualityOverride(std::optional<RendererQualitySettings> quality, std::string_view source = "override");
 		const RendererQualitySettings& GetQuality() const { return m_Renderer->GetQuality(); }
 
@@ -63,9 +66,12 @@ namespace Strata
 		const SceneRenderer& GetSceneRenderer() const { return *m_Renderer; }
 		SceneRenderer& GetSceneRenderer() { return *m_Renderer; }
 	private:
-		// Applies the project's quality or the override to the renderer, after its SetViewportSize (Auto resolves for the
-		// frame's rows).
+		// Applies the override, the game's or the project's quality to the renderer, after its SetViewportSize (Auto resolves
+		// for the frame's rows).
 		void ApplyQuality();
+		// The provided graphics options' value in effect, made again only when their version changed (versions are unique
+		// across providers, so a replaced provider is noticed too).
+		const RendererQualitySettings& FollowQuality(IGameGraphics& graphics);
 		void UpdateMessage(const Scene& scene, const glm::uvec2& size);
 	private:
 		Scope<SceneRenderer> m_Renderer;
@@ -75,9 +81,12 @@ namespace Strata
 		bool m_ShowingMessage = false;
 		std::optional<RendererQualitySettings> m_QualityOverride;
 		std::string m_QualitySource;
-		// What the log said last: the preset, and whether an override set it (none: nothing logged since the override changed).
+		uint64_t m_GraphicsVersion = 0; // Of the IGameGraphics value m_GraphicsQuality was made from
+		RendererQualitySettings m_GraphicsQuality;
+		GameGraphicsSource m_GraphicsPresetSource = GameGraphicsSource::Project;
+		// What the log said last: the preset and its source (none: nothing logged since the override changed).
 		std::optional<RendererQualityPreset> m_LoggedPreset;
-		bool m_LoggedOverride = false;
+		std::string m_LoggedSource;
 	};
 
 }

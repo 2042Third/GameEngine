@@ -7,6 +7,7 @@
 #include "Strata/Core/SaveFiles.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Project/GameManifest.h"
+#include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Runtime/FramePerfLog.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneLoader.h"
@@ -23,6 +24,7 @@
 namespace Strata
 {
 
+	class GameGraphicsService;
 	struct SceneWorkBudget;
 
 	struct GameRuntimeOptions
@@ -49,6 +51,8 @@ namespace Strata
 		bool PrepareRenderScenes = false;
 		// The sections the manifest's settings are validated with (tests' local registries); null: the process's.
 		const SettingsRegistry* Settings = nullptr;
+		// StrataRuntime --quality: the session's Graphics Quality preset over the project's and the player's (never saved).
+		std::optional<RendererQualityPreset> Quality;
 	};
 
 	// Runs an exported game: opens its asset pack (the active asset manager while the runtime lives), loads its script
@@ -64,7 +68,10 @@ namespace Strata
 	// the crash is logged once and reported by GetScriptFault, so the application can decide what to do.
 	//
 	// The game's project settings (the manifest's, version 5) are the engine service IProjectSettings while the runtime
-	// lives; a section a registered module claims that its module refuses stops the game (Create fails naming it).
+	// lives; a section a registered module claims that its module refuses stops the game (Create fails naming it). Its
+	// graphics options (GameGraphicsService: the project's Graphics Quality, the players' choices of GraphicsOptions.json in
+	// the save directory and GameRuntimeOptions::Quality) are the engine service IGameGraphics from before its first script
+	// call until it ends.
 	class GameRuntime
 	{
 	public:
@@ -102,6 +109,8 @@ namespace Strata
 		const std::optional<ScriptFault>& GetScriptFault() const { return m_ScriptFault; }
 		// Where the game keeps its save files (see GameRuntimeOptions::SaveFilesDirectory).
 		std::optional<std::filesystem::path> GetSaveDirectory() const { return m_Saves ? m_Saves->GetSaveDirectory() : std::nullopt; }
+		// The game's graphics options (the engine service IGameGraphics while the runtime lives).
+		GameGraphicsService& GetGraphics() { return *m_Graphics; }
 
 		// Starts loading a scene of the pack: the running scene goes on until it and everything it uses are loaded, then
 		// Update swaps it in (stopping the running scene, starting the new one's systems; the assets the new scene does not
@@ -184,6 +193,9 @@ namespace Strata
 		std::optional<ScriptFault> m_ScriptFault;
 		Scope<SaveDirectory> m_Saves;
 		Scope<EngineServices::ScopedProvider<IGameSaves>> m_SavesProvider; // After m_Saves: ends first
+		// After m_Manifest and m_Saves, whose settings and directory it reads; the provider after it, so it ends first.
+		Scope<GameGraphicsService> m_Graphics;
+		Scope<EngineServices::ScopedProvider<IGameGraphics>> m_GraphicsProvider;
 	};
 
 }

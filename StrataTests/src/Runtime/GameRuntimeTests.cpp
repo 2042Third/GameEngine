@@ -15,8 +15,10 @@
 #include "Strata/Input/Input.h"
 #include "Strata/Input/InputActions.h"
 #include "Strata/Project/GameManifest.h"
+#include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Core/SaveFiles.h"
+#include "Strata/Runtime/GameGraphicsService.h"
 #include "Strata/Runtime/GamePresentation.h"
 #include "Strata/Runtime/GameRuntime.h"
 #include "Strata/Scene/Components.h"
@@ -726,6 +728,81 @@ TEST_SUITE("Runtime.Game")
 		}
 		CHECK(InputActions::GetPlayerBindings().Actions.empty());
 		Input::Reset();
+	}
+
+	TEST_CASE("An exported game loads the players' graphics options before its first script call, and they end with it")
+	{
+		SettingsRegistry registry;
+		REQUIRE(registry.Register(RendererQuality::MakeSection()));
+		const SettingsSection& section = *registry.Find(RendererQuality::c_SectionId);
+		GameRuntimeOptions options;
+		options.Settings = &registry;
+		options.SaveFilesDirectory = CreateTemporaryDirectory("RuntimeGraphicsSaves");
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeGraphics");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 1) } }, UUID(0x1010));
+		RewriteManifest(manifest, 5, { { std::string(RendererQuality::c_SectionId), { { "Version", RendererQuality::c_SectionVersion },
+			{ "Value", { { "Preset", "High" } } } } } });
+		REQUIRE(FileSystem::WriteText(options.SaveFilesDirectory / GraphicsOptionsFile::c_FileName, GraphicsOptionsFile::Write({ { "Preset", "Low" } }, section)));
+
+		IGameGraphics* before = EngineServices::Get<IGameGraphics>();
+		std::string error;
+		{
+			// Create provides the options before the scene starts (its OnCreate is the first script call).
+			Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, options);
+			REQUIRE_MESSAGE(game, error);
+			IGameGraphics* graphics = EngineServices::Get<IGameGraphics>();
+			REQUIRE(graphics);
+			CHECK(graphics == &game->GetGraphics());
+			CHECK(graphics->GetSection() == &section);
+			CHECK(graphics->GetEffectiveValue()["Preset"] == "Low");
+			CHECK(graphics->GetSource("Preset") == GameGraphicsSource::Player);
+			CHECK(game->GetGraphics().GetQuality().HasSameKnobs(RendererQuality::GetPreset(RendererQualityPreset::Low)));
+			// The manifest's Graphics Quality under them.
+			REQUIRE(graphics->ResetOptions(""));
+			CHECK(graphics->GetEffectiveValue()["Preset"] == "High");
+		}
+		CHECK(EngineServices::Get<IGameGraphics>() == before);
+
+		// A version-4 manifest has no settings: the section's default, with the players' choices over it.
+		RewriteManifest(manifest, 4, nullptr);
+		{
+			Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, options);
+			REQUIRE_MESSAGE(game, error);
+			CHECK(game->GetGraphics().GetEffectiveValue()["Preset"] == "Low");
+			REQUIRE(game->GetGraphics().ResetOptions("Preset"));
+			CHECK(game->GetGraphics().GetEffectiveValue() == section.GetDefault());
+		}
+	}
+
+	TEST_CASE("GameRuntimeOptions::Quality fixes the preset for the session without writing the file")
+	{
+		SettingsRegistry registry;
+		REQUIRE(registry.Register(RendererQuality::MakeSection()));
+		const SettingsSection& section = *registry.Find(RendererQuality::c_SectionId);
+		GameRuntimeOptions options;
+		options.Settings = &registry;
+		options.SaveFilesDirectory = CreateTemporaryDirectory("RuntimeQualitySaves");
+		options.Quality = RendererQualityPreset::Ultra;
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeQuality");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 1) } }, UUID(0x1010));
+		RewriteManifest(manifest, 5, { { std::string(RendererQuality::c_SectionId), { { "Version", RendererQuality::c_SectionVersion },
+			{ "Value", { { "Preset", "Medium" } } } } } });
+		const std::filesystem::path file = options.SaveFilesDirectory / GraphicsOptionsFile::c_FileName;
+		const std::string saved = GraphicsOptionsFile::Write({ { "Preset", "Low" } }, section);
+		REQUIRE(FileSystem::WriteText(file, saved));
+
+		std::string error;
+		{
+			Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, options);
+			REQUIRE_MESSAGE(game, error);
+			GameGraphicsService& graphics = game->GetGraphics();
+			CHECK(graphics.GetCommandLinePreset() == RendererQualityPreset::Ultra);
+			CHECK(graphics.GetEffectiveValue() == RendererQuality::GetPresetValues()[static_cast<size_t>(RendererQualityPreset::Ultra)]);
+			CHECK(graphics.GetSource("Preset") == GameGraphicsSource::CommandLine);
+			CHECK(graphics.GetPlayerOptions() == nlohmann::json { { "Preset", "Low" } });
+		}
+		// The players' file is as it was.
+		CHECK(FileSystem::ReadText(file) == saved);
 	}
 
 	TEST_CASE("The window title is the game's title")

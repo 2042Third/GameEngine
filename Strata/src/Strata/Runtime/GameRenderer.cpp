@@ -55,17 +55,40 @@ namespace Strata
 		m_LoggedPreset.reset();
 	}
 
+	const RendererQualitySettings& GameRenderer::FollowQuality(IGameGraphics& graphics)
+	{
+		const uint64_t version = graphics.GetVersion();
+		if (version != m_GraphicsVersion)
+		{
+			m_GraphicsQuality = RendererQuality::FromSectionValue(&graphics.GetEffectiveValue());
+			m_GraphicsPresetSource = graphics.GetSource("Preset").value_or(GameGraphicsSource::Project);
+			m_GraphicsVersion = version;
+		}
+		return m_GraphicsQuality;
+	}
+
 	void GameRenderer::ApplyQuality()
 	{
-		const bool overridden = m_QualityOverride.has_value();
-		const RendererQualitySettings& quality = overridden ? *m_QualityOverride : RendererQuality::GetProjectQuality();
+		IGameGraphics* graphics = m_QualityOverride ? nullptr : EngineServices::Get<IGameGraphics>();
+		if (graphics && !graphics->GetSection())
+			graphics = nullptr;
+		const RendererQualitySettings& quality = m_QualityOverride ? *m_QualityOverride : graphics ? FollowQuality(*graphics)
+			: RendererQuality::GetProjectQuality();
 		// Equal knobs cost one comparison; a change makes again only what it sizes (SceneRenderer::SetQuality).
 		m_Renderer->SetQuality(quality);
-		if (m_LoggedPreset != quality.Preset || m_LoggedOverride != overridden)
+		// Where the preset comes from, for the log line written when it or its source changes.
+		std::string_view source = "the project's";
+		if (m_QualityOverride)
+			source = m_QualitySource;
+		else if (graphics && m_GraphicsPresetSource == GameGraphicsSource::Player)
+			source = "the player's";
+		else if (graphics && m_GraphicsPresetSource == GameGraphicsSource::CommandLine)
+			source = "--quality";
+		if (m_LoggedPreset != quality.Preset || m_LoggedSource != source)
 		{
-			ST_CORE_INFO("Graphics quality: {} ({})", RendererQuality::PresetToString(quality.Preset), overridden ? m_QualitySource : "the project's");
+			ST_CORE_INFO("Graphics quality: {} ({})", RendererQuality::PresetToString(quality.Preset), source);
 			m_LoggedPreset = quality.Preset;
-			m_LoggedOverride = overridden;
+			m_LoggedSource = source;
 		}
 	}
 

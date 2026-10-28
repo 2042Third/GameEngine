@@ -7,6 +7,7 @@
 #include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Input/InputActions.h"
 #include "Strata/Renderer/RenderScene.h"
+#include "Strata/Runtime/GameGraphicsService.h"
 #include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneWorkBudget.h"
 
@@ -117,6 +118,14 @@ namespace Strata
 		// The bindings the players chose in an earlier session (InputActions::SaveBindings), with the manifest's actions.
 		InputActions::ResetSession();
 		InputActions::LoadBindings();
+		// The graphics options the players chose in an earlier session over the manifest's Graphics Quality (a version-4
+		// manifest has none: the section's default), and the command line's preset over both: from the first script call and
+		// the first frame on.
+		runtime->m_Graphics = CreateScope<GameGraphicsService>(runtime->m_Manifest.Settings ? &*runtime->m_Manifest.Settings : nullptr,
+			runtime->m_Saves.get(), options.Settings);
+		runtime->m_Graphics->SetCommandLinePreset(options.Quality);
+		runtime->m_Graphics->LoadPlayerOptions();
+		runtime->m_GraphicsProvider = CreateScope<EngineServices::ScopedProvider<IGameGraphics>>(*runtime->m_Graphics);
 
 		// The loading scene first, so that it plays while the start scene loads (both load in the background).
 		const AssetHandle loadingScene = runtime->m_Manifest.LoadingScene;
@@ -158,8 +167,11 @@ namespace Strata
 		m_ScriptEngine.reset();
 		if (m_AssetManager && AssetManager::GetActive() == m_AssetManager)
 			AssetManager::SetActive(nullptr);
-		// The game's players' bindings, map enables and simulated actions end with it.
+		// The game's players' bindings, map enables and simulated actions end with it, and so do its graphics options (after
+		// the scene stopped: its scripts' last calls may use them).
 		InputActions::ResetSession();
+		m_GraphicsProvider.reset();
+		m_Graphics.reset();
 	}
 
 	bool GameRuntime::LoadScene(AssetHandle scene, std::string* outError)

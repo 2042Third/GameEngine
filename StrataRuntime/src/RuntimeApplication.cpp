@@ -80,6 +80,8 @@ namespace Strata
 			runtimeOptions.TimeDilation = !endsByItself;
 			runtimeOptions.KeepEveryFixedStep = endsByItself;
 			runtimeOptions.SaveFilesDirectory = m_Options.SaveDirectory;
+			// The run's Graphics Quality preset over the project's and the players' (their saved choices stay as they are).
+			runtimeOptions.Quality = m_Options.Quality;
 			// Headless runs (servers, CI) have no window to render to; with one, scenes have their render proxies built before
 			// they start, so the frame that shows one does not build them all.
 			const bool renders = Application::Get().GetWindow() && Renderer::IsInitialized();
@@ -100,12 +102,9 @@ namespace Strata
 				ReportStartFailure(error);
 				return;
 			}
+			// The renderer follows the game's graphics options (IGameGraphics), --quality among them.
 			if (renders)
-			{
 				m_Renderer = CreateScope<GameRenderer>();
-				if (m_Options.Quality)
-					m_Renderer->SetQualityOverride(RendererQuality::GetPreset(*m_Options.Quality), "--quality");
-			}
 			// The game's pacing (vsync, uncapped), which loading caps (GameRuntime::GetFrameRateCap).
 			m_GamePacing = Application::Get().GetMaxFrameRate();
 			if (!m_Options.PerfLogPath.empty())
@@ -347,8 +346,8 @@ namespace Strata
 			{ "--asset-budget-mb", "<megabytes>", "The GPU texture budget of the game's assets" },
 			{ "--perf-log", "<file.csv>", "Write a row of frame timings per frame" },
 			{ "--save-directory", "<folder>", "Keep the game's save files in this folder (default: the player's data)" },
-			{ "--quality", "<low|medium|high|ultra>", "Draw with this Graphics Quality preset for this run (default: the project's); "
-				"nothing is saved" },
+			{ "--quality", "<low|medium|high|ultra>", "Draw with this Graphics Quality preset for this run (default: the project's, with "
+				"the players' saved options over it); nothing is saved" },
 			{ "--help", nullptr, "Print this help and exit" } };
 
 		// --quality's value: a named preset, any case (Custom is the project's values, never a run's).
