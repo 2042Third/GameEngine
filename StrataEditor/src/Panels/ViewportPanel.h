@@ -7,6 +7,7 @@
 #include "UI/Widgets.h"
 
 #include <Strata/Math/AABB.h>
+#include <Strata/Renderer/RendererQuality.h>
 
 #include <glm/glm.hpp>
 
@@ -79,10 +80,13 @@ namespace Strata
 			Fly
 		};
 
-		void DrawChips(EditorContext& context);
+		void DrawChips(EditorPanelContext& panelContext);
 		void DrawStatsChip(ViewportSettings& settings);
 		// The debug view (StreamingView): the image as rendered, or colored by streaming state or level of detail.
 		void DrawDebugViewChip(ViewportSettings& settings);
+		// The Scene view's quality (ViewportSettings::Quality): the project's Graphics Quality, or a preset of the view's own;
+		// its popup also opens Project Settings at Graphics Quality.
+		void DrawQualityChip(EditorPanelContext& panelContext, ViewportSettings& settings);
 		// What the colors of the debug view mean, with how many entities in view have each, at the image's bottom left.
 		void DrawDebugViewLegend(EditorContext& context);
 		void HandleShortcuts(EditorPanelContext& context);
@@ -121,6 +125,10 @@ namespace Strata
 		// The agent chip's text for the activity and age (in whole seconds) it was made for.
 		// The toolbar's chips across frames: the last ones that do not fit with their labels are drawn as icons.
 		UI::ChipStripState m_ChipStrip;
+		// The quality chip's texts that name the project's preset, made again when it changes.
+		std::optional<std::string> m_QualityTooltip;
+		std::string m_QualityProjectItem;
+		RendererQualityPreset m_QualityTooltipPreset = RendererQualityPreset::High;
 		std::string m_AgentChipText;
 		uint64_t m_AgentChipActivity = 0;
 		int64_t m_AgentChipSeconds = -1;

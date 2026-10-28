@@ -1066,7 +1066,7 @@ TEST_SUITE("Editor.UI")
 		{
 			std::vector<UI::ItemProbe::Item> chips;
 			for (const char* key : { "Viewport.Camera", "Viewport.Grid", "Viewport.Outline", "Viewport.Gizmos", "Viewport.Stats",
-				"Viewport.PreviewLighting", "Viewport.GameUI", "Viewport.DebugView", "Viewport.GameCamera" })
+				"Viewport.PreviewLighting", "Viewport.GameUI", "Viewport.DebugView", "Viewport.Quality", "Viewport.GameCamera" })
 			{
 				const std::string name = key;
 				CAPTURE(name);
@@ -1101,8 +1101,9 @@ TEST_SUITE("Editor.UI")
 			wideWidth = checkInReach(chips);
 			CHECK(chips[0].Max.x - chips[0].Min.x > 2.5f * fontSize);
 		}
-		// A small window leaves the Scene view a few hundred units: more chips are icons, the last one among them.
-		HarnessEditor editor({ ImVec2(900.0f, 700.0f), 1.0f }, WithFeatureProject("EditorUIChipsNarrow"));
+		// A small window leaves the Scene view a few hundred units: more chips are icons, the last one among them. (Its ten chips need
+		// about 400 units as icons: a narrower view cuts the last ones off.)
+		HarnessEditor editor({ ImVec2(1000.0f, 700.0f), 1.0f }, WithFeatureProject("EditorUIChipsNarrow"));
 		editor.Frames(3);
 		const std::vector<UI::ItemProbe::Item> chips = chipsOf();
 		CHECK(checkInReach(chips) < wideWidth);
@@ -1164,6 +1165,40 @@ TEST_SUITE("Editor.UI")
 		REQUIRE(editor.Click("Viewport.Camera"));
 		REQUIRE(editor.Click("Viewport.EditPose.Rest"));
 		CHECK(settings.EditPose == AnimationEditPose::Rest);
+	}
+
+	TEST_CASE("The quality chip shows the preset in effect and its popup sets the Scene view's quality")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIQualityChip"));
+		editor.Frames(2);
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const ViewportSettings& settings = editor.Context().GetViewport().GetSettings();
+		// The feature project's Graphics Quality is Custom: the view follows it, unlit.
+		REQUIRE(UI::ItemProbe::Find("Viewport.Quality").has_value());
+		CHECK(UI::ItemProbe::Find("Viewport.Quality")->Text == "Custom");
+		CHECK(UI::ItemProbe::Find("Viewport.Quality")->Color != ToColor(colors.Accent));
+
+		// A preset of the view's own: lit, named after it, and what viewport.getSettings reports.
+		REQUIRE(editor.Click("Viewport.Quality"));
+		REQUIRE(UI::ItemProbe::Find("Viewport.Quality.Project").has_value());
+		REQUIRE(editor.Click("Viewport.Quality.Ultra"));
+		editor.Frames(1);
+		CHECK(settings.Quality == ViewportQuality::Ultra);
+		CHECK(UI::ItemProbe::Find("Viewport.Quality")->Text == "Ultra");
+		CHECK(UI::ItemProbe::Find("Viewport.Quality")->Color == ToColor(colors.Accent));
+		CHECK(editor.Run("viewport.getSettings")["quality"] == "ultra");
+		// Back to the project's.
+		REQUIRE(editor.Click("Viewport.Quality"));
+		REQUIRE(editor.Click("Viewport.Quality.Project"));
+		editor.Frames(1);
+		CHECK(settings.Quality == ViewportQuality::Project);
+		CHECK(UI::ItemProbe::Find("Viewport.Quality")->Text == "Custom");
+
+		// "Graphics Quality..." opens Project Settings at its page.
+		REQUIRE(editor.Click("Viewport.Quality"));
+		REQUIRE(editor.Click("Viewport.Quality.Open"));
+		CHECK(editor.FramesUntil([]() { return UI::ItemProbe::Find("ProjectSettings.Renderer.Quality.Row.ShadowResolution").has_value(); }));
+		CHECK(editor.Layer->GetPanels().IsOpen(EditorPanels::c_ProjectSettings));
 	}
 
 	TEST_CASE("The viewport's debug view chip lights while a debug view colors the image")

@@ -27,6 +27,7 @@
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
@@ -274,7 +275,7 @@ namespace Strata
 		{
 			const float agentRoom = agentWidth > 0.0f ? agentWidth + style.ItemSpacing.x * 2.0f : 0.0f;
 			UI::ChipStrip strip(m_ChipStrip, layout.Max.x - layout.ChipsMin.x - agentRoom);
-			DrawChips(context);
+			DrawChips(panelContext);
 			DrawPreviewChip(panelContext);
 		}
 		if (agentWidth > 0.0f)
@@ -326,8 +327,9 @@ namespace Strata
 	// Chips
 	////////////////////////////////////////////////////////////////////////////////
 
-	void ViewportPanel::DrawChips(EditorContext& context)
+	void ViewportPanel::DrawChips(EditorPanelContext& panelContext)
 	{
+		EditorContext& context = panelContext.Context;
 		EditorViewport& viewport = context.GetViewport();
 		ViewportSettings& settings = viewport.GetSettings();
 		EditorCamera& camera = viewport.GetCamera();
@@ -412,6 +414,8 @@ namespace Strata
 			"Show the selection's UI canvas in 2D at its reference aspect ratio, to place and size its elements with handles");
 		ImGui::SameLine();
 		DrawDebugViewChip(settings);
+		ImGui::SameLine();
+		DrawQualityChip(panelContext, settings);
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.GameCamera", Icons::Camera, "Game camera", &settings.PilotGameCamera,
 			"Look through the scene's primary camera with the editor's overlays (F8); the editor camera stays where it was");
@@ -596,6 +600,48 @@ namespace Strata
 			if (ImGui::MenuItem(name, nullptr, settings.DebugView == view))
 				settings.DebugView = view;
 		}
+		ImGui::EndPopup();
+	}
+
+	void ViewportPanel::DrawQualityChip(EditorPanelContext& panelContext, ViewportSettings& settings)
+	{
+		// Lit while the view chooses its own preset; named after the preset in effect. A click opens the choice.
+		const RendererQualityPreset projectPreset = RendererQuality::GetProjectQuality().Preset;
+		const bool own = settings.Quality != ViewportQuality::Project;
+		const RendererQualityPreset preset = own ? ResolveViewportQuality(settings.Quality).Preset : projectPreset;
+		if (!m_QualityTooltip || m_QualityTooltipPreset != projectPreset)
+		{
+			const char* name = RendererQuality::PresetToString(projectPreset);
+			m_QualityTooltip = fmt::format("The Scene view's rendering quality. Project follows Project Settings > Graphics Quality ({}); a preset "
+				"here changes only this view. The Game view, captures through the scene camera and the game follow the project and the players' "
+				"options.", name);
+			m_QualityProjectItem = fmt::format("Project ({})", name);
+			m_QualityTooltipPreset = projectPreset;
+		}
+		bool clicked = own;
+		if (UI::ToggleChip("Viewport.Quality", Icons::MonitorCog, RendererQuality::PresetToString(preset), &clicked, m_QualityTooltip->c_str()))
+			ImGui::OpenPopup("Quality");
+		if (!ImGui::BeginPopup("Quality"))
+			return;
+		const std::pair<ViewportQuality, const char*> items[] = {
+			{ ViewportQuality::Project, "Project" },
+			{ ViewportQuality::Low, "Low" },
+			{ ViewportQuality::Medium, "Medium" },
+			{ ViewportQuality::High, "High" },
+			{ ViewportQuality::Ultra, "Ultra" }
+		};
+		for (const auto& [quality, name] : items)
+		{
+			const char* label = quality == ViewportQuality::Project ? m_QualityProjectItem.c_str() : name;
+			if (ImGui::MenuItem(label, nullptr, settings.Quality == quality))
+				settings.Quality = quality;
+			UI::ItemProbe::Record(fmt::format("Viewport.Quality.{}", name));
+		}
+		ImGui::Separator();
+		if (ImGui::MenuItem("Graphics Quality...", nullptr, false, panelContext.Shell != nullptr))
+			panelContext.Shell->ShowProjectSettings(std::string(RendererQuality::c_SectionId));
+		UI::ItemProbe::Record("Viewport.Quality.Open", panelContext.Shell != nullptr);
+		ImGui::SetItemTooltip("The project's quality, its presets side by side with what each costs (Project Settings)");
 		ImGui::EndPopup();
 	}
 
