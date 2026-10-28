@@ -108,8 +108,10 @@ namespace
 	// exposure metered center-weighted with the key, bloom at the default radius, the lens vignette, the dither) and a
 	// grading that runs (white balance 5600 K, a slope): the median of the GPU stage `stage` over the measured frames,
 	// recorded as `key` on devices that write timestamps. `motionBlur` turns the Post Process's motion blur on; the camera
-	// turns `turnPixels` pixels a frame at the image's center (0: still); with `lens`, the frames have depth of field.
-	void MeasurePostStage4K(const std::string& key, const char* stage, bool motionBlur, float turnPixels, std::optional<CameraLens> lens = std::nullopt)
+	// turns `turnPixels` pixels a frame at the image's center (0: still); with `lens`, the frames have depth of field; `method`
+	// is the anti-aliasing method (the others leave TAA).
+	void MeasurePostStage4K(const std::string& key, const char* stage, bool motionBlur, float turnPixels, std::optional<CameraLens> lens = std::nullopt,
+		AntiAliasingMode method = AntiAliasingMode::TAA)
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -127,7 +129,7 @@ namespace
 		Perf::AddCameraAndLight(scene);
 		Perf::CreateCubeGrid(scene, c_Count);
 		PostProcessComponent& postProcess = scene.CreateEntity("Post Process").AddComponent<PostProcessComponent>();
-		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
+		postProcess.AntiAliasingMethod = method;
 		postProcess.WhiteBalanceTemperature = 5600.0f;
 		postProcess.ColorSlope = glm::vec3(1.05f, 1.0f, 0.95f);
 		postProcess.MotionBlur = motionBlur;
@@ -153,7 +155,8 @@ namespace
 				frame++;
 			});
 			const SceneRendererStats& stats = renderer.GetStats();
-			CHECK(stats.TemporalAntiAliasing);
+			CHECK(stats.TemporalAntiAliasing == (method == AntiAliasingMode::TAA));
+			CHECK(stats.MorphologicalAntiAliasing == (method == AntiAliasingMode::Morphological));
 			CHECK(stats.Dithered);
 			CHECK(stats.MotionBlurred == motionBlur);
 			if (motionBlur)
@@ -400,6 +403,13 @@ TEST_SUITE("PerfGPU.Renderer")
 		// gather's copy of every pixel (provisional: the reference machine sets the budgets).
 		MeasurePostStage4K("PerfGPU.Renderer.MotionBlur4K", "GPU.MotionBlur", true, 16.0f);
 		MeasurePostStage4K("PerfGPU.Renderer.MotionBlur4KStill", "GPU.MotionBlur", true, 0.0f);
+	}
+
+	TEST_CASE("Morphological anti-aliasing's cost at 3840x2160")
+	{
+		// GPU.Post with morphological anti-aliasing instead of TAA: the tone mapping into the 10-bit image, the edges, the blend
+		// weights and the blend, beside Post4K's TAA (provisional: the reference machine sets the budget).
+		MeasurePostStage4K("PerfGPU.Renderer.Morphological4K", "GPU.Post", false, 0.0f, std::nullopt, AntiAliasingMode::Morphological);
 	}
 
 	TEST_CASE("Depth of field's cost at 3840x2160")

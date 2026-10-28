@@ -100,19 +100,22 @@ TEST_SUITE("Reflection")
 		CHECK_FALSE(projection->SetValue(&camera, int32_t(7)));
 		CHECK(camera.Projection == ProjectionType::Orthographic);
 
-		// Post-processing's anti-aliasing method: FXAA by default, its two choices only.
+		// Post-processing's anti-aliasing method: FXAA by default, its three choices only.
 		const PropertyInfo* method = ComponentRegistry::Find<PostProcessComponent>()->FindProperty("AntiAliasingMethod");
 		REQUIRE(method);
 		CHECK(method->Type == PropertyType::Enum);
-		REQUIRE(method->EnumValues.size() == 2);
+		REQUIRE(method->EnumValues.size() == 3);
 		CHECK(method->EnumValues[0].Name == "FXAA");
 		CHECK(method->EnumValues[1].Name == "TAA");
+		CHECK(method->EnumValues[2].Name == "Morphological");
 		PostProcessComponent postProcess;
 		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::FXAA);
 		CHECK(method->SetValue(&postProcess, int32_t(1)));
 		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::TAA);
-		CHECK_FALSE(method->SetValue(&postProcess, int32_t(2)));
-		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::TAA);
+		CHECK(method->SetValue(&postProcess, int32_t(2)));
+		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::Morphological);
+		CHECK_FALSE(method->SetValue(&postProcess, int32_t(3)));
+		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::Morphological);
 
 		// The TAA's preset and tunables, right after the method: the enums' names and values (file and script API), the
 		// tunables' ranges and tooltips, and their defaults, Sharp's table.
@@ -563,6 +566,8 @@ TEST_SUITE("Scene.InactiveProperties")
 		post.AntiAliasing = true;
 		for (const char* property : temporal)
 			CHECK_MESSAGE(reason("PostProcess", property) == "Only TAA uses it (Anti Aliasing Method is FXAA)", property);
+		post.AntiAliasingMethod = AntiAliasingMode::Morphological;
+		CHECK(reason("PostProcess", "TAAPreset") == "Only TAA uses it (Anti Aliasing Method is Morphological)");
 		post.AntiAliasingMethod = AntiAliasingMode::TAA;
 		CHECK(reason("PostProcess", "TAAPreset").empty());
 		post.TAAPreset = TemporalAntiAliasingPreset::Sharp;

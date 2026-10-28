@@ -214,6 +214,7 @@
 	"PerfGPU.Renderer.MotionBlur4K": { "Unit": "ms", "Provisional": true, "Target": 0.30 },
 	"PerfGPU.Renderer.MotionBlur4KStill": { "Unit": "ms", "Provisional": true, "Target": 0.12 },
 	"PerfGPU.Renderer.DepthOfField4K": { "Unit": "ms", "Provisional": true, "Target": 0.8 },
+	"PerfGPU.Renderer.Morphological4K": { "Unit": "ms", "Provisional": true, "Target": 0.35 },
 	"PerfGPU.Renderer.Transmission": { "Measured": 0.2247, "Budget": 0.337, "Unit": "ms" },
 	"PerfGPU.Renderer.TransmissionGPU": { "Measured": 1.35, "Budget": 2.025, "Unit": "ms" },
 	"PerfGPU.Renderer.LocalShadows16Lights": { "Measured": 0.6042, "Budget": 0.9062, "Unit": "ms" },

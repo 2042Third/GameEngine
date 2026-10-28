@@ -38,6 +38,12 @@ namespace Strata
 			return (size + 7) / 8;
 		}
 
+		// Morphological anti-aliasing's area table (RG8, RenderData::c_MorphologicalAreaTableSize texels each way, row by row).
+		constexpr uint8_t c_MorphologicalAreaTable[] = {
+#include "Strata/Renderer/MorphologicalAreaTable.inl"
+		};
+		static_assert(sizeof(c_MorphologicalAreaTable) == RenderData::c_MorphologicalAreaTableSize * RenderData::c_MorphologicalAreaTableSize * 2);
+
 		// A lens's focus distance in millimeters, at least 1.1 focal lengths: nearer, a lens cannot focus (the thin lens's image
 		// would lie behind infinity).
 		float GetFocusMillimeters(const CameraLens& lens)
@@ -150,6 +156,19 @@ namespace Strata
 		copyLayout.visibility = nvrhi::ShaderType::Pixel;
 		copyLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Sampler(0) };
 		m_CopyBindingLayout = m_Device->createBindingLayout(copyLayout);
+		// Morphological anti-aliasing's passes: every read is a point fetch (texelFetch), so they declare no sampler.
+		nvrhi::BindingLayoutDesc morphologicalEdgesLayout;
+		morphologicalEdgesLayout.visibility = nvrhi::ShaderType::Pixel;
+		morphologicalEdgesLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Texture_SRV(1),
+			nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::MorphologicalParameters)) };
+		m_MorphologicalEdgesLayout = m_Device->createBindingLayout(morphologicalEdgesLayout);
+		nvrhi::BindingLayoutDesc morphologicalWeightsLayout;
+		morphologicalWeightsLayout.visibility = nvrhi::ShaderType::Pixel;
+		morphologicalWeightsLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Texture_SRV(1) };
+		m_MorphologicalWeightsLayout = m_Device->createBindingLayout(morphologicalWeightsLayout);
+		m_MorphologicalBlendLayout = m_Device->createBindingLayout(morphologicalEdgesLayout);
+		ST_CORE_VERIFY(m_MorphologicalEdgesLayout && m_MorphologicalWeightsLayout && m_MorphologicalBlendLayout,
+			"SceneRenderer: failed to create the morphological anti-aliasing's layouts");
 		// Motion blur: one layout for its three passes (every set fills every slot). b0 is the frame's constants (the
 		// camera's motion, the depth's view distance), so the push constants take slot 1.
 		nvrhi::BindingLayoutDesc motionBlurLayout;
@@ -363,6 +382,14 @@ namespace Strata
 		release(m_LDRTexture);
 		release(m_LDRFramebuffer);
 		release(m_FXAABindingSet);
+		// Morphological anti-aliasing's targets (its area table stays: it does not depend on the size).
+		release(m_MorphologicalEdges);
+		release(m_MorphologicalWeights);
+		release(m_MorphologicalEdgesFramebuffer);
+		release(m_MorphologicalWeightsFramebuffer);
+		release(m_MorphologicalEdgesSet);
+		release(m_MorphologicalWeightsSet);
+		release(m_MorphologicalBlendSet);
 		// The motion blur's targets and sets (made again by the next frame that blurs; the gather's history sets reference the
 		// temporal history, which goes with the targets too).
 		release(m_MotionBlurTexture);
@@ -428,6 +455,10 @@ namespace Strata
 			case AntiAliasingChoice::TAA:
 				settings.AntiAliasing = true;
 				settings.AntiAliasingMethod = AntiAliasingMode::TAA;
+				break;
+			case AntiAliasingChoice::Morphological:
+				settings.AntiAliasing = true;
+				settings.AntiAliasingMethod = AntiAliasingMode::Morphological;
 				break;
 		}
 		if (quality.MotionBlur == SceneEffectChoice::Off || quality.MotionBlurQuality == MotionBlurSamples::Off)
@@ -762,6 +793,65 @@ namespace Strata
 		return true;
 	}
 
+	bool SceneRenderer::EnsureMorphologicalResources(nvrhi::ICommandList* commandList)
+	{
+		if (m_MorphologicalEdges)
+			return true;
+		if (!m_MorphologicalAreaTable)
+		{
+			nvrhi::TextureDesc desc;
+			desc.width = RenderData::c_MorphologicalAreaTableSize;
+			desc.height = RenderData::c_MorphologicalAreaTableSize;
+			desc.format = nvrhi::Format::RG8_UNORM;
+			desc.debugName = m_Specification.DebugName + ".MorphologicalAreaTable";
+			desc.initialState = nvrhi::ResourceStates::ShaderResource;
+			desc.keepInitialState = true;
+			nvrhi::TextureHandle table = m_Device->createTexture(desc);
+			if (!table)
+			{
+				m_Errors.Report("failed to create the morphological anti-aliasing's area table; drawing with FXAA");
+				return false;
+			}
+			commandList->writeTexture(table, 0, 0, c_MorphologicalAreaTable, RenderData::c_MorphologicalAreaTableSize * 2);
+			m_MorphologicalAreaTable = std::move(table);
+		}
+		const uint32_t width = m_ViewportSize.x;
+		const uint32_t height = m_ViewportSize.y;
+		const std::string& name = m_Specification.DebugName;
+		nvrhi::TextureHandle edges = CreateRenderTarget(m_Device, width, height, nvrhi::Format::RG8_UNORM, name + ".MorphologicalEdges", false);
+		nvrhi::TextureHandle weights = CreateRenderTarget(m_Device, width, height, nvrhi::Format::RGBA8_UNORM, name + ".MorphologicalWeights", false);
+		nvrhi::FramebufferHandle edgesFramebuffer = edges ? m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(edges)) : nullptr;
+		nvrhi::FramebufferHandle weightsFramebuffer = weights ? m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(weights)) : nullptr;
+		if (!edgesFramebuffer || !weightsFramebuffer)
+		{
+			m_Errors.Report(fmt::format("failed to create the morphological anti-aliasing's targets for a {}x{} viewport; drawing with FXAA", width, height));
+			return false;
+		}
+		const nvrhi::BindingSetItem pushConstants = nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::MorphologicalParameters));
+		nvrhi::BindingSetDesc edgesSet;
+		edgesSet.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, m_LDRTexture), nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture), pushConstants };
+		nvrhi::BindingSetDesc weightsSet;
+		weightsSet.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, edges), nvrhi::BindingSetItem::Texture_SRV(1, m_MorphologicalAreaTable) };
+		nvrhi::BindingSetDesc blendSet;
+		blendSet.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, m_LDRTexture), nvrhi::BindingSetItem::Texture_SRV(1, weights), pushConstants };
+		nvrhi::BindingSetHandle edgesBindings = m_Device->createBindingSet(edgesSet, m_MorphologicalEdgesLayout);
+		nvrhi::BindingSetHandle weightsBindings = m_Device->createBindingSet(weightsSet, m_MorphologicalWeightsLayout);
+		nvrhi::BindingSetHandle blendBindings = m_Device->createBindingSet(blendSet, m_MorphologicalBlendLayout);
+		if (!edgesBindings || !weightsBindings || !blendBindings)
+		{
+			m_Errors.Report(fmt::format("failed to create the morphological anti-aliasing's bindings for a {}x{} viewport; drawing with FXAA", width, height));
+			return false;
+		}
+		m_MorphologicalEdges = std::move(edges);
+		m_MorphologicalWeights = std::move(weights);
+		m_MorphologicalEdgesFramebuffer = std::move(edgesFramebuffer);
+		m_MorphologicalWeightsFramebuffer = std::move(weightsFramebuffer);
+		m_MorphologicalEdgesSet = std::move(edgesBindings);
+		m_MorphologicalWeightsSet = std::move(weightsBindings);
+		m_MorphologicalBlendSet = std::move(blendBindings);
+		return true;
+	}
+
 	void SceneRenderer::UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, const SceneRenderOptions& options,
 		nvrhi::IBindingSet* bindingSet, std::optional<float> keyReferenceLog2)
 	{
@@ -948,13 +1038,16 @@ namespace Strata
 		tonemap.ChromaticAberration = unit(postProcess.ChromaticAberration) * RenderData::c_ChromaticAberrationScale;
 		tonemap.GrainFrame = grainSeed;
 
-		// FXAA unless the image was resolved temporally.
-		const bool fxaa = postProcess.AntiAliasing && !resolved;
-		nvrhi::IFramebuffer* tonemapTarget = fxaa ? m_LDRFramebuffer.Get() : output;
-		// The last pass that writes the display image dithers it, once: FXAA when it follows (the tone mapping's 10-bit image
-		// stays undithered), else the tone mapping.
+		// FXAA or morphological anti-aliasing unless the image was resolved temporally (FXAA also when the morphological one's
+		// resources cannot be made).
+		const bool antiAliased = postProcess.AntiAliasing && !resolved;
+		const bool morphological = antiAliased && postProcess.AntiAliasingMethod == AntiAliasingMode::Morphological && EnsureMorphologicalResources(commandList);
+		const bool fxaa = antiAliased && !morphological;
+		nvrhi::IFramebuffer* tonemapTarget = fxaa || morphological ? m_LDRFramebuffer.Get() : output;
+		// The last pass that writes the display image dithers it, once: FXAA's or the morphological blend when one follows (the
+		// tone mapping's 10-bit image stays undithered), else the tone mapping.
 		const float outputLevels = m_Specification.DitherOutput ? GetDitherLevels(output->getFramebufferInfo().colorFormats[0]) : 0.0f;
-		tonemap.DitherLevels = fxaa ? 0.0f : outputLevels;
+		tonemap.DitherLevels = fxaa || morphological ? 0.0f : outputLevels;
 		m_Stats.Dithered = outputLevels > 0.0f;
 		commandList->beginMarker("Tonemap");
 		ST_CORE_ASSERT(!m_TonemapConstantsWritten, "SceneRenderer: a frame writes the tone mapping's constants once");
@@ -963,7 +1056,23 @@ namespace Strata
 		DrawFullscreen(commandList, GetFullscreenPipeline(m_TonemapPipelines, m_TonemapPixelShader, m_TonemapBindingLayout, tonemapTarget->getFramebufferInfo()),
 			tonemapTarget, SelectPostSet(source, m_TonemapBindingSet, m_TemporalTonemapSets, m_DepthOfFieldTonemapSet, m_MotionBlurTonemapSet), nullptr, 0);
 		commandList->endMarker();
-		if (fxaa)
+		if (morphological)
+		{
+			RenderData::MorphologicalParameters parameters = {};
+			parameters.Threshold = RenderData::c_MorphologicalThreshold;
+			parameters.DepthThreshold = RenderData::c_MorphologicalDepthThreshold;
+			parameters.DitherLevels = outputLevels;
+			commandList->beginMarker("Morphological");
+			DrawFullscreen(commandList, GetFullscreenPipeline(m_MorphologicalEdgesPipelines, m_MorphologicalEdgesShader, m_MorphologicalEdgesLayout,
+				m_MorphologicalEdgesFramebuffer->getFramebufferInfo()), m_MorphologicalEdgesFramebuffer, m_MorphologicalEdgesSet, &parameters, sizeof(parameters));
+			DrawFullscreen(commandList, GetFullscreenPipeline(m_MorphologicalWeightsPipelines, m_MorphologicalWeightsShader, m_MorphologicalWeightsLayout,
+				m_MorphologicalWeightsFramebuffer->getFramebufferInfo()), m_MorphologicalWeightsFramebuffer, m_MorphologicalWeightsSet, nullptr, 0);
+			DrawFullscreen(commandList, GetFullscreenPipeline(m_MorphologicalBlendPipelines, m_MorphologicalBlendShader, m_MorphologicalBlendLayout,
+				output->getFramebufferInfo()), output, m_MorphologicalBlendSet, &parameters, sizeof(parameters));
+			commandList->endMarker();
+			m_Stats.MorphologicalAntiAliasing = true;
+		}
+		else if (fxaa)
 		{
 			RenderData::FXAAParameters parameters = {};
 			parameters.DitherLevels = outputLevels;

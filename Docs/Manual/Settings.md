@@ -57,9 +57,9 @@ to find a page or a field), the selected page on the right:
   atlas and largest tile, how many of those lights cast shadows, the level-of-detail error, the smallest size drawn and the
   motion blur's samples: Low has none, Medium 8, High 12, Ultra 16, for scenes whose Post Process turns motion blur on).
   Five rows are the same under every preset, for players' comfort and preference: **Anti-aliasing** (Scene: the Post
-  Process's method; or Off, FXAA, TAA), **Motion blur** (Scene: as the Post Process says; Off: never), **Depth of
-  field** (Scene: as the camera's lens says; Off: everything in focus), **Film grain** and **Chromatic aberration**
-  (Scene: as the Post Process says; Off: never).
+  Process's method; or Off, FXAA, TAA, Morphological), **Motion blur** (Scene: as the Post Process says; Off: never),
+  **Depth of field** (Scene: as the camera's lens says; Off: everything in focus), **Film grain** and **Chromatic
+  aberration** (Scene: as the Post Process says; Off: never).
   No setting draws below the screen's resolution, and a scene's look (its lights, Post Process and sky) stays the same.
   Exported games use it, and `<Game> --quality low` (or `medium`, `high`, `ultra`) plays one run at a preset without
   saving anything. The Scene view can draw at a preset of your own, for your computer alone, with

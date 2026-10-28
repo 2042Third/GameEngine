@@ -175,7 +175,10 @@ namespace Strata
 		FXAA = 0, // Fast approximate anti-aliasing of the finished image
 		// Temporal anti-aliasing: each frame samples its pixels at another sub-pixel offset and is blended with the renderer's
 		// history of earlier frames, reprojected along the motion vectors (SceneRendererSpecification::TemporalAntiAliasing)
-		TAA
+		TAA,
+		// Morphological anti-aliasing of each frame on its own: finds edges, reconstructs the lines their staircases stand for
+		// and blends across them by the areas the lines cover (nothing temporal)
+		Morphological
 	};
 
 	// How the TAA looks (PostProcessComponent::TAAPreset). The values are script and file API: they never change.

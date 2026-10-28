@@ -47,6 +47,7 @@ AA_MODES = {
     "taa": {"AntiAliasing": True, "AntiAliasingMethod": "TAA"},
     "fxaa": {"AntiAliasing": True, "AntiAliasingMethod": "FXAA"},
     "off": {"AntiAliasing": False},
+    "morph": {"AntiAliasing": True, "AntiAliasingMethod": "Morphological"},
 }
 QUALITIES = ("project", "low", "medium", "high", "ultra")
 CROP_SCALE = 4
@@ -655,7 +656,7 @@ def capture_command(args):
     modes = [mode.strip() for mode in args.aa.split(",") if mode.strip()]
     for mode in modes:
         if mode not in AA_MODES:
-            raise ToolError(f"--aa: unknown mode {mode} (taa, fxaa, off)")
+            raise ToolError(f"--aa: unknown mode {mode} (taa, fxaa, off, morph)")
     if args.quality not in QUALITIES:
         raise ToolError(f"--quality: one of {', '.join(QUALITIES)}")
     if args.repeat < 1:

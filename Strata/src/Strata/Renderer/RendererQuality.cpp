@@ -69,7 +69,7 @@ namespace Strata
 		// The names of an enum row's values, in value order (the files and scripts store the names).
 		constexpr const char* c_MotionBlurSamplesNames[] = { "Off", "Samples8", "Samples12", "Samples16" };
 		constexpr uint32_t c_MotionBlurSampleCounts[] = { 0, 8, 12, 16 };
-		constexpr const char* c_AntiAliasingChoiceNames[] = { "Scene", "Off", "FXAA", "TAA" };
+		constexpr const char* c_AntiAliasingChoiceNames[] = { "Scene", "Off", "FXAA", "TAA", "Morphological" };
 		constexpr const char* c_SceneEffectChoiceNames[] = { "Scene", "Off" };
 
 		template<typename T, size_t N>
@@ -412,7 +412,7 @@ namespace Strata
 				EnumOptions(c_MotionBlurSamplesNames), MotionBlurSamplesToString(high.MotionBlurQuality)));
 			// The players' rows: read under every preset.
 			section.Fields.push_back(EnumField("AntiAliasing", "Anti-aliasing", "Under every preset: the anti-aliasing method, the scene's (its "
-				"Post Process's) or Off, FXAA or TAA.", EnumOptions(c_AntiAliasingChoiceNames), AntiAliasingChoiceToString(high.AntiAliasing)));
+				"Post Process's) or Off, FXAA, TAA or Morphological.", EnumOptions(c_AntiAliasingChoiceNames), AntiAliasingChoiceToString(high.AntiAliasing)));
 			section.Fields.push_back(EnumField("MotionBlur", "Motion blur", "Under every preset: Scene shows the scene's motion blur where its Post "
 				"Process turns it on; Off never blurs.", EnumOptions(c_SceneEffectChoiceNames), SceneEffectChoiceToString(high.MotionBlur)));
 			section.Fields.push_back(EnumField("DepthOfField", "Depth of field", "Under every preset: Scene shows the depth of field of cameras "

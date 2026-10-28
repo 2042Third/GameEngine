@@ -268,12 +268,16 @@ namespace Strata
 		m_ShadowVertexShader = shaders.Get("Scene/ShadowMesh.vert");
 		m_ShadowMaskPixelShader = shaders.Get("Scene/ShadowMask.frag");
 		m_FXAAPixelShader = shaders.Get("PostProcess/FXAA.frag");
+		m_MorphologicalEdgesShader = shaders.Get("PostProcess/MorphologicalEdges.frag");
+		m_MorphologicalWeightsShader = shaders.Get("PostProcess/MorphologicalWeights.frag");
+		m_MorphologicalBlendShader = shaders.Get("PostProcess/MorphologicalBlend.frag");
 		m_SelectionMaskPixelShader = shaders.Get("Scene/SelectionMask.frag");
 		m_LocalShadowVertexShader = shaders.Get("Scene/LocalShadowMesh.vert");
 		m_SkinnedLocalShadowVertexShader = shaders.Get("Scene/LocalShadowMeshSkinned.vert");
 		ST_CORE_VERIFY(m_MeshVertexShader && m_PrepassPixelShader && m_ForwardPixelShader && m_ForwardTransparentPixelShader && m_GlassPixelShader && m_FullscreenVertexShader
 			&& m_TonemapPixelShader && m_SkyboxPixelShader && m_AtmosphereSkyboxPixelShader && m_ShadowVertexShader && m_ShadowMaskPixelShader && m_FXAAPixelShader && m_SkinnedMeshVertexShader
-			&& m_SkinnedShadowVertexShader && m_SelectionMaskPixelShader && m_LocalShadowVertexShader && m_SkinnedLocalShadowVertexShader,
+			&& m_SkinnedShadowVertexShader && m_SelectionMaskPixelShader && m_LocalShadowVertexShader && m_SkinnedLocalShadowVertexShader && m_MorphologicalEdgesShader
+			&& m_MorphologicalWeightsShader && m_MorphologicalBlendShader,
 			"SceneRenderer shaders are missing");
 
 		// The knobs within their ranges: cascades 1 to 4, the local shadows' atlas a power of two from 512 to 8192, at most

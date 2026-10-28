@@ -1356,6 +1356,11 @@
 							"DisplayName": "",
 							"Name": "TAA",
 							"Value": 1
+						},
+						{
+							"DisplayName": "",
+							"Name": "Morphological",
+							"Value": 2
 						}
 					],
 					"Flags": 0,
@@ -1363,7 +1368,7 @@
 					"Min": 0.0,
 					"Name": "AntiAliasingMethod",
 					"Speed": 0.0,
-					"Tooltip": "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion. TAA Preset chooses how the TAA looks",
+					"Tooltip": "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion. TAA Preset chooses how the TAA looks. Morphological: non-temporal, finds edges and blends along them, keeping texture detail",
 					"Type": "Enum"
 				},
 				{
