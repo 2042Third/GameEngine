@@ -121,8 +121,6 @@ namespace Strata::Tests
 		return camera;
 	}
 
-	// Plain output: no tone curve, no vignette, no bloom, ambient occlusion or anti-aliasing, so unlit colors come out
-	// unchanged.
 	// Direction a sun travels at an elevation above the horizon (degrees), coming from the given azimuth (degrees
 	// around +Y, 0 = from +X).
 	inline glm::vec3 SunDirection(float elevation, float azimuth)
@@ -217,6 +215,8 @@ namespace Strata::Tests
 		return result;
 	}
 
+	// Plain output: no tone curve, no vignette, no bloom, ambient occlusion or anti-aliasing, so unlit colors come out
+	// unchanged.
 	inline PostProcessComponent& AddNeutralPostProcess(Scene& scene)
 	{
 		PostProcessComponent& postProcess = scene.CreateEntity("PostProcess").AddComponent<PostProcessComponent>();

@@ -1407,7 +1407,7 @@ name). Differences found while building:
   parallel to the light, whose receiver plane makes their visibility 0.5 (shaded by N.L = 0, so never seen). The TAA
   suite's smoothing cases now bound the converged roughness at 0.9 of a frame's: with the mask, a frame's penumbra is
   smooth already.
-- Step 4: the march and `FaceNormal` live in `Effects/ScreenShadows.frag` (`ContactShadow` returns the occlusion and the
+- Step 4: the march and `FaceNormal` live in `Effects/ContactShadows.frag` (`ContactShadow` returns the occlusion and the
   step's length on screen); the constants are `SceneRenderer::c_ContactShadowMaxScreenShare` (0.05),
   `c_ContactShadowThickness` (0.02) and `c_ContactShadowThicknessScale` (0.005); `RenderScreenShadows` takes the frame's
   constants for the shadow distance. `ContactShadows` is an Int field 0-32 whose description says 1-3 count as 4

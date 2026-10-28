@@ -10,7 +10,7 @@
 using namespace Strata;
 using namespace Strata::Tests;
 
-// The sun's contact shadows (Effects/ScreenShadows.frag: a march toward the sun over the depth buffer): they ground what the
+// The sun's contact shadows (Effects/ContactShadows.frag: a march toward the sun over the depth buffer): they ground what the
 // cascades are too coarse for, never shadow an open plane or a convex lit surface, have no grain without anti-aliasing,
 // fade with distance and at the screen's edges, and Medium has none.
 
