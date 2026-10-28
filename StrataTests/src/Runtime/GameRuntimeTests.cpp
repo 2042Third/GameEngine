@@ -522,19 +522,30 @@ TEST_SUITE("Runtime.Game")
 		for (uint32_t frame = 0; frame < 3; frame++)
 			game->Update(c_Frame);
 
-		// The perf log's columns read the running scene's streaming and physics.
+		// The perf log's columns read the running scene's streaming and physics: its capacity and its last step. Writing a row
+		// turns box3d's counters on for the scene, so the contact columns are filled from its next step on.
 		const FramePerfColumnGroup columns = game->MakePerfLogColumns();
-		REQUIRE(columns.Names.size() == 8);
+		REQUIRE(columns.Names.size() == 15);
 		CHECK(columns.Names[2] == "WorldCellsLoaded");
 		CHECK(columns.Names[5] == "PhysicsBodiesWaiting");
 		CHECK(columns.Names[6] == "PhysicsBodiesPending");
-		std::string line;
-		FramePerfRow row(line);
-		columns.Write(row);
-		REQUIRE(row.GetCount() == 8);
-		const std::optional<PerfLogTable> table = ParsePerfLog("A,B,C,D,E,F,G,H\n" + line.substr(1) + "\n", error);
-		REQUIRE_MESSAGE(table, error);
-		const std::vector<double>& values = table->Rows[0];
+		CHECK(columns.Names[8] == "PhysicsStepMs");
+		CHECK(columns.Names[12] == "PhysicsContacts");
+		CHECK(columns.Names[14] == "PhysicsMaxBodySpeed");
+		const auto writeRow = [&]()
+		{
+			std::string line;
+			FramePerfRow row(line);
+			columns.Write(row);
+			REQUIRE(row.GetCount() == 15);
+			const std::optional<PerfLogTable> table = ParsePerfLog("A,B,C,D,E,F,G,H,I,J,K,L,M,N,O\n" + line.substr(1) + "\n", error);
+			REQUIRE_MESSAGE(table, error);
+			return table->Rows[0];
+		};
+		writeRow();
+		for (uint32_t frame = 0; frame < 2; frame++)
+			game->Update(c_Frame);
+		const std::vector<double> values = writeRow();
 		CHECK(values[0] >= 4.0); // Wanted
 		CHECK(values[2] >= 4.0); // Loaded
 #if ST_WITH_PHYSICS
@@ -542,12 +553,14 @@ TEST_SUITE("Runtime.Game")
 		CHECK(values[5] == 0.0); // Waiting
 		CHECK(values[6] == 0.0); // Pending: the cells' boxes need no mesh
 		CHECK(values[7] >= values[4]); // Capacity
+		CHECK(values[8] > 0.0); // Step ms
+		CHECK(values[9] >= 0.0); // box3d's ms (it may round to 0 with nothing awake)
+		for (size_t column = 10; column < 15; column++)
+			CHECK_FALSE(std::isnan(values[column])); // Awake, sleeping, contacts, recycled, the fastest body
 #else
 		// An engine without physics leaves the physics columns empty.
-		CHECK(std::isnan(values[4]));
-		CHECK(std::isnan(values[5]));
-		CHECK(std::isnan(values[6]));
-		CHECK(std::isnan(values[7]));
+		for (size_t column = 4; column < 15; column++)
+			CHECK(std::isnan(values[column]));
 #endif
 	}
 

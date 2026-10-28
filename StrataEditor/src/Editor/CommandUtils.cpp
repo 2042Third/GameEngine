@@ -18,6 +18,7 @@
 #include <Strata/Scene/ComponentAccess.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/Scene/SceneServices.h>
 #include <Strata/World/WorldStreamingSystem.h>
 
 #include <algorithm>
@@ -377,6 +378,14 @@ namespace Strata
 					{ "state", SubSceneStateToString(subScene.State) },
 					{ "entities", subScene.CreatedEntities } });
 			}
+			// The running game's physics, compactly: its body slots, the awake bodies and the last step's milliseconds (more in
+			// physics.stats); null without a physics world.
+			nlohmann::json physics = nullptr;
+			if (const IPhysicsDiagnostics* diagnostics = scene.IsRunning() ? scene.GetService<IPhysicsDiagnostics>() : nullptr)
+			{
+				if (const PhysicsStepInfo step = diagnostics->GetStepInfo(); step.HasWorld)
+					physics = { { "bodies", step.Bodies }, { "awake", step.AwakeBodies }, { "stepMs", step.StepMs } };
+			}
 			nlohmann::json switching = nullptr;
 			if (context.IsRuntimeSceneLoading())
 				switching = { { "scene", UUIDToJson(context.GetRuntimeSceneLoadTarget()) }, { "progress", context.GetRuntimeSceneLoadProgress() } };
@@ -387,6 +396,7 @@ namespace Strata
 				{ "entityCount", scene.GetEntityCount() },
 				{ "subScenes", std::move(subScenes) },
 				{ "world", std::move(world) },
+				{ "physics", std::move(physics) },
 				{ "switching", std::move(switching) } };
 		}
 

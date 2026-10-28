@@ -32,6 +32,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <span>
@@ -492,6 +493,7 @@ namespace Strata
 			bool TransformDirty = false;                    // A signaled transform change to apply at the next step
 			bool Polled = false;                            // Listed in PhysicsWorldData::PolledBodies
 			bool HasPendingForce = false;                   // PendingForce or PendingTorque are set
+			bool CountedMoving = false;                     // Counted in PhysicsWorldData::MovingRecordBodies (see UpdateMovingCount)
 			uint64_t SlotTicket = 0;                        // Its entry in PhysicsWorldData::SlotWaiters while it waits for a slot
 			uint64_t WriteBackPass = 0;                     // Last write-back pass that wrote this body
 			uint64_t SyncPass = 0;                          // Last step whose synchronization handled this record
@@ -567,6 +569,56 @@ namespace Strata
 			bool Written = false;
 			bool NonFinite = false;
 			bool ScaleChanged = false;
+		};
+
+		// How the bodies a step wrote back settle (PhysicsStats::MaxBodySpeed, SettlingBodyCount and RestingJitter): the fastest
+		// speed, the bodies faster than the sleep threshold, and the squared displacements of the others in units of
+		// c_DisplacementUnit, summed as integers. Every part combines exactly in any order (a maximum, integer sums that
+		// saturate), so the result does not depend on how the writes were split between threads.
+		struct SettlingSums
+		{
+			static constexpr double c_DisplacementUnit = 1.0e-8; // 10 nm: far below what a body at rest moves in a step
+
+			float MaxSpeed = 0.0f;
+			uint32_t Settling = 0;
+			uint32_t Resting = 0;
+			uint64_t RestingSquares = 0;
+
+			void Add(float displacement, float inverseTimestep, float sleepThreshold)
+			{
+				const float speed = displacement * inverseTimestep;
+				MaxSpeed = std::max(MaxSpeed, speed);
+				if (speed > sleepThreshold)
+				{
+					Settling++;
+					return;
+				}
+				Resting++;
+				// A resting body moves less than the threshold (at most 1 m/s) over a step, so its units fit 32 bits.
+				const uint64_t units = static_cast<uint64_t>(std::min(static_cast<double>(displacement) / c_DisplacementUnit, 4.0e9));
+				AddSquares(units * units);
+			}
+
+			void Merge(const SettlingSums& other)
+			{
+				MaxSpeed = std::max(MaxSpeed, other.MaxSpeed);
+				Settling += other.Settling;
+				Resting += other.Resting;
+				AddSquares(other.RestingSquares);
+			}
+
+			// The RMS displacement of the resting bodies, in millimeters.
+			float GetRestingJitterMm() const
+			{
+				if (Resting == 0)
+					return 0.0f;
+				return static_cast<float>(std::sqrt(static_cast<double>(RestingSquares) / static_cast<double>(Resting)) * c_DisplacementUnit * 1000.0);
+			}
+		private:
+			void AddSquares(uint64_t squares)
+			{
+				RestingSquares = squares > std::numeric_limits<uint64_t>::max() - RestingSquares ? std::numeric_limits<uint64_t>::max() : RestingSquares + squares;
+			}
 		};
 
 		// A box hull of these half extents and this placement in its body, by the bits of its values: box hulls are made once
@@ -717,6 +769,11 @@ namespace Strata
 		std::vector<BodySlot> BodySlots;                              // Per box3d body index, see FindBodyRecord
 		std::vector<ShapeSlot> ShapeSlots;                            // Per box3d shape index, see ResolveShape
 		uint32_t LiveBodies = 0;                                      // box3d bodies of records and character controllers
+		// The moving bodies in the simulation, counted where they enter and leave it: records' dynamic and kinematic bodies (see
+		// UpdateMovingCount) and the character controllers' presence bodies (see ApplyCharacterChanges). With box3d's awake count
+		// they give the sleeping bodies in constant time; GetStats checks them against its walk in Debug builds.
+		uint32_t MovingRecordBodies = 0;
+		uint32_t PresenceBodies = 0;
 		// The bodies that were awake after the last step, and those woken or created since (see MarkAwake): what the next step
 		// synchronizes besides the polled records, by body index. Listed once per stamp.
 		std::vector<int32_t> AwakeBodies;
@@ -795,6 +852,21 @@ namespace Strata
 		float LastSyncTime = 0.0f;
 		float LastWriteBackTime = 0.0f;
 		float LastContactTime = 0.0f;
+		// The instruments of the last step (see PhysicsStats and DeveloperGuide "Physics instruments").
+		bool DetailedStats = false;                                   // See PhysicsWorld::SetDetailedStats
+		float SleepThreshold = 0.0f;                                  // Of every moving body (see MakeBodySetup and the presence bodies)
+		float LastApplyTime = 0.0f;
+		float LastCheckedPairTime = 0.0f;
+		float LastEventTime = 0.0f;
+		float LastInstrumentTime = 0.0f;
+		double TotalStepMs = 0.0;
+		double TotalLibraryMs = 0.0;
+		PhysicsLibraryProfile LastProfile;
+		PhysicsLibraryCounters LastCounters;                          // While DetailedStats; RecycledContacts summed over the fixed step
+		uint32_t ContactRoomGrowths = 0;
+		uint32_t NextContactRoom = 0;                                 // box3d's contact room until its next growth (see CountContactGrowth)
+		float LastContactGrowthStepMs = 0.0f;
+		SettlingSums LastSettling;
 		uint32_t LastSyncedBodies = 0;
 		uint32_t LastCheckedPairs = 0;
 		uint32_t LastWrittenBodies = 0;
@@ -965,6 +1037,10 @@ namespace Strata
 			{
 				data.RecordOverflow.erase(handle);
 			}
+			// Its body was destroyed first (DestroyRecord), which uncounted it.
+			ST_CORE_ASSERT(!it->second.CountedMoving, "Physics: a record is removed while its body counts as moving");
+			if (it->second.CountedMoving)
+				data.MovingRecordBodies--;
 			data.Bodies.erase(it);
 			CheckRecordIndex(data);
 		}
@@ -998,6 +1074,21 @@ namespace Strata
 			}
 			data.BodySlots[index] = BodySlot { body.generation, true, 0, handle, record };
 			data.LiveBodies++;
+		}
+
+		// Counts a record's body in PhysicsWorldData::MovingRecordBodies while it is a dynamic or kinematic body in the simulation.
+		// Called wherever a record's body or its simulation membership changes (a type changes only with a new body); the record
+		// remembers what was counted, so a type set before the old body is destroyed uncounts it right.
+		void UpdateMovingCount(PhysicsWorldData& data, BodyRecord& record)
+		{
+			const bool moving = record.HasBody() && record.InSimulation && record.Type != RigidBodyType::Static;
+			if (moving == record.CountedMoving)
+				return;
+			record.CountedMoving = moving;
+			if (moving)
+				data.MovingRecordBodies++;
+			else
+				data.MovingRecordBodies--;
 		}
 
 		void UnregisterBody(PhysicsWorldData& data, b3BodyId body)
@@ -1371,6 +1462,7 @@ namespace Strata
 			record.InSimulation = false;
 			record.KinematicMoving = false;
 			record.HasPendingForce = false;
+			UpdateMovingCount(data, record);
 			EndContactsOf(data, record.EntityID);
 		}
 
@@ -1437,6 +1529,7 @@ namespace Strata
 			record.Suspended = false;
 			record.KinematicMoving = false;
 			record.TransformDirty = false;
+			UpdateMovingCount(data, record);
 			return PlacementResult::Added;
 		}
 
@@ -1461,6 +1554,7 @@ namespace Strata
 			record.Suspended = false;
 			record.KinematicMoving = false;
 			record.HasPendingForce = false;
+			UpdateMovingCount(data, record);
 		}
 
 		// Which pairs of an entity lost their box3d contacts.
@@ -2176,6 +2270,7 @@ namespace Strata
 				if (type != RigidBodyType::Static)
 					MarkAwake(data, body);
 			}
+			UpdateMovingCount(data, record);
 			UpdatePolling(data, handle, record);
 		}
 
@@ -2566,10 +2661,14 @@ namespace Strata
 				if (B3_IS_NON_NULL(change.OldShape))
 					UnregisterShape(data, change.OldShape);
 				if (B3_IS_NON_NULL(change.OldBody))
+				{
 					UnregisterBody(data, change.OldBody);
+					data.PresenceBodies--;
+				}
 				if (B3_IS_NON_NULL(change.NewBody))
 				{
 					RegisterBody(data, change.NewBody, entt::null, nullptr);
+					data.PresenceBodies++;
 					ShapeSlot slot;
 					slot.BodyType = RigidBodyType::Kinematic;
 					slot.Entity = change.Entity;
@@ -3862,8 +3961,9 @@ namespace Strata
 		// the pose is composed with its world scale as of the last synchronization (the shape's within tolerance), or its
 		// current one if it was edited without a signal while the body slept, in which case the shape is rebuilt before the
 		// next step (ScaleChanged). Reads only its body (box3d's getters do not change the world) and writes only its record
-		// and transform, so it may run on worker threads for distinct bodies.
-		void WritePose(PoseWrite& item)
+		// and transform, so it may run on worker threads for distinct bodies. A written body's displacement since its last
+		// synchronization joins `settling`.
+		void WritePose(PoseWrite& item, SettlingSums& settling, float inverseTimestep, float sleepThreshold)
 		{
 			BodyRecord& record = *item.Record;
 			glm::vec3 position;
@@ -3873,6 +3973,7 @@ namespace Strata
 				item.NonFinite = true;
 				return;
 			}
+			const float displacement = glm::length(position - glm::vec3(record.LastWorldTransform[3]));
 
 			// The same products as Scene::GetWorldTransform and UpdateWorldTransforms, so that LastWorldTransform equals the
 			// matrix the scene will cache (the next step compares them).
@@ -3894,6 +3995,7 @@ namespace Strata
 			record.LastWorldTransform = item.HasParent ? item.ParentWorld * item.Transform->GetTransform() : item.Transform->GetTransform();
 			record.WorldScale = worldScale;
 			item.Written = true;
+			settling.Add(displacement, inverseTimestep, sleepThreshold);
 		}
 
 		// Writes the poses of the dynamic bodies that moved in the step (box3d's move events, those that fell asleep included)
@@ -3905,11 +4007,15 @@ namespace Strata
 		// the registry. The scene is then told about every written transform in one batch (Scene::MarkTransformsChanged),
 		// and the rare cases (scale edits, non-finite poses, failed writes, descendants to update) are handled in body order
 		// on the main thread. Dynamic bodies below written ones (nested dynamics) follow, one by one, parents before
-		// children, so that every child's local transform is computed against its parent's final pose.
-		void WriteBackDynamicBodies(PhysicsWorldData& data)
+		// children, so that every child's local transform is computed against its parent's final pose. How the written bodies
+		// settle over the fixed step of `timestep` seconds becomes PhysicsWorldData::LastSettling.
+		void WriteBackDynamicBodies(PhysicsWorldData& data, float timestep)
 		{
 			ST_PROFILE_FUNCTION();
 
+			const float inverseTimestep = 1.0f / timestep;
+			const float sleepThreshold = data.SleepThreshold;
+			SettlingSums settling;
 			Scene& scene = *data.OwnerScene;
 			entt::registry& registry = scene.GetRegistry();
 
@@ -3986,16 +4092,20 @@ namespace Strata
 			if (count >= c_ParallelWriteThreshold && JobSystem::IsInitialized())
 			{
 				const uint32_t batchSize = std::max<uint32_t>(64, count / ((JobSystem::GetWorkerThreadCount() + 1) * 4));
+				std::mutex settlingMutex;
 				JobSystem::ParallelFor(count, batchSize, [&](uint32_t begin, uint32_t end)
 				{
+					SettlingSums batch;
 					for (uint32_t index = begin; index < end; index++)
-						WritePose(writes[index]);
+						WritePose(writes[index], batch, inverseTimestep, sleepThreshold);
+					std::scoped_lock<std::mutex> lock(settlingMutex);
+					settling.Merge(batch);
 				});
 			}
 			else
 			{
 				for (PoseWrite& write : writes)
-					WritePose(write);
+					WritePose(write, settling, inverseTimestep, sleepThreshold);
 			}
 
 			// The outcomes, in body order on the main thread.
@@ -4036,6 +4146,7 @@ namespace Strata
 					WarnNonFinitePose(data, handle, record);
 					continue;
 				}
+				const float displacement = glm::length(position - glm::vec3(record.LastWorldTransform[3]));
 
 				// As in WritePose.
 				glm::vec3 worldScale = record.WorldScale;
@@ -4053,8 +4164,10 @@ namespace Strata
 				}
 				record.LastWorldTransform = scene.GetWorldTransform(entity);
 				record.WorldScale = worldScale;
+				settling.Add(displacement, inverseTimestep, sleepThreshold);
 				UpdateDescendantsOfMovedBody(data, entity, true);
 			}
+			data.LastSettling = settling;
 		}
 
 		//////////////////////////////////////////////////////////////////////////
@@ -4224,6 +4337,63 @@ namespace Strata
 			return static_cast<uint32_t>(std::min<uint64_t>(count, UINT32_MAX));
 		}
 
+		//////////////////////////////////////////////////////////////////////////
+		// Instruments
+		//////////////////////////////////////////////////////////////////////////
+
+		uint32_t ToCount(int value)
+		{
+			return static_cast<uint32_t>(std::max(value, 0));
+		}
+
+		// box3d's counters after its last step, with the rule of PhysicsLibraryCounters for its stale recycled count.
+		PhysicsLibraryCounters ReadCounters(b3WorldId world)
+		{
+			const b3Counters library = b3World_GetCounters(world);
+			PhysicsLibraryCounters counters;
+			counters.Islands = ToCount(library.islandCount);
+			counters.Contacts = ToCount(library.contactCount);
+			counters.AwakeContacts = ToCount(library.awakeContactCount);
+			counters.RecycledContacts = counters.AwakeContacts > 0 ? ToCount(library.recycledContactCount) : 0;
+			return counters;
+		}
+
+		// After each box3d step of a fixed step: its stage times join the fixed step's profile, and while detailed statistics
+		// are on its counters are read (the last box3d step's islands and contacts, the recycled contacts summed).
+		void ReadLibraryStep(const PhysicsWorldData& data, PhysicsLibraryProfile& profile, PhysicsLibraryCounters& counters)
+		{
+			const b3Profile step = b3World_GetProfile(data.World);
+			profile.Pairs += step.pairs;
+			profile.Collide += step.collide;
+			profile.Solve += step.solve;
+			profile.Sensors += step.sensors;
+			profile.Constraints += step.constraints;
+			profile.Transforms += step.transforms;
+			profile.Refit += step.refit;
+			profile.Continuous += step.bullets;
+			profile.SleepIslands += step.sleepIslands;
+			profile.SplitIslands += step.splitIslands;
+			if (!data.DetailedStats)
+				return;
+			const PhysicsLibraryCounters last = ReadCounters(data.World);
+			const uint32_t recycled = counters.RecycledContacts + last.RecycledContacts;
+			counters = last;
+			counters.RecycledContacts = recycled;
+		}
+
+		// Counts the steps after which box3d's peak of contacts (b3World_GetMaxCapacity) passed the contact room it had: the
+		// room it reserved when the world was created, doubled at each growth as box3d's arrays double.
+		void CountContactGrowth(PhysicsWorldData& data, const b3Capacity& held, float libraryTime)
+		{
+			const uint32_t peak = ToCount(held.contactCount);
+			if (peak <= data.NextContactRoom)
+				return;
+			data.ContactRoomGrowths++;
+			data.LastContactGrowthStepMs = libraryTime;
+			while (data.NextContactRoom < peak && data.NextContactRoom < (1u << 31))
+				data.NextContactRoom = std::max(2 * data.NextContactRoom, 1u);
+		}
+
 	}
 
 	PhysicsWorld::PhysicsWorld(Scene& scene, const PhysicsSettings& settings, const PhysicsCapacityDemand& demand, PhysicsBuildMode mode)
@@ -4266,6 +4436,8 @@ namespace Strata
 		definition.capacity.contactCount = static_cast<int>(data.LibraryRoomContacts);
 		data.Tasks.Configure(definition);
 		data.World = b3CreateWorld(&definition);
+		data.SleepThreshold = b3DefaultBodyDef().sleepThreshold; // What every moving body gets (MakeBodySetup, presence bodies)
+		data.NextContactRoom = data.LibraryRoomContacts;
 
 		data.Characters = CreateScope<CharacterControllerSet>(scene, data.World, data.Settings);
 		ConnectSignals(data);
@@ -4535,6 +4707,7 @@ namespace Strata
 		ApplyChanges(data);
 		// Room reserved for bodies to come (PhysicsWorld::Reserve) counts before the step (see "Capacities").
 		GrowRoom(data, data.ReservedBodies);
+		const Clock::time_point applyEnd = Clock::now();
 		data.HeldLastStep = HoldForMeshes(data, timestep);
 		if (data.HeldLastStep)
 		{
@@ -4547,13 +4720,19 @@ namespace Strata
 		SyncEntitiesToBodies(data, timestep);
 		std::vector<PairKey> characterPairs;
 		StepCharacters(data, timestep, characterPairs);
+		const Clock::time_point checkedPairsStart = Clock::now();
 		CollectCheckedPairs(data);
 		const Clock::time_point stepsStart = Clock::now();
 
 		// CollisionSteps box3d steps of the fixed step; forces act in each, and each one's events are read before the next.
+		// The library's profile (and, while asked for, its counters) are read after each step, before its events.
 		const uint32_t steps = data.Settings.CollisionSteps;
 		const float subStep = timestep / static_cast<float>(steps);
 		float libraryTime = 0.0f;
+		float eventTime = 0.0f;
+		float readTime = 0.0f;
+		PhysicsLibraryProfile profile;
+		PhysicsLibraryCounters counters;
 		for (uint32_t step = 0; step < steps; step++)
 		{
 			ApplyPendingForces(data, data.ForcedBodies);
@@ -4562,9 +4741,14 @@ namespace Strata
 				ST_PROFILE_SCOPE("PhysicsWorld::Simulate - box3d");
 				b3World_Step(data.World, subStep, c_SolverSubSteps);
 			}
-			libraryTime += millisecondsBetween(libraryStart, Clock::now());
+			const Clock::time_point libraryEnd = Clock::now();
+			libraryTime += millisecondsBetween(libraryStart, libraryEnd);
 			data.HasStepped = true;
+			ReadLibraryStep(data, profile, counters);
+			const Clock::time_point eventsStart = Clock::now();
+			readTime += millisecondsBetween(libraryEnd, eventsStart);
 			ProcessStepEvents(data, step + 1 == steps);
+			eventTime += millisecondsBetween(eventsStart, Clock::now());
 		}
 		for (const entt::entity handle : data.ForcedBodies)
 		{
@@ -4578,7 +4762,7 @@ namespace Strata
 		data.ForcedBodies.clear();
 		const Clock::time_point stepsEnd = Clock::now();
 
-		WriteBackDynamicBodies(data);
+		WriteBackDynamicBodies(data, timestep);
 		const Clock::time_point writeBackEnd = Clock::now();
 		ResolveCharacterPairs(data, characterPairs);
 		ResolveRecheckedPairs(data);
@@ -4590,14 +4774,26 @@ namespace Strata
 		if (held.contactCount > 0 && static_cast<uint32_t>(held.contactCount) > data.Settings.MaxContactConstraints)
 			data.Demand.ContactConstraints = std::max(data.Demand.ContactConstraints, std::min(NextPowerOfTwo(static_cast<uint64_t>(held.contactCount)),
 				PhysicsCapacitySettings::c_MaxContactConstraintsLimit));
+		const Clock::time_point upkeepEnd = Clock::now();
+		CountContactGrowth(data, held, libraryTime);
+		data.LastProfile = profile;
+		data.LastCounters = counters;
 		const Clock::time_point endTime = Clock::now();
 
-		const float eventTime = millisecondsBetween(stepsStart, stepsEnd) - libraryTime;
+		// ContactTime: the step loop beyond the library's steps and the instruments' reads (its part EventTime: the events
+		// read in the loop), and the pair upkeep after the write-back.
+		const float loopTime = millisecondsBetween(stepsStart, stepsEnd) - libraryTime - readTime;
+		data.LastApplyTime = millisecondsBetween(startTime, applyEnd);
+		data.LastCheckedPairTime = millisecondsBetween(checkedPairsStart, stepsStart);
 		data.LastSyncTime = millisecondsBetween(startTime, stepsStart);
 		data.LastLibraryTime = libraryTime;
 		data.LastWriteBackTime = millisecondsBetween(stepsEnd, writeBackEnd);
-		data.LastContactTime = eventTime + millisecondsBetween(writeBackEnd, endTime);
+		data.LastEventTime = eventTime;
+		data.LastContactTime = std::max(loopTime, 0.0f) + millisecondsBetween(writeBackEnd, upkeepEnd);
+		data.LastInstrumentTime = readTime + millisecondsBetween(upkeepEnd, endTime);
 		data.LastStepTime = millisecondsBetween(startTime, endTime);
+		data.TotalStepMs += data.LastStepTime;
+		data.TotalLibraryMs += libraryTime;
 	}
 
 	std::vector<CollisionEvent> PhysicsWorld::TakeCollisionEvents()
@@ -5067,7 +5263,77 @@ namespace Strata
 		stats.LastGrowthMs = data.LastGrowthMs;
 		stats.LastGrowthFrom = data.LastGrowthFrom;
 		stats.LastGrowthTo = data.LastGrowthTo;
+
+		// The constant-time counts agree with the walk.
+		ST_CORE_ASSERT(data.MovingRecordBodies == stats.DynamicBodyCount + stats.KinematicBodyCount,
+			"Physics: {} moving bodies counted, but {} dynamic and {} kinematic bodies are in the simulation", data.MovingRecordBodies, stats.DynamicBodyCount,
+			stats.KinematicBodyCount);
+		ST_CORE_ASSERT(data.PresenceBodies == stats.CharacterControllerCount, "Physics: {} presence bodies counted, but {} character controllers",
+			data.PresenceBodies, stats.CharacterControllerCount);
+		const PhysicsStepInfo step = GetStepInfo();
+		stats.MovingBodyCount = data.MovingRecordBodies + data.PresenceBodies;
+		stats.SleepingBodyCount = step.SleepingBodies;
+		stats.DetailedStats = data.DetailedStats;
+		stats.IslandCount = data.LastCounters.Islands;
+		stats.ContactCount = data.LastCounters.Contacts;
+		stats.AwakeContactCount = data.LastCounters.AwakeContacts;
+		stats.RecycledContactCount = data.LastCounters.RecycledContacts;
+		stats.LibraryProfile = data.LastProfile;
+		stats.LibraryWorkers = ToCount(b3World_GetWorkerCount(data.World));
+		stats.LibraryContactPeak = ToCount(b3World_GetMaxCapacity(data.World).contactCount);
+		stats.ContactRoomGrowths = data.ContactRoomGrowths;
+		stats.LastContactGrowthStepMs = data.LastContactGrowthStepMs;
+		stats.MaxBodySpeed = step.MaxBodySpeed;
+		stats.SettlingBodyCount = step.SettlingBodies;
+		stats.RestingJitter = step.RestingJitterMm;
+		stats.ApplyTime = data.LastApplyTime;
+		stats.CheckedPairTime = data.LastCheckedPairTime;
+		stats.EventTime = data.LastEventTime;
+		stats.InstrumentTime = data.LastInstrumentTime;
+		stats.TotalStepMs = data.TotalStepMs;
+		stats.TotalLibraryMs = data.TotalLibraryMs;
 		return stats;
+	}
+
+	PhysicsStepInfo PhysicsWorld::GetStepInfo() const
+	{
+		const PhysicsWorldData& data = *m_Data;
+		PhysicsStepInfo info;
+		info.HasWorld = true;
+		info.DetailedStats = data.DetailedStats;
+		info.StepMs = data.LastStepTime;
+		info.LibraryMs = data.LastLibraryTime;
+		info.StrataMs = std::max(data.LastStepTime - data.LastLibraryTime, 0.0f);
+		info.Bodies = GetUsedBodySlots(data);
+		info.AwakeBodies = ToCount(b3World_GetAwakeBodyCount(data.World));
+		const uint32_t moving = data.MovingRecordBodies + data.PresenceBodies;
+		info.SleepingBodies = moving > info.AwakeBodies ? moving - info.AwakeBodies : 0;
+		info.Islands = data.LastCounters.Islands;
+		info.Contacts = data.LastCounters.Contacts;
+		info.AwakeContacts = data.LastCounters.AwakeContacts;
+		info.RecycledContacts = data.LastCounters.RecycledContacts;
+		info.MaxBodySpeed = data.LastSettling.MaxSpeed;
+		info.SettlingBodies = data.LastSettling.Settling;
+		info.RestingJitterMm = data.LastSettling.GetRestingJitterMm();
+		info.Steps = data.StepCount;
+		info.TotalStepMs = data.TotalStepMs;
+		info.TotalLibraryMs = data.TotalLibraryMs;
+		return info;
+	}
+
+	void PhysicsWorld::SetDetailedStats(bool detailed)
+	{
+		m_Data->DetailedStats = detailed;
+	}
+
+	bool PhysicsWorld::IsDetailedStats() const
+	{
+		return m_Data->DetailedStats;
+	}
+
+	PhysicsLibraryCounters PhysicsWorld::ReadLibraryCounters() const
+	{
+		return ReadCounters(m_Data->World);
 	}
 
 }

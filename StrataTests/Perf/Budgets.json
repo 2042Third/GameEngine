@@ -216,5 +216,11 @@
 	"PerfGPU.Renderer.LocalShadows16LightsGPU": { "Measured": 1.558, "Budget": 2.337, "Unit": "ms" },
 	"PerfGPU.Renderer.LocalShadows16LightsCached": { "Measured": 0.2214, "Budget": 0.3321, "Unit": "ms" },
 	"PerfGPU.Renderer.LocalShadows16LightsCachedGPU": { "Measured": 1.252, "Budget": 1.878, "Unit": "ms" },
-	"PerfGPU.Renderer.TAALocalShadowsPeakMemory": { "Measured": 528.4, "Budget": 792.5, "Unit": "MB" }
+	"PerfGPU.Renderer.TAALocalShadowsPeakMemory": { "Measured": 528.4, "Budget": 792.5, "Unit": "MB" },
+	"Perf.Physics.Boxes70k.CollideMs": { "Unit": "ms", "Provisional": true },
+	"Perf.Physics.Grow65k.GrowthMs": { "Unit": "ms", "Provisional": true, "Target": 4 },
+	"Perf.Physics.Create10kBodies.LibraryOnly": { "Unit": "ms", "Provisional": true },
+	"Perf.Physics.Create100kStaticBodies.LibraryOnly": { "Unit": "ms", "Provisional": true },
+	"Perf.Physics.Grow65k.LibraryOnly": { "Unit": "ms", "Provisional": true },
+	"Perf.World.CellUnload.LibraryOnly": { "Unit": "ms", "Provisional": true }
 }

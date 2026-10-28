@@ -847,18 +847,24 @@ TEST_SUITE("Physics.Simulation")
 
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
+		physics.SetDetailedStats(true);
 		CollisionRecorder recorder(physics);
 		StepScene(scene, 90);
 		PhysicsStats stats = physics.GetStats();
 		REQUIRE(stats.ActiveBodyCount == 0);
 		CHECK(stats.ContactPairCount == 401);
 
-		// Everything sleeps: nothing is visited.
+		// Everything sleeps: nothing is visited, no contact is awake or recycled, and every moving body counts as sleeping.
 		StepScene(scene, 1);
 		stats = physics.GetStats();
 		CHECK(stats.SyncedBodyCount == 0);
 		CHECK(stats.CheckedPairCount == 0);
 		CHECK(stats.WrittenBodyCount == 0);
+		CHECK(stats.AwakeContactCount == 0);
+		CHECK(stats.RecycledContactCount == 0);
+		CHECK(stats.SettlingBodyCount == 0);
+		CHECK(stats.MovingBodyCount == 401);
+		CHECK(stats.SleepingBodyCount == 401);
 
 		// One body in motion: only it and its contact are visited.
 		CHECK(physics.SetLinearVelocity(ball, glm::vec3(2.0f, 0.0f, 0.0f)));
@@ -908,6 +914,10 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(stats.CheckedPairCount == 0);
 		CHECK(stats.WrittenBodyCount == 0);
 		CHECK(stats.ContactPairCount == 401);
+		CHECK(stats.AwakeContactCount == 0);
+		CHECK(stats.RecycledContactCount == 0);
+		CHECK(stats.SettlingBodyCount == 0);
+		CHECK(stats.SleepingBodyCount == 401);
 		CHECK(recorder.Count(CollisionEventType::Begin) == recorder.Count(CollisionEventType::End) + 401);
 	}
 

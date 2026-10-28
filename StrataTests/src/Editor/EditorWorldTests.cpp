@@ -98,6 +98,46 @@ TEST_SUITE("Editor.World")
 		CHECK(stats["growths"]["count"] == 0);
 		CHECK(stats["steps"].get<uint64_t>() > 0);
 
+		// The instruments of the last step: its parts, box3d's stages, the bodies asleep and how they settle. box3d's
+		// counters are not read every step, so they are null unless the query asks for them.
+		const nlohmann::json& step = stats["step"];
+		CHECK(step["ms"].get<double>() >= step["libraryMs"].get<double>());
+		for (const char* part : { "apply", "sync", "characters", "checkedPairs", "events", "writeBack", "pairs", "instruments" })
+			CHECK(step["parts"][part].is_number());
+		for (const char* stage : { "pairs", "collide", "solve", "sensors", "constraints", "transforms", "refit", "continuous", "islands", "splitIslands" })
+			CHECK(step["library"][stage].is_number());
+		CHECK(step["workers"].get<uint32_t>() >= 1);
+		CHECK(step["totalMs"].get<double>() >= step["totalLibraryMs"].get<double>());
+		CHECK(stats["sleep"]["moving"] == 10);
+		CHECK(stats["sleep"]["awake"].get<uint32_t>() + stats["sleep"]["sleeping"].get<uint32_t>() == 10);
+		CHECK(stats["sleep"]["islands"].is_null());
+		CHECK(stats["contacts"]["detailed"] == false);
+		CHECK(stats["contacts"]["total"].is_null());
+		CHECK(stats["contacts"]["recycled"].is_null());
+		CHECK(stats["contacts"]["roomGrowths"] == 0);
+		CHECK(stats["contacts"]["peak"].get<uint32_t>() >= 10);
+		CHECK(stats["settling"]["maxSpeed"].is_number());
+		CHECK(stats["settling"]["settling"].is_number());
+		CHECK(stats["settling"]["restingJitterMm"].is_number());
+		const nlohmann::json detailed = editor.Run("physics.stats", { { "detail", true } });
+		CHECK(detailed["contacts"]["total"].get<uint32_t>() >= 10);
+		CHECK(detailed["contacts"]["recycled"].is_number());
+		CHECK(detailed["sleep"]["islands"].get<uint32_t>() >= 1);
+		CHECK(detailed["contacts"]["detailed"] == false); // A query changes nothing
+		CHECK(editor.Run("physics.stats")["contacts"]["total"].is_null());
+		const EditorCommandResult invalid = editor.Layer->GetCommands().Execute(editor.Context(), "physics.stats", { { "detail", "yes" } });
+		CHECK_FALSE(invalid.Success);
+		CHECK(invalid.Error.find("detail") != std::string::npos);
+
+		// The status and the play state carry the running game's physics compactly.
+		const nlohmann::json physics = editor.Run("editor.status")["play"]["running"]["physics"];
+		REQUIRE(physics.is_object());
+		CHECK(physics["bodies"] == 11);
+		CHECK(physics["awake"].get<uint32_t>() <= 10);
+		CHECK(physics["stepMs"].is_number());
+		CHECK(editor.Run("play.state")["running"]["physics"]["bodies"] == 11);
+		CHECK(editor.Run("scene.info")["running"]["physics"]["bodies"] == 11);
+
 		// What the last frame built and destroyed.
 		Scene& game = *editor.Context().GetActiveScene();
 		CreateDynamicBox(game, "Spawned", glm::vec3(0.0f, 5.0f, 0.0f));
@@ -109,6 +149,7 @@ TEST_SUITE("Editor.World")
 		editor.Run("play.stop");
 		editor.Frames(1);
 		CHECK(editor.Run("physics.stats") == nlohmann::json { { "running", false } });
+		CHECK(editor.Run("editor.status")["play"]["running"].is_null());
 	}
 
 	TEST_CASE("The Physics section's facts wrap inside a narrow Streaming panel")
@@ -120,7 +161,7 @@ TEST_SUITE("Editor.World")
 		editor.Run("editor.showPanel", { { "panel", "Streaming" } });
 		editor.Frames(3);
 		const ImGuiWindow* sections = editor.FindStreamingSections();
-		for (const char* key : { "Streaming.PhysicsBodies", "Streaming.PhysicsPending", "Streaming.PhysicsReserved" })
+		for (const char* key : { "Streaming.PhysicsBodies", "Streaming.PhysicsPending", "Streaming.PhysicsReserved", "Streaming.Physics.Step" })
 		{
 			CAPTURE(key);
 			const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(key);

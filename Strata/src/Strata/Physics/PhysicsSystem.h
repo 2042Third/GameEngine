@@ -43,14 +43,15 @@ namespace Strata
 	// and static bodies only follow signaled changes, see PhysicsWorld).
 	//
 	// Other systems reach it through the scene services it registers while it exists (Scene/SceneServices.h):
-	// ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries, ICharacterControl and IPhysicsCapacity. Collision events are collected during each
+	// ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries, ICharacterControl, IPhysicsCapacity and
+	// IPhysicsDiagnostics. Collision events are collected during each
 	// step and dispatched afterwards on the main thread to the registered listeners (see ICollisionEventSource, which also
 	// says which contacts are tracked). Listeners may use the whole scene and physics API, including destroying entities;
 	// End events caused by changes made outside a step are dispatched after the next update.
 	//
 	// Main thread only. Functions return false / zero / empty results while there is no simulation.
 	class PhysicsSystem : public SceneSystem, public ICollisionEventSource, public IBodyMotionQuery, public IBodyControl, public IPhysicsQueries,
-		public ICharacterControl, public IPhysicsCapacity
+		public ICharacterControl, public IPhysicsCapacity, public IPhysicsDiagnostics
 	{
 	public:
 		explicit PhysicsSystem(Scene& scene);
@@ -167,6 +168,14 @@ namespace Strata
 
 		PhysicsCapacityInfo GetCapacityInfo() const override;
 		void Reserve(uint32_t bodies) override;
+
+		//////////////////////////////////////////////////////////////////////////
+		// Diagnostics (IPhysicsDiagnostics; see PhysicsWorld::GetStepInfo and SetDetailedStats). Detailed statistics asked for
+		// before the world exists apply to it once it is created, and stay on for the system's life.
+		//////////////////////////////////////////////////////////////////////////
+
+		PhysicsStepInfo GetStepInfo() const override;
+		void SetDetailedStats(bool detailed) override;
 	private:
 		struct CollisionListener
 		{
@@ -202,6 +211,7 @@ namespace Strata
 		bool m_WorldRequested = false;
 		bool m_ReportedNoWorld = false; // The scene found no free physics world (reported once)
 		uint32_t m_ReservedBodies = 0; // See Reserve
+		bool m_DetailedStats = false;  // See SetDetailedStats
 		std::vector<entt::scoped_connection> m_CreationConnections; // Watch for the first physics component
 
 		std::vector<Ref<CollisionListener>> m_CollisionListeners;

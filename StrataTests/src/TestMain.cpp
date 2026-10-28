@@ -40,6 +40,7 @@
 #include "World/WorldDriveProcess.h"
 
 #if ST_WITH_PHYSICS
+	#include "Physics/PhysicsScenes.h"
 	#include "Physics/PhysicsTestUtils.h"
 #endif
 
@@ -679,6 +680,13 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 #if ST_WITH_PHYSICS
 	if (mode == "broad-phase-churn")
 		return Strata::Tests::RunBroadPhaseChurnProcess();
+	if (mode == "physics-settle")
+	{
+		// <scene> <seconds> <result.json> [options]: plays a settle scene (Physics/PhysicsScenes.h) with the physics settings
+		// given and writes what it measured, for Tools/PhysicsSweep.py. A measurement runs at full speed.
+		Strata::Platform::DisableExecutionSpeedThrottling();
+		return Strata::Tests::RunPhysicsSettleProcess(argc, argv);
+	}
 #endif
 	if (mode == "local-shadows-memory")
 	{

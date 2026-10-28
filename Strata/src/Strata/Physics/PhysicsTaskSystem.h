@@ -45,8 +45,12 @@ namespace Strata
 		void Configure(b3WorldDef& definition);
 
 		// The workers box3d splits a step's stages for: the JobSystem's workers and the stepping thread, at most box3d's
-		// B3_MAX_WORKERS; 1 without a JobSystem.
+		// B3_MAX_WORKERS and at most the limit SetWorkerLimit set; 1 without a JobSystem.
 		static uint32_t GetWorkerCount();
+		// The most workers worlds created from now on split their steps for (0: no limit), process-wide: for the settle helper's
+		// sweeps and tests. Main thread.
+		static void SetWorkerLimit(uint32_t limit);
+		static uint32_t GetWorkerLimit();
 	private:
 		struct Task
 		{

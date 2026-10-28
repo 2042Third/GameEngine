@@ -2,16 +2,23 @@
 
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
+#include "Physics/PhysicsScenes.h"
 #include "Physics/PhysicsTestUtils.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
+#include "Strata/Physics/PhysicsRuntime.h"
 #include "Strata/Physics/PhysicsSystem.h"
+#include "Strata/Physics/PhysicsTaskSystem.h"
 #include "Strata/Physics/PhysicsWorld.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneServices.h"
 #include "TestHelpers.h"
+
+#include <box3d/box3d.h>
+#include <box3d/collision.h>
+#include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <chrono>
@@ -72,6 +79,53 @@ namespace
 		Floor
 	};
 
+	// The medians of a step's parts over the timed frames (DeveloperGuide "Physics instruments"): Strata's (PhysicsStats'
+	// parts of SyncTime and ContactTime), box3d's stages (PhysicsLibraryProfile) and what the instruments cost.
+	struct StepParts
+	{
+		std::vector<double> Apply, Sync, Characters, CheckedPairs, Events, WriteBack, Pairs, Instruments;
+		std::vector<double> LibraryPairs, Collide, Solve, Sensors, Constraints, Transforms, Refit, Continuous, SleepIslands, SplitIslands;
+
+		void Add(const PhysicsStats& stats)
+		{
+			Apply.push_back(stats.ApplyTime);
+			Sync.push_back(std::max(0.0, static_cast<double>(stats.SyncTime) - stats.ApplyTime - stats.CharacterTime - stats.CheckedPairTime));
+			Characters.push_back(stats.CharacterTime);
+			CheckedPairs.push_back(stats.CheckedPairTime);
+			Events.push_back(stats.EventTime);
+			WriteBack.push_back(stats.WriteBackTime);
+			Pairs.push_back(std::max(0.0, static_cast<double>(stats.ContactTime) - stats.EventTime));
+			Instruments.push_back(stats.InstrumentTime);
+			const PhysicsLibraryProfile& profile = stats.LibraryProfile;
+			LibraryPairs.push_back(profile.Pairs);
+			Collide.push_back(profile.Collide);
+			Solve.push_back(profile.Solve);
+			Sensors.push_back(profile.Sensors);
+			Constraints.push_back(profile.Constraints);
+			Transforms.push_back(profile.Transforms);
+			Refit.push_back(profile.Refit);
+			Continuous.push_back(profile.Continuous);
+			SleepIslands.push_back(profile.SleepIslands);
+			SplitIslands.push_back(profile.SplitIslands);
+		}
+
+		static double Median(const std::vector<double>& values)
+		{
+			return values.empty() ? 0.0 : Perf::Summarize(values).MedianMs;
+		}
+
+		std::string Describe(double strataMedian) const
+		{
+			const double instruments = Median(Instruments);
+			return fmt::format("Strata's parts (medians, ms): apply {:.3f}, sync {:.3f}, characters {:.3f}, checked pairs {:.3f}, events {:.3f}, "
+				"write-back {:.3f}, pairs {:.3f}, instruments {:.4f} ({:.2f}% of Strata's step); box3d's stages: pairs {:.3f}, collide {:.3f}, solve {:.3f} "
+				"(constraints {:.3f}, transforms {:.3f}, refit {:.3f}, continuous {:.3f}, sleep islands {:.3f}), sensors {:.3f}, split islands {:.3f}",
+				Median(Apply), Median(Sync), Median(Characters), Median(CheckedPairs), Median(Events), Median(WriteBack), Median(Pairs), instruments,
+				strataMedian > 0.0 ? 100.0 * instruments / strataMedian : 0.0, Median(LibraryPairs), Median(Collide), Median(Solve), Median(Constraints),
+				Median(Transforms), Median(Refit), Median(Continuous), Median(SleepIslands), Median(Sensors), Median(SplitIslands));
+		}
+	};
+
 	// Plays box stacks (Perf::CreateBoxStacks) while the boxes land on each other and measures that busy phase (see
 	// MeasureFallingBoxes).
 	Perf::MetricValues PlayFallingBoxes(size_t count, const std::string& metric, ContactListening listening)
@@ -103,6 +157,7 @@ namespace
 		std::vector<double> frames;
 		std::vector<double> librarySteps;
 		std::vector<double> strataSteps;
+		StepParts parts;
 		for (uint32_t frame = 0; frame < c_Warmup + c_Frames; frame++)
 		{
 			const Clock::time_point start = Clock::now();
@@ -115,16 +170,37 @@ namespace
 			frames.push_back(elapsed);
 			librarySteps.push_back(stats.LibraryStepTime);
 			strataSteps.push_back(static_cast<double>(stats.LastStepTime) - static_cast<double>(stats.LibraryStepTime));
+			parts.Add(stats);
 		}
 		const Perf::Measurement frame = Perf::Summarize(frames);
 		const Perf::Measurement library = Perf::Summarize(librarySteps);
 		const Perf::Measurement strata = Perf::Summarize(strataSteps);
 		MESSAGE(metric, ": frame median ", frame.MedianMs, " ms (p95 ", frame.P95Ms, " ms); step: library ", library.MedianMs, " ms, Strata ", strata.MedianMs, " ms");
+		MESSAGE(metric, ": ", parts.Describe(strata.MedianMs));
 
 		// Still the busy phase: most boxes are awake.
 		const PhysicsStats stats = physics.GetStats();
 		CHECK(stats.ActiveBodyCount > count / 2);
 		CHECK(stats.StepCount == c_Warmup + c_Frames);
+
+		// box3d's counters over three more frames, read only now: they walk box3d's islands, so the timed frames ran without
+		// them (PhysicsWorld::SetDetailedStats). The share of the awake contacts box3d recycled, and how the boxes settle.
+		physics.SetDetailedStats(true);
+		uint64_t recycled = 0;
+		uint64_t awakeContacts = 0;
+		for (uint32_t extra = 0; extra < 3; extra++)
+		{
+			scene.OnUpdateRuntime(c_FrameTimestep);
+			const PhysicsStats extraStats = physics.GetStats();
+			recycled += extraStats.RecycledContactCount;
+			awakeContacts += extraStats.AwakeContactCount;
+		}
+		const PhysicsStats detailed = physics.GetStats();
+		physics.SetDetailedStats(false);
+		MESSAGE(metric, ": box3d's islands ", detailed.IslandCount, ", contacts ", detailed.ContactCount, " (", detailed.AwakeContactCount, " awake), recycled ",
+			awakeContacts > 0 ? 100.0 * static_cast<double>(recycled) / static_cast<double>(awakeContacts) : 0.0, "% of the awake contacts over 3 steps; ",
+			detailed.ActiveBodyCount, " bodies awake, ", detailed.SettlingBodyCount, " settling, the fastest at ", detailed.MaxBodySpeed, " m/s; ",
+			detailed.LibraryWorkers, " box3d workers");
 		CHECK(CountPhysicsWarnings(logStart) == 0);
 		if (listening == ContactListening::Floor)
 		{
@@ -140,8 +216,12 @@ namespace
 		}
 		scene.OnRuntimeStop();
 		REQUIRE(library.MedianMs > 0.0);
-		return Perf::MetricValues { { metric + ".ActiveFrame", frame.MedianMs }, { metric + ".StrataStepTime", strata.MedianMs },
+		Perf::MetricValues values { { metric + ".ActiveFrame", frame.MedianMs }, { metric + ".StrataStepTime", strata.MedianMs },
 			{ metric + ".StrataToLibraryStep", strata.MedianMs / library.MedianMs } };
+		// box3d's narrow phase at 70,000 boxes: what contact recycling saves.
+		if (count == 70'000)
+			values[metric + ".CollideMs"] = StepParts::Median(parts.Collide);
+		return values;
 	}
 
 	// The busy phase of falling box stacks: the median 60 Hz frame (one fixed step each) against the budget of
@@ -152,10 +232,118 @@ namespace
 	void MeasureFallingBoxes(size_t count, const std::string& metric, ContactListening listening = ContactListening::Nobody)
 	{
 		Perf::ScopedApplicationJobSystem jobs;
-		Perf::CheckBudgetsConfirmed({ metric + ".ActiveFrame", metric + ".StrataStepTime", metric + ".StrataToLibraryStep" }, [&]
+		std::vector<std::string> keys { metric + ".ActiveFrame", metric + ".StrataStepTime", metric + ".StrataToLibraryStep" };
+		if (count == 70'000)
+			keys.push_back(metric + ".CollideMs");
+		Perf::CheckBudgetsConfirmed(keys, [&]
 		{
 			return PlayFallingBoxes(count, metric, listening);
 		});
+	}
+
+
+	//////////////////////////////////////////////////////////////////////////
+	// box3d alone (the library-only metrics): what the physics library itself takes for the work of a Strata metric, called
+	// directly as Physics.Box3D does, so that the Strata metric splits into box3d's share and Strata's.
+	//////////////////////////////////////////////////////////////////////////
+
+	// A box3d world as PhysicsWorld makes one: Strata's task system, sleep and continuous collision on, the room split between
+	// static and moving bodies, and the given gravity.
+	class LibraryWorld
+	{
+	public:
+		LibraryWorld(uint32_t staticRoom, uint32_t movingRoom, uint32_t contactRoom, const b3Vec3& gravity = b3Vec3 { 0.0f, -10.0f, 0.0f })
+			: m_Tasks(&m_Counters)
+		{
+			b3WorldDef definition = b3DefaultWorldDef();
+			definition.gravity = gravity;
+			definition.enableSleep = true;
+			definition.enableContinuous = true;
+			definition.capacity.staticBodyCount = static_cast<int>(staticRoom);
+			definition.capacity.staticShapeCount = static_cast<int>(staticRoom);
+			definition.capacity.dynamicBodyCount = static_cast<int>(movingRoom);
+			definition.capacity.dynamicShapeCount = static_cast<int>(movingRoom);
+			definition.capacity.contactCount = static_cast<int>(contactRoom);
+			m_Tasks.Configure(definition);
+			m_World = b3CreateWorld(&definition);
+			m_Hull = b3MakeBoxHull(0.5f, 0.5f, 0.5f);
+		}
+
+		~LibraryWorld()
+		{
+			b3DestroyWorld(m_World);
+		}
+
+		LibraryWorld(const LibraryWorld&) = delete;
+		LibraryWorld& operator=(const LibraryWorld&) = delete;
+
+		b3WorldId Get() const { return m_World; }
+
+		// A 1 m box as InstallBody makes it (the shape shared, contacts and sensor events on, a dynamic body's mass from its
+		// shape afterwards); a static body created after the world stepped finds its pairs itself.
+		b3BodyId CreateBox(b3BodyType type, const b3Vec3& position)
+		{
+			b3BodyDef bodyDefinition = b3DefaultBodyDef();
+			bodyDefinition.type = type;
+			bodyDefinition.position = position;
+			const b3BodyId body = b3CreateBody(m_World, &bodyDefinition);
+			b3ShapeDef shapeDefinition = b3DefaultShapeDef();
+			shapeDefinition.enableSensorEvents = true;
+			shapeDefinition.enableContactEvents = true;
+			shapeDefinition.invokeContactCreation = m_Stepped || type != b3_staticBody;
+			shapeDefinition.updateBodyMass = type != b3_dynamicBody;
+			b3CreateHullShape(body, &shapeDefinition, &m_Hull.base);
+			if (type == b3_dynamicBody)
+				b3Body_ApplyMassFromShapes(body);
+			return body;
+		}
+
+		void Step()
+		{
+			b3World_Step(m_World, c_FrameTimestep, 4);
+			m_Stepped = true;
+		}
+	private:
+		PhysicsRuntimeReference m_Runtime; // First: box3d's hooks are installed before the world exists
+		PhysicsTaskCounters m_Counters;
+		PhysicsTaskSystem m_Tasks;
+		b3WorldId m_World = b3_nullWorldId;
+		b3BoxHull m_Hull = {};
+		bool m_Stepped = false;
+	};
+
+	// The bodies of Grow65kMaxFrame in a world of box3d's own, reserved for `room` bodies (90% static as the scene's are) and
+	// holding 65,536 of them: the median time of creating 65,536 more and stepping once, over 5 fresh worlds (after one to warm
+	// up), as the scene's frame does.
+	Perf::Measurement MeasureLibraryGrowth(uint32_t room)
+	{
+		constexpr uint32_t c_Bodies = 65'536;
+		const auto createBodies = [](LibraryWorld& world, uint32_t first, uint32_t count)
+		{
+			for (uint32_t index = first; index < first + count; index++)
+			{
+				const b3Vec3 position { static_cast<float>(index % 256) * 3.0f, 0.0f, static_cast<float>(index / 256) * 3.0f };
+				if (index % 10 == 0)
+					world.CreateBox(b3_dynamicBody, b3Vec3 { position.x, 5.0f, position.z });
+				else
+					world.CreateBox(b3_staticBody, position);
+			}
+		};
+		std::vector<double> samples;
+		for (uint32_t round = 0; round < 6; round++)
+		{
+			const uint32_t movingRoom = room / 10;
+			LibraryWorld world(room - movingRoom, movingRoom, 2 * room, b3Vec3 { 0.0f, 0.0f, 0.0f });
+			createBodies(world, 0, c_Bodies);
+			world.Step();
+			const Clock::time_point start = Clock::now();
+			createBodies(world, c_Bodies, c_Bodies);
+			world.Step();
+			const double elapsed = MillisecondsSince(start);
+			if (round > 0)
+				samples.push_back(elapsed);
+		}
+		return Perf::Summarize(samples);
 	}
 
 }
@@ -291,28 +479,14 @@ TEST_SUITE("Perf.Physics")
 		Perf::ScopedApplicationJobSystem jobs;
 		Perf::CheckBudgetConfirmed("Perf.Physics.Characters1000Step", [&]
 		{
-			constexpr uint32_t c_Columns = 40;
 			constexpr uint32_t c_Characters = 1'000;
 			Scene scene;
-			Entity floor = scene.CreateEntity("Floor");
-			floor.GetTransform().Translation = glm::vec3(60.0f, -0.5f, 30.0f);
-			floor.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(100.0f, 0.5f, 100.0f);
-			for (uint32_t step = 0; step < 30; step++)
-				CreateStaticBox(scene, "Step " + std::to_string(step), glm::vec3(4.0f * static_cast<float>(step) + 3.0f, 0.15f, 30.0f), glm::vec3(1.0f, 0.15f, 100.0f));
-			std::vector<Entity> characters;
-			characters.reserve(c_Characters);
-			for (uint32_t index = 0; index < c_Characters; index++)
-			{
-				Entity character = scene.CreateEntity("Character");
-				character.GetTransform().Translation = glm::vec3(1.0f * static_cast<float>(index / c_Columns), 0.0f, 1.5f * static_cast<float>(index % c_Columns));
-				character.AddComponent<CharacterControllerComponent>();
-				characters.push_back(character);
-			}
+			const SettleScene crowd = CreateCharacterCrowd(scene, c_Characters);
+			const Entity first = scene.FindEntityByName("Character 0");
+			REQUIRE(first);
 			scene.OnRuntimeStart();
-			ICharacterControl* control = scene.GetService<ICharacterControl>();
-			REQUIRE(control != nullptr);
-			for (Entity character : characters)
-				REQUIRE(control->MoveCharacter(character, glm::vec3(2.0f, 0.0f, 0.0f)));
+			REQUIRE(scene.GetService<ICharacterControl>() != nullptr);
+			crowd.BeforeStep(scene, 0); // Every character walks along +X at 2 m/s
 
 			constexpr uint32_t c_Warmup = 10;
 			constexpr uint32_t c_Steps = 60;
@@ -328,7 +502,7 @@ TEST_SUITE("Perf.Physics")
 			const PhysicsStats stats = GetPhysics(scene).GetStats();
 			CHECK(stats.CharacterControllerCount == c_Characters);
 			// They walked on: past the first step at x = 2..4 for the first rows.
-			CHECK(GetWorldPosition(scene, characters.front()).x > 1.5f);
+			CHECK(GetWorldPosition(scene, first).x > 1.5f);
 			const Perf::Measurement step = Perf::Summarize(samples);
 			MESSAGE("1,000 characters: median step ", step.MedianMs, " ms (p95 ", step.P95Ms, " ms); controllers ", stats.CharacterTime, " ms, library ",
 				stats.LibraryStepTime, " ms");
@@ -488,5 +662,172 @@ TEST_SUITE("Perf.Physics")
 			return creation.MedianMs;
 		});
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Reading box3d's counters at 70,000 boxes")
+	{
+		// What b3World_GetCounters costs: box3d counts its islands and contacts together with its memory, walking every island
+		// and shared hull. The world reads them after every step only if that is at most 0.5% of this scene's library step,
+		// otherwise only while detailed statistics are on (PhysicsWorld::SetDetailedStats). Measured at the busy phase's
+		// start (nearly every box its own island) and once the stacks stand; for information (DeveloperGuide "Physics
+		// instruments" states the decision).
+		Perf::ScopedApplicationJobSystem jobs;
+		Scene scene;
+		Perf::CreateBoxStacks(scene, 70'000);
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		REQUIRE(physics.GetWorld() != nullptr);
+		const auto measureReads = [&]()
+		{
+			std::vector<double> samples;
+			for (uint32_t read = 0; read < 21; read++)
+			{
+				const Clock::time_point start = Clock::now();
+				const PhysicsLibraryCounters counters = physics.GetWorld()->ReadLibraryCounters();
+				samples.push_back(MillisecondsSince(start));
+				CHECK(counters.Islands > 0);
+			}
+			return Perf::Summarize(samples).MedianMs;
+		};
+		scene.OnUpdateRuntime(c_FrameTimestep);
+		const PhysicsLibraryCounters busy = physics.GetWorld()->ReadLibraryCounters();
+		const double busyRead = measureReads();
+		// The library step of the busy phase as Boxes70k measures it (frames 5 to 44), then the stacks standing.
+		std::vector<double> librarySteps;
+		for (uint32_t frame = 1; frame < 240; frame++)
+		{
+			scene.OnUpdateRuntime(c_FrameTimestep);
+			if (frame >= 5 && frame < 45)
+				librarySteps.push_back(physics.GetStats().LibraryStepTime);
+		}
+		const PhysicsLibraryCounters standing = physics.GetWorld()->ReadLibraryCounters();
+		const double standingRead = measureReads();
+		const double library = Perf::Summarize(librarySteps).MedianMs;
+		MESSAGE("b3World_GetCounters at 70,000 boxes: ", busyRead, " ms with ", busy.Islands, " islands (the busy phase's start), ", standingRead, " ms with ",
+			standing.Islands, " islands (", physics.GetStats().ActiveBodyCount, " bodies awake); the busy phase's library step median ", library,
+			" ms, so a read is ", library > 0.0 ? 100.0 * std::max(busyRead, standingRead) / library : 0.0, "% of it (the rule: at most 0.5%)");
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("box3d alone creating the bodies of Create10kBodies")
+	{
+		// Create10kBodies' spawn without Strata: 10,000 dynamic boxes created in a world that has stepped, the median of 8 rounds
+		// (after 2 to warm up), each round's boxes destroyed again before the next. Against Create10kBodies it splits that
+		// metric into box3d's share and Strata's (the roadmap's open items).
+		Perf::ScopedApplicationJobSystem jobs;
+		Perf::CheckBudgetConfirmed("Perf.Physics.Create10kBodies.LibraryOnly", [&]
+		{
+			LibraryWorld world(1'024, 1'024, 2'048);
+			world.CreateBox(b3_staticBody, b3Vec3 { 75.0f, -0.5f, 75.0f });
+			world.Step();
+			std::vector<double> samples;
+			std::vector<b3BodyId> bodies;
+			bodies.reserve(10'000);
+			for (uint32_t round = 0; round < 10; round++)
+			{
+				bodies.clear();
+				const Clock::time_point start = Clock::now();
+				for (uint32_t index = 0; index < 10'000; index++)
+				{
+					const b3Vec3 position { static_cast<float>(index % 100) * 1.5f, 5.0f + static_cast<float>(round) * 2.0f, static_cast<float>(index / 100) * 1.5f };
+					bodies.push_back(world.CreateBox(b3_dynamicBody, position));
+				}
+				const double elapsed = MillisecondsSince(start);
+				if (round >= 2)
+					samples.push_back(elapsed);
+				for (const b3BodyId body : bodies)
+					b3DestroyBody(body);
+				world.Step();
+			}
+			const Perf::Measurement creation = Perf::Summarize(samples);
+			MESSAGE("box3d creating 10,000 dynamic boxes: median ", creation.MedianMs, " ms, max ", creation.MaxMs, " ms");
+			return creation.MedianMs;
+		});
+	}
+
+	TEST_CASE("box3d alone creating the bodies of Create100kStaticBodies")
+	{
+		// Create100kStaticBodies without Strata: 100,000 static boxes created in a world with room for 262,144 bodies that has
+		// stepped (so each finds its pairs), the median of 5 rounds after one to warm up.
+		Perf::ScopedApplicationJobSystem jobs;
+		Perf::CheckBudgetConfirmed("Perf.Physics.Create100kStaticBodies.LibraryOnly", [&]
+		{
+			LibraryWorld world(262'144 - 1'024, 1'024, 2'048);
+			world.CreateBox(b3_staticBody, b3Vec3 { 0.0f, -0.5f, 0.0f });
+			world.Step();
+			std::vector<double> samples;
+			std::vector<b3BodyId> bodies;
+			bodies.reserve(100'000);
+			for (uint32_t round = 0; round < 6; round++)
+			{
+				bodies.clear();
+				const Clock::time_point start = Clock::now();
+				for (uint32_t index = 0; index < 100'000; index++)
+					bodies.push_back(world.CreateBox(b3_staticBody, b3Vec3 { static_cast<float>(index % 316) * 2.0f, 0.5f, static_cast<float>(index / 316) * 2.0f }));
+				const double elapsed = MillisecondsSince(start);
+				if (round >= 1)
+					samples.push_back(elapsed);
+				for (const b3BodyId body : bodies)
+					b3DestroyBody(body);
+				world.Step();
+			}
+			const Perf::Measurement creation = Perf::Summarize(samples);
+			MESSAGE("box3d creating 100,000 static boxes: median ", creation.MedianMs, " ms, max ", creation.MaxMs, " ms");
+			return creation.MedianMs;
+		});
+	}
+
+	TEST_CASE("box3d alone creating the bodies of Grow65kMaxFrame, and what its growth costs")
+	{
+		// The frame of Grow65kMaxFrame without Strata, in a world reserved for 65,536 bodies (box3d grows its storage while the
+		// bodies come) and in one reserved for 131,072 (no growth): the first is the library's share of that frame, and the
+		// difference of the two medians is what growing costs (GrowthMs). Each median is of 5 fresh worlds; a difference
+		// within the spread of the two is noise, which the message says.
+		Perf::ScopedApplicationJobSystem jobs;
+		Perf::CheckBudgetsConfirmed({ "Perf.Physics.Grow65k.LibraryOnly", "Perf.Physics.Grow65k.GrowthMs" }, [&]
+		{
+			const Perf::Measurement growing = MeasureLibraryGrowth(65'536);
+			const Perf::Measurement reserved = MeasureLibraryGrowth(131'072);
+			const double growth = growing.MedianMs - reserved.MedianMs;
+			const double spread = std::max(growing.MaxMs - growing.MinMs, reserved.MaxMs - reserved.MinMs);
+			MESSAGE("box3d creating 65,536 bodies and stepping: ", growing.MedianMs, " ms (", growing.MinMs, "-", growing.MaxMs, ") in a world reserved for 65,536, ",
+				reserved.MedianMs, " ms (", reserved.MinMs, "-", reserved.MaxMs, ") in one reserved for 131,072: growing costs ", growth, " ms",
+				std::abs(growth) <= spread ? " (within noise: the spread is " + std::to_string(spread) + " ms)" : std::string());
+			return Perf::MetricValues { { "Perf.Physics.Grow65k.LibraryOnly", growing.MedianMs }, { "Perf.Physics.Grow65k.GrowthMs", std::max(growth, 0.0) } };
+		});
+	}
+
+	TEST_CASE("box3d alone taking a cell's 25,000 static bodies out of the simulation")
+	{
+		// The request's frame of Perf.World.CellUnloadMaxFrame without Strata: the cell's 25,000 static boxes disabled at once,
+		// the median of 5 rounds after one to warm up (the bodies are enabled again, and the world stepped, between rounds).
+		Perf::ScopedApplicationJobSystem jobs;
+		Perf::CheckBudgetConfirmed("Perf.World.CellUnload.LibraryOnly", [&]
+		{
+			LibraryWorld world(32'768, 1'024, 2'048);
+			world.CreateBox(b3_staticBody, b3Vec3 { 0.0f, 0.0f, 0.0f });
+			std::vector<b3BodyId> bodies;
+			bodies.reserve(25'000);
+			for (uint32_t index = 0; index < 25'000; index++)
+				bodies.push_back(world.CreateBox(b3_staticBody, b3Vec3 { static_cast<float>(index % 160) * 2.0f, 1.0f, static_cast<float>(index / 160) * 2.0f }));
+			world.Step();
+			std::vector<double> samples;
+			for (uint32_t round = 0; round < 6; round++)
+			{
+				const Clock::time_point start = Clock::now();
+				for (const b3BodyId body : bodies)
+					b3Body_Disable(body);
+				const double elapsed = MillisecondsSince(start);
+				if (round >= 1)
+					samples.push_back(elapsed);
+				world.Step();
+				for (const b3BodyId body : bodies)
+					b3Body_Enable(body);
+				world.Step();
+			}
+			const Perf::Measurement removal = Perf::Summarize(samples);
+			MESSAGE("box3d disabling 25,000 static bodies: median ", removal.MedianMs, " ms, max ", removal.MaxMs, " ms");
+			return removal.MedianMs;
+		});
 	}
 }

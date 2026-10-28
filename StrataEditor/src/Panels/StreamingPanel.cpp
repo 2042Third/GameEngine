@@ -264,13 +264,19 @@ namespace Strata
 
 	void StreamingPanel::OnUpdate(EditorPanelContext& context)
 	{
-		// Only a running game has physics; reading its capacity costs a service lookup.
+		// Only a running game has physics; reading its capacity and its last step costs two service lookups.
 		m_Physics.reset();
+		m_PhysicsStep.reset();
 		if (context.Context.IsPlaying())
 		{
 			const Ref<Scene>& scene = context.Context.GetActiveScene();
 			if (const IPhysicsCapacity* physics = scene && scene->IsRunning() ? scene->GetService<IPhysicsCapacity>() : nullptr)
 				m_Physics = physics->GetCapacityInfo();
+			if (const IPhysicsDiagnostics* diagnostics = scene && scene->IsRunning() ? scene->GetService<IPhysicsDiagnostics>() : nullptr)
+			{
+				if (const PhysicsStepInfo step = diagnostics->GetStepInfo(); step.HasWorld)
+					m_PhysicsStep = step;
+			}
 		}
 
 		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
@@ -372,7 +378,7 @@ namespace Strata
 				ImGui::SetScrollHereY(0.0f);
 			m_RevealPhysics = false;
 			if (open)
-				DrawPhysics(*m_Physics);
+				DrawPhysics(*m_Physics, m_PhysicsStep);
 		}
 		if (UI::SectionHeader("Streaming.Memory", "Memory"))
 			DrawPools(stats);
@@ -447,7 +453,7 @@ namespace Strata
 			static_cast<unsigned long long>(stats.StagingReleases));
 	}
 
-	void StreamingPanel::DrawPhysics(const PhysicsCapacityInfo& physics)
+	void StreamingPanel::DrawPhysics(const PhysicsCapacityInfo& physics, const std::optional<PhysicsStepInfo>& step)
 	{
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		if (physics.MaxBodies == 0)
@@ -482,6 +488,22 @@ namespace Strata
 		std::snprintf(fact.data(), fact.size(), "reserves %.1f MB", ToMB(physics.ReservedBytes));
 		ContinueLine(fact.data(), colors.TextSecondary);
 		UI::ItemProbe::Record("Streaming.PhysicsReserved");
+		if (!step)
+			return;
+		// The last step: its time and box3d's part, the bodies awake of the moving ones, and the share of the awake contacts
+		// box3d recycled, which it counts only while detailed statistics are on (physics.stats).
+		ImGui::TextWrapped("Step %.2f ms (box3d %.2f)", step->StepMs, step->LibraryMs);
+		UI::ItemProbe::Record("Streaming.Physics.Step");
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Wall time of the last physics step and box3d's own part of it; Strata's part is the rest (physics.stats has its parts)");
+		std::snprintf(fact.data(), fact.size(), "awake %u of %u", step->AwakeBodies, step->AwakeBodies + step->SleepingBodies);
+		ContinueLine(fact.data(), colors.TextSecondary);
+		if (step->DetailedStats && step->AwakeContacts > 0)
+		{
+			// At most all of them: an island that fell asleep in the step leaves fewer awake contacts than the pass recycled.
+			std::snprintf(fact.data(), fact.size(), "recycled %.0f%%", std::min(100.0, 100.0 * static_cast<double>(step->RecycledContacts) / static_cast<double>(step->AwakeContacts)));
+			ContinueLine(fact.data(), colors.TextSecondary);
+		}
 	}
 
 	void StreamingPanel::DrawUploads(const AssetManagerStats& stats)

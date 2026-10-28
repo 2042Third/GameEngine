@@ -25,7 +25,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <optional>
 
 // Worlds and the physics that holds them: world.cook, world.info and physics.stats.
 
@@ -318,7 +320,53 @@ namespace Strata
 				{ "cellsLoading", stats.CellsLoading }, { "cellsDirty", world->GetDirtyCells().size() }, { "persistentDirty", world->IsPersistentDirty() } };
 		}
 
-		nlohmann::json DescribePhysicsStats(const Scene* scene)
+		// What the last step did, as the instruments saw it (DeveloperGuide "Physics instruments"). box3d's counters come from
+		// every step while detailed statistics are on; otherwise `queried` holds them when the query read them (box3d's last
+		// step), and without either they are null.
+		nlohmann::json DescribePhysicsStep(const PhysicsStats& stats, const std::optional<PhysicsLibraryCounters>& queried)
+		{
+			const PhysicsLibraryProfile& profile = stats.LibraryProfile;
+			std::optional<PhysicsLibraryCounters> counters = queried;
+			if (stats.DetailedStats)
+				counters = PhysicsLibraryCounters { stats.IslandCount, stats.ContactCount, stats.AwakeContactCount, stats.RecycledContactCount };
+			const auto counter = [&](uint32_t PhysicsLibraryCounters::* field) { return counters ? nlohmann::json((*counters).*field) : nlohmann::json(nullptr); };
+			nlohmann::json recycledShare = nullptr;
+			if (counters && counters->AwakeContacts > 0)
+				recycledShare = std::min(1.0, static_cast<double>(counters->RecycledContacts) / static_cast<double>(counters->AwakeContacts));
+			// SyncTime holds the changes, the entities' synchronization, the characters and the checked pairs; ContactTime the
+			// events and the pair upkeep.
+			const float sync = std::max(stats.SyncTime - stats.ApplyTime - stats.CharacterTime - stats.CheckedPairTime, 0.0f);
+			const float pairs = std::max(stats.ContactTime - stats.EventTime, 0.0f);
+			return {
+				{ "step", {
+					{ "ms", stats.LastStepTime },
+					{ "libraryMs", stats.LibraryStepTime },
+					{ "strataMs", std::max(stats.LastStepTime - stats.LibraryStepTime, 0.0f) },
+					{ "parts", { { "apply", stats.ApplyTime }, { "sync", sync }, { "characters", stats.CharacterTime }, { "checkedPairs", stats.CheckedPairTime },
+						{ "events", stats.EventTime }, { "writeBack", stats.WriteBackTime }, { "pairs", pairs }, { "instruments", stats.InstrumentTime } } },
+					{ "library", { { "pairs", profile.Pairs }, { "collide", profile.Collide }, { "solve", profile.Solve }, { "sensors", profile.Sensors },
+						{ "constraints", profile.Constraints }, { "transforms", profile.Transforms }, { "refit", profile.Refit },
+						{ "continuous", profile.Continuous }, { "islands", profile.SleepIslands }, { "splitIslands", profile.SplitIslands } } },
+					{ "workers", stats.LibraryWorkers },
+					{ "totalMs", stats.TotalStepMs },
+					{ "totalLibraryMs", stats.TotalLibraryMs } } },
+				{ "sleep", { { "awake", stats.ActiveBodyCount }, { "sleeping", stats.SleepingBodyCount }, { "moving", stats.MovingBodyCount },
+					{ "islands", counter(&PhysicsLibraryCounters::Islands) } } },
+				{ "contacts", {
+					{ "total", counter(&PhysicsLibraryCounters::Contacts) },
+					{ "awake", counter(&PhysicsLibraryCounters::AwakeContacts) },
+					{ "recycled", counter(&PhysicsLibraryCounters::RecycledContacts) },
+					{ "recycledShare", recycledShare },
+					{ "detailed", stats.DetailedStats },
+					{ "tracked", stats.ContactPairCount },
+					{ "capacity", stats.MaxContactConstraints },
+					{ "peak", stats.LibraryContactPeak },
+					{ "roomGrowths", stats.ContactRoomGrowths },
+					{ "lastGrowthStepMs", stats.LastContactGrowthStepMs } } },
+				{ "settling", { { "maxSpeed", stats.MaxBodySpeed }, { "settling", stats.SettlingBodyCount }, { "restingJitterMm", stats.RestingJitter } } } };
+		}
+
+		nlohmann::json DescribePhysicsStats(const Scene* scene, bool detail)
 		{
 			if (!scene || !scene->IsRunning())
 				return { { "running", false } };
@@ -326,7 +374,10 @@ namespace Strata
 			const PhysicsSystem* physics = scene->GetSystem<PhysicsSystem>();
 			const PhysicsStats stats = physics ? physics->GetStats() : PhysicsStats();
 			const PhysicsCapacityInfo capacity = physics ? physics->GetCapacityInfo() : PhysicsCapacityInfo();
-			return {
+			std::optional<PhysicsLibraryCounters> queried;
+			if (detail && physics && physics->GetWorld())
+				queried = physics->GetWorld()->ReadLibraryCounters();
+			nlohmann::json result = {
 				{ "running", true },
 				{ "simulating", physics && physics->GetWorld() != nullptr },
 				{ "bodies", {
@@ -360,6 +411,8 @@ namespace Strata
 				{ "steps", stats.StepCount },
 				{ "heldSteps", stats.HeldStepCount },
 				{ "waitingForMeshes", stats.WaitingForMeshes } };
+			result.update(DescribePhysicsStep(stats, queried));
+			return result;
 		}
 
 	}
@@ -965,13 +1018,28 @@ namespace Strata
 			"frame, the slices a switched-to scene's bodies were built in while it loaded (preparedSlices; 0 when they were built as the scene "
 			"started), the world's growths past its room (count, the last one's milliseconds and room), what the world needed beyond the room it "
 			"was created with (demand: the scene's next world reserves it), the last step's milliseconds, the steps run, the steps held while "
-			"mesh colliders wait for their meshes, and whether the last step was held. {running: false} while editing; simulating is false while "
-			"a running scene has no physics components.",
-			ObjectSchema({}),
-			[](EditorContext& context, const nlohmann::json&)
+			"mesh colliders wait for their meshes, and whether the last step was held. What the last step did: step (ms; libraryMs, box3d's own "
+			"part; strataMs, Strata's, in parts apply, sync, characters, checkedPairs, events, writeBack, pairs and instruments; library: box3d's "
+			"stages pairs, collide, solve and sensors, which add up to libraryMs, and the parts of solve constraints, transforms, refit, continuous "
+			"and islands, besides splitIslands; workers: box3d's; totalMs and totalLibraryMs since play started: difference two reads), sleep "
+			"(awake, sleeping and moving bodies, islands), contacts (total, awake and recycled: box3d's reuse of resting contacts without new "
+			"collision work, and recycledShare of the awake ones; tracked: touching entity pairs someone listens to; capacity; peak: the most "
+			"contacts box3d held; roomGrowths: steps after which box3d's contact storage grew while playing) and settling (maxSpeed of the moving "
+			"bodies in m/s; settling: those faster than the sleep threshold; restingJitterMm: how far the others still move in a step). box3d's "
+			"counters (islands; contacts total, awake and recycled) are read every step only while detailed statistics are on (contacts.detailed: "
+			"the perf lab, a game run with a perf log); otherwise detail: true reads them once for this answer (box3d's last step) and changes "
+			"nothing, and without it they are null. {running: false} while editing; simulating is false while a running scene has no physics "
+			"components.",
+			ObjectSchema({ { "detail", BoolSchema("Read box3d's island and contact counters for this answer when they are not read every step "
+				"(default false)") } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
 			{
+				CommandArguments arguments(parameters);
+				const bool detail = arguments.GetBool("detail", false);
+				if (!arguments.IsValid())
+					return arguments.Fail();
 				const Ref<Scene>& scene = context.GetActiveScene();
-				return EditorCommandResult::Ok(DescribePhysicsStats(context.IsPlaying() ? scene.get() : nullptr));
+				return EditorCommandResult::Ok(DescribePhysicsStats(context.IsPlaying() ? scene.get() : nullptr, detail));
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 	}
 

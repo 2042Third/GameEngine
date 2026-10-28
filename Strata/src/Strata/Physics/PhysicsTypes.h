@@ -85,6 +85,40 @@ namespace Strata
 		bool operator==(const PhysicsCapacityDemand& other) const = default;
 	};
 
+	// The physics library's own stage times of a fixed step, in milliseconds: box3d's b3World_GetProfile read after each of its
+	// steps and summed over the fixed step's box3d steps. Two levels, as box3d measures them: the stages, whose sum is the
+	// library step (up to box3d's own small overhead), and the parts of Solve, which are measured inside it and never added to
+	// it. SplitIslands runs in a task beside the solve and is added to nothing.
+	struct PhysicsLibraryProfile
+	{
+		// The stages
+		float Pairs = 0.0f;        // Finding new pairs in the broad phase
+		float Collide = 0.0f;      // The narrow phase: contact manifolds (contacts recycled skip it)
+		float Solve = 0.0f;        // Solving, integrating, islands, transforms and the broad phase's refit
+		float Sensors = 0.0f;      // Sensor overlaps
+		// Parts of Solve
+		float Constraints = 0.0f;  // The constraint solver's stages
+		float Transforms = 0.0f;   // Finalizing the bodies' transforms
+		float Refit = 0.0f;        // Refitting the broad phase's trees
+		float Continuous = 0.0f;   // Continuous collision of fast bodies (box3d's bullets)
+		float SleepIslands = 0.0f; // Putting islands to sleep
+		// Beside the solve
+		float SplitIslands = 0.0f;
+	};
+
+	// box3d's counters after a step (b3World_GetCounters): its islands, its contacts (touching or not), the awake ones (as of
+	// after the step) and the contacts its collide pass recycled. box3d resets its recycled count only in a collide pass, which
+	// runs only while some contact is awake, so after a step that left no contact awake it still holds the last pass's count:
+	// that step counts 0 recycled (exact for that case; it misses only the contacts recycled in the step in which the last
+	// island fell asleep).
+	struct PhysicsLibraryCounters
+	{
+		uint32_t Islands = 0;
+		uint32_t Contacts = 0;
+		uint32_t AwakeContacts = 0;
+		uint32_t RecycledContacts = 0;
+	};
+
 	struct PhysicsStats
 	{
 		uint32_t BodyCount = 0;          // Bodies in the simulation (inactive entities' bodies are excluded)
@@ -147,6 +181,46 @@ namespace Strata
 		// The slices a loaded scene's world was built in while its load prepared it, before the scene ran
 		// (PhysicsSystem::PrepareLoadedScene); 0 for a world built when its scene started.
 		uint32_t PreparedSlices = 0;
+
+		// The instruments (DeveloperGuide "Physics instruments"), kept as the world steps, so that IPhysicsDiagnostics reads
+		// them in constant time. Of the last fixed step unless stated.
+		// Bodies: the moving bodies in the simulation (dynamic and kinematic bodies of entities in the simulation, and character
+		// controllers' presence bodies, as ActiveBodyCount counts them), and those of them asleep.
+		uint32_t MovingBodyCount = 0;
+		uint32_t SleepingBodyCount = 0;
+		// box3d's counters (see PhysicsLibraryCounters; RecycledContactCount summed over the fixed step's box3d steps), read
+		// after every box3d step only while DetailedStats is on (PhysicsWorld::SetDetailedStats: box3d counts them together with
+		// its memory, which walks every island); 0 otherwise.
+		bool DetailedStats = false;
+		uint32_t IslandCount = 0;
+		uint32_t ContactCount = 0;
+		uint32_t AwakeContactCount = 0;
+		uint32_t RecycledContactCount = 0;
+		PhysicsLibraryProfile LibraryProfile; // box3d's stage times
+		uint32_t LibraryWorkers = 0;          // The workers box3d splits its stages for (b3World_GetWorkerCount)
+		// The most contacts box3d held at the start of a step so far (b3World_GetMaxCapacity: a peak, not its storage), the
+		// steps after which that peak passed the contact room box3d reserved or its next doubling (box3d's contact storage grew
+		// while playing), and the library time of the last such step.
+		uint32_t LibraryContactPeak = 0;
+		uint32_t ContactRoomGrowths = 0;
+		float LastContactGrowthStepMs = 0.0f;
+		// How the dynamic bodies the step wrote back settle: the fastest one's speed (m/s), those faster than their sleep
+		// threshold, and the RMS of the step's displacement of the others, in millimeters. Speeds are displacements over the
+		// fixed step, a proxy: box3d's sleep test uses its own sleep velocity (linear speed plus the angular arc over the body's
+		// extent), so a body counted settling may still fall asleep.
+		float MaxBodySpeed = 0.0f;
+		uint32_t SettlingBodyCount = 0;
+		float RestingJitter = 0.0f;
+		// Parts of Strata's work, in milliseconds: ApplyTime (changes and growth at the step's start) and CheckedPairTime are
+		// parts of SyncTime, EventTime (reading box3d's events) is a part of ContactTime, and InstrumentTime is what reading
+		// box3d's profile and counters cost the step (also part of LastStepTime, in none of the other parts).
+		float ApplyTime = 0.0f;
+		float CheckedPairTime = 0.0f;
+		float EventTime = 0.0f;
+		float InstrumentTime = 0.0f;
+		// Since the world was created: the steps' wall time and the library's, in milliseconds (tools difference two reads).
+		double TotalStepMs = 0.0;
+		double TotalLibraryMs = 0.0;
 	};
 
 	// Triangle data used to build MeshColliderComponent shapes.

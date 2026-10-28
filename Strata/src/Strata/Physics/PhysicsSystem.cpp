@@ -64,11 +64,13 @@ namespace Strata
 		m_Scene.RegisterService<IPhysicsQueries>(*this);
 		m_Scene.RegisterService<ICharacterControl>(*this);
 		m_Scene.RegisterService<IPhysicsCapacity>(*this);
+		m_Scene.RegisterService<IPhysicsDiagnostics>(*this);
 	}
 
 	PhysicsSystem::~PhysicsSystem()
 	{
 		OnRuntimeStop();
+		m_Scene.UnregisterService<IPhysicsDiagnostics>(*this);
 		m_Scene.UnregisterService<IPhysicsCapacity>(*this);
 		m_Scene.UnregisterService<ICharacterControl>(*this);
 		m_Scene.UnregisterService<IPhysicsQueries>(*this);
@@ -183,6 +185,18 @@ namespace Strata
 		m_ReservedBodies = bodies;
 		if (m_World)
 			m_World->Reserve(bodies);
+	}
+
+	PhysicsStepInfo PhysicsSystem::GetStepInfo() const
+	{
+		return m_World ? m_World->GetStepInfo() : PhysicsStepInfo();
+	}
+
+	void PhysicsSystem::SetDetailedStats(bool detailed)
+	{
+		m_DetailedStats = detailed;
+		if (m_World)
+			m_World->SetDetailedStats(detailed);
 	}
 
 	CollisionListenerID PhysicsSystem::AddCollisionListener(CollisionCallback callback, CollisionListenerScope scope)
@@ -571,6 +585,7 @@ namespace Strata
 		m_AppliedLayerMasks = settings.LayerCollisionMasks;
 		if (m_ReservedBodies > 0)
 			m_World->Reserve(m_ReservedBodies);
+		m_World->SetDetailedStats(m_DetailedStats);
 		// Contacts are tracked for the listeners and watches registered so far.
 		UpdateContactTracking();
 		for (const auto& [entity, count] : m_CollisionWatches)

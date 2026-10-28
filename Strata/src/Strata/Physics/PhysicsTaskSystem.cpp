@@ -6,6 +6,7 @@
 #include <box3d/box3d.h>
 
 #include <algorithm>
+#include <atomic>
 
 namespace Strata
 {
@@ -66,11 +67,30 @@ namespace Strata
 		definition.userTaskContext = this;
 	}
 
+	namespace
+	{
+
+		std::atomic<uint32_t> s_WorkerLimit = 0; // See SetWorkerLimit
+
+	}
+
 	uint32_t PhysicsTaskSystem::GetWorkerCount()
 	{
 		if (!JobSystem::IsInitialized())
 			return 1;
-		return std::min<uint32_t>(JobSystem::GetWorkerThreadCount() + 1, B3_MAX_WORKERS);
+		const uint32_t count = std::min<uint32_t>(JobSystem::GetWorkerThreadCount() + 1, B3_MAX_WORKERS);
+		const uint32_t limit = s_WorkerLimit.load(std::memory_order_relaxed);
+		return limit > 0 ? std::min(count, limit) : count;
+	}
+
+	void PhysicsTaskSystem::SetWorkerLimit(uint32_t limit)
+	{
+		s_WorkerLimit.store(limit, std::memory_order_relaxed);
+	}
+
+	uint32_t PhysicsTaskSystem::GetWorkerLimit()
+	{
+		return s_WorkerLimit.load(std::memory_order_relaxed);
 	}
 
 	PhysicsTaskSystem::Task* PhysicsTaskSystem::AcquireTask()

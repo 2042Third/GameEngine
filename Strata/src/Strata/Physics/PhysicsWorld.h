@@ -264,7 +264,24 @@ namespace Strata
 		std::vector<Entity> OverlapSphere(const glm::vec3& center, float radius, uint32_t layerMask = c_AllPhysicsLayers, bool includeTriggers = false) const;
 		std::vector<Entity> OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, uint32_t layerMask = c_AllPhysicsLayers, bool includeTriggers = false) const;
 
+		// Walks every record to count the bodies by type (for physics.stats and tests, never every frame); the instruments it
+		// reports are kept as the world steps (see GetStepInfo).
 		PhysicsStats GetStats() const;
+
+		//////////////////////////////////////////////////////////////////////////
+		// Instruments (DeveloperGuide "Physics instruments")
+		//////////////////////////////////////////////////////////////////////////
+
+		// What the last step did, in constant time: the fields of GetStats that need no walk (see IPhysicsDiagnostics).
+		PhysicsStepInfo GetStepInfo() const;
+		// Whether box3d's counters (PhysicsLibraryCounters) are read after every box3d step. box3d counts them together with its
+		// memory, which walks every island and shared hull, so the world reads them only while asked to (the perf lab, the
+		// settle helper, a game run with a perf log); off, those fields of the stats are 0. Applies from the next step.
+		void SetDetailedStats(bool detailed);
+		bool IsDetailedStats() const;
+		// box3d's counters as of its last step, read now (physics.stats {detail: true}): changes nothing. The recycled count
+		// follows PhysicsLibraryCounters' rule for that box3d step.
+		PhysicsLibraryCounters ReadLibraryCounters() const;
 	private:
 		Scope<PhysicsWorldData> m_Data;
 	};

@@ -351,7 +351,8 @@ namespace Strata
 	{
 		FramePerfColumnGroup group;
 		group.Names = { "WorldCellsWanted", "WorldCellsLoading", "WorldCellsLoaded", "WorldCellsUnloading", "PhysicsBodies", "PhysicsBodiesWaiting",
-			"PhysicsBodiesPending", "PhysicsMaxBodies" };
+			"PhysicsBodiesPending", "PhysicsMaxBodies", "PhysicsStepMs", "PhysicsLibraryMs", "PhysicsAwakeBodies", "PhysicsSleepingBodies", "PhysicsContacts",
+			"PhysicsRecycledContacts", "PhysicsMaxBodySpeed" };
 		group.Write = [this](FramePerfRow& row)
 		{
 			const IWorldStreaming* streaming = m_Scene ? m_Scene->GetService<IWorldStreaming>() : nullptr;
@@ -380,6 +381,36 @@ namespace Strata
 			else
 			{
 				for (int column = 0; column < 4; column++)
+					row.AddEmpty();
+			}
+			// What the last physics step did (IPhysicsDiagnostics). The log turns box3d's counters on for the scene it logs (they
+			// are read only when asked for, see PhysicsWorld::SetDetailedStats), so the contact columns are filled from the
+			// scene's next step on.
+			IPhysicsDiagnostics* diagnostics = m_Scene ? m_Scene->GetService<IPhysicsDiagnostics>() : nullptr;
+			if (diagnostics)
+				diagnostics->SetDetailedStats(true);
+			const PhysicsStepInfo step = diagnostics ? diagnostics->GetStepInfo() : PhysicsStepInfo();
+			if (step.HasWorld)
+			{
+				row.Add(step.StepMs, 3);
+				row.Add(step.LibraryMs, 3);
+				row.Add(step.AwakeBodies, 0);
+				row.Add(step.SleepingBodies, 0);
+				if (step.DetailedStats)
+				{
+					row.Add(step.Contacts, 0);
+					row.Add(step.RecycledContacts, 0);
+				}
+				else
+				{
+					row.AddEmpty();
+					row.AddEmpty();
+				}
+				row.Add(step.MaxBodySpeed, 3);
+			}
+			else
+			{
+				for (int column = 0; column < 7; column++)
 					row.AddEmpty();
 			}
 		};

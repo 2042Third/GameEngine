@@ -90,6 +90,9 @@ namespace Strata
 		const std::optional<AssetManagerStats>& GetStats() const { return m_Stats; }
 		// The running game's physics capacity as this frame's OnUpdate read it (nullopt while editing or without physics).
 		const std::optional<PhysicsCapacityInfo>& GetPhysics() const { return m_Physics; }
+		// What the running game's last physics step did as this frame's OnUpdate read it (nullopt while editing or without
+		// physics).
+		const std::optional<PhysicsStepInfo>& GetPhysicsStep() const { return m_PhysicsStep; }
 		// Opens the Physics section at the next draw and scrolls it to the top of the panel (the status bar's pill of bodies
 		// without collision leads there). Sections: World, Physics, Memory, Loads and uploads, then the assets.
 		void RevealPhysics() { m_RevealPhysics = true; }
@@ -149,7 +152,7 @@ namespace Strata
 		void DrawPools(const AssetManagerStats& stats);
 		void DrawStreaming(const AssetManagerStats& stats);
 		void DrawUploads(const AssetManagerStats& stats);
-		void DrawPhysics(const PhysicsCapacityInfo& physics);
+		void DrawPhysics(const PhysicsCapacityInfo& physics, const std::optional<PhysicsStepInfo>& step);
 		// The World section: the streaming world's statistics and its cell map.
 		void DrawWorld(EditorPanelContext& context, const WorldStreamer& streamer, bool editable);
 		void DrawTable();
@@ -169,6 +172,7 @@ namespace Strata
 	private:
 		std::optional<AssetManagerStats> m_Stats;
 		std::optional<PhysicsCapacityInfo> m_Physics;
+		std::optional<PhysicsStepInfo> m_PhysicsStep;
 		bool m_RevealPhysics = false;
 		bool m_RevealWorld = false;
 		CellMap m_CellMap;

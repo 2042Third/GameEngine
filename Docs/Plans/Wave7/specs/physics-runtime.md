@@ -1152,3 +1152,21 @@ budgets of 2.5, box3d's constants and defaults and nearly every file:line of sec
 Unverified here (left to the implementer): the cost of `b3World_GetCounters` at `Boxes70k`; how Strata's step splits;
 the Playground's and the ball pit's time to sleep; step 0's names until it lands; whether `Scene` offers a write guard
 for R6.
+
+## As built
+
+Notes of the implementation where it differs from the text above (main at cc9524a1, step 0 landed):
+
+- **Step 0's names.** `Perf.Physics.Create10kBodies` was re-baselined by step 0 itself (`Measured` 15.76, `Budget` 23.64,
+  `Target` 7.995; the roadmap's open items say so), so Q1 needed nothing from this stream. The stream builds in its
+  worktree's `build/windows` (the streams' brief) rather than `build/agent-physics-runtime`.
+- **Step 1.** The counters' branch: `b3World_GetCounters` costs 0.09-0.10 ms at 70,000 boxes, above the rule's 43 us, so
+  they are read every step only while detailed statistics are on. The perf log turns them on for the scene it logs (its
+  column writer calls `IPhysicsDiagnostics::SetDetailedStats`). `PhysicsStats` also reports `MovingBodyCount` and
+  `InstrumentTime`. The settle helper takes `--workers` and `--collision-steps` from step 1 and the tuning options from
+  step 2, which adds the settings. The ball pits use the Physics Playground's balls as it spawns them (its 0.5 m prefab
+  scaled by 0.5: 0.25 m radius), not 0.5 m; the crate push's pushed crate weighs 5 kg (the Third-Person Adventure's 25 kg
+  crate stops a character's push after one step: its script pushes it), and the head crate rests on a standing
+  character, then rides a walk at 0.5 m/s (a teleported presence body carries nothing, so a walking character loses it
+  whatever the tuning). The seam probes' excursion is the range of a body's height along its lane once the contact
+  settled (a triangle mesh holds bodies a few millimeters above its nominal top).
