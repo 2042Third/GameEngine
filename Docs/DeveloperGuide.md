@@ -1053,8 +1053,21 @@ plays, and the **Preferences** dialog ([Preferences](#preferences)).
   the editor UI registers in the `EditorSettingsPageRegistry` (`EditorLayer::GetSettingsPages`) under the section's id;
   `Editor.UI.ProjectSettings` fails for a complex section of the process's registry without one, so a section and its
   page land together: the External Editor's (`ExternalEditorPage`, `UI/ScriptDialogs`) and Collision Layers
-  (`CollisionLayersPage`, [Collision layers](#collision-layers)). `EditorShell::ShowProjectSettings(page)` brings the
-  panel forward at a page (the Inspector's link to the collision layers).
+  (`CollisionLayersPage`, [Collision layers](#collision-layers)). A simple section may register a custom page too, which
+  then replaces the generic one (`EditorSettingsPageRegistry::CreatePage` prefers a registered page): **Graphics Quality**
+  (`UI/GraphicsQualityPage`, the section `Renderer.Quality`) shows the presets as five chips and one table, a row per
+  quality row that follows the preset ([Quality settings](#quality-settings): the row traits) and a column per preset,
+  the chosen column on `AccentMuted`, Custom's column editable (under a named preset it shows where a switch to Custom
+  starts, `RendererQuality::MakeCustomStart`, and an edit there switches to Custom and sets the field in one
+  `project.setSettings`), the rows' memory at 1920 x 1080 and 3840 x 2160 (`RowTraits::MemoryBytes`, summed per column)
+  and a line of the Scene view's GPU times of the rows' stages (formatted again at most twice a second); the rows that
+  do not follow the preset under "Players' choices". Choosing a named preset keeps the rows' stored values, so Custom's
+  tuning comes back with Custom. The page and its probes (`ProjectSettings.Renderer.Quality.` `Preset.<Preset>`,
+  `Header.<Preset>`, `Row.<Field>`, `Cell.<Field>.<Preset>`, `Custom.<Field>`, `Choice.<Field>`, `Memory1080.<Preset>`,
+  `Memory2160.<Preset>`, `GPU`, `Problem`, `Reset`) read the option model, so a row another change adds appears without
+  UI work. The generic page and it share the field-to-widget conversions of `UI/SettingsFieldProperty`.
+  `EditorShell::ShowProjectSettings(page)` brings the panel forward at a page (the Inspector's link to the collision
+  layers, the Scene view's quality chip).
 - **Rules.** Pages change nothing themselves: every edit runs a command with `CommandOrigin { CommandSource::UI }`
   (project steps are undoable, preferences are not). They draw from copies of the values, read again only when the
   values' version changes (`ProjectSettingsValues::GetVersion`, `EditorPreferences::GetVersion`), never parsing per

@@ -8,6 +8,7 @@
 #include "UI/Icons.h"
 #include "UI/ItemProbe.h"
 #include "UI/PropertyWidgets.h"
+#include "UI/SettingsFieldProperty.h"
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
@@ -27,7 +28,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <limits>
 #include <optional>
 #include <utility>
 
@@ -79,71 +79,6 @@ namespace Strata
 			return source;
 		}
 
-		// A simple section's field as the property widgets draw it.
-		PropertyInfo MakeProperty(const SettingsField& field)
-		{
-			PropertyInfo property;
-			property.Name = field.Name;
-			property.DisplayName = field.Title;
-			property.Tooltip = field.Description;
-			switch (field.Type)
-			{
-				case SettingsFieldType::Bool:
-					property.Type = PropertyType::Bool;
-					break;
-				case SettingsFieldType::Int:
-					property.Type = PropertyType::Int;
-					// The widget edits 32-bit numbers: a wider range is cut to theirs (the section still validates the value).
-					property.Min = static_cast<float>(std::max(field.Min, static_cast<double>(std::numeric_limits<int32_t>::min())));
-					property.Max = static_cast<float>(std::min(field.Max, static_cast<double>(std::numeric_limits<int32_t>::max())));
-					break;
-				case SettingsFieldType::Float:
-					property.Type = PropertyType::Float;
-					property.Min = static_cast<float>(field.Min);
-					property.Max = static_cast<float>(field.Max);
-					break;
-				case SettingsFieldType::String:
-					property.Type = PropertyType::String;
-					break;
-				case SettingsFieldType::Enum:
-					property.Type = PropertyType::Enum;
-					for (size_t index = 0; index < field.Options.size(); index++)
-						property.EnumValues.push_back({ field.Options[index], static_cast<int32_t>(index), {} });
-					break;
-				case SettingsFieldType::Asset:
-					property.Type = PropertyType::Asset;
-					property.AssetFilter = AssetTypeFromString(field.AssetType).value_or(AssetType::None);
-					break;
-			}
-			return property;
-		}
-
-		// A field's value of a validated section value as its widget edits it.
-		PropertyValue ToPropertyValue(const SettingsField& field, const PropertyInfo& property, const nlohmann::json& value)
-		{
-			if (field.Type == SettingsFieldType::Asset && value.is_null())
-				return UUID::Null();
-			if (field.Type == SettingsFieldType::Int && value.is_number())
-			{
-				const double number = value.get<double>();
-				return static_cast<int32_t>(std::clamp(number, static_cast<double>(std::numeric_limits<int32_t>::min()),
-					static_cast<double>(std::numeric_limits<int32_t>::max())));
-			}
-			if (std::optional<PropertyValue> parsed = PropertyValueFromJson(property, value))
-				return std::move(*parsed);
-			return GetDefaultPropertyValue(property.Type);
-		}
-
-		nlohmann::json ToJsonValue(const SettingsField& field, const PropertyInfo& property, const PropertyValue& value)
-		{
-			if (field.Type == SettingsFieldType::Asset)
-			{
-				const UUID handle = std::get<UUID>(value);
-				return handle.IsValid() ? UUIDToJson(handle) : nlohmann::json(nullptr);
-			}
-			return PropertyValueToJson(property, value);
-		}
-
 		// The page of a simple section: its fields in a property table, each edit running the section's command with the whole
 		// value (the others as they are).
 		class GenericSettingsPage final : public SettingsPage
@@ -153,7 +88,7 @@ namespace Strata
 				: m_Section(section), m_Kind(kind)
 			{
 				for (const SettingsField& field : section.Fields)
-					m_Properties.push_back(MakeProperty(field));
+					m_Properties.push_back(UI::MakeFieldProperty(field));
 			}
 
 			void Draw(EditorPanelContext& context, float width) override
@@ -185,7 +120,7 @@ namespace Strata
 				if (edited)
 				{
 					nlohmann::json value = m_Value;
-					value[m_Section.Fields[*edited].Name] = ToJsonValue(m_Section.Fields[*edited], m_Properties[*edited], m_Values[*edited]);
+					value[m_Section.Fields[*edited].Name] = UI::PropertyToFieldValue(m_Section.Fields[*edited], m_Properties[*edited], m_Values[*edited]);
 					Apply(context, { { "section", m_Section.Id }, { "value", std::move(value) } });
 				}
 
@@ -209,7 +144,7 @@ namespace Strata
 				for (size_t index = 0; index < m_Section.Fields.size(); index++)
 				{
 					const nlohmann::json* member = JsonUtils::Find(m_Value, m_Section.Fields[index].Name);
-					m_Values.push_back(ToPropertyValue(m_Section.Fields[index], m_Properties[index], member ? *member : m_Section.Fields[index].Default));
+					m_Values.push_back(UI::FieldToPropertyValue(m_Section.Fields[index], m_Properties[index], member ? *member : m_Section.Fields[index].Default));
 				}
 			}
 
