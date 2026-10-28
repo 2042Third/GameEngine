@@ -6,6 +6,7 @@
 #include "Strata/Asset/MeshGeometry.h"
 #include "Strata/Core/EngineServices.h"
 #include "Strata/Core/SettingsRegistry.h"
+#include "Strata/Renderer/ColorLookup.h"
 #include "Strata/Renderer/Font.h"
 #include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/Material.h"
@@ -77,7 +78,7 @@ namespace Strata
 		// The project's Graphics Quality, which programs apply to their renderers (RendererQuality::GetProjectQuality).
 		SettingsRegistry::GetProcessRegistry().Register(RendererQuality::MakeSection());
 
-		// Textures and meshes are stored in their cooked binary form, materials and fonts as their source. Textures and
+		// Textures, meshes and color lookups are stored in their cooked binary form, materials and fonts as their source. Textures and
 		// fonts keep their bytes: they take them over instead of copying them. Block-compressed textures are decoded here,
 		// on the loading worker, for graphics devices that cannot sample them. A first load of a texture reads its header and
 		// mip tail only (its prefix), and the texture streamer each manager gets reads finer levels as views need them.
@@ -110,6 +111,10 @@ namespace Strata
 		AssetLoaderRegistry::Register(AssetType::Font, [](const AssetMetadata&, AssetLoadData& data, std::string* outError) -> Ref<Asset>
 		{
 			return Font::Create(data.TakeBytes(), outError);
+		});
+		AssetLoaderRegistry::Register(AssetType::ColorLookup, [](const AssetMetadata&, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
+		{
+			return ColorLookup::Deserialize(data, outError);
 		});
 
 		// The primitive meshes use the default material.

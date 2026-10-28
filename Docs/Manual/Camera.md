@@ -1,8 +1,8 @@
 # The camera's image
 
 How Strata turns the light of a scene into the picture a camera would take: exposure, the tone curve, color, bloom, the
-vignette, motion blur, grain and color fringes, all set on the scene's **Post Process** component, depth of field, set on
-the **Camera**, what each costs, and three recipes.
+vignette, motion blur, grain and color fringes and color lookups, all set on the scene's **Post Process** component, depth
+of field, set on the **Camera**, what each costs, and three recipes.
 This guide is for people working in the editor; [DeveloperGuide.md](../DeveloperGuide.md) (Rendering, "Light units and
 exposure" and "Post-processing") explains how the renderer computes it. Anti-aliasing has its own page:
 [AntiAliasing.md](AntiAliasing.md).
@@ -73,6 +73,19 @@ On the scene's light, before the tone curve:
 - **Color Slope** (a gain per channel), **Color Offset** (light added per channel, in fractions of middle gray: it tints
   the shadows most) and **Color Power** (a contrast per channel around middle gray) grade the image; (1, 1, 1), (0, 0,
   0) and (1, 1, 1) change nothing.
+
+### Color lookups
+
+A grade made in another tool (a colorist's look, a film emulation) comes as a 3D lookup table in a `.cube` file, the
+format grading tools export. Put the file in the project's assets: it imports as a **Color Lookup**, and its import
+setting **Size** chooses the points the stored table has each way (17, 33, the default, or 65: more follow a grade's fine
+changes more closely and take more memory, 39 KB, 287 KB and 2.2 MB; File keeps the file's own size). Only 3D tables
+import; a file that is not one says on which line it went wrong.
+
+On the Post Process, **Color Lookup** names the table and **Color Lookup Intensity** (1) how much of it shows. It applies
+to the finished image, after the tone curve and the saturation, as grading tools apply a look to the picture they show:
+grade from an image of the scene with Strata's curve (a capture of the viewport), so the table starts from what the
+player will see. While the table loads, the image shows without it.
 
 ## Bloom
 
@@ -153,8 +166,8 @@ GPU time at 3840x2160 on an RTX 5090 (the medians of Strata's look-dev captures 
 | Motion blur, the camera still | about 0.11 ms (it still reads every pixel) |
 | Depth of field (`GPU.DepthOfField`), everything far blurred at the largest circle | about 0.20 ms |
 
-Off, motion blur costs nothing (no pass, no target, no motion vectors it would ask for), and so does depth of field. Grain
-and color fringes are part of the tone mapping: a few more operations per pixel when on.
+Off, motion blur costs nothing (no pass, no target, no motion vectors it would ask for), and so does depth of field. Grain,
+color fringes and a color lookup are part of the tone mapping: a few more operations per pixel when on.
 
 ## Recipes
 

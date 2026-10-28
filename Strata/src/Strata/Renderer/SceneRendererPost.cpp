@@ -2,6 +2,7 @@
 #include "Strata/Renderer/SceneRenderer.h"
 
 #include "Strata/Core/Assert.h"
+#include "Strata/Renderer/ColorLookup.h"
 #include "Strata/Renderer/GraphicsDevice.h"
 #include "Strata/Renderer/PostProcessMath.h"
 #include "Strata/Renderer/Renderer.h"
@@ -20,12 +21,12 @@
 // Post-processing, from the HDR image (the frame's, or temporal anti-aliasing's resolved image) to the display: automatic
 // exposure meters it into the exposure buffer (PostProcess/Histogram.comp, Exposure.comp) or writes the manual exposure
 // there, bloom downsamples it into a half-resolution chain and upsamples back (PostProcess/Bloom.comp), tone mapping maps it
-// with the exposure, the bloom, the vignette and the TAA's sharpening into the display target (PostProcess/Tonemap.frag),
-// or into the LDR target that FXAA reads (PostProcess/FXAA.frag). RenderFrame records RenderPostHDR (exposure, bloom) and
-// RenderPostDisplay (tone mapping, FXAA) in the GPU.Post stage, with the text and overlay preparation between them. Post
-// passes take their parameters by push constants or buffers of their own, never FrameConstants. The temporal history's own
-// post sets (m_TemporalExposureSets, m_TemporalBloomSets, m_TemporalTonemapSets) belong to the TAA's resources
-// (SceneRenderer::EnsureTemporalResources).
+// with the exposure, the bloom, the vignette, the TAA's sharpening, the grading and the color lookup into the display target
+// (PostProcess/Tonemap.frag), or into the LDR target that FXAA reads (PostProcess/FXAA.frag). RenderFrame records
+// RenderPostHDR (exposure, bloom) and RenderPostDisplay (tone mapping, FXAA) in the GPU.Post stage, with the text and overlay
+// preparation between them. Post passes take their parameters by push constants or buffers of their own, never
+// FrameConstants. The temporal history's own post sets (m_TemporalExposureSets, m_TemporalBloomSets, m_TemporalTonemapSets)
+// belong to the TAA's resources (SceneRenderer::EnsureTemporalResources).
 
 namespace Strata
 {
@@ -86,6 +87,13 @@ namespace Strata
 			nvrhi::BindingLayoutItem::VolatileConstantBuffer(0)
 		};
 		m_TonemapBindingLayout = m_Device->createBindingLayout(tonemapLayout);
+		// Its second set: the color lookup (a 3D texture and the linear clamping sampler), or a dummy without one, so the
+		// sets of every post source stay as they are when the scene's lookup changes or loads. NVRHI wants the layouts of a
+		// pipeline to use different slots: t3 and s2, after the first set's.
+		nvrhi::BindingLayoutDesc colorLookupLayout;
+		colorLookupLayout.visibility = nvrhi::ShaderType::Pixel;
+		colorLookupLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(3), nvrhi::BindingLayoutItem::Sampler(2) };
+		m_ColorLookupLayout = m_Device->createBindingLayout(colorLookupLayout);
 		// The tone mapping's parameters outgrew the 128 bytes of push constants NVRHI allows: a volatile constant buffer, written
 		// once by every frame that tone-maps. Its versions need no reservation of their own: each such frame writes FrameConstants
 		// first, and ReserveFrameConstantVersions starts a frame only while the frames in flight leave room for
@@ -211,8 +219,8 @@ namespace Strata
 		m_DepthOfFieldDilatePipeline = CreateComputePipeline("PostProcess/DepthOfFieldDilate.comp", m_DepthOfFieldLayout);
 		m_DepthOfFieldGatherPipeline = CreateComputePipeline("PostProcess/DepthOfFieldGather.comp", m_DepthOfFieldLayout);
 		m_DepthOfFieldCompositePipeline = CreateComputePipeline("PostProcess/DepthOfFieldComposite.comp", m_DepthOfFieldLayout);
-		ST_CORE_VERIFY(m_TonemapBindingLayout && m_TonemapConstantBuffer && m_ExposureBindingLayout && m_HistogramPipeline && m_ExposurePipeline && m_HistogramBuffer
-			&& m_ExposureBuffer && exposureReadbacks && m_BloomBindingLayout && m_BloomPipeline && m_FXAABindingLayout && m_CopyBindingLayout,
+		ST_CORE_VERIFY(m_TonemapBindingLayout && m_ColorLookupLayout && m_TonemapConstantBuffer && m_ExposureBindingLayout && m_HistogramPipeline
+			&& m_ExposurePipeline && m_HistogramBuffer && m_ExposureBuffer && exposureReadbacks && m_BloomBindingLayout && m_BloomPipeline && m_FXAABindingLayout && m_CopyBindingLayout,
 			"SceneRenderer: failed to create the post-processing resources");
 	}
 
@@ -1003,8 +1011,69 @@ namespace Strata
 		return glm::vec2(1.0f / std::abs(camera.Projection[0][0]), 1.0f / std::abs(camera.Projection[1][1]));
 	}
 
+	nvrhi::ITexture* SceneRenderer::ResolveColorLookup(const PostProcessComponent& postProcess)
+	{
+		if (!postProcess.ColorLookup.IsValid() || !(postProcess.ColorLookupIntensity > 0.0f))
+			return nullptr;
+		const Ref<ColorLookup> lookup = m_Assets.Resolve<ColorLookup>(postProcess.ColorLookup, AssetPriority::High);
+		return lookup ? lookup->GetTexture() : nullptr;
+	}
+
+	nvrhi::IBindingSet* SceneRenderer::GetColorLookupSet(nvrhi::ICommandList* commandList, nvrhi::ITexture* lookup)
+	{
+		if (!lookup)
+		{
+			// The set of the latest lookup goes once frames stop using it: it holds the lookup's texture.
+			if (m_ColorLookupSet)
+				Renderer::ReleaseDeferred({ nvrhi::ResourceHandle(m_ColorLookupSet.Get()) });
+			m_ColorLookupSet = nullptr;
+			m_ColorLookupSetTexture = nullptr;
+			if (!m_ColorLookupDummySet)
+			{
+				nvrhi::TextureDesc desc;
+				desc.dimension = nvrhi::TextureDimension::Texture3D;
+				desc.format = c_HDRFormat;
+				desc.debugName = m_Specification.DebugName + ".ColorLookupDummy";
+				desc.initialState = nvrhi::ResourceStates::ShaderResource;
+				desc.keepInitialState = true;
+				nvrhi::TextureHandle dummy = m_Device->createTexture(desc);
+				nvrhi::BindingSetDesc set;
+				set.bindings = { nvrhi::BindingSetItem::Texture_SRV(3, dummy), nvrhi::BindingSetItem::Sampler(2, m_LinearClampSampler) };
+				nvrhi::BindingSetHandle dummySet = dummy ? m_Device->createBindingSet(set, m_ColorLookupLayout) : nullptr;
+				if (!dummySet)
+				{
+					m_Errors.Report("failed to create the tone mapping's color lookup bindings; the frame is not tone-mapped");
+					return nullptr;
+				}
+				// Written once, so the texture the shader never reads at intensity 0 is still defined.
+				const uint16_t zero[4] = {};
+				commandList->writeTexture(dummy, 0, 0, zero, sizeof(zero), sizeof(zero));
+				m_ColorLookupDummy = std::move(dummy);
+				m_ColorLookupDummySet = std::move(dummySet);
+			}
+			return m_ColorLookupDummySet;
+		}
+		if (!m_ColorLookupSet || m_ColorLookupSetTexture != lookup)
+		{
+			nvrhi::BindingSetDesc set;
+			set.bindings = { nvrhi::BindingSetItem::Texture_SRV(3, lookup), nvrhi::BindingSetItem::Sampler(2, m_LinearClampSampler) };
+			nvrhi::BindingSetHandle lookupSet = m_Device->createBindingSet(set, m_ColorLookupLayout);
+			if (!lookupSet)
+			{
+				m_Errors.Report("failed to create the color lookup's bindings; drawing without it");
+				return GetColorLookupSet(commandList, nullptr);
+			}
+			if (m_ColorLookupSet)
+				Renderer::ReleaseDeferred({ nvrhi::ResourceHandle(m_ColorLookupSet.Get()) });
+			// The set holds the texture, so no other texture takes its address while it is kept.
+			m_ColorLookupSet = std::move(lookupSet);
+			m_ColorLookupSetTexture = lookup;
+		}
+		return m_ColorLookupSet;
+	}
+
 	void SceneRenderer::RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
-		bool resolved, PostSource source, bool bloom, const glm::vec2& vignetteTangents, uint32_t grainSeed, nvrhi::IFramebuffer* output)
+		bool resolved, PostSource source, bool bloom, const glm::vec2& vignetteTangents, uint32_t grainSeed, nvrhi::ITexture* colorLookup, nvrhi::IFramebuffer* output)
 	{
 		// Tone mapping into the display target, or into the intermediate target FXAA reads.
 		RenderData::TonemapConstants tonemap = {};
@@ -1037,6 +1106,15 @@ namespace Strata
 		tonemap.FilmGrain = unit(postProcess.FilmGrain);
 		tonemap.ChromaticAberration = unit(postProcess.ChromaticAberration) * RenderData::c_ChromaticAberrationScale;
 		tonemap.GrainFrame = grainSeed;
+		// The scene's color lookup once it is loaded (ResolveColorLookup), else the dummy, which the shader skips at intensity 0.
+		nvrhi::IBindingSet* colorLookupSet = GetColorLookupSet(commandList, colorLookup);
+		if (!colorLookupSet)
+			return;
+		if (colorLookup && colorLookupSet == m_ColorLookupSet.Get())
+		{
+			tonemap.ColorLookupIntensity = unit(postProcess.ColorLookupIntensity);
+			m_Stats.ColorLookup = true;
+		}
 
 		// FXAA or morphological anti-aliasing unless the image was resolved temporally (FXAA also when the morphological one's
 		// resources cannot be made).
@@ -1053,8 +1131,9 @@ namespace Strata
 		ST_CORE_ASSERT(!m_TonemapConstantsWritten, "SceneRenderer: a frame writes the tone mapping's constants once");
 		commandList->writeBuffer(m_TonemapConstantBuffer, &tonemap, sizeof(tonemap));
 		m_TonemapConstantsWritten = true;
-		DrawFullscreen(commandList, GetFullscreenPipeline(m_TonemapPipelines, m_TonemapPixelShader, m_TonemapBindingLayout, tonemapTarget->getFramebufferInfo()),
-			tonemapTarget, SelectPostSet(source, m_TonemapBindingSet, m_TemporalTonemapSets, m_DepthOfFieldTonemapSet, m_MotionBlurTonemapSet), nullptr, 0);
+		DrawFullscreen(commandList, GetFullscreenPipeline(m_TonemapPipelines, m_TonemapPixelShader, { m_TonemapBindingLayout, m_ColorLookupLayout },
+			tonemapTarget->getFramebufferInfo()), tonemapTarget, SelectPostSet(source, m_TonemapBindingSet, m_TemporalTonemapSets, m_DepthOfFieldTonemapSet,
+			m_MotionBlurTonemapSet), nullptr, 0, colorLookupSet);
 		commandList->endMarker();
 		if (morphological)
 		{
@@ -1099,13 +1178,15 @@ namespace Strata
 	}
 
 	void SceneRenderer::DrawFullscreen(nvrhi::ICommandList* commandList, nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* bindingSet,
-		const void* pushConstants, size_t pushConstantSize)
+		const void* pushConstants, size_t pushConstantSize, nvrhi::IBindingSet* secondSet)
 	{
 		nvrhi::GraphicsState state;
 		state.pipeline = pipeline;
 		state.framebuffer = framebuffer;
 		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y)));
 		state.bindings = { bindingSet };
+		if (secondSet)
+			state.bindings.push_back(secondSet);
 		commandList->setGraphicsState(state);
 		if (pushConstants)
 			commandList->setPushConstants(pushConstants, pushConstantSize);

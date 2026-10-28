@@ -483,7 +483,8 @@ def camera_parameters(shot):
 
 
 def resolve_setup(editor, step):
-    """A setup step's parameters, its "entityName" replaced by the first entity of that name."""
+    """A setup step's parameters, its "entityName" replaced by the first entity of that name and its "repoFile" (a path in
+    the repository, for asset.import) by that file's absolute path as "file"."""
     params = json.loads(json.dumps(step.get("Parameters", {})))
     name = params.pop("entityName", None)
     if name is not None:
@@ -491,6 +492,12 @@ def resolve_setup(editor, step):
         if not found:
             raise ToolError(f"setup: no entity named {name}")
         params["entity"] = found[0]
+    repo_file = params.pop("repoFile", None)
+    if repo_file is not None:
+        path = (ROOT / repo_file).resolve()
+        if not path.is_file():
+            raise ToolError(f"setup: no file {repo_file} in the repository")
+        params["file"] = str(path)
     return params
 
 

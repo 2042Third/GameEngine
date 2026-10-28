@@ -2,6 +2,7 @@
 #include "Strata/Asset/AssetImporter.h"
 
 #include "Strata/Asset/AssetManager.h"
+#include "Strata/Asset/ColorLookupImporter.h"
 #include "Strata/Asset/GltfImporter.h"
 #include "Strata/Asset/TextureImporter.h"
 #include "Strata/Core/FileSystem.h"
@@ -172,6 +173,7 @@ namespace Strata
 		AssetImporterRegistry::Register(CreateScope<AudioClipImporter>());
 #endif
 		AssetImporterRegistry::Register(CreateScope<FontImporter>());
+		AssetImporterRegistry::Register(CreateScope<ColorLookupImporter>());
 	}
 
 }

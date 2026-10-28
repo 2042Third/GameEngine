@@ -288,7 +288,8 @@ namespace Strata
 	uint64_t GPUUploadQueue::GetRegionBytes(TextureFormat format, const GPUTextureRegion& region)
 	{
 		const TextureFormatInfo info = GetTextureFormatInfo(format);
-		return static_cast<uint64_t>(AlignUp(region.Rows, info.BlockHeight) / info.BlockHeight) * GetBlockRowByteSize(format, region.Width);
+		const uint64_t sliceBytes = static_cast<uint64_t>(AlignUp(region.Rows, info.BlockHeight) / info.BlockHeight) * GetBlockRowByteSize(format, region.Width);
+		return sliceBytes * std::max(region.Depth, 1u);
 	}
 
 	uint64_t GPUUploadQueue::GetStagingBytes(TextureFormat format, std::span<const GPUTextureRegion> regions)
@@ -332,7 +333,8 @@ namespace Strata
 			offset = AlignUp64(offset, c_RegionAlignment);
 			const uint64_t regionBytes = GetRegionBytes(format, region);
 			AddCopy(destination + offset, region.Data, static_cast<size_t>(regionBytes));
-			m_TextureCopies.push_back(GPUBufferTextureCopy { staging, offset, texture, region.MipLevel, region.FirstRow, region.Width, region.Rows });
+			m_TextureCopies.push_back(GPUBufferTextureCopy { staging, offset, texture, region.MipLevel, region.FirstRow, region.Width, region.Rows,
+				std::max(region.Depth, 1u) });
 			offset += regionBytes;
 			bytes += regionBytes;
 		}

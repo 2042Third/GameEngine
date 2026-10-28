@@ -78,7 +78,8 @@ TEST_SUITE("Engine.Modules")
 		CHECK((ComponentRegistry::Find("AudioSource") != nullptr) == ST_WITH_AUDIO);
 		CHECK((ComponentRegistry::Find("Animator") != nullptr) == ST_WITH_ANIMATION);
 		CHECK(ComponentRegistry::Find("StreamingSource") != nullptr);
-		for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Texture, AssetType::Mesh, AssetType::Material, AssetType::Font, AssetType::World })
+		for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Texture, AssetType::Mesh, AssetType::Material, AssetType::Font, AssetType::World,
+				 AssetType::ColorLookup })
 		{
 			CAPTURE(AssetTypeToString(type));
 			CHECK(AssetLoaderRegistry::Find(type) != nullptr);
@@ -198,8 +199,8 @@ TEST_SUITE("Engine.Modules")
 		INFO("Output: ", result.Output);
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
-		// The loaders and systems of the modules the build has: 12 and six in a full build.
-		const int loaders = 8 + (ST_WITH_AUDIO ? 1 : 0) + (ST_WITH_ANIMATION ? 3 : 0);
+		// The loaders and systems of the modules the build has: 13 and six in a full build.
+		const int loaders = 9 + (ST_WITH_AUDIO ? 1 : 0) + (ST_WITH_ANIMATION ? 3 : 0);
 		std::string systems = " UI Scripting";
 		systems += ST_WITH_ANIMATION ? " Animation" : "";
 		systems += " World";

@@ -636,6 +636,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     mean channel difference and a difference image (eight times the difference), the crops side by side, and per picture
     the ratio of the GPU times; `compare.json` and `index.html`. It reports differences without failing; exit code 1 only
     when one side has a picture the other lacks.
+  - A shot's `Setup` runs editor commands on its scene before the captures; a step's `entityName` names the entity, and
+    `repoFile` (a path in the repository) gives `asset.import` the file to copy in (`tp.lut` imports the feature project's
+    `Warm.cube`).
   - Shots and look-dev content are appended, never changed, so that captures of every build keep comparing. GPU times
     are kept only from runs alone on the machine, under `python Tools/PerfLock.py --label lookdev-<label> --limit 90 -- ...`
     (a full run takes longer than the lock's default limit); the pictures are read and cropped on every core after the
@@ -3855,6 +3858,35 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     images set `SceneRenderOptions::GrainSeed` (the capture renderer and thumbnails: 0), so a picture taken again is the
     same; live views and games leave it unset.
   - Tests: `GPU.SceneRenderer.GrainAndAberration`.
+- **Color lookup** (`PostProcessComponent::ColorLookup`, a `ColorLookup` asset, and `ColorLookupIntensity`, 0 to 1,
+  default 1; `Renderer/ColorLookup.h`): a grade made in another tool, after the curve and the saturation, in the encoded
+  domain, before the grain and the dither: `encoded = mix(encoded, lookup(encoded * (N - 1) / N + 0.5 / N), intensity)`,
+  trilinear (the linear clamping sampler), N its points each way.
+  - The asset (`AssetType::ColorLookup`, appended) is a lattice over [0, 1] on every axis, red fastest; its cooked form is
+    `STLU` version 1 (a 16-byte header: magic, version, size, zero; then size^3 RGBA16F points), validated whole by
+    `ColorLookup::Deserialize` (sizes 2 to 65, exact length, finite points). On the GPU it is a 3D RGBA16F texture uploaded
+    in one step of the upload queue (`GPUTextureRegion::Depth`: the slices of a 3D level; 65^3 is 2.2 MB, under
+    `c_AssetUploadStepBytes`), its memory moving from the CPU pool to the GPU textures'. `ColorLookup::Sample` is the
+    trilinear lookup the shader does and the importer resamples with.
+  - Import (`Asset/ColorLookupImporter`, AssetPipeline layer, version 1): `.cube` files (`ParseCubeFile`: `TITLE`,
+    `LUT_3D_SIZE`, `DOMAIN_MIN`/`DOMAIN_MAX` or `LUT_3D_INPUT_RANGE`, `#` comments, CRLF and a byte order mark; numbers
+    read without the C locale; `LUT_1D_SIZE`, a missing or repeated size, bad numbers, keywords among the values, too few
+    or too many values and an empty domain fail with the line, quoting the file through `MakeValidUTF8`; unknown keywords
+    are ignored with a warning; cancellation checked every 4096 lines and per resampled slice). Setting `Size`: "17",
+    "33" (default) or "65", or "File" for the file's own; `ResampleCubeTable` maps each point's input into the file's
+    domain (clamping outside it), so the cooked lattice always spans [0, 1] and holds no domain; a table of its own size
+    over [0, 1] is copied, and sizes of (n - 1) k + 1 refine one of n points exactly.
+  - Rendering: `RenderFrame` resolves it through the frame's `AssetResolveCache` (`ResolveColorLookup`, high priority,
+    before the frame's pending assets are counted) only when its intensity is above 0; while it loads nothing applies. The
+    tone mapping's pipeline has a second layout (`m_ColorLookupLayout`, set 1: the texture and the sampler), whose set is
+    the lookup's (`GetColorLookupSet`, made when the lookup's texture changes and kept while frames use it) or a 1x1x1
+    dummy (written once), so the five tone-mapping sets of the post sources stay as they are. `TonemapConstants`'
+    `ColorLookupIntensity` (offset 156) is 0 without a lookup: the uniform branch skips the fetch. Stats: `ColorLookup`
+    (`renderStats.colorLookup`).
+  - Tests: `Renderer.ColorLookup` (the cooked form, its corruption, the lookup), `Asset.ColorLookupImporter`,
+    `GPU.SceneRenderer.ColorLookup` (a 9^3 grade within one code of the CPU's lookup at intensities 1 and 0.5, the identity
+    within one code of none, nothing while it is not loaded). The feature project's `Lighting/Feature/Warm.cube` (17^3,
+    written by its `GenerateAssets.py`) is on the active Post Process at 0.5.
 - **Morphological anti-aliasing** (`AntiAliasingMode::Morphological`, appended: file and script name "Morphological"; the
   plan's "SMAA", named for what it is: designed here, it shares no pattern, corner or search table with the published
   SMAA). Three fullscreen passes in `GPU.Post` after the tone mapping, which writes the 10-bit intermediate as for FXAA:

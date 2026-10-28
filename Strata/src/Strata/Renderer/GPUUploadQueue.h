@@ -28,6 +28,9 @@ namespace Strata
 		uint32_t FirstRow = 0;  // Texel rows; for block-compressed formats the first row of a block. 0: the level's first copy
 		uint32_t Rows = 0;      // Texel rows; for block-compressed formats whole blocks but at the level's end
 		const uint8_t* Data = nullptr; // The first row's texels (or blocks), rows tightly packed
+		// Slices of a 3D texture's level from its first, each `Rows` rows tightly packed after the previous (FirstRow 0 and Rows
+		// the level's height); 1 for 2D textures.
+		uint32_t Depth = 1;
 	};
 
 	// A byte range copied from CPU memory into a buffer (GPUUploadQueue::UploadBuffer).
@@ -154,7 +157,7 @@ namespace Strata
 		// Whether this is the frame's first step: the frame's first call, which uploaded nothing yet, in a frame that uploaded
 		// nothing yet.
 		static bool IsFramesFirstStep(const AssetFinalizeContext& context, uint64_t callBytes);
-		// The bytes of a region's rows (of blocks).
+		// The bytes of a region's rows (of blocks), of all its slices.
 		static uint64_t GetRegionBytes(TextureFormat format, const GPUTextureRegion& region);
 		// The staging bytes a texture upload of these regions takes: the staging buffer the pool hands out for them, one after
 		// the other (StagingPool::GetBufferByteSize).

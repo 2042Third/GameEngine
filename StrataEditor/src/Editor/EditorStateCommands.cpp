@@ -272,6 +272,8 @@ namespace Strata
 				{ "depthOfField", stats.DepthOfField ? nlohmann::json { { "focusDistance", stats.DepthOfFieldLens.FocusDistance },
 					{ "focalLength", stats.DepthOfFieldLens.FocalLength }, { "fNumber", stats.DepthOfFieldLens.FNumber },
 					{ "infinityBlurPixels", stats.DepthOfFieldInfinityCoC } } : nlohmann::json(nullptr) },
+				// Whether the Post Process's color lookup was applied (false while it loads).
+				{ "colorLookup", stats.ColorLookup },
 				{ "gpuMs", std::move(gpuMs) },
 				{ "gpuStatsFrame", gpu.HasTimes ? nlohmann::json(gpu.Frame) : nlohmann::json(nullptr) } };
 		}

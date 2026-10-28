@@ -21,6 +21,7 @@ namespace Strata
 			case AssetType::AnimationClip:       return "AnimationClip";
 			case AssetType::AnimationController: return "AnimationController";
 			case AssetType::World:               return "World";
+			case AssetType::ColorLookup:         return "ColorLookup";
 		}
 		return "None";
 	}
@@ -30,7 +31,8 @@ namespace Strata
 		constexpr AssetType types[] = {
 			AssetType::None, AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Mesh,
 			AssetType::Material, AssetType::Texture, AssetType::AudioClip, AssetType::Font,
-			AssetType::Skeleton, AssetType::AnimationClip, AssetType::AnimationController, AssetType::World
+			AssetType::Skeleton, AssetType::AnimationClip, AssetType::AnimationController, AssetType::World,
+			AssetType::ColorLookup
 		};
 		for (AssetType type : types)
 		{

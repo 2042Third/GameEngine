@@ -546,6 +546,12 @@ TEST_SUITE("Scene.InactiveProperties")
 		post.MotionBlur = true;
 		CHECK(reason("PostProcess", "MotionBlurShutterAngle").empty());
 		post.MotionBlur = false;
+		// The color lookup's intensity only with a lookup.
+		CHECK(reason("PostProcess", "ColorLookupIntensity") == "No Color Lookup is set");
+		CHECK(reason("PostProcess", "ColorLookup").empty());
+		post.ColorLookup = UUID(0xC0105ull);
+		CHECK(reason("PostProcess", "ColorLookupIntensity").empty());
+		post.ColorLookup = UUID::Null();
 		// The metering, its window, the light adaptation and the key: automatic exposure's.
 		for (const char* property : { "AutoExposureMetering", "AutoExposureLowPercentile", "AutoExposureHighPercentile", "AutoExposureLightSpeed", "AutoExposureKey" })
 		{

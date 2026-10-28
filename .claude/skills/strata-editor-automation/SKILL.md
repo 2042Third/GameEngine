@@ -322,7 +322,7 @@ section has Extract Sun for both). `lighting.bakeProbes` bakes reflection probes
 
 **Assets**: `asset.import {"file": "<absolute path>", "directory": "Models"}` copies a file into the project and
 imports it: models `.gltf`/`.glb` (also meshopt-compressed), textures `.png`/`.jpg`/`.tga`/`.bmp`/`.psd`/`.gif`/`.hdr`,
-audio `.wav`/`.mp3`/`.flac`/`.ogg`, fonts `.ttf`/`.otf`. It runs in the background (copy on an I/O thread, import like
+audio `.wav`/`.mp3`/`.flac`/`.ogg`, fonts `.ttf`/`.otf`, color lookups `.cube`. It runs in the background (copy on an I/O thread, import like
 re-imports) and answers when the imports are done; take several with `"files": [...]` and whole folders (their tree,
 `.meta` files and model files kept) with `"directories": [...]` rather than many calls (calls that overlap copy one after
 the other). A `.gltf` that names separate `.bin` and image files
@@ -502,6 +502,7 @@ manual exposure), `motionBlur` (`samples`, `tileSize` on frames that blurred; ed
 the Game view while the game plays), `depthOfField` (`focusDistance`, `focalLength`, `fNumber`, `infinityBlurPixels` of
 frames seen through a scene camera whose Camera has `DepthOfField` on: the Game view, a Scene view through the game's
 camera and captures with `camera: "scene"`; the editor camera never defocuses),
+`colorLookup` (the Post Process's color lookup was applied: false while its `.cube` asset loads),
 `gpuDriven` (the GPU culled it
 and built its draws: its counts are the GPU's, of a frame 2-3 frames older in `editor.perf` and of the captured frame in
 captures, once `gpuCounts` is true), `feedbackRequests` (its asset requests came from the GPU's visibility feedback of a
