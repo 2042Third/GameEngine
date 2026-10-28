@@ -102,7 +102,7 @@ strata_add_shaders(Strata_Renderer
 		IBL/ProbeIrradiance.comp
 		IBL/BRDFLut.comp
 		Effects/GTAO.comp
-		Effects/AOBlur.comp
+		Effects/AODenoise.comp
 		Effects/ScreenSpaceReflections.comp
 		Effects/SceneColorCopy.comp
 		Effects/LightingViewStats.comp
@@ -152,7 +152,7 @@ strata_add_shaders(Strata_Renderer
 		"Scene/HZBBuild.comp|Scene/HZBBuildArray.comp|ST_HZB_ARRAY"
 		"Effects/GTAO.comp|Effects/GTAOHalf.comp|ST_AO_HALF"
 		"Scene/Skybox.frag|Scene/SkyboxAtmosphere.frag|ST_ATMOSPHERE"
-		"Effects/AOBlur.comp|Effects/AOBlurHalf.comp|ST_AO_HALF"
+		"Effects/AODenoise.comp|Effects/AODenoiseHalf.comp|ST_AO_HALF"
 		"Effects/SceneColorCopy.comp|Effects/SceneColorCopyFallback.comp|ST_SCENE_COLOR_FALLBACK")
 
 # The default font of text rendering (Roboto Medium, Apache License 2.0; see ThirdPartyNotices.md).

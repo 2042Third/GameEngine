@@ -377,8 +377,12 @@ namespace Strata
 			.Property("BloomThreshold", &PostProcessComponent::BloomThreshold,
 				WithTooltip(Range(0.0f, 20.0f, 0.05f), "Only light brighter than this (after exposure) blooms; 0 = all light, physically based"))
 			.Property("AmbientOcclusion", &PostProcessComponent::AmbientOcclusion)
-			.Property("AmbientOcclusionRadius", &PostProcessComponent::AmbientOcclusionRadius, WithTooltip(Range(0.01f, 10.0f, 0.01f), "World units"))
+			.Property("AmbientOcclusionRadius", &PostProcessComponent::AmbientOcclusionRadius, WithTooltip(Range(0.01f, 10.0f, 0.01f),
+				"Meters: how far around a surface occluders darken it; on screen kept between 0.3% and 12% of the view's height"))
 			.Property("AmbientOcclusionIntensity", &PostProcessComponent::AmbientOcclusionIntensity, Slider(0.0f, 4.0f))
+			.Property("AmbientOcclusionMultiBounce", &PostProcessComponent::AmbientOcclusionMultiBounce, WithTooltip({},
+				"Occluded corners of bright surfaces keep the light their walls reflect into them: white plaster stays light in its creases, "
+				"dark soil darkens fully"))
 			.Property("AntiAliasing", &PostProcessComponent::AntiAliasing, WithTooltip({}, "Smooths jagged edges, by the method below"))
 			.EnumProperty("AntiAliasingMethod", &PostProcessComponent::AntiAliasingMethod, { { "FXAA", 0 }, { "TAA", 1 } },
 				{ .Tooltip = "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another "

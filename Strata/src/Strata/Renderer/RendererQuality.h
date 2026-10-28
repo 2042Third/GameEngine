@@ -42,6 +42,22 @@ namespace Strata
 	// The costly knobs of a renderer: what a person, project or player chooses for a machine, never a scene's look (that
 	// stays on lights, Post Process and the sky). The defaults are Medium, 0.6.0's costs. Docs/DeveloperGuide.md,
 	// "Quality settings": a row of the presets per knob, and what adding one involves.
+	// Ambient occlusion's samples (Effects/GTAO.comp: slices x steps per side): Low 1 x 4, Medium 2 x 6 (Strata 0.6.0's), High
+	// 3 x 8, Ultra 4 x 12. The values never change meaning (the Renderer.Quality section stores their names).
+	enum class AmbientOcclusionLevel : uint8_t
+	{
+		Low = 0,
+		Medium = 1,
+		High = 2,
+		Ultra = 3
+	};
+
+	struct AmbientOcclusionSamples
+	{
+		uint32_t Slices = 2;
+		uint32_t StepsPerSide = 6;
+	};
+
 	struct RendererQualitySettings
 	{
 		RendererQualityPreset Preset = RendererQualityPreset::Medium; // What these values are; reported, never compared
@@ -64,6 +80,8 @@ namespace Strata
 		// not drawn in the view, by either path: they add moire and GPU time, not information. 0 draws them all. Shadow
 		// cascades leave out casters below a texel (SceneRendererStats::SubTexelCasters).
 		float MinProjectedPixels = 0.5f;
+		// Ambient occlusion's samples per pixel (GetAmbientOcclusionSamples); the scene's Post Process asks for the occlusion.
+		AmbientOcclusionLevel AmbientOcclusionQuality = AmbientOcclusionLevel::Medium;
 
 		// Every member equal, Preset included.
 		bool operator==(const RendererQualitySettings& other) const = default;
@@ -75,7 +93,7 @@ namespace Strata
 	namespace RendererQuality
 	{
 		constexpr std::string_view c_SectionId = "Renderer.Quality";
-		constexpr uint32_t c_SectionVersion = 1; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
+		constexpr uint32_t c_SectionVersion = 2; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
 		constexpr uint32_t c_HighResolutionRows = 1440;
 		constexpr uint32_t c_MaxShadowMapSize = 8192; // The most texels each way of a cascade (SceneRenderer applies it)
 
@@ -91,6 +109,10 @@ namespace Strata
 		std::optional<RendererQualityPreset> PresetFromString(std::string_view name, bool ignoreCase = false);
 		const char* ShadowResolutionToString(ShadowMapResolution resolution); // "Auto", "AutoFine", "1024" ...
 		std::optional<ShadowMapResolution> ShadowResolutionFromString(std::string_view name);
+		const char* AmbientOcclusionLevelToString(AmbientOcclusionLevel level); // "Low" ... "Ultra"
+		std::optional<AmbientOcclusionLevel> AmbientOcclusionLevelFromString(std::string_view name);
+		// Slices and steps per side of a level: { 1, 4 }, { 2, 6 }, { 3, 8 }, { 4, 12 }.
+		AmbientOcclusionSamples GetAmbientOcclusionSamples(AmbientOcclusionLevel level);
 
 		// The Renderer.Quality section (simple; registered by RegisterRendererModule).
 		SettingsSection MakeSection();

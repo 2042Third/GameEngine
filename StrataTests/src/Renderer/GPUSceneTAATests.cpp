@@ -20,8 +20,9 @@ using namespace Strata::Tests::TAA;
 namespace
 {
 
-	// The shadows' and the ambient occlusion's noise turns every frame with TAA, and the history smooths it: the converged
-	// penumbra's roughness stays below `bound` times one frame's under `preset`; `custom` (when set) is the look, under Custom.
+	// The shadows' noise turns every frame with TAA, and the history smooths it: the converged penumbra's roughness stays below
+	// `bound` times one frame's under `preset`; `custom` (when set) is the look, under Custom. The ambient occlusion never turns:
+	// it resolves its pattern within the frame, the same in every frame of a still view.
 	void CheckNoiseSmoothed(TemporalAntiAliasingPreset preset, const TemporalAntiAliasingSettings* custom, double bound)
 	{
 		GPUContext gpu;
@@ -123,7 +124,7 @@ namespace
 		}
 		REQUIRE(groundPixels > c_Size * c_Size / 2);
 		CHECK(changed > c_Size);
-		CHECK(firstOcclusion != ninthOcclusion);
+		CHECK(firstOcclusion == ninthOcclusion);
 
 		const std::vector<float> converged = groundLuminance(ReadHDR(renderer.GetResolvedHDRTexture()));
 		// The penumbra: the ground between its shadowed and its lit brightness.
@@ -503,12 +504,12 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("With TAA the shadows' and the ambient occlusion's noise turns every frame, and the history smooths it")
+	TEST_CASE("With TAA the shadows' noise turns every frame, and the history smooths it; the ambient occlusion holds still")
 	{
 		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Original, nullptr, 0.5);
 	}
 
-	TEST_CASE("Variance clipping keeps the history smoothing the shadows' and the ambient occlusion's noise")
+	TEST_CASE("Variance clipping keeps the history smoothing the shadows' noise")
 	{
 		TemporalAntiAliasingSettings settings = c_TAAOriginalSettings;
 		settings.HistoryClamp = TemporalHistoryClamp::Variance;
@@ -516,7 +517,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Custom, &settings, 0.6);
 	}
 
-	TEST_CASE("Sharp keeps the history smoothing the shadows' and the ambient occlusion's noise")
+	TEST_CASE("Sharp keeps the history smoothing the shadows' noise")
 	{
 		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Sharp, nullptr, 0.6);
 	}

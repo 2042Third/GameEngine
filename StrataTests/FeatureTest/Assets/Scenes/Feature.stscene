@@ -262,6 +262,7 @@
 					"PostProcess": {
 						"AmbientOcclusion": true,
 						"AmbientOcclusionIntensity": 1.5,
+						"AmbientOcclusionMultiBounce": false,
 						"AmbientOcclusionRadius": 0.8,
 						"AntiAliasing": true,
 						"AntiAliasingMethod": "TAA",

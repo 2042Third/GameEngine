@@ -10,6 +10,7 @@
 #include "Include/LocalShadows.glsl"
 #include "Include/Clusters.glsl"
 #include "Include/Fog.glsl"
+#include "Include/AmbientOcclusionFit.glsl"
 #define ST_REFLECTION_PROBE_SAMPLING
 #include "Include/ReflectionProbes.glsl"
 
@@ -208,6 +209,10 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 	float diffuseOcclusion = surface.Occlusion * screenOcclusion;
 	if (lightingView == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION)
 		return vec3(diffuseOcclusion);
+	// Multi-bounce (AOParams.y): occluded corners keep the light their walls, of the surface's diffuse albedo, reflect into
+	// them (Include/AmbientOcclusionFit.glsl). Diffuse light only; specular occlusion keeps the visibility.
+	vec3 diffuseOcclusionColor = u_Frame.AOParams.y > 0.0 ? AOMultiBounce(diffuseOcclusion, surface.Albedo * (1.0 - surface.Metallic))
+		: vec3(diffuseOcclusion);
 	vec3 reflected = reflect(-surface.View, surface.Normal);
 	// Reflection probes whose boxes hold the surface light it first (Include/ReflectionProbes.glsl); the sky, or the constant
 	// ambient without an environment, fills in what they leave.
@@ -258,7 +263,7 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 			// that a probe fading out meets it without a step at its box's faces.
 			if (!environment)
 				diffuse += u_Frame.AmbientColor.rgb * sky * surface.Albedo * (1.0 - surface.Metallic);
-			indirect = ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusion + radiance * specularColor * specularOcclusion;
+			indirect = ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusionColor + radiance * specularColor * specularOcclusion;
 		}
 		else if (screenReflection.a > 0.0)
 		{
@@ -266,18 +271,18 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 			vec3 diffuse = environment ? irradiance * surface.Albedo * (1.0 - surface.Metallic) * (1.0 - specularColor) * u_Frame.EnvironmentParams.x
 				: u_Frame.AmbientColor.rgb * surface.Albedo * (1.0 - surface.Metallic);
 			vec3 specular = radiance * (environment ? u_Frame.EnvironmentParams.x : 0.0) * (1.0 - screenReflection.a) + screenReflection.rgb;
-			indirect = ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusion + specular * specularColor * specularOcclusion;
+			indirect = ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusionColor + specular * specularColor * specularOcclusion;
 		}
 		else
 		{
 			vec3 diffuse = irradiance * surface.Albedo * (1.0 - surface.Metallic) * (1.0 - specularColor);
-			indirect = (ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusion + radiance * specularColor * specularOcclusion) * u_Frame.EnvironmentParams.x;
+			indirect = (ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusionColor + radiance * specularColor * specularOcclusion) * u_Frame.EnvironmentParams.x;
 		}
 	}
 	else
 	{
 		// Constant ambient without an environment map: diffuse only, modulated by material occlusion.
-		indirect = ScatterDiffuse(u_Frame.AmbientColor.rgb * surface.Albedo * (1.0 - surface.Metallic), diffuseWeight) * diffuseOcclusion;
+		indirect = ScatterDiffuse(u_Frame.AmbientColor.rgb * surface.Albedo * (1.0 - surface.Metallic), diffuseWeight) * diffuseOcclusionColor;
 	}
 
 	vec3 emitted = lightingView == ST_LIGHTING_VIEW_INDIRECT ? vec3(0.0) : surface.Emissive;
