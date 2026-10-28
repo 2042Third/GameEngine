@@ -878,11 +878,12 @@ The renderer measures them (`Renderer/GPUProfiler`, `Renderer::GetGPUProfiler`) 
 (`GraphicsDevice::CreateTimestampPool`, read with their availability and never waited for; NVRHI's timer queries read 32-bit
 values and end render passes). A ring of `MaxFramesInFlight + 2` frame slots of 256 timestamps: `Renderer::BeginFrame` closes
 the frame's slot (an event query marks the end of its submissions), hands the oldest slots the GPU completed to the frame
-profiler (every renderer's intervals added up per stage, like CPU stages) and opens the next one, whose timestamps the
-first timed command list of the frame resets ahead of its first timestamp (`GPUTimestampPool::RecordReset`; query commands of
-a queue run in submission order, and timed lists execute in the order their timers start), without a submission of its own
-(a timer that runs on into a new frame writes nothing into the new slot before a timer starts in it). A slot still in use when its turn
-comes is dropped (`GPUProfilerStats::DroppedFrames`), as is a frame whose timestamps are still not readable a frame after the
+profiler (every renderer's intervals added up per stage, like CPU stages) and opens the next one, resetting its timestamps
+on the host (`GPUTimestampPool::ResetCompleted`, `vkResetQueryPool`: the slot's earlier frame was read or dropped once its
+event query showed the GPU completed it, and the validation layer learned that completion when the query was polled). No
+submission of its own is needed, and the frame's timed command lists may execute in any order (the upload batch's list,
+opened by the frame's first upload, runs after lists the geometry pool's growth executes meanwhile); a device without host
+query resets resets the slot in a command list executed at once. A slot still in use when its turn comes is dropped (`GPUProfilerStats::DroppedFrames`), as is a frame whose timestamps are still not readable a frame after the
 GPU completed its work (recorded into a command list that was never executed; MoltenVK makes timestamps readable a little
 after the completion is signaled, so a completed slot waits that one frame); nothing waits for the GPU. `GPUPassTimer` times
 consecutive passes of a command list with one timestamp per boundary, so stages tile it without gaps; a `GPUTimerRecord`

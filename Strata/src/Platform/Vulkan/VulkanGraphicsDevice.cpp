@@ -174,9 +174,8 @@ namespace Strata
 				count = std::min(count, m_Count - first);
 				const auto& dispatch = VULKAN_HPP_DEFAULT_DISPATCHER;
 				// Recorded, in a command list of its own executed at once: query commands of one queue run in submission order,
-				// so the reset follows the earlier writes and precedes every later one without waiting for the GPU. A host reset
-				// would have to know the writes' command buffers completed, which the validation layer may learn later than the
-				// frame's event queries do.
+				// so the reset follows the earlier writes and precedes every later one without waiting for the GPU (a host reset
+				// needs the writes to have completed: ResetCompleted).
 				if (!m_ResetList)
 					m_ResetList = m_NvrhiDevice->createCommandList();
 				if (!m_ResetList)
@@ -189,14 +188,19 @@ namespace Strata
 				m_NvrhiDevice->executeCommandList(m_ResetList);
 			}
 
-			void RecordReset(nvrhi::ICommandList* commandList, uint32_t first, uint32_t count) override
+			void ResetCompleted(uint32_t first, uint32_t count) override
 			{
-				if (!commandList || first >= m_Count || count == 0)
+				if (first >= m_Count || count == 0)
 					return;
 				count = std::min(count, m_Count - first);
-				VkCommandBuffer commandBuffer = static_cast<VkCommandBuffer>(commandList->getNativeObject(nvrhi::ObjectTypes::VK_CommandBuffer).pointer);
-				if (commandBuffer != VK_NULL_HANDLE)
-					VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdResetQueryPool(commandBuffer, m_Pool, first, count);
+				const auto& dispatch = VULKAN_HPP_DEFAULT_DISPATCHER;
+				// The caller saw the writes complete by polling an event query, which reads the queue's timeline semaphore: the
+				// validation layer retires the queue's submissions up to the value read before that read returns, so it knows
+				// them complete too and takes the timestamps as reset from here on.
+				if (m_HostReset && dispatch.vkResetQueryPool)
+					dispatch.vkResetQueryPool(m_Device, m_Pool, first, count);
+				else
+					Reset(first, count);
 			}
 
 			void Write(nvrhi::ICommandList* commandList, uint32_t index) override

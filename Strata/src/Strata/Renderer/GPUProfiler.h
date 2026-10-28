@@ -76,12 +76,12 @@ namespace Strata
 	// frame profiler, frames later, without ever waiting for the GPU. A ring of MaxFramesInFlight + 2 frame slots of
 	// c_MaxTimestampsPerFrame timestamps: BeginFrame (Renderer::BeginFrame) closes the frame's slot, reads the oldest pending
 	// slots that the GPU completed and hands their per-stage sums (every user's intervals added up, as CPU stages add up) to
-	// the frame profiler for the frame that recorded them (FrameProfiler::RecordGPUFrame), then opens the next slot, whose
-	// reset the first command list that writes it records (GPUTimestampPool::RecordReset: no submission of its own). A slot
-	// still in use when its turn comes is dropped, never waited for, and so is one whose timestamps are still not readable a
-	// frame after the GPU completed it (a timed command list that was never executed; drivers may make the results readable a
-	// little after the work completed, as MoltenVK does). Passes are timed with GPUPassTimer. Without timestamp support
-	// everything is a no-op. Main thread only.
+	// the frame profiler for the frame that recorded them (FrameProfiler::RecordGPUFrame), then opens the next slot and resets
+	// its timestamps (GPUTimestampPool::ResetCompleted: on the host where the device can, without a submission), so the
+	// frame's timed command lists may execute in any order. A slot still in use when its turn comes is dropped, never waited
+	// for, and so is one whose timestamps are still not readable a frame after the GPU completed it (a timed command list
+	// that was never executed; drivers may make the results readable a little after the work completed, as MoltenVK does).
+	// Passes are timed with GPUPassTimer. Without timestamp support everything is a no-op. Main thread only.
 	class GPUProfiler
 	{
 	public:
@@ -105,11 +105,8 @@ namespace Strata
 		void Resolve(bool wait);
 
 		// Used by GPUPassTimer: writes a timestamp into the open slot (c_NoTimestamp when there is none, or it is full), and
-		// adds an interval between two of its timestamps to the slot (and to `record`). The slot's first timestamp brings its
-		// reset along, recorded into its command list ahead of it: only where `listStart` (a GPUPassTimer starting, at the
-		// start of its list's work); a timer that runs on into a new frame writes nothing into it (c_NoTimestamp) until a
-		// timer starts in the frame.
-		uint32_t WriteTimestamp(nvrhi::ICommandList* commandList, bool listStart = false);
+		// adds an interval between two of its timestamps to the slot (and to `record`).
+		uint32_t WriteTimestamp(nvrhi::ICommandList* commandList);
 		void AddInterval(FrameStageID stage, uint32_t begin, uint32_t end, GPUTimerRecord* record);
 		// The serial of the open slot (0 without one).
 		uint64_t GetOpenSlot() const;
@@ -134,7 +131,9 @@ namespace Strata
 			uint64_t ProfilerFrame = 0;
 			uint32_t ResetCount = 0;  // The frame profiler's, when the slot was opened
 			uint32_t Count = 0;       // Timestamps written
-			bool Reset = false;       // Its timestamps were made writable for its frame (WriteTimestamp)
+			// Closed with timestamps but without an event query (it could not be made): nothing shows when the GPU completed
+			// their writes, so the slot's next reset goes through the queue (GPUTimestampPool::Reset).
+			bool Unfenced = false;
 			uint32_t CompletedCount = 0; // Of the open slot's timestamps, those the GPU ran by the latest Resolve(true)
 			std::vector<GPUTimedInterval> Intervals;
 			nvrhi::EventQueryHandle Done; // Set when the slot closes: the GPU completed every submission of its frame
@@ -170,11 +169,10 @@ namespace Strata
 
 	// Times consecutive GPU passes of a command list: one timestamp per pass boundary, so the stages tile the command list
 	// without gaps. Construct it where the first pass starts (`stage`), call Next where the next one starts, and End (or let
-	// it go out of scope) where the last one ends, before the command list is closed. Construct it outside render passes (at
-	// the start of the list's work: the frame's first timer records its slot's reset there). The command list must be
-	// executed in the frame it was recorded in, before any timed list recorded after it (timed lists execute in the order
-	// their timers started). `record` collects the intervals too (a renderer's own times). Uses the renderer's profiler
-	// (Renderer::GetGPUProfiler); does nothing without one, or without timestamp support.
+	// it go out of scope) where the last one ends, before the command list is closed. The command list must be executed in
+	// the frame it was recorded in; the frame's timed lists may execute in any order (the slot was reset when it opened).
+	// `record` collects the intervals too (a renderer's own times). Uses the renderer's profiler (Renderer::GetGPUProfiler);
+	// does nothing without one, or without timestamp support.
 	class GPUPassTimer
 	{
 	public:

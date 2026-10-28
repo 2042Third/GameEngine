@@ -137,6 +137,11 @@ namespace Strata
 			m_Device.GetDevice()->setEventQuery(slot.Done, nvrhi::CommandQueue::Graphics);
 			slot.DoneSet = true;
 		}
+		else
+		{
+			// Nothing will show when the GPU completed the frame's writes: the slot's next reset goes through the queue.
+			slot.Unfenced = true;
+		}
 		slot.State = SlotState::Pending;
 	}
 
@@ -155,8 +160,14 @@ namespace Strata
 			m_Stats.DroppedFrames++;
 			FreeSlot(slot);
 		}
-		// Made writable with its first timestamp (WriteTimestamp), not here: a submission of its own every frame costs more.
-		slot.Reset = false;
+		// The slot's earlier frame was read or dropped once its event query showed the GPU completed it, or it wrote nothing:
+		// its timestamps are reset at once, on the host where the device can (a submission of its own every frame costs more),
+		// before any command list of this frame writes them, so the frame's timed lists may execute in any order.
+		if (slot.Unfenced)
+			m_Pool->Reset(GetBase(m_NextSlot), c_MaxTimestampsPerFrame);
+		else
+			m_Pool->ResetCompleted(GetBase(m_NextSlot), c_MaxTimestampsPerFrame);
+		slot.Unfenced = false;
 		slot.State = SlotState::Open;
 		slot.Serial = m_NextSerial++;
 		slot.ProfilerFrame = m_Profiler.GetTotalFrameCount();
@@ -260,7 +271,7 @@ namespace Strata
 		return m_OpenSlot < m_Slots.size() ? m_Slots[m_OpenSlot].Serial : 0;
 	}
 
-	uint32_t GPUProfiler::WriteTimestamp(nvrhi::ICommandList* commandList, bool listStart)
+	uint32_t GPUProfiler::WriteTimestamp(nvrhi::ICommandList* commandList)
 	{
 		if (!m_Pool || m_OpenSlot >= m_Slots.size() || !commandList)
 			return c_NoTimestamp;
@@ -270,21 +281,6 @@ namespace Strata
 		{
 			m_Stats.SkippedTimestamps++;
 			return c_NoTimestamp;
-		}
-		if (!slot.Reset)
-		{
-			// A timer that runs on into a new frame does not time it: the slot's reset goes ahead of its first timestamp, at
-			// the start of a list's work (outside render passes), and a list of its own could not be opened beside an open
-			// immediate one.
-			if (!listStart)
-			{
-				m_Stats.SkippedTimestamps++;
-				return c_NoTimestamp;
-			}
-			// The queue runs the reset after every earlier write of the slot's timestamps (their frame was read or dropped) and
-			// before this frame's: ahead of this one in its list, which the timed lists recorded later follow on the queue.
-			m_Pool->RecordReset(commandList, GetBase(m_OpenSlot), c_MaxTimestampsPerFrame);
-			slot.Reset = true;
 		}
 		const uint32_t index = GetBase(m_OpenSlot) + slot.Count++;
 		m_Pool->Write(commandList, index);
@@ -359,7 +355,7 @@ namespace Strata
 		if (!m_Profiler)
 			return;
 		m_Slot = m_Profiler->GetOpenSlot();
-		m_Begin = m_Profiler->WriteTimestamp(m_CommandList, true);
+		m_Begin = m_Profiler->WriteTimestamp(m_CommandList);
 	}
 
 	void GPUPassTimer::Next(FrameStageID stage)

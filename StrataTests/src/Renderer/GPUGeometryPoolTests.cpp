@@ -1,12 +1,16 @@
 #include <doctest/doctest.h>
 
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Strata/Core/FrameProfiler.h"
 #include "Strata/Renderer/GeometryPool.h"
+#include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Renderer/MeshFactory.h"
+#include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/StagingPool.h"
 
 #include <cstring>
+#include <functional>
 #include <initializer_list>
 #include <map>
 #include <vector>
@@ -279,6 +283,80 @@ TEST_SUITE("GPU.Renderer.GeometryPool")
 		}
 		for (const Filled& entry : filled)
 			CHECK(HoldsPattern(gpu, *pool, entry));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The frame's GPU times hold the pool's growth under an upload batch whose command list is open")
+	{
+		// The batch's graphics list is the frame's first timed list (its first upload opened it) and executes last; the
+		// growth's timed list executes at once, ahead of it. Every slot of the renderer's profiler was written before, so a
+		// write into one before its reset ran is what the validation layer reports, and the frame's times would be lost.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		GPUProfiler& gpuProfiler = Renderer::GetGPUProfiler();
+		if (!gpuProfiler.IsEnabled())
+		{
+			MESSAGE("The device writes no timestamps: nothing to check");
+			return;
+		}
+		FrameProfiler& profiler = FrameProfiler::Get();
+		profiler.Reset();
+		nvrhi::TextureDesc desc;
+		desc.width = 4;
+		desc.height = 4;
+		desc.format = nvrhi::Format::RGBA8_UNORM;
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		desc.debugName = "BatchSource";
+		const nvrhi::TextureHandle source = gpu.GetNvrhiDevice()->createTexture(desc);
+		desc.debugName = "BatchDestination";
+		const nvrhi::TextureHandle destination = gpu.GetNvrhiDevice()->createTexture(desc);
+		REQUIRE(source);
+		REQUIRE(destination);
+		StagingPool staging(gpu.GetNvrhiDevice());
+		GPUUploadQueue queue(gpu.GetDevice(), staging);
+		const auto runFrame = [&](const std::function<void()>& work)
+		{
+			profiler.BeginFrame();
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			work();
+			gpu.GetDevice().EndFrame();
+			profiler.EndFrame(0.001);
+		};
+		const auto uploadBatch = [&]()
+		{
+			queue.BeginBatch();
+			queue.CopyTextureLevels(destination, 0, source, 0, 1);
+			queue.SubmitBatch();
+		};
+		for (uint32_t frame = 0; frame < 2 * gpuProfiler.GetSlotCount(); frame++)
+			runFrame(uploadBatch);
+		const uint64_t dropped = gpuProfiler.GetStats().DroppedFrames;
+
+		const Ref<GeometryPool> pool = GeometryPool::Create(gpu.GetNvrhiDevice(), SmallPool());
+		REQUIRE(pool);
+		uint64_t grown = 0;
+		runFrame([&]()
+		{
+			grown = profiler.GetTotalFrameCount();
+			queue.BeginBatch();
+			queue.CopyTextureLevels(destination, 0, source, 0, 1);
+			const uint64_t version = pool->GetBufferVersion();
+			CHECK(pool->Allocate(GeometryArena::Static, 1000, 4000, queue.GetOpenBatch()).Handle != c_InvalidGeometry);
+			CHECK(pool->GetBufferVersion() > version);
+			queue.SubmitBatch();
+		});
+		// The frames after it bring its GPU times.
+		for (uint32_t frame = 0; frame < gpuProfiler.GetSlotCount(); frame++)
+			runFrame([]() {});
+		gpu.GetDevice().WaitForIdle();
+		gpuProfiler.Resolve(true);
+		const FrameSample sample = profiler.GetFrame(static_cast<uint32_t>(profiler.GetTotalFrameCount() - 1 - grown));
+		REQUIRE(sample.Index == grown);
+		CHECK(sample.HasGPU);
+		CHECK(sample.GPUStageMs[RendererGPUStages::Get().Uploads] > 0.0f);
+		CHECK(gpuProfiler.GetStats().DroppedFrames == dropped);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
