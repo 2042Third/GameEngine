@@ -13,6 +13,9 @@
 							0.16,
 							1
 						],
+						"Aperture": 5.6,
+						"DepthOfField": true,
+						"FocusEntity": "F7E000000000001D",
 						"OrthographicFar": 1000,
 						"OrthographicNear": 0.1,
 						"OrthographicSize": 10,
@@ -20,7 +23,8 @@
 						"PerspectiveFar": 300,
 						"PerspectiveNear": 0.05,
 						"Primary": true,
-						"Projection": "Perspective"
+						"Projection": "Perspective",
+						"SensorHeight": 36
 					},
 					"Name": {
 						"Name": "Main Camera"
@@ -61,6 +65,7 @@
 							0.07,
 							1
 						],
+						"FocusDistance": 25,
 						"OrthographicFar": 60,
 						"OrthographicNear": -10,
 						"OrthographicSize": 24,

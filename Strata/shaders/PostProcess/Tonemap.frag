@@ -49,7 +49,7 @@ layout(set = 0, binding = ST_CBV(0), std140) uniform TonemapConstants
 } u_Parameters;
 
 #define ST_COLOR_GRADING 1u
-#define ST_MOTION_BLUR_MASK 2u
+#define ST_BLUR_MASK 2u
 
 // Largest exposed value passed to the tone curves: far beyond where every curve saturates, small enough that their
 // intermediate products stay finite in 32-bit floats.
@@ -174,9 +174,10 @@ void main()
 	// The exposure multiplies luminance; the scene color is pre-exposed, so its factor is divided out (exactly).
 	vec4 source = texture(sampler2D(u_SceneColor, u_PointSampler), v_UV);
 	vec3 color = ExposeSceneColor(source.rgb);
-	// The motion blur's output holds 1 in alpha where it blurred: sharpening a blur would cut its streaks into steps.
+	// The motion blur's and the depth of field's outputs hold 1 in alpha where they blurred: sharpening a blur would cut a motion
+	// blur's streaks into steps and give a defocused area a texture it does not have.
 	float sharpening = u_Parameters.Sharpening;
-	if ((u_Parameters.ColorFlags & ST_MOTION_BLUR_MASK) != 0u)
+	if ((u_Parameters.ColorFlags & ST_BLUR_MASK) != 0u)
 		sharpening *= 1.0 - clamp(source.a, 0.0, 1.0);
 	if (sharpening > 0.0)
 		color = min(Sharpen(color, sharpening), vec3(c_MaxExposedValue));

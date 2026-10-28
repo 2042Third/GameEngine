@@ -863,6 +863,41 @@ TEST_SUITE("Editor.Commands")
 		CHECK(inactive["Shoulder"] == "Only the Filmic curve has a shoulder (Tonemapper is AgX)");
 	}
 
+	TEST_CASE("A camera's lens is set, undone and refused out of range")
+	{
+		CommandHarness harness;
+		const std::string entity = harness.Run("entity.create", { { "name", "Camera" } })["id"].get<std::string>();
+		const std::string subject = harness.Run("entity.create", { { "name", "Subject" } })["id"].get<std::string>();
+		harness.Run("component.add", { { "entity", entity }, { "component", "Camera" } });
+		const auto values = [&]() { return harness.Run("component.get", { { "entity", entity }, { "component", "Camera" } })["values"]; };
+		const nlohmann::json defaults = values();
+		CHECK(defaults["DepthOfField"] == false);
+		CHECK(defaults["FocusDistance"] == 10.0);
+		CHECK(defaults["Aperture"].get<double>() == doctest::Approx(2.8));
+		CHECK(defaults["SensorHeight"] == 24.0);
+		const size_t undoDepth = harness.Context.GetUndoStack().GetPosition();
+		harness.Run("component.set", { { "entity", entity }, { "component", "Camera" }, { "values", { { "DepthOfField", true }, { "FocusDistance", 4.5 },
+			{ "FocusEntity", subject }, { "Aperture", 1.4 }, { "SensorHeight", 36.0 } } } });
+		CHECK(harness.Context.GetUndoStack().GetPosition() == undoDepth + 1);
+		const nlohmann::json changed = values();
+		CHECK(changed["DepthOfField"] == true);
+		CHECK(changed["FocusDistance"] == 4.5);
+		CHECK(changed["FocusEntity"] == subject);
+		CHECK(changed["Aperture"].get<double>() == doctest::Approx(1.4));
+		CHECK(changed["SensorHeight"] == 36.0);
+		const nlohmann::json inactive = harness.Run("component.get", { { "entity", entity }, { "component", "Camera" } })["inactive"];
+		CHECK(inactive["FocusDistance"] == "A Focus Entity sets the distance");
+		for (const auto& [property, value] : { std::pair<const char*, nlohmann::json> { "FocusDistance", 0.0 }, { "Aperture", 0.5 }, { "SensorHeight", 200.0 },
+				 { "FocusEntity", "not an entity" } })
+		{
+			CAPTURE(property);
+			CHECK_FALSE(harness.Error("component.set", { { "entity", entity }, { "component", "Camera" }, { "values", { { property, value } } } }).empty());
+			CHECK(values() == changed);
+		}
+		harness.Run("edit.undo");
+		CHECK(values() == defaults);
+	}
+
 	TEST_CASE("Hierarchy, duplication, components and selection")
 	{
 		CommandHarness harness;

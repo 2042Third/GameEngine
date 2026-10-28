@@ -2166,4 +2166,45 @@ TEST_SUITE("GPU.Editor.Viewport")
 		harness.Run("play.stop");
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("Views and captures through a scene camera with depth of field defocus; the editor camera never does")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		const std::string camera = harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", { { "Primary", true },
+			{ "DepthOfField", true }, { "FocusDistance", 3.0 }, { "Aperture", 1.4 } } }, { "Transform", { { "Translation", { 0, 0, 5 } } } } } } })["id"].get<std::string>();
+		EditorContext& context = harness.Context;
+		EditorViewport& viewport = context.GetViewport();
+		harness.Run("viewport.setSettings", { { "gameView", { { "mode", "1280x720" } } } });
+		const glm::uvec2 size(1280, 720);
+		auto render = [&](ViewportRenderer& renderer, ViewportCameraSource source)
+		{
+			const std::optional<ViewportView> view = ResolveViewportView(context, source, 1280.0f / 720.0f);
+			REQUIRE(view);
+			if (!view->FromScene)
+				CHECK_FALSE(view->Lens.has_value()); // The editor camera never has a lens
+			REQUIRE(renderer.Render(context, size, *view, viewport.GetSettings(), false, RendererQuality::GetProjectQuality()));
+			return renderer.GetStats();
+		};
+		REQUIRE(viewport.GetGameRenderer());
+		// A lens is not a moment: the game's camera defocuses in edit mode too.
+		const SceneRendererStats game = render(*viewport.GetGameRenderer(), ViewportCameraSource::Scene);
+		CHECK(game.DepthOfField);
+		CHECK(game.DepthOfFieldLens.FocusDistance == doctest::Approx(3.0f));
+		CHECK(game.DepthOfFieldLens.FNumber == doctest::Approx(1.4f));
+		CHECK_FALSE(render(*viewport.GetRenderer(), ViewportCameraSource::Editor).DepthOfField);
+		nlohmann::json capture;
+		harness.Capture({ { "camera", "scene" }, { "waitForAssets", false } }, &capture);
+		REQUIRE(viewport.GetCaptureRenderer());
+		CHECK(viewport.GetCaptureRenderer()->GetStats().DepthOfField);
+		CHECK(capture["renderStats"]["depthOfField"]["fNumber"].get<double>() == doctest::Approx(1.4));
+		harness.Capture({ { "camera", "editor" }, { "waitForAssets", false } });
+		CHECK_FALSE(viewport.GetCaptureRenderer()->GetStats().DepthOfField);
+		// Off on the camera: no lens.
+		harness.Run("component.set", { { "entity", camera }, { "component", "Camera" }, { "values", { { "DepthOfField", false } } } });
+		CHECK_FALSE(render(*viewport.GetGameRenderer(), ViewportCameraSource::Scene).DepthOfField);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

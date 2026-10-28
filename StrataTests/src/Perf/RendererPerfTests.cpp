@@ -12,6 +12,7 @@
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/Process.h>
 #include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/PostProcessData.h>
 #include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/TextureStreamer.h>
@@ -22,6 +23,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -106,8 +108,8 @@ namespace
 	// exposure metered center-weighted with the key, bloom at the default radius, the lens vignette, the dither) and a
 	// grading that runs (white balance 5600 K, a slope): the median of the GPU stage `stage` over the measured frames,
 	// recorded as `key` on devices that write timestamps. `motionBlur` turns the Post Process's motion blur on; the camera
-	// turns `turnPixels` pixels a frame at the image's center (0: still).
-	void MeasurePostStage4K(const std::string& key, const char* stage, bool motionBlur, float turnPixels)
+	// turns `turnPixels` pixels a frame at the image's center (0: still); with `lens`, the frames have depth of field.
+	void MeasurePostStage4K(const std::string& key, const char* stage, bool motionBlur, float turnPixels, std::optional<CameraLens> lens = std::nullopt)
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -145,7 +147,9 @@ namespace
 			frame = 0;
 			const Perf::FrameMeasurement measurement = Perf::MeasureFrames(gpu, c_WarmupFrames, c_MeasuredFrames, [&]
 			{
-				REQUIRE(renderer.Render(scene, GridView(c_Count, yawPerFrame * static_cast<float>(frame))));
+				SceneRenderOptions options;
+				options.Lens = lens;
+				REQUIRE(renderer.Render(scene, GridView(c_Count, yawPerFrame * static_cast<float>(frame)), nullptr, options));
 				frame++;
 			});
 			const SceneRendererStats& stats = renderer.GetStats();
@@ -154,6 +158,7 @@ namespace
 			CHECK(stats.MotionBlurred == motionBlur);
 			if (motionBlur)
 				CHECK(stats.MotionBlurSamples == 12u);
+			CHECK(stats.DepthOfField == lens.has_value());
 			const double stageMs = MedianGPUStageMs(stage);
 			MESSAGE(key, ": ", std::string(stage), " ", stageMs, " ms median, GPU ", measurement.GPU ? measurement.GPU->MedianMs : 0.0, " ms busy");
 			return Perf::MetricValues { { key, stageMs } };
@@ -395,6 +400,20 @@ TEST_SUITE("PerfGPU.Renderer")
 		// gather's copy of every pixel (provisional: the reference machine sets the budgets).
 		MeasurePostStage4K("PerfGPU.Renderer.MotionBlur4K", "GPU.MotionBlur", true, 16.0f);
 		MeasurePostStage4K("PerfGPU.Renderer.MotionBlur4KStill", "GPU.MotionBlur", true, 0.0f);
+	}
+
+	TEST_CASE("Depth of field's cost at 3840x2160")
+	{
+		// GPU.DepthOfField at its worst: a 100 mm sensor's f/1.4 lens of the grid view focused 2 m away, so the whole grid, hundreds
+		// of meters off, blurs at the largest circle (2% of the height) and every pixel gathers (provisional: the reference
+		// machine sets the budget).
+		CameraLens lens;
+		lens.SensorHeight = 100.0f;
+		lens.FocalLength = 0.5f * lens.SensorHeight / std::tan(glm::radians(30.0f));
+		lens.FNumber = 1.4f;
+		lens.FocusDistance = 2.0f;
+		REQUIRE(lens.GetCircleOfConfusionScale(2160.0f) > RenderData::c_DepthOfFieldMaxDiameter * 2160.0f);
+		MeasurePostStage4K("PerfGPU.Renderer.DepthOfField4K", "GPU.DepthOfField", false, 0.0f, lens);
 	}
 
 	TEST_CASE("Render cost of 100,000 cubes in height fog")

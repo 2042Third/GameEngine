@@ -30,6 +30,7 @@ namespace Strata
 			if (Entity camera = scene.GetPrimaryCameraEntity())
 			{
 				view.Camera = SceneCamera::FromEntity(scene, camera, aspectRatio);
+				view.Lens = CameraLens::FromEntity(scene, camera);
 				view.FromScene = true;
 				return view;
 			}
@@ -197,6 +198,8 @@ namespace Strata
 		// made by editing are not the game's), and the capture renderer's single pictures never do (it renders a view again for
 		// its settle frames while a running game moves).
 		options.MotionBlur = !m_SingleImages && view.FromScene && context.IsPlaying();
+		// Depth of field is a lens's, not a moment's: views and captures through a scene camera show it, playing or not.
+		options.Lens = view.Lens;
 		m_DebugDraw.Clear();
 		options.SelectionColor = settings.SelectionColor;
 		if (overlays)

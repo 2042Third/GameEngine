@@ -40,9 +40,10 @@ namespace Strata
 		static_assert(sizeof(TonemapConstants) == 144);
 		static_assert(offsetof(TonemapConstants, ColorRows) == 64 && offsetof(TonemapConstants, ColorOffset) == 112);
 		static_assert(offsetof(TonemapConstants, ColorPower) == 128);
-		// TonemapConstants::ColorFlags: the grading applies; the source's alpha is the motion blur's mask (no sharpening there).
+		// TonemapConstants::ColorFlags: the grading applies; the source's alpha marks the pixels the motion blur or the depth of
+		// field blurred (no sharpening there).
 		constexpr uint32_t c_TonemapColorGrading = 1u;
-		constexpr uint32_t c_TonemapMotionBlurMask = 2u;
+		constexpr uint32_t c_TonemapBlurMask = 2u;
 
 		// PostProcess/MotionBlurTiles.comp, MotionBlurNeighbors.comp, MotionBlur.comp (push constants, slot 1: b0 is the frame's
 		// constants).
@@ -53,13 +54,32 @@ namespace Strata
 			float MinLength;       // Pixels: the viewport's height / 1080
 			uint32_t TileSize;     // Pixels: max(8, ceil(MaxLength / 2))
 			uint32_t SampleCount;  // 8, 12 or 16 (RendererQualitySettings::MotionBlurQuality)
+			uint32_t SourceMask;   // 1: the source's alpha is the depth of field's mask, kept where the motion blur copies the color
 			uint32_t Padding0;
 			uint32_t Padding1;
-			uint32_t Padding2;
 		};
 		static_assert(sizeof(MotionBlurParameters) == 32);
 		// The smallest tile: the tile targets are made for it, so a change of MotionBlurMaxLength never reallocates.
 		constexpr uint32_t c_MotionBlurMinTileSize = 8;
+
+		// PostProcess/DepthOfField*.comp (push constants, slot 1: b0 is the frame's constants).
+		struct DepthOfFieldParameters
+		{
+			float FocusDistance;  // Meters
+			float CoCScale;       // Full-resolution pixels: the circle of confusion's radius for a point infinitely far
+			float MaxCoC;         // Full-resolution pixels: the largest radius either way (c_DepthOfFieldMaxDiameter of the height, halved)
+			uint32_t TileSize;    // Half-resolution pixels: max(c_DepthOfFieldMinTileSize, ceil(MaxCoC / 2))
+			uint32_t SampleCount; // The gather's samples per field (c_DepthOfFieldSamples)
+			uint32_t Padding0;
+			uint32_t Padding1;
+			uint32_t Padding2;
+		};
+		static_assert(sizeof(DepthOfFieldParameters) == 32);
+		// The largest circle of confusion, as a fraction of the image height (its diameter), the gather's samples, and the
+		// smallest tile of the near field's maxima (half-resolution pixels; the tile targets are made for it).
+		constexpr float c_DepthOfFieldMaxDiameter = 0.02f;
+		constexpr uint32_t c_DepthOfFieldSamples = 48;
+		constexpr uint32_t c_DepthOfFieldMinTileSize = 8;
 		static_assert(offsetof(TonemapConstants, Operator) == 16 && offsetof(TonemapConstants, DitherLevels) == 32);
 		static_assert(offsetof(TonemapConstants, VignetteTangents) == 40 && offsetof(TonemapConstants, FilmicToeSlope) == 48);
 

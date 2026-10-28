@@ -110,6 +110,11 @@ strata_add_shaders(Strata_Renderer
 		PostProcess/MotionBlurTiles.comp
 		PostProcess/MotionBlurNeighbors.comp
 		PostProcess/MotionBlur.comp
+		PostProcess/DepthOfFieldPrepare.comp
+		PostProcess/DepthOfFieldTiles.comp
+		PostProcess/DepthOfFieldDilate.comp
+		PostProcess/DepthOfFieldGather.comp
+		PostProcess/DepthOfFieldComposite.comp
 		PostProcess/Histogram.comp
 		PostProcess/Exposure.comp
 		PostProcess/Bloom.comp

@@ -228,11 +228,13 @@ TEST_SUITE("Renderer.Quality")
 	{
 		for (const char* preset : { "Low", "Medium", "High", "Ultra", "Custom" })
 		{
-			const nlohmann::json value = { { "Preset", preset }, { "AntiAliasing", "FXAA" }, { "MotionBlur", "Off" }, { "MotionBlurQuality", "Samples16" } };
+			const nlohmann::json value = { { "Preset", preset }, { "AntiAliasing", "FXAA" }, { "MotionBlur", "Off" }, { "DepthOfField", "Off" },
+				{ "MotionBlurQuality", "Samples16" } };
 			const RendererQualitySettings settings = RendererQuality::FromSectionValue(&value);
 			CAPTURE(preset);
 			CHECK(settings.AntiAliasing == AntiAliasingChoice::FXAA);
 			CHECK(settings.MotionBlur == SceneEffectChoice::Off);
+			CHECK(settings.DepthOfField == SceneEffectChoice::Off);
 			// The samples follow the preset: the value's only under Custom.
 			const RendererQualityPreset parsed = *RendererQuality::PresetFromString(preset);
 			CHECK(settings.MotionBlurQuality == (parsed == RendererQualityPreset::Custom ? MotionBlurSamples::Samples16
@@ -240,7 +242,9 @@ TEST_SUITE("Renderer.Quality")
 			const nlohmann::json written = RendererQuality::ToSectionValue(settings);
 			CHECK(written["AntiAliasing"] == "FXAA");
 			CHECK(written["MotionBlur"] == "Off");
+			CHECK(written["DepthOfField"] == "Off");
 		}
+		CHECK(RendererQuality::GetPreset(RendererQualityPreset::Ultra).DepthOfField == SceneEffectChoice::Scene);
 		CHECK(RendererQuality::GetMotionBlurSampleCount(MotionBlurSamples::Off) == 0);
 		CHECK(RendererQuality::GetMotionBlurSampleCount(MotionBlurSamples::Samples12) == 12);
 		CHECK(RendererQuality::AntiAliasingChoiceFromString("Blurry") == std::nullopt);

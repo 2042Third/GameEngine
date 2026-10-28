@@ -3808,10 +3808,45 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     at High, 3840x2160, the camera turning 16 pixels a frame: about 0.18 ms on an RTX 5090, 0.24 ms where every
     neighborhood takes the depth-aware path) and `MotionBlur4KStill` (still: about 0.11 ms), beside `Post4K` (`GPU.Post`
     with every post effect at its default and a grading).
-- **The players' rows** (`RendererQualitySettings::AntiAliasing` and `MotionBlur`, the same under every preset): Scene,
-  or Off, FXAA or TAA for the method; Scene or Off for the motion blur (players may turn off, never on, what a scene
-  uses). `ApplyQualityOverrides` applies them to the copy of the Post Process every pass reads, once per frame, on both
-  paths; screen-space reflections follow the effective method.
+- **Depth of field** (`RenderDepthOfField`, `PostProcess/DepthOfField*.comp`, `Include/DepthOfField.glsl`; stage
+  `GPU.DepthOfField`, registered after `GPU.MotionBlur` and timed before it, between `GPU.TAA` and `GPU.MotionBlur`):
+  - The lens lives on `CameraComponent` (`DepthOfField`, off; `FocusDistance` 10 m; `FocusEntity`, whose distance along
+    the camera's view, at least the near plane, replaces it; `Aperture`, the f-number, 2.8; `SensorHeight` 24 mm), with
+    the focal length from the field of view (`0.5 * SensorHeight / tan(fov / 2)`). It stays out of `SceneCamera`, whose
+    value is the cascades' cache key: programs pass `SceneRenderOptions::Lens` (`CameraLens::FromEntity`, none for
+    orthographic cameras or without `DepthOfField`): `GameRenderer` for the primary camera, `ViewportRenderer` for views
+    through the scene's camera (captures included: a lens is not a moment, unlike the motion blur); the editor camera
+    never has one. The players' row `DepthOfField` (Scene, Off) turns it off; so do orthographic views and `HDROutput`.
+  - The circle of confusion (`CameraLens::GetCircleOfConfusion`): `f^2 / (N (zf - f)) * (z - zf) / z` on the sensor (the
+    focus held at least 1.1 focal lengths away), in pixels `/ SensorHeight * height`, negative in front of the focus; the
+    passes work with radii, clamped to `c_DepthOfFieldMaxDiameter` (2%) of the height across.
+  - Passes: a half-resolution image (`m_DepthOfFieldHalf`: 2x2 means, and the signed radius of the nearest pixel when one
+    is in the near field, else of the farthest), the near field's tile maxima (tiles of `max(8, ceil(max radius))`
+    half-resolution pixels) and their 3x3 neighborhoods', the gather (48 samples on a golden-angle disk turned by a
+    static per-pixel angle, `PixelRandom(texel, 7)`) and the full-resolution composite (`m_DepthOfFieldTexture`, alpha 1
+    where it changed the image, the post source of what follows; the motion blur keeps that mark where it copies the
+    color, `MotionBlurParameters::SourceMask`, and the tone mapping does not sharpen there).
+  - The gather's two fields: a texel's own (a blurred texel takes the samples within its circle whose own circle covers
+    it, so a sharp foreground never bleeds into a blurred background; a near texel keeps what lies behind it, which
+    shows where the near field's coverage is partial) and the near field, premultiplied by its coverage (the samples of
+    the near field, at least as near as the texel, whose circle covers it, each weighed by the share of its light that
+    falls there: the disk's area over its circle's, at most 16), so a blurred foreground spreads half over the edge of
+    what lies behind it and fully over its own inside. The composite keeps a pixel whose circle is under a pixel across
+    exactly, fades its own field in over the next pixel of diameter and puts the near field over everything. No median
+    filters the fields: the static rotation of 48 samples and the bilinear upsampling leave no isolated outliers.
+  - Off costs nothing: no lens, no pass and no target. On, the targets are the full-resolution output (66 MB at
+    3840x2160), three half-resolution ones (17 MB each) and two tile targets, made by the first frame with a lens and
+    released with the render targets. Stats: `DepthOfField`, `DepthOfFieldLens`, `DepthOfFieldInfinityCoC`
+    (`renderStats.depthOfField`).
+  - Tests: `GPU.SceneRenderer.DepthOfField` (the focus plane exact, an edge's blur a disk of its circle's diameter, a
+    near card's blur over the wall in focus, both paths, off, the sharpening mask), `Renderer.CameraLens`; perf
+    (provisional) `PerfGPU.Renderer.DepthOfField4K`, the worst case: every pixel far behind the focus at the largest
+    circle (about 0.20 ms on an RTX 5090). The look-dev shot `tp.dof` focuses the Third-Person camera on the robot at f/2.
+- **The players' rows** (`RendererQualitySettings::AntiAliasing`, `MotionBlur` and `DepthOfField`, the same under every
+  preset): Scene, or Off, FXAA or TAA for the method; Scene or Off for the motion blur and the depth of field (players
+  may turn off, never on, what a scene uses). `ApplyQualityOverrides` applies the first two to the copy of the Post
+  Process every pass reads, once per frame, on both paths (screen-space reflections follow the effective method);
+  `RenderFrame` reads the third beside the lens.
 - **FXAA's subpixel blend** is 0.25 (`FXAA.frag`'s `c_Subpixel`; 0.75 until 0.7.0, which cost 19-22% of the texture
   detail of an image without anti-aliasing; on PhysicsPlayground's tiled floor at 3840x2160, 0.375 keeps 0.85 of it and 0.25
   0.87, the rest being the edges FXAA is there to smooth). Lower values would leave single-pixel aliasing alone.

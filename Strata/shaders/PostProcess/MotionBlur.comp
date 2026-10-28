@@ -13,7 +13,8 @@
 // reaches the center spreads over it (a moving foreground over the background), a farther one counts when the center's own
 // blur reaches it, and parts of one surface blur together; the center counts as a sample at distance 0. A neighborhood whose
 // blurs all lie within GetUniformTolerance of its largest moves as one surface: its samples take that surface's weights from
-// their distance alone and read only colors. Alpha 1 marks the blurred pixels (the tone mapping does not sharpen them).
+// their distance alone and read only colors. Alpha 1 marks the blurred pixels (the tone mapping does not sharpen them); where
+// the color is copied, the depth of field's mark is kept when the source is its output (SourceMask), else 0.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -69,7 +70,7 @@ void main()
 	float neighborRadius = 0.5 * neighborLength;
 	if (neighborRadius < 0.5)
 	{
-		imageStore(o_Blurred, pixel, vec4(center.rgb, 0.0));
+		imageStore(o_Blurred, pixel, vec4(center.rgb, u_MotionBlur.SourceMask != 0u ? center.a : 0.0));
 		return;
 	}
 	vec2 neighborDirection = neighbor.xy / neighborLength;

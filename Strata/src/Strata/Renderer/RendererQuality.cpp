@@ -262,6 +262,8 @@ namespace Strata
 				clamped.AntiAliasing = AntiAliasingChoice::Scene;
 			if (static_cast<size_t>(clamped.MotionBlur) >= std::size(c_SceneEffectChoiceNames))
 				clamped.MotionBlur = SceneEffectChoice::Scene;
+			if (static_cast<size_t>(clamped.DepthOfField) >= std::size(c_SceneEffectChoiceNames))
+				clamped.DepthOfField = SceneEffectChoice::Scene;
 			if (static_cast<uint8_t>(clamped.Preset) > static_cast<uint8_t>(RendererQualityPreset::Custom))
 				clamped.Preset = RendererQualityPreset::Custom;
 			return clamped;
@@ -409,6 +411,8 @@ namespace Strata
 				"Post Process's) or Off, FXAA or TAA.", EnumOptions(c_AntiAliasingChoiceNames), AntiAliasingChoiceToString(high.AntiAliasing)));
 			section.Fields.push_back(EnumField("MotionBlur", "Motion blur", "Under every preset: Scene shows the scene's motion blur where its Post "
 				"Process turns it on; Off never blurs.", EnumOptions(c_SceneEffectChoiceNames), SceneEffectChoiceToString(high.MotionBlur)));
+			section.Fields.push_back(EnumField("DepthOfField", "Depth of field", "Under every preset: Scene shows the depth of field of cameras "
+				"that turn it on; Off keeps every distance in focus.", EnumOptions(c_SceneEffectChoiceNames), SceneEffectChoiceToString(high.DepthOfField)));
 			return section;
 		}
 
@@ -441,6 +445,7 @@ namespace Strata
 			{
 				ReadEnumField(*value, "AntiAliasing", c_AntiAliasingChoiceNames, settings.AntiAliasing);
 				ReadEnumField(*value, "MotionBlur", c_SceneEffectChoiceNames, settings.MotionBlur);
+				ReadEnumField(*value, "DepthOfField", c_SceneEffectChoiceNames, settings.DepthOfField);
 			}
 			return Clamp(settings);
 		}
@@ -458,7 +463,8 @@ namespace Strata
 				{ "MinProjectedPixels", settings.MinProjectedPixels },
 				{ "MotionBlurQuality", MotionBlurSamplesToString(settings.MotionBlurQuality) },
 				{ "AntiAliasing", AntiAliasingChoiceToString(settings.AntiAliasing) },
-				{ "MotionBlur", SceneEffectChoiceToString(settings.MotionBlur) }
+				{ "MotionBlur", SceneEffectChoiceToString(settings.MotionBlur) },
+				{ "DepthOfField", SceneEffectChoiceToString(settings.DepthOfField) }
 			};
 		}
 

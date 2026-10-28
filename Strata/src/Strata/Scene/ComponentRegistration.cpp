@@ -43,6 +43,22 @@ namespace Strata
 			return camera.Projection == ProjectionType::Orthographic ? std::string() : "The camera's projection is Perspective";
 		}
 
+		// The lens's fields: only perspective cameras with Depth Of Field on have one, and a focus entity sets the distance.
+		std::string WithLens(const CameraComponent& camera)
+		{
+			if (camera.Projection != ProjectionType::Perspective)
+				return "Orthographic cameras have no depth of field";
+			return camera.DepthOfField ? std::string() : "Depth Of Field is off";
+		}
+
+		std::string WithFocusDistance(const CameraComponent& camera)
+		{
+			const std::string lens = WithLens(camera);
+			if (!lens.empty())
+				return lens;
+			return camera.FocusEntity.IsValid() ? "A Focus Entity sets the distance" : std::string();
+		}
+
 	}
 
 	void RegisterSceneComponents()
@@ -144,9 +160,26 @@ namespace Strata
 			.Property("OrthographicNear", &CameraComponent::OrthographicNear, Range(-c_Unbounded, c_Unbounded, 0.01f))
 			.Property("OrthographicFar", &CameraComponent::OrthographicFar, Range(-c_Unbounded, c_Unbounded, 1.0f))
 			.Property("Primary", &CameraComponent::Primary, WithTooltip({}, "The first active primary camera renders the game view"))
-			.Property("ClearColor", &CameraComponent::ClearColor, Color());
+			.Property("ClearColor", &CameraComponent::ClearColor, Color())
+			.Property("DepthOfField", &CameraComponent::DepthOfField,
+				WithTooltip({}, "Blurs what lies nearer or farther than the focus, as a camera's lens does (perspective cameras); players can "
+					"turn it off"))
+			.Property("FocusDistance", &CameraComponent::FocusDistance,
+				WithTooltip(Range(0.1f, 10000.0f, 0.05f), "Meters from the camera to the sharpest plane"))
+			.EntityProperty("FocusEntity", &CameraComponent::FocusEntity,
+				{ .Tooltip = "Keeps this entity in focus (its distance along the camera's view, at least the near plane); none: Focus Distance" })
+			.Property("Aperture", &CameraComponent::Aperture,
+				WithTooltip(Range(1.0f, 32.0f, 0.1f), "The lens's f-number: lower blurs more (f/1.4 a portrait lens wide open), higher keeps more "
+					"in focus (f/16)"))
+			.Property("SensorHeight", &CameraComponent::SensorHeight,
+				WithTooltip(Range(4.0f, 100.0f, 0.5f), "Millimeters: with the field of view it sets the focal length; larger sensors blur more "
+					"at the same view (24 full frame, 15.6 APS-C, 8.8 a 1-inch sensor)"));
 		for (const char* property : { "PerspectiveFOV", "PerspectiveNear", "PerspectiveFar" })
 			ComponentRegistry::SetInactiveReason<CameraComponent>(property, &PerspectiveOnly);
+		for (const char* property : { "FocusEntity", "Aperture", "SensorHeight" })
+			ComponentRegistry::SetInactiveReason<CameraComponent>(property, &WithLens);
+		ComponentRegistry::SetInactiveReason<CameraComponent>("FocusDistance", &WithFocusDistance);
+		ComponentRegistry::SetInactiveReason<CameraComponent>("DepthOfField", &PerspectiveOnly);
 		for (const char* property : { "OrthographicSize", "OrthographicNear", "OrthographicFar" })
 			ComponentRegistry::SetInactiveReason<CameraComponent>(property, &OrthographicOnly);
 
