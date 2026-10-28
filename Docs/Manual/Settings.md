@@ -54,7 +54,7 @@ to find a page or a field), the selected page on the right:
   **Medium** (what Strata 0.6.0 drew: screen-space reflections at half resolution, only with TAA), **High** (the default:
   as Medium, but sharper sun shadows on displays of 1440 rows and more, 256 MiB of shadow maps per view instead of 64,
   denser ambient occlusion, sharper reflections of the sky, 512 texels per face instead of 256, and screen-space
-  reflections traced on every pixel with any anti-aliasing, about 250 MiB of video memory per view at 3840x2160 instead
+  reflections traced on every pixel with any anti-aliasing, about 230 MiB of video memory per view at 3840x2160 instead
   of 79) or **Ultra** (sharper shadows everywhere, larger point and spot light shadows, finer levels of detail, the
   densest ambient occlusion and longer screen-space reflection rays: for large GPUs), or **Custom** to set each value
   yourself (the shadow resolution, the number of cascades, the point and spot lights' shadow atlas and largest tile, how

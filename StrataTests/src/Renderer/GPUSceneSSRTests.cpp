@@ -550,6 +550,67 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Spatial reflections of a wall across a grazing mirror floor are whole")
+	{
+		// From low over a mirror floor, the rays from the floor travel hundreds of pixels toward a red wall, just above floor
+		// pixels nearer than they are. Each must reach the wall: a hierarchical march over a nearest-depth pyramid ran out of
+		// iterations there (every coarse cell holds nearer floor below the ray), so the wall's reflection broke into stripes.
+		constexpr uint32_t c_WideSize = 1536;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		MirrorScene scene(assets, 0.0f);
+		// The cube becomes a wall 8 m wide and 2 m high whose front face is 3.9 m behind the origin.
+		TransformComponent& wall = scene.Cube.GetComponent<TransformComponent>();
+		wall.Translation = glm::vec3(0.0f, 1.0f, -4.0f);
+		wall.Scale = glm::vec3(8.0f, 2.0f, 0.2f);
+		scene.Cube.MarkModified<TransformComponent>();
+		scene.Camera = LookAt(glm::vec3(0.0f, 0.6f, 6.0f), glm::vec3(0.0f, 0.3f, 0.0f));
+		SetAntiAliasingFor(scene.Contents, ReflectionsQuality::Spatial);
+		SceneRenderer renderer = CreateReflectionRenderer("Wall", ReflectionsQuality::Spatial);
+		renderer.SetViewportSize(c_WideSize, c_WideSize);
+		WarmUp(gpu, renderer, scene.Contents, scene.Camera);
+		RenderFrames(gpu, renderer, scene.Contents, scene.Camera, 3);
+		REQUIRE(renderer.GetStats().ScreenSpaceReflections);
+
+		// The face's mirror image in the floor, away from the screen's edges (where hits fade) and from the face's: rays that
+		// reach it near its top edge, last and in their longest steps (the bottom of its reflection), may step past it, so
+		// that edge is ragged over a few pixels, as it is for the Checkerboard trace in a frame.
+		glm::vec2 low(1e9f);
+		glm::vec2 high(-1e9f);
+		for (const glm::vec3& corner : { glm::vec3(-3.0f, 0.0f, -3.9f), glm::vec3(3.0f, 0.0f, -3.9f), glm::vec3(-3.0f, -2.0f, -3.9f), glm::vec3(3.0f, -2.0f, -3.9f) })
+		{
+			const glm::vec2 pixel = glm::vec2(ProjectToPixel(scene.Camera, corner, c_WideSize));
+			low = glm::min(low, pixel);
+			high = glm::max(high, pixel);
+		}
+		const float margin = 0.12f * static_cast<float>(c_WideSize);
+		const float raggedEdge = 0.15f * (high.y - low.y);
+		const glm::uvec2 first = glm::uvec2(glm::max(low + glm::vec2(4.0f), glm::vec2(margin)));
+		const glm::uvec2 last = glm::uvec2(glm::min(high - glm::vec2(4.0f, 4.0f + raggedEdge), glm::vec2(static_cast<float>(c_WideSize) - margin)));
+		REQUIRE(last.x >= first.x + 100);
+		REQUIRE(last.y >= first.y + 40);
+		REQUIRE(renderer.GetScreenReflectionTexture());
+		const ReadbackImage image = ReadHalfImage(renderer.GetScreenReflectionTexture());
+		REQUIRE(image.Width == c_WideSize);
+		uint32_t holes = 0;
+		uint32_t texels = 0;
+		for (uint32_t y = first.y; y <= last.y; y++)
+		{
+			for (uint32_t x = first.x; x <= last.x; x++)
+			{
+				const glm::vec4 texel = ReadHalfTexel(image, x, y);
+				holes += texel.a > 0.5f && texel.r > 0.5f && texel.b < 0.25f * texel.r ? 0u : 1u;
+				texels++;
+			}
+		}
+		CAPTURE(holes);
+		CAPTURE(texels);
+		CHECK(holes == 0u);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The Reflections row: Off traces nothing, and a changed mode releases one mode's targets for the other's")
 	{
 		GPUContext gpu;

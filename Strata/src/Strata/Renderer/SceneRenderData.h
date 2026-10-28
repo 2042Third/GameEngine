@@ -418,11 +418,10 @@ namespace Strata
 			float Intensity;        // As ScreenReflectionParameters'
 			float MaxRoughness;
 			float HistoryScale;     // The frame's pre-exposure over the previous frame's color copy's
-			uint32_t Steps;         // Iterations of the hierarchical march (RendererQuality::GetScreenReflectionSteps)
+			uint32_t Steps;         // Steps of the march along the ray (RendererQuality::GetScreenReflectionSteps)
 			uint32_t RefineSteps;   // Bisections of a hit
-			uint32_t PyramidLevels; // Levels of the nearest-depth pyramid
 			uint32_t ColorLevels;   // Levels of the half-resolution color copy
-			uint32_t Padding = 0;
+			uint32_t Padding[2] = {};
 		};
 		static_assert(sizeof(SpatialReflectionParameters) == 32);
 
