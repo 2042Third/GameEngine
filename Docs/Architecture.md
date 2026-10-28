@@ -303,7 +303,7 @@ and `SceneRenderer` extracts each frame's draws from it (`SceneRendererExtractio
 aerial perspective volume, shadow cascades and
 point and spot lights' shadow views, depth/normal/entity-ID prepass (with motion vectors and, for screen-space reflections, the
 surface target), GTAO and its denoiser, reflection probes' conversions and the screen-space reflections (the Checkerboard
-trace, or the Spatial modes' nearest-depth pyramid, trace and resolve), forward PBR (hazed by aerial perspective, then
+trace, or the Spatial modes' full-resolution trace and resolve), forward PBR (hazed by aerial perspective, then
 fogged), sky, a copy of the image so far for glass (and a full-resolution one for the next frame's Spatial reflections),
 transparents (glass first, hazed and fogged as well),
 the TAA resolve, exposure, bloom, tone mapping, FXAA, then overlays (a lighting debug view and its statistics first)
@@ -895,7 +895,7 @@ The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStage
 | `GPU.Aerial` | the atmosphere's aerial perspective volume, recorded after the light clusters (frames with an atmosphere sky only) |
 | `GPU.Cull` | culling dispatches and depth pyramids |
 | `GPU.Shadows`, `GPU.Prepass`, `GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent` | the scene passes |
-| `GPU.Reflections` | reflection probes' conversions and the screen-space reflections' trace (at Spatial and SpatialHigh with their nearest-depth pyramid and resolve; their color copy for the next frame is in `GPU.Transparent`), between `GPU.AO` and `GPU.Opaque` |
+| `GPU.Reflections` | reflection probes' conversions and the screen-space reflections' trace (at Spatial and SpatialHigh with their resolve; their color copy for the next frame is in `GPU.Transparent`), between `GPU.AO` and `GPU.Opaque` |
 | `GPU.TAA` | the motion history's copy (`Scene/MotionCopy.comp`) and the temporal anti-aliasing resolve |
 | `GPU.Post` | exposure, bloom, tone mapping and FXAA |
 | `GPU.Overlays` | grid, tints, outline, debug lines, text and the copy into a target |

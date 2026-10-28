@@ -1291,13 +1291,12 @@ namespace Strata
 		bool EnsureScreenReflectionResources();
 		// Traces the frame's screen-space reflections into their target (Effects/ScreenSpaceReflections.comp, GPU.Reflections).
 		void TraceScreenReflections(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
-		// Spatial and SpatialHigh: the surface target and its prepass framebuffer, the nearest-depth pyramid, the full-resolution
-		// trace and resolve targets, the full-resolution color copy beside the scene-color copy (EnsureSceneColorResources), and
-		// the pipelines and binding sets of the pyramid, the trace and the resolve; false (reported) when they cannot be created.
+		// Spatial and SpatialHigh: the surface target and its prepass framebuffer, the full-resolution trace and resolve targets,
+		// the full-resolution color copy beside the scene-color copy (EnsureSceneColorResources), and the pipelines and binding
+		// sets of the trace and the resolve; false (reported) when they cannot be created.
 		bool EnsureSpatialReflectionResources();
-		// Builds the nearest-depth pyramid (Effects/DepthPyramidNearest.comp), traces every pixel against it with the previous
-		// frame's color copy (Effects/ScreenSpaceReflectionsSpatial.comp) and resolves the result into the target the forward
-		// pass reads (Effects/ReflectionResolve.comp), in GPU.Reflections.
+		// Traces every pixel against the depth with the previous frame's color copy (Effects/ScreenSpaceReflectionsSpatial.comp)
+		// and resolves the result into the target the forward pass reads (Effects/ReflectionResolve.comp), in GPU.Reflections.
 		void TraceSpatialReflections(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
 		// Hands every screen-space reflection resource of the viewport's size (both modes', with the color copy's history) to
 		// `released`: with the render targets, and when the quality's Reflections mode changes.
@@ -2260,18 +2259,13 @@ namespace Strata
 		nvrhi::ITexture* m_BoundScreenReflections = nullptr;
 		// Spatial reflections (Reflections Spatial and SpatialHigh): whether the reflection resources made are theirs (the target
 		// at SRV 18 is then full resolution, written by the resolve), the frame copies its color for the next frame's trace, the
-		// trace's raw target, the nearest-depth pyramid (half resolution and below) with a binding set per level, the
-		// full-resolution color copy and its copy set, the pipelines and binding sets of the pyramid, the trace and the resolve,
-		// and the copy the next frame reads: the frame that made it (RenderCount + 1), its scene and its pre-exposure.
+		// trace's raw target, the full-resolution color copy and its copy set, the pipelines and binding sets of the trace and the
+		// resolve, and the copy the next frame reads: the frame that made it (RenderCount + 1), its scene and its pre-exposure.
 		bool m_SpatialReflectionResources = false;
 		bool m_ReflectionCopyFrame = false;
 		nvrhi::TextureHandle m_TracedReflectionTexture;
-		nvrhi::TextureHandle m_ReflectionPyramid;
-		std::vector<nvrhi::BindingSetHandle> m_ReflectionPyramidSets;
 		nvrhi::TextureHandle m_ReflectionColorTexture;
 		nvrhi::BindingSetHandle m_ReflectionColorCopySet;
-		nvrhi::BindingLayoutHandle m_ReflectionPyramidLayout;
-		nvrhi::ComputePipelineHandle m_ReflectionPyramidPipeline;
 		nvrhi::BindingLayoutHandle m_SpatialReflectionLayout;
 		nvrhi::ComputePipelineHandle m_SpatialReflectionPipeline;
 		nvrhi::BindingSetHandle m_SpatialReflectionSet;

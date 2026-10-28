@@ -3071,8 +3071,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   directional shadow cascades and point and spot lights' shadow views ("Local light shadows"),
   depth/normal/entity-ID prepass (with motion vectors when asked or for
   TAA: "Motion vectors and TAA"), ground-truth ambient occlusion and its denoiser, the reflection probes' conversions
-  and the screen-space reflections ("Reflections": the Checkerboard trace, or for the Spatial modes a nearest-depth
-  pyramid, the full-resolution trace and its resolve, which read the previous frame's color copy), forward PBR
+  and the screen-space reflections ("Reflections": the Checkerboard trace, or for the Spatial modes the full-resolution
+  trace and its resolve, which read the previous frame's color copy), forward PBR
   (opaque surfaces with an EQUAL depth test
   and forced early depth testing), sky, a copy of the image so far (for glass, and with a full-resolution one beside it
   for the Spatial reflections of the next frame), transparent surfaces: glass first, then the blended ones back to front
@@ -3134,7 +3134,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
 | Prefiltered sky per set of maps (RGBA16F, six levels; the atmosphere keeps two sets) | 4 MiB | 4 MiB | 16 MiB | 16 MiB |
-| Screen-space reflections at 3840x2160 (with a scene that asks; "Reflections") | none | 79 MiB | about 250 MiB | about 250 MiB |
+| Screen-space reflections at 3840x2160 (with a scene that asks; "Reflections") | none | 79 MiB | about 230 MiB | about 230 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for its ambient occlusion
@@ -3952,8 +3952,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `FrameConstants::ReflectionParams.x` is 1) and mixes it over the probes' and the sky's specular radiance before the
   split-sum BRDF, as `radiance * (1 - a) + rgb`: premultiplied, a texel that found nothing adds no black to the pixels
   beside a reflection (`GPU.SceneRenderer.SSR`'s edge case); without a sky the constant ambient still lights the diffuse
-  part. Transparent surfaces get none, and the trace reads no nearest-depth pyramid
-  (both deferred). Memory: the surface target's 8 and the result's 2 bytes per pixel (about 20 MiB at 1920x1080), made by
+  part. Transparent surfaces get none (deferred). Memory: the surface target's 8 and the result's 2 bytes per pixel (about 20 MiB at 1920x1080), made by
   the first frame that traces, released with the targets. Pixels that find nothing render bit for bit as without
   reflections (`GPU.SceneRenderer.SSR`: a rough floor and a cube above the view; its other cases are the mirror floor
   against the CPU's prediction on both paths, a moving cube's reflection that keeps up only when fetched along the hit's
@@ -3961,15 +3960,15 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `Render100kCubesTAA`'s scene with them traced from every surface (maximum roughness 1), and report the stage's median.
   **Spatial and SpatialHigh** need no history. From the renderer's second frame of a view on (the first, a camera cut, a
   reset or another render scene set `SceneRendererStats::ScreenSpaceReflectionsPending`, and captures render one more
-  frame for it, `c_MaxCaptureReflectionFrames`), the prepass writes the same surface target,
-  `Effects/DepthPyramidNearest.comp` builds a nearest-depth pyramid of the prepass's depth (R32F, half resolution and
-  below, at most 8 levels; the last texel of a level also covers the rest of an odd level above it, so every pixel lies
-  in a texel of every level), and `Effects/ScreenSpaceReflectionsSpatial.comp` traces every pixel at full resolution: the
-  same reflected ray (`Include/ScreenReflections.glsl`, shared with Checkerboard's trace), marched on the pyramid (up a
-  level while the ray stays in front of a cell's nearest depth over its span, down where it may not; at the depth's own
-  pixels a hit within the same thickness), in 32 iterations and 6 bisections (SpatialHigh 48 and 8,
-  `RendererQuality::GetScreenReflectionSteps`), its start offset by ambient occlusion's fixed 4x4 order, never by the
-  frame. What a ray sees is the previous frame's color before its transparent surfaces: in these modes every frame copies
+  frame for it, `c_MaxCaptureReflectionFrames`), the prepass writes the same surface target and
+  `Effects/ScreenSpaceReflectionsSpatial.comp` traces every pixel at full resolution: the same reflected ray
+  (`Include/ScreenReflections.glsl`, shared with Checkerboard's trace), marched against the full-resolution depth over its
+  whole length in 32 steps closer together near its start, a hit where it passed behind a surface by less than the same
+  thickness, refined in 6 bisections (SpatialHigh 48 and 8, `RendererQuality::GetScreenReflectionSteps`), its steps offset
+  by ambient occlusion's fixed 4x4 order, never by the frame. (A hierarchical march over a nearest-depth pyramid ran out of
+  iterations on rays grazing a floor, whose nearer pixels below the ray fill every coarse cell: at 3840x2160 a polished
+  floor reflected a wall as broken stripes, which `GPU.SceneRenderer.SSR`'s wall case and the look-dev shot
+  `lookdev.mirror` show.) What a ray sees is the previous frame's color before its transparent surfaces: in these modes every frame copies
   its HDR image after the sky into the scene-color copy glass reads (half resolution, blurred levels) and, beside it, into
   a full-resolution copy (`Effects/SceneColorCopy.comp` with a destination of the source's size, in `GPU.Transparent`),
   and the next frame fetches where the hit surface was along its motion vector (these modes draw motion vectors), scaled
@@ -3983,7 +3982,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   ones borrow their neighbors' rays, which hides the march's fixed offsets. It writes the full-resolution target the
   forward pass reads at SRV 18 (the same premultiplied lookup). Memory at 3840x2160: the surface target 63 MiB (as
   Checkerboard's), the trace and the resolve 63 MiB each (RGBA16F), the full-resolution copy 32 MiB (B10G11R11; 63 MiB in
-  the RGBA16F fallback), the pyramid 11 MiB, beside the scene-color copy (11 MiB): about 170 MiB more than Checkerboard,
+  the RGBA16F fallback), beside the scene-color copy (11 MiB): about 150 MiB more than Checkerboard,
   made by the first frame that asks, released with the targets and when the row's mode changes. `GPU.SceneRenderer.SSR`
   runs the mirror floor's edge, rough-floor, off-screen and moving-cube cases in both modes (Spatial with FXAA), checks
   that Spatial traces without TAA where the CPU predicts, alike on both paths, with the same image in every later frame,

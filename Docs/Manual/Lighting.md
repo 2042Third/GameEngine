@@ -175,7 +175,7 @@ and need TAA to smooth them; at **Low** there are none.
 - Transparent surfaces do not get them.
 - At Medium they need TAA (Anti Aliasing Method TAA): with FXAA or without anti-aliasing they are not drawn. Cost there:
   about half a millisecond of GPU time at 1920x1080 on an Apple M2 Max with every surface reflecting, and about 20 MB of
-  video memory per view. At High and Ultra they work with any anti-aliasing and take about 250 MB of video memory per
+  video memory per view. At High and Ultra they work with any anti-aliasing and take about 230 MB of video memory per
   view at 3840x2160 (about 60 MB at 1920x1080).
 - The first frame of a view has nothing to reflect from yet: reflections appear from the second frame on (captures wait
   for it).

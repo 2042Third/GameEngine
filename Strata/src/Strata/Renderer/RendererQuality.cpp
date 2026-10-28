@@ -455,7 +455,7 @@ namespace Strata
 				reflectionModes.emplace_back(entry.Name);
 			section.Fields.push_back(EnumField("Reflections", "Screen-space reflections", "Custom only: what the Post Process's screen-space "
 				"reflections cost. Off; Checkerboard (Strata 0.6.0's: half resolution, only with TAA); Spatial and SpatialHigh trace every pixel "
-				"at full resolution with or without TAA (32 and 48 steps), about 170 MiB more per view at 3840x2160.", std::move(reflectionModes),
+				"at full resolution with or without TAA (32 and 48 steps), about 150 MiB more per view at 3840x2160.", std::move(reflectionModes),
 				ReflectionsQualityToString(high.Reflections)));
 			return section;
 		}

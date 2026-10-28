@@ -70,8 +70,8 @@ namespace Strata
 		SpatialHigh = 3
 	};
 
-	// The march of a screen-space reflection ray (Effects/ScreenSpaceReflections.comp): its steps (in Spatial modes,
-	// iterations of the hierarchical march) and the bisection's refinements of a hit.
+	// The march of a screen-space reflection ray (Effects/ScreenSpaceReflections.comp, ScreenSpaceReflectionsSpatial.comp):
+	// its steps along the ray and the bisection's refinements of a hit.
 	struct ScreenReflectionSteps
 	{
 		uint32_t Steps = 24;
@@ -107,7 +107,7 @@ namespace Strata
 		// 4 MiB at 256, 16 MiB at 512 per set of maps (the atmosphere keeps two).
 		uint32_t EnvironmentResolution = 256;
 		// Screen-space reflections' mode (ReflectionsQuality): Spatial and SpatialHigh add a full-resolution trace, resolve and
-		// color copy and a depth pyramid (about 170 MiB more than Checkerboard at 3840x2160; DG "Reflections").
+		// color copy (about 150 MiB more than Checkerboard at 3840x2160; DG "Reflections").
 		ReflectionsQuality Reflections = ReflectionsQuality::Checkerboard;
 
 		// Every member equal, Preset included.
