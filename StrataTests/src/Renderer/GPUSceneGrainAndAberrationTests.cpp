@@ -215,6 +215,18 @@ TEST_SUITE("GPU.SceneRenderer.GrainAndAberration")
 		CHECK(std::abs(blue - expected) <= 0.1f);
 		CHECK(expected <= 0.5f);
 		CHECK(expected > 0.35f);
+
+		// The players' row: off renders the fringed scene as without aberration, and the grain's row leaves it alone.
+		SceneRendererSpecification off = ExactSpecification();
+		off.Quality.ChromaticAberration = SceneEffectChoice::Off;
+		SceneRenderer withoutAberration(off);
+		withoutAberration.SetViewportSize(c_Width, c_Height);
+		CHECK(MaxDifference(RenderFrame(withoutAberration, scene, camera), sharp) == 0);
+		SceneRendererSpecification grainOff = ExactSpecification();
+		grainOff.Quality.FilmGrain = SceneEffectChoice::Off;
+		SceneRenderer withoutGrain(grainOff);
+		withoutGrain.SetViewportSize(c_Width, c_Height);
+		CHECK(MaxDifference(RenderFrame(withoutGrain, scene, camera), fringed) == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
