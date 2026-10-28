@@ -1,12 +1,13 @@
 #ifndef STRATA_EXPOSURE_GLSL
 #define STRATA_EXPOSURE_GLSL
 
-// Exposure state shared by the post-processing passes. Keep in sync with SceneRenderData.h.
+// Exposure state shared by the post-processing passes. Keep in sync with Renderer/PostProcessData.h.
 //
-// The exposure buffer holds two floats, written by Exposure.comp (or by the CPU with manual exposure):
-// [0] adapted log2 average luminance, [1] linear exposure multiplier applied to the scene color.
+// The exposure buffer holds floats written by Exposure.comp (or by the CPU with manual exposure): [0] the adapted log2 average
+// luminance, [1] the linear exposure multiplier applied to the scene color, [2] the exposure key's stops (0 without a key).
 #define ST_EXPOSURE_LOG_LUMINANCE 0
 #define ST_EXPOSURE_MULTIPLIER    1
+#define ST_EXPOSURE_KEY           2
 
 // Luminance histogram: bin 0 counts pixels darker than 2^MIN_LOG2 (including black), which the metering ignores;
 // bins 1..255 split [MIN_LOG2, MAX_LOG2] evenly in log2 space.

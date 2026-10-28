@@ -258,6 +258,12 @@ namespace Strata
 				{ "geometryPool", DescribeGeometryPool() },
 				// The scenes' GPU copies (a playing scene's clone doubles its scene's while it plays).
 				{ "sceneMirrorMB", Renderer::IsInitialized() ? static_cast<double>(Renderer::GetRenderSceneGPUs().GetBufferBytes()) / (1024.0 * 1024.0) : 0.0 },
+				// What automatic exposure metered (EV100 = log2 L + 3, frames late), its key's stops and the sun's gray card it
+				// compared with (null without a directional light); null with manual exposure.
+				{ "exposure", stats.ExposureLog2Luminance ? nlohmann::json { { "ev100", *stats.ExposureLog2Luminance + 3.0f },
+					{ "keyStops", stats.ExposureKeyStops },
+					{ "cardEv100", stats.ExposureKeyReferenceLog2 ? nlohmann::json(*stats.ExposureKeyReferenceLog2 + 3.0f) : nlohmann::json(nullptr) } }
+					: nlohmann::json(nullptr) },
 				{ "gpuMs", std::move(gpuMs) },
 				{ "gpuStatsFrame", gpu.HasTimes ? nlohmann::json(gpu.Frame) : nlohmann::json(nullptr) } };
 		}

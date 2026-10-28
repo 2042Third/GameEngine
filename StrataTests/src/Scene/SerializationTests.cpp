@@ -509,6 +509,30 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(loaded.ColorSlope == glm::vec3(4.0f, 1.0f, 1.0f));
 		CHECK(loaded.ColorOffset == glm::vec3(0.1f, 0.0f, 0.0f));
 		CHECK(loaded.ColorPower == glm::vec3(0.2f, 1.0f, 5.0f));
+
+		// Automatic exposure's metering, window, light adaptation and key: files without them get the new defaults (named in
+		// 0.7.0's release notes) without a warning; set, they round-trip and are clamped.
+		loaded = load({ { "AutoExposure", true }, { "AutoExposureSpeed", 1.5 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.AutoExposureMetering == ExposureMetering::CenterWeighted);
+		CHECK(loaded.AutoExposureLowPercentile == 0.1f);
+		CHECK(loaded.AutoExposureHighPercentile == 0.9f);
+		CHECK(loaded.AutoExposureLightSpeed == 3.0f);
+		CHECK(loaded.AutoExposureKey == 0.12f);
+		loaded = load({ { "AutoExposureMetering", "Average" }, { "AutoExposureLowPercentile", 0.25 }, { "AutoExposureHighPercentile", 0.75 },
+			{ "AutoExposureLightSpeed", 6.0 }, { "AutoExposureKey", 0.3 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.AutoExposureMetering == ExposureMetering::Average);
+		CHECK(loaded.AutoExposureLowPercentile == 0.25f);
+		CHECK(loaded.AutoExposureHighPercentile == 0.75f);
+		CHECK(loaded.AutoExposureLightSpeed == 6.0f);
+		CHECK(loaded.AutoExposureKey == 0.3f);
+		loaded = load({ { "AutoExposureLowPercentile", 0.9 }, { "AutoExposureHighPercentile", 0.1 }, { "AutoExposureLightSpeed", 50.0 }, { "AutoExposureKey", 2.0 } },
+			warnings);
+		CHECK(loaded.AutoExposureLowPercentile == 0.49f);
+		CHECK(loaded.AutoExposureHighPercentile == 0.51f);
+		CHECK(loaded.AutoExposureLightSpeed == 20.0f);
+		CHECK(loaded.AutoExposureKey == 0.5f);
 	}
 
 	TEST_CASE("Directional lights saved before cascade blending load with the default blend; invalid blends are clamped or warn")

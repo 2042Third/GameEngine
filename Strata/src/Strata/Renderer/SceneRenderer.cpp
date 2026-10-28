@@ -1404,9 +1404,11 @@ namespace Strata
 		if (!newest)
 			return;
 		m_ExposureReadbackSeen = newest->Render;
-		float values[2] = {};
+		float values[3] = {};
 		if (!newest->Readback->Read(values, sizeof(values)))
 			return;
+		m_MeteredLog2Luminance = values[RenderData::c_ExposureLogLuminance];
+		m_MeteredKeyStops = values[RenderData::c_ExposureKeyStops];
 		const float multiplier = values[RenderData::c_ExposureMultiplier];
 		if (!(multiplier > 0.0f) || !std::isfinite(multiplier))
 			return; // Nothing to follow (an image that metered nothing keeps its exposure)
@@ -2604,6 +2606,12 @@ namespace Strata
 		ChoosePreExposure(postProcess, options);
 		m_Stats.PreExposure = m_PreExposure;
 		m_Stats.PreExposureSettled = m_PreExposureSettled;
+		// What the automatic exposure metered (frames late) and the gray card its key compared with (this frame's light).
+		if (postProcess.AutoExposure && m_PreExposureAutomatic && m_MeteredLog2Luminance)
+		{
+			m_Stats.ExposureLog2Luminance = m_MeteredLog2Luminance;
+			m_Stats.ExposureKeyStops = m_MeteredKeyStops;
+		}
 		const bool temporalWanted = m_Specification.TemporalAntiAliasing && postProcess.AntiAliasing && postProcess.AntiAliasingMethod == AntiAliasingMode::TAA;
 		const TemporalAntiAliasingSettings temporalSettings = GetTemporalAntiAliasingSettings(postProcess);
 
@@ -3079,7 +3087,15 @@ namespace Strata
 		// Post-processing reads the resolved image with temporal anti-aliasing (the history's newest texture).
 		const bool resolved = m_TemporalResolved;
 		gpuTimer.Next(gpuStages.Post);
-		const bool bloom = RenderPostHDR(commandList, postProcess, resolved);
+		// The exposure key's reference: the luminance of a gray card (albedo 0.18) facing the directional light, as Forward.frag
+		// lights it (the atmosphere's transmittance included); none without a light.
+		std::optional<float> keyReferenceLog2;
+		const float sunLuminance = glm::dot(glm::vec3(frame.DirectionalLightColor), glm::vec3(0.2126f, 0.7152f, 0.0722f)) * 0.18f / glm::pi<float>();
+		if (frame.DirectionalLightDirection.w > 0.0f && sunLuminance > 0.0f && std::isfinite(sunLuminance))
+			keyReferenceLog2 = std::log2(sunLuminance);
+		if (postProcess.AutoExposure)
+			m_Stats.ExposureKeyReferenceLog2 = keyReferenceLog2;
+		const bool bloom = RenderPostHDR(commandList, postProcess, options, resolved, keyReferenceLog2);
 
 		TextRenderStats textStats;
 		m_FontAtlases->BeginFrame(TextRenderer::c_FrameRasterBudget);

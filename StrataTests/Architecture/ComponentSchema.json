@@ -1196,7 +1196,7 @@
 					"Min": 0.0,
 					"Name": "AutoExposureSpeed",
 					"Speed": 0.05000000074505806,
-					"Tooltip": "Adaptation rate per second; 0 = instant",
+					"Tooltip": "How fast the exposure follows a darker scene (the image brightens), per second; 0 jumps at once",
 					"Type": "Float"
 				},
 				{
@@ -1620,6 +1620,77 @@
 					"Speed": 0.009999999776482582,
 					"Tooltip": "Power: per-channel contrast around middle gray",
 					"Type": "Vec3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Auto Exposure Metering",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "Average",
+							"Value": 0
+						},
+						{
+							"DisplayName": "Center Weighted",
+							"Name": "CenterWeighted",
+							"Value": 1
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "AutoExposureMetering",
+					"Speed": 0.0,
+					"Tooltip": "How the image is metered: Average weighs every pixel alike; CenterWeighted counts the middle of the image most and its edges a quarter, as a camera's center-weighted meter",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Auto Exposure Low Percentile",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.49000000953674316,
+					"Min": 0.0,
+					"Name": "AutoExposureLowPercentile",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "The darkest share of the metered pixels that is ignored, so deep shadows do not move the exposure",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Auto Exposure High Percentile",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1.0,
+					"Min": 0.5099999904632568,
+					"Name": "AutoExposureHighPercentile",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "The brightest share of the metered pixels below this is kept: the pixels above it (light sources) do not move the exposure",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Auto Exposure Light Speed",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 20.0,
+					"Min": 0.0,
+					"Name": "AutoExposureLightSpeed",
+					"Speed": 0.05000000074505806,
+					"Tooltip": "How fast it follows a brighter scene (the image darkens), per second, as eyes leaving a tunnel; 0 jumps at once",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Auto Exposure Key",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.5,
+					"Min": 0.0,
+					"Name": "AutoExposureKey",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "How much a scene's brightness against a gray card in the sun shows: 0 meters every scene to middle gray; 0.12 shows an interior 5 stops below the sun's card 0.6 stops darker (at most 2 darker, 1 brighter). Needs a directional light",
+					"Type": "Float"
 				}
 			]
 		},

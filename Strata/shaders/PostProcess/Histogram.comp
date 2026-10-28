@@ -17,18 +17,41 @@ layout(set = 0, binding = ST_UAV(0), std430) buffer HistogramBuffer
 	uint u_Histogram[];
 };
 
-// RenderData::ExposureParameters (only the pre-exposure is read here).
+// RenderData::ExposureParameters (the pre-exposure and the metering are read here).
 layout(push_constant) uniform ExposureParameters
 {
 	float MinLog2;
 	float MaxLog2;
-	float AdaptFactor;
+	float AdaptLight;
+	float AdaptDark;
 	float Compensation;
 	float LowPercentile;
 	float HighPercentile;
 	float InversePreExposure;
-	float Padding;
+	float KeyStrength;
+	float KeyReferenceLog2;
+	float KeyMinStops;
+	float KeyMaxStops;
+	float MeteringAspect;
+	uint Metering; // ExposureMetering: 0 every pixel alike, 1 center-weighted
+	float Padding0;
+	float Padding1;
 } u_Parameters;
+
+#define ST_METERING_CENTER_WEIGHTED 1u
+
+// A pixel's weight in the histogram. Average: 1 (every pixel alike). CenterWeighted: 16 at the image's center falling to 4 at
+// its edges, a Gaussian of 0.25 image heights (r, the distance from the center in image heights): the middle third of the
+// frame decides, as a camera's center-weighted meter. At 3840x2160 the sum stays far below 2^32 (8.3 million pixels times 16).
+uint MeteringWeight(ivec2 pixel, ivec2 size)
+{
+	if (u_Parameters.Metering != ST_METERING_CENTER_WEIGHTED)
+		return 1u;
+	vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+	vec2 offset = (uv - 0.5) * vec2(u_Parameters.MeteringAspect, 1.0);
+	float falloff = exp(-dot(offset, offset) / (2.0 * 0.25 * 0.25));
+	return uint(round(16.0 * (0.25 + 0.75 * falloff)));
+}
 
 shared uint s_Bins[ST_HISTOGRAM_BINS];
 
@@ -38,8 +61,12 @@ void main()
 	barrier();
 
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	if (all(lessThan(pixel, textureSize(u_SceneColor, 0))))
-		atomicAdd(s_Bins[LuminanceToHistogramBin(Luminance(texelFetch(u_SceneColor, pixel, 0).rgb) * u_Parameters.InversePreExposure)], 1u);
+	ivec2 size = textureSize(u_SceneColor, 0);
+	if (all(lessThan(pixel, size)))
+	{
+		uint bin = LuminanceToHistogramBin(Luminance(texelFetch(u_SceneColor, pixel, 0).rgb) * u_Parameters.InversePreExposure);
+		atomicAdd(s_Bins[bin], MeteringWeight(pixel, size));
+	}
 	barrier();
 
 	uint count = s_Bins[gl_LocalInvocationIndex];

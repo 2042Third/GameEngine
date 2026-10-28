@@ -161,6 +161,14 @@ namespace Strata
 		Filmic
 	};
 
+	// How automatic exposure weighs the image's pixels (PostProcessComponent::AutoExposureMetering). The values are script and
+	// file API: they never change.
+	enum class ExposureMetering : uint8_t
+	{
+		Average = 0,       // Every pixel alike
+		CenterWeighted = 1 // The middle of the image counts most and its edges a quarter, as a camera's center-weighted meter
+	};
+
 	// How PostProcessComponent::AntiAliasing smooths edges.
 	enum class AntiAliasingMode : uint8_t
 	{
@@ -231,9 +239,11 @@ namespace Strata
 		// Filmic for new components and scenes without one (ACES until 0.7.0: files store the curve, so their scenes keep it).
 		TonemapOperator Tonemapper = TonemapOperator::Filmic;
 		float Exposure = 0.0f; // Exposure compensation in EV (stops); the only exposure without AutoExposure
-		// Automatic exposure maps the average luminance of the image's non-black pixels to middle gray. The average is
-		// clamped to [2^MinEV, 2^MaxEV] and approached at AutoExposureSpeed per second (0 = instantly). MaxEV reaches what
-		// a scene lit by a real sun meters (around 15); scenes saved with another value keep it.
+		// Automatic exposure maps the average luminance of the image's non-black pixels (between the metering window's
+		// percentiles, weighed by AutoExposureMetering) to middle gray, offset by the exposure key. The average is clamped to
+		// [2^MinEV, 2^MaxEV] and approached at AutoExposureSpeed per second toward darker scenes and AutoExposureLightSpeed
+		// toward brighter ones (0 = instantly). MaxEV reaches what a scene lit by a real sun meters (around 15); scenes saved
+		// with another value keep it.
 		bool AutoExposure = true;
 		float AutoExposureMinEV = -4.0f;
 		float AutoExposureMaxEV = 16.0f;
@@ -281,6 +291,16 @@ namespace Strata
 		glm::vec3 ColorSlope = glm::vec3(1.0f);
 		glm::vec3 ColorOffset = glm::vec3(0.0f);
 		glm::vec3 ColorPower = glm::vec3(1.0f);
+		// Automatic exposure's metering: the pixels' weights, and the darkest and brightest shares of them ignored (so deep
+		// shadows and light sources do not move the exposure; HighPercentile - LowPercentile is at least 0.02).
+		ExposureMetering AutoExposureMetering = ExposureMetering::CenterWeighted;
+		float AutoExposureLowPercentile = 0.1f;
+		float AutoExposureHighPercentile = 0.9f;
+		float AutoExposureLightSpeed = 3.0f; // Per second, toward brighter scenes (eyes leaving a tunnel); 0 = instantly
+		// The exposure key: the metered average's stops from the luminance of a gray card facing the scene's directional light,
+		// times this, darken (or brighten) the image within [-2, +1] stops, so interiors read darker than sunlight as far as their
+		// light is darker. 0 meters every scene to middle gray; without a directional light there is no key.
+		float AutoExposureKey = 0.12f;
 	};
 
 	// The settings the TAA resolves with: the preset's table, or the component's tunables under Custom, clamped to their

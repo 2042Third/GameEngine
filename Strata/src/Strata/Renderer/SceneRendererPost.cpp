@@ -101,15 +101,16 @@ namespace Strata
 			.setKeepInitialState(true)
 			.setDebugName(m_Specification.DebugName + ".LuminanceHistogram"));
 		m_ExposureBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
-			.setByteSize(4 * sizeof(float))
+			.setByteSize(RenderData::c_ExposureValues * sizeof(float))
 			.setStructStride(sizeof(float))
 			.setCanHaveUAVs(true)
 			.setInitialState(nvrhi::ResourceStates::ShaderResource)
 			.setKeepInitialState(true)
 			.setDebugName(m_Specification.DebugName + ".Exposure"));
-		// The automatic exposure's results come back to choose the pre-exposure: two floats (Include/Exposure.glsl).
+		// The automatic exposure's results come back to choose the pre-exposure and for the statistics: three floats
+		// (Include/Exposure.glsl: the adapted log2 luminance, the multiplier, the key's stops).
 		for (ExposureReadback& entry : m_ExposureReadbacks)
-			entry.Readback = CreateScope<BufferReadback>(m_Device, 2 * sizeof(float), m_Specification.DebugName + ".ExposureReadback");
+			entry.Readback = CreateScope<BufferReadback>(m_Device, 3 * sizeof(float), m_Specification.DebugName + ".ExposureReadback");
 		const bool exposureReadbacks = std::all_of(m_ExposureReadbacks.begin(), m_ExposureReadbacks.end(),
 			[](const ExposureReadback& entry) { return entry.Readback->IsValid(); });
 
@@ -265,31 +266,49 @@ namespace Strata
 		release(m_FXAABindingSet);
 	}
 
-	void SceneRenderer::UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* bindingSet)
+	void SceneRenderer::UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, const SceneRenderOptions& options,
+		nvrhi::IBindingSet* bindingSet, std::optional<float> keyReferenceLog2)
 	{
 		const auto now = std::chrono::steady_clock::now();
-		// Rendering pauses (breakpoints, minimized windows) must not turn into one huge adaptation step.
-		const float deltaTime = m_LastExposureTime ? std::clamp(std::chrono::duration<float>(now - *m_LastExposureTime).count(), 0.0f, 0.25f) : 0.0f;
+		// Rendering pauses (breakpoints, minimized windows) must not turn into one huge adaptation step. Tools that step time
+		// give the time instead.
+		float deltaTime = m_LastExposureTime ? std::clamp(std::chrono::duration<float>(now - *m_LastExposureTime).count(), 0.0f, 0.25f) : 0.0f;
+		if (options.AdaptationSeconds)
+			deltaTime = std::isfinite(*options.AdaptationSeconds) ? std::max(*options.AdaptationSeconds, 0.0f) : 0.0f;
 		m_LastExposureTime = now;
 		const float compensation = std::exp2(std::clamp(settings.Exposure, -20.0f, 20.0f));
 
 		if (!settings.AutoExposure)
 		{
-			const float values[4] = { 0.0f, compensation, 0.0f, 0.0f };
+			const float values[RenderData::c_ExposureValues] = { 0.0f, compensation, 0.0f, 0.0f };
 			commandList->writeBuffer(m_ExposureBuffer, values, sizeof(values));
 			m_ResetExposure = true; // Automatic exposure starts from the scene's brightness when turned on
 			return;
 		}
 
+		auto adapt = [&](float speed) { return m_ResetExposure || !(speed > 0.0f) ? 1.0f : 1.0f - std::exp(-deltaTime * std::min(speed, 1000.0f)); };
 		RenderData::ExposureParameters parameters = {};
 		parameters.MinLog2 = std::clamp(settings.AutoExposureMinEV, RenderData::c_HistogramMinLog2, RenderData::c_HistogramMaxLog2);
 		parameters.MaxLog2 = std::clamp(settings.AutoExposureMaxEV, parameters.MinLog2, RenderData::c_HistogramMaxLog2);
-		parameters.AdaptFactor = m_ResetExposure || settings.AutoExposureSpeed <= 0.0f ? 1.0f : 1.0f - std::exp(-deltaTime * settings.AutoExposureSpeed);
+		// Light adaptation (toward a brighter scene) and dark adaptation (toward a darker one) at their own speeds.
+		parameters.AdaptLight = adapt(settings.AutoExposureLightSpeed);
+		parameters.AdaptDark = adapt(settings.AutoExposureSpeed);
 		parameters.Compensation = compensation;
-		// The darkest and brightest 10% of the pixels (deep shadows, light sources) do not move the exposure.
-		parameters.LowPercentile = 0.1f;
-		parameters.HighPercentile = 0.9f;
+		// The metering window: the darkest and brightest pixels (deep shadows, light sources) do not move the exposure. At least
+		// 0.02 of the pixels stay inside it.
+		const float low = std::isfinite(settings.AutoExposureLowPercentile) ? std::clamp(settings.AutoExposureLowPercentile, 0.0f, 0.49f) : 0.1f;
+		const float high = std::isfinite(settings.AutoExposureHighPercentile) ? std::clamp(settings.AutoExposureHighPercentile, 0.51f, 1.0f) : 0.9f;
+		parameters.LowPercentile = low;
+		parameters.HighPercentile = std::max(high, low + 0.02f);
 		parameters.InversePreExposure = 1.0f / m_PreExposure;
+		// The exposure key compares the metered average with a gray card facing the directional light; without one there is none.
+		const float key = std::isfinite(settings.AutoExposureKey) ? std::clamp(settings.AutoExposureKey, 0.0f, 0.5f) : 0.0f;
+		parameters.KeyStrength = keyReferenceLog2 ? key : 0.0f;
+		parameters.KeyReferenceLog2 = keyReferenceLog2.value_or(0.0f);
+		parameters.KeyMinStops = RenderData::c_ExposureKeyMinStops;
+		parameters.KeyMaxStops = RenderData::c_ExposureKeyMaxStops;
+		parameters.MeteringAspect = static_cast<float>(m_ViewportSize.x) / static_cast<float>(std::max(m_ViewportSize.y, 1u));
+		parameters.Metering = static_cast<uint32_t>(settings.AutoExposureMetering);
 		m_ResetExposure = false;
 
 		commandList->clearBufferUInt(m_HistogramBuffer, 0);
@@ -313,7 +332,7 @@ namespace Strata
 		ExposureReadback& readback = m_ExposureReadbacks[m_ExposureReadbackIndex];
 		if (readback.Readback->IsPending() && !readback.Readback->IsReady())
 			return;
-		readback.Readback->Record(commandList, m_ExposureBuffer, 0, 2 * sizeof(float));
+		readback.Readback->Record(commandList, m_ExposureBuffer, 0, 3 * sizeof(float));
 		readback.Render = m_RenderCount + 1;
 		readback.Epoch = m_PreExposureEpoch;
 		readback.PreExposure = m_PreExposure;
@@ -355,10 +374,11 @@ namespace Strata
 			dispatch(m_BloomUpsampleSets[level], RenderData::c_BloomUpsample, level);
 	}
 
-	bool SceneRenderer::RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, bool resolved)
+	bool SceneRenderer::RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const SceneRenderOptions& options, bool resolved,
+		std::optional<float> keyReferenceLog2)
 	{
 		commandList->beginMarker("Exposure");
-		UpdateExposure(commandList, postProcess, resolved ? m_TemporalExposureSets[m_HistoryIndex].Get() : m_ExposureBindingSet.Get());
+		UpdateExposure(commandList, postProcess, options, resolved ? m_TemporalExposureSets[m_HistoryIndex].Get() : m_ExposureBindingSet.Get(), keyReferenceLog2);
 		commandList->endMarker();
 		const bool bloom = postProcess.Bloom && postProcess.BloomIntensity > 0.0f;
 		if (bloom)
