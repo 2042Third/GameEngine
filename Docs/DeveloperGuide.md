@@ -3232,10 +3232,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
   (ignoring case). Three layers make the value in effect every renderer of the game follows: the project's value (pulled
   by `IProjectSettings::GetVersion`), the player's choices over it (`SetOption`: a choice of `Preset` keeps only the
   preset and the rows that do not follow it, Custom starting from the look in effect with `MakeCustomStart`; a row that
-  follows the preset, set under a named preset, switches to Custom from the look in effect first; every change is
-  validated by the section and a refused one changes nothing), and over both a command line's preset (`--quality`, for
-  the session, never saved; a choice made under it is kept as the player's and reported with source `CommandLine`).
-  `GetSource` says where each field's value comes from (`Project`, `Player`, `CommandLine`); `GetVersion` changes with
+  follows the preset, set while the player's own preset is not Custom, switches the player to Custom from the look in
+  effect first, also under the project's Custom, so the player's tuning holds every row and keeps its meaning when the
+  project's preset changes; every change is validated by the section and a refused one changes nothing), and over both a
+  command line's preset (`--quality`, for the session, never saved; a choice made under it is kept as the player's and
+  reported with source `CommandLine`). `GetSource` says where each field's value comes from (`Project`, `Player`,
+  `CommandLine`; a row that follows the preset is the player's when their preset decides it or their own value of it is
+  in effect, never for a member a named preset of the project's overrules); `GetVersion` changes with
   the value in effect, a source or the player's choices, unique across providers. `ResetOptions` removes a choice (`""`:
   every one; `Preset`: the preset and the rows that follow it, so the project's quality applies; a row that follows the
   preset under the player's Custom takes the project's value). `GameGraphicsService` (`Runtime/`) implements it:

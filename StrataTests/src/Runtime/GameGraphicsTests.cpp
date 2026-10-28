@@ -455,6 +455,56 @@ TEST_SUITE("Runtime.GameGraphics")
 		CHECK(service.GetEffectiveValue() == custom);
 	}
 
+	TEST_CASE("A row set under the project's Custom keeps its meaning when the project's preset changes")
+	{
+		GraphicsProject project("GameGraphicsProjectCustom");
+		project.Set({ { "Preset", "Custom" }, { "ShadowResolution", "1024" }, { "ShadowCascades", 3 } });
+		{
+			GameGraphicsService service(&project.Values, &project.Saves, &project.Registry);
+			REQUIRE(service.SetOption("ShadowCascades", 2));
+			// The player's Custom, from the project's tuning, holds every row.
+			const nlohmann::json& player = service.GetPlayerOptions();
+			CHECK(player.value("Preset", std::string()) == "Custom");
+			CHECK(player.value("ShadowResolution", std::string()) == "1024");
+			CHECK(player.value("ShadowCascades", 0) == 2);
+			for (const RendererQuality::RowTraits& row : RendererQuality::GetRowTraits())
+				CHECK(player.contains(std::string(row.Field)));
+			REQUIRE(service.SaveOptions());
+
+			// The project's preset changes: the player's tuning stays in effect, and is reported as theirs.
+			project.Set({ { "Preset", "High" } });
+			CHECK(service.GetEffectiveValue()["Preset"] == "Custom");
+			CHECK(service.GetEffectiveValue()["ShadowCascades"] == 2);
+			CHECK(service.GetEffectiveValue()["ShadowResolution"] == "1024");
+			CheckSources(service, project.GetSection(), GameGraphicsSource::Player);
+		}
+		// So in a later session.
+		GameGraphicsService service(&project.Values, &project.Saves, &project.Registry);
+		service.LoadPlayerOptions();
+		CHECK(service.GetEffectiveValue()["ShadowCascades"] == 2);
+		CHECK(service.GetSource("ShadowCascades") == GameGraphicsSource::Player);
+	}
+
+	TEST_CASE("A player's row the project's named preset overrules is the project's in effect and source")
+	{
+		// A file written by hand: a row without the player's preset.
+		GraphicsProject project("GameGraphicsOverruledRow");
+		project.WriteFile(fmt::format("{{\"Options\": {{\"ShadowCascades\": 2}}, \"Section\": {{\"Id\": \"Renderer.Quality\", \"Version\": {}}}, "
+			"\"Strata\": {{\"Format\": \"GraphicsOptions\", \"Version\": 1}}}}", RendererQuality::c_SectionVersion));
+		GameGraphicsService service(&project.Values, &project.Saves, &project.Registry);
+		service.LoadPlayerOptions();
+		REQUIRE(service.GetPlayerOptions() == nlohmann::json { { "ShadowCascades", 2 } });
+		// Under High the member does nothing: High's cascades, the project's.
+		CHECK(service.GetEffectiveValue()["ShadowCascades"] == 4);
+		CheckSources(service, project.GetSection(), GameGraphicsSource::Project);
+		// Under the project's Custom it is in effect: the player's.
+		project.Set({ { "Preset", "Custom" }, { "ShadowCascades", 3 } });
+		CHECK(service.GetEffectiveValue()["ShadowCascades"] == 2);
+		CHECK(service.GetSource("ShadowCascades") == GameGraphicsSource::Player);
+		CHECK(service.GetSource("ShadowResolution") == GameGraphicsSource::Project);
+		CHECK(service.GetSource("Preset") == GameGraphicsSource::Project);
+	}
+
 	TEST_CASE("Without a save directory Save fails with the reason and the choices stay")
 	{
 		GraphicsProject project("GameGraphicsNoSaves");

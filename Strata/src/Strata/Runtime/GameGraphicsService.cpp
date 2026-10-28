@@ -254,14 +254,22 @@ namespace Strata
 				}
 			}
 			const bool playerPreset = Player.contains("Preset");
+			const nlohmann::json* basePreset = JsonUtils::Find(base, "Preset");
+			const bool custom = basePreset && *basePreset == RendererQuality::PresetToString(RendererQualityPreset::Custom);
 			std::vector<GameGraphicsSource> sources;
 			sources.reserve(section.Fields.size());
 			for (const SettingsField& field : section.Fields)
 			{
-				const bool follows = field.Name == "Preset" || FollowsPreset(field);
+				const bool isPreset = field.Name == "Preset";
+				const bool follows = isPreset || FollowsPreset(field);
+				// A row that follows the preset is the player's when their preset decides it, or when their own value of it is
+				// in effect: under a named preset of the project's a member of theirs (a file written by hand) is not.
+				const bool player = isPreset ? playerPreset
+					: follows ? playerPreset || (custom && Player.contains(field.Name))
+					: Player.contains(field.Name);
 				if (CommandLine && follows)
 					sources.push_back(GameGraphicsSource::CommandLine);
-				else if (Player.contains(field.Name) || (follows && playerPreset))
+				else if (player)
 					sources.push_back(GameGraphicsSource::Player);
 				else
 					sources.push_back(GameGraphicsSource::Project);
@@ -544,7 +552,9 @@ namespace Strata
 		}
 		else if (data.FollowsPreset(*field))
 		{
-			const nlohmann::json* preset = JsonUtils::Find(base, "Preset");
+			// Unless the player's own preset is Custom, Custom first, from the look in effect (also under the project's Custom:
+			// the player's tuning then holds every row and keeps its meaning when the project's preset changes).
+			const nlohmann::json* preset = JsonUtils::Find(data.Player, "Preset");
 			if (!preset || *preset != RendererQuality::PresetToString(RendererQualityPreset::Custom))
 				player = choosePreset(RendererQuality::PresetToString(RendererQualityPreset::Custom));
 			player[field->Name] = stored;
