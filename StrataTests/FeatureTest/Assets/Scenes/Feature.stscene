@@ -350,6 +350,7 @@
 						"ScreenSpaceReflections": false,
 						"ScreenSpaceReflectionsIntensity": 1,
 						"ScreenSpaceReflectionsMaxRoughness": 0.5,
+						"Shoulder": 0.4,
 						"TAAClipWidth": 1.25,
 						"TAADisocclusionRejection": false,
 						"TAADisocclusionThreshold": 0.05,
@@ -361,7 +362,8 @@
 						"TAAResampleWeight": 0.25,
 						"TAASharpening": 0.5,
 						"TAATransparentWeight": 0.5,
-						"Tonemapper": "KhronosNeutral",
+						"Toe": 0.6,
+						"Tonemapper": "Filmic",
 						"Vignette": 0.2
 					},
 					"SkyLight": {

@@ -23,7 +23,7 @@ namespace Strata
 			{ ProjectTemplates::c_Empty, "Empty", "A project with no scene: start from nothing." },
 			{ ProjectTemplates::c_Basic3D, "Basic 3D",
 				"A lit 3D start scene: a main camera with an audio listener, a sun with shadows, a procedural sky, a 20 x 20 ground plane of dark "
-				"stone (Materials/Ground.stmat) with a box collider, so bodies and characters stand on it, and post-processing (ACES tone mapping, "
+				"stone (Materials/Ground.stmat) with a box collider, so bodies and characters stand on it, and post-processing (Filmic tone mapping, "
 				"automatic exposure)." }
 		} };
 
@@ -36,7 +36,6 @@ namespace Strata
 		// The ground's collider: a box under the plane (the plane's own space, scaled with it to 20 x 20), its top flush with
 		// the surface at y = 0, a meter thick so that fast bodies do not tunnel through.
 		constexpr float c_Basic3DGroundColliderHalfThickness = 0.5f;
-		constexpr float c_Basic3DExposureCompensation = 1.0f; // EV
 
 		void PopulateBasic3D(Scene& scene, const TemplateAssets& assets)
 		{
@@ -67,11 +66,10 @@ namespace Strata
 			collider.Offset = glm::vec3(0.0f, -c_Basic3DGroundColliderHalfThickness, 0.0f);
 
 			PostProcessComponent& postProcess = scene.CreateEntity("Post Process").AddComponent<PostProcessComponent>();
-			postProcess.Tonemapper = TonemapOperator::ACES;
+			// Filmic shows the metered average at display middle gray: no exposure compensation.
+			postProcess.Tonemapper = TonemapOperator::Filmic;
 			postProcess.AutoExposure = true;
-			// Automatic exposure brings the image's average to middle gray; with sunlit white surfaces (the default
-			// material) filling most of the view that leaves the sky dim. One stop brighter reads as a sunny day.
-			postProcess.Exposure = c_Basic3DExposureCompensation;
+			postProcess.Exposure = 0.0f;
 			// Temporal anti-aliasing: steady edges, and the shadows' and ambient occlusion's noise averaged away.
 			postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
 		}

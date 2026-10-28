@@ -29,10 +29,14 @@ namespace Strata
 			float DitherLevels;         // 32: 2^bits - 1 of the target this pass writes; 0: no dither
 			float Vignette;
 			glm::vec2 VignetteTangents; //     tangents of the half field of view per axis (a lens's vignette); (0, 0): none
+			float FilmicToeSlope;       // 48: the Filmic curve's look (PostProcessMath::FilmicCurve)
+			float FilmicWhiteStops;
+			float FilmicShoulderPower;
+			uint32_t Padding0;
 		};
-		static_assert(sizeof(TonemapConstants) == 48);
+		static_assert(sizeof(TonemapConstants) == 64);
 		static_assert(offsetof(TonemapConstants, Operator) == 16 && offsetof(TonemapConstants, DitherLevels) == 32);
-		static_assert(offsetof(TonemapConstants, VignetteTangents) == 40);
+		static_assert(offsetof(TonemapConstants, VignetteTangents) == 40 && offsetof(TonemapConstants, FilmicToeSlope) == 48);
 
 		// PostProcess/FXAA.frag (push constants).
 		struct FXAAParameters

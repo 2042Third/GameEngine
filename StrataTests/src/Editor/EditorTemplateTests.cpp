@@ -122,9 +122,10 @@ namespace
 		Entity postProcess = scene.FindEntityByName("Post Process");
 		REQUIRE(postProcess);
 		REQUIRE(postProcess.HasComponent<PostProcessComponent>());
-		CHECK(postProcess.GetComponent<PostProcessComponent>().Tonemapper == TonemapOperator::ACES);
+		// Filmic shows a metered middle gray at display middle gray: no exposure compensation.
+		CHECK(postProcess.GetComponent<PostProcessComponent>().Tonemapper == TonemapOperator::Filmic);
 		CHECK(postProcess.GetComponent<PostProcessComponent>().AutoExposure);
-		CHECK(postProcess.GetComponent<PostProcessComponent>().Exposure == doctest::Approx(1.0f));
+		CHECK(postProcess.GetComponent<PostProcessComponent>().Exposure == 0.0f);
 		CHECK(postProcess.GetComponent<PostProcessComponent>().AntiAliasing);
 		CHECK(postProcess.GetComponent<PostProcessComponent>().AntiAliasingMethod == AntiAliasingMode::TAA);
 		CHECK(postProcess.GetComponent<PostProcessComponent>().TAAPreset == TemporalAntiAliasingPreset::Sharp);

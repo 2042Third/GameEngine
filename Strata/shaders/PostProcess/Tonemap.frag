@@ -4,6 +4,7 @@
 #include "Include/Common.glsl"
 #include "Include/Dither.glsl"
 #include "Include/Exposure.glsl"
+#include "Include/Filmic.glsl"
 
 // Exposure, bloom, tone mapping and color grading from the HDR scene color into a display-referred, sRGB-encoded
 // target.
@@ -13,6 +14,7 @@
 #define ST_TONEMAP_ACES            2
 #define ST_TONEMAP_AGX             3
 #define ST_TONEMAP_KHRONOS_NEUTRAL 4
+#define ST_TONEMAP_FILMIC          5
 
 layout(set = 0, binding = ST_SRV(0)) uniform texture2D u_SceneColor;
 layout(set = 0, binding = ST_SAMPLER(0)) uniform sampler u_PointSampler;
@@ -37,6 +39,10 @@ layout(set = 0, binding = ST_CBV(0), std140) uniform TonemapConstants
 	float DitherLevels;       // 2^bits - 1 of the target this pass writes; 0: no dither
 	float Vignette;
 	vec2 VignetteTangents;    // Tangents of the half field of view per axis (a lens's vignette)
+	float FilmicToeSlope;     // The Filmic curve's look (PostProcessMath::FilmicCurve)
+	float FilmicWhiteStops;
+	float FilmicShoulderPower;
+	uint Padding0;
 } u_Parameters;
 
 // Largest exposed value passed to the tone curves: far beyond where every curve saturates, small enough that their
@@ -185,6 +191,7 @@ void main()
 		case ST_TONEMAP_ACES:            color = TonemapACES(color); break;
 		case ST_TONEMAP_AGX:             color = TonemapAgX(color); break;
 		case ST_TONEMAP_KHRONOS_NEUTRAL: color = TonemapKhronosNeutral(color); break;
+		case ST_TONEMAP_FILMIC:          color = TonemapFilmic(color, u_Parameters.FilmicToeSlope, u_Parameters.FilmicWhiteStops, u_Parameters.FilmicShoulderPower); break;
 		default:                         color = clamp(color, 0.0, 1.0); break;
 	}
 

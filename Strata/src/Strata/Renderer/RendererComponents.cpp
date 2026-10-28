@@ -98,6 +98,32 @@ namespace Strata
 			return post.AutoExposure ? std::string() : "Auto Exposure is off";
 		}
 
+		const char* GetTonemapperName(TonemapOperator tonemapper)
+		{
+			switch (tonemapper)
+			{
+				case TonemapOperator::None: return "None";
+				case TonemapOperator::Reinhard: return "Reinhard";
+				case TonemapOperator::ACES: return "ACES";
+				case TonemapOperator::AgX: return "AgX";
+				case TonemapOperator::KhronosNeutral: return "Khronos Neutral";
+				case TonemapOperator::Filmic: return "Filmic";
+			}
+			return "unknown";
+		}
+
+		std::string WithFilmicToe(const PostProcessComponent& post)
+		{
+			return post.Tonemapper == TonemapOperator::Filmic ? std::string()
+				: fmt::format("Only the Filmic curve has a toe (Tonemapper is {})", GetTonemapperName(post.Tonemapper));
+		}
+
+		std::string WithFilmicShoulder(const PostProcessComponent& post)
+		{
+			return post.Tonemapper == TonemapOperator::Filmic ? std::string()
+				: fmt::format("Only the Filmic curve has a shoulder (Tonemapper is {})", GetTonemapperName(post.Tonemapper));
+		}
+
 		std::string WithBloom(const PostProcessComponent& post)
 		{
 			return post.Bloom ? std::string() : "Bloom is off";
@@ -364,7 +390,11 @@ namespace Strata
 			.Category("Rendering")
 			.Description("Tonemapping, exposure, bloom, ambient occlusion, anti-aliasing and screen-space reflection settings")
 			.EnumProperty("Tonemapper", &PostProcessComponent::Tonemapper, { { "None", 0 }, { "Reinhard", 1 }, { "ACES", 2 }, { "AgX", 3 },
-				{ "KhronosNeutral", 4, "Khronos Neutral" } })
+				{ "KhronosNeutral", 4, "Khronos Neutral" }, { "Filmic", 5 } },
+				{ .Tooltip = "Filmic: the engine's camera-like curve, middle gray shown as middle gray, a soft shoulder that takes bright colors "
+					"to white without changing their hue (Toe and Shoulder shape it); ACES: punchier, darker mid-tones (needs about +0.8 EV for "
+					"the same brightness); AgX: flatter and less saturated; Khronos Neutral: keeps base colors up to the highlights; Reinhard; "
+					"None: the exposed colors clipped" })
 			.Property("Exposure", &PostProcessComponent::Exposure, WithTooltip(Range(-16.0f, 16.0f, 0.05f), "Exposure compensation in EV"))
 			.Property("AutoExposure", &PostProcessComponent::AutoExposure)
 			.Property("AutoExposureMinEV", &PostProcessComponent::AutoExposureMinEV,
@@ -436,10 +466,16 @@ namespace Strata
 					"surfaces blur what they reflect, which screen-space reflections do not"))
 			.Property("Vignette", &PostProcessComponent::Vignette, Slider(0.0f, 1.0f))
 			.Property("Saturation", &PostProcessComponent::Saturation, Slider(0.0f, 2.0f))
-			.Property("Contrast", &PostProcessComponent::Contrast, WithTooltip(Slider(0.5f, 2.0f), "Around middle gray; 1 = unchanged"));
+			.Property("Contrast", &PostProcessComponent::Contrast, WithTooltip(Slider(0.5f, 2.0f), "Around middle gray; 1 = unchanged"))
+			.Property("Toe", &PostProcessComponent::Toe, WithTooltip(Slider(0.0f, 1.0f), "How deep the shadows go: higher crushes the darkest tones toward "
+				"black, lower keeps more detail in them (Filmic only)"))
+			.Property("Shoulder", &PostProcessComponent::Shoulder, WithTooltip(Slider(0.0f, 1.0f), "How softly highlights roll off to white: higher "
+				"reaches white more stops above middle gray (5 at 0, 6.5 at 0.5, 8 at 1), keeping more highlight detail (Filmic only)"));
 		// Exposure is the compensation SceneRenderer applies with automatic exposure too: always active.
 		SetInactiveReasons<PostProcessComponent>({ "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed" }, &WithAutoExposure);
 		SetInactiveReasons<PostProcessComponent>({ "BloomIntensity", "BloomThreshold" }, &WithBloom);
+		SetInactiveReasons<PostProcessComponent>({ "Toe" }, &WithFilmicToe);
+		SetInactiveReasons<PostProcessComponent>({ "Shoulder" }, &WithFilmicShoulder);
 		SetInactiveReasons<PostProcessComponent>({ "AmbientOcclusionRadius", "AmbientOcclusionIntensity" }, &WithAmbientOcclusion);
 		SetInactiveReasons<PostProcessComponent>({ "AntiAliasingMethod" }, &WithAntiAliasing);
 		SetInactiveReasons<PostProcessComponent>({ "TAAPreset" }, &WithTemporalAntiAliasing);

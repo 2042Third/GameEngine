@@ -148,6 +148,53 @@ namespace
 		return sum / (static_cast<double>(image.Width) * image.Height);
 	}
 
+	// The curves before Filmic, transcribed from PostProcess/Tonemap.frag for a gray value: what they must keep showing.
+	float EarlierCurve(TonemapOperator tonemapper, float gray)
+	{
+		const glm::vec3 color(gray);
+		switch (tonemapper)
+		{
+			case TonemapOperator::Reinhard:
+				return gray / (1.0f + gray);
+			case TonemapOperator::ACES:
+			{
+				const glm::mat3 input(0.59719f, 0.07600f, 0.02840f, 0.35458f, 0.90834f, 0.13383f, 0.04823f, 0.01566f, 0.83777f);
+				const glm::mat3 output(1.60475f, -0.10208f, -0.00327f, -0.53108f, 1.10813f, -0.07276f, -0.07367f, -0.00605f, 1.07602f);
+				const glm::vec3 v = input * color;
+				const glm::vec3 a = v * (v + 0.0245786f) - 0.000090537f;
+				const glm::vec3 b = v * (0.983729f * v + 0.4329510f) + 0.238081f;
+				return glm::clamp(output * (a / b), 0.0f, 1.0f).r;
+			}
+			case TonemapOperator::AgX:
+			{
+				const glm::mat3 inset(0.842479062253094f, 0.0423282422610123f, 0.0423756549057051f, 0.0784335999999992f, 0.878468636469772f, 0.0784336f,
+					0.0792237451477643f, 0.0791661274605434f, 0.879142973793104f);
+				const glm::mat3 outset(1.19687900512017f, -0.0528968517574562f, -0.0529716355144438f, -0.0980208811401368f, 1.15190312990417f,
+					-0.0980434501171241f, -0.0990297440797205f, -0.0989611768448433f, 1.15107367264116f);
+				glm::vec3 v = inset * glm::max(color, glm::vec3(1e-10f));
+				v = glm::clamp((glm::log2(v) + 12.47393f) / (4.026069f + 12.47393f), 0.0f, 1.0f);
+				const glm::vec3 v2 = v * v;
+				const glm::vec3 v4 = v2 * v2;
+				v = 15.5f * v4 * v2 - 40.14f * v4 * v + 31.96f * v4 - 6.868f * v2 * v + 0.4298f * v2 + 0.1191f * v - 0.00232f;
+				v = outset * v;
+				return std::pow(std::max(v.r, 0.0f), 2.2f);
+			}
+			case TonemapOperator::KhronosNeutral:
+			{
+				// A gray stays gray: the desaturation mixes the compressed peak with itself.
+				const float startCompression = 0.8f - 0.04f;
+				const float offset = gray < 0.08f ? gray - 6.25f * gray * gray : 0.04f;
+				const float value = gray - offset;
+				if (value < startCompression)
+					return value;
+				const float d = 1.0f - startCompression;
+				return 1.0f - d * d / (value + d - startCompression);
+			}
+			default:
+				return std::clamp(gray, 0.0f, 1.0f);
+		}
+	}
+
 	SceneRendererSpecification Dithered()
 	{
 		SceneRendererSpecification specification = ExactSpecification();
@@ -349,6 +396,114 @@ TEST_SUITE("GPU.SceneRenderer.Camera")
 				}
 			}
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Filmic on the GPU matches its CPU reference")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const glm::vec3 colors[] = { { 1.0f, 0.05f, 0.05f }, { 0.05f, 1.0f, 0.05f }, { 0.05f, 0.05f, 1.0f }, { 1.0f, 1.0f, 0.05f }, { 0.8f, 0.5f, 0.35f },
+			{ 0.2f, 0.4f, 0.08f }, { 0.25f, 0.45f, 0.9f }, { 1.0f, 1.0f, 1.0f } };
+		constexpr uint32_t c_Size = 16;
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		uint32_t compared = 0;
+		for (const glm::vec3& color : colors)
+		{
+			// Scaled to the luminance of middle gray, then exposed from -3 to +4 stops (whole stops: the pre-exposure divides the
+			// manual exposure out exactly).
+			const glm::vec3 scaled = color * (0.18f / glm::dot(color, glm::vec3(0.2126f, 0.7152f, 0.0722f)));
+			MaterialProperties material = Emitting(1.0f);
+			material.EmissiveColor = scaled;
+			FlatField field(assets, 1.0f);
+			field.Wall.GetComponent<MeshRendererComponent>().Material = assets.AddMaterial(material);
+			field.Wall.MarkModified<MeshRendererComponent>();
+			field.PostProcess->Tonemapper = TonemapOperator::Filmic;
+			const PostProcessMath::FilmicCurve look = PostProcessMath::MakeFilmicCurve(field.PostProcess->Toe, field.PostProcess->Shoulder);
+			for (int stops = -3; stops <= 4; stops++)
+			{
+				field.PostProcess->Exposure = static_cast<float>(stops);
+				const ReadbackImage image = RenderToImage(renderer, field.SceneData, field.Camera);
+				ReadbackImage hdr;
+				REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), hdr));
+				const float preExposure = renderer.GetStats().PreExposure;
+				for (uint32_t y = 0; y < c_Size; y++)
+				{
+					for (uint32_t x = 0; x < c_Size; x++)
+					{
+						const glm::vec3 exposed = glm::vec3(ReadHalfTexel(hdr, x, y)) * (std::exp2(static_cast<float>(stops)) / preExposure);
+						const glm::vec3 expected = PostProcessMath::LinearToSRGB(PostProcessMath::ApplyFilmic(exposed, look)) * 255.0f;
+						const glm::u8vec4 pixel = GetPixelRGBA8(image, x, y);
+						const glm::vec3 difference = glm::abs(glm::vec3(pixel.r, pixel.g, pixel.b) - expected);
+						CAPTURE(color);
+						CAPTURE(stops);
+						CHECK(std::max({ difference.r, difference.g, difference.b }) <= 1.0f);
+						compared++;
+					}
+				}
+			}
+		}
+		CHECK(compared == 8 * 8 * c_Size * c_Size);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Automatic exposure under Filmic shows middle gray at sRGB 118 with Exposure 0")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		// A histogram bin's center (Include/Exposure.glsl's HistogramBinToLog2): the metering returns bin centers, and half a
+		// bin (0.055 stops) times Filmic's slope would move the result by up to 2.7 codes.
+		constexpr uint32_t c_Bin = 120;
+		const float log2Luminance = RenderData::c_HistogramMinLog2
+			+ (static_cast<float>(c_Bin - 1) + 0.5f) / static_cast<float>(RenderData::c_HistogramBins - 2) * (RenderData::c_HistogramMaxLog2 - RenderData::c_HistogramMinLog2);
+		FlatField field(assets, std::exp2(log2Luminance));
+		field.PostProcess->AutoExposure = true;
+		field.PostProcess->Exposure = 0.0f;
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_SceneTestSize, c_SceneTestSize);
+		for (TonemapOperator tonemapper : { TonemapOperator::Filmic, TonemapOperator::ACES })
+		{
+			field.PostProcess->Tonemapper = tonemapper;
+			renderer.ResetExposureAdaptation();
+			const int center = Red(RenderToImage(renderer, field.SceneData, field.Camera), c_SceneTestSize / 2, c_SceneTestSize / 2);
+			CAPTURE(static_cast<int>(tonemapper));
+			if (tonemapper == TonemapOperator::Filmic)
+				CHECK((center >= 117 && center <= 119));
+			else
+				CHECK(std::abs(center - 91) <= 1); // ACES shows middle gray at sRGB 91: it needs about +0.8 EV
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The earlier curves are unchanged")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_SceneTestSize, c_SceneTestSize);
+		for (TonemapOperator tonemapper : { TonemapOperator::ACES, TonemapOperator::AgX, TonemapOperator::KhronosNeutral, TonemapOperator::Reinhard })
+		{
+			for (float gray : { 0.005f, 0.05f, 0.18f, 0.5f, 1.0f, 2.0f, 5.0f, 11.5f })
+			{
+				FlatField field(assets, gray);
+				field.PostProcess->Tonemapper = tonemapper;
+				const int code = Red(RenderToImage(renderer, field.SceneData, field.Camera), c_SceneTestSize / 2, c_SceneTestSize / 2);
+				const float expected = PostProcessMath::LinearToSRGB(glm::vec3(EarlierCurve(tonemapper, gray))).r * 255.0f;
+				CAPTURE(static_cast<int>(tonemapper));
+				CAPTURE(gray);
+				CHECK(std::abs(static_cast<float>(code) - expected) <= 1.0f);
+			}
+		}
+		// The transcription's middle grays: ACES 91, AgX 128, Khronos Neutral 105, Reinhard 109.
+		auto middleGray = [](TonemapOperator tonemapper) { return std::lround(PostProcessMath::LinearToSRGB(glm::vec3(EarlierCurve(tonemapper, 0.18f))).r * 255.0f); };
+		CHECK(middleGray(TonemapOperator::ACES) == 91);
+		CHECK(middleGray(TonemapOperator::AgX) == 128);
+		CHECK(middleGray(TonemapOperator::KhronosNeutral) == 105);
+		CHECK(middleGray(TonemapOperator::Reinhard) == 109);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

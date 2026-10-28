@@ -148,13 +148,17 @@ namespace Strata
 		static constexpr float c_MinExtent = 0.01f; // Meters: a box of no size would reflect nothing
 	};
 
+	// The tone curve of PostProcessComponent. The values are script and file API: they never change; new curves are appended.
 	enum class TonemapOperator : uint8_t
 	{
 		None = 0,
 		Reinhard,
 		ACES,
 		AgX,
-		KhronosNeutral
+		KhronosNeutral,
+		// The engine's camera-like curve (Include/Filmic.glsl, Tools/FitFilmic.py): middle gray shown as middle gray, a soft
+		// shoulder that takes bright colors to white without changing their hue; shaped by PostProcessComponent::Toe, Shoulder
+		Filmic
 	};
 
 	// How PostProcessComponent::AntiAliasing smooths edges.
@@ -224,7 +228,8 @@ namespace Strata
 	// without one use the defaults.
 	struct PostProcessComponent
 	{
-		TonemapOperator Tonemapper = TonemapOperator::ACES;
+		// Filmic for new components and scenes without one (ACES until 0.7.0: files store the curve, so their scenes keep it).
+		TonemapOperator Tonemapper = TonemapOperator::Filmic;
 		float Exposure = 0.0f; // Exposure compensation in EV (stops); the only exposure without AutoExposure
 		// Automatic exposure maps the average luminance of the image's non-black pixels to middle gray. The average is
 		// clamped to [2^MinEV, 2^MaxEV] and approached at AutoExposureSpeed per second (0 = instantly). MaxEV reaches what
@@ -263,6 +268,10 @@ namespace Strata
 		float Vignette = 0.2f;
 		float Saturation = 1.0f;
 		float Contrast = 1.0f; // Around middle gray; 1 = unchanged
+		// The Filmic curve's look, each in [0, 1]: how deep the shadows go (higher crushes the darkest tones) and how softly the
+		// highlights roll off to white (higher reaches white more stops above middle gray: 5 at 0, 6.5 at 0.5, 8 at 1).
+		float Toe = 0.5f;
+		float Shoulder = 0.5f;
 	};
 
 	// The settings the TAA resolves with: the preset's table, or the component's tunables under Custom, clamped to their

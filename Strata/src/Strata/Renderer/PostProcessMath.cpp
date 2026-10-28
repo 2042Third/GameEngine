@@ -1,6 +1,8 @@
 #include "stpch.h"
 #include "Strata/Renderer/PostProcessMath.h"
 
+#include "Strata/Renderer/FilmicConstants.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -64,6 +66,41 @@ namespace Strata::PostProcessMath
 			result[channel] = q / levels;
 		}
 		return result;
+	}
+
+	FilmicCurve MakeFilmicCurve(float toe, float shoulder)
+	{
+		toe = std::clamp(std::isfinite(toe) ? toe : 0.5f, 0.0f, 1.0f);
+		shoulder = std::clamp(std::isfinite(shoulder) ? shoulder : 0.5f, 0.0f, 1.0f);
+		FilmicCurve curve;
+		curve.ToeSlope = FilmicConstants::Contrast * (0.85f + 0.5f * toe);
+		curve.WhiteStops = 6.5f + 3.0f * (shoulder - 0.5f);
+		const float middleGray = FilmicConstants::MiddleGray;
+		curve.ShoulderPower = FilmicConstants::Contrast * middleGray * std::log(2.0f) * curve.WhiteStops / (1.0f - middleGray);
+		return curve;
+	}
+
+	float EvaluateFilmicCurve(float x, const FilmicCurve& curve)
+	{
+		const float middleGray = FilmicConstants::MiddleGray;
+		if (!(x > 0.0f))
+			return 0.0f;
+		const float t = std::log2(x / middleGray);
+		if (t < 0.0f)
+		{
+			const float toeWidth = FilmicConstants::ToeWidth;
+			return middleGray * std::exp2(curve.ToeSlope * t + (FilmicConstants::Contrast - curve.ToeSlope) * toeWidth * (std::exp(t / toeWidth) - 1.0f));
+		}
+		if (t >= curve.WhiteStops)
+			return 1.0f;
+		return middleGray + (1.0f - middleGray) * (1.0f - std::pow(1.0f - t / curve.WhiteStops, curve.ShoulderPower));
+	}
+
+	glm::vec3 ApplyFilmic(const glm::vec3& exposed, const FilmicCurve& curve)
+	{
+		const glm::vec3 inset = FilmicConstants::Inset * glm::max(exposed, glm::vec3(0.0f));
+		const glm::vec3 curved(EvaluateFilmicCurve(inset.r, curve), EvaluateFilmicCurve(inset.g, curve), EvaluateFilmicCurve(inset.b, curve));
+		return glm::clamp(FilmicConstants::Outset * curved, glm::vec3(0.0f), glm::vec3(1.0f));
 	}
 
 }
