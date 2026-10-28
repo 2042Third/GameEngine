@@ -240,7 +240,9 @@ mouse buttons, gamepad controls and composites, the project settings section `In
 window's events, with the players' bindings (`<save directory>/InputBindings.json`), map enables, simulated actions and
 binding capture (DeveloperGuide.md, "Input actions"). Scripts read and rebind them by name through the host functions
 `InputIsActionDown` to `InputSaveBindings`, and capture a binding through `InputBeginBindingCapture`,
-`InputPollBindingCapture` and `InputCancelBindingCapture`.
+`InputPollBindingCapture` and `InputCancelBindingCapture`. The players' graphics options follow them in the table,
+`GraphicsGetOptionCount` to `GraphicsSaveOptions`: the fields of `Renderer.Quality` by name, through the engine service
+`IGameGraphics` (DeveloperGuide.md, "Quality settings").
 
 **Math** (`Math/`). Engine conventions in `Math.h`: right-handed, +Y up, -Z forward, reversed-Z projections, Euler
 angles in degrees. `AABB`, `Frustum`, `Ray`, and `Random` (thread-local generators).

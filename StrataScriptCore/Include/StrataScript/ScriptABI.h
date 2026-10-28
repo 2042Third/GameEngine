@@ -257,6 +257,50 @@ extern "C"
 		StrataScriptInputDevices_Gamepad = 4
 	} StrataScriptInputDevices;
 
+	/* The kind of value a graphics option takes (StrataScriptGraphicsOptionInfo::Type). */
+	typedef enum StrataScriptGraphicsOptionType
+	{
+		StrataScriptGraphicsOptionType_Bool = 0,
+		StrataScriptGraphicsOptionType_Int = 1,   /* A whole number from Min to Max */
+		StrataScriptGraphicsOptionType_Float = 2, /* A number from Min to Max */
+		StrataScriptGraphicsOptionType_Choice = 3 /* One of ChoiceCount names (GraphicsGetOptionChoice) */
+	} StrataScriptGraphicsOptionType;
+
+	/* Where the value in effect of a graphics option comes from (StrataScriptGraphicsOptionInfo::Source). */
+	typedef enum StrataScriptGraphicsOptionSource
+	{
+		StrataScriptGraphicsOptionSource_Project = 0,    /* The project's Graphics Quality settings */
+		StrataScriptGraphicsOptionSource_Player = 1,     /* The player's choice: GraphicsSetOption, or saved by an earlier session */
+		StrataScriptGraphicsOptionSource_CommandLine = 2 /* The program's command line fixes it for this session */
+	} StrataScriptGraphicsOptionSource;
+
+	/*
+	 * A graphics option (GraphicsDescribeOption). The module sets StructSize to the size of the struct it passes; the engine
+	 * fills at most that many bytes, at most its own struct's, and sets StructSize to the bytes it filled: read a member
+	 * only when ST_SCRIPT_HAS_MEMBER covers it, so modules of a newer SDK (members appended) work with older engines and the
+	 * other way round. The engine refuses a StructSize smaller than this first version's. The strings are engine memory,
+	 * valid until the engine call into the module that asked returns: copy them.
+	 */
+	typedef struct StrataScriptGraphicsOptionInfo
+	{
+		uint32_t StructSize;
+		uint32_t Type;                  /* StrataScriptGraphicsOptionType */
+		StrataScriptString Name;        /* What GraphicsGetOption and GraphicsSetOption take ("ShadowResolution") */
+		StrataScriptString Title;       /* For menus ("Shadow resolution") */
+		StrataScriptString Description; /* What it changes and what it costs */
+		double Min;                     /* Int and Float: the inclusive range; 0 for the others */
+		double Max;
+		uint32_t ChoiceCount;           /* Choice: how many choices; 0 for the others */
+		uint32_t Source;                /* StrataScriptGraphicsOptionSource of the value in effect when it was described */
+	} StrataScriptGraphicsOptionInfo;
+
+	ST_SCRIPT_DETAIL_STATIC_ASSERT(sizeof(void*) != 8 || (sizeof(StrataScriptGraphicsOptionInfo) == 80
+		&& offsetof(StrataScriptGraphicsOptionInfo, Type) == 4 && offsetof(StrataScriptGraphicsOptionInfo, Name) == 8
+		&& offsetof(StrataScriptGraphicsOptionInfo, Title) == 24 && offsetof(StrataScriptGraphicsOptionInfo, Description) == 40
+		&& offsetof(StrataScriptGraphicsOptionInfo, Min) == 56 && offsetof(StrataScriptGraphicsOptionInfo, Max) == 64
+		&& offsetof(StrataScriptGraphicsOptionInfo, ChoiceCount) == 72 && offsetof(StrataScriptGraphicsOptionInfo, Source) == 76),
+		"StrataScriptGraphicsOptionInfo's first version is part of the ABI");
+
 	/*
 	 * Engine services for scripts. Unless noted otherwise, functions taking a context only work while the engine is
 	 * calling into the module for that context, on the engine's main thread; otherwise they fail (returning false, 0
@@ -658,6 +702,37 @@ extern "C"
 		bool (*InputBeginBindingCapture)(StrataScriptContext* context, uint32_t devices);
 		uint64_t (*InputPollBindingCapture)(StrataScriptContext* context, char* buffer, uint64_t capacity);
 		bool (*InputCancelBindingCapture)(StrataScriptContext* context);
+
+		/*
+		 * Graphics options (added after InputCancelBindingCapture, ABI version 1: check ST_SCRIPT_HAS_MEMBER before use): the
+		 * players' choice of rendering quality, a game's options menu. The options are the fields of the project's Graphics
+		 * Quality settings (the section Renderer.Quality) by name, ignoring case: "Preset" (Low, Medium, High, Ultra,
+		 * Custom) first, then a row per costly setting, so options a later engine adds reach scripts without new
+		 * functions. The value in effect is the project's, the player's choices over it, and over both the preset the
+		 * program's command line fixes for the session (StrataRuntime --quality); renderers follow it from the next frame
+		 * (a change of shadow resolution rebuilds the shadow maps once). Setting a row other than Preset while Preset is
+		 * not Custom switches it to Custom, starting from the look in effect. The player's choices last for the session:
+		 * GraphicsSaveOptions writes them into the game's save directory (the engine's file, outside the save files), from
+		 * which the program running the game reads them when the game starts. Options are numbered 0 to
+		 * GraphicsGetOptionCount - 1 in a fixed order for the engine's run (not across engine versions: use names).
+		 * GraphicsDescribeOption fills an info struct (see StrataScriptGraphicsOptionInfo); GraphicsGetOptionChoice copies
+		 * the name of a Choice option's choice (the text buffer protocol; 0 for anything else). GraphicsGetOption reads
+		 * the value in effect: Bool, Int, Float, or for a Choice a String with the choice's name, copied into stringBuffer
+		 * (at most stringCapacity bytes) with outValue->As.String set to { stringBuffer, full size }. GraphicsSetOption
+		 * takes Bool for Bool, Int for Int, Float or Int for Float, and String (a choice's name, ignoring case) for a
+		 * Choice, never a number (choices are named; their order may change between engine versions, and "2048" is a
+		 * name); it refuses, changing nothing, other types and values out of range. GraphicsResetOptions
+		 * removes the player's choice of an option, or of every option for an empty name (Preset: the project's quality
+		 * applies again). Every function fails (0, false) when the program running the game has no graphics options.
+		 */
+		uint32_t (*GraphicsGetOptionCount)(StrataScriptContext* context);
+		bool (*GraphicsDescribeOption)(StrataScriptContext* context, uint32_t index, StrataScriptGraphicsOptionInfo* outInfo);
+		bool (*GraphicsGetOption)(StrataScriptContext* context, StrataScriptString option, StrataScriptValue* outValue, char* stringBuffer,
+			uint64_t stringCapacity);
+		bool (*GraphicsSetOption)(StrataScriptContext* context, StrataScriptString option, const StrataScriptValue* value);
+		uint64_t (*GraphicsGetOptionChoice)(StrataScriptContext* context, uint32_t index, uint32_t choice, char* buffer, uint64_t capacity);
+		bool (*GraphicsResetOptions)(StrataScriptContext* context, StrataScriptString option);
+		bool (*GraphicsSaveOptions)(StrataScriptContext* context);
 
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;

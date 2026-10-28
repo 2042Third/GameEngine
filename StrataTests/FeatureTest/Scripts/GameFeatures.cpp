@@ -1,8 +1,8 @@
 // The gameplay helpers (Random, Timer, KeyRepeat), scene streaming (a sub-scene loaded and unloaded, a model instantiated
-// many times once everything it uses is in), the game's window and save files, and the game flow (Game) on "Game
-// Features". Every runner provides a window (the editor records the requests, the runtime applies them after the frame or,
-// headless, reports them) and a save directory (the editor's project, the runners' temporary directories, a shipped game's
-// user data: the script deletes what it saved). The in-process runners set
+// many times once everything it uses is in), the game's window, save files and graphics options, and the game flow (Game)
+// on "Game Features". Every runner provides a window (the editor records the requests, the runtime applies them after the
+// frame or, headless, reports them), a save directory (the editor's project, the runners' temporary directories, a shipped
+// game's user data: the script deletes what it saved) and graphics options (the script leaves no choice saved). The in-process runners set
 // QuitFrame to the frame they play after the scenario (PlayFeatureQuitFrame): in it, the script asks for scene loads and
 // then to quit with QuitCode (set by the scene), and the runners check that whoever runs the scene (the headless scene
 // itself, the editor, the game runtime) honors the quit. The real executables' runs never set it, so their games keep
@@ -14,8 +14,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace Strata;
@@ -46,6 +48,7 @@ public:
 		CheckRandom();
 		CheckWindow();
 		CheckSaves();
+		CheckGraphics();
 		m_Countdown.Start(0.5f);
 		m_Ticker.Start(0.1f, true);
 		StartStreaming();
@@ -163,6 +166,39 @@ private:
 		Expect(listed("Feature Progress") && listed("Feature.bin"), "Game::ListSaveFiles");
 		Expect(Game::DeleteSaveFile("Feature Progress") && Game::DeleteSaveFile("Feature.bin"), "Game::DeleteSaveFile");
 		Expect(!Game::ReadSaveText("Feature Progress") && !Game::DeleteSaveFile("Feature.bin"), "deleted saves are gone");
+	}
+
+	// The players' graphics options over the feature project's Custom quality (FeatureTest.stproj: 3 cascades of 1024).
+	void CheckGraphics()
+	{
+		const std::vector<GraphicsOption> options = Graphics::Options();
+		Expect(!options.empty() && options.front().Name == "Preset" && options.front().Type == GraphicsOptionType::Choice
+			&& options.front().Choices.size() == 5 && options.front().Choices[4] == "Custom", "Graphics::Options lists Preset first with its five choices");
+		const std::optional<GraphicsOption> cascades = Graphics::FindOption("shadowcascades");
+		Expect(cascades && cascades->Name == "ShadowCascades" && cascades->Type == GraphicsOptionType::Int && cascades->Min == 1.0 && cascades->Max >= 3.0
+			&& !cascades->Title.empty() && !cascades->Description.empty(), "Graphics::FindOption ignores case");
+		const std::optional<GraphicsOption> lodError = Graphics::FindOption("LODErrorPixels");
+		Expect(lodError && lodError->Type == GraphicsOptionType::Float, "a Float option");
+		Expect(Graphics::Get<std::string>("Preset").has_value() && Graphics::Get<int32_t>("ShadowCascades").has_value()
+			&& Graphics::Get<float>("LODErrorPixels").has_value(), "Graphics::Get reads the value in effect");
+		Expect(Graphics::GetPreset().has_value() && Graphics::GetPresetName(QualityPreset::Ultra) == "Ultra", "Graphics::GetPreset, GetPresetName");
+
+		// A player's preset, then a row, which switches to Custom from the look in effect (unless the program's command line
+		// fixes the preset for the session: the choices are kept, the source says so).
+		Expect(Graphics::SetPreset(QualityPreset::Low), "Graphics::SetPreset");
+		const std::optional<GraphicsOption> preset = Graphics::FindOption("Preset");
+		const bool commandLine = preset && preset->Source == GraphicsOptionSource::CommandLine;
+		Expect(commandLine || (preset && preset->Source == GraphicsOptionSource::Player && Graphics::GetPreset() == QualityPreset::Low),
+			"the player's preset applies");
+		Expect(Graphics::Set<int32_t>("ShadowCascades", 2), "Graphics::Set<int32_t>");
+		Expect(commandLine || (Graphics::GetPreset() == QualityPreset::Custom && Graphics::Get<int32_t>("ShadowCascades") == 2
+			&& Graphics::Get<std::string>("ShadowResolution") == std::string("1024")), "a row switches the preset to Custom from Low's look");
+		Expect(Graphics::Set("ShadowResolution", "2048") && Graphics::Set("ShadowResolution", std::string_view("AutoFine")), "Graphics::Set of a choice");
+		Expect(!commandLine || Graphics::FindOption("ShadowResolution").value_or(GraphicsOption {}).Source == GraphicsOptionSource::CommandLine, "the command line's source");
+		Expect(Graphics::Reset("ShadowCascades") && Graphics::Reset(), "Graphics::Reset");
+		Expect(commandLine || Graphics::FindOption("Preset").value_or(GraphicsOption {}).Source == GraphicsOptionSource::Project, "the project's quality applies again");
+		// No choice is left saved in the runner's save directory.
+		Expect(Graphics::Save(), "Graphics::Save");
 	}
 
 	void CheckRandom()

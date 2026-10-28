@@ -5,6 +5,7 @@
 #include "Strata/Core/EngineServices.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/SaveFiles.h"
+#include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Core/StringUtils.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Input/InputActions.h"
@@ -29,6 +30,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <exception>
 #include <iterator>
 #include <optional>
@@ -3026,6 +3028,348 @@ namespace Strata
 		}
 
 		////////////////////////////////////////////////////////////////////////////////
+		// The game's graphics options (the engine service IGameGraphics of the program running the game)
+		////////////////////////////////////////////////////////////////////////////////
+
+		// The size of StrataScriptGraphicsOptionInfo's first version: the least a module may pass.
+		constexpr uint64_t c_GraphicsOptionInfoFirstSize = offsetof(StrataScriptGraphicsOptionInfo, Source) + sizeof(uint32_t);
+
+		static_assert(StrataScriptGraphicsOptionSource_Project == static_cast<uint32_t>(GameGraphicsSource::Project)
+			&& StrataScriptGraphicsOptionSource_Player == static_cast<uint32_t>(GameGraphicsSource::Player)
+			&& StrataScriptGraphicsOptionSource_CommandLine == static_cast<uint32_t>(GameGraphicsSource::CommandLine),
+			"The graphics options' sources are the ABI's");
+
+		IGameGraphics* RequireGameGraphics(ScriptSystem& system, const char* function)
+		{
+			IGameGraphics* graphics = EngineServices::Get<IGameGraphics>();
+			if (!graphics || !graphics->GetSection())
+			{
+				system.ReportProblem(function, "the program running the game has no graphics options");
+				return nullptr;
+			}
+			return graphics;
+		}
+
+		// The section's fields scripts reach as options: Bool, Int, Float and Enum (Renderer.Quality has no other kind).
+		bool IsGraphicsOption(const SettingsField& field)
+		{
+			return field.Type == SettingsFieldType::Bool || field.Type == SettingsFieldType::Int || field.Type == SettingsFieldType::Float
+				|| field.Type == SettingsFieldType::Enum;
+		}
+
+		uint32_t CountGraphicsOptions(const SettingsSection& section)
+		{
+			return static_cast<uint32_t>(std::count_if(section.Fields.begin(), section.Fields.end(), IsGraphicsOption));
+		}
+
+		// The option of an index, in field order (null out of range).
+		const SettingsField* GetGraphicsOption(const SettingsSection& section, uint32_t index)
+		{
+			uint32_t option = 0;
+			for (const SettingsField& field : section.Fields)
+			{
+				if (!IsGraphicsOption(field))
+					continue;
+				if (option == index)
+					return &field;
+				option++;
+			}
+			return nullptr;
+		}
+
+		// The option of a name, ignoring case (null for an unknown one).
+		const SettingsField* FindGraphicsOption(const SettingsSection& section, std::string_view name)
+		{
+			for (const SettingsField& field : section.Fields)
+			{
+				if (IsGraphicsOption(field) && StringUtils::EqualsIgnoreCase(field.Name, name))
+					return &field;
+			}
+			return nullptr;
+		}
+
+		std::string ListChoices(const SettingsField& field)
+		{
+			std::string choices;
+			for (const std::string& choice : field.Options)
+				choices += (choices.empty() ? "" : ", ") + choice;
+			return choices;
+		}
+
+		// The option a script names, reporting an unreadable or unknown name.
+		const SettingsField* RequireGraphicsOption(ScriptSystem& system, const SettingsSection& section, StrataScriptString option, const char* function)
+		{
+			const std::string_view name = ScriptStringView(option);
+			if (name.empty())
+			{
+				system.ReportProblem(function, "the option's name is empty or not readable (a null pointer, or too long)");
+				return nullptr;
+			}
+			const SettingsField* field = FindGraphicsOption(section, name);
+			if (!field)
+				system.ReportProblem(function, fmt::format("there is no graphics option '{}'", StringUtils::MakeValidUTF8(name)));
+			return field;
+		}
+
+		uint32_t HostGraphicsGetOptionCount(StrataScriptContext* context)
+		{
+			return HostCall("GraphicsGetOptionCount", uint32_t(0), [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "GraphicsGetOptionCount");
+				IGameGraphics* graphics = system ? RequireGameGraphics(*system, "GraphicsGetOptionCount") : nullptr;
+				return graphics ? CountGraphicsOptions(*graphics->GetSection()) : uint32_t(0);
+			});
+		}
+
+		bool HostGraphicsDescribeOption(StrataScriptContext* context, uint32_t index, StrataScriptGraphicsOptionInfo* outInfo)
+		{
+			return HostCall("GraphicsDescribeOption", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "GraphicsDescribeOption");
+				IGameGraphics* graphics = system ? RequireGameGraphics(*system, "GraphicsDescribeOption") : nullptr;
+				if (!graphics)
+					return false;
+				if (!outInfo)
+				{
+					system->ReportProblem("GraphicsDescribeOption", "the info pointer is null");
+					return false;
+				}
+				if (outInfo->StructSize < c_GraphicsOptionInfoFirstSize)
+				{
+					system->ReportProblem("GraphicsDescribeOption", fmt::format("the info's StructSize {} is smaller than its first version's {} bytes",
+						outInfo->StructSize, c_GraphicsOptionInfoFirstSize));
+					return false;
+				}
+				const SettingsField* field = GetGraphicsOption(*graphics->GetSection(), index);
+				if (!field)
+				{
+					system->ReportProblem("GraphicsDescribeOption", fmt::format("there is no option {} (the game has {})", index,
+						CountGraphicsOptions(*graphics->GetSection())));
+					return false;
+				}
+				// The strings point into the frozen registry's section, which outlives every module call.
+				StrataScriptGraphicsOptionInfo info = {};
+				info.Name = StrataScriptString { field->Name.data(), field->Name.size() };
+				info.Title = StrataScriptString { field->Title.data(), field->Title.size() };
+				info.Description = StrataScriptString { field->Description.data(), field->Description.size() };
+				switch (field->Type)
+				{
+					case SettingsFieldType::Bool:
+						info.Type = StrataScriptGraphicsOptionType_Bool;
+						break;
+					case SettingsFieldType::Int:
+						info.Type = StrataScriptGraphicsOptionType_Int;
+						info.Min = field->Min;
+						info.Max = field->Max;
+						break;
+					case SettingsFieldType::Float:
+						info.Type = StrataScriptGraphicsOptionType_Float;
+						info.Min = field->Min;
+						info.Max = field->Max;
+						break;
+					default:
+						info.Type = StrataScriptGraphicsOptionType_Choice;
+						info.ChoiceCount = static_cast<uint32_t>(field->Options.size());
+						break;
+				}
+				info.Source = static_cast<uint32_t>(graphics->GetSource(field->Name).value_or(GameGraphicsSource::Project));
+				// The module's struct may be older (smaller, never below the first version) or newer (larger) than the engine's.
+				const uint32_t filled = static_cast<uint32_t>(std::min<uint64_t>(outInfo->StructSize, sizeof(StrataScriptGraphicsOptionInfo)));
+				info.StructSize = filled;
+				std::memcpy(outInfo, &info, filled);
+				return true;
+			});
+		}
+
+		bool HostGraphicsGetOption(StrataScriptContext* context, StrataScriptString option, StrataScriptValue* outValue, char* stringBuffer,
+			uint64_t stringCapacity)
+		{
+			return HostCall("GraphicsGetOption", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "GraphicsGetOption");
+				IGameGraphics* graphics = system ? RequireGameGraphics(*system, "GraphicsGetOption") : nullptr;
+				if (!graphics)
+					return false;
+				if (!outValue)
+				{
+					system->ReportProblem("GraphicsGetOption", "the output pointer is null");
+					return false;
+				}
+				const SettingsField* field = RequireGraphicsOption(*system, *graphics->GetSection(), option, "GraphicsGetOption");
+				if (!field)
+					return false;
+				const nlohmann::json& effective = graphics->GetEffectiveValue();
+				const auto member = effective.find(field->Name);
+				if (member == effective.end())
+					return false;
+				StrataScriptValue result = {};
+				if (field->Type == SettingsFieldType::Bool && member->is_boolean())
+				{
+					result.Type = StrataScriptValueType_Bool;
+					result.As.Bool = member->get<bool>();
+				}
+				else if (field->Type == SettingsFieldType::Int && member->is_number_integer())
+				{
+					result.Type = StrataScriptValueType_Int;
+					result.As.Int = member->get<int64_t>();
+				}
+				else if (field->Type == SettingsFieldType::Float && member->is_number())
+				{
+					result.Type = StrataScriptValueType_Float;
+					result.As.Float = member->get<float>();
+				}
+				else if (field->Type == SettingsFieldType::Enum && member->is_string())
+				{
+					// The choice's name goes into the caller's buffer; the size tells it whether the buffer was large enough.
+					const std::string& text = member->get_ref<const std::string&>();
+					CopyText(text, stringBuffer, stringCapacity);
+					result.Type = StrataScriptValueType_String;
+					result.As.String = StrataScriptString { stringBuffer, static_cast<uint64_t>(text.size()) };
+				}
+				else
+				{
+					return false;
+				}
+				*outValue = result;
+				return true;
+			});
+		}
+
+		bool HostGraphicsSetOption(StrataScriptContext* context, StrataScriptString option, const StrataScriptValue* value)
+		{
+			return HostCall("GraphicsSetOption", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "GraphicsSetOption");
+				IGameGraphics* graphics = system ? RequireGameGraphics(*system, "GraphicsSetOption") : nullptr;
+				if (!graphics)
+					return false;
+				if (!value)
+				{
+					system->ReportProblem("GraphicsSetOption", "the value pointer is null");
+					return false;
+				}
+				const SettingsField* field = RequireGraphicsOption(*system, *graphics->GetSection(), option, "GraphicsSetOption");
+				if (!field)
+					return false;
+				// The value in the field's stored form; a type the option does not take is refused before the section sees it.
+				nlohmann::json stored;
+				std::string refused;
+				switch (field->Type)
+				{
+					case SettingsFieldType::Bool:
+						if (value->Type == StrataScriptValueType_Bool)
+							stored = value->As.Bool;
+						else
+							refused = fmt::format("'{}' takes a Bool", field->Name);
+						break;
+					case SettingsFieldType::Int:
+						if (value->Type == StrataScriptValueType_Int)
+							stored = value->As.Int;
+						else
+							refused = fmt::format("'{}' takes an Int", field->Name);
+						break;
+					case SettingsFieldType::Float:
+						if (value->Type == StrataScriptValueType_Float && std::isfinite(value->As.Float))
+							stored = static_cast<double>(value->As.Float);
+						else if (value->Type == StrataScriptValueType_Int)
+							stored = static_cast<double>(value->As.Int);
+						else
+							refused = fmt::format("'{}' takes a finite Float or an Int", field->Name);
+						break;
+					default:
+					{
+						// Choices are named: a number is no choice, whatever its position (their order may change).
+						const std::string_view name = value->Type == StrataScriptValueType_String ? ScriptStringView(value->As.String) : std::string_view();
+						if (name.empty())
+							refused = fmt::format("'{}' takes the name of a choice ({})", field->Name, ListChoices(*field));
+						else
+							stored = std::string(name);
+						break;
+					}
+				}
+				if (!refused.empty())
+				{
+					system->ReportProblem("GraphicsSetOption", refused);
+					return false;
+				}
+				std::string error;
+				if (!graphics->SetOption(field->Name, stored, &error))
+				{
+					system->ReportProblem("GraphicsSetOption", fmt::format("{}: {}", field->Name, StringUtils::MakeValidUTF8(error)));
+					return false;
+				}
+				return true;
+			});
+		}
+
+		uint64_t HostGraphicsGetOptionChoice(StrataScriptContext* context, uint32_t index, uint32_t choice, char* buffer, uint64_t capacity)
+		{
+			return HostCall("GraphicsGetOptionChoice", uint64_t(0), [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "GraphicsGetOptionChoice");
+				IGameGraphics* graphics = system ? RequireGameGraphics(*system, "GraphicsGetOptionChoice") : nullptr;
+				if (!graphics)
+					return uint64_t(0);
+				const SettingsField* field = GetGraphicsOption(*graphics->GetSection(), index);
+				if (!field || field->Type != SettingsFieldType::Enum)
+				{
+					system->ReportProblem("GraphicsGetOptionChoice", field ? fmt::format("'{}' has no choices", field->Name)
+						: fmt::format("there is no option {}", index));
+					return uint64_t(0);
+				}
+				if (choice >= field->Options.size())
+				{
+					system->ReportProblem("GraphicsGetOptionChoice", fmt::format("'{}' has no choice {} (it has {})", field->Name, choice, field->Options.size()));
+					return uint64_t(0);
+				}
+				return CopyText(field->Options[choice], buffer, capacity);
+			});
+		}
+
+		bool HostGraphicsResetOptions(StrataScriptContext* context, StrataScriptString option)
+		{
+			return HostCall("GraphicsResetOptions", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "GraphicsResetOptions");
+				IGameGraphics* graphics = system ? RequireGameGraphics(*system, "GraphicsResetOptions") : nullptr;
+				if (!graphics)
+					return false;
+				// An empty name resets every option: a name that cannot be read must not become one.
+				const std::string_view name = ScriptStringView(option);
+				if (option.Size > 0 && name.empty())
+				{
+					system->ReportProblem("GraphicsResetOptions", "the option's name is not readable (a null pointer, or too long)");
+					return false;
+				}
+				std::string error;
+				if (!graphics->ResetOptions(name, &error))
+				{
+					system->ReportProblem("GraphicsResetOptions", StringUtils::MakeValidUTF8(error));
+					return false;
+				}
+				return true;
+			});
+		}
+
+		bool HostGraphicsSaveOptions(StrataScriptContext* context)
+		{
+			return HostCall("GraphicsSaveOptions", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "GraphicsSaveOptions");
+				IGameGraphics* graphics = system ? RequireGameGraphics(*system, "GraphicsSaveOptions") : nullptr;
+				if (!graphics)
+					return false;
+				std::string error;
+				if (!graphics->SaveOptions(&error))
+				{
+					system->ReportProblem("GraphicsSaveOptions", error);
+					return false;
+				}
+				return true;
+			});
+		}
+
+		////////////////////////////////////////////////////////////////////////////////
 		// The table
 		////////////////////////////////////////////////////////////////////////////////
 
@@ -3188,7 +3532,14 @@ namespace Strata
 	X(InputSaveBindings) \
 	X(InputBeginBindingCapture) \
 	X(InputPollBindingCapture) \
-	X(InputCancelBindingCapture)
+	X(InputCancelBindingCapture) \
+	X(GraphicsGetOptionCount) \
+	X(GraphicsDescribeOption) \
+	X(GraphicsGetOption) \
+	X(GraphicsSetOption) \
+	X(GraphicsGetOptionChoice) \
+	X(GraphicsResetOptions) \
+	X(GraphicsSaveOptions)
 
 		struct HostFunctionEntry
 		{

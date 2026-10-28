@@ -1608,13 +1608,25 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   `ReadSaveFile`/`ReadSaveText`, `DeleteSaveFile`, `ListSaveFiles`) to `IGameSaves` (`<user data>/<Game>/Saves` in a
   shipped game, `<project>/.strata/Saves` in the editor). Save names are checked in the engine before any path is formed
   (`SaveFiles::ValidateName`: no separators, no "..", no device names) and writes are atomic. Code that runs a game
-  in-process (tests, tools) provides both, or the calls fail and are reported, and provides `IProjectSettings` when it runs
-  a project and calls `InputActions::Update()` after its frame's input ([Input actions](#input-actions)).
+  in-process (tests, tools) provides both and `IGameGraphics` (a `GameGraphicsService`), or the calls fail and are
+  reported, and provides `IProjectSettings` when it runs a project and calls `InputActions::Update()` after its frame's
+  input ([Input actions](#input-actions)).
+- Graphics options (`StrataScript/Graphics.h`; host functions `GraphicsGetOptionCount` to `GraphicsSaveOptions`): a
+  game's options menu reads and sets the players' graphics options through `IGameGraphics` ([Quality
+  settings](#quality-settings), "Players' options"): the options are `Renderer.Quality`'s fields of type Bool, Int, Float
+  and Enum, by name ignoring case, in field order ("Preset" first). `Graphics::Options` and `FindOption` describe them
+  (title, description, range, choices, the source of the value in effect), `Get<T>` reads the value in effect (a
+  Choice as its name), `Set` sets the player's choice (Bool, Int, Float or Int for a Float, a choice by its name: a
+  number is never a choice, since choices are reordered between versions), `GetPreset`, `SetPreset` and
+  `GetPresetName` wrap "Preset" (`QualityPreset`, the order of its choices, which `Scripting.Graphics` checks),
+  `Reset` removes a choice (empty: every one) and `Save` writes them to the players' file for the next run (explicitly:
+  the game decides when a choice is final). Options are numbered only to enumerate; reads and writes go by name, so rows
+  a later engine adds reach scripts without new functions. Only `GameGraphicsService` touches `GraphicsOptions.json`.
 - Host function order: the character controller, gamepad, cursor, window, save file and collision layer functions
   (`CharacterMove` to `PhysicsGetLayerIndex`) are appended to ABI version 1 after the Animator functions, then wave 4's
   world streaming functions (`WorldRequestCellsAround` to `WorldIsLayerEnabled`), then wave 6's input action functions
   (`InputIsActionDown` to `InputSaveBindings`, then the capture's `InputBeginBindingCapture` to
-  `InputCancelBindingCapture`).
+  `InputCancelBindingCapture`), then wave 7's graphics options (`GraphicsGetOptionCount` to `GraphicsSaveOptions`).
 - World streaming: `World::RequestCellsAround` (a `WorldCellRequest`, released with `Release`), `IsLoadedAround`,
   `SetLayerEnabled` and `IsLayerEnabled` (`StrataScript/World.h`) go through the scene service `IWorldStreaming` the
   World system offers in every running scene; in a scene that streams no world (`IWorldStreaming::IsStreaming` false)
@@ -1636,7 +1648,12 @@ ABI rules:
   catches every exception in the module and reports it through `ReportException` (the instance is disabled).
 - The module description (`StrataScriptModuleAPI`) is the only extensible struct a module writes into engine memory:
   the engine announces its size in `StructSize`, the module writes at most that much and reports its own size
-  (`Detail::WriteModuleAPI`), so modules of a newer SDK with appended members load into older engines safely.
+  (`Detail::WriteModuleAPI`), so modules of a newer SDK with appended members load into older engines safely. The
+  opposite direction, an extensible struct in module memory the engine fills, is `StrataScriptGraphicsOptionInfo`
+  (`GraphicsDescribeOption`): the module gives its capacity in `StructSize`, the engine writes at most that much (and at
+  most its own struct) and sets `StructSize` to the bytes it filled, refusing a capacity below the first version's 80
+  bytes; the module reads a member only when `ST_SCRIPT_HAS_MEMBER` covers it. The frozen structs
+  (`StrataScriptRaycastHit`, `StrataScriptCharacterState`) stay frozen: they carry no size.
 - Every call into module code goes through `ScriptModule` (`CrashGuard`), including loading and unloading the library.
   Module memory (descriptors, strings) is read only inside guarded calls; copy it into locals of the guarded lambda,
   then move the complete result out, so a fault can never leave engine objects half-written.
