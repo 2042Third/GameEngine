@@ -3701,20 +3701,30 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
     slower memory of 2026-10-27): 0.021 ms, twice the spec's 0.01 ms target. Six `PixelRandom` values a pixel (two hashes
     each) are what it costs; the noise stays as it is until a cheaper hash of the same statistics replaces it, with its
     CPU twin and `Renderer.PostProcessMath`'s statistics.
-- **Tone curves** (`TonemapOperator`): Filmic (`Include/Filmic.glsl`, `PostProcessMath::ApplyFilmic`) is the default of new
-  Post Process components, of scenes without one and of the Basic 3D template; ACES, AgX, Khronos Neutral and Reinhard are
-  unchanged, so scenes that stored them look as before. Filmic works per channel on an inset color after AgX's principle
-  (a per-channel curve on a gamut drawn in toward white takes bright saturated colors to white instead of skewing their
-  hue; the outset gives back the saturation the inset took): for t = log2(x / 0.18), below middle gray
-  `y = 0.18 * 2^(Ct t + (C0 - Ct) tau (exp(t / tau) - 1))`, above it `y = 0.18 + 0.82 (1 - (1 - t / Tw)^q)` up to white at
-  Tw stops, `q = C0 0.18 ln2 Tw / 0.82` so the log-log slope is C0 at middle gray. `Toe` sets the toe's slope
-  `Ct = C0 (0.85 + 0.5 Toe)`, `Shoulder` the white point `Tw = 6.5 + 3 (Shoulder - 0.5)` stops (5 to 8); both reach the
-  shader through `TonemapConstants`' Filmic block (`PostProcessMath::MakeFilmicCurve`). The inset and outset matrices,
-  C0 and tau are fitted by `Tools/FitFilmic.py` against targets stated in its header (middle gray, contrast, white, toe,
-  hue in ICtCp, the path to white, saturation, a monotonic shape) and written to `Include/FilmicConstants.glsl` and
+- **Tone curves** (`TonemapOperator`): Filmic (`Include/Filmic.glsl`, `PostProcessMath::ApplyFilmic`) is the default of
+  new Post Process components, of scenes without one and of the Basic 3D template; ACES, AgX, Khronos Neutral and
+  Reinhard are unchanged, so scenes that stored them look as before. Filmic works on an inset color, per channel in the
+  highlights after AgX's principle (a per-channel curve on a gamut drawn in toward white takes bright saturated colors
+  to white instead of skewing their hue; the outset gives back the saturation the inset took), and on the color as a
+  whole below middle gray: there it scales the inset color by the curve of its largest channel over that channel, and
+  the two blend by a smoothstep over 0 to 4 stops of that channel (`c_FilmicChannelStart`, `c_FilmicChannelEnd`; the
+  largest channel is on the curve either way, gray exactly). A per-channel toe raises the channels' ratios to its slope
+  (about 1.5) and the outset's negative lobes push the weak channel to 0: dark skies, shaded foliage and blue flowers
+  turned into deep primaries (a sky color at 1.7 to 1.9 times its chroma from -1 to -4 stops, its red clipped; ACES at
+  the samples' old +1 EV 1.25 to 1.5). The curve, for t = log2(x / 0.18): below middle gray `y = 0.18 * 2^(Ct t + (C0 -
+  Ct) tau (exp(t / tau) - 1))`, above it `y = 0.18 + 0.82 (1 - (1 - t / Tw)^q)` up to white at Tw stops, `q = C0 0.18
+  ln2 Tw / 0.82` so the log-log slope is C0 at middle gray. `Toe` sets the toe's slope `Ct = C0 (0.85 + 0.5 Toe)`,
+  `Shoulder` the white point `Tw = 6.5 + 3 (Shoulder - 0.5)` stops (5 to 8); both reach the shader through
+  `TonemapConstants`' Filmic block (`PostProcessMath::MakeFilmicCurve`). The inset and outset matrices, C0 and tau are
+  fitted by `Tools/FitFilmic.py` against targets stated in its header (middle gray, contrast, white, toe, hue in ICtCp
+  within 10 and 6 degrees, the path to white, saturation at middle gray, a monotonic shape, and the shadows' saturation:
+  at most 1.30 times the scene's chroma below middle gray) and written to `Include/FilmicConstants.glsl` and
   `Renderer/FilmicConstants.h`: never edit them by hand (`FitFilmic.py --check` checks the committed ones);
   `Renderer.PostProcessMath` checks the targets again on the C++ reference and `GPU.SceneRenderer.Camera` the shader
-  against it. Thumbnails changed with the default curve (`ThumbnailCache::c_Version` 6).
+  against it. As fitted (C0 1.398): the sky color keeps 1.15 of its chroma from -6 stops to middle gray, skin 1.05,
+  foliage 0.98 (ACES at +1 EV: 1.5, 1.4, 1.26), hue within 8 degrees on the saturated colors and 5 on skin, foliage and
+  sky; a dark sky (0.02, 0.06, 0.15) shows at sRGB (11, 60, 99), where the per-channel toe showed (0, 39, 95).
+  Thumbnails changed with the default curve (`ThumbnailCache::c_Version` 6) and its shadows (8).
 - **Color** (`PostProcessMath::MakeColorGrading`, `TonemapConstants`' color block): on scene-linear light after the bloom
   and before `Contrast` and the curve, `c1 = M c` with `M = diag(ColorSlope) * W`, `c2 = max(c1 + ColorOffset * 0.18, 0)`,
   `c3 = 0.18 (c2 / 0.18)^ColorPower`; `Saturation` stays after the curve. The white balance `W`

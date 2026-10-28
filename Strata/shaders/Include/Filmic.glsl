@@ -4,7 +4,7 @@
 #include "Include/FilmicConstants.glsl"
 
 // The Filmic tone curve (TonemapOperator::Filmic; its CPU reference is Renderer/PostProcessMath.h's ApplyFilmic, its form and
-// fit Tools/FitFilmic.py). Per channel, for an exposed value x and t = log2(x / 0.18), the stops from middle gray: below
+// fit Tools/FitFilmic.py). For an exposed value x and t = log2(x / 0.18), the stops from middle gray: below
 // middle gray y = 0.18 * 2^(Ct t + (C0 - Ct) tau (exp(t / tau) - 1)), whose log-log slope turns from C0 at middle gray to the
 // toe's Ct below it; above it y = 0.18 + 0.82 (1 - (1 - t / Tw)^q) up to white, reached with zero slope Tw stops above
 // middle gray. Middle gray shows as middle gray.
@@ -20,13 +20,22 @@ float FilmicCurve(float x, float toeSlope, float whiteStops, float shoulderPower
 	return c_FilmicMiddleGray + (1.0 - c_FilmicMiddleGray) * (1.0 - pow(1.0 - t / whiteStops, shoulderPower));
 }
 
-// The curve per channel on the inset color, outset back: bright saturated colors go to white without skewing their hue.
-// Display-linear, in [0, 1].
+// The curve on the inset color, outset back. In the highlights it works per channel, so bright saturated colors go to white
+// without skewing their hue; below middle gray it scales the inset color as a whole (the curve of its largest channel over
+// that channel), so the toe's slope, above 1, does not raise the channels' ratios to its power: shadows and dark skies keep
+// the scene's chroma instead of deepening into primaries. The two blend over c_FilmicChannelStart to c_FilmicChannelEnd
+// stops of the largest channel, which is on the curve either way. Display-linear, in [0, 1].
 vec3 TonemapFilmic(vec3 color, float toeSlope, float whiteStops, float shoulderPower)
 {
 	vec3 inset = c_FilmicInset * max(color, vec3(0.0));
-	vec3 curved = vec3(FilmicCurve(inset.r, toeSlope, whiteStops, shoulderPower), FilmicCurve(inset.g, toeSlope, whiteStops, shoulderPower),
+	float largest = max(inset.r, max(inset.g, inset.b));
+	if (!(largest > 0.0))
+		return vec3(0.0);
+	float largestCurved = FilmicCurve(largest, toeSlope, whiteStops, shoulderPower);
+	vec3 perChannel = vec3(FilmicCurve(inset.r, toeSlope, whiteStops, shoulderPower), FilmicCurve(inset.g, toeSlope, whiteStops, shoulderPower),
 		FilmicCurve(inset.b, toeSlope, whiteStops, shoulderPower));
+	float channel = smoothstep(c_FilmicChannelStart, c_FilmicChannelEnd, log2(largest / c_FilmicMiddleGray));
+	vec3 curved = mix(inset * (largestCurved / largest), perChannel, channel);
 	return clamp(c_FilmicOutset * curved, vec3(0.0), vec3(1.0));
 }
 

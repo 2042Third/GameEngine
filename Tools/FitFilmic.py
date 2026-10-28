@@ -7,9 +7,13 @@ The outputs are committed (CI never runs this script); run it again only to chan
     python Tools/FitFilmic.py --check            # check the committed constants against the targets, write nothing
     python Tools/FitFilmic.py --from-committed   # refine the committed constants as one more (the first) start
 
-The curve (TonemapOperator::Filmic) works per channel on an inset color, after AgX's principle: a per-channel curve on a
-gamut drawn in toward white desaturates bright colors toward white instead of skewing their hue, and the outset gives
-back the saturation the inset took. For an exposed scene value x and t = log2(x / 0.18), the stops from middle gray:
+The curve (TonemapOperator::Filmic) works on an inset color, per channel in the highlights after AgX's principle: a
+per-channel curve on a gamut drawn in toward white desaturates bright colors toward white instead of skewing their hue,
+and the outset gives back the saturation the inset took. Below middle gray it scales the inset color as a whole (the
+curve of its largest channel over that channel), so shadows keep the scene's channel ratios: a per-channel toe, whose
+log-log slope is above 1, raises them to that power and, through the outset's negative lobes, pushed dark skies and blues
+to deep primaries (1.9 times the scene's chroma, more than ACES at +1 EV). For an exposed scene value x and
+t = log2(x / 0.18), the stops from middle gray:
 
     shadows, t < 0:        y = 0.18 * 2^(Ct t + (C0 - Ct) tau (exp(t / tau) - 1))
     highlights, 0 <= t:    y = 0.18 + 0.82 (1 - (1 - t / Tw)^q) below Tw, 1 from Tw on, q = C0 0.18 ln2 Tw / 0.82
@@ -21,15 +25,27 @@ Tw = 6.5 + 3 (Shoulder - 0.5) stops (Renderer/PostProcessMath.cpp, MakeFilmicCur
 The gamut: row i of the inset is (1 - s_i) e_i + s_i (1/3 (1, 1, 1) + rho_i (e_{i+1} - e_{i-1})), indices mod 3: each
 channel takes a share s_i of the mean, turned by rho_i toward its next or previous neighbor. Every row sums to 1, so
 neutral colors pass unchanged and the gray ramp is exactly the curve. The outset is the inverse of a matrix of the same
-form with its own s'_i and rho'_i. Bounds: s in [0, 0.45], rho in [-0.15, 0.15]. The operator is
-o = clamp(outset * curve(inset * max(color, 0)), 0, 1), display-linear, before the saturation and the sRGB encode.
+form with its own s'_i and rho'_i. Bounds: s in [0, 0.45], rho in [-0.15, 0.15]. The operator, with v = inset *
+max(color, 0) and m = max(v):
+
+    ratio = v * curve(m) / m                  (the color as a whole; its largest channel on the curve)
+    channel = (curve(v_r), curve(v_g), curve(v_b))
+    w = smoothstep(CHANNEL_START, CHANNEL_END, log2(m / 0.18))
+    o = clamp(outset * mix(ratio, channel, w), 0, 1)
+
+display-linear, before the saturation and the sRGB encode; the largest channel is curve(m) either way, and gray (all
+channels m) is exactly the curve. CHANNEL_START and CHANNEL_END (0 and 4 stops) are the form's, not fitted: the blend
+ends 4 stops above middle gray, so the path to white (T6) is the per-channel curve's, and it is wide enough that the
+blend's turn never makes a channel decrease (T8).
 
 The fit: the twelve matrix values, tau in [0.75, 3] and C0 in [1.35, 1.45], by Nelder-Mead (written here) from 8 seeded
 starts (and, with --from-committed, the committed constants first), each refined again from 3 seeded hops, minimizing the
 worst hue deviation (as a share of its color's limit, in tens of degrees) + 0.1 times the sum of the deviations + 40 times
-the saturation band's violations + 400 times the path to white's + 10^6 times the decreases T8 forbids (on a coarser
-grid), subject to the targets below. It exits 1 and writes nothing when a target is not met. The committed constants came
-from the seeded starts refined three times with --from-committed --starts 0 as the targets settled (T6 and T8 made hard).
+the saturation band's and the shadows' saturation limit's violations + 400 times the path to white's + 10^6 times the
+decreases T8 forbids (on a coarser grid), subject to the targets below. It exits 1 and writes nothing when a target is not
+met. The committed constants came from the per-channel form's (the seeded starts refined three times with
+--from-committed --starts 0 as its targets settled), refitted from there for this form with T9 (two seeded starts and
+the earlier constants, blending from 0 to 3 stops), then refined with --from-committed --starts 0 at 0 to 4 stops.
 
 Targets (Toe and Shoulder 0.5 unless named):
     T1 middle gray: y(0.18) = 0.18.
@@ -38,21 +54,24 @@ Targets (Toe and Shoulder 0.5 unless named):
     T4 toe: 0.005 shows at sRGB code 2 to 4.
     T5 hue: ten test colors (scene-linear sRGB, scaled to luminance 0.18), each ramped from -4 to +7 stops in quarter
        stops. Hue is measured in ICtCp (ITU-R BT.2100: BT.709 to BT.2020 by BT.2087's matrix, the LMS matrix, PQ with a
-       display white of 100 nits). The displayed hue stays within 12.5 degrees (the seven saturated colors) and 7.5
-       degrees (skin, foliage, sky) of the hue of the scene color scaled linearly to the same display luminance, while the
-       displayed chroma is at least 15% of the ramp's largest. (Planned at 10 and 6; with T6 and T8 held, the fit's form
-       reaches about 12.2 on blue and 7.3 on sky, where ACES drifts 29.1 and 5.9 and AgX 13.0 and 6.9: the report
-       prints all three per color, and the limits keep the planned ratio between the two groups.)
+       display white of 100 nits). The displayed hue stays within 10 degrees (the seven saturated colors) and 6 degrees
+       (skin, foliage, sky) of the hue of the scene color scaled linearly to the same display luminance, while the
+       displayed chroma is at least 15% of the ramp's largest. (The per-channel form reached only 12.3 on blue and 7.1 on
+       sky; ACES drifts 29.1 and 5.9, AgX 13.0 and 6.9: the report prints all three per color.)
     T6 path to white: every test color at +Tw + 1 stops has every channel at least 0.95.
     T7 saturation: at 0 stops, each color's displayed ICtCp chroma over that of the scene color scaled linearly to the same
        display luminance lies in [0.90, 1.20].
     T8 shape: monotonic per channel and in luminance over [-12, +10] stops for Toe and Shoulder on a 0.25 grid; q >= 1.
+    T9 shadows' saturation: below middle gray (the ramp's steps from -4 to -0.25 stops), each color's saturation ratio (as
+       T7's) is at most 1.30: shadows and dark skies keep about the scene's chroma (ACES at +1 EV, the samples' 0.6.0
+       look, reaches 1.50 on sky and 1.41 on skin; the per-channel form reached 1.88 on sky).
 
 Outputs (the same numbers, 9 significant digits):
     Strata/shaders/Include/FilmicConstants.glsl   c_FilmicInset, c_FilmicOutset (column-major, as GLSL builds them),
-                                                  c_FilmicContrast (C0), c_FilmicToeWidth (tau), c_FilmicMiddleGray
+                                                  c_FilmicContrast (C0), c_FilmicToeWidth (tau), c_FilmicMiddleGray,
+                                                  c_FilmicChannelStart, c_FilmicChannelEnd
     Strata/src/Strata/Renderer/FilmicConstants.h  Strata::FilmicConstants::c_Inset, c_Outset, c_Contrast, c_ToeWidth,
-                                                  c_MiddleGray
+                                                  c_MiddleGray, c_ChannelStart, c_ChannelEnd
 
 Only the standard library is used; a run is deterministic.
 """
@@ -72,20 +91,25 @@ MIDDLE_GRAY = 0.18
 LUMINANCE = (0.2126, 0.7152, 0.0722)
 
 TEST_COLORS = [
-    ("red", (1.0, 0.05, 0.05), 12.5),
-    ("green", (0.05, 1.0, 0.05), 12.5),
-    ("blue", (0.05, 0.05, 1.0), 12.5),
-    ("yellow", (1.0, 1.0, 0.05), 12.5),
-    ("cyan", (0.05, 1.0, 1.0), 12.5),
-    ("magenta", (1.0, 0.05, 1.0), 12.5),
-    ("orange", (1.0, 0.4, 0.05), 12.5),
-    ("skin", (0.8, 0.5, 0.35), 7.5),
-    ("foliage", (0.2, 0.4, 0.08), 7.5),
-    ("sky", (0.25, 0.45, 0.9), 7.5),
+    ("red", (1.0, 0.05, 0.05), 10.0),
+    ("green", (0.05, 1.0, 0.05), 10.0),
+    ("blue", (0.05, 0.05, 1.0), 10.0),
+    ("yellow", (1.0, 1.0, 0.05), 10.0),
+    ("cyan", (0.05, 1.0, 1.0), 10.0),
+    ("magenta", (1.0, 0.05, 1.0), 10.0),
+    ("orange", (1.0, 0.4, 0.05), 10.0),
+    ("skin", (0.8, 0.5, 0.35), 6.0),
+    ("foliage", (0.2, 0.4, 0.08), 6.0),
+    ("sky", (0.25, 0.45, 0.9), 6.0),
 ]
 RAMP_STOPS = [-4.0 + 0.25 * index for index in range(45)]  # -4 to +7
 CHROMA_FLOOR = 0.15
 SATURATION_BAND = (0.90, 1.20)
+SHADOW_SATURATION_LIMIT = 1.30
+# The stops of the inset color's largest channel over which the operator turns from scaling the color as a whole to the
+# per-channel curve (the form's, not fitted).
+CHANNEL_START = 0.0
+CHANNEL_END = 4.0
 S_BOUNDS = (0.0, 0.45)
 RHO_BOUNDS = (-0.15, 0.15)
 TAU_BOUNDS = (0.75, 3.0)
@@ -158,9 +182,19 @@ def unpack(params):
     return inset, outset, params[12], params[13]
 
 
+def smoothstep(edge0, edge1, x):
+    t = min(max((x - edge0) / (edge1 - edge0), 0.0), 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
 def filmic(color, inset, outset, contrast, tau, look):
     v = apply(inset, tuple(max(c, 0.0) for c in color))
-    y = tuple(curve(c, contrast, tau, look) for c in v)
+    largest = max(v)
+    if largest <= 0.0:
+        return (0.0, 0.0, 0.0)
+    gain = curve(largest, contrast, tau, look) / largest
+    w = smoothstep(CHANNEL_START, CHANNEL_END, math.log2(largest / MIDDLE_GRAY))
+    y = tuple((1.0 - w) * c * gain + w * curve(c, contrast, tau, look) for c in v)
     return tuple(min(max(c, 0.0), 1.0) for c in apply(outset, y))
 
 
@@ -244,7 +278,7 @@ def scaled_to_gray(color):
 # --- Targets ----------------------------------------------------------------------------------------------------------
 
 def ramp_measures(operator):
-    """Per test color: (worst hue deviation over the checked steps, saturation ratio at 0 stops)."""
+    """Per test color: (worst hue deviation over the checked steps, saturation ratio at 0 stops, the largest below it)."""
     results = []
     for name, color, limit in TEST_COLORS:
         base = scaled_to_gray(color)
@@ -267,7 +301,8 @@ def ramp_measures(operator):
             worst = max(worst, hue_difference(hue, reference[0]))
         zero = next(step for step in steps if step[0] == 0.0)
         saturation = zero[2] / zero[3][1] if zero[3] and zero[3][1] > 0.0 else 0.0
-        results.append((name, worst, limit, saturation))
+        shadows = max((step[2] / step[3][1] for step in steps if step[0] < 0.0 and step[3] and step[3][1] > 0.0), default=0.0)
+        results.append((name, worst, limit, saturation, shadows))
     return results
 
 
@@ -336,7 +371,7 @@ def evaluate(params):
     total = 0.0
     band_violation = 0.0
     white_violation = 0.0
-    for name, worst, limit, saturation in measures:
+    for name, worst, limit, saturation, shadows in measures:
         total += worst
         if worst > limit:
             failures.append(f"T5: {name} drifts {worst:.2f} degrees (limit {limit:.0f})")
@@ -344,6 +379,10 @@ def evaluate(params):
             failures.append(f"T7: {name}'s saturation ratio {saturation:.3f}")
         # The fit aims inside the band, so the result does not sit on its edge.
         band_violation += max(0.0, SATURATION_BAND[0] + 0.005 - saturation, saturation - SATURATION_BAND[1] + 0.005)
+        # T9
+        if shadows > SHADOW_SATURATION_LIMIT:
+            failures.append(f"T9: {name}'s saturation ratio below middle gray reaches {shadows:.3f}")
+        band_violation += max(0.0, shadows - SHADOW_SATURATION_LIMIT + 0.005)
     # T6
     for name, color, _ in TEST_COLORS:
         shown = operator(tuple(c * 2.0 ** (look[1] + 1.0) for c in scaled_to_gray(color)))
@@ -353,7 +392,7 @@ def evaluate(params):
     shape, _ = shape_violation(inset, outset, contrast, tau, FIT_SHAPE_GRID, FIT_SHAPE_STOPS)
     # Each color's hue deviation counts as a share of its limit (in tens of degrees), so skin, foliage and sky, whose limit is 6
     # degrees, are not traded for the saturated colors.
-    worst_hue = max(10.0 * worst / limit for _, worst, limit, _ in measures)
+    worst_hue = max(10.0 * worst / limit for _, worst, limit, _, _ in measures)
     cost = worst_hue + 0.1 * total + 40.0 * band_violation + 400.0 * white_violation + 1.0e6 * shape
     return cost, failures, measures
 
@@ -475,13 +514,17 @@ def write_outputs(params):
         "#define STRATA_FILMIC_CONSTANTS_GLSL\n\n"
         f"// {banner}.\n"
         f"{parameter_lines}\n"
-        "// The Filmic curve's gamut: the inset before the per-channel curve and the outset after it (column-major).\n"
+        "// The Filmic curve's gamut: the inset before the curve and the outset after it (column-major).\n"
         f"const mat3 c_FilmicInset = {glsl_matrix(inset)};\n"
         f"const mat3 c_FilmicOutset = {glsl_matrix(outset)};\n"
         "// The log-log slope at middle gray (C0), the stops over which the toe turns to its own slope (tau), middle gray.\n"
         f"const float c_FilmicContrast = {float_literal(contrast)};\n"
         f"const float c_FilmicToeWidth = {float_literal(tau)};\n"
-        "const float c_FilmicMiddleGray = 0.18;\n\n"
+        "const float c_FilmicMiddleGray = 0.18;\n"
+        "// The stops of the inset color's largest channel over which the curve turns from scaling the color as a whole to per\n"
+        "// channel (the form's, not fitted).\n"
+        f"const float c_FilmicChannelStart = {float_literal(CHANNEL_START)};\n"
+        f"const float c_FilmicChannelEnd = {float_literal(CHANNEL_END)};\n\n"
         "#endif\n"
     )
     header = (
@@ -491,14 +534,18 @@ def write_outputs(params):
         "#include <glm/glm.hpp>\n\n"
         "namespace Strata::FilmicConstants\n"
         "{\n\n"
-        "\t// The Filmic curve's gamut (shaders/Include/FilmicConstants.glsl): the inset before the per-channel curve and the\n"
-        "\t// outset after it.\n"
+        "\t// The Filmic curve's gamut (shaders/Include/FilmicConstants.glsl): the inset before the curve and the outset after\n"
+        "\t// it.\n"
         f"\tinline const glm::mat3 c_Inset = {cpp_matrix(inset)};\n"
         f"\tinline const glm::mat3 c_Outset = {cpp_matrix(outset)};\n"
         "\t// The log-log slope at middle gray (C0), the stops over which the toe turns to its own slope (tau), middle gray.\n"
         f"\tinline constexpr float c_Contrast = {float_literal(contrast)}f;\n"
         f"\tinline constexpr float c_ToeWidth = {float_literal(tau)}f;\n"
-        "\tinline constexpr float c_MiddleGray = 0.18f;\n\n"
+        "\tinline constexpr float c_MiddleGray = 0.18f;\n"
+        "\t// The stops of the inset color's largest channel over which the curve turns from scaling the color as a whole to per\n"
+        "\t// channel (the form's, not fitted).\n"
+        f"\tinline constexpr float c_ChannelStart = {float_literal(CHANNEL_START)}f;\n"
+        f"\tinline constexpr float c_ChannelEnd = {float_literal(CHANNEL_END)}f;\n\n"
         "}\n"
     )
     for path, text in ((GLSL_OUTPUT, glsl), (HEADER_OUTPUT, header)):
@@ -523,10 +570,13 @@ def print_report(params):
     print(f"middle gray -> sRGB {srgb_code(curve(MIDDLE_GRAY, contrast, tau, look)):.1f}; 0.005 -> {srgb_code(curve(0.005, contrast, tau, look)):.2f};"
           f" +6 stops -> {srgb_code(curve(MIDDLE_GRAY * 64.0, contrast, tau, look)):.1f}")
     others = {"ACES": ramp_measures(aces), "AgX": ramp_measures(agx)}
-    print(f"{'color':<9} {'Filmic hue':>10} {'ACES':>7} {'AgX':>7}   {'Filmic sat':>10} {'ACES':>6} {'AgX':>6}")
-    for index, (name, worst, limit, saturation) in enumerate(measures):
+    others["ACES +1 EV"] = ramp_measures(lambda color: aces(tuple(2.0 * c for c in color)))
+    print(f"{'color':<9} {'Filmic hue':>10} {'ACES':>7} {'AgX':>7}   {'Filmic sat':>10} {'ACES':>6} {'AgX':>6}"
+          f"   {'shadows':>7} {'ACES+1':>6} {'AgX':>6}")
+    for index, (name, worst, limit, saturation, shadows) in enumerate(measures):
         print(f"{name:<9} {worst:>10.2f} {others['ACES'][index][1]:>7.2f} {others['AgX'][index][1]:>7.2f}   {saturation:>10.3f}"
-              f" {others['ACES'][index][3]:>6.3f} {others['AgX'][index][3]:>6.3f}")
+              f" {others['ACES'][index][3]:>6.3f} {others['AgX'][index][3]:>6.3f}   {shadows:>7.3f}"
+              f" {others['ACES +1 EV'][index][4]:>6.3f} {others['AgX'][index][4]:>6.3f}")
     shape, why = shape_violation(inset, outset, contrast, tau, SHAPE_GRID, SHAPE_STOPS)
     if shape > 0.0:
         failures.append(f"T8: {why} (decreases summing to {shape:.2e})")

@@ -180,16 +180,16 @@ namespace
 	};
 
 	constexpr FilmicTestColor c_FilmicTestColors[] = {
-		{ "red", { 1.0, 0.05, 0.05 }, 12.5 },
-		{ "green", { 0.05, 1.0, 0.05 }, 12.5 },
-		{ "blue", { 0.05, 0.05, 1.0 }, 12.5 },
-		{ "yellow", { 1.0, 1.0, 0.05 }, 12.5 },
-		{ "cyan", { 0.05, 1.0, 1.0 }, 12.5 },
-		{ "magenta", { 1.0, 0.05, 1.0 }, 12.5 },
-		{ "orange", { 1.0, 0.4, 0.05 }, 12.5 },
-		{ "skin", { 0.8, 0.5, 0.35 }, 7.5 },
-		{ "foliage", { 0.2, 0.4, 0.08 }, 7.5 },
-		{ "sky", { 0.25, 0.45, 0.9 }, 7.5 },
+		{ "red", { 1.0, 0.05, 0.05 }, 10.0 },
+		{ "green", { 0.05, 1.0, 0.05 }, 10.0 },
+		{ "blue", { 0.05, 0.05, 1.0 }, 10.0 },
+		{ "yellow", { 1.0, 1.0, 0.05 }, 10.0 },
+		{ "cyan", { 0.05, 1.0, 1.0 }, 10.0 },
+		{ "magenta", { 1.0, 0.05, 1.0 }, 10.0 },
+		{ "orange", { 1.0, 0.4, 0.05 }, 10.0 },
+		{ "skin", { 0.8, 0.5, 0.35 }, 6.0 },
+		{ "foliage", { 0.2, 0.4, 0.08 }, 6.0 },
+		{ "sky", { 0.25, 0.45, 0.9 }, 6.0 },
 	};
 
 	glm::dvec3 ScaledToMiddleGray(const glm::dvec3& color)
@@ -202,12 +202,14 @@ namespace
 		return glm::dvec3(PostProcessMath::ApplyFilmic(glm::vec3(scene), look));
 	}
 
-	// T5 and T7 of Tools/FitFilmic.py for one test color: the largest hue deviation (degrees) over the ramp from -4 to +7 stops
-	// where the displayed chroma is at least 15% of the ramp's largest, and the saturation ratio at 0 stops.
+	// T5, T7 and T9 of Tools/FitFilmic.py for one test color: the largest hue deviation (degrees) over the ramp from -4 to +7
+	// stops where the displayed chroma is at least 15% of the ramp's largest, the saturation ratio at 0 stops, and the largest
+	// below it.
 	struct RampMeasure
 	{
 		double WorstHue = 0.0;
 		double Saturation = 0.0;
+		double ShadowSaturation = 0.0;
 	};
 
 	RampMeasure MeasureRamp(const glm::dvec3& color, const PostProcessMath::FilmicCurve& look)
@@ -242,6 +244,8 @@ namespace
 				measure.WorstHue = std::max(measure.WorstHue, HueDifference(step.Hue, step.ReferenceHue));
 			if (step.Stops == 0.0)
 				measure.Saturation = step.Chroma / step.ReferenceChroma;
+			if (step.Stops < 0.0 && step.ReferenceChroma > 0.0)
+				measure.ShadowSaturation = std::max(measure.ShadowSaturation, step.Chroma / step.ReferenceChroma);
 		}
 		return measure;
 	}
@@ -394,11 +398,12 @@ TEST_SUITE("Renderer.PostProcessMath")
 		for (const FilmicTestColor& color : c_FilmicTestColors)
 		{
 			CAPTURE(std::string(color.Name));
-			// T5 and T7.
+			// T5, T7 and T9: shadows keep about the scene's chroma (the per-channel toe raised a dark sky's to 1.88 times).
 			const RampMeasure measure = MeasureRamp(color.Color, look);
 			CHECK(measure.WorstHue <= color.HueLimit);
 			CHECK(measure.Saturation >= 0.90);
 			CHECK(measure.Saturation <= 1.20);
+			CHECK(measure.ShadowSaturation <= 1.30);
 			// T6: one stop past white every channel is at least 0.95.
 			const glm::dvec3 white = Filmic(ScaledToMiddleGray(color.Color) * std::exp2(static_cast<double>(look.WhiteStops) + 1.0), look);
 			CHECK(std::min({ white.r, white.g, white.b }) >= 0.95);
