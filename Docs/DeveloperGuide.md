@@ -3294,8 +3294,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `MinProjectedPixels`, cascades and sub-texel casters, materials, levels of detail through `LODSelection`) and in
   `Cull.comp` (`Include/LODSelection.glsl`, `Include/Culling.glsl`). Change both together; `GPU.SceneRenderer.GPUDriven`
   and `IndirectFallback` compare the paths' pixels (within 1/255), entity IDs and counts scene by scene. Shading must not
-  depend on the order of draws or of a draw's instances: no screen-space derivatives in what both paths must agree on
-  (some GPUs group pixels of adjacent triangles into quads by draw), and opaque results never on draw order.
+  depend on the order of draws or of a draw's instances: screen-space derivatives only as the derivative rule allows
+  ("Lighting": of the primitive's own interpolants and textures, in control flow uniform over a quad, before any
+  `discard`; a quad belongs to one primitive, so both paths get the same ones), never of what other draws wrote, and
+  opaque results never on draw order.
 - The GPU's counts (instances, draws, triangles, levels, shadow casters, visible and size-culled proxies, overflow) come
   back 2-3 frames late (`SceneRendererGPUStats`, `HasCounters`, `CountersRender`; `ResolveGPUStats(true)` waits);
   `AddGPUCounts` adds them to a frame's `SceneRendererStats` for display (`renderStats`, the viewport's statistics).

@@ -419,8 +419,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Shadow views are kept while nothing reaching them changed (`PrepareShadowCache`, `FindLocalShadowCasters`): a new
   input of how casters are drawn changes a version they compare. What is drawn and requested is decided twice, by the
   CPU path (`SceneRendererExtraction.cpp`) and the GPU's culling and visibility feedback (`Cull.comp`): change both, keep
-  shading independent of draw order (no screen-space derivatives), and keep `GPU.SceneRenderer.GPUDriven` and
-  `.Feedback` passing ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
+  shading independent of draw order (screen-space derivatives only of the primitive's own interpolants and textures), and
+  keep `GPU.SceneRenderer.GPUDriven` and `.Feedback` passing ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
 
 ## Automation (editor RPC + MCP)
 
