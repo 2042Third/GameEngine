@@ -3657,6 +3657,12 @@ lights, Post Process and the sky), and never a resolution below the output's.
   texel sizes or 0.6.0's splits. Stats: `ShadowFit`, `ShadowFitSquares`, `ShadowFitSettled`, `ShadowFitNear`, `ShadowFitFar`,
   `ShadowFitChanges`, `Cascades[c].Fitted`; `editor.status`'s render stats report `shadowFit` and `cascades`. Tests:
   `Renderer.ShadowFit` (the tracker alone, synthetic readbacks), `GPU.SceneRenderer.ShadowFit`.
+- **Costs** (look-dev A/B against 0.6.0's filter at cc9524a1, three interleaved pairs, medians, the samples' scene cameras
+  with TAA; RTX 5090): at 3840x2160 High `GPU.ScreenShadows` is 0.46-0.78 ms (mask, blur, contact shadows and the fit's
+  reduction) while `GPU.Opaque` loses the filter (0.06-0.18 ms less), GPU busy 1.27-1.40 times; at 1920x1080 Medium the
+  stage is 0.085-0.14 ms against 0.01-0.03 ms saved in `GPU.Opaque`, busy 1.13-1.19 times. The evaluation dominates the
+  stage; the blur and the reduction are small parts of it. `PerfGPU.Renderer.ScreenShadows4K*` and `ShadowRedraw4K*`
+  (provisional) measure it on 100,000 shadowed cubes.
 - **Transparent surfaces** are not in the prepass: `Forward.frag`'s transparent and glass variants call
   `SampleDirectionalShadow`, the same filter per pixel, without the blur (and without contact shadows). A change to how
   the sun's shadow reaches surfaces changes both.

@@ -1487,3 +1487,13 @@ name). Differences found while building:
     cascades now, not the last), pp.scene 0.81 (0%), pp.editor 0.62 (0%), ow.scene 1.35 (0%; before: 1.76, 2.09, 2.48,
     1.92, 2.09 with 2.1% above 4). ow.editor has no receiver within the shadow distance (as before). No sample needed its
     Cascade Distribution changed.
+- Finish: the A/Bs of section 7 (look-dev `ab/`, three interleaved pairs against cc9524a1's Release built from `git
+  archive`, each run under `Tools/PerfLock.py`, TAA, medians of the pairs, base / branch): 3840x2160 High GPU busy
+  tp.scene 1.966 / 2.533 ms (1.29x), pp.scene 1.329 / 1.855 (1.40x), ow.scene 1.390 / 1.768 (1.27x), with
+  `GPU.ScreenShadows` 0.780, 0.568, 0.463 ms and `GPU.Opaque` 0.399 / 0.219, 0.270 / 0.212, 0.303 / 0.235; 1920x1080
+  Medium tp.scene 0.570 / 0.671 (1.18x), pp.scene 0.494 / 0.589 (1.19x), ow.scene 0.562 / 0.633 (1.13x), with
+  `GPU.ScreenShadows` 0.138, 0.091, 0.085 and `GPU.Opaque` 0.094 / 0.064, 0.098 / 0.087, 0.129 / 0.117. Medium at 1080
+  exceeds section 7's 1.08x: the cause is the stage (the evaluation pass above all: the blur's clip-space rewrite saved
+  0.01-0.03 ms at 4K, and the reduction is one compute pass over the depth), not the forward pass. Not resolved in this
+  stream (open problem in the landing report): skipping pixels that face away from the sun is not safe (the forward pass
+  lights with the shading normal, which the mask does not have), and per-pass timers inside the stage are the next step.
