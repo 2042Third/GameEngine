@@ -408,6 +408,10 @@ namespace Strata
 		// Deletes the players' graphics options file and, while playing, drops the running game's choices (the project's
 		// quality from its next frame). False, changing nothing, without a project or when the file stays.
 		bool ResetPlayerGraphicsOptions(std::string* outError = nullptr);
+		// editor.status' game.graphics: the preset and the value in effect, each field's source ("project", "player",
+		// "commandLine"), the players' options (GetPlayerGraphicsOptions), the players' file when it exists and its problem;
+		// null without the renderer's section.
+		nlohmann::json DescribeGameGraphics();
 
 		//////////////////////////////////////////////////////////////////////////
 		// Selection (entities of the active scene)

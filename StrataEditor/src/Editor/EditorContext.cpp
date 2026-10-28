@@ -152,14 +152,16 @@ namespace Strata
 		m_ProjectSettingsProvider = CreateScope<EngineServices::ScopedProvider<IProjectSettings>>(m_OpenProjectSettings);
 		m_GameGraphics = CreateScope<GameGraphicsService>(&m_OpenProjectSettings, &m_GameSaves, &GetSettingsRegistry());
 		m_GameGraphicsProvider = CreateScope<EngineServices::ScopedProvider<IGameGraphics>>(*m_GameGraphics);
-		// What the game asked of its shell: window requests (recorded, not applied), its cursor, where its saves go.
+		// What the game asked of its shell: window requests (recorded, not applied), its cursor, where its saves go, and its
+		// graphics options.
 		SetStatusProvider("game", [this]()
 		{
 			const std::optional<std::filesystem::path> saves = GetGameSaveDirectory();
 			const CursorMode cursor = Input::GetGameCursorMode();
 			return nlohmann::json { { "windowRequests", m_GameWindow.Describe() },
 				{ "cursor", cursor == CursorMode::Locked ? "locked" : (cursor == CursorMode::Hidden ? "hidden" : "normal") },
-				{ "saveDirectory", saves ? nlohmann::json(FileSystem::ToUTF8(*saves)) : nlohmann::json(nullptr) } };
+				{ "saveDirectory", saves ? nlohmann::json(FileSystem::ToUTF8(*saves)) : nlohmann::json(nullptr) },
+				{ "graphics", DescribeGameGraphics() } };
 		});
 		// The recovery journal follows every step the undo stack applies; recovery files apply only to scenes the project
 		// still has, which scans find by their handles wherever they moved.
@@ -1674,6 +1676,28 @@ namespace Strata
 			InputActions::ResetBindings("");
 		m_PlayerBindingsResetCount++;
 		return true;
+	}
+
+	nlohmann::json EditorContext::DescribeGameGraphics()
+	{
+		GameGraphicsService& graphics = *m_GameGraphics;
+		const SettingsSection* section = graphics.GetSection();
+		if (!section)
+			return nullptr;
+		const nlohmann::json& effective = graphics.GetEffectiveValue();
+		nlohmann::json sources = nlohmann::json::object();
+		for (const SettingsField& field : section->Fields)
+		{
+			const GameGraphicsSource source = graphics.GetSource(field.Name).value_or(GameGraphicsSource::Project);
+			sources[field.Name] = source == GameGraphicsSource::Player ? "player" : source == GameGraphicsSource::CommandLine ? "commandLine" : "project";
+		}
+		const std::optional<std::filesystem::path> file = graphics.GetOptionsFile();
+		const nlohmann::json& playerOptions = GetPlayerGraphicsOptions();
+		const std::string& problem = GetPlayerGraphicsProblem();
+		return { { "preset", effective.contains("Preset") ? effective["Preset"] : nlohmann::json(nullptr) }, { "effective", effective },
+			{ "sources", std::move(sources) }, { "playerOptions", playerOptions },
+			{ "playerFile", file && FileSystem::Exists(*file) ? nlohmann::json(FileSystem::ToUTF8(*file)) : nlohmann::json(nullptr) },
+			{ "playerFileProblem", problem.empty() ? nlohmann::json(nullptr) : nlohmann::json(problem) } };
 	}
 
 	const RendererQualitySettings& EditorContext::GetGameQuality()

@@ -132,4 +132,92 @@ TEST_SUITE("Editor.GameGraphics")
 		harness.Run("play.stop");
 		CHECK(harness.Graphics().GetEffectiveValue()["ShadowCascades"] == 1);
 	}
+
+	TEST_CASE("graphics.resetPlayerOptions deletes the players' file and, while playing, the game's choices")
+	{
+		GraphicsCommands harness("GameGraphicsResetCommand");
+		harness.SetProjectQuality({ { "Preset", "Medium" } });
+		// Nothing to reset is no failure.
+		CHECK(harness.Run("graphics.resetPlayerOptions")["reset"] == nlohmann::json::array());
+
+		// Outside play: the file goes, and the next session starts with the project's quality.
+		harness.SavePlayerOptions({ { "Preset", "Custom" }, { "ShadowCascades", 2 } });
+		const size_t position = harness.Context.GetUndoStack().GetPosition();
+		CHECK(harness.Run("graphics.resetPlayerOptions")["reset"] == nlohmann::json::array({ "Preset", "ShadowCascades" }));
+		CHECK(harness.Context.GetUndoStack().GetPosition() == position); // Not undoable, like the game's saves
+		CHECK_FALSE(FileSystem::Exists(harness.GetFile()));
+		CHECK(harness.Context.GetPlayerGraphicsOptions().empty());
+		harness.Run("play.start", { { "build", false } });
+		CHECK(harness.Graphics().GetEffectiveValue()["Preset"] == "Medium");
+
+		// While playing: the file and the running game's choices, the project's quality from the next frame.
+		REQUIRE(harness.Graphics().SetOption("Preset", "Low"));
+		REQUIRE(harness.Graphics().SaveOptions());
+		REQUIRE(FileSystem::Exists(harness.GetFile()));
+		CHECK(harness.Run("graphics.resetPlayerOptions")["reset"] == nlohmann::json::array({ "Preset" }));
+		CHECK_FALSE(FileSystem::Exists(harness.GetFile()));
+		CHECK(harness.Graphics().GetPlayerOptions().empty());
+		CHECK(harness.Context.GetGameQuality().HasSameKnobs(RendererQuality::GetPreset(RendererQualityPreset::Medium)));
+		harness.Run("play.stop");
+	}
+
+	TEST_CASE("graphics.resetPlayerOptions refuses without a project and changes nothing")
+	{
+		GraphicsCommands harness("GameGraphicsResetNoProject");
+		harness.SavePlayerOptions({ { "Preset", "Low" } });
+		const std::filesystem::path file = harness.GetFile();
+		harness.Run("project.close");
+		const EditorCommandResult refused = harness.Commands.Execute(harness.Context, "graphics.resetPlayerOptions", nlohmann::json::object());
+		CHECK_FALSE(refused.Success);
+		CHECK(refused.Error.find("No project is open") != std::string::npos);
+		CHECK(FileSystem::Exists(file));
+		CHECK(harness.Context.GetPlayerGraphicsOptions().empty());
+	}
+
+	TEST_CASE("editor.status reports the game's graphics: in play the session's, outside play the file's")
+	{
+		GraphicsCommands harness("GameGraphicsStatus");
+		harness.SetProjectQuality({ { "Preset", "High" } });
+		const auto status = [&harness]() { return harness.Run("editor.status", { { "sections", { "game" } } })["game"]["graphics"]; };
+		nlohmann::json graphics = status();
+		CHECK(graphics["preset"] == "High");
+		CHECK(graphics["effective"]["Preset"] == "High");
+		CHECK(graphics["sources"]["Preset"] == "project");
+		CHECK(graphics["sources"]["ShadowResolution"] == "project");
+		CHECK(graphics["playerOptions"] == nlohmann::json::object());
+		CHECK(graphics["playerFile"].is_null());
+		CHECK(graphics["playerFileProblem"].is_null());
+
+		// A game's options menu saves a choice while playing; outside play the file's options show, what the next session starts
+		// with, while the value in effect stays the project's.
+		harness.Run("play.start", { { "build", false } });
+		REQUIRE(harness.Graphics().SetOption("Preset", "Low"));
+		REQUIRE(harness.Graphics().SaveOptions());
+		harness.Run("play.stop");
+		graphics = status();
+		CHECK(graphics["playerOptions"] == nlohmann::json { { "Preset", "Low" } });
+		CHECK(graphics["playerFile"] == FileSystem::ToUTF8(harness.GetFile()));
+		CHECK(graphics["effective"]["Preset"] == "High");
+
+		// In play: the session's, and a choice a script makes shows in the next answer.
+		harness.Run("play.start", { { "build", false } });
+		graphics = status();
+		CHECK(graphics["preset"] == "Low");
+		CHECK(graphics["sources"]["Preset"] == "player");
+		CHECK(graphics["sources"]["ShadowCascades"] == "player");
+		REQUIRE(harness.Graphics().SetOption("Preset", "Ultra"));
+		graphics = status();
+		CHECK(graphics["playerOptions"] == nlohmann::json { { "Preset", "Ultra" } });
+		CHECK(graphics["effective"]["ShadowResolution"] == "AutoFine");
+		harness.Run("play.stop");
+
+		// A file that is no options file (read again when a session ends): its problem, and no options.
+		REQUIRE(FileSystem::WriteText(harness.GetFile(), "{ not json"));
+		harness.Run("play.start", { { "build", false } });
+		harness.Run("play.stop");
+		graphics = status();
+		CHECK(graphics["playerOptions"] == nlohmann::json::object());
+		REQUIRE(graphics["playerFileProblem"].is_string());
+		CHECK(graphics["playerFileProblem"].get<std::string>().find("are ignored") != std::string::npos);
+	}
 }

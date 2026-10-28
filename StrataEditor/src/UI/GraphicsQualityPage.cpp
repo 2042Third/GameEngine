@@ -159,6 +159,11 @@ namespace Strata
 		std::array<std::string, c_Columns> Memory1080;
 		std::array<std::string, c_Columns> Memory2160;
 
+		// The players' options as last read (EditorContext::GetPlayerGraphicsOptions), and the banner's text made from them.
+		nlohmann::json PlayerOptions = nlohmann::json::object();
+		bool PlayerPlaying = false;
+		std::string PlayerText;
+
 		std::string GPULine;
 		double GPULineTime = -std::numeric_limits<double>::infinity();
 		std::vector<std::pair<std::string, float>> StageTimes; // Of the stages the rows name, as the GPU line shows them
@@ -283,6 +288,7 @@ namespace Strata
 			Caption(text, colors.Warning, width);
 			UI::ItemProbe::Record(data.Prefix + "Problem", true, 0, text);
 		}
+		DrawPlayerOptions(context);
 		ImGui::Spacing();
 		DrawPresets(context);
 		ImGui::Spacing();
@@ -295,6 +301,44 @@ namespace Strata
 		ImGui::Spacing();
 		if (UI::DialogButton((data.Prefix + "Reset").c_str(), "Reset to Defaults", false, data.Stored))
 			Apply(context, { { "section", data.Model.Section->Id }, { "reset", true } });
+	}
+
+	void GraphicsQualityPage::DrawPlayerOptions(EditorPanelContext& context)
+	{
+		Data& data = *m_Data;
+		// Only the engine's section is the one the game's options are made of.
+		if (!data.EngineModel)
+			return;
+		const nlohmann::json& options = context.Context.GetPlayerGraphicsOptions();
+		const bool playing = context.Context.IsPlaying();
+		if (options != data.PlayerOptions || playing != data.PlayerPlaying)
+		{
+			data.PlayerOptions = options;
+			data.PlayerPlaying = playing;
+			std::string set;
+			for (const auto& [name, value] : options.items())
+				set += fmt::format("{}{} {}", set.empty() ? "" : ", ", name, value.is_string() ? value.get<std::string>() : value.dump());
+			data.PlayerText = playing ? fmt::format("The running game's player chose: {} (marked Player)", set)
+				: fmt::format("The players' saved options replace the project's in play: {}. Changes here reach play once they are reset.", set);
+		}
+		if (data.PlayerOptions.empty())
+			return;
+		UI::Banner((data.Prefix + "PlayerOptions").c_str(), Icons::Gamepad2, data.PlayerText, UI::GetThemeColors().Info);
+		if (UI::ToolbarButton((data.Prefix + "PlayerOptions.Reset").c_str(), Icons::RotateCcw, "Reset Player Options", "Delete the graphics options "
+			"players saved (the project's .strata/Saves/GraphicsOptions.json), so that play uses the project's Graphics Quality"))
+		{
+			RunEditorCommand(context.Context, context.Commands, "graphics.resetPlayerOptions");
+		}
+	}
+
+	void GraphicsQualityPage::DrawPlayerPill(std::string_view field)
+	{
+		Data& data = *m_Data;
+		if (!data.EngineModel || !JsonUtils::Find(data.PlayerOptions, field))
+			return;
+		ImGui::SameLine();
+		UI::Pill(fmt::format("{}Row.{}.Player", data.Prefix, field).c_str(), Icons::Gamepad2, "Player", UI::GetThemeColors().Info,
+			"The players' graphics options set this in play");
 	}
 
 	void GraphicsQualityPage::DrawPresets(EditorPanelContext& context)
@@ -319,6 +363,7 @@ namespace Strata
 				Apply(context, { { "section", data.Model.Section->Id }, { "value", std::move(value) } });
 			}
 		}
+		DrawPlayerPill("Preset");
 	}
 
 	void GraphicsQualityPage::DrawTable(EditorPanelContext& context, float width)
@@ -374,6 +419,7 @@ namespace Strata
 				}
 				ImGui::SetTooltip("%s", tooltip.c_str());
 			}
+			DrawPlayerPill(name);
 
 			for (size_t column = 0; column < c_PresetColumns; column++)
 			{

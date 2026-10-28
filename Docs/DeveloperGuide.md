@@ -1228,7 +1228,14 @@ section; the composition root runs it first, and Input is a module every engine 
   bindings are reset); the page marks those actions ("In play", with the players' bindings) and offers "Reset Player
   Bindings": `inputActions.resetPlayerBindings` (Session, `settings` toolset) deletes the file through
   `InputActions::DeleteSavedBindings` and, while playing, restores the project's bindings in the running game, returning
-  the actions reset.
+  the actions reset. The players' graphics options work the same way ([Quality settings](#quality-settings)):
+  `EditorContext::GetPlayerGraphicsOptions` (and `GetPlayerGraphicsProblem`, a refused or partly dropped file) reports
+  what replaces the project's Graphics Quality in play, read again when play starts or stops, the project changes, the
+  running game's options change (`GameGraphicsService::GetVersion`) or they are reset; the Graphics Quality page shows a
+  banner and "Player" pills for them with "Reset Player Options": `graphics.resetPlayerOptions` (Session, `settings`
+  toolset) deletes `GraphicsOptions.json` and, while playing, drops the running game's choices, returning the options
+  reset. `editor.status`' `game.graphics` reports the preset and value in effect, each field's source (`project`,
+  `player`, `commandLine`), the players' options, the file and its problem.
 - **Simulated actions** (`SimulateAction`, `ReleaseAllSimulated`, `ClearSimulated`): held down from the next input frame,
   whatever the bindings, with a value (Button: 1); for tools that play the game.
 - **Capture** (`BeginCapture(InputCaptureDevices)`, `TakeCapturedBinding`, `CancelCapture`): listens for the next control

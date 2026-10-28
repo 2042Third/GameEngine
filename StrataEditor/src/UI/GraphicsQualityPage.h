@@ -7,6 +7,8 @@
 
 #include <nlohmann/json_fwd.hpp>
 
+#include <string_view>
+
 namespace Strata
 {
 
@@ -18,10 +20,13 @@ namespace Strata
 	// from, RendererQuality::MakeCustomStart), each row's memory at 1920 x 1080 and 3840 x 2160 and the time its GPU stage
 	// takes now in the Scene view; the rows the presets leave alone (players' choices, RowTraits::FollowsPreset false) below
 	// it. Rows come from the option model, so the rows other changes add appear without UI work. Every edit is one
-	// project.setSettings (one undo step) with CommandOrigin { CommandSource::UI }. Probe keys, under
-	// "ProjectSettings.<section id>.": Preset.<Low|Medium|High|Ultra|Custom>, Header.<Preset>, Row.<Field>,
-	// Cell.<Field>.<Preset> (the chosen column's record AccentMuted), Custom.<Field>, Choice.<Field>, Memory1080.<Preset>,
-	// Memory2160.<Preset>, GPU, Problem, Reset.
+	// project.setSettings (one undo step) with CommandOrigin { CommandSource::UI }. While the players' graphics options
+	// replace the project's in play (EditorContext::GetPlayerGraphicsOptions: the running game's, or the players' file the
+	// next session starts with) a banner says what they set, the rows they set carry a "Player" pill, and a button resets
+	// them (graphics.resetPlayerOptions). Probe keys, under "ProjectSettings.<section id>.": Preset.<Low|Medium|High|Ultra|
+	// Custom>, Header.<Preset>, Row.<Field>, Row.<Field>.Player (Row.Preset.Player beside the chips), Cell.<Field>.<Preset>
+	// (the chosen column's record AccentMuted), Custom.<Field>, Choice.<Field>, Memory1080.<Preset>, Memory2160.<Preset>,
+	// GPU, PlayerOptions, PlayerOptions.Reset, Problem, Reset.
 	class GraphicsQualityPage final : public SettingsPage
 	{
 	public:
@@ -43,6 +48,10 @@ namespace Strata
 		void DrawTable(EditorPanelContext& context, float width);
 		void DrawChoices(EditorPanelContext& context, float width); // Rows with FollowsPreset false; nothing when there are none
 		void DrawGPU(EditorPanelContext& context, float width);
+		// The banner while the players' options replace the project's, read again when the editor's read of them changes.
+		void DrawPlayerOptions(EditorPanelContext& context);
+		// The "Player" pill of a field the players' options set, after its label.
+		void DrawPlayerPill(std::string_view field);
 		void Apply(EditorPanelContext& context, const nlohmann::json& parameters); // project.setSettings
 	private:
 		struct Data;

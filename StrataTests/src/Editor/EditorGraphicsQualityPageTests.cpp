@@ -17,6 +17,7 @@
 #include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Renderer/RendererQuality.h>
+#include <Strata/Runtime/GameGraphicsService.h>
 
 #include <imgui.h>
 #include <nlohmann/json.hpp>
@@ -281,5 +282,40 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		value = editor.Context().GetProject()->GetSettings().FindSection(QualityTestModel::c_SectionId);
 		REQUIRE(value);
 		CHECK(*value == nlohmann::json { { "Preset", "Custom" }, { "Detail", 3 }, { "Comfort", false } });
+	}
+
+	TEST_CASE("The players' banner shows what their options set and its button resets them")
+	{
+		HarnessEditor editor;
+		editor.Frames(1);
+		CreateProject(editor, "GraphicsQualityPlayers");
+		OpenGraphicsQuality(editor);
+		CHECK_FALSE(IsDrawn(PageKey("PlayerOptions")));
+		CHECK_FALSE(IsDrawn(PageKey("Row.Preset.Player")));
+
+		// While playing, a game's options menu sets the players' choices: the banner names them, marked on the page.
+		const std::filesystem::path file = *editor.Context().GetGameSaveDirectory() / GraphicsOptionsFile::c_FileName;
+		editor.Run("play.start", { { "build", false } });
+		GameGraphicsService& graphics = editor.Context().GetGameGraphics();
+		REQUIRE(graphics.SetOption("Preset", "Low"));
+		REQUIRE(graphics.SetOption("ShadowCascades", 2));
+		REQUIRE(editor.FramesUntil([]() { return IsDrawn(PageKey("PlayerOptions")); }));
+		CHECK(TextOf(PageKey("PlayerOptions")).find("The running game's player chose: ") != std::string::npos);
+		CHECK(IsDrawn(PageKey("Row.ShadowCascades.Player")));
+		// It saves them and play stops: the next session starts with them.
+		REQUIRE(graphics.SaveOptions());
+		editor.Run("play.stop");
+		REQUIRE(editor.FramesUntil([]() { return TextOf(PageKey("PlayerOptions")).find("saved options") != std::string::npos; }));
+		CHECK(TextOf(PageKey("PlayerOptions")).find("The players' saved options replace the project's in play: ") != std::string::npos);
+		CHECK(TextOf(PageKey("PlayerOptions")).find("ShadowCascades 2") != std::string::npos);
+		CHECK(IsDrawn(PageKey("Row.Preset.Player")));
+		CHECK(IsDrawn(PageKey("Row.ShadowCascades.Player")));
+
+		// The button runs graphics.resetPlayerOptions: the file goes, and so do the banner and the pills.
+		REQUIRE(editor.Click(PageKey("PlayerOptions.Reset")));
+		editor.Frames(2);
+		CHECK_FALSE(FileSystem::Exists(file));
+		CHECK_FALSE(IsDrawn(PageKey("PlayerOptions")));
+		CHECK_FALSE(IsDrawn(PageKey("Row.Preset.Player")));
 	}
 }
