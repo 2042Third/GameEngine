@@ -97,6 +97,7 @@ strata_add_shaders(Strata_Renderer
 		Scene/MotionCopy.comp
 		Debug/LODSelection.comp
 		Debug/ShadowViewStats.comp
+		Debug/BlueNoise.comp
 		IBL/EquirectToCube.comp
 		IBL/ProceduralSky.comp
 		IBL/CubeDownsample.comp
