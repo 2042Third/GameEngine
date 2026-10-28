@@ -926,7 +926,13 @@ namespace Strata
 			"materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes (new mesh renderers waiting for "
 			"their upload to the GPU), geometryPool "
 			"(the meshes' GPU geometry: usedMB, capacityMB, allocations, fragmentation, moves, growths), sceneMirrorMB (the GPU memory of the scenes' "
-			"GPU copies: a playing scene's doubles its scene's), gpuMs "
+			"GPU copies: a playing scene's doubles its scene's), exposure (what automatic exposure metered, frames late: ev100, EV100 = log2 of the "
+			"metered luminance in nits + 3; keyStops, the exposure key's darkening, 0 or below; cardEv100, the EV100 of a gray card in the "
+			"directional light's light, null without one; exposure is null with manual exposure), motionBlur (samples, tileSize in pixels; null on "
+			"frames that did not blur), depthOfField (focusDistance in meters, focalLength in millimeters, fNumber, infinityBlurPixels: the blur's "
+			"diameter of a point infinitely far; null without a lens), colorLookup (whether the Post Process's color lookup was applied; false "
+			"while it loads), lensFlare (sunInFront: whether the directional light's disk was in front of the camera for the starburst; null when "
+			"lens flares did not run), gpuMs "
 			"(per GPU stage of the frame gpuStatsFrame names). gameRenderStats is the same for the Game view's latest frame (null while it is "
 			"hidden or closed); both views' GPU work adds up in gpu's stages. Times are milliseconds as avgMs, p50Ms and p95Ms (nearest rank) and maxMs.",
 			ObjectSchema({ { "frames", IntegerSchema("How many of the latest frames to summarize (default 120)", 1, FrameProfiler::c_DefaultCapacity) } }),

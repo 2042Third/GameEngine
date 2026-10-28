@@ -103,9 +103,9 @@ Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
   prefix gets a shard (`StrataTests/CoreShards.json`) and corruption sweeps go in `*.Sweep` suites ([Unit
   tests](Docs/DeveloperGuide.md#unit-tests), [Shards, sweeps and locks](Docs/DeveloperGuide.md#shards-sweeps-and-locks)).
 - `GPU*` suites (label `gpu`) share one device through `Tests::GPUContext` (never create devices in tests) and end with
-  `CHECK(gpu.GetNewErrorCount() == 0)`: validation errors fail them. Exact-pixel tests set
-  `SceneRendererSpecification::TextureStreaming = false` and `AddNeutralPostProcess`, tests of whole-asset residency
-  `SetPartialLoads(false)`; text tests render until no glyph is pending. Count what a frame drew with
+  `CHECK(gpu.GetNewErrorCount() == 0)`: validation errors fail them. Exact-pixel tests render with
+  `Tests::ExactSpecification()` (no texture streaming, no dither) and `AddNeutralPostProcess`, tests of whole-asset
+  residency `SetPartialLoads(false)`; text tests render until no glyph is pending. Count what a frame drew with
   `Tests::GetDrawnCounts` (the GPU-driven path counts on the GPU, frames later).
 - **Perf tests** (`Perf.*`, `PerfGPU.*`, label `perf`, Release and Dist; CI skips them): limits live only in
   `StrataTests/Perf/Budgets.json`, measured on the reference machine (else `Provisional`); **budgets only go down** (at

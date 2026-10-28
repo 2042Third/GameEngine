@@ -94,8 +94,8 @@ namespace Strata
 		// The motion blur's gather samples, for scenes whose Post Process turns it on (8 at Medium; Off at Low turns it off).
 		MotionBlurSamples MotionBlurQuality = MotionBlurSamples::Samples8;
 		// The players' rows, the same under every preset (comfort and preference, not cost): the anti-aliasing method (the
-		// scene's, or off, FXAA or TAA) and whether the scene's motion blur, its cameras' depth of field, its film grain and its
-		// chromatic aberration show.
+		// scene's, or off, FXAA, TAA or the morphological anti-aliasing) and whether the scene's motion blur, its cameras' depth
+		// of field, its film grain and its chromatic aberration show.
 		AntiAliasingChoice AntiAliasing = AntiAliasingChoice::Scene;
 		SceneEffectChoice MotionBlur = SceneEffectChoice::Scene;
 		SceneEffectChoice DepthOfField = SceneEffectChoice::Scene;

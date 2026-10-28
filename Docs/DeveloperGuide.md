@@ -127,7 +127,7 @@ modules:
 | `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU at 60 frames per second (servers, CI); `--frames N` stops after N frames (a count that is not a positive whole number exits 3, so a mistyped check cannot run forever); `--seconds S` stops at the frame by which the game played S seconds of game time (`GameRuntime::GetPlayedSeconds`: the fixed steps of its scenes from its start on, not the loading scene's; refused like `--frames`; with both, the first reached ends the run), the length of a check whose outcome depends on how far the game got (a picture, a tour), which a count of frames is not: the frame rate differs by machine and configuration; both keep every fixed step (no time dilation, and a frame longer than the scene's `MaxFixedStepsPerFrame` steps plays only the time they simulate, `GameRuntimeOptions::KeepEveryFixedStep`, so the scene's clock and its scripts' frame time agree with the steps counted); `--screenshot out.png` with `--frames N` or `--seconds S` saves the last frame (and fails the run when it shows the missing-camera message, or a black frame because the start scene still loads: scenes load in the background, the manifest's optional `LoadingScene` plays meanwhile); `--asset-budget-mb <n>` sets the GPU texture budget of the game's assets; `--resolution <width>x<height>` renders in a window of exactly that many pixels whatever the display's scale (instead of the manifest's window, which scales with the display; implies `--windowed`); `--quality <low|medium|high|ultra>` draws the run at a Graphics Quality preset and saves nothing (Custom, unknown names and `--headless` exit 3; "Quality settings"); `--perf-log <csv>` writes a row per frame (frame time, frame profiler stages, job threads, asset streaming and mip streaming, the upload queue, the device's memory and its staging, the process's private memory and its peak, the GPU's stages and busy time of the same frame, then a world's streaming and physics columns and what the renderer
 drew: draw calls, instances, triangles, visible and occluded proxies, instance uploads), also headless; `--save-directory <dir>` keeps the game's save files there instead of the player's data directory (tests); `--help` prints the options (`c_Arguments`), and an argument it does not understand or a bad value ends the run with the problem and the usage on stderr and exit code 3, as in the editor (`Core/CommandLineOptions`: `FindUnknownArgument`, `FormatUsage`, `c_UsageExitCode`). Patch packs the manifest lists (`PatchPacks`) are mounted over the game's pack. |
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `ThirdPerson`, `OpenWorld`, `PhysicsPlayground` and `Tetris` (played and exported by the CTests `StrataEditor.ThirdPerson`, `StrataEditor.OpenWorld`, `StrataEditor.PhysicsPlayground` and `StrataEditor.Tetris`), each with `README.md`, `CREDITS.md` and `Picture.png` ([Samples](#samples): how they are made, credited and kept within budgets). `Samples.json` lists them; the build copies them next to the executables (`StrataSamples`), where the launcher's Open Sample and `project.openSample` offer them as copies. Open one in place only to change the sample: `StrataEditor --project Samples/<Game>`. |
-| `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables; `GenerateIslandTerrain.py` makes the Open World sample's island: its terrain tiles and palette, and the command script that scatters its vegetation), `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)), `PerfLock.py` (runs a command under a lock in the user's temporary directory, so that the measurements of agents run by one user never overlap) `CompatLint.py` (compiles changed files with GCC 14 and LLVM 16, the compilers closest to CI's, without precompiled headers, before a push: AGENTS.md, "CI before main") and `CIStatus.py` (the state of a commit's CI runs and the failure annotations its jobs left, readable without a job log) and `LookDev.py` (pictures of fixed shots through headless editors and their comparison between builds, see [Look-dev harness](#look-dev-harness)). |
+| `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables; `GenerateIslandTerrain.py` makes the Open World sample's island: its terrain tiles and palette, and the command script that scatters its vegetation; `FitFilmic.py` fits the Filmic tone curve into `FilmicConstants.glsl` and `FilmicConstants.h`, `GenerateWhiteBalance.py` writes the white balance's locus, `Renderer/WhiteBalanceLocus.inl`, and `GenerateAreaTable.py` the morphological anti-aliasing's area table, `Renderer/MorphologicalAreaTable.inl`: see [Post-processing](#post-processing)), `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)), `PerfLock.py` (runs a command under a lock in the user's temporary directory, so that the measurements of agents run by one user never overlap) `CompatLint.py` (compiles changed files with GCC 14 and LLVM 16, the compilers closest to CI's, without precompiled headers, before a push: AGENTS.md, "CI before main") and `CIStatus.py` (the state of a commit's CI runs and the failure annotations its jobs left, readable without a job log) and `LookDev.py` (pictures of fixed shots through headless editors and their comparison between builds, see [Look-dev harness](#look-dev-harness)). |
 | `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, render scene, animation, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands), `Manual/` (guides for people making games in the editor: `Scripting.md`), `Releases/` (the notes of each release, `<version>.md`, and the README of the release archives, `PackageReadme.md`). |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
 
@@ -698,8 +698,9 @@ exercised by it.
   with committed `.meta` files). Its scene `Scenes/Feature.stscene` contains every registered component, its project
   file sets every registered project settings section to a value other than the default (the collision layers the
   scene and scripts use come from there: `FeatureProject` provides the project's settings as `IProjectSettings`, as a
-  program that runs a project does, and the scene stores none; its `Renderer.Quality` is a Custom value with every field
-  off its default, which `GPU.FeatureTest` renders the feature scene with), it gives the game an identity (title,
+  program that runs a project does, and the scene stores none; its `Renderer.Quality` is a Custom value with every cost
+  knob off its default and the players' rows of the effects the scene uses at Scene, so those effects run, which
+  `GPU.FeatureTest` renders the feature scene with), it gives the game an identity (title,
   version, company,
   copyright and `Textures/Checker.png` as its icon, which `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` find in
   the export, its log and `FeatureTest.png`), the project has assets of every type (the tiny binary ones come from `Tools/GenerateAssets.py`, whose outputs are committed), and
@@ -3073,8 +3074,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   texture is created by the first frame that needs it (no target, or overlays or text to compose), so renderers that
   draw into targets without overlays (games without text) never hold one.
 - `SceneRenderer.cpp` holds the frame (`RenderFrame`) and what its passes share; features live in files of their own:
-  `SceneRendererPost.cpp` the post-processing from the HDR image to the display (`RenderPostHDR`: exposure and bloom;
-  `RenderPostDisplay`: tone mapping and FXAA; their resources, targets and passes), `SceneRendererAmbientOcclusion.cpp`
+  `SceneRendererPost.cpp` the post-processing from the HDR image to the display (depth of field and motion blur;
+  `RenderPostHDR`: exposure, bloom and lens flares; `RenderPostDisplay`: tone mapping, then FXAA or the morphological
+  anti-aliasing; their resources, targets and passes), `SceneRendererAmbientOcclusion.cpp`
   the ambient occlusion (GTAO and its blur, their resources and targets), `SceneRendererGlass.cpp`,
   `SceneRendererScreenReflections.cpp`, `SceneRendererReflectionProbes.cpp`, `SceneRendererAtmosphere.cpp`,
   `SceneRendererLocalShadows.cpp`, `SceneRendererExtraction.cpp` and `SceneRendererGPUDriven.cpp`. Their members stay
@@ -3111,7 +3113,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `MaxShadowedLocalLights` | 4 | 16 | 16 | 16 |
 | `LODErrorPixels` / `MinProjectedPixels` | 2 / 1 | 1 / 0.5 | 1 / 0.5 | 0.5 / 0.25 |
 | `MotionBlurQuality` (samples, for scenes with motion blur) | Off | 8 | 12 | 16 |
-| `AntiAliasing`, `MotionBlur` (players' rows, under every preset) | Scene | Scene | Scene | Scene |
+| `AntiAliasing`, `MotionBlur`, `DepthOfField`, `FilmGrain`, `ChromaticAberration` (players' rows, under every preset: they only turn off what a scene uses) | Scene | Scene | Scene | Scene |
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
 
@@ -3154,10 +3156,12 @@ lights, Post Process and the sky), and never a resolution below the output's.
   changes what a test or perf scene costs), a row `c_<Knob>Row` of its four presets on one line in
   `RendererQuality.cpp`, a line in `GetPreset`, `FromSectionValue` and `ToSectionValue`, a field of the section
   described for agents (its default High's value), `Clamp`'s line, its use in the renderer (both draw paths, and every
-  cache that must notice it), a check of its column in `Renderer.Quality`'s first case, a non-default Custom value in
-  `FeatureTest.stproj`, and its cost in the table above. `HasSameKnobs` and `renderStats.quality` need no line. Each
-  landing that adds rows raises `RendererQuality::c_SectionVersion` by one (an integrator renumbers when two streams
-  chose the same); values stored at an older version read the new fields' defaults.
+  cache that must notice it), a check of its column in `Renderer.Quality`'s first case, a Custom value in
+  `FeatureTest.stproj` (a cost knob's off its default; a players' row that turns off an effect the feature scene uses
+  stays at Scene, so the effect runs: the feature test checks the section's value as a whole against its default), and
+  its cost in the table above. `HasSameKnobs` and `renderStats.quality` need no line. Each landing that adds rows raises
+  `RendererQuality::c_SectionVersion` by one (an integrator renumbers when two streams chose the same); values stored at
+  an older version read the new fields' defaults.
 
 ### Render scene
 
@@ -3641,13 +3645,17 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Post-processing
 
-The passes from the TAA resolve to the display image live in `Renderer/SceneRendererPost.cpp`: `RenderPostHDR` (the
-exposure and the bloom) and `RenderPostDisplay` (the tone mapping and FXAA), recorded in the `GPU.Post` stage. Their GPU
-data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (for tests) in
-`Renderer/PostProcessMath.h`. People's guide: `Docs/Manual/AntiAliasing.md`.
+The passes from the TAA resolve to the display image live in `Renderer/SceneRendererPost.cpp`: depth of field
+(`GPU.DepthOfField`) and motion blur (`GPU.MotionBlur`), then `RenderPostHDR` (the exposure, the bloom and the lens
+flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphological anti-aliasing), recorded in the
+`GPU.Post` stage. Their GPU data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (for tests) in
+`Renderer/PostProcessMath.h`. People's guides: `Docs/Manual/Camera.md` (the camera's image) and
+`Docs/Manual/AntiAliasing.md`.
 
-- **A new effect** runs in `SceneRendererPost.cpp` between the TAA resolve and the tone mapping (in a GPU stage of its
-  own when it is a pass of its own, registered in order as `GPU.MotionBlur` is), reads the frame's post source (the HDR
+- **A new effect** runs in `SceneRendererPost.cpp` between the TAA resolve and the tone mapping (its passes go into the
+  GPU stage they belong to: `GPU.Post` for a pass of the exposure, bloom and tone mapping's chain, as the lens flare's
+  between the bloom's downsamples and upsamples; a stage of its own for an effect of its own, as `GPU.MotionBlur` and
+  `GPU.DepthOfField`, registered as "GPU timing" says), reads the frame's post source (the HDR
   image, the TAA's history or the motion blur's output: `PostSource`, one binding set per source) rather than a texture
   of its choosing, is turned off by `Tests::AddNeutralPostProcess` (so exact-pixel tests keep their meaning) and keeps the
   default image bit-identical when its property is at its neutral value. Exact-pixel tests also render with
@@ -3742,15 +3750,16 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     `renderStats.exposure` (`ev100`, `keyStops`, `cardEv100`).
   - `AddNeutralPostProcess` meters as 0.6.0 did (`Average`, key 0, one speed both ways), so tests that turn automatic
     exposure on keep their meaning.
-- **Bloom** (`RenderBloom`, `Bloom.comp`): the half-resolution chain is allocated with every level down to 4 pixels, at
-  most `RenderData::c_MaxBloomLevels` (8), so a change of `BloomRadius` never reallocates. A frame uses
-  `span = log2(BloomRadius * height)` levels (`SceneRenderer::GetBloomSpan`: within [1, the levels allocated], snapped to a
-  whole number within 1e-4): `ceil(span)` levels, the deepest added with the weight of its share
-  (`BloomParameters::UpsampleWeight`), and the tone mapping normalizes the sum by `1 / span`. The deepest level's texel
-  spans `BloomRadius * height` pixels, so the halo covers the same share of the image at every resolution. The default,
-  64 / 1080, gives 1080 rows 0.6.0's six levels bit for bit and 2160 rows seven (one more, finer octave: a seventh of the
-  energy). Small views get a small halo: tests of 64 pixels that check a glow a few pixels out set `BloomRadius` 0.25
-  (0.6.0's four levels there). `SceneRendererStats::BloomLevels` reports the levels used.
+- **Bloom** (`RenderBloomDownsamples`, `RenderBloomUpsamples`, `DispatchBloom`, `Bloom.comp`): the half-resolution chain
+  is allocated with every level down to 4 pixels, at most `RenderData::c_MaxBloomLevels` (8), so a change of
+  `BloomRadius` never reallocates. A frame uses `span = log2(BloomRadius * height)` levels
+  (`SceneRenderer::GetBloomSpan`: within [1, the levels allocated], snapped to a whole number within 1e-4): `ceil(span)`
+  levels, the deepest added with the weight of its share (`BloomParameters::UpsampleWeight`), and the tone mapping
+  normalizes the sum by `1 / span`. The deepest level's texel spans `BloomRadius * height` pixels, so the halo covers
+  the same share of the image at every resolution. The default, 64 / 1080, gives 1080 rows 0.6.0's six levels bit for
+  bit and 2160 rows seven (one more, finer octave: a seventh of the energy). Small views get a small halo: tests of 64
+  pixels that check a glow a few pixels out set `BloomRadius` 0.25 (0.6.0's four levels there).
+  `SceneRendererStats::BloomLevels` reports the levels used.
 - **Vignette:** a lens's natural fall-off on scene-linear light after the bloom and before the grading and the curve:
   `color *= mix(1, cos^4(theta), Vignette)`, `tan(theta) = |ndc * VignetteTangents|`, the tangents of the camera's half
   field of view per axis (`SceneRenderer::GetVignetteTangents`: `1 / P[0][0]`, `1 / P[1][1]` of its unjittered
@@ -3787,7 +3796,8 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     that blurs, released with the targets)
     holds 1 in alpha where it blurred and becomes the post source of the exposure, the bloom and the tone mapping
     (`PostSource` sets per source: HDR, the TAA's history, the motion blur), whose TAA sharpening is masked off there
-    (`TonemapConstants::ColorFlags`' `c_TonemapMotionBlurMask`): sharpening a blur would cut its streaks into steps.
+    (`TonemapConstants::ColorFlags`' `RenderData::c_TonemapBlurMask`, `ST_BLUR_MASK` in `Tonemap.frag`): sharpening a
+    blur would cut its streaks into steps.
   - The gather's static offsets quantize an edge crossing the span to steps of 1/N of its contrast: fine streak noise
     where things move, nothing that averages away. `PostProcessMath::GetMotionBlurProfile` is its CPU model (the profile
     and spread of an ideal edge), which the GPU tests and the look-dev criteria compare with.
@@ -4311,13 +4321,14 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
 - Every GPU pass is timed in a GPU stage (`FrameStageKind::GPU`, Docs/Architecture.md, "Frame profiler"): a command list's
   passes with one `GPUPassTimer` (constructed where the first pass begins, `Next(stage)` where each next one begins, `End()`
   before the command list closes, on every path that closes it). A new pass goes into the stage it belongs to, or a new stage.
-- A new GPU stage is registered where its pass runs in the frame (`RendererGPUStages::Get` registers in frame order, near
-  the stage its pass follows), and added at the same position to the five lists that name the stages: `editor.perf`'s
-  description (`EditorStateCommands.cpp`), `EditorProfilerTests.cpp`, `FramePerfLogTests.cpp`, Architecture.md's stage
-  table and the editor-automation skill. Registration order sets the stages' ids and perf-log columns, so inserting one
-  moves the later ones; nothing depends on that, since ids are compared only within a build and perf-log readers find
-  columns by name. A new resource of the scene layout takes the next free slot that `Include/Scene.glsl`'s comment
-  lists (assigned slots included), and a pass that does not run binds a dummy there.
+- A new GPU stage is registered where its pass runs in the frame (`RendererGPUStages::Get` registers in frame order,
+  near the stage its pass follows; one exception: `GPU.DepthOfField` was registered after `GPU.MotionBlur`, where wave
+  7's plan placed it, and is timed before it), and added at the same position to the five lists that name the stages:
+  `editor.perf`'s description (`EditorStateCommands.cpp`), `EditorProfilerTests.cpp`, `FramePerfLogTests.cpp`,
+  Architecture.md's stage table and the editor-automation skill. Registration order sets the stages' ids and perf-log
+  columns, so inserting one moves the later ones; nothing depends on that, since ids are compared only within a build
+  and perf-log readers find columns by name. A new resource of the scene layout takes the next free slot that
+  `Include/Scene.glsl`'s comment lists (assigned slots included), and a pass that does not run binds a dummy there.
 - Register a module's GPU stages when the module registers (`RegisterRendererModule` registers `RendererGPUStages`), so they
   exist before a perf log writes its header (`GPU.UI` by `RegisterGameUIModule`), and so are the CPU stages its passes
   time (`Render.UI`): a stage `ST_PROFILE_STAGE` first registers in a frame after the header gets no column; a stage of a

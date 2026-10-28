@@ -31,7 +31,7 @@ namespace Strata
 		FrameStageID TAA = c_InvalidFrameStage;         // The motion history's copy and the temporal anti-aliasing resolve
 		FrameStageID MotionBlur = c_InvalidFrameStage;  // The motion blur's tile maxima, neighborhoods and gather
 		FrameStageID DepthOfField = c_InvalidFrameStage; // Depth of field's passes (timed before the motion blur's)
-		FrameStageID Post = c_InvalidFrameStage;        // Exposure, bloom, tone mapping, FXAA
+		FrameStageID Post = c_InvalidFrameStage;        // Exposure, bloom, lens flares, tone mapping, FXAA or the morphological anti-aliasing
 		FrameStageID Overlays = c_InvalidFrameStage;    // Grid, tints, outline, lines, text, the copy into a target
 
 		static const RendererGPUStages& Get();
