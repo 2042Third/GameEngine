@@ -1611,6 +1611,70 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(editor.Context().GetPrimarySelection().HasComponent<SkyLightComponent>());
 	}
 
+	TEST_CASE("The Sky section's preset buttons run lighting.applySkyPreset as the person's, one undo step each")
+	{
+		ImGuiHarness::Specification display;
+		display.DisplaySize = ImVec2(1600.0f, 1400.0f);
+		AuthoringEditor editor(display);
+		editor.Context().ClearSelection();
+		editor.Frames(2);
+		REQUIRE(editor.ProbeText("Inspector.Sky") == "None");
+		const auto lastCommand = [&]() -> const CommandJournalEntry*
+		{
+			const auto& entries = editor.Context().GetJournal().GetEntries();
+			for (auto entry = entries.rbegin(); entry != entries.rend(); ++entry)
+			{
+				if (!entry->Event)
+					return &*entry;
+			}
+			return nullptr;
+		};
+
+		// Without a sky the buttons show too: the command makes the sky (and the sun) the scene lacks.
+		REQUIRE(editor.Click("Inspector.Sky"));
+		size_t position = editor.UndoPosition();
+		REQUIRE(editor.Click("Inspector.SkyPreset.Clear"));
+		editor.Frames(1);
+		REQUIRE(lastCommand());
+		CHECK(lastCommand()->Command == "lighting.applySkyPreset");
+		CHECK(lastCommand()->Source == CommandSource::UI);
+		CHECK(lastCommand()->Parameters == nlohmann::json { { "preset", "Clear" } });
+		CHECK(editor.UndoPosition() == position + 1);
+		const Entity sky = editor.Context().GetActiveScene()->FindEntityByName("Sky");
+		REQUIRE(sky);
+		REQUIRE(sky.HasComponent<SkyLightComponent>());
+		CHECK(sky.GetComponent<SkyLightComponent>().Source == SkyLightSource::Atmosphere);
+		CHECK(editor.ProbeText("Inspector.Sky") == "Atmosphere");
+
+		// With a sky each button names it, and each preset is one step.
+		struct Expected
+		{
+			const char* Button;
+			const char* Preset;
+			SkyLightSource Source;
+		};
+		constexpr Expected c_Buttons[] = {
+			{ "Inspector.SkyPreset.Hazy", "Hazy", SkyLightSource::Atmosphere },
+			{ "Inspector.SkyPreset.Overcast", "Overcast", SkyLightSource::Procedural },
+			{ "Inspector.SkyPreset.GoldenHour", "GoldenHour", SkyLightSource::Atmosphere },
+			{ "Inspector.SkyPreset.Clear", "Clear", SkyLightSource::Atmosphere }
+		};
+		for (const Expected& button : c_Buttons)
+		{
+			CAPTURE(button.Preset);
+			position = editor.UndoPosition();
+			REQUIRE(editor.Click(button.Button));
+			editor.Frames(1);
+			REQUIRE(lastCommand());
+			CHECK(lastCommand()->Command == "lighting.applySkyPreset");
+			CHECK(lastCommand()->Source == CommandSource::UI);
+			CHECK(lastCommand()->Parameters["preset"] == button.Preset);
+			CHECK(lastCommand()->Parameters["sky"] == UUIDToJson(sky.GetUUID()));
+			CHECK(editor.UndoPosition() == position + 1);
+			CHECK(sky.GetComponent<SkyLightComponent>().Source == button.Source);
+		}
+	}
+
 	TEST_CASE("Extract Sun shows for map skies, makes the map's sun the scene's light, then turns the map's Remove Sun on")
 	{
 		// The feature scene's first sky ("Environment") is Sky.hdr, whose sun the feature project's .meta already removes.

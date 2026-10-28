@@ -1,6 +1,7 @@
 {
 	"Handle": "E88D830B3086223A",
 	"ImportSettings": {
+		"BaseColorFactorsAreSRGB": true,
 		"GenerateLODs": true,
 		"ImportCameras": true,
 		"ImportLights": true,
