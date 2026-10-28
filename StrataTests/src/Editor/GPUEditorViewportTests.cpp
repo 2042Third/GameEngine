@@ -1780,7 +1780,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 			return parameters;
 		};
 
-		// Each view measures its frame: the capture waits for the statistics, which arrive frames later.
+		// Each view measures its frame: the capture waits for the statistics, which come back with its picture.
 		nlohmann::json result;
 		harness.Capture(withView("luminance"), &result);
 		const nlohmann::json& debugView = result["debugView"];
@@ -1819,6 +1819,56 @@ TEST_SUITE("GPU.Editor.Viewport")
 		// The tint views carry no lighting statistics.
 		harness.Capture(withView("lod"), &result);
 		CHECK_FALSE(result["debugView"].contains("lighting"));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("viewport.capture's lighting statistics are those of the frame it captured")
+	{
+		// The statistics come back from the GPU frames after the frame they measured. The capture reports those of its picture's
+		// frame, never of a frame it drew before (while assets loaded or the exposure settled): here the sun's intensity changes
+		// before every frame of the capture renderer and names it, and the reported sun illuminance tells which frame was measured.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		Scene& scene = *harness.Context.GetActiveScene();
+		Entity sun = scene.FindEntityByName("Sun");
+		REQUIRE(sun);
+		const glm::vec3 direction = glm::normalize(glm::vec3(0.3f, -1.0f, 0.2f));
+		sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(direction);
+		sun.MarkModified<TransformComponent>();
+		ViewportRenderer* renderer = harness.Context.GetViewport().GetCaptureRenderer();
+		REQUIRE(renderer);
+
+		for (const char* view : { "luminance", "albedo" })
+		{
+			CAPTURE(view);
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			harness.Runner.Run(harness.Context, harness.Commands, "viewport.capture",
+				{ { "width", 64 }, { "height", 64 }, { "overlays", false }, { "debugView", view } },
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			for (int frame = 0; !*completed && frame < 2000; frame++)
+			{
+				sun.GetComponent<DirectionalLightComponent>().Intensity = static_cast<float>(renderer->GetSceneRenderer().GetRenderCount() + 1);
+				sun.MarkModified<DirectionalLightComponent>();
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				harness.Context.Update(Timestep(1.0f / 60.0f));
+				harness.Runner.Update(harness.Context);
+				gpu.GetDevice().EndFrame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			REQUIRE(*completed);
+			const EditorCommandResult& result = **completed;
+			INFO(result.Error);
+			REQUIRE(result.Success);
+			// The capture's picture is the capture renderer's latest frame.
+			const float captured = static_cast<float>(renderer->GetSceneRenderer().GetRenderCount());
+			const nlohmann::json& lighting = result.Value["debugView"]["lighting"];
+			REQUIRE(lighting.is_object());
+			CHECK(result.Value["debugView"]["lightingPending"] == false);
+			CHECK(lighting["sunIlluminance"].get<float>() == doctest::Approx(captured * -direction.y).epsilon(0.001));
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
