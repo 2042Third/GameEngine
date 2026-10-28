@@ -1058,12 +1058,13 @@ plays, and the **Preferences** dialog ([Preferences](#preferences)).
   (`UI/GraphicsQualityPage`, the section `Renderer.Quality`) shows the presets as five chips and one table, a row per
   quality row that follows the preset ([Quality settings](#quality-settings): the row traits) and a column per preset,
   the chosen column on `AccentMuted`, Custom's column editable (under a named preset it shows where a switch to Custom
-  starts, `RendererQuality::MakeCustomStart`, and an edit there switches to Custom and sets the field in one
-  `project.setSettings`), the rows' memory at 1920 x 1080 and 3840 x 2160 (`RowTraits::MemoryBytes`, summed per column)
-  and a line of the Scene view's GPU times of the rows' stages (formatted again at most twice a second); the rows that
-  do not follow the preset under "Players' choices". Choosing a named preset keeps the rows' stored values, so Custom's
-  tuning comes back with Custom. The page and its probes (`ProjectSettings.Renderer.Quality.` `Preset.<Preset>`,
-  `Header.<Preset>`, `Row.<Field>`, `Cell.<Field>.<Preset>`, `Custom.<Field>`, `Choice.<Field>`, `Memory1080.<Preset>`,
+  starts, `RendererQuality::MakeCustomStart`: an earlier Custom tuning, else the preset's values, which its cells'
+  tooltip names, and an edit there switches to Custom and sets the field in one `project.setSettings`), the rows'
+  memory at 1920 x 1080 and 3840 x 2160 (`RowTraits::MemoryBytes`, summed per column) and a line of the Scene view's
+  GPU times of the rows' stages (formatted again at most twice a second); the rows that do not follow the preset under
+  "Players' choices". Choosing a named preset keeps the rows' stored values, so Custom's tuning comes back with Custom.
+  The page and its probes (`ProjectSettings.Renderer.Quality.` `Preset.<Preset>`, `Header.<Preset>`, `Row.<Field>`,
+  `Cell.<Field>.<Preset>`, `Custom.<Field>`, `CustomTooltip`, `Choice.<Field>`, `Memory1080.<Preset>`,
   `Memory2160.<Preset>`, `GPU`, `Problem`, `Reset`) read the option model, so a row another change adds appears without
   UI work. The generic page and it share the field-to-widget conversions of `UI/SettingsFieldProperty`.
   `EditorShell::ShowProjectSettings(page)` brings the panel forward at a page (the Inspector's link to the collision

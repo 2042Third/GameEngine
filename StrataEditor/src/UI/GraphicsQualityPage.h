@@ -25,8 +25,9 @@ namespace Strata
 	// next session starts with) a banner says what they set, the rows they set carry a "Player" pill, and a button resets
 	// them (graphics.resetPlayerOptions). Probe keys, under "ProjectSettings.<section id>.": Preset.<Low|Medium|High|Ultra|
 	// Custom>, Header.<Preset>, Row.<Field>, Row.<Field>.Player (Row.Preset.Player beside the chips), Cell.<Field>.<Preset>
-	// (the chosen column's record AccentMuted), Custom.<Field>, Choice.<Field>, Memory1080.<Preset>, Memory2160.<Preset>,
-	// GPU, PlayerOptions, PlayerOptions.Reset, Problem, Reset.
+	// (the chosen column's record AccentMuted), Custom.<Field>, CustomTooltip (while a Custom cell's tooltip shows: where an
+	// edit starts), Choice.<Field>, Memory1080.<Preset>, Memory2160.<Preset>, GPU, PlayerOptions, PlayerOptions.Reset,
+	// Problem, Reset.
 	class GraphicsQualityPage final : public SettingsPage
 	{
 	public:

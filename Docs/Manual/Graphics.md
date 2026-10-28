@@ -24,8 +24,9 @@ what each one costs:
 
 - **Medium** draws what Strata 0.6.0 drew. **High**, the default, is Medium on screens below 1440 rows and sharper sun
   shadows from 1440 rows on. **Ultra** is for large GPUs; **Low** for older and integrated ones.
-- **Custom** sets each value yourself: the table's Custom column is editable. Editing it while a preset is chosen switches
-  to Custom, starting from that preset's values; choosing a preset again keeps your Custom values for later.
+- **Custom** sets each value yourself: the table's Custom column is editable. Choosing a preset keeps your Custom values
+  for later, and the column keeps showing them. Editing it while a preset is chosen switches to Custom, starting from
+  the values the column shows: your earlier Custom values, or that preset's when you have none (its tooltip says which).
 - The memory is that of one view: each renderer holds its own (the editor's Scene and Game views and its captures, the
   exported game one), and shadow maps exist only while a light casts shadows.
 - The page also shows how long the Scene view's shadows and meshes take on the GPU now, so you can see a change's cost.

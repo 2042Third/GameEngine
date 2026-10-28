@@ -87,6 +87,16 @@ namespace
 		return editor.Context().GetProject()->GetSettings().FindSection(RendererQuality::c_SectionId);
 	}
 
+	// The tooltip of Custom's cell of a row, as the page records it while it shows (written only then).
+	std::string HoverCustomTooltip(HarnessEditor& editor, std::string_view field)
+	{
+		const std::optional<UI::ItemProbe::Item> cell = UI::ItemProbe::Find(PageKey("Custom." + std::string(field)));
+		REQUIRE(cell.has_value());
+		editor.Harness.MoveMouse(cell->GetCenter());
+		editor.Frames(8, 0.1f);
+		return TextOf(PageKey("CustomTooltip"));
+	}
+
 	// A layer that draws one page in a window, for pages no registered section shows (a test section's).
 	class PageLayer final : public Layer
 	{
@@ -184,8 +194,11 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		CHECK(editor.Context().GetUndoStack().GetCount() == steps + 1);
 		CHECK_FALSE(editor.Context().IsSceneModified());
 		CHECK(ColorOf(PageKey("Header.Ultra")) == AccentMuted());
-		// Custom's column keeps showing the stored tuning (two cascades of High's), which comes back when Custom is chosen.
+		// Custom's column keeps showing the stored tuning (two cascades of High's), which comes back when Custom is chosen, and
+		// an edit there starts from it, as its tooltip says.
 		CHECK(TextOf(PageKey("Memory2160.Custom")) == "192 MiB");
+		CHECK(HoverCustomTooltip(editor, "ShadowCascades") == "Editing a value switches to Custom, starting from the Custom values chosen earlier, "
+			"which this column shows");
 
 		// One undo reverts it.
 		editor.Run("edit.undo");
@@ -209,6 +222,8 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		CreateProject(editor, "GraphicsQualityCustomEdit");
 		OpenGraphicsQuality(editor);
 		const size_t steps = editor.Context().GetUndoStack().GetCount();
+		// Nothing tuned yet: an edit starts from the preset's values.
+		CHECK(HoverCustomTooltip(editor, "ShadowCascades") == "Editing a value switches to Custom, starting from High's values");
 
 		REQUIRE(editor.Click(PageKey("Custom.ShadowResolution")));
 		editor.Frames(1);

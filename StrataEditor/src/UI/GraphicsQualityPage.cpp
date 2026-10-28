@@ -219,8 +219,16 @@ namespace Strata
 			data.Preset = RendererQuality::PresetFromString(preset->get_ref<const std::string&>()).value_or(RendererQualityPreset::High);
 		const bool custom = data.Preset == RendererQualityPreset::Custom;
 		data.CustomValue = custom ? RendererQuality::Normalize(data.Value, data.Model) : RendererQuality::MakeCustomStart(data.Value, data.Model);
-		data.CustomTooltip = custom ? std::string()
-			: fmt::format("Editing a value switches to Custom, starting from {}'s values", RendererQuality::PresetToString(data.Preset));
+		data.CustomTooltip.clear();
+		if (!custom)
+		{
+			// Where a switch to Custom starts: the preset's values, unless MakeCustomStart kept an earlier Custom tuning.
+			nlohmann::json presetStart = RendererQuality::Normalize(data.Value, data.Model);
+			presetStart["Preset"] = RendererQuality::PresetToString(RendererQualityPreset::Custom);
+			data.CustomTooltip = data.CustomValue == presetStart
+				? fmt::format("Editing a value switches to Custom, starting from {}'s values", RendererQuality::PresetToString(data.Preset))
+				: std::string("Editing a value switches to Custom, starting from the Custom values chosen earlier, which this column shows");
+		}
 
 		// The settings of each column, for the memory the engine's rows take (a test model's rows have none).
 		std::array<RendererQualitySettings, c_Columns> settings;
@@ -449,7 +457,10 @@ namespace Strata
 			if (!customChosen)
 				ImGui::PopStyleColor();
 			if (!data.CustomTooltip.empty() && UI::IsTooltipDue())
+			{
 				ImGui::SetTooltip("%s", data.CustomTooltip.c_str());
+				UI::ItemProbe::Record(data.Prefix + "CustomTooltip", true, 0, data.CustomTooltip);
+			}
 			// A drag or a text edit shows its value as it goes and runs the command once, when it ends.
 			if (result.Finished)
 				edited = index;
