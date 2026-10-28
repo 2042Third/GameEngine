@@ -3066,15 +3066,17 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 ### Scene renderer and lighting
 
 - `SceneRenderer` draws a `Scene` from a `SceneCamera` into its output texture or a given framebuffer:
-  light clustering, directional shadow cascades and point and spot lights' shadow views ("Local light shadows"),
+  light clustering, the atmosphere's aerial perspective volume (atmosphere skies only: "Fog and atmosphere"),
+  directional shadow cascades and point and spot lights' shadow views ("Local light shadows"),
   depth/normal/entity-ID prepass (with motion vectors when asked or for
-  TAA: "Motion vectors and TAA"), ground-truth ambient
-  occlusion, the reflection probes' conversions and the screen-space reflections' trace ("Reflections"), forward PBR
+  TAA: "Motion vectors and TAA"), ground-truth ambient occlusion and its denoiser, the reflection probes' conversions
+  and the screen-space reflections ("Reflections": the Checkerboard trace, or for the Spatial modes a nearest-depth
+  pyramid, the full-resolution trace and its resolve, which read the previous frame's color copy), forward PBR
   (opaque surfaces with an EQUAL depth test
-  and forced early depth testing), sky,
-  transparent surfaces: glass first after a copy of the image so far, then the blended ones back to front ("Clear coat
-  and glass"), each fogged by the scene's height fog ("Fog and atmosphere"), the temporal
-  anti-aliasing resolve when the scene chooses it, then
+  and forced early depth testing), sky, a copy of the image so far (for glass, and with a full-resolution one beside it
+  for the Spatial reflections of the next frame), transparent surfaces: glass first, then the blended ones back to front
+  ("Clear coat and glass"), every surface hazed by aerial perspective and then fogged by the scene's height fog ("Fog and
+  atmosphere"), the temporal anti-aliasing resolve when the scene chooses it, then
   post-processing from the scene's `PostProcessComponent` (exposure, bloom, tone mapping and grading, FXAA without
   TAA). A target framebuffer must match the viewport size and have a non-sRGB UNORM color format; `Render` returns false
   (and logs once) instead of rescaling. The output
