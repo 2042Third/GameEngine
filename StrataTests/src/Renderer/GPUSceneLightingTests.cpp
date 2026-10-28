@@ -1,6 +1,7 @@
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RendererComponents.h"
+#include "Strata/Renderer/RendererQuality.h"
 
 #include <glm/gtc/constants.hpp>
 
@@ -495,42 +496,59 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 		Scene scene;
 		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().EnvironmentMap = uniform;
 		SceneRenderer renderer;
-		renderer.SetViewportSize(c_Size, c_Size);
-		REQUIRE(renderer.Render(scene, LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f))));
-		CHECK(renderer.GetStats().EnvironmentLighting);
-		REQUIRE(renderer.GetIrradianceMap());
-
-		// A uniform environment stays uniform under every normalized filter: each face and mip of the radiance cube,
-		// the irradiance map and every roughness level of the prefiltered map.
-		for (nvrhi::ITexture* texture : { renderer.GetEnvironmentCube(), renderer.GetIrradianceMap(), renderer.GetPrefilteredMap() })
+		// Both prefiltered sizes (RendererQualitySettings::EnvironmentResolution: Medium's 256, High's 512, whose second and
+		// third levels take fewer samples).
+		for (const uint32_t size : { 512u, 256u })
 		{
-			const nvrhi::TextureDesc& desc = texture->getDesc();
-			CAPTURE(desc.debugName);
-			CHECK(desc.arraySize == 6);
-			for (uint32_t mip = 0; mip < desc.mipLevels; mip++)
+			CAPTURE(size);
+			RendererQualitySettings quality = RendererQuality::GetPreset(RendererQualityPreset::Medium);
+			quality.Preset = RendererQualityPreset::Custom;
+			quality.EnvironmentResolution = size;
+			renderer.SetQuality(quality);
+			renderer.SetViewportSize(c_Size, c_Size);
+			REQUIRE(renderer.Render(scene, LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f))));
+			CHECK(renderer.GetStats().EnvironmentLighting);
+			REQUIRE(renderer.GetIrradianceMap());
+			REQUIRE(renderer.GetPrefilteredMap());
+			CHECK(renderer.GetPrefilteredMap()->getDesc().width == size);
+			CHECK(renderer.GetPrefilteredMap()->getDesc().mipLevels == 6);
+
+			// A uniform environment stays uniform under every normalized filter: each face and mip of the radiance cube,
+			// the irradiance map and every roughness level of the prefiltered map.
+			for (nvrhi::ITexture* texture : { renderer.GetEnvironmentCube(), renderer.GetIrradianceMap(), renderer.GetPrefilteredMap() })
 			{
-				for (uint32_t face = 0; face < 6; face++)
+				const nvrhi::TextureDesc& desc = texture->getDesc();
+				CAPTURE(desc.debugName);
+				CHECK(desc.arraySize == 6);
+				for (uint32_t mip = 0; mip < desc.mipLevels; mip++)
 				{
-					CAPTURE(mip);
-					CAPTURE(face);
-					ReadbackImage image;
-					REQUIRE(Renderer::ReadTexture(texture, image, mip, face));
-					CHECK(image.Width == std::max(desc.width >> mip, 1u));
-					for (uint32_t y = 0; y < image.Height; y += std::max(1u, image.Height / 4))
+					for (uint32_t face = 0; face < 6; face++)
 					{
-						for (uint32_t x = 0; x < image.Width; x += std::max(1u, image.Width / 4))
+						CAPTURE(mip);
+						CAPTURE(face);
+						ReadbackImage image;
+						REQUIRE(Renderer::ReadTexture(texture, image, mip, face));
+						CHECK(image.Width == std::max(desc.width >> mip, 1u));
+						CHECK(image.Height == std::max(desc.height >> mip, 1u));
+						for (uint32_t y = 0; y < image.Height; y += std::max(1u, image.Height / 4))
 						{
-							const glm::vec4 texel = ReadHalfTexel(image, x, y);
-							CHECK(texel.r == doctest::Approx(2.0f).epsilon(0.01));
-							CHECK(texel.b == doctest::Approx(2.0f).epsilon(0.01));
+							for (uint32_t x = 0; x < image.Width; x += std::max(1u, image.Width / 4))
+							{
+								const glm::vec4 texel = ReadHalfTexel(image, x, y);
+								CHECK(texel.r == doctest::Approx(2.0f).epsilon(0.01));
+								CHECK(texel.b == doctest::Approx(2.0f).epsilon(0.01));
+							}
 						}
+						// The last texel too: a level dispatched for a smaller size leaves its far corner unwritten.
+						const glm::vec4 corner = ReadHalfTexel(image, image.Width - 1, image.Height - 1);
+						CHECK(corner.r == doctest::Approx(2.0f).epsilon(0.01));
 					}
 				}
 			}
+			ReadbackImage outOfRange;
+			CHECK_FALSE(Renderer::ReadTexture(renderer.GetPrefilteredMap(), outOfRange, 6, 0));
+			CHECK_FALSE(Renderer::ReadTexture(renderer.GetPrefilteredMap(), outOfRange, 0, 6));
 		}
-		ReadbackImage outOfRange;
-		CHECK_FALSE(Renderer::ReadTexture(renderer.GetPrefilteredMap(), outOfRange, 6, 0));
-		CHECK_FALSE(Renderer::ReadTexture(renderer.GetPrefilteredMap(), outOfRange, 0, 6));
 
 		ReadbackImage lut;
 		REQUIRE(Renderer::ReadTexture(renderer.GetBRDFLut(), lut));
