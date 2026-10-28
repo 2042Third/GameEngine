@@ -192,6 +192,9 @@ editor started with `--no-gpu` (use `--headless`):
   belowRangeShare, aboveRangeShare, sunIlluminance, skyIlluminance, sunToSkyRatio}` (null where the view measures nothing):
   check `sunToSkyRatio` (lux from the sun over lux from the sky on flat ground: a clear day 6 to 10, hazy 3 to 5, overcast
   under 0.3) and `aboveRangeShare` (albedos too bright) instead of reading colors.
+- **Sun and sky presets:** `lighting.applySkyPreset {"preset": "Clear" | "Hazy" | "Overcast" | "GoldenHour", sky?, light?,
+  sunElevation?, sunAzimuth?}` lights the scene with a real sky and sun in one undo step (creating "Sky" and "Sun" when
+  missing, keeping the sun's azimuth unless given) and returns `groundIlluminance`; start a scene's lighting from one.
 - **Texture memory** follows the screen: `asset.stats {"assets": true}` lists each streaming texture with `residentMip`
   (the finest mip level resident, 0 the full resolution), `wantedMip` (the finest its views need), `mipCount` and
   `residentBytes`, and its `mipStreaming` totals say what the streamer did (`levelsRaised`, `levelsDropped`,

@@ -5,6 +5,7 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/ProjectTemplates.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Editor/SaveTestUtils.h"
 #include "Renderer/GPUTestUtils.h"
@@ -15,14 +16,17 @@
 #include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Timestep.h>
+#include <Strata/Math/Math.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/RendererComponents.h>
+#include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Scene.h>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <stb_image.h>
 
 #include <algorithm>
@@ -742,6 +746,50 @@ TEST_SUITE("GPU.Editor.Lighting")
 		REQUIRE(result.Success);
 		CHECK(result.Value["clipped"] == true);
 		CHECK(result.Value["warning"].get<std::string>().find("clipped") != std::string::npos);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The Basic 3D template's sun lights flat ground at least five times as much as its sky")
+	{
+		// The template's Clear preset: the physical atmosphere and a 120,000 lux sun 40 degrees up, measured by the luminance
+		// view's statistics (Strata 0.6.0's template, a 3 lux sun under the procedural sky, gave 2.4).
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Scene scene;
+		REQUIRE(ProjectTemplates::Populate(ProjectTemplates::c_Basic3D, scene));
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(64, 64);
+		SceneRenderOptions options;
+		options.LightingView = SceneLightingView::Luminance;
+		SceneCamera camera;
+		camera.View = glm::lookAt(glm::vec3(0.0f, 2.0f, 6.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		camera.Projection = Math::PerspectiveReverseZ(glm::radians(60.0f), 1.0f, 0.1f, 1000.0f);
+		camera.Position = glm::vec3(0.0f, 2.0f, 6.0f);
+		camera.Near = 0.1f;
+		camera.Far = 1000.0f;
+		camera.VerticalFOV = glm::radians(60.0f);
+		// The atmosphere's environment is made over a few frames: statistics of a frame drawn with it are read.
+		uint64_t environmentFrame = 0;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (std::chrono::steady_clock::now() < deadline)
+		{
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			renderer.ResolveGPUStats(true);
+			if (environmentFrame == 0 && renderer.GetStats().EnvironmentLighting && !renderer.GetStats().EnvironmentRefreshPending)
+				environmentFrame = renderer.GetRenderCount();
+			if (environmentFrame != 0 && renderer.GetLightingViewStats() && renderer.GetLightingViewStats()->Render > environmentFrame)
+				break;
+		}
+		REQUIRE(renderer.GetLightingViewStats());
+		const LightingViewStats& stats = *renderer.GetLightingViewStats();
+		CAPTURE(stats.SunIlluminance);
+		CAPTURE(stats.SkyIlluminance);
+		// The air dims the sun on its way down; the ground still gets most of it.
+		CHECK(stats.SunIlluminance < 120000.0f * std::sin(glm::radians(40.0f)));
+		CHECK(stats.SunIlluminance > 40000.0f);
+		CHECK(stats.SunToSkyRatio >= 5.0f);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

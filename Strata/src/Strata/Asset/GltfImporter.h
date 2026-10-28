@@ -21,8 +21,8 @@ namespace Strata
 	// no conversion is applied besides the optional uniform scale.
 	//
 	// Settings: { "Scale": 1.0, "GenerateLODs": true, "LODCount": 3, "OptimizeMeshes": true, "ImportMaterials": true,
-	// "ImportCameras": true, "ImportLights": true, "MaxTextureSize": 0, "TextureCompression": "Auto",
-	// "TextureQuality": "High" } (the last two as TextureImportSettings' Compression and Quality).
+	// "BaseColorFactorsAreSRGB": false, "ImportCameras": true, "ImportLights": true, "MaxTextureSize": 0, "TextureCompression":
+	// "Auto", "TextureQuality": "High" } (the last two as TextureImportSettings' Compression and Quality).
 	// Morph targets, their animation and vertex colors are not imported (a warning names what was skipped).
 	// Files referenced by the model must lie inside the asset directory; changing them re-imports the model. Buffer views
 	// compressed with EXT_meshopt_compression are decoded with meshoptimizer's decoders and filters.
@@ -35,8 +35,8 @@ namespace Strata
 		// 8: the import scale is baked into the content instead of the model root's scale.
 		// 9: levels of detail are simplified with their normals and texture coordinates, with their errors (cooked meshes
 		// version 3). 10: clear coat, transmission, volume and index of refraction (KHR_materials_clearcoat, _transmission,
-		// _volume, _ior).
-		uint32_t GetVersion() const override { return 10; }
+		// _volume, _ior). 11: BaseColorFactorsAreSRGB.
+		uint32_t GetVersion() const override { return 11; }
 		bool ReadsExternalFiles() const override { return true; }
 		// The URIs of the model's buffers and images that name files (data URIs and buffers in a .glb are no files); fails for
 		// URLs and absolute paths.

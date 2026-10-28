@@ -88,9 +88,11 @@ namespace Strata
 		// Procedural sky: linear luminance in nits straight up, at the horizon and below it. The sun's disk sits where the
 		// scene's directional light comes from (45 degrees above the horizon without one), SunSize degrees across, with the
 		// light's color times SunIntensity as its luminance.
-		glm::vec3 ZenithColor = { 0.18f, 0.32f, 0.62f };
-		glm::vec3 HorizonColor = { 0.66f, 0.74f, 0.84f };
-		glm::vec3 GroundColor = { 0.22f, 0.20f, 0.18f };
+		// The defaults give a clear day's sun to sky ratio on flat ground (about 8 with the default 3 lux sun 45 degrees up, as the
+		// atmosphere's): Strata 0.6.0's colors times 0.25.
+		glm::vec3 ZenithColor = { 0.045f, 0.08f, 0.155f };
+		glm::vec3 HorizonColor = { 0.165f, 0.185f, 0.21f };
+		glm::vec3 GroundColor = { 0.055f, 0.05f, 0.045f };
 		float SunSize = 0.53f; // Degrees across (the procedural sky's and the atmosphere's disk)
 		float SunIntensity = 20.0f;
 		// Atmosphere: the directional light is the sun above the atmosphere (its Intensity the illuminance there, about

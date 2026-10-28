@@ -1324,6 +1324,8 @@ registration (and the tests'), and any a module registers. They hold for every p
 
 ### Importers
 
+- glTF models: `BaseColorFactorsAreSRGB` (off by default, inactive without Import Materials) decodes base color factors an
+  exporter wrote as sRGB bytes (Kenney's kits) to the linear values glTF expects; the alpha stays. Importer version 11.
 - Importers (`Asset/AssetImporter.h`, built-ins in `Asset/AssetImporters.cpp`) turn source files into
   the stored form, cached per handle in `<project>/.strata/Cache` (derived data, never committed). A
   cached import is redone when the source content, the import settings, the importer's `GetVersion()`
@@ -3655,6 +3657,27 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Light units and exposure
 
+- **Balanced light by default:** the `basic3d` template lights its scene with the Clear sky preset (`R/SkyPresets.h`): the
+  physical atmosphere with the component's default air and a 120,000 lux sun above it, 40 degrees up at the azimuth 20
+  (`ProjectTemplates::GetBasic3DSunDirection`), shadows of a 0.53 degree sun: flat ground in the sun gets at least five
+  times the light of flat ground in shade (`GPU.Editor.Lighting`; 0.6.0's template gave 2.4). New procedural skies have
+  0.6.0's colors times 0.25 (zenith 0.045, 0.08, 0.155; horizon 0.165, 0.185, 0.21; ground 0.055, 0.05, 0.045 nits), a
+  ratio of about 8.4 with the default 3 lux sun 45 degrees up, as the atmosphere's (`GPU.ProceduralSky`); stored skies keep
+  their colors. The editor's preview sky for scenes without light uses the new defaults.
+- **Sun and sky presets** (`SkyPreset`, `GetSkyPresetValues`, `GetSkyPresetSunDirection`; the values are command API):
+  | Preset | Sky | Sun |
+  | --- | --- | --- |
+  | Clear | Atmosphere: density 1, haze 1, ground albedo 0.3 | 40 degrees, 120,000 lux, 0.53 degrees soft |
+  | Hazy | Atmosphere: density 1.2, haze 4, ground albedo 0.3 | 35 degrees, 120,000 lux, 0.53 |
+  | Overcast | Procedural: zenith (2600, 2650, 2750), horizon (2200, 2250, 2300), ground (400, 380, 360) nits, no disk | 60 degrees, 1,500 lux, 10 (the softest) |
+  | GoldenHour | Atmosphere: density 1, haze 1.5, ground albedo 0.3 | 6 degrees, 120,000 lux, 0.53 |
+
+  `lighting.applySkyPreset {preset, sky?, light?, sunElevation?, sunAzimuth?}` writes them in one undo step (the running
+  copy while playing): the sky light's source and settings, the directional light's rotation (keeping its azimuth, measured
+  on the direction toward the sun, unless `sunAzimuth` is given; 20 for a new light), intensity, color and softness, and
+  raises the active Post Process's `AutoExposureMaxEV` below 15 to 16; it creates "Sky" and "Sun" when the scene has none and
+  returns `groundIlluminance` (the atmosphere's transmittance applied, `Atmosphere::ComputeSunTransmittance`). The
+  Inspector's Sky section has a button per preset.
 - The shading computes photometric quantities without a factor between them, so every intensity has a unit (the
   descriptions and the Inspector's tooltips name it; `Renderer.LightUnits` checks them):
   - `DirectionalLightComponent::Intensity` is illuminance in lux on a surface facing the light, times `Color`
