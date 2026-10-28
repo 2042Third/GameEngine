@@ -3643,6 +3643,13 @@ exposure and the bloom) and `RenderPostDisplay` (the tone mapping and FXAA), rec
 data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (for tests) in
 `Renderer/PostProcessMath.h`. People's guide: `Docs/Manual/AntiAliasing.md`.
 
+- **A new effect** runs in `SceneRendererPost.cpp` between the TAA resolve and the tone mapping (in a GPU stage of its
+  own when it is a pass of its own, registered in order as `GPU.MotionBlur` is), reads the frame's post source (the HDR
+  image, the TAA's history or the motion blur's output: `PostSource`, one binding set per source) rather than a texture
+  of its choosing, is turned off by `Tests::AddNeutralPostProcess` (so exact-pixel tests keep their meaning) and keeps the
+  default image bit-identical when its property is at its neutral value. Exact-pixel tests also render with
+  `Tests::ExactSpecification()` (no dither). Generated constants (`FilmicConstants`, `WhiteBalanceLocus.inl`) change
+  only through their generators (`Tools/FitFilmic.py`, `Tools/GenerateWhiteBalance.py`), never by hand.
 - **Parameters:** post passes take theirs by push constants or by buffers of their own, never by new `FrameConstants`
   fields (reading them is fine). The tone mapping reads `RenderData::TonemapConstants`, a volatile constant buffer
   (`m_TonemapConstantBuffer`, `ST_CBV(0)`, std140) written once per frame right before its draw: its parameters outgrew
@@ -3768,6 +3775,20 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
   - Limits: blended transparent surfaces write no velocity and blur with what lies behind them; overlays, text and the
     game UI are drawn after the post and never blur. Stats: `MotionBlurred`, `MotionBlurSamples`, `MotionBlurTileSize`
     (`renderStats.motionBlur`).
+  - Judging it: the look-dev harness's live shots `tp.live.slow`, `.turn` and `.fast` turn the Third-Person camera at 6,
+    30 and 120 degrees per second (Look values 0.0375, 0.1875 and 0.75 of its 160 degrees per second), each without
+    blur and with shutters of 180 (`.mb180`) and 90 degrees (`.mb90`) under TAA, the gameplay turn also under FXAA and
+    without anti-aliasing (`tp.live.turn.fxaa`, `.off`, each with `.mb180`), and the slow and fast ones without
+    anti-aliasing (`tp.live.slow.off`, `tp.live.fast.off`, each with `.mb180`); capture them with `--live-only --sizes
+    3840x2160 --shots "tp.live.*"`. They adapt the exposure at once (both speeds 0: adaptation follows the wall clock,
+    which differs between runs). Only shots without anti-aliasing compare pixel for pixel across runs: TAA's jitter
+    follows the frames the editor drew between steps. In the slow pan no pixel of the center crop differs from its
+    blur-off twin by more than 3 codes (0.25% differ at all: near ground, whose parallax moves it past the threshold),
+    and 6 pixels of the rest of the frame do. The template and the samples keep `MotionBlur` off until the owner's
+    before/after sheet of these shots clears it (the owner rejects smear: when in doubt, off).
+  - Perf (provisional, measured by the reference machine's campaign): `PerfGPU.Renderer.MotionBlur4K` (`GPU.MotionBlur`
+    at High, 3840x2160, the camera turning 16 pixels a frame) and `MotionBlur4KStill` (still), beside `Post4K`
+    (`GPU.Post` with every post effect at its default and a grading).
 - **The players' rows** (`RendererQualitySettings::AntiAliasing` and `MotionBlur`, the same under every preset): Scene,
   or Off, FXAA or TAA for the method; Scene or Off for the motion blur (players may turn off, never on, what a scene
   uses). `ApplyQualityOverrides` applies them to the copy of the Post Process every pass reads, once per frame, on both
