@@ -495,7 +495,8 @@ time: presenting, and the wait for the display's image at the back buffer's firs
 
 **Render statistics and GPU time**: `editor.perf` also has `gpu` (`frames` with GPU times, `latencyFrames`: they arrive
 2-3 frames late, `busy`, `stages` per GPU stage: `GPU.Uploads`, `GPU.Setup`, `GPU.Cull`, `GPU.Shadows`, `GPU.Prepass`,
-`GPU.AO`, `GPU.Reflections` (reflection probes' conversions, screen-space reflections), `GPU.Opaque` (with the sky),
+`GPU.ScreenShadows` (the sun's shadow mask, its blur, contact shadows and the cascades' fit to the view), `GPU.AO`,
+`GPU.Reflections` (reflection probes' conversions, screen-space reflections), `GPU.Opaque` (with the sky),
 `GPU.Transparent`, `GPU.TAA` (motion vectors' history, temporal anti-aliasing), `GPU.Post`, `GPU.Overlays`, `GPU.UI` (the
 game UI), `GPU.ImGui`) and `boundBy`: `"gpu"`
 (the GPU's median busy time takes at least 90% of the frame interval and exceeds the CPU's frame time: make the scene
@@ -503,7 +504,11 @@ cheaper to draw), `"cpu"` (the CPU's frame time does: look at `stages`), `"cappe
 pace: neither is the limit) or `"unknown"` (no GPU times: `--no-gpu`, or a driver without timestamps). Its `renderStats`
 (`gameRenderStats` for the Game view's frame, null while it is hidden; and every `viewport.capture` result's, for the
 captured frame) says what a frame drew: `quality` (the Graphics Quality it drew with, as `project.setSettings` takes
-it), `shadowMapSize` (the sun's cascades' texels), `localShadowTileSizes` (each shadowed point and spot light's tile),
+it), `shadowMapSize` (the sun's cascades' texels), `cascades` (each sun cascade's slice `near`/`far` in meters of view
+distance, `texelSize` in meters and `fitted`: its square follows the receivers rather than its slice's sphere),
+`shadowFit` (`fitted`: the cascades are laid out over the receivers the frame's depth showed; `squaresFitted`, `settled`:
+no readback is due that may change them; `near`, `far`: the range the slices divide), `localShadowTileSizes` (each
+shadowed point and spot light's tile),
 `gpuDriven` (the GPU culled it
 and built its draws: its counts are the GPU's, of a frame 2-3 frames older in `editor.perf` and of the captured frame in
 captures, once `gpuCounts` is true), `feedbackRequests` (its asset requests came from the GPU's visibility feedback of a

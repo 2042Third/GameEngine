@@ -3657,7 +3657,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
   feedback frames every cascade gets the slots of every caster the feedback saw, and the last cascade holds every caster
   of every receiver. `ForThumbnails()` and `ForBake()` turn the fit off (single frames), and so do tests of the layout's
   texel sizes or 0.6.0's splits. Stats: `ShadowFit`, `ShadowFitSquares`, `ShadowFitSettled`, `ShadowFitNear`, `ShadowFitFar`,
-  `ShadowFitChanges`, `Cascades[c].Fitted`; `editor.status`'s render stats report `shadowFit` and `cascades`. Tests:
+  `ShadowFitChanges`, `Cascades[c].Fitted`; `editor.perf`'s `renderStats` (and every `viewport.capture` result's) report
+  `shadowFit` and `cascades`. Tests:
   `Renderer.ShadowFit` (the tracker alone, synthetic readbacks), `GPU.SceneRenderer.ShadowFit`.
 - **Costs** (look-dev A/B against 0.6.0's filter at cc9524a1, three interleaved pairs, medians, the samples' scene cameras
   with TAA; RTX 5090): at 3840x2160 High `GPU.ScreenShadows` is 0.46-0.78 ms (mask, blur, contact shadows and the fit's

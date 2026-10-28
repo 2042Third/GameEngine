@@ -58,7 +58,7 @@ integrator writes the release notes from them when the wave lands (and removes t
   shadow's texels go where the surfaces are (several times finer under a high camera looking down over a level). The
   farthest cascade still reaches the Shadow Distance, so what comes into view is shadowed at once. Cascade Distribution
   on the Directional Light (0.9) shares the distances among the cascades; captures wait for the fit (`shadowFitSettled`),
-  and `editor.status`'s render statistics report each cascade's slice and texel size.
+  and the render statistics of `editor.perf` and `viewport.capture` report each cascade's slice and texel size.
 
 **Upgrading**
 
