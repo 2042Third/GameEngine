@@ -1,0 +1,42 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/DepthOfField.glsl"
+
+// Depth of field's composite, at full resolution, into the post source of what follows: a pixel whose circle of confusion is
+// under a pixel across keeps the sharp image exactly; its own blurred field fades in over the next pixel of diameter; the near
+// field (premultiplied) goes over everything. Alpha 1 marks the pixels it changed (the tone mapping does not sharpen them).
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(0)) uniform texture2D u_Color;
+layout(set = 0, binding = ST_SRV(1)) uniform texture2D u_Depth;
+layout(set = 0, binding = ST_SRV(2)) uniform texture2D u_Near;
+layout(set = 0, binding = ST_SRV(3)) uniform texture2D u_Own;
+layout(set = 0, binding = ST_UAV(0), rgba16f) uniform writeonly image2D o_Composite;
+
+void main()
+{
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = textureSize(u_Color, 0);
+	if (any(greaterThanEqual(pixel, size)))
+		return;
+	vec3 color = texelFetch(u_Color, pixel, 0).rgb;
+	vec2 uv = (vec2(pixel) + 0.5) * u_Frame.ViewportSize.zw;
+	float radius = abs(GetCircleOfConfusion(uv, texelFetch(u_Depth, pixel, 0).r));
+	float changed = 0.0;
+	float blend = smoothstep(0.5, 1.0, radius);
+	if (blend > 0.0)
+	{
+		color = mix(color, texture(sampler2D(u_Own, u_LinearClampSampler), uv).rgb, blend);
+		changed = 1.0;
+	}
+	vec4 near = texture(sampler2D(u_Near, u_LinearClampSampler), uv);
+	if (near.a > 0.0)
+	{
+		color = color * (1.0 - near.a) + near.rgb;
+		changed = 1.0;
+	}
+	imageStore(o_Composite, pixel, vec4(min(color, vec3(c_MaxHDRValue)), changed));
+}

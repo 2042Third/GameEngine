@@ -327,6 +327,66 @@
 					"Speed": 0.0,
 					"Tooltip": "",
 					"Type": "Color4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Depth Of Field",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "DepthOfField",
+					"Speed": 0.0,
+					"Tooltip": "Blurs what lies nearer or farther than the focus, as a camera's lens does (perspective cameras); players can turn it off",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Focus Distance",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10000.0,
+					"Min": 0.10000000149011612,
+					"Name": "FocusDistance",
+					"Speed": 0.05000000074505806,
+					"Tooltip": "Meters from the camera to the sharpest plane",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Focus Entity",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "FocusEntity",
+					"Speed": 0.0,
+					"Tooltip": "Keeps this entity in focus (its distance along the camera's view, at least the near plane); none: Focus Distance",
+					"Type": "Entity"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Aperture",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 32.0,
+					"Min": 1.0,
+					"Name": "Aperture",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "The lens's f-number: lower blurs more (f/1.4 a portrait lens wide open), higher keeps more in focus (f/16)",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Sensor Height",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 100.0,
+					"Min": 4.0,
+					"Name": "SensorHeight",
+					"Speed": 0.5,
+					"Tooltip": "Millimeters: with the field of view it sets the focal length; larger sensors blur more at the same view (24 full frame, 15.6 APS-C, 8.8 a 1-inch sensor)",
+					"Type": "Float"
 				}
 			]
 		},

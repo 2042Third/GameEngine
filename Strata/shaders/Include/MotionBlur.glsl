@@ -16,9 +16,9 @@ layout(push_constant) uniform MotionBlurParameters
 	float MinLength;       // Pixels: blurs shorter than this are dropped, fading in up to twice it (the height / 1080)
 	uint TileSize;         // Pixels each way of a tile of the tile maxima
 	uint SampleCount;      // The gather's samples (8, 12 or 16)
+	uint SourceMask;       // 1: the source's alpha is the depth of field's mask, kept where the gather copies the color
 	uint Padding0;
 	uint Padding1;
-	uint Padding2;
 } u_MotionBlur;
 
 // The blur of a pixel, in pixels (+y down): its motion since the previous frame (the camera's where nothing was drawn) times

@@ -1,7 +1,8 @@
 # The camera's image
 
 How Strata turns the light of a scene into the picture a camera would take: exposure, the tone curve, color, bloom, the
-vignette and motion blur, all set on the scene's **Post Process** component, what each costs, and three recipes.
+vignette and motion blur, all set on the scene's **Post Process** component, depth of field, set on the **Camera**, what
+each costs, and three recipes.
 This guide is for people working in the editor; [DeveloperGuide.md](../DeveloperGuide.md) (Rendering, "Light units and
 exposure" and "Post-processing") explains how the renderer computes it. Anti-aliasing has its own page:
 [AntiAliasing.md](AntiAliasing.md).
@@ -110,6 +111,25 @@ turns it on:
 The Basic 3D template and the samples leave it off: motion blur suits fast games seen through a moving camera (racing,
 action), where it reads as a camera's; slow, precise and 2D games are better without it.
 
+## Depth of field
+
+A real lens shows sharp only what lies at its focus: nearer and farther things blur into soft disks, more the wider its
+aperture. Turn on **Depth Of Field** on the scene's camera (perspective cameras only):
+
+- **Focus Distance** (10 m): meters from the camera to the sharpest plane. Or **Focus Entity**: an entity kept in focus
+  (its distance along the camera's view), such as the player or a speaking character.
+- **Aperture** (f/2.8): the f-number. Lower blurs more (f/1.4, a portrait lens wide open, isolates a subject), higher keeps
+  more in focus (f/8 to f/16 for landscapes).
+- **Sensor Height** (24 mm, full frame): with the field of view it sets the focal length; a larger sensor at the same view
+  blurs more (36 for medium format), a smaller one less (15.6 APS-C, 8.8 a 1-inch sensor).
+- A wide view (60 degrees) focused 10 m away barely blurs the far background at f/2.8 (about 1.4 pixels across at
+  2160 rows), as a real wide lens does; near things blur strongly. Long lenses (a narrow field of view) blur much more.
+  No blur is wider than 2% of the image height.
+- What is in focus stays exactly as without depth of field; a blurred foreground spreads over what lies behind it.
+- The Game view, a Scene view through the game's camera and captures through it show it, playing or not; the editor
+  camera never does. Players can turn it off: the **Depth of field** row of the Graphics Quality settings (Scene or Off,
+  the same under every preset; [Settings.md](Settings.md)).
+
 ## What it costs
 
 GPU time at 3840x2160 on an RTX 5090 (the medians of Strata's look-dev captures of the samples and of its perf tests):
@@ -120,8 +140,9 @@ GPU time at 3840x2160 on an RTX 5090 (the medians of Strata's look-dev captures 
 | The same with FXAA, or with TAA's sharpening | about 0.21 ms, 0.22 ms |
 | Motion blur (`GPU.MotionBlur`, 12 samples), the camera turning 16 pixels a frame | about 0.18 ms |
 | Motion blur, the camera still | about 0.11 ms (it still reads every pixel) |
+| Depth of field (`GPU.DepthOfField`), everything far blurred at the largest circle | about 0.20 ms |
 
-Off, motion blur costs nothing (no pass, no target, no motion vectors it would ask for).
+Off, motion blur costs nothing (no pass, no target, no motion vectors it would ask for), and so does depth of field.
 
 ## Recipes
 

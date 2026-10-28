@@ -3088,18 +3088,31 @@ namespace Strata
 				m_Errors.Clear();
 			return true;
 		}
-		// Post-processing reads the resolved image with temporal anti-aliasing (the history's newest texture), and the motion
-		// blur's output on frames that blur: not without a motion history (the first frame, a resize, another render scene) or on
-		// a camera cut, whose motion spans the cut.
+		// Post-processing reads the resolved image with temporal anti-aliasing (the history's newest texture), the depth of field's
+		// output on frames seen through a lens (perspective views, unless the players turned it off), and the motion blur's on
+		// frames that blur: not without a motion history (the first frame, a resize, another render scene) or on a camera cut,
+		// whose motion spans the cut.
 		const bool resolved = m_TemporalResolved;
-		bool motionBlurred = false;
+		PostSource postSource = resolved ? PostSource::History : PostSource::HDR;
+		if (options.Lens && !camera.Orthographic && m_Specification.Quality.DepthOfField != SceneEffectChoice::Off)
+		{
+			gpuTimer.Next(gpuStages.DepthOfField);
+			commandList->beginMarker("DepthOfField");
+			if (RenderDepthOfField(commandList, *options.Lens, postSource))
+				postSource = PostSource::DepthOfField;
+			else
+				degraded = true;
+			commandList->endMarker();
+		}
 		if (motionBlurWanted && m_Stats.MotionHistory && !cameraCut)
 		{
 			gpuTimer.Next(gpuStages.MotionBlur);
 			commandList->beginMarker("MotionBlur");
-			motionBlurred = RenderMotionBlur(commandList, postProcess, resolved);
+			if (RenderMotionBlur(commandList, postProcess, postSource))
+				postSource = PostSource::MotionBlur;
+			else
+				degraded = true;
 			commandList->endMarker();
-			degraded = degraded || !motionBlurred;
 		}
 		gpuTimer.Next(gpuStages.Post);
 		// The exposure key's reference: the luminance of a gray card (albedo 0.18) facing the directional light, as Forward.frag
@@ -3110,7 +3123,7 @@ namespace Strata
 			keyReferenceLog2 = std::log2(sunLuminance);
 		if (postProcess.AutoExposure)
 			m_Stats.ExposureKeyReferenceLog2 = keyReferenceLog2;
-		const bool bloom = RenderPostHDR(commandList, postProcess, options, resolved, motionBlurred, keyReferenceLog2);
+		const bool bloom = RenderPostHDR(commandList, postProcess, options, postSource, keyReferenceLog2);
 
 		TextRenderStats textStats;
 		m_FontAtlases->BeginFrame(TextRenderer::c_FrameRasterBudget);
@@ -3145,7 +3158,7 @@ namespace Strata
 			return false;
 		}
 		nvrhi::IFramebuffer* output = target && !overlays ? target : m_OutputFramebuffer.Get();
-		RenderPostDisplay(commandList, postProcess, temporalSettings, resolved, motionBlurred, bloom, GetVignetteTangents(camera, m_ViewportSize), output);
+		RenderPostDisplay(commandList, postProcess, temporalSettings, resolved, postSource, bloom, GetVignetteTangents(camera, m_ViewportSize), output);
 
 		if (overlays)
 		{

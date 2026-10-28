@@ -74,6 +74,27 @@ namespace Strata
 		static SceneCamera FromEntity(const Scene& scene, Entity entity, float aspectRatio);
 	};
 
+	// A camera's lens, for depth of field (SceneRenderOptions::Lens). It stays out of SceneCamera, whose whole value is the
+	// shadow cascades' cache key, so focusing never redraws shadows.
+	struct CameraLens
+	{
+		float FocusDistance = 10.0f; // Meters from the camera to the sharpest plane
+		float FocalLength = 20.78f;  // Millimeters
+		float FNumber = 2.8f;
+		float SensorHeight = 24.0f;  // Millimeters
+
+		// The lens of a scene entity's CameraComponent with DepthOfField on and a perspective projection (none otherwise): the
+		// focal length follows from the field of view (0.5 * SensorHeight / tan(fov / 2)); a FocusEntity of the scene sets the
+		// focus distance (along the camera's forward axis to its world position, at least the near plane).
+		static std::optional<CameraLens> FromEntity(const Scene& scene, Entity entity);
+
+		// The signed circle of confusion of a point `distance` meters from the camera, in pixels of an image `height` pixels
+		// tall: f^2 / (N (zf - f)) * (z - zf) / z on the sensor, negative in front of the focus. GetCircleOfConfusionScale is
+		// its value for a point infinitely far, which the passes multiply by 1 - zf / z.
+		float GetCircleOfConfusion(float distance, float height) const;
+		float GetCircleOfConfusionScale(float height) const;
+	};
+
 	// How a renderer issues its draws (SceneRendererSpecification::IndirectMode).
 	enum class IndirectDrawMode : uint8_t
 	{
@@ -326,6 +347,9 @@ namespace Strata
 		// The scene's motion blur applies (PostProcessComponent::MotionBlur, unless the quality turns it off). Editor views and
 		// renderers of single images (captures, thumbnails) turn it off: they never blur.
 		bool MotionBlur = true;
+		// Depth of field through this lens (unless the quality's DepthOfField row turns it off): programs set it when they view
+		// through a scene camera with DepthOfField on (CameraLens::FromEntity); unset, nothing is defocused.
+		std::optional<CameraLens> Lens;
 
 		// The overlays below are drawn over the finished image (after tone mapping and anti-aliasing) with exact display
 		// colors; all of them are off by default.
@@ -535,6 +559,11 @@ namespace Strata
 		bool MotionBlurred = false;
 		uint32_t MotionBlurSamples = 0;
 		uint32_t MotionBlurTileSize = 0;
+		// Depth of field (SceneRenderOptions::Lens): whether the frame's passes ran, with the lens they used and the circle of
+		// confusion (diameter, pixels) of a point infinitely far through it.
+		bool DepthOfField = false;
+		CameraLens DepthOfFieldLens;
+		float DepthOfFieldInfinityCoC = 0.0f;
 		// The bloom levels the frame used (PostProcessComponent::BloomRadius; 0 without bloom).
 		uint32_t BloomLevels = 0;
 		// The frame's last pass that wrote the display image dithered it (SceneRendererSpecification::DitherOutput, and an 8-bit
@@ -679,6 +708,9 @@ namespace Strata
 		// The motion blur's output (RGBA16F, pre-exposed, alpha 1 where it blurred): null until a frame blurred, and again once
 		// the render targets are released.
 		nvrhi::ITexture* GetMotionBlurTexture() const { return m_MotionBlurTexture; }
+		// The depth of field's output (RGBA16F, pre-exposed, alpha 1 where it changed the image): null until a frame had a lens,
+		// and again once the render targets are released.
+		nvrhi::ITexture* GetDepthOfFieldTexture() const { return m_DepthOfFieldTexture; }
 		// The exposure of the latest frame (Include/Exposure.glsl): the adapted log2 average luminance and the multiplier of
 		// luminance the tone mapping applies.
 		nvrhi::IBuffer* GetExposureBuffer() const { return m_ExposureBuffer; }
@@ -1265,21 +1297,37 @@ namespace Strata
 		// The LDR target and the post passes' bindings and bloom chain for the viewport; false with what failed.
 		bool CreatePostTargets(uint32_t width, uint32_t height, std::string& outFailure);
 		void ReleasePostTargets(std::vector<nvrhi::ResourceHandle>& released);
-		// The exposure and the bloom of the HDR image (the resolved one when `resolved`); returns whether bloom ran.
-		// `keyReferenceLog2`: log2 of the luminance of a gray card facing the frame's directional light (unset without one).
-		// `motionBlurred`: the post source is the motion blur's output (else the resolved image when `resolved`, else the HDR target).
-		bool RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const SceneRenderOptions& options, bool resolved,
-			bool motionBlurred, std::optional<float> keyReferenceLog2);
-		// Motion blur of the post source (the resolved image when `resolved`, else the HDR target) into m_MotionBlurTexture: the
-		// tile maxima, their neighborhoods' and the gather. False (reported) when its resources cannot be made: the frame
-		// shows the image unblurred.
-		bool RenderMotionBlur(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, bool resolved);
+		// What post-processing reads after the TAA resolve: the HDR target, the TAA's newest history texture, or the output of the
+		// depth of field or of the motion blur. Each pass that reads it has a binding set per source.
+		enum class PostSource : uint8_t
+		{
+			HDR,
+			History,
+			DepthOfField,
+			MotionBlur
+		};
+		// The set of `source` among a pass's sets per source (the history's: the newest texture's).
+		nvrhi::IBindingSet* SelectPostSet(PostSource source, nvrhi::IBindingSet* hdr, const std::array<nvrhi::BindingSetHandle, 2>& history,
+			nvrhi::IBindingSet* depthOfField, nvrhi::IBindingSet* motionBlur) const;
+		// The exposure and the bloom of the post source; returns whether bloom ran. `keyReferenceLog2`: log2 of the luminance of a
+		// gray card facing the frame's directional light (unset without one).
+		bool RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const SceneRenderOptions& options, PostSource source,
+			std::optional<float> keyReferenceLog2);
+		// Depth of field of the post source (HDR or History) through `lens` into m_DepthOfFieldTexture: the half-resolution image
+		// and circles of confusion, the near field's tile maxima and their neighborhoods', the gather of both fields and the
+		// full-resolution composite. False (reported) when its resources cannot be made: the frame shows the image in focus.
+		bool RenderDepthOfField(nvrhi::ICommandList* commandList, const CameraLens& lens, PostSource source);
+		bool EnsureDepthOfFieldResources();
+		// Motion blur of the post source (HDR, History or DepthOfField) into m_MotionBlurTexture: the tile maxima, their
+		// neighborhoods' and the gather. False (reported) when its resources cannot be made: the frame shows the image unblurred.
+		bool RenderMotionBlur(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, PostSource source);
 		bool EnsureMotionBlurResources();
 		// The players' quality rows applied to the scene's settings: the anti-aliasing method they chose and their motion blur.
 		static void ApplyQualityOverrides(PostProcessComponent& settings, const RendererQualitySettings& quality);
-		// Tone mapping into `output`, or into the LDR target and FXAA from it into `output`.
+		// Tone mapping of the post source into `output`, or into the LDR target and FXAA from it into `output` (FXAA unless the frame
+		// was `resolved` temporally).
 		void RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
-			bool resolved, bool motionBlurred, bool bloom, const glm::vec2& vignetteTangents, nvrhi::IFramebuffer* output);
+			bool resolved, PostSource source, bool bloom, const glm::vec2& vignetteTangents, nvrhi::IFramebuffer* output);
 		// The Post Process's grading (white balance, slope, offset, power), the white balance's part cached per temperature and tint.
 		PostProcessMath::ColorGrading GetColorGrading(const PostProcessComponent& postProcess);
 		// The bloom chain of the image `prefilterSet` reads (the first downsample: the HDR target's or the resolved image's).
@@ -1816,10 +1864,33 @@ namespace Strata
 		nvrhi::TextureHandle m_MotionBlurPixels;      // R32_UINT, viewport-sized: each pixel's blur radius and view distance
 		nvrhi::BindingSetHandle m_MotionBlurTilesSet;
 		nvrhi::BindingSetHandle m_MotionBlurNeighborsSet;
-		std::array<nvrhi::BindingSetHandle, 3> m_MotionBlurGatherSets; // HDR, History 0, History 1
+		std::array<nvrhi::BindingSetHandle, 4> m_MotionBlurGatherSets; // HDR, History 0, History 1, the depth of field's output
 		nvrhi::BindingSetHandle m_MotionBlurExposureSet;
 		nvrhi::BindingSetHandle m_MotionBlurBloomSet;
 		nvrhi::BindingSetHandle m_MotionBlurTonemapSet;
+		// Depth of field (SceneRendererPost.cpp): one layout for its five passes, their targets (made by the first frame with a lens,
+		// released with the render targets), their sets (the half-resolution image's and the composite's per source: HDR, History
+		// 0 and 1) and the post sets of its output (exposure, bloom's prefilter, tone mapping).
+		nvrhi::BindingLayoutHandle m_DepthOfFieldLayout;
+		nvrhi::ComputePipelineHandle m_DepthOfFieldPreparePipeline;
+		nvrhi::ComputePipelineHandle m_DepthOfFieldTilesPipeline;
+		nvrhi::ComputePipelineHandle m_DepthOfFieldDilatePipeline;
+		nvrhi::ComputePipelineHandle m_DepthOfFieldGatherPipeline;
+		nvrhi::ComputePipelineHandle m_DepthOfFieldCompositePipeline;
+		nvrhi::TextureHandle m_DepthOfFieldTexture; // RGBA16F, viewport-sized: the composite, alpha 1 where it changed the image
+		nvrhi::TextureHandle m_DepthOfFieldHalf;    // RGBA16F, half size: the 2x2 means and signed circles of confusion
+		nvrhi::TextureHandle m_DepthOfFieldNear;    // RGBA16F, half size: the near field, premultiplied by its coverage
+		nvrhi::TextureHandle m_DepthOfFieldOwn;     // RGBA16F, half size: each texel's own blur (or what lies behind a near one)
+		nvrhi::TextureHandle m_DepthOfFieldTileMax; // RGBA16F, ceil(half size / 8): the largest near (x) and far (y) radius per tile
+		nvrhi::TextureHandle m_DepthOfFieldDilated; // Their 3x3 neighborhoods' largest
+		std::array<nvrhi::BindingSetHandle, 3> m_DepthOfFieldPrepareSets;   // HDR, History 0, History 1
+		std::array<nvrhi::BindingSetHandle, 3> m_DepthOfFieldCompositeSets; // HDR, History 0, History 1
+		nvrhi::BindingSetHandle m_DepthOfFieldTilesSet;
+		nvrhi::BindingSetHandle m_DepthOfFieldDilateSet;
+		nvrhi::BindingSetHandle m_DepthOfFieldGatherSet;
+		nvrhi::BindingSetHandle m_DepthOfFieldExposureSet;
+		nvrhi::BindingSetHandle m_DepthOfFieldBloomSet;
+		nvrhi::BindingSetHandle m_DepthOfFieldTonemapSet;
 		nvrhi::FramebufferHandle m_LDRFramebuffer;
 		bool m_ResetExposure = true;
 		// The pre-exposure (SceneRendererStats::PreExposure): the value frames are drawn with; whether it settled; a reset asked

@@ -611,9 +611,22 @@ TEST_SUITE("Scene.InactiveProperties")
 		CameraComponent& camera = entity.AddComponent<CameraComponent>();
 		CHECK(reason("Camera", "PerspectiveFOV").empty());
 		CHECK_FALSE(reason("Camera", "OrthographicSize").empty());
+		// The lens: only with depth of field on a perspective camera; a focus entity sets the distance.
+		for (const char* property : { "FocusDistance", "FocusEntity", "Aperture", "SensorHeight" })
+			CHECK_MESSAGE(reason("Camera", property) == "Depth Of Field is off", property);
+		CHECK(reason("Camera", "DepthOfField").empty());
+		camera.DepthOfField = true;
+		for (const char* property : { "FocusDistance", "FocusEntity", "Aperture", "SensorHeight" })
+			CHECK_MESSAGE(reason("Camera", property).empty(), property);
+		camera.FocusEntity = UUID(0xF0C5);
+		CHECK(reason("Camera", "FocusDistance") == "A Focus Entity sets the distance");
+		CHECK(reason("Camera", "Aperture").empty());
 		camera.Projection = ProjectionType::Orthographic;
 		CHECK_FALSE(reason("Camera", "PerspectiveNear").empty());
 		CHECK(reason("Camera", "OrthographicFar").empty());
+		CHECK(reason("Camera", "Aperture") == "Orthographic cameras have no depth of field");
+		CHECK(reason("Camera", "FocusDistance") == "Orthographic cameras have no depth of field");
+		CHECK_FALSE(reason("Camera", "DepthOfField").empty());
 #if ST_WITH_ANIMATION
 		AnimatorComponent& animator = entity.AddComponent<AnimatorComponent>();
 		CHECK(reason("Animator", "Clip").empty());

@@ -894,6 +894,7 @@ The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStage
 | `GPU.Reflections` | reflection probes' conversions and the screen-space reflections' trace, between `GPU.AO` and `GPU.Opaque` |
 | `GPU.TAA` | the motion history's copy (`Scene/MotionCopy.comp`) and the temporal anti-aliasing resolve |
 | `GPU.MotionBlur` | the motion blur's tile maxima, their neighborhoods and its gather (`PostProcess/MotionBlur*.comp`) |
+| `GPU.DepthOfField` | depth of field's half-resolution circles of confusion, near-field tiles, gather and composite (`PostProcess/DepthOfField*.comp`; timed before the motion blur) |
 | `GPU.Post` | exposure, bloom, tone mapping and FXAA |
 | `GPU.Overlays` | grid, tints, outline, debug lines, text and the copy into a target |
 | `GPU.UI` | the game UI pass's draws, world-space and screen-space (`GameUIRenderer`, registered by `RegisterGameUIModule`), inside `GPU.Overlays`: the pass times them with the frame's timer (`SceneOverlayFrame::GPUTimer`) and hands it back |

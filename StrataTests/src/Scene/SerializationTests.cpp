@@ -555,6 +555,44 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(loaded.MotionBlurMaxLength == 0.005f);
 	}
 
+	TEST_CASE("Cameras saved before depth of field load without it; their lens round-trips and is clamped")
+	{
+		const auto load = [](const nlohmann::json& camera, std::vector<std::string>& warnings)
+		{
+			const nlohmann::json document = {
+				{ "Strata", { { "Format", "Scene" }, { "Version", 1 } } },
+				{ "Scene", { { "Name", "Old" }, { "Entities", { { { "ID", "00000000000000AA" }, { "Components", {
+					{ "Name", { { "Name", "Camera" } } }, { "Camera", camera } } } }, { { "ID", "00000000000000BB" }, { "Components", {
+					{ "Name", { { "Name", "Subject" } } } } } } } } } }
+			};
+			Scene scene;
+			std::string error;
+			REQUIRE_MESSAGE(SceneSerializer::Deserialize(scene, document, &error, &warnings), error);
+			return scene.GetEntityByUUID(UUID(0xAA)).GetComponent<CameraComponent>();
+		};
+		// As 0.6.0 saved it: no lens, so no depth of field, and no warning.
+		std::vector<std::string> warnings;
+		CameraComponent loaded = load({ { "Primary", true }, { "PerspectiveFOV", 50 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK_FALSE(loaded.DepthOfField);
+		CHECK(loaded.FocusDistance == 10.0f);
+		CHECK_FALSE(loaded.FocusEntity.IsValid());
+		CHECK(loaded.Aperture == 2.8f);
+		CHECK(loaded.SensorHeight == 24.0f);
+		loaded = load({ { "DepthOfField", true }, { "FocusDistance", 3.5 }, { "FocusEntity", "00000000000000BB" }, { "Aperture", 1.4 }, { "SensorHeight", 36 } },
+			warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.DepthOfField);
+		CHECK(loaded.FocusDistance == 3.5f);
+		CHECK(loaded.FocusEntity == UUID(0xBB));
+		CHECK(loaded.Aperture == 1.4f);
+		CHECK(loaded.SensorHeight == 36.0f);
+		loaded = load({ { "FocusDistance", 0.0 }, { "Aperture", 64.0 }, { "SensorHeight", 1.0 } }, warnings);
+		CHECK(loaded.FocusDistance == 0.1f);
+		CHECK(loaded.Aperture == 32.0f);
+		CHECK(loaded.SensorHeight == 4.0f);
+	}
+
 	TEST_CASE("Directional lights saved before cascade blending load with the default blend; invalid blends are clamped or warn")
 	{
 		const auto load = [](const nlohmann::json& light, std::vector<std::string>& warnings)

@@ -30,6 +30,9 @@ namespace Strata
 	{
 		SceneCamera Camera;
 		bool FromScene = false;      // The scene's primary camera (otherwise the editor camera)
+		// The scene camera's lens when it has depth of field (CameraLens::FromEntity): views through it defocus as the game does,
+		// captures included; the editor camera never has one.
+		std::optional<CameraLens> Lens;
 		bool EditorOverlays = false; // Whether editor overlays and tools belong on this view by default
 		// The editor camera while the game is not playing (editing or simulating): views for working on the scene, where
 		// the viewport settings' preview lighting and hidden game UI apply. Views through the scene's camera and of the

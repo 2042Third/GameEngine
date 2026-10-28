@@ -7,6 +7,9 @@
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/RendererQuality.h"
+#include "Strata/Scene/Components.h"
+#include "Strata/Scene/Entity.h"
+#include "Strata/Scene/Scene.h"
 
 #include <algorithm>
 #include <chrono>
@@ -33,6 +36,13 @@ namespace Strata
 		uint32_t DispatchGroups(uint32_t size)
 		{
 			return (size + 7) / 8;
+		}
+
+		// A lens's focus distance in millimeters, at least 1.1 focal lengths: nearer, a lens cannot focus (the thin lens's image
+		// would lie behind infinity).
+		float GetFocusMillimeters(const CameraLens& lens)
+		{
+			return std::max(lens.FocusDistance * 1000.0f, 1.1f * lens.FocalLength);
 		}
 
 		// The levels (2^bits - 1) the output's dither quantizes to in a target of `format` (Include/Dither.glsl): the 8-bit and
@@ -160,9 +170,77 @@ namespace Strata
 		m_MotionBlurTilesPipeline = CreateComputePipeline("PostProcess/MotionBlurTiles.comp", m_MotionBlurLayout);
 		m_MotionBlurNeighborsPipeline = CreateComputePipeline("PostProcess/MotionBlurNeighbors.comp", m_MotionBlurLayout);
 		m_MotionBlurPipeline = CreateComputePipeline("PostProcess/MotionBlur.comp", m_MotionBlurLayout);
+		// Depth of field: one layout for its five passes, as the motion blur's; the composite's bilinear reads use the linear
+		// clamping sampler at Include/Scene.glsl's slot 8.
+		nvrhi::BindingLayoutDesc depthOfFieldLayout;
+		depthOfFieldLayout.visibility = nvrhi::ShaderType::Compute;
+		depthOfFieldLayout.bindings = {
+			nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+			nvrhi::BindingLayoutItem::Texture_SRV(0),
+			nvrhi::BindingLayoutItem::Texture_SRV(1),
+			nvrhi::BindingLayoutItem::Texture_SRV(2),
+			nvrhi::BindingLayoutItem::Texture_SRV(3),
+			nvrhi::BindingLayoutItem::Texture_UAV(0),
+			nvrhi::BindingLayoutItem::Texture_UAV(1),
+			nvrhi::BindingLayoutItem::Sampler(8),
+			nvrhi::BindingLayoutItem::PushConstants(1, sizeof(RenderData::DepthOfFieldParameters))
+		};
+		m_DepthOfFieldLayout = m_Device->createBindingLayout(depthOfFieldLayout);
+		ST_CORE_VERIFY(m_DepthOfFieldLayout, "SceneRenderer: failed to create the depth of field's layout");
+		m_DepthOfFieldPreparePipeline = CreateComputePipeline("PostProcess/DepthOfFieldPrepare.comp", m_DepthOfFieldLayout);
+		m_DepthOfFieldTilesPipeline = CreateComputePipeline("PostProcess/DepthOfFieldTiles.comp", m_DepthOfFieldLayout);
+		m_DepthOfFieldDilatePipeline = CreateComputePipeline("PostProcess/DepthOfFieldDilate.comp", m_DepthOfFieldLayout);
+		m_DepthOfFieldGatherPipeline = CreateComputePipeline("PostProcess/DepthOfFieldGather.comp", m_DepthOfFieldLayout);
+		m_DepthOfFieldCompositePipeline = CreateComputePipeline("PostProcess/DepthOfFieldComposite.comp", m_DepthOfFieldLayout);
 		ST_CORE_VERIFY(m_TonemapBindingLayout && m_TonemapConstantBuffer && m_ExposureBindingLayout && m_HistogramPipeline && m_ExposurePipeline && m_HistogramBuffer
 			&& m_ExposureBuffer && exposureReadbacks && m_BloomBindingLayout && m_BloomPipeline && m_FXAABindingLayout && m_CopyBindingLayout,
 			"SceneRenderer: failed to create the post-processing resources");
+	}
+
+	std::optional<CameraLens> CameraLens::FromEntity(const Scene& scene, Entity entity)
+	{
+		if (!entity || !entity.HasComponent<CameraComponent>())
+			return std::nullopt;
+		const CameraComponent& component = entity.GetComponent<CameraComponent>();
+		if (!component.DepthOfField || component.Projection != ProjectionType::Perspective)
+			return std::nullopt;
+		auto finiteOr = [](float value, float fallback) { return std::isfinite(value) ? value : fallback; };
+		CameraLens lens;
+		lens.SensorHeight = std::clamp(finiteOr(component.SensorHeight, 24.0f), 4.0f, 100.0f);
+		lens.FNumber = std::clamp(finiteOr(component.Aperture, 2.8f), 1.0f, 32.0f);
+		const float fieldOfView = glm::radians(std::clamp(finiteOr(component.PerspectiveFOV, 60.0f), 1.0f, 179.0f));
+		lens.FocalLength = 0.5f * lens.SensorHeight / std::tan(0.5f * fieldOfView);
+		lens.FocusDistance = std::clamp(finiteOr(component.FocusDistance, 10.0f), 0.1f, 10000.0f);
+		if (component.FocusEntity.IsValid())
+		{
+			if (Entity target = scene.GetEntityByUUID(component.FocusEntity))
+			{
+				// Along the camera's view (its local -Z), as the focus plane lies: an entity off to the side is in focus at the same
+				// depth as one straight ahead.
+				const glm::mat4 cameraTransform = scene.GetWorldTransform(entity);
+				const glm::vec3 position(cameraTransform[3]);
+				const glm::vec3 axis(cameraTransform[2]);
+				const float axisLength = glm::length(axis);
+				const glm::vec3 forward = axisLength > 0.0f ? -axis / axisLength : glm::vec3(0.0f, 0.0f, -1.0f);
+				const float distance = glm::dot(glm::vec3(scene.GetWorldTransform(target)[3]) - position, forward);
+				lens.FocusDistance = std::max(std::isfinite(distance) ? distance : 0.0f, std::max(component.PerspectiveNear, 0.001f));
+			}
+		}
+		return lens;
+	}
+
+	float CameraLens::GetCircleOfConfusionScale(float height) const
+	{
+		// f^2 / (N (zf - f)) on the sensor, in millimeters, then in pixels of the image the sensor's height spans.
+		const float focus = GetFocusMillimeters(*this);
+		return FocalLength * FocalLength / (FNumber * (focus - FocalLength)) / SensorHeight * height;
+	}
+
+	float CameraLens::GetCircleOfConfusion(float distance, float height) const
+	{
+		const float focus = GetFocusMillimeters(*this);
+		const float millimeters = std::max(distance * 1000.0f, 1e-3f);
+		return GetCircleOfConfusionScale(height) * (millimeters - focus) / millimeters;
 	}
 
 	bool SceneRenderer::CreatePostTargets(uint32_t width, uint32_t height, std::string& outFailure)
@@ -298,6 +376,40 @@ namespace Strata
 		release(m_MotionBlurExposureSet);
 		release(m_MotionBlurBloomSet);
 		release(m_MotionBlurTonemapSet);
+		// The depth of field's, the same way (handles are released one by one: NVRHI's handles overload the address operator).
+		release(m_DepthOfFieldTexture);
+		release(m_DepthOfFieldHalf);
+		release(m_DepthOfFieldNear);
+		release(m_DepthOfFieldOwn);
+		release(m_DepthOfFieldTileMax);
+		release(m_DepthOfFieldDilated);
+		for (nvrhi::BindingSetHandle& set : m_DepthOfFieldPrepareSets)
+			release(set);
+		for (nvrhi::BindingSetHandle& set : m_DepthOfFieldCompositeSets)
+			release(set);
+		release(m_DepthOfFieldTilesSet);
+		release(m_DepthOfFieldDilateSet);
+		release(m_DepthOfFieldGatherSet);
+		release(m_DepthOfFieldExposureSet);
+		release(m_DepthOfFieldBloomSet);
+		release(m_DepthOfFieldTonemapSet);
+	}
+
+	nvrhi::IBindingSet* SceneRenderer::SelectPostSet(PostSource source, nvrhi::IBindingSet* hdr, const std::array<nvrhi::BindingSetHandle, 2>& history,
+		nvrhi::IBindingSet* depthOfField, nvrhi::IBindingSet* motionBlur) const
+	{
+		switch (source)
+		{
+			case PostSource::HDR:
+				return hdr;
+			case PostSource::History:
+				return history[m_HistoryIndex];
+			case PostSource::DepthOfField:
+				return depthOfField;
+			case PostSource::MotionBlur:
+				return motionBlur;
+		}
+		return hdr;
 	}
 
 	void SceneRenderer::ApplyQualityOverrides(PostProcessComponent& settings, const RendererQualitySettings& quality)
@@ -423,10 +535,26 @@ namespace Strata
 				return false;
 			}
 		}
+		// The gather of the depth of field's output, once it exists.
+		if (m_DepthOfFieldTexture && !m_MotionBlurGatherSets[3])
+		{
+			nvrhi::BindingSetDesc gather;
+			gather.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer), nvrhi::BindingSetItem::Texture_SRV(0, m_VelocityTexture),
+				nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture), nvrhi::BindingSetItem::Texture_SRV(2, m_MotionBlurNeighborMax),
+				nvrhi::BindingSetItem::Texture_SRV(3, m_DepthOfFieldTexture), nvrhi::BindingSetItem::Texture_SRV(4, m_MotionBlurPixels),
+				nvrhi::BindingSetItem::Texture_UAV(0, m_MotionBlurTexture), nvrhi::BindingSetItem::Texture_UAV(1, m_MotionBlurTileMax),
+				nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::MotionBlurParameters)) };
+			m_MotionBlurGatherSets[3] = m_Device->createBindingSet(gather, m_MotionBlurLayout);
+			if (!m_MotionBlurGatherSets[3])
+			{
+				m_Errors.Report("failed to create the motion blur's bindings of the depth of field's output; drawing without motion blur");
+				return false;
+			}
+		}
 		return true;
 	}
 
-	bool SceneRenderer::RenderMotionBlur(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, bool resolved)
+	bool SceneRenderer::RenderMotionBlur(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, PostSource source)
 	{
 		if (!EnsureMotionBlurResources())
 			return false;
@@ -440,6 +568,7 @@ namespace Strata
 		parameters.MinLength = static_cast<float>(height) / 1080.0f;
 		parameters.TileSize = std::max(RenderData::c_MotionBlurMinTileSize, static_cast<uint32_t>(std::ceil(parameters.MaxLength * 0.5f)));
 		parameters.SampleCount = RendererQuality::GetMotionBlurSampleCount(m_Specification.Quality.MotionBlurQuality);
+		parameters.SourceMask = source == PostSource::DepthOfField ? 1u : 0u;
 		const uint32_t tilesX = (width + parameters.TileSize - 1) / parameters.TileSize;
 		const uint32_t tilesY = (height + parameters.TileSize - 1) / parameters.TileSize;
 
@@ -454,11 +583,178 @@ namespace Strata
 		};
 		dispatch(m_MotionBlurTilesPipeline, m_MotionBlurTilesSet, tilesX, tilesY);
 		dispatch(m_MotionBlurNeighborsPipeline, m_MotionBlurNeighborsSet, DispatchGroups(tilesX), DispatchGroups(tilesY));
-		nvrhi::IBindingSet* gather = resolved ? m_MotionBlurGatherSets[1 + m_HistoryIndex].Get() : m_MotionBlurGatherSets[0].Get();
+		const std::array<nvrhi::BindingSetHandle, 2> historyGathers = { m_MotionBlurGatherSets[1], m_MotionBlurGatherSets[2] };
+		nvrhi::IBindingSet* gather = SelectPostSet(source, m_MotionBlurGatherSets[0], historyGathers, m_MotionBlurGatherSets[3], nullptr);
+		ST_CORE_ASSERT(gather, "SceneRenderer: the motion blur has no gather of its source");
 		dispatch(m_MotionBlurPipeline, gather, DispatchGroups(width), DispatchGroups(height));
 		m_Stats.MotionBlurred = true;
 		m_Stats.MotionBlurSamples = parameters.SampleCount;
 		m_Stats.MotionBlurTileSize = parameters.TileSize;
+		return true;
+	}
+
+	bool SceneRenderer::EnsureDepthOfFieldResources()
+	{
+		const uint32_t width = m_ViewportSize.x;
+		const uint32_t height = m_ViewportSize.y;
+		if (!m_DepthOfFieldTexture)
+		{
+			auto createTarget = [&](uint32_t targetWidth, uint32_t targetHeight, const char* name)
+			{
+				nvrhi::TextureDesc desc;
+				desc.width = std::max(targetWidth, 1u);
+				desc.height = std::max(targetHeight, 1u);
+				desc.format = c_HDRFormat;
+				desc.isUAV = true;
+				desc.debugName = m_Specification.DebugName + name;
+				desc.initialState = nvrhi::ResourceStates::ShaderResource;
+				desc.keepInitialState = true;
+				return m_Device->createTexture(desc);
+			};
+			const uint32_t halfWidth = (width + 1) / 2;
+			const uint32_t halfHeight = (height + 1) / 2;
+			const uint32_t tilesX = (halfWidth + RenderData::c_DepthOfFieldMinTileSize - 1) / RenderData::c_DepthOfFieldMinTileSize;
+			const uint32_t tilesY = (halfHeight + RenderData::c_DepthOfFieldMinTileSize - 1) / RenderData::c_DepthOfFieldMinTileSize;
+			nvrhi::TextureHandle composite = createTarget(width, height, ".DepthOfField");
+			nvrhi::TextureHandle half = createTarget(halfWidth, halfHeight, ".DepthOfFieldHalf");
+			nvrhi::TextureHandle nearField = createTarget(halfWidth, halfHeight, ".DepthOfFieldNear");
+			nvrhi::TextureHandle own = createTarget(halfWidth, halfHeight, ".DepthOfFieldOwn");
+			nvrhi::TextureHandle tileMax = createTarget(tilesX, tilesY, ".DepthOfFieldTileMax");
+			nvrhi::TextureHandle dilated = createTarget(tilesX, tilesY, ".DepthOfFieldDilated");
+			if (!composite || !half || !nearField || !own || !tileMax || !dilated)
+			{
+				m_Errors.Report(fmt::format("failed to create the depth of field's targets for a {}x{} viewport; drawing without depth of field", width, height));
+				return false;
+			}
+			// NVRHI binds every slot of a layout: as the motion blur's, a pass's sets fill the slots it does not read with textures
+			// it neither reads nor writes there, and its unwritten UAV slot with a target the next pass writes anyway.
+			const nvrhi::BindingSetItem frame = nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer);
+			const nvrhi::BindingSetItem depth = nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture);
+			const nvrhi::BindingSetItem sampler = nvrhi::BindingSetItem::Sampler(8, m_LinearClampSampler);
+			const nvrhi::BindingSetItem pushConstants = nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::DepthOfFieldParameters));
+			nvrhi::BindingSetDesc tiles;
+			tiles.bindings = { frame, nvrhi::BindingSetItem::Texture_SRV(0, half), depth, nvrhi::BindingSetItem::Texture_SRV(2, dilated),
+				nvrhi::BindingSetItem::Texture_SRV(3, own), nvrhi::BindingSetItem::Texture_UAV(0, tileMax), nvrhi::BindingSetItem::Texture_UAV(1, nearField),
+				sampler, pushConstants };
+			nvrhi::BindingSetDesc dilate;
+			dilate.bindings = { frame, nvrhi::BindingSetItem::Texture_SRV(0, half), depth, nvrhi::BindingSetItem::Texture_SRV(2, tileMax),
+				nvrhi::BindingSetItem::Texture_SRV(3, own), nvrhi::BindingSetItem::Texture_UAV(0, dilated), nvrhi::BindingSetItem::Texture_UAV(1, nearField),
+				sampler, pushConstants };
+			nvrhi::BindingSetDesc gather;
+			gather.bindings = { frame, nvrhi::BindingSetItem::Texture_SRV(0, half), depth, nvrhi::BindingSetItem::Texture_SRV(2, dilated),
+				nvrhi::BindingSetItem::Texture_SRV(3, tileMax), nvrhi::BindingSetItem::Texture_UAV(0, nearField), nvrhi::BindingSetItem::Texture_UAV(1, own),
+				sampler, pushConstants };
+			// The output as the post source, as the HDR target's sets (CreatePostTargets).
+			nvrhi::BindingSetDesc exposure;
+			exposure.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, composite), nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_HistogramBuffer),
+				nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_ExposureBuffer), nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::ExposureParameters)) };
+			nvrhi::BindingSetDesc bloom;
+			bloom.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, composite), nvrhi::BindingSetItem::Sampler(0, m_LinearClampSampler),
+				nvrhi::BindingSetItem::Texture_UAV(0, m_BloomTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_ExposureBuffer), nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::BloomParameters)) };
+			nvrhi::BindingSetDesc tonemap;
+			tonemap.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, composite), nvrhi::BindingSetItem::Sampler(0, m_PointClampSampler),
+				nvrhi::BindingSetItem::Texture_SRV(1, m_BloomTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
+				nvrhi::BindingSetItem::Sampler(1, m_LinearClampSampler), nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_ExposureBuffer),
+				nvrhi::BindingSetItem::ConstantBuffer(0, m_TonemapConstantBuffer) };
+			nvrhi::BindingSetHandle tilesSet = m_Device->createBindingSet(tiles, m_DepthOfFieldLayout);
+			nvrhi::BindingSetHandle dilateSet = m_Device->createBindingSet(dilate, m_DepthOfFieldLayout);
+			nvrhi::BindingSetHandle gatherSet = m_Device->createBindingSet(gather, m_DepthOfFieldLayout);
+			nvrhi::BindingSetHandle exposureSet = m_Device->createBindingSet(exposure, m_ExposureBindingLayout);
+			nvrhi::BindingSetHandle bloomSet = m_Device->createBindingSet(bloom, m_BloomBindingLayout);
+			nvrhi::BindingSetHandle tonemapSet = m_Device->createBindingSet(tonemap, m_TonemapBindingLayout);
+			if (!tilesSet || !dilateSet || !gatherSet || !exposureSet || !bloomSet || !tonemapSet)
+			{
+				m_Errors.Report(fmt::format("failed to create the depth of field's bindings for a {}x{} viewport; drawing without depth of field", width, height));
+				return false;
+			}
+			m_DepthOfFieldTexture = std::move(composite);
+			m_DepthOfFieldHalf = std::move(half);
+			m_DepthOfFieldNear = std::move(nearField);
+			m_DepthOfFieldOwn = std::move(own);
+			m_DepthOfFieldTileMax = std::move(tileMax);
+			m_DepthOfFieldDilated = std::move(dilated);
+			m_DepthOfFieldTilesSet = std::move(tilesSet);
+			m_DepthOfFieldDilateSet = std::move(dilateSet);
+			m_DepthOfFieldGatherSet = std::move(gatherSet);
+			m_DepthOfFieldExposureSet = std::move(exposureSet);
+			m_DepthOfFieldBloomSet = std::move(bloomSet);
+			m_DepthOfFieldTonemapSet = std::move(tonemapSet);
+		}
+		// The sets that read the source, per source: the HDR target's, and the TAA's history textures' once they exist.
+		for (uint32_t index = 0; index < 3; index++)
+		{
+			nvrhi::ITexture* source = index == 0 ? m_HDRTexture.Get() : m_HistoryTextures[index - 1].Get();
+			if (!source || m_DepthOfFieldPrepareSets[index])
+				continue;
+			const nvrhi::BindingSetItem frame = nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer);
+			const nvrhi::BindingSetItem sampler = nvrhi::BindingSetItem::Sampler(8, m_LinearClampSampler);
+			const nvrhi::BindingSetItem pushConstants = nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::DepthOfFieldParameters));
+			nvrhi::BindingSetDesc prepare;
+			prepare.bindings = { frame, nvrhi::BindingSetItem::Texture_SRV(0, source), nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture),
+				nvrhi::BindingSetItem::Texture_SRV(2, m_DepthOfFieldTileMax), nvrhi::BindingSetItem::Texture_SRV(3, m_DepthOfFieldDilated),
+				nvrhi::BindingSetItem::Texture_UAV(0, m_DepthOfFieldHalf), nvrhi::BindingSetItem::Texture_UAV(1, m_DepthOfFieldOwn), sampler, pushConstants };
+			nvrhi::BindingSetDesc composite;
+			composite.bindings = { frame, nvrhi::BindingSetItem::Texture_SRV(0, source), nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture),
+				nvrhi::BindingSetItem::Texture_SRV(2, m_DepthOfFieldNear), nvrhi::BindingSetItem::Texture_SRV(3, m_DepthOfFieldOwn),
+				nvrhi::BindingSetItem::Texture_UAV(0, m_DepthOfFieldTexture), nvrhi::BindingSetItem::Texture_UAV(1, m_DepthOfFieldHalf), sampler, pushConstants };
+			nvrhi::BindingSetHandle prepareSet = m_Device->createBindingSet(prepare, m_DepthOfFieldLayout);
+			nvrhi::BindingSetHandle compositeSet = m_Device->createBindingSet(composite, m_DepthOfFieldLayout);
+			if (!prepareSet || !compositeSet)
+			{
+				m_Errors.Report("failed to create the depth of field's bindings of its source; drawing without depth of field");
+				return false;
+			}
+			m_DepthOfFieldPrepareSets[index] = std::move(prepareSet);
+			m_DepthOfFieldCompositeSets[index] = std::move(compositeSet);
+		}
+		return true;
+	}
+
+	bool SceneRenderer::RenderDepthOfField(nvrhi::ICommandList* commandList, const CameraLens& lens, PostSource source)
+	{
+		ST_CORE_ASSERT(source == PostSource::HDR || source == PostSource::History, "SceneRenderer: depth of field reads the HDR image or the history");
+		if (!EnsureDepthOfFieldResources())
+			return false;
+		const uint32_t sourceIndex = source == PostSource::History ? 1 + m_HistoryIndex : 0;
+		if (!m_DepthOfFieldPrepareSets[sourceIndex] || !m_DepthOfFieldCompositeSets[sourceIndex])
+		{
+			m_Errors.Report("the depth of field's source has no bindings; drawing without depth of field");
+			return false;
+		}
+		const uint32_t width = m_ViewportSize.x;
+		const uint32_t height = m_ViewportSize.y;
+		const float rows = static_cast<float>(height);
+		RenderData::DepthOfFieldParameters parameters = {};
+		parameters.FocusDistance = GetFocusMillimeters(lens) * 0.001f;
+		// The passes work with radii: half the circle of confusion's diameter.
+		parameters.CoCScale = 0.5f * lens.GetCircleOfConfusionScale(rows);
+		parameters.MaxCoC = 0.5f * RenderData::c_DepthOfFieldMaxDiameter * rows;
+		parameters.TileSize = std::max(RenderData::c_DepthOfFieldMinTileSize, static_cast<uint32_t>(std::ceil(parameters.MaxCoC * 0.5f)));
+		parameters.SampleCount = RenderData::c_DepthOfFieldSamples;
+		const uint32_t halfWidth = (width + 1) / 2;
+		const uint32_t halfHeight = (height + 1) / 2;
+		const uint32_t tilesX = (halfWidth + parameters.TileSize - 1) / parameters.TileSize;
+		const uint32_t tilesY = (halfHeight + parameters.TileSize - 1) / parameters.TileSize;
+
+		auto dispatch = [&](nvrhi::IComputePipeline* pipeline, nvrhi::IBindingSet* set, uint32_t groupsX, uint32_t groupsY)
+		{
+			nvrhi::ComputeState state;
+			state.pipeline = pipeline;
+			state.bindings = { set };
+			commandList->setComputeState(state);
+			commandList->setPushConstants(&parameters, sizeof(parameters));
+			commandList->dispatch(groupsX, groupsY, 1);
+		};
+		dispatch(m_DepthOfFieldPreparePipeline, m_DepthOfFieldPrepareSets[sourceIndex], DispatchGroups(halfWidth), DispatchGroups(halfHeight));
+		dispatch(m_DepthOfFieldTilesPipeline, m_DepthOfFieldTilesSet, tilesX, tilesY);
+		dispatch(m_DepthOfFieldDilatePipeline, m_DepthOfFieldDilateSet, DispatchGroups(tilesX), DispatchGroups(tilesY));
+		dispatch(m_DepthOfFieldGatherPipeline, m_DepthOfFieldGatherSet, DispatchGroups(halfWidth), DispatchGroups(halfHeight));
+		dispatch(m_DepthOfFieldCompositePipeline, m_DepthOfFieldCompositeSets[sourceIndex], DispatchGroups(width), DispatchGroups(height));
+		m_Stats.DepthOfField = true;
+		m_Stats.DepthOfFieldLens = lens;
+		m_Stats.DepthOfFieldLens.FocusDistance = parameters.FocusDistance;
+		m_Stats.DepthOfFieldInfinityCoC = std::min(lens.GetCircleOfConfusionScale(rows), RenderData::c_DepthOfFieldMaxDiameter * rows);
 		return true;
 	}
 
@@ -587,19 +883,18 @@ namespace Strata
 			dispatch(m_BloomUpsampleSets[level], RenderData::c_BloomUpsample, level, level + 2 == levels ? deepestWeight : 1.0f);
 	}
 
-	bool SceneRenderer::RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const SceneRenderOptions& options, bool resolved,
-		bool motionBlurred, std::optional<float> keyReferenceLog2)
+	bool SceneRenderer::RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const SceneRenderOptions& options, PostSource source,
+		std::optional<float> keyReferenceLog2)
 	{
 		commandList->beginMarker("Exposure");
-		nvrhi::IBindingSet* exposureSet = motionBlurred ? m_MotionBlurExposureSet.Get() : resolved ? m_TemporalExposureSets[m_HistoryIndex].Get() : m_ExposureBindingSet.Get();
+		nvrhi::IBindingSet* exposureSet = SelectPostSet(source, m_ExposureBindingSet, m_TemporalExposureSets, m_DepthOfFieldExposureSet, m_MotionBlurExposureSet);
 		UpdateExposure(commandList, postProcess, options, exposureSet, keyReferenceLog2);
 		commandList->endMarker();
 		const bool bloom = postProcess.Bloom && postProcess.BloomIntensity > 0.0f;
 		if (bloom)
 		{
 			commandList->beginMarker("Bloom");
-			RenderBloom(commandList, postProcess,
-				motionBlurred ? m_MotionBlurBloomSet.Get() : resolved ? m_TemporalBloomSets[m_HistoryIndex].Get() : m_BloomDownsampleSets[0].Get());
+			RenderBloom(commandList, postProcess, SelectPostSet(source, m_BloomDownsampleSets[0], m_TemporalBloomSets, m_DepthOfFieldBloomSet, m_MotionBlurBloomSet));
 			commandList->endMarker();
 		}
 		return bloom;
@@ -615,7 +910,7 @@ namespace Strata
 	}
 
 	void SceneRenderer::RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
-		bool resolved, bool motionBlurred, bool bloom, const glm::vec2& vignetteTangents, nvrhi::IFramebuffer* output)
+		bool resolved, PostSource source, bool bloom, const glm::vec2& vignetteTangents, nvrhi::IFramebuffer* output)
 	{
 		// Tone mapping into the display target, or into the intermediate target FXAA reads.
 		RenderData::TonemapConstants tonemap = {};
@@ -637,7 +932,9 @@ namespace Strata
 		tonemap.FilmicWhiteStops = filmic.WhiteStops;
 		tonemap.FilmicShoulderPower = filmic.ShoulderPower;
 		const PostProcessMath::ColorGrading grading = GetColorGrading(postProcess);
-		tonemap.ColorFlags = (grading.Active ? RenderData::c_TonemapColorGrading : 0u) | (motionBlurred ? RenderData::c_TonemapMotionBlurMask : 0u);
+		// The depth of field's and the motion blur's outputs mark what they blurred in alpha.
+		const bool blurMask = source == PostSource::DepthOfField || source == PostSource::MotionBlur;
+		tonemap.ColorFlags = (grading.Active ? RenderData::c_TonemapColorGrading : 0u) | (blurMask ? RenderData::c_TonemapBlurMask : 0u);
 		for (int row = 0; row < 3; row++)
 			tonemap.ColorRows[row] = glm::vec4(grading.Matrix[0][row], grading.Matrix[1][row], grading.Matrix[2][row], 0.0f);
 		tonemap.ColorOffset = glm::vec4(grading.Offset, 0.0f);
@@ -656,7 +953,7 @@ namespace Strata
 		commandList->writeBuffer(m_TonemapConstantBuffer, &tonemap, sizeof(tonemap));
 		m_TonemapConstantsWritten = true;
 		DrawFullscreen(commandList, GetFullscreenPipeline(m_TonemapPipelines, m_TonemapPixelShader, m_TonemapBindingLayout, tonemapTarget->getFramebufferInfo()),
-			tonemapTarget, motionBlurred ? m_MotionBlurTonemapSet.Get() : resolved ? m_TemporalTonemapSets[m_HistoryIndex].Get() : m_TonemapBindingSet.Get(), nullptr, 0);
+			tonemapTarget, SelectPostSet(source, m_TonemapBindingSet, m_TemporalTonemapSets, m_DepthOfFieldTonemapSet, m_MotionBlurTonemapSet), nullptr, 0);
 		commandList->endMarker();
 		if (fxaa)
 		{

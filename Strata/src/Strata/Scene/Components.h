@@ -139,6 +139,15 @@ namespace Strata
 		bool Primary = true;
 		// Background when no sky is rendered (sRGB-encoded; exposed and tone mapped with the scene, see SceneCamera)
 		glm::vec4 ClearColor = { 0.05f, 0.05f, 0.07f, 1.0f };
+		// Depth of field, as a physical lens shows it (perspective cameras; off by default): the lens of the field of view on a
+		// sensor SensorHeight millimeters tall (24: full frame), focused FocusDistance meters away or, when FocusEntity names an
+		// entity of the scene, on it, its aperture the f-number Aperture. Players can turn it off (RendererQualitySettings::
+		// DepthOfField); programs pass it to the renderer as SceneRenderOptions::Lens (CameraLens::FromEntity).
+		bool DepthOfField = false;
+		float FocusDistance = 10.0f;
+		UUID FocusEntity = UUID::Null();
+		float Aperture = 2.8f;
+		float SensorHeight = 24.0f;
 
 		// View-to-clip transform for the given aspect ratio, in Strata's reversed-Z convention.
 		glm::mat4 GetProjection(float aspectRatio) const;
