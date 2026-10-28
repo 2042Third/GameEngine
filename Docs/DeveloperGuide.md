@@ -722,6 +722,8 @@ exercised by it.
     `Sky.hdr` (a 900-nit texel its generator writes, which its `.meta`'s `RemoveSun` paints out of the cooked map) into
     the Sun with `lighting.extractSun` and undo it, export it with the module and run it headless; they must exit cleanly and print what the scripts log
     (`StrataTests/Editor/RunAndExpect.cmake`). A new editor command a game relies on gets a step there.
+    `StrataRuntime.FeatureTestQuality` (labels `feature` and `gpu`) runs the exported game in a window with
+    `--quality low`: its scripts must read the preset as the command line's and say so.
 - **The feature test enforces coverage.** It fails when:
   - a registered component is missing from the feature scene, or a property has its default value on every entity
     with the component (new properties need a non-default value there, which also proves that they serialize);
