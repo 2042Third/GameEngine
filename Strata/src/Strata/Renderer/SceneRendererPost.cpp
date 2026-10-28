@@ -33,6 +33,26 @@ namespace Strata
 			return (size + 7) / 8;
 		}
 
+		// The levels (2^bits - 1) the output's dither quantizes to in a target of `format` (Include/Dither.glsl): the 8-bit and
+		// 10-bit UNORM formats; 0 (no dither) for the others a target may have (16-bit UNORM, the packed 5-6-5, 5-5-5-1 and
+		// 4-4-4-4 formats), whose own rounding is left as it is.
+		float GetDitherLevels(nvrhi::Format format)
+		{
+			switch (format)
+			{
+				case nvrhi::Format::R8_UNORM:
+				case nvrhi::Format::RG8_UNORM:
+				case nvrhi::Format::RGBA8_UNORM:
+				case nvrhi::Format::BGRA8_UNORM:
+				case nvrhi::Format::BGRX8_UNORM:
+					return 255.0f;
+				case nvrhi::Format::R10G10B10A2_UNORM:
+					return 1023.0f;
+				default:
+					return 0.0f;
+			}
+		}
+
 	}
 
 	void SceneRenderer::CreatePostResources()
@@ -126,7 +146,7 @@ namespace Strata
 	{
 		const std::string& name = m_Specification.DebugName;
 		// Tone mapping writes here when FXAA follows.
-		m_LDRTexture = CreateRenderTarget(m_Device, width, height, c_OutputFormat, name + ".LDR", false);
+		m_LDRTexture = CreateRenderTarget(m_Device, width, height, c_LDRFormat, name + ".LDR", false);
 		m_LDRFramebuffer = m_LDRTexture ? m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(m_LDRTexture)) : nullptr;
 		if (!m_LDRTexture || !m_LDRFramebuffer)
 		{
@@ -369,6 +389,11 @@ namespace Strata
 		// FXAA unless the image was resolved temporally.
 		const bool fxaa = postProcess.AntiAliasing && !resolved;
 		nvrhi::IFramebuffer* tonemapTarget = fxaa ? m_LDRFramebuffer.Get() : output;
+		// The last pass that writes the display image dithers it, once: FXAA when it follows (the tone mapping's 10-bit image
+		// stays undithered), else the tone mapping.
+		const float outputLevels = m_Specification.DitherOutput ? GetDitherLevels(output->getFramebufferInfo().colorFormats[0]) : 0.0f;
+		tonemap.DitherLevels = fxaa ? 0.0f : outputLevels;
+		m_Stats.Dithered = outputLevels > 0.0f;
 		commandList->beginMarker("Tonemap");
 		ST_CORE_ASSERT(!m_TonemapConstantsWritten, "SceneRenderer: a frame writes the tone mapping's constants once");
 		commandList->writeBuffer(m_TonemapConstantBuffer, &tonemap, sizeof(tonemap));
@@ -379,6 +404,7 @@ namespace Strata
 		if (fxaa)
 		{
 			RenderData::FXAAParameters parameters = {};
+			parameters.DitherLevels = outputLevels;
 			commandList->beginMarker("FXAA");
 			DrawFullscreen(commandList, GetFullscreenPipeline(m_FXAAPipelines, m_FXAAPixelShader, m_FXAABindingLayout, output->getFramebufferInfo()), output, m_FXAABindingSet,
 				&parameters, sizeof(parameters));

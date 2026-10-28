@@ -2,6 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "Include/Common.glsl"
+#include "Include/Dither.glsl"
 
 // Fast approximate anti-aliasing (after FXAA 3.11 quality by Timothy Lottes) on the display-encoded image: finds
 // luma edges, walks along each edge to its ends and blends across it by the pixel's position along the edge.
@@ -23,7 +24,9 @@ layout(location = 0) out vec4 o_Color;
 
 const float c_EdgeThreshold = 0.125;     // Minimum local contrast, relative to the brightest neighbor
 const float c_EdgeThresholdMin = 0.0312; // Minimum absolute contrast (keeps dark noise untouched)
-const float c_Subpixel = 0.75;           // Amount of sub-pixel aliasing removal
+// Amount of sub-pixel aliasing removal: 0.75 cost 19-22% of the texture detail of an image without anti-aliasing, 0.375
+// still 15% (PhysicsPlayground's tiled floor at 3840x2160).
+const float c_Subpixel = 0.25;
 const int c_SearchSteps = 12;
 const float c_StepSizes[c_SearchSteps] = float[](1.0, 1.0, 1.0, 1.0, 1.0, 1.5, 2.0, 2.0, 2.0, 2.0, 4.0, 8.0);
 
@@ -53,7 +56,7 @@ void main()
 	float range = lumaMax - lumaMin;
 	if (range < max(c_EdgeThresholdMin, lumaMax * c_EdgeThreshold))
 	{
-		o_Color = vec4(center, 1.0);
+		o_Color = vec4(DitherToCodes(center, uvec2(gl_FragCoord.xy), u_Parameters.DitherLevels), 1.0);
 		return;
 	}
 
@@ -134,5 +137,5 @@ void main()
 		finalUV.y += finalOffset * stepLength;
 	else
 		finalUV.x += finalOffset * stepLength;
-	o_Color = vec4(Fetch(finalUV), 1.0);
+	o_Color = vec4(DitherToCodes(Fetch(finalUV), uvec2(gl_FragCoord.xy), u_Parameters.DitherLevels), 1.0);
 }

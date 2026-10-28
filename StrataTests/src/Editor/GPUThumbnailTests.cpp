@@ -1068,7 +1068,9 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 			}
 			REQUIRE(left <= right);
 			INFO("the arm covers (", left, ", ", top, ") to (", right, ", ", bottom, ") of ", image.Width, "x", image.Height);
-			return bottom - top > 2 * (right - left);
+			// The standing arm is twice as tall as wide; lying, it would be wider than tall. The output's dither moves the box's
+			// edges by a pixel where the arm's anti-aliased edge meets the threshold, hence the margin below 2.
+			return static_cast<double>(bottom - top) > 1.8 * static_cast<double>(right - left);
 		};
 
 		harness.RequestUntilIdle({ model });

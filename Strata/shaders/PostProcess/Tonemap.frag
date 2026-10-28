@@ -2,6 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "Include/Common.glsl"
+#include "Include/Dither.glsl"
 #include "Include/Exposure.glsl"
 
 // Exposure, bloom, tone mapping and color grading from the HDR scene color into a display-referred, sRGB-encoded
@@ -193,5 +194,6 @@ void main()
 	vec2 centered = v_UV - 0.5;
 	color *= 1.0 - u_Parameters.Vignette * smoothstep(0.2, 0.8, length(centered) * 1.41421356);
 
-	o_Color = vec4(LinearToSRGB(clamp(color, 0.0, 1.0)), 1.0);
+	// The target's own quantization, dithered when this pass writes the display image (u_Parameters.DitherLevels).
+	o_Color = vec4(DitherToCodes(LinearToSRGB(clamp(color, 0.0, 1.0)), uvec2(gl_FragCoord.xy), u_Parameters.DitherLevels), 1.0);
 }

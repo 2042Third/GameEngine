@@ -210,6 +210,12 @@ namespace Strata
 		// did not render, and after ResetHistory. Off: such scenes are drawn with FXAA (renderers of single images that do not
 		// render a view several times, such as thumbnails).
 		bool TemporalAntiAliasing = true;
+		// The 8-bit (or 10-bit) output is dithered: triangular noise of one code per channel in the encoded domain
+		// (Include/Dither.glsl), the same every frame, so gradients show no bands, black and white stay exact and every value
+		// keeps its mean. The last pass that writes the display image dithers it (the tone mapping, or FXAA after it); the
+		// overlays and the copy into a target are exact display colors. Tests that compare exact pixels turn it off
+		// (Tests::ExactSpecification).
+		bool DitherOutput = true;
 
 		// A shadow view (a light's tile) is drawn again only when what it shows changed: the light (its position, direction,
 		// range, cone, tile or filter), a shadow caster whose bounds before or after its change reach the light's range and
@@ -511,6 +517,9 @@ namespace Strata
 		// then the brightest and darkest values of the frame may have overflowed or lost precision (captures wait for it).
 		float PreExposure = 1.0f;
 		bool PreExposureSettled = false;
+		// The frame's last pass that wrote the display image dithered it (SceneRendererSpecification::DitherOutput, and an 8-bit
+		// or 10-bit UNORM target).
+		bool Dithered = false;
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -640,6 +649,8 @@ namespace Strata
 		nvrhi::ITexture* GetBRDFLut() const { return m_BRDFLut; }
 
 		nvrhi::ITexture* GetBloomTexture() const { return m_BloomTexture; } // Level 0 of the bloom chain (half resolution)
+		// The tone-mapped image FXAA reads (c_LDRFormat, sRGB-encoded, not dithered): null until the render targets exist.
+		nvrhi::ITexture* GetLDRTexture() const { return m_LDRTexture; }
 		// The exposure of the latest frame (Include/Exposure.glsl): the adapted log2 average luminance and the multiplier of
 		// luminance the tone mapping applies.
 		nvrhi::IBuffer* GetExposureBuffer() const { return m_ExposureBuffer; }
@@ -1242,6 +1253,9 @@ namespace Strata
 		// The formats of the HDR image (and of the bloom chain and the temporal history) and of the display images.
 		static constexpr nvrhi::Format c_HDRFormat = nvrhi::Format::RGBA16_FLOAT;
 		static constexpr nvrhi::Format c_OutputFormat = nvrhi::Format::RGBA8_UNORM;
+		// The tone mapping's image before FXAA: 10 bits per channel in the 4 bytes RGBA8 takes, so the bands an undithered
+		// 8-bit intermediate would bake in stay out (FXAA dithers its 8-bit output once).
+		static constexpr nvrhi::Format c_LDRFormat = nvrhi::Format::R10G10B10A2_UNORM;
 		// Versions of the volatile FrameConstants buffer, and the most a frame writes: the frame's constants and, under TAA,
 		// the overlays' unjittered copy. ReserveFrameConstantVersions waits only when a caller outruns the GPU by more. The
 		// tone mapping's constant buffer (written once by every frame that writes these) has as many versions.
@@ -1744,7 +1758,7 @@ namespace Strata
 		nvrhi::BindingLayoutHandle m_FXAABindingLayout;
 		nvrhi::BindingLayoutHandle m_CopyBindingLayout; // The overlays' copy of the output texture into a target
 		nvrhi::BindingSetHandle m_FXAABindingSet;
-		nvrhi::TextureHandle m_LDRTexture; // Tone-mapped image before anti-aliasing
+		nvrhi::TextureHandle m_LDRTexture; // Tone-mapped image before anti-aliasing (c_LDRFormat)
 		nvrhi::FramebufferHandle m_LDRFramebuffer;
 		bool m_ResetExposure = true;
 		// The pre-exposure (SceneRendererStats::PreExposure): the value frames are drawn with; whether it settled; a reset asked

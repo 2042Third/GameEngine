@@ -25,13 +25,6 @@ namespace
 
 	constexpr uint32_t c_Size = c_SceneTestSize;
 
-	SceneRendererSpecification ExactSpecification()
-	{
-		SceneRendererSpecification specification;
-		specification.TextureStreaming = false;
-		return specification;
-	}
-
 	// An equirectangular HDR capture (RGBA16F, with its levels) whose radiance in each direction `radiance` gives; the
 	// directions follow the engine's mapping (Include/IBL.glsl's DirectionToEquirect).
 	Ref<Texture> CreateCapture(const std::function<glm::vec3(const glm::vec3&)>& radiance, uint32_t width = 256)
