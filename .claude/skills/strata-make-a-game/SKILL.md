@@ -45,7 +45,7 @@ StrataCLI list                       # the commands this build has; check that i
 `.gitignore` for the `.strata/` cache, and `Scripts/` with its `CMakeLists.txt` and an example `Spinner.cpp` (delete it if
 unused). With the `basic3d` template (`project.templates` lists them) it also saves a lit start scene,
 `Scenes/Main.stscene`, already set as the start scene: "Main Camera" (primary, audio listener), "Sun" (directional light,
-shadows), "Sky" (procedural sky light), "Ground" (a 20 x 20 plane with the dark `Materials/Ground.stmat`, which you can
+shadows; a 120,000 lux sun 40 degrees up), "Sky" (the physical atmosphere: the Clear preset), "Ground" (a 20 x 20 plane with the dark `Materials/Ground.stmat`, which you can
 restyle with `material.set`, and a static box collider with its top at y = 0: dynamic bodies and character controllers rest
 on it) and "Post Process". Keep what fits your game and change or delete the rest
 (`entity.find {"name": "Ground"}` gives the IDs). Without a template the project has no scene.
@@ -284,9 +284,17 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
   layer (`1u << Physics::GetLayerIndex("Player")`).
 - Camera: `{"Camera": {"Primary": true, "PerspectiveFOV": 45}}`; cameras and lights look along their -Z, so a camera at
   `+Z` looking at the origin needs no rotation. Rotations are Euler degrees `[pitch, yaw, roll]`.
-- Light: a `DirectionalLight` (Intensity ~3, pitch -35) plus a `SkyLight`: `"Source": "Procedural"` for a sky (its sun
-  follows the directional light; `ZenithColor`, `HorizonColor`, `GroundColor`, `SunSize`, `SunIntensity`), or an
-  environment map, or just an `AmbientColor` for fill (`ShowBackground: false` keeps the camera's clear color). With
+- Light: start from a preset, `lighting.applySkyPreset {"preset": "Clear"}` (or Hazy, Overcast, GoldenHour): the physical
+  atmosphere and a real sun (120,000 lux above the air) in one undo step, with the Post Process's `AutoExposureMaxEV`
+  raised to 16; it creates "Sky" and "Sun" when missing and keeps the sun's azimuth (`sunAzimuth`, `sunElevation` to
+  aim it). Otherwise a `DirectionalLight` plus a `SkyLight`: `"Source": "Procedural"` for a sky (its sun follows the
+  directional light; `ZenithColor`, `HorizonColor`, `GroundColor`, `SunSize`, `SunIntensity`), or an environment map, or
+  just an `AmbientColor` for fill (`ShowBackground: false` keeps the camera's clear color). Check the balance with
+  `viewport.capture {"debugView": "luminance"}`: `debugView.lighting.sunToSkyRatio` is about 5-10 on a clear day (under 2
+  looks flat), and `{"debugView": "albedo"}`'s `aboveRangeShare` near 0 (base colors above 0.85 look plastic and glow).
+  Under the atmosphere distant surfaces fade into the air's haze (`AerialPerspective`); a small world (under a few km)
+  shows depth with `AerialPerspectiveScale` 4-8. Ambient occlusion's `AmbientOcclusionRadius` (meters, default 1) sets
+  how far around a surface occluders darken it. With
   an HDR sky that shows a sun, `lighting.extractSun` points the directional light where the sky's sun is, with its color
   and brightness, and `asset.setImportSettings {"asset": <map>, "settings": {"RemoveSun": true}}` then paints the sun out
   of the map, so it does not light the scene twice (unshadowed); bake Reflection Probes again afterwards.

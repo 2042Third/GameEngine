@@ -397,6 +397,11 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Costly knobs are rows of `RendererQualitySettings` and fields of the `Renderer.Quality` section (a row per line, its four
   presets on it); Medium keeps 0.6.0's costs ([Quality settings](Docs/DeveloperGuide.md#quality-settings)).
 - Shaders writing HDR targets clamp with `SanitizeHDR`; normal maps are read as X and Y with Z reconstructed.
+- Light keeps its energy and needs no history: specular is compensated for multiple scattering from the BRDF table
+  (`GetSpecularEnergy`) and diffuse gets what specular leaves; ambient occlusion and other screen-space lighting denoise
+  within the frame; specular anti-aliasing takes derivatives only of the primitive's own interpolants and textures. Check
+  lighting changes with the `lighting`, `ao`, `indirect`, `luminance` and `albedo` debug views and the white-furnace
+  test ([Lighting](Docs/DeveloperGuide.md#lighting)).
 - Temporal effects jitter only the frame's camera copy and keep history per renderer; single images settle or turn TAA
   off.
 - Font files are untrusted input: extend `Renderer/FontValidation.h`, with crafted-font tests, before calling another

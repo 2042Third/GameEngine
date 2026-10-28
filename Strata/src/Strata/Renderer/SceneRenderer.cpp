@@ -350,6 +350,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(20),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(21),
 			nvrhi::BindingLayoutItem::Texture_SRV(27),          // The atmosphere's sky-view table (Include/Atmosphere.glsl)
+			nvrhi::BindingLayoutItem::Texture_SRV(29),          // Aerial perspective's volume (Include/AerialPerspective.glsl)
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -788,8 +789,8 @@ namespace Strata
 		ST_CORE_ASSERT(mip < c_PrefilteredMipCount, "Environment filter step {} out of range", step);
 		const uint32_t size = std::max(1u, maps.PrefilteredSize >> mip);
 		const float roughness = static_cast<float>(mip) / static_cast<float>(c_PrefilteredMipCount - 1);
-		DispatchIBL(commandList, m_PrefilterPipeline, maps.Cube, wholeCube, nvrhi::TextureDimension::TextureCube, maps.Prefiltered, mip,
 		const uint32_t samples = RendererQuality::GetPrefilterSamples(maps.PrefilteredSize, mip);
+		DispatchIBL(commandList, m_PrefilterPipeline, maps.Cube, wholeCube, nvrhi::TextureDimension::TextureCube, maps.Prefiltered, mip,
 			nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { size, c_EnvironmentCubeSize, roughness, samples }, 6);
 	}
 
@@ -819,6 +820,7 @@ namespace Strata
 		frame.SunDiskColor = glm::vec4(0.0f);
 		m_SkyHorizon.reset();
 		m_AtmosphereFrame = false;
+		m_AerialScale = 0.0f;
 
 		const SkyLightComponent* skyLight = nullptr;
 		for (auto [entity, sky, world] : scene.GetRegistry().view<SkyLightComponent, WorldTransformComponent>().each())
@@ -860,6 +862,10 @@ namespace Strata
 				return;
 			}
 			m_AtmosphereFrame = true;
+			// Aerial perspective's distance scale (SetAerialPerspective decides the frame's with the camera): 0 when off,
+			// non-finite values as 0, as SetHeightFog sanitizes its inputs.
+			const float scale = skyLight->AerialPerspectiveScale;
+			m_AerialScale = skyLight->AerialPerspective && std::isfinite(scale) ? std::clamp(scale, 0.0f, SkyLightComponent::c_MaxAerialPerspectiveScale) : 0.0f;
 			// The tables and the environment hold the sky per lux of sun: times the light's illuminance above the atmosphere.
 			intensity *= m_AtmosphereSunIlluminance;
 		}
@@ -943,6 +949,7 @@ namespace Strata
 		nvrhi::IBuffer* previousInstances = m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer();
 		nvrhi::IBuffer* previousPalette = m_PreviousPalette ? m_PreviousPalette.Get() : m_SceneGPU->GetPaletteBuffer();
 		nvrhi::ITexture* skyView = GetBoundSkyView();
+		nvrhi::ITexture* aerialVolume = GetBoundAerialVolume();
 		nvrhi::ITexture* probeArray = GetBoundReflectionProbes();
 		nvrhi::ITexture* screenReflections = GetBoundScreenReflections();
 		nvrhi::ITexture* sceneColor = GetBoundSceneColor();
@@ -963,6 +970,7 @@ namespace Strata
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(20, previousInstances),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(21, previousPalette),
 				nvrhi::BindingSetItem::Texture_SRV(27, skyView),
+				nvrhi::BindingSetItem::Texture_SRV(29, aerialVolume, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
@@ -1010,6 +1018,7 @@ namespace Strata
 		m_BoundPreviousInstances = previousInstances;
 		m_BoundPreviousPalette = previousPalette;
 		m_BoundSkyView = skyView;
+		m_BoundAerialVolume = aerialVolume;
 		m_BoundReflectionProbes = probeArray;
 		m_BoundScreenReflections = screenReflections;
 		m_BoundSceneColor = sceneColor;
@@ -1263,7 +1272,9 @@ namespace Strata
 		frame.FogDensity = glm::vec4(0.0f);
 		frame.FogColor = glm::vec4(0.0f);
 		frame.FogLight = glm::vec4(0.0f);
-		frame.FogParams = glm::vec4(0.0f);
+		// FogParams.z and w are aerial perspective's (SetAerialPerspective, after this).
+		frame.FogParams.x = 0.0f;
+		frame.FogParams.y = 0.0f;
 		const HeightFogComponent* fog = FindHeightFog(scene);
 		if (!fog)
 			return;
@@ -1293,7 +1304,8 @@ namespace Strata
 		else
 			frame.FogLight = SanitizeRadiance(glm::vec3(frame.AmbientColor));
 		const float sunScattering = std::clamp(finiteOr(fog->SunScattering, 0.0f), 0.0f, 1.0f);
-		frame.FogParams = glm::vec4(1.0f, sunScattering * HeightFogComponent::c_MaxSunAsymmetry, 0.0f, 0.0f);
+		frame.FogParams.x = 1.0f;
+		frame.FogParams.y = sunScattering * HeightFogComponent::c_MaxSunAsymmetry;
 		m_Stats.HeightFog = true;
 	}
 
@@ -1680,6 +1692,8 @@ namespace Strata
 			ReleaseLocalShadowAtlas(quality.LocalShadowAtlasSize);
 		else if (quality.LocalShadowMaxTile != current.LocalShadowMaxTile)
 			ResetLocalShadows();
+		// The environment: computed again at the new size by the next frame with a sky (or taken from a renderer of that size).
+		const bool environment = quality.EnvironmentResolution != current.EnvironmentResolution;
 
 		current = quality;
 		if (cascades)
@@ -1693,20 +1707,6 @@ namespace Strata
 			return false;
 		ResetHistory();
 		return true;
-	}
-		// The environment: computed again at the new size by the next frame with a sky (or taken from a renderer of that size).
-		const bool environment = quality.EnvironmentResolution != current.EnvironmentResolution;
-
-	void SceneRenderer::InvalidateShadowCache()
-	{
-		m_ShadowCacheValid = 0;
-		m_ShadowCachePending = false;
-		m_ShadowCacheKeys = {};
-		m_ShadowCachePendingKeys = {};
-		m_ShadowCacheContent = {};
-		m_ShadowCachePendingContent = {};
-		m_ShadowCacheBounds.clear();
-		m_ShadowCacheProxyVersion = 0;
 	}
 
 	void SceneRenderer::ReleaseEnvironment()
@@ -1735,6 +1735,18 @@ namespace Strata
 			}
 		}
 		Renderer::ReleaseDeferred(std::move(released));
+	}
+
+	void SceneRenderer::InvalidateShadowCache()
+	{
+		m_ShadowCacheValid = 0;
+		m_ShadowCachePending = false;
+		m_ShadowCacheKeys = {};
+		m_ShadowCachePendingKeys = {};
+		m_ShadowCacheContent = {};
+		m_ShadowCachePendingContent = {};
+		m_ShadowCacheBounds.clear();
+		m_ShadowCacheProxyVersion = 0;
 	}
 
 	uint32_t SceneRenderer::SelectLOD(const Mesh& mesh, const Submesh& submesh, float screenFraction) const
@@ -2910,12 +2922,13 @@ namespace Strata
 			RecordMotionGrowth(commandList);
 		UpdateEnvironment(scene, preview, frame, commandList);
 		SetHeightFog(scene, camera, frame);
+		SetAerialPerspective(camera, frame);
 		// The texture table's changed entries (textures that streamed levels moved to other bindless slots) before anything
 		// samples them; a table that grew has a new buffer, which the binding sets follow.
 		TextureTable& textureTable = Renderer::GetTextureTable();
 		const bool tableUploaded = textureTable.RecordUploads(commandList);
 		const bool rebind = buffersRecreated || m_BoundEnvironmentCube != GetEnvironmentCube() || m_BoundIrradiance != GetIrradianceMap()
-			|| m_BoundPrefiltered != GetPrefilteredMap() || m_BoundSkyView != GetBoundSkyView()
+			|| m_BoundPrefiltered != GetPrefilteredMap() || m_BoundSkyView != GetBoundSkyView() || m_BoundAerialVolume != GetBoundAerialVolume()
 			|| m_BoundReflectionProbes != GetBoundReflectionProbes() || m_BoundScreenReflections != GetBoundScreenReflections() || m_BoundSceneColor != GetBoundSceneColor()
 			|| m_BoundTextureTableVersion != textureTable.GetBufferVersion();
 		if (!tableUploaded || (rebind && !CreateSceneBindingSets()))
@@ -2974,6 +2987,14 @@ namespace Strata
 		{
 			commandList->beginMarker("LightClusters");
 			BuildLightClusters(commandList);
+			commandList->endMarker();
+		}
+		// After the frame's constants and the atmosphere's tables; the next stage's start ends its interval.
+		if (m_AerialFrame)
+		{
+			gpuTimer.Next(gpuStages.Aerial);
+			commandList->beginMarker("Aerial");
+			RenderAerialPerspective(commandList, camera);
 			commandList->endMarker();
 		}
 

@@ -1292,9 +1292,22 @@ TEST_SUITE("Editor.Commands")
 			CAPTURE(property);
 			CHECK_FALSE(harness.Error("component.set", { { "entity", entity }, { "component", "SkyLight" }, { "values", { { property, value } } } }).empty());
 		}
+		// Aerial perspective: on by default, its scale within [0, 64] and inactive while it is off.
+		CHECK(sky()["values"]["AerialPerspective"] == true);
+		CHECK(sky()["values"]["AerialPerspectiveScale"].get<double>() == doctest::Approx(1.0));
+		CHECK_FALSE(sky()["inactive"].contains("AerialPerspectiveScale"));
+		harness.Run("component.set", { { "entity", entity }, { "component", "SkyLight" }, { "values", { { "AerialPerspectiveScale", 6.0 } } } });
+		CHECK(sky()["values"]["AerialPerspectiveScale"].get<double>() == doctest::Approx(6.0));
+		CHECK_FALSE(harness.Error("component.set", { { "entity", entity }, { "component", "SkyLight" }, { "values", { { "AerialPerspectiveScale", 65.0 } } } }).empty());
+		harness.Run("component.set", { { "entity", entity }, { "component", "SkyLight" }, { "values", { { "AerialPerspective", false } } } });
+		CHECK(sky()["inactive"]["AerialPerspectiveScale"] == "Aerial Perspective is off");
+		harness.Run("edit.undo");
+		CHECK(sky()["values"]["AerialPerspective"] == true);
 		// Back to the procedural sky: the atmosphere's settings are inactive.
 		harness.Run("component.set", { { "entity", entity }, { "component", "SkyLight" }, { "values", { { "Source", "Procedural" } } } });
 		CHECK(sky()["inactive"].contains("AtmosphereHaze"));
+		CHECK(sky()["inactive"].contains("AerialPerspective"));
+		CHECK(sky()["inactive"].contains("AerialPerspectiveScale"));
 	}
 
 	TEST_CASE("Scene settings changes are undoable")

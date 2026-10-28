@@ -41,19 +41,7 @@ void main()
 		float step = next - previous;
 		float t = 0.5 * (previous + next);
 		previous = next;
-		float pointRadius = RadiusAlongRay(radius, mu, t);
-		float height = pointRadius - c_AtmosphereBottomRadius;
-		vec3 rayleigh = medium.RayleighScattering * exp(-max(height, 0.0) / c_RayleighScaleHeight);
-		vec3 mie = medium.MieScattering * exp(-max(height, 0.0) / c_MieScaleHeight);
-		vec3 extinction = GetAtmosphereExtinction(medium, height);
-		vec3 position = vec3(0.0, radius, 0.0) + direction * t;
-		float sunMu = dot(position, toSun) / pointRadius;
-		vec3 sun = GetSunTransmittance(pointRadius, sunMu);
-		vec3 multiple = GetMultipleScattering(pointRadius, sunMu);
-		vec3 scattered = rayleigh * (rayleighPhase * sun + multiple) + mie * (miePhase * sun + multiple);
-		vec3 stepTransmittance = exp(-extinction * step);
-		light += transmittance * (1.0 - stepTransmittance) / max(extinction, vec3(1.0e-9)) * scattered;
-		transmittance *= stepTransmittance;
+		AccumulateAtmosphereSegment(medium, radius, mu, direction, toSun, rayleighPhase, miePhase, t, step, transmittance, light);
 	}
 	if (ground)
 	{

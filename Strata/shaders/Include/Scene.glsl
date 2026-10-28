@@ -94,7 +94,9 @@ struct FrameConstants
 	// is off), w: 1 when an environment map's irradiance from above lights it instead, 2 when the atmosphere's sky at the
 	// horizon does (toward the ray's azimuth)
 	vec4 FogLight;
-	vec4 FogParams;  // x: 1 when the scene has fog, y: the asymmetry of its scattering of the directional light
+	// x: 1 when the scene has fog, y: the asymmetry of its scattering of the directional light; z: aerial perspective's far
+	// distance in meters (0: none; Include/AerialPerspective.glsl), w: its distance scale (light-and-materials claims z and w)
+	vec4 FogParams;
 	// The atmosphere's sun disk: xyz toward the sun, w its angular radius (0: none); rgb its illuminance at the ground (lux)
 	vec4 SunDiskDirection;
 	vec4 SunDiskColor;

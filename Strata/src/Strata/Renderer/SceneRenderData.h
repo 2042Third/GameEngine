@@ -83,7 +83,10 @@ namespace Strata
 			// ambient color without an environment, 1 when ColorFromSky is off), w: 1 when an environment map's irradiance from
 			// above lights it instead, 2 when the atmosphere's sky at the horizon does (toward the ray's azimuth)
 			glm::vec4 FogLight;
-			glm::vec4 FogParams;   // x: 1 when the scene has fog, y: the asymmetry of its scattering of the directional light
+			// x: 1 when the scene has fog, y: the asymmetry of its scattering of the directional light (SetHeightFog); z: aerial
+			// perspective's far distance in meters (0: none), w: its distance scale (SetAerialPerspective; light-and-materials
+			// claims z and w)
+			glm::vec4 FogParams;
 			// The atmosphere's sun disk (SkyLightSource::Atmosphere; Scene/Skybox.frag's atmosphere variant): xyz toward the sun,
 			// w its angular radius (0: no disk); rgb its illuminance at the ground in lux, through the atmosphere.
 			glm::vec4 SunDiskDirection;
@@ -362,6 +365,22 @@ namespace Strata
 			uint32_t Padding1;
 		};
 		static_assert(sizeof(AtmospherePassParameters) == 16);
+
+		// Aerial perspective's volume (IBL/AtmosphereAerial.comp): columns across the screen each way, and depth slices (the
+		// texture holds two slabs of them: the in-scattered light, then the transmittance).
+		constexpr uint32_t c_AerialSize = 32;
+		constexpr uint32_t c_AerialSlices = 32;
+		constexpr float c_AerialMaxDistance = 32000.0f; // Meters: the volume reaches at most this far (or the camera's far plane)
+		// IBL/AtmosphereAerial.comp's push constants: the view rays through the screen's corners, unjittered, in camera-relative
+		// world space (not normalized: they interpolate linearly across the screen), and what the march needs.
+		struct AerialPerspectiveParameters
+		{
+			glm::vec4 RayTopLeft;     // w: the volume's far distance D (meters)
+			glm::vec4 RayTopRight;    // w: the distance scale
+			glm::vec4 RayBottomLeft;  // w: the viewer's distance from the planet's center (km): bottom radius + clamp(camera y, 0, 20 km)
+			glm::vec4 RayBottomRight; // w: unused
+		};
+		static_assert(sizeof(AerialPerspectiveParameters) == 64);
 
 		// Effects/GTAO.comp's and Effects/AODenoise.comp's push constants.
 		struct AOParameters

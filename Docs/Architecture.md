@@ -889,6 +889,7 @@ The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStage
 | --- | --- |
 | `GPU.Uploads` | the upload queue's graphics batches (`GPUUploadQueue::SubmitBatch`) |
 | `GPU.Setup` | a scene renderer's environment maps, scene data uploads and light clusters |
+| `GPU.Aerial` | the atmosphere's aerial perspective volume, recorded after the light clusters (frames with an atmosphere sky only) |
 | `GPU.Cull` | culling dispatches and depth pyramids |
 | `GPU.Shadows`, `GPU.Prepass`, `GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent` | the scene passes |
 | `GPU.Reflections` | reflection probes' conversions and the screen-space reflections' trace, between `GPU.AO` and `GPU.Opaque` |

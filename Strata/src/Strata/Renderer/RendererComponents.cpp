@@ -59,6 +59,14 @@ namespace Strata
 			return sky.Source != SkyLightSource::EnvironmentMap ? std::string() : "Only the procedural sky and the atmosphere draw a sun (Source is Environment Map)";
 		}
 
+		// The scale of aerial perspective's distances, while it is on.
+		std::string WithAerialPerspective(const SkyLightComponent& sky)
+		{
+			if (sky.Source != SkyLightSource::Atmosphere)
+				return AtmosphereOnly(sky);
+			return sky.AerialPerspective ? std::string() : "Aerial Perspective is off";
+		}
+
 		// The atmosphere's background is drawn from its sky-view table, never blurred.
 		std::string WithoutAtmosphere(const SkyLightComponent& sky)
 		{
@@ -309,11 +317,17 @@ namespace Strata
 			.Property("AtmosphereHaze", &SkyLightComponent::AtmosphereHaze,
 				WithTooltip(Range(0.0f, 10.0f, 0.01f), "Atmosphere: amount of aerosols (1: a clear day), the whitish haze and glow around the sun"))
 			.Property("GroundAlbedo", &SkyLightComponent::GroundAlbedo,
-				WithTooltip(Range(0.0f, 1.0f, 0.01f), "Atmosphere: diffuse reflectance of the planet's ground, which lights the sky from below"));
+				WithTooltip(Range(0.0f, 1.0f, 0.01f), "Atmosphere: diffuse reflectance of the planet's ground, which lights the sky from below"))
+			.Property("AerialPerspective", &SkyLightComponent::AerialPerspective,
+				WithTooltip({}, "Atmosphere: distant surfaces fade into the air's haze, as the sky does (aerial perspective)"))
+			.Property("AerialPerspectiveScale", &SkyLightComponent::AerialPerspectiveScale,
+				WithTooltip(Range(0.0f, SkyLightComponent::c_MaxAerialPerspectiveScale, 0.1f), "Atmosphere: distances multiplied by this for the "
+					"haze: 1 is Earth's air, 4 makes a 1 km view look like 4 km"));
 		SetInactiveReasons<SkyLightComponent>({ "EnvironmentMap", "Rotation" }, &EnvironmentMapOnly);
 		SetInactiveReasons<SkyLightComponent>({ "ZenithColor", "HorizonColor", "GroundColor", "SunIntensity" }, &ProceduralSkyOnly);
 		SetInactiveReasons<SkyLightComponent>({ "SunSize" }, &WithSunDisk);
-		SetInactiveReasons<SkyLightComponent>({ "AtmosphereDensity", "AtmosphereHaze", "GroundAlbedo" }, &AtmosphereOnly);
+		SetInactiveReasons<SkyLightComponent>({ "AtmosphereDensity", "AtmosphereHaze", "GroundAlbedo", "AerialPerspective" }, &AtmosphereOnly);
+		SetInactiveReasons<SkyLightComponent>({ "AerialPerspectiveScale" }, &WithAerialPerspective);
 		SetInactiveReasons<SkyLightComponent>({ "BackgroundBlur" }, &WithoutAtmosphere);
 		SetInactiveReasons<SkyLightComponent>({ "AmbientColor" }, &WithoutEnvironmentOnly);
 

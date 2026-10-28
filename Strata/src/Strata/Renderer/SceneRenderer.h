@@ -506,6 +506,8 @@ namespace Strata
 		// is still under way. The directional light's color is multiplied by SunTransmittance, the share of its light that
 		// reaches the ground through the atmosphere (1 without one).
 		bool Atmosphere = false;
+		// The frame drew aerial perspective (SkyLightComponent::AerialPerspective under the atmosphere, a perspective camera).
+		bool AerialPerspective = false;
 		uint32_t AtmosphereTableUpdates = 0;
 		uint32_t AtmosphereSkyViewUpdates = 0;
 		uint32_t EnvironmentRefreshSteps = 0;
@@ -711,6 +713,9 @@ namespace Strata
 		// the atmosphere.
 		nvrhi::ITexture* GetAtmosphereTransmittanceTable() const { return m_Atmosphere ? m_Atmosphere->Transmittance.Get() : nullptr; }
 		nvrhi::ITexture* GetAtmosphereSkyViewTable() const { return m_Atmosphere ? m_Atmosphere->SkyView.Get() : nullptr; }
+		// Aerial perspective's volume (RGBA16F, 32 x 32 x 64: in-scattered light per lux of sun, then transmittance), null until a
+		// frame drew it.
+		nvrhi::ITexture* GetAerialVolume() const { return m_Atmosphere ? m_Atmosphere->AerialVolume.Get() : nullptr; }
 		// The atmosphere's environment is computed again once the sun moved more than this many degrees, in this many steps.
 		static constexpr float c_AtmosphereRefreshAngle = 0.5f;
 		static constexpr uint32_t c_AtmosphereRefreshSteps = 6 + 2 + 6; // Faces, the cube's levels and irradiance, prefiltered levels
@@ -1105,12 +1110,12 @@ namespace Strata
 			nvrhi::TextureHandle Cube;        // Radiance cubemap with mips (background, irradiance source)
 			nvrhi::TextureHandle Irradiance;  // Diffuse irradiance
 			nvrhi::TextureHandle Prefiltered; // Specular radiance, one mip per roughness level
+			uint32_t PrefilteredSize = 256;   // Texels each way of Prefiltered's first level (RendererQualitySettings::EnvironmentResolution)
 		};
 		// The atmosphere (SceneRendererAtmosphere.cpp): made with the first frame whose sky uses it, released with the first that
 		// does not. Its tables (Include/Atmosphere.glsl) are computed when what they depend on changes; its environment is
 		// double-buffered: while the sun moved more than c_AtmosphereRefreshAngle since the current one was computed, or the
 		// settings changed, the other set of maps is computed in c_AtmosphereRefreshSteps steps (one per frame with
-			uint32_t PrefilteredSize = 256;   // Texels each way of Prefiltered's first level (RendererQualitySettings::EnvironmentResolution)
 		// SceneRendererSpecification::SpreadLightingUpdates, else all at once) and then takes over; changes meanwhile wait for
 		// the next refresh, which starts once it is done.
 		struct AtmosphereState
@@ -1128,6 +1133,11 @@ namespace Strata
 			nvrhi::BindingSetHandle TransmittanceSet;
 			nvrhi::BindingSetHandle MultipleScatteringSet;
 			nvrhi::BindingSetHandle SkyViewSet;
+			// Aerial perspective (IBL/AtmosphereAerial.comp, RenderAerialPerspective): made by its first frame.
+			nvrhi::BindingLayoutHandle AerialLayout;
+			nvrhi::ComputePipelineHandle AerialPipeline;
+			nvrhi::TextureHandle AerialVolume;
+			nvrhi::BindingSetHandle AerialSet;
 			std::optional<AtmosphereSettings> TableSettings; // What the transmittance and multiple-scattering tables hold
 			glm::vec3 SkyViewSun = glm::vec3(0.0f);          // What the sky-view table holds, with TableSettings
 			int32_t SkyViewBand = -1;
@@ -1227,6 +1237,14 @@ namespace Strata
 		bool CreateSceneBindingSets();
 		// What the scene binding sets bind as the sky-view table: the atmosphere's in its frames, else a black texture.
 		nvrhi::ITexture* GetBoundSkyView() const;
+		// What they bind as aerial perspective's volume (SRV 29): the atmosphere's in frames that draw it, else a black 3D texture.
+		nvrhi::ITexture* GetBoundAerialVolume() const;
+		// Whether the frame draws aerial perspective (m_AerialScale under the atmosphere, a perspective camera, its resources
+		// made), and FogParams.z and w for it (0 without): after SetHeightFog, which writes FogParams.x and y.
+		void SetAerialPerspective(const SceneCamera& camera, RenderData::FrameConstants& frame);
+		bool EnsureAerialResources();
+		// Computes the frame's aerial perspective volume for the unjittered camera (SceneRendererAtmosphere.cpp).
+		void RenderAerialPerspective(nvrhi::ICommandList* commandList, const SceneCamera& camera);
 		// What the scene binding sets bind as the reflection probes' cube array: a one-slot black array without probes.
 		nvrhi::ITexture* GetBoundReflectionProbes() const;
 		// The frame's reflection probes (SceneRendererReflectionProbes.cpp), on the CPU after the lights: the strongest in view,
@@ -1438,6 +1456,9 @@ namespace Strata
 		// Releases the cascades' depth array with what references it (framebuffers, depth pyramids and their sets, the cached
 		// cascades), through Renderer::ReleaseDeferred; the next frame that draws a shadowed sun makes them again.
 		void ReleaseShadowMap();
+		// Drops the environment maps (and the atmosphere's spare and refreshing ones) through Renderer::ReleaseDeferred, so the
+		// next frame with a sky computes them at the quality's EnvironmentResolution or takes a shared set of that size.
+		void ReleaseEnvironment();
 		// The cascade cache holds nothing: every cascade is drawn again.
 		void InvalidateShadowCache();
 		// The cascades' size for a quality at the current viewport: its resolution resolved for the rows, limited by the
@@ -1456,9 +1477,6 @@ namespace Strata
 		void GatherLocalShadowDraws(RenderScene& renderScene, bool casterDraws);
 		// The shaders' data of the shadowed lights (m_LocalShadowData), relative to the frame's camera.
 		void BuildLocalShadowData(const SceneCamera& camera);
-		// Drops the environment maps (and the atmosphere's spare and refreshing ones) through Renderer::ReleaseDeferred, so the
-		// next frame with a sky computes them at the quality's EnvironmentResolution or takes a shared set of that size.
-		void ReleaseEnvironment();
 		// Creates the atlas with its framebuffer once a frame has shadowed lights; false (reported) when that fails.
 		bool EnsureLocalShadowAtlas();
 		// Clears the views' tiles and draws their casters (the CPU's draws).
@@ -1669,6 +1687,10 @@ namespace Strata
 		bool m_AtmosphereFrame = false;      // The frame's sky is the atmosphere
 		float m_AtmosphereSunIlluminance = 0.0f; // Its sun's illuminance above it: the largest component of the light's color times intensity
 		nvrhi::ITexture* m_BoundSkyView = nullptr; // The sky-view table (or a black texture) referenced by m_SceneBindingSet
+		float m_AerialScale = 0.0f;    // The sky's AerialPerspectiveScale in atmosphere frames (UpdateEnvironment), 0 when off
+		bool m_AerialFrame = false;    // The frame draws aerial perspective (SetAerialPerspective)
+		float m_AerialDistance = 0.0f; // Its volume's far distance in meters
+		nvrhi::ITexture* m_BoundAerialVolume = nullptr; // Aerial perspective's volume (or the black one) referenced by m_SceneBindingSet
 		nvrhi::ITexture* m_BoundReflectionProbes = nullptr; // The probes' cube array (or the black one) referenced by m_SceneBindingSet
 		nvrhi::BindingLayoutHandle m_IBLBindingLayout;
 		nvrhi::ComputePipelineHandle m_EquirectToCubePipeline;

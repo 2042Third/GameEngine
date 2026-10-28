@@ -10,6 +10,7 @@
 #include "Include/LocalShadows.glsl"
 #include "Include/Clusters.glsl"
 #include "Include/Fog.glsl"
+#include "Include/AerialPerspective.glsl"
 #include "Include/AmbientOcclusionFit.glsl"
 #define ST_REFLECTION_PROBE_SAMPLING
 #include "Include/ReflectionProbes.glsl"
@@ -215,8 +216,8 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 	vec3 diffuseOcclusionColor = u_Frame.AOParams.y > 0.0 ? AOMultiBounce(diffuseOcclusion, surface.Albedo * (1.0 - surface.Metallic))
 		: vec3(diffuseOcclusion);
 	vec3 reflected = reflect(-surface.View, surface.Normal);
-	// Reflection probes whose boxes hold the surface light it first (Include/ReflectionProbes.glsl); the sky, or the constant
 	vec3 surfaceGeometricNormal = normalize(v_Normal) * (gl_FrontFacing ? 1.0 : -1.0);
+	// Reflection probes whose boxes hold the surface light it first (Include/ReflectionProbes.glsl); the sky, or the constant
 	// ambient without an environment, fills in what they leave.
 	ProbeLight probes;
 	probes.Irradiance = vec3(0.0);
@@ -363,12 +364,12 @@ void main()
 	{
 		vec4 metallicRoughness = SampleMaterialTexture(material.MetallicRoughnessMap, uv);
 		vec3 shadingNormal = GetShadingNormal(material, uv, v_Normal, v_Tangent, gl_FrontFacing);
-		float occlusion = mix(1.0, SampleMaterialTexture(material.OcclusionMap, uv).r, material.OcclusionStrength);
 		// Specular anti-aliasing (MaterialParams.z): the lobe widened by the shading normal's change across the pixel. Derivatives
 		// only of the primitive's interpolants and textures, in a branch on its material (the same for a whole quad), before any
 		// discard: both draw paths shade alike.
 		float roughness = WidenRoughness(clamp(material.Roughness * metallicRoughness.g, 0.0, 1.0), dFdx(shadingNormal), dFdy(shadingNormal),
 			u_Frame.MaterialParams.z);
+		float occlusion = mix(1.0, SampleMaterialTexture(material.OcclusionMap, uv).r, material.OcclusionStrength);
 		ClearcoatData coat;
 		coat.Strength = 0.0;
 		coat.Roughness = 0.0;
@@ -379,8 +380,8 @@ void main()
 			coat.Strength = clamp(material.Clearcoat * SampleMaterialTexture(material.ClearcoatMap, uv).r, 0.0, 1.0);
 			coat.Roughness = clamp(material.ClearcoatRoughness * SampleMaterialTexture(material.ClearcoatRoughnessMap, uv).g, 0.0, 1.0);
 			coat.Normal = GetMappedNormal(material.ClearcoatNormalMap, 1.0, uv, v_Normal, v_Tangent, gl_FrontFacing);
-		}
 			coat.Roughness = WidenRoughness(coat.Roughness, dFdx(coat.Normal), dFdy(coat.Normal), u_Frame.MaterialParams.z);
+		}
 		float diffuseWeight = 1.0;
 #ifdef ST_FORWARD_GLASS
 		float transmission = clamp(material.Transmission * SampleMaterialTexture(material.TransmissionMap, uv).r, 0.0, 1.0);
@@ -404,8 +405,11 @@ void main()
 	if (lightingView == ST_LIGHTING_VIEW_ALBEDO)
 		color = baseColor.rgb;
 
-	// Every variant fogs alike, so a transparent surface looks like an opaque one at its depth. The value views show the
-	// surface's own values.
+	// Every variant hazes and fogs alike, so a transparent surface looks like an opaque one at its depth: the air's haze
+	// first (aerial perspective), then the height fog, nearer the camera, over it. The value views show the surface's own
+	// values.
+	if (u_Frame.FogParams.z > 0.0 && !valueView)
+		color = ApplyAerialPerspective(color, v_RelativePosition, gl_FragCoord.xy);
 	if (u_Frame.FogParams.x > 0.0 && !valueView)
 		color = ApplyHeightFog(color, v_RelativePosition);
 #ifdef ST_FORWARD_GLASS
