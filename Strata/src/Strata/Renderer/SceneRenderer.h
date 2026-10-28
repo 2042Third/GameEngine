@@ -1199,8 +1199,9 @@ namespace Strata
 		bool EnsureOutputTarget();
 		bool ValidateTarget(nvrhi::IFramebuffer* target);
 		// Finds the scene's sky light (or the preview sky); (re)computes the environment maps when its environment texture
-		// or its procedural sky's parameters changed.
-		void UpdateEnvironment(Scene& scene, bool preview, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList);
+		// or its procedural sky's parameters changed. False when the atmosphere's resources could not be made (reported; the
+		// scene then has no environment).
+		bool UpdateEnvironment(Scene& scene, bool preview, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList);
 		// The frame's fog constants from the scene's height fog (FindHeightFog), after the lights and the environment, whose
 		// light it scatters.
 		void SetHeightFog(Scene& scene, const SceneCamera& camera, RenderData::FrameConstants& frame);
@@ -1256,8 +1257,10 @@ namespace Strata
 		// What they bind as aerial perspective's volume (SRV 29): the atmosphere's in frames that draw it, else a black 3D texture.
 		nvrhi::ITexture* GetBoundAerialVolume() const;
 		// Whether the frame draws aerial perspective (m_AerialScale under the atmosphere, a perspective camera, its resources
-		// made), and FogParams.z and w for it (0 without): after SetHeightFog, which writes FogParams.x and y.
-		void SetAerialPerspective(const SceneCamera& camera, RenderData::FrameConstants& frame);
+		// made), and FogParams.z and w for it (0 without): after SetHeightFog, which writes FogParams.x and y. False when its
+		// resources could not be made (reported; the frame draws without the haze and counts as degraded, so the report is not
+		// logged again every frame).
+		bool SetAerialPerspective(const SceneCamera& camera, RenderData::FrameConstants& frame);
 		bool EnsureAerialResources();
 		// Computes the frame's aerial perspective volume for the unjittered camera (SceneRendererAtmosphere.cpp).
 		void RenderAerialPerspective(nvrhi::ICommandList* commandList, const SceneCamera& camera);

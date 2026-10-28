@@ -364,20 +364,23 @@ namespace Strata
 		return m_AerialFrame && m_Atmosphere && m_Atmosphere->AerialVolume ? m_Atmosphere->AerialVolume.Get() : Renderer::GetBlack3DTexture();
 	}
 
-	void SceneRenderer::SetAerialPerspective(const SceneCamera& camera, RenderData::FrameConstants& frame)
+	bool SceneRenderer::SetAerialPerspective(const SceneCamera& camera, RenderData::FrameConstants& frame)
 	{
 		// Orthographic views keep no distance along their rays to haze by.
 		m_AerialFrame = m_AtmosphereFrame && m_Atmosphere && m_AerialScale > 0.0f && !camera.Orthographic;
+		bool made = true;
 		if (m_AerialFrame && !EnsureAerialResources())
 		{
 			m_Errors.Report("aerial perspective's volume could not be created; distant surfaces are drawn without the air's haze");
 			m_AerialFrame = false;
+			made = false;
 		}
 		const float farPlane = std::isfinite(camera.Far) && camera.Far > 0.0f ? camera.Far : RenderData::c_AerialMaxDistance;
 		m_AerialDistance = std::clamp(farPlane, 1.0f, RenderData::c_AerialMaxDistance);
 		frame.FogParams.z = m_AerialFrame ? m_AerialDistance : 0.0f;
 		frame.FogParams.w = m_AerialFrame ? m_AerialScale : 0.0f;
 		m_Stats.AerialPerspective = m_AerialFrame;
+		return made;
 	}
 
 	bool SceneRenderer::EnsureAerialResources()

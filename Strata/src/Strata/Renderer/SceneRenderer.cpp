@@ -845,7 +845,7 @@ namespace Strata
 		return parameters;
 	}
 
-	void SceneRenderer::UpdateEnvironment(Scene& scene, bool preview, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList)
+	bool SceneRenderer::UpdateEnvironment(Scene& scene, bool preview, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList)
 	{
 		frame.EnvironmentParams = glm::vec4(0.0f);
 		frame.SkyParams = glm::vec4(0.0f);
@@ -880,7 +880,7 @@ namespace Strata
 		{
 			m_Environment = nullptr; // Release the maps of a removed environment
 			m_EnvironmentHold = nullptr;
-			return;
+			return true;
 		}
 
 		float rotation = 0.0f; // The procedural sky and the atmosphere are computed in world space: their sun follows the light
@@ -892,7 +892,7 @@ namespace Strata
 			{
 				m_Environment = nullptr;
 				m_Atmosphere.reset();
-				return;
+				return false;
 			}
 			m_AtmosphereFrame = true;
 			// Aerial perspective's distance scale (SetAerialPerspective decides the frame's with the camera): 0 when off,
@@ -919,7 +919,7 @@ namespace Strata
 				// Constant ambient until the environment arrives (counted as pending by the resolve cache); the map is raised
 				// whole as soon as it is loaded.
 				HoldEnvironmentMap(skyLight->EnvironmentMap);
-				return;
+				return true;
 			}
 			// The environment is computed from the whole map: this renderer holds it whole in its streamer until then. Once
 			// computed, the cube is all renderers sample, so nothing asks for the map's levels any more and they drop to its
@@ -945,7 +945,7 @@ namespace Strata
 				{
 					HoldEnvironmentMap(skyLight->EnvironmentMap);
 					m_Assets.CountPending(skyLight->EnvironmentMap);
-					return;
+					return true;
 				}
 				else
 				{
@@ -964,6 +964,7 @@ namespace Strata
 		const float blur = atmosphere ? 0.0f : std::clamp(skyLight->BackgroundBlur, 0.0f, 1.0f);
 		frame.SkyParams = glm::vec4(blur * backgroundMips, skyLight->ShowBackground ? 1.0f : 0.0f, 0.0f, 0.0f);
 		m_Stats.EnvironmentLighting = true;
+		return true;
 	}
 
 	void SceneRenderer::HoldEnvironmentMap(AssetHandle map)
@@ -2998,9 +2999,11 @@ namespace Strata
 		GPUPassTimer gpuTimer(commandList, gpuStages.Setup, &BeginGPURecord());
 		if (m_GrownPreviousInstances || m_GrownPreviousPalette)
 			RecordMotionGrowth(commandList);
-		UpdateEnvironment(scene, preview, frame, commandList);
+		if (!UpdateEnvironment(scene, preview, frame, commandList))
+			degraded = true; // The atmosphere's tables could not be made (reported); the scene has no environment
 		SetHeightFog(scene, camera, frame);
-		SetAerialPerspective(camera, frame);
+		if (!SetAerialPerspective(camera, frame))
+			degraded = true; // Reported; the frame is drawn without the haze
 		// The texture table's changed entries (textures that streamed levels moved to other bindless slots) before anything
 		// samples them; a table that grew has a new buffer, which the binding sets follow.
 		TextureTable& textureTable = Renderer::GetTextureTable();
