@@ -144,12 +144,19 @@ namespace Strata
 			return post.AntiAliasing ? std::string() : "Anti Aliasing is off";
 		}
 
-		// The TAA's look: inactive without anti-aliasing or with FXAA.
+		// The name of a method that is not TAA, for the reasons below.
+		const char* NonTemporalMethodName(AntiAliasingMode method)
+		{
+			return method == AntiAliasingMode::Morphological ? "Morphological" : "FXAA";
+		}
+
+		// The TAA's look: inactive without anti-aliasing or with another method.
 		std::string WithTemporalAntiAliasing(const PostProcessComponent& post)
 		{
 			if (!post.AntiAliasing)
 				return "Anti Aliasing is off";
-			return post.AntiAliasingMethod == AntiAliasingMode::TAA ? std::string() : "Only TAA uses it (Anti Aliasing Method is FXAA)";
+			return post.AntiAliasingMethod == AntiAliasingMode::TAA ? std::string()
+				: fmt::format("Only TAA uses it (Anti Aliasing Method is {})", NonTemporalMethodName(post.AntiAliasingMethod));
 		}
 
 		// Screen-space reflections read the TAA's history: inactive without it.
@@ -157,7 +164,8 @@ namespace Strata
 		{
 			if (!post.AntiAliasing)
 				return "Needs TAA (Anti Aliasing is off)";
-			return post.AntiAliasingMethod == AntiAliasingMode::TAA ? std::string() : "Needs TAA (Anti Aliasing Method is FXAA)";
+			return post.AntiAliasingMethod == AntiAliasingMode::TAA ? std::string()
+				: fmt::format("Needs TAA (Anti Aliasing Method is {})", NonTemporalMethodName(post.AntiAliasingMethod));
 		}
 
 		std::string WithScreenSpaceReflections(const PostProcessComponent& post)
@@ -416,10 +424,11 @@ namespace Strata
 			.Property("AmbientOcclusionRadius", &PostProcessComponent::AmbientOcclusionRadius, WithTooltip(Range(0.01f, 10.0f, 0.01f), "World units"))
 			.Property("AmbientOcclusionIntensity", &PostProcessComponent::AmbientOcclusionIntensity, Slider(0.0f, 4.0f))
 			.Property("AntiAliasing", &PostProcessComponent::AntiAliasing, WithTooltip({}, "Smooths jagged edges, by the method below"))
-			.EnumProperty("AntiAliasingMethod", &PostProcessComponent::AntiAliasingMethod, { { "FXAA", 0 }, { "TAA", 1 } },
+			.EnumProperty("AntiAliasingMethod", &PostProcessComponent::AntiAliasingMethod, { { "FXAA", 0 }, { "TAA", 1 }, { "Morphological", 2 } },
 				{ .Tooltip = "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another "
 					"sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion. "
-					"TAA Preset chooses how the TAA looks" })
+					"TAA Preset chooses how the TAA looks. Morphological: non-temporal, finds edges and blends along them, keeping texture "
+					"detail" })
 			.EnumProperty("TAAPreset", &PostProcessComponent::TAAPreset, { { "Sharp", 0 }, { "Original", 1 }, { "Custom", 2 } },
 				{ .Tooltip = "How the TAA looks. Sharp: tighter history clipping, slow pans resampled less, uncovered surfaces drop their "
 					"history, transparent surfaces take mostly the current frame, a faster response to motion and a light sharpening of the "

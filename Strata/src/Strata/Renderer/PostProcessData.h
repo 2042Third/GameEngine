@@ -92,6 +92,23 @@ namespace Strata
 		static_assert(offsetof(TonemapConstants, Operator) == 16 && offsetof(TonemapConstants, DitherLevels) == 32);
 		static_assert(offsetof(TonemapConstants, VignetteTangents) == 40 && offsetof(TonemapConstants, FilmicToeSlope) == 48);
 
+		// PostProcess/MorphologicalEdges.frag and MorphologicalBlend.frag (push constants): the edges' thresholds (a luma
+		// difference of the display-encoded image; a depth jump beyond the neighboring steps, relative to the depth) and the blend's
+		// dither.
+		struct MorphologicalParameters
+		{
+			float Threshold;
+			float DepthThreshold;
+			float DitherLevels; // 2^bits - 1 of the target the blend writes; 0: no dither
+			float Padding0;
+		};
+		static_assert(sizeof(MorphologicalParameters) == 16);
+		constexpr float c_MorphologicalThreshold = 0.05f;
+		constexpr float c_MorphologicalDepthThreshold = 0.05f;
+		// The area table's texels each way (Renderer/MorphologicalAreaTable.inl, Tools/GenerateAreaTable.py): four crossings of
+		// 33 distances (0 to 32 pixels).
+		constexpr uint32_t c_MorphologicalAreaTableSize = 4 * 33;
+
 		// PostProcess/FXAA.frag (push constants).
 		struct FXAAParameters
 		{

@@ -400,6 +400,9 @@ TEST_SUITE("Scene.Serialization")
 		loaded = load({ { "AntiAliasing", true }, { "AntiAliasingMethod", "TAA" } }, warnings);
 		CHECK(warnings.empty());
 		CHECK(loaded.AntiAliasingMethod == AntiAliasingMode::TAA);
+		loaded = load({ { "AntiAliasing", true }, { "AntiAliasingMethod", "Morphological" } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.AntiAliasingMethod == AntiAliasingMode::Morphological);
 		loaded = load({ { "AntiAliasingMethod", "MSAA" } }, warnings);
 		CHECK(CountWarnings(warnings, "AntiAliasingMethod") == 1);
 		CHECK(loaded.AntiAliasingMethod == AntiAliasingMode::FXAA);

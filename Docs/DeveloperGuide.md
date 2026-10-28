@@ -3855,11 +3855,37 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     images set `SceneRenderOptions::GrainSeed` (the capture renderer and thumbnails: 0), so a picture taken again is the
     same; live views and games leave it unset.
   - Tests: `GPU.SceneRenderer.GrainAndAberration`.
+- **Morphological anti-aliasing** (`AntiAliasingMode::Morphological`, appended: file and script name "Morphological"; the
+  plan's "SMAA", named for what it is: designed here, it shares no pattern, corner or search table with the published
+  SMAA). Three fullscreen passes in `GPU.Post` after the tone mapping, which writes the 10-bit intermediate as for FXAA:
+  - Edges (`MorphologicalEdges.frag`, RG8 `m_MorphologicalEdges`: each pixel's left and top edge): a display-encoded
+    luma difference of `c_MorphologicalThreshold` (0.05) or more, kept where it is at least half the largest of the
+    pixel's other neighbors' (local contrast adaptation), or-ed with depth jumps (more than
+    `c_MorphologicalDepthThreshold` of the depth and twice the neighboring steps: the depth is linear in screen space on
+    planes, so slopes are no edges).
+  - Blend weights (`MorphologicalWeights.frag`, RGBA8 `m_MorphologicalWeights`, rg for the top edge, ba for the left): the
+    edge's run is searched both ways (at most 32 pixels each), the crossing edges at its ends say how the staircase turns
+    (across the edge, on the pixel's side, both, none), and the area table gives the shares: the reconstructed line runs
+    from each end's half step (+0.5, -0.5, or 0 when both or none) to the run's middle (Z and L shapes), and a run between
+    two steps the same way (a U: a dot or a dash of texture) blends nothing, which keeps fine texture (blending them, the
+    tiled floor below kept 0.81 of its detail). The table (`Renderer/MorphologicalAreaTable.inl`, 132 x 132 RG8, uploaded
+    by the first frame that uses it) is written only by `Tools/GenerateAreaTable.py`, which integrates the line exactly.
+  - Blend (`MorphologicalBlend.frag`, into the output with the dither): each pixel mixes in linear light with the
+    neighbors across its edges by those shares (scaled to one where they sum above it); a pixel without weights keeps the
+    intermediate's value exactly, as FXAA leaves flat areas.
+  - The reconstruction crosses each run at its middle, where the true line crosses within half a pixel of it: the error
+    grows with the slope (a 1:7 edge's pixels within 0.08 of their coverage on average, 1:3 within 0.15, without
+    anti-aliasing 0.25 and 0.28). Targets: 50 MB at 3840x2160, made by the first frame that uses it; other methods make
+    none. Stats: `MorphologicalAntiAliasing`. Tests: `GPU.SceneRenderer.Morphological`; perf (provisional)
+    `PerfGPU.Renderer.Morphological4K` (`GPU.Post` with it: about 0.31 ms, Post4K's TAA frame 0.24 ms). On
+    PhysicsPlayground's tiled floor at 3840x2160 (look-dev `--aa morph`; clarity's detail measure, region 1750,1150
+    360x360) it keeps 0.88 of the texture detail of the image without anti-aliasing (FXAA 0.86, TAA Sharp 0.93):
+    short of the spec's 0.95, as every spatial method that smooths the steps of a texture's fine pattern is.
 - **The players' rows** (`RendererQualitySettings::AntiAliasing`, `MotionBlur`, `DepthOfField`, `FilmGrain` and
-  `ChromaticAberration`, the same under every preset): Scene, or Off, FXAA or TAA for the method; Scene or Off for the
-  others (players may turn off, never on, what a scene uses). `ApplyQualityOverrides` applies all but the depth of field to
-  the copy of the Post Process every pass reads, once per frame, on both paths (screen-space reflections follow the
-  effective method); `RenderFrame` reads the depth of field's beside the lens.
+  `ChromaticAberration`, the same under every preset): Scene, or Off, FXAA, TAA or Morphological for the method; Scene or
+  Off for the others (players may turn off, never on, what a scene uses). `ApplyQualityOverrides` applies all but the depth
+  of field to the copy of the Post Process every pass reads, once per frame, on both paths (screen-space reflections
+  follow the effective method); `RenderFrame` reads the depth of field's beside the lens.
 - **FXAA's subpixel blend** is 0.25 (`FXAA.frag`'s `c_Subpixel`; 0.75 until 0.7.0, which cost 19-22% of the texture
   detail of an image without anti-aliasing; on PhysicsPlayground's tiled floor at 3840x2160, 0.375 keeps 0.85 of it and 0.25
   0.87, the rest being the edges FXAA is there to smooth). Lower values would leave single-pixel aliasing alone.

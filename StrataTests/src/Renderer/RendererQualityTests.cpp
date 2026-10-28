@@ -252,6 +252,8 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(RendererQuality::GetMotionBlurSampleCount(MotionBlurSamples::Off) == 0);
 		CHECK(RendererQuality::GetMotionBlurSampleCount(MotionBlurSamples::Samples12) == 12);
 		CHECK(RendererQuality::AntiAliasingChoiceFromString("Blurry") == std::nullopt);
+		CHECK(RendererQuality::AntiAliasingChoiceFromString("Morphological") == AntiAliasingChoice::Morphological);
+		CHECK(std::string(RendererQuality::AntiAliasingChoiceToString(AntiAliasingChoice::Morphological)) == "Morphological");
 	}
 
 	TEST_CASE("A value without a field takes the field's default")

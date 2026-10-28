@@ -120,6 +120,9 @@ strata_add_shaders(Strata_Renderer
 		PostProcess/Bloom.comp
 		PostProcess/TAA.comp
 		PostProcess/FXAA.frag
+		PostProcess/MorphologicalEdges.frag
+		PostProcess/MorphologicalWeights.frag
+		PostProcess/MorphologicalBlend.frag
 		PostProcess/Copy.frag
 		IBL/AtmosphereTransmittance.comp
 		IBL/AtmosphereMultipleScattering.comp

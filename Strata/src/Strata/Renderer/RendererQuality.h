@@ -55,7 +55,8 @@ namespace Strata
 		Scene = 0, // The Post Process's
 		Off,
 		FXAA,
-		TAA
+		TAA,
+		Morphological
 	};
 
 	// A players' comfort row: the scene's effect, or off (players may turn off, never on, what a scene uses).
@@ -131,7 +132,7 @@ namespace Strata
 		std::optional<MotionBlurSamples> MotionBlurSamplesFromString(std::string_view name);
 		// The gather's samples of a row value (0 for Off).
 		uint32_t GetMotionBlurSampleCount(MotionBlurSamples samples);
-		const char* AntiAliasingChoiceToString(AntiAliasingChoice choice); // "Scene", "Off", "FXAA", "TAA"
+		const char* AntiAliasingChoiceToString(AntiAliasingChoice choice); // "Scene", "Off", "FXAA", "TAA", "Morphological"
 		std::optional<AntiAliasingChoice> AntiAliasingChoiceFromString(std::string_view name);
 		const char* SceneEffectChoiceToString(SceneEffectChoice choice); // "Scene", "Off"
 		std::optional<SceneEffectChoice> SceneEffectChoiceFromString(std::string_view name);

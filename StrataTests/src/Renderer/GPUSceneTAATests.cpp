@@ -582,9 +582,11 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 			bool SceneAntiAliasing;
 			bool Smooth;
 			bool Temporal;
+			bool Morphological = false;
 		};
 		for (const Case& testCase : { Case { AntiAliasingChoice::Scene, true, true, false }, Case { AntiAliasingChoice::Off, true, false, false },
-				 Case { AntiAliasingChoice::FXAA, false, true, false }, Case { AntiAliasingChoice::TAA, false, true, true } })
+				 Case { AntiAliasingChoice::FXAA, false, true, false }, Case { AntiAliasingChoice::TAA, false, true, true },
+				 Case { AntiAliasingChoice::Morphological, false, true, false, true } })
 		{
 			SceneRendererSpecification specification = ExactSpecification();
 			specification.Quality.AntiAliasing = testCase.Choice;
@@ -597,6 +599,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 			CAPTURE(static_cast<int>(testCase.Choice));
 			CHECK((partial(image) > 20) == testCase.Smooth);
 			CHECK(renderer.GetStats().TemporalAntiAliasing == testCase.Temporal);
+			CHECK(renderer.GetStats().MorphologicalAntiAliasing == testCase.Morphological);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

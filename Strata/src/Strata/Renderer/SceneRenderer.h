@@ -573,6 +573,8 @@ namespace Strata
 		// The frame's last pass that wrote the display image dithered it (SceneRendererSpecification::DitherOutput, and an 8-bit
 		// or 10-bit UNORM target).
 		bool Dithered = false;
+		// The frame was anti-aliased morphologically (AntiAliasingMode::Morphological).
+		bool MorphologicalAntiAliasing = false;
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -715,6 +717,9 @@ namespace Strata
 		// The depth of field's output (RGBA16F, pre-exposed, alpha 1 where it changed the image): null until a frame had a lens,
 		// and again once the render targets are released.
 		nvrhi::ITexture* GetDepthOfFieldTexture() const { return m_DepthOfFieldTexture; }
+		// Morphological anti-aliasing's blend weights (RGBA8: the top edge's in rg, the left edge's in ba): null until a frame used
+		// it, and again once the render targets are released.
+		nvrhi::ITexture* GetMorphologicalWeightsTexture() const { return m_MorphologicalWeights; }
 		// The exposure of the latest frame (Include/Exposure.glsl): the adapted log2 average luminance and the multiplier of
 		// luminance the tone mapping applies.
 		nvrhi::IBuffer* GetExposureBuffer() const { return m_ExposureBuffer; }
@@ -1322,6 +1327,9 @@ namespace Strata
 		// full-resolution composite. False (reported) when its resources cannot be made: the frame shows the image in focus.
 		bool RenderDepthOfField(nvrhi::ICommandList* commandList, const CameraLens& lens, PostSource source);
 		bool EnsureDepthOfFieldResources();
+		// Morphological anti-aliasing's targets, sets and area table (written by `commandList` the first time); false (reported)
+		// when they cannot be made: the frame takes FXAA instead.
+		bool EnsureMorphologicalResources(nvrhi::ICommandList* commandList);
 		// Motion blur of the post source (HDR, History or DepthOfField) into m_MotionBlurTexture: the tile maxima, their
 		// neighborhoods' and the gather. False (reported) when its resources cannot be made: the frame shows the image unblurred.
 		bool RenderMotionBlur(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, PostSource source);
@@ -1855,6 +1863,26 @@ namespace Strata
 		nvrhi::BindingLayoutHandle m_CopyBindingLayout; // The overlays' copy of the output texture into a target
 		nvrhi::BindingSetHandle m_FXAABindingSet;
 		nvrhi::TextureHandle m_LDRTexture; // Tone-mapped image before anti-aliasing (c_LDRFormat)
+		// Morphological anti-aliasing (SceneRendererPost.cpp): its three passes' shaders, layouts and pipelines, its targets (the
+		// edges, RG8, and the blend weights, RGBA8: made by the first frame that uses it, released with the render targets) with
+		// their framebuffers and sets, and the area table (made with them the first time, kept).
+		nvrhi::ShaderHandle m_MorphologicalEdgesShader;
+		nvrhi::ShaderHandle m_MorphologicalWeightsShader;
+		nvrhi::ShaderHandle m_MorphologicalBlendShader;
+		nvrhi::BindingLayoutHandle m_MorphologicalEdgesLayout;
+		nvrhi::BindingLayoutHandle m_MorphologicalWeightsLayout;
+		nvrhi::BindingLayoutHandle m_MorphologicalBlendLayout;
+		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_MorphologicalEdgesPipelines;
+		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_MorphologicalWeightsPipelines;
+		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_MorphologicalBlendPipelines;
+		nvrhi::TextureHandle m_MorphologicalAreaTable;
+		nvrhi::TextureHandle m_MorphologicalEdges;
+		nvrhi::TextureHandle m_MorphologicalWeights;
+		nvrhi::FramebufferHandle m_MorphologicalEdgesFramebuffer;
+		nvrhi::FramebufferHandle m_MorphologicalWeightsFramebuffer;
+		nvrhi::BindingSetHandle m_MorphologicalEdgesSet;
+		nvrhi::BindingSetHandle m_MorphologicalWeightsSet;
+		nvrhi::BindingSetHandle m_MorphologicalBlendSet;
 		// Motion blur (SceneRendererPost.cpp): one layout for its three passes, their targets (made by the first frame that blurs,
 		// released with the render targets), their sets (the gather's per source: HDR, History 0 and 1) and the post sets of its
 		// output (exposure, bloom's prefilter, tone mapping).
