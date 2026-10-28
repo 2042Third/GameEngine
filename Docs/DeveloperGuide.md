@@ -3625,8 +3625,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
     distance times the cosine of the view's half diagonal, so a sea's box around the camera does not reach it) over
     2^0.5, quarter stops below, at least the near clip; the nearest receivers are left out while together
     they hold less than 1% of the receiver pixels (`c_NearOutlierShare`: a leaf at a flying camera would otherwise spend
-    the first cascades on distances nothing else occupies), out of the squares too, and containment shades them from a
-    coarser cascade; `F` their farthest times 2^0.5, quarter stops
+    the first cascades on distances nothing else occupies), out of the squares too, and containment shades them from the
+    last cascade, whose sphere then holds every point of the view nearer than `D`; where it would not (the near bound they
+    give beyond `D k`, `k = tan^2(fovY/2) + tan^2(fovX/2)`, which only fields of view below about 45 degrees at 16:9 and
+    orthographic views, `k = 0`, allow) they are kept like any receiver; `F` their farthest times 2^0.5, quarter stops
     above, at least `N` 2^0.5, and the shadow distance `D` from 0.7 `D` on (one cascade: always). A bound or side grows in
     the frame it must and shrinks only after `ShadowFitTracker::c_ShrinkReadbacks` (8) readbacks in a row asked for less,
     to the least shrunk of them.

@@ -68,6 +68,17 @@ namespace Strata
 			layout.CascadeCount = count;
 		}
 
+		// k of a view: the sphere of a slice [a, D] holds every point of the view nearer than D when a <= D k, k = tan^2(fovY / 2)
+		// + tan^2(fovX / 2) (the squared distance to the sphere's center is convex along the view, so the frustum's end points
+		// bound it). An orthographic view's is 0: a sphere holds no point nearer than its slice.
+		double GetSphereReach(const ShadowFitView& view)
+		{
+			if (view.Orthographic)
+				return 0.0;
+			const double tanY = static_cast<double>(view.TanHalfFOV);
+			return tanY * tanY * (1.0 + static_cast<double>(view.Aspect) * static_cast<double>(view.Aspect));
+		}
+
 		bool Differs(const ShadowFitLayout& a, const ShadowFitLayout& b)
 		{
 			if (a.Fitted != b.Fitted || a.CascadeCount != b.CascadeCount)
@@ -156,24 +167,37 @@ namespace Strata
 		}
 	}
 
-	double ShadowFitTracker::GetFittedNearest() const
+	double ShadowFitTracker::GetFittedNearest(const ShadowFitView& view) const
 	{
 		const RenderData::ShadowFitResult& result = m_Readback.Result;
 		if (result.SurfacePixels == 0)
 			return 0.0;
+		const double nearest = DecodeOrderedFloat(~result.Nearest);
 		// The bins in order of distance: the first one that takes the count past the outliers' share holds the nearest receiver
 		// the fit keeps (the nearest one overall when the first bin alone does).
 		const uint64_t outliers = static_cast<uint64_t>(c_NearOutlierShare * static_cast<double>(result.SurfacePixels));
 		uint64_t counted = 0;
+		double kept = nearest;
 		for (const RenderData::ShadowFitBin& bin : result.Bins)
 		{
 			if (bin.MaxD == 0)
 				continue;
 			counted += bin.Pixels;
 			if (counted > outliers)
-				return DecodeOrderedFloat(~bin.MinD);
+			{
+				kept = DecodeOrderedFloat(~bin.MinD);
+				break;
+			}
 		}
-		return DecodeOrderedFloat(~result.Nearest);
+		if (!(kept > nearest))
+			return nearest;
+		// The receivers left out fall to the last cascade (containment), whose sphere holds every point of the view nearer than
+		// the shadow distance only while the near bound they give is at most D k (Update): narrow fields of view and orthographic
+		// views keep them, so the near bound comes to them as to any receiver.
+		const double nearBound = std::max(static_cast<double>(view.Near), std::min(kept, static_cast<double>(view.NearestTransparent)) / c_Sqrt2);
+		if (!(FromQuarters(QuartersBelow(nearBound)) <= static_cast<double>(view.ShadowDistance) * GetSphereReach(view)))
+			return nearest;
+		return kept;
 	}
 
 	bool ShadowFitTracker::GetBoundTargets(const ShadowFitView& view, int32_t& nearQuarters, int32_t& farQuarters) const
@@ -181,7 +205,7 @@ namespace Strata
 		const RenderData::ShadowFitResult& result = m_Readback.Result;
 		if (result.SurfacePixels == 0 || result.Farthest == 0)
 			return false; // No receivers: nothing to fit to
-		const double nearest = GetFittedNearest();
+		const double nearest = GetFittedNearest(view);
 		const double farthest = DecodeOrderedFloat(result.Farthest);
 		if (!std::isfinite(nearest) || !std::isfinite(farthest) || !(nearest <= farthest))
 			return false;
@@ -209,7 +233,7 @@ namespace Strata
 		const glm::dmat3& readRotation = m_Readback.CameraRotation;
 		const glm::dvec3 offset = m_Readback.CameraPosition - view.CameraPosition;
 		const glm::dvec3 forward = -glm::dmat3(view.CameraRotation)[2];
-		const double nearest = GetFittedNearest();
+		const double nearest = GetFittedNearest(view);
 		for (const RenderData::ShadowFitBin& bin : m_Readback.Result.Bins)
 		{
 			if (bin.MaxD == 0 || DecodeOrderedFloat(bin.MaxD) < nearest)
@@ -350,13 +374,11 @@ namespace Strata
 					LayOutSlices(view, layout, layout.Near, view.ShadowDistance, distribution, count);
 
 				// The last cascade's sphere holds every point of the view nearer than the shadow distance when its slice [a, D]
-				// starts at a <= D k, k = tan^2(fovY / 2) + tan^2(fovX / 2) (the squared distance to its center is convex along the
-				// view, so the frustum's end points bound it): any a < D at the usual fields of view. Narrower views (and
-				// orthographic ones) take the sphere of [N, D], which holds every point from N on.
+				// starts at a <= D k (GetSphereReach): any a < D at the usual fields of view. Narrower views (and orthographic ones)
+				// take the sphere of [N, D], which holds every point from N on, and every point when N <= D k (GetFittedNearest
+				// leaves no receiver out otherwise).
 				ShadowFitCascade& last = layout.Cascades[count - 1];
-				const double tanY = static_cast<double>(view.TanHalfFOV);
-				const double k = view.Orthographic ? 0.0 : tanY * tanY * (1.0 + static_cast<double>(view.Aspect) * static_cast<double>(view.Aspect));
-				if (count > 1 && !(static_cast<double>(last.SliceNear) <= distance * k))
+				if (count > 1 && !(static_cast<double>(last.SliceNear) <= distance * GetSphereReach(view)))
 					GetSliceSphere(view, layout.Near, view.ShadowDistance, last.SphereCenter, last.Radius);
 
 				// The squares of every cascade but the last, perspective views only (an orthographic view keeps its spheres). Slices

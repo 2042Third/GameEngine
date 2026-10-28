@@ -411,6 +411,53 @@ TEST_SUITE("Renderer.ShadowFit")
 		CHECK(fit(withBranch).Near < 1.0f);
 	}
 
+	TEST_CASE("Receivers left out of the near end stay inside the last cascade's sphere in narrow and orthographic views")
+	{
+		// A slope 57-79 m away fills the view, and a post 12-15 m away near its corner covers 0.5% of the pixels: under the
+		// outliers' share. The last cascade's sphere holds what no square holds only while the near end lies within D k (20
+		// degrees at 16:9: k = 0.13, D k = 10.3 m; orthographic: 0), so these views keep the post in the fit.
+		const auto receivers = [](const TestCamera& camera, float nearDepth, float farDepth, glm::vec2 ndcMin, glm::vec2 ndcMax, int columns, int rows)
+		{
+			std::vector<glm::vec3> points;
+			const float tanY = std::tan(camera.VerticalFOV * 0.5f);
+			for (int row = 0; row < rows; row++)
+			{
+				for (int column = 0; column < columns; column++)
+				{
+					const glm::vec2 ndc = glm::mix(ndcMin, ndcMax, glm::vec2((static_cast<float>(column) + 0.5f) / static_cast<float>(columns),
+						(static_cast<float>(row) + 0.5f) / static_cast<float>(rows)));
+					const float depth = glm::mix(nearDepth, farDepth, (static_cast<float>(row) + 0.5f) / static_cast<float>(rows));
+					const glm::vec2 halfSize = camera.Orthographic ? 0.5f * camera.OrthographicHeight * glm::vec2(camera.Aspect, 1.0f)
+						: depth * tanY * glm::vec2(camera.Aspect, 1.0f);
+					points.push_back(camera.Position + camera.Rotation * glm::vec3(ndc * halfSize, -depth));
+				}
+			}
+			return points;
+		};
+		for (const bool orthographic : { false, true })
+		{
+			CAPTURE(orthographic);
+			TestCamera camera;
+			camera.VerticalFOV = glm::radians(20.0f);
+			camera.Orthographic = orthographic;
+			camera.OrthographicHeight = 20.0f;
+			const ShadowFitView view = MakeView(camera);
+			std::vector<glm::vec3> points = receivers(camera, 57.0f, 79.0f, glm::vec2(-1.0f), glm::vec2(1.0f), 160, 90);
+			const std::vector<glm::vec3> post = receivers(camera, 12.0f, 15.0f, glm::vec2(-0.95f), glm::vec2(-0.85f, 0.0f), 4, 18);
+			REQUIRE(post.size() * 200 <= points.size()); // At most 0.5%
+			points.insert(points.end(), post.begin(), post.end());
+			ShadowFitTracker tracker;
+			tracker.Update(view, nullptr);
+			const ShadowFitReadback readback = MakeReadback(camera, points, tracker, 1);
+			const ShadowFitLayout& layout = tracker.Update(view, &readback);
+			REQUIRE(layout.Fitted);
+			CHECK(layout.Near <= 12.0f / std::sqrt(2.0f));
+			const ShadowFitCascade& last = layout.Cascades[layout.CascadeCount - 1];
+			for (const glm::vec3& point : post)
+				CHECK(glm::length(point - camera.Position - last.SphereCenter) <= last.Radius);
+		}
+	}
+
 	TEST_CASE("The last cascade keeps its slice's sphere, that of [N, D] for narrow fields of view")
 	{
 		TestCamera camera;
