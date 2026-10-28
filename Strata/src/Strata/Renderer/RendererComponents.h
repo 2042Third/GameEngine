@@ -272,6 +272,15 @@ namespace Strata
 		// highlights roll off to white (higher reaches white more stops above middle gray: 5 at 0, 6.5 at 0.5, 8 at 1).
 		float Toe = 0.5f;
 		float Shoulder = 0.5f;
+		// Color, on scene-linear light before the tone curve (Saturation is after it): the white balance names the light that
+		// shows as white, by its temperature in kelvin (2,000 to 15,000; 6500 is neutral) and a tint along green-magenta (-1 to
+		// 1, positive adds magenta); then a per-channel slope (gain), offset (light added, in fractions of middle gray) and
+		// power around middle gray. The defaults change nothing.
+		float WhiteBalanceTemperature = 6500.0f;
+		float WhiteBalanceTint = 0.0f;
+		glm::vec3 ColorSlope = glm::vec3(1.0f);
+		glm::vec3 ColorOffset = glm::vec3(0.0f);
+		glm::vec3 ColorPower = glm::vec3(1.0f);
 	};
 
 	// The settings the TAA resolves with: the preset's table, or the component's tunables under Custom, clamped to their

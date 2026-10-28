@@ -3687,6 +3687,17 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
   `Renderer/FilmicConstants.h`: never edit them by hand (`FitFilmic.py --check` checks the committed ones);
   `Renderer.PostProcessMath` checks the targets again on the C++ reference and `GPU.SceneRenderer.Camera` the shader
   against it. Thumbnails changed with the default curve (`ThumbnailCache::c_Version` 6).
+- **Color** (`PostProcessMath::MakeColorGrading`, `TonemapConstants`' color block): on scene-linear light after the bloom
+  and before `Contrast` and the curve, `c1 = M c` with `M = diag(ColorSlope) * W`, `c2 = max(c1 + ColorOffset * 0.18, 0)`,
+  `c3 = 0.18 (c2 / 0.18)^ColorPower`; `Saturation` stays after the curve. The white balance `W`
+  (`PostProcessMath::GetWhiteBalanceMatrix`, double precision, cached by the renderer per temperature and tint) shows the
+  light it names as white: the white locus at `WhiteBalanceTemperature`, moved along the locus's normal by `0.02 *
+  WhiteBalanceTint` in CIE 1960 (u, v) (positive assumes a greener light: the image turns magenta), scaled to sRGB's D65 in
+  the cone space of CIE 159:2004's CAT02 (von Kries). The locus (`Renderer/WhiteBalanceLocus.inl`, written by
+  `Tools/GenerateWhiteBalance.py`: never edit it by hand) is the CIE daylight locus from 5000 K (shifted by 5e-5 so that
+  6500 K is D65 exactly), Planck's law against the CIE 1931 observer to 4000 K, blended between, every 5 mireds. 6500 K and
+  tint 0 return the identity without arithmetic, and a grading that changes nothing leaves `ColorFlags` 0, so the shader
+  skips it (a uniform branch): the defaults render bit-identically to no grading.
 - **FXAA's subpixel blend** is 0.25 (`FXAA.frag`'s `c_Subpixel`; 0.75 until 0.7.0, which cost 19-22% of the texture
   detail of an image without anti-aliasing; on PhysicsPlayground's tiled floor at 3840x2160, 0.375 keeps 0.85 of it and 0.25
   0.87, the rest being the edges FXAA is there to smooth). Lower values would leave single-pixel aliasing alone.

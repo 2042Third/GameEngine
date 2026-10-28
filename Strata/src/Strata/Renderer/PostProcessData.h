@@ -32,9 +32,16 @@ namespace Strata
 			float FilmicToeSlope;       // 48: the Filmic curve's look (PostProcessMath::FilmicCurve)
 			float FilmicWhiteStops;
 			float FilmicShoulderPower;
-			uint32_t Padding0;
+			uint32_t ColorFlags;        //     c_TonemapColorGrading: the grading below applies (else skipped: bit-identical to none)
+			glm::vec4 ColorRows[3];     // 64: PostProcessMath::ColorGrading::Matrix (white balance times slope) as rows (w unused)
+			glm::vec4 ColorOffset;      // 112: xyz: the offset in units of light (ColorOffset times middle gray), added before the power
+			glm::vec4 ColorPower;       // 128: xyz: the power around middle gray
 		};
-		static_assert(sizeof(TonemapConstants) == 64);
+		static_assert(sizeof(TonemapConstants) == 144);
+		static_assert(offsetof(TonemapConstants, ColorRows) == 64 && offsetof(TonemapConstants, ColorOffset) == 112);
+		static_assert(offsetof(TonemapConstants, ColorPower) == 128);
+		// TonemapConstants::ColorFlags.
+		constexpr uint32_t c_TonemapColorGrading = 1u;
 		static_assert(offsetof(TonemapConstants, Operator) == 16 && offsetof(TonemapConstants, DitherLevels) == 32);
 		static_assert(offsetof(TonemapConstants, VignetteTangents) == 40 && offsetof(TonemapConstants, FilmicToeSlope) == 48);
 

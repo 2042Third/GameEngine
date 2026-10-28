@@ -817,6 +817,45 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Context.GetUndoStack().GetHistory().size() == history + 1);
 	}
 
+	TEST_CASE("The camera's tone and color properties are set, undone and refused out of range")
+	{
+		CommandHarness harness;
+		const std::string entity = harness.Run("entity.create", { { "name", "Camera Look" } })["id"].get<std::string>();
+		harness.Run("component.add", { { "entity", entity }, { "component", "PostProcess" } });
+		const auto values = [&]() { return harness.Run("component.get", { { "entity", entity }, { "component", "PostProcess" } })["values"]; };
+		const nlohmann::json defaults = values();
+		CHECK(defaults["Tonemapper"] == "Filmic");
+		CHECK(defaults["Toe"] == 0.5);
+		CHECK(defaults["WhiteBalanceTemperature"] == 6500.0);
+		CHECK(defaults["ColorSlope"] == nlohmann::json::array({ 1.0, 1.0, 1.0 }));
+		const size_t undoDepth = harness.Context.GetUndoStack().GetPosition();
+		harness.Run("component.set", { { "entity", entity }, { "component", "PostProcess" }, { "values", { { "Toe", 0.25 }, { "Shoulder", 0.75 },
+			{ "WhiteBalanceTemperature", 3200.0 }, { "WhiteBalanceTint", -0.5 }, { "ColorSlope", { 1.5, 1.0, 0.5 } }, { "ColorOffset", { 0.01, 0.0, -0.01 } },
+			{ "ColorPower", { 1.0, 2.0, 1.0 } } } } });
+		CHECK(harness.Context.GetUndoStack().GetPosition() == undoDepth + 1);
+		const nlohmann::json changed = values();
+		CHECK(changed["Toe"] == 0.25);
+		CHECK(changed["Shoulder"] == 0.75);
+		CHECK(changed["WhiteBalanceTemperature"] == 3200.0);
+		CHECK(changed["WhiteBalanceTint"] == -0.5);
+		CHECK(changed["ColorSlope"] == nlohmann::json::array({ 1.5, 1.0, 0.5 }));
+		for (const auto& [property, value] : { std::pair<const char*, nlohmann::json> { "Toe", 1.5 }, { "Shoulder", -0.5 }, { "WhiteBalanceTemperature", 1000.0 },
+				 { "WhiteBalanceTint", 2.0 }, { "ColorSlope", { 5.0, 1.0, 1.0 } }, { "ColorOffset", { 0.0, 0.5, 0.0 } }, { "ColorPower", { 0.1, 1.0, 1.0 } },
+				 { "Tonemapper", "Cinematic" } })
+		{
+			CAPTURE(property);
+			CHECK_FALSE(harness.Error("component.set", { { "entity", entity }, { "component", "PostProcess" }, { "values", { { property, value } } } }).empty());
+			CHECK(values() == changed);
+		}
+		harness.Run("edit.undo");
+		CHECK(values() == defaults);
+		// Toe and Shoulder shape only the Filmic curve.
+		harness.Run("component.set", { { "entity", entity }, { "component", "PostProcess" }, { "values", { { "Tonemapper", "AgX" } } } });
+		const nlohmann::json inactive = harness.Run("component.get", { { "entity", entity }, { "component", "PostProcess" } })["inactive"];
+		CHECK(inactive["Toe"] == "Only the Filmic curve has a toe (Tonemapper is AgX)");
+		CHECK(inactive["Shoulder"] == "Only the Filmic curve has a shoulder (Tonemapper is AgX)");
+	}
+
 	TEST_CASE("Hierarchy, duplication, components and selection")
 	{
 		CommandHarness harness;

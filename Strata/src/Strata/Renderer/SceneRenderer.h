@@ -11,6 +11,7 @@
 #include "Strata/Renderer/GeometryPool.h"
 #include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/GPUSceneData.h"
+#include "Strata/Renderer/PostProcessMath.h"
 #include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/SceneOverlay.h"
 #include "Strata/Renderer/SceneRenderData.h"
@@ -1241,6 +1242,8 @@ namespace Strata
 		// Tone mapping into `output`, or into the LDR target and FXAA from it into `output`.
 		void RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
 			bool resolved, bool bloom, nvrhi::IFramebuffer* output);
+		// The Post Process's grading (white balance, slope, offset, power), the white balance's part cached per temperature and tint.
+		PostProcessMath::ColorGrading GetColorGrading(const PostProcessComponent& postProcess);
 		// The bloom chain of the image `prefilterSet` reads (the first downsample: the HDR target's or the resolved image's).
 		void RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet);
 		// A fullscreen triangle with `pipeline` into `framebuffer` (post passes, the overlays' copy).
@@ -1740,6 +1743,8 @@ namespace Strata
 		nvrhi::BindingSetHandle m_TonemapBindingSet;
 		nvrhi::BufferHandle m_TonemapConstantBuffer; // RenderData::TonemapConstants, written once per frame (volatile)
 		bool m_TonemapConstantsWritten = false;      // By the frame being recorded (ReserveFrameConstantVersions starts a frame)
+		std::optional<PostProcessMath::ColorGrading> m_Grading; // The white balance of m_GradingKey (temperature, tint)
+		glm::vec2 m_GradingKey = glm::vec2(0.0f);
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_TonemapPipelines;
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_FXAAPipelines;
 		nvrhi::BindingLayoutHandle m_ExposureBindingLayout;

@@ -475,6 +475,40 @@ TEST_SUITE("Scene.Serialization")
 		loaded = load({ { "ScreenSpaceReflectionsIntensity", 3.0 }, { "ScreenSpaceReflectionsMaxRoughness", -1.0 } }, warnings);
 		CHECK(loaded.ScreenSpaceReflectionsIntensity == 1.0f);
 		CHECK(loaded.ScreenSpaceReflectionsMaxRoughness == 0.0f);
+
+		// The camera's tone and color (0.7.0): a file saved before them keeps its curve and loads the rest's defaults without a
+		// warning (the defaults change nothing); the values round-trip and are clamped to their ranges.
+		warnings.clear();
+		loaded = load({ { "Tonemapper", "ACES" }, { "Exposure", 1.0 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.Tonemapper == TonemapOperator::ACES);
+		CHECK(loaded.Toe == 0.5f);
+		CHECK(loaded.Shoulder == 0.5f);
+		CHECK(loaded.WhiteBalanceTemperature == 6500.0f);
+		CHECK(loaded.WhiteBalanceTint == 0.0f);
+		CHECK(loaded.ColorSlope == glm::vec3(1.0f));
+		CHECK(loaded.ColorOffset == glm::vec3(0.0f));
+		CHECK(loaded.ColorPower == glm::vec3(1.0f));
+		loaded = load({ { "Tonemapper", "Filmic" }, { "Toe", 0.25 }, { "Shoulder", 0.75 }, { "WhiteBalanceTemperature", 4500.0 }, { "WhiteBalanceTint", 0.25 },
+			{ "ColorSlope", { 1.5, 1.0, 0.5 } }, { "ColorOffset", { 0.01, 0.0, -0.01 } }, { "ColorPower", { 1.0, 2.0, 1.0 } } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.Tonemapper == TonemapOperator::Filmic);
+		CHECK(loaded.Toe == 0.25f);
+		CHECK(loaded.Shoulder == 0.75f);
+		CHECK(loaded.WhiteBalanceTemperature == 4500.0f);
+		CHECK(loaded.WhiteBalanceTint == 0.25f);
+		CHECK(loaded.ColorSlope == glm::vec3(1.5f, 1.0f, 0.5f));
+		CHECK(loaded.ColorOffset == glm::vec3(0.01f, 0.0f, -0.01f));
+		CHECK(loaded.ColorPower == glm::vec3(1.0f, 2.0f, 1.0f));
+		loaded = load({ { "Toe", 3.0 }, { "Shoulder", -1.0 }, { "WhiteBalanceTemperature", 100.0 }, { "WhiteBalanceTint", 4.0 },
+			{ "ColorSlope", { 9.0, 1.0, 1.0 } }, { "ColorOffset", { 1.0, 0.0, 0.0 } }, { "ColorPower", { 0.0, 1.0, 9.0 } } }, warnings);
+		CHECK(loaded.Toe == 1.0f);
+		CHECK(loaded.Shoulder == 0.0f);
+		CHECK(loaded.WhiteBalanceTemperature == 2000.0f);
+		CHECK(loaded.WhiteBalanceTint == 1.0f);
+		CHECK(loaded.ColorSlope == glm::vec3(4.0f, 1.0f, 1.0f));
+		CHECK(loaded.ColorOffset == glm::vec3(0.1f, 0.0f, 0.0f));
+		CHECK(loaded.ColorPower == glm::vec3(0.2f, 1.0f, 5.0f));
 	}
 
 	TEST_CASE("Directional lights saved before cascade blending load with the default blend; invalid blends are clamped or warn")

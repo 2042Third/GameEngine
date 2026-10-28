@@ -390,6 +390,12 @@ namespace Strata
 		tonemap.FilmicToeSlope = filmic.ToeSlope;
 		tonemap.FilmicWhiteStops = filmic.WhiteStops;
 		tonemap.FilmicShoulderPower = filmic.ShoulderPower;
+		const PostProcessMath::ColorGrading grading = GetColorGrading(postProcess);
+		tonemap.ColorFlags = grading.Active ? RenderData::c_TonemapColorGrading : 0u;
+		for (int row = 0; row < 3; row++)
+			tonemap.ColorRows[row] = glm::vec4(grading.Matrix[0][row], grading.Matrix[1][row], grading.Matrix[2][row], 0.0f);
+		tonemap.ColorOffset = glm::vec4(grading.Offset, 0.0f);
+		tonemap.ColorPower = glm::vec4(grading.Power, 0.0f);
 
 		// FXAA unless the image was resolved temporally.
 		const bool fxaa = postProcess.AntiAliasing && !resolved;
@@ -415,6 +421,21 @@ namespace Strata
 				&parameters, sizeof(parameters));
 			commandList->endMarker();
 		}
+	}
+
+	PostProcessMath::ColorGrading SceneRenderer::GetColorGrading(const PostProcessComponent& postProcess)
+	{
+		// The white balance's matrix is computed in double: kept while the temperature and tint stay.
+		const glm::vec2 key(postProcess.WhiteBalanceTemperature, postProcess.WhiteBalanceTint);
+		if (key != m_GradingKey || !m_Grading)
+		{
+			m_Grading = PostProcessMath::MakeColorGrading(key.x, key.y, glm::vec3(1.0f), glm::vec3(0.0f), glm::vec3(1.0f));
+			m_GradingKey = key;
+		}
+		PostProcessMath::ColorGrading grading = PostProcessMath::MakeColorGrading(6500.0f, 0.0f, postProcess.ColorSlope, postProcess.ColorOffset, postProcess.ColorPower);
+		grading.Matrix = grading.Matrix * m_Grading->Matrix;
+		grading.Active = grading.Active || m_Grading->Active;
+		return grading;
 	}
 
 	void SceneRenderer::DrawFullscreen(nvrhi::ICommandList* commandList, nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* bindingSet,

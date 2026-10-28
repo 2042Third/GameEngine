@@ -470,7 +470,15 @@ namespace Strata
 			.Property("Toe", &PostProcessComponent::Toe, WithTooltip(Slider(0.0f, 1.0f), "How deep the shadows go: higher crushes the darkest tones toward "
 				"black, lower keeps more detail in them (Filmic only)"))
 			.Property("Shoulder", &PostProcessComponent::Shoulder, WithTooltip(Slider(0.0f, 1.0f), "How softly highlights roll off to white: higher "
-				"reaches white more stops above middle gray (5 at 0, 6.5 at 0.5, 8 at 1), keeping more highlight detail (Filmic only)"));
+				"reaches white more stops above middle gray (5 at 0, 6.5 at 0.5, 8 at 1), keeping more highlight detail (Filmic only)"))
+			.Property("WhiteBalanceTemperature", &PostProcessComponent::WhiteBalanceTemperature,
+				WithTooltip(Range(2000.0f, 15000.0f, 50.0f), "Temperature in kelvin of the light that shows as white: lower values cool the image "
+					"(3200 for tungsten light), higher warm it; 6500 is neutral"))
+			.Property("WhiteBalanceTint", &PostProcessComponent::WhiteBalanceTint, WithTooltip(Slider(-1.0f, 1.0f), "Tint: positive adds magenta, negative green"))
+			.Property("ColorSlope", &PostProcessComponent::ColorSlope, WithTooltip(Range(0.0f, 4.0f, 0.01f), "Slope: per-channel gain before the tone curve"))
+			.Property("ColorOffset", &PostProcessComponent::ColorOffset,
+				WithTooltip(Range(-0.1f, 0.1f, 0.001f), "Offset: light added per channel, in fractions of middle gray (tints the shadows most)"))
+			.Property("ColorPower", &PostProcessComponent::ColorPower, WithTooltip(Range(0.2f, 5.0f, 0.01f), "Power: per-channel contrast around middle gray"));
 		// Exposure is the compensation SceneRenderer applies with automatic exposure too: always active.
 		SetInactiveReasons<PostProcessComponent>({ "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed" }, &WithAutoExposure);
 		SetInactiveReasons<PostProcessComponent>({ "BloomIntensity", "BloomThreshold" }, &WithBloom);
