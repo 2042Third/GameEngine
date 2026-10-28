@@ -3630,6 +3630,22 @@ lights, Post Process and the sky), and never a resolution below the output's.
     changes a scene without a `Post Process` only where its metered average exceeds 2^12 nits). P is then about 2^-19,
     two stops below the metered multiplier (about 2^-17.5).
 
+### Post-processing
+
+The passes from the TAA resolve to the display image live in `Renderer/SceneRendererPost.cpp`: `RenderPostHDR` (the
+exposure and the bloom) and `RenderPostDisplay` (the tone mapping and FXAA), recorded in the `GPU.Post` stage. Their GPU
+data is in `Renderer/PostProcessData.h`. People's guide: `Docs/Manual/AntiAliasing.md`.
+
+- **Parameters:** post passes take theirs by push constants or by buffers of their own, never by new `FrameConstants`
+  fields (reading them is fine). The tone mapping reads `RenderData::TonemapConstants`, a volatile constant buffer
+  (`m_TonemapConstantBuffer`, `ST_CBV(0)`, std140) written once per frame right before its draw: its parameters outgrew
+  the 128 bytes NVRHI allows push constants, and it grows only by appending vec4-aligned blocks, whose offsets its
+  `static_assert`s check. Its versions need no reservation of their own: every frame that tone-maps writes
+  `FrameConstants` first, and `ReserveFrameConstantVersions` starts a frame only while the frames in flight leave room for
+  `c_MaxFrameConstantWrites` more of those, so at most `c_FrameConstantVersions - c_MaxFrameConstantWrites + 1` frames
+  hold a version of it, within its `c_FrameConstantVersions`. FXAA takes `RenderData::FXAAParameters` by push constants;
+  the overlays' copy into a target has a layout of its own (`m_CopyBindingLayout`).
+
 ### Fog and atmosphere
 
 - The first active `HeightFogComponent` fogs the scene (`SceneRenderer::FindHeightFog`;

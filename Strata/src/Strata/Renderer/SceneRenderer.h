@@ -1242,6 +1242,12 @@ namespace Strata
 		// The formats of the HDR image (and of the bloom chain and the temporal history) and of the display images.
 		static constexpr nvrhi::Format c_HDRFormat = nvrhi::Format::RGBA16_FLOAT;
 		static constexpr nvrhi::Format c_OutputFormat = nvrhi::Format::RGBA8_UNORM;
+		// Versions of the volatile FrameConstants buffer, and the most a frame writes: the frame's constants and, under TAA,
+		// the overlays' unjittered copy. ReserveFrameConstantVersions waits only when a caller outruns the GPU by more. The
+		// tone mapping's constant buffer (written once by every frame that writes these) has as many versions.
+		static constexpr uint32_t c_FrameConstantVersions = 16;
+		static constexpr uint32_t c_MaxFrameConstantWrites = 2;
+		static_assert(c_MaxFrameConstantWrites <= c_FrameConstantVersions);
 		// The scene's first active post-processing settings, or the defaults.
 		static PostProcessComponent GetPostProcessSettings(Scene& scene);
 		nvrhi::IGraphicsPipeline* GetScenePipeline(const PipelineKey& key);
@@ -1718,6 +1724,8 @@ namespace Strata
 		// Post-processing (SceneRendererPost.cpp; the temporal history's own post sets below belong to the TAA's resources)
 		nvrhi::BindingLayoutHandle m_TonemapBindingLayout;
 		nvrhi::BindingSetHandle m_TonemapBindingSet;
+		nvrhi::BufferHandle m_TonemapConstantBuffer; // RenderData::TonemapConstants, written once per frame (volatile)
+		bool m_TonemapConstantsWritten = false;      // By the frame being recorded (ReserveFrameConstantVersions starts a frame)
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_TonemapPipelines;
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_FXAAPipelines;
 		nvrhi::BindingLayoutHandle m_ExposureBindingLayout;
@@ -1734,6 +1742,7 @@ namespace Strata
 		std::vector<nvrhi::BindingSetHandle> m_BloomUpsampleSets;   // [n]: level n+1 -> n
 		nvrhi::ShaderHandle m_FXAAPixelShader;
 		nvrhi::BindingLayoutHandle m_FXAABindingLayout;
+		nvrhi::BindingLayoutHandle m_CopyBindingLayout; // The overlays' copy of the output texture into a target
 		nvrhi::BindingSetHandle m_FXAABindingSet;
 		nvrhi::TextureHandle m_LDRTexture; // Tone-mapped image before anti-aliasing
 		nvrhi::FramebufferHandle m_LDRFramebuffer;

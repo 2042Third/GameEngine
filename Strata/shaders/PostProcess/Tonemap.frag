@@ -22,20 +22,20 @@ layout(set = 0, binding = ST_SRV(2), std430) readonly buffer ExposureBuffer
 	float u_Exposure[];
 };
 
-layout(push_constant) uniform TonemapParameters
+// RenderData::TonemapConstants (Renderer/PostProcessData.h), written once per frame.
+layout(set = 0, binding = ST_CBV(0), std140) uniform TonemapConstants
 {
-	float BloomIntensity; // Fraction of the light scattered into the glow; 0 = off
-	float BloomScale;     // Normalizes the sum of the bloom levels
+	float BloomIntensity;     // Fraction of the light scattered into the glow; 0 = off
+	float BloomScale;         // Normalizes the sum of the bloom levels
 	float Saturation;
-	float Vignette;
 	float Contrast;
 	int Operator;
-	uint BloomAdditive;   // 1: the bloom holds only the light above a threshold and is added
+	uint BloomAdditive;       // 1: the bloom holds only the light above a threshold and is added
 	float InversePreExposure; // 1 / the pre-exposure the scene color carries (a power of two)
-	float Sharpening;     // Of the displayed image, on frames the TAA resolved; 0 = off
-	float Padding0;
-	float Padding1;
-	float Padding2;
+	float Sharpening;         // Of the displayed image, on frames the TAA resolved; 0 = off
+	float DitherLevels;       // 2^bits - 1 of the target this pass writes; 0: no dither
+	float Vignette;
+	vec2 VignetteTangents;    // Tangents of the half field of view per axis (a lens's vignette)
 } u_Parameters;
 
 // Largest exposed value passed to the tone curves: far beyond where every curve saturates, small enough that their

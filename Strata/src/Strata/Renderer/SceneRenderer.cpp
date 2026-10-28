@@ -44,11 +44,6 @@ namespace Strata
 		constexpr nvrhi::Format c_VelocityFormat = nvrhi::Format::RG16_FLOAT;
 		constexpr nvrhi::Format c_EnvironmentFormat = nvrhi::Format::RGBA16_FLOAT;
 
-		// Versions of the volatile FrameConstants buffer, and the most a frame writes: the frame's constants and, under TAA,
-		// the overlays' unjittered copy. ReserveFrameConstantVersions waits only when a caller outruns the GPU by more.
-		constexpr uint32_t c_FrameConstantVersions = 16;
-		constexpr uint32_t c_MaxFrameConstantWrites = 2;
-		static_assert(c_MaxFrameConstantWrites <= c_FrameConstantVersions);
 		constexpr uint32_t c_EnvironmentCubeSize = 512;
 		constexpr uint32_t c_IrradianceSize = 32;
 		constexpr uint32_t c_PrefilteredSize = 256;
@@ -1321,6 +1316,7 @@ namespace Strata
 			ReleaseOldestFrameConstants();
 		}
 		m_FrameConstantWrites = 0;
+		m_TonemapConstantsWritten = false;
 	}
 
 	void SceneRenderer::WriteFrameConstants(nvrhi::ICommandList* commandList, const RenderData::FrameConstants& frame)
@@ -1493,7 +1489,7 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(1, m_BloomTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
 				nvrhi::BindingSetItem::Sampler(1, m_LinearClampSampler),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_ExposureBuffer),
-				nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::TonemapParameters))
+				nvrhi::BindingSetItem::ConstantBuffer(0, m_TonemapConstantBuffer)
 			};
 			tonemapSets[index] = m_Device->createBindingSet(tonemap, m_TonemapBindingLayout);
 			created = resolveSets[index] && exposureSets[index] && bloomSets[index] && tonemapSets[index];
@@ -2073,7 +2069,7 @@ namespace Strata
 		{
 			nvrhi::BindingSetDesc copySet;
 			copySet.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, output), nvrhi::BindingSetItem::Sampler(0, m_PointClampSampler) };
-			copyBindingSet = m_Device->createBindingSet(copySet, m_FXAABindingLayout);
+			copyBindingSet = m_Device->createBindingSet(copySet, m_CopyBindingLayout);
 		}
 		if (!output || !outputFramebuffer || !overlayFramebuffer || !copyBindingSet)
 		{
@@ -3142,7 +3138,7 @@ namespace Strata
 			if (target)
 			{
 				commandList->beginMarker("Copy");
-				DrawFullscreen(commandList, GetFullscreenPipeline(m_CopyPipelines, m_CopyPixelShader, m_FXAABindingLayout, target->getFramebufferInfo()), target,
+				DrawFullscreen(commandList, GetFullscreenPipeline(m_CopyPipelines, m_CopyPixelShader, m_CopyBindingLayout, target->getFramebufferInfo()), target,
 					m_CopyBindingSet, nullptr, 0);
 				commandList->endMarker();
 			}

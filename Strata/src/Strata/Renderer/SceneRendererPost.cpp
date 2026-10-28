@@ -45,9 +45,21 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(1),
 			nvrhi::BindingLayoutItem::Sampler(1),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
-			nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::TonemapParameters))
+			nvrhi::BindingLayoutItem::VolatileConstantBuffer(0)
 		};
 		m_TonemapBindingLayout = m_Device->createBindingLayout(tonemapLayout);
+		// The tone mapping's parameters outgrew the 128 bytes of push constants NVRHI allows: a volatile constant buffer, written
+		// once by every frame that tone-maps. Its versions need no reservation of their own: each such frame writes FrameConstants
+		// first, and ReserveFrameConstantVersions starts a frame only while the frames in flight leave room for
+		// c_MaxFrameConstantWrites more of those, so at most c_FrameConstantVersions - c_MaxFrameConstantWrites + 1 frames hold a
+		// version of this buffer, within its c_FrameConstantVersions.
+		static_assert(c_MaxFrameConstantWrites >= 1, "every frame that tone-maps holds a FrameConstants version");
+		m_TonemapConstantBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
+			.setByteSize(sizeof(RenderData::TonemapConstants))
+			.setIsConstantBuffer(true)
+			.setIsVolatile(true)
+			.setMaxVersions(c_FrameConstantVersions)
+			.setDebugName(m_Specification.DebugName + ".TonemapConstants"));
 
 		nvrhi::BindingLayoutDesc exposureLayout;
 		exposureLayout.visibility = nvrhi::ShaderType::Compute;
@@ -94,10 +106,20 @@ namespace Strata
 
 		nvrhi::BindingLayoutDesc fxaaLayout;
 		fxaaLayout.visibility = nvrhi::ShaderType::Pixel;
-		fxaaLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Sampler(0) };
+		fxaaLayout.bindings = {
+			nvrhi::BindingLayoutItem::Texture_SRV(0),
+			nvrhi::BindingLayoutItem::Sampler(0),
+			nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::FXAAParameters))
+		};
 		m_FXAABindingLayout = m_Device->createBindingLayout(fxaaLayout);
-		ST_CORE_VERIFY(m_TonemapBindingLayout && m_ExposureBindingLayout && m_HistogramPipeline && m_ExposurePipeline && m_HistogramBuffer && m_ExposureBuffer
-			&& exposureReadbacks && m_BloomBindingLayout && m_BloomPipeline && m_FXAABindingLayout, "SceneRenderer: failed to create the post-processing resources");
+		// The overlays' copy of the output texture into a target (PostProcess/Copy.frag).
+		nvrhi::BindingLayoutDesc copyLayout;
+		copyLayout.visibility = nvrhi::ShaderType::Pixel;
+		copyLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Sampler(0) };
+		m_CopyBindingLayout = m_Device->createBindingLayout(copyLayout);
+		ST_CORE_VERIFY(m_TonemapBindingLayout && m_TonemapConstantBuffer && m_ExposureBindingLayout && m_HistogramPipeline && m_ExposurePipeline && m_HistogramBuffer
+			&& m_ExposureBuffer && exposureReadbacks && m_BloomBindingLayout && m_BloomPipeline && m_FXAABindingLayout && m_CopyBindingLayout,
+			"SceneRenderer: failed to create the post-processing resources");
 	}
 
 	bool SceneRenderer::CreatePostTargets(uint32_t width, uint32_t height, std::string& outFailure)
@@ -181,11 +203,15 @@ namespace Strata
 			nvrhi::BindingSetItem::Texture_SRV(1, m_BloomTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
 			nvrhi::BindingSetItem::Sampler(1, m_LinearClampSampler),
 			nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_ExposureBuffer),
-			nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::TonemapParameters))
+			nvrhi::BindingSetItem::ConstantBuffer(0, m_TonemapConstantBuffer)
 		};
 		m_TonemapBindingSet = m_Device->createBindingSet(tonemapSet, m_TonemapBindingLayout);
 		nvrhi::BindingSetDesc fxaaSet;
-		fxaaSet.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, m_LDRTexture), nvrhi::BindingSetItem::Sampler(0, m_LinearClampSampler) };
+		fxaaSet.bindings = {
+			nvrhi::BindingSetItem::Texture_SRV(0, m_LDRTexture),
+			nvrhi::BindingSetItem::Sampler(0, m_LinearClampSampler),
+			nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::FXAAParameters))
+		};
 		m_FXAABindingSet = m_Device->createBindingSet(fxaaSet, m_FXAABindingLayout);
 		if (!m_TonemapBindingSet || !m_FXAABindingSet)
 		{
@@ -327,11 +353,10 @@ namespace Strata
 		bool resolved, bool bloom, nvrhi::IFramebuffer* output)
 	{
 		// Tone mapping into the display target, or into the intermediate target FXAA reads.
-		RenderData::TonemapParameters tonemap = {};
+		RenderData::TonemapConstants tonemap = {};
 		tonemap.BloomIntensity = bloom ? std::min(postProcess.BloomIntensity, 1.0f) : 0.0f;
 		tonemap.BloomScale = 1.0f / static_cast<float>(m_BloomLevels);
 		tonemap.Saturation = std::max(postProcess.Saturation, 0.0f);
-		tonemap.Vignette = std::clamp(postProcess.Vignette, 0.0f, 1.0f);
 		tonemap.Contrast = std::clamp(postProcess.Contrast, 0.1f, 4.0f);
 		tonemap.Operator = static_cast<int32_t>(postProcess.Tonemapper);
 		tonemap.BloomAdditive = postProcess.BloomThreshold > 0.0f ? 1u : 0u;
@@ -339,18 +364,24 @@ namespace Strata
 		// Only the TAA's image is sharpened (it softens texture detail), and only on the way to the display: frames with FXAA, or
 		// without TAA, skip the branch and stay as they were.
 		tonemap.Sharpening = resolved ? temporalSettings.Sharpening : 0.0f;
+		tonemap.Vignette = std::clamp(postProcess.Vignette, 0.0f, 1.0f);
 
 		// FXAA unless the image was resolved temporally.
 		const bool fxaa = postProcess.AntiAliasing && !resolved;
 		nvrhi::IFramebuffer* tonemapTarget = fxaa ? m_LDRFramebuffer.Get() : output;
 		commandList->beginMarker("Tonemap");
+		ST_CORE_ASSERT(!m_TonemapConstantsWritten, "SceneRenderer: a frame writes the tone mapping's constants once");
+		commandList->writeBuffer(m_TonemapConstantBuffer, &tonemap, sizeof(tonemap));
+		m_TonemapConstantsWritten = true;
 		DrawFullscreen(commandList, GetFullscreenPipeline(m_TonemapPipelines, m_TonemapPixelShader, m_TonemapBindingLayout, tonemapTarget->getFramebufferInfo()),
-			tonemapTarget, resolved ? m_TemporalTonemapSets[m_HistoryIndex].Get() : m_TonemapBindingSet.Get(), &tonemap, sizeof(tonemap));
+			tonemapTarget, resolved ? m_TemporalTonemapSets[m_HistoryIndex].Get() : m_TonemapBindingSet.Get(), nullptr, 0);
 		commandList->endMarker();
 		if (fxaa)
 		{
+			RenderData::FXAAParameters parameters = {};
 			commandList->beginMarker("FXAA");
-			DrawFullscreen(commandList, GetFullscreenPipeline(m_FXAAPipelines, m_FXAAPixelShader, m_FXAABindingLayout, output->getFramebufferInfo()), output, m_FXAABindingSet, nullptr, 0);
+			DrawFullscreen(commandList, GetFullscreenPipeline(m_FXAAPipelines, m_FXAAPixelShader, m_FXAABindingLayout, output->getFramebufferInfo()), output, m_FXAABindingSet,
+				&parameters, sizeof(parameters));
 			commandList->endMarker();
 		}
 	}

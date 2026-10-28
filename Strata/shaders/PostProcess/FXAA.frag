@@ -9,6 +9,15 @@
 layout(set = 0, binding = ST_SRV(0)) uniform texture2D u_Color;
 layout(set = 0, binding = ST_SAMPLER(0)) uniform sampler u_LinearClamp;
 
+// RenderData::FXAAParameters (Renderer/PostProcessData.h).
+layout(push_constant) uniform FXAAParameters
+{
+	float DitherLevels; // 2^bits - 1 of the target FXAA writes; 0: no dither
+	float Padding0;
+	float Padding1;
+	float Padding2;
+} u_Parameters;
+
 layout(location = 0) in vec2 v_UV;
 layout(location = 0) out vec4 o_Color;
 

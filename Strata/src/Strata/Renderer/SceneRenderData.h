@@ -1,5 +1,8 @@
 #pragma once
 
+// The post-processing passes' data (tone mapping, exposure, bloom) lives in its own header.
+#include "Strata/Renderer/PostProcessData.h"
+
 #include <glm/glm.hpp>
 
 #include <cstddef>
@@ -376,43 +379,6 @@ namespace Strata
 		};
 		static_assert(sizeof(ScreenReflectionParameters) == 16);
 
-		struct TonemapParameters
-		{
-			float BloomIntensity;
-			float BloomScale;
-			float Saturation;
-			float Vignette;
-			float Contrast;
-			int32_t Operator;
-			uint32_t BloomAdditive; // 1: the bloom holds only light above a threshold and is added instead of mixed
-			float InversePreExposure; // 1 / the pre-exposure the scene color carries (FrameConstants::TemporalParams.y)
-			float Sharpening;         // Of the displayed image, on frames the TAA resolved; 0 = off
-			float Padding0;
-			float Padding1;
-			float Padding2;
-		};
-		static_assert(sizeof(TonemapParameters) == 48);
-
-		// Include/Exposure.glsl: the exposure buffer and the luminance histogram.
-		constexpr uint32_t c_ExposureLogLuminance = 0;
-		constexpr uint32_t c_ExposureMultiplier = 1;
-		constexpr uint32_t c_HistogramBins = 256;
-		constexpr float c_HistogramMinLog2 = -12.0f;
-		constexpr float c_HistogramMaxLog2 = 16.0f;
-
-		struct ExposureParameters
-		{
-			float MinLog2;
-			float MaxLog2;
-			float AdaptFactor;
-			float Compensation;
-			float LowPercentile;
-			float HighPercentile;
-			float InversePreExposure; // 1 / the pre-exposure the scene color carries: the histogram meters luminance
-			float Padding;
-		};
-		static_assert(sizeof(ExposureParameters) == 32);
-
 		// Overlay/Grid.frag
 		struct GridParameters
 		{
@@ -456,20 +422,6 @@ namespace Strata
 			uint32_t Padding;
 		};
 		static_assert(sizeof(TextParameters) == 16);
-
-		constexpr uint32_t c_BloomPrefilter = 0;
-		constexpr uint32_t c_BloomDownsample = 1;
-		constexpr uint32_t c_BloomUpsample = 2;
-		constexpr uint32_t c_MaxBloomLevels = 6;
-
-		struct BloomParameters
-		{
-			float Threshold;
-			float Knee;
-			uint32_t Mode;
-			float InversePreExposure; // 1 / the pre-exposure the scene color carries
-		};
-		static_assert(sizeof(BloomParameters) == 16);
 
 		// PostProcess/TAA.comp: how the frame's image and the temporal history are blended (TemporalAntiAliasingSettings).
 		struct TemporalParameters
