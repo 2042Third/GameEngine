@@ -421,10 +421,21 @@ TEST_SUITE("Editor.ProjectMigration")
 			const nlohmann::json* committedValue = committed ? JsonUtils::Find(*committed, "Value") : nullptr;
 			const PhysicsLayerSettings committedLayers = committedValue ? PhysicsLayerSettings::FromJson(*committedValue) : PhysicsLayerSettings();
 			CHECK(committedLayers == expected.Layers);
-			// As 0.5.0 left it: version 2, without settings.
+			// As 0.5.0 left it: version 2, without settings, and the scenes holding the layers they used (an editor that keeps the
+			// layers in the project drops a scene's table when it saves the scene, so the samples' committed scenes need not hold
+			// it any more).
 			(*file)["Strata"]["Version"] = 2;
 			file->erase("Settings");
 			REQUIRE(FileSystem::WriteText(projectFile, JsonUtils::Dump(*file, 1, '\t')));
+			for (const std::string& scene : expected.Scenes)
+			{
+				REQUIRE(committedValue);
+				const std::filesystem::path scenePath = copy / "Assets" / FileSystem::FromUTF8(scene);
+				std::optional<nlohmann::json> document = JsonUtils::Parse(FileSystem::ReadText(scenePath).value_or(""));
+				REQUIRE(document.has_value());
+				(*document)["Scene"]["Settings"]["PhysicsLayers"] = *committedValue;
+				REQUIRE(FileSystem::WriteText(scenePath, JsonUtils::Dump(*document)));
+			}
 
 			MigrationHarness harness;
 			const uint64_t logged = Log::GetBuffer().GetLatestSequence();
