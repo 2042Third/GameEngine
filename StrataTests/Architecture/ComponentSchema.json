@@ -1754,7 +1754,7 @@
 					"Min": 0.0,
 					"Name": "AutoExposureKey",
 					"Speed": 0.009999999776482582,
-					"Tooltip": "How much a scene's brightness against a gray card in the sun shows: 0 meters every scene to middle gray; 0.12 shows an interior 5 stops below the sun's card 0.6 stops darker (at most 2 darker, 1 brighter). Needs a directional light",
+					"Tooltip": "How much a scene's brightness against a gray card in the sun shows: 0 meters every scene to middle gray; 0.12 shows an interior 5 stops below the sun's card 0.6 stops darker (at most 2); scenes above the card are not brightened. Needs a directional light",
 					"Type": "Float"
 				},
 				{

@@ -25,10 +25,12 @@ brighter than a lamp-lit room. Exposure scales that light to the display, as a c
   leaving a tunnel, the glare fades within a second) than a darker one (**Auto Exposure Speed**, 1.5 per second). 0
   jumps at once.
 - **The key** (**Auto Exposure Key**, 0.12): a camera that metered every scene to middle gray would show a dim room as
-  bright as a sunny street. The key compares what the camera meters with a gray card lit by the scene's directional light
-  and keeps part of the difference: a room five stops darker than that card shows 0.6 stops darker, a snow field above it
-  a little brighter (at most 2 stops darker, 1 brighter). 0 meters every scene to middle gray. It needs a directional
-  light, and a night lit by the moon (the directional light) is not darkened by it: set Exposure for that.
+  bright as a sunny street. The key compares what the camera meters with a gray card lit by the scene's directional
+  light and keeps part of the difference: a room five stops darker than that card shows 0.6 stops darker (at most 2
+  stops). It only darkens: a scene brighter than the card is lit by more than the sun (an overcast sky, dusk, lamps),
+  and showing it brighter would make an overcast day lighter than a sunny one. 0 meters every scene to middle gray. It
+  needs a directional light, and a night lit by the moon (the directional light) is not darkened by it: set Exposure for
+  that, as for a scene that should look bright, such as snow in the sun (+0.5 to +1).
 - **Auto Exposure Min EV**, **Max EV** bound the metered average (in log2 nits; EV100 is 3 more). Real sunlight needs
   Max EV 16.
 
@@ -37,7 +39,8 @@ What a scene meters against the directional light's gray card, and what the key 
 | Scene | Meters | The key |
 | --- | --- | --- |
 | Sunny exterior (sun and sky) | near the sun's card | about 0 |
-| Overcast exterior (a dim sun, a bright sky) | 2 to 3 stops below the card | 0.25 to 0.35 stops darker |
+| Overcast exterior (a dim sun, a bright sky) | 2 to 3 stops above the sun's card (the sky lights it) | 0 |
+| Dusk (the sun fading out, the sky and lamps lighting the scene) | above the fading sun's card | 0 |
 | Interior lit through windows | 5 to 7 stops below the card | 0.6 to 0.85 stops darker |
 | Night under the moon (the moon is the directional light) | near the moon's card | about 0 |
 
@@ -181,8 +184,8 @@ lookup are part of the tone mapping: a few more operations per pixel when on.
   real sun (about 100,000 lux, or the atmosphere sky's 120,000) and Max EV 16. If the sky fills most of the frame and the
   ground looks dark, raise Exposure by 0.25 to 0.5.
 - **An interior:** the same, with the key at 0.12 to 0.2 so the room reads darker than the street outside (as far as its
-  light is darker); a lamp-lit room takes White Balance Temperature 3000 to 4000 to look neutral, or stays at 6500 to
-  keep its warmth.
+  light is darker; the key never brightens); a lamp-lit room takes White Balance Temperature 3000 to 4000 to look
+  neutral, or stays at 6500 to keep its warmth.
 - **A night:** Auto Exposure on with Exposure -1 to -2 (a night should look dark, not like a dim day), White Balance
   Temperature 4000 to 5000 for a cool moonlit cast (the camera takes the light for a warmer one), Toe 0.6, Bloom Intensity 0.06 so lamps glow. Without automatic
   exposure, a scene lit by a full moon takes a manual Exposure around +4.

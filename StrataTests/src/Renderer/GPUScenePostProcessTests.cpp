@@ -921,7 +921,8 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 			std::memcpy(values, bytes.data(), sizeof(values));
 			const float cardLog2 = std::log2(lux * 0.18f / glm::pi<float>());
 			// The key the CPU computes from what the GPU metered.
-			CHECK(std::abs(values[2] - std::clamp(postProcess.AutoExposureKey * (values[0] - cardLog2), -2.0f, 1.0f)) < 0.01f);
+			CHECK(std::abs(values[2] - std::clamp(postProcess.AutoExposureKey * (values[0] - cardLog2), RenderData::c_ExposureKeyMinStops,
+				RenderData::c_ExposureKeyMaxStops)) < 0.01f);
 			return values[2];
 		};
 		// A sunlit exterior meters near the card: the floor's diffuse light is sin(60) of the card's (0.2 stops below it).
@@ -948,6 +949,58 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 		renderer.ResetExposureAdaptation();
 		REQUIRE(renderer.Render(scene, camera, nullptr, options));
 		CHECK(ReadExposureKey(gpu, renderer) == 0.0f);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The exposure key never brightens: a dim sun under a bright sky, and a sun fading out over a lit scene")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		MaterialProperties gray;
+		gray.BaseColor = glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
+		gray.Roughness = 1.0f;
+		gray.Metallic = 0.0f;
+		Scene scene;
+		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.AutoExposure = true;
+		postProcess.AutoExposureKey = 0.12f;
+		postProcess.AutoExposureMinEV = -12.0f;
+		postProcess.AutoExposureMaxEV = 16.0f;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(gray), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(100.0f);
+		// An overcast sky: its light makes the floor four times as bright as the gray card the 1 lux sun lights (the sun's own
+		// share of the floor is sin(60) of the card's), so the floor meters two stops above the card.
+		SkyLightComponent& sky = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+		sky.AmbientColor = glm::vec3((4.0f - std::sin(glm::radians(60.0f))) / glm::pi<float>());
+		Entity sun = AddSun(scene, glm::normalize(glm::vec3(0.0f, -std::sin(glm::radians(60.0f)), -std::cos(glm::radians(60.0f)))), 1.0f, false);
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 3.0f, 0.01f), glm::vec3(0.0f));
+		SceneRenderOptions options;
+		options.PreExposure = 1.0f;
+		auto meter = [&](float lux)
+		{
+			sun.GetComponent<DirectionalLightComponent>().Intensity = lux;
+			sun.MarkModified<DirectionalLightComponent>();
+			renderer.ResetExposureAdaptation();
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			const std::vector<uint8_t> bytes = ReadBufferRange(gpu, renderer.GetExposureBuffer(), 0, 3 * sizeof(float));
+			REQUIRE(bytes.size() == 3 * sizeof(float));
+			float values[3] = {};
+			std::memcpy(values, bytes.data(), sizeof(values));
+			return glm::vec2(values[0], values[2]);
+		};
+		// Overcast: the floor meters above the sun's card, and shows as bright as a sunny exterior that meters at it.
+		const glm::vec2 overcast = meter(1.0f);
+		CHECK(overcast.x > std::log2(0.18f / glm::pi<float>()) + 1.8f);
+		CHECK(overcast.y == 0.0f);
+		// The sun sets over the sky-lit floor: its card falls toward nothing while the floor keeps the sky's light. The key stays
+		// 0 all the way, and at 0 lux (no card at all) too: nothing brightens or jumps as the light fades out.
+		for (const float lux : { 0.25f, 1.0f / 64.0f, 1.0f / 4096.0f, 1.0e-6f, 0.0f })
+		{
+			CAPTURE(lux);
+			CHECK(meter(lux).y == 0.0f);
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
