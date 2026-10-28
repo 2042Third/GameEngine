@@ -3,6 +3,7 @@
 
 #include "Include/Common.glsl"
 #include "Include/Dither.glsl"
+#include "Include/Grain.glsl"
 
 // Fast approximate anti-aliasing (after FXAA 3.11 quality by Timothy Lottes) on the display-encoded image: finds
 // luma edges, walks along each edge to its ends and blends across it by the pixel's position along the edge.
@@ -14,10 +15,17 @@ layout(set = 0, binding = ST_SAMPLER(0)) uniform sampler u_LinearClamp;
 layout(push_constant) uniform FXAAParameters
 {
 	float DitherLevels; // 2^bits - 1 of the target FXAA writes; 0: no dither
+	float FilmGrain;    // The grain's strength (Include/Grain.glsl), added after the anti-aliasing; 0 = off
+	uint GrainFrame;    // The frame's number: the grain changes every frame
 	float Padding0;
-	float Padding1;
-	float Padding2;
 } u_Parameters;
+
+// The anti-aliased color as written: grain, then the dither.
+vec4 Finish(vec3 color)
+{
+	uvec2 pixel = uvec2(gl_FragCoord.xy);
+	return vec4(DitherToCodes(AddFilmGrain(color, pixel, u_Parameters.FilmGrain, u_Parameters.GrainFrame), pixel, u_Parameters.DitherLevels), 1.0);
+}
 
 layout(location = 0) in vec2 v_UV;
 layout(location = 0) out vec4 o_Color;
@@ -56,7 +64,7 @@ void main()
 	float range = lumaMax - lumaMin;
 	if (range < max(c_EdgeThresholdMin, lumaMax * c_EdgeThreshold))
 	{
-		o_Color = vec4(DitherToCodes(center, uvec2(gl_FragCoord.xy), u_Parameters.DitherLevels), 1.0);
+		o_Color = Finish(center);
 		return;
 	}
 
@@ -137,5 +145,5 @@ void main()
 		finalUV.y += finalOffset * stepLength;
 	else
 		finalUV.x += finalOffset * stepLength;
-	o_Color = vec4(DitherToCodes(Fetch(finalUV), uvec2(gl_FragCoord.xy), u_Parameters.DitherLevels), 1.0);
+	o_Color = Finish(Fetch(finalUV));
 }

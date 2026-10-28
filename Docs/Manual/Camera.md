@@ -152,7 +152,8 @@ Film and lenses have flaws that make a picture feel photographed; use them spari
 players can turn each off with the **Film grain** and **Chromatic aberration** rows of the Graphics Quality settings):
 
 - **Film Grain** (0): fine noise, new every frame, strongest in the mid-tones as film's is and the same on every
-  channel (no color speckle). 1 spreads a mid-gray by about 10 codes without changing its brightness; 0.1 to 0.3 reads
+  channel (no color speckle). 1 spreads a mid-gray by about 10 codes without changing its brightness, whatever the
+  anti-aliasing (it is added after FXAA and the morphological anti-aliasing, which would smooth it); 0.1 to 0.3 reads
   as texture rather than noise.
 - **Chromatic Aberration** (0): a lens's lateral color fringes, red and blue drawn apart toward the image's corners; 1
   shifts each half a pixel at the corners of a 3840x2160 image (the same share of any image) and nothing at the center.

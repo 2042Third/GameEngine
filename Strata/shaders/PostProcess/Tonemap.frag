@@ -5,6 +5,7 @@
 #include "Include/Dither.glsl"
 #include "Include/Exposure.glsl"
 #include "Include/Filmic.glsl"
+#include "Include/Grain.glsl"
 
 // Exposure, bloom, tone mapping and color grading from the HDR scene color into a display-referred, sRGB-encoded
 // target.
@@ -46,7 +47,7 @@ layout(set = 0, binding = ST_CBV(0), std140) uniform TonemapConstants
 	vec4 ColorRows[3];        // White balance times slope, as rows
 	vec4 ColorOffset;         // xyz: added before the power (in units of light)
 	vec4 ColorPower;          // xyz: per-channel power around middle gray
-	float FilmGrain;          // The grain's strength; 0 = off
+	float FilmGrain;          // The grain's strength; 0 = off, and when FXAA or the morphological blend follows (it adds the grain)
 	float ChromaticAberration; // k: red is read at 0.5 + (uv - 0.5) (1 + k), blue at (1 - k); 0 = off
 	uint GrainFrame;          // The frame's number: the grain changes every frame
 	float ColorLookupIntensity; // How much of the color lookup (set 1) shows; 0: none bound
@@ -67,9 +68,6 @@ layout(set = 1, binding = ST_SRV(4)) uniform texture2D u_LensFlare;
 // The starburst: six rays (|cos 3 phi|^c_RayPower), fading over c_RayLength image heights.
 const float c_RayPower = 40.0;
 const float c_RayLength = 0.08;
-
-// The grain's strength in the encoded domain at FilmGrain 1 (RenderData::c_FilmGrainAmplitude).
-const float c_FilmGrainAmplitude = 0.04;
 
 #define ST_COLOR_GRADING 1u
 #define ST_BLUR_MASK 2u
@@ -289,17 +287,8 @@ void main()
 		vec3 graded = texture(sampler3D(u_ColorLookup, u_ColorLookupSampler), encoded * ((size - 1.0) / size) + 0.5 / size).rgb;
 		encoded = clamp(mix(encoded, graded, u_Parameters.ColorLookupIntensity), 0.0, 1.0);
 	}
-	// Film grain in the encoded domain, after the curve and before the dither: most visible in the mid-tones, as film's
-	// (sqrt(4 Y (1 - Y)) of the encoded luminance Y), the same on every channel, near-Gaussian (four uniform streams), new every
-	// frame (salted with the frame's number) and zero-mean, so it adds texture without moving the image's brightness.
-	if (u_Parameters.FilmGrain > 0.0)
-	{
-		uvec2 pixel = uvec2(gl_FragCoord.xy);
-		uint salt = 8u + 4u * u_Parameters.GrainFrame;
-		float noise = (PixelRandom(pixel, salt) + PixelRandom(pixel, salt + 1u) + PixelRandom(pixel, salt + 2u) + PixelRandom(pixel, salt + 3u) - 2.0) * 1.7320508;
-		float encodedLuminance = clamp(dot(encoded, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
-		encoded = clamp(encoded + u_Parameters.FilmGrain * c_FilmGrainAmplitude * sqrt(4.0 * encodedLuminance * (1.0 - encodedLuminance)) * noise, 0.0, 1.0);
-	}
+	// Film grain in the encoded domain, after the curve and before the dither, when this pass writes the display image.
+	encoded = AddFilmGrain(encoded, uvec2(gl_FragCoord.xy), u_Parameters.FilmGrain, u_Parameters.GrainFrame);
 	// The target's own quantization, dithered when this pass writes the display image (u_Parameters.DitherLevels).
 	o_Color = vec4(DitherToCodes(encoded, uvec2(gl_FragCoord.xy), u_Parameters.DitherLevels), 1.0);
 }

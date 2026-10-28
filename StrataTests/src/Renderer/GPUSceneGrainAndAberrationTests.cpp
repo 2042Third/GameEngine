@@ -119,6 +119,60 @@ TEST_SUITE("GPU.SceneRenderer.GrainAndAberration")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Film grain is as strong under FXAA and the morphological anti-aliasing as without anti-aliasing")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		GrayWall wall(assets, 128);
+		wall.PostProcess->FilmGrain = 1.0f;
+		constexpr uint32_t c_Size = 512;
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f));
+		SceneRenderOptions seeded;
+		seeded.GrainSeed = 3;
+		// The grain's spread in codes over the image, and how alike neighbors are (the correlation of horizontal neighbors).
+		auto measure = [&](bool antiAliasing, AntiAliasingMode method)
+		{
+			wall.PostProcess->AntiAliasing = antiAliasing;
+			wall.PostProcess->AntiAliasingMethod = method;
+			SceneRenderer renderer(ExactSpecification());
+			renderer.SetViewportSize(c_Size, c_Size);
+			REQUIRE(renderer.Render(wall.SceneData, camera, nullptr, seeded));
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), image));
+			CHECK(renderer.GetStats().MorphologicalAntiAliasing == (antiAliasing && method == AntiAliasingMode::Morphological));
+			double sum = 0.0;
+			double squares = 0.0;
+			double products = 0.0;
+			for (uint32_t y = 0; y < c_Size; y++)
+			{
+				for (uint32_t x = 0; x < c_Size; x++)
+				{
+					const double value = static_cast<double>(Red(image, x, y)) - 128.0;
+					sum += value;
+					squares += value * value;
+					if (x + 1 < c_Size)
+						products += value * (static_cast<double>(Red(image, x + 1, y)) - 128.0);
+				}
+			}
+			const double count = static_cast<double>(c_Size) * c_Size;
+			const double mean = sum / count;
+			const double variance = squares / count - mean * mean;
+			return glm::dvec2(std::sqrt(variance), (products / (count - c_Size) - mean * mean) / variance);
+		};
+		const glm::dvec2 plain = measure(false, AntiAliasingMode::FXAA);
+		const glm::dvec2 fxaa = measure(true, AntiAliasingMode::FXAA);
+		const glm::dvec2 morphological = measure(true, AntiAliasingMode::Morphological);
+		MESSAGE("grain spread: ", plain.x, " codes without anti-aliasing, ", fxaa.x, " under FXAA, ", morphological.x, " morphological; neighbor "
+			"correlation ", plain.y, ", ", fxaa.y, ", ", morphological.y);
+		CHECK(fxaa.x == doctest::Approx(plain.x).epsilon(0.03));
+		CHECK(morphological.x == doctest::Approx(plain.x).epsilon(0.03));
+		// Neighbors stay independent: nothing blended the grain into its neighbors.
+		CHECK(std::abs(fxaa.y) < 0.03);
+		CHECK(std::abs(morphological.y) < 0.03);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Chromatic aberration separates red and blue toward the corners, half a pixel at a 3840x2160 corner")
 	{
 		GPUContext gpu;

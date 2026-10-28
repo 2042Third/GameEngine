@@ -4,11 +4,12 @@
 
 #include "Include/Common.glsl"
 #include "Include/Dither.glsl"
+#include "Include/Grain.glsl"
 
 // Morphological anti-aliasing, pass 3 of 3: each pixel mixes, in linear light, with the neighbors across its edges by the
 // weights of pass 2 (its own top and left edges' r and b; the g of the pixel below and the a of the pixel right of it, the
-// shares their edges give this pixel), and the result is dithered into the display target. A pixel without weights keeps the
-// tone mapping's value exactly.
+// shares their edges give this pixel), and the result takes the film grain and is dithered into the display target. A pixel
+// without weights keeps the tone mapping's value exactly (before the grain).
 
 layout(set = 0, binding = ST_SRV(0)) uniform texture2D u_Color; // The tone mapping's display-encoded image (10 bits)
 layout(set = 0, binding = ST_SRV(1)) uniform texture2D u_Weights;
@@ -19,7 +20,11 @@ layout(push_constant) uniform MorphologicalParameters
 	float Threshold;
 	float DepthThreshold;
 	float DitherLevels; // 2^bits - 1 of the target this pass writes; 0: no dither
+	float FilmGrain;      // The blend's grain (Include/Grain.glsl), added after the blend; 0 = off
+	uint GrainFrame;      // The frame's number: the grain changes every frame
 	float Padding0;
+	float Padding1;
+	float Padding2;
 } u_Parameters;
 
 layout(location = 0) in vec2 v_UV;
@@ -47,5 +52,6 @@ void main()
 		mixed += SRGBToLinear(texelFetch(u_Color, min(pixel + ivec2(1, 0), size - 1), 0).rgb) * (right * scale);
 		color = LinearToSRGB(mixed);
 	}
+	color = AddFilmGrain(color, uvec2(pixel), u_Parameters.FilmGrain, u_Parameters.GrainFrame);
 	o_Color = vec4(DitherToCodes(color, uvec2(pixel), u_Parameters.DitherLevels), 1.0);
 }
