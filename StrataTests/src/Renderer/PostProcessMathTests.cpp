@@ -381,9 +381,9 @@ TEST_SUITE("Renderer.PostProcessMath")
 		constexpr float c_Stops = 1e-3f;
 		const float slope = (std::log2(PostProcessMath::EvaluateFilmicCurve(0.18f * std::exp2(c_Stops), look))
 			- std::log2(PostProcessMath::EvaluateFilmicCurve(0.18f * std::exp2(-c_Stops), look))) / (2.0f * c_Stops);
-		CHECK(std::abs(slope - FilmicConstants::Contrast) < 0.01f);
-		CHECK(FilmicConstants::Contrast >= 1.35f);
-		CHECK(FilmicConstants::Contrast <= 1.45f);
+		CHECK(std::abs(slope - FilmicConstants::c_Contrast) < 0.01f);
+		CHECK(FilmicConstants::c_Contrast >= 1.35f);
+		CHECK(FilmicConstants::c_Contrast <= 1.45f);
 		// T3: white Tw stops above middle gray; +6 stops at least code 250.
 		CHECK(PostProcessMath::EvaluateFilmicCurve(0.18f * std::exp2(look.WhiteStops), look) == 1.0f);
 		CHECK(PostProcessMath::EvaluateFilmicCurve(0.18f * 64.0f, look) >= 0.955f);
