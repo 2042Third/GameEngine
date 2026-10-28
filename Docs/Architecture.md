@@ -2400,7 +2400,12 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   2-3 frames late through a readback (`BufferReadback`, `SceneRendererGPUStats`, `AddGPUCounts`). The opaque pixels do not
   depend on the order of a record's instances; shadows' receiver plane bias follows the receiver's normal, not
   screen-space derivatives, which on some GPUs depend on how draws group pixels into quads (`Include/Shadows.glsl`), so
-  both paths agree to the pixel (`GPU.SceneRenderer.GPUDriven`, `IndirectFallback`).
+  both paths agree to the pixel (`GPU.SceneRenderer.GPUDriven`, `IndirectFallback`). A render scene that never had a
+  proxy records none of this (`SceneRendererStats::GPUCulled`): no culling pass, depth pyramid, second phase or feedback,
+  only the clears of the counters (which the point and spot lights' culling still fills, and the readback still copies)
+  and of the casters' depths, whose absence the cascades' fit reads. Recording the empty passes took about a seventh of
+  the CPU time of an editor frame of 100,000 empty entities. Such frames walk the view on the CPU (no feedback comes), and
+  that walk starts no job for an empty spatial index.
 - **Visibility feedback** (`SceneRendererSpecification::VisibilityFeedback`, on by default; `Cull.comp`'s counting
   passes, `Scene/CullFeedback.comp`, `SceneRenderer::ApplyFeedback`). What a GPU-driven frame requests comes from the GPU's
   culling of an earlier frame instead of the CPU walking the view's proxies. For every proxy within the prefetch distance,

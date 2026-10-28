@@ -363,6 +363,10 @@ namespace Strata
 		// InstancesPerLOD, SkinnedInstances, ShadowCasters and ShadowDrawCalls count only what the CPU drew (transparent
 		// surfaces). DrawCommands counts every draw call the CPU recorded.
 		bool GPUDriven = false;
+		// The GPU-driven frame culled the render scene's proxies on the GPU. A render scene without proxies has nothing to cull:
+		// its frames record none of the culling's passes, no occlusion culling and no visibility feedback (only the counters
+		// the lights' culling writes, and with them the statistics, keep coming).
+		bool GPUCulled = false;
 		// The frame's requests came from the GPU's visibility feedback (SceneRendererSpecification::VisibilityFeedback); its
 		// VisibleProxies and CulledInstances then count only the proxies the CPU still looked at.
 		bool FeedbackRequests = false;
@@ -1432,10 +1436,11 @@ namespace Strata
 		// Sizes the culling buffers for the frame; `outRecreated` when one was replaced (the binding sets follow).
 		bool EnsureCullBuffers(bool& outRecreated);
 		bool CreateCullBindingSet();
-		// Uploads the tables and constants that changed, and the geometry pool's tables.
+		// Uploads the tables and constants that changed, and the geometry pool's tables (none on a frame without proxies).
 		bool UploadCullTables(nvrhi::ICommandList* commandList);
 		// Counts, builds the draws and writes the draw list (Scene/Cull.comp, CullBuild.comp) of the cascades and of the view's
-		// first phase (all of the view without occlusion culling).
+		// first phase (all of the view without occlusion culling). A frame without proxies (m_GPUCullFrame) records no pass: it
+		// clears the results the frame still reads.
 		void RunGPUCulling(nvrhi::ICommandList* commandList, bool shadows);
 		// The GPU-driven path's point and spot lights: culls the scene's light records into the light buffer (every light in
 		// view, in record order) and its count (Scene/LightCull.comp, LightCompact.comp), before the light clusters.
@@ -1896,6 +1901,7 @@ namespace Strata
 		// The GPU-driven path (SceneRendererGPUDriven.cpp).
 		uint64_t m_RenderCount = 0;
 		bool m_GPUDrivenFrame = false;  // The frame being rendered culls on the GPU
+		bool m_GPUCullFrame = false;    // And its render scene has proxies to cull (SceneRendererStats::GPUCulled)
 		nvrhi::BindingLayoutHandle m_CullBindingLayout;
 		nvrhi::ComputePipelineHandle m_CullViewPipeline;
 		nvrhi::ComputePipelineHandle m_CullShadowPipeline;

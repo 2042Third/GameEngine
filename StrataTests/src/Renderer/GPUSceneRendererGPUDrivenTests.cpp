@@ -624,6 +624,79 @@ TEST_SUITE("GPU.SceneRenderer.GPUDriven")
 		CHECK(all.GetGPUStats().SizeCulledProxies == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("A scene without mesh renderers records no culling, its lights still counted; its first mesh renderer is drawn in its first frame")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::DefaultMaterial));
+		const AssetHandle material = LitMaterial(assets, glm::vec4(0.6f, 0.4f, 0.3f, 1.0f));
+		const SceneCamera camera = View(glm::vec3(0.0f, 6.0f, 9.0f), glm::vec3(0.0f));
+		// A sun with shadows and three shadowed point lights in view: the GPU culls the point lights (its counters say what it
+		// found), and their 18 shadow views are more than one batch culls (c_CullMaxLocalShadowViews).
+		constexpr uint32_t c_Lamps = 3;
+		static_assert(c_Lamps * RenderData::c_LocalShadowFaces > RenderData::c_CullMaxLocalShadowViews);
+		const auto addLights = [](Scene& scene)
+		{
+			AddNeutralPostProcess(scene);
+			AddSun(scene, glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f)), 3.0f);
+			for (uint32_t index = 0; index < c_Lamps; index++)
+			{
+				Entity lamp = AddPointLight(scene, glm::vec3(static_cast<float>(index) * 2.0f - 2.0f, 1.5f, 1.0f), glm::vec3(1.0f, 0.8f, 0.6f), 5.0f, 10.0f);
+				lamp.GetComponent<PointLightComponent>().CastShadows = true;
+			}
+		};
+		Scene meshes;
+		addLights(meshes);
+		for (uint32_t index = 0; index < 6; index++)
+			AddMesh(meshes, BuiltinAssets::CubeMesh, material, glm::vec3(static_cast<float>(index) * 1.5f - 3.75f, 0.0f, 0.0f), "Cube");
+		// Lights and entities without mesh renderers, as the editor's scenes of nested entities.
+		Scene empty;
+		addLights(empty);
+		for (uint32_t index = 0; index < 100; index++)
+			empty.CreateEntity("Empty");
+
+		// Every shadow view of every lamp drawn every frame.
+		Comparison comparison(IndirectDrawMode::Auto, 1.0f, 0, true);
+		const PathFrame first = comparison.Check(meshes, camera);
+		CHECK(comparison.GPU.GetStats().GPUCulled);
+		CHECK(first.Counts.Instances > 0);
+		CHECK(first.Counts.ShadowCasters > 0);
+		CHECK(first.Counts.LocalShadowCasters > 0);
+
+		// More frames than the visibility feedback takes to come back: the scene has no proxy, so none culls (and none gives
+		// feedback), yet every frame's counters arrive, of that frame (none of the meshes drawn before, and the point lights
+		// counted once each, as the CPU path counts them), and the lamps' shadow views are drawn (empty) as the CPU path's.
+		for (uint32_t frame = 0; frame < 6; frame++)
+		{
+			CAPTURE(frame);
+			const PathFrame lights = comparison.Check(empty, camera);
+			CHECK(comparison.GPU.GetStats().GPUDriven);
+			CHECK_FALSE(comparison.GPU.GetStats().GPUCulled);
+			CHECK_FALSE(comparison.GPU.GetStats().FeedbackRequests);
+			CHECK(comparison.GPU.GetStats().LocalShadowViewsDrawn == c_Lamps * RenderData::c_LocalShadowFaces);
+			CHECK(lights.Counts.Instances == 0);
+			CHECK(lights.Counts.ShadowCasters == 0);
+			CHECK(lights.Counts.LocalShadowCasters == 0);
+			const LightCounts gpuLights = GetLightCounts(comparison.GPU);
+			const LightCounts cpuLights = GetLightCounts(comparison.CPU);
+			CHECK(gpuLights.Lights == 1 + c_Lamps);
+			CHECK(gpuLights.Lights == cpuLights.Lights);
+			CHECK(gpuLights.CulledLights == cpuLights.CulledLights);
+		}
+
+		// The scene's first mesh renderer: culled, and drawn (and casting) in its first frame, as the CPU path draws it.
+		AddMesh(empty, BuiltinAssets::CubeMesh, material, glm::vec3(0.0f), "First");
+		const PathFrame drawn = comparison.Check(empty, camera);
+		CHECK(comparison.GPU.GetStats().GPUCulled);
+		CHECK(drawn.Counts.Instances == 1);
+		CHECK(drawn.Counts.ShadowCasters > 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }
 
 TEST_SUITE("GPU.SceneRenderer.GPUDrivenFallback")

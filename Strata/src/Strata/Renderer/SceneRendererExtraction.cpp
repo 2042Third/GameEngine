@@ -552,6 +552,10 @@ namespace Strata
 		// light-space bounds tested below, so no caster is missed. The cascades' queries run as one job each (queries only
 		// read the index) and merge in cascade order.
 		const SpatialIndex& index = renderScene.GetSpatialIndex();
+		// An empty index holds no caster: no query runs, nor the jobs that would run them (scenes of empty entities, whose
+		// frames have no feedback to apply and walk the view on the CPU).
+		if (index.GetCount() == 0)
+			return;
 		const glm::vec3 lightX(m_LightView[0][0], m_LightView[1][0], m_LightView[2][0]);
 		const glm::vec3 lightY(m_LightView[0][1], m_LightView[1][1], m_LightView[2][1]);
 		const glm::vec3 lightZ(m_LightView[0][2], m_LightView[1][2], m_LightView[2][2]);

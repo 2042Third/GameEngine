@@ -3274,6 +3274,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `AddGPUCounts` adds them to a frame's `SceneRendererStats` for display (`renderStats`, the viewport's statistics).
   `SceneRendererStats` of a GPU-driven frame (`GPUDriven`) counts only what the CPU drew (transparent surfaces), and
   `GetOpaqueBatches`, `GetShadowBatches` and the shadow draw list are empty.
+- A render scene that never had a proxy (empty entities and lights only: an editor's scene of nested entities) has nothing
+  to cull, so its GPU-driven frames record none of the culling's passes, no occlusion phase and no feedback
+  (`SceneRendererStats::GPUCulled` is false; `RunGPUCulling` clears only what the frame still reads: the counters the
+  lights' culling writes, which keep coming every frame, and the casters' depths the cascades' fit reads). Their requests
+  come from the CPU's marks. Work added to the culling that matters without proxies (a new counter, a buffer another pass
+  reads) is cleared or run in that branch too; `GPU.SceneRenderer.GPUDriven` renders such a scene, counts its lights and
+  draws its first mesh renderer.
 - Requests on the GPU path follow the GPU's visibility feedback, 2-3 frames late (`SceneRendererSpecification::
   VisibilityFeedback`, `SceneRendererStats::FeedbackRequests`, `renderStats.feedbackRequests`; Docs/Architecture.md,
   "Render scene"). Feedback marks exactly what the CPU's walk of the view marks (`GPU.SceneRenderer.Feedback` compares the

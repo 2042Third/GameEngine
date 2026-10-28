@@ -2732,6 +2732,9 @@ namespace Strata
 		// CPU still resolves the frame's assets and fits the cascades, and draws transparent surfaces.
 		m_GPUDrivenFrame = IsGPUDriven();
 		m_Stats.GPUDriven = m_GPUDrivenFrame;
+		// A render scene without proxies gives the GPU nothing to cull or draw (scenes of empty entities, an editor's new scene).
+		m_GPUCullFrame = m_GPUDrivenFrame && renderScene.GetProxyCapacity() > 0;
+		m_Stats.GPUCulled = m_GPUCullFrame;
 		CollectLights(scene, renderScene, camera, preview, frame);
 		const auto extractionStart = std::chrono::steady_clock::now();
 		// The CPU's culling works in world space (the spatial index holds world bounds).
