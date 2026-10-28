@@ -1368,6 +1368,15 @@ namespace Strata
 		return std::ldexp(1.0f, static_cast<int>(rounded));
 	}
 
+	void SceneRenderer::StartPreExposureEpoch()
+	{
+		m_PreExposureEpoch++;
+		// The stats report what this stretch metered: nothing until its first readback arrives, not the previous stretch's (a
+		// scene metered before a reset or a stretch of manual exposure).
+		m_MeteredLog2Luminance.reset();
+		m_MeteredKeyStops = 0.0f;
+	}
+
 	void SceneRenderer::ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options)
 	{
 		if (m_ResetPreExposure)
@@ -1375,14 +1384,14 @@ namespace Strata
 			m_ResetPreExposure = false;
 			m_PreExposure = 1.0f;
 			m_PreExposureSettled = false;
-			m_PreExposureEpoch++;
+			StartPreExposureEpoch();
 		}
 		const bool automatic = !options.PreExposure && settings.AutoExposure;
 		if (!automatic)
 		{
 			// Readbacks of the automatic exposure before this stretch say nothing about the frames after it.
 			if (m_PreExposureAutomatic)
-				m_PreExposureEpoch++;
+				StartPreExposureEpoch();
 			m_PreExposureAutomatic = false;
 			if (options.PreExposure)
 				m_PreExposure = *options.PreExposure > 0.0f ? GetPreExposureFor(std::log2(*options.PreExposure)) : 1.0f;

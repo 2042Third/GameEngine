@@ -3736,8 +3736,9 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     all of it. A scene that is bright in the sun (snow) takes a positive `Exposure`, as a photographer compensates.
   - The exposure buffer holds the metered log2 luminance, the multiplier and the key's stops (`c_ExposureKeyStops`); the
     readback copies all three: `SceneRendererStats::ExposureLog2Luminance`, `ExposureKeyStops` (frames late, unset with
-    manual exposure) and `ExposureKeyReferenceLog2` (the frame's card), reported by `renderStats.exposure` (`ev100`,
-    `keyStops`, `cardEv100`).
+    manual exposure, and unset after a reset or a stretch of manual exposure until a readback of the new stretch
+    arrives: `StartPreExposureEpoch`) and `ExposureKeyReferenceLog2` (the frame's card), reported by
+    `renderStats.exposure` (`ev100`, `keyStops`, `cardEv100`).
   - `AddNeutralPostProcess` meters as 0.6.0 did (`Average`, key 0, one speed both ways), so tests that turn automatic
     exposure on keep their meaning.
 - **Bloom** (`RenderBloom`, `Bloom.comp`): the half-resolution chain is allocated with every level down to 4 pixels, at
