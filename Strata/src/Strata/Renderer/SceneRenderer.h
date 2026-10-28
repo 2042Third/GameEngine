@@ -545,6 +545,9 @@ namespace Strata
 		uint32_t TemporalFrames = 0;
 		uint32_t HistoryResets = 0;
 		glm::vec2 Jitter = glm::vec2(0.0f);
+		// Ambient occlusion's samples per pixel (slices x steps per side x 2, RendererQualitySettings::AmbientOcclusionQuality);
+		// 0 in frames without it.
+		uint32_t AmbientOcclusionSamples = 0;
 		// Local light shadows (RendererQualitySettings::LocalShadowAtlasSize): the point and spot lights with atlas tiles,
 		// the shadow views (tiles) drawn this frame, and those of these lights still waiting to be drawn (their lights cast no
 		// shadow until all of theirs are drawn, or keep the shadows drawn before they changed).
@@ -1807,14 +1810,14 @@ namespace Strata
 		nvrhi::FramebufferHandle m_OutputFramebuffer;
 
 		// Ambient occlusion (SceneRendererAmbientOcclusion.cpp)
-		nvrhi::TextureHandle m_AORawTexture; // Noisy GTAO output
-		nvrhi::TextureHandle m_AOTexture;    // Blurred
+		nvrhi::TextureHandle m_AORawTexture; // GTAO's output: a 4x4 pattern of slice rotations
+		nvrhi::TextureHandle m_AOTexture;    // Denoised (the pattern resolved, then blurred within edges)
 		nvrhi::Format m_AOFormat = nvrhi::Format::R32_FLOAT; // Of both: R16_FLOAT where the device stores it (CreateAmbientOcclusionResources)
 		nvrhi::BindingLayoutHandle m_AOBindingLayout;
 		nvrhi::BindingSetHandle m_GTAOBindingSet;
-		nvrhi::BindingSetHandle m_AOBlurBindingSet;
+		nvrhi::BindingSetHandle m_AODenoiseBindingSet;
 		nvrhi::ComputePipelineHandle m_GTAOPipeline;
-		nvrhi::ComputePipelineHandle m_AOBlurPipeline;
+		nvrhi::ComputePipelineHandle m_AODenoisePipeline;
 
 		// Post-processing (SceneRendererPost.cpp; the temporal history's own post sets below belong to the TAA's resources)
 		nvrhi::BindingLayoutHandle m_TonemapBindingLayout;

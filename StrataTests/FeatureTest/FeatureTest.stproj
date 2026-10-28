@@ -139,6 +139,7 @@
 		},
 		"Renderer.Quality": {
 			"Value": {
+				"AmbientOcclusionQuality": "Low",
 				"LODErrorPixels": 1.5,
 				"LocalShadowAtlasSize": "2048",
 				"LocalShadowMaxTile": "512",
@@ -148,7 +149,7 @@
 				"ShadowCascades": 3,
 				"ShadowResolution": "1024"
 			},
-			"Version": 1
+			"Version": 2
 		},
 		"Scene.CollisionLayers": {
 			"Value": {

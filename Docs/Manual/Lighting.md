@@ -174,6 +174,20 @@ color says (since 0.7.0; before, a metal of roughness 1 lost about two thirds of
 metals such as copper or gold keep less at high roughness, as real ones do: each bounce between the facets takes some of
 the light. Materials made darker to look right before may now be set to their measured colors.
 
+## Ambient occlusion
+
+The **Post Process**'s **Ambient Occlusion** darkens the light from the sky and the surroundings in creases and corners and
+under objects, where less of the sky is seen, so things sit on the ground. It is computed from the image each frame, clean
+without TAA.
+
+- **Ambient Occlusion Radius** (1 m): how far around a surface occluders darken it. On screen it stays between 0.3% and 12%
+  of the view's height: far away objects keep a thin contact line, close-ups do not turn into dark halos.
+- **Ambient Occlusion Intensity** (1): how strongly; above 1 darker.
+- **Ambient Occlusion Multi Bounce** (on): bright surfaces reflect light into their own creases, so white plaster stays
+  light in its corners while dark soil darkens fully. It also applies to materials' occlusion maps.
+- Its cost follows the **Graphics Quality**'s ambient occlusion quality (Low, Medium, High, Ultra: more samples per pixel).
+  The occlusion only sees what is on screen: things behind others or outside the view do not occlude.
+
 ## Debug views
 
 The **debug view** chip on the viewport's toolbar has five views that show the scene's light instead of its image, each

@@ -1063,7 +1063,7 @@
 					"Min": 0.009999999776482582,
 					"Name": "AmbientOcclusionRadius",
 					"Speed": 0.009999999776482582,
-					"Tooltip": "World units",
+					"Tooltip": "Meters: how far around a surface occluders darken it; on screen kept between 0.3% and 12% of the view's height",
 					"Type": "Float"
 				},
 				{
@@ -1077,6 +1077,18 @@
 					"Speed": 0.0,
 					"Tooltip": "",
 					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Ambient Occlusion Multi Bounce",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "AmbientOcclusionMultiBounce",
+					"Speed": 0.0,
+					"Tooltip": "Occluded corners of bright surfaces keep the light their walls reflect into them: white plaster stays light in its creases, dark soil darkens fully",
+					"Type": "Bool"
 				},
 				{
 					"AssetFilter": 0,

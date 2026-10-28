@@ -237,8 +237,11 @@ namespace Strata
 		float BloomIntensity = 0.04f; // Fraction of the light scattered into the glow
 		float BloomThreshold = 0.0f;  // Only light brighter than this (after exposure) blooms; 0 = all light
 		bool AmbientOcclusion = true;
-		float AmbientOcclusionRadius = 0.6f; // World units
+		float AmbientOcclusionRadius = 1.0f; // Meters; on screen kept between 0.3% and 12% of the view's height
 		float AmbientOcclusionIntensity = 1.0f;
+		// Occluded corners of bright surfaces keep the light their walls reflect into them (the forward pass's AOMultiBounce): also
+		// for materials' occlusion maps, with or without AmbientOcclusion.
+		bool AmbientOcclusionMultiBounce = true;
 		bool AntiAliasing = true;
 		AntiAliasingMode AntiAliasingMethod = AntiAliasingMode::FXAA;
 		// The TAA's look: a preset, or the tunables below under Custom. The preset and the tunables are independent: choosing

@@ -40,8 +40,8 @@ vec3 SRGBToLinear(vec3 color)
 	return mix(high, low, lessThanEqual(color, vec3(0.04045)));
 }
 
-// Per-pixel noise in [0, 1) whose neighbors differ evenly (interleaved gradient noise): ambient occlusion's and screen-space
-// reflections' start offsets, turned each frame by TemporalParams.z.
+// Per-pixel noise in [0, 1) whose neighbors differ evenly (interleaved gradient noise): screen-space reflections' start
+// offsets, turned each frame by TemporalParams.z.
 float InterleavedGradientNoise(vec2 pixel)
 {
 	return fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));

@@ -73,13 +73,15 @@ struct FrameConstants
 	// into the next (DirectionalLightComponent::CascadeBlend), w: cascade count (0 = none)
 	vec4 ShadowParams;
 	vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
-	vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
+	// x: 1 when screen-space ambient occlusion is available; y: 1 when occlusion's multi-bounce applies (AOMultiBounce;
+	// light-and-materials claims y)
+	vec4 AOParams;
 	// x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels); y: the lighting debug view
 	// (ST_LIGHTING_VIEW_*, 0: none; light-and-materials claims y and z)
 	vec4 MaterialParams;
 	// x: 1 when u_PreviousInstances and u_PreviousJoints hold the renderer's previous frame; y: the pre-exposure, a power of two
 	// every writer of the HDR target multiplies its luminance by (SceneRenderer: values near 100,000 lux stay within half
-	// floats); z: the frame's rotation of per-pixel noise (PCSS, ambient occlusion) in turns, 0 without temporal anti-aliasing
+	// floats); z: the frame's rotation of per-pixel noise (PCSS, screen-space reflections) in turns, 0 without temporal anti-aliasing
 	vec4 TemporalParams;
 	// Temporal anti-aliasing's offset of the frame's samples in clip units (in Projection, ViewProjection and their inverses; 0
 	// without it): xy this frame's, zw the renderer's previous frame's

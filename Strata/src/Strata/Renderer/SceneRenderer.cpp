@@ -2824,7 +2824,7 @@ namespace Strata
 			PrepareGPUCulling(renderScene, camera);
 		ReportVisibleAnimators(scene);
 		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
-		frame.AOParams = glm::vec4(postProcess.AmbientOcclusion ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+		frame.AOParams = glm::vec4(postProcess.AmbientOcclusion ? 1.0f : 0.0f, postProcess.AmbientOcclusionMultiBounce ? 1.0f : 0.0f, 0.0f, 0.0f);
 		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, static_cast<float>(options.LightingView), 0.0f, 0.0f);
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())

@@ -121,8 +121,8 @@ namespace Strata::Tests
 		return camera;
 	}
 
-	// Plain output: no tone curve, no vignette, no bloom, ambient occlusion or anti-aliasing, so unlit colors come out
-	// unchanged.
+	// Plain output: no tone curve, no vignette, no bloom, ambient occlusion (nor its multi-bounce, which applies to materials'
+	// occlusion too) or anti-aliasing, so unlit colors come out unchanged.
 	inline PostProcessComponent& AddNeutralPostProcess(Scene& scene)
 	{
 		PostProcessComponent& postProcess = scene.CreateEntity("PostProcess").AddComponent<PostProcessComponent>();
@@ -132,6 +132,7 @@ namespace Strata::Tests
 		postProcess.Vignette = 0.0f;
 		postProcess.Bloom = false;
 		postProcess.AmbientOcclusion = false;
+		postProcess.AmbientOcclusionMultiBounce = false;
 		postProcess.AntiAliasing = false;
 		return postProcess;
 	}

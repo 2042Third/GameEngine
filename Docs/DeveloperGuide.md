@@ -3079,7 +3079,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - `SceneRenderer.cpp` holds the frame (`RenderFrame`) and what its passes share; features live in files of their own:
   `SceneRendererPost.cpp` the post-processing from the HDR image to the display (`RenderPostHDR`: exposure and bloom;
   `RenderPostDisplay`: tone mapping and FXAA; their resources, targets and passes), `SceneRendererAmbientOcclusion.cpp`
-  the ambient occlusion (GTAO and its blur, their resources and targets), `SceneRendererGlass.cpp`,
+  the ambient occlusion (GTAO and its denoiser, their resources and targets), `SceneRendererLightingView.cpp` the lighting debug views, `SceneRendererGlass.cpp`,
   `SceneRendererScreenReflections.cpp`, `SceneRendererReflectionProbes.cpp`, `SceneRendererAtmosphere.cpp`,
   `SceneRendererLocalShadows.cpp`, `SceneRendererExtraction.cpp` and `SceneRendererGPUDriven.cpp`. Their members stay
   declared in `SceneRenderer.h`, grouped under a comment naming their file. A feature's new pass goes into its file
@@ -3114,11 +3114,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `LocalShadowMaxTile` | 512 | 1024 | 1024 | 2048 |
 | `MaxShadowedLocalLights` | 4 | 16 | 16 | 16 |
 | `LODErrorPixels` / `MinProjectedPixels` | 2 / 1 | 1 / 0.5 | 1 / 0.5 | 0.5 / 0.25 |
+| `AmbientOcclusionQuality` (slices x steps per side) | Low 1 x 4 | Medium 2 x 6 | High 3 x 8 | Ultra 4 x 12 |
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
-  High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows (`Renderer.Quality` checks it).
+  High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for its ambient occlusion
+  (3 x 8 at every size; `Renderer.Quality` checks it).
   Custom is the section's fields (High's values by default). `RendererQuality::Clamp` keeps every knob in its range.
 - **Auto by rows:** `RendererQuality::ResolveShadowMapSize` resolves Auto and AutoFine for the renderer's viewport rows
   (its output: the Scene and Game views' panel pixels, the window's back buffer, a capture's image), limited to
@@ -3393,9 +3395,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   where it calls `ResetExposureAdaptation`). It is counted in frames, never in time: slow frames never reset it. Tests
   may render many frames back to back without device frames: the renderer waits for its own oldest frames before its
   frame constants' versions run out (`SceneRenderer::ReserveFrameConstantVersions`; Architecture rules, NVRHI pitfalls).
-- With TAA, PCSS and GTAO turn their per-pixel noise by the golden ratio's fraction of a turn per frame of the history
-  (`TemporalParams.z`, counted from the reset so captures are deterministic), and the history averages it; without TAA the
-  turn is 0 and the images are unchanged.
+- With TAA, PCSS and screen-space reflections turn their per-pixel noise by the golden ratio's fraction of a turn per frame
+  of the history (`TemporalParams.z`, counted from the reset so captures are deterministic), and the history averages it;
+  without TAA the turn is 0 and the images are unchanged. Ambient occlusion never turns: it resolves its pattern within the
+  frame ("Ambient occlusion").
 - Renderers of single images settle or turn TAA off: `viewport.capture` and the project's picture render their still view
   again until the history holds `c_TemporalSettleFrames` (8) complete frames (a frame still incomplete for another reason
   starts it again while its own bounded wait lasts, so a view that stays incomplete still settles once that wait ended),
@@ -3516,7 +3519,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   black after tone mapping). Instances with a mirroring transform (negative determinant) use
   pipelines with clockwise front faces and flip their tangent handedness (`c_InstanceMirrored`). The ambient occlusion
   targets are R16F where the device stores the extended storage image formats
-  (`GraphicsDeviceInfo::SupportsExtendedStorageFormats`, the `*Half.comp` variants of `GTAO` and `AOBlur`), else R32F.
+  (`GraphicsDeviceInfo::SupportsExtendedStorageFormats`, the `*Half.comp` variants of `GTAO` and `AODenoise`), else R32F.
 - Fragment shaders take every derivative (`fwidth`, `dFdx`, `texture` without an explicit level, helpers such as
   `SDFCoverage`) before their first `discard`: a discard that differs per pixel ends its invocation, which leaves the
   derivatives of the rest of its 2x2 quad undefined (Mesa drops the lane; MoltenVK keeps it, so the Mac shows nothing).
@@ -3617,6 +3620,38 @@ lights, Post Process and the sky), and never a resolution below the output's.
   with one, a 16x16-group pass over the image and a fullscreen draw in `GPU.Overlays`. The pipelines stay once made (the
   capture renderer releases its targets after every picture), the statistics buffer and readbacks (about 4 KB) go with the
   targets on `SetViewportSize(0, 0)`.
+
+### Ambient occlusion
+
+- **Passes** (`R/SceneRendererAmbientOcclusion.cpp`, stage `GPU.AO`, when the Post Process's `AmbientOcclusion` is on):
+  `Effects/GTAO.comp` integrates the cosine-weighted visibility over the quality row's slices and steps per side
+  (`RendererQualitySettings::AmbientOcclusionQuality`, `RendererQuality::GetAmbientOcclusionSamples`: Low 1 x 4, Medium 2 x 6
+  as 0.6.0, High 3 x 8, Ultra 4 x 12; `SceneRendererStats::AmbientOcclusionSamples` reports slices x steps x 2;
+  `SetQuality` changes only the push constants) into the raw target, then `Effects/AODenoise.comp` writes the target the
+  forward pass reads (scene SRV 11). Both targets are of the viewport's size, R16F where stored (else R32F): 2 x 16.6 MiB
+  at 3840x2160, made with the render targets.
+- **No history:** GTAO's slice rotation and step offset come from a fixed 4x4 pattern (the 4x4 ordered-dither order
+  `IsLODFadeDrawn` uses, two orders of it), never from the frame, so every 4x4 block of pixels holds the 16 rotations once.
+  `AODenoise` (8x8 groups over a 16x16 group-shared tile of occlusion, linear depth and normal) resolves the pattern with a
+  5x5 bilateral average whose tent weights (0.5, 1, 1, 1, 0.5) weigh each phase exactly once (depth `exp(-50 dz / z)`,
+  normal `max(n.n, 0)^8`), then blurs the result over 5x5 within depth edges (0.6.0's blur). Images are the same with TAA,
+  FXAA or none, and two frames of a still view are identical (`GPU.SceneRenderer.AmbientOcclusion`).
+- **Radius:** `PostProcessComponent::AmbientOcclusionRadius` (default 1 m) is kept on screen between
+  `c_AOMinRadiusFraction` (0.3%, at least 1.5 pixels) and `c_AOMaxRadiusFraction` (12%) of the viewport's height, and the
+  world radius follows the clamp: distant creases keep a line, near surfaces cost and look the same at every resolution.
+  At a 60-degree field of view the cap keeps the whole metre from about 7 m on; nearer, the radius shrinks with the view.
+- **Thin occluders:** a sample below a slice's horizon relaxes it toward itself by `ThinOccluderDecay` (`1 - 0.9^(6 /
+  steps)`: the same relaxation per metre at every quality), so poles, fences and plates do not draw dark halos on the walls
+  behind them, while occluders wide on screen keep their samples high.
+- **Multi-bounce** (`PostProcessComponent::AmbientOcclusionMultiBounce`, default on, `AOParams.y`; also for materials'
+  occlusion maps, with or without screen AO): the forward pass multiplies diffuse image light by
+  `AOMultiBounce(visibility, albedo (1 - metallic))` (`Include/AmbientOcclusionFit.glsl`, `R/AmbientOcclusionFit.h`), the
+  light the occluders of the surface's albedo reflect into it; specular occlusion keeps the visibility. The model,
+  `x / (1 - rho (1 - x) h(x, rho))` with a fitted bilinear `h`, and its coefficients come from `Tools/FitAOMultiBounce.py`
+  (2D radiosity in grooves and trenches, fitted to the reference's conditional means for visibilities from 0.25; its
+  docstring says why not the polynomial first planned); `Renderer.AmbientOcclusion` checks the fit against reference
+  samples the script writes (`StrataTests/src/Renderer/AmbientOcclusionFitReference.h`). Change the fit only by running
+  the script with `--write`.
 
 ### Light units and exposure
 

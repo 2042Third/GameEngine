@@ -38,6 +38,7 @@ namespace Strata
 		constexpr PresetRow<uint32_t> c_MaxShadowedLocalLightsRow = { 4, 16, 16, 16 };
 		constexpr PresetRow<float> c_LODErrorPixelsRow = { 2.0f, 1.0f, 1.0f, 0.5f };
 		constexpr PresetRow<float> c_MinProjectedPixelsRow = { 1.0f, 0.5f, 0.5f, 0.25f };
+		constexpr PresetRow<AmbientOcclusionLevel> c_AmbientOcclusionQualityRow = { AmbientOcclusionLevel::Low, AmbientOcclusionLevel::Medium, AmbientOcclusionLevel::High, AmbientOcclusionLevel::Ultra };
 
 		constexpr uint32_t c_MinLocalShadowAtlasSize = 512;
 		constexpr uint32_t c_MaxLocalShadowAtlasSize = 8192;
@@ -61,6 +62,16 @@ namespace Strata
 			ShadowMapResolution Resolution;
 			const char* Name;
 		};
+		struct AmbientOcclusionName
+		{
+			AmbientOcclusionLevel Level;
+			const char* Name;
+			AmbientOcclusionSamples Samples;
+		};
+		constexpr AmbientOcclusionName c_AmbientOcclusionNames[] = { { AmbientOcclusionLevel::Low, "Low", { 1, 4 } },
+			{ AmbientOcclusionLevel::Medium, "Medium", { 2, 6 } }, { AmbientOcclusionLevel::High, "High", { 3, 8 } },
+			{ AmbientOcclusionLevel::Ultra, "Ultra", { 4, 12 } } };
+
 		constexpr ResolutionName c_ResolutionNames[] = { { ShadowMapResolution::Auto, "Auto" }, { ShadowMapResolution::AutoFine, "AutoFine" },
 			{ ShadowMapResolution::Size1024, "1024" }, { ShadowMapResolution::Size2048, "2048" }, { ShadowMapResolution::Size4096, "4096" },
 			{ ShadowMapResolution::Size8192, "8192" } };
@@ -94,6 +105,16 @@ namespace Strata
 			{
 				if (std::optional<ShadowMapResolution> resolution = RendererQuality::ShadowResolutionFromString(member->get_ref<const std::string&>()))
 					knob = *resolution;
+			}
+		}
+
+		void ReadField(const nlohmann::json& value, std::string_view name, AmbientOcclusionLevel& knob)
+		{
+			const nlohmann::json* member = JsonUtils::Find(value, name);
+			if (member && member->is_string())
+			{
+				if (std::optional<AmbientOcclusionLevel> level = RendererQuality::AmbientOcclusionLevelFromString(member->get_ref<const std::string&>()))
+					knob = *level;
 			}
 		}
 
@@ -187,6 +208,7 @@ namespace Strata
 					settings.MaxShadowedLocalLights = c_MaxShadowedLocalLightsRow[index];
 					settings.LODErrorPixels = c_LODErrorPixelsRow[index];
 					settings.MinProjectedPixels = c_MinProjectedPixelsRow[index];
+					settings.AmbientOcclusionQuality = c_AmbientOcclusionQualityRow[index];
 				}
 				return presets;
 			}();
@@ -212,6 +234,8 @@ namespace Strata
 			clamped.MaxShadowedLocalLights = std::min(clamped.MaxShadowedLocalLights, RenderData::c_MaxShadowedLocalLights);
 			clamped.LODErrorPixels = ClampPixels(clamped.LODErrorPixels, medium.LODErrorPixels);
 			clamped.MinProjectedPixels = ClampPixels(clamped.MinProjectedPixels, medium.MinProjectedPixels);
+			if (static_cast<uint8_t>(clamped.AmbientOcclusionQuality) > static_cast<uint8_t>(AmbientOcclusionLevel::Ultra))
+				clamped.AmbientOcclusionQuality = medium.AmbientOcclusionQuality;
 			if (static_cast<uint8_t>(clamped.Preset) > static_cast<uint8_t>(RendererQualityPreset::Custom))
 				clamped.Preset = RendererQualityPreset::Custom;
 			return clamped;
@@ -272,6 +296,36 @@ namespace Strata
 			return std::nullopt;
 		}
 
+		const char* AmbientOcclusionLevelToString(AmbientOcclusionLevel level)
+		{
+			for (const AmbientOcclusionName& entry : c_AmbientOcclusionNames)
+			{
+				if (entry.Level == level)
+					return entry.Name;
+			}
+			return "Medium";
+		}
+
+		std::optional<AmbientOcclusionLevel> AmbientOcclusionLevelFromString(std::string_view name)
+		{
+			for (const AmbientOcclusionName& entry : c_AmbientOcclusionNames)
+			{
+				if (name == entry.Name)
+					return entry.Level;
+			}
+			return std::nullopt;
+		}
+
+		AmbientOcclusionSamples GetAmbientOcclusionSamples(AmbientOcclusionLevel level)
+		{
+			for (const AmbientOcclusionName& entry : c_AmbientOcclusionNames)
+			{
+				if (entry.Level == level)
+					return entry.Samples;
+			}
+			return AmbientOcclusionSamples {};
+		}
+
 
 		SettingsSection MakeSection()
 		{
@@ -316,6 +370,12 @@ namespace Strata
 				high.LODErrorPixels));
 			section.Fields.push_back(NumberField("MinProjectedPixels", "Smallest drawn size (pixels)", "Custom only: meshes smaller on screen than "
 				"this many pixels are not drawn (0: all).", SettingsFieldType::Float, 0.0, c_MaxPixels, high.MinProjectedPixels));
+			std::vector<std::string> occlusionLevels;
+			for (const AmbientOcclusionName& entry : c_AmbientOcclusionNames)
+				occlusionLevels.emplace_back(entry.Name);
+			section.Fields.push_back(EnumField("AmbientOcclusionQuality", "Ambient occlusion quality", "Custom only: ambient occlusion's samples, "
+				"Low 1x4, Medium 2x6 (Strata 0.6.0's), High 3x8, Ultra 4x12 slices x steps per side; GPU time at 3840x2160 grows about with their "
+				"product.", std::move(occlusionLevels), AmbientOcclusionLevelToString(high.AmbientOcclusionQuality)));
 			return section;
 		}
 
@@ -341,6 +401,7 @@ namespace Strata
 				ReadField(*value, "MaxShadowedLocalLights", settings.MaxShadowedLocalLights);
 				ReadField(*value, "LODErrorPixels", settings.LODErrorPixels);
 				ReadField(*value, "MinProjectedPixels", settings.MinProjectedPixels);
+				ReadField(*value, "AmbientOcclusionQuality", settings.AmbientOcclusionQuality);
 			}
 			// Knobs read under every preset (players' comfort rows) follow here, one line each.
 			return Clamp(settings);
@@ -356,7 +417,8 @@ namespace Strata
 				{ "LocalShadowMaxTile", std::to_string(settings.LocalShadowMaxTile) },
 				{ "MaxShadowedLocalLights", settings.MaxShadowedLocalLights },
 				{ "LODErrorPixels", settings.LODErrorPixels },
-				{ "MinProjectedPixels", settings.MinProjectedPixels }
+				{ "MinProjectedPixels", settings.MinProjectedPixels },
+				{ "AmbientOcclusionQuality", AmbientOcclusionLevelToString(settings.AmbientOcclusionQuality) }
 			};
 		}
 

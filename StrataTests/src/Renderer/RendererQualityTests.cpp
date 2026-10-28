@@ -29,6 +29,7 @@ namespace
 	constexpr std::array<uint32_t, 4> c_MaxShadowedLocalLights = { 4, 16, 16, 16 };
 	constexpr std::array<float, 4> c_LODErrorPixels = { 2.0f, 1.0f, 1.0f, 0.5f };
 	constexpr std::array<float, 4> c_MinProjectedPixels = { 1.0f, 0.5f, 0.5f, 0.25f };
+	constexpr std::array<AmbientOcclusionLevel, 4> c_AmbientOcclusionQuality = { AmbientOcclusionLevel::Low, AmbientOcclusionLevel::Medium, AmbientOcclusionLevel::High, AmbientOcclusionLevel::Ultra };
 
 	void CheckColumn(const RendererQualitySettings& settings, size_t column)
 	{
@@ -40,6 +41,7 @@ namespace
 		CHECK(settings.MaxShadowedLocalLights == c_MaxShadowedLocalLights[column]);
 		CHECK(settings.LODErrorPixels == c_LODErrorPixels[column]);
 		CHECK(settings.MinProjectedPixels == c_MinProjectedPixels[column]);
+		CHECK(settings.AmbientOcclusionQuality == c_AmbientOcclusionQuality[column]);
 	}
 
 	constexpr RendererQualityPreset c_Presets[] = { RendererQualityPreset::Low, RendererQualityPreset::Medium, RendererQualityPreset::High,
@@ -137,8 +139,10 @@ TEST_SUITE("Renderer.Quality")
 		}
 	}
 
-	TEST_CASE("High is Medium below 1440 rows")
+	TEST_CASE("High is Medium below 1440 rows but for its ambient occlusion")
 	{
+		// High's ambient occlusion (3 x 8 samples) differs from Medium's (Strata 0.6.0's 2 x 6) at every size; the other knobs
+		// equal Medium's below 1440 rows.
 		const RendererQualitySettings high = RendererQuality::GetPreset(RendererQualityPreset::High);
 		const RendererQualitySettings medium = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		for (const uint32_t rows : { 720u, 1080u, 1439u })
@@ -147,6 +151,8 @@ TEST_SUITE("Renderer.Quality")
 			CHECK(RendererQuality::ResolveShadowMapSize(high.ShadowResolution, rows) == RendererQuality::ResolveShadowMapSize(medium.ShadowResolution, rows));
 			RendererQualitySettings resolved = high;
 			resolved.ShadowResolution = medium.ShadowResolution;
+			CHECK(resolved.AmbientOcclusionQuality != medium.AmbientOcclusionQuality);
+			resolved.AmbientOcclusionQuality = medium.AmbientOcclusionQuality;
 			CHECK(resolved.HasSameKnobs(medium));
 		}
 		CHECK(RendererQuality::ResolveShadowMapSize(high.ShadowResolution, 1440) != RendererQuality::ResolveShadowMapSize(medium.ShadowResolution, 1440));
@@ -184,9 +190,11 @@ TEST_SUITE("Renderer.Quality")
 		refused({ { "LODErrorPixels", -1.0 } });
 		refused({ { "LODErrorPixels", 9.0 } });
 		refused({ { "Unknown", 1 } });
+		refused({ { "AmbientOcclusionQuality", "Extreme" } });
 
 		const nlohmann::json custom = { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LocalShadowAtlasSize", "2048" },
-			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 } };
+			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 },
+			{ "AmbientOcclusionQuality", "Low" } };
 		std::string error;
 		CHECK_MESSAGE(section.Validate(custom, RendererQuality::c_SectionVersion, &error).has_value(), error);
 	}
@@ -199,7 +207,8 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(lowSettings.HasSameKnobs(RendererQuality::GetPreset(RendererQualityPreset::Low)));
 
 		const nlohmann::json custom = { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LocalShadowAtlasSize", "2048" },
-			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 } };
+			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 },
+			{ "AmbientOcclusionQuality", "Low" } };
 		const RendererQualitySettings customSettings = RendererQuality::FromSectionValue(&custom);
 		CHECK(customSettings.Preset == RendererQualityPreset::Custom);
 		CHECK(customSettings.ShadowResolution == ShadowMapResolution::Size4096);
@@ -209,6 +218,7 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(customSettings.MaxShadowedLocalLights == 8);
 		CHECK(customSettings.LODErrorPixels == 1.5f);
 		CHECK(customSettings.MinProjectedPixels == 0.75f);
+		CHECK(customSettings.AmbientOcclusionQuality == AmbientOcclusionLevel::Low);
 
 		const RendererQualitySettings none = RendererQuality::FromSectionValue(nullptr);
 		CHECK(none.Preset == RendererQualityPreset::High);
