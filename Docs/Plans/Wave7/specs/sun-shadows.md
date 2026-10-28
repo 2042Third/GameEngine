@@ -1474,3 +1474,16 @@ name). Differences found while building:
     must-fail case is "A floor that appears beside what the readback saw": a box alone on screen fits small squares, then
     the floor is drawn; without containment its pixels at the first slices' distances, outside their squares, are lit
     (sun share 1.0), with it they fall to the last cascade (shadowed).
+  - Two corrections after the first acceptance run (ow.scene, the flying camera over the forest, read 2.28 against 2.09
+    before the fit, 9.4% of its receivers above 4, its fitted range starting at the near clip): the transparent surfaces'
+    near bound took their bounds' center depth less half their diagonal, which the sea's water put behind the camera;
+    it is now where the view can see the bounds at the nearest (the larger of the nearest corner's depth and the distance
+    times the cosine of the view's half diagonal). And the near bound leaves out the nearest receivers while together they
+    hold under 1% of the receiver pixels (`ShadowFitTracker::c_NearOutlierShare`; a tree top at the camera), which needs a
+    pixel count per bin (`ShadowFitBin::Pixels`, `ShadowFitResult` 2,256 bytes); they are left out of the squares too, and
+    containment shades them from a coarser cascade.
+  - Acceptance (look-dev `step6-shadowview3`, High, TAA, the shadows view's median screen pixels per texel and share above
+    4, 3840x2160 and 1920x1080 alike): tp.scene 1.24 (0%), tp.editor 0.31 (0%; most receivers in the second and third
+    cascades now, not the last), pp.scene 0.81 (0%), pp.editor 0.62 (0%), ow.scene 1.35 (0%; before: 1.76, 2.09, 2.48,
+    1.92, 2.09 with 2.1% above 4). ow.editor has no receiver within the shadow distance (as before). No sample needed its
+    Cascade Distribution changed.

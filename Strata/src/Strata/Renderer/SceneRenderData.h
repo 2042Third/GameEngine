@@ -581,8 +581,9 @@ namespace Strata
 		constexpr uint32_t c_ShadowFitBinsPerStop = 4;
 
 		// A bin's receivers as a box in the camera's view space: x and y of their positions and their view distance d, each an
-		// EncodeOrderedFloat (Include/OrderedFloat.glsl). The minima are stored complemented, so every field reduces with
-		// atomicMax and a buffer cleared to 0 holds empty bins (MaxD 0: no float encodes to 0).
+		// EncodeOrderedFloat (Include/OrderedFloat.glsl), and how many pixels hold them. The minima are stored complemented, so
+		// every box field reduces with atomicMax (the count with atomicAdd) and a buffer cleared to 0 holds empty bins (MaxD 0:
+		// no float encodes to 0).
 		struct ShadowFitBin
 		{
 			uint32_t MinX;
@@ -591,8 +592,9 @@ namespace Strata
 			uint32_t MaxX;
 			uint32_t MaxY;
 			uint32_t MaxD;
+			uint32_t Pixels;
 		};
-		static_assert(sizeof(ShadowFitBin) == 24);
+		static_assert(sizeof(ShadowFitBin) == 28);
 
 		// Scene/ShadowFit.comp's result: the nearest (complemented) and farthest view distance of any receiver, how many pixels
 		// hold one, and the bins.
@@ -604,7 +606,7 @@ namespace Strata
 			uint32_t Reserved;
 			ShadowFitBin Bins[c_ShadowFitBins];
 		};
-		static_assert(sizeof(ShadowFitResult) == 1936);
+		static_assert(sizeof(ShadowFitResult) == 2256);
 
 		// Scene/ShadowFit.comp's push constants: the depth's size in pixels.
 		struct ShadowFitParameters

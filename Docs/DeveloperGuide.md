@@ -3607,8 +3607,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `GPU.ScreenShadows`, after the mask, `Scene/ShadowFit.comp` reduces the complete prepass depth (both paths alike; the
   GPU path's occlusion pyramid holds only the first phase's farthest depths, the sky included) to the receivers' nearest
   and farthest view distance and, per quarter stop of view distance (`RenderData::c_ShadowFitBins` 80 from 6.25 cm), the
-  box of their positions in the camera's **view space** (`ShadowFitResult`, 1,936 bytes; every field an ordered float
-  reduced with `atomicMax`, minima complemented; a thread reduces 4 x 4 pixels in registers, a group in shared memory).
+  box of their positions in the camera's **view space** and their pixels (`ShadowFitResult`, 2,256 bytes; every box field
+  an ordered float reduced with `atomicMax`, minima complemented, the counts with `atomicAdd`; a thread reduces 4 x 4
+  pixels in registers, a group in shared memory).
   A ring of `c_GPURecordCount` readbacks, each with the frame's camera, the tracker's epoch and layout version, is
   submitted after the frame and polled (never waited for) by `UpdateShadowFit` at the start of a later frame's
   extraction, before the visibility feedback is chosen; `FindShadowCasters` applies the tracker's layout to
@@ -3620,7 +3621,12 @@ lights, Post Process and the sky), and never a resolution below the output's.
     are none or all beyond the shadow distance, the layout is Strata 0.6.0's (0.8 logarithmic splits from the near clip,
     spheres). The first readback of an epoch sets everything at once: 0.6.0's layout is no state to shrink from.
   - **Bounds:** `N` is the receivers' nearest distance (or the previous frame's nearest transparent surface, which no
-    depth holds) over 2^0.5, quarter stops below, at least the near clip; `F` their farthest times 2^0.5, quarter stops
+    depth holds: where the view can see its bounds at the nearest, the larger of their nearest corner's depth and their
+    distance times the cosine of the view's half diagonal, so a sea's box around the camera does not reach it) over
+    2^0.5, quarter stops below, at least the near clip; the nearest receivers are left out while together
+    they hold less than 1% of the receiver pixels (`c_NearOutlierShare`: a leaf at a flying camera would otherwise spend
+    the first cascades on distances nothing else occupies), out of the squares too, and containment shades them from a
+    coarser cascade; `F` their farthest times 2^0.5, quarter stops
     above, at least `N` 2^0.5, and the shadow distance `D` from 0.7 `D` on (one cascade: always). A bound or side grows in
     the frame it must and shrinks only after `ShadowFitTracker::c_ShrinkReadbacks` (8) readbacks in a row asked for less,
     to the least shrunk of them.

@@ -156,12 +156,32 @@ namespace Strata
 		}
 	}
 
+	double ShadowFitTracker::GetFittedNearest() const
+	{
+		const RenderData::ShadowFitResult& result = m_Readback.Result;
+		if (result.SurfacePixels == 0)
+			return 0.0;
+		// The bins in order of distance: the first one that takes the count past the outliers' share holds the nearest receiver
+		// the fit keeps (the nearest one overall when the first bin alone does).
+		const uint64_t outliers = static_cast<uint64_t>(c_NearOutlierShare * static_cast<double>(result.SurfacePixels));
+		uint64_t counted = 0;
+		for (const RenderData::ShadowFitBin& bin : result.Bins)
+		{
+			if (bin.MaxD == 0)
+				continue;
+			counted += bin.Pixels;
+			if (counted > outliers)
+				return DecodeOrderedFloat(~bin.MinD);
+		}
+		return DecodeOrderedFloat(~result.Nearest);
+	}
+
 	bool ShadowFitTracker::GetBoundTargets(const ShadowFitView& view, int32_t& nearQuarters, int32_t& farQuarters) const
 	{
 		const RenderData::ShadowFitResult& result = m_Readback.Result;
 		if (result.SurfacePixels == 0 || result.Farthest == 0)
 			return false; // No receivers: nothing to fit to
-		const double nearest = DecodeOrderedFloat(~result.Nearest);
+		const double nearest = GetFittedNearest();
 		const double farthest = DecodeOrderedFloat(result.Farthest);
 		if (!std::isfinite(nearest) || !std::isfinite(farthest) || !(nearest <= farthest))
 			return false;
@@ -189,10 +209,11 @@ namespace Strata
 		const glm::dmat3& readRotation = m_Readback.CameraRotation;
 		const glm::dvec3 offset = m_Readback.CameraPosition - view.CameraPosition;
 		const glm::dvec3 forward = -glm::dmat3(view.CameraRotation)[2];
+		const double nearest = GetFittedNearest();
 		for (const RenderData::ShadowFitBin& bin : m_Readback.Result.Bins)
 		{
-			if (bin.MaxD == 0)
-				continue; // Empty
+			if (bin.MaxD == 0 || DecodeOrderedFloat(bin.MaxD) < nearest)
+				continue; // Empty, or only receivers the fit leaves out
 			const double minX = DecodeOrderedFloat(~bin.MinX);
 			const double minY = DecodeOrderedFloat(~bin.MinY);
 			const double minD = DecodeOrderedFloat(~bin.MinD);

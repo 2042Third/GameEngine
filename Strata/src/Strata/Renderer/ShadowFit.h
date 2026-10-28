@@ -92,6 +92,10 @@ namespace Strata
 		static constexpr float c_UnfittedDistribution = 0.8f;
 		// A fitted far bound from this share of the shadow distance on is the shadow distance.
 		static constexpr float c_FarToDistance = 0.7f;
+		// The nearest receivers are left out of the fit while together they hold less than this share of the receiver pixels (a
+		// leaf or a tree top at a flying camera would spend the first cascades on distances almost nothing occupies); containment
+		// shades them from a coarser cascade.
+		static constexpr double c_NearOutlierShare = 0.01;
 		// A fitted square is the receivers' box grown by this factor, and by the filter's reach on each side in its own texels
 		// (the shaders' containment margin).
 		static constexpr double c_SquareGrowth = 1.05;
@@ -139,6 +143,9 @@ namespace Strata
 			double Farthest = 0.0;
 		};
 
+		// The readback's nearest receiver distance once the outliers nearer than it are left out (c_NearOutlierShare); 0 without
+		// receivers.
+		double GetFittedNearest() const;
 		// The fitted layout's bounds from the readback (false: no receivers within the shadow distance).
 		bool GetBoundTargets(const ShadowFitView& view, int32_t& nearQuarters, int32_t& farQuarters) const;
 		void Reproject(const ShadowFitView& view);

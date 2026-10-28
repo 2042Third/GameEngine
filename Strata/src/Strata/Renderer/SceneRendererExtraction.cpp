@@ -69,6 +69,22 @@ namespace Strata
 		// many of the cascade's texels: smaller casters only flicker in and out of texels (SceneRendererStats::SubTexelCasters).
 		constexpr float c_MinCasterTexels = 1.0f;
 
+		// A lower bound of the view depth of any point of `bounds` the camera sees: the nearest of its corners' depths, and for a
+		// perspective view its distance from the camera times `cosHalfDiagonal` (a point in view lies within the view's half
+		// diagonal of its direction), which a large box around the camera (a sea's water) keeps from reaching the camera.
+		float GetNearestViewDepth(const SceneCamera& camera, const AABB& bounds, float cosHalfDiagonal)
+		{
+			float nearest = std::numeric_limits<float>::infinity();
+			for (uint32_t corner = 0; corner < 8; corner++)
+			{
+				const glm::vec3 point((corner & 1) != 0 ? bounds.Max.x : bounds.Min.x, (corner & 2) != 0 ? bounds.Max.y : bounds.Min.y,
+					(corner & 4) != 0 ? bounds.Max.z : bounds.Min.z);
+				nearest = std::min(nearest, -(camera.View * glm::vec4(point, 1.0f)).z);
+			}
+			const glm::vec3 closest = glm::clamp(camera.Position, bounds.Min, bounds.Max);
+			return std::max(nearest, glm::length(closest - camera.Position) * cosHalfDiagonal);
+		}
+
 		// The sort key of a draw: pipeline state first (cascade, alpha mask, winding, culling, skinning), then mesh, submesh
 		// and level of detail, which together make a batch; the material in the lowest bits only when batches are split by
 		// material.
@@ -941,6 +957,10 @@ namespace Strata
 		const float viewportHeight = static_cast<float>(m_ViewportSize.y);
 		const bool batchAcrossMaterials = m_Specification.BatchAcrossMaterials;
 		const TextureStreamingPolicy::ViewScale viewScale = TextureStreamingPolicy::GetViewScale(camera, viewportHeight);
+		// Every point in view lies within the view's half diagonal of its direction (perspective views).
+		const float tanHalfFOV = std::tan(camera.VerticalFOV * 0.5f);
+		const float aspect = static_cast<float>(m_ViewportSize.x) / static_cast<float>(std::max(m_ViewportSize.y, 1u));
+		const float cosHalfDiagonal = camera.Orthographic ? 0.0f : 1.0f / std::sqrt(1.0f + tanHalfFOV * tanHalfFOV * (1.0f + aspect * aspect));
 		const bool skins = renderScene.HasSkinProxies(); // Scenes without skinned meshes skip the per-proxy checks
 		// Mesh renderers smaller than this many pixels on screen are not drawn (the GPU's culling leaves out the same ones).
 		const float minPixels = m_Specification.Quality.MinProjectedPixels;
@@ -1028,7 +1048,7 @@ namespace Strata
 						output.Transparent.push_back(TransparentDraw { viewDepth, renderScene.GetEntityID(proxy), submeshIndex, instance, meshSlot, lod, doubleSided, mirrored, skinned,
 							(materialFlags & c_MaterialTransmissive) != 0 });
 						// Transparent surfaces are not in the depth the cascades' fit measures: their nearest point bounds its near end.
-						nearestTransparent = std::min(nearestTransparent, viewDepth - 0.5f * glm::length(bounds.Max - bounds.Min));
+						nearestTransparent = std::min(nearestTransparent, GetNearestViewDepth(camera, bounds, cosHalfDiagonal));
 						continue;
 					}
 					if (opaqueDraws)

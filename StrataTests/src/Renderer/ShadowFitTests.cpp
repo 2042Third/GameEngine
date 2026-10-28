@@ -123,6 +123,7 @@ namespace
 			out.MaxX = std::max(out.MaxX, EncodeOrdered(view.x));
 			out.MaxY = std::max(out.MaxY, EncodeOrdered(view.y));
 			out.MaxD = std::max(out.MaxD, EncodeOrdered(distance));
+			out.Pixels++;
 			result.Nearest = std::max(result.Nearest, ~EncodeOrdered(distance));
 			result.Farthest = std::max(result.Farthest, EncodeOrdered(distance));
 			result.SurfacePixels++;
@@ -303,10 +304,11 @@ TEST_SUITE("Renderer.ShadowFit")
 		}
 		CHECK(tracker.GetLayout().Far == shrunk);
 
-		// The near bound likewise: a closer receiver lowers it at once.
+		// The near bound likewise: a closer receiver (on more than 1% of the pixels: no outlier) lowers it at once.
 		const float nearBefore = tracker.GetLayout().Near;
 		std::vector<glm::vec3> closer = near20;
-		closer.push_back(glm::vec3(0.0f, 0.0f, -1.0f));
+		for (size_t pixel = 0; pixel < near20.size() / 50; pixel++)
+			closer.push_back(glm::vec3(0.001f * static_cast<float>(pixel), 0.0f, -1.0f));
 		readback = MakeReadback(camera, closer, tracker, render++);
 		CHECK(tracker.Update(view, &readback).Near < nearBefore);
 	}
@@ -370,6 +372,43 @@ TEST_SUITE("Renderer.ShadowFit")
 		const float withGlass = tracker.Update(view, nullptr).Near;
 		CHECK(withGlass <= 0.8f / std::sqrt(2.0f));
 		CHECK(withGlass > 0.25f);
+	}
+
+	TEST_CASE("Receivers at the camera holding under 1% of the pixels neither pull the near end nor grow the squares")
+	{
+		const TestCamera camera = BoardCamera();
+		const ShadowFitView view = MakeView(camera);
+		const std::vector<glm::vec3> board = GetGroundReceivers(camera, 1000.0f, 10.0f);
+		const auto fit = [&](const std::vector<glm::vec3>& receivers)
+		{
+			ShadowFitTracker tracker;
+			tracker.Update(view, nullptr);
+			const ShadowFitReadback readback = MakeReadback(camera, receivers, tracker, 1);
+			return tracker.Update(view, &readback);
+		};
+		const ShadowFitLayout plain = fit(board);
+		REQUIRE(plain.SquaresFitted);
+		CHECK(plain.Near > 5.0f);
+
+		// A leaf a metre from the camera, on fewer pixels than 1% of the receivers': the layout is the board's alone.
+		const glm::vec3 leafCenter = camera.Position + camera.Rotation * glm::vec3(0.3f, -0.2f, -1.0f);
+		std::vector<glm::vec3> withLeaf = board;
+		const size_t leafPixels = board.size() / 200;
+		for (size_t pixel = 0; pixel < leafPixels; pixel++)
+			withLeaf.push_back(leafCenter + camera.Rotation * glm::vec3(0.01f * static_cast<float>(pixel % 10), 0.01f * static_cast<float>(pixel / 10), 0.0f));
+		const ShadowFitLayout leaf = fit(withLeaf);
+		CHECK(leaf.Near == plain.Near);
+		for (uint32_t cascade = 0; cascade < plain.CascadeCount; cascade++)
+		{
+			CHECK(leaf.Cascades[cascade].SliceFar == plain.Cascades[cascade].SliceFar);
+			CHECK(leaf.Cascades[cascade].Side == plain.Cascades[cascade].Side);
+		}
+
+		// On more than 1% of them it is a receiver like any other: the near end comes to it.
+		std::vector<glm::vec3> withBranch = board;
+		for (size_t pixel = 0; pixel < board.size() / 50; pixel++)
+			withBranch.push_back(leafCenter + camera.Rotation * glm::vec3(0.01f * static_cast<float>(pixel % 20), 0.01f * static_cast<float>(pixel / 20), 0.0f));
+		CHECK(fit(withBranch).Near < 1.0f);
 	}
 
 	TEST_CASE("The last cascade keeps its slice's sphere, that of [N, D] for narrow fields of view")

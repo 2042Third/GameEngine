@@ -325,6 +325,31 @@ TEST_SUITE("GPU.SceneRenderer.ShadowFit")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A sea-sized transparent surface around the camera does not pull the fitted range to the camera")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		PlaygroundScene playground(assets);
+		Scene& scene = playground.SceneData;
+		// Transparent surfaces are in no depth the fit measures: their nearest visible point bounds the near end, and a plane
+		// whose box holds the camera's position must count from where the view can see it, not from its box.
+		MaterialProperties water;
+		water.BaseColor = glm::vec4(0.2f, 0.4f, 0.6f, 0.5f);
+		water.AlphaMode = MaterialAlphaMode::Blend;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(water), glm::vec3(0.0f, -10.0f, 0.0f), "Sea").GetComponent<TransformComponent>().Scale =
+			glm::vec3(400.0f);
+		constexpr uint32_t size = 128;
+		SceneRenderer renderer(FittedSpecification());
+		renderer.SetViewportSize(size, size);
+		const SceneCamera camera = PlaygroundCamera(size, size);
+		CHECK(RenderUntilFitSettled(renderer, scene, camera, 8) <= 8);
+		REQUIRE(renderer.GetStats().ShadowFit);
+		CHECK(renderer.GetStats().ShadowFitNear > 10.0f);
+		CHECK(renderer.GetTransparentBatches().size() == 1); // The sea is drawn
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("First frames and camera cuts use Strata 0.6.0's layout")
 	{
 		GPUContext gpu;
