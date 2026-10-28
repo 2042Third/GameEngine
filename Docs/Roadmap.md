@@ -645,17 +645,25 @@ Open items and deferrals later waves own:
 - Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
   `GameRuntime`, the editor and many tests use the script engine directly; physics, audio and animation can be left
   out (`STRATA_WITH_PHYSICS`, `STRATA_WITH_AUDIO`, `STRATA_WITH_ANIMATION`, wave 4's `engine-modules`).
-- Physics at runtime (wave 7's `physics-runtime`, steps 1-3 and the first item of 4 landed): the step's parts, box3d's
+- Physics at runtime (wave 7's `physics-runtime`, steps 1-3 and 5 and most of 4 landed): the step's parts, box3d's
   stages and counters, sleeping bodies and how bodies settle are measured (`physics.stats`, `editor.status`, the perf log,
   the Streaming panel); the project's `Physics.Simulation` tunes recycling, sleeping and the contacts (defaults: box3d's 5
   cm, a sleep threshold of 0.08 m/s); character controllers and kinematic bodies never recycle; contacts nobody tracks cost
-  no lookups. Not done, measured as far as the loaded machine allowed: poses written back from box3d's move events (built
-  and tested, no gain an A/B of the loaded machine could resolve: the patch waits in the stream's report), the
-  write-back's prelude in parallel, box3d's worker rule (the sweep's `workers` command is ready), the characters' prelude,
-  the per-record pair count of tracked scenes, the unload's Strata share against box3d's 5.3 ms, `Perf.Physics.Sleeping70k`
-  and the settle CPU metrics, then what lay below the cut: the scene's world matrices from physics, rolling resistance,
-  deferred removal of an unloading cell's statics, a per-scene override of `Physics.Simulation`, and upstream requests to
-  box3d (a settable recycle angle, a run-time reserve, bulk insertion and removal). The sweep found too: 1 m tiles bump
+  no lookups, and tracked ones are looked up only for bodies that have some; the write-back and the synchronization read
+  records and components on the job threads (Strata's part of a 70,000-box step 11.1 -> 7.7 ms, then the sync 3.3 -> 2.2
+  ms, in A/Bs on the loaded machine). Not done: poses written back from box3d's move events (a move event sits at the
+  body's place in box3d's awake set, the same random access `b3Body_GetTransform` makes, and copying it in the serial event
+  loop moved that access to the main thread: no gain in two A/Bs), box3d's worker rule (the sweep of 4-24 workers on the
+  loaded machine varied box3d's 70,000-box step from 17 to 60 ms within one count: it needs a quiet machine), the
+  characters' prelude (0.05 of a 0.8 ms crowd step, below the 3% an item needs; the moves take 0.37 ms in parallel and
+  the serial part after them, the entities' writes, the presence bodies' teleports through box3d and the pushes, 0.3 ms),
+  the unload's Strata share (physics' changes take 19-27 ms of the request frame against box3d's 5.4-8.3 ms for
+  the same disables), and box3d's cost of sleeping bodies (`Perf.Physics.Sleeping70k.StepRatio` 4.4-7.3 against its 1.2
+  target: 1,000 falling boxes beside 70,000 sleeping ones take box3d 2.35 ms instead of 0.23, its transforms stage enlarging
+  moving proxies up a dynamic tree that holds the sleeping ones, while Strata's part stays at 0.1-0.2 ms); then what lay
+  below the cut: the scene's world matrices from physics, rolling resistance, deferred removal of an unloading cell's
+  statics, a per-scene override of `Physics.Simulation`, and upstream requests to box3d (a settable recycle angle, a
+  run-time reserve, bulk insertion and removal, sleeping proxies kept apart from moving ones). The sweep found too: 1 m tiles bump
   sliding boxes and rolling balls at their inner edges (44 mm at 2 m/s, 630 mm at 8 m/s, with or without recycling), which
   a merged floor or a triangle mesh avoids; the throwaway build of box3d with another recycle angle was not made.
 - Physics: dynamic bodies below other dynamic bodies are still written back one by one; a collider built from a mesh
