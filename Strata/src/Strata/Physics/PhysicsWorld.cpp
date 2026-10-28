@@ -3346,25 +3346,34 @@ namespace Strata
 			data.LastSyncedBodies = 0;
 			data.SyncFollowers.clear();
 
+			// The awake bodies' records are read by the jobs below, not here: that is a cache miss per body, and a busy world
+			// has tens of thousands awake.
 			std::vector<std::pair<entt::entity, BodyRecord*>>& awake = data.AwakeRecords;
 			awake.clear();
 			for (const int32_t index : data.AwakeBodies)
 			{
 				const BodySlot& slot = data.BodySlots[static_cast<size_t>(index)];
-				if (slot.Used && slot.Record && slot.Record->InSimulation && slot.Record->Type != RigidBodyType::Static)
+				if (slot.Used && slot.Record)
 					awake.emplace_back(slot.Entity, slot.Record);
 			}
 
 			const Scene& scene = *data.OwnerScene;
 			const uint64_t pass = data.SyncPass;
 			std::atomic<uint32_t> unchanged = 0;
+			// Drops the bodies that need nothing from the list: static ones and those out of the simulation, and those whose
+			// entity is where the last step put it (counted in LastSyncedBodies).
 			const auto skipUnchanged = [&](uint32_t begin, uint32_t end)
 			{
 				uint32_t skipped = 0;
 				for (uint32_t index = begin; index < end; index++)
 				{
 					auto& [handle, record] = awake[index];
-					if (record->TransformDirty || record->KinematicMoving || !record->InSimulation)
+					if (!record->InSimulation || record->Type == RigidBodyType::Static)
+					{
+						record = nullptr;
+						continue;
+					}
+					if (record->TransformDirty || record->KinematicMoving)
 						continue;
 					const glm::mat4* world = scene.FindCurrentWorldTransform(handle);
 					if (!world || *world != record->LastWorldTransform)

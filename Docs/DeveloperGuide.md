@@ -2043,7 +2043,9 @@ that may not include the Physics module: the runtime's perf log, `editor.status`
   the bodies; reading records and components joined the parallel writes, and bodies below static parents are written in
   parallel too (`WriteBackDynamicBodies`). An interleaved A/B of five pairs (the settle helper's busy-phase medians, same
   machine and load) measured the write-back 7.03 -> 3.82 ms and Strata's step 11.06 -> 7.73 ms at 70,000 boxes, 2.60 -> 1.37
-  and 5.15 -> 3.72 ms at 30,000 with the floor tracked, and 0.49 -> 0.29 and 0.70 -> 0.53 ms at 10,000.
+  and 5.15 -> 3.72 ms at 30,000 with the floor tracked, and 0.49 -> 0.29 and 0.70 -> 0.53 ms at 10,000. The
+  synchronization before the step likewise reads the awake bodies' records in its parallel chunks, not on the main thread
+  (`SyncEntitiesToBodies`): its part at 70,000 boxes went from 3.32 to 2.17 ms (five pairs).
 
 ### Settling and the sweep
 

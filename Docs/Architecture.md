@@ -423,8 +423,8 @@ looks up tens of thousands of them in a frame; the index points into the map's n
 only through `EmplaceRecord` and `EraseRecord`, which assert that the counts agree). Bodies spawned and removed again before
 every step must not grow box3d's trees without end (`Physics.Capacity` runs such spawns in a helper process). Around each
 step the work on awake bodies runs on the job system: the synchronization visits the bodies awake after the last step
-(box3d's move events) and those woken since, skipping in parallel chunks those whose entity is where the last step put it
-(`Scene::FindCurrentWorldTransform` reads only current cached matrices), and the write-back writes the poses of the bodies
+(box3d's move events) and those woken since, reading their records and skipping in parallel chunks those whose entity is
+where the last step put it (`Scene::FindCurrentWorldTransform` reads only current cached matrices), and the write-back writes the poses of the bodies
 box3d moved: the main thread only lists them in body order, and parallel chunks read their records and components
 (through storages fetched beforehand), mark the dynamic ones written, write those without a parent, then those whose
 parent's cached world transform is current and no dynamic ancestor was written, each touching only its own record and
