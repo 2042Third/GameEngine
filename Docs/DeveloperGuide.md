@@ -4295,8 +4295,9 @@ the sample), and `Changes` says what was trimmed or converted. Every CC0 and CC-
 `Samples.Content` (`StrataTests/src/Samples/`) checks every sample the index lists and that no directory is unlisted: the
 files above, every source asset under `Assets/` (the extensions importers read) credited by exactly one row, no row that
 credits nothing, the licenses, attributions and notices, the links of `README.md` and `CREDITS.md`, and the budgets (MB = 1,000,000 bytes): 25 MB of source assets
-and 20 MB of documents per sample, and over the standard samples 55 MB of binary files (they barely compress) and 50 MB
-of documents (about tenfold smaller in archives), so that they grow release archives by at most about 60 MB. A graphical
+and 20 MB of documents per sample, 55 MB of binary files over the standard samples (they barely compress) and 50 MB of
+documents over all samples (about tenfold smaller in archives), so that the standard samples grow release archives by
+at most about 60 MB. A graphical
 showcase's entry in `Samples.json` says `"Budget": "Showcase"` (any other value is refused): it may hold 80 MB of source
 assets, and the showcases' binary files count against 85 MB of their own, apart from the others' 55 MB
 (`SampleBudgetClass`, `SampleBudgets::ShowcaseSourceAssetBytes`, `ShowcaseTotalBinaryBytes`), so that with showcases
