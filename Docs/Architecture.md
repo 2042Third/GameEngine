@@ -299,10 +299,13 @@ texture costs the driver about 0.1 ms, so every frame destroys what completed wi
 the oldest first, at least one) and every release as many as it hands over, which keeps the queue bounded without
 frames) and the blocking `ReadTexture`. `RenderScene` keeps a scene's render proxies in a `SpatialIndex`,
 and `SceneRenderer` extracts each frame's draws from it (`SceneRendererExtraction.cpp`, resolving assets through its
-`AssetResolveCache`; see [Render scene](#render-scene)). `SceneRenderer` draws a scene (light clustering, shadow cascades and
+`AssetResolveCache`; see [Render scene](#render-scene)). `SceneRenderer` draws a scene (light clustering, the atmosphere's
+aerial perspective volume, shadow cascades and
 point and spot lights' shadow views, depth/normal/entity-ID prepass (with motion vectors and, for screen-space reflections, the
-surface target), GTAO and its denoiser, reflection probes' conversions and the screen-space reflections' trace, forward PBR, sky, a copy of the
-image so far for glass, transparents (glass first),
+surface target), GTAO and its denoiser, reflection probes' conversions and the screen-space reflections (the Checkerboard
+trace, or the Spatial modes' nearest-depth pyramid, trace and resolve), forward PBR (hazed by aerial perspective, then
+fogged), sky, a copy of the image so far for glass (and a full-resolution one for the next frame's Spatial reflections),
+transparents (glass first, hazed and fogged as well),
 the TAA resolve, exposure, bloom, tone mapping, FXAA, then overlays (a lighting debug view and its statistics first)
 and text) into render targets of its viewport size. Temporal state belongs to the renderer, never to the scene or the
 camera: each renderer jitters only its frame's copy of the camera and keeps its own motion history (the previous frame's

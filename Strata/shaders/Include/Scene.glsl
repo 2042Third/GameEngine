@@ -4,7 +4,8 @@
 // Resources shared by the scene passes. Layouts mirror the structs in Strata/Renderer/SceneRenderData.h; keep them
 // in sync (std140 for the constant buffer, std430 for storage buffers, 16-byte aligned members).
 
-// The scene layout's slots (SceneRenderer::CreateResources): SRV 0-21 and 27, samplers 0-5 (materials), 8, 9 and 10, CBV 0.
+// The scene layout's slots (SceneRenderer::CreateResources): SRV 0-21, 27 and 29 (the aerial perspective volume), samplers 0-5
+// (materials), 8, 9 and 10, CBV 0.
 // SRV 22-26 belong to the compute layouts of temporal anti-aliasing and screen-space reflections, never to this one.
 // Assigned for wave 7: SRV 28 the sun's screen-space shadow mask, 32 the cascades' depth ranges and 33 the shadows'
 // blue-noise tile (sun-shadows); 29 the aerial perspective volume, 30 and 31 the irradiance volume, 34 volumetric fog
