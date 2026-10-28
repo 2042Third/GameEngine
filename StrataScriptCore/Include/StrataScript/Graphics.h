@@ -43,8 +43,8 @@ namespace Strata
 	struct GraphicsOption
 	{
 		std::string Name;        // What Get and Set take
-		std::string Title;       // For the menu
-		std::string Description;
+		std::string Title;       // For the menu (English: a game that translates its menu writes its own)
+		std::string Description; // What it changes and what it costs, for the menu's tooltip or help line
 		GraphicsOptionType Type = GraphicsOptionType::Bool;
 		double Min = 0.0;        // Int and Float
 		double Max = 0.0;

@@ -400,6 +400,24 @@ TEST_SUITE("Renderer.Quality")
 		}
 	}
 
+	TEST_CASE("The options' texts read in a game's options menu as well as in the editor")
+	{
+		// Graphics::Options hands every field's title and description to games' menus: they say what an option changes and
+		// costs, never where the editor shows it, which engine version it matches, or that it applies under Custom only (a
+		// player's change of a row switches to Custom itself).
+		for (const SettingsField& field : RendererQuality::MakeSection().Fields)
+		{
+			CAPTURE(field.Name);
+			CHECK_FALSE(field.Title.empty());
+			CHECK_FALSE(field.Description.empty());
+			for (const char* phrase : { "Custom only", "Strata", "0.6.0", "fields below", "the page", "column" })
+			{
+				CAPTURE(phrase);
+				CHECK(field.Description.find(phrase) == std::string::npos);
+			}
+		}
+	}
+
 	TEST_CASE("Presets round-trip through Custom")
 	{
 		// Every named preset can be written as Custom fields (what AutoFine exists for), and a switch to Custom keeps its look.

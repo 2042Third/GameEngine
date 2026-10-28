@@ -360,31 +360,34 @@ namespace Strata
 			std::vector<std::string> presets;
 			for (const PresetName& entry : c_PresetNames)
 				presets.emplace_back(entry.Name);
-			section.Fields.push_back(EnumField("Preset", "Preset", "The preset: Low, Medium (Strata 0.6.0's costs), High (the default), Ultra, or "
-				"Custom, which uses the fields below. Under a preset the fields are ignored.", std::move(presets), "High"));
+			// The fields' titles and descriptions reach players too (a game's options menu lists them, Graphics::Options): they say
+			// what an option changes and what it costs, never engine versions or where the editor shows them.
+			section.Fields.push_back(EnumField("Preset", "Preset", "The quality preset: Low, Medium, High or Ultra sets every other option to its "
+				"value; Custom uses the values chosen for them.", std::move(presets), "High"));
 			std::vector<std::string> resolutions;
 			for (const ResolutionName& entry : c_ResolutionNames)
 				resolutions.emplace_back(entry.Name);
 			// One field per knob, in the rows' order, each defaulting to High's value: choosing Custom from High changes nothing.
-			section.Fields.push_back(EnumField("ShadowResolution", "Shadow resolution", "Custom only: texels each way of every sun shadow cascade. "
-				"Auto: 2048 below 1440 output rows, 4096 from 1440 (about one texel per screen pixel at each cascade's far end); AutoFine: 4096 and "
-				"8192. Memory per view: cascades x size x size x 4 bytes (4 x 4096: 256 MiB).", std::move(resolutions),
-				ShadowResolutionToString(high.ShadowResolution)));
-			section.Fields.push_back(NumberField("ShadowCascades", "Shadow cascades", "Custom only: sun shadow cascades. Fewer cost less but spread the "
-				"same texels over the shadow distance.", SettingsFieldType::Int, 1, RenderData::c_MaxCascades, high.ShadowCascades));
-			section.Fields.push_back(EnumField("LocalShadowAtlasSize", "Point and spot shadow atlas", "Custom only: texels each way of the shadow "
-				"atlas point and spot lights share (4096: 64 MiB per view).", SizeOptions(c_AtlasSizeOptions), std::to_string(high.LocalShadowAtlasSize)));
-			section.Fields.push_back(EnumField("LocalShadowMaxTile", "Largest point and spot shadow tile", "Custom only: the largest tile a point or "
-				"spot light's shadow view gets (at most the atlas); tiles follow how large the light looks on screen.", SizeOptions(c_MaxTileOptions),
-				std::to_string(high.LocalShadowMaxTile)));
-			section.Fields.push_back(NumberField("MaxShadowedLocalLights", "Shadowed point and spot lights", "Custom only: point and spot lights "
-				"that cast shadows in a view, the most relevant first.", SettingsFieldType::Int, 0, RenderData::c_MaxShadowedLocalLights,
+			section.Fields.push_back(EnumField("ShadowResolution", "Shadow resolution", "Texels each way of every sun shadow cascade: sharper sun "
+				"shadows for more GPU memory and time. Auto: 2048 below 1440 output rows, 4096 from 1440 (about one texel per screen pixel at each "
+				"cascade's far end); AutoFine: 4096 and 8192. Memory per view: cascades x size x size x 4 bytes (4 x 4096: 256 MiB).",
+				std::move(resolutions), ShadowResolutionToString(high.ShadowResolution)));
+			section.Fields.push_back(NumberField("ShadowCascades", "Shadow cascades", "Sun shadow cascades: fewer cost less GPU time and memory but "
+				"spread the same texels over the shadow distance.", SettingsFieldType::Int, 1, RenderData::c_MaxCascades, high.ShadowCascades));
+			section.Fields.push_back(EnumField("LocalShadowAtlasSize", "Point and spot shadow atlas", "Texels each way of the shadow atlas point and "
+				"spot lights share: sharper shadows of those lights for more GPU memory (4096: 64 MiB per view).", SizeOptions(c_AtlasSizeOptions),
+				std::to_string(high.LocalShadowAtlasSize)));
+			section.Fields.push_back(EnumField("LocalShadowMaxTile", "Largest point and spot shadow tile", "The largest tile of the atlas a point or "
+				"spot light's shadow gets (at most the atlas): tiles follow how large the light looks on screen, and larger ones are sharper.",
+				SizeOptions(c_MaxTileOptions), std::to_string(high.LocalShadowMaxTile)));
+			section.Fields.push_back(NumberField("MaxShadowedLocalLights", "Shadowed point and spot lights", "Point and spot lights that cast "
+				"shadows in a view, the most relevant first: more cost more GPU time.", SettingsFieldType::Int, 0, RenderData::c_MaxShadowedLocalLights,
 				high.MaxShadowedLocalLights));
-			section.Fields.push_back(NumberField("LODErrorPixels", "Level of detail error (pixels)", "Custom only: levels of detail are chosen so "
-				"that their error spans at most this many pixels on screen (0: full detail).", SettingsFieldType::Float, 0.0, c_MaxPixels,
-				high.LODErrorPixels));
-			section.Fields.push_back(NumberField("MinProjectedPixels", "Smallest drawn size (pixels)", "Custom only: meshes smaller on screen than "
-				"this many pixels are not drawn (0: all).", SettingsFieldType::Float, 0.0, c_MaxPixels, high.MinProjectedPixels));
+			section.Fields.push_back(NumberField("LODErrorPixels", "Level of detail error (pixels)", "Levels of detail are chosen so that their "
+				"error spans at most this many pixels on screen: lower draws more triangles (0: full detail).", SettingsFieldType::Float, 0.0,
+				c_MaxPixels, high.LODErrorPixels));
+			section.Fields.push_back(NumberField("MinProjectedPixels", "Smallest drawn size (pixels)", "Meshes smaller on screen than this many "
+				"pixels are not drawn: higher draws fewer (0: all).", SettingsFieldType::Float, 0.0, c_MaxPixels, high.MinProjectedPixels));
 			return section;
 		}
 

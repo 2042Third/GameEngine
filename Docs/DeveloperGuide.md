@@ -3209,8 +3209,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `renderStats.shadowMapSize` and `renderStats.localShadowTileSizes` in `editor.perf` and every capture.
 - **Adding a knob (a row):** a member of the struct with Medium's value as its default (0.6.0's cost: Medium never
   changes what a test or perf scene costs), a row `c_<Knob>Row` of its four presets on one line in
-  `RendererQuality.cpp`, a line in `GetPreset`, `FromSectionValue` and `ToSectionValue`, a field of the section
-  described for agents (its default High's value), `Clamp`'s line, its use in the renderer (both draw paths, and every
+  `RendererQuality.cpp`, a line in `GetPreset`, `FromSectionValue` and `ToSectionValue`, a field of the section (its
+  default High's value) whose title and description say what it changes and costs to agents, people and players alike
+  (games' options menus show them through `Graphics::Options`: no "Custom only", engine versions or the editor's layout,
+  which `Renderer.Quality` checks), `Clamp`'s line, its use in the renderer (both draw paths, and every
   cache that must notice it), a check of its column in `Renderer.Quality`'s first case, a non-default Custom value in
   `FeatureTest.stproj`, a line in the traits table (below), and its cost in the table above. `HasSameKnobs` and
   `renderStats.quality` need no line. Each landing that adds rows raises `RendererQuality::c_SectionVersion` by one (an
