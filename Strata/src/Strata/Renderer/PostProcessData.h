@@ -40,8 +40,13 @@ namespace Strata
 			float ChromaticAberration;  //      the lateral aberration's scale of red and blue about the center (k); 0 = off
 			uint32_t GrainFrame;        //      the frame's number: the grain changes every frame, as film's
 			float ColorLookupIntensity; //      PostProcessComponent::ColorLookupIntensity of the lookup bound at set 1; 0: none
+			float LensFlare;            // 160: PostProcessComponent::LensFlare * c_LensFlareScale; 0: no flare bound at set 1
+			float Starburst;            //      the rays' brightness at the disk: c_LensFlareRayGain times a white card's luminance in the
+			                            //      directional light; 0 without a disk in front of the camera
+			glm::vec2 Sun;              //      the disk, in UV
 		};
-		static_assert(sizeof(TonemapConstants) == 160);
+		static_assert(sizeof(TonemapConstants) == 176);
+		static_assert(offsetof(TonemapConstants, LensFlare) == 160 && offsetof(TonemapConstants, Sun) == 168);
 		static_assert(offsetof(TonemapConstants, ColorRows) == 64 && offsetof(TonemapConstants, ColorOffset) == 112);
 		static_assert(offsetof(TonemapConstants, ColorPower) == 128 && offsetof(TonemapConstants, FilmGrain) == 144);
 		// ChromaticAberration 1 shifts red and blue half a pixel at a 3840x2160 image's corners (a fixed share of the image at
@@ -49,6 +54,25 @@ namespace Strata
 		constexpr float c_ChromaticAberrationScale = 0.5f / (0.5f * 3840.0f);
 		// The grain's strength in display codes' fraction at FilmGrain 1, in the mid-tones (PostProcess/Tonemap.frag).
 		constexpr float c_FilmGrainAmplitude = 0.04f;
+		// PostProcess/LensFlare.comp (push constants): the ghosts and the halo at a quarter of the resolution, and in alpha the
+		// share of the disk's surroundings that sees the sky (the starburst's, which the tone mapping draws).
+		struct LensFlareParameters
+		{
+			glm::vec2 Sun;      // The directional light's disk, in UV (with c_LensFlareSun)
+			float Aspect;       // Width / height
+			uint32_t Flags;     // c_LensFlareSun: the disk is in front of the camera
+			float SunTapRadius; // Image heights: the depth taps that see whether the disk is covered
+			float Padding0;
+			float Padding1;
+			float Padding2;
+		};
+		static_assert(sizeof(LensFlareParameters) == 32);
+		constexpr uint32_t c_LensFlareSun = 1u;
+		constexpr float c_LensFlareSunTapRadius = 0.01f;
+		// What the tone mapping adds of the flare at LensFlare 1 (restraint: a sun in view leaves faint ghosts).
+		constexpr float c_LensFlareScale = 0.02f;
+		// The starburst's rays at the disk, in white cards' luminances in the directional light (before c_LensFlareScale).
+		constexpr float c_LensFlareRayGain = 16.0f;
 		// TonemapConstants::ColorFlags: the grading applies; the source's alpha marks the pixels the motion blur or the depth of
 		// field blurred (no sharpening there).
 		constexpr uint32_t c_TonemapColorGrading = 1u;

@@ -538,7 +538,10 @@ namespace Strata
 					"and the saturation. Nothing applies while it loads" })
 			.Property("ColorLookupIntensity", &PostProcessComponent::ColorLookupIntensity,
 				WithTooltip(Slider(0.0f, 1.0f), "How much of the color lookup's grade shows: 1 all of it, 0.5 halfway between the image and the "
-					"graded image"));
+					"graded image"))
+			.Property("LensFlare", &PostProcessComponent::LensFlare,
+				WithTooltip(Slider(0.0f, 1.0f), "A lens's flares around very bright light, with restraint: faint tinted ghosts mirrored through the "
+					"image's center, a halo, and six rays around the sun's disk while it is in view and not covered. 0 none"));
 		// Exposure is the compensation SceneRenderer applies with automatic exposure too: always active.
 		SetInactiveReasons<PostProcessComponent>({ "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed", "AutoExposureMetering",
 			"AutoExposureLowPercentile", "AutoExposureHighPercentile", "AutoExposureLightSpeed", "AutoExposureKey" }, &WithAutoExposure);

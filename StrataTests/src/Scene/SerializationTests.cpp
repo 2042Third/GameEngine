@@ -581,6 +581,15 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(loaded.ColorLookupIntensity == 0.4f);
 		loaded = load({ { "ColorLookupIntensity", 3.0 } }, warnings);
 		CHECK(loaded.ColorLookupIntensity == 1.0f);
+
+		// Lens flares: off in older files; set, they round-trip and are clamped.
+		loaded = load({ { "Vignette", 0.2 } }, warnings);
+		CHECK(loaded.LensFlare == 0.0f);
+		loaded = load({ { "LensFlare", 0.35 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.LensFlare == 0.35f);
+		loaded = load({ { "LensFlare", -1.0 } }, warnings);
+		CHECK(loaded.LensFlare == 0.0f);
 	}
 
 	TEST_CASE("Cameras saved before depth of field load without it; their lens round-trips and is clamped")

@@ -3887,6 +3887,33 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     `GPU.SceneRenderer.ColorLookup` (a 9^3 grade within one code of the CPU's lookup at intensities 1 and 0.5, the identity
     within one code of none, nothing while it is not loaded). The feature project's `Lighting/Feature/Warm.cube` (17^3,
     written by its `GenerateAssets.py`) is on the active Post Process at 0.5.
+- **Lens flares** (`PostProcessComponent::LensFlare`, 0 to 1, off by default; `RenderLensFlare`, `PostProcess/LensFlare.comp`,
+  `RenderData::LensFlareParameters`; in `GPU.Post`):
+  - One compute pass at a quarter of the resolution (`m_LensFlareTexture`, RGBA16F, made by the first frame that flares
+    and released with the render targets) reads the bloom chain's level 1 (exposed) between the chain's downsamples and
+    upsamples (`RenderBloomDownsamples`, `RenderBloomUpsamples`): the upsamples add the deeper levels' glow, whose tent
+    filters leave diamond-shaped contours the flare's threshold would cut out. It reads through a cubic B-spline (four
+    bilinear taps), for soft, round ghosts. With bloom off the chain writes only levels 0 and 1 for it (the tone mapping
+    adds no bloom, and `SceneRendererStats::BloomLevels` stays 0); the flare runs only when the frame wrote level 1.
+  - Ghosts: four images of the bright part at `0.5 + (0.5 - uv) k`, k in {-1.6, -0.7, 0.45, 1.2} (gathered from
+    `0.5 + (0.5 - uv) / k`, nothing from outside the image), each with a fixed tint, fading toward the corners. The
+    bright part is the exposed light above 4, its excess compressed toward 16 (`excess / (1 + excess / 16)`): the sun's
+    thousands leave ghosts as faint as a lamp's. A halo gathers from the point 0.45 image heights toward the center,
+    weighted by that point's nearness to the center.
+  - Starburst: `RenderFrame` projects the directional light's disk (`-DirectionalLightDirection`, the unjittered camera;
+    only in front of a perspective camera); the flare pass counts the sky (reversed-Z 0) with 16 depth taps on two rings
+    around it (`c_LensFlareSunTapRadius`, 0.01 image heights) and writes that share into its target's alpha (every
+    texel alike). The tone mapping draws the six rays at full resolution (near the disk they are thinner than the flare's
+    texels, which would alias them away): `|cos 3 phi|^40`, fading over 0.08 heights, of `c_LensFlareRayGain` (16) times a
+    white card's luminance in the light (`2^keyReferenceLog2 / 0.18`, the exposure applied), scaled by the share.
+  - The tone mapping adds the flare after the bloom, tent-filtered up (four bilinear taps half a texel apart), at
+    `LensFlare * c_LensFlareScale` (0.02; `TonemapConstants`' last block at 160: `LensFlare`, `Starburst`, `Sun`, 176
+    bytes): it reads it through its second set beside the color lookup (`GetTonemapInputSet`, slots t3, t4 and s2, a 1x1
+    dummy without a flare).
+  - Stats: `LensFlare`, `LensFlareSun` (`renderStats.lensFlare`). Tests: `GPU.SceneRenderer.LensFlare` (off changes
+    nothing and makes no target; ghosts land where the mirror puts them, faint, and a source at the mirrored place flares as
+    the mirror image within 2 codes; the starburst along a ray and not between rays, and none behind a wall). The feature
+    scene's Environment has 0.5.
 - **Morphological anti-aliasing** (`AntiAliasingMode::Morphological`, appended: file and script name "Morphological"; the
   plan's "SMAA", named for what it is: designed here, it shares no pattern, corner or search table with the published
   SMAA). Three fullscreen passes in `GPU.Post` after the tone mapping, which writes the 10-bit intermediate as for FXAA:

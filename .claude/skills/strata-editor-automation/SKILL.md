@@ -502,7 +502,8 @@ manual exposure), `motionBlur` (`samples`, `tileSize` on frames that blurred; ed
 the Game view while the game plays), `depthOfField` (`focusDistance`, `focalLength`, `fNumber`, `infinityBlurPixels` of
 frames seen through a scene camera whose Camera has `DepthOfField` on: the Game view, a Scene view through the game's
 camera and captures with `camera: "scene"`; the editor camera never defocuses),
-`colorLookup` (the Post Process's color lookup was applied: false while its `.cube` asset loads),
+`colorLookup` (the Post Process's color lookup was applied: false while its `.cube` asset loads), `lensFlare` (null
+unless lens flares ran; `sunInFront`: the sun's disk was in front of the camera for the starburst),
 `gpuDriven` (the GPU culled it
 and built its draws: its counts are the GPU's, of a frame 2-3 frames older in `editor.perf` and of the captured frame in
 captures, once `gpuCounts` is true), `feedbackRequests` (its asset requests came from the GPU's visibility feedback of a

@@ -281,6 +281,7 @@
 						"ChromaticAberration": 0.5,
 						"ColorLookup": "F7A0000000000011",
 						"ColorLookupIntensity": 0.5,
+						"LensFlare": 0.5,
 						"ColorOffset": [
 							0.0,
 							0.0,

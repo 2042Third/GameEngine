@@ -87,13 +87,14 @@ namespace Strata
 			nvrhi::BindingLayoutItem::VolatileConstantBuffer(0)
 		};
 		m_TonemapBindingLayout = m_Device->createBindingLayout(tonemapLayout);
-		// Its second set: the color lookup (a 3D texture and the linear clamping sampler), or a dummy without one, so the
-		// sets of every post source stay as they are when the scene's lookup changes or loads. NVRHI wants the layouts of a
-		// pipeline to use different slots: t3 and s2, after the first set's.
-		nvrhi::BindingLayoutDesc colorLookupLayout;
-		colorLookupLayout.visibility = nvrhi::ShaderType::Pixel;
-		colorLookupLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(3), nvrhi::BindingLayoutItem::Sampler(2) };
-		m_ColorLookupLayout = m_Device->createBindingLayout(colorLookupLayout);
+		// Its second set: the color lookup (a 3D texture) and the lens flare, or dummies without them, with the linear clamping
+		// sampler, so the sets of every post source stay as they are when the scene's lookup changes or loads. NVRHI wants the
+		// layouts of a pipeline to use different slots: t3, t4 and s2, after the first set's.
+		nvrhi::BindingLayoutDesc tonemapInputLayout;
+		tonemapInputLayout.visibility = nvrhi::ShaderType::Pixel;
+		tonemapInputLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(3), nvrhi::BindingLayoutItem::Texture_SRV(4),
+			nvrhi::BindingLayoutItem::Sampler(2) };
+		m_TonemapInputLayout = m_Device->createBindingLayout(tonemapInputLayout);
 		// The tone mapping's parameters outgrew the 128 bytes of push constants NVRHI allows: a volatile constant buffer, written
 		// once by every frame that tone-maps. Its versions need no reservation of their own: each such frame writes FrameConstants
 		// first, and ReserveFrameConstantVersions starts a frame only while the frames in flight leave room for
@@ -150,6 +151,20 @@ namespace Strata
 		};
 		m_BloomBindingLayout = m_Device->createBindingLayout(bloomLayout);
 		m_BloomPipeline = CreateComputePipeline("PostProcess/Bloom.comp", m_BloomBindingLayout);
+		// The lens flare reads the bloom chain's level 1, the depth (the starburst's taps, point fetches) and the exposure.
+		nvrhi::BindingLayoutDesc lensFlareLayout;
+		lensFlareLayout.visibility = nvrhi::ShaderType::Compute;
+		lensFlareLayout.bindings = {
+			nvrhi::BindingLayoutItem::Texture_SRV(0),
+			nvrhi::BindingLayoutItem::Sampler(0),
+			nvrhi::BindingLayoutItem::Texture_SRV(1),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
+			nvrhi::BindingLayoutItem::Texture_UAV(0),
+			nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::LensFlareParameters))
+		};
+		m_LensFlareLayout = m_Device->createBindingLayout(lensFlareLayout);
+		ST_CORE_VERIFY(m_LensFlareLayout, "SceneRenderer: failed to create the lens flare's layout");
+		m_LensFlarePipeline = CreateComputePipeline("PostProcess/LensFlare.comp", m_LensFlareLayout);
 
 		nvrhi::BindingLayoutDesc fxaaLayout;
 		fxaaLayout.visibility = nvrhi::ShaderType::Pixel;
@@ -219,7 +234,7 @@ namespace Strata
 		m_DepthOfFieldDilatePipeline = CreateComputePipeline("PostProcess/DepthOfFieldDilate.comp", m_DepthOfFieldLayout);
 		m_DepthOfFieldGatherPipeline = CreateComputePipeline("PostProcess/DepthOfFieldGather.comp", m_DepthOfFieldLayout);
 		m_DepthOfFieldCompositePipeline = CreateComputePipeline("PostProcess/DepthOfFieldComposite.comp", m_DepthOfFieldLayout);
-		ST_CORE_VERIFY(m_TonemapBindingLayout && m_ColorLookupLayout && m_TonemapConstantBuffer && m_ExposureBindingLayout && m_HistogramPipeline
+		ST_CORE_VERIFY(m_TonemapBindingLayout && m_TonemapInputLayout && m_TonemapConstantBuffer && m_ExposureBindingLayout && m_HistogramPipeline
 			&& m_ExposurePipeline && m_HistogramBuffer && m_ExposureBuffer && exposureReadbacks && m_BloomBindingLayout && m_BloomPipeline && m_FXAABindingLayout && m_CopyBindingLayout,
 			"SceneRenderer: failed to create the post-processing resources");
 	}
@@ -428,6 +443,12 @@ namespace Strata
 		release(m_DepthOfFieldExposureSet);
 		release(m_DepthOfFieldBloomSet);
 		release(m_DepthOfFieldTonemapSet);
+		// The lens flare's, and the tone mapping's second set, which may bind its target.
+		release(m_LensFlareTexture);
+		release(m_LensFlareSet);
+		release(m_TonemapInputSet);
+		m_TonemapInputLookup = nullptr;
+		m_TonemapInputFlare = nullptr;
 	}
 
 	nvrhi::IBindingSet* SceneRenderer::SelectPostSet(PostSource source, nvrhi::IBindingSet* hdr, const std::array<nvrhi::BindingSetHandle, 2>& history,
@@ -953,53 +974,143 @@ namespace Strata
 		return std::clamp(span, 1.0f, static_cast<float>(std::max(levels, 1u)));
 	}
 
-	void SceneRenderer::RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet)
+	void SceneRenderer::DispatchBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* bindingSet, uint32_t mode,
+		uint32_t level, float upsampleWeight)
 	{
 		RenderData::BloomParameters parameters = {};
 		parameters.Threshold = std::max(settings.BloomThreshold, 0.0f);
 		parameters.Knee = parameters.Threshold * 0.5f;
 		parameters.InversePreExposure = 1.0f / m_PreExposure;
-		// The levels the radius asks for: ceil(span), the deepest weighted by the fraction of it the span covers.
-		m_BloomSpan = GetBloomSpan(settings.BloomRadius, m_ViewportSize.y, m_BloomLevels);
-		const uint32_t levels = static_cast<uint32_t>(std::ceil(m_BloomSpan));
-		const float deepestWeight = m_BloomSpan - static_cast<float>(levels - 1);
-		m_Stats.BloomLevels = levels;
-
+		parameters.Mode = mode;
+		parameters.UpsampleWeight = upsampleWeight;
 		const nvrhi::TextureDesc& desc = m_BloomTexture->getDesc();
-		auto dispatch = [&](nvrhi::IBindingSet* bindingSet, uint32_t mode, uint32_t level, float upsampleWeight)
-		{
-			nvrhi::ComputeState state;
-			state.pipeline = m_BloomPipeline;
-			state.bindings = { bindingSet };
-			commandList->setComputeState(state);
-			parameters.Mode = mode;
-			parameters.UpsampleWeight = upsampleWeight;
-			commandList->setPushConstants(&parameters, sizeof(parameters));
-			commandList->dispatch(DispatchGroups(std::max(1u, desc.width >> level)), DispatchGroups(std::max(1u, desc.height >> level)), 1);
-		};
+		nvrhi::ComputeState state;
+		state.pipeline = m_BloomPipeline;
+		state.bindings = { bindingSet };
+		commandList->setComputeState(state);
+		commandList->setPushConstants(&parameters, sizeof(parameters));
+		commandList->dispatch(DispatchGroups(std::max(1u, desc.width >> level)), DispatchGroups(std::max(1u, desc.height >> level)), 1);
+	}
 
-		dispatch(prefilterSet, RenderData::c_BloomPrefilter, 0, 1.0f);
+	uint32_t SceneRenderer::RenderBloomDownsamples(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet,
+		bool bloom)
+	{
+		// The levels the radius asks for (ceil(span)); without the bloom, the lens flare's two.
+		m_BloomSpan = GetBloomSpan(settings.BloomRadius, m_ViewportSize.y, m_BloomLevels);
+		const uint32_t levels = bloom ? static_cast<uint32_t>(std::ceil(m_BloomSpan)) : std::min(2u, m_BloomLevels);
+		DispatchBloom(commandList, settings, prefilterSet, RenderData::c_BloomPrefilter, 0, 1.0f);
 		for (uint32_t level = 1; level < levels; level++)
-			dispatch(m_BloomDownsampleSets[level], RenderData::c_BloomDownsample, level, 1.0f);
+			DispatchBloom(commandList, settings, m_BloomDownsampleSets[level], RenderData::c_BloomDownsample, level, 1.0f);
+		return levels;
+	}
+
+	void SceneRenderer::RenderBloomUpsamples(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, uint32_t levels)
+	{
+		// The deepest level is weighted by the fraction of it the span covers.
+		const float deepestWeight = m_BloomSpan - static_cast<float>(levels - 1);
 		for (uint32_t level = levels - 1; level-- > 0;)
-			dispatch(m_BloomUpsampleSets[level], RenderData::c_BloomUpsample, level, level + 2 == levels ? deepestWeight : 1.0f);
+			DispatchBloom(commandList, settings, m_BloomUpsampleSets[level], RenderData::c_BloomUpsample, level, level + 2 == levels ? deepestWeight : 1.0f);
+		m_Stats.BloomLevels = levels;
 	}
 
 	bool SceneRenderer::RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const SceneRenderOptions& options, PostSource source,
-		std::optional<float> keyReferenceLog2)
+		std::optional<float> keyReferenceLog2, std::optional<glm::vec2> sunUV)
 	{
 		commandList->beginMarker("Exposure");
 		nvrhi::IBindingSet* exposureSet = SelectPostSet(source, m_ExposureBindingSet, m_TemporalExposureSets, m_DepthOfFieldExposureSet, m_MotionBlurExposureSet);
 		UpdateExposure(commandList, postProcess, options, exposureSet, keyReferenceLog2);
 		commandList->endMarker();
 		const bool bloom = postProcess.Bloom && postProcess.BloomIntensity > 0.0f;
+		// Lens flares come from the bloom chain's level 1: the chain runs for them with bloom off (the tone mapping then adds
+		// no bloom).
+		const bool flare = std::isfinite(postProcess.LensFlare) && postProcess.LensFlare > 0.0f && m_BloomLevels >= 2;
+		if (!bloom && !flare)
+			return false;
+		commandList->beginMarker("Bloom");
+		const uint32_t levels = RenderBloomDownsamples(commandList, postProcess,
+			SelectPostSet(source, m_BloomDownsampleSets[0], m_TemporalBloomSets, m_DepthOfFieldBloomSet, m_MotionBlurBloomSet), bloom);
+		commandList->endMarker();
+		// The lens flare reads level 1 as its downsample left it (when the frame wrote it: a radius of one level of a small view
+		// does not), before the upsamples add the deeper levels' glow, whose tent filters leave diamond-shaped contours the
+		// flare's threshold would cut out.
+		if (flare && levels >= 2)
+		{
+			commandList->beginMarker("LensFlare");
+			RenderLensFlare(commandList, keyReferenceLog2, sunUV);
+			commandList->endMarker();
+		}
 		if (bloom)
 		{
 			commandList->beginMarker("Bloom");
-			RenderBloom(commandList, postProcess, SelectPostSet(source, m_BloomDownsampleSets[0], m_TemporalBloomSets, m_DepthOfFieldBloomSet, m_MotionBlurBloomSet));
+			RenderBloomUpsamples(commandList, postProcess, levels);
 			commandList->endMarker();
 		}
 		return bloom;
+	}
+
+	bool SceneRenderer::EnsureLensFlareResources()
+	{
+		if (m_LensFlareSet)
+			return true;
+		// The bloom chain's level 1: a quarter of the resolution.
+		const nvrhi::TextureDesc& bloomDesc = m_BloomTexture->getDesc();
+		nvrhi::TextureDesc desc;
+		desc.width = std::max(1u, bloomDesc.width >> 1);
+		desc.height = std::max(1u, bloomDesc.height >> 1);
+		desc.format = c_HDRFormat;
+		desc.isUAV = true;
+		desc.debugName = m_Specification.DebugName + ".LensFlare";
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		nvrhi::TextureHandle texture = m_Device->createTexture(desc);
+		nvrhi::BindingSetDesc set;
+		set.bindings = {
+			nvrhi::BindingSetItem::Texture_SRV(0, m_BloomTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(1, 1, 0, 1)),
+			nvrhi::BindingSetItem::Sampler(0, m_LinearClampSampler),
+			nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture),
+			nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_ExposureBuffer),
+			nvrhi::BindingSetItem::Texture_UAV(0, texture),
+			nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::LensFlareParameters))
+		};
+		nvrhi::BindingSetHandle bindings = texture ? m_Device->createBindingSet(set, m_LensFlareLayout) : nullptr;
+		if (!bindings)
+		{
+			m_Errors.Report(fmt::format("failed to create the lens flare's target for a {}x{} viewport; drawing without lens flares", m_ViewportSize.x,
+				m_ViewportSize.y));
+			return false;
+		}
+		m_LensFlareTexture = std::move(texture);
+		m_LensFlareSet = std::move(bindings);
+		return true;
+	}
+
+	bool SceneRenderer::RenderLensFlare(nvrhi::ICommandList* commandList, std::optional<float> keyReferenceLog2, std::optional<glm::vec2> sunUV)
+	{
+		if (!EnsureLensFlareResources())
+			return false;
+		RenderData::LensFlareParameters parameters = {};
+		parameters.Aspect = static_cast<float>(m_ViewportSize.x) / static_cast<float>(std::max(m_ViewportSize.y, 1u));
+		parameters.SunTapRadius = RenderData::c_LensFlareSunTapRadius;
+		// The starburst: rays of a white card's luminance in the directional light's light (the key's gray card over its albedo).
+		m_Starburst = 0.0f;
+		if (sunUV && keyReferenceLog2)
+		{
+			parameters.Sun = *sunUV;
+			parameters.Flags = RenderData::c_LensFlareSun;
+			m_StarburstSun = *sunUV;
+			const float luminance = std::exp2(*keyReferenceLog2) / 0.18f;
+			m_Starburst = std::isfinite(luminance) ? RenderData::c_LensFlareRayGain * luminance : 0.0f;
+			m_Stats.LensFlareSun = true;
+		}
+		const nvrhi::TextureDesc& desc = m_LensFlareTexture->getDesc();
+		nvrhi::ComputeState state;
+		state.pipeline = m_LensFlarePipeline;
+		state.bindings = { m_LensFlareSet };
+		commandList->setComputeState(state);
+		commandList->setPushConstants(&parameters, sizeof(parameters));
+		commandList->dispatch(DispatchGroups(desc.width), DispatchGroups(desc.height), 1);
+		m_Stats.LensFlare = true;
+		return true;
 	}
 
 	glm::vec2 SceneRenderer::GetVignetteTangents(const SceneCamera& camera, glm::uvec2 viewportSize)
@@ -1019,57 +1130,57 @@ namespace Strata
 		return lookup ? lookup->GetTexture() : nullptr;
 	}
 
-	nvrhi::IBindingSet* SceneRenderer::GetColorLookupSet(nvrhi::ICommandList* commandList, nvrhi::ITexture* lookup)
+	nvrhi::IBindingSet* SceneRenderer::GetTonemapInputSet(nvrhi::ICommandList* commandList, nvrhi::ITexture* lookup, nvrhi::ITexture* flare)
 	{
-		if (!lookup)
+		if (!m_ColorLookupDummy || !m_LensFlareDummy)
 		{
-			// The set of the latest lookup goes once frames stop using it: it holds the lookup's texture.
-			if (m_ColorLookupSet)
-				Renderer::ReleaseDeferred({ nvrhi::ResourceHandle(m_ColorLookupSet.Get()) });
-			m_ColorLookupSet = nullptr;
-			m_ColorLookupSetTexture = nullptr;
-			if (!m_ColorLookupDummySet)
+			// The dummies, written once, so the textures the shader never reads at intensity 0 are still defined.
+			nvrhi::TextureDesc desc;
+			desc.format = c_HDRFormat;
+			desc.initialState = nvrhi::ResourceStates::ShaderResource;
+			desc.keepInitialState = true;
+			desc.debugName = m_Specification.DebugName + ".LensFlareDummy";
+			nvrhi::TextureHandle flareDummy = m_Device->createTexture(desc);
+			desc.dimension = nvrhi::TextureDimension::Texture3D;
+			desc.debugName = m_Specification.DebugName + ".ColorLookupDummy";
+			nvrhi::TextureHandle lookupDummy = m_Device->createTexture(desc);
+			if (!flareDummy || !lookupDummy)
 			{
-				nvrhi::TextureDesc desc;
-				desc.dimension = nvrhi::TextureDimension::Texture3D;
-				desc.format = c_HDRFormat;
-				desc.debugName = m_Specification.DebugName + ".ColorLookupDummy";
-				desc.initialState = nvrhi::ResourceStates::ShaderResource;
-				desc.keepInitialState = true;
-				nvrhi::TextureHandle dummy = m_Device->createTexture(desc);
-				nvrhi::BindingSetDesc set;
-				set.bindings = { nvrhi::BindingSetItem::Texture_SRV(3, dummy), nvrhi::BindingSetItem::Sampler(2, m_LinearClampSampler) };
-				nvrhi::BindingSetHandle dummySet = dummy ? m_Device->createBindingSet(set, m_ColorLookupLayout) : nullptr;
-				if (!dummySet)
-				{
-					m_Errors.Report("failed to create the tone mapping's color lookup bindings; the frame is not tone-mapped");
-					return nullptr;
-				}
-				// Written once, so the texture the shader never reads at intensity 0 is still defined.
-				const uint16_t zero[4] = {};
-				commandList->writeTexture(dummy, 0, 0, zero, sizeof(zero), sizeof(zero));
-				m_ColorLookupDummy = std::move(dummy);
-				m_ColorLookupDummySet = std::move(dummySet);
+				m_Errors.Report("failed to create the tone mapping's dummy inputs; the frame is not tone-mapped");
+				return nullptr;
 			}
-			return m_ColorLookupDummySet;
+			const uint16_t zero[4] = {};
+			commandList->writeTexture(flareDummy, 0, 0, zero, sizeof(zero), sizeof(zero));
+			commandList->writeTexture(lookupDummy, 0, 0, zero, sizeof(zero), sizeof(zero));
+			m_ColorLookupDummy = std::move(lookupDummy);
+			m_LensFlareDummy = std::move(flareDummy);
 		}
-		if (!m_ColorLookupSet || m_ColorLookupSetTexture != lookup)
+		nvrhi::ITexture* lookupTexture = lookup ? lookup : m_ColorLookupDummy.Get();
+		nvrhi::ITexture* flareTexture = flare ? flare : m_LensFlareDummy.Get();
+		if (!m_TonemapInputSet || m_TonemapInputLookup != lookupTexture || m_TonemapInputFlare != flareTexture)
 		{
 			nvrhi::BindingSetDesc set;
-			set.bindings = { nvrhi::BindingSetItem::Texture_SRV(3, lookup), nvrhi::BindingSetItem::Sampler(2, m_LinearClampSampler) };
-			nvrhi::BindingSetHandle lookupSet = m_Device->createBindingSet(set, m_ColorLookupLayout);
-			if (!lookupSet)
+			set.bindings = { nvrhi::BindingSetItem::Texture_SRV(3, lookupTexture), nvrhi::BindingSetItem::Texture_SRV(4, flareTexture),
+				nvrhi::BindingSetItem::Sampler(2, m_LinearClampSampler) };
+			nvrhi::BindingSetHandle inputSet = m_Device->createBindingSet(set, m_TonemapInputLayout);
+			if (!inputSet)
 			{
-				m_Errors.Report("failed to create the color lookup's bindings; drawing without it");
-				return GetColorLookupSet(commandList, nullptr);
+				if (lookup || flare)
+				{
+					m_Errors.Report("failed to create the color lookup's or the lens flare's bindings; drawing without them");
+					return GetTonemapInputSet(commandList, nullptr, nullptr);
+				}
+				m_Errors.Report("failed to create the tone mapping's second set; the frame is not tone-mapped");
+				return nullptr;
 			}
-			if (m_ColorLookupSet)
-				Renderer::ReleaseDeferred({ nvrhi::ResourceHandle(m_ColorLookupSet.Get()) });
-			// The set holds the texture, so no other texture takes its address while it is kept.
-			m_ColorLookupSet = std::move(lookupSet);
-			m_ColorLookupSetTexture = lookup;
+			// The set of the latest textures goes once frames stop using them: it holds them.
+			if (m_TonemapInputSet)
+				Renderer::ReleaseDeferred({ nvrhi::ResourceHandle(m_TonemapInputSet.Get()) });
+			m_TonemapInputSet = std::move(inputSet);
+			m_TonemapInputLookup = lookupTexture;
+			m_TonemapInputFlare = flareTexture;
 		}
-		return m_ColorLookupSet;
+		return m_TonemapInputSet;
 	}
 
 	void SceneRenderer::RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
@@ -1106,14 +1217,22 @@ namespace Strata
 		tonemap.FilmGrain = unit(postProcess.FilmGrain);
 		tonemap.ChromaticAberration = unit(postProcess.ChromaticAberration) * RenderData::c_ChromaticAberrationScale;
 		tonemap.GrainFrame = grainSeed;
-		// The scene's color lookup once it is loaded (ResolveColorLookup), else the dummy, which the shader skips at intensity 0.
-		nvrhi::IBindingSet* colorLookupSet = GetColorLookupSet(commandList, colorLookup);
-		if (!colorLookupSet)
+		// The scene's color lookup once it is loaded (ResolveColorLookup) and the frame's lens flare (RenderPostHDR), else
+		// dummies, which the shader skips at intensity 0.
+		nvrhi::ITexture* lensFlare = m_Stats.LensFlare ? m_LensFlareTexture.Get() : nullptr;
+		nvrhi::IBindingSet* inputSet = GetTonemapInputSet(commandList, colorLookup, lensFlare);
+		if (!inputSet)
 			return;
-		if (colorLookup && colorLookupSet == m_ColorLookupSet.Get())
+		if (colorLookup && m_TonemapInputLookup == colorLookup)
 		{
 			tonemap.ColorLookupIntensity = unit(postProcess.ColorLookupIntensity);
 			m_Stats.ColorLookup = true;
+		}
+		if (lensFlare && m_TonemapInputFlare == lensFlare)
+		{
+			tonemap.LensFlare = unit(postProcess.LensFlare) * RenderData::c_LensFlareScale;
+			tonemap.Starburst = m_Starburst;
+			tonemap.Sun = m_StarburstSun;
 		}
 
 		// FXAA or morphological anti-aliasing unless the image was resolved temporally (FXAA also when the morphological one's
@@ -1131,9 +1250,9 @@ namespace Strata
 		ST_CORE_ASSERT(!m_TonemapConstantsWritten, "SceneRenderer: a frame writes the tone mapping's constants once");
 		commandList->writeBuffer(m_TonemapConstantBuffer, &tonemap, sizeof(tonemap));
 		m_TonemapConstantsWritten = true;
-		DrawFullscreen(commandList, GetFullscreenPipeline(m_TonemapPipelines, m_TonemapPixelShader, { m_TonemapBindingLayout, m_ColorLookupLayout },
+		DrawFullscreen(commandList, GetFullscreenPipeline(m_TonemapPipelines, m_TonemapPixelShader, { m_TonemapBindingLayout, m_TonemapInputLayout },
 			tonemapTarget->getFramebufferInfo()), tonemapTarget, SelectPostSet(source, m_TonemapBindingSet, m_TemporalTonemapSets, m_DepthOfFieldTonemapSet,
-			m_MotionBlurTonemapSet), nullptr, 0, colorLookupSet);
+			m_MotionBlurTonemapSet), nullptr, 0, inputSet);
 		commandList->endMarker();
 		if (morphological)
 		{

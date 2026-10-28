@@ -833,7 +833,8 @@ TEST_SUITE("Editor.Commands")
 			{ "WhiteBalanceTemperature", 3200.0 }, { "WhiteBalanceTint", -0.5 }, { "ColorSlope", { 1.5, 1.0, 0.5 } }, { "ColorOffset", { 0.01, 0.0, -0.01 } },
 			{ "ColorPower", { 1.0, 2.0, 1.0 } }, { "AutoExposureMetering", "Average" }, { "AutoExposureLowPercentile", 0.2 }, { "AutoExposureHighPercentile", 0.8 },
 			{ "AutoExposureLightSpeed", 5.0 }, { "AutoExposureKey", 0.25 }, { "MotionBlur", true }, { "MotionBlurShutterAngle", 90.0 },
-			{ "MotionBlurMaxLength", 0.03 }, { "FilmGrain", 0.25 }, { "ChromaticAberration", 0.5 }, { "ColorLookupIntensity", 0.75 } } } });
+			{ "MotionBlurMaxLength", 0.03 }, { "FilmGrain", 0.25 }, { "ChromaticAberration", 0.5 }, { "ColorLookupIntensity", 0.75 },
+			{ "LensFlare", 0.3 } } } });
 		CHECK(harness.Context.GetUndoStack().GetPosition() == undoDepth + 1);
 		const nlohmann::json changed = values();
 		CHECK(changed["Toe"] == 0.25);
@@ -848,11 +849,12 @@ TEST_SUITE("Editor.Commands")
 		CHECK(changed["FilmGrain"] == 0.25);
 		CHECK(changed["ChromaticAberration"] == 0.5);
 		CHECK(changed["ColorLookupIntensity"] == 0.75);
+		CHECK(changed["LensFlare"] == 0.3);
 		for (const auto& [property, value] : { std::pair<const char*, nlohmann::json> { "Toe", 1.5 }, { "Shoulder", -0.5 }, { "WhiteBalanceTemperature", 1000.0 },
 				 { "WhiteBalanceTint", 2.0 }, { "ColorSlope", { 5.0, 1.0, 1.0 } }, { "ColorOffset", { 0.0, 0.5, 0.0 } }, { "ColorPower", { 0.1, 1.0, 1.0 } },
 				 { "Tonemapper", "Cinematic" }, { "AutoExposureMetering", "Spot" }, { "AutoExposureLowPercentile", 0.6 }, { "AutoExposureKey", 0.8 },
 				 { "MotionBlurShutterAngle", 400.0 }, { "MotionBlurMaxLength", 0.1 }, { "FilmGrain", 2.0 }, { "ChromaticAberration", -0.5 },
-				 { "ColorLookupIntensity", 1.5 }, { "ColorLookup", UUIDToJson(BuiltinAssets::CubeMesh) } })
+				 { "ColorLookupIntensity", 1.5 }, { "ColorLookup", UUIDToJson(BuiltinAssets::CubeMesh) }, { "LensFlare", 2.0 } })
 		{
 			CAPTURE(property);
 			CHECK_FALSE(harness.Error("component.set", { { "entity", entity }, { "component", "PostProcess" }, { "values", { { property, value } } } }).empty());

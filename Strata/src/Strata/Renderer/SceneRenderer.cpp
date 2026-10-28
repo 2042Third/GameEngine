@@ -3133,7 +3133,19 @@ namespace Strata
 			keyReferenceLog2 = std::log2(sunLuminance);
 		if (postProcess.AutoExposure)
 			m_Stats.ExposureKeyReferenceLog2 = keyReferenceLog2;
-		const bool bloom = RenderPostHDR(commandList, postProcess, options, postSource, keyReferenceLog2);
+		// Where the directional light's disk is on screen (unjittered), for the lens flare's starburst: in front of a perspective
+		// camera only (an orthographic one sees directions at infinity edge-on).
+		std::optional<glm::vec2> sunUV;
+		if (postProcess.LensFlare > 0.0f && frame.DirectionalLightDirection.w > 0.0f)
+		{
+			const glm::vec4 clip = camera.Projection * camera.View * glm::vec4(-glm::vec3(frame.DirectionalLightDirection), 0.0f);
+			if (clip.w > 1e-6f && std::isfinite(clip.x) && std::isfinite(clip.y))
+			{
+				const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+				sunUV = glm::vec2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
+			}
+		}
+		const bool bloom = RenderPostHDR(commandList, postProcess, options, postSource, keyReferenceLog2, sunUV);
 
 		TextRenderStats textStats;
 		m_FontAtlases->BeginFrame(TextRenderer::c_FrameRasterBudget);
