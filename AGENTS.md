@@ -411,6 +411,9 @@ reaches the application only through `EditorHost`. Every command family, panel a
   (`RecordInstanceChanges`, `RecordProxyChange`) so its GPU copy follows ([Render scene](Docs/DeveloperGuide.md#render-scene)).
 - Scene shaders work in camera-relative space (`TransformPositionRelative`; rotation-only view matrices): upload anything
   positioned relative to the camera, subtracting in double ([Camera-relative space](Docs/DeveloperGuide.md#camera-relative-space)).
+- The sun's shadow reaches opaque surfaces through the screen-space mask (SRV 28) and transparent ones through
+  `SampleDirectionalShadow`: change both; shadow filters use fixed noise, never `TemporalParams.z`
+  ([Sun shadows](Docs/DeveloperGuide.md#sun-shadows)).
 - Shadow views are kept while nothing reaching them changed (`PrepareShadowCache`, `FindLocalShadowCasters`): a new
   input of how casters are drawn changes a version they compare. What is drawn and requested is decided twice, by the
   CPU path (`SceneRendererExtraction.cpp`) and the GPU's culling and visibility feedback (`Cull.comp`): change both, keep

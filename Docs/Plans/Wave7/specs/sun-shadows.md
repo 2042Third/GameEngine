@@ -1432,3 +1432,7 @@ name). Differences found while building:
   only to those that hit: behind objects seen from the camera, whether a step lands within the thickness depends on the
   per-pixel offset, and blurring only the hits left a stipple of unblurred lit pixels between them (the ThirdPerson
   robot's arm over the floor in `tp.scene`, no AA); now that area is a smooth partial shadow, at the same cost.
+- Step 5: `Docs/Manual/Graphics.md` and `graphics-options`' `c_RowTraits` are not on main, so the rows' trait lines and
+  table lines wait for that stream's landing (merge notes). The AGENTS.md bullet leaves out "cascade layouts come only
+  from `ShadowFitTracker` on the CPU" until step 6 builds the tracker. Saving the samples' scenes through the editor also
+  dropped their old copy of the collision layers (the projects' `Scene.CollisionLayers` hold them).

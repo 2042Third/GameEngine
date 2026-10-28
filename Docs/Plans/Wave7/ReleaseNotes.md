@@ -59,6 +59,8 @@ integrator writes the release notes from them when the wave lands (and removes t
 - Every scene's sun shadows change: penumbrae half as wide as before for the same Shadow Softness, narrow edges filtered
   by a fixed tent instead of rotated noise. Set Shadow Softness to 2 times its old value to keep a scene's old width.
 - Thumbnails are made again (their cache's version is 5).
+- The Third-Person Adventure's, Physics Playground's and Open World's suns have the real sun's Shadow Softness, 0.53
+  degrees (Tetris keeps its 1.0).
 - Every directional light gets contact shadows at High and Ultra (Contact Shadow Length 0.3 m for scenes saved before it):
   set it to 0 on a light to keep its old look. They come from every opaque surface on screen, also from meshes whose
   Cast Shadows is off.

@@ -421,6 +421,21 @@ TEST_SUITE("Editor.ProjectMigration")
 			const nlohmann::json* committedValue = committed ? JsonUtils::Find(*committed, "Value") : nullptr;
 			const PhysicsLayerSettings committedLayers = committedValue ? PhysicsLayerSettings::FromJson(*committedValue) : PhysicsLayerSettings();
 			CHECK(committedLayers == expected.Layers);
+			// 0.5.0 stored the layers in the scenes' settings, which the migration reads; a sample scene saved since the layers
+			// moved to the project has no such copy any more. Put the committed layers back into the scenes listed, as 0.5.0
+			// wrote them (the setting's last member, before the entity count).
+			for (const std::string& scene : expected.Scenes)
+			{
+				REQUIRE(committedValue);
+				const std::filesystem::path scenePath = copy / "Assets" / FileSystem::FromUTF8(scene);
+				std::string text = FileSystem::ReadText(scenePath).value_or("");
+				if (text.find("\"PhysicsLayers\":") != std::string::npos)
+					continue;
+				const size_t settingsEnd = text.find("},\"EntityCount\":");
+				REQUIRE(settingsEnd != std::string::npos);
+				text.insert(settingsEnd, ",\"PhysicsLayers\":" + JsonUtils::Dump(*committedValue));
+				REQUIRE(FileSystem::WriteText(scenePath, text));
+			}
 			// As 0.5.0 left it: version 2, without settings.
 			(*file)["Strata"]["Version"] = 2;
 			file->erase("Settings");
