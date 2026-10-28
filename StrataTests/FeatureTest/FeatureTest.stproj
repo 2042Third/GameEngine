@@ -151,7 +151,7 @@
 				"ShadowCascades": 3,
 				"ShadowResolution": "1024"
 			},
-			"Version": 4
+			"Version": 2
 		},
 		"Scene.CollisionLayers": {
 			"Value": {

@@ -120,7 +120,7 @@ namespace Strata
 	namespace RendererQuality
 	{
 		constexpr std::string_view c_SectionId = "Renderer.Quality";
-		constexpr uint32_t c_SectionVersion = 4; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
+		constexpr uint32_t c_SectionVersion = 2; // Each landing that adds rows adds one (Docs/DeveloperGuide.md, "Quality settings")
 		constexpr uint32_t c_HighResolutionRows = 1440;
 		constexpr uint32_t c_MaxShadowMapSize = 8192; // The most texels each way of a cascade (SceneRenderer applies it)
 
