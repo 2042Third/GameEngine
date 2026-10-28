@@ -892,7 +892,7 @@ The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStage
 | `GPU.Aerial` | the atmosphere's aerial perspective volume, recorded after the light clusters (frames with an atmosphere sky only) |
 | `GPU.Cull` | culling dispatches and depth pyramids |
 | `GPU.Shadows`, `GPU.Prepass`, `GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent` | the scene passes |
-| `GPU.Reflections` | reflection probes' conversions and the screen-space reflections' trace, between `GPU.AO` and `GPU.Opaque` |
+| `GPU.Reflections` | reflection probes' conversions and the screen-space reflections' trace (at Spatial and SpatialHigh with their nearest-depth pyramid and resolve; their color copy for the next frame is in `GPU.Transparent`), between `GPU.AO` and `GPU.Opaque` |
 | `GPU.TAA` | the motion history's copy (`Scene/MotionCopy.comp`) and the temporal anti-aliasing resolve |
 | `GPU.Post` | exposure, bloom, tone mapping and FXAA |
 | `GPU.Overlays` | grid, tints, outline, debug lines, text and the copy into a target |

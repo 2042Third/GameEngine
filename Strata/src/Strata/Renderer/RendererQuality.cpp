@@ -40,6 +40,7 @@ namespace Strata
 		constexpr PresetRow<float> c_MinProjectedPixelsRow = { 1.0f, 0.5f, 0.5f, 0.25f };
 		constexpr PresetRow<AmbientOcclusionLevel> c_AmbientOcclusionQualityRow = { AmbientOcclusionLevel::Low, AmbientOcclusionLevel::Medium, AmbientOcclusionLevel::High, AmbientOcclusionLevel::Ultra };
 		constexpr PresetRow<uint32_t> c_EnvironmentResolutionRow = { 256, 256, 512, 512 };
+		constexpr PresetRow<ReflectionsQuality> c_ReflectionsRow = { ReflectionsQuality::Off, ReflectionsQuality::Checkerboard, ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh };
 
 		constexpr uint32_t c_MinLocalShadowAtlasSize = 512;
 		constexpr uint32_t c_MaxLocalShadowAtlasSize = 8192;
@@ -72,6 +73,15 @@ namespace Strata
 		constexpr AmbientOcclusionName c_AmbientOcclusionNames[] = { { AmbientOcclusionLevel::Low, "Low", { 1, 4 } },
 			{ AmbientOcclusionLevel::Medium, "Medium", { 2, 6 } }, { AmbientOcclusionLevel::High, "High", { 3, 8 } },
 			{ AmbientOcclusionLevel::Ultra, "Ultra", { 4, 12 } } };
+		struct ReflectionsName
+		{
+			ReflectionsQuality Quality;
+			const char* Name;
+			ScreenReflectionSteps Steps;
+		};
+		constexpr ReflectionsName c_ReflectionsNames[] = { { ReflectionsQuality::Off, "Off", { 24, 6 } },
+			{ ReflectionsQuality::Checkerboard, "Checkerboard", { 24, 6 } }, { ReflectionsQuality::Spatial, "Spatial", { 32, 6 } },
+			{ ReflectionsQuality::SpatialHigh, "SpatialHigh", { 48, 8 } } };
 
 		constexpr ResolutionName c_ResolutionNames[] = { { ShadowMapResolution::Auto, "Auto" }, { ShadowMapResolution::AutoFine, "AutoFine" },
 			{ ShadowMapResolution::Size1024, "1024" }, { ShadowMapResolution::Size2048, "2048" }, { ShadowMapResolution::Size4096, "4096" },
@@ -116,6 +126,16 @@ namespace Strata
 			{
 				if (std::optional<AmbientOcclusionLevel> level = RendererQuality::AmbientOcclusionLevelFromString(member->get_ref<const std::string&>()))
 					knob = *level;
+			}
+		}
+
+		void ReadField(const nlohmann::json& value, std::string_view name, ReflectionsQuality& knob)
+		{
+			const nlohmann::json* member = JsonUtils::Find(value, name);
+			if (member && member->is_string())
+			{
+				if (std::optional<ReflectionsQuality> quality = RendererQuality::ReflectionsQualityFromString(member->get_ref<const std::string&>()))
+					knob = *quality;
 			}
 		}
 
@@ -211,6 +231,7 @@ namespace Strata
 					settings.MinProjectedPixels = c_MinProjectedPixelsRow[index];
 					settings.AmbientOcclusionQuality = c_AmbientOcclusionQualityRow[index];
 					settings.EnvironmentResolution = c_EnvironmentResolutionRow[index];
+					settings.Reflections = c_ReflectionsRow[index];
 				}
 				return presets;
 			}();
@@ -239,6 +260,8 @@ namespace Strata
 			if (static_cast<uint8_t>(clamped.AmbientOcclusionQuality) > static_cast<uint8_t>(AmbientOcclusionLevel::Ultra))
 				clamped.AmbientOcclusionQuality = medium.AmbientOcclusionQuality;
 			clamped.EnvironmentResolution = clamped.EnvironmentResolution == 512 ? 512 : 256;
+			if (static_cast<uint8_t>(clamped.Reflections) > static_cast<uint8_t>(ReflectionsQuality::SpatialHigh))
+				clamped.Reflections = medium.Reflections;
 			if (static_cast<uint8_t>(clamped.Preset) > static_cast<uint8_t>(RendererQualityPreset::Custom))
 				clamped.Preset = RendererQualityPreset::Custom;
 			return clamped;
@@ -329,6 +352,41 @@ namespace Strata
 			return AmbientOcclusionSamples {};
 		}
 
+		const char* ReflectionsQualityToString(ReflectionsQuality quality)
+		{
+			for (const ReflectionsName& entry : c_ReflectionsNames)
+			{
+				if (entry.Quality == quality)
+					return entry.Name;
+			}
+			return "Checkerboard";
+		}
+
+		std::optional<ReflectionsQuality> ReflectionsQualityFromString(std::string_view name)
+		{
+			for (const ReflectionsName& entry : c_ReflectionsNames)
+			{
+				if (name == entry.Name)
+					return entry.Quality;
+			}
+			return std::nullopt;
+		}
+
+		ScreenReflectionSteps GetScreenReflectionSteps(ReflectionsQuality quality)
+		{
+			for (const ReflectionsName& entry : c_ReflectionsNames)
+			{
+				if (entry.Quality == quality)
+					return entry.Steps;
+			}
+			return ScreenReflectionSteps {};
+		}
+
+		bool IsSpatialReflections(ReflectionsQuality quality)
+		{
+			return quality == ReflectionsQuality::Spatial || quality == ReflectionsQuality::SpatialHigh;
+		}
+
 		uint32_t GetPrefilterSamples(uint32_t size, uint32_t mip)
 		{
 			// At 512 the narrow lobes of levels 1 and 2 (roughness 0.2 and 0.4) need fewer samples: the filtered importance
@@ -392,6 +450,13 @@ namespace Strata
 			section.Fields.push_back(EnumField("EnvironmentResolution", "Sky reflection resolution", "Custom only: the prefiltered sky's texels "
 				"each way per face: 512 keeps mirror reflections of the sky sharp at 4K; 12 MiB more per view than 256, 24 MiB with the "
 				"atmosphere.", { "256", "512" }, std::to_string(high.EnvironmentResolution)));
+			std::vector<std::string> reflectionModes;
+			for (const ReflectionsName& entry : c_ReflectionsNames)
+				reflectionModes.emplace_back(entry.Name);
+			section.Fields.push_back(EnumField("Reflections", "Screen-space reflections", "Custom only: what the Post Process's screen-space "
+				"reflections cost. Off; Checkerboard (Strata 0.6.0's: half resolution, only with TAA); Spatial and SpatialHigh trace every pixel "
+				"at full resolution with or without TAA (32 and 48 steps), about 170 MiB more per view at 3840x2160.", std::move(reflectionModes),
+				ReflectionsQualityToString(high.Reflections)));
 			return section;
 		}
 
@@ -419,6 +484,7 @@ namespace Strata
 				ReadField(*value, "MinProjectedPixels", settings.MinProjectedPixels);
 				ReadField(*value, "AmbientOcclusionQuality", settings.AmbientOcclusionQuality);
 				ReadField(*value, "EnvironmentResolution", settings.EnvironmentResolution);
+				ReadField(*value, "Reflections", settings.Reflections);
 			}
 			// Knobs read under every preset (players' comfort rows) follow here, one line each.
 			return Clamp(settings);
@@ -436,7 +502,8 @@ namespace Strata
 				{ "LODErrorPixels", settings.LODErrorPixels },
 				{ "MinProjectedPixels", settings.MinProjectedPixels },
 				{ "AmbientOcclusionQuality", AmbientOcclusionLevelToString(settings.AmbientOcclusionQuality) },
-				{ "EnvironmentResolution", std::to_string(settings.EnvironmentResolution) }
+				{ "EnvironmentResolution", std::to_string(settings.EnvironmentResolution) },
+				{ "Reflections", ReflectionsQualityToString(settings.Reflections) }
 			};
 		}
 

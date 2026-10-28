@@ -104,6 +104,9 @@ strata_add_shaders(Strata_Renderer
 		Effects/GTAO.comp
 		Effects/AODenoise.comp
 		Effects/ScreenSpaceReflections.comp
+		Effects/ScreenSpaceReflectionsSpatial.comp
+		Effects/DepthPyramidNearest.comp
+		Effects/ReflectionResolve.comp
 		Effects/SceneColorCopy.comp
 		Effects/LightingViewStats.comp
 		PostProcess/Fullscreen.vert

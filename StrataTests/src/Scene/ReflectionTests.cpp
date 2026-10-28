@@ -561,15 +561,17 @@ TEST_SUITE("Scene.InactiveProperties")
 		CHECK(reason("PostProcess", "TAAClipWidth") == "Only Tight clipping uses it (TAA History Clamp is Range)");
 		CHECK(reason("PostProcess", "TAADisocclusionThreshold") == "TAA Disocclusion Rejection is off");
 
-		// Screen-space reflections read the TAA's history: inactive without it, and their settings while they are off.
+		// Screen-space reflections' settings are inactive while they are off; with or without TAA they are active (whether the
+		// renderer's quality traces them without TAA is not the component's to know: RendererQualitySettings::Reflections).
 		const char* const reflections[] = { "ScreenSpaceReflections", "ScreenSpaceReflectionsIntensity", "ScreenSpaceReflectionsMaxRoughness" };
+		post.ScreenSpaceReflections = true;
 		post.AntiAliasing = false;
 		for (const char* property : reflections)
-			CHECK_MESSAGE(reason("PostProcess", property) == "Needs TAA (Anti Aliasing is off)", property);
+			CHECK_MESSAGE(reason("PostProcess", property).empty(), property);
 		post.AntiAliasing = true;
 		post.AntiAliasingMethod = AntiAliasingMode::FXAA;
 		for (const char* property : reflections)
-			CHECK_MESSAGE(reason("PostProcess", property) == "Needs TAA (Anti Aliasing Method is FXAA)", property);
+			CHECK_MESSAGE(reason("PostProcess", property).empty(), property);
 		post.AntiAliasingMethod = AntiAliasingMode::TAA;
 		post.ScreenSpaceReflections = false;
 		CHECK(reason("PostProcess", "ScreenSpaceReflections").empty());

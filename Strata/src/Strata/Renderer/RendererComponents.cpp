@@ -129,20 +129,11 @@ namespace Strata
 			return post.AntiAliasingMethod == AntiAliasingMode::TAA ? std::string() : "Only TAA uses it (Anti Aliasing Method is FXAA)";
 		}
 
-		// Screen-space reflections read the TAA's history: inactive without it.
-		std::string WithTemporalHistory(const PostProcessComponent& post)
-		{
-			if (!post.AntiAliasing)
-				return "Needs TAA (Anti Aliasing is off)";
-			return post.AntiAliasingMethod == AntiAliasingMode::TAA ? std::string() : "Needs TAA (Anti Aliasing Method is FXAA)";
-		}
-
+		// The screen-space reflections' settings while they are off. Whether they need TAA depends on the renderer's quality
+		// (RendererQualitySettings::Reflections: Checkerboard does, Spatial does not), which a component cannot know.
 		std::string WithScreenSpaceReflections(const PostProcessComponent& post)
 		{
-			std::string reason = WithTemporalHistory(post);
-			if (reason.empty() && !post.ScreenSpaceReflections)
-				reason = "Screen Space Reflections is off";
-			return reason;
+			return post.ScreenSpaceReflections ? std::string() : "Screen Space Reflections is off";
 		}
 
 		const char* GetPresetName(TemporalAntiAliasingPreset preset)
@@ -445,7 +436,8 @@ namespace Strata
 					"averaging softens. Strong edges are sharpened much less and overshoot is bounded, so halos stay faint. 0 is off"))
 			.Property("ScreenSpaceReflections", &PostProcessComponent::ScreenSpaceReflections,
 				WithTooltip({}, "Reflections of what the screen shows, found each frame: smooth floors, water and metal reflect what stands near "
-					"them. Needs TAA. Where they find nothing (off screen, hidden, the sky) the reflection probes and the sky reflect as before"))
+					"them. At Graphics Quality Medium (Reflections Checkerboard) only with TAA; High and Ultra trace every pixel with or without it. "
+					"Where they find nothing (off screen, hidden, the sky) the reflection probes and the sky reflect as before"))
 			.Property("ScreenSpaceReflectionsIntensity", &PostProcessComponent::ScreenSpaceReflectionsIntensity,
 				WithTooltip(Slider(0.0f, 1.0f), "How much the screen-space reflections replace the probes' and the sky's reflection where they "
 					"find something; 1: fully"))
@@ -471,7 +463,6 @@ namespace Strata
 		SetInactiveReasons<PostProcessComponent>({ "TAADisocclusionRejection" }, &WithCustomBool);
 		SetInactiveReasons<PostProcessComponent>({ "TAADisocclusionThreshold" }, &WithDisocclusionRejection);
 		SetInactiveReasons<PostProcessComponent>({ "TAASharpening" }, &WithCustomTunable<float, &TemporalAntiAliasingSettings::Sharpening>);
-		SetInactiveReasons<PostProcessComponent>({ "ScreenSpaceReflections" }, &WithTemporalHistory);
 		SetInactiveReasons<PostProcessComponent>({ "ScreenSpaceReflectionsIntensity", "ScreenSpaceReflectionsMaxRoughness" }, &WithScreenSpaceReflections);
 
 		ComponentRegistry::Register<TextComponent>("Text")

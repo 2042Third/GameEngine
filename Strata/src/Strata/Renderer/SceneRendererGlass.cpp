@@ -12,7 +12,8 @@
 // Glass (transmissive materials, MaterialProperties::Transmission; DG "Clear coat and glass"): the transparent pass draws it
 // first, unblended, writing depth, entity ids and motion (Scene/ForwardGlass.frag), and it reads what lies behind it from a
 // copy of the frame's HDR image made just before (the opaque surfaces and the sky), at half resolution with mips that rough
-// glass reads blurred (Effects/SceneColorCopy.comp, in GPU.Transparent).
+// glass reads blurred (Effects/SceneColorCopy.comp, in GPU.Transparent). Spatial screen-space reflections read the next
+// frame's copy (made every frame then, with a full-resolution one beside it: SceneRendererScreenReflections.cpp).
 
 namespace Strata
 {
@@ -116,6 +117,14 @@ namespace Strata
 			const uint32_t width = std::max(1u, desc.width >> level);
 			const uint32_t height = std::max(1u, desc.height >> level);
 			commandList->dispatch((width + c_SceneColorGroupSize - 1) / c_SceneColorGroupSize, (height + c_SceneColorGroupSize - 1) / c_SceneColorGroupSize, 1);
+		}
+		// Spatial screen-space reflections read the next frame's mirror-like reflections from a full-resolution copy beside it.
+		if (m_ReflectionCopyFrame)
+		{
+			state.bindings = { m_ReflectionColorCopySet };
+			commandList->setComputeState(state);
+			commandList->dispatch((m_ViewportSize.x + c_SceneColorGroupSize - 1) / c_SceneColorGroupSize,
+				(m_ViewportSize.y + c_SceneColorGroupSize - 1) / c_SceneColorGroupSize, 1);
 		}
 	}
 

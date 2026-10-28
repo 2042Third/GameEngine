@@ -147,10 +147,11 @@
 				"MaxShadowedLocalLights": 8,
 				"MinProjectedPixels": 0.75,
 				"Preset": "Custom",
+				"Reflections": "SpatialHigh",
 				"ShadowCascades": 3,
 				"ShadowResolution": "1024"
 			},
-			"Version": 3
+			"Version": 4
 		},
 		"Scene.CollisionLayers": {
 			"Value": {

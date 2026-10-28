@@ -158,10 +158,13 @@ a probe shows the scene as it was baked (a day-night cycle or a moving door is n
 
 ## Screen-space reflections
 
-Probes and the sky reflect a fixed picture. **Screen Space Reflections** (in the **Post Process**, with TAA) adds what
-the screen shows: a polished floor, a pond or a metal plate reflects the characters and things standing on or beside it,
-and the reflections move with them. Each frame the renderer follows the reflected rays across the image (at half
-resolution) and takes the color the previous frame showed where a ray meets a surface; TAA smooths the result.
+Probes and the sky reflect a fixed picture. **Screen Space Reflections** (in the **Post Process**) adds what the screen
+shows: a polished floor, a pond or a metal plate reflects the characters and things standing on or beside it, and the
+reflections move with them. Each frame the renderer follows the reflected rays across the image and takes the color the
+previous frame showed where a ray meets a surface. How depends on the project's Graphics Quality (its **Reflections**
+row): at **High** and **Ultra** every pixel traces at full resolution and neighboring pixels share what they found, with or
+without TAA, so reflections are sharp and need no history; at **Medium** (Strata 0.6.0's) they trace at half resolution
+and need TAA to smooth them; at **Low** there are none.
 
 - Only what is on screen can be reflected. Things behind the camera, beside the view or hidden behind others are not:
   there the probes and the sky reflect as before. Reflections fade toward the screen's edges.
@@ -170,8 +173,12 @@ resolution) and takes the color the previous frame showed where a ray meets a su
   show none at all.
 - **Screen Space Reflections Intensity** (1): how much they replace the probes' and the sky's reflection.
 - Transparent surfaces do not get them.
-- They need TAA (Anti Aliasing Method TAA); with FXAA the settings are greyed out. Cost: about half a millisecond of GPU
-  time at 1920x1080 on an Apple M2 Max with every surface reflecting, and about 20 MB of video memory per view.
+- At Medium they need TAA (Anti Aliasing Method TAA): with FXAA or without anti-aliasing they are not drawn. Cost there:
+  about half a millisecond of GPU time at 1920x1080 on an Apple M2 Max with every surface reflecting, and about 20 MB of
+  video memory per view. At High and Ultra they work with any anti-aliasing and take about 250 MB of video memory per
+  view at 3840x2160 (about 60 MB at 1920x1080).
+- The first frame of a view has nothing to reflect from yet: reflections appear from the second frame on (captures wait
+  for it).
 
 ## Materials that keep their energy
 

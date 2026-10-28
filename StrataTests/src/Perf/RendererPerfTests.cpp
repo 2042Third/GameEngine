@@ -840,6 +840,57 @@ TEST_SUITE("PerfGPU.Renderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Spatial screen-space reflections' cost on 100,000 cubes in a 4K view")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+
+		// Render100kCubesShadowed4K's scene with screen-space reflections from every surface (the maximum roughness 1) at
+		// RendererQualitySettings::Reflections Spatial, with FXAA: the nearest-depth pyramid, the full-resolution trace and the
+		// resolve (GPU.Reflections, target 1.2 ms) and the color copy the next frame reads (in GPU.Transparent).
+		constexpr size_t c_Count = 100'000;
+		constexpr uint32_t c_Width4K = 3840;
+		constexpr uint32_t c_Height4K = 2160;
+		const float halfExtent = static_cast<float>(std::ceil(std::sqrt(static_cast<double>(c_Count)))) * Perf::c_GridSpacing * 0.5f;
+		Scene scene("SpatialReflectionCubes4K");
+		Perf::AddCameraAndLight(scene, 4.0f * halfExtent);
+		Perf::CreateCubeGrid(scene, c_Count);
+		PostProcessComponent& postProcess = scene.CreateEntity("Post Process").AddComponent<PostProcessComponent>();
+		postProcess.AntiAliasingMethod = AntiAliasingMode::FXAA;
+		postProcess.ScreenSpaceReflections = true;
+		postProcess.ScreenSpaceReflectionsMaxRoughness = 1.0f;
+		SceneRendererSpecification specification = Perf::MeasuredRendererSpecification();
+		specification.Quality.Reflections = ReflectionsQuality::Spatial;
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(c_Width4K, c_Height4K);
+		const bool measuresGPU = Perf::MeasuresGPU();
+		std::vector<std::string> keys = { "PerfGPU.Renderer.SSRSpatial4K" };
+		if (measuresGPU)
+		{
+			keys.push_back("PerfGPU.Renderer.SSRSpatial4KGPU");
+			keys.push_back("PerfGPU.Renderer.SSRSpatial4KStageGPU");
+		}
+		Perf::CheckBudgetsConfirmed(keys, [&]
+		{
+			const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(c_Count), "Spatial reflections 4K");
+			CHECK(GetDrawnCounts(renderer).Instances == c_Count);
+			CHECK(renderer.GetStats().ScreenSpaceReflections);
+			CHECK_FALSE(renderer.GetStats().TemporalAntiAliasing);
+			Perf::MetricValues values { { "PerfGPU.Renderer.SSRSpatial4K", measurement.CPU.MedianMs } };
+			if (measuresGPU)
+			{
+				values.emplace("PerfGPU.Renderer.SSRSpatial4KGPU", Perf::MeasureGPU(measurement));
+				const double stage = MedianGPUStageMs("GPU.Reflections");
+				CHECK(stage > 0.0);
+				values.emplace("PerfGPU.Renderer.SSRSpatial4KStageGPU", stage);
+			}
+			return values;
+		});
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Idle frames of 3,000 streamed textures in view")
 	{
 		GPUContext gpu;

@@ -1694,6 +1694,14 @@ namespace Strata
 			ResetLocalShadows();
 		// The environment: computed again at the new size by the next frame with a sky (or taken from a renderer of that size).
 		const bool environment = quality.EnvironmentResolution != current.EnvironmentResolution;
+		// Screen-space reflections: the next frame that traces them makes the new mode's targets (none at Off).
+		const bool reflections = quality.Reflections != current.Reflections;
+		if (reflections)
+		{
+			std::vector<nvrhi::ResourceHandle> released;
+			ReleaseScreenReflections(released);
+			Renderer::ReleaseDeferred(std::move(released));
+		}
 
 		current = quality;
 		if (cascades)
@@ -1703,7 +1711,7 @@ namespace Strata
 		}
 		if (environment)
 			ReleaseEnvironment();
-		if (!cascades && !atlas && !environment)
+		if (!cascades && !atlas && !environment && !reflections)
 			return false;
 		ResetHistory();
 		return true;
@@ -2026,11 +2034,7 @@ namespace Strata
 		release(m_LightingStatsBindingSet);
 		m_LightingStatsIrradiance = nullptr;
 		// Screen-space reflections' targets (made again by the next frame that traces them).
-		release(m_SurfaceTexture);
-		release(m_ScreenReflectionTexture);
-		release(m_SurfacePrepassFramebuffer);
-		for (nvrhi::BindingSetHandle& set : m_ScreenReflectionSets)
-			release(set);
+		ReleaseScreenReflections(released);
 		// The scene-color copy (made again by the next frame that draws glass).
 		release(m_SceneColorTexture);
 		for (nvrhi::BindingSetHandle& set : m_SceneColorSets)
@@ -2677,9 +2681,15 @@ namespace Strata
 		const bool temporalWanted = m_Specification.TemporalAntiAliasing && postProcess.AntiAliasing && postProcess.AntiAliasingMethod == AntiAliasingMode::TAA;
 		const TemporalAntiAliasingSettings temporalSettings = GetTemporalAntiAliasingSettings(postProcess);
 
+		// Screen-space reflections, as the quality scales what the scene asks for (RendererQualitySettings::Reflections): the
+		// Spatial modes trace every frame from the previous frame's color copy, along the motion vectors they ask for.
+		const ReflectionsQuality reflectionsQuality = m_Specification.Quality.Reflections;
+		const bool reflectionsAsked = postProcess.ScreenSpaceReflections && reflectionsQuality != ReflectionsQuality::Off;
+		const bool spatialReflectionsWanted = reflectionsAsked && RendererQuality::IsSpatialReflections(reflectionsQuality);
+
 		// Motion: the history holds the renderer's previous frame when that frame copied it (its latest frame asked for motion
 		// too) and drew this render scene or the one it is a clone of (the same slots).
-		m_MotionFrame = options.MotionVectors || options.ShowMotionVectors || temporalWanted;
+		m_MotionFrame = options.MotionVectors || options.ShowMotionVectors || temporalWanted || spatialReflectionsWanted;
 		const bool motionHistory = m_MotionFrame && m_MotionRender != 0 && m_MotionRender == m_RenderCount
 			&& (m_MotionSceneId == renderScene.GetId() || renderScene.GetCloneSource() == m_MotionSceneId);
 		bool motionFailed = false;
@@ -2700,6 +2710,7 @@ namespace Strata
 		// camera cut or a reset asked for (a resize released it). Counted in frames, never in time, so slow frames keep it.
 		// Without its resources (or the motion vectors') the frame is drawn with FXAA.
 		const bool cameraCut = IsCameraCut(camera);
+		const bool historyReset = m_ResetHistory; // The TAA's branch clears it; spatial reflections start again on it too
 		m_TemporalFrame = temporalWanted && m_MotionFrame && EnsureTemporalResources();
 		const bool temporalFailed = temporalWanted && !m_TemporalFrame;
 		m_TemporalResolved = false;
@@ -2735,10 +2746,27 @@ namespace Strata
 		m_Stats.TemporalAntiAliasing = m_TemporalFrame;
 		m_Stats.TemporalFrames = m_TemporalFrame ? m_TemporalFrames : 0u;
 		m_Stats.HistoryResets = m_HistoryResets;
-		// Screen-space reflections fetch the previous frame's resolved image: with TAA, once its history holds that frame.
-		const bool reflectionsWanted = m_TemporalFrame && m_TemporalFrames > 1 && postProcess.ScreenSpaceReflections;
-		m_ReflectionFrame = reflectionsWanted && EnsureScreenReflectionResources();
+		// Screen-space reflections. Checkerboard fetches the previous frame's resolved image: with TAA, once its history holds
+		// that frame. Spatial reads the color copy the renderer's previous frame made of this render scene (or the one it is a
+		// clone of), without a camera cut or a reset since; every frame makes the copy for the next.
+		bool reflectionsWanted = false;
+		m_ReflectionCopyFrame = false;
+		if (spatialReflectionsWanted)
+		{
+			reflectionsWanted = true;
+			m_ReflectionCopyFrame = m_MotionFrame && EnsureSpatialReflectionResources();
+			m_ReflectionFrame = m_ReflectionCopyFrame && m_ReflectionColorRender != 0 && m_ReflectionColorRender == m_RenderCount && !cameraCut
+				&& !historyReset && (m_ReflectionColorSceneId == renderScene.GetId() || renderScene.GetCloneSource() == m_ReflectionColorSceneId);
+			if (!m_TemporalFrame)
+				m_ResetHistory = false;
+		}
+		else
+		{
+			reflectionsWanted = m_TemporalFrame && m_TemporalFrames > 1 && reflectionsAsked && reflectionsQuality == ReflectionsQuality::Checkerboard;
+			m_ReflectionFrame = reflectionsWanted && EnsureScreenReflectionResources();
+		}
 		m_Stats.ScreenSpaceReflections = m_ReflectionFrame;
+		m_Stats.ScreenSpaceReflectionsPending = m_ReflectionCopyFrame && !m_ReflectionFrame;
 
 		// Scene shaders work camera-relative (Include/Scene.glsl): the view's translation is left out of its matrices. The jitter
 		// is only in the frame's copy of the projection: what the CPU culls, chooses levels of detail and fits the cascades with
@@ -2822,7 +2850,7 @@ namespace Strata
 		// The local shadow views' casters: the CPU's on frames that walk the view (both paths), else bounds for the GPU's culling.
 		FindLocalShadowCasters(renderScene, camera, frustum, !m_FeedbackFrame, !m_FeedbackFrame);
 		// Rendered with a reported limitation: keep the error so it is not logged every frame.
-		bool degraded = motionFailed || temporalFailed || (reflectionsWanted && !m_ReflectionFrame);
+		bool degraded = motionFailed || temporalFailed || (reflectionsWanted && !m_ReflectionFrame && !m_ReflectionCopyFrame);
 		if (!m_LocalShadowLights.empty() && !EnsureLocalShadowAtlas())
 		{
 			ResetLocalShadows(); // Reported; no light casts a local shadow this frame
@@ -3065,7 +3093,9 @@ namespace Strata
 			gpuTimer.Next(gpuStages.Reflections);
 			commandList->beginMarker("Reflections");
 			ConvertReflectionProbes(commandList);
-			if (m_ReflectionFrame)
+			if (m_ReflectionFrame && m_SpatialReflectionResources)
+				TraceSpatialReflections(commandList, postProcess);
+			else if (m_ReflectionFrame)
 				TraceScreenReflections(commandList, postProcess);
 			commandList->endMarker();
 		}
@@ -3105,12 +3135,18 @@ namespace Strata
 			commandList->endMarker();
 		}
 		gpuTimer.Next(gpuStages.Transparent);
-		if (m_GlassBatchCount > 0 && m_SceneColorTexture)
+		if ((m_GlassBatchCount > 0 && m_SceneColorTexture) || m_ReflectionCopyFrame)
 		{
 			commandList->beginMarker("SceneColorCopy");
 			CopySceneColor(commandList);
 			commandList->endMarker();
 			m_Stats.SceneColorCopies = 1;
+			if (m_ReflectionCopyFrame)
+			{
+				m_ReflectionColorRender = m_RenderCount + 1;
+				m_ReflectionColorSceneId = renderScene.GetId();
+				m_ReflectionColorPreExposure = m_PreExposure;
+			}
 		}
 		commandList->beginMarker("Transparent");
 		DrawBatches(commandList, Pass::Transparent, true);

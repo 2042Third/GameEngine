@@ -1,0 +1,40 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/Common.glsl"
+
+// One level of the nearest-depth pyramid spatial screen-space reflections march on (SceneRenderer::TraceSpatialReflections, in
+// GPU.Reflections, after the prepass): each texel the nearest (largest, reversed-Z) of the texels it covers in the level above,
+// the prepass's depth for level 0. A texel covers the 2x2 texels below it; the last texel of a row or column also covers the
+// rest of an odd source (levels are half their source's size rounded down), so level k's texel holds the nearest depth of
+// the pixels p with min(p >> (k + 1), size - 1) equal to it: every pixel lies in a texel of every level. A ray that stays in
+// front of a texel's depth over its span cannot hit anything there (Effects/ScreenSpaceReflectionsSpatial.comp).
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(0)) uniform texture2D u_Source;
+layout(set = 0, binding = ST_UAV(0), r32f) uniform writeonly image2D o_Destination;
+
+void main()
+{
+	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize(o_Destination);
+	if (texel.x >= size.x || texel.y >= size.y)
+		return;
+	ivec2 last = textureSize(u_Source, 0) - 1;
+	ivec2 first = min(texel * 2, last);
+	// Two texels each way, three for the last texel of a level whose source is odd (and one where the source is a single texel).
+	ivec2 end = min(texel * 2 + 1, last);
+	if (texel.x == size.x - 1)
+		end.x = last.x;
+	if (texel.y == size.y - 1)
+		end.y = last.y;
+	float nearest = 0.0;
+	for (int y = first.y; y <= end.y; y++)
+	{
+		for (int x = first.x; x <= end.x; x++)
+			nearest = max(nearest, texelFetch(u_Source, ivec2(x, y), 0).r);
+	}
+	imageStore(o_Destination, texel, vec4(nearest));
+}

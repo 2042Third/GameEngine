@@ -55,6 +55,10 @@ namespace Strata
 		// Frames a capture may render again while temporal anti-aliasing settles (c_TemporalSettleFrames): enough for its eight
 		// phases even when another user of the capture renderer started its history again in between.
 		constexpr uint32_t c_MaxCaptureTemporalFrames = 16;
+		// Frames a capture may render again while spatial screen-space reflections wait for a previous frame's color
+		// (SceneRendererStats::ScreenSpaceReflectionsPending): the capture renderer's first frame of a view makes it, the second
+		// reads it.
+		constexpr uint32_t c_MaxCaptureReflectionFrames = 2;
 		// Frames a capture may render again while shadow views of point and spot lights wait to be drawn, or reflection probes'
 		// captures to be converted: none for the capture renderer, which draws every view and converts every loaded capture in its
 		// first frame (SceneRendererSpecification::SpreadLightingUpdates is off); captures still loading count as pending assets.
@@ -299,6 +303,7 @@ namespace Strata
 			uint32_t InstanceFrames = 0; // Renders repeated so far while new mesh renderers waited for their upload to the GPU
 			uint32_t MotionFrames = 0;   // Renders repeated for the motion view's previous frame
 			uint32_t TemporalFrames = 0; // Renders repeated while temporal anti-aliasing settled
+			uint32_t ReflectionFrames = 0; // Renders repeated while spatial reflections waited for a previous frame's color
 			uint32_t LightingFrames = 0; // Renders repeated while shadow views of point and spot lights waited to be drawn
 			uint32_t LightingViewFrames = 0; // Renders repeated while the lighting view's statistics were on their way back
 			std::optional<LightingViewStats> LightingViewStats; // The lighting view's, as the captured frame knew them
@@ -705,7 +710,9 @@ namespace Strata
 			// so each one starts it anyway), so the picture blends complete frames only.
 			const bool temporalPending = !contentPending && stats.TemporalAntiAliasing && stats.TemporalFrames < c_TemporalSettleFrames
 				&& progress.TemporalFrames < c_MaxCaptureTemporalFrames;
-			if (contentPending || temporalPending)
+			// Spatial screen-space reflections read the previous frame's color, which a view's first frame lacks.
+			const bool reflectionsPending = !contentPending && stats.ScreenSpaceReflectionsPending && progress.ReflectionFrames < c_MaxCaptureReflectionFrames;
+			if (contentPending || temporalPending || reflectionsPending)
 			{
 				if (contentPending)
 					renderer->GetSceneRenderer().ResetHistory();
@@ -714,6 +721,7 @@ namespace Strata
 				progress.LightingViewFrames += lightingViewPending ? 1 : 0;
 				progress.ExposureFrames += exposurePending ? 1 : 0;
 				progress.TemporalFrames += temporalPending ? 1 : 0;
+				progress.ReflectionFrames += reflectionsPending ? 1 : 0;
 				progress.TextFrames += textPending ? 1 : 0;
 				progress.AssetFrames += assetsPending ? 1 : 0;
 				progress.MipFrames += mipsPending ? 1 : 0;
@@ -798,7 +806,8 @@ namespace Strata
 				{ "camera", request.OwnCamera.IsSet() ? "custom" : (progress.View.FromScene ? "scene" : "editor") },
 				{ "view", DescribeView(progress.View.Camera) },
 				{ "waitedFrames", std::max({ progress.TextFrames, progress.AssetFrames, progress.MipFrames, progress.PoseFrames, progress.InstanceFrames,
-					progress.MotionFrames, progress.TemporalFrames, progress.LightingFrames, progress.ExposureFrames, progress.LightingViewFrames }) },
+					progress.MotionFrames, progress.TemporalFrames, progress.LightingFrames, progress.ExposureFrames, progress.LightingViewFrames,
+					progress.ReflectionFrames }) },
 				{ "temporalFrames", progress.Stats.TemporalFrames },
 				{ "overlays", progress.Overlays },
 				{ "pendingAssets", progress.PendingAssets },
