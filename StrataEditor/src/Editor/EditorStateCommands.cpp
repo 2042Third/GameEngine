@@ -224,6 +224,7 @@ namespace Strata
 				{ "shadowMapSize", stats.ShadowMapSize },
 				{ "localShadowTileSizes", std::move(tileSizes) },
 				{ "gpuDriven", stats.GPUDriven },
+				{ "gpuCulled", stats.GPUCulled },
 				{ "gpuCounts", stats.GPUDriven && gpu.HasCounters },
 				{ "feedbackRequests", stats.FeedbackRequests },
 				{ "drawCommands", stats.DrawCommands },
@@ -894,8 +895,10 @@ namespace Strata
 			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
 			"times. renderStats is the viewport's latest frame (null while it renders none): quality (the Graphics Quality it drew with, as "
 			"project.settings shows Renderer.Quality), shadowMapSize (the sun's cascades' texels), localShadowTileSizes (each shadowed point and spot "
-			"light's tile), gpuDriven (the GPU culled the frame and built its draws: "
-			"its counts are the GPU's, of a frame 2-3 frames older, once gpuCounts is true; transparent surfaces are the CPU's), feedbackRequests (its "
+			"light's tile), gpuDriven (the frame took the GPU-driven path: "
+			"its counts are the GPU's, of a frame 2-3 frames older, once gpuCounts is true; transparent surfaces are the CPU's), gpuCulled (the GPU "
+			"culled the scene's mesh renderers and built their draws; false in a scene without mesh renderers, whose frames record no culling and "
+			"take their requests from the CPU), feedbackRequests (its "
 			"asset requests came from the GPU's visibility feedback of an earlier frame, not from the CPU walking the view), drawCommands (draw "
 			"calls the CPU recorded), draws (instanced draws of the view), opaqueDraws, shadowDraws, instances, shadowCasters, triangles, "
 			"visibleProxies, occludedProxies (in the frustum but hidden behind what the view draws: left out on the GPU-driven path), occludedCasters "

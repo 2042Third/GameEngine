@@ -497,10 +497,11 @@ pace: neither is the limit) or `"unknown"` (no GPU times: `--no-gpu`, or a drive
 (`gameRenderStats` for the Game view's frame, null while it is hidden; and every `viewport.capture` result's, for the
 captured frame) says what a frame drew: `quality` (the Graphics Quality it drew with, as `project.setSettings` takes
 it), `shadowMapSize` (the sun's cascades' texels), `localShadowTileSizes` (each shadowed point and spot light's tile),
-`gpuDriven` (the GPU culled it
-and built its draws: its counts are the GPU's, of a frame 2-3 frames older in `editor.perf` and of the captured frame in
-captures, once `gpuCounts` is true), `feedbackRequests` (its asset requests came from the GPU's visibility feedback of a
-frame 2-3 frames older: the CPU walks the view itself only on first frames, camera cuts and frames after assets loaded),
+`gpuDriven` (the frame took the GPU-driven path: its counts are the GPU's, of a frame 2-3 frames older in `editor.perf`
+and of the captured frame in captures, once `gpuCounts` is true), `gpuCulled` (the GPU culled the scene's mesh renderers
+and built their draws; false in a scene without mesh renderers, which has nothing to cull), `feedbackRequests` (its asset
+requests came from the GPU's visibility feedback of a frame 2-3 frames older: the CPU walks the view itself on first
+frames, camera cuts, frames after assets loaded and every frame of a scene without mesh renderers, `gpuCulled` false),
 `drawCommands` (draw calls the CPU recorded: a few per pass however large the scene
 on the GPU-driven path), `draws` (instanced draws of the view), `opaqueDraws`, `shadowDraws`, `instances` (an instance
 whose level of detail is cross-fading is drawn twice for 16 frames, at both levels),
