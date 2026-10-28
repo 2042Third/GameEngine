@@ -250,6 +250,8 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 		SceneTestAssets assets;
 		Scene scene;
 		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		// 0.6.0's four levels at this size (the default radius reaches two): the glow is checked 6 pixels out.
+		postProcess.BloomRadius = 0.25f;
 		Entity light = AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(Emitting(200.0f)), glm::vec3(0.0f), "Light");
 		light.GetComponent<TransformComponent>().Scale = glm::vec3(0.1f);
 
@@ -284,6 +286,7 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 		SceneTestAssets assets;
 		Scene scene;
 		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.BloomRadius = 0.25f; // 0.6.0's four levels at this size
 		AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(Emitting(0.18f)), glm::vec3(0.0f, 0.0f, -0.1f), "Wall")
 			.GetComponent<TransformComponent>().Scale = glm::vec3(20.0f);
 		Entity light = AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(Emitting(0.5f)), glm::vec3(0.0f), "Light");
@@ -426,6 +429,7 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 		SceneTestAssets assets;
 		CreaseScene crease;
 		crease.PostProcess->BloomIntensity = 0.1f;
+		crease.PostProcess->BloomRadius = 0.25f; // The chain of 0.6.0 at these small sizes
 		const glm::vec3 lampPosition(-1.0f, 0.4f, 1.2f);
 		AddMesh(crease.SceneData, BuiltinAssets::SphereMesh, assets.AddMaterial(Emitting(100.0f)), lampPosition, "Lamp")
 			.GetComponent<TransformComponent>().Scale = glm::vec3(0.2f);

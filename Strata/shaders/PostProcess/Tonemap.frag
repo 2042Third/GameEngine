@@ -186,6 +186,14 @@ void main()
 			color = mix(color, bloom, u_Parameters.BloomIntensity);
 		color = min(color, vec3(c_MaxExposedValue));
 	}
+	// A lens's natural fall-off toward the corners, on scene-linear light: cos^4 of the field angle (tan theta = |ndc *
+	// VignetteTangents|, the tangents of the half field of view per axis), mixed in by Vignette (1: a lens's full fall-off).
+	if (u_Parameters.Vignette > 0.0)
+	{
+		vec2 field = UVToNDC(v_UV) * u_Parameters.VignetteTangents;
+		float secantSquared = 1.0 + dot(field, field);
+		color *= mix(1.0, 1.0 / (secantSquared * secantSquared), u_Parameters.Vignette);
+	}
 	// White balance, slope, offset and power on scene-linear light, before the tone curve (PostProcessMath::ApplyColorGrading).
 	// The branch is uniform; without grading the color is untouched.
 	if ((u_Parameters.ColorFlags & ST_COLOR_GRADING) != 0u)
@@ -210,9 +218,6 @@ void main()
 
 	float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
 	color = max(mix(vec3(luminance), color, u_Parameters.Saturation), vec3(0.0));
-
-	vec2 centered = v_UV - 0.5;
-	color *= 1.0 - u_Parameters.Vignette * smoothstep(0.2, 0.8, length(centered) * 1.41421356);
 
 	// The target's own quantization, dithered when this pass writes the display image (u_Parameters.DitherLevels).
 	o_Color = vec4(DitherToCodes(LinearToSRGB(clamp(color, 0.0, 1.0)), uvec2(gl_FragCoord.xy), u_Parameters.DitherLevels), 1.0);

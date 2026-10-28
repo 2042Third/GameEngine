@@ -533,6 +533,15 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(loaded.AutoExposureHighPercentile == 0.51f);
 		CHECK(loaded.AutoExposureLightSpeed == 20.0f);
 		CHECK(loaded.AutoExposureKey == 0.5f);
+
+		// Bloom's radius: 64 / 1080 in older files; clamped. The vignette keeps its stored value under the lens's model.
+		loaded = load({ { "Bloom", true }, { "Vignette", 0.2 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.BloomRadius == 64.0f / 1080.0f);
+		CHECK(loaded.Vignette == 0.2f);
+		CHECK(PostProcessComponent().Vignette == 0.12f);
+		loaded = load({ { "BloomRadius", 1.0 } }, warnings);
+		CHECK(loaded.BloomRadius == 0.25f);
 	}
 
 	TEST_CASE("Directional lights saved before cascade blending load with the default blend; invalid blends are clamped or warn")

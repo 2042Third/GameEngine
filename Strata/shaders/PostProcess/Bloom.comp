@@ -29,6 +29,10 @@ layout(push_constant) uniform BloomParameters
 	float Knee;      // Width of the soft transition around the threshold
 	uint Mode;
 	float InversePreExposure; // 1 / the pre-exposure the scene color carries
+	float UpsampleWeight;     // The weight of the smaller level an upsample adds: the deepest level's share, else 1
+	float Padding0;
+	float Padding1;
+	float Padding2;
 } u_Parameters;
 
 vec3 SampleSource(vec2 uv)
@@ -117,7 +121,7 @@ void main()
 	vec3 color;
 	if (u_Parameters.Mode == ST_BLOOM_UPSAMPLE)
 	{
-		color = imageLoad(o_Destination, pixel).rgb + Upsample(uv, texel);
+		color = imageLoad(o_Destination, pixel).rgb + u_Parameters.UpsampleWeight * Upsample(uv, texel);
 	}
 	else if (u_Parameters.Mode == ST_BLOOM_PREFILTER)
 	{

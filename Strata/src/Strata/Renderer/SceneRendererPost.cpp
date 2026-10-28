@@ -348,30 +348,47 @@ namespace Strata
 		m_ExposureReadbackRecorded = false;
 	}
 
+	float SceneRenderer::GetBloomSpan(float radius, uint32_t height, uint32_t levels)
+	{
+		// The deepest level's texel spans 2^span output pixels: BloomRadius times the height. A span within 1e-4 of a whole
+		// number is that number, so the default (64 / 1080) gives 1080 rows exactly six levels.
+		const float safeRadius = std::isfinite(radius) ? std::clamp(radius, 0.01f, 0.25f) : 64.0f / 1080.0f;
+		float span = std::log2(safeRadius * static_cast<float>(std::max(height, 1u)));
+		if (std::abs(span - std::round(span)) < 1e-4f)
+			span = std::round(span);
+		return std::clamp(span, 1.0f, static_cast<float>(std::max(levels, 1u)));
+	}
+
 	void SceneRenderer::RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet)
 	{
 		RenderData::BloomParameters parameters = {};
 		parameters.Threshold = std::max(settings.BloomThreshold, 0.0f);
 		parameters.Knee = parameters.Threshold * 0.5f;
 		parameters.InversePreExposure = 1.0f / m_PreExposure;
+		// The levels the radius asks for: ceil(span), the deepest weighted by the fraction of it the span covers.
+		m_BloomSpan = GetBloomSpan(settings.BloomRadius, m_ViewportSize.y, m_BloomLevels);
+		const uint32_t levels = static_cast<uint32_t>(std::ceil(m_BloomSpan));
+		const float deepestWeight = m_BloomSpan - static_cast<float>(levels - 1);
+		m_Stats.BloomLevels = levels;
 
 		const nvrhi::TextureDesc& desc = m_BloomTexture->getDesc();
-		auto dispatch = [&](nvrhi::IBindingSet* bindingSet, uint32_t mode, uint32_t level)
+		auto dispatch = [&](nvrhi::IBindingSet* bindingSet, uint32_t mode, uint32_t level, float upsampleWeight)
 		{
 			nvrhi::ComputeState state;
 			state.pipeline = m_BloomPipeline;
 			state.bindings = { bindingSet };
 			commandList->setComputeState(state);
 			parameters.Mode = mode;
+			parameters.UpsampleWeight = upsampleWeight;
 			commandList->setPushConstants(&parameters, sizeof(parameters));
 			commandList->dispatch(DispatchGroups(std::max(1u, desc.width >> level)), DispatchGroups(std::max(1u, desc.height >> level)), 1);
 		};
 
-		dispatch(prefilterSet, RenderData::c_BloomPrefilter, 0);
-		for (uint32_t level = 1; level < m_BloomLevels; level++)
-			dispatch(m_BloomDownsampleSets[level], RenderData::c_BloomDownsample, level);
-		for (uint32_t level = m_BloomLevels - 1; level-- > 0;)
-			dispatch(m_BloomUpsampleSets[level], RenderData::c_BloomUpsample, level);
+		dispatch(prefilterSet, RenderData::c_BloomPrefilter, 0, 1.0f);
+		for (uint32_t level = 1; level < levels; level++)
+			dispatch(m_BloomDownsampleSets[level], RenderData::c_BloomDownsample, level, 1.0f);
+		for (uint32_t level = levels - 1; level-- > 0;)
+			dispatch(m_BloomUpsampleSets[level], RenderData::c_BloomUpsample, level, level + 2 == levels ? deepestWeight : 1.0f);
 	}
 
 	bool SceneRenderer::RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const SceneRenderOptions& options, bool resolved,
@@ -390,13 +407,23 @@ namespace Strata
 		return bloom;
 	}
 
+	glm::vec2 SceneRenderer::GetVignetteTangents(const SceneCamera& camera, glm::uvec2 viewportSize)
+	{
+		// Orthographic views have no field angle: they vignette as a 60 degree view of their aspect.
+		const float aspect = static_cast<float>(viewportSize.x) / static_cast<float>(std::max(viewportSize.y, 1u));
+		if (camera.Orthographic || camera.Projection[0][0] == 0.0f || camera.Projection[1][1] == 0.0f)
+			return glm::vec2(aspect, 1.0f) * std::tan(glm::radians(30.0f));
+		return glm::vec2(1.0f / std::abs(camera.Projection[0][0]), 1.0f / std::abs(camera.Projection[1][1]));
+	}
+
 	void SceneRenderer::RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
-		bool resolved, bool bloom, nvrhi::IFramebuffer* output)
+		bool resolved, bool bloom, const glm::vec2& vignetteTangents, nvrhi::IFramebuffer* output)
 	{
 		// Tone mapping into the display target, or into the intermediate target FXAA reads.
 		RenderData::TonemapConstants tonemap = {};
 		tonemap.BloomIntensity = bloom ? std::min(postProcess.BloomIntensity, 1.0f) : 0.0f;
-		tonemap.BloomScale = 1.0f / static_cast<float>(m_BloomLevels);
+		// Every level weighs the same (an octave each): the sum is normalized by the span of levels used.
+		tonemap.BloomScale = 1.0f / m_BloomSpan;
 		tonemap.Saturation = std::max(postProcess.Saturation, 0.0f);
 		tonemap.Contrast = std::clamp(postProcess.Contrast, 0.1f, 4.0f);
 		tonemap.Operator = static_cast<int32_t>(postProcess.Tonemapper);
@@ -405,7 +432,8 @@ namespace Strata
 		// Only the TAA's image is sharpened (it softens texture detail), and only on the way to the display: frames with FXAA, or
 		// without TAA, skip the branch and stay as they were.
 		tonemap.Sharpening = resolved ? temporalSettings.Sharpening : 0.0f;
-		tonemap.Vignette = std::clamp(postProcess.Vignette, 0.0f, 1.0f);
+		tonemap.Vignette = std::isfinite(postProcess.Vignette) ? std::clamp(postProcess.Vignette, 0.0f, 1.0f) : 0.0f;
+		tonemap.VignetteTangents = vignetteTangents;
 		const PostProcessMath::FilmicCurve filmic = PostProcessMath::MakeFilmicCurve(postProcess.Toe, postProcess.Shoulder);
 		tonemap.FilmicToeSlope = filmic.ToeSlope;
 		tonemap.FilmicWhiteStops = filmic.WhiteStops;

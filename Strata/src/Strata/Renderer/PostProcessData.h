@@ -93,11 +93,12 @@ namespace Strata
 		constexpr float c_ExposureKeyMinStops = -2.0f;
 		constexpr float c_ExposureKeyMaxStops = 1.0f;
 
-		// PostProcess/Bloom.comp's modes, and the deepest level of its chain.
+		// PostProcess/Bloom.comp's modes, and the most levels its chain allocates (every level down to 4 pixels: a frame uses
+		// as many as PostProcessComponent::BloomRadius asks for, so a change of the radius never reallocates).
 		constexpr uint32_t c_BloomPrefilter = 0;
 		constexpr uint32_t c_BloomDownsample = 1;
 		constexpr uint32_t c_BloomUpsample = 2;
-		constexpr uint32_t c_MaxBloomLevels = 6;
+		constexpr uint32_t c_MaxBloomLevels = 8;
 
 		// PostProcess/Bloom.comp (push constants).
 		struct BloomParameters
@@ -106,8 +107,12 @@ namespace Strata
 			float Knee;
 			uint32_t Mode;
 			float InversePreExposure; // 1 / the pre-exposure the scene color carries
+			float UpsampleWeight;     // Upsamples: the weight of the smaller level added (the deepest level's share; else 1)
+			float Padding0;
+			float Padding1;
+			float Padding2;
 		};
-		static_assert(sizeof(BloomParameters) == 16);
+		static_assert(sizeof(BloomParameters) == 32);
 
 	}
 

@@ -532,6 +532,11 @@ TEST_SUITE("Scene.InactiveProperties")
 		for (const char* property : { "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed", "BloomIntensity", "BloomThreshold",
 			"AmbientOcclusionRadius", "AmbientOcclusionIntensity", "AntiAliasingMethod" })
 			CHECK_MESSAGE(reason("PostProcess", property).empty(), property);
+		// The bloom's radius only with bloom.
+		CHECK(reason("PostProcess", "BloomRadius").empty());
+		post.Bloom = false;
+		CHECK(reason("PostProcess", "BloomRadius") == "Bloom is off");
+		post.Bloom = true;
 		// The metering, its window, the light adaptation and the key: automatic exposure's.
 		for (const char* property : { "AutoExposureMetering", "AutoExposureLowPercentile", "AutoExposureHighPercentile", "AutoExposureLightSpeed", "AutoExposureKey" })
 		{

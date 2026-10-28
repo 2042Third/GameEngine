@@ -271,6 +271,7 @@
 						"AutoExposureSpeed": 2,
 						"Bloom": true,
 						"BloomIntensity": 0.08,
+						"BloomRadius": 0.08,
 						"BloomThreshold": 1,
 						"ColorOffset": [
 							0.0,

@@ -465,7 +465,9 @@ namespace Strata
 			.Property("ScreenSpaceReflectionsMaxRoughness", &PostProcessComponent::ScreenSpaceReflectionsMaxRoughness,
 				WithTooltip(Slider(0.0f, 1.0f), "Surfaces rougher than this get none, and they fade out over the last quarter below it: rough "
 					"surfaces blur what they reflect, which screen-space reflections do not"))
-			.Property("Vignette", &PostProcessComponent::Vignette, Slider(0.0f, 1.0f))
+			.Property("Vignette", &PostProcessComponent::Vignette,
+				WithTooltip(Slider(0.0f, 1.0f), "Natural darkening toward the image's corners, as a lens's (cos^4 of the field angle): 0 none, 1 a "
+					"lens's full fall-off; 0.12 darkens the corners of a 60 degree view by about 10%"))
 			.Property("Saturation", &PostProcessComponent::Saturation, Slider(0.0f, 2.0f))
 			.Property("Contrast", &PostProcessComponent::Contrast, WithTooltip(Slider(0.5f, 2.0f), "Around middle gray; 1 = unchanged"))
 			.Property("Toe", &PostProcessComponent::Toe, WithTooltip(Slider(0.0f, 1.0f), "How deep the shadows go: higher crushes the darkest tones toward "
@@ -494,11 +496,14 @@ namespace Strata
 			.Property("AutoExposureKey", &PostProcessComponent::AutoExposureKey,
 				WithTooltip(Range(0.0f, 0.5f, 0.01f), "How much a scene's brightness against a gray card in the sun shows: 0 meters every scene to "
 					"middle gray; 0.12 shows an interior 5 stops below the sun's card 0.6 stops darker (at most 2 darker, 1 brighter). Needs a "
-					"directional light"));
+					"directional light"))
+			.Property("BloomRadius", &PostProcessComponent::BloomRadius,
+				WithTooltip(Range(0.01f, 0.25f, 0.001f), "How far the glow reaches, as a fraction of the image height: the same share of the image "
+					"at every resolution"));
 		// Exposure is the compensation SceneRenderer applies with automatic exposure too: always active.
 		SetInactiveReasons<PostProcessComponent>({ "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed", "AutoExposureMetering",
 			"AutoExposureLowPercentile", "AutoExposureHighPercentile", "AutoExposureLightSpeed", "AutoExposureKey" }, &WithAutoExposure);
-		SetInactiveReasons<PostProcessComponent>({ "BloomIntensity", "BloomThreshold" }, &WithBloom);
+		SetInactiveReasons<PostProcessComponent>({ "BloomIntensity", "BloomThreshold", "BloomRadius" }, &WithBloom);
 		SetInactiveReasons<PostProcessComponent>({ "Toe" }, &WithFilmicToe);
 		SetInactiveReasons<PostProcessComponent>({ "Shoulder" }, &WithFilmicShoulder);
 		SetInactiveReasons<PostProcessComponent>({ "AmbientOcclusionRadius", "AmbientOcclusionIntensity" }, &WithAmbientOcclusion);

@@ -101,8 +101,8 @@ namespace Strata
 		// cached ones are made again.
 		// 2: skinned meshes stand in their skeleton's rest pose; 3: wave 4's renderer (the shadow bias, size culling); 4: cascade
 		// blending (shadows fade out over the last tenth of the shadow distance, which large models reach); 5: dithered output;
-		// 6: Filmic for scenes without a Post Process.
-		static constexpr uint32_t c_Version = 6;
+		// 6: Filmic for scenes without a Post Process; 7: the lens vignette and bloom by screen fraction.
+		static constexpr uint32_t c_Version = 7;
 
 		ThumbnailCache(const Ref<EditorAssetManager>& assets, ThumbnailCacheSpecification specification);
 		~ThumbnailCache();
