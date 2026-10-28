@@ -108,6 +108,7 @@ strata_add_shaders(Strata_Renderer
 		Effects/ScreenSpaceReflections.comp
 		Effects/SceneColorCopy.comp
 		Effects/ScreenShadows.frag
+		Effects/ContactShadows.frag
 		Effects/ScreenShadowsBlur.frag
 		PostProcess/Fullscreen.vert
 		PostProcess/Tonemap.frag

@@ -701,6 +701,11 @@ namespace Strata
 		static constexpr float c_ScreenShadowMaxBlurPixels = 8.0f;
 		// The mask's blur keeps taps within this fraction of a pixel's view distance of its plane.
 		static constexpr float c_ScreenShadowPlaneTolerance = 0.01f;
+		// Contact shadows: the march's reach on screen as a share of the image's height, and how thick (meters, plus a share of
+		// the view distance) what it passes behind must be to occlude.
+		static constexpr float c_ContactShadowMaxScreenShare = 0.05f;
+		static constexpr float c_ContactShadowThickness = 0.02f;
+		static constexpr float c_ContactShadowThicknessScale = 0.005f;
 		// Frames over which a light's shadow fades in once all its views are drawn (SceneRendererSpecification::
 		// SpreadLightingUpdates).
 		static constexpr uint32_t c_LocalShadowFadeFrames = 8;
@@ -840,6 +845,7 @@ namespace Strata
 			float Bias = 1.0f;
 			float NormalBias = 1.5f;
 			float CascadeBlend = 0.1f; // DirectionalLightComponent::CascadeBlend, within [0, 0.5]
+			float ContactLength = 0.3f; // DirectionalLightComponent::ContactShadowLength, within [0, 2]
 		};
 
 		// A transparent submesh instance, drawn on its own, back to front.
@@ -1550,7 +1556,7 @@ namespace Strata
 		// be made (the frame renders without the sun's shadows, reported). RenderScreenShadows records the evaluation and the
 		// two blur passes after the depth prepass.
 		bool EnsureScreenShadowResources();
-		void RenderScreenShadows(nvrhi::ICommandList* commandList);
+		void RenderScreenShadows(nvrhi::ICommandList* commandList, const RenderData::FrameConstants& frame);
 		void ReleaseScreenShadowTargets(std::vector<nvrhi::ResourceHandle>& released);
 		// What the scene binding sets name at SRV 28: the mask, or white (visibility 1) without one.
 		nvrhi::ITexture* GetBoundScreenShadows() const;
@@ -1646,15 +1652,19 @@ namespace Strata
 		nvrhi::TextureHandle m_DummyShadowRanges;
 		nvrhi::ITexture* m_BoundShadowRanges = nullptr;
 		// The sun's screen-space shadow mask (EnsureScreenShadowResources): targets A (the result) and B, their framebuffers, the
-		// evaluation's and the blur's pipelines and binding sets (the evaluation's names the shadow map and ranges it was made
-		// with; the blur's read A, then B), and the texture the scene binding sets name at SRV 28.
+		// evaluation's, the contact shadows' and the blur's pipelines and binding sets (the evaluation's names the shadow map and
+		// ranges it was made with; the contact shadows' read B; the blur's read A, then B), and the texture the scene binding
+		// sets name at SRV 28.
 		std::array<nvrhi::TextureHandle, 2> m_ScreenShadowTextures;
 		std::array<nvrhi::FramebufferHandle, 2> m_ScreenShadowFramebuffers;
 		nvrhi::BindingLayoutHandle m_ScreenShadowLayout;
 		nvrhi::BindingLayoutHandle m_ScreenShadowBlurLayout;
+		nvrhi::BindingLayoutHandle m_ContactShadowLayout;
 		nvrhi::GraphicsPipelineHandle m_ScreenShadowPipeline;
 		nvrhi::GraphicsPipelineHandle m_ScreenShadowBlurPipeline;
+		nvrhi::GraphicsPipelineHandle m_ContactShadowPipeline;
 		nvrhi::BindingSetHandle m_ScreenShadowSet;
+		nvrhi::BindingSetHandle m_ContactShadowSet;
 		std::array<nvrhi::BindingSetHandle, 2> m_ScreenShadowBlurSets;
 		const nvrhi::ITexture* m_ScreenShadowBoundMap = nullptr;
 		const nvrhi::ITexture* m_ScreenShadowBoundRanges = nullptr;

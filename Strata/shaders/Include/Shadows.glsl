@@ -12,25 +12,19 @@
 // normal offset (ShadowBias), and a receiver plane depth bias that follows the receiver's slope across the filter region.
 // Every shader that includes this file enables GL_EXT_samplerless_texture_functions.
 
+#include "Include/BlueNoise.glsl"
 #include "Include/Scene.glsl"
 
 layout(set = 0, binding = ST_SRV(7)) uniform texture2DArray u_ShadowMap;
 // Per cascade layer, three levels of cells of 4, 8 and 16 shadow texels each way: the nearest depth (the largest, toward the
 // light) rounded up in the high 16 bits, the farthest rounded down in the low 16 bits.
 layout(set = 0, binding = ST_SRV(32)) uniform utexture2DArray u_ShadowRanges;
-// A 64x64 tile of blue noise (Renderer::GetBlueNoiseTexture): per-pixel values whose neighbors differ, fixed per pixel.
-layout(set = 0, binding = ST_SRV(33)) uniform texture2D u_BlueNoise;
 layout(set = 0, binding = ST_SAMPLER(9)) uniform samplerShadow u_ShadowCompareSampler;
 
 const int c_ShadowRangeLevels = 3;
 const float c_MaxShadowSearchTexels = 31.0; // Keeps a search region within 5 x 5 cells of its level
 const float c_GoldenAngle = 2.39996323;
 
-// The blue-noise tile's value at a pixel, shifted by `shift` (decorrelated uses take different shifts), in (0, 1).
-float BlueNoise(ivec2 pixel, ivec2 shift)
-{
-	return texelFetch(u_BlueNoise, (pixel + shift) & 63, 0).r + 0.5 / 256.0;
-}
 
 int SelectCascade(float viewDepth)
 {

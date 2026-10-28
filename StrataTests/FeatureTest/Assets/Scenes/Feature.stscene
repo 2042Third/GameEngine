@@ -104,6 +104,7 @@
 							0.95,
 							0.85
 						],
+						"ContactShadowLength": 0.4,
 						"Intensity": 4,
 						"ShadowBias": 1.2,
 						"ShadowDistance": 40,

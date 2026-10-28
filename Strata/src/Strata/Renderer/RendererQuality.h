@@ -67,6 +67,8 @@ namespace Strata
 		// Taps of the sun's shadow edges where their penumbra is wider than a shadow texel (a Vogel disk turned by a fixed
 		// blue-noise tile, Include/Shadows.glsl): 8, 16, 24 or 32. More taps, less grain.
 		uint32_t ShadowFilterQuality = 16;
+		// Steps of the sun's screen-space contact shadows (0 off; else 4 to 32), which ground objects below the cascades' detail.
+		uint32_t ContactShadows = 0;
 
 		// Every member equal, Preset included.
 		bool operator==(const RendererQualitySettings& other) const = default;

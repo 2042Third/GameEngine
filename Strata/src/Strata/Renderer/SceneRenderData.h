@@ -549,7 +549,7 @@ namespace Strata
 		};
 		static_assert(sizeof(ShadowRangeParameters) == 32);
 
-		// Effects/ScreenShadows.frag: the sun's contact shadows (none while ContactSteps is 0).
+		// Effects/ContactShadows.frag: the sun's contact shadows (the pass does not run while ContactSteps is 0).
 		struct ScreenShadowParameters
 		{
 			float ContactLength;         // Meters toward the sun

@@ -479,6 +479,18 @@
 					"Speed": 0.0,
 					"Tooltip": "Fraction of each shadow cascade's depth range over which it blends into the next one, hiding the seams between them; the last one fades out by the Shadow Distance. 0 switches at once",
 					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Contact Shadow Length",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 2.0,
+					"Min": 0.0,
+					"Name": "ContactShadowLength",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Meters toward the light over which contact shadows ground objects smaller than the shadow cascades' texels (Graphics Quality's Contact Shadows, High and Ultra); 0 off",
+					"Type": "Float"
 				}
 			]
 		},

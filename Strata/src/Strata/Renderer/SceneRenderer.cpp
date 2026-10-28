@@ -2352,6 +2352,8 @@ namespace Strata
 			m_ShadowLight.Bias = light.ShadowBias;
 			m_ShadowLight.NormalBias = light.ShadowNormalBias;
 			m_ShadowLight.CascadeBlend = std::isfinite(light.CascadeBlend) ? std::clamp(light.CascadeBlend, 0.0f, DirectionalLightComponent::c_MaxCascadeBlend) : 0.0f;
+			m_ShadowLight.ContactLength = std::isfinite(light.ContactShadowLength)
+				? std::clamp(light.ContactShadowLength, 0.0f, DirectionalLightComponent::c_MaxContactShadowLength) : 0.0f;
 		};
 		float brightest = -1.0f;
 		for (auto [entity, light, world] : registry.view<DirectionalLightComponent, WorldTransformComponent>().each())
@@ -3115,7 +3117,7 @@ namespace Strata
 		{
 			gpuTimer.Next(gpuStages.ScreenShadows);
 			commandList->beginMarker("ScreenShadows");
-			RenderScreenShadows(commandList);
+			RenderScreenShadows(commandList, frame);
 			commandList->endMarker();
 			m_Stats.ScreenShadows = true;
 		}

@@ -39,11 +39,15 @@ namespace Strata
 		constexpr PresetRow<float> c_LODErrorPixelsRow = { 2.0f, 1.0f, 1.0f, 0.5f };
 		constexpr PresetRow<float> c_MinProjectedPixelsRow = { 1.0f, 0.5f, 0.5f, 0.25f };
 		constexpr PresetRow<uint32_t> c_ShadowFilterQualityRow = { 8, 16, 24, 32 };
+		constexpr PresetRow<uint32_t> c_ContactShadowsRow = { 0, 0, 12, 16 };
 
 		constexpr uint32_t c_MinLocalShadowAtlasSize = 512;
 		constexpr uint32_t c_MaxLocalShadowAtlasSize = 8192;
 		constexpr uint32_t c_MinLocalShadowTile = 128;
 		constexpr float c_MaxPixels = 8.0f;
+		// Contact shadows march no steps (off) or 4 to 32 (RendererQualitySettings::ContactShadows): fewer reach too little.
+		constexpr uint32_t c_MinContactShadowSteps = 4;
+		constexpr uint32_t c_MaxContactShadowSteps = 32;
 
 		// The sizes the section offers for the local shadows' atlas and its largest tile, stored as their names.
 		constexpr uint32_t c_AtlasSizeOptions[] = { 1024, 2048, 4096, 8192 };
@@ -191,6 +195,7 @@ namespace Strata
 					settings.LODErrorPixels = c_LODErrorPixelsRow[index];
 					settings.MinProjectedPixels = c_MinProjectedPixelsRow[index];
 					settings.ShadowFilterQuality = c_ShadowFilterQualityRow[index];
+					settings.ContactShadows = c_ContactShadowsRow[index];
 				}
 				return presets;
 			}();
@@ -220,6 +225,8 @@ namespace Strata
 			const auto taps = std::find_if(std::begin(c_ShadowFilterTapOptions), std::end(c_ShadowFilterTapOptions),
 				[&](uint32_t option) { return option >= clamped.ShadowFilterQuality; });
 			clamped.ShadowFilterQuality = taps != std::end(c_ShadowFilterTapOptions) ? *taps : c_ShadowFilterTapOptions[std::size(c_ShadowFilterTapOptions) - 1];
+			clamped.ContactShadows = clamped.ContactShadows == 0 ? 0u
+				: std::clamp(clamped.ContactShadows, c_MinContactShadowSteps, c_MaxContactShadowSteps);
 			if (static_cast<uint8_t>(clamped.Preset) > static_cast<uint8_t>(RendererQualityPreset::Custom))
 				clamped.Preset = RendererQualityPreset::Custom;
 			return clamped;
@@ -327,6 +334,9 @@ namespace Strata
 			section.Fields.push_back(EnumField("ShadowFilterQuality", "Shadow filter quality", "Custom only: taps of the sun's shadow edges where "
 				"they are wider than a shadow texel; more taps, less grain before the screen-space blur (8 Low, 16 Medium, 24 High, 32 Ultra).",
 				SizeOptions(c_ShadowFilterTapOptions), std::to_string(high.ShadowFilterQuality)));
+			section.Fields.push_back(NumberField("ContactShadows", "Contact shadows", "Custom only: steps of the sun's contact shadows, which ground "
+				"objects below the shadow map's detail (0 off: Low and Medium; 12 High; 16 Ultra; 1 to 3 count as 4).", SettingsFieldType::Int, 0,
+				c_MaxContactShadowSteps, high.ContactShadows));
 			return section;
 		}
 
@@ -353,6 +363,7 @@ namespace Strata
 				ReadField(*value, "LODErrorPixels", settings.LODErrorPixels);
 				ReadField(*value, "MinProjectedPixels", settings.MinProjectedPixels);
 				ReadField(*value, "ShadowFilterQuality", settings.ShadowFilterQuality);
+				ReadField(*value, "ContactShadows", settings.ContactShadows);
 			}
 			// Knobs read under every preset (players' comfort rows) follow here, one line each.
 			return Clamp(settings);
@@ -369,7 +380,8 @@ namespace Strata
 				{ "MaxShadowedLocalLights", settings.MaxShadowedLocalLights },
 				{ "LODErrorPixels", settings.LODErrorPixels },
 				{ "MinProjectedPixels", settings.MinProjectedPixels },
-				{ "ShadowFilterQuality", std::to_string(settings.ShadowFilterQuality) }
+				{ "ShadowFilterQuality", std::to_string(settings.ShadowFilterQuality) },
+				{ "ContactShadows", settings.ContactShadows }
 			};
 		}
 

@@ -60,6 +60,7 @@ namespace
 		DirectionalLightComponent& sun = lights.AddComponent<DirectionalLightComponent>();
 		sun.Intensity = 5.0f;
 		sun.CascadeBlend = 0.3f;
+		sun.ContactShadowLength = 0.75f;
 		PointLightComponent& lamp = lights.AddComponent<PointLightComponent>();
 		lamp.Range = 42.0f;
 		lamp.CastShadows = true;
@@ -229,6 +230,7 @@ TEST_SUITE("Scene.Serialization")
 
 		CHECK(loaded.FindEntityByName("Lights").GetComponent<PostProcessComponent>().AntiAliasingMethod == AntiAliasingMode::TAA);
 		CHECK(loaded.FindEntityByName("Lights").GetComponent<DirectionalLightComponent>().CascadeBlend == doctest::Approx(0.3f));
+		CHECK(loaded.FindEntityByName("Lights").GetComponent<DirectionalLightComponent>().ContactShadowLength == doctest::Approx(0.75f));
 		const PointLightComponent& lamp = loaded.FindEntityByName("Lights").GetComponent<PointLightComponent>();
 		CHECK(lamp.CastShadows);
 		CHECK(lamp.ShadowBias == doctest::Approx(2.5f));
@@ -498,6 +500,8 @@ TEST_SUITE("Scene.Serialization")
 			{ "ShadowNormalBias", 1.5 }, { "ShadowSoftness", 1 } }, warnings);
 		CHECK(warnings.empty());
 		CHECK(loaded.CascadeBlend == doctest::Approx(0.1f));
+		// As 0.6.0 saved it (no contact shadows): the default length, so contact shadows are on for existing scenes at High.
+		CHECK(loaded.ContactShadowLength == doctest::Approx(0.3f));
 		// Stored softness is kept (scenes store every property); a light stored without one has the sun's 0.53 degrees.
 		CHECK(loaded.ShadowSoftness == 1.0f);
 		CHECK(load(nlohmann::json::object(), warnings).ShadowSoftness == doctest::Approx(0.53f));
@@ -512,6 +516,12 @@ TEST_SUITE("Scene.Serialization")
 		loaded = load({ { "CascadeBlend", "wide" } }, warnings);
 		CHECK(CountWarnings(warnings, "CascadeBlend") == 1);
 		CHECK(loaded.CascadeBlend == doctest::Approx(0.1f));
+		warnings.clear();
+		loaded = load({ { "ContactShadowLength", 5 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.ContactShadowLength == doctest::Approx(DirectionalLightComponent::c_MaxContactShadowLength));
+		loaded = load({ { "ContactShadowLength", 0 } }, warnings);
+		CHECK(loaded.ContactShadowLength == 0.0f);
 	}
 
 	TEST_CASE("Point and spot lights saved before their shadows load without them; invalid shadow settings are clamped or warn")

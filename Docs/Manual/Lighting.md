@@ -111,6 +111,13 @@ the ground and soften with the distance from their caster as a real sun's do (a 
 **Shadow Bias** and **Shadow Normal Bias** remove the speckles ("acne") a surface can cast on itself: raise them a little
 when lit surfaces show dark stripes, lower them when shadows detach from their casters.
 
+**Contact Shadow Length** (meters, 0.3 by default, at most 2) grounds what is smaller than the cascades can show, such as a
+foot on the ground or a thin plate on a table: at the High and Ultra graphics quality the renderer looks this far toward
+the sun over what the camera sees and shades where something is in the way. 0 turns them off for the light. Like every
+effect worked out from the image, they come from every opaque surface on screen, also from meshes whose **Cast Shadows**
+is off, and from nothing off screen or hidden behind something; they fade out toward the shadow distance and the image's
+edges, and transparent surfaces neither cast nor receive them.
+
 Point and spot lights cast shadows when **Cast Shadows** is on (it is off by default). A spot light's shadow covers its
 cone, a point light's every direction (the renderer draws it as the six faces of a cube). **Shadow Filter Radius** softens
 the shadow's edge (0 is sharp, 8 the softest), and **Shadow Bias** and **Shadow Normal Bias** work as for the sun; all

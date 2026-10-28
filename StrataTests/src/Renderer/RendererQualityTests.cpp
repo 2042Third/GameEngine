@@ -30,6 +30,7 @@ namespace
 	constexpr std::array<float, 4> c_LODErrorPixels = { 2.0f, 1.0f, 1.0f, 0.5f };
 	constexpr std::array<float, 4> c_MinProjectedPixels = { 1.0f, 0.5f, 0.5f, 0.25f };
 	constexpr std::array<uint32_t, 4> c_ShadowFilterQuality = { 8, 16, 24, 32 };
+	constexpr std::array<uint32_t, 4> c_ContactShadows = { 0, 0, 12, 16 };
 
 	void CheckColumn(const RendererQualitySettings& settings, size_t column)
 	{
@@ -42,6 +43,7 @@ namespace
 		CHECK(settings.LODErrorPixels == c_LODErrorPixels[column]);
 		CHECK(settings.MinProjectedPixels == c_MinProjectedPixels[column]);
 		CHECK(settings.ShadowFilterQuality == c_ShadowFilterQuality[column]);
+		CHECK(settings.ContactShadows == c_ContactShadows[column]);
 	}
 
 	constexpr RendererQualityPreset c_Presets[] = { RendererQualityPreset::Low, RendererQualityPreset::Medium, RendererQualityPreset::High,
@@ -139,7 +141,7 @@ TEST_SUITE("Renderer.Quality")
 		}
 	}
 
-	TEST_CASE("High is Medium below 1440 rows but for the sun shadows' filter")
+	TEST_CASE("High is Medium below 1440 rows but for the sun shadows' filter and contact shadows")
 	{
 		const RendererQualitySettings high = RendererQuality::GetPreset(RendererQualityPreset::High);
 		const RendererQualitySettings medium = RendererQuality::GetPreset(RendererQualityPreset::Medium);
@@ -152,6 +154,9 @@ TEST_SUITE("Renderer.Quality")
 			// High's wide penumbrae take more taps at every size (the rows streams add that differ below 1440 rows).
 			CHECK(resolved.ShadowFilterQuality == 24);
 			resolved.ShadowFilterQuality = medium.ShadowFilterQuality;
+			CHECK(resolved.ContactShadows == 12);
+			CHECK(medium.ContactShadows == 0);
+			resolved.ContactShadows = medium.ContactShadows;
 			CHECK(resolved.HasSameKnobs(medium));
 		}
 		CHECK(RendererQuality::ResolveShadowMapSize(high.ShadowResolution, 1440) != RendererQuality::ResolveShadowMapSize(medium.ShadowResolution, 1440));
@@ -190,6 +195,9 @@ TEST_SUITE("Renderer.Quality")
 		refused({ { "LODErrorPixels", 9.0 } });
 		refused({ { "ShadowFilterQuality", "12" } });
 		refused({ { "ShadowFilterQuality", 16 } });
+		refused({ { "ContactShadows", 33 } });
+		refused({ { "ContactShadows", -1 } });
+		refused({ { "ContactShadows", "12" } });
 		refused({ { "Unknown", 1 } });
 
 		const nlohmann::json custom = { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LocalShadowAtlasSize", "2048" },
@@ -323,6 +331,15 @@ TEST_SUITE("Renderer.Quality")
 			RendererQualitySettings filter;
 			filter.ShadowFilterQuality = taps;
 			CHECK(RendererQuality::Clamp(filter).ShadowFilterQuality == expected);
+		}
+		// Contact shadows: off, or 4 to 32 steps.
+		for (const auto& [steps, expected] : { std::pair { 0u, 0u }, std::pair { 1u, 4u }, std::pair { 3u, 4u }, std::pair { 4u, 4u }, std::pair { 12u, 12u },
+				 std::pair { 32u, 32u }, std::pair { 33u, 32u }, std::pair { 1000u, 32u } })
+		{
+			CAPTURE(steps);
+			RendererQualitySettings contact;
+			contact.ContactShadows = steps;
+			CHECK(RendererQuality::Clamp(contact).ContactShadows == expected);
 		}
 	}
 }

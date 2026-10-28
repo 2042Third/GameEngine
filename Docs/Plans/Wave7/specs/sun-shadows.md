@@ -1407,3 +1407,28 @@ name). Differences found while building:
   parallel to the light, whose receiver plane makes their visibility 0.5 (shaded by N.L = 0, so never seen). The TAA
   suite's smoothing cases now bound the converged roughness at 0.9 of a frame's: with the mask, a frame's penumbra is
   smooth already.
+- Step 4: the march and `FaceNormal` live in `Effects/ScreenShadows.frag` (`ContactShadow` returns the occlusion and the
+  step's length on screen); the constants are `SceneRenderer::c_ContactShadowMaxScreenShare` (0.05),
+  `c_ContactShadowThickness` (0.02) and `c_ContactShadowThicknessScale` (0.005); `RenderScreenShadows` takes the frame's
+  constants for the shadow distance. `ContactShadows` is an Int field 0-32 whose description says 1-3 count as 4
+  (`Clamp`); the section stays at version 2 (one bump for the stream). The plate test's single cascade covers 400 m, not
+  200: at 200 its texels (0.37 m) are smaller than the plate's bounding sphere (0.43 m), so the plate was drawn as a
+  one-texel caster. The convex test reads the sun's share in HDR (an 8-bit image hides a whole shadow on faces lit at
+  grazing angles) and adds an 8-segment cylinder 2 m long: on the 16 x 8 sphere a ray leaving a face turned from the sun
+  near its sun-side edge crosses the face's plane only beyond that edge, where the next face bends away, so the sphere
+  cannot fail without the face test; the cylinder's long faces let the ray dip into them (it fails without the face test,
+  least share 0.0). The grain test measures the RMS along the contact shadow's edge (each column against its mean over
+  20 cm of the plate's length) instead of against a 9-pixel moving average, which reads the edge's own curvature as
+  noise: 1.4% with the blur by step length, 5.4% with a 1-pixel blur. The fade test's plate casts nothing into the
+  cascades. `GPU.SceneRenderer.GPUDriven`'s comparison renders every scene with 12 contact steps.
+  Contact shadows are a pass of their own, `Effects/ContactShadows.frag`, between the evaluation (which then writes B) and
+  the blur (B into A), not a block of `ScreenShadows.frag`: inside the evaluation the march made `GPU.ScreenShadows` 1.34
+  ms in `tp.scene` at 3840x2160 High (0.60 without it, step 3), the two parts' registers together; apart, with the steps
+  interpolated in clip space, their depth reads issued four at a time, steps more than two pixels' footprint in front of
+  the depth buffer's surface ended without the face's plane, and the start's face test asked only once a step hits, the
+  stage is 0.87 ms (contact shadows +0.27 ms). `ScreenShadowParameters` are the contact pass's push constants (the
+  evaluation has none); `Include/BlueNoise.glsl` holds the tile both passes read.
+  The blur radius by step length also goes to pixels whose march passed behind a surface by more than the thickness, not
+  only to those that hit: behind objects seen from the camera, whether a step lands within the thickness depends on the
+  per-pixel offset, and blurring only the hits left a stipple of unblurred lit pixels between them (the ThirdPerson
+  robot's arm over the floor in `tp.scene`, no AA); now that area is a smooth partial shadow, at the same cost.

@@ -87,6 +87,8 @@ namespace
 			specification.GPUDriven = mode;
 			specification.IndirectMode = indirect;
 			specification.Quality.LODErrorPixels = lodErrorPixels;
+			// High's contact shadows: their march reads the depth both paths must write alike.
+			specification.Quality.ContactShadows = 12;
 			specification.MaxDrawsPerIndirectCall = maxDrawsPerCall;
 			specification.TextureStreaming = false; // Every level of every texture, on both paths
 			if (everyLocalShadowView)

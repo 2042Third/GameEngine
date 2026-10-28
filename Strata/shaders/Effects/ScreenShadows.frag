@@ -10,22 +10,11 @@
 // (lit, umbra, narrow penumbrae), 0.35 of the penumbra's half-width in pixels where the blue-noise-turned disk did, enough
 // to take its grain without widening the penumbra by more than about 6%. Output: red the square root of the visibility (8
 // bits spent where a step would show, near the umbra), green the blur radius over c_ScreenShadowMaxBlurPixels. Opaque
-// surfaces read the red (Scene/Forward.frag); transparent ones filter per pixel.
+// surfaces read the red (Scene/Forward.frag); transparent ones filter per pixel. Contact shadows follow in their own pass
+// (Effects/ContactShadows.frag).
 
 layout(set = 0, binding = ST_SRV(22)) uniform texture2D u_Depth;
 layout(set = 0, binding = ST_SRV(23)) uniform texture2D u_Normals; // The prepass's view-space geometric normal, octahedral
-
-layout(push_constant) uniform ScreenShadowParameters
-{
-	float ContactLength;
-	uint ContactSteps;
-	float ContactMaxPixels;
-	float ContactFadeStart;
-	float ContactFadeEnd;
-	float ContactThickness;
-	float ContactThicknessScale;
-	uint Reserved;
-} u_ScreenShadows;
 
 layout(location = 0) out vec2 o_Mask;
 

@@ -50,9 +50,15 @@ integrator writes the release notes from them when the wave lands (and removes t
 - Opaque surfaces take the sun's shadow from a screen-space mask drawn after the depth prepass, whose edge-aware blur
   removes the soft penumbrae's grain in the frame (no TAA needed) without letting light cross a silhouette; transparent
   surfaces keep a per-pixel filter, without the blur. New GPU stage `GPU.ScreenShadows`.
+- Contact shadows ground small objects at High and Ultra: the sun's shadow mask marches toward the sun over the depth
+  buffer and shades what the cascades are too coarse for (Contact Shadow Length on the Directional Light, 0.3 m; 0 off).
+  Graphics Quality gains Contact Shadows (off at Low and Medium, 12 steps at High, 16 at Ultra).
 
 **Upgrading**
 
 - Every scene's sun shadows change: penumbrae half as wide as before for the same Shadow Softness, narrow edges filtered
   by a fixed tent instead of rotated noise. Set Shadow Softness to 2 times its old value to keep a scene's old width.
 - Thumbnails are made again (their cache's version is 5).
+- Every directional light gets contact shadows at High and Ultra (Contact Shadow Length 0.3 m for scenes saved before it):
+  set it to 0 on a light to keep its old look. They come from every opaque surface on screen, also from meshes whose
+  Cast Shadows is off.

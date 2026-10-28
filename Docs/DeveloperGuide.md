@@ -3116,12 +3116,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `MaxShadowedLocalLights` | 4 | 16 | 16 | 16 |
 | `LODErrorPixels` / `MinProjectedPixels` | 2 / 1 | 1 / 0.5 | 1 / 0.5 | 0.5 / 0.25 |
 | `ShadowFilterQuality` (taps of the sun's wide penumbrae) | 8 | 16 | 24 | 32 |
+| `ContactShadows` (steps of the sun's contact shadows; 0 off) | 0 | 0 | 12 | 16 |
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost per pixel
-  (`ShadowFilterQuality`; `Renderer.Quality` checks it).
+  (`ShadowFilterQuality`, `ContactShadows`; `Renderer.Quality` checks it).
   Custom is the section's fields (High's values by default). `RendererQuality::Clamp` keeps every knob in its range.
 - **Auto by rows:** `RendererQuality::ResolveShadowMapSize` resolves Auto and AutoFine for the renderer's viewport rows
   (its output: the Scene and Game views' panel pixels, the window's back buffer, a capture's image), limited to
@@ -3577,6 +3578,28 @@ lights, Post Process and the sky), and never a resolution below the output's.
   a shadowed sun and released with the render targets; a frame whose targets cannot be made renders without the sun's
   shadows (`ShadowParams.w` 0, also for transparent surfaces), reported. `SceneRendererStats::ScreenShadows`,
   `SceneRenderer::GetScreenShadowTexture`.
+- **Contact shadows** ground what lies below the cascades' texels (a 5 cm plate on the floor, a foot): a pass of their own
+  between the evaluation (which then writes B) and the blur, `Effects/ContactShadows.frag` (B into A; apart from the
+  evaluation so neither carries the other's registers), marches from each pixel the sun still reaches toward the sun over
+  the prepass's depth, `RendererQualitySettings::ContactShadows` steps (0 at Low and Medium: no march; 12 High, 16 Ultra; Custom 0 or 4-32)
+  over the light's `DirectionalLightComponent::ContactShadowLength` (meters, 0-2, default 0.3; 0 turns them off for the
+  light), shortened so the march spans at most 5% of the image's height on screen. It starts one pixel's footprint off
+  the surface, only where both the prepass's normal and the pixel's **own face** face the sun (`FaceNormal`: the plane
+  through the positions the depth buffer holds at the pixel and, on each axis, the neighbor nearer in depth; the
+  prepass's normal is the interpolated vertex normal, which leans off the faces of coarse smooth-shaded meshes, and a
+  ray from a face turned from the sun under a normal turned toward it enters its own object; asked once a step hits), so
+  convex objects never darken themselves. A step occludes when it lies between 2 mm and `0.02 m + 0.005 d` (its view
+  distance `d`) behind the face the depth buffer holds under it (that face's own plane again: exact for planes at any
+  angle, so a ray rising off a floor at a grazing sun never reads the floor as an occluder); steps more than two pixels'
+  footprint in front of that surface along the view end without the plane (which gives up contact shadows from surfaces
+  seen nearly edge-on). Steps are interpolated in clip space and read the depth four at a time, so the reads overlap.
+  They are offset by the fixed blue-noise tile (shifted apart from the disk's turn), not by the frame; the dither this
+  leaves where a hit depends on whether a step lands within the thickness (a contact shadow's far edge, rays passing
+  behind an object seen from the camera) is taken by the mask's blur, whose radius becomes half the step's length on
+  screen (1-4 pixels) where a march hit or passed behind a surface by more than the thickness; hits fade over the
+  march's last 40%, from half the shadow distance to all of it, and within 5% of the screen's edges. The limit every screen-space method has: contact shadows come from every opaque surface of the depth
+  prepass, also from mesh renderers whose `CastShadows` is off, and from nothing off screen or hidden; transparent
+  surfaces neither cast nor receive them. `GPU.SceneRenderer.ContactShadows`; the GPU-driven comparison draws them.
 - **Transparent surfaces** are not in the prepass: `Forward.frag`'s transparent and glass variants call
   `SampleDirectionalShadow`, the same filter per pixel, without the blur (and without contact shadows). A change to how
   the sun's shadow reaches surfaces changes both.

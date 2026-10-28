@@ -30,10 +30,15 @@ namespace Strata
 		// Fraction of each shadow cascade's depth range, before its far end, over which it blends into the next cascade (the
 		// last one fades out, ending at ShadowDistance): hides the seams between cascades. 0 switches cascades at once.
 		float CascadeBlend = 0.1f;
+		// How far toward the light, in meters, the screen-space contact shadows look for what the cascades are too coarse to show
+		// (at High and Ultra: RendererQualitySettings::ContactShadows); 0 turns them off for this light.
+		float ContactShadowLength = 0.3f;
 
 		// At most half of a slice: a cascade's band then never reaches back into the previous one's, so a pixel blends two
 		// cascades at most.
 		static constexpr float c_MaxCascadeBlend = 0.5f;
+		// Contact shadows march at most this far (meters): beyond, the cascades show what the march could.
+		static constexpr float c_MaxContactShadowLength = 2.0f;
 	};
 
 	// Point and spot lights cast shadows with CastShadows (off by default): a renderer gives the most relevant ones in view
