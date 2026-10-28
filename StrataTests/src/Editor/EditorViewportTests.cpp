@@ -446,6 +446,10 @@ TEST_SUITE("Editor.Viewport")
 		REQUIRE_MESSAGE(restored.FromJson(settings.ToJson(), &error), error);
 		CHECK(restored.DebugView == ViewportDebugView::Motion);
 		CHECK(settings.ToJson()["DebugView"] == "motion");
+		settings.DebugView = ViewportDebugView::Shadows;
+		REQUIRE_MESSAGE(restored.FromJson(settings.ToJson(), &error), error);
+		CHECK(restored.DebugView == ViewportDebugView::Shadows);
+		CHECK(settings.ToJson()["DebugView"] == "shadows");
 		// The selection and debug view colors are the editor theme's, not saved with the project.
 		CHECK_FALSE(settings.ToJson().contains("SelectionColor"));
 		CHECK_FALSE(settings.ToJson().contains("DebugColors"));
@@ -684,6 +688,11 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(harness.Run("viewport.setSettings", { { "debugView", "motion" } })["debugView"] == "motion");
 			CHECK(harness.Context.GetViewport().GetSettings().DebugView == ViewportDebugView::Motion);
 			CHECK(harness.Error("viewport.setSettings", { { "debugView", "velocity" } }).find("'debugView'") != std::string::npos);
+			// The shadows view; "shadow" is refused with the message naming the views.
+			CHECK(harness.Run("viewport.setSettings", { { "debugView", "shadows" } })["debugView"] == "shadows");
+			CHECK(harness.Run("viewport.getSettings")["debugView"] == "shadows");
+			CHECK(harness.Context.GetViewport().GetSettings().DebugView == ViewportDebugView::Shadows);
+			CHECK(harness.Error("viewport.setSettings", { { "debugView", "shadow" } }).find("\"shadows\"") != std::string::npos);
 			settings = harness.Run("viewport.setSettings", { { "debugView", "streaming" } });
 			CHECK(harness.Run("viewport.getSettings") == settings);
 

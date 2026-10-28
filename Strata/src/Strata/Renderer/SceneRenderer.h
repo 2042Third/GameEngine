@@ -15,6 +15,7 @@
 #include "Strata/Renderer/SceneOverlay.h"
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Renderer/ShadowAtlasAllocator.h"
+#include "Strata/Renderer/ShadowView.h"
 #include "Strata/Renderer/TextureReadback.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
@@ -351,6 +352,15 @@ namespace Strata
 		// yellow-green, left cyan, down violet) and its strength the speed, full at 16 pixels a frame; still pixels show the
 		// image darkened. Where nothing was drawn (the sky) the motion is the camera's.
 		bool ShowMotionVectors = false;
+		// The shadows debug view, drawn first (Overlay/ShadowView.frag): every pixel the scene drew colored by the screen pixels
+		// one texel of the sun's cascade that shades it spans there (a texel's world size over a pixel's facing the camera at the
+		// pixel's view distance, Include/ShadowView.glsl), from ShadowViewColors[0] at one or fewer through [1] at two to [2] at
+		// four or more, linear in stops; a checker of the texels where they span more than about 1.4 pixels, white cascade edges
+		// and hatched blend bands. Pixels no cascade covers show the image under a gray veil, the sky the image darkened. The
+		// frame also counts its pixels by cascade and ratio (SceneRenderer::GetShadowViewStats, read back frames later).
+		bool ShowShadowView = false;
+		// Display colors (sRGB; alpha unused) of the ramp: green, yellow and red by default (the editor passes its theme's).
+		std::array<glm::vec4, 3> ShadowViewColors = { { { 0.24f, 0.75f, 0.55f, 1.0f }, { 0.91f, 0.76f, 0.30f, 1.0f }, { 0.90f, 0.33f, 0.29f, 1.0f } } };
 	};
 
 	struct SceneRendererStats
@@ -511,6 +521,10 @@ namespace Strata
 		// then the brightest and darkest values of the frame may have overflowed or lost precision (captures wait for it).
 		float PreExposure = 1.0f;
 		bool PreExposureSettled = false;
+		// The sun's cascades the frame laid out (SceneRenderer::FindShadowCasters): the first CascadeCount entries, 0 without a
+		// shadowed sun (the shadows debug view reports them).
+		std::array<ShadowCascadeStats, RenderData::c_MaxCascades> Cascades = {};
+		uint32_t CascadeCount = 0;
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -753,6 +767,15 @@ namespace Strata
 		void ResolveGPUStats(bool wait);
 		// Frames rendered (Render calls that returned true) since the renderer was created.
 		uint64_t GetRenderCount() const { return m_RenderCount; }
+		// What the shadows debug view (SceneRenderOptions::ShowShadowView) counted in the newest frame that showed it whose counts
+		// came back from the GPU (2-3 frames later, read without waiting; Render resolves them at the start of each frame). Its
+		// Render is 0 until one arrived.
+		const ShadowViewStats& GetShadowViewStats() const { return m_ShadowViewStats; }
+		// Reads the counts of frames whose GPU work completed (never waits): tools that wait for a frame's statistics without
+		// rendering another one call it.
+		void ResolveShadowViewStats();
+		// Whether the shadows debug view's resources exist (made by the first frame that shows it).
+		bool HasShadowViewResources() const { return m_ShadowViewCountBuffer != nullptr; }
 		// Whether frames are culled and drawn by the GPU (SceneRendererSpecification::GPUDriven and the device).
 		bool IsGPUDriven() const;
 
@@ -1499,6 +1522,12 @@ namespace Strata
 		void DrawDebugLines(nvrhi::ICommandList* commandList, DebugDrawDepth depth, uint32_t firstVertex, uint32_t vertexCount);
 		// The motion debug view (SceneRenderOptions::ShowMotionVectors) into the output texture; false when GPU resources failed.
 		bool DrawMotionView(nvrhi::ICommandList* commandList, const nvrhi::Viewport& viewport);
+		// The shadows debug view (SceneRenderOptions::ShowShadowView, SceneRendererShadowView.cpp): counts the frame's pixels
+		// (Debug/ShadowViewStats.comp, read back through m_ShadowViewReadbacks) and draws the view into the output texture;
+		// false when GPU resources failed (reported).
+		bool DrawShadowView(nvrhi::ICommandList* commandList, const SceneRenderOptions& options, const nvrhi::Viewport& viewport);
+		// After the executed command list of a frame that recorded the view's counts: the copy is pending.
+		void SubmitShadowViewReadback();
 		// The tints of SceneRenderOptions::EntityTints (StatusTint.frag); false when GPU resources failed.
 		bool DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport);
 	private:
@@ -2103,6 +2132,30 @@ namespace Strata
 		nvrhi::BindingLayoutHandle m_MotionViewLayout;
 		nvrhi::BindingSetHandle m_MotionViewBindingSet;
 		nvrhi::GraphicsPipelineHandle m_MotionViewPipeline;
+		// The shadows debug view (DrawShadowView): the overlay's and the count's pipelines, their binding sets (which name the
+		// depth: released with the targets), the counts' buffer and the ring of their readbacks, each with the layout of the
+		// frame it copied (made by the first frame that shows the view, kept with the renderer so a capture's counts survive
+		// the release of its targets), and the newest statistics read.
+		nvrhi::BindingLayoutHandle m_ShadowViewLayout;
+		nvrhi::GraphicsPipelineHandle m_ShadowViewPipeline;
+		nvrhi::BindingSetHandle m_ShadowViewBindingSet;
+		nvrhi::BindingLayoutHandle m_ShadowViewCountLayout;
+		nvrhi::ComputePipelineHandle m_ShadowViewCountPipeline;
+		nvrhi::BindingSetHandle m_ShadowViewCountBindingSet;
+		nvrhi::BufferHandle m_ShadowViewCountBuffer;
+		struct ShadowViewReadback
+		{
+			Scope<BufferReadback> Readback;
+			uint64_t Render = 0;
+			glm::uvec2 ViewportSize = glm::uvec2(0);
+			uint32_t ShadowMapSize = 0;
+			uint32_t CascadeCount = 0;
+			std::array<ShadowCascadeStats, RenderData::c_MaxCascades> Cascades = {};
+		};
+		std::array<ShadowViewReadback, c_GPURecordCount> m_ShadowViewReadbacks;
+		uint32_t m_ShadowViewReadbackIndex = 0;
+		bool m_ShadowViewReadbackRecorded = false; // The frame being recorded copies the counts (SubmitShadowViewReadback)
+		ShadowViewStats m_ShadowViewStats;
 		nvrhi::BindingLayoutHandle m_MotionCopyLayout;
 		nvrhi::ComputePipelineHandle m_MotionCopyPipeline;
 		nvrhi::BufferHandle m_MotionCopyListBuffer; // The elements a frame copies: the instances', then the joints'

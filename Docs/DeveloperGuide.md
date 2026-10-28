@@ -621,7 +621,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     `Tools/LookDev/Shots.json` (the scenes' cameras, the editor's opening views, the audits' close-ups) at each size
     (`--sizes`, default 3840x2160 and 1920x1080), anti-aliasing mode (`--aa`: TAA, FXAA and none, set on the scenes'
     Post Process components without saving) and repeat (`--repeat`, default 5), at the project's Graphics Quality or
-    `--quality <preset>` (refused with a build whose `viewport.capture` has no `quality`). `--live` adds the live shots:
+    `--quality <preset>` (refused with a build whose `viewport.capture` has no `quality`), and with `--debug-view <view>`
+    the stills show that debug view (each repeat's stats keep the result's `debugView`, with the shadows view's
+    statistics). `--live` adds the live shots:
     windowed editors play the scene and read back what the Game view presented (`viewport.capture {live}`), to judge
     motion. `--work <dir>` keeps the copies and their imported assets for the next run (`--fresh-work` makes them
     again); `run.json` reports the time each project took to make and open apart from the captures.
@@ -2848,7 +2850,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - **View commands** change no scene data and record no undo: `camera.get`, `camera.set {position, target, yaw, pitch,
   distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
   (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?,
-  fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion", quality?: "project" | "low" | "medium" |
+  fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion" | "shadows", quality?: "project" | "low" | "medium" |
   "high" | "ultra", waitForAssets?, path?, overwrite?}` renders on the
   next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still
   being rasterized, so text is never half drawn, up to `c_MaxCaptureExposureFrames` until its pre-exposure settled (the
@@ -2871,9 +2873,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   "screenSpaceTexts", "hiddenScreenSpaceTexts", "ui": {"canvases",
   "hiddenCanvases", "elements", "drawCalls", "pendingGlyphs"}, "debugView":
   {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD",
-  "entitiesPerMipShortfall"}, "notice"?, "path"?}` (the mip view counts entities with textures by the mip levels their
-  worst texture lacks: none, 1, 2, 3 or more or still loading; the motion view colors pixels by their motion since the
-  capture renderer's previous frame, so it renders a second frame, and a still scene shows none); it defaults to the
+  "entitiesPerMipShortfall", "shadows"?}, "notice"?, "path"?}` (the mip view counts entities with textures by the mip levels
+  their worst texture lacks: none, 1, 2, 3 or more or still loading; the motion view colors pixels by their motion since the
+  capture renderer's previous frame, so it renders a second frame, and a still scene shows none; the shadows view colors
+  every receiver by screen pixels per shadow texel and adds `shadows: {complete, shadowMapSize, surfaceShare, skyShare,
+  uncoveredShare, medianPixelsPerTexel, p10PixelsPerTexel, p90PixelsPerTexel, aboveFourShare, cascades: [{index, near, far,
+  texelSize, screenShare, medianPixelsPerTexel, p10PixelsPerTexel, p90PixelsPerTexel, aboveFourShare}], note?}`: shares of
+  the image's pixels, ratios over the covered receivers (the metric: "Sun shadows"), read back from the captured frame,
+  which the capture waits for as for its GPU times, `complete` false when they did not come within
+  `c_MaxCaptureGPUStatsPolls`); it defaults to the
   viewport's size, camera, overlays and debug view and fails without a GPU. `position`, `target` and `fov` render through a camera of the capture's own (a copy
   of the editor camera with those changes; `camera.get` is unchanged, the result's camera is `"custom"`), so agents look
   around without moving the person's view. **Live captures** (`viewport.capture {live: true, camera, atFixedStep?,
@@ -3516,6 +3524,32 @@ lights, Post Process and the sky), and never a resolution below the output's.
   Multiply coverage into the result and discard once at the end, as `GameUI/UIQuad.frag` does, or sample every texture
   before the discards, as `Scene/Forward.frag` and `Scene/DepthPrepass.frag` do. `Architecture.Shaders` checks every
   fragment shader's source.
+
+### Sun shadows
+
+- **The shadows debug view** (`SceneRenderOptions::ShowShadowView`; the editor's `debugView: "shadows"`) measures how fine
+  the sun's cascades are where the receivers are. Its metric is screen pixels per shadow texel: for each pixel the scene
+  drew, its camera-relative position is reconstructed from the depth through `InverseViewProjection`, its view distance
+  `d` selects its cascade as the shading does, and the ratio is the cascade's texel size (`CascadeData::Parameters.x`)
+  over a screen pixel's world size facing the camera at that distance, `2 d / (Projection[1][1] * rows)` (`2 /
+  (Projection[1][1] * rows)` for orthographic views): independent of the surface's orientation, so it compares with the
+  shadows audit's numbers. About 1 or less is as fine as the screen; 2.2 at every split was 0.6.0's 2048-texel cascades at
+  2160 rows. `Include/ShadowView.glsl` computes it once for both users: `Overlay/ShadowView.frag` colors receivers
+  (green at most 1, yellow 2, red 4 and more, linear in stops; a checker of the texels where they span more than about
+  1.4 pixels; white cascade edges; hatched blend bands; a gray veil where no cascade covers a surface, the sky darkened),
+  and `Debug/ShadowViewStats.comp` counts every pixel as sky, uncovered surface or a cascade's bin of an eighth of a stop
+  over [1/16, 16) pixels per texel (`RenderData::ShadowViewCounts`, 1,040 bytes, shared-memory counts flushed with one
+  atomic add per non-empty entry and group). Both run in `GPU.Overlays` with the overlays' frame constants, and only in
+  frames that show the view: its pipelines and buffers are made by the first such frame, its binding sets (which name the
+  depth) are released with the targets, its counts' buffer and the ring of `c_GPURecordCount` readbacks stay with the
+  renderer, so a capture's counts survive the release of its targets.
+- `SceneRenderer::GetShadowViewStats()` (`ShadowViewStats`, `Strata/Renderer/ShadowView.h`) is the newest frame whose counts
+  came back (2-3 frames late, never waited for: `Render` resolves them at its start, `ResolveShadowViewStats` for tools
+  that wait without rendering, as `viewport.capture` does beside `ResolveGPUStats`): per cascade its layout (the frame's
+  `SceneRendererStats::Cascades`: slice from its near end, blend band included, to its split, and texel size), its bins,
+  pixels, median, 10th and 90th percentiles (the first bin where the cumulative count reaches the fraction, at its
+  geometric center) and pixels at 4 or more; the same over every covered pixel. `ShadowView::Summarize` is the one
+  summary the GPU tests compare a CPU histogram with (`GPU.SceneRenderer.ShadowView`).
 
 ### Local light shadows
 

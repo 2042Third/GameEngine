@@ -123,6 +123,39 @@ namespace Strata::Tests
 
 	// Plain output: no tone curve, no vignette, no bloom, ambient occlusion or anti-aliasing, so unlit colors come out
 	// unchanged.
+	// Direction a sun travels at an elevation above the horizon (degrees), coming from the given azimuth (degrees
+	// around +Y, 0 = from +X).
+	inline glm::vec3 SunDirection(float elevation, float azimuth)
+	{
+		const float e = glm::radians(elevation);
+		const float a = glm::radians(azimuth);
+		return -glm::vec3(std::cos(e) * std::cos(a), std::sin(e), std::cos(e) * std::sin(a));
+	}
+
+	// A camera at `position` looking along -Z, `pitch` degrees below the horizon, with a vertical field of view of `fov`
+	// degrees: its rows see the floor (y = 0) each at one view depth.
+	inline SceneCamera PitchedCamera(const glm::vec3& position, float pitch, float fov)
+	{
+		const float radians = glm::radians(pitch);
+		SceneCamera camera = LookAt(position, position + glm::vec3(0.0f, -std::sin(radians), -std::cos(radians)));
+		camera.Projection = Math::PerspectiveReverseZ(glm::radians(fov), 1.0f, 0.1f, 500.0f);
+		camera.VerticalFOV = glm::radians(fov);
+		camera.Far = 500.0f;
+		return camera;
+	}
+
+	// The view depth of the floor (y = 0) a row of a square image of the camera shows, or a negative value where it shows no
+	// floor (along a row of a camera without roll, it does not change).
+	inline float FloorRowDepth(const SceneCamera& camera, uint32_t row, uint32_t size)
+	{
+		const float ndcY = 1.0f - 2.0f * (static_cast<float>(row) + 0.5f) / static_cast<float>(size);
+		const glm::vec3 viewRay(0.0f, ndcY * std::tan(camera.VerticalFOV * 0.5f), -1.0f); // One unit of view depth
+		const glm::vec3 worldRay = glm::mat3(glm::inverse(camera.View)) * viewRay;
+		if (!(worldRay.y < 0.0f))
+			return -1.0f;
+		return camera.Position.y / -worldRay.y;
+	}
+
 	inline PostProcessComponent& AddNeutralPostProcess(Scene& scene)
 	{
 		PostProcessComponent& postProcess = scene.CreateEntity("PostProcess").AddComponent<PostProcessComponent>();

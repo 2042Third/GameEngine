@@ -1964,6 +1964,9 @@ namespace Strata
 		release(m_MotionPrepassFramebuffer);
 		release(m_GlassMotionFramebuffer);
 		release(m_MotionViewBindingSet);
+		// The shadows debug view's binding sets name the depth (its buffers and readbacks stay with the renderer).
+		release(m_ShadowViewBindingSet);
+		release(m_ShadowViewCountBindingSet);
 		// Screen-space reflections' targets (made again by the next frame that traces them).
 		release(m_SurfaceTexture);
 		release(m_ScreenReflectionTexture);
@@ -2548,6 +2551,7 @@ namespace Strata
 	bool SceneRenderer::RenderFrame(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options)
 	{
 		ResolveGPUStats(false);
+		ResolveShadowViewStats();
 		m_Stats = {};
 		if (m_ViewportSize.x == 0 || m_ViewportSize.y == 0)
 			return false; // Nothing to show (e.g. a minimized window); not an error
@@ -2799,6 +2803,7 @@ namespace Strata
 		{
 			m_Errors.Report("failed to create the shadow map; rendering without shadows");
 			frame.ShadowParams.w = 0.0f;
+			m_Stats.CascadeCount = 0;
 			degraded = true;
 		}
 		if (m_GPUDrivenFrame)
@@ -3114,6 +3119,7 @@ namespace Strata
 			if (m_GPUDrivenFrame)
 				SubmitCullReadback();
 			SubmitExposureReadback();
+			SubmitShadowViewReadback();
 			m_Stats = {};
 			return false;
 		}
@@ -3155,6 +3161,7 @@ namespace Strata
 		if (m_GPUDrivenFrame)
 			SubmitCullReadback();
 		SubmitExposureReadback();
+		SubmitShadowViewReadback();
 		CommitShadowCache();
 		CommitLocalShadows();
 
@@ -3233,7 +3240,7 @@ namespace Strata
 	bool SceneRenderer::HasOverlays(const SceneRenderOptions& options)
 	{
 		return options.ShowGrid || !options.SelectedEntities.empty() || (options.DebugShapes && !options.DebugShapes->IsEmpty()) || !options.EntityTints.empty()
-			|| options.ShowMotionVectors;
+			|| options.ShowMotionVectors || options.ShowShadowView;
 	}
 
 	bool SceneRenderer::DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport)
@@ -3480,8 +3487,10 @@ namespace Strata
 			complete = false;
 		}
 
-		// The motion view and the tints color the scene itself: the other overlays go over them. Without motion vectors (they
-		// could not be made: reported) there is no motion view.
+		// The shadows and motion views and the tints color the scene itself: the other overlays go over them. Without motion
+		// vectors (they could not be made: reported) there is no motion view.
+		if (options.ShowShadowView && !DrawShadowView(commandList, options, viewport))
+			return false;
 		if (options.ShowMotionVectors && m_MotionFrame && !DrawMotionView(commandList, viewport))
 			return false;
 		if (entityIDs && !options.EntityTints.empty() && !DrawEntityTints(commandList, scene, options.EntityTints, viewport))

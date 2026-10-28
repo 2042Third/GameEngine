@@ -1721,6 +1721,57 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture with the shadows debug view reports its cascades")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.AddScene();
+		harness.Run("entity.create", { { "name", "Floor" }, { "components", { { "Transform", { { "Translation", { 0, -0.5, 0 } }, { "Scale", { 40, 1, 40 } } } },
+			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::PlaneMesh) } } } } } });
+		harness.Run("camera.set", { { "position", { 0, 2, 6 } }, { "target", { 0, 0, 0 } } });
+		const nlohmann::json parameters = { { "width", 96 }, { "height", 64 }, { "overlays", false } };
+		nlohmann::json result;
+		const DecodedImage plain = harness.Capture(parameters, &result);
+		nlohmann::json withView = parameters;
+		withView["debugView"] = "shadows";
+		const DecodedImage shadows = harness.Capture(withView, &result);
+		CHECK(harness.CountDifferences(shadows, plain) > 50);
+		const nlohmann::json& view = result["debugView"];
+		CHECK(view["view"] == "shadows");
+		REQUIRE(view.contains("shadows"));
+		const nlohmann::json& stats = view["shadows"];
+		CHECK(stats["complete"] == true);
+		const SceneRendererStats& frame = harness.Context.GetViewport().GetCaptureRenderer()->GetStats();
+		REQUIRE(frame.CascadeCount > 0);
+		REQUIRE(stats["cascades"].size() == frame.CascadeCount);
+		CHECK(stats["shadowMapSize"].get<uint32_t>() == frame.ShadowMapSize);
+		double shares = stats["skyShare"].get<double>() + stats["uncoveredShare"].get<double>();
+		for (uint32_t cascade = 0; cascade < frame.CascadeCount; cascade++)
+		{
+			const nlohmann::json& entry = stats["cascades"][cascade];
+			CHECK(entry["index"] == cascade);
+			CHECK(entry["far"].get<float>() == doctest::Approx(frame.Cascades[cascade].Far));
+			CHECK(entry["texelSize"].get<float>() == doctest::Approx(frame.Cascades[cascade].WorldPerTexel));
+			shares += entry["screenShare"].get<double>();
+		}
+		CHECK(shares == doctest::Approx(1.0).epsilon(1e-3));
+		CHECK(stats["surfaceShare"].get<double>() + stats["skyShare"].get<double>() == doctest::Approx(1.0).epsilon(1e-6));
+		CHECK(stats["medianPixelsPerTexel"].get<double>() > 0.0);
+		CHECK_FALSE(stats.contains("note"));
+
+		// Without a shadowed sun: no cascades, with a note.
+		auto suns = harness.Context.GetActiveScene()->GetRegistry().view<DirectionalLightComponent>();
+		REQUIRE(suns.size() == 1);
+		const Entity sun(suns.front(), harness.Context.GetActiveScene().get());
+		harness.Run("component.set", { { "entity", UUIDToJson(sun.GetUUID()) }, { "component", "DirectionalLight" }, { "values", { { "CastShadows", false } } } });
+		harness.Capture(withView, &result);
+		CHECK(result["debugView"]["shadows"]["cascades"].empty());
+		CHECK(result["debugView"]["shadows"]["note"] == "no shadowed directional light");
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A live capture returns the Game view's frames at exact steps of a game started paused")
 	{
 		Tests::GPUContext gpu;

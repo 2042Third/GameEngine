@@ -173,8 +173,14 @@ editor started with `--no-gpu` (use `--headless`):
   (green: as needed, blue 1 level short, yellow 2, red 3+ or still loading; textures stream their mip levels to what
   the screen shows, so a picture taken right after the camera moved may be blurry where it is red); `"motion"` colors
   every pixel by how it moved since the view's previous frame (hue: direction, right red, up yellow-green, left cyan, down
-  violet; strength: speed, full at 16 pixels a frame; still pixels darkened: useful while playing); `"none"` is the
-  plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
+  violet; strength: speed, full at 16 pixels a frame; still pixels darkened: useful while playing); `"shadows"` colors
+  every surface by how many screen pixels one texel of the sun's shadow cascade there spans (green at most 1, yellow 2,
+  red 4 and more; a checker shows the texels where they are coarse), draws the cascades' edges white and hatches their
+  blend bands, veils what no cascade covers in gray and darkens the sky, and the result's `debugView.shadows` reports
+  `{complete, shadowMapSize, surfaceShare, skyShare, uncoveredShare, medianPixelsPerTexel, p10PixelsPerTexel,
+  p90PixelsPerTexel, aboveFourShare, cascades: [{index, near, far, texelSize, screenShare, medianPixelsPerTexel, ...}]}`
+  (shares of the image; pixels per texel over covered receivers: about 1 or less means shadows as fine as the screen);
+  `"none"` is the plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
   `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the Game view). The result's
   `debugView` counts what it found among the entities in view: `{view, tintedEntities, pendingEntities, failedEntities,
   placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], lodErrorPixels: [the largest error in pixels drawn at each of

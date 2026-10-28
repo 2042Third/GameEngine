@@ -502,10 +502,12 @@ namespace Strata
 			box.WorldPerTexel = static_cast<float>(worldPerTexel);
 			box.Radius = radius;
 			frame.CascadeSplits[cascade] = sliceFar;
+			m_Stats.Cascades[cascade] = ShadowCascadeStats { sliceNear, sliceFar, box.WorldPerTexel };
 			sliceNear = std::max(sliceFar - cascadeBlend * (sliceFar - previousSplit), nearClip);
 			previousSplit = sliceFar;
 		}
 		m_CascadeCount = cascadeCount;
+		m_Stats.CascadeCount = cascadeCount;
 
 		// Shadows of a skinned mesh move with its animator, also when the mesh itself is out of view; the cascades reach far
 		// beyond the view (spheres around its slices), so a caster out of view reports its animator only when its shadow can

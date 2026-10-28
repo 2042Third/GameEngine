@@ -34,3 +34,12 @@ integrator writes the release notes from them when the wave lands (and removes t
 - A renderer drawing fewer sun shadow cascades keeps fewer layers (thumbnails: 4 MiB instead of 16), and a capture
   renderer frees its cascades between pictures.
 - A validation layer the loader lists but cannot load no longer keeps a device from starting on Windows.
+
+## sun-shadows
+
+**What's new**
+
+- A `shadows` debug view (the viewport's debug menu, `viewport.setSettings {debugView: "shadows"}` and
+  `viewport.capture {debugView: "shadows"}`) colors every surface by how many screen pixels one texel of the sun's shadow
+  cascades spans there, outlines the cascades and hatches their blend bands; captures report each cascade's slice, texel
+  size, share of the image and pixels per texel.

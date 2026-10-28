@@ -94,6 +94,7 @@ strata_add_shaders(Strata_Renderer
 		Scene/HZBBuild.comp
 		Scene/MotionCopy.comp
 		Debug/LODSelection.comp
+		Debug/ShadowViewStats.comp
 		IBL/EquirectToCube.comp
 		IBL/ProceduralSky.comp
 		IBL/CubeDownsample.comp
@@ -121,6 +122,7 @@ strata_add_shaders(Strata_Renderer
 		Overlay/Outline.frag
 		Overlay/StatusTint.frag
 		Overlay/MotionView.frag
+		Overlay/ShadowView.frag
 		Overlay/DebugLine.vert
 		Overlay/DebugLine.frag
 		Overlay/Text.vert

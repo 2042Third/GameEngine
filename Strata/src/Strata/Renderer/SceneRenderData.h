@@ -503,6 +503,33 @@ namespace Strata
 		};
 		static_assert(sizeof(MotionCopyParameters) == 16);
 
+		// The shadows debug view (SceneRenderOptions::ShowShadowView, Include/ShadowView.glsl): screen pixels per shadow texel,
+		// binned per cascade in eighths of a stop over [2^c_ShadowViewMinStops, 2^(c_ShadowViewMinStops + c_ShadowViewBins / 8)):
+		// bin b covers [2^(b / 8 - 4), 2^((b + 1) / 8 - 4)), and ratios outside the range count in the first or last bin.
+		constexpr uint32_t c_ShadowViewBins = 64;
+		constexpr uint32_t c_ShadowViewBinsPerStop = 8;
+		constexpr int32_t c_ShadowViewMinStops = -4;
+
+		// Overlay/ShadowView.frag: the ramp's colors at 1 (or fewer), 2 and 4 (or more) screen pixels per shadow texel.
+		struct ShadowViewParameters
+		{
+			glm::vec4 Colors[3];
+		};
+		static_assert(sizeof(ShadowViewParameters) == 48);
+
+		// Debug/ShadowViewStats.comp's result: per cascade the receiver pixels of each bin, and the frame's surface pixels
+		// (anything drawn: receivers in a cascade and those outside every one), sky pixels (nothing drawn) and surface pixels
+		// outside every cascade.
+		struct ShadowViewCounts
+		{
+			uint32_t Bins[c_MaxCascades][c_ShadowViewBins];
+			uint32_t SurfacePixels;
+			uint32_t SkyPixels;
+			uint32_t UncoveredPixels;
+			uint32_t Reserved;
+		};
+		static_assert(sizeof(ShadowViewCounts) == 1040);
+
 	}
 
 }

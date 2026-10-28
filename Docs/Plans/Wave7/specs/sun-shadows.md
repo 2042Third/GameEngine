@@ -1378,3 +1378,19 @@ toward the light, which only makes the classification more conservative), the ex
 the half-width PCSS analysis. Noted rather than changed: most lit ground under a sun below about 70 degrees is not
 classified lit (its own texels span each cell's range) and takes the 4-tap floor, so the early exit is mostly the
 umbra's (section 10, item 18).
+
+## 14. As built
+
+Step 0 landed with the names section 2.3 assumes (`RendererQualitySettings` and its `PresetRow` lines,
+`RendererQuality::ResolveShadowMapSize`, `SceneRenderer::GetShadowMapSize`, `m_ShadowMapLayers`, `ReleaseShadowMap()`,
+`InvalidateShadowCache()`, `ForThumbnails()`/`ForBake()`, the slot comment with SRV 28, 32 and 33, the look-dev shots by
+name). Differences found while building:
+
+- Step 1: the shadows view's CPU types live in `Strata/Renderer/ShadowView.h` (`ShadowCascadeStats`, `ShadowViewRatioStats`,
+  `ShadowViewStats`, and `ShadowView::GetBin`, `GetBinCenter`, `Summarize`, `SummarizeAll`, which the GPU test's CPU
+  histogram shares); `RenderData::ShadowViewParameters` is the three colors (48 bytes) until step 3 adds the mask;
+  `SceneRenderOptions::ShadowViewColors` defaults to the theme's Malachite, Sulfur and Cinnabar. The view's draw and count
+  are `SceneRenderer::DrawShadowView` in `SceneRendererShadowView.cpp`. `Tools/LookDev.py capture --debug-view <view>`
+  takes the acceptance's statistics.
+- `graphics-options`' `c_RowTraits` is not on main yet: the rows' trait lines are added when that stream lands.
+- The worktree builds in its own `build/windows` (the stream brief), not `build/agent-sun-shadows`.

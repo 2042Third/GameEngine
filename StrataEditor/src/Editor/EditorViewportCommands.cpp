@@ -136,13 +136,52 @@ namespace Strata
 
 		nlohmann::json DebugViewSchema(std::string description)
 		{
-			return { { "type", "string" }, { "enum", { "none", "streaming", "lod", "mip", "motion" } }, { "description", std::move(description) } };
+			return { { "type", "string" }, { "enum", { "none", "streaming", "lod", "mip", "motion", "shadows" } }, { "description", std::move(description) } };
 		}
 
-		// What the debug view of a render found.
-		nlohmann::json DescribeDebugView(ViewportDebugView view, const StreamingViewStats& stats, uint32_t tintedEntities)
+		// What the shadows debug view counted (SceneRenderer::GetShadowViewStats): shares of the image's pixels, and screen pixels
+		// per shadow texel over the covered receivers, overall and per cascade with its layout. `complete`: the counts are the
+		// captured frame's (else the newest that arrived).
+		nlohmann::json DescribeShadowView(const ShadowViewStats& stats, bool complete)
 		{
-			return {
+			const double imagePixels = static_cast<double>(stats.ViewportSize.x) * static_cast<double>(stats.ViewportSize.y);
+			const auto share = [&](uint64_t pixels) { return imagePixels > 0.0 ? static_cast<double>(pixels) / imagePixels : 0.0; };
+			const auto ratioShare = [](const ShadowViewRatioStats& ratio)
+			{
+				return ratio.Pixels > 0 ? static_cast<double>(ratio.AboveFourPixels) / static_cast<double>(ratio.Pixels) : 0.0;
+			};
+			nlohmann::json cascades = nlohmann::json::array();
+			for (uint32_t cascade = 0; cascade < stats.CascadeCount; cascade++)
+			{
+				const ShadowCascadeStats& layout = stats.Cascades[cascade];
+				const ShadowViewRatioStats& ratio = stats.PerCascade[cascade];
+				cascades.push_back({ { "index", cascade }, { "near", layout.Near }, { "far", layout.Far }, { "texelSize", layout.WorldPerTexel },
+					{ "screenShare", share(ratio.Pixels) }, { "medianPixelsPerTexel", ratio.MedianPixelsPerTexel },
+					{ "p10PixelsPerTexel", ratio.P10PixelsPerTexel }, { "p90PixelsPerTexel", ratio.P90PixelsPerTexel },
+					{ "aboveFourShare", ratioShare(ratio) } });
+			}
+			nlohmann::json result = {
+				{ "complete", complete },
+				{ "shadowMapSize", stats.ShadowMapSize },
+				{ "surfaceShare", share(stats.SurfacePixels) },
+				{ "skyShare", share(stats.SkyPixels) },
+				{ "uncoveredShare", share(stats.UncoveredPixels) },
+				{ "medianPixelsPerTexel", stats.Covered.MedianPixelsPerTexel },
+				{ "p10PixelsPerTexel", stats.Covered.P10PixelsPerTexel },
+				{ "p90PixelsPerTexel", stats.Covered.P90PixelsPerTexel },
+				{ "aboveFourShare", ratioShare(stats.Covered) },
+				{ "cascades", std::move(cascades) } };
+			if (stats.CascadeCount == 0)
+				result["note"] = "no shadowed directional light";
+			return result;
+		}
+
+		// What the debug view of a render found; `shadows` (the shadows view's counts, null for the other views) and whether they
+		// are the rendered frame's.
+		nlohmann::json DescribeDebugView(ViewportDebugView view, const StreamingViewStats& stats, uint32_t tintedEntities, const ShadowViewStats* shadows,
+			bool shadowsComplete)
+		{
+			nlohmann::json result = {
 				{ "view", ViewportDebugViewToString(view) },
 				{ "tintedEntities", tintedEntities },
 				{ "pendingEntities", stats.PendingEntities },
@@ -151,6 +190,9 @@ namespace Strata
 				{ "entitiesPerLOD", stats.EntitiesPerLOD },
 				{ "lodErrorPixels", stats.MaxErrorPixelsPerLOD },
 				{ "entitiesPerMipShortfall", stats.EntitiesPerMipShortfall } };
+			if (shadows)
+				result["shadows"] = DescribeShadowView(*shadows, shadowsComplete);
+			return result;
 		}
 
 		nlohmann::json DescribeViewportSettings(const ViewportSettings& settings)
@@ -249,6 +291,10 @@ namespace Strata
 			bool Overlays = false;
 			ViewportDebugView DebugView = ViewportDebugView::None;
 			StreamingViewStats DebugViewStats;
+			// The shadows view's counts (DebugView Shadows), once those of the captured frame arrived or the wait ended, and whether
+			// they are that frame's.
+			ShadowViewStats ShadowView;
+			bool ShadowViewComplete = false;
 			uint32_t TintedEntities = 0;
 			uint32_t PendingAssets = 0;
 			uint32_t PendingTextGlyphs = 0;
@@ -706,12 +752,18 @@ namespace Strata
 					ViewportRenderer* renderer = context.GetViewport().GetCaptureRenderer();
 					SceneRenderer& sceneRenderer = renderer->GetSceneRenderer();
 					sceneRenderer.ResolveGPUStats(false);
+					// The capture renderer renders no frame while the capture waits: its shadows view's counts are read here.
+					sceneRenderer.ResolveShadowViewStats();
 					const SceneRendererGPUStats& gpu = sceneRenderer.GetGPUStats();
-					// The GPU-driven path's counts come back with the frame's culling counters: the capture waits for those too.
+					// The GPU-driven path's counts come back with the frame's culling counters: the capture waits for those too, and
+					// for the shadows view's.
 					const bool timesKnown = !Renderer::GetGPUProfiler().IsEnabled() || (gpu.HasTimes && gpu.Frame >= progress.RenderFrame);
 					const bool countsKnown = !progress.Stats.GPUDriven || (gpu.HasCounters && gpu.CountersRender >= progress.RenderCount);
-					if (!(timesKnown && countsKnown) && progress.GPUStatsPolls++ < c_MaxCaptureGPUStatsPolls)
+					const bool shadowsKnown = progress.DebugView != ViewportDebugView::Shadows || sceneRenderer.GetShadowViewStats().Render >= progress.RenderCount;
+					if (!(timesKnown && countsKnown && shadowsKnown) && progress.GPUStatsPolls++ < c_MaxCaptureGPUStatsPolls)
 						return std::nullopt;
+					progress.ShadowView = sceneRenderer.GetShadowViewStats();
+					progress.ShadowViewComplete = shadowsKnown;
 					SceneRendererGPUStats known = gpu;
 					if (!(gpu.HasTimes && gpu.Frame >= progress.RenderFrame))
 					{
@@ -770,7 +822,8 @@ namespace Strata
 				{ "hiddenScreenSpaceTexts", progress.HiddenScreenSpaceTexts },
 				{ "ui", { { "canvases", progress.UI.Canvases }, { "hiddenCanvases", progress.UI.HiddenCanvases }, { "elements", progress.UI.Elements },
 					{ "drawCalls", progress.UI.DrawCalls }, { "pendingGlyphs", progress.UI.PendingGlyphs } } },
-				{ "debugView", DescribeDebugView(progress.DebugView, progress.DebugViewStats, progress.TintedEntities) },
+				{ "debugView", DescribeDebugView(progress.DebugView, progress.DebugViewStats, progress.TintedEntities,
+					progress.DebugView == ViewportDebugView::Shadows ? &progress.ShadowView : nullptr, progress.ShadowViewComplete) },
 				{ "renderStats", std::move(progress.RenderStats) }
 			};
 			if (!progress.View.Notice.empty())
@@ -885,8 +938,9 @@ namespace Strata
 			"The viewport's view settings (saved with the project's editor state): which editor overlays are drawn (grid, selectionOutline, sceneGizmos, "
 			"stats; allColliders: collider shapes of every entity instead of only the selection's), previewLighting (editor views light scenes without any light of their own with a preview sun and sky), gameUI (editor views draw the "
 			"game's screen-space UI, its HUD text and UI canvases, and a click selects a UI element), canvasMode (the 2D canvas mode for placing game "
-			"UI), the gizmo mode and space, whether gizmo drags snap, the snap steps, debugView (\"none\", or \"streaming\" / \"lod\" / \"mip\": the "
-			"image colored by streaming state, level of detail or the mip levels textures lack), gameView (the Game view's image: {mode, width, "
+			"UI), the gizmo mode and space, whether gizmo drags snap, the snap steps, debugView (\"none\", or \"streaming\" / \"lod\" / \"mip\" / "
+			"\"motion\" / \"shadows\": the image colored by streaming state, level of detail, the mip levels textures lack, motion or shadow texels "
+			"per pixel), gameView (the Game view's image: {mode, width, "
 			"height}, width and height for mode \"custom\"), pilotGameCamera (the Scene view looks through the scene's primary camera) and editPose "
 			"(\"rest\" or \"clipStart\": what skinned characters of the edited scene show while it does not play).",
 			ObjectSchema({}),
@@ -922,7 +976,8 @@ namespace Strata
 					"detail they are drawn at (0 to 3+), \"mip\" tints entities with textures by the mip levels their worst texture lacks against what "
 					"their view needs (none Malachite, 1 Azurite, 2 Sulfur, 3 or more or still loading Cinnabar), \"motion\" colors every pixel by its motion "
 					"since the view's previous frame (hue: the direction, right red, up yellow-green, left cyan, down violet; strength: the speed, full at "
-					"16 pixels a frame; still pixels darkened), \"none\" shows the image as rendered") },
+					"16 pixels a frame; still pixels darkened), \"shadows\" colors receivers by screen pixels per shadow texel (green at most 1, yellow 2, "
+					"red 4 and more), outlines the sun's cascades and hatches their blend bands, \"none\" shows the image as rendered") },
 				{ "gameView", ObjectSchema({
 					{ "mode", { { "type", "string" }, { "enum", { "free", "16:9", "16:10", "4:3", "21:9", "1920x1080", "1280x720", "custom", "game" } },
 						{ "description", "The Game view's image: free fills the panel, an aspect ratio is the largest image of it inside the panel "
@@ -1015,10 +1070,12 @@ namespace Strata
 			"views not drawn (localShadowViewsPending; captures draw them all at once) and reflection probes whose capture was not loaded "
 			"(reflectionProbesPending; waited for as assets are, with waitForAssets; captures convert loaded ones at once). debugView colors "
 			"the picture "
-			"by streaming state, level of detail or mip levels (default: the viewport's, viewport.setSettings) and the result's debugView says what it "
-			"found: {view, tintedEntities, pendingEntities, failedEntities, placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], "
-			"lodErrorPixels: [the largest error drawn at each of those, in pixels, where levels are chosen by their errors; else 0], "
-			"entitiesPerMipShortfall: [at the wanted level, 1 level coarser, 2, 3+ or loading]} among the entities in view. renderStats is what the "
+			"by streaming state, level of detail, mip levels, motion or shadow texels (default: the viewport's, viewport.setSettings) and the result's "
+			"debugView says what it found: {view, tintedEntities, pendingEntities, failedEntities, placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, "
+			"LOD2, LOD3+], lodErrorPixels: [the largest error drawn at each of those, in pixels, where levels are chosen by their errors; else 0], "
+			"entitiesPerMipShortfall: [at the wanted level, 1 level coarser, 2, 3+ or loading]} among the entities in view; with \"shadows\" also "
+			"shadows: {complete, shadowMapSize, surfaceShare, skyShare, uncoveredShare (of the image), median/p10/p90PixelsPerTexel, aboveFourShare (of "
+			"covered receivers), cascades: [{index, near, far, texelSize, screenShare, median/p10/p90PixelsPerTexel, aboveFourShare}]}. renderStats is what the "
 			"captured frame drew, as editor.perf's renderStats (draws, instances, shadow casters, triangles, proxies, lights, timings), with gpuMs: "
 			"the GPU's milliseconds per stage of the captured frame (empty, with gpuStatsFrame null, where the GPU writes no timestamps). quality "
 			"draws the picture at a preset (default: the view's); renderStats.quality says what it drew with. "
@@ -1040,7 +1097,8 @@ namespace Strata
 					"true); false takes the picture at once") },
 				{ "debugView", DebugViewSchema("\"streaming\" tints entities by streaming state (pending Sulfur, failed Cinnabar, missing meshes as boxes), "
 					"\"lod\" by level of detail, \"mip\" by the mip levels their textures lack, \"motion\" colors pixels by their motion since the capture's "
-					"previous frame (rendered twice for it: still scenes show none), \"none\" not at all (default: the viewport's debug view)") },
+					"previous frame (rendered twice for it: still scenes show none), \"shadows\" colors receivers by screen pixels per shadow texel and "
+					"outlines the cascades, \"none\" not at all (default: the viewport's debug view)") },
 				{ "quality", QualitySchema("The quality the picture is drawn at (default: the quality of the view it shows: the Scene view's for the "
 					"editor camera and cameras of the capture's own, the project's for the scene's camera)") },
 				{ "path", StringSchema("Also save the PNG to this .png file: relative to the project directory (needs an open project) or absolute; folders are "
@@ -1087,7 +1145,7 @@ namespace Strata
 				{
 					request.DebugView = ViewportDebugViewFromString(arguments.GetString("debugView"));
 					if (!request.DebugView && arguments.IsValid())
-						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\", \"lod\", \"mip\" or \"motion\"");
+						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\", \"lod\", \"mip\", \"motion\" or \"shadows\"");
 				}
 				if (arguments.Has("quality"))
 				{
