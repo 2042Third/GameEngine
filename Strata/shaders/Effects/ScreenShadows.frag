@@ -27,6 +27,9 @@ const float c_ScreenShadowMaxBlurPixels = 8.0;
 // c_StairTexelPixels.
 const float c_StairFacing = 0.5;
 const float c_StairTexelPixels = 1.5;
+// The stair steps' radius at most: every pixel of radius costs the blur two taps a pass, and 4 takes the steps nearly as
+// well as 8 (the Open World's pine tiers) at about half the cost.
+const float c_StairMaxBlurPixels = 4.0;
 
 // How many screen pixels one texel of a cascade (`worldPerTexel`) covers at most on a receiver's plane: a step of a texel
 // across the light slides along the plane by 1 / |n.L| in the plane's steepest direction (and by 1 across it), and shows on
@@ -84,7 +87,7 @@ void main()
 		{
 			float texelPixels = ReceiverTexelPixels(position, normal, worldPerTexel, pixelWorld);
 			if (texelPixels > c_StairTexelPixels)
-				blur = max(blur, min(texelPixels, c_ScreenShadowMaxBlurPixels));
+				blur = max(blur, min(texelPixels, c_StairMaxBlurPixels));
 		}
 	}
 	o_Mask = vec2(sqrt(clamp(shadow.Visibility, 0.0, 1.0)), blur / c_ScreenShadowMaxBlurPixels);

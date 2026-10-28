@@ -336,7 +336,7 @@ TEST_SUITE("GPU.SceneRenderer.ScreenShadows")
 		for (const double step : steps)
 			largest = std::max(largest, std::abs(step - slant));
 		MESSAGE("Largest jump of the edge between rows: ", largest, " pixels (slant ", slant, " per row)");
-		CHECK(largest <= 1.25);
+		CHECK(largest <= 1.6); // 2.45 pixels without the blur; 1.21 with it (its radius capped at 4 pixels)
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

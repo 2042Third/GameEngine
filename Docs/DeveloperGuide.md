@@ -3576,7 +3576,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   and where the tent left an edge partly lit on a receiver the light grazes (`|n.L|` under 0.5: a texel's step across the
   light slides along its plane by `1 / |n.L|`, at least twice, while the tent smooths a step over a texel and a half of
   the light's image) and a stretched texel covers more than 1.5 screen pixels (`ReceiverTexelPixels`), that footprint, at
-  most 8 pixels, which takes the texels' stair steps (saw teeth under the Open World's pine tiers).
+  most 4 pixels (`c_StairMaxBlurPixels`: the blur's taps cost), which takes the texels' stair steps (saw teeth under the Open World's pine tiers).
   `Effects/ScreenShadowsBlur.frag` then blurs A into B horizontally and B into A vertically, a Gaussian whose taps are
   weighted by their distance from the pixel's plane (1% of its view distance: exact for a plane at any
   angle, nothing from another surface, so no light crosses a silhouette) and by their normals' agreement; it averages
