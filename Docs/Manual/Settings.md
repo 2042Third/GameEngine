@@ -50,11 +50,13 @@ to find a page or a field), the selected page on the right:
   the saved bindings so that your edits apply again.
 - **Graphics Quality** (under Rendering): how much the game's and the editor's views spend on shadows and detail. Pick a
   **Preset**: **Low** (smaller shadow maps, three sun shadow cascades, four point and spot lights with shadows, coarser
-  levels of detail: for older or integrated GPUs), **Medium** (what Strata 0.6.0 drew), **High** (the default: as Medium,
-  but sharper sun shadows on displays of 1440 rows and more, 256 MiB of shadow maps per view instead of 64) or **Ultra**
-  (sharper shadows everywhere, larger point and spot light shadows, finer levels of detail: for large GPUs), or
-  **Custom** to set each value yourself (the shadow resolution, the number of cascades, the point and spot lights' shadow
-  atlas and largest tile, how many of those lights cast shadows, the level-of-detail error and the smallest size drawn).
+  levels of detail: for older or integrated GPUs), **Medium** (Strata 0.6.0's shadow map sizes and sample counts, no
+  contact shadows), **High** (the default: smoother wide sun penumbrae and contact shadows at every size, and sharper sun
+  shadows on displays of 1440 rows and more, 256 MiB of shadow maps per view instead of 64) or **Ultra** (sharper shadows
+  everywhere, larger point and spot light shadows, finer levels of detail: for large GPUs), or **Custom** to set each
+  value yourself (the shadow resolution, the number of cascades, the point and spot lights' shadow atlas and largest
+  tile, how many of those lights cast shadows, the level-of-detail error, the smallest size drawn, the shadow filter
+  quality: taps of the sun's wide penumbrae, and the contact shadows' steps).
   No setting draws below the screen's resolution, and a scene's look (its lights, Post Process and sky) stays the same.
   Exported games use it, and `<Game> --quality low` (or `medium`, `high`, `ultra`) plays one run at a preset without
   saving anything. The Scene view can draw at a preset of your own, for your computer alone, with

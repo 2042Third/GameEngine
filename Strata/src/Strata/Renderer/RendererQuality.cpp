@@ -296,8 +296,9 @@ namespace Strata
 			section.Title = "Graphics Quality";
 			section.Category = "Rendering";
 			section.Description = "The rendering quality of the project's games and of the editor's views and captures: the costly knobs every "
-				"renderer draws with, as a preset or as Custom values. Medium keeps Strata 0.6.0's costs; High, the default, draws 4096-texel "
-				"sun shadow cascades from 1440 output rows (as Medium below them). Scenes keep their look on lights, Post Process and the sky; "
+				"renderer draws with, as a preset or as Custom values. Medium keeps Strata 0.6.0's costs (its sample counts and resolutions); "
+				"High, the default, adds more sun shadow filter taps and contact shadows at every size and draws 4096-texel sun shadow "
+				"cascades from 1440 output rows. Scenes keep their look on lights, Post Process and the sky; "
 				"no setting renders below the output's resolution. Set it with project.setSettings; players may change it in games that offer "
 				"graphics options, and StrataRuntime --quality for one run.";
 			section.Scope = SettingsScope::Project;

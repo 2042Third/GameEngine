@@ -20,7 +20,8 @@ integrator writes the release notes from them when the wave lands (and removes t
 **Upgrading**
 
 - Projects use High unless they choose: at 1440 rows and above, sun shadows are drawn into 4096-texel cascades, 256 MiB
-  per view with a shadowed sun instead of 64 MiB (below 1440 rows High is Medium). Choose Medium to keep 0.6.0's costs.
+  per view with a shadowed sun instead of 64 MiB (below 1440 rows High keeps Medium's cascades, and at every size adds
+  the sun shadows' 24-tap filter and contact shadows). Choose Medium to keep 0.6.0's sample counts.
 - Engine code: `SceneRendererSpecification`'s `ShadowMapSize`, `ShadowCascades`, `LocalShadowAtlasSize`,
   `MaxShadowedLocalLights`, `LODErrorPixels` and `MinProjectedPixels` moved into its `Quality`
   (`RendererQualitySettings`); `ShadowMapSize` became `ShadowResolution`. `ProbeBake::GetRendererSpecification` became
