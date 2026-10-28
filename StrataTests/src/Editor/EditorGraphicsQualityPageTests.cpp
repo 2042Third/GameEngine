@@ -299,6 +299,37 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		CHECK(*value == nlohmann::json { { "Preset", "Custom" }, { "Detail", 3 }, { "Comfort", false } });
 	}
 
+	TEST_CASE("Through the scene's camera the quality chip names the game's quality, the player's choice while playing")
+	{
+		HarnessEditor editor;
+		editor.Frames(1);
+		CreateProject(editor, "GraphicsQualityChipGame");
+		const ImU32 accent = UI::ToColorU32(UI::GetThemeColors().Accent);
+		// The editor camera at the view's own preset: lit, named after it.
+		editor.Run("viewport.setSettings", { { "quality", "ultra" } });
+		editor.Frames(2);
+		CHECK(TextOf("Viewport.Quality") == "Ultra");
+		CHECK(ColorOf("Viewport.Quality") == accent);
+		// The scene's camera draws at the game's quality (GetSceneViewQuality): the project's High, the view's Ultra on but muted.
+		editor.Run("viewport.setSettings", { { "pilotGameCamera", true } });
+		editor.Frames(2);
+		CHECK(TextOf("Viewport.Quality") == "High");
+		CHECK(ColorOf("Viewport.Quality") != accent);
+		// While playing, the player's choice.
+		editor.Run("play.start", { { "build", false } });
+		REQUIRE(editor.Context().GetGameGraphics().SetOption("Preset", "Low"));
+		editor.Frames(2);
+		CHECK(TextOf("Viewport.Quality") == "Low");
+		editor.Run("play.stop");
+		editor.Frames(2);
+		CHECK(TextOf("Viewport.Quality") == "High");
+		// The editor camera again: the view's own.
+		editor.Run("viewport.setSettings", { { "pilotGameCamera", false } });
+		editor.Frames(2);
+		CHECK(TextOf("Viewport.Quality") == "Ultra");
+		CHECK(ColorOf("Viewport.Quality") == accent);
+	}
+
 	TEST_CASE("The players' banner shows what their options set and its button resets them")
 	{
 		HarnessEditor editor;
@@ -377,6 +408,10 @@ TEST_SUITE("Editor.UI.Inspector")
 		editor.Run("project.setSettings", { { "section", RendererQuality::c_SectionId }, { "value", { { "Preset", "Low" } } } });
 		editor.Frames(2);
 		CHECK(TextOf("Inspector.DirectionalLight.ShadowQuality") == "Shadow maps: 3 x 1024 at 1080 rows (Graphics Quality: Low)");
+		// A sun that casts no shadow has no shadow maps.
+		editor.Run("component.set", { { "entity", sun }, { "component", "DirectionalLight" }, { "values", { { "CastShadows", false } } } });
+		editor.Frames(2);
+		CHECK(TextOf("Inspector.DirectionalLight.ShadowQuality") == "No shadow maps: Cast Shadows is off");
 		REQUIRE(editor.Click("Inspector.DirectionalLight.ShadowQuality.Open"));
 		CHECK(editor.FramesUntil([]() { return IsDrawn(PageKey("Row.ShadowResolution")); }));
 	}

@@ -80,13 +80,15 @@ namespace Strata
 			Fly
 		};
 
-		void DrawChips(EditorPanelContext& panelContext);
+		// `sceneCamera`: this frame's view looks through the scene's camera (ViewportView::FromScene).
+		void DrawChips(EditorPanelContext& panelContext, bool sceneCamera);
 		void DrawStatsChip(ViewportSettings& settings);
 		// The debug view (StreamingView): the image as rendered, or colored by streaming state or level of detail.
 		void DrawDebugViewChip(ViewportSettings& settings);
 		// The Scene view's quality (ViewportSettings::Quality): the project's Graphics Quality, or a preset of the view's own;
-		// its popup also opens Project Settings at Graphics Quality.
-		void DrawQualityChip(EditorPanelContext& panelContext, ViewportSettings& settings);
+		// through the scene's camera it names the game's preset, which the view draws with then (GetSceneViewQuality), the
+		// view's own setting shown on but muted. Its popup also opens Project Settings at Graphics Quality.
+		void DrawQualityChip(EditorPanelContext& panelContext, ViewportSettings& settings, bool sceneCamera);
 		// What the colors of the debug view mean, with how many entities in view have each, at the image's bottom left.
 		void DrawDebugViewLegend(EditorContext& context);
 		void HandleShortcuts(EditorPanelContext& context);
@@ -126,10 +128,19 @@ namespace Strata
 		// The toolbar's chips across frames: the last ones that do not fit with their labels are drawn as icons, those that
 		// do not fit even so on more rows.
 		UI::ChipStripState m_ChipStrip;
-		// The quality chip's texts that name the project's preset, made again when it changes.
-		std::optional<std::string> m_QualityTooltip;
+		// What the quality chip's texts name: the project's preset and, through the scene's camera, the game's preset and
+		// where it comes from (GameGraphicsSource; -1 for the editor camera). The texts are made again when it changes.
+		struct QualityChipKey
+		{
+			RendererQualityPreset Project = RendererQualityPreset::High;
+			RendererQualityPreset Game = RendererQualityPreset::High;
+			int32_t GameSource = -1;
+
+			bool operator==(const QualityChipKey& other) const = default;
+		};
+		std::optional<QualityChipKey> m_QualityChipKey;
+		std::string m_QualityTooltip;
 		std::string m_QualityProjectItem;
-		RendererQualityPreset m_QualityTooltipPreset = RendererQualityPreset::High;
 		std::string m_AgentChipText;
 		uint64_t m_AgentChipActivity = 0;
 		int64_t m_AgentChipSeconds = -1;

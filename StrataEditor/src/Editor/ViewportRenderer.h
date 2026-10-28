@@ -92,12 +92,13 @@ namespace Strata
 	constexpr uint32_t c_TemporalSettleFrames = SceneRenderer::c_TemporalJitterPhases;
 
 	// What a view's last successful Render showed of the game: live captures (viewport.capture {live}) pair a view's frames
-	// with the game's fixed steps.
+	// with the game's fixed steps, and the sun's Inspector line names the quality the Scene view's frame was drawn with.
 	struct ViewportRenderStamp
 	{
 		uint64_t RenderCount = 0; // SceneRenderer::GetRenderCount after that Render (0: none yet)
 		uint64_t PlaySession = 0; // EditorContext::GetPlaySession while the game ran, 0 while editing
 		uint64_t FixedSteps = 0;  // EditorContext::GetFixedStepCount then: the steps the frame shows
+		bool FromScene = false;   // The view looked through the scene's camera (ViewportView::FromScene): the game's quality
 	};
 
 	// Renders the editor's active scene for the viewport or a capture, with the overlays the viewport settings enable:
@@ -155,7 +156,7 @@ namespace Strata
 		// the selection, the scene or its hierarchy changed.
 		void UpdateSelectionSubtrees(EditorContext& context, const Ref<Scene>& scene);
 		// Records a successful Render of the active scene (m_RenderedScene and m_RenderStamp).
-		void OnRendered(EditorContext& context);
+		void OnRendered(EditorContext& context, const ViewportView& view);
 	private:
 		Scope<SceneRenderer> m_Renderer;
 		DebugDraw m_DebugDraw;

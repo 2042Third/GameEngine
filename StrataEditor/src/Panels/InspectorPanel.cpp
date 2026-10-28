@@ -31,6 +31,7 @@
 #include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
+#include <Strata/Runtime/GameGraphicsService.h>
 #include <Strata/Scene/ComponentAccess.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/PrefabInstances.h>
@@ -771,7 +772,7 @@ namespace Strata
 			if (info.TypeId == entt::type_id<ReflectionProbeComponent>().hash())
 				DrawReflectionProbeBake(panelContext, entities);
 			if (info.TypeId == entt::type_id<DirectionalLightComponent>().hash())
-				DrawSunShadowQuality(panelContext);
+				DrawSunShadowQuality(panelContext, entities);
 			ImGui::Spacing();
 		}
 		ImGui::PopID();
@@ -1384,20 +1385,43 @@ namespace Strata
 		}
 	}
 
-	void InspectorPanel::DrawSunShadowQuality(EditorPanelContext& panelContext)
+	void InspectorPanel::DrawSunShadowQuality(EditorPanelContext& panelContext, std::span<const Entity> entities)
 	{
-		// What the Scene view's latest frame drew (its renderer's stats), else the project's quality resolved for 1080 rows.
+		// What the Scene view's latest frame drew (its renderer's stats) and with which quality: the editor camera's at the
+		// view's setting, the scene's camera at the game's (GetSceneViewQuality). Else the project's quality resolved for 1080
+		// rows.
 		EditorContext& context = panelContext.Context;
 		const RendererQualitySettings& project = RendererQuality::GetProjectQuality();
 		const ViewportRenderer* renderer = context.GetViewport().FindRenderer();
 		const SceneRendererStats* stats = renderer ? &renderer->GetStats() : nullptr;
+		const bool casts = std::any_of(entities.begin(), entities.end(), [](Entity entity)
+			{ return entity.HasComponent<DirectionalLightComponent>() && entity.GetComponent<DirectionalLightComponent>().CastShadows; });
 		SunShadowLine line;
 		line.ProjectPreset = static_cast<int32_t>(project.Preset);
-		if (stats && stats->ShadowMapSize > 0)
+		if (!casts)
+		{
+			line.What = SunShadowLine::Kind::NoShadows;
+		}
+		else if (stats && stats->ShadowMapSize > 0)
 		{
 			line.Cascades = stats->Quality.ShadowCascades;
 			line.Size = stats->ShadowMapSize;
-			line.ViewPreset = context.GetViewport().GetSettings().Quality != ViewportQuality::Project ? static_cast<int32_t>(stats->Quality.Preset) : -1;
+			line.DrawnPreset = static_cast<int32_t>(stats->Quality.Preset);
+			line.What = SunShadowLine::Kind::Project;
+			if (renderer->GetRenderStamp().FromScene)
+			{
+				// The game's quality: the project's unless the player (or a command line) chose the preset.
+				const std::optional<GameGraphicsSource> source = context.GetGameGraphics().GetSource("Preset");
+				if (source && *source != GameGraphicsSource::Project)
+				{
+					line.What = SunShadowLine::Kind::Game;
+					line.GameSource = static_cast<int32_t>(*source);
+				}
+			}
+			else if (context.GetViewport().GetSettings().Quality != ViewportQuality::Project)
+			{
+				line.What = SunShadowLine::Kind::View;
+			}
 		}
 		else
 		{
@@ -1408,18 +1432,25 @@ namespace Strata
 		if (!line.Matches(m_SunShadowLine) || m_SunShadowLine.Text.empty())
 		{
 			const char* projectName = RendererQuality::PresetToString(project.Preset);
-			if (line.ViewPreset >= 0)
+			const char* drawnName = line.DrawnPreset >= 0 ? RendererQuality::PresetToString(static_cast<RendererQualityPreset>(line.DrawnPreset)) : "";
+			switch (line.What)
 			{
-				line.Text = fmt::format("Shadow maps: {} x {} in the Scene view ({}; the project: {})", line.Cascades, line.Size,
-					RendererQuality::PresetToString(static_cast<RendererQualityPreset>(line.ViewPreset)), projectName);
-			}
-			else if (line.Rows > 0)
-			{
-				line.Text = fmt::format("Shadow maps: {} x {} at {} rows (Graphics Quality: {})", line.Cascades, line.Size, line.Rows, projectName);
-			}
-			else
-			{
-				line.Text = fmt::format("Shadow maps: {} x {} (Graphics Quality: {})", line.Cascades, line.Size, projectName);
+				case SunShadowLine::Kind::NoShadows:
+					line.Text = "No shadow maps: Cast Shadows is off";
+					break;
+				case SunShadowLine::Kind::Estimate:
+					line.Text = fmt::format("Shadow maps: {} x {} at {} rows (Graphics Quality: {})", line.Cascades, line.Size, line.Rows, projectName);
+					break;
+				case SunShadowLine::Kind::Project:
+					line.Text = fmt::format("Shadow maps: {} x {} (Graphics Quality: {})", line.Cascades, line.Size, projectName);
+					break;
+				case SunShadowLine::Kind::View:
+					line.Text = fmt::format("Shadow maps: {} x {} in the Scene view ({}; the project: {})", line.Cascades, line.Size, drawnName, projectName);
+					break;
+				case SunShadowLine::Kind::Game:
+					line.Text = fmt::format("Shadow maps: {} x {} through the scene's camera ({}, {}; the project: {})", line.Cascades, line.Size, drawnName,
+						line.GameSource == static_cast<int32_t>(GameGraphicsSource::Player) ? "the player's" : "the command line's", projectName);
+					break;
 			}
 			m_SunShadowLine = std::move(line);
 		}

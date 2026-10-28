@@ -37,7 +37,8 @@ what each one costs:
   what the exported game, the Game view and pictures of the scene's camera draw with. Each change is an undo step.
 - **The Scene view** has a quality chip in its toolbar: **Project** follows the page, or choose a preset for this view
   alone, for your computer (`viewport.setSettings {"quality": "ultra"}` does the same). The Game view always draws as the
-  game will.
+  game will, and so does the Scene view while it looks through the scene's camera (**Game camera**): its chip then names
+  the game's preset, a player's choice while you play.
 - **Pictures** (`viewport.capture`) draw at the quality of the view they show unless they ask for one
   (`{"quality": "ultra"}`).
 - **One run of a game**: `<Game> --quality low` (or `medium`, `high`, `ultra`) plays at that preset without saving

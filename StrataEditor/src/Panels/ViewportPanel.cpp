@@ -29,6 +29,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
+#include <Strata/Runtime/GameGraphicsService.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 
@@ -276,7 +277,7 @@ namespace Strata
 		{
 			const float agentRoom = agentWidth > 0.0f ? agentWidth + style.ItemSpacing.x * 2.0f : 0.0f;
 			UI::ChipStrip strip(m_ChipStrip, layout.Max.x - layout.ChipsMin.x - agentRoom);
-			DrawChips(panelContext);
+			DrawChips(panelContext, view && view->FromScene);
 			DrawPreviewChip(panelContext);
 		}
 		if (agentWidth > 0.0f)
@@ -328,7 +329,7 @@ namespace Strata
 	// Chips
 	////////////////////////////////////////////////////////////////////////////////
 
-	void ViewportPanel::DrawChips(EditorPanelContext& panelContext)
+	void ViewportPanel::DrawChips(EditorPanelContext& panelContext, bool sceneCamera)
 	{
 		EditorContext& context = panelContext.Context;
 		EditorViewport& viewport = context.GetViewport();
@@ -416,7 +417,7 @@ namespace Strata
 		ImGui::SameLine();
 		DrawDebugViewChip(settings);
 		ImGui::SameLine();
-		DrawQualityChip(panelContext, settings);
+		DrawQualityChip(panelContext, settings, sceneCamera);
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.GameCamera", Icons::Camera, "Game camera", &settings.PilotGameCamera,
 			"Look through the scene's primary camera with the editor's overlays (F8); the editor camera stays where it was");
@@ -604,23 +605,40 @@ namespace Strata
 		ImGui::EndPopup();
 	}
 
-	void ViewportPanel::DrawQualityChip(EditorPanelContext& panelContext, ViewportSettings& settings)
+	void ViewportPanel::DrawQualityChip(EditorPanelContext& panelContext, ViewportSettings& settings, bool sceneCamera)
 	{
-		// Lit while the view chooses its own preset; named after the preset in effect. A click opens the choice.
-		const RendererQualityPreset projectPreset = RendererQuality::GetProjectQuality().Preset;
+		// Lit while the view chooses its own preset; named after the preset in effect: the view's for the editor camera, the
+		// game's through the scene's camera (the project's, or a player's choice while playing), where the view's own preset
+		// does nothing (on, but muted). A click opens the choice.
+		EditorContext& context = panelContext.Context;
+		QualityChipKey key;
+		key.Project = RendererQuality::GetProjectQuality().Preset;
 		const bool own = settings.Quality != ViewportQuality::Project;
-		const RendererQualityPreset preset = own ? ResolveViewportQuality(settings.Quality).Preset : projectPreset;
-		if (!m_QualityTooltip || m_QualityTooltipPreset != projectPreset)
+		RendererQualityPreset preset = own ? ResolveViewportQuality(settings.Quality).Preset : key.Project;
+		if (sceneCamera)
 		{
-			const char* name = RendererQuality::PresetToString(projectPreset);
+			key.Game = context.GetGameQuality().Preset;
+			key.GameSource = static_cast<int32_t>(context.GetGameGraphics().GetSource("Preset").value_or(GameGraphicsSource::Project));
+			preset = key.Game;
+		}
+		if (m_QualityChipKey != key)
+		{
+			const char* name = RendererQuality::PresetToString(key.Project);
 			m_QualityTooltip = fmt::format("The Scene view's rendering quality. Project follows Project Settings > Graphics Quality ({}); a preset "
 				"here changes only this view. The Game view, captures through the scene camera and the game follow the project and the players' "
 				"options.", name);
+			if (sceneCamera)
+			{
+				const char* source = key.GameSource == static_cast<int32_t>(GameGraphicsSource::Player) ? "the player's choice"
+					: key.GameSource == static_cast<int32_t>(GameGraphicsSource::CommandLine) ? "the command line's" : "the project's";
+				m_QualityTooltip = fmt::format("Through the scene's camera the view draws as the Game view does, at the game's quality ({}, {}). {}",
+					RendererQuality::PresetToString(key.Game), source, m_QualityTooltip);
+			}
 			m_QualityProjectItem = fmt::format("Project ({})", name);
-			m_QualityTooltipPreset = projectPreset;
+			m_QualityChipKey = key;
 		}
 		bool clicked = own;
-		if (UI::ToggleChip("Viewport.Quality", Icons::MonitorCog, RendererQuality::PresetToString(preset), &clicked, m_QualityTooltip->c_str()))
+		if (UI::ToggleChip("Viewport.Quality", Icons::MonitorCog, RendererQuality::PresetToString(preset), &clicked, m_QualityTooltip.c_str(), !sceneCamera))
 			ImGui::OpenPopup("Quality");
 		if (!ImGui::BeginPopup("Quality"))
 			return;

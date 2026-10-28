@@ -2613,8 +2613,11 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   Process Tone and color, Exposure, Bloom, Ambient occlusion, Anti-aliasing, Reflections and Lens; every property of both
   has a description with its unit (`Renderer.Components` checks it). The sun's section ends with what its shadow maps are
   (`Inspector.DirectionalLight.ShadowQuality`: "Shadow maps: 4 x 4096 (Graphics Quality: High)" from the Scene view's
-  latest frame, `SceneRendererStats::ShadowMapSize`; the view's own preset when it has one; the project's quality at
-  1080 rows before a frame) and a link to Graphics Quality.
+  latest frame, `SceneRendererStats::ShadowMapSize`, named after the quality that frame was drawn with: the view's own
+  preset for the editor camera when it has one, through the scene's camera the game's (`ViewportRenderStamp::FromScene`;
+  "through the scene's camera (Low, the player's; ...)" when a player chose it); the project's quality at 1080 rows
+  before a frame; "No shadow maps: Cast Shadows is off" when no inspected light casts shadows) and a link to Graphics
+  Quality.
 - The inspectors show the selected entities or one asset (`EditorContext::SetInspectedAsset`, `selection.set {asset}`;
   the entities stay selected). Selecting an entity, deleting the asset or closing the project returns to the entities;
   `GetInspectionVersion` changes with every switch and every asset inspected (again), and the editor brings the
@@ -3197,10 +3200,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   the project's, the Scene view at `ViewportSettings::Quality` (`viewport.setSettings {quality}` or the view's quality chip,
   `Viewport.Quality`, whose popup also opens Graphics Quality: the project's by default, or a preset of the person's for
   that view) for the editor camera and at the game's for the scene's camera ("Game
-  camera", the canvas mode: `GetSceneViewQuality`), captures at the quality of the view they show unless
-  `viewport.capture {quality}` asks for one. Thumbnails and the probe bake draw with
-  `SceneRendererSpecification::ForThumbnails()` and `ForBake()`, 0.6.0's values, whatever anyone chose: a bake never
-  depends on a person's settings.
+  camera", the canvas mode: `GetSceneViewQuality`; the chip then names the game's preset and shows the view's own
+  muted), captures at the quality of the view they show unless `viewport.capture {quality}` asks for one. Thumbnails
+  and the probe bake draw with `SceneRendererSpecification::ForThumbnails()` and `ForBake()`, 0.6.0's values, whatever
+  anyone chose: a bake never depends on a person's settings.
 - **Stats:** `SceneRendererStats::Quality`, `ShadowMapSize` (after the limits and a fallback) and
   `LocalShadowTileSizes`; `renderStats.quality` (the section's fields and values, which `project.setSettings` takes),
   `renderStats.shadowMapSize` and `renderStats.localShadowTileSizes` in `editor.perf` and every capture.

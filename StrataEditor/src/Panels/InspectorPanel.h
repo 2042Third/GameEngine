@@ -109,9 +109,10 @@ namespace Strata
 			std::vector<size_t> Properties;
 		};
 		const std::vector<PropertyGroup>& GetPropertyGroups(const ComponentInfo& info);
-		// Under the Directional Light's properties: the shadow maps the Scene view draws it with and the Graphics Quality
-		// they come from, with a link to the page.
-		void DrawSunShadowQuality(EditorPanelContext& panelContext);
+		// Under the Directional Light's properties: the shadow maps the Scene view draws it with and the quality they come
+		// from (the project's Graphics Quality, the view's own preset, or through the scene's camera the game's: the player's
+		// choice while playing), none while no inspected light casts shadows; with a link to the page.
+		void DrawSunShadowQuality(EditorPanelContext& panelContext, std::span<const Entity> entities);
 		// With nothing selected: the project's Graphics Quality and a link to its page.
 		void DrawGraphicsQualityLink(EditorPanelContext& panelContext);
 		// An edit of a rotation shared by several entities: continues the edit in progress, or begins one from the angles the
@@ -163,17 +164,28 @@ namespace Strata
 		// The sun's line, made again when what it says changes.
 		struct SunShadowLine
 		{
+			// Where the numbers come from.
+			enum class Kind : uint8_t
+			{
+				NoShadows, // No inspected light casts shadows
+				Estimate,  // No frame of the Scene view yet: the project's quality resolved for Rows
+				Project,   // The Scene view's frame at the project's Graphics Quality
+				View,      // The Scene view's frame at a preset of its own (DrawnPreset)
+				Game       // The Scene view's frame through the scene's camera at the game's quality, which GameSource set
+			};
+			Kind What = Kind::Estimate;
 			uint32_t Cascades = 0;
 			uint32_t Size = 0;
-			uint32_t Rows = 0; // 0: the Scene view's own frame; otherwise the rows the project's quality was resolved for
-			int32_t ViewPreset = -1;
+			uint32_t Rows = 0;
+			int32_t DrawnPreset = -1;
 			int32_t ProjectPreset = -1;
+			int32_t GameSource = -1; // GameGraphicsSource of the game's preset
 			std::string Text;
 
 			bool Matches(const SunShadowLine& other) const
 			{
-				return Cascades == other.Cascades && Size == other.Size && Rows == other.Rows && ViewPreset == other.ViewPreset
-					&& ProjectPreset == other.ProjectPreset;
+				return What == other.What && Cascades == other.Cascades && Size == other.Size && Rows == other.Rows && DrawnPreset == other.DrawnPreset
+					&& ProjectPreset == other.ProjectPreset && GameSource == other.GameSource;
 			}
 		};
 		SunShadowLine m_SunShadowLine;
