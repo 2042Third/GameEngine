@@ -11,7 +11,9 @@
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -137,6 +139,7 @@ namespace Strata
 		{
 			m_Summary = profiler.Summarize(profiler.GetCapacity());
 			m_LastSummaryTime = now;
+			UpdateTableRows();
 		}
 		if (profiler.GetRecordedFrameCount() == 0)
 		{
@@ -256,27 +259,41 @@ namespace Strata
 		const float spikeMs = GetSpikeThreshold(*m_Summary);
 		const float markerSize = std::max(ImGui::GetFontSize() * 0.25f, 2.0f);
 		const ImU32 untimed = UI::ToColorU32(GetUntimedColor());
+		// The stages this strip stacks, in id order, with their colors: sorted out once, not for each of the 600 frames and
+		// every registered stage (the other strip's included).
+		std::array<FrameStageID, FrameProfiler::c_MaxStages> stacked;
+		std::array<ImU32, FrameProfiler::c_MaxStages> stackedColors;
+		uint32_t stackedCount = 0;
+		for (FrameStageID stage = 0; stage < stageCount; stage++)
+		{
+			const bool gpuStage = profiler.GetStageKind(stage) == FrameStageKind::GPU;
+			if (gpu ? !gpuStage : !profiler.IsStageInWorkTime(stage))
+				continue;
+			stacked[stackedCount] = stage;
+			stackedColors[stackedCount] = UI::ToColorU32(GetStageColor(stage));
+			stackedCount++;
+		}
 		for (uint32_t age = 0; age < frames; age++)
 		{
 			const FrameSample frame = profiler.GetFrame(age);
 			// Frames whose GPU times did not arrive (yet) stay blank in the GPU's strip.
 			if (gpu && !frame.HasGPU)
 				continue;
+			const std::span<const float> times = gpu ? frame.GPUStageMs : frame.StageMs;
 			const float right = max.x - columnWidth * static_cast<float>(age);
 			const float left = right - std::max(columnWidth, 1.0f);
 			float y = max.y;
 			float timed = 0.0f;
-			for (FrameStageID stage = 0; stage < stageCount; stage++)
+			for (uint32_t index = 0; index < stackedCount; index++)
 			{
-				const bool gpuStage = profiler.GetStageKind(stage) == FrameStageKind::GPU;
-				const float ms = gpu ? (gpuStage ? frame.GPUStageMs[stage] : 0.0f) : frame.StageMs[stage];
-				if (ms <= 0.0f || (!gpu && !profiler.IsStageInWorkTime(stage)))
+				const float ms = times[stacked[index]];
+				if (ms <= 0.0f)
 					continue;
 				timed += ms;
 				const float height = ms * pixelsPerMs;
 				// Slivers below half a pixel are not drawn; they still count for the rest of the frame above them.
 				if (height >= 0.5f)
-					drawList->AddRectFilled(ImVec2(left, y - height), ImVec2(right, y), UI::ToColorU32(GetStageColor(stage)));
+					drawList->AddRectFilled(ImVec2(left, y - height), ImVec2(right, y), stackedColors[index]);
 				y -= height;
 			}
 			if (gpu)
@@ -372,10 +389,62 @@ namespace Strata
 		ImGui::EndTooltip();
 	}
 
+	void PerformancePanel::UpdateTableRows()
+	{
+		const FrameProfileSummary& summary = *m_Summary;
+		const auto makeRow = [](TableRow::SwatchColor swatch, FrameStageID stage, std::string name, const FrameTimeStats& time, bool secondary)
+		{
+			TableRow row;
+			row.Swatch = swatch;
+			row.Stage = stage;
+			row.Name = std::move(name);
+			const float values[] = { time.Average, time.P50, time.P95, time.Max };
+			for (size_t column = 0; column < row.Values.size(); column++)
+				row.Values[column] = fmt::format("{:.3f}", values[column]);
+			row.Secondary = secondary;
+			return row;
+		};
+		const auto makeLine = [](std::string text, bool secondary, const char* probe)
+		{
+			TableRow row;
+			row.Swatch = TableRow::SwatchColor::None;
+			row.Name = std::move(text);
+			row.Secondary = secondary;
+			row.Probe = probe;
+			return row;
+		};
+
+		m_CPURows.clear();
+		m_CPURows.push_back(makeRow(TableRow::SwatchColor::Text, c_InvalidFrameStage, "Frame", summary.Work, false));
+		m_CPURows.back().Probe = "Performance.FrameRow";
+		m_CPURows.push_back(makeRow(TableRow::SwatchColor::Untimed, c_InvalidFrameStage, "Untimed (rest of the frame)", summary.Untimed, true));
+		for (FrameStageID stage = 0; stage < summary.Stages.size(); stage++)
+		{
+			const FrameStageSummary& entry = summary.Stages[stage];
+			if (entry.Kind != FrameStageKind::CPU)
+				continue; // The GPU's stages come in their own section
+			const bool ran = entry.Time.Max > 0.0f;
+			m_CPURows.push_back(makeRow(TableRow::SwatchColor::Stage, stage, entry.InWorkTime ? entry.Name : entry.Name + " (outside the work time)", entry.Time, !ran));
+		}
+
+		// The GPU's section: what bounds the frames, the GPU's busy time per frame, and its stages over the frames with GPU times
+		// (they arrive a few frames late).
+		m_GPURows.clear();
+		m_GPURows.push_back(makeLine(fmt::format("GPU \xC2\xB7 {} frames, known {:.1f} frames late", summary.GPU.Frames, summary.GPU.LatencyFrames), false,
+			"Performance.GPUSection"));
+		m_GPURows.push_back(makeLine(DescribeBound(summary), summary.GPU.BoundBy == FrameBound::Unknown, "Performance.Bound"));
+		m_GPURows.push_back(makeRow(TableRow::SwatchColor::Text, c_InvalidFrameStage, "GPU busy", summary.GPU.Busy, summary.GPU.Frames == 0));
+		for (FrameStageID stage = 0; stage < summary.Stages.size(); stage++)
+		{
+			const FrameStageSummary& entry = summary.Stages[stage];
+			if (entry.Kind == FrameStageKind::GPU)
+				m_GPURows.push_back(makeRow(TableRow::SwatchColor::Stage, stage, entry.Name, entry.Time, entry.Time.Max <= 0.0f));
+		}
+	}
+
 	void PerformancePanel::DrawStageTable()
 	{
 		const UI::ThemeColors& colors = UI::GetThemeColors();
-		const FrameProfileSummary& summary = *m_Summary;
 		const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY
 			| ImGuiTableFlags_NoSavedSettings;
 		// The rest of the panel's height (the timeline left it room), so the panel itself never scrolls beside the table.
@@ -388,54 +457,37 @@ namespace Strata
 			ImGui::TableSetupColumn(column, ImGuiTableColumnFlags_WidthStretch, 1.0f);
 		ImGui::TableHeadersRow();
 		UI::ItemProbe::Record("Performance.StagesHeader");
-		const auto row = [](const ImVec4& color, const std::string& name, const FrameTimeStats& time, const ImVec4& textColor)
+		const auto drawRow = [&colors](const TableRow& row)
 		{
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(0);
-			Swatch(color);
-			ImGui::SameLine();
-			ImGui::TextColored(textColor, "%s", name.c_str());
-			const float values[] = { time.Average, time.P50, time.P95, time.Max };
-			for (int column = 0; column < 4; column++)
+			const ImVec4& textColor = row.Secondary ? colors.TextSecondary : colors.Text;
+			const bool hasValues = row.Swatch != TableRow::SwatchColor::None;
+			if (hasValues)
 			{
-				ImGui::TableSetColumnIndex(column + 1);
-				ImGui::TextColored(textColor, "%.3f", values[column]);
+				Swatch(row.Swatch == TableRow::SwatchColor::Stage ? GetStageColor(row.Stage)
+					: row.Swatch == TableRow::SwatchColor::Untimed ? GetUntimedColor() : colors.Text);
+				ImGui::SameLine();
 			}
+			ImGui::TextColored(textColor, "%s", row.Name.c_str());
+			if (hasValues)
+			{
+				for (size_t column = 0; column < row.Values.size(); column++)
+				{
+					ImGui::TableSetColumnIndex(static_cast<int>(column) + 1);
+					ImGui::TextColored(textColor, "%s", row.Values[column].c_str());
+				}
+			}
+			if (row.Probe)
+				UI::ItemProbe::Record(row.Probe, true, 0, row.Name);
 		};
 		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
-		row(colors.Text, "Frame", summary.Work, colors.Text);
-		UI::ItemProbe::Record("Performance.FrameRow");
-		row(GetUntimedColor(), "Untimed (rest of the frame)", summary.Untimed, colors.TextSecondary);
-		for (FrameStageID stage = 0; stage < summary.Stages.size(); stage++)
+		for (const TableRow& row : m_CPURows)
+			drawRow(row);
+		if (ShowsGPU(*m_Summary))
 		{
-			const FrameStageSummary& entry = summary.Stages[stage];
-			if (entry.Kind != FrameStageKind::CPU)
-				continue; // The GPU's stages come in their own section
-			const bool ran = entry.Time.Max > 0.0f;
-			row(GetStageColor(stage), entry.InWorkTime ? entry.Name : entry.Name + " (outside the work time)", entry.Time, ran ? colors.Text : colors.TextSecondary);
-		}
-		// The GPU's section: what bounds the frames, the GPU's busy time per frame, and its stages over the frames with GPU
-		// times (they arrive a few frames late).
-		if (ShowsGPU(summary))
-		{
-			ImGui::TableNextRow();
-			ImGui::TableSetColumnIndex(0);
-			ImGui::TextColored(colors.Text, "GPU \xC2\xB7 %u frames, known %.1f frames late", summary.GPU.Frames, summary.GPU.LatencyFrames);
-			UI::ItemProbe::Record("Performance.GPUSection");
-			ImGui::TableNextRow();
-			ImGui::TableSetColumnIndex(0);
-			const std::string bound = DescribeBound(summary);
-			ImGui::TextColored(summary.GPU.BoundBy == FrameBound::Unknown ? colors.TextSecondary : colors.Text, "%s", bound.c_str());
-			UI::ItemProbe::Record("Performance.Bound", true, 0, bound);
-			row(colors.Text, "GPU busy", summary.GPU.Busy, summary.GPU.Frames > 0 ? colors.Text : colors.TextSecondary);
-			for (FrameStageID stage = 0; stage < summary.Stages.size(); stage++)
-			{
-				const FrameStageSummary& entry = summary.Stages[stage];
-				if (entry.Kind != FrameStageKind::GPU)
-					continue;
-				const bool ran = entry.Time.Max > 0.0f;
-				row(GetStageColor(stage), entry.Name, entry.Time, ran ? colors.Text : colors.TextSecondary);
-			}
+			for (const TableRow& row : m_GPURows)
+				drawRow(row);
 		}
 		ImGui::PopFont();
 		ImGui::EndTable();

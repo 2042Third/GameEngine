@@ -351,25 +351,47 @@ namespace Strata
 
 	FrameTimeStats FrameProfiler::ComputeStats(std::span<const float> samples)
 	{
-		FrameTimeStats stats;
-		if (samples.empty())
-			return stats;
 		std::vector<float> values(samples.begin(), samples.end());
+		return ComputeStatsInPlace(values);
+	}
+
+	FrameTimeStats FrameProfiler::ComputeStatsInPlace(std::span<float> values)
+	{
+		FrameTimeStats stats;
+		if (values.empty())
+			return stats;
 		double sum = 0.0;
-		for (const float sample : values)
-			sum += sample;
+		float lowest = values.front();
+		float highest = values.front();
+		for (const float value : values)
+		{
+			sum += value;
+			lowest = std::min(lowest, value);
+			highest = std::max(highest, value);
+		}
 		stats.Average = static_cast<float>(sum / static_cast<double>(values.size()));
-		// Nearest rank: the sample at rank ceil(p * n) (1-based), found without sorting everything.
-		const auto percentile = [&values](size_t percent)
+		stats.Max = highest;
+		// Samples all alike are their own percentiles: most stages in most summaries (a stage that did not run is all zeros).
+		if (lowest == highest)
+		{
+			stats.P50 = lowest;
+			stats.P95 = lowest;
+			return stats;
+		}
+		// Nearest rank: the sample at rank ceil(p * n) (1-based), found without sorting everything. nth_element leaves the
+		// samples after the median's position no smaller than the median, and the 95th percentile's rank is at least the
+		// median's, so the second search looks only there.
+		const auto atRank = [&values](size_t percent)
 		{
 			const size_t rank = std::max<size_t>((values.size() * percent + 99) / 100, 1);
-			const auto it = values.begin() + static_cast<std::ptrdiff_t>(rank - 1);
-			std::nth_element(values.begin(), it, values.end());
-			return *it;
+			return values.begin() + static_cast<std::ptrdiff_t>(rank - 1);
 		};
-		stats.P50 = percentile(50);
-		stats.P95 = percentile(95);
-		stats.Max = *std::max_element(values.begin(), values.end());
+		const auto median = atRank(50);
+		std::nth_element(values.begin(), median, values.end());
+		stats.P50 = *median;
+		const auto p95 = atRank(95);
+		std::nth_element(median, p95, values.end());
+		stats.P95 = *p95;
 		return stats;
 	}
 
@@ -383,63 +405,76 @@ namespace Strata
 		summary.IOThreads = jobs.IO.Threads;
 		summary.BackgroundThreads = jobs.Background.Threads;
 
+		// The stages by kind, sorted out once rather than for every frame.
 		const uint32_t stageCount = GetStageCount();
-		std::vector<std::vector<float>> stageSamples(stageCount);
-		std::vector<float> work;
-		std::vector<float> stageSums;
-		std::vector<float> untimed;
-		std::vector<float> intervalSamples;
-		std::vector<float> gpuBusy;
-		work.reserve(count);
-		stageSums.reserve(count);
-		untimed.reserve(count);
-		intervalSamples.reserve(count);
-		double intervals = 0.0;
+		std::array<FrameStageID, c_MaxStages> cpuStages;
+		std::array<FrameStageID, c_MaxStages> gpuStages;
+		uint32_t cpuStageCount = 0;
+		uint32_t gpuStageCount = 0;
+		for (FrameStageID stage = 0; stage < stageCount; stage++)
+		{
+			if (m_StageKinds[stage] == FrameStageKind::GPU)
+				gpuStages[gpuStageCount++] = stage;
+			else
+				cpuStages[cpuStageCount++] = stage;
+		}
+
+		// Every series in one allocation, a row of `count` samples each: a row per stage (a CPU stage has a sample per frame,
+		// a GPU stage one per frame whose GPU times arrived), then the frames' work, stage sum, untimed time, interval (frames
+		// that have a previous one) and GPU busy time. The statistics reorder each row in place: the rows are this summary's.
+		const uint32_t workRow = stageCount;
+		const uint32_t stageSumRow = stageCount + 1;
+		const uint32_t untimedRow = stageCount + 2;
+		const uint32_t intervalRow = stageCount + 3;
+		const uint32_t gpuBusyRow = stageCount + 4;
+		std::vector<float> samples(static_cast<size_t>(gpuBusyRow + 1) * count);
+		const auto row = [&samples, count](uint32_t index) { return samples.data() + static_cast<size_t>(index) * count; };
+		uint32_t gpuFrames = 0;
 		uint32_t intervalCount = 0;
+		double intervals = 0.0;
 		double gpuLatency = 0.0;
 		double workerBusy = 0.0;
 		double ioBusy = 0.0;
 		double backgroundBusy = 0.0;
 		for (uint32_t age = 0; age < count; age++)
 		{
-			const FrameSample frame = GetFrame(age);
-			work.push_back(frame.WorkMs);
+			const FrameRecord& record = m_Records[(m_NextRecord + m_Capacity - 1 - age) % m_Capacity];
 			double sum = 0.0;
-			for (uint32_t stage = 0; stage < stageCount; stage++)
+			for (uint32_t index = 0; index < cpuStageCount; index++)
 			{
-				if (m_StageKinds[stage] == FrameStageKind::GPU)
-				{
-					// GPU stages over the frames whose GPU times arrived.
-					if (frame.HasGPU)
-						stageSamples[stage].push_back(frame.GPUStageMs[stage]);
-					continue;
-				}
-				stageSamples[stage].push_back(frame.StageMs[stage]);
+				const FrameStageID stage = cpuStages[index];
+				const float ms = record.StageMs[stage];
+				row(stage)[age] = ms;
 				if (m_StageInWorkTime[stage])
-					sum += frame.StageMs[stage];
+					sum += ms;
 			}
-			if (frame.HasGPU)
+			if (record.HasGPU)
 			{
-				gpuBusy.push_back(frame.GPUBusyMs);
-				gpuLatency += frame.GPULatencyFrames;
+				// GPU stages over the frames whose GPU times arrived.
+				for (uint32_t index = 0; index < gpuStageCount; index++)
+					row(gpuStages[index])[gpuFrames] = record.GPUStageMs[gpuStages[index]];
+				row(gpuBusyRow)[gpuFrames] = record.GPUBusyMs;
+				gpuFrames++;
+				gpuLatency += record.GPULatencyFrames;
 			}
-			stageSums.push_back(static_cast<float>(sum));
-			untimed.push_back(std::max(frame.WorkMs - static_cast<float>(sum), 0.0f));
-			if (frame.IntervalMs > 0.0f)
+			row(workRow)[age] = record.WorkMs;
+			row(stageSumRow)[age] = static_cast<float>(sum);
+			row(untimedRow)[age] = std::max(record.WorkMs - static_cast<float>(sum), 0.0f);
+			if (record.IntervalMs > 0.0f)
 			{
-				intervals += frame.IntervalMs;
-				intervalCount++;
-				intervalSamples.push_back(frame.IntervalMs);
+				intervals += record.IntervalMs;
+				row(intervalRow)[intervalCount++] = record.IntervalMs;
 			}
-			workerBusy += frame.WorkerBusyPercent;
-			ioBusy += frame.IOBusyPercent;
-			backgroundBusy += frame.BackgroundBusyPercent;
+			workerBusy += record.WorkerBusyPercent;
+			ioBusy += record.IOBusyPercent;
+			backgroundBusy += record.BackgroundBusyPercent;
 		}
 
-		summary.Work = ComputeStats(work);
-		summary.StageSum = ComputeStats(stageSums);
-		summary.Untimed = ComputeStats(untimed);
-		summary.Interval = ComputeStats(intervalSamples);
+		const auto stats = [](float* first, uint32_t size) { return ComputeStatsInPlace(std::span<float>(first, size)); };
+		summary.Work = stats(row(workRow), count);
+		summary.StageSum = stats(row(stageSumRow), count);
+		summary.Untimed = stats(row(untimedRow), count);
+		summary.Interval = stats(row(intervalRow), intervalCount);
 		summary.FramesPerSecond = intervals > 0.0 ? static_cast<float>(static_cast<double>(intervalCount) * 1000.0 / intervals) : 0.0f;
 		if (count > 0)
 		{
@@ -448,12 +483,15 @@ namespace Strata
 			summary.BackgroundBusyPercent = static_cast<float>(backgroundBusy / static_cast<double>(count));
 		}
 		summary.Stages.reserve(stageCount);
-		for (uint32_t stage = 0; stage < stageCount; stage++)
-			summary.Stages.push_back(FrameStageSummary { m_StageNames[stage], m_StageInWorkTime[stage], m_StageKinds[stage], ComputeStats(stageSamples[stage]) });
+		for (FrameStageID stage = 0; stage < stageCount; stage++)
+		{
+			const uint32_t size = m_StageKinds[stage] == FrameStageKind::GPU ? gpuFrames : count;
+			summary.Stages.push_back(FrameStageSummary { m_StageNames[stage], m_StageInWorkTime[stage], m_StageKinds[stage], stats(row(stage), size) });
+		}
 
 		FrameGPUSummary& gpu = summary.GPU;
-		gpu.Frames = static_cast<uint32_t>(gpuBusy.size());
-		gpu.Busy = ComputeStats(gpuBusy);
+		gpu.Frames = gpuFrames;
+		gpu.Busy = stats(row(gpuBusyRow), gpuFrames);
 		if (gpu.Frames > 0)
 		{
 			gpu.LatencyFrames = static_cast<float>(gpuLatency / static_cast<double>(gpu.Frames));

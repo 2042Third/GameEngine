@@ -855,7 +855,9 @@ nest in it). Each frame
 also records how busy the job system's worker, I/O and background threads were since the previous frame
 (`JobSystem::GetStats`: per-thread busy time and completed jobs, written by each pool thread under a sequence lock and
 read without stopping it).
-`Summarize` gives mean, nearest-rank 50th and 95th percentiles and maximum per stage; frame listeners
+`Summarize` gives mean, nearest-rank 50th and 95th percentiles and maximum per stage (every series in one allocation, each
+reordered in place by `ComputeStatsInPlace`; a series of equal samples, such as a stage that did not run, needs no
+search); frame listeners
 (`AddFrameListener`) receive every recorded frame. The editor reports it through `editor.perf`, the Performance panel and
 the status bar's frame pill (see [Editor](#editor));
 `StrataRuntime --perf-log` writes it as CSV (`Runtime/FramePerfLog`, see
@@ -3229,8 +3231,9 @@ is the `strata-scripting` skill. The layers:
   stage self times of the last 600 frames (newest at the right, untimed work on top, reference lines at 16.7 and 33.3
   ms), scaled to the 95th percentile frame (taller frames are cut at the top), marks spikes (frames over twice the
   median and a 60 FPS frame), explains the frame under the mouse, lists per-stage statistics under the frame's totals
-  (frozen under the header) and copies `editor.perf`'s JSON (Copy as JSON); its statistics are computed four times a
-  second. While GPU times arrive (or are expected) a GPU strip under the timeline stacks the GPU stages of the same frames
+  (frozen under the header) and copies `editor.perf`'s JSON (Copy as JSON); its statistics, and the table's text with
+  them, are made four times a second, and each strip sorts out the stages it stacks once per frame drawn, not per column
+  (the other strip's stages cost its 600 columns nothing). While GPU times arrive (or are expected) a GPU strip under the timeline stacks the GPU stages of the same frames
   at the same scale (frames without GPU times stay blank), and the table ends with a GPU section: what bounds the frames
   (`PerformancePanel::DescribeBound`: GPU-bound, CPU-bound, capped or unknown, by `FrameBound`), the GPU's busy time and
   each GPU stage. The status bar's frame pill keeps its text; its tooltip adds the same bound line (a summary of the last

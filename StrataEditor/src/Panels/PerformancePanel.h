@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace Strata
 {
@@ -54,6 +55,29 @@ namespace Strata
 		// Whether the panel shows the GPU: GPU times arrived, or are expected.
 		static bool ShowsGPU(const FrameProfileSummary& summary);
 	private:
+		// A row of the stage table. Its text is made with the statistics (a few times per second, UpdateTableRows), not in each
+		// frame that draws it: the table of every registered stage would format about a hundred numbers per frame.
+		struct TableRow
+		{
+			// The swatch's color: the text's (the totals), the untimed rest's or the row's stage's; None for a line of text without
+			// a swatch or values (the GPU section's headings).
+			enum class SwatchColor : uint8_t
+			{
+				Text = 0,
+				Untimed,
+				Stage,
+				None
+			};
+			SwatchColor Swatch = SwatchColor::Text;
+			FrameStageID Stage = c_InvalidFrameStage;
+			std::string Name;
+			std::array<std::string, 4> Values; // The average, p50, p95 and maximum in milliseconds
+			bool Secondary = false;            // In the secondary text color: the untimed rest, stages that did not run
+			const char* Probe = nullptr;       // The item probe recorded with the row's last item (and its name as the text)
+		};
+
+		// Makes the stage table's rows of m_Summary.
+		void UpdateTableRows();
 		void DrawSummary();
 		void DrawTimeline(const ImVec2& size);
 		// One strip of the timeline: the CPU's stages and untimed work, or the GPU's stages.
@@ -65,6 +89,9 @@ namespace Strata
 		uint32_t m_JobCursor = 0;
 		uint32_t m_JobSampleCount = 0;
 		std::optional<FrameProfileSummary> m_Summary;
+		// The stage table of m_Summary: the frame's totals and the CPU's stages, and the GPU section (shown with the GPU).
+		std::vector<TableRow> m_CPURows;
+		std::vector<TableRow> m_GPURows;
 		double m_LastSummaryTime = -1.0;
 		bool m_Copied = false;
 		double m_CopiedTime = 0.0;
