@@ -3149,12 +3149,15 @@ lights, Post Process and the sky), and never a resolution below the output's.
   size knobs apply from the next frame on both paths, through what already compares them (the cascade cache's key
   holds the LOD criteria, the local shadows' `LocalShadowContent` holds `LODErrorPixels`: a new error draws every
   light's views again in their tiles, as a caster's change does). A knob that changes what a cached shadow view shows
-  goes into one of them. A new `EnvironmentResolution` drops the environment maps and the atmosphere's spare and
-  refreshing sets (`ReleaseEnvironment`): the next frame with a sky computes them at the new size (the atmosphere's first
-  environment at once) or takes over a shared set of it. A new `Reflections` mode releases the screen-space reflections'
-  resources (`ReleaseScreenReflections`); the next frame that traces makes the new mode's. It returns whether the
-  cascades, the atlas, the environment or the reflections were released, and then restarts the temporal history. Callers apply the quality right after `SetViewportSize` in a frame, so Auto resolves for its rows; equal
-  knobs cost one comparison. An allocation that fails halves the cascades (down to 1024) or the atlas (down to 2048),
+  goes into one of them. A new `EnvironmentResolution` keeps the environment lighting: only its prefiltered cube depends
+  on the size, so the next frame with a sky takes over a shared set of the new size or makes a new prefiltered cube and
+  filters it from the radiance cube in hand (`ResizePrefilteredMap`), never from the environment map again, whose levels
+  dropped to its tail once the environment was computed. The atmosphere's maps and its spare and refreshing sets are
+  released instead (`ReleaseAtmosphereEnvironment`): its next frame computes its environment at once at the new size. A
+  new `Reflections` mode releases the screen-space reflections' resources (`ReleaseScreenReflections`); the next frame
+  that traces makes the new mode's. It returns whether the cascades, the atlas, the environment or the reflections
+  changed, and then restarts the temporal history. Callers apply the quality right after `SetViewportSize` in a frame,
+  so Auto resolves for its rows; equal knobs cost one comparison. An allocation that fails halves the cascades (down to 1024) or the atlas (down to 2048),
   reports it once, and is tried at the requested size again by the next resize or change of that knob.
 - **Single images release their cascades:** a zero viewport (a capture renderer between pictures, the editor's hidden
   Game view) releases them with the render targets; thumbnails keep one 1024-texel layer. A minimized window keeps

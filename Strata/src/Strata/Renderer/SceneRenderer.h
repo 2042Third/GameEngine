@@ -495,8 +495,9 @@ namespace Strata
 		uint32_t MeshesWithoutBounds = 0;
 		bool EnvironmentLighting = false; // A sky light's environment (map or procedural sky) lights the scene
 		// Environment cubes computed this frame (with their irradiance and prefiltered maps): 1 when the environment map
-		// or the procedural sky's parameters (colors, sun size and intensity, the sun's direction and color) changed. An
-		// environment map's environment that another renderer computed is taken over, not computed (0).
+		// or the procedural sky's parameters (colors, sun size and intensity, the sun's direction and color) changed, also when a
+		// new EnvironmentResolution filtered only the prefiltered map again. An environment map's environment that another
+		// renderer computed is taken over, not computed (0).
 		uint32_t EnvironmentUpdates = 0;
 		// The atmosphere (SkyLightSource::Atmosphere): whether the frame's sky is it; its tables computed this frame (1 when
 		// its settings or the sun's color changed: transmittance and multiple scattering) and its sky-view tables (when the
@@ -1210,6 +1211,16 @@ namespace Strata
 		void ReportTextureUse(const SceneCamera& camera);
 		// New environment textures (radiance cube with mips, irradiance, prefiltered).
 		EnvironmentMaps CreateEnvironmentMaps(nvrhi::ICommandList* commandList);
+		// A new environment cube texture of `size` texels each way and `mips` levels, out of its undefined layout whole (written
+		// level by level by the passes).
+		nvrhi::TextureHandle CreateEnvironmentTexture(nvrhi::ICommandList* commandList, uint32_t size, uint32_t mips, const char* name);
+		// Gives `maps` a new prefiltered cube of the quality's EnvironmentResolution (the old one goes to `released`): the radiance
+		// cube and the irradiance do not depend on it.
+		void ReplacePrefilteredMap(nvrhi::ICommandList* commandList, EnvironmentMaps& maps, std::vector<nvrhi::ResourceHandle>& released);
+		// A new EnvironmentResolution: the current environment's prefiltered cube made at the new size and filtered from its
+		// radiance cube within the frame, so the environment keeps lighting the scene (an environment map's, which nothing reads
+		// any more once computed, could not be computed again before its levels streamed back in). Shared as a map's is.
+		void ResizePrefilteredMap(nvrhi::ICommandList* commandList);
 		// The environment maps of an equirectangular texture (new textures, so maps of the previous source are never
 		// overwritten while it may still be in use), shared with the renderers that start lighting with the same texture.
 		void ProcessEnvironment(nvrhi::ICommandList* commandList, const Ref<Texture>& source);
@@ -1474,9 +1485,10 @@ namespace Strata
 		// Releases the cascades' depth array with what references it (framebuffers, depth pyramids and their sets, the cached
 		// cascades), through Renderer::ReleaseDeferred; the next frame that draws a shadowed sun makes them again.
 		void ReleaseShadowMap();
-		// Drops the environment maps (and the atmosphere's spare and refreshing ones) through Renderer::ReleaseDeferred, so the
-		// next frame with a sky computes them at the quality's EnvironmentResolution or takes a shared set of that size.
-		void ReleaseEnvironment();
+		// Drops the atmosphere's environment maps and its spare and refreshing ones through Renderer::ReleaseDeferred, so its
+		// next frame computes its environment at once at the quality's EnvironmentResolution. (An environment map's or a
+		// procedural sky's environment is kept: UpdateEnvironment resizes only its prefiltered cube.)
+		void ReleaseAtmosphereEnvironment();
 		// The cascade cache holds nothing: every cascade is drawn again.
 		void InvalidateShadowCache();
 		// The cascades' size for a quality at the current viewport: its resolution resolved for the rows, limited by the

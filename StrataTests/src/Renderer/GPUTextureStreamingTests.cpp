@@ -8,6 +8,7 @@
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Renderer/BindlessTextureTable.h"
 #include "Strata/Renderer/RendererComponents.h"
+#include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureFormat.h"
@@ -853,6 +854,94 @@ TEST_SUITE("GPU.TextureStreaming")
 		CHECK(after.RangeReadsCompleted == raised.RangeReadsCompleted);
 		CHECK(after.Detail.LevelsDropped == raised.Detail.LevelsDropped + 4);
 		CHECK(map->GetResidentLevel() == 4);
+
+		AssetManager::SetActive(nullptr);
+		scene.reset();
+		manager.reset();
+		SettleDevice(gpu);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A new environment resolution keeps a map's sky and its light while the map keeps its tail")
+	{
+		// A player's Graphics Quality or the Scene view's preset changes RendererQualitySettings::EnvironmentResolution once the
+		// map dropped to its tail. Only the prefiltered cube depends on it: the next frame filters one of the new size from the
+		// radiance cube the renderer holds. Computed from the map again, the scene lost its sky and image light until the map's
+		// levels streamed back in.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr AssetHandle c_SkyHandle = AssetHandle(0xA3003);
+		constexpr uint32_t c_SkyViewSize = 64;
+		const std::filesystem::path pack = WriteStreamingPack({ StreamingPackAsset { c_SkyHandle, AssetType::Texture, "Textures/Sky.hdr", CookEnvironmentMap(512, 256) } });
+		std::string error;
+		Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(pack, &error);
+		REQUIRE_MESSAGE(manager, error);
+		Scope<Scene> scene = CreateScope<Scene>("Sky");
+		AddNeutralPostProcess(*scene);
+		scene->CreateEntity("Sky").AddComponent<SkyLightComponent>().EnvironmentMap = c_SkyHandle;
+		AddMesh(*scene, BuiltinAssets::SphereMesh, BuiltinAssets::DefaultMaterial, glm::vec3(0.0f), "Ball");
+		const SceneCamera camera = CameraAt(3.0f);
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_SkyViewSize, c_SkyViewSize);
+		uint32_t updates = 0;
+		for (uint32_t frame = 0; frame < 200 && updates == 0; frame++)
+		{
+			RunFrame(gpu, manager, { { &renderer, scene.get() } }, camera);
+			updates += renderer.GetStats().EnvironmentUpdates;
+		}
+		REQUIRE(updates == 1);
+		ShortenIdleDrops(*manager);
+		const Ref<Texture> map = PeekTexture(*manager, c_SkyHandle);
+		REQUIRE(map);
+		REQUIRE(RunFramesUntil([&]() { RunFrame(gpu, manager, { { &renderer, scene.get() } }, camera); },
+			[&]() { return map->GetResidentLevel() == map->GetTailLevel(); }, 0.0));
+		REQUIRE(map->GetTailLevel() > 0);
+		nvrhi::ITexture* const cube = renderer.GetEnvironmentCube();
+		nvrhi::ITexture* const irradiance = renderer.GetIrradianceMap();
+		REQUIRE(cube);
+		REQUIRE(renderer.GetPrefilteredMap());
+		CHECK(renderer.GetPrefilteredMap()->getDesc().width == 256);
+		AssetManager::SetActive(manager);
+		REQUIRE(gpu.GetDevice().BeginFrame());
+		Strata::Renderer::BeginFrame();
+		manager->Update();
+		const ReadbackImage reference = RenderToImage(renderer, *scene, camera);
+		gpu.GetDevice().EndFrame();
+		const AssetManagerStats before = manager->GetStats();
+
+		// High's size and back to Medium's: each change lights its very next frame, from the same radiance cube and irradiance.
+		for (const uint32_t size : { 512u, 256u })
+		{
+			CAPTURE(size);
+			RendererQualitySettings quality = RendererQuality::GetPreset(RendererQualityPreset::Medium);
+			quality.Preset = RendererQualityPreset::Custom;
+			quality.EnvironmentResolution = size;
+			REQUIRE(renderer.SetQuality(quality));
+			AssetManager::SetActive(manager);
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Strata::Renderer::BeginFrame();
+			manager->Update();
+			const ReadbackImage image = RenderToImage(renderer, *scene, camera);
+			gpu.GetDevice().EndFrame();
+			CHECK(renderer.GetStats().EnvironmentLighting);
+			CHECK(renderer.GetStats().PendingAssets == 0);
+			CHECK(renderer.GetStats().EnvironmentUpdates == 1);
+			REQUIRE(renderer.GetPrefilteredMap());
+			CHECK(renderer.GetPrefilteredMap()->getDesc().width == size);
+			CHECK(renderer.GetPrefilteredMap()->getDesc().mipLevels == 6);
+			CHECK(renderer.GetEnvironmentCube() == cube);
+			CHECK(renderer.GetIrradianceMap() == irradiance);
+			// The sky's blue in a corner and the ball lit by it, as before the change.
+			CHECK(GetPixelRGBA8(image, 1, 1).b > 100);
+			const glm::u8vec4 ball = GetPixelRGBA8(image, c_SkyViewSize / 2, c_SkyViewSize / 2);
+			CHECK(ball.r + ball.g + ball.b > 60);
+			CAPTURE(MaxDifference(image, reference));
+			CHECK(MaxDifference(image, reference) <= 2);
+		}
+		// Nothing was read from the map: it kept its tail.
+		CHECK(manager->GetStats().Detail.LevelsRaised == before.Detail.LevelsRaised);
+		CHECK(manager->GetStats().RangeReads == before.RangeReads);
+		CHECK(map->GetResidentLevel() == map->GetTailLevel());
 
 		AssetManager::SetActive(nullptr);
 		scene.reset();
