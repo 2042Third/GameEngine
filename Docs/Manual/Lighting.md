@@ -220,7 +220,7 @@ Below 3 a sunny scene looks flat and gray; far above 10 its shadows turn black. 
 default 3 lux sun (about 8).
 
 Models from kits whose exporter writes sRGB colors into glTF's linear base color factors (Kenney's, for one) look washed
-out and too saturated: turn on **Base Color Factors Are sRGB** in their import settings.
+out: lighter and paler than their artist chose. Turn on **Base Color Factors Are sRGB** in their import settings.
 
 ## Ambient occlusion
 
