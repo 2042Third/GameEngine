@@ -203,6 +203,36 @@ TEST_SUITE("Editor.Lighting")
 		CHECK(post.GetComponent<PostProcessComponent>().AutoExposureMaxEV == 12.0f);
 	}
 
+	TEST_CASE("lighting.applySkyPreset turns a manual exposure automatic in its undo step")
+	{
+		// A manual exposure of 0 suits a 3 lux sun: under a real one the whole frame clips to white.
+		LightingHarness harness;
+		Scene& scene = harness.GetScene();
+		Entity post = scene.CreateEntity("Post");
+		PostProcessComponent& postProcess = post.AddComponent<PostProcessComponent>();
+		postProcess.AutoExposure = false;
+		postProcess.Exposure = 1.5f;
+		postProcess.AutoExposureMaxEV = 12.0f;
+		const nlohmann::json result = harness.Run("lighting.applySkyPreset", { { "preset", "Hazy" } });
+		CHECK(result["autoExposureTurnedOn"] == true);
+		CHECK(result["postProcess"] == harness.Id(post));
+		CHECK(post.GetComponent<PostProcessComponent>().AutoExposure);
+		CHECK(post.GetComponent<PostProcessComponent>().Exposure == 0.0f);
+		CHECK(post.GetComponent<PostProcessComponent>().AutoExposureMaxEV == 16.0f);
+		harness.Run("edit.undo");
+		CHECK_FALSE(post.GetComponent<PostProcessComponent>().AutoExposure);
+		CHECK(post.GetComponent<PostProcessComponent>().Exposure == 1.5f);
+		CHECK(post.GetComponent<PostProcessComponent>().AutoExposureMaxEV == 12.0f);
+		harness.Run("edit.redo");
+
+		// An automatic exposure that reaches a sunlit scene's level is left as it is.
+		const nlohmann::json again = harness.Run("lighting.applySkyPreset", { { "preset", "Clear" } });
+		CHECK(again["autoExposureTurnedOn"] == false);
+		CHECK(again["postProcess"].is_null());
+		CHECK(post.GetComponent<PostProcessComponent>().AutoExposure);
+		CHECK(post.GetComponent<PostProcessComponent>().AutoExposureMaxEV == 16.0f);
+	}
+
 	TEST_CASE("lighting.applySkyPreset refuses invalid parameters and changes nothing")
 	{
 		LightingHarness harness;

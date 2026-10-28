@@ -201,8 +201,10 @@ The Sky section of the Inspector has four presets, each a sky and a sun of real 
 `lighting.applySkyPreset`): **Clear** (the physical atmosphere and a 120,000 lux sun 40 degrees up: sunny, deep blue
 shadows), **Hazy** (thicker air: a paler sky and softer contrast), **Overcast** (an even gray sky of about 7,700 lux and a
 faint, very soft sun) and **Golden Hour** (the sun 6 degrees up: warm light and long shadows). They keep the sun's direction
-around the horizon, make the sky and the sun a scene lacks, and raise the Post Process's **Auto Exposure Max EV** to 16 when
-it would clip a real sun.
+around the horizon and make the sky and the sun a scene lacks. A real sun would turn the image white under a manual
+exposure (an **Exposure** of 0 suits a 3 lux sun), so a preset turns the Post Process's **Auto Exposure** on (its
+**Exposure** compensation back to 0) and raises its **Auto Exposure Max EV** to 16 when lower; undo brings the old
+exposure back.
 
 How sunny a scene looks depends most on its **sun to sky ratio**: the light flat ground gets from the sun over what it gets
 from the sky (the lighting debug views' legend names it).

@@ -3718,8 +3718,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   copy while playing): the sky light's source and settings, the directional light's rotation (keeping its azimuth, measured
   on the direction toward the sun, unless `sunAzimuth` is given; 20 for a new light; a light already within
   `c_PresetDirectionTolerance` of the preset's direction keeps its rotation, so a preset applied again records nothing),
-  intensity, color and softness, and raises the active Post Process's `AutoExposureMaxEV` below 15 to 16; it creates
-  "Sky" and "Sun" when the scene has none and returns `groundIlluminance` (the atmosphere's transmittance applied,
+  intensity, color and softness. The active Post Process's exposure must not clip a real sun: a manual one turns automatic
+  with no compensation (`autoExposureTurnedOn`), and `AutoExposureMaxEV` below 15 rises to 16. It creates "Sky" and "Sun"
+  when the scene has none and returns `groundIlluminance` (the atmosphere's transmittance applied,
   `Atmosphere::ComputeSunTransmittance`). The Inspector's Sky section has a button per preset.
 - The shading computes photometric quantities without a factor between them, so every intensity has a unit (the
   descriptions and the Inspector's tooltips name it; `Renderer.LightUnits` checks them):

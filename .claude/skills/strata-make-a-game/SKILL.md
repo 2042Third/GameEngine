@@ -285,11 +285,12 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
 - Camera: `{"Camera": {"Primary": true, "PerspectiveFOV": 45}}`; cameras and lights look along their -Z, so a camera at
   `+Z` looking at the origin needs no rotation. Rotations are Euler degrees `[pitch, yaw, roll]`.
 - Light: start from a preset, `lighting.applySkyPreset {"preset": "Clear"}` (or Hazy, Overcast, GoldenHour): the physical
-  atmosphere and a real sun (120,000 lux above the air) in one undo step, with the Post Process's `AutoExposureMaxEV`
-  raised to 16; it creates "Sky" and "Sun" when missing and keeps the sun's azimuth (`sunAzimuth`, `sunElevation` to
-  aim it). Otherwise a `DirectionalLight` plus a `SkyLight`: `"Source": "Procedural"` for a sky (its sun follows the
-  directional light; `ZenithColor`, `HorizonColor`, `GroundColor`, `SunSize`, `SunIntensity`), or an environment map, or
-  just an `AmbientColor` for fill (`ShowBackground: false` keeps the camera's clear color). Check the balance with
+  atmosphere and a real sun (120,000 lux above the air) in one undo step, with the Post Process's exposure made automatic
+  and `AutoExposureMaxEV` raised to 16; it creates "Sky" and "Sun" when missing and keeps the sun's azimuth
+  (`sunAzimuth`, `sunElevation` to aim it). Otherwise a `DirectionalLight` plus a `SkyLight`: `"Source": "Procedural"`
+  for a sky (its sun follows the directional light; `ZenithColor`, `HorizonColor`, `GroundColor`, `SunSize`,
+  `SunIntensity`), or an environment map, or just an `AmbientColor` for fill (`ShowBackground: false` keeps the camera's
+  clear color). Check the balance with
   `viewport.capture {"debugView": "luminance"}`: `debugView.lighting.sunToSkyRatio` is about 5-10 on a clear day (under 2
   looks flat), and `{"debugView": "albedo"}`'s `aboveRangeShare` near 0 (base colors above 0.85 look plastic and glow).
   Under the atmosphere distant surfaces fade into the air's haze (`AerialPerspective`); a small world (under a few km)
