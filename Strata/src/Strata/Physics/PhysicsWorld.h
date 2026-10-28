@@ -282,6 +282,22 @@ namespace Strata
 		// box3d's counters as of its last step, read now (physics.stats {detail: true}): changes nothing. The recycled count
 		// follows PhysicsLibraryCounters' rule for that box3d step.
 		PhysicsLibraryCounters ReadLibraryCounters() const;
+
+		//////////////////////////////////////////////////////////////////////////
+		// Simulation tuning (DeveloperGuide "Physics simulation")
+		//////////////////////////////////////////////////////////////////////////
+
+		// Applies the tuning fields of `tuning` (ContactRecycleDistance, SleepThreshold, ContactHertz, ContactDampingRatio,
+		// ContactPushSpeed; sanitized like the world's settings, the other fields ignored), which GetSettings reports from now on:
+		// the recycle distance and the contact tuning at once, the sleep threshold to every dynamic and kinematic body (also those
+		// out of the simulation) and the presence bodies. Main thread, between steps (PhysicsSystem calls it before a fixed step
+		// when the project's section changed). A body recycles contacts made from the next step on with the new distance.
+		void SetSimulationTuning(const PhysicsSettings& tuning);
+		// box3d's own values: the world's recycle distance, and the sleep threshold and contact recycling of the body an entity
+		// owns or of its character controller's presence body (nullopt and false for neither). For tests and diagnostics.
+		float GetContactRecycleDistance() const;
+		std::optional<float> GetSleepThreshold(Entity entity) const;
+		bool IsContactRecyclingEnabled(Entity entity) const;
 	private:
 		Scope<PhysicsWorldData> m_Data;
 	};

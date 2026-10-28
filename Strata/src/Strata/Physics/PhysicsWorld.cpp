@@ -718,10 +718,26 @@ namespace Strata
 			return storage.Custom ? *storage.Custom : static_cast<PhysicsMeshProvider&>(storage.Default);
 		}
 
+		float ClampFinite(float value, float low, float high, float fallback)
+		{
+			return std::isfinite(value) ? std::clamp(value, low, high) : fallback;
+		}
+
+		// The simulation's tuning within its ranges (see PhysicsSettings).
+		void SanitizeTuning(PhysicsSettings& settings)
+		{
+			settings.ContactRecycleDistance = ClampFinite(settings.ContactRecycleDistance, 0.0f, 1.0f, c_DefaultContactRecycleDistance);
+			settings.SleepThreshold = ClampFinite(settings.SleepThreshold, 0.0f, 1.0f, c_DefaultSleepThreshold);
+			settings.ContactHertz = ClampFinite(settings.ContactHertz, 1.0f, 240.0f, c_DefaultContactHertz);
+			settings.ContactDampingRatio = ClampFinite(settings.ContactDampingRatio, 0.0f, 100.0f, c_DefaultContactDampingRatio);
+			settings.ContactPushSpeed = ClampFinite(settings.ContactPushSpeed, 0.01f, 100.0f, c_DefaultContactPushSpeed);
+		}
+
 		// The settings of a world with resolved capacities (see PhysicsWorld::ResolveCapacities), within the engine's limits.
 		PhysicsSettings SanitizeSettings(const PhysicsSettings& settings)
 		{
 			PhysicsSettings result = settings;
+			SanitizeTuning(result);
 			result.MaxBodies = ClampCapacity(settings.MaxBodies, PhysicsCapacitySettings::c_MaxBodiesLimit);
 			result.MaxContactConstraints = ClampCapacity(settings.MaxContactConstraints, PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
 			result.CollisionSteps = std::clamp(settings.CollisionSteps, 1u, 64u);
@@ -854,7 +870,6 @@ namespace Strata
 		float LastContactTime = 0.0f;
 		// The instruments of the last step (see PhysicsStats and DeveloperGuide "Physics instruments").
 		bool DetailedStats = false;                                   // See PhysicsWorld::SetDetailedStats
-		float SleepThreshold = 0.0f;                                  // Of every moving body (see MakeBodySetup and the presence bodies)
 		float LastApplyTime = 0.0f;
 		float LastCheckedPairTime = 0.0f;
 		float LastEventTime = 0.0f;
@@ -1882,6 +1897,7 @@ namespace Strata
 			if (type == RigidBodyType::Static)
 				return setup;
 
+			setup.Body.sleepThreshold = data.Settings.SleepThreshold;
 			setup.Body.linearDamping = SanitizeNonNegative(rigidBody->LinearDamping, defaults.LinearDamping);
 			setup.Body.angularDamping = SanitizeNonNegative(rigidBody->AngularDamping, defaults.AngularDamping);
 			setup.Body.gravityScale = std::isfinite(rigidBody->GravityScale) ? rigidBody->GravityScale : defaults.GravityScale;
@@ -4014,7 +4030,7 @@ namespace Strata
 			ST_PROFILE_FUNCTION();
 
 			const float inverseTimestep = 1.0f / timestep;
-			const float sleepThreshold = data.SleepThreshold;
+			const float sleepThreshold = data.Settings.SleepThreshold;
 			SettlingSums settling;
 			Scene& scene = *data.OwnerScene;
 			entt::registry& registry = scene.GetRegistry();
@@ -4381,6 +4397,16 @@ namespace Strata
 			counters.RecycledContacts = recycled;
 		}
 
+		// The box3d body of an entity's record, or its character controller's presence body; null for neither.
+		b3BodyId FindBodyOrPresenceBody(const PhysicsWorldData& data, Entity entity)
+		{
+			if (!entity.IsValid() || entity.GetScene() != data.OwnerScene)
+				return b3_nullBodyId;
+			if (const BodyRecord* record = FindRecord(data, entity.GetHandle()); record && record->HasBody())
+				return record->BodyID;
+			return data.Characters ? data.Characters->GetPresenceBody(entity) : b3_nullBodyId;
+		}
+
 		// Counts the steps after which box3d's peak of contacts (b3World_GetMaxCapacity) passed the contact room it had: the
 		// room it reserved when the world was created, doubled at each growth as box3d's arrays double.
 		void CountContactGrowth(PhysicsWorldData& data, const b3Capacity& held, float libraryTime)
@@ -4420,6 +4446,9 @@ namespace Strata
 		}
 		definition.enableSleep = true;
 		definition.enableContinuous = true;
+		definition.contactHertz = data.Settings.ContactHertz;
+		definition.contactDampingRatio = data.Settings.ContactDampingRatio;
+		definition.contactSpeed = data.Settings.ContactPushSpeed;
 		// The room box3d reserves at once (see LibraryRoomBodies), split between its static and moving storage like the
 		// scene's bodies.
 		const uint32_t candidateCount = CountBodyCandidates(scene);
@@ -4436,7 +4465,9 @@ namespace Strata
 		definition.capacity.contactCount = static_cast<int>(data.LibraryRoomContacts);
 		data.Tasks.Configure(definition);
 		data.World = b3CreateWorld(&definition);
-		data.SleepThreshold = b3DefaultBodyDef().sleepThreshold; // What every moving body gets (MakeBodySetup, presence bodies)
+		// box3d's definition has no recycle distance; the bodies take the sleep threshold as they are made (MakeBodySetup and
+		// the presence bodies).
+		b3World_SetContactRecycleDistance(data.World, data.Settings.ContactRecycleDistance);
 		data.NextContactRoom = data.LibraryRoomContacts;
 
 		data.Characters = CreateScope<CharacterControllerSet>(scene, data.World, data.Settings);
@@ -5319,6 +5350,56 @@ namespace Strata
 		info.TotalStepMs = data.TotalStepMs;
 		info.TotalLibraryMs = data.TotalLibraryMs;
 		return info;
+	}
+
+	void PhysicsWorld::SetSimulationTuning(const PhysicsSettings& tuning)
+	{
+		ST_PROFILE_FUNCTION();
+		PhysicsWorldData& data = *m_Data;
+		PhysicsSettings next = data.Settings;
+		next.ContactRecycleDistance = tuning.ContactRecycleDistance;
+		next.SleepThreshold = tuning.SleepThreshold;
+		next.ContactHertz = tuning.ContactHertz;
+		next.ContactDampingRatio = tuning.ContactDampingRatio;
+		next.ContactPushSpeed = tuning.ContactPushSpeed;
+		SanitizeTuning(next);
+
+		if (next.ContactRecycleDistance != data.Settings.ContactRecycleDistance)
+			b3World_SetContactRecycleDistance(data.World, next.ContactRecycleDistance);
+		if (next.ContactHertz != data.Settings.ContactHertz || next.ContactDampingRatio != data.Settings.ContactDampingRatio
+			|| next.ContactPushSpeed != data.Settings.ContactPushSpeed)
+		{
+			b3World_SetContactTuning(data.World, next.ContactHertz, next.ContactDampingRatio, next.ContactPushSpeed);
+		}
+		if (next.SleepThreshold != data.Settings.SleepThreshold)
+		{
+			// Every body that may sleep, also those out of the simulation (they keep it when they come back), and the presence
+			// bodies: one walk per change, never per step.
+			for (const auto& [handle, record] : data.Bodies)
+			{
+				if (record.HasBody() && record.Type != RigidBodyType::Static)
+					b3Body_SetSleepThreshold(record.BodyID, next.SleepThreshold);
+			}
+			data.Characters->SetSleepThreshold(next.SleepThreshold);
+		}
+		data.Settings = next;
+	}
+
+	float PhysicsWorld::GetContactRecycleDistance() const
+	{
+		return b3World_GetContactRecycleDistance(m_Data->World);
+	}
+
+	std::optional<float> PhysicsWorld::GetSleepThreshold(Entity entity) const
+	{
+		const b3BodyId body = FindBodyOrPresenceBody(*m_Data, entity);
+		return B3_IS_NON_NULL(body) ? std::optional<float>(b3Body_GetSleepThreshold(body)) : std::nullopt;
+	}
+
+	bool PhysicsWorld::IsContactRecyclingEnabled(Entity entity) const
+	{
+		const b3BodyId body = FindBodyOrPresenceBody(*m_Data, entity);
+		return B3_IS_NON_NULL(body) && b3Body_IsContactRecyclingEnabled(body);
 	}
 
 	void PhysicsWorld::SetDetailedStats(bool detailed)

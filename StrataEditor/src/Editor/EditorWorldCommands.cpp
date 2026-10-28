@@ -412,6 +412,18 @@ namespace Strata
 				{ "heldSteps", stats.HeldStepCount },
 				{ "waitingForMeshes", stats.WaitingForMeshes } };
 			result.update(DescribePhysicsStep(stats, queried));
+			// The tuning the world runs with (DeveloperGuide "Physics simulation") and where it came from.
+			if (const PhysicsWorld* world = physics ? physics->GetWorld() : nullptr)
+			{
+				const PhysicsSettings& settings = world->GetSettings();
+				result["settings"] = { { "contactRecycleDistance", settings.ContactRecycleDistance }, { "sleepThreshold", settings.SleepThreshold },
+					{ "contactHertz", settings.ContactHertz }, { "contactDampingRatio", settings.ContactDampingRatio },
+					{ "contactPushSpeed", settings.ContactPushSpeed }, { "source", PhysicsSimulationSettings::SourceToString(physics->GetSimulationSource()) } };
+			}
+			else
+			{
+				result["settings"] = nullptr;
+			}
 			return result;
 		}
 
@@ -1028,8 +1040,10 @@ namespace Strata
 			"bodies in m/s; settling: those faster than the sleep threshold; restingJitterMm: how far the others still move in a step). box3d's "
 			"counters (islands; contacts total, awake and recycled) are read every step only while detailed statistics are on (contacts.detailed: "
 			"the perf lab, a game run with a perf log); otherwise detail: true reads them once for this answer (box3d's last step) and changes "
-			"nothing, and without it they are null. {running: false} while editing; simulating is false while a running scene has no physics "
-			"components.",
+			"nothing, and without it they are null. settings: the tuning the world runs with (contactRecycleDistance in meters, sleepThreshold in "
+			"m/s, contactHertz, contactDampingRatio, contactPushSpeed) and its source (project: the project's Physics.Simulation section, which "
+			"project.setSettings changes while the game runs, from its next fixed step; defaults); null without a world. {running: false} while "
+			"editing; simulating is false while a running scene has no physics components.",
 			ObjectSchema({ { "detail", BoolSchema("Read box3d's island and contact counters for this answer when they are not read every step "
 				"(default false)") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)

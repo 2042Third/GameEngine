@@ -430,14 +430,18 @@ dynamic bodies follow one by one, parents first, and the rare cases (scale edits
 are handled on the main thread in body order, so the results do not depend on the number of threads. Body order comes from
 a bitmap over the body indices of which only the words that got bits are sorted, read and cleared, so a step costs what
 moved, not the world's size. box3d computes in single precision: bodies more than 100 km (1e5 m) from the origin wait like
-bodies with a degenerate transform.
+bodies with a degenerate transform. How bodies settle (box3d's contact recycling distance, the sleep threshold) is the
+project's `Physics.Simulation` section, which `PhysicsSystem` applies on the main thread when a world is made and before a
+fixed step after it changed; what each step did (box3d's stage times and counters, Strata's parts, sleeping bodies, how
+bodies settle) is kept as the world steps and read in constant time through the scene service `IPhysicsDiagnostics`
+(DeveloperGuide, "Physics instruments" and "Physics simulation").
 
 **Character controllers** (`Physics/CharacterControllers`, `CharacterControllerComponent`). An entity with an active,
 enabled controller and no rigid body (an entity with both is the rigid body, with a warning) is an upright capsule
 standing on the entity's origin (its rotation and scale do not change it) that moves by box3d's mover queries
 (`b3World_CollideMover`, `b3SolvePlanes`, `b3World_CastMover`), plus a kinematic presence body (90% of its radius, its top
-at the capsule's, its shape carrying the entity's UUID) through which dynamic bodies land on it, triggers detect it and
-queries hit it. Each fixed step, after the bodies are synchronized and before box3d's step, `CharacterControllerSet::Step`
+at the capsule's, its shape carrying the entity's UUID; it never recycles contacts, since it is teleported every step)
+through which dynamic bodies land on it, triggers detect it and queries hit it. Each fixed step, after the bodies are synchronized and before box3d's step, `CharacterControllerSet::Step`
 moves every controller: its velocity is the walk velocity its script set (`ICharacterControl::MoveCharacter`, kept until
 the next call; the vertical part only without gravity), a pending jump, accumulated root motion (`AddCharacterMotion`: the
 animation system's, see Animation, Root motion) and gravity times its `GravityScale`; standing on walkable ground it takes

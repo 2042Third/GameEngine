@@ -17,6 +17,19 @@ namespace Strata
 	// Query layer mask that accepts every layer.
 	constexpr uint32_t c_AllPhysicsLayers = 0xFFFFFFFFu;
 
+	// The simulation's tuning defaults (PhysicsSettings; the project's Physics.Simulation section, DeveloperGuide "Physics
+	// simulation", uses the first two as its fields' defaults).
+	// box3d's B3_CONTACT_RECYCLE_DISTANCE (10 linear slops of 5 mm), in meters: touching contacts whose bodies moved less than
+	// this relative to each other since the contact was computed (and turned less than 10 degrees) are reused.
+	constexpr float c_DefaultContactRecycleDistance = 0.05f;
+	// box3d's b3BodyDef::sleepThreshold, in m/s: a body slower than this for 0.5 s (with its whole island) falls asleep.
+	constexpr float c_DefaultSleepThreshold = 0.05f;
+	// box3d's b3WorldDef contact tuning: the contacts' stiffness in cycles per second, their damping ratio, and the speed in m/s
+	// at which overlaps are pushed apart (contactSpeed).
+	constexpr float c_DefaultContactHertz = 30.0f;
+	constexpr float c_DefaultContactDampingRatio = 10.0f;
+	constexpr float c_DefaultContactPushSpeed = 3.0f;
+
 	// Configuration of a physics world. Capacities are the room a world reserves when it is created; 0 sizes one
 	// automatically from the bodies the scene has then (see PhysicsWorld::ResolveCapacities), and a scene's
 	// SceneSettings::PhysicsCapacity overrides these. A world whose bodies outgrow its room grows (see PhysicsWorld,
@@ -33,6 +46,15 @@ namespace Strata
 		// The most bodies a world may grow to: a cap on the memory physics uses (see PhysicsWorld::EstimateReservedBytes);
 		// beyond it bodies wait. 0: the engine's limit (PhysicsCapacitySettings::c_MaxBodiesLimit). Never below MaxBodies.
 		uint32_t GrowthLimit = 0;
+
+		// The simulation's tuning (see the defaults above): what PhysicsWorld::SetSimulationTuning changes while a world runs.
+		// The project's Physics.Simulation section overrides the first two (PhysicsSystem). Out-of-range values are clamped,
+		// non-finite ones replaced by the defaults.
+		float ContactRecycleDistance = c_DefaultContactRecycleDistance; // Meters, 0 to 1; 0 turns contact recycling off
+		float SleepThreshold = c_DefaultSleepThreshold;                 // m/s, 0 to 1, of every dynamic and kinematic body
+		float ContactHertz = c_DefaultContactHertz;                     // 1 to 240
+		float ContactDampingRatio = c_DefaultContactDampingRatio;       // 0 to 100
+		float ContactPushSpeed = c_DefaultContactPushSpeed;             // m/s, 0.01 to 100
 
 		// Layer collision matrix: bit j of LayerCollisionMasks[i] is set when layer i collides with layer j. Two layers
 		// collide only if both of their masks allow it, so an asymmetric edit disables the pair. Everything collides by

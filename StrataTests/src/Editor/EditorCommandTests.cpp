@@ -9,6 +9,7 @@
 #include "Editor/TestPEImage.h"
 #include "Editor/UndoStack.h"
 #include "FeatureTest/FeatureTestUtils.h"
+#include "Physics/PhysicsTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetDependencies.h>
@@ -19,6 +20,7 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Version.h>
 #include <Strata/Physics/PhysicsSystem.h>
+#include <Strata/Physics/PhysicsWorld.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/Mesh.h>
@@ -1498,5 +1500,51 @@ TEST_SUITE("Editor.Commands")
 		REQUIRE(saved);
 		CHECK(vehicleOf((*saved)["Scene"]["Entities"], truck) == vehicle);
 		CHECK(vehicleOf((*saved)["Scene"]["Entities"], copy) == vehicle);
+	}
+
+	TEST_CASE("project.setSettings tunes the running game's physics; its undo after play restores the project's value")
+	{
+		CommandHarness harness;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorPhysicsSimulation") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		Scene& edited = *harness.Context.GetEditScene();
+		Tests::CreateGround(edited);
+		Tests::CreateDynamicBox(edited, "Box", glm::vec3(0.0f, 2.0f, 0.0f));
+		CHECK(harness.Run("project.settings")["sections"].dump().find("Physics.Simulation") != std::string::npos);
+
+		harness.Run("play.start");
+		harness.Context.Update(Timestep(1.0f / 60.0f));
+		nlohmann::json settings = harness.Run("physics.stats")["settings"];
+		CHECK(settings["source"] == "defaults");
+		CHECK(settings["contactRecycleDistance"].get<double>() == doctest::Approx(0.05));
+		CHECK(settings["sleepThreshold"].get<double>() == doctest::Approx(0.05));
+		CHECK(settings["contactHertz"].get<double>() == doctest::Approx(30.0));
+
+		// While playing: the running world follows at its next fixed step.
+		harness.Run("project.setSettings", { { "section", "Physics.Simulation" }, { "value", { { "ContactRecycleDistance", 0.7 }, { "SleepThreshold", 0.1 } } } });
+		harness.Context.Update(Timestep(1.0f / 60.0f));
+		settings = harness.Run("physics.stats")["settings"];
+		CHECK(settings["source"] == "project");
+		CHECK(settings["contactRecycleDistance"].get<double>() == doctest::Approx(0.7));
+		CHECK(settings["sleepThreshold"].get<double>() == doctest::Approx(0.1));
+		CHECK(harness.Context.GetActiveScene()->GetSystem<PhysicsSystem>()->GetWorld()->GetContactRecycleDistance() == doctest::Approx(0.7f));
+		// An invalid value changes nothing.
+		CHECK(harness.Error("project.setSettings", { { "section", "Physics.Simulation" }, { "value", { { "ContactRecycleDistance", 2.0 } } } })
+			.find("ContactRecycleDistance") != std::string::npos);
+		harness.Run("play.stop");
+		CHECK(harness.Run("physics.stats") == nlohmann::json { { "running", false } });
+
+		// The change stays after play; its undo brings the default back, which the next play uses.
+		const auto stored = [&]() { return harness.Context.GetProject()->GetSettings().FindSection("Physics.Simulation"); };
+		REQUIRE(stored() != nullptr);
+		CHECK((*stored())["ContactRecycleDistance"].get<double>() == doctest::Approx(0.7));
+		harness.Run("edit.undo");
+		CHECK(stored() == nullptr);
+		harness.Run("play.start");
+		harness.Context.Update(Timestep(1.0f / 60.0f));
+		settings = harness.Run("physics.stats")["settings"];
+		CHECK(settings["source"] == "defaults");
+		CHECK(settings["contactRecycleDistance"].get<double>() == doctest::Approx(0.05));
+		harness.Run("play.stop");
 	}
 }

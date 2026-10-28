@@ -1119,6 +1119,37 @@ two members). A layer's name means the same in every scene and prefab.
   `project.open` reports `migrated: {collisionLayers: {scenes, conflicts, unreadable}}` (null when nothing migrated).
   Scene files are not touched.
 
+### Physics simulation
+
+How the physics simulation settles bodies is the project's section `Physics.Simulation` (`Physics/PhysicsSimulationSettings`,
+registered by `RegisterPhysicsModule`; a build without physics keeps a stored one unclaimed and writes it back as it was),
+a simple section of two fields, `ContactRecycleDistance` (meters, 0 to 1; 0 turns contact recycling off) and
+`SleepThreshold` (m/s, 0 to 1), whose defaults are `PhysicsSettings`' (`c_DefaultContactRecycleDistance` and
+`c_DefaultSleepThreshold`: box3d's own unless the sweep of [Settling and the sweep](#settling-and-the-sweep) chose others). The
+contact tuning (`ContactHertz`, `ContactDampingRatio`, `ContactPushSpeed`) stays in `PhysicsSettings`, the process default
+tests and the settle helper set ([Settling and the sweep](#settling-and-the-sweep) says why).
+
+- **Precedence.** A world uses the project's section when the program provides `IProjectSettings` (the editor with a
+  project, a game from its manifest) and the project stores it; otherwise the process defaults
+  (`PhysicsSystem::SetDefaultSettings`). `physics.stats`' `settings` reports the values in effect and their `source`
+  (`project` or `defaults`).
+- **Where it applies, on the main thread only** (`IProjectSettings`' contract): `PhysicsSystem::MakeWorldSettings` reads it
+  when a world is created, also for a world a load prepares (`PrepareLoadedScene`); before every fixed step
+  `PhysicsSystem::SyncSimulationSettings` reads it again when the provider's version changed (an adopted world reads it
+  once more, so a world prepared before a change gets it) and hands what differs to `PhysicsWorld::SetSimulationTuning`:
+  the recycle distance and contact tuning at once (`b3World_SetContactRecycleDistance`, `b3World_SetContactTuning`), the
+  sleep threshold to every dynamic and kinematic body with a box3d body, in the simulation or not (one walk per change,
+  never per step), and to the presence bodies; new bodies take it in `MakeBodySetup` and `CreatePresenceBody`. So
+  `project.setSettings` changes a running game from its next fixed step; a contact made before a distance change keeps
+  being recycled within the old distance until it is recomputed. Out-of-range values are clamped (distance 0-1 m,
+  threshold 0-1 m/s, hertz 1-240, damping 0-100, push speed 0.01-100 m/s) and non-finite ones replaced by the defaults.
+- **Characters never recycle.** A character controller's presence body is made with `enableContactRecycling` off, as
+  box3d advises for characters: it is teleported every step, and a recycled contact would keep the manifold of where it
+  stood under what it carries or pushes (`PhysicsWorld::IsContactRecyclingEnabled` answers for a body or a presence body).
+- **Tests.** `Physics.Settings` (the section, precedence, creation, a prepared world, a change at the next step, clamping),
+  `Physics.Recycling` (presence bodies, the crate push), `Editor.Commands` (`project.setSettings` while playing and its undo
+  after play) and the feature project, which stores the section with non-default values.
+
 ### Input actions
 
 A game's input actions are one set, the project section `Input.Actions` (`Input/InputActionSet`): an asset would load
@@ -1869,7 +1900,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
 
 `Strata/src/Strata/Physics/` holds the "Physics" scene system (`PhysicsSystem`), its world on box3d (`PhysicsWorld`), the
 character controllers and box3d's tasks on the job system. How bodies map to components, the step and the write-back:
-Docs/Architecture.md, "Physics"; capacities and growth: "World partition" below.
+Docs/Architecture.md, "Physics"; capacities and growth: "World partition" below; the project's tuning (recycle distance,
+sleep threshold): [Physics simulation](#physics-simulation).
 
 ### Physics instruments
 

@@ -137,6 +137,13 @@
 			},
 			"Version": 1
 		},
+		"Physics.Simulation": {
+			"Value": {
+				"ContactRecycleDistance": 0.04,
+				"SleepThreshold": 0.06
+			},
+			"Version": 1
+		},
 		"Renderer.Quality": {
 			"Value": {
 				"LODErrorPixels": 1.5,

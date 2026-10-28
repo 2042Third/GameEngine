@@ -110,8 +110,8 @@ namespace Strata::Tests
 	// The helper process "physics-settle" (TestMain.cpp): <scene> <seconds> <result.json> [--recycle-distance m]
 	// [--sleep-threshold m/s] [--contact-hertz hz] [--contact-damping ratio] [--contact-push-speed m/s] [--workers n]
 	// [--collision-steps n]. Plays a settle scene with those settings (PhysicsSystem::SetDefaultSettings; the workers through
-	// PhysicsTaskSystem::SetWorkerLimit) on a job system as applications run, and writes MeasureSettling's summary. Returns 0,
-	// or 1 with the reason on stderr.
+	// PhysicsTaskSystem::SetWorkerLimit) on a job system as applications run, without a project (the settings are the process
+	// defaults), and writes MeasureSettling's summary with the settings used. Returns 0, or 1 with the reason on stderr.
 	int RunPhysicsSettleProcess(int argc, char** argv);
 
 }

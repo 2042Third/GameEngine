@@ -3,6 +3,7 @@
 #include "Strata/Core/Base.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Core/UUID.h"
+#include "Strata/Physics/PhysicsSimulationSettings.h"
 #include "Strata/Physics/PhysicsTypes.h"
 #include "Strata/Physics/PhysicsWorld.h"
 #include "Strata/Scene/Entity.h"
@@ -176,6 +177,10 @@ namespace Strata
 
 		PhysicsStepInfo GetStepInfo() const override;
 		void SetDetailedStats(bool detailed) override;
+
+		// Where the running world's tuning comes from (DeveloperGuide "Physics simulation"): the project's Physics.Simulation
+		// section or the process defaults.
+		PhysicsSimulationSettings::Source GetSimulationSource() const { return m_SimulationSource; }
 	private:
 		struct CollisionListener
 		{
@@ -200,6 +205,8 @@ namespace Strata
 		std::array<uint32_t, c_PhysicsLayerCount> GetEffectiveLayerMasks() const;
 		// Applies the scene's layer matrix to the world when it changed (the project's table applied again, a script).
 		void SyncLayers();
+		// Applies the project's Physics.Simulation section to the world when the settings provider's version changed.
+		void SyncSimulationSettings();
 		void DispatchCollisionEvents();
 		// Tells the world which contacts to track: all of them while a listener of every entity is registered.
 		void UpdateContactTracking();
@@ -212,6 +219,10 @@ namespace Strata
 		bool m_ReportedNoWorld = false; // The scene found no free physics world (reported once)
 		uint32_t m_ReservedBodies = 0; // See Reserve
 		bool m_DetailedStats = false;  // See SetDetailedStats
+		// The settings provider's version whose Physics.Simulation section the world has (nullopt: not read for this world yet),
+		// and where its tuning came from.
+		std::optional<uint64_t> m_SimulationVersion;
+		PhysicsSimulationSettings::Source m_SimulationSource = PhysicsSimulationSettings::Source::Defaults;
 		std::vector<entt::scoped_connection> m_CreationConnections; // Watch for the first physics component
 
 		std::vector<Ref<CollisionListener>> m_CollisionListeners;

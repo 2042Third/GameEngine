@@ -749,6 +749,16 @@ namespace Strata::Tests
 				workers = static_cast<uint32_t>(value);
 			else if (option == "--collision-steps" && value >= 1.0 && value <= 64.0)
 				settings.CollisionSteps = static_cast<uint32_t>(value);
+			else if (option == "--recycle-distance" && value >= 0.0 && value <= 1.0)
+				settings.ContactRecycleDistance = static_cast<float>(value);
+			else if (option == "--sleep-threshold" && value >= 0.0 && value <= 1.0)
+				settings.SleepThreshold = static_cast<float>(value);
+			else if (option == "--contact-hertz" && value >= 1.0 && value <= 240.0)
+				settings.ContactHertz = static_cast<float>(value);
+			else if (option == "--contact-damping" && value >= 0.0 && value <= 100.0)
+				settings.ContactDampingRatio = static_cast<float>(value);
+			else if (option == "--contact-push-speed" && value >= 0.01 && value <= 100.0)
+				settings.ContactPushSpeed = static_cast<float>(value);
 			else
 			{
 				std::fprintf(stderr, "physics-settle: unknown option or value out of range: %s %s\n", argv[index - 1], argv[index]);
@@ -777,6 +787,11 @@ namespace Strata::Tests
 				document["scene"] = std::string(sceneName);
 				document["workers"] = PhysicsTaskSystem::GetWorkerCount();
 				document["collisionSteps"] = settings.CollisionSteps;
+				document["recycleDistance"] = settings.ContactRecycleDistance;
+				document["sleepThreshold"] = settings.SleepThreshold;
+				document["contactHertz"] = settings.ContactHertz;
+				document["contactDamping"] = settings.ContactDampingRatio;
+				document["contactPushSpeed"] = settings.ContactPushSpeed;
 				std::ofstream file(resultPath, std::ios::binary | std::ios::trunc);
 				file << document.dump(1, '\t') << '\n';
 				if (!file.good())
