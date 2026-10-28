@@ -3,6 +3,7 @@
 
 #include "Strata/Core/Assert.h"
 #include "Strata/Renderer/GraphicsDevice.h"
+#include "Strata/Renderer/PostProcessMath.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/RendererComponents.h"
 
@@ -385,6 +386,10 @@ namespace Strata
 		// without TAA, skip the branch and stay as they were.
 		tonemap.Sharpening = resolved ? temporalSettings.Sharpening : 0.0f;
 		tonemap.Vignette = std::clamp(postProcess.Vignette, 0.0f, 1.0f);
+		const PostProcessMath::FilmicCurve filmic = PostProcessMath::MakeFilmicCurve(postProcess.Toe, postProcess.Shoulder);
+		tonemap.FilmicToeSlope = filmic.ToeSlope;
+		tonemap.FilmicWhiteStops = filmic.WhiteStops;
+		tonemap.FilmicShoulderPower = filmic.ShoulderPower;
 
 		// FXAA unless the image was resolved temporally.
 		const bool fxaa = postProcess.AntiAliasing && !resolved;

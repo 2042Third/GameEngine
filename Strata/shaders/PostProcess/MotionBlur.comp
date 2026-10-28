@@ -1,0 +1,91 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/Dither.glsl"
+#include "Include/MotionBlur.glsl"
+
+// The motion blur's gather (PostProcessMath::MotionBlurProfile is its CPU model): a reconstruction filter on the principle of
+// the tile-max / neighbor-max filters, designed here. Where the neighborhood's largest blur is under half a pixel, the pixel
+// keeps its color exactly (alpha 0). Otherwise SampleCount point samples spread over the neighborhood's blur, stratified over
+// its whole span with one static offset per pixel (no ghost copies, nothing temporal); even samples follow the neighborhood's
+// direction, odd ones the pixel's own when it moves at least 1.5 pixels. Each sample counts by depth: a nearer sample whose blur
+// reaches the center spreads over it (a moving foreground over the background), a farther one counts when the center's own
+// blur reaches it, and parts of one surface blur together; the center counts as a sample at distance 0. Alpha 1 marks the
+// blurred pixels (the tone mapping does not sharpen them).
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(0)) uniform texture2D u_Velocity;
+layout(set = 0, binding = ST_SRV(1)) uniform texture2D u_Depth;
+layout(set = 0, binding = ST_SRV(2)) uniform texture2D u_NeighborMax;
+layout(set = 0, binding = ST_SRV(3)) uniform texture2D u_Color;
+layout(set = 0, binding = ST_UAV(0), rgba16f) uniform writeonly image2D o_Blurred;
+
+// Depth classification: a sample within 5% of the center's distance lies on the same surface.
+const float c_DepthTolerance = 0.05;
+
+float Cover(float distance, float radius)
+{
+	return clamp(1.0 - distance / radius, 0.0, 1.0);
+}
+
+float Span(float distance, float radius)
+{
+	return 1.0 - smoothstep(0.95 * radius, 1.05 * radius, distance);
+}
+
+float SampleWeight(float distance, float sampleDistance, float sampleRadius, float centerDistance, float centerRadius)
+{
+	float inFront = clamp(1.0 - (sampleDistance - centerDistance) / (c_DepthTolerance * centerDistance), 0.0, 1.0);
+	float behind = clamp(1.0 - (centerDistance - sampleDistance) / (c_DepthTolerance * centerDistance), 0.0, 1.0);
+	return inFront * Cover(distance, sampleRadius) + behind * Cover(distance, centerRadius)
+		+ 2.0 * Span(distance, sampleRadius) * Span(distance, centerRadius);
+}
+
+void main()
+{
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = textureSize(u_Color, 0);
+	if (any(greaterThanEqual(pixel, size)))
+		return;
+	vec4 center = texelFetch(u_Color, pixel, 0);
+	ivec2 tile = pixel / int(u_MotionBlur.TileSize);
+	vec2 neighborVelocity = texelFetch(u_NeighborMax, tile, 0).xy;
+	float neighborRadius = 0.5 * length(neighborVelocity);
+	if (neighborRadius < 0.5)
+	{
+		imageStore(o_Blurred, pixel, vec4(center.rgb, 0.0));
+		return;
+	}
+
+	vec2 uv = (vec2(pixel) + 0.5) * u_Frame.ViewportSize.zw;
+	float centerDepth = texelFetch(u_Depth, pixel, 0).r;
+	vec2 centerVelocity = GetBlurVelocity(texelFetch(u_Velocity, pixel, 0).rg, centerDepth, uv);
+	float centerSpeed = length(centerVelocity);
+	float centerRadius = max(0.5 * centerSpeed, 0.5);
+	float centerDistance = GetViewDistance(uv, centerDepth);
+	vec2 neighborDirection = neighborVelocity / (2.0 * neighborRadius);
+	vec2 ownDirection = centerSpeed >= 1.5 ? centerVelocity / centerSpeed : neighborDirection;
+
+	// The center: a sample at distance 0 on its own surface.
+	float totalWeight = SampleWeight(0.0, centerDistance, centerRadius, centerDistance, centerRadius);
+	vec3 sum = center.rgb * totalWeight;
+	uint count = u_MotionBlur.SampleCount;
+	float jitter = PixelRandom(uvec2(pixel), 6u) - 0.5;
+	for (uint index = 0u; index < count; index++)
+	{
+		float position = -1.0 + (2.0 * float(index) + 1.0 + jitter) / float(count);
+		vec2 direction = (index & 1u) == 0u ? neighborDirection : ownDirection;
+		vec2 offset = position * neighborRadius * direction;
+		ivec2 samplePixel = clamp(ivec2(floor(vec2(pixel) + 0.5 + offset)), ivec2(0), size - 1);
+		float distance = abs(position) * neighborRadius;
+		vec2 sampleUV = (vec2(samplePixel) + 0.5) * u_Frame.ViewportSize.zw;
+		float sampleDepth = texelFetch(u_Depth, samplePixel, 0).r;
+		float sampleRadius = max(0.5 * length(GetBlurVelocity(texelFetch(u_Velocity, samplePixel, 0).rg, sampleDepth, sampleUV)), 0.5);
+		float weight = SampleWeight(distance, GetViewDistance(sampleUV, sampleDepth), sampleRadius, centerDistance, centerRadius);
+		sum += texelFetch(u_Color, samplePixel, 0).rgb * weight;
+		totalWeight += weight;
+	}
+	imageStore(o_Blurred, pixel, vec4(min(sum / totalWeight, vec3(c_MaxHDRValue)), 1.0));
+}

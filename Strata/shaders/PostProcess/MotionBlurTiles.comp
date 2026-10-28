@@ -1,0 +1,52 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/MotionBlur.glsl"
+
+// The motion blur's tile maxima: one group per tile of TileSize pixels; its threads scan the tile's pixels in turn, and the
+// blur velocity (GetBlurVelocity) of the largest length goes to the tile's texel (xy).
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(0)) uniform texture2D u_Velocity;
+layout(set = 0, binding = ST_SRV(1)) uniform texture2D u_Depth;
+layout(set = 0, binding = ST_UAV(0), rgba16f) uniform writeonly image2D o_TileMax;
+
+shared vec2 s_Largest[64];
+
+void main()
+{
+	ivec2 size = textureSize(u_Depth, 0);
+	ivec2 tile = ivec2(gl_WorkGroupID.xy);
+	int tileSize = int(u_MotionBlur.TileSize);
+	ivec2 origin = tile * tileSize;
+	vec2 largest = vec2(0.0);
+	for (int y = int(gl_LocalInvocationID.y); y < tileSize; y += 8)
+	{
+		for (int x = int(gl_LocalInvocationID.x); x < tileSize; x += 8)
+		{
+			ivec2 pixel = origin + ivec2(x, y);
+			if (any(greaterThanEqual(pixel, size)))
+				continue;
+			vec2 uv = (vec2(pixel) + 0.5) * u_Frame.ViewportSize.zw;
+			vec2 velocity = GetBlurVelocity(texelFetch(u_Velocity, pixel, 0).rg, texelFetch(u_Depth, pixel, 0).r, uv);
+			if (dot(velocity, velocity) > dot(largest, largest))
+				largest = velocity;
+		}
+	}
+	s_Largest[gl_LocalInvocationIndex] = largest;
+	barrier();
+	for (uint stride = 32u; stride > 0u; stride >>= 1u)
+	{
+		if (gl_LocalInvocationIndex < stride)
+		{
+			vec2 other = s_Largest[gl_LocalInvocationIndex + stride];
+			if (dot(other, other) > dot(s_Largest[gl_LocalInvocationIndex], s_Largest[gl_LocalInvocationIndex]))
+				s_Largest[gl_LocalInvocationIndex] = other;
+		}
+		barrier();
+	}
+	if (gl_LocalInvocationIndex == 0u)
+		imageStore(o_TileMax, tile, vec4(s_Largest[0], 0.0, 0.0));
+}

@@ -3589,7 +3589,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   exposure: `M = 2^Exposure * 0.18 / 2^a`, where `a` is the log2 average luminance metered by `Exposure.comp`'s
   histogram (`Include/Exposure.glsl`: [-12, 16] in 254 bins of 0.11 EV, the darkest and brightest tenth of the pixels
   left out), adapted at `AutoExposureSpeed` and clamped to [`AutoExposureMinEV`, `AutoExposureMaxEV`]: the average lands
-  on middle gray, and `Exposure` compensates.
+  on middle gray, and `Exposure` compensates. Where the tone curve shows that middle gray on the display depends on the curve:
+  Filmic (the default since 0.7.0) shows 0.18 as 0.18 (sRGB 118) and needs no compensation; ACES shows it at 0.106 (sRGB
+  91, about 0.8 EV darker), Khronos Neutral at 0.14 (sRGB 105) and AgX at 0.215 (sRGB 128).
 - A camera: a reflected-light meter calibrated with K = 12.5 reads EV100 = log2(L * 100 / 12.5) = log2(L) + 3 for an
   average luminance L, and the manual exposure that puts L at middle gray is log2(0.18 / L) = 0.53 - EV100. So
   `Exposure` is about 0.5 - EV100 (a "sunny 16" scene, EV100 15, is about -14.5), and `AutoExposureMinEV` and `MaxEV`
@@ -3671,6 +3673,20 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     `TriangularNoise` are the shader's twins in the same integer arithmetic (`Renderer.PostProcessMath`,
     `GPU.SceneRenderer.Camera`).
   - Thumbnails changed with the dither (`ThumbnailCache::c_Version` 5).
+- **Tone curves** (`TonemapOperator`): Filmic (`Include/Filmic.glsl`, `PostProcessMath::ApplyFilmic`) is the default of new
+  Post Process components, of scenes without one and of the Basic 3D template; ACES, AgX, Khronos Neutral and Reinhard are
+  unchanged, so scenes that stored them look as before. Filmic works per channel on an inset color after AgX's principle
+  (a per-channel curve on a gamut drawn in toward white takes bright saturated colors to white instead of skewing their
+  hue; the outset gives back the saturation the inset took): for t = log2(x / 0.18), below middle gray
+  `y = 0.18 * 2^(Ct t + (C0 - Ct) tau (exp(t / tau) - 1))`, above it `y = 0.18 + 0.82 (1 - (1 - t / Tw)^q)` up to white at
+  Tw stops, `q = C0 0.18 ln2 Tw / 0.82` so the log-log slope is C0 at middle gray. `Toe` sets the toe's slope
+  `Ct = C0 (0.85 + 0.5 Toe)`, `Shoulder` the white point `Tw = 6.5 + 3 (Shoulder - 0.5)` stops (5 to 8); both reach the
+  shader through `TonemapConstants`' Filmic block (`PostProcessMath::MakeFilmicCurve`). The inset and outset matrices,
+  C0 and tau are fitted by `Tools/FitFilmic.py` against targets stated in its header (middle gray, contrast, white, toe,
+  hue in ICtCp, the path to white, saturation, a monotonic shape) and written to `Include/FilmicConstants.glsl` and
+  `Renderer/FilmicConstants.h`: never edit them by hand (`FitFilmic.py --check` checks the committed ones);
+  `Renderer.PostProcessMath` checks the targets again on the C++ reference and `GPU.SceneRenderer.Camera` the shader
+  against it. Thumbnails changed with the default curve (`ThumbnailCache::c_Version` 6).
 - **FXAA's subpixel blend** is 0.25 (`FXAA.frag`'s `c_Subpixel`; 0.75 until 0.7.0, which cost 19-22% of the texture
   detail of an image without anti-aliasing; on PhysicsPlayground's tiled floor at 3840x2160, 0.375 keeps 0.85 of it and 0.25
   0.87, the rest being the edges FXAA is there to smooth). Lower values would leave single-pixel aliasing alone.

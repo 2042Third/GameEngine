@@ -1039,8 +1039,9 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		const nlohmann::json imported = harness.Run("asset.import", { { "file", FileSystem::ToUTF8(source) }, { "directory", "Models" } });
 		const AssetHandle model = *UUIDFromJson(imported["asset"]);
 
-		// The bounding box of the pixels that are not the sky (the color of their row's left edge: the preview sky changes
-		// with the height only): taller than wide when the arm stands.
+		// The bounding box of the arm's silhouette: the pixels that differ from their left neighbor by more than the preview
+		// sky's gradients, the vignette and the output's dither do (the sky changes smoothly along a row; the arm's left and
+		// right edges are steps). Taller than wide when the arm stands.
 		auto standing = [](nvrhi::ITexture* texture)
 		{
 			ReadbackImage image;
@@ -1051,13 +1052,13 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 			uint32_t bottom = 0;
 			for (uint32_t y = 0; y < image.Height; y++)
 			{
-				const glm::u8vec4 sky = Tests::GetPixelRGBA8(image, 1, y);
-				for (uint32_t x = 0; x < image.Width; x++)
+				for (uint32_t x = 1; x < image.Width; x++)
 				{
 					const glm::u8vec4 pixel = Tests::GetPixelRGBA8(image, x, y);
+					const glm::u8vec4 neighbor = Tests::GetPixelRGBA8(image, x - 1, y);
 					int difference = 0;
 					for (int channel = 0; channel < 3; channel++)
-						difference += std::abs(static_cast<int>(pixel[channel]) - static_cast<int>(sky[channel]));
+						difference += std::abs(static_cast<int>(pixel[channel]) - static_cast<int>(neighbor[channel]));
 					if (difference <= 24)
 						continue;
 					left = std::min(left, x);
@@ -1068,9 +1069,7 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 			}
 			REQUIRE(left <= right);
 			INFO("the arm covers (", left, ", ", top, ") to (", right, ", ", bottom, ") of ", image.Width, "x", image.Height);
-			// The standing arm is twice as tall as wide; lying, it would be wider than tall. The output's dither moves the box's
-			// edges by a pixel where the arm's anti-aliased edge meets the threshold, hence the margin below 2.
-			return static_cast<double>(bottom - top) > 1.8 * static_cast<double>(right - left);
+			return bottom - top > 2 * (right - left);
 		};
 
 		harness.RequestUntilIdle({ model });

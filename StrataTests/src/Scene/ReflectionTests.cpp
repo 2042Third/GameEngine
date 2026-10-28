@@ -516,6 +516,15 @@ TEST_SUITE("Scene.InactiveProperties")
 		CHECK(reason("PostProcess", "BloomThreshold") == "Bloom is off");
 		CHECK(reason("PostProcess", "AmbientOcclusionRadius") == "Ambient Occlusion is off");
 		CHECK(reason("PostProcess", "Exposure").empty());
+		// The Filmic curve's look only with Filmic.
+		CHECK(reason("PostProcess", "Toe").empty());
+		CHECK(reason("PostProcess", "Shoulder").empty());
+		post.Tonemapper = TonemapOperator::ACES;
+		CHECK(reason("PostProcess", "Toe") == "Only the Filmic curve has a toe (Tonemapper is ACES)");
+		CHECK(reason("PostProcess", "Shoulder") == "Only the Filmic curve has a shoulder (Tonemapper is ACES)");
+		post.Tonemapper = TonemapOperator::KhronosNeutral;
+		CHECK(reason("PostProcess", "Toe") == "Only the Filmic curve has a toe (Tonemapper is Khronos Neutral)");
+		post.Tonemapper = TonemapOperator::Filmic;
 		post.AutoExposure = true;
 		post.Bloom = true;
 		post.AmbientOcclusion = true;
