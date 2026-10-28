@@ -1066,7 +1066,7 @@ TEST_SUITE("Editor.UI")
 		{
 			std::vector<UI::ItemProbe::Item> chips;
 			for (const char* key : { "Viewport.Camera", "Viewport.Grid", "Viewport.Outline", "Viewport.Gizmos", "Viewport.Stats",
-				"Viewport.PreviewLighting", "Viewport.GameUI", "Viewport.DebugView", "Viewport.Quality", "Viewport.GameCamera" })
+				"Viewport.PreviewLighting", "Viewport.GameUI", "Viewport.CanvasMode", "Viewport.DebugView", "Viewport.Quality", "Viewport.GameCamera" })
 			{
 				const std::string name = key;
 				CAPTURE(name);
@@ -1076,19 +1076,35 @@ TEST_SUITE("Editor.UI")
 			}
 			return chips;
 		};
-		// Every chip ends within the image's width (the strip's clip rectangle would hide what passes it), and keeps its label
-		// for probes and tooltips.
+		// Every chip ends within the image's width and above it, in the toolbar (the strip's clip rectangle would hide what
+		// passes it), covers no other chip, and keeps its label for probes and tooltips.
 		const auto checkInReach = [](const std::vector<UI::ItemProbe::Item>& chips)
 		{
 			const std::optional<UI::ItemProbe::Item> image = UI::ItemProbe::Find("Viewport.Image");
 			REQUIRE(image.has_value());
-			for (const UI::ItemProbe::Item& chip : chips)
+			for (size_t index = 0; index < chips.size(); index++)
 			{
+				const UI::ItemProbe::Item& chip = chips[index];
 				CAPTURE(chip.Text);
 				CHECK(chip.Max.x <= image->Max.x);
+				CHECK(chip.Max.y <= image->Min.y);
+				for (size_t other = index + 1; other < chips.size(); other++)
+				{
+					CAPTURE(chips[other].Text);
+					CHECK_FALSE((chip.Min.x < chips[other].Max.x && chips[other].Min.x < chip.Max.x && chip.Min.y < chips[other].Max.y
+						&& chips[other].Min.y < chip.Max.y));
+				}
 			}
 			CHECK(chips[1].Text == "Grid");
 			return image->Max.x - image->Min.x;
+		};
+		// The rows the chips take: a chip starts one when it lies below the previous chip.
+		const auto countRows = [](const std::vector<UI::ItemProbe::Item>& chips)
+		{
+			int rows = 1;
+			for (size_t index = 1; index < chips.size(); index++)
+				rows += chips[index].Min.y >= chips[index - 1].Max.y ? 1 : 0;
+			return rows;
 		};
 		float fontSize = 0.0f;
 		float wideWidth = 0.0f;
@@ -1099,16 +1115,30 @@ TEST_SUITE("Editor.UI")
 			editor.Frames(3);
 			const std::vector<UI::ItemProbe::Item> chips = chipsOf();
 			wideWidth = checkInReach(chips);
+			CHECK(countRows(chips) == 1);
 			CHECK(chips[0].Max.x - chips[0].Min.x > 2.5f * fontSize);
 		}
-		// A small window leaves the Scene view a few hundred units: more chips are icons, the last one among them. (Its ten chips need
-		// about 400 units as icons: a narrower view cuts the last ones off.)
-		HarnessEditor editor({ ImVec2(1000.0f, 700.0f), 1.0f }, WithFeatureProject("EditorUIChipsNarrow"));
+		{
+			// A small window leaves the Scene view a few hundred units: more chips are icons, the last one among them.
+			HarnessEditor editor({ ImVec2(900.0f, 700.0f), 1.0f }, WithFeatureProject("EditorUIChipsNarrow"));
+			editor.Frames(3);
+			const std::vector<UI::ItemProbe::Item> chips = chipsOf();
+			CHECK(checkInReach(chips) < wideWidth);
+			CHECK(chips.back().Max.x - chips.back().Min.x <= 2.5f * fontSize);
+			// A click on an icon still toggles its setting.
+			const bool pilot = editor.Context().GetViewport().GetSettings().PilotGameCamera;
+			REQUIRE(editor.Click("Viewport.GameCamera"));
+			CHECK(editor.Context().GetViewport().GetSettings().PilotGameCamera != pilot);
+		}
+		// A view too narrow even for the icons puts the chips that pass it on rows under the first, the image under them.
+		HarnessEditor editor({ ImVec2(720.0f, 700.0f), 1.0f }, WithFeatureProject("EditorUIChipsWrapped"));
 		editor.Frames(3);
 		const std::vector<UI::ItemProbe::Item> chips = chipsOf();
-		CHECK(checkInReach(chips) < wideWidth);
-		CHECK(chips.back().Max.x - chips.back().Min.x <= 2.5f * fontSize);
-		// A click on an icon still toggles its setting.
+		checkInReach(chips);
+		CHECK(countRows(chips) >= 2);
+		const bool grid = editor.Context().GetViewport().GetSettings().ShowGrid;
+		REQUIRE(editor.Click("Viewport.Grid"));
+		CHECK(editor.Context().GetViewport().GetSettings().ShowGrid != grid);
 		const bool pilot = editor.Context().GetViewport().GetSettings().PilotGameCamera;
 		REQUIRE(editor.Click("Viewport.GameCamera"));
 		CHECK(editor.Context().GetViewport().GetSettings().PilotGameCamera != pilot);

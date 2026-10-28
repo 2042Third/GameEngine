@@ -3836,7 +3836,8 @@ is the `strata-scripting` skill. The layers:
   `GetViewportRenderOptions` gives editor views (the editor camera, except `Automatic`'s fallback while playing) preview
   lighting and a hidden HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). Both views hold their
   chips in a toolbar strip above the image (`Panels/ViewportToolbar`), never over it; a Scene view too narrow for their
-  labels draws the last ones as icons (`UI::ChipStrip`, decided from the previous frame's chips). The Scene view's 2D
+  labels draws the last ones as icons, and one too narrow for the icons wraps them onto more toolbar rows (`UI::ChipStrip`,
+  decided from the previous frame's chips; `ViewportToolbar::Compute` makes room for its rows). The Scene view's 2D
   canvas mode (`Panels/CanvasModeView`, `Editor/CanvasEdit`) shows a screen-space canvas at its reference aspect through
   the scene's camera, with handles that place rects, zoom and pan that never lay it out again (DeveloperGuide.md, "Game
   UI commands").

@@ -124,7 +124,8 @@ namespace Strata
 		// only get a framebuffer scale of their own with multi-viewport support; like ImGui's renderer data, the panel falls
 		// back to the display's otherwise.
 		const ImGuiStyle& style = ImGui::GetStyle();
-		const ViewportToolbar::Layout layout = ViewportToolbar::Compute();
+		// As many rows as the chips took in the last frame (a narrow view wraps them).
+		const ViewportToolbar::Layout layout = ViewportToolbar::Compute(m_ChipStrip.Rows);
 		const ImVec2 imageMin = layout.ImageMin;
 		const ImVec2 available = layout.ImageSize;
 		ImGui::SetCursorScreenPos(imageMin);
@@ -268,7 +269,7 @@ namespace Strata
 			UpdateGizmo(context, *view);
 
 		// The chips, in the toolbar from its left; the agent's at its right. The last chips that do not fit with their labels
-		// are drawn as icons (their labels in their tooltips).
+		// are drawn as icons (their labels in their tooltips), and those that do not fit even so on the rows under the first.
 		ImGui::PushClipRect(layout.Min, layout.Max, true);
 		ImGui::SetCursorScreenPos(layout.ChipsMin);
 		const float agentWidth = PrepareAgentChip(panelContext);

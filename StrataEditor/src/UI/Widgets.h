@@ -55,17 +55,21 @@ namespace Strata::UI
 	bool ToggleChip(const char* id, const char* icon, const char* label, bool* value, const char* tooltip, bool inEffect = true);
 	// The width a chip with this icon and label takes, e.g. to align one to the right.
 	float ChipWidth(const char* icon, const char* label);
-	// What a strip of chips keeps across frames (ChipStrip): the widths its chips take with their labels, and from which
-	// chip on they are drawn as icons.
+	// What a strip of chips keeps across frames (ChipStrip): the widths its chips take with their labels, from which chip on
+	// they are drawn as icons, and the chips that start a row of their own.
 	struct ChipStripState
 	{
 		std::vector<std::pair<float, float>> Widths; // Each chip's with its label and as an icon
 		size_t FirstIcon = SIZE_MAX;
+		std::vector<size_t> RowStarts; // The chips after the first row's that start a row, in order
+		uint32_t Rows = 1;             // The rows the strip takes: what the toolbar holding it makes room for
 	};
-	// The chips drawn while one exists form a strip `available` units wide: from the left they show their labels as long as
-	// the strip holds them, the last ones are drawn as their icon alone with their label leading their tooltip (probes keep
-	// the label), so a narrow toolbar keeps every chip in reach. Which ones is decided from the previous frame's chips, so a
-	// strip that changes width or chips settles in the next frame. Strips do not nest.
+	// The chips drawn while one exists form a strip `available` units wide, from where the cursor is: from the left they
+	// show their labels as long as the strip holds them, the last ones are drawn as their icon alone with their label leading
+	// their tooltip (probes keep the label). When even the icons do not fit, the chips that pass the strip's width go on
+	// further rows under the first (one frame height and the item spacing apart; ChipStripState::Rows tells the toolbar how
+	// many), so a narrow toolbar keeps every chip in reach. Which ones is decided from the previous frame's chips, so a strip
+	// that changes width or chips settles in the next frame. Strips do not nest.
 	class ChipStrip
 	{
 	public:
@@ -74,12 +78,16 @@ namespace Strata::UI
 		ChipStrip(const ChipStrip&) = delete;
 		ChipStrip& operator=(const ChipStrip&) = delete;
 
-		// For the next chip, its widths with its label and as an icon: whether it is drawn as an icon.
+		// For the next chip, its widths with its label and as an icon: whether it is drawn as an icon. A chip that starts a
+		// row moves the cursor to that row's start.
 		bool NextIsIcon(float labeledWidth, float iconWidth);
 	private:
 		ChipStripState& m_State;
 		float m_Available;
+		ImVec2 m_Start;
 		size_t m_Count = 0;
+		size_t m_NextRowStart = 0; // Index into m_State.RowStarts
+		uint32_t m_Row = 0;
 	};
 
 	// A status pill: an icon and text in a color on a tint of that color, sized to its text in the current font. Returns

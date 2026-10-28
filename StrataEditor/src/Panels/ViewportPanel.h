@@ -123,7 +123,8 @@ namespace Strata
 		bool m_CursorLocked = false; // By fly mode
 		std::optional<TransformDrag> m_GizmoDrag;
 		// The agent chip's text for the activity and age (in whole seconds) it was made for.
-		// The toolbar's chips across frames: the last ones that do not fit with their labels are drawn as icons.
+		// The toolbar's chips across frames: the last ones that do not fit with their labels are drawn as icons, those that
+		// do not fit even so on more rows.
 		UI::ChipStripState m_ChipStrip;
 		// The quality chip's texts that name the project's preset, made again when it changes.
 		std::optional<std::string> m_QualityTooltip;

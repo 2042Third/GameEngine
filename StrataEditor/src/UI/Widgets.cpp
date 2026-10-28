@@ -216,7 +216,7 @@ namespace Strata::UI
 	}
 
 	ChipStrip::ChipStrip(ChipStripState& state, float available)
-		: m_State(state), m_Available(available)
+		: m_State(state), m_Available(available), m_Start(ImGui::GetCursorScreenPos())
 	{
 		ST_CORE_ASSERT(!s_ChipStrip, "Chip strips do not nest");
 		s_ChipStrip = this;
@@ -238,6 +238,24 @@ namespace Strata::UI
 			width -= m_State.Widths[firstIcon].first - m_State.Widths[firstIcon].second;
 		}
 		m_State.FirstIcon = firstIcon < m_Count ? firstIcon : SIZE_MAX;
+
+		// When even the icons do not fit, the chips that would pass the strip's width start rows under it.
+		m_State.RowStarts.clear();
+		float rowWidth = 0.0f;
+		for (size_t index = 0; index < m_Count; index++)
+		{
+			const float chipWidth = index >= firstIcon ? m_State.Widths[index].second : m_State.Widths[index].first;
+			if (rowWidth > 0.0f && rowWidth + spacing + chipWidth > m_Available)
+			{
+				m_State.RowStarts.push_back(index);
+				rowWidth = chipWidth;
+			}
+			else
+			{
+				rowWidth += (rowWidth > 0.0f ? spacing : 0.0f) + chipWidth;
+			}
+		}
+		m_State.Rows = static_cast<uint32_t>(m_State.RowStarts.size()) + 1;
 	}
 
 	bool ChipStrip::NextIsIcon(float labeledWidth, float iconWidth)
@@ -246,6 +264,17 @@ namespace Strata::UI
 		if (m_State.Widths.size() < m_Count)
 			m_State.Widths.resize(m_Count);
 		m_State.Widths[index] = { labeledWidth, iconWidth };
+		// The previous frame's rows: a chip that starts one goes to its left end, under the row before.
+		if (m_NextRowStart < m_State.RowStarts.size() && m_State.RowStarts[m_NextRowStart] == index)
+		{
+			m_NextRowStart++;
+			m_Row++;
+			const ImGuiStyle& style = ImGui::GetStyle();
+			ImGui::SetCursorScreenPos(ImVec2(m_Start.x, m_Start.y + static_cast<float>(m_Row) * (ImGui::GetFrameHeight() + style.ItemSpacing.y)));
+			// The chip starts a line of the window: a SameLine before it (the strip's chips are drawn one beside the other)
+			// would keep the row above as the line, and the next chip's SameLine would go back to it.
+			ImGui::GetCurrentWindow()->DC.IsSameLine = false;
+		}
 		return index >= m_State.FirstIcon;
 	}
 

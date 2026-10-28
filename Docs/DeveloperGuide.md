@@ -2867,11 +2867,13 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   canvases): the camera settings, the overlay toggles (grid, outline, gizmos, stats), the editor-view settings (preview
   lighting, game UI) and the debug view (named after the view, "Lit" without one, and lit while one colors the image; a
   click offers Lit, Streaming, LOD and Mip) from its left, the agent chip at its right (a strip narrower than the chips
-  with their labels draws the last ones as icons, labels in their tooltips: `UI::ChipStrip`); clicking a chip does not focus the
-  panel; "Game camera" (F8, `ViewportSettings::PilotGameCamera`) looks through the scene's primary camera with the
-  editor's overlays, leaving the editor camera where it was. The toolbar's bottom border takes the play state's color
-  while the scene runs. A debug view shows a legend at the image's bottom left (`UI::Legend`: its colors with the number
-  of entities in view per color, counts aligned in a column, and the placeholder boxes). The
+  with their labels draws the last ones as icons, labels in their tooltips, and one too narrow even for the icons puts the
+  chips that pass its width on rows under the first, the toolbar growing by those rows: `UI::ChipStrip`, so every chip
+  stays in reach); clicking a chip does not focus the panel; "Game camera" (F8, `ViewportSettings::PilotGameCamera`)
+  looks through the scene's primary camera with the editor's overlays, leaving the editor camera where it was. The
+  toolbar's bottom border takes the play state's color while the scene runs. A debug view shows a legend at the image's
+  bottom left (`UI::Legend`: its colors with the number of entities in view per color, counts aligned in a column, and
+  the placeholder boxes). The
   selection outline is the theme's accent and the debug views use its meanings (`ViewportSettings::SelectionColor` and
   `DebugColors`, set by the UI, not saved).
   Clicks pick without blocking (`EditorViewport::RequestPick` reads one pixel of the entity-ID buffer; Ctrl toggles,
