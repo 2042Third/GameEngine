@@ -3845,12 +3845,24 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     what lies behind it and fully over its own inside. The composite keeps a pixel whose circle is under a pixel across
     exactly, fades its own field in over the next pixel of diameter and puts the near field over everything. No median
     filters the fields: the static rotation of 48 samples and the bilinear upsampling leave no isolated outliers.
+  - Under TAA the color is the resolved image, without jitter, while the depth is the frame's, jittered by up to half a
+    pixel: a pixel at an in-focus silhouette over a far background would find the subject in some frames' depth and the
+    background in others, and switch between the resolved edge and the blurred background every frame. So the composite
+    fades the blur in with the distance (the larger of x and y) from the nearest in-focus depth within two pixels
+    (`c_FocusReach`, read through a group-shared tile): none within one pixel (an edge pixel finds the subject in its
+    neighborhood in every jitter phase), half at two, all from three. What still follows the jitter is a pixel two or
+    three away switching between two images of the background, half as far. Prepare's half-resolution classification
+    reads the same depth: a block at the silhouette changes between in focus and blurred with the jitter, which moves a
+    sample's weight in its neighbors' gathers (one of 48, a few codes at most). A black card in focus over a white wall
+    at f/1, 3 degrees off the pixel grid: 37 codes between consecutive frames, as without the lens (TAA's own edge
+    motion), where the composite before took 187.
   - Off costs nothing: no lens, no pass and no target. On, the targets are the full-resolution output (66 MB at
     3840x2160), three half-resolution ones (17 MB each) and two tile targets, made by the first frame with a lens and
     released with the render targets. Stats: `DepthOfField`, `DepthOfFieldLens`, `DepthOfFieldInfinityCoC`
     (`renderStats.depthOfField`).
   - Tests: `GPU.SceneRenderer.DepthOfField` (the focus plane exact, an edge's blur a disk of its circle's diameter, a
-    near card's blur over the wall in focus, both paths, off, the sharpening mask), `Renderer.CameraLens`; perf
+    near card's blur over the wall in focus, an in-focus silhouette under TAA no less steady than without the lens, both
+    paths, off, the sharpening mask), `Renderer.CameraLens`; perf
     (provisional) `PerfGPU.Renderer.DepthOfField4K`, the worst case: every pixel far behind the focus at the largest
     circle (about 0.20 ms on an RTX 5090). The look-dev shot `tp.dof` focuses the Third-Person camera on the robot at f/2.
 - **Film grain and chromatic aberration** (`PostProcessComponent::FilmGrain`, `ChromaticAberration`, 0 to 1, off by

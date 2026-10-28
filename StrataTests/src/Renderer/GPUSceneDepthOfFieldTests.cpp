@@ -265,6 +265,56 @@ TEST_SUITE("GPU.SceneRenderer.DepthOfField")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Under TAA an in-focus silhouette over a defocused background flickers no more than without the lens")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene("Silhouette");
+		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.AntiAliasing = true;
+		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
+		// A white wall 20 m from the camera, far out of focus, and a black card 1 m from it in focus, tilted a little so its edges
+		// cross the pixels at every offset: its silhouette lies on in-focus depth in some of TAA's jitter phases and on the wall's
+		// in others.
+		AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(Emitting(1.0f)), glm::vec3(0.0f, 0.0f, -16.0f), "Wall")
+			.GetComponent<TransformComponent>().Scale = glm::vec3(100.0f, 100.0f, 1.0f);
+		TransformComponent& card = AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(Emitting(0.0f)), glm::vec3(-0.25f, 0.0f, 3.0f), "Card")
+			.GetComponent<TransformComponent>();
+		card.Scale = glm::vec3(0.5f, 0.5f, 1.0f);
+		card.Rotation = glm::angleAxis(glm::radians(3.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		const SceneCamera camera = EdgeWall::CameraAt(4.0f);
+		const CameraLens lens = Lens(1.0f, 1.0f);
+		REQUIRE(lens.GetCircleOfConfusion(20.0f, static_cast<float>(c_Height)) > 15.0f);
+		// The largest change of any pixel between consecutive frames, over 16 frames (two cycles of the jitter) after the history
+		// converged.
+		auto flicker = [&](std::optional<CameraLens> withLens)
+		{
+			SceneRenderer renderer(ExactSpecification());
+			renderer.SetViewportSize(c_Width, c_Height);
+			SceneRenderOptions options;
+			options.Lens = withLens;
+			for (int frame = 0; frame < 24; frame++)
+				REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			CHECK(renderer.GetStats().TemporalAntiAliasing);
+			CHECK(renderer.GetStats().DepthOfField == withLens.has_value());
+			ReadbackImage previous = RenderImage(renderer, scene, camera, options);
+			int largest = 0;
+			for (int frame = 0; frame < 16; frame++)
+			{
+				ReadbackImage image = RenderImage(renderer, scene, camera, options);
+				largest = std::max(largest, MaxDifference(previous, image));
+				previous = std::move(image);
+			}
+			return largest;
+		};
+		const int sharp = flicker(std::nullopt);
+		const int defocused = flicker(lens);
+		MESSAGE("largest change between frames: ", sharp, " codes without the lens, ", defocused, " with it");
+		CHECK(defocused <= sharp + 6);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Both draw paths defocus equally")
 	{
 		GPUContext gpu;
