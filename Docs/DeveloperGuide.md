@@ -2399,7 +2399,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `Scene::ReleaseInBackground` (stopped on the main thread, destroyed by a background job). Owners that render the scenes
   they load build their render proxies over frames before the swap (`SceneLoadOptions::Prepare` with
   `RenderScene::PrepareLoadedScene`, state `Preparing`: the editor with a GPU, `GameRuntimeOptions::PrepareRenderScenes`
-  for StrataRuntime with a window), so the frame that shows a scene builds none.
+  for StrataRuntime with a window), so the frame that shows a scene builds none. The GPU copy is made a frame before the
+  swap too (the call that makes it returns false): work added to the swap frame of a scene's first show belongs in
+  the preparation instead, where it is spread over frames.
 
 ### Opening scenes
 

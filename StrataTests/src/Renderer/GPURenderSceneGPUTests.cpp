@@ -535,14 +535,22 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		CHECK_FALSE(RenderScene::PrepareLoadedScene(scene, spent));
 		const RenderSceneGPU* untouched = Renderer::GetRenderSceneGPUs().Find(RenderScene::Get(scene).GetId());
 		CHECK((!untouched || !untouched->IsResident(0)));
-		// The next frame's budget fills it.
+		// The next frame's budget fills it. That frame made the copy, so the scene is ready only at the one after it, which
+		// uploads nothing more (the frame that swaps a scene in builds the renderers' binding sets for its copy).
 		SceneWorkBudget next = SceneWorkBudget::ForFrame(scene.GetSettings());
 		next.Deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-		CHECK(RenderScene::PrepareLoadedScene(scene, next));
+		CHECK_FALSE(RenderScene::PrepareLoadedScene(scene, next));
 		const RenderSceneGPU* mirror = Renderer::GetRenderSceneGPUs().Find(RenderScene::Get(scene).GetId());
 		REQUIRE(mirror);
 		CHECK(mirror->GetDeferredProxies() == 0);
 		CHECK(mirror->IsResident(0));
+		const uint64_t writes = mirror->GetWriteVersion();
+		const uint64_t buffers = mirror->GetBufferVersion();
+		SceneWorkBudget last = SceneWorkBudget::ForFrame(scene.GetSettings());
+		last.Deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		CHECK(RenderScene::PrepareLoadedScene(scene, last));
+		CHECK(mirror->GetWriteVersion() == writes);
+		CHECK(mirror->GetBufferVersion() == buffers);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

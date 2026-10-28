@@ -2309,7 +2309,10 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   within `c_PrepareUploadBytes` a frame, so the frame that shows the scene uploads no proxy; both draw from the frame's
   `SceneWorkBudget` (the proxies get the time left, at least a chunk; the call that completes them fills the mirror only
   while the budget still has time, else the next call fills it whatever its time, so a sync that alone outlasts the budget,
-  as Debug builds' validation of a large scene does, never holds the copy back). A render scene's
+  as Debug builds' validation of a large scene does, never holds the copy back). The call that makes the mirror (its
+  buffers, their first upload and a submission) never completes the preparation: the scene is swapped in a frame later,
+  so that frame, which builds the renderers' binding sets for the new mirror, does not also pay for making it (together
+  they were the longest frame of opening 100,000 empty entities in the editor). A render scene's
   destructor posts its id (any thread) and `Renderer::BeginFrame` releases its mirror; mirrors no renderer updated for
   `RenderSceneGPUCache::c_UnusedFrames` (300) frames go too, and a later frame of their scene uploads it again. The
   buffers of the latest mirror released with at most `c_RecycleBytes` (1 MiB) wait, for 300 frames at most, for the next
