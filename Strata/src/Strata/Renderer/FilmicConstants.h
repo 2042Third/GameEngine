@@ -12,17 +12,17 @@ namespace Strata::FilmicConstants
 
 	// The Filmic curve's gamut (shaders/Include/FilmicConstants.glsl): the inset before the per-channel curve and the
 	// outset after it.
-	inline const glm::mat3 Inset = glm::mat3(
+	inline const glm::mat3 c_Inset = glm::mat3(
 		0.76672608f, 0.11223015f, 0.086866652f,
 		0.169123592f, 0.8130816f, 0.176074648f,
 		0.0641503281f, 0.0746882502f, 0.7370587f);
-	inline const glm::mat3 Outset = glm::mat3(
+	inline const glm::mat3 c_Outset = glm::mat3(
 		1.3263492f, -0.165947071f, -0.0351557951f,
 		-0.0934393065f, 1.4828733f, -0.141664889f,
 		-0.232909897f, -0.316926228f, 1.17682068f);
 	// The log-log slope at middle gray (C0), the stops over which the toe turns to its own slope (tau), middle gray.
-	inline constexpr float Contrast = 1.45f;
-	inline constexpr float ToeWidth = 2.99269855f;
-	inline constexpr float MiddleGray = 0.18f;
+	inline constexpr float c_Contrast = 1.45f;
+	inline constexpr float c_ToeWidth = 2.99269855f;
+	inline constexpr float c_MiddleGray = 0.18f;
 
 }

@@ -51,7 +51,8 @@ Targets (Toe and Shoulder 0.5 unless named):
 Outputs (the same numbers, 9 significant digits):
     Strata/shaders/Include/FilmicConstants.glsl   c_FilmicInset, c_FilmicOutset (column-major, as GLSL builds them),
                                                   c_FilmicContrast (C0), c_FilmicToeWidth (tau), c_FilmicMiddleGray
-    Strata/src/Strata/Renderer/FilmicConstants.h  Strata::FilmicConstants::Inset, Outset, Contrast, ToeWidth, MiddleGray
+    Strata/src/Strata/Renderer/FilmicConstants.h  Strata::FilmicConstants::c_Inset, c_Outset, c_Contrast, c_ToeWidth,
+                                                  c_MiddleGray
 
 Only the standard library is used; a run is deterministic.
 """
@@ -492,12 +493,12 @@ def write_outputs(params):
         "{\n\n"
         "\t// The Filmic curve's gamut (shaders/Include/FilmicConstants.glsl): the inset before the per-channel curve and the\n"
         "\t// outset after it.\n"
-        f"\tinline const glm::mat3 Inset = {cpp_matrix(inset)};\n"
-        f"\tinline const glm::mat3 Outset = {cpp_matrix(outset)};\n"
+        f"\tinline const glm::mat3 c_Inset = {cpp_matrix(inset)};\n"
+        f"\tinline const glm::mat3 c_Outset = {cpp_matrix(outset)};\n"
         "\t// The log-log slope at middle gray (C0), the stops over which the toe turns to its own slope (tau), middle gray.\n"
-        f"\tinline constexpr float Contrast = {float_literal(contrast)}f;\n"
-        f"\tinline constexpr float ToeWidth = {float_literal(tau)}f;\n"
-        "\tinline constexpr float MiddleGray = 0.18f;\n\n"
+        f"\tinline constexpr float c_Contrast = {float_literal(contrast)}f;\n"
+        f"\tinline constexpr float c_ToeWidth = {float_literal(tau)}f;\n"
+        "\tinline constexpr float c_MiddleGray = 0.18f;\n\n"
         "}\n"
     )
     for path, text in ((GLSL_OUTPUT, glsl), (HEADER_OUTPUT, header)):

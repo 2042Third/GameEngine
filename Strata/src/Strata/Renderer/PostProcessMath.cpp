@@ -113,23 +113,23 @@ namespace Strata::PostProcessMath
 		toe = std::clamp(std::isfinite(toe) ? toe : 0.5f, 0.0f, 1.0f);
 		shoulder = std::clamp(std::isfinite(shoulder) ? shoulder : 0.5f, 0.0f, 1.0f);
 		FilmicCurve curve;
-		curve.ToeSlope = FilmicConstants::Contrast * (0.85f + 0.5f * toe);
+		curve.ToeSlope = FilmicConstants::c_Contrast * (0.85f + 0.5f * toe);
 		curve.WhiteStops = 6.5f + 3.0f * (shoulder - 0.5f);
-		const float middleGray = FilmicConstants::MiddleGray;
-		curve.ShoulderPower = FilmicConstants::Contrast * middleGray * std::log(2.0f) * curve.WhiteStops / (1.0f - middleGray);
+		const float middleGray = FilmicConstants::c_MiddleGray;
+		curve.ShoulderPower = FilmicConstants::c_Contrast * middleGray * std::log(2.0f) * curve.WhiteStops / (1.0f - middleGray);
 		return curve;
 	}
 
 	float EvaluateFilmicCurve(float x, const FilmicCurve& curve)
 	{
-		const float middleGray = FilmicConstants::MiddleGray;
+		const float middleGray = FilmicConstants::c_MiddleGray;
 		if (!(x > 0.0f))
 			return 0.0f;
 		const float t = std::log2(x / middleGray);
 		if (t < 0.0f)
 		{
-			const float toeWidth = FilmicConstants::ToeWidth;
-			return middleGray * std::exp2(curve.ToeSlope * t + (FilmicConstants::Contrast - curve.ToeSlope) * toeWidth * (std::exp(t / toeWidth) - 1.0f));
+			const float toeWidth = FilmicConstants::c_ToeWidth;
+			return middleGray * std::exp2(curve.ToeSlope * t + (FilmicConstants::c_Contrast - curve.ToeSlope) * toeWidth * (std::exp(t / toeWidth) - 1.0f));
 		}
 		if (t >= curve.WhiteStops)
 			return 1.0f;
@@ -193,7 +193,7 @@ namespace Strata::PostProcessMath
 		const glm::mat3 whiteBalance = GetWhiteBalanceMatrix(temperature, clampedTint);
 		const glm::mat3 slopeMatrix(clampedSlope.x, 0.0f, 0.0f, 0.0f, clampedSlope.y, 0.0f, 0.0f, 0.0f, clampedSlope.z);
 		grading.Matrix = slopeMatrix * whiteBalance;
-		grading.Offset = clampedOffset * FilmicConstants::MiddleGray;
+		grading.Offset = clampedOffset * FilmicConstants::c_MiddleGray;
 		grading.Power = clampedPower;
 		grading.Active = temperature != 6500.0f || clampedTint != 0.0f || clampedSlope != glm::vec3(1.0f) || clampedOffset != glm::vec3(0.0f)
 			|| clampedPower != glm::vec3(1.0f);
@@ -205,7 +205,7 @@ namespace Strata::PostProcessMath
 		if (!grading.Active)
 			return color;
 		const glm::vec3 balanced = glm::max(grading.Matrix * color + grading.Offset, glm::vec3(0.0f));
-		const float middleGray = FilmicConstants::MiddleGray;
+		const float middleGray = FilmicConstants::c_MiddleGray;
 		return middleGray * glm::pow(balanced / middleGray, grading.Power);
 	}
 
@@ -268,9 +268,9 @@ namespace Strata::PostProcessMath
 
 	glm::vec3 ApplyFilmic(const glm::vec3& exposed, const FilmicCurve& curve)
 	{
-		const glm::vec3 inset = FilmicConstants::Inset * glm::max(exposed, glm::vec3(0.0f));
+		const glm::vec3 inset = FilmicConstants::c_Inset * glm::max(exposed, glm::vec3(0.0f));
 		const glm::vec3 curved(EvaluateFilmicCurve(inset.r, curve), EvaluateFilmicCurve(inset.g, curve), EvaluateFilmicCurve(inset.b, curve));
-		return glm::clamp(FilmicConstants::Outset * curved, glm::vec3(0.0f), glm::vec3(1.0f));
+		return glm::clamp(FilmicConstants::c_Outset * curved, glm::vec3(0.0f), glm::vec3(1.0f));
 	}
 
 }
