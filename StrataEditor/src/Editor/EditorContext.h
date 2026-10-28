@@ -55,6 +55,7 @@ namespace Strata
 	class EditorPreferences;
 	class ExternalEditorLauncher;
 	class GameExport;
+	class GameGraphicsService;
 	struct GameExportOptions;
 	class InputSequence;
 	class ProjectThumbnail;
@@ -391,6 +392,22 @@ namespace Strata
 		// Deletes the players' bindings file (InputActions::DeleteSavedBindings) and, while playing, gives the running game the
 		// project's bindings from its next input frame. False, changing nothing, without a project or when the file stays.
 		bool ResetPlayerBindings(std::string* outError = nullptr);
+		// The game's graphics options (the engine service IGameGraphics while the context lives): the project's Graphics
+		// Quality, and while playing the players' choices over it, loaded from <project>/.strata/Saves/GraphicsOptions.json when
+		// play starts and forgotten when it stops (the file stays).
+		GameGraphicsService& GetGameGraphics() { return *m_GameGraphics; }
+		// What the Game view and captures of the scene's camera draw with: the game's quality (outside play the project's).
+		const RendererQualitySettings& GetGameQuality();
+		// The players' graphics options that replace the project's, by field name: while playing, those of the running game
+		// (saved or not); otherwise those of the players' file (GraphicsOptions.json, which a game's options menu wrote with
+		// Graphics::Save while playing here), which the next play session starts with. Read again when play starts or stops, the
+		// project changes, the running game's options change or the options are reset; empty without a project.
+		const nlohmann::json& GetPlayerGraphicsOptions();
+		// Why the players' file is ignored, or what of it is dropped, from the same read (empty when nothing is wrong).
+		const std::string& GetPlayerGraphicsProblem();
+		// Deletes the players' graphics options file and, while playing, drops the running game's choices (the project's
+		// quality from its next frame). False, changing nothing, without a project or when the file stays.
+		bool ResetPlayerGraphicsOptions(std::string* outError = nullptr);
 
 		//////////////////////////////////////////////////////////////////////////
 		// Selection (entities of the active scene)
@@ -875,9 +892,22 @@ namespace Strata
 		uint64_t m_PlayerBindingsResets = 0;   // m_PlayerBindingsResetCount
 		uint64_t m_PlayerBindingsResetCount = 0;
 		OpenProjectSettings m_OpenProjectSettings { *this };
+		// After the project's settings and the saves it reads.
+		Scope<GameGraphicsService> m_GameGraphics;
+		// GetPlayerGraphicsOptions' answer, and what it was read for.
+		nlohmann::json m_PlayerGraphicsOptions = nlohmann::json::object();
+		std::string m_PlayerGraphicsProblem;
+		bool m_PlayerGraphicsRead = false;
+		bool m_PlayerGraphicsPlaying = false;
+		uint64_t m_PlayerGraphicsProject = 0;  // m_ProjectGeneration, 0 without a project
+		uint64_t m_PlayerGraphicsSession = 0;  // m_PlaySession
+		uint64_t m_PlayerGraphicsVersion = 0;  // m_GameGraphics->GetVersion()
+		uint64_t m_PlayerGraphicsResets = 0;   // m_PlayerGraphicsResetCount
+		uint64_t m_PlayerGraphicsResetCount = 0;
 		Scope<EngineServices::ScopedProvider<IGameWindow>> m_GameWindowProvider;
 		Scope<EngineServices::ScopedProvider<IGameSaves>> m_GameSavesProvider;
 		Scope<EngineServices::ScopedProvider<IProjectSettings>> m_ProjectSettingsProvider;
+		Scope<EngineServices::ScopedProvider<IGameGraphics>> m_GameGraphicsProvider; // Ends first
 
 		std::vector<UUID> m_Selection;
 		std::unordered_set<UUID> m_SelectionSet; // The same entities, for IsSelected

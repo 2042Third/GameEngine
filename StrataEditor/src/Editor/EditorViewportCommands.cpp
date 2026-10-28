@@ -618,10 +618,12 @@ namespace Strata
 			else
 				renderer->GetSceneRenderer().ResetExposureAdaptation();
 			progress.Rendered = true;
-			// The view's quality, as the panel showing it draws: the Scene view's setting for the editor camera and cameras of the
-			// capture's own, the project's for the scene's camera.
-			const ViewportQuality quality = request.Quality.value_or(GetSceneViewQuality(*view, viewport.GetSettings().Quality));
-			if (!renderer->Render(context, request.Size, *view, settings, progress.Overlays, ResolveViewportQuality(quality)))
+			// The quality asked for, else the view's, as the panel showing it draws: the Scene view's setting for the editor camera
+			// and cameras of the capture's own, the game's for the scene's camera (the project's, with the players' options while
+			// playing).
+			const RendererQualitySettings quality = request.Quality ? ResolveViewportQuality(*request.Quality)
+				: GetSceneViewQuality(*view, viewport.GetSettings().Quality, context.GetGameQuality());
+			if (!renderer->Render(context, request.Size, *view, settings, progress.Overlays, quality))
 			{
 				renderer->ReleaseTargets();
 				return EditorCommandResult::Fail("Rendering the capture failed (see the log)");
@@ -940,7 +942,7 @@ namespace Strata
 					"and unloading (gray) around the camera") },
 				{ "quality", QualitySchema("What the Scene view draws with: the project's Graphics Quality (Renderer.Quality, the default) or a preset "
 					"of this editor's for the view (a view setting, saved with the editor's state, no undo step); the Game view and the scene's camera "
-					"always draw at the project's") } }),
+					"always draw at the game's: the project's, and while playing the players' options over it") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				nlohmann::json changes = nlohmann::json::object();
@@ -1042,7 +1044,8 @@ namespace Strata
 					"\"lod\" by level of detail, \"mip\" by the mip levels their textures lack, \"motion\" colors pixels by their motion since the capture's "
 					"previous frame (rendered twice for it: still scenes show none), \"none\" not at all (default: the viewport's debug view)") },
 				{ "quality", QualitySchema("The quality the picture is drawn at (default: the quality of the view it shows: the Scene view's for the "
-					"editor camera and cameras of the capture's own, the project's for the scene's camera)") },
+					"editor camera and cameras of the capture's own, the game's for the scene's camera: the project's, with the players' options "
+					"while playing)") },
 				{ "path", StringSchema("Also save the PNG to this .png file: relative to the project directory (needs an open project) or absolute; folders are "
 					"created, network and device paths are refused") },
 				{ "overwrite", BoolSchema("Replace an existing file at path (default false: an existing file is an error)") },

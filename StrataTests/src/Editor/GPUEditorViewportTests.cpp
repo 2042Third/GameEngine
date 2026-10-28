@@ -31,6 +31,7 @@
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
+#include <Strata/Runtime/GameGraphicsService.h>
 #include <Strata/Scene/Components.h>
 
 #include <imgui.h>
@@ -2121,6 +2122,71 @@ TEST_SUITE("GPU.Editor.Viewport")
 		harness.Run("viewport.setSettings", { { "quality", "project" } });
 		REQUIRE(sceneView->Render(context, glm::uvec2(64, 64), *editorView, viewport.GetSettings(), true, ResolveViewportQuality(viewport.GetSettings().Quality)));
 		CHECK(sceneView->GetSceneRenderer().GetQuality() == RendererQuality::GetPreset(RendererQualityPreset::Low));
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+}
+
+TEST_SUITE("GPU.Editor.GameGraphics")
+{
+	TEST_CASE("The Game view and captures of the scene camera follow the player's options while playing; the Scene view keeps its own")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(Tests::CreateTemporaryDirectory("ViewportGameGraphics") / "Game") }, { "name", "Game" } });
+		harness.AddScene();
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", { { "Primary", true } } },
+			{ "Transform", { { "Translation", { 0, 0, 5 } } } } } } });
+		harness.Run("project.setSettings", { { "section", "Renderer.Quality" }, { "value", { { "Preset", "Medium" } } } });
+		harness.Run("viewport.setSettings", { { "quality", "high" } });
+		const nlohmann::json small = { { "width", 64 }, { "height", 64 }, { "overlays", false }, { "waitForAssets", false } };
+		const auto captureQuality = [&](const char* camera)
+		{
+			nlohmann::json parameters = small;
+			parameters["camera"] = camera;
+			nlohmann::json result;
+			harness.Capture(parameters, &result);
+			return result["renderStats"]["quality"]["Preset"].get<std::string>();
+		};
+		EditorContext& context = harness.Context;
+		ViewportRenderer* game = context.GetViewport().GetGameRenderer();
+		REQUIRE(game);
+		// The Game view's panel, as the editor draws it.
+		Tests::ImGuiHarness ui;
+		GameViewPanel panel;
+		EditorPanelContext panelContext { context, harness.Commands, harness.Runner };
+		const auto drawGameView = [&]()
+		{
+			ui.Frame([&]()
+			{
+				ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+				ImGui::SetNextWindowSize(ImVec2(320.0f, 240.0f));
+				ImGui::Begin("Game", nullptr, ImGuiWindowFlags_NoSavedSettings);
+				panel.OnUpdate(panelContext);
+				panel.OnImGuiRender(panelContext);
+				ImGui::End();
+			});
+			REQUIRE(game->GetSize().x > 0);
+			return game->GetSceneRenderer().GetQuality().Preset;
+		};
+
+		// Outside play the game's quality is the project's.
+		CHECK(captureQuality("scene") == "Medium");
+		CHECK(captureQuality("editor") == "High");
+		CHECK(drawGameView() == RendererQualityPreset::Medium);
+
+		// A player's choice while playing: the Game view and the scene's camera follow it, the Scene view's editor camera not.
+		harness.Run("play.start", { { "build", false } });
+		REQUIRE(context.GetGameGraphics().SetOption("Preset", "Low"));
+		CHECK(drawGameView() == RendererQualityPreset::Low);
+		CHECK(captureQuality("scene") == "Low");
+		CHECK(captureQuality("editor") == "High");
+		harness.Run("play.stop");
+		CHECK(drawGameView() == RendererQualityPreset::Medium);
+		CHECK(captureQuality("scene") == "Medium");
+		panel.OnDetach(panelContext);
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

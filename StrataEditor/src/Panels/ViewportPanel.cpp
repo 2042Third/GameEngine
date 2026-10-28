@@ -240,9 +240,9 @@ namespace Strata
 		ViewportSettings renderSettings = settings;
 		renderSettings.ShowGameUI = renderSettings.ShowGameUI || canvasMode;
 		// The editor camera at the Scene view's own quality setting (the project's by default), the scene's camera at the
-		// project's.
+		// game's (the project's, with the players' options while playing).
 		const bool rendered = renderer && view && renderer->Render(context, size, *view, renderSettings, view->EditorOverlays && !canvasMode,
-			ResolveViewportQuality(GetSceneViewQuality(*view, settings.Quality)));
+			GetSceneViewQuality(*view, settings.Quality, context.GetGameQuality()));
 		if (rendered)
 		{
 			if (canvasMode)
