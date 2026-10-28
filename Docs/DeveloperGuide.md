@@ -3759,13 +3759,20 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     kept), dropped below `height / 1080` pixels and faded in up to twice that: a sample-and-hold display already smears
     eye-tracked motion, so a blur of a pixel or two would only soften texture in slow pans.
   - Passes: the tile maxima (tiles of `max(8, ceil(MaxLength / 2))` pixels; RGBA16F targets made for 8-pixel tiles, so
-    the length never reallocates), each tile's 3x3 neighborhood's maximum (diagonal neighbors only when their blur runs
-    toward the center tile), and the gather (8, 12 or 16 samples, the quality's `MotionBlurQuality`): where the
+    the length never reallocates: xy the tile's largest blur, z the diagonal of the box holding all of its blurs), which
+    also writes every pixel's blur radius and view distance as two half floats (`m_MotionBlurPixels`, R32_UINT: the
+    gather's samples read one texel instead of velocity and depth and their math), each tile's 3x3 neighborhood's
+    maximum (diagonal neighbors only when their blur runs toward the center tile; z bounds how far any blur of the
+    neighborhood lies from it), and the gather (8, 12 or 16 samples, the quality's `MotionBlurQuality`): where the
     neighborhood's blur is under half a pixel the pixel keeps its color exactly; otherwise samples stratified over the
     neighborhood's span with one static per-pixel offset (`PixelRandom(pixel, 6)`: no ghost copies, nothing temporal),
     weighed by depth so a moving foreground spreads over the background, a farther sample counts where the center's own
-    blur reaches it, one surface blurs together, and a still foreground over a moving background stays sharp. The output
-    (`m_MotionBlurTexture`, RGBA16F, 66 MiB at 3840x2160, made by the first frame that blurs, released with the targets)
+    blur reaches it, one surface blurs together, and a still foreground over a moving background stays sharp. A
+    neighborhood whose blurs all lie within `GetUniformTolerance` (half a pixel, or 5% of the longest) of its largest moves
+    as one surface (a turning camera moves near and far points alike): its samples read only colors and take the weights
+    of one surface, which the depth-aware path gives them too. The output
+    (`m_MotionBlurTexture`, RGBA16F, 66 MB at 3840x2160, with the pixel target 100 MB in all, made by the first frame
+    that blurs, released with the targets)
     holds 1 in alpha where it blurred and becomes the post source of the exposure, the bloom and the tone mapping
     (`PostSource` sets per source: HDR, the TAA's history, the motion blur), whose TAA sharpening is masked off there
     (`TonemapConstants::ColorFlags`' `c_TonemapMotionBlurMask`): sharpening a blur would cut its streaks into steps.
@@ -3782,13 +3789,25 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     anti-aliasing (`tp.live.slow.off`, `tp.live.fast.off`, each with `.mb180`); capture them with `--live-only --sizes
     3840x2160 --shots "tp.live.*"`. They adapt the exposure at once (both speeds 0: adaptation follows the wall clock,
     which differs between runs). Only shots without anti-aliasing compare pixel for pixel across runs: TAA's jitter
-    follows the frames the editor drew between steps. In the slow pan no pixel of the center crop differs from its
-    blur-off twin by more than 3 codes (0.25% differ at all: near ground, whose parallax moves it past the threshold),
-    and 6 pixels of the rest of the frame do. The template and the samples keep `MotionBlur` off until the owner's
-    before/after sheet of these shots clears it (the owner rejects smear: when in doubt, off).
+    follows the frames the editor drew between steps. The slow and fast shots capture from step 120, the gameplay turn
+    from step 30 (15 degrees into the turn: the robot, the signpost and the right fence in view). The camera orbits the
+    player, so image motion depends on depth: what lies near the pivot (the robot, the signpost, the near fence) moves
+    about 5 pixels a frame in the gameplay turn, under the threshold, and stays exact, while the far course moves 16. In
+    the slow pan no pixel of the center crop differs from its blur-off twin by more than a code (0.26% differ: near
+    ground, whose parallax moves it past the threshold), and 6 pixels of the rest of the frame by more than 3. Measured
+    against `GetMotionBlurProfile` fed each edge's motion between consecutive blur-off frames (rows aligned on the edge,
+    in linear light): an edge of the far course in the gameplay turn (8 pixels of blur) has a 10-90% width of 7.0 pixels
+    against the model's 7.1, a fence post in the fast turn (17.5 pixels) 12.9 against 12.1, both profiles monotonic, the
+    post's streak noise (0.044 RMS of its rows about their mean, beyond its own texture's) within 1.5 times the model's
+    largest spread (0.034), as the GPU test judges it; the robot keeps 1.00 (gameplay turn) and 0.99 (fast turn) of its
+    texture detail. A near object over a slower background (the signpost over the grass in the fast turn) blurs about
+    half as wide as one surface would: the depth weights leave the slower background mostly unsmeared. The template and
+    the samples keep `MotionBlur` off until the owner's before/after sheet of these shots clears it (the owner rejects
+    smear: when in doubt, off).
   - Perf (provisional, measured by the reference machine's campaign): `PerfGPU.Renderer.MotionBlur4K` (`GPU.MotionBlur`
-    at High, 3840x2160, the camera turning 16 pixels a frame) and `MotionBlur4KStill` (still), beside `Post4K`
-    (`GPU.Post` with every post effect at its default and a grading).
+    at High, 3840x2160, the camera turning 16 pixels a frame: about 0.18 ms on an RTX 5090, 0.24 ms where every
+    neighborhood takes the depth-aware path) and `MotionBlur4KStill` (still: about 0.11 ms), beside `Post4K` (`GPU.Post`
+    with every post effect at its default and a grading).
 - **The players' rows** (`RendererQualitySettings::AntiAliasing` and `MotionBlur`, the same under every preset): Scene,
   or Off, FXAA or TAA for the method; Scene or Off for the motion blur (players may turn off, never on, what a scene
   uses). `ApplyQualityOverrides` applies them to the copy of the Post Process every pass reads, once per frame, on both

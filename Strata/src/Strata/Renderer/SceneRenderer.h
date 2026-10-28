@@ -1811,8 +1811,9 @@ namespace Strata
 		nvrhi::ComputePipelineHandle m_MotionBlurNeighborsPipeline;
 		nvrhi::ComputePipelineHandle m_MotionBlurPipeline;
 		nvrhi::TextureHandle m_MotionBlurTexture;     // RGBA16F, viewport-sized: the blurred image, alpha 1 where it blurred
-		nvrhi::TextureHandle m_MotionBlurTileMax;     // RGBA16F, ceil(size / 8): each tile's largest blur (xy, pixels)
-		nvrhi::TextureHandle m_MotionBlurNeighborMax; // The largest of each tile's neighborhood
+		nvrhi::TextureHandle m_MotionBlurTileMax;     // RGBA16F, ceil(size / 8): each tile's largest blur (xy, pixels), its spread (z)
+		nvrhi::TextureHandle m_MotionBlurNeighborMax; // The largest of each tile's neighborhood (xy), its spread about it (z)
+		nvrhi::TextureHandle m_MotionBlurPixels;      // R32_UINT, viewport-sized: each pixel's blur radius and view distance
 		nvrhi::BindingSetHandle m_MotionBlurTilesSet;
 		nvrhi::BindingSetHandle m_MotionBlurNeighborsSet;
 		std::array<nvrhi::BindingSetHandle, 3> m_MotionBlurGatherSets; // HDR, History 0, History 1
