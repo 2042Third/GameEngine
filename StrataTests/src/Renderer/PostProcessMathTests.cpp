@@ -459,11 +459,11 @@ TEST_SUITE("Renderer.PostProcessMath")
 		CHECK_FALSE(neutral.Active);
 		CHECK(PostProcessMath::ApplyColorGrading(glm::vec3(0.3f, 0.2f, 0.1f), neutral) == glm::vec3(0.3f, 0.2f, 0.1f));
 		// Near 6500 K the matrix is near the identity: the default lies on the locus (no jump).
-		const glm::mat3 near = PostProcessMath::GetWhiteBalanceMatrix(6550.0f, 0.0f);
+		const glm::mat3 nearIdentity = PostProcessMath::GetWhiteBalanceMatrix(6550.0f, 0.0f);
 		for (int column = 0; column < 3; column++)
 		{
 			for (int row = 0; row < 3; row++)
-				CHECK(std::abs(near[column][row] - (column == row ? 1.0f : 0.0f)) < 0.01f);
+				CHECK(std::abs(nearIdentity[column][row] - (column == row ? 1.0f : 0.0f)) < 0.01f);
 		}
 	}
 
