@@ -12,12 +12,15 @@ Method** chooses how.
 
 - **FXAA** smooths each frame on its own, by blurring along the edges it finds in the image. It costs little and never
   trails, but edges still crawl a little as things move, thin details (grass, rails, distant branches) flicker, and the
-  noise of soft shadows and ambient occlusion stays. It is the component's default, and the right choice for 2D games
-  and pixel art, whose crisp pixels TAA would soften.
+  grain of soft shadows' edges stays. It is the component's default, and the right choice for 2D games and pixel art,
+  whose crisp pixels TAA would soften.
 - **TAA** (temporal anti-aliasing) moves every frame's samples by a different fraction of a pixel (eight positions in
   turn) and blends each frame with the image of the frames before it, fetched where each surface was in the previous
-  frame. Edges come out smooth and steady, thin details stop flickering, and the noise of soft shadows and ambient
-  occlusion averages away. New projects made from the Basic 3D template and the 3D samples use it.
+  frame. Edges come out smooth and steady, thin details stop flickering, and the grain of soft shadows' edges averages
+  away. New projects made from the Basic 3D template and the 3D samples use it.
+
+Ambient occlusion looks the same with either method, and without anti-aliasing: it smooths its own pattern within each
+frame, so it needs no earlier frames.
 
 ## How many frames TAA keeps
 
