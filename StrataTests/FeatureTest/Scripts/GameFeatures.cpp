@@ -190,6 +190,11 @@ private:
 		const bool commandLine = preset && preset->Source == GraphicsOptionSource::CommandLine;
 		Expect(commandLine || (preset && preset->Source == GraphicsOptionSource::Player && Graphics::GetPreset() == QualityPreset::Low),
 			"the player's preset applies");
+		// A run with --quality says so (StrataRuntime.FeatureTestQuality expects the line: the runtime hands the preset to the
+		// game's graphics options, where scripts see it, not to the renderer alone).
+		if (commandLine)
+			Log::Info("FeatureTest graphics: the command line fixes the preset (", Graphics::GetPresetName(Graphics::GetPreset().value_or(QualityPreset::Custom)),
+				") over the player's choice");
 		Expect(Graphics::Set<int32_t>("ShadowCascades", 2), "Graphics::Set<int32_t>");
 		Expect(commandLine || (Graphics::GetPreset() == QualityPreset::Custom && Graphics::Get<int32_t>("ShadowCascades") == 2
 			&& Graphics::Get<std::string>("ShadowResolution") == std::string("1024")), "a row switches the preset to Custom from Low's look");

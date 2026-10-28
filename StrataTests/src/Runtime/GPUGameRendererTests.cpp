@@ -1,6 +1,8 @@
 #include "Renderer/SceneRendererTestUtils.h"
+#include "TestHelpers.h"
 
 #include "Strata/Core/EngineServices.h"
+#include "Strata/Core/Log.h"
 #include "Strata/Core/ProjectSettings.h"
 #include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Renderer/RendererComponents.h"
@@ -10,9 +12,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <functional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace Strata;
@@ -379,11 +383,20 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 		{
 			GameGraphicsService graphics(&values, nullptr, &registry);
 			EngineServices::ScopedProvider<IGameGraphics> provider(graphics);
+			// The info line each change of the preset or its source writes names where the preset comes from.
+			const ScopedLogLevel infoLog(LogLevel::Info);
+			const LogCapture log;
+			const auto logged = [&log](std::string_view message)
+			{
+				const std::vector<LogEntry> entries = log.GetEntries();
+				return std::count_if(entries.begin(), entries.end(), [message](const LogEntry& entry) { return entry.Message == message; });
+			};
 			// The player's preset reaches the next frame.
 			REQUIRE(graphics.SetOption("Preset", "Low"));
 			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
 			CHECK(renderer.GetQuality().HasSameKnobs(RendererQuality::GetPreset(RendererQualityPreset::Low)));
 			CHECK(renderer.GetSceneRenderer().GetShadowMapSize() == 1024);
+			CHECK(logged("Graphics quality: Low (the player's)") == 1);
 			REQUIRE(graphics.SetOption("Preset", "Medium"));
 			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
 			CHECK(renderer.GetSceneRenderer().GetShadowMapSize() == 2048);
@@ -392,6 +405,7 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
 			CHECK(renderer.GetSceneRenderer().GetShadowMapSize() == 1024);
 			CHECK(renderer.GetStats().Quality.ShadowCascades == 3);
+			CHECK(logged("Graphics quality: Low (--quality)") == 1);
 			// An override still wins over all.
 			renderer.SetQualityOverride(RendererQuality::GetPreset(RendererQualityPreset::Medium));
 			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
