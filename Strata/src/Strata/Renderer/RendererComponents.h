@@ -254,6 +254,12 @@ namespace Strata
 		// How far the glow reaches, as a fraction of the image's height (its deepest level's texel): the same share of the image
 		// at every resolution. 64 / 1080 by default: 1080 rows use 0.6.0's six levels exactly, 2160 rows seven.
 		float BloomRadius = 64.0f / 1080.0f;
+		// Motion blur (off by default): what moves on screen blurs over the shutter's share of each frame (MotionBlurShutterAngle
+		// degrees of 360: 180 blurs over half a frame's motion), clamped to MotionBlurMaxLength of the image's height. Editor views
+		// never blur, and players can turn it off (RendererQualitySettings::MotionBlur).
+		bool MotionBlur = false;
+		float MotionBlurShutterAngle = 180.0f;
+		float MotionBlurMaxLength = 0.02f;
 		bool AmbientOcclusion = true;
 		float AmbientOcclusionRadius = 0.6f; // World units
 		float AmbientOcclusionIntensity = 1.0f;

@@ -139,16 +139,19 @@
 		},
 		"Renderer.Quality": {
 			"Value": {
+				"AntiAliasing": "TAA",
 				"LODErrorPixels": 1.5,
 				"LocalShadowAtlasSize": "2048",
 				"LocalShadowMaxTile": "512",
 				"MaxShadowedLocalLights": 8,
 				"MinProjectedPixels": 0.75,
+				"MotionBlur": "Scene",
+				"MotionBlurQuality": "Samples16",
 				"Preset": "Custom",
 				"ShadowCascades": 3,
 				"ShadowResolution": "1024"
 			},
-			"Version": 1
+			"Version": 2
 		},
 		"Scene.CollisionLayers": {
 			"Value": {

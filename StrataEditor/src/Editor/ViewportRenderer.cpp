@@ -121,6 +121,7 @@ namespace Strata
 	}
 
 	ViewportRenderer::ViewportRenderer(const std::string& debugName, bool fades)
+		: m_SingleImages(!fades)
 	{
 		SceneRendererSpecification specification;
 		specification.DebugName = debugName;
@@ -192,6 +193,10 @@ namespace Strata
 		}
 
 		SceneRenderOptions options = GetViewportRenderOptions(view, settings);
+		// Only the game's camera blurs, while the game plays, in the live views: the editor camera never does (camera moves
+		// made by editing are not the game's), and the capture renderer's single pictures never do (it renders a view again for
+		// its settle frames while a running game moves).
+		options.MotionBlur = !m_SingleImages && view.FromScene && context.IsPlaying();
 		m_DebugDraw.Clear();
 		options.SelectionColor = settings.SelectionColor;
 		if (overlays)

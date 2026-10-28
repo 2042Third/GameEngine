@@ -3107,6 +3107,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `LocalShadowMaxTile` | 512 | 1024 | 1024 | 2048 |
 | `MaxShadowedLocalLights` | 4 | 16 | 16 | 16 |
 | `LODErrorPixels` / `MinProjectedPixels` | 2 / 1 | 1 / 0.5 | 1 / 0.5 | 0.5 / 0.25 |
+| `MotionBlurQuality` (samples, for scenes with motion blur) | Off | 8 | 12 | 16 |
+| `AntiAliasing`, `MotionBlur` (players' rows, under every preset) | Scene | Scene | Scene | Scene |
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
 
@@ -3331,7 +3333,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Motion vectors and TAA
 
-- A frame with `SceneRenderOptions::MotionVectors` (or `ShowMotionVectors`, the motion debug view) writes each opaque and
+- A frame with `SceneRenderOptions::MotionVectors` (or `ShowMotionVectors`, the motion debug view, or TAA, or the motion blur:
+  "Post-processing") writes each opaque and
   alpha-masked surface's motion since the renderer's previous frame into an RG16F velocity target
   (`SceneRenderer::GetVelocityTexture`): its unjittered position in this frame's UV space minus its position in the
   previous one's (`FrameConstants::UnjitteredViewProjection`, `PreviousViewProjection`, built in double relative to the
@@ -3736,6 +3739,39 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
   darkens a 60 degree 16:9 view's corners by 9.9%, the side edges' centers much less. Stored values keep their number under
   this model (a stored 0.2 darkens those corners 16.5%, where 0.6.0's ring after the curve darkened them 20%). Thumbnails
   changed with both (`ThumbnailCache::c_Version` 7).
+- **Motion blur** (`RenderMotionBlur`, `PostProcess/MotionBlurTiles.comp`, `MotionBlurNeighbors.comp`, `MotionBlur.comp`,
+  `Include/MotionBlur.glsl`; stage `GPU.MotionBlur` between `GPU.TAA` and `GPU.Post`):
+  - When: `SceneRenderOptions::MotionBlur` (on; the editor turns it on only in the live views' scene camera while the
+    game plays, never in its editor camera or captures; thumbnails turn it off), not `HDROutput`, the Post Process's
+    `MotionBlur` (off by default) with a shutter above 0, after the quality's overrides (`ApplyQualityOverrides`: the
+    `MotionBlurQuality` row Off or the players' `MotionBlur` row Off turn it off). Frames that want it ask for motion
+    vectors, so the motion history goes on; the passes run when the frame has a motion history and no camera cut (a
+    cut's motion spans the cut). Frames that do not blur show the image as without it.
+  - The blur of a pixel (`GetBlurVelocity`, the same in the three passes): its motion (the camera's where nothing was
+    drawn) in pixels times `MotionBlurShutterAngle / 360`, clamped to `MotionBlurMaxLength` of the height (direction
+    kept), dropped below `height / 1080` pixels and faded in up to twice that: a sample-and-hold display already smears
+    eye-tracked motion, so a blur of a pixel or two would only soften texture in slow pans.
+  - Passes: the tile maxima (tiles of `max(8, ceil(MaxLength / 2))` pixels; RGBA16F targets made for 8-pixel tiles, so
+    the length never reallocates), each tile's 3x3 neighborhood's maximum (diagonal neighbors only when their blur runs
+    toward the center tile), and the gather (8, 12 or 16 samples, the quality's `MotionBlurQuality`): where the
+    neighborhood's blur is under half a pixel the pixel keeps its color exactly; otherwise samples stratified over the
+    neighborhood's span with one static per-pixel offset (`PixelRandom(pixel, 6)`: no ghost copies, nothing temporal),
+    weighed by depth so a moving foreground spreads over the background, a farther sample counts where the center's own
+    blur reaches it, one surface blurs together, and a still foreground over a moving background stays sharp. The output
+    (`m_MotionBlurTexture`, RGBA16F, 66 MiB at 3840x2160, made by the first frame that blurs, released with the targets)
+    holds 1 in alpha where it blurred and becomes the post source of the exposure, the bloom and the tone mapping
+    (`PostSource` sets per source: HDR, the TAA's history, the motion blur), whose TAA sharpening is masked off there
+    (`TonemapConstants::ColorFlags`' `c_TonemapMotionBlurMask`): sharpening a blur would cut its streaks into steps.
+  - The gather's static offsets quantize an edge crossing the span to steps of 1/N of its contrast: fine streak noise
+    where things move, nothing that averages away. `PostProcessMath::GetMotionBlurProfile` is its CPU model (the profile
+    and spread of an ideal edge), which the GPU tests and the look-dev criteria compare with.
+  - Limits: blended transparent surfaces write no velocity and blur with what lies behind them; overlays, text and the
+    game UI are drawn after the post and never blur. Stats: `MotionBlurred`, `MotionBlurSamples`, `MotionBlurTileSize`
+    (`renderStats.motionBlur`).
+- **The players' rows** (`RendererQualitySettings::AntiAliasing` and `MotionBlur`, the same under every preset): Scene,
+  or Off, FXAA or TAA for the method; Scene or Off for the motion blur (players may turn off, never on, what a scene
+  uses). `ApplyQualityOverrides` applies them to the copy of the Post Process every pass reads, once per frame, on both
+  paths; screen-space reflections follow the effective method.
 - **FXAA's subpixel blend** is 0.25 (`FXAA.frag`'s `c_Subpixel`; 0.75 until 0.7.0, which cost 19-22% of the texture
   detail of an image without anti-aliasing; on PhysicsPlayground's tiled floor at 3840x2160, 0.375 keeps 0.85 of it and 0.25
   0.87, the rest being the edges FXAA is there to smooth). Lower values would leave single-pixel aliasing alone.

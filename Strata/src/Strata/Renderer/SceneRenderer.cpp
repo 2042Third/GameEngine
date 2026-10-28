@@ -2602,7 +2602,9 @@ namespace Strata
 		m_Stats.DeferredProxies = m_SceneGPU->GetDeferredProxies();
 
 		// Temporal anti-aliasing (below) blends along the motion vectors.
-		const PostProcessComponent postProcess = GetPostProcessSettings(scene);
+		// The players' quality rows apply to the copy every pass reads.
+		PostProcessComponent postProcess = GetPostProcessSettings(scene);
+		ApplyQualityOverrides(postProcess, m_Specification.Quality);
 		ChoosePreExposure(postProcess, options);
 		m_Stats.PreExposure = m_PreExposure;
 		m_Stats.PreExposureSettled = m_PreExposureSettled;
@@ -2617,7 +2619,9 @@ namespace Strata
 
 		// Motion: the history holds the renderer's previous frame when that frame copied it (its latest frame asked for motion
 		// too) and drew this render scene or the one it is a clone of (the same slots).
-		m_MotionFrame = options.MotionVectors || options.ShowMotionVectors || temporalWanted;
+		// Motion blur asks for motion vectors on every frame it is wanted, so the motion history goes on.
+		const bool motionBlurWanted = options.MotionBlur && !options.HDROutput && postProcess.MotionBlur && postProcess.MotionBlurShutterAngle > 0.0f;
+		m_MotionFrame = options.MotionVectors || options.ShowMotionVectors || temporalWanted || motionBlurWanted;
 		const bool motionHistory = m_MotionFrame && m_MotionRender != 0 && m_MotionRender == m_RenderCount
 			&& (m_MotionSceneId == renderScene.GetId() || renderScene.GetCloneSource() == m_MotionSceneId);
 		bool motionFailed = false;
@@ -3084,8 +3088,19 @@ namespace Strata
 				m_Errors.Clear();
 			return true;
 		}
-		// Post-processing reads the resolved image with temporal anti-aliasing (the history's newest texture).
+		// Post-processing reads the resolved image with temporal anti-aliasing (the history's newest texture), and the motion
+		// blur's output on frames that blur: not without a motion history (the first frame, a resize, another render scene) or on
+		// a camera cut, whose motion spans the cut.
 		const bool resolved = m_TemporalResolved;
+		bool motionBlurred = false;
+		if (motionBlurWanted && m_Stats.MotionHistory && !cameraCut)
+		{
+			gpuTimer.Next(gpuStages.MotionBlur);
+			commandList->beginMarker("MotionBlur");
+			motionBlurred = RenderMotionBlur(commandList, postProcess, resolved);
+			commandList->endMarker();
+			degraded = degraded || !motionBlurred;
+		}
 		gpuTimer.Next(gpuStages.Post);
 		// The exposure key's reference: the luminance of a gray card (albedo 0.18) facing the directional light, as Forward.frag
 		// lights it (the atmosphere's transmittance included); none without a light.
@@ -3095,7 +3110,7 @@ namespace Strata
 			keyReferenceLog2 = std::log2(sunLuminance);
 		if (postProcess.AutoExposure)
 			m_Stats.ExposureKeyReferenceLog2 = keyReferenceLog2;
-		const bool bloom = RenderPostHDR(commandList, postProcess, options, resolved, keyReferenceLog2);
+		const bool bloom = RenderPostHDR(commandList, postProcess, options, resolved, motionBlurred, keyReferenceLog2);
 
 		TextRenderStats textStats;
 		m_FontAtlases->BeginFrame(TextRenderer::c_FrameRasterBudget);
@@ -3130,7 +3145,7 @@ namespace Strata
 			return false;
 		}
 		nvrhi::IFramebuffer* output = target && !overlays ? target : m_OutputFramebuffer.Get();
-		RenderPostDisplay(commandList, postProcess, temporalSettings, resolved, bloom, GetVignetteTangents(camera, m_ViewportSize), output);
+		RenderPostDisplay(commandList, postProcess, temporalSettings, resolved, motionBlurred, bloom, GetVignetteTangents(camera, m_ViewportSize), output);
 
 		if (overlays)
 		{

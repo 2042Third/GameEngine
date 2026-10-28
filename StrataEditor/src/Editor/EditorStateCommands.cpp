@@ -264,6 +264,9 @@ namespace Strata
 					{ "keyStops", stats.ExposureKeyStops },
 					{ "cardEv100", stats.ExposureKeyReferenceLog2 ? nlohmann::json(*stats.ExposureKeyReferenceLog2 + 3.0f) : nlohmann::json(nullptr) } }
 					: nlohmann::json(nullptr) },
+				// The motion blur's samples and tile size (pixels) on frames that blurred.
+				{ "motionBlur", stats.MotionBlurred ? nlohmann::json { { "samples", stats.MotionBlurSamples }, { "tileSize", stats.MotionBlurTileSize } }
+					: nlohmann::json(nullptr) },
 				{ "gpuMs", std::move(gpuMs) },
 				{ "gpuStatsFrame", gpu.HasTimes ? nlohmann::json(gpu.Frame) : nlohmann::json(nullptr) } };
 		}
@@ -895,7 +898,7 @@ namespace Strata
 			"I/O and background threads (imports, exports), how busy they were in percent, running and queued jobs now). gpu is the GPU's side of "
 			"the same frames, known 2-3 frames late: frames (with GPU times), latencyFrames, busy (the GPU stages added up per frame), stages (per GPU "
 			"stage: GPU.Uploads, GPU.Setup, GPU.Cull, GPU.Shadows, GPU.Prepass, GPU.AO, GPU.Reflections (reflection probes' conversions, screen-space reflections), "
-			"GPU.Opaque (with the sky), GPU.Transparent, GPU.TAA (motion vectors' history and temporal anti-aliasing), GPU.Post, "
+			"GPU.Opaque (with the sky), GPU.Transparent, GPU.TAA (motion vectors' history and temporal anti-aliasing), GPU.MotionBlur, GPU.Post, "
 			"GPU.Overlays, GPU.UI (the game UI), GPU.ImGui) and boundBy: gpu when the GPU's median busy time takes at least 90% of the median frame interval and exceeds "
 			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
 			"times. renderStats is the viewport's latest frame (null while it renders none): quality (the Graphics Quality it drew with, as "

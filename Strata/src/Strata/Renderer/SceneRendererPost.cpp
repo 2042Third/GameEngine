@@ -6,6 +6,7 @@
 #include "Strata/Renderer/PostProcessMath.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/RendererComponents.h"
+#include "Strata/Renderer/RendererQuality.h"
 
 #include <algorithm>
 #include <chrono>
@@ -139,6 +140,24 @@ namespace Strata
 		copyLayout.visibility = nvrhi::ShaderType::Pixel;
 		copyLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Sampler(0) };
 		m_CopyBindingLayout = m_Device->createBindingLayout(copyLayout);
+		// Motion blur: one layout for its three passes (every set fills every slot). b0 is the frame's constants (the
+		// camera's motion, the depth's view distance), so the push constants take slot 1.
+		nvrhi::BindingLayoutDesc motionBlurLayout;
+		motionBlurLayout.visibility = nvrhi::ShaderType::Compute;
+		motionBlurLayout.bindings = {
+			nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+			nvrhi::BindingLayoutItem::Texture_SRV(0),
+			nvrhi::BindingLayoutItem::Texture_SRV(1),
+			nvrhi::BindingLayoutItem::Texture_SRV(2),
+			nvrhi::BindingLayoutItem::Texture_SRV(3),
+			nvrhi::BindingLayoutItem::Texture_UAV(0),
+			nvrhi::BindingLayoutItem::PushConstants(1, sizeof(RenderData::MotionBlurParameters))
+		};
+		m_MotionBlurLayout = m_Device->createBindingLayout(motionBlurLayout);
+		ST_CORE_VERIFY(m_MotionBlurLayout, "SceneRenderer: failed to create the motion blur's layout");
+		m_MotionBlurTilesPipeline = CreateComputePipeline("PostProcess/MotionBlurTiles.comp", m_MotionBlurLayout);
+		m_MotionBlurNeighborsPipeline = CreateComputePipeline("PostProcess/MotionBlurNeighbors.comp", m_MotionBlurLayout);
+		m_MotionBlurPipeline = CreateComputePipeline("PostProcess/MotionBlur.comp", m_MotionBlurLayout);
 		ST_CORE_VERIFY(m_TonemapBindingLayout && m_TonemapConstantBuffer && m_ExposureBindingLayout && m_HistogramPipeline && m_ExposurePipeline && m_HistogramBuffer
 			&& m_ExposureBuffer && exposureReadbacks && m_BloomBindingLayout && m_BloomPipeline && m_FXAABindingLayout && m_CopyBindingLayout,
 			"SceneRenderer: failed to create the post-processing resources");
@@ -264,6 +283,172 @@ namespace Strata
 		release(m_LDRTexture);
 		release(m_LDRFramebuffer);
 		release(m_FXAABindingSet);
+		// The motion blur's targets and sets (made again by the next frame that blurs; the gather's history sets reference the
+		// temporal history, which goes with the targets too).
+		release(m_MotionBlurTexture);
+		release(m_MotionBlurTileMax);
+		release(m_MotionBlurNeighborMax);
+		release(m_MotionBlurTilesSet);
+		release(m_MotionBlurNeighborsSet);
+		for (nvrhi::BindingSetHandle& set : m_MotionBlurGatherSets)
+			release(set);
+		release(m_MotionBlurExposureSet);
+		release(m_MotionBlurBloomSet);
+		release(m_MotionBlurTonemapSet);
+	}
+
+	void SceneRenderer::ApplyQualityOverrides(PostProcessComponent& settings, const RendererQualitySettings& quality)
+	{
+		switch (quality.AntiAliasing)
+		{
+			case AntiAliasingChoice::Scene:
+				break;
+			case AntiAliasingChoice::Off:
+				settings.AntiAliasing = false;
+				break;
+			case AntiAliasingChoice::FXAA:
+				settings.AntiAliasing = true;
+				settings.AntiAliasingMethod = AntiAliasingMode::FXAA;
+				break;
+			case AntiAliasingChoice::TAA:
+				settings.AntiAliasing = true;
+				settings.AntiAliasingMethod = AntiAliasingMode::TAA;
+				break;
+		}
+		if (quality.MotionBlur == SceneEffectChoice::Off || quality.MotionBlurQuality == MotionBlurSamples::Off)
+			settings.MotionBlur = false;
+	}
+
+	bool SceneRenderer::EnsureMotionBlurResources()
+	{
+		const uint32_t width = m_ViewportSize.x;
+		const uint32_t height = m_ViewportSize.y;
+		if (!m_MotionBlurTexture)
+		{
+			auto createTarget = [&](uint32_t targetWidth, uint32_t targetHeight, const char* name)
+			{
+				nvrhi::TextureDesc desc;
+				desc.width = std::max(targetWidth, 1u);
+				desc.height = std::max(targetHeight, 1u);
+				desc.format = c_HDRFormat;
+				desc.isUAV = true;
+				desc.debugName = m_Specification.DebugName + name;
+				desc.initialState = nvrhi::ResourceStates::ShaderResource;
+				desc.keepInitialState = true;
+				return m_Device->createTexture(desc);
+			};
+			const uint32_t tilesX = (width + RenderData::c_MotionBlurMinTileSize - 1) / RenderData::c_MotionBlurMinTileSize;
+			const uint32_t tilesY = (height + RenderData::c_MotionBlurMinTileSize - 1) / RenderData::c_MotionBlurMinTileSize;
+			nvrhi::TextureHandle blurred = createTarget(width, height, ".MotionBlur");
+			nvrhi::TextureHandle tileMax = createTarget(tilesX, tilesY, ".MotionBlurTileMax");
+			nvrhi::TextureHandle neighborMax = createTarget(tilesX, tilesY, ".MotionBlurNeighborMax");
+			if (!blurred || !tileMax || !neighborMax || !m_VelocityTexture)
+			{
+				m_Errors.Report(fmt::format("failed to create the motion blur's targets for a {}x{} viewport; drawing without motion blur", width, height));
+				return false;
+			}
+			// NVRHI binds every slot of a layout: a pass's sets fill the slots it does not read with textures it does not write.
+			const nvrhi::BindingSetItem pushConstants = nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::MotionBlurParameters));
+			nvrhi::BindingSetDesc tiles;
+			tiles.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer), nvrhi::BindingSetItem::Texture_SRV(0, m_VelocityTexture),
+				nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture), nvrhi::BindingSetItem::Texture_SRV(2, neighborMax),
+				nvrhi::BindingSetItem::Texture_SRV(3, m_HDRTexture), nvrhi::BindingSetItem::Texture_UAV(0, tileMax), pushConstants };
+			nvrhi::BindingSetDesc neighbors;
+			neighbors.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer), nvrhi::BindingSetItem::Texture_SRV(0, m_VelocityTexture),
+				nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture), nvrhi::BindingSetItem::Texture_SRV(2, tileMax),
+				nvrhi::BindingSetItem::Texture_SRV(3, m_HDRTexture), nvrhi::BindingSetItem::Texture_UAV(0, neighborMax), pushConstants };
+			nvrhi::BindingSetDesc gather;
+			gather.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer), nvrhi::BindingSetItem::Texture_SRV(0, m_VelocityTexture),
+				nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture), nvrhi::BindingSetItem::Texture_SRV(2, neighborMax),
+				nvrhi::BindingSetItem::Texture_SRV(3, m_HDRTexture), nvrhi::BindingSetItem::Texture_UAV(0, blurred), pushConstants };
+			// The motion blur's output as the post source, as the HDR target's sets (CreatePostTargets).
+			nvrhi::BindingSetDesc exposure;
+			exposure.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, blurred), nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_HistogramBuffer),
+				nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_ExposureBuffer), nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::ExposureParameters)) };
+			nvrhi::BindingSetDesc bloom;
+			bloom.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, blurred), nvrhi::BindingSetItem::Sampler(0, m_LinearClampSampler),
+				nvrhi::BindingSetItem::Texture_UAV(0, m_BloomTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_ExposureBuffer), nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::BloomParameters)) };
+			nvrhi::BindingSetDesc tonemap;
+			tonemap.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, blurred), nvrhi::BindingSetItem::Sampler(0, m_PointClampSampler),
+				nvrhi::BindingSetItem::Texture_SRV(1, m_BloomTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
+				nvrhi::BindingSetItem::Sampler(1, m_LinearClampSampler), nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_ExposureBuffer),
+				nvrhi::BindingSetItem::ConstantBuffer(0, m_TonemapConstantBuffer) };
+			nvrhi::BindingSetHandle tilesSet = m_Device->createBindingSet(tiles, m_MotionBlurLayout);
+			nvrhi::BindingSetHandle neighborsSet = m_Device->createBindingSet(neighbors, m_MotionBlurLayout);
+			nvrhi::BindingSetHandle gatherSet = m_Device->createBindingSet(gather, m_MotionBlurLayout);
+			nvrhi::BindingSetHandle exposureSet = m_Device->createBindingSet(exposure, m_ExposureBindingLayout);
+			nvrhi::BindingSetHandle bloomSet = m_Device->createBindingSet(bloom, m_BloomBindingLayout);
+			nvrhi::BindingSetHandle tonemapSet = m_Device->createBindingSet(tonemap, m_TonemapBindingLayout);
+			if (!tilesSet || !neighborsSet || !gatherSet || !exposureSet || !bloomSet || !tonemapSet)
+			{
+				m_Errors.Report(fmt::format("failed to create the motion blur's bindings for a {}x{} viewport; drawing without motion blur", width, height));
+				return false;
+			}
+			m_MotionBlurTexture = std::move(blurred);
+			m_MotionBlurTileMax = std::move(tileMax);
+			m_MotionBlurNeighborMax = std::move(neighborMax);
+			m_MotionBlurTilesSet = std::move(tilesSet);
+			m_MotionBlurNeighborsSet = std::move(neighborsSet);
+			m_MotionBlurGatherSets[0] = std::move(gatherSet);
+			m_MotionBlurExposureSet = std::move(exposureSet);
+			m_MotionBlurBloomSet = std::move(bloomSet);
+			m_MotionBlurTonemapSet = std::move(tonemapSet);
+		}
+		// The gather of the temporal history's textures (the resolved image), once they exist.
+		for (uint32_t index = 0; index < 2; index++)
+		{
+			if (!m_HistoryTextures[index] || m_MotionBlurGatherSets[1 + index])
+				continue;
+			nvrhi::BindingSetDesc gather;
+			gather.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer), nvrhi::BindingSetItem::Texture_SRV(0, m_VelocityTexture),
+				nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture), nvrhi::BindingSetItem::Texture_SRV(2, m_MotionBlurNeighborMax),
+				nvrhi::BindingSetItem::Texture_SRV(3, m_HistoryTextures[index]), nvrhi::BindingSetItem::Texture_UAV(0, m_MotionBlurTexture),
+				nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::MotionBlurParameters)) };
+			m_MotionBlurGatherSets[1 + index] = m_Device->createBindingSet(gather, m_MotionBlurLayout);
+			if (!m_MotionBlurGatherSets[1 + index])
+			{
+				m_Errors.Report("failed to create the motion blur's bindings of the temporal history; drawing without motion blur");
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool SceneRenderer::RenderMotionBlur(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, bool resolved)
+	{
+		if (!EnsureMotionBlurResources())
+			return false;
+		const uint32_t width = m_ViewportSize.x;
+		const uint32_t height = m_ViewportSize.y;
+		RenderData::MotionBlurParameters parameters = {};
+		const float shutter = std::isfinite(postProcess.MotionBlurShutterAngle) ? std::clamp(postProcess.MotionBlurShutterAngle, 0.0f, 360.0f) : 180.0f;
+		const float maxLength = std::isfinite(postProcess.MotionBlurMaxLength) ? std::clamp(postProcess.MotionBlurMaxLength, 0.005f, 0.05f) : 0.02f;
+		parameters.ShutterFraction = shutter / 360.0f;
+		parameters.MaxLength = maxLength * static_cast<float>(height);
+		parameters.MinLength = static_cast<float>(height) / 1080.0f;
+		parameters.TileSize = std::max(RenderData::c_MotionBlurMinTileSize, static_cast<uint32_t>(std::ceil(parameters.MaxLength * 0.5f)));
+		parameters.SampleCount = RendererQuality::GetMotionBlurSampleCount(m_Specification.Quality.MotionBlurQuality);
+		const uint32_t tilesX = (width + parameters.TileSize - 1) / parameters.TileSize;
+		const uint32_t tilesY = (height + parameters.TileSize - 1) / parameters.TileSize;
+
+		auto dispatch = [&](nvrhi::IComputePipeline* pipeline, nvrhi::IBindingSet* set, uint32_t groupsX, uint32_t groupsY)
+		{
+			nvrhi::ComputeState state;
+			state.pipeline = pipeline;
+			state.bindings = { set };
+			commandList->setComputeState(state);
+			commandList->setPushConstants(&parameters, sizeof(parameters));
+			commandList->dispatch(groupsX, groupsY, 1);
+		};
+		dispatch(m_MotionBlurTilesPipeline, m_MotionBlurTilesSet, tilesX, tilesY);
+		dispatch(m_MotionBlurNeighborsPipeline, m_MotionBlurNeighborsSet, DispatchGroups(tilesX), DispatchGroups(tilesY));
+		nvrhi::IBindingSet* gather = resolved ? m_MotionBlurGatherSets[1 + m_HistoryIndex].Get() : m_MotionBlurGatherSets[0].Get();
+		dispatch(m_MotionBlurPipeline, gather, DispatchGroups(width), DispatchGroups(height));
+		m_Stats.MotionBlurred = true;
+		m_Stats.MotionBlurSamples = parameters.SampleCount;
+		m_Stats.MotionBlurTileSize = parameters.TileSize;
+		return true;
 	}
 
 	void SceneRenderer::UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, const SceneRenderOptions& options,
@@ -392,16 +577,18 @@ namespace Strata
 	}
 
 	bool SceneRenderer::RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const SceneRenderOptions& options, bool resolved,
-		std::optional<float> keyReferenceLog2)
+		bool motionBlurred, std::optional<float> keyReferenceLog2)
 	{
 		commandList->beginMarker("Exposure");
-		UpdateExposure(commandList, postProcess, options, resolved ? m_TemporalExposureSets[m_HistoryIndex].Get() : m_ExposureBindingSet.Get(), keyReferenceLog2);
+		nvrhi::IBindingSet* exposureSet = motionBlurred ? m_MotionBlurExposureSet.Get() : resolved ? m_TemporalExposureSets[m_HistoryIndex].Get() : m_ExposureBindingSet.Get();
+		UpdateExposure(commandList, postProcess, options, exposureSet, keyReferenceLog2);
 		commandList->endMarker();
 		const bool bloom = postProcess.Bloom && postProcess.BloomIntensity > 0.0f;
 		if (bloom)
 		{
 			commandList->beginMarker("Bloom");
-			RenderBloom(commandList, postProcess, resolved ? m_TemporalBloomSets[m_HistoryIndex].Get() : m_BloomDownsampleSets[0].Get());
+			RenderBloom(commandList, postProcess,
+				motionBlurred ? m_MotionBlurBloomSet.Get() : resolved ? m_TemporalBloomSets[m_HistoryIndex].Get() : m_BloomDownsampleSets[0].Get());
 			commandList->endMarker();
 		}
 		return bloom;
@@ -417,7 +604,7 @@ namespace Strata
 	}
 
 	void SceneRenderer::RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
-		bool resolved, bool bloom, const glm::vec2& vignetteTangents, nvrhi::IFramebuffer* output)
+		bool resolved, bool motionBlurred, bool bloom, const glm::vec2& vignetteTangents, nvrhi::IFramebuffer* output)
 	{
 		// Tone mapping into the display target, or into the intermediate target FXAA reads.
 		RenderData::TonemapConstants tonemap = {};
@@ -439,7 +626,7 @@ namespace Strata
 		tonemap.FilmicWhiteStops = filmic.WhiteStops;
 		tonemap.FilmicShoulderPower = filmic.ShoulderPower;
 		const PostProcessMath::ColorGrading grading = GetColorGrading(postProcess);
-		tonemap.ColorFlags = grading.Active ? RenderData::c_TonemapColorGrading : 0u;
+		tonemap.ColorFlags = (grading.Active ? RenderData::c_TonemapColorGrading : 0u) | (motionBlurred ? RenderData::c_TonemapMotionBlurMask : 0u);
 		for (int row = 0; row < 3; row++)
 			tonemap.ColorRows[row] = glm::vec4(grading.Matrix[0][row], grading.Matrix[1][row], grading.Matrix[2][row], 0.0f);
 		tonemap.ColorOffset = glm::vec4(grading.Offset, 0.0f);
@@ -458,7 +645,7 @@ namespace Strata
 		commandList->writeBuffer(m_TonemapConstantBuffer, &tonemap, sizeof(tonemap));
 		m_TonemapConstantsWritten = true;
 		DrawFullscreen(commandList, GetFullscreenPipeline(m_TonemapPipelines, m_TonemapPixelShader, m_TonemapBindingLayout, tonemapTarget->getFramebufferInfo()),
-			tonemapTarget, resolved ? m_TemporalTonemapSets[m_HistoryIndex].Get() : m_TonemapBindingSet.Get(), nullptr, 0);
+			tonemapTarget, motionBlurred ? m_MotionBlurTonemapSet.Get() : resolved ? m_TemporalTonemapSets[m_HistoryIndex].Get() : m_TonemapBindingSet.Get(), nullptr, 0);
 		commandList->endMarker();
 		if (fxaa)
 		{

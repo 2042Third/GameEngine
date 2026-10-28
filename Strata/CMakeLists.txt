@@ -107,6 +107,9 @@ strata_add_shaders(Strata_Renderer
 		Effects/SceneColorCopy.comp
 		PostProcess/Fullscreen.vert
 		PostProcess/Tonemap.frag
+		PostProcess/MotionBlurTiles.comp
+		PostProcess/MotionBlurNeighbors.comp
+		PostProcess/MotionBlur.comp
 		PostProcess/Histogram.comp
 		PostProcess/Exposure.comp
 		PostProcess/Bloom.comp

@@ -54,7 +54,10 @@ to find a page or a field), the selected page on the right:
   but sharper sun shadows on displays of 1440 rows and more, 256 MiB of shadow maps per view instead of 64) or **Ultra**
   (sharper shadows everywhere, larger point and spot light shadows, finer levels of detail: for large GPUs), or
   **Custom** to set each value yourself (the shadow resolution, the number of cascades, the point and spot lights' shadow
-  atlas and largest tile, how many of those lights cast shadows, the level-of-detail error and the smallest size drawn).
+  atlas and largest tile, how many of those lights cast shadows, the level-of-detail error, the smallest size drawn and the
+  motion blur's samples: Low has none, Medium 8, High 12, Ultra 16, for scenes whose Post Process turns motion blur on).
+  Two rows are the same under every preset, for players' comfort and preference: **Anti-aliasing** (Scene: the Post
+  Process's method; or Off, FXAA, TAA) and **Motion blur** (Scene: as the Post Process says; Off: never).
   No setting draws below the screen's resolution, and a scene's look (its lights, Post Process and sky) stays the same.
   Exported games use it, and `<Game> --quality low` (or `medium`, `high`, `ultra`) plays one run at a preset without
   saving anything. The Scene view can draw at a preset of your own, for your computer alone, with

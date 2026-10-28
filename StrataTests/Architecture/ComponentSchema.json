@@ -1703,6 +1703,42 @@
 					"Speed": 0.0010000000474974513,
 					"Tooltip": "How far the glow reaches, as a fraction of the image height: the same share of the image at every resolution",
 					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Motion Blur",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "MotionBlur",
+					"Speed": 0.0,
+					"Tooltip": "Blurs what moves on screen over the shutter's share of each frame, as a film camera does; editor views never blur, and players can turn it off",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Motion Blur Shutter Angle",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 360.0,
+					"Min": 0.0,
+					"Name": "MotionBlurShutterAngle",
+					"Speed": 1.0,
+					"Tooltip": "How long the shutter stays open, in degrees of the frame: 180 blurs over half a frame's motion, as film cameras do; 0 none",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Motion Blur Max Length",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.05000000074505806,
+					"Min": 0.004999999888241291,
+					"Name": "MotionBlurMaxLength",
+					"Speed": 0.0010000000474974513,
+					"Tooltip": "The longest blur, as a fraction of the image height: 0.02 is 43 pixels at 2160 rows",
+					"Type": "Float"
 				}
 			]
 		},

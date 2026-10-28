@@ -49,6 +49,7 @@ layout(set = 0, binding = ST_CBV(0), std140) uniform TonemapConstants
 } u_Parameters;
 
 #define ST_COLOR_GRADING 1u
+#define ST_MOTION_BLUR_MASK 2u
 
 // Largest exposed value passed to the tone curves: far beyond where every curve saturates, small enough that their
 // intermediate products stay finite in 32-bit floats.
@@ -73,7 +74,7 @@ vec3 ExposeSceneColor(vec3 color)
 // four neighbors, in compressed luminance (L / (1 + L)), by an amount falling steeply with the five taps' range, bounded to
 // that range widened by the amount times the range (so thin lines, glints and fine texture can still sharpen) and below 1.
 // Only the luminance changes, so edges get no color fringes, and a black pixel stays black.
-vec3 Sharpen(vec3 color)
+vec3 Sharpen(vec3 color, float sharpening)
 {
 	ivec2 pixel = ivec2(gl_FragCoord.xy); // The viewport starts at 0, 0: fragments line up with the scene color's texels
 	ivec2 last = textureSize(sampler2D(u_SceneColor, u_PointSampler), 0) - 1;
@@ -95,7 +96,7 @@ vec3 Sharpen(vec3 color)
 		mean += 0.25 * neighbor;
 	}
 	float range = high - low;
-	float amount = u_Parameters.Sharpening * pow(1.0 - range, c_SharpeningContrastExponent);
+	float amount = sharpening * pow(1.0 - range, c_SharpeningContrastExponent);
 	float sharpened = clamp(center + amount * (center - mean), max(low - amount * range, 0.0), min(high + amount * range, 0.5 * (1.0 + high)));
 	if (centerLuminance <= 0.0)
 		return color;
@@ -171,9 +172,14 @@ void main()
 {
 	// Inf or NaN (from a broken input or an extreme exposure) would make every tone curve return NaN.
 	// The exposure multiplies luminance; the scene color is pre-exposed, so its factor is divided out (exactly).
-	vec3 color = ExposeSceneColor(texture(sampler2D(u_SceneColor, u_PointSampler), v_UV).rgb);
-	if (u_Parameters.Sharpening > 0.0)
-		color = min(Sharpen(color), vec3(c_MaxExposedValue));
+	vec4 source = texture(sampler2D(u_SceneColor, u_PointSampler), v_UV);
+	vec3 color = ExposeSceneColor(source.rgb);
+	// The motion blur's output holds 1 in alpha where it blurred: sharpening a blur would cut its streaks into steps.
+	float sharpening = u_Parameters.Sharpening;
+	if ((u_Parameters.ColorFlags & ST_MOTION_BLUR_MASK) != 0u)
+		sharpening *= 1.0 - clamp(source.a, 0.0, 1.0);
+	if (sharpening > 0.0)
+		color = min(Sharpen(color, sharpening), vec3(c_MaxExposedValue));
 	if (u_Parameters.BloomIntensity > 0.0)
 	{
 		// The bloom is already exposed. Without a threshold it holds all the light, and a small fraction of it
