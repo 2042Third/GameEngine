@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <optional>
 #include <set>
 #include <string>
 #include <system_error>
@@ -86,6 +87,7 @@ TEST_SUITE("Samples.Content")
 
 		std::set<std::string> listed;
 		std::vector<std::filesystem::path> directories;
+		std::vector<Tests::SampleBudgetClass> classes;
 		for (const nlohmann::json& sample : (*index)["Samples"])
 		{
 			const std::string name = sample.value("Directory", std::string());
@@ -93,7 +95,11 @@ TEST_SUITE("Samples.Content")
 			REQUIRE_FALSE(name.empty());
 			listed.insert(name);
 			directories.push_back(GetSamplesDirectory() / FileSystem::FromUTF8(name));
-			const std::vector<std::string> errors = Tests::CheckSampleContent(directories.back(), notices);
+			std::string budgetError;
+			const std::optional<Tests::SampleBudgetClass> budgetClass = Tests::ReadSampleBudgetClass(sample, &budgetError);
+			REQUIRE_MESSAGE(budgetClass, budgetError);
+			classes.push_back(*budgetClass);
+			const std::vector<std::string> errors = Tests::CheckSampleContent(directories.back(), notices, {}, *budgetClass);
 			for (const std::string& error : errors)
 				FAIL_CHECK(error);
 		}
@@ -110,8 +116,40 @@ TEST_SUITE("Samples.Content")
 				CHECK(listed.contains(name));
 			}
 		}
-		for (const std::string& total : Tests::CheckSamplesTotals(directories))
+		for (const std::string& total : Tests::CheckSamplesTotals(directories, {}, classes))
 			FAIL_CHECK(total);
+	}
+
+	TEST_CASE("A showcase sample may hold 80 MB of source assets and others 25 MB")
+	{
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("SampleShowcase");
+		// Samples.json's Budget: absent, "Showcase", or refused.
+		CHECK(Tests::ReadSampleBudgetClass(nlohmann::json { { "Directory", "A" } }) == Tests::SampleBudgetClass::Standard);
+		CHECK(Tests::ReadSampleBudgetClass(nlohmann::json { { "Budget", "Showcase" } }) == Tests::SampleBudgetClass::Showcase);
+		std::string error;
+		CHECK_FALSE(Tests::ReadSampleBudgetClass(nlohmann::json { { "Budget", "Huge" } }, &error));
+		CHECK(error.find("\"Huge\" is no budget class") != std::string::npos);
+		CHECK_FALSE(Tests::ReadSampleBudgetClass(nlohmann::json { { "Budget", 80 } }));
+
+		// 60 MB of source assets: over a standard sample's 25 MB, within a showcase's 80 MB, and over it at 81 MB.
+		const std::filesystem::path showcase = MakeValidSample(root / "Showcase");
+		WriteSizedFile(showcase / "Assets" / "Scans" / "Rock.png", 60'000'000);
+		CHECK(HasError(Tests::CheckSampleContent(showcase, c_Notices), "the source assets take 60.0 MB (at most 25.0 MB)"));
+		CHECK_FALSE(HasError(Tests::CheckSampleContent(showcase, c_Notices, {}, Tests::SampleBudgetClass::Showcase), "source assets take"));
+		WriteSizedFile(showcase / "Assets" / "Scans" / "Cliff.png", 21'000'000);
+		CHECK(HasError(Tests::CheckSampleContent(showcase, c_Notices, {}, Tests::SampleBudgetClass::Showcase),
+			"the source assets take 81.0 MB (at most 80.0 MB)"));
+
+		// The showcase's binaries count against their own total: the others' 55 MB is not loosened.
+		const std::filesystem::path standard = MakeValidSample(root / "Standard");
+		WriteSizedFile(standard / "Assets" / "Pack" / "Big.png", 20'000'000);
+		const std::vector<std::filesystem::path> both = { showcase, standard };
+		CHECK(Tests::CheckSamplesTotals(both, {}, { Tests::SampleBudgetClass::Showcase, Tests::SampleBudgetClass::Standard }).empty());
+		CHECK(HasError(Tests::CheckSamplesTotals(both), "the samples' binary files take 101.0 MB (at most 55.0 MB)"));
+		// 81 MB of scans and the picture, then 4 MB more: over the showcases' 85 MB.
+		WriteSizedFile(showcase / "Assets" / "Scans" / "Sand.png", 4'000'000);
+		CHECK(HasError(Tests::CheckSamplesTotals(both, {}, { Tests::SampleBudgetClass::Showcase, Tests::SampleBudgetClass::Standard }),
+			"the showcase samples' binary files take 85.0 MB (at most 85.0 MB)"));
 	}
 
 	TEST_CASE("A sample that follows every rule passes")

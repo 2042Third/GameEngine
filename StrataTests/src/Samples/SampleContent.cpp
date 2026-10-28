@@ -1,8 +1,10 @@
 #include "Samples/SampleContent.h"
 
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/StringUtils.h"
 
+#include <nlohmann/json.hpp>
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
@@ -244,7 +246,20 @@ namespace Strata::Tests
 		return std::find(c_BinaryExtensions.begin(), c_BinaryExtensions.end(), extension) != c_BinaryExtensions.end();
 	}
 
-	std::vector<std::string> CheckSampleContent(const std::filesystem::path& directory, const std::string& notices, const SampleBudgets& budgets)
+	std::optional<SampleBudgetClass> ReadSampleBudgetClass(const nlohmann::json& entry, std::string* outError)
+	{
+		const nlohmann::json* budget = JsonUtils::Find(entry, "Budget");
+		if (!budget)
+			return SampleBudgetClass::Standard;
+		if (budget->is_string() && budget->get_ref<const std::string&>() == "Showcase")
+			return SampleBudgetClass::Showcase;
+		if (outError)
+			*outError = fmt::format("the budget {} is no budget class (leave it out, or \"Showcase\")", budget->dump());
+		return std::nullopt;
+	}
+
+	std::vector<std::string> CheckSampleContent(const std::filesystem::path& directory, const std::string& notices, const SampleBudgets& budgets,
+		SampleBudgetClass budgetClass)
 	{
 		std::vector<std::string> errors;
 		for (const char* required : { "README.md", "CREDITS.md", "Picture.png" })
@@ -330,8 +345,9 @@ namespace Strata::Tests
 				errors.push_back(fmt::format("the source '{}' of '{}' is not in ThirdPartyNotices.md's \"Sample assets\" table", url, row.Files));
 		}
 
-		if (sourceBytes > budgets.SourceAssetBytes)
-			errors.push_back(fmt::format("the source assets take {} (at most {})", FormatMB(sourceBytes), FormatMB(budgets.SourceAssetBytes)));
+		const uint64_t sourceBudget = budgetClass == SampleBudgetClass::Showcase ? budgets.ShowcaseSourceAssetBytes : budgets.SourceAssetBytes;
+		if (sourceBytes > sourceBudget)
+			errors.push_back(fmt::format("the source assets take {} (at most {})", FormatMB(sourceBytes), FormatMB(sourceBudget)));
 		if (documentBytes > budgets.DocumentBytes)
 			errors.push_back(fmt::format("the documents take {} (at most {})", FormatMB(documentBytes), FormatMB(budgets.DocumentBytes)));
 		if (screenshots > budgets.MaxScreenshots)
@@ -341,18 +357,31 @@ namespace Strata::Tests
 		return errors;
 	}
 
-	std::vector<std::string> CheckSamplesTotals(const std::vector<std::filesystem::path>& directories, const SampleBudgets& budgets)
+	std::vector<std::string> CheckSamplesTotals(const std::vector<std::filesystem::path>& directories, const SampleBudgets& budgets,
+		const std::vector<SampleBudgetClass>& classes)
 	{
 		uint64_t binaryBytes = 0;
+		uint64_t showcaseBinaryBytes = 0;
 		uint64_t documentBytes = 0;
-		for (const std::filesystem::path& directory : directories)
+		for (size_t index = 0; index < directories.size(); index++)
 		{
-			for (const SampleFile& file : ListFiles(directory))
-				(IsSampleBinaryFile(FileSystem::FromUTF8(file.Path)) ? binaryBytes : documentBytes) += file.Size;
+			const bool showcase = index < classes.size() && classes[index] == SampleBudgetClass::Showcase;
+			for (const SampleFile& file : ListFiles(directories[index]))
+			{
+				if (!IsSampleBinaryFile(FileSystem::FromUTF8(file.Path)))
+					documentBytes += file.Size;
+				else
+					(showcase ? showcaseBinaryBytes : binaryBytes) += file.Size;
+			}
 		}
 		std::vector<std::string> errors;
 		if (binaryBytes > budgets.TotalBinaryBytes)
 			errors.push_back(fmt::format("the samples' binary files take {} (at most {})", FormatMB(binaryBytes), FormatMB(budgets.TotalBinaryBytes)));
+		if (showcaseBinaryBytes > budgets.ShowcaseTotalBinaryBytes)
+		{
+			errors.push_back(fmt::format("the showcase samples' binary files take {} (at most {})", FormatMB(showcaseBinaryBytes),
+				FormatMB(budgets.ShowcaseTotalBinaryBytes)));
+		}
 		if (documentBytes > budgets.TotalDocumentBytes)
 			errors.push_back(fmt::format("the samples' documents take {} (at most {})", FormatMB(documentBytes), FormatMB(budgets.TotalDocumentBytes)));
 		return errors;
