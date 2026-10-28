@@ -391,6 +391,7 @@ namespace Strata
 
 	void PerformancePanel::UpdateTableRows()
 	{
+		m_TableBuilds++;
 		const FrameProfileSummary& summary = *m_Summary;
 		const auto makeRow = [](TableRow::SwatchColor swatch, FrameStageID stage, std::string name, const FrameTimeStats& time, bool secondary)
 		{

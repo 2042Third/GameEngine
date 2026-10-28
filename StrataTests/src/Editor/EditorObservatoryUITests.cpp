@@ -734,6 +734,35 @@ TEST_SUITE("Editor.UI")
 		CHECK(panel.GetSummary()->Frames == 1);
 	}
 
+	TEST_CASE("The Performance panel makes its stage table with its statistics, not in every frame it draws")
+	{
+		// The table of every registered stage formats about a hundred numbers: in every frame, that was most of the panel's
+		// frame (Perf.EditorPanels.Performance600FramesP95).
+		ImGuiHarness harness;
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		EditorCommandRunner runner;
+		EditorPanelContext panelContext { context, commands, runner };
+		FrameProfiler& profiler = FrameProfiler::Get();
+		profiler.Reset();
+		for (int frame = 0; frame < 10; frame++)
+		{
+			profiler.BeginFrame();
+			profiler.EndFrame(0.001);
+		}
+		PerformancePanel panel;
+		// The harness's frames are ImGuiHarness::c_DeltaTime apart: these all lie within the first refresh interval.
+		const int framesPerRefresh = static_cast<int>(PerformancePanel::c_SummaryRefreshSeconds / ImGuiHarness::c_DeltaTime);
+		REQUIRE(framesPerRefresh > 4);
+		DrawPanel(harness, panel, panelContext, ImVec2(800.0f, 600.0f), framesPerRefresh - 2);
+		REQUIRE(panel.GetSummary());
+		CHECK(panel.GetSummary()->Frames == 10);
+		CHECK(panel.GetTableBuildCount() == 1);
+		// The interval passes in these: the statistics and the rows are made again, once.
+		DrawPanel(harness, panel, panelContext, ImVec2(800.0f, 600.0f), 4);
+		CHECK(panel.GetTableBuildCount() == 2);
+	}
+
 	TEST_CASE("The harness counts glyphs a font lacks")
 	{
 		// The check the panels' tests rely on: an icon drawn in the monospaced font (which has none) is its fallback glyph.

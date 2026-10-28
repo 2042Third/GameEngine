@@ -39,6 +39,8 @@ namespace Strata
 		const JobSystemStats& GetJobStats() const { return m_Jobs; }
 		// The statistics the panel shows (computed when it was last drawn, at most c_SummaryRefreshSeconds ago).
 		const std::optional<FrameProfileSummary>& GetSummary() const { return m_Summary; }
+		// How many times the stage table's rows were made: with the statistics, not in every frame drawn (tests).
+		uint64_t GetTableBuildCount() const { return m_TableBuilds; }
 		// The color of a stage in the timeline (a categorical palette of the theme's tokens); the untimed rest has its own.
 		static const ImVec4& GetStageColor(FrameStageID stage);
 		static const ImVec4& GetUntimedColor();
@@ -92,6 +94,7 @@ namespace Strata
 		// The stage table of m_Summary: the frame's totals and the CPU's stages, and the GPU section (shown with the GPU).
 		std::vector<TableRow> m_CPURows;
 		std::vector<TableRow> m_GPURows;
+		uint64_t m_TableBuilds = 0;
 		double m_LastSummaryTime = -1.0;
 		bool m_Copied = false;
 		double m_CopiedTime = 0.0;
