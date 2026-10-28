@@ -475,6 +475,26 @@ TEST_SUITE("Scene.Serialization")
 		loaded = load({ { "ScreenSpaceReflectionsIntensity", 3.0 }, { "ScreenSpaceReflectionsMaxRoughness", -1.0 } }, warnings);
 		CHECK(loaded.ScreenSpaceReflectionsIntensity == 1.0f);
 		CHECK(loaded.ScreenSpaceReflectionsMaxRoughness == 0.0f);
+
+		// Ambient occlusion's multi-bounce: on in every file saved before it (0.6.0's), without a warning; off round-trips.
+		warnings.clear();
+		loaded = load({ { "AmbientOcclusion", true }, { "AmbientOcclusionRadius", 0.5 }, { "AmbientOcclusionIntensity", 1.0 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.AmbientOcclusionMultiBounce);
+		CHECK(PostProcessComponent().AmbientOcclusionMultiBounce);
+		loaded = load({ { "AmbientOcclusion", true }, { "AmbientOcclusionMultiBounce", false } }, warnings);
+		CHECK(warnings.empty());
+		CHECK_FALSE(loaded.AmbientOcclusionMultiBounce);
+		Scene saved;
+		Entity post = saved.CreateEntity("Post");
+		post.AddComponent<PostProcessComponent>().AmbientOcclusionMultiBounce = false;
+		const nlohmann::json document = SceneSerializer::Serialize(saved);
+		Scene reloaded;
+		std::string error;
+		REQUIRE_MESSAGE(SceneSerializer::Deserialize(reloaded, document, &error), error);
+		Entity copy = reloaded.GetEntityByUUID(post.GetUUID());
+		REQUIRE(copy);
+		CHECK_FALSE(copy.GetComponent<PostProcessComponent>().AmbientOcclusionMultiBounce);
 	}
 
 	TEST_CASE("Directional lights saved before cascade blending load with the default blend; invalid blends are clamped or warn")
