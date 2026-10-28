@@ -20,10 +20,11 @@ using namespace Strata::Tests::TAA;
 namespace
 {
 
-	// The ambient occlusion's noise turns every frame with TAA, and the history smooths the shading: the converged penumbra's
-	// roughness stays below `bound` times one frame's under `preset`; `custom` (when set) is the look, under Custom. The sun's
-	// shadow needs no history (Include/Shadows.glsl, GPU.SceneRenderer.ShadowFilter and .ScreenShadows: the same in every frame,
-	// its disk's grain blurred in the frame), so what the history averages is the occlusion's turn and the jitter's.
+	// The local lights' shadow filter and the ambient occlusion turn their noise every frame with TAA, and the history smooths
+	// it: the converged penumbra's roughness stays below `bound` times one frame's under `preset`; `custom` (when set) is the
+	// look, under Custom. The penumbra is a shadowed spot light's (Include/LocalShadows.glsl turns its taps by
+	// TemporalParams.z): the sun's shadow has no noise left to turn (Include/Shadows.glsl, GPU.SceneRenderer.ShadowFilter and
+	// .ScreenShadows: the same in every frame, its disk's grain blurred in the frame), so it would measure nothing.
 	void CheckNoiseSmoothed(TemporalAntiAliasingPreset preset, const TemporalAntiAliasingSettings* custom, double bound)
 	{
 		GPUContext gpu;
@@ -35,18 +36,26 @@ namespace
 		if (custom)
 			SetTemporalAntiAliasingSettings(postProcess, *custom);
 		postProcess.AmbientOcclusion = true;
-		postProcess.Exposure = -2.0f;
-		Entity sun = AddSun(scene, glm::normalize(glm::vec3(-0.3f, -1.0f, 0.0f)), 1.0f);
-		sun.GetComponent<DirectionalLightComponent>().ShadowSoftness = 6.0f; // A wide penumbra
 		Entity ground = AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f), "Ground");
 		ground.GetComponent<TransformComponent>().Scale = glm::vec3(30.0f);
-		// A roof above the camera (seen from below it is culled) whose shadow's edge crosses the view, and a box in the
-		// penumbra whose contact with the ground the ambient occlusion darkens.
+		// A roof above the camera (seen from below it is culled) whose shadow's edge crosses the view at x = -2 under a spot
+		// light above it pointing down, with the widest filter (a penumbra of about 16 of its texels), and a box in the shadow
+		// whose contact with the ground the ambient occlusion darkens.
 		Entity roof = AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(5.0f, 4.0f, 0.0f), "Roof");
 		roof.GetComponent<TransformComponent>().Scale = glm::vec3(10.0f);
+		Entity spot = scene.CreateEntity("Spot");
+		spot.GetComponent<TransformComponent>().Translation = glm::vec3(1.0f, 6.0f, 0.0f);
+		spot.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::vec3(0.0f, -1.0f, 0.0f));
+		SpotLightComponent& light = spot.AddComponent<SpotLightComponent>();
+		light.Intensity = 200.0f;
+		light.Range = 30.0f;
+		light.InnerConeAngle = 55.0f;
+		light.OuterConeAngle = 60.0f;
+		light.CastShadows = true;
+		light.ShadowFilterRadius = PointLightComponent::c_MaxShadowFilterRadius;
 		AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(-1.2f, 0.25f, 1.0f), "Box").GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
 		const SceneCamera camera = OrthographicLookAt(glm::vec3(-1.2f, 3.0f, 0.0f), glm::vec3(-1.2f, 0.0f, 0.0f), 4.0f);
-		SceneRenderer renderer = CreateRenderer("Noise");
+		SceneRenderer renderer = CreateRenderer("Noise", GPUDrivenMode::Off, true, false); // The spot's shadow without its fade-in
 		renderer.SetViewportSize(c_Size, c_Size);
 
 		// Luminance of the ground's pixels away from other surfaces (no geometric edge in their neighborhood); NaN elsewhere.
@@ -99,6 +108,13 @@ namespace
 			REQUIRE(Renderer::ReadTexture(renderer.GetAmbientOcclusionTexture(), image));
 			return image.Pixels;
 		};
+
+		// The spot light's shadow view is drawn in the first frames: the history starts again once it is (with the noise's turn).
+		for (int frame = 0; frame < 30 && (frame == 0 || renderer.GetStats().LocalShadowViewsPending > 0); frame++)
+			REQUIRE(renderer.Render(scene, camera));
+		REQUIRE(renderer.GetStats().LocalShadowViewsPending == 0);
+		REQUIRE(renderer.GetStats().LocalShadowLights == 1);
+		renderer.ResetHistory();
 
 		// Frames 1 and 9 have the same jitter phase: only the noise's turn tells them apart.
 		std::vector<float> first;
@@ -505,22 +521,22 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("With TAA the ambient occlusion's noise turns every frame, and the history smooths the shading")
+	TEST_CASE("With TAA the local lights' shadows' and the ambient occlusion's noise turns every frame, and the history smooths it")
 	{
-		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Original, nullptr, 0.9);
+		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Original, nullptr, 0.5);
 	}
 
-	TEST_CASE("Variance clipping keeps the history smoothing the shading")
+	TEST_CASE("Variance clipping keeps the history smoothing the local lights' shadows' and the ambient occlusion's noise")
 	{
 		TemporalAntiAliasingSettings settings = c_TAAOriginalSettings;
 		settings.HistoryClamp = TemporalHistoryClamp::Variance;
 		settings.ClipWidth = 1.25f;
-		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Custom, &settings, 0.9);
+		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Custom, &settings, 0.6);
 	}
 
-	TEST_CASE("Sharp keeps the history smoothing the shading")
+	TEST_CASE("Sharp keeps the history smoothing the local lights' shadows' and the ambient occlusion's noise")
 	{
-		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Sharp, nullptr, 0.9);
+		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Sharp, nullptr, 0.6);
 	}
 
 	TEST_CASE("Both paths resolve the same image over sixteen frames of a moving scene")

@@ -22,12 +22,15 @@ namespace Strata::Tests::TAA
 		return mode == GPUDrivenMode::Off ? "CPU path" : "GPU-driven path";
 	}
 
-	inline SceneRenderer CreateRenderer(const char* name, GPUDrivenMode mode = GPUDrivenMode::Off, bool temporal = true)
+	// `spreadLighting`: SceneRendererSpecification::SpreadLightingUpdates (off: a shadowed point or spot light casts at full
+	// strength from the frame its views are drawn, without fading in).
+	inline SceneRenderer CreateRenderer(const char* name, GPUDrivenMode mode = GPUDrivenMode::Off, bool temporal = true, bool spreadLighting = true)
 	{
 		SceneRendererSpecification specification;
 		specification.TextureStreaming = false;
 		specification.GPUDriven = mode;
 		specification.TemporalAntiAliasing = temporal;
+		specification.SpreadLightingUpdates = spreadLighting;
 		specification.DebugName = name;
 		// The cases compare a history's frames with each other and with renderers without the jitter: the sun's cascades must not
 		// follow readbacks of the jittered depth (GPU.SceneRenderer.ShadowFit covers the fit with temporal anti-aliasing).
