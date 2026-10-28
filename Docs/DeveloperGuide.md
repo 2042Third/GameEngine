@@ -3571,10 +3571,14 @@ lights, Post Process and the sky), and never a resolution below the output's.
   prepass, from its D32 depth (the camera-relative position through the frame's jittered `InverseViewProjection`: the
   point the forward pass shades) and its geometric normal (RG16F octahedral, view space), into target A (RG8: red the
   square root of the visibility, so the 8 bits are spent near the umbra where a step would show; green the pixel's blur
-  radius over `c_ScreenShadowMaxBlurPixels`, 8): no radius where the tent alone filtered (lit, umbra, narrow penumbrae),
-  0.35 of the penumbra's half-width in pixels where the disk did (enough for the blue noise's grain, the penumbra widens
-  by about 6%). `Effects/ScreenShadowsBlur.frag` then blurs A into B horizontally and B into A vertically, a Gaussian
-  whose taps are weighted by their distance from the pixel's plane (1% of its view distance: exact for a plane at any
+  radius over `c_ScreenShadowMaxBlurPixels`, 8): no radius where the filter left early (lit, umbra), 0.35 of the
+  penumbra's half-width in pixels where the disk did (enough for the blue noise's grain, the penumbra widens by about 6%),
+  and where the tent left an edge partly lit on a receiver the light grazes (`|n.L|` under 0.5: a texel's step across the
+  light slides along its plane by `1 / |n.L|`, at least twice, while the tent smooths a step over a texel and a half of
+  the light's image) and a stretched texel covers more than 1.5 screen pixels (`ReceiverTexelPixels`), that footprint, at
+  most 8 pixels, which takes the texels' stair steps (saw teeth under the Open World's pine tiers).
+  `Effects/ScreenShadowsBlur.frag` then blurs A into B horizontally and B into A vertically, a Gaussian whose taps are
+  weighted by their distance from the pixel's plane (1% of its view distance: exact for a plane at any
   angle, nothing from another surface, so no light crosses a silhouette) and by their normals' agreement; it averages
   visibility, not its encoding, and pixels without a radius keep their value exactly. `Forward.frag`'s opaque variants
   read A at SRV 28 (white without a mask: visibility 1). The targets (33 MB at 3840x2160) are made by the first frame with

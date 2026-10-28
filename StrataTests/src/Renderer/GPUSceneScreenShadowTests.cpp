@@ -284,6 +284,62 @@ TEST_SUITE("GPU.SceneRenderer.ScreenShadows")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Hard edges on a receiver the sun grazes show no stair steps of the shadow map's texels")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		// A beam 0.5 m over the floor under a sun 12 degrees high from +X, turned 5 degrees about the vertical: its shadow's edge
+		// crosses the light's texel rows once every 55 texels along it, and the grazing light stretches each of those steps 4.8
+		// times across the edge (2.3 cm: 6 pixels of the camera, which looks straight down at the edge over 1 m). A point light's
+		// hard edge (softness 0) takes the fixed tent alone, which spreads a step over only a texel and a half along the edge (2
+		// rows of pixels): stairs, saw teeth where edges slant more.
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(40.0f);
+		Entity beam = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(2.5f, 0.5f, 0.0f), "Beam");
+		beam.GetComponent<TransformComponent>().Scale = glm::vec3(0.3f, 0.3f, 8.0f);
+		beam.GetComponent<TransformComponent>().Rotation = glm::angleAxis(glm::radians(5.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		Entity sun = AddSun(scene, SunDirection(12.0f, 0.0f), 3.0f);
+		sun.GetComponent<DirectionalLightComponent>().ShadowDistance = 20.0f;
+		sun.GetComponent<DirectionalLightComponent>().ShadowSoftness = 0.0f;
+		const SceneCamera camera = OrthographicLookAt(glm::vec3(1.0f, 1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), 1.0f);
+		SceneRenderer renderer(MaskSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SunlightImage sunlight = RenderSunlight(renderer, scene, camera, sun);
+
+		// Per row, where the sun's share rises through a half (the shadow lies toward -X: the image's left); the edge's own slant
+		// is the rows' median step, and a stair step shows as a row whose crossing jumps from the one before.
+		std::vector<double> crossings;
+		for (uint32_t y = 8; y + 8 < c_Size; y++)
+		{
+			std::vector<double> row(c_Size);
+			for (uint32_t x = 0; x < c_Size; x++)
+				row[x] = sunlight.At(x, y);
+			double crossing = -1.0;
+			for (uint32_t x = 1; x < c_Size && crossing < 0.0; x++)
+			{
+				if (row[x - 1] < 0.5 && row[x] >= 0.5)
+					crossing = static_cast<double>(x - 1) + (0.5 - row[x - 1]) / (row[x] - row[x - 1]);
+			}
+			REQUIRE(crossing > 8.0);
+			REQUIRE(crossing < static_cast<double>(c_Size) - 8.0);
+			crossings.push_back(crossing);
+		}
+		std::vector<double> steps;
+		for (size_t index = 1; index < crossings.size(); index++)
+			steps.push_back(crossings[index] - crossings[index - 1]);
+		std::vector<double> sorted = steps;
+		std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
+		const double slant = sorted[sorted.size() / 2];
+		double largest = 0.0;
+		for (const double step : steps)
+			largest = std::max(largest, std::abs(step - slant));
+		MESSAGE("Largest jump of the edge between rows: ", largest, " pixels (slant ", slant, " per row)");
+		CHECK(largest <= 1.25);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The mask is drawn only for a shadowed sun")
 	{
 		GPUContext gpu;
