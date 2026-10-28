@@ -134,8 +134,8 @@ namespace Strata
 		AnimationEditPose EditPose = AnimationEditPose::Rest;
 		// What the Scene view draws the editor camera with (ResolveViewportQuality): the project's Graphics Quality, or a
 		// preset of this editor's for the view, the person's machine apart from the project's choice. The Game view and the
-		// scene's camera always draw at the project's, also in the Scene view ("Game camera", the canvas mode:
-		// GetSceneViewQuality).
+		// scene's camera always draw at the game's quality (EditorContext::GetGameQuality: the project's, with the players'
+		// options while playing), also in the Scene view ("Game camera", the canvas mode: GetSceneViewQuality).
 		ViewportQuality Quality = ViewportQuality::Project;
 
 		nlohmann::json ToJson() const;

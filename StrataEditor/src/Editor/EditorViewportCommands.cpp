@@ -227,7 +227,9 @@ namespace Strata
 			bool WaitForAssets = true;
 			std::optional<bool> Overlays;
 			std::optional<ViewportDebugView> DebugView; // Unset: the viewport's
-			std::optional<ViewportQuality> Quality;     // Unset: the view's (the Scene view's setting, the project's for the scene's camera)
+			// Unset: the view's (the Scene view's setting; for the scene's camera the game's quality, EditorContext::GetGameQuality:
+			// the project's, with the players' options while playing)
+			std::optional<ViewportQuality> Quality;
 			std::filesystem::path Path; // Empty: the image is only returned
 			bool Overwrite = false;
 		};

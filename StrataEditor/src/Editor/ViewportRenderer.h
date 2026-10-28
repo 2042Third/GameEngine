@@ -118,8 +118,9 @@ namespace Strata
 
 		// Renders into the output texture at `size` (render targets are recreated only when the size changes) at `quality`
 		// (SceneRenderer::SetQuality, applied after the size, so Auto resolves for the image's rows): the Scene view's
-		// ResolveViewportQuality(settings.Quality), the project's for the Game view and the project's picture, the request's
-		// for captures. Returns false when nothing was rendered: a zero size, or a failure the scene renderer logged.
+		// GetSceneViewQuality, the game's for the Game view (EditorContext::GetGameQuality), the project's for the project's
+		// picture, the request's for captures. Returns false when nothing was rendered: a zero size, or a failure the scene
+		// renderer logged.
 		bool Render(EditorContext& context, const glm::uvec2& size, const ViewportView& view, const ViewportSettings& settings, bool overlays,
 			const RendererQualitySettings& quality);
 
