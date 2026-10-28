@@ -645,12 +645,34 @@ Open items and deferrals later waves own:
 - Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
   `GameRuntime`, the editor and many tests use the script engine directly; physics, audio and animation can be left
   out (`STRATA_WITH_PHYSICS`, `STRATA_WITH_AUDIO`, `STRATA_WITH_ANIMATION`, wave 4's `engine-modules`).
+- Physics at runtime (wave 7's `physics-runtime`, steps 1-3 and the first item of 4 landed): the step's parts, box3d's
+  stages and counters, sleeping bodies and how bodies settle are measured (`physics.stats`, `editor.status`, the perf log,
+  the Streaming panel); the project's `Physics.Simulation` tunes recycling, sleeping and the contacts (defaults: box3d's 5
+  cm, a sleep threshold of 0.08 m/s); character controllers and kinematic bodies never recycle; contacts nobody tracks cost
+  no lookups. Not done, measured as far as the loaded machine allowed: poses written back from box3d's move events (built
+  and tested, no gain an A/B of the loaded machine could resolve: the patch waits in the stream's report), the
+  write-back's prelude in parallel, box3d's worker rule (the sweep's `workers` command is ready), the characters' prelude,
+  the per-record pair count of tracked scenes, the unload's Strata share against box3d's 5.3 ms, `Perf.Physics.Sleeping70k`
+  and the settle CPU metrics, then what lay below the cut: the scene's world matrices from physics, rolling resistance,
+  deferred removal of an unloading cell's statics, a per-scene override of `Physics.Simulation`, and upstream requests to
+  box3d (a settable recycle angle, a run-time reserve, bulk insertion and removal). The sweep found too: 1 m tiles bump
+  sliding boxes and rolling balls at their inner edges (44 mm at 2 m/s, 630 mm at 8 m/s, with or without recycling), which
+  a merged floor or a triangle mesh avoids; the throwaway build of box3d with another recycle angle was not made.
 - Physics: dynamic bodies below other dynamic bodies are still written back one by one; a collider built from a mesh
   that is reimported while evicted keeps the old data until the mesh loads again (the source revisions render-scene uses
   would tell).
 - Physics on box3d (wave 5's `physics-box3d`): creating and removing many bodies costs about three times Jolt's time,
   because box3d inserts every shape into its trees one at a time on the main thread (the numbers are in the reference
-  machine's list below), and Strata's own part of it grew with allocations per body. The owner left it as it is on
+  machine's list below), and Strata's own part of it grew with allocations per body. Wave 7's `physics-runtime` measured
+  box3d alone beside each metric (`*.LibraryOnly`, 2026-10-28, the reference machine with its temporary memory and other
+  builds running, so both shares about 1.3 to 1.6 times the campaign's): `Create10kBodies` 19.1 ms of which box3d's 10.3;
+  `Create100kStaticBodies` 214-259 ms of which 128.9; the `Grow65kMaxFrame` frame 198-220 ms of which box3d's 102.8 in a
+  world reserved for 65,536 and 90.7 in one reserved for 131,072 (the growth's 12 ms lies within the 30 ms spread of five
+  worlds: `Grow65k.GrowthMs` is within noise); the unload's request frame 16-29 ms of which box3d's 25,000 disables 5.3.
+  The owner on 2026-10-27: "I don't think physics object creation performance is a big deal. But i care about runtime
+  performance", so creation was not optimized in wave 7; the way down stays bulk insertion in box3d (an upstream change
+  and a later bump) and fewer allocations per body in Strata, and the unload's Strata share (Strata's removal work over
+  box3d's 5.3 ms) is the runtime item left (below). The owner left it as it is on
   2026-10-20 ("creation speed is not too important") after a check found no easy fix: bodies created disabled pay the
   tree insert when enabled (12-15 ms per 25,000 either way); creating a streamed cell's statics across frames with a
   filter that collides with nothing but keeps their category, then setting the real filter without a pair search at

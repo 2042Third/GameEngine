@@ -464,6 +464,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   other way is the owner's: a cost the owner accepted by name is re-baselined once the same way, with the ruling as its
   reason and its old `Measured` kept as its `Target` (`Perf.Physics.Create10kBodies`, slower since wave 5 moved to box3d
   at the owner's request: "I don't think physics object creation performance is a big deal", 2026-10-27).
+  Metrics of the physics library alone (`*.LibraryOnly`, `Perf.Physics.Grow65k.GrowthMs`: box3d called directly, as
+  `Physics.Box3D` does, for the work of `Create10kBodies`, `Create100kStaticBodies`, the `Grow65kMaxFrame` frame and the
+  25,000 removals of `Perf.World.CellUnloadMaxFrame`) split those metrics into box3d's share and Strata's; the roadmap's
+  open items keep the split.
   `--propose-budgets` (with `--results <runs>`) applies the rules to kept runs (at least three valid ones: the canary
   within 1.10 of its reference, the machine at most 30% busy) and writes the proposed `Budgets.json`: provisional entries
   get `Measured` (the median) and `Budget` (1.5 times it, or their `Target` when every run met it), cheaper ones (below
