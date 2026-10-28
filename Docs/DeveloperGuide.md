@@ -3721,12 +3721,19 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     `round(16 (0.25 + 0.75 exp(-r^2 / (2 * 0.25^2))))` (4 to 16), r its distance from the image's center in image heights:
     the middle third decides, the edges count a quarter. The window's percentiles are properties (high - low at least
     0.02).
-  - The key (`AutoExposureKey`, 0.12): `k = clamp(key * (a - log2(L_ref)), -2, +1)` stops, `L_ref = Luminance(sun) * 0.18 /
-    pi` the luminance of a gray card facing the frame's directional light as `Forward.frag` lights it (the atmosphere's
-    transmittance and the editor's preview sun included); none without a directional light. A sunlit exterior meters
-    near the card (k near 0); an interior five stops below it shows 0.6 stops darker; a night lit by the moon is not darkened
-    by it (`Exposure` does that). It is scene-relative, so it works in dim units and in real ones; interiors darken only as
-    far as their light is darker (sky light reaches into closed rooms until it is occluded).
+  - The key (`AutoExposureKey`, 0.12): `k = clamp(key * (a - log2(L_ref)), -2, 0)` stops (`c_ExposureKeyMinStops`,
+    `c_ExposureKeyMaxStops`), `L_ref = Luminance(sun) * 0.18 / pi` the luminance of a gray card facing the frame's
+    directional light as `Forward.frag` lights it (the atmosphere's transmittance and the editor's preview sun
+    included); none without a directional light. A sunlit exterior meters near the card (k near 0); an interior five
+    stops below it shows 0.6 stops darker; a night lit by the moon is not darkened by it (`Exposure` does that). It is
+    scene-relative, so it works in dim units and in real ones; interiors darken only as far as their light is darker
+    (sky light reaches into closed rooms until it is occluded).
+  - The key never brightens. The card measures the directional light alone, so a scene metering above it is lit by more
+    than the sun: an overcast sky (a 1,500 lux sun under 7,700 lux of sky meters 2.6 stops above its card), the sky and
+    the lamps of a dusk whose sun fades out (the card falls toward nothing while the scene keeps its light), a night's
+    own lights. Brightening those would show an overcast day lighter than a sunny one and dusk lighter than the
+    afternoon, and jump when the light reached 0 (no card, no key); with the range ending at 0 the key stays 0 through
+    all of it. A scene that is bright in the sun (snow) takes a positive `Exposure`, as a photographer compensates.
   - The exposure buffer holds the metered log2 luminance, the multiplier and the key's stops (`c_ExposureKeyStops`); the
     readback copies all three: `SceneRendererStats::ExposureLog2Luminance`, `ExposureKeyStops` (frames late, unset with
     manual exposure) and `ExposureKeyReferenceLog2` (the frame's card), reported by `renderStats.exposure` (`ev100`,

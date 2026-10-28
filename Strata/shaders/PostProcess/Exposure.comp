@@ -6,7 +6,8 @@
 
 // Automatic exposure: the average log2 luminance of the histogram (ignoring the darkest and brightest pixels), clamped to
 // the allowed range, adapts over time (faster toward brighter scenes than toward darker ones, as eyes do) and is mapped to
-// middle gray, offset by the exposure key: a scene that meters below the sun's gray card shows darker, one above it brighter.
+// middle gray, offset by the exposure key: a scene that meters below the sun's gray card shows darker (one above it is not
+// brightened: RenderData::c_ExposureKeyMaxStops).
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 

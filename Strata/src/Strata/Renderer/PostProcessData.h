@@ -176,10 +176,12 @@ namespace Strata
 		static_assert(sizeof(ExposureParameters) == 64);
 		static_assert(offsetof(ExposureParameters, Compensation) == 16 && offsetof(ExposureParameters, KeyStrength) == 32);
 		static_assert(offsetof(ExposureParameters, MeteringAspect) == 48);
-		// The exposure key's range in stops: a scene metering below the sun's gray card shows at most this much darker, one
-		// above it at most this much brighter.
+		// The exposure key's range in stops: a scene metering below the sun's gray card shows at most this much darker. It never
+		// brightens: a scene above the card is lit by more than the directional light (an overcast or dusk sky, lamps after
+		// sunset, the night's own lights), which the card does not measure, and brightening it would show it lighter than a
+		// sunny day; a bright scene in the sun (snow) takes a positive Exposure, as a photographer compensates.
 		constexpr float c_ExposureKeyMinStops = -2.0f;
-		constexpr float c_ExposureKeyMaxStops = 1.0f;
+		constexpr float c_ExposureKeyMaxStops = 0.0f;
 
 		// PostProcess/Bloom.comp's modes, and the most levels its chain allocates (every level down to 4 pixels: a frame uses
 		// as many as PostProcessComponent::BloomRadius asks for, so a change of the radius never reallocates).

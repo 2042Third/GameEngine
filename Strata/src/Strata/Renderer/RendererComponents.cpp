@@ -514,8 +514,8 @@ namespace Strata
 					"tunnel; 0 jumps at once"))
 			.Property("AutoExposureKey", &PostProcessComponent::AutoExposureKey,
 				WithTooltip(Range(0.0f, 0.5f, 0.01f), "How much a scene's brightness against a gray card in the sun shows: 0 meters every scene to "
-					"middle gray; 0.12 shows an interior 5 stops below the sun's card 0.6 stops darker (at most 2 darker, 1 brighter). Needs a "
-					"directional light"))
+					"middle gray; 0.12 shows an interior 5 stops below the sun's card 0.6 stops darker (at most 2); scenes above the card are not "
+					"brightened. Needs a directional light"))
 			.Property("BloomRadius", &PostProcessComponent::BloomRadius,
 				WithTooltip(Range(0.01f, 0.25f, 0.001f), "How far the glow reaches, as a fraction of the image height: the same share of the image "
 					"at every resolution"))

@@ -324,9 +324,10 @@ namespace Strata
 		float AutoExposureLowPercentile = 0.1f;
 		float AutoExposureHighPercentile = 0.9f;
 		float AutoExposureLightSpeed = 3.0f; // Per second, toward brighter scenes (eyes leaving a tunnel); 0 = instantly
-		// The exposure key: the metered average's stops from the luminance of a gray card facing the scene's directional light,
-		// times this, darken (or brighten) the image within [-2, +1] stops, so interiors read darker than sunlight as far as their
-		// light is darker. 0 meters every scene to middle gray; without a directional light there is no key.
+		// The exposure key: the metered average's stops below the luminance of a gray card facing the scene's directional light,
+		// times this, darken the image by up to 2 stops, so interiors read darker than sunlight as far as their light is darker;
+		// a scene above the card is not brightened (RenderData::c_ExposureKeyMaxStops). 0 meters every scene to middle gray;
+		// without a directional light there is no key.
 		float AutoExposureKey = 0.12f;
 	};
 
