@@ -654,10 +654,8 @@ namespace Strata
 			// The bands from the brightest down, each one EV wide (the last and the first take what lies beyond).
 			for (size_t band = lightingColors.Luminance.size(); band-- > 0;)
 			{
-				const int first = static_cast<int>(std::floor(lightingColors.LuminanceFirstEV100)) + static_cast<int>(band);
-				std::string name = band + 1 == lightingColors.Luminance.size() ? fmt::format("EV {}+", first)
-					: band == 0 ? fmt::format("EV <{}", first + 1) : fmt::format("EV {}", first);
-				lines.push_back({ toColor(lightingColors.Luminance[band]), std::move(name), std::string() });
+				lines.push_back({ toColor(lightingColors.Luminance[band]), GetLuminanceLegendName(band, lightingColors.Luminance.size(),
+					lightingColors.LuminanceFirstEV100), std::string() });
 			}
 		}
 		else if (settings.DebugView == ViewportDebugView::Albedo)
@@ -671,20 +669,7 @@ namespace Strata
 		else if (settings.DebugView == ViewportDebugView::Motion)
 			note = "Hue: direction, strength: speed (full at 16 px)";
 		else if (GetLightingView(settings.DebugView) != SceneLightingView::None)
-		{
-			// Every lighting view: the sun to sky ratio on flat ground (a clear day's is 6 to 10), and what the view measured.
-			if (!lighting)
-				note = "Measuring...";
-			else if (lighting->SunToSkyRatio > 0.0f)
-				note = fmt::format("Sun : sky {:.1f} on flat ground", lighting->SunToSkyRatio);
-			else
-				note = "Sun : sky -";
-			if (lighting && settings.DebugView == ViewportDebugView::AmbientOcclusion && std::isfinite(lighting->ValueMedian))
-				note += fmt::format(", AO median {:.2f}", lighting->ValueMedian);
-			else if (lighting && settings.DebugView != ViewportDebugView::AmbientOcclusion && settings.DebugView != ViewportDebugView::Albedo
-				&& std::isfinite(lighting->SurfaceEV100.y))
-				note += fmt::format(", EV100 median {:.1f}", lighting->SurfaceEV100.y);
-		}
+			note = GetLightingLegendNote(settings.DebugView, lighting); // The sun to sky ratio on flat ground (a clear day's is 6 to 10)
 
 		// At the image's bottom left.
 		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);

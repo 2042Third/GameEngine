@@ -15,6 +15,7 @@
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
+#include <cmath>
 
 namespace Strata
 {
@@ -83,6 +84,28 @@ namespace Strata
 		if (errorPixels > 0.0f)
 			return fmt::format("LOD {}{} ({:.2f} px)", level, last ? "+" : "", errorPixels);
 		return fmt::format("LOD {}{}", level, last ? "+" : "");
+	}
+
+	std::string GetLuminanceLegendName(size_t band, size_t bands, float firstEV100)
+	{
+		const int first = (std::isfinite(firstEV100) ? static_cast<int>(std::floor(firstEV100)) : 0) + static_cast<int>(band);
+		if (band + 1 == bands)
+			return fmt::format("EV {}+", first);
+		if (band == 0)
+			return fmt::format("EV <{}", first + 1);
+		return fmt::format("EV {}", first);
+	}
+
+	std::string GetLightingLegendNote(ViewportDebugView view, const std::optional<LightingViewStats>& stats)
+	{
+		if (!stats)
+			return "Measuring...";
+		std::string note = stats->SunToSkyRatio > 0.0f ? fmt::format("Sun : sky {:.1f} on flat ground", stats->SunToSkyRatio) : std::string("Sun : sky -");
+		if (view == ViewportDebugView::AmbientOcclusion && std::isfinite(stats->ValueMedian))
+			note += fmt::format(", AO median {:.2f}", stats->ValueMedian);
+		else if (view != ViewportDebugView::AmbientOcclusion && view != ViewportDebugView::Albedo && std::isfinite(stats->SurfaceEV100.y))
+			note += fmt::format(", EV100 median {:.1f}", stats->SurfaceEV100.y);
+		return note;
 	}
 
 	void StreamingView::Build(Scene& scene, ViewportDebugView view, const SceneCamera& camera, const LODCriteria& lod, const ViewportDebugColors& colors,
