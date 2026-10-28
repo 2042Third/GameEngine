@@ -680,7 +680,10 @@ Open items and deferrals later waves own:
   recycling), which a merged floor or a triangle mesh avoids; a pile's time to sleep is chaotic, so the pits are compared
   over nine layouts each (the distance does not change how soon the 500-ball pit sleeps, the 2,000-ball pit slept soonest
   at 5 cm, and 0.08 m/s beats 0.05 in every layout); and the recycle angle was not measured in a throwaway build: the
-  share recycled keeps rising with the distance while bodies move, so nothing shows the angle limiting it.
+  share recycled keeps rising with the distance while bodies move, so nothing shows the angle limiting it. Piles of balls
+  grow box3d's contact storage once, as they form (4.7 to 6.1 contacts a body against the automatic room's 2; the
+  Physics Playground's first play 3,152 in 2,048), which `PhysicsStats::ContactRoomGrowths` counts; the perf lab's box
+  stacks and the other settle scenes stay within their room, so `c_ContactsPerBody` stays 2.
 - Physics: dynamic bodies below other dynamic bodies are still written back one by one; a collider built from a mesh
   that is reimported while evicted keeps the old data until the mesh loads again (the source revisions render-scene uses
   would tell).
