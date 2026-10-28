@@ -101,13 +101,6 @@ namespace
 		return GetPixelRGBA8(image, static_cast<uint32_t>(x), static_cast<uint32_t>(y));
 	}
 
-	SceneRendererSpecification ExactSpecification()
-	{
-		SceneRendererSpecification specification;
-		specification.TextureStreaming = false;
-		return specification;
-	}
-
 	// The smallest box holding every pixel whose color passes `select` (min inclusive, max exclusive); empty: min > max.
 	template<typename Select>
 	std::pair<glm::ivec2, glm::ivec2> FindPixels(const ReadbackImage& image, Select select)

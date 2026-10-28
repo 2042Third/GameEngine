@@ -3634,7 +3634,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 The passes from the TAA resolve to the display image live in `Renderer/SceneRendererPost.cpp`: `RenderPostHDR` (the
 exposure and the bloom) and `RenderPostDisplay` (the tone mapping and FXAA), recorded in the `GPU.Post` stage. Their GPU
-data is in `Renderer/PostProcessData.h`. People's guide: `Docs/Manual/AntiAliasing.md`.
+data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (for tests) in
+`Renderer/PostProcessMath.h`. People's guide: `Docs/Manual/AntiAliasing.md`.
 
 - **Parameters:** post passes take theirs by push constants or by buffers of their own, never by new `FrameConstants`
   fields (reading them is fine). The tone mapping reads `RenderData::TonemapConstants`, a volatile constant buffer
@@ -3645,6 +3646,35 @@ data is in `Renderer/PostProcessData.h`. People's guide: `Docs/Manual/AntiAliasi
   `c_MaxFrameConstantWrites` more of those, so at most `c_FrameConstantVersions - c_MaxFrameConstantWrites + 1` frames
   hold a version of it, within its `c_FrameConstantVersions`. FXAA takes `RenderData::FXAAParameters` by push constants;
   the overlays' copy into a target has a layout of its own (`m_CopyBindingLayout`).
+- **Output and dither:** the last pass that writes the 8-bit (or 10-bit) display image dithers it, so gradients (skies,
+  fog, dark falloffs, the vignette) show no bands. `Include/Dither.glsl`'s `DitherToCodes` turns an encoded value v, in
+  codes of the target (`levels` = 2^bits - 1, v clamped to [0, levels]), into `q = floor(v + n + 0.5)` with triangular
+  noise `n = u0 + u1 - 1` of one code where that cannot leave [0, levels] (its noise power does not depend on v, so there
+  is no noise modulation), and into `q = floor(v + u0)` within half a code of black or white: the mean of q is exactly v
+  everywhere, and black and white stay exact. The noise is a static hash of the pixel (`MixBits`, `PixelRandom`, two
+  streams per channel, so channels and neighbors are uncorrelated), the same every frame: invisible as a pattern at one
+  code, nothing for TAA to accumulate, and still frames, captures and the two draw paths' comparisons stay
+  deterministic. The shader quantizes itself: `q / levels` lies within half an ulp of code q, which UNORM targets store as
+  q on every device that rounds to nearest (the GPU suites' twin test checks it).
+  - Which pass: without FXAA the tone mapping dithers into the output; with FXAA it writes the
+    `R10G10B10A2_UNORM` intermediate (`SceneRenderer::c_LDRFormat`, `GetLDRTexture`: the 4 bytes a pixel RGBA8 took,
+    and a mandatory color-attachment format) undithered, and FXAA dithers its output, so the noise is added once and the
+    intermediate bakes no bands in. FXAA's thresholds (`c_EdgeThresholdMin`, about 8 codes) never take the noise for
+    edges. The overlays and the copy into a target (`Copy.frag`) are exact display colors over the dithered image.
+  - Levels per target format (`GetDitherLevels`): 255 for the 8-bit UNORM formats (RGBA8, BGRA8, the swapchain's), 1023
+    for `R10G10B10A2_UNORM`, none for the other formats `ValidateTarget` accepts (16-bit UNORM, the packed 5-6-5,
+    5-5-5-1 and 4-4-4-4 formats). With overlays the tone mapping writes the RGBA8 output texture and the copy carries it.
+  - `SceneRendererSpecification::DitherOutput` (on) turns it off; `SceneRendererStats::Dithered` says whether the frame's
+    last pass dithered. Tests that compare exact codes, or that compare with values computed on the CPU within less than
+    2/255, render with `Tests::ExactSpecification()` (no texture streaming, no dither); comparisons of two renderers of one
+    specification need nothing, the noise being static. `PostProcessMath::DitherToCodes`, `PixelRandom` and
+    `TriangularNoise` are the shader's twins in the same integer arithmetic (`Renderer.PostProcessMath`,
+    `GPU.SceneRenderer.Camera`).
+  - Thumbnails changed with the dither (`ThumbnailCache::c_Version` 5).
+- **FXAA's subpixel blend** is 0.25 (`FXAA.frag`'s `c_Subpixel`; 0.75 until 0.7.0, which cost 19-22% of the texture
+  detail of an image without anti-aliasing; on PhysicsPlayground's tiled floor at 3840x2160, 0.375 keeps 0.85 of it and 0.25
+  0.87, the rest being the edges FXAA is there to smooth). Lower values would leave single-pixel aliasing alone.
+
 
 ### Fog and atmosphere
 
@@ -3971,7 +4001,9 @@ data is in `Renderer/PostProcessData.h`. People's guide: `Docs/Manual/AntiAliasi
   It draws at the project's Graphics Quality, followed every frame by its version, unless `SetQualityOverride` sets one
   (`StrataRuntime --quality`), and logs each change of the preset or its source ("Quality settings").
 - GPU tests of the scene renderer share `StrataTests/src/Renderer/SceneRendererTestUtils.h`. Verify that a
-  new regression test fails without its fix before relying on it.
+  new regression test fails without its fix before relying on it. Renderers whose pixels are compared with exact values
+  take `Tests::ExactSpecification()` (texture streaming and the output's dither off, "Post-processing"), and their scenes
+  `AddNeutralPostProcess` (no tone curve, exposure, vignette, bloom, ambient occlusion or anti-aliasing).
 
 ### GPU timing
 
