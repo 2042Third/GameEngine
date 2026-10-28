@@ -2078,6 +2078,13 @@ recycling](#contact-recycling) applied to what it finds). An interrupted sweep c
 skipped. Rerun it when box3d is bumped or the contact code changes, and keep `Physics.Settling` (the defaults' bounds,
 StrataTests/src/Physics/PhysicsSettlingTests.cpp, each checked to fail with an absurd setting) in line with what it finds.
 
+box3d splits a step for the job system's workers and the stepping thread (`PhysicsTaskSystem::GetWorkerCount`). The
+`workers` sweep of 2026-10-28 (4 to 24 workers, five repeats interleaved, on the reference machine with its temporary
+memory and other builds running) kept that rule: box3d's step fell up to 12-16 workers and stayed level beyond (70,000
+boxes: 27.6 ms at 4, 18.4 at 12, 18.2 at 16, 17.6 at 24; 30,000 tracked: 9.1, 5.8, 5.7, 6.2), and no count beat today's
+by the 3% a change needs. A new rule is stated in the job system's workers (so tests see the same count on every
+machine), never above today's, and keeps 5 workers for 4 job workers (`Physics.Box3D`'s golden-hash case checks it).
+
 ## World partition
 
 `Strata/src/Strata/World/` holds the World asset (`.stworld`: layers, cells, the cooked index), the grid math, the
