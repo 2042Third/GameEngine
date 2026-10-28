@@ -3192,7 +3192,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   device frame and wait undrawn meanwhile (`SceneRendererStats::DeferredInstanceBytes`, `DeferredProxies`: code that
   renders a single picture renders again until none waits, as captures and thumbnails do); changes of resident ones upload
   at once. A reader of the proxy log that takes `GetProxyVersion` reads every change after it. Mirrors go with their
-  render scenes (at the next `Renderer::BeginFrame`) or after 300 frames unused.
+  render scenes (at the next `Renderer::BeginFrame`) or after 300 frames unused; the next mirror made takes over the
+  buffers of a released small one (at most `RenderSceneGPUCache::c_RecycleBytes`) and their buffer version, so binding
+  sets made for them stay valid: compare buffer versions, never mirrors or scene ids, to know when to make them again.
 - The copy knows only what the logs say: code that changes instances or proxies records each change
   (`RenderScene::RecordInstanceChanges`, `RecordProxyChange`; palettes log as they are recomputed), or the GPU path draws
   stale data that the CPU path does not. Data a feature adds per instance goes into a buffer of its own, parallel to the

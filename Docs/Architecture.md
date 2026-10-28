@@ -2309,7 +2309,12 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   while the budget still has time, else the next call fills it whatever its time, so a sync that alone outlasts the budget,
   as Debug builds' validation of a large scene does, never holds the copy back). A render scene's
   destructor posts its id (any thread) and `Renderer::BeginFrame` releases its mirror; mirrors no renderer updated for
-  `RenderSceneGPUCache::c_UnusedFrames` (300) frames go too, and a later frame of their scene uploads it again.
+  `RenderSceneGPUCache::c_UnusedFrames` (300) frames go too, and a later frame of their scene uploads it again. The
+  buffers of the latest mirror released with at most `c_RecycleBytes` (1 MiB) wait, for 300 frames at most, for the next
+  mirror made, which takes them over under their buffer version (`RenderSceneGPU::AdoptBuffers`; its first update
+  clears those that start cleared): a renderer that draws one small scene after another, as thumbnails and previews do,
+  then creates no buffers and keeps its binding sets, which a new mirror's buffers would make again. Frames in flight
+  that still read them read before the next update's copies, as with any update.
   The mirror also holds the scene's asset tables, by slot: the mesh table (per mesh slot the `GeometryHandle` of the
   loaded mesh, with its arena; 0 while it is not loaded or not in the geometry pool), and per material slot its GPU data
   (`RenderData::MaterialData`, `MaterialGPU::Build`) and flags (available, double-sided, alpha-masked, transparent, and

@@ -381,6 +381,115 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The next scene's GPU copy takes over a released small copy's buffers, cleared, and draws as with buffers of its own")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadBuiltinAssets(assets);
+		RenderSceneGPUCache& cache = Renderer::GetRenderSceneGPUs();
+		const SceneCamera camera = ViewOfRows();
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		// Other tests' copies go after c_UnusedFrames frames (the buffers of one of them may wait for the next copy), the
+		// buffers kept after as many frames more.
+		const auto waitOutRecycled = [&]()
+		{
+			for (uint64_t frame = 0; frame <= 2 * RenderSceneGPUCache::c_UnusedFrames + 1; frame++)
+				EmptyFrame(gpu);
+			REQUIRE(cache.GetRecycledBytes() == 0);
+		};
+		// Thumbnails draw one small scene after another: 40 cubes, then 10 elsewhere and a light.
+		const auto makeFirst = []()
+		{
+			Scope<Scene> scene = CreateScope<Scene>("First");
+			AddNeutralPostProcess(*scene);
+			AddCubeRow(*scene, 40);
+			return scene;
+		};
+		const auto makeSecond = []()
+		{
+			Scope<Scene> scene = CreateScope<Scene>("Second");
+			AddNeutralPostProcess(*scene);
+			AddCubeRow(*scene, 10, -6.0f);
+			AddPointLight(*scene, glm::vec3(10.0f, 4.0f, -6.0f), glm::vec3(1.0f), 20.0f, 30.0f);
+			return scene;
+		};
+
+		// The first scene drawn and let go; its copy's buffer version and instance buffer.
+		const auto drawFirst = [&]()
+		{
+			Scope<Scene> first = makeFirst();
+			Frame(gpu, [&]() { REQUIRE(renderer.Render(*first, camera)); });
+			const RenderSceneGPU* mirror = cache.Find(RenderScene::Get(*first).GetId());
+			REQUIRE(mirror);
+			REQUIRE(mirror->GetBufferBytes() <= RenderSceneGPUCache::c_RecycleBytes);
+			return std::pair<uint64_t, nvrhi::IBuffer*>(mirror->GetBufferVersion(), mirror->GetInstanceBuffer());
+		};
+
+		// The reference: the same two scenes, the second one's copy in buffers of its own (the first one's released).
+		waitOutRecycled();
+		const uint64_t releasedVersion = drawFirst().first;
+		waitOutRecycled();
+		ReadbackImage reference;
+		{
+			Scope<Scene> second = makeSecond();
+			Frame(gpu, [&]() { REQUIRE(renderer.Render(*second, camera)); });
+			reference = RenderToImage(renderer, *second, camera);
+			CHECK(cache.Find(RenderScene::Get(*second).GetId())->GetBufferVersion() > releasedVersion);
+		}
+		waitOutRecycled();
+
+		// The first scene, then at once the second one, which takes the first one's buffers over.
+		const std::pair<uint64_t, nvrhi::IBuffer*> firstDrawn = drawFirst();
+		EmptyFrame(gpu);
+		CHECK(cache.GetRecycledBytes() > 0);
+
+		Scope<Scene> second = makeSecond();
+		Frame(gpu, [&]() { REQUIRE(renderer.Render(*second, camera)); });
+		const ReadbackImage taken = RenderToImage(renderer, *second, camera);
+		CHECK(cache.GetRecycledBytes() == 0);
+		const RenderSceneGPU* mirror = cache.Find(RenderScene::Get(*second).GetId());
+		REQUIRE(mirror);
+		// The same buffers under the same version: the renderer keeps its binding sets.
+		CHECK(mirror->GetBufferVersion() == firstDrawn.first);
+		CHECK(mirror->GetInstanceBuffer() == firstDrawn.second);
+		CheckMirror(gpu, RenderScene::Get(*second), *mirror);
+		CheckTables(gpu, *mirror);
+		// Whatever the first scene left beyond the second's records reads as cleared, as in new buffers.
+		const uint64_t recordCapacity = mirror->GetProxyBuffer()->getDesc().byteSize / sizeof(RenderData::GPUProxy);
+		const std::vector<RenderData::GPUProxy> records = ReadRecords<RenderData::GPUProxy>(gpu, mirror->GetProxyBuffer(), recordCapacity);
+		const RenderData::GPUProxy empty = {};
+		for (uint64_t record = RenderScene::Get(*second).GetProxyCapacity(); record < recordCapacity; record++)
+		{
+			CAPTURE(record);
+			REQUIRE(std::memcmp(&records[record], &empty, sizeof(empty)) == 0);
+		}
+		CHECK(MaxDifference(reference, taken) == 0);
+		second.reset();
+		EmptyFrame(gpu);
+
+		// Buffers no copy takes over go after c_UnusedFrames frames.
+		CHECK(cache.GetRecycledBytes() > 0);
+		for (uint64_t frame = 0; frame < RenderSceneGPUCache::c_UnusedFrames; frame++)
+			EmptyFrame(gpu);
+		CHECK(cache.GetRecycledBytes() > 0);
+		EmptyFrame(gpu);
+		CHECK(cache.GetRecycledBytes() == 0);
+
+		// A large copy's buffers are released, never kept.
+		{
+			Scope<Scene> large = CreateScope<Scene>("Large");
+			AddCubeRow(*large, 20'000);
+			Frame(gpu, [&]() { REQUIRE(renderer.Render(*large, camera)); });
+			REQUIRE(cache.Find(RenderScene::Get(*large).GetId())->GetBufferBytes() > RenderSceneGPUCache::c_RecycleBytes);
+		}
+		EmptyFrame(gpu);
+		CHECK(cache.GetRecycledBytes() == 0);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A loaded scene's GPU copy is filled while it is prepared, so the frame that shows it uploads no proxy")
 	{
 		GPUContext gpu;

@@ -44,7 +44,7 @@ namespace Strata
 		}
 
 		// Buffer versions are unique in the process (main thread only), so a mirror made again for a scene never repeats one a
-		// renderer's binding sets were made for.
+		// renderer's binding sets were made for, unless it took over the very buffers of that version (AdoptBuffers).
 		uint64_t s_LastBufferVersion = 0;
 		// Write versions (GetWriteVersion) likewise, so a version of one mirror never reads as up to date in a mirror made later.
 		uint64_t s_LastWriteVersion = 0;
@@ -122,6 +122,46 @@ namespace Strata
 		for (const GrowingBuffer* buffer : { &m_Instances, &m_Proxies, &m_Palette, &m_MeshTableBuffer, &m_MaterialBuffer, &m_MaterialFlagBuffer, &m_LightRecords })
 			bytes += buffer->Buffer ? buffer->Buffer->getDesc().byteSize : 0;
 		return bytes;
+	}
+
+	uint64_t RenderSceneGPU::BufferSet::GetBytes() const
+	{
+		uint64_t bytes = 0;
+		for (const nvrhi::BufferHandle& buffer : Buffers)
+			bytes += buffer ? buffer->getDesc().byteSize : 0;
+		return bytes;
+	}
+
+	std::array<RenderSceneGPU::GrowingBuffer*, RenderSceneGPU::BufferSet::c_Count> RenderSceneGPU::GetGrowingBuffers()
+	{
+		return { &m_Instances, &m_Proxies, &m_Palette, &m_MeshTableBuffer, &m_MaterialBuffer, &m_MaterialFlagBuffer, &m_LightRecords };
+	}
+
+	RenderSceneGPU::BufferSet RenderSceneGPU::TakeBuffers()
+	{
+		BufferSet set;
+		const std::array<GrowingBuffer*, BufferSet::c_Count> buffers = GetGrowingBuffers();
+		for (size_t index = 0; index < buffers.size(); index++)
+		{
+			set.Buffers[index] = std::move(buffers[index]->Buffer);
+			set.ElementCounts[index] = buffers[index]->ElementCount;
+			*buffers[index] = GrowingBuffer();
+		}
+		set.Version = m_BufferVersion;
+		return set;
+	}
+
+	void RenderSceneGPU::AdoptBuffers(BufferSet set)
+	{
+		ST_CORE_ASSERT(!m_Initialized, "RenderSceneGPU::AdoptBuffers: the mirror was updated already");
+		const std::array<GrowingBuffer*, BufferSet::c_Count> buffers = GetGrowingBuffers();
+		for (size_t index = 0; index < buffers.size(); index++)
+		{
+			buffers[index]->Buffer = std::move(set.Buffers[index]);
+			buffers[index]->ElementCount = buffers[index]->Buffer ? set.ElementCounts[index] : 0;
+		}
+		m_BufferVersion = set.Version;
+		m_ClearAdopted = true;
 	}
 
 	void RenderSceneGPU::BeginFrame(uint64_t frame)
@@ -590,6 +630,20 @@ namespace Strata
 		m_CommandList->open();
 		// The copies are the frame's uploads to the GPU's time per stage.
 		GPUPassTimer gpuTimer(m_CommandList, RendererGPUStages::Get().Uploads);
+		if (m_ClearAdopted)
+		{
+			// Buffers taken over from a released mirror hold its scene: those that start cleared when new (EnsureCapacity's
+			// `clear`) are cleared now, before anything is written into them.
+			for (GrowingBuffer* buffer : { &m_Proxies, &m_MeshTableBuffer, &m_MaterialBuffer, &m_MaterialFlagBuffer, &m_LightRecords })
+			{
+				if (!buffer->Buffer)
+					continue;
+				m_CommandList->clearBufferUInt(buffer->Buffer, 0);
+				m_CommandList->setBufferState(buffer->Buffer, nvrhi::ResourceStates::ShaderResource);
+			}
+			m_CommandList->commitBarriers();
+			m_ClearAdopted = false;
+		}
 		const bool buffersReady = EnsureCapacity(m_Proxies, proxyCount, sizeof(RenderData::GPUProxy), "Proxies", true)
 			&& EnsureCapacity(m_Instances, instances.size(), sizeof(RenderData::InstanceData), "Instances", false)
 			&& EnsureCapacity(m_Palette, palette.size(), sizeof(RenderData::AffineTransform), "Palette", false)
@@ -870,7 +924,14 @@ namespace Strata
 			if (source && source->HoldsVersions(renderScene.GetCloneVersions()))
 				mirror = RenderSceneGPU::CreateClone(*source, id);
 			if (!mirror)
+			{
 				mirror = CreateScope<RenderSceneGPU>(m_Device, id);
+				if (m_Recycled)
+				{
+					mirror->AdoptBuffers(std::move(*m_Recycled));
+					m_Recycled.reset();
+				}
+			}
 			found = m_Mirrors.emplace(id, std::move(mirror)).first;
 			found->second->BeginFrame(m_Frame);
 		}
@@ -904,22 +965,47 @@ namespace Strata
 		const auto found = m_Mirrors.find(renderSceneId);
 		if (found == m_Mirrors.end())
 			return;
-		const RenderSceneGPU& mirror = *found->second;
+		const bool complete = found->second->HasBuffers();
+		RenderSceneGPU::BufferSet set = found->second->TakeBuffers();
+		m_Mirrors.erase(found);
+		// A complete set of small buffers waits for the next mirror (the class comment), in place of an older one.
+		if (complete && set.GetBytes() <= c_RecycleBytes)
+		{
+			ReleaseRecycled();
+			m_Recycled = std::move(set);
+			m_RecycledFrame = m_Frame;
+			return;
+		}
 		// Frames in flight may still read its buffers.
 		std::vector<nvrhi::ResourceHandle> buffers;
-		for (nvrhi::IBuffer* buffer : { mirror.GetInstanceBuffer(), mirror.GetProxyBuffer(), mirror.GetPaletteBuffer(), mirror.GetMeshTableBuffer(),
-			mirror.GetMaterialBuffer(), mirror.GetMaterialFlagBuffer() })
+		for (const nvrhi::BufferHandle& buffer : set.Buffers)
 		{
 			if (buffer)
-				buffers.emplace_back(buffer);
+				buffers.emplace_back(buffer.Get());
 		}
 		Renderer::ReleaseDeferred(std::move(buffers));
-		m_Mirrors.erase(found);
+	}
+
+	void RenderSceneGPUCache::ReleaseRecycled()
+	{
+		if (!m_Recycled)
+			return;
+		std::vector<nvrhi::ResourceHandle> buffers;
+		for (const nvrhi::BufferHandle& buffer : m_Recycled->Buffers)
+		{
+			if (buffer)
+				buffers.emplace_back(buffer.Get());
+		}
+		m_Recycled.reset();
+		Renderer::ReleaseDeferred(std::move(buffers));
 	}
 
 	void RenderSceneGPUCache::BeginFrame()
 	{
 		m_Frame++;
+		// Buffers no new mirror took over within c_UnusedFrames frames go too.
+		if (m_Recycled && m_Frame - m_RecycledFrame > c_UnusedFrames)
+			ReleaseRecycled();
 		std::vector<uint64_t> destroyed;
 		{
 			std::lock_guard lock(s_Mutex);

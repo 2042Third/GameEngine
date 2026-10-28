@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
@@ -62,6 +63,18 @@ namespace Strata
 	class RenderSceneGPU
 	{
 	public:
+		// A mirror's buffers, its buffer version and what each buffer has room for, taken from a released mirror for the next
+		// one (RenderSceneGPUCache): TakeBuffers, AdoptBuffers.
+		struct BufferSet
+		{
+			static constexpr size_t c_Count = 7;
+			std::array<nvrhi::BufferHandle, c_Count> Buffers;
+			std::array<uint64_t, c_Count> ElementCounts = {};
+			uint64_t Version = 0;
+
+			uint64_t GetBytes() const;
+		};
+
 		RenderSceneGPU(nvrhi::IDevice* device, uint64_t renderSceneId);
 		~RenderSceneGPU();
 
@@ -76,6 +89,13 @@ namespace Strata
 		bool HoldsVersions(const RenderScene::ChangeVersions& versions) const;
 		// The bytes of its buffers (the GPU memory the mirror holds).
 		uint64_t GetBufferBytes() const;
+		// Hands the buffers over, leaving the mirror without any (it is about to be released).
+		BufferSet TakeBuffers();
+		// A new mirror, before its first update, takes over a released mirror's buffers and their version: what they hold is
+		// cleared at that update where new buffers start cleared (EnsureCapacity), and renderers that made binding sets for
+		// them keep those (the buffers are the same objects). Frames in flight that still read them read before the update's
+		// copies, which the queue orders after them, as with any update of a mirror.
+		void AdoptBuffers(BufferSet buffers);
 
 		uint64_t GetRenderSceneId() const { return m_RenderSceneId; }
 
@@ -125,8 +145,8 @@ namespace Strata
 		bool HasAlphaMaskedMaterials() const { return m_AlphaMaskedMaterials > 0; }
 		// The material slots whose flags say transparent, in no order: the GPU's culling leaves their instances to the CPU.
 		std::span<const uint32_t> GetTransparentMaterialSlots() const { return m_TransparentSlots; }
-		// Changes whenever a buffer is replaced, to a value no mirror had before: binding sets made for another value are
-		// made again.
+		// Changes whenever a buffer is replaced, to a value no mirror had before, but for a mirror that took over a released
+		// mirror's buffers, which takes over their value: binding sets made for another value are made again.
 		uint64_t GetBufferVersion() const { return m_BufferVersion; }
 		// The frame (BeginFrame) of the latest update.
 		uint64_t GetLastUsedFrame() const { return m_LastUsedFrame; }
@@ -200,6 +220,8 @@ namespace Strata
 		void BuildMaterial(uint32_t slot, AssetHandle material, const AssetManagerBase* assets);
 		void SetMaterialFlags(uint32_t slot, uint32_t flags);
 		void RemoveTextureUsers(uint32_t slot);
+		// The buffers in BufferSet's order: instances, proxies, palette, mesh table, materials, material flags, light records.
+		std::array<GrowingBuffer*, BufferSet::c_Count> GetGrowingBuffers();
 		// Every member as the source has it (CreateClone then gives the clone buffers and a command list of its own).
 		RenderSceneGPU(const RenderSceneGPU& source) = default;
 	private:
@@ -217,6 +239,7 @@ namespace Strata
 		WriteLog m_InstanceWrites;
 		WriteLog m_PaletteWrites;
 		bool m_Initialized = false; // The first update reads everything
+		bool m_ClearAdopted = false; // The buffers came from a released mirror (AdoptBuffers): the first update clears them
 
 		// The versions of the render scene the buffers hold.
 		uint64_t m_ProxyVersion = 0;
@@ -293,10 +316,16 @@ namespace Strata
 	// (Scene::ReleaseInBackground), and GPU resources are released on the main thread. A destroyed render scene posts its
 	// id (NotifyDestroyed, any thread), and BeginFrame releases its mirror, as well as mirrors no renderer updated for
 	// c_UnusedFrames frames. Main thread only, but NotifyDestroyed.
+	//
+	// The buffers of the latest released mirror whose buffers are small (at most c_RecycleBytes: a thumbnail's or a preview's
+	// scene) wait for the next mirror made, which takes them over (RenderSceneGPU::AdoptBuffers): a renderer that draws one
+	// scene after another (thumbnails) then creates no buffers and keeps its binding sets, which a new mirror's buffers would
+	// make again in the frame that draws it. Kept for c_UnusedFrames frames at most.
 	class RenderSceneGPUCache
 	{
 	public:
 		static constexpr uint64_t c_UnusedFrames = 300;
+		static constexpr uint64_t c_RecycleBytes = 1024 * 1024;
 
 		explicit RenderSceneGPUCache(nvrhi::IDevice* device);
 		~RenderSceneGPUCache();
@@ -310,6 +339,8 @@ namespace Strata
 		size_t GetMirrorCount() const { return m_Mirrors.size(); }
 		// The GPU memory every mirror's buffers hold (a clone's mirror doubles a scene's while it plays).
 		uint64_t GetBufferBytes() const;
+		// The GPU memory of a released mirror's buffers kept for the next mirror (0 when none wait).
+		uint64_t GetRecycledBytes() const { return m_Recycled ? m_Recycled->GetBytes() : 0; }
 
 		// Once per device frame (Renderer::BeginFrame): releases the mirrors of destroyed render scenes and those unused for
 		// c_UnusedFrames frames (their buffers once the GPU is done with them), and starts the mirrors' budgets for new proxies.
@@ -319,10 +350,15 @@ namespace Strata
 		static void NotifyDestroyed(uint64_t renderSceneId);
 	private:
 		void Release(uint64_t renderSceneId);
+		// Releases the buffers kept for the next mirror (once the GPU is done with them).
+		void ReleaseRecycled();
 	private:
 		nvrhi::IDevice* m_Device;
 		std::unordered_map<uint64_t, Scope<RenderSceneGPU>> m_Mirrors;
 		uint64_t m_Frame = 0;
+		// A released mirror's buffers for the next mirror, and the frame they were released in.
+		std::optional<RenderSceneGPU::BufferSet> m_Recycled;
+		uint64_t m_RecycledFrame = 0;
 
 		// The ids that have mirrors, and those destroyed since the last BeginFrame (render scenes die on any thread).
 		static std::mutex s_Mutex;
