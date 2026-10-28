@@ -38,18 +38,18 @@ namespace
 		return image;
 	}
 
-	// The position, in pixels, where a channel crosses half of a rising step of linear light along row `y` near column `near`.
-	float LinearCrossing(const ReadbackImage& image, uint32_t y, uint32_t near, int channel)
+	// The position, in pixels, where a channel crosses half of a rising step of linear light along row `y` near column `around`.
+	float LinearCrossing(const ReadbackImage& image, uint32_t y, uint32_t around, int channel)
 	{
 		auto linear = [&](uint32_t x) { return PostProcessMath::SRGBToLinear(static_cast<float>(GetPixelRGBA8(image, x, y)[channel]) / 255.0f); };
-		for (uint32_t x = near - 8; x < near + 8; x++)
+		for (uint32_t x = around - 8; x < around + 8; x++)
 		{
 			const float a = linear(x);
 			const float b = linear(x + 1);
 			if (a < 0.5f && b >= 0.5f)
 				return static_cast<float>(x) + (0.5f - a) / (b - a);
 		}
-		FAIL("no crossing near column ", near);
+		FAIL("no crossing near column ", around);
 		return 0.0f;
 	}
 
