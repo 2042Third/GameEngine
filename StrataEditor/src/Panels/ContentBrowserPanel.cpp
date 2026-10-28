@@ -62,6 +62,7 @@ namespace Strata
 			{ "ContentBrowser.Filter.AnimationController", "Controllers", AssetType::AnimationController,
 				"Animation controllers: show only these types (several can be on)" },
 			{ "ContentBrowser.Filter.World", "Worlds", AssetType::World, "Worlds: show only these types (several can be on)" },
+			{ "ContentBrowser.Filter.ColorLookup", "Lookups", AssetType::ColorLookup, "Color lookups: show only these types (several can be on)" },
 		};
 
 		// The tree pane's width when the panel opens, in font sizes.

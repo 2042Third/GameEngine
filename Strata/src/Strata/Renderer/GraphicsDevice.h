@@ -104,7 +104,7 @@ namespace Strata
 		nvrhi::IBuffer* Buffer = nullptr; // Instead of a texture
 	};
 
-	// A copy of rows of one mip level of a color texture from a buffer (GraphicsDevice::RecordBufferToTextureCopies): the
+	// A copy of rows (of slices) of one mip level of a color texture from a buffer (GraphicsDevice::RecordBufferToTextureCopies): the
 	// rows are tightly packed in the buffer from SourceOffset on, as whole blocks for block-compressed formats.
 	struct GPUBufferTextureCopy
 	{
@@ -115,6 +115,7 @@ namespace Strata
 		uint32_t FirstRow = 0;     // Texel rows; for block-compressed formats the first row of a block
 		uint32_t Width = 0;        // The level's width in texels
 		uint32_t Rows = 0;         // Texel rows; for block-compressed formats whole blocks but at the level's end
+		uint32_t Depth = 1;        // Slices of a 3D texture from its first, each Rows rows after the previous; 1 for 2D textures
 	};
 
 	// Owns the GPU device (through NVRHI), the swapchain of the main window, and frame pacing.

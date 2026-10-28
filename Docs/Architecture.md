@@ -1568,6 +1568,7 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   | Model | `.gltf .glb` (also `EXT_meshopt_compression`, decoded with meshoptimizer) | `GltfImporter` | entity template; Mesh (skinned ones with their skin), Material, Texture, Skeleton and AnimationClip sub-assets |
   | AudioClip | `.wav .mp3 .flac .ogg` | `AudioClipImporter` | `STAU` header + the encoded file |
   | Font | `.ttf .otf` | `FontImporter` | the source, validated on import |
+  | ColorLookup | `.cube` (3D tables) | `ColorLookupImporter` | cooked `STLU` lattice over [0, 1], resampled to its `Size` setting (see DeveloperGuide.md, "Post-processing") |
 
   A model's import `Scale` is baked into its content: mesh positions (before LODs and bounds are made from them, so
   simplification errors and recorded bounds are in final units), node translations below the root, the skeleton's rest

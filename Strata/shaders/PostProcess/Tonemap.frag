@@ -49,8 +49,14 @@ layout(set = 0, binding = ST_CBV(0), std140) uniform TonemapConstants
 	float FilmGrain;          // The grain's strength; 0 = off
 	float ChromaticAberration; // k: red is read at 0.5 + (uv - 0.5) (1 + k), blue at (1 - k); 0 = off
 	uint GrainFrame;          // The frame's number: the grain changes every frame
-	float Padding0;
+	float ColorLookupIntensity; // How much of the color lookup (set 1) shows; 0: none bound
 } u_Parameters;
+
+// The scene's color lookup (ColorLookup: an RGBA16F 3D table over the display-encoded colors), or a dummy while
+// ColorLookupIntensity is 0. The sampler interpolates linearly and clamps. (The slots follow set 0's: NVRHI wants a
+// pipeline's layouts to use different ones.)
+layout(set = 1, binding = ST_SRV(3)) uniform texture3D u_ColorLookup;
+layout(set = 1, binding = ST_SAMPLER(2)) uniform sampler u_ColorLookupSampler;
 
 // The grain's strength in the encoded domain at FilmGrain 1 (RenderData::c_FilmGrainAmplitude).
 const float c_FilmGrainAmplitude = 0.04;
@@ -242,6 +248,14 @@ void main()
 	color = max(mix(vec3(luminance), color, u_Parameters.Saturation), vec3(0.0));
 
 	vec3 encoded = LinearToSRGB(clamp(color, 0.0, 1.0));
+	// A grade made in another tool: the color lookup maps the display-encoded color, its points at the texels' centers (a
+	// lattice of N points spans [0.5 / N, 1 - 0.5 / N] of the texture), mixed in by the intensity. The branch is uniform.
+	if (u_Parameters.ColorLookupIntensity > 0.0)
+	{
+		float size = float(textureSize(sampler3D(u_ColorLookup, u_ColorLookupSampler), 0).x);
+		vec3 graded = texture(sampler3D(u_ColorLookup, u_ColorLookupSampler), encoded * ((size - 1.0) / size) + 0.5 / size).rgb;
+		encoded = clamp(mix(encoded, graded, u_Parameters.ColorLookupIntensity), 0.0, 1.0);
+	}
 	// Film grain in the encoded domain, after the curve and before the dither: most visible in the mid-tones, as film's
 	// (sqrt(4 Y (1 - Y)) of the encoded luminance Y), the same on every channel, near-Gaussian (four uniform streams), new every
 	// frame (salted with the frame's number) and zero-mean, so it adds texture without moving the image's brightness.

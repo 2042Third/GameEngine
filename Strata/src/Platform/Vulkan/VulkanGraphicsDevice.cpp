@@ -1348,7 +1348,7 @@ namespace Strata
 			region.bufferImageHeight = (copy.Rows + blockSize - 1) / blockSize * blockSize;
 			region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, copy.MipLevel, 0, 1 };
 			region.imageOffset = { 0, static_cast<int32_t>(copy.FirstRow), 0 };
-			region.imageExtent = { copy.Width, copy.Rows, 1 };
+			region.imageExtent = { copy.Width, copy.Rows, std::max(copy.Depth, 1u) };
 			const VkBuffer buffer = static_cast<VkBuffer>(copy.Source->getNativeObject(nvrhi::ObjectTypes::VK_Buffer).pointer);
 			const VkImage image = static_cast<VkImage>(copy.Destination->getNativeObject(nvrhi::ObjectTypes::VK_Image).pointer);
 			VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);

@@ -575,6 +575,8 @@ namespace Strata
 		bool Dithered = false;
 		// The frame was anti-aliased morphologically (AntiAliasingMode::Morphological).
 		bool MorphologicalAntiAliasing = false;
+		// The Post Process's color lookup was applied (PostProcessComponent::ColorLookup at an intensity above 0, loaded).
+		bool ColorLookup = false;
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -1337,16 +1339,24 @@ namespace Strata
 		// The players' quality rows applied to the scene's settings: the anti-aliasing method they chose and their motion blur.
 		static void ApplyQualityOverrides(PostProcessComponent& settings, const RendererQualitySettings& quality);
 		// Tone mapping of the post source into `output`, or into the LDR target and FXAA from it into `output` (FXAA unless the frame
-		// was `resolved` temporally).
+		// was `resolved` temporally). `colorLookup`: the texture of the Post Process's color lookup (ResolveColorLookup), or null.
 		void RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
-			bool resolved, PostSource source, bool bloom, const glm::vec2& vignetteTangents, uint32_t grainSeed, nvrhi::IFramebuffer* output);
+			bool resolved, PostSource source, bool bloom, const glm::vec2& vignetteTangents, uint32_t grainSeed, nvrhi::ITexture* colorLookup,
+			nvrhi::IFramebuffer* output);
+		// The texture of the Post Process's color lookup, requested every frame it is used (through the frame's asset resolve
+		// cache, which holds it until the frame ends); null without one, at intensity 0, and while it loads.
+		nvrhi::ITexture* ResolveColorLookup(const PostProcessComponent& postProcess);
+		// The tone mapping's second set (set 1, slots t3 and s2): the color lookup's texture, or the dummy when `lookup` is null (both made by the
+		// first frame that needs them; the dummy written by `commandList`). Null (reported) when they cannot be made.
+		nvrhi::IBindingSet* GetColorLookupSet(nvrhi::ICommandList* commandList, nvrhi::ITexture* lookup);
 		// The Post Process's grading (white balance, slope, offset, power), the white balance's part cached per temperature and tint.
 		PostProcessMath::ColorGrading GetColorGrading(const PostProcessComponent& postProcess);
 		// The bloom chain of the image `prefilterSet` reads (the first downsample: the HDR target's or the resolved image's).
 		void RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet);
-		// A fullscreen triangle with `pipeline` into `framebuffer` (post passes, the overlays' copy).
+		// A fullscreen triangle with `pipeline` into `framebuffer` (post passes, the overlays' copy); `secondSet` is bound at set 1
+		// for pipelines of two layouts.
 		void DrawFullscreen(nvrhi::ICommandList* commandList, nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* bindingSet,
-			const void* pushConstants, size_t pushConstantSize);
+			const void* pushConstants, size_t pushConstantSize, nvrhi::IBindingSet* secondSet = nullptr);
 		// A compute pipeline of the shader library's `shader` with one binding layout (verified: the shader exists).
 		nvrhi::ComputePipelineHandle CreateComputePipeline(const char* shader, nvrhi::IBindingLayout* layout);
 		// A render target of the viewport's kind (depth or color, in its render state).
@@ -1369,6 +1379,9 @@ namespace Strata
 		// Fullscreen-triangle pipeline for a pixel shader and target format, cached per format.
 		nvrhi::IGraphicsPipeline* GetFullscreenPipeline(std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>>& cache, nvrhi::IShader* pixelShader,
 			nvrhi::IBindingLayout* layout, const nvrhi::FramebufferInfo& framebufferInfo);
+		// The same with several binding layouts, set 0 first.
+		nvrhi::IGraphicsPipeline* GetFullscreenPipeline(std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>>& cache, nvrhi::IShader* pixelShader,
+			const nvrhi::BindingLayoutVector& layouts, const nvrhi::FramebufferInfo& framebufferInfo);
 		// Grows a structured (or vertex) buffer to hold elementCount elements (the replaced buffer is released once the GPU
 		// is done with it); false when the allocation failed.
 		enum class BufferKind : uint8_t
@@ -1844,6 +1857,13 @@ namespace Strata
 		std::optional<PostProcessMath::ColorGrading> m_Grading; // The white balance of m_GradingKey (temperature, tint)
 		glm::vec2 m_GradingKey = glm::vec2(0.0f);
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_TonemapPipelines;
+		// The tone mapping's color lookup (set 1): its layout, a 1x1x1 dummy and its set for frames without one, and the set of the
+		// latest lookup with the texture it binds (kept while frames use that lookup; it holds the texture).
+		nvrhi::BindingLayoutHandle m_ColorLookupLayout;
+		nvrhi::TextureHandle m_ColorLookupDummy;
+		nvrhi::BindingSetHandle m_ColorLookupDummySet;
+		nvrhi::BindingSetHandle m_ColorLookupSet;
+		nvrhi::ITexture* m_ColorLookupSetTexture = nullptr;
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_FXAAPipelines;
 		nvrhi::BindingLayoutHandle m_ExposureBindingLayout;
 		nvrhi::BindingSetHandle m_ExposureBindingSet;

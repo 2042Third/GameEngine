@@ -29,6 +29,8 @@ only files whose content changed on purpose; the .meta files keep the handles ei
                                    Elbow, Wrist below an "Armature" node) with two animations, "Wave" (linear, baked at
                                    30 keys per second) and "Swing" (linear root travel, a cubic spline turn, a step
                                    scale); its quaternions come from math.sin and math.cos, like Blip.wav's samples
+    Assets/Lighting/Feature/Warm.cube 17x17x17 3D color lookup (Cube LUT text): a warm grade that lifts the reds' mid-tones
+                                   and lowers the blues', with a title, a comment and the default domain
 
 The .meta sidecars are not generated: they hold the stable asset handles the scene, prefab and material reference.
 """
@@ -562,6 +564,24 @@ def make_arm_gltf():
     return (json.dumps(document, indent="\t") + "\n").encode("utf-8")
 
 
+################################################################################
+# Warm.cube
+################################################################################
+
+def make_warm_cube():
+    """A 17^3 lookup over display-encoded colors: each channel bent by c (1 - c), red up, green barely, blue down (the ends
+    stay where they are, so black and white do not move)."""
+    size = 17
+    lines = ['TITLE "Feature Warm"', "# A warm grade for the feature test (GenerateAssets.py)", f"LUT_3D_SIZE {size}",
+             "DOMAIN_MIN 0.0 0.0 0.0", "DOMAIN_MAX 1.0 1.0 1.0"]
+    for blue in range(size):
+        for green in range(size):
+            for red in range(size):
+                r, g, b = red / (size - 1), green / (size - 1), blue / (size - 1)
+                lines.append(f"{r + 0.12 * r * (1 - r):.6f} {g + 0.03 * g * (1 - g):.6f} {b - 0.1 * b * (1 - b):.6f}")
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
 def main():
     write_bytes("Textures/Checker.png", make_checker_png())
     write_bytes("Textures/Bumps_normal.png", make_bumps_normal_png())
@@ -572,6 +592,7 @@ def main():
     write_bytes("Fonts/FeatureBlocks.ttf", make_font())
     write_bytes("Models/Platform.gltf", make_platform_gltf())
     write_bytes("Models/Arm.gltf", make_arm_gltf())
+    write_bytes("Lighting/Feature/Warm.cube", make_warm_cube())
 
 
 if __name__ == "__main__":

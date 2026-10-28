@@ -296,6 +296,10 @@ namespace Strata
 		// toward the corners (ChromaticAberration 1: half a pixel at a 3840x2160 image's corners).
 		float FilmGrain = 0.0f;
 		float ChromaticAberration = 0.0f;
+		// A grade made in another tool (a ColorLookup asset, imported from a .cube file), applied after the tone curve and the
+		// saturation to the display-encoded image, mixed in by ColorLookupIntensity. Nothing applies while it loads.
+		AssetHandle ColorLookup = UUID::Null();
+		float ColorLookupIntensity = 1.0f;
 		float Saturation = 1.0f;
 		float Contrast = 1.0f; // Around middle gray; 1 = unchanged
 		// The Filmic curve's look, each in [0, 1]: how deep the shadows go (higher crushes the darkest tones) and how softly the

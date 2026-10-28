@@ -2193,6 +2193,12 @@ namespace Strata
 	nvrhi::IGraphicsPipeline* SceneRenderer::GetFullscreenPipeline(std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>>& cache,
 		nvrhi::IShader* pixelShader, nvrhi::IBindingLayout* layout, const nvrhi::FramebufferInfo& framebufferInfo)
 	{
+		return GetFullscreenPipeline(cache, pixelShader, nvrhi::BindingLayoutVector { layout }, framebufferInfo);
+	}
+
+	nvrhi::IGraphicsPipeline* SceneRenderer::GetFullscreenPipeline(std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>>& cache,
+		nvrhi::IShader* pixelShader, const nvrhi::BindingLayoutVector& layouts, const nvrhi::FramebufferInfo& framebufferInfo)
+	{
 		for (const auto& [info, pipeline] : cache)
 		{
 			if (info == framebufferInfo)
@@ -2203,7 +2209,7 @@ namespace Strata
 		desc.primType = nvrhi::PrimitiveType::TriangleList;
 		desc.VS = m_FullscreenVertexShader;
 		desc.PS = pixelShader;
-		desc.bindingLayouts = { layout };
+		desc.bindingLayouts = layouts;
 		desc.renderState.rasterState.setCullNone();
 		desc.renderState.depthStencilState.setDepthTestEnable(false).setDepthWriteEnable(false);
 		nvrhi::GraphicsPipelineHandle pipeline = m_Device->createGraphicsPipeline(desc, framebufferInfo);
@@ -3139,6 +3145,8 @@ namespace Strata
 		m_Stats.PendingTextGlyphs = textStats.PendingGlyphs;
 		m_Stats.RasterizedTextGlyphs = textStats.RasterizedGlyphs;
 		const bool overlayPasses = PrepareOverlayPasses(scene, camera, options, commandList, gpuTimer);
+		// Requested before the statistics count what is pending: a color lookup that loads leaves the frame incomplete.
+		nvrhi::ITexture* colorLookup = ResolveColorLookup(postProcess);
 		const AssetResolveStats& assetStats = m_Assets.GetStats();
 		m_Stats.PendingAssets = assetStats.Pending + textStats.PendingFonts + m_Stats.Overlays.PendingAssets;
 		m_Stats.RequestsByVisibility = assetStats.Requested;
@@ -3163,7 +3171,7 @@ namespace Strata
 		}
 		nvrhi::IFramebuffer* output = target && !overlays ? target : m_OutputFramebuffer.Get();
 		RenderPostDisplay(commandList, postProcess, temporalSettings, resolved, postSource, bloom, GetVignetteTangents(camera, m_ViewportSize),
-			options.GrainSeed.value_or(static_cast<uint32_t>(m_RenderCount)), output);
+			options.GrainSeed.value_or(static_cast<uint32_t>(m_RenderCount)), colorLookup, output);
 
 		if (overlays)
 		{

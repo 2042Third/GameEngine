@@ -279,6 +279,8 @@
 						"BloomRadius": 0.08,
 						"BloomThreshold": 1,
 						"ChromaticAberration": 0.5,
+						"ColorLookup": "F7A0000000000011",
+						"ColorLookupIntensity": 0.5,
 						"ColorOffset": [
 							0.0,
 							0.0,

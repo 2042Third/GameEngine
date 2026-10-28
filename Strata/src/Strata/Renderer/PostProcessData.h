@@ -39,7 +39,7 @@ namespace Strata
 			float FilmGrain;            // 144: PostProcessComponent::FilmGrain; 0 = off
 			float ChromaticAberration;  //      the lateral aberration's scale of red and blue about the center (k); 0 = off
 			uint32_t GrainFrame;        //      the frame's number: the grain changes every frame, as film's
-			float Padding0;
+			float ColorLookupIntensity; //      PostProcessComponent::ColorLookupIntensity of the lookup bound at set 1; 0: none
 		};
 		static_assert(sizeof(TonemapConstants) == 160);
 		static_assert(offsetof(TonemapConstants, ColorRows) == 64 && offsetof(TonemapConstants, ColorOffset) == 112);

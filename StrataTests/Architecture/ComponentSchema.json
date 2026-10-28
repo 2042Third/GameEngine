@@ -1828,6 +1828,30 @@
 					"Speed": 0.0,
 					"Tooltip": "A lens's lateral color fringes, red and blue drawn apart toward the corners; 1 shifts each half a pixel at a 3840x2160 image's corners. Players can turn it off",
 					"Type": "Float"
+				},
+				{
+					"AssetFilter": 13,
+					"DisplayName": "Color Lookup",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ColorLookup",
+					"Speed": 0.0,
+					"Tooltip": "A grade made in another tool (a .cube file's 3D lookup table), applied to the finished image after the tone curve and the saturation. Nothing applies while it loads",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color Lookup Intensity",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "ColorLookupIntensity",
+					"Speed": 0.0,
+					"Tooltip": "How much of the color lookup's grade shows: 1 all of it, 0.5 halfway between the image and the graded image",
+					"Type": "Float"
 				}
 			]
 		},

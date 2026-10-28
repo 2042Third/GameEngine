@@ -26,7 +26,8 @@ namespace Strata
 		Skeleton,           // Joint hierarchy and rest pose of an imported model (Animation/Skeleton.h)
 		AnimationClip,      // Joint channels of an imported animation (Animation/AnimationClip.h)
 		AnimationController, // States, transitions and parameters (".stanimator", Animation/AnimationController.h)
-		World                // Layers and cells of a streamed world (".stworld", World/WorldAsset.h)
+		World,               // Layers and cells of a streamed world (".stworld", World/WorldAsset.h)
+		ColorLookup          // 3D color lookup table of a grade, applied after the tone curve (".cube", Renderer/ColorLookup.h)
 	};
 
 	const char* AssetTypeToString(AssetType type);

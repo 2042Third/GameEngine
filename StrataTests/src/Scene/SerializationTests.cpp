@@ -569,6 +569,18 @@ TEST_SUITE("Scene.Serialization")
 		loaded = load({ { "FilmGrain", 4.0 }, { "ChromaticAberration", -1.0 } }, warnings);
 		CHECK(loaded.FilmGrain == 1.0f);
 		CHECK(loaded.ChromaticAberration == 0.0f);
+
+		// The color lookup: none in older files (at full intensity once one is set); set, it round-trips, the intensity clamped.
+		loaded = load({ { "Vignette", 0.2 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK_FALSE(loaded.ColorLookup.IsValid());
+		CHECK(loaded.ColorLookupIntensity == 1.0f);
+		loaded = load({ { "ColorLookup", "00000000000C0105" }, { "ColorLookupIntensity", 0.4 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.ColorLookup == UUID(0xC0105ull));
+		CHECK(loaded.ColorLookupIntensity == 0.4f);
+		loaded = load({ { "ColorLookupIntensity", 3.0 } }, warnings);
+		CHECK(loaded.ColorLookupIntensity == 1.0f);
 	}
 
 	TEST_CASE("Cameras saved before depth of field load without it; their lens round-trips and is clamped")

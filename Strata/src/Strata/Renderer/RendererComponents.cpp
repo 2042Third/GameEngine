@@ -129,6 +129,11 @@ namespace Strata
 			return post.MotionBlur ? std::string() : "Motion Blur is off";
 		}
 
+		std::string WithColorLookup(const PostProcessComponent& post)
+		{
+			return post.ColorLookup.IsValid() ? std::string() : "No Color Lookup is set";
+		}
+
 		std::string WithBloom(const PostProcessComponent& post)
 		{
 			return post.Bloom ? std::string() : "Bloom is off";
@@ -527,12 +532,19 @@ namespace Strata
 					"Players can turn it off"))
 			.Property("ChromaticAberration", &PostProcessComponent::ChromaticAberration,
 				WithTooltip(Slider(0.0f, 1.0f), "A lens's lateral color fringes, red and blue drawn apart toward the corners; 1 shifts each half a "
-					"pixel at a 3840x2160 image's corners. Players can turn it off"));
+					"pixel at a 3840x2160 image's corners. Players can turn it off"))
+			.AssetProperty("ColorLookup", &PostProcessComponent::ColorLookup, AssetType::ColorLookup,
+				{ .Tooltip = "A grade made in another tool (a .cube file's 3D lookup table), applied to the finished image after the tone curve "
+					"and the saturation. Nothing applies while it loads" })
+			.Property("ColorLookupIntensity", &PostProcessComponent::ColorLookupIntensity,
+				WithTooltip(Slider(0.0f, 1.0f), "How much of the color lookup's grade shows: 1 all of it, 0.5 halfway between the image and the "
+					"graded image"));
 		// Exposure is the compensation SceneRenderer applies with automatic exposure too: always active.
 		SetInactiveReasons<PostProcessComponent>({ "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed", "AutoExposureMetering",
 			"AutoExposureLowPercentile", "AutoExposureHighPercentile", "AutoExposureLightSpeed", "AutoExposureKey" }, &WithAutoExposure);
 		SetInactiveReasons<PostProcessComponent>({ "BloomIntensity", "BloomThreshold", "BloomRadius" }, &WithBloom);
 		SetInactiveReasons<PostProcessComponent>({ "MotionBlurShutterAngle", "MotionBlurMaxLength" }, &WithMotionBlur);
+		SetInactiveReasons<PostProcessComponent>({ "ColorLookupIntensity" }, &WithColorLookup);
 		SetInactiveReasons<PostProcessComponent>({ "Toe" }, &WithFilmicToe);
 		SetInactiveReasons<PostProcessComponent>({ "Shoulder" }, &WithFilmicShoulder);
 		SetInactiveReasons<PostProcessComponent>({ "AmbientOcclusionRadius", "AmbientOcclusionIntensity" }, &WithAmbientOcclusion);
