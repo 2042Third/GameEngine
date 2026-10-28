@@ -166,6 +166,14 @@ resolution) and takes the color the previous frame showed where a ray meets a su
 - They need TAA (Anti Aliasing Method TAA); with FXAA the settings are greyed out. Cost: about half a millisecond of GPU
   time at 1920x1080 on an Apple M2 Max with every surface reflecting, and about 20 MB of video memory per view.
 
+## Materials that keep their energy
+
+A rough metal scatters the light it receives between the tiny facets of its surface before it leaves; Strata counts that
+light, so a white metal reflects all the light around it however rough it is, and rough metals look as bright as their
+color says (since 0.7.0; before, a metal of roughness 1 lost about two thirds of its light and looked dull gray). Colored
+metals such as copper or gold keep less at high roughness, as real ones do: each bounce between the facets takes some of
+the light. Materials made darker to look right before may now be set to their measured colors.
+
 ## Debug views
 
 The **debug view** chip on the viewport's toolbar has five views that show the scene's light instead of its image, each

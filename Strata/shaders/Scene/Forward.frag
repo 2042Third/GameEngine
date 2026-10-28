@@ -138,6 +138,20 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 	surface.Roughness = clamp(material.Roughness * metallicRoughness.g, 0.0, 1.0);
 	surface.Occlusion = occlusion;
 	surface.Emissive = emissive;
+	// The split sum's BRDF table at the surface: its specular reflectance of image light and the compensation of its lobe for
+	// multiple scattering, which direct light takes too.
+	float NoV = max(dot(surface.Normal, surface.View), 1e-4);
+	vec3 f0 = mix(vec3(0.04), surface.Albedo, surface.Metallic);
+	vec2 dfg = textureLod(sampler2D(u_BRDFLut, u_LinearClampSampler), vec2(NoV, surface.Roughness), 0.0).rg;
+	surface.SpecularEnergy = GetSpecularEnergy(f0, dfg);
+	float coatNoV = 1.0;
+	vec2 coatDFG = vec2(1.0, 0.0);
+	if (coat.Strength > 0.0)
+	{
+		coatNoV = max(dot(coat.Normal, surface.View), 1e-4);
+		coatDFG = textureLod(sampler2D(u_BRDFLut, u_LinearClampSampler), vec2(coatNoV, coat.Roughness), 0.0).rg;
+		coat.SpecularEnergy = GetSpecularEnergy(vec3(c_ClearcoatF0), coatDFG).x;
+	}
 
 	float viewDepth = -(u_Frame.View * vec4(v_RelativePosition, 1.0)).z;
 	vec3 color = vec3(0.0);
@@ -218,11 +232,9 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 	vec3 indirect;
 	if (environment || probes.Weight > 0.0 || screenReflection.a > 0.0)
 	{
-		// Image-based lighting: diffuse irradiance plus split-sum specular (prefiltered radiance x environment BRDF).
-		float NoV = max(dot(surface.Normal, surface.View), 1e-4);
-		vec3 f0 = mix(vec3(0.04), surface.Albedo, surface.Metallic);
-		vec2 dfg = textureLod(sampler2D(u_BRDFLut, u_LinearClampSampler), vec2(NoV, surface.Roughness), 0.0).rg;
-		vec3 specularColor = f0 * dfg.x + dfg.y;
+		// Image-based lighting: diffuse irradiance plus split-sum specular (prefiltered radiance x environment BRDF, compensated
+		// for multiple scattering); diffuse gets what specular leaves.
+		vec3 specularColor = (f0 * dfg.x + dfg.y) * surface.SpecularEnergy;
 		vec3 irradiance = vec3(0.0);
 		vec3 radiance = vec3(0.0);
 		if (environment)
@@ -273,9 +285,7 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 	{
 		// The coat reflects the probes', the sky's or the ambient light by its prefiltered Fresnel (split sum, as the base), and
 		// the light under it, the base's and the emission, loses what it reflects.
-		float coatNoV = max(dot(coat.Normal, surface.View), 1e-4);
-		vec2 coatDFG = textureLod(sampler2D(u_BRDFLut, u_LinearClampSampler), vec2(coatNoV, coat.Roughness), 0.0).rg;
-		float coatReflectance = coat.Strength * (c_ClearcoatF0 * coatDFG.x + coatDFG.y);
+		float coatReflectance = coat.Strength * (c_ClearcoatF0 * coatDFG.x + coatDFG.y) * coat.SpecularEnergy;
 		vec3 coatReflected = reflect(-surface.View, coat.Normal);
 		vec3 coatRadiance = SampleSpecularLight(surface.Position, coat.Normal, coatReflected, coat.Roughness, environment);
 		float coatOcclusion = clamp(pow(coatNoV + diffuseOcclusion, exp2(-16.0 * coat.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0);
@@ -312,7 +322,9 @@ vec3 TransmitLight(InstanceData instance, MaterialData material, vec3 normal, ve
 
 	float NoV = max(dot(normal, view), 1e-4);
 	vec2 dfg = textureLod(sampler2D(u_BRDFLut, u_LinearClampSampler), vec2(NoV, roughness), 0.0).rg;
-	vec3 reflectance = mix(vec3(0.04), albedo, metallic) * dfg.x + dfg.y;
+	// What the surface reflects, compensated as its specular light is (ShadeLitSurface): the rest passes through.
+	vec3 f0 = mix(vec3(0.04), albedo, metallic);
+	vec3 reflectance = (f0 * dfg.x + dfg.y) * GetSpecularEnergy(f0, dfg);
 	vec3 absorbed = exp(-material.Absorption.rgb * thickness);
 	return behind * absorbed * albedo * (1.0 - metallic) * (1.0 - reflectance) * transmission;
 }
@@ -346,6 +358,7 @@ void main()
 		coat.Strength = 0.0;
 		coat.Roughness = 0.0;
 		coat.Normal = shadingNormal;
+		coat.SpecularEnergy = 1.0;
 		if ((material.Flags & ST_MATERIAL_CLEARCOAT) != 0u)
 		{
 			coat.Strength = clamp(material.Clearcoat * SampleMaterialTexture(material.ClearcoatMap, uv).r, 0.0, 1.0);

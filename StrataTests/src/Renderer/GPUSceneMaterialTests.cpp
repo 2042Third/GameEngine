@@ -313,6 +313,41 @@ TEST_SUITE("GPU.SceneRenderer.Materials")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Glass leaves what it reflects")
+	{
+		// In a white furnace (a sky of 1 nit) over an emissive backdrop of 1 nit, a rough clear pane passes through what it does
+		// not reflect: the light it transmits and the light it reflects, both compensated for multiple scattering alike, add up
+		// to the backdrop's.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::QuadMesh));
+		const AssetHandle sky = assets.Add(CreateEnvironmentTexture(glm::vec3(1.0f), glm::vec3(1.0f)), "Furnace");
+		for (const float roughness : { 0.0f, 0.6f })
+		{
+			CAPTURE(roughness);
+			Scene scene;
+			AddNeutralPostProcess(scene);
+			SkyLightComponent& skyLight = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+			skyLight.EnvironmentMap = sky;
+			skyLight.ShowBackground = false;
+			Entity backdrop = AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(UnlitColor({ 1.0f, 1.0f, 1.0f, 1.0f })), glm::vec3(0.0f, 0.0f, -3.0f), "Backdrop");
+			backdrop.GetComponent<TransformComponent>().Scale = glm::vec3(20.0f);
+			MaterialProperties glass = Glass(1.5f, 0.05f);
+			glass.Roughness = roughness;
+			AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(glass), glm::vec3(0.0f), "Pane").GetComponent<TransformComponent>().Scale = glm::vec3(3.0f);
+			SceneRenderer renderer = CreateMaterialRenderer("Glass", false);
+			renderer.SetViewportSize(c_ViewSize, c_ViewSize);
+			RenderSettled(gpu, renderer, scene, LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f)), true);
+			const std::vector<glm::vec3> image = ReadHDR(renderer.GetHDRTexture());
+			const glm::vec3 pane = image[static_cast<size_t>(c_ViewSize / 2) * c_ViewSize + c_ViewSize / 2];
+			CHECK(pane.g >= 0.97f);
+			CHECK(pane.g <= 1.03f);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Glass shows what lies behind it, displaced by its index of refraction and thickness")
 	{
 		GPUContext gpu;
