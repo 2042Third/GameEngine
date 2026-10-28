@@ -454,7 +454,7 @@ TEST_SUITE("PerfGPU.Renderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Render cost of 100,000 cubes under the atmosphere, with a still sun and with a moving one")
+	TEST_CASE("Render cost of 100,000 cubes under the atmosphere, with a still sun and with a moving one over 256 and 512 prefiltered skies")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -514,6 +514,41 @@ TEST_SUITE("PerfGPU.Renderer")
 				values.emplace("PerfGPU.Renderer.AtmosphereGPU", Perf::MeasureGPU(still));
 				Perf::MeasureGPU(moving); // Checks that its frames' times arrived
 				values.emplace("PerfGPU.Renderer.AtmosphereSunMovingMaxFrameGPU", moving.GPU->MaxMs);
+			}
+			return values;
+		});
+
+		// The moving sun again with High's prefiltered sky (RendererQualitySettings::EnvironmentResolution 512, the other knobs
+		// Medium's so the environment's refresh is all that differs): its costliest step filters a 512 level.
+		SceneRendererSpecification fineSky = Perf::MeasuredRendererSpecification();
+		fineSky.Quality.EnvironmentResolution = 512;
+		SceneRenderer fineRenderer(fineSky);
+		fineRenderer.SetViewportSize(c_Width, c_Height);
+		std::vector<std::string> fineKeys = { "PerfGPU.Renderer.AtmosphereSunMovingMaxFrameHigh" };
+		if (measuresGPU)
+			fineKeys.push_back("PerfGPU.Renderer.AtmosphereSunMovingMaxFrameHighGPU");
+		Perf::CheckBudgetsConfirmed(fineKeys, [&]
+		{
+			const SceneCamera camera = GridView(c_Count);
+			float angle = -50.0f;
+			uint32_t updates = 0;
+			const Perf::FrameMeasurement moving = Perf::MeasureFrames(gpu, c_WarmupFrames, c_MeasuredFrames, [&]
+			{
+				angle -= 0.1f;
+				sun.GetComponent<TransformComponent>().Rotation = glm::angleAxis(glm::radians(angle), glm::vec3(1.0f, 0.0f, 0.0f));
+				sun.MarkModified<TransformComponent>();
+				REQUIRE(fineRenderer.Render(scene, camera));
+				updates += fineRenderer.GetStats().EnvironmentUpdates;
+			});
+			MESSAGE("100k cubes under the atmosphere with the sun moving, a 512 prefiltered sky: ", moving.CPU.MaxMs, " ms slowest frame, GPU ",
+				moving.GPU ? moving.GPU->MaxMs : 0.0, " ms slowest busy; ", updates, " new environments");
+			CHECK(updates > 0);
+			CHECK(fineRenderer.GetStats().Quality.EnvironmentResolution == 512u);
+			Perf::MetricValues values { { "PerfGPU.Renderer.AtmosphereSunMovingMaxFrameHigh", moving.CPU.MaxMs } };
+			if (measuresGPU)
+			{
+				Perf::MeasureGPU(moving); // Checks that its frames' times arrived
+				values.emplace("PerfGPU.Renderer.AtmosphereSunMovingMaxFrameHighGPU", moving.GPU->MaxMs);
 			}
 			return values;
 		});
@@ -678,6 +713,130 @@ TEST_SUITE("PerfGPU.Renderer")
 				return values;
 			});
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Ambient occlusion's cost on 100,000 cubes in a 4K view, at Medium and at High")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+
+		// Render100kCubesShadowed4K's scene without a Post Process, so ambient occlusion runs with the component's defaults
+		// (its 1 m radius): Medium's 2 x 6 samples per side (0.6.0's), High's 3 x 8. GPU.AO's median is the stage's cost;
+		// High's is held to its 1.8 ms target (provisional until the reference machine measures it), Medium's is recorded for
+		// the campaign to compare with 0.6.0's.
+		constexpr size_t c_Count = 100'000;
+		constexpr uint32_t c_Width4K = 3840;
+		constexpr uint32_t c_Height4K = 2160;
+		const float halfExtent = static_cast<float>(std::ceil(std::sqrt(static_cast<double>(c_Count)))) * Perf::c_GridSpacing * 0.5f;
+		Scene scene("AmbientOcclusionCubes4K");
+		Perf::AddCameraAndLight(scene, 4.0f * halfExtent);
+		Perf::CreateCubeGrid(scene, c_Count);
+		const bool measuresGPU = Perf::MeasuresGPU();
+		for (const RendererQualityPreset preset : { RendererQualityPreset::Medium, RendererQualityPreset::High })
+		{
+			CAPTURE(RendererQuality::PresetToString(preset));
+			SceneRendererSpecification specification = Perf::MeasuredRendererSpecification();
+			specification.Quality = RendererQuality::GetPreset(preset);
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Width4K, c_Height4K);
+			const AmbientOcclusionSamples samples = RendererQuality::GetAmbientOcclusionSamples(specification.Quality.AmbientOcclusionQuality);
+			const bool high = preset == RendererQualityPreset::High;
+			std::vector<std::string> keys;
+			if (high)
+				keys.push_back("PerfGPU.Renderer.AOHigh4K");
+			if (measuresGPU)
+			{
+				if (high)
+				{
+					keys.push_back("PerfGPU.Renderer.AOHigh4KGPU");
+					keys.push_back("PerfGPU.Renderer.AOHigh4KStageGPU");
+				}
+				else
+				{
+					keys.push_back("PerfGPU.Renderer.AOMedium4KStageGPU");
+				}
+			}
+			if (keys.empty())
+				continue; // Medium without timestamps: nothing of it is recorded
+			Perf::CheckBudgetsConfirmed(keys, [&]
+			{
+				const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(c_Count), high ? "AO High 4K" : "AO Medium 4K");
+				CHECK(GetDrawnCounts(renderer).Instances == c_Count);
+				CHECK(renderer.GetStats().AmbientOcclusionSamples == samples.Slices * samples.StepsPerSide * 2);
+				Perf::MetricValues values;
+				if (high)
+					values.emplace("PerfGPU.Renderer.AOHigh4K", measurement.CPU.MedianMs);
+				if (measuresGPU)
+				{
+					const double busy = Perf::MeasureGPU(measurement);
+					const double stage = MedianGPUStageMs("GPU.AO");
+					CHECK(stage > 0.0);
+					if (high)
+					{
+						values.emplace("PerfGPU.Renderer.AOHigh4KGPU", busy);
+						values.emplace("PerfGPU.Renderer.AOHigh4KStageGPU", stage);
+					}
+					else
+					{
+						values.emplace("PerfGPU.Renderer.AOMedium4KStageGPU", stage);
+					}
+				}
+				return values;
+			});
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Aerial perspective's cost on 100,000 cubes under the atmosphere in a 4K view")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+
+		// Render100kCubesShadowed4K's scene under the atmosphere, whose Sky Light draws aerial perspective by default: the
+		// frame's volume (GPU.Aerial, target 0.05 ms) and its lookup in the forward pass (GPU.Opaque).
+		constexpr size_t c_Count = 100'000;
+		constexpr uint32_t c_Width4K = 3840;
+		constexpr uint32_t c_Height4K = 2160;
+		const float halfExtent = static_cast<float>(std::ceil(std::sqrt(static_cast<double>(c_Count)))) * Perf::c_GridSpacing * 0.5f;
+		Scene scene("AerialCubes4K");
+		Perf::AddCameraAndLight(scene, 4.0f * halfExtent);
+		Perf::CreateCubeGrid(scene, c_Count);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().Source = SkyLightSource::Atmosphere;
+		for (auto [entity, light] : scene.GetRegistry().view<DirectionalLightComponent>().each())
+		{
+			light.Intensity = 100000.0f;
+			Entity(entity, &scene).MarkModified<DirectionalLightComponent>();
+		}
+		SceneRenderer renderer(Perf::MeasuredRendererSpecification());
+		renderer.SetViewportSize(c_Width4K, c_Height4K);
+		const bool measuresGPU = Perf::MeasuresGPU();
+		std::vector<std::string> keys = { "PerfGPU.Renderer.Aerial4K" };
+		if (measuresGPU)
+		{
+			keys.push_back("PerfGPU.Renderer.Aerial4KGPU");
+			keys.push_back("PerfGPU.Renderer.Aerial4KStageGPU");
+		}
+		Perf::CheckBudgetsConfirmed(keys, [&]
+		{
+			const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(c_Count), "Aerial perspective 4K");
+			CHECK(GetDrawnCounts(renderer).Instances == c_Count);
+			CHECK(renderer.GetStats().Atmosphere);
+			CHECK(renderer.GetStats().AerialPerspective);
+			Perf::MetricValues values { { "PerfGPU.Renderer.Aerial4K", measurement.CPU.MedianMs } };
+			if (measuresGPU)
+			{
+				values.emplace("PerfGPU.Renderer.Aerial4KGPU", Perf::MeasureGPU(measurement));
+				const double stage = MedianGPUStageMs("GPU.Aerial");
+				CHECK(stage > 0.0);
+				values.emplace("PerfGPU.Renderer.Aerial4KStageGPU", stage);
+			}
+			return values;
+		});
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
