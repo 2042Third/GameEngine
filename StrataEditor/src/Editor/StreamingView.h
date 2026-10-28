@@ -22,17 +22,29 @@ namespace Strata
 	class RenderScene;
 	class Scene;
 
-	// What the viewport shows: the scene as rendered, colored by what the streaming pillars do to it, or its motion.
+	// What the viewport shows: the scene as rendered, colored by what the streaming pillars do to it, its motion, or a lighting
+	// view (SceneRenderOptions::LightingView, in SceneLightingView's order).
 	enum class ViewportDebugView : uint8_t
 	{
 		None = 0,
 		Streaming, // Entities whose mesh, material or textures are still loading, or failed to
 		LOD,       // Entities by the level of detail their mesh is drawn at
 		Mip,       // Entities by how far their textures' resident mip levels are from those their view needs
-		Motion     // Every pixel's motion since the view's previous frame (SceneRenderOptions::ShowMotionVectors), not a tint
+		Motion,    // Every pixel's motion since the view's previous frame (SceneRenderOptions::ShowMotionVectors), not a tint
+		// The lighting views (SceneLightingView), not tints either: lit surfaces shaded white, the ambient occlusion, the indirect
+		// light alone, the luminance as EV100 bands and the albedo with values outside 0.03-0.85 marked.
+		Lighting,
+		AmbientOcclusion,
+		Indirect,
+		Luminance,
+		Albedo
 	};
 
-	// "none", "streaming", "lod", "mip", "motion" (the names commands and the saved viewport state use).
+	// The lighting view a debug view shows (SceneLightingView::None for the others).
+	SceneLightingView GetLightingView(ViewportDebugView view);
+
+	// "none", "streaming", "lod", "mip", "motion", "lighting", "ao", "indirect", "luminance", "albedo" (the names commands and the
+	// saved viewport state use).
 	const char* ViewportDebugViewToString(ViewportDebugView view);
 	std::optional<ViewportDebugView> ViewportDebugViewFromString(std::string_view name);
 
@@ -58,6 +70,8 @@ namespace Strata
 		glm::vec4 CellLoading = { 0.91f, 0.76f, 0.30f, 1.0f };
 		glm::vec4 CellLoaded = { 0.84f, 0.55f, 0.27f, 1.0f };
 		glm::vec4 CellUnloading = { 0.60f, 0.58f, 0.55f, 1.0f };
+		// The lighting views' luminance bands, albedo marks and background (SceneRenderOptions::LightingColors).
+		LightingViewColors Lighting;
 	};
 
 	// What a debug view found in the last Build, among the entities in the camera's view.

@@ -1368,7 +1368,7 @@ namespace Strata
 		return std::ldexp(1.0f, static_cast<int>(rounded));
 	}
 
-	void SceneRenderer::ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options)
+	void SceneRenderer::ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options, bool hold)
 	{
 		if (m_ResetPreExposure)
 		{
@@ -1388,6 +1388,13 @@ namespace Strata
 				m_PreExposure = *options.PreExposure > 0.0f ? GetPreExposureFor(std::log2(*options.PreExposure)) : 1.0f;
 			else
 				m_PreExposure = GetPreExposureFor(std::clamp(settings.Exposure, -20.0f, 20.0f)); // The power of two nearest 2^Exposure
+			m_PreExposureSettled = true;
+			return;
+		}
+		// A lighting view of values (not light) meters nothing worth following: the pre-exposure keeps its value until the view
+		// ends (BeginLightingViewFrame starts a new epoch then), settled, since the values it writes are unexposed.
+		if (hold)
+		{
 			m_PreExposureSettled = true;
 			return;
 		}
@@ -1906,6 +1913,9 @@ namespace Strata
 			ReleaseRenderTargets();
 			ReleaseReflectionProbes();
 			ReleaseShadowMap();
+			std::vector<nvrhi::ResourceHandle> released;
+			ReleaseLightingViewResources(released);
+			Renderer::ReleaseDeferred(std::move(released));
 			return;
 		}
 
@@ -1964,6 +1974,10 @@ namespace Strata
 		release(m_MotionPrepassFramebuffer);
 		release(m_GlassMotionFramebuffer);
 		release(m_MotionViewBindingSet);
+		// The lighting views' bindings name the HDR target and the depth.
+		release(m_LightingOverlayBindingSet);
+		release(m_LightingStatsBindingSet);
+		m_LightingStatsIrradiance = nullptr;
 		// Screen-space reflections' targets (made again by the next frame that traces them).
 		release(m_SurfaceTexture);
 		release(m_ScreenReflectionTexture);
@@ -2518,6 +2532,7 @@ namespace Strata
 		if (!Renderer::IsInitialized())
 			return;
 		ResolveCullCounters(wait);
+		ResolveLightingViewStats(wait);
 		GPUProfiler& profiler = Renderer::GetGPUProfiler();
 		if (!profiler.IsEnabled())
 			return;
@@ -2605,9 +2620,13 @@ namespace Strata
 
 		// Temporal anti-aliasing (below) blends along the motion vectors.
 		const PostProcessComponent postProcess = GetPostProcessSettings(scene);
-		ChoosePreExposure(postProcess, options);
+		// A lighting view changed since the previous frame resets the history and, around its value views, the exposure's
+		// readbacks; those views' frames hold the pre-exposure.
+		BeginLightingViewFrame(options.LightingView);
+		ChoosePreExposure(postProcess, options, IsLightingValueView(options.LightingView));
 		m_Stats.PreExposure = m_PreExposure;
 		m_Stats.PreExposureSettled = m_PreExposureSettled;
+		m_Stats.LightingViewPending = options.LightingView != SceneLightingView::None && !m_LightingViewStats;
 		const bool temporalWanted = m_Specification.TemporalAntiAliasing && postProcess.AntiAliasing && postProcess.AntiAliasingMethod == AntiAliasingMode::TAA;
 		const TemporalAntiAliasingSettings temporalSettings = GetTemporalAntiAliasingSettings(postProcess);
 
@@ -2806,7 +2825,7 @@ namespace Strata
 		ReportVisibleAnimators(scene);
 		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
 		frame.AOParams = glm::vec4(postProcess.AmbientOcclusion ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
-		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, static_cast<float>(options.LightingView), 0.0f, 0.0f);
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
 			|| m_BoundLocalShadowAtlas != (m_LocalShadowAtlas ? m_LocalShadowAtlas.Get() : m_DummyLocalShadowAtlas.Get())
@@ -3134,6 +3153,14 @@ namespace Strata
 				overlayFrame.InverseViewProjection = glm::inverse(overlayFrame.ViewProjection);
 				WriteFrameConstants(commandList, overlayFrame);
 			}
+			if (options.LightingView != SceneLightingView::None)
+			{
+				// First among the overlays: the views of values replace the image the others are drawn over.
+				commandList->beginMarker("LightingView");
+				if (!RecordLightingView(commandList, options, frame, nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y))))
+					degraded = true; // Reported; the image is the lit one
+				commandList->endMarker();
+			}
 			commandList->beginMarker("Overlays");
 			const bool overlaysDrawn = RenderOverlays(commandList, scene, camera, options, text, overlayPasses);
 			commandList->endMarker();
@@ -3155,6 +3182,7 @@ namespace Strata
 		if (m_GPUDrivenFrame)
 			SubmitCullReadback();
 		SubmitExposureReadback();
+		SubmitLightingViewReadback();
 		CommitShadowCache();
 		CommitLocalShadows();
 
@@ -3233,7 +3261,7 @@ namespace Strata
 	bool SceneRenderer::HasOverlays(const SceneRenderOptions& options)
 	{
 		return options.ShowGrid || !options.SelectedEntities.empty() || (options.DebugShapes && !options.DebugShapes->IsEmpty()) || !options.EntityTints.empty()
-			|| options.ShowMotionVectors;
+			|| options.ShowMotionVectors || options.LightingView != SceneLightingView::None;
 	}
 
 	bool SceneRenderer::DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport)
@@ -3481,8 +3509,8 @@ namespace Strata
 		}
 
 		// The motion view and the tints color the scene itself: the other overlays go over them. Without motion vectors (they
-		// could not be made: reported) there is no motion view.
-		if (options.ShowMotionVectors && m_MotionFrame && !DrawMotionView(commandList, viewport))
+		// could not be made: reported) there is no motion view, nor with a lighting view, drawn in its place (RecordLightingView).
+		if (options.ShowMotionVectors && m_MotionFrame && options.LightingView == SceneLightingView::None && !DrawMotionView(commandList, viewport))
 			return false;
 		if (entityIDs && !options.EntityTints.empty() && !DrawEntityTints(commandList, scene, options.EntityTints, viewport))
 			return false;

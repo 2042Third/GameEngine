@@ -183,6 +183,15 @@ editor started with `--no-gpu` (use `--headless`):
   you need not read colors: e.g. capture with `"streaming"` until `pendingEntities` and `placeholderBoxes` are 0, or with
   `"mip"` until only the first entry of `entitiesPerMipShortfall` counts entities (every texture as sharp as the view
   needs).
+- **Lighting views** show and measure the scene's light: `"lighting"` shades every lit surface white (the light alone,
+  through the scene's exposure), `"ao"` the ambient occlusion that darkens indirect light (white: none), `"indirect"` only the
+  sky's, probes' and reflected light, `"luminance"` the scene's luminance as EV100 bands (log2 of nits plus 3: an overcast
+  day's ground about 12, a sunlit one about 15), `"albedo"` the base colors with values below 0.03 marked blue and above 0.85
+  striped red (no real material lies outside). `viewport.capture` waits until the view's statistics came back (a few frames)
+  and adds `debugView.lighting: {view, surfaceShare, surfaceEv100: {p05, p50, p95}, backgroundEv100, value: {median, p05},
+  belowRangeShare, aboveRangeShare, sunIlluminance, skyIlluminance, sunToSkyRatio}` (null where the view measures nothing):
+  check `sunToSkyRatio` (lux from the sun over lux from the sky on flat ground: a clear day 6 to 10, hazy 3 to 5, overcast
+  under 0.3) and `aboveRangeShare` (albedos too bright) instead of reading colors.
 - **Texture memory** follows the screen: `asset.stats {"assets": true}` lists each streaming texture with `residentMip`
   (the finest mip level resident, 0 the full resolution), `wantedMip` (the finest its views need), `mipCount` and
   `residentBytes`, and its `mipStreaming` totals say what the streamer did (`levelsRaised`, `levelsDropped`,

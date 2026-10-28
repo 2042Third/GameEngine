@@ -59,6 +59,9 @@ namespace Strata
 		// captures to be converted: none for the capture renderer, which draws every view and converts every loaded capture in its
 		// first frame (SceneRendererSpecification::SpreadLightingUpdates is off); captures still loading count as pending assets.
 		constexpr uint32_t c_MaxCaptureLightingFrames = 16;
+		// Frames a capture may render again while the statistics of its lighting debug view (SceneRenderer::GetLightingViewStats)
+		// are on their way back from the GPU: they arrive two or three frames after the frame they measured.
+		constexpr uint32_t c_MaxCaptureLightingViewFrames = 8;
 		// Frames a capture may render again while its pre-exposure settles (SceneRendererStats::PreExposureSettled): automatic
 		// exposure reads its metering back frames later, and a scene far from 1 nit (daylight in real units) needs a second
 		// readback once its pre-exposure moved.
@@ -136,13 +139,40 @@ namespace Strata
 
 		nlohmann::json DebugViewSchema(std::string description)
 		{
-			return { { "type", "string" }, { "enum", { "none", "streaming", "lod", "mip", "motion" } }, { "description", std::move(description) } };
+			return { { "type", "string" }, { "enum", { "none", "streaming", "lod", "mip", "motion", "lighting", "ao", "indirect", "luminance", "albedo" } },
+				{ "description", std::move(description) } };
 		}
 
-		// What the debug view of a render found.
-		nlohmann::json DescribeDebugView(ViewportDebugView view, const StreamingViewStats& stats, uint32_t tintedEntities)
+		// A measured value, null where nothing was measured (NaN).
+		nlohmann::json MeasuredValue(float value)
 		{
+			return std::isfinite(value) ? nlohmann::json(value) : nlohmann::json(nullptr);
+		}
+
+		// What a lighting view measured (SceneRenderer::GetLightingViewStats), in the names of the debug views.
+		nlohmann::json DescribeLightingViewStats(ViewportDebugView view, const LightingViewStats& stats)
+		{
+			const bool albedo = stats.View == SceneLightingView::Albedo;
 			return {
+				{ "view", ViewportDebugViewToString(view) },
+				{ "surfaceShare", stats.SurfaceShare },
+				{ "surfaceEv100", { { "p05", MeasuredValue(stats.SurfaceEV100.x) }, { "p50", MeasuredValue(stats.SurfaceEV100.y) },
+					{ "p95", MeasuredValue(stats.SurfaceEV100.z) } } },
+				{ "backgroundEv100", MeasuredValue(stats.BackgroundEV100) },
+				{ "value", { { "median", MeasuredValue(stats.ValueMedian) }, { "p05", MeasuredValue(stats.ValueP05) } } },
+				{ "belowRangeShare", albedo ? nlohmann::json(stats.BelowRangeShare) : nlohmann::json(nullptr) },
+				{ "aboveRangeShare", albedo ? nlohmann::json(stats.AboveRangeShare) : nlohmann::json(nullptr) },
+				{ "sunIlluminance", stats.SunIlluminance },
+				{ "skyIlluminance", stats.SkyIlluminance },
+				{ "sunToSkyRatio", stats.SunToSkyRatio } };
+		}
+
+		// What the debug view of a render found: for a lighting view also its statistics (null, with lightingPending, when they did
+		// not arrive in time).
+		nlohmann::json DescribeDebugView(ViewportDebugView view, const StreamingViewStats& stats, uint32_t tintedEntities,
+			const std::optional<LightingViewStats>& lighting)
+		{
+			nlohmann::json result = {
 				{ "view", ViewportDebugViewToString(view) },
 				{ "tintedEntities", tintedEntities },
 				{ "pendingEntities", stats.PendingEntities },
@@ -151,6 +181,12 @@ namespace Strata
 				{ "entitiesPerLOD", stats.EntitiesPerLOD },
 				{ "lodErrorPixels", stats.MaxErrorPixelsPerLOD },
 				{ "entitiesPerMipShortfall", stats.EntitiesPerMipShortfall } };
+			if (GetLightingView(view) != SceneLightingView::None)
+			{
+				result["lighting"] = lighting ? DescribeLightingViewStats(view, *lighting) : nlohmann::json(nullptr);
+				result["lightingPending"] = !lighting;
+			}
+			return result;
 		}
 
 		nlohmann::json DescribeViewportSettings(const ViewportSettings& settings)
@@ -264,6 +300,8 @@ namespace Strata
 			uint32_t MotionFrames = 0;   // Renders repeated for the motion view's previous frame
 			uint32_t TemporalFrames = 0; // Renders repeated while temporal anti-aliasing settled
 			uint32_t LightingFrames = 0; // Renders repeated while shadow views of point and spot lights waited to be drawn
+			uint32_t LightingViewFrames = 0; // Renders repeated while the lighting view's statistics were on their way back
+			std::optional<LightingViewStats> LightingStats; // The lighting view's, as the captured frame knew them
 			uint32_t ExposureFrames = 0; // Renders repeated while the pre-exposure settled
 			bool Rendered = false;       // A first frame was rendered (it started the exposure again)
 			uint32_t TexturesBelowWanted = 0;
@@ -631,6 +669,7 @@ namespace Strata
 			progress.RenderFrame = FrameProfiler::Get().GetTotalFrameCount();
 			progress.RenderCount = renderer->GetSceneRenderer().GetRenderCount();
 			progress.DebugViewStats = renderer->GetDebugViewStats();
+			progress.LightingStats = renderer->GetLightingViewStats();
 			progress.TintedEntities = stats.TintedEntities;
 			progress.PendingAssets = stats.PendingAssets;
 			progress.PendingTextGlyphs = stats.PendingTextGlyphs;
@@ -654,10 +693,13 @@ namespace Strata
 			// Probes wait only for their captures to load (the capture renderer converts every one at once): an asset wait.
 			const uint32_t probesPending = request.WaitForAssets ? progress.ReflectionProbesPending : 0u;
 			const bool lightingPending = progress.LocalShadowViewsPending + probesPending > 0 && progress.LightingFrames < c_MaxCaptureLightingFrames;
+			// A lighting view's statistics of a frame this capture rendered (the capture renderer drops them with its targets).
+			const bool lightingViewPending = GetLightingView(progress.DebugView) != SceneLightingView::None && !progress.LightingStats
+				&& progress.LightingViewFrames < c_MaxCaptureLightingViewFrames;
 			// Until its pre-exposure settled the frame's brightest and darkest values may have clamped or lost bits.
 			const bool exposurePending = !stats.PreExposureSettled && progress.ExposureFrames < c_MaxCaptureExposureFrames;
 			const bool contentPending = textPending || assetsPending || mipsPending || posesPending || instancesPending || motionPending || lightingPending
-				|| exposurePending;
+				|| exposurePending || lightingViewPending;
 			// Temporal anti-aliasing: the mean of the jitter's phases of the complete view, as the viewport shows a still view once it
 			// settled. A frame still incomplete starts the history again (the capture's targets are released after each picture,
 			// so each one starts it anyway), so the picture blends complete frames only.
@@ -669,6 +711,7 @@ namespace Strata
 					renderer->GetSceneRenderer().ResetHistory();
 				progress.MotionFrames += motionPending ? 1 : 0;
 				progress.LightingFrames += lightingPending ? 1 : 0;
+				progress.LightingViewFrames += lightingViewPending ? 1 : 0;
 				progress.ExposureFrames += exposurePending ? 1 : 0;
 				progress.TemporalFrames += temporalPending ? 1 : 0;
 				progress.TextFrames += textPending ? 1 : 0;
@@ -755,7 +798,7 @@ namespace Strata
 				{ "camera", request.OwnCamera.IsSet() ? "custom" : (progress.View.FromScene ? "scene" : "editor") },
 				{ "view", DescribeView(progress.View.Camera) },
 				{ "waitedFrames", std::max({ progress.TextFrames, progress.AssetFrames, progress.MipFrames, progress.PoseFrames, progress.InstanceFrames,
-					progress.MotionFrames, progress.TemporalFrames, progress.LightingFrames, progress.ExposureFrames }) },
+					progress.MotionFrames, progress.TemporalFrames, progress.LightingFrames, progress.ExposureFrames, progress.LightingViewFrames }) },
 				{ "temporalFrames", progress.Stats.TemporalFrames },
 				{ "overlays", progress.Overlays },
 				{ "pendingAssets", progress.PendingAssets },
@@ -770,7 +813,7 @@ namespace Strata
 				{ "hiddenScreenSpaceTexts", progress.HiddenScreenSpaceTexts },
 				{ "ui", { { "canvases", progress.UI.Canvases }, { "hiddenCanvases", progress.UI.HiddenCanvases }, { "elements", progress.UI.Elements },
 					{ "drawCalls", progress.UI.DrawCalls }, { "pendingGlyphs", progress.UI.PendingGlyphs } } },
-				{ "debugView", DescribeDebugView(progress.DebugView, progress.DebugViewStats, progress.TintedEntities) },
+				{ "debugView", DescribeDebugView(progress.DebugView, progress.DebugViewStats, progress.TintedEntities, progress.LightingStats) },
 				{ "renderStats", std::move(progress.RenderStats) }
 			};
 			if (!progress.View.Notice.empty())
@@ -886,7 +929,8 @@ namespace Strata
 			"stats; allColliders: collider shapes of every entity instead of only the selection's), previewLighting (editor views light scenes without any light of their own with a preview sun and sky), gameUI (editor views draw the "
 			"game's screen-space UI, its HUD text and UI canvases, and a click selects a UI element), canvasMode (the 2D canvas mode for placing game "
 			"UI), the gizmo mode and space, whether gizmo drags snap, the snap steps, debugView (\"none\", or \"streaming\" / \"lod\" / \"mip\": the "
-			"image colored by streaming state, level of detail or the mip levels textures lack), gameView (the Game view's image: {mode, width, "
+			"image colored by streaming state, level of detail or the mip levels textures lack; \"motion\"; or a lighting view: \"lighting\", "
+			"\"ao\", \"indirect\", \"luminance\", \"albedo\"), gameView (the Game view's image: {mode, width, "
 			"height}, width and height for mode \"custom\"), pilotGameCamera (the Scene view looks through the scene's primary camera) and editPose "
 			"(\"rest\" or \"clipStart\": what skinned characters of the edited scene show while it does not play).",
 			ObjectSchema({}),
@@ -922,7 +966,10 @@ namespace Strata
 					"detail they are drawn at (0 to 3+), \"mip\" tints entities with textures by the mip levels their worst texture lacks against what "
 					"their view needs (none Malachite, 1 Azurite, 2 Sulfur, 3 or more or still loading Cinnabar), \"motion\" colors every pixel by its motion "
 					"since the view's previous frame (hue: the direction, right red, up yellow-green, left cyan, down violet; strength: the speed, full at "
-					"16 pixels a frame; still pixels darkened), \"none\" shows the image as rendered") },
+					"16 pixels a frame; still pixels darkened), \"lighting\" shades every lit surface white (the light alone), \"ao\" shows the "
+					"occlusion that darkens indirect light (white: none), \"indirect\" only the sky's, probes' and reflected light, \"luminance\" the "
+					"scene's luminance in EV100 bands (log2 nits + 3; the legend names them), \"albedo\" the base colors with values below 0.03 marked "
+					"Azurite and above 0.85 striped Cinnabar, \"none\" shows the image as rendered") },
 				{ "gameView", ObjectSchema({
 					{ "mode", { { "type", "string" }, { "enum", { "free", "16:9", "16:10", "4:3", "21:9", "1920x1080", "1280x720", "custom", "game" } },
 						{ "description", "The Game view's image: free fills the panel, an aspect ratio is the largest image of it inside the panel "
@@ -1018,7 +1065,8 @@ namespace Strata
 			"by streaming state, level of detail or mip levels (default: the viewport's, viewport.setSettings) and the result's debugView says what it "
 			"found: {view, tintedEntities, pendingEntities, failedEntities, placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], "
 			"lodErrorPixels: [the largest error drawn at each of those, in pixels, where levels are chosen by their errors; else 0], "
-			"entitiesPerMipShortfall: [at the wanted level, 1 level coarser, 2, 3+ or loading]} among the entities in view. renderStats is what the "
+			"entitiesPerMipShortfall: [at the wanted level, 1 level coarser, 2, 3+ or loading]} among the entities in view; the lighting views "
+			"show the scene's light, and debugView.lighting holds what they measured (EV100 percentiles, albedo shares, sunToSkyRatio). renderStats is what the "
 			"captured frame drew, as editor.perf's renderStats (draws, instances, shadow casters, triangles, proxies, lights, timings), with gpuMs: "
 			"the GPU's milliseconds per stage of the captured frame (empty, with gpuStatsFrame null, where the GPU writes no timestamps). quality "
 			"draws the picture at a preset (default: the view's); renderStats.quality says what it drew with. "
@@ -1040,7 +1088,11 @@ namespace Strata
 					"true); false takes the picture at once") },
 				{ "debugView", DebugViewSchema("\"streaming\" tints entities by streaming state (pending Sulfur, failed Cinnabar, missing meshes as boxes), "
 					"\"lod\" by level of detail, \"mip\" by the mip levels their textures lack, \"motion\" colors pixels by their motion since the capture's "
-					"previous frame (rendered twice for it: still scenes show none), \"none\" not at all (default: the viewport's debug view)") },
+					"previous frame (rendered twice for it: still scenes show none); \"lighting\" white surfaces, \"ao\" ambient occlusion, \"indirect\" "
+					"indirect light only, \"luminance\" EV100 bands, \"albedo\" base colors (outside 0.03-0.85 marked), each with debugView.lighting: "
+					"{view, surfaceShare, surfaceEv100 {p05, p50, p95}, backgroundEv100, value {median, p05} (ao, albedo), belowRangeShare, "
+					"aboveRangeShare (albedo), sunIlluminance, skyIlluminance (lux on flat ground), sunToSkyRatio}; \"none\" not at all (default: the "
+					"viewport's debug view)") },
 				{ "quality", QualitySchema("The quality the picture is drawn at (default: the quality of the view it shows: the Scene view's for the "
 					"editor camera and cameras of the capture's own, the project's for the scene's camera)") },
 				{ "path", StringSchema("Also save the PNG to this .png file: relative to the project directory (needs an open project) or absolute; folders are "
@@ -1087,7 +1139,8 @@ namespace Strata
 				{
 					request.DebugView = ViewportDebugViewFromString(arguments.GetString("debugView"));
 					if (!request.DebugView && arguments.IsValid())
-						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\", \"lod\", \"mip\" or \"motion\"");
+						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\", \"lod\", \"mip\", \"motion\", \"lighting\", \"ao\", "
+							"\"indirect\", \"luminance\" or \"albedo\"");
 				}
 				if (arguments.Has("quality"))
 				{

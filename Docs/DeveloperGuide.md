@@ -636,6 +636,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     mean channel difference and a difference image (eight times the difference), the crops side by side, and per picture
     the ratio of the GPU times; `compare.json` and `index.html`. It reports differences without failing; exit code 1 only
     when one side has a picture the other lacks.
+  - A shot with `DebugView` captures that debug view of `viewport.capture` (the lighting views' statistics land in its
+    `stats/`); builds without it refuse the shot.
   - Shots and look-dev content are appended, never changed, so that captures of every build keep comparing. GPU times
     are kept only from runs alone on the machine, under `python Tools/PerfLock.py --label lookdev-<label> --limit 90 -- ...`
     (a full run takes longer than the lock's default limit); the pictures are read and cropped on every core after the
@@ -2848,7 +2850,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - **View commands** change no scene data and record no undo: `camera.get`, `camera.set {position, target, yaw, pitch,
   distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
   (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?,
-  fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion", quality?: "project" | "low" | "medium" |
+  fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion" | "lighting" | "ao" | "indirect" | "luminance" |
+  "albedo", quality?: "project" | "low" | "medium" |
   "high" | "ultra", waitForAssets?, path?, overwrite?}` renders on the
   next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still
   being rasterized, so text is never half drawn, up to `c_MaxCaptureExposureFrames` until its pre-exposure settled (the
@@ -2871,9 +2874,13 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   "screenSpaceTexts", "hiddenScreenSpaceTexts", "ui": {"canvases",
   "hiddenCanvases", "elements", "drawCalls", "pendingGlyphs"}, "debugView":
   {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD",
-  "entitiesPerMipShortfall"}, "notice"?, "path"?}` (the mip view counts entities with textures by the mip levels their
-  worst texture lacks: none, 1, 2, 3 or more or still loading; the motion view colors pixels by their motion since the
-  capture renderer's previous frame, so it renders a second frame, and a still scene shows none); it defaults to the
+  "entitiesPerMipShortfall", "lighting"?, "lightingPending"?}, "notice"?, "path"?}` (the mip view counts entities with
+  textures by the mip levels their worst texture lacks: none, 1, 2, 3 or more or still loading; the motion view colors
+  pixels by their motion since the capture renderer's previous frame, so it renders a second frame, and a still scene shows
+  none; the lighting views ("Lighting" under Rendering) add `lighting: {view, surfaceShare, surfaceEv100: {p05, p50, p95},
+  backgroundEv100, value: {median, p05}, belowRangeShare, aboveRangeShare, sunIlluminance, skyIlluminance, sunToSkyRatio}`,
+  null where the view measures nothing (NaN), and the capture renders again, up to `c_MaxCaptureLightingViewFrames` (8),
+  until the statistics of a frame it drew came back: `lighting` null and `lightingPending` true if they did not); it defaults to the
   viewport's size, camera, overlays and debug view and fails without a GPU. `position`, `target` and `fov` render through a camera of the capture's own (a copy
   of the editor camera with those changes; `camera.get` is unchanged, the result's camera is `"custom"`), so agents look
   around without moving the person's view. **Live captures** (`viewport.capture {live: true, camera, atFixedStep?,
@@ -3563,6 +3570,41 @@ lights, Post Process and the sky), and never a resolution below the output's.
   both in texels at the surface's depth.
 - Cost: the views drawn (none in a still scene), their casters' culling (a sphere query per drawn light on the CPU, or the
   GPU's tests per view), and 16 comparison taps per pixel for each shadowed light reaching it.
+
+### Lighting
+
+- **Lighting debug views** (`SceneRenderOptions::LightingView`, `SceneLightingView`; `R/SceneRendererLightingView.cpp`) show
+  and measure the scene's light, so a lighting change is checked against numbers rather than by eye. The forward pass reads
+  the view from `MaterialParams.y` (a uniform branch, nothing when 0): **Lighting** shades every lit surface with albedo 1 and
+  no emission (unlit ones as they are), **Indirect** keeps only the image light (sky, probes, screen-space reflections) and
+  drops emission, **AmbientOcclusion** returns the occlusion that darkens indirect light (material times screen, before
+  multi-bounce), **Albedo** writes the base color; the last two are *value views*: written without the pre-exposure (a
+  sunlit scene's 2^-19 would make an albedo of 0.03 subnormal in half floats), without fog and what glass transmits.
+  **Luminance** keeps the lit image. Lighting and Indirect go through exposure and tone mapping as the image does; for the
+  value views and Luminance, `Overlay/LightingView.frag` replaces the finished image, first among the overlays (the motion
+  view is skipped with one), from the frame's own HDR target (never the temporal history, which would blend values of
+  earlier frames): occlusion as gray, albedo with luminances below `c_AlbedoLow` (0.03) mixed 0.7 toward the low mark and
+  above `c_AlbedoHigh` (0.85) toward the high mark in diagonal stripes, luminance as EV100 bands (`log2(nits) + 3`, one EV
+  wide from `LightingViewColors::LuminanceFirstEV100`, 12 colors), in `SceneRenderOptions::LightingColors` (the editor
+  sets them from theme tokens).
+- **Statistics** (`GetLightingViewStats`, `LightingViewStats`): every frame of a view `Effects/LightingViewStats.comp`
+  counts the HDR target into group-shared histograms added to a buffer (`LightingViewStatsData`: EV100 in quarter-EV bins
+  from -8 to 24 for surfaces and the background apart, the value views' values in 64 bins, the albedo's pixels outside the
+  range), copied into a ring of three `BufferReadback`s with the frame's render count, view and sun illuminance, and polled
+  by `ResolveGPUStats` (frames later, never waited for but with `wait`): percentiles walk the cumulative histogram
+  (linear within a bin), `SunIlluminance` is the directional light at the ground (its color is after the atmosphere)
+  times the cosine to the zenith, `SkyIlluminance` pi times the irradiance map at +Y times the sky's intensity (or the
+  constant ambient), and `SunToSkyRatio` their ratio on flat ground, before shadows. Statistics older than the view's
+  choice are never returned; `SceneRendererStats::LightingViewPending` says none arrived yet. `HDROutput` frames shade with
+  the view but measure and replace nothing.
+- **History and exposure:** a change of the view resets the temporal history; while a value view shows, automatic
+  exposure holds the pre-exposure it had (`ChoosePreExposure`'s `hold`: settled, readbacks not looked at), entering and
+  leaving one starts a new epoch of the exposure's readbacks (none metered around the switch is followed), and leaving one
+  jumps the adaptation, so the lit image returns at once.
+- **Cost:** nothing without a view (no pipeline, buffer or pass; `HasOverlays` asks for the output texture only with one);
+  with one, a 16x16-group pass over the image and a fullscreen draw in `GPU.Overlays`. The pipelines stay once made (the
+  capture renderer releases its targets after every picture), the statistics buffer and readbacks (about 4 KB) go with the
+  targets on `SetViewportSize(0, 0)`.
 
 ### Light units and exposure
 

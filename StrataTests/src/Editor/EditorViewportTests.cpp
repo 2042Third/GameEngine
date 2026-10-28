@@ -684,6 +684,19 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(harness.Run("viewport.setSettings", { { "debugView", "motion" } })["debugView"] == "motion");
 			CHECK(harness.Context.GetViewport().GetSettings().DebugView == ViewportDebugView::Motion);
 			CHECK(harness.Error("viewport.setSettings", { { "debugView", "velocity" } }).find("'debugView'") != std::string::npos);
+			// The lighting views, saved under their names.
+			const std::pair<const char*, ViewportDebugView> lightingViews[] = { { "lighting", ViewportDebugView::Lighting },
+				{ "ao", ViewportDebugView::AmbientOcclusion }, { "indirect", ViewportDebugView::Indirect }, { "luminance", ViewportDebugView::Luminance },
+				{ "albedo", ViewportDebugView::Albedo } };
+			for (const auto& [name, view] : lightingViews)
+			{
+				CAPTURE(name);
+				CHECK(harness.Run("viewport.setSettings", { { "debugView", name } })["debugView"] == name);
+				CHECK(harness.Context.GetViewport().GetSettings().DebugView == view);
+				CHECK(GetLightingView(view) != SceneLightingView::None);
+				CHECK(harness.Context.GetViewport().GetSettings().ToJson()["DebugView"] == name);
+			}
+			CHECK(harness.Error("viewport.setSettings", { { "debugView", "lit" } }).find("'debugView'") != std::string::npos);
 			settings = harness.Run("viewport.setSettings", { { "debugView", "streaming" } });
 			CHECK(harness.Run("viewport.getSettings") == settings);
 

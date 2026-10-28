@@ -1721,6 +1721,67 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("viewport.capture shows the lighting views with their statistics")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.AddScene();
+		Scene& scene = *harness.Context.GetActiveScene();
+		Entity sun = scene.CreateEntity("Sun");
+		sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::normalize(glm::vec3(0.3f, -1.0f, 0.2f)));
+		sun.AddComponent<DirectionalLightComponent>().Intensity = 3.0f;
+		const nlohmann::json size = { { "width", 64 }, { "height", 64 }, { "overlays", false } };
+		auto withView = [&size](const char* view)
+		{
+			nlohmann::json parameters = size;
+			parameters["debugView"] = view;
+			return parameters;
+		};
+
+		// Each view measures its frame: the capture waits for the statistics, which arrive frames later.
+		nlohmann::json result;
+		harness.Capture(withView("luminance"), &result);
+		const nlohmann::json& debugView = result["debugView"];
+		CHECK(debugView["view"] == "luminance");
+		CHECK(debugView["lightingPending"] == false);
+		CHECK(result["waitedFrames"].get<int>() <= 8);
+		const nlohmann::json& lighting = debugView["lighting"];
+		REQUIRE(lighting.is_object());
+		CHECK(lighting["view"] == "luminance");
+		CHECK(lighting["surfaceShare"].get<float>() > 0.0f);
+		CHECK(lighting["surfaceEv100"]["p05"].is_number());
+		CHECK(lighting["surfaceEv100"]["p50"].is_number());
+		CHECK(lighting["surfaceEv100"]["p95"].is_number());
+		CHECK(lighting["backgroundEv100"].is_number());
+		CHECK(lighting["value"]["median"].is_null());
+		CHECK(lighting["value"]["p05"].is_null());
+		CHECK(lighting["belowRangeShare"].is_null());
+		CHECK(lighting["aboveRangeShare"].is_null());
+		CHECK(lighting["sunIlluminance"].get<float>() > 0.0f);
+		CHECK(lighting["skyIlluminance"].is_number());
+		CHECK(lighting["sunToSkyRatio"].is_number());
+
+		// The value views measure values, the other views EV100.
+		harness.Capture(withView("albedo"), &result);
+		CHECK(result["debugView"]["lighting"]["view"] == "albedo");
+		CHECK(result["debugView"]["lighting"]["value"]["median"].is_number());
+		CHECK(result["debugView"]["lighting"]["aboveRangeShare"].is_number());
+		CHECK(result["debugView"]["lighting"]["surfaceEv100"]["p50"].is_null());
+		for (const char* view : { "lighting", "ao", "indirect" })
+		{
+			CAPTURE(view);
+			harness.Capture(withView(view), &result);
+			CHECK(result["debugView"]["view"] == view);
+			CHECK(result["debugView"]["lighting"].is_object());
+		}
+		// The tint views carry no lighting statistics.
+		harness.Capture(withView("lod"), &result);
+		CHECK_FALSE(result["debugView"].contains("lighting"));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A live capture returns the Game view's frames at exact steps of a game started paused")
 	{
 		Tests::GPUContext gpu;
