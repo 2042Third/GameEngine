@@ -304,8 +304,9 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
 - Reflection probes: a `ReflectionProbe` box (`Extents`) around a room or an area gives shiny surfaces there the
   reflections of what is around them; `lighting.bakeProbes` bakes them (again after moving lights or walls; one undo
   step). See Docs/Manual/Lighting.md.
-- The camera's look (`PostProcess`; Docs/Manual/Camera.md): new components and the Basic 3D template use the `Filmic`
-  curve at `Exposure` 0 with automatic exposure; keep that and change the light, not the exposure. ACES, which older
+- The camera's look (`PostProcess`; Docs/Manual/Camera.md): new components use the `Filmic` curve at `Exposure` 0 with
+  automatic exposure (the Basic 3D template's start scene +0.25: a bright sky over a dark ground); keep that and change
+  the light, not the exposure, besides 0.25 to 0.5 for a frame that is mostly sky. ACES, which older
   scenes store, needs about +0.8 EV for the same brightness. `MotionBlur` (off) suits fast games seen through a moving
   camera (racing, action); leave it off for slow, precise or 2D games, and judge it in the Game view while playing
   (editor views and captures never blur).

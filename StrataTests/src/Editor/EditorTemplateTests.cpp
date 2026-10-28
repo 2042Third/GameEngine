@@ -122,11 +122,12 @@ namespace
 		Entity postProcess = scene.FindEntityByName("Post Process");
 		REQUIRE(postProcess);
 		REQUIRE(postProcess.HasComponent<PostProcessComponent>());
-		// Filmic shows a metered middle gray at display middle gray: no exposure compensation.
+		// Filmic shows a metered middle gray at display middle gray; the start scene's composition (a bright sky over dark stone)
+		// takes +0.25 EV by the samples' rule.
 		const PostProcessComponent& look = postProcess.GetComponent<PostProcessComponent>();
 		CHECK(look.Tonemapper == TonemapOperator::Filmic);
 		CHECK(look.AutoExposure);
-		CHECK(look.Exposure == 0.0f);
+		CHECK(look.Exposure == 0.25f);
 		// The rest of how a metered gray shows is the component's defaults, which GPU.SceneRenderer.Camera's middle-gray test
 		// renders (sRGB 112-124): the metering, the key, the curve's shape, neutral color, the lens vignette, no motion blur.
 		const PostProcessComponent defaults;
