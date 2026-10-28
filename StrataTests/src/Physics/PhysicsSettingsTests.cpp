@@ -17,12 +17,15 @@
 #include <box3d/box3d.h>
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
+#include <spdlog/fmt/fmt.h>
 
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -239,6 +242,45 @@ TEST_SUITE("Physics.Settings")
 
 TEST_SUITE("Physics.Recycling")
 {
+	TEST_CASE("Distance 0 recycles nothing; the default recycles most of a settling stack's awake contacts")
+	{
+		// A stack of 10 boxes dropped a centimeter apart, from landing until it falls asleep: the recycled contacts and the
+		// awake ones summed over the steps (a sleeping stack has no awake contacts).
+		const auto settle = [](float distance)
+		{
+			PhysicsSettings settings = PhysicsSystem::GetDefaultSettings();
+			settings.ContactRecycleDistance = distance;
+			ScopedPhysicsSettings scoped(settings);
+			Scene scene;
+			CreateGround(scene);
+			for (uint32_t index = 0; index < 10; index++)
+				CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 0.51f + 1.01f * static_cast<float>(index), 0.0f));
+			scene.OnRuntimeStart();
+			PhysicsSystem& physics = GetPhysics(scene);
+			CHECK(physics.GetWorld()->GetContactRecycleDistance() == doctest::Approx(distance));
+			physics.SetDetailedStats(true);
+			uint64_t recycled = 0;
+			uint64_t awake = 0;
+			for (uint32_t step = 0; step < 900 && (step == 0 || physics.GetStats().ActiveBodyCount > 0); step++)
+			{
+				StepScene(scene, 1);
+				const PhysicsStats stats = physics.GetStats();
+				recycled += stats.RecycledContactCount;
+				awake += stats.AwakeContactCount;
+			}
+			CHECK(physics.GetStats().ActiveBodyCount == 0);
+			scene.OnRuntimeStop();
+			return std::pair<uint64_t, uint64_t>(recycled, awake);
+		};
+		const auto [offRecycled, offAwake] = settle(0.0f);
+		const auto [recycled, awake] = settle(c_DefaultContactRecycleDistance);
+		MESSAGE("Recycled ", offRecycled, " of ", offAwake, " awake contacts at distance 0, ", recycled, " of ", awake, " at the default");
+		CHECK(offAwake > 100);
+		CHECK(offRecycled == 0);
+		CHECK(awake > 100);
+		CHECK(2 * recycled > awake);
+	}
+
 	TEST_CASE("Character controllers' presence bodies and kinematic bodies never recycle contacts; other bodies do")
 	{
 		Scene scene;

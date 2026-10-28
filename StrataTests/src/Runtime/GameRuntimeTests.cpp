@@ -30,7 +30,9 @@
 
 #if ST_WITH_PHYSICS
 	#include "Strata/Physics/PhysicsComponents.h"
+	#include "Strata/Physics/PhysicsSimulationSettings.h"
 	#include "Strata/Physics/PhysicsSystem.h"
+	#include "Strata/Physics/PhysicsWorld.h"
 #endif
 
 #include <chrono>
@@ -490,6 +492,43 @@ TEST_SUITE("Runtime.Game")
 		CHECK_FALSE(physics->DoLayersCollide(0, 4));
 		const Entity falling = running.FindEntityByName("Ghost");
 		UpdateUntil(*game, [&]() { return glm::vec3(running.GetWorldTransform(falling)[3]).y < -2.0f; });
+	}
+
+	TEST_CASE("An exported game's physics runs with its manifest's Physics.Simulation section")
+	{
+		ScopedJobSystem jobs(2, 2);
+		Scene start("Start");
+		start.CreateEntity("Camera").AddComponent<CameraComponent>().Primary = true;
+		Entity ground = start.CreateEntity("Ground");
+		ground.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		ground.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(20.0f, 0.5f, 20.0f);
+		Entity box = start.CreateEntity("Box");
+		box.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.5f, 0.0f);
+		box.AddComponent<RigidBodyComponent>();
+		box.AddComponent<BoxColliderComponent>();
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeProjectSimulation");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, ToBytes(JsonUtils::Dump(SceneSerializer::Serialize(start))) } }, UUID(0x1010));
+		const nlohmann::json tuning = { { "ContactRecycleDistance", 0.02 }, { "SleepThreshold", 0.15 }, { "ContactHertz", 25.0 },
+			{ "ContactDampingRatio", 8.0 }, { "ContactPushSpeed", 2.0 } };
+		RewriteManifest(manifest, 5, { { PhysicsSimulationSettings::c_SectionId, { { "Version", 1 }, { "Value", tuning } } } });
+
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		REQUIRE(game->WaitForStart());
+		game->Update(c_Frame);
+		const PhysicsSystem* physics = game->GetScene()->GetSystem<PhysicsSystem>();
+		REQUIRE(physics);
+		REQUIRE(physics->GetWorld());
+		CHECK(physics->GetSimulationSource() == PhysicsSimulationSettings::Source::Project);
+		const PhysicsWorld& world = *physics->GetWorld();
+		CHECK(world.GetContactRecycleDistance() == doctest::Approx(0.02f));
+		const std::optional<float> threshold = world.GetSleepThreshold(game->GetScene()->FindEntityByName("Box"));
+		REQUIRE(threshold);
+		CHECK(*threshold == doctest::Approx(0.15f));
+		CHECK(world.GetSettings().ContactHertz == doctest::Approx(25.0f));
+		CHECK(world.GetSettings().ContactDampingRatio == doctest::Approx(8.0f));
+		CHECK(world.GetSettings().ContactPushSpeed == doctest::Approx(2.0f));
 	}
 #endif
 
