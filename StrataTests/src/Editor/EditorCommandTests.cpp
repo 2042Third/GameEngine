@@ -1310,6 +1310,26 @@ TEST_SUITE("Editor.Commands")
 		CHECK(sky()["inactive"].contains("AerialPerspectiveScale"));
 	}
 
+	TEST_CASE("Ambient occlusion's multi-bounce is set when added and changed with an undo step")
+	{
+		CommandHarness harness;
+		const std::string entity = harness.Run("entity.create", { { "name", "Post" } })["id"].get<std::string>();
+		const auto postProcess = [&]() { return harness.Run("component.get", { { "entity", entity }, { "component", "PostProcess" } }); };
+		harness.Run("component.add", { { "entity", entity }, { "component", "PostProcess" }, { "values", { { "AmbientOcclusionMultiBounce", false } } } });
+		CHECK(postProcess()["values"]["AmbientOcclusionMultiBounce"] == false);
+		harness.Run("edit.undo");
+		harness.Run("component.add", { { "entity", entity }, { "component", "PostProcess" } });
+		CHECK(postProcess()["values"]["AmbientOcclusionMultiBounce"] == true);
+		harness.Run("component.set", { { "entity", entity }, { "component", "PostProcess" }, { "values", { { "AmbientOcclusionMultiBounce", false } } } });
+		CHECK(postProcess()["values"]["AmbientOcclusionMultiBounce"] == false);
+		harness.Run("edit.undo");
+		CHECK(postProcess()["values"]["AmbientOcclusionMultiBounce"] == true);
+		harness.Run("edit.redo");
+		CHECK(postProcess()["values"]["AmbientOcclusionMultiBounce"] == false);
+		CHECK_FALSE(harness.Error("component.set", { { "entity", entity }, { "component", "PostProcess" }, { "values", { { "AmbientOcclusionMultiBounce", "yes" } } } }).empty());
+		CHECK(postProcess()["values"]["AmbientOcclusionMultiBounce"] == false);
+	}
+
 	TEST_CASE("Scene settings changes are undoable")
 	{
 		CommandHarness harness;
