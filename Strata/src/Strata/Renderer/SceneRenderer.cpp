@@ -630,41 +630,69 @@ namespace Strata
 		commandList->dispatch(DispatchGroups(parameters.OutputSize), DispatchGroups(parameters.OutputSize), layers);
 	}
 
-	SceneRenderer::EnvironmentMaps SceneRenderer::CreateEnvironmentMaps(nvrhi::ICommandList* commandList)
+	nvrhi::TextureHandle SceneRenderer::CreateEnvironmentTexture(nvrhi::ICommandList* commandList, uint32_t size, uint32_t mips, const char* name)
 	{
-		auto createCube = [&](uint32_t size, uint32_t mips, const char* name)
-		{
-			nvrhi::TextureDesc desc;
-			desc.width = size;
-			desc.height = size;
-			desc.arraySize = 6;
-			desc.mipLevels = mips;
-			desc.dimension = nvrhi::TextureDimension::TextureCube;
-			desc.format = c_EnvironmentFormat;
-			desc.isUAV = true;
-			desc.debugName = m_Specification.DebugName + "." + name;
-			desc.initialState = nvrhi::ResourceStates::ShaderResource;
-			desc.keepInitialState = true;
-			nvrhi::TextureHandle texture = m_Device->createTexture(desc);
-			ST_CORE_VERIFY(texture, "SceneRenderer: failed to create the {} cubemap", name);
-			return texture;
-		};
-
-		EnvironmentMaps maps;
-		maps.Cube = createCube(c_EnvironmentCubeSize, MipCountFor(c_EnvironmentCubeSize), "EnvironmentCube");
-		maps.Irradiance = createCube(c_IrradianceSize, 1, "Irradiance");
-		maps.PrefilteredSize = m_Specification.Quality.EnvironmentResolution;
-		maps.Prefiltered = createCube(maps.PrefilteredSize, c_PrefilteredMipCount, "Prefiltered");
-		// The new maps leave their undefined layout whole, before any level is written. Left to the passes, each level would
+		nvrhi::TextureDesc desc;
+		desc.width = size;
+		desc.height = size;
+		desc.arraySize = 6;
+		desc.mipLevels = mips;
+		desc.dimension = nvrhi::TextureDimension::TextureCube;
+		desc.format = c_EnvironmentFormat;
+		desc.isUAV = true;
+		desc.debugName = m_Specification.DebugName + "." + name;
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		nvrhi::TextureHandle texture = m_Device->createTexture(desc);
+		ST_CORE_VERIFY(texture, "SceneRenderer: failed to create the {} cubemap", name);
+		// The new texture leaves its undefined layout whole, before any level is written. Left to the passes, each level would
 		// leave it in a barrier of its own that waits for nothing (there is nothing to wait for in a new texture), recorded
 		// between the writes of the other levels; on the RTX 5090 (driver 617.42) such a barrier could land after levels
 		// already written and lose them: the atmosphere's first environment kept a black prefiltered map (its levels 0 to 3)
 		// whenever the long multiple-scattering pass ran before it in the frame, so mirrors and rough metals reflected
 		// nothing until the sun moved.
-		for (nvrhi::ITexture* texture : { maps.Cube.Get(), maps.Irradiance.Get(), maps.Prefiltered.Get() })
-			commandList->setTextureState(texture, nvrhi::AllSubresources, nvrhi::ResourceStates::UnorderedAccess);
+		commandList->setTextureState(texture, nvrhi::AllSubresources, nvrhi::ResourceStates::UnorderedAccess);
+		return texture;
+	}
+
+	SceneRenderer::EnvironmentMaps SceneRenderer::CreateEnvironmentMaps(nvrhi::ICommandList* commandList)
+	{
+		EnvironmentMaps maps;
+		maps.Cube = CreateEnvironmentTexture(commandList, c_EnvironmentCubeSize, MipCountFor(c_EnvironmentCubeSize), "EnvironmentCube");
+		maps.Irradiance = CreateEnvironmentTexture(commandList, c_IrradianceSize, 1, "Irradiance");
+		maps.PrefilteredSize = m_Specification.Quality.EnvironmentResolution;
+		maps.Prefiltered = CreateEnvironmentTexture(commandList, maps.PrefilteredSize, c_PrefilteredMipCount, "Prefiltered");
 		commandList->commitBarriers();
 		return maps;
+	}
+
+	void SceneRenderer::ReplacePrefilteredMap(nvrhi::ICommandList* commandList, EnvironmentMaps& maps, std::vector<nvrhi::ResourceHandle>& released)
+	{
+		if (maps.Prefiltered)
+			released.emplace_back(maps.Prefiltered.Get());
+		maps.PrefilteredSize = m_Specification.Quality.EnvironmentResolution;
+		maps.Prefiltered = CreateEnvironmentTexture(commandList, maps.PrefilteredSize, c_PrefilteredMipCount, "Prefiltered");
+		commandList->commitBarriers();
+	}
+
+	void SceneRenderer::ResizePrefilteredMap(nvrhi::ICommandList* commandList)
+	{
+		ST_PROFILE_FUNCTION();
+		ST_CORE_ASSERT(m_Environment && !m_Environment->Atmosphere, "SceneRenderer: only a map's or a procedural sky's environment is resized in place");
+		// The maps are copied: an environment map's are shared with renderers of the old size, which keep theirs (the radiance
+		// cube and the irradiance are shared with them, read only).
+		EnvironmentMaps maps = *m_Environment;
+		std::vector<nvrhi::ResourceHandle> released;
+		ReplacePrefilteredMap(commandList, maps, released);
+		commandList->beginMarker("EnvironmentResolution");
+		for (uint32_t mip = 0; mip < c_PrefilteredMipCount; mip++)
+			FilterEnvironmentStep(commandList, maps, c_EnvironmentFilterSteps - c_PrefilteredMipCount + mip);
+		commandList->endMarker();
+		m_Environment = CreateRef<const EnvironmentMaps>(std::move(maps));
+		if (m_Environment->Source)
+			ShareEnvironment(m_Environment);
+		Renderer::ReleaseDeferred(std::move(released));
+		m_Stats.EnvironmentUpdates++;
 	}
 
 	void SceneRenderer::ProcessEnvironment(nvrhi::ICommandList* commandList, const Ref<Texture>& source)
@@ -736,6 +764,11 @@ namespace Strata
 		EnvironmentMaps maps = m_Environment && m_Environment->Procedural ? *m_Environment : CreateEnvironmentMaps(commandList);
 		maps.Source = nullptr;
 		maps.Procedural = parameters;
+		// A new EnvironmentResolution at the same time: only the prefiltered cube depends on it.
+		std::vector<nvrhi::ResourceHandle> released;
+		if (maps.PrefilteredSize != m_Specification.Quality.EnvironmentResolution)
+			ReplacePrefilteredMap(commandList, maps, released);
+		Renderer::ReleaseDeferred(std::move(released));
 
 		nvrhi::BindingSetDesc setDesc;
 		setDesc.bindings = {
@@ -875,6 +908,8 @@ namespace Strata
 			const RenderData::ProceduralSkyParameters parameters = GetProceduralSkyParameters(*skyLight, frame);
 			if (!m_Environment || !m_Environment->Procedural || *m_Environment->Procedural != parameters)
 				GenerateProceduralSky(commandList, parameters);
+			else if (m_Environment->PrefilteredSize != m_Specification.Quality.EnvironmentResolution)
+				ResizePrefilteredMap(commandList);
 		}
 		else
 		{
@@ -889,9 +924,20 @@ namespace Strata
 			// The environment is computed from the whole map: this renderer holds it whole in its streamer until then. Once
 			// computed, the cube is all renderers sample, so nothing asks for the map's levels any more and they drop to its
 			// tail; a renderer that starts lighting with the map afterwards takes over the environment another one computed.
-			if (!m_Environment || texture != m_Environment->Source)
+			const uint32_t prefilteredSize = m_Specification.Quality.EnvironmentResolution;
+			if (m_Environment && texture == m_Environment->Source && m_Environment->PrefilteredSize != prefilteredSize)
 			{
-				if (Ref<const EnvironmentMaps> shared = FindSharedEnvironment(*texture, m_Specification.Quality.EnvironmentResolution))
+				// A new EnvironmentResolution: the maps of a renderer of that size, or the current ones with their prefiltered cube
+				// filtered again at it from their radiance cube. Never computed again from the map, whose levels dropped to its
+				// tail: the scene would lose its sky and image light until they streamed back in.
+				if (Ref<const EnvironmentMaps> shared = FindSharedEnvironment(*texture, prefilteredSize))
+					m_Environment = std::move(shared);
+				else
+					ResizePrefilteredMap(commandList);
+			}
+			else if (!m_Environment || texture != m_Environment->Source)
+			{
+				if (Ref<const EnvironmentMaps> shared = FindSharedEnvironment(*texture, prefilteredSize))
 				{
 					m_Environment = std::move(shared);
 				}
@@ -1692,7 +1738,9 @@ namespace Strata
 			ReleaseLocalShadowAtlas(quality.LocalShadowAtlasSize);
 		else if (quality.LocalShadowMaxTile != current.LocalShadowMaxTile)
 			ResetLocalShadows();
-		// The environment: computed again at the new size by the next frame with a sky (or taken from a renderer of that size).
+		// The environment: its prefiltered cube is made at the new size by the next frame with a sky (UpdateEnvironment), filtered
+		// from the radiance cube in hand (or taken from a renderer of that size), so it keeps lighting the scene meanwhile. The
+		// atmosphere's sets of maps are released instead: its next frame computes its environment at once, at the new size.
 		const bool environment = quality.EnvironmentResolution != current.EnvironmentResolution;
 		// Screen-space reflections: the next frame that traces them makes the new mode's targets (none at Off).
 		const bool reflections = quality.Reflections != current.Reflections;
@@ -1709,15 +1757,15 @@ namespace Strata
 			m_RequestedShadowMapSize = size;
 			m_ShadowMapSize = size;
 		}
-		if (environment)
-			ReleaseEnvironment();
+		if (environment && m_Atmosphere)
+			ReleaseAtmosphereEnvironment();
 		if (!cascades && !atlas && !environment && !reflections)
 			return false;
 		ResetHistory();
 		return true;
 	}
 
-	void SceneRenderer::ReleaseEnvironment()
+	void SceneRenderer::ReleaseAtmosphereEnvironment()
 	{
 		std::vector<nvrhi::ResourceHandle> released;
 		auto release = [&released](const EnvironmentMaps& maps)
@@ -1728,11 +1776,13 @@ namespace Strata
 					released.emplace_back(texture.Get());
 			}
 		};
-		if (m_Environment)
+		if (m_Environment && m_Environment->Atmosphere)
+		{
 			release(*m_Environment);
-		m_Environment = nullptr;
-		// The atmosphere's spare and refreshing maps are of the old size too: without them its next frame computes its first
-		// environment at once, at the new size.
+			m_Environment = nullptr;
+		}
+		// The spare and refreshing maps are of the old size too: without them the next frame computes the first environment at
+		// once, at the new size.
 		if (m_Atmosphere)
 		{
 			for (std::optional<EnvironmentMaps>* maps : { &m_Atmosphere->Refresh, &m_Atmosphere->Spare })
