@@ -1,11 +1,16 @@
 #include "Renderer/TAATestUtils.h"
 
+#include "Strata/Core/Log.h"
 #include "Strata/Renderer/Atmosphere.h"
+#include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/ShaderLibrary.h"
+#include "TestHelpers.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 // Aerial perspective (SkyLightComponent::AerialPerspective, IBL/AtmosphereAerial.comp, Include/AerialPerspective.glsl): the air
@@ -256,6 +261,49 @@ TEST_SUITE("GPU.Atmosphere")
 		CAPTURE(right);
 		for (int channel = 0; channel < 3; channel++)
 			CHECK(right[channel] == doctest::Approx(left[channel]).epsilon(0.01));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Aerial perspective that cannot be made is reported once, and the frames are drawn without the haze")
+	{
+		// Each frame tries to make the volume again (an allocation can succeed later), but its error is logged only when it
+		// appears: the frame counts as degraded, which keeps the renderer's last error instead of clearing it at its end.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAirMeshes(assets);
+		Scene scene;
+		AddAtmosphere(scene, true, 8.0f);
+		AddFacingQuad(scene, assets, glm::vec3(500.0f, 1.0f, 0.0f), 200.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+		const SceneCamera camera = HorizontalCamera(2000.0f, 60.0f);
+		SceneRenderer renderer = CreateAirRenderer();
+		ShaderLibrary& shaders = Renderer::GetShaderLibrary();
+		size_t reports = 0;
+		{
+			const LogCapture log;
+			shaders.SetUnavailable("IBL/AtmosphereAerial.comp", true);
+			RenderAir(gpu, renderer, scene, camera);
+			for (int frame = 0; frame < 4; frame++)
+			{
+				REQUIRE(renderer.Render(scene, camera));
+				FinishFrame(gpu);
+				CHECK(renderer.GetStats().EnvironmentLighting);
+				CHECK_FALSE(renderer.GetStats().AerialPerspective);
+			}
+			shaders.SetUnavailable("IBL/AtmosphereAerial.comp", false);
+			for (const LogEntry& entry : log.GetEntries())
+			{
+				if (entry.Message.find("aerial perspective's volume could not be created") != std::string::npos)
+					reports++;
+			}
+		}
+		CHECK(reports == 1);
+		CHECK(renderer.GetAerialVolume() == nullptr);
+
+		// Once it can be made, the next frame hazes.
+		RenderAir(gpu, renderer, scene, camera);
+		CHECK(renderer.GetStats().AerialPerspective);
+		CHECK(renderer.GetAerialVolume() != nullptr);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
