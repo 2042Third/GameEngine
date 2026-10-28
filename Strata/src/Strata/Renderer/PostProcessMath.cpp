@@ -209,6 +209,63 @@ namespace Strata::PostProcessMath
 		return middleGray * glm::pow(balanced / middleGray, grading.Power);
 	}
 
+	MotionBlurProfile GetMotionBlurProfile(float lengthPixels, uint32_t sampleCount)
+	{
+		// One surface moving uniformly: every pixel's blur, its tile's and its neighborhood's are the same, so every sample
+		// counts as a sample of the center's own surface (PostProcess/MotionBlur.comp's weights with equal depths).
+		MotionBlurProfile profile;
+		const float radius = 0.5f * lengthPixels;
+		const int reach = static_cast<int>(std::ceil(radius)) + 1;
+		profile.FirstPixel = -reach;
+		const size_t pixels = static_cast<size_t>(2 * reach);
+		profile.Mean.assign(pixels, 0.0f);
+		profile.Spread.assign(pixels, 0.0f);
+		auto edge = [](int pixel) { return pixel >= 0 ? 1.0f : 0.0f; };
+		if (radius < 0.5f || sampleCount == 0)
+		{
+			for (size_t index = 0; index < pixels; index++)
+				profile.Mean[index] = edge(profile.FirstPixel + static_cast<int>(index));
+			return profile;
+		}
+		const float sampleRadius = std::max(radius, 0.5f);
+		auto cover = [](float distance, float r) { return std::clamp(1.0f - distance / r, 0.0f, 1.0f); };
+		auto span = [](float distance, float r)
+		{
+			const float t = std::clamp((distance - 0.95f * r) / (0.1f * r), 0.0f, 1.0f);
+			return 1.0f - t * t * (3.0f - 2.0f * t);
+		};
+		auto weight = [&](float distance) { return 2.0f * cover(distance, sampleRadius) + 2.0f * span(distance, sampleRadius) * span(distance, sampleRadius); };
+		// The rows' static offsets are uniform in [0, 1): the profile averages them, finely sampled.
+		constexpr int c_Offsets = 512;
+		for (size_t index = 0; index < pixels; index++)
+		{
+			const int pixel = profile.FirstPixel + static_cast<int>(index);
+			double sum = 0.0;
+			double sumSquares = 0.0;
+			for (int step = 0; step < c_Offsets; step++)
+			{
+				const float jitter = (static_cast<float>(step) + 0.5f) / static_cast<float>(c_Offsets) - 0.5f;
+				float total = weight(0.0f);
+				float value = total * edge(pixel);
+				for (uint32_t sample = 0; sample < sampleCount; sample++)
+				{
+					const float position = -1.0f + (2.0f * static_cast<float>(sample) + 1.0f + jitter) / static_cast<float>(sampleCount);
+					const int samplePixel = static_cast<int>(std::floor(static_cast<float>(pixel) + 0.5f + position * radius));
+					const float w = weight(std::abs(position) * radius);
+					value += w * edge(samplePixel);
+					total += w;
+				}
+				const double shown = value / total;
+				sum += shown;
+				sumSquares += shown * shown;
+			}
+			const double mean = sum / c_Offsets;
+			profile.Mean[index] = static_cast<float>(mean);
+			profile.Spread[index] = static_cast<float>(std::sqrt(std::max(sumSquares / c_Offsets - mean * mean, 0.0)));
+		}
+		return profile;
+	}
+
 	glm::vec3 ApplyFilmic(const glm::vec3& exposed, const FilmicCurve& curve)
 	{
 		const glm::vec3 inset = FilmicConstants::Inset * glm::max(exposed, glm::vec3(0.0f));

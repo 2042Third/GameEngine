@@ -166,6 +166,7 @@ namespace Strata
 		std::weak_ptr<Scene> m_OutlinedScene;
 		uint64_t m_OutlinedHierarchyVersion = 0;
 		bool m_OutlinedValid = false;
+		bool m_SingleImages = false; // The capture renderer (made without fades): its pictures never blur
 		std::weak_ptr<Scene> m_RenderedScene;
 		ViewportRenderStamp m_RenderStamp;
 		// What an OverlayOnly view renders under the scene's UI: nothing, with neutral post-processing (made on first use).

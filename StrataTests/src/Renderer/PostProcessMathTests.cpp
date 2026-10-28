@@ -558,4 +558,34 @@ TEST_SUITE("Renderer.PostProcessMath")
 		CHECK(clamped.Offset == glm::vec3(-0.1f * 0.18f));
 		CHECK(clamped.Matrix == PostProcessMath::GetWhiteBalanceMatrix(6500.0f, 1.0f) * 4.0f);
 	}
+
+	TEST_CASE("The motion blur's model blurs an edge over its length and keeps still edges")
+	{
+		const PostProcessMath::MotionBlurProfile still = PostProcessMath::GetMotionBlurProfile(0.5f, 12);
+		for (size_t index = 0; index < still.Mean.size(); index++)
+			CHECK(still.Mean[index] == (still.FirstPixel + static_cast<int>(index) >= 0 ? 1.0f : 0.0f));
+		for (const float length : { 6.0f, 12.0f, 24.0f })
+		{
+			const PostProcessMath::MotionBlurProfile profile = PostProcessMath::GetMotionBlurProfile(length, 12);
+			uint32_t width = 0;
+			float previous = 0.0f;
+			for (size_t index = 0; index < profile.Mean.size(); index++)
+			{
+				width += profile.Mean[index] > 1e-3f && profile.Mean[index] < 1.0f - 1e-3f ? 1u : 0u;
+				CHECK(profile.Mean[index] >= previous - 1e-6f); // Monotonic: no doubled edges
+				previous = profile.Mean[index];
+			}
+			// The samples lie length / N apart: the outermost reach within that of the span's ends.
+			CAPTURE(length);
+			CHECK(std::abs(static_cast<float>(width) - length) <= std::max(1.0f, length / 12.0f));
+		}
+		// More samples, less streak noise.
+		float spread8 = 0.0f;
+		float spread16 = 0.0f;
+		for (float value : PostProcessMath::GetMotionBlurProfile(12.0f, 8).Spread)
+			spread8 = std::max(spread8, value);
+		for (float value : PostProcessMath::GetMotionBlurProfile(12.0f, 16).Spread)
+			spread16 = std::max(spread16, value);
+		CHECK(spread16 < spread8);
+	}
 }

@@ -323,6 +323,9 @@ namespace Strata
 		// The time the automatic exposure adapts over since this renderer's previous frame; unset, the wall clock between its
 		// frames (at most 0.25 s, so pauses do not turn into one huge step). Tests and tools that step time set it.
 		std::optional<float> AdaptationSeconds;
+		// The scene's motion blur applies (PostProcessComponent::MotionBlur, unless the quality turns it off). Editor views and
+		// renderers of single images (captures, thumbnails) turn it off: they never blur.
+		bool MotionBlur = true;
 
 		// The overlays below are drawn over the finished image (after tone mapping and anti-aliasing) with exact display
 		// colors; all of them are off by default.
@@ -527,6 +530,11 @@ namespace Strata
 		std::optional<float> ExposureLog2Luminance;
 		float ExposureKeyStops = 0.0f;
 		std::optional<float> ExposureKeyReferenceLog2;
+		// Motion blur (PostProcessComponent::MotionBlur): whether the frame's passes ran (not without a motion history or on a
+		// camera cut), their samples per pixel and their tile size in pixels.
+		bool MotionBlurred = false;
+		uint32_t MotionBlurSamples = 0;
+		uint32_t MotionBlurTileSize = 0;
 		// The bloom levels the frame used (PostProcessComponent::BloomRadius; 0 without bloom).
 		uint32_t BloomLevels = 0;
 		// The frame's last pass that wrote the display image dithered it (SceneRendererSpecification::DitherOutput, and an 8-bit
@@ -668,6 +676,9 @@ namespace Strata
 		static glm::vec2 GetVignetteTangents(const SceneCamera& camera, glm::uvec2 viewportSize);
 		// The tone-mapped image FXAA reads (c_LDRFormat, sRGB-encoded, not dithered): null until the render targets exist.
 		nvrhi::ITexture* GetLDRTexture() const { return m_LDRTexture; }
+		// The motion blur's output (RGBA16F, pre-exposed, alpha 1 where it blurred): null until a frame blurred, and again once
+		// the render targets are released.
+		nvrhi::ITexture* GetMotionBlurTexture() const { return m_MotionBlurTexture; }
 		// The exposure of the latest frame (Include/Exposure.glsl): the adapted log2 average luminance and the multiplier of
 		// luminance the tone mapping applies.
 		nvrhi::IBuffer* GetExposureBuffer() const { return m_ExposureBuffer; }
@@ -1256,11 +1267,19 @@ namespace Strata
 		void ReleasePostTargets(std::vector<nvrhi::ResourceHandle>& released);
 		// The exposure and the bloom of the HDR image (the resolved one when `resolved`); returns whether bloom ran.
 		// `keyReferenceLog2`: log2 of the luminance of a gray card facing the frame's directional light (unset without one).
+		// `motionBlurred`: the post source is the motion blur's output (else the resolved image when `resolved`, else the HDR target).
 		bool RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const SceneRenderOptions& options, bool resolved,
-			std::optional<float> keyReferenceLog2);
+			bool motionBlurred, std::optional<float> keyReferenceLog2);
+		// Motion blur of the post source (the resolved image when `resolved`, else the HDR target) into m_MotionBlurTexture: the
+		// tile maxima, their neighborhoods' and the gather. False (reported) when its resources cannot be made: the frame
+		// shows the image unblurred.
+		bool RenderMotionBlur(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, bool resolved);
+		bool EnsureMotionBlurResources();
+		// The players' quality rows applied to the scene's settings: the anti-aliasing method they chose and their motion blur.
+		static void ApplyQualityOverrides(PostProcessComponent& settings, const RendererQualitySettings& quality);
 		// Tone mapping into `output`, or into the LDR target and FXAA from it into `output`.
 		void RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
-			bool resolved, bool bloom, const glm::vec2& vignetteTangents, nvrhi::IFramebuffer* output);
+			bool resolved, bool motionBlurred, bool bloom, const glm::vec2& vignetteTangents, nvrhi::IFramebuffer* output);
 		// The Post Process's grading (white balance, slope, offset, power), the white balance's part cached per temperature and tint.
 		PostProcessMath::ColorGrading GetColorGrading(const PostProcessComponent& postProcess);
 		// The bloom chain of the image `prefilterSet` reads (the first downsample: the HDR target's or the resolved image's).
@@ -1784,6 +1803,22 @@ namespace Strata
 		nvrhi::BindingLayoutHandle m_CopyBindingLayout; // The overlays' copy of the output texture into a target
 		nvrhi::BindingSetHandle m_FXAABindingSet;
 		nvrhi::TextureHandle m_LDRTexture; // Tone-mapped image before anti-aliasing (c_LDRFormat)
+		// Motion blur (SceneRendererPost.cpp): one layout for its three passes, their targets (made by the first frame that blurs,
+		// released with the render targets), their sets (the gather's per source: HDR, History 0 and 1) and the post sets of its
+		// output (exposure, bloom's prefilter, tone mapping).
+		nvrhi::BindingLayoutHandle m_MotionBlurLayout;
+		nvrhi::ComputePipelineHandle m_MotionBlurTilesPipeline;
+		nvrhi::ComputePipelineHandle m_MotionBlurNeighborsPipeline;
+		nvrhi::ComputePipelineHandle m_MotionBlurPipeline;
+		nvrhi::TextureHandle m_MotionBlurTexture;     // RGBA16F, viewport-sized: the blurred image, alpha 1 where it blurred
+		nvrhi::TextureHandle m_MotionBlurTileMax;     // RGBA16F, ceil(size / 8): each tile's largest blur (xy, pixels)
+		nvrhi::TextureHandle m_MotionBlurNeighborMax; // The largest of each tile's neighborhood
+		nvrhi::BindingSetHandle m_MotionBlurTilesSet;
+		nvrhi::BindingSetHandle m_MotionBlurNeighborsSet;
+		std::array<nvrhi::BindingSetHandle, 3> m_MotionBlurGatherSets; // HDR, History 0, History 1
+		nvrhi::BindingSetHandle m_MotionBlurExposureSet;
+		nvrhi::BindingSetHandle m_MotionBlurBloomSet;
+		nvrhi::BindingSetHandle m_MotionBlurTonemapSet;
 		nvrhi::FramebufferHandle m_LDRFramebuffer;
 		bool m_ResetExposure = true;
 		// The pre-exposure (SceneRendererStats::PreExposure): the value frames are drawn with; whether it settled; a reset asked

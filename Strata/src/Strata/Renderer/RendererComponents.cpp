@@ -124,6 +124,11 @@ namespace Strata
 				: fmt::format("Only the Filmic curve has a shoulder (Tonemapper is {})", GetTonemapperName(post.Tonemapper));
 		}
 
+		std::string WithMotionBlur(const PostProcessComponent& post)
+		{
+			return post.MotionBlur ? std::string() : "Motion Blur is off";
+		}
+
 		std::string WithBloom(const PostProcessComponent& post)
 		{
 			return post.Bloom ? std::string() : "Bloom is off";
@@ -499,11 +504,20 @@ namespace Strata
 					"directional light"))
 			.Property("BloomRadius", &PostProcessComponent::BloomRadius,
 				WithTooltip(Range(0.01f, 0.25f, 0.001f), "How far the glow reaches, as a fraction of the image height: the same share of the image "
-					"at every resolution"));
+					"at every resolution"))
+			.Property("MotionBlur", &PostProcessComponent::MotionBlur,
+				WithTooltip({}, "Blurs what moves on screen over the shutter's share of each frame, as a film camera does; editor views never "
+					"blur, and players can turn it off"))
+			.Property("MotionBlurShutterAngle", &PostProcessComponent::MotionBlurShutterAngle,
+				WithTooltip(Range(0.0f, 360.0f, 1.0f), "How long the shutter stays open, in degrees of the frame: 180 blurs over half a frame's "
+					"motion, as film cameras do; 0 none"))
+			.Property("MotionBlurMaxLength", &PostProcessComponent::MotionBlurMaxLength,
+				WithTooltip(Range(0.005f, 0.05f, 0.001f), "The longest blur, as a fraction of the image height: 0.02 is 43 pixels at 2160 rows"));
 		// Exposure is the compensation SceneRenderer applies with automatic exposure too: always active.
 		SetInactiveReasons<PostProcessComponent>({ "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed", "AutoExposureMetering",
 			"AutoExposureLowPercentile", "AutoExposureHighPercentile", "AutoExposureLightSpeed", "AutoExposureKey" }, &WithAutoExposure);
 		SetInactiveReasons<PostProcessComponent>({ "BloomIntensity", "BloomThreshold", "BloomRadius" }, &WithBloom);
+		SetInactiveReasons<PostProcessComponent>({ "MotionBlurShutterAngle", "MotionBlurMaxLength" }, &WithMotionBlur);
 		SetInactiveReasons<PostProcessComponent>({ "Toe" }, &WithFilmicToe);
 		SetInactiveReasons<PostProcessComponent>({ "Shoulder" }, &WithFilmicShoulder);
 		SetInactiveReasons<PostProcessComponent>({ "AmbientOcclusionRadius", "AmbientOcclusionIntensity" }, &WithAmbientOcclusion);

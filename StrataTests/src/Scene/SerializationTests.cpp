@@ -542,6 +542,17 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(PostProcessComponent().Vignette == 0.12f);
 		loaded = load({ { "BloomRadius", 1.0 } }, warnings);
 		CHECK(loaded.BloomRadius == 0.25f);
+
+		// The motion blur: off and at its defaults in older files; clamped.
+		loaded = load({ { "Bloom", true } }, warnings);
+		CHECK(warnings.empty());
+		CHECK_FALSE(loaded.MotionBlur);
+		CHECK(loaded.MotionBlurShutterAngle == 180.0f);
+		CHECK(loaded.MotionBlurMaxLength == 0.02f);
+		loaded = load({ { "MotionBlur", true }, { "MotionBlurShutterAngle", 720.0 }, { "MotionBlurMaxLength", 0.0 } }, warnings);
+		CHECK(loaded.MotionBlur);
+		CHECK(loaded.MotionBlurShutterAngle == 360.0f);
+		CHECK(loaded.MotionBlurMaxLength == 0.005f);
 	}
 
 	TEST_CASE("Directional lights saved before cascade blending load with the default blend; invalid blends are clamped or warn")

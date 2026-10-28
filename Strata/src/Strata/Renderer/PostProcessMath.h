@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace Strata::PostProcessMath
 {
@@ -77,5 +78,17 @@ namespace Strata::PostProcessMath
 	// From the Post Process's values (each clamped to its property's range; non-finite values are neutral).
 	ColorGrading MakeColorGrading(float kelvin, float tint, const glm::vec3& slope, const glm::vec3& offset, const glm::vec3& power);
 	glm::vec3 ApplyColorGrading(const glm::vec3& color, const ColorGrading& grading);
+
+	// The motion blur's gather (PostProcess/MotionBlur.comp) on an ideal edge (black left of pixel 0, white from it) of one
+	// surface moving uniformly with a blur of `lengthPixels` (after the shutter, clamp and threshold): per pixel from FirstPixel
+	// on, the profile's mean over the rows' static offsets and its spread (the RMS of single rows about the mean: the streak
+	// noise), in linear light.
+	struct MotionBlurProfile
+	{
+		int FirstPixel = 0;
+		std::vector<float> Mean;
+		std::vector<float> Spread;
+	};
+	MotionBlurProfile GetMotionBlurProfile(float lengthPixels, uint32_t sampleCount);
 
 }

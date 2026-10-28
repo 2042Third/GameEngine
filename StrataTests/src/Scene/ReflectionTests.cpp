@@ -537,6 +537,12 @@ TEST_SUITE("Scene.InactiveProperties")
 		post.Bloom = false;
 		CHECK(reason("PostProcess", "BloomRadius") == "Bloom is off");
 		post.Bloom = true;
+		// The motion blur's shutter and length only with motion blur.
+		CHECK(reason("PostProcess", "MotionBlurShutterAngle") == "Motion Blur is off");
+		CHECK(reason("PostProcess", "MotionBlurMaxLength") == "Motion Blur is off");
+		post.MotionBlur = true;
+		CHECK(reason("PostProcess", "MotionBlurShutterAngle").empty());
+		post.MotionBlur = false;
 		// The metering, its window, the light adaptation and the key: automatic exposure's.
 		for (const char* property : { "AutoExposureMetering", "AutoExposureLowPercentile", "AutoExposureHighPercentile", "AutoExposureLightSpeed", "AutoExposureKey" })
 		{

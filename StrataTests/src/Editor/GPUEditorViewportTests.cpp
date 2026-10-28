@@ -2124,4 +2124,46 @@ TEST_SUITE("GPU.Editor.Viewport")
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("Editor views never blur; the Game view blurs while playing; captures never blur")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", { { "Primary", true } } },
+			{ "Transform", { { "Translation", { 0, 0, 5 } } } } } } });
+		EditorContext& context = harness.Context;
+		// Every Post Process of the scene blurs (the scene the harness adds has one; the first active one applies).
+		harness.Run("entity.create", { { "name", "Post" }, { "components", { { "PostProcess", { { "MotionBlur", true } } } } } });
+		for (auto [entity, postProcess] : context.GetActiveScene()->GetRegistry().view<PostProcessComponent>().each())
+			postProcess.MotionBlur = true;
+		EditorViewport& viewport = context.GetViewport();
+		harness.Run("viewport.setSettings", { { "gameView", { { "mode", "1280x720" } } } });
+		const glm::uvec2 size(1280, 720);
+		auto renderTwice = [&](ViewportRenderer& renderer, ViewportCameraSource source)
+		{
+			for (int frame = 0; frame < 2; frame++)
+			{
+				const std::optional<ViewportView> view = ResolveViewportView(context, source, 1280.0f / 720.0f);
+				REQUIRE(view);
+				REQUIRE(renderer.Render(context, size, *view, viewport.GetSettings(), false, RendererQuality::GetProjectQuality()));
+			}
+			return renderer.GetStats().MotionBlurred;
+		};
+		REQUIRE(viewport.GetGameRenderer());
+		// In edit mode nothing blurs: the scene is still, and moves made by editing are not the game's.
+		CHECK_FALSE(renderTwice(*viewport.GetGameRenderer(), ViewportCameraSource::Scene));
+		CHECK_FALSE(renderTwice(*viewport.GetRenderer(), ViewportCameraSource::Editor));
+		harness.Run("play.start", { { "build", false } });
+		// Playing, the game's camera blurs (its passes run on every frame with a motion history); the editor camera never does.
+		CHECK(renderTwice(*viewport.GetGameRenderer(), ViewportCameraSource::Scene));
+		CHECK_FALSE(renderTwice(*viewport.GetRenderer(), ViewportCameraSource::Editor));
+		// Captures are single pictures: the capture renderer renders its view again for its settle frames, and never blurs.
+		harness.Capture({ { "camera", "scene" }, { "waitForAssets", false } });
+		REQUIRE(viewport.GetCaptureRenderer());
+		CHECK_FALSE(viewport.GetCaptureRenderer()->GetStats().MotionBlurred);
+		harness.Run("play.stop");
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }
