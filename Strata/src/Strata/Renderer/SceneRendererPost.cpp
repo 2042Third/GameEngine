@@ -22,11 +22,12 @@
 // exposure meters it into the exposure buffer (PostProcess/Histogram.comp, Exposure.comp) or writes the manual exposure
 // there, bloom downsamples it into a half-resolution chain and upsamples back (PostProcess/Bloom.comp), tone mapping maps it
 // with the exposure, the bloom, the vignette, the TAA's sharpening, the grading and the color lookup into the display target
-// (PostProcess/Tonemap.frag), or into the LDR target that FXAA reads (PostProcess/FXAA.frag). RenderFrame records
-// RenderPostHDR (exposure, bloom) and RenderPostDisplay (tone mapping, FXAA) in the GPU.Post stage, with the text and overlay
-// preparation between them. Post passes take their parameters by push constants or buffers of their own, never
-// FrameConstants. The temporal history's own post sets (m_TemporalExposureSets, m_TemporalBloomSets, m_TemporalTonemapSets)
-// belong to the TAA's resources (SceneRenderer::EnsureTemporalResources).
+// (PostProcess/Tonemap.frag), or into the LDR target that FXAA or the morphological anti-aliasing reads (PostProcess/FXAA.frag,
+// Morphological*.frag). RenderFrame records RenderPostHDR (exposure, bloom, lens flares) and RenderPostDisplay (tone mapping,
+// then FXAA or the morphological anti-aliasing) in the GPU.Post stage, with the text and overlay preparation between them.
+// Post passes take their parameters by push constants or buffers of their own, never FrameConstants. The temporal history's
+// own post sets (m_TemporalExposureSets, m_TemporalBloomSets, m_TemporalTonemapSets) belong to the TAA's resources
+// (SceneRenderer::EnsureTemporalResources).
 
 namespace Strata
 {
