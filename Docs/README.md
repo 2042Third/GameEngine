@@ -33,6 +33,8 @@ Guides for people making games in the editor:
   the sky, height fog, shadows, reflection probes and screen-space reflections.
 - [Manual/AntiAliasing.md](Manual/AntiAliasing.md): FXAA and TAA, how many frames TAA keeps and when it trails, the
   Sharp and Original presets and every tunable of Custom, and TAA's limits.
+- [Manual/Graphics.md](Manual/Graphics.md): graphics quality: the presets and what each costs, where quality is chosen
+  (the project, the Scene view, pictures, a run), players' options in a game's menu, and why there is no render scale.
 - [Manual/Settings.md](Manual/Settings.md): the Project Settings panel (the start and loading scenes, the game's title,
   version and icon, what exports keep, collision layers, input actions and the settings the engine and the game define)
   and the Preferences window (the external editor, the size of the interface), undo, saving and moving from 0.5.0.

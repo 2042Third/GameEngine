@@ -1686,3 +1686,27 @@ Answers to the author's open questions: Q1, settled by step 0 (`AutoFine`). Step
 struct pattern (module memory, capacity in, filled size out, refused below 80 bytes) is acceptable: it is the mirror of
 `StrataScriptModuleAPI`'s rule, and DG "ABI rules" gets the sentence (S3). The device-limit accessor is resolved above.
 The constant-pixel UI in 2x stills stays *unverified* and documented as a limit.
+
+## As built
+
+Step 0 at cc9524a1 against section 2.2 (names only; the design is unchanged):
+
+- `GameRenderer::SetQualityOverride(quality, source)` takes the label its log line names ("--quality", "override"), and
+  the quality is applied in a private `ApplyQuality()`, which now calls `FollowQuality(IGameGraphics&)`. The log line's
+  sources: "the project's", "the player's", "--quality", or the override's label.
+- `RendererQuality::PresetFromString(name, ignoreCase)` has the case flag; `c_HighResolutionRows` (1440) and
+  `c_MaxShadowMapSize` exist.
+- `ViewportQuality`, `ResolveViewportQuality` and `GetSceneViewQuality` live in `Editor/ViewportRenderer.h`. Step 0 drew
+  the scene's camera in the Scene view at the project's quality; `GetSceneViewQuality(view, setting, game)` now returns
+  settings and takes the game's quality (`EditorContext::GetGameQuality`) for the scene's camera, so the Scene view's
+  "Game camera", the Game view and captures of the scene's camera agree (D5's description clause says so).
+- The stream builds in its worktree's own `build/windows` (the wave brief), not `build/agent-graphics-options`.
+- The page's preset chips carry signal icons (Low to Ultra) and the sliders icon (Custom), not one icon on the first chip:
+  a chip without an icon leaves a gap.
+- `GraphicsQualityPage` also records `Header.<Preset>` probes; the players' banner is `UI::Banner` with a
+  `UI::ToolbarButton` under it, and "Player" pills mark the fields the players' options set (the preset beside the chips).
+- The Scene view's tenth chip needs about 400 units of view as icons: `Editor.UI`'s narrow-strip test uses a 1000-unit
+  window (was 900) so that its view still holds every chip.
+- The Third-Person Adventure's Graphics row is a two-by-two grid (`gridLayout`, cells of 198 x 40), not one line of four
+  (`horizontalLayout`): the sample's font is wide, and "Medium" wrapped in a quarter of the row. The toggles are copies
+  of the panel's VSync toggle (`entity.duplicate`), so they keep its look.
