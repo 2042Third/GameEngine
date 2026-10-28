@@ -1646,3 +1646,89 @@ code, the tests' files and suites). What was changed, and why:
 Not changed, but worth the implementer's eye: the final 5x5 blur after the 4x4 resolve (open question 4) and the AO
 minimum radius (a new risk row) are the two places where this stream could make the image softer or outlined; both are
 judged on the look-dev sheet at 3840x2160 with FXAA and without anti-aliasing before the step lands.
+
+## As built
+
+What landed differs from the spec above as follows (steps 1-7; steps 8-11 below the cut were not started). The commits'
+messages give each reason in full.
+
+**Names and slots that differ**
+
+- The ambient occlusion row's enum is `AmbientOcclusionLevel`; the member and the section's field keep the name
+  `AmbientOcclusionQuality` (a member named like its type changes the name's meaning in the class for GCC).
+- `SceneRenderOptions::LightingColors` (of type `LightingViewColors`) and the capture's `CaptureProgress::LightingStats`,
+  not members named like their types: GCC 13 and later reject that (`-Wchanges-meaning`), which MinGW's default
+  `-fms-extensions` hides locally.
+- `renderStats.quality` is step 0's `RendererQuality::ToSectionValue`, so its key is `"AmbientOcclusionQuality"`, not
+  `"ambientOcclusionQuality"`; no lines were added to `EditorStateCommands.cpp`.
+- The statistics pass binds the irradiance cube at SRV 3 (`Scene.glsl`'s `u_IrradianceMap`), not 2. The scene layout holds
+  SRV 29 (the aerial volume; `Renderer::GetBlack3DTexture` stands in without it). `SetHeightFog` writes `FogParams.x/.y`
+  only, `SetAerialPerspective` `.z/.w`; `MaterialParams.z` is specular anti-aliasing. `VolumeParams` was not appended (step
+  7 needed no new frame constant); step 8 appends it.
+- `Renderer.Quality`'s section version is 2 for the whole landing (three rows), as plan 4.1 asks; the feature project
+  stores 2. The integrator renumbers against what landed before.
+- `RowTraits` lines are missing (`graphics-options` had not landed): `{ "AmbientOcclusionQuality", true, "GPU.AO", nullptr }`,
+  `{ "EnvironmentResolution", true, "", <4 / 16 MiB per set, two with the atmosphere> }` and `{ "Reflections", true,
+  "GPU.Reflections", <0 / 79 / about 230 MiB at 3840x2160 for Off / Checkerboard / Spatial, by pixels> }`.
+- `ThumbnailCache::c_Version` is 5 here; `sun-shadows` also bumps 4 to 5: the later lander takes main's value + 1.
+
+**Design that differs**
+
+- Value-view frames still record their exposure readbacks; the epoch bumps on entering and leaving a value view keep them
+  from being followed (`SceneRendererPost.cpp` untouched).
+- Multi-bounce is a rational fit, `x / (1 - rho (1 - x) h)`, to the radiosity reference's conditional means (largest error
+  0.015 against the 0.03 bound; the spec's polynomial missed by 0.085 to 0.33).
+- The procedural sky's factor is 0.25 (four times darker than 0.6.0, not five): the default sun 45 degrees up gives a sun to
+  sky ratio of 8.4. Measured as illuminance, 0.6.0's template is 2.4 (GPU.SceneRenderer.LightingViews expects 2.43, not
+  1.6) and the atmosphere's Clear 8.1.
+- High differs from Medium below 1440 rows in ambient occlusion and reflections.
+- The capture waits for no extra frames for its statistics: a lighting view's capture keeps its targets until the
+  statistics of its picture's frame come back with the image (`c_MaxCaptureLightingViewFrames` is gone).
+- A new `EnvironmentResolution` keeps the environment: the prefiltered cube is made at the new size and filtered from the
+  radiance cube in hand (`ResizePrefilteredMap`), or a shared set of that size is taken; only the atmosphere's maps are
+  released (`ReleaseAtmosphereEnvironment`).
+- `lighting.applySkyPreset` keeps a light already aimed within `c_PresetDirectionTolerance` and turns a manual exposure
+  automatic (`autoExposureTurnedOn`).
+- Spatial reflections march the ray's whole length against the full-resolution depth in 32 / 48 steps (the Checkerboard
+  trace's march with fixed 4x4 offsets), not a nearest-depth pyramid: the hierarchical march ran out of iterations on rays
+  grazing a floor and broke a polished floor's reflections into stripes at 3840x2160 (`lookdev.mirror`). The resolve's hit
+  direction is the neighbor's mirror direction, its density the neighbor's lobe peak; the full-resolution copy reuses
+  `SceneColorCopy.comp`; the ray setup is shared in `Include/ScreenReflections.glsl`; the AO denoiser runs its 5x5 blur
+  separably.
+- The Open World uses aerial perspective scale 6; `Tools/GenerateIslandTerrain.py`'s grass palette moved (a content change
+  outside the spec's list) to keep the windowed image's green check without editing it.
+
+**Acceptance measured** (look-dev captures in `wave7-plan/lookdev/light-and-materials/`, Release, 3840x2160)
+
+- Step 2, the furnace row (`lookdev.furnace`, `final-lookdev-high`): the 0.95 metals reflect 0.997, 0.997, 0.997, 0.985 and
+  0.961 of F0 at roughness 0 to 1 (at least 0.9 required; step 0 read 0.997, 0.997, 0.914, 0.623, 0.310); the dielectrics
+  0.516 to 0.508, as before.
+- Step 3, the ambient occlusion view (`final-tp-ao`, the same with FXAA and without anti-aliasing): the RMS of the
+  occlusion minus its 7x7 box mean is 0.094% on `tp.view.ao`'s feet, 0.43% on `tp.scene.view.ao`'s robot shadow and 0.73%
+  on its feet (at most 1%); the fixed 4x4 pattern's own part (the residue's mean per position in the 4x4 cell) is at most
+  0.006%.
+- Step 5, single-pixel glints (a pixel a quarter of the display range above all eight neighbors) with FXAA: none on the
+  Third-Person far coins or the Playground balls, before step 5 (`step5-before`) and now (`final-scenes-fxaa`); their
+  materials have no normal maps, so the GPU test's bumpy sphere is the measure (variance 0.14 of without).
+- Step 7, `lookdev.mirror` (`final-lookdev-high`, `final-mirror-ultra`): whole reflections of the wall, balls, box and 3 cm
+  poles at High and Ultra with TAA, FXAA and none; the reflections of top edges are ragged over a few pixels.
+- A/B (section 7.1; `ab-review`): cc9524a1's Release build against df574d55's, the three samples' scene cameras with TAA,
+  three interleaved pairs under PerfLock, medians in ms (information: today's memory is not the reference machine's).
+  At Medium, `GPU.AO` 0.38 -> 0.39 (Open World 4K), 0.40 -> 0.41 (Playground 4K), 0.87 -> 0.73 (Third-Person 4K): ratios
+  0.84 to 1.09 at both sizes (at most 1.10). `GPU.Aerial` 0.010 (at most 0.05); the Open World's `GPU.Opaque` at Medium
+  0.296 -> 0.343 at 4K (+0.047, at most +0.05), 0.145 -> 0.153 at 1080p; GPU busy at Medium 1.37 -> 1.45 (Open World),
+  1.33 -> 1.36 (Playground), 1.90 -> 1.82 (Third-Person) at 4K. At High (the branch's rows: AO 3x8, the 512 sky,
+  Spatial reflections): `GPU.AO` 1.37 to 1.63 times step 0's High (which drew Medium's AO), at most 1.20 ms (Third-Person
+  4K, at most 1.8); the Third-Person's `GPU.Reflections` 0.018 -> 0.177 and `GPU.Transparent` 0 -> 0.095 (the
+  full-resolution colour copy) at 4K; GPU busy at 4K 1.39 -> 1.67, 1.35 -> 1.59 and 2.32 -> 2.76.
+
+**Merge notes**
+
+- a27f44ae and 3f2bce65 fail Editor.ProjectMigration (the samples' re-save dropped `Scene.Settings.PhysicsLayers`;
+  fd5fc3f1 fixes the test), and f564fec8's tree lacks a shader its CMake list names (removed in df574d55). History is never
+  rewritten here: land the branch squashed per step, or fold fd5fc3f1 into a27f44ae and f564fec8 into df574d55 when the
+  integrator rebases, so that no commit of main fails a suite.
+- `Forward.frag` regions this stream touched: the lighting-view branches, the surface setup's BRDF fetch and widened
+  roughness, the indirect block (multi-bounce, specular energy, the horizon fade's geometric normal), the coat,
+  `TransmitLight` and aerial perspective before the height fog; `sun-shadows`' sun term is untouched.
+- `AddNeutralPostProcess` sets `AmbientOcclusionMultiBounce = false`.
