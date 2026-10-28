@@ -24,14 +24,36 @@ layout(set = 0, binding = ST_SAMPLER(9)) uniform samplerShadow u_ShadowCompareSa
 const int c_ShadowRangeLevels = 3;
 const float c_MaxShadowSearchTexels = 31.0; // Keeps a search region within 5 x 5 cells of its level
 const float c_GoldenAngle = 2.39996323;
+// How far inside its square's edges a cascade holds a receiver (ShadowFitTracker::c_FilterReachTexels): the filter's reach,
+// so a receiver it holds is filtered from texels of its square alone. The last cascade holds receivers to its edge.
+const float c_ShadowCascadeMarginTexels = 33.0;
 
+// Whether a cascade holds a camera-relative position: within its square by `margin` (in uv) and within its depth range.
+bool ShadowCascadeHolds(int cascade, vec3 relativePosition, float margin)
+{
+	vec4 lightClip = u_Cascades[cascade].ViewProjection * vec4(relativePosition, 1.0);
+	vec3 lightPosition = lightClip.xyz / lightClip.w;
+	vec2 uv = NDCToUV(lightPosition.xy);
+	return all(greaterThanEqual(uv, vec2(margin))) && all(lessThanEqual(uv, vec2(1.0 - margin))) && lightPosition.z >= 0.0 && lightPosition.z <= 1.0;
+}
 
-int SelectCascade(float viewDepth)
+bool ShadowCascadeHolds(int cascade, vec3 relativePosition)
+{
+	bool last = cascade + 1 >= int(u_Frame.ShadowParams.w);
+	return ShadowCascadeHolds(cascade, relativePosition, last ? 0.0 : c_ShadowCascadeMarginTexels * u_Frame.ShadowParams.y);
+}
+
+// The cascade that shades a camera-relative position at a view depth, by containment: from the first cascade whose split lies
+// beyond the depth, the first one that holds the position (ShadowCascadeHolds); -1 when none does. The cascades' squares may be
+// fitted to the receivers a readback saw (SceneRenderer::FindShadowCasters, ShadowFitTracker): one the readback missed (a fast
+// turn, something that just appeared) falls to a coarser cascade, at last to the last one's sphere, which reaches the shadow
+// distance, until the next readback fits it. Every shader that selects a cascade calls this; none selects by depth alone.
+int SelectShadowCascade(float viewDepth, vec3 relativePosition)
 {
 	int cascadeCount = int(u_Frame.ShadowParams.w);
 	for (int cascade = 0; cascade < cascadeCount; cascade++)
 	{
-		if (viewDepth < u_Frame.CascadeSplits[cascade])
+		if (viewDepth < u_Frame.CascadeSplits[cascade] && ShadowCascadeHolds(cascade, relativePosition))
 			return cascade;
 	}
 	return -1;
@@ -40,15 +62,19 @@ int SelectCascade(float viewDepth)
 // How far a pixel is into the band where its cascade hands over to the next one (the last one fades out): 0 before the
 // band, 1 at the split. The band is the last ShadowParams.z of the cascade's depth range, from the previous split (the
 // first cascade's from the camera, at 0), as SceneRenderer::FindShadowCasters lays it out: the next cascade's slice starts
-// at the band, so its square covers it.
-float CascadeBlendWeight(int cascade, float viewDepth)
+// at the band, so its square covers it unless it is fitted to receivers elsewhere; then the cascade does not blend into it
+// (0), and a position beyond the split falls to the next cascade that holds it.
+float CascadeBlendWeight(int cascade, float viewDepth, vec3 relativePosition)
 {
 	float split = u_Frame.CascadeSplits[cascade];
 	float previousSplit = cascade > 0 ? u_Frame.CascadeSplits[cascade - 1] : 0.0;
 	float band = u_Frame.ShadowParams.z * (split - previousSplit);
 	if (!(band > 0.0))
 		return 0.0;
-	return clamp((viewDepth - (split - band)) / band, 0.0, 1.0);
+	float weight = clamp((viewDepth - (split - band)) / band, 0.0, 1.0);
+	if (weight > 0.0 && cascade + 1 < int(u_Frame.ShadowParams.w) && !ShadowCascadeHolds(cascade + 1, relativePosition))
+		return 0.0;
+	return weight;
 }
 
 // Receiver plane depth bias: the gradient of the receiver's light-space depth over the shadow map's uv, from the plane
@@ -216,11 +242,11 @@ ShadowSample SampleCascadeShadow(int cascade, vec3 relativePosition, vec3 normal
 // between cascades nor the end of the shadows at the shadow distance shows. PenumbraTexels and DiskWeight are mixed alike.
 ShadowSample EvaluateDirectionalShadow(vec3 relativePosition, vec3 normal, float viewDepth, ivec2 pixel)
 {
-	int cascade = SelectCascade(viewDepth);
+	int cascade = SelectShadowCascade(viewDepth, relativePosition);
 	if (cascade < 0)
 		return ShadowSample(1.0, 0.0, 0.0, -1);
 	ShadowSample shadow = SampleCascadeShadow(cascade, relativePosition, normal, pixel);
-	float blend = CascadeBlendWeight(cascade, viewDepth);
+	float blend = CascadeBlendWeight(cascade, viewDepth, relativePosition);
 	if (blend > 0.0)
 	{
 		ShadowSample next = cascade + 1 < int(u_Frame.ShadowParams.w) ? SampleCascadeShadow(cascade + 1, relativePosition, normal, pixel)

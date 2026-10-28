@@ -179,7 +179,8 @@ editor started with `--no-gpu` (use `--headless`):
   blend bands, veils what no cascade covers in gray and darkens the sky, and the result's `debugView.shadows` reports
   `{complete, shadowMapSize, surfaceShare, skyShare, uncoveredShare, medianPixelsPerTexel, p10PixelsPerTexel,
   p90PixelsPerTexel, aboveFourShare, cascades: [{index, near, far, texelSize, screenShare, medianPixelsPerTexel, ...}]}`
-  (shares of the image; pixels per texel over covered receivers: about 1 or less means shadows as fine as the screen);
+  (shares of the image; pixels per texel over covered receivers: about 1 or less means shadows as fine as the screen; the
+  cascades follow what the view shows a few frames late, and a capture waits for them: `shadowFitSettled` in its result);
   `"none"` is the plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
   `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the Game view). The result's
   `debugView` counts what it found among the entities in view: `{view, tintedEntities, pendingEntities, failedEntities,

@@ -2855,7 +2855,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still
   being rasterized, so text is never half drawn, up to `c_MaxCaptureExposureFrames` until its pre-exposure settled (the
   first frame starts it again from 1 with `ResetExposureAdaptation`, the later ones only jump the adaptation:
-  `PreExposureSettled`, "Light units and exposure"), for a scene drawn with temporal anti-aliasing until its history holds
+  `PreExposureSettled`, "Light units and exposure"), up to `c_MaxCaptureShadowFitFrames` (12) until the sun's cascades'
+  fit to the view settled (the first frame starts it again with `ResetShadowFit`: `ShadowFitSettled`, "Sun shadows"),
+  for a scene drawn with temporal anti-aliasing until its history holds
   `c_TemporalSettleFrames` frames of the complete view, up to `c_MaxCaptureTemporalFrames`, and with `waitForAssets`
   (default true) up to `c_MaxCaptureAssetFrames` while assets of the view are loading, so the first capture after
   opening or playing a scene shows its materials, and up
@@ -2868,7 +2870,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   the image back without stalling, encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data":
   <base64>}, "width", "height", "camera", "view": {"position", "forward", "fov"}, "waitedFrames", "temporalFrames", "overlays",
   "pendingAssets", "texturesBelowWanted", "stalePoses", "pendingTextGlyphs", "localShadowViewsPending",
-  "reflectionProbesPending", "preExposureSettled",
+  "reflectionProbesPending", "preExposureSettled", "shadowFitSettled",
   "previewLighting",
   "screenSpaceTexts", "hiddenScreenSpaceTexts", "ui": {"canvases",
   "hiddenCanvases", "elements", "drawCalls", "pendingGlyphs"}, "debugView":
@@ -3510,8 +3512,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
 - Cascade blending (`DirectionalLightComponent::CascadeBlend`, 0 to 0.5, 0.1 by default and for scenes saved before
   it): each cascade's band is the last `CascadeBlend` of its slice's depth range, before its split (the first slice's
   range counted from the camera). `Include/Shadows.glsl` (`CascadeBlendWeight`) mixes a band's pixels with the next
-  cascade by depth, and the last cascade's with no shadow, so no seam shows between cascades and shadows fade out by the
-  shadow distance instead of stopping. `FindShadowCasters` starts each next slice at the previous band before fitting
+  cascade where that one holds them (a fitted square may not: "Sun shadows"), and the last cascade's with no shadow, so no
+  seam shows between cascades and shadows fade out by the shadow distance instead of stopping. `FindShadowCasters` starts each next slice at the previous band before fitting
   its sphere, so the next square covers the band; the CPU's caster test, the GPU's `CullConstants::CascadeBoxes`, the
   fit and the cascade cache's keys all read those boxes. Its cost: a second filter evaluation in the bands' pixels, and
   slightly larger squares (lower texel density, more casters) for cascades 1 to 3. 0 switches cascades at once, as 0.5.0
@@ -3600,13 +3602,62 @@ lights, Post Process and the sky), and never a resolution below the output's.
   march's last 40%, from half the shadow distance to all of it, and within 5% of the screen's edges. The limit every screen-space method has: contact shadows come from every opaque surface of the depth
   prepass, also from mesh renderers whose `CastShadows` is off, and from nothing off screen or hidden; transparent
   surfaces neither cast nor receive them. `GPU.SceneRenderer.ContactShadows`; the GPU-driven comparison draws them.
+- **Cascades fitted to the view** (`SceneRendererSpecification::FitShadowsToView`, on by default; `ShadowFitTracker`,
+  `Strata/Renderer/ShadowFit.h`; `SceneRendererShadowFit.cpp`): the cascades go where the receivers are. In
+  `GPU.ScreenShadows`, after the mask, `Scene/ShadowFit.comp` reduces the complete prepass depth (both paths alike; the
+  GPU path's occlusion pyramid holds only the first phase's farthest depths, the sky included) to the receivers' nearest
+  and farthest view distance and, per quarter stop of view distance (`RenderData::c_ShadowFitBins` 80 from 6.25 cm), the
+  box of their positions in the camera's **view space** (`ShadowFitResult`, 1,936 bytes; every field an ordered float
+  reduced with `atomicMax`, minima complemented; a thread reduces 4 x 4 pixels in registers, a group in shared memory).
+  A ring of `c_GPURecordCount` readbacks, each with the frame's camera, the tracker's epoch and layout version, is
+  submitted after the frame and polled (never waited for) by `UpdateShadowFit` at the start of a later frame's
+  extraction, before the visibility feedback is chosen; `FindShadowCasters` applies the tracker's layout to
+  `m_Cascades` and `CascadeSplits`, so the CPU's caster test, the GPU's culling, the depth fit and the cascade cache's
+  keys agree, and **cascade layouts come only from the tracker**. Its rules, in order:
+  - **Epochs:** the fit's first frame, `ResetShadowFit` (`GameRenderer` on scene loads, captures and the project thumbnail on
+    their first frame), a camera cut, another render scene (a clone, entering Play, keeps it), other cascades (size or
+    count) and a light that stopped casting start one; until a readback of the epoch arrives, and while the receivers
+    are none or all beyond the shadow distance, the layout is Strata 0.6.0's (0.8 logarithmic splits from the near clip,
+    spheres). The first readback of an epoch sets everything at once: 0.6.0's layout is no state to shrink from.
+  - **Bounds:** `N` is the receivers' nearest distance (or the previous frame's nearest transparent surface, which no
+    depth holds) over 2^0.5, quarter stops below, at least the near clip; `F` their farthest times 2^0.5, quarter stops
+    above, at least `N` 2^0.5, and the shadow distance `D` from 0.7 `D` on (one cascade: always). A bound or side grows in
+    the frame it must and shrinks only after `ShadowFitTracker::c_ShrinkReadbacks` (8) readbacks in a row asked for less,
+    to the least shrunk of them.
+  - **Slices:** with `F = D` the `n` slices over `[N, D]`, else `n - 1` over `[N, F]` and the last one from the band before
+    `F` to `D`, splitting by the light's `CascadeDistribution` (0-1, 0.9: the logarithmic share). The **last cascade always
+    reaches `D` on its slice's sphere** (that of `[N, D]` where the field of view is so narrow that the sphere of `[a, D]`
+    would not hold the frustum's nearer points: `a > D (tan^2(fovY/2) + tan^2(fovX/2))`, and for orthographic views): a
+    receiver no readback saw (a camera turning from a wall to a vista, a door opening) has a cascade, coarser for 2-3
+    frames, never none.
+  - **Squares** (perspective views; every cascade but the last): the bins' boxes are re-projected through the readback's
+    camera into this frame's camera and light, in double, so neither a moving camera nor a turning sun (the Open World's
+    day cycle) costs a fallback frame; the union of the bins whose distance now overlaps a slice, grown by how far the
+    slice's corners moved with the camera's turn since the readback, by 5% and by `c_FilterReachTexels` (33) of its own
+    texels on each side, as a square of quarter stops (at least a sixteenth of the slice's sphere; the sphere once it would
+    be as large, or when no bin reaches the slice), centered on whole texels of absolute light space. Its depth stays the
+    sphere's (`FarZ`, `SphereNearZ`, `Radius`: the search distance), so every point of the slice is in its depth range.
+  - **Containment:** shaders select cascades with `SelectShadowCascade(viewDepth, position)` (`Include/Shadows.glsl`; the
+    only selection: never by depth alone): from the first cascade whose split lies beyond the depth, the first that holds
+    the position 33 texels inside its square (the last one to its edge, as 0.6.0) and in its depth range; a band blends
+    into the next cascade only where that one holds the pixel. The debug view selects alike.
+  - **Settled** (`SceneRendererStats::ShadowFitSettled`): since the latest change or epoch, a readback of a frame drawn with
+    the current layout arrived and kept it (true without a fit). `viewport.capture` and the project thumbnail render
+    again while it is not, for at most 12 frames (`c_MaxCaptureShadowFitFrames`, `ProjectThumbnail::c_MaxShadowFitFrames`);
+    tests render frames waited for (`ReadTexture`), so readbacks arrive the frame after on every machine.
+  Layout changes keep the visibility feedback (squares move texel by texel with the camera, as 0.6.0's spheres did): on
+  feedback frames every cascade gets the slots of every caster the feedback saw, and the last cascade holds every caster
+  of every receiver. `ForThumbnails()` and `ForBake()` turn the fit off (single frames), and so do tests of the layout's
+  texel sizes or 0.6.0's splits. Stats: `ShadowFit`, `ShadowFitSquares`, `ShadowFitSettled`, `ShadowFitNear`, `ShadowFitFar`,
+  `ShadowFitChanges`, `Cascades[c].Fitted`; `editor.status`'s render stats report `shadowFit` and `cascades`. Tests:
+  `Renderer.ShadowFit` (the tracker alone, synthetic readbacks), `GPU.SceneRenderer.ShadowFit`.
 - **Transparent surfaces** are not in the prepass: `Forward.frag`'s transparent and glass variants call
   `SampleDirectionalShadow`, the same filter per pixel, without the blur (and without contact shadows). A change to how
   the sun's shadow reaches surfaces changes both.
 - **The shadows debug view** (`SceneRenderOptions::ShowShadowView`; the editor's `debugView: "shadows"`) measures how fine
   the sun's cascades are where the receivers are. Its metric is screen pixels per shadow texel: for each pixel the scene
-  drew, its camera-relative position is reconstructed from the depth through `InverseViewProjection`, its view distance
-  `d` selects its cascade as the shading does, and the ratio is the cascade's texel size (`CascadeData::Parameters.x`)
+  drew, its camera-relative position is reconstructed from the depth through `InverseViewProjection`, it and its view
+  distance `d` select its cascade as the shading does (`SelectShadowCascade`), and the ratio is the cascade's texel size (`CascadeData::Parameters.x`)
   over a screen pixel's world size facing the camera at that distance, `2 d / (Projection[1][1] * rows)` (`2 /
   (Projection[1][1] * rows)` for orthographic views): independent of the surface's orientation, so it compares with the
   shadows audit's numbers. About 1 or less is as fine as the screen; 2.2 at every split was 0.6.0's 2048-texel cascades at

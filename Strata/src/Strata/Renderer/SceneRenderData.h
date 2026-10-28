@@ -573,6 +573,48 @@ namespace Strata
 		};
 		static_assert(sizeof(ScreenShadowBlurParameters) == 16);
 
+		// Scene/ShadowFit.comp: the receivers the frame's depth holds, binned by view distance in quarter stops from
+		// c_ShadowFitBinBase (bin = floor(4 log2(d / c_ShadowFitBinBase)), clamped to the bins: 6.25 cm to 65 km), for the
+		// cascades' fit to what the camera sees (ShadowFitTracker, Renderer/ShadowFit.h).
+		constexpr uint32_t c_ShadowFitBins = 80;
+		constexpr float c_ShadowFitBinBase = 0.0625f;
+		constexpr uint32_t c_ShadowFitBinsPerStop = 4;
+
+		// A bin's receivers as a box in the camera's view space: x and y of their positions and their view distance d, each an
+		// EncodeOrderedFloat (Include/OrderedFloat.glsl). The minima are stored complemented, so every field reduces with
+		// atomicMax and a buffer cleared to 0 holds empty bins (MaxD 0: no float encodes to 0).
+		struct ShadowFitBin
+		{
+			uint32_t MinX;
+			uint32_t MinY;
+			uint32_t MinD;
+			uint32_t MaxX;
+			uint32_t MaxY;
+			uint32_t MaxD;
+		};
+		static_assert(sizeof(ShadowFitBin) == 24);
+
+		// Scene/ShadowFit.comp's result: the nearest (complemented) and farthest view distance of any receiver, how many pixels
+		// hold one, and the bins.
+		struct ShadowFitResult
+		{
+			uint32_t Nearest;
+			uint32_t Farthest;
+			uint32_t SurfacePixels;
+			uint32_t Reserved;
+			ShadowFitBin Bins[c_ShadowFitBins];
+		};
+		static_assert(sizeof(ShadowFitResult) == 1936);
+
+		// Scene/ShadowFit.comp's push constants: the depth's size in pixels.
+		struct ShadowFitParameters
+		{
+			uint32_t Width;
+			uint32_t Height;
+			uint32_t Reserved[2];
+		};
+		static_assert(sizeof(ShadowFitParameters) == 16);
+
 	}
 
 }

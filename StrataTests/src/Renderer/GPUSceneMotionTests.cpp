@@ -95,6 +95,8 @@ namespace
 		specification.TextureStreaming = false;
 		specification.GPUDriven = mode;
 		specification.DebugName = name;
+		// Images of renderers that rendered different numbers of frames are compared: the sun's cascades must not follow the view.
+		specification.FitShadowsToView = false;
 		return SceneRenderer(specification);
 	}
 

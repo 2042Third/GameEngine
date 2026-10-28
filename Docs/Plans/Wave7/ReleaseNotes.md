@@ -53,6 +53,12 @@ integrator writes the release notes from them when the wave lands (and removes t
 - Contact shadows ground small objects at High and Ultra: the sun's shadow mask marches toward the sun over the depth
   buffer and shades what the cascades are too coarse for (Contact Shadow Length on the Directional Light, 0.3 m; 0 off).
   Graphics Quality gains Contact Shadows (off at Low and Medium, 12 steps at High, 16 at Ultra).
+- The sun's cascades follow what the camera sees: a few frames after the view changes they cover only the distances from
+  the nearest to the farthest surface in view, and each cascade but the farthest shrinks to the surfaces it shades, so the
+  shadow's texels go where the surfaces are (several times finer under a high camera looking down over a level). The
+  farthest cascade still reaches the Shadow Distance, so what comes into view is shadowed at once. Cascade Distribution
+  on the Directional Light (0.9) shares the distances among the cascades; captures wait for the fit (`shadowFitSettled`),
+  and `editor.status`'s render statistics report each cascade's slice and texel size.
 
 **Upgrading**
 
@@ -64,3 +70,8 @@ integrator writes the release notes from them when the wave lands (and removes t
 - Every directional light gets contact shadows at High and Ultra (Contact Shadow Length 0.3 m for scenes saved before it):
   set it to 0 on a light to keep its old look. They come from every opaque surface on screen, also from meshes whose
   Cast Shadows is off.
+- Every scene's cascades are fitted to the view (Cascade Distribution 0.9 for scenes saved before it). Renderers made from
+  `SceneRendererSpecification` fit them unless `FitShadowsToView` is off (thumbnails and probe bakes turn it off); a
+  renderer's first frames, and frames after a camera cut, keep the earlier layout until the GPU's reduction of the view
+  comes back. Shaders that sample the cascades select them with `SelectShadowCascade(viewDepth, position)`, by
+  containment: `SelectCascade` is gone.

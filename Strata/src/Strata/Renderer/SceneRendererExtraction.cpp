@@ -17,8 +17,6 @@
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneServices.h"
 
-#include <glm/gtc/matrix_transform.hpp>
-
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -422,92 +420,76 @@ namespace Strata
 		if (!m_ShadowLight.Enabled)
 			return;
 
-		const uint32_t cascadeCount = m_Specification.Quality.ShadowCascades;
+		// The frame's layout (UpdateShadowFit: the light's view and the slices, spheres and fitted squares of ShadowFitTracker),
+		// applied here once: the CPU's caster test, the GPU's culling (CullConstants::CascadeBoxes), the depth fit
+		// (GatherShadowDraws) and the cascade cache's keys all read m_Cascades, so both paths cull, fit and draw the same cascades
+		// and a cascade is drawn again exactly when its square or slice changed.
+		const ShadowFitLayout& layout = m_ShadowFitLayout;
+		const uint32_t cascadeCount = layout.CascadeCount;
 		const float nearClip = std::max(camera.Near, 0.01f);
 		const float farClip = std::clamp(m_ShadowLight.Distance, nearClip + 0.1f, std::max(camera.Far, nearClip + 0.1f));
 		const float aspect = static_cast<float>(m_ViewportSize.x) / static_cast<float>(m_ViewportSize.y);
 		const float tanHalfFOV = camera.Orthographic ? 0.0f : std::tan(camera.VerticalFOV * 0.5f);
 		const glm::mat4 inverseView = glm::inverse(camera.View);
-		// The slices are laid out around the camera (camera-relative), and placed in absolute light space in double, so the
-		// texel snapping stays stable however far the camera is from the origin.
 		const glm::mat3 cameraRotation(inverseView);
 		const glm::vec3 lightDirection = m_ShadowLight.Direction;
-		const glm::vec3 up = std::abs(lightDirection.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
-		m_LightView = glm::lookAt(glm::vec3(0.0f), lightDirection, up);
 		const glm::dmat3 lightRotation = glm::dmat3(glm::mat3(m_LightView));
-		m_CameraLightPosition = lightRotation * glm::dvec3(camera.Position);
-		const float mapSize = static_cast<float>(m_ShadowMapSize);
+		const double mapSize = static_cast<double>(m_ShadowMapSize);
 
-		// Each cascade's square covers the bounding sphere of a view frustum slice; its depth range is fitted to the casters
-		// (GatherShadowDraws). A cascade blends into the next one over the last CascadeBlend of its slice, before its split
-		// (Include/Shadows.glsl, CascadeBlendWeight: the first slice's range is taken from the camera, at 0): the next slice
-		// starts at that band, so the next cascade's square covers it too. The near end is a slice's narrowest part, so its
-		// sphere grows little.
-		const float cascadeBlend = m_ShadowLight.CascadeBlend;
-		float sliceNear = nearClip;
-		float previousSplit = 0.0f;
-		AABB shadowedView; // The box around the part of the view the cascades cover (the slices' corners)
+		// Each cascade's square covers its slice's bounding sphere, or the receivers' square the tracker fitted (its depth stays
+		// the sphere's, so every point of the slice is within it); its depth range toward the light is fitted to the casters
+		// (GatherShadowDraws). Placed in absolute light space in double, so the texel snapping stays stable however far the
+		// camera is from the origin: a sphere's center on whole texels of its square here, a fitted square's by the tracker.
 		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
 		{
-			// Practical split scheme: a blend of logarithmic and uniform splits.
-			const float fraction = static_cast<float>(cascade + 1) / static_cast<float>(cascadeCount);
-			const float logarithmic = nearClip * std::pow(farClip / nearClip, fraction);
-			const float uniform = nearClip + (farClip - nearClip) * fraction;
-			const float sliceFar = 0.8f * logarithmic + 0.2f * uniform;
-
-			// Bounding sphere of the view frustum slice: its size does not change when the camera rotates, which keeps the
-			// shadow texel footprint (and thus the edges) stable.
-			// The slice's corners relative to the camera.
-			std::array<glm::vec3, 8> corners;
-			size_t cornerIndex = 0;
-			for (float distance : { sliceNear, sliceFar })
+			const ShadowFitCascade& slice = layout.Cascades[cascade];
+			const float radius = slice.Radius;
+			const glm::dvec3 sphereCenter = m_CameraLightPosition + lightRotation * glm::dvec3(slice.SphereCenter);
+			double halfSide = static_cast<double>(radius);
+			glm::dvec2 squareCenter = glm::dvec2(sphereCenter);
+			if (slice.Fitted)
 			{
-				const float halfHeight = camera.Orthographic ? camera.VerticalFOV * 0.5f : distance * tanHalfFOV;
-				const float halfWidth = halfHeight * aspect;
-				for (float x : { -1.0f, 1.0f })
-				{
-					for (float y : { -1.0f, 1.0f })
-						corners[cornerIndex++] = cameraRotation * glm::vec3(x * halfWidth, y * halfHeight, -distance);
-				}
+				halfSide = 0.5 * static_cast<double>(slice.Side);
+				squareCenter = slice.Center;
 			}
-			glm::vec3 center(0.0f);
-			for (const glm::vec3& corner : corners)
-			{
-				center += corner;
-				shadowedView.Expand(camera.Position + corner);
-			}
-			center /= 8.0f;
-			float radius = 0.0f;
-			for (const glm::vec3& corner : corners)
-				radius = std::max(radius, glm::length(corner - center));
-			radius = std::ceil(radius * 16.0f) / 16.0f;
-
-			// Snap the cascade origin to whole texels of absolute light space so edges do not shimmer while the camera moves.
-			const double worldPerTexel = 2.0 * static_cast<double>(radius) / static_cast<double>(mapSize);
-			glm::dvec3 lightCenter = m_CameraLightPosition + lightRotation * glm::dvec3(center);
-			lightCenter.x = std::floor(lightCenter.x / worldPerTexel) * worldPerTexel;
-			lightCenter.y = std::floor(lightCenter.y / worldPerTexel) * worldPerTexel;
+			const double worldPerTexel = 2.0 * halfSide / mapSize;
+			if (!slice.Fitted)
+				squareCenter = glm::floor(squareCenter / worldPerTexel) * worldPerTexel;
+			const glm::dvec3 lightCenter(squareCenter, sphereCenter.z);
 			const glm::vec3 relativeCenter(lightCenter - m_CameraLightPosition);
 			const glm::vec3 absoluteCenter(lightCenter);
+			const float half = static_cast<float>(halfSide);
 
 			CascadeBox& box = m_Cascades[cascade];
-			box.Min = glm::vec2(absoluteCenter) - radius;
-			box.Max = glm::vec2(absoluteCenter) + radius;
+			box.Min = glm::vec2(absoluteCenter) - half;
+			box.Max = glm::vec2(absoluteCenter) + half;
 			box.FarZ = absoluteCenter.z - radius;
 			box.SphereNearZ = absoluteCenter.z + radius;
-			box.RelativeMin = glm::vec2(relativeCenter) - radius;
-			box.RelativeMax = glm::vec2(relativeCenter) + radius;
+			box.RelativeMin = glm::vec2(relativeCenter) - half;
+			box.RelativeMax = glm::vec2(relativeCenter) + half;
 			box.RelativeFarZ = relativeCenter.z - radius;
 			box.RelativeSphereNearZ = relativeCenter.z + radius;
 			box.WorldPerTexel = static_cast<float>(worldPerTexel);
 			box.Radius = radius;
-			frame.CascadeSplits[cascade] = sliceFar;
-			m_Stats.Cascades[cascade] = ShadowCascadeStats { sliceNear, sliceFar, box.WorldPerTexel };
-			sliceNear = std::max(sliceFar - cascadeBlend * (sliceFar - previousSplit), nearClip);
-			previousSplit = sliceFar;
+			frame.CascadeSplits[cascade] = slice.SliceFar;
+			m_Stats.Cascades[cascade] = ShadowCascadeStats { slice.SliceNear, slice.SliceFar, box.WorldPerTexel, slice.Fitted };
 		}
 		m_CascadeCount = cascadeCount;
 		m_Stats.CascadeCount = cascadeCount;
+
+		// The box around the part of the view the cascades cover, from the near clip to the shadow distance (receivers nearer
+		// than a fitted layout's first slice are shaded by containment too).
+		AABB shadowedView;
+		for (float distance : { nearClip, farClip })
+		{
+			const float halfHeight = camera.Orthographic ? camera.VerticalFOV * 0.5f : distance * tanHalfFOV;
+			const float halfWidth = halfHeight * aspect;
+			for (float x : { -1.0f, 1.0f })
+			{
+				for (float y : { -1.0f, 1.0f })
+					shadowedView.Expand(camera.Position + cameraRotation * glm::vec3(x * halfWidth, y * halfHeight, -distance));
+			}
+		}
 
 		// Shadows of a skinned mesh move with its animator, also when the mesh itself is out of view; the cascades reach far
 		// beyond the view (spheres around its slices), so a caster out of view reports its animator only when its shadow can
@@ -980,6 +962,7 @@ namespace Strata
 			std::array<uint32_t, SceneRendererStats::c_LODStatCount> instancesPerLOD = {};
 			uint32_t skipped = 0;
 			uint32_t skinnedInstances = 0;
+			float nearestTransparent = std::numeric_limits<float>::infinity();
 			const uint32_t end = std::min(visible, (chunk + 1) * c_ExtractionChunkSize);
 			for (uint32_t item = chunk * c_ExtractionChunkSize; item < end; item++)
 			{
@@ -1044,6 +1027,8 @@ namespace Strata
 					{
 						output.Transparent.push_back(TransparentDraw { viewDepth, renderScene.GetEntityID(proxy), submeshIndex, instance, meshSlot, lod, doubleSided, mirrored, skinned,
 							(materialFlags & c_MaterialTransmissive) != 0 });
+						// Transparent surfaces are not in the depth the cascades' fit measures: their nearest point bounds its near end.
+						nearestTransparent = std::min(nearestTransparent, viewDepth - 0.5f * glm::length(bounds.Max - bounds.Min));
 						continue;
 					}
 					if (opaqueDraws)
@@ -1073,14 +1058,17 @@ namespace Strata
 			output.InstancesPerLOD = instancesPerLOD;
 			output.Skipped = skipped;
 			output.SkinnedInstances = skinnedInstances;
+			output.NearestTransparent = nearestTransparent;
 		});
 
 		m_Draws.clear();
 		m_Transparent.clear();
+		m_NearestTransparent = std::numeric_limits<float>::infinity(); // For the next frame's fit (UpdateShadowFit)
 		uint32_t skipped = 0;
 		for (uint32_t chunk = 0; chunk < chunks; chunk++)
 		{
 			const ExtractionChunk& output = m_Chunks[chunk];
+			m_NearestTransparent = std::min(m_NearestTransparent, output.NearestTransparent);
 			m_Draws.insert(m_Draws.end(), output.Draws.begin(), output.Draws.end());
 			m_Transparent.insert(m_Transparent.end(), output.Transparent.begin(), output.Transparent.end());
 			for (size_t lod = 0; lod < output.InstancesPerLOD.size(); lod++)

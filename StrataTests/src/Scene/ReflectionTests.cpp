@@ -208,6 +208,21 @@ TEST_SUITE("Reflection")
 		CHECK_FALSE(contact->IsInRange(PropertyValue(-0.1f)));
 		CHECK(contact->SetValue(&sun, PropertyValue(5.0f)));
 		CHECK(sun.ContactShadowLength == doctest::Approx(2.0f));
+		// The fitted cascades' distribution: 0.9 by default, within [0, 1].
+		const PropertyInfo* distribution = ComponentRegistry::Find<DirectionalLightComponent>()->FindProperty("CascadeDistribution");
+		REQUIRE(distribution);
+		CHECK(distribution->Type == PropertyType::Float);
+		CHECK(distribution->Min == 0.0f);
+		CHECK(distribution->Max == 1.0f);
+		CHECK_FALSE(distribution->Tooltip.empty());
+		CHECK(sun.CascadeDistribution == doctest::Approx(0.9f));
+		CHECK(distribution->IsInRange(PropertyValue(0.0f)));
+		CHECK(distribution->IsInRange(PropertyValue(1.0f)));
+		CHECK_FALSE(distribution->IsInRange(PropertyValue(1.5f)));
+		CHECK(distribution->SetValue(&sun, PropertyValue(3.0f)));
+		CHECK(sun.CascadeDistribution == doctest::Approx(1.0f));
+		CHECK_FALSE(distribution->SetValue(&sun, std::numeric_limits<float>::quiet_NaN()));
+		CHECK(sun.CascadeDistribution == doctest::Approx(1.0f));
 
 		// Point and spot lights' shadows: off by default; biases within [0, 10], the filter radius within [0, 8] (texels).
 		for (const char* component : { "PointLight", "SpotLight" })
@@ -468,7 +483,8 @@ TEST_SUITE("Scene.InactiveProperties")
 		CHECK(reason("DirectionalLight", "CascadeBlend").empty());
 		CHECK(reason("DirectionalLight", "ShadowBias").empty());
 		sun.CastShadows = false;
-		for (const char* property : { "ShadowDistance", "ShadowSoftness", "ShadowBias", "ShadowNormalBias", "CascadeBlend", "ContactShadowLength" })
+		for (const char* property : { "ShadowDistance", "ShadowSoftness", "ShadowBias", "ShadowNormalBias", "CascadeBlend", "ContactShadowLength",
+			"CascadeDistribution" })
 			CHECK_MESSAGE(reason("DirectionalLight", property) == "Cast Shadows is off", property);
 		CHECK(reason("DirectionalLight", "Intensity").empty()); // Always active
 

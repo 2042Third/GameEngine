@@ -29,6 +29,9 @@ namespace
 		specification.Quality.ShadowCascades = 1;
 		specification.Quality.ShadowResolution = ShadowMapResolution::Size1024;
 		specification.Quality.ContactShadows = steps;
+		// The plate is a sub-texel caster of its one cascade, and cases compare frames: the layout must not follow the view (the
+		// fit has its own suite, GPU.SceneRenderer.ShadowFit).
+		specification.FitShadowsToView = false;
 		return specification;
 	}
 
@@ -352,6 +355,7 @@ TEST_SUITE("GPU.SceneRenderer.ContactShadows")
 		const SceneCamera camera = PlateCamera();
 		SceneRendererSpecification medium;
 		medium.TextureStreaming = false;
+		medium.FitShadowsToView = false; // Two frames are compared pixel by pixel
 		CHECK(medium.Quality.ContactShadows == 0);
 		SceneRenderer renderer(medium);
 		renderer.SetViewportSize(c_Size, c_Size);

@@ -42,17 +42,15 @@ bool GetShadowViewSample(ivec2 pixel, float depth, out ShadowViewSample viewSamp
 	vec4 point = u_Frame.InverseViewProjection * vec4(UVToNDC(uv), depth, 1.0);
 	vec3 position = point.xyz / point.w;
 	float viewDepth = -(u_Frame.View * vec4(position, 1.0)).z;
-	int cascade = SelectCascade(viewDepth);
+	int cascade = SelectShadowCascade(viewDepth, position);
 	if (cascade < 0)
 		return false;
 	vec4 lightClip = u_Cascades[cascade].ViewProjection * vec4(position, 1.0);
 	vec2 shadowUV = NDCToUV(lightClip.xy / lightClip.w);
-	if (any(lessThan(shadowUV, vec2(0.0))) || any(greaterThan(shadowUV, vec2(1.0))))
-		return false;
 
 	viewSample.Cascade = cascade;
 	viewSample.PixelsPerTexel = u_Cascades[cascade].Parameters.x / GetPixelWorldSize(viewDepth);
-	viewSample.BlendWeight = CascadeBlendWeight(cascade, viewDepth);
+	viewSample.BlendWeight = CascadeBlendWeight(cascade, viewDepth, position);
 	viewSample.ShadowUV = shadowUV;
 	return true;
 }

@@ -29,6 +29,9 @@ namespace Strata::Tests::TAA
 		specification.GPUDriven = mode;
 		specification.TemporalAntiAliasing = temporal;
 		specification.DebugName = name;
+		// The cases compare a history's frames with each other and with renderers without the jitter: the sun's cascades must not
+		// follow readbacks of the jittered depth (GPU.SceneRenderer.ShadowFit covers the fit with temporal anti-aliasing).
+		specification.FitShadowsToView = false;
 		return SceneRenderer(specification);
 	}
 

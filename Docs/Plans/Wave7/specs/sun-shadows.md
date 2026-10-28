@@ -1436,3 +1436,41 @@ name). Differences found while building:
   table lines wait for that stream's landing (merge notes). The AGENTS.md bullet leaves out "cascade layouts come only
   from `ShadowFitTracker` on the CPU" until step 6 builds the tracker. Saving the samples' scenes through the editor also
   dropped their old copy of the collision layers (the projects' `Scene.CollisionLayers` hold them).
+- Step 6: `SceneRendererShadowFit.cpp` holds `UpdateShadowFit`, `RecordShadowFit` and `SubmitShadowFitReadback`;
+  `Renderer/ShadowFit.h` `ShadowFitView`, `ShadowFitReadback`, `ShadowFitCascade`, `ShadowFitLayout` and
+  `ShadowFitTracker` (its layout holds the slices, their spheres and the fitted squares, which `FindShadowCasters` turns
+  into `m_Cascades`; `GetUnfittedLayout` is 0.6.0's, `GetSplit` the split formula). `UpdateShadowFit` also computes the
+  light's view (moved from `FindShadowCasters`), so the tracker has it before culling. Differences from D11-D13:
+  - `ShadowFit.comp` reconstructs view-space positions through the frame's `InverseProjection` (the rotation-only `View`
+    makes that the camera's view space directly); a thread reduces a 4 x 4 block of pixels in registers before the
+    group's shared copy (neighbors mostly share a bin), so a group covers 64 x 64 pixels.
+  - Bounds come from the readback's `Nearest`/`Farthest` as rule 3 says (not re-projected); the bins' re-projected
+    distances decide which bins reach a slice, the first slice's from 0 (the first cascade is selected for everything
+    nearer than its split).
+  - A fitted square keeps its center while it holds the receivers by the filter's reach, and is centered on them (on its
+    texels) only otherwise. Without this, temporal anti-aliasing's jitter moved the receivers' box by sub-pixel amounts
+    every frame, the snapped center flipped by a texel, and a still view redrew its cascades every frame (the
+    `GPU.SceneRenderer.ShadowFit` still-camera case checks the cache with TAA too).
+  - A light that stops casting (`ShadowLight.Enabled` false, also intensity 0) starts a new epoch. `RenderSunlight`
+    (tests) renders its lit and dark frames that way, so its shadowed frames are unfitted; the fit's own tests compare
+    against a second renderer instead.
+  - `HDROutput` frames submit the fit's readback too (the spec turned the fit off for them instead: a renderer with the
+    fit on may still render one).
+  - `DescribeRenderStats`' cascades also carry `fitted`.
+  - The perf metrics `ScreenShadows4K*` and `ShadowRedraw4K*` are measured by step 0's case "Render cost of 100,000 cubes
+    whose shadows cover a 4K view, at Medium and at High", which is exactly the scene section 7 describes (cascade cache
+    off, Medium and High at 3840x2160): no second case renders it again.
+  - Tests: "A high camera gets finer texels" compares the shadows view's median (fitted at most 0.6 of unfitted) at
+    2048 x 4, not `Cascades[0].WorldPerTexel`: the fitted first cascade is a different slice (from about 13 m instead of
+    the near clip), whose texels are coarser than 0.6.0's first cascade's while those of the cascades holding the
+    receivers are finer. Suites whose cases compare frames of a renderer, or of renderers whose frames are not waited for,
+    turn the fit off with a comment: the filter, mask and contact suites' helpers (spec-listed), the TAA suites' helper,
+    the motion suite's helper, the cascade cache cases (`GPU.SceneRenderer.Shadows`, `.Quality`), the seam, band and fade
+    cases (0.6.0's splits), the pre-exposure case, the extraction determinism case, an animation case, Medium's contact
+    case. `GPU.Editor.Viewport` cases that count their capture's frames for another reason turn their sun's shadows off
+    (`TurnOffSunShadows`) or give the scene an unshadowed sun (the preview's sun casts shadows).
+  - The revealed floor of D13's tests fails without the last cascade reaching `D` (lit beyond `F`), but not without
+    containment: the wall's fitted squares, as wide as the view at the wall, hold the floor beyond it too. Containment's
+    must-fail case is "A floor that appears beside what the readback saw": a box alone on screen fits small squares, then
+    the floor is drawn; without containment its pixels at the first slices' distances, outside their squares, are lit
+    (sun share 1.0), with it they fall to the last cascade (shadowed).

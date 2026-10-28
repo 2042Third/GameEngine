@@ -18,6 +18,7 @@ namespace Strata
 		float Near = 0.0f;
 		float Far = 0.0f;
 		float WorldPerTexel = 0.0f;
+		bool Fitted = false; // Its square was fitted to the receivers (SceneRendererSpecification::FitShadowsToView), not its sphere's
 
 		bool operator==(const ShadowCascadeStats&) const = default;
 	};

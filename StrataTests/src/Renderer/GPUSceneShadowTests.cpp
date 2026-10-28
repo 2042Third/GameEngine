@@ -422,6 +422,9 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		Scene& scene = cacheScene.SceneData;
 		SceneRendererSpecification specification;
 		specification.TextureStreaming = false;
+		// Cached cascades are counted frame by frame from the first frame, whose layout a fit to the view would change after the
+		// first readback (GPU.SceneRenderer.ShadowFit covers caching with it).
+		specification.FitShadowsToView = false;
 		SceneRenderer cached(specification);
 		specification.CacheShadowCascades = false;
 		SceneRenderer redrawn(specification);
@@ -513,6 +516,7 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		constexpr uint32_t size = 256;
 		SceneRendererSpecification specification;
 		specification.TextureStreaming = false;
+		specification.FitShadowsToView = false; // The split's position is Strata 0.6.0's layout's
 		SceneRenderer renderer(specification);
 		renderer.SetViewportSize(size, size);
 		// Looking down at 45 degrees, the floor from 12.6 m to 21.9 m away: about 30 rows per metre of depth at the split.
@@ -582,6 +586,7 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		constexpr uint32_t size = 256;
 		SceneRendererSpecification specification;
 		specification.TextureStreaming = false;
+		specification.FitShadowsToView = false; // The bands' positions are Strata 0.6.0's layout's (RoofScene)
 		SceneRenderer renderer(specification);
 		renderer.SetViewportSize(size, size);
 		const SceneCamera camera = PitchedCamera(glm::vec3(0.0f, 0.2f, 0.0f), 0.0f, 10.0f);
@@ -614,6 +619,7 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		constexpr uint32_t size = 256;
 		SceneRendererSpecification specification;
 		specification.TextureStreaming = false;
+		specification.FitShadowsToView = false; // The last band's position is Strata 0.6.0's layout's (RoofScene)
 		SceneRenderer renderer(specification);
 		renderer.SetViewportSize(size, size);
 		// Looking down at 45 degrees from 20 m: the floor from about 15 m to 67 m away.

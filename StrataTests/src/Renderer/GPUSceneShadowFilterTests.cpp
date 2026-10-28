@@ -60,6 +60,9 @@ namespace
 		specification.TextureStreaming = false;
 		specification.Quality.ShadowCascades = cascades;
 		specification.Quality.ShadowResolution = resolution;
+		// The cases measure at the cascades' texel sizes and compare frames: the layout must not follow the view (the fit has its
+		// own suite, GPU.SceneRenderer.ShadowFit).
+		specification.FitShadowsToView = false;
 		return specification;
 	}
 

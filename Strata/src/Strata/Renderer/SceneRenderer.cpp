@@ -215,6 +215,8 @@ namespace Strata
 		// every shadow view of every shadowed point and spot light is drawn in the frame (into a smaller atlas).
 		specification.TemporalAntiAliasing = false;
 		specification.SpreadLightingUpdates = false;
+		// A single frame has no readback to fit its cascades to: Strata 0.6.0's layout, the same for every thumbnail.
+		specification.FitShadowsToView = false;
 		RendererQualitySettings& quality = specification.Quality;
 		quality = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		quality.Preset = RendererQualityPreset::Custom;
@@ -227,7 +229,7 @@ namespace Strata
 	SceneRendererSpecification SceneRendererSpecification::ForBake()
 	{
 		// No entity IDs, temporal anti-aliasing or texture streaming (a bake waits for every level), every shadow view and
-		// probe conversion in its first frame, no fades.
+		// probe conversion in its first frame, no fades, Strata 0.6.0's cascades (a bake's views are single frames).
 		SceneRendererSpecification specification;
 		specification.DebugName = "ProbeBake";
 		specification.EntityIDs = false;
@@ -236,6 +238,7 @@ namespace Strata
 		specification.SpreadLightingUpdates = false;
 		specification.FadeTextureLevels = false;
 		specification.FadeLevelsOfDetail = false;
+		specification.FitShadowsToView = false;
 		RendererQualitySettings& quality = specification.Quality;
 		quality = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		quality.Preset = RendererQualityPreset::Custom;
@@ -2085,6 +2088,8 @@ namespace Strata
 		// The shadows debug view's binding sets name the depth (its buffers and readbacks stay with the renderer).
 		release(m_ShadowViewBindingSet);
 		release(m_ShadowViewCountBindingSet);
+		// So does the cascades' fit's (its buffer and readbacks stay with the renderer, like its layout).
+		release(m_ShadowFitSet);
 		// Screen-space reflections' targets (made again by the next frame that traces them).
 		release(m_SurfaceTexture);
 		release(m_ScreenReflectionTexture);
@@ -2354,6 +2359,7 @@ namespace Strata
 			m_ShadowLight.CascadeBlend = std::isfinite(light.CascadeBlend) ? std::clamp(light.CascadeBlend, 0.0f, DirectionalLightComponent::c_MaxCascadeBlend) : 0.0f;
 			m_ShadowLight.ContactLength = std::isfinite(light.ContactShadowLength)
 				? std::clamp(light.ContactShadowLength, 0.0f, DirectionalLightComponent::c_MaxContactShadowLength) : 0.0f;
+			m_ShadowLight.Distribution = std::isfinite(light.CascadeDistribution) ? std::clamp(light.CascadeDistribution, 0.0f, 1.0f) : 0.9f;
 		};
 		float brightest = -1.0f;
 		for (auto [entity, light, world] : registry.view<DirectionalLightComponent, WorldTransformComponent>().each())
@@ -2865,6 +2871,10 @@ namespace Strata
 			m_LODFadeFrame++;         // And so do level-of-detail fades: a frame skipped draws every level at once
 		}
 		m_LODFadeFrame++;
+		// The sun's cascades' layout: fitted to the receivers a readback of an earlier frame saw, else Strata 0.6.0's. Layout
+		// changes keep the visibility feedback: on feedback frames every cascade gets the slots of every caster the feedback saw,
+		// and the last cascade, which reaches the shadow distance, holds every caster of every receiver.
+		UpdateShadowFit(renderScene, camera, cameraCut);
 		m_FeedbackFrame = UsesFeedback(renderScene);
 		m_Stats.FeedbackRequests = m_FeedbackFrame;
 		if (m_FeedbackFrame)
@@ -3118,6 +3128,9 @@ namespace Strata
 			gpuTimer.Next(gpuStages.ScreenShadows);
 			commandList->beginMarker("ScreenShadows");
 			RenderScreenShadows(commandList, frame);
+			// The receivers of the complete prepass depth, for a later frame's cascades (SceneRendererSpecification::FitShadowsToView).
+			if (m_ShadowFitActive && !RecordShadowFit(commandList, camera))
+				degraded = true;
 			commandList->endMarker();
 			m_Stats.ScreenShadows = true;
 		}
@@ -3215,6 +3228,7 @@ namespace Strata
 			ExecuteFrame(commandList);
 			if (m_GPUDrivenFrame)
 				SubmitCullReadback();
+			SubmitShadowFitReadback();
 			CommitShadowCache();
 			CommitLocalShadows();
 			if (m_TemporalResolved)
@@ -3260,6 +3274,7 @@ namespace Strata
 				SubmitCullReadback();
 			SubmitExposureReadback();
 			SubmitShadowViewReadback();
+			SubmitShadowFitReadback();
 			m_Stats = {};
 			return false;
 		}
@@ -3302,6 +3317,7 @@ namespace Strata
 			SubmitCullReadback();
 		SubmitExposureReadback();
 		SubmitShadowViewReadback();
+		SubmitShadowFitReadback();
 		CommitShadowCache();
 		CommitLocalShadows();
 

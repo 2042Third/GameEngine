@@ -106,6 +106,14 @@ active height fog in a scene applies.
 The directional light casts shadows up to **Shadow Distance** (meters) from the camera, in cascades that are finer near
 the camera. **Cascade Blend** hides the seams between the cascades and fades the shadows out at the distance.
 
+The cascades follow what the camera sees: a few frames after the view changes, they cover only the distances from the
+nearest to the farthest surface in view, and each one but the farthest shrinks to the surfaces it shades, so the shadow's
+detail goes where the surfaces are (a high camera looking down over a level gets several times finer shadows than
+cascades starting at the camera). The farthest cascade always reaches the Shadow Distance, so a surface that just came
+into view (the camera turned, a door opened) is shadowed at once, a little coarser for the few frames until the cascades
+follow. **Cascade Distribution** (0 to 1, 0.9 by default) decides how the cascades share those distances: 0 evenly, 1 each
+cascade the same ratio farther than the previous one; higher puts more of the detail near the camera.
+
 **Shadow Softness** is the light's apparent size in degrees: 0.53 is the sun's (the default; scenes saved with another
 value keep it). Shadows are sharp where an object touches the ground and soften with the distance from their caster as a
 real sun's do: a 0.53 degree sun blurs an edge over about 1 cm per metre between the caster and the ground (a pole's shadow
@@ -139,7 +147,8 @@ steps for each lit pixel nearer than the shadow distance (about 0.2-0.3 ms at 38
 To see where the cascades are and how fine they are, choose **Shadows** in the Scene view's debug menu: every surface is
 colored by how many screen pixels one shadow texel covers there (green about one, yellow two, red four or more), with the
 cascades outlined and their blend bands hatched. Agents read the same as numbers: `viewport.capture {"debugView": "shadows"}`
-reports each cascade's distances, texel size and pixels per texel.
+reports each cascade's distances, texel size and pixels per texel (a capture waits the few frames the cascades take to
+follow the view: `shadowFitSettled`).
 
 Point and spot lights cast shadows when **Cast Shadows** is on (it is off by default). A spot light's shadow covers its
 cone, a point light's every direction (the renderer draws it as the six faces of a cube). **Shadow Filter Radius** softens

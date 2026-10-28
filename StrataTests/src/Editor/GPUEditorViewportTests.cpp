@@ -241,6 +241,19 @@ namespace
 			Run("camera.set", { { "position", { 0, 0, 4 } }, { "target", { 0, 0, 0 } } });
 		}
 
+		// The scene's suns cast no shadows: a capture that counts its frames for another reason (text, probes, the motion view)
+		// then has no cascades whose fit to the view it waits for (SceneRendererStats::ShadowFitSettled).
+		void TurnOffSunShadows()
+		{
+			std::vector<UUID> suns;
+			Scene& scene = *Context.GetEditScene();
+			for (const entt::entity handle : scene.GetRegistry().view<DirectionalLightComponent>())
+				suns.push_back(Entity(handle, &scene).GetUUID());
+			for (const UUID sun : suns)
+				Run("component.set", { { "entity", UUIDToJson(sun) }, { "component", "DirectionalLight" }, { "values", { { "CastShadows", false } } } });
+			CHECK_FALSE(suns.empty());
+		}
+
 		int CountDifferences(const DecodedImage& a, const DecodedImage& b)
 		{
 			REQUIRE(a.Width == b.Width);
@@ -420,6 +433,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(gpu.IsValid());
 		ViewportGPUHarness harness;
 		harness.AddScene();
+		harness.TurnOffSunShadows(); // The second capture waits for nothing
 		harness.Run("viewport.setSettings", { { "gameUI", true } });
 		// A UI label with more distinct glyphs than a render may rasterize (TextRenderer::c_FrameRasterBudget), new to the
 		// capture renderer, which the UI pass shares with the text.
@@ -1506,6 +1520,8 @@ TEST_SUITE("GPU.Editor.Viewport")
 			{ "Capture", UUIDToJson(capture) } } } } } });
 		harness.Run("entity.create", { { "name", "Ball" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::SphereMesh) } } } } } });
 		harness.Run("camera.set", { { "position", { 0, 0, 3 } }, { "target", { 0, 0, 0 } } });
+		// Taken at once: a sun without shadows (else the preview's sun casts them), so no cascades whose fit to the view it waits for.
+		harness.Run("entity.create", { { "name", "Sun" }, { "components", { { "DirectionalLight", { { "Intensity", 3.0 }, { "CastShadows", false } } } } } });
 
 		// Without waitForAssets the picture is taken at once, the probe reported as pending.
 		nlohmann::json result;
@@ -1658,6 +1674,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(gpu.IsValid());
 		ViewportGPUHarness harness;
 		harness.AddScene();
+		harness.TurnOffSunShadows(); // The motion view's capture renders exactly one frame more
 		// No overlays: the debug views apply without them.
 		const nlohmann::json size = { { "width", 64 }, { "height", 64 }, { "overlays", false } };
 		auto withView = [&size](const char* view)
@@ -1769,6 +1786,35 @@ TEST_SUITE("GPU.Editor.Viewport")
 		harness.Capture(withView, &result);
 		CHECK(result["debugView"]["shadows"]["cascades"].empty());
 		CHECK(result["debugView"]["shadows"]["note"] == "no shadowed directional light");
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture waits until the sun's cascades fit the view, and a second capture equals it byte for byte")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.AddScene();
+		harness.Run("entity.create", { { "name", "Floor" }, { "components", { { "Transform", { { "Translation", { 0, -0.5, 0 } }, { "Scale", { 60, 1, 60 } } } },
+			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::PlaneMesh) } } } } } });
+		// The Physics Playground's framing: high above the floor, the receivers 20-60 m away.
+		harness.Run("camera.set", { { "position", { 0, 22, 30 } }, { "target", { 0, 0, 0 } } });
+		const nlohmann::json parameters = { { "width", 128 }, { "height", 72 }, { "overlays", false } };
+		nlohmann::json first;
+		harness.Capture(parameters, &first);
+		CHECK(first["shadowFitSettled"] == true);
+		CHECK(first["waitedFrames"].get<int>() >= 1); // The first frame cannot know the receivers yet
+		CHECK(first["renderStats"]["shadowFit"]["fitted"] == true);
+		CHECK(first["renderStats"]["shadowFit"]["settled"] == true);
+		CHECK(first["renderStats"]["cascades"].size() == harness.Context.GetViewport().GetCaptureRenderer()->GetStats().CascadeCount);
+		CHECK(harness.Context.GetViewport().GetCaptureRenderer()->GetStats().ShadowFit);
+		// Each capture starts the fit again (ResetShadowFit) and waits for it alike.
+		nlohmann::json second;
+		harness.Capture(parameters, &second);
+		CHECK(second["shadowFitSettled"] == true);
+		CHECK(second["waitedFrames"] == first["waitedFrames"]);
+		CHECK(second["Image"]["Data"] == first["Image"]["Data"]);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

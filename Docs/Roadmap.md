@@ -1186,7 +1186,8 @@ within 1.15 times step 0's.
   - The sun's shadow evaluated once per pixel in a screen-space pass after the depth prepass, with an edge-aware blur
     sized by the penumbra; transparent surfaces keep the per-pixel filter.
   - Contact shadows in that pass (`ContactShadowLength`, on at High and Ultra).
-  - Cascades fitted to the depth range of what the camera sees (SDSM), with a per-light split distribution.
+  - Cascades fitted to what the camera sees (SDSM): to the depth range and the receivers' extent, with a per-light split
+    distribution.
   - Below the cut: sized point and spot lights with the same filter, up to 8 cascades, distant shadows for open worlds,
     16-bit depth for far cascades, and cascades kept while the camera moves.
 - **`camera-and-tone`: the image of a camera.** What the renderer shows reads like a photograph from a good camera,

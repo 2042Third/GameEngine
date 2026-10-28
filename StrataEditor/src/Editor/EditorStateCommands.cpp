@@ -217,11 +217,23 @@ namespace Strata
 			nlohmann::json tileSizes = nlohmann::json::array();
 			for (uint32_t light = 0; light < stats.LocalShadowLights && light < stats.LocalShadowTileSizes.size(); light++)
 				tileSizes.push_back(stats.LocalShadowTileSizes[light]);
+			// The sun's cascades as the frame laid them out: each one's slice of view distances and texel size (world units).
+			nlohmann::json cascades = nlohmann::json::array();
+			for (uint32_t cascade = 0; cascade < stats.CascadeCount && cascade < stats.Cascades.size(); cascade++)
+			{
+				const ShadowCascadeStats& slice = stats.Cascades[cascade];
+				cascades.push_back({ { "near", slice.Near }, { "far", slice.Far }, { "texelSize", slice.WorldPerTexel }, { "fitted", slice.Fitted } });
+			}
 			return {
 				// What the frame drew with: the Renderer.Quality section's fields and values (project.setSettings takes them), the
 				// sun's cascades' size and each shadowed point and spot light's tile.
 				{ "quality", RendererQuality::ToSectionValue(stats.Quality) },
 				{ "shadowMapSize", stats.ShadowMapSize },
+				{ "cascades", std::move(cascades) },
+				// Whether the cascades were fitted to what the view shows (the slices to the receivers' range, the squares to their
+				// extent) and the fit settled, and the range the slices divide.
+				{ "shadowFit", { { "fitted", stats.ShadowFit }, { "squaresFitted", stats.ShadowFitSquares }, { "settled", stats.ShadowFitSettled },
+					{ "near", stats.ShadowFitNear }, { "far", stats.ShadowFitFar } } },
 				{ "localShadowTileSizes", std::move(tileSizes) },
 				{ "gpuDriven", stats.GPUDriven },
 				{ "gpuCounts", stats.GPUDriven && gpu.HasCounters },

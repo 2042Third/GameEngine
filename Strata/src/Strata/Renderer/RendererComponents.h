@@ -33,6 +33,10 @@ namespace Strata
 		// How far toward the light, in meters, the screen-space contact shadows look for what the cascades are too coarse to show
 		// (at High and Ultra: RendererQualitySettings::ContactShadows); 0 turns them off for this light.
 		float ContactShadowLength = 0.3f;
+		// How the shadow cascades share the distances from the nearest to the farthest surface the camera sees, once they are
+		// fitted to them (SceneRendererSpecification::FitShadowsToView): 0 evenly, 1 each cascade the same ratio farther than the
+		// previous one. Higher puts more of the shadows' detail near the camera.
+		float CascadeDistribution = 0.9f;
 
 		// At most half of a slice: a cascade's band then never reaches back into the previous one's, so a pixel blends two
 		// cascades at most.

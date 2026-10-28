@@ -53,6 +53,9 @@ namespace
 		specification.Quality.ShadowCascades = 1;
 		specification.Quality.ShadowResolution = ShadowMapResolution::Size4096;
 		specification.Quality.ShadowFilterQuality = taps;
+		// The cases compare frames with each other and with the per-pixel filter at the cascade's texel size: the layout must
+		// not follow the view (the fit has its own suite, GPU.SceneRenderer.ShadowFit).
+		specification.FitShadowsToView = false;
 		return specification;
 	}
 

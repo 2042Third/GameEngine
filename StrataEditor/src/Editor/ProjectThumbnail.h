@@ -34,6 +34,9 @@ namespace Strata
 		static constexpr uint32_t c_MaxTemporalFrames = 16;
 		// Frames rendered while the pre-exposure settles (SceneRendererStats::PreExposureSettled), as captures wait for it.
 		static constexpr uint32_t c_MaxExposureFrames = 8;
+		// Frames rendered while the sun's cascades' fit to the view settles (SceneRendererStats::ShadowFitSettled), as captures
+		// wait for it.
+		static constexpr uint32_t c_MaxShadowFitFrames = 12;
 
 		// Where a project keeps its thumbnail (its intermediate directory).
 		static std::filesystem::path GetFile(const std::filesystem::path& projectDirectory);
@@ -64,7 +67,8 @@ namespace Strata
 		uint32_t m_Frames = 0;         // Rendered while the view was incomplete
 		uint32_t m_TemporalFrames = 0; // Rendered while temporal anti-aliasing settled
 		uint32_t m_ExposureFrames = 0; // Rendered while the pre-exposure settled
-		bool m_Rendered = false;       // The picture's first frame was rendered (it started the exposure again)
+		uint32_t m_ShadowFitFrames = 0; // Rendered while the sun's cascades' fit settled
+		bool m_Rendered = false;       // The picture's first frame was rendered (it started the exposure and the cascades' fit again)
 		Scope<TextureReadback> m_Readback;
 		std::filesystem::path m_File;
 		Ref<WriteState> m_Write;

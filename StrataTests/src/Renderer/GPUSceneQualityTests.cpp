@@ -326,6 +326,8 @@ TEST_SUITE("GPU.SceneRenderer.Quality")
 		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
 		QualityScene scene;
 		SceneRendererSpecification specification = MakeSpecification(GPUDrivenMode::Auto);
+		// Cached cascades are counted frame by frame across the change, whose first frames a fit to the view would lay out anew.
+		specification.FitShadowsToView = false;
 		SceneRenderer cached(specification);
 		specification.CacheShadowCascades = false;
 		SceneRenderer redrawn(specification);
