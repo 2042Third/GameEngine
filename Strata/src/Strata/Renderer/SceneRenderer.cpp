@@ -350,6 +350,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(20),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(21),
 			nvrhi::BindingLayoutItem::Texture_SRV(27),          // The atmosphere's sky-view table (Include/Atmosphere.glsl)
+			nvrhi::BindingLayoutItem::Texture_SRV(28),          // The sun's screen-space shadow mask (Scene/Forward.frag)
 			nvrhi::BindingLayoutItem::Texture_SRV(32),          // The sun shadow cascades' depth ranges (Include/Shadows.glsl)
 			nvrhi::BindingLayoutItem::Texture_SRV(33),          // The blue-noise tile (Include/Shadows.glsl)
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
@@ -957,7 +958,9 @@ namespace Strata
 		nvrhi::ITexture* sceneColor = GetBoundSceneColor();
 
 		// The shadow pass reads the same resources except for its own draw list (and never the shadow maps it draws into).
-		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap, nvrhi::ITexture* boundRanges, nvrhi::ITexture* boundAtlas)
+		nvrhi::ITexture* screenShadows = GetBoundScreenShadows();
+		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap, nvrhi::ITexture* boundRanges, nvrhi::ITexture* boundAtlas,
+			nvrhi::ITexture* boundMask)
 		{
 			nvrhi::BindingSetDesc desc;
 			desc.bindings = {
@@ -972,6 +975,7 @@ namespace Strata
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(20, previousInstances),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(21, previousPalette),
 				nvrhi::BindingSetItem::Texture_SRV(27, skyView),
+				nvrhi::BindingSetItem::Texture_SRV(28, boundMask),
 				nvrhi::BindingSetItem::Texture_SRV(32, boundRanges),
 				nvrhi::BindingSetItem::Texture_SRV(33, Renderer::GetBlueNoiseTexture()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
@@ -995,12 +999,13 @@ namespace Strata
 				desc.bindings.push_back(nvrhi::BindingSetItem::Sampler(0, m_MaterialSamplers[index]).setArrayElement(index));
 			return m_Device->createBindingSet(desc, m_SceneBindingLayout);
 		};
-		m_SceneBindingSet = create(m_DrawListBuffer, shadowMap, shadowRanges, localShadowAtlas);
-		m_ShadowBindingSet = create(m_ShadowDrawListBuffer, m_DummyShadowMap, m_DummyShadowRanges, m_DummyLocalShadowAtlas);
+		m_SceneBindingSet = create(m_DrawListBuffer, shadowMap, shadowRanges, localShadowAtlas, screenShadows);
+		m_ShadowBindingSet = create(m_ShadowDrawListBuffer, m_DummyShadowMap, m_DummyShadowRanges, m_DummyLocalShadowAtlas, Renderer::GetWhiteTexture());
 		// The GPU-driven path's passes read the draw list its culling writes.
 		const bool gpuSets = m_GPUDrawListBuffer != nullptr;
-		m_GPUSceneBindingSet = gpuSets ? create(m_GPUDrawListBuffer, shadowMap, shadowRanges, localShadowAtlas) : nullptr;
-		m_GPUShadowBindingSet = gpuSets ? create(m_GPUDrawListBuffer, m_DummyShadowMap, m_DummyShadowRanges, m_DummyLocalShadowAtlas) : nullptr;
+		m_GPUSceneBindingSet = gpuSets ? create(m_GPUDrawListBuffer, shadowMap, shadowRanges, localShadowAtlas, screenShadows) : nullptr;
+		m_GPUShadowBindingSet = gpuSets ? create(m_GPUDrawListBuffer, m_DummyShadowMap, m_DummyShadowRanges, m_DummyLocalShadowAtlas, Renderer::GetWhiteTexture())
+			: nullptr;
 
 		nvrhi::BindingSetDesc clusterSet;
 		clusterSet.bindings = {
@@ -1016,6 +1021,7 @@ namespace Strata
 		m_BoundPrefiltered = GetPrefilteredMap();
 		m_BoundShadowMap = shadowMap;
 		m_BoundShadowRanges = shadowRanges;
+		m_BoundScreenShadows = screenShadows;
 		m_BoundLocalShadowAtlas = localShadowAtlas;
 		m_BoundSceneGPUVersion = m_SceneGPU->GetBufferVersion();
 		m_BoundTextureTableVersion = Renderer::GetTextureTable().GetBufferVersion();
@@ -1616,6 +1622,11 @@ namespace Strata
 		return true;
 	}
 
+	nvrhi::ITexture* SceneRenderer::GetBoundScreenShadows() const
+	{
+		return m_ScreenShadowTextures[0] ? m_ScreenShadowTextures[0].Get() : Renderer::GetWhiteTexture();
+	}
+
 	bool SceneRenderer::CreateShadowRanges(nvrhi::ITexture* shadowMap, uint32_t size, uint32_t layers)
 	{
 		if (!m_ShadowRangePipeline)
@@ -2065,6 +2076,7 @@ namespace Strata
 		release(m_MotionPrepassFramebuffer);
 		release(m_GlassMotionFramebuffer);
 		release(m_MotionViewBindingSet);
+		ReleaseScreenShadowTargets(released);
 		// The shadows debug view's binding sets name the depth (its buffers and readbacks stay with the renderer).
 		release(m_ShadowViewBindingSet);
 		release(m_ShadowViewCountBindingSet);
@@ -2907,6 +2919,14 @@ namespace Strata
 			m_Stats.CascadeCount = 0;
 			degraded = true;
 		}
+		// Opaque surfaces take the sun's shadow from the screen-space mask: without it, no surface does (transparent ones neither).
+		if (frame.ShadowParams.w > 0.0f && !EnsureScreenShadowResources())
+		{
+			m_Errors.Report("failed to create the screen-space shadow targets; rendering without sun shadows");
+			frame.ShadowParams.w = 0.0f;
+			m_Stats.CascadeCount = 0;
+			degraded = true;
+		}
 		if (m_GPUDrivenFrame)
 			PrepareGPUCulling(renderScene, camera);
 		ReportVisibleAnimators(scene);
@@ -2915,7 +2935,7 @@ namespace Strata
 		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
-			|| m_BoundShadowRanges != (m_ShadowRanges ? m_ShadowRanges.Get() : m_DummyShadowRanges.Get())
+			|| m_BoundShadowRanges != (m_ShadowRanges ? m_ShadowRanges.Get() : m_DummyShadowRanges.Get()) || m_BoundScreenShadows != GetBoundScreenShadows()
 			|| m_BoundLocalShadowAtlas != (m_LocalShadowAtlas ? m_LocalShadowAtlas.Get() : m_DummyLocalShadowAtlas.Get())
 			|| m_BoundSceneGPUVersion != m_SceneGPU->GetBufferVersion()
 			|| m_BoundPreviousInstances != (m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer())
@@ -3084,6 +3104,16 @@ namespace Strata
 		else
 			DrawBatches(commandList, Pass::Prepass, false);
 		commandList->endMarker();
+
+		// The sun's shadow on every opaque pixel of the prepass, before anything shades them.
+		if (frame.ShadowParams.w > 0.0f)
+		{
+			gpuTimer.Next(gpuStages.ScreenShadows);
+			commandList->beginMarker("ScreenShadows");
+			RenderScreenShadows(commandList);
+			commandList->endMarker();
+			m_Stats.ScreenShadows = true;
+		}
 
 		if (postProcess.AmbientOcclusion)
 		{

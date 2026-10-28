@@ -63,6 +63,8 @@ layout(set = 0, binding = ST_SRV(19)) uniform texture2D u_SceneColor;
 // edge then blends with the light it replaces, not with black). Of the opaque surfaces the prepass drew: transparent surfaces
 // have none.
 layout(set = 0, binding = ST_SRV(18)) uniform texture2D u_ScreenReflections;
+// The sun's screen-space shadow mask (Effects/ScreenShadows.frag): red the square root of the sun's visibility at the pixel.
+layout(set = 0, binding = ST_SRV(28)) uniform texture2D u_ScreenShadows;
 #endif
 
 // The share of its diffuse light a surface scatters: transmissive surfaces pass the rest through (the glass variant). The other
@@ -133,8 +135,14 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 		float shadow = 1.0;
 		if (u_Frame.ShadowParams.w > 0.0)
 		{
+#ifdef ST_FORWARD_TRANSPARENT
+			// Transparent surfaces are not in the prepass: the same filter, per pixel (no blur, no contact shadows).
 			vec3 geometricNormal = normalize(v_Normal) * (gl_FrontFacing ? 1.0 : -1.0);
 			shadow = SampleDirectionalShadow(v_RelativePosition, geometricNormal, viewDepth, gl_FragCoord.xy);
+#else
+			float encoded = texelFetch(u_ScreenShadows, ivec2(gl_FragCoord.xy), 0).r;
+			shadow = encoded * encoded;
+#endif
 		}
 		color += LightSurface(surface, coat, diffuseWeight, -u_Frame.DirectionalLightDirection.xyz, u_Frame.DirectionalLightColor.rgb) * shadow;
 	}

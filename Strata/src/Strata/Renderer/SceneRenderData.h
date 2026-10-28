@@ -549,6 +549,30 @@ namespace Strata
 		};
 		static_assert(sizeof(ShadowRangeParameters) == 32);
 
+		// Effects/ScreenShadows.frag: the sun's contact shadows (none while ContactSteps is 0).
+		struct ScreenShadowParameters
+		{
+			float ContactLength;         // Meters toward the sun
+			uint32_t ContactSteps;
+			float ContactMaxPixels;      // The march's longest reach on screen
+			float ContactFadeStart;      // View distances over which contact shadows fade out
+			float ContactFadeEnd;
+			float ContactThickness;      // Meters behind a surface that still occlude...
+			float ContactThicknessScale; // ...plus this much per meter of view distance
+			uint32_t Reserved;
+		};
+		static_assert(sizeof(ScreenShadowParameters) == 32);
+
+		// Effects/ScreenShadowsBlur.frag: one direction of the mask's blur.
+		struct ScreenShadowBlurParameters
+		{
+			int32_t DirectionX;
+			int32_t DirectionY;
+			float PlaneTolerance; // How far from a pixel's plane a tap may lie, as a fraction of its view distance
+			uint32_t Reserved;
+		};
+		static_assert(sizeof(ScreenShadowBlurParameters) == 16);
+
 	}
 
 }

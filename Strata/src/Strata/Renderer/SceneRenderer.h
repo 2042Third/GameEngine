@@ -525,6 +525,8 @@ namespace Strata
 		// shadowed sun (the shadows debug view reports them).
 		std::array<ShadowCascadeStats, RenderData::c_MaxCascades> Cascades = {};
 		uint32_t CascadeCount = 0;
+		// The frame drew the sun's screen-space shadow mask (SceneRenderer::GetScreenShadowTexture): every frame with a shadowed sun.
+		bool ScreenShadows = false;
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -692,6 +694,13 @@ namespace Strata
 		nvrhi::ITexture* GetShadowMap() const { return m_ShadowMap; }
 		// The cascades' depth ranges (Include/Shadows.glsl, Scene/ShadowRanges.comp): made and released with the shadow map.
 		nvrhi::ITexture* GetShadowRanges() const { return m_ShadowRanges; }
+		// The sun's screen-space shadow mask the forward pass read (RG8_UNORM: red the square root of the sun's visibility, green
+		// the pixel's blur radius over c_ScreenShadowMaxBlurPixels; Effects/ScreenShadows.frag): null until a frame draws a
+		// shadowed sun, and again once the render targets are released.
+		nvrhi::ITexture* GetScreenShadowTexture() const { return m_ScreenShadowTextures[0]; }
+		static constexpr float c_ScreenShadowMaxBlurPixels = 8.0f;
+		// The mask's blur keeps taps within this fraction of a pixel's view distance of its plane.
+		static constexpr float c_ScreenShadowPlaneTolerance = 0.01f;
 		// Frames over which a light's shadow fades in once all its views are drawn (SceneRendererSpecification::
 		// SpreadLightingUpdates).
 		static constexpr uint32_t c_LocalShadowFadeFrames = 8;
@@ -1536,6 +1545,15 @@ namespace Strata
 		bool DrawShadowView(nvrhi::ICommandList* commandList, const SceneRenderOptions& options, const nvrhi::Viewport& viewport);
 		// After the executed command list of a frame that recorded the view's counts: the copy is pending.
 		void SubmitShadowViewReadback();
+		// The sun's screen-space shadow mask (SceneRendererScreenShadows.cpp): its targets (RG8, the viewport's size, made by the
+		// first frame with a shadowed sun, released with the render targets), pipelines and binding sets; false when they cannot
+		// be made (the frame renders without the sun's shadows, reported). RenderScreenShadows records the evaluation and the
+		// two blur passes after the depth prepass.
+		bool EnsureScreenShadowResources();
+		void RenderScreenShadows(nvrhi::ICommandList* commandList);
+		void ReleaseScreenShadowTargets(std::vector<nvrhi::ResourceHandle>& released);
+		// What the scene binding sets name at SRV 28: the mask, or white (visibility 1) without one.
+		nvrhi::ITexture* GetBoundScreenShadows() const;
 		// The tints of SceneRenderOptions::EntityTints (StatusTint.frag); false when GPU resources failed.
 		bool DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport);
 	private:
@@ -1627,6 +1645,20 @@ namespace Strata
 		nvrhi::ComputePipelineHandle m_ShadowRangeDownsamplePipeline;
 		nvrhi::TextureHandle m_DummyShadowRanges;
 		nvrhi::ITexture* m_BoundShadowRanges = nullptr;
+		// The sun's screen-space shadow mask (EnsureScreenShadowResources): targets A (the result) and B, their framebuffers, the
+		// evaluation's and the blur's pipelines and binding sets (the evaluation's names the shadow map and ranges it was made
+		// with; the blur's read A, then B), and the texture the scene binding sets name at SRV 28.
+		std::array<nvrhi::TextureHandle, 2> m_ScreenShadowTextures;
+		std::array<nvrhi::FramebufferHandle, 2> m_ScreenShadowFramebuffers;
+		nvrhi::BindingLayoutHandle m_ScreenShadowLayout;
+		nvrhi::BindingLayoutHandle m_ScreenShadowBlurLayout;
+		nvrhi::GraphicsPipelineHandle m_ScreenShadowPipeline;
+		nvrhi::GraphicsPipelineHandle m_ScreenShadowBlurPipeline;
+		nvrhi::BindingSetHandle m_ScreenShadowSet;
+		std::array<nvrhi::BindingSetHandle, 2> m_ScreenShadowBlurSets;
+		const nvrhi::ITexture* m_ScreenShadowBoundMap = nullptr;
+		const nvrhi::ITexture* m_ScreenShadowBoundRanges = nullptr;
+		nvrhi::ITexture* m_BoundScreenShadows = nullptr;
 		std::vector<nvrhi::FramebufferHandle> m_ShadowFramebuffers;
 		nvrhi::BufferHandle m_ShadowDrawListBuffer; // Instance indices of the shadow draws
 		nvrhi::BindingSetHandle m_ShadowBindingSet; // Scene bindings with the shadow draw list

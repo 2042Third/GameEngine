@@ -1399,3 +1399,11 @@ name). Differences found while building:
   `ShadowFilterQuality` is an Enum field of "8", "16", "24" and "32" (the section refuses other values). The thin-caster
   test's camera has a 40 degree field of view (at 60 the cascade's texels are 7.5 mm). The cascade seam test's check is
   now the larger of the in-cascade step and a quarter pixel: the filter has no per-pixel noise any more.
+- Step 3: `SceneRendererStats::ScreenShadows` and `SceneRenderer::GetScreenShadowTexture` as specified; the mask's blur
+  constants are `SceneRenderer::c_ScreenShadowMaxBlurPixels` (8) and `c_ScreenShadowPlaneTolerance` (0.01). The test
+  comparing the mask with the per-pixel filter compares blurred pixels with the per-pixel result's mean along the edge
+  (17 pixels): a single per-pixel value carries the disk's grain (up to 0.12 at 16 taps), which the 0.08 bound cannot
+  hold. The silhouette test's pole is lit on its visible face (a sun from +Z): under a sun straight down its faces are
+  parallel to the light, whose receiver plane makes their visibility 0.5 (shaded by N.L = 0, so never seen). The TAA
+  suite's smoothing cases now bound the converged roughness at 0.9 of a frame's: with the mask, a frame's penumbra is
+  smooth already.

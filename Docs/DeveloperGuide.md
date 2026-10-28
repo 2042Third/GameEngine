@@ -3561,7 +3561,25 @@ lights, Post Process and the sky), and never a resolution below the output's.
   (texel-relative, so they follow the resolution) and the receiver plane bias; `GPU.SceneRenderer.Shadows` checks for
   acne at 1024, 2048 and 4096 texels with and without the light's biases, and `ShadowFilter` that contacts recede at
   most 2.5 texels.
-- **Transparent surfaces** call the same `SampleDirectionalShadow`.
+- **The screen-space mask** (`SceneRendererScreenShadows.cpp`, GPU stage `GPU.ScreenShadows` right after `GPU.Prepass`):
+  opaque surfaces take the sun's shadow from a mask the frame draws after the depth prepass (after the GPU-driven path's
+  second occlusion phase), on both paths alike. `Effects/ScreenShadows.frag` evaluates the filter at every pixel of the
+  prepass, from its D32 depth (the camera-relative position through the frame's jittered `InverseViewProjection`: the
+  point the forward pass shades) and its geometric normal (RG16F octahedral, view space), into target A (RG8: red the
+  square root of the visibility, so the 8 bits are spent near the umbra where a step would show; green the pixel's blur
+  radius over `c_ScreenShadowMaxBlurPixels`, 8): no radius where the tent alone filtered (lit, umbra, narrow penumbrae),
+  0.35 of the penumbra's half-width in pixels where the disk did (enough for the blue noise's grain, the penumbra widens
+  by about 6%). `Effects/ScreenShadowsBlur.frag` then blurs A into B horizontally and B into A vertically, a Gaussian
+  whose taps are weighted by their distance from the pixel's plane (1% of its view distance: exact for a plane at any
+  angle, nothing from another surface, so no light crosses a silhouette) and by their normals' agreement; it averages
+  visibility, not its encoding, and pixels without a radius keep their value exactly. `Forward.frag`'s opaque variants
+  read A at SRV 28 (white without a mask: visibility 1). The targets (33 MB at 3840x2160) are made by the first frame with
+  a shadowed sun and released with the render targets; a frame whose targets cannot be made renders without the sun's
+  shadows (`ShadowParams.w` 0, also for transparent surfaces), reported. `SceneRendererStats::ScreenShadows`,
+  `SceneRenderer::GetScreenShadowTexture`.
+- **Transparent surfaces** are not in the prepass: `Forward.frag`'s transparent and glass variants call
+  `SampleDirectionalShadow`, the same filter per pixel, without the blur (and without contact shadows). A change to how
+  the sun's shadow reaches surfaces changes both.
 - **The shadows debug view** (`SceneRenderOptions::ShowShadowView`; the editor's `debugView: "shadows"`) measures how fine
   the sun's cascades are where the receivers are. Its metric is screen pixels per shadow texel: for each pixel the scene
   drew, its camera-relative position is reconstructed from the depth through `InverseViewProjection`, its view distance
