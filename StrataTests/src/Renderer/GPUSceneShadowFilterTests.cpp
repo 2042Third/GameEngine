@@ -105,13 +105,6 @@ namespace
 		return Renderer::GetGraphicsDevice().GetInfo().SupportsDrawIndirectFirstInstance;
 	}
 
-	uint16_t HalfAt(const ReadbackImage& image, size_t pixel, size_t channel)
-	{
-		uint16_t value = 0;
-		std::memcpy(&value, image.Pixels.data() + pixel * image.BytesPerPixel + channel * sizeof(uint16_t), sizeof(value));
-		return value;
-	}
-
 }
 
 TEST_SUITE("GPU.SceneRenderer.ShadowFilter")
@@ -304,7 +297,7 @@ TEST_SUITE("GPU.SceneRenderer.ShadowFilter")
 			Entity caster = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(place(random), height(random), place(random) - 20.0f), "Caster");
 			caster.GetComponent<TransformComponent>().Scale = glm::vec3(0.5f + 0.1f * static_cast<float>(index % 7));
 		}
-		Entity sun = AddSun(scene, SunDirection(50.0f, 30.0f), 3.0f);
+		AddSun(scene, SunDirection(50.0f, 30.0f), 3.0f);
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 4.0f, 6.0f), glm::vec3(0.0f, 0.0f, -10.0f));
 
 		// The ranges of a layer against its shadow map: each level's cell (of 4 << level texels) holds every texel's depth.
