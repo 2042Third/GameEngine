@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace Strata;
@@ -512,6 +513,109 @@ TEST_SUITE("Perf.Physics")
 			scene.OnRuntimeStop();
 			return step.MedianMs;
 		});
+	}
+
+	// The medians of a running scene's physics step and of box3d's part of it, and the step's parts (StepParts::Describe).
+	struct StepMedians
+	{
+		double StepMs = 0.0;
+		double LibraryMs = 0.0;
+		std::string Parts;
+	};
+
+	// Creates 1,000 boxes in a grid 20 m above the ground, away from everything else (x from -300 m), in a running scene, and
+	// times the physics steps (PhysicsStats::LastStepTime) while they fall: the medians over 40 steps after 5 of warm-up.
+	StepMedians TimeThousandFalling(Scene& scene)
+	{
+		constexpr uint32_t c_Fallers = 1'000;
+		for (uint32_t index = 0; index < c_Fallers; index++)
+			CreateDynamicBox(scene, "Faller", glm::vec3(-300.0f + static_cast<float>(index % 40) * 2.0f, 20.0f, static_cast<float>(index / 40) * 2.0f));
+		PhysicsSystem& physics = GetPhysics(scene);
+		constexpr uint32_t c_Warmup = 5;
+		constexpr uint32_t c_Steps = 40;
+		std::vector<double> steps;
+		std::vector<double> library;
+		std::vector<double> strata;
+		StepParts parts;
+		for (uint32_t step = 0; step < c_Warmup + c_Steps; step++)
+		{
+			scene.OnUpdateRuntime(scene.GetSettings().FixedTimestep);
+			if (step < c_Warmup)
+				continue;
+			const PhysicsStats stats = physics.GetStats();
+			steps.push_back(stats.LastStepTime);
+			library.push_back(stats.LibraryStepTime);
+			strata.push_back(static_cast<double>(stats.LastStepTime) - static_cast<double>(stats.LibraryStepTime));
+			parts.Add(stats);
+		}
+		// Still falling, all of them and nothing else: about 2.8 m of the 20 m.
+		CHECK(physics.GetStats().ActiveBodyCount == c_Fallers);
+		return { Perf::Summarize(steps).MedianMs, Perf::Summarize(library).MedianMs, parts.Describe(Perf::Summarize(strata).MedianMs) };
+	}
+
+	TEST_CASE("70,000 sleeping boxes cost the steps of 1,000 falling ones nearly nothing")
+	{
+		// Box stacks that settled and fell asleep, and 1,000 boxes falling in another part of the world, against the 1,000
+		// alone: the ratio of the median steps against Perf.Physics.Sleeping70k.StepRatio. Sleeping bodies stay in box3d's
+		// trees and in Strata's records, but no per-step list of Strata's holds them.
+		Perf::ScopedApplicationJobSystem jobs;
+		Perf::CheckBudgetConfirmed("Perf.Physics.Sleeping70k.StepRatio", [&]
+		{
+			StepMedians alone;
+			{
+				Scene scene;
+				CreateGround(scene);
+				scene.OnRuntimeStart();
+				alone = TimeThousandFalling(scene);
+				scene.OnRuntimeStop();
+			}
+
+			Scene scene;
+			Perf::CreateBoxStacks(scene, 70'000);
+			scene.OnRuntimeStart();
+			PhysicsSystem& physics = GetPhysics(scene);
+			uint32_t settleSteps = 0;
+			for (; settleSteps < 1'200 && (settleSteps < 10 || physics.GetStats().ActiveBodyCount > 0); settleSteps++)
+				scene.OnUpdateRuntime(scene.GetSettings().FixedTimestep);
+			REQUIRE(physics.GetStats().ActiveBodyCount == 0);
+			const StepMedians withSleeping = TimeThousandFalling(scene);
+			const PhysicsStats stats = physics.GetStats();
+			CHECK(stats.SleepingBodyCount == 70'000);
+			scene.OnRuntimeStop();
+
+			const double ratio = withSleeping.StepMs / alone.StepMs;
+			MESSAGE("1,000 falling boxes: median step ", alone.StepMs, " ms (box3d ", alone.LibraryMs, " ms) alone, ", withSleeping.StepMs, " ms (box3d ",
+				withSleeping.LibraryMs, " ms) beside 70,000 sleeping boxes (asleep after ", settleSteps, " steps): ratio ", ratio);
+			MESSAGE("Alone: ", alone.Parts);
+			MESSAGE("Beside the sleeping boxes: ", withSleeping.Parts);
+			return ratio;
+		});
+	}
+
+	// A settle scene played for 10 simulated seconds (Tests::MeasureSettling, box3d's counters read every step): the sum of
+	// its fixed steps' wall time, which rewards sleeping sooner as well as cheaper steps, against `metric`.
+	void MeasureSettleCpu(std::string_view sceneName, const std::string& metric)
+	{
+		Perf::ScopedApplicationJobSystem jobs;
+		Perf::CheckBudgetConfirmed(metric, [&]
+		{
+			Scene scene;
+			const std::optional<SettleScene> settle = CreateSettleScene(scene, sceneName);
+			REQUIRE(settle);
+			const SettlingSummary summary = MeasureSettling(scene, *settle, 10.0f);
+			MESSAGE(metric, ": ", summary.SettleCpuMs, " ms of steps over 10 s; 99% asleep after ", summary.SecondsTo99Asleep, " s (-1: not within 10 s)");
+			return summary.SettleCpuMs;
+		});
+	}
+
+	TEST_CASE("A pit of 2,000 balls settling for 10 seconds")
+	{
+		MeasureSettleCpu("BallPit2k", "Perf.Physics.BallPit2k.SettleCpuMs");
+	}
+
+	TEST_CASE("10,000 falling boxes settling for 10 seconds")
+	{
+		MeasureSettleCpu("Boxes10k", "Perf.Physics.Boxes10k.SettleCpuMs");
 	}
 
 	TEST_CASE("Creating 65,536 bodies in a world reserved for 65,536")

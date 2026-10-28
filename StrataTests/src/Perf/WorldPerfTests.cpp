@@ -118,6 +118,8 @@ TEST_SUITE("Perf.World")
 			// the streamer's place, then the scene's update, where physics takes the cell's bodies out.
 			double longest = StreamFrame(AssetManager::GetActive().get(), scene, nullptr, {}, [&]() { REQUIRE(scene.UnloadSubScene(cell)); });
 			const double requestFrame = longest;
+			// Physics' share of the request's frame: its rounds of changes, which take the bodies out of the simulation.
+			const PhysicsStats requestStats = scene.GetSystem<PhysicsSystem>()->GetStats();
 			uint32_t frames = 1;
 			while (scene.GetSubSceneStatus(cell) != nullptr)
 			{
@@ -127,7 +129,8 @@ TEST_SUITE("Perf.World")
 			// The bodies left with the entities.
 			scene.OnUpdateRuntime(Timestep(1.0f / 60.0f));
 			CHECK(scene.GetSystem<PhysicsSystem>()->GetStats().BodyCount == 1);
-			MESSAGE("Unloading 25,000 entities with bodies: ", frames, " frames, the request's work ", requestFrame, " ms, the longest's ", longest, " ms");
+			MESSAGE("Unloading 25,000 entities with bodies: ", frames, " frames, the request's work ", requestFrame, " ms (physics' changes ", requestStats.ChangeTime,
+				" ms for ", requestStats.BodiesRemovedLastUpdate, " bodies out), the longest's ", longest, " ms");
 			scene.OnRuntimeStop();
 			return longest;
 		});

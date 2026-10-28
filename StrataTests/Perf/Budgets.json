@@ -222,5 +222,8 @@
 	"Perf.Physics.Create10kBodies.LibraryOnly": { "Unit": "ms", "Provisional": true },
 	"Perf.Physics.Create100kStaticBodies.LibraryOnly": { "Unit": "ms", "Provisional": true },
 	"Perf.Physics.Grow65k.LibraryOnly": { "Unit": "ms", "Provisional": true },
-	"Perf.World.CellUnload.LibraryOnly": { "Unit": "ms", "Provisional": true }
+	"Perf.World.CellUnload.LibraryOnly": { "Unit": "ms", "Provisional": true },
+	"Perf.Physics.Sleeping70k.StepRatio": { "Unit": "ratio", "Provisional": true, "Target": 1.2 },
+	"Perf.Physics.BallPit2k.SettleCpuMs": { "Unit": "ms", "Provisional": true },
+	"Perf.Physics.Boxes10k.SettleCpuMs": { "Unit": "ms", "Provisional": true }
 }
