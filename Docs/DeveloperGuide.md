@@ -3399,9 +3399,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   where it calls `ResetExposureAdaptation`). It is counted in frames, never in time: slow frames never reset it. Tests
   may render many frames back to back without device frames: the renderer waits for its own oldest frames before its
   frame constants' versions run out (`SceneRenderer::ReserveFrameConstantVersions`; Architecture rules, NVRHI pitfalls).
-- With TAA, PCSS and GTAO turn their per-pixel noise by the golden ratio's fraction of a turn per frame of the history
-  (`TemporalParams.z`, counted from the reset so captures are deterministic), and the history averages it; without TAA the
-  turn is 0 and the images are unchanged.
+- With TAA, the local lights' shadow filter, GTAO and the screen-space reflections turn their per-pixel noise by the golden
+  ratio's fraction of a turn per frame of the history (`TemporalParams.z`, counted from the reset so captures are
+  deterministic), and the history averages it; without TAA the turn is 0 and the images are unchanged. The sun's shadow
+  filter turns nothing: a fixed blue-noise tile, whose grain the shadow mask's blur takes in the frame ("Sun shadows").
 - Renderers of single images settle or turn TAA off: `viewport.capture` and the project's picture render their still view
   again until the history holds `c_TemporalSettleFrames` (8) complete frames (a frame still incomplete for another reason
   starts it again while its own bounded wait lasts, so a view that stays incomplete still settles once that wait ended),

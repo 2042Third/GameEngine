@@ -46,7 +46,8 @@ integrator writes the release notes from them when the wave lands (and removes t
   size, share of the image and pixels per texel.
 - Physical soft shadows: the sun's penumbrae are as wide as a sun of the light's Shadow Softness makes them (it now
   defaults to 0.53 degrees, the real sun's; stored values are kept), sharp at contact, without grain and identical from
-  frame to frame with or without TAA; thin casters such as wires and grass keep their shadows.
+  frame to frame with or without TAA; the filter no longer misses thin casters such as wires and grass that the shadow map
+  holds.
 - Graphics Quality gains Shadow Filter Quality (8, 16, 24 or 32 taps for wide penumbrae; Medium keeps 16).
 - Opaque surfaces take the sun's shadow from a screen-space mask drawn after the depth prepass, whose edge-aware blur
   removes the soft penumbrae's grain in the frame (no TAA needed) without letting light cross a silhouette; transparent

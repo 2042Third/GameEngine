@@ -412,7 +412,7 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Scene shaders work in camera-relative space (`TransformPositionRelative`; rotation-only view matrices): upload anything
   positioned relative to the camera, subtracting in double ([Camera-relative space](Docs/DeveloperGuide.md#camera-relative-space)).
 - The sun's shadow reaches opaque surfaces through the screen-space mask (SRV 28) and transparent ones through
-  `SampleDirectionalShadow`: change both; shadow filters use fixed noise, never `TemporalParams.z`, and cascade layouts
+  `SampleDirectionalShadow`: change both; the sun's filters use fixed noise, never `TemporalParams.z`, and cascade layouts
   come only from `ShadowFitTracker` on the CPU ([Sun shadows](Docs/DeveloperGuide.md#sun-shadows)).
 - Shadow views are kept while nothing reaching them changed (`PrepareShadowCache`, `FindLocalShadowCasters`): a new
   input of how casters are drawn changes a version they compare. What is drawn and requested is decided twice, by the

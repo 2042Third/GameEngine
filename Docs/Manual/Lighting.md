@@ -116,10 +116,13 @@ cascade the same ratio farther than the previous one; higher puts more of the de
 
 **Shadow Softness** is the light's apparent size in degrees: 0.53 is the sun's (the default; scenes saved with another
 value keep it). Shadows are sharp where an object touches the ground and soften with the distance from their caster as a
-real sun's do: a 0.53 degree sun blurs an edge over about 1 cm per metre between the caster and the ground (a pole's shadow
-4 m away has a 2.5 cm soft edge), 2 degrees over about 3.5 cm per metre (a hazy sun), 0 is a point light's hard edge. The
-soft edges are the same in every frame, with or without anti-aliasing: nothing in them flickers or crawls, and thin
-casters such as wires, poles and grass keep their shadows at any distance the cascades reach.
+real sun's do: a 0.53 degree sun blurs an edge from 10% to 90% of its light over about 0.64 cm per metre between the
+caster and the ground (a pole's shadow 4 m away has a 2.5 cm soft edge), 2 degrees over about 2.4 cm per metre (a hazy
+sun), 0 is a point light's hard edge. The soft edges are the same in every frame, with or without anti-aliasing: nothing
+in them flickers or crawls. The filter never misses a caster the shadow map holds, however thin, but the map holds only
+what is at least about one of its texels wide: far from the camera, where the cascades' texels are a few centimetres
+across, a wire or a blade of grass can lose its shadow, and casters smaller than a texel are left out of those cascades.
+Near the camera, Contact Shadow Length grounds such small things at the High and Ultra graphics quality.
 
 **Shadow Bias** and **Shadow Normal Bias** remove the speckles ("acne") a surface can cast on itself: raise them a little
 when lit surfaces show dark stripes, lower them when shadows detach from their casters.
