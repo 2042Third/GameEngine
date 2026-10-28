@@ -251,6 +251,9 @@ namespace Strata
 		bool Bloom = true;
 		float BloomIntensity = 0.04f; // Fraction of the light scattered into the glow
 		float BloomThreshold = 0.0f;  // Only light brighter than this (after exposure) blooms; 0 = all light
+		// How far the glow reaches, as a fraction of the image's height (its deepest level's texel): the same share of the image
+		// at every resolution. 64 / 1080 by default: 1080 rows use 0.6.0's six levels exactly, 2160 rows seven.
+		float BloomRadius = 64.0f / 1080.0f;
 		bool AmbientOcclusion = true;
 		float AmbientOcclusionRadius = 0.6f; // World units
 		float AmbientOcclusionIntensity = 1.0f;
@@ -275,7 +278,10 @@ namespace Strata
 		bool ScreenSpaceReflections = false;
 		float ScreenSpaceReflectionsIntensity = 1.0f;    // How much they replace the probes' and the sky's reflection, 0 to 1
 		float ScreenSpaceReflectionsMaxRoughness = 0.5f; // Rougher surfaces reflect nothing; the last quarter below it fades
-		float Vignette = 0.2f;
+		// A lens's natural darkening toward the corners, applied before the tone curve: the share of cos^4 of the field angle
+		// (1: a lens's full fall-off). 0.12 darkens a 60 degree view's corners by about 10% (0.2 until 0.7.0, a ring after the
+		// curve: files keep their value under the lens's model).
+		float Vignette = 0.12f;
 		float Saturation = 1.0f;
 		float Contrast = 1.0f; // Around middle gray; 1 = unchanged
 		// The Filmic curve's look, each in [0, 1]: how deep the shadows go (higher crushes the darkest tones) and how softly the

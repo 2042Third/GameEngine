@@ -527,6 +527,8 @@ namespace Strata
 		std::optional<float> ExposureLog2Luminance;
 		float ExposureKeyStops = 0.0f;
 		std::optional<float> ExposureKeyReferenceLog2;
+		// The bloom levels the frame used (PostProcessComponent::BloomRadius; 0 without bloom).
+		uint32_t BloomLevels = 0;
 		// The frame's last pass that wrote the display image dithered it (SceneRendererSpecification::DitherOutput, and an 8-bit
 		// or 10-bit UNORM target).
 		bool Dithered = false;
@@ -659,6 +661,11 @@ namespace Strata
 		nvrhi::ITexture* GetBRDFLut() const { return m_BRDFLut; }
 
 		nvrhi::ITexture* GetBloomTexture() const { return m_BloomTexture; } // Level 0 of the bloom chain (half resolution)
+		// The bloom chain's span for a radius (PostProcessComponent::BloomRadius, a fraction of the height): log2(radius * height)
+		// levels, within [1, `levels`], snapped to a whole number within 1e-4; a frame uses ceil(span) levels.
+		static float GetBloomSpan(float radius, uint32_t height, uint32_t levels);
+		// The tangents of a camera's half field of view per axis, the lens vignette's (orthographic views: a 60 degree view's).
+		static glm::vec2 GetVignetteTangents(const SceneCamera& camera, glm::uvec2 viewportSize);
 		// The tone-mapped image FXAA reads (c_LDRFormat, sRGB-encoded, not dithered): null until the render targets exist.
 		nvrhi::ITexture* GetLDRTexture() const { return m_LDRTexture; }
 		// The exposure of the latest frame (Include/Exposure.glsl): the adapted log2 average luminance and the multiplier of
@@ -1253,7 +1260,7 @@ namespace Strata
 			std::optional<float> keyReferenceLog2);
 		// Tone mapping into `output`, or into the LDR target and FXAA from it into `output`.
 		void RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
-			bool resolved, bool bloom, nvrhi::IFramebuffer* output);
+			bool resolved, bool bloom, const glm::vec2& vignetteTangents, nvrhi::IFramebuffer* output);
 		// The Post Process's grading (white balance, slope, offset, power), the white balance's part cached per temperature and tint.
 		PostProcessMath::ColorGrading GetColorGrading(const PostProcessComponent& postProcess);
 		// The bloom chain of the image `prefilterSet` reads (the first downsample: the HDR target's or the resolved image's).
@@ -1768,7 +1775,8 @@ namespace Strata
 		nvrhi::BindingLayoutHandle m_BloomBindingLayout;
 		nvrhi::ComputePipelineHandle m_BloomPipeline;
 		nvrhi::TextureHandle m_BloomTexture;
-		uint32_t m_BloomLevels = 0;
+		uint32_t m_BloomLevels = 0; // Allocated (every level down to 4 pixels, at most RenderData::c_MaxBloomLevels)
+		float m_BloomSpan = 1.0f;   // The latest frame's (GetBloomSpan): the tone mapping normalizes the levels by it
 		std::vector<nvrhi::BindingSetHandle> m_BloomDownsampleSets; // [0]: scene color -> level 0, [n]: level n-1 -> n
 		std::vector<nvrhi::BindingSetHandle> m_BloomUpsampleSets;   // [n]: level n+1 -> n
 		nvrhi::ShaderHandle m_FXAAPixelShader;

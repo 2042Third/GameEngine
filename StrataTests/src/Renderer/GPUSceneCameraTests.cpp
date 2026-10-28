@@ -195,6 +195,78 @@ namespace
 		}
 	}
 
+	// A small bright square (1% of the view's height) on black, for the bloom: Tonemapper None, manual exposure, bloom on.
+	struct BloomScene
+	{
+		Scene SceneData;
+		PostProcessComponent* PostProcess = nullptr;
+		SceneCamera Camera;
+
+		explicit BloomScene(SceneTestAssets& assets)
+		{
+			PostProcess = &AddNeutralPostProcess(SceneData);
+			PostProcess->Bloom = true;
+			PostProcess->BloomIntensity = 0.04f;
+			const float halfHeight = 2.0f * std::tan(glm::radians(30.0f));
+			AddMesh(SceneData, BuiltinAssets::QuadMesh, assets.AddMaterial(Emitting(1000.0f)), glm::vec3(0.0f), "Light")
+				.GetComponent<TransformComponent>().Scale = glm::vec3(0.02f * halfHeight);
+			Camera = LookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f), 16.0f / 9.0f);
+		}
+	};
+
+	// The halo the bloom chain made (its level 0, half resolution) around the square: the distance from the center, as a
+	// fraction of the image's width, at which the glow along the horizontal falls to 1% of its value 2% of the height out; and
+	// the glow's energy (the chain summed and normalized as the tone mapping mixes it) relative to the source's.
+	struct BloomHalo
+	{
+		float RadiusOfWidth = 0.0f;
+		float Energy = 0.0f;
+	};
+
+	BloomHalo MeasureBloomHalo(SceneRenderer& renderer, BloomScene& bloom, glm::uvec2 size)
+	{
+		renderer.SetViewportSize(size.x, size.y);
+		RenderToImage(renderer, bloom.SceneData, bloom.Camera);
+		ReadbackImage chain;
+		REQUIRE(Renderer::ReadTexture(renderer.GetBloomTexture(), chain));
+		ReadbackImage hdr;
+		REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), hdr));
+		const float span = SceneRenderer::GetBloomSpan(bloom.PostProcess->BloomRadius, size.y, RenderData::c_MaxBloomLevels);
+		BloomHalo halo;
+		double glow = 0.0;
+		for (uint32_t y = 0; y < chain.Height; y++)
+		{
+			for (uint32_t x = 0; x < chain.Width; x++)
+				glow += ReadHalfTexel(chain, x, y).r;
+		}
+		double source = 0.0;
+		for (uint32_t y = 0; y < hdr.Height; y++)
+		{
+			for (uint32_t x = 0; x < hdr.Width; x++)
+				source += ReadHalfTexel(hdr, x, y).r;
+		}
+		// A texel of level 0 covers 2x2 output pixels.
+		halo.Energy = static_cast<float>(glow * 4.0 / span / source);
+		const uint32_t row = chain.Height / 2;
+		const uint32_t center = chain.Width / 2;
+		const float reference = ReadHalfTexel(chain, center + static_cast<uint32_t>(0.02f * static_cast<float>(chain.Height)), row).r;
+		uint32_t x = center;
+		while (x + 1 < chain.Width && ReadHalfTexel(chain, x, row).r > 0.01f * reference)
+			x++;
+		halo.RadiusOfWidth = static_cast<float>(x - center) / static_cast<float>(chain.Width);
+		return halo;
+	}
+
+	// The code a pixel of a flat field of `linear` luminance (Tonemapper None, manual exposure 0) shows with the lens vignette.
+	float VignettedCode(float linear, glm::uvec2 pixel, glm::uvec2 size, const glm::vec2& tangents, float vignette)
+	{
+		const glm::vec2 uv = (glm::vec2(pixel) + 0.5f) / glm::vec2(size);
+		const glm::vec2 field = glm::vec2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f) * tangents;
+		const float secantSquared = 1.0f + glm::dot(field, field);
+		const float factor = glm::mix(1.0f, 1.0f / (secantSquared * secantSquared), vignette);
+		return PostProcessMath::LinearToSRGB(glm::vec3(linear * factor)).r * 255.0f;
+	}
+
 	SceneRendererSpecification Dithered()
 	{
 		SceneRendererSpecification specification = ExactSpecification();
@@ -569,6 +641,130 @@ TEST_SUITE("GPU.SceneRenderer.Camera")
 			field.PostProcess->ColorOffset = glm::vec3(0.0f);
 			field.PostProcess->ColorPower = glm::vec3(1.0f);
 			CHECK(MaxDifference(RenderToImage(renderer, field.SceneData, field.Camera), neutral) == 0);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Bloom covers the same share of the image at 1080 and 2160 rows")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const glm::uvec2 sizes[] = { { 1920, 1080 }, { 3840, 2160 } };
+		BloomHalo halos[2];
+		for (size_t index = 0; index < 2; index++)
+		{
+			BloomScene bloom(assets);
+			SceneRenderer renderer(ExactSpecification());
+			halos[index] = MeasureBloomHalo(renderer, bloom, sizes[index]);
+			CAPTURE(sizes[index]);
+			CHECK(renderer.GetStats().BloomLevels == (index == 0 ? 6u : 7u));
+		}
+		CHECK(halos[0].RadiusOfWidth == doctest::Approx(halos[1].RadiusOfWidth).epsilon(0.1));
+		CHECK(halos[0].Energy == doctest::Approx(halos[1].Energy).epsilon(0.1));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Bloom radius scales the halo")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		BloomScene bloom(assets);
+		SceneRenderer renderer(ExactSpecification());
+		const float standard = MeasureBloomHalo(renderer, bloom, { 1920, 1080 }).RadiusOfWidth;
+		bloom.PostProcess->BloomRadius = 0.03f;
+		const float half = MeasureBloomHalo(renderer, bloom, { 1920, 1080 }).RadiusOfWidth;
+		bloom.PostProcess->BloomRadius = 0.12f;
+		const float twice = MeasureBloomHalo(renderer, bloom, { 1920, 1080 }).RadiusOfWidth;
+		CHECK(half / standard == doctest::Approx(0.5).epsilon(0.25));
+		CHECK(twice / standard == doctest::Approx(2.0).epsilon(0.25));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("At 1080 rows the default bloom is 0.6.0's")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		BloomScene bloom(assets);
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(1920, 1080);
+		const ReadbackImage standard = RenderToImage(renderer, bloom.SceneData, bloom.Camera);
+		CHECK(renderer.GetStats().BloomLevels == 6);
+		CHECK(SceneRenderer::GetBloomSpan(PostProcessComponent().BloomRadius, 1080, RenderData::c_MaxBloomLevels) == 6.0f);
+		// The radius as the Inspector shows and a file stores it (0.0592593, seven digits) snaps to the same six levels, bit for
+		// bit: no seventh level of a weight near 0.
+		for (const float radius : { 0.0592593f, 64.0f / 1080.0f + 1e-6f, 64.0f / 1080.0f - 1e-6f })
+		{
+			bloom.PostProcess->BloomRadius = radius;
+			CAPTURE(radius);
+			CHECK(MaxDifference(RenderToImage(renderer, bloom.SceneData, bloom.Camera), standard) == 0);
+			CHECK(renderer.GetStats().BloomLevels == 6);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The vignette leaves the center, is symmetric and falls like cos^4 of the field angle")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		FlatField field(assets, LuminanceForCode(200.0f));
+		constexpr uint32_t c_Width = 160;
+		constexpr uint32_t c_Height = 90;
+		field.Camera = LookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f), static_cast<float>(c_Width) / static_cast<float>(c_Height));
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Width, c_Height);
+		const ReadbackImage plain = RenderToImage(renderer, field.SceneData, field.Camera);
+		field.PostProcess->Vignette = 0.12f;
+		const ReadbackImage vignetted = RenderToImage(renderer, field.SceneData, field.Camera);
+		CHECK(GetPixelRGBA8(vignetted, c_Width / 2, c_Height / 2) == GetPixelRGBA8(plain, c_Width / 2, c_Height / 2));
+		for (uint32_t y = 0; y < c_Height; y += 7)
+		{
+			for (uint32_t x = 0; x < c_Width; x += 5)
+			{
+				CAPTURE(x);
+				CAPTURE(y);
+				CHECK(std::abs(Red(vignetted, x, y) - Red(vignetted, c_Width - 1 - x, y)) <= 1);
+				CHECK(std::abs(Red(vignetted, x, y) - Red(vignetted, x, c_Height - 1 - y)) <= 1);
+			}
+		}
+		const glm::vec2 tangents = SceneRenderer::GetVignetteTangents(field.Camera, { c_Width, c_Height });
+		for (const glm::uvec2& pixel : { glm::uvec2(0, 0), glm::uvec2(0, c_Height / 2), glm::uvec2(c_Width / 2, 0) })
+		{
+			CAPTURE(pixel);
+			CHECK(std::abs(static_cast<float>(Red(vignetted, pixel)) - VignettedCode(LuminanceForCode(200.0f), pixel, { c_Width, c_Height }, tangents, 0.12f)) <= 1.0f);
+		}
+		// At 60 degrees and 16:9, the corners darken by about 9.9%.
+		const glm::vec2 corner = tangents;
+		const float cos4 = 1.0f / ((1.0f + glm::dot(corner, corner)) * (1.0f + glm::dot(corner, corner)));
+		CHECK(0.12f * (1.0f - cos4) == doctest::Approx(0.099f).epsilon(0.02));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Orthographic views vignette as a 60 degree view")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		FlatField field(assets, LuminanceForCode(200.0f));
+		constexpr uint32_t c_Width = 160;
+		constexpr uint32_t c_Height = 90;
+		field.Camera = OrthographicLookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f), 1.0f);
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Width, c_Height);
+		const ReadbackImage plain = RenderToImage(renderer, field.SceneData, field.Camera);
+		field.PostProcess->Vignette = 0.12f;
+		const ReadbackImage vignetted = RenderToImage(renderer, field.SceneData, field.Camera);
+		const SceneCamera perspective = LookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f), static_cast<float>(c_Width) / static_cast<float>(c_Height));
+		const glm::vec2 tangents = SceneRenderer::GetVignetteTangents(perspective, { c_Width, c_Height });
+		CHECK(SceneRenderer::GetVignetteTangents(field.Camera, { c_Width, c_Height }) == tangents);
+		for (const glm::uvec2& pixel : { glm::uvec2(0, 0), glm::uvec2(0, c_Height / 2) })
+		{
+			CAPTURE(pixel);
+			CHECK(Red(vignetted, pixel) < Red(plain, pixel));
+			CHECK(std::abs(static_cast<float>(Red(vignetted, pixel)) - VignettedCode(LuminanceForCode(200.0f), pixel, { c_Width, c_Height }, tangents, 0.12f)) <= 1.0f);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

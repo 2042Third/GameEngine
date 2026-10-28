@@ -1510,7 +1510,7 @@
 					"Min": 0.0,
 					"Name": "Vignette",
 					"Speed": 0.0,
-					"Tooltip": "",
+					"Tooltip": "Natural darkening toward the image's corners, as a lens's (cos^4 of the field angle): 0 none, 1 a lens's full fall-off; 0.12 darkens the corners of a 60 degree view by about 10%",
 					"Type": "Float"
 				},
 				{
@@ -1690,6 +1690,18 @@
 					"Name": "AutoExposureKey",
 					"Speed": 0.009999999776482582,
 					"Tooltip": "How much a scene's brightness against a gray card in the sun shows: 0 meters every scene to middle gray; 0.12 shows an interior 5 stops below the sun's card 0.6 stops darker (at most 2 darker, 1 brighter). Needs a directional light",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Bloom Radius",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.25,
+					"Min": 0.009999999776482582,
+					"Name": "BloomRadius",
+					"Speed": 0.0010000000474974513,
+					"Tooltip": "How far the glow reaches, as a fraction of the image height: the same share of the image at every resolution",
 					"Type": "Float"
 				}
 			]

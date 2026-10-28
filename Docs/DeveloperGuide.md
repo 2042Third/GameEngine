@@ -3720,6 +3720,22 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     `keyStops`, `cardEv100`).
   - `AddNeutralPostProcess` meters as 0.6.0 did (`Average`, key 0, one speed both ways), so tests that turn automatic
     exposure on keep their meaning.
+- **Bloom** (`RenderBloom`, `Bloom.comp`): the half-resolution chain is allocated with every level down to 4 pixels, at
+  most `RenderData::c_MaxBloomLevels` (8), so a change of `BloomRadius` never reallocates. A frame uses
+  `span = log2(BloomRadius * height)` levels (`SceneRenderer::GetBloomSpan`: within [1, the levels allocated], snapped to a
+  whole number within 1e-4): `ceil(span)` levels, the deepest added with the weight of its share
+  (`BloomParameters::UpsampleWeight`), and the tone mapping normalizes the sum by `1 / span`. The deepest level's texel
+  spans `BloomRadius * height` pixels, so the halo covers the same share of the image at every resolution. The default,
+  64 / 1080, gives 1080 rows 0.6.0's six levels bit for bit and 2160 rows seven (one more, finer octave: a seventh of the
+  energy). Small views get a small halo: tests of 64 pixels that check a glow a few pixels out set `BloomRadius` 0.25
+  (0.6.0's four levels there). `SceneRendererStats::BloomLevels` reports the levels used.
+- **Vignette:** a lens's natural fall-off on scene-linear light after the bloom and before the grading and the curve:
+  `color *= mix(1, cos^4(theta), Vignette)`, `tan(theta) = |ndc * VignetteTangents|`, the tangents of the camera's half
+  field of view per axis (`SceneRenderer::GetVignetteTangents`: `1 / P[0][0]`, `1 / P[1][1]` of its unjittered
+  projection; orthographic views as a 60 degree view of their aspect). 1 is a lens's full fall-off; the default 0.12
+  darkens a 60 degree 16:9 view's corners by 9.9%, the side edges' centers much less. Stored values keep their number under
+  this model (a stored 0.2 darkens those corners 16.5%, where 0.6.0's ring after the curve darkened them 20%). Thumbnails
+  changed with both (`ThumbnailCache::c_Version` 7).
 - **FXAA's subpixel blend** is 0.25 (`FXAA.frag`'s `c_Subpixel`; 0.75 until 0.7.0, which cost 19-22% of the texture
   detail of an image without anti-aliasing; on PhysicsPlayground's tiled floor at 3840x2160, 0.375 keeps 0.85 of it and 0.25
   0.87, the rest being the edges FXAA is there to smooth). Lower values would leave single-pixel aliasing alone.
