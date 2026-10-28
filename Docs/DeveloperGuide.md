@@ -3603,7 +3603,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   They are offset by the fixed blue-noise tile (shifted apart from the disk's turn), not by the frame; the dither this
   leaves where a hit depends on whether a step lands within the thickness (a contact shadow's far edge, rays passing
   behind an object seen from the camera) is taken by the mask's blur, whose radius becomes half the step's length on
-  screen (1-4 pixels) where a march hit or passed behind a surface by more than the thickness; hits fade over the
+  screen (1-4 pixels) where a march hit, passed behind a surface by more than the thickness or passed near an occluder (a
+  surface standing off the start's own plane toward the sun by more than the thickness: the pixels beside a contact
+  shadow's edge whose own marches missed, which would stay fully lit between blurred neighbors); hits fade over the
   march's last 40%, from half the shadow distance to all of it, and within 5% of the screen's edges. The limit every screen-space method has: contact shadows come from every opaque surface of the depth
   prepass, also from mesh renderers whose `CastShadows` is off, and from nothing off screen or hidden; transparent
   surfaces neither cast nor receive them. `GPU.SceneRenderer.ContactShadows`; the GPU-driven comparison draws them.

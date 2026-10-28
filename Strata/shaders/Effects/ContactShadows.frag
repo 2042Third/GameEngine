@@ -12,10 +12,10 @@
 // own plane, from the depths, not the prepass's interpolated normal) occludes. Fixed per-pixel offsets (no temporal noise)
 // dither where a hit depends on whether a step lands within the thickness behind a surface (a contact shadow's far edge, a ray
 // passing behind an object seen from the camera), which the blur takes with a radius of half a step's length on screen, given
-// to every pixel whose march hit or passed behind a surface by more than the thickness; hits fade over the march's last 40%,
-// with distance and at the screen's edges. Out: the source's visibility times what the march leaves of
-// it (its encoding, the square root, multiplied by the square root), and the larger of the two blur radii. Kept apart from the
-// evaluation so neither carries the other's registers.
+// to every pixel whose march hit, passed behind a surface by more than the thickness or passed near an occluder; hits fade
+// over the march's last 40%, with distance and at the screen's edges. Out: the source's visibility times what the march
+// leaves of it (its encoding, the square root, multiplied by the square root), and the larger of the two blur radii. Kept
+// apart from the evaluation so neither carries the other's registers.
 
 layout(set = 0, binding = ST_SRV(22)) uniform texture2D u_Depth;
 layout(set = 0, binding = ST_SRV(23)) uniform texture2D u_Normals; // The prepass's view-space geometric normal, octahedral
@@ -81,13 +81,14 @@ vec3 FaceNormal(ivec2 pixel, vec3 position, float depth)
 }
 
 // Contact shadows: a march toward the sun over the depth buffer, for what the cascades are too coarse to show. Returns the
-// occlusion (0: none), the march's step on screen in pixels, and 1 where a step lay behind a surface by more than the
-// thickness (its neighbors' marches may hit: the blur evens them out), else 0. Points along the march are interpolated in clip space (a
-// line's clip coordinates are linear along it); the steps read the depth buffer c_ContactBatch at a time, so their reads
-// overlap, and are then judged in order. A step in front of that surface along the view by more than two pixels' footprint
-// lies in front of its plane too (but on surfaces seen nearly edge-on, whose contact shadows are given up), so most steps end
-// there; the others take the face's own plane (FaceNormal), which decides. A march only counts from a pixel whose own face
-// faces the sun, which is asked once something is hit.
+// occlusion (0: none), the march's step on screen in pixels, and 1 where the march hit or passed near an occluder (a step
+// lay behind a surface by more than the thickness, or a surface stood off the start's plane toward the sun by more than it:
+// its neighbors' marches may hit where this one does not, and the blur evens them out), else 0. Points along the march are
+// interpolated in clip space (a line's clip coordinates are linear along it); the steps read the depth buffer
+// c_ContactBatch at a time, so their reads overlap, and are then judged in order. A step in front of that surface along the
+// view by more than two pixels' footprint lies in front of its plane too (but on surfaces seen nearly edge-on, whose
+// contact shadows are given up), so most steps end there; the others take the face's own plane (FaceNormal), which
+// decides. A march only counts from a pixel whose own face faces the sun, which is asked once something is hit.
 vec3 ContactShadow(ivec2 pixel, vec3 position, float depth, vec3 normal, float viewDepth, float pixelWorld)
 {
 	vec3 toSun = -u_Frame.DirectionalLightDirection.xyz;
@@ -117,7 +118,7 @@ vec3 ContactShadow(ivec2 pixel, vec3 position, float depth, vec3 normal, float v
 	float startViewDepth = -(u_Frame.View * vec4(start, 1.0)).z;
 	float sunViewDepth = -(mat3(u_Frame.View) * toSun).z; // View depth gained per meter toward the sun
 	bool orthographic = u_Frame.CameraForward.w > 0.5;
-	float passedBehind = 0.0;
+	float nearOccluder = 0.0;
 	ivec2 last = ivec2(u_Frame.ViewportSize.xy) - 1;
 
 	for (uint first = 0u; first < steps; first += c_ContactBatch)
@@ -153,12 +154,16 @@ vec3 ContactShadow(ivec2 pixel, vec3 position, float depth, vec3 normal, float v
 				continue; // The start's own neighborhood (terminators of coarse meshes), or nothing drawn there
 			vec3 surface = PositionAt(pixels[k], depths[k]);
 			float stepViewDepth = startViewDepth + sunViewDepth * along;
+			float thickness = u_ScreenShadows.ContactThickness + u_ScreenShadows.ContactThicknessScale * stepViewDepth;
+			// A surface standing off the start's own plane by more than the thickness, on the side the march rises to: an occluder
+			// the march passes near, whose neighbors' marches may hit where this one does not.
+			if (dot(normal, surface - position) > thickness)
+				nearOccluder = 1.0;
 			float surfaceViewDepth = dot(surface, u_Frame.CameraForward.xyz);
 			float footprint = orthographic ? pixelWorld : pixelWorld * surfaceViewDepth / viewDepth;
 			if (stepViewDepth - surfaceViewDepth < -2.0 * footprint)
 				continue;
 			vec3 toStep = start + toSun * along - surface;
-			float thickness = u_ScreenShadows.ContactThickness + u_ScreenShadows.ContactThicknessScale * stepViewDepth;
 			float behind = -dot(FaceNormal(pixels[k], surface, depths[k]), toStep); // How far the step lies behind that surface
 			if (behind > c_ContactMinBehind && behind < thickness)
 			{
@@ -171,12 +176,12 @@ vec3 ContactShadow(ivec2 pixel, vec3 position, float depth, vec3 normal, float v
 				return vec3(fade * edge.x * edge.y * (1.0 - smoothstep(0.6, 1.0, t)), stepPixels, 1.0);
 			}
 			if (behind >= thickness)
-				passedBehind = 1.0;
+				nearOccluder = 1.0;
 		}
 		if (ended)
 			break;
 	}
-	return vec3(0.0, stepPixels, passedBehind);
+	return vec3(0.0, stepPixels, nearOccluder);
 }
 
 void main()
