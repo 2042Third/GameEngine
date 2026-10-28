@@ -21,13 +21,14 @@ namespace Strata
 	// simulation", uses them as its fields' defaults). The sweep of DeveloperGuide "Contact recycling" chose them.
 	// box3d's B3_CONTACT_RECYCLE_DISTANCE (10 linear slops of 5 mm), in meters: touching contacts whose bodies moved less than
 	// this relative to each other since the contact was computed (and turned less than 10 degrees) are reused. The sweep kept
-	// it: shorter distances keep the ball pits awake (2.5 cm and below: not asleep within 40 s), 0 topples a tower of 20 crates,
-	// and longer ones bump more at seams (DeveloperGuide "Contact recycling").
+	// it: the only distance its rule's gates pass, 2.5 cm, put the 2,000-ball pit to sleep later (median 22.6 s over nine
+	// layouts against 14.7), 0 topples a tower of 20 crates, longer ones bump more at seams, and the distance does not change
+	// how soon the 500-ball pit sleeps (DeveloperGuide "Contact recycling").
 	constexpr float c_DefaultContactRecycleDistance = 0.05f;
 	// In m/s: a body slower than this for 0.5 s (with its whole island) falls asleep. box3d's b3BodyDef::sleepThreshold is
-	// 0.05; at 0.08 the 2,000-ball pit and the Physics Playground's pit of 500 sleep about a fifth sooner (14.7 s instead of
-	// 18.8; 15.5 s instead of more than 20) while every probe and the Playground's stations come out the same (the sweep,
-	// DeveloperGuide "Contact recycling").
+	// 0.05; at 0.08 the ball pits sleep a quarter to a third sooner in every one of their nine layouts (medians 11.4 s instead
+	// of 15.1 for 500 balls, 14.7 instead of 21.0 for 2,000) while every probe and the Physics Playground's stations come out
+	// the same (the sweep, DeveloperGuide "Contact recycling").
 	constexpr float c_DefaultSleepThreshold = 0.08f;
 	// box3d's b3WorldDef contact tuning: the contacts' stiffness in cycles per second, their damping ratio, and the speed in m/s
 	// at which overlaps are pushed apart (contactSpeed).

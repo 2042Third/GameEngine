@@ -36,9 +36,12 @@ namespace Strata::Tests
 	};
 
 	// A walled pit (inner half width 4.5 m, the Physics Playground's, up to 600 balls; 6 m beyond) of `count` balls of 0.25 m
-	// radius (the Playground's prefab scaled as it spawns them) in a lattice 0.6 m apart with fixed offsets, a quarter each of
-	// the Playground's four ball materials. Probe "pit.ballsInPit".
-	SettleScene CreateBallPit(Scene& scene, uint32_t count);
+	// radius (the Playground's prefab scaled as it spawns them) in a lattice 0.6 m apart with fixed offsets of up to 4 cm, a
+	// quarter each of the Playground's four ball materials. Probe "pit.ballsInPit". `layout` (below c_BallPitLayouts) shifts
+	// the offsets among the balls: the same pit arranged otherwise. A pile's time to sleep is chaotic (a ball starting a bit
+	// elsewhere changes it by seconds), so measures of it are taken over several layouts.
+	constexpr uint32_t c_BallPitLayouts = 9;
+	SettleScene CreateBallPit(Scene& scene, uint32_t count, uint32_t layout = 0);
 	// `height` 1 m crates (the Playground's: 20 kg, friction 0.8) placed touching on the ground. Probe "tower.topDriftMm", the
 	// top crate's horizontal drift.
 	SettleScene CreateTower(Scene& scene, uint32_t height);
@@ -72,8 +75,9 @@ namespace Strata::Tests
 	// floor watched (as a script's contact callbacks on it do).
 	SettleScene CreateFallingBoxes(Scene& scene, uint32_t count, bool trackFloor);
 
-	// The scenes by the sweep's names (GetSettleSceneNames); nullopt for an unknown name.
-	std::optional<SettleScene> CreateSettleScene(Scene& scene, std::string_view name);
+	// The scenes by the sweep's names (GetSettleSceneNames), the ball pits in `layout`; nullopt for an unknown name or a layout
+	// the scene does not have (the other scenes have only layout 0).
+	std::optional<SettleScene> CreateSettleScene(Scene& scene, std::string_view name, uint32_t layout = 0);
 	std::vector<std::string> GetSettleSceneNames();
 
 	// What MeasureSettling saw.
@@ -118,7 +122,7 @@ namespace Strata::Tests
 
 	// The helper process "physics-settle" (TestMain.cpp): <scene> <seconds> <result.json> [--recycle-distance m]
 	// [--sleep-threshold m/s] [--contact-hertz hz] [--contact-damping ratio] [--contact-push-speed m/s] [--workers n]
-	// [--collision-steps n]. Plays a settle scene with those settings (PhysicsSystem::SetDefaultSettings; the workers through
+	// [--collision-steps n] [--layout n] (the ball pits' layout). Plays a settle scene with those settings (PhysicsSystem::SetDefaultSettings; the workers through
 	// PhysicsTaskSystem::SetWorkerLimit) on a job system as applications run, without a project (the settings are the process
 	// defaults), and writes MeasureSettling's summary with the settings used. Returns 0, or 1 with the reason on stderr.
 	int RunPhysicsSettleProcess(int argc, char** argv);

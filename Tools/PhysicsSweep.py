@@ -5,6 +5,7 @@
     python Tools/PhysicsSweep.py distances --tests <StrataTests> --output <dir> [--repeats 3] [--seconds 10]
     python Tools/PhysicsSweep.py knobs --tests <StrataTests> --output <dir> --distance <m> [--repeats 3]
     python Tools/PhysicsSweep.py workers --tests <StrataTests> --output <dir> [--workers 4,8,12,16,24] [--repeats 3]
+    python Tools/PhysicsSweep.py pits --tests <StrataTests> --output <dir> [--layouts 9] [--distances ...] [--thresholds ...]
     python Tools/PhysicsSweep.py playground --cli <StrataCLI> --editor <StrataEditor> --output <dir> [--distances ...]
     python Tools/PhysicsSweep.py report --output <dir>
 
@@ -21,6 +22,11 @@ result already there skips it, so an interrupted sweep continues.
 - knobs: at one distance, one knob at a time (sleep threshold, contact hertz, damping ratio, push speed, collision steps)
   on the scenes that settle and the probes.
 - workers: box3d's worker count (--workers) on the falling boxes and the crowd.
+- pits: the ball pits (--scenes, BallPit500 and BallPit2k) in --layouts arrangements of their balls (the helper's --layout:
+  the same lattice with its balls' fixed offsets shifted), per recycle distance and sleep threshold. A pit's time to sleep
+  is chaotic (a difference in the last bit of a ball's start changes it by seconds), so one run ranks nothing; the report
+  gives each point's median, lowest and highest time to 99% asleep over the layouts and how many slept. Its measures are
+  simulated seconds, not wall time, so it runs without the perf lock, --jobs runs at a time.
 - playground: the Physics Playground as its regression plays it (AutoDemo off), through a headless editor (--no-gpu, a
   private session directory) and StrataCLI on a copy (project.openSample): per distance, project.setSettings on
   Physics.Simulation, then 20 s of fixed steps (play.step, physics.stats every 15 steps), the script's TowerTopDrift,
@@ -37,6 +43,7 @@ Exit code: 0, 1 when a run failed, 2 for usage errors. Only the standard library
 """
 
 import argparse
+import concurrent.futures
 import json
 import os
 import statistics
@@ -62,6 +69,9 @@ KNOBS = {
 }
 KNOB_SCENES = ["BallPit2k", "Boxes10k", "Tower20", "Dominoes64"] + PROBE_SCENES
 WORKER_SCENES = ["Boxes10k", "Boxes30kTracked", "Boxes70k", "Characters1000"]
+PIT_SCENES = ["BallPit500", "BallPit2k"]
+PIT_DISTANCES = [0.0, 0.007, 0.025, 0.035, 0.05, 0.075]
+PIT_THRESHOLDS = [0.05, 0.08]
 # Measured in a separate pass of the probes with the busy phase only: the falling boxes settle within the perf lab's frames.
 CPU_SCENES = set(SETTLE_SCENES)
 
@@ -133,6 +143,18 @@ def command_workers(args):
     return 1 if failed else 0
 
 
+def command_pits(args):
+    distances = [float(value) for value in args.distances.split(",")]
+    thresholds = [float(value) for value in args.thresholds.split(",")]
+    runs = [(scene, [("recycle-distance", distance), ("sleep-threshold", threshold), ("layout", layout)])
+            for scene in args.scenes.split(",") for threshold in thresholds for distance in distances for layout in range(args.layouts)]
+    # Simulated seconds do not depend on the machine's load: no lock, several runs at a time.
+    args.no_lock = True
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        results = list(pool.map(lambda run: run_point(args, run[0], run[1], 0), runs))
+    return 1 if any(result is None for result in results) else 0
+
+
 def call(cli, environment, project, command, parameters=None):
     """Runs one command through StrataCLI against the editor of `project`; returns its result (a dict) or raises."""
     arguments = [cli, "call", command, json.dumps(parameters or {}), "--project", project]
@@ -187,7 +209,9 @@ def command_playground(args):
                 stats = call(args.cli, environment, project, "physics.stats", {"detail": True})
                 series.append({"seconds": (chunk + 1) * 0.25, "awake": stats["sleep"]["awake"], "moving": stats["sleep"]["moving"],
                                "recycled": stats["contacts"]["recycled"], "awakeContacts": stats["contacts"]["awake"],
-                               "stepMs": stats["step"]["ms"], "maxSpeed": stats["settling"]["maxSpeed"]})
+                               "stepMs": stats["step"]["ms"], "maxSpeed": stats["settling"]["maxSpeed"],
+                               "contactPeak": stats["contacts"]["peak"], "contactRoomGrowths": stats["contacts"]["roomGrowths"],
+                               "contactCapacity": stats["contacts"]["capacity"]})
             fields = call(args.cli, environment, project, "script.get", {"entity": game, "class": "Playground"})["scripts"][0]["fields"]
             call(args.cli, environment, project, "input.click", {"entity": start})
             call(args.cli, environment, project, "play.step", {"steps": 1200})
@@ -196,7 +220,8 @@ def command_playground(args):
             asleep = next((sample["seconds"] for sample in series if sample["moving"] > 0 and sample["awake"] <= 0.01 * sample["moving"]), -1.0)
             recycled = sum(sample["recycled"] or 0 for sample in series)
             awake = sum(sample["awakeContacts"] or 0 for sample in series)
-            result = {"recycleDistance": distance, "secondsTo99Asleep": asleep, "meanRecycledShare": recycled / awake if awake else 0.0,
+            result = {"recycleDistance": distance, "sleepThreshold": args.sleep_threshold, "secondsTo99Asleep": asleep,
+                      "meanRecycledShare": recycled / awake if awake else 0.0,
                       "series": series, "probes": {"towerTopDrift": fields.get("TowerTopDrift"), "ghostsOnPitFloor": fields.get("GhostsOnPitFloor"),
                                                    "ballsInPit": fields.get("BallsInPit"), "ballsEscaped": fields.get("BallsEscaped"),
                                                    "dominoesDown": after.get("DominoesDown")}}
@@ -320,6 +345,35 @@ def apply_rule(results, distances):
     return min(passing, key=order), failures
 
 
+def describe_pits(results):
+    """The pits' table: per scene, sleep threshold and distance, the time to 99% asleep over the layouts."""
+    groups = {}
+    for scene in PIT_SCENES:
+        for point, runs in results.get(scene, {}).items():
+            options = dict(part.split("=", 1) for part in point.split(","))
+            if "layout" not in options:
+                continue
+            key = (scene, float(options.get("sleep-threshold", "0.08")), float(options.get("recycle-distance", "0.05")))
+            groups.setdefault(key, []).extend(run.get("secondsTo99Asleep") for run in runs)
+    if not groups:
+        return []
+    lines = ["", "## Pits over layouts", "",
+             "| pit | sleep threshold m/s | distance m | layouts | asleep | median 99% asleep s | lowest s | highest s |",
+             "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+
+    def text(value):
+        return "not asleep" if value == float("inf") else f"{value:.2f}"
+
+    for (scene, threshold, distance), times in sorted(groups.items()):
+        # A pit not asleep within the run counts as later than any that slept.
+        ordered = sorted(float("inf") if time is None or time < 0.0 else time for time in times)
+        asleep = [time for time in ordered if time != float("inf")]
+        middle = ordered[len(ordered) // 2] if len(ordered) % 2 else (ordered[len(ordered) // 2 - 1] + ordered[len(ordered) // 2]) / 2.0
+        lines.append(f"| {scene} | {threshold:g} | {distance:g} | {len(ordered)} | {len(asleep)} | {text(middle)} | {text(ordered[0])} | "
+                     f"{text(ordered[-1])} |")
+    return lines
+
+
 def command_report(args):
     results = load_results(args.output)
     if not results:
@@ -359,7 +413,7 @@ def command_report(args):
         lines.append(f"- {distance:g} m: " + ("passes" if not reasons else "fails: " + "; ".join(reasons[:4]) + (" ..." if len(reasons) > 4 else "")))
     lines.append("")
     lines.append(f"Chosen: {chosen:g} m" if chosen is not None else "Chosen: none passes")
-    knob_points = sorted({point for scene in results.values() for point in scene if "," in point})
+    knob_points = sorted({point for scene in results.values() for point in scene if "," in point and "layout=" not in point})
     if knob_points:
         lines += ["", "## Knobs", "", "| point | pit 99% asleep s | pit settle CPU ms | 10k settle CPU ms | tower drift mm | dominoes down s | 70k library ms |",
                   "| --- | --- | --- | --- | --- | --- | --- |"]
@@ -367,6 +421,7 @@ def command_report(args):
             lines.append(f"| {point} | " + " | ".join(describe(measure(results, scene, point, key)) for scene, key in (
                 ("BallPit2k", "secondsTo99Asleep"), ("BallPit2k", "settleCpuMs"), ("Boxes10k", "settleCpuMs"), ("Tower20", "probes/tower.topDriftMm"),
                 ("Dominoes64", "probes/dominoes.allDownSeconds"), ("Boxes70k", "busyLibraryMs"))) + " |")
+    lines += describe_pits(results)
     worker_points = sorted({point for scene in results.values() for point in scene if point.startswith("workers=")}, key=lambda p: int(p.split("=")[1]))
     if worker_points:
         lines += ["", "## Workers", "", "| workers | " + " | ".join(f"{scene} library ms | {scene} step ms" for scene in WORKER_SCENES) + " |",
@@ -388,7 +443,7 @@ def command_report(args):
 def main():
     parser = argparse.ArgumentParser(description="The physics tuning sweep (Docs/DeveloperGuide.md, \"Settling and the sweep\").")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("distances", "knobs", "workers", "playground", "report"):
+    for name in ("distances", "knobs", "workers", "pits", "playground", "report"):
         command = commands.add_parser(name)
         command.add_argument("--output", required=True, help="Where the results go (outside the repository)")
         if name == "report":
@@ -411,6 +466,12 @@ def main():
             command.add_argument("--distance", type=float, required=True, help="The recycle distance the knobs are swept at")
         if name == "workers":
             command.add_argument("--workers", default="4,8,12,16,24")
+        if name == "pits":
+            command.add_argument("--scenes", default=",".join(PIT_SCENES))
+            command.add_argument("--layouts", type=int, default=9, help="Arrangements of the balls per point (1 to 9)")
+            command.add_argument("--distances", default=",".join(f"{d:g}" for d in PIT_DISTANCES))
+            command.add_argument("--thresholds", default=",".join(f"{t:g}" for t in PIT_THRESHOLDS))
+            command.add_argument("--jobs", type=int, default=4, help="Runs at a time (default 4)")
     args = parser.parse_args()
     if args.command == "playground":
         if not os.path.isfile(args.cli) or not os.path.isfile(args.editor):
@@ -422,10 +483,12 @@ def main():
             parser.error(f"no test executable at '{args.tests}'")
         if args.repeats < 1 or args.seconds <= 0:
             parser.error("--repeats and --seconds must be positive")
+        if args.command == "pits" and (not 1 <= args.layouts <= 9 or args.jobs < 1):
+            parser.error("--layouts must be from 1 to 9 and --jobs positive")
         args.tests = os.path.abspath(args.tests)
     os.makedirs(args.output, exist_ok=True)
-    handlers = {"distances": command_distances, "knobs": command_knobs, "workers": command_workers, "playground": command_playground,
-                "report": command_report}
+    handlers = {"distances": command_distances, "knobs": command_knobs, "workers": command_workers, "pits": command_pits,
+                "playground": command_playground, "report": command_report}
     return handlers[args.command](args)
 
 

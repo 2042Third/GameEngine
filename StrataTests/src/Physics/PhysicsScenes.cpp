@@ -149,7 +149,7 @@ namespace Strata::Tests
 
 	}
 
-	SettleScene CreateBallPit(Scene& scene, uint32_t count)
+	SettleScene CreateBallPit(Scene& scene, uint32_t count, uint32_t layout)
 	{
 		CreateGround(scene);
 		const float half = count <= 600 ? 4.5f : 6.0f;
@@ -173,9 +173,10 @@ namespace Strata::Tests
 		{
 			const uint32_t layer = index / perLayer;
 			const uint32_t cell = index % perLayer;
-			// Fixed offsets of up to 4 cm, so that the lattice does not stack ball on ball exactly.
-			const float jitterX = static_cast<float>(static_cast<int>((index * 37u) % 9u) - 4) * 0.01f;
-			const float jitterZ = static_cast<float>(static_cast<int>((index * 53u) % 9u) - 4) * 0.01f;
+			// Fixed offsets of up to 4 cm, so that the lattice does not stack ball on ball exactly; the layout shifts them among
+			// the balls (5 and 7 are prime to 9: each layout below 9 shifts them otherwise).
+			const float jitterX = static_cast<float>(static_cast<int>((index * 37u + layout * 5u) % 9u) - 4) * 0.01f;
+			const float jitterZ = static_cast<float>(static_cast<int>((index * 53u + layout * 7u) % 9u) - 4) * 0.01f;
 			const glm::vec3 position(-half + 0.3f + static_cast<float>(cell % perRow) * c_Spacing + jitterX, 0.3f + static_cast<float>(layer) * c_Spacing,
 				-half + 0.3f + static_cast<float>(cell / perRow) * c_Spacing + jitterZ);
 			Entity ball = CreateDynamicSphere(scene, "Ball", position, c_Radius);
@@ -573,12 +574,12 @@ namespace Strata::Tests
 			"Boxes10k", "Boxes30kTracked", "Boxes70k" };
 	}
 
-	std::optional<SettleScene> CreateSettleScene(Scene& scene, std::string_view name)
+	std::optional<SettleScene> CreateSettleScene(Scene& scene, std::string_view name, uint32_t layout)
 	{
-		if (name == "BallPit2k")
-			return CreateBallPit(scene, 2'000);
-		if (name == "BallPit500")
-			return CreateBallPit(scene, 500);
+		if ((name == "BallPit2k" || name == "BallPit500") && layout < c_BallPitLayouts)
+			return CreateBallPit(scene, name == "BallPit2k" ? 2'000 : 500, layout);
+		if (layout != 0)
+			return std::nullopt;
 		if (name == "Tower20")
 			return CreateTower(scene, 20);
 		if (name == "Pyramid15")
@@ -765,6 +766,7 @@ namespace Strata::Tests
 
 		PhysicsSettings settings;
 		uint32_t workers = 0;
+		uint32_t layout = 0;
 		for (int index = 5; index < argc; index++)
 		{
 			const std::string_view option = argv[index];
@@ -789,6 +791,8 @@ namespace Strata::Tests
 				settings.ContactDampingRatio = static_cast<float>(value);
 			else if (option == "--contact-push-speed" && value >= 0.01 && value <= 100.0)
 				settings.ContactPushSpeed = static_cast<float>(value);
+			else if (option == "--layout" && value >= 0.0 && value < c_BallPitLayouts && value == std::floor(value))
+				layout = static_cast<uint32_t>(value);
 			else
 			{
 				std::fprintf(stderr, "physics-settle: unknown option or value out of range: %s %s\n", argv[index - 1], argv[index]);
@@ -804,10 +808,10 @@ namespace Strata::Tests
 		int result = 0;
 		{
 			Scene scene { std::string(sceneName) };
-			const std::optional<SettleScene> settle = CreateSettleScene(scene, sceneName);
+			const std::optional<SettleScene> settle = CreateSettleScene(scene, sceneName, layout);
 			if (!settle)
 			{
-				std::fprintf(stderr, "physics-settle: no settle scene '%.*s'\n", static_cast<int>(sceneName.size()), sceneName.data());
+				std::fprintf(stderr, "physics-settle: no settle scene '%.*s' in layout %u\n", static_cast<int>(sceneName.size()), sceneName.data(), layout);
 				result = 1;
 			}
 			else
@@ -822,6 +826,7 @@ namespace Strata::Tests
 				document["contactHertz"] = settings.ContactHertz;
 				document["contactDamping"] = settings.ContactDampingRatio;
 				document["contactPushSpeed"] = settings.ContactPushSpeed;
+				document["layout"] = layout;
 				std::ofstream file(resultPath, std::ios::binary | std::ios::trunc);
 				file << document.dump(1, '\t') << '\n';
 				if (!file.good())

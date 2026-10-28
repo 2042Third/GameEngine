@@ -13,9 +13,11 @@ using namespace Strata;
 using namespace Strata::Tests;
 
 // How the engine's defaults settle the settle scenes (DeveloperGuide "Contact recycling"): deterministic for a build on a
-// platform whatever the number of threads, so the bounds are the values measured at the defaults (on Windows, Debug and
-// Release alike) times 1.25, rounded up; across compilers the last bits of Strata's own math may differ, which the margin
-// absorbs. The bounds were checked against absurd settings: recycling off topples the tower, a 0.7 m recycle distance fails the
+// platform whatever the number of threads, so the bounds are the values measured at the defaults (on Windows with MSVC,
+// Debug and Release alike) times 1.25, rounded up. Across compilers and CPUs the last bits of Strata's own math may differ:
+// played with the contact tuning a few bits off its defaults (damping 10 +- 1e-5, hertz 29.999), the tower, the pyramid,
+// the dominoes, the seams and the platform moved by less than 0.1 mm or one step, which the margin absorbs, while the ball
+// pit is chaotic (below). The bounds were checked against absurd settings: recycling off topples the tower, a 0.7 m recycle distance fails the
 // seams and ledges, a sleep threshold of 0 keeps the tower, the pit and the pyramid awake, and contacts of 1 Hz topple the
 // tower and the pyramid; the dominoes' held under every setting the sweep tried, so it guards the code rather than the
 // tuning, and the platform's fails while kinematic bodies recycle contacts (696 mm).
@@ -34,13 +36,18 @@ TEST_SUITE("Physics.Settling")
 
 	TEST_CASE("A pit of 500 balls falls asleep")
 	{
+		// A pile's time to sleep is chaotic: over the pit's nine layouts the defaults put 99% of it to sleep after 7.2 to 22.5 s
+		// (median 11.4; Tools/PhysicsSweep.py pits), and the contact tuning a few bits off its defaults moved this layout's
+		// 16.2 s anywhere from 8.8 to 27.0 s. A platform whose math differs in its last bits plays another such trajectory,
+		// so the bound is the slowest seen times 1.25, not this run's: it still fails a pit that never sleeps (a threshold of
+		// 0) or sleeps far later.
 		Scene scene;
 		const SettleScene pit = CreateBallPit(scene, 500);
 		const SettlingSummary summary = MeasureSettling(scene, pit, 40.0f);
 		MESSAGE("Ball pit: 99% asleep after ", summary.SecondsTo99Asleep, " s, all after ", summary.SecondsToAllAsleep, " s");
 		CHECK(summary.Probes.at("pit.ballsInPit") == 500.0);
 		CHECK(summary.SecondsTo99Asleep >= 0.0);
-		CHECK(summary.SecondsTo99Asleep <= 20.3);
+		CHECK(summary.SecondsTo99Asleep <= 34.0);
 	}
 
 	TEST_CASE("A pyramid of 15 rows stands and sleeps")

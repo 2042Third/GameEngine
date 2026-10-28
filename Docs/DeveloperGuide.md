@@ -1930,51 +1930,74 @@ points in the bodies' frames while a turning platform carries its riders, who th
 2 m/s and 30 degrees/s, against 17 mm without recycling).
 
 **The sweep** (`Tools/PhysicsSweep.py`, [Settling and the sweep](#settling-and-the-sweep); 2026-10-28, Release, the
-reference machine with its temporary memory, so the times are about twice the reference's; three interleaved repeats,
-medians; the Physics Playground through the editor):
+reference machine with its temporary memory, so the times are about twice the reference's; CPU measures three interleaved
+repeats, medians; the pits nine layouts each; the Physics Playground through the editor):
 
-| distance | `Boxes70k` box3d / collide / recycled | 2,000-ball pit 99% asleep | tower of 20: drift | Playground pit asleep | worst extra bump at seams | ledge travel, worst extra |
+| distance | `Boxes70k` box3d / collide / recycled | pits 99% asleep, medians of nine layouts: 500 / 2,000 balls | tower of 20: drift | Playground pit asleep | worst extra bump at seams | ledge travel, worst extra |
 | --- | --- | --- | --- | --- | --- | --- |
-| 0 (off) | 18.4 / 3.29 ms / 0% | not in 30 s | toppled (28 m) | 12.5 s | 0 | 0 |
-| 0.35 cm | 15.7 / 2.64 ms / 49% | not in 30 s | 9.4 mm | | 0.3 mm | 0 |
-| 0.7 cm | 14.6 / 2.10 ms / 73% | not in 30 s | 5.1 mm | 13.8 s | 0 | 0 |
-| 1 cm | 17.6 / 2.19 ms / 76% | not in 30 s | 6.0 mm | | 0.1 mm | 1.0 cm |
-| 2.5 cm | 14.2 / 1.89 ms / 84% | not in 30 s (nor 40 s at 0.08 m/s) | 9.2 mm | 14.0 s | 0.4 mm | 0.6 cm |
-| 3.5 cm | 13.8 / 1.94 ms / 85% | 24.3 s | 9.2 mm | 16.5 s | 5.4 mm | 1.6 cm |
-| **5 cm** (box3d's, kept) | 15.3 / 1.87 ms / 85% | 18.8 s (14.7 s at 0.08 m/s) | 9.2 mm | over 20 s (15.5 s at 0.08 m/s) | 5.0 mm | 1.7 cm |
-| 7.5 cm | 15.9 / 1.94 ms / 85% | 15.4 s | 9.2 mm | 14.0 s | 11.7 mm | 3.1 cm |
-| 10 cm | 16.0 / 1.89 ms / 85% | 22.1 s | 9.2 mm | | 25.1 mm | 3.1 cm |
-| 70 cm | | | | 13.5 s | 54.9 mm | 11.3 cm |
+| 0 (off) | 18.4 / 3.29 ms / 0% | 10.8 / 26.7 s | toppled (28 m) | 12.8 s | 0 | 0 |
+| 0.35 cm | 15.7 / 2.64 ms / 49% | 12.3 / 30.7 s | 9.4 mm | 10.5 s | 0.3 mm | 0 |
+| 0.7 cm | 14.6 / 2.10 ms / 73% | 11.7 / 24.6 s | 5.1 mm | 10.5 s | 0 | 0 |
+| 1 cm | 17.6 / 2.19 ms / 76% | | 6.0 mm | | 0.1 mm | 1.0 cm |
+| 2.5 cm | 14.2 / 1.89 ms / 84% | 10.8 / 22.6 s | 9.2 mm | 12.3 s | 0.4 mm | 0.6 cm |
+| 3.5 cm | 13.8 / 1.94 ms / 85% | 14.3 / 21.2 s | 9.2 mm | 15.8 s | 5.4 mm | 1.6 cm |
+| **5 cm** (box3d's, kept) | 15.3 / 1.87 ms / 85% | 11.4 / 14.7 s | 9.2 mm | 15.5 s | 5.0 mm | 1.7 cm |
+| 7.5 cm | 15.9 / 1.94 ms / 85% | 11.5 / 17.2 s | 9.2 mm | 11.8 s | 11.7 mm | 3.1 cm |
+| 10 cm | 16.0 / 1.89 ms / 85% | | 9.2 mm | | 25.1 mm | 3.1 cm |
+| 70 cm | | 12.3 / 18.8 s | | 10.0 s | 54.9 mm | 11.3 cm |
+
+The pits and the Playground at Strata's sleep threshold, 0.08 m/s. **A pile's time to sleep is chaotic**: a ball starting a
+bit elsewhere, or contacts tuned a few bits differently, change it by seconds, so the sweep plays each pit in nine layouts
+(the helper's `--layout`: the same lattice with the balls' fixed offsets shifted among them) and compares medians; one run
+of each, as the Playground's column is, ranks nothing. At the defaults the 500-ball pit slept after 7.2 to 22.5 s over the
+nine layouts (median 11.4) and the 2,000-ball pit after 8.3 to 34.2 s (14.7); at 0, 0.35, 0.7, 2.5 and 7.5 cm one layout of
+the 2,000-ball pit was not asleep within 40 s. The 500-ball pit's medians lie within 10.8 to 14.3 s at every distance, so
+the distance does not change how soon it sleeps; the 2,000-ball pit slept soonest at 5 cm (every other distance's layouts
+slept later than 5 cm's in 40 to 56 of the 81 pairs: a tendency, not significant over nine layouts). The sleep threshold
+does matter: at 5 cm, 0.08 m/s put both pits to sleep sooner than box3d's 0.05 in every one of the nine layouts (500 balls:
+median 11.4 s against 15.1; 2,000: 14.7 against 21.0, two of nine not asleep within 40 s at 0.05).
 
 The platform column of the sweep (the riders' creep with recycling allowed on the platform: 17 mm at 0, 131 at 0.35 cm,
 696 at 5 cm, 869 at 7.5 cm) is why kinematic bodies do not recycle: with that, it is 17 mm at every distance. Every distance
-keeps the domino run (all 64 down in about 10.9 s), the Playground's stations (tower drift 12.6 mm, 8
-ghosts on the pit floor, 500 balls in the pit, 64 dominoes) and the crate a character pushes (3.0 m in 2 s; 2.76 m at
-70 cm). The bumps at the seams of 1 m tiles are mostly the tiles' inner edges, with or without recycling (boxes sliding
-at 2 m/s rise 44 mm at distance 0, balls rolling at 8 m/s 130 mm): recycling adds a few millimeters to those. On a
-triangle mesh it removes one (a box sliding at 2 m/s rose 47 mm at 0, none from 3.5 cm on).
+keeps the domino run (all 64 down in about 10.9 s), the Playground's stations (tower drift 8 to 11 mm, 8 ghosts on the pit
+floor, 500 balls in the pit, 64 dominoes) and the crate a character pushes (3.0 m in 2 s; 2.76 m at 70 cm). The bumps at the
+seams of 1 m tiles are mostly the tiles' inner edges, with or without recycling (boxes sliding at 2 m/s rise 44 mm at
+distance 0, balls rolling at 8 m/s 130 mm): recycling adds a few millimeters to those. On a triangle mesh it removes one (a
+box sliding at 2 m/s rose 47 mm at distances up to 2.5 cm, none from 3.5 cm on).
 
 **The rule and the defaults.** The spec's rule (ghost gate against distance 0: seams at most 2 mm and ledges at most 1 cm
 more, the crate within 5%, every domino down, the tower within 10 mm or 1.2 times distance 0's; cost gate: `Boxes70k`'s
-box3d step within 3% of the best; then the shortest time to sleep) picks 2.5 cm. But at 2.5 cm the 2,000-ball pit does
-not fall asleep within 30 s (nor 40 s at 0.08 m/s), against 18.8 s at box3d's 5 cm, which the rule's acceptance forbids,
-and distance 0, the gate's reference, topples the tower. So Strata keeps box3d's 5 cm (`c_DefaultContactRecycleDistance`)
-and states the cost: up to 5 mm more over tile seams that bump 12 to 44 mm anyway at 1 to 2 m/s, and up to 1.7 cm further
-past a ledge. Lower the distance where bodies slide over tiled floors; raise it only after looking at seams and edges. The
-sleep threshold goes from box3d's 0.05 to 0.08 m/s (`c_DefaultSleepThreshold`): the 2,000-ball pit and the Playground's
-pit sleep a fifth sooner or more (14.7 s instead of 18.8; 15.5 s instead of more than 20), every probe and station came out
-the same, and 0.12 m/s, faster still (9.6 s and 13.3 s), stops slow rolling and sliding visibly early. The contact tuning
-became fields of the section because each changes how long piles settle by more than a tenth (hertz 20: the tower leans
-88 mm and the pit sleeps at 29 s; damping 5: the pit does not sleep in 30 s, 20: 28 s; push speed 1 m/s: 25.9 s); box3d's
-values stay the defaults. Two collision steps per fixed step double the cost and keep the pit awake.
+box3d step within 3% of the best; then the shortest time to sleep) passes only 2.5 cm through both gates, and its
+acceptance requires the chosen distance to put the 2,000-ball pit to sleep no later than box3d's 5 cm. Over nine layouts
+2.5 cm's median is 22.6 s against 5 cm's 14.7 s (one layout not asleep within 40 s), so 2.5 cm fails the acceptance, no
+other distance passes the gates, and distance 0, the gate's reference, topples the tower: Strata keeps box3d's 5 cm
+(`c_DefaultContactRecycleDistance`) and states the cost, up to 5 mm more over tile seams that bump 12 to 44 mm anyway at 1
+to 2 m/s, and up to 1.7 cm further past a ledge, against a 47 mm bump on triangle meshes that 5 cm removes. (The first
+sweep ranked the distances by one run of the 2,000-ball pit each; that ranking was the pit's chaos, and these medians
+replace it.) Bumps at the seams of a tiled floor call for one collider or a triangle mesh, not a shorter distance, which
+removes at most the 5 mm recycling adds; lower the distance where bodies must leave ledges promptly, and raise it only
+after looking at seams and edges. The sleep threshold goes from box3d's 0.05 to 0.08 m/s (`c_DefaultSleepThreshold`):
+both pits sleep a quarter to a third sooner (above), every probe and station came out the same, and 0.12 m/s, faster still,
+stops slow rolling and sliding visibly early. The contact tuning became fields of the section because each changes how long
+piles settle by more than a tenth (hertz 20: the tower leans 88 mm and the pit sleeps at 29 s; damping 5: the pit does not
+sleep in 30 s, 20: 28 s; push speed 1 m/s: 25.9 s; single runs of the pit, so these show the knob matters, not by how
+much); box3d's values stay the defaults. Two collision steps per fixed step double the cost and keep the pit awake.
 
-**The owner's "0.7"**, read every way: 0.7 cm (1.4 slops) recycles 73% of the busy boxes' contacts and passes the ghost
-gate, but leaves both pits awake; 0.7 of box3d's 5 cm (3.5 cm) sleeps the 2,000-ball pit in 24.3 s, slower than 5 cm, with
-the same bumps; 0.7 m recycles contacts over 70 cm of relative motion: boxes sliding at 0.5 m/s over tiles bump 59 mm (4 at
-distance 0), a box leaves a ledge 11 cm further before it drops, the pushed crate goes 11% shorter than without recycling, and the pits are no
-better; 0.7 of the slop (0.35 cm) is like 0.7 cm; 70% of contacts recycled is reached at 0.7 cm by the busy boxes and at every
-distance from 0.35 cm by the pits (94-96%); the angle was not changed: the pits' share is flat across distances, but a
-throwaway build of box3d with another angle was not made (D8 allows one; left to a later look).
+**The owner's "0.7"**, read every way, asked whether it puts more bodies to sleep and makes piles steadier: the distance
+does not put bodies to sleep sooner in any reading, the sleep threshold does (above). 0.7 cm (1.4 slops) recycles 73% of the
+busy boxes' contacts and passes the ghost gate; its pits sleep after 11.7 and 24.6 s (medians, 5 cm: 11.4 and 14.7) and the
+Playground's after 10.5 s (one run; 5 cm: 15.5), all within the pits' chaotic spread; its tower stands (5.1 mm). 0.7 of
+box3d's 5 cm (3.5 cm): 14.3 and 21.2 s, with 5 cm's bumps. 0.7 m recycles contacts over 70 cm of relative motion: boxes
+sliding at 0.5 m/s over tiles bump 59 mm (4 at distance 0), a box leaves a ledge 11 cm further before it drops and the
+pushed crate goes 11% shorter than without recycling, while its pits sleep after 12.3 and 18.8 s and the Playground's after
+10.0 s, no sooner than 5 cm's beyond the spread. 0.7 of the slop (0.35 cm): 12.3 and 30.7 s, otherwise like 0.7 cm. 70% of
+contacts recycled is reached at 0.7 cm by the busy boxes and at every distance from 0.35 cm by the pits over a whole run
+(94-96%). The recycle angle, box3d's constant (cos^2 of 5 degrees; "0.7" as its stored form would be about 66 degrees): not
+measured, as there is no evidence the angle limits recycling. The spec's trigger for a throwaway build is a recycled share
+flat across distances while bodies turn, and it is not: in the 2,000-ball pit's busy phase (steps 5 to 44, balls falling
+and rolling) the share rises with the distance from 26% at 0.35 cm to 44% at 5 cm and 49% at 10 cm, and over the dominoes'
+whole run from 84% to 92% and 93%. Over a whole run the pits' share is flat only because it is saturated: 94-96% of the
+awake contacts recycled leaves any angle at most the other 5%.
 
 ### Physics instruments
 
@@ -2011,7 +2034,12 @@ that may not include the Physics module: the runtime's perf log, `editor.status`
   reserved (at least 16 contacts) or its next doubling: box3d's contact storage grew while playing. box3d makes a step's
   contacts in its pair update but adds them to the peak at the start of its next step, so the world reads the peak after
   every box3d step and credits a growth to the step before (`LastContactGrowthStepMs`, that step's library time); a
-  growth in the world's last step is never counted.
+  growth in the world's last step is never counted. Piles of balls grow it once, as they form: the automatic room is 2
+  contacts a body (`c_ContactsPerBody`, at least 2,048), while the 500-ball pit holds about 2,350 contacts (4.7 a body) and
+  the 2,000-ball pit 12,200 to 12,700 (6.1 a body), and the Physics Playground's first play 3,152 in a room of 2,048 (the
+  editor's next play reserves what it held: `PhysicsCapacityDemand`). The other settle scenes stay within their room
+  (stacked boxes hold one contact a body). `c_ContactsPerBody` stays 2: a growth doubles box3d's arrays once, as play
+  starts, where a larger room would reserve the memory in every world.
 - **Settling** of the dynamic bodies a step wrote back: the fastest one's speed, those faster than the sleep threshold
   (`SettlingBodyCount`) and the RMS of the others' displacement in the step (`RestingJitter`, mm). The speed is a
   displacement over the fixed step, computed by `WritePose` before it overwrites the record's pose, and the sums are
@@ -2070,20 +2098,28 @@ and carrying one on its head (`CratePush`), boxes on a moving and turning kinema
 `Boxes70k`). `Tests::MeasureSettling` plays one with box3d's counters on and sums it up: when 99% and all of its moving bodies
 first slept, the steps' and the library's milliseconds (and `SettleCpuMs`, the steps' wall time over the first 10 s), the busy
 phase's medians as the perf lab takes them, the recycled share, the fastest body at 5 s, the resting jitter between 5 and 10 s
-and the scene's probes. The test binary's helper `--strata-test-helper=physics-settle <scene> <seconds> <result.json>
-[--workers n] [--collision-steps n] [--recycle-distance m] [--sleep-threshold m/s] [--contact-hertz hz] [--contact-damping
-ratio] [--contact-push-speed m/s]` runs one in a process of its own with those settings (box3d's workers capped with
-`PhysicsTaskSystem::SetWorkerLimit`) and writes that summary, with the settings used, as JSON.
+and the scene's probes, and box3d's contact room, peak and growths. The test binary's helper `--strata-test-helper=physics-settle
+<scene> <seconds> <result.json> [--workers n] [--collision-steps n] [--recycle-distance m] [--sleep-threshold m/s]
+[--contact-hertz hz] [--contact-damping ratio] [--contact-push-speed m/s] [--layout n]` runs one in a process of its own with
+those settings (box3d's workers capped with `PhysicsTaskSystem::SetWorkerLimit`; `--layout`, 0 to 8, arranges the ball
+pits otherwise: `CreateBallPit` shifts the balls' fixed offsets among them) and writes that summary, with the settings
+used, as JSON.
 
 `Tools/PhysicsSweep.py` (outside the repository's output: give it a directory) runs the helper per point under
 `Tools/PerfLock.py`, one fresh process each: `distances` (the recycle distances on every settle scene, CPU measures three
 times interleaved, the deterministic probe scenes once, also at 70 cm), `knobs --distance m` (sleep threshold, contact
-tuning and collision steps one at a time), `workers` (box3d's worker count), `playground` (the Physics Playground through a
-headless editor and StrataCLI on a copy, as its regression plays it: per distance 20 s of steps with `physics.stats` every
-15, the script's stations, then the dominoes) and `report` (the tables, and the rule of [Contact
-recycling](#contact-recycling) applied to what it finds). An interrupted sweep continues: points already written are
-skipped. Rerun it when box3d is bumped or the contact code changes, and keep `Physics.Settling` (the defaults' bounds,
-StrataTests/src/Physics/PhysicsSettlingTests.cpp, each checked to fail with an absurd setting) in line with what it finds.
+tuning and collision steps one at a time), `workers` (box3d's worker count), `pits` (the two ball pits in nine layouts
+per distance and sleep threshold, several runs at a time without the lock: their measure is simulated seconds),
+`playground` (the Physics Playground through a headless editor and StrataCLI on a copy, as its regression plays it: per
+distance 20 s of steps with `physics.stats` every 15, the script's stations, then the dominoes) and `report` (the tables,
+the pits' medians and ranges over their layouts, and the rule of [Contact recycling](#contact-recycling) applied to what
+it finds). An interrupted sweep continues: points already written are skipped. Rerun it when box3d is bumped or the
+contact code changes, and keep `Physics.Settling` (the defaults' bounds, StrataTests/src/Physics/PhysicsSettlingTests.cpp,
+each checked to fail with an absurd setting) in line with what it finds. Compare piles' times to sleep only over layouts:
+one run is one trajectory of a chaotic system, and a platform whose math differs in the last bits plays another. So the
+ball pit's bound in `Physics.Settling` is the slowest time seen over its layouts and over contact tuning a few bits off the
+defaults (27.0 s) times 1.25, while the tower, the pyramid, the dominoes, the seams and the platform, which those
+perturbations moved by less than 0.1 mm or one step, keep bounds of 1.25 times their measure.
 
 box3d splits a step for the job system's workers and the stepping thread (`PhysicsTaskSystem::GetWorkerCount`). The
 `workers` sweep of 2026-10-28 (4 to 24 workers, five repeats interleaved, on the reference machine with its temporary

@@ -298,6 +298,22 @@ TEST_SUITE("TestHelpers")
 		CHECK(summary["contactHertz"].get<double>() == doctest::Approx(45.0));
 		CHECK(summary["contactDamping"].get<double>() == doctest::Approx(5.0));
 		CHECK(summary["contactPushSpeed"].get<double>() == doctest::Approx(1.0));
+		// The ball pits in another layout; scenes without layouts and layouts out of range are refused.
+		specification.Arguments = { "--strata-test-helper=physics-settle", "BallPit500", "0.1", FileSystem::ToUTF8(result), "--layout", "3" };
+		REQUIRE(Process::Run(specification, std::chrono::minutes(5)).ExitCode == 0);
+		const nlohmann::json pit = nlohmann::json::parse(FileSystem::ReadText(result).value_or(std::string()), nullptr, false);
+		REQUIRE(pit.is_object());
+		CHECK(pit["layout"] == 3);
+		CHECK(pit["movingBodies"] == 500);
+		for (const char* layout : { "9", "1.5", "-1" })
+		{
+			CAPTURE(layout);
+			specification.Arguments = { "--strata-test-helper=physics-settle", "BallPit500", "0.1", FileSystem::ToUTF8(result), "--layout", layout };
+			CHECK(Process::Run(specification, std::chrono::minutes(1)).ExitCode == 1);
+		}
+		specification.Arguments = { "--strata-test-helper=physics-settle", "Tower20", "0.1", FileSystem::ToUTF8(result), "--layout", "1" };
+		CHECK(Process::Run(specification, std::chrono::minutes(1)).ExitCode == 1);
+
 		// Out of its range, or not wholly a finite number: refused.
 		specification.Arguments = { "--strata-test-helper=physics-settle", "Tower20", "0.5", FileSystem::ToUTF8(result), "--recycle-distance", "2" };
 		CHECK(Process::Run(specification, std::chrono::minutes(1)).ExitCode == 1);
