@@ -711,8 +711,10 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(harness.CountDifferences(image, settled) == 0);
 
 		// Without waiting, a capture takes what the frame has: it renders again only for the scene's temporal anti-aliasing, the
-		// jitter's phases.
+		// jitter's phases. Its sun casts no shadows here: else the capture would first wait for the cascades' fit, whose frames
+		// follow how soon the GPU finishes the readbacks, and waitedFrames would report the larger of the two waits.
 		harness.Run("play.stop");
+		harness.TurnOffSunShadows();
 		harness.Run("play.start", { { "build", false } });
 		nlohmann::json immediate = size;
 		immediate["waitForAssets"] = false;
@@ -1809,11 +1811,13 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(first["renderStats"]["shadowFit"]["settled"] == true);
 		CHECK(first["renderStats"]["cascades"].size() == harness.Context.GetViewport().GetCaptureRenderer()->GetStats().CascadeCount);
 		CHECK(harness.Context.GetViewport().GetCaptureRenderer()->GetStats().ShadowFit);
-		// Each capture starts the fit again (ResetShadowFit) and waits for it alike.
+		// Each capture starts the fit again (ResetShadowFit) and waits for it alike. How many frames that takes follows how soon the
+		// GPU finishes each frame's readback (polled, never waited for), so only its bounds are checked: the pictures are equal.
 		nlohmann::json second;
 		harness.Capture(parameters, &second);
 		CHECK(second["shadowFitSettled"] == true);
-		CHECK(second["waitedFrames"] == first["waitedFrames"]);
+		CHECK(second["waitedFrames"].get<int>() >= 1);
+		CHECK(second["waitedFrames"].get<int>() <= 12); // EditorViewportCommands.cpp's c_MaxCaptureShadowFitFrames
 		CHECK(second["Image"]["Data"] == first["Image"]["Data"]);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
