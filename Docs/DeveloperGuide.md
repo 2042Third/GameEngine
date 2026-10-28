@@ -3842,11 +3842,24 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     near card's blur over the wall in focus, both paths, off, the sharpening mask), `Renderer.CameraLens`; perf
     (provisional) `PerfGPU.Renderer.DepthOfField4K`, the worst case: every pixel far behind the focus at the largest
     circle (about 0.20 ms on an RTX 5090). The look-dev shot `tp.dof` focuses the Third-Person camera on the robot at f/2.
-- **The players' rows** (`RendererQualitySettings::AntiAliasing`, `MotionBlur` and `DepthOfField`, the same under every
-  preset): Scene, or Off, FXAA or TAA for the method; Scene or Off for the motion blur and the depth of field (players
-  may turn off, never on, what a scene uses). `ApplyQualityOverrides` applies the first two to the copy of the Post
-  Process every pass reads, once per frame, on both paths (screen-space reflections follow the effective method);
-  `RenderFrame` reads the third beside the lens.
+- **Film grain and chromatic aberration** (`PostProcessComponent::FilmGrain`, `ChromaticAberration`, 0 to 1, off by
+  default; in `Tonemap.frag`, `TonemapConstants` 144-159):
+  - The aberration is read first: red at `0.5 + (uv - 0.5) * (1 + k)`, blue at `(1 - k)`, green unmoved, bilinear, with
+    `k = ChromaticAberration * c_ChromaticAberrationScale` (`0.5 / 1920`), so 1 draws red and blue half a pixel apart from
+    green at a 3840x2160 image's corners and nothing at its center (the same share of the image at every resolution).
+  - The grain comes after the curve and the saturation, in the encoded domain, before the dither: `encoded +=
+    FilmGrain * c_FilmGrainAmplitude (0.04) * sqrt(4 Y (1 - Y)) * g`, `Y` the encoded luminance (film's grain shows most in
+    the mid-tones), `g` near-Gaussian (four `PixelRandom` streams from 8, salted with `TonemapConstants::GrainFrame`, the
+    renderer's render count: new every frame), the same on every channel. It is zero-mean: 1 spreads a mid-gray by about
+    10 codes and moves its mean by under 0.1 code. With FXAA the grain is in the image FXAA reads. Renderers of single
+    images set `SceneRenderOptions::GrainSeed` (the capture renderer and thumbnails: 0), so a picture taken again is the
+    same; live views and games leave it unset.
+  - Tests: `GPU.SceneRenderer.GrainAndAberration`.
+- **The players' rows** (`RendererQualitySettings::AntiAliasing`, `MotionBlur`, `DepthOfField`, `FilmGrain` and
+  `ChromaticAberration`, the same under every preset): Scene, or Off, FXAA or TAA for the method; Scene or Off for the
+  others (players may turn off, never on, what a scene uses). `ApplyQualityOverrides` applies all but the depth of field to
+  the copy of the Post Process every pass reads, once per frame, on both paths (screen-space reflections follow the
+  effective method); `RenderFrame` reads the depth of field's beside the lens.
 - **FXAA's subpixel blend** is 0.25 (`FXAA.frag`'s `c_Subpixel`; 0.75 until 0.7.0, which cost 19-22% of the texture
   detail of an image without anti-aliasing; on PhysicsPlayground's tiled floor at 3840x2160, 0.375 keeps 0.85 of it and 0.25
   0.87, the rest being the edges FXAA is there to smooth). Lower values would leave single-pixel aliasing alone.

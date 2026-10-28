@@ -1,8 +1,8 @@
 # The camera's image
 
 How Strata turns the light of a scene into the picture a camera would take: exposure, the tone curve, color, bloom, the
-vignette and motion blur, all set on the scene's **Post Process** component, depth of field, set on the **Camera**, what
-each costs, and three recipes.
+vignette, motion blur, grain and color fringes, all set on the scene's **Post Process** component, depth of field, set on
+the **Camera**, what each costs, and three recipes.
 This guide is for people working in the editor; [DeveloperGuide.md](../DeveloperGuide.md) (Rendering, "Light units and
 exposure" and "Post-processing") explains how the renderer computes it. Anti-aliasing has its own page:
 [AntiAliasing.md](AntiAliasing.md).
@@ -130,6 +130,17 @@ aperture. Turn on **Depth Of Field** on the scene's camera (perspective cameras 
   camera never does. Players can turn it off: the **Depth of field** row of the Graphics Quality settings (Scene or Off,
   the same under every preset; [Settings.md](Settings.md)).
 
+## Grain and color fringes
+
+Film and lenses have flaws that make a picture feel photographed; use them sparingly (both are off by default, and
+players can turn each off with the **Film grain** and **Chromatic aberration** rows of the Graphics Quality settings):
+
+- **Film Grain** (0): fine noise, new every frame, strongest in the mid-tones as film's is and the same on every
+  channel (no color speckle). 1 spreads a mid-gray by about 10 codes without changing its brightness; 0.1 to 0.3 reads
+  as texture rather than noise.
+- **Chromatic Aberration** (0): a lens's lateral color fringes, red and blue drawn apart toward the image's corners; 1
+  shifts each half a pixel at the corners of a 3840x2160 image (the same share of any image) and nothing at the center.
+
 ## What it costs
 
 GPU time at 3840x2160 on an RTX 5090 (the medians of Strata's look-dev captures of the samples and of its perf tests):
@@ -142,7 +153,8 @@ GPU time at 3840x2160 on an RTX 5090 (the medians of Strata's look-dev captures 
 | Motion blur, the camera still | about 0.11 ms (it still reads every pixel) |
 | Depth of field (`GPU.DepthOfField`), everything far blurred at the largest circle | about 0.20 ms |
 
-Off, motion blur costs nothing (no pass, no target, no motion vectors it would ask for), and so does depth of field.
+Off, motion blur costs nothing (no pass, no target, no motion vectors it would ask for), and so does depth of field. Grain
+and color fringes are part of the tone mapping: a few more operations per pixel when on.
 
 ## Recipes
 

@@ -36,10 +36,19 @@ namespace Strata
 			glm::vec4 ColorRows[3];     // 64: PostProcessMath::ColorGrading::Matrix (white balance times slope) as rows (w unused)
 			glm::vec4 ColorOffset;      // 112: xyz: the offset in units of light (ColorOffset times middle gray), added before the power
 			glm::vec4 ColorPower;       // 128: xyz: the power around middle gray
+			float FilmGrain;            // 144: PostProcessComponent::FilmGrain; 0 = off
+			float ChromaticAberration;  //      the lateral aberration's scale of red and blue about the center (k); 0 = off
+			uint32_t GrainFrame;        //      the frame's number: the grain changes every frame, as film's
+			float Padding0;
 		};
-		static_assert(sizeof(TonemapConstants) == 144);
+		static_assert(sizeof(TonemapConstants) == 160);
 		static_assert(offsetof(TonemapConstants, ColorRows) == 64 && offsetof(TonemapConstants, ColorOffset) == 112);
-		static_assert(offsetof(TonemapConstants, ColorPower) == 128);
+		static_assert(offsetof(TonemapConstants, ColorPower) == 128 && offsetof(TonemapConstants, FilmGrain) == 144);
+		// ChromaticAberration 1 shifts red and blue half a pixel at a 3840x2160 image's corners (a fixed share of the image at
+		// every resolution): k = ChromaticAberration * c_ChromaticAberrationScale.
+		constexpr float c_ChromaticAberrationScale = 0.5f / (0.5f * 3840.0f);
+		// The grain's strength in display codes' fraction at FilmGrain 1, in the mid-tones (PostProcess/Tonemap.frag).
+		constexpr float c_FilmGrainAmplitude = 0.04f;
 		// TonemapConstants::ColorFlags: the grading applies; the source's alpha marks the pixels the motion blur or the depth of
 		// field blurred (no sharpening there).
 		constexpr uint32_t c_TonemapColorGrading = 1u;

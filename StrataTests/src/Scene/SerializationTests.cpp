@@ -553,6 +553,19 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(loaded.MotionBlur);
 		CHECK(loaded.MotionBlurShutterAngle == 360.0f);
 		CHECK(loaded.MotionBlurMaxLength == 0.005f);
+
+		// Film grain and chromatic aberration: off in older files; set, they round-trip and are clamped.
+		loaded = load({ { "Vignette", 0.2 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.FilmGrain == 0.0f);
+		CHECK(loaded.ChromaticAberration == 0.0f);
+		loaded = load({ { "FilmGrain", 0.3 }, { "ChromaticAberration", 0.6 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.FilmGrain == 0.3f);
+		CHECK(loaded.ChromaticAberration == 0.6f);
+		loaded = load({ { "FilmGrain", 4.0 }, { "ChromaticAberration", -1.0 } }, warnings);
+		CHECK(loaded.FilmGrain == 1.0f);
+		CHECK(loaded.ChromaticAberration == 0.0f);
 	}
 
 	TEST_CASE("Cameras saved before depth of field load without it; their lens round-trips and is clamped")

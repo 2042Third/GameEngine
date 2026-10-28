@@ -350,6 +350,10 @@ namespace Strata
 		// Depth of field through this lens (unless the quality's DepthOfField row turns it off): programs set it when they view
 		// through a scene camera with DepthOfField on (CameraLens::FromEntity); unset, nothing is defocused.
 		std::optional<CameraLens> Lens;
+		// The film grain's pattern (PostProcessComponent::FilmGrain): unset, the renderer's frame count, so the grain changes
+		// every frame as film's; set, that seed. Renderers of single images (captures, thumbnails) set it so a picture taken
+		// again is the same.
+		std::optional<uint32_t> GrainSeed;
 
 		// The overlays below are drawn over the finished image (after tone mapping and anti-aliasing) with exact display
 		// colors; all of them are off by default.
@@ -1327,7 +1331,7 @@ namespace Strata
 		// Tone mapping of the post source into `output`, or into the LDR target and FXAA from it into `output` (FXAA unless the frame
 		// was `resolved` temporally).
 		void RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
-			bool resolved, PostSource source, bool bloom, const glm::vec2& vignetteTangents, nvrhi::IFramebuffer* output);
+			bool resolved, PostSource source, bool bloom, const glm::vec2& vignetteTangents, uint32_t grainSeed, nvrhi::IFramebuffer* output);
 		// The Post Process's grading (white balance, slope, offset, power), the white balance's part cached per temperature and tint.
 		PostProcessMath::ColorGrading GetColorGrading(const PostProcessComponent& postProcess);
 		// The bloom chain of the image `prefilterSet` reads (the first downsample: the HDR target's or the resolved image's).

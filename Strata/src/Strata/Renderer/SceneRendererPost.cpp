@@ -432,6 +432,10 @@ namespace Strata
 		}
 		if (quality.MotionBlur == SceneEffectChoice::Off || quality.MotionBlurQuality == MotionBlurSamples::Off)
 			settings.MotionBlur = false;
+		if (quality.FilmGrain == SceneEffectChoice::Off)
+			settings.FilmGrain = 0.0f;
+		if (quality.ChromaticAberration == SceneEffectChoice::Off)
+			settings.ChromaticAberration = 0.0f;
 	}
 
 	bool SceneRenderer::EnsureMotionBlurResources()
@@ -910,7 +914,7 @@ namespace Strata
 	}
 
 	void SceneRenderer::RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
-		bool resolved, PostSource source, bool bloom, const glm::vec2& vignetteTangents, nvrhi::IFramebuffer* output)
+		bool resolved, PostSource source, bool bloom, const glm::vec2& vignetteTangents, uint32_t grainSeed, nvrhi::IFramebuffer* output)
 	{
 		// Tone mapping into the display target, or into the intermediate target FXAA reads.
 		RenderData::TonemapConstants tonemap = {};
@@ -939,6 +943,10 @@ namespace Strata
 			tonemap.ColorRows[row] = glm::vec4(grading.Matrix[0][row], grading.Matrix[1][row], grading.Matrix[2][row], 0.0f);
 		tonemap.ColorOffset = glm::vec4(grading.Offset, 0.0f);
 		tonemap.ColorPower = glm::vec4(grading.Power, 0.0f);
+		auto unit = [](float value) { return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.0f; };
+		tonemap.FilmGrain = unit(postProcess.FilmGrain);
+		tonemap.ChromaticAberration = unit(postProcess.ChromaticAberration) * RenderData::c_ChromaticAberrationScale;
+		tonemap.GrainFrame = grainSeed;
 
 		// FXAA unless the image was resolved temporally.
 		const bool fxaa = postProcess.AntiAliasing && !resolved;
