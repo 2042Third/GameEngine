@@ -16,10 +16,12 @@
 #include <Strata/Math/Math.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/Atmosphere.h>
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Renderer/SceneRenderer.h>
+#include <Strata/Renderer/SkyPresets.h>
 #include <Strata/Renderer/TextureReadback.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
@@ -520,6 +522,207 @@ namespace Strata
 			return sun;
 		}
 
+		// The azimuth (degrees from +X toward +Z) of the direction toward the sun a directional light shines from: it shines along
+		// its world -Z axis, away from the sun. None for a light pointing (nearly) straight up or down.
+		std::optional<float> GetSunAzimuth(Scene& scene, Entity light)
+		{
+			const glm::vec3 shining = glm::vec3(scene.GetWorldTransform(light) * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
+			const float length = glm::length(shining);
+			if (!(length > 1e-6f))
+				return std::nullopt;
+			const glm::vec3 towardSun = -shining / length;
+			if (!(std::hypot(towardSun.x, towardSun.z) > 1e-4f))
+				return std::nullopt;
+			return glm::degrees(std::atan2(towardSun.z, towardSun.x));
+		}
+
+		// Turns `light` to shine away from `towardSun` (world space) through its parent's inverse linear part, as
+		// ApplyExtractedSun does; false (nothing changed) when its Z scale or its parent's transform leaves no direction.
+		bool PointLightAwayFrom(Scene& scene, Entity light, const glm::vec3& towardSun)
+		{
+			const float scaleZ = light.GetComponent<TransformComponent>().Scale.z;
+			if (!std::isfinite(scaleZ) || scaleZ == 0.0f)
+				return false;
+			glm::vec3 localDirection = scaleZ < 0.0f ? towardSun : -towardSun;
+			if (const Entity parent = light.GetParent())
+			{
+				const glm::mat3 linear(scene.GetWorldTransform(parent));
+				const float determinant = glm::determinant(linear);
+				if (!std::isfinite(determinant) || std::abs(determinant) < 1.0e-12f)
+					return false;
+				localDirection = glm::normalize(glm::inverse(linear) * localDirection);
+			}
+			light.GetComponent<TransformComponent>().Rotation = Math::LookRotation(localDirection);
+			light.MarkModified<TransformComponent>();
+			return true;
+		}
+
+		// The automatic exposure's brightest metered level that leaves a real sun unclipped (lighting.applySkyPreset raises lower ones).
+		constexpr float c_PresetAutoExposureMaxEV = 16.0f;
+		constexpr float c_PresetAutoExposureRaiseBelow = 15.0f;
+		constexpr float c_PresetDefaultAzimuth = 20.0f;
+
+		EditorCommandResult ApplySkyPreset(EditorContext& context, const nlohmann::json& parameters)
+		{
+			std::string error;
+			if (!context.CheckSceneEditable(&error))
+				return EditorCommandResult::Fail(std::move(error));
+			const Ref<Scene>& scenePointer = context.GetActiveScene();
+			if (!scenePointer)
+				return EditorCommandResult::Fail("No scene is open");
+			Scene& scene = *scenePointer;
+			CommandArguments arguments(parameters);
+			const std::string presetName = arguments.GetString("preset");
+			const std::optional<SkyPreset> preset = SkyPresetFromString(presetName);
+			Entity sky = arguments.FindEntity(scene, "sky");
+			Entity light = arguments.FindEntity(scene, "light");
+			// The angles: numbers when given (null or absent: the defaults).
+			const auto readAngle = [&parameters](const char* name, bool& invalid) -> std::optional<float>
+			{
+				const auto it = parameters.find(name);
+				if (it == parameters.end() || it->is_null())
+					return std::nullopt;
+				if (!it->is_number())
+				{
+					invalid = true;
+					return std::nullopt;
+				}
+				return static_cast<float>(it->get<double>());
+			};
+			bool invalidAngle = false;
+			std::optional<float> elevation = readAngle("sunElevation", invalidAngle);
+			std::optional<float> azimuth = readAngle("sunAzimuth", invalidAngle);
+			if (!arguments.IsValid())
+				return arguments.Fail();
+			if (!preset)
+				return EditorCommandResult::InvalidParameters("Parameter 'preset' must be \"Clear\", \"Hazy\", \"Overcast\" or \"GoldenHour\"");
+			if (sky && !sky.HasComponent<SkyLightComponent>())
+				return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'sky': '{}' has no SkyLight component", sky.GetName()));
+			if (light && !light.HasComponent<DirectionalLightComponent>())
+				return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'light': '{}' has no DirectionalLight component", light.GetName()));
+			if (invalidAngle)
+				return EditorCommandResult::InvalidParameters("Parameters 'sunElevation' and 'sunAzimuth' must be numbers");
+			if (elevation && !(std::isfinite(*elevation) && *elevation >= -10.0f && *elevation <= 90.0f))
+				return EditorCommandResult::InvalidParameters("Parameter 'sunElevation' must be a number from -10 to 90");
+			if (azimuth && !(std::isfinite(*azimuth) && *azimuth >= -360.0f && *azimuth <= 360.0f))
+				return EditorCommandResult::InvalidParameters("Parameter 'sunAzimuth' must be a number from -360 to 360");
+
+			scene.UpdateWorldTransforms();
+			if (!sky)
+			{
+				for (auto [handle, component, world] : scene.GetRegistry().view<SkyLightComponent, WorldTransformComponent>().each())
+				{
+					if (world.ActiveInHierarchy)
+					{
+						sky = Entity(handle, &scene);
+						break;
+					}
+				}
+			}
+			if (!light)
+				light = FindSceneSun(scene);
+			if (!azimuth && light)
+				azimuth = GetSunAzimuth(scene, light);
+			const SkyPresetValues& values = GetSkyPresetValues(*preset);
+			const glm::vec3 towardSun = GetSkyPresetSunDirection(elevation.value_or(values.SunElevation), azimuth.value_or(c_PresetDefaultAzimuth));
+
+			SceneEditTransaction transaction(scene, "Apply Sky Preset", {});
+			const bool createdSky = !sky;
+			if (createdSky)
+			{
+				sky = scene.CreateEntity("Sky");
+				sky.AddComponent<SkyLightComponent>();
+				transaction.TrackCreated(sky.GetUUID());
+			}
+			else
+			{
+				transaction.Track(sky.GetUUID());
+			}
+			const bool createdLight = !light;
+			if (createdLight)
+			{
+				light = scene.CreateEntity("Sun");
+				light.AddComponent<DirectionalLightComponent>();
+				transaction.TrackCreated(light.GetUUID());
+			}
+			else
+			{
+				transaction.Track(light.GetUUID());
+			}
+
+			// What the preset writes, to tell whether it changed anything (a preset applied twice records no step).
+			const SkyLightComponent skyBefore = sky.GetComponent<SkyLightComponent>();
+			const glm::quat rotationBefore = light.GetComponent<TransformComponent>().Rotation;
+			const DirectionalLightComponent sunBefore = light.GetComponent<DirectionalLightComponent>();
+			SkyLightComponent& skyLight = sky.GetComponent<SkyLightComponent>();
+			skyLight.Source = values.Source;
+			skyLight.Intensity = values.SkyIntensity;
+			skyLight.SunSize = values.SunSize;
+			if (values.Source == SkyLightSource::Atmosphere)
+			{
+				skyLight.AtmosphereDensity = values.AtmosphereDensity;
+				skyLight.AtmosphereHaze = values.AtmosphereHaze;
+				skyLight.GroundAlbedo = values.GroundAlbedo;
+			}
+			else
+			{
+				skyLight.ZenithColor = values.ZenithColor;
+				skyLight.HorizonColor = values.HorizonColor;
+				skyLight.GroundColor = values.GroundColor;
+				skyLight.SunIntensity = values.SunDiskIntensity;
+			}
+			sky.MarkModified<SkyLightComponent>();
+
+			if (!PointLightAwayFrom(scene, light, towardSun))
+				return RollBackEdit(transaction, fmt::format("'{}' cannot point at the sun: its scale along Z, or its parent's transform, leaves it no "
+					"direction", light.GetName()), EditorCommandError::Failed);
+			DirectionalLightComponent& sun = light.GetComponent<DirectionalLightComponent>();
+			sun.Intensity = values.SunIlluminance;
+			sun.Color = values.SunColor;
+			sun.ShadowSoftness = values.ShadowSoftness;
+			light.MarkModified<DirectionalLightComponent>();
+
+			// Automatic exposure that would clip a real sun's scene: raised to what it needs.
+			nlohmann::json postProcessEntity = nullptr;
+			for (auto [handle, postProcess, world] : scene.GetRegistry().view<PostProcessComponent, WorldTransformComponent>().each())
+			{
+				if (!world.ActiveInHierarchy)
+					continue;
+				if (postProcess.AutoExposure && postProcess.AutoExposureMaxEV < c_PresetAutoExposureRaiseBelow)
+				{
+					const Entity entity(handle, &scene);
+					transaction.Track(entity.GetUUID());
+					postProcess.AutoExposureMaxEV = c_PresetAutoExposureMaxEV;
+					scene.GetRegistry().patch<PostProcessComponent>(handle);
+					postProcessEntity = UUIDToJson(entity.GetUUID());
+				}
+				break; // The first active Post Process is the one that applies
+			}
+
+			// The light on a surface facing the sun at the ground: the atmosphere's transmittance applied for its presets.
+			float groundIlluminance = values.SunIlluminance;
+			if (values.Source == SkyLightSource::Atmosphere)
+			{
+				const Atmosphere::Medium medium = Atmosphere::GetMedium(values.AtmosphereDensity, values.AtmosphereHaze);
+				const glm::dvec3 transmittance = Atmosphere::ComputeSunTransmittance(medium, glm::dvec3(towardSun), glm::radians(static_cast<double>(values.SunSize)) * 0.5);
+				groundIlluminance = static_cast<float>(glm::dot(transmittance, glm::dvec3(0.2126, 0.7152, 0.0722))) * values.SunIlluminance;
+			}
+			const SkyLightComponent& skyAfter = sky.GetComponent<SkyLightComponent>();
+			const DirectionalLightComponent& sunAfter = light.GetComponent<DirectionalLightComponent>();
+			const bool changed = createdSky || createdLight || !postProcessEntity.is_null() || skyAfter.Source != skyBefore.Source
+				|| skyAfter.Intensity != skyBefore.Intensity || skyAfter.SunSize != skyBefore.SunSize
+				|| skyAfter.AtmosphereDensity != skyBefore.AtmosphereDensity || skyAfter.AtmosphereHaze != skyBefore.AtmosphereHaze
+				|| skyAfter.GroundAlbedo != skyBefore.GroundAlbedo || skyAfter.ZenithColor != skyBefore.ZenithColor
+				|| skyAfter.HorizonColor != skyBefore.HorizonColor || skyAfter.GroundColor != skyBefore.GroundColor
+				|| skyAfter.SunIntensity != skyBefore.SunIntensity || light.GetComponent<TransformComponent>().Rotation != rotationBefore
+				|| sunAfter.Intensity != sunBefore.Intensity || sunAfter.Color != sunBefore.Color || sunAfter.ShadowSoftness != sunBefore.ShadowSoftness;
+			nlohmann::json result = { { "preset", SkyPresetToString(*preset) }, { "changed", changed }, { "sky", UUIDToJson(sky.GetUUID()) },
+				{ "light", UUIDToJson(light.GetUUID()) }, { "createdSky", createdSky }, { "createdLight", createdLight },
+				{ "sunDirection", { towardSun.x, towardSun.y, towardSun.z } }, { "sunIntensity", values.SunIlluminance },
+				{ "groundIlluminance", groundIlluminance }, { "postProcess", std::move(postProcessEntity) } };
+			return FinishEdit(context, transaction, std::move(result));
+		}
+
 		// The sky as it is now (its Rotation and Intensity may have changed while the map was read).
 		EditorCommandResult ApplyExtractedSun(EditorContext& context, ExtractState& state, Scene& scene, const SkyLightComponent& sky, const HDRSun::Sun& sun)
 		{
@@ -718,6 +921,29 @@ namespace Strata
 					return PollBake(pollContext, *state);
 				});
 			} }));
+
+		registry.Register({ "lighting.applySkyPreset",
+			"Lights the scene with a sun and sky preset: Clear (the physical atmosphere, a 120,000 lux sun 40 degrees up: sunny, deep blue "
+			"shadows), Hazy (thicker air, a paler sky and softer contrast), Overcast (an even gray sky of about 7,700 lux and a faint, very soft "
+			"sun) or GoldenHour (the sun 6 degrees up, warm light and long shadows). Writes the sky light's source and settings and the "
+			"directional light's rotation, intensity, color and shadow softness; keeps the light's azimuth unless sunAzimuth is given. Raises "
+			"the active Post Process's AutoExposureMaxEV to 16 when automatic exposure would otherwise clip a real sun. Creates 'Sky' or 'Sun' "
+			"when the scene has none. One undo step; while playing it changes the running copy (warning). Returns {preset, changed, sky, light, "
+			"createdSky, createdLight, sunDirection (toward the sun), sunIntensity (lux above the air), groundIlluminance (lux on a surface "
+			"facing the sun at the ground), postProcess (the entity whose AutoExposureMaxEV was raised, or null)}.",
+			ObjectSchema({ { "preset", { { "type", "string" }, { "enum", { "Clear", "Hazy", "Overcast", "GoldenHour" } },
+					{ "description", "The preset" } } },
+				{ "sky", EntitySchema("The entity with the SkyLight to write; default: the scene's first active sky light, or a new 'Sky'") },
+				{ "light", EntitySchema("The entity with the DirectionalLight to write; default: the brightest active one, or a new 'Sun'") },
+				{ "sunElevation", { { "type", "number" }, { "minimum", -10.0 }, { "maximum", 90.0 },
+					{ "description", "Degrees above the horizon (default: the preset's)" } } },
+				{ "sunAzimuth", { { "type", "number" }, { "minimum", -360.0 }, { "maximum", 360.0 },
+					{ "description", "Degrees from +X toward +Z of the direction toward the sun (default: the light's own, or 20)" } } } },
+				{ "preset" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				return ApplySkyPreset(context, parameters);
+			} });
 
 		registry.Register(MayDefer({ "lighting.extractSun",
 			"Makes the scene's directional light the sun of its sky's environment map: finds the map's sun in its source file (the "

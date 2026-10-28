@@ -126,7 +126,7 @@ TEST_SUITE("Asset.ImportSettings")
 		const AssetImporter& models = GetImporter(".glb");
 		const std::vector<PropertyInfo> modelProperties = models.GetSettingsProperties();
 		CHECK(GetNames(modelProperties) == std::vector<std::string> { "Scale", "GenerateLODs", "LODCount", "MaxTextureSize", "TextureCompression",
-			"TextureQuality", "OptimizeMeshes", "ImportMaterials", "ImportCameras", "ImportLights" });
+			"TextureQuality", "OptimizeMeshes", "ImportMaterials", "BaseColorFactorsAreSRGB", "ImportCameras", "ImportLights" });
 		CHECK(GetOptions(Find(modelProperties, "TextureCompression")) == std::vector<std::string> { "Auto", "Uncompressed" });
 		CHECK(GetOptions(Find(modelProperties, "TextureQuality")) == std::vector<std::string> { "High", "Fast" });
 		CHECK(Find(modelProperties, "Scale").Type == PropertyType::Float);
@@ -184,7 +184,7 @@ TEST_SUITE("Asset.ImportSettings")
 		CHECK_FALSE(models.GetInactiveReason("LODCount", withoutLODs).empty());
 		nlohmann::json withoutMaterials = model;
 		withoutMaterials["ImportMaterials"] = false;
-		for (const char* setting : { "MaxTextureSize", "TextureCompression", "TextureQuality" })
+		for (const char* setting : { "MaxTextureSize", "TextureCompression", "TextureQuality", "BaseColorFactorsAreSRGB" })
 			CHECK_FALSE(models.GetInactiveReason(setting, withoutMaterials).empty());
 		nlohmann::json uncompressed = model;
 		uncompressed["TextureCompression"] = "Uncompressed";

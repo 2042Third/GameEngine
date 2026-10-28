@@ -7,6 +7,7 @@
 #include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Renderer/SceneRenderer.h>
+#include <Strata/Renderer/SkyPresets.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
@@ -22,13 +23,16 @@ namespace Strata
 		constexpr std::array<ProjectTemplate, 2> c_Templates = { {
 			{ ProjectTemplates::c_Empty, "Empty", "A project with no scene: start from nothing." },
 			{ ProjectTemplates::c_Basic3D, "Basic 3D",
-				"A lit 3D start scene: a main camera with an audio listener, a sun with shadows, a procedural sky, a 20 x 20 ground plane of dark "
+				"A lit 3D start scene: a main camera with an audio listener, a sun and the physical atmosphere, a 20 x 20 ground plane of dark "
 				"stone (Materials/Ground.stmat) with a box collider, so bodies and characters stand on it, and post-processing (ACES tone mapping, "
 				"automatic exposure)." }
 		} };
 
 		constexpr glm::vec3 c_Basic3DCameraPosition = { 0.0f, 2.0f, 6.0f };
-		constexpr float c_Basic3DSunIntensity = 3.0f;
+		// The Clear sky preset's sun (SkyPresets.h): 40 degrees up, from the camera's right and slightly behind it, so objects at the
+		// origin show a lit and a shaded side and a shadow falling left and back.
+		constexpr SkyPreset c_Basic3DSkyPreset = SkyPreset::Clear;
+		constexpr float c_Basic3DSunAzimuth = 20.0f;
 		// The ground: a dark, warm stone (linear color), rough enough that the sky's reflection does not wash it out.
 		constexpr glm::vec4 c_GroundColor = { 0.16f, 0.15f, 0.14f, 1.0f };
 		constexpr float c_GroundRoughness = 0.9f;
@@ -47,14 +51,24 @@ namespace Strata
 			camera.AddComponent<CameraComponent>().Primary = true;
 			camera.AddComponent<AudioListenerComponent>();
 
+			// Real light: the sun above the air and the physical atmosphere, as lighting.applySkyPreset's Clear writes them.
+			const SkyPresetValues& preset = GetSkyPresetValues(c_Basic3DSkyPreset);
 			Entity sun = scene.CreateEntity("Sun");
 			// A directional light shines along its forward (-Z) axis: away from the sun.
 			sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(-ProjectTemplates::GetBasic3DSunDirection());
 			DirectionalLightComponent& light = sun.AddComponent<DirectionalLightComponent>();
-			light.Intensity = c_Basic3DSunIntensity;
+			light.Intensity = preset.SunIlluminance;
+			light.Color = preset.SunColor;
+			light.ShadowSoftness = preset.ShadowSoftness;
 			light.CastShadows = true;
 
-			scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().Source = SkyLightSource::Procedural;
+			SkyLightComponent& sky = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+			sky.Source = preset.Source;
+			sky.Intensity = preset.SkyIntensity;
+			sky.AtmosphereDensity = preset.AtmosphereDensity;
+			sky.AtmosphereHaze = preset.AtmosphereHaze;
+			sky.GroundAlbedo = preset.GroundAlbedo;
+			sky.SunSize = preset.SunSize;
 
 			Entity ground = scene.CreateEntity("Ground");
 			ground.GetComponent<TransformComponent>().Scale = glm::vec3(c_Basic3DGroundSize, 1.0f, c_Basic3DGroundSize);
@@ -136,7 +150,7 @@ namespace Strata
 
 		glm::vec3 GetBasic3DSunDirection()
 		{
-			return SceneRenderer::GetPreviewSunDirection();
+			return GetSkyPresetSunDirection(GetSkyPresetValues(c_Basic3DSkyPreset).SunElevation, c_Basic3DSunAzimuth);
 		}
 
 		std::optional<TemplateView> GetEditorView(std::string_view id)

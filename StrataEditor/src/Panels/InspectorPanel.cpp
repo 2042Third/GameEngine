@@ -1415,6 +1415,35 @@ namespace Strata
 				ImGui::EndDisabled();
 			}
 		}
+		// The sun and sky presets (lighting.applySkyPreset: the sky light and the sun with real values, one undo step; it makes
+		// the sky and the sun the scene lacks). While playing they change the running copy, as every component edit does.
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextColored(colors.TextSecondary, "Presets");
+		struct PresetButton
+		{
+			const char* Id;
+			const char* Icon;
+			const char* Label;
+			const char* Preset;
+			const char* Tooltip;
+		};
+		constexpr PresetButton c_PresetButtons[] = {
+			{ "Inspector.SkyPreset.Clear", Icons::Sun, "Clear", "Clear", "The physical atmosphere and a 120,000 lux sun 40 degrees up: sunny, deep blue shadows" },
+			{ "Inspector.SkyPreset.Hazy", Icons::Haze, "Hazy", "Hazy", "Thicker air and the sun 35 degrees up: a paler sky and softer contrast" },
+			{ "Inspector.SkyPreset.Overcast", Icons::Cloud, "Overcast", "Overcast", "An even gray sky of about 7,700 lux and a faint, very soft sun" },
+			{ "Inspector.SkyPreset.GoldenHour", Icons::Sunset, "Golden Hour", "GoldenHour", "The sun 6 degrees up: warm light and long shadows" }
+		};
+		for (const PresetButton& button : c_PresetButtons)
+		{
+			ImGui::SameLine();
+			if (UI::ToolbarButton(button.Id, button.Icon, button.Label, button.Tooltip))
+			{
+				nlohmann::json parameters = { { "preset", button.Preset } };
+				if (sky)
+					parameters["sky"] = UUIDToJson(sky.GetUUID());
+				RunEditorCommand(context, commands, "lighting.applySkyPreset", parameters);
+			}
+		}
 		// The fog the sky lights, offered here while the scene has none; the entity that holds it edits it.
 		if (!SceneRenderer::FindHeightFog(scene)
 			&& UI::ToolbarButton("Inspector.AddHeightFog", Icons::CloudFog, "Add Height Fog", "Create an entity with height fog: fog that thickens toward the ground"))

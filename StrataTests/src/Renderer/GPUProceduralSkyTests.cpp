@@ -2,6 +2,7 @@
 #include "Strata/Renderer/RendererComponents.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 
@@ -350,6 +351,48 @@ TEST_SUITE("GPU.ProceduralSky")
 		const ReadbackImage spotOnly = render({});
 		CHECK(MaxDifference(render(preview), spotOnly) == 0);
 		CHECK_FALSE(renderer.GetStats().PreviewLighting);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("New procedural skies against the default sun keep a real ratio")
+	{
+		// A default procedural sky and a default directional light 45 degrees up (3 lux): flat ground gets at least five times
+		// as much light from the sun as from the sky (about 8.4: Strata 0.6.0's colors, five times brighter, gave 2.1).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f), "Ground").GetComponent<TransformComponent>().Scale = glm::vec3(20.0f);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().Source = SkyLightSource::Procedural;
+		Entity sun = scene.CreateEntity("Sun");
+		sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(-glm::normalize(glm::vec3(1.0f, 1.0f, 0.0f)));
+		sun.AddComponent<DirectionalLightComponent>();
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(64, 64);
+		SceneRenderOptions options;
+		options.LightingView = SceneLightingView::Luminance;
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 3.0f, 3.0f), glm::vec3(0.0f));
+		// The environment is made over a few frames: statistics of a frame drawn with it are read.
+		uint64_t environmentFrame = 0;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (std::chrono::steady_clock::now() < deadline)
+		{
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			renderer.ResolveGPUStats(true);
+			if (environmentFrame == 0 && renderer.GetStats().EnvironmentLighting && !renderer.GetStats().EnvironmentRefreshPending)
+				environmentFrame = renderer.GetRenderCount();
+			if (environmentFrame != 0 && renderer.GetLightingViewStats() && renderer.GetLightingViewStats()->Render > environmentFrame)
+				break;
+		}
+		REQUIRE(renderer.GetLightingViewStats());
+		const LightingViewStats& stats = *renderer.GetLightingViewStats();
+		CHECK(stats.SunIlluminance == doctest::Approx(3.0f * std::sqrt(0.5f)).epsilon(0.01));
+		CAPTURE(stats.SkyIlluminance);
+		CHECK(stats.SunToSkyRatio >= 5.0f);
+		CHECK(stats.SunToSkyRatio <= 12.0f);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

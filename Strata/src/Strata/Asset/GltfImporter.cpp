@@ -80,6 +80,7 @@ namespace Strata
 			uint32_t LODCount = 3;
 			bool OptimizeMeshes = true;
 			bool ImportMaterials = true;
+			bool BaseColorFactorsAreSRGB = false; // The file's base color factors hold sRGB-encoded values: converted to linear
 			bool ImportCameras = true;
 			bool ImportLights = true;
 			uint32_t MaxTextureSize = 0;
@@ -99,6 +100,7 @@ namespace Strata
 			settings.LODCount = static_cast<uint32_t>(std::min<uint64_t>(JsonUtils::GetUInt(json, "LODCount", settings.LODCount), c_MaxLODCount));
 			settings.OptimizeMeshes = JsonUtils::GetBool(json, "OptimizeMeshes", settings.OptimizeMeshes);
 			settings.ImportMaterials = JsonUtils::GetBool(json, "ImportMaterials", settings.ImportMaterials);
+			settings.BaseColorFactorsAreSRGB = JsonUtils::GetBool(json, "BaseColorFactorsAreSRGB", settings.BaseColorFactorsAreSRGB);
 			settings.ImportCameras = JsonUtils::GetBool(json, "ImportCameras", settings.ImportCameras);
 			settings.ImportLights = JsonUtils::GetBool(json, "ImportLights", settings.ImportLights);
 			settings.MaxTextureSize = static_cast<uint32_t>(std::min<uint64_t>(JsonUtils::GetUInt(json, "MaxTextureSize", 0), TextureImporter::c_MaxImageDimension));
@@ -797,6 +799,16 @@ namespace Strata
 
 				const cgltf_pbr_metallic_roughness& pbr = source.pbr_metallic_roughness;
 				properties.BaseColor = glm::make_vec4(pbr.base_color_factor);
+				// Some exporters (Kenney's kits among them) write sRGB-encoded bytes where glTF expects linear factors: the setting
+				// decodes them (the alpha is linear either way).
+				if (m_Settings.BaseColorFactorsAreSRGB)
+				{
+					for (int channel = 0; channel < 3; channel++)
+					{
+						const float encoded = std::clamp(properties.BaseColor[channel], 0.0f, 1.0f);
+						properties.BaseColor[channel] = encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
+					}
+				}
 				properties.Metallic = std::clamp(pbr.metallic_factor, 0.0f, 1.0f);
 				properties.Roughness = std::clamp(pbr.roughness_factor, 0.0f, 1.0f);
 				properties.EmissiveColor = glm::make_vec3(source.emissive_factor);
@@ -2027,6 +2039,7 @@ namespace Strata
 			{ "LODCount", 3 },
 			{ "OptimizeMeshes", true },
 			{ "ImportMaterials", true },
+			{ "BaseColorFactorsAreSRGB", false },
 			{ "ImportCameras", true },
 			{ "ImportLights", true },
 			{ "MaxTextureSize", 0 },
@@ -2044,6 +2057,8 @@ namespace Strata
 		const bool textureSetting = setting == "MaxTextureSize" || setting == "TextureCompression" || setting == "TextureQuality";
 		if (textureSetting && !values.ImportMaterials)
 			return "The model's textures are imported with its materials: Import Materials is off";
+		if (setting == "BaseColorFactorsAreSRGB" && !values.ImportMaterials)
+			return "The base color factors belong to the model's materials: Import Materials is off";
 		if (setting == "TextureQuality" && values.Compression == TextureCompression::Uncompressed)
 			return "Quality only chooses how block compression encodes; with Texture Compression Uncompressed every texel is kept exact";
 		return {};
@@ -2073,6 +2088,9 @@ namespace Strata
 				.Tooltip("Reorder vertices and triangles for the GPU's caches")
 			.Bool("ImportMaterials", defaults.ImportMaterials)
 				.Tooltip("Import the model's materials and textures; without them, meshes use the default material")
+			.Bool("BaseColorFactorsAreSRGB", defaults.BaseColorFactorsAreSRGB).DisplayName("Base Color Factors Are sRGB")
+				.Tooltip("The file's base color factors hold sRGB-encoded values (some exporters write them so, e.g. Kenney's kits): convert "
+					"them to linear, as glTF expects. Off reads them as glTF specifies")
 			.Bool("ImportCameras", defaults.ImportCameras)
 				.Tooltip("Import the model's cameras as camera components")
 			.Bool("ImportLights", defaults.ImportLights)

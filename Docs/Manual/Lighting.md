@@ -35,8 +35,10 @@ Some real values, with the exposure that suits a scene lit by them (see below):
 | Household lamp (800 lumens) | 64 cd | |
 | Candle | 1 cd | |
 
-New lights, new scenes and the samples use small values instead (a 3 lux sun, a sky under 1 nit, 10 cd for a new point
-light), which look right at a manual exposure of 0; new scenes and most samples turn on automatic exposure (see below).
+New projects use real values: the Basic 3D template opens under the physical atmosphere with a 120,000 lux sun (the Clear
+preset below). New lights and scenes made from nothing still use small values (a 3 lux sun, a procedural sky of a fraction
+of a nit, 10 cd for a new point light), which look right at a manual exposure of 0; new scenes and most samples turn on
+automatic exposure (see below).
 Both work: what matters is that the lights of a scene agree with each other, and that the exposure matches them. A
 scene twice as bright at one stop less exposure looks exactly the same.
 
@@ -173,6 +175,31 @@ light, so a white metal reflects all the light around it however rough it is, an
 color says (since 0.7.0; before, a metal of roughness 1 lost about two thirds of its light and looked dull gray). Colored
 metals such as copper or gold keep less at high roughness, as real ones do: each bounce between the facets takes some of
 the light. Materials made darker to look right before may now be set to their measured colors.
+
+## Sun and sky presets
+
+The Sky section of the Inspector has four presets, each a sky and a sun of real values in one undo step (agents run
+`lighting.applySkyPreset`): **Clear** (the physical atmosphere and a 120,000 lux sun 40 degrees up: sunny, deep blue
+shadows), **Hazy** (thicker air: a paler sky and softer contrast), **Overcast** (an even gray sky of about 7,700 lux and a
+faint, very soft sun) and **Golden Hour** (the sun 6 degrees up: warm light and long shadows). They keep the sun's direction
+around the horizon, make the sky and the sun a scene lacks, and raise the Post Process's **Auto Exposure Max EV** to 16 when
+it would clip a real sun.
+
+How sunny a scene looks depends most on its **sun to sky ratio**: the light flat ground gets from the sun over what it gets
+from the sky (the lighting debug views' legend names it).
+
+| Light | Sun : sky on flat ground |
+| --- | --- |
+| Clear noon | 6 to 10 |
+| Hazy day | 3 to 5 |
+| Golden hour | about 1 to 2 |
+| Overcast | below 0.3 |
+
+Below 3 a sunny scene looks flat and gray; far above 10 its shadows turn black. New procedural skies are balanced for the
+default 3 lux sun (about 8).
+
+Models from kits whose exporter writes sRGB colors into glTF's linear base color factors (Kenney's, for one) look washed
+out and too saturated: turn on **Base Color Factors Are sRGB** in their import settings.
 
 ## Ambient occlusion
 

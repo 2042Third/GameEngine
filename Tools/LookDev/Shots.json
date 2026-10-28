@@ -37,6 +37,9 @@
 		{"Name": "lookdev.view.ao", "Project": "LookDev", "Camera": "scene", "DebugView": "ao", "AntiAliasing": ["taa"]},
 		{"Name": "lookdev.view.indirect", "Project": "LookDev", "Camera": "scene", "DebugView": "indirect", "AntiAliasing": ["taa"]},
 		{"Name": "lookdev.view.luminance", "Project": "LookDev", "Camera": "scene", "DebugView": "luminance", "AntiAliasing": ["taa"]},
-		{"Name": "lookdev.view.albedo", "Project": "LookDev", "Camera": "scene", "DebugView": "albedo", "AntiAliasing": ["taa"]}
+		{"Name": "lookdev.view.albedo", "Project": "LookDev", "Camera": "scene", "DebugView": "albedo", "AntiAliasing": ["taa"]},
+		{"Name": "tp.view.ao", "Project": "ThirdPerson", "Position": [1.2, 1.2, 4.6], "Target": [-0.196, -0.08, 2.273], "Fov": 60, "DebugView": "ao", "AntiAliasing": ["fxaa", "off"], "Crops": [{"Name": "feet", "Rect": [0.3, 0.62, 0.62, 0.88]}]},
+		{"Name": "basic3d.view.luminance", "Project": "Basic3D", "Camera": "scene", "DebugView": "luminance", "AntiAliasing": ["taa"]},
+		{"Name": "ow.view.albedo", "Project": "OpenWorld", "Camera": "scene", "DebugView": "albedo", "AntiAliasing": ["taa"]}
 	]
 }
