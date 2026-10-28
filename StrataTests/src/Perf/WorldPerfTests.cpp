@@ -129,8 +129,9 @@ TEST_SUITE("Perf.World")
 			// The bodies left with the entities.
 			scene.OnUpdateRuntime(Timestep(1.0f / 60.0f));
 			CHECK(scene.GetSystem<PhysicsSystem>()->GetStats().BodyCount == 1);
+			// Physics' changes hold box3d's disables of the 25,000 bodies: Perf.World.CellUnload.LibraryOnly times those alone.
 			MESSAGE("Unloading 25,000 entities with bodies: ", frames, " frames, the request's work ", requestFrame, " ms (physics' changes ", requestStats.ChangeTime,
-				" ms for ", requestStats.BodiesRemovedLastUpdate, " bodies out), the longest's ", longest, " ms");
+				" ms), the longest's ", longest, " ms");
 			scene.OnRuntimeStop();
 			return longest;
 		});

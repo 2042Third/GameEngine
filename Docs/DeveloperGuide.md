@@ -467,8 +467,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   Metrics of the physics library alone (`*.LibraryOnly`, `Perf.Physics.Grow65k.GrowthMs`: box3d called directly, as
   `Physics.Box3D` does, for the work of `Create10kBodies`, `Create100kStaticBodies`, the `Grow65kMaxFrame` frame and the
   25,000 removals of `Perf.World.CellUnloadMaxFrame`) split those metrics into box3d's share and Strata's; the roadmap's
-  open items keep the split. `Perf.Physics.Sleeping70k.StepRatio` is the median step of 1,000 falling boxes beside 70,000
-  sleeping ones over that of the 1,000 alone (its message gives both steps' parts), and `Perf.Physics.BallPit2k.SettleCpuMs`
+  open items keep the split. Each times what its metric's frame makes box3d do, in the same state: `CellUnload.LibraryOnly`
+  disables the bodies in a fresh world that stepped once, as the request's frame finds its world (box3d's first disable in
+  a world costs about twice a later one, while its set of disabled bodies grows; its message gives both).
+  `Perf.Physics.Sleeping70k.StepRatio` is the median step of 1,000 falling boxes beside 70,000 sleeping ones over that of the 1,000 alone (its message gives both steps' parts), and `Perf.Physics.BallPit2k.SettleCpuMs`
   and `Boxes10k.SettleCpuMs` the summed wall time of a settle scene's steps over its first 10 seconds
   (`Tests::MeasureSettling`, box3d's counters read every step): they reward sleeping sooner as well as cheaper steps.
   `--propose-budgets` (with `--results <runs>`) applies the rules to kept runs (at least three valid ones: the canary

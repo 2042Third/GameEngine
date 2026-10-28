@@ -906,35 +906,50 @@ TEST_SUITE("Perf.Physics")
 
 	TEST_CASE("box3d alone taking a cell's 25,000 static bodies out of the simulation")
 	{
-		// The request's frame of Perf.World.CellUnloadMaxFrame without Strata: the cell's 25,000 static boxes disabled at once,
-		// the median of 5 rounds after one to warm up (the bodies are enabled again, and the world stepped, between rounds).
+		// The request's frame of Perf.World.CellUnloadMaxFrame without Strata: the cell's 25,000 static boxes disabled at once in
+		// a world that stepped once since they were made, as the request's frame finds its world. box3d's first disable in a
+		// world costs about twice a later one (its set of disabled bodies grows while they come), so every round makes a fresh
+		// world: the median of 5 rounds after one to warm up. The message also gives the same bodies disabled a second time
+		// (enabled again and the world stepped in between), for comparison.
 		Perf::ScopedApplicationJobSystem jobs;
 		Perf::CheckBudgetConfirmed("Perf.World.CellUnload.LibraryOnly", [&]
 		{
-			LibraryWorld world(32'768, 1'024, 2'048);
-			world.CreateBox(b3_staticBody, b3Vec3 { 0.0f, 0.0f, 0.0f });
+			std::vector<double> firstDisables;
+			std::vector<double> laterDisables;
 			std::vector<b3BodyId> bodies;
 			bodies.reserve(25'000);
-			for (uint32_t index = 0; index < 25'000; index++)
-				bodies.push_back(world.CreateBox(b3_staticBody, b3Vec3 { static_cast<float>(index % 160) * 2.0f, 1.0f, static_cast<float>(index / 160) * 2.0f }));
-			world.Step();
-			std::vector<double> samples;
 			for (uint32_t round = 0; round < 6; round++)
 			{
-				const Clock::time_point start = Clock::now();
-				for (const b3BodyId body : bodies)
-					b3Body_Disable(body);
-				const double elapsed = MillisecondsSince(start);
-				if (round >= 1)
-					samples.push_back(elapsed);
+				LibraryWorld world(32'768, 1'024, 2'048);
+				world.CreateBox(b3_staticBody, b3Vec3 { 0.0f, 0.0f, 0.0f });
+				bodies.clear();
+				for (uint32_t index = 0; index < 25'000; index++)
+					bodies.push_back(world.CreateBox(b3_staticBody, b3Vec3 { static_cast<float>(index % 160) * 2.0f, 1.0f, static_cast<float>(index / 160) * 2.0f }));
+				world.Step();
+				const auto disableAll = [&]()
+				{
+					const Clock::time_point start = Clock::now();
+					for (const b3BodyId body : bodies)
+						b3Body_Disable(body);
+					return MillisecondsSince(start);
+				};
+				const double first = disableAll();
 				world.Step();
 				for (const b3BodyId body : bodies)
 					b3Body_Enable(body);
 				world.Step();
+				const double later = disableAll();
+				if (round >= 1)
+				{
+					firstDisables.push_back(first);
+					laterDisables.push_back(later);
+				}
 			}
-			const Perf::Measurement removal = Perf::Summarize(samples);
-			MESSAGE("box3d disabling 25,000 static bodies: median ", removal.MedianMs, " ms, max ", removal.MaxMs, " ms");
-			return removal.MedianMs;
+			const Perf::Measurement first = Perf::Summarize(firstDisables);
+			const Perf::Measurement later = Perf::Summarize(laterDisables);
+			MESSAGE("box3d disabling 25,000 static bodies: median ", first.MedianMs, " ms (", first.MinMs, "-", first.MaxMs, ") the first time in a world, ", later.MedianMs,
+				" ms (", later.MinMs, "-", later.MaxMs, ") the second time");
+			return first.MedianMs;
 		});
 	}
 }
