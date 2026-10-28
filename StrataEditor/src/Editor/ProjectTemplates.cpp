@@ -29,6 +29,10 @@ namespace Strata
 
 		constexpr glm::vec3 c_Basic3DCameraPosition = { 0.0f, 2.0f, 6.0f };
 		constexpr float c_Basic3DSunIntensity = 3.0f;
+		// The start scene's exposure compensation, by the rule the 3D samples follow (the median display luminance of its
+		// camera's 1920x1080 TAA image within [0.15, 0.22], in steps of 0.25 EV): its bright sky over the dark stone ground
+		// meters the ground below middle gray, 0.136 at Exposure 0; +0.25 brings it to 0.174.
+		constexpr float c_Basic3DExposure = 0.25f;
 		// The ground: a dark, warm stone (linear color), rough enough that the sky's reflection does not wash it out.
 		constexpr glm::vec4 c_GroundColor = { 0.16f, 0.15f, 0.14f, 1.0f };
 		constexpr float c_GroundRoughness = 0.9f;
@@ -66,10 +70,10 @@ namespace Strata
 			collider.Offset = glm::vec3(0.0f, -c_Basic3DGroundColliderHalfThickness, 0.0f);
 
 			PostProcessComponent& postProcess = scene.CreateEntity("Post Process").AddComponent<PostProcessComponent>();
-			// Filmic shows the metered average at display middle gray: no exposure compensation.
+			// Filmic shows the metered average at display middle gray; the compensation is the scene's, for its composition.
 			postProcess.Tonemapper = TonemapOperator::Filmic;
 			postProcess.AutoExposure = true;
-			postProcess.Exposure = 0.0f;
+			postProcess.Exposure = c_Basic3DExposure;
 			// Temporal anti-aliasing: steady edges, and the shadows' and ambient occlusion's noise averaged away.
 			postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
 		}
