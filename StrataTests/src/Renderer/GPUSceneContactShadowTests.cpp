@@ -202,7 +202,7 @@ TEST_SUITE("GPU.SceneRenderer.ContactShadows")
 		struct Shape
 		{
 			const char* Name;
-			Ref<Mesh> Mesh;
+			Ref<Mesh> Geometry; // Not named Mesh: GCC rejects a member that changes what the name means in its class
 			glm::vec3 Center;
 		};
 		const Shape shapes[] = { { "Sphere", MeshFactory::CreateSphere(0.5f, 16, 8), glm::vec3(0.0f) },
@@ -213,7 +213,7 @@ TEST_SUITE("GPU.SceneRenderer.ContactShadows")
 			CAPTURE(name);
 			Scene scene;
 			AddNeutralPostProcess(scene);
-			Entity mesh = AddMesh(scene, assets.Add(shape.Mesh, shape.Name), UUID::Null(), shape.Center, shape.Name);
+			Entity mesh = AddMesh(scene, assets.Add(shape.Geometry, shape.Name), UUID::Null(), shape.Center, shape.Name);
 			mesh.GetComponent<MeshRendererComponent>().CastShadows = false;
 			// The sun's share of each pixel (HDR), not the 8-bit image: the faces in question are lit at grazing angles, where
 			// a whole shadow is a step or two of 8 bits.
