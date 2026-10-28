@@ -39,7 +39,8 @@ namespace Strata::PostProcessMath
 	FilmicCurve MakeFilmicCurve(float toe, float shoulder);
 	// The curve of one channel (Include/Filmic.glsl's FilmicCurve): 0 for x <= 0, middle gray to middle gray, 1 from Tw on.
 	float EvaluateFilmicCurve(float x, const FilmicCurve& curve);
-	// The whole operator (Include/Filmic.glsl's TonemapFilmic): the inset, the curve per channel, the outset, clamped to [0, 1].
+	// The whole operator (Include/Filmic.glsl's TonemapFilmic): the inset, the curve (on the color as a whole below middle gray,
+	// per channel above it), the outset, clamped to [0, 1].
 	glm::vec3 ApplyFilmic(const glm::vec3& exposed, const FilmicCurve& curve);
 
 	// White balance. The white locus (Renderer/WhiteBalanceLocus.inl, Tools/GenerateWhiteBalance.py): an entry every 5 mireds

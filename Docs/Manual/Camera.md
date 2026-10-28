@@ -53,14 +53,16 @@ of `viewport.capture` and `editor.perf`: `exposure.ev100`, `exposure.keyStops` a
 The tone curve maps the exposed light, which can be thousands of times brighter than white, onto the display.
 
 - **Filmic** (the default) is Strata's camera-like curve: a metered middle gray shows as middle gray (so a new project
-  needs no exposure compensation), highlights roll off to white over six and a half stops without clipping, and bright
-  saturated colors go to white without changing their hue (a red light stays red, skin and foliage keep theirs).
-  **Toe** (0.5) sets how deep the shadows go: higher crushes the darkest tones toward black, lower keeps more detail in
-  them. **Shoulder** (0.5) sets how softly highlights reach white: 5 stops above middle gray at 0, 6.5 at 0.5, 8 at 1.
-- **ACES** is punchier with darker mid-tones (it shows middle gray about 0.8 stops darker, so scenes made for it carry
-  +0.8 to +1 Exposure) and skews bright reds toward orange. **AgX** is flatter and less saturated. **Khronos Neutral**
-  keeps base colors exact up to the highlights. **Reinhard** and **None** (the exposed color, clipped) are for special
-  cases.
+  needs no exposure compensation), highlights roll off to white over six and a half stops without clipping, bright
+  saturated colors go to white without changing their hue (a red light stays red, skin and foliage keep theirs), and
+  shadows keep the scene's own colors: a dark sky or a shaded blue flower stays as saturated as it is, not a deeper
+  blue. **Toe** (0.5) sets how deep the shadows go: higher crushes the darkest tones toward black, lower keeps more
+  detail in them. **Shoulder** (0.5) sets how softly highlights reach white: 5 stops above middle gray at 0, 6.5 at 0.5,
+  8 at 1.
+- **ACES** is punchier: darker mid-tones (it shows middle gray about 0.8 stops darker, so scenes made for it carry +0.8
+  to +1 Exposure), skies, skin and foliage in shadow about a third more saturated than Filmic's, and bright reds
+  skewed toward orange. **AgX** is flatter and less saturated. **Khronos Neutral** keeps base colors exact up to the
+  highlights. **Reinhard** and **None** (the exposed color, clipped) are for special cases.
 - **Contrast** (1) steepens or flattens the image around middle gray before the curve; **Saturation** (1) scales the
   colors after it.
 

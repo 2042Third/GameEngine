@@ -269,8 +269,17 @@ namespace Strata::PostProcessMath
 	glm::vec3 ApplyFilmic(const glm::vec3& exposed, const FilmicCurve& curve)
 	{
 		const glm::vec3 inset = FilmicConstants::c_Inset * glm::max(exposed, glm::vec3(0.0f));
-		const glm::vec3 curved(EvaluateFilmicCurve(inset.r, curve), EvaluateFilmicCurve(inset.g, curve), EvaluateFilmicCurve(inset.b, curve));
-		return glm::clamp(FilmicConstants::c_Outset * curved, glm::vec3(0.0f), glm::vec3(1.0f));
+		const float largest = std::max({ inset.r, inset.g, inset.b });
+		if (!(largest > 0.0f))
+			return glm::vec3(0.0f);
+		// Below middle gray the color scales as a whole (its largest channel on the curve), above it each channel takes the
+		// curve; GLSL's smoothstep between them over the largest channel's stops.
+		const glm::vec3 perChannel(EvaluateFilmicCurve(inset.r, curve), EvaluateFilmicCurve(inset.g, curve), EvaluateFilmicCurve(inset.b, curve));
+		const glm::vec3 whole = inset * (EvaluateFilmicCurve(largest, curve) / largest);
+		const float t = std::clamp((std::log2(largest / FilmicConstants::c_MiddleGray) - FilmicConstants::c_ChannelStart)
+			/ (FilmicConstants::c_ChannelEnd - FilmicConstants::c_ChannelStart), 0.0f, 1.0f);
+		const float channel = t * t * (3.0f - 2.0f * t);
+		return glm::clamp(FilmicConstants::c_Outset * glm::mix(whole, perChannel, channel), glm::vec3(0.0f), glm::vec3(1.0f));
 	}
 
 }
