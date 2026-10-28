@@ -94,22 +94,23 @@ vec3 ContactShadow(ivec2 pixel, vec3 position, float depth, vec3 normal, float v
 	if (u_ScreenShadows.ContactSteps == 0u || viewDepth >= u_ScreenShadows.ContactFadeEnd || dot(normal, toSun) <= 0.0)
 		return vec3(0.0);
 
-	// The march's reach, shortened to ContactMaxPixels on screen.
+	// The march's reach, shortened to ContactMaxPixels on screen. A point r meters toward the sun has the clip coordinates
+	// C0 + r D, so its distance on screen from the start is r B / (w0 + r D.w) for B = |D.xy w0 - C0.xy D.w| / w0 in pixels:
+	// it reaches ContactMaxPixels at r = M w0 / (B - M D.w), which for a march toward the camera (D.w < 0) lies before the
+	// camera's plane, so a march is shortened, never dropped, as it nears the camera.
 	vec3 start = position + normal * pixelWorld;
-	float reach = u_ScreenShadows.ContactLength;
 	vec4 startClip = u_Frame.ViewProjection * vec4(start, 1.0);
-	vec4 endClip = u_Frame.ViewProjection * vec4(start + toSun * reach, 1.0);
+	vec4 clipPerMeter = u_Frame.ViewProjection * vec4(toSun, 0.0);
 	if (!(startClip.w > 0.0))
 		return vec3(0.0);
-	vec2 startPixel = NDCToUV(startClip.xy / startClip.w) * u_Frame.ViewportSize.xy;
-	float screenLength = endClip.w > 0.0 ? length(NDCToUV(endClip.xy / endClip.w) * u_Frame.ViewportSize.xy - startPixel) : 1e30;
-	if (screenLength > u_ScreenShadows.ContactMaxPixels)
-	{
-		float shortened = u_ScreenShadows.ContactMaxPixels / screenLength;
-		reach *= shortened;
-		endClip = mix(startClip, endClip, shortened);
-		screenLength = u_ScreenShadows.ContactMaxPixels;
-	}
+	vec2 pixelsPerNDC = vec2(0.5, -0.5) * u_Frame.ViewportSize.xy;
+	float screenRate = length((clipPerMeter.xy * startClip.w - startClip.xy * clipPerMeter.w) * pixelsPerNDC) / startClip.w;
+	float maxPixels = u_ScreenShadows.ContactMaxPixels;
+	float reach = u_ScreenShadows.ContactLength;
+	if (screenRate > maxPixels * clipPerMeter.w)
+		reach = min(reach, maxPixels * startClip.w / (screenRate - maxPixels * clipPerMeter.w));
+	vec4 endClip = startClip + clipPerMeter * reach;
+	float screenLength = reach * screenRate / max(endClip.w, 1e-6);
 	uint steps = u_ScreenShadows.ContactSteps;
 	float stepPixels = screenLength / float(steps);
 	float offset = BlueNoise(pixel, ivec2(32, 17)); // Fixed per pixel, apart from the disk's turn

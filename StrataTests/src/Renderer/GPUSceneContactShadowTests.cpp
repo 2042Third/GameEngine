@@ -199,6 +199,28 @@ TEST_SUITE("GPU.SceneRenderer.ContactShadows")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A march toward the camera is shortened to its reach on screen, never dropped")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		// Straight down from 1.5 m with the sun 60 degrees high behind the camera (its rays toward the sun come toward the camera):
+		// at the longest Contact Shadow Length, 2 m, a march from the floor would cross the camera's plane after 1.73 m. Shortened
+		// to 5% of the image's height on screen it covers about 5 cm, enough for the plate's 2.9 cm shadow.
+		PlateScene plate;
+		plate.CastNoCascadeShadow(); // Whatever shades the floor beside the plate is a contact shadow
+		plate.Sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(SunDirection(60.0f, 0.0f));
+		plate.Sun.MarkModified<TransformComponent>();
+		plate.SetLength(2.0f);
+		const SceneCamera camera = TopCamera(0.0f, 1.5f, 40.0f);
+		SceneRenderer renderer(ContactSpecification(12));
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SunlightImage sunlight = RenderSunlight(renderer, plate.SceneData, camera, plate.Sun);
+		CHECK(ShareAt(sunlight, camera, glm::vec3(-c_PlateHalfWidth - 0.01f, 0.0f, 0.0f)) < 0.5f);
+		CHECK(ShareAt(sunlight, camera, glm::vec3(-c_PlateHalfWidth - 0.10f, 0.0f, 0.0f)) > 0.95f);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Contact shadows never shadow an open plane")
 	{
 		GPUContext gpu;
