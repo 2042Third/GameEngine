@@ -92,7 +92,9 @@ namespace Strata::Tests::Perf
 #if ST_WITH_PHYSICS
 	BoxStacks CreateBoxStacks(Scene& scene, size_t count, uint32_t height)
 	{
-		REQUIRE(height > 0);
+		// Asserts only when it fails: the settle helper process builds stacks without a doctest context.
+		if (height == 0)
+			FAIL("Box stacks need a height of at least one box");
 		constexpr float boxSize = 1.0f;
 		constexpr float gap = 0.2f;
 		constexpr float pitch = boxSize + gap;

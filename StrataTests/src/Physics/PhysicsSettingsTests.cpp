@@ -39,11 +39,11 @@ namespace
 			REQUIRE(m_Registry.Register(PhysicsSimulationSettings::MakeSection()));
 		}
 
-		void Set(double recycleDistance, double sleepThreshold)
+		void Set(double recycleDistance, double sleepThreshold, double contactHertz = c_DefaultContactHertz)
 		{
 			std::string error;
-			REQUIRE_MESSAGE(m_Values.Set(PhysicsSimulationSettings::c_SectionId, { { "ContactRecycleDistance", recycleDistance }, { "SleepThreshold", sleepThreshold } },
-				m_Registry, &error), error);
+			REQUIRE_MESSAGE(m_Values.Set(PhysicsSimulationSettings::c_SectionId, { { "ContactRecycleDistance", recycleDistance },
+				{ "SleepThreshold", sleepThreshold }, { "ContactHertz", contactHertz } }, m_Registry, &error), error);
 		}
 	private:
 		SettingsRegistry m_Registry;
@@ -70,25 +70,34 @@ TEST_SUITE("Physics.Settings")
 		CHECK(section->Title == "Simulation");
 		CHECK(section->Category == "Physics");
 		CHECK(section->Scope == SettingsScope::Project);
-		REQUIRE(section->Fields.size() == 2);
+		REQUIRE(section->Fields.size() == 5);
 		const PhysicsSettings defaults;
 		for (const SettingsField& field : section->Fields)
 		{
 			CAPTURE(field.Name);
 			CHECK(field.Type == SettingsFieldType::Float);
-			CHECK(field.Min == 0.0);
-			CHECK(field.Max == 1.0); // Every reading of "0.7", 0.7 m included, is one command away
 			CHECK(field.Description.size() > 100);
 		}
 		CHECK(section->Fields[0].Name == "ContactRecycleDistance");
+		CHECK(section->Fields[0].Max == 1.0); // Every reading of "0.7", 0.7 m included, is one command away
 		CHECK(section->Fields[0].Description.find("meters") != std::string::npos);
 		CHECK(section->Fields[0].Description.find("Character controllers never recycle") != std::string::npos);
 		CHECK(section->Fields[1].Name == "SleepThreshold");
+		CHECK(section->Fields[1].Max == 1.0);
+		CHECK(section->Fields[2].Name == "ContactHertz");
+		CHECK(section->Fields[2].Min == 1.0);
+		CHECK(section->Fields[2].Max == 240.0);
+		CHECK(section->Fields[3].Name == "ContactDampingRatio");
+		CHECK(section->Fields[3].Max == 100.0);
+		CHECK(section->Fields[4].Name == "ContactPushSpeed");
+		CHECK(section->Fields[4].Min == 0.01);
 		const nlohmann::json value = section->GetDefault();
 		CHECK(value["ContactRecycleDistance"].get<double>() == doctest::Approx(defaults.ContactRecycleDistance));
 		CHECK(value["SleepThreshold"].get<double>() == doctest::Approx(defaults.SleepThreshold));
-		// They are box3d's own.
-		CHECK(defaults.SleepThreshold == b3DefaultBodyDef().sleepThreshold);
+		CHECK(value["ContactHertz"].get<double>() == doctest::Approx(defaults.ContactHertz));
+		CHECK(value["ContactDampingRatio"].get<double>() == doctest::Approx(defaults.ContactDampingRatio));
+		CHECK(value["ContactPushSpeed"].get<double>() == doctest::Approx(defaults.ContactPushSpeed));
+		// The contact tuning and the recycle distance are box3d's own (the sleep threshold: DeveloperGuide "Contact recycling").
 		const b3WorldDef world = b3DefaultWorldDef();
 		CHECK(defaults.ContactHertz == world.contactHertz);
 		CHECK(defaults.ContactDampingRatio == world.contactDampingRatio);
@@ -123,9 +132,11 @@ TEST_SUITE("Physics.Settings")
 		SUBCASE("The project's section over the defaults")
 		{
 			SimulationProject project;
-			project.Set(0.04, 0.06);
+			project.Set(0.04, 0.06, 45.0);
 			scene.OnRuntimeStart();
 			const PhysicsWorld& world = *GetPhysics(scene).GetWorld();
+			CHECK(world.GetSettings().ContactHertz == doctest::Approx(45.0f));
+			CHECK(world.GetSettings().ContactDampingRatio == doctest::Approx(c_DefaultContactDampingRatio));
 			CHECK(world.GetContactRecycleDistance() == doctest::Approx(0.04f));
 			CHECK(world.GetSettings().ContactRecycleDistance == doctest::Approx(0.04f));
 			CHECK(*world.GetSleepThreshold(box) == doctest::Approx(0.06f));
@@ -228,16 +239,20 @@ TEST_SUITE("Physics.Settings")
 
 TEST_SUITE("Physics.Recycling")
 {
-	TEST_CASE("Character controllers' presence bodies never recycle contacts; other bodies do")
+	TEST_CASE("Character controllers' presence bodies and kinematic bodies never recycle contacts; other bodies do")
 	{
 		Scene scene;
-		CreateGround(scene);
+		Entity ground = CreateGround(scene);
 		Entity box = CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 0.5f, 0.0f));
+		Entity platform = CreateDynamicBox(scene, "Platform", glm::vec3(-3.0f, 0.5f, 0.0f));
+		platform.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
 		Entity character = CreateCharacter(scene, glm::vec3(5.0f, 0.0f, 0.0f));
 		scene.OnRuntimeStart();
 		const PhysicsWorld& world = *GetPhysics(scene).GetWorld();
 		CHECK_FALSE(world.IsContactRecyclingEnabled(character));
+		CHECK_FALSE(world.IsContactRecyclingEnabled(platform));
 		CHECK(world.IsContactRecyclingEnabled(box));
+		CHECK(world.IsContactRecyclingEnabled(ground));
 		CHECK_FALSE(world.IsContactRecyclingEnabled(Entity()));
 		// A rebuilt presence body too.
 		character.GetComponent<CharacterControllerComponent>().Radius = 0.4f;

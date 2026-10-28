@@ -1517,7 +1517,7 @@ TEST_SUITE("Editor.Commands")
 		nlohmann::json settings = harness.Run("physics.stats")["settings"];
 		CHECK(settings["source"] == "defaults");
 		CHECK(settings["contactRecycleDistance"].get<double>() == doctest::Approx(0.05));
-		CHECK(settings["sleepThreshold"].get<double>() == doctest::Approx(0.05));
+		CHECK(settings["sleepThreshold"].get<double>() == doctest::Approx(c_DefaultSleepThreshold));
 		CHECK(settings["contactHertz"].get<double>() == doctest::Approx(30.0));
 
 		// While playing: the running world follows at its next fixed step.

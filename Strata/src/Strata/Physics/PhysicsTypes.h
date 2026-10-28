@@ -18,12 +18,17 @@ namespace Strata
 	constexpr uint32_t c_AllPhysicsLayers = 0xFFFFFFFFu;
 
 	// The simulation's tuning defaults (PhysicsSettings; the project's Physics.Simulation section, DeveloperGuide "Physics
-	// simulation", uses the first two as its fields' defaults).
+	// simulation", uses them as its fields' defaults). The sweep of DeveloperGuide "Contact recycling" chose them.
 	// box3d's B3_CONTACT_RECYCLE_DISTANCE (10 linear slops of 5 mm), in meters: touching contacts whose bodies moved less than
-	// this relative to each other since the contact was computed (and turned less than 10 degrees) are reused.
+	// this relative to each other since the contact was computed (and turned less than 10 degrees) are reused. The sweep kept
+	// it: shorter distances keep the ball pits awake (2.5 cm and below: not asleep within 40 s), 0 topples a tower of 20 crates,
+	// and longer ones bump more at seams (DeveloperGuide "Contact recycling").
 	constexpr float c_DefaultContactRecycleDistance = 0.05f;
-	// box3d's b3BodyDef::sleepThreshold, in m/s: a body slower than this for 0.5 s (with its whole island) falls asleep.
-	constexpr float c_DefaultSleepThreshold = 0.05f;
+	// In m/s: a body slower than this for 0.5 s (with its whole island) falls asleep. box3d's b3BodyDef::sleepThreshold is
+	// 0.05; at 0.08 the 2,000-ball pit and the Physics Playground's pit of 500 sleep about a fifth sooner (14.7 s instead of
+	// 18.8; 15.5 s instead of more than 20) while every probe and the Playground's stations come out the same (the sweep,
+	// DeveloperGuide "Contact recycling").
+	constexpr float c_DefaultSleepThreshold = 0.08f;
 	// box3d's b3WorldDef contact tuning: the contacts' stiffness in cycles per second, their damping ratio, and the speed in m/s
 	// at which overlaps are pushed apart (contactSpeed).
 	constexpr float c_DefaultContactHertz = 30.0f;
@@ -48,8 +53,8 @@ namespace Strata
 		uint32_t GrowthLimit = 0;
 
 		// The simulation's tuning (see the defaults above): what PhysicsWorld::SetSimulationTuning changes while a world runs.
-		// The project's Physics.Simulation section overrides the first two (PhysicsSystem). Out-of-range values are clamped,
-		// non-finite ones replaced by the defaults.
+		// The project's Physics.Simulation section overrides them (PhysicsSystem). Out-of-range values are clamped, non-finite
+		// ones replaced by the defaults.
 		float ContactRecycleDistance = c_DefaultContactRecycleDistance; // Meters, 0 to 1; 0 turns contact recycling off
 		float SleepThreshold = c_DefaultSleepThreshold;                 // m/s, 0 to 1, of every dynamic and kinematic body
 		float ContactHertz = c_DefaultContactHertz;                     // 1 to 240

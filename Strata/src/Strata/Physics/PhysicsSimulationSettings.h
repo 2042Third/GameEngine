@@ -12,7 +12,8 @@ namespace Strata
 	class IProjectSettings;
 
 	// The project's physics tuning: the settings section "Physics.Simulation" (DeveloperGuide "Physics simulation"), whose
-	// fields are PhysicsSettings' ContactRecycleDistance and SleepThreshold. Main thread only, like IProjectSettings.
+	// fields are PhysicsSettings' ContactRecycleDistance, SleepThreshold, ContactHertz, ContactDampingRatio and
+	// ContactPushSpeed. Main thread only, like IProjectSettings.
 	namespace PhysicsSimulationSettings
 	{
 

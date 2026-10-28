@@ -16,16 +16,17 @@ namespace Strata
 	namespace
 	{
 
-		SettingsField FloatField(const char* name, const char* title, std::string description, double max, double defaultValue)
+		SettingsField FloatField(const char* name, const char* title, std::string description, double min, double max, double defaultValue)
 		{
 			SettingsField field;
 			field.Name = name;
 			field.Title = title;
 			field.Description = std::move(description);
 			field.Type = SettingsFieldType::Float;
-			field.Min = 0.0;
+			field.Min = min;
 			field.Max = max;
-			field.Default = defaultValue;
+			// The float constants' nearest decimal (0.08, not 0.0799999982), as people and project files read it.
+			field.Default = std::round(defaultValue * 1.0e6) / 1.0e6;
 			return field;
 		}
 
@@ -61,12 +62,26 @@ namespace Strata
 				"recycle more, but a recycled contact keeps its old points and normal, so a body can seem supported a little past an edge, "
 				"bump at seams between tiles, or keep its old contact when moved or teleported by up to this distance. Lower it when bodies "
 				"bump over seams or hang past edges. Character controllers never recycle contacts.",
-				1.0, c_DefaultContactRecycleDistance));
+				0.0, 1.0, c_DefaultContactRecycleDistance));
 			section.Fields.push_back(FloatField("SleepThreshold", "Sleep threshold",
 				"Speed in m/s, 0 to 1 (0.05 by default, box3d's): a body slower than this for half a second, with every body it touches, falls "
 				"asleep and costs nothing until something wakes it. Larger values put piles to sleep sooner but stop slow bodies (a ball "
 				"rolling to a halt, a slowly sliding crate) early; 0 keeps every body awake.",
-				1.0, c_DefaultSleepThreshold));
+				0.0, 1.0, c_DefaultSleepThreshold));
+			// The contact tuning: the sweep found each changes how long piles take to settle by more than a tenth (DeveloperGuide
+			// "Contact recycling"), so projects may tune it; box3d's own values are the defaults.
+			section.Fields.push_back(FloatField("ContactHertz", "Contact stiffness",
+				"Cycles per second, 1 to 240 (30 by default, box3d's): how stiffly contacts push overlapping bodies apart. Lower values "
+				"are softer (stacks sag and towers can topple: at 20 a tower of 20 crates leaned 88 mm instead of 9); higher ones change "
+				"little at 60 fixed steps per second.", 1.0, 240.0, c_DefaultContactHertz));
+			section.Fields.push_back(FloatField("ContactDampingRatio", "Contact damping",
+				"0 to 100 (10 by default, box3d's): how much contacts damp the bounce of their push-out. Lower values let piles jiggle "
+				"longer (at 5 the 2,000-ball pit did not sleep within 30 s); higher ones make contacts sluggish (at 20 towers lean "
+				"more).", 0.0, 100.0, c_DefaultContactDampingRatio));
+			section.Fields.push_back(FloatField("ContactPushSpeed", "Overlap push speed",
+				"Meters per second, 0.01 to 100 (3 by default, box3d's): the fastest that overlapping bodies are pushed apart. Lower "
+				"values separate spawned or teleported overlaps gently but leave piles settling longer (at 1 the ball pit slept 7 s "
+				"later).", 0.01, 100.0, c_DefaultContactPushSpeed));
 			return section;
 		}
 
@@ -84,6 +99,9 @@ namespace Strata
 			{
 				settings.ContactRecycleDistance = ReadFloat(*value, "ContactRecycleDistance", defaults.ContactRecycleDistance);
 				settings.SleepThreshold = ReadFloat(*value, "SleepThreshold", defaults.SleepThreshold);
+				settings.ContactHertz = ReadFloat(*value, "ContactHertz", defaults.ContactHertz);
+				settings.ContactDampingRatio = ReadFloat(*value, "ContactDampingRatio", defaults.ContactDampingRatio);
+				settings.ContactPushSpeed = ReadFloat(*value, "ContactPushSpeed", defaults.ContactPushSpeed);
 				source = Source::Project;
 			}
 			if (outSource)

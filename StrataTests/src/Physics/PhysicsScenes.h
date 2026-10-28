@@ -62,7 +62,8 @@ namespace Strata::Tests
 	// when it is still above the character's shoulders afterwards).
 	SettleScene CreateCratePush(Scene& scene);
 	// Four boxes resting on a kinematic platform that starts after a second to move at 2 m/s and turn at 30 degrees/s. Probe
-	// "platform.slipMm": the most a box moved horizontally in the platform's frame.
+	// "platform.slipMm": the most a box moved horizontally in the platform's frame while riding, from a second into the motion
+	// (the sudden start slides them first) for four seconds.
 	SettleScene CreateKinematicPlatform(Scene& scene);
 	// `count` character controllers ("Character 0"...) in a grid walking along +X at 2 m/s from the first step on, over a ground
 	// crossed by 0.3 m steps every 4 m (Perf.Physics.Characters1000Step's crowd).

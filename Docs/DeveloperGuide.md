@@ -55,6 +55,7 @@ stays under 40,000 characters (the test `Docs.AgentGuide` fails beyond). How the
 - [Audio](#audio)
 - [Animation](#animation)
 - [Physics](#physics)
+  - [Contact recycling](#contact-recycling)
   - [Physics instruments](#physics-instruments)
   - [Settling and the sweep](#settling-and-the-sweep)
 - [World partition](#world-partition)
@@ -1123,11 +1124,10 @@ two members). A layer's name means the same in every scene and prefab.
 
 How the physics simulation settles bodies is the project's section `Physics.Simulation` (`Physics/PhysicsSimulationSettings`,
 registered by `RegisterPhysicsModule`; a build without physics keeps a stored one unclaimed and writes it back as it was),
-a simple section of two fields, `ContactRecycleDistance` (meters, 0 to 1; 0 turns contact recycling off) and
-`SleepThreshold` (m/s, 0 to 1), whose defaults are `PhysicsSettings`' (`c_DefaultContactRecycleDistance` and
-`c_DefaultSleepThreshold`: box3d's own unless the sweep of [Settling and the sweep](#settling-and-the-sweep) chose others). The
-contact tuning (`ContactHertz`, `ContactDampingRatio`, `ContactPushSpeed`) stays in `PhysicsSettings`, the process default
-tests and the settle helper set ([Settling and the sweep](#settling-and-the-sweep) says why).
+a simple section of five fields, `ContactRecycleDistance` (meters, 0 to 1; 0 turns contact recycling off),
+`SleepThreshold` (m/s, 0 to 1), `ContactHertz` (1 to 240), `ContactDampingRatio` (0 to 100) and `ContactPushSpeed` (m/s,
+0.01 to 100), whose defaults are `PhysicsSettings`' (`c_Default...`: box3d's own but the sleep threshold, 0.08 m/s; the sweep
+chose them, [Contact recycling](#contact-recycling)).
 
 - **Precedence.** A world uses the project's section when the program provides `IProjectSettings` (the editor with a
   project, a game from its manifest) and the project stores it; otherwise the process defaults
@@ -1143,9 +1143,11 @@ tests and the settle helper set ([Settling and the sweep](#settling-and-the-swee
   `project.setSettings` changes a running game from its next fixed step; a contact made before a distance change keeps
   being recycled within the old distance until it is recomputed. Out-of-range values are clamped (distance 0-1 m,
   threshold 0-1 m/s, hertz 1-240, damping 0-100, push speed 0.01-100 m/s) and non-finite ones replaced by the defaults.
-- **Characters never recycle.** A character controller's presence body is made with `enableContactRecycling` off, as
-  box3d advises for characters: it is teleported every step, and a recycled contact would keep the manifold of where it
-  stood under what it carries or pushes (`PhysicsWorld::IsContactRecyclingEnabled` answers for a body or a presence body).
+- **Characters and kinematic bodies never recycle.** A character controller's presence body is made with
+  `enableContactRecycling` off, as box3d advises for characters: it is teleported every step, and a recycled contact would
+  keep the manifold of where it stood under what it carries or pushes. So are kinematic bodies (`MakeBodySetup`): the sweep
+  found riders of a turning platform creeping off it ([Contact recycling](#contact-recycling)).
+  `PhysicsWorld::IsContactRecyclingEnabled` answers for a body or a presence body.
 - **Tests.** `Physics.Settings` (the section, precedence, creation, a prepared world, a change at the next step, clamping),
   `Physics.Recycling` (presence bodies, the crate push), `Editor.Commands` (`project.setSettings` while playing and its undo
   after play) and the feature project, which stores the section with non-default values.
@@ -1903,6 +1905,67 @@ character controllers and box3d's tasks on the job system. How bodies map to com
 Docs/Architecture.md, "Physics"; capacities and growth: "World partition" below; the project's tuning (recycle distance,
 sleep threshold): [Physics simulation](#physics-simulation).
 
+### Contact recycling
+
+box3d recycles a touching contact instead of computing it again while neither body moved fast, both turned less than 10
+degrees since the contact's points were computed, and their relative motion stays within the world's recycle distance
+(`b3World_SetContactRecycleDistance`, 10 linear slops: 5 cm; non-touching contacts within at most 2 cm). A recycled contact
+keeps its points' anchors and normal and moves their separations along ("same as sub-stepping"), skips the narrow phase,
+and changes no touching state (no begin or end event while it is recycled); restitution still comes from the velocities
+sampled every step, so it bounces. What it keeps stale is its geometry: a body can seem supported a little past an edge,
+bump where tiles meet, or keep its old contact when teleported within the distance. The angle (cos^2 of 5 degrees) is a
+box3d constant. Character controllers' presence bodies and kinematic bodies never recycle ([Physics
+simulation](#physics-simulation)): a contact recycles only while both bodies allow it, and a recycled contact keeps its
+points in the bodies' frames while a turning platform carries its riders, who then creep (0.70 m in 4 s on a platform at
+2 m/s and 30 degrees/s, against 17 mm without recycling).
+
+**The sweep** (`Tools/PhysicsSweep.py`, [Settling and the sweep](#settling-and-the-sweep); 2026-10-28, Release, the
+reference machine with its temporary memory, so the times are about twice the reference's; three interleaved repeats,
+medians; the Physics Playground through the editor):
+
+| distance | `Boxes70k` box3d / collide / recycled | 2,000-ball pit 99% asleep | tower of 20: drift | Playground pit asleep | worst extra bump at seams | ledge travel, worst extra |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 (off) | 18.4 / 3.29 ms / 0% | not in 30 s | toppled (28 m) | 12.5 s | 0 | 0 |
+| 0.35 cm | 15.7 / 2.64 ms / 49% | not in 30 s | 9.4 mm | | 0.3 mm | 0 |
+| 0.7 cm | 14.6 / 2.10 ms / 73% | not in 30 s | 5.1 mm | 13.8 s | 0 | 0 |
+| 1 cm | 17.6 / 2.19 ms / 76% | not in 30 s | 6.0 mm | | 0.1 mm | 1.0 cm |
+| 2.5 cm | 14.2 / 1.89 ms / 84% | not in 30 s (nor 40 s at 0.08 m/s) | 9.2 mm | 14.0 s | 0.4 mm | 0.6 cm |
+| 3.5 cm | 13.8 / 1.94 ms / 85% | 24.3 s | 9.2 mm | 16.5 s | 5.4 mm | 1.6 cm |
+| **5 cm** (box3d's, kept) | 15.3 / 1.87 ms / 85% | 18.8 s (14.7 s at 0.08 m/s) | 9.2 mm | over 20 s (15.5 s at 0.08 m/s) | 5.0 mm | 1.7 cm |
+| 7.5 cm | 15.9 / 1.94 ms / 85% | 15.4 s | 9.2 mm | 14.0 s | 11.7 mm | 3.1 cm |
+| 10 cm | 16.0 / 1.89 ms / 85% | 22.1 s | 9.2 mm | | 25.1 mm | 3.1 cm |
+| 70 cm | | | | 13.5 s | 54.9 mm | 11.3 cm |
+
+The platform column of the sweep (the riders' creep with recycling allowed on the platform: 17 mm at 0, 131 at 0.35 cm,
+696 at 5 cm, 869 at 7.5 cm) is why kinematic bodies do not recycle: with that, it is 17 mm at every distance. Every distance
+keeps the domino run (all 64 down in about 10.9 s), the Playground's stations (tower drift 12.6 mm, 8
+ghosts on the pit floor, 500 balls in the pit, 64 dominoes) and the crate a character pushes (3.0 m in 2 s; 2.76 m at
+70 cm). The bumps at the seams of 1 m tiles are mostly the tiles' inner edges, with or without recycling (boxes sliding
+at 2 m/s rise 44 mm at distance 0, balls rolling at 8 m/s 130 mm): recycling adds a few millimeters to those. On a
+triangle mesh it removes one (a box sliding at 2 m/s rose 47 mm at 0, none from 3.5 cm on).
+
+**The rule and the defaults.** The spec's rule (ghost gate against distance 0: seams at most 2 mm and ledges at most 1 cm
+more, the crate within 5%, every domino down, the tower within 10 mm or 1.2 times distance 0's; cost gate: `Boxes70k`'s
+box3d step within 3% of the best; then the shortest time to sleep) picks 2.5 cm. But at 2.5 cm the 2,000-ball pit does
+not fall asleep within 30 s (nor 40 s at 0.08 m/s), against 18.8 s at box3d's 5 cm, which the rule's acceptance forbids,
+and distance 0, the gate's reference, topples the tower. So Strata keeps box3d's 5 cm (`c_DefaultContactRecycleDistance`)
+and states the cost: up to 5 mm more over tile seams that bump 12 to 44 mm anyway at 1 to 2 m/s, and up to 1.7 cm further
+past a ledge. Lower the distance where bodies slide over tiled floors; raise it only after looking at seams and edges. The
+sleep threshold goes from box3d's 0.05 to 0.08 m/s (`c_DefaultSleepThreshold`): the 2,000-ball pit and the Playground's
+pit sleep a fifth sooner or more (14.7 s instead of 18.8; 15.5 s instead of more than 20), every probe and station came out
+the same, and 0.12 m/s, faster still (9.6 s and 13.3 s), stops slow rolling and sliding visibly early. The contact tuning
+became fields of the section because each changes how long piles settle by more than a tenth (hertz 20: the tower leans
+88 mm and the pit sleeps at 29 s; damping 5: the pit does not sleep in 30 s, 20: 28 s; push speed 1 m/s: 25.9 s); box3d's
+values stay the defaults. Two collision steps per fixed step double the cost and keep the pit awake.
+
+**The owner's "0.7"**, read every way: 0.7 cm (1.4 slops) recycles 73% of the busy boxes' contacts and passes the ghost
+gate, but leaves both pits awake; 0.7 of box3d's 5 cm (3.5 cm) sleeps the 2,000-ball pit in 24.3 s, slower than 5 cm, with
+the same bumps; 0.7 m recycles contacts over 70 cm of relative motion: boxes sliding at 0.5 m/s over tiles bump 59 mm (4 at
+distance 0), a box leaves a ledge 11 cm further before it drops, the pushed crate goes 11% shorter than without recycling, and the pits are no
+better; 0.7 of the slop (0.35 cm) is like 0.7 cm; 70% of contacts recycled is reached at 0.7 cm by the busy boxes and at every
+distance from 0.35 cm by the pits (94-96%); the angle was not changed: the pits' share is flat across distances, but a
+throwaway build of box3d with another angle was not made (D8 allows one; left to a later look).
+
 ### Physics instruments
 
 What a step did is kept as the world steps, so that what is read every frame takes constant time: `PhysicsStats` holds it
@@ -1974,8 +2037,19 @@ and carrying one on its head (`CratePush`), boxes on a moving and turning kinema
 first slept, the steps' and the library's milliseconds (and `SettleCpuMs`, the steps' wall time over the first 10 s), the busy
 phase's medians as the perf lab takes them, the recycled share, the fastest body at 5 s, the resting jitter between 5 and 10 s
 and the scene's probes. The test binary's helper `--strata-test-helper=physics-settle <scene> <seconds> <result.json>
-[--workers n] [--collision-steps n]` runs one in a process of its own (box3d's workers capped with
-`PhysicsTaskSystem::SetWorkerLimit`) and writes that summary as JSON.
+[--workers n] [--collision-steps n] [--recycle-distance m] [--sleep-threshold m/s] [--contact-hertz hz] [--contact-damping
+ratio] [--contact-push-speed m/s]` runs one in a process of its own with those settings (box3d's workers capped with
+`PhysicsTaskSystem::SetWorkerLimit`) and writes that summary, with the settings used, as JSON.
+
+`Tools/PhysicsSweep.py` (outside the repository's output: give it a directory) runs the helper per point under
+`Tools/PerfLock.py`, one fresh process each: `distances` (the recycle distances on every settle scene, CPU measures three
+times interleaved, the deterministic probe scenes once, also at 70 cm), `knobs --distance m` (sleep threshold, contact
+tuning and collision steps one at a time), `workers` (box3d's worker count), `playground` (the Physics Playground through a
+headless editor and StrataCLI on a copy, as its regression plays it: per distance 20 s of steps with `physics.stats` every
+15, the script's stations, then the dominoes) and `report` (the tables, and the rule of [Contact
+recycling](#contact-recycling) applied to what it finds). An interrupted sweep continues: points already written are
+skipped. Rerun it when box3d is bumped or the contact code changes, and keep `Physics.Settling` (the defaults' bounds,
+StrataTests/src/Physics/PhysicsSettlingTests.cpp, each checked to fail with an absurd setting) in line with what it finds.
 
 ## World partition
 

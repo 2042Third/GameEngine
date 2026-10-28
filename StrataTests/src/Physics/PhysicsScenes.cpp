@@ -471,6 +471,10 @@ namespace Strata::Tests
 			riders.push_back(CreateDynamicBox(scene, "Rider", glm::vec3(corner.x, 1.5f, corner.y), glm::vec3(0.25f)));
 
 		constexpr uint32_t c_MoveStart = 60;
+		// The riders slide while the platform's sudden start brings them up to speed (about 0.7 m); what counts is how they
+		// creep once they ride along, from a second into the motion for four seconds.
+		constexpr uint32_t c_RideStart = c_MoveStart + 60;
+		constexpr uint32_t c_RideEnd = c_RideStart + 240;
 		auto localAtStart = CreateRef<std::vector<glm::vec3>>();
 		const auto toPlatform = [platform](Scene& scene, Entity rider)
 		{
@@ -479,7 +483,7 @@ namespace Strata::Tests
 		SettleScene settle;
 		settle.BeforeStep = [=](Scene& scene, uint32_t step)
 		{
-			if (step == c_MoveStart)
+			if (step == c_RideStart)
 			{
 				for (const Entity rider : riders)
 					localAtStart->push_back(toPlatform(scene, rider));
@@ -497,7 +501,7 @@ namespace Strata::Tests
 		settle.AfterStep = [=](Scene& scene, uint32_t step, std::map<std::string, double>& probes)
 		{
 			KeepMax(probes, "platform.slipMm", 0.0);
-			if (step < c_MoveStart || localAtStart->size() != riders.size())
+			if (step >= c_RideEnd || localAtStart->size() != riders.size())
 				return;
 			for (size_t index = 0; index < riders.size(); index++)
 				KeepMax(probes, "platform.slipMm", 1000.0 * HorizontalDistance(toPlatform(scene, riders[index]), (*localAtStart)[index]));

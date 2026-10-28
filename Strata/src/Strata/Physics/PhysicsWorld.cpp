@@ -1902,7 +1902,13 @@ namespace Strata
 			setup.Body.angularDamping = SanitizeNonNegative(rigidBody->AngularDamping, defaults.AngularDamping);
 			setup.Body.gravityScale = std::isfinite(rigidBody->GravityScale) ? rigidBody->GravityScale : defaults.GravityScale;
 			if (type == RigidBodyType::Kinematic)
+			{
+				// Kinematic bodies never recycle contacts (so neither does what touches them): a recycled contact keeps its points
+				// in the bodies' frames while a turning platform carries its riders, which then creep (0.70 m in 4 s on one
+				// turning at 30 degrees/s, against 17 mm without recycling; DeveloperGuide "Contact recycling").
+				setup.Body.enableContactRecycling = false;
 				return setup;
+			}
 
 			// box3d sweeps every dynamic body against static ones; a bullet also against kinematic and dynamic bodies.
 			setup.Body.isBullet = rigidBody->ContinuousCollision && !rigidBody->IsTrigger;
