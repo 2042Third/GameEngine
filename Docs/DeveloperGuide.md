@@ -807,7 +807,9 @@ short. Their full wording:
 
 - **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background work goes through
   `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O, `JobPriority::Background` for long work no frame
-  waits for, such as an import's texture compression or an export's pack compression: it runs on background threads
+  waits for, such as an import's texture compression, an export's pack compression or the parallel read of a scene
+  asset's document (jobs that fill the workers take the processors at the frame's priority, and the frame's submissions
+  then wait scheduling quanta for the graphics driver's threads): it runs on background threads
   below the normal thread priority, which leave four hardware threads to the main thread, the driver and the frame's
   helpers but keep at least half of them (`JobSystem::GetDefaultBackgroundThreadCount`), so it never takes the
   processors from the frame, whose own work runs on the normal-priority workers). A thread that waits for a job runs

@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Scene/Prefab.h"
 
+#include "Strata/Core/JobSystem.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Components.h"
@@ -25,6 +26,12 @@ namespace Strata
 		// world transforms.
 		constexpr float c_SceneReadStreamShare = 0.80f;
 		constexpr float c_SceneReadLinkShare = 0.12f;
+
+		// Of the jobs that read a large scene document in parallel when the scene asset loads (SceneReadOptions::Priority): long
+		// work no frame waits for. On the worker pool they took every processor at the frame's priority while the editor opened
+		// a scene, and the graphics driver's threads, which the frame's submissions wait for, then waited whole scheduling quanta
+		// for one (frames of 4-11 ms). The background threads run below the frame's threads and leave processors to them.
+		constexpr JobPriority c_SceneParsePriority = JobPriority::Background;
 
 		// Validates a {"Strata": {"Format": format, "Version": n}, key: {...}} document and returns the payload.
 		const nlohmann::json* ReadDocument(const nlohmann::json& json, std::string_view format, std::string_view key, uint32_t maxVersion, std::string* outError)
@@ -346,6 +353,7 @@ namespace Strata
 			// at load time): the text and one entity's DOM at a time, never a DOM of the whole document.
 			SceneReadOptions options;
 			options.IsCancelled = isCancelled;
+			options.Priority = c_SceneParsePriority;
 			EntityReadProgress linkProgress;
 			if (progress)
 			{

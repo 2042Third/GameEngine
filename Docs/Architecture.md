@@ -1282,7 +1282,11 @@ of whole scenes never become one:
   read as a stream), the skeleton goes through the stream handler, and then jobs parse chunks of
   `ParallelChunkEntities` (2,048) into `EntityColumns` while the reading thread hands the finished chunks to the sink in
   order, at most twice the worker count of chunks in memory. The scene and its reports do not depend on the path. A
-  cancel is noticed after every chunk; an over-limit document is refused before any check.
+  cancel is noticed after every chunk; an over-limit document is refused before any check. The jobs run at
+  `SceneReadOptions::Priority`: a scene asset's load (`SceneAsset::Deserialize`) puts them on the background threads,
+  since no frame waits for it and on the workers they took every processor at the frame's priority while the editor
+  opened a scene (the frame's queue submissions then waited for the graphics driver's threads for scheduling quanta,
+  frames of 4-11 ms); tools that wait for a read keep the workers.
 - **Cooked scenes** (`Scene/CookedScene`): the binary form exports put into packs (`AssetPackCook`'s `CookForPack`, called
   by `EditorAssetManager::WriteAssetPack` with `AssetPackWriteOptions::CookDocuments`; `GameExportOptions::CookDocuments`,
   `project.export`'s `cookDocuments`, defaults to true). "STSC" version 1: a 64-byte header with its own CRC-32C and a

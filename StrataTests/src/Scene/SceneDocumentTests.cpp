@@ -7,6 +7,7 @@
 #include "Strata/Core/DocumentOutput.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Hash.h"
+#include "Strata/Core/JobSystem.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Scene/ComponentAccess.h"
@@ -34,6 +35,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -1177,6 +1179,47 @@ TEST_SUITE("Scene.Documents")
 			CHECK(sink.Entities == (cancelAt + 255) / 256 * 256);
 			CHECK_FALSE(sink.Finished);
 		}
+	}
+
+	TEST_CASE("A scene asset's load reads a large document on the background threads and leaves the workers to the frame")
+	{
+		// The jobs of the parallel read ran on the worker pool, at the frame's priority, and took every processor while the
+		// editor opened a scene: the graphics driver's threads, which the frame's submissions wait for, then waited scheduling
+		// quanta for one. 512 roots with a chain of 31 descendants each: no level of the hierarchy is wide enough for the world
+		// transforms the load computes afterwards to use the workers, so whatever they run comes from the read.
+		const size_t count = SceneReadOptions().ParallelMinEntities;
+		constexpr size_t c_ChainLength = 32;
+		std::string text = "{" + Header() + fmt::format(",\"Scene\":{{\"Name\":\"Chains\",\"EntityCount\":{},\"Entities\":[\n", count);
+		for (size_t index = 0; index < count; index++)
+		{
+			nlohmann::json entity = { { "ID", UUIDToJson(UUID(index + 1)) }, { "Components", { { "Name", { { "Name", fmt::format("E{}", index) } } } } } };
+			if (index % c_ChainLength != 0)
+				entity["Parent"] = UUIDToJson(UUID(index));
+			text += JsonUtils::Dump(entity);
+			text += index + 1 < count ? ",\n" : "\n";
+		}
+		text += "]}}";
+		{
+			// The document takes the parallel path.
+			ScopedJobSystem jobs(4, 1);
+			const SceneRead read = ReadStreamed(text);
+			INFO(read.Error);
+			REQUIRE(read.Success);
+			REQUIRE(read.Result.Parallel);
+		}
+
+		// A job system of its own: its pools' counts are the load's alone.
+		ScopedJobSystem jobs(4, 1);
+		std::string error;
+		const Ref<SceneAsset> asset = SceneAsset::Deserialize(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(text.data()), text.size()), &error);
+		REQUIRE_MESSAGE(asset, error);
+		const Ref<Scene> scene = asset->TakePreparedScene(&error);
+		REQUIRE_MESSAGE(scene, error);
+		CHECK(scene->GetEntityCount() == count);
+		CHECK(scene->GetRootEntities().size() == (count + c_ChainLength - 1) / c_ChainLength);
+		const JobSystemStats stats = JobSystem::GetStats();
+		CHECK(stats.Workers.CompletedJobs == 0);
+		CHECK(stats.Workers.RunningJobs == 0);
 	}
 }
 
