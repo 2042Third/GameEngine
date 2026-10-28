@@ -614,7 +614,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   - `capture --build <bin dir>` copies the three 3D samples (never opening them in place) and makes two projects in a
     work directory: `Basic3D`, a new project of the `basic3d` template, and `LookDev`, built by the command script
     `Tools/LookDev/LookDevScene.json` from the `empty` template (a room with a window and a shadowed lamp, a white-furnace
-    row of spheres over roughness and metalness in `Scenes/Furnace.stscene`, poles, a fence and a 5 cm plate as thin
+    row of spheres over roughness and metalness in `Scenes/Furnace.stscene`, a dark floor of roughness 0.02, 0.1 and 0.3
+    under screen-space reflections in `Scenes/Mirror.stscene` (`lookdev.mirror`), poles, a fence and a 5 cm plate as thin
     casters, an alpha-masked leaf card whose texture the tool draws, the physical sky; every look property at its
     component's default, so each build shows what new content gets). A headless editor per project
     (`StrataCLI launch`, a private `STRATA_SESSION_DIR` of the work directory) captures every shot of
