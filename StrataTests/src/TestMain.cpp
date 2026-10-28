@@ -707,14 +707,15 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	}
 	if (mode == "check-image")
 	{
-		// <png> [--dominant red|green|blue <percent>] [--size <width>x<height>]: succeeds if the image decodes and shows
-		// something: it is neither (nearly) black nor a single color, with --dominant at least <percent> of its pixels are
-		// clearly of that color (the channel exceeds both others by more than 40), e.g. a known object of the scene, and with
-		// --size it has exactly that many pixels.
+		// <png> [--dominant red|green|blue <percent> [--margin <codes>]] [--size <width>x<height>]: succeeds if the image
+		// decodes and shows something: it is neither (nearly) black nor a single color, with --dominant at least <percent> of
+		// its pixels are clearly of that color (the channel exceeds both others by more than --margin, 40 unless given), e.g. a
+		// known object of the scene, and with --size it has exactly that many pixels.
 		if (argc < 3)
 			return 2;
 		int dominantChannel = -1;
 		double dominantPercent = 0.0;
+		int dominantMargin = 40;
 		const char* dominantName = "";
 		std::optional<std::pair<uint32_t, uint32_t>> expectedSize;
 		for (int argument = 3; argument < argc; argument++)
@@ -729,6 +730,14 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 				if (dominantChannel < 0 || !(dominantPercent > 0.0 && dominantPercent <= 100.0))
 					return 2;
 				argument += 2;
+			}
+			else if (option == "--margin" && argument + 1 < argc)
+			{
+				const std::optional<int64_t> margin = Strata::CommandLine(std::vector<std::string> { "check-image", "--margin", argv[argument + 1] }).GetIntOption("--margin");
+				if (!margin || *margin < 0 || *margin > 255)
+					return 2;
+				dominantMargin = static_cast<int>(*margin);
+				argument++;
 			}
 			else if (option == "--size" && argument + 1 < argc)
 			{
@@ -771,7 +780,7 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 				const int value = pixel[dominantChannel];
 				const int other1 = pixel[(dominantChannel + 1) % 3];
 				const int other2 = pixel[(dominantChannel + 2) % 3];
-				dominant += value > other1 + 40 && value > other2 + 40 ? 1 : 0;
+				dominant += value > other1 + dominantMargin && value > other2 + dominantMargin ? 1 : 0;
 			}
 			for (int channel = 0; channel < 3; channel++)
 			{
