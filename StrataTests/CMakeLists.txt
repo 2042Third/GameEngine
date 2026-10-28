@@ -866,7 +866,9 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataEditor.OpenWorld PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataOpenWorldExport)
 	# In a window at 1920 x 1080 with a small texture budget (mip streaming under pressure), for 30 s of game time (--seconds,
 	# however fast the frames come: the 24 s tour has ended over the island in the morning of a 600 s day that begins at 9:00):
-	# the island fills the lower half of the picture, and the perf log shows cells loaded, streaming and the GPU at work (TAA,
+	# the island fills the lower half of the picture (its grass at least 5% of the pixels, green by more than 30 codes: Filmic
+	# shows it at its own chroma, about 36 to 40 codes above red and blue; the sky and the teal trees have none), and the
+	# perf log shows cells loaded, streaming and the GPU at work (TAA,
 	# and the shadow views of the lantern, which the tour sees in its first two seconds), no body waiting at the growth limit
 	# and none left waiting for its collider at the end.
 	set(STRATA_OPEN_WORLD_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/OpenWorld/$<CONFIG>")
@@ -877,7 +879,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataRuntime.OpenWorldWindowed PROPERTIES LABELS "gpu" TIMEOUT 300 FIXTURES_REQUIRED StrataOpenWorldExport
 		FIXTURES_SETUP StrataOpenWorldWindowed)
 	add_test(NAME StrataRuntime.OpenWorldWindowedImage
-		COMMAND StrataTests --strata-test-helper=check-image "${STRATA_OPEN_WORLD_DIR}/Windowed.png" --size 1920x1080 --dominant green 5)
+		COMMAND StrataTests --strata-test-helper=check-image "${STRATA_OPEN_WORLD_DIR}/Windowed.png" --size 1920x1080 --dominant green 5 --margin 30)
 	set_tests_properties(StrataRuntime.OpenWorldWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldWindowed)
 	add_test(NAME StrataRuntime.OpenWorldWindowedPerf
 		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_OPEN_WORLD_DIR}/Windowed.csv" any --nonzero WorldCellsLoaded
