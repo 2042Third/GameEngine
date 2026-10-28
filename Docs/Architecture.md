@@ -396,7 +396,11 @@ it (mesh colliders, anything that warns). So body IDs and the simulation do not 
 (`PhysicsStats::ParallelBuildCount`). Static shapes created before a world's first step skip box3d's pair search (the first
 step finds every pair); afterwards they search, or bodies resting where they appear would not touch them. Bodies that leave
 the simulation (inactive entities, a cell leaving) are disabled in box3d, destroyed bodies destroyed, and box3d wakes what
-touched them; a static body that moves wakes the bodies around its old and new place (`PhysicsStats::WakeQueryCount`).
+touched them; a static body without contacts (nearly all of a leaving cell's) is parked instead: its shapes get a filter
+that collides with nothing, which box3d checks before every pair, query, sensor visit and sweep, and box3d disables it a
+second later in slices of 1,024 a step unless it came back or went first (`PhysicsStats::ParkedBodyCount`), so that taking
+a cell's 25,000 static bodies out costs its frame no tree removals (box3d's first disable of them took 6.6 ms); a static body
+that moves that moves wakes the bodies around its old and new place (`PhysicsStats::WakeQueryCount`).
 Other systems use physics through the scene services `PhysicsSystem` offers (`ICollisionEventSource`, `IBodyMotionQuery`,
 `IBodyControl`, `IPhysicsQueries`, `ICharacterControl`, `IPhysicsCapacity`, with `CollisionEvent`, `RaycastHit`,
 `CharacterState` and `PhysicsCapacityInfo`, in `Scene/SceneServices.h`); `IPhysicsCapacity` reports the bodies, the room

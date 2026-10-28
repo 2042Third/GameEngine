@@ -154,6 +154,9 @@ namespace Strata
 		uint32_t KinematicBodyCount = 0;
 		uint32_t ActiveBodyCount = 0;    // Awake bodies (sleeping and static bodies are not simulated), character controllers' presence bodies included
 		uint32_t PendingBodyCount = 0;   // Entities waiting for a body that cannot be built yet (degenerate transform, mesh not loaded, growth limit)
+		// Static bodies out of the simulation that box3d still holds, colliding with nothing, until it disables them about a second
+		// later in slices (or they come back, or go): what an unloading cell leaves to the frames after its request.
+		uint32_t ParkedBodyCount = 0;
 		uint32_t CharacterControllerCount = 0; // Character controllers in the simulation (their presence bodies are not in BodyCount)
 		uint32_t ContactPairCount = 0;   // Touching pairs of entities that are tracked (those someone listens to, see ICollisionEventSource)
 		uint64_t PairIndexOperations = 0; // Entries of the per-entity touching pair lists written since the world was created

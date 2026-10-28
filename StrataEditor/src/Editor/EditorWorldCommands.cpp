@@ -387,6 +387,7 @@ namespace Strata
 					{ "kinematic", stats.KinematicBodyCount },
 					{ "active", stats.ActiveBodyCount },
 					{ "characters", stats.CharacterControllerCount },
+					{ "parked", stats.ParkedBodyCount },
 					{ "slotsUsed", capacity.Bodies } } },
 				{ "capacity", {
 					{ "maxBodies", stats.MaxBodies },
@@ -1024,7 +1025,8 @@ namespace Strata
 
 		registry.Register({ "physics.stats",
 			"The physics of the running game (play or simulate): bodies in the simulation (total, static, dynamic, kinematic, awake, character "
-			"controllers) and the bodies in use, the world's room (maxBodies: as it grew; growthLimit: the most it may hold; maxContactConstraints) "
+			"controllers; parked: static bodies out of it that collide with nothing until box3d drops them a second later) and the bodies in use, "
+			"the world's room (maxBodies: as it grew; growthLimit: the most it may hold; maxContactConstraints) "
 			"and the memory it takes (reservedMB), bodies waiting at the growth limit (waitingForSlot: below it no body waits) and waiting for "
 			"other reasons (meshes loading, degenerate transforms), the bodies built and destroyed and the milliseconds spent on it in the last "
 			"frame, the slices a switched-to scene's bodies were built in while it loaded (preparedSlices; 0 when they were built as the scene "

@@ -397,6 +397,94 @@ TEST_SUITE("Physics.Lifecycle")
 		CHECK(hit->HitEntity == child);
 	}
 
+	TEST_CASE("Static bodies without contacts leave the simulation parked, colliding with nothing until box3d drops them")
+	{
+		// What an unloading cell's static bodies do (Perf.World.CellUnloadMaxFrame): they keep their place in box3d's trees with a
+		// filter that collides with nothing, and box3d disables them about a second later unless they came back or went first.
+		Scene scene;
+		Entity floor = CreateStaticBox(scene, "Floor", glm::vec3(0.0f, -0.5f, 0.0f), glm::vec3(5.0f, 0.5f, 5.0f));
+		Entity box = CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 1.0f, 0.0f));
+		box.SetActive(false);
+		Entity trigger = CreateStaticBox(scene, "Trigger", glm::vec3(20.0f, 0.0f, 0.0f), glm::vec3(1.0f));
+		trigger.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Static;
+		trigger.GetComponent<RigidBodyComponent>().IsTrigger = true;
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 1);
+		const auto hitsFloor = [&]()
+		{
+			const std::optional<RaycastHit> hit = physics.Raycast(glm::vec3(0.0f, 10.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 20.0f);
+			return hit && hit->HitEntity == floor;
+		};
+		const auto dropBox = [&]()
+		{
+			box.SetActive(true);
+			REQUIRE(physics.Teleport(box, glm::vec3(0.0f, 1.0f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f)));
+			REQUIRE(physics.SetLinearVelocity(box, glm::vec3(0.0f)));
+			StepScene(scene, 30);
+			const float height = GetWorldPosition(scene, box).y;
+			box.SetActive(false);
+			return height;
+		};
+		REQUIRE(hitsFloor());
+		CHECK(dropBox() == doctest::Approx(0.5f).epsilon(0.02));
+
+		// Out of the simulation: parked, and nothing finds it or collides with it, also after the layer matrix changed.
+		floor.SetActive(false);
+		CHECK_FALSE(physics.HasBody(floor));
+		CHECK(physics.GetStats().ParkedBodyCount == 1);
+		CHECK(physics.GetStats().BodyCount == 1); // The trigger
+		CHECK_FALSE(hitsFloor());
+		CHECK(physics.OverlapBox(glm::vec3(0.0f, -0.5f, 0.0f), glm::vec3(1.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f)).empty());
+		CHECK(dropBox() < 0.0f);
+		physics.SetLayersCollide(0, 1, false);
+		CHECK(dropBox() < 0.0f);
+		CHECK(physics.GetStats().ParkedBodyCount == 1);
+
+		// Back before box3d dropped it: found and collided with at once.
+		floor.SetActive(true);
+		CHECK(physics.HasBody(floor));
+		CHECK(physics.GetStats().ParkedBodyCount == 0);
+		CHECK(hitsFloor());
+		CHECK(dropBox() == doctest::Approx(0.5f).epsilon(0.02));
+
+		// Parked for a second, box3d disables it; it comes back from there as well.
+		floor.SetActive(false);
+		StepScene(scene, 30);
+		CHECK(physics.GetStats().ParkedBodyCount == 1);
+		StepScene(scene, 60);
+		CHECK(physics.GetStats().ParkedBodyCount == 0);
+		CHECK_FALSE(hitsFloor());
+		CHECK(dropBox() < 0.0f);
+		floor.SetActive(true);
+		CHECK(hitsFloor());
+		CHECK(dropBox() == doctest::Approx(0.5f).epsilon(0.02));
+
+		// With contacts (a box resting on it), a static body is disabled at once: only that ends box3d's contacts.
+		box.SetActive(true);
+		REQUIRE(physics.Teleport(box, glm::vec3(0.0f, 0.5f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f)));
+		StepScene(scene, 5);
+		floor.SetActive(false);
+		CHECK(physics.GetStats().ParkedBodyCount == 0);
+		StepScene(scene, 30);
+		CHECK(GetWorldPosition(scene, box).y < 0.0f);
+		box.SetActive(false);
+
+		// Triggers are disabled at once too; a parked body that goes leaves nothing parked.
+		trigger.SetActive(false);
+		CHECK(physics.GetStats().ParkedBodyCount == 0);
+		floor.SetActive(true);
+		CHECK(physics.HasBody(floor));
+		floor.SetActive(false);
+		CHECK_FALSE(physics.HasBody(floor));
+		CHECK(physics.GetStats().ParkedBodyCount == 1);
+		scene.DestroyEntity(floor);
+		StepScene(scene, 1);
+		CHECK(physics.GetStats().ParkedBodyCount == 0);
+		CHECK(physics.GetStats().StaticBodyCount == 0);
+	}
+
 	TEST_CASE("Entities created inactive get their body when activated")
 	{
 		Scene scene;

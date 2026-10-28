@@ -88,6 +88,7 @@ TEST_SUITE("Editor.World")
 		CHECK(stats["bodies"]["total"] == 11);
 		CHECK(stats["bodies"]["static"] == 1);
 		CHECK(stats["bodies"]["dynamic"] == 10);
+		CHECK(stats["bodies"]["parked"] == 0);
 		CHECK(stats["bodies"]["slotsUsed"] == 11);
 		CHECK(stats["capacity"]["maxBodies"] == 1024);
 		CHECK(stats["capacity"]["growthLimit"] == PhysicsCapacitySettings::c_MaxBodiesLimit);

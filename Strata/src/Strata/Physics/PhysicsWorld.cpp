@@ -57,6 +57,13 @@ namespace Strata
 		// Bodies within this distance of a static body that is moved are woken up, so that nothing keeps sleeping on top of a
 		// body that is no longer there (box3d wakes the bodies touching a body it disables or destroys itself).
 		constexpr float c_WakeMargin = 0.1f;
+		// A static body without contacts that leaves the simulation is parked (see ParkStaticBody); box3d disables it this many
+		// steps later (a second at the default timestep) unless it came back or went before, at most c_ParkedDisablesPerStep
+		// bodies a step. A cell's entities are destroyed within that second, so its static bodies are never disabled first; their
+		// entries are dropped then, at most c_ParkedEntriesPerStep a step.
+		constexpr uint64_t c_ParkedSteps = 60;
+		constexpr uint32_t c_ParkedDisablesPerStep = 1024;
+		constexpr uint32_t c_ParkedEntriesPerStep = 8 * c_ParkedDisablesPerStep;
 		constexpr float c_MinimumMass = 0.001f;
 		// Applying a change can move colliders to another body, which is a change in turn; this many rounds always settle
 		// a consistent hierarchy, so hitting the limit means a bug rather than a big change.
@@ -485,7 +492,8 @@ namespace Strata
 			RigidBodyType Type = RigidBodyType::Static;
 			BuildFailure Failure = BuildFailure::None;
 			uint32_t Layer = 0;                             // Collision layer of its shapes
-			bool InSimulation = false;                      // Its body is enabled in box3d
+			bool InSimulation = false;                      // Its body is enabled in box3d (and not parked)
+			bool Parked = false;                            // Out of the simulation, but box3d holds it until a later step (see ParkStaticBody)
 			bool IsTrigger = false;                         // Its shapes are sensors
 			bool Suspended = false;                         // Out of the simulation because the world transform is degenerate
 			bool WaitsForParent = false;                    // Not built because the parent cannot be inverted (dynamic bodies)
@@ -793,6 +801,11 @@ namespace Strata
 		// they give the sleeping bodies in constant time; GetStats checks them against its walk in Debug builds.
 		uint32_t MovingRecordBodies = 0;
 		uint32_t PresenceBodies = 0;
+		// Static bodies out of the simulation that box3d still holds, colliding with nothing (see ParkStaticBody): the records'
+		// entities and the step each was parked at, in that order. Entries of records that came back, went or were parked again
+		// since are dropped as they are reached (see DisableParkedBodies). ParkedBodies counts the records parked now.
+		std::deque<std::pair<entt::entity, uint64_t>> ParkedRecords;
+		uint32_t ParkedBodies = 0;
 		// The bodies that were awake after the last step, and those woken or created since (see MarkAwake): what the next step
 		// synchronizes besides the polled records, by body index. Listed once per stamp.
 		std::vector<int32_t> AwakeBodies;
@@ -1502,14 +1515,78 @@ namespace Strata
 			record.SavedAngularVelocity = ToGlm(b3Body_GetAngularVelocity(record.BodyID));
 		}
 
-		// Takes a body out of the simulation: box3d disables it (it keeps its shapes) and wakes the bodies it touched.
-		void RemoveFromSimulation(PhysicsWorldData& data, BodyRecord& record)
+		// Parks a static body that leaves the simulation and has no contacts: instead of disabling it, which takes its shapes out
+		// of box3d's trees (0.13 us a body, twice that the first time in a world, while box3d's set of disabled bodies grows:
+		// 6.6 ms when a streamed cell of 25,000 unloads, Perf.World.CellUnload.LibraryOnly), its shapes get a filter that
+		// collides with nothing (PhysicsFilters::MakeParkedShapeFilter), which box3d checks before every pair, query, sensor
+		// visit and sweep, so the body collides with nothing from this step on, as a disabled body. box3d disables it
+		// c_ParkedSteps steps later, a slice a step (DisableParkedBodies), unless it came back (AddToSimulation) or went
+		// (DestroyBox3DBody) before. A body with contacts is disabled at once: box3d keeps a contact whatever the filters say,
+		// so only disabling ends it. Triggers too, whose sensor visits box3d keeps. Returns whether the body was parked.
+		bool ParkStaticBody(PhysicsWorldData& data, entt::entity handle, BodyRecord& record)
+		{
+			if (record.Type != RigidBodyType::Static || record.IsTrigger || record.Parked || b3Body_GetContactCapacity(record.BodyID) > 0)
+				return false;
+			const b3Filter parked = PhysicsFilters::MakeParkedShapeFilter(record.Layer);
+			for (const b3ShapeId shape : record.Shapes)
+				b3Shape_SetFilter(shape, parked, false); // No contacts to end, and the proxies stay where they are
+			record.Parked = true;
+			data.ParkedBodies++;
+			data.ParkedRecords.emplace_back(handle, data.StepCount);
+			return true;
+		}
+
+		// Gives a parked body its shapes' filter back (see ParkStaticBody). Coming back into the simulation, box3d makes their
+		// proxies again to find their pairs, as enabling does (bodies may rest within a proxy's margin); disabled, the filter
+		// is only stored for when the body is enabled.
+		void UnparkBody(PhysicsWorldData& data, BodyRecord& record, bool findPairs)
+		{
+			ST_CORE_ASSERT(record.Parked, "Physics: a body that is not parked is unparked");
+			const b3Filter filter = PhysicsFilters::MakeShapeFilter(record.Layer, data.Settings.LayerCollisionMasks);
+			for (const b3ShapeId shape : record.Shapes)
+				b3Shape_SetFilter(shape, filter, findPairs);
+			record.Parked = false;
+			data.ParkedBodies--;
+		}
+
+		// Disables the bodies parked at least c_ParkedSteps steps ago that are still parked, oldest first, at most
+		// c_ParkedDisablesPerStep of them: they leave box3d's trees, so that bodies inactive for long cost the queries and pair
+		// searches nothing. Called once per fixed step, so how many are disabled depends only on the steps. The time counts as
+		// changes applied (PhysicsStats::ChangeTime): it is the rest of the bodies' removal.
+		void DisableParkedBodies(PhysicsWorldData& data)
+		{
+			if (data.ParkedRecords.empty() || data.ParkedRecords.front().second + c_ParkedSteps > data.StepCount)
+				return;
+			const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+			uint32_t disabled = 0;
+			uint32_t visited = 0;
+			while (!data.ParkedRecords.empty() && disabled < c_ParkedDisablesPerStep && visited < c_ParkedEntriesPerStep)
+			{
+				const auto [handle, parkedAt] = data.ParkedRecords.front();
+				if (parkedAt + c_ParkedSteps > data.StepCount)
+					break;
+				data.ParkedRecords.pop_front();
+				visited++;
+				BodyRecord* record = FindRecord(data, handle);
+				if (!record || !record->Parked || record->LeftSimulationAt != parkedAt)
+					continue; // Back, gone or parked again since (a later entry)
+				b3Body_Disable(record->BodyID);
+				UnparkBody(data, *record, false);
+				disabled++;
+			}
+			GetUpdateCounters(data).ChangeTime += std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start).count();
+		}
+
+		// Takes a body out of the simulation: box3d disables it (it keeps its shapes) and wakes the bodies it touched, or a
+		// static body without contacts is parked (see ParkStaticBody).
+		void RemoveFromSimulation(PhysicsWorldData& data, entt::entity handle, BodyRecord& record)
 		{
 			if (!record.InSimulation)
 				return;
 
 			SaveVelocities(record);
-			b3Body_Disable(record.BodyID);
+			if (!ParkStaticBody(data, handle, record))
+				b3Body_Disable(record.BodyID);
 			record.LeftSimulationAt = data.StepCount;
 			record.InSimulation = false;
 			record.KinematicMoving = false;
@@ -1554,8 +1631,12 @@ namespace Strata
 			// Enabling finds the body's pairs again, and its contacts begin at the next step. Its sensor visits do not: box3d
 			// drops the visits of a disabled body at its next step, so a body back before that step keeps them unchanged and no
 			// Begin comes for the trigger pairs that ended when it left. They are seeded after the next step (SeedWantedPairs
-			// counts the visits of the body's sensors and of the triggers it is in).
-			b3Body_Enable(record.BodyID);
+			// counts the visits of the body's sensors and of the triggers it is in). A parked body is enabled still: its filter
+			// comes back, and its proxies are made again to find its pairs.
+			if (record.Parked)
+				UnparkBody(data, record, true);
+			else
+				b3Body_Enable(record.BodyID);
 			if (record.LeftSimulationAt == data.StepCount && (record.IsTrigger || !data.TriggerBodies.empty()) && (data.TrackAll || !data.ContactInterest.empty()))
 				data.SeededEntities.push_back(record.EntityID);
 			if (record.Type == RigidBodyType::Dynamic)
@@ -1593,6 +1674,12 @@ namespace Strata
 				return;
 
 			GetUpdateCounters(data).BodiesRemoved++;
+			if (record.Parked)
+			{
+				// Its entry in ParkedRecords is dropped when reached.
+				record.Parked = false;
+				data.ParkedBodies--;
+			}
 			for (const b3ShapeId shape : record.Shapes)
 				UnregisterShape(data, shape);
 			UnregisterBody(data, record.BodyID);
@@ -2616,7 +2703,7 @@ namespace Strata
 
 			if (!IsSimulated(*data.OwnerScene, entity))
 			{
-				RemoveFromSimulation(data, record);
+				RemoveFromSimulation(data, handle, record);
 			}
 			else if (record.HasBody() && !record.InSimulation)
 			{
@@ -3166,7 +3253,7 @@ namespace Strata
 					if (BodyRecord* record = FindRecord(data, entity.GetHandle()))
 					{
 						if (record->Type != RigidBodyType::Static)
-							RemoveFromSimulation(data, *record);
+							RemoveFromSimulation(data, entity.GetHandle(), *record);
 						return true;
 					}
 
@@ -3288,7 +3375,7 @@ namespace Strata
 					else
 						ST_CORE_WARN("Physics: the parent of '{}' is scaled to (nearly) zero, so its simulated pose cannot be written back; its body leaves the simulation until the parent's transform is valid", entity.GetName());
 				}
-				RemoveFromSimulation(data, *record);
+				RemoveFromSimulation(data, handle, *record);
 				record->Suspended = true;
 				UpdatePolling(data, handle, *record);
 				return;
@@ -4025,7 +4112,7 @@ namespace Strata
 			glm::vec3 entityScale;
 			if (Math::DecomposeTransform(record.LastWorldTransform, entityPosition, entityRotation, entityScale) && IsWithinCoordinateRange(entityPosition))
 				b3Body_SetTransform(record.BodyID, ToB3(entityPosition), ToB3(entityRotation));
-			RemoveFromSimulation(data, record);
+			RemoveFromSimulation(data, handle, record);
 			record.Suspended = true;
 			UpdatePolling(data, handle, record);
 		}
@@ -4888,6 +4975,7 @@ namespace Strata
 		ApplyChanges(data);
 		// Room reserved for bodies to come (PhysicsWorld::Reserve) counts before the step (see "Capacities").
 		GrowRoom(data, data.ReservedBodies);
+		DisableParkedBodies(data);
 		const Clock::time_point applyEnd = Clock::now();
 		data.HeldLastStep = HoldForMeshes(data, timestep);
 		if (data.HeldLastStep)
@@ -5018,10 +5106,11 @@ namespace Strata
 		data.Settings.LayerCollisionMasks = masks;
 		// box3d keeps a filter per shape: the shapes of the layers whose masks changed take the new ones (rare, O(bodies)).
 		// box3d destroys their contacts and finds them again at the next step, so their pairs wait for it to confirm them,
-		// and only the pairs whose layers the change parts end.
+		// and only the pairs whose layers the change parts end. Parked bodies keep colliding with nothing: they take the new
+		// masks when they come back or are disabled (UnparkBody).
 		for (auto& [handle, record] : data.Bodies)
 		{
-			if (!record.HasBody() || previous[record.Layer] == masks[record.Layer])
+			if (!record.HasBody() || record.Parked || previous[record.Layer] == masks[record.Layer])
 				continue;
 			const b3Filter filter = PhysicsFilters::MakeShapeFilter(record.Layer, masks);
 			for (const b3ShapeId shape : record.Shapes)
@@ -5400,6 +5489,8 @@ namespace Strata
 					stats.PendingBodyCount++;
 				continue;
 			}
+			if (record.Parked)
+				stats.ParkedBodyCount++;
 			if (!record.InSimulation)
 				continue;
 
@@ -5411,6 +5502,7 @@ namespace Strata
 				case RigidBodyType::Kinematic: stats.KinematicBodyCount++; break;
 			}
 		}
+		ST_CORE_ASSERT(stats.ParkedBodyCount == data.ParkedBodies, "Physics: {} records are parked, but {} are counted", stats.ParkedBodyCount, data.ParkedBodies);
 		stats.CharacterControllerCount = data.Characters->GetCount();
 		stats.CharacterTime = data.Characters->GetLastStepTime();
 		stats.ActiveBodyCount = static_cast<uint32_t>(std::max(b3World_GetAwakeBodyCount(data.World), 0));

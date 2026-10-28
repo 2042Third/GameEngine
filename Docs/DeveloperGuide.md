@@ -58,6 +58,7 @@ stays under 40,000 characters (the test `Docs.AgentGuide` fails beyond). How the
   - [Contact recycling](#contact-recycling)
   - [Physics instruments](#physics-instruments)
   - [Settling and the sweep](#settling-and-the-sweep)
+  - [Leaving the simulation](#leaving-the-simulation)
 - [World partition](#world-partition)
 - [Game UI](#game-ui)
   - [The UI contract](#the-ui-contract)
@@ -2084,6 +2085,24 @@ memory and other builds running) kept that rule: box3d's step fell up to 12-16 w
 boxes: 27.6 ms at 4, 18.4 at 12, 18.2 at 16, 17.6 at 24; 30,000 tracked: 9.1, 5.8, 5.7, 6.2), and no count beat today's
 by the 3% a change needs. A new rule is stated in the job system's workers (so tests see the same count on every
 machine), never above today's, and keeps 5 workers for 4 job workers (`Physics.Box3D`'s golden-hash case checks it).
+
+### Leaving the simulation
+
+A body leaves the simulation when its entity becomes inactive (a cell unloading makes its top-level entities inactive in
+one frame) or gets a transform it cannot have, and a moving one also when its entity is about to be destroyed; it
+collides with nothing from that update on (no contact, query, sensor visit or sweep finds it). box3d disables it, which
+takes its shapes out of box3d's trees; a static body without contacts that is not a trigger is parked instead
+(`ParkStaticBody` in `PhysicsWorld.cpp`): its shapes keep their place and get a filter whose mask is empty
+(`PhysicsFilters::MakeParkedShapeFilter`; their category stays, as box3d's trees sort by it), and box3d checks shape
+filters before every pair, query, sensor visit and sweep. box3d disables the parked bodies 60 steps later, at most 1,024
+a step and the time counted in `ChangeTime`, unless they came back first (their filter returns and their proxies are
+made again, finding their pairs as enabling does) or went (destroyed with their entity: a cell's entities go within that
+second, so its static bodies are never disabled first). A body with contacts cannot be parked: box3d keeps a contact
+whatever the filters say, so only disabling ends it; triggers neither, whose visits box3d keeps. Code that sets shape
+filters skips parked bodies (`SetLayerCollisionMasks`: they take the matrix when they come back or are disabled).
+`PhysicsStats::ParkedBodyCount` and `physics.stats`' `bodies.parked` count them; `Physics.Lifecycle` checks what finds
+and collides with them. In the request frame of `Perf.World.CellUnloadMaxFrame` this leaves Strata's own work, about 2
+ms, instead of box3d's first disable of the cell's 25,000 static bodies (6.6 ms alone).
 
 ## World partition
 

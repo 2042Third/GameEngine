@@ -91,8 +91,9 @@ TEST_SUITE("Perf.World")
 	TEST_CASE("Unloading a cell of 25,000 entities with bodies spreads its work over frames")
 	{
 		// The scale audit's cell: 25,000 static boxes. Before the sliced unload its frame took 51-56 ms; now the request's frame
-		// takes the cell out of the game (its roots inactive, its bodies out of the simulation in one batch) and the later
-		// frames destroy it within the frame's budget (Scene::UpdateSubScenes) with physics' batched removals (ChangeTime).
+		// takes the cell out of the game (its roots inactive, its bodies out of the simulation in one batch: parked, colliding
+		// with nothing, still in box3d's trees) and the later frames destroy it within the frame's budget
+		// (Scene::UpdateSubScenes) with physics' batched removals (ChangeTime), box3d's tree removals among them.
 		Perf::ScopedApplicationJobSystem jobs;
 		Perf::CheckBudgetConfirmed("Perf.World.CellUnloadMaxFrame", [&]
 		{
@@ -118,8 +119,10 @@ TEST_SUITE("Perf.World")
 			// the streamer's place, then the scene's update, where physics takes the cell's bodies out.
 			double longest = StreamFrame(AssetManager::GetActive().get(), scene, nullptr, {}, [&]() { REQUIRE(scene.UnloadSubScene(cell)); });
 			const double requestFrame = longest;
-			// Physics' share of the request's frame: its rounds of changes, which take the bodies out of the simulation.
+			// Physics' share of the request's frame: its rounds of changes, which take the bodies out of the simulation. Static
+			// bodies without contacts are parked: box3d's removals wait for the entities' destruction in the next frames.
 			const PhysicsStats requestStats = scene.GetSystem<PhysicsSystem>()->GetStats();
+			CHECK(requestStats.ParkedBodyCount == 25'000);
 			uint32_t frames = 1;
 			while (scene.GetSubSceneStatus(cell) != nullptr)
 			{
@@ -129,7 +132,8 @@ TEST_SUITE("Perf.World")
 			// The bodies left with the entities.
 			scene.OnUpdateRuntime(Timestep(1.0f / 60.0f));
 			CHECK(scene.GetSystem<PhysicsSystem>()->GetStats().BodyCount == 1);
-			// Physics' changes hold box3d's disables of the 25,000 bodies: Perf.World.CellUnload.LibraryOnly times those alone.
+			CHECK(scene.GetSystem<PhysicsSystem>()->GetStats().ParkedBodyCount == 0);
+			// Disabling the 25,000 bodies at once would cost box3d what Perf.World.CellUnload.LibraryOnly times.
 			MESSAGE("Unloading 25,000 entities with bodies: ", frames, " frames, the request's work ", requestFrame, " ms (physics' changes ", requestStats.ChangeTime,
 				" ms), the longest's ", longest, " ms");
 			scene.OnRuntimeStop();
