@@ -3672,11 +3672,12 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
   code, nothing for TAA to accumulate, and still frames, captures and the two draw paths' comparisons stay
   deterministic. The shader quantizes itself: `q / levels` lies within half an ulp of code q, which UNORM targets store as
   q on every device that rounds to nearest (the GPU suites' twin test checks it).
-  - Which pass: without FXAA the tone mapping dithers into the output; with FXAA it writes the
-    `R10G10B10A2_UNORM` intermediate (`SceneRenderer::c_LDRFormat`, `GetLDRTexture`: the 4 bytes a pixel RGBA8 took,
-    and a mandatory color-attachment format) undithered, and FXAA dithers its output, so the noise is added once and the
-    intermediate bakes no bands in. FXAA's thresholds (`c_EdgeThresholdMin`, about 8 codes) never take the noise for
-    edges. The overlays and the copy into a target (`Copy.frag`) are exact display colors over the dithered image.
+  - Which pass: without FXAA the tone mapping dithers into the output; with FXAA it writes the `R10G10B10A2_UNORM`
+    intermediate (`SceneRenderer::c_LDRFormat`, `GetLDRTexture`: the 4 bytes a pixel RGBA8 took, and a mandatory
+    color-attachment format) undithered, and FXAA (or the morphological blend) dithers its output, so the noise is added
+    once and the intermediate bakes no bands in. FXAA's thresholds (`c_EdgeThresholdMin`, about 8 codes) never take the
+    dither's noise for edges. The film grain goes into the same last pass, before its dither, for the same reason
+    (below). The overlays and the copy into a target (`Copy.frag`) are exact display colors over the dithered image.
   - Levels per target format (`GetDitherLevels`): 255 for the 8-bit UNORM formats (RGBA8, BGRA8, the swapchain's), 1023
     for `R10G10B10A2_UNORM`, none for the other formats `ValidateTarget` accepts (16-bit UNORM, the packed 5-6-5,
     5-5-5-1 and 4-4-4-4 formats). With overlays the tone mapping writes the RGBA8 output texture and the copy carries it.
@@ -3866,18 +3867,24 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
     (provisional) `PerfGPU.Renderer.DepthOfField4K`, the worst case: every pixel far behind the focus at the largest
     circle (about 0.20 ms on an RTX 5090). The look-dev shot `tp.dof` focuses the Third-Person camera on the robot at f/2.
 - **Film grain and chromatic aberration** (`PostProcessComponent::FilmGrain`, `ChromaticAberration`, 0 to 1, off by
-  default; in `Tonemap.frag`, `TonemapConstants` 144-159):
+  default; the aberration in `Tonemap.frag`, the grain in `Include/Grain.glsl`; `TonemapConstants` 144-159):
   - The aberration is read first: red at `0.5 + (uv - 0.5) * (1 + k)`, blue at `(1 - k)`, green unmoved, bilinear, with
     `k = ChromaticAberration * c_ChromaticAberrationScale` (`0.5 / 1920`), so 1 draws red and blue half a pixel apart from
     green at a 3840x2160 image's corners and nothing at its center (the same share of the image at every resolution).
-  - The grain comes after the curve and the saturation, in the encoded domain, before the dither: `encoded +=
-    FilmGrain * c_FilmGrainAmplitude (0.04) * sqrt(4 Y (1 - Y)) * g`, `Y` the encoded luminance (film's grain shows most in
-    the mid-tones), `g` near-Gaussian (four `PixelRandom` streams from 8, salted with `TonemapConstants::GrainFrame`, the
+  - The grain comes after the curve and the saturation, in the encoded domain, in the pass that writes the display
+    image, before its dither (`AddFilmGrain`): the tone mapping, or FXAA or the morphological blend when one follows it
+    (`FXAAParameters`, `MorphologicalParameters`: `FilmGrain`, `GrainFrame`; the tone mapping's `FilmGrain` is 0 then).
+    Added before them, their edge thresholds (FXAA's 0.0312, the morphological 0.05) would take the grain's differences
+    between neighbors for edges and blend most of the image: at 1 it kept 0.82 of its spread under FXAA and 0.84 under
+    the morphological anti-aliasing, and neighbors correlated by 0.09 and 0.11. `encoded += FilmGrain *
+    c_FilmGrainAmplitude (0.04) * sqrt(4 Y (1 - Y)) * g`, `Y` the encoded luminance (film's grain shows most in the
+    mid-tones), `g` near-Gaussian (four `PixelRandom` streams from 8, salted with `TonemapConstants::GrainFrame`, the
     renderer's render count: new every frame), the same on every channel. It is zero-mean: 1 spreads a mid-gray by about
-    10 codes and moves its mean by under 0.1 code. With FXAA the grain is in the image FXAA reads. Renderers of single
-    images set `SceneRenderOptions::GrainSeed` (the capture renderer and thumbnails: 0), so a picture taken again is the
-    same; live views and games leave it unset.
-  - Tests: `GPU.SceneRenderer.GrainAndAberration`.
+    10 codes and moves its mean by under 0.1 code, under every anti-aliasing method. Renderers of single images set
+    `SceneRenderOptions::GrainSeed` (the capture renderer and thumbnails: 0), so a picture taken again is the same; live
+    views and games leave it unset.
+  - Tests: `GPU.SceneRenderer.GrainAndAberration` (the grain's spread and independence of neighbors the same under FXAA
+    and the morphological anti-aliasing as without, the players' rows of both).
 - **Color lookup** (`PostProcessComponent::ColorLookup`, a `ColorLookup` asset, and `ColorLookupIntensity`, 0 to 1,
   default 1; `Renderer/ColorLookup.h`): a grade made in another tool, after the curve and the saturation, in the encoded
   domain, before the grain and the dither: `encoded = mix(encoded, lookup(encoded * (N - 1) / N + 0.5 / N), intensity)`,

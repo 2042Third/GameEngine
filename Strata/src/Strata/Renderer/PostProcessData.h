@@ -36,7 +36,7 @@ namespace Strata
 			glm::vec4 ColorRows[3];     // 64: PostProcessMath::ColorGrading::Matrix (white balance times slope) as rows (w unused)
 			glm::vec4 ColorOffset;      // 112: xyz: the offset in units of light (ColorOffset times middle gray), added before the power
 			glm::vec4 ColorPower;       // 128: xyz: the power around middle gray
-			float FilmGrain;            // 144: PostProcessComponent::FilmGrain; 0 = off
+			float FilmGrain;            // 144: PostProcessComponent::FilmGrain; 0 = off, and when FXAA or the morphological blend adds it
 			float ChromaticAberration;  //      the lateral aberration's scale of red and blue about the center (k); 0 = off
 			uint32_t GrainFrame;        //      the frame's number: the grain changes every frame, as film's
 			float ColorLookupIntensity; //      PostProcessComponent::ColorLookupIntensity of the lookup bound at set 1; 0: none
@@ -52,7 +52,7 @@ namespace Strata
 		// ChromaticAberration 1 shifts red and blue half a pixel at a 3840x2160 image's corners (a fixed share of the image at
 		// every resolution): k = ChromaticAberration * c_ChromaticAberrationScale.
 		constexpr float c_ChromaticAberrationScale = 0.5f / (0.5f * 3840.0f);
-		// The grain's strength in display codes' fraction at FilmGrain 1, in the mid-tones (PostProcess/Tonemap.frag).
+		// The grain's strength in display codes' fraction at FilmGrain 1, in the mid-tones (Include/Grain.glsl).
 		constexpr float c_FilmGrainAmplitude = 0.04f;
 		// PostProcess/LensFlare.comp (push constants): the ghosts and the halo at a quarter of the resolution, and in alpha the
 		// share of the disk's surroundings that sees the sky (the starburst's, which the tone mapping draws).
@@ -124,9 +124,13 @@ namespace Strata
 			float Threshold;
 			float DepthThreshold;
 			float DitherLevels; // 2^bits - 1 of the target the blend writes; 0: no dither
+			float FilmGrain;    // The blend's grain (Include/Grain.glsl); 0 = off
+			uint32_t GrainFrame;
 			float Padding0;
+			float Padding1;
+			float Padding2;
 		};
-		static_assert(sizeof(MorphologicalParameters) == 16);
+		static_assert(sizeof(MorphologicalParameters) == 32);
 		constexpr float c_MorphologicalThreshold = 0.05f;
 		constexpr float c_MorphologicalDepthThreshold = 0.05f;
 		// The area table's texels each way (Renderer/MorphologicalAreaTable.inl, Tools/GenerateAreaTable.py): four crossings of
@@ -137,9 +141,9 @@ namespace Strata
 		struct FXAAParameters
 		{
 			float DitherLevels; // 2^bits - 1 of the target FXAA writes; 0: no dither
+			float FilmGrain;    // The grain FXAA adds after its blend (Include/Grain.glsl); 0 = off
+			uint32_t GrainFrame;
 			float Padding0;
-			float Padding1;
-			float Padding2;
 		};
 		static_assert(sizeof(FXAAParameters) == 16);
 

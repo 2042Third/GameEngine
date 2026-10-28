@@ -1253,6 +1253,11 @@ namespace Strata
 		// tone mapping's 10-bit image stays undithered), else the tone mapping.
 		const float outputLevels = m_Specification.DitherOutput ? GetDitherLevels(output->getFramebufferInfo().colorFormats[0]) : 0.0f;
 		tonemap.DitherLevels = fxaa || morphological ? 0.0f : outputLevels;
+		// The grain too goes into the display image last (before the dither): in the tone mapping's 10-bit image, FXAA and the
+		// morphological edges would take its differences between neighbors for edges and blend it away.
+		const float grain = tonemap.FilmGrain;
+		if (fxaa || morphological)
+			tonemap.FilmGrain = 0.0f;
 		m_Stats.Dithered = outputLevels > 0.0f;
 		commandList->beginMarker("Tonemap");
 		ST_CORE_ASSERT(!m_TonemapConstantsWritten, "SceneRenderer: a frame writes the tone mapping's constants once");
@@ -1268,6 +1273,8 @@ namespace Strata
 			parameters.Threshold = RenderData::c_MorphologicalThreshold;
 			parameters.DepthThreshold = RenderData::c_MorphologicalDepthThreshold;
 			parameters.DitherLevels = outputLevels;
+			parameters.FilmGrain = grain;
+			parameters.GrainFrame = grainSeed;
 			commandList->beginMarker("Morphological");
 			DrawFullscreen(commandList, GetFullscreenPipeline(m_MorphologicalEdgesPipelines, m_MorphologicalEdgesShader, m_MorphologicalEdgesLayout,
 				m_MorphologicalEdgesFramebuffer->getFramebufferInfo()), m_MorphologicalEdgesFramebuffer, m_MorphologicalEdgesSet, &parameters, sizeof(parameters));
@@ -1282,6 +1289,8 @@ namespace Strata
 		{
 			RenderData::FXAAParameters parameters = {};
 			parameters.DitherLevels = outputLevels;
+			parameters.FilmGrain = grain;
+			parameters.GrainFrame = grainSeed;
 			commandList->beginMarker("FXAA");
 			DrawFullscreen(commandList, GetFullscreenPipeline(m_FXAAPipelines, m_FXAAPixelShader, m_FXAABindingLayout, output->getFramebufferInfo()), output, m_FXAABindingSet,
 				&parameters, sizeof(parameters));
