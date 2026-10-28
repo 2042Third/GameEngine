@@ -111,6 +111,11 @@ namespace Strata
 		// background).
 		static JobHandle Submit(std::function<void()> job, JobPriority priority = JobPriority::Normal);
 		static JobHandle SubmitIO(std::function<void()> job, JobPriority priority = JobPriority::Normal);
+		// Queues a part of background work in progress on the background threads: ahead of the background work that has not
+		// started (JobPriority::Background's jobs, such as the imports a scan queued), with ParallelFor's background helpers.
+		// For work a thread hands out in pieces and waits for, such as a scene asset's parallel read: queued behind every
+		// import, its pieces would wait until the waiting thread ran them one by one.
+		static JobHandle SubmitBackgroundPart(std::function<void()> job);
 
 		// Returns once the job completed. A job no thread has started yet runs on the calling thread.
 		static void Wait(const JobHandle& handle);

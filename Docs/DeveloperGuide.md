@@ -812,7 +812,10 @@ short. Their full wording:
   then wait scheduling quanta for the graphics driver's threads): it runs on background threads
   below the normal thread priority, which leave four hardware threads to the main thread, the driver and the frame's
   helpers but keep at least half of them (`JobSystem::GetDefaultBackgroundThreadCount`), so it never takes the
-  processors from the frame, whose own work runs on the normal-priority workers). A thread that waits for a job runs
+  processors from the frame, whose own work runs on the normal-priority workers). Pieces of background work in progress
+  that a thread hands out and waits for (the read's chunks) go through `SubmitBackgroundPart`, ahead of background work
+  that has not started, as `ParallelFor`'s background helpers do: queued behind the imports a scan started, they would
+  run one by one on the waiting thread while the imports compress. A thread that waits for a job runs
   that job itself if it has not started, and never other jobs. What a job captures is released on the thread that runs
   it (`Submit` keeps no copy of the function: libc++ copies a small one when it moves it), so a job may hold the last
   reference to what it destroys off the frame (`Scene::ReleaseInBackground`). Results return to the main thread through

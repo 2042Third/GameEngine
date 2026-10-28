@@ -8,8 +8,10 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -376,6 +378,54 @@ TEST_SUITE("Core.JobSystem")
 		release = true;
 		holdWorker.Wait();
 		holdBackground.Wait();
+	}
+
+	TEST_CASE("Parts of background work in progress run on the background threads before background work that has not started")
+	{
+		// Without the job system, inline.
+		REQUIRE_FALSE(JobSystem::IsInitialized());
+		bool ranInline = false;
+		CHECK(JobSystem::SubmitBackgroundPart([&ranInline]() { ranInline = true; }).IsComplete());
+		CHECK(ranInline);
+
+		// A scene asset's parallel read hands out its chunks while imports wait to start: behind them, the chunks would only
+		// run on the reading thread. One background thread, held: what queues behind it runs in queue order once it is free.
+		ScopedJobSystem jobSystem(1, 0);
+		REQUIRE(JobSystem::GetBackgroundThreadCount() == 1);
+		std::atomic<bool> release = false;
+		std::atomic<bool> holding = false;
+		const JobHandle hold = JobSystem::Submit([&]()
+		{
+			holding = true;
+			while (!release.load())
+				std::this_thread::sleep_for(std::chrono::microseconds(100));
+		}, JobPriority::Background);
+		while (!holding.load())
+			std::this_thread::sleep_for(std::chrono::microseconds(100));
+
+		std::mutex mutex;
+		std::vector<std::string> order;
+		std::atomic<uint32_t> onBackground = 0;
+		const auto record = [&](const char* name)
+		{
+			if (JobSystem::IsBackgroundThread() && Platform::GetCurrentThreadPriority() == ThreadPriority::BelowNormal)
+				onBackground++;
+			std::scoped_lock<std::mutex> lock(mutex);
+			order.push_back(name);
+		};
+		const JobHandle import = JobSystem::Submit([&]() { record("import"); }, JobPriority::Background);
+		const JobHandle part = JobSystem::SubmitBackgroundPart([&]() { record("part"); });
+		CHECK(JobSystem::GetStats().Background.QueuedJobs == 2);
+		release = true;
+		// Waited for by their completion, not by Wait, which would run one that has not started on this thread.
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (!(import.IsComplete() && part.IsComplete()) && std::chrono::steady_clock::now() < deadline)
+			std::this_thread::sleep_for(std::chrono::microseconds(100));
+		REQUIRE(import.IsComplete());
+		REQUIRE(part.IsComplete());
+		hold.Wait();
+		CHECK(order == std::vector<std::string> { "part", "import" });
+		CHECK(onBackground.load() == 2);
 	}
 
 	TEST_CASE("A throwing ParallelFor batch is contained and the others still run")
