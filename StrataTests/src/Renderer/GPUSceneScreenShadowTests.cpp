@@ -302,6 +302,32 @@ TEST_SUITE("GPU.SceneRenderer.ScreenShadows")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A quality change's new cascades reach the mask")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		PlateScene plate;
+		plate.SetSoftness(4.0f);
+		// The mask's evaluation names the cascades it was made with: after SetQuality released them, the next frame draws as a
+		// renderer made at the new quality does.
+		SceneRenderer changed(MaskSpecification());
+		changed.SetViewportSize(c_Size, c_Size);
+		RenderToImage(changed, plate.SceneData, plate.Camera);
+		RendererQualitySettings quality = changed.GetQuality();
+		quality.ShadowResolution = ShadowMapResolution::Size2048;
+		changed.SetQuality(quality);
+		const ReadbackImage afterChange = RenderToImage(changed, plate.SceneData, plate.Camera);
+		SceneRendererSpecification specification = MaskSpecification();
+		specification.Quality.ShadowResolution = ShadowMapResolution::Size2048;
+		SceneRenderer fresh(specification);
+		fresh.SetViewportSize(c_Size, c_Size);
+		const ReadbackImage reference = RenderToImage(fresh, plate.SceneData, plate.Camera);
+		CHECK(changed.GetShadowMapSize() == 2048);
+		CHECK(afterChange.Pixels == reference.Pixels);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("HDROutput frames and one cascade use the mask")
 	{
 		GPUContext gpu;

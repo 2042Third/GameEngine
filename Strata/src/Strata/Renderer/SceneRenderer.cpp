@@ -1730,6 +1730,11 @@ namespace Strata
 		m_ShadowPyramidSize = 0;
 		m_ShadowPyramidLevels = 0;
 		release(m_CullBindingSet); // References the pyramids
+		// The screen-space shadows' evaluation reads the cascades and their ranges: made again by the next frame with them, also
+		// when a new texture gets a released one's address.
+		release(m_ScreenShadowSet);
+		m_ScreenShadowBoundMap = nullptr;
+		m_ScreenShadowBoundRanges = nullptr;
 		Renderer::ReleaseDeferred(std::move(released));
 		InvalidateShadowCache();
 		// The scene's binding sets, which read the cascades, are made again by the next frame's comparison, even when a new
