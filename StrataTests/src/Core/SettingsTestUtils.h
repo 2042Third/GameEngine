@@ -19,7 +19,7 @@
 namespace Strata::Tests
 {
 
-	// "Test.Simple", a simple project section with a field of every type: Speed (Float 0 to 10, 1), Count (Int 1 to 8, 4),
+	// "Test.Simple", a simple project section with a field of every type: Speed (Float 0 to 10, 1, dragged 0.01 a pixel), Count (Int 1 to 8, 4),
 	// Enabled (Bool, true), Label (String of at most 16 bytes, "Hello"), Mode (Enum Fast or Slow, "Fast") and Icon (a Texture,
 	// none).
 	inline SettingsSection MakeSimpleTestSection()
@@ -43,6 +43,7 @@ namespace Strata::Tests
 		SettingsField& speed = addField("Speed", SettingsFieldType::Float, 1.0);
 		speed.Min = 0.0;
 		speed.Max = 10.0;
+		speed.DragSpeed = 0.01;
 		SettingsField& count = addField("Count", SettingsFieldType::Int, 4);
 		count.Min = 1.0;
 		count.Max = 8.0;

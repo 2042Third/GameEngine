@@ -292,11 +292,15 @@ namespace Strata
 		// ContactPushSpeed; sanitized like the world's settings, the other fields ignored), which GetSettings reports from now on:
 		// the recycle distance and the contact tuning at once, the sleep threshold to every dynamic and kinematic body (also those
 		// out of the simulation) and the presence bodies. Main thread, between steps (PhysicsSystem calls it before a fixed step
-		// when the project's section changed). A body recycles contacts made from the next step on with the new distance.
+		// when the project's section changed). box3d reads the recycle distance in every collide pass, so a new one applies to
+		// every contact from the next step on, those made before it included.
 		void SetSimulationTuning(const PhysicsSettings& tuning);
 		// box3d's own values: the world's recycle distance, and the sleep threshold and contact recycling of the body an entity
 		// owns or of its character controller's presence body (nullopt and false for neither). For tests and diagnostics.
 		float GetContactRecycleDistance() const;
+		// The contact stiffness box3d uses in fixed steps of `timestep`: ContactHertz, at most an eighth of box3d's substep rate
+		// (b3World_Step softens stiffer contacts for steps that long): 30 Hz at 1/60 s with one collision step.
+		float GetEffectiveContactHertz(float timestep) const;
 		std::optional<float> GetSleepThreshold(Entity entity) const;
 		bool IsContactRecyclingEnabled(Entity entity) const;
 	private:

@@ -50,6 +50,9 @@ namespace Strata
 		SettingsFieldType Type = SettingsFieldType::Bool;
 		double Min = 0.0;        // Int, Float: the inclusive range
 		double Max = 0.0;
+		// Float: how much a pixel of dragging changes the value on a settings page, for values whose useful steps are smaller
+		// than the widgets' default (0: that default, 0.05).
+		double DragSpeed = 0.0;
 		uint32_t MaxLength = 0;  // String: the most bytes it may hold
 		std::vector<std::string> Options; // Enum
 		std::string AssetType;   // Asset: the type's name as AssetTypeToString writes it ("Texture")

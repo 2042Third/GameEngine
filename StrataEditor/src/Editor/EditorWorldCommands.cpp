@@ -418,7 +418,8 @@ namespace Strata
 			{
 				const PhysicsSettings& settings = world->GetSettings();
 				result["settings"] = { { "contactRecycleDistance", settings.ContactRecycleDistance }, { "sleepThreshold", settings.SleepThreshold },
-					{ "contactHertz", settings.ContactHertz }, { "contactDampingRatio", settings.ContactDampingRatio },
+					{ "contactHertz", settings.ContactHertz }, { "effectiveContactHertz", world->GetEffectiveContactHertz(scene->GetSettings().FixedTimestep) },
+					{ "contactDampingRatio", settings.ContactDampingRatio },
 					{ "contactPushSpeed", settings.ContactPushSpeed }, { "source", PhysicsSimulationSettings::SourceToString(physics->GetSimulationSource()) } };
 			}
 			else
@@ -1041,12 +1042,13 @@ namespace Strata
 			"contacts box3d held; roomGrowths: box3d steps whose new contacts grew its contact storage while playing, counted after the step that "
 			"follows; lastGrowthStepMs: the library time of the last of them) and settling (maxSpeed of the moving bodies in m/s; settling: those "
 			"faster than the sleep threshold; restingJitterMm: how far the others still move in a step). box3d's counters (islands; contacts "
-			"total, awake and recycled) are read every step only while detailed statistics are on (the perf lab, a game run with a perf log; "
-			"contacts.detailed: the last step read them); otherwise detail: true reads them once for this answer (box3d's last step) and changes "
-			"nothing, and without it they are null. settings: the tuning the world runs with (contactRecycleDistance in meters, sleepThreshold in "
-			"m/s, contactHertz, contactDampingRatio, contactPushSpeed) and its source (project: the project's Physics.Simulation section, which "
-			"project.setSettings changes while the game runs, from its next fixed step; defaults); null without a world. {running: false} while "
-			"editing; simulating is false while a running scene has no physics components.",
+			"total, awake and recycled) are read every step only while detailed statistics are on (the perf lab, a "
+			"game run with a perf log; contacts.detailed: the last step read them); otherwise detail: true reads them once for this answer "
+			"(box3d's last step) and changes nothing, and without it they are null. settings: the tuning the world runs with "
+			"(contactRecycleDistance in meters, sleepThreshold in m/s, contactHertz; effectiveContactHertz: what box3d uses, at most an eighth "
+			"of its substep rate, 30 at 60 fixed steps per second; contactDampingRatio, contactPushSpeed) and its source (project: the project's "
+			"Physics.Simulation section, which project.setSettings changes while the game runs, from its next fixed step; defaults); null "
+			"without a world. {running: false} while editing; simulating is false while a running scene has no physics components.",
 			ObjectSchema({ { "detail", BoolSchema("Read box3d's island and contact counters for this answer when they are not read every step "
 				"(default false)") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)

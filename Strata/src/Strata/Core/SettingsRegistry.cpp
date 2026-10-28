@@ -132,6 +132,8 @@ namespace Strata
 				case SettingsFieldType::Float:
 					if (!std::isfinite(field.Min) || !std::isfinite(field.Max) || field.Min > field.Max)
 						return fmt::format("field '{}' needs a finite range whose Min is not above its Max", field.Name);
+					if (!std::isfinite(field.DragSpeed) || field.DragSpeed < 0.0)
+						return fmt::format("field '{}' needs a DragSpeed that is finite and not negative", field.Name);
 					break;
 				case SettingsFieldType::String:
 					if (field.MaxLength == 0)

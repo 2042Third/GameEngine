@@ -1150,17 +1150,27 @@ chose them, [Contact recycling](#contact-recycling)).
   the recycle distance and contact tuning at once (`b3World_SetContactRecycleDistance`, `b3World_SetContactTuning`), the
   sleep threshold to every dynamic and kinematic body with a box3d body, in the simulation or not (one walk per change,
   never per step), and to the presence bodies; new bodies take it in `MakeBodySetup` and `CreatePresenceBody`. So
-  `project.setSettings` changes a running game from its next fixed step; a contact made before a distance change keeps
-  being recycled within the old distance until it is recomputed. Out-of-range values are clamped (distance 0-1 m,
-  threshold 0-1 m/s, hertz 1-240, damping 0-100, push speed 0.01-100 m/s) and non-finite ones replaced by the defaults.
+  `project.setSettings` changes a running game from its next fixed step: box3d's collide pass reads the world's recycle
+  distance every step, for every contact, so a new distance applies to the contacts made before it as well (only a
+  body's own recycling switch, `b3Body_EnableContactRecycling`, holds for the contacts made after it). Out-of-range values
+  are clamped (distance 0-1 m, threshold 0-1 m/s, hertz 1-240, damping 0-100, push speed 0.01-100 m/s) and non-finite
+  ones replaced by the defaults.
+- **Stiffness has a ceiling.** box3d softens contacts for large steps: it uses at most an eighth of its substep rate,
+  `min(ContactHertz, 0.125 * substeps / step)` (static contacts twice that), so at Strata's 4 solver substeps of a 1/60 s
+  fixed step with one collision step the ceiling is 30 Hz, the default: any higher `ContactHertz` acts as 30. A shorter
+  fixed step or more collision steps raise it (1/120 s: 60 Hz). Lower values take effect; `physics.stats`' `settings`
+  report both the value asked for (`contactHertz`) and the one box3d uses (`effectiveContactHertz`).
 - **Characters and kinematic bodies never recycle.** A character controller's presence body is made with
   `enableContactRecycling` off, as box3d advises for characters: it is teleported every step, and a recycled contact would
   keep the manifold of where it stood under what it carries or pushes. So are kinematic bodies (`MakeBodySetup`): the sweep
   found riders of a turning platform creeping off it ([Contact recycling](#contact-recycling)).
   `PhysicsWorld::IsContactRecyclingEnabled` answers for a body or a presence body.
-- **Tests.** `Physics.Settings` (the section, precedence, creation, a prepared world, a change at the next step, clamping),
-  `Physics.Recycling` (presence bodies, the crate push), `Editor.Commands` (`project.setSettings` while playing and its undo
-  after play) and the feature project, which stores the section with non-default values.
+- **Tests.** `Physics.Settings` (the section and the defaults its descriptions state, precedence, creation, a prepared
+  world, a change at the next step, what box3d does with a changed stiffness, damping and push speed while the world runs,
+  the stiffness's ceiling, clamping), `Physics.Recycling` (distance 0 recycles nothing, the default most of a settling
+  stack's awake contacts; presence and kinematic bodies, the crate push), `Runtime.Game` (an exported game's manifest
+  section), `Editor.Commands` (`project.setSettings` while playing and its undo after play) and the feature project, which
+  stores the section with non-default values in every field.
 
 ### Input actions
 

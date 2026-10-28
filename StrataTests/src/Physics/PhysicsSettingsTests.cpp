@@ -42,11 +42,13 @@ namespace
 			REQUIRE(m_Registry.Register(PhysicsSimulationSettings::MakeSection()));
 		}
 
-		void Set(double recycleDistance, double sleepThreshold, double contactHertz = c_DefaultContactHertz)
+		void Set(double recycleDistance, double sleepThreshold, double contactHertz = c_DefaultContactHertz,
+			double contactDampingRatio = c_DefaultContactDampingRatio, double contactPushSpeed = c_DefaultContactPushSpeed)
 		{
 			std::string error;
 			REQUIRE_MESSAGE(m_Values.Set(PhysicsSimulationSettings::c_SectionId, { { "ContactRecycleDistance", recycleDistance },
-				{ "SleepThreshold", sleepThreshold }, { "ContactHertz", contactHertz } }, m_Registry, &error), error);
+				{ "SleepThreshold", sleepThreshold }, { "ContactHertz", contactHertz }, { "ContactDampingRatio", contactDampingRatio },
+				{ "ContactPushSpeed", contactPushSpeed } }, m_Registry, &error), error);
 		}
 	private:
 		SettingsRegistry m_Registry;
@@ -66,7 +68,7 @@ namespace
 
 TEST_SUITE("Physics.Settings")
 {
-	TEST_CASE("The Physics.Simulation section is box3d's defaults, described for agents")
+	TEST_CASE("The Physics.Simulation section's defaults are stated in its descriptions for agents")
 	{
 		const SettingsSection* section = SettingsRegistry::GetProcessRegistry().Find(PhysicsSimulationSettings::c_SectionId);
 		REQUIRE(section != nullptr);
@@ -80,11 +82,20 @@ TEST_SUITE("Physics.Settings")
 			CAPTURE(field.Name);
 			CHECK(field.Type == SettingsFieldType::Float);
 			CHECK(field.Description.size() > 100);
+			// The default each description states is the field's (a stale "0.05 by default" told agents the wrong one).
+			CHECK(field.Description.find(fmt::format("{:g} by default", field.Default.get<double>())) != std::string::npos);
+			// Dragged on the settings page in steps its useful values differ by, at most the widgets' default.
+			CHECK(field.DragSpeed > 0.0);
+			CHECK(field.DragSpeed <= 0.1);
 		}
 		CHECK(section->Fields[0].Name == "ContactRecycleDistance");
+		CHECK(section->Fields[0].Title == "Contact recycle distance (m)");
 		CHECK(section->Fields[0].Max == 1.0); // Every reading of "0.7", 0.7 m included, is one command away
+		CHECK(section->Fields[0].DragSpeed == 0.001); // A millimeter a pixel: 0.35, 0.7 and 2.5 cm within reach
 		CHECK(section->Fields[0].Description.find("meters") != std::string::npos);
-		CHECK(section->Fields[0].Description.find("Character controllers never recycle") != std::string::npos);
+		CHECK(section->Fields[0].Description.find("Character controllers and kinematic bodies never recycle") != std::string::npos);
+		CHECK(section->Fields[1].Title == "Sleep threshold (m/s)");
+		CHECK(section->Fields[2].Description.find("effectiveContactHertz") != std::string::npos);
 		CHECK(section->Fields[1].Name == "SleepThreshold");
 		CHECK(section->Fields[1].Max == 1.0);
 		CHECK(section->Fields[2].Name == "ContactHertz");
@@ -135,11 +146,12 @@ TEST_SUITE("Physics.Settings")
 		SUBCASE("The project's section over the defaults")
 		{
 			SimulationProject project;
-			project.Set(0.04, 0.06, 45.0);
+			project.Set(0.04, 0.06, 45.0, 7.0, 2.0);
 			scene.OnRuntimeStart();
 			const PhysicsWorld& world = *GetPhysics(scene).GetWorld();
 			CHECK(world.GetSettings().ContactHertz == doctest::Approx(45.0f));
-			CHECK(world.GetSettings().ContactDampingRatio == doctest::Approx(c_DefaultContactDampingRatio));
+			CHECK(world.GetSettings().ContactDampingRatio == doctest::Approx(7.0f));
+			CHECK(world.GetSettings().ContactPushSpeed == doctest::Approx(2.0f));
 			CHECK(world.GetContactRecycleDistance() == doctest::Approx(0.04f));
 			CHECK(world.GetSettings().ContactRecycleDistance == doctest::Approx(0.04f));
 			CHECK(*world.GetSleepThreshold(box) == doctest::Approx(0.06f));
@@ -207,6 +219,71 @@ TEST_SUITE("Physics.Settings")
 		Entity spawned = CreateDynamicBox(scene, "Spawned", glm::vec3(0.0f, 3.0f, 3.0f));
 		StepScene(scene, 1);
 		CHECK(*world.GetSleepThreshold(spawned) == doctest::Approx(0.12f));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A running world's contacts soften, damp and push apart as the changed section says")
+	{
+		// box3d has no getter for its contact tuning: what it received shows in how contacts behave. Every body stays awake
+		// (threshold 0), so that the change reaches a box resting since the start.
+		SimulationProject project;
+		project.Set(c_DefaultContactRecycleDistance, 0.0);
+		Scene scene;
+		CreateGround(scene);
+		Entity resting = CreateDynamicBox(scene, "Resting", glm::vec3(0.0f, 0.5f, 0.0f));
+		scene.OnRuntimeStart();
+		StepScene(scene, 60);
+		const float stiffSag = 0.5f - GetWorldPosition(scene, resting).y;
+
+		// Soft contacts (2 Hz, box3d's static contacts twice that) let the resting box sink into the ground.
+		project.Set(c_DefaultContactRecycleDistance, 0.0, 2.0);
+		StepScene(scene, 120);
+		const float softSag = 0.5f - GetWorldPosition(scene, resting).y;
+
+		// A slow push-out (0.1 m/s, with damping 1 so that the speed limits it): a box spawned 30 cm deep in the ground rises at
+		// that speed, then at the default one.
+		project.Set(c_DefaultContactRecycleDistance, 0.0, c_DefaultContactHertz, 1.0, 0.1);
+		Entity sunk = CreateDynamicBox(scene, "Sunk", glm::vec3(5.0f, 0.2f, 0.0f));
+		StepScene(scene, 30);
+		const float slowRise = GetWorldPosition(scene, sunk).y - 0.2f;
+		project.Set(c_DefaultContactRecycleDistance, 0.0);
+		StepScene(scene, 30);
+		const float height = GetWorldPosition(scene, sunk).y;
+		MESSAGE("Sag ", stiffSag * 1000.0f, " mm stiff, ", softSag * 1000.0f, " mm soft; the sunk box rose ", slowRise * 1000.0f,
+			" mm in 0.5 s at 0.1 m/s, then stood at ", height, " m");
+		CHECK(stiffSag < 0.008f);
+		CHECK(softSag > stiffSag + 0.008f);
+		CHECK(slowRise > 0.02f);
+		CHECK(slowRise < 0.1f * 0.5f + 0.01f);
+		CHECK(height > 0.48f);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("box3d uses at most an eighth of its substep rate as the contacts' stiffness")
+	{
+		Scene scene;
+		CreateGround(scene);
+		PhysicsSettings settings;
+		settings.ContactHertz = 45.0f;
+		{
+			ScopedPhysicsSettings scoped(settings);
+			scene.OnRuntimeStart();
+		}
+		const PhysicsWorld& world = *GetPhysics(scene).GetWorld();
+		// 4 solver substeps of a 1/60 s step: 240 a second, an eighth of it 30 Hz.
+		CHECK(world.GetEffectiveContactHertz(1.0f / 60.0f) == doctest::Approx(30.0f));
+		CHECK(world.GetEffectiveContactHertz(1.0f / 120.0f) == doctest::Approx(45.0f));
+		CHECK(world.GetEffectiveContactHertz(0.0f) == doctest::Approx(45.0f));
+		scene.OnRuntimeStop();
+
+		settings.ContactHertz = 20.0f;
+		settings.CollisionSteps = 2;
+		ScopedPhysicsSettings scoped(settings);
+		scene.OnRuntimeStart();
+		CHECK(GetPhysics(scene).GetWorld()->GetEffectiveContactHertz(1.0f / 60.0f) == doctest::Approx(20.0f));
+		settings.ContactHertz = 90.0f;
+		GetPhysics(scene).GetWorld()->SetSimulationTuning(settings);
+		CHECK(GetPhysics(scene).GetWorld()->GetEffectiveContactHertz(1.0f / 60.0f) == doctest::Approx(60.0f)); // Two collision steps
 		scene.OnRuntimeStop();
 	}
 

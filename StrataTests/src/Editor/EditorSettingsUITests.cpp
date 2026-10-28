@@ -355,15 +355,35 @@ TEST_SUITE("Editor.UI.ProjectSettings")
 		CHECK(editor.Context().GetUndoStack().GetCount() == steps + 1);
 		CHECK(editor.Context().GetUndoStack().GetUndoName() == "Set Simple");
 
+		// A drag moves a Float field by the field's DragSpeed a pixel (Speed's 0.01, not the widgets' 0.05), as one step.
+		const std::optional<UI::ItemProbe::Item> speed = UI::ItemProbe::Find("ProjectSettings.Test.Simple.Speed");
+		REQUIRE(speed);
+		const ImVec2 start = speed->GetCenter();
+		constexpr float c_Pixels = 40.0f;
+		editor.Harness.MoveMouse(start);
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, true);
+		editor.Frames(1);
+		for (int part = 1; part <= 4; part++)
+		{
+			editor.Harness.MoveMouse(ImVec2(start.x + c_Pixels * static_cast<float>(part) / 4.0f, start.y));
+			editor.Frames(1);
+		}
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+		editor.Frames(2);
+		const double dragged = (*editor.Context().GetProject()->GetSettings().FindSection("Test.Simple"))["Speed"].get<double>();
+		CHECK(dragged == doctest::Approx(1.0 + c_Pixels * 0.01).epsilon(0.02));
+		CHECK(editor.Context().GetUndoStack().GetCount() == steps + 2);
+
 		// Text runs it once, when the edit ends; a value the section refuses changes nothing.
 		REQUIRE(editor.ReplaceText("ProjectSettings.Test.Simple.Label", "Racing"));
 		Press(editor, ImGuiKey_Enter);
 		CHECK((*editor.Context().GetProject()->GetSettings().FindSection("Test.Simple"))["Label"] == "Racing");
-		CHECK(editor.Context().GetUndoStack().GetCount() == steps + 2);
+		CHECK(editor.Context().GetUndoStack().GetCount() == steps + 3);
 		REQUIRE(editor.ReplaceText("ProjectSettings.Test.Simple.Label", "A label longer than sixteen bytes"));
 		Press(editor, ImGuiKey_Enter);
 		CHECK((*editor.Context().GetProject()->GetSettings().FindSection("Test.Simple"))["Label"] == "Racing");
-		CHECK(editor.Context().GetUndoStack().GetCount() == steps + 2);
+		CHECK(editor.Context().GetUndoStack().GetCount() == steps + 3);
 
 		// Reset to Defaults removes the stored section.
 		REQUIRE(editor.Click("ProjectSettings.Test.Simple.Reset"));

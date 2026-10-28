@@ -5649,6 +5649,16 @@ namespace Strata
 		return b3World_GetContactRecycleDistance(m_Data->World);
 	}
 
+	float PhysicsWorld::GetEffectiveContactHertz(float timestep) const
+	{
+		const PhysicsSettings& settings = m_Data->Settings;
+		if (!(timestep > 0.0f) || !std::isfinite(timestep))
+			return settings.ContactHertz;
+		// As b3World_Step computes it: its substep rate is the solver's substeps over each box3d step's time.
+		const float subStepRate = static_cast<float>(c_SolverSubSteps) * static_cast<float>(settings.CollisionSteps) / timestep;
+		return std::min(settings.ContactHertz, 0.125f * subStepRate);
+	}
+
 	std::optional<float> PhysicsWorld::GetSleepThreshold(Entity entity) const
 	{
 		const b3BodyId body = FindBodyOrPresenceBody(*m_Data, entity);

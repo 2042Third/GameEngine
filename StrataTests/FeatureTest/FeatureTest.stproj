@@ -139,9 +139,9 @@
 		},
 		"Physics.Simulation": {
 			"Value": {
-				"ContactDampingRatio": 10,
-				"ContactHertz": 30,
-				"ContactPushSpeed": 3,
+				"ContactDampingRatio": 9,
+				"ContactHertz": 25,
+				"ContactPushSpeed": 2.5,
 				"ContactRecycleDistance": 0.04,
 				"SleepThreshold": 0.06
 			},
