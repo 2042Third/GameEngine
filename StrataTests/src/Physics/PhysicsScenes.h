@@ -103,6 +103,11 @@ namespace Strata::Tests
 		double MeanRecycledShare = 0.0;
 		double MaxSpeedAt5s = 0.0;        // m/s, the fastest body written back in the step at 5 s
 		double RestingJitterMm = 0.0;     // The mean of the steps' resting jitter between 5 and 10 s (steps that wrote bodies)
+		// box3d's contact storage at the end (PhysicsStats): the room the world reserved (MaxContactConstraints), the most
+		// contacts box3d held, and how often they grew its storage.
+		uint32_t ContactRoom = 0;
+		uint32_t ContactPeak = 0;
+		uint32_t ContactRoomGrowths = 0;
 		std::map<std::string, double> Probes;
 
 		nlohmann::json ToJson() const;

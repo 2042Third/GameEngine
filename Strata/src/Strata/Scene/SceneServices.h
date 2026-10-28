@@ -420,7 +420,9 @@ namespace Strata
 	struct PhysicsStepInfo
 	{
 		bool HasWorld = false;
-		bool DetailedStats = false;     // box3d's counters (islands, contacts) are read after every step; otherwise they are 0
+		// The step read box3d's counters (islands, contacts): detailed statistics were on for it. Otherwise they are 0, also
+		// right after detailed statistics were turned on, until a step ran with them.
+		bool DetailedStats = false;
 		float StepMs = 0.0f;            // The last step's wall time
 		float LibraryMs = 0.0f;         // box3d's own part of it
 		float StrataMs = 0.0f;          // Strata's part (StepMs - LibraryMs)
@@ -451,6 +453,8 @@ namespace Strata
 		// box3d counts them together with its memory, walking every island (see PhysicsWorld::SetDetailedStats). Main thread;
 		// applies from the next step, also to a world created later for the scene.
 		virtual void SetDetailedStats(bool detailed) = 0;
+		// Whether detailed statistics are asked for (SetDetailedStats), whether or not a step read them yet.
+		virtual bool IsDetailedStats() const = 0;
 	};
 
 	//////////////////////////////////////////////////////////////////////////

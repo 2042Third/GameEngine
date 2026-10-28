@@ -73,6 +73,8 @@ namespace Strata
 		constexpr float c_MaxBodyCoordinate = 1.0e5f;
 		// Solver sub-steps of each box3d step (box3d's recommended count).
 		constexpr int c_SolverSubSteps = 4;
+		// The fewest contacts box3d reserves room for, whatever its world definition asks (b3CreateWorld).
+		constexpr uint32_t c_LibraryMinContactRoom = 16;
 
 		// Warnings are issued once per entity and kind. The transient kinds are reset when the entity's body is built, so
 		// that a recurring problem is reported again.
@@ -894,9 +896,11 @@ namespace Strata
 		double TotalLibraryMs = 0.0;
 		PhysicsLibraryProfile LastProfile;
 		PhysicsLibraryCounters LastCounters;                          // While DetailedStats; RecycledContacts summed over the fixed step
+		bool LastCountersRead = false;                                // The last step read LastCounters (DetailedStats was on for it)
 		uint32_t ContactRoomGrowths = 0;
 		uint32_t NextContactRoom = 0;                                 // box3d's contact room until its next growth (see CountContactGrowth)
 		float LastContactGrowthStepMs = 0.0f;
+		float PreviousLibraryStepMs = 0.0f;                           // The library time of the last box3d step (see CountContactGrowth)
 		SettlingSums LastSettling;
 		uint32_t LastSyncedBodies = 0;
 		uint32_t LastCheckedPairs = 0;
@@ -4644,15 +4648,18 @@ namespace Strata
 			return data.Characters ? data.Characters->GetPresenceBody(entity) : b3_nullBodyId;
 		}
 
-		// Counts the steps after which box3d's peak of contacts (b3World_GetMaxCapacity) passed the contact room it had: the
-		// room it reserved when the world was created, doubled at each growth as box3d's arrays double.
-		void CountContactGrowth(PhysicsWorldData& data, const b3Capacity& held, float libraryTime)
+		// After each box3d step: counts the box3d steps whose contacts took box3d's peak (b3World_GetMaxCapacity) past the contact
+		// room it had, the room it reserved when the world was created, doubled at each growth as box3d's arrays double.
+		// box3d makes a step's new contacts in that step's pair update but adds them to the peak only at the start of its next
+		// step, so the peak read after a box3d step shows the contacts of the step before it: the growth is credited to that
+		// step (`previousLibraryTime`, its library time), one box3d step after it happened.
+		void CountContactGrowth(PhysicsWorldData& data, const b3Capacity& held, float previousLibraryTime)
 		{
 			const uint32_t peak = ToCount(held.contactCount);
 			if (peak <= data.NextContactRoom)
 				return;
 			data.ContactRoomGrowths++;
-			data.LastContactGrowthStepMs = libraryTime;
+			data.LastContactGrowthStepMs = previousLibraryTime;
 			while (data.NextContactRoom < peak && data.NextContactRoom < (1u << 31))
 				data.NextContactRoom = std::max(2 * data.NextContactRoom, 1u);
 		}
@@ -4705,7 +4712,7 @@ namespace Strata
 		// box3d's definition has no recycle distance; the bodies take the sleep threshold as they are made (MakeBodySetup and
 		// the presence bodies).
 		b3World_SetContactRecycleDistance(data.World, data.Settings.ContactRecycleDistance);
-		data.NextContactRoom = data.LibraryRoomContacts;
+		data.NextContactRoom = std::max(data.LibraryRoomContacts, c_LibraryMinContactRoom);
 
 		data.Characters = CreateScope<CharacterControllerSet>(scene, data.World, data.Settings);
 		ConnectSignals(data);
@@ -5011,9 +5018,12 @@ namespace Strata
 				b3World_Step(data.World, subStep, c_SolverSubSteps);
 			}
 			const Clock::time_point libraryEnd = Clock::now();
-			libraryTime += millisecondsBetween(libraryStart, libraryEnd);
+			const float stepLibraryTime = millisecondsBetween(libraryStart, libraryEnd);
+			libraryTime += stepLibraryTime;
 			data.HasStepped = true;
 			ReadLibraryStep(data, profile, counters);
+			CountContactGrowth(data, b3World_GetMaxCapacity(data.World), data.PreviousLibraryStepMs);
+			data.PreviousLibraryStepMs = stepLibraryTime;
 			const Clock::time_point eventsStart = Clock::now();
 			readTime += millisecondsBetween(libraryEnd, eventsStart);
 			ProcessStepEvents(data, step + 1 == steps);
@@ -5044,9 +5054,9 @@ namespace Strata
 			data.Demand.ContactConstraints = std::max(data.Demand.ContactConstraints, std::min(NextPowerOfTwo(static_cast<uint64_t>(held.contactCount)),
 				PhysicsCapacitySettings::c_MaxContactConstraintsLimit));
 		const Clock::time_point upkeepEnd = Clock::now();
-		CountContactGrowth(data, held, libraryTime);
 		data.LastProfile = profile;
 		data.LastCounters = counters;
+		data.LastCountersRead = data.DetailedStats;
 		const Clock::time_point endTime = Clock::now();
 
 		// ContactTime: the step loop beyond the library's steps and the instruments' reads (its part EventTime: the events
@@ -5553,7 +5563,7 @@ namespace Strata
 		const PhysicsStepInfo step = GetStepInfo();
 		stats.MovingBodyCount = data.MovingRecordBodies + data.PresenceBodies;
 		stats.SleepingBodyCount = step.SleepingBodies;
-		stats.DetailedStats = data.DetailedStats;
+		stats.DetailedStats = data.LastCountersRead;
 		stats.IslandCount = data.LastCounters.Islands;
 		stats.ContactCount = data.LastCounters.Contacts;
 		stats.AwakeContactCount = data.LastCounters.AwakeContacts;
@@ -5580,7 +5590,7 @@ namespace Strata
 		const PhysicsWorldData& data = *m_Data;
 		PhysicsStepInfo info;
 		info.HasWorld = true;
-		info.DetailedStats = data.DetailedStats;
+		info.DetailedStats = data.LastCountersRead;
 		info.StepMs = data.LastStepTime;
 		info.LibraryMs = data.LastLibraryTime;
 		info.StrataMs = std::max(data.LastStepTime - data.LastLibraryTime, 0.0f);

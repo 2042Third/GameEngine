@@ -220,8 +220,9 @@ namespace Strata
 		uint32_t MovingBodyCount = 0;
 		uint32_t SleepingBodyCount = 0;
 		// box3d's counters (see PhysicsLibraryCounters; RecycledContactCount summed over the fixed step's box3d steps), read
-		// after every box3d step only while DetailedStats is on (PhysicsWorld::SetDetailedStats: box3d counts them together with
-		// its memory, which walks every island); 0 otherwise.
+		// after every box3d step only while detailed statistics are on (PhysicsWorld::SetDetailedStats: box3d counts them
+		// together with its memory, which walks every island). DetailedStats: the last fixed step read them; otherwise they are
+		// 0, also right after detailed statistics were turned on, until a step ran with them.
 		bool DetailedStats = false;
 		uint32_t IslandCount = 0;
 		uint32_t ContactCount = 0;
@@ -230,8 +231,10 @@ namespace Strata
 		PhysicsLibraryProfile LibraryProfile; // box3d's stage times
 		uint32_t LibraryWorkers = 0;          // The workers box3d splits its stages for (b3World_GetWorkerCount)
 		// The most contacts box3d held at the start of a step so far (b3World_GetMaxCapacity: a peak, not its storage), the
-		// steps after which that peak passed the contact room box3d reserved or its next doubling (box3d's contact storage grew
-		// while playing), and the library time of the last such step.
+		// box3d steps whose new contacts took that peak past the contact room box3d reserved or its next doubling (box3d's
+		// contact storage grew while playing), and the library time of the last such step. box3d adds a step's contacts to its
+		// peak at the start of its next step, so a growth is counted after the step that follows it (one that the world's last
+		// step made is never counted).
 		uint32_t LibraryContactPeak = 0;
 		uint32_t ContactRoomGrowths = 0;
 		float LastContactGrowthStepMs = 0.0f;

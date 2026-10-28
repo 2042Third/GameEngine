@@ -177,6 +177,90 @@ TEST_SUITE("Physics.Instruments")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Contact storage growing past its room is counted and credited to the step that grew it")
+	{
+		// A room of 16 contacts and three stacks of 10 boxes on the ground, 3 m apart: 30 touching contacts.
+		Scene scene;
+		scene.GetSettings().PhysicsCapacity.MaxContactConstraints = 16;
+		CreateGround(scene);
+		const auto addStacks = [&scene](uint32_t first, uint32_t count)
+		{
+			for (uint32_t column = first; column < first + count; column++)
+				CreateStack(scene, 10, glm::vec3(static_cast<float>(column) * 3.0f - 9.0f, 0.0f, 0.0f));
+		};
+		addStacks(0, 3);
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+
+		// The first step makes the contacts, in its pair update; box3d adds them to its peak at the start of its next step.
+		StepScene(scene, 1);
+		const float firstStepMs = physics.GetStepInfo().LibraryMs;
+		CHECK(physics.GetStats().ContactRoomGrowths == 0);
+		StepScene(scene, 1);
+		PhysicsStats stats = physics.GetStats();
+		CHECK(stats.LibraryContactPeak > 16);
+		CHECK(stats.LibraryContactPeak <= 32);
+		CHECK(stats.ContactRoomGrowths == 1);
+		CHECK(stats.LastContactGrowthStepMs == firstStepMs); // Not the second step's, which grew nothing
+		StepScene(scene, 10);
+		CHECK(physics.GetStats().ContactRoomGrowths == 1);
+
+		// Three more stacks pass the doubled room (32): one more growth, credited to the step that made their contacts.
+		addStacks(3, 3);
+		StepScene(scene, 1);
+		const float spawnStepMs = physics.GetStepInfo().LibraryMs;
+		CHECK(physics.GetStats().ContactRoomGrowths == 1);
+		StepScene(scene, 1);
+		stats = physics.GetStats();
+		CHECK(stats.LibraryContactPeak > 32);
+		CHECK(stats.LibraryContactPeak <= 64);
+		CHECK(stats.ContactRoomGrowths == 2);
+		CHECK(stats.LastContactGrowthStepMs == spawnStepMs);
+		scene.OnRuntimeStop();
+
+		// box3d reserves room for at least 16 contacts whatever the world asks for: a stack of 10 grows nothing.
+		Scene small;
+		small.GetSettings().PhysicsCapacity.MaxContactConstraints = 4;
+		CreateGround(small);
+		CreateStack(small, 10);
+		small.OnRuntimeStart();
+		StepScene(small, 3);
+		CHECK(GetPhysics(small).GetStats().LibraryContactPeak >= 10);
+		CHECK(GetPhysics(small).GetStats().ContactRoomGrowths == 0);
+		small.OnRuntimeStop();
+	}
+
+	TEST_CASE("box3d's counters are reported as read only once a step read them")
+	{
+		Scene scene;
+		CreateGround(scene);
+		CreateStack(scene, 5);
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 2);
+
+		// Asked for but not read yet (a perf log's first row, a panel's first frame): the zeros are not counts.
+		physics.SetDetailedStats(true);
+		CHECK(physics.IsDetailedStats());
+		CHECK(physics.GetWorld()->IsDetailedStats());
+		CHECK_FALSE(physics.GetStepInfo().DetailedStats);
+		CHECK_FALSE(physics.GetStats().DetailedStats);
+		CHECK(physics.GetStepInfo().Contacts == 0);
+		StepScene(scene, 1);
+		CHECK(physics.GetStepInfo().DetailedStats);
+		CHECK(physics.GetStats().DetailedStats);
+		CHECK(physics.GetStepInfo().Contacts >= 5);
+
+		// Turned off: the last step's counters stand until a step runs without them.
+		physics.SetDetailedStats(false);
+		CHECK_FALSE(physics.IsDetailedStats());
+		CHECK(physics.GetStepInfo().DetailedStats);
+		StepScene(scene, 1);
+		CHECK_FALSE(physics.GetStepInfo().DetailedStats);
+		CHECK(physics.GetStepInfo().Contacts == 0);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("The moving bodies are counted as they come and go")
 	{
 		Scene scene;
@@ -377,12 +461,14 @@ TEST_SUITE("TestHelpers")
 		CHECK(summary["movingBodies"] == 20);
 		CHECK(summary["workers"].get<uint32_t>() <= 2);
 		for (const char* key : { "seconds", "secondsTo99Asleep", "secondsToAllAsleep", "stepMs", "libraryMs", "settleCpuMs", "busyStrataMs", "busyLibraryMs",
-			"busyCollideMs", "busySyncMs", "busyWriteBackMs", "busyRecycledShare", "meanRecycledShare", "maxSpeedAt5s", "restingJitterMm" })
+			"busyCollideMs", "busySyncMs", "busyWriteBackMs", "busyRecycledShare", "meanRecycledShare", "maxSpeedAt5s", "restingJitterMm",
+			"contactRoom", "contactPeak", "contactRoomGrowths" })
 		{
 			CAPTURE(key);
 			CHECK(summary[key].is_number());
 		}
 		CHECK(summary["stepMs"].get<double>() > 0.0);
+		CHECK(summary["contactPeak"].get<uint32_t>() >= 20); // 20 crates touching each other and the ground
 		CHECK(summary["probes"]["tower.topDriftMm"].is_number());
 
 		// What it refuses.

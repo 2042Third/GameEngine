@@ -276,7 +276,8 @@ namespace Strata
 		PhysicsStepInfo GetStepInfo() const;
 		// Whether box3d's counters (PhysicsLibraryCounters) are read after every box3d step. box3d counts them together with its
 		// memory, which walks every island and shared hull, so the world reads them only while asked to (the perf lab, the
-		// settle helper, a game run with a perf log); off, those fields of the stats are 0. Applies from the next step.
+		// settle helper, a game run with a perf log); off, those fields of the stats are 0. Applies from the next step: the
+		// stats' DetailedStats says whether the last step read them. IsDetailedStats: as asked.
 		void SetDetailedStats(bool detailed);
 		bool IsDetailedStats() const;
 		// box3d's counters as of its last step, read now (physics.stats {detail: true}): changes nothing. The recycled count

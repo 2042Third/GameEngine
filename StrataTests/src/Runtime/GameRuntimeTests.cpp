@@ -542,7 +542,10 @@ TEST_SUITE("Runtime.Game")
 			REQUIRE_MESSAGE(table, error);
 			return table->Rows[0];
 		};
-		writeRow();
+		// The first row: the scene's steps so far ran without the counters, so the contact columns stay empty, not 0.
+		const std::vector<double> first = writeRow();
+		CHECK(std::isnan(first[12]));
+		CHECK(std::isnan(first[13]));
 		for (uint32_t frame = 0; frame < 2; frame++)
 			game->Update(c_Frame);
 		const std::vector<double> values = writeRow();

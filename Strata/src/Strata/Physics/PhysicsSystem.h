@@ -177,6 +177,7 @@ namespace Strata
 
 		PhysicsStepInfo GetStepInfo() const override;
 		void SetDetailedStats(bool detailed) override;
+		bool IsDetailedStats() const override { return m_DetailedStats; }
 
 		// Where the running world's tuning comes from (DeveloperGuide "Physics simulation"): the project's Physics.Simulation
 		// section or the process defaults.

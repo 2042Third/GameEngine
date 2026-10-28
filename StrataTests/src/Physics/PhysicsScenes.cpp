@@ -625,6 +625,9 @@ namespace Strata::Tests
 			{ "meanRecycledShare", MeanRecycledShare },
 			{ "maxSpeedAt5s", MaxSpeedAt5s },
 			{ "restingJitterMm", RestingJitterMm },
+			{ "contactRoom", ContactRoom },
+			{ "contactPeak", ContactPeak },
+			{ "contactRoomGrowths", ContactRoomGrowths },
 			{ "probes", std::move(probes) } };
 	}
 
@@ -705,7 +708,11 @@ namespace Strata::Tests
 			summary.Steps++;
 		}
 		summary.Seconds = static_cast<double>(summary.Steps) * timestep;
-		summary.MovingBodies = physics.GetStats().MovingBodyCount;
+		const PhysicsStats last = physics.GetStats();
+		summary.MovingBodies = last.MovingBodyCount;
+		summary.ContactRoom = last.MaxContactConstraints;
+		summary.ContactPeak = last.LibraryContactPeak;
+		summary.ContactRoomGrowths = last.ContactRoomGrowths;
 		summary.MeanRecycledShare = awake > 0 ? static_cast<double>(recycled) / static_cast<double>(awake) : 0.0;
 		summary.RestingJitterMm = jitterSteps > 0 ? jitterSum / jitterSteps : 0.0;
 		const auto median = [](const std::vector<double>& values) { return values.empty() ? 0.0 : Perf::Summarize(values).MedianMs; };

@@ -1999,13 +1999,19 @@ that may not include the Physics module: the runtime's perf log, `editor.status`
   more than the rule's 0.5% of that scene's library step on the reference machine (43 us of 8.6 ms), so the world reads
   them after every box3d step only while detailed statistics are on
   (`IPhysicsDiagnostics::SetDetailedStats`: the perf lab, the settle helper, a game run with `--perf-log`), and they read 0
-  otherwise. `physics.stats {detail: true}` reads them once for its answer and turns nothing on. box3d resets its
+  otherwise; `PhysicsStats::DetailedStats` and `PhysicsStepInfo::DetailedStats` say whether the last step read them (not
+  yet right after they were turned on: the perf log's first row of a scene leaves their columns empty), and
+  `IPhysicsDiagnostics::IsDetailedStats` whether they are asked for. `physics.stats {detail: true}` reads them once for
+  its answer and turns nothing on. box3d resets its
   recycled count only in a collide pass, which runs only while some contact is awake: a box3d step after which no contact
   is awake counts 0 recycled, not the last pass's stale count. The awake contacts are counted after the step, so in a
   step where an island fell asleep the recycled ones can exceed them (their share is shown at most 100%).
 - **Contact storage.** `b3World_GetMaxCapacity` is the most contacts box3d held at a step's start (a peak, not its
-  storage); `ContactRoomGrowths` counts the steps after which the peak passed the contact room box3d reserved or its next
-  doubling: box3d's contact storage grew while playing.
+  storage); `ContactRoomGrowths` counts the box3d steps whose new contacts took the peak past the contact room box3d
+  reserved (at least 16 contacts) or its next doubling: box3d's contact storage grew while playing. box3d makes a step's
+  contacts in its pair update but adds them to the peak at the start of its next step, so the world reads the peak after
+  every box3d step and credits a growth to the step before (`LastContactGrowthStepMs`, that step's library time); a
+  growth in the world's last step is never counted.
 - **Settling** of the dynamic bodies a step wrote back: the fastest one's speed, those faster than the sleep threshold
   (`SettlingBodyCount`) and the RMS of the others' displacement in the step (`RestingJitter`, mm). The speed is a
   displacement over the fixed step, computed by `WritePose` before it overwrites the record's pose, and the sums are
