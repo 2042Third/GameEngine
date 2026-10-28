@@ -118,8 +118,8 @@ GPU time at 3840x2160 on an RTX 5090 (the medians of Strata's look-dev captures 
 | --- | --- |
 | Exposure, bloom, tone curve, color, vignette and dither together (`GPU.Post`) | about 0.18 ms without anti-aliasing (0.15 before 0.7.0) |
 | The same with FXAA, or with TAA's sharpening | about 0.21 ms, 0.22 ms |
-| Motion blur (`GPU.MotionBlur`, 12 samples), the camera turning 16 pixels a frame | about 0.53 ms |
-| Motion blur, the camera still | about 0.10 ms (it still reads every pixel) |
+| Motion blur (`GPU.MotionBlur`, 12 samples), the camera turning 16 pixels a frame | about 0.18 ms |
+| Motion blur, the camera still | about 0.11 ms (it still reads every pixel) |
 
 Off, motion blur costs nothing (no pass, no target, no motion vectors it would ask for).
 

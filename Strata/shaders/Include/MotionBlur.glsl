@@ -5,7 +5,7 @@
 
 // The motion blur's passes (PostProcess/MotionBlurTiles.comp, MotionBlurNeighbors.comp, MotionBlur.comp; SceneRendererPost.cpp,
 // RenderMotionBlur): the frame constants at b0 (Include/Scene.glsl: the camera's motion, the depth's view distance), the
-// parameters below as push constants. Every fetch is a point fetch (texelFetch), so no sampler is declared. SRV 0-3 alias
+// parameters below as push constants. Every fetch is a point fetch (texelFetch), so no sampler is declared. SRV 0-4 alias
 // Include/Scene.glsl's declarations, which these shaders never use, as Overlay/MotionView.frag's do.
 
 // RenderData::MotionBlurParameters (Renderer/PostProcessData.h).
@@ -37,16 +37,41 @@ vec2 GetBlurVelocity(vec2 velocityUV, float depth, vec2 uv)
 	return velocity * (kept / speed);
 }
 
-// The distance from the camera of what a pixel shows (the view's depth along its forward axis): the sky, where nothing was
-// drawn, lies infinitely far, held as c_MotionBlurSkyDistance.
-const float c_MotionBlurSkyDistance = 1.0e8;
+// The distance from the camera of what a pixel shows (the view's depth along its forward axis), at most
+// c_MotionBlurSkyDistance, the largest half float: the sky, where nothing was drawn, lies there (infinitely far).
+const float c_MotionBlurSkyDistance = 65504.0;
 
 float GetViewDistance(vec2 uv, float depth)
 {
 	if (depth <= 0.0)
 		return c_MotionBlurSkyDistance;
 	vec4 point = u_Frame.InverseProjection * vec4(UVToNDC(uv), depth, 1.0);
-	return max(-point.z / point.w, 1e-6);
+	return clamp(-point.z / point.w, 1e-4, c_MotionBlurSkyDistance);
+}
+
+// What the gather reads of every sample, written by the tile pass for every pixel (an r32ui target): the pixel's blur radius
+// (half its blur's length, at least half a pixel) and its view distance, as two half floats.
+uint PackBlurPixel(float radius, float viewDistance)
+{
+	return packHalf2x16(vec2(radius, viewDistance));
+}
+
+vec2 UnpackBlurPixel(uint packed)
+{
+	return unpackHalf2x16(packed);
+}
+
+float GetBlurRadius(vec2 velocity)
+{
+	return max(0.5 * length(velocity), 0.5);
+}
+
+// A neighborhood whose every blur lies within this many pixels of its largest (or 5% of its length) blurs as one surface
+// moving uniformly: MotionBlur.comp's gather then reads only colors, with the weights its depth-aware path gives samples of
+// one surface (a turning camera: every point moves alike on screen, whatever its depth).
+float GetUniformTolerance(float neighborLength)
+{
+	return max(0.5, 0.05 * neighborLength);
 }
 
 #endif

@@ -150,7 +150,9 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(1),
 			nvrhi::BindingLayoutItem::Texture_SRV(2),
 			nvrhi::BindingLayoutItem::Texture_SRV(3),
+			nvrhi::BindingLayoutItem::Texture_SRV(4),
 			nvrhi::BindingLayoutItem::Texture_UAV(0),
+			nvrhi::BindingLayoutItem::Texture_UAV(1),
 			nvrhi::BindingLayoutItem::PushConstants(1, sizeof(RenderData::MotionBlurParameters))
 		};
 		m_MotionBlurLayout = m_Device->createBindingLayout(motionBlurLayout);
@@ -288,6 +290,7 @@ namespace Strata
 		release(m_MotionBlurTexture);
 		release(m_MotionBlurTileMax);
 		release(m_MotionBlurNeighborMax);
+		release(m_MotionBlurPixels);
 		release(m_MotionBlurTilesSet);
 		release(m_MotionBlurNeighborsSet);
 		for (nvrhi::BindingSetHandle& set : m_MotionBlurGatherSets)
@@ -325,12 +328,12 @@ namespace Strata
 		const uint32_t height = m_ViewportSize.y;
 		if (!m_MotionBlurTexture)
 		{
-			auto createTarget = [&](uint32_t targetWidth, uint32_t targetHeight, const char* name)
+			auto createTarget = [&](uint32_t targetWidth, uint32_t targetHeight, const char* name, nvrhi::Format format = c_HDRFormat)
 			{
 				nvrhi::TextureDesc desc;
 				desc.width = std::max(targetWidth, 1u);
 				desc.height = std::max(targetHeight, 1u);
-				desc.format = c_HDRFormat;
+				desc.format = format;
 				desc.isUAV = true;
 				desc.debugName = m_Specification.DebugName + name;
 				desc.initialState = nvrhi::ResourceStates::ShaderResource;
@@ -342,25 +345,31 @@ namespace Strata
 			nvrhi::TextureHandle blurred = createTarget(width, height, ".MotionBlur");
 			nvrhi::TextureHandle tileMax = createTarget(tilesX, tilesY, ".MotionBlurTileMax");
 			nvrhi::TextureHandle neighborMax = createTarget(tilesX, tilesY, ".MotionBlurNeighborMax");
-			if (!blurred || !tileMax || !neighborMax || !m_VelocityTexture)
+			nvrhi::TextureHandle pixels = createTarget(width, height, ".MotionBlurPixels", nvrhi::Format::R32_UINT);
+			if (!blurred || !tileMax || !neighborMax || !pixels || !m_VelocityTexture)
 			{
 				m_Errors.Report(fmt::format("failed to create the motion blur's targets for a {}x{} viewport; drawing without motion blur", width, height));
 				return false;
 			}
-			// NVRHI binds every slot of a layout: a pass's sets fill the slots it does not read with textures it does not write.
+			// NVRHI binds every slot of a layout: a pass's sets fill the slots it does not read with textures it neither reads
+			// nor writes there, and the slots it does not write with targets the next pass writes anyway (the neighbor pass's
+			// UAV 1 is the gather's output, the gather's the tile maxima), so no target changes state for nothing.
 			const nvrhi::BindingSetItem pushConstants = nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::MotionBlurParameters));
 			nvrhi::BindingSetDesc tiles;
 			tiles.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer), nvrhi::BindingSetItem::Texture_SRV(0, m_VelocityTexture),
 				nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture), nvrhi::BindingSetItem::Texture_SRV(2, neighborMax),
-				nvrhi::BindingSetItem::Texture_SRV(3, m_HDRTexture), nvrhi::BindingSetItem::Texture_UAV(0, tileMax), pushConstants };
+				nvrhi::BindingSetItem::Texture_SRV(3, m_HDRTexture), nvrhi::BindingSetItem::Texture_SRV(4, m_HDRTexture),
+				nvrhi::BindingSetItem::Texture_UAV(0, tileMax), nvrhi::BindingSetItem::Texture_UAV(1, pixels), pushConstants };
 			nvrhi::BindingSetDesc neighbors;
 			neighbors.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer), nvrhi::BindingSetItem::Texture_SRV(0, m_VelocityTexture),
 				nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture), nvrhi::BindingSetItem::Texture_SRV(2, tileMax),
-				nvrhi::BindingSetItem::Texture_SRV(3, m_HDRTexture), nvrhi::BindingSetItem::Texture_UAV(0, neighborMax), pushConstants };
+				nvrhi::BindingSetItem::Texture_SRV(3, m_HDRTexture), nvrhi::BindingSetItem::Texture_SRV(4, pixels),
+				nvrhi::BindingSetItem::Texture_UAV(0, neighborMax), nvrhi::BindingSetItem::Texture_UAV(1, blurred), pushConstants };
 			nvrhi::BindingSetDesc gather;
 			gather.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer), nvrhi::BindingSetItem::Texture_SRV(0, m_VelocityTexture),
 				nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture), nvrhi::BindingSetItem::Texture_SRV(2, neighborMax),
-				nvrhi::BindingSetItem::Texture_SRV(3, m_HDRTexture), nvrhi::BindingSetItem::Texture_UAV(0, blurred), pushConstants };
+				nvrhi::BindingSetItem::Texture_SRV(3, m_HDRTexture), nvrhi::BindingSetItem::Texture_SRV(4, pixels),
+				nvrhi::BindingSetItem::Texture_UAV(0, blurred), nvrhi::BindingSetItem::Texture_UAV(1, tileMax), pushConstants };
 			// The motion blur's output as the post source, as the HDR target's sets (CreatePostTargets).
 			nvrhi::BindingSetDesc exposure;
 			exposure.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, blurred), nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_HistogramBuffer),
@@ -388,6 +397,7 @@ namespace Strata
 			m_MotionBlurTexture = std::move(blurred);
 			m_MotionBlurTileMax = std::move(tileMax);
 			m_MotionBlurNeighborMax = std::move(neighborMax);
+			m_MotionBlurPixels = std::move(pixels);
 			m_MotionBlurTilesSet = std::move(tilesSet);
 			m_MotionBlurNeighborsSet = std::move(neighborsSet);
 			m_MotionBlurGatherSets[0] = std::move(gatherSet);
@@ -403,7 +413,8 @@ namespace Strata
 			nvrhi::BindingSetDesc gather;
 			gather.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer), nvrhi::BindingSetItem::Texture_SRV(0, m_VelocityTexture),
 				nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture), nvrhi::BindingSetItem::Texture_SRV(2, m_MotionBlurNeighborMax),
-				nvrhi::BindingSetItem::Texture_SRV(3, m_HistoryTextures[index]), nvrhi::BindingSetItem::Texture_UAV(0, m_MotionBlurTexture),
+				nvrhi::BindingSetItem::Texture_SRV(3, m_HistoryTextures[index]), nvrhi::BindingSetItem::Texture_SRV(4, m_MotionBlurPixels),
+				nvrhi::BindingSetItem::Texture_UAV(0, m_MotionBlurTexture), nvrhi::BindingSetItem::Texture_UAV(1, m_MotionBlurTileMax),
 				nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::MotionBlurParameters)) };
 			m_MotionBlurGatherSets[1 + index] = m_Device->createBindingSet(gather, m_MotionBlurLayout);
 			if (!m_MotionBlurGatherSets[1 + index])
