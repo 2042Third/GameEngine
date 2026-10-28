@@ -2037,6 +2037,13 @@ that may not include the Physics module: the runtime's perf log, `editor.status`
   The write-back is about three fifths of Strata's part, and box3d's solve three quarters of its own (at 70,000 boxes its
   constraints 8.2 ms, transforms 3.0, refit 0.8). Once the stacks stand box3d recycles 96.7% of the awake contacts at its
   5 cm.
+- **The write-back after wave 7's step 4.** Timed in its parts at 70,000 boxes, the write-back above spent 2.8 ms on the
+  main thread listing the moved bodies (a cache miss per body on its record), 0.8-1.0 ms fetching their components, 2.4-2.7
+  ms writing the poses in parallel and about 1 ms telling the scene and handling outcomes. The main thread now only lists
+  the bodies; reading records and components joined the parallel writes, and bodies below static parents are written in
+  parallel too (`WriteBackDynamicBodies`). An interleaved A/B of five pairs (the settle helper's busy-phase medians, same
+  machine and load) measured the write-back 7.03 -> 3.82 ms and Strata's step 11.06 -> 7.73 ms at 70,000 boxes, 2.60 -> 1.37
+  and 5.15 -> 3.72 ms at 30,000 with the floor tracked, and 0.49 -> 0.29 and 0.70 -> 0.53 ms at 10,000.
 
 ### Settling and the sweep
 

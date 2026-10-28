@@ -617,6 +617,8 @@ namespace Strata::Tests
 			{ "busyStrataMs", BusyStrataMs },
 			{ "busyLibraryMs", BusyLibraryMs },
 			{ "busyCollideMs", BusyCollideMs },
+			{ "busySyncMs", BusySyncMs },
+			{ "busyWriteBackMs", BusyWriteBackMs },
 			{ "busyRecycledShare", BusyRecycledShare },
 			{ "meanRecycledShare", MeanRecycledShare },
 			{ "maxSpeedAt5s", MaxSpeedAt5s },
@@ -649,6 +651,8 @@ namespace Strata::Tests
 		std::vector<double> busyStrata;
 		std::vector<double> busyLibrary;
 		std::vector<double> busyCollide;
+		std::vector<double> busySync;
+		std::vector<double> busyWriteBack;
 		uint64_t busyRecycled = 0;
 		uint64_t busyAwake = 0;
 		uint64_t recycled = 0;
@@ -676,6 +680,8 @@ namespace Strata::Tests
 				busyStrata.push_back(static_cast<double>(stats.LastStepTime) - stats.LibraryStepTime);
 				busyLibrary.push_back(stats.LibraryStepTime);
 				busyCollide.push_back(stats.LibraryProfile.Collide);
+				busySync.push_back(stats.SyncTime);
+				busyWriteBack.push_back(stats.WriteBackTime);
 				busyRecycled += stats.RecycledContactCount;
 				busyAwake += stats.AwakeContactCount;
 			}
@@ -704,6 +710,8 @@ namespace Strata::Tests
 		summary.BusyStrataMs = median(busyStrata);
 		summary.BusyLibraryMs = median(busyLibrary);
 		summary.BusyCollideMs = median(busyCollide);
+		summary.BusySyncMs = median(busySync);
+		summary.BusyWriteBackMs = median(busyWriteBack);
 		summary.BusyRecycledShare = busyAwake > 0 ? static_cast<double>(busyRecycled) / static_cast<double>(busyAwake) : 0.0;
 		scene.OnRuntimeStop();
 		return summary;

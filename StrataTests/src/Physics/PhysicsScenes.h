@@ -91,10 +91,13 @@ namespace Strata::Tests
 		double LibraryMs = 0.0;
 		double SettleCpuMs = 0.0;
 		// The busy phase as the perf lab measures it (the medians of steps 5 to 44): Strata's and the library's step, box3d's
-		// collide stage, and the recycled share of the awake contacts over those steps.
+		// collide stage, two of Strata's parts (PhysicsStats::SyncTime and WriteBackTime), and the recycled share of the awake
+		// contacts over those steps.
 		double BusyStrataMs = 0.0;
 		double BusyLibraryMs = 0.0;
 		double BusyCollideMs = 0.0;
+		double BusySyncMs = 0.0;
+		double BusyWriteBackMs = 0.0;
 		double BusyRecycledShare = 0.0;
 		// Recycled contacts over awake contacts, summed over the whole run.
 		double MeanRecycledShare = 0.0;

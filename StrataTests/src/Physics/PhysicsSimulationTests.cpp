@@ -59,6 +59,54 @@ namespace
 		return poses;
 	}
 
+	// Hundreds of bodies falling at once, so that the write-back runs in parallel chunks when a job system runs: roots,
+	// bodies below a turned and scaled static parent, below a parent moved before every step (its cached world transform is
+	// not current while the step writes, so the main thread writes those) and nested bodies below dynamic ones. Returns every
+	// entity's local pose in hierarchy order, and the most bodies a step wrote back.
+	std::vector<BodyPose> SimulateParentedCrowd(uint32_t& outMostWritten)
+	{
+		Scene scene("Crowd");
+		CreateGround(scene);
+		Entity turned = scene.CreateEntity("Turned");
+		turned.GetTransform().Translation = glm::vec3(0.0f, 1.0f, 0.0f);
+		turned.GetTransform().Rotation = glm::angleAxis(0.5f, glm::vec3(0.0f, 1.0f, 0.0f));
+		turned.GetTransform().Scale = glm::vec3(1.25f);
+		Entity drifting = scene.CreateEntity("Drifting");
+		Entity carrier;
+		for (int index = 0; index < 640; index++)
+		{
+			const glm::vec3 position(static_cast<float>(index % 32) * 1.5f - 24.0f, 1.0f + static_cast<float>(index % 3) * 0.5f, static_cast<float>(index / 32) * 1.5f - 15.0f);
+			Entity body = CreateDynamicBox(scene, "Body", position, glm::vec3(0.3f));
+			switch (index % 5)
+			{
+				case 1: scene.SetParent(body, turned); break;
+				case 2: scene.SetParent(body, drifting); break;
+				case 3: carrier = body; break;
+				case 4: scene.SetParent(body, carrier); break;
+				default: break;
+			}
+		}
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		outMostWritten = 0;
+		for (uint32_t step = 0; step < 60; step++)
+		{
+			drifting.GetTransform().Translation.x += 0.001f;
+			drifting.MarkModified<TransformComponent>();
+			scene.OnUpdateRuntime(scene.GetSettings().FixedTimestep);
+			outMostWritten = std::max(outMostWritten, physics.GetStats().WrittenBodyCount);
+		}
+
+		std::vector<BodyPose> poses;
+		for (Entity entity : scene.GetEntitiesInHierarchyOrder())
+		{
+			const TransformComponent& transform = entity.GetComponent<TransformComponent>();
+			poses.push_back({ transform.Translation, transform.Rotation });
+		}
+		return poses;
+	}
+
 	bool AreIdentical(const std::vector<BodyPose>& a, const std::vector<BodyPose>& b)
 	{
 		if (a.size() != b.size())
@@ -788,6 +836,20 @@ TEST_SUITE("Physics.Simulation")
 		ScopedJobSystem jobSystem(3);
 		const std::vector<BodyPose> threaded = SimulatePile();
 		CHECK(AreIdentical(first, threaded));
+	}
+
+	TEST_CASE("Parented and nested bodies are written back alike on one thread and on several")
+	{
+		uint32_t serialWritten = 0;
+		const std::vector<BodyPose> serial = SimulateParentedCrowd(serialWritten);
+		ScopedJobSystem jobSystem(3);
+		uint32_t threadedWritten = 0;
+		const std::vector<BodyPose> threaded = SimulateParentedCrowd(threadedWritten);
+		// Enough bodies moved for the write-back's parallel chunks (from 512 writes).
+		CHECK(serialWritten == 640);
+		CHECK(threadedWritten == 640);
+		CHECK(serial.size() == 643);
+		CHECK(AreIdentical(serial, threaded));
 	}
 
 	TEST_CASE("Moving a body wakes the bodies resting on it")

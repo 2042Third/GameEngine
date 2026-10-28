@@ -377,7 +377,7 @@ TEST_SUITE("TestHelpers")
 		CHECK(summary["movingBodies"] == 20);
 		CHECK(summary["workers"].get<uint32_t>() <= 2);
 		for (const char* key : { "seconds", "secondsTo99Asleep", "secondsToAllAsleep", "stepMs", "libraryMs", "settleCpuMs", "busyStrataMs", "busyLibraryMs",
-			"busyCollideMs", "busyRecycledShare", "meanRecycledShare", "maxSpeedAt5s", "restingJitterMm" })
+			"busyCollideMs", "busySyncMs", "busyWriteBackMs", "busyRecycledShare", "meanRecycledShare", "maxSpeedAt5s", "restingJitterMm" })
 		{
 			CAPTURE(key);
 			CHECK(summary[key].is_number());

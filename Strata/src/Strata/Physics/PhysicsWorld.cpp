@@ -555,17 +555,19 @@ namespace Strata
 			BodyRecord* Record = nullptr;
 		};
 
-		// A dynamic body whose simulated pose is written to its entity in parallel with the others: one without a dynamic
-		// ancestor written in the same step, so its parent's world transform is known before the writes start (see
-		// WriteBackDynamicBodies). Each item touches only its own record and transform.
+		// A body box3d moved in the step, whose simulated pose is written to its entity if it is a dynamic body in the simulation
+		// (see WriteBackDynamicBodies). Items are written in parallel; each touches only its own record and transform. Kept
+		// small: the write-back walks the list several times, and a busy world moves tens of thousands of bodies a step.
 		struct PoseWrite
 		{
 			BodyRecord* Record = nullptr;
 			entt::entity Handle = entt::null;
 			TransformComponent* Transform = nullptr;
-			glm::mat4 ParentWorld = glm::mat4(1.0f); // Identity for a root
+			bool Skipped = false;   // Nothing to write here: not a dynamic body in the simulation, nested, or suspended
 			bool HasParent = false;
 			bool HasChildren = false;
+			bool Deferred = false;  // Its parent's world transform is not current or not invertible: handled on the main thread
+			bool Nested = false;    // Below a body written in this step: written after it, on the main thread
 			// Outcome, handled on the main thread afterwards, in order
 			bool Written = false;
 			bool NonFinite = false;
@@ -910,6 +912,7 @@ namespace Strata
 		std::vector<std::pair<uint32_t, entt::entity>> NestedWrites;  // Depth and entity of dynamic bodies below written ones
 		std::vector<PoseWrite> PoseWrites;                            // See WriteBackDynamicBodies
 		std::vector<entt::entity> WrittenEntities;
+		std::vector<entt::entity> WrittenParents;                     // Written bodies with children (their descendants follow)
 		// Ordering scratch of the write-back: a bit per body index (grown with the slots, all clear between steps) and the
 		// words of it that bits were set in during this step.
 		std::vector<uint64_t> MovedBodyBits;
@@ -4032,13 +4035,13 @@ namespace Strata
 				ST_CORE_ERROR("Physics: the simulation produced a non-finite pose for '{}'; its transform is not updated", Entity(handle, data.OwnerScene).GetName());
 		}
 
-		// Writes one body's simulated pose to its entity, given its parent's world transform. The entity keeps its own scale:
-		// the pose is composed with its world scale as of the last synchronization (the shape's within tolerance), or its
-		// current one if it was edited without a signal while the body slept, in which case the shape is rebuilt before the
-		// next step (ScaleChanged). Reads only its body (box3d's getters do not change the world) and writes only its record
-		// and transform, so it may run on worker threads for distinct bodies. A written body's displacement since its last
-		// synchronization joins `settling`.
-		void WritePose(PoseWrite& item, SettlingSums& settling, float inverseTimestep, float sleepThreshold)
+		// Writes one body's simulated pose to its entity, given its parent's world transform (null for a root). The entity keeps
+		// its own scale: the pose is composed with its world scale as of the last synchronization (the shape's within
+		// tolerance), or its current one if it was edited without a signal while the body slept, in which case the shape is
+		// rebuilt before the next step (ScaleChanged). Reads only its body (box3d's getters do not change the world) and writes
+		// only its record and transform, so it may run on worker threads for distinct bodies. A written body's displacement
+		// since its last synchronization joins `settling`.
+		void WritePose(PoseWrite& item, const glm::mat4* parentWorld, SettlingSums& settling, float inverseTimestep, float sleepThreshold)
 		{
 			BodyRecord& record = *item.Record;
 			glm::vec3 position;
@@ -4052,7 +4055,7 @@ namespace Strata
 
 			// The same products as Scene::GetWorldTransform and UpdateWorldTransforms, so that LastWorldTransform equals the
 			// matrix the scene will cache (the next step compares them).
-			const glm::mat4 currentWorld = item.HasParent ? item.ParentWorld * item.Transform->GetTransform() : item.Transform->GetTransform();
+			const glm::mat4 currentWorld = parentWorld ? *parentWorld * item.Transform->GetTransform() : item.Transform->GetTransform();
 			glm::vec3 worldScale = record.WorldScale;
 			if (currentWorld != record.LastWorldTransform)
 			{
@@ -4065,9 +4068,9 @@ namespace Strata
 			}
 
 			const glm::mat4 pose = Math::ComposeTransform(position, glm::normalize(rotation), worldScale);
-			if (!SetLocalPose(*item.Transform, item.HasParent ? glm::inverse(item.ParentWorld) * pose : pose))
+			if (!SetLocalPose(*item.Transform, parentWorld ? glm::inverse(*parentWorld) * pose : pose))
 				return;
-			record.LastWorldTransform = item.HasParent ? item.ParentWorld * item.Transform->GetTransform() : item.Transform->GetTransform();
+			record.LastWorldTransform = parentWorld ? *parentWorld * item.Transform->GetTransform() : item.Transform->GetTransform();
 			record.WorldScale = worldScale;
 			item.Written = true;
 			settling.Add(displacement, inverseTimestep, sleepThreshold);
@@ -4076,14 +4079,20 @@ namespace Strata
 		// Writes the poses of the dynamic bodies that moved in the step (box3d's move events, those that fell asleep included)
 		// to their entities.
 		//
-		// Bodies without a dynamic ancestor written in this step (nearly all of them: roots, and bodies below static or
-		// kinematic parents) are written in parallel chunks on the job system, with their parents' world transforms read
-		// before the writes start; each touches only its own record and transform, through pointers fetched beforehand, never
-		// the registry. The scene is then told about every written transform in one batch (Scene::MarkTransformsChanged),
-		// and the rare cases (scale edits, non-finite poses, failed writes, descendants to update) are handled in body order
-		// on the main thread. Dynamic bodies below written ones (nested dynamics) follow, one by one, parents before
-		// children, so that every child's local transform is computed against its parent's final pose. How the written bodies
-		// settle over the fixed step of `timestep` seconds becomes PhysicsWorldData::LastSettling.
+		// The main thread only lists the moved bodies in body order; the rest of the per-body work runs in parallel chunks on
+		// the job system when many moved (a busy world moves tens of thousands a step). First every listed body that is a
+		// dynamic body in the simulation is marked written and, if it has no parent (nearly all bodies), written; then the
+		// bodies with a parent and no dynamic ancestor written in this step (bodies below static or kinematic parents) are
+		// written against their parent's world transform, read with Scene::FindCurrentWorldTransform (which only reads the
+		// scene: no thread changes the hierarchy or the cached matrices meanwhile, the writes touch only TransformComponents).
+		// Each item touches only its own record and transform, through storages fetched beforehand on the main thread. A
+		// parent whose cached transform is not current, or cannot be inverted (the body leaves the simulation), is handled on
+		// the main thread in body order. The scene is then told about every written transform in one batch
+		// (Scene::MarkTransformsChanged), and the rare cases (scale edits, non-finite poses, failed writes, descendants to
+		// update) are handled in body order on the main thread. Dynamic bodies below written ones (nested dynamics) follow,
+		// one by one, parents before children, so that every child's local transform is computed against its parent's final
+		// pose. So the results do not depend on the number of threads. How the written bodies settle over the fixed step of
+		// `timestep` seconds becomes PhysicsWorldData::LastSettling.
 		void WriteBackDynamicBodies(PhysicsWorldData& data, float timestep)
 		{
 			ST_PROFILE_FUNCTION();
@@ -4096,13 +4105,14 @@ namespace Strata
 
 			// The bodies that moved, in body index order, each once: their bits were set in a bitmap over the body indices
 			// (MarkMoved), and only the words that got bits are sorted, read and cleared again, so the ordering costs what
-			// moved, not the world's size.
+			// moved, not the world's size. Their records are not read here: that is a cache miss per body, left to the jobs.
 			std::vector<uint64_t>& movedBits = data.MovedBodyBits;
 			std::vector<uint32_t>& movedWords = data.MovedBodyWords;
 			std::sort(movedWords.begin(), movedWords.end());
 			data.LastOrderedSlots = static_cast<uint32_t>(movedWords.size() * 64);
 
 			data.WriteBackPass++;
+			const uint64_t pass = data.WriteBackPass;
 			std::vector<PoseWrite>& writes = data.PoseWrites;
 			writes.clear();
 			for (const uint32_t word : movedWords)
@@ -4111,83 +4121,152 @@ namespace Strata
 				for (uint64_t bits = wordBits; bits != 0; bits &= bits - 1)
 				{
 					const BodySlot& slot = data.BodySlots[size_t(word) * 64 + static_cast<size_t>(std::countr_zero(bits))];
-					BodyRecord* record = slot.Record;
-					if (!slot.Used || !record || record->Type != RigidBodyType::Dynamic || !record->InSimulation)
-						continue;
-					record->WriteBackPass = data.WriteBackPass;
-					writes.push_back(PoseWrite { record, slot.Entity });
+					if (slot.Used && slot.Record)
+						writes.push_back(PoseWrite { slot.Record, slot.Entity });
 				}
 			}
 			movedWords.clear();
-			data.LastWrittenBodies = static_cast<uint32_t>(writes.size());
 
-			// Bodies below another body written in this step wait for its pose (nested dynamics, serial); the others get their
-			// transform and their parent's world transform now.
-			std::vector<std::pair<uint32_t, entt::entity>>& nested = data.NestedWrites;
-			nested.clear();
-			const auto isWrittenAbove = [&](Entity entity)
-			{
-				for (Entity ancestor = entity.GetParent(); ancestor.IsValid(); ancestor = ancestor.GetParent())
-				{
-					const BodyRecord* record = FindRecord(data, ancestor.GetHandle());
-					if (record && record->WriteBackPass == data.WriteBackPass)
-						return true;
-				}
-				return false;
-			};
-			size_t kept = 0;
-			for (PoseWrite& write : writes)
-			{
-				const Entity entity(write.Handle, &scene);
-				const HierarchyComponent& node = registry.get<HierarchyComponent>(write.Handle);
-				write.Transform = &registry.get<TransformComponent>(write.Handle);
-				write.HasChildren = node.FirstChild != entt::null;
-				write.HasParent = node.Parent != entt::null;
-				if (write.HasParent)
-				{
-					if (isWrittenAbove(entity))
-					{
-						nested.emplace_back(scene.GetDepth(entity), write.Handle);
-						continue;
-					}
-					write.ParentWorld = scene.GetWorldTransform(Entity(node.Parent, &scene));
-					if (!IsInvertible(write.ParentWorld))
-					{
-						SuspendUnwritableBody(data, write.Handle, *write.Record);
-						continue;
-					}
-				}
-				writes[kept++] = write;
-			}
-			writes.resize(kept);
-
-			// The writes: in parallel chunks when there are many.
-			constexpr size_t c_ParallelWriteThreshold = 512;
+			// registry.storage may create a storage, which only the main thread may do; the jobs only read these two (and the
+			// records, the scene's cached matrices and box3d's bodies) and write the items' own records and transforms.
+			auto& hierarchies = registry.storage<HierarchyComponent>();
+			auto& transforms = registry.storage<TransformComponent>();
 			const uint32_t count = static_cast<uint32_t>(writes.size());
-			if (count >= c_ParallelWriteThreshold && JobSystem::IsInitialized())
+			constexpr uint32_t c_ParallelWriteThreshold = 512;
+			const bool parallel = count >= c_ParallelWriteThreshold && JobSystem::IsInitialized();
+			std::mutex settlingMutex;
+			std::atomic<uint32_t> dynamicCount = 0;
+			std::atomic<uint32_t> parentedCount = 0;
+			std::atomic<uint32_t> deferredCount = 0;
+			const auto forEachChunk = [&](const auto& visit)
 			{
-				const uint32_t batchSize = std::max<uint32_t>(64, count / ((JobSystem::GetWorkerThreadCount() + 1) * 4));
-				std::mutex settlingMutex;
-				JobSystem::ParallelFor(count, batchSize, [&](uint32_t begin, uint32_t end)
+				const auto chunk = [&](uint32_t begin, uint32_t end)
 				{
-					SettlingSums batch;
-					for (uint32_t index = begin; index < end; index++)
-						WritePose(writes[index], batch, inverseTimestep, sleepThreshold);
+					SettlingSums sums;
+					visit(begin, end, sums);
 					std::scoped_lock<std::mutex> lock(settlingMutex);
-					settling.Merge(batch);
+					settling.Merge(sums);
+				};
+				if (parallel)
+					JobSystem::ParallelFor(count, std::max<uint32_t>(64, count / ((JobSystem::GetWorkerThreadCount() + 1) * 4)), chunk);
+				else
+					chunk(0, count);
+			};
+
+			// The dynamic bodies are marked written (every mark is set before any body's ancestors are looked at below), and
+			// those without a parent written.
+			forEachChunk([&](uint32_t begin, uint32_t end, SettlingSums& sums)
+			{
+				uint32_t dynamic = 0;
+				uint32_t parented = 0;
+				for (uint32_t index = begin; index < end; index++)
+				{
+					PoseWrite& write = writes[index];
+					BodyRecord& record = *write.Record;
+					if (record.Type != RigidBodyType::Dynamic || !record.InSimulation)
+					{
+						write.Skipped = true;
+						continue;
+					}
+					dynamic++;
+					record.WriteBackPass = pass;
+					const HierarchyComponent& node = hierarchies.get(write.Handle);
+					write.Transform = &transforms.get(write.Handle);
+					write.HasChildren = node.FirstChild != entt::null;
+					write.HasParent = node.Parent != entt::null;
+					if (write.HasParent)
+						parented++;
+					else
+						WritePose(write, nullptr, sums, inverseTimestep, sleepThreshold);
+				}
+				dynamicCount.fetch_add(dynamic, std::memory_order_relaxed);
+				parentedCount.fetch_add(parented, std::memory_order_relaxed);
+			});
+			data.LastWrittenBodies = dynamicCount.load(std::memory_order_relaxed);
+
+			// The bodies with a parent: those below a body written in this step wait for it (nested), the others are written
+			// against their parent's current world transform, or left to the main thread when it is not current or cannot be
+			// inverted.
+			if (parentedCount.load(std::memory_order_relaxed) > 0)
+			{
+				const auto isWrittenAbove = [&](entt::entity handle)
+				{
+					entt::entity ancestor = hierarchies.get(handle).Parent;
+					while (ancestor != entt::null)
+					{
+						const BodyRecord* record = FindRecord(data, ancestor);
+						if (record && record->WriteBackPass == pass)
+							return true;
+						if (!hierarchies.contains(ancestor))
+							break;
+						ancestor = hierarchies.get(ancestor).Parent;
+					}
+					return false;
+				};
+				forEachChunk([&](uint32_t begin, uint32_t end, SettlingSums& sums)
+				{
+					uint32_t deferred = 0;
+					for (uint32_t index = begin; index < end; index++)
+					{
+						PoseWrite& write = writes[index];
+						if (write.Skipped || !write.HasParent)
+							continue;
+						if (isWrittenAbove(write.Handle))
+						{
+							write.Nested = true;
+							write.Skipped = true;
+							deferred++;
+							continue;
+						}
+						const glm::mat4* parentWorld = scene.FindCurrentWorldTransform(hierarchies.get(write.Handle).Parent);
+						if (!parentWorld || !IsInvertible(*parentWorld))
+						{
+							write.Deferred = true;
+							deferred++;
+							continue;
+						}
+						WritePose(write, parentWorld, sums, inverseTimestep, sleepThreshold);
+					}
+					deferredCount.fetch_add(deferred, std::memory_order_relaxed);
 				});
 			}
-			else
+
+			// What the jobs left to the main thread, in body order: nested bodies wait for their written ancestors (below),
+			// bodies whose parent's world transform is not cached are written against the one the scene computes, and bodies
+			// whose parent cannot be inverted leave the simulation.
+			std::vector<std::pair<uint32_t, entt::entity>>& nested = data.NestedWrites;
+			nested.clear();
+			if (deferredCount.load(std::memory_order_relaxed) > 0)
 			{
 				for (PoseWrite& write : writes)
-					WritePose(write, settling, inverseTimestep, sleepThreshold);
+				{
+					if (write.Nested)
+					{
+						nested.emplace_back(scene.GetDepth(Entity(write.Handle, &scene)), write.Handle);
+						continue;
+					}
+					if (!write.Deferred)
+						continue;
+					const glm::mat4 parentWorld = scene.GetWorldTransform(Entity(hierarchies.get(write.Handle).Parent, &scene));
+					if (!IsInvertible(parentWorld))
+					{
+						SuspendUnwritableBody(data, write.Handle, *write.Record);
+						write.Skipped = true;
+						continue;
+					}
+					WritePose(write, &parentWorld, settling, inverseTimestep, sleepThreshold);
+				}
 			}
 
 			// The outcomes, in body order on the main thread.
 			std::vector<entt::entity>& written = data.WrittenEntities;
 			written.clear();
+			std::vector<entt::entity>& movedParents = data.WrittenParents;
+			movedParents.clear();
 			for (PoseWrite& write : writes)
 			{
+				if (write.Skipped)
+					continue;
 				if (write.NonFinite)
 				{
 					WarnNonFinitePose(data, write.Handle, *write.Record);
@@ -4196,16 +4275,19 @@ namespace Strata
 				if (write.ScaleChanged)
 					data.OwnerRefreshes.Add(write.Handle);
 				if (write.Written)
+				{
 					written.push_back(write.Handle);
+					if (write.HasChildren)
+						movedParents.push_back(write.Handle);
+				}
 				else
+				{
 					SuspendUnwritableBody(data, write.Handle, *write.Record);
+				}
 			}
 			scene.MarkTransformsChanged(written);
-			for (const PoseWrite& write : writes)
-			{
-				if (write.Written && write.HasChildren)
-					UpdateDescendantsOfMovedBody(data, Entity(write.Handle, &scene), true);
-			}
+			for (const entt::entity handle : movedParents)
+				UpdateDescendantsOfMovedBody(data, Entity(handle, &scene), true);
 
 			// Nested dynamics: by depth, then by entity (deterministic, parents first), each against its parent's new pose.
 			std::sort(nested.begin(), nested.end());
