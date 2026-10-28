@@ -7,10 +7,15 @@
 // The shadows debug view over the finished image (SceneRenderOptions::ShowShadowView): every receiver pixel colored by the
 // screen pixels one shadow texel of its cascade spans there (Include/ShadowView.glsl), from Colors[0] at one pixel per texel
 // or finer through Colors[1] at two to Colors[2] at four or coarser, linear in stops. Where a texel spans more than about 1.4
-// pixels a checker of the shadow map's texels shows them; cascade edges are white and blend bands hatched. The pass cannot
-// read the image it blends over: pixels no cascade covers get a gray veil, the sky the image darkened.
+// pixels a checker of the shadow map's texels shows them; the colors darken with the sun's shadow (0.4 + 0.6 times the
+// visibility of the frame's screen-space mask), so the view shows where the shadows fall on the texels; cascade edges are
+// white and blend bands hatched. The pass cannot read the image it blends over: pixels no cascade covers get a gray veil,
+// the sky the image darkened.
 
 layout(set = 0, binding = ST_SRV(22)) uniform texture2D u_Depth;
+// The sun's screen-space shadow mask (SceneRenderer::GetBoundScreenShadows: white without one), red the visibility's square
+// root.
+layout(set = 0, binding = ST_SRV(23)) uniform texture2D u_ShadowMask;
 
 layout(push_constant) uniform ShadowViewParameters
 {
@@ -57,6 +62,9 @@ void main()
 
 	if (viewSample.BlendWeight > 0.0 && ((pixel.x + pixel.y) & 7) < 2)
 		color *= 0.6;
+
+	float visibility = texelFetch(u_ShadowMask, pixel, 0).r;
+	color *= 0.4 + 0.6 * visibility * visibility;
 
 	// Where the right or the lower neighbor is a receiver of another cascade (not at silhouettes against the sky or pixels no
 	// cascade covers).

@@ -3685,7 +3685,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   shadows audit's numbers. About 1 or less is as fine as the screen; 2.2 at every split was 0.6.0's 2048-texel cascades at
   2160 rows. `Include/ShadowView.glsl` computes it once for both users: `Overlay/ShadowView.frag` colors receivers
   (green at most 1, yellow 2, red 4 and more, linear in stops; a checker of the texels where they span more than about
-  1.4 pixels; white cascade edges; hatched blend bands; a gray veil where no cascade covers a surface, the sky darkened),
+  1.4 pixels; darkened by the sun's shadow, 0.4 + 0.6 times the visibility of the frame's mask at SRV 23 (white without
+  one), so the view shows where the shadows fall on the texels; white cascade edges; hatched blend bands; a gray veil
+  where no cascade covers a surface, the sky darkened),
   and `Debug/ShadowViewStats.comp` counts every pixel as sky, uncovered surface or a cascade's bin of an eighth of a stop
   over [1/16, 16) pixels per texel (`RenderData::ShadowViewCounts`, 1,040 bytes, shared-memory counts flushed with one
   atomic add per non-empty entry and group). Both run in `GPU.Overlays` with the overlays' frame constants, and only in

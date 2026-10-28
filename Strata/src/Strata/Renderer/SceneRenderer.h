@@ -2269,6 +2269,7 @@ namespace Strata
 		nvrhi::BindingLayoutHandle m_ShadowViewLayout;
 		nvrhi::GraphicsPipelineHandle m_ShadowViewPipeline;
 		nvrhi::BindingSetHandle m_ShadowViewBindingSet;
+		nvrhi::ITexture* m_ShadowViewBoundMask = nullptr; // The sun's shadow mask (or white) m_ShadowViewBindingSet names
 		nvrhi::BindingLayoutHandle m_ShadowViewCountLayout;
 		nvrhi::ComputePipelineHandle m_ShadowViewCountPipeline;
 		nvrhi::BindingSetHandle m_ShadowViewCountBindingSet;

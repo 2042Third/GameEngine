@@ -28,6 +28,7 @@ namespace Strata
 				nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
 				nvrhi::BindingLayoutItem::StructuredBuffer_SRV(17), // The cascades (Include/Scene.glsl)
 				nvrhi::BindingLayoutItem::Texture_SRV(22),          // The depth
+				nvrhi::BindingLayoutItem::Texture_SRV(23),          // The sun's shadow mask, or white
 				// Slot 1: register b0 belongs to the frame constants.
 				nvrhi::BindingLayoutItem::PushConstants(1, sizeof(RenderData::ShadowViewParameters))
 			};
@@ -90,16 +91,21 @@ namespace Strata
 			m_ShadowViewCountBuffer = std::move(buffer);
 			m_ShadowViewCountBindingSet = nullptr; // Names the buffer
 		}
-		if (!m_ShadowViewBindingSet || !m_ShadowViewCountBindingSet)
+		// The view darkens its colors by the sun's shadow: the frame's mask, made by the first frame with a shadowed sun (white
+		// before; without a shadowed sun the view reads no pixel of it).
+		nvrhi::ITexture* mask = GetBoundScreenShadows();
+		if (!m_ShadowViewBindingSet || !m_ShadowViewCountBindingSet || m_ShadowViewBoundMask != mask)
 		{
 			nvrhi::BindingSetDesc desc;
 			desc.bindings = {
 				nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(17, m_CascadeBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(22, m_DepthTexture),
+				nvrhi::BindingSetItem::Texture_SRV(23, mask),
 				nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::ShadowViewParameters))
 			};
 			m_ShadowViewBindingSet = m_Device->createBindingSet(desc, m_ShadowViewLayout);
+			m_ShadowViewBoundMask = mask;
 			nvrhi::BindingSetDesc countDesc;
 			countDesc.bindings = {
 				nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
@@ -112,6 +118,7 @@ namespace Strata
 			{
 				m_ShadowViewBindingSet = nullptr;
 				m_ShadowViewCountBindingSet = nullptr;
+				m_ShadowViewBoundMask = nullptr;
 				m_Errors.Report("failed to create the shadows debug view's bindings");
 				return false;
 			}

@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <optional>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
@@ -200,6 +201,56 @@ TEST_SUITE("GPU.SceneRenderer.ShadowView")
 				CHECK(std::abs(floorView[channel] - static_cast<int>(std::lround(floorPlain[channel] * 0.35 + 0.25 * 0.65 * 255.0))) <= 1);
 			}
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The shadows view darkens its colors where the sun's shadow falls")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		ShadowViewScene view;
+		// A 2 m box 8 m ahead and 1 m to the right, whose shadow falls on the floor beside it, toward -X and -Z.
+		Entity box = AddMesh(view.SceneData, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(1.0f, 1.0f, -8.0f), "Box");
+		box.GetComponent<TransformComponent>().Scale = glm::vec3(2.0f);
+		SceneRendererSpecification specification = ShadowViewSpecification(GPUDrivenMode::Off);
+		specification.FitShadowsToView = false; // Frames are compared pixel by pixel: the same cascades in each
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(c_ViewSize, c_ViewSize);
+		const auto render = [&](bool boxCasts)
+		{
+			box.GetComponent<MeshRendererComponent>().CastShadows = boxCasts;
+			box.MarkModified<MeshRendererComponent>();
+			const ReadbackImage image = RenderToImage(renderer, view.SceneData, view.Camera);
+			return std::make_pair(image, RenderShadowView(renderer, view.SceneData, view.Camera));
+		};
+		const auto [shadowed, shadowedView] = render(true);
+		const auto [unshadowed, unshadowedView] = render(false);
+
+		// The floor pixels the box's shadow darkens in the image keep their color in the view with it at about 0.4 (0.4 + 0.6
+		// times their visibility squared; edges are white either way).
+		uint32_t inShadow = 0;
+		double ratioSum = 0.0;
+		for (uint32_t y = 0; y < c_ViewSize; y++)
+		{
+			for (uint32_t x = 0; x < c_ViewSize; x++)
+			{
+				const glm::ivec4 lit = PixelAt(unshadowed, x, y);
+				const glm::ivec4 dark = PixelAt(shadowed, x, y);
+				const glm::ivec4 litView = PixelAt(unshadowedView, x, y);
+				const glm::ivec4 darkView = PixelAt(shadowedView, x, y);
+				const int litSum = lit.r + lit.g + lit.b;
+				const int litViewSum = litView.r + litView.g + litView.b;
+				if (litSum > 30 && dark.r + dark.g + dark.b < litSum / 3 && litViewSum > 30 && litViewSum < 3 * 255)
+				{
+					inShadow++;
+					ratioSum += static_cast<double>(darkView.r + darkView.g + darkView.b) / litViewSum;
+				}
+			}
+		}
+		REQUIRE(inShadow > 100);
+		CAPTURE(inShadow);
+		CHECK(ratioSum / inShadow <= 0.45);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
