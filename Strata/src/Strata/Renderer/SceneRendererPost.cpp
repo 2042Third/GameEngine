@@ -1014,7 +1014,7 @@ namespace Strata
 	}
 
 	bool SceneRenderer::RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const SceneRenderOptions& options, PostSource source,
-		std::optional<float> keyReferenceLog2, std::optional<glm::vec2> sunUV)
+		std::optional<float> keyReferenceLog2, std::optional<glm::vec2> sunUV, bool& degraded)
 	{
 		commandList->beginMarker("Exposure");
 		nvrhi::IBindingSet* exposureSet = SelectPostSet(source, m_ExposureBindingSet, m_TemporalExposureSets, m_DepthOfFieldExposureSet, m_MotionBlurExposureSet);
@@ -1036,7 +1036,8 @@ namespace Strata
 		if (flare && levels >= 2)
 		{
 			commandList->beginMarker("LensFlare");
-			RenderLensFlare(commandList, keyReferenceLog2, sunUV);
+			if (!RenderLensFlare(commandList, keyReferenceLog2, sunUV))
+				degraded = true; // Drawn without lens flares; EnsureLensFlareResources reported why
 			commandList->endMarker();
 		}
 		if (bloom)
@@ -1183,8 +1184,9 @@ namespace Strata
 		return m_TonemapInputSet;
 	}
 
-	void SceneRenderer::RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
-		bool resolved, PostSource source, bool bloom, const glm::vec2& vignetteTangents, uint32_t grainSeed, nvrhi::ITexture* colorLookup, nvrhi::IFramebuffer* output)
+	bool SceneRenderer::RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
+		bool resolved, PostSource source, bool bloom, const glm::vec2& vignetteTangents, uint32_t grainSeed, nvrhi::ITexture* colorLookup, nvrhi::IFramebuffer* output,
+		bool& degraded)
 	{
 		// Tone mapping into the display target, or into the intermediate target FXAA reads.
 		RenderData::TonemapConstants tonemap = {};
@@ -1222,7 +1224,10 @@ namespace Strata
 		nvrhi::ITexture* lensFlare = m_Stats.LensFlare ? m_LensFlareTexture.Get() : nullptr;
 		nvrhi::IBindingSet* inputSet = GetTonemapInputSet(commandList, colorLookup, lensFlare);
 		if (!inputSet)
-			return;
+			return false;
+		// GetTonemapInputSet reported it when it bound the dummies instead.
+		if ((colorLookup && m_TonemapInputLookup != colorLookup) || (lensFlare && m_TonemapInputFlare != lensFlare))
+			degraded = true;
 		if (colorLookup && m_TonemapInputLookup == colorLookup)
 		{
 			tonemap.ColorLookupIntensity = unit(postProcess.ColorLookupIntensity);
@@ -1238,7 +1243,10 @@ namespace Strata
 		// FXAA or morphological anti-aliasing unless the image was resolved temporally (FXAA also when the morphological one's
 		// resources cannot be made).
 		const bool antiAliased = postProcess.AntiAliasing && !resolved;
-		const bool morphological = antiAliased && postProcess.AntiAliasingMethod == AntiAliasingMode::Morphological && EnsureMorphologicalResources(commandList);
+		const bool morphologicalWanted = antiAliased && postProcess.AntiAliasingMethod == AntiAliasingMode::Morphological;
+		const bool morphological = morphologicalWanted && EnsureMorphologicalResources(commandList);
+		if (morphologicalWanted && !morphological)
+			degraded = true; // Drawn with FXAA; EnsureMorphologicalResources reported why
 		const bool fxaa = antiAliased && !morphological;
 		nvrhi::IFramebuffer* tonemapTarget = fxaa || morphological ? m_LDRFramebuffer.Get() : output;
 		// The last pass that writes the display image dithers it, once: FXAA's or the morphological blend when one follows (the
@@ -1279,6 +1287,7 @@ namespace Strata
 				&parameters, sizeof(parameters));
 			commandList->endMarker();
 		}
+		return true;
 	}
 
 	PostProcessMath::ColorGrading SceneRenderer::GetColorGrading(const PostProcessComponent& postProcess)
