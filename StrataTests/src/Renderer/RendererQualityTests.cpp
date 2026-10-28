@@ -6,13 +6,19 @@
 #include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/SceneRenderer.h"
 
+#include "Renderer/QualityTestModel.h"
+
 #include <nlohmann/json.hpp>
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
+#include <vector>
 
 using namespace Strata;
 
@@ -62,6 +68,56 @@ namespace
 			REQUIRE_MESSAGE(Values.Set(RendererQuality::c_SectionId, value, Registry, &error), error);
 		}
 	};
+
+	// A valid value of the field other than `avoid` (the other bound, option or boolean).
+	nlohmann::json OtherValue(const SettingsField& field, const nlohmann::json& avoid)
+	{
+		switch (field.Type)
+		{
+			case SettingsFieldType::Bool:
+				return !(avoid.is_boolean() && avoid.get<bool>());
+			case SettingsFieldType::Int:
+				return avoid == nlohmann::json(static_cast<int64_t>(field.Min)) ? static_cast<int64_t>(field.Max) : static_cast<int64_t>(field.Min);
+			case SettingsFieldType::Float:
+				return avoid == nlohmann::json(field.Min) ? field.Max : field.Min;
+			case SettingsFieldType::Enum:
+				for (const std::string& option : field.Options)
+				{
+					if (avoid != nlohmann::json(option))
+						return option;
+				}
+				break;
+			case SettingsFieldType::String:
+			case SettingsFieldType::Asset:
+				break;
+		}
+		FAIL("Renderer.Quality's field '" << field.Name << "' has no other value");
+		return nullptr;
+	}
+
+	// The section's validated value.
+	nlohmann::json ValidValue(const SettingsSection& section, const nlohmann::json& value)
+	{
+		std::string error;
+		std::optional<nlohmann::json> valid = section.Validate(value, section.Version, &error);
+		REQUIRE_MESSAGE(valid.has_value(), error);
+		return std::move(*valid);
+	}
+
+	// Mebibytes of the rows' memory for a preset's settings at an output size.
+	uint64_t MemoryMiB(const RendererQualitySettings& settings, glm::uvec2 output, std::string_view field)
+	{
+		for (const RendererQuality::RowTraits& row : RendererQuality::GetRowTraits())
+		{
+			if (row.Field == field)
+			{
+				REQUIRE(row.MemoryBytes != nullptr);
+				return row.MemoryBytes(settings, output) >> 20;
+			}
+		}
+		FAIL("No row " << std::string(field));
+		return 0;
+	}
 
 }
 
@@ -307,5 +363,190 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(clamped.LODErrorPixels == 8.0f);
 		CHECK(clamped.MinProjectedPixels == 0.5f);
 		CHECK(RendererQuality::Clamp(RendererQualitySettings {}) == RendererQualitySettings {});
+	}
+
+	TEST_CASE("Every field but Preset has a row, and every row a field")
+	{
+		// A later row's field without its traits line (RendererQuality.cpp's c_RowTraits) fails here.
+		const SettingsSection section = RendererQuality::MakeSection();
+		const std::span<const RendererQuality::RowTraits> rows = RendererQuality::GetRowTraits();
+		REQUIRE(section.Fields.size() == rows.size() + 1);
+		CHECK(section.Fields.front().Name == "Preset");
+		for (size_t index = 0; index < rows.size(); index++)
+		{
+			CAPTURE(index);
+			CHECK(rows[index].Field == section.Fields[index + 1].Name);
+		}
+		const RendererQuality::OptionModel model = RendererQuality::GetOptionModel(section);
+		CHECK(RendererQuality::FindRow("Preset", model) == nullptr);
+		CHECK(RendererQuality::FindRow("NoSuchRow", model) == nullptr);
+		const RendererQuality::RowTraits* row = RendererQuality::FindRow("shadowresolution", model);
+		REQUIRE(row != nullptr);
+		CHECK(row->Field == "ShadowResolution");
+		CHECK(row->GPUStage == "GPU.Shadows");
+		REQUIRE(model.PresetValues.size() == c_RendererQualityPresetCount);
+		for (size_t index = 0; index < c_RendererQualityPresetCount; index++)
+			CHECK(model.PresetValues[index] == RendererQuality::ToSectionValue(RendererQuality::GetPreset(c_Presets[index])));
+	}
+
+	TEST_CASE("Renderer.Quality's fields are graphics options")
+	{
+		// What the script host offers players: Bool, Int, Float and Enum fields only.
+		for (const SettingsField& field : RendererQuality::MakeSection().Fields)
+		{
+			CAPTURE(field.Name);
+			CHECK((field.Type == SettingsFieldType::Bool || field.Type == SettingsFieldType::Int || field.Type == SettingsFieldType::Float
+				|| field.Type == SettingsFieldType::Enum));
+		}
+	}
+
+	TEST_CASE("Presets round-trip through Custom")
+	{
+		// Every named preset can be written as Custom fields (what AutoFine exists for), and a switch to Custom keeps its look.
+		const SettingsSection section = RendererQuality::MakeSection();
+		const RendererQuality::OptionModel model = RendererQuality::GetOptionModel(section);
+		for (const RendererQualityPreset preset : c_Presets)
+		{
+			CAPTURE(RendererQuality::PresetToString(preset));
+			const nlohmann::json value = ValidValue(section, { { "Preset", RendererQuality::PresetToString(preset) } });
+			const nlohmann::json custom = RendererQuality::MakeCustomStart(value, model);
+			CHECK(custom["Preset"] == "Custom");
+			CHECK(section.Validate(custom, section.Version).has_value());
+			const RendererQualitySettings settings = RendererQuality::FromSectionValue(&custom);
+			const RendererQualitySettings expected = RendererQuality::GetPreset(preset);
+			CHECK(settings.Preset == RendererQualityPreset::Custom);
+			CHECK(settings.HasSameKnobs(expected));
+			for (const uint32_t rows : { 720u, 1439u, 1440u, 2160u, 4320u })
+			{
+				CAPTURE(rows);
+				CHECK(RendererQuality::ResolveShadowMapSize(settings.ShadowResolution, rows) == RendererQuality::ResolveShadowMapSize(expected.ShadowResolution, rows));
+			}
+		}
+	}
+
+	TEST_CASE("Normalize spells out a named preset and changes nothing it decides")
+	{
+		const SettingsSection section = RendererQuality::MakeSection();
+		const RendererQuality::OptionModel model = RendererQuality::GetOptionModel(section);
+		std::vector<nlohmann::json> values;
+		for (const RendererQualityPreset preset : c_Presets)
+			values.push_back(ValidValue(section, { { "Preset", RendererQuality::PresetToString(preset) }, { "ShadowCascades", 2 } }));
+		values.push_back(ValidValue(section, { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LODErrorPixels", 1.5 } }));
+		for (const nlohmann::json& value : values)
+		{
+			CAPTURE(value.dump());
+			const nlohmann::json normalized = RendererQuality::Normalize(value, model);
+			CHECK(RendererQuality::FromSectionValue(&normalized).HasSameKnobs(RendererQuality::FromSectionValue(&value)));
+			CHECK(RendererQuality::FromSectionValue(&normalized).Preset == RendererQuality::FromSectionValue(&value).Preset);
+			CHECK(RendererQuality::Normalize(normalized, model) == normalized);
+			CHECK(section.Validate(normalized, section.Version).has_value());
+			const std::optional<RendererQualityPreset> preset = RendererQuality::PresetFromString(value["Preset"].get<std::string>());
+			REQUIRE(preset.has_value());
+			for (const RendererQuality::RowTraits& row : model.Rows)
+			{
+				CAPTURE(std::string(row.Field));
+				const std::string field(row.Field);
+				if (*preset == RendererQualityPreset::Custom)
+					CHECK(normalized[field] == value[field]);
+				else if (row.FollowsPreset)
+					CHECK(normalized[field] == model.PresetValues[static_cast<size_t>(*preset)][field]);
+			}
+		}
+		// A value without some fields gets them at their defaults.
+		nlohmann::json expected = section.GetDefault();
+		expected["Preset"] = "Custom";
+		CHECK(RendererQuality::Normalize({ { "Preset", "Custom" } }, model) == expected);
+	}
+
+	TEST_CASE("Custom keeps a tuning and otherwise starts from the look in effect")
+	{
+		const SettingsSection section = RendererQuality::MakeSection();
+		const RendererQuality::OptionModel model = RendererQuality::GetOptionModel(section);
+		const nlohmann::json& low = model.PresetValues[static_cast<size_t>(RendererQualityPreset::Low)];
+		const nlohmann::json& ultra = model.PresetValues[static_cast<size_t>(RendererQualityPreset::Ultra)];
+		const auto expectLow = [&](const nlohmann::json& start)
+		{
+			nlohmann::json expected = low;
+			expected["Preset"] = "Custom";
+			CHECK(start == expected);
+		};
+
+		// The rows at their defaults (nobody tuned them) under Low: Low's look.
+		expectLow(RendererQuality::MakeCustomStart(ValidValue(section, { { "Preset", "Low" } }), model));
+		// The rows at another preset's values (an earlier start) under Low: Low's look again.
+		nlohmann::json ultraRows = ultra;
+		ultraRows["Preset"] = "Low";
+		expectLow(RendererQuality::MakeCustomStart(ValidValue(section, ultraRows), model));
+
+		// One tuned row: the stored rows are someone's tuning, all kept.
+		const nlohmann::json tuned = ValidValue(section, { { "Preset", "Low" }, { "ShadowCascades", 2 } });
+		nlohmann::json expected = tuned;
+		expected["Preset"] = "Custom";
+		CHECK(RendererQuality::MakeCustomStart(tuned, model) == expected);
+		// Under Custom nothing but the label changes.
+		CHECK(RendererQuality::MakeCustomStart(expected, model) == expected);
+	}
+
+	TEST_CASE("Rows that do not follow the preset keep their values in Normalize and Custom's start")
+	{
+		const Tests::QualityTestModel test;
+		const RendererQuality::OptionModel model = test.GetModel();
+		const nlohmann::json value = ValidValue(test.Section, { { "Preset", "Low" }, { "Detail", 7 }, { "Comfort", false } });
+		CHECK(RendererQuality::Normalize(value, model) == nlohmann::json { { "Preset", "Low" }, { "Detail", 1 }, { "Comfort", false } });
+		// Detail 7 is a tuning (neither the default 3 nor a preset's 1 to 4): kept, with the comfort row.
+		CHECK(RendererQuality::MakeCustomStart(value, model) == nlohmann::json { { "Preset", "Custom" }, { "Detail", 7 }, { "Comfort", false } });
+		const nlohmann::json untuned = ValidValue(test.Section, { { "Preset", "Ultra" }, { "Comfort", false } });
+		CHECK(RendererQuality::MakeCustomStart(untuned, model) == nlohmann::json { { "Preset", "Custom" }, { "Detail", 4 }, { "Comfort", false } });
+	}
+
+	TEST_CASE("Rows that do not follow the preset are read under every preset")
+	{
+		// A players' comfort row (FollowsPreset false) is read from the value under every preset (its line in
+		// FromSectionValue's last block); a row that follows the preset is the preset's whatever the value holds.
+		const SettingsSection section = RendererQuality::MakeSection();
+		const RendererQuality::OptionModel model = RendererQuality::GetOptionModel(section);
+		for (size_t presetIndex = 0; presetIndex < c_RendererQualityPresetCount; presetIndex++)
+		{
+			const nlohmann::json& presetValue = model.PresetValues[presetIndex];
+			for (size_t fieldIndex = 1; fieldIndex < section.Fields.size(); fieldIndex++)
+			{
+				const SettingsField& field = section.Fields[fieldIndex];
+				const RendererQuality::RowTraits* row = RendererQuality::FindRow(field.Name, model);
+				REQUIRE(row != nullptr);
+				CAPTURE(presetIndex);
+				CAPTURE(field.Name);
+				// A value other than the default and other than the preset's.
+				nlohmann::json other = OtherValue(field, field.Default);
+				if (other == presetValue[field.Name])
+					other = OtherValue(field, other);
+				const nlohmann::json value = ValidValue(section, { { "Preset", RendererQuality::PresetToString(c_Presets[presetIndex]) }, { field.Name, other } });
+				const nlohmann::json read = RendererQuality::ToSectionValue(RendererQuality::FromSectionValue(&value));
+				if (row->FollowsPreset)
+					CHECK(read[field.Name] == presetValue[field.Name]);
+				else
+					CHECK(read[field.Name] == other);
+			}
+		}
+	}
+
+	TEST_CASE("Memory estimates")
+	{
+		// Cascades: cascades x size^2 x 4 bytes (D32), Auto resolved by the output's rows; the local atlas: size^2 x 4.
+		const RendererQualitySettings medium = RendererQuality::GetPreset(RendererQualityPreset::Medium);
+		const RendererQualitySettings high = RendererQuality::GetPreset(RendererQualityPreset::High);
+		const RendererQualitySettings ultra = RendererQuality::GetPreset(RendererQualityPreset::Ultra);
+		CHECK(MemoryMiB(high, { 3840, 2160 }, "ShadowResolution") == 256);
+		CHECK(MemoryMiB(high, { 3840, 2160 }, "LocalShadowAtlasSize") == 64);
+		CHECK(MemoryMiB(high, { 1920, 1080 }, "ShadowResolution") == 64);
+		CHECK(MemoryMiB(ultra, { 3840, 2160 }, "ShadowResolution") == 1024);
+		CHECK(MemoryMiB(ultra, { 3840, 2160 }, "LocalShadowAtlasSize") == 256);
+		CHECK(MemoryMiB(medium, { 1920, 1080 }, "ShadowResolution") == 64);
+		CHECK(MemoryMiB(medium, { 1920, 1080 }, "LocalShadowAtlasSize") == 64);
+		// The rows that allocate nothing of their own have no estimate.
+		for (const RendererQuality::RowTraits& row : RendererQuality::GetRowTraits())
+		{
+			CAPTURE(std::string(row.Field));
+			CHECK((row.MemoryBytes != nullptr) == (row.Field == "ShadowResolution" || row.Field == "LocalShadowAtlasSize"));
+		}
 	}
 }

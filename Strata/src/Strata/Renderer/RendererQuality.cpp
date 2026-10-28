@@ -39,6 +39,32 @@ namespace Strata
 		constexpr PresetRow<float> c_LODErrorPixelsRow = { 2.0f, 1.0f, 1.0f, 0.5f };
 		constexpr PresetRow<float> c_MinProjectedPixelsRow = { 1.0f, 0.5f, 0.5f, 0.25f };
 
+		// GPU memory of the rows that allocate (RowTraits::MemoryBytes), as the renderer makes the resources.
+		uint64_t CascadeBytes(const RendererQualitySettings& settings, glm::uvec2 output)
+		{
+			// A D32 layer per cascade, of the size the output's rows resolve Auto and AutoFine to.
+			const uint64_t size = RendererQuality::ResolveShadowMapSize(settings.ShadowResolution, output.y);
+			return static_cast<uint64_t>(settings.ShadowCascades) * size * size * 4;
+		}
+
+		uint64_t LocalShadowAtlasBytes(const RendererQualitySettings& settings, glm::uvec2)
+		{
+			// The point and spot lights' D32 atlas (SceneRendererLocalShadows.cpp).
+			const uint64_t size = settings.LocalShadowAtlasSize;
+			return size * size * 4;
+		}
+
+		// What graphics options know of each field but Preset, in field order: one line per row, beside its PresetRow line.
+		constexpr RendererQuality::RowTraits c_RowTraits[] = {
+			{ "ShadowResolution", true, "GPU.Shadows", &CascadeBytes },
+			{ "ShadowCascades", true, "GPU.Shadows", nullptr }, // Counted with ShadowResolution
+			{ "LocalShadowAtlasSize", true, "GPU.Shadows", &LocalShadowAtlasBytes },
+			{ "LocalShadowMaxTile", true, "GPU.Shadows", nullptr },
+			{ "MaxShadowedLocalLights", true, "GPU.Shadows", nullptr },
+			{ "LODErrorPixels", true, "GPU.Opaque", nullptr },
+			{ "MinProjectedPixels", true, "GPU.Opaque", nullptr },
+		};
+
 		constexpr uint32_t c_MinLocalShadowAtlasSize = 512;
 		constexpr uint32_t c_MaxLocalShadowAtlasSize = 8192;
 		constexpr uint32_t c_MinLocalShadowTile = 128;
@@ -155,6 +181,49 @@ namespace Strata
 			for (const uint32_t size : sizes)
 				options.push_back(std::to_string(size));
 			return options;
+		}
+
+		// The value with a member for every field of the model's section (absent ones at their defaults).
+		nlohmann::json WithEveryField(const nlohmann::json& value, const RendererQuality::OptionModel& model)
+		{
+			nlohmann::json result = value.is_object() ? value : nlohmann::json::object();
+			if (!model.Section)
+				return result;
+			for (const SettingsField& field : model.Section->Fields)
+			{
+				if (!result.contains(field.Name))
+					result[field.Name] = field.Default;
+			}
+			return result;
+		}
+
+		// The named preset a value is under (nullopt under Custom, or without a readable Preset), and its values in the model
+		// (null when the model has none for it).
+		const nlohmann::json* FindNamedPresetValue(const nlohmann::json& value, const RendererQuality::OptionModel& model)
+		{
+			const nlohmann::json* member = JsonUtils::Find(value, "Preset");
+			if (!member || !member->is_string())
+				return nullptr;
+			const std::optional<RendererQualityPreset> preset = RendererQuality::PresetFromString(member->get_ref<const std::string&>());
+			if (!preset || *preset == RendererQualityPreset::Custom)
+				return nullptr;
+			const size_t index = static_cast<size_t>(*preset);
+			return index < model.PresetValues.size() ? &model.PresetValues[index] : nullptr;
+		}
+
+		// Whether every row that follows the preset has the same value in `a` and `b` (a member missing from either differs).
+		bool HaveSameFollowingRows(const nlohmann::json& a, const nlohmann::json& b, const RendererQuality::OptionModel& model)
+		{
+			for (const RendererQuality::RowTraits& row : model.Rows)
+			{
+				if (!row.FollowsPreset)
+					continue;
+				const nlohmann::json* left = JsonUtils::Find(a, row.Field);
+				const nlohmann::json* right = JsonUtils::Find(b, row.Field);
+				if (!left || !right || *left != *right)
+					return false;
+			}
+			return true;
 		}
 
 	}
@@ -381,6 +450,72 @@ namespace Strata
 			s_Cache.Valid = true;
 			s_Cache.SettingsVersion = version;
 			return s_Cache.Quality;
+		}
+
+		std::span<const RowTraits> GetRowTraits()
+		{
+			return c_RowTraits;
+		}
+
+		std::span<const nlohmann::json> GetPresetValues()
+		{
+			static const std::array<nlohmann::json, c_RendererQualityPresetCount> s_Values = []()
+			{
+				std::array<nlohmann::json, c_RendererQualityPresetCount> values;
+				for (size_t index = 0; index < c_RendererQualityPresetCount; index++)
+					values[index] = ToSectionValue(GetPreset(static_cast<RendererQualityPreset>(index)));
+				return values;
+			}();
+			return s_Values;
+		}
+
+		OptionModel GetOptionModel(const SettingsSection& section)
+		{
+			OptionModel model;
+			model.Section = &section;
+			model.Rows = GetRowTraits();
+			model.PresetValues = GetPresetValues();
+			return model;
+		}
+
+		const RowTraits* FindRow(std::string_view field, const OptionModel& model)
+		{
+			for (const RowTraits& row : model.Rows)
+			{
+				if (EqualsIgnoringCase(row.Field, field))
+					return &row;
+			}
+			return nullptr;
+		}
+
+		nlohmann::json Normalize(const nlohmann::json& value, const OptionModel& model)
+		{
+			nlohmann::json result = WithEveryField(value, model);
+			const nlohmann::json* presetValue = FindNamedPresetValue(result, model);
+			if (!presetValue)
+				return result;
+			// Under a named preset the rows that follow it are the preset's, whatever is stored for them.
+			for (const RowTraits& row : model.Rows)
+			{
+				if (!row.FollowsPreset)
+					continue;
+				if (const nlohmann::json* member = JsonUtils::Find(*presetValue, row.Field))
+					result[std::string(row.Field)] = *member;
+			}
+			return result;
+		}
+
+		nlohmann::json MakeCustomStart(const nlohmann::json& value, const OptionModel& model)
+		{
+			const nlohmann::json stored = WithEveryField(value, model);
+			// Rows that hold the defaults or a preset's values were not tuned (nobody chose them, or a preset's look was the
+			// start): Custom starts from the look in effect. Anything else is someone's tuning, kept.
+			bool tuned = model.Section && !HaveSameFollowingRows(stored, model.Section->GetDefault(), model);
+			for (const nlohmann::json& presetValue : model.PresetValues)
+				tuned = tuned && !HaveSameFollowingRows(stored, presetValue, model);
+			nlohmann::json result = tuned ? stored : Normalize(stored, model);
+			result["Preset"] = PresetToString(RendererQualityPreset::Custom);
+			return result;
 		}
 
 	}

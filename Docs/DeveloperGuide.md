@@ -3150,9 +3150,25 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `RendererQuality.cpp`, a line in `GetPreset`, `FromSectionValue` and `ToSectionValue`, a field of the section
   described for agents (its default High's value), `Clamp`'s line, its use in the renderer (both draw paths, and every
   cache that must notice it), a check of its column in `Renderer.Quality`'s first case, a non-default Custom value in
-  `FeatureTest.stproj`, and its cost in the table above. `HasSameKnobs` and `renderStats.quality` need no line. Each
-  landing that adds rows raises `RendererQuality::c_SectionVersion` by one (an integrator renumbers when two streams
-  chose the same); values stored at an older version read the new fields' defaults.
+  `FeatureTest.stproj`, a line in the traits table (below), and its cost in the table above. `HasSameKnobs` and
+  `renderStats.quality` need no line. Each landing that adds rows raises `RendererQuality::c_SectionVersion` by one (an
+  integrator renumbers when two streams chose the same); values stored at an older version read the new fields'
+  defaults.
+- **Row traits:** what graphics options (the Graphics Quality page, the players' options) know of each field but
+  `Preset` is a line of `c_RowTraits` in `RendererQuality.cpp`, in field order beside the knob's preset row
+  (`RendererQuality::GetRowTraits`; `Renderer.Quality` fails for a field without one): `FollowsPreset` (true: the row
+  is the preset's under a named preset and the section's field only under Custom; false: a players' comfort row the
+  presets leave alone, which `FromSectionValue` reads under every preset in its last block and the page lists under
+  "Players' choices"), `GPUStage` (the GPU stage whose time the row changes, which the page shows) and `MemoryBytes`
+  (the bytes the row's resources take in one renderer for some settings at an output size, Auto resolved by its rows;
+  null when the row allocates nothing of its own or another row counts it: `ShadowCascades` is counted with
+  `ShadowResolution`). The option logic works over a `RendererQuality::OptionModel` (a simple quality section, its rows'
+  traits and its four presets' values, `GetPresetValues`: `ToSectionValue(GetPreset(p))`), the engine's
+  `GetOptionModel(section)` or a test's own: `FindRow` (ignoring case), `Normalize` (every field present and, under a
+  named preset, the rows that follow it set to the preset's values: what is in effect, spelled out; idempotent) and
+  `MakeCustomStart` (the Custom value a switch to Custom starts from: the stored rows that follow the preset are kept
+  when they are someone's tuning, equal neither to the fields' defaults nor to a preset's values, and become the values
+  in effect otherwise; rows that do not follow the preset keep theirs).
 
 ### Render scene
 

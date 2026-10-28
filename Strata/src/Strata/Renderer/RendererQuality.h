@@ -3,11 +3,13 @@
 #include "Strata/Core/Base.h"
 #include "Strata/Renderer/SceneRenderData.h"
 
+#include <glm/vec2.hpp>
 #include <nlohmann/json_fwd.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string_view>
 
 namespace Strata
@@ -104,6 +106,50 @@ namespace Strata
 		// provides the service: only tests and tools render so (the editor provides it whenever it runs, the game from its
 		// manifest). Main thread only.
 		const RendererQualitySettings& GetProjectQuality();
+
+		// What graphics options (the Graphics Quality page, the players' options) know of a field of Renderer.Quality besides
+		// the field itself. RendererQuality.cpp's c_RowTraits holds one line per field but Preset, in field order, beside the
+		// knob's PresetRow line (Docs/DeveloperGuide.md, "Quality settings").
+		struct RowTraits
+		{
+			std::string_view Field;    // The section field ("ShadowResolution")
+			bool FollowsPreset = true; // False: a player's choice the presets leave alone (comfort rows), read under every preset
+			std::string_view GPUStage; // The GPU stage whose time this row changes ("GPU.Shadows"); empty: none of its own
+			// Bytes of GPU memory this row's resources take in one renderer for these (unresolved) settings at an output size
+			// (Auto and AutoFine resolved with ResolveShadowMapSize(resolution, output.y)); null when the row allocates nothing of
+			// its own or another row counts the resource (ShadowCascades is counted with ShadowResolution).
+			uint64_t (*MemoryBytes)(const RendererQualitySettings& settings, glm::uvec2 output) = nullptr;
+		};
+		// The engine's rows: one per field of MakeSection() but Preset, in field order.
+		std::span<const RowTraits> GetRowTraits();
+		// The section values of Low, Medium, High and Ultra, every field spelled out: ToSectionValue(GetPreset(p)), made once.
+		std::span<const nlohmann::json> GetPresetValues();
+
+		// What the option logic works over: a simple quality section (its first field Preset, an Enum of Low, Medium, High,
+		// Ultra and Custom), its rows' traits and its four presets' values. The engine's is GetOptionModel(section); the
+		// page's and the players' options' tests build one over a test section of their own (for example with a row that does
+		// not follow the preset).
+		struct OptionModel
+		{
+			const SettingsSection* Section = nullptr;
+			std::span<const RowTraits> Rows;              // One per field but Preset
+			std::span<const nlohmann::json> PresetValues; // Low, Medium, High, Ultra: c_RendererQualityPresetCount entries
+		};
+		// The engine's rows and presets over `section` (the registered Renderer.Quality section).
+		OptionModel GetOptionModel(const SettingsSection& section);
+
+		// The row of a field, ignoring case (null for Preset and unknown names).
+		const RowTraits* FindRow(std::string_view field, const OptionModel& model);
+
+		// The value with every field present and, under a named preset, every row that follows the preset set to the preset's
+		// value (PresetValues): what is in effect, spelled out. `value` must be valid at the section's version (Validate's
+		// result). Idempotent; for the engine's model FromSectionValue(&Normalize(v)) has the same knobs as FromSectionValue(&v).
+		nlohmann::json Normalize(const nlohmann::json& value, const OptionModel& model);
+		// The Custom value a switch to Custom starts from (the rule of the TAA preset's Custom start): the rows that follow the
+		// preset, taken together, are someone's tuning when they equal neither the fields' defaults nor any preset's values; a
+		// tuning is kept, otherwise they become the values in effect (Normalize). Rows that do not follow the preset keep
+		// their values. Preset becomes "Custom". `value` as for Normalize.
+		nlohmann::json MakeCustomStart(const nlohmann::json& value, const OptionModel& model);
 	}
 
 }
