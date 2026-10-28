@@ -298,8 +298,16 @@ TEST_SUITE("TestHelpers")
 		CHECK(summary["contactHertz"].get<double>() == doctest::Approx(45.0));
 		CHECK(summary["contactDamping"].get<double>() == doctest::Approx(5.0));
 		CHECK(summary["contactPushSpeed"].get<double>() == doctest::Approx(1.0));
-		// Out of its range: refused.
+		// Out of its range, or not wholly a finite number: refused.
 		specification.Arguments = { "--strata-test-helper=physics-settle", "Tower20", "0.5", FileSystem::ToUTF8(result), "--recycle-distance", "2" };
 		CHECK(Process::Run(specification, std::chrono::minutes(1)).ExitCode == 1);
+		for (const char* number : { "0.05m", "", "nan", "inf", "0,05" })
+		{
+			CAPTURE(number);
+			specification.Arguments = { "--strata-test-helper=physics-settle", "Tower20", "0.5", FileSystem::ToUTF8(result), "--sleep-threshold", number };
+			CHECK(Process::Run(specification, std::chrono::minutes(1)).ExitCode == 1);
+			specification.Arguments = { "--strata-test-helper=physics-settle", "Tower20", number, FileSystem::ToUTF8(result) };
+			CHECK(Process::Run(specification, std::chrono::minutes(1)).ExitCode == 1);
+		}
 	}
 }

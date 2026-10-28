@@ -20,13 +20,15 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <limits>
+#include <locale>
 #include <memory>
+#include <sstream>
+#include <string>
 #include <thread>
 
 namespace Strata::Tests
@@ -722,9 +724,18 @@ namespace Strata::Tests
 
 		bool ParseNumber(std::string_view text, double& outValue)
 		{
-			const char* end = text.data() + text.size();
-			const auto [last, error] = std::from_chars(text.data(), end, outValue);
-			return error == std::errc() && last == end && std::isfinite(outValue);
+			if (text.empty())
+				return false;
+			// Apple Clang 15's libc++ has no std::from_chars for floating point; a stream with the classic locale reads the
+			// number independent of the C locale. The whole text must be the number.
+			std::istringstream stream { std::string(text) };
+			stream.imbue(std::locale::classic());
+			double value = 0.0;
+			stream >> value;
+			if (stream.fail() || stream.peek() != std::istringstream::traits_type::eof() || !std::isfinite(value))
+				return false;
+			outValue = value;
+			return true;
 		}
 
 	}
