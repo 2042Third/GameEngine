@@ -364,6 +364,25 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 			CHECK_FALSE(renderer.GetStats().ScreenSpaceReflections);
 			CHECK(renderer.GetSurfaceTexture() == nullptr);
 		}
+		SUBCASE("The players' anti-aliasing row over a TAA scene: only TAA traces")
+		{
+			for (const AntiAliasingChoice choice : { AntiAliasingChoice::Off, AntiAliasingChoice::FXAA, AntiAliasingChoice::Morphological,
+					 AntiAliasingChoice::TAA })
+			{
+				CAPTURE(static_cast<int>(choice));
+				SceneRendererSpecification specification;
+				specification.TextureStreaming = false;
+				specification.DebugName = "PlayersRow";
+				specification.Quality.AntiAliasing = choice;
+				SceneRenderer renderer(specification);
+				renderer.SetViewportSize(c_ViewSize, c_ViewSize);
+				RenderFrames(gpu, renderer, scene.Contents, scene.Camera, 3);
+				const bool temporal = choice == AntiAliasingChoice::TAA;
+				CHECK(renderer.GetStats().TemporalAntiAliasing == temporal);
+				CHECK(renderer.GetStats().ScreenSpaceReflections == temporal);
+				CHECK((renderer.GetSurfaceTexture() != nullptr) == temporal);
+			}
+		}
 		SUBCASE("Released with the targets, made again by the next frame that traces")
 		{
 			SceneRenderer renderer = CreateRenderer("Resized");
