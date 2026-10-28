@@ -397,6 +397,11 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Costly knobs are rows of `RendererQualitySettings` and fields of the `Renderer.Quality` section (a row per line, its four
   presets on it); Medium keeps 0.6.0's costs ([Quality settings](Docs/DeveloperGuide.md#quality-settings)).
 - Shaders writing HDR targets clamp with `SanitizeHDR`; normal maps are read as X and Y with Z reconstructed.
+- Post effects run in `Renderer/SceneRendererPost.cpp` between the TAA resolve and the tone mapping, take parameters by
+  push constants or the post's constant buffer (never new `FrameConstants` fields; reading them is fine), read the
+  frame's post source, are off in `AddNeutralPostProcess`, and exact-pixel tests also turn `DitherOutput` off; Filmic's
+  and white balance's constants come only from their `Tools/` generators
+  ([Post-processing](Docs/DeveloperGuide.md#post-processing)).
 - Temporal effects jitter only the frame's camera copy and keep history per renderer; single images settle or turn TAA
   off.
 - Font files are untrusted input: extend `Renderer/FontValidation.h`, with crafted-font tests, before calling another

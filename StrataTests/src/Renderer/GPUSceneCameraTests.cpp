@@ -547,6 +547,24 @@ TEST_SUITE("GPU.SceneRenderer.Camera")
 			else
 				CHECK(std::abs(center - 91) <= 1); // ACES shows middle gray at sRGB 91: it needs about +0.8 EV
 		}
+
+		// The Basic 3D template's look (the component's defaults with automatic exposure and TAA, which Editor.Templates checks
+		// it keeps): center-weighted metering, the key (none without a directional light), bloom, the lens vignette (exact at
+		// the center) and the dither show a metered middle gray at sRGB 112-124 (the plan's row; 0.6.0's template: 91).
+		PostProcessComponent look;
+		look.AutoExposure = true;
+		look.Exposure = 0.0f;
+		look.AntiAliasingMethod = AntiAliasingMode::TAA;
+		*field.PostProcess = look;
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		SceneRenderer templateRenderer(specification);
+		templateRenderer.SetViewportSize(c_SceneTestSize, c_SceneTestSize);
+		for (uint32_t frame = 0; frame < 4; frame++)
+			REQUIRE(templateRenderer.Render(field.SceneData, field.Camera));
+		const int center = Red(RenderToImage(templateRenderer, field.SceneData, field.Camera), c_SceneTestSize / 2, c_SceneTestSize / 2);
+		CHECK(center >= 112);
+		CHECK(center <= 124);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
