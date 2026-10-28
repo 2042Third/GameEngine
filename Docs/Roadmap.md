@@ -1264,14 +1264,15 @@ within 1.15 times step 0's.
     13.5 ms, 1,000 walking characters from 0.86 to at most 0.70 ms a step, and sleeping bodies at no measurable cost.
   - Contact recycling at a distance chosen by measurement on piles, towers and the Physics Playground (each reading of
     the owner's "0.7" answered with numbers); the distance and the sleep threshold in a `Physics.Simulation` project
-    section, changed while the game plays; character controllers' bodies never recycle contacts.
+    section, changed while the game plays; character controllers' bodies and kinematic bodies never recycle contacts.
   - No physics hitch while playing beyond creating bodies: of the frame that brings a world to 65,536 bodies, at most
     4 ms grow its storage; Strata's part of a cell's unload at most 1.25 times box3d's own removal.
   - Sleeping bodies, islands, contacts, box3d's stage times and how piles settle in `physics.stats`, `editor.status`,
     the runtime's perf log, the Streaming panel and the perf lab.
   - Creating and loading bodies recorded with box3d's share, not optimized (the owner's ruling).
   - Below the cut: the scene's world matrices from physics, rolling resistance, deferred removal of an unloading cell's
-    static bodies, a per-scene override of the section, and requests to box3d upstream.
+    static bodies (landed: they are parked, then disabled in slices), a per-scene override of the section, and requests
+    to box3d upstream.
 
 ### Later (wave 8 and beyond)
 

@@ -258,8 +258,10 @@ namespace Strata
 		registry.Register({ "play.state",
 			"Whether the scene is being edited, played or simulated, whether it is paused, the steps play.step still runs (pendingSteps), the fixed "
 			"steps run since play started (fixedSteps), and what runs (running, null in edit mode): {scene (the scene asset the game switched to, "
-			"null while the edited scene's copy runs), name, path, entityCount, subScenes: [{id, scene, name, state, entities}], switching: {scene, "
-			"progress} while a scene the game asked for loads, else null}.",
+			"null while the edited scene's copy runs), name, path, entityCount, subScenes: [{id, scene, name, state, entities}] (a world's cells "
+			"are left out: world sums them up), world: {world, cellsWanted, cellsLoading, cellsLoaded, cellsUnloading, cellsFailed} while a world "
+			"streams, else null, physics: {bodies (body slots in use), awake, stepMs (the last physics step)} or null without a physics world "
+			"(physics.stats has more), switching: {scene, progress} while a scene the game asked for loads, else null}.",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
