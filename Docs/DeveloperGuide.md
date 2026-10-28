@@ -3977,8 +3977,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   program that only some programs have (`GPU.ImGui`) registers where it is first used.
 - An overlay pass (`ISceneOverlayPass`) times its draws with the renderer's timer, `SceneOverlayFrame::GPUTimer`:
   `Next(its stage)` before them and `Next` back to the stage the timer had after them, as `GameUIRenderer` does.
-- Timed command lists are executed in the frame they were recorded in: the profiler resolves a frame's timestamps once the
-  GPU completed what was submitted in it, and drops a frame whose timestamps were never written.
+- Timed command lists are executed in the frame they were recorded in, in the order their timers started: the profiler
+  resolves a frame's timestamps once the GPU completed what was submitted in it, drops a frame whose timestamps were never
+  written, and has the frame's first timer record the slot's reset into its list (outside render passes: construct a
+  `GPUPassTimer` at the start of the list's work), so a list that writes the slot later must not run before that one.
 - Never wait for timestamps in a frame: `SceneRenderer::GetGPUStats` and the frame profiler's GPU times arrive 2-3 frames
   late. Tests and tools that need the last frame's call `SceneRenderer::ResolveGPUStats(true)`.
 - A timestamp recorded inside a render pass instance may be written when the pass ends on tile-based drivers (MoltenVK):

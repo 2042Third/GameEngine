@@ -189,6 +189,16 @@ namespace Strata
 				m_NvrhiDevice->executeCommandList(m_ResetList);
 			}
 
+			void RecordReset(nvrhi::ICommandList* commandList, uint32_t first, uint32_t count) override
+			{
+				if (!commandList || first >= m_Count || count == 0)
+					return;
+				count = std::min(count, m_Count - first);
+				VkCommandBuffer commandBuffer = static_cast<VkCommandBuffer>(commandList->getNativeObject(nvrhi::ObjectTypes::VK_CommandBuffer).pointer);
+				if (commandBuffer != VK_NULL_HANDLE)
+					VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdResetQueryPool(commandBuffer, m_Pool, first, count);
+			}
+
 			void Write(nvrhi::ICommandList* commandList, uint32_t index) override
 			{
 				if (!commandList || index >= m_Count)

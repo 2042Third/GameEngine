@@ -322,6 +322,89 @@ TEST_SUITE("GPU.Renderer.Timers")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A frame's first timer resets the frame's timestamps in its list; a timer that runs on into a frame does not time it")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!gpu.GetDevice().GetInfo().SupportsTimestamps)
+		{
+			MESSAGE("The device writes no timestamps: nothing to check");
+			return;
+		}
+		FrameProfilerSpecification specification;
+		specification.SampleJobs = false;
+		FrameProfiler frames(specification);
+		const FrameStageID first = frames.RegisterStage("GPU.First", false, FrameStageKind::GPU);
+		const FrameStageID second = frames.RegisterStage("GPU.Second", false, FrameStageKind::GPU);
+		GPUProfiler gpuProfiler(gpu.GetDevice(), frames);
+		REQUIRE(gpuProfiler.IsEnabled());
+		nvrhi::IDevice* device = gpu.GetNvrhiDevice();
+		nvrhi::TextureHandle target = CreateTarget(device, 16);
+		REQUIRE(target);
+		nvrhi::CommandListHandle commandList = device->createCommandList();
+		const auto timedList = [&](FrameStageID stage)
+		{
+			commandList->open();
+			{
+				GPUPassTimer timer(&gpuProfiler, commandList.Get(), stage);
+				commandList->clearTextureFloat(target, nvrhi::AllSubresources, nvrhi::Color(1.0f));
+			}
+			commandList->close();
+			REQUIRE(gpu.ExecuteAndWait(commandList));
+		};
+
+		// Every slot written once (twice over), so a slot opened again holds the timestamps of its earlier frame: the
+		// validation layer reports a write before their reset ran.
+		for (uint32_t frame = 0; frame < 2 * gpuProfiler.GetSlotCount(); frame++)
+		{
+			frames.BeginFrame();
+			gpuProfiler.BeginFrame();
+			timedList(first);
+			timedList(second); // A second timed list of the frame writes after the first one's reset
+			frames.EndFrame(0.001);
+		}
+		CHECK(gpuProfiler.GetStats().ResolvedFrames >= gpuProfiler.GetSlotCount());
+		const uint64_t dropped = gpuProfiler.GetStats().DroppedFrames;
+
+		// A timer started in one frame and running on into the next writes nothing into the new frame's slot, which is not
+		// reset yet (its reset goes ahead of a timer's first timestamp, at the start of a list); the frame's next timed list
+		// resets it and times its stage.
+		frames.BeginFrame();
+		gpuProfiler.BeginFrame();
+		commandList->open();
+		const uint64_t skipped = gpuProfiler.GetStats().SkippedTimestamps;
+		{
+			GPUPassTimer timer(&gpuProfiler, commandList.Get(), first);
+			commandList->clearTextureFloat(target, nvrhi::AllSubresources, nvrhi::Color(0.5f));
+			frames.EndFrame(0.001);
+			frames.BeginFrame();
+			gpuProfiler.BeginFrame();
+			timer.Next(second);
+			commandList->clearTextureFloat(target, nvrhi::AllSubresources, nvrhi::Color(0.25f));
+		}
+		commandList->close();
+		REQUIRE(gpu.ExecuteAndWait(commandList));
+		CHECK(gpuProfiler.GetStats().SkippedTimestamps == skipped + 2); // Next(second) and the end
+		timedList(second);
+		const uint64_t spanned = frames.GetTotalFrameCount();
+		frames.EndFrame(0.001);
+		// The frames after it resolve the one with the second stage's interval.
+		for (int frame = 0; frame < 4; frame++)
+		{
+			frames.BeginFrame();
+			gpuProfiler.BeginFrame();
+			frames.EndFrame(0.001);
+		}
+		gpuProfiler.Resolve(true);
+		const uint32_t age = static_cast<uint32_t>(frames.GetTotalFrameCount() - 1 - spanned);
+		const FrameSample sample = frames.GetFrame(age);
+		REQUIRE(sample.Index == spanned);
+		CHECK(sample.HasGPU);
+		CHECK(sample.GPUStageMs[second] > 0.0f);
+		CHECK(gpuProfiler.GetStats().DroppedFrames == dropped);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The back buffer's first preparation in a frame is timed as the Present stage, outside the work time")
 	{
 		Tests::GPUContext gpu;

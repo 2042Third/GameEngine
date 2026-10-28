@@ -77,6 +77,10 @@ namespace Strata
 		// after the writes submitted before it, before those submitted after it. Until the GPU ran it, Read may still return
 		// the earlier values: read a range only once the work that wrote it after the reset completed.
 		virtual void Reset(uint32_t first, uint32_t count) = 0;
+		// Records the reset of timestamps [first, first + count) into the open command list, outside any render pass (at its
+		// start): what the queue runs after it, later in the list or in lists executed after it, may write them. Costs no
+		// submission of its own, but every other list that writes them must be executed after this one.
+		virtual void RecordReset(nvrhi::ICommandList* commandList, uint32_t first, uint32_t count) = 0;
 		// Records into the open command list that the GPU writes its time into timestamp `index` once every command recorded
 		// before it on the queue completed. Allowed inside render passes; pending NVRHI barriers are not committed (they run
 		// with the next command, so their time counts toward what follows). The timestamp must have been reset since its last
