@@ -3696,6 +3696,11 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
     `TriangularNoise` are the shader's twins in the same integer arithmetic (`Renderer.PostProcessMath`,
     `GPU.SceneRenderer.Camera`).
   - Thumbnails changed with the dither (`ThumbnailCache::c_Version` 5).
+  - Cost: `GPU.Post` of `PerfGPU.Renderer.Post4K`'s frame (3840x2160, TAA, the tone mapping dithers) took 0.2446 ms with
+    the dither and 0.2235 ms without it (medians of three interleaved runs each under `PerfLock.py`, RTX 5090 on the
+    slower memory of 2026-10-27): 0.021 ms, twice the spec's 0.01 ms target. Six `PixelRandom` values a pixel (two hashes
+    each) are what it costs; the noise stays as it is until a cheaper hash of the same statistics replaces it, with its
+    CPU twin and `Renderer.PostProcessMath`'s statistics.
 - **Tone curves** (`TonemapOperator`): Filmic (`Include/Filmic.glsl`, `PostProcessMath::ApplyFilmic`) is the default of new
   Post Process components, of scenes without one and of the Basic 3D template; ACES, AgX, Khronos Neutral and Reinhard are
   unchanged, so scenes that stored them look as before. Filmic works per channel on an inset color after AgX's principle
@@ -3750,6 +3755,12 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
     `renderStats.exposure` (`ev100`, `keyStops`, `cardEv100`).
   - `AddNeutralPostProcess` meters as 0.6.0 did (`Average`, key 0, one speed both ways), so tests that turn automatic
     exposure on keep their meaning.
+  - Measured on the look-dev shots (run `camera-and-tone/7-final`, 3840x2160 TAA, before the key stopped brightening):
+    `lookdev.room` meters at EV100 14.040 against its card's 15.191 and shows a key of -0.1381, the formula's
+    `0.12 * (14.040 - 15.191)` to the fourth digit; `lookdev.overview` meters at 15.588 (+0.048 then, 0 now). The room's
+    and the exterior's displayed means (display-linear luminance over every fourth pixel) are 0.149 and 0.164; 0.6.0's
+    by the same measure 0.110 and 0.096. In 0.6.0's sky light the room meters only 1.15 stops below the card: the key
+    darkens it by 0.14 stops, as far as its light is darker.
 - **Bloom** (`RenderBloomDownsamples`, `RenderBloomUpsamples`, `DispatchBloom`, `Bloom.comp`): the half-resolution chain
   is allocated with every level down to 4 pixels, at most `RenderData::c_MaxBloomLevels` (8), so a change of
   `BloomRadius` never reallocates. A frame uses `span = log2(BloomRadius * height)` levels
