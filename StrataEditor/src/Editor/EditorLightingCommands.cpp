@@ -524,16 +524,23 @@ namespace Strata
 
 		// The azimuth (degrees from +X toward +Z) of the direction toward the sun a directional light shines from: it shines along
 		// its world -Z axis, away from the sun. None for a light pointing (nearly) straight up or down.
-		std::optional<float> GetSunAzimuth(Scene& scene, Entity light)
+		// The world direction toward the sun a directional light shines from (along its world -Z axis); none when its transform
+		// leaves it no direction.
+		std::optional<glm::vec3> GetTowardSun(Scene& scene, Entity light)
 		{
 			const glm::vec3 shining = glm::vec3(scene.GetWorldTransform(light) * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
 			const float length = glm::length(shining);
 			if (!(length > 1e-6f))
 				return std::nullopt;
-			const glm::vec3 towardSun = -shining / length;
-			if (!(std::hypot(towardSun.x, towardSun.z) > 1e-4f))
+			return -shining / length;
+		}
+
+		std::optional<float> GetSunAzimuth(Scene& scene, Entity light)
+		{
+			const std::optional<glm::vec3> towardSun = GetTowardSun(scene, light);
+			if (!towardSun || !(std::hypot(towardSun->x, towardSun->z) > 1e-4f))
 				return std::nullopt;
-			return glm::degrees(std::atan2(towardSun.z, towardSun.x));
+			return glm::degrees(std::atan2(towardSun->z, towardSun->x));
 		}
 
 		// Turns `light` to shine away from `towardSun` (world space) through its parent's inverse linear part, as
@@ -561,6 +568,10 @@ namespace Strata
 		constexpr float c_PresetAutoExposureMaxEV = 16.0f;
 		constexpr float c_PresetAutoExposureRaiseBelow = 15.0f;
 		constexpr float c_PresetDefaultAzimuth = 20.0f;
+		// How far (the length of the difference of unit vectors, about radians) a light's direction toward the sun may be from the
+		// preset's for it to keep its rotation: the azimuth read back from the rotation and the direction made again from it round
+		// differently on each platform (its math library and fused multiply-adds), a few ulps off.
+		constexpr float c_PresetDirectionTolerance = 1.0e-5f;
 
 		EditorCommandResult ApplySkyPreset(EditorContext& context, const nlohmann::json& parameters)
 		{
@@ -673,7 +684,11 @@ namespace Strata
 			}
 			sky.MarkModified<SkyLightComponent>();
 
-			if (!PointLightAwayFrom(scene, light, towardSun))
+			// A light already pointing at the preset's sun keeps its rotation: one made again from its own azimuth can differ from it in
+			// the last bits, and a preset applied twice would record a step that changes nothing visible.
+			const std::optional<glm::vec3> currentTowardSun = createdLight ? std::nullopt : GetTowardSun(scene, light);
+			const bool aimed = currentTowardSun && glm::length(*currentTowardSun - towardSun) < c_PresetDirectionTolerance;
+			if (!aimed && !PointLightAwayFrom(scene, light, towardSun))
 				return RollBackEdit(transaction, fmt::format("'{}' cannot point at the sun: its scale along Z, or its parent's transform, leaves it no "
 					"direction", light.GetName()), EditorCommandError::Failed);
 			DirectionalLightComponent& sun = light.GetComponent<DirectionalLightComponent>();
