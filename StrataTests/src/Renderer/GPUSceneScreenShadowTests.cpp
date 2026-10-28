@@ -289,19 +289,60 @@ TEST_SUITE("GPU.SceneRenderer.ScreenShadows")
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
+		const FrameStageID stage = RendererGPUStages::Get().ScreenShadows;
+		const bool timed = Renderer::GetGPUProfiler().IsEnabled();
+		if (!timed)
+			MESSAGE("The device writes no timestamps: the stage's absence is not checked");
+		// Frames as an application runs them, so the profiler resolves their timestamps (two alike: the first one's slot is
+		// closed by the second's frame); then whether they timed the mask's stage.
+		const auto renderTimed = [&](SceneRenderer& renderer, PlateScene& scene)
+		{
+			ReadbackImage image;
+			for (int frame = 0; frame < 2; frame++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				image = RenderToImage(renderer, scene.SceneData, scene.Camera);
+				gpu.GetDevice().EndFrame();
+			}
+			if (timed)
+			{
+				renderer.ResolveGPUStats(true);
+				const SceneRendererGPUStats& gpuStats = renderer.GetGPUStats();
+				REQUIRE(gpuStats.HasTimes);
+				REQUIRE_FALSE(gpuStats.StageMs.empty());
+				const bool timesMask = std::any_of(gpuStats.StageMs.begin(), gpuStats.StageMs.end(), [stage](const GPUStageTime& time) { return time.Stage == stage; });
+				CHECK(timesMask == renderer.GetStats().ScreenShadows);
+			}
+			return image;
+		};
+
+		// A renderer that drew the mask for a shadowed sun draws a sun without shadows, and a scene without a sun, exactly as one
+		// that never had a shadowed sun: no mask, no stage, and nothing of the mask's left in the image.
 		PlateScene plate;
+		SceneRenderer used(MaskSpecification());
+		used.SetViewportSize(c_Size, c_Size);
+		renderTimed(used, plate);
+		CHECK(used.GetStats().ScreenShadows);
+		CHECK(used.GetScreenShadowTexture() != nullptr);
 		plate.Sun.GetComponent<DirectionalLightComponent>().CastShadows = false;
 		plate.Sun.MarkModified<DirectionalLightComponent>();
-		SceneRenderer renderer(MaskSpecification());
-		renderer.SetViewportSize(c_Size, c_Size);
-		const ReadbackImage image = RenderToImage(renderer, plate.SceneData, plate.Camera);
-		CHECK_FALSE(renderer.GetStats().ScreenShadows);
-		CHECK(renderer.GetScreenShadowTexture() == nullptr);
-		renderer.ResolveGPUStats(true);
-		const SceneRendererGPUStats& gpuStats = renderer.GetGPUStats();
-		const FrameStageID stage = RendererGPUStages::Get().ScreenShadows;
-		for (const GPUStageTime& time : gpuStats.StageMs)
-			CHECK(time.Stage != stage);
+		SceneRenderer fresh(MaskSpecification());
+		fresh.SetViewportSize(c_Size, c_Size);
+		const ReadbackImage unshadowed = renderTimed(used, plate);
+		CHECK_FALSE(used.GetStats().ScreenShadows);
+		const ReadbackImage neverShadowed = renderTimed(fresh, plate);
+		CHECK_FALSE(fresh.GetStats().ScreenShadows);
+		CHECK(fresh.GetScreenShadowTexture() == nullptr);
+		CHECK(unshadowed.Pixels == neverShadowed.Pixels);
+
+		plate.SceneData.DestroyEntity(plate.Sun);
+		const ReadbackImage withoutSun = renderTimed(used, plate);
+		CHECK_FALSE(used.GetStats().ScreenShadows);
+		const ReadbackImage neverSun = renderTimed(fresh, plate);
+		CHECK_FALSE(fresh.GetStats().ScreenShadows);
+		CHECK(fresh.GetScreenShadowTexture() == nullptr);
+		CHECK(withoutSun.Pixels == neverSun.Pixels);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

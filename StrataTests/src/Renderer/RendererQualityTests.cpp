@@ -289,6 +289,7 @@ TEST_SUITE("Renderer.Quality")
 		CHECK_FALSE(thumbnailRenderer.FadeLevelsOfDetail);
 		CHECK_FALSE(thumbnailRenderer.TemporalAntiAliasing);
 		CHECK_FALSE(thumbnailRenderer.SpreadLightingUpdates);
+		CHECK_FALSE(thumbnailRenderer.FitShadowsToView); // A single frame: no readback could fit its cascades
 		CHECK(thumbnailRenderer.TextureStreaming);
 		CHECK(SceneRendererSpecification::ForBake().DebugName == "ProbeBake");
 	}
