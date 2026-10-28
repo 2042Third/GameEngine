@@ -40,6 +40,7 @@
 		{"Name": "lookdev.view.albedo", "Project": "LookDev", "Camera": "scene", "DebugView": "albedo", "AntiAliasing": ["taa"]},
 		{"Name": "tp.view.ao", "Project": "ThirdPerson", "Position": [1.2, 1.2, 4.6], "Target": [-0.196, -0.08, 2.273], "Fov": 60, "DebugView": "ao", "AntiAliasing": ["fxaa", "off"], "Crops": [{"Name": "feet", "Rect": [0.3, 0.62, 0.62, 0.88]}]},
 		{"Name": "basic3d.view.luminance", "Project": "Basic3D", "Camera": "scene", "DebugView": "luminance", "AntiAliasing": ["taa"]},
-		{"Name": "ow.view.albedo", "Project": "OpenWorld", "Camera": "scene", "DebugView": "albedo", "AntiAliasing": ["taa"]}
+		{"Name": "ow.view.albedo", "Project": "OpenWorld", "Camera": "scene", "DebugView": "albedo", "AntiAliasing": ["taa"], "Crops": [{"Name": "near-forest", "Rect": [0.25, 0.7, 0.55, 0.95]}, {"Name": "mid-forest", "Rect": [0.45, 0.52, 0.7, 0.72]}]},
+		{"Name": "pp.view.luminance", "Project": "PhysicsPlayground", "Camera": "scene", "DebugView": "luminance", "AntiAliasing": ["taa"]}
 	]
 }

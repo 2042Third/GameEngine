@@ -1,6 +1,7 @@
 {
 	"Handle": "0DC20F15593DD212",
 	"ImportSettings": {
+		"BaseColorFactorsAreSRGB": true,
 		"GenerateLODs": true,
 		"ImportCameras": true,
 		"ImportLights": true,

@@ -161,8 +161,10 @@ class HeightGrid:
 def palette_color(u, v):
     """The terrain's color (sRGB, 0-255) at palette coordinates: u the height, v the slope."""
     height = HEIGHT_RANGE[0] + (HEIGHT_RANGE[1] - HEIGHT_RANGE[0]) * u
-    stops = ((-10.0, (110, 120, 105)), (-1.0, (196, 178, 128)), (2.5, (222, 202, 146)), (4.5, (110, 150, 62)),
-             (18.0, (82, 128, 50)), (34.0, (70, 98, 52)), (48.0, (118, 110, 98)), (62.0, (140, 136, 130)),
+    # The grass (4.5 to 18 m) is a meadow's green under a neutral sun: less red than a yellow-green, which the sun's light,
+    # reddened by the air, would turn olive.
+    stops = ((-10.0, (110, 120, 105)), (-1.0, (196, 178, 128)), (2.5, (222, 202, 146)), (4.5, (94, 148, 58)),
+             (18.0, (70, 124, 48)), (34.0, (70, 98, 52)), (48.0, (118, 110, 98)), (62.0, (140, 136, 130)),
              (68.0, (236, 240, 244)), (80.0, (246, 248, 250)))
     color = stops[-1][1]
     for (h0, c0), (h1, c1) in zip(stops, stops[1:]):

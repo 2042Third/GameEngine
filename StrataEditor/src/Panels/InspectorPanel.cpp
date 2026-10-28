@@ -1435,7 +1435,10 @@ namespace Strata
 		};
 		for (const PresetButton& button : c_PresetButtons)
 		{
+			// The row wraps where the Inspector is too narrow for it: a button past its right edge could not be clicked.
 			ImGui::SameLine();
+			if (ImGui::GetContentRegionAvail().x < UI::GetToolbarButtonWidth(button.Icon, button.Label))
+				ImGui::NewLine();
 			if (UI::ToolbarButton(button.Id, button.Icon, button.Label, button.Tooltip))
 			{
 				nlohmann::json parameters = { { "preset", button.Preset } };
