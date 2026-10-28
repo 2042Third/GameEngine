@@ -1388,7 +1388,7 @@ name). Differences found while building:
 
 - Step 1: the shadows view's CPU types live in `Strata/Renderer/ShadowView.h` (`ShadowCascadeStats`, `ShadowViewRatioStats`,
   `ShadowViewStats`, and `ShadowView::GetBin`, `GetBinCenter`, `Summarize`, `SummarizeAll`, which the GPU test's CPU
-  histogram shares); `RenderData::ShadowViewParameters` is the three colors (48 bytes) until step 3 adds the mask;
+  histogram shares); `RenderData::ShadowViewParameters` is the three colors (48 bytes; the review fixes added the mask without `HasMask`, a white texture standing for none);
   `SceneRenderOptions::ShadowViewColors` defaults to the theme's Malachite, Sulfur and Cinnabar. The view's draw and count
   are `SceneRenderer::DrawShadowView` in `SceneRendererShadowView.cpp`. `Tools/LookDev.py capture --debug-view <view>`
   takes the acceptance's statistics.
@@ -1497,3 +1497,37 @@ name). Differences found while building:
   0.01-0.03 ms at 4K, and the reduction is one compute pass over the depth), not the forward pass. Not resolved in this
   stream (open problem in the landing report): skipping pixels that face away from the sun is not safe (the forward pass
   lights with the shading normal, which the mask does not have), and per-pass timers inside the stage are the next step.
+- Review fixes (an independent review of the branch; each behavior fix in its own commit with a regression test that fails
+  without it, but the contact shadows' lit specks, shown by look-dev only):
+  - Contact shadows: `FaceNormal` orients faces by the view ray (`GetViewVector`), so orthographic views get them right;
+    the march's reach is solved in perspective (`r = M w0 / (B - M D.w)`), so marches toward the camera are shortened,
+    never dropped, and no longer over- or under-shortened; pixels whose march passed near an occluder (a surface standing
+    off the start's plane toward the sun by more than the thickness) take the blur radius too, so a contact shadow's
+    edges have no lit specks. Fringes beside thin foliage (marches passing behind a leaf thinner than the assumed
+    thickness) remain: an open problem.
+  - `BlueNoise()` returns `(k + 0.5) / 256` (the R8_UNORM tile reads as `k / 255`); `Debug/BlueNoise.comp` and
+    `GPU.Renderer.BlueNoise` check it.
+  - Near outliers stay out of the fit only where the last cascade's sphere still holds them (`N <= D k`); narrow and
+    orthographic views keep them (`ShadowFitTracker::GetFittedNearest`, `GetSphereReach`).
+  - The mask's evaluation gives the tent's partly lit edge pixels on receivers the sun grazes (`|n.L| < 0.5`) a blur
+    radius of a stretched texel's footprint, at most 4 pixels, once it exceeds 1.5 pixels (`ReceiverTexelPixels`): the
+    saw teeth under the Open World's pine tiers are gone. It costs `GPU.ScreenShadows` 0.02-0.03 ms at Medium 1080.
+  - The shadows view darkens its colors by the mask (SRV 23, white without one; `ShadowViewParameters` stays 48 bytes,
+    the white texture standing for `HasMask`).
+  - Section 7's first lever (the fit's reduction on every second row and column) was measured and not kept: the pass is
+    0.011-0.012 ms at Medium 1080 with and without it, all fixed costs.
+  - Measured for the review (look-dev under `wave7-plan/lookdev/sun-shadows/review-*`): the final A/B (`review-ab-final`,
+    three interleaved pairs against cc9524a1 under PerfLock, TAA, medians, base / branch) at 1920x1080 Medium tp.scene
+    0.561 / 0.697 ms (1.24x), pp.scene 0.497 / 0.592 (1.19x), ow.scene 0.564 / 0.650 (1.15x), `GPU.ScreenShadows` 0.160,
+    0.113, 0.116; at 3840x2160 High 1.971 / 2.592 (1.32x), 1.321 / 1.874 (1.42x), 1.393 / 1.839 (1.32x), the stage 0.829,
+    0.612, 0.535. Medium stays above section 7's 1.08x and the wave's 1.15x, and the stage above steps 3 and 4's 0.35
+    and 0.45 ms targets: unmet. Timed apart at Medium 1080 the evaluation is 0.07-0.12 ms, the blur 0.035-0.046 ms, the
+    reduction 0.011 ms (`review-stages2`); what remains to cut is in the evaluation (its range reads and tent run for most
+    lit pixels), which no lever keeps Medium's sample counts for. The noise measure (`shadows/tools/noise.py`, row 1450,
+    x 1170-1290 of tp.scene at 3840x2160) gives 1.6% of the contrast at High and Medium with no AA, FXAA and TAA alike:
+    the same in every mode, so it is the edge's own profile against the 9-pixel average, not grain (0.6.0: 4.6% no AA,
+    1.6% TAA); the step 2 and 3 targets (2.5%, 1.0% High, 1.5% Medium) are met at 2.5% and missed by that profile at 1.0%
+    and 1.5%. The low-sun, thin-caster, water and editor shots (`review-final`) show no acne, peter-panning or lost
+    shadows; `tp.live.pan` and `ow.live.tour` (`review-before`, four frames each) show no change of near shadows'
+    sharpness. Not measured: the per-cascade baseline of step 1, the identical-PNG check, the CastShadows-off GPU.Opaque
+    comparison, lookdev.contact's strip share, and the step 6 day-cycle tour beyond four frames.
