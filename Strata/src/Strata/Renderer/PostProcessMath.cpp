@@ -9,6 +9,46 @@
 namespace Strata::PostProcessMath
 {
 
+	namespace
+	{
+
+		constexpr WhiteLocusEntry c_WhiteLocus[] = {
+#include "Strata/Renderer/WhiteBalanceLocus.inl"
+		};
+
+		// sRGB's white, D65 (x, y), and its primaries: the matrices between linear sRGB and XYZ are built from them.
+		constexpr glm::dvec2 c_D65 = { 0.3127, 0.3290 };
+		constexpr glm::dvec2 c_SRGBPrimaries[3] = { { 0.64, 0.33 }, { 0.30, 0.60 }, { 0.15, 0.06 } };
+
+		glm::dvec3 XYToXYZ(const glm::dvec2& xy)
+		{
+			return glm::dvec3(xy.x / xy.y, 1.0, (1.0 - xy.x - xy.y) / xy.y);
+		}
+
+		// Linear sRGB to XYZ: the primaries' XYZ scaled so that (1, 1, 1) is D65 at luminance 1.
+		glm::dmat3 GetSRGBToXYZ()
+		{
+			const glm::dmat3 primaries(XYToXYZ(c_SRGBPrimaries[0]), XYToXYZ(c_SRGBPrimaries[1]), XYToXYZ(c_SRGBPrimaries[2]));
+			const glm::dvec3 scale = glm::inverse(primaries) * XYToXYZ(c_D65);
+			return primaries * glm::dmat3(scale.x, 0.0, 0.0, 0.0, scale.y, 0.0, 0.0, 0.0, scale.z);
+		}
+
+		// CIE 159:2004's CAT02 (rows as published; glm is column-major).
+		const glm::dmat3 c_CAT02 = glm::transpose(glm::dmat3(0.7328, 0.4296, -0.1624, -0.7036, 1.6975, 0.0061, 0.0030, 0.0136, 0.9834));
+
+		glm::dvec2 UVToXY(const glm::dvec2& uv)
+		{
+			const double denominator = 2.0 * uv.x - 8.0 * uv.y + 4.0;
+			return glm::dvec2(3.0 * uv.x / denominator, 2.0 * uv.y / denominator);
+		}
+
+		float FiniteOr(float value, float fallback)
+		{
+			return std::isfinite(value) ? value : fallback;
+		}
+
+	}
+
 	glm::vec3 LinearToSRGB(const glm::vec3& linear)
 	{
 		glm::vec3 encoded;
@@ -94,6 +134,79 @@ namespace Strata::PostProcessMath
 		if (t >= curve.WhiteStops)
 			return 1.0f;
 		return middleGray + (1.0f - middleGray) * (1.0f - std::pow(1.0f - t / curve.WhiteStops, curve.ShoulderPower));
+	}
+
+	std::span<const WhiteLocusEntry> GetWhiteLocusTable()
+	{
+		return c_WhiteLocus;
+	}
+
+	glm::dvec4 GetWhiteLocus(double kelvin)
+	{
+		const std::span<const WhiteLocusEntry> table = GetWhiteLocusTable();
+		const double mireds = std::clamp(1e6 / kelvin, table.front().Mireds, table.back().Mireds);
+		size_t index = 0;
+		while (index + 2 < table.size() && table[index + 1].Mireds < mireds)
+			index++;
+		const WhiteLocusEntry& first = table[index];
+		const WhiteLocusEntry& second = table[index + 1];
+		const double weight = (mireds - first.Mireds) / (second.Mireds - first.Mireds);
+		const glm::dvec2 normal = glm::normalize(glm::mix(glm::dvec2(first.NormalU, first.NormalV), glm::dvec2(second.NormalU, second.NormalV), weight));
+		return glm::dvec4(glm::mix(first.U, second.U, weight), glm::mix(first.V, second.V, weight), normal);
+	}
+
+	glm::dvec3 ChromaticityToLinearSRGB(const glm::dvec2& uv)
+	{
+		return glm::inverse(GetSRGBToXYZ()) * XYToXYZ(UVToXY(uv));
+	}
+
+	glm::mat3 GetWhiteBalanceMatrix(float kelvin, float tint)
+	{
+		if (kelvin == 6500.0f && tint == 0.0f)
+			return glm::mat3(1.0f);
+		const glm::dvec4 locus = GetWhiteLocus(std::clamp(static_cast<double>(FiniteOr(kelvin, 6500.0f)), 2000.0, 15000.0));
+		const double shift = 0.02 * std::clamp(static_cast<double>(FiniteOr(tint, 0.0f)), -1.0, 1.0);
+		const glm::dvec2 light = glm::dvec2(locus.x, locus.y) + shift * glm::dvec2(locus.z, locus.w);
+		const glm::dvec3 lightCones = c_CAT02 * XYToXYZ(UVToXY(light));
+		const glm::dvec3 referenceCones = c_CAT02 * XYToXYZ(c_D65);
+		const glm::dvec3 gains = referenceCones / lightCones;
+		const glm::dmat3 toXYZ = GetSRGBToXYZ();
+		const glm::dmat3 scale(gains.x, 0.0, 0.0, 0.0, gains.y, 0.0, 0.0, 0.0, gains.z);
+		return glm::mat3(glm::inverse(toXYZ) * glm::inverse(c_CAT02) * scale * c_CAT02 * toXYZ);
+	}
+
+	ColorGrading MakeColorGrading(float kelvin, float tint, const glm::vec3& slope, const glm::vec3& offset, const glm::vec3& power)
+	{
+		ColorGrading grading;
+		glm::vec3 clampedSlope;
+		glm::vec3 clampedOffset;
+		glm::vec3 clampedPower;
+		for (int channel = 0; channel < 3; channel++)
+		{
+			clampedSlope[channel] = std::clamp(FiniteOr(slope[channel], 1.0f), 0.0f, 4.0f);
+			clampedOffset[channel] = std::clamp(FiniteOr(offset[channel], 0.0f), -0.1f, 0.1f);
+			clampedPower[channel] = std::clamp(FiniteOr(power[channel], 1.0f), 0.2f, 5.0f);
+		}
+		const float temperature = std::clamp(FiniteOr(kelvin, 6500.0f), 2000.0f, 15000.0f);
+		const float clampedTint = std::clamp(FiniteOr(tint, 0.0f), -1.0f, 1.0f);
+		// Slope scales the white-balanced channels: diag(slope) * M.
+		const glm::mat3 whiteBalance = GetWhiteBalanceMatrix(temperature, clampedTint);
+		const glm::mat3 slopeMatrix(clampedSlope.x, 0.0f, 0.0f, 0.0f, clampedSlope.y, 0.0f, 0.0f, 0.0f, clampedSlope.z);
+		grading.Matrix = slopeMatrix * whiteBalance;
+		grading.Offset = clampedOffset * FilmicConstants::MiddleGray;
+		grading.Power = clampedPower;
+		grading.Active = temperature != 6500.0f || clampedTint != 0.0f || clampedSlope != glm::vec3(1.0f) || clampedOffset != glm::vec3(0.0f)
+			|| clampedPower != glm::vec3(1.0f);
+		return grading;
+	}
+
+	glm::vec3 ApplyColorGrading(const glm::vec3& color, const ColorGrading& grading)
+	{
+		if (!grading.Active)
+			return color;
+		const glm::vec3 balanced = glm::max(grading.Matrix * color + grading.Offset, glm::vec3(0.0f));
+		const float middleGray = FilmicConstants::MiddleGray;
+		return middleGray * glm::pow(balanced / middleGray, grading.Power);
 	}
 
 	glm::vec3 ApplyFilmic(const glm::vec3& exposed, const FilmicCurve& curve)

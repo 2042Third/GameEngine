@@ -42,8 +42,13 @@ layout(set = 0, binding = ST_CBV(0), std140) uniform TonemapConstants
 	float FilmicToeSlope;     // The Filmic curve's look (PostProcessMath::FilmicCurve)
 	float FilmicWhiteStops;
 	float FilmicShoulderPower;
-	uint Padding0;
+	uint ColorFlags;          // ST_COLOR_GRADING: the grading below applies
+	vec4 ColorRows[3];        // White balance times slope, as rows
+	vec4 ColorOffset;         // xyz: added before the power (in units of light)
+	vec4 ColorPower;          // xyz: per-channel power around middle gray
 } u_Parameters;
+
+#define ST_COLOR_GRADING 1u
 
 // Largest exposed value passed to the tone curves: far beyond where every curve saturates, small enough that their
 // intermediate products stay finite in 32-bit floats.
@@ -180,6 +185,14 @@ void main()
 		else
 			color = mix(color, bloom, u_Parameters.BloomIntensity);
 		color = min(color, vec3(c_MaxExposedValue));
+	}
+	// White balance, slope, offset and power on scene-linear light, before the tone curve (PostProcessMath::ApplyColorGrading).
+	// The branch is uniform; without grading the color is untouched.
+	if ((u_Parameters.ColorFlags & ST_COLOR_GRADING) != 0u)
+	{
+		color = vec3(dot(u_Parameters.ColorRows[0].xyz, color), dot(u_Parameters.ColorRows[1].xyz, color), dot(u_Parameters.ColorRows[2].xyz, color));
+		color = max(color + u_Parameters.ColorOffset.xyz, vec3(0.0));
+		color = min(0.18 * pow(color / 0.18, u_Parameters.ColorPower.xyz), vec3(c_MaxExposedValue));
 	}
 	// Contrast around middle gray, in log space before the tone curve.
 	if (u_Parameters.Contrast != 1.0)

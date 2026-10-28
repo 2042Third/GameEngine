@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <span>
 
 namespace Strata::PostProcessMath
 {
@@ -39,5 +40,42 @@ namespace Strata::PostProcessMath
 	float EvaluateFilmicCurve(float x, const FilmicCurve& curve);
 	// The whole operator (Include/Filmic.glsl's TonemapFilmic): the inset, the curve per channel, the outset, clamped to [0, 1].
 	glm::vec3 ApplyFilmic(const glm::vec3& exposed, const FilmicCurve& curve);
+
+	// White balance. The white locus (Renderer/WhiteBalanceLocus.inl, Tools/GenerateWhiteBalance.py): an entry every 5 mireds
+	// from 60 to 510, its CIE 1960 (u, v) and unit normal toward green; the daylight locus at and above 5000 K (shifted so that
+	// 6500 K is sRGB's D65 white), Planck's at and below 4000 K, blended between.
+	struct WhiteLocusEntry
+	{
+		double Mireds;
+		double U;
+		double V;
+		double NormalU;
+		double NormalV;
+	};
+	std::span<const WhiteLocusEntry> GetWhiteLocusTable();
+	// The locus at a temperature (clamped to the table), interpolated linearly in mireds: (u, v, normal u, normal v).
+	glm::dvec4 GetWhiteLocus(double kelvin);
+	// sRGB's linear color of a CIE 1960 (u, v) chromaticity at luminance 1.
+	glm::dvec3 ChromaticityToLinearSRGB(const glm::dvec2& uv);
+	// The white balance of scene-linear sRGB light: the light of the white locus at `kelvin` (2,000 to 15,000), moved along
+	// the locus's normal by 0.02 * `tint` in (u, v) (positive assumes a greener light, so the image turns magenta), shows as
+	// white. A von Kries scaling in the cone space of CAT02 (CIE 159:2004), relative to sRGB's D65 white:
+	// M = XYZToSRGB * CAT02^-1 * diag(reference / light cones) * CAT02 * SRGBToXYZ, computed in double. 6500 K and tint 0
+	// return the identity exactly; lower temperatures cool the image, higher warm it.
+	glm::mat3 GetWhiteBalanceMatrix(float kelvin, float tint);
+
+	// The grading before the tone curve (Include/... Tonemap.frag): c1 = Matrix * c (white balance times the slope), c2 =
+	// max(c1 + Offset, 0) (the offset in units of light, PostProcessComponent::ColorOffset times middle gray), c3 = 0.18 *
+	// (c2 / 0.18)^Power. Active is false when every part is neutral: the tone mapping then skips it (bit-identical to none).
+	struct ColorGrading
+	{
+		glm::mat3 Matrix = glm::mat3(1.0f);
+		glm::vec3 Offset = glm::vec3(0.0f);
+		glm::vec3 Power = glm::vec3(1.0f);
+		bool Active = false;
+	};
+	// From the Post Process's values (each clamped to its property's range; non-finite values are neutral).
+	ColorGrading MakeColorGrading(float kelvin, float tint, const glm::vec3& slope, const glm::vec3& offset, const glm::vec3& power);
+	glm::vec3 ApplyColorGrading(const glm::vec3& color, const ColorGrading& grading);
 
 }

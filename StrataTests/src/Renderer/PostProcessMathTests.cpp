@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -90,6 +91,85 @@ namespace
 	{
 		const double difference = std::fmod(a - b + 540.0, 360.0) - 180.0;
 		return std::abs(difference);
+	}
+
+	glm::dvec2 XYToUV(const glm::dvec2& xy)
+	{
+		const double denominator = -2.0 * xy.x + 12.0 * xy.y + 3.0;
+		return glm::dvec2(4.0 * xy.x / denominator, 6.0 * xy.y / denominator);
+	}
+
+	// The CIE daylight locus's chromaticity polynomial (CIE 15) at a nominal temperature (corrected by 1.4388 / 1.4380).
+	glm::dvec2 DaylightUV(double kelvin)
+	{
+		const double t = kelvin * 1.4388 / 1.4380;
+		const double x = t <= 7000.0 ? -4.6070e9 / (t * t * t) + 2.9678e6 / (t * t) + 0.09911e3 / t + 0.244063
+									 : -2.0064e9 / (t * t * t) + 1.9018e6 / (t * t) + 0.24748e3 / t + 0.237040;
+		return XYToUV(glm::dvec2(x, -3.000 * x * x + 2.870 * x - 0.275));
+	}
+
+	// Planck's law against the CIE 1931 2-degree observer at 10 nm (every second row of its 5 nm table).
+	glm::dvec2 PlanckianUV(double kelvin)
+	{
+		struct Row
+		{
+			double Wavelength;
+			double X;
+			double Y;
+			double Z;
+		};
+		constexpr Row c_Observer[] = {
+			{ 380, 0.001368, 3.9e-05, 0.006450001 },
+			{ 390, 0.004243, 0.00012, 0.02005001 },
+			{ 400, 0.01431, 0.000396, 0.06785001 },
+			{ 410, 0.04351, 0.00121, 0.2074 },
+			{ 420, 0.13438, 0.004, 0.6456 },
+			{ 430, 0.2839, 0.0116, 1.3856 },
+			{ 440, 0.34828, 0.023, 1.74706 },
+			{ 450, 0.3362, 0.038, 1.77211 },
+			{ 460, 0.2908, 0.06, 1.6692 },
+			{ 470, 0.19536, 0.09098, 1.28764 },
+			{ 480, 0.09564, 0.13902, 0.8129501 },
+			{ 490, 0.03201, 0.20802, 0.46518 },
+			{ 500, 0.0049, 0.323, 0.272 },
+			{ 510, 0.0093, 0.503, 0.1582 },
+			{ 520, 0.06327, 0.71, 0.07824999 },
+			{ 530, 0.1655, 0.862, 0.04216 },
+			{ 540, 0.2904, 0.954, 0.0203 },
+			{ 550, 0.4334499, 0.9949501, 0.008749999 },
+			{ 560, 0.5945, 0.995, 0.0039 },
+			{ 570, 0.7621, 0.952, 0.0021 },
+			{ 580, 0.9163, 0.87, 0.001650001 },
+			{ 590, 1.0263, 0.757, 0.0011 },
+			{ 600, 1.0622, 0.631, 0.0008 },
+			{ 610, 1.0026, 0.503, 0.00034 },
+			{ 620, 0.8544499, 0.381, 0.00019 },
+			{ 630, 0.6424, 0.265, 4.999999e-05 },
+			{ 640, 0.4479, 0.175, 2e-05 },
+			{ 650, 0.2835, 0.107, 0.0 },
+			{ 660, 0.1649, 0.061, 0.0 },
+			{ 670, 0.0874, 0.032, 0.0 },
+			{ 680, 0.04677, 0.017, 0.0 },
+			{ 690, 0.0227, 0.00821, 0.0 },
+			{ 700, 0.01135916, 0.004102, 0.0 },
+			{ 710, 0.005790346, 0.002091, 0.0 },
+			{ 720, 0.002899327, 0.001047, 0.0 },
+			{ 730, 0.001439971, 0.00052, 0.0 },
+			{ 740, 0.0006900786, 0.0002492, 0.0 },
+			{ 750, 0.0003323011, 0.00012, 0.0 },
+			{ 760, 0.0001661505, 6e-05, 0.0 },
+			{ 770, 8.307527e-05, 3e-05, 0.0 },
+			{ 780, 4.150994e-05, 1.499e-05, 0.0 },
+		};
+		glm::dvec3 xyz(0.0);
+		for (const Row& row : c_Observer)
+		{
+			const double meters = row.Wavelength * 1e-9;
+			const double radiance = std::pow(meters, -5.0) / std::expm1(1.4388e-2 / (meters * kelvin));
+			xyz += radiance * glm::dvec3(row.X, row.Y, row.Z);
+		}
+		const double denominator = xyz.x + 15.0 * xyz.y + 3.0 * xyz.z;
+		return glm::dvec2(4.0 * xyz.x / denominator, 6.0 * xyz.y / denominator);
 	}
 
 	struct FilmicTestColor
@@ -370,5 +450,112 @@ TEST_SUITE("Renderer.PostProcessMath")
 			CHECK(PostProcessMath::ApplyFilmic(glm::vec3(value), look).g == doctest::Approx(PostProcessMath::EvaluateFilmicCurve(value, look)).epsilon(1e-4));
 		CHECK(PostProcessMath::ApplyFilmic(glm::vec3(0.0f), look) == glm::vec3(0.0f));
 		CHECK(PostProcessMath::ApplyFilmic(glm::vec3(-1.0f), look) == glm::vec3(0.0f));
+	}
+
+	TEST_CASE("White balance at 6500 K and tint 0 is the identity")
+	{
+		CHECK(PostProcessMath::GetWhiteBalanceMatrix(6500.0f, 0.0f) == glm::mat3(1.0f));
+		const PostProcessMath::ColorGrading neutral = PostProcessMath::MakeColorGrading(6500.0f, 0.0f, glm::vec3(1.0f), glm::vec3(0.0f), glm::vec3(1.0f));
+		CHECK_FALSE(neutral.Active);
+		CHECK(PostProcessMath::ApplyColorGrading(glm::vec3(0.3f, 0.2f, 0.1f), neutral) == glm::vec3(0.3f, 0.2f, 0.1f));
+		// Near 6500 K the matrix is near the identity: the default lies on the locus (no jump).
+		const glm::mat3 near = PostProcessMath::GetWhiteBalanceMatrix(6550.0f, 0.0f);
+		for (int column = 0; column < 3; column++)
+		{
+			for (int row = 0; row < 3; row++)
+				CHECK(std::abs(near[column][row] - (column == row ? 1.0f : 0.0f)) < 0.01f);
+		}
+	}
+
+	TEST_CASE("White balance neutralizes the light it names")
+	{
+		for (double kelvin : { 3200.0, 4500.0, 9000.0 })
+		{
+			for (float tint : { 0.0f, 0.5f, -1.0f })
+			{
+				const glm::dvec4 locus = PostProcessMath::GetWhiteLocus(kelvin);
+				const glm::dvec2 light = glm::dvec2(locus.x, locus.y) + 0.02 * static_cast<double>(tint) * glm::dvec2(locus.z, locus.w);
+				const glm::vec3 shown = PostProcessMath::GetWhiteBalanceMatrix(static_cast<float>(kelvin), tint) * glm::vec3(PostProcessMath::ChromaticityToLinearSRGB(light));
+				CAPTURE(kelvin);
+				CAPTURE(tint);
+				CHECK(std::abs(shown.r - shown.g) < 1e-3f * shown.g);
+				CHECK(std::abs(shown.b - shown.g) < 1e-3f * shown.g);
+			}
+		}
+	}
+
+	TEST_CASE("Lower temperatures cool the image and tint moves between green and magenta")
+	{
+		const glm::vec3 gray(0.18f);
+		const glm::vec3 tungsten = PostProcessMath::GetWhiteBalanceMatrix(3200.0f, 0.0f) * gray;
+		CHECK(tungsten.b > tungsten.r); // A light named warmer than it is: the white-lit image turns blue
+		const glm::vec3 shade = PostProcessMath::GetWhiteBalanceMatrix(9000.0f, 0.0f) * gray;
+		CHECK(shade.r > shade.b); // Named cooler: it warms
+		const glm::vec3 magenta = PostProcessMath::GetWhiteBalanceMatrix(6500.0f, 1.0f) * gray;
+		CHECK(magenta.g < magenta.r);
+		CHECK(magenta.g < magenta.b);
+		const glm::vec3 green = PostProcessMath::GetWhiteBalanceMatrix(6500.0f, -1.0f) * gray;
+		CHECK(green.g > green.r);
+		CHECK(green.g > green.b);
+	}
+
+	TEST_CASE("The white locus matches Planck's law below 4000 K and the daylight formula above 5000 K")
+	{
+		const std::span<const PostProcessMath::WhiteLocusEntry> table = PostProcessMath::GetWhiteLocusTable();
+		REQUIRE(table.size() == 91);
+		CHECK(table.front().Mireds == 60.0);
+		CHECK(table.back().Mireds == 510.0);
+		auto entry = [&](double mireds) -> const PostProcessMath::WhiteLocusEntry&
+		{
+			const size_t index = static_cast<size_t>((mireds - 60.0) / 5.0);
+			REQUIRE(table[index].Mireds == mireds);
+			return table[index];
+		};
+		// Planck's law against the CIE 1931 2-degree observer's 10 nm table.
+		for (double mireds : { 250.0, 300.0, 350.0, 420.0, 500.0 })
+		{
+			const glm::dvec2 expected = PlanckianUV(1e6 / mireds);
+			CAPTURE(mireds);
+			CHECK(std::abs(entry(mireds).U - expected.x) < 5e-4);
+			CHECK(std::abs(entry(mireds).V - expected.y) < 5e-4);
+		}
+		// The CIE daylight formula (shifted onto D65 at 6500 K, by less than 1e-4).
+		for (double mireds : { 60.0, 100.0, 150.0, 175.0, 200.0 })
+		{
+			const glm::dvec2 expected = DaylightUV(1e6 / mireds);
+			CAPTURE(mireds);
+			CHECK(std::abs(entry(mireds).U - expected.x) < 5e-4);
+			CHECK(std::abs(entry(mireds).V - expected.y) < 5e-4);
+		}
+		// 6500 K is sRGB's white, D65.
+		const glm::dvec4 at6500 = PostProcessMath::GetWhiteLocus(6500.0);
+		const glm::dvec2 d65 = XYToUV(glm::dvec2(0.3127, 0.3290));
+		CHECK(std::abs(at6500.x - d65.x) < 1e-5);
+		CHECK(std::abs(at6500.y - d65.y) < 1e-5);
+		// No jump: consecutive entries lie close, and the normals are unit length, toward green.
+		for (size_t index = 0; index + 1 < table.size(); index++)
+		{
+			CHECK(std::hypot(table[index + 1].U - table[index].U, table[index + 1].V - table[index].V) < 0.004);
+			CHECK(std::abs(std::hypot(table[index].NormalU, table[index].NormalV) - 1.0) < 1e-6);
+			CHECK(table[index].NormalV > 0.0);
+		}
+	}
+
+	TEST_CASE("Grading applies slope, offset and power around middle gray")
+	{
+		const PostProcessMath::ColorGrading grading = PostProcessMath::MakeColorGrading(6500.0f, 0.0f, glm::vec3(2.0f, 1.0f, 0.5f), glm::vec3(0.1f, 0.0f, -0.1f),
+			glm::vec3(1.0f, 2.0f, 1.0f));
+		CHECK(grading.Active);
+		const glm::vec3 graded = PostProcessMath::ApplyColorGrading(glm::vec3(0.18f), grading);
+		CHECK(graded.r == doctest::Approx(0.18f * 2.0f + 0.018f));
+		CHECK(graded.g == doctest::Approx(0.18f)); // A power keeps middle gray
+		CHECK(graded.b == doctest::Approx(0.18f * 0.5f - 0.018f));
+		CHECK(PostProcessMath::ApplyColorGrading(glm::vec3(0.36f), grading).g == doctest::Approx(0.72f)); // (2)^2 times middle gray
+		// Out-of-range and non-finite values clamp to the properties' ranges or are neutral.
+		const PostProcessMath::ColorGrading clamped = PostProcessMath::MakeColorGrading(std::numeric_limits<float>::quiet_NaN(), 5.0f, glm::vec3(10.0f),
+			glm::vec3(-1.0f), glm::vec3(0.0f));
+		CHECK(clamped.Power == glm::vec3(0.2f));
+		CHECK(clamped.Offset == glm::vec3(-0.1f * 0.18f));
+		CHECK(clamped.Matrix == PostProcessMath::GetWhiteBalanceMatrix(6500.0f, 1.0f) * 4.0f);
 	}
 }

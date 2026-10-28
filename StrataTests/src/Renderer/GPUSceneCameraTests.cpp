@@ -506,4 +506,70 @@ TEST_SUITE("GPU.SceneRenderer.Camera")
 		CHECK(middleGray(TonemapOperator::Reinhard) == 109);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("Grading at its defaults renders bit-identically to no grading; white balance, slope, offset and power follow the CPU math")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		constexpr uint32_t c_Size = 16;
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		const glm::vec3 colors[] = { { 0.18f, 0.18f, 0.18f }, { 0.4f, 0.2f, 0.1f }, { 0.05f, 0.1f, 0.3f }, { 0.01f, 0.012f, 0.008f } };
+		struct Grading
+		{
+			float Temperature;
+			float Tint;
+			glm::vec3 Slope;
+			glm::vec3 Offset;
+			glm::vec3 Power;
+		};
+		const Grading gradings[] = {
+			{ 3200.0f, 0.0f, glm::vec3(1.0f), glm::vec3(0.0f), glm::vec3(1.0f) },
+			{ 9000.0f, -0.5f, glm::vec3(1.0f), glm::vec3(0.0f), glm::vec3(1.0f) },
+			{ 6500.0f, 0.0f, glm::vec3(1.2f, 1.0f, 0.8f), glm::vec3(0.0f), glm::vec3(1.0f) },
+			{ 6500.0f, 0.0f, glm::vec3(1.0f), glm::vec3(0.05f, 0.0f, -0.05f), glm::vec3(1.0f) },
+			{ 5600.0f, 0.3f, glm::vec3(1.1f, 0.9f, 1.0f), glm::vec3(0.0f, 0.02f, 0.0f), glm::vec3(1.3f, 1.0f, 0.8f) },
+		};
+		for (const glm::vec3& color : colors)
+		{
+			MaterialProperties material = Emitting(1.0f);
+			material.EmissiveColor = color;
+			FlatField field(assets, 1.0f);
+			field.Wall.GetComponent<MeshRendererComponent>().Material = assets.AddMaterial(material);
+			field.Wall.MarkModified<MeshRendererComponent>();
+			// The neutral grading takes no branch: the image equals the one before grading existed, a plain clip.
+			const ReadbackImage neutral = RenderToImage(renderer, field.SceneData, field.Camera);
+			ReadbackImage hdr;
+			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), hdr));
+			const glm::vec3 scene = glm::vec3(ReadHalfTexel(hdr, c_Size / 2, c_Size / 2));
+			const glm::u8vec4 plain = GetPixelRGBA8(neutral, c_Size / 2, c_Size / 2);
+			const glm::vec3 plainExpected = PostProcessMath::LinearToSRGB(glm::clamp(scene, 0.0f, 1.0f)) * 255.0f;
+			CHECK(std::abs(static_cast<float>(plain.r) - plainExpected.r) <= 0.5f);
+			for (const Grading& grading : gradings)
+			{
+				field.PostProcess->WhiteBalanceTemperature = grading.Temperature;
+				field.PostProcess->WhiteBalanceTint = grading.Tint;
+				field.PostProcess->ColorSlope = grading.Slope;
+				field.PostProcess->ColorOffset = grading.Offset;
+				field.PostProcess->ColorPower = grading.Power;
+				const ReadbackImage image = RenderToImage(renderer, field.SceneData, field.Camera);
+				const PostProcessMath::ColorGrading cpu = PostProcessMath::MakeColorGrading(grading.Temperature, grading.Tint, grading.Slope, grading.Offset,
+					grading.Power);
+				const glm::vec3 expected = PostProcessMath::LinearToSRGB(glm::clamp(PostProcessMath::ApplyColorGrading(scene, cpu), 0.0f, 1.0f)) * 255.0f;
+				const glm::u8vec4 pixel = GetPixelRGBA8(image, c_Size / 2, c_Size / 2);
+				const glm::vec3 difference = glm::abs(glm::vec3(pixel.r, pixel.g, pixel.b) - expected);
+				CAPTURE(color);
+				CAPTURE(grading.Temperature);
+				CHECK(std::max({ difference.r, difference.g, difference.b }) <= 1.0f);
+			}
+			field.PostProcess->WhiteBalanceTemperature = 6500.0f;
+			field.PostProcess->WhiteBalanceTint = 0.0f;
+			field.PostProcess->ColorSlope = glm::vec3(1.0f);
+			field.PostProcess->ColorOffset = glm::vec3(0.0f);
+			field.PostProcess->ColorPower = glm::vec3(1.0f);
+			CHECK(MaxDifference(RenderToImage(renderer, field.SceneData, field.Camera), neutral) == 0);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

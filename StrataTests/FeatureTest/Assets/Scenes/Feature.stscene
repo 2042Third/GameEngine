@@ -272,6 +272,21 @@
 						"Bloom": true,
 						"BloomIntensity": 0.08,
 						"BloomThreshold": 1,
+						"ColorOffset": [
+							0.0,
+							0.0,
+							0.002
+						],
+						"ColorPower": [
+							1.0,
+							1.0,
+							1.05
+						],
+						"ColorSlope": [
+							1.02,
+							1.0,
+							0.98
+						],
 						"Contrast": 1.05,
 						"Exposure": 0.25,
 						"Saturation": 1.1,
@@ -290,7 +305,9 @@
 						"TAASharpening": 0.9,
 						"TAATransparentWeight": 0.9,
 						"Tonemapper": "AgX",
-						"Vignette": 0.1
+						"Vignette": 0.1,
+						"WhiteBalanceTemperature": 5600,
+						"WhiteBalanceTint": 0.1
 					},
 					"SkyLight": {
 						"AmbientColor": [

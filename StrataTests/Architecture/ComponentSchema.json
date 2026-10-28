@@ -1560,6 +1560,66 @@
 					"Speed": 0.0,
 					"Tooltip": "How softly highlights roll off to white: higher reaches white more stops above middle gray (5 at 0, 6.5 at 0.5, 8 at 1), keeping more highlight detail (Filmic only)",
 					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "White Balance Temperature",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 15000.0,
+					"Min": 2000.0,
+					"Name": "WhiteBalanceTemperature",
+					"Speed": 50.0,
+					"Tooltip": "Temperature in kelvin of the light that shows as white: lower values cool the image (3200 for tungsten light), higher warm it; 6500 is neutral",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "White Balance Tint",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": -1.0,
+					"Name": "WhiteBalanceTint",
+					"Speed": 0.0,
+					"Tooltip": "Tint: positive adds magenta, negative green",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color Slope",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 4.0,
+					"Min": 0.0,
+					"Name": "ColorSlope",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Slope: per-channel gain before the tone curve",
+					"Type": "Vec3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color Offset",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.10000000149011612,
+					"Min": -0.10000000149011612,
+					"Name": "ColorOffset",
+					"Speed": 0.0010000000474974513,
+					"Tooltip": "Offset: light added per channel, in fractions of middle gray (tints the shadows most)",
+					"Type": "Vec3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color Power",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 5.0,
+					"Min": 0.20000000298023224,
+					"Name": "ColorPower",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Power: per-channel contrast around middle gray",
+					"Type": "Vec3"
 				}
 			]
 		},
