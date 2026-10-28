@@ -1705,8 +1705,40 @@ Step 0 at cc9524a1 against section 2.2 (names only; the design is unchanged):
   a chip without an icon leaves a gap.
 - `GraphicsQualityPage` also records `Header.<Preset>` probes; the players' banner is `UI::Banner` with a
   `UI::ToolbarButton` under it, and "Player" pills mark the fields the players' options set (the preset beside the chips).
-- The Scene view's tenth chip needs about 400 units of view as icons: `Editor.UI`'s narrow-strip test uses a 1000-unit
-  window (was 900) so that its view still holds every chip.
+- The Scene view's tenth chip needs about 400 units of view as icons, more than a 900-unit editor window leaves it:
+  `UI::ChipStrip` puts the chips that do not fit even as icons on rows under the first, and the toolbar makes room for
+  them (`ViewportToolbar::Compute(rows)`). `Editor.UI`'s narrow-strip test keeps its 900-unit window and adds a
+  720-unit one that must wrap (the first landing had widened the test's window instead; the review found it).
 - The Third-Person Adventure's Graphics row is a two-by-two grid (`gridLayout`, cells of 198 x 40), not one line of four
   (`horizontalLayout`): the sample's font is wide, and "Medium" wrapped in a quarter of the row. The toggles are copies
   of the panel's VSync toggle (`entity.duplicate`), so they keep its look.
+
+After the independent review of the landing (2026-10-28):
+
+- D1 step 3: a row that follows the preset, set while the player's own preset is not Custom, switches the player to
+  Custom first also under the project's Custom (the spec set the field alone there), so the player's tuning holds every
+  row and keeps its meaning when the project's preset changes. A row that follows the preset is the player's (source)
+  only while the player's preset decides it or their own value of it is in effect.
+- D9: the Custom column's tooltip says where an edit starts: the preset's values, or the Custom values chosen earlier
+  when `MakeCustomStart` kept a tuning (probe `CustomTooltip` while it shows). The players' banner formats values as
+  the table does; scripts' Float options are stored as the float's shortest decimal (`FloatToJson`).
+- D10 and D11: through the scene's camera ("Game camera", the canvas mode) the chip names the game's preset (a player's
+  choice while playing) and shows the view's own setting on but muted; the sun's line names the quality its frame was
+  drawn with (`ViewportRenderStamp::FromScene`: "through the scene's camera (Medium, the player's; the project: High)")
+  and reads "No shadow maps: Cast Shadows is off" when no inspected light casts shadows. `GPU.Editor.GameGraphics`
+  measures S6's acceptance line, "Shadow maps: 4 x 4096 (Graphics Quality: High)", in a Scene view of 1440 rows.
+- `Renderer.Quality`'s field descriptions are written for players too (games' menus show them through
+  `Graphics::Options`): no "Custom only", engine versions or the editor's layout, which `Renderer.Quality` checks; the
+  later streams' new fields (`light-and-materials`' and `camera-and-tone`'s specs wrote "Custom only: ...") follow.
+- S2's `--quality` routing has a test that fails with step 0's override: `StrataRuntime.FeatureTestQuality` (labels
+  `feature`, `gpu`) runs the exported feature game in a window with `--quality low`, whose scripts log that the command
+  line fixes the preset.
+- Section 8's A/Bs (Release, interleaved under `Tools/PerfLock.py`, the branch with these fixes against cc9524a1 built
+  the same way, on the temporary 2133 MT/s memory with other streams building, so ratios only):
+  `Perf.Editor.SelectionFrame100kSelected` base 8.76 ms, branch 8.86 ms, ratio 1.011 (8 pairs; expected within 1.02);
+  `PerfGPU.Renderer` (4 pairs, all 46 metrics on both sides): GPU times 0.85 to 1.00, CPU times 0.85 to 1.12 (the
+  largest, `Render100kCubesShadowed`: base 0.270 ms, branch 0.303 ms, the base's own runs from 0.238 to 0.356 ms),
+  editor frames (`EditFrame*`) 0.89 to 1.03: no change beyond the noise. No budget changed.
+- S8 (supersampled stills, below the cut) was not started; S9 landed without it, against section 3's order. Nothing
+  ships or documents `viewport.capture {supersample}`: S8 goes to the Roadmap's "Later" unless the integrator schedules
+  it, and wave 8's showcase cannot count on it.
