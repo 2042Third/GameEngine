@@ -26,6 +26,7 @@
 #include <chrono>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -273,6 +274,68 @@ namespace Strata
 		glm::vec4 Color = glm::vec4(0.0f); // Display color (sRGB-encoded); alpha is the tint's opacity
 	};
 
+	// What a lighting debug view shows instead of the lit image (SceneRenderOptions::LightingView). The values follow the order
+	// of the editor's debug view names and Include/Scene.glsl's ST_LIGHTING_VIEW_* constants; nothing stores them.
+	enum class SceneLightingView : uint8_t
+	{
+		None = 0,
+		Lighting,         // Every lit surface shaded white (albedo 1, metallic and roughness kept, no emission), through the scene's exposure
+		AmbientOcclusion, // The occlusion the forward pass applies to indirect light (material x screen), as gray
+		Indirect,         // Only the indirect light (sky, probes, screen-space reflections), through the scene's exposure
+		Luminance,        // The scene's luminance as EV100 bands (log2 nits + 3)
+		Albedo            // The base color, with values outside [RenderData::c_AlbedoLow, c_AlbedoHigh] marked
+	};
+
+	// Display colors of the lighting views that show values (sRGB; alpha unused). Not saved: the editor sets them from its theme.
+	struct LightingViewColors
+	{
+		// EV100 bands from LuminanceFirstEV100 on, one EV wide: below the first band its color, above the last the last's. An
+		// even ramp from dark blue through green and yellow to white.
+		std::array<glm::vec4, RenderData::c_LightingViewLuminanceColors> Luminance = { {
+			{ 0.06f, 0.06f, 0.30f, 1.0f },
+			{ 0.08f, 0.16f, 0.55f, 1.0f },
+			{ 0.10f, 0.30f, 0.78f, 1.0f },
+			{ 0.10f, 0.48f, 0.82f, 1.0f },
+			{ 0.10f, 0.62f, 0.62f, 1.0f },
+			{ 0.16f, 0.70f, 0.38f, 1.0f },
+			{ 0.40f, 0.78f, 0.22f, 1.0f },
+			{ 0.68f, 0.84f, 0.18f, 1.0f },
+			{ 0.92f, 0.86f, 0.20f, 1.0f },
+			{ 0.98f, 0.70f, 0.24f, 1.0f },
+			{ 1.00f, 0.86f, 0.62f, 1.0f },
+			{ 1.00f, 1.00f, 1.00f, 1.0f } } };
+		// The first band's lower edge: from 5 (4 nits, a dim interior) the bands reach 17 (16,000 nits, sunlit snow).
+		float LuminanceFirstEV100 = 5.0f;
+		glm::vec4 AlbedoLow = { 0.20f, 0.40f, 0.95f, 1.0f };  // Over albedo below RenderData::c_AlbedoLow (blended at 0.7)
+		glm::vec4 AlbedoHigh = { 0.95f, 0.20f, 0.18f, 1.0f }; // Over albedo above RenderData::c_AlbedoHigh (diagonal stripes, 0.7)
+		glm::vec4 Background = { 0.5f, 0.5f, 0.5f, 1.0f };    // Pixels without a surface in the occlusion and albedo views
+	};
+
+	// What a lighting view measured in one frame, read back frames later (a readback, never waited for:
+	// SceneRenderer::GetLightingViewStats).
+	struct LightingViewStats
+	{
+		SceneLightingView View = SceneLightingView::None;
+		uint64_t Render = 0;       // The renderer's frame the statistics belong to (its GetRenderCount once that frame was rendered)
+		float SurfaceShare = 0.0f; // Share of the image's pixels that show a surface (a depth was drawn)
+		// Lighting, Indirect, Luminance: EV100 of the surfaces' pixels at the 5th, 50th and 95th percentile, and the median of the
+		// background's (the sky or the clear color); NaN where there are no such pixels or the view does not measure them.
+		glm::vec3 SurfaceEV100 = glm::vec3(std::numeric_limits<float>::quiet_NaN());
+		float BackgroundEV100 = std::numeric_limits<float>::quiet_NaN();
+		// AmbientOcclusion and Albedo (the albedo's luminance): the surfaces' median and 5th percentile; Albedo: the shares of the
+		// surface pixels below RenderData::c_AlbedoLow and above c_AlbedoHigh.
+		float ValueMedian = std::numeric_limits<float>::quiet_NaN();
+		float ValueP05 = std::numeric_limits<float>::quiet_NaN();
+		float BelowRangeShare = 0.0f;
+		float AboveRangeShare = 0.0f;
+		// Every view: illuminance in lux on a horizontal surface from the directional light at the ground (after the atmosphere,
+		// before shadows) and from the sky (pi times the irradiance map at +Y times the sky's intensity, or pi times the constant
+		// ambient without an environment), and their ratio (0 without either).
+		float SunIlluminance = 0.0f;
+		float SkyIlluminance = 0.0f;
+		float SunToSkyRatio = 0.0f;
+	};
+
 	// How a scene is shown, beyond its own data: mainly editor views. With the defaults a scene renders exactly as a game
 	// shows it.
 	struct SceneRenderOptions
@@ -351,6 +414,16 @@ namespace Strata
 		// yellow-green, left cyan, down violet) and its strength the speed, full at 16 pixels a frame; still pixels show the
 		// image darkened. Where nothing was drawn (the sky) the motion is the camera's.
 		bool ShowMotionVectors = false;
+
+		// A lighting debug view (SceneLightingView). Lighting and Indirect change what the forward pass shades and are exposed and
+		// tone mapped as the image is; AmbientOcclusion and Albedo write their values (unexposed) and Luminance keeps the lit
+		// image, and the three replace the finished image with their values in LightingViewColors (Overlay/LightingView.frag,
+		// first among the overlays; the motion view is left out with one). Every view measures its frame
+		// (SceneRenderer::GetLightingViewStats). A change of the view starts the temporal history again, and while
+		// AmbientOcclusion or Albedo shows, whose values are not light, the automatic pre-exposure holds its value. Frames with
+		// HDROutput shade with the view but measure and replace nothing.
+		SceneLightingView LightingView = SceneLightingView::None;
+		LightingViewColors LightingViewColors;
 	};
 
 	struct SceneRendererStats
@@ -511,6 +584,9 @@ namespace Strata
 		// then the brightest and darkest values of the frame may have overflowed or lost precision (captures wait for it).
 		float PreExposure = 1.0f;
 		bool PreExposureSettled = false;
+		// A lighting view is on (SceneRenderOptions::LightingView) and no statistics of a frame drawn with it since it was chosen
+		// arrived yet (SceneRenderer::GetLightingViewStats).
+		bool LightingViewPending = false;
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -751,6 +827,10 @@ namespace Strata
 		// Resolves the GPU stats of the frames rendered so far; with `wait`, waits for the GPU first so the last frame's are
 		// known (tests and tools).
 		void ResolveGPUStats(bool wait);
+		// The newest statistics of the current lighting view (SceneRenderOptions::LightingView) measured since it was chosen:
+		// empty without a view and until the first readback of a frame drawn with it arrived (SceneRendererStats::
+		// LightingViewPending). Render polls the readbacks without waiting; ResolveGPUStats(true) waits for them.
+		const std::optional<LightingViewStats>& GetLightingViewStats() const { return m_LightingViewStats; }
 		// Frames rendered (Render calls that returned true) since the renderer was created.
 		uint64_t GetRenderCount() const { return m_RenderCount; }
 		// Whether frames are culled and drawn by the GPU (SceneRendererSpecification::GPUDriven and the device).
@@ -1197,7 +1277,8 @@ namespace Strata
 		// manual exposure into the exposure buffer.
 		void UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* bindingSet);
 		// The frame's pre-exposure (m_PreExposure) from the options, the settings and the readbacks of earlier frames' metering.
-		void ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options);
+		// `hold` (frames of a lighting view whose values are not light): automatic exposure keeps the value it has, settled.
+		void ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options, bool hold);
 		// After the executed command list of a frame that recorded the exposure's copy: the copy is pending.
 		void SubmitExposureReadback();
 		// Ends the holds of captures no gather of this frame or the previous one waited for.
@@ -1501,6 +1582,26 @@ namespace Strata
 		bool DrawMotionView(nvrhi::ICommandList* commandList, const nvrhi::Viewport& viewport);
 		// The tints of SceneRenderOptions::EntityTints (StatusTint.frag); false when GPU resources failed.
 		bool DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport);
+
+		// Lighting debug views (SceneRenderOptions::LightingView; SceneRendererLightingView.cpp).
+		// Whether a view's values are not light (AmbientOcclusion, Albedo): written unexposed, the pre-exposure held.
+		static bool IsLightingValueView(SceneLightingView view);
+		// Follows a change of the view between frames, before the frame's pre-exposure is chosen: the temporal history starts
+		// again and the statistics of the earlier view are dropped; entering or leaving a value view starts a new epoch of the
+		// exposure's readbacks (none recorded around the switch is followed), and leaving one jumps the exposure's adaptation.
+		void BeginLightingViewFrame(SceneLightingView view);
+		// The view's statistics pass (Effects/LightingViewStats.comp) into the next readback, and for the views of values and
+		// luminance the overlay over the output (Overlay/LightingView.frag); false when GPU resources failed (reported).
+		bool RecordLightingView(nvrhi::ICommandList* commandList, const SceneRenderOptions& options, const RenderData::FrameConstants& frame,
+			const nvrhi::Viewport& viewport);
+		// After the executed command list of a frame that recorded the statistics' copy: the copy is pending.
+		void SubmitLightingViewReadback();
+		// Turns the newest completed readback of the current view into m_LightingViewStats (with `wait`, waits for the pending
+		// ones first).
+		void ResolveLightingViewStats(bool wait);
+		// The statistics buffer, its readbacks and the binding sets naming the targets (the pipelines stay), released with the
+		// targets.
+		void ReleaseLightingViewResources(std::vector<nvrhi::ResourceHandle>& released);
 	private:
 		SceneRendererSpecification m_Specification;
 		nvrhi::IDevice* m_Device = nullptr;
@@ -2103,6 +2204,33 @@ namespace Strata
 		nvrhi::BindingLayoutHandle m_MotionViewLayout;
 		nvrhi::BindingSetHandle m_MotionViewBindingSet;
 		nvrhi::GraphicsPipelineHandle m_MotionViewPipeline;
+		// Lighting debug views (RecordLightingView): the latest frame's view and the frame it was chosen in (RenderCount + 1); the
+		// overlay's and the statistics' layouts and pipelines (made by the first frame of a view, kept for the renderer's life:
+		// the capture renderer releases its targets after every picture); their binding sets (with the targets; the statistics'
+		// names the irradiance map it was made with); the statistics buffer and a ring of readbacks, each with the frame, view and
+		// sun illuminance it measured; the newest statistics.
+		SceneLightingView m_LightingView = SceneLightingView::None;
+		uint64_t m_LightingViewChosen = 0;
+		nvrhi::BindingLayoutHandle m_LightingOverlayLayout;
+		nvrhi::GraphicsPipelineHandle m_LightingOverlayPipeline;
+		nvrhi::BindingSetHandle m_LightingOverlayBindingSet;
+		nvrhi::BindingLayoutHandle m_LightingStatsLayout;
+		nvrhi::ComputePipelineHandle m_LightingStatsPipeline;
+		nvrhi::BindingSetHandle m_LightingStatsBindingSet;
+		nvrhi::ITexture* m_LightingStatsIrradiance = nullptr;
+		nvrhi::BufferHandle m_LightingStatsBuffer;
+		struct LightingViewReadback
+		{
+			Scope<BufferReadback> Readback;
+			uint64_t Render = 0;
+			SceneLightingView View = SceneLightingView::None;
+			float SunIlluminance = 0.0f;
+		};
+		static constexpr uint32_t c_LightingViewReadbacks = 3;
+		std::array<LightingViewReadback, c_LightingViewReadbacks> m_LightingViewReadbacks;
+		uint32_t m_LightingViewReadbackIndex = 0;
+		bool m_LightingViewReadbackRecorded = false; // The frame being recorded copies the statistics (SubmitLightingViewReadback)
+		std::optional<LightingViewStats> m_LightingViewStats;
 		nvrhi::BindingLayoutHandle m_MotionCopyLayout;
 		nvrhi::ComputePipelineHandle m_MotionCopyPipeline;
 		nvrhi::BufferHandle m_MotionCopyListBuffer; // The elements a frame copies: the instances', then the joints'

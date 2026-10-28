@@ -105,6 +105,7 @@ strata_add_shaders(Strata_Renderer
 		Effects/AOBlur.comp
 		Effects/ScreenSpaceReflections.comp
 		Effects/SceneColorCopy.comp
+		Effects/LightingViewStats.comp
 		PostProcess/Fullscreen.vert
 		PostProcess/Tonemap.frag
 		PostProcess/Histogram.comp
@@ -121,6 +122,7 @@ strata_add_shaders(Strata_Renderer
 		Overlay/Outline.frag
 		Overlay/StatusTint.frag
 		Overlay/MotionView.frag
+		Overlay/LightingView.frag
 		Overlay/DebugLine.vert
 		Overlay/DebugLine.frag
 		Overlay/Text.vert

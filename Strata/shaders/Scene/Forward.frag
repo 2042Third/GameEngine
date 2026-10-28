@@ -65,6 +65,18 @@ layout(set = 0, binding = ST_SRV(19)) uniform texture2D u_SceneColor;
 layout(set = 0, binding = ST_SRV(18)) uniform texture2D u_ScreenReflections;
 #endif
 
+// The frame's lighting debug view (ST_LIGHTING_VIEW_*, SceneRenderOptions::LightingView): the same for every pixel.
+uint GetLightingView()
+{
+	return uint(u_Frame.MaterialParams.y + 0.5);
+}
+
+// The views whose values are not light (occlusion, albedo): written unexposed, without fog or what glass transmits.
+bool IsLightingValueView(uint view)
+{
+	return view == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION || view == ST_LIGHTING_VIEW_ALBEDO;
+}
+
 // The share of its diffuse light a surface scatters: transmissive surfaces pass the rest through (the glass variant). The other
 // variants scatter all of it, with the arithmetic they had before transmission existed.
 vec3 ScatterDiffuse(vec3 diffuse, float diffuseWeight)
@@ -111,7 +123,8 @@ vec3 SampleSpecularLight(vec3 relativePosition, vec3 normal, vec3 reflected, flo
 // The lit surface's color: the sun with its shadow, the punctual lights of the pixel's cluster (those with shadows through
 // their views, Include/LocalShadows.glsl), the reflection probes' and the sky's image-based light (or the constant ambient)
 // and the emission, under the clear coat where the material has one. `diffuseWeight` is the share of the diffuse light the
-// surface scatters (1 - its transmission in the glass variant; 1 elsewhere).
+// surface scatters (1 - its transmission in the glass variant; 1 elsewhere). The lighting debug views Indirect and
+// AmbientOcclusion return only the indirect light and the occlusion that darkens it.
 vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicRoughness, vec3 shadingNormal, float occlusion, MaterialData material,
 	ClearcoatData coat, float diffuseWeight)
 {
@@ -168,6 +181,9 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 			color += LightSurface(surface, coat, diffuseWeight, normalize(toLight), light.Color.rgb * attenuation);
 		}
 	}
+	uint lightingView = GetLightingView();
+	if (lightingView == ST_LIGHTING_VIEW_INDIRECT)
+		color = vec3(0.0);
 
 	// Screen-space occlusion darkens indirect light only (direct light has shadows).
 #ifdef ST_FORWARD_TRANSPARENT
@@ -176,6 +192,8 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 	float screenOcclusion = u_Frame.AOParams.x > 0.0 ? texelFetch(u_AmbientOcclusion, ivec2(gl_FragCoord.xy), 0).r : 1.0;
 #endif
 	float diffuseOcclusion = surface.Occlusion * screenOcclusion;
+	if (lightingView == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION)
+		return vec3(diffuseOcclusion);
 	vec3 reflected = reflect(-surface.View, surface.Normal);
 	// Reflection probes whose boxes hold the surface light it first (Include/ReflectionProbes.glsl); the sky, or the constant
 	// ambient without an environment, fills in what they leave.
@@ -250,7 +268,7 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 		indirect = ScatterDiffuse(u_Frame.AmbientColor.rgb * surface.Albedo * (1.0 - surface.Metallic), diffuseWeight) * diffuseOcclusion;
 	}
 
-	vec3 emitted = surface.Emissive;
+	vec3 emitted = lightingView == ST_LIGHTING_VIEW_INDIRECT ? vec3(0.0) : surface.Emissive;
 	if (coat.Strength > 0.0)
 	{
 		// The coat reflects the probes', the sky's or the ambient light by its prefiltered Fresnel (split sum, as the base), and
@@ -311,6 +329,11 @@ void main()
 	vec4 baseColor = material.BaseColor * SampleMaterialTexture(material.BaseColorMap, uv);
 	vec3 emissive = material.Emissive.rgb * SampleMaterialTexture(material.EmissiveMap, uv).rgb;
 	vec3 color = baseColor.rgb + emissive;
+	// The lighting debug view: Lighting shades every lit surface white without its emission (unlit ones draw as they are).
+	uint lightingView = GetLightingView();
+	bool valueView = IsLightingValueView(lightingView);
+	vec3 albedo = lightingView == ST_LIGHTING_VIEW_LIGHTING ? vec3(1.0) : baseColor.rgb;
+	vec3 surfaceEmissive = lightingView == ST_LIGHTING_VIEW_LIGHTING ? vec3(0.0) : emissive;
 #ifdef ST_FORWARD_GLASS
 	vec3 transmitted = vec3(0.0);
 #endif
@@ -335,18 +358,30 @@ void main()
 		diffuseWeight = 1.0 - transmission;
 		float metallic = clamp(material.Metallic * metallicRoughness.b, 0.0, 1.0);
 		float roughness = clamp(material.Roughness * metallicRoughness.g, 0.0, 1.0);
-		transmitted = TransmitLight(instance, material, shadingNormal, GetViewVector(v_RelativePosition), baseColor.rgb, metallic, roughness, transmission);
+		transmitted = TransmitLight(instance, material, shadingNormal, GetViewVector(v_RelativePosition), albedo, metallic, roughness, transmission);
 		if (coat.Strength > 0.0)
 			transmitted *= 1.0 - ClearcoatFresnel(coat, dot(coat.Normal, GetViewVector(v_RelativePosition)));
 #endif
-		color = ShadeLitSurface(baseColor.rgb, baseColor.a, emissive, metallicRoughness, shadingNormal, occlusion, material, coat, diffuseWeight);
+		color = ShadeLitSurface(albedo, baseColor.a, surfaceEmissive, metallicRoughness, shadingNormal, occlusion, material, coat, diffuseWeight);
 	}
+	else if (lightingView == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION)
+	{
+		color = vec3(1.0); // Nothing occludes the light of an unlit surface
+	}
+	else if (lightingView == ST_LIGHTING_VIEW_INDIRECT)
+	{
+		color = vec3(0.0); // Its emission is not indirect light
+	}
+	if (lightingView == ST_LIGHTING_VIEW_ALBEDO)
+		color = baseColor.rgb;
 
-	// Every variant fogs alike, so a transparent surface looks like an opaque one at its depth.
-	if (u_Frame.FogParams.x > 0.0)
+	// Every variant fogs alike, so a transparent surface looks like an opaque one at its depth. The value views show the
+	// surface's own values.
+	if (u_Frame.FogParams.x > 0.0 && !valueView)
 		color = ApplyHeightFog(color, v_RelativePosition);
 #ifdef ST_FORWARD_GLASS
-	color += transmitted;
+	if (!valueView)
+		color += transmitted;
 #endif
 
 	// The prepass's mask: of a fading level, only the pixels whose depth it wrote.
@@ -361,8 +396,9 @@ void main()
 #else
 	const float alpha = 1.0;
 #endif
-	// Pre-exposed (TemporalParams.y, a power of two: exact unless a value overflows or becomes subnormal).
-	o_Color = vec4(SanitizeHDR(color * u_Frame.TemporalParams.y), alpha);
+	// Pre-exposed (TemporalParams.y, a power of two: exact unless a value overflows or becomes subnormal), but for the value
+	// views: a sunlit scene's pre-exposure (2^-19) would make an albedo of 0.03 subnormal in half floats.
+	o_Color = vec4(SanitizeHDR(valueView ? color : color * u_Frame.TemporalParams.y), alpha);
 #ifdef ST_FORWARD_GLASS
 #ifndef ST_NO_ENTITY_IDS
 	o_EntityID = instance.EntityID;

@@ -38,6 +38,11 @@ namespace Strata
 			case ViewportDebugView::LOD:       return "lod";
 			case ViewportDebugView::Mip:       return "mip";
 			case ViewportDebugView::Motion:    return "motion";
+			case ViewportDebugView::Lighting:  return "lighting";
+			case ViewportDebugView::AmbientOcclusion: return "ao";
+			case ViewportDebugView::Indirect:  return "indirect";
+			case ViewportDebugView::Luminance: return "luminance";
+			case ViewportDebugView::Albedo:    return "albedo";
 			case ViewportDebugView::None:      break;
 		}
 		return "none";
@@ -46,12 +51,31 @@ namespace Strata
 	std::optional<ViewportDebugView> ViewportDebugViewFromString(std::string_view name)
 	{
 		for (ViewportDebugView view : { ViewportDebugView::None, ViewportDebugView::Streaming, ViewportDebugView::LOD, ViewportDebugView::Mip,
-			ViewportDebugView::Motion })
+			ViewportDebugView::Motion, ViewportDebugView::Lighting, ViewportDebugView::AmbientOcclusion, ViewportDebugView::Indirect,
+			ViewportDebugView::Luminance, ViewportDebugView::Albedo })
 		{
 			if (name == ViewportDebugViewToString(view))
 				return view;
 		}
 		return std::nullopt;
+	}
+
+	SceneLightingView GetLightingView(ViewportDebugView view)
+	{
+		switch (view)
+		{
+			case ViewportDebugView::Lighting:         return SceneLightingView::Lighting;
+			case ViewportDebugView::AmbientOcclusion: return SceneLightingView::AmbientOcclusion;
+			case ViewportDebugView::Indirect:         return SceneLightingView::Indirect;
+			case ViewportDebugView::Luminance:        return SceneLightingView::Luminance;
+			case ViewportDebugView::Albedo:           return SceneLightingView::Albedo;
+			case ViewportDebugView::None:
+			case ViewportDebugView::Streaming:
+			case ViewportDebugView::LOD:
+			case ViewportDebugView::Mip:
+			case ViewportDebugView::Motion:           break;
+		}
+		return SceneLightingView::None;
 	}
 
 	std::string GetLODLegendName(size_t level, bool last, float errorPixels)
@@ -66,7 +90,9 @@ namespace Strata
 	{
 		m_Tints.clear();
 		m_Stats = {};
-		if (view == ViewportDebugView::None || view == ViewportDebugView::Motion || !AssetManager::HasActive())
+		// Only the streaming, LOD and mip views tint entities.
+		const bool tintView = view == ViewportDebugView::Streaming || view == ViewportDebugView::LOD || view == ViewportDebugView::Mip;
+		if (!tintView || !AssetManager::HasActive())
 			return;
 
 		// The proxies as the renderer will draw them this frame (its own Sync then finds nothing new), from the cached world

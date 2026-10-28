@@ -27,6 +27,14 @@
 #define ST_LIGHT_POINT 0u
 #define ST_LIGHT_SPOT  1u
 
+// The lighting debug views (SceneLightingView, MaterialParams.y): what the forward pass writes instead of the lit color.
+#define ST_LIGHTING_VIEW_NONE              0u
+#define ST_LIGHTING_VIEW_LIGHTING          1u // White albedo, no emission
+#define ST_LIGHTING_VIEW_AMBIENT_OCCLUSION 2u // The occlusion of indirect light (material x screen), unexposed
+#define ST_LIGHTING_VIEW_INDIRECT          3u // Indirect light only
+#define ST_LIGHTING_VIEW_LUMINANCE         4u // The lit image (the overlay bands it)
+#define ST_LIGHTING_VIEW_ALBEDO            5u // The base color, unexposed
+
 #define ST_SAMPLER_COUNT 6
 
 // Texture table entries (u_TextureTable): bindless slot in bits 0-23, sampler index in bits 24-30, and this bit for
@@ -66,7 +74,9 @@ struct FrameConstants
 	vec4 ShadowParams;
 	vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 	vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
-	vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
+	// x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels); y: the lighting debug view
+	// (ST_LIGHTING_VIEW_*, 0: none; light-and-materials claims y and z)
+	vec4 MaterialParams;
 	// x: 1 when u_PreviousInstances and u_PreviousJoints hold the renderer's previous frame; y: the pre-exposure, a power of two
 	// every writer of the HDR target multiplies its luminance by (SceneRenderer: values near 100,000 lux stay within half
 	// floats); z: the frame's rotation of per-pixel noise (PCSS, ambient occlusion) in turns, 0 without temporal anti-aliasing

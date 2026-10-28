@@ -63,7 +63,9 @@ namespace Strata
 			glm::vec4 ShadowParams;              // x: 2 tan(light angular radius), y: 1 / map size, z: cascade blend, w: cascade count
 			glm::vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 			glm::vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
-			glm::vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
+			// x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels); y: the lighting debug view
+			// (SceneLightingView as a float, 0: none; light-and-materials claims y and z)
+			glm::vec4 MaterialParams;
 			// x: 1 when the motion history holds the renderer's previous frame; y: the pre-exposure, the power of two every writer of
 			// the HDR target multiplies its luminance by (SceneRendererStats::PreExposure); z: the frame's rotation of per-pixel noise
 			// (PCSS, ambient occlusion) in turns, 0 without temporal anti-aliasing
@@ -502,6 +504,49 @@ namespace Strata
 			uint32_t ListOffset;  // The list's first entry in the list buffer
 		};
 		static_assert(sizeof(MotionCopyParameters) == 16);
+
+		// The lighting debug views' statistics (Effects/LightingViewStats.comp; SceneRenderer::GetLightingViewStats): histograms of
+		// a frame's EV100 (log2 of its luminance in nits, plus 3) in quarter-EV bins from c_LightingViewMinEV100 on, and of the
+		// value views' values (occlusion, the albedo's luminance) in bins of 1/64 over [0, 1].
+		constexpr uint32_t c_LightingViewEVBins = 128;
+		constexpr float c_LightingViewMinEV100 = -8.0f;
+		constexpr float c_LightingViewBinsPerEV = 4.0f;
+		constexpr uint32_t c_LightingViewValueBins = 64;
+		// The albedo view marks base colors whose luminance lies outside [c_AlbedoLow, c_AlbedoHigh]: darker than charcoal or
+		// brighter than fresh snow, which no measured material is.
+		constexpr float c_AlbedoLow = 0.03f;
+		constexpr float c_AlbedoHigh = 0.85f;
+		// Effects/LightingViewStats.comp's output, cleared before each dispatch (one 32-bit word per entry; Include/LightingView.glsl
+		// names the offsets).
+		struct LightingViewStatsData
+		{
+			uint32_t SurfaceEV[c_LightingViewEVBins];    // Pixels with a surface (a depth was drawn)
+			uint32_t BackgroundEV[c_LightingViewEVBins]; // The others (the sky or the clear color)
+			uint32_t Value[c_LightingViewValueBins];     // Surface pixels of the value views
+			uint32_t SurfacePixels;
+			uint32_t BackgroundPixels;
+			uint32_t BelowRange; // Albedo: surface pixels below c_AlbedoLow
+			uint32_t AboveRange; // Albedo: surface pixels above c_AlbedoHigh
+			// rgb: the sky's light on a horizontal surface over pi: the irradiance map at +Y times EnvironmentParams.x, or the
+			// constant ambient without an environment
+			glm::vec4 SkyIrradiance;
+		};
+		static_assert(sizeof(LightingViewStatsData) == (2 * c_LightingViewEVBins + c_LightingViewValueBins + 4) * 4 + 16);
+		constexpr uint32_t c_LightingViewLuminanceColors = 12;
+		// Push constants (b1) of Overlay/LightingView.frag and Effects/LightingViewStats.comp.
+		struct LightingViewParameters
+		{
+			uint32_t View;             // SceneLightingView
+			float InversePreExposure;  // 1 / the frame's pre-exposure (TemporalParams.y): the HDR target holds luminance times it
+			float LuminanceFirstEV100; // The luminance view's first band's lower edge
+			uint32_t Padding0;
+			uint32_t LuminanceColors[c_LightingViewLuminanceColors]; // RGBA8, sRGB, packed (red in the low byte)
+			uint32_t AlbedoLow;
+			uint32_t AlbedoHigh;
+			uint32_t Background;
+			uint32_t Padding1;
+		};
+		static_assert(sizeof(LightingViewParameters) == 80);
 
 	}
 

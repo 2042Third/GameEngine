@@ -165,3 +165,22 @@ resolution) and takes the color the previous frame showed where a ray meets a su
 - Transparent surfaces do not get them.
 - They need TAA (Anti Aliasing Method TAA); with FXAA the settings are greyed out. Cost: about half a millisecond of GPU
   time at 1920x1080 on an Apple M2 Max with every surface reflecting, and about 20 MB of video memory per view.
+
+## Debug views
+
+The **debug view** chip on the viewport's toolbar has five views that show the scene's light instead of its image, each
+with a legend:
+
+- **Lighting**: every surface white, lit as the scene lights it. Shadows, the sky's color and how bright the sun is
+  against the sky show without the materials' colors in the way.
+- **AO**: the ambient occlusion that darkens the indirect light, white where nothing occludes.
+- **Indirect**: only the light from the sky, reflection probes and reflections, without the sun and the other lights.
+- **Luminance**: how bright each part of the image really is, in bands one exposure value (EV100) wide: each band twice
+  as bright as the one below it. An interior lit by a window is about EV 7 to 9, a sunlit street about 14 to 15, the
+  sunlit sky above 13.
+- **Albedo**: the materials' base colors. Real materials lie between about 0.03 (charcoal, fresh asphalt) and 0.85 (fresh
+  snow): darker ones are marked blue, brighter ones striped red, with their share of the image in the legend. Colors
+  outside that range make lighting look wrong however it is set up.
+
+Every view's legend names the **sun to sky ratio** on flat ground: how much more light a horizontal surface in the sun gets
+than one in the shade. A clear day gives 6 to 10, a hazy one 3 to 5, golden hour about 1 to 2, an overcast day below 0.3.

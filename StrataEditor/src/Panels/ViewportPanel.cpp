@@ -576,9 +576,20 @@ namespace Strata
 			label = "Mip";
 		else if (settings.DebugView == ViewportDebugView::Motion)
 			label = "Motion";
+		else if (settings.DebugView == ViewportDebugView::Lighting)
+			label = "Lighting";
+		else if (settings.DebugView == ViewportDebugView::AmbientOcclusion)
+			label = "AO";
+		else if (settings.DebugView == ViewportDebugView::Indirect)
+			label = "Indirect";
+		else if (settings.DebugView == ViewportDebugView::Luminance)
+			label = "Luminance";
+		else if (settings.DebugView == ViewportDebugView::Albedo)
+			label = "Albedo";
 		if (UI::ToggleChip("Viewport.DebugView", Icons::Layers, label, &clicked,
 			"Debug views: color the scene by streaming state (meshes, materials and textures still loading or failed), by the level of detail "
-			"meshes are drawn at, by the mip levels textures lack against what the view needs, or by how each pixel moved since the previous frame"))
+			"meshes are drawn at, by the mip levels textures lack against what the view needs, or by how each pixel moved since the previous frame; "
+			"or show its light: surfaces shaded white, ambient occlusion, indirect light alone, luminance in EV100 bands, or albedo"))
 		{
 			ImGui::OpenPopup("DebugView");
 		}
@@ -589,7 +600,12 @@ namespace Strata
 			{ ViewportDebugView::Streaming, "Streaming: loading and failed assets" },
 			{ ViewportDebugView::LOD, "LOD: level of detail drawn" },
 			{ ViewportDebugView::Mip, "Mip: texture levels resident against needed" },
-			{ ViewportDebugView::Motion, "Motion: movement since the previous frame" }
+			{ ViewportDebugView::Motion, "Motion: movement since the previous frame" },
+			{ ViewportDebugView::Lighting, "Lighting: every surface white, lit as the scene lights it" },
+			{ ViewportDebugView::AmbientOcclusion, "AO: the occlusion that darkens indirect light" },
+			{ ViewportDebugView::Indirect, "Indirect: sky, probe and reflected light only" },
+			{ ViewportDebugView::Luminance, "Luminance: EV100 bands of the scene's light" },
+			{ ViewportDebugView::Albedo, "Albedo: base colors, out of 0.03-0.85 marked" }
 		};
 		for (const auto& [view, name] : views)
 		{
@@ -630,11 +646,45 @@ namespace Strata
 			for (size_t shortfall = 0; shortfall < settings.DebugColors.Mip.size(); shortfall++)
 				lines.push_back({ toColor(settings.DebugColors.Mip[shortfall]), names[shortfall], std::to_string(stats.EntitiesPerMipShortfall[shortfall]) });
 		}
+		const std::optional<LightingViewStats>& lighting = renderer->GetLightingViewStats();
+		const LightingViewColors& lightingColors = settings.DebugColors.Lighting;
+		const auto formatShare = [](float share) { return fmt::format("{:.1f}%", share * 100.0f); };
+		if (settings.DebugView == ViewportDebugView::Luminance)
+		{
+			// The bands from the brightest down, each one EV wide (the last and the first take what lies beyond).
+			for (size_t band = lightingColors.Luminance.size(); band-- > 0;)
+			{
+				const int first = static_cast<int>(std::floor(lightingColors.LuminanceFirstEV100)) + static_cast<int>(band);
+				std::string name = band + 1 == lightingColors.Luminance.size() ? fmt::format("EV {}+", first)
+					: band == 0 ? fmt::format("EV <{}", first + 1) : fmt::format("EV {}", first);
+				lines.push_back({ toColor(lightingColors.Luminance[band]), std::move(name), std::string() });
+			}
+		}
+		else if (settings.DebugView == ViewportDebugView::Albedo)
+		{
+			lines.push_back({ toColor(lightingColors.AlbedoHigh), "Above 0.85", lighting ? formatShare(lighting->AboveRangeShare) : std::string("-") });
+			lines.push_back({ toColor(lightingColors.AlbedoLow), "Below 0.03", lighting ? formatShare(lighting->BelowRangeShare) : std::string("-") });
+		}
 		std::string note;
 		if (settings.DebugView == ViewportDebugView::Streaming && stats.PlaceholderBoxes > 0)
 			note = fmt::format("{} boxes: meshes not there yet", stats.PlaceholderBoxes);
 		else if (settings.DebugView == ViewportDebugView::Motion)
 			note = "Hue: direction, strength: speed (full at 16 px)";
+		else if (GetLightingView(settings.DebugView) != SceneLightingView::None)
+		{
+			// Every lighting view: the sun to sky ratio on flat ground (a clear day's is 6 to 10), and what the view measured.
+			if (!lighting)
+				note = "Measuring...";
+			else if (lighting->SunToSkyRatio > 0.0f)
+				note = fmt::format("Sun : sky {:.1f} on flat ground", lighting->SunToSkyRatio);
+			else
+				note = "Sun : sky -";
+			if (lighting && settings.DebugView == ViewportDebugView::AmbientOcclusion && std::isfinite(lighting->ValueMedian))
+				note += fmt::format(", AO median {:.2f}", lighting->ValueMedian);
+			else if (lighting && settings.DebugView != ViewportDebugView::AmbientOcclusion && settings.DebugView != ViewportDebugView::Albedo
+				&& std::isfinite(lighting->SurfaceEV100.y))
+				note += fmt::format(", EV100 median {:.1f}", lighting->SurfaceEV100.y);
+		}
 
 		// At the image's bottom left.
 		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
