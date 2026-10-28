@@ -96,6 +96,14 @@ namespace Strata
 	// largest error drawn at it in pixels where it has one (StreamingViewStats::MaxErrorPixelsPerLOD): "LOD 2 (0.84 px)".
 	std::string GetLODLegendName(size_t level, bool last, float errorPixels);
 
+	// The luminance view's legend name of band `band` of `bands`, each one EV100 wide from the floor of `firstEV100`
+	// (LightingViewColors): "EV 9"; the first takes what lies below ("EV <6"), the last what lies above ("EV 16+").
+	std::string GetLuminanceLegendName(size_t band, size_t bands, float firstEV100);
+
+	// The note under a lighting view's legend: the sun to sky ratio on flat ground and, for the occlusion view, the occlusion's
+	// median or, for the light views (not the albedo), the surfaces' EV100 median; "Measuring..." until statistics arrived.
+	std::string GetLightingLegendNote(ViewportDebugView view, const std::optional<LightingViewStats>& stats);
+
 	// Builds what a debug view draws over the viewport image for one frame: SceneRenderOptions::EntityTints (the drawn
 	// entities' colors) and, in the streaming view, placeholder boxes for entities whose mesh is not there to draw. Works on
 	// the scene's render proxies (RenderScene): the entities the renderer finds in the view, culled with the bounds it culls
