@@ -50,7 +50,8 @@ vec3 PositionAt(ivec2 pixel, float depth)
 // The plane of the surface the depth buffer holds at a pixel (not the prepass's interpolated normal, which leans off the
 // faces of coarse smooth-shaded meshes): through the pixel's position and, on each axis, the neighbor nearer in depth (the
 // other may lie across a silhouette; device depths rank neighbors as view depths do, being monotonic in them), turned
-// toward the camera. Zero where an axis has no drawn neighbor.
+// toward the viewer along the pixel's own view ray (GetViewVector: an orthographic camera's position says nothing about which
+// side of a face it sees, e.g. a wall beyond it laterally). Zero where an axis has no drawn neighbor.
 vec3 FaceNormal(ivec2 pixel, vec3 position, float depth)
 {
 	ivec2 last = ivec2(u_Frame.ViewportSize.xy) - 1;
@@ -76,7 +77,7 @@ vec3 FaceNormal(ivec2 pixel, vec3 position, float depth)
 	if (dot(normal, normal) < 1e-20)
 		return vec3(0.0);
 	normal = normalize(normal);
-	return dot(normal, position) > 0.0 ? -normal : normal; // Toward the camera (at the origin)
+	return dot(normal, GetViewVector(position)) < 0.0 ? -normal : normal;
 }
 
 // Contact shadows: a march toward the sun over the depth buffer, for what the cascades are too coarse to show. Returns the

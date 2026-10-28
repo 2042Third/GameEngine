@@ -155,6 +155,50 @@ TEST_SUITE("GPU.SceneRenderer.ContactShadows")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("An orthographic camera's contact shadows take each face's side from the view's direction")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		// An orthographic camera's position along its view says nothing about which side of a face it sees: this one looks down
+		// at the plate 26.6 degrees below the horizon from a point below the floor's plane (as an isometric camera sits before
+		// walls that lie beyond it to the side), the plate 0.75 m above the image's center. A face turned toward the camera's
+		// position instead of against the view would turn the floor's faces down: the floor beside the plate would get no
+		// contact shadow (its own face would face away from the sun).
+		PlateScene plate;
+		plate.CastNoCascadeShadow(); // Whatever shades the floor beside the plate is a contact shadow
+		const glm::vec3 forward = glm::normalize(glm::vec3(0.0f, -1.0f, 2.0f));
+		const glm::vec3 up = glm::normalize(glm::vec3(0.0f, 2.0f, 1.0f));
+		const glm::vec3 position = -1.0f * forward - 0.75f * up;
+		REQUIRE(position.y < 0.0f);
+		const SceneCamera camera = OrthographicLookAt(position, position + forward, 2.5f);
+		SceneRenderer renderer(ContactSpecification(12));
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SunlightImage sunlight = RenderSunlight(renderer, plate.SceneData, camera, plate.Sun);
+		const glm::vec3 beside(-c_PlateHalfWidth - 0.04f, 0.0f, 0.0f);
+		CHECK(ShareAt(sunlight, camera, beside) < 0.5f);
+		CHECK(MeanShade(sunlight, camera, 0.01f, 0.05f) > 0.5f);
+		// The open floor around it stays lit: no face's side is taken wrongly either.
+		uint32_t points = 0;
+		for (float x = -0.9f; x <= 0.9f; x += 0.05f)
+		{
+			for (float z = -0.6f; z <= 0.6f; z += 0.05f)
+			{
+				if (std::abs(x) < c_PlateHalfWidth + 0.25f && std::abs(z) < c_PlateHalfWidth + 0.25f)
+					continue; // The plate and what it shades
+				const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(x, 0.0f, z), c_Size);
+				if (pixel.x >= c_Size || pixel.y >= c_Size || sunlight.At(pixel.x, pixel.y) < 0.0f)
+					continue;
+				CAPTURE(x);
+				CAPTURE(z);
+				CHECK(sunlight.At(pixel.x, pixel.y) > 0.95f);
+				points++;
+			}
+		}
+		CHECK(points > 100);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Contact shadows never shadow an open plane")
 	{
 		GPUContext gpu;
