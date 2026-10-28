@@ -215,6 +215,10 @@ namespace Strata
 		// every shadow view of every shadowed point and spot light is drawn in the frame (into a smaller atlas).
 		specification.TemporalAntiAliasing = false;
 		specification.SpreadLightingUpdates = false;
+		// A thumbnail's few objects are culled and drawn by the CPU, which draws the same pixels: the GPU-driven path's fixed
+		// costs per frame (its culling dispatches, the occlusion pyramid, the counters' readbacks) and per scene (its culling
+		// binding set) buy nothing for a scene this small, and every thumbnail is a new scene.
+		specification.GPUDriven = GPUDrivenMode::Off;
 		RendererQualitySettings& quality = specification.Quality;
 		quality = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		quality.Preset = RendererQualityPreset::Custom;

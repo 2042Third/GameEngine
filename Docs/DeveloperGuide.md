@@ -3141,7 +3141,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   camera", the canvas mode: `GetSceneViewQuality`), captures at the quality of the view they show unless
   `viewport.capture {quality}` asks for one. Thumbnails and the probe bake draw with
   `SceneRendererSpecification::ForThumbnails()` and `ForBake()`, 0.6.0's values, whatever anyone chose: a bake never
-  depends on a person's settings.
+  depends on a person's settings. Thumbnails draw through the CPU path (`GPUDriven` Off, the same pixels): a thumbnail's
+  few objects gain nothing from the GPU's culling, whose fixed costs per frame and per new scene doubled their longest
+  frame (`PerfGPU.Editor.ThumbnailsMaxFrame`).
 - **Stats:** `SceneRendererStats::Quality`, `ShadowMapSize` (after the limits and a fallback) and
   `LocalShadowTileSizes`; `renderStats.quality` (the section's fields and values, which `project.setSettings` takes),
   `renderStats.shadowMapSize` and `renderStats.localShadowTileSizes` in `editor.perf` and every capture.

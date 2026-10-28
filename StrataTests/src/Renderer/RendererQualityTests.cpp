@@ -275,6 +275,8 @@ TEST_SUITE("Renderer.Quality")
 		CHECK_FALSE(thumbnailRenderer.TemporalAntiAliasing);
 		CHECK_FALSE(thumbnailRenderer.SpreadLightingUpdates);
 		CHECK(thumbnailRenderer.TextureStreaming);
+		// A thumbnail's few objects draw through the CPU path, without the GPU-driven path's fixed costs per frame and scene.
+		CHECK(thumbnailRenderer.GPUDriven == GPUDrivenMode::Off);
 		CHECK(SceneRendererSpecification::ForBake().DebugName == "ProbeBake");
 	}
 
