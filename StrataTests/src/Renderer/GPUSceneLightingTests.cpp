@@ -2,6 +2,9 @@
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RendererComponents.h"
 
+#include <glm/gtc/constants.hpp>
+
+#include <chrono>
 #include <cmath>
 
 using namespace Strata;
@@ -16,6 +19,68 @@ namespace
 	{
 		const float encoded = static_cast<float>(value) / 255.0f;
 		return encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
+	}
+
+	// The white furnace: a sky of 1 nit in every direction and nothing else, where a surface that keeps its energy reflects
+	// exactly what it receives. Spheres of the built-in mesh (radius 0.5) at the origin, seen head-on through an orthographic
+	// camera, are read in the HDR target (pre-exposure 1: neutral post-processing) at their center (NoV = 1) and at 0.8 of
+	// their radius (NoV = 0.6).
+	constexpr uint32_t c_FurnaceSize = 96;
+	constexpr float c_FurnaceView = 1.2f; // World units the orthographic view shows
+
+	struct FurnaceReading
+	{
+		glm::vec3 Center = glm::vec3(0.0f);
+		glm::vec3 Rim = glm::vec3(0.0f);
+	};
+
+	glm::vec3 ReadHDRPixel(const ReadbackImage& image, uint32_t x, uint32_t y)
+	{
+		return glm::vec3(ReadHalfTexel(image, x, y));
+	}
+
+	FurnaceReading RenderFurnace(SceneTestAssets& assets, AssetHandle sky, const MaterialProperties& material, SceneRenderer* keep = nullptr)
+	{
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().EnvironmentMap = sky;
+		AddMesh(scene, BuiltinAssets::SphereMesh, assets.AddMaterial(material), glm::vec3(0.0f), "Sphere");
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		SceneRenderer local(specification);
+		SceneRenderer& renderer = keep ? *keep : local;
+		renderer.SetViewportSize(c_FurnaceSize, c_FurnaceSize);
+		const SceneCamera camera = OrthographicLookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f), c_FurnaceView);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		do
+		{
+			REQUIRE(renderer.Render(scene, camera));
+			renderer.ResolveGPUStats(true);
+		} while (!renderer.GetStats().EnvironmentLighting && std::chrono::steady_clock::now() < deadline);
+		REQUIRE(renderer.GetStats().EnvironmentLighting);
+		ReadbackImage image;
+		REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+		const uint32_t center = c_FurnaceSize / 2;
+		const uint32_t rim = center + static_cast<uint32_t>(std::lround(0.8f * 0.5f / c_FurnaceView * static_cast<float>(c_FurnaceSize)));
+		return { ReadHDRPixel(image, center, center), ReadHDRPixel(image, rim, center) };
+	}
+
+	// The BRDF table's (scale, bias) of F0 at NoV 1 and roughness 1 (its last texel), as the forward pass samples it there.
+	glm::vec2 ReadRoughBRDF(SceneRenderer& renderer)
+	{
+		ReadbackImage lut;
+		REQUIRE(Renderer::ReadTexture(renderer.GetBRDFLut(), lut));
+		const glm::vec4 texel = ReadHalfTexel(lut, lut.Width - 1, lut.Height - 1);
+		return glm::vec2(texel.x, texel.y);
+	}
+
+	MaterialProperties FurnaceMetal(const glm::vec3& color, float roughness)
+	{
+		MaterialProperties properties;
+		properties.BaseColor = glm::vec4(color, 1.0f);
+		properties.Metallic = 1.0f;
+		properties.Roughness = roughness;
+		return properties;
 	}
 
 	// A large matte floor (facing +Y) at the origin.
@@ -609,6 +674,116 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 		sky.EnvironmentMap = reddish;
 		image = RenderToImage(renderer, scene, camera);
 		CHECK(GetPixelRGBA8(image, c_Size / 2, c_Size / 2) == redSphere);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A white furnace keeps a rough metal's light at every roughness")
+	{
+		// Multiple-scattering compensation (PBR.glsl's GetSpecularEnergy): a white metal (F0 = 1) reflects all the light it
+		// receives at every roughness; 0.6.0's single-scattering lobe kept 0.31 of it for silver at roughness 1.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle sky = assets.Add(CreateEnvironmentTexture(glm::vec3(1.0f), glm::vec3(1.0f)), "Furnace");
+		for (const float roughness : { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f })
+		{
+			CAPTURE(roughness);
+			const FurnaceReading white = RenderFurnace(assets, sky, FurnaceMetal(glm::vec3(1.0f), roughness));
+			for (const glm::vec3& value : { white.Center, white.Rim })
+			{
+				CHECK(value.r >= 0.97f);
+				CHECK(value.r <= 1.03f);
+				CHECK(value.g >= 0.97f);
+				CHECK(value.g <= 1.03f);
+			}
+		}
+
+		// The look-dev furnace's silver (0.95) keeps at least 0.9 of its F0 at roughness 1.
+		const FurnaceReading silver = RenderFurnace(assets, sky, FurnaceMetal(glm::vec3(0.95f), 1.0f));
+		CHECK(silver.Center.g >= 0.9f * 0.95f);
+		CHECK(silver.Rim.g >= 0.9f * 0.95f);
+
+		// A colored metal keeps less: each further bounce absorbs 1 - F0 of the light. Copper's channels follow the formula
+		// with the table read back at the pixel (NoV 1, roughness 1).
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		SceneRenderer copperRenderer(specification);
+		const glm::vec3 copper(0.95f, 0.64f, 0.54f);
+		const FurnaceReading reading = RenderFurnace(assets, sky, FurnaceMetal(copper, 1.0f), &copperRenderer);
+		const glm::vec2 dfg = ReadRoughBRDF(copperRenderer);
+		const float albedo = dfg.x + dfg.y;
+		CAPTURE(albedo);
+		for (int channel = 0; channel < 3; channel++)
+		{
+			CAPTURE(channel);
+			const float f0 = copper[channel];
+			const float expected = (f0 * dfg.x + dfg.y) * (1.0f + f0 * (1.0f / albedo - 1.0f));
+			CHECK(reading.Center[channel] == doctest::Approx(expected).epsilon(0.03));
+		}
+
+		// A white dielectric: diffuse gets what specular leaves.
+		MaterialProperties dielectric;
+		dielectric.BaseColor = glm::vec4(1.0f);
+		dielectric.Roughness = 1.0f;
+		const FurnaceReading plastic = RenderFurnace(assets, sky, dielectric);
+		for (const glm::vec3& value : { plastic.Center, plastic.Rim })
+		{
+			CHECK(value.g >= 0.97f);
+			CHECK(value.g <= 1.03f);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Direct light's specular is compensated as image light's")
+	{
+		// A white metal plane (F0 = 1, roughness 1) facing an orthographic camera and a sun along its normal: NoL = NoV = NoH =
+		// VoH = 1, so GGX's D is 1 / pi and the correlated Smith visibility 1 / 4; the compensation divides by the table's
+		// directional albedo there.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		constexpr float c_Illuminance = 10.0f;
+		for (GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(static_cast<int>(mode));
+			Scene scene;
+			AddNeutralPostProcess(scene);
+			scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.0f);
+			AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(FurnaceMetal(glm::vec3(1.0f), 1.0f)), glm::vec3(0.0f), "Plane")
+				.GetComponent<TransformComponent>().Scale = glm::vec3(10.0f);
+			AddSun(scene, glm::vec3(0.0f, -1.0f, 0.0f), c_Illuminance, false);
+			SceneRendererSpecification specification;
+			specification.TextureStreaming = false;
+			specification.GPUDriven = mode;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Size, c_Size);
+			REQUIRE(renderer.Render(scene, OrthographicLookAt(glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0.0f), 2.0f)));
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+			const glm::vec2 dfg = ReadRoughBRDF(renderer);
+			const float expected = (1.0f / glm::pi<float>()) * 0.25f * c_Illuminance / (dfg.x + dfg.y);
+			CAPTURE(dfg);
+			CHECK(ReadHDRPixel(image, c_Size / 2, c_Size / 2).g == doctest::Approx(expected).epsilon(0.02));
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A clear coat over a white metal keeps the furnace's light")
+	{
+		// The coat reflects what it takes from the base: with both compensated, the furnace's light stays 1.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle sky = assets.Add(CreateEnvironmentTexture(glm::vec3(1.0f), glm::vec3(1.0f)), "Furnace");
+		MaterialProperties coated = FurnaceMetal(glm::vec3(1.0f), 1.0f);
+		coated.Clearcoat = 1.0f;
+		coated.ClearcoatRoughness = 1.0f;
+		const FurnaceReading reading = RenderFurnace(assets, sky, coated);
+		for (const glm::vec3& value : { reading.Center, reading.Rim })
+		{
+			CHECK(value.g >= 0.97f);
+			CHECK(value.g <= 1.03f);
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

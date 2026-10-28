@@ -3573,6 +3573,18 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Lighting
 
+- **Energy compensation** (`PBR.glsl`'s `GetSpecularEnergy`): GGX's single-scattering lobe reflects only its directional
+  albedo `E = x + y` of the light (the BRDF table's scale and bias of F0 summed: the lobe's albedo for F0 = 1); the rest
+  scatters again between the microfacets. The specular light is multiplied by `1 + F0 (1 / E - 1)`, exact for F0 = 1 (the
+  lobe then reflects everything) and less for colored metals, whose further bounces absorb `1 - F0` each. The factor
+  (`SurfaceData::SpecularEnergy`, `ClearcoatData::SpecularEnergy` for the coat's lobe of F0 0.04) is computed once per pixel
+  from the table fetch the surface setup of `ShadeLitSurface` makes, and multiplies direct light's specular term
+  (`EvaluateLightWeighted`, `EvaluateClearcoat`), image light's split sum (`specularColor`), the coat's reflectance, and what
+  glass reflects in `TransmitLight` (what passes through is what it does not reflect). Image light's diffuse keeps
+  `1 - specularColor` (diffuse gets what specular leaves); direct light's keeps `1 - F`, as the compensation adds under 0.5%
+  to a dielectric's reflection. A white metal in a white furnace reflects the whole sky at every roughness (0.31 of it at
+  roughness 1 before; `GPU.SceneRenderer.Lighting`'s furnace cases): check every shading change with them, and with the
+  look-dev furnace (`lookdev.furnace`, Tonemapper None, so the PNG's decoded values at the sphere centers are linear).
 - **Lighting debug views** (`SceneRenderOptions::LightingView`, `SceneLightingView`; `R/SceneRendererLightingView.cpp`) show
   and measure the scene's light, so a lighting change is checked against numbers rather than by eye. The forward pass reads
   the view from `MaterialParams.y` (a uniform branch, nothing when 0): **Lighting** shades every lit surface with albedo 1 and

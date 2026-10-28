@@ -2,7 +2,8 @@
 #define STRATA_PBR_GLSL
 
 // Physically based shading (glTF 2.0 metallic-roughness model): GGX distribution, height-correlated Smith
-// visibility, Schlick Fresnel and Lambertian diffuse.
+// visibility, Schlick Fresnel and Lambertian diffuse, with the specular lobe compensated for the light GGX loses to
+// multiple scattering between microfacets (GetSpecularEnergy).
 
 #include "Include/Common.glsl"
 
@@ -34,6 +35,20 @@ vec3 FresnelSchlickRoughness(vec3 f0, float NoV, float roughness)
 	return f0 + (max(vec3(1.0 - roughness), f0) - f0) * pow(1.0 - NoV, 5.0);
 }
 
+// The smallest directional albedo the compensation divides by. The BRDF table's x + y stays above 0.2 for every NoV and
+// roughness it holds; this only keeps a broken table finite.
+const float c_MinSpecularAlbedo = 0.05;
+
+// Multiple-scattering compensation of the specular lobe: the factor its light is multiplied by. `dfg` is the BRDF table
+// (IBL/BRDFLut.comp) at the surface's NoV and roughness: its x + y is the single-scattering lobe's directional albedo E for
+// F0 = 1, which reflects only E of the light; the rest scatters again between the microfacets and leaves after further
+// bounces, each of which keeps F0 of it. 1 + F0 (1 / E - 1) restores that light: exact for F0 = 1 (the lobe then reflects
+// everything), less for colored metals, whose further bounces absorb 1 - F0 each.
+vec3 GetSpecularEnergy(vec3 f0, vec2 dfg)
+{
+	return 1.0 + f0 * (1.0 / max(dfg.x + dfg.y, c_MinSpecularAlbedo) - 1.0);
+}
+
 struct SurfaceData
 {
 	vec3 Position;
@@ -45,6 +60,7 @@ struct SurfaceData
 	float Roughness;  // Perceptual roughness
 	float Occlusion;
 	vec3 Emissive;
+	vec3 SpecularEnergy; // GetSpecularEnergy at the surface's NoV and roughness: multiplies its specular light
 };
 
 // EvaluateLight with its diffuse part weighted by `diffuseWeight`: a transmissive surface passes the rest of the light its
@@ -64,7 +80,9 @@ vec3 EvaluateLightWeighted(SurfaceData surface, vec3 lightDirection, vec3 radian
 	vec3 f0 = mix(vec3(0.04), surface.Albedo, surface.Metallic);
 
 	vec3 F = FresnelSchlick(f0, VoH);
-	vec3 specular = DistributionGGX(NoH, alpha) * VisibilitySmithGGXCorrelated(NoV, NoL, alpha) * F;
+	vec3 specular = DistributionGGX(NoH, alpha) * VisibilitySmithGGXCorrelated(NoV, NoL, alpha) * F * surface.SpecularEnergy;
+	// Diffuse keeps 1 - F: the compensated light leaves a dielectric's specular under 0.5% brighter, below what the diffuse
+	// lobe's approximation already is off by.
 	vec3 diffuse = (1.0 - F) * (1.0 - surface.Metallic) * surface.Albedo * INV_PI * diffuseWeight;
 	return (diffuse + specular) * radiance * NoL;
 }
@@ -83,6 +101,7 @@ struct ClearcoatData
 	float Strength;  // 0: no coat
 	float Roughness; // Perceptual
 	vec3 Normal;
+	float SpecularEnergy; // GetSpecularEnergy of the coat's lobe (F0 c_ClearcoatF0) at its NoV and roughness
 };
 
 const float c_ClearcoatF0 = 0.04;
@@ -108,7 +127,7 @@ vec3 EvaluateClearcoat(ClearcoatData coat, vec3 view, vec3 lightDirection, vec3 
 	float NoH = clamp(dot(coat.Normal, H), 0.0, 1.0);
 	float roughness = max(coat.Roughness, c_MinRoughness);
 	float alpha = roughness * roughness;
-	return DistributionGGX(NoH, alpha) * VisibilitySmithGGXCorrelated(NoV, NoL, alpha) * fresnel * radiance * NoL;
+	return DistributionGGX(NoH, alpha) * VisibilitySmithGGXCorrelated(NoV, NoL, alpha) * fresnel * coat.SpecularEnergy * radiance * NoL;
 }
 
 // Smooth distance falloff for punctual lights: inverse square, windowed to reach zero at the range.
