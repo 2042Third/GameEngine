@@ -3154,7 +3154,7 @@ namespace Strata
 				sunUV = glm::vec2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
 			}
 		}
-		const bool bloom = RenderPostHDR(commandList, postProcess, options, postSource, keyReferenceLog2, sunUV);
+		const bool bloom = RenderPostHDR(commandList, postProcess, options, postSource, keyReferenceLog2, sunUV, degraded);
 
 		TextRenderStats textStats;
 		m_FontAtlases->BeginFrame(TextRenderer::c_FrameRasterBudget);
@@ -3191,8 +3191,20 @@ namespace Strata
 			return false;
 		}
 		nvrhi::IFramebuffer* output = target && !overlays ? target : m_OutputFramebuffer.Get();
-		RenderPostDisplay(commandList, postProcess, temporalSettings, resolved, postSource, bloom, GetVignetteTangents(camera, m_ViewportSize),
-			options.GrainSeed.value_or(static_cast<uint32_t>(m_RenderCount)), colorLookup, output);
+		if (!RenderPostDisplay(commandList, postProcess, temporalSettings, resolved, postSource, bloom, GetVignetteTangents(camera, m_ViewportSize),
+				options.GrainSeed.value_or(static_cast<uint32_t>(m_RenderCount)), colorLookup, output, degraded))
+		{
+			// Nothing reached the output (the tone mapping's inputs could not be bound; reported): no image rather than a stale one.
+			gpuTimer.End();
+			commandList->endMarker();
+			commandList->close();
+			ExecuteFrame(commandList); // Keeps the uploads that were recorded
+			if (m_GPUDrivenFrame)
+				SubmitCullReadback();
+			SubmitExposureReadback();
+			m_Stats = {};
+			return false;
+		}
 
 		if (overlays)
 		{

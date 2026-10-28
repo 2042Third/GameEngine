@@ -1331,9 +1331,10 @@ namespace Strata
 			nvrhi::IBindingSet* depthOfField, nvrhi::IBindingSet* motionBlur) const;
 		// The exposure and the bloom of the post source; returns whether bloom ran. `keyReferenceLog2`: log2 of the luminance of a
 		// gray card facing the frame's directional light (unset without one).
-		// `sunUV`: where the directional light's disk is, when it is in front of the camera (the lens flare's starburst).
+		// `sunUV`: where the directional light's disk is, when it is in front of the camera (the lens flare's starburst). Sets
+		// `degraded` when a step failed (reported) and the frame goes on without it (the lens flare).
 		bool RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const SceneRenderOptions& options, PostSource source,
-			std::optional<float> keyReferenceLog2, std::optional<glm::vec2> sunUV);
+			std::optional<float> keyReferenceLog2, std::optional<glm::vec2> sunUV, bool& degraded);
 		// The lens flare of the bloom chain's level 1 (as its downsample left it) into m_LensFlareTexture, with the share of the disk at `sunUV` that sees the
 		// sky in alpha, and the starburst the tone mapping draws there (m_Starburst: c_LensFlareRayGain times a white card's
 		// luminance in its light, 2^keyReferenceLog2 / 0.18). False (reported) when its resources cannot be made.
@@ -1355,9 +1356,12 @@ namespace Strata
 		static void ApplyQualityOverrides(PostProcessComponent& settings, const RendererQualitySettings& quality);
 		// Tone mapping of the post source into `output`, or into the LDR target and FXAA from it into `output` (FXAA unless the frame
 		// was `resolved` temporally). `colorLookup`: the texture of the Post Process's color lookup (ResolveColorLookup), or null.
-		void RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
+		// Sets `degraded` when a step failed (reported) and the image was drawn without it (the morphological anti-aliasing, drawn
+		// as FXAA; the color lookup or the lens flare); false (reported) when the tone mapping could not run: nothing was written
+		// into `output`.
+		bool RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
 			bool resolved, PostSource source, bool bloom, const glm::vec2& vignetteTangents, uint32_t grainSeed, nvrhi::ITexture* colorLookup,
-			nvrhi::IFramebuffer* output);
+			nvrhi::IFramebuffer* output, bool& degraded);
 		// The texture of the Post Process's color lookup, requested every frame it is used (through the frame's asset resolve
 		// cache, which holds it until the frame ends); null without one, at intensity 0, and while it loads.
 		nvrhi::ITexture* ResolveColorLookup(const PostProcessComponent& postProcess);
