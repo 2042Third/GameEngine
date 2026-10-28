@@ -493,6 +493,8 @@ namespace Strata
 		description["Type"] = PropertyTypeToString(property.Type);
 		if (!property.Tooltip.empty())
 			description["Description"] = property.Tooltip;
+		if (!property.Section.empty())
+			description["Section"] = property.Section;
 		if (property.HasRange())
 		{
 			description["Min"] = property.Min;

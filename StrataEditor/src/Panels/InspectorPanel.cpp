@@ -6,6 +6,7 @@
 #include "Editor/EditorWorld.h"
 #include "Editor/PropertyEdit.h"
 #include "Editor/SceneEdit.h"
+#include "Editor/ViewportRenderer.h"
 #include "Editor/ScriptEdit.h"
 #include "UI/ComponentDrawers.h"
 #include "UI/EditorActions.h"
@@ -28,6 +29,7 @@
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/RendererComponents.h>
+#include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/ComponentAccess.h>
 #include <Strata/Scene/Components.h>
@@ -768,6 +770,8 @@ namespace Strata
 				DrawAnimatorState(context, entities.front());
 			if (info.TypeId == entt::type_id<ReflectionProbeComponent>().hash())
 				DrawReflectionProbeBake(panelContext, entities);
+			if (info.TypeId == entt::type_id<DirectionalLightComponent>().hash())
+				DrawSunShadowQuality(panelContext);
 			ImGui::Spacing();
 		}
 		ImGui::PopID();
@@ -883,75 +887,126 @@ namespace Strata
 		ImGui::PopID();
 	}
 
+	const std::vector<InspectorPanel::PropertyGroup>& InspectorPanel::GetPropertyGroups(const ComponentInfo& info)
+	{
+		if (const auto it = m_PropertyGroups.find(&info); it != m_PropertyGroups.end())
+			return it->second;
+		std::vector<PropertyGroup> groups;
+		groups.push_back({});
+		for (size_t index = 0; index < info.Properties.size(); index++)
+		{
+			const std::string& section = info.Properties[index].Section;
+			auto group = std::find_if(groups.begin(), groups.end(), [&section](const PropertyGroup& candidate) { return candidate.Section == section; });
+			if (group == groups.end())
+			{
+				groups.push_back({ section, fmt::format("Inspector.{}.Section.{}", info.Name, section), {} });
+				group = std::prev(groups.end());
+			}
+			group->Properties.push_back(index);
+		}
+		return m_PropertyGroups.emplace(&info, std::move(groups)).first->second;
+	}
+
 	void InspectorPanel::DrawProperties(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
 		const PrefabView* prefab, const UI::ComponentDrawResult* drawn)
 	{
-		if (!UI::BeginPropertyTable("Properties"))
-			return;
-		const std::vector<std::optional<PropertyValue>>& defaults = GetDefaults(info);
-		Scene& scene = *entities.front().GetScene();
-		for (size_t index = 0; index < info.Properties.size(); index++)
+		const auto isDrawn = [&info, drawn](size_t index)
 		{
 			const PropertyInfo& property = info.Properties[index];
-			if (property.IsHidden() || property.IsTransient() || (drawn && drawn->Replaces(property.Name)))
+			return !property.IsHidden() && !property.IsTransient() && !(drawn && drawn->Replaces(property.Name));
+		};
+		bool tableOpen = false;
+		int tables = 0;
+		for (const PropertyGroup& group : GetPropertyGroups(info))
+		{
+			if (std::none_of(group.Properties.begin(), group.Properties.end(), isDrawn))
 				continue;
-			const std::optional<SharedPropertyValue> shared = GetSharedProperty(entities, info, property);
-			if (!shared)
-				continue;
-
-			const std::string probe = fmt::format("Inspector.{}.{}", info.Name, property.Name);
-			const std::string inactive = GetSharedInactiveReason(entities, info, property);
-			UI::PropertyLabelOptions labelOptions;
-			labelOptions.Overridden = prefab && prefab->IsOverridden(info.Name, property.Name);
-			labelOptions.InactiveReason = inactive;
-			UI::PropertyLabel(property.DisplayName, property.Tooltip, probe, labelOptions);
-			if (labelOptions.Overridden)
+			if (!group.Section.empty())
 			{
-				const std::string_view name = property.Name;
-				DrawPropertyOverrideMenu(*prefab, info, std::span(&name, 1), probe);
+				if (tableOpen)
+					UI::EndPropertyTable();
+				tableOpen = false;
+				UI::PropertyGroupHeading(group.Section, group.ProbeKey);
 			}
-			// A row whose edit means more than setting the property draws its own value.
-			if (const UI::PropertyDrawer* drawer = UI::PropertyDrawers::Find(info.TypeId, property.Name))
+			if (!tableOpen)
 			{
-				const UI::PropertyDrawContext row { commands, entities, info, property, shared->Value, shared->Mixed, property.IsReadOnly() || !inactive.empty(), probe };
-				(*drawer)(context, row);
-				continue;
+				// Instances of the window's one property table (BeginPropertyTable): they share the label width.
+				tableOpen = UI::BeginPropertyTable(tables == 0 ? "Properties" : "Properties.Section");
+				tables++;
+				if (!tableOpen)
+					continue;
 			}
-			PropertyWidgetOptions options;
-			options.Mixed = shared->Mixed;
-			options.MixedComponents = shared->MixedComponents;
-			options.DefaultValue = index < defaults.size() && defaults[index] ? &*defaults[index] : nullptr;
-			options.ProbeKey = probe;
-			PropertyValue value = shared->Value;
-			// An inactive property shows its value disabled: changing it would change nothing (its label says why).
-			ImGui::BeginDisabled(property.IsReadOnly() || !inactive.empty());
-			const PropertyEditResult result = DrawPropertyWidget(property, value, scene, options);
-			ImGui::EndDisabled();
-			if (result.Changed)
+			for (const size_t index : group.Properties)
 			{
-				// Several entities: the components (axes) the edit changed are written, each entity keeps its own others.
-				std::string error;
-				const bool partial = std::any_of(result.ChangedComponents.begin(), result.ChangedComponents.end(), [](bool changed) { return changed; });
-				bool set = false;
-				if (entities.size() == 1)
-					set = SetPropertyWithUndo(context, entities.front(), info, property, value, &error);
-				else if (partial && property.Type == PropertyType::Quat)
-					set = UpdateRotationEdit(context, entities, info, property, result, &error);
-				else if (partial)
-					set = SetPropertyComponentsWithUndo(context, entities, info, property, value, result.ChangedComponents, &error);
-				else
-					set = SetPropertyWithUndo(context, entities, info, property, shared->Value, value, &error);
-				if (!set)
-					ST_WARN("{}.{}: {}", info.Name, property.Name, error);
-			}
-			if (result.Finished)
-			{
-				context.GetUndoStack().BreakMerge();
-				// The next edit reads the entities' angles again, as the fields show them then.
-				m_RotationEdit.reset();
+				if (isDrawn(index))
+					DrawPropertyRow(context, commands, entities, info, prefab, index);
 			}
 		}
-		UI::EndPropertyTable();
+		if (tableOpen)
+			UI::EndPropertyTable();
+	}
+
+	void InspectorPanel::DrawPropertyRow(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
+		const PrefabView* prefab, size_t index)
+	{
+		const std::vector<std::optional<PropertyValue>>& defaults = GetDefaults(info);
+		Scene& scene = *entities.front().GetScene();
+		const PropertyInfo& property = info.Properties[index];
+		const std::optional<SharedPropertyValue> shared = GetSharedProperty(entities, info, property);
+		if (!shared)
+			return;
+
+		const std::string probe = fmt::format("Inspector.{}.{}", info.Name, property.Name);
+		const std::string inactive = GetSharedInactiveReason(entities, info, property);
+		UI::PropertyLabelOptions labelOptions;
+		labelOptions.Overridden = prefab && prefab->IsOverridden(info.Name, property.Name);
+		labelOptions.InactiveReason = inactive;
+		UI::PropertyLabel(property.DisplayName, property.Tooltip, probe, labelOptions);
+		if (labelOptions.Overridden)
+		{
+			const std::string_view name = property.Name;
+			DrawPropertyOverrideMenu(*prefab, info, std::span(&name, 1), probe);
+		}
+		// A row whose edit means more than setting the property draws its own value.
+		if (const UI::PropertyDrawer* drawer = UI::PropertyDrawers::Find(info.TypeId, property.Name))
+		{
+			const UI::PropertyDrawContext row { commands, entities, info, property, shared->Value, shared->Mixed, property.IsReadOnly() || !inactive.empty(), probe };
+			(*drawer)(context, row);
+			return;
+		}
+		PropertyWidgetOptions options;
+		options.Mixed = shared->Mixed;
+		options.MixedComponents = shared->MixedComponents;
+		options.DefaultValue = index < defaults.size() && defaults[index] ? &*defaults[index] : nullptr;
+		options.ProbeKey = probe;
+		PropertyValue value = shared->Value;
+		// An inactive property shows its value disabled: changing it would change nothing (its label says why).
+		ImGui::BeginDisabled(property.IsReadOnly() || !inactive.empty());
+		const PropertyEditResult result = DrawPropertyWidget(property, value, scene, options);
+		ImGui::EndDisabled();
+		if (result.Changed)
+		{
+			// Several entities: the components (axes) the edit changed are written, each entity keeps its own others.
+			std::string error;
+			const bool partial = std::any_of(result.ChangedComponents.begin(), result.ChangedComponents.end(), [](bool changed) { return changed; });
+			bool set = false;
+			if (entities.size() == 1)
+				set = SetPropertyWithUndo(context, entities.front(), info, property, value, &error);
+			else if (partial && property.Type == PropertyType::Quat)
+				set = UpdateRotationEdit(context, entities, info, property, result, &error);
+			else if (partial)
+				set = SetPropertyComponentsWithUndo(context, entities, info, property, value, result.ChangedComponents, &error);
+			else
+				set = SetPropertyWithUndo(context, entities, info, property, shared->Value, value, &error);
+			if (!set)
+				ST_WARN("{}.{}: {}", info.Name, property.Name, error);
+		}
+		if (result.Finished)
+		{
+			context.GetUndoStack().BreakMerge();
+			// The next edit reads the entities' angles again, as the fields show them then.
+			m_RotationEdit.reset();
+		}
 	}
 
 	bool InspectorPanel::UpdateRotationEdit(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PropertyInfo& property,
@@ -1278,8 +1333,9 @@ namespace Strata
 				UI::EndPropertyTable();
 			}
 		}
-		// The collision layers the scene runs with are the project's, edited in Project Settings.
+		// The collision layers the scene runs with are the project's, edited in Project Settings, and so is its quality.
 		DrawCollisionLayersLink(panelContext);
+		DrawGraphicsQualityLink(panelContext);
 		if (UI::SectionHeader("Inspector.Streaming", GetStreamingHeader(), ImGuiTreeNodeFlags_None, m_StreamingSummary->Text))
 		{
 			if (UI::BeginPropertyTable("StreamingSettings"))
@@ -1325,6 +1381,71 @@ namespace Strata
 			&& panelContext.Shell)
 		{
 			panelContext.Shell->ShowProjectSettings(ProjectCollisionLayers::c_SectionId);
+		}
+	}
+
+	void InspectorPanel::DrawSunShadowQuality(EditorPanelContext& panelContext)
+	{
+		// What the Scene view's latest frame drew (its renderer's stats), else the project's quality resolved for 1080 rows.
+		EditorContext& context = panelContext.Context;
+		const RendererQualitySettings& project = RendererQuality::GetProjectQuality();
+		const ViewportRenderer* renderer = context.GetViewport().FindRenderer();
+		const SceneRendererStats* stats = renderer ? &renderer->GetStats() : nullptr;
+		SunShadowLine line;
+		line.ProjectPreset = static_cast<int32_t>(project.Preset);
+		if (stats && stats->ShadowMapSize > 0)
+		{
+			line.Cascades = stats->Quality.ShadowCascades;
+			line.Size = stats->ShadowMapSize;
+			line.ViewPreset = context.GetViewport().GetSettings().Quality != ViewportQuality::Project ? static_cast<int32_t>(stats->Quality.Preset) : -1;
+		}
+		else
+		{
+			line.Rows = 1080;
+			line.Cascades = project.ShadowCascades;
+			line.Size = RendererQuality::ResolveShadowMapSize(project.ShadowResolution, line.Rows);
+		}
+		if (!line.Matches(m_SunShadowLine) || m_SunShadowLine.Text.empty())
+		{
+			const char* projectName = RendererQuality::PresetToString(project.Preset);
+			if (line.ViewPreset >= 0)
+			{
+				line.Text = fmt::format("Shadow maps: {} x {} in the Scene view ({}; the project: {})", line.Cascades, line.Size,
+					RendererQuality::PresetToString(static_cast<RendererQualityPreset>(line.ViewPreset)), projectName);
+			}
+			else if (line.Rows > 0)
+			{
+				line.Text = fmt::format("Shadow maps: {} x {} at {} rows (Graphics Quality: {})", line.Cascades, line.Size, line.Rows, projectName);
+			}
+			else
+			{
+				line.Text = fmt::format("Shadow maps: {} x {} (Graphics Quality: {})", line.Cascades, line.Size, projectName);
+			}
+			m_SunShadowLine = std::move(line);
+		}
+		// Wrapped, with the link under it: the line is long for a narrow Inspector.
+		ImGui::PushTextWrapPos(0.0f);
+		ImGui::TextUnformatted(m_SunShadowLine.Text.c_str());
+		ImGui::PopTextWrapPos();
+		UI::ItemProbe::Record("Inspector.DirectionalLight.ShadowQuality", true, 0, m_SunShadowLine.Text);
+		if (UI::LinkButton("Inspector.DirectionalLight.ShadowQuality.Open", "Graphics Quality", Icons::ExternalLink, "Shadow-map resolution and "
+			"cascades are the project's: choose them in Project Settings") && panelContext.Shell)
+		{
+			panelContext.Shell->ShowProjectSettings(std::string(RendererQuality::c_SectionId));
+		}
+	}
+
+	void InspectorPanel::DrawGraphicsQualityLink(EditorPanelContext& panelContext)
+	{
+		const char* preset = RendererQuality::PresetToString(RendererQuality::GetProjectQuality().Preset);
+		ImGui::AlignTextToFramePadding();
+		ImGui::Text("Graphics quality: %s", preset);
+		UI::ItemProbe::Record("Inspector.GraphicsQuality", true, 0, preset);
+		ImGui::SameLine();
+		if (UI::LinkButton("Inspector.GraphicsQuality.Open", "Project Settings", Icons::ExternalLink, "The rendering quality of the project's games "
+			"and of the editor's views: presets and what each costs") && panelContext.Shell)
+		{
+			panelContext.Shell->ShowProjectSettings(std::string(RendererQuality::c_SectionId));
 		}
 	}
 

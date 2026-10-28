@@ -319,3 +319,62 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		CHECK_FALSE(IsDrawn(PageKey("Row.Preset.Player")));
 	}
 }
+
+TEST_SUITE("Editor.UI.Inspector")
+{
+	TEST_CASE("Post Process draws a heading per section")
+	{
+		HarnessEditor editor;
+		editor.Frames(1);
+		CreateProject(editor, "InspectorSections");
+		const std::string entity = editor.Run("entity.create", { { "name", "Look" }, { "components", { { "PostProcess", nlohmann::json::object() } } } })["id"].get<std::string>();
+		editor.Run("selection.set", { { "entities", { entity } } });
+		REQUIRE(editor.FramesUntil([]() { return IsDrawn("Inspector.PostProcess.Section.Lens"); }));
+		// In the order of their first property, each under its heading.
+		float previous = -1.0f;
+		for (const char* section : { "Tone and color", "Exposure", "Bloom", "Ambient occlusion", "Anti-aliasing", "Reflections", "Lens" })
+		{
+			CAPTURE(section);
+			const std::optional<UI::ItemProbe::Item> heading = UI::ItemProbe::Find(std::string("Inspector.PostProcess.Section.") + section);
+			REQUIRE(heading.has_value());
+			CHECK(heading->Text == section);
+			CHECK(heading->Min.y > previous);
+			previous = heading->Min.y;
+		}
+		const std::optional<UI::ItemProbe::Item> exposure = UI::ItemProbe::Find("Inspector.PostProcess.Exposure.Label");
+		const std::optional<UI::ItemProbe::Item> bloomHeading = UI::ItemProbe::Find("Inspector.PostProcess.Section.Bloom");
+		REQUIRE(exposure.has_value());
+		CHECK(exposure->Min.y > UI::ItemProbe::Find("Inspector.PostProcess.Section.Exposure")->Min.y);
+		CHECK(exposure->Min.y < bloomHeading->Min.y);
+	}
+
+	TEST_CASE("The sun shows its shadow maps and links to Graphics Quality")
+	{
+		HarnessEditor editor;
+		editor.Frames(1);
+		CreateProject(editor, "InspectorSun");
+		const std::string sun = editor.Run("entity.create", { { "name", "Sun" }, { "components", { { "DirectionalLight", nlohmann::json::object() } } } })["id"].get<std::string>();
+		editor.Run("selection.set", { { "entities", { sun } } });
+		REQUIRE(editor.FramesUntil([]() { return IsDrawn("Inspector.DirectionalLight.ShadowQuality"); }));
+		// Without a GPU the Scene view draws no frame: the project's quality (High) resolved for 1080 rows.
+		CHECK(TextOf("Inspector.DirectionalLight.ShadowQuality") == "Shadow maps: 4 x 2048 at 1080 rows (Graphics Quality: High)");
+		CHECK(IsDrawn("Inspector.DirectionalLight.Section.Shadows"));
+		editor.Run("project.setSettings", { { "section", RendererQuality::c_SectionId }, { "value", { { "Preset", "Low" } } } });
+		editor.Frames(2);
+		CHECK(TextOf("Inspector.DirectionalLight.ShadowQuality") == "Shadow maps: 3 x 1024 at 1080 rows (Graphics Quality: Low)");
+		REQUIRE(editor.Click("Inspector.DirectionalLight.ShadowQuality.Open"));
+		CHECK(editor.FramesUntil([]() { return IsDrawn(PageKey("Row.ShadowResolution")); }));
+	}
+
+	TEST_CASE("With nothing selected the Inspector links to Graphics Quality")
+	{
+		HarnessEditor editor;
+		editor.Frames(1);
+		CreateProject(editor, "InspectorNothing");
+		editor.Run("selection.set", { { "entities", nlohmann::json::array() } });
+		REQUIRE(editor.FramesUntil([]() { return IsDrawn("Inspector.GraphicsQuality"); }));
+		CHECK(TextOf("Inspector.GraphicsQuality") == "High");
+		REQUIRE(editor.Click("Inspector.GraphicsQuality.Open"));
+		CHECK(editor.FramesUntil([]() { return IsDrawn(PageKey("Row.ShadowResolution")); }));
+	}
+}

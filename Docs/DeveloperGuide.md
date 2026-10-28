@@ -2601,6 +2601,19 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 ### Inspectors
 
+- **Sections:** a registration groups its properties with `PropertyBuilderBase::Section(name)`, which puts every property
+  registered after it into that section until the next call (`PropertyInfo::Section`; `component.list` and the component
+  schema snapshot report `Section`). Registration order never changes, so a section need not be contiguous: a property
+  appended at the end of a registration joins its group with a `.Section` call of its own (Saturation and Contrast join
+  Post Process' "Tone and color"). `InspectorPanel::DrawProperties` draws the properties without a section first, then each
+  section in the order of its first property under a `UI::PropertyGroupHeading` (between property tables, which share one
+  label width), only when a property of it is drawn; the grouping is made once per component type
+  (`GetPropertyGroups`). Probes `Inspector.<Component>.Section.<Section>`. Directional Light has Light and Shadows, Post
+  Process Tone and color, Exposure, Bloom, Ambient occlusion, Anti-aliasing, Reflections and Lens; every property of both
+  has a description with its unit (`Renderer.Components` checks it). The sun's section ends with what its shadow maps are
+  (`Inspector.DirectionalLight.ShadowQuality`: "Shadow maps: 4 x 4096 (Graphics Quality: High)" from the Scene view's
+  latest frame, `SceneRendererStats::ShadowMapSize`; the view's own preset when it has one; the project's quality at
+  1080 rows before a frame) and a link to Graphics Quality.
 - The inspectors show the selected entities or one asset (`EditorContext::SetInspectedAsset`, `selection.set {asset}`;
   the entities stay selected). Selecting an entity, deleting the asset or closing the project returns to the entities;
   `GetInspectionVersion` changes with every switch and every asset inspected (again), and the editor brings the
@@ -2632,7 +2645,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   and Custom also where it starts from (`GetTemporalAntiAliasingCustomStart`: the preset in effect while the tunables
   hold a table, else the tuning), unless the selected entities would start from different values. It shows the scene's
   settings (gravity, the fixed step, the physics world's capacities, how many collision layers the project names with a
-  link to their page, bodies and controllers choosing their layer among layer 0 and the named ones; how many entities
+  link to their page, the project's Graphics Quality preset with a link to its page (`Inspector.GraphicsQuality`), bodies
+  and controllers choosing their layer among layer 0 and the named ones; how many entities
   sub-scenes create per frame) and sky (with an "Extract Sun" button for environment-map skies, an "Add Height Fog"
   button while the scene has no height fog, and "Bake Reflection Probes" while it has probes; a probe's own section has
   Bake, both running `lighting.bakeProbes` through the runner) with nothing selected, in sections that start closed with

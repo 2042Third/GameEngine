@@ -57,7 +57,7 @@ namespace Strata
 		template<typename Member>
 		Derived& Property(std::string name, Member T::* member, const PropertyOptions& options = {})
 		{
-			PropertyInfo& property = m_Properties.emplace_back();
+			PropertyInfo& property = AddProperty();
 			Detail::ApplyPropertyOptions(property, name, Detail::DeducePropertyType<Member>(options.Color), options);
 			property.Getter = [member](const void* object) -> PropertyValue { return static_cast<const T*>(object)->*member; };
 			property.Setter = [member](void* object, const PropertyValue& value) { static_cast<T*>(object)->*member = std::get<Member>(value); };
@@ -68,7 +68,7 @@ namespace Strata
 		Derived& EnumProperty(std::string name, EnumType T::* member, std::vector<EnumValue> values, const PropertyOptions& options = {})
 		{
 			static_assert(std::is_enum_v<EnumType>, "EnumProperty requires an enum member");
-			PropertyInfo& property = m_Properties.emplace_back();
+			PropertyInfo& property = AddProperty();
 			Detail::ApplyPropertyOptions(property, name, PropertyType::Enum, options);
 			property.EnumValues = std::move(values);
 			property.Getter = [member](const void* object) -> PropertyValue { return static_cast<int32_t>(static_cast<const T*>(object)->*member); };
@@ -78,7 +78,7 @@ namespace Strata
 
 		Derived& AssetProperty(std::string name, UUID T::* member, AssetType assetType, const PropertyOptions& options = {})
 		{
-			PropertyInfo& property = m_Properties.emplace_back();
+			PropertyInfo& property = AddProperty();
 			Detail::ApplyPropertyOptions(property, name, PropertyType::Asset, options);
 			property.AssetFilter = assetType;
 			property.Getter = [member](const void* object) -> PropertyValue { return static_cast<const T*>(object)->*member; };
@@ -88,7 +88,7 @@ namespace Strata
 
 		Derived& EntityProperty(std::string name, UUID T::* member, const PropertyOptions& options = {})
 		{
-			PropertyInfo& property = m_Properties.emplace_back();
+			PropertyInfo& property = AddProperty();
 			Detail::ApplyPropertyOptions(property, name, PropertyType::Entity, options);
 			property.Getter = [member](const void* object) -> PropertyValue { return static_cast<const T*>(object)->*member; };
 			property.Setter = [member](void* object, const PropertyValue& value) { static_cast<T*>(object)->*member = std::get<UUID>(value); };
@@ -99,16 +99,33 @@ namespace Strata
 		Derived& CustomProperty(std::string name, PropertyType type, std::function<PropertyValue(const T&)> getter,
 			std::function<void(T&, const PropertyValue&)> setter, const PropertyOptions& options = {})
 		{
-			PropertyInfo& property = m_Properties.emplace_back();
+			PropertyInfo& property = AddProperty();
 			Detail::ApplyPropertyOptions(property, name, type, options);
 			property.Getter = [getter](const void* object) { return getter(*static_cast<const T*>(object)); };
 			property.Setter = [setter](void* object, const PropertyValue& value) { setter(*static_cast<T*>(object), value); };
 			return Self();
 		}
+		// The section (the group editors show properties under: PropertyInfo::Section) of every property registered after this
+		// call, until the next one; "" ends sections. Registration order stays what it is, so a section need not be contiguous:
+		// a property appended at the end of a registration joins a group with its own Section call, and editors draw the
+		// sections in the order of their first property.
+		Derived& Section(std::string name)
+		{
+			m_Section = std::move(name);
+			return Self();
+		}
 	private:
 		Derived& Self() { return static_cast<Derived&>(*this); }
+
+		PropertyInfo& AddProperty()
+		{
+			PropertyInfo& property = m_Properties.emplace_back();
+			property.Section = m_Section;
+			return property;
+		}
 	private:
 		std::vector<PropertyInfo>& m_Properties;
+		std::string m_Section;
 	};
 
 	// Builds a standalone property list for a plain struct (e.g. material parameters).

@@ -224,15 +224,24 @@ namespace Strata
 			.DisplayName("Directional Light")
 			.Category("Lighting")
 			.Description("Sun-like light shining along the entity's forward (-Z) direction; its intensity is illuminance in lux")
-			.Property("Color", &DirectionalLightComponent::Color, Color())
+			.Section("Light")
+			.Property("Color", &DirectionalLightComponent::Color, WithTooltip(Color(), "Linear color of the light, times Intensity: (1, 1, 1) for the "
+				"midday sun; the physical atmosphere dims and reddens it toward the horizon itself, so tint it only for a look"))
 			.Property("Intensity", &DirectionalLightComponent::Intensity,
 				WithTooltip(Range(0.0f, c_Unbounded, 0.05f), "Illuminance in lux on a surface facing the light, times Color: direct sun about 100,000, an "
 					"overcast day 1,000 to 10,000, a full moon 0.25"))
-			.Property("CastShadows", &DirectionalLightComponent::CastShadows)
-			.Property("ShadowDistance", &DirectionalLightComponent::ShadowDistance, Range(1.0f, 10000.0f, 1.0f))
-			.Property("ShadowSoftness", &DirectionalLightComponent::ShadowSoftness, Range(0.0f, 10.0f, 0.01f))
-			.Property("ShadowBias", &DirectionalLightComponent::ShadowBias, Range(0.0f, 10.0f, 0.01f))
-			.Property("ShadowNormalBias", &DirectionalLightComponent::ShadowNormalBias, Range(0.0f, 10.0f, 0.01f))
+			.Section("Shadows")
+			.Property("CastShadows", &DirectionalLightComponent::CastShadows, WithTooltip({}, "Whether the light casts shadows: cascaded shadow maps out "
+				"to Shadow Distance, their resolution and number set by Project Settings > Graphics Quality"))
+			.Property("ShadowDistance", &DirectionalLightComponent::ShadowDistance, WithTooltip(Range(1.0f, 10000.0f, 1.0f), "Meters from the camera the "
+				"shadows reach; the last cascade fades out before it. Shorter spends the same shadow-map texels on less ground: sharper near shadows"))
+			.Property("ShadowSoftness", &DirectionalLightComponent::ShadowSoftness, WithTooltip(Range(0.0f, 10.0f, 0.01f), "Angular diameter of the "
+				"light's disk in degrees (the sun: about 0.53): the penumbra widens with the distance from the caster. 0: the hardest shadow the "
+				"filter allows"))
+			.Property("ShadowBias", &DirectionalLightComponent::ShadowBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), "Depth offset toward the light in "
+				"shadow-map texels: raise it against shadow acne (stripes on lit surfaces), lower it when shadows detach from their casters"))
+			.Property("ShadowNormalBias", &DirectionalLightComponent::ShadowNormalBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), "Offset of the lookup "
+				"along the surface normal in shadow-map texels: raise it against acne on surfaces at grazing angles to the light"))
 			.Property("CascadeBlend", &DirectionalLightComponent::CascadeBlend,
 				WithTooltip(Slider(0.0f, DirectionalLightComponent::c_MaxCascadeBlend), "Fraction of each shadow cascade's depth range over which it blends into the next one, "
 					"hiding the seams between them; the last one fades out by the Shadow Distance. 0 switches at once"));
@@ -363,22 +372,32 @@ namespace Strata
 			.DisplayName("Post Process")
 			.Category("Rendering")
 			.Description("Tonemapping, exposure, bloom, ambient occlusion, anti-aliasing and screen-space reflection settings")
+			.Section("Tone and color")
 			.EnumProperty("Tonemapper", &PostProcessComponent::Tonemapper, { { "None", 0 }, { "Reinhard", 1 }, { "ACES", 2 }, { "AgX", 3 },
-				{ "KhronosNeutral", 4, "Khronos Neutral" } })
+				{ "KhronosNeutral", 4, "Khronos Neutral" } }, { .Tooltip = "The curve that maps the scene's light to the display: ACES (filmic, "
+					"contrasty), AgX (filmic, keeps bright colors' hue), Khronos Neutral (keeps colors close to the materials'), Reinhard (soft), None "
+					"(clipped: for UI and tests)" })
+			.Section("Exposure")
 			.Property("Exposure", &PostProcessComponent::Exposure, WithTooltip(Range(-16.0f, 16.0f, 0.05f), "Exposure compensation in EV"))
-			.Property("AutoExposure", &PostProcessComponent::AutoExposure)
+			.Property("AutoExposure", &PostProcessComponent::AutoExposure, WithTooltip({}, "Adapts the exposure to the scene's brightness over time, as "
+				"an eye or a camera's meter does, within Auto Exposure Min and Max EV; off, Exposure alone sets it"))
 			.Property("AutoExposureMinEV", &PostProcessComponent::AutoExposureMinEV,
 				WithTooltip(Range(-12.0f, 16.0f, 0.1f), "Darkest average scene luminance (log2) automatic exposure brightens up to"))
 			.Property("AutoExposureMaxEV", &PostProcessComponent::AutoExposureMaxEV,
 				WithTooltip(Range(-12.0f, 16.0f, 0.1f), "Brightest average scene luminance (log2) automatic exposure darkens down to"))
 			.Property("AutoExposureSpeed", &PostProcessComponent::AutoExposureSpeed, WithTooltip(Range(0.0f, 20.0f, 0.05f), "Adaptation rate per second; 0 = instant"))
-			.Property("Bloom", &PostProcessComponent::Bloom)
+			.Section("Bloom")
+			.Property("Bloom", &PostProcessComponent::Bloom, WithTooltip({}, "A soft glow around bright light: the light a camera's lens scatters"))
 			.Property("BloomIntensity", &PostProcessComponent::BloomIntensity, WithTooltip(Slider(0.0f, 1.0f), "Fraction of the light scattered into the glow"))
 			.Property("BloomThreshold", &PostProcessComponent::BloomThreshold,
 				WithTooltip(Range(0.0f, 20.0f, 0.05f), "Only light brighter than this (after exposure) blooms; 0 = all light, physically based"))
-			.Property("AmbientOcclusion", &PostProcessComponent::AmbientOcclusion)
+			.Section("Ambient occlusion")
+			.Property("AmbientOcclusion", &PostProcessComponent::AmbientOcclusion, WithTooltip({}, "Darkens creases, corners and contacts that ambient "
+				"light reaches less (screen-space ambient occlusion)"))
 			.Property("AmbientOcclusionRadius", &PostProcessComponent::AmbientOcclusionRadius, WithTooltip(Range(0.01f, 10.0f, 0.01f), "World units"))
-			.Property("AmbientOcclusionIntensity", &PostProcessComponent::AmbientOcclusionIntensity, Slider(0.0f, 4.0f))
+			.Property("AmbientOcclusionIntensity", &PostProcessComponent::AmbientOcclusionIntensity, WithTooltip(Slider(0.0f, 4.0f), "How strongly the "
+				"occlusion darkens ambient light: 1 as measured, 0 none, above 1 stronger"))
+			.Section("Anti-aliasing")
 			.Property("AntiAliasing", &PostProcessComponent::AntiAliasing, WithTooltip({}, "Smooths jagged edges, by the method below"))
 			.EnumProperty("AntiAliasingMethod", &PostProcessComponent::AntiAliasingMethod, { { "FXAA", 0 }, { "TAA", 1 } },
 				{ .Tooltip = "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another "
@@ -425,6 +444,7 @@ namespace Strata
 			.Property("TAASharpening", &PostProcessComponent::TAASharpening,
 				WithTooltip(Slider(0.0f, 1.0f), "Sharpens the displayed image after TAA, never the history, to restore texture detail the "
 					"averaging softens. Strong edges are sharpened much less and overshoot is bounded, so halos stay faint. 0 is off"))
+			.Section("Reflections")
 			.Property("ScreenSpaceReflections", &PostProcessComponent::ScreenSpaceReflections,
 				WithTooltip({}, "Reflections of what the screen shows, found each frame: smooth floors, water and metal reflect what stands near "
 					"them. Needs TAA. Where they find nothing (off screen, hidden, the sky) the reflection probes and the sky reflect as before"))
@@ -434,8 +454,12 @@ namespace Strata
 			.Property("ScreenSpaceReflectionsMaxRoughness", &PostProcessComponent::ScreenSpaceReflectionsMaxRoughness,
 				WithTooltip(Slider(0.0f, 1.0f), "Surfaces rougher than this get none, and they fade out over the last quarter below it: rough "
 					"surfaces blur what they reflect, which screen-space reflections do not"))
-			.Property("Vignette", &PostProcessComponent::Vignette, Slider(0.0f, 1.0f))
-			.Property("Saturation", &PostProcessComponent::Saturation, Slider(0.0f, 2.0f))
+			.Section("Lens")
+			.Property("Vignette", &PostProcessComponent::Vignette, WithTooltip(Slider(0.0f, 1.0f), "Darkens the image toward its corners, as a lens "
+				"does: 0 off, 1 strongest"))
+			.Section("Tone and color")
+			.Property("Saturation", &PostProcessComponent::Saturation, WithTooltip(Slider(0.0f, 2.0f), "Color saturation after the tone curve: 1 "
+				"unchanged, 0 gray, 2 twice as vivid"))
 			.Property("Contrast", &PostProcessComponent::Contrast, WithTooltip(Slider(0.5f, 2.0f), "Around middle gray; 1 = unchanged"));
 		// Exposure is the compensation SceneRenderer applies with automatic exposure too: always active.
 		SetInactiveReasons<PostProcessComponent>({ "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed" }, &WithAutoExposure);

@@ -1,8 +1,13 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Reflection/ComponentRegistry.h"
+#include "Strata/Reflection/PropertyBuilder.h"
 #include "Strata/Renderer/RendererComponents.h"
 
+#include <algorithm>
 #include <limits>
+#include <string>
+#include <vector>
 
 using namespace Strata;
 
@@ -140,5 +145,48 @@ TEST_SUITE("Renderer.Components")
 		CHECK(written.TAADisocclusionThreshold == c_TAASharpSettings.DisocclusionThreshold);
 		CHECK(written.TAAHistoryClamp == TemporalHistoryClamp::MinMax);
 		CHECK_FALSE(written.TAADisocclusionRejection);
+	}
+}
+
+TEST_SUITE("Renderer.Components")
+{
+	TEST_CASE("Every property of DirectionalLight and PostProcess has a description")
+	{
+		for (const char* component : { "DirectionalLight", "PostProcess" })
+		{
+			const ComponentInfo* info = ComponentRegistry::Find(component);
+			REQUIRE(info);
+			for (const PropertyInfo& property : info->Properties)
+			{
+				CAPTURE(component);
+				CAPTURE(property.Name);
+				CHECK_FALSE(property.Tooltip.empty());
+			}
+		}
+	}
+
+	TEST_CASE("Post Process' sections are Tone and color, Exposure, Bloom, Ambient occlusion, Anti-aliasing, Reflections, Lens, in that order")
+	{
+		const auto sectionsOf = [](const char* component)
+		{
+			const ComponentInfo* info = ComponentRegistry::Find(component);
+			REQUIRE(info);
+			std::vector<std::string> sections;
+			for (const PropertyInfo& property : info->Properties)
+			{
+				CAPTURE(property.Name);
+				CHECK_FALSE(property.Section.empty());
+				if (std::find(sections.begin(), sections.end(), property.Section) == sections.end())
+					sections.push_back(property.Section);
+			}
+			return sections;
+		};
+		CHECK(sectionsOf("PostProcess") == std::vector<std::string> { "Tone and color", "Exposure", "Bloom", "Ambient occlusion", "Anti-aliasing",
+			"Reflections", "Lens" });
+		CHECK(sectionsOf("DirectionalLight") == std::vector<std::string> { "Light", "Shadows" });
+		// Saturation and Contrast, registered last, join the tone curve's group.
+		const ComponentInfo* postProcess = ComponentRegistry::Find("PostProcess");
+		CHECK(FindProperty(postProcess->Properties, "Contrast")->Section == "Tone and color");
+		CHECK(FindProperty(postProcess->Properties, "TAASharpening")->Section == "Anti-aliasing");
 	}
 }

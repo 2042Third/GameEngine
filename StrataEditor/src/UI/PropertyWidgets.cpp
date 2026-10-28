@@ -1079,6 +1079,22 @@ namespace Strata
 			ImGui::EndTable();
 		}
 
+		void PropertyGroupHeading(std::string_view text, std::string_view probeKey)
+		{
+			const ThemeColors& colors = GetThemeColors();
+			ImGui::Dummy(ImVec2(0.0f, 0.35f * ImGui::GetFontSize()));
+			PushFont(EditorFont::SemiBold, TextSize::Caption);
+			ImGui::PushStyleColor(ImGuiCol_Text, colors.TextSecondary);
+			ImGui::TextUnformatted(text.data(), text.data() + text.size());
+			ImGui::PopStyleColor();
+			ImGui::PopFont();
+			if (!probeKey.empty())
+				ItemProbe::Record(probeKey, true, 0, text);
+			ImGui::PushStyleColor(ImGuiCol_Separator, colors.Border);
+			ImGui::Separator();
+			ImGui::PopStyleColor();
+		}
+
 		void PropertyLabel(std::string_view label, std::string_view tooltip, std::string_view probeKey, const PropertyLabelOptions& options)
 		{
 			const ThemeColors& colors = GetThemeColors();

@@ -392,8 +392,9 @@
 					"Max": 0.0,
 					"Min": 0.0,
 					"Name": "Color",
+					"Section": "Light",
 					"Speed": 0.0,
-					"Tooltip": "",
+					"Tooltip": "Linear color of the light, times Intensity: (1, 1, 1) for the midday sun; the physical atmosphere dims and reddens it toward the horizon itself, so tint it only for a look",
 					"Type": "Color3"
 				},
 				{
@@ -404,6 +405,7 @@
 					"Max": 1000000.0,
 					"Min": 0.0,
 					"Name": "Intensity",
+					"Section": "Light",
 					"Speed": 0.05000000074505806,
 					"Tooltip": "Illuminance in lux on a surface facing the light, times Color: direct sun about 100,000, an overcast day 1,000 to 10,000, a full moon 0.25",
 					"Type": "Float"
@@ -416,8 +418,9 @@
 					"Max": 0.0,
 					"Min": 0.0,
 					"Name": "CastShadows",
+					"Section": "Shadows",
 					"Speed": 0.0,
-					"Tooltip": "",
+					"Tooltip": "Whether the light casts shadows: cascaded shadow maps out to Shadow Distance, their resolution and number set by Project Settings > Graphics Quality",
 					"Type": "Bool"
 				},
 				{
@@ -428,8 +431,9 @@
 					"Max": 10000.0,
 					"Min": 1.0,
 					"Name": "ShadowDistance",
+					"Section": "Shadows",
 					"Speed": 1.0,
-					"Tooltip": "",
+					"Tooltip": "Meters from the camera the shadows reach; the last cascade fades out before it. Shorter spends the same shadow-map texels on less ground: sharper near shadows",
 					"Type": "Float"
 				},
 				{
@@ -440,8 +444,9 @@
 					"Max": 10.0,
 					"Min": 0.0,
 					"Name": "ShadowSoftness",
+					"Section": "Shadows",
 					"Speed": 0.009999999776482582,
-					"Tooltip": "",
+					"Tooltip": "Angular diameter of the light's disk in degrees (the sun: about 0.53): the penumbra widens with the distance from the caster. 0: the hardest shadow the filter allows",
 					"Type": "Float"
 				},
 				{
@@ -452,8 +457,9 @@
 					"Max": 10.0,
 					"Min": 0.0,
 					"Name": "ShadowBias",
+					"Section": "Shadows",
 					"Speed": 0.009999999776482582,
-					"Tooltip": "",
+					"Tooltip": "Depth offset toward the light in shadow-map texels: raise it against shadow acne (stripes on lit surfaces), lower it when shadows detach from their casters",
 					"Type": "Float"
 				},
 				{
@@ -464,8 +470,9 @@
 					"Max": 10.0,
 					"Min": 0.0,
 					"Name": "ShadowNormalBias",
+					"Section": "Shadows",
 					"Speed": 0.009999999776482582,
-					"Tooltip": "",
+					"Tooltip": "Offset of the lookup along the surface normal in shadow-map texels: raise it against acne on surfaces at grazing angles to the light",
 					"Type": "Float"
 				},
 				{
@@ -476,6 +483,7 @@
 					"Max": 0.5,
 					"Min": 0.0,
 					"Name": "CascadeBlend",
+					"Section": "Shadows",
 					"Speed": 0.0,
 					"Tooltip": "Fraction of each shadow cascade's depth range over which it blends into the next one, hiding the seams between them; the last one fades out by the Shadow Distance. 0 switches at once",
 					"Type": "Float"
@@ -942,8 +950,9 @@
 					"Max": 0.0,
 					"Min": 0.0,
 					"Name": "Tonemapper",
+					"Section": "Tone and color",
 					"Speed": 0.0,
-					"Tooltip": "",
+					"Tooltip": "The curve that maps the scene's light to the display: ACES (filmic, contrasty), AgX (filmic, keeps bright colors' hue), Khronos Neutral (keeps colors close to the materials'), Reinhard (soft), None (clipped: for UI and tests)",
 					"Type": "Enum"
 				},
 				{
@@ -954,6 +963,7 @@
 					"Max": 16.0,
 					"Min": -16.0,
 					"Name": "Exposure",
+					"Section": "Exposure",
 					"Speed": 0.05000000074505806,
 					"Tooltip": "Exposure compensation in EV",
 					"Type": "Float"
@@ -966,8 +976,9 @@
 					"Max": 0.0,
 					"Min": 0.0,
 					"Name": "AutoExposure",
+					"Section": "Exposure",
 					"Speed": 0.0,
-					"Tooltip": "",
+					"Tooltip": "Adapts the exposure to the scene's brightness over time, as an eye or a camera's meter does, within Auto Exposure Min and Max EV; off, Exposure alone sets it",
 					"Type": "Bool"
 				},
 				{
@@ -978,6 +989,7 @@
 					"Max": 16.0,
 					"Min": -12.0,
 					"Name": "AutoExposureMinEV",
+					"Section": "Exposure",
 					"Speed": 0.10000000149011612,
 					"Tooltip": "Darkest average scene luminance (log2) automatic exposure brightens up to",
 					"Type": "Float"
@@ -990,6 +1002,7 @@
 					"Max": 16.0,
 					"Min": -12.0,
 					"Name": "AutoExposureMaxEV",
+					"Section": "Exposure",
 					"Speed": 0.10000000149011612,
 					"Tooltip": "Brightest average scene luminance (log2) automatic exposure darkens down to",
 					"Type": "Float"
@@ -1002,6 +1015,7 @@
 					"Max": 20.0,
 					"Min": 0.0,
 					"Name": "AutoExposureSpeed",
+					"Section": "Exposure",
 					"Speed": 0.05000000074505806,
 					"Tooltip": "Adaptation rate per second; 0 = instant",
 					"Type": "Float"
@@ -1014,8 +1028,9 @@
 					"Max": 0.0,
 					"Min": 0.0,
 					"Name": "Bloom",
+					"Section": "Bloom",
 					"Speed": 0.0,
-					"Tooltip": "",
+					"Tooltip": "A soft glow around bright light: the light a camera's lens scatters",
 					"Type": "Bool"
 				},
 				{
@@ -1026,6 +1041,7 @@
 					"Max": 1.0,
 					"Min": 0.0,
 					"Name": "BloomIntensity",
+					"Section": "Bloom",
 					"Speed": 0.0,
 					"Tooltip": "Fraction of the light scattered into the glow",
 					"Type": "Float"
@@ -1038,6 +1054,7 @@
 					"Max": 20.0,
 					"Min": 0.0,
 					"Name": "BloomThreshold",
+					"Section": "Bloom",
 					"Speed": 0.05000000074505806,
 					"Tooltip": "Only light brighter than this (after exposure) blooms; 0 = all light, physically based",
 					"Type": "Float"
@@ -1050,8 +1067,9 @@
 					"Max": 0.0,
 					"Min": 0.0,
 					"Name": "AmbientOcclusion",
+					"Section": "Ambient occlusion",
 					"Speed": 0.0,
-					"Tooltip": "",
+					"Tooltip": "Darkens creases, corners and contacts that ambient light reaches less (screen-space ambient occlusion)",
 					"Type": "Bool"
 				},
 				{
@@ -1062,6 +1080,7 @@
 					"Max": 10.0,
 					"Min": 0.009999999776482582,
 					"Name": "AmbientOcclusionRadius",
+					"Section": "Ambient occlusion",
 					"Speed": 0.009999999776482582,
 					"Tooltip": "World units",
 					"Type": "Float"
@@ -1074,8 +1093,9 @@
 					"Max": 4.0,
 					"Min": 0.0,
 					"Name": "AmbientOcclusionIntensity",
+					"Section": "Ambient occlusion",
 					"Speed": 0.0,
-					"Tooltip": "",
+					"Tooltip": "How strongly the occlusion darkens ambient light: 1 as measured, 0 none, above 1 stronger",
 					"Type": "Float"
 				},
 				{
@@ -1086,6 +1106,7 @@
 					"Max": 0.0,
 					"Min": 0.0,
 					"Name": "AntiAliasing",
+					"Section": "Anti-aliasing",
 					"Speed": 0.0,
 					"Tooltip": "Smooths jagged edges, by the method below",
 					"Type": "Bool"
@@ -1109,6 +1130,7 @@
 					"Max": 0.0,
 					"Min": 0.0,
 					"Name": "AntiAliasingMethod",
+					"Section": "Anti-aliasing",
 					"Speed": 0.0,
 					"Tooltip": "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion. TAA Preset chooses how the TAA looks",
 					"Type": "Enum"
@@ -1137,6 +1159,7 @@
 					"Max": 0.0,
 					"Min": 0.0,
 					"Name": "TAAPreset",
+					"Section": "Anti-aliasing",
 					"Speed": 0.0,
 					"Tooltip": "How the TAA looks. Sharp: tighter history clipping, slow pans resampled less, uncovered surfaces drop their history, transparent surfaces take mostly the current frame, a faster response to motion and a light sharpening of the displayed image. Original: the first TAA, softer and steadier. Custom: the tunables below (choosing it in the Inspector starts from the look in effect)",
 					"Type": "Enum"
@@ -1149,6 +1172,7 @@
 					"Max": 32.0,
 					"Min": 2.0,
 					"Name": "TAAHistoryFrames",
+					"Section": "Anti-aliasing",
 					"Speed": 1.0,
 					"Tooltip": "About how many frames the image averages: the current frame weighs at least 1 / this. At 8, every jitter position counts once. More is smoother and steadier but lags behind lighting changes; fewer reacts faster but edges crawl",
 					"Type": "UInt"
@@ -1161,6 +1185,7 @@
 					"Max": 0.25,
 					"Min": 0.0,
 					"Name": "TAAMotionResponse",
+					"Section": "Anti-aliasing",
 					"Speed": 0.0010000000474974513,
 					"Tooltip": "How quickly moving surfaces let go of the history. At 0.0625, motion of 8 pixels a frame weighs the current frame 0.5. Higher keeps moving things crisper and their trails shorter, but they get less anti-aliasing while they move. 0: motion does not matter",
 					"Type": "Float"
@@ -1173,6 +1198,7 @@
 					"Max": 1.0,
 					"Min": 0.0,
 					"Name": "TAAMaxMotionWeight",
+					"Section": "Anti-aliasing",
 					"Speed": 0.0,
 					"Tooltip": "The most the current frame weighs, however fast things move. 1 lets very fast motion drop the history: sharp, but aliased",
 					"Type": "Float"
@@ -1185,6 +1211,7 @@
 					"Max": 1.0,
 					"Min": 0.0,
 					"Name": "TAAResampleWeight",
+					"Section": "Anti-aliasing",
 					"Speed": 0.0,
 					"Tooltip": "The current frame's least weight where the history is read between pixels, as in slow pans; it is largest halfway between them. Higher keeps slowly moving texture crisper, but its edges get less anti-aliasing while they move. 0: off",
 					"Type": "Float"
@@ -1208,6 +1235,7 @@
 					"Max": 0.0,
 					"Min": 0.0,
 					"Name": "TAAHistoryClamp",
+					"Section": "Anti-aliasing",
 					"Speed": 0.0,
 					"Tooltip": "How the history is kept consistent with what the pixel shows now. Range limits it to the range of the colors around the pixel. Tight limits it to a narrower box around their average, which removes more ghosting and trails, most where the surroundings are smooth and less beside glints",
 					"Type": "Enum"
@@ -1220,6 +1248,7 @@
 					"Max": 4.0,
 					"Min": 0.5,
 					"Name": "TAAClipWidth",
+					"Section": "Anti-aliasing",
 					"Speed": 0.05000000074505806,
 					"Tooltip": "Tight only: the box's half width, in standard deviations of the colors around the pixel. Lower removes more trails, but lets edges flicker and lets noise through",
 					"Type": "Float"
@@ -1232,6 +1261,7 @@
 					"Max": 1.0,
 					"Min": 0.0,
 					"Name": "TAATransparentWeight",
+					"Section": "Anti-aliasing",
 					"Speed": 0.0,
 					"Tooltip": "The current frame's least weight where a blended transparent surface covers the pixel (half cover or more counts as full). Transparent surfaces have no motion vectors of their own. 0 treats them like everything else, so they ghost when they move; 1 drops their history, so they never ghost, but their edges shimmer",
 					"Type": "Float"
@@ -1244,6 +1274,7 @@
 					"Max": 0.0,
 					"Min": 0.0,
 					"Name": "TAADisocclusionRejection",
+					"Section": "Anti-aliasing",
 					"Speed": 0.0,
 					"Tooltip": "Drop the history where a surface was just uncovered (something nearer covered it in the previous frame), so moving objects leave no ghost on what they uncover",
 					"Type": "Bool"
@@ -1256,6 +1287,7 @@
 					"Max": 0.5,
 					"Min": 0.009999999776482582,
 					"Name": "TAADisocclusionThreshold",
+					"Section": "Anti-aliasing",
 					"Speed": 0.004999999888241291,
 					"Tooltip": "How much nearer the previous frame's surface must have been, as a fraction of the distance, for the pixel to count as uncovered. Lower catches thin gaps, such as a hand in front of a wall, but may drop the history of surfaces moving fast away from the camera",
 					"Type": "Float"
@@ -1268,6 +1300,7 @@
 					"Max": 1.0,
 					"Min": 0.0,
 					"Name": "TAASharpening",
+					"Section": "Anti-aliasing",
 					"Speed": 0.0,
 					"Tooltip": "Sharpens the displayed image after TAA, never the history, to restore texture detail the averaging softens. Strong edges are sharpened much less and overshoot is bounded, so halos stay faint. 0 is off",
 					"Type": "Float"
@@ -1280,6 +1313,7 @@
 					"Max": 0.0,
 					"Min": 0.0,
 					"Name": "ScreenSpaceReflections",
+					"Section": "Reflections",
 					"Speed": 0.0,
 					"Tooltip": "Reflections of what the screen shows, found each frame: smooth floors, water and metal reflect what stands near them. Needs TAA. Where they find nothing (off screen, hidden, the sky) the reflection probes and the sky reflect as before",
 					"Type": "Bool"
@@ -1292,6 +1326,7 @@
 					"Max": 1.0,
 					"Min": 0.0,
 					"Name": "ScreenSpaceReflectionsIntensity",
+					"Section": "Reflections",
 					"Speed": 0.0,
 					"Tooltip": "How much the screen-space reflections replace the probes' and the sky's reflection where they find something; 1: fully",
 					"Type": "Float"
@@ -1304,6 +1339,7 @@
 					"Max": 1.0,
 					"Min": 0.0,
 					"Name": "ScreenSpaceReflectionsMaxRoughness",
+					"Section": "Reflections",
 					"Speed": 0.0,
 					"Tooltip": "Surfaces rougher than this get none, and they fade out over the last quarter below it: rough surfaces blur what they reflect, which screen-space reflections do not",
 					"Type": "Float"
@@ -1316,8 +1352,9 @@
 					"Max": 1.0,
 					"Min": 0.0,
 					"Name": "Vignette",
+					"Section": "Lens",
 					"Speed": 0.0,
-					"Tooltip": "",
+					"Tooltip": "Darkens the image toward its corners, as a lens does: 0 off, 1 strongest",
 					"Type": "Float"
 				},
 				{
@@ -1328,8 +1365,9 @@
 					"Max": 2.0,
 					"Min": 0.0,
 					"Name": "Saturation",
+					"Section": "Tone and color",
 					"Speed": 0.0,
-					"Tooltip": "",
+					"Tooltip": "Color saturation after the tone curve: 1 unchanged, 0 gray, 2 twice as vivid",
 					"Type": "Float"
 				},
 				{
@@ -1340,6 +1378,7 @@
 					"Max": 2.0,
 					"Min": 0.5,
 					"Name": "Contrast",
+					"Section": "Tone and color",
 					"Speed": 0.0,
 					"Tooltip": "Around middle gray; 1 = unchanged",
 					"Type": "Float"

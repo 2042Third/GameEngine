@@ -94,9 +94,26 @@ namespace Strata
 		void DrawPropertyOverrideMenu(const PrefabView& prefab, const ComponentInfo& info, std::span<const std::string_view> properties,
 			std::string_view probeKey);
 		// The generic rows of a component's properties, without those a component drawer showed (`drawn`); a property with a
-		// property drawer (UI::PropertyDrawers) draws its value through it.
+		// property drawer (UI::PropertyDrawers) draws its value through it. Properties without a section come first, then each
+		// section (PropertyInfo::Section) under its heading, in the order of its first property; a heading only over drawn rows.
 		void DrawProperties(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
 			const PrefabView* prefab, const UI::ComponentDrawResult* drawn = nullptr);
+		// One row of DrawProperties.
+		void DrawPropertyRow(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
+			const PrefabView* prefab, size_t index);
+		// A component's properties grouped by section, made once per component type (the registry is frozen).
+		struct PropertyGroup
+		{
+			std::string Section;  // Empty: the properties without a section (no heading)
+			std::string ProbeKey; // "Inspector.<Component>.Section.<Section>"
+			std::vector<size_t> Properties;
+		};
+		const std::vector<PropertyGroup>& GetPropertyGroups(const ComponentInfo& info);
+		// Under the Directional Light's properties: the shadow maps the Scene view draws it with and the Graphics Quality
+		// they come from, with a link to the page.
+		void DrawSunShadowQuality(EditorPanelContext& panelContext);
+		// With nothing selected: the project's Graphics Quality and a link to its page.
+		void DrawGraphicsQualityLink(EditorPanelContext& panelContext);
 		// An edit of a rotation shared by several entities: continues the edit in progress, or begins one from the angles the
 		// widget showed (RotationAnglesEdit keeps each entity's own angles through a drag).
 		bool UpdateRotationEdit(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PropertyInfo& property,
@@ -142,6 +159,24 @@ namespace Strata
 		};
 		std::optional<StreamingSummary> m_StreamingSummary;
 		std::unordered_map<const ComponentInfo*, std::vector<std::optional<PropertyValue>>> m_Defaults;
+		std::unordered_map<const ComponentInfo*, std::vector<PropertyGroup>> m_PropertyGroups;
+		// The sun's line, made again when what it says changes.
+		struct SunShadowLine
+		{
+			uint32_t Cascades = 0;
+			uint32_t Size = 0;
+			uint32_t Rows = 0; // 0: the Scene view's own frame; otherwise the rows the project's quality was resolved for
+			int32_t ViewPreset = -1;
+			int32_t ProjectPreset = -1;
+			std::string Text;
+
+			bool Matches(const SunShadowLine& other) const
+			{
+				return Cascades == other.Cascades && Size == other.Size && Rows == other.Rows && ViewPreset == other.ViewPreset
+					&& ProjectPreset == other.ProjectPreset;
+			}
+		};
+		SunShadowLine m_SunShadowLine;
 		MaterialEditor m_MaterialEditor;
 		// The rotation of several entities being edited, until the widget reports the edit finished.
 		std::optional<RotationAnglesEdit> m_RotationEdit;

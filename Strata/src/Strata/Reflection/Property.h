@@ -74,6 +74,8 @@ namespace Strata
 		std::string Name;        // Stable identifier used in files and APIs, e.g. "Translation"
 		std::string DisplayName; // Inspector label, e.g. "Translation"
 		std::string Tooltip;
+		// The group editors show it under ("Shadows"; PropertyBuilderBase::Section); empty: none, before every group.
+		std::string Section;
 		PropertyType Type = PropertyType::Float;
 		PropertyFlags Flags = PropertyFlags::None;
 		float Min = 0.0f;

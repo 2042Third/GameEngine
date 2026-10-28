@@ -49,7 +49,12 @@ ComponentRegistry::Register<WindZoneComponent>("WindZone")
   impossible (no negative radii, no zero divisors). `Range`, `Slider`, `Color`, `WithTooltip` and `c_Unbounded` come
   from `Strata/Reflection/PropertyOptions.h`.
 - `Color()` marks vec3/vec4 members as colors; `Slider(min, max)` uses a slider; `WithTooltip` documents
-  the property for people and AI agents (the tooltip text is part of `component.list`).
+  the property for people and AI agents (the tooltip text is part of `component.list`): say what it changes, with its
+  unit (meters, degrees, lux, EV, texels) and what its bounds mean.
+- `.Section("Shadows")` before properties groups them under a heading in the Inspector (until the next `.Section`); a
+  component with many properties groups them all. A property added later goes inside its group's lines, or at the end
+  after a `.Section` call of its own (sections need not be contiguous; registration order never changes, files and
+  cooked scenes keep theirs). Regenerate the component schema snapshot after (`--strata-test-helper=write-component-schema`).
 - Flags: `NotRemovable` for components every entity has, `Hidden` for internal ones, `NoSerialize` only
   for data the serializer writes itself.
 - `Requires("UIRect")` names a component the entity needs for this one to work (every UI component but the rect needs
