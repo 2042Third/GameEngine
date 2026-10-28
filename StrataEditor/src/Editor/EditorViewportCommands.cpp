@@ -63,9 +63,6 @@ namespace Strata
 		// captures to be converted: none for the capture renderer, which draws every view and converts every loaded capture in its
 		// first frame (SceneRendererSpecification::SpreadLightingUpdates is off); captures still loading count as pending assets.
 		constexpr uint32_t c_MaxCaptureLightingFrames = 16;
-		// Frames a capture may render again while the statistics of its lighting debug view (SceneRenderer::GetLightingViewStats)
-		// are on their way back from the GPU: they arrive two or three frames after the frame they measured.
-		constexpr uint32_t c_MaxCaptureLightingViewFrames = 8;
 		// Frames a capture may render again while its pre-exposure settles (SceneRendererStats::PreExposureSettled): automatic
 		// exposure reads its metering back frames later, and a scene far from 1 nit (daylight in real units) needs a second
 		// readback once its pre-exposure moved.
@@ -305,8 +302,11 @@ namespace Strata
 			uint32_t TemporalFrames = 0; // Renders repeated while temporal anti-aliasing settled
 			uint32_t ReflectionFrames = 0; // Renders repeated while spatial reflections waited for a previous frame's color
 			uint32_t LightingFrames = 0; // Renders repeated while shadow views of point and spot lights waited to be drawn
-			uint32_t LightingViewFrames = 0; // Renders repeated while the lighting view's statistics were on their way back
-			std::optional<LightingViewStats> LightingStats; // The lighting view's, as the captured frame knew them
+			// A lighting view's statistics of the captured frame (SceneRenderer::GetLightingViewStats), which come back from the GPU
+			// with its image: the capture renderer keeps its targets (and their readbacks) while they are pending. Empty when they
+			// never arrived.
+			bool LightingStatsPending = false;
+			std::optional<LightingViewStats> LightingStats;
 			uint32_t ExposureFrames = 0; // Renders repeated while the pre-exposure settled
 			bool Rendered = false;       // A first frame was rendered (it started the exposure again)
 			uint32_t TexturesBelowWanted = 0;
@@ -674,7 +674,6 @@ namespace Strata
 			progress.RenderFrame = FrameProfiler::Get().GetTotalFrameCount();
 			progress.RenderCount = renderer->GetSceneRenderer().GetRenderCount();
 			progress.DebugViewStats = renderer->GetDebugViewStats();
-			progress.LightingStats = renderer->GetLightingViewStats();
 			progress.TintedEntities = stats.TintedEntities;
 			progress.PendingAssets = stats.PendingAssets;
 			progress.PendingTextGlyphs = stats.PendingTextGlyphs;
@@ -698,13 +697,10 @@ namespace Strata
 			// Probes wait only for their captures to load (the capture renderer converts every one at once): an asset wait.
 			const uint32_t probesPending = request.WaitForAssets ? progress.ReflectionProbesPending : 0u;
 			const bool lightingPending = progress.LocalShadowViewsPending + probesPending > 0 && progress.LightingFrames < c_MaxCaptureLightingFrames;
-			// A lighting view's statistics of a frame this capture rendered (the capture renderer drops them with its targets).
-			const bool lightingViewPending = GetLightingView(progress.DebugView) != SceneLightingView::None && !progress.LightingStats
-				&& progress.LightingViewFrames < c_MaxCaptureLightingViewFrames;
 			// Until its pre-exposure settled the frame's brightest and darkest values may have clamped or lost bits.
 			const bool exposurePending = !stats.PreExposureSettled && progress.ExposureFrames < c_MaxCaptureExposureFrames;
 			const bool contentPending = textPending || assetsPending || mipsPending || posesPending || instancesPending || motionPending || lightingPending
-				|| exposurePending || lightingViewPending;
+				|| exposurePending;
 			// Temporal anti-aliasing: the mean of the jitter's phases of the complete view, as the viewport shows a still view once it
 			// settled. A frame still incomplete starts the history again (the capture's targets are released after each picture,
 			// so each one starts it anyway), so the picture blends complete frames only.
@@ -718,7 +714,6 @@ namespace Strata
 					renderer->GetSceneRenderer().ResetHistory();
 				progress.MotionFrames += motionPending ? 1 : 0;
 				progress.LightingFrames += lightingPending ? 1 : 0;
-				progress.LightingViewFrames += lightingViewPending ? 1 : 0;
 				progress.ExposureFrames += exposurePending ? 1 : 0;
 				progress.TemporalFrames += temporalPending ? 1 : 0;
 				progress.ReflectionFrames += reflectionsPending ? 1 : 0;
@@ -730,8 +725,12 @@ namespace Strata
 				return std::nullopt;
 			}
 			progress.Readback = TextureReadback::Create(renderer->GetOutputTexture(), {}, &error);
-			// Captures are occasional and may be large: their render targets are not kept between them.
-			renderer->ReleaseTargets();
+			// Captures are occasional and may be large: their render targets are not kept between them. A lighting view's
+			// statistics of this frame come back with its image, read back with the targets' readbacks: they are released once
+			// those arrived (ContinueCapture), so the statistics describe the captured image, never an earlier frame.
+			progress.LightingStatsPending = progress.Readback && GetLightingView(progress.DebugView) != SceneLightingView::None;
+			if (!progress.LightingStatsPending)
+				renderer->ReleaseTargets();
 			if (!progress.Readback)
 				return EditorCommandResult::Fail(fmt::format("Reading the capture back failed: {}", error));
 			progress.View = std::move(*view);
@@ -743,12 +742,24 @@ namespace Strata
 		// image take long enough to hitch the editor), save it on an I/O thread when asked to, then report.
 		std::optional<EditorCommandResult> ContinueCapture(EditorContext& context, const CaptureRequest& request, CaptureProgress& progress)
 		{
+			// The targets a lighting view's capture kept for its statistics: released once they arrived, or when the capture fails.
+			const auto releaseTargets = [&context, &progress]()
+			{
+				if (!progress.LightingStatsPending)
+					return;
+				if (ViewportRenderer* renderer = context.GetViewport().GetCaptureRenderer())
+					renderer->ReleaseTargets();
+				progress.LightingStatsPending = false;
+			};
 			if (!progress.Encoded)
 			{
 				if (!progress.Readback->IsReady())
 				{
 					if (std::chrono::steady_clock::now() - progress.Submitted > c_CaptureReadbackTimeout)
+					{
+						releaseTargets();
 						return EditorCommandResult::Fail(fmt::format("The GPU did not finish the capture within {} seconds", c_CaptureReadbackTimeout.count()));
+					}
 					return std::nullopt;
 				}
 				// The GPU finished the capture: its GPU times are known once the profiler resolved its frame (a frame or two).
@@ -761,8 +772,18 @@ namespace Strata
 					// The GPU-driven path's counts come back with the frame's culling counters: the capture waits for those too.
 					const bool timesKnown = !Renderer::GetGPUProfiler().IsEnabled() || (gpu.HasTimes && gpu.Frame >= progress.RenderFrame);
 					const bool countsKnown = !progress.Stats.GPUDriven || (gpu.HasCounters && gpu.CountersRender >= progress.RenderCount);
-					if (!(timesKnown && countsKnown) && progress.GPUStatsPolls++ < c_MaxCaptureGPUStatsPolls)
+					// The lighting view's statistics of the captured frame come back with it (ResolveGPUStats polled them).
+					const std::optional<LightingViewStats>& lighting = sceneRenderer.GetLightingViewStats();
+					const bool lightingKnown = !progress.LightingStatsPending || (lighting && lighting->Render >= progress.RenderCount);
+					if (!(timesKnown && countsKnown && lightingKnown) && progress.GPUStatsPolls++ < c_MaxCaptureGPUStatsPolls)
 						return std::nullopt;
+					if (progress.LightingStatsPending)
+					{
+						// Those of another frame (a use of the capture renderer in between) are not reported.
+						if (lighting && lighting->Render == progress.RenderCount)
+							progress.LightingStats = lighting;
+						releaseTargets();
+					}
 					SceneRendererGPUStats known = gpu;
 					if (!(gpu.HasTimes && gpu.Frame >= progress.RenderFrame))
 					{
@@ -776,7 +797,10 @@ namespace Strata
 				}
 				Ref<EncodedCapture> encoded = CreateRef<EncodedCapture>();
 				if (!progress.Readback->GetResult(encoded->Image))
+				{
+					releaseTargets();
 					return EditorCommandResult::Fail("Mapping the captured image failed");
+				}
 				progress.Readback.reset();
 				progress.Encoded = encoded;
 				progress.EncodeJob = SubmitEncode(encoded, true);
@@ -806,8 +830,7 @@ namespace Strata
 				{ "camera", request.OwnCamera.IsSet() ? "custom" : (progress.View.FromScene ? "scene" : "editor") },
 				{ "view", DescribeView(progress.View.Camera) },
 				{ "waitedFrames", std::max({ progress.TextFrames, progress.AssetFrames, progress.MipFrames, progress.PoseFrames, progress.InstanceFrames,
-					progress.MotionFrames, progress.TemporalFrames, progress.LightingFrames, progress.ExposureFrames, progress.LightingViewFrames,
-					progress.ReflectionFrames }) },
+					progress.MotionFrames, progress.TemporalFrames, progress.LightingFrames, progress.ExposureFrames, progress.ReflectionFrames }) },
 				{ "temporalFrames", progress.Stats.TemporalFrames },
 				{ "overlays", progress.Overlays },
 				{ "pendingAssets", progress.PendingAssets },

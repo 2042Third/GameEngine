@@ -2882,9 +2882,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   pixels by their motion since the capture renderer's previous frame, so it renders a second frame, and a still scene shows
   none; the lighting views ("Lighting" under Rendering) add `lighting: {view, surfaceShare, surfaceEv100: {p05, p50, p95},
   backgroundEv100, value: {median, p05}, belowRangeShare, aboveRangeShare, sunIlluminance, skyIlluminance, sunToSkyRatio}`,
-  null where the view measures nothing (NaN), and the capture renders again, up to `c_MaxCaptureLightingViewFrames` (8),
-  until the statistics of a frame it drew came back: `lighting` null and `lightingPending` true if they did not); it defaults to the
-  viewport's size, camera, overlays and debug view and fails without a GPU. `position`, `target` and `fov` render through a camera of the capture's own (a copy
+  null where the view measures nothing (NaN), measured on the captured frame itself: the capture renderer keeps its
+  targets, whose readbacks bring the statistics back with the image, until they arrived (`lighting` null and
+  `lightingPending` true if they did not within the polls the GPU times get); it defaults to the viewport's size, camera,
+  overlays and debug view and fails without a GPU. `position`, `target` and `fov` render through a camera of the capture's own (a copy
   of the editor camera with those changes; `camera.get` is unchanged, the result's camera is `"custom"`), so agents look
   around without moving the person's view. **Live captures** (`viewport.capture {live: true, camera, atFixedStep?,
   frames?, path?}`) render nothing: they read back what the Scene view (`"editor"`) or the Game view (`"scene"`) presented, its
