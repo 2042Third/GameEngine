@@ -3664,9 +3664,12 @@ lights, Post Process and the sky), and never a resolution below the output's.
   at 3840x2160, made with the render targets.
 - **No history:** GTAO's slice rotation and step offset come from a fixed 4x4 pattern (the 4x4 ordered-dither order
   `IsLODFadeDrawn` uses, two orders of it), never from the frame, so every 4x4 block of pixels holds the 16 rotations once.
-  `AODenoise` (8x8 groups over a 16x16 group-shared tile of occlusion, linear depth and normal) resolves the pattern with a
-  5x5 bilateral average whose tent weights (0.5, 1, 1, 1, 0.5) weigh each phase exactly once (depth `exp(-50 dz / z)`,
-  normal `max(n.n, 0)^8`), then blurs the result over 5x5 within depth edges (0.6.0's blur). Images are the same with TAA,
+  `AODenoise` (16x16 groups over a 24x24 group-shared tile of occlusion, linear depth and normal) resolves the pattern with
+  a 5x5 bilateral average whose tent weights (0.5, 1, 1, 1, 0.5) weigh each phase exactly once (depth `exp(-50 dz / z)`,
+  normal `max(n.n, 0)^8`), then blurs the result over 5x5 within depth edges (0.6.0's blur). Both run separably (a row of 5,
+  then a column of 5, each tap weighed against the pixel it is gathered for): the 5x5 kernels' weights on a surface facing
+  the camera, within neighbors' depth differences elsewhere, at 28 taps per pixel instead of 64, so `GPU.AO` at Medium
+  costs what 0.6.0's did (1.01 to 1.02 of it on the Physics Playground at 3840x2160). Images are the same with TAA,
   FXAA or none, and two frames of a still view are identical (`GPU.SceneRenderer.AmbientOcclusion`).
 - **Radius:** `PostProcessComponent::AmbientOcclusionRadius` (default 1 m) is kept on screen between
   `c_AOMinRadiusFraction` (0.3%, at least 1.5 pixels) and `c_AOMaxRadiusFraction` (12%) of the viewport's height, and the

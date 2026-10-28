@@ -28,9 +28,13 @@ namespace Strata
 		constexpr nvrhi::Format c_AOFormat = nvrhi::Format::R16_FLOAT;
 		constexpr nvrhi::Format c_AOFallbackFormat = nvrhi::Format::R32_FLOAT;
 
-		uint32_t DispatchGroups(uint32_t size)
+		// Effects/GTAO.comp's groups are 8x8 pixels, Effects/AODenoise.comp's 16x16 (larger groups share their tile's border).
+		constexpr uint32_t c_GTAOGroupSize = 8;
+		constexpr uint32_t c_DenoiseGroupSize = 16;
+
+		uint32_t DispatchGroups(uint32_t size, uint32_t groupSize)
 		{
-			return (size + 7) / 8;
+			return (size + groupSize - 1) / groupSize;
 		}
 
 	}
@@ -123,21 +127,19 @@ namespace Strata
 		// The relaxation per step that keeps the relaxation per meter of 0.1 per step at 6 steps.
 		parameters.ThinOccluderDecay = 1.0f - std::pow(0.9f, 6.0f / static_cast<float>(samples.StepsPerSide));
 		m_Stats.AmbientOcclusionSamples = samples.Slices * samples.StepsPerSide * 2;
-		const uint32_t groupsX = DispatchGroups(m_ViewportSize.x);
-		const uint32_t groupsY = DispatchGroups(m_ViewportSize.y);
 
 		nvrhi::ComputeState state;
 		state.pipeline = m_GTAOPipeline;
 		state.bindings = { m_GTAOBindingSet };
 		commandList->setComputeState(state);
 		commandList->setPushConstants(&parameters, sizeof(parameters));
-		commandList->dispatch(groupsX, groupsY, 1);
+		commandList->dispatch(DispatchGroups(m_ViewportSize.x, c_GTAOGroupSize), DispatchGroups(m_ViewportSize.y, c_GTAOGroupSize), 1);
 
 		state.pipeline = m_AODenoisePipeline;
 		state.bindings = { m_AODenoiseBindingSet };
 		commandList->setComputeState(state);
 		commandList->setPushConstants(&parameters, sizeof(parameters));
-		commandList->dispatch(groupsX, groupsY, 1);
+		commandList->dispatch(DispatchGroups(m_ViewportSize.x, c_DenoiseGroupSize), DispatchGroups(m_ViewportSize.y, c_DenoiseGroupSize), 1);
 	}
 
 }
