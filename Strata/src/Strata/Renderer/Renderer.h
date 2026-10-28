@@ -103,6 +103,8 @@ namespace Strata
 		// A cube array of one black cube: what the scene passes sample as reflection probes without any (the device's
 		// imageCubeArray feature is required).
 		static nvrhi::ITexture* GetBlackCubeArrayTexture();
+		// A 1x1x1 black 3D texture: what the scene passes bind as aerial perspective's volume in frames without it.
+		static nvrhi::ITexture* GetBlack3DTexture();
 
 		// Copies one subresource of a 2D, 2D-array or cube texture (a mip level of an array slice or cube face) to the
 		// CPU. Blocks until the GPU is done; meant for screenshots, picking fallbacks and tests, not per-frame use.

@@ -103,6 +103,12 @@ namespace Strata
 		float AtmosphereDensity = 1.0f;
 		float AtmosphereHaze = 1.0f;
 		float GroundAlbedo = 0.3f;
+		// Atmosphere: the air between the camera and every surface dims it and adds the light it scatters toward the camera, as
+		// the sky does over its whole depth (aerial perspective), distances multiplied by AerialPerspectiveScale: worlds smaller
+		// than real ones (an island of 1 km) show the haze of larger ones above 1.
+		bool AerialPerspective = true;
+		float AerialPerspectiveScale = 1.0f; // 0 to c_MaxAerialPerspectiveScale
+		static constexpr float c_MaxAerialPerspectiveScale = 64.0f;
 	};
 
 	// Exponential height fog over the scene's surfaces and its sky. The first active entity with this component in a scene

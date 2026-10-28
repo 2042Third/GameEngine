@@ -495,6 +495,30 @@ namespace
 		return View(glm::vec3(0.0f, 2.0f, 4.5f), glm::vec3(0.0f, 0.4f, 0.0f));
 	}
 
+	// The atmosphere with aerial perspective (scale 8): shapes from near to 300 m, opaque and alpha-blended, hazed by distance.
+	SceneCamera BuildAerialPerspective(Scene& scene, SceneTestAssets& assets, TestSkinningPoses&)
+	{
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::normalize(glm::vec3(-0.5f, -0.6f, -0.4f)), 3.0f);
+		SkyLightComponent& sky = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+		sky.Source = SkyLightSource::Atmosphere;
+		sky.AerialPerspectiveScale = 8.0f;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, LitMaterial(assets, glm::vec4(0.3f, 0.4f, 0.25f, 1.0f)), glm::vec3(0.0f, 0.0f, -150.0f), "Ground")
+			.GetComponent<TransformComponent>().Scale = glm::vec3(400.0f);
+		const AssetHandle shape = LitMaterial(assets, glm::vec4(0.6f, 0.5f, 0.4f, 1.0f));
+		MaterialProperties glassy = UnlitColor({ 0.4f, 0.5f, 0.6f, 0.5f });
+		glassy.AlphaMode = MaterialAlphaMode::Blend;
+		const AssetHandle blended = assets.AddMaterial(glassy);
+		for (uint32_t index = 0; index < 8; index++)
+		{
+			const float distance = 5.0f * std::pow(1.8f, static_cast<float>(index));
+			const glm::vec3 position(static_cast<float>(index % 2) * 6.0f - 3.0f, 1.0f, -distance);
+			AddMesh(scene, BuiltinAssets::CubeMesh, index % 3 == 2 ? blended : shape, position, "Shape").GetComponent<TransformComponent>().Scale =
+				glm::vec3(0.4f * std::sqrt(distance));
+		}
+		return View(glm::vec3(0.0f, 2.0f, 6.0f), glm::vec3(0.0f, 1.5f, -100.0f));
+	}
+
 	const TestScene c_Scenes[] = {
 		{ "Many meshes", BuildManyMeshes },
 		{ "Alpha-masked", BuildAlphaMasked },
@@ -507,6 +531,7 @@ namespace
 		{ "Occluded", BuildOccluded },
 		{ "Local shadows", BuildLocalShadowed },
 		{ "Lit materials", BuildLitMaterials },
+		{ "Atmosphere and aerial perspective", BuildAerialPerspective },
 	};
 
 	void CompareScenes(GPUContext& gpu, IndirectDrawMode indirect, uint32_t maxDrawsPerCall = 0)

@@ -3831,6 +3831,24 @@ lights, Post Process and the sky), and never a resolution below the output's.
     0.3 MiB, each set of maps about 21 MiB (33 MiB with a 512 prefiltered sky), so a renderer with the atmosphere holds
     two (42 MiB, 66 MiB at High and Ultra); nothing exists without the atmosphere. `GPU.Atmosphere` switches the sky's
     source and the sun back and forth and compares the reflections with a fresh renderer's.
+  - **Aerial perspective** (`SkyLightComponent::AerialPerspective`, on by default, and `AerialPerspectiveScale`, 0 to 64):
+    the air between the camera and a surface dims it and adds the light it scatters toward the camera, as the sky-view
+    table integrates over the whole sky. Each frame with it (the atmosphere, a scale above 0, a perspective camera:
+    `SetAerialPerspective`, `SceneRendererStats::AerialPerspective`) `IBL/AtmosphereAerial.comp` fills a volume of 32 x 32
+    columns across the screen and 32 depth slices (`RenderData::c_AerialSize`, `c_AerialSlices`; RGBA16F 32 x 32 x 64: the
+    in-scattered light per lux of sun of the sun's color in slices 0-31, the transmittance in 32-63, 512 KiB, made with the
+    atmosphere's resources). The columns are the view rays through the unjittered camera's corners interpolated across the
+    screen; slice k's center lies at `D ((k + 0.5) / 32)^2` meters (D the camera's far plane, at most
+    `c_AerialMaxDistance`, 32 km), crowding near the camera, and each slice integrates its stretch in two midpoint steps of
+    `AccumulateAtmosphereSegment` (`Include/AtmospherePass.glsl`), the integrand the sky-view table's loop calls too, with
+    distances multiplied by the scale (small worlds show the haze of large ones: the Open World uses 6). `Scene/Forward.frag`
+    applies it per pixel (`Include/AerialPerspective.glsl`, SRV 29, two trilinear fetches) to opaque, masked, transparent
+    and glass surfaces alike, before the height fog (fog lies nearer the camera; under the atmosphere its sky light, the
+    sky-view table at the horizon, already holds the air's haze, so the two meet there); the sky is not hazed again, and
+    the value debug views skip it. `FogParams.z` holds D and `.w` the scale (0 without: the uniform branch costs nothing
+    else, and a black 3D texture is bound): `SetHeightFog` writes only `.x` and `.y`, and `SetAerialPerspective` runs after
+    it. The pass is recorded after the light clusters in `GPU.Aerial` (1,024 threads of 64 segments). Probe bakes apply it
+    too: it is light the probe sees.
 
 ### Reflections
 

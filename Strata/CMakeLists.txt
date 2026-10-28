@@ -117,6 +117,7 @@ strata_add_shaders(Strata_Renderer
 		IBL/AtmosphereTransmittance.comp
 		IBL/AtmosphereMultipleScattering.comp
 		IBL/AtmosphereSkyView.comp
+		IBL/AtmosphereAerial.comp
 		IBL/AtmosphereCube.comp
 		Overlay/Grid.frag
 		Overlay/Outline.frag

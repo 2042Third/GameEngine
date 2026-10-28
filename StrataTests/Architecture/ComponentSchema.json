@@ -897,6 +897,30 @@
 					"Speed": 0.009999999776482582,
 					"Tooltip": "Atmosphere: diffuse reflectance of the planet's ground, which lights the sky from below",
 					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Aerial Perspective",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "AerialPerspective",
+					"Speed": 0.0,
+					"Tooltip": "Atmosphere: distant surfaces fade into the air's haze, as the sky does (aerial perspective)",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Aerial Perspective Scale",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 64.0,
+					"Min": 0.0,
+					"Name": "AerialPerspectiveScale",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "Atmosphere: distances multiplied by this for the haze: 1 is Earth's air, 4 makes a 1 km view look like 4 km",
+					"Type": "Float"
 				}
 			]
 		},

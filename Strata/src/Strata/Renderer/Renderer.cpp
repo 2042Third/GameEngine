@@ -41,6 +41,7 @@ namespace Strata
 			nvrhi::TextureHandle FlatNormalTexture;
 			nvrhi::TextureHandle BlackCubeTexture;
 			nvrhi::TextureHandle BlackCubeArrayTexture;
+			nvrhi::TextureHandle Black3DTexture;
 		};
 
 		Scope<RendererData> s_Data;
@@ -96,12 +97,14 @@ namespace Strata
 		s_Data->FlatNormalTexture = CreateSolidTexture(commandList, 0xFFFF8080u, "FlatNormalTexture"); // (0.5, 0.5, 1.0)
 		s_Data->BlackCubeTexture = CreateSolidTexture(commandList, 0xFF000000u, "BlackCubeTexture", nvrhi::TextureDimension::TextureCube);
 		s_Data->BlackCubeArrayTexture = CreateSolidTexture(commandList, 0xFF000000u, "BlackCubeArrayTexture", nvrhi::TextureDimension::TextureCubeArray);
+		s_Data->Black3DTexture = CreateSolidTexture(commandList, 0xFF000000u, "Black3DTexture", nvrhi::TextureDimension::Texture3D);
 		commandList->close();
 		nvrhiDevice->executeCommandList(commandList);
 
 		s_Data->FrameCommandList = nvrhiDevice->createCommandList();
 		if (!s_Data->LinearClamp || !s_Data->LinearWrap || !s_Data->AnisotropicWrap || !s_Data->PointClamp || !s_Data->WhiteTexture
-			|| !s_Data->BlackTexture || !s_Data->FlatNormalTexture || !s_Data->BlackCubeTexture || !s_Data->BlackCubeArrayTexture || !s_Data->FrameCommandList)
+			|| !s_Data->BlackTexture || !s_Data->FlatNormalTexture || !s_Data->BlackCubeTexture || !s_Data->BlackCubeArrayTexture || !s_Data->Black3DTexture
+			|| !s_Data->FrameCommandList)
 		{
 			ST_CORE_ERROR("Renderer: failed to create shared GPU resources");
 			Shutdown();
@@ -286,6 +289,7 @@ namespace Strata
 	nvrhi::ITexture* Renderer::GetFlatNormalTexture() { return s_Data->FlatNormalTexture; }
 	nvrhi::ITexture* Renderer::GetBlackCubeTexture() { return s_Data->BlackCubeTexture; }
 	nvrhi::ITexture* Renderer::GetBlackCubeArrayTexture() { return s_Data->BlackCubeArrayTexture; }
+	nvrhi::ITexture* Renderer::GetBlack3DTexture() { return s_Data->Black3DTexture; }
 
 	bool Renderer::ReadTexture(nvrhi::ITexture* texture, ReadbackImage& outImage, uint32_t mipLevel, uint32_t arraySlice)
 	{

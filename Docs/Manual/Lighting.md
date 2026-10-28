@@ -90,6 +90,11 @@ scene, or offers **Add Procedural Sky** when there is none (the scene is then li
   Use real values with it: a 120,000 lux sun and automatic exposure (**Max EV** 16). A sun that moves keeps the sky and
   its own light up to date at once; the light the sky casts on the scene follows every half degree, computed over a few
   frames and then switched to.
+  - **Aerial Perspective** (on by default): the air between the camera and distant surfaces dims them and adds its own
+    light, so mountains and far trees fade into the sky's blue, as they do outdoors (and toward orange at sunset).
+    **Aerial Perspective Scale** multiplies the distances the air is measured over: 1 is Earth's air, in which a few
+    hundred meters barely haze; worlds smaller than real ones show the depth of larger ones with a higher scale (4 makes a
+    1 km view look like 4 km; the Open World sample uses 6). Turn it off to keep the look of scenes made before 0.7.0.
 
 **Show Background** draws the sky behind the scene (otherwise the background is the clear color) and **Background
 Blur** softens it (the atmosphere's background is always sharp).
@@ -176,11 +181,6 @@ color says (since 0.7.0; before, a metal of roughness 1 lost about two thirds of
 metals such as copper or gold keep less at high roughness, as real ones do: each bounce between the facets takes some of
 the light. Materials made darker to look right before may now be set to their measured colors.
 
-## Sun and sky presets
-
-The Sky section of the Inspector has four presets, each a sky and a sun of real values in one undo step (agents run
-`lighting.applySkyPreset`): **Clear** (the physical atmosphere and a 120,000 lux sun 40 degrees up: sunny, deep blue
-shadows), **Hazy** (thicker air: a paler sky and softer contrast), **Overcast** (an even gray sky of about 7,700 lux and a
 Highlights hold at 4K without sparkling: where a surface's normal map or curvature changes faster than the pixels can
 show, its highlight spreads over the pixels it covers instead of flickering between single bright pixels (specular
 anti-aliasing, since 0.7.0). Distant normal-mapped and curved surfaces therefore look slightly rougher than their
@@ -188,6 +188,11 @@ material says; flat surfaces are unchanged. Reflections that a normal map would 
 instead of showing what lies below the surface. At the High and Ultra graphics quality the sky's reflections are filtered
 at 512 texels per face (256 at Low and Medium), so mirror-like surfaces reflect a sharp sky at 4K.
 
+## Sun and sky presets
+
+The Sky section of the Inspector has four presets, each a sky and a sun of real values in one undo step (agents run
+`lighting.applySkyPreset`): **Clear** (the physical atmosphere and a 120,000 lux sun 40 degrees up: sunny, deep blue
+shadows), **Hazy** (thicker air: a paler sky and softer contrast), **Overcast** (an even gray sky of about 7,700 lux and a
 faint, very soft sun) and **Golden Hour** (the sun 6 degrees up: warm light and long shadows). They keep the sun's direction
 around the horizon, make the sky and the sun a scene lacks, and raise the Post Process's **Auto Exposure Max EV** to 16 when
 it would clip a real sun.

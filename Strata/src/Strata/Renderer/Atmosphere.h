@@ -59,6 +59,10 @@ namespace Strata
 		// zenith to the top of the atmosphere, as the table stores it: the ground is ignored (callers test it), and heights
 		// below it count as the ground's.
 		glm::dvec3 ComputeTransmittance(const Medium& medium, double radius, double mu);
+		// The transmittance along `distance` kilometers of a ray from a point at `radius` in the direction of cosine `mu` with
+		// the zenith (the same midpoint quadrature, c_TransmittanceSteps steps over the distance): what aerial perspective dims
+		// a surface that far away by. Heights below the ground count as the ground's.
+		glm::dvec3 ComputePathTransmittance(const Medium& medium, double radius, double mu, double distance);
 		// The fraction of a sun's light that reaches the ground through the atmosphere, toward `towardSun` (a unit vector),
 		// for a disk of `angularRadius` radians: its center's transmittance, times the share of the disk above the horizon.
 		glm::dvec3 ComputeSunTransmittance(const Medium& medium, const glm::dvec3& towardSun, double angularRadius);

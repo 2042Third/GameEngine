@@ -72,6 +72,21 @@ namespace Strata::Atmosphere
 		return glm::exp(-depth * step);
 	}
 
+	glm::dvec3 ComputePathTransmittance(const Medium& medium, double radius, double mu, double distance)
+	{
+		if (!(distance > 0.0))
+			return glm::dvec3(1.0);
+		const double step = distance / static_cast<double>(c_TransmittanceSteps);
+		glm::dvec3 depth(0.0);
+		for (uint32_t index = 0; index < c_TransmittanceSteps; index++)
+		{
+			const double t = (static_cast<double>(index) + 0.5) * step;
+			const double pointRadius = std::sqrt(std::max(radius * radius + t * t + 2.0 * radius * mu * t, 0.0));
+			depth += Extinction(medium, pointRadius - c_BottomRadius);
+		}
+		return glm::exp(-depth * step);
+	}
+
 	glm::dvec3 ComputeSunTransmittance(const Medium& medium, const glm::dvec3& towardSun, double angularRadius)
 	{
 		// The disk's center seen from the ground; the part of the disk below the horizon (a linear share across its
