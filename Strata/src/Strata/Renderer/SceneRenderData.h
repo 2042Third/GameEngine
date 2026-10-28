@@ -66,7 +66,8 @@ namespace Strata
 			// (PostProcessComponent::AmbientOcclusionMultiBounce; light-and-materials claims y)
 			glm::vec4 AOParams;
 			// x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels); y: the lighting debug view
-			// (SceneLightingView as a float, 0: none; light-and-materials claims y and z)
+			// (SceneLightingView as a float, 0: none); z: specular anti-aliasing's strength (1 with
+			// SceneRendererSpecification::SpecularAntiAliasing, else 0) (light-and-materials claims y and z)
 			glm::vec4 MaterialParams;
 			// x: 1 when the motion history holds the renderer's previous frame; y: the pre-exposure, the power of two every writer of
 			// the HDR target multiplies its luminance by (SceneRendererStats::PreExposure); z: the frame's rotation of per-pixel noise

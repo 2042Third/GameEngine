@@ -123,11 +123,12 @@ vec3 SampleSpecularLight(vec3 relativePosition, vec3 normal, vec3 reflected, flo
 
 // The lit surface's color: the sun with its shadow, the punctual lights of the pixel's cluster (those with shadows through
 // their views, Include/LocalShadows.glsl), the reflection probes' and the sky's image-based light (or the constant ambient)
-// and the emission, under the clear coat where the material has one. `diffuseWeight` is the share of the diffuse light the
-// surface scatters (1 - its transmission in the glass variant; 1 elsewhere). The lighting debug views Indirect and
-// AmbientOcclusion return only the indirect light and the occlusion that darkens it.
-vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicRoughness, vec3 shadingNormal, float occlusion, MaterialData material,
-	ClearcoatData coat, float diffuseWeight)
+// and the emission, under the clear coat where the material has one. `roughness` is the perceptual roughness widened by
+// specular anti-aliasing (main); `diffuseWeight` is the share of the diffuse light the surface scatters (1 - its transmission
+// in the glass variant; 1 elsewhere). The lighting debug views Indirect and AmbientOcclusion return only the indirect light and
+// the occlusion that darkens it.
+vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicRoughness, float roughness, vec3 shadingNormal, float occlusion,
+	MaterialData material, ClearcoatData coat, float diffuseWeight)
 {
 	SurfaceData surface;
 	surface.Position = v_RelativePosition;
@@ -136,7 +137,7 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 	surface.Albedo = albedo;
 	surface.Alpha = baseAlpha;
 	surface.Metallic = clamp(material.Metallic * metallicRoughness.b, 0.0, 1.0);
-	surface.Roughness = clamp(material.Roughness * metallicRoughness.g, 0.0, 1.0);
+	surface.Roughness = roughness;
 	surface.Occlusion = occlusion;
 	surface.Emissive = emissive;
 	// The split sum's BRDF table at the surface: its specular reflectance of image light and the compensation of its lobe for
@@ -215,6 +216,7 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 		: vec3(diffuseOcclusion);
 	vec3 reflected = reflect(-surface.View, surface.Normal);
 	// Reflection probes whose boxes hold the surface light it first (Include/ReflectionProbes.glsl); the sky, or the constant
+	vec3 surfaceGeometricNormal = normalize(v_Normal) * (gl_FrontFacing ? 1.0 : -1.0);
 	// ambient without an environment, fills in what they leave.
 	ProbeLight probes;
 	probes.Irradiance = vec3(0.0);
@@ -248,8 +250,10 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 			radiance = textureLod(samplerCube(u_PrefilteredMap, u_LinearClampSampler), RotateEnvironmentDirection(reflected),
 				surface.Roughness * u_Frame.EnvironmentParams.z).rgb;
 		}
-		// Specular occlusion from ambient occlusion (Lagarde): tighter for smooth surfaces and grazing views.
-		float specularOcclusion = clamp(pow(NoV + diffuseOcclusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0);
+		// Specular occlusion from ambient occlusion (Lagarde): tighter for smooth surfaces and grazing views; reflections a normal
+		// map turns into the surface fade out (GetHorizonFade).
+		float specularOcclusion = clamp(pow(NoV + diffuseOcclusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0)
+			* GetHorizonFade(reflected, surfaceGeometricNormal);
 		if (probes.Weight > 0.0)
 		{
 			// The probes' captures hold the scene's luminance (their intensities applied); the sky's share is scaled here.
@@ -293,7 +297,8 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 		float coatReflectance = coat.Strength * (c_ClearcoatF0 * coatDFG.x + coatDFG.y) * coat.SpecularEnergy;
 		vec3 coatReflected = reflect(-surface.View, coat.Normal);
 		vec3 coatRadiance = SampleSpecularLight(surface.Position, coat.Normal, coatReflected, coat.Roughness, environment);
-		float coatOcclusion = clamp(pow(coatNoV + diffuseOcclusion, exp2(-16.0 * coat.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0);
+		float coatOcclusion = clamp(pow(coatNoV + diffuseOcclusion, exp2(-16.0 * coat.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0)
+			* GetHorizonFade(coatReflected, surfaceGeometricNormal);
 		indirect = indirect * (1.0 - coatReflectance) + coatRadiance * coatReflectance * coatOcclusion;
 		emitted *= 1.0 - ClearcoatFresnel(coat, coatNoV);
 	}
@@ -359,6 +364,11 @@ void main()
 		vec4 metallicRoughness = SampleMaterialTexture(material.MetallicRoughnessMap, uv);
 		vec3 shadingNormal = GetShadingNormal(material, uv, v_Normal, v_Tangent, gl_FrontFacing);
 		float occlusion = mix(1.0, SampleMaterialTexture(material.OcclusionMap, uv).r, material.OcclusionStrength);
+		// Specular anti-aliasing (MaterialParams.z): the lobe widened by the shading normal's change across the pixel. Derivatives
+		// only of the primitive's interpolants and textures, in a branch on its material (the same for a whole quad), before any
+		// discard: both draw paths shade alike.
+		float roughness = WidenRoughness(clamp(material.Roughness * metallicRoughness.g, 0.0, 1.0), dFdx(shadingNormal), dFdy(shadingNormal),
+			u_Frame.MaterialParams.z);
 		ClearcoatData coat;
 		coat.Strength = 0.0;
 		coat.Roughness = 0.0;
@@ -370,17 +380,18 @@ void main()
 			coat.Roughness = clamp(material.ClearcoatRoughness * SampleMaterialTexture(material.ClearcoatRoughnessMap, uv).g, 0.0, 1.0);
 			coat.Normal = GetMappedNormal(material.ClearcoatNormalMap, 1.0, uv, v_Normal, v_Tangent, gl_FrontFacing);
 		}
+			coat.Roughness = WidenRoughness(coat.Roughness, dFdx(coat.Normal), dFdy(coat.Normal), u_Frame.MaterialParams.z);
 		float diffuseWeight = 1.0;
 #ifdef ST_FORWARD_GLASS
 		float transmission = clamp(material.Transmission * SampleMaterialTexture(material.TransmissionMap, uv).r, 0.0, 1.0);
 		diffuseWeight = 1.0 - transmission;
 		float metallic = clamp(material.Metallic * metallicRoughness.b, 0.0, 1.0);
-		float roughness = clamp(material.Roughness * metallicRoughness.g, 0.0, 1.0);
 		transmitted = TransmitLight(instance, material, shadingNormal, GetViewVector(v_RelativePosition), albedo, metallic, roughness, transmission);
 		if (coat.Strength > 0.0)
 			transmitted *= 1.0 - ClearcoatFresnel(coat, dot(coat.Normal, GetViewVector(v_RelativePosition)));
 #endif
-		color = ShadeLitSurface(albedo, baseColor.a, surfaceEmissive, metallicRoughness, shadingNormal, occlusion, material, coat, diffuseWeight);
+		color = ShadeLitSurface(albedo, baseColor.a, surfaceEmissive, metallicRoughness, roughness, shadingNormal, occlusion, material, coat,
+			diffuseWeight);
 	}
 	else if (lightingView == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION)
 	{

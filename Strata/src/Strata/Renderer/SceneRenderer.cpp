@@ -27,9 +27,10 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
-#include <unordered_map>
+#include <utility>
 
 namespace Strata
 {
@@ -51,13 +52,12 @@ namespace Strata
 		static_assert(c_MaxFrameConstantWrites <= c_FrameConstantVersions);
 		constexpr uint32_t c_EnvironmentCubeSize = 512;
 		constexpr uint32_t c_IrradianceSize = 32;
-		constexpr uint32_t c_PrefilteredSize = 256;
+		// The prefiltered sky's size per face is the quality's (RendererQualitySettings::EnvironmentResolution).
 		constexpr uint32_t c_PrefilteredMipCount = 6; // Roughness 0, 0.2, ... 1.0
 		// FilterEnvironmentStep: the cube's levels, the irradiance, then each prefiltered level.
 		constexpr uint32_t c_EnvironmentFilterSteps = 2 + c_PrefilteredMipCount;
 		static_assert(SceneRenderer::c_AtmosphereRefreshSteps == 6 + c_EnvironmentFilterSteps);
 		constexpr uint32_t c_IrradianceSamples = 256;
-		constexpr uint32_t c_PrefilterSamples = 512;
 		constexpr uint32_t c_BRDFLutSize = 128;
 		constexpr uint32_t c_BRDFLutSamples = 512;
 
@@ -652,7 +652,8 @@ namespace Strata
 		EnvironmentMaps maps;
 		maps.Cube = createCube(c_EnvironmentCubeSize, MipCountFor(c_EnvironmentCubeSize), "EnvironmentCube");
 		maps.Irradiance = createCube(c_IrradianceSize, 1, "Irradiance");
-		maps.Prefiltered = createCube(c_PrefilteredSize, c_PrefilteredMipCount, "Prefiltered");
+		maps.PrefilteredSize = m_Specification.Quality.EnvironmentResolution;
+		maps.Prefiltered = createCube(maps.PrefilteredSize, c_PrefilteredMipCount, "Prefiltered");
 		// The new maps leave their undefined layout whole, before any level is written. Left to the passes, each level would
 		// leave it in a barrier of its own that waits for nothing (there is nothing to wait for in a new texture), recorded
 		// between the writes of the other levels; on the RTX 5090 (driver 617.42) such a barrier could land after levels
@@ -688,8 +689,9 @@ namespace Strata
 	{
 		std::mutex Mutex; // Renderers draw on the main thread; the lock keeps the registry safe for any other
 		// The entries do not keep the maps: they live as long as a renderer lights with them. A live entry's maps hold their
-		// source texture, so its address names nothing else meanwhile.
-		std::unordered_map<const Texture*, std::weak_ptr<const EnvironmentMaps>> Maps;
+		// source texture, so its address names nothing else meanwhile. Keyed by the texture and the prefiltered size: renderers of
+		// different EnvironmentResolution compute their own.
+		std::map<std::pair<const Texture*, uint32_t>, std::weak_ptr<const EnvironmentMaps>> Maps;
 	};
 
 	SceneRenderer::SharedEnvironments& SceneRenderer::GetSharedEnvironments()
@@ -698,11 +700,11 @@ namespace Strata
 		return s_SharedEnvironments;
 	}
 
-	Ref<const SceneRenderer::EnvironmentMaps> SceneRenderer::FindSharedEnvironment(const Texture& source)
+	Ref<const SceneRenderer::EnvironmentMaps> SceneRenderer::FindSharedEnvironment(const Texture& source, uint32_t prefilteredSize)
 	{
 		SharedEnvironments& shared = GetSharedEnvironments();
 		std::scoped_lock<std::mutex> lock(shared.Mutex);
-		auto it = shared.Maps.find(&source);
+		auto it = shared.Maps.find({ &source, prefilteredSize });
 		if (it == shared.Maps.end())
 			return nullptr;
 		Ref<const EnvironmentMaps> maps = it->second.lock();
@@ -721,7 +723,7 @@ namespace Strata
 		std::scoped_lock<std::mutex> lock(shared.Mutex);
 		// Entries of maps no renderer holds any more go first, so the registry holds as many entries as maps in use.
 		std::erase_if(shared.Maps, [](const auto& entry) { return entry.second.expired(); });
-		shared.Maps[environment->Source.get()] = environment;
+		shared.Maps[{ environment->Source.get(), environment->PrefilteredSize }] = environment;
 	}
 
 	void SceneRenderer::GenerateProceduralSky(nvrhi::ICommandList* commandList, const RenderData::ProceduralSkyParameters& parameters)
@@ -784,10 +786,11 @@ namespace Strata
 		}
 		const uint32_t mip = step - 2;
 		ST_CORE_ASSERT(mip < c_PrefilteredMipCount, "Environment filter step {} out of range", step);
-		const uint32_t size = std::max(1u, c_PrefilteredSize >> mip);
+		const uint32_t size = std::max(1u, maps.PrefilteredSize >> mip);
 		const float roughness = static_cast<float>(mip) / static_cast<float>(c_PrefilteredMipCount - 1);
 		DispatchIBL(commandList, m_PrefilterPipeline, maps.Cube, wholeCube, nvrhi::TextureDimension::TextureCube, maps.Prefiltered, mip,
-			nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { size, c_EnvironmentCubeSize, roughness, c_PrefilterSamples }, 6);
+		const uint32_t samples = RendererQuality::GetPrefilterSamples(maps.PrefilteredSize, mip);
+			nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { size, c_EnvironmentCubeSize, roughness, samples }, 6);
 	}
 
 	RenderData::ProceduralSkyParameters SceneRenderer::GetProceduralSkyParameters(const SkyLightComponent& sky, const RenderData::FrameConstants& frame) const
@@ -882,7 +885,7 @@ namespace Strata
 			// tail; a renderer that starts lighting with the map afterwards takes over the environment another one computed.
 			if (!m_Environment || texture != m_Environment->Source)
 			{
-				if (Ref<const EnvironmentMaps> shared = FindSharedEnvironment(*texture))
+				if (Ref<const EnvironmentMaps> shared = FindSharedEnvironment(*texture, m_Specification.Quality.EnvironmentResolution))
 				{
 					m_Environment = std::move(shared);
 				}
@@ -1684,11 +1687,15 @@ namespace Strata
 			m_RequestedShadowMapSize = size;
 			m_ShadowMapSize = size;
 		}
-		if (!cascades && !atlas)
+		if (environment)
+			ReleaseEnvironment();
+		if (!cascades && !atlas && !environment)
 			return false;
 		ResetHistory();
 		return true;
 	}
+		// The environment: computed again at the new size by the next frame with a sky (or taken from a renderer of that size).
+		const bool environment = quality.EnvironmentResolution != current.EnvironmentResolution;
 
 	void SceneRenderer::InvalidateShadowCache()
 	{
@@ -1700,6 +1707,34 @@ namespace Strata
 		m_ShadowCachePendingContent = {};
 		m_ShadowCacheBounds.clear();
 		m_ShadowCacheProxyVersion = 0;
+	}
+
+	void SceneRenderer::ReleaseEnvironment()
+	{
+		std::vector<nvrhi::ResourceHandle> released;
+		auto release = [&released](const EnvironmentMaps& maps)
+		{
+			for (const nvrhi::TextureHandle& texture : { maps.Cube, maps.Irradiance, maps.Prefiltered })
+			{
+				if (texture)
+					released.emplace_back(texture.Get());
+			}
+		};
+		if (m_Environment)
+			release(*m_Environment);
+		m_Environment = nullptr;
+		// The atmosphere's spare and refreshing maps are of the old size too: without them its next frame computes its first
+		// environment at once, at the new size.
+		if (m_Atmosphere)
+		{
+			for (std::optional<EnvironmentMaps>* maps : { &m_Atmosphere->Refresh, &m_Atmosphere->Spare })
+			{
+				if (*maps)
+					release(**maps);
+				maps->reset();
+			}
+		}
+		Renderer::ReleaseDeferred(std::move(released));
 	}
 
 	uint32_t SceneRenderer::SelectLOD(const Mesh& mesh, const Submesh& submesh, float screenFraction) const
@@ -2825,7 +2860,8 @@ namespace Strata
 		ReportVisibleAnimators(scene);
 		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
 		frame.AOParams = glm::vec4(postProcess.AmbientOcclusion ? 1.0f : 0.0f, postProcess.AmbientOcclusionMultiBounce ? 1.0f : 0.0f, 0.0f, 0.0f);
-		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, static_cast<float>(options.LightingView), 0.0f, 0.0f);
+		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, static_cast<float>(options.LightingView),
+			m_Specification.SpecularAntiAliasing ? 1.0f : 0.0f, 0.0f);
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
 			|| m_BoundLocalShadowAtlas != (m_LocalShadowAtlas ? m_LocalShadowAtlas.Get() : m_DummyLocalShadowAtlas.Get())

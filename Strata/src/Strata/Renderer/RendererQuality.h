@@ -82,6 +82,10 @@ namespace Strata
 		float MinProjectedPixels = 0.5f;
 		// Ambient occlusion's samples per pixel (GetAmbientOcclusionSamples); the scene's Post Process asks for the occlusion.
 		AmbientOcclusionLevel AmbientOcclusionQuality = AmbientOcclusionLevel::Medium;
+		// The prefiltered sky's texels each way per face, 256 or 512 (Clamp takes any other value to 256; the environment cube it
+		// is filtered from stays 512): 512 keeps mirror-like reflections of the sky sharp at 4K. Six levels at both sizes, RGBA16F:
+		// 4 MiB at 256, 16 MiB at 512 per set of maps (the atmosphere keeps two).
+		uint32_t EnvironmentResolution = 256;
 
 		// Every member equal, Preset included.
 		bool operator==(const RendererQualitySettings& other) const = default;
@@ -93,7 +97,7 @@ namespace Strata
 	namespace RendererQuality
 	{
 		constexpr std::string_view c_SectionId = "Renderer.Quality";
-		constexpr uint32_t c_SectionVersion = 2; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
+		constexpr uint32_t c_SectionVersion = 3; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
 		constexpr uint32_t c_HighResolutionRows = 1440;
 		constexpr uint32_t c_MaxShadowMapSize = 8192; // The most texels each way of a cascade (SceneRenderer applies it)
 
@@ -113,6 +117,10 @@ namespace Strata
 		std::optional<AmbientOcclusionLevel> AmbientOcclusionLevelFromString(std::string_view name);
 		// Slices and steps per side of a level: { 1, 4 }, { 2, 6 }, { 3, 8 }, { 4, 12 }.
 		AmbientOcclusionSamples GetAmbientOcclusionSamples(AmbientOcclusionLevel level);
+		// The samples per texel that filter level `mip` of a prefiltered sky of `size` texels each way (IBL/Prefilter.comp): 512
+		// at every level of 256 (Strata 0.6.0's); at 512, levels 1 and 2 take 128 (their narrow lobes read finer source levels)
+		// and the others 512, so no level costs more than 0.6.0's largest (size^2 x samples).
+		uint32_t GetPrefilterSamples(uint32_t size, uint32_t mip);
 
 		// The Renderer.Quality section (simple; registered by RegisterRendererModule).
 		SettingsSection MakeSection();

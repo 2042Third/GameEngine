@@ -8,6 +8,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
@@ -30,6 +31,7 @@ namespace
 	constexpr std::array<float, 4> c_LODErrorPixels = { 2.0f, 1.0f, 1.0f, 0.5f };
 	constexpr std::array<float, 4> c_MinProjectedPixels = { 1.0f, 0.5f, 0.5f, 0.25f };
 	constexpr std::array<AmbientOcclusionLevel, 4> c_AmbientOcclusionQuality = { AmbientOcclusionLevel::Low, AmbientOcclusionLevel::Medium, AmbientOcclusionLevel::High, AmbientOcclusionLevel::Ultra };
+	constexpr std::array<uint32_t, 4> c_EnvironmentResolution = { 256, 256, 512, 512 };
 
 	void CheckColumn(const RendererQualitySettings& settings, size_t column)
 	{
@@ -42,6 +44,7 @@ namespace
 		CHECK(settings.LODErrorPixels == c_LODErrorPixels[column]);
 		CHECK(settings.MinProjectedPixels == c_MinProjectedPixels[column]);
 		CHECK(settings.AmbientOcclusionQuality == c_AmbientOcclusionQuality[column]);
+		CHECK(settings.EnvironmentResolution == c_EnvironmentResolution[column]);
 	}
 
 	constexpr RendererQualityPreset c_Presets[] = { RendererQualityPreset::Low, RendererQualityPreset::Medium, RendererQualityPreset::High,
@@ -139,10 +142,10 @@ TEST_SUITE("Renderer.Quality")
 		}
 	}
 
-	TEST_CASE("High is Medium below 1440 rows but for its ambient occlusion")
+	TEST_CASE("High is Medium below 1440 rows but for its ambient occlusion and sky reflections")
 	{
-		// High's ambient occlusion (3 x 8 samples) differs from Medium's (Strata 0.6.0's 2 x 6) at every size; the other knobs
-		// equal Medium's below 1440 rows.
+		// High's ambient occlusion (3 x 8 samples) and prefiltered sky (512 per face) differ from Medium's (Strata 0.6.0's 2 x 6
+		// and 256) at every size; the other knobs equal Medium's below 1440 rows.
 		const RendererQualitySettings high = RendererQuality::GetPreset(RendererQualityPreset::High);
 		const RendererQualitySettings medium = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		for (const uint32_t rows : { 720u, 1080u, 1439u })
@@ -153,6 +156,8 @@ TEST_SUITE("Renderer.Quality")
 			resolved.ShadowResolution = medium.ShadowResolution;
 			CHECK(resolved.AmbientOcclusionQuality != medium.AmbientOcclusionQuality);
 			resolved.AmbientOcclusionQuality = medium.AmbientOcclusionQuality;
+			CHECK(resolved.EnvironmentResolution != medium.EnvironmentResolution);
+			resolved.EnvironmentResolution = medium.EnvironmentResolution;
 			CHECK(resolved.HasSameKnobs(medium));
 		}
 		CHECK(RendererQuality::ResolveShadowMapSize(high.ShadowResolution, 1440) != RendererQuality::ResolveShadowMapSize(medium.ShadowResolution, 1440));
@@ -191,10 +196,12 @@ TEST_SUITE("Renderer.Quality")
 		refused({ { "LODErrorPixels", 9.0 } });
 		refused({ { "Unknown", 1 } });
 		refused({ { "AmbientOcclusionQuality", "Extreme" } });
+		refused({ { "EnvironmentResolution", "1024" } });
+		refused({ { "EnvironmentResolution", 512 } });
 
 		const nlohmann::json custom = { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LocalShadowAtlasSize", "2048" },
 			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 },
-			{ "AmbientOcclusionQuality", "Low" } };
+			{ "AmbientOcclusionQuality", "Low" }, { "EnvironmentResolution", "256" } };
 		std::string error;
 		CHECK_MESSAGE(section.Validate(custom, RendererQuality::c_SectionVersion, &error).has_value(), error);
 	}
@@ -208,7 +215,7 @@ TEST_SUITE("Renderer.Quality")
 
 		const nlohmann::json custom = { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LocalShadowAtlasSize", "2048" },
 			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 },
-			{ "AmbientOcclusionQuality", "Low" } };
+			{ "AmbientOcclusionQuality", "Low" }, { "EnvironmentResolution", "256" } };
 		const RendererQualitySettings customSettings = RendererQuality::FromSectionValue(&custom);
 		CHECK(customSettings.Preset == RendererQualityPreset::Custom);
 		CHECK(customSettings.ShadowResolution == ShadowMapResolution::Size4096);
@@ -219,10 +226,35 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(customSettings.LODErrorPixels == 1.5f);
 		CHECK(customSettings.MinProjectedPixels == 0.75f);
 		CHECK(customSettings.AmbientOcclusionQuality == AmbientOcclusionLevel::Low);
+		CHECK(customSettings.EnvironmentResolution == 256);
 
 		const RendererQualitySettings none = RendererQuality::FromSectionValue(nullptr);
 		CHECK(none.Preset == RendererQualityPreset::High);
 		CHECK(none.HasSameKnobs(RendererQuality::GetPreset(RendererQualityPreset::High)));
+	}
+
+	TEST_CASE("At 512 no level of the prefiltered sky costs more samples than 256's largest")
+	{
+		// The atmosphere filters its environment a level per frame (SceneRenderer::c_AtmosphereRefreshSteps): at 512 per face no
+		// step may take longer than 0.6.0's largest. Level 0 (roughness 0) copies the cube and takes no samples.
+		const auto cost = [](uint32_t size, uint32_t mip)
+		{
+			const uint64_t texels = std::max(1u, size >> mip);
+			return texels * texels * RendererQuality::GetPrefilterSamples(size, mip);
+		};
+		uint64_t largest = 0;
+		for (uint32_t mip = 0; mip < 6; mip++)
+		{
+			CHECK(RendererQuality::GetPrefilterSamples(256, mip) == 512); // Medium: Strata 0.6.0's
+			if (mip > 0)
+				largest = std::max(largest, cost(256, mip));
+		}
+		for (uint32_t mip = 1; mip < 6; mip++)
+		{
+			CAPTURE(mip);
+			CHECK(cost(512, mip) <= largest);
+		}
+		CHECK(SceneRenderer::c_AtmosphereRefreshSteps == 14);
 	}
 
 	TEST_CASE("A value without a field takes the field's default")

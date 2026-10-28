@@ -49,6 +49,37 @@ vec3 GetSpecularEnergy(vec3 f0, vec2 dfg)
 	return 1.0 + f0 * (1.0 / max(dfg.x + dfg.y, c_MinSpecularAlbedo) - 1.0);
 }
 
+// Geometric specular anti-aliasing: a highlight narrower than a pixel lands on some pixels and misses their neighbors, and
+// sparkles as the surface moves. The shading normal's change over a pixel's footprint is a spread of normals within it, which
+// a lobe widened by that variance integrates (it keeps the highlight's energy and spreads it over the pixels it covers).
+// Screen-space variance of the normal over a pixel's filter footprint, per unit of its squared derivatives.
+const float c_SpecularAAVariance = 0.25;
+// The most the lobe's alpha^2 is widened: silhouettes and seams, where the normal jumps, would otherwise turn matte.
+const float c_SpecularAAMaxKernel = 0.18;
+
+// The perceptual roughness widened by the variance of the normal over the pixel: `normalDx` and `normalDy` are the screen
+// derivatives of the unit shading normal; `strength` 0 returns the roughness unchanged (MaterialParams.z). Derivatives are
+// taken only of the primitive's own interpolants and textures, so both draw paths shade alike (Docs/DeveloperGuide.md,
+// "Lighting").
+float WidenRoughness(float perceptualRoughness, vec3 normalDx, vec3 normalDy, float strength)
+{
+	float variance = c_SpecularAAVariance * (dot(normalDx, normalDx) + dot(normalDy, normalDy));
+	float kernel = min(2.0 * variance, c_SpecularAAMaxKernel) * strength;
+	float alpha = perceptualRoughness * perceptualRoughness;
+	return sqrt(sqrt(clamp(alpha * alpha + kernel, 0.0, 1.0)));
+}
+
+// How far below the geometric surface image light may still be reflected: a normal map can turn the reflected vector into
+// the surface, where it would see the surface itself; the fade reaches 0 about 15 degrees below it.
+const float c_HorizonFadeWidth = 0.25;
+
+// The share of image light a reflection along `reflected` keeps against the surface's `geometricNormal` (both unit).
+float GetHorizonFade(vec3 reflected, vec3 geometricNormal)
+{
+	float fade = clamp(1.0 + dot(reflected, geometricNormal) / c_HorizonFadeWidth, 0.0, 1.0);
+	return fade * fade;
+}
+
 struct SurfaceData
 {
 	vec3 Position;
