@@ -144,6 +144,39 @@ TEST_SUITE("Editor.Lighting")
 		CHECK(Azimuth(toward) == doctest::Approx(-90.0f).epsilon(0.001));
 	}
 
+	TEST_CASE("lighting.applySkyPreset applied again changes nothing at any azimuth")
+	{
+		// The azimuth is read back from the light's rotation and the direction made again from it: rounded differently, the
+		// rotation drifted by an ulp at some azimuths (the default 20 degrees among them), so a second click recorded a step.
+		for (const float azimuth : { 20.0f, -60.0f, -33.0f, 13.0f, 41.0f, 120.0f, 157.0f })
+		{
+			CAPTURE(azimuth);
+			LightingHarness harness;
+			Scene& scene = harness.GetScene();
+			scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+			Entity sun = scene.CreateEntity("Sun");
+			sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(-GetSkyPresetSunDirection(30.0f, azimuth));
+			sun.AddComponent<DirectionalLightComponent>();
+			scene.UpdateWorldTransforms();
+			for (const SkyPreset preset : { SkyPreset::Clear, SkyPreset::Hazy, SkyPreset::Overcast, SkyPreset::GoldenHour })
+			{
+				const std::string name = SkyPresetToString(preset);
+				CAPTURE(name);
+				CHECK(harness.Run("lighting.applySkyPreset", { { "preset", name } })["changed"] == true);
+				const glm::quat rotation = sun.GetComponent<TransformComponent>().Rotation;
+				const int64_t position = harness.Run("editor.status", { { "sections", { "undo" } } })["undo"]["position"].get<int64_t>();
+				for (int again = 0; again < 3; again++)
+				{
+					CHECK(harness.Run("lighting.applySkyPreset", { { "preset", name } })["changed"] == false);
+					CHECK(harness.Run("editor.status", { { "sections", { "undo" } } })["undo"]["position"].get<int64_t>() == position);
+					const bool kept = sun.GetComponent<TransformComponent>().Rotation == rotation;
+					CHECK(kept);
+				}
+				CHECK(Azimuth(TowardSun(scene, sun)) == doctest::Approx(azimuth).epsilon(0.001));
+			}
+		}
+	}
+
 	TEST_CASE("lighting.applySkyPreset creates the sky and the sun a scene lacks, and raises a clipping Post Process")
 	{
 		LightingHarness harness;
