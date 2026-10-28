@@ -3637,8 +3637,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
   view is skipped with one), from the frame's own HDR target (never the temporal history, which would blend values of
   earlier frames): occlusion as gray, albedo with luminances below `c_AlbedoLow` (0.03) mixed 0.7 toward the low mark and
   above `c_AlbedoHigh` (0.85) toward the high mark in diagonal stripes, luminance as EV100 bands (`log2(nits) + 3`, one EV
-  wide from `LightingViewColors::LuminanceFirstEV100`, 12 colors), in `LightingViewColors` (the editor sets them from theme
-  tokens).
+  wide from `LightingViewColors::LuminanceFirstEV100`, 12 colors), in `SceneRenderOptions::LightingColors` (the editor
+  sets them from theme tokens).
 - **Statistics** (`GetLightingViewStats`, `LightingViewStats`): every frame of a view `Effects/LightingViewStats.comp`
   counts the HDR target into group-shared histograms added to a buffer (`LightingViewStatsData`: EV100 in quarter-EV bins
   from -8 to 24 for surfaces and the background apart, the value views' values in 64 bins, the albedo's pixels outside the

@@ -234,7 +234,7 @@ namespace Strata
 		options.EntityTints = m_StreamingView.GetTints();
 		options.ShowMotionVectors = settings.DebugView == ViewportDebugView::Motion;
 		options.LightingView = GetLightingView(settings.DebugView);
-		options.LightingViewColors = settings.DebugColors.Lighting;
+		options.LightingColors = settings.DebugColors.Lighting;
 		if (!m_DebugDraw.IsEmpty())
 			options.DebugShapes = &m_DebugDraw;
 

@@ -142,7 +142,7 @@ TEST_SUITE("GPU.SceneRenderer.LightingViews")
 		AddSun(scene, glm::vec3(0.3f, -1.0f, 0.2f), 3.0f);
 		SceneRenderOptions options;
 		options.LightingView = SceneLightingView::Albedo;
-		const LightingViewColors& colors = options.LightingViewColors;
+		const LightingViewColors& colors = options.LightingColors;
 		for (GPUDrivenMode path : c_Paths)
 		{
 			CAPTURE(static_cast<int>(path));
@@ -208,8 +208,8 @@ TEST_SUITE("GPU.SceneRenderer.LightingViews")
 				CHECK(std::isnan(stats.ValueMedian));
 
 				const ReadbackImage image = RenderWith(renderer, scene, TopView(), options);
-				const int band = static_cast<int>(std::floor(expectedEV - options.LightingViewColors.LuminanceFirstEV100));
-				const glm::vec4 color = options.LightingViewColors.Luminance[static_cast<size_t>(band)];
+				const int band = static_cast<int>(std::floor(expectedEV - options.LightingColors.LuminanceFirstEV100));
+				const glm::vec4 color = options.LightingColors.Luminance[static_cast<size_t>(band)];
 				const glm::u8vec4 pixel = GetPixelRGBA8(image, c_Size / 2, c_Size / 2);
 				CHECK(std::abs(static_cast<int>(pixel.r) - ToByte(color.r)) <= 1);
 				CHECK(std::abs(static_cast<int>(pixel.g) - ToByte(color.g)) <= 1);

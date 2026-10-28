@@ -70,7 +70,7 @@ namespace Strata
 		glm::vec4 CellLoading = { 0.91f, 0.76f, 0.30f, 1.0f };
 		glm::vec4 CellLoaded = { 0.84f, 0.55f, 0.27f, 1.0f };
 		glm::vec4 CellUnloading = { 0.60f, 0.58f, 0.55f, 1.0f };
-		// The lighting views' luminance bands, albedo marks and background (SceneRenderOptions::LightingViewColors).
+		// The lighting views' luminance bands, albedo marks and background (SceneRenderOptions::LightingColors).
 		LightingViewColors Lighting;
 	};
 

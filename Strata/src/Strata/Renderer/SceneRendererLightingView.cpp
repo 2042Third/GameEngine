@@ -202,12 +202,12 @@ namespace Strata
 		RenderData::LightingViewParameters parameters = {};
 		parameters.View = static_cast<uint32_t>(view);
 		parameters.InversePreExposure = 1.0f / m_PreExposure;
-		parameters.LuminanceFirstEV100 = std::isfinite(options.LightingViewColors.LuminanceFirstEV100) ? options.LightingViewColors.LuminanceFirstEV100 : 0.0f;
+		parameters.LuminanceFirstEV100 = std::isfinite(options.LightingColors.LuminanceFirstEV100) ? options.LightingColors.LuminanceFirstEV100 : 0.0f;
 		for (uint32_t index = 0; index < RenderData::c_LightingViewLuminanceColors; index++)
-			parameters.LuminanceColors[index] = PackDisplayColor(options.LightingViewColors.Luminance[index]);
-		parameters.AlbedoLow = PackDisplayColor(options.LightingViewColors.AlbedoLow);
-		parameters.AlbedoHigh = PackDisplayColor(options.LightingViewColors.AlbedoHigh);
-		parameters.Background = PackDisplayColor(options.LightingViewColors.Background);
+			parameters.LuminanceColors[index] = PackDisplayColor(options.LightingColors.Luminance[index]);
+		parameters.AlbedoLow = PackDisplayColor(options.LightingColors.AlbedoLow);
+		parameters.AlbedoHigh = PackDisplayColor(options.LightingColors.AlbedoHigh);
+		parameters.Background = PackDisplayColor(options.LightingColors.Background);
 
 		// The statistics: a readback whose earlier copy is still under way is left to finish, and the frame measures nothing.
 		LightingViewReadback& readback = m_LightingViewReadbacks[m_LightingViewReadbackIndex];

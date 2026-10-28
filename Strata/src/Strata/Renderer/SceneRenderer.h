@@ -421,13 +421,13 @@ namespace Strata
 
 		// A lighting debug view (SceneLightingView). Lighting and Indirect change what the forward pass shades and are exposed and
 		// tone mapped as the image is; AmbientOcclusion and Albedo write their values (unexposed) and Luminance keeps the lit
-		// image, and the three replace the finished image with their values in LightingViewColors (Overlay/LightingView.frag,
+		// image, and the three replace the finished image with their values in LightingColors (Overlay/LightingView.frag,
 		// first among the overlays; the motion view is left out with one). Every view measures its frame
 		// (SceneRenderer::GetLightingViewStats). A change of the view starts the temporal history again, and while
 		// AmbientOcclusion or Albedo shows, whose values are not light, the automatic pre-exposure holds its value. Frames with
 		// HDROutput shade with the view but measure and replace nothing.
 		SceneLightingView LightingView = SceneLightingView::None;
-		LightingViewColors LightingViewColors;
+		LightingViewColors LightingColors;
 	};
 
 	struct SceneRendererStats

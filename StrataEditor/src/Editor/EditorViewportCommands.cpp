@@ -306,7 +306,7 @@ namespace Strata
 			uint32_t ReflectionFrames = 0; // Renders repeated while spatial reflections waited for a previous frame's color
 			uint32_t LightingFrames = 0; // Renders repeated while shadow views of point and spot lights waited to be drawn
 			uint32_t LightingViewFrames = 0; // Renders repeated while the lighting view's statistics were on their way back
-			std::optional<LightingViewStats> LightingViewStats; // The lighting view's, as the captured frame knew them
+			std::optional<LightingViewStats> LightingStats; // The lighting view's, as the captured frame knew them
 			uint32_t ExposureFrames = 0; // Renders repeated while the pre-exposure settled
 			bool Rendered = false;       // A first frame was rendered (it started the exposure again)
 			uint32_t TexturesBelowWanted = 0;
@@ -674,7 +674,7 @@ namespace Strata
 			progress.RenderFrame = FrameProfiler::Get().GetTotalFrameCount();
 			progress.RenderCount = renderer->GetSceneRenderer().GetRenderCount();
 			progress.DebugViewStats = renderer->GetDebugViewStats();
-			progress.LightingViewStats = renderer->GetLightingViewStats();
+			progress.LightingStats = renderer->GetLightingViewStats();
 			progress.TintedEntities = stats.TintedEntities;
 			progress.PendingAssets = stats.PendingAssets;
 			progress.PendingTextGlyphs = stats.PendingTextGlyphs;
@@ -699,7 +699,7 @@ namespace Strata
 			const uint32_t probesPending = request.WaitForAssets ? progress.ReflectionProbesPending : 0u;
 			const bool lightingPending = progress.LocalShadowViewsPending + probesPending > 0 && progress.LightingFrames < c_MaxCaptureLightingFrames;
 			// A lighting view's statistics of a frame this capture rendered (the capture renderer drops them with its targets).
-			const bool lightingViewPending = GetLightingView(progress.DebugView) != SceneLightingView::None && !progress.LightingViewStats
+			const bool lightingViewPending = GetLightingView(progress.DebugView) != SceneLightingView::None && !progress.LightingStats
 				&& progress.LightingViewFrames < c_MaxCaptureLightingViewFrames;
 			// Until its pre-exposure settled the frame's brightest and darkest values may have clamped or lost bits.
 			const bool exposurePending = !stats.PreExposureSettled && progress.ExposureFrames < c_MaxCaptureExposureFrames;
@@ -822,7 +822,7 @@ namespace Strata
 				{ "hiddenScreenSpaceTexts", progress.HiddenScreenSpaceTexts },
 				{ "ui", { { "canvases", progress.UI.Canvases }, { "hiddenCanvases", progress.UI.HiddenCanvases }, { "elements", progress.UI.Elements },
 					{ "drawCalls", progress.UI.DrawCalls }, { "pendingGlyphs", progress.UI.PendingGlyphs } } },
-				{ "debugView", DescribeDebugView(progress.DebugView, progress.DebugViewStats, progress.TintedEntities, progress.LightingViewStats) },
+				{ "debugView", DescribeDebugView(progress.DebugView, progress.DebugViewStats, progress.TintedEntities, progress.LightingStats) },
 				{ "renderStats", std::move(progress.RenderStats) }
 			};
 			if (!progress.View.Notice.empty())
