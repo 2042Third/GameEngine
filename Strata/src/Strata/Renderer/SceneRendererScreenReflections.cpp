@@ -154,4 +154,244 @@ namespace Strata
 		commandList->dispatch((desc.width + 7) / 8, (desc.height + 7) / 8, 1);
 	}
 
+	bool SceneRenderer::EnsureSpatialReflectionResources()
+	{
+		ShaderLibrary& shaders = Renderer::GetShaderLibrary();
+		if (!m_SpatialReflectionPipeline)
+		{
+			nvrhi::BindingLayoutDesc pyramidLayout;
+			pyramidLayout.visibility = nvrhi::ShaderType::Compute;
+			pyramidLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Texture_UAV(0) };
+			m_ReflectionPyramidLayout = m_Device->createBindingLayout(pyramidLayout);
+			nvrhi::BindingLayoutDesc traceLayout;
+			traceLayout.visibility = nvrhi::ShaderType::Compute;
+			traceLayout.bindings = {
+				nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+				nvrhi::BindingLayoutItem::Texture_SRV(22),
+				nvrhi::BindingLayoutItem::Texture_SRV(23),
+				nvrhi::BindingLayoutItem::Texture_SRV(24),
+				nvrhi::BindingLayoutItem::Texture_SRV(25),
+				nvrhi::BindingLayoutItem::Texture_SRV(26),
+				nvrhi::BindingLayoutItem::Texture_SRV(27),
+				nvrhi::BindingLayoutItem::Texture_SRV(28),
+				nvrhi::BindingLayoutItem::Sampler(8),
+				nvrhi::BindingLayoutItem::Texture_UAV(0),
+				nvrhi::BindingLayoutItem::PushConstants(1, sizeof(RenderData::SpatialReflectionParameters))
+			};
+			m_SpatialReflectionLayout = m_Device->createBindingLayout(traceLayout);
+			nvrhi::BindingLayoutDesc resolveLayout;
+			resolveLayout.visibility = nvrhi::ShaderType::Compute;
+			resolveLayout.bindings = {
+				nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+				nvrhi::BindingLayoutItem::Texture_SRV(22),
+				nvrhi::BindingLayoutItem::Texture_SRV(23),
+				nvrhi::BindingLayoutItem::Texture_SRV(25),
+				nvrhi::BindingLayoutItem::Texture_UAV(0)
+			};
+			m_ReflectionResolveLayout = m_Device->createBindingLayout(resolveLayout);
+			nvrhi::ShaderHandle pyramidShader = shaders.Get("Effects/DepthPyramidNearest.comp");
+			nvrhi::ShaderHandle traceShader = shaders.Get("Effects/ScreenSpaceReflectionsSpatial.comp");
+			nvrhi::ShaderHandle resolveShader = shaders.Get("Effects/ReflectionResolve.comp");
+			ST_CORE_VERIFY(pyramidShader && traceShader && resolveShader && m_ReflectionPyramidLayout && m_SpatialReflectionLayout && m_ReflectionResolveLayout,
+				"SceneRenderer: the spatial screen-space reflection shaders are missing");
+			m_ReflectionPyramidPipeline = m_Device->createComputePipeline(nvrhi::ComputePipelineDesc().setComputeShader(pyramidShader)
+				.addBindingLayout(m_ReflectionPyramidLayout));
+			m_ReflectionResolvePipeline = m_Device->createComputePipeline(nvrhi::ComputePipelineDesc().setComputeShader(resolveShader)
+				.addBindingLayout(m_ReflectionResolveLayout));
+			m_SpatialReflectionPipeline = m_Device->createComputePipeline(nvrhi::ComputePipelineDesc().setComputeShader(traceShader)
+				.addBindingLayout(m_SpatialReflectionLayout));
+			ST_CORE_VERIFY(m_ReflectionPyramidPipeline && m_ReflectionResolvePipeline && m_SpatialReflectionPipeline,
+				"SceneRenderer: failed to create the spatial screen-space reflection pipelines");
+		}
+		if (!m_PrepassSurfacePixelShader)
+		{
+			m_PrepassSurfacePixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/DepthPrepassSurface.frag" : "Scene/DepthPrepassNoEntityIDsSurface.frag");
+			ST_CORE_VERIFY(m_PrepassSurfacePixelShader, "SceneRenderer: the prepass's surface shader is missing");
+		}
+		if (m_SpatialReflectionSet)
+			return true;
+		// The previous frame's color: the scene-color copy's blurred levels, beside which the full-resolution copy is made.
+		if (!EnsureSceneColorResources())
+			return false;
+
+		// Made after the motion resources of the frame (the velocity target), which go with the other targets as these do.
+		ST_CORE_ASSERT(m_VelocityTexture, "Spatial screen-space reflections need the motion vectors");
+		const uint32_t width = m_ViewportSize.x;
+		const uint32_t height = m_ViewportSize.y;
+		auto makeTarget = [&](nvrhi::Format format, uint32_t targetWidth, uint32_t targetHeight, uint32_t levels, const char* name, bool renderTarget)
+		{
+			nvrhi::TextureDesc desc;
+			desc.width = targetWidth;
+			desc.height = targetHeight;
+			desc.mipLevels = levels;
+			desc.format = format;
+			desc.isUAV = !renderTarget;
+			desc.isRenderTarget = renderTarget;
+			desc.debugName = m_Specification.DebugName + name;
+			desc.initialState = renderTarget ? nvrhi::ResourceStates::RenderTarget : nvrhi::ResourceStates::ShaderResource;
+			desc.keepInitialState = true;
+			return m_Device->createTexture(desc);
+		};
+		// The pyramid: level 0 half the viewport's size (rounded up, so every pixel has a texel), at most c_MaxPyramidLevels; the
+		// last texel of a level covers the rest of an odd level above it (Effects/DepthPyramidNearest.comp).
+		constexpr uint32_t c_MaxPyramidLevels = 8;
+		const uint32_t pyramidWidth = std::max(1u, (width + 1) / 2);
+		const uint32_t pyramidHeight = std::max(1u, (height + 1) / 2);
+		uint32_t pyramidLevels = 1;
+		while (pyramidLevels < c_MaxPyramidLevels && std::max(pyramidWidth, pyramidHeight) >> pyramidLevels > 0)
+			pyramidLevels++;
+		ST_CORE_ASSERT(!m_SurfaceTexture && !m_ScreenReflectionTexture, "The Checkerboard mode's targets are released before the spatial ones are made");
+		nvrhi::TextureHandle surface = makeTarget(c_SurfaceFormat, width, height, 1, ".Surface", true);
+		nvrhi::TextureHandle traced = makeTarget(c_ScreenReflectionFormat, width, height, 1, ".TracedReflections", false);
+		nvrhi::TextureHandle resolved = makeTarget(c_ScreenReflectionFormat, width, height, 1, ".ScreenReflections", false);
+		nvrhi::TextureHandle pyramid = makeTarget(nvrhi::Format::R32_FLOAT, pyramidWidth, pyramidHeight, pyramidLevels, ".ReflectionPyramid", false);
+		nvrhi::TextureHandle color = makeTarget(m_SceneColorFormat, width, height, 1, ".ReflectionColor", false);
+
+		nvrhi::FramebufferHandle framebuffer;
+		std::vector<nvrhi::BindingSetHandle> pyramidSets;
+		nvrhi::BindingSetHandle colorCopySet;
+		nvrhi::BindingSetHandle traceSet;
+		nvrhi::BindingSetHandle resolveSet;
+		if (surface && traced && resolved && pyramid && color)
+		{
+			nvrhi::FramebufferDesc desc;
+			desc.addColorAttachment(m_NormalTexture);
+			if (m_EntityIDTexture)
+				desc.addColorAttachment(m_EntityIDTexture);
+			desc.addColorAttachment(m_VelocityTexture);
+			desc.addColorAttachment(surface);
+			desc.setDepthAttachment(m_DepthTexture);
+			framebuffer = m_Device->createFramebuffer(desc);
+			// Level 0 from the depth, each further one from the level above it.
+			for (uint32_t level = 0; level < pyramidLevels; level++)
+			{
+				nvrhi::BindingSetDesc set;
+				set.bindings = {
+					level == 0 ? nvrhi::BindingSetItem::Texture_SRV(0, m_DepthTexture)
+						: nvrhi::BindingSetItem::Texture_SRV(0, pyramid, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(level - 1, 1, 0, 1)),
+					nvrhi::BindingSetItem::Texture_UAV(0, pyramid, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(level, 1, 0, 1))
+				};
+				nvrhi::BindingSetHandle handle = m_Device->createBindingSet(set, m_ReflectionPyramidLayout);
+				if (!handle)
+					break;
+				pyramidSets.push_back(std::move(handle));
+			}
+			// The full-resolution color copy, with the scene-color copy's pipeline (a destination of the source's size).
+			colorCopySet = m_Device->createBindingSet(nvrhi::BindingSetDesc()
+				.addItem(nvrhi::BindingSetItem::Texture_SRV(0, m_HDRTexture))
+				.addItem(nvrhi::BindingSetItem::Texture_UAV(0, color)), m_SceneColorLayout);
+			nvrhi::BindingSetDesc traceDesc;
+			traceDesc.bindings = {
+				nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
+				nvrhi::BindingSetItem::Texture_SRV(22, m_DepthTexture),
+				nvrhi::BindingSetItem::Texture_SRV(23, surface),
+				nvrhi::BindingSetItem::Texture_SRV(24, m_VelocityTexture),
+				nvrhi::BindingSetItem::Texture_SRV(25, color),
+				nvrhi::BindingSetItem::Texture_SRV(26, m_NormalTexture),
+				nvrhi::BindingSetItem::Texture_SRV(27, m_SceneColorTexture),
+				nvrhi::BindingSetItem::Texture_SRV(28, pyramid),
+				nvrhi::BindingSetItem::Sampler(8, m_LinearClampSampler),
+				nvrhi::BindingSetItem::Texture_UAV(0, traced),
+				nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::SpatialReflectionParameters))
+			};
+			traceSet = m_Device->createBindingSet(traceDesc, m_SpatialReflectionLayout);
+			nvrhi::BindingSetDesc resolveDesc;
+			resolveDesc.bindings = {
+				nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
+				nvrhi::BindingSetItem::Texture_SRV(22, m_DepthTexture),
+				nvrhi::BindingSetItem::Texture_SRV(23, surface),
+				nvrhi::BindingSetItem::Texture_SRV(25, traced),
+				nvrhi::BindingSetItem::Texture_UAV(0, resolved)
+			};
+			resolveSet = m_Device->createBindingSet(resolveDesc, m_ReflectionResolveLayout);
+		}
+		if (!framebuffer || pyramidSets.size() != pyramidLevels || !colorCopySet || !traceSet || !resolveSet)
+		{
+			// What was made goes with this scope (no command list used it yet): the next frame that wants them tries again.
+			m_Errors.Report(fmt::format("failed to create the spatial screen-space reflections' targets for a {}x{} viewport; rendering without them",
+				width, height));
+			return false;
+		}
+		m_SurfaceTexture = std::move(surface);
+		m_SurfacePrepassFramebuffer = std::move(framebuffer);
+		m_TracedReflectionTexture = std::move(traced);
+		m_ScreenReflectionTexture = std::move(resolved);
+		m_ReflectionPyramid = std::move(pyramid);
+		m_ReflectionPyramidSets = std::move(pyramidSets);
+		m_ReflectionColorTexture = std::move(color);
+		m_ReflectionColorCopySet = std::move(colorCopySet);
+		m_SpatialReflectionSet = std::move(traceSet);
+		m_ReflectionResolveSet = std::move(resolveSet);
+		m_SpatialReflectionResources = true;
+		m_ReflectionColorRender = 0; // The new copy holds nothing yet
+		return true;
+	}
+
+	void SceneRenderer::TraceSpatialReflections(nvrhi::ICommandList* commandList, const PostProcessComponent& settings)
+	{
+		ST_PROFILE_FUNCTION();
+		constexpr uint32_t c_GroupSize = 8;
+		nvrhi::ComputeState state;
+		state.pipeline = m_ReflectionPyramidPipeline;
+		const nvrhi::TextureDesc& pyramidDesc = m_ReflectionPyramid->getDesc();
+		for (uint32_t level = 0; level < static_cast<uint32_t>(m_ReflectionPyramidSets.size()); level++)
+		{
+			state.bindings = { m_ReflectionPyramidSets[level] };
+			commandList->setComputeState(state);
+			const uint32_t width = std::max(1u, pyramidDesc.width >> level);
+			const uint32_t height = std::max(1u, pyramidDesc.height >> level);
+			commandList->dispatch((width + c_GroupSize - 1) / c_GroupSize, (height + c_GroupSize - 1) / c_GroupSize, 1);
+		}
+
+		const auto finiteIn = [](float value, float fallback) { return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : fallback; };
+		const ScreenReflectionSteps steps = RendererQuality::GetScreenReflectionSteps(m_Specification.Quality.Reflections);
+		RenderData::SpatialReflectionParameters parameters;
+		parameters.Intensity = finiteIn(settings.ScreenSpaceReflectionsIntensity, 0.0f);
+		parameters.MaxRoughness = finiteIn(settings.ScreenSpaceReflectionsMaxRoughness, 0.0f);
+		// The copy is the previous frame's, at its own pre-exposure.
+		parameters.HistoryScale = m_PreExposure / m_ReflectionColorPreExposure;
+		parameters.Steps = steps.Steps;
+		parameters.RefineSteps = steps.RefineSteps;
+		parameters.PyramidLevels = pyramidDesc.mipLevels;
+		parameters.ColorLevels = m_SceneColorTexture->getDesc().mipLevels;
+		state.pipeline = m_SpatialReflectionPipeline;
+		state.bindings = { m_SpatialReflectionSet };
+		commandList->setComputeState(state);
+		commandList->setPushConstants(&parameters, sizeof(parameters));
+		const uint32_t groupsX = (m_ViewportSize.x + c_GroupSize - 1) / c_GroupSize;
+		const uint32_t groupsY = (m_ViewportSize.y + c_GroupSize - 1) / c_GroupSize;
+		commandList->dispatch(groupsX, groupsY, 1);
+
+		state.pipeline = m_ReflectionResolvePipeline;
+		state.bindings = { m_ReflectionResolveSet };
+		commandList->setComputeState(state);
+		commandList->dispatch(groupsX, groupsY, 1);
+	}
+
+	void SceneRenderer::ReleaseScreenReflections(std::vector<nvrhi::ResourceHandle>& released)
+	{
+		auto release = [&released](auto& handle)
+		{
+			if (handle)
+				released.emplace_back(handle.Get());
+			handle = nullptr;
+		};
+		release(m_SurfaceTexture);
+		release(m_ScreenReflectionTexture);
+		release(m_SurfacePrepassFramebuffer);
+		for (nvrhi::BindingSetHandle& set : m_ScreenReflectionSets)
+			release(set);
+		release(m_TracedReflectionTexture);
+		release(m_ReflectionPyramid);
+		for (nvrhi::BindingSetHandle& set : m_ReflectionPyramidSets)
+			release(set);
+		m_ReflectionPyramidSets.clear();
+		release(m_ReflectionColorTexture);
+		release(m_ReflectionColorCopySet);
+		release(m_SpatialReflectionSet);
+		release(m_ReflectionResolveSet);
+		m_SpatialReflectionResources = false;
+		m_ReflectionColorRender = 0;
+	}
+
 }

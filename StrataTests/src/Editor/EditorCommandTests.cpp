@@ -71,20 +71,20 @@ namespace
 		}
 	};
 
-	// The TAA's preset and tunables, all inactive for `reason`, and the screen-space reflections' settings, which need TAA, for
-	// `reflectionsReason` (without anti-aliasing, or with FXAA), added to `rows`.
-	nlohmann::json WithTemporalRows(nlohmann::json rows, const char* reason, const char* reflectionsReason)
+	// The TAA's preset and tunables, all inactive for `reason` (without anti-aliasing, or with FXAA), and the settings of the
+	// screen-space reflections a new Post Process leaves off, added to `rows`. Whether those need TAA is the renderer's quality's
+	// to say (RendererQualitySettings::Reflections), not the component's.
+	nlohmann::json WithTemporalRows(nlohmann::json rows, const char* reason)
 	{
 		for (const char* property : { "TAAPreset", "TAAHistoryFrames", "TAAMotionResponse", "TAAMaxMotionWeight", "TAAResampleWeight", "TAAHistoryClamp",
 				 "TAAClipWidth", "TAATransparentWeight", "TAADisocclusionRejection", "TAADisocclusionThreshold", "TAASharpening" })
 			rows[property] = reason;
-		for (const char* property : { "ScreenSpaceReflections", "ScreenSpaceReflectionsIntensity", "ScreenSpaceReflectionsMaxRoughness" })
-			rows[property] = reflectionsReason;
+		for (const char* property : { "ScreenSpaceReflectionsIntensity", "ScreenSpaceReflectionsMaxRoughness" })
+			rows[property] = "Screen Space Reflections is off";
 		return rows;
 	}
 
 	constexpr const char* c_OnlyTAA = "Only TAA uses it (Anti Aliasing Method is FXAA)";
-	constexpr const char* c_ReflectionsNeedTAA = "Needs TAA (Anti Aliasing Method is FXAA)";
 
 }
 
@@ -842,7 +842,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK_FALSE(harness.Run("component.get", { { "entity", c }, { "component", "SpotLight" } }).contains("inactive"));
 		harness.Run("component.add", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "Bloom", false } } } });
 		const nlohmann::json post = harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } });
-		CHECK(post["inactive"] == WithTemporalRows({ { "BloomIntensity", "Bloom is off" }, { "BloomThreshold", "Bloom is off" } }, c_OnlyTAA, c_ReflectionsNeedTAA));
+		CHECK(post["inactive"] == WithTemporalRows({ { "BloomIntensity", "Bloom is off" }, { "BloomThreshold", "Bloom is off" } }, c_OnlyTAA));
 		CHECK(harness.Run("entity.get", { { "entity", c } })["inactive"] == nlohmann::json { { "PostProcess", post["inactive"] } });
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 		CHECK_FALSE(harness.Run("entity.get", { { "entity", c } }).contains("inactive"));
@@ -859,7 +859,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK(method() == "TAA");
 		harness.Run("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "AntiAliasing", false } } } });
 		CHECK(harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } })["inactive"]
-			== WithTemporalRows({ { "AntiAliasingMethod", "Anti Aliasing is off" } }, "Anti Aliasing is off", "Needs TAA (Anti Aliasing is off)"));
+			== WithTemporalRows({ { "AntiAliasingMethod", "Anti Aliasing is off" } }, "Anti Aliasing is off"));
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 
 		// The TAA's preset and tunables: Custom with tunables in one step, undone in one; out-of-range values refused without

@@ -1317,7 +1317,7 @@
 					"Min": 0.0,
 					"Name": "ScreenSpaceReflections",
 					"Speed": 0.0,
-					"Tooltip": "Reflections of what the screen shows, found each frame: smooth floors, water and metal reflect what stands near them. Needs TAA. Where they find nothing (off screen, hidden, the sky) the reflection probes and the sky reflect as before",
+					"Tooltip": "Reflections of what the screen shows, found each frame: smooth floors, water and metal reflect what stands near them. At Graphics Quality Medium (Reflections Checkerboard) only with TAA; High and Ultra trace every pixel with or without it. Where they find nothing (off screen, hidden, the sky) the reflection probes and the sky reflect as before",
 					"Type": "Bool"
 				},
 				{

@@ -574,10 +574,15 @@ namespace Strata
 		uint32_t ReflectionProbes = 0;
 		uint32_t ReflectionProbeConversions = 0;
 		uint32_t ReflectionProbesPending = 0;
-		// Whether the frame traced screen-space reflections (PostProcessComponent::ScreenSpaceReflections): only with temporal
-		// anti-aliasing, from the second frame of its history on (they read the previous frame's resolved image).
+		// Whether the frame traced screen-space reflections (PostProcessComponent::ScreenSpaceReflections, scaled by
+		// RendererQualitySettings::Reflections): Checkerboard only with temporal anti-aliasing, from the second frame of its
+		// history on (they read the previous frame's resolved image); Spatial and SpatialHigh with or without it, from the
+		// second frame on (they read the previous frame's color copy). ScreenSpaceReflectionsPending: a Spatial frame that
+		// asked for them had no previous copy to read (the first frame, a camera cut, a reset); it made one for the next.
 		bool ScreenSpaceReflections = false;
-		// Copies of the scene's color the frame made for transmissive surfaces (CopySceneColor: 1 when it draws one, else 0).
+		bool ScreenSpaceReflectionsPending = false;
+		// Copies of the scene's color the frame made for transmissive surfaces and spatial reflections (CopySceneColor: 1 when
+		// it made one, else 0).
 		uint32_t SceneColorCopies = 0;
 		// Instances drawn into shadow views (summed over views) and their draw calls (the GPU-driven path's are counted on the
 		// GPU: SceneRendererGPUStats::LocalShadowInstances, LocalShadowDraws, AddGPUCounts).
@@ -1267,17 +1272,30 @@ namespace Strata
 			return m_ReflectionFrame ? m_SurfacePrepassFramebuffer.Get() : m_MotionFrame ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get();
 		}
 		// Screen-space reflections' targets, their prepass framebuffer, the trace's layout, pipeline and binding sets (per history
-		// texture), made by the first frame that traces them; false (reported) when they cannot be created.
+		// texture), made by the first frame that traces them; false (reported) when they cannot be created. Checkerboard
+		// (RendererQualitySettings::Reflections): a half-resolution target the trace writes.
 		bool EnsureScreenReflectionResources();
 		// Traces the frame's screen-space reflections into their target (Effects/ScreenSpaceReflections.comp, GPU.Reflections).
 		void TraceScreenReflections(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
+		// Spatial and SpatialHigh: the surface target and its prepass framebuffer, the nearest-depth pyramid, the full-resolution
+		// trace and resolve targets, the full-resolution color copy beside the scene-color copy (EnsureSceneColorResources), and
+		// the pipelines and binding sets of the pyramid, the trace and the resolve; false (reported) when they cannot be created.
+		bool EnsureSpatialReflectionResources();
+		// Builds the nearest-depth pyramid (Effects/DepthPyramidNearest.comp), traces every pixel against it with the previous
+		// frame's color copy (Effects/ScreenSpaceReflectionsSpatial.comp) and resolves the result into the target the forward
+		// pass reads (Effects/ReflectionResolve.comp), in GPU.Reflections.
+		void TraceSpatialReflections(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
+		// Hands every screen-space reflection resource of the viewport's size (both modes', with the color copy's history) to
+		// `released`: with the render targets, and when the quality's Reflections mode changes.
+		void ReleaseScreenReflections(std::vector<nvrhi::ResourceHandle>& released);
 		// What the scene binding sets bind at SRV 18: the reflections' target once made, else a black texture.
 		nvrhi::ITexture* GetBoundScreenReflections() const;
 		// The scene-color copy, its layout, pipeline and binding sets (one per level), made by the first frame that draws a
 		// transmissive surface; false (reported) when they cannot be created.
 		bool EnsureSceneColorResources();
 		// Copies the HDR image (the opaque surfaces and the sky) into the scene-color copy's levels (Effects/SceneColorCopy.comp,
-		// in GPU.Transparent), before the glass that reads it.
+		// in GPU.Transparent), before the glass that reads it; in frames that copy for spatial reflections
+		// (m_ReflectionCopyFrame), also into their full-resolution copy.
 		void CopySceneColor(nvrhi::ICommandList* commandList);
 		// What the scene binding sets bind at SRV 19: the scene-color copy once made, else a black texture.
 		nvrhi::ITexture* GetBoundSceneColor() const;
@@ -2225,6 +2243,29 @@ namespace Strata
 		nvrhi::ComputePipelineHandle m_ScreenReflectionPipeline;
 		std::array<nvrhi::BindingSetHandle, 2> m_ScreenReflectionSets;
 		nvrhi::ITexture* m_BoundScreenReflections = nullptr;
+		// Spatial reflections (Reflections Spatial and SpatialHigh): whether the reflection resources made are theirs (the target
+		// at SRV 18 is then full resolution, written by the resolve), the frame copies its color for the next frame's trace, the
+		// trace's raw target, the nearest-depth pyramid (half resolution and below) with a binding set per level, the
+		// full-resolution color copy and its copy set, the pipelines and binding sets of the pyramid, the trace and the resolve,
+		// and the copy the next frame reads: the frame that made it (RenderCount + 1), its scene and its pre-exposure.
+		bool m_SpatialReflectionResources = false;
+		bool m_ReflectionCopyFrame = false;
+		nvrhi::TextureHandle m_TracedReflectionTexture;
+		nvrhi::TextureHandle m_ReflectionPyramid;
+		std::vector<nvrhi::BindingSetHandle> m_ReflectionPyramidSets;
+		nvrhi::TextureHandle m_ReflectionColorTexture;
+		nvrhi::BindingSetHandle m_ReflectionColorCopySet;
+		nvrhi::BindingLayoutHandle m_ReflectionPyramidLayout;
+		nvrhi::ComputePipelineHandle m_ReflectionPyramidPipeline;
+		nvrhi::BindingLayoutHandle m_SpatialReflectionLayout;
+		nvrhi::ComputePipelineHandle m_SpatialReflectionPipeline;
+		nvrhi::BindingSetHandle m_SpatialReflectionSet;
+		nvrhi::BindingLayoutHandle m_ReflectionResolveLayout;
+		nvrhi::ComputePipelineHandle m_ReflectionResolvePipeline;
+		nvrhi::BindingSetHandle m_ReflectionResolveSet;
+		uint64_t m_ReflectionColorRender = 0;
+		uint64_t m_ReflectionColorSceneId = 0;
+		float m_ReflectionColorPreExposure = 1.0f;
 		// The scene-color copy transmissive surfaces read (SRV 19): its format (B10G11R11, or RGBA16F without the extended
 		// storage formats), the copy's pipeline and its binding sets, one per level, and the texture the scene binding sets name.
 		nvrhi::TextureHandle m_SceneColorTexture;

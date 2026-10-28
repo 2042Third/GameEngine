@@ -2591,7 +2591,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   part and border, a text's outline color, a selectable's transition states and explicit navigation, a layout's grid;
   each following the code that reads the property); `component.get` and `entity.get` list them as `inactive`. The TAA's
   tunables say which preset sets them and to what ("The Sharp preset sets it (0.0625): choose Custom to tune it"), and
-  the screen-space reflections' settings that they need TAA ("Needs TAA (Anti Aliasing Method is FXAA)"). A
+  the screen-space reflections' intensity and maximum roughness that the reflections are off (whether they need TAA is the
+  renderer's `Reflections` quality, which a component cannot know: "Reflections"). A
   property whose edit means more than setting it draws its value through `UI::PropertyDrawers` (by component type and
   property name; `InspectorPanel::DrawProperties` calls it in place of the generic widget, after the same label, override
   mark and menu): `TAAPreset`'s drawer runs one `component.set` per choice, Sharp and Original setting the preset alone
@@ -3125,13 +3126,16 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `LODErrorPixels` / `MinProjectedPixels` | 2 / 1 | 1 / 0.5 | 1 / 0.5 | 0.5 / 0.25 |
 | `AmbientOcclusionQuality` (slices x steps per side) | Low 1 x 4 | Medium 2 x 6 | High 3 x 8 | Ultra 4 x 12 |
 | `EnvironmentResolution` (prefiltered sky per face) | 256 | 256 | 512 | 512 |
+| `Reflections` (screen-space reflections a scene asks for) | Off | Checkerboard (TAA only) | Spatial | SpatialHigh |
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
 | Prefiltered sky per set of maps (RGBA16F, six levels; the atmosphere keeps two sets) | 4 MiB | 4 MiB | 16 MiB | 16 MiB |
+| Screen-space reflections at 3840x2160 (with a scene that asks; "Reflections") | none | 79 MiB | about 250 MiB | about 250 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for its ambient occlusion
-  (3 x 8 at every size) and its prefiltered sky (512 per face at every size; `Renderer.Quality` checks both).
+  (3 x 8 at every size), its prefiltered sky (512 per face at every size) and its screen-space reflections (Spatial;
+  `Renderer.Quality` checks the three).
   Custom is the section's fields (High's values by default). `RendererQuality::Clamp` keeps every knob in its range.
 - **Auto by rows:** `RendererQuality::ResolveShadowMapSize` resolves Auto and AutoFine for the renderer's viewport rows
   (its output: the Scene and Game views' panel pixels, the window's back buffer, a capture's image), limited to
@@ -3147,8 +3151,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   light's views again in their tiles, as a caster's change does). A knob that changes what a cached shadow view shows
   goes into one of them. A new `EnvironmentResolution` drops the environment maps and the atmosphere's spare and
   refreshing sets (`ReleaseEnvironment`): the next frame with a sky computes them at the new size (the atmosphere's first
-  environment at once) or takes over a shared set of it. It returns whether the cascades, the atlas or the environment
-  were released, and then restarts the temporal history. Callers apply the quality right after `SetViewportSize` in a frame, so Auto resolves for its rows; equal
+  environment at once) or takes over a shared set of it. A new `Reflections` mode releases the screen-space reflections'
+  resources (`ReleaseScreenReflections`); the next frame that traces makes the new mode's. It returns whether the
+  cascades, the atlas, the environment or the reflections were released, and then restarts the temporal history. Callers apply the quality right after `SetViewportSize` in a frame, so Auto resolves for its rows; equal
   knobs cost one comparison. An allocation that fails halves the cascades (down to 1024) or the atlas (down to 2048),
   reports it once, and is tried at the requested size again by the next resize or change of that knob.
 - **Single images release their cascades:** a zero viewport (a capture renderer between pictures, the editor's hidden
@@ -3408,7 +3413,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   where it calls `ResetExposureAdaptation`). It is counted in frames, never in time: slow frames never reset it. Tests
   may render many frames back to back without device frames: the renderer waits for its own oldest frames before its
   frame constants' versions run out (`SceneRenderer::ReserveFrameConstantVersions`; Architecture rules, NVRHI pitfalls).
-- With TAA, PCSS and screen-space reflections turn their per-pixel noise by the golden ratio's fraction of a turn per frame
+- With TAA, PCSS and Checkerboard screen-space reflections turn their per-pixel noise by the golden ratio's fraction of a turn per frame
   of the history (`TemporalParams.z`, counted from the reset so captures are deterministic), and the history averages it;
   without TAA the turn is 0 and the images are unchanged. Ambient occlusion never turns: it resolves its pattern within the
   frame ("Ambient occlusion").
@@ -3911,9 +3916,11 @@ lights, Post Process and the sky), and never a resolution below the output's.
   after it the imported files go to the trash.
   A probe bakes what is drawn at its position, other probes' current captures included: baking twice adds a bounce.
 - **Screen-space reflections** (`PostProcessComponent::ScreenSpaceReflections`, `SceneRendererScreenReflections.cpp`)
-  need TAA (the setting is inactive without it): the trace fetches the previous frame's resolved image, the TAA's
-  history, and leaves its noise to the TAA. From the history's second frame on (`SceneRendererStats::
-  ScreenSpaceReflections`), the prepass's surface variant (`ST_PREPASS_SURFACE`, `Scene/DepthPrepassSurface.frag`,
+  trace in the mode of the `Reflections` quality row (`ReflectionsQuality`, "Quality settings"): none at Low (Off),
+  Checkerboard at Medium (Strata 0.6.0's, with TAA only), Spatial at High and SpatialHigh at Ultra (with or without TAA).
+  The scene asks for them and the row scales or turns off what it asks, so the setting has no inactive reason for TAA.
+  **Checkerboard** fetches the previous frame's resolved image, the TAA's history, and leaves its noise to the TAA. From
+  the history's second frame on (`SceneRendererStats::ScreenSpaceReflections`), the prepass's surface variant (`ST_PREPASS_SURFACE`, `Scene/DepthPrepassSurface.frag`,
   pipelines with `PipelineKey::Surface`, after the velocity target) also writes the surface target: RGBA16F at full
   resolution, the normal-mapped view-space normal (octahedral; `GetShadingNormal` of `Include/MaterialTextures.glsl`, as
   the forward pass shades it), the roughness and the metallic factor, the maps sampled before any discard; unlit surfaces
@@ -3939,8 +3946,39 @@ lights, Post Process and the sky), and never a resolution below the output's.
   the first frame that traces, released with the targets. Pixels that find nothing render bit for bit as without
   reflections (`GPU.SceneRenderer.SSR`: a rough floor and a cube above the view; its other cases are the mirror floor
   against the CPU's prediction on both paths, a moving cube's reflection that keeps up only when fetched along the hit's
-  motion, and that nothing traces without TAA). `PerfGPU.Renderer.SSR` and `...GPU` (provisional) measure
+  motion, and that Checkerboard traces nothing without TAA). `PerfGPU.Renderer.SSR` and `...GPU` (provisional) measure
   `Render100kCubesTAA`'s scene with them traced from every surface (maximum roughness 1), and report the stage's median.
+  **Spatial and SpatialHigh** need no history. From the renderer's second frame of a view on (the first, a camera cut, a
+  reset or another render scene set `SceneRendererStats::ScreenSpaceReflectionsPending`, and captures render one more
+  frame for it, `c_MaxCaptureReflectionFrames`), the prepass writes the same surface target,
+  `Effects/DepthPyramidNearest.comp` builds a nearest-depth pyramid of the prepass's depth (R32F, half resolution and
+  below, at most 8 levels; the last texel of a level also covers the rest of an odd level above it, so every pixel lies
+  in a texel of every level), and `Effects/ScreenSpaceReflectionsSpatial.comp` traces every pixel at full resolution: the
+  same reflected ray (`Include/ScreenReflections.glsl`, shared with Checkerboard's trace), marched on the pyramid (up a
+  level while the ray stays in front of a cell's nearest depth over its span, down where it may not; at the depth's own
+  pixels a hit within the same thickness), in 32 iterations and 6 bisections (SpatialHigh 48 and 8,
+  `RendererQuality::GetScreenReflectionSteps`), its start offset by ambient occlusion's fixed 4x4 order, never by the
+  frame. What a ray sees is the previous frame's color before its transparent surfaces: in these modes every frame copies
+  its HDR image after the sky into the scene-color copy glass reads (half resolution, blurred levels) and, beside it, into
+  a full-resolution copy (`Effects/SceneColorCopy.comp` with a destination of the source's size, in `GPU.Transparent`),
+  and the next frame fetches where the hit surface was along its motion vector (these modes draw motion vectors), scaled
+  to its own pre-exposure: the full-resolution copy up to roughness 0.05, the blurred levels at roughness x (levels - 1)
+  from 0.15, blended between. That is last frame's light moved to where it is now, not an accumulation: each frame's
+  reflections are complete in themselves, and a still view gives the same image frame after frame once the reflections
+  of reflections settled (a bounce a frame). `Effects/ReflectionResolve.comp` then resolves each pixel from its 3x3
+  neighborhood as a ratio estimator: a neighbor's result weighs the center's GGX lobe toward the neighbor's mirror
+  direction over the density the neighbor's ray stands for (its own lobe's peak, 1 / (pi alpha^2)), at most the center's
+  own weight, times ambient occlusion's depth and normal weights; smooth surfaces keep their own sharp reflections, rough
+  ones borrow their neighbors' rays, which hides the march's fixed offsets. It writes the full-resolution target the
+  forward pass reads at SRV 18 (the same premultiplied lookup). Memory at 3840x2160: the surface target 63 MiB (as
+  Checkerboard's), the trace and the resolve 63 MiB each (RGBA16F), the full-resolution copy 32 MiB (B10G11R11; 63 MiB in
+  the RGBA16F fallback), the pyramid 11 MiB, beside the scene-color copy (11 MiB): about 170 MiB more than Checkerboard,
+  made by the first frame that asks, released with the targets and when the row's mode changes. `GPU.SceneRenderer.SSR`
+  runs the mirror floor's edge, rough-floor, off-screen and moving-cube cases in both modes (Spatial with FXAA), checks
+  that Spatial traces without TAA where the CPU predicts, alike on both paths, with the same image in every later frame,
+  and that a changed mode releases one mode's targets for the other's (Off makes none).
+  `PerfGPU.Renderer.SSRSpatial4K` (+ `GPU`, `StageGPU`: `GPU.Reflections`, target 1.2 ms; provisional) measures Spatial
+  on the 100,000-cube grid at 3840x2160 with FXAA.
 - Bindings: scene-set SRV 9 is the cube array (a one-slot black cube array, `Renderer::GetBlackCubeArrayTexture`, without
   probes in view; the device's `imageCubeArray` is required, "Building") and SRV 10 the probe buffer
   (`RenderData::ReflectionProbeBuffer`, 3.6 KB made with the renderer: the slots' coefficients, written on the GPU, then

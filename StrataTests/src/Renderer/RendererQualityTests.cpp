@@ -32,6 +32,7 @@ namespace
 	constexpr std::array<float, 4> c_MinProjectedPixels = { 1.0f, 0.5f, 0.5f, 0.25f };
 	constexpr std::array<AmbientOcclusionLevel, 4> c_AmbientOcclusionQuality = { AmbientOcclusionLevel::Low, AmbientOcclusionLevel::Medium, AmbientOcclusionLevel::High, AmbientOcclusionLevel::Ultra };
 	constexpr std::array<uint32_t, 4> c_EnvironmentResolution = { 256, 256, 512, 512 };
+	constexpr std::array<ReflectionsQuality, 4> c_Reflections = { ReflectionsQuality::Off, ReflectionsQuality::Checkerboard, ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh };
 
 	void CheckColumn(const RendererQualitySettings& settings, size_t column)
 	{
@@ -45,6 +46,7 @@ namespace
 		CHECK(settings.MinProjectedPixels == c_MinProjectedPixels[column]);
 		CHECK(settings.AmbientOcclusionQuality == c_AmbientOcclusionQuality[column]);
 		CHECK(settings.EnvironmentResolution == c_EnvironmentResolution[column]);
+		CHECK(settings.Reflections == c_Reflections[column]);
 	}
 
 	constexpr RendererQualityPreset c_Presets[] = { RendererQualityPreset::Low, RendererQualityPreset::Medium, RendererQualityPreset::High,
@@ -142,10 +144,10 @@ TEST_SUITE("Renderer.Quality")
 		}
 	}
 
-	TEST_CASE("High is Medium below 1440 rows but for its ambient occlusion and sky reflections")
+	TEST_CASE("High is Medium below 1440 rows but for its ambient occlusion, sky reflections and screen-space reflections")
 	{
-		// High's ambient occlusion (3 x 8 samples) and prefiltered sky (512 per face) differ from Medium's (Strata 0.6.0's 2 x 6
-		// and 256) at every size; the other knobs equal Medium's below 1440 rows.
+		// High's ambient occlusion (3 x 8 samples), prefiltered sky (512 per face) and screen-space reflections (Spatial) differ
+		// from Medium's (Strata 0.6.0's 2 x 6, 256 and Checkerboard) at every size; the other knobs equal Medium's below 1440 rows.
 		const RendererQualitySettings high = RendererQuality::GetPreset(RendererQualityPreset::High);
 		const RendererQualitySettings medium = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		for (const uint32_t rows : { 720u, 1080u, 1439u })
@@ -158,6 +160,8 @@ TEST_SUITE("Renderer.Quality")
 			resolved.AmbientOcclusionQuality = medium.AmbientOcclusionQuality;
 			CHECK(resolved.EnvironmentResolution != medium.EnvironmentResolution);
 			resolved.EnvironmentResolution = medium.EnvironmentResolution;
+			CHECK(resolved.Reflections != medium.Reflections);
+			resolved.Reflections = medium.Reflections;
 			CHECK(resolved.HasSameKnobs(medium));
 		}
 		CHECK(RendererQuality::ResolveShadowMapSize(high.ShadowResolution, 1440) != RendererQuality::ResolveShadowMapSize(medium.ShadowResolution, 1440));
@@ -198,10 +202,11 @@ TEST_SUITE("Renderer.Quality")
 		refused({ { "AmbientOcclusionQuality", "Extreme" } });
 		refused({ { "EnvironmentResolution", "1024" } });
 		refused({ { "EnvironmentResolution", 512 } });
+		refused({ { "Reflections", "Mirror" } });
 
 		const nlohmann::json custom = { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LocalShadowAtlasSize", "2048" },
 			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 },
-			{ "AmbientOcclusionQuality", "Low" }, { "EnvironmentResolution", "256" } };
+			{ "AmbientOcclusionQuality", "Low" }, { "EnvironmentResolution", "256" }, { "Reflections", "Off" } };
 		std::string error;
 		CHECK_MESSAGE(section.Validate(custom, RendererQuality::c_SectionVersion, &error).has_value(), error);
 	}
@@ -215,7 +220,7 @@ TEST_SUITE("Renderer.Quality")
 
 		const nlohmann::json custom = { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LocalShadowAtlasSize", "2048" },
 			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 },
-			{ "AmbientOcclusionQuality", "Low" }, { "EnvironmentResolution", "256" } };
+			{ "AmbientOcclusionQuality", "Low" }, { "EnvironmentResolution", "256" }, { "Reflections", "Off" } };
 		const RendererQualitySettings customSettings = RendererQuality::FromSectionValue(&custom);
 		CHECK(customSettings.Preset == RendererQualityPreset::Custom);
 		CHECK(customSettings.ShadowResolution == ShadowMapResolution::Size4096);
@@ -227,10 +232,36 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(customSettings.MinProjectedPixels == 0.75f);
 		CHECK(customSettings.AmbientOcclusionQuality == AmbientOcclusionLevel::Low);
 		CHECK(customSettings.EnvironmentResolution == 256);
+		CHECK(customSettings.Reflections == ReflectionsQuality::Off);
 
 		const RendererQualitySettings none = RendererQuality::FromSectionValue(nullptr);
 		CHECK(none.Preset == RendererQualityPreset::High);
 		CHECK(none.HasSameKnobs(RendererQuality::GetPreset(RendererQualityPreset::High)));
+	}
+
+	TEST_CASE("Screen-space reflections' modes: their names, marches and whether they are spatial")
+	{
+		// Checkerboard is Strata 0.6.0's trace (24 + 6 steps); the spatial modes march farther per ray on the depth pyramid.
+		const ReflectionsQuality modes[] = { ReflectionsQuality::Off, ReflectionsQuality::Checkerboard, ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh };
+		const char* const names[] = { "Off", "Checkerboard", "Spatial", "SpatialHigh" };
+		for (size_t index = 0; index < 4; index++)
+		{
+			CAPTURE(names[index]);
+			CHECK(std::string(RendererQuality::ReflectionsQualityToString(modes[index])) == names[index]);
+			CHECK(RendererQuality::ReflectionsQualityFromString(names[index]) == modes[index]);
+			CHECK(RendererQuality::IsSpatialReflections(modes[index]) == (index >= 2));
+		}
+		CHECK_FALSE(RendererQuality::ReflectionsQualityFromString("spatial").has_value());
+		const ScreenReflectionSteps checkerboard = RendererQuality::GetScreenReflectionSteps(ReflectionsQuality::Checkerboard);
+		CHECK((checkerboard.Steps == 24u && checkerboard.RefineSteps == 6u));
+		const ScreenReflectionSteps spatial = RendererQuality::GetScreenReflectionSteps(ReflectionsQuality::Spatial);
+		CHECK((spatial.Steps == 32u && spatial.RefineSteps == 6u));
+		const ScreenReflectionSteps spatialHigh = RendererQuality::GetScreenReflectionSteps(ReflectionsQuality::SpatialHigh);
+		CHECK((spatialHigh.Steps == 48u && spatialHigh.RefineSteps == 8u));
+		// An unknown value clamps to Medium's.
+		RendererQualitySettings settings;
+		settings.Reflections = static_cast<ReflectionsQuality>(7);
+		CHECK(RendererQuality::Clamp(settings).Reflections == ReflectionsQuality::Checkerboard);
 	}
 
 	TEST_CASE("At 512 no level of the prefiltered sky costs more samples than 256's largest")

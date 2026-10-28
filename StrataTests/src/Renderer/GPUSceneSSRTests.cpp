@@ -7,7 +7,8 @@
 #include <utility>
 #include <vector>
 
-// Screen-space reflections (PostProcessComponent::ScreenSpaceReflections, Effects/ScreenSpaceReflections.comp): a mirror floor
+// Screen-space reflections (PostProcessComponent::ScreenSpaceReflections; RendererQualitySettings::Reflections Checkerboard:
+// Effects/ScreenSpaceReflections.comp, Spatial: ScreenSpaceReflectionsSpatial.comp and ReflectionResolve.comp): a mirror floor
 // under a red cube, against what the CPU predicts its reflection to be.
 
 using namespace Strata;
@@ -46,6 +47,32 @@ namespace
 		}
 	};
 
+	// A renderer as CreateRenderer makes them (Medium: Checkerboard) with another Reflections mode.
+	SceneRenderer CreateReflectionRenderer(const char* name, ReflectionsQuality reflections, GPUDrivenMode mode = GPUDrivenMode::Off)
+	{
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		specification.GPUDriven = mode;
+		specification.DebugName = name;
+		specification.Quality.Reflections = reflections;
+		return SceneRenderer(specification);
+	}
+
+	// The modes the tests run in: Checkerboard with TAA (its only way), Spatial without it (FXAA; it needs no history).
+	struct ReflectionMode
+	{
+		ReflectionsQuality Quality;
+		const char* Name;
+	};
+	constexpr ReflectionMode c_ReflectionModes[] = { { ReflectionsQuality::Checkerboard, "Checkerboard with TAA" },
+		{ ReflectionsQuality::Spatial, "Spatial with FXAA" } };
+
+	// The scene's anti-aliasing for a mode's tests.
+	void SetAntiAliasingFor(Scene& scene, ReflectionsQuality reflections)
+	{
+		GetPostProcess(scene).AntiAliasingMethod = reflections == ReflectionsQuality::Checkerboard ? AntiAliasingMode::TAA : AntiAliasingMode::FXAA;
+	}
+
 	void RenderFrames(GPUContext& gpu, SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, uint32_t frames)
 	{
 		for (uint32_t frame = 0; frame < frames; frame++)
@@ -70,9 +97,11 @@ namespace
 	}
 
 	// The settled image of the scene with and without screen-space reflections, from one renderer (the same environment).
-	std::pair<std::vector<uint16_t>, std::vector<uint16_t>> RenderWithAndWithout(GPUContext& gpu, Scene& scene, const SceneCamera& camera)
+	std::pair<std::vector<uint16_t>, std::vector<uint16_t>> RenderWithAndWithout(GPUContext& gpu, Scene& scene, const SceneCamera& camera,
+		ReflectionsQuality reflections)
 	{
-		SceneRenderer renderer = CreateRenderer("Reflections");
+		SetAntiAliasingFor(scene, reflections);
+		SceneRenderer renderer = CreateReflectionRenderer("Reflections", reflections);
 		renderer.SetViewportSize(c_ViewSize, c_ViewSize);
 		GetPostProcess(scene).ScreenSpaceReflections = true;
 		WarmUp(gpu, renderer, scene, camera);
@@ -99,7 +128,8 @@ namespace
 		return ProjectToPixel(camera, glm::vec3(point.x, -point.y, point.z), c_ViewSize);
 	}
 
-	// The red texels of the reflections' target (the cube's reflection): how many, and their mean column.
+	// The red texels of the reflections' target (the cube's reflection): how many, and their mean column in the view's pixels
+	// (the Checkerboard target is half the view's size).
 	struct RedTexels
 	{
 		uint32_t Count = 0;
@@ -109,6 +139,7 @@ namespace
 	RedTexels FindRedTexels(SceneRenderer& renderer)
 	{
 		const ReadbackImage image = ReadHalfImage(renderer.GetScreenReflectionTexture());
+		const float scale = static_cast<float>(c_ViewSize) / static_cast<float>(image.Width);
 		RedTexels red;
 		double sumX = 0.0;
 		for (uint32_t y = 0; y < image.Height; y++)
@@ -123,7 +154,7 @@ namespace
 				}
 			}
 		}
-		red.MeanX = red.Count > 0 ? static_cast<float>(sumX / red.Count) : 0.0f;
+		red.MeanX = red.Count > 0 ? (static_cast<float>(sumX / red.Count) + 0.5f) * scale - 0.5f : 0.0f;
 		return red;
 	}
 
@@ -241,14 +272,18 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 		// The forward pass samples the half-resolution reflections bilinearly: where texels that hit the cube and texels that
 		// found nothing meet, its pixels must show a mix of the cube's reflection and the probe's or the sky's. Mixed by the
 		// filtered confidence over a color the filter had blended with the misses' black, they lost a fifth of both.
+		// The Spatial mode resolves its full-resolution target before the same lookup.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
 		LoadAssets(assets);
-		for (const bool probe : { false, true })
+		for (const auto& [mode, probe] : { std::pair(c_ReflectionModes[0], false), std::pair(c_ReflectionModes[0], true),
+				 std::pair(c_ReflectionModes[1], false), std::pair(c_ReflectionModes[1], true) })
 		{
+			CAPTURE(mode.Name);
 			CAPTURE(probe);
 			MirrorScene scene(assets, 0.0f);
+			SetAntiAliasingFor(scene.Contents, mode.Quality);
 			if (probe)
 			{
 				// A green probe whose box holds everything in view, in place of the sky's reflection.
@@ -256,7 +291,7 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 				component.Capture = assets.Add(CreateEnvironmentTexture(glm::vec3(0.0f, 0.6f, 0.0f), glm::vec3(0.0f, 0.6f, 0.0f)), "Probe");
 				component.Extents = glm::vec3(40.0f);
 			}
-			SceneRenderer renderer = CreateRenderer("Edges");
+			SceneRenderer renderer = CreateReflectionRenderer("Edges", mode.Quality);
 			renderer.SetViewportSize(c_ViewSize, c_ViewSize);
 			auto ready = [&renderer, probe]()
 			{
@@ -319,9 +354,13 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 		LoadAssets(assets);
 		SUBCASE("A floor rougher than the reflections' maximum roughness")
 		{
-			MirrorScene scene(assets, 0.8f);
-			const auto [with, without] = RenderWithAndWithout(gpu, scene.Contents, scene.Camera);
-			CHECK(with == without);
+			for (const ReflectionMode& mode : c_ReflectionModes)
+			{
+				CAPTURE(mode.Name);
+				MirrorScene scene(assets, 0.8f);
+				const auto [with, without] = RenderWithAndWithout(gpu, scene.Contents, scene.Camera, mode.Quality);
+				CHECK(with == without);
+			}
 		}
 		SUBCASE("A cube above the view, whose reflection the floor would show")
 		{
@@ -332,13 +371,17 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 			REQUIRE(cubeClip.y / cubeClip.w > 1.0f);
 			const glm::vec4 mirrorClip = scene.Camera.Projection * scene.Camera.View * glm::vec4(0.0f, -1.0f, 0.5f, 1.0f);
 			REQUIRE(std::abs(mirrorClip.y / mirrorClip.w) < 0.8f);
-			const auto [with, without] = RenderWithAndWithout(gpu, scene.Contents, scene.Camera);
-			CHECK(with == without);
+			for (const ReflectionMode& mode : c_ReflectionModes)
+			{
+				CAPTURE(mode.Name);
+				const auto [with, without] = RenderWithAndWithout(gpu, scene.Contents, scene.Camera, mode.Quality);
+				CHECK(with == without);
+			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Without TAA nothing traces and no surface target is made")
+	TEST_CASE("Checkerboard without TAA traces nothing and makes no surface target")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -384,45 +427,175 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 	{
 		// The cube moves half its size each frame; the reflection fetches it where the previous frame showed it. Fetched at the
 		// hit's own position instead, only the part the cube's two positions share would be red, behind its motion.
+		// Spatial reads the previous frame's color copy the same way.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
 		LoadAssets(assets);
-		MirrorScene moving(assets, 0.0f, TemporalAntiAliasingPreset::Sharp);
-		SceneRenderer renderer = CreateRenderer("Moving");
-		renderer.SetViewportSize(c_ViewSize, c_ViewSize);
-		constexpr float c_Step = 0.5f;
-		constexpr uint32_t c_Frames = 7;
-		const float start = -c_Step * static_cast<float>(c_Frames - 1) * 0.5f;
-		for (uint32_t frame = 0; frame < c_Frames; frame++)
+		for (const ReflectionMode& mode : c_ReflectionModes)
 		{
-			moving.Cube.GetComponent<TransformComponent>().Translation.x = start + c_Step * static_cast<float>(frame);
-			moving.Cube.MarkModified<TransformComponent>();
-			REQUIRE(renderer.Render(moving.Contents, moving.Camera));
-			FinishFrame(gpu);
+			CAPTURE(mode.Name);
+			MirrorScene moving(assets, 0.0f, TemporalAntiAliasingPreset::Sharp);
+			SetAntiAliasingFor(moving.Contents, mode.Quality);
+			SceneRenderer renderer = CreateReflectionRenderer("Moving", mode.Quality);
+			renderer.SetViewportSize(c_ViewSize, c_ViewSize);
+			constexpr float c_Step = 0.5f;
+			constexpr uint32_t c_Frames = 7;
+			const float start = -c_Step * static_cast<float>(c_Frames - 1) * 0.5f;
+			for (uint32_t frame = 0; frame < c_Frames; frame++)
+			{
+				moving.Cube.GetComponent<TransformComponent>().Translation.x = start + c_Step * static_cast<float>(frame);
+				moving.Cube.MarkModified<TransformComponent>();
+				REQUIRE(renderer.Render(moving.Contents, moving.Camera));
+				FinishFrame(gpu);
+			}
+			REQUIRE(renderer.GetStats().ScreenSpaceReflections);
+			const RedTexels movingRed = FindRedTexels(renderer);
+			const float cubeX = moving.Cube.GetComponent<TransformComponent>().Translation.x;
+
+			// The same cube standing still where the moving one ended.
+			MirrorScene still(assets, 0.0f, TemporalAntiAliasingPreset::Sharp);
+			SetAntiAliasingFor(still.Contents, mode.Quality);
+			still.Cube.GetComponent<TransformComponent>().Translation.x = cubeX;
+			SceneRenderer stillRenderer = CreateReflectionRenderer("Still", mode.Quality);
+			stillRenderer.SetViewportSize(c_ViewSize, c_ViewSize);
+			RenderFrames(gpu, stillRenderer, still.Contents, still.Camera, c_Frames);
+			const RedTexels stillRed = FindRedTexels(stillRenderer);
+
+			REQUIRE(stillRed.Count > 20u);
+			const float predictedX = static_cast<float>(MirrorPixel(moving.Camera, glm::vec3(cubeX, 1.0f, 0.5f)).x);
+			CAPTURE(movingRed.Count);
+			CAPTURE(stillRed.Count);
+			CAPTURE(movingRed.MeanX);
+			CAPTURE(stillRed.MeanX);
+			CAPTURE(predictedX);
+			CHECK(std::abs(stillRed.MeanX - predictedX) < 3.0f);
+			CHECK(static_cast<float>(movingRed.Count) > 0.85f * static_cast<float>(stillRed.Count));
+			CHECK(std::abs(movingRed.MeanX - stillRed.MeanX) < 2.0f);
 		}
-		REQUIRE(renderer.GetStats().ScreenSpaceReflections);
-		const RedTexels movingRed = FindRedTexels(renderer);
-		const float cubeX = moving.Cube.GetComponent<TransformComponent>().Translation.x;
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 
-		// The same cube standing still where the moving one ended.
-		MirrorScene still(assets, 0.0f, TemporalAntiAliasingPreset::Sharp);
-		still.Cube.GetComponent<TransformComponent>().Translation.x = cubeX;
-		SceneRenderer stillRenderer = CreateRenderer("Still");
-		stillRenderer.SetViewportSize(c_ViewSize, c_ViewSize);
-		RenderFrames(gpu, stillRenderer, still.Contents, still.Camera, c_Frames);
-		const RedTexels stillRed = FindRedTexels(stillRenderer);
+	TEST_CASE("Spatial reflections trace every pixel without TAA, where the CPU predicts, alike on both paths and in every frame")
+	{
+		// Each frame traces from the previous frame's color: the first after a reset has none to read (pending), every later one
+		// is complete in itself, so a still view gives the same image frame after frame (no history averages anything).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		for (const bool fxaa : { true, false })
+		{
+			CAPTURE(fxaa);
+			MirrorScene scene(assets, 0.0f);
+			PostProcessComponent& post = GetPostProcess(scene.Contents);
+			post.AntiAliasingMethod = AntiAliasingMode::FXAA;
+			post.AntiAliasing = fxaa;
+			SceneRenderer cpu = CreateReflectionRenderer("CPU", ReflectionsQuality::Spatial, GPUDrivenMode::Off);
+			SceneRenderer gpuDriven = CreateReflectionRenderer("GPU", ReflectionsQuality::Spatial, GPUDrivenMode::Auto);
+			cpu.SetViewportSize(c_ViewSize, c_ViewSize);
+			gpuDriven.SetViewportSize(c_ViewSize, c_ViewSize);
+			WarmUp(gpu, cpu, scene.Contents, scene.Camera);
+			WarmUp(gpu, gpuDriven, scene.Contents, scene.Camera);
+			std::vector<uint16_t> previous;
+			for (uint32_t frame = 0; frame < 5; frame++)
+			{
+				CAPTURE(frame);
+				const ReadbackImage cpuImage = RenderToImage(cpu, scene.Contents, scene.Camera);
+				const ReadbackImage gpuImage = RenderToImage(gpuDriven, scene.Contents, scene.Camera);
+				CHECK(MaxDifference(cpuImage, gpuImage) <= 1);
+				for (SceneRenderer* renderer : { &cpu, &gpuDriven })
+				{
+					const SceneRendererStats& stats = renderer->GetStats();
+					CHECK_FALSE(stats.TemporalAntiAliasing);
+					CHECK(stats.ScreenSpaceReflections == (frame > 0));
+					CHECK(stats.ScreenSpaceReflectionsPending == (frame == 0));
+					CHECK(stats.SceneColorCopies == 1u);
+				}
+				CHECK(gpuDriven.GetStats().GPUDriven);
+				// From the third frame on the reflections see a frame that had them too: nothing changes any more.
+				const std::vector<uint16_t> bits = ReadHDRBits(cpu.GetHDRTexture());
+				if (frame >= 3)
+					CHECK(bits == previous);
+				previous = bits;
+			}
 
-		REQUIRE(stillRed.Count > 20u);
-		const float predictedX = static_cast<float>(MirrorPixel(moving.Camera, glm::vec3(cubeX, 1.0f, 0.5f)).x) * 0.5f;
-		CAPTURE(movingRed.Count);
-		CAPTURE(stillRed.Count);
-		CAPTURE(movingRed.MeanX);
-		CAPTURE(stillRed.MeanX);
-		CAPTURE(predictedX);
-		CHECK(std::abs(stillRed.MeanX - predictedX) < 1.5f);
-		CHECK(static_cast<float>(movingRed.Count) > 0.85f * static_cast<float>(stillRed.Count));
-		CHECK(std::abs(movingRed.MeanX - stillRed.MeanX) < 1.0f);
+			for (SceneRenderer* renderer : { &cpu, &gpuDriven })
+			{
+				CAPTURE(renderer->GetSpecification().DebugName);
+				REQUIRE(renderer->GetScreenReflectionTexture());
+				CHECK(renderer->GetScreenReflectionTexture()->getDesc().width == c_ViewSize);
+				const std::vector<glm::vec3> image = ReadHDR(renderer->GetHDRTexture());
+				// The cube's front face, seen in the floor below it: red.
+				for (const glm::vec3& point : { glm::vec3(0.0f, 1.0f, 0.5f), glm::vec3(-0.3f, 0.8f, 0.5f), glm::vec3(0.3f, 1.2f, 0.5f) })
+				{
+					CAPTURE(point);
+					const glm::vec3 color = TexelAt(image, MirrorPixel(scene.Camera, point));
+					CAPTURE(color);
+					CHECK(color.r > 0.6f);
+					CHECK(color.g < 0.1f);
+					CHECK(color.b < 0.25f);
+				}
+				// Beside the cube and above it the floor mirrors the sky (blue), as it does without the reflections.
+				for (const glm::vec3& point : { glm::vec3(1.6f, 1.0f, 0.5f), glm::vec3(-1.6f, 1.0f, 0.5f), glm::vec3(0.0f, 2.2f, 0.5f) })
+				{
+					CAPTURE(point);
+					const glm::vec3 color = TexelAt(image, MirrorPixel(scene.Camera, point));
+					CAPTURE(color);
+					CHECK(color.r < 0.2f);
+					CHECK(color.b > color.r);
+				}
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The Reflections row: Off traces nothing, and a changed mode releases one mode's targets for the other's")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		MirrorScene scene(assets, 0.0f);
+		SceneRenderer renderer = CreateRenderer("Modes");
+		renderer.SetViewportSize(c_ViewSize, c_ViewSize);
+		CHECK(renderer.GetQuality().Reflections == ReflectionsQuality::Checkerboard);
+		RenderFrames(gpu, renderer, scene.Contents, scene.Camera, 3);
+		CHECK(renderer.GetStats().ScreenSpaceReflections);
+		REQUIRE(renderer.GetScreenReflectionTexture());
+		CHECK(renderer.GetScreenReflectionTexture()->getDesc().width == c_ViewSize / 2);
+
+		const auto setReflections = [&renderer](ReflectionsQuality reflections)
+		{
+			RendererQualitySettings quality = renderer.GetQuality();
+			quality.Reflections = reflections;
+			return renderer.SetQuality(quality);
+		};
+		SUBCASE("Spatial, with TAA too")
+		{
+			CHECK(setReflections(ReflectionsQuality::SpatialHigh));
+			CHECK(renderer.GetScreenReflectionTexture() == nullptr);
+			CHECK(renderer.GetSurfaceTexture() == nullptr);
+			RenderFrames(gpu, renderer, scene.Contents, scene.Camera, 3);
+			CHECK(renderer.GetStats().TemporalAntiAliasing);
+			CHECK(renderer.GetStats().ScreenSpaceReflections);
+			REQUIRE(renderer.GetScreenReflectionTexture());
+			CHECK(renderer.GetScreenReflectionTexture()->getDesc().width == c_ViewSize);
+			// The same mode again changes nothing.
+			CHECK_FALSE(setReflections(ReflectionsQuality::SpatialHigh));
+			CHECK(renderer.GetScreenReflectionTexture());
+		}
+		SUBCASE("Off")
+		{
+			CHECK(setReflections(ReflectionsQuality::Off));
+			CHECK(renderer.GetScreenReflectionTexture() == nullptr);
+			RenderFrames(gpu, renderer, scene.Contents, scene.Camera, 3);
+			CHECK_FALSE(renderer.GetStats().ScreenSpaceReflections);
+			CHECK_FALSE(renderer.GetStats().ScreenSpaceReflectionsPending);
+			CHECK(renderer.GetStats().SceneColorCopies == 0u);
+			CHECK(renderer.GetScreenReflectionTexture() == nullptr);
+			CHECK(renderer.GetSurfaceTexture() == nullptr);
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

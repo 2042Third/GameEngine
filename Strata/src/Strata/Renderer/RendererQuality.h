@@ -58,6 +58,26 @@ namespace Strata
 		uint32_t StepsPerSide = 6;
 	};
 
+	// Screen-space reflections (PostProcessComponent::ScreenSpaceReflections asks for them; the row scales or turns off what
+	// a scene asks): Off; Checkerboard, Strata 0.6.0's trace (half resolution, a pixel of each 2x2 block per frame, the TAA's
+	// history as its color: only with TAA); Spatial and SpatialHigh, every pixel at full resolution with a spatial resolve and
+	// the previous frame's color (with or without TAA). The values never change meaning (the section stores their names).
+	enum class ReflectionsQuality : uint8_t
+	{
+		Off = 0,
+		Checkerboard = 1,
+		Spatial = 2,
+		SpatialHigh = 3
+	};
+
+	// The march of a screen-space reflection ray (Effects/ScreenSpaceReflections.comp): its steps (in Spatial modes,
+	// iterations of the hierarchical march) and the bisection's refinements of a hit.
+	struct ScreenReflectionSteps
+	{
+		uint32_t Steps = 24;
+		uint32_t RefineSteps = 6;
+	};
+
 	struct RendererQualitySettings
 	{
 		RendererQualityPreset Preset = RendererQualityPreset::Medium; // What these values are; reported, never compared
@@ -86,6 +106,9 @@ namespace Strata
 		// is filtered from stays 512): 512 keeps mirror-like reflections of the sky sharp at 4K. Six levels at both sizes, RGBA16F:
 		// 4 MiB at 256, 16 MiB at 512 per set of maps (the atmosphere keeps two).
 		uint32_t EnvironmentResolution = 256;
+		// Screen-space reflections' mode (ReflectionsQuality): Spatial and SpatialHigh add a full-resolution trace, resolve and
+		// color copy and a depth pyramid (about 170 MiB more than Checkerboard at 3840x2160; DG "Reflections").
+		ReflectionsQuality Reflections = ReflectionsQuality::Checkerboard;
 
 		// Every member equal, Preset included.
 		bool operator==(const RendererQualitySettings& other) const = default;
@@ -97,7 +120,7 @@ namespace Strata
 	namespace RendererQuality
 	{
 		constexpr std::string_view c_SectionId = "Renderer.Quality";
-		constexpr uint32_t c_SectionVersion = 3; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
+		constexpr uint32_t c_SectionVersion = 4; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
 		constexpr uint32_t c_HighResolutionRows = 1440;
 		constexpr uint32_t c_MaxShadowMapSize = 8192; // The most texels each way of a cascade (SceneRenderer applies it)
 
@@ -117,6 +140,12 @@ namespace Strata
 		std::optional<AmbientOcclusionLevel> AmbientOcclusionLevelFromString(std::string_view name);
 		// Slices and steps per side of a level: { 1, 4 }, { 2, 6 }, { 3, 8 }, { 4, 12 }.
 		AmbientOcclusionSamples GetAmbientOcclusionSamples(AmbientOcclusionLevel level);
+		const char* ReflectionsQualityToString(ReflectionsQuality quality); // "Off", "Checkerboard", "Spatial", "SpatialHigh"
+		std::optional<ReflectionsQuality> ReflectionsQualityFromString(std::string_view name);
+		// The march of a mode: Checkerboard 24 + 6, Spatial 32 + 6, SpatialHigh 48 + 8 (Off: Checkerboard's, unused).
+		ScreenReflectionSteps GetScreenReflectionSteps(ReflectionsQuality quality);
+		// Whether a mode traces every pixel at full resolution with the previous frame's color (Spatial, SpatialHigh).
+		bool IsSpatialReflections(ReflectionsQuality quality);
 		// The samples per texel that filter level `mip` of a prefiltered sky of `size` texels each way (IBL/Prefilter.comp): 512
 		// at every level of 256 (Strata 0.6.0's); at 512, levels 1 and 2 take 128 (their narrow lobes read finer source levels)
 		// and the others 512, so no level costs more than 0.6.0's largest (size^2 x samples).

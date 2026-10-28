@@ -1418,6 +1418,46 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture with spatial screen-space reflections renders until they read a previous frame's color")
+	{
+		// At High (Reflections Spatial) the reflections read the previous frame's color, which the capture renderer's first frame
+		// of a view lacks (its targets go after every picture): the capture renders once more, without anti-aliasing too.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.Run("entity.create", { { "name", "PostProcess" }, { "components", { { "PostProcess", { { "Tonemapper", "None" }, { "AutoExposure", false },
+			{ "Vignette", 0.0 }, { "Bloom", false }, { "AntiAliasing", false }, { "ScreenSpaceReflections", true },
+			{ "ScreenSpaceReflectionsMaxRoughness", 1.0 } } } } } });
+		Scene& scene = *harness.Context.GetActiveScene();
+		Entity floor = scene.CreateEntity("Floor");
+		floor.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		floor.GetComponent<TransformComponent>().Scale = glm::vec3(20.0f, 1.0f, 20.0f);
+		floor.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		Entity box = scene.CreateEntity("Box");
+		box.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.5f, 0.0f);
+		box.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		scene.CreateEntity("Sun").AddComponent<DirectionalLightComponent>();
+		harness.Run("camera.set", { { "position", { 0, 2, 6 } }, { "target", { 0, 0, 0 } } });
+
+		for (const char* quality : { "high", "medium" })
+		{
+			CAPTURE(quality);
+			nlohmann::json result;
+			harness.CaptureLoaded({ { "width", 128 }, { "height", 128 }, { "overlays", false }, { "quality", quality } }, &result);
+			ViewportRenderer* capture = harness.Context.GetViewport().GetCaptureRenderer();
+			REQUIRE(capture);
+			const SceneRendererStats& stats = capture->GetSceneRenderer().GetStats();
+			const bool spatial = std::string(quality) == "high";
+			// Medium's Checkerboard reflections need TAA: without it they trace nothing and nothing is waited for.
+			CHECK(stats.ScreenSpaceReflections == spatial);
+			CHECK_FALSE(stats.ScreenSpaceReflectionsPending);
+			if (spatial)
+				CHECK(result["waitedFrames"] >= 1);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A capture of a scene with sixteen shadowed point lights shows every light's shadow in its first complete frame")
 	{
 		Tests::GPUContext gpu;
