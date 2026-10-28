@@ -883,8 +883,9 @@ on the host (`GPUTimestampPool::ResetCompleted`, `vkResetQueryPool`: the slot's 
 event query showed the GPU completed it, and the validation layer learned that completion when the query was polled). No
 submission of its own is needed, and the frame's timed command lists may execute in any order (the upload batch's list,
 opened by the frame's first upload, runs after lists the geometry pool's growth executes meanwhile); a device without host
-query resets resets the slot in a command list executed at once. A slot still in use when its turn comes is dropped (`GPUProfilerStats::DroppedFrames`), as is a frame whose timestamps are still not readable a frame after the
-GPU completed its work (recorded into a command list that was never executed; MoltenVK makes timestamps readable a little
+query resets resets the slot in a command list executed at once. A slot still in use when its turn comes is dropped
+(`GPUProfilerStats::DroppedFrames`), as is a frame whose timestamps are still not readable a frame after the GPU completed
+its work (recorded into a command list that was never executed; MoltenVK makes timestamps readable a little
 after the completion is signaled, so a completed slot waits that one frame); nothing waits for the GPU. `GPUPassTimer` times
 consecutive passes of a command list with one timestamp per boundary, so stages tile it without gaps; a `GPUTimerRecord`
 keeps a user's own intervals (`SceneRenderer::GetGPUStats`).
