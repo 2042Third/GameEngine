@@ -323,9 +323,19 @@ namespace Strata
 		{
 			data.PlayerOptions = options;
 			data.PlayerPlaying = playing;
+			// Each choice as the table shows its values.
 			std::string set;
 			for (const auto& [name, value] : options.items())
-				set += fmt::format("{}{} {}", set.empty() ? "" : ", ", name, value.is_string() ? value.get<std::string>() : value.dump());
+			{
+				const SettingsField* field = nullptr;
+				for (const SettingsField& candidate : data.Model.Section->Fields)
+				{
+					if (candidate.Name == name)
+						field = &candidate;
+				}
+				const std::string text = field ? FormatValue(*field, value, data.EngineModel) : value.is_string() ? value.get<std::string>() : value.dump();
+				set += fmt::format("{}{} {}", set.empty() ? "" : ", ", name, text);
+			}
 			data.PlayerText = playing ? fmt::format("The running game's player chose: {} (marked Player)", set)
 				: fmt::format("The players' saved options replace the project's in play: {}. Changes here reach play once they are reset.", set);
 		}

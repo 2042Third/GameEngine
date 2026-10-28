@@ -345,8 +345,12 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		GameGraphicsService& graphics = editor.Context().GetGameGraphics();
 		REQUIRE(graphics.SetOption("Preset", "Low"));
 		REQUIRE(graphics.SetOption("ShadowCascades", 2));
+		// A number as the table writes it: a float widened to a double (as a 32-bit float reaches it) shows as 0.6.
+		REQUIRE(graphics.SetOption("LODErrorPixels", static_cast<double>(0.6f)));
 		REQUIRE(editor.FramesUntil([]() { return IsDrawn(PageKey("PlayerOptions")); }));
 		CHECK(TextOf(PageKey("PlayerOptions")).find("The running game's player chose: ") != std::string::npos);
+		CHECK(TextOf(PageKey("PlayerOptions")).find("LODErrorPixels 0.6,") != std::string::npos);
+		CHECK(TextOf(PageKey("PlayerOptions")).find("0.600") == std::string::npos);
 		CHECK(IsDrawn(PageKey("Row.ShadowCascades.Player")));
 		// It saves them and play stops: the next session starts with them.
 		REQUIRE(graphics.SaveOptions());

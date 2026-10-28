@@ -11,6 +11,7 @@
 #include "Strata/Input/InputActions.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Reflection/ComponentRegistry.h"
+#include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Scene/ComponentAccess.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
@@ -3269,8 +3270,10 @@ namespace Strata
 							refused = fmt::format("'{}' takes an Int", field->Name);
 						break;
 					case SettingsFieldType::Float:
+						// A float as the decimal it was written as (0.6f as 0.6, not as the double 0.6000000238418579): what the
+						// players' file, editor.status and the Graphics Quality page show.
 						if (value->Type == StrataScriptValueType_Float && std::isfinite(value->As.Float))
-							stored = static_cast<double>(value->As.Float);
+							stored = FloatToJson(value->As.Float);
 						else if (value->Type == StrataScriptValueType_Int)
 							stored = static_cast<double>(value->As.Int);
 						else

@@ -165,6 +165,11 @@ TEST_SUITE("Scripting.Graphics")
 		probe.Ask(c_SetFloat, "LODErrorPixels", {}, 0, 0.75f);
 		CHECK(probe.Get<bool>("Accepted"));
 		CHECK(game.GetGraphics().GetEffectiveValue()["LODErrorPixels"] == 0.75);
+		// A float the binary form cannot hold exactly is kept as the decimal the script wrote, as the players' file shows it.
+		probe.Ask(c_SetFloat, "LODErrorPixels", {}, 0, 0.6f);
+		CHECK(probe.Get<bool>("Accepted"));
+		CHECK(game.GetGraphics().GetEffectiveValue()["LODErrorPixels"] == 0.6);
+		CHECK(game.GetGraphics().GetPlayerOptions()["LODErrorPixels"].dump() == "0.6");
 		probe.Ask(c_SetChoice, "ShadowResolution", "4096");
 		CHECK(probe.Get<bool>("Accepted"));
 		CHECK(probe.Get<std::string>("Effective") == "4096");
