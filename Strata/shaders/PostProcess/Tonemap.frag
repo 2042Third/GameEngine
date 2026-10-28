@@ -46,7 +46,14 @@ layout(set = 0, binding = ST_CBV(0), std140) uniform TonemapConstants
 	vec4 ColorRows[3];        // White balance times slope, as rows
 	vec4 ColorOffset;         // xyz: added before the power (in units of light)
 	vec4 ColorPower;          // xyz: per-channel power around middle gray
+	float FilmGrain;          // The grain's strength; 0 = off
+	float ChromaticAberration; // k: red is read at 0.5 + (uv - 0.5) (1 + k), blue at (1 - k); 0 = off
+	uint GrainFrame;          // The frame's number: the grain changes every frame
+	float Padding0;
 } u_Parameters;
+
+// The grain's strength in the encoded domain at FilmGrain 1 (RenderData::c_FilmGrainAmplitude).
+const float c_FilmGrainAmplitude = 0.04;
 
 #define ST_COLOR_GRADING 1u
 #define ST_BLUR_MASK 2u
@@ -173,6 +180,14 @@ void main()
 	// Inf or NaN (from a broken input or an extreme exposure) would make every tone curve return NaN.
 	// The exposure multiplies luminance; the scene color is pre-exposed, so its factor is divided out (exactly).
 	vec4 source = texture(sampler2D(u_SceneColor, u_PointSampler), v_UV);
+	// Lateral chromatic aberration, as a lens's: red magnified a little about the center, blue shrunk, green where it is
+	// (bilinear reads: the shift is a fraction of a pixel). The uniform branch leaves the source untouched when off.
+	if (u_Parameters.ChromaticAberration > 0.0)
+	{
+		vec2 offset = v_UV - 0.5;
+		source.r = texture(sampler2D(u_SceneColor, u_LinearSampler), 0.5 + offset * (1.0 + u_Parameters.ChromaticAberration)).r;
+		source.b = texture(sampler2D(u_SceneColor, u_LinearSampler), 0.5 + offset * (1.0 - u_Parameters.ChromaticAberration)).b;
+	}
 	vec3 color = ExposeSceneColor(source.rgb);
 	// The motion blur's and the depth of field's outputs hold 1 in alpha where they blurred: sharpening a blur would cut a motion
 	// blur's streaks into steps and give a defocused area a texture it does not have.
@@ -226,6 +241,18 @@ void main()
 	float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
 	color = max(mix(vec3(luminance), color, u_Parameters.Saturation), vec3(0.0));
 
+	vec3 encoded = LinearToSRGB(clamp(color, 0.0, 1.0));
+	// Film grain in the encoded domain, after the curve and before the dither: most visible in the mid-tones, as film's
+	// (sqrt(4 Y (1 - Y)) of the encoded luminance Y), the same on every channel, near-Gaussian (four uniform streams), new every
+	// frame (salted with the frame's number) and zero-mean, so it adds texture without moving the image's brightness.
+	if (u_Parameters.FilmGrain > 0.0)
+	{
+		uvec2 pixel = uvec2(gl_FragCoord.xy);
+		uint salt = 8u + 4u * u_Parameters.GrainFrame;
+		float noise = (PixelRandom(pixel, salt) + PixelRandom(pixel, salt + 1u) + PixelRandom(pixel, salt + 2u) + PixelRandom(pixel, salt + 3u) - 2.0) * 1.7320508;
+		float encodedLuminance = clamp(dot(encoded, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+		encoded = clamp(encoded + u_Parameters.FilmGrain * c_FilmGrainAmplitude * sqrt(4.0 * encodedLuminance * (1.0 - encodedLuminance)) * noise, 0.0, 1.0);
+	}
 	// The target's own quantization, dithered when this pass writes the display image (u_Parameters.DitherLevels).
-	o_Color = vec4(DitherToCodes(LinearToSRGB(clamp(color, 0.0, 1.0)), uvec2(gl_FragCoord.xy), u_Parameters.DitherLevels), 1.0);
+	o_Color = vec4(DitherToCodes(encoded, uvec2(gl_FragCoord.xy), u_Parameters.DitherLevels), 1.0);
 }

@@ -3158,7 +3158,8 @@ namespace Strata
 			return false;
 		}
 		nvrhi::IFramebuffer* output = target && !overlays ? target : m_OutputFramebuffer.Get();
-		RenderPostDisplay(commandList, postProcess, temporalSettings, resolved, postSource, bloom, GetVignetteTangents(camera, m_ViewportSize), output);
+		RenderPostDisplay(commandList, postProcess, temporalSettings, resolved, postSource, bloom, GetVignetteTangents(camera, m_ViewportSize),
+			options.GrainSeed.value_or(static_cast<uint32_t>(m_RenderCount)), output);
 
 		if (overlays)
 		{

@@ -278,6 +278,7 @@
 						"BloomIntensity": 0.08,
 						"BloomRadius": 0.08,
 						"BloomThreshold": 1,
+						"ChromaticAberration": 0.5,
 						"ColorOffset": [
 							0.0,
 							0.0,
@@ -295,6 +296,7 @@
 						],
 						"Contrast": 1.05,
 						"Exposure": 0.25,
+						"FilmGrain": 0.2,
 						"MotionBlur": true,
 						"MotionBlurMaxLength": 0.03,
 						"MotionBlurShutterAngle": 150,

@@ -264,6 +264,10 @@ namespace Strata
 				clamped.MotionBlur = SceneEffectChoice::Scene;
 			if (static_cast<size_t>(clamped.DepthOfField) >= std::size(c_SceneEffectChoiceNames))
 				clamped.DepthOfField = SceneEffectChoice::Scene;
+			if (static_cast<size_t>(clamped.FilmGrain) >= std::size(c_SceneEffectChoiceNames))
+				clamped.FilmGrain = SceneEffectChoice::Scene;
+			if (static_cast<size_t>(clamped.ChromaticAberration) >= std::size(c_SceneEffectChoiceNames))
+				clamped.ChromaticAberration = SceneEffectChoice::Scene;
 			if (static_cast<uint8_t>(clamped.Preset) > static_cast<uint8_t>(RendererQualityPreset::Custom))
 				clamped.Preset = RendererQualityPreset::Custom;
 			return clamped;
@@ -413,6 +417,10 @@ namespace Strata
 				"Process turns it on; Off never blurs.", EnumOptions(c_SceneEffectChoiceNames), SceneEffectChoiceToString(high.MotionBlur)));
 			section.Fields.push_back(EnumField("DepthOfField", "Depth of field", "Under every preset: Scene shows the depth of field of cameras "
 				"that turn it on; Off keeps every distance in focus.", EnumOptions(c_SceneEffectChoiceNames), SceneEffectChoiceToString(high.DepthOfField)));
+			section.Fields.push_back(EnumField("FilmGrain", "Film grain", "Under every preset: Scene shows the film grain of a Post Process that "
+				"turns it on; Off never.", EnumOptions(c_SceneEffectChoiceNames), SceneEffectChoiceToString(high.FilmGrain)));
+			section.Fields.push_back(EnumField("ChromaticAberration", "Chromatic aberration", "Under every preset: Scene shows the color fringes of "
+				"a Post Process that turns them on; Off never.", EnumOptions(c_SceneEffectChoiceNames), SceneEffectChoiceToString(high.ChromaticAberration)));
 			return section;
 		}
 
@@ -446,6 +454,8 @@ namespace Strata
 				ReadEnumField(*value, "AntiAliasing", c_AntiAliasingChoiceNames, settings.AntiAliasing);
 				ReadEnumField(*value, "MotionBlur", c_SceneEffectChoiceNames, settings.MotionBlur);
 				ReadEnumField(*value, "DepthOfField", c_SceneEffectChoiceNames, settings.DepthOfField);
+				ReadEnumField(*value, "FilmGrain", c_SceneEffectChoiceNames, settings.FilmGrain);
+				ReadEnumField(*value, "ChromaticAberration", c_SceneEffectChoiceNames, settings.ChromaticAberration);
 			}
 			return Clamp(settings);
 		}
@@ -464,7 +474,9 @@ namespace Strata
 				{ "MotionBlurQuality", MotionBlurSamplesToString(settings.MotionBlurQuality) },
 				{ "AntiAliasing", AntiAliasingChoiceToString(settings.AntiAliasing) },
 				{ "MotionBlur", SceneEffectChoiceToString(settings.MotionBlur) },
-				{ "DepthOfField", SceneEffectChoiceToString(settings.DepthOfField) }
+				{ "DepthOfField", SceneEffectChoiceToString(settings.DepthOfField) },
+				{ "FilmGrain", SceneEffectChoiceToString(settings.FilmGrain) },
+				{ "ChromaticAberration", SceneEffectChoiceToString(settings.ChromaticAberration) }
 			};
 		}
 

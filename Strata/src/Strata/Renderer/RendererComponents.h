@@ -288,6 +288,11 @@ namespace Strata
 		// (1: a lens's full fall-off). 0.12 darkens a 60 degree view's corners by about 10% (0.2 until 0.7.0, a ring after the
 		// curve: files keep their value under the lens's model).
 		float Vignette = 0.12f;
+		// A lens's and film's flaws, with restraint (off by default; players can turn each off): grain in the mid-tones that
+		// changes every frame (FilmGrain 1: about 10 codes of spread), and lateral chromatic aberration, red and blue fringes
+		// toward the corners (ChromaticAberration 1: half a pixel at a 3840x2160 image's corners).
+		float FilmGrain = 0.0f;
+		float ChromaticAberration = 0.0f;
 		float Saturation = 1.0f;
 		float Contrast = 1.0f; // Around middle gray; 1 = unchanged
 		// The Filmic curve's look, each in [0, 1]: how deep the shadows go (higher crushes the darkest tones) and how softly the

@@ -1799,6 +1799,30 @@
 					"Speed": 0.0010000000474974513,
 					"Tooltip": "The longest blur, as a fraction of the image height: 0.02 is 43 pixels at 2160 rows",
 					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Film Grain",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "FilmGrain",
+					"Speed": 0.0,
+					"Tooltip": "Film's grain, new every frame, most visible in the mid-tones; 1 spreads them by about 10 codes. Players can turn it off",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Chromatic Aberration",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "ChromaticAberration",
+					"Speed": 0.0,
+					"Tooltip": "A lens's lateral color fringes, red and blue drawn apart toward the corners; 1 shifts each half a pixel at a 3840x2160 image's corners. Players can turn it off",
+					"Type": "Float"
 				}
 			]
 		},

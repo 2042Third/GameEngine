@@ -512,7 +512,13 @@ namespace Strata
 				WithTooltip(Range(0.0f, 360.0f, 1.0f), "How long the shutter stays open, in degrees of the frame: 180 blurs over half a frame's "
 					"motion, as film cameras do; 0 none"))
 			.Property("MotionBlurMaxLength", &PostProcessComponent::MotionBlurMaxLength,
-				WithTooltip(Range(0.005f, 0.05f, 0.001f), "The longest blur, as a fraction of the image height: 0.02 is 43 pixels at 2160 rows"));
+				WithTooltip(Range(0.005f, 0.05f, 0.001f), "The longest blur, as a fraction of the image height: 0.02 is 43 pixels at 2160 rows"))
+			.Property("FilmGrain", &PostProcessComponent::FilmGrain,
+				WithTooltip(Slider(0.0f, 1.0f), "Film's grain, new every frame, most visible in the mid-tones; 1 spreads them by about 10 codes. "
+					"Players can turn it off"))
+			.Property("ChromaticAberration", &PostProcessComponent::ChromaticAberration,
+				WithTooltip(Slider(0.0f, 1.0f), "A lens's lateral color fringes, red and blue drawn apart toward the corners; 1 shifts each half a "
+					"pixel at a 3840x2160 image's corners. Players can turn it off"));
 		// Exposure is the compensation SceneRenderer applies with automatic exposure too: always active.
 		SetInactiveReasons<PostProcessComponent>({ "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed", "AutoExposureMetering",
 			"AutoExposureLowPercentile", "AutoExposureHighPercentile", "AutoExposureLightSpeed", "AutoExposureKey" }, &WithAutoExposure);

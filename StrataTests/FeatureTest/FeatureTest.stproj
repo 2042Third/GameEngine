@@ -140,7 +140,9 @@
 		"Renderer.Quality": {
 			"Value": {
 				"AntiAliasing": "TAA",
+				"ChromaticAberration": "Scene",
 				"DepthOfField": "Scene",
+				"FilmGrain": "Scene",
 				"LODErrorPixels": 1.5,
 				"LocalShadowAtlasSize": "2048",
 				"LocalShadowMaxTile": "512",

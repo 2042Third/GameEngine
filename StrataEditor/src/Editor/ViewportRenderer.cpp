@@ -200,6 +200,9 @@ namespace Strata
 		options.MotionBlur = !m_SingleImages && view.FromScene && context.IsPlaying();
 		// Depth of field is a lens's, not a moment's: views and captures through a scene camera show it, playing or not.
 		options.Lens = view.Lens;
+		// A capture taken again is the same picture: its film grain keeps one pattern.
+		if (m_SingleImages)
+			options.GrainSeed = 0;
 		m_DebugDraw.Clear();
 		options.SelectionColor = settings.SelectionColor;
 		if (overlays)
