@@ -697,17 +697,27 @@ namespace Strata
 			sun.ShadowSoftness = values.ShadowSoftness;
 			light.MarkModified<DirectionalLightComponent>();
 
-			// Automatic exposure that would clip a real sun's scene: raised to what it needs.
+			// An exposure that would clip a real sun's scene to white: a manual one (meant for small values: 0 suits a 3 lux sun)
+			// becomes automatic, from no compensation, and an automatic one that stops below a sunlit scene's level is raised to it.
 			nlohmann::json postProcessEntity = nullptr;
+			bool autoExposureTurnedOn = false;
 			for (auto [handle, postProcess, world] : scene.GetRegistry().view<PostProcessComponent, WorldTransformComponent>().each())
 			{
 				if (!world.ActiveInHierarchy)
 					continue;
-				if (postProcess.AutoExposure && postProcess.AutoExposureMaxEV < c_PresetAutoExposureRaiseBelow)
+				const bool manual = !postProcess.AutoExposure;
+				if (manual || postProcess.AutoExposureMaxEV < c_PresetAutoExposureRaiseBelow)
 				{
 					const Entity entity(handle, &scene);
 					transaction.Track(entity.GetUUID());
-					postProcess.AutoExposureMaxEV = c_PresetAutoExposureMaxEV;
+					if (manual)
+					{
+						postProcess.AutoExposure = true;
+						postProcess.Exposure = 0.0f;
+						autoExposureTurnedOn = true;
+					}
+					if (postProcess.AutoExposureMaxEV < c_PresetAutoExposureRaiseBelow)
+						postProcess.AutoExposureMaxEV = c_PresetAutoExposureMaxEV;
 					scene.GetRegistry().patch<PostProcessComponent>(handle);
 					postProcessEntity = UUIDToJson(entity.GetUUID());
 				}
@@ -734,7 +744,7 @@ namespace Strata
 			nlohmann::json result = { { "preset", SkyPresetToString(*preset) }, { "changed", changed }, { "sky", UUIDToJson(sky.GetUUID()) },
 				{ "light", UUIDToJson(light.GetUUID()) }, { "createdSky", createdSky }, { "createdLight", createdLight },
 				{ "sunDirection", { towardSun.x, towardSun.y, towardSun.z } }, { "sunIntensity", values.SunIlluminance },
-				{ "groundIlluminance", groundIlluminance }, { "postProcess", std::move(postProcessEntity) } };
+				{ "groundIlluminance", groundIlluminance }, { "postProcess", std::move(postProcessEntity) }, { "autoExposureTurnedOn", autoExposureTurnedOn } };
 			return FinishEdit(context, transaction, std::move(result));
 		}
 
@@ -941,11 +951,12 @@ namespace Strata
 			"Lights the scene with a sun and sky preset: Clear (the physical atmosphere, a 120,000 lux sun 40 degrees up: sunny, deep blue "
 			"shadows), Hazy (thicker air, a paler sky and softer contrast), Overcast (an even gray sky of about 7,700 lux and a faint, very soft "
 			"sun) or GoldenHour (the sun 6 degrees up, warm light and long shadows). Writes the sky light's source and settings and the "
-			"directional light's rotation, intensity, color and shadow softness; keeps the light's azimuth unless sunAzimuth is given. Raises "
-			"the active Post Process's AutoExposureMaxEV to 16 when automatic exposure would otherwise clip a real sun. Creates 'Sky' or 'Sun' "
-			"when the scene has none. One undo step; while playing it changes the running copy (warning). Returns {preset, changed, sky, light, "
-			"createdSky, createdLight, sunDirection (toward the sun), sunIntensity (lux above the air), groundIlluminance (lux on a surface "
-			"facing the sun at the ground), postProcess (the entity whose AutoExposureMaxEV was raised, or null)}.",
+			"directional light's rotation, intensity, color and shadow softness; keeps the light's azimuth unless sunAzimuth is given. A real "
+			"sun clips to white under the active Post Process's manual exposure, so that turns automatic (Exposure compensation 0), and its "
+			"AutoExposureMaxEV is raised to 16 when below 15. Creates 'Sky' or 'Sun' when the scene has none. One undo step; while playing it "
+			"changes the running copy (warning). Returns {preset, changed, sky, light, createdSky, createdLight, sunDirection (toward the sun), "
+			"sunIntensity (lux above the air), groundIlluminance (lux on a surface facing the sun at the ground), postProcess (the entity whose "
+			"exposure was changed, or null), autoExposureTurnedOn (its manual exposure became automatic)}.",
 			ObjectSchema({ { "preset", { { "type", "string" }, { "enum", { "Clear", "Hazy", "Overcast", "GoldenHour" } },
 					{ "description", "The preset" } } },
 				{ "sky", EntitySchema("The entity with the SkyLight to write; default: the scene's first active sky light, or a new 'Sky'") },
