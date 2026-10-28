@@ -333,7 +333,11 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		sun.GetComponent<DirectionalLightComponent>().ShadowDistance = 1000.0f;
 
 		constexpr uint32_t size = 64;
-		SceneRenderer renderer;
+		// Two frames' casters are compared: the cascades must not follow the first frame's receivers into the second (the fit
+		// has its own suite, GPU.SceneRenderer.ShadowFit).
+		SceneRendererSpecification specification;
+		specification.FitShadowsToView = false;
+		SceneRenderer renderer(specification);
 		renderer.SetViewportSize(size, size);
 		SceneCamera camera = LookAt(glm::vec3(0.0f, 8.0f, 8.0f), glm::vec3(0.0f));
 		camera.Far = 2000.0f;
