@@ -43,3 +43,13 @@ integrator writes the release notes from them when the wave lands (and removes t
   `viewport.capture {debugView: "shadows"}`) colors every surface by how many screen pixels one texel of the sun's shadow
   cascades spans there, outlines the cascades and hatches their blend bands; captures report each cascade's slice, texel
   size, share of the image and pixels per texel.
+- Physical soft shadows: the sun's penumbrae are as wide as a sun of the light's Shadow Softness makes them (it now
+  defaults to 0.53 degrees, the real sun's; stored values are kept), sharp at contact, without grain and identical from
+  frame to frame with or without TAA; thin casters such as wires and grass keep their shadows.
+- Graphics Quality gains Shadow Filter Quality (8, 16, 24 or 32 taps for wide penumbrae; Medium keeps 16).
+
+**Upgrading**
+
+- Every scene's sun shadows change: penumbrae half as wide as before for the same Shadow Softness, narrow edges filtered
+  by a fixed tent instead of rotated noise. Set Shadow Softness to 2 times its old value to keep a scene's old width.
+- Thumbnails are made again (their cache's version is 5).

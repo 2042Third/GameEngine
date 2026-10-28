@@ -1,33 +1,35 @@
 #ifndef STRATA_SHADOWS_GLSL
 #define STRATA_SHADOWS_GLSL
 
-// Directional light shadows: cascaded shadow maps (reversed-Z: larger depth = closer to the light) filtered with
-// percentage-closer soft shadows (PCSS): a blocker search estimates the penumbra from the light's angular size,
-// then percentage-closer filtering with that radius softens the edge. Each cascade blends into the next one over a band
-// before its split (the last one fades out). Acne is prevented by the rasterizer's slope
-// bias (shadow pass), a constant depth bias and a normal offset (ShadowBias), and a receiver plane depth bias that
-// follows the receiver's slope across the filter region.
+// Directional light shadows: cascaded shadow maps (reversed-Z: larger depth = closer to the light) filtered as the sun's
+// disk shades (Docs/DeveloperGuide.md, "Sun shadows"). Each cascade layer has a conservative pyramid of depth ranges
+// (u_ShadowRanges, Scene/ShadowRanges.comp): the cells around a receiver classify it as lit or in umbra without a single
+// comparison, and otherwise estimate the blockers' distance, whose penumbra is filtered at the physical half-width
+// separation * tan(the sun's angular radius): a fixed tent of four bilinear comparisons where the penumbra is narrower than
+// about a texel, and a Vogel disk of ShadowBias.z taps turned by a fixed blue-noise tile where it is wider. Nothing turns
+// with the frame, so a still view is the same in every frame. Each cascade blends into the next one over a band before its
+// split (the last one fades out). Acne is prevented by the rasterizer's slope bias (shadow pass), a constant depth bias and a
+// normal offset (ShadowBias), and a receiver plane depth bias that follows the receiver's slope across the filter region.
+// Every shader that includes this file enables GL_EXT_samplerless_texture_functions.
 
 #include "Include/Scene.glsl"
 
 layout(set = 0, binding = ST_SRV(7)) uniform texture2DArray u_ShadowMap;
+// Per cascade layer, three levels of cells of 4, 8 and 16 shadow texels each way: the nearest depth (the largest, toward the
+// light) rounded up in the high 16 bits, the farthest rounded down in the low 16 bits.
+layout(set = 0, binding = ST_SRV(32)) uniform utexture2DArray u_ShadowRanges;
+// A 64x64 tile of blue noise (Renderer::GetBlueNoiseTexture): per-pixel values whose neighbors differ, fixed per pixel.
+layout(set = 0, binding = ST_SRV(33)) uniform texture2D u_BlueNoise;
 layout(set = 0, binding = ST_SAMPLER(9)) uniform samplerShadow u_ShadowCompareSampler;
-layout(set = 0, binding = ST_SAMPLER(10)) uniform sampler u_ShadowPointSampler;
 
-const vec2 c_PoissonDisk[16] = vec2[](
-	vec2(-0.94201624, -0.39906216), vec2(0.94558609, -0.76890725), vec2(-0.09418410, -0.92938870), vec2(0.34495938, 0.29387760),
-	vec2(-0.91588581, 0.45771432), vec2(-0.81544232, -0.87912464), vec2(-0.38277543, 0.27676845), vec2(0.97484398, 0.75648379),
-	vec2(0.44323325, -0.97511554), vec2(0.53742981, -0.47373420), vec2(-0.26496911, -0.41893023), vec2(0.79197514, 0.19090188),
-	vec2(-0.24188840, 0.99706507), vec2(-0.81409955, 0.91437590), vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790));
+const int c_ShadowRangeLevels = 3;
+const float c_MaxShadowSearchTexels = 31.0; // Keeps a search region within 5 x 5 cells of its level
+const float c_GoldenAngle = 2.39996323;
 
-// Per-pixel rotation of the sampling pattern (interleaved gradient noise) trades banding for fine noise. With temporal
-// anti-aliasing every frame turns it further (TemporalParams.z), so the history averages the noise away.
-mat2 ShadowSampleRotation(vec2 pixel)
+// The blue-noise tile's value at a pixel, shifted by `shift` (decorrelated uses take different shifts), in (0, 1).
+float BlueNoise(ivec2 pixel, ivec2 shift)
 {
-	float angle = TWO_PI * fract(fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715)))) + u_Frame.TemporalParams.z);
-	float s = sin(angle);
-	float c = cos(angle);
-	return mat2(c, s, -s, c);
+	return texelFetch(u_BlueNoise, (pixel + shift) & 63, 0).r + 0.5 / 256.0;
 }
 
 int SelectCascade(float viewDepth)
@@ -74,9 +76,33 @@ vec2 ReceiverDepthGradient(mat4 cascadeViewProjection, vec3 normal)
 	return vec2(-2.0 * lightNormal.x, 2.0 * lightNormal.y) / lightNormal.z;
 }
 
-// Fraction of light reaching the surface in one cascade (1 = fully lit, also outside the cascade's square).
-float SampleCascadeShadow(int cascade, vec3 relativePosition, vec3 normal, mat2 rotation)
+// A cell's depth range: x the nearest depth (toward the light), y the farthest.
+vec2 UnpackShadowRange(uint packed)
 {
+	return vec2(float(packed >> 16u), float(packed & 0xFFFFu)) / 65535.0;
+}
+
+// The share of a bilinear 2x2 footprint of the cascade's layer that blocks the light at `reference` (1 = in shadow). An
+// explicit level: the sun is shaded in non-uniform control flow (the classification returns early).
+float CompareShadowMap(int cascade, vec2 uv, float reference)
+{
+	return textureGrad(sampler2DArrayShadow(u_ShadowMap, u_ShadowCompareSampler), vec4(uv, float(cascade), reference), vec2(0.0), vec2(0.0));
+}
+
+// What the filter found in one cascade, or blended over two (EvaluateDirectionalShadow).
+struct ShadowSample
+{
+	float Visibility;     // 1 = fully lit (also outside the cascade's square)
+	float PenumbraTexels; // The disk's radius, half the penumbra's width, in texels of the cascade; 0 where none was found
+	float DiskWeight;     // How much of the result came from the disk (0: the fixed tent alone)
+	int Cascade;          // The cascade (the first one where two blend), -1 where none covers the position
+};
+
+// The sun's visibility at a camera-relative position with its geometric normal (facing the viewer) in one cascade, at a
+// screen pixel (which picks the disk's fixed turn).
+ShadowSample SampleCascadeShadow(int cascade, vec3 relativePosition, vec3 normal, ivec2 pixel)
+{
+	ShadowSample result = ShadowSample(1.0, 0.0, 0.0, cascade);
 	// Normal offset: push the lookup position off the surface by about a shadow texel to avoid acne.
 	vec4 cascadeData = u_Cascades[cascade].Parameters; // x: world units per texel, y: depth range, z: search distance (world units)
 	mat4 cascadeViewProjection = u_Cascades[cascade].ViewProjection;
@@ -85,70 +111,137 @@ float SampleCascadeShadow(int cascade, vec3 relativePosition, vec3 normal, mat2 
 	vec3 lightPosition = lightClip.xyz / lightClip.w;
 	vec2 uv = NDCToUV(lightPosition.xy);
 	if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
-		return 1.0;
+		return result;
 	float depthRange = max(cascadeData.y, 1e-6);
 	float receiverDepth = lightPosition.z + u_Frame.ShadowBias.x * cascadeData.x / depthRange;
 
 	// The receiver plane correction is limited to the search distance, so planes nearly along the light (curved receivers'
 	// normals at their silhouettes) cannot move the comparison arbitrarily far.
-	vec2 depthGradient = ReceiverDepthGradient(cascadeViewProjection, normal);
-	float maxCorrection = cascadeData.z / depthRange;
-
 	float texelSize = u_Frame.ShadowParams.y;
+	vec2 texelPosition = uv / texelSize;
+	vec2 depthPerTexel = ReceiverDepthGradient(cascadeViewProjection, normal) * texelSize;
+	float slope = abs(depthPerTexel.x) + abs(depthPerTexel.y);
+	float maxCorrection = cascadeData.z / depthRange;
+	float worldPerTexel = max(cascadeData.x, 1e-6);
 
-	// Blocker search over the region that could shade this receiver: the penumbra of blockers up to the search
-	// distance away.
-	float lightSizeUV = u_Frame.ShadowParams.x / max(cascadeData.x, 1e-6) * texelSize; // Penumbra per world unit of separation
-	float searchRadius = clamp(lightSizeUV * cascadeData.z, texelSize, 32.0 * texelSize);
-	float separationSum = 0.0;
-	float blockerCount = 0.0;
-	for (int index = 0; index < 16; index++)
+	// The search region: the half-width of the penumbra of a blocker at the search distance, at least the tent's support, and
+	// a texel more for the bilinear footprints. Its cells come from the coarsest level that keeps it within 5 x 5 of them.
+	float searchTexels = min(u_Frame.ShadowParams.x * cascadeData.z / worldPerTexel, c_MaxShadowSearchTexels);
+	float regionTexels = max(searchTexels, 1.5) + 1.0;
+	int level = regionTexels <= 8.0 ? 0 : (regionTexels <= 16.0 ? 1 : 2);
+	float cellSize = float(4 << level);
+	ivec2 lastLevelCell = textureSize(u_ShadowRanges, level).xy - 1;
+	ivec2 firstCell = clamp(ivec2(floor((texelPosition - regionTexels) / cellSize)), ivec2(0), lastLevelCell);
+	ivec2 lastCell = clamp(ivec2(floor((texelPosition + regionTexels) / cellSize)), ivec2(0), lastLevelCell);
+
+	// Every comparison below reads texels inside these cells against a reference within receiverDepth +- spread, and the
+	// ranges are rounded outward: a region whose nearest depth is at most the lowest reference is lit, one whose farthest is
+	// beyond the highest is in umbra, exactly. A caster of any thinness inside raises the nearest depth: never missed.
+	float spread = min(slope * regionTexels, maxCorrection);
+	float cellSpread = min(slope * cellSize * 0.5, maxCorrection);
+	float nearest = 0.0;
+	float farthest = 1.0;
+	float blockerSum = 0.0;
+	float blockerWeight = 0.0;
+	for (int cellY = firstCell.y; cellY <= lastCell.y; cellY++)
 	{
-		vec2 offset = rotation * c_PoissonDisk[index] * searchRadius;
-		float reference = receiverDepth + clamp(dot(depthGradient, offset), -maxCorrection, maxCorrection);
-		float depth = textureLod(sampler2DArray(u_ShadowMap, u_ShadowPointSampler), vec3(uv + offset, float(cascade)), 0.0).r;
-		if (depth > reference)
+		for (int cellX = firstCell.x; cellX <= lastCell.x; cellX++)
 		{
-			separationSum += depth - reference;
-			blockerCount += 1.0;
+			vec2 range = UnpackShadowRange(texelFetch(u_ShadowRanges, ivec3(cellX, cellY, cascade), level).r);
+			nearest = max(nearest, range.x);
+			farthest = min(farthest, range.y);
+			// A cell blocks where its nearest depth is nearer than the receiver plane anywhere over it; its weight is its overlap
+			// with the search square, which changes continuously as the receiver moves (no jumps as cells enter the region).
+			vec2 cellMin = vec2(cellX, cellY) * cellSize;
+			float cellReference = receiverDepth + clamp(dot(depthPerTexel, cellMin + 0.5 * cellSize - texelPosition), -maxCorrection, maxCorrection) + cellSpread;
+			if (range.x > cellReference)
+			{
+				vec2 overlap = clamp(min(cellMin + cellSize, texelPosition + searchTexels) - max(cellMin, texelPosition - searchTexels), 0.0, cellSize) / cellSize;
+				float weight = overlap.x * overlap.y;
+				blockerSum += weight * (range.x - cellReference);
+				blockerWeight += weight;
+			}
 		}
 	}
-	if (blockerCount == 0.0)
-		return 1.0;
-
-	// Penumbra grows with the distance between blocker and receiver (depth is linear in an orthographic projection).
-	float separation = separationSum / blockerCount * depthRange;
-	float filterRadius = clamp(separation * lightSizeUV, texelSize, 32.0 * texelSize);
-
-	// The comparison sampler tests reference < stored: true where a blocker is closer to the light (reversed-Z).
-	float shadowed = 0.0;
-	for (int index = 0; index < 16; index++)
+	if (nearest <= receiverDepth - spread)
+		return result; // Lit
+	if (farthest > receiverDepth + spread)
 	{
-		vec2 offset = rotation * c_PoissonDisk[index] * filterRadius;
-		float reference = receiverDepth + clamp(dot(depthGradient, offset), -maxCorrection, maxCorrection);
-		shadowed += texture(sampler2DArrayShadow(u_ShadowMap, u_ShadowCompareSampler), vec4(uv + offset, float(cascade), reference));
+		result.Visibility = 0.0; // Umbra
+		return result;
 	}
-	return 1.0 - shadowed / 16.0;
+
+	// The penumbra's half-width from the blockers' mean distance (biased toward wider by at most a cell's depth spread):
+	// a straight edge under a disk of angular radius a falls from lit to shadow over 2 s tan(a), which filtering with a disk
+	// of radius s tan(a) reproduces. No blocker weight (a softness of 0, or blockers only beside the search square): none.
+	float penumbraTexels = 0.0;
+	if (blockerWeight > 0.0)
+	{
+		float separation = blockerSum / blockerWeight * depthRange;
+		penumbraTexels = min(separation * u_Frame.ShadowParams.x / worldPerTexel, searchTexels);
+	}
+
+	// The least filter: four bilinear comparisons at (+-0.5, +-0.5) texels, a separable trapezoid of +-1.5 texels (flat over
+	// +-0.5), the same at every pixel: edges narrower than a texel are smooth and never dithered.
+	float tent = 0.0;
+	for (int tap = 0; tap < 4; tap++)
+	{
+		vec2 offset = vec2((tap & 1) == 0 ? -0.5 : 0.5, (tap & 2) == 0 ? -0.5 : 0.5);
+		float reference = receiverDepth + clamp(dot(depthPerTexel, offset), -maxCorrection, maxCorrection);
+		tent += 0.25 * CompareShadowMap(cascade, uv + offset * texelSize, reference);
+	}
+	float shadowed = tent;
+
+	// Wider penumbrae: a Vogel disk (taps at radii sqrt((i + 0.5) / N), turned by the golden angle) turned per pixel by the
+	// blue-noise tile, faded in from 1 to 2 texels of radius so the result stays continuous.
+	float diskWeight = clamp(penumbraTexels - 1.0, 0.0, 1.0);
+	if (diskWeight > 0.0)
+	{
+		int taps = max(int(u_Frame.ShadowBias.z), 1);
+		float turn = TWO_PI * BlueNoise(pixel, ivec2(0));
+		vec2 direction = vec2(cos(turn), sin(turn));
+		const mat2 golden = mat2(cos(c_GoldenAngle), sin(c_GoldenAngle), -sin(c_GoldenAngle), cos(c_GoldenAngle));
+		float disk = 0.0;
+		for (int tap = 0; tap < taps; tap++)
+		{
+			vec2 offset = penumbraTexels * sqrt((float(tap) + 0.5) / float(taps)) * direction;
+			float reference = receiverDepth + clamp(dot(depthPerTexel, offset), -maxCorrection, maxCorrection);
+			disk += CompareShadowMap(cascade, uv + offset * texelSize, reference);
+			direction = golden * direction;
+		}
+		shadowed = mix(tent, disk / float(taps), diskWeight);
+	}
+	result.Visibility = 1.0 - shadowed;
+	result.PenumbraTexels = penumbraTexels;
+	result.DiskWeight = diskWeight;
+	return result;
 }
 
-// Fraction of light reaching the surface (1 = fully lit); `normal` is the receiver's geometric normal (facing the viewer).
-// Pixels in a cascade's blend band mix it with the next cascade by depth (the last cascade with no shadow), so neither the
-// seam between cascades nor the end of the shadows at the shadow distance shows.
-float SampleDirectionalShadow(vec3 relativePosition, vec3 normal, float viewDepth, vec2 pixel)
+// The sun's shadow at a camera-relative position with its geometric normal (facing the viewer) and view depth: the
+// cascade's sample, mixed with the next cascade's (the last cascade's with no shadow) in its blend band, so neither the seam
+// between cascades nor the end of the shadows at the shadow distance shows. PenumbraTexels and DiskWeight are mixed alike.
+ShadowSample EvaluateDirectionalShadow(vec3 relativePosition, vec3 normal, float viewDepth, ivec2 pixel)
 {
 	int cascade = SelectCascade(viewDepth);
 	if (cascade < 0)
-		return 1.0;
-
-	mat2 rotation = ShadowSampleRotation(pixel);
-	float shadow = SampleCascadeShadow(cascade, relativePosition, normal, rotation);
+		return ShadowSample(1.0, 0.0, 0.0, -1);
+	ShadowSample shadow = SampleCascadeShadow(cascade, relativePosition, normal, pixel);
 	float blend = CascadeBlendWeight(cascade, viewDepth);
 	if (blend > 0.0)
 	{
-		float next = cascade + 1 < int(u_Frame.ShadowParams.w) ? SampleCascadeShadow(cascade + 1, relativePosition, normal, rotation) : 1.0;
-		shadow = mix(shadow, next, blend);
+		ShadowSample next = cascade + 1 < int(u_Frame.ShadowParams.w) ? SampleCascadeShadow(cascade + 1, relativePosition, normal, pixel)
+			: ShadowSample(1.0, 0.0, 0.0, cascade);
+		shadow.Visibility = mix(shadow.Visibility, next.Visibility, blend);
+		shadow.PenumbraTexels = mix(shadow.PenumbraTexels, next.PenumbraTexels, blend);
+		shadow.DiskWeight = mix(shadow.DiskWeight, next.DiskWeight, blend);
 	}
 	return shadow;
+}
+
+// Fraction of light reaching the surface (1 = fully lit); `normal` is the receiver's geometric normal (facing the viewer).
+float SampleDirectionalShadow(vec3 relativePosition, vec3 normal, float viewDepth, vec2 pixel)
+{
+	return EvaluateDirectionalShadow(relativePosition, normal, viewDepth, ivec2(pixel)).Visibility;
 }
 
 #endif

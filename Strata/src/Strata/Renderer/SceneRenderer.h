@@ -690,6 +690,8 @@ namespace Strata
 		// The sun's shadow cascades' depth array (Quality.ShadowCascades layers): null until a frame draws a shadowed sun, and
 		// again once the cascades were released (a zero viewport releases them with the render targets).
 		nvrhi::ITexture* GetShadowMap() const { return m_ShadowMap; }
+		// The cascades' depth ranges (Include/Shadows.glsl, Scene/ShadowRanges.comp): made and released with the shadow map.
+		nvrhi::ITexture* GetShadowRanges() const { return m_ShadowRanges; }
 		// Frames over which a light's shadow fades in once all its views are drawn (SceneRendererSpecification::
 		// SpreadLightingUpdates).
 		static constexpr uint32_t c_LocalShadowFadeFrames = 8;
@@ -1367,6 +1369,12 @@ namespace Strata
 		template<typename T>
 		uint64_t UploadChangedRange(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, std::vector<T>& list, std::vector<T>& uploaded, bool full);
 
+		// The cascades' depth ranges for a new shadow map of `size` texels and `layers` layers (m_ShadowRanges, its binding
+		// sets); false when they cannot be made (nothing is kept then).
+		bool CreateShadowRanges(nvrhi::ITexture* shadowMap, uint32_t size, uint32_t layers);
+		// Builds the depth ranges of the cascade layers in `layerMask` from the shadow map (Scene/ShadowRanges.comp), right
+		// after they were drawn.
+		void BuildShadowRanges(nvrhi::ICommandList* commandList, uint32_t layerMask);
 		// Makes the cascades' depth array (Quality.ShadowCascades layers of m_ShadowMapSize) and their framebuffers once.
 		bool EnsureShadowMap();
 		// Releases the cascades' depth array with what references it (framebuffers, depth pyramids and their sets, the cached
@@ -1609,6 +1617,16 @@ namespace Strata
 		uint32_t m_ShadowMapLayers = 0;        // Its layers (the cascades it was made for)
 		nvrhi::TextureHandle m_DummyShadowMap; // Bound while no shadows are rendered
 		nvrhi::ITexture* m_BoundShadowMap = nullptr;
+		// The cascades' depth ranges (R32_UINT, a layer per cascade, RenderData::c_ShadowRangeLevels levels; made and released
+		// with the shadow map, built for the layers a frame draws: they belong to the cascade cache), a binding set per level,
+		// the pipelines that build them, and what the scene binding sets name (a dummy without shadows).
+		nvrhi::TextureHandle m_ShadowRanges;
+		std::vector<nvrhi::BindingSetHandle> m_ShadowRangeSets;
+		nvrhi::BindingLayoutHandle m_ShadowRangeLayout;
+		nvrhi::ComputePipelineHandle m_ShadowRangePipeline;
+		nvrhi::ComputePipelineHandle m_ShadowRangeDownsamplePipeline;
+		nvrhi::TextureHandle m_DummyShadowRanges;
+		nvrhi::ITexture* m_BoundShadowRanges = nullptr;
 		std::vector<nvrhi::FramebufferHandle> m_ShadowFramebuffers;
 		nvrhi::BufferHandle m_ShadowDrawListBuffer; // Instance indices of the shadow draws
 		nvrhi::BindingSetHandle m_ShadowBindingSet; // Scene bindings with the shadow draw list

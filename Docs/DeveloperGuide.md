@@ -3115,11 +3115,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `LocalShadowMaxTile` | 512 | 1024 | 1024 | 2048 |
 | `MaxShadowedLocalLights` | 4 | 16 | 16 | 16 |
 | `LODErrorPixels` / `MinProjectedPixels` | 2 / 1 | 1 / 0.5 | 1 / 0.5 | 0.5 / 0.25 |
+| `ShadowFilterQuality` (taps of the sun's wide penumbrae) | 8 | 16 | 24 | 32 |
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
-  High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows (`Renderer.Quality` checks it).
+  High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost per pixel
+  (`ShadowFilterQuality`; `Renderer.Quality` checks it).
   Custom is the section's fields (High's values by default). `RendererQuality::Clamp` keeps every knob in its range.
 - **Auto by rows:** `RendererQuality::ResolveShadowMapSize` resolves Auto and AutoFine for the renderer's viewport rows
   (its output: the Scene and Game views' panel pixels, the window's back buffer, a capture's image), limited to
@@ -3498,8 +3500,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
 - Shadows: cascade depth ranges are fitted to the casters toward the light (casters beyond
   `c_MaxShadowCasterDistance` are pancaked onto the near plane), on the GPU on both paths (`Scene/CascadeFit.comp` writes
   `u_Cascades`, which the shadow and forward shaders read: never put cascade projections back into `FrameConstants`; the
-  CPU path hands it the nearest casters it found, the GPU-driven path's culling finds them the same frame); acne is handled by the rasterizer
-  depth bias, the light's depth and normal offsets and a receiver plane depth bias in the PCSS filter. A caster is
+  CPU path hands it the nearest casters it found, the GPU-driven path's culling finds them the same frame); the filter,
+  its depth ranges and its biases: "Sun shadows". A caster is
   drawn into a cascade only while its light-space extent (the larger of x and y) covers at least `c_MinCasterTexels`
   (1) of the cascade's texels (`SceneRendererStats::SubTexelCasters` counts those left out, per cascade): smaller ones
   only flicker in and out of texels. `FindShadowCasters` queries the cascades as one job each and tests the candidates
@@ -3510,7 +3512,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   cascade by depth, and the last cascade's with no shadow, so no seam shows between cascades and shadows fade out by the
   shadow distance instead of stopping. `FindShadowCasters` starts each next slice at the previous band before fitting
   its sphere, so the next square covers the band; the CPU's caster test, the GPU's `CullConstants::CascadeBoxes`, the
-  fit and the cascade cache's keys all read those boxes. Its cost: a second PCSS evaluation in the bands' pixels, and
+  fit and the cascade cache's keys all read those boxes. Its cost: a second filter evaluation in the bands' pixels, and
   slightly larger squares (lower texel density, more casters) for cascades 1 to 3. 0 switches cascades at once, as 0.5.0
   did (`GPU.SceneRenderer.Shadows`: the seam, the bands' coverage at 0.5, the fade).
 - HDR targets are RGBA16F: shaders writing them clamp with `SanitizeHDR` (Inf and NaN would turn
@@ -3527,6 +3529,39 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Sun shadows
 
+- **The filter** (`Include/Shadows.glsl`, `SampleCascadeShadow`) is percentage-closer soft shadows at the physical width:
+  a blocker at separation `s` under a disk of angular radius `a` (half the light's `ShadowSoftness`; the sun is 0.53
+  degrees across, the component's default) lights a straight edge from none to full over `2 s tan(a)`, which filtering
+  with a disk of radius `s tan(a)` reproduces (`ShadowParams.x` is `tan(a)`; its 10-90% width is `1.374 s tan(a)`, 2.5 cm
+  at 4 m). Per pixel, in its cascade: the normal offset and receiver plane bias as before; the **search region** (the
+  half-width of the penumbra of a blocker at the cascade's search distance, `Parameters.z`, at most 31 texels, at least
+  the tent's 1.5, plus a texel) read as at most 5 x 5 cells of the cascade's **depth ranges**; a region whose nearest
+  depth is no nearer than the lowest reference any tap compares with is **lit**, one whose farthest is nearer than the
+  highest is in **umbra**, both exactly (the ranges are rounded outward and every tap reads inside the region), and a
+  caster of any thinness raises the nearest depth, so the search never misses one. Otherwise the cells nearer than the
+  receiver plane over them give the blockers' mean separation (weighted by their overlap with the search square, so the
+  estimate is continuous as the receiver moves; no blocking cell: no penumbra), the **tent** (four bilinear comparisons
+  at +-0.5 texels: a trapezoid of +-1.5 texels, the same at every pixel) filters every edge, and where the penumbra's
+  radius exceeds a texel a **Vogel disk** of `RendererQualitySettings::ShadowFilterQuality` taps (8, 16, 24, 32;
+  `ShadowBias.z`), turned per pixel by the renderer's fixed 64x64 blue-noise tile (`Renderer::GetBlueNoiseTexture`,
+  `RenderData::c_BlueNoise`, made by `Tools/GenerateBlueNoise.py`: void and cluster, every byte 16 times), takes over
+  between 1 and 2 texels of radius. Nothing reads `TemporalParams.z` or a frame counter: a still view is the same image
+  in every frame with and without TAA (`GPU.SceneRenderer.ShadowFilter`). Lit ground under a sun below about 70 degrees
+  spans its own cells' ranges, so it takes the tent (4 taps) rather than leaving early; umbrae and ground facing the sun
+  leave after the range reads.
+- **The depth ranges** (`SceneRenderer::GetShadowRanges`): an R32_UINT array of a layer per cascade and three levels of
+  cells of 4, 8 and 16 texels, each `(ceil(nearest * 65535) << 16) | floor(farthest * 65535)` (reversed-Z: nearest is the
+  largest), rounded outward. `Scene/ShadowRanges.comp` builds level 0 from the shadow map and its `Downsample` variant
+  the others, in `GPU.Shadows` right after the layers are drawn: every layer on the CPU path, the drawn ones on the
+  GPU-driven path (`LayerMask`), so a kept layer keeps its ranges: they belong to the cascade cache, made and released
+  with the shadow map (`CreateShadowRanges` in `EnsureShadowMap`, `ReleaseShadowMap`; a failure fails the map). Scene
+  slots: SRV 32 the ranges, 33 the blue-noise tile (the shadow pass's sets bind a dummy at 32). The filter changes how
+  shadows are read, not how casters are drawn: no cache key changed.
+- **Biases** stay as they were: the rasterizer's slope bias, the light's 1-texel depth bias and 1.5-texel normal offset
+  (texel-relative, so they follow the resolution) and the receiver plane bias; `GPU.SceneRenderer.Shadows` checks for
+  acne at 1024, 2048 and 4096 texels with and without the light's biases, and `ShadowFilter` that contacts recede at
+  most 2.5 texels.
+- **Transparent surfaces** call the same `SampleDirectionalShadow`.
 - **The shadows debug view** (`SceneRenderOptions::ShowShadowView`; the editor's `debugView: "shadows"`) measures how fine
   the sun's cascades are where the receivers are. Its metric is screen pixels per shadow texel: for each pixel the scene
   drew, its camera-relative position is reconstructed from the depth through `InverseViewProjection`, its view distance
@@ -3591,7 +3626,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   pancaking) from `RenderData::LocalShadowData` (scene set SRV 13, a slot per light: six camera-relative matrices, the
   tiles, the biases and the light's strength); a redrawn tile is first cleared by a quad at depth 0, since a clear would
   also clear the cached tiles. The forward passes sample the atlas (SRV 8; the shadow passes bind a dummy) through the
-  cascades' comparison sampler, 16 rotated taps kept inside the tile, for lights whose `LightData::SpotAngles.z` names their
+  cascades' comparison sampler, 16 taps kept inside the tile (`c_LocalShadowPoissonDisk`, turned per pixel by
+  `LocalShadowSampleRotation`, which still turns with the TAA frame: the sun's filter no longer does), for lights whose
+  `LightData::SpotAngles.z` names their
   slot plus one: the CPU path writes it with the frame's lights, `Scene/LightCompact.comp` from the renderer's slot table per
   light record (light-culling SRV 21). The depth bias moves the lookup toward the light and the normal bias off the surface,
   both in texels at the surface's depth.

@@ -29,6 +29,7 @@ namespace
 	constexpr std::array<uint32_t, 4> c_MaxShadowedLocalLights = { 4, 16, 16, 16 };
 	constexpr std::array<float, 4> c_LODErrorPixels = { 2.0f, 1.0f, 1.0f, 0.5f };
 	constexpr std::array<float, 4> c_MinProjectedPixels = { 1.0f, 0.5f, 0.5f, 0.25f };
+	constexpr std::array<uint32_t, 4> c_ShadowFilterQuality = { 8, 16, 24, 32 };
 
 	void CheckColumn(const RendererQualitySettings& settings, size_t column)
 	{
@@ -40,6 +41,7 @@ namespace
 		CHECK(settings.MaxShadowedLocalLights == c_MaxShadowedLocalLights[column]);
 		CHECK(settings.LODErrorPixels == c_LODErrorPixels[column]);
 		CHECK(settings.MinProjectedPixels == c_MinProjectedPixels[column]);
+		CHECK(settings.ShadowFilterQuality == c_ShadowFilterQuality[column]);
 	}
 
 	constexpr RendererQualityPreset c_Presets[] = { RendererQualityPreset::Low, RendererQualityPreset::Medium, RendererQualityPreset::High,
@@ -137,7 +139,7 @@ TEST_SUITE("Renderer.Quality")
 		}
 	}
 
-	TEST_CASE("High is Medium below 1440 rows")
+	TEST_CASE("High is Medium below 1440 rows but for the sun shadows' filter")
 	{
 		const RendererQualitySettings high = RendererQuality::GetPreset(RendererQualityPreset::High);
 		const RendererQualitySettings medium = RendererQuality::GetPreset(RendererQualityPreset::Medium);
@@ -147,6 +149,9 @@ TEST_SUITE("Renderer.Quality")
 			CHECK(RendererQuality::ResolveShadowMapSize(high.ShadowResolution, rows) == RendererQuality::ResolveShadowMapSize(medium.ShadowResolution, rows));
 			RendererQualitySettings resolved = high;
 			resolved.ShadowResolution = medium.ShadowResolution;
+			// High's wide penumbrae take more taps at every size (the rows streams add that differ below 1440 rows).
+			CHECK(resolved.ShadowFilterQuality == 24);
+			resolved.ShadowFilterQuality = medium.ShadowFilterQuality;
 			CHECK(resolved.HasSameKnobs(medium));
 		}
 		CHECK(RendererQuality::ResolveShadowMapSize(high.ShadowResolution, 1440) != RendererQuality::ResolveShadowMapSize(medium.ShadowResolution, 1440));
@@ -183,6 +188,8 @@ TEST_SUITE("Renderer.Quality")
 		refused({ { "LocalShadowMaxTile", "4096" } });
 		refused({ { "LODErrorPixels", -1.0 } });
 		refused({ { "LODErrorPixels", 9.0 } });
+		refused({ { "ShadowFilterQuality", "12" } });
+		refused({ { "ShadowFilterQuality", 16 } });
 		refused({ { "Unknown", 1 } });
 
 		const nlohmann::json custom = { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LocalShadowAtlasSize", "2048" },
@@ -307,5 +314,15 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(clamped.LODErrorPixels == 8.0f);
 		CHECK(clamped.MinProjectedPixels == 0.5f);
 		CHECK(RendererQuality::Clamp(RendererQualitySettings {}) == RendererQualitySettings {});
+
+		// The shadow filter's taps: the next option at or above the value, at most 32.
+		for (const auto& [taps, expected] : { std::pair { 0u, 8u }, std::pair { 5u, 8u }, std::pair { 8u, 8u }, std::pair { 12u, 16u }, std::pair { 24u, 24u },
+				 std::pair { 25u, 32u }, std::pair { 40u, 32u } })
+		{
+			CAPTURE(taps);
+			RendererQualitySettings filter;
+			filter.ShadowFilterQuality = taps;
+			CHECK(RendererQuality::Clamp(filter).ShadowFilterQuality == expected);
+		}
 	}
 }

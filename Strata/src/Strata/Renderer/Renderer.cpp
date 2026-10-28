@@ -2,6 +2,7 @@
 #include "Strata/Renderer/Renderer.h"
 
 #include "Strata/Core/Profiling.h"
+#include "Strata/Renderer/BlueNoise.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureTable.h"
@@ -41,6 +42,7 @@ namespace Strata
 			nvrhi::TextureHandle FlatNormalTexture;
 			nvrhi::TextureHandle BlackCubeTexture;
 			nvrhi::TextureHandle BlackCubeArrayTexture;
+			nvrhi::TextureHandle BlueNoiseTexture;
 		};
 
 		Scope<RendererData> s_Data;
@@ -96,12 +98,25 @@ namespace Strata
 		s_Data->FlatNormalTexture = CreateSolidTexture(commandList, 0xFFFF8080u, "FlatNormalTexture"); // (0.5, 0.5, 1.0)
 		s_Data->BlackCubeTexture = CreateSolidTexture(commandList, 0xFF000000u, "BlackCubeTexture", nvrhi::TextureDimension::TextureCube);
 		s_Data->BlackCubeArrayTexture = CreateSolidTexture(commandList, 0xFF000000u, "BlackCubeArrayTexture", nvrhi::TextureDimension::TextureCubeArray);
+		{
+			nvrhi::TextureDesc desc;
+			desc.width = RenderData::c_BlueNoiseSize;
+			desc.height = RenderData::c_BlueNoiseSize;
+			desc.format = nvrhi::Format::R8_UNORM;
+			desc.debugName = "BlueNoise";
+			desc.initialState = nvrhi::ResourceStates::ShaderResource;
+			desc.keepInitialState = true;
+			s_Data->BlueNoiseTexture = nvrhiDevice->createTexture(desc);
+			if (s_Data->BlueNoiseTexture)
+				commandList->writeTexture(s_Data->BlueNoiseTexture, 0, 0, RenderData::c_BlueNoise, RenderData::c_BlueNoiseSize);
+		}
 		commandList->close();
 		nvrhiDevice->executeCommandList(commandList);
 
 		s_Data->FrameCommandList = nvrhiDevice->createCommandList();
 		if (!s_Data->LinearClamp || !s_Data->LinearWrap || !s_Data->AnisotropicWrap || !s_Data->PointClamp || !s_Data->WhiteTexture
-			|| !s_Data->BlackTexture || !s_Data->FlatNormalTexture || !s_Data->BlackCubeTexture || !s_Data->BlackCubeArrayTexture || !s_Data->FrameCommandList)
+			|| !s_Data->BlackTexture || !s_Data->FlatNormalTexture || !s_Data->BlackCubeTexture || !s_Data->BlackCubeArrayTexture || !s_Data->BlueNoiseTexture
+			|| !s_Data->FrameCommandList)
 		{
 			ST_CORE_ERROR("Renderer: failed to create shared GPU resources");
 			Shutdown();
@@ -282,6 +297,7 @@ namespace Strata
 	nvrhi::ISampler* Renderer::GetPointClampSampler() { return s_Data->PointClamp; }
 	nvrhi::ISampler* Renderer::GetAnisotropicWrapSampler() { return s_Data->AnisotropicWrap; }
 	nvrhi::ITexture* Renderer::GetWhiteTexture() { return s_Data->WhiteTexture; }
+	nvrhi::ITexture* Renderer::GetBlueNoiseTexture() { return s_Data->BlueNoiseTexture; }
 	nvrhi::ITexture* Renderer::GetBlackTexture() { return s_Data->BlackTexture; }
 	nvrhi::ITexture* Renderer::GetFlatNormalTexture() { return s_Data->FlatNormalTexture; }
 	nvrhi::ITexture* Renderer::GetBlackCubeTexture() { return s_Data->BlackCubeTexture; }

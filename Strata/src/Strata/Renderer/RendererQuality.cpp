@@ -38,6 +38,7 @@ namespace Strata
 		constexpr PresetRow<uint32_t> c_MaxShadowedLocalLightsRow = { 4, 16, 16, 16 };
 		constexpr PresetRow<float> c_LODErrorPixelsRow = { 2.0f, 1.0f, 1.0f, 0.5f };
 		constexpr PresetRow<float> c_MinProjectedPixelsRow = { 1.0f, 0.5f, 0.5f, 0.25f };
+		constexpr PresetRow<uint32_t> c_ShadowFilterQualityRow = { 8, 16, 24, 32 };
 
 		constexpr uint32_t c_MinLocalShadowAtlasSize = 512;
 		constexpr uint32_t c_MaxLocalShadowAtlasSize = 8192;
@@ -47,6 +48,8 @@ namespace Strata
 		// The sizes the section offers for the local shadows' atlas and its largest tile, stored as their names.
 		constexpr uint32_t c_AtlasSizeOptions[] = { 1024, 2048, 4096, 8192 };
 		constexpr uint32_t c_MaxTileOptions[] = { 256, 512, 1024, 2048 };
+		// The taps the sun's wide penumbrae may take (RendererQualitySettings::ShadowFilterQuality), stored as their names.
+		constexpr uint32_t c_ShadowFilterTapOptions[] = { 8, 16, 24, 32 };
 
 		struct PresetName
 		{
@@ -187,6 +190,7 @@ namespace Strata
 					settings.MaxShadowedLocalLights = c_MaxShadowedLocalLightsRow[index];
 					settings.LODErrorPixels = c_LODErrorPixelsRow[index];
 					settings.MinProjectedPixels = c_MinProjectedPixelsRow[index];
+					settings.ShadowFilterQuality = c_ShadowFilterQualityRow[index];
 				}
 				return presets;
 			}();
@@ -212,6 +216,10 @@ namespace Strata
 			clamped.MaxShadowedLocalLights = std::min(clamped.MaxShadowedLocalLights, RenderData::c_MaxShadowedLocalLights);
 			clamped.LODErrorPixels = ClampPixels(clamped.LODErrorPixels, medium.LODErrorPixels);
 			clamped.MinProjectedPixels = ClampPixels(clamped.MinProjectedPixels, medium.MinProjectedPixels);
+			// The next option at or above the value, at most the largest.
+			const auto taps = std::find_if(std::begin(c_ShadowFilterTapOptions), std::end(c_ShadowFilterTapOptions),
+				[&](uint32_t option) { return option >= clamped.ShadowFilterQuality; });
+			clamped.ShadowFilterQuality = taps != std::end(c_ShadowFilterTapOptions) ? *taps : c_ShadowFilterTapOptions[std::size(c_ShadowFilterTapOptions) - 1];
 			if (static_cast<uint8_t>(clamped.Preset) > static_cast<uint8_t>(RendererQualityPreset::Custom))
 				clamped.Preset = RendererQualityPreset::Custom;
 			return clamped;
@@ -316,6 +324,9 @@ namespace Strata
 				high.LODErrorPixels));
 			section.Fields.push_back(NumberField("MinProjectedPixels", "Smallest drawn size (pixels)", "Custom only: meshes smaller on screen than "
 				"this many pixels are not drawn (0: all).", SettingsFieldType::Float, 0.0, c_MaxPixels, high.MinProjectedPixels));
+			section.Fields.push_back(EnumField("ShadowFilterQuality", "Shadow filter quality", "Custom only: taps of the sun's shadow edges where "
+				"they are wider than a shadow texel; more taps, less grain before the screen-space blur (8 Low, 16 Medium, 24 High, 32 Ultra).",
+				SizeOptions(c_ShadowFilterTapOptions), std::to_string(high.ShadowFilterQuality)));
 			return section;
 		}
 
@@ -341,6 +352,7 @@ namespace Strata
 				ReadField(*value, "MaxShadowedLocalLights", settings.MaxShadowedLocalLights);
 				ReadField(*value, "LODErrorPixels", settings.LODErrorPixels);
 				ReadField(*value, "MinProjectedPixels", settings.MinProjectedPixels);
+				ReadField(*value, "ShadowFilterQuality", settings.ShadowFilterQuality);
 			}
 			// Knobs read under every preset (players' comfort rows) follow here, one line each.
 			return Clamp(settings);
@@ -356,7 +368,8 @@ namespace Strata
 				{ "LocalShadowMaxTile", std::to_string(settings.LocalShadowMaxTile) },
 				{ "MaxShadowedLocalLights", settings.MaxShadowedLocalLights },
 				{ "LODErrorPixels", settings.LODErrorPixels },
-				{ "MinProjectedPixels", settings.MinProjectedPixels }
+				{ "MinProjectedPixels", settings.MinProjectedPixels },
+				{ "ShadowFilterQuality", std::to_string(settings.ShadowFilterQuality) }
 			};
 		}
 

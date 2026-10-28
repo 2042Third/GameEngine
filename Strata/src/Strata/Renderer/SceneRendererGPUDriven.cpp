@@ -1380,6 +1380,8 @@ namespace Strata
 			RunShadowOcclusionPhase(commandList);
 			DrawGPUShadowBuckets(commandList, constants.SecondPhaseShadowBuckets, constants.FirstLocalBucket);
 		}
+		// The drawn layers' depth ranges; the kept ones keep theirs (they belong to the cascade cache).
+		BuildShadowRanges(commandList, allCascades & ~cached);
 	}
 
 	void SceneRenderer::DrawGPUShadowBuckets(nvrhi::ICommandList* commandList, uint32_t firstDense, uint32_t endDense)

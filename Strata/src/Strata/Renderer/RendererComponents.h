@@ -24,7 +24,7 @@ namespace Strata
 		float Intensity = 3.0f; // Illuminance in lux on a surface facing the light, times Color
 		bool CastShadows = true;
 		float ShadowDistance = 80.0f;   // Shadows are rendered up to this distance from the camera
-		float ShadowSoftness = 1.0f;    // Angular diameter of the light in degrees (the sun is about 0.5): penumbra size
+		float ShadowSoftness = 0.53f;   // Angular diameter of the light in degrees (the sun: 0.53, the default): penumbra size
 		float ShadowBias = 1.0f;        // Depth offset toward the light, in shadow map texels
 		float ShadowNormalBias = 1.5f;  // Offset along the surface normal, in shadow map texels
 		// Fraction of each shadow cascade's depth range, before its far end, over which it blends into the next cascade (the

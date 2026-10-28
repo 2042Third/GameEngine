@@ -181,6 +181,8 @@ TEST_SUITE("Reflection")
 		CHECK(DirectionalLightComponent::c_MaxCascadeBlend == 0.5f);
 		DirectionalLightComponent sun;
 		CHECK(sun.CascadeBlend == doctest::Approx(0.1f));
+		// The sun's angular diameter by default (degrees).
+		CHECK(sun.ShadowSoftness == doctest::Approx(0.53f));
 		CHECK(blend->IsInRange(PropertyValue(0.0f)));
 		CHECK(blend->IsInRange(PropertyValue(0.5f)));
 		CHECK_FALSE(blend->IsInRange(PropertyValue(0.6f)));

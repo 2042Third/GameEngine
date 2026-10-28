@@ -1394,3 +1394,8 @@ name). Differences found while building:
   takes the acceptance's statistics.
 - `graphics-options`' `c_RowTraits` is not on main yet: the rows' trait lines are added when that stream lands.
 - The worktree builds in its own `build/windows` (the stream brief), not `build/agent-sun-shadows`.
+- Step 2: the blue-noise tile uses a Gaussian of sigma 1.5, not 1.9 (at 1.9 an 8x8 block's mean strays up to 8.3 from
+  127.5, at 1.5 up to 4.6, 1.9 on average; `Renderer.BlueNoise` bounds the worst block at 6 and the mean at 2.5).
+  `ShadowFilterQuality` is an Enum field of "8", "16", "24" and "32" (the section refuses other values). The thin-caster
+  test's camera has a 40 degree field of view (at 60 the cascade's texels are 7.5 mm). The cascade seam test's check is
+  now the larger of the in-cascade step and a quarter pixel: the filter has no per-pixel noise any more.

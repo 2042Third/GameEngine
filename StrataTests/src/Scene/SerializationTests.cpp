@@ -498,6 +498,10 @@ TEST_SUITE("Scene.Serialization")
 			{ "ShadowNormalBias", 1.5 }, { "ShadowSoftness", 1 } }, warnings);
 		CHECK(warnings.empty());
 		CHECK(loaded.CascadeBlend == doctest::Approx(0.1f));
+		// Stored softness is kept (scenes store every property); a light stored without one has the sun's 0.53 degrees.
+		CHECK(loaded.ShadowSoftness == 1.0f);
+		CHECK(load(nlohmann::json::object(), warnings).ShadowSoftness == doctest::Approx(0.53f));
+		CHECK(warnings.empty());
 		loaded = load({ { "CascadeBlend", 0 } }, warnings);
 		CHECK(warnings.empty());
 		CHECK(loaded.CascadeBlend == 0.0f);

@@ -1756,8 +1756,8 @@ TEST_SUITE("GPU.Editor.Viewport")
 			CHECK(entry["texelSize"].get<float>() == doctest::Approx(frame.Cascades[cascade].WorldPerTexel));
 			shares += entry["screenShare"].get<double>();
 		}
-		CHECK(shares == doctest::Approx(1.0).epsilon(1e-3));
-		CHECK(stats["surfaceShare"].get<double>() + stats["skyShare"].get<double>() == doctest::Approx(1.0).epsilon(1e-6));
+		CHECK(std::abs(shares - 1.0) <= 1e-3);
+		CHECK(std::abs(stats["surfaceShare"].get<double>() + stats["skyShare"].get<double>() - 1.0) <= 1e-6);
 		CHECK(stats["medianPixelsPerTexel"].get<double>() > 0.0);
 		CHECK_FALSE(stats.contains("note"));
 

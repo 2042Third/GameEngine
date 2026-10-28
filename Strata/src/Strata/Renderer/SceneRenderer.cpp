@@ -350,6 +350,8 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(20),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(21),
 			nvrhi::BindingLayoutItem::Texture_SRV(27),          // The atmosphere's sky-view table (Include/Atmosphere.glsl)
+			nvrhi::BindingLayoutItem::Texture_SRV(32),          // The sun shadow cascades' depth ranges (Include/Shadows.glsl)
+			nvrhi::BindingLayoutItem::Texture_SRV(33),          // The blue-noise tile (Include/Shadows.glsl)
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -406,6 +408,15 @@ namespace Strata
 		dummyShadowDesc.initialState = nvrhi::ResourceStates::ShaderResource;
 		dummyShadowDesc.keepInitialState = true;
 		m_DummyShadowMap = m_Device->createTexture(dummyShadowDesc);
+		// The cascades' depth ranges while no shadows are rendered (never read then).
+		nvrhi::TextureDesc dummyRangesDesc;
+		dummyRangesDesc.arraySize = RenderData::c_MaxCascades;
+		dummyRangesDesc.dimension = nvrhi::TextureDimension::Texture2DArray;
+		dummyRangesDesc.format = nvrhi::Format::R32_UINT;
+		dummyRangesDesc.debugName = m_Specification.DebugName + ".NoShadowRanges";
+		dummyRangesDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+		dummyRangesDesc.keepInitialState = true;
+		m_DummyShadowRanges = m_Device->createTexture(dummyRangesDesc);
 		nvrhi::TextureDesc dummyAtlasDesc = dummyShadowDesc;
 		dummyAtlasDesc.arraySize = 1;
 		dummyAtlasDesc.dimension = nvrhi::TextureDimension::Texture2D;
@@ -524,7 +535,7 @@ namespace Strata
 		m_TemporalPipeline = CreateComputePipeline("PostProcess/TAA.comp", m_TemporalBindingLayout);
 
 		ST_CORE_VERIFY(m_InputLayout && m_SceneBindingLayout && m_FrameConstantBuffer && m_CommandList && m_ShadowPushBindingSet
-			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_DummyLocalShadowAtlas
+			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_DummyShadowRanges && m_DummyLocalShadowAtlas
 			&& m_LocalShadowBuffer && m_ReflectionProbeBuffer && m_ClusterBuffer
 			&& m_ClusterBindingLayout && m_ClusterPipeline
 			&& m_TemporalBindingLayout && m_TemporalPipeline, "SceneRenderer: failed to create GPU resources");
@@ -935,6 +946,7 @@ namespace Strata
 		nvrhi::ITexture* environmentCube = GetEnvironmentCube();
 		const bool hasEnvironment = environmentCube != nullptr;
 		nvrhi::ITexture* shadowMap = m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get();
+		nvrhi::ITexture* shadowRanges = m_ShadowRanges ? m_ShadowRanges.Get() : m_DummyShadowRanges.Get();
 		nvrhi::ITexture* localShadowAtlas = m_LocalShadowAtlas ? m_LocalShadowAtlas.Get() : m_DummyLocalShadowAtlas.Get();
 		// Without a motion history the scene's own buffers stand in (nothing reads them then).
 		nvrhi::IBuffer* previousInstances = m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer();
@@ -945,7 +957,7 @@ namespace Strata
 		nvrhi::ITexture* sceneColor = GetBoundSceneColor();
 
 		// The shadow pass reads the same resources except for its own draw list (and never the shadow maps it draws into).
-		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap, nvrhi::ITexture* boundAtlas)
+		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap, nvrhi::ITexture* boundRanges, nvrhi::ITexture* boundAtlas)
 		{
 			nvrhi::BindingSetDesc desc;
 			desc.bindings = {
@@ -960,6 +972,8 @@ namespace Strata
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(20, previousInstances),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(21, previousPalette),
 				nvrhi::BindingSetItem::Texture_SRV(27, skyView),
+				nvrhi::BindingSetItem::Texture_SRV(32, boundRanges),
+				nvrhi::BindingSetItem::Texture_SRV(33, Renderer::GetBlueNoiseTexture()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
@@ -981,12 +995,12 @@ namespace Strata
 				desc.bindings.push_back(nvrhi::BindingSetItem::Sampler(0, m_MaterialSamplers[index]).setArrayElement(index));
 			return m_Device->createBindingSet(desc, m_SceneBindingLayout);
 		};
-		m_SceneBindingSet = create(m_DrawListBuffer, shadowMap, localShadowAtlas);
-		m_ShadowBindingSet = create(m_ShadowDrawListBuffer, m_DummyShadowMap, m_DummyLocalShadowAtlas);
+		m_SceneBindingSet = create(m_DrawListBuffer, shadowMap, shadowRanges, localShadowAtlas);
+		m_ShadowBindingSet = create(m_ShadowDrawListBuffer, m_DummyShadowMap, m_DummyShadowRanges, m_DummyLocalShadowAtlas);
 		// The GPU-driven path's passes read the draw list its culling writes.
 		const bool gpuSets = m_GPUDrawListBuffer != nullptr;
-		m_GPUSceneBindingSet = gpuSets ? create(m_GPUDrawListBuffer, shadowMap, localShadowAtlas) : nullptr;
-		m_GPUShadowBindingSet = gpuSets ? create(m_GPUDrawListBuffer, m_DummyShadowMap, m_DummyLocalShadowAtlas) : nullptr;
+		m_GPUSceneBindingSet = gpuSets ? create(m_GPUDrawListBuffer, shadowMap, shadowRanges, localShadowAtlas) : nullptr;
+		m_GPUShadowBindingSet = gpuSets ? create(m_GPUDrawListBuffer, m_DummyShadowMap, m_DummyShadowRanges, m_DummyLocalShadowAtlas) : nullptr;
 
 		nvrhi::BindingSetDesc clusterSet;
 		clusterSet.bindings = {
@@ -1001,6 +1015,7 @@ namespace Strata
 		m_BoundIrradiance = GetIrradianceMap();
 		m_BoundPrefiltered = GetPrefilteredMap();
 		m_BoundShadowMap = shadowMap;
+		m_BoundShadowRanges = shadowRanges;
 		m_BoundLocalShadowAtlas = localShadowAtlas;
 		m_BoundSceneGPUVersion = m_SceneGPU->GetBufferVersion();
 		m_BoundTextureTableVersion = Renderer::GetTextureTable().GetBufferVersion();
@@ -1589,6 +1604,9 @@ namespace Strata
 			if (!framebuffers.back())
 				return false;
 		}
+		// The cascades' depth ranges, which the filter needs: without them, no shadows.
+		if (!CreateShadowRanges(shadowMap, desc.width, layers))
+			return false;
 		m_ShadowMap = shadowMap;
 		m_ShadowMapLayers = layers;
 		m_ShadowFramebuffers = std::move(framebuffers);
@@ -1596,6 +1614,84 @@ namespace Strata
 		if (!EnsureShadowPyramid())
 			ST_CORE_WARN("{}: the shadow cascades' depth pyramids could not be created; the cascades are not occlusion culled", m_Specification.DebugName);
 		return true;
+	}
+
+	bool SceneRenderer::CreateShadowRanges(nvrhi::ITexture* shadowMap, uint32_t size, uint32_t layers)
+	{
+		if (!m_ShadowRangePipeline)
+		{
+			nvrhi::BindingLayoutDesc layout;
+			layout.visibility = nvrhi::ShaderType::Compute;
+			layout.bindings = {
+				nvrhi::BindingLayoutItem::Texture_SRV(0),
+				nvrhi::BindingLayoutItem::Texture_UAV(0),
+				nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::ShadowRangeParameters))
+			};
+			m_ShadowRangeLayout = m_Device->createBindingLayout(layout);
+			ST_CORE_VERIFY(m_ShadowRangeLayout, "SceneRenderer: failed to create the shadow ranges' layout");
+			m_ShadowRangePipeline = CreateComputePipeline("Scene/ShadowRanges.comp", m_ShadowRangeLayout);
+			m_ShadowRangeDownsamplePipeline = CreateComputePipeline("Scene/ShadowRangesDownsample.comp", m_ShadowRangeLayout);
+			ST_CORE_VERIFY(m_ShadowRangePipeline && m_ShadowRangeDownsamplePipeline, "SceneRenderer: failed to create the shadow ranges' pipelines");
+		}
+		nvrhi::TextureDesc desc;
+		desc.width = std::max((size + RenderData::c_ShadowRangeCellTexels - 1) / RenderData::c_ShadowRangeCellTexels, 1u);
+		desc.height = desc.width;
+		desc.arraySize = layers;
+		desc.mipLevels = RenderData::c_ShadowRangeLevels;
+		desc.dimension = nvrhi::TextureDimension::Texture2DArray;
+		desc.format = nvrhi::Format::R32_UINT;
+		desc.isUAV = true;
+		desc.debugName = m_Specification.DebugName + ".ShadowRanges";
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		nvrhi::TextureHandle ranges = m_Device->createTexture(desc);
+		if (!ranges)
+			return false;
+		// A binding set per level, over every layer (a dispatch builds the level of each cascade): level 0 reads the shadow map.
+		std::vector<nvrhi::BindingSetHandle> sets;
+		for (uint32_t level = 0; level < RenderData::c_ShadowRangeLevels; level++)
+		{
+			nvrhi::BindingSetDesc set;
+			set.bindings = {
+				level == 0 ? nvrhi::BindingSetItem::Texture_SRV(0, shadowMap, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, layers))
+					: nvrhi::BindingSetItem::Texture_SRV(0, ranges, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(level - 1, 1, 0, layers)),
+				nvrhi::BindingSetItem::Texture_UAV(0, ranges, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(level, 1, 0, layers)),
+				nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::ShadowRangeParameters))
+			};
+			sets.push_back(m_Device->createBindingSet(set, m_ShadowRangeLayout));
+			if (!sets.back())
+				return false;
+		}
+		m_ShadowRanges = std::move(ranges);
+		m_ShadowRangeSets = std::move(sets);
+		return true;
+	}
+
+	void SceneRenderer::BuildShadowRanges(nvrhi::ICommandList* commandList, uint32_t layerMask)
+	{
+		if (layerMask == 0)
+			return;
+		commandList->beginMarker("ShadowRanges");
+		// Level by level, every layer of the mask in one dispatch; NVRHI places the barriers between the levels (each reads the
+		// one below through its own binding set).
+		glm::uvec2 source(m_ShadowMapSize);
+		glm::uvec2 destination(std::max((m_ShadowMapSize + RenderData::c_ShadowRangeCellTexels - 1) / RenderData::c_ShadowRangeCellTexels, 1u));
+		for (uint32_t level = 0; level < RenderData::c_ShadowRangeLevels; level++)
+		{
+			nvrhi::ComputeState state;
+			state.pipeline = level == 0 ? m_ShadowRangePipeline : m_ShadowRangeDownsamplePipeline;
+			state.bindings = { m_ShadowRangeSets[level] };
+			commandList->setComputeState(state);
+			RenderData::ShadowRangeParameters parameters = {};
+			parameters.SourceSize = source;
+			parameters.DestinationSize = destination;
+			parameters.LayerMask = layerMask;
+			commandList->setPushConstants(&parameters, sizeof(parameters));
+			commandList->dispatch((destination.x + 7) / 8, (destination.y + 7) / 8, m_CascadeCount);
+			source = destination;
+			destination = glm::max((destination + 1u) / 2u, glm::uvec2(1));
+		}
+		commandList->endMarker();
 	}
 
 	void SceneRenderer::ReleaseShadowMap()
@@ -1611,6 +1707,10 @@ namespace Strata
 		for (nvrhi::FramebufferHandle& framebuffer : m_ShadowFramebuffers)
 			release(framebuffer);
 		m_ShadowFramebuffers.clear();
+		release(m_ShadowRanges);
+		for (nvrhi::BindingSetHandle& set : m_ShadowRangeSets)
+			release(set);
+		m_ShadowRangeSets.clear();
 		m_ShadowMapLayers = 0;
 		release(m_ShadowPyramid);
 		for (nvrhi::BindingSetHandle& set : m_ShadowPyramidSets)
@@ -1624,6 +1724,7 @@ namespace Strata
 		// The scene's binding sets, which read the cascades, are made again by the next frame's comparison, even when a new
 		// texture gets the released one's address.
 		m_BoundShadowMap = nullptr;
+		m_BoundShadowRanges = nullptr;
 		// The cascades' occlusion culling starts again: its history named the released layers.
 		m_ShadowOcclusionPays = true;
 		m_ShadowOcclusionRender = 0;
@@ -2814,6 +2915,7 @@ namespace Strata
 		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
+			|| m_BoundShadowRanges != (m_ShadowRanges ? m_ShadowRanges.Get() : m_DummyShadowRanges.Get())
 			|| m_BoundLocalShadowAtlas != (m_LocalShadowAtlas ? m_LocalShadowAtlas.Get() : m_DummyLocalShadowAtlas.Get())
 			|| m_BoundSceneGPUVersion != m_SceneGPU->GetBufferVersion()
 			|| m_BoundPreviousInstances != (m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer())
@@ -2940,6 +3042,7 @@ namespace Strata
 				{
 					m_ShadowCacheValid = 0; // The CPU path redraws every layer
 					DrawShadows(commandList, static_cast<uint32_t>(frame.ShadowParams.w));
+					BuildShadowRanges(commandList, (1u << m_CascadeCount) - 1u);
 				}
 			}
 			if (!m_LocalShadowViews.empty())

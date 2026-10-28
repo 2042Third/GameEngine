@@ -1175,8 +1175,9 @@ namespace Strata
 		}
 		const float mapSize = static_cast<float>(m_ShadowMapSize);
 		const float halfAngle = glm::radians(std::clamp(m_ShadowLight.Softness, 0.0f, 10.0f)) * 0.5f;
-		frame.ShadowParams = glm::vec4(2.0f * std::tan(halfAngle), 1.0f / mapSize, m_ShadowLight.CascadeBlend, static_cast<float>(cascadeCount));
-		frame.ShadowBias = glm::vec4(m_ShadowLight.Bias, m_ShadowLight.NormalBias, 0.0f, 0.0f);
+		// The penumbra's half-width per unit of separation (Include/Shadows.glsl filters at it), and the wide penumbrae's taps.
+		frame.ShadowParams = glm::vec4(std::tan(halfAngle), 1.0f / mapSize, m_ShadowLight.CascadeBlend, static_cast<float>(cascadeCount));
+		frame.ShadowBias = glm::vec4(m_ShadowLight.Bias, m_ShadowLight.NormalBias, static_cast<float>(m_Specification.Quality.ShadowFilterQuality), 0.0f);
 		if (!casterDraws)
 			return; // The GPU's culling draws the casters
 

@@ -61,64 +61,6 @@ namespace
 		}
 	};
 
-	// How much of the sun reaches each pixel's surface (1 lit, 0 in full shadow; -1 where the sun lights nothing), from the
-	// HDR images (red) of the scene as it is, with the sun's shadows off (lit) and without the sun (dark): the scene's
-	// lighting is linear in the sun's. Square images.
-	struct SunlightImage
-	{
-		uint32_t Size = 0;
-		std::vector<float> Fraction;
-
-		float At(uint32_t x, uint32_t y) const { return Fraction[static_cast<size_t>(y) * Size + x]; }
-	};
-
-	SunlightImage RenderSunlight(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, Entity sun)
-	{
-		const auto renderHDR = [&]()
-		{
-			REQUIRE(renderer.Render(scene, camera));
-			ReadbackImage image;
-			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
-			return image;
-		};
-		DirectionalLightComponent& light = sun.GetComponent<DirectionalLightComponent>();
-		const ReadbackImage shadowed = renderHDR();
-		const bool castShadows = light.CastShadows;
-		light.CastShadows = false;
-		sun.MarkModified<DirectionalLightComponent>();
-		const ReadbackImage lit = renderHDR();
-		const float intensity = light.Intensity;
-		light.Intensity = 0.0f;
-		sun.MarkModified<DirectionalLightComponent>();
-		const ReadbackImage dark = renderHDR();
-		light.CastShadows = castShadows;
-		light.Intensity = intensity;
-		sun.MarkModified<DirectionalLightComponent>();
-
-		for (const ReadbackImage* image : { &shadowed, &lit, &dark })
-		{
-			REQUIRE(image->Format == nvrhi::Format::RGBA16_FLOAT);
-			REQUIRE(image->Width == shadowed.Width);
-			REQUIRE(image->Height == shadowed.Width);
-		}
-		const auto red = [](const ReadbackImage& image, size_t pixel)
-		{
-			uint16_t value = 0;
-			std::memcpy(&value, image.Pixels.data() + pixel * image.BytesPerPixel, sizeof(value));
-			return glm::unpackHalf1x16(value);
-		};
-		SunlightImage result;
-		result.Size = shadowed.Width;
-		result.Fraction.resize(static_cast<size_t>(shadowed.Width) * shadowed.Height);
-		for (size_t pixel = 0; pixel < result.Fraction.size(); pixel++)
-		{
-			const float direct = red(lit, pixel) - red(dark, pixel);
-			const float reaching = red(shadowed, pixel) - red(dark, pixel);
-			result.Fraction[pixel] = direct > 1e-3f ? reaching / direct : -1.0f;
-		}
-		return result;
-	}
-
 	// A floor under a roof that shadows all of it, with a sun from +X 45 degrees above the horizon and shadows to 50 m: the
 	// splits of its four cascades, a blend of 0.8 logarithmic and 0.2 uniform splits from the near clip of 0.1 m, lie at
 	// 2.89, 6.80, 15.96 and 50 m.
@@ -250,13 +192,11 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		Entity sun = AddSun(scene, glm::vec3(0.0f, -1.0f, 0.0f), 1.0f);
 
 		constexpr uint32_t size = 128;
-		SceneRenderer renderer;
-		renderer.SetViewportSize(size, size);
 		// Looking over the floor toward the horizon: the visible floor spans every cascade.
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 3.0f, 6.0f), glm::vec3(0.0f, 0.0f, -6.0f));
 
 		// A plane cannot shadow itself: with shadows it must look exactly as without them.
-		auto checkNoAcne = [&](float componentBias, float elevation, float azimuth)
+		auto checkNoAcne = [&](SceneRenderer& renderer, float componentBias, float elevation, float azimuth)
 		{
 			CAPTURE(componentBias);
 			CAPTURE(elevation);
@@ -290,13 +230,22 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 			CHECK(Red(reference, size / 2, size - 1) > 100); // The floor is lit
 		};
 
-		// With the light's own depth and normal offsets, and with only the shadow pass's rasterizer depth bias.
-		for (float componentBias : { 1.0f, 0.0f })
+		// With the light's own depth and normal offsets, and with only the shadow pass's rasterizer depth bias, at the
+		// resolutions the presets draw.
+		for (const ShadowMapResolution resolution : { ShadowMapResolution::Size1024, ShadowMapResolution::Size2048, ShadowMapResolution::Size4096 })
 		{
-			for (float elevation : { 3.0f, 8.0f, 20.0f })
+			CAPTURE(static_cast<int>(resolution));
+			SceneRendererSpecification specification;
+			specification.Quality.ShadowResolution = resolution;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(size, size);
+			for (float componentBias : { 1.0f, 0.0f })
 			{
-				for (float azimuth : { 0.0f, 35.0f, 90.0f })
-					checkNoAcne(componentBias, elevation, azimuth);
+				for (float elevation : { 3.0f, 8.0f, 20.0f })
+				{
+					for (float azimuth : { 0.0f, 35.0f, 90.0f })
+						checkNoAcne(renderer, componentBias, elevation, azimuth);
+				}
 			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -609,7 +558,10 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		};
 
 		const Steps blended = measure(DirectionalLightComponent().CascadeBlend);
-		CHECK(blended.AtSplit <= blended.InCascade);
+		// The filter has no per-pixel noise to hide a step in (Include/Shadows.glsl: the same tent at every pixel): inside a
+		// cascade the edge moves by its texels' rounding alone, so a step of under a quarter of a pixel at the split shows no
+		// seam either, against the switch's several pixels.
+		CHECK(blended.AtSplit <= std::max(blended.InCascade, 0.25f));
 		const Steps switched = measure(0.0f);
 		CHECK(switched.AtSplit > 2.0f * switched.InCascade);
 		CHECK(switched.AtSplit > 1.0f);

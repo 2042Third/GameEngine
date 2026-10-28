@@ -20,8 +20,10 @@ using namespace Strata::Tests::TAA;
 namespace
 {
 
-	// The shadows' and the ambient occlusion's noise turns every frame with TAA, and the history smooths it: the converged
+	// The ambient occlusion's noise turns every frame with TAA, and the history smooths the shading's noise: the converged
 	// penumbra's roughness stays below `bound` times one frame's under `preset`; `custom` (when set) is the look, under Custom.
+	// The sun's filter is the same in every frame (Include/Shadows.glsl, GPU.SceneRenderer.ShadowFilter): its fixed pattern varies
+	// only as the jitter moves the surface under the pixels.
 	void CheckNoiseSmoothed(TemporalAntiAliasingPreset preset, const TemporalAntiAliasingSettings* custom, double bound)
 	{
 		GPUContext gpu;
@@ -503,12 +505,12 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("With TAA the shadows' and the ambient occlusion's noise turns every frame, and the history smooths it")
+	TEST_CASE("With TAA the ambient occlusion's noise turns every frame, and the history smooths the shading's noise")
 	{
-		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Original, nullptr, 0.5);
+		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Original, nullptr, 0.6);
 	}
 
-	TEST_CASE("Variance clipping keeps the history smoothing the shadows' and the ambient occlusion's noise")
+	TEST_CASE("Variance clipping keeps the history smoothing the shading's noise")
 	{
 		TemporalAntiAliasingSettings settings = c_TAAOriginalSettings;
 		settings.HistoryClamp = TemporalHistoryClamp::Variance;
@@ -516,7 +518,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Custom, &settings, 0.6);
 	}
 
-	TEST_CASE("Sharp keeps the history smoothing the shadows' and the ambient occlusion's noise")
+	TEST_CASE("Sharp keeps the history smoothing the shading's noise")
 	{
 		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Sharp, nullptr, 0.6);
 	}

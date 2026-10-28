@@ -103,6 +103,9 @@ namespace Strata
 		// A cube array of one black cube: what the scene passes sample as reflection probes without any (the device's
 		// imageCubeArray feature is required).
 		static nvrhi::ITexture* GetBlackCubeArrayTexture();
+		// The 64x64 blue-noise tile (R8_UNORM, RenderData::c_BlueNoise): per-pixel values whose neighbors differ, which filters
+		// index by the screen pixel (the sun's shadows turn their disk by it).
+		static nvrhi::ITexture* GetBlueNoiseTexture();
 
 		// Copies one subresource of a 2D, 2D-array or cube texture (a mip level of an array slice or cube face) to the
 		// CPU. Blocks until the GPU is done; meant for screenshots, picking fallbacks and tests, not per-frame use.

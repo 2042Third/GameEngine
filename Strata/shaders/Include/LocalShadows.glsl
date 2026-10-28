@@ -30,6 +30,23 @@ layout(set = 0, binding = ST_SRV(13), std430) readonly buffer LocalShadowBuffer
 // The views' depth atlas (reversed-Z: larger is nearer to the light), sampled through the cascades' comparison sampler.
 layout(set = 0, binding = ST_SRV(8)) uniform texture2D u_LocalShadowAtlas;
 
+const vec2 c_LocalShadowPoissonDisk[16] = vec2[](
+	vec2(-0.94201624, -0.39906216), vec2(0.94558609, -0.76890725), vec2(-0.09418410, -0.92938870), vec2(0.34495938, 0.29387760),
+	vec2(-0.91588581, 0.45771432), vec2(-0.81544232, -0.87912464), vec2(-0.38277543, 0.27676845), vec2(0.97484398, 0.75648379),
+	vec2(0.44323325, -0.97511554), vec2(0.53742981, -0.47373420), vec2(-0.26496911, -0.41893023), vec2(0.79197514, 0.19090188),
+	vec2(-0.24188840, 0.99706507), vec2(-0.81409955, 0.91437590), vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790));
+
+// Per-pixel rotation of the filter's taps (interleaved gradient noise) trades banding for fine noise. With temporal
+// anti-aliasing every frame turns it further (TemporalParams.z), so the history averages the noise away. (The sun's filter
+// uses a fixed blue-noise tile instead: Include/Shadows.glsl.)
+mat2 LocalShadowSampleRotation(vec2 pixel)
+{
+	float angle = TWO_PI * fract(fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715)))) + u_Frame.TemporalParams.z);
+	float s = sin(angle);
+	float c = cos(angle);
+	return mat2(c, s, -s, c);
+}
+
 // The view of a shadowed light that sees a camera-relative position: a spot light's only view, or the cube face of a point
 // light's major axis toward it (+X, -X, +Y, -Y, +Z, -Z, as SceneRenderer lays the faces out).
 uint SelectLocalShadowView(uint slot, vec3 relativePosition)
@@ -74,12 +91,12 @@ float SampleLocalShadow(uint slot, vec3 relativePosition, vec3 normal, vec2 pixe
 	vec2 lowest = tile.xy + 0.5 * atlasTexel;
 	vec2 highest = tile.xy + vec2(tile.z) - 0.5 * atlasTexel;
 	vec2 radius = max(parameters.z, 0.0) * atlasTexel;
-	mat2 rotation = ShadowSampleRotation(pixel);
+	mat2 rotation = LocalShadowSampleRotation(pixel);
 	// The comparison sampler tests reference < stored: true where a caster is nearer to the light (reversed-Z).
 	float shadowed = 0.0;
 	for (int index = 0; index < 16; index++)
 	{
-		vec2 tap = clamp(uv + rotation * c_PoissonDisk[index] * radius, lowest, highest);
+		vec2 tap = clamp(uv + rotation * c_LocalShadowPoissonDisk[index] * radius, lowest, highest);
 		// An explicit level: lights are shaded in non-uniform control flow, where implicit derivatives are undefined.
 		shadowed += textureLod(sampler2DShadow(u_LocalShadowAtlas, u_ShadowCompareSampler), vec3(tap, ndc.z), 0.0);
 	}

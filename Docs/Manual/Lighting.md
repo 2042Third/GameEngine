@@ -105,7 +105,9 @@ active height fog in a scene applies.
 
 The directional light casts shadows up to **Shadow Distance** from the camera, in cascades that are finer near the
 camera. **Cascade Blend** hides the seams between the cascades and fades the shadows out at the distance; **Shadow
-Softness** is the light's apparent size (the sun is about 0.5 degrees), which softens shadows further from their casters.
+Softness** is the light's apparent size in degrees (the sun: 0.53, the default): shadows are sharp where an object touches
+the ground and soften with the distance from their caster as a real sun's do (a 0.53 degree sun blurs an edge over about
+1 cm per metre).
 **Shadow Bias** and **Shadow Normal Bias** remove the speckles ("acne") a surface can cast on itself: raise them a little
 when lit surfaces show dark stripes, lower them when shadows detach from their casters.
 
