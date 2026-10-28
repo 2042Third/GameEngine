@@ -267,6 +267,7 @@ namespace Strata
 		// Only a running game has physics; reading its capacity and its last step costs two service lookups.
 		m_Physics.reset();
 		m_PhysicsStep.reset();
+		m_PhysicsDetailed = false;
 		if (context.Context.IsPlaying())
 		{
 			const Ref<Scene>& scene = context.Context.GetActiveScene();
@@ -276,6 +277,7 @@ namespace Strata
 			{
 				if (const PhysicsStepInfo step = diagnostics->GetStepInfo(); step.HasWorld)
 					m_PhysicsStep = step;
+				m_PhysicsDetailed = diagnostics->IsDetailedStats();
 			}
 		}
 
@@ -378,7 +380,7 @@ namespace Strata
 				ImGui::SetScrollHereY(0.0f);
 			m_RevealPhysics = false;
 			if (open)
-				DrawPhysics(*m_Physics, m_PhysicsStep);
+				DrawPhysics(context, *m_Physics, m_PhysicsStep);
 		}
 		if (UI::SectionHeader("Streaming.Memory", "Memory"))
 			DrawPools(stats);
@@ -453,7 +455,7 @@ namespace Strata
 			static_cast<unsigned long long>(stats.StagingReleases));
 	}
 
-	void StreamingPanel::DrawPhysics(const PhysicsCapacityInfo& physics, const std::optional<PhysicsStepInfo>& step)
+	void StreamingPanel::DrawPhysics(EditorPanelContext& context, const PhysicsCapacityInfo& physics, const std::optional<PhysicsStepInfo>& step)
 	{
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		if (physics.MaxBodies == 0)
@@ -491,7 +493,8 @@ namespace Strata
 		if (!step)
 			return;
 		// The last step: its time and box3d's part, the bodies awake of the moving ones, and the share of the awake contacts
-		// box3d recycled, which it counts only while detailed statistics are on (physics.stats).
+		// box3d recycled, which it counts only while detailed statistics are on: the check box below turns them on
+		// (physics.setDetailedStats), as they cost the steps a walk of box3d's islands.
 		ImGui::TextWrapped("Step %.2f ms (box3d %.2f)", step->StepMs, step->LibraryMs);
 		UI::ItemProbe::Record("Streaming.Physics.Step");
 		if (ImGui::IsItemHovered())
@@ -503,7 +506,18 @@ namespace Strata
 			// At most all of them: an island that fell asleep in the step leaves fewer awake contacts than the pass recycled.
 			std::snprintf(fact.data(), fact.size(), "recycled %.0f%%", std::min(100.0, 100.0 * static_cast<double>(step->RecycledContacts) / static_cast<double>(step->AwakeContacts)));
 			ContinueLine(fact.data(), colors.TextSecondary);
+			UI::ItemProbe::Record("Streaming.Physics.Recycled");
 		}
+		bool detailed = m_PhysicsDetailed;
+		if (ImGui::Checkbox("Count contacts", &detailed))
+		{
+			RunEditorCommand(context.Context, context.Commands, "physics.setDetailedStats", { { "enabled", detailed } });
+			m_PhysicsDetailed = detailed;
+		}
+		UI::ItemProbe::Record("Streaming.Physics.CountContacts");
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Read box3d's contact counters after every step of the running game, to show the share of the awake contacts it "
+				"recycled (about 0.1 ms a step at 70,000 bodies; physics.setDetailedStats)");
 	}
 
 	void StreamingPanel::DrawUploads(const AssetManagerStats& stats)

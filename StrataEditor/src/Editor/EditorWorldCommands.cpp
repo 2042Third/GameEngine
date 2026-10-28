@@ -29,7 +29,7 @@
 #include <chrono>
 #include <optional>
 
-// Worlds and the physics that holds them: world.cook, world.info and physics.stats.
+// Worlds and the physics that holds them: world.cook, world.info, physics.stats and physics.setDetailedStats.
 
 namespace Strata
 {
@@ -1042,7 +1042,7 @@ namespace Strata
 			"contacts box3d held; roomGrowths: box3d steps whose new contacts grew its contact storage while playing, counted after the step that "
 			"follows; lastGrowthStepMs: the library time of the last of them) and settling (maxSpeed of the moving bodies in m/s; settling: those "
 			"faster than the sleep threshold; restingJitterMm: how far the others still move in a step). box3d's counters (islands; contacts "
-			"total, awake and recycled) are read every step only while detailed statistics are on (the perf lab, a "
+			"total, awake and recycled) are read every step only while detailed statistics are on (physics.setDetailedStats, the perf lab, a "
 			"game run with a perf log; contacts.detailed: the last step read them); otherwise detail: true reads them once for this answer "
 			"(box3d's last step) and changes nothing, and without it they are null. settings: the tuning the world runs with "
 			"(contactRecycleDistance in meters, sleepThreshold in m/s, contactHertz; effectiveContactHertz: what box3d uses, at most an eighth "
@@ -1060,6 +1060,30 @@ namespace Strata
 				const Ref<Scene>& scene = context.GetActiveScene();
 				return EditorCommandResult::Ok(DescribePhysicsStats(context.IsPlaying() ? scene.get() : nullptr, detail));
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
+
+		registry.Register({ "physics.setDetailedStats",
+			"Turns box3d's counters (islands; contacts total, awake and recycled) on or off for every step of the running game (play or "
+			"simulate), where physics.stats {detail: true} reads them once: while on, physics.stats reports them after each step "
+			"(contacts.detailed is true from the next step on) and the Streaming panel's Physics section shows the share of the awake "
+			"contacts box3d recycled. box3d counts them together with its memory, about 0.1 ms a step at 70,000 bodies, so they are off "
+			"by default. Holds for the running scene until play stops; a scene the game switches to starts without them. Fails while "
+			"editing and when the running scene has no physics. Returns enabled.",
+			ObjectSchema({ { "enabled", BoolSchema("Read box3d's counters after every step (true) or no longer (false)") } }, { "enabled" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				if (!arguments.Has("enabled"))
+					arguments.SetError("Parameter 'enabled' is required");
+				const bool enabled = arguments.GetBool("enabled", false);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				const Ref<Scene>& scene = context.GetActiveScene();
+				IPhysicsDiagnostics* diagnostics = context.IsPlaying() && scene && scene->IsRunning() ? scene->GetService<IPhysicsDiagnostics>() : nullptr;
+				if (!diagnostics)
+					return EditorCommandResult::Fail("No running game with physics: play.start first");
+				diagnostics->SetDetailedStats(enabled);
+				return EditorCommandResult::Ok({ { "enabled", diagnostics->IsDetailedStats() } });
+			}, EditorCommandKind::Session });
 	}
 
 }

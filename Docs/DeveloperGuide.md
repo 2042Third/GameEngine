@@ -2031,7 +2031,8 @@ that may not include the Physics module: the runtime's perf log, `editor.status`
   costs 0.09 to 0.10 ms at 70,000 boxes with 70,000 islands and with 7,000 (`Perf.Physics`, "Reading box3d's counters"),
   more than the rule's 0.5% of that scene's library step on the reference machine (43 us of 8.6 ms), so the world reads
   them after every box3d step only while detailed statistics are on
-  (`IPhysicsDiagnostics::SetDetailedStats`: the perf lab, the settle helper, a game run with `--perf-log`), and they read 0
+  (`IPhysicsDiagnostics::SetDetailedStats`: the perf lab, the settle helper, a game run with `--perf-log`,
+  `physics.setDetailedStats` and the Streaming panel's "Count contacts"), and they read 0
   otherwise; `PhysicsStats::DetailedStats` and `PhysicsStepInfo::DetailedStats` say whether the last step read them (not
   yet right after they were turned on: the perf log's first row of a scene leaves their columns empty), and
   `IPhysicsDiagnostics::IsDetailedStats` whether they are asked for. `physics.stats {detail: true}` reads them once for
@@ -2061,7 +2062,8 @@ that may not include the Physics module: the runtime's perf log, `editor.status`
   runtime's perf-log columns `PhysicsStepMs`, `PhysicsLibraryMs`, `PhysicsAwakeBodies`, `PhysicsSleepingBodies`,
   `PhysicsContacts`, `PhysicsRecycledContacts` and `PhysicsMaxBodySpeed` (the log turns detailed statistics on for the
   scene it logs, so the contact columns fill from its next step on), and the Streaming panel's Physics row "Step 1.42 ms
-  (box3d 0.91) - awake 1,204 of 9,876 - recycled 63%" (the share only while detailed statistics are on).
+  (box3d 0.91) - awake 1,204 of 9,876 - recycled 63%" (the share only while detailed statistics are on: its "Count
+  contacts" check box runs `physics.setDetailedStats`).
 - **Contacts nobody tracks cost nothing.** While no pair of entities is tracked (no listener, or nothing its entities
   touch), a step looks up no awake body's pair list (`PhysicsStats::PairLookupCount` 0) and resolves no end event; while
   nobody wants any contact (no listener of every entity and no watched entity), it resolves no begin event. A pair that
@@ -2995,12 +2997,16 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   the bodies of a scene switched to were built in while it loaded (`preparedSlices`, 0 for bodies built as the scene
   started: a play copy); growths; demand; dropped contact steps; the last step's time, the steps run and held; and what
   the last step did ([Physics instruments](#physics-instruments)): `step` (its milliseconds, box3d's and Strata's, Strata's
-  parts, box3d's stages, box3d's workers, the totals since play started), `sleep` (awake, sleeping and moving bodies,
-  islands), `contacts` (box3d's total, awake and recycled ones and the recycled share, null unless detailed statistics are
-  on or `detail: true` reads them once; tracked pairs, capacity, peak, room growths) and `settling` (fastest speed, bodies
-  still settling, resting jitter). `{running: false}` while editing. While a
-  game runs, the Streaming panel's Physics section (after the World section, before Memory) shows the same capacity, read
-  once per frame through `IPhysicsCapacity` (constant time), and leads the status bar's pill of bodies without collision.
+  parts, box3d's stages, box3d's workers, the totals since the running scene's world was created), `sleep` (awake,
+  sleeping and moving bodies, islands), `contacts` (box3d's total, awake and recycled ones and the recycled share, null
+  unless detailed statistics are on or `detail: true` reads them once; tracked pairs, capacity, peak, room growths) and
+  `settling` (fastest speed, bodies still settling, resting jitter), and `settings` (the tuning in effect, with the contact
+  stiffness box3d uses, `effectiveContactHertz`). `{running: false}` while editing. **`physics.setDetailedStats
+  {enabled}`** (a Session command) turns box3d's counters on or off for every step of the running scene
+  (`IPhysicsDiagnostics::SetDetailedStats`); it fails while editing. While a game runs, the Streaming panel's Physics
+  section (after the World section, before Memory) shows the same capacity, read once per frame through
+  `IPhysicsCapacity` (constant time), the last step, and a "Count contacts" check box that runs `physics.setDetailedStats`
+  for the share of recycled contacts; it leads the status bar's pill of bodies without collision.
 
 ### Edits while playing and value ranges
 

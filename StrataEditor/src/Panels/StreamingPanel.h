@@ -152,7 +152,7 @@ namespace Strata
 		void DrawPools(const AssetManagerStats& stats);
 		void DrawStreaming(const AssetManagerStats& stats);
 		void DrawUploads(const AssetManagerStats& stats);
-		void DrawPhysics(const PhysicsCapacityInfo& physics, const std::optional<PhysicsStepInfo>& step);
+		void DrawPhysics(EditorPanelContext& context, const PhysicsCapacityInfo& physics, const std::optional<PhysicsStepInfo>& step);
 		// The World section: the streaming world's statistics and its cell map.
 		void DrawWorld(EditorPanelContext& context, const WorldStreamer& streamer, bool editable);
 		void DrawTable();
@@ -173,6 +173,7 @@ namespace Strata
 		std::optional<AssetManagerStats> m_Stats;
 		std::optional<PhysicsCapacityInfo> m_Physics;
 		std::optional<PhysicsStepInfo> m_PhysicsStep;
+		bool m_PhysicsDetailed = false; // The running game reads box3d's counters every step (IPhysicsDiagnostics::IsDetailedStats)
 		bool m_RevealPhysics = false;
 		bool m_RevealWorld = false;
 		CellMap m_CellMap;
