@@ -48,16 +48,20 @@ to find a page or a field), the selected page on the right:
   rename or remove them. When your game saved a player's rebinding while you played it, that player's bindings replace
   the project's in every play session after: those actions are marked **In play**, and **Reset Player Bindings** deletes
   the saved bindings so that your edits apply again.
-- **Graphics Quality** (under Rendering): how much the game's and the editor's views spend on shadows and detail. Pick a
-  **Preset**: **Low** (smaller shadow maps, three sun shadow cascades, four point and spot lights with shadows, coarser
-  levels of detail, lighter ambient occlusion: for older or integrated GPUs), **Medium** (what Strata 0.6.0 drew), **High**
-  (the default: as Medium, but sharper sun shadows on displays of 1440 rows and more, 256 MiB of shadow maps per view
-  instead of 64, denser ambient occlusion and sharper reflections of the sky, 512 texels per face instead of 256) or
-  **Ultra** (sharper shadows everywhere, larger point and spot light shadows, finer levels of detail, the densest ambient
-  occlusion: for large GPUs), or **Custom** to set each value yourself (the shadow resolution, the number of cascades, the
-  point and spot lights' shadow atlas and largest tile, how many of those lights cast shadows, the level-of-detail error
-  and the smallest size drawn, the ambient occlusion's quality and the sky reflections' resolution).
-  No setting draws below the screen's resolution, and a scene's look (its lights, Post Process and sky) stays the same.
+- **Graphics Quality** (under Rendering): how much the game's and the editor's views spend on shadows, light and detail.
+  Pick a **Preset**: **Low** (smaller shadow maps, three sun shadow cascades, four point and spot lights with shadows,
+  coarser levels of detail, lighter ambient occlusion and no screen-space reflections: for older or integrated GPUs),
+  **Medium** (what Strata 0.6.0 drew: screen-space reflections at half resolution, only with TAA), **High** (the default:
+  as Medium, but sharper sun shadows on displays of 1440 rows and more, 256 MiB of shadow maps per view instead of 64,
+  denser ambient occlusion, sharper reflections of the sky, 512 texels per face instead of 256, and screen-space
+  reflections traced on every pixel with any anti-aliasing, about 250 MiB of video memory per view at 3840x2160 instead
+  of 79) or **Ultra** (sharper shadows everywhere, larger point and spot light shadows, finer levels of detail, the
+  densest ambient occlusion and longer screen-space reflection rays: for large GPUs), or **Custom** to set each value
+  yourself (the shadow resolution, the number of cascades, the point and spot lights' shadow atlas and largest tile, how
+  many of those lights cast shadows, the level-of-detail error and the smallest size drawn, the ambient occlusion's
+  quality, the sky reflections' resolution and the screen-space reflections). No setting draws below the screen's
+  resolution, and a scene's own settings (its lights, Post Process and sky) are never changed: a preset only decides how
+  finely they are drawn, and what costs too much at Low (screen-space reflections) is left out.
   Exported games use it, and `<Game> --quality low` (or `medium`, `high`, `ultra`) plays one run at a preset without
   saving anything. The Scene view can draw at a preset of your own, for your computer alone, with
   `viewport.setSettings {quality}` ("project" follows this page).
