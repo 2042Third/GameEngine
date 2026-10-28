@@ -3586,10 +3586,11 @@ lights, Post Process and the sky), and never a resolution below the output's.
 - Exposure: the tonemapper sees `L * M`, L the scene's luminance in nits and M the multiplier of the exposure buffer
   (`SceneRenderer::UpdateExposure`; the HDR target holds `L * P`, see the pre-exposure below, and the tone mapping applies
   `M / P`). Manual exposure: `M = 2^Exposure` (registered within [-16, 16]). Automatic
-  exposure: `M = 2^Exposure * 0.18 / 2^a`, where `a` is the log2 average luminance metered by `Exposure.comp`'s
-  histogram (`Include/Exposure.glsl`: [-12, 16] in 254 bins of 0.11 EV, the darkest and brightest tenth of the pixels
-  left out), adapted at `AutoExposureSpeed` and clamped to [`AutoExposureMinEV`, `AutoExposureMaxEV`]: the average lands
-  on middle gray, and `Exposure` compensates. Where the tone curve shows that middle gray on the display depends on the curve:
+  exposure: `M = 2^Exposure * 0.18 / 2^a * 2^k`, where `a` is the log2 average luminance metered by `Exposure.comp`'s
+  histogram (`Include/Exposure.glsl`: [-12, 16] in 254 bins of 0.11 EV, the pixels outside the
+  `AutoExposureLowPercentile`-`HighPercentile` window left out, weighed by `AutoExposureMetering`), adapted and clamped to
+  [`AutoExposureMinEV`, `AutoExposureMaxEV`], and `k` the exposure key ("Post-processing"): the average lands on middle
+  gray, and `Exposure` compensates. Where the tone curve shows that middle gray on the display depends on the curve:
   Filmic (the default since 0.7.0) shows 0.18 as 0.18 (sRGB 118) and needs no compensation; ACES shows it at 0.106 (sRGB
   91, about 0.8 EV darker), Khronos Neutral at 0.14 (sRGB 105) and AgX at 0.215 (sRGB 128).
 - A camera: a reflected-light meter calibrated with K = 12.5 reads EV100 = log2(L * 100 / 12.5) = log2(L) + 3 for an
@@ -3698,6 +3699,27 @@ data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (f
   6500 K is D65 exactly), Planck's law against the CIE 1931 observer to 4000 K, blended between, every 5 mireds. 6500 K and
   tint 0 return the identity without arithmetic, and a grading that changes nothing leaves `ColorFlags` 0, so the shader
   skips it (a uniform branch): the defaults render bit-identically to no grading.
+- **Exposure** (`UpdateExposure`, `Histogram.comp`, `Exposure.comp`, `RenderData::ExposureParameters`, 64 bytes):
+  - Adaptation: toward a brighter target at `AutoExposureLightSpeed` (3 per second: light adaptation, eyes leaving a
+    tunnel), toward a darker one at `AutoExposureSpeed` (1.5: dark adaptation), each `1 - exp(-dt * speed)` of the way per
+    frame (1 on a reset or at speed 0). `dt` is the wall clock between the renderer's frames, at most 0.25 s, or
+    `SceneRenderOptions::AdaptationSeconds` (tests and tools that step time).
+  - Metering: `Average` weighs every pixel 1 (0.6.0's histogram); `CenterWeighted` (the default) weighs a pixel
+    `round(16 (0.25 + 0.75 exp(-r^2 / (2 * 0.25^2))))` (4 to 16), r its distance from the image's center in image heights:
+    the middle third decides, the edges count a quarter. The window's percentiles are properties (high - low at least
+    0.02).
+  - The key (`AutoExposureKey`, 0.12): `k = clamp(key * (a - log2(L_ref)), -2, +1)` stops, `L_ref = Luminance(sun) * 0.18 /
+    pi` the luminance of a gray card facing the frame's directional light as `Forward.frag` lights it (the atmosphere's
+    transmittance and the editor's preview sun included); none without a directional light. A sunlit exterior meters
+    near the card (k near 0); an interior five stops below it shows 0.6 stops darker; a night lit by the moon is not darkened
+    by it (`Exposure` does that). It is scene-relative, so it works in dim units and in real ones; interiors darken only as
+    far as their light is darker (sky light reaches into closed rooms until it is occluded).
+  - The exposure buffer holds the metered log2 luminance, the multiplier and the key's stops (`c_ExposureKeyStops`); the
+    readback copies all three: `SceneRendererStats::ExposureLog2Luminance`, `ExposureKeyStops` (frames late, unset with
+    manual exposure) and `ExposureKeyReferenceLog2` (the frame's card), reported by `renderStats.exposure` (`ev100`,
+    `keyStops`, `cardEv100`).
+  - `AddNeutralPostProcess` meters as 0.6.0 did (`Average`, key 0, one speed both ways), so tests that turn automatic
+    exposure on keep their meaning.
 - **FXAA's subpixel blend** is 0.25 (`FXAA.frag`'s `c_Subpixel`; 0.75 until 0.7.0, which cost 19-22% of the texture
   detail of an image without anti-aliasing; on PhysicsPlayground's tiled floor at 3840x2160, 0.375 keeps 0.85 of it and 0.25
   0.87, the rest being the edges FXAA is there to smooth). Lower values would leave single-pixel aliasing alone.

@@ -320,6 +320,9 @@ namespace Strata
 		// and no target (Render fails with one). Tools that read the scene's light back (the reflection probe bake) set it with
 		// a forced PreExposure, which they divide out.
 		bool HDROutput = false;
+		// The time the automatic exposure adapts over since this renderer's previous frame; unset, the wall clock between its
+		// frames (at most 0.25 s, so pauses do not turn into one huge step). Tests and tools that step time set it.
+		std::optional<float> AdaptationSeconds;
 
 		// The overlays below are drawn over the finished image (after tone mapping and anti-aliasing) with exact display
 		// colors; all of them are off by default.
@@ -518,6 +521,12 @@ namespace Strata
 		// then the brightest and darkest values of the frame may have overflowed or lost precision (captures wait for it).
 		float PreExposure = 1.0f;
 		bool PreExposureSettled = false;
+		// Automatic exposure, from the newest readback of the renderer's metering (frames late, as the pre-exposure's): the
+		// adapted log2 average luminance, the exposure key's stops and the log2 luminance of the sun's gray card the key compares
+		// with (unset without a directional light). Unset with manual exposure and until a readback arrived.
+		std::optional<float> ExposureLog2Luminance;
+		float ExposureKeyStops = 0.0f;
+		std::optional<float> ExposureKeyReferenceLog2;
 		// The frame's last pass that wrote the display image dithered it (SceneRendererSpecification::DitherOutput, and an 8-bit
 		// or 10-bit UNORM target).
 		bool Dithered = false;
@@ -1207,7 +1216,8 @@ namespace Strata
 			float previousDepthOffset);
 		// Meters the HDR image (automatic exposure) through `bindingSet` (the HDR target's or the resolved image's) or writes the
 		// manual exposure into the exposure buffer.
-		void UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* bindingSet);
+		void UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, const SceneRenderOptions& options, nvrhi::IBindingSet* bindingSet,
+			std::optional<float> keyReferenceLog2);
 		// The frame's pre-exposure (m_PreExposure) from the options, the settings and the readbacks of earlier frames' metering.
 		void ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options);
 		// After the executed command list of a frame that recorded the exposure's copy: the copy is pending.
@@ -1238,7 +1248,9 @@ namespace Strata
 		bool CreatePostTargets(uint32_t width, uint32_t height, std::string& outFailure);
 		void ReleasePostTargets(std::vector<nvrhi::ResourceHandle>& released);
 		// The exposure and the bloom of the HDR image (the resolved one when `resolved`); returns whether bloom ran.
-		bool RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, bool resolved);
+		// `keyReferenceLog2`: log2 of the luminance of a gray card facing the frame's directional light (unset without one).
+		bool RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const SceneRenderOptions& options, bool resolved,
+			std::optional<float> keyReferenceLog2);
 		// Tone mapping into `output`, or into the LDR target and FXAA from it into `output`.
 		void RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
 			bool resolved, bool bloom, nvrhi::IFramebuffer* output);
@@ -1786,6 +1798,9 @@ namespace Strata
 		uint32_t m_ExposureReadbackIndex = 0;
 		bool m_ExposureReadbackRecorded = false; // The frame being recorded copies the exposure (SubmitExposureReadback)
 		uint64_t m_ExposureReadbackSeen = 0;
+		// The newest readback's metering (SceneRendererStats::ExposureLog2Luminance, ExposureKeyStops).
+		std::optional<float> m_MeteredLog2Luminance;
+		float m_MeteredKeyStops = 0.0f;
 		float m_HistoryPreExposure = 1.0f; // The pre-exposure of the temporal history's newest image
 		// Temporal anti-aliasing (SceneRendererSpecification::TemporalAntiAliasing): the frame being rendered uses it; the frames
 		// the history holds (0: none); the frame that resolved it last (RenderCount + 1; 0: none, or not since a frame failed),

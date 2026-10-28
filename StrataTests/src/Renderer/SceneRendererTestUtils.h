@@ -140,6 +140,10 @@ namespace Strata::Tests
 		postProcess.Tonemapper = TonemapOperator::None;
 		postProcess.AutoExposure = false;
 		postProcess.Exposure = 0.0f;
+		// Tests that turn automatic exposure on meter as 0.6.0 did: every pixel alike, one speed both ways, no key.
+		postProcess.AutoExposureMetering = ExposureMetering::Average;
+		postProcess.AutoExposureLightSpeed = postProcess.AutoExposureSpeed;
+		postProcess.AutoExposureKey = 0.0f;
 		postProcess.Vignette = 0.0f;
 		postProcess.Bloom = false;
 		postProcess.AmbientOcclusion = false;

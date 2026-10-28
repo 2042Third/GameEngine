@@ -401,7 +401,8 @@ namespace Strata
 				WithTooltip(Range(-12.0f, 16.0f, 0.1f), "Darkest average scene luminance (log2) automatic exposure brightens up to"))
 			.Property("AutoExposureMaxEV", &PostProcessComponent::AutoExposureMaxEV,
 				WithTooltip(Range(-12.0f, 16.0f, 0.1f), "Brightest average scene luminance (log2) automatic exposure darkens down to"))
-			.Property("AutoExposureSpeed", &PostProcessComponent::AutoExposureSpeed, WithTooltip(Range(0.0f, 20.0f, 0.05f), "Adaptation rate per second; 0 = instant"))
+			.Property("AutoExposureSpeed", &PostProcessComponent::AutoExposureSpeed,
+				WithTooltip(Range(0.0f, 20.0f, 0.05f), "How fast the exposure follows a darker scene (the image brightens), per second; 0 jumps at once"))
 			.Property("Bloom", &PostProcessComponent::Bloom)
 			.Property("BloomIntensity", &PostProcessComponent::BloomIntensity, WithTooltip(Slider(0.0f, 1.0f), "Fraction of the light scattered into the glow"))
 			.Property("BloomThreshold", &PostProcessComponent::BloomThreshold,
@@ -478,9 +479,25 @@ namespace Strata
 			.Property("ColorSlope", &PostProcessComponent::ColorSlope, WithTooltip(Range(0.0f, 4.0f, 0.01f), "Slope: per-channel gain before the tone curve"))
 			.Property("ColorOffset", &PostProcessComponent::ColorOffset,
 				WithTooltip(Range(-0.1f, 0.1f, 0.001f), "Offset: light added per channel, in fractions of middle gray (tints the shadows most)"))
-			.Property("ColorPower", &PostProcessComponent::ColorPower, WithTooltip(Range(0.2f, 5.0f, 0.01f), "Power: per-channel contrast around middle gray"));
+			.Property("ColorPower", &PostProcessComponent::ColorPower, WithTooltip(Range(0.2f, 5.0f, 0.01f), "Power: per-channel contrast around middle gray"))
+			.EnumProperty("AutoExposureMetering", &PostProcessComponent::AutoExposureMetering, { { "Average", 0 }, { "CenterWeighted", 1, "Center Weighted" } },
+				{ .Tooltip = "How the image is metered: Average weighs every pixel alike; CenterWeighted counts the middle of the image most and its "
+					"edges a quarter, as a camera's center-weighted meter" })
+			.Property("AutoExposureLowPercentile", &PostProcessComponent::AutoExposureLowPercentile,
+				WithTooltip(Range(0.0f, 0.49f, 0.01f), "The darkest share of the metered pixels that is ignored, so deep shadows do not move the exposure"))
+			.Property("AutoExposureHighPercentile", &PostProcessComponent::AutoExposureHighPercentile,
+				WithTooltip(Range(0.51f, 1.0f, 0.01f), "The brightest share of the metered pixels below this is kept: the pixels above it (light "
+					"sources) do not move the exposure"))
+			.Property("AutoExposureLightSpeed", &PostProcessComponent::AutoExposureLightSpeed,
+				WithTooltip(Range(0.0f, 20.0f, 0.05f), "How fast it follows a brighter scene (the image darkens), per second, as eyes leaving a "
+					"tunnel; 0 jumps at once"))
+			.Property("AutoExposureKey", &PostProcessComponent::AutoExposureKey,
+				WithTooltip(Range(0.0f, 0.5f, 0.01f), "How much a scene's brightness against a gray card in the sun shows: 0 meters every scene to "
+					"middle gray; 0.12 shows an interior 5 stops below the sun's card 0.6 stops darker (at most 2 darker, 1 brighter). Needs a "
+					"directional light"));
 		// Exposure is the compensation SceneRenderer applies with automatic exposure too: always active.
-		SetInactiveReasons<PostProcessComponent>({ "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed" }, &WithAutoExposure);
+		SetInactiveReasons<PostProcessComponent>({ "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed", "AutoExposureMetering",
+			"AutoExposureLowPercentile", "AutoExposureHighPercentile", "AutoExposureLightSpeed", "AutoExposureKey" }, &WithAutoExposure);
 		SetInactiveReasons<PostProcessComponent>({ "BloomIntensity", "BloomThreshold" }, &WithBloom);
 		SetInactiveReasons<PostProcessComponent>({ "Toe" }, &WithFilmicToe);
 		SetInactiveReasons<PostProcessComponent>({ "Shoulder" }, &WithFilmicShoulder);

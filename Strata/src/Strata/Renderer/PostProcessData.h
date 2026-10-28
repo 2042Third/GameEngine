@@ -55,9 +55,12 @@ namespace Strata
 		};
 		static_assert(sizeof(FXAAParameters) == 16);
 
-		// Include/Exposure.glsl: the exposure buffer and the luminance histogram.
+		// Include/Exposure.glsl: the exposure buffer's floats (the adapted log2 luminance, the multiplier of luminance the tone
+		// mapping applies, the exposure key's stops) and the luminance histogram.
 		constexpr uint32_t c_ExposureLogLuminance = 0;
 		constexpr uint32_t c_ExposureMultiplier = 1;
+		constexpr uint32_t c_ExposureKeyStops = 2;
+		constexpr uint32_t c_ExposureValues = 4;
 		constexpr uint32_t c_HistogramBins = 256;
 		constexpr float c_HistogramMinLog2 = -12.0f;
 		constexpr float c_HistogramMaxLog2 = 16.0f;
@@ -65,16 +68,30 @@ namespace Strata
 		// PostProcess/Histogram.comp and Exposure.comp (push constants).
 		struct ExposureParameters
 		{
-			float MinLog2;
+			float MinLog2;            // 0: the range the metered average is clamped to
 			float MaxLog2;
-			float AdaptFactor;
-			float Compensation;
-			float LowPercentile;
+			float AdaptLight;         //    the fraction of the way to a brighter target this frame (1: jump to it)
+			float AdaptDark;          //    and to a darker one
+			float Compensation;       // 16: 2^Exposure
+			float LowPercentile;      //     the metering window
 			float HighPercentile;
-			float InversePreExposure; // 1 / the pre-exposure the scene color carries: the histogram meters luminance
-			float Padding;
+			float InversePreExposure; //     1 / the pre-exposure the scene color carries: the histogram meters luminance
+			float KeyStrength;        // 32: the exposure key (PostProcessComponent::AutoExposureKey); 0 without a directional light
+			float KeyReferenceLog2;   //     log2 of the luminance of a gray card (albedo 0.18) facing the directional light
+			float KeyMinStops;        //     the key's range
+			float KeyMaxStops;
+			float MeteringAspect;     // 48: width / height of the metered image
+			uint32_t Metering;        //     ExposureMetering
+			float Padding0;
+			float Padding1;
 		};
-		static_assert(sizeof(ExposureParameters) == 32);
+		static_assert(sizeof(ExposureParameters) == 64);
+		static_assert(offsetof(ExposureParameters, Compensation) == 16 && offsetof(ExposureParameters, KeyStrength) == 32);
+		static_assert(offsetof(ExposureParameters, MeteringAspect) == 48);
+		// The exposure key's range in stops: a scene metering below the sun's gray card shows at most this much darker, one
+		// above it at most this much brighter.
+		constexpr float c_ExposureKeyMinStops = -2.0f;
+		constexpr float c_ExposureKeyMaxStops = 1.0f;
 
 		// PostProcess/Bloom.comp's modes, and the deepest level of its chain.
 		constexpr uint32_t c_BloomPrefilter = 0;

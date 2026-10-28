@@ -532,6 +532,14 @@ TEST_SUITE("Scene.InactiveProperties")
 		for (const char* property : { "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed", "BloomIntensity", "BloomThreshold",
 			"AmbientOcclusionRadius", "AmbientOcclusionIntensity", "AntiAliasingMethod" })
 			CHECK_MESSAGE(reason("PostProcess", property).empty(), property);
+		// The metering, its window, the light adaptation and the key: automatic exposure's.
+		for (const char* property : { "AutoExposureMetering", "AutoExposureLowPercentile", "AutoExposureHighPercentile", "AutoExposureLightSpeed", "AutoExposureKey" })
+		{
+			CHECK_MESSAGE(reason("PostProcess", property).empty(), property);
+			post.AutoExposure = false;
+			CHECK_MESSAGE(reason("PostProcess", property) == "Auto Exposure is off", property);
+			post.AutoExposure = true;
+		}
 
 		// The TAA's preset and tunables: inactive without anti-aliasing, with FXAA, and (the tunables) unless Custom, quoting the
 		// preset's value or why it reads none; under Custom, the clip width only for tight clipping and the threshold only with
