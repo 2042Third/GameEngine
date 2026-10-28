@@ -3092,7 +3092,14 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   writes mip 0 of the environment cube; the mips, irradiance and prefiltered maps are computed by the same chain
   (`SceneRenderer::FilterEnvironment`). A procedural cube is computed again only when its parameters
   (`RenderData::ProceduralSkyParameters`, compared exactly) change, into the same textures, and
-  `SceneRendererStats::EnvironmentUpdates` counts it; `Rotation` applies to maps only.
+  `SceneRendererStats::EnvironmentUpdates` counts it; `Rotation` applies to maps only. The environment cube is 512 per face
+  and the irradiance cube 32; the prefiltered cube's size per face is the quality's `EnvironmentResolution` (256 at Low
+  and Medium, 512 at High and Ultra: mirror-like reflections of the sky stay sharp at 4K), six levels (roughness 0, 0.2
+  ... 1) at both sizes, so `EnvironmentParams.z` stays 5. Level 0 copies the cube; the others take
+  `RendererQuality::GetPrefilterSamples` samples per texel: 512 at 256 (0.6.0's), and at 512 128 for levels 1 and 2 (their
+  narrow lobes read finer source levels through the filtered importance sampling), so no level, which the atmosphere
+  computes one per frame, costs more than 0.6.0's largest. Maps of environment map textures are shared between renderers
+  by texture and size (`FindSharedEnvironment`): renderers of different resolutions compute their own.
 - `SceneRenderOptions` also shapes editor views: `PreviewEnvironment` lights a scene without any active light
   (`SceneRenderer::NeedsPreviewLighting`: no directional, point, spot or sky light, so a night scene lit by a torch
   stays dark) with a preview sun (`SceneRenderer::GetPreviewSunDirection`) and the default procedural sky
@@ -3117,12 +3124,14 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `MaxShadowedLocalLights` | 4 | 16 | 16 | 16 |
 | `LODErrorPixels` / `MinProjectedPixels` | 2 / 1 | 1 / 0.5 | 1 / 0.5 | 0.5 / 0.25 |
 | `AmbientOcclusionQuality` (slices x steps per side) | Low 1 x 4 | Medium 2 x 6 | High 3 x 8 | Ultra 4 x 12 |
+| `EnvironmentResolution` (prefiltered sky per face) | 256 | 256 | 512 | 512 |
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
+| Prefiltered sky per set of maps (RGBA16F, six levels; the atmosphere keeps two sets) | 4 MiB | 4 MiB | 16 MiB | 16 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for its ambient occlusion
-  (3 x 8 at every size; `Renderer.Quality` checks it).
+  (3 x 8 at every size) and its prefiltered sky (512 per face at every size; `Renderer.Quality` checks both).
   Custom is the section's fields (High's values by default). `RendererQuality::Clamp` keeps every knob in its range.
 - **Auto by rows:** `RendererQuality::ResolveShadowMapSize` resolves Auto and AutoFine for the renderer's viewport rows
   (its output: the Scene and Game views' panel pixels, the window's back buffer, a capture's image), limited to
@@ -3136,8 +3145,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   size knobs apply from the next frame on both paths, through what already compares them (the cascade cache's key
   holds the LOD criteria, the local shadows' `LocalShadowContent` holds `LODErrorPixels`: a new error draws every
   light's views again in their tiles, as a caster's change does). A knob that changes what a cached shadow view shows
-  goes into one of them. It returns whether the cascades or the atlas were released, and then restarts the temporal
-  history. Callers apply the quality right after `SetViewportSize` in a frame, so Auto resolves for its rows; equal
+  goes into one of them. A new `EnvironmentResolution` drops the environment maps and the atmosphere's spare and
+  refreshing sets (`ReleaseEnvironment`): the next frame with a sky computes them at the new size (the atmosphere's first
+  environment at once) or takes over a shared set of it. It returns whether the cascades, the atlas or the environment
+  were released, and then restarts the temporal history. Callers apply the quality right after `SetViewportSize` in a frame, so Auto resolves for its rows; equal
   knobs cost one comparison. An allocation that fails halves the cascades (down to 1024) or the atlas (down to 2048),
   reports it once, and is tried at the requested size again by the next resize or change of that knob.
 - **Single images release their cascades:** a zero viewport (a capture renderer between pictures, the editor's hidden
@@ -3590,6 +3601,25 @@ lights, Post Process and the sky), and never a resolution below the output's.
   to a dielectric's reflection. A white metal in a white furnace reflects the whole sky at every roughness (0.31 of it at
   roughness 1 before; `GPU.SceneRenderer.Lighting`'s furnace cases): check every shading change with them, and with the
   look-dev furnace (`lookdev.furnace`, Tonemapper None, so the PNG's decoded values at the sphere centers are linear).
+- **Specular anti-aliasing** (`PBR.glsl`'s `WidenRoughness`, `SceneRendererSpecification::SpecularAntiAliasing`, on by
+  default, `MaterialParams.z`): a highlight narrower than a pixel lands on some pixels and misses their neighbors, so
+  normal-mapped and curved surfaces sparkle at 4K and as they move. The shading normal's change across the pixel is a spread
+  of normals within its footprint, so the lobe is widened by its variance: `alpha^2 += min(2 x 0.25 (|dN/dx|^2 +
+  |dN/dy|^2), 0.18)` (`c_SpecularAAVariance`, `c_SpecularAAMaxKernel`, the cap keeping silhouettes and seams from turning
+  matte). GGX stays normalized, so the highlight keeps its light and spreads it over the pixels it covers. `main()` widens
+  the base's roughness and the coat's (with its own normal) before shading; the glass variant's transmission blur takes the
+  widened one; the prepass writes the same widened roughness into the surface target (`ST_PREPASS_SURFACE`), so
+  screen-space reflections trace the lobe the forward pass shades. **The derivative rule:** derivatives are taken only of
+  values computed from the primitive's own interpolants and its material's textures, in control flow uniform over a quad
+  (branches on the material's flags only), before any `discard`: a quad belongs to one primitive, which both draw paths
+  draw with the same vertex module, so they stay pixel-equal (`GPU.SceneRenderer.GPUDriven`'s "Lit materials"). A flat
+  surface without a normal map has zero derivatives and keeps its roughness exactly. `GPU.SceneRenderer.Materials` checks
+  that a bumpy sphere's highlight variance halves and its light stays within 15%.
+- **The horizon fade** (`GetHorizonFade`): a normal map can turn the reflected vector into the surface, where image light
+  would show the surface's own underside. Image light (probes, sky, screen-space reflections, through the specular
+  occlusion) is multiplied by `clamp(1 + R . Ng / 0.25, 0, 1)^2` with Ng the geometric normal (facing the viewer), reaching
+  0 about 15 degrees below the surface; the coat takes its own. Direct light has its own `NoL`. Smooth surfaces without a
+  normal map reflect above their surface and are unchanged.
 - **Lighting debug views** (`SceneRenderOptions::LightingView`, `SceneLightingView`; `R/SceneRendererLightingView.cpp`) show
   and measure the scene's light, so a lighting change is checked against numbers rather than by eye. The forward pass reads
   the view from `MaterialParams.y` (a uniform branch, nothing when 0): **Lighting** shades every lit surface with albedo 1 and
@@ -3798,9 +3828,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
     `EnvironmentUpdates`); a change meanwhile waits for the next refresh, which follows at once, so settings that change
     every frame still update the environment every 14 frames. An intensity change recomputes nothing, also from and to 0.
     The scene's binding sets follow each of the three maps (cube, irradiance, prefiltered). Memory: the tables about
-    0.3 MiB, each set of maps about 21 MiB, so a renderer with the atmosphere holds two (42 MiB); nothing exists without
-    the atmosphere. `GPU.Atmosphere` switches the sky's source and the sun back and forth and compares the reflections
-    with a fresh renderer's.
+    0.3 MiB, each set of maps about 21 MiB (33 MiB with a 512 prefiltered sky), so a renderer with the atmosphere holds
+    two (42 MiB, 66 MiB at High and Ultra); nothing exists without the atmosphere. `GPU.Atmosphere` switches the sky's
+    source and the sun back and forth and compares the reflections with a fresh renderer's.
 
 ### Reflections
 

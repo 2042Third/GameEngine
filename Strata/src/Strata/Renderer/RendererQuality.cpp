@@ -39,6 +39,7 @@ namespace Strata
 		constexpr PresetRow<float> c_LODErrorPixelsRow = { 2.0f, 1.0f, 1.0f, 0.5f };
 		constexpr PresetRow<float> c_MinProjectedPixelsRow = { 1.0f, 0.5f, 0.5f, 0.25f };
 		constexpr PresetRow<AmbientOcclusionLevel> c_AmbientOcclusionQualityRow = { AmbientOcclusionLevel::Low, AmbientOcclusionLevel::Medium, AmbientOcclusionLevel::High, AmbientOcclusionLevel::Ultra };
+		constexpr PresetRow<uint32_t> c_EnvironmentResolutionRow = { 256, 256, 512, 512 };
 
 		constexpr uint32_t c_MinLocalShadowAtlasSize = 512;
 		constexpr uint32_t c_MaxLocalShadowAtlasSize = 8192;
@@ -209,6 +210,7 @@ namespace Strata
 					settings.LODErrorPixels = c_LODErrorPixelsRow[index];
 					settings.MinProjectedPixels = c_MinProjectedPixelsRow[index];
 					settings.AmbientOcclusionQuality = c_AmbientOcclusionQualityRow[index];
+					settings.EnvironmentResolution = c_EnvironmentResolutionRow[index];
 				}
 				return presets;
 			}();
@@ -236,6 +238,7 @@ namespace Strata
 			clamped.MinProjectedPixels = ClampPixels(clamped.MinProjectedPixels, medium.MinProjectedPixels);
 			if (static_cast<uint8_t>(clamped.AmbientOcclusionQuality) > static_cast<uint8_t>(AmbientOcclusionLevel::Ultra))
 				clamped.AmbientOcclusionQuality = medium.AmbientOcclusionQuality;
+			clamped.EnvironmentResolution = clamped.EnvironmentResolution == 512 ? 512 : 256;
 			if (static_cast<uint8_t>(clamped.Preset) > static_cast<uint8_t>(RendererQualityPreset::Custom))
 				clamped.Preset = RendererQualityPreset::Custom;
 			return clamped;
@@ -326,6 +329,16 @@ namespace Strata
 			return AmbientOcclusionSamples {};
 		}
 
+		uint32_t GetPrefilterSamples(uint32_t size, uint32_t mip)
+		{
+			// At 512 the narrow lobes of levels 1 and 2 (roughness 0.2 and 0.4) need fewer samples: the filtered importance
+			// sampling reads source levels as fine as their lobes, and 128 keeps level 1 at 0.6.0's level 1 cost (256^2 x 6 x
+			// 128 = 128^2 x 6 x 512), so a refresh step of the atmosphere never takes longer than before.
+			constexpr uint32_t c_Samples = 512;
+			constexpr uint32_t c_NarrowLobeSamples = 128;
+			return size > 256 && (mip == 1 || mip == 2) ? c_NarrowLobeSamples : c_Samples;
+		}
+
 
 		SettingsSection MakeSection()
 		{
@@ -376,6 +389,9 @@ namespace Strata
 			section.Fields.push_back(EnumField("AmbientOcclusionQuality", "Ambient occlusion quality", "Custom only: ambient occlusion's samples, "
 				"Low 1x4, Medium 2x6 (Strata 0.6.0's), High 3x8, Ultra 4x12 slices x steps per side; GPU time at 3840x2160 grows about with their "
 				"product.", std::move(occlusionLevels), AmbientOcclusionLevelToString(high.AmbientOcclusionQuality)));
+			section.Fields.push_back(EnumField("EnvironmentResolution", "Sky reflection resolution", "Custom only: the prefiltered sky's texels "
+				"each way per face: 512 keeps mirror reflections of the sky sharp at 4K; 12 MiB more per view than 256, 24 MiB with the "
+				"atmosphere.", { "256", "512" }, std::to_string(high.EnvironmentResolution)));
 			return section;
 		}
 
@@ -402,6 +418,7 @@ namespace Strata
 				ReadField(*value, "LODErrorPixels", settings.LODErrorPixels);
 				ReadField(*value, "MinProjectedPixels", settings.MinProjectedPixels);
 				ReadField(*value, "AmbientOcclusionQuality", settings.AmbientOcclusionQuality);
+				ReadField(*value, "EnvironmentResolution", settings.EnvironmentResolution);
 			}
 			// Knobs read under every preset (players' comfort rows) follow here, one line each.
 			return Clamp(settings);
@@ -418,7 +435,8 @@ namespace Strata
 				{ "MaxShadowedLocalLights", settings.MaxShadowedLocalLights },
 				{ "LODErrorPixels", settings.LODErrorPixels },
 				{ "MinProjectedPixels", settings.MinProjectedPixels },
-				{ "AmbientOcclusionQuality", AmbientOcclusionLevelToString(settings.AmbientOcclusionQuality) }
+				{ "AmbientOcclusionQuality", AmbientOcclusionLevelToString(settings.AmbientOcclusionQuality) },
+				{ "EnvironmentResolution", std::to_string(settings.EnvironmentResolution) }
 			};
 		}
 

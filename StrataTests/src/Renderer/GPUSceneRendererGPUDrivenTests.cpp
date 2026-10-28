@@ -464,6 +464,37 @@ namespace
 		return View(glm::vec3(0.0f, 1.5f, 6.0f), glm::vec3(0.0f, 1.0f, -6.0f));
 	}
 
+	// Every shading path the specular work touches: bumpy normal-mapped metals of roughness 0.2, 0.6 and 1 (their specular
+	// anti-aliasing takes screen derivatives of the shading normal), a clear-coated one with its own widened lobe, a sun, a
+	// procedural sky and ambient occlusion.
+	SceneCamera BuildLitMaterials(Scene& scene, SceneTestAssets& assets, TestSkinningPoses&)
+	{
+		AddNeutralPostProcess(scene).AmbientOcclusion = true;
+		AddSun(scene, glm::normalize(glm::vec3(-0.4f, -1.0f, -0.5f)), 3.0f);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().Source = SkyLightSource::Procedural;
+		const AssetHandle bumps = assets.AddBumpyNormalMap(256);
+		const float roughnesses[] = { 0.2f, 0.6f, 1.0f };
+		for (uint32_t index = 0; index < std::size(roughnesses); index++)
+		{
+			MaterialProperties metal;
+			metal.BaseColor = glm::vec4(0.95f, 0.64f, 0.54f, 1.0f);
+			metal.Metallic = 1.0f;
+			metal.Roughness = roughnesses[index];
+			metal.NormalMap = bumps;
+			AddMesh(scene, BuiltinAssets::SphereMesh, assets.AddMaterial(metal), glm::vec3(static_cast<float>(index) * 1.2f - 1.2f, 0.5f, 0.0f), "Metal");
+		}
+		MaterialProperties coated;
+		coated.BaseColor = glm::vec4(0.1f, 0.3f, 0.8f, 1.0f);
+		coated.Roughness = 0.5f;
+		coated.Clearcoat = 1.0f;
+		coated.ClearcoatRoughness = 0.05f;
+		coated.NormalMap = bumps;
+		AddMesh(scene, BuiltinAssets::SphereMesh, assets.AddMaterial(coated), glm::vec3(0.0f, 0.5f, 1.2f), "Coated");
+		AddMesh(scene, BuiltinAssets::PlaneMesh, LitMaterial(assets, glm::vec4(0.6f, 0.6f, 0.6f, 1.0f)), glm::vec3(0.0f), "Floor")
+			.GetComponent<TransformComponent>().Scale = glm::vec3(8.0f);
+		return View(glm::vec3(0.0f, 2.0f, 4.5f), glm::vec3(0.0f, 0.4f, 0.0f));
+	}
+
 	const TestScene c_Scenes[] = {
 		{ "Many meshes", BuildManyMeshes },
 		{ "Alpha-masked", BuildAlphaMasked },
@@ -475,6 +506,7 @@ namespace
 		{ "LODs by error", BuildLODsByError, c_LODSceneErrorPixels },
 		{ "Occluded", BuildOccluded },
 		{ "Local shadows", BuildLocalShadowed },
+		{ "Lit materials", BuildLitMaterials },
 	};
 
 	void CompareScenes(GPUContext& gpu, IndirectDrawMode indirect, uint32_t maxDrawsPerCall = 0)

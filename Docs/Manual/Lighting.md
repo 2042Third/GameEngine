@@ -181,6 +181,13 @@ the light. Materials made darker to look right before may now be set to their me
 The Sky section of the Inspector has four presets, each a sky and a sun of real values in one undo step (agents run
 `lighting.applySkyPreset`): **Clear** (the physical atmosphere and a 120,000 lux sun 40 degrees up: sunny, deep blue
 shadows), **Hazy** (thicker air: a paler sky and softer contrast), **Overcast** (an even gray sky of about 7,700 lux and a
+Highlights hold at 4K without sparkling: where a surface's normal map or curvature changes faster than the pixels can
+show, its highlight spreads over the pixels it covers instead of flickering between single bright pixels (specular
+anti-aliasing, since 0.7.0). Distant normal-mapped and curved surfaces therefore look slightly rougher than their
+material says; flat surfaces are unchanged. Reflections that a normal map would turn into the surface itself fade out
+instead of showing what lies below the surface. At the High and Ultra graphics quality the sky's reflections are filtered
+at 512 texels per face (256 at Low and Medium), so mirror-like surfaces reflect a sharp sky at 4K.
+
 faint, very soft sun) and **Golden Hour** (the sun 6 degrees up: warm light and long shadows). They keep the sun's direction
 around the horizon, make the sky and the sun a scene lacks, and raise the Post Process's **Auto Exposure Max EV** to 16 when
 it would clip a real sun.

@@ -174,6 +174,10 @@ namespace Strata
 		// single images that wait for the levels they need (the editor's captures, thumbnails) turn it off: they show the
 		// finest resident levels at once.
 		bool FadeTextureLevels = true;
+		// Geometric specular anti-aliasing (MaterialParams.z): the forward pass widens each surface's specular lobe by how much
+		// its shading normal changes across the pixel, so highlights narrower than a pixel spread over it with their energy
+		// instead of sparkling (Include/PBR.glsl, WidenRoughness). Off only to compare with and without it (tests).
+		bool SpecularAntiAliasing = true;
 		// The render scene's GPU copy (RenderSceneGPU, shared by the scene's renderers) uploads new proxies' records and
 		// instances within this many bytes per frame, at least one proxy per frame; the others wait, undrawn
 		// (SceneRendererStats::DeferredInstanceBytes). Changes of proxies already on the GPU always upload at once.
@@ -1106,6 +1110,7 @@ namespace Strata
 		// does not. Its tables (Include/Atmosphere.glsl) are computed when what they depend on changes; its environment is
 		// double-buffered: while the sun moved more than c_AtmosphereRefreshAngle since the current one was computed, or the
 		// settings changed, the other set of maps is computed in c_AtmosphereRefreshSteps steps (one per frame with
+			uint32_t PrefilteredSize = 256;   // Texels each way of Prefiltered's first level (RendererQualitySettings::EnvironmentResolution)
 		// SceneRendererSpecification::SpreadLightingUpdates, else all at once) and then takes over; changes meanwhile wait for
 		// the next refresh, which starts once it is done.
 		struct AtmosphereState
@@ -1197,7 +1202,7 @@ namespace Strata
 		// that starts drawing a scene lit by a map (a capture renderer, a second view) neither waits for the map's levels,
 		// which drop to its tail once the environment is computed, nor computes it again. Maps written in place (procedural
 		// skies) are never shared.
-		static Ref<const EnvironmentMaps> FindSharedEnvironment(const Texture& source);
+		static Ref<const EnvironmentMaps> FindSharedEnvironment(const Texture& source, uint32_t prefilteredSize);
 		static void ShareEnvironment(const Ref<const EnvironmentMaps>& environment);
 		static SharedEnvironments& GetSharedEnvironments();
 		// The environment maps of a procedural sky, computed into the current procedural sky's textures when there are
@@ -1451,6 +1456,9 @@ namespace Strata
 		void GatherLocalShadowDraws(RenderScene& renderScene, bool casterDraws);
 		// The shaders' data of the shadowed lights (m_LocalShadowData), relative to the frame's camera.
 		void BuildLocalShadowData(const SceneCamera& camera);
+		// Drops the environment maps (and the atmosphere's spare and refreshing ones) through Renderer::ReleaseDeferred, so the
+		// next frame with a sky computes them at the quality's EnvironmentResolution or takes a shared set of that size.
+		void ReleaseEnvironment();
 		// Creates the atlas with its framebuffer once a frame has shadowed lights; false (reported) when that fails.
 		bool EnsureLocalShadowAtlas();
 		// Clears the views' tiles and draws their casters (the CPU's draws).
