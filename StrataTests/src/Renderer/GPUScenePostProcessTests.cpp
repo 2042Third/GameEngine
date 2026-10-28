@@ -952,6 +952,65 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The stats report the newest metering and key of automatic exposure, the sun's card, and forget them with a new stretch")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		MaterialProperties gray;
+		gray.BaseColor = glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
+		gray.Roughness = 1.0f;
+		gray.Metallic = 0.0f;
+		Scene scene;
+		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.AutoExposure = true;
+		postProcess.AutoExposureKey = 0.12f;
+		postProcess.AutoExposureMinEV = -12.0f;
+		postProcess.AutoExposureMaxEV = 16.0f;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(gray), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(100.0f);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.0f);
+		// A 64 lux sun 60 degrees high: the floor meters a little below its gray card.
+		Entity sun = AddSun(scene, glm::normalize(glm::vec3(0.0f, -std::sin(glm::radians(60.0f)), -std::cos(glm::radians(60.0f)))), 64.0f, false);
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 3.0f, 0.01f), glm::vec3(0.0f));
+		REQUIRE(RenderUntilPreExposureSettled(renderer, scene, camera, 30) <= 30);
+		// The metering arrives frames late; the scene is still, so the newest readback holds what the buffer holds now.
+		for (int frame = 0; frame < 4; frame++)
+			RenderToImage(renderer, scene, camera);
+		const SceneRendererStats& stats = renderer.GetStats();
+		REQUIRE(stats.ExposureLog2Luminance.has_value());
+		CHECK(*stats.ExposureLog2Luminance == doctest::Approx(ReadExposure(gpu, renderer).x).epsilon(1e-4));
+		CHECK(stats.ExposureKeyStops == doctest::Approx(ReadExposureKey(gpu, renderer)).epsilon(1e-4));
+		CHECK(stats.ExposureKeyStops <= 0.0f);
+		REQUIRE(stats.ExposureKeyReferenceLog2.has_value());
+		CHECK(*stats.ExposureKeyReferenceLog2 == doctest::Approx(std::log2(64.0f * 0.18f / glm::pi<float>())));
+		const float metered = *stats.ExposureLog2Luminance;
+
+		// Manual exposure meters nothing.
+		postProcess.AutoExposure = false;
+		RenderToImage(renderer, scene, camera);
+		CHECK_FALSE(renderer.GetStats().ExposureLog2Luminance.has_value());
+		CHECK_FALSE(renderer.GetStats().ExposureKeyReferenceLog2.has_value());
+		// Back on, under a sun 8 stops brighter: until a readback of the new stretch arrives there is no metering to report, not
+		// the earlier stretch's.
+		sun.GetComponent<DirectionalLightComponent>().Intensity = 64.0f * 256.0f;
+		sun.MarkModified<DirectionalLightComponent>();
+		postProcess.AutoExposure = true;
+		RenderToImage(renderer, scene, camera);
+		CHECK_FALSE(renderer.GetStats().ExposureLog2Luminance.has_value());
+		CHECK(renderer.GetStats().ExposureKeyStops == 0.0f);
+		REQUIRE(RenderUntilPreExposureSettled(renderer, scene, camera, 30) <= 30);
+		REQUIRE(renderer.GetStats().ExposureLog2Luminance.has_value());
+		CHECK(*renderer.GetStats().ExposureLog2Luminance > metered + 6.0f);
+
+		// Without a directional light there is no card.
+		scene.DestroyEntity(sun);
+		RenderToImage(renderer, scene, camera);
+		CHECK_FALSE(renderer.GetStats().ExposureKeyReferenceLog2.has_value());
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The exposure key never brightens: a dim sun under a bright sky, and a sun fading out over a lit scene")
 	{
 		GPUContext gpu;

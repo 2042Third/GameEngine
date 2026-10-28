@@ -1288,6 +1288,8 @@ namespace Strata
 			std::optional<float> keyReferenceLog2);
 		// The frame's pre-exposure (m_PreExposure) from the options, the settings and the readbacks of earlier frames' metering.
 		void ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options);
+		// A new stretch of the pre-exposure (a reset, or automatic exposure turned off): its readbacks and metering start empty.
+		void StartPreExposureEpoch();
 		// After the executed command list of a frame that recorded the exposure's copy: the copy is pending.
 		void SubmitExposureReadback();
 		// Ends the holds of captures no gather of this frame or the previous one waited for.
@@ -1995,7 +1997,7 @@ namespace Strata
 		uint32_t m_ExposureReadbackIndex = 0;
 		bool m_ExposureReadbackRecorded = false; // The frame being recorded copies the exposure (SubmitExposureReadback)
 		uint64_t m_ExposureReadbackSeen = 0;
-		// The newest readback's metering (SceneRendererStats::ExposureLog2Luminance, ExposureKeyStops).
+		// The newest readback's metering (SceneRendererStats::ExposureLog2Luminance, ExposureKeyStops), of the current epoch only.
 		std::optional<float> m_MeteredLog2Luminance;
 		float m_MeteredKeyStops = 0.0f;
 		float m_HistoryPreExposure = 1.0f; // The pre-exposure of the temporal history's newest image
