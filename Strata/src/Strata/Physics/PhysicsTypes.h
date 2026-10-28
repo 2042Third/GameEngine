@@ -168,6 +168,7 @@ namespace Strata
 		// world's capacity:
 		uint32_t SyncedBodyCount = 0;    // Bodies compared with their entity before the step (awake ones and those with changes)
 		uint32_t CheckedPairCount = 0;   // Touching pairs of awake bodies, whose points the step refreshed
+		uint32_t PairLookupCount = 0;    // Awake bodies whose touching pairs the step looked up (none while no pair is tracked)
 		uint32_t WrittenBodyCount = 0;   // Dynamic bodies whose pose was written back to their entity
 		// Body slots read to put the moved bodies in body order for the write-back: the groups of 64 that hold a moved body.
 		uint32_t OrderedSlotCount = 0;

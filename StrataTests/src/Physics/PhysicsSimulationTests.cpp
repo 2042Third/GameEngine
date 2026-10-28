@@ -921,6 +921,34 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(recorder.Count(CollisionEventType::Begin) == recorder.Count(CollisionEventType::End) + 401);
 	}
 
+	TEST_CASE("Contacts nobody tracks cost no lookups")
+	{
+		Scene scene;
+		Entity ground = CreateGround(scene);
+		for (int index = 0; index < 20; index++)
+			CreateDynamicBox(scene, "Box", glm::vec3(static_cast<float>(index) * 1.5f - 15.0f, 0.6f, 0.0f));
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		// Nobody listens: the boxes land and touch the ground, and no step looks a pair up.
+		StepScene(scene, 10);
+		PhysicsStats stats = physics.GetStats();
+		CHECK(stats.ActiveBodyCount == 20);
+		CHECK(stats.ContactPairCount == 0);
+		CHECK(stats.PairLookupCount == 0);
+		CHECK(stats.CheckedPairCount == 0);
+
+		// A watched ground: its pairs are seeded, and the awake bodies' pairs are checked again.
+		std::vector<CollisionEvent> events;
+		physics.AddCollisionListener([&events](const CollisionEvent& event) { events.push_back(event); }, CollisionListenerScope::WatchedEntities);
+		physics.WatchCollisions(ground.GetUUID());
+		StepScene(scene, 2);
+		stats = physics.GetStats();
+		CHECK(stats.ContactPairCount == 20);
+		CHECK(stats.PairLookupCount > 0);
+		CHECK(events.size() == 20);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Kinematic bodies reach their target when a frame runs several fixed steps")
 	{
 		Scene scene;

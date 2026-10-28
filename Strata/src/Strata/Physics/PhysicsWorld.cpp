@@ -884,6 +884,7 @@ namespace Strata
 		SettlingSums LastSettling;
 		uint32_t LastSyncedBodies = 0;
 		uint32_t LastCheckedPairs = 0;
+		uint32_t LastPairLookups = 0;                                 // Touching pair lists the last step looked up (see CollectCheckedPairs)
 		uint32_t LastWrittenBodies = 0;
 		uint32_t LastOrderedSlots = 0;
 		uint64_t BuildCount = 0;
@@ -3516,7 +3517,12 @@ namespace Strata
 
 			const b3ContactEvents contactEvents = b3World_GetContactEvents(data.World);
 			const b3SensorEvents sensorEvents = b3World_GetSensorEvents(data.World);
-			for (int index = 0; index < contactEvents.endCount; index++)
+			// Ends only end tracked pairs, and begins only begin wanted ones: while no pair is tracked, or nobody wants any,
+			// their loops would resolve every event's shapes for nothing (a pair that becomes wanted while it touches is seeded
+			// from box3d's contacts instead, SeedWantedPairs).
+			const bool anyTracked = !data.TouchingPairs.empty();
+			const bool anyWanted = data.TrackAll || !data.ContactInterest.empty();
+			for (int index = 0; anyTracked && index < contactEvents.endCount; index++)
 			{
 				const b3ContactEndTouchEvent& event = contactEvents.endEvents[index];
 				const ShapeSlot* a = ResolveShape(data, event.shapeIdA);
@@ -3524,7 +3530,7 @@ namespace Strata
 				if (a && b)
 					CountEnd(data, a->Entity, b->Entity);
 			}
-			for (int index = 0; index < sensorEvents.endCount; index++)
+			for (int index = 0; anyTracked && index < sensorEvents.endCount; index++)
 			{
 				const b3SensorEndTouchEvent& event = sensorEvents.endEvents[index];
 				const ShapeSlot* sensor = ResolveShape(data, event.sensorShapeId);
@@ -3532,7 +3538,7 @@ namespace Strata
 				if (sensor && visitor && !(sensor->BodyType == RigidBodyType::Static && visitor->BodyType == RigidBodyType::Static))
 					CountEnd(data, sensor->Entity, visitor->Entity);
 			}
-			for (int index = 0; index < contactEvents.beginCount; index++)
+			for (int index = 0; anyWanted && index < contactEvents.beginCount; index++)
 			{
 				const b3ContactBeginTouchEvent& event = contactEvents.beginEvents[index];
 				const ShapeSlot* a = ResolveShape(data, event.shapeIdA);
@@ -3544,7 +3550,7 @@ namespace Strata
 				ReadContactPoint(event.contactId, point, normal);
 				CountBegin(data, a->Entity, b->Entity, false, point, normal, event.contactId);
 			}
-			for (int index = 0; index < sensorEvents.beginCount; index++)
+			for (int index = 0; anyWanted && index < sensorEvents.beginCount; index++)
 			{
 				const b3SensorBeginTouchEvent& event = sensorEvents.beginEvents[index];
 				const ShapeSlot* sensor = ResolveShape(data, event.sensorShapeId);
@@ -3569,12 +3575,20 @@ namespace Strata
 			ST_PROFILE_FUNCTION();
 
 			data.CheckedPairs.clear();
+			data.LastPairLookups = 0;
+			// Nothing tracked (no listener, or nothing its entities touch): nothing to look up for the awake bodies.
+			if (data.TouchingPairs.empty())
+			{
+				data.LastCheckedPairs = 0;
+				return;
+			}
 			const uint64_t step = data.StepCount;
 			for (const int32_t index : data.AwakeBodies)
 			{
 				const BodySlot& slot = data.BodySlots[static_cast<size_t>(index)];
 				if (!slot.Used || !slot.Record)
 					continue;
+				data.LastPairLookups++;
 				auto indexIt = data.EntityPairs.find(slot.Record->EntityID);
 				if (indexIt == data.EntityPairs.end())
 					continue;
@@ -5273,6 +5287,7 @@ namespace Strata
 		stats.Demand = data.Demand;
 		stats.SyncedBodyCount = data.LastSyncedBodies;
 		stats.CheckedPairCount = data.LastCheckedPairs;
+		stats.PairLookupCount = data.LastPairLookups;
 		stats.WrittenBodyCount = data.LastWrittenBodies;
 		stats.OrderedSlotCount = data.LastOrderedSlots;
 		stats.BuildCount = data.BuildCount;

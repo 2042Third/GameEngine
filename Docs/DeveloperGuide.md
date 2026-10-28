@@ -2008,6 +2008,10 @@ that may not include the Physics module: the runtime's perf log, `editor.status`
   `PhysicsContacts`, `PhysicsRecycledContacts` and `PhysicsMaxBodySpeed` (the log turns detailed statistics on for the
   scene it logs, so the contact columns fill from its next step on), and the Streaming panel's Physics row "Step 1.42 ms
   (box3d 0.91) - awake 1,204 of 9,876 - recycled 63%" (the share only while detailed statistics are on).
+- **Contacts nobody tracks cost nothing.** While no pair of entities is tracked (no listener, or nothing its entities
+  touch), a step looks up no awake body's pair list (`PhysicsStats::PairLookupCount` 0) and resolves no end event; while
+  nobody wants any contact (no listener of every entity and no watched entity), it resolves no begin event. A pair that
+  becomes wanted while it touches is seeded from box3d's contacts after the next step, as before.
 - **Their cost** is timed inside the step (`InstrumentTime`; the perf lab's falling boxes print it with the decomposition):
   about 1 us a step at 70,000 boxes (0.01% of Strata's part) and 0.5 us at 10,000; the settling sums add a length and a
   few integer operations per written body inside the parallel write-back.
