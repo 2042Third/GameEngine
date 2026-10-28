@@ -2015,7 +2015,12 @@ that may not include the Physics module: the runtime's perf log, `editor.status`
 - **Contacts nobody tracks cost nothing.** While no pair of entities is tracked (no listener, or nothing its entities
   touch), a step looks up no awake body's pair list (`PhysicsStats::PairLookupCount` 0) and resolves no end event; while
   nobody wants any contact (no listener of every entity and no watched entity), it resolves no begin event. A pair that
-  becomes wanted while it touches is seeded from box3d's contacts after the next step, as before.
+  becomes wanted while it touches is seeded from box3d's contacts after the next step, as before. While pairs are tracked,
+  a step looks up only the awake bodies whose record counts pairs (`BodyRecord::PairCount`, kept equal to the entity's
+  `EntityPairs` list wherever a list changes, `UpdatePairCount`; a record made for an entity that lists pairs already
+  starts from its list; `GetStats` checks every count in Debug builds), and a body leaving the simulation looks for
+  contacts to end only when it counts some: `Boxes30kTracked` looks up at most the 3,000 bottom boxes touching the floor,
+  not every awake box.
 - **Their cost** is timed inside the step (`InstrumentTime`; the perf lab's falling boxes print it with the decomposition):
   about 1 us a step at 70,000 boxes (0.01% of Strata's part) and 0.5 us at 10,000; the settling sums add a length and a
   few integer operations per written body inside the parallel write-back.

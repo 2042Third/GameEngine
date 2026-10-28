@@ -949,6 +949,59 @@ TEST_SUITE("Physics.Simulation")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Only awake bodies with tracked pairs are looked up")
+	{
+		Scene scene;
+		Entity ground = CreateGround(scene);
+		// Ten stacks of two boxes: the lower boxes touch the ground, the upper ones only the lower ones.
+		std::vector<Entity> lower;
+		std::vector<Entity> upper;
+		for (int index = 0; index < 10; index++)
+		{
+			const float x = static_cast<float>(index) * 1.5f - 7.5f;
+			lower.push_back(CreateDynamicBox(scene, "Lower", glm::vec3(x, 0.55f, 0.0f)));
+			upper.push_back(CreateDynamicBox(scene, "Upper", glm::vec3(x, 1.6f, 0.0f)));
+		}
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+
+		// Only the ground's contacts are watched: of the 20 awake boxes, the 10 lower ones have pairs and are looked up.
+		std::vector<CollisionEvent> events;
+		physics.AddCollisionListener([&events](const CollisionEvent& event) { events.push_back(event); }, CollisionListenerScope::WatchedEntities);
+		physics.WatchCollisions(ground.GetUUID());
+		StepScene(scene, 12);
+		PhysicsStats stats = physics.GetStats();
+		REQUIRE(stats.ActiveBodyCount == 20);
+		CHECK(stats.ContactPairCount == 10);
+		CHECK(stats.PairLookupCount == 10);
+		CHECK(stats.CheckedPairCount == 10);
+
+		// Pairs that end as bodies leave (deactivated, destroyed) or are lifted away are no longer looked up; the counts
+		// follow every change (GetStats checks them against the pair lists in Debug builds).
+		lower[0].SetActive(false);
+		scene.DestroyEntity(lower[1]);
+		CHECK(physics.Teleport(lower[2], glm::vec3(-4.5f, 10.0f, 5.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f)));
+		StepScene(scene, 2);
+		stats = physics.GetStats();
+		CHECK(stats.ContactPairCount == 7);
+		CHECK(stats.PairLookupCount == 7);
+
+		// Reactivated, the body touches the ground again and is looked up with the others.
+		lower[0].SetActive(true);
+		StepScene(scene, 2);
+		stats = physics.GetStats();
+		CHECK(stats.ContactPairCount == 8);
+		CHECK(stats.PairLookupCount == 8);
+
+		// No longer watched: every pair ends, and nothing is looked up.
+		physics.UnwatchCollisions(ground.GetUUID());
+		StepScene(scene, 2);
+		stats = physics.GetStats();
+		CHECK(stats.ContactPairCount == 0);
+		CHECK(stats.PairLookupCount == 0);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Kinematic bodies reach their target when a frame runs several fixed steps")
 	{
 		Scene scene;

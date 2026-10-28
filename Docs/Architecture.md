@@ -415,7 +415,9 @@ resolve to nothing; a rebuilt body's pairs wait for its new shapes' contacts of 
 new Begin. Sensor events where neither body moves (a static trigger and a static collider) are dropped, and trigger events
 get the center of the two shapes' bounds' intersection as their point. Each touching pair knows its position in the pair
 lists of both its entities, so it is added and removed in constant time (`PhysicsStats::PairIndexOperations` counts the
-list writes). Each box3d body index leads to its entity and record in constant time (`BodySlot`), and so does each entity
+list writes), and each record counts its entity's pairs (`BodyRecord::PairCount`), so a step looks up the pairs of only
+the awake bodies that have some, and nothing while no pair is tracked; a step where nobody wants a contact resolves no
+begin event, and one without a tracked pair no end event. Each box3d body index leads to its entity and record in constant time (`BodySlot`), and so does each entity
 index (`RecordSlot`: the records stay in an ordered map for the steps' deterministic order, but a cell that loads or unloads
 looks up tens of thousands of them in a frame; the index points into the map's nodes, so records are created and removed
 only through `EmplaceRecord` and `EraseRecord`, which assert that the counts agree). Bodies spawned and removed again before

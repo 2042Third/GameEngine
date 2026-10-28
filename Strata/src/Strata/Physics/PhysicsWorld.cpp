@@ -494,6 +494,7 @@ namespace Strata
 			bool Polled = false;                            // Listed in PhysicsWorldData::PolledBodies
 			bool HasPendingForce = false;                   // PendingForce or PendingTorque are set
 			bool CountedMoving = false;                     // Counted in PhysicsWorldData::MovingRecordBodies (see UpdateMovingCount)
+			uint32_t PairCount = 0;                         // Touching pairs its entity lists in PhysicsWorldData::EntityPairs (see UpdatePairCount)
 			uint64_t SlotTicket = 0;                        // Its entry in PhysicsWorldData::SlotWaiters while it waits for a slot
 			uint64_t WriteBackPass = 0;                     // Last write-back pass that wrote this body
 			uint64_t SyncPass = 0;                          // Last step whose synchronization handled this record
@@ -1314,6 +1315,22 @@ namespace Strata
 			data.PendingEvents.push_back(event);
 		}
 
+		// Keeps the PairCount of an entity's record equal to the length of its EntityPairs list (0 without one), wherever that
+		// list changes, so that a step looks lists up only for the awake bodies that have pairs (CollectCheckedPairs) and a body
+		// leaving the simulation looks for contacts to end only when it has some (EndContactsOf). Pairs name entities by UUID,
+		// and an entity of a pair need not own a record (a character controller's): then there is nothing to keep. A record
+		// made for an entity that lists pairs already starts from the list (BeginBodyBuild); GetStats checks every record's
+		// count against the lists in Debug builds.
+		void UpdatePairCount(PhysicsWorldData& data, UUID entityID, size_t count)
+		{
+			const Entity entity = data.OwnerScene->GetEntityByUUID(entityID);
+			if (!entity)
+				return;
+			BodyRecord* record = FindRecord(data, entity.GetHandle());
+			if (record && record->EntityID == entityID)
+				record->PairCount = static_cast<uint32_t>(count);
+		}
+
 		// The touching pairs of each entity are listed in EntityPairs, and each pair knows its position in the lists of both
 		// its entities: adding and removing a pair take constant time, however many pairs an entity has (a floor under
 		// thousands of boxes). PairIndexOperations counts the list entries written.
@@ -1322,9 +1339,11 @@ namespace Strata
 			std::vector<PairKey>& pairsOfA = data.EntityPairs[pair.A];
 			pair.IndexInA = static_cast<uint32_t>(pairsOfA.size());
 			pairsOfA.push_back(key);
+			UpdatePairCount(data, pair.A, pairsOfA.size());
 			std::vector<PairKey>& pairsOfB = data.EntityPairs[pair.B];
 			pair.IndexInB = static_cast<uint32_t>(pairsOfB.size());
 			pairsOfB.push_back(key);
+			UpdatePairCount(data, pair.B, pairsOfB.size());
 			data.PairIndexOperations += 2;
 			data.TouchingPairs.emplace(key, pair);
 		}
@@ -1358,11 +1377,12 @@ namespace Strata
 				data.PairIndexOperations++;
 			}
 			keys.pop_back();
+			UpdatePairCount(data, entityID, keys.size());
 			if (keys.empty())
 				data.EntityPairs.erase(it);
 		}
 
-		// Ends every contact of an entity (its body left the simulation).
+		// Ends every contact of an entity (its body left the simulation, or its record is gone).
 		void EndContactsOf(PhysicsWorldData& data, UUID entityID)
 		{
 			auto indexIt = data.EntityPairs.find(entityID);
@@ -1371,6 +1391,7 @@ namespace Strata
 
 			const std::vector<PairKey> keys = std::move(indexIt->second);
 			data.EntityPairs.erase(indexIt);
+			UpdatePairCount(data, entityID, 0);
 
 			data.PairIndexOperations += keys.size();
 			std::vector<TouchingPair> ended;
@@ -1388,6 +1409,18 @@ namespace Strata
 			std::sort(ended.begin(), ended.end(), [](const TouchingPair& a, const TouchingPair& b) { return a.SortKey < b.SortKey; });
 			for (const TouchingPair& pair : ended)
 				QueueEvent(data, CollisionEventType::End, pair);
+		}
+
+		// Ends every contact of a record's entity: nothing to look up when it has none (most bodies, e.g. the static bodies of
+		// an unloading cell).
+		void EndContactsOf(PhysicsWorldData& data, const BodyRecord& record)
+		{
+#if defined(ST_DEBUG)
+			// A lookup per call, which is what the count saves: Debug builds only (Release keeps its asserts).
+			ST_CORE_ASSERT(record.PairCount > 0 || !data.EntityPairs.contains(record.EntityID), "Physics: a record's pair count says none, but its entity lists pairs");
+#endif
+			if (record.PairCount > 0)
+				EndContactsOf(data, record.EntityID);
 		}
 
 		//////////////////////////////////////////////////////////////////////////
@@ -1479,7 +1512,7 @@ namespace Strata
 			record.KinematicMoving = false;
 			record.HasPendingForce = false;
 			UpdateMovingCount(data, record);
-			EndContactsOf(data, record.EntityID);
+			EndContactsOf(data, record);
 		}
 
 		enum class PlacementResult : uint8_t
@@ -2096,7 +2129,7 @@ namespace Strata
 			SetFailure(data, handle, record, failure);
 			record.LastWorldTransform = worldTransform;
 			record.ShapeMembers.clear();
-			EndContactsOf(data, record.EntityID);
+			EndContactsOf(data, record);
 			UpdatePolling(data, handle, record);
 		}
 
@@ -2120,7 +2153,12 @@ namespace Strata
 			auto [record, created] = EmplaceRecord(data, handle);
 			start.Record = record;
 			if (created)
+			{
 				start.Record->EntityID = entity.GetUUID();
+				// Pairs its entity began without a record (see UpdatePairCount), e.g. as a character controller's.
+				const auto pairs = data.EntityPairs.find(start.Record->EntityID);
+				start.Record->PairCount = pairs != data.EntityPairs.end() ? static_cast<uint32_t>(pairs->second.size()) : 0;
+			}
 
 			start.Type = start.RigidBody ? start.RigidBody->Type : RigidBodyType::Static;
 			if (start.Type != RigidBodyType::Static && start.Type != RigidBodyType::Dynamic && start.Type != RigidBodyType::Kinematic)
@@ -2282,7 +2320,7 @@ namespace Strata
 				record.SavedLinearVelocity = type == RigidBodyType::Dynamic ? linearVelocity : glm::vec3(0.0f);
 				record.SavedAngularVelocity = type == RigidBodyType::Dynamic ? angularVelocity : glm::vec3(0.0f);
 				record.InSimulation = false;
-				EndContactsOf(data, record.EntityID);
+				EndContactsOf(data, record);
 			}
 			else
 			{
@@ -3586,7 +3624,8 @@ namespace Strata
 			for (const int32_t index : data.AwakeBodies)
 			{
 				const BodySlot& slot = data.BodySlots[static_cast<size_t>(index)];
-				if (!slot.Used || !slot.Record)
+				// Only bodies whose entity has pairs are looked up (PairCount, kept by UpdatePairCount).
+				if (!slot.Used || !slot.Record || slot.Record->PairCount == 0)
 					continue;
 				data.LastPairLookups++;
 				auto indexIt = data.EntityPairs.find(slot.Record->EntityID);
@@ -5258,6 +5297,12 @@ namespace Strata
 		PhysicsStats stats;
 		for (const auto& [handle, record] : data.Bodies)
 		{
+#if defined(ST_DEBUG)
+			const auto pairs = data.EntityPairs.find(record.EntityID);
+			ST_CORE_ASSERT(record.PairCount == (pairs != data.EntityPairs.end() ? pairs->second.size() : 0),
+				"Physics: the record of {} counts {} touching pairs, but its entity lists {}", static_cast<uint64_t>(record.EntityID), record.PairCount,
+				pairs != data.EntityPairs.end() ? pairs->second.size() : 0);
+#endif
 			if (!record.HasBody())
 			{
 				if (IsPending(record))

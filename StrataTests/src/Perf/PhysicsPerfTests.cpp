@@ -200,19 +200,22 @@ namespace
 		MESSAGE(metric, ": box3d's islands ", detailed.IslandCount, ", contacts ", detailed.ContactCount, " (", detailed.AwakeContactCount, " awake), recycled ",
 			awakeContacts > 0 ? 100.0 * static_cast<double>(recycled) / static_cast<double>(awakeContacts) : 0.0, "% of the awake contacts over 3 steps; ",
 			detailed.ActiveBodyCount, " bodies awake, ", detailed.SettlingBodyCount, " settling, the fastest at ", detailed.MaxBodySpeed, " m/s; ",
-			detailed.LibraryWorkers, " box3d workers");
+			detailed.LibraryWorkers, " box3d workers; ", detailed.PairLookupCount, " touching pair lists looked up a step");
 		CHECK(CountPhysicsWarnings(logStart) == 0);
 		if (listening == ContactListening::Floor)
 		{
-			// Every bottom box landed (on the floor, for good), and only those contacts are tracked.
+			// Every bottom box landed (on the floor, for good), and only those contacts are tracked: a step looks up the pairs
+			// of those boxes only, not of every awake one.
 			const size_t columns = (count + Perf::c_BoxStackHeight - 1) / Perf::c_BoxStackHeight;
 			CHECK(stats.ContactPairCount == columns);
+			CHECK(stats.PairLookupCount <= columns);
 			CHECK(floorContactBegins == columns);
 			CHECK(contacts->RemoveCollisionListener(listener));
 		}
 		else
 		{
 			CHECK(stats.ContactPairCount == 0);
+			CHECK(stats.PairLookupCount == 0);
 		}
 		scene.OnRuntimeStop();
 		REQUIRE(library.MedianMs > 0.0);
