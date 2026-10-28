@@ -1852,6 +1852,18 @@
 					"Speed": 0.0,
 					"Tooltip": "How much of the color lookup's grade shows: 1 all of it, 0.5 halfway between the image and the graded image",
 					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Lens Flare",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "LensFlare",
+					"Speed": 0.0,
+					"Tooltip": "A lens's flares around very bright light, with restraint: faint tinted ghosts mirrored through the image's center, a halo, and six rays around the sun's disk while it is in view and not covered. 0 none",
+					"Type": "Float"
 				}
 			]
 		},

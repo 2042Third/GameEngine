@@ -274,6 +274,8 @@ namespace Strata
 					{ "infinityBlurPixels", stats.DepthOfFieldInfinityCoC } } : nlohmann::json(nullptr) },
 				// Whether the Post Process's color lookup was applied (false while it loads).
 				{ "colorLookup", stats.ColorLookup },
+				// Whether lens flares ran, and whether the directional light's disk was in front of the camera for their starburst.
+				{ "lensFlare", stats.LensFlare ? nlohmann::json { { "sunInFront", stats.LensFlareSun } } : nlohmann::json(nullptr) },
 				{ "gpuMs", std::move(gpuMs) },
 				{ "gpuStatsFrame", gpu.HasTimes ? nlohmann::json(gpu.Frame) : nlohmann::json(nullptr) } };
 		}

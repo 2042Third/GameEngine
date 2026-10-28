@@ -153,6 +153,10 @@ players can turn each off with the **Film grain** and **Chromatic aberration** r
   as texture rather than noise.
 - **Chromatic Aberration** (0): a lens's lateral color fringes, red and blue drawn apart toward the image's corners; 1
   shifts each half a pixel at the corners of a 3840x2160 image (the same share of any image) and nothing at the center.
+- **Lens Flare** (0): what a lens adds around very bright light (the sun, a lamp's bulb, a reflection of the sun): faint
+  tinted ghosts mirrored through the image's center, a halo, and six rays around the sun's disk while it is in view and
+  nothing covers it. Only light far brighter than white makes them, and even the sun leaves faint ghosts; 0.3 to 0.6
+  suits a sunny exterior. Flares come from the bloom's image, which is made for them also with Bloom off.
 
 ## What it costs
 
@@ -165,9 +169,11 @@ GPU time at 3840x2160 on an RTX 5090 (the medians of Strata's look-dev captures 
 | Motion blur (`GPU.MotionBlur`, 12 samples), the camera turning 16 pixels a frame | about 0.18 ms |
 | Motion blur, the camera still | about 0.11 ms (it still reads every pixel) |
 | Depth of field (`GPU.DepthOfField`), everything far blurred at the largest circle | about 0.20 ms |
+| Lens flares (in `GPU.Post`), the sun in view | about 0.035 ms more |
 
-Off, motion blur costs nothing (no pass, no target, no motion vectors it would ask for), and so does depth of field. Grain,
-color fringes and a color lookup are part of the tone mapping: a few more operations per pixel when on.
+Off, motion blur costs nothing (no pass, no target, no motion vectors it would ask for), and so do depth of field and lens
+flares (a pass at a quarter of the resolution, plus the bloom's when Bloom is off). Grain, color fringes and a color
+lookup are part of the tone mapping: a few more operations per pixel when on.
 
 ## Recipes
 

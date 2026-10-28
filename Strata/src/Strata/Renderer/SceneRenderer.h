@@ -577,6 +577,10 @@ namespace Strata
 		bool MorphologicalAntiAliasing = false;
 		// The Post Process's color lookup was applied (PostProcessComponent::ColorLookup at an intensity above 0, loaded).
 		bool ColorLookup = false;
+		// The lens flare pass ran (PostProcessComponent::LensFlare above 0), and whether the directional light's disk was in
+		// front of the camera for its starburst.
+		bool LensFlare = false;
+		bool LensFlareSun = false;
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -722,6 +726,9 @@ namespace Strata
 		// Morphological anti-aliasing's blend weights (RGBA8: the top edge's in rg, the left edge's in ba): null until a frame used
 		// it, and again once the render targets are released.
 		nvrhi::ITexture* GetMorphologicalWeightsTexture() const { return m_MorphologicalWeights; }
+		// The lens flare at a quarter of the resolution (RGBA16F, exposed): null until a frame flared, and again once the render
+		// targets are released.
+		nvrhi::ITexture* GetLensFlareTexture() const { return m_LensFlareTexture; }
 		// The exposure of the latest frame (Include/Exposure.glsl): the adapted log2 average luminance and the multiplier of
 		// luminance the tone mapping applies.
 		nvrhi::IBuffer* GetExposureBuffer() const { return m_ExposureBuffer; }
@@ -1322,8 +1329,14 @@ namespace Strata
 			nvrhi::IBindingSet* depthOfField, nvrhi::IBindingSet* motionBlur) const;
 		// The exposure and the bloom of the post source; returns whether bloom ran. `keyReferenceLog2`: log2 of the luminance of a
 		// gray card facing the frame's directional light (unset without one).
+		// `sunUV`: where the directional light's disk is, when it is in front of the camera (the lens flare's starburst).
 		bool RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const SceneRenderOptions& options, PostSource source,
-			std::optional<float> keyReferenceLog2);
+			std::optional<float> keyReferenceLog2, std::optional<glm::vec2> sunUV);
+		// The lens flare of the bloom chain's level 1 (as its downsample left it) into m_LensFlareTexture, with the share of the disk at `sunUV` that sees the
+		// sky in alpha, and the starburst the tone mapping draws there (m_Starburst: c_LensFlareRayGain times a white card's
+		// luminance in its light, 2^keyReferenceLog2 / 0.18). False (reported) when its resources cannot be made.
+		bool RenderLensFlare(nvrhi::ICommandList* commandList, std::optional<float> keyReferenceLog2, std::optional<glm::vec2> sunUV);
+		bool EnsureLensFlareResources();
 		// Depth of field of the post source (HDR or History) through `lens` into m_DepthOfFieldTexture: the half-resolution image
 		// and circles of confusion, the near field's tile maxima and their neighborhoods', the gather of both fields and the
 		// full-resolution composite. False (reported) when its resources cannot be made: the frame shows the image in focus.
@@ -1346,13 +1359,19 @@ namespace Strata
 		// The texture of the Post Process's color lookup, requested every frame it is used (through the frame's asset resolve
 		// cache, which holds it until the frame ends); null without one, at intensity 0, and while it loads.
 		nvrhi::ITexture* ResolveColorLookup(const PostProcessComponent& postProcess);
-		// The tone mapping's second set (set 1, slots t3 and s2): the color lookup's texture, or the dummy when `lookup` is null (both made by the
-		// first frame that needs them; the dummy written by `commandList`). Null (reported) when they cannot be made.
-		nvrhi::IBindingSet* GetColorLookupSet(nvrhi::ICommandList* commandList, nvrhi::ITexture* lookup);
+		// The tone mapping's second set (set 1, slots t3, t4 and s2): the color lookup's texture and the lens flare's, each
+		// replaced by a dummy when null (the dummies made by the first frame, written by `commandList`); kept while frames use
+		// the same pair. Null (reported) when they cannot be made.
+		nvrhi::IBindingSet* GetTonemapInputSet(nvrhi::ICommandList* commandList, nvrhi::ITexture* lookup, nvrhi::ITexture* flare);
 		// The Post Process's grading (white balance, slope, offset, power), the white balance's part cached per temperature and tint.
 		PostProcessMath::ColorGrading GetColorGrading(const PostProcessComponent& postProcess);
-		// The bloom chain of the image `prefilterSet` reads (the first downsample: the HDR target's or the resolved image's).
-		void RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet);
+		// The bloom chain of the image `prefilterSet` reads (the first downsample: the HDR target's or the resolved image's): its
+		// downsamples, as deep as BloomRadius asks (only levels 0 and 1, the lens flare's, without `bloom`), which return the
+		// levels written, then its upsamples back to level 0, which the tone mapping reads.
+		uint32_t RenderBloomDownsamples(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet, bool bloom);
+		void RenderBloomUpsamples(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, uint32_t levels);
+		void DispatchBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* bindingSet, uint32_t mode, uint32_t level,
+			float upsampleWeight);
 		// A fullscreen triangle with `pipeline` into `framebuffer` (post passes, the overlays' copy); `secondSet` is bound at set 1
 		// for pipelines of two layouts.
 		void DrawFullscreen(nvrhi::ICommandList* commandList, nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* bindingSet,
@@ -1857,13 +1876,24 @@ namespace Strata
 		std::optional<PostProcessMath::ColorGrading> m_Grading; // The white balance of m_GradingKey (temperature, tint)
 		glm::vec2 m_GradingKey = glm::vec2(0.0f);
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_TonemapPipelines;
-		// The tone mapping's color lookup (set 1): its layout, a 1x1x1 dummy and its set for frames without one, and the set of the
-		// latest lookup with the texture it binds (kept while frames use that lookup; it holds the texture).
-		nvrhi::BindingLayoutHandle m_ColorLookupLayout;
+		// The tone mapping's second set (set 1): its layout, the dummies of frames without a color lookup (1x1x1) and without a
+		// lens flare (1x1), and the latest set with the two textures it binds (it holds them, so neither address is reused while
+		// it is kept).
+		nvrhi::BindingLayoutHandle m_TonemapInputLayout;
 		nvrhi::TextureHandle m_ColorLookupDummy;
-		nvrhi::BindingSetHandle m_ColorLookupDummySet;
-		nvrhi::BindingSetHandle m_ColorLookupSet;
-		nvrhi::ITexture* m_ColorLookupSetTexture = nullptr;
+		nvrhi::TextureHandle m_LensFlareDummy;
+		nvrhi::BindingSetHandle m_TonemapInputSet;
+		nvrhi::ITexture* m_TonemapInputLookup = nullptr;
+		nvrhi::ITexture* m_TonemapInputFlare = nullptr;
+		// The lens flare (SceneRendererPost.cpp): its layout and pipeline, and its quarter-resolution target and set (made by the
+		// first frame that flares, released with the render targets).
+		nvrhi::BindingLayoutHandle m_LensFlareLayout;
+		nvrhi::ComputePipelineHandle m_LensFlarePipeline;
+		nvrhi::TextureHandle m_LensFlareTexture;
+		nvrhi::BindingSetHandle m_LensFlareSet;
+		// The frame's starburst for the tone mapping (RenderLensFlare): the disk in UV and the rays' brightness, 0 without one.
+		glm::vec2 m_StarburstSun = glm::vec2(0.0f);
+		float m_Starburst = 0.0f;
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_FXAAPipelines;
 		nvrhi::BindingLayoutHandle m_ExposureBindingLayout;
 		nvrhi::BindingSetHandle m_ExposureBindingSet;

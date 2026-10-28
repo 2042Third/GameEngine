@@ -300,6 +300,9 @@ namespace Strata
 		// saturation to the display-encoded image, mixed in by ColorLookupIntensity. Nothing applies while it loads.
 		AssetHandle ColorLookup = UUID::Null();
 		float ColorLookupIntensity = 1.0f;
+		// A lens's flares around very bright light (0: none): ghosts mirrored through the image's center, a halo and the
+		// directional light's starburst when its disk is in view. The bloom chain feeds them (it runs for them with Bloom off).
+		float LensFlare = 0.0f;
 		float Saturation = 1.0f;
 		float Contrast = 1.0f; // Around middle gray; 1 = unchanged
 		// The Filmic curve's look, each in [0, 1]: how deep the shadows go (higher crushes the darkest tones) and how softly the

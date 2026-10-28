@@ -118,6 +118,7 @@ strata_add_shaders(Strata_Renderer
 		PostProcess/Histogram.comp
 		PostProcess/Exposure.comp
 		PostProcess/Bloom.comp
+		PostProcess/LensFlare.comp
 		PostProcess/TAA.comp
 		PostProcess/FXAA.frag
 		PostProcess/MorphologicalEdges.frag

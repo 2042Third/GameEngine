@@ -1370,3 +1370,18 @@ recomputed), the vignette's numbers (9.9% and 16.5% at 60 degrees, recomputed), 
 parameter layout (64 bytes) and the tone-mapping buffer's std140 offsets, the file:line references of 2.1-2.3
 (spot-checked against bc6ee123), the ABI (no host function), both draw paths (post-processing reads what both write),
 the shadow caches (the lens stays out of their key), the cut line, and open questions 2, 3, 5, 7 and 8.
+
+## 15. As built (5.11 and 5.12)
+
+1. **The color lookup's cooked form holds no domain (5.11).** `ColorLookupImporter` folds `DOMAIN_MIN`/`DOMAIN_MAX` (and
+   Resolve's `LUT_3D_INPUT_RANGE`) into its resampling, so every cooked lattice spans [0, 1] and the shader needs no
+   domain constants; `STLU` version 1 is a 16-byte header (magic, version, size, zero) and the RGBA16F points. The `Size`
+   setting is a choice of "17", "33" (default), "65" or "File" (the file's own size). The upload queue gained 3D regions
+   (`GPUTextureRegion::Depth`). The tone mapping reads the lookup through a second binding set (set 1, slots t3 and s2:
+   NVRHI wants a pipeline's layouts to use different slots), so the five tone-mapping sets of the post sources stay as
+   they are.
+2. **Lens flares read level 1 before the bloom's upsamples (5.12).** After the upsamples, the deeper levels' tent filters
+   leave diamond-shaped contours that the flare's threshold cut out as diamond ghosts (look-dev `13-flare`); the flare
+   runs between `RenderBloomDownsamples` and `RenderBloomUpsamples` and reads through a cubic B-spline. The bright part's
+   excess over 4 is compressed toward 16 so the sun's ghosts stay faint. The starburst is drawn by the tone mapping, as
+   specified, but its 16 depth taps run in the flare pass, which hands their share over in its target's alpha.
