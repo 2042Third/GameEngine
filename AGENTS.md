@@ -289,6 +289,9 @@ Game logic is C++ script classes in a module built against `StrataScriptCore` on
   frame's input. Gameplay and UI read rebindable controls as input actions, and only `InputActions` touches the players'
   bindings file ([Gameplay API](Docs/DeveloperGuide.md#gameplay-api)).
 - SDK helpers named like engine classes (`Random`, `Timer`) are tested only inside a script module.
+- Players' graphics options go through `IGameGraphics` (`Renderer.Quality`'s fields by name; the project's value, then
+  the player's, then `--quality`); in-process game loops provide it too; only `GameGraphicsService` touches
+  `GraphicsOptions.json`, and every quality row has a line in `RendererQuality`'s traits table (`FollowsPreset`).
 
 ## Audio
 

@@ -50,7 +50,7 @@ namespace Strata::CLI::McpToolsets
 			{ "editor.", "editor" }, { "log.", "editor" },
 			{ "ui.", "ui" },
 			{ "world.", "world" }, { "physics.", "world" },
-			{ "preferences.", "settings" }, { "inputActions.", "settings" } };
+			{ "preferences.", "settings" }, { "inputActions.", "settings" }, { "graphics.", "settings" } };
 
 		constexpr ToolsetInfo c_Toolsets[] = {
 			{ "core", "Making and testing a game: project, scene, entities, components, prefabs, assets, scripts, play, input sequences, captures" },
@@ -65,7 +65,7 @@ namespace Strata::CLI::McpToolsets
 			{ "editor", "The editor itself: status, activity, panels, dialogs, logs" },
 			{ "ui", "Game UI: canvases and widgets" },
 			{ "world", "Worlds, their cells, and physics statistics" },
-			{ "settings", "Project settings, collision layers, input actions, the game's identity and the editor's preferences" } };
+			{ "settings", "Project settings, graphics quality, collision layers, input actions, the game's identity and the editor's preferences" } };
 
 		size_t FindSentenceEnd(std::string_view text)
 		{

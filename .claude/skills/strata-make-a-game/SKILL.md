@@ -468,7 +468,8 @@ is each one's regression:
   entity); camera-relative movement with coyote time; a follow camera whose arm a raycast shortens; triggers that collect
   and launch; a crate the controller pushes; a main menu scene that loads the course (`Game::LoadScene`, the scene as an
   asset field so pruned exports keep it); settings in a save file applied with `Audio::SetMasterVolume`,
-  `Game::SetWindowMode` and `Game::SetVSync`; a pause menu at time scale 0; an attract mode kept in the script module's
+  `Game::SetWindowMode` and `Game::SetVSync`, and a Graphics row (Low to Ultra toggles in one group: `Graphics::SetPreset`,
+  `Graphics::Save`; offer one in every 3D game's settings menu); a pause menu at time scale 0; an attract mode kept in the script module's
   own state across scene loads; a flag in a hand (`AttachToJoint`: the joint's transform carries the model's scale, so
   the child's scale divides by it).
 

@@ -80,11 +80,11 @@ namespace Strata
 	std::optional<ViewportQuality> ViewportQualityFromString(std::string_view name);
 	// The settings a view's quality stands for: Project is RendererQuality::GetProjectQuality(), the others their preset's.
 	RendererQualitySettings ResolveViewportQuality(ViewportQuality quality);
-	// What the Scene view draws `view` with: the project's quality for the scene's camera (ViewportView::FromScene, with
-	// "Game camera" or behind the canvas mode: as the Game view and the game draw it), `setting`
-	// (ViewportSettings::Quality) for the editor camera. viewport.capture draws its view with it unless the request names
-	// a quality.
-	ViewportQuality GetSceneViewQuality(const ViewportView& view, ViewportQuality setting);
+	// What the Scene view draws `view` with: `game`, the game's quality (EditorContext::GetGameQuality: the project's, with
+	// the players' options while playing), for the scene's camera (ViewportView::FromScene, with "Game camera" or behind the
+	// canvas mode: as the Game view and the game draw it), `setting` (ViewportSettings::Quality) for the editor camera.
+	// viewport.capture draws its view with it unless the request names a quality.
+	RendererQualitySettings GetSceneViewQuality(const ViewportView& view, ViewportQuality setting, const RendererQualitySettings& game);
 
 	// Frames of temporal anti-aliasing a single picture of a view settles over (SceneRendererStats::TemporalFrames): the
 	// jitter's eight phases, after which the image is their mean, as the viewport's converged view shows it. Captures and the
@@ -92,12 +92,13 @@ namespace Strata
 	constexpr uint32_t c_TemporalSettleFrames = SceneRenderer::c_TemporalJitterPhases;
 
 	// What a view's last successful Render showed of the game: live captures (viewport.capture {live}) pair a view's frames
-	// with the game's fixed steps.
+	// with the game's fixed steps, and the sun's Inspector line names the quality the Scene view's frame was drawn with.
 	struct ViewportRenderStamp
 	{
 		uint64_t RenderCount = 0; // SceneRenderer::GetRenderCount after that Render (0: none yet)
 		uint64_t PlaySession = 0; // EditorContext::GetPlaySession while the game ran, 0 while editing
 		uint64_t FixedSteps = 0;  // EditorContext::GetFixedStepCount then: the steps the frame shows
+		bool FromScene = false;   // The view looked through the scene's camera (ViewportView::FromScene): the game's quality
 	};
 
 	// Renders the editor's active scene for the viewport or a capture, with the overlays the viewport settings enable:
@@ -117,8 +118,9 @@ namespace Strata
 
 		// Renders into the output texture at `size` (render targets are recreated only when the size changes) at `quality`
 		// (SceneRenderer::SetQuality, applied after the size, so Auto resolves for the image's rows): the Scene view's
-		// ResolveViewportQuality(settings.Quality), the project's for the Game view and the project's picture, the request's
-		// for captures. Returns false when nothing was rendered: a zero size, or a failure the scene renderer logged.
+		// GetSceneViewQuality, the game's for the Game view (EditorContext::GetGameQuality), the project's for the project's
+		// picture, the request's for captures. Returns false when nothing was rendered: a zero size, or a failure the scene
+		// renderer logged.
 		bool Render(EditorContext& context, const glm::uvec2& size, const ViewportView& view, const ViewportSettings& settings, bool overlays,
 			const RendererQualitySettings& quality);
 
@@ -155,7 +157,7 @@ namespace Strata
 		// the selection, the scene or its hierarchy changed.
 		void UpdateSelectionSubtrees(EditorContext& context, const Ref<Scene>& scene);
 		// Records a successful Render of the active scene (m_RenderedScene and m_RenderStamp).
-		void OnRendered(EditorContext& context);
+		void OnRendered(EditorContext& context, const ViewportView& view);
 	private:
 		Scope<SceneRenderer> m_Renderer;
 		DebugDraw m_DebugDraw;

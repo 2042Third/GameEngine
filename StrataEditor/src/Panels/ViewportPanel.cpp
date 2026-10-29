@@ -27,7 +27,9 @@
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
+#include <Strata/Runtime/GameGraphicsService.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 
@@ -123,7 +125,8 @@ namespace Strata
 		// only get a framebuffer scale of their own with multi-viewport support; like ImGui's renderer data, the panel falls
 		// back to the display's otherwise.
 		const ImGuiStyle& style = ImGui::GetStyle();
-		const ViewportToolbar::Layout layout = ViewportToolbar::Compute();
+		// As many rows as the chips took in the last frame (a narrow view wraps them).
+		const ViewportToolbar::Layout layout = ViewportToolbar::Compute(m_ChipStrip.Rows);
 		const ImVec2 imageMin = layout.ImageMin;
 		const ImVec2 available = layout.ImageSize;
 		ImGui::SetCursorScreenPos(imageMin);
@@ -239,9 +242,9 @@ namespace Strata
 		ViewportSettings renderSettings = settings;
 		renderSettings.ShowGameUI = renderSettings.ShowGameUI || canvasMode;
 		// The editor camera at the Scene view's own quality setting (the project's by default), the scene's camera at the
-		// project's.
+		// game's (the project's, with the players' options while playing).
 		const bool rendered = renderer && view && renderer->Render(context, size, *view, renderSettings, view->EditorOverlays && !canvasMode,
-			ResolveViewportQuality(GetSceneViewQuality(*view, settings.Quality)));
+			GetSceneViewQuality(*view, settings.Quality, context.GetGameQuality()));
 		if (rendered)
 		{
 			if (canvasMode)
@@ -267,14 +270,14 @@ namespace Strata
 			UpdateGizmo(context, *view);
 
 		// The chips, in the toolbar from its left; the agent's at its right. The last chips that do not fit with their labels
-		// are drawn as icons (their labels in their tooltips).
+		// are drawn as icons (their labels in their tooltips), and those that do not fit even so on the rows under the first.
 		ImGui::PushClipRect(layout.Min, layout.Max, true);
 		ImGui::SetCursorScreenPos(layout.ChipsMin);
 		const float agentWidth = PrepareAgentChip(panelContext);
 		{
 			const float agentRoom = agentWidth > 0.0f ? agentWidth + style.ItemSpacing.x * 2.0f : 0.0f;
 			UI::ChipStrip strip(m_ChipStrip, layout.Max.x - layout.ChipsMin.x - agentRoom);
-			DrawChips(context);
+			DrawChips(panelContext, view && view->FromScene);
 			DrawPreviewChip(panelContext);
 		}
 		if (agentWidth > 0.0f)
@@ -326,8 +329,9 @@ namespace Strata
 	// Chips
 	////////////////////////////////////////////////////////////////////////////////
 
-	void ViewportPanel::DrawChips(EditorContext& context)
+	void ViewportPanel::DrawChips(EditorPanelContext& panelContext, bool sceneCamera)
 	{
+		EditorContext& context = panelContext.Context;
 		EditorViewport& viewport = context.GetViewport();
 		ViewportSettings& settings = viewport.GetSettings();
 		EditorCamera& camera = viewport.GetCamera();
@@ -412,6 +416,8 @@ namespace Strata
 			"Show the selection's UI canvas in 2D at its reference aspect ratio, to place and size its elements with handles");
 		ImGui::SameLine();
 		DrawDebugViewChip(settings);
+		ImGui::SameLine();
+		DrawQualityChip(panelContext, settings, sceneCamera);
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.GameCamera", Icons::Camera, "Game camera", &settings.PilotGameCamera,
 			"Look through the scene's primary camera with the editor's overlays (F8); the editor camera stays where it was");
@@ -596,6 +602,65 @@ namespace Strata
 			if (ImGui::MenuItem(name, nullptr, settings.DebugView == view))
 				settings.DebugView = view;
 		}
+		ImGui::EndPopup();
+	}
+
+	void ViewportPanel::DrawQualityChip(EditorPanelContext& panelContext, ViewportSettings& settings, bool sceneCamera)
+	{
+		// Lit while the view chooses its own preset; named after the preset in effect: the view's for the editor camera, the
+		// game's through the scene's camera (the project's, or a player's choice while playing), where the view's own preset
+		// does nothing (on, but muted). A click opens the choice.
+		EditorContext& context = panelContext.Context;
+		QualityChipKey key;
+		key.Project = RendererQuality::GetProjectQuality().Preset;
+		const bool own = settings.Quality != ViewportQuality::Project;
+		RendererQualityPreset preset = own ? ResolveViewportQuality(settings.Quality).Preset : key.Project;
+		if (sceneCamera)
+		{
+			key.Game = context.GetGameQuality().Preset;
+			key.GameSource = static_cast<int32_t>(context.GetGameGraphics().GetSource("Preset").value_or(GameGraphicsSource::Project));
+			preset = key.Game;
+		}
+		if (m_QualityChipKey != key)
+		{
+			const char* name = RendererQuality::PresetToString(key.Project);
+			m_QualityTooltip = fmt::format("The Scene view's rendering quality. Project follows Project Settings > Graphics Quality ({}); a preset "
+				"here changes only this view. The Game view, captures through the scene camera and the game follow the project and the players' "
+				"options.", name);
+			if (sceneCamera)
+			{
+				const char* source = key.GameSource == static_cast<int32_t>(GameGraphicsSource::Player) ? "the player's choice"
+					: key.GameSource == static_cast<int32_t>(GameGraphicsSource::CommandLine) ? "the command line's" : "the project's";
+				m_QualityTooltip = fmt::format("Through the scene's camera the view draws as the Game view does, at the game's quality ({}, {}). {}",
+					RendererQuality::PresetToString(key.Game), source, m_QualityTooltip);
+			}
+			m_QualityProjectItem = fmt::format("Project ({})", name);
+			m_QualityChipKey = key;
+		}
+		bool clicked = own;
+		if (UI::ToggleChip("Viewport.Quality", Icons::MonitorCog, RendererQuality::PresetToString(preset), &clicked, m_QualityTooltip.c_str(), !sceneCamera))
+			ImGui::OpenPopup("Quality");
+		if (!ImGui::BeginPopup("Quality"))
+			return;
+		const std::pair<ViewportQuality, const char*> items[] = {
+			{ ViewportQuality::Project, "Project" },
+			{ ViewportQuality::Low, "Low" },
+			{ ViewportQuality::Medium, "Medium" },
+			{ ViewportQuality::High, "High" },
+			{ ViewportQuality::Ultra, "Ultra" }
+		};
+		for (const auto& [quality, name] : items)
+		{
+			const char* label = quality == ViewportQuality::Project ? m_QualityProjectItem.c_str() : name;
+			if (ImGui::MenuItem(label, nullptr, settings.Quality == quality))
+				settings.Quality = quality;
+			UI::ItemProbe::Record(fmt::format("Viewport.Quality.{}", name));
+		}
+		ImGui::Separator();
+		if (ImGui::MenuItem("Graphics Quality...", nullptr, false, panelContext.Shell != nullptr))
+			panelContext.Shell->ShowProjectSettings(std::string(RendererQuality::c_SectionId));
+		UI::ItemProbe::Record("Viewport.Quality.Open", panelContext.Shell != nullptr);
+		ImGui::SetItemTooltip("The project's quality, its presets side by side with what each costs (Project Settings)");
 		ImGui::EndPopup();
 	}
 

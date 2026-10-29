@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -33,8 +34,9 @@ namespace Strata
 			ImVec2 ImageSize;
 		};
 
-		// From the window's cursor and content region (call before drawing anything in the panel).
-		Layout Compute();
+		// From the window's cursor and content region (call before drawing anything in the panel), with room for `rows` rows
+		// of chips (UI::ChipStripState::Rows), as many as leave the image at least half the panel's height.
+		Layout Compute(uint32_t rows = 1);
 		// The toolbar's chrome band, its bottom border in the play state's color while the scene runs (changes made now are
 		// discarded when it stops).
 		void DrawBackground(ImDrawList* drawList, const Layout& layout, const EditorContext& context);

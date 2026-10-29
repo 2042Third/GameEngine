@@ -25,6 +25,18 @@ void SettingsMenu::OnUIClick(Entity widget)
 
 void SettingsMenu::OnUIValueChanged(Entity widget, float value)
 {
+	// The Graphics row is one toggle group: switching a toggle on switches the others off first, whose events are ignored
+	// (acting on them would switch the clicked toggle off again), and the one that is on cannot be switched off.
+	if (const std::optional<QualityPreset> preset = GetGraphicsPreset(widget))
+	{
+		if (value == 0.0f)
+			return;
+		Graphics::SetPreset(*preset);
+		if (Graphics::Save())
+			GraphicsSaves++;
+		ThirdPerson::PlayInterfaceSound(ToggleSound);
+		return;
+	}
 	ThirdPerson::GameSettings& settings = ThirdPerson::GetSettings();
 	if (widget == VolumeSlider || widget == SensitivitySlider)
 	{
@@ -98,6 +110,28 @@ void SettingsMenu::ShowValues()
 		FullscreenToggle.GetUI().SetValue(settings.Fullscreen ? 1.0f : 0.0f);
 	if (VSyncToggle.IsValid())
 		VSyncToggle.GetUI().SetValue(settings.VSync ? 1.0f : 0.0f);
+	// The preset in effect (a session's --quality included); Custom shows none of the four.
+	const std::optional<QualityPreset> preset = Graphics::GetPreset();
+	for (const Entity toggle : { GraphicsLow, GraphicsMedium, GraphicsHigh, GraphicsUltra })
+	{
+		if (toggle.IsValid())
+			toggle.GetUI().SetValue(preset && GetGraphicsPreset(toggle) == preset ? 1.0f : 0.0f);
+	}
+}
+
+std::optional<QualityPreset> SettingsMenu::GetGraphicsPreset(Entity widget) const
+{
+	if (!widget.IsValid())
+		return std::nullopt;
+	if (widget == GraphicsLow)
+		return QualityPreset::Low;
+	if (widget == GraphicsMedium)
+		return QualityPreset::Medium;
+	if (widget == GraphicsHigh)
+		return QualityPreset::High;
+	if (widget == GraphicsUltra)
+		return QualityPreset::Ultra;
+	return std::nullopt;
 }
 
 void SettingsMenu::Save(bool display)
@@ -116,7 +150,12 @@ ST_SCRIPT_CLASS(SettingsMenu)
 	ST_SCRIPT_FIELD(FullscreenToggle);
 	ST_SCRIPT_FIELD(VSyncToggle);
 	ST_SCRIPT_FIELD(BackButton);
+	ST_SCRIPT_FIELD(GraphicsLow);
+	ST_SCRIPT_FIELD(GraphicsMedium);
+	ST_SCRIPT_FIELD(GraphicsHigh);
+	ST_SCRIPT_FIELD(GraphicsUltra);
 	ST_SCRIPT_FIELD(ToggleSound);
 	ST_SCRIPT_FIELD(SaveDelaySeconds);
 	ST_SCRIPT_FIELD(Saves);
+	ST_SCRIPT_FIELD(GraphicsSaves);
 }

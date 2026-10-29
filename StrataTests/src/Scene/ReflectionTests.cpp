@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Reflection/ComponentRegistry.h"
+#include "Strata/Reflection/PropertyBuilder.h"
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/ComponentAccess.h"
@@ -21,6 +22,7 @@
 #include <iterator>
 #include <limits>
 #include <utility>
+#include <vector>
 
 using namespace Strata;
 
@@ -610,3 +612,40 @@ TEST_SUITE("Scene.InactiveProperties")
 	}
 }
 
+
+namespace
+{
+	struct SectionedProperties
+	{
+		float A = 0.0f;
+		float B = 0.0f;
+		float C = 0.0f;
+		float D = 0.0f;
+	};
+}
+
+TEST_SUITE("Reflection")
+{
+	TEST_CASE("Section applies to the properties registered after it until the next")
+	{
+		std::vector<PropertyInfo> properties;
+		PropertyListBuilder<SectionedProperties>(properties)
+			.Property("A", &SectionedProperties::A)
+			.Section("First")
+			.Property("B", &SectionedProperties::B)
+			.Section("Second")
+			.Property("C", &SectionedProperties::C)
+			.Section("First")
+			.Property("D", &SectionedProperties::D);
+		REQUIRE(properties.size() == 4);
+		// Before the first call: none. A section may come back after another; registration order stays.
+		CHECK(properties[0].Section.empty());
+		CHECK(properties[1].Section == "First");
+		CHECK(properties[2].Section == "Second");
+		CHECK(properties[3].Section == "First");
+		CHECK(properties[3].Name == "D");
+		// Descriptions name it where there is one.
+		CHECK_FALSE(DescribeProperty(properties[0]).contains("Section"));
+		CHECK(DescribeProperty(properties[2])["Section"] == "Second");
+	}
+}

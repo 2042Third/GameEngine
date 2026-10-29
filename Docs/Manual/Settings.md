@@ -48,17 +48,26 @@ to find a page or a field), the selected page on the right:
   rename or remove them. When your game saved a player's rebinding while you played it, that player's bindings replace
   the project's in every play session after: those actions are marked **In play**, and **Reset Player Bindings** deletes
   the saved bindings so that your edits apply again.
-- **Graphics Quality** (under Rendering): how much the game's and the editor's views spend on shadows and detail. Pick a
-  **Preset**: **Low** (smaller shadow maps, three sun shadow cascades, four point and spot lights with shadows, coarser
+- **Graphics Quality** (under Rendering, [Graphics.md](Graphics.md)): how much the game's and the editor's views spend on
+  shadows and detail. The page shows the presets side by side in one table, a row per setting with what it costs in
+  memory at 1920 x 1080 and 3840 x 2160 and the time its part of the frame takes now in the Scene view; the chosen
+  column is highlighted. Pick a **Preset** with the chips above it: **Low** (smaller shadow maps, three sun shadow cascades, four point and spot lights with shadows, coarser
   levels of detail: for older or integrated GPUs), **Medium** (what Strata 0.6.0 drew), **High** (the default: as Medium,
   but sharper sun shadows on displays of 1440 rows and more, 256 MiB of shadow maps per view instead of 64) or **Ultra**
   (sharper shadows everywhere, larger point and spot light shadows, finer levels of detail: for large GPUs), or
-  **Custom** to set each value yourself (the shadow resolution, the number of cascades, the point and spot lights' shadow
-  atlas and largest tile, how many of those lights cast shadows, the level-of-detail error and the smallest size drawn).
+  **Custom** to set each value yourself in the table's Custom column (the shadow resolution, the number of cascades, the
+  point and spot lights' shadow atlas and largest tile, how many of those lights cast shadows, the level-of-detail error
+  and the smallest size drawn): choosing a preset keeps your Custom values for when you come back, and editing the
+  column under a preset switches to Custom from the values it shows (your earlier Custom values, or that preset's when
+  you have none).
   No setting draws below the screen's resolution, and a scene's look (its lights, Post Process and sky) stays the same.
   Exported games use it, and `<Game> --quality low` (or `medium`, `high`, `ultra`) plays one run at a preset without
-  saving anything. The Scene view can draw at a preset of your own, for your computer alone, with
-  `viewport.setSettings {quality}` ("project" follows this page).
+  saving anything. Players can choose a preset in your game's options menu (`Graphics::SetPreset`, kept with
+  `Graphics::Save`): when such a choice was saved while you played, a banner says what it sets, the rows it sets are
+  marked **Player**, and **Reset Player Options** deletes it so that this page applies in play again. The Scene view can
+  draw at a preset of your own, for your computer alone, with its quality chip (or `viewport.setSettings {quality}`;
+  "Project" follows this page). With nothing selected, the Inspector shows the project's preset with a link here, and a
+  sun's Inspector says how large its shadow maps are.
 - A page for each kind of setting the engine and your game define, grouped by category. **Reset to Defaults** sets a page
   back to the values it starts with.
 

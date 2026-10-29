@@ -133,6 +133,27 @@ that reads the keys themselves (`Input::IsKeyPressed`) still sees it. `Input::Ca
 `.strata/Saves` folder, beside the game's save files, and replace the project's bindings of those actions at every Play
 until the game saves others.
 
+## Graphics options
+
+An options menu offers the project's Graphics Quality to players ([Graphics.md](Graphics.md)) through
+`StrataScript/Graphics.h`:
+
+```cpp
+Graphics::SetPreset(QualityPreset::Low);                // Low, Medium, High, Ultra (Custom: the values below)
+Graphics::Set("ShadowCascades", 3);                    // One setting by name; the preset becomes Custom
+Graphics::Set("ShadowResolution", "2048");             // A choice by its name, never its position
+const std::optional<QualityPreset> preset = Graphics::GetPreset();
+for (const GraphicsOption& option : Graphics::Options()) // Name, Title, Description, Type, Min, Max, Choices, Source
+	Log::Info(option.Title, ": ", option.Description);
+Graphics::Reset();                                     // Back to the project's quality
+Graphics::Save();                                      // Kept for the next run
+```
+
+Changes apply from the next frame (a change of shadow resolution rebuilds the shadow maps once, so do it in a menu, not
+during play). `Save` writes them to the engine's file beside the save files; the game reads it when it starts, and
+`<Game> --quality` overrides it for one run (an option's `Source` then says `CommandLine`). Options a later engine adds
+appear in `Options()` without new code: read and set them by name.
+
 ## Hot reload
 
 Build while the game plays and the new code takes over: every script instance is recreated with its fields kept, and

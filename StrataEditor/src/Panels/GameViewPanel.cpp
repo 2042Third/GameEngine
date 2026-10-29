@@ -13,7 +13,6 @@
 #include <Strata/Input/Input.h>
 #include <Strata/Renderer/GraphicsDevice.h>
 #include <Strata/Renderer/Renderer.h>
-#include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Scene/Scene.h>
 
 #include <imgui.h>
@@ -120,8 +119,8 @@ namespace Strata
 		bool rendered = false;
 		if (view)
 		{
-			// As the game draws: at the project's quality.
-			rendered = renderer && renderer->Render(context, renderSize, *view, settings, false, RendererQuality::GetProjectQuality());
+			// As the game draws: at the game's quality (the project's, with the players' options while playing).
+			rendered = renderer && renderer->Render(context, renderSize, *view, settings, false, context.GetGameQuality());
 			if (rendered)
 				drawList->AddImage(ViewportToolbar::ToTextureID(renderer->GetOutputTexture()), imageMin, imageMax);
 			else

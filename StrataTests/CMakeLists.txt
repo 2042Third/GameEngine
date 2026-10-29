@@ -732,6 +732,15 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}|Keeping the game's save files in ${STRATA_FEATURE_RUN_DIR}/Saves|Strata Feature Test 6.1.2.3 (Strata "
 			"-DEXPECT_PATHS=${STRATA_FEATURE_RUN_DIR}/Saves|${STRATA_FEATURE_RUN_DIR}/Build/FeatureTest.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataRuntime.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestGame LABELS "feature")
+	# --quality in a window (a headless run refuses it): the runtime hands the preset to the game's graphics options, where the
+	# feature scripts read it as the command line's (and say so), and the game renderer draws with it. Overriding the renderer
+	# alone would draw the same but leave the scripts reading their own choice.
+	add_test(NAME StrataRuntime.FeatureTestQuality
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_FEATURE_RUN_DIR}/Build/FeatureTest${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DARGUMENTS=--windowed|--resolution|640x360|--frames|240|--quality|low|--save-directory|${STRATA_FEATURE_RUN_DIR}/SavesQuality"
+			"-DEXPECT=FeatureTest graphics: the command line fixes the preset (Low) over the player's choice|Graphics quality: Low (--quality)"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataRuntime.FeatureTestQuality PROPERTIES FIXTURES_REQUIRED StrataFeatureTestGame LABELS "feature;gpu" TIMEOUT 300)
 endif()
 
 # A game's script workflow through the real editor and runtime, as an agent drives it (see Editor/ScriptsEndToEnd.cmake):

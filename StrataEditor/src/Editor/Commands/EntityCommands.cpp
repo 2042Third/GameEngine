@@ -610,7 +610,7 @@ namespace Strata
 		// Components
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "component.list", "Every component type that can be added to entities, with its properties (types, ranges, enum values).", ObjectSchema({}),
+		registry.Register({ "component.list", "Every component type that can be added to entities, with its properties (types, ranges, enum values, descriptions, and the Section the Inspector groups each under).", ObjectSchema({}),
 			[](EditorContext&, const nlohmann::json&)
 			{
 				nlohmann::json components = nlohmann::json::array();

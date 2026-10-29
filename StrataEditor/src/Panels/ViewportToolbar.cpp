@@ -26,13 +26,16 @@ namespace Strata::ViewportToolbar
 
 	}
 
-	Layout Compute()
+	Layout Compute(uint32_t rows)
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const ImVec2 panelMin = ImGui::GetCursorScreenPos();
 		const ImVec2 panelSize = ImGui::GetContentRegionAvail();
-		// The chips' row with half the item spacing above and below: the toolbar takes little of the image's height.
-		const float height = ImGui::GetFrameHeight() + style.ItemSpacing.y;
+		// The chips' rows, each with half the item spacing above and below: the toolbar takes little of the image's height. A
+		// strip too narrow for its icons wraps its chips onto more rows, at most as many as leave the image half the panel.
+		const float rowHeight = ImGui::GetFrameHeight() + style.ItemSpacing.y;
+		const uint32_t maxRows = static_cast<uint32_t>(std::max(1.0f, std::floor(panelSize.y * 0.5f / rowHeight)));
+		const float height = rowHeight * static_cast<float>(std::clamp<uint32_t>(rows, 1, maxRows));
 		const float border = std::max(1.0f, std::floor(ImGui::GetFontSize() * c_BorderInFontSizes));
 		Layout layout;
 		layout.Min = panelMin;

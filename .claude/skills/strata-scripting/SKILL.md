@@ -141,6 +141,7 @@ ST_SCRIPT_CLASS(Turret)
   `GetActionBindings`/`SetActionBindings`, `ResetActionBindings`, `SaveBindings`, the capture
   `BeginBindingCapture(InputDevices)`/`PollBindingCapture`/`CancelBindingCapture`: see
   [Input actions and rebinding](#input-actions-and-rebinding).
+- `Graphics` (`StrataScript/Graphics.h`): the players' graphics options, see [Graphics options](#graphics-options).
 - `UIElement` (`entity.GetUI()`) and `UI`: the game UI, see [Game UI](#game-ui).
 - `Log::Info/Warn/Error/Trace(args...)` - arguments are concatenated (`Log::Info("Health ", health)`).
 - `RigidBody` (`GetEntity().GetRigidBody()`), `Physics` (raycasts, overlaps), `Collision` (contact callbacks),
@@ -475,6 +476,32 @@ Input::SetActionMapEnabled("Vehicle", inCar);           // Off: held actions rel
   `Input::CancelBindingCapture()` after a timeout; play stopping cancels it. A test drives it with `input.key` or
   `input.gamepadButton` while the menu listens.
 - Tools press actions' bindings with the `input.*` commands (`input.key`, `input.gamepadButton`...).
+
+### Graphics options
+
+A settings menu offers the project's Graphics Quality (Project Settings > Graphics Quality, the section
+`Renderer.Quality`) to players by name:
+
+```cpp
+Graphics::SetPreset(QualityPreset::Low);         // Low, Medium, High, Ultra; GetPreset() reads it (Custom: none of them)
+Graphics::Set<int32_t>("ShadowCascades", 2);    // A row: the preset becomes Custom, starting from the look in effect
+Graphics::Set("ShadowResolution", "2048");      // A Choice row takes a choice's name (never its position)
+Graphics::Get<std::string>("ShadowResolution"); // The value in effect; Get<int32_t>, Get<float>, Get<bool> for the others
+Graphics::Reset();                              // A name, or none: every choice; the project's quality applies again
+Graphics::Save();                               // Kept for the next run (the engine's GraphicsOptions.json)
+```
+
+- `Graphics::Options()` lists every option (`Name`, `Title`, `Description`, `Type`, `Min`/`Max`, `Choices`, `Source`:
+  Project, Player or CommandLine) in the engine's order, "Preset" first; `FindOption(name)` one of them. Read and set them
+  by name: rows a later engine adds appear without new code.
+- A menu row of four toggles in one toggle group (Low to Ultra): call `SetPreset` and `Save` on the toggle's event with a
+  value of 1 and ignore the 0 events (switching one on switches the others off first; acting on those would switch the
+  clicked one off again); show the preset in effect with `GetPreset()` when the menu opens. The Third-Person sample's
+  `SettingsMenu` does this.
+- Changes apply from the next frame; a shadow resolution change rebuilds the shadow maps once (a menu, not gameplay).
+  `StrataRuntime --quality` fixes the preset for one run: a choice made then is kept as the player's and its `Source`
+  reads CommandLine. In the editor, play loads the saved choices from `<project>/.strata/Saves` and forgets unsaved ones
+  when it stops; `graphics.resetPlayerOptions` deletes the file.
 
 ### The window and save files
 

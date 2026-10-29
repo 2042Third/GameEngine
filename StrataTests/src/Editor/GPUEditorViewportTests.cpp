@@ -11,12 +11,14 @@
 #include "Editor/ViewportRenderer.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/GameViewPanel.h"
+#include "Panels/InspectorPanel.h"
 #include "Panels/ViewportPanel.h"
 #include "Renderer/GPUTestUtils.h"
 #include "Renderer/MeshTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
 #include "TestHelpers.h"
 #include "UI/EditorPanelRegistry.h"
+#include "UI/ItemProbe.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
@@ -31,6 +33,7 @@
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
+#include <Strata/Runtime/GameGraphicsService.h>
 #include <Strata/Scene/Components.h>
 
 #include <imgui.h>
@@ -2121,6 +2124,138 @@ TEST_SUITE("GPU.Editor.Viewport")
 		harness.Run("viewport.setSettings", { { "quality", "project" } });
 		REQUIRE(sceneView->Render(context, glm::uvec2(64, 64), *editorView, viewport.GetSettings(), true, ResolveViewportQuality(viewport.GetSettings().Quality)));
 		CHECK(sceneView->GetSceneRenderer().GetQuality() == RendererQuality::GetPreset(RendererQualityPreset::Low));
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+}
+
+TEST_SUITE("GPU.Editor.GameGraphics")
+{
+	TEST_CASE("The Game view and captures of the scene camera follow the player's options while playing; the Scene view keeps its own")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(Tests::CreateTemporaryDirectory("ViewportGameGraphics") / "Game") }, { "name", "Game" } });
+		harness.AddScene();
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", { { "Primary", true } } },
+			{ "Transform", { { "Translation", { 0, 0, 5 } } } } } } });
+		harness.Run("project.setSettings", { { "section", "Renderer.Quality" }, { "value", { { "Preset", "Medium" } } } });
+		harness.Run("viewport.setSettings", { { "quality", "high" } });
+		const nlohmann::json small = { { "width", 64 }, { "height", 64 }, { "overlays", false }, { "waitForAssets", false } };
+		const auto captureQuality = [&](const char* camera)
+		{
+			nlohmann::json parameters = small;
+			parameters["camera"] = camera;
+			nlohmann::json result;
+			harness.Capture(parameters, &result);
+			return result["renderStats"]["quality"]["Preset"].get<std::string>();
+		};
+		EditorContext& context = harness.Context;
+		ViewportRenderer* game = context.GetViewport().GetGameRenderer();
+		REQUIRE(game);
+		// The Game view's panel, as the editor draws it.
+		Tests::ImGuiHarness ui;
+		GameViewPanel panel;
+		EditorPanelContext panelContext { context, harness.Commands, harness.Runner };
+		const auto drawGameView = [&]()
+		{
+			ui.Frame([&]()
+			{
+				ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+				ImGui::SetNextWindowSize(ImVec2(320.0f, 240.0f));
+				ImGui::Begin("Game", nullptr, ImGuiWindowFlags_NoSavedSettings);
+				panel.OnUpdate(panelContext);
+				panel.OnImGuiRender(panelContext);
+				ImGui::End();
+			});
+			REQUIRE(game->GetSize().x > 0);
+			return game->GetSceneRenderer().GetQuality().Preset;
+		};
+
+		// Outside play the game's quality is the project's.
+		CHECK(captureQuality("scene") == "Medium");
+		CHECK(captureQuality("editor") == "High");
+		CHECK(drawGameView() == RendererQualityPreset::Medium);
+
+		// A player's choice while playing: the Game view and the scene's camera follow it, the Scene view's editor camera not.
+		harness.Run("play.start", { { "build", false } });
+		REQUIRE(context.GetGameGraphics().SetOption("Preset", "Low"));
+		CHECK(drawGameView() == RendererQualityPreset::Low);
+		CHECK(captureQuality("scene") == "Low");
+		CHECK(captureQuality("editor") == "High");
+		harness.Run("play.stop");
+		CHECK(drawGameView() == RendererQualityPreset::Medium);
+		CHECK(captureQuality("scene") == "Medium");
+		panel.OnDetach(panelContext);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The sun's Inspector line names the shadow maps the Scene view drew and the quality they come from")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(Tests::CreateTemporaryDirectory("ViewportSunLine") / "Game") }, { "name", "Game" } });
+		const std::string sun = harness.Run("entity.create", { { "name", "Sun" }, { "components", { { "DirectionalLight", { { "Intensity", 3.0 },
+			{ "CastShadows", true } } } } } })["id"].get<std::string>();
+		harness.Run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } });
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", { { "Primary", true } } },
+			{ "Transform", { { "Translation", { 0, 0, 5 } } } } } } });
+		harness.Run("camera.set", { { "position", { 0, 0, 4 } }, { "target", { 0, 0, 0 } } });
+		harness.Run("project.setSettings", { { "section", "Renderer.Quality" }, { "value", { { "Preset", "High" } } } });
+		harness.Run("selection.set", { { "entities", { sun } } });
+		EditorContext& context = harness.Context;
+
+		// The Scene view at 1440 rows and more (High's sun shadows are 4096 there) beside the Inspector, as the editor draws them.
+		Tests::ImGuiHarness ui({ ImVec2(2000.0f, 1700.0f), 1.0f });
+		ViewportPanel scene;
+		InspectorPanel inspector;
+		EditorPanelContext panelContext { context, harness.Commands, harness.Runner };
+		const auto drawLine = [&]()
+		{
+			for (int frame = 0; frame < 2; frame++)
+			{
+				ui.Frame([&]()
+				{
+					ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+					ImGui::SetNextWindowSize(ImVec2(1024.0f, 1600.0f));
+					ImGui::Begin("Scene", nullptr, ImGuiWindowFlags_NoSavedSettings);
+					scene.OnUpdate(panelContext);
+					scene.OnImGuiRender(panelContext);
+					ImGui::End();
+					ImGui::SetNextWindowPos(ImVec2(1024.0f, 0.0f));
+					ImGui::SetNextWindowSize(ImVec2(900.0f, 1600.0f));
+					ImGui::Begin("Inspector", nullptr, ImGuiWindowFlags_NoSavedSettings);
+					inspector.OnImGuiRender(panelContext);
+					ImGui::End();
+				});
+			}
+			const ViewportRenderer* renderer = context.GetViewport().FindRenderer();
+			REQUIRE(renderer);
+			REQUIRE(renderer->GetSize().y >= RendererQuality::c_HighResolutionRows);
+			const std::optional<UI::ItemProbe::Item> line = UI::ItemProbe::Find("Inspector.DirectionalLight.ShadowQuality");
+			REQUIRE(line.has_value());
+			return line->Text;
+		};
+
+		// The project's quality: what S6 promises at High in a view of 1440 rows.
+		CHECK(drawLine() == "Shadow maps: 4 x 4096 (Graphics Quality: High)");
+		// A preset of the view's own.
+		harness.Run("viewport.setSettings", { { "quality", "low" } });
+		CHECK(drawLine() == "Shadow maps: 3 x 1024 in the Scene view (Low; the project: High)");
+		// Through the scene's camera the view draws at the game's quality, which the view's own preset does not change: the
+		// project's, and while playing the player's choice.
+		harness.Run("viewport.setSettings", { { "pilotGameCamera", true } });
+		CHECK(drawLine() == "Shadow maps: 4 x 4096 (Graphics Quality: High)");
+		harness.Run("play.start", { { "build", false } });
+		REQUIRE(context.GetGameGraphics().SetOption("Preset", "Medium"));
+		CHECK(drawLine() == "Shadow maps: 4 x 2048 through the scene's camera (Medium, the player's; the project: High)");
+		harness.Run("play.stop");
+		CHECK(drawLine() == "Shadow maps: 4 x 4096 (Graphics Quality: High)");
+		scene.OnDetach(panelContext);
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

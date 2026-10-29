@@ -87,6 +87,11 @@ namespace Strata
 		// inactive, the reason then under "<probeKey>.Inactive").
 		void PropertyLabel(std::string_view label, std::string_view tooltip = {}, std::string_view probeKey = {}, const PropertyLabelOptions& options = {});
 
+		// A heading over a group of a component's properties (PropertyInfo::Section): some space, the text in SemiBold at the
+		// caption size in the secondary text color, and a separator line. Call it between EndPropertyTable and the next
+		// BeginPropertyTable (the tables of a window share their label width). The probe records the text under probeKey.
+		void PropertyGroupHeading(std::string_view text, std::string_view probeKey);
+
 		// The type icon of an asset type (UI/Icons.h), as lists and pickers show assets.
 		const char* GetAssetTypeIcon(AssetType type);
 		// The name of an asset type for people ("Audio Clip"), where AssetTypeToString gives the identifier ("AudioClip").

@@ -196,9 +196,10 @@ editor started with `--no-gpu` (use `--headless`):
   `viewport.getSettings` / `viewport.setSettings {previewLighting?, gameUI?, grid?, selectionOutline?, sceneGizmos?,
   allColliders?, stats?, gizmo?, space?, debugView?, editPose?, quality?, ...}` change these view settings (no undo step;
   saved with the project's editor state). `quality` is the Scene view's Graphics Quality: "project" (the default) or a
-  preset of this editor's ("low" to "ultra"); the Game view and the scene's camera draw at the project's (the
-  `Renderer.Quality` section: `project.setSettings {"section": "Renderer.Quality", "value": {"Preset": "Medium"}}`), and a
-  capture at its view's unless `viewport.capture {"quality": "ultra"}` asks for one.
+  preset of this editor's ("low" to "ultra"; the person sets it with the Scene view's quality chip); the Game view and the
+  scene's camera draw at the game's: the project's (the `Renderer.Quality` section: `project.setSettings {"section":
+  "Renderer.Quality", "value": {"Preset": "Medium"}}`), with the players' options over it while playing, and a capture at
+  its view's unless `viewport.capture {"quality": "ultra"}` asks for one.
   Collider shapes show for the selection only unless `allColliders` is on; far away lights and
   cameras show as small icons.
 - **Opening a scene takes frames.** `scene.open` reads the scene and loads everything it uses in the background while the
@@ -664,6 +665,12 @@ rename or remove it. `project.settings {"section": "Input.Actions"}` shows the w
 Bindings a game's rebinding menu saved while playing (`Input::SaveBindings`, into `.strata/Saves/InputBindings.json`)
 replace the project's at every play start, so `setAction`'s bindings do not reach play for those actions:
 `inputActions.resetPlayerBindings {}` deletes that file (and, while playing, gives the game the project's bindings back).
+**Graphics quality** (toolset `settings`) is the project's section `Renderer.Quality` (`project.setSettings`, above:
+`{"Preset": "Low" | "Medium" | "High" | "Ultra"}`, or `"Custom"` with its fields). Graphics options a game's options menu
+saved while playing (`Graphics::Save`, into `.strata/Saves/GraphicsOptions.json`) replace the project's at every play
+start: `editor.status {"sections": ["game"]}` reports them as `game.graphics` (`effective` values, `sources` per field:
+"project", "player" or "commandLine", `playerOptions`, `playerFile`, `playerFileProblem`), and
+`graphics.resetPlayerOptions {}` deletes that file (and, while playing, drops the running game's choices).
 **Preferences** (toolset `settings`) are the person's, for every project, not the project's: `preferences.get` lists them
 like `project.settings` does (the external editor is `Editor.ExternalEditor`, `{"Command": "..."}`; the interface scale
 `Editor.Interface`, `{"Scale": "125%"}`), and

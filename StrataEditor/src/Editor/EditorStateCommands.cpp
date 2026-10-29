@@ -709,7 +709,8 @@ namespace Strata
 			"(the scene scene.open or project.open is opening: {scene, startScene, state, progress}, null when none), memory (privateMB, "
 			"workingSetMB and their peaks) and the sections of editor parts: automation (port, clients, connectedClients with the names agents "
 			"gave, pending requests and commands), assets (memory and budgets per pool, streaming queue, uploads; see asset.stats), game (the "
-			"running game's window requests, cursor and save directory), recovery (the edited scene's journal of unsaved changes and how many "
+			"running game's window requests, cursor, save directory and graphics: the Graphics Quality options in effect, where each comes from, and "
+			"the players' saved options), recovery (the edited scene's journal of unsaved changes and how many "
 			"recovery entries apply; see scene.recoveryStatus), world (the open world: {name, cellsLoaded, cellsLoading, cellsDirty, "
 			"persistentDirty}, null when the edited scene is no world; see world.status) and editor (window, frame rate, GPU). sections: "
 			"[\"all\"] returns everything.",

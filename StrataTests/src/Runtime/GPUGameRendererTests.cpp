@@ -1,17 +1,22 @@
 #include "Renderer/SceneRendererTestUtils.h"
+#include "TestHelpers.h"
 
 #include "Strata/Core/EngineServices.h"
+#include "Strata/Core/Log.h"
 #include "Strata/Core/ProjectSettings.h"
 #include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/RendererQuality.h"
+#include "Strata/Runtime/GameGraphicsService.h"
 #include "Strata/Runtime/GameRenderer.h"
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <functional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace Strata;
@@ -349,6 +354,70 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 		// The provider gone: Medium again.
 		REQUIRE(renderer.Render(scene, target.Framebuffer, size));
 		CHECK(renderer.GetQuality().Preset == RendererQualityPreset::Medium);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The game renderer follows the player's options and the command line")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		// Below 1440 rows High and Ultra would allocate 64 and 256 MiB of cascades: the test stays with Low and Medium.
+		const glm::uvec2 size(640, 360);
+		WindowTarget target(gpu.GetNvrhiDevice(), size);
+		Ref<Scene> scene = CreateRef<Scene>("Level");
+		AddNeutralPostProcess(*scene);
+		AddMesh(*scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Cube");
+		AddSun(*scene, glm::normalize(glm::vec3(-0.3f, -1.0f, -0.2f)), 2.0f);
+		Entity camera = scene->CreateEntity("Camera");
+		camera.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, 3.0f);
+		camera.AddComponent<CameraComponent>();
+		GameRenderer renderer;
+
+		SettingsRegistry registry;
+		REQUIRE(registry.Register(RendererQuality::MakeSection()));
+		ProjectSettingsValues values;
+		std::string error;
+		REQUIRE_MESSAGE(values.Set(RendererQuality::c_SectionId, { { "Preset", "Medium" } }, registry, &error), error);
+		{
+			GameGraphicsService graphics(&values, nullptr, &registry);
+			EngineServices::ScopedProvider<IGameGraphics> provider(graphics);
+			// The info line each change of the preset or its source writes names where the preset comes from.
+			const ScopedLogLevel infoLog(LogLevel::Info);
+			const LogCapture log;
+			const auto logged = [&log](std::string_view message)
+			{
+				const std::vector<LogEntry> entries = log.GetEntries();
+				return std::count_if(entries.begin(), entries.end(), [message](const LogEntry& entry) { return entry.Message == message; });
+			};
+			// The player's preset reaches the next frame.
+			REQUIRE(graphics.SetOption("Preset", "Low"));
+			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+			CHECK(renderer.GetQuality().HasSameKnobs(RendererQuality::GetPreset(RendererQualityPreset::Low)));
+			CHECK(renderer.GetSceneRenderer().GetShadowMapSize() == 1024);
+			CHECK(logged("Graphics quality: Low (the player's)") == 1);
+			REQUIRE(graphics.SetOption("Preset", "Medium"));
+			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+			CHECK(renderer.GetSceneRenderer().GetShadowMapSize() == 2048);
+			// The command line's preset over the player's.
+			graphics.SetCommandLinePreset(RendererQualityPreset::Low);
+			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+			CHECK(renderer.GetSceneRenderer().GetShadowMapSize() == 1024);
+			CHECK(renderer.GetStats().Quality.ShadowCascades == 3);
+			CHECK(logged("Graphics quality: Low (--quality)") == 1);
+			// An override still wins over all.
+			renderer.SetQualityOverride(RendererQuality::GetPreset(RendererQualityPreset::Medium));
+			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+			CHECK(renderer.GetSceneRenderer().GetShadowMapSize() == 2048);
+			renderer.SetQualityOverride(std::nullopt);
+			REQUIRE(renderer.RenderEmpty(target.Framebuffer, size));
+			CHECK(renderer.GetQuality().HasSameKnobs(RendererQuality::GetPreset(RendererQualityPreset::Low)));
+		}
+		// No provider: the project's (none here: Medium, the tests' and tools' default).
+		REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+		CHECK(renderer.GetQuality().Preset == RendererQualityPreset::Medium);
+		CHECK(renderer.GetSceneRenderer().GetShadowMapSize() == 2048);
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

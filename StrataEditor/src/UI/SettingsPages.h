@@ -43,8 +43,9 @@ namespace Strata
 
 	// The pages of complex settings sections (those without fields, which no generic page can draw), keyed by section id: the
 	// editor UI registers them (EditorLayer: External Editor; Collision Layers and Input Actions with their sections).
-	// Simple sections need none: a generic page draws their fields. Editor.UI.ProjectSettings checks that every complex
-	// section of the process's registry has one. Main thread only.
+	// Simple sections need none: a generic page draws their fields, unless a page registered for the section draws them its
+	// own way (Graphics Quality). Editor.UI.ProjectSettings checks that every complex section of the process's registry has
+	// one. Main thread only.
 	class EditorSettingsPageRegistry
 	{
 	public:

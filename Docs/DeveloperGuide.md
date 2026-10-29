@@ -722,6 +722,8 @@ exercised by it.
     `Sky.hdr` (a 900-nit texel its generator writes, which its `.meta`'s `RemoveSun` paints out of the cooked map) into
     the Sun with `lighting.extractSun` and undo it, export it with the module and run it headless; they must exit cleanly and print what the scripts log
     (`StrataTests/Editor/RunAndExpect.cmake`). A new editor command a game relies on gets a step there.
+    `StrataRuntime.FeatureTestQuality` (labels `feature` and `gpu`) runs the exported game in a window with
+    `--quality low`: its scripts must read the preset as the command line's and say so.
 - **The feature test enforces coverage.** It fails when:
   - a registered component is missing from the feature scene, or a property has its default value on every entity
     with the component (new properties need a non-default value there, which also proves that they serialize);
@@ -1053,8 +1055,22 @@ plays, and the **Preferences** dialog ([Preferences](#preferences)).
   the editor UI registers in the `EditorSettingsPageRegistry` (`EditorLayer::GetSettingsPages`) under the section's id;
   `Editor.UI.ProjectSettings` fails for a complex section of the process's registry without one, so a section and its
   page land together: the External Editor's (`ExternalEditorPage`, `UI/ScriptDialogs`) and Collision Layers
-  (`CollisionLayersPage`, [Collision layers](#collision-layers)). `EditorShell::ShowProjectSettings(page)` brings the
-  panel forward at a page (the Inspector's link to the collision layers).
+  (`CollisionLayersPage`, [Collision layers](#collision-layers)). A simple section may register a custom page too, which
+  then replaces the generic one (`EditorSettingsPageRegistry::CreatePage` prefers a registered page): **Graphics Quality**
+  (`UI/GraphicsQualityPage`, the section `Renderer.Quality`) shows the presets as five chips and one table, a row per
+  quality row that follows the preset ([Quality settings](#quality-settings): the row traits) and a column per preset,
+  the chosen column on `AccentMuted`, Custom's column editable (under a named preset it shows where a switch to Custom
+  starts, `RendererQuality::MakeCustomStart`: an earlier Custom tuning, else the preset's values, which its cells'
+  tooltip names, and an edit there switches to Custom and sets the field in one `project.setSettings`), the rows'
+  memory at 1920 x 1080 and 3840 x 2160 (`RowTraits::MemoryBytes`, summed per column) and a line of the Scene view's
+  GPU times of the rows' stages (formatted again at most twice a second); the rows that do not follow the preset under
+  "Players' choices". Choosing a named preset keeps the rows' stored values, so Custom's tuning comes back with Custom.
+  The page and its probes (`ProjectSettings.Renderer.Quality.` `Preset.<Preset>`, `Header.<Preset>`, `Row.<Field>`,
+  `Cell.<Field>.<Preset>`, `Custom.<Field>`, `CustomTooltip`, `Choice.<Field>`, `Memory1080.<Preset>`,
+  `Memory2160.<Preset>`, `GPU`, `Problem`, `Reset`) read the option model, so a row another change adds appears without
+  UI work. The generic page and it share the field-to-widget conversions of `UI/SettingsFieldProperty`.
+  `EditorShell::ShowProjectSettings(page)` brings the panel forward at a page (the Inspector's link to the collision
+  layers, the Scene view's quality chip).
 - **Rules.** Pages change nothing themselves: every edit runs a command with `CommandOrigin { CommandSource::UI }`
   (project steps are undoable, preferences are not). They draw from copies of the values, read again only when the
   values' version changes (`ProjectSettingsValues::GetVersion`, `EditorPreferences::GetVersion`), never parsing per
@@ -1169,7 +1185,8 @@ section; the composition root runs it first, and Input is a module every engine 
   game decides (a rebinding menu closing), to `<IGameSaves directory>/InputBindings.json`
   (`{"Strata": {"Format": "InputBindings", "Version": 1}, "Actions": {"Gameplay/Jump": ["Key/Space"]}}`, keys always
   map-qualified; `InputPlayerBindings`), atomically, outside `SaveFiles`' `*.save` names, so `Game::ListSaveFiles` never
-  lists it. `LoadBindings` reads at most 64 KiB and forgives per entry: unknown actions and bindings their kind cannot use
+  lists it (the players' graphics options are kept beside it the same way, `GraphicsOptions.json`: [Quality
+  settings](#quality-settings)). `LoadBindings` reads at most 64 KiB and forgives per entry: unknown actions and bindings their kind cannot use
   are dropped with one warning, and a file that is no bindings file is ignored with a warning (the project's bindings
   apply). `ReadSavedBindings` reads the file as `LoadBindings` would apply it, without applying or warning, and
   `DeleteSavedBindings` removes it.
@@ -1214,7 +1231,14 @@ section; the composition root runs it first, and Input is a module every engine 
   bindings are reset); the page marks those actions ("In play", with the players' bindings) and offers "Reset Player
   Bindings": `inputActions.resetPlayerBindings` (Session, `settings` toolset) deletes the file through
   `InputActions::DeleteSavedBindings` and, while playing, restores the project's bindings in the running game, returning
-  the actions reset.
+  the actions reset. The players' graphics options work the same way ([Quality settings](#quality-settings)):
+  `EditorContext::GetPlayerGraphicsOptions` (and `GetPlayerGraphicsProblem`, a refused or partly dropped file) reports
+  what replaces the project's Graphics Quality in play, read again when play starts or stops, the project changes, the
+  running game's options change (`GameGraphicsService::GetVersion`) or they are reset; the Graphics Quality page shows a
+  banner and "Player" pills for them with "Reset Player Options": `graphics.resetPlayerOptions` (Session, `settings`
+  toolset) deletes `GraphicsOptions.json` and, while playing, drops the running game's choices, returning the options
+  reset. `editor.status`' `game.graphics` reports the preset and value in effect, each field's source (`project`,
+  `player`, `commandLine`), the players' options, the file and its problem.
 - **Simulated actions** (`SimulateAction`, `ReleaseAllSimulated`, `ClearSimulated`): held down from the next input frame,
   whatever the bindings, with a value (Button: 1); for tools that play the game.
 - **Capture** (`BeginCapture(InputCaptureDevices)`, `TakeCapturedBinding`, `CancelCapture`): listens for the next control
@@ -1594,13 +1618,25 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   `ReadSaveFile`/`ReadSaveText`, `DeleteSaveFile`, `ListSaveFiles`) to `IGameSaves` (`<user data>/<Game>/Saves` in a
   shipped game, `<project>/.strata/Saves` in the editor). Save names are checked in the engine before any path is formed
   (`SaveFiles::ValidateName`: no separators, no "..", no device names) and writes are atomic. Code that runs a game
-  in-process (tests, tools) provides both, or the calls fail and are reported, and provides `IProjectSettings` when it runs
-  a project and calls `InputActions::Update()` after its frame's input ([Input actions](#input-actions)).
+  in-process (tests, tools) provides both and `IGameGraphics` (a `GameGraphicsService`), or the calls fail and are
+  reported, and provides `IProjectSettings` when it runs a project and calls `InputActions::Update()` after its frame's
+  input ([Input actions](#input-actions)).
+- Graphics options (`StrataScript/Graphics.h`; host functions `GraphicsGetOptionCount` to `GraphicsSaveOptions`): a
+  game's options menu reads and sets the players' graphics options through `IGameGraphics` ([Quality
+  settings](#quality-settings), "Players' options"): the options are `Renderer.Quality`'s fields of type Bool, Int, Float
+  and Enum, by name ignoring case, in field order ("Preset" first). `Graphics::Options` and `FindOption` describe them
+  (title, description, range, choices, the source of the value in effect), `Get<T>` reads the value in effect (a
+  Choice as its name), `Set` sets the player's choice (Bool, Int, Float or Int for a Float, a choice by its name: a
+  number is never a choice, since choices are reordered between versions), `GetPreset`, `SetPreset` and
+  `GetPresetName` wrap "Preset" (`QualityPreset`, the order of its choices, which `Scripting.Graphics` checks),
+  `Reset` removes a choice (empty: every one) and `Save` writes them to the players' file for the next run (explicitly:
+  the game decides when a choice is final). Options are numbered only to enumerate; reads and writes go by name, so rows
+  a later engine adds reach scripts without new functions. Only `GameGraphicsService` touches `GraphicsOptions.json`.
 - Host function order: the character controller, gamepad, cursor, window, save file and collision layer functions
   (`CharacterMove` to `PhysicsGetLayerIndex`) are appended to ABI version 1 after the Animator functions, then wave 4's
   world streaming functions (`WorldRequestCellsAround` to `WorldIsLayerEnabled`), then wave 6's input action functions
   (`InputIsActionDown` to `InputSaveBindings`, then the capture's `InputBeginBindingCapture` to
-  `InputCancelBindingCapture`).
+  `InputCancelBindingCapture`), then wave 7's graphics options (`GraphicsGetOptionCount` to `GraphicsSaveOptions`).
 - World streaming: `World::RequestCellsAround` (a `WorldCellRequest`, released with `Release`), `IsLoadedAround`,
   `SetLayerEnabled` and `IsLayerEnabled` (`StrataScript/World.h`) go through the scene service `IWorldStreaming` the
   World system offers in every running scene; in a scene that streams no world (`IWorldStreaming::IsStreaming` false)
@@ -1622,7 +1658,12 @@ ABI rules:
   catches every exception in the module and reports it through `ReportException` (the instance is disabled).
 - The module description (`StrataScriptModuleAPI`) is the only extensible struct a module writes into engine memory:
   the engine announces its size in `StructSize`, the module writes at most that much and reports its own size
-  (`Detail::WriteModuleAPI`), so modules of a newer SDK with appended members load into older engines safely.
+  (`Detail::WriteModuleAPI`), so modules of a newer SDK with appended members load into older engines safely. The
+  opposite direction, an extensible struct in module memory the engine fills, is `StrataScriptGraphicsOptionInfo`
+  (`GraphicsDescribeOption`): the module gives its capacity in `StructSize`, the engine writes at most that much (and at
+  most its own struct) and sets `StructSize` to the bytes it filled, refusing a capacity below the first version's 80
+  bytes; the module reads a member only when `ST_SCRIPT_HAS_MEMBER` covers it. The frozen structs
+  (`StrataScriptRaycastHit`, `StrataScriptCharacterState`) stay frozen: they carry no size.
 - Every call into module code goes through `ScriptModule` (`CrashGuard`), including loading and unloading the library.
   Module memory (descriptors, strings) is read only inside guarded calls; copy it into locals of the guarded lambda,
   then move the complete result out, so a fault can never leave engine objects half-written.
@@ -2563,6 +2604,22 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 ### Inspectors
 
+- **Sections:** a registration groups its properties with `PropertyBuilderBase::Section(name)`, which puts every property
+  registered after it into that section until the next call (`PropertyInfo::Section`; `component.list` and the component
+  schema snapshot report `Section`). Registration order never changes, so a section need not be contiguous: a property
+  appended at the end of a registration joins its group with a `.Section` call of its own (Saturation and Contrast join
+  Post Process' "Tone and color"). `InspectorPanel::DrawProperties` draws the properties without a section first, then each
+  section in the order of its first property under a `UI::PropertyGroupHeading` (between property tables, which share one
+  label width), only when a property of it is drawn; the grouping is made once per component type
+  (`GetPropertyGroups`). Probes `Inspector.<Component>.Section.<Section>`. Directional Light has Light and Shadows, Post
+  Process Tone and color, Exposure, Bloom, Ambient occlusion, Anti-aliasing, Reflections and Lens; every property of both
+  has a description with its unit (`Renderer.Components` checks it). The sun's section ends with what its shadow maps are
+  (`Inspector.DirectionalLight.ShadowQuality`: "Shadow maps: 4 x 4096 (Graphics Quality: High)" from the Scene view's
+  latest frame, `SceneRendererStats::ShadowMapSize`, named after the quality that frame was drawn with: the view's own
+  preset for the editor camera when it has one, through the scene's camera the game's (`ViewportRenderStamp::FromScene`;
+  "through the scene's camera (Low, the player's; ...)" when a player chose it); the project's quality at 1080 rows
+  before a frame; "No shadow maps: Cast Shadows is off" when no inspected light casts shadows) and a link to Graphics
+  Quality.
 - The inspectors show the selected entities or one asset (`EditorContext::SetInspectedAsset`, `selection.set {asset}`;
   the entities stay selected). Selecting an entity, deleting the asset or closing the project returns to the entities;
   `GetInspectionVersion` changes with every switch and every asset inspected (again), and the editor brings the
@@ -2594,7 +2651,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   and Custom also where it starts from (`GetTemporalAntiAliasingCustomStart`: the preset in effect while the tunables
   hold a table, else the tuning), unless the selected entities would start from different values. It shows the scene's
   settings (gravity, the fixed step, the physics world's capacities, how many collision layers the project names with a
-  link to their page, bodies and controllers choosing their layer among layer 0 and the named ones; how many entities
+  link to their page, the project's Graphics Quality preset with a link to its page (`Inspector.GraphicsQuality`), bodies
+  and controllers choosing their layer among layer 0 and the named ones; how many entities
   sub-scenes create per frame) and sky (with an "Extract Sun" button for environment-map skies, an "Add Height Fog"
   button while the scene has no height fog, and "Bake Reflection Probes" while it has probes; a probe's own section has
   Bake, both running `lighting.bakeProbes` through the runner) with nothing selected, in sections that start closed with
@@ -2815,11 +2873,13 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   canvases): the camera settings, the overlay toggles (grid, outline, gizmos, stats), the editor-view settings (preview
   lighting, game UI) and the debug view (named after the view, "Lit" without one, and lit while one colors the image; a
   click offers Lit, Streaming, LOD and Mip) from its left, the agent chip at its right (a strip narrower than the chips
-  with their labels draws the last ones as icons, labels in their tooltips: `UI::ChipStrip`); clicking a chip does not focus the
-  panel; "Game camera" (F8, `ViewportSettings::PilotGameCamera`) looks through the scene's primary camera with the
-  editor's overlays, leaving the editor camera where it was. The toolbar's bottom border takes the play state's color
-  while the scene runs. A debug view shows a legend at the image's bottom left (`UI::Legend`: its colors with the number
-  of entities in view per color, counts aligned in a column, and the placeholder boxes). The
+  with their labels draws the last ones as icons, labels in their tooltips, and one too narrow even for the icons puts the
+  chips that pass its width on rows under the first, the toolbar growing by those rows: `UI::ChipStrip`, so every chip
+  stays in reach); clicking a chip does not focus the panel; "Game camera" (F8, `ViewportSettings::PilotGameCamera`)
+  looks through the scene's primary camera with the editor's overlays, leaving the editor camera where it was. The
+  toolbar's bottom border takes the play state's color while the scene runs. A debug view shows a legend at the image's
+  bottom left (`UI::Legend`: its colors with the number of entities in view per color, counts aligned in a column, and
+  the placeholder boxes). The
   selection outline is the theme's accent and the debug views use its meanings (`ViewportSettings::SelectionColor` and
   `DebugColors`, set by the UI, not saved).
   Clicks pick without blocking (`EditorViewport::RequestPick` reads one pixel of the entity-ID buffer; Ctrl toggles,
@@ -3132,27 +3192,78 @@ lights, Post Process and the sky), and never a resolution below the output's.
 - **Single images release their cascades:** a zero viewport (a capture renderer between pictures, the editor's hidden
   Game view) releases them with the render targets; thumbnails keep one 1024-texel layer. A minimized window keeps
   them, as it keeps its render targets: the application skips its frames, so no zero viewport reaches its renderers.
-- **Who follows what:** games follow the project's section (`RendererQuality::GetProjectQuality`, the section read
-  through `IProjectSettings` and cached by its version; Medium without a provider, which only tests and tools lack)
-  unless `GameRenderer::SetQualityOverride` sets one (`StrataRuntime --quality <low|medium|high|ultra>` for a run,
-  logged as "Graphics quality: Ultra (--quality)"). In the editor the Game view and the project's picture draw at the
-  project's, the Scene view at `ViewportSettings::Quality` (`viewport.setSettings {quality}`: the project's by default,
-  or a preset of the person's for that view) for the editor camera and at the project's for the scene's camera ("Game
-  camera", the canvas mode: `GetSceneViewQuality`), captures at the quality of the view they show unless
-  `viewport.capture {quality}` asks for one. Thumbnails and the probe bake draw with
-  `SceneRendererSpecification::ForThumbnails()` and `ForBake()`, 0.6.0's values, whatever anyone chose: a bake never
-  depends on a person's settings.
+- **Who follows what:** games follow their graphics options (`IGameGraphics`, below: the project's section, the
+  players' choices over it and `StrataRuntime --quality <low|medium|high|ultra>` over both), else the project's section
+  (`RendererQuality::GetProjectQuality`, the section read through `IProjectSettings` and cached by its version; Medium
+  without a provider, which only tests and tools lack), unless `GameRenderer::SetQualityOverride` sets one (tests and
+  tools). `GameRenderer` logs "Graphics quality: <preset> (<source>)" when the preset or its source changes (the
+  project's, the player's, --quality, or the override's label). In the editor the Game view draws at the game's quality
+  (`EditorContext::GetGameQuality`: the project's, with the players' options while playing), the project's picture at
+  the project's, the Scene view at `ViewportSettings::Quality` (`viewport.setSettings {quality}` or the view's quality chip,
+  `Viewport.Quality`, whose popup also opens Graphics Quality: the project's by default, or a preset of the person's for
+  that view) for the editor camera and at the game's for the scene's camera ("Game
+  camera", the canvas mode: `GetSceneViewQuality`; the chip then names the game's preset and shows the view's own
+  muted), captures at the quality of the view they show unless `viewport.capture {quality}` asks for one. Thumbnails
+  and the probe bake draw with `SceneRendererSpecification::ForThumbnails()` and `ForBake()`, 0.6.0's values, whatever
+  anyone chose: a bake never depends on a person's settings.
 - **Stats:** `SceneRendererStats::Quality`, `ShadowMapSize` (after the limits and a fallback) and
   `LocalShadowTileSizes`; `renderStats.quality` (the section's fields and values, which `project.setSettings` takes),
   `renderStats.shadowMapSize` and `renderStats.localShadowTileSizes` in `editor.perf` and every capture.
 - **Adding a knob (a row):** a member of the struct with Medium's value as its default (0.6.0's cost: Medium never
   changes what a test or perf scene costs), a row `c_<Knob>Row` of its four presets on one line in
-  `RendererQuality.cpp`, a line in `GetPreset`, `FromSectionValue` and `ToSectionValue`, a field of the section
-  described for agents (its default High's value), `Clamp`'s line, its use in the renderer (both draw paths, and every
+  `RendererQuality.cpp`, a line in `GetPreset`, `FromSectionValue` and `ToSectionValue`, a field of the section (its
+  default High's value) whose title and description say what it changes and costs to agents, people and players alike
+  (games' options menus show them through `Graphics::Options`: no "Custom only", engine versions or the editor's layout,
+  which `Renderer.Quality` checks), `Clamp`'s line, its use in the renderer (both draw paths, and every
   cache that must notice it), a check of its column in `Renderer.Quality`'s first case, a non-default Custom value in
-  `FeatureTest.stproj`, and its cost in the table above. `HasSameKnobs` and `renderStats.quality` need no line. Each
-  landing that adds rows raises `RendererQuality::c_SectionVersion` by one (an integrator renumbers when two streams
-  chose the same); values stored at an older version read the new fields' defaults.
+  `FeatureTest.stproj`, a line in the traits table (below), and its cost in the table above. `HasSameKnobs` and
+  `renderStats.quality` need no line. Each landing that adds rows raises `RendererQuality::c_SectionVersion` by one (an
+  integrator renumbers when two streams chose the same); values stored at an older version read the new fields'
+  defaults.
+- **Row traits:** what graphics options (the Graphics Quality page, the players' options) know of each field but
+  `Preset` is a line of `c_RowTraits` in `RendererQuality.cpp`, in field order beside the knob's preset row
+  (`RendererQuality::GetRowTraits`; `Renderer.Quality` fails for a field without one): `FollowsPreset` (true: the row
+  is the preset's under a named preset and the section's field only under Custom; false: a players' comfort row the
+  presets leave alone, which `FromSectionValue` reads under every preset in its last block and the page lists under
+  "Players' choices"), `GPUStage` (the GPU stage whose time the row changes, which the page shows) and `MemoryBytes`
+  (the bytes the row's resources take in one renderer for some settings at an output size, Auto resolved by its rows;
+  null when the row allocates nothing of its own or another row counts it: `ShadowCascades` is counted with
+  `ShadowResolution`). The option logic works over a `RendererQuality::OptionModel` (a simple quality section, its rows'
+  traits and its four presets' values, `GetPresetValues`: `ToSectionValue(GetPreset(p))`), the engine's
+  `GetOptionModel(section)` or a test's own: `FindRow` (ignoring case), `Normalize` (every field present and, under a
+  named preset, the rows that follow it set to the preset's values: what is in effect, spelled out; idempotent) and
+  `MakeCustomStart` (the Custom value a switch to Custom starts from: the stored rows that follow the preset are kept
+  when they are someone's tuning, equal neither to the fields' defaults nor to a preset's values, and become the values
+  in effect otherwise; rows that do not follow the preset keep theirs).
+- **Players' options:** a game's options menu changes quality through the engine service `IGameGraphics`
+  (`Core/EngineServices.h`; scripts: `StrataScript/Graphics.h`), whose options are `Renderer.Quality`'s fields by name
+  (ignoring case). Three layers make the value in effect every renderer of the game follows: the project's value (pulled
+  by `IProjectSettings::GetVersion`), the player's choices over it (`SetOption`: a choice of `Preset` keeps only the
+  preset and the rows that do not follow it, Custom starting from the look in effect with `MakeCustomStart`; a row that
+  follows the preset, set while the player's own preset is not Custom, switches the player to Custom from the look in
+  effect first, also under the project's Custom, so the player's tuning holds every row and keeps its meaning when the
+  project's preset changes; every change is validated by the section and a refused one changes nothing), and over both a
+  command line's preset (`--quality`, for the session, never saved; a choice made under it is kept as the player's and
+  reported with source `CommandLine`). `GetSource` says where each field's value comes from (`Project`, `Player`,
+  `CommandLine`; a row that follows the preset is the player's when their preset decides it or their own value of it is
+  in effect, never for a member a named preset of the project's overrules); `GetVersion` changes with
+  the value in effect, a source or the player's choices, unique across providers. `ResetOptions` removes a choice (`""`:
+  every one; `Preset`: the preset and the rows that follow it, so the project's quality applies; a row that follows the
+  preset under the player's Custom takes the project's value). `GameGraphicsService` (`Runtime/`) implements it:
+  `GameRuntime` owns one (`GetGraphics`, over the manifest's settings, its save directory and
+  `GameRuntimeOptions::Quality`, provided from before the first script call until it ends) and `EditorContext` another
+  (over the open project and `.strata/Saves`; play loads the players' file at its start and forgets the choices when it
+  stops, `ResetSession`). In-process game loops provide one too: without it scripts' graphics calls fail and are
+  reported.
+- **The players' file** (`GraphicsOptionsFile`, only `GameGraphicsService` reads, writes and deletes it):
+  `<IGameSaves directory>/GraphicsOptions.json`, `{"Options": {"Preset": "Low"}, "Section": {"Id": "Renderer.Quality",
+  "Version": n}, "Strata": {"Format": "GraphicsOptions", "Version": 1}}`, tab-indented, written atomically by
+  `SaveOptions` (even with no choice, so a reset followed by a save persists), outside `SaveFiles`' `*.save` names.
+  `LoadPlayerOptions` reads at most 64 KiB; a file that is no options file (not JSON, another format or section, a
+  newer format or section version, no `Options` object, two members naming one field) is ignored with one warning and
+  the project's quality applies; members are matched ignoring case, upgraded through the section's `Validate` from the
+  stored section version, and those the section no longer has or refuses are dropped with one warning. A load never
+  rewrites the file.
 
 ### Render scene
 
@@ -4184,6 +4295,11 @@ the sample), and `Changes` says what was trimmed or converted. Every CC0 and CC-
 `Samples.Content` (`StrataTests/src/Samples/`) checks every sample the index lists and that no directory is unlisted: the
 files above, every source asset under `Assets/` (the extensions importers read) credited by exactly one row, no row that
 credits nothing, the licenses, attributions and notices, the links of `README.md` and `CREDITS.md`, and the budgets (MB = 1,000,000 bytes): 25 MB of source assets
-and 20 MB of documents per sample, and over all samples 55 MB of binary files (they barely compress) and 50 MB of
-documents (about tenfold smaller in archives), so that release archives grow by at most about 60 MB. Textures are 1K
-(2K only where 1K visibly fails), JPEG for color and PNG where alpha or exact palettes need it.
+and 20 MB of documents per sample, 55 MB of binary files over the standard samples (they barely compress) and 50 MB of
+documents over all samples (about tenfold smaller in archives), so that the standard samples grow release archives by
+at most about 60 MB. A graphical
+showcase's entry in `Samples.json` says `"Budget": "Showcase"` (any other value is refused): it may hold 80 MB of source
+assets, and the showcases' binary files count against 85 MB of their own, apart from the others' 55 MB
+(`SampleBudgetClass`, `SampleBudgets::ShowcaseSourceAssetBytes`, `ShowcaseTotalBinaryBytes`), so that with showcases
+release archives grow by at most about 145 MB (140 MB of binary files over all samples). Textures are 1K (2K only
+where 1K visibly fails; showcase scans 2K), JPEG for color and PNG where alpha or exact palettes need it.

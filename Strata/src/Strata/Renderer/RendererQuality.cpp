@@ -39,6 +39,32 @@ namespace Strata
 		constexpr PresetRow<float> c_LODErrorPixelsRow = { 2.0f, 1.0f, 1.0f, 0.5f };
 		constexpr PresetRow<float> c_MinProjectedPixelsRow = { 1.0f, 0.5f, 0.5f, 0.25f };
 
+		// GPU memory of the rows that allocate (RowTraits::MemoryBytes), as the renderer makes the resources.
+		uint64_t CascadeBytes(const RendererQualitySettings& settings, glm::uvec2 output)
+		{
+			// A D32 layer per cascade, of the size the output's rows resolve Auto and AutoFine to.
+			const uint64_t size = RendererQuality::ResolveShadowMapSize(settings.ShadowResolution, output.y);
+			return static_cast<uint64_t>(settings.ShadowCascades) * size * size * 4;
+		}
+
+		uint64_t LocalShadowAtlasBytes(const RendererQualitySettings& settings, glm::uvec2)
+		{
+			// The point and spot lights' D32 atlas (SceneRendererLocalShadows.cpp).
+			const uint64_t size = settings.LocalShadowAtlasSize;
+			return size * size * 4;
+		}
+
+		// What graphics options know of each field but Preset, in field order: one line per row, beside its PresetRow line.
+		constexpr RendererQuality::RowTraits c_RowTraits[] = {
+			{ "ShadowResolution", true, "GPU.Shadows", &CascadeBytes },
+			{ "ShadowCascades", true, "GPU.Shadows", nullptr }, // Counted with ShadowResolution
+			{ "LocalShadowAtlasSize", true, "GPU.Shadows", &LocalShadowAtlasBytes },
+			{ "LocalShadowMaxTile", true, "GPU.Shadows", nullptr },
+			{ "MaxShadowedLocalLights", true, "GPU.Shadows", nullptr },
+			{ "LODErrorPixels", true, "GPU.Opaque", nullptr },
+			{ "MinProjectedPixels", true, "GPU.Opaque", nullptr },
+		};
+
 		constexpr uint32_t c_MinLocalShadowAtlasSize = 512;
 		constexpr uint32_t c_MaxLocalShadowAtlasSize = 8192;
 		constexpr uint32_t c_MinLocalShadowTile = 128;
@@ -155,6 +181,49 @@ namespace Strata
 			for (const uint32_t size : sizes)
 				options.push_back(std::to_string(size));
 			return options;
+		}
+
+		// The value with a member for every field of the model's section (absent ones at their defaults).
+		nlohmann::json WithEveryField(const nlohmann::json& value, const RendererQuality::OptionModel& model)
+		{
+			nlohmann::json result = value.is_object() ? value : nlohmann::json::object();
+			if (!model.Section)
+				return result;
+			for (const SettingsField& field : model.Section->Fields)
+			{
+				if (!result.contains(field.Name))
+					result[field.Name] = field.Default;
+			}
+			return result;
+		}
+
+		// The named preset a value is under (nullopt under Custom, or without a readable Preset), and its values in the model
+		// (null when the model has none for it).
+		const nlohmann::json* FindNamedPresetValue(const nlohmann::json& value, const RendererQuality::OptionModel& model)
+		{
+			const nlohmann::json* member = JsonUtils::Find(value, "Preset");
+			if (!member || !member->is_string())
+				return nullptr;
+			const std::optional<RendererQualityPreset> preset = RendererQuality::PresetFromString(member->get_ref<const std::string&>());
+			if (!preset || *preset == RendererQualityPreset::Custom)
+				return nullptr;
+			const size_t index = static_cast<size_t>(*preset);
+			return index < model.PresetValues.size() ? &model.PresetValues[index] : nullptr;
+		}
+
+		// Whether every row that follows the preset has the same value in `a` and `b` (a member missing from either differs).
+		bool HaveSameFollowingRows(const nlohmann::json& a, const nlohmann::json& b, const RendererQuality::OptionModel& model)
+		{
+			for (const RendererQuality::RowTraits& row : model.Rows)
+			{
+				if (!row.FollowsPreset)
+					continue;
+				const nlohmann::json* left = JsonUtils::Find(a, row.Field);
+				const nlohmann::json* right = JsonUtils::Find(b, row.Field);
+				if (!left || !right || *left != *right)
+					return false;
+			}
+			return true;
 		}
 
 	}
@@ -291,31 +360,34 @@ namespace Strata
 			std::vector<std::string> presets;
 			for (const PresetName& entry : c_PresetNames)
 				presets.emplace_back(entry.Name);
-			section.Fields.push_back(EnumField("Preset", "Preset", "The preset: Low, Medium (Strata 0.6.0's costs), High (the default), Ultra, or "
-				"Custom, which uses the fields below. Under a preset the fields are ignored.", std::move(presets), "High"));
+			// The fields' titles and descriptions reach players too (a game's options menu lists them, Graphics::Options): they say
+			// what an option changes and what it costs, never engine versions or where the editor shows them.
+			section.Fields.push_back(EnumField("Preset", "Preset", "The quality preset: Low, Medium, High or Ultra sets every other option to its "
+				"value; Custom uses the values chosen for them.", std::move(presets), "High"));
 			std::vector<std::string> resolutions;
 			for (const ResolutionName& entry : c_ResolutionNames)
 				resolutions.emplace_back(entry.Name);
 			// One field per knob, in the rows' order, each defaulting to High's value: choosing Custom from High changes nothing.
-			section.Fields.push_back(EnumField("ShadowResolution", "Shadow resolution", "Custom only: texels each way of every sun shadow cascade. "
-				"Auto: 2048 below 1440 output rows, 4096 from 1440 (about one texel per screen pixel at each cascade's far end); AutoFine: 4096 and "
-				"8192. Memory per view: cascades x size x size x 4 bytes (4 x 4096: 256 MiB).", std::move(resolutions),
-				ShadowResolutionToString(high.ShadowResolution)));
-			section.Fields.push_back(NumberField("ShadowCascades", "Shadow cascades", "Custom only: sun shadow cascades. Fewer cost less but spread the "
-				"same texels over the shadow distance.", SettingsFieldType::Int, 1, RenderData::c_MaxCascades, high.ShadowCascades));
-			section.Fields.push_back(EnumField("LocalShadowAtlasSize", "Point and spot shadow atlas", "Custom only: texels each way of the shadow "
-				"atlas point and spot lights share (4096: 64 MiB per view).", SizeOptions(c_AtlasSizeOptions), std::to_string(high.LocalShadowAtlasSize)));
-			section.Fields.push_back(EnumField("LocalShadowMaxTile", "Largest point and spot shadow tile", "Custom only: the largest tile a point or "
-				"spot light's shadow view gets (at most the atlas); tiles follow how large the light looks on screen.", SizeOptions(c_MaxTileOptions),
-				std::to_string(high.LocalShadowMaxTile)));
-			section.Fields.push_back(NumberField("MaxShadowedLocalLights", "Shadowed point and spot lights", "Custom only: point and spot lights "
-				"that cast shadows in a view, the most relevant first.", SettingsFieldType::Int, 0, RenderData::c_MaxShadowedLocalLights,
+			section.Fields.push_back(EnumField("ShadowResolution", "Shadow resolution", "Texels each way of every sun shadow cascade: sharper sun "
+				"shadows for more GPU memory and time. Auto: 2048 below 1440 output rows, 4096 from 1440 (about one texel per screen pixel at each "
+				"cascade's far end); AutoFine: 4096 and 8192. Memory per view: cascades x size x size x 4 bytes (4 x 4096: 256 MiB).",
+				std::move(resolutions), ShadowResolutionToString(high.ShadowResolution)));
+			section.Fields.push_back(NumberField("ShadowCascades", "Shadow cascades", "Sun shadow cascades: fewer cost less GPU time and memory but "
+				"spread the same texels over the shadow distance.", SettingsFieldType::Int, 1, RenderData::c_MaxCascades, high.ShadowCascades));
+			section.Fields.push_back(EnumField("LocalShadowAtlasSize", "Point and spot shadow atlas", "Texels each way of the shadow atlas point and "
+				"spot lights share: sharper shadows of those lights for more GPU memory (4096: 64 MiB per view).", SizeOptions(c_AtlasSizeOptions),
+				std::to_string(high.LocalShadowAtlasSize)));
+			section.Fields.push_back(EnumField("LocalShadowMaxTile", "Largest point and spot shadow tile", "The largest tile of the atlas a point or "
+				"spot light's shadow gets (at most the atlas): tiles follow how large the light looks on screen, and larger ones are sharper.",
+				SizeOptions(c_MaxTileOptions), std::to_string(high.LocalShadowMaxTile)));
+			section.Fields.push_back(NumberField("MaxShadowedLocalLights", "Shadowed point and spot lights", "Point and spot lights that cast "
+				"shadows in a view, the most relevant first: more cost more GPU time.", SettingsFieldType::Int, 0, RenderData::c_MaxShadowedLocalLights,
 				high.MaxShadowedLocalLights));
-			section.Fields.push_back(NumberField("LODErrorPixels", "Level of detail error (pixels)", "Custom only: levels of detail are chosen so "
-				"that their error spans at most this many pixels on screen (0: full detail).", SettingsFieldType::Float, 0.0, c_MaxPixels,
-				high.LODErrorPixels));
-			section.Fields.push_back(NumberField("MinProjectedPixels", "Smallest drawn size (pixels)", "Custom only: meshes smaller on screen than "
-				"this many pixels are not drawn (0: all).", SettingsFieldType::Float, 0.0, c_MaxPixels, high.MinProjectedPixels));
+			section.Fields.push_back(NumberField("LODErrorPixels", "Level of detail error (pixels)", "Levels of detail are chosen so that their "
+				"error spans at most this many pixels on screen: lower draws more triangles (0: full detail).", SettingsFieldType::Float, 0.0,
+				c_MaxPixels, high.LODErrorPixels));
+			section.Fields.push_back(NumberField("MinProjectedPixels", "Smallest drawn size (pixels)", "Meshes smaller on screen than this many "
+				"pixels are not drawn: higher draws fewer (0: all).", SettingsFieldType::Float, 0.0, c_MaxPixels, high.MinProjectedPixels));
 			return section;
 		}
 
@@ -381,6 +453,72 @@ namespace Strata
 			s_Cache.Valid = true;
 			s_Cache.SettingsVersion = version;
 			return s_Cache.Quality;
+		}
+
+		std::span<const RowTraits> GetRowTraits()
+		{
+			return c_RowTraits;
+		}
+
+		std::span<const nlohmann::json> GetPresetValues()
+		{
+			static const std::array<nlohmann::json, c_RendererQualityPresetCount> s_Values = []()
+			{
+				std::array<nlohmann::json, c_RendererQualityPresetCount> values;
+				for (size_t index = 0; index < c_RendererQualityPresetCount; index++)
+					values[index] = ToSectionValue(GetPreset(static_cast<RendererQualityPreset>(index)));
+				return values;
+			}();
+			return s_Values;
+		}
+
+		OptionModel GetOptionModel(const SettingsSection& section)
+		{
+			OptionModel model;
+			model.Section = &section;
+			model.Rows = GetRowTraits();
+			model.PresetValues = GetPresetValues();
+			return model;
+		}
+
+		const RowTraits* FindRow(std::string_view field, const OptionModel& model)
+		{
+			for (const RowTraits& row : model.Rows)
+			{
+				if (EqualsIgnoringCase(row.Field, field))
+					return &row;
+			}
+			return nullptr;
+		}
+
+		nlohmann::json Normalize(const nlohmann::json& value, const OptionModel& model)
+		{
+			nlohmann::json result = WithEveryField(value, model);
+			const nlohmann::json* presetValue = FindNamedPresetValue(result, model);
+			if (!presetValue)
+				return result;
+			// Under a named preset the rows that follow it are the preset's, whatever is stored for them.
+			for (const RowTraits& row : model.Rows)
+			{
+				if (!row.FollowsPreset)
+					continue;
+				if (const nlohmann::json* member = JsonUtils::Find(*presetValue, row.Field))
+					result[std::string(row.Field)] = *member;
+			}
+			return result;
+		}
+
+		nlohmann::json MakeCustomStart(const nlohmann::json& value, const OptionModel& model)
+		{
+			const nlohmann::json stored = WithEveryField(value, model);
+			// Rows that hold the defaults or a preset's values were not tuned (nobody chose them, or a preset's look was the
+			// start): Custom starts from the look in effect. Anything else is someone's tuning, kept.
+			bool tuned = model.Section && !HaveSameFollowingRows(stored, model.Section->GetDefault(), model);
+			for (const nlohmann::json& presetValue : model.PresetValues)
+				tuned = tuned && !HaveSameFollowingRows(stored, presetValue, model);
+			nlohmann::json result = tuned ? stored : Normalize(stored, model);
+			result["Preset"] = PresetToString(RendererQualityPreset::Custom);
+			return result;
 		}
 
 	}

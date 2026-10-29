@@ -12,6 +12,7 @@
 #include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/Texture.h"
+#include "Strata/Runtime/GameGraphicsService.h"
 #include "Strata/Runtime/GameWindowService.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
@@ -239,6 +240,9 @@ TEST_SUITE("FeatureTest")
 		EngineServices::ScopedProvider<IGameWindow> windowProvider(window);
 		SaveDirectory saves(CreateTemporaryDirectory("FeatureSaves"));
 		EngineServices::ScopedProvider<IGameSaves> savesProvider(saves);
+		// Its graphics options over the project's quality, kept in the same directory.
+		GameGraphicsService graphics(EngineServices::Get<IProjectSettings>(), &saves);
+		EngineServices::ScopedProvider<IGameGraphics> graphicsProvider(graphics);
 
 		ScopedScriptLogLevel scriptLogLevel;
 		LogCapture log;

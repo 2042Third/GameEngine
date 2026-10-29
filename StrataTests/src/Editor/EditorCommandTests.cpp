@@ -964,6 +964,15 @@ TEST_SUITE("Editor.Commands")
 		const nlohmann::json components = harness.Run("component.list")["components"];
 		CHECK(std::any_of(components.begin(), components.end(), [](const nlohmann::json& component) { return component["name"] == "MeshRenderer"; }));
 		CHECK(std::none_of(components.begin(), components.end(), [](const nlohmann::json& component) { return component["name"] == "Relationship"; }));
+		// Properties name the group the Inspector shows them under.
+		const auto postProcess = std::find_if(components.begin(), components.end(), [](const nlohmann::json& component) { return component["name"] == "PostProcess"; });
+		REQUIRE(postProcess != components.end());
+		CAPTURE((*postProcess).dump());
+		const nlohmann::json& properties = (*postProcess)["properties"];
+		const auto tonemapper = std::find_if(properties.begin(), properties.end(), [](const nlohmann::json& property) { return property["Name"] == "Tonemapper"; });
+		REQUIRE(tonemapper != properties.end());
+		CHECK((*tonemapper)["Section"] == "Tone and color");
+		CHECK_FALSE((*tonemapper)["Description"].get<std::string>().empty());
 	}
 
 	TEST_CASE("Play mode runs a copy and discards its changes")

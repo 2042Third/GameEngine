@@ -98,9 +98,9 @@ TEST_SUITE("CLI.McpToolsets")
 			return commands;
 		};
 		CHECK(toolsetCommands("ui") == std::set<std::string> { "ui.create", "ui.hitTest", "ui.layout" });
-		// The project's settings, input actions and the preferences commands make up the settings toolset; core stays as it was (27
-		// commands, 32 tools).
-		CHECK(toolsetCommands("settings") == std::set<std::string> { "inputActions.resetPlayerBindings", "inputActions.setAction",
+		// The project's settings, the players' graphics options, input actions and the preferences commands make up the settings
+		// toolset; core stays as it was (27 commands, 32 tools).
+		CHECK(toolsetCommands("settings") == std::set<std::string> { "graphics.resetPlayerOptions", "inputActions.resetPlayerBindings", "inputActions.setAction",
 			"inputActions.setMap", "preferences.get", "preferences.save", "preferences.set", "project.save", "project.setCollisionLayers",
 			"project.setGameInfo", "project.setSettings", "project.settings" });
 		const std::set<std::string> playCommands = toolsetCommands("play");

@@ -115,9 +115,9 @@ namespace Strata
 		return RendererQuality::GetProjectQuality();
 	}
 
-	ViewportQuality GetSceneViewQuality(const ViewportView& view, ViewportQuality setting)
+	RendererQualitySettings GetSceneViewQuality(const ViewportView& view, ViewportQuality setting, const RendererQualitySettings& game)
 	{
-		return view.FromScene ? ViewportQuality::Project : setting;
+		return view.FromScene ? game : ResolveViewportQuality(setting);
 	}
 
 	ViewportRenderer::ViewportRenderer(const std::string& debugName, bool fades)
@@ -187,7 +187,7 @@ namespace Strata
 			options.ScreenView = view.ScreenView;
 			const bool rendered = m_Renderer->Render(*m_EmptyScene, view.Camera, nullptr, options);
 			if (rendered)
-				OnRendered(context);
+				OnRendered(context, view);
 			return rendered;
 		}
 
@@ -238,16 +238,17 @@ namespace Strata
 
 		const bool rendered = m_Renderer->Render(*scene, view.Camera, nullptr, options);
 		if (rendered)
-			OnRendered(context);
+			OnRendered(context, view);
 		return rendered;
 	}
 
-	void ViewportRenderer::OnRendered(EditorContext& context)
+	void ViewportRenderer::OnRendered(EditorContext& context, const ViewportView& view)
 	{
 		m_RenderedScene = context.GetActiveScene();
 		m_RenderStamp.RenderCount = m_Renderer->GetRenderCount();
 		m_RenderStamp.PlaySession = context.IsPlaying() ? context.GetPlaySession() : 0;
 		m_RenderStamp.FixedSteps = context.GetFixedStepCount();
+		m_RenderStamp.FromScene = view.FromScene;
 	}
 
 	void ViewportRenderer::DrawCellBounds(EditorContext& context, const ViewportView& view)

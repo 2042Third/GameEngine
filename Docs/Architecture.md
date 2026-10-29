@@ -201,7 +201,8 @@ process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime
 them), `Crypto` (SHA-256, peer authentication), `Base64`, `CommandLine`, `Timer`/`FramePacer`, `JsonUtils`
 (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the audio thread), `EngineServices` (process-wide
 interfaces a module or the program running a game offers the modules that may not include it, such as the audio output's
-master volume, `IAudioOutput`, the game's window, `IGameWindow`, and its save directory, `IGameSaves`),
+master volume, `IAudioOutput`, the game's window, `IGameWindow`, its save directory, `IGameSaves`, and its graphics
+options, `IGameGraphics`),
 `SettingsRegistry` and `ProjectSettings` (the settings sections modules register, and the project's values of them, read
 through the engine service `IProjectSettings`: DeveloperGuide.md, "Project settings"), `SaveFiles` (a
 game's save files: names checked before any path is formed, atomic writes; `SaveDirectory`), `FrameProfiler` (the
@@ -239,7 +240,9 @@ mouse buttons, gamepad controls and composites, the project settings section `In
 window's events, with the players' bindings (`<save directory>/InputBindings.json`), map enables, simulated actions and
 binding capture (DeveloperGuide.md, "Input actions"). Scripts read and rebind them by name through the host functions
 `InputIsActionDown` to `InputSaveBindings`, and capture a binding through `InputBeginBindingCapture`,
-`InputPollBindingCapture` and `InputCancelBindingCapture`.
+`InputPollBindingCapture` and `InputCancelBindingCapture`. The players' graphics options follow them in the table,
+`GraphicsGetOptionCount` to `GraphicsSaveOptions`: the fields of `Renderer.Quality` by name, through the engine service
+`IGameGraphics` (DeveloperGuide.md, "Quality settings").
 
 **Math** (`Math/`). Engine conventions in `Math.h`: right-handed, +Y up, -Z forward, reversed-Z projections, Euler
 angles in degrees. `AABB`, `Frustum`, `Ray`, and `Random` (thread-local generators).
@@ -500,8 +503,9 @@ Explorer reads them (`Editor/PEResources`).
 **Runtime** (`Runtime/`). `GameRuntime` runs an exported game without depending on windowing or rendering: it opens
 the pack, loads the script module, starts scenes and honors their requests. `GameRenderer` draws the running scene
 from its primary camera, or a message frame that names the problem, with a scene renderer that writes no entity-ID
-buffer (`SceneRendererSpecification::EntityIDs`: games do not pick by pixel), at the project's Graphics Quality: the
-specification's `Quality` (`RendererQualitySettings`, Medium by default) is the renderer's costly knobs, which
+buffer (`SceneRendererSpecification::EntityIDs`: games do not pick by pixel), at the game's Graphics Quality (its
+`IGameGraphics`: the project's, the players' choices over it and `--quality` over both; `GameGraphicsService` keeps the
+players' choices in `GraphicsOptions.json` in the save directory): the specification's `Quality` (`RendererQualitySettings`, Medium by default) is the renderer's costly knobs, which
 `SceneRenderer::SetQuality` changes while it lives, making again only what a changed knob sizes (the editor's views
 follow the project or the person's preset alike; DeveloperGuide.md, "Quality settings"). See
 [Export and the runtime](#export-and-the-runtime).
@@ -978,10 +982,11 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   same way (`c_ValidatedProxiesPerSync`, 1,024 proxies).
 - Gameplay asks the scene's owner to quit or to switch scenes (`Scene::RequestQuit`, `RequestSceneLoad`); owners honor
   the requests after the update. The owners are the editor's play mode (`EditorContext::StartRuntime` plays a
-  `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`. The game's shell (its window and save files,
-  engine services, see [Scene services](#scene-services)) belongs to the program running it: play mode records window
-  requests without touching the editor's window and keeps saves in the project (`<project>/.strata/Saves`); starting and
-  stopping play forget the requests and set the game's cursor mode back to Normal (`EditorContext::ResetGameShell`).
+  `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`. The game's shell (its window, save files and
+  graphics options, engine services, see [Scene services](#scene-services)) belongs to the program running it: play mode
+  records window requests without touching the editor's window and keeps saves in the project
+  (`<project>/.strata/Saves`); starting and stopping play forget the requests, the players' graphics options and set the
+  game's cursor mode back to Normal (`EditorContext::ResetGameShell`).
 - **`Scene::Copy`** makes an independent scene with the same entities, components and caches. Its entities keep the
   source's EnTT identifiers (made with the source's handles, the free indices after them as the source would reuse
   them), so every storage is copied whole: the copyable registered components, the hierarchy links, the cached world
@@ -1179,6 +1184,7 @@ the game (`EngineServices::ScopedProvider`, which restores the provider it repla
 | `IGameWindow`: window mode, resolution, vsync, the size the game renders at | StrataRuntime's `GameWindowService` (applied after the frame, `ApplyRequests`; headless: accepted and reported back), the editor's `EditorGameWindow` (recorded and reported, never applied: `editor.status`, a notice over the Game view and its "Game's request" resolution) | script host (`Game::SetWindowMode` and friends) |
 | `IGameSaves`: the save directory | `GameRuntime` (`<user data>/<game>/Saves`, `GameRuntimeOptions::SaveFilesDirectory`), `EditorContext` (`<project>/.strata/Saves`) | script host (`Game::WriteSaveFile` and friends, through `SaveFiles`) |
 | `IProjectSettings`: the project's settings sections, validated (DeveloperGuide.md, "Project settings") | `GameRuntime` (its manifest's, version 5 manifests; none for older ones), `EditorContext` (the open project's; none set without one) | the modules that register sections (Scene: `ProjectCollisionLayers`), on the main thread |
+| `IGameGraphics`: the players' graphics options, `Renderer.Quality`'s fields by name, with the value in effect and its sources (DeveloperGuide.md, "Quality settings") | `GameRuntime` and `EditorContext`, each through a `GameGraphicsService` | `GameRenderer` (what the game draws with), the editor's Game view, the script host (`Graphics::Set` and friends) |
 
 ### Scene caches
 
@@ -3830,7 +3836,8 @@ is the `strata-scripting` skill. The layers:
   `GetViewportRenderOptions` gives editor views (the editor camera, except `Automatic`'s fallback while playing) preview
   lighting and a hidden HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). Both views hold their
   chips in a toolbar strip above the image (`Panels/ViewportToolbar`), never over it; a Scene view too narrow for their
-  labels draws the last ones as icons (`UI::ChipStrip`, decided from the previous frame's chips). The Scene view's 2D
+  labels draws the last ones as icons, and one too narrow for the icons wraps them onto more toolbar rows (`UI::ChipStrip`,
+  decided from the previous frame's chips; `ViewportToolbar::Compute` makes room for its rows). The Scene view's 2D
   canvas mode (`Panels/CanvasModeView`, `Editor/CanvasEdit`) shows a screen-space canvas at its reference aspect through
   the scene's camera, with handles that place rects, zoom and pan that never lay it out again (DeveloperGuide.md, "Game
   UI commands").

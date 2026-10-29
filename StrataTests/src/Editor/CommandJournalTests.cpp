@@ -147,6 +147,7 @@ namespace
 		"asset.setBudget",
 		"camera.focus", "camera.set",
 		"editor.activity.export", "editor.quit", "editor.removeRecentProject",
+		"graphics.resetPlayerOptions",
 		"input.action", "input.click", "input.gamepadAxis", "input.gamepadButton", "input.key", "input.mouseButton", "input.mouseMove",
 		"input.releaseAll", "input.scroll", "input.sequence", "input.type",
 		"inputActions.resetPlayerBindings",

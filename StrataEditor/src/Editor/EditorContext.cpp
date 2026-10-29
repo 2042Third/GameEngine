@@ -33,6 +33,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/Renderer.h>
+#include <Strata/Runtime/GameGraphicsService.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/PrefabInstances.h>
@@ -149,14 +150,18 @@ namespace Strata
 		m_GameWindowProvider = CreateScope<EngineServices::ScopedProvider<IGameWindow>>(m_GameWindow);
 		m_GameSavesProvider = CreateScope<EngineServices::ScopedProvider<IGameSaves>>(m_GameSaves);
 		m_ProjectSettingsProvider = CreateScope<EngineServices::ScopedProvider<IProjectSettings>>(m_OpenProjectSettings);
-		// What the game asked of its shell: window requests (recorded, not applied), its cursor, where its saves go.
+		m_GameGraphics = CreateScope<GameGraphicsService>(&m_OpenProjectSettings, &m_GameSaves, &GetSettingsRegistry());
+		m_GameGraphicsProvider = CreateScope<EngineServices::ScopedProvider<IGameGraphics>>(*m_GameGraphics);
+		// What the game asked of its shell: window requests (recorded, not applied), its cursor, where its saves go, and its
+		// graphics options.
 		SetStatusProvider("game", [this]()
 		{
 			const std::optional<std::filesystem::path> saves = GetGameSaveDirectory();
 			const CursorMode cursor = Input::GetGameCursorMode();
 			return nlohmann::json { { "windowRequests", m_GameWindow.Describe() },
 				{ "cursor", cursor == CursorMode::Locked ? "locked" : (cursor == CursorMode::Hidden ? "hidden" : "normal") },
-				{ "saveDirectory", saves ? nlohmann::json(FileSystem::ToUTF8(*saves)) : nlohmann::json(nullptr) } };
+				{ "saveDirectory", saves ? nlohmann::json(FileSystem::ToUTF8(*saves)) : nlohmann::json(nullptr) },
+				{ "graphics", DescribeGameGraphics() } };
 		});
 		// The recovery journal follows every step the undo stack applies; recovery files apply only to scenes the project
 		// still has, which scans find by their handles wherever they moved.
@@ -1377,8 +1382,10 @@ namespace Strata
 		// Keys a tool held down in an earlier session (input.* commands) must not leak into this one.
 		ResetSimulatedInput();
 		ResetGameShell();
-		// The bindings players saved in an earlier session (the project's .strata/Saves), as an exported game loads them.
+		// The bindings and graphics options players saved in an earlier session (the project's .strata/Saves), as an exported
+		// game loads them.
 		InputActions::LoadBindings();
+		m_GameGraphics->LoadPlayerOptions();
 		m_RuntimeScene->SetTimeDilation(m_Specification.TimeDilation);
 		m_RuntimeScene->OnRuntimeStart(mode);
 		// Cells with unsaved edits stay for the session: their documents on disk are older than what plays.
@@ -1617,8 +1624,10 @@ namespace Strata
 	{
 		m_GameWindow.Clear();
 		Input::SetGameCursorMode(CursorMode::Normal);
-		// Map enables, players' bindings, simulated actions and a capture belong to the game session.
+		// Map enables, players' bindings, simulated actions and a capture belong to the game session, and so do the players'
+		// graphics options.
 		InputActions::ResetSession();
+		m_GameGraphics->ResetSession();
 	}
 
 	std::optional<std::filesystem::path> EditorContext::GetGameSaveDirectory() const
@@ -1666,6 +1675,80 @@ namespace Strata
 		if (IsPlaying())
 			InputActions::ResetBindings("");
 		m_PlayerBindingsResetCount++;
+		return true;
+	}
+
+	nlohmann::json EditorContext::DescribeGameGraphics()
+	{
+		GameGraphicsService& graphics = *m_GameGraphics;
+		const SettingsSection* section = graphics.GetSection();
+		if (!section)
+			return nullptr;
+		const nlohmann::json& effective = graphics.GetEffectiveValue();
+		nlohmann::json sources = nlohmann::json::object();
+		for (const SettingsField& field : section->Fields)
+		{
+			const GameGraphicsSource source = graphics.GetSource(field.Name).value_or(GameGraphicsSource::Project);
+			sources[field.Name] = source == GameGraphicsSource::Player ? "player" : source == GameGraphicsSource::CommandLine ? "commandLine" : "project";
+		}
+		const std::optional<std::filesystem::path> file = graphics.GetOptionsFile();
+		const nlohmann::json& playerOptions = GetPlayerGraphicsOptions();
+		const std::string& problem = GetPlayerGraphicsProblem();
+		return { { "preset", effective.contains("Preset") ? effective["Preset"] : nlohmann::json(nullptr) }, { "effective", effective },
+			{ "sources", std::move(sources) }, { "playerOptions", playerOptions },
+			{ "playerFile", file && FileSystem::Exists(*file) ? nlohmann::json(FileSystem::ToUTF8(*file)) : nlohmann::json(nullptr) },
+			{ "playerFileProblem", problem.empty() ? nlohmann::json(nullptr) : nlohmann::json(problem) } };
+	}
+
+	const RendererQualitySettings& EditorContext::GetGameQuality()
+	{
+		return m_GameGraphics->GetQuality();
+	}
+
+	const nlohmann::json& EditorContext::GetPlayerGraphicsOptions()
+	{
+		const bool playing = IsPlaying();
+		const uint64_t project = m_Project ? m_ProjectGeneration : 0; // Generations count from 1
+		const uint64_t version = m_GameGraphics->GetVersion();
+		// What a game saves while it plays is read once it stopped (a new session): the file is read only on these changes.
+		if (m_PlayerGraphicsRead && m_PlayerGraphicsPlaying == playing && m_PlayerGraphicsProject == project && m_PlayerGraphicsSession == m_PlaySession
+			&& m_PlayerGraphicsVersion == version && m_PlayerGraphicsResets == m_PlayerGraphicsResetCount)
+		{
+			return m_PlayerGraphicsOptions;
+		}
+		m_PlayerGraphicsProblem.clear();
+		if (playing)
+			m_PlayerGraphicsOptions = m_GameGraphics->GetPlayerOptions();
+		else
+			m_PlayerGraphicsOptions = m_Project ? m_GameGraphics->ReadSavedOptions(&m_PlayerGraphicsProblem) : nlohmann::json::object();
+		m_PlayerGraphicsRead = true;
+		m_PlayerGraphicsPlaying = playing;
+		m_PlayerGraphicsProject = project;
+		m_PlayerGraphicsSession = m_PlaySession;
+		m_PlayerGraphicsVersion = version;
+		m_PlayerGraphicsResets = m_PlayerGraphicsResetCount;
+		return m_PlayerGraphicsOptions;
+	}
+
+	const std::string& EditorContext::GetPlayerGraphicsProblem()
+	{
+		GetPlayerGraphicsOptions();
+		return m_PlayerGraphicsProblem;
+	}
+
+	bool EditorContext::ResetPlayerGraphicsOptions(std::string* outError)
+	{
+		if (!m_Project)
+		{
+			if (outError)
+				*outError = "No project is open: the players' graphics options belong to a project's game";
+			return false;
+		}
+		if (!m_GameGraphics->DeleteSavedOptions(outError))
+			return false;
+		if (IsPlaying())
+			m_GameGraphics->ResetOptions("");
+		m_PlayerGraphicsResetCount++;
 		return true;
 	}
 

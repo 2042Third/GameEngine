@@ -28,6 +28,7 @@
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/FileDialogs.h"
+#include "UI/GraphicsQualityPage.h"
 #include "UI/Icons.h"
 #include "UI/ItemProbe.h"
 #include "UI/Notifications.h"
@@ -44,6 +45,7 @@
 #include <Strata/Events/MouseEvent.h>
 #include <Strata/Input/InputActionSet.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Scene/ProjectCollisionLayers.h>
 
@@ -137,7 +139,8 @@ namespace Strata
 		ST_ASSERT(m_Host, "The editor layer needs a host");
 		if (!options.DefaultProjectLocation.empty())
 			m_ProjectDialogs.SetDefaultLocation(options.DefaultProjectLocation);
-		// The settings windows' pages of complex sections; simple sections need none (a generic page draws them).
+		// The settings windows' pages of complex sections; simple sections need none (a generic page draws them) unless they
+		// have a page of their own.
 		m_SettingsPages.Register(ExternalEditor::c_SettingsSection, [](EditorContext& context, const SettingsSection&, SettingsWindowKind)
 		{
 			return CreateScope<ExternalEditorPage>(context);
@@ -149,6 +152,11 @@ namespace Strata
 		m_SettingsPages.Register(InputActionSet::c_SectionId, [](EditorContext&, const SettingsSection&, SettingsWindowKind)
 		{
 			return CreateScope<InputActionsPage>();
+		});
+		// A simple section with a page of its own: the presets side by side with each row's costs.
+		m_SettingsPages.Register(std::string(RendererQuality::c_SectionId), [](EditorContext&, const SettingsSection& section, SettingsWindowKind)
+		{
+			return CreateScope<GraphicsQualityPage>(section);
 		});
 		RegisterBuiltinPanels();
 		RegisterPanelCommands();

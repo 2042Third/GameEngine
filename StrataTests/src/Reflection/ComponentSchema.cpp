@@ -16,7 +16,7 @@ namespace Strata::Tests
 				nlohmann::json enumValues = nlohmann::json::array();
 				for (const EnumValue& value : property.EnumValues)
 					enumValues.push_back({ { "Name", value.Name }, { "Value", value.Value }, { "DisplayName", value.DisplayName } });
-				properties.push_back({
+				nlohmann::json described = {
 					{ "Name", property.Name },
 					{ "DisplayName", property.DisplayName },
 					{ "Tooltip", property.Tooltip },
@@ -26,7 +26,11 @@ namespace Strata::Tests
 					{ "Max", property.Max },
 					{ "Speed", property.Speed },
 					{ "AssetFilter", static_cast<uint32_t>(property.AssetFilter) },
-					{ "EnumValues", enumValues } });
+					{ "EnumValues", enumValues } };
+				// Only where a component groups its properties, so the snapshot of the others stays as it was.
+				if (!property.Section.empty())
+					described["Section"] = property.Section;
+				properties.push_back(std::move(described));
 			}
 			components.push_back({
 				{ "Name", info->Name },
