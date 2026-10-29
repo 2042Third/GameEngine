@@ -17,6 +17,25 @@ namespace Strata
 	// Query layer mask that accepts every layer.
 	constexpr uint32_t c_AllPhysicsLayers = 0xFFFFFFFFu;
 
+	// The simulation's tuning defaults (PhysicsSettings; the project's Physics.Simulation section, DeveloperGuide "Physics
+	// simulation", uses them as its fields' defaults). The sweep of DeveloperGuide "Contact recycling" chose them.
+	// box3d's B3_CONTACT_RECYCLE_DISTANCE (10 linear slops of 5 mm), in meters: touching contacts whose bodies moved less than
+	// this relative to each other since the contact was computed (and turned less than 10 degrees) are reused. The sweep kept
+	// it: the only distance its rule's gates pass, 2.5 cm, put the 2,000-ball pit to sleep later (median 22.6 s over nine
+	// layouts against 14.7), 0 topples a tower of 20 crates, longer ones bump more at seams, and the distance does not change
+	// how soon the 500-ball pit sleeps (DeveloperGuide "Contact recycling").
+	constexpr float c_DefaultContactRecycleDistance = 0.05f;
+	// In m/s: a body slower than this for 0.5 s (with its whole island) falls asleep. box3d's b3BodyDef::sleepThreshold is
+	// 0.05; at 0.08 the ball pits sleep a quarter to a third sooner in every one of their nine layouts (medians 11.4 s instead
+	// of 15.1 for 500 balls, 14.7 instead of 21.0 for 2,000) while every probe and the Physics Playground's stations come out
+	// the same (the sweep, DeveloperGuide "Contact recycling").
+	constexpr float c_DefaultSleepThreshold = 0.08f;
+	// box3d's b3WorldDef contact tuning: the contacts' stiffness in cycles per second, their damping ratio, and the speed in m/s
+	// at which overlaps are pushed apart (contactSpeed).
+	constexpr float c_DefaultContactHertz = 30.0f;
+	constexpr float c_DefaultContactDampingRatio = 10.0f;
+	constexpr float c_DefaultContactPushSpeed = 3.0f;
+
 	// Configuration of a physics world. Capacities are the room a world reserves when it is created; 0 sizes one
 	// automatically from the bodies the scene has then (see PhysicsWorld::ResolveCapacities), and a scene's
 	// SceneSettings::PhysicsCapacity overrides these. A world whose bodies outgrow its room grows (see PhysicsWorld,
@@ -33,6 +52,15 @@ namespace Strata
 		// The most bodies a world may grow to: a cap on the memory physics uses (see PhysicsWorld::EstimateReservedBytes);
 		// beyond it bodies wait. 0: the engine's limit (PhysicsCapacitySettings::c_MaxBodiesLimit). Never below MaxBodies.
 		uint32_t GrowthLimit = 0;
+
+		// The simulation's tuning (see the defaults above): what PhysicsWorld::SetSimulationTuning changes while a world runs.
+		// The project's Physics.Simulation section overrides them (PhysicsSystem). Out-of-range values are clamped, non-finite
+		// ones replaced by the defaults.
+		float ContactRecycleDistance = c_DefaultContactRecycleDistance; // Meters, 0 to 1; 0 turns contact recycling off
+		float SleepThreshold = c_DefaultSleepThreshold;                 // m/s, 0 to 1, of every dynamic and kinematic body
+		float ContactHertz = c_DefaultContactHertz;                     // 1 to 240
+		float ContactDampingRatio = c_DefaultContactDampingRatio;       // 0 to 100
+		float ContactPushSpeed = c_DefaultContactPushSpeed;             // m/s, 0.01 to 100
 
 		// Layer collision matrix: bit j of LayerCollisionMasks[i] is set when layer i collides with layer j. Two layers
 		// collide only if both of their masks allow it, so an asymmetric edit disables the pair. Everything collides by
@@ -85,6 +113,40 @@ namespace Strata
 		bool operator==(const PhysicsCapacityDemand& other) const = default;
 	};
 
+	// The physics library's own stage times of a fixed step, in milliseconds: box3d's b3World_GetProfile read after each of its
+	// steps and summed over the fixed step's box3d steps. Two levels, as box3d measures them: the stages, whose sum is the
+	// library step (up to box3d's own small overhead), and the parts of Solve, which are measured inside it and never added to
+	// it. SplitIslands runs in a task beside the solve and is added to nothing.
+	struct PhysicsLibraryProfile
+	{
+		// The stages
+		float Pairs = 0.0f;        // Finding new pairs in the broad phase
+		float Collide = 0.0f;      // The narrow phase: contact manifolds (contacts recycled skip it)
+		float Solve = 0.0f;        // Solving, integrating, islands, transforms and the broad phase's refit
+		float Sensors = 0.0f;      // Sensor overlaps
+		// Parts of Solve
+		float Constraints = 0.0f;  // The constraint solver's stages
+		float Transforms = 0.0f;   // Finalizing the bodies' transforms
+		float Refit = 0.0f;        // Refitting the broad phase's trees
+		float Continuous = 0.0f;   // Continuous collision of fast bodies (box3d's bullets)
+		float SleepIslands = 0.0f; // Putting islands to sleep
+		// Beside the solve
+		float SplitIslands = 0.0f;
+	};
+
+	// box3d's counters after a step (b3World_GetCounters): its islands, its contacts (touching or not), the awake ones (as of
+	// after the step) and the contacts its collide pass recycled. box3d resets its recycled count only in a collide pass, which
+	// runs only while some contact is awake, so after a step that left no contact awake it still holds the last pass's count:
+	// that step counts 0 recycled (exact for that case; it misses only the contacts recycled in the step in which the last
+	// island fell asleep).
+	struct PhysicsLibraryCounters
+	{
+		uint32_t Islands = 0;
+		uint32_t Contacts = 0;
+		uint32_t AwakeContacts = 0;
+		uint32_t RecycledContacts = 0;
+	};
+
 	struct PhysicsStats
 	{
 		uint32_t BodyCount = 0;          // Bodies in the simulation (inactive entities' bodies are excluded)
@@ -93,6 +155,9 @@ namespace Strata
 		uint32_t KinematicBodyCount = 0;
 		uint32_t ActiveBodyCount = 0;    // Awake bodies (sleeping and static bodies are not simulated), character controllers' presence bodies included
 		uint32_t PendingBodyCount = 0;   // Entities waiting for a body that cannot be built yet (degenerate transform, mesh not loaded, growth limit)
+		// Static bodies out of the simulation that box3d still holds, colliding with nothing, until it disables them about a second
+		// later in slices (or they come back, or go): what an unloading cell leaves to the frames after its request.
+		uint32_t ParkedBodyCount = 0;
 		uint32_t CharacterControllerCount = 0; // Character controllers in the simulation (their presence bodies are not in BodyCount)
 		uint32_t ContactPairCount = 0;   // Touching pairs of entities that are tracked (those someone listens to, see ICollisionEventSource)
 		uint64_t PairIndexOperations = 0; // Entries of the per-entity touching pair lists written since the world was created
@@ -107,6 +172,7 @@ namespace Strata
 		// world's capacity:
 		uint32_t SyncedBodyCount = 0;    // Bodies compared with their entity before the step (awake ones and those with changes)
 		uint32_t CheckedPairCount = 0;   // Touching pairs of awake bodies, whose points the step refreshed
+		uint32_t PairLookupCount = 0;    // Awake bodies whose touching pairs the step looked up (none while no pair is tracked)
 		uint32_t WrittenBodyCount = 0;   // Dynamic bodies whose pose was written back to their entity
 		// Body slots read to put the moved bodies in body order for the write-back: the groups of 64 that hold a moved body.
 		uint32_t OrderedSlotCount = 0;
@@ -147,6 +213,49 @@ namespace Strata
 		// The slices a loaded scene's world was built in while its load prepared it, before the scene ran
 		// (PhysicsSystem::PrepareLoadedScene); 0 for a world built when its scene started.
 		uint32_t PreparedSlices = 0;
+
+		// The instruments (DeveloperGuide "Physics instruments"), kept as the world steps, so that IPhysicsDiagnostics reads
+		// them in constant time. Of the last fixed step unless stated.
+		// Bodies: the moving bodies in the simulation (dynamic and kinematic bodies of entities in the simulation, and character
+		// controllers' presence bodies, as ActiveBodyCount counts them), and those of them asleep.
+		uint32_t MovingBodyCount = 0;
+		uint32_t SleepingBodyCount = 0;
+		// box3d's counters (see PhysicsLibraryCounters; RecycledContactCount summed over the fixed step's box3d steps), read
+		// after every box3d step only while detailed statistics are on (PhysicsWorld::SetDetailedStats: box3d counts them
+		// together with its memory, which walks every island). DetailedStats: the last fixed step read them; otherwise they are
+		// 0, also right after detailed statistics were turned on, until a step ran with them.
+		bool DetailedStats = false;
+		uint32_t IslandCount = 0;
+		uint32_t ContactCount = 0;
+		uint32_t AwakeContactCount = 0;
+		uint32_t RecycledContactCount = 0;
+		PhysicsLibraryProfile LibraryProfile; // box3d's stage times
+		uint32_t LibraryWorkers = 0;          // The workers box3d splits its stages for (b3World_GetWorkerCount)
+		// The most contacts box3d held at the start of a step so far (b3World_GetMaxCapacity: a peak, not its storage), the
+		// box3d steps whose new contacts took that peak past the contact room box3d reserved or its next doubling (box3d's
+		// contact storage grew while playing), and the library time of the last such step. box3d adds a step's contacts to its
+		// peak at the start of its next step, so a growth is counted after the step that follows it (one that the world's last
+		// step made is never counted).
+		uint32_t LibraryContactPeak = 0;
+		uint32_t ContactRoomGrowths = 0;
+		float LastContactGrowthStepMs = 0.0f;
+		// How the dynamic bodies the step wrote back settle: the fastest one's speed (m/s), those faster than their sleep
+		// threshold, and the RMS of the step's displacement of the others, in millimeters. Speeds are displacements over the
+		// fixed step, a proxy: box3d's sleep test uses its own sleep velocity (linear speed plus the angular arc over the body's
+		// extent), so a body counted settling may still fall asleep.
+		float MaxBodySpeed = 0.0f;
+		uint32_t SettlingBodyCount = 0;
+		float RestingJitter = 0.0f;
+		// Parts of Strata's work, in milliseconds: ApplyTime (changes and growth at the step's start) and CheckedPairTime are
+		// parts of SyncTime, EventTime (reading box3d's events) is a part of ContactTime, and InstrumentTime is what reading
+		// box3d's profile and counters cost the step (also part of LastStepTime, in none of the other parts).
+		float ApplyTime = 0.0f;
+		float CheckedPairTime = 0.0f;
+		float EventTime = 0.0f;
+		float InstrumentTime = 0.0f;
+		// Since the world was created: the steps' wall time and the library's, in milliseconds (tools difference two reads).
+		double TotalStepMs = 0.0;
+		double TotalLibraryMs = 0.0;
 	};
 
 	// Triangle data used to build MeshColliderComponent shapes.

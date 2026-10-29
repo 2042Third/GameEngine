@@ -209,7 +209,7 @@ namespace Strata
 	void RegisterInputCommands(EditorCommandRegistry& registry);
 	void RegisterStreamingCommands(EditorCommandRegistry& registry);
 	void RegisterAnimationCommands(EditorCommandRegistry& registry);
-	void RegisterWorldCommands(EditorCommandRegistry& registry); // world.cook, world.info, physics.stats (EditorWorldCommands.cpp)
+	void RegisterWorldCommands(EditorCommandRegistry& registry); // world.cook, world.info, physics.stats, physics.setDetailedStats (EditorWorldCommands.cpp)
 	void RegisterLightingCommands(EditorCommandRegistry& registry); // lighting.* (EditorLightingCommands.cpp)
 	void RegisterAudioCommands(EditorCommandRegistry& registry); // audio.* (Commands/AudioCommands.cpp)
 	void RegisterUICommands(EditorCommandRegistry& registry);      // ui.create, ui.layout, ui.hitTest (EditorUICommands.cpp)

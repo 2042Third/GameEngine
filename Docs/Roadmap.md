@@ -645,12 +645,60 @@ Open items and deferrals later waves own:
 - Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
   `GameRuntime`, the editor and many tests use the script engine directly; physics, audio and animation can be left
   out (`STRATA_WITH_PHYSICS`, `STRATA_WITH_AUDIO`, `STRATA_WITH_ANIMATION`, wave 4's `engine-modules`).
+- Physics at runtime (wave 7's `physics-runtime`, steps 1-5 landed, and below its cut the deferred removal of a leaving
+  cell's static bodies): the step's parts, box3d's stages and counters, sleeping bodies and how bodies settle are
+  measured (`physics.stats`, `editor.status`, the perf log, the Streaming panel); the project's `Physics.Simulation`
+  tunes recycling, sleeping and the contacts (defaults: box3d's 5 cm, a sleep threshold of 0.08 m/s); character
+  controllers and kinematic bodies never recycle; contacts nobody tracks cost no lookups, and tracked ones are looked up
+  only for bodies that have some; the write-back and the synchronization read records and components on the job threads
+  (Strata's part of a 70,000-box step 11.1 -> 7.7 ms, then the sync 3.3 -> 2.2 ms, in A/Bs on the loaded machine). Not
+  done: poses written back from box3d's move events (a move event sits at the body's place in box3d's awake set, the
+  same random access `b3Body_GetTransform` makes, and copying it in the serial event loop moved that access to the main
+  thread: no gain in two A/Bs), a new rule for box3d's workers (today's, the job system's workers and the stepping
+  thread, stays: a sweep of 4-24 workers, five repeats interleaved on the loaded machine, found box3d's step falling up
+  to 12-16 workers and level beyond, 70,000 boxes 27.6 ms at 4, 18.4 at 12, 18.2 at 16 and 17.6 at 24, the 30,000
+  tracked 9.1, 5.8, 5.7 and 6.2, and no count beating today's by the 3% a change needs; the quiet machine with its own
+  memory may differ, `Tools/PhysicsSweep.py workers` measures it), the characters' prelude (0.05 of a 0.8 ms crowd step,
+  below the 3% an item needs; the moves take 0.37 ms in parallel and the serial part after them, the entities' writes,
+  the presence bodies' teleports through box3d and the pushes, 0.3 ms), and box3d's cost of sleeping bodies
+  (`Perf.Physics.Sleeping70k.StepRatio` 4.4-7.3 against its 1.2 target: 1,000 falling boxes beside 70,000 sleeping ones
+  take box3d 2.35 ms instead of 0.23, its transforms stage enlarging moving proxies up a dynamic tree that holds the
+  sleeping ones, while Strata's part stays at 0.1-0.2 ms). The unload's Strata share is within its target (at most 1.25
+  times box3d's own removal): in the request's frame physics' changes took 7.9-9.2 ms (medians of seven interleaved runs
+  each, the stream's base and the stream), of which box3d's first disable of the 25,000 bodies in a fresh world takes
+  6.6 alone (`Perf.World.CellUnload.LibraryOnly`, which times it that way since: a second disable of the same bodies
+  takes 3.3) and Strata's own work (the activity checks, finding the records, their bookkeeping) about 1.1 ms timed in
+  process. Then box3d's removals left the request's frame: a static body without contacts that leaves the simulation is
+  parked (its shapes collide with nothing at once, and box3d disables it a second later in slices unless it came back or
+  went first, as a cell's entities do), and the request's frame went from 10.3 to 6.8 ms (medians of six interleaved
+  runs on the loaded machine; 8.1-10.0 against 3.5-4.0 in its quieter runs, so near `CellUnloadMaxFrame`'s 4 ms target).
+  Not done from below the cut: the scene's world matrices from physics (a Scene API whose cache contract the Scene
+  module decides), rolling resistance (not needed: the pits sleep with the 0.08 m/s threshold), a per-scene override of
+  `Physics.Simulation` (no project needs one yet), and upstream requests to box3d (a settable recycle angle, a run-time
+  reserve, bulk insertion and removal, sleeping proxies kept apart from moving ones). The sweep found too: 1 m tiles
+  bump sliding boxes and rolling balls at their inner edges (44 mm at 2 m/s, 630 mm at 8 m/s, with or without
+  recycling), which a merged floor or a triangle mesh avoids; a pile's time to sleep is chaotic, so the pits are compared
+  over nine layouts each (the distance does not change how soon the 500-ball pit sleeps, the 2,000-ball pit slept soonest
+  at 5 cm, and 0.08 m/s beats 0.05 in every layout); and the recycle angle was not measured in a throwaway build: the
+  share recycled keeps rising with the distance while bodies move, so nothing shows the angle limiting it. Piles of balls
+  grow box3d's contact storage once, as they form (4.7 to 6.1 contacts a body against the automatic room's 2; the
+  Physics Playground's first play 3,152 in 2,048), which `PhysicsStats::ContactRoomGrowths` counts; the perf lab's box
+  stacks and the other settle scenes stay within their room, so `c_ContactsPerBody` stays 2.
 - Physics: dynamic bodies below other dynamic bodies are still written back one by one; a collider built from a mesh
   that is reimported while evicted keeps the old data until the mesh loads again (the source revisions render-scene uses
   would tell).
 - Physics on box3d (wave 5's `physics-box3d`): creating and removing many bodies costs about three times Jolt's time,
   because box3d inserts every shape into its trees one at a time on the main thread (the numbers are in the reference
-  machine's list below), and Strata's own part of it grew with allocations per body. The owner left it as it is on
+  machine's list below), and Strata's own part of it grew with allocations per body. Wave 7's `physics-runtime` measured
+  box3d alone beside each metric (`*.LibraryOnly`, 2026-10-28, the reference machine with its temporary memory and other
+  builds running, so both shares about 1.3 to 1.6 times the campaign's): `Create10kBodies` 19.1 ms of which box3d's 10.3;
+  `Create100kStaticBodies` 214-259 ms of which 128.9; the `Grow65kMaxFrame` frame 198-220 ms of which box3d's 102.8 in a
+  world reserved for 65,536 and 90.7 in one reserved for 131,072 (the growth's 12 ms lies within the 30 ms spread of five
+  worlds: `Grow65k.GrowthMs` is within noise); the unload's request frame 8-12 ms of which box3d's first disable of the
+  25,000 bodies 6-8 (step 4), and 3.5-7 ms since its static bodies are parked and leave box3d a second later.
+  The owner on 2026-10-27: "I don't think physics object creation performance is a big deal. But i care about runtime
+  performance", so creation was not optimized in wave 7; the way down stays bulk insertion in box3d (an upstream change
+  and a later bump) and fewer allocations per body in Strata. The owner left it as it is on
   2026-10-20 ("creation speed is not too important") after a check found no easy fix: bodies created disabled pay the
   tree insert when enabled (12-15 ms per 25,000 either way); creating a streamed cell's statics across frames with a
   filter that collides with nothing but keeps their category, then setting the real filter without a pair search at
@@ -1224,14 +1272,15 @@ within 1.15 times step 0's.
     13.5 ms, 1,000 walking characters from 0.86 to at most 0.70 ms a step, and sleeping bodies at no measurable cost.
   - Contact recycling at a distance chosen by measurement on piles, towers and the Physics Playground (each reading of
     the owner's "0.7" answered with numbers); the distance and the sleep threshold in a `Physics.Simulation` project
-    section, changed while the game plays; character controllers' bodies never recycle contacts.
+    section, changed while the game plays; character controllers' bodies and kinematic bodies never recycle contacts.
   - No physics hitch while playing beyond creating bodies: of the frame that brings a world to 65,536 bodies, at most
     4 ms grow its storage; Strata's part of a cell's unload at most 1.25 times box3d's own removal.
   - Sleeping bodies, islands, contacts, box3d's stage times and how piles settle in `physics.stats`, `editor.status`,
     the runtime's perf log, the Streaming panel and the perf lab.
   - Creating and loading bodies recorded with box3d's share, not optimized (the owner's ruling).
   - Below the cut: the scene's world matrices from physics, rolling resistance, deferred removal of an unloading cell's
-    static bodies, a per-scene override of the section, and requests to box3d upstream.
+    static bodies (landed: they are parked, then disabled in slices), a per-scene override of the section, and requests
+    to box3d upstream.
 
 ### Later (wave 8 and beyond)
 

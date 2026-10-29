@@ -151,6 +151,7 @@ namespace
 		"input.action", "input.click", "input.gamepadAxis", "input.gamepadButton", "input.key", "input.mouseButton", "input.mouseMove",
 		"input.releaseAll", "input.scroll", "input.sequence", "input.type",
 		"inputActions.resetPlayerBindings",
+		"physics.setDetailedStats",
 		"play.pause", "play.simulate", "play.start", "play.step", "play.stop",
 		"prefab.select",
 		"preferences.save", "preferences.set",

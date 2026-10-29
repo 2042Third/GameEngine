@@ -137,6 +137,16 @@
 			},
 			"Version": 1
 		},
+		"Physics.Simulation": {
+			"Value": {
+				"ContactDampingRatio": 9,
+				"ContactHertz": 25,
+				"ContactPushSpeed": 2.5,
+				"ContactRecycleDistance": 0.04,
+				"SleepThreshold": 0.06
+			},
+			"Version": 1
+		},
 		"Renderer.Quality": {
 			"Value": {
 				"AmbientOcclusionQuality": "Low",

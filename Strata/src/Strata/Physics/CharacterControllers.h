@@ -100,6 +100,10 @@ namespace Strata
 		// The presence bodies take the world's layer matrix after it changed. Lists the controllers whose presence shapes took
 		// a new filter (box3d destroyed those shapes' contacts).
 		void RefreshFilters(std::vector<UUID>& outRefiltered);
+		// Every presence body takes the world's new sleep threshold (new ones read it from the world's settings).
+		void SetSleepThreshold(float threshold);
+		// The presence body of an entity's controller, null without one (diagnostics and tests).
+		b3BodyId GetPresenceBody(Entity entity) const;
 
 		//////////////////////////////////////////////////////////////////////////
 		// Gameplay (see ICharacterControl; entities without a controller get false or nothing)

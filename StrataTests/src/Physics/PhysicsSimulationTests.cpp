@@ -59,6 +59,54 @@ namespace
 		return poses;
 	}
 
+	// Hundreds of bodies falling at once, so that the write-back runs in parallel chunks when a job system runs: roots,
+	// bodies below a turned and scaled static parent, below a parent moved before every step (its cached world transform is
+	// not current while the step writes, so the main thread writes those) and nested bodies below dynamic ones. Returns every
+	// entity's local pose in hierarchy order, and the most bodies a step wrote back.
+	std::vector<BodyPose> SimulateParentedCrowd(uint32_t& outMostWritten)
+	{
+		Scene scene("Crowd");
+		CreateGround(scene);
+		Entity turned = scene.CreateEntity("Turned");
+		turned.GetTransform().Translation = glm::vec3(0.0f, 1.0f, 0.0f);
+		turned.GetTransform().Rotation = glm::angleAxis(0.5f, glm::vec3(0.0f, 1.0f, 0.0f));
+		turned.GetTransform().Scale = glm::vec3(1.25f);
+		Entity drifting = scene.CreateEntity("Drifting");
+		Entity carrier;
+		for (int index = 0; index < 640; index++)
+		{
+			const glm::vec3 position(static_cast<float>(index % 32) * 1.5f - 24.0f, 1.0f + static_cast<float>(index % 3) * 0.5f, static_cast<float>(index / 32) * 1.5f - 15.0f);
+			Entity body = CreateDynamicBox(scene, "Body", position, glm::vec3(0.3f));
+			switch (index % 5)
+			{
+				case 1: scene.SetParent(body, turned); break;
+				case 2: scene.SetParent(body, drifting); break;
+				case 3: carrier = body; break;
+				case 4: scene.SetParent(body, carrier); break;
+				default: break;
+			}
+		}
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		outMostWritten = 0;
+		for (uint32_t step = 0; step < 60; step++)
+		{
+			drifting.GetTransform().Translation.x += 0.001f;
+			drifting.MarkModified<TransformComponent>();
+			scene.OnUpdateRuntime(scene.GetSettings().FixedTimestep);
+			outMostWritten = std::max(outMostWritten, physics.GetStats().WrittenBodyCount);
+		}
+
+		std::vector<BodyPose> poses;
+		for (Entity entity : scene.GetEntitiesInHierarchyOrder())
+		{
+			const TransformComponent& transform = entity.GetComponent<TransformComponent>();
+			poses.push_back({ transform.Translation, transform.Rotation });
+		}
+		return poses;
+	}
+
 	bool AreIdentical(const std::vector<BodyPose>& a, const std::vector<BodyPose>& b)
 	{
 		if (a.size() != b.size())
@@ -790,6 +838,20 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(AreIdentical(first, threaded));
 	}
 
+	TEST_CASE("Parented and nested bodies are written back alike on one thread and on several")
+	{
+		uint32_t serialWritten = 0;
+		const std::vector<BodyPose> serial = SimulateParentedCrowd(serialWritten);
+		ScopedJobSystem jobSystem(3);
+		uint32_t threadedWritten = 0;
+		const std::vector<BodyPose> threaded = SimulateParentedCrowd(threadedWritten);
+		// Enough bodies moved for the write-back's parallel chunks (from 512 writes).
+		CHECK(serialWritten == 640);
+		CHECK(threadedWritten == 640);
+		CHECK(serial.size() == 643);
+		CHECK(AreIdentical(serial, threaded));
+	}
+
 	TEST_CASE("Moving a body wakes the bodies resting on it")
 	{
 		enum class Move
@@ -847,18 +909,24 @@ TEST_SUITE("Physics.Simulation")
 
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
+		physics.SetDetailedStats(true);
 		CollisionRecorder recorder(physics);
 		StepScene(scene, 90);
 		PhysicsStats stats = physics.GetStats();
 		REQUIRE(stats.ActiveBodyCount == 0);
 		CHECK(stats.ContactPairCount == 401);
 
-		// Everything sleeps: nothing is visited.
+		// Everything sleeps: nothing is visited, no contact is awake or recycled, and every moving body counts as sleeping.
 		StepScene(scene, 1);
 		stats = physics.GetStats();
 		CHECK(stats.SyncedBodyCount == 0);
 		CHECK(stats.CheckedPairCount == 0);
 		CHECK(stats.WrittenBodyCount == 0);
+		CHECK(stats.AwakeContactCount == 0);
+		CHECK(stats.RecycledContactCount == 0);
+		CHECK(stats.SettlingBodyCount == 0);
+		CHECK(stats.MovingBodyCount == 401);
+		CHECK(stats.SleepingBodyCount == 401);
 
 		// One body in motion: only it and its contact are visited.
 		CHECK(physics.SetLinearVelocity(ball, glm::vec3(2.0f, 0.0f, 0.0f)));
@@ -908,7 +976,92 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(stats.CheckedPairCount == 0);
 		CHECK(stats.WrittenBodyCount == 0);
 		CHECK(stats.ContactPairCount == 401);
+		CHECK(stats.AwakeContactCount == 0);
+		CHECK(stats.RecycledContactCount == 0);
+		CHECK(stats.SettlingBodyCount == 0);
+		CHECK(stats.SleepingBodyCount == 401);
 		CHECK(recorder.Count(CollisionEventType::Begin) == recorder.Count(CollisionEventType::End) + 401);
+	}
+
+	TEST_CASE("Contacts nobody tracks cost no lookups")
+	{
+		Scene scene;
+		Entity ground = CreateGround(scene);
+		for (int index = 0; index < 20; index++)
+			CreateDynamicBox(scene, "Box", glm::vec3(static_cast<float>(index) * 1.5f - 15.0f, 0.6f, 0.0f));
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		// Nobody listens: the boxes land and touch the ground, and no step looks a pair up.
+		StepScene(scene, 10);
+		PhysicsStats stats = physics.GetStats();
+		CHECK(stats.ActiveBodyCount == 20);
+		CHECK(stats.ContactPairCount == 0);
+		CHECK(stats.PairLookupCount == 0);
+		CHECK(stats.CheckedPairCount == 0);
+
+		// A watched ground: its pairs are seeded, and the awake bodies' pairs are checked again.
+		std::vector<CollisionEvent> events;
+		physics.AddCollisionListener([&events](const CollisionEvent& event) { events.push_back(event); }, CollisionListenerScope::WatchedEntities);
+		physics.WatchCollisions(ground.GetUUID());
+		StepScene(scene, 2);
+		stats = physics.GetStats();
+		CHECK(stats.ContactPairCount == 20);
+		CHECK(stats.PairLookupCount > 0);
+		CHECK(events.size() == 20);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Only awake bodies with tracked pairs are looked up")
+	{
+		Scene scene;
+		Entity ground = CreateGround(scene);
+		// Ten stacks of two boxes: the lower boxes touch the ground, the upper ones only the lower ones.
+		std::vector<Entity> lower;
+		std::vector<Entity> upper;
+		for (int index = 0; index < 10; index++)
+		{
+			const float x = static_cast<float>(index) * 1.5f - 7.5f;
+			lower.push_back(CreateDynamicBox(scene, "Lower", glm::vec3(x, 0.55f, 0.0f)));
+			upper.push_back(CreateDynamicBox(scene, "Upper", glm::vec3(x, 1.6f, 0.0f)));
+		}
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+
+		// Only the ground's contacts are watched: of the 20 awake boxes, the 10 lower ones have pairs and are looked up.
+		std::vector<CollisionEvent> events;
+		physics.AddCollisionListener([&events](const CollisionEvent& event) { events.push_back(event); }, CollisionListenerScope::WatchedEntities);
+		physics.WatchCollisions(ground.GetUUID());
+		StepScene(scene, 12);
+		PhysicsStats stats = physics.GetStats();
+		REQUIRE(stats.ActiveBodyCount == 20);
+		CHECK(stats.ContactPairCount == 10);
+		CHECK(stats.PairLookupCount == 10);
+		CHECK(stats.CheckedPairCount == 10);
+
+		// Pairs that end as bodies leave (deactivated, destroyed) or are lifted away are no longer looked up; the counts
+		// follow every change (GetStats checks them against the pair lists in Debug builds).
+		lower[0].SetActive(false);
+		scene.DestroyEntity(lower[1]);
+		CHECK(physics.Teleport(lower[2], glm::vec3(-4.5f, 10.0f, 5.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f)));
+		StepScene(scene, 2);
+		stats = physics.GetStats();
+		CHECK(stats.ContactPairCount == 7);
+		CHECK(stats.PairLookupCount == 7);
+
+		// Reactivated, the body touches the ground again and is looked up with the others.
+		lower[0].SetActive(true);
+		StepScene(scene, 2);
+		stats = physics.GetStats();
+		CHECK(stats.ContactPairCount == 8);
+		CHECK(stats.PairLookupCount == 8);
+
+		// No longer watched: every pair ends, and nothing is looked up.
+		physics.UnwatchCollisions(ground.GetUUID());
+		StepScene(scene, 2);
+		stats = physics.GetStats();
+		CHECK(stats.ContactPairCount == 0);
+		CHECK(stats.PairLookupCount == 0);
+		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Kinematic bodies reach their target when a frame runs several fixed steps")

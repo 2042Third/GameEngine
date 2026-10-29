@@ -32,7 +32,9 @@
 
 #if ST_WITH_PHYSICS
 	#include "Strata/Physics/PhysicsComponents.h"
+	#include "Strata/Physics/PhysicsSimulationSettings.h"
 	#include "Strata/Physics/PhysicsSystem.h"
+	#include "Strata/Physics/PhysicsWorld.h"
 #endif
 
 #include <chrono>
@@ -493,6 +495,43 @@ TEST_SUITE("Runtime.Game")
 		const Entity falling = running.FindEntityByName("Ghost");
 		UpdateUntil(*game, [&]() { return glm::vec3(running.GetWorldTransform(falling)[3]).y < -2.0f; });
 	}
+
+	TEST_CASE("An exported game's physics runs with its manifest's Physics.Simulation section")
+	{
+		ScopedJobSystem jobs(2, 2);
+		Scene start("Start");
+		start.CreateEntity("Camera").AddComponent<CameraComponent>().Primary = true;
+		Entity ground = start.CreateEntity("Ground");
+		ground.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		ground.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(20.0f, 0.5f, 20.0f);
+		Entity box = start.CreateEntity("Box");
+		box.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.5f, 0.0f);
+		box.AddComponent<RigidBodyComponent>();
+		box.AddComponent<BoxColliderComponent>();
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeProjectSimulation");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, ToBytes(JsonUtils::Dump(SceneSerializer::Serialize(start))) } }, UUID(0x1010));
+		const nlohmann::json tuning = { { "ContactRecycleDistance", 0.02 }, { "SleepThreshold", 0.15 }, { "ContactHertz", 25.0 },
+			{ "ContactDampingRatio", 8.0 }, { "ContactPushSpeed", 2.0 } };
+		RewriteManifest(manifest, 5, { { PhysicsSimulationSettings::c_SectionId, { { "Version", 1 }, { "Value", tuning } } } });
+
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		REQUIRE(game->WaitForStart());
+		game->Update(c_Frame);
+		const PhysicsSystem* physics = game->GetScene()->GetSystem<PhysicsSystem>();
+		REQUIRE(physics);
+		REQUIRE(physics->GetWorld());
+		CHECK(physics->GetSimulationSource() == PhysicsSimulationSettings::Source::Project);
+		const PhysicsWorld& world = *physics->GetWorld();
+		CHECK(world.GetContactRecycleDistance() == doctest::Approx(0.02f));
+		const std::optional<float> threshold = world.GetSleepThreshold(game->GetScene()->FindEntityByName("Box"));
+		REQUIRE(threshold);
+		CHECK(*threshold == doctest::Approx(0.15f));
+		CHECK(world.GetSettings().ContactHertz == doctest::Approx(25.0f));
+		CHECK(world.GetSettings().ContactDampingRatio == doctest::Approx(8.0f));
+		CHECK(world.GetSettings().ContactPushSpeed == doctest::Approx(2.0f));
+	}
 #endif
 
 	TEST_CASE("A world game starts with its start cells in, paces the frames that show nothing and logs its streaming")
@@ -524,19 +563,33 @@ TEST_SUITE("Runtime.Game")
 		for (uint32_t frame = 0; frame < 3; frame++)
 			game->Update(c_Frame);
 
-		// The perf log's columns read the running scene's streaming and physics.
+		// The perf log's columns read the running scene's streaming and physics: its capacity and its last step. Writing a row
+		// turns box3d's counters on for the scene, so the contact columns are filled from its next step on.
 		const FramePerfColumnGroup columns = game->MakePerfLogColumns();
-		REQUIRE(columns.Names.size() == 8);
+		REQUIRE(columns.Names.size() == 15);
 		CHECK(columns.Names[2] == "WorldCellsLoaded");
 		CHECK(columns.Names[5] == "PhysicsBodiesWaiting");
 		CHECK(columns.Names[6] == "PhysicsBodiesPending");
-		std::string line;
-		FramePerfRow row(line);
-		columns.Write(row);
-		REQUIRE(row.GetCount() == 8);
-		const std::optional<PerfLogTable> table = ParsePerfLog("A,B,C,D,E,F,G,H\n" + line.substr(1) + "\n", error);
-		REQUIRE_MESSAGE(table, error);
-		const std::vector<double>& values = table->Rows[0];
+		CHECK(columns.Names[8] == "PhysicsStepMs");
+		CHECK(columns.Names[12] == "PhysicsContacts");
+		CHECK(columns.Names[14] == "PhysicsMaxBodySpeed");
+		const auto writeRow = [&]()
+		{
+			std::string line;
+			FramePerfRow row(line);
+			columns.Write(row);
+			REQUIRE(row.GetCount() == 15);
+			const std::optional<PerfLogTable> table = ParsePerfLog("A,B,C,D,E,F,G,H,I,J,K,L,M,N,O\n" + line.substr(1) + "\n", error);
+			REQUIRE_MESSAGE(table, error);
+			return table->Rows[0];
+		};
+		// The first row: the scene's steps so far ran without the counters, so the contact columns stay empty, not 0.
+		const std::vector<double> first = writeRow();
+		CHECK(std::isnan(first[12]));
+		CHECK(std::isnan(first[13]));
+		for (uint32_t frame = 0; frame < 2; frame++)
+			game->Update(c_Frame);
+		const std::vector<double> values = writeRow();
 		CHECK(values[0] >= 4.0); // Wanted
 		CHECK(values[2] >= 4.0); // Loaded
 #if ST_WITH_PHYSICS
@@ -544,12 +597,14 @@ TEST_SUITE("Runtime.Game")
 		CHECK(values[5] == 0.0); // Waiting
 		CHECK(values[6] == 0.0); // Pending: the cells' boxes need no mesh
 		CHECK(values[7] >= values[4]); // Capacity
+		CHECK(values[8] > 0.0); // Step ms
+		CHECK(values[9] >= 0.0); // box3d's ms (it may round to 0 with nothing awake)
+		for (size_t column = 10; column < 15; column++)
+			CHECK_FALSE(std::isnan(values[column])); // Awake, sleeping, contacts, recycled, the fastest body
 #else
 		// An engine without physics leaves the physics columns empty.
-		CHECK(std::isnan(values[4]));
-		CHECK(std::isnan(values[5]));
-		CHECK(std::isnan(values[6]));
-		CHECK(std::isnan(values[7]));
+		for (size_t column = 4; column < 15; column++)
+			CHECK(std::isnan(values[column]));
 #endif
 	}
 

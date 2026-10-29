@@ -599,7 +599,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataRuntime.PerfLog PROPERTIES FIXTURES_REQUIRED StrataExportedGame FIXTURES_SETUP StrataRuntimePerfLog)
 	add_test(NAME StrataRuntime.PerfLogCheck
 		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLog.csv" 30 --nonzero Assets.Update --column WorldCellsLoaded
-			--column PhysicsBodiesWaiting --column PhysicsBodiesPending --column PhysicsMaxBodies --column World.Streaming)
+			--column PhysicsBodiesWaiting --column PhysicsBodiesPending --column PhysicsMaxBodies --column PhysicsStepMs --column PhysicsRecycledContacts
+			--column World.Streaming)
 	set_tests_properties(StrataRuntime.PerfLogCheck PROPERTIES FIXTURES_REQUIRED StrataRuntimePerfLog)
 	add_test(NAME StrataRuntime.InvalidPerfLog
 		COMMAND "${CMAKE_COMMAND}"

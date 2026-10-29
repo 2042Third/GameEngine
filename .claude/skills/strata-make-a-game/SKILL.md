@@ -472,6 +472,12 @@ is each one's regression:
   field of view and the window size give the ray), grabbing (a velocity toward a point in front of the camera each fixed
   step), impact sounds by material with a voice budget shared by every body, a trigger that counts balls, a collision
   layer that passes through another (`project.setCollisionLayers {layerNames, layerCollisions}`), R reloading the scene to reset.
+  A pile that never sleeps shows in `physics.stats` (`sleep.awake`, `settling.maxSpeed`, `settling.restingJitterMm`); the
+  project's `Physics.Simulation` section tunes it while the game plays (`project.setSettings {"section":
+  "Physics.Simulation", "value": {"ContactRecycleDistance": 0.05, "SleepThreshold": 0.12}}`: a higher threshold than the
+  default 0.08 sleeps sooner but stops slow bodies early). Bodies that bump over the seams of a tiled floor hit the tiles'
+  edges, with or without contact recycling: make the floor one collider (or a mesh collider) instead of lowering the
+  recycle distance, which removes only the few millimeters recycling adds and, at 0, lets stacks topple.
 - **OpenWorld**: a generated terrain (`Tools/GenerateIslandTerrain.py`) kept in a world's persistent scene with static
   mesh colliders; 20,000 props scattered into a world layer (`world.edit {editLayer}`, `world.loadCells` to pin the
   region first, then `prefab.instantiate {instances}` steps); foxes with an animation controller; teleports that prefetch

@@ -36,6 +36,7 @@ namespace Strata::UI
 				property.Type = PropertyType::Float;
 				property.Min = static_cast<float>(field.Min);
 				property.Max = static_cast<float>(field.Max);
+				property.Speed = static_cast<float>(field.DragSpeed);
 				break;
 			case SettingsFieldType::String:
 				property.Type = PropertyType::String;

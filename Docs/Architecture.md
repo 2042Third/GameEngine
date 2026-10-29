@@ -403,7 +403,11 @@ it (mesh colliders, anything that warns). So body IDs and the simulation do not 
 (`PhysicsStats::ParallelBuildCount`). Static shapes created before a world's first step skip box3d's pair search (the first
 step finds every pair); afterwards they search, or bodies resting where they appear would not touch them. Bodies that leave
 the simulation (inactive entities, a cell leaving) are disabled in box3d, destroyed bodies destroyed, and box3d wakes what
-touched them; a static body that moves wakes the bodies around its old and new place (`PhysicsStats::WakeQueryCount`).
+touched them; a static body without contacts (nearly all of a leaving cell's) is parked instead: its shapes get a filter
+that collides with nothing, which box3d checks before every pair, query, sensor visit and sweep, and box3d disables it a
+second later in slices of 1,024 a step unless it came back or went first (`PhysicsStats::ParkedBodyCount`), so that taking
+a cell's 25,000 static bodies out costs its frame no tree removals (box3d's first disable of them took 6.6 ms); a static body
+that moves wakes the bodies around its old and new place (`PhysicsStats::WakeQueryCount`).
 Other systems use physics through the scene services `PhysicsSystem` offers (`ICollisionEventSource`, `IBodyMotionQuery`,
 `IBodyControl`, `IPhysicsQueries`, `ICharacterControl`, `IPhysicsCapacity`, with `CollisionEvent`, `RaycastHit`,
 `CharacterState` and `PhysicsCapacityInfo`, in `Scene/SceneServices.h`); `IPhysicsCapacity` reports the bodies, the room
@@ -422,29 +426,37 @@ resolve to nothing; a rebuilt body's pairs wait for its new shapes' contacts of 
 new Begin. Sensor events where neither body moves (a static trigger and a static collider) are dropped, and trigger events
 get the center of the two shapes' bounds' intersection as their point. Each touching pair knows its position in the pair
 lists of both its entities, so it is added and removed in constant time (`PhysicsStats::PairIndexOperations` counts the
-list writes). Each box3d body index leads to its entity and record in constant time (`BodySlot`), and so does each entity
+list writes), and each record counts its entity's pairs (`BodyRecord::PairCount`), so a step looks up the pairs of only
+the awake bodies that have some, and nothing while no pair is tracked; a step where nobody wants a contact resolves no
+begin event, and one without a tracked pair no end event. Each box3d body index leads to its entity and record in constant time (`BodySlot`), and so does each entity
 index (`RecordSlot`: the records stay in an ordered map for the steps' deterministic order, but a cell that loads or unloads
 looks up tens of thousands of them in a frame; the index points into the map's nodes, so records are created and removed
 only through `EmplaceRecord` and `EraseRecord`, which assert that the counts agree). Bodies spawned and removed again before
 every step must not grow box3d's trees without end (`Physics.Capacity` runs such spawns in a helper process). Around each
 step the work on awake bodies runs on the job system: the synchronization visits the bodies awake after the last step
-(box3d's move events) and those woken since, skipping in parallel chunks those whose entity is where the last step put it
-(`Scene::FindCurrentWorldTransform` reads only current cached matrices), and the write-back writes the poses of the bodies
-box3d moved, those without a dynamic ancestor in parallel chunks, each touching only its own record and
-`TransformComponent` through pointers fetched beforehand, against parent world transforms read before the writes, then
-tells the scene about all of them at once (`Scene::MarkTransformsChanged`, no `on_update`); bodies below other written
-dynamic bodies follow one by one, parents first, and the rare cases (scale edits, failed writes, descendants to update)
-are handled on the main thread in body order, so the results do not depend on the number of threads. Body order comes from
+(box3d's move events) and those woken since, reading their records and skipping in parallel chunks those whose entity is
+where the last step put it (`Scene::FindCurrentWorldTransform` reads only current cached matrices), and the write-back writes the poses of the bodies
+box3d moved: the main thread only lists them in body order, and parallel chunks read their records and components
+(through storages fetched beforehand), mark the dynamic ones written, write those without a parent, then those whose
+parent's cached world transform is current and no dynamic ancestor was written, each touching only its own record and
+`TransformComponent`; the main thread writes the bodies whose parent's transform is not cached and tells the scene about
+all of them at once (`Scene::MarkTransformsChanged`, no `on_update`); bodies below other written dynamic bodies follow one
+by one, parents first, and the rare cases (scale edits, failed writes, parents that cannot be inverted, descendants to
+update) are handled on the main thread in body order, so the results do not depend on the number of threads. Body order comes from
 a bitmap over the body indices of which only the words that got bits are sorted, read and cleared, so a step costs what
 moved, not the world's size. box3d computes in single precision: bodies more than 100 km (1e5 m) from the origin wait like
-bodies with a degenerate transform.
+bodies with a degenerate transform. How bodies settle (box3d's contact recycling distance, the sleep threshold) is the
+project's `Physics.Simulation` section, which `PhysicsSystem` applies on the main thread when a world is made and before a
+fixed step after it changed; what each step did (box3d's stage times and counters, Strata's parts, sleeping bodies, how
+bodies settle) is kept as the world steps and read in constant time through the scene service `IPhysicsDiagnostics`
+(DeveloperGuide, "Physics instruments" and "Physics simulation").
 
 **Character controllers** (`Physics/CharacterControllers`, `CharacterControllerComponent`). An entity with an active,
 enabled controller and no rigid body (an entity with both is the rigid body, with a warning) is an upright capsule
 standing on the entity's origin (its rotation and scale do not change it) that moves by box3d's mover queries
 (`b3World_CollideMover`, `b3SolvePlanes`, `b3World_CastMover`), plus a kinematic presence body (90% of its radius, its top
-at the capsule's, its shape carrying the entity's UUID) through which dynamic bodies land on it, triggers detect it and
-queries hit it. Each fixed step, after the bodies are synchronized and before box3d's step, `CharacterControllerSet::Step`
+at the capsule's, its shape carrying the entity's UUID; it never recycles contacts, since it is teleported every step)
+through which dynamic bodies land on it, triggers detect it and queries hit it. Each fixed step, after the bodies are synchronized and before box3d's step, `CharacterControllerSet::Step`
 moves every controller: its velocity is the walk velocity its script set (`ICharacterControl::MoveCharacter`, kept until
 the next call; the vertical part only without gravity), a pending jump, accumulated root motion (`AddCharacterMotion`: the
 animation system's, see Animation, Root motion) and gravity times its `GravityScale`; standing on walkable ground it takes

@@ -606,6 +606,7 @@ TEST_SUITE("CLI.McpToolsets")
 		CHECK(McpToolsets::GetToolsets("editor.status") == std::vector<std::string> { "core", "editor" });
 		CHECK(McpToolsets::GetToolsets("input.click") == std::vector<std::string> { "play" });
 		CHECK(McpToolsets::GetToolsets("physics.stats") == std::vector<std::string> { "world" });
+		CHECK(McpToolsets::GetToolsets("physics.setDetailedStats") == std::vector<std::string> { "world" });
 		// The project's settings have a toolset of their own; the project's other commands stay with the assets.
 		CHECK(McpToolsets::GetToolsets("project.setSettings") == std::vector<std::string> { "settings" });
 		CHECK(McpToolsets::GetToolsets("project.save") == std::vector<std::string> { "settings" });

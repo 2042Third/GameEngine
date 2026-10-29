@@ -1,6 +1,8 @@
 #include "stpch.h"
 #include "Strata/Physics/PhysicsRegistration.h"
 
+#include "Strata/Core/SettingsRegistry.h"
+#include "Strata/Physics/PhysicsSimulationSettings.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/SceneSystem.h"
 
@@ -10,6 +12,8 @@ namespace Strata
 	void RegisterPhysicsModule()
 	{
 		RegisterPhysicsComponents();
+		const bool sectionRegistered = SettingsRegistry::GetProcessRegistry().Register(PhysicsSimulationSettings::MakeSection());
+		ST_CORE_VERIFY(sectionRegistered, "The physics module could not register its settings section");
 
 		// Physics simulates what the scripts moved this frame (another module's system: a soft constraint). It also runs in the
 		// editor's simulate mode.

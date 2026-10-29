@@ -234,6 +234,9 @@ The threading model, frame loop and pipelines these rules protect are described 
   `DestroyEntities`...), never by editing `RelationshipComponent` or `HierarchyComponent`.
 - **Collision layers** are the project's (`Scene.CollisionLayers`); `Scene::GetPhysicsLayers` is a working copy applied
   on the main thread ([details](Docs/DeveloperGuide.md#collision-layers)).
+- **Physics tuning** is the project's `Physics.Simulation` section, applied by `PhysicsSystem` on the main thread;
+  character presence bodies and kinematic bodies never recycle contacts, and what physics reports every frame stays
+  constant time (`IPhysicsDiagnostics`) ([Physics](Docs/DeveloperGuide.md#physics)).
 
 These rules in full: [Architecture rules](Docs/DeveloperGuide.md#architecture-rules).
 

@@ -3,6 +3,7 @@
 #include "Strata/Core/Base.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Core/UUID.h"
+#include "Strata/Physics/PhysicsSimulationSettings.h"
 #include "Strata/Physics/PhysicsTypes.h"
 #include "Strata/Physics/PhysicsWorld.h"
 #include "Strata/Scene/Entity.h"
@@ -43,14 +44,15 @@ namespace Strata
 	// and static bodies only follow signaled changes, see PhysicsWorld).
 	//
 	// Other systems reach it through the scene services it registers while it exists (Scene/SceneServices.h):
-	// ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries, ICharacterControl and IPhysicsCapacity. Collision events are collected during each
+	// ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries, ICharacterControl, IPhysicsCapacity and
+	// IPhysicsDiagnostics. Collision events are collected during each
 	// step and dispatched afterwards on the main thread to the registered listeners (see ICollisionEventSource, which also
 	// says which contacts are tracked). Listeners may use the whole scene and physics API, including destroying entities;
 	// End events caused by changes made outside a step are dispatched after the next update.
 	//
 	// Main thread only. Functions return false / zero / empty results while there is no simulation.
 	class PhysicsSystem : public SceneSystem, public ICollisionEventSource, public IBodyMotionQuery, public IBodyControl, public IPhysicsQueries,
-		public ICharacterControl, public IPhysicsCapacity
+		public ICharacterControl, public IPhysicsCapacity, public IPhysicsDiagnostics
 	{
 	public:
 		explicit PhysicsSystem(Scene& scene);
@@ -167,6 +169,19 @@ namespace Strata
 
 		PhysicsCapacityInfo GetCapacityInfo() const override;
 		void Reserve(uint32_t bodies) override;
+
+		//////////////////////////////////////////////////////////////////////////
+		// Diagnostics (IPhysicsDiagnostics; see PhysicsWorld::GetStepInfo and SetDetailedStats). Detailed statistics asked for
+		// before the world exists apply to it once it is created, and stay on for the system's life.
+		//////////////////////////////////////////////////////////////////////////
+
+		PhysicsStepInfo GetStepInfo() const override;
+		void SetDetailedStats(bool detailed) override;
+		bool IsDetailedStats() const override { return m_DetailedStats; }
+
+		// Where the running world's tuning comes from (DeveloperGuide "Physics simulation"): the project's Physics.Simulation
+		// section or the process defaults.
+		PhysicsSimulationSettings::Source GetSimulationSource() const { return m_SimulationSource; }
 	private:
 		struct CollisionListener
 		{
@@ -191,6 +206,8 @@ namespace Strata
 		std::array<uint32_t, c_PhysicsLayerCount> GetEffectiveLayerMasks() const;
 		// Applies the scene's layer matrix to the world when it changed (the project's table applied again, a script).
 		void SyncLayers();
+		// Applies the project's Physics.Simulation section to the world when the settings provider's version changed.
+		void SyncSimulationSettings();
 		void DispatchCollisionEvents();
 		// Tells the world which contacts to track: all of them while a listener of every entity is registered.
 		void UpdateContactTracking();
@@ -202,6 +219,11 @@ namespace Strata
 		bool m_WorldRequested = false;
 		bool m_ReportedNoWorld = false; // The scene found no free physics world (reported once)
 		uint32_t m_ReservedBodies = 0; // See Reserve
+		bool m_DetailedStats = false;  // See SetDetailedStats
+		// The settings provider's version whose Physics.Simulation section the world has (nullopt: not read for this world yet),
+		// and where its tuning came from.
+		std::optional<uint64_t> m_SimulationVersion;
+		PhysicsSimulationSettings::Source m_SimulationSource = PhysicsSimulationSettings::Source::Defaults;
 		std::vector<entt::scoped_connection> m_CreationConnections; // Watch for the first physics component
 
 		std::vector<Ref<CollisionListener>> m_CollisionListeners;

@@ -27,6 +27,18 @@ namespace Strata::PhysicsFilters
 		return filter;
 	}
 
+	// The filter of a parked shape (a static body out of the simulation that box3d still holds, see PhysicsWorld's
+	// ParkStaticBody): its layer's category, which box3d's trees sort by, and an empty mask, so that no shape pairs with it and
+	// no query or sensor finds it.
+	inline b3Filter MakeParkedShapeFilter(uint32_t layer)
+	{
+		b3Filter filter = b3DefaultFilter();
+		filter.categoryBits = uint64_t(1) << layer;
+		filter.maskBits = 0;
+		filter.groupIndex = 0;
+		return filter;
+	}
+
 	// A query of the shapes on the layers of `layerMask` (bit L: user layer L).
 	inline b3QueryFilter MakeQueryFilter(uint32_t layerMask)
 	{

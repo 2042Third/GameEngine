@@ -411,6 +411,53 @@ namespace Strata
 	};
 
 	//////////////////////////////////////////////////////////////////////////
+	// Physics diagnostics
+	//////////////////////////////////////////////////////////////////////////
+
+	// What a running scene's physics world did in its last fixed step (IPhysicsDiagnostics): the instruments of PhysicsStats
+	// that need no walk of the bodies (see there and DeveloperGuide "Physics instruments"). All zero, HasWorld false, while
+	// the scene has no physics world.
+	struct PhysicsStepInfo
+	{
+		bool HasWorld = false;
+		// The step read box3d's counters (islands, contacts): detailed statistics were on for it. Otherwise they are 0, also
+		// right after detailed statistics were turned on, until a step ran with them.
+		bool DetailedStats = false;
+		float StepMs = 0.0f;            // The last step's wall time
+		float LibraryMs = 0.0f;         // box3d's own part of it
+		float StrataMs = 0.0f;          // Strata's part (StepMs - LibraryMs)
+		uint32_t Bodies = 0;            // Body slots in use (as IPhysicsCapacity counts them)
+		uint32_t AwakeBodies = 0;
+		uint32_t SleepingBodies = 0;    // Moving bodies (dynamic, kinematic, presence bodies) asleep
+		uint32_t Islands = 0;
+		uint32_t Contacts = 0;          // box3d's contacts, touching or not
+		uint32_t AwakeContacts = 0;
+		uint32_t RecycledContacts = 0;
+		float MaxBodySpeed = 0.0f;      // m/s, of the dynamic bodies the step wrote back
+		uint32_t SettlingBodies = 0;    // Of those, the ones faster than their sleep threshold
+		float RestingJitterMm = 0.0f;   // RMS displacement of the others in the step
+		uint64_t Steps = 0;
+		double TotalStepMs = 0.0;       // Since the world was created
+		double TotalLibraryMs = 0.0;
+	};
+
+	// The physics of a running scene as numbers, for code that may not include the Physics module (the runtime's perf log,
+	// the editor's status and panels). Every call takes constant time: it reads what the world keeps as it steps.
+	class IPhysicsDiagnostics
+	{
+	public:
+		virtual ~IPhysicsDiagnostics() = default;
+
+		virtual PhysicsStepInfo GetStepInfo() const = 0;
+		// Whether box3d's counters (islands, contacts touching and recycled) are read after every step: off by default, since
+		// box3d counts them together with its memory, walking every island (see PhysicsWorld::SetDetailedStats). Main thread;
+		// applies from the next step, also to a world created later for the scene.
+		virtual void SetDetailedStats(bool detailed) = 0;
+		// Whether detailed statistics are asked for (SetDetailedStats), whether or not a step read them yet.
+		virtual bool IsDetailedStats() const = 0;
+	};
+
+	//////////////////////////////////////////////////////////////////////////
 	// World streaming
 	//////////////////////////////////////////////////////////////////////////
 

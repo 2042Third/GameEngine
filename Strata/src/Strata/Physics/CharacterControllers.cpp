@@ -288,12 +288,16 @@ namespace Strata
 		}
 
 		// The presence body of a record at `position`: kinematic, on the controller's layer, seen by sensors. Moving wakes it;
-		// standing still it falls asleep like any body, so that its contacts with sleeping bodies (a crate on its head) last.
+		// standing still it falls asleep like any body (at the world's sleep threshold), so that its contacts with sleeping
+		// bodies (a crate on its head) last. It never recycles contacts, as box3d advises for characters: it is teleported every
+		// step, and a recycled contact would keep the manifold of where it stood (a ghost under a crate it pushes or carries).
 		void CreatePresenceBody(CharacterControllerSetData& data, ControllerRecord& record, const glm::vec3& position)
 		{
 			b3BodyDef bodyDefinition = b3DefaultBodyDef();
 			bodyDefinition.type = b3_kinematicBody;
 			bodyDefinition.position = ToB3(position);
+			bodyDefinition.sleepThreshold = data.Settings->SleepThreshold;
+			bodyDefinition.enableContactRecycling = false;
 			record.PresenceBody = b3CreateBody(data.World, &bodyDefinition);
 			b3ShapeDef shapeDefinition = b3DefaultShapeDef();
 			shapeDefinition.userData = reinterpret_cast<void*>(static_cast<uintptr_t>(static_cast<uint64_t>(record.EntityID)));
@@ -850,6 +854,21 @@ namespace Strata
 		for (auto& [handle, record] : data.Controllers)
 			DestroyPresenceBody(record);
 		data.Controllers.clear();
+	}
+
+	void CharacterControllerSet::SetSleepThreshold(float threshold)
+	{
+		for (auto& [handle, record] : m_Data->Controllers)
+		{
+			if (B3_IS_NON_NULL(record.PresenceBody))
+				b3Body_SetSleepThreshold(record.PresenceBody, threshold);
+		}
+	}
+
+	b3BodyId CharacterControllerSet::GetPresenceBody(Entity entity) const
+	{
+		const ControllerRecord* record = FindController(*m_Data, entity);
+		return record ? record->PresenceBody : b3_nullBodyId;
 	}
 
 	uint32_t CharacterControllerSet::CountCandidates(const Scene& scene)

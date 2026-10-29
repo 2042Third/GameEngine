@@ -34,6 +34,22 @@ to find a page or a field), the selected page on the right:
   layers are the project's, the same in every scene and prefab; the Inspector shows how many are named when nothing is
   selected, with a link to this page. Scripts can change which layers collide while the game plays, until the next scene
   starts.
+- **Simulation** (under Physics): how bodies settle. **Contact recycle distance** is a distance in meters (5 cm by
+  default): while two touching bodies have moved less than that relative to each other, the physics reuses their contact
+  instead of computing it again, which costs less and keeps piles and stacks steady. A reused contact keeps its old
+  points, so a body can seem held a little past an edge (up to about 2 cm at the default) and bumps a few millimeters more
+  where floor tiles meet: lower it when bodies hang past edges. Bodies that visibly hop over the seams of a tiled floor hit
+  the tiles' edges, with or without reuse: make such a floor one collider, or a mesh collider, instead. 0 turns recycling
+  off, which costs more and lets tall stacks topple; the distance does not change how soon piles fall asleep. **Sleep
+  threshold** is a speed in meters per second (0.08 by default): a body slower than that for half a second, with
+  everything it touches, falls asleep and costs nothing until something wakes it; a larger value puts piles to sleep
+  sooner but stops slow bodies (a ball rolling to a halt) early. **Contact stiffness**, **Contact damping** and **Overlap
+  push speed** tune how contacts push touching bodies apart: the defaults suit most games; a softer stiffness lets towers
+  sag, less damping lets piles jiggle longer, and a slower push speed separates overlapping spawns gently but lets piles
+  settle longer. Stiffness cannot go above what the game's fixed step allows: 30 at 60 steps per second (the default), 60
+  at 120, so higher values change nothing. Changes apply to the running game at once. Character controllers and
+  kinematic bodies (moving platforms, doors) never reuse contacts, so what they carry or push always meets them where
+  they are.
 - **Input Actions** (under Input): the game's named controls, which scripts read by name and players can rebind. Actions
   sit in maps (a set the game turns on and off together, such as Gameplay or Vehicle): **Add Map** adds one, and the
   selected map's name, whether it works when the game starts, and the bin to remove it are below the list. **Add Action**

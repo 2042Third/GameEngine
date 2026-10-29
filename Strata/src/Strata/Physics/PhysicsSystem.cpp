@@ -64,11 +64,13 @@ namespace Strata
 		m_Scene.RegisterService<IPhysicsQueries>(*this);
 		m_Scene.RegisterService<ICharacterControl>(*this);
 		m_Scene.RegisterService<IPhysicsCapacity>(*this);
+		m_Scene.RegisterService<IPhysicsDiagnostics>(*this);
 	}
 
 	PhysicsSystem::~PhysicsSystem()
 	{
 		OnRuntimeStop();
+		m_Scene.UnregisterService<IPhysicsDiagnostics>(*this);
 		m_Scene.UnregisterService<IPhysicsCapacity>(*this);
 		m_Scene.UnregisterService<ICharacterControl>(*this);
 		m_Scene.UnregisterService<IPhysicsQueries>(*this);
@@ -169,6 +171,7 @@ namespace Strata
 
 		SyncGravity();
 		SyncLayers();
+		SyncSimulationSettings();
 		m_World->Simulate(timestep);
 		DispatchCollisionEvents();
 	}
@@ -183,6 +186,18 @@ namespace Strata
 		m_ReservedBodies = bodies;
 		if (m_World)
 			m_World->Reserve(bodies);
+	}
+
+	PhysicsStepInfo PhysicsSystem::GetStepInfo() const
+	{
+		return m_World ? m_World->GetStepInfo() : PhysicsStepInfo();
+	}
+
+	void PhysicsSystem::SetDetailedStats(bool detailed)
+	{
+		m_DetailedStats = detailed;
+		if (m_World)
+			m_World->SetDetailedStats(detailed);
 	}
 
 	CollisionListenerID PhysicsSystem::AddCollisionListener(CollisionCallback callback, CollisionListenerScope scope)
@@ -290,6 +305,15 @@ namespace Strata
 			return;
 		m_AppliedLayerMasks = masks;
 		m_World->SetLayerCollisionMasks(masks);
+	}
+
+	void PhysicsSystem::SyncSimulationSettings()
+	{
+		const uint64_t version = PhysicsSimulationSettings::GetProviderVersion();
+		if (m_SimulationVersion == version)
+			return;
+		m_SimulationVersion = version;
+		m_World->SetSimulationTuning(PhysicsSimulationSettings::Apply(m_Settings, &m_SimulationSource));
 	}
 
 	PhysicsStats PhysicsSystem::GetStats() const
@@ -513,7 +537,8 @@ namespace Strata
 			settings.MaxContactConstraints = capacity.MaxContactConstraints;
 		// The scene's layer matrix (its copy of the project's) as it is when the world starts.
 		settings.LayerCollisionMasks = CombineLayerMasks(defaults, scene);
-		return settings;
+		// The project's tuning over the defaults' (read on the main thread: the start of play, a load's preparation).
+		return PhysicsSimulationSettings::Apply(settings);
 	}
 
 	bool PhysicsSystem::PrepareLoadedScene(Scene& scene, SceneWorkBudget& budget)
@@ -571,6 +596,11 @@ namespace Strata
 		m_AppliedLayerMasks = settings.LayerCollisionMasks;
 		if (m_ReservedBodies > 0)
 			m_World->Reserve(m_ReservedBodies);
+		m_World->SetDetailedStats(m_DetailedStats);
+		// The world was made with the project's section as it was then; the next fixed step reads it again (a prepared world
+		// may be older than a change), and applies only what differs.
+		m_SimulationVersion.reset();
+		PhysicsSimulationSettings::Apply(m_Settings, &m_SimulationSource);
 		// Contacts are tracked for the listeners and watches registered so far.
 		UpdateContactTracking();
 		for (const auto& [entity, count] : m_CollisionWatches)

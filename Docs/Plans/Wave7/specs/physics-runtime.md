@@ -1152,3 +1152,54 @@ budgets of 2.5, box3d's constants and defaults and nearly every file:line of sec
 Unverified here (left to the implementer): the cost of `b3World_GetCounters` at `Boxes70k`; how Strata's step splits;
 the Playground's and the ball pit's time to sleep; step 0's names until it lands; whether `Scene` offers a write guard
 for R6.
+
+## As built
+
+Notes of the implementation where it differs from the text above (main at cc9524a1, step 0 landed):
+
+- **Step 0's names.** `Perf.Physics.Create10kBodies` was re-baselined by step 0 itself (`Measured` 15.76, `Budget` 23.64,
+  `Target` 7.995; the roadmap's open items say so), so Q1 needed nothing from this stream. The stream builds in its
+  worktree's `build/windows` (the streams' brief) rather than `build/agent-physics-runtime`.
+- **Step 1.** The counters' branch: `b3World_GetCounters` costs 0.09-0.10 ms at 70,000 boxes, above the rule's 43 us, so
+  they are read every step only while detailed statistics are on. The perf log turns them on for the scene it logs (its
+  column writer calls `IPhysicsDiagnostics::SetDetailedStats`). `PhysicsStats` also reports `MovingBodyCount` and
+  `InstrumentTime`. The settle helper takes `--workers` and `--collision-steps` from step 1 and the tuning options from
+  step 2, which adds the settings. The ball pits use the Physics Playground's balls as it spawns them (its 0.5 m prefab
+  scaled by 0.5: 0.25 m radius), not 0.5 m; the crate push's pushed crate weighs 5 kg (the Third-Person Adventure's 25 kg
+  crate stops a character's push after one step: its script pushes it), and the head crate rests on a standing
+  character, then rides a walk at 0.5 m/s (a teleported presence body carries nothing, so a walking character loses it
+  whatever the tuning). The seam probes' excursion is the range of a body's height along its lane once the contact
+  settled (a triangle mesh holds bodies a few millimeters above its nominal top).
+- **Step 2.** The contact tuning (hertz, damping ratio, push speed) became fields of the section by 4.3 item 5's rule.
+  Its commit stated no A/B of `Perf.Physics`; an interleaved A/B of the stream against cc9524a1 (three pairs, Release, the
+  loaded machine, the medians of the pairs' first attempts) measured `Characters1000Step` at 0.92 ms on both sides (base
+  0.98, 0.89, 0.92; stream 0.97, 0.92, 0.88): no change outside noise, as step 2's acceptance asks. The same pairs:
+  Strata's part of a `Boxes70k` step 10.4 -> 6.0 ms, `Boxes30kTracked` 4.3 -> 3.1, `Boxes10k` 0.61 -> 0.44.
+- **Step 3: the rule's outcome, for the orchestrator.** Only 2.5 cm passes the rule's gates (ghost and cost). The rule's
+  acceptance asks the 2,000-ball pit to fall asleep at `d*` no later than at 5 cm; a pile's time to sleep is chaotic, so
+  it was measured over nine layouts of the pit (`Tools/PhysicsSweep.py pits`): at 0.08 m/s 2.5 cm's median is 22.6 s
+  against 5 cm's 14.7 s (one layout of nine not asleep within 40 s at 2.5 cm), at 0.05 m/s 34.3 against 21.0. So 2.5 cm
+  fails the acceptance, no other distance passes the gates, and the stream kept box3d's 5 cm, which fails the ghost gate
+  (the seams' worst excursion 5.0 mm above distance 0's, against 2 mm; the ledge's travel 1.7 cm more, against 1 cm) and
+  removes a 47 mm bump on triangle meshes that every distance up to 2.5 cm keeps. The rule names no outcome for this case:
+  the orchestrator rules on it. (The first sweep decided the same from one run of the pit per distance, which said 2.5 cm
+  never slept; that claim was the pit's chaos, and the medians replaced it.)
+- **Step 3: what follows from it.** `Physics.Settling`'s seam and ledge bounds are the cost measured at 5 cm times 1.25
+  (6.3 mm, 2.2 cm), not "at most 2 mm above distance 0's", which 5 cm does not meet; the ball pit's bound is the slowest
+  time seen over its layouts and over contact tuning a few bits off the defaults (27.0 s) times 1.25, 34 s, not 1.25 times
+  one run, which another platform's trajectory could exceed. The sleep threshold moved to 0.08 m/s by the rule (0.08
+  shortened both pits' time to sleep in every layout: medians 14.7 against 21.0 s and 11.4 against 15.1). Kinematic bodies
+  stopped recycling (the platform probe, item 6). The angle reading was not measured: the share recycled keeps rising with
+  the distance while bodies move (the 2,000-ball pit's busy phase 26% at 0.35 cm, 44% at 5 cm, 49% at 10 cm), so the
+  spec's trigger did not fire.
+- **Step 3: the sweep's samples.** The Third-Person Adventure and Open World drivers were not built. The Open World has no
+  dynamic body (its cells' bodies are static and static pairs make no contacts), and the Third-Person crate is moved by its
+  script (step 1's note), so the generated `CratePush` stands for its push; both samples' regressions
+  (`StrataEditor.ThirdPerson`'s crate displacement, `StrataEditor.OpenWorld`'s tour) pass at the new defaults. The Physics
+  Playground was swept at 0.05 m/s and, since, at 0.08 m/s at every distance (its pit 99% asleep after 10.0 to 15.8 s, one
+  run each, within the pits' spread).
+- **Step 4.** Item 2 did not land (the same random access, no gain); items 5 and 7 went below the cut by the 3% rule;
+  item 11, below the cut, landed: static bodies leaving the simulation without contacts are parked and disabled 60 steps
+  later in slices of 1,024 a step. Spec 2.4's question whether contact storage grows while playing: piles of balls grow it
+  once as they form (4.7 to 6.1 contacts a body against the automatic room's 2); `c_ContactsPerBody` stays 2.
+- **Release notes.** The lines this stream's defaults and features need are in `Docs/Plans/Wave7/ReleaseNotes.md`.

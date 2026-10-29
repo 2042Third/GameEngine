@@ -6,6 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -107,6 +108,13 @@ TEST_SUITE("Core.Settings")
 		SettingsSection twice = Tests::MakeSimpleTestSection();
 		twice.Fields[1].Name = "Speed";
 		CHECK_FALSE(registry.Register(twice));
+		for (const double speed : { -0.01, std::numeric_limits<double>::infinity(), std::nan("") })
+		{
+			CAPTURE(speed);
+			SettingsSection badSpeed = Tests::MakeSimpleTestSection();
+			badSpeed.Fields[0].DragSpeed = speed;
+			CHECK_FALSE(registry.Register(badSpeed));
+		}
 		CHECK(registry.GetAll().empty());
 
 		// Registered defaults are in the stored form too: a Float default given as a whole number, an Asset default in short.
