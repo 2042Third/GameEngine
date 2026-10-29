@@ -1209,11 +1209,13 @@ within 1.15 times step 0's.
   - Lighting debug views (lighting only, ambient occlusion, indirect light, luminance in EV, albedo range).
   - Multiple-scattering energy compensation, checked by a white-furnace test.
   - GTAO by quality, denoised spatially without TAA, with a 1 m radius and multi-bounce.
-  - The template under the physical atmosphere with a 100,000 lux sun, sun and sky presets (`lighting.applySkyPreset`),
+  - The template under the physical atmosphere with a 120,000 lux sun, sun and sky presets (`lighting.applySkyPreset`),
     the samples' skies and suns balanced and the Open World's leaves corrected.
   - Specular anti-aliasing, a 512 prefiltered sky at High, and aerial perspective from the atmosphere.
-  - Below the cut: screen-space reflections without TAA, volumetric fog and light shafts, a baked irradiance volume for
-    sky visibility and bounce light, bent normals, and alpha cutouts that hold at distance.
+  - Below the cut: screen-space reflections without TAA (landed: a full-resolution spatial trace and resolve at High and
+    Ultra, the `Reflections` row); volumetric fog and light shafts, a baked irradiance volume for sky visibility and
+    bounce light, bent normals with cone specular occlusion and "Fit to Room", and alpha cutouts that hold at distance
+    were not started and moved to "Later".
 - **`physics-runtime`: physics that runs fast and settles.** The owner on 2026-10-27: "I don't think physics object
   creation performance is a big deal. But i care about runtime performance. For large box3d physics be sure to use
   box3d's contact recycling."
@@ -1253,7 +1255,8 @@ upscaling, and nothing may need temporal accumulation to look right (TAA stays o
   {supersample: 2}`: rendered at twice the size and filtered down with the output's dither, for the showcase's
   screenshots; point and spot lights with a source radius and the sun's physical filter, up to 8 sun cascades, distant
   shadows for open worlds, 16-bit depth for far cascades, per-cascade cache keys that keep cascades while the camera
-  moves); MSAA; virtual shadow maps if the shadows debug view shows cascades falling short; frame-level variants
+  moves; volumetric fog and light shafts, a baked irradiance volume for sky visibility and bounce light, bent normals
+  with cone specular occlusion and reflection probes' "Fit to Room", coverage-preserving alpha mips for cutouts); MSAA; virtual shadow maps if the shadows debug view shows cascades falling short; frame-level variants
   of the forward shader if `GPU.Opaque` shows the need; more shadowed lights with occlusion culling of their views;
   run-time probe capture for moving suns; render scale above 1 for live views; area lights; the rest of the open items'
   list.
