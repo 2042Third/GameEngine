@@ -2197,6 +2197,11 @@ namespace Strata
 		ReleasePostTargets(released);
 		release(m_SceneBindingSet); // References the ambient occlusion texture
 		release(m_ShadowBindingSet);
+		// The GPU-driven path's copies of both reference the same targets, and the scene's the cascades and the local shadows'
+		// atlas: kept, they would keep all of it alive after a zero viewport released it, until the renderer's next GPU-driven
+		// frame (a hidden Game view's: once it shows again). The next frame makes the four again (m_SceneBindingSet is null).
+		release(m_GPUSceneBindingSet);
+		release(m_GPUShadowBindingSet);
 		release(m_OverlayFramebuffer);
 		release(m_CopyBindingSet);
 		release(m_OutlineBindingSet); // References the entity-ID texture

@@ -64,6 +64,13 @@ namespace
 		return shadowMap->getDesc().arraySize;
 	}
 
+	// The references held on a resource, ours included (NVRHI's AddRef and Release return the count they leave).
+	unsigned long GetReferenceCount(nvrhi::IResource* resource)
+	{
+		resource->AddRef();
+		return resource->Release();
+	}
+
 	uint32_t GetShadowMapWidth(const SceneRenderer& renderer)
 	{
 		nvrhi::ITexture* shadowMap = renderer.GetShadowMap();
@@ -164,9 +171,16 @@ TEST_SUITE("GPU.SceneRenderer.Quality")
 			CHECK(renderer.GetShadowMap() == kept);
 
 			// Released altogether (a capture renderer between pictures, the editor's hidden Game view): the cascades go too, and
-			// the next frame makes them again and draws the same picture.
+			// nothing the renderer keeps holds them once the GPU is done with them (the GPU-driven path's binding sets read them,
+			// as the CPU path's do), and the next frame makes them again and draws the same picture.
+			nvrhi::TextureHandle released = renderer.GetShadowMap();
 			renderer.SetViewportSize(0, 0);
 			CHECK(renderer.GetShadowMap() == nullptr);
+			gpu.GetDevice().WaitForIdle();
+			gpu.GetNvrhiDevice()->runGarbageCollection();
+			Renderer::GetDeferredReleases().Collect();
+			CHECK(GetReferenceCount(released) == 1); // Ours alone
+			released = nullptr;
 			renderer.SetViewportSize(c_Size, c_Size);
 			ReadbackImage again;
 			for (int frame = 0; frame < 2; frame++)
