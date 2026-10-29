@@ -1198,9 +1198,10 @@ within 1.15 times step 0's.
     projects and the samples need no +1 EV; white balance and slope, offset and power.
   - Exposure that adapts like an eye (brighter faster than darker, center-weighted metering, a key that keeps interiors
     darker than sunlight), bloom of the same size at every resolution, a lens's vignette.
-  - Motion blur of the camera and of moving objects, on at 180 degrees in the template and the samples, with quality
-    rows and players' comfort switches.
-  - Below the cut: depth of field with a physical lens, film grain and chromatic aberration, a morphological
+  - Motion blur of the camera and of moving objects, with quality rows and players' comfort switches. It ships off in
+    the template and the samples ("when in doubt, off"): the owner's before/after sheet, with the full criteria table
+    of the live shots (failing edges included), decides before it is turned on anywhere.
+  - Below the cut (landed): depth of field with a physical lens, film grain and chromatic aberration, a morphological
     anti-aliasing of Strata's own, 3D LUTs and lens flares.
 - **`light-and-materials`: believable light.** A new project opens sunny with a real sun to sky ratio, rough metals keep
   their energy, occlusion grounds every object without TAA, highlights hold at 4K without sparkle, and distance fades
