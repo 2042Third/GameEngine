@@ -1,0 +1,213 @@
+#pragma once
+
+#include <glm/glm.hpp>
+
+#include <cstddef>
+#include <cstdint>
+
+namespace Strata
+{
+
+	// GPU data of the post-processing passes (SceneRendererPost.cpp, shaders/PostProcess): their constant buffers, push
+	// constants and buffer slots. Each struct matches its shader's declaration (std140 for constant buffers): change both
+	// together.
+	namespace RenderData
+	{
+
+		// PostProcess/Tonemap.frag's constant buffer (binding ST_CBV(0)), written once per frame. std140: it grows only by
+		// appending vec4-aligned blocks, whose offsets the static_asserts below check.
+		struct TonemapConstants
+		{
+			float BloomIntensity;       // 0: fraction of the light scattered into the glow; 0 = off
+			float BloomScale;           //    normalizes the sum of the bloom levels
+			float Saturation;
+			float Contrast;             //    around middle gray; 1 = unchanged
+			int32_t Operator;           // 16: TonemapOperator
+			uint32_t BloomAdditive;     //     1: the bloom holds only light above a threshold and is added instead of mixed
+			float InversePreExposure;   //     1 / the pre-exposure the scene color carries (FrameConstants::TemporalParams.y)
+			float Sharpening;           //     of the displayed image, on frames the TAA resolved; 0 = off
+			float DitherLevels;         // 32: 2^bits - 1 of the target this pass writes; 0: no dither
+			float Vignette;
+			glm::vec2 VignetteTangents; //     tangents of the half field of view per axis (a lens's vignette); (0, 0): none
+			float FilmicToeSlope;       // 48: the Filmic curve's look (PostProcessMath::FilmicCurve)
+			float FilmicWhiteStops;
+			float FilmicShoulderPower;
+			uint32_t ColorFlags;        //     c_TonemapColorGrading: the grading below applies (else skipped: bit-identical to none)
+			glm::vec4 ColorRows[3];     // 64: PostProcessMath::ColorGrading::Matrix (white balance times slope) as rows (w unused)
+			glm::vec4 ColorOffset;      // 112: xyz: the offset in units of light (ColorOffset times middle gray), added before the power
+			glm::vec4 ColorPower;       // 128: xyz: the power around middle gray
+			float FilmGrain;            // 144: PostProcessComponent::FilmGrain; 0 = off, and when FXAA or the morphological blend adds it
+			float ChromaticAberration;  //      the lateral aberration's scale of red and blue about the center (k); 0 = off
+			uint32_t GrainFrame;        //      the frame's number: the grain changes every frame, as film's
+			float ColorLookupIntensity; //      PostProcessComponent::ColorLookupIntensity of the lookup bound at set 1; 0: none
+			float LensFlare;            // 160: PostProcessComponent::LensFlare * c_LensFlareScale; 0: no flare bound at set 1
+			float Starburst;            //      the rays' brightness at the disk: c_LensFlareRayGain times a white card's luminance in the
+			                            //      directional light; 0 without a disk in front of the camera
+			glm::vec2 Sun;              //      the disk, in UV
+		};
+		static_assert(sizeof(TonemapConstants) == 176);
+		static_assert(offsetof(TonemapConstants, LensFlare) == 160 && offsetof(TonemapConstants, Sun) == 168);
+		static_assert(offsetof(TonemapConstants, ColorRows) == 64 && offsetof(TonemapConstants, ColorOffset) == 112);
+		static_assert(offsetof(TonemapConstants, ColorPower) == 128 && offsetof(TonemapConstants, FilmGrain) == 144);
+		// ChromaticAberration 1 shifts red and blue half a pixel at a 3840x2160 image's corners (a fixed share of the image at
+		// every resolution): k = ChromaticAberration * c_ChromaticAberrationScale.
+		constexpr float c_ChromaticAberrationScale = 0.5f / (0.5f * 3840.0f);
+		// The grain's strength in display codes' fraction at FilmGrain 1, in the mid-tones (Include/Grain.glsl).
+		constexpr float c_FilmGrainAmplitude = 0.04f;
+		// PostProcess/LensFlare.comp (push constants): the ghosts and the halo at a quarter of the resolution, and in alpha the
+		// share of the disk's surroundings that sees the sky (the starburst's, which the tone mapping draws).
+		struct LensFlareParameters
+		{
+			glm::vec2 Sun;      // The directional light's disk, in UV (with c_LensFlareSun)
+			float Aspect;       // Width / height
+			uint32_t Flags;     // c_LensFlareSun: the disk is in front of the camera
+			float SunTapRadius; // Image heights: the depth taps that see whether the disk is covered
+			float Padding0;
+			float Padding1;
+			float Padding2;
+		};
+		static_assert(sizeof(LensFlareParameters) == 32);
+		constexpr uint32_t c_LensFlareSun = 1u;
+		constexpr float c_LensFlareSunTapRadius = 0.01f;
+		// What the tone mapping adds of the flare at LensFlare 1 (restraint: a sun in view leaves faint ghosts).
+		constexpr float c_LensFlareScale = 0.02f;
+		// The starburst's rays at the disk, in white cards' luminances in the directional light (before c_LensFlareScale).
+		constexpr float c_LensFlareRayGain = 16.0f;
+		// TonemapConstants::ColorFlags: the grading applies; the source's alpha marks the pixels the motion blur or the depth of
+		// field blurred (no sharpening there).
+		constexpr uint32_t c_TonemapColorGrading = 1u;
+		constexpr uint32_t c_TonemapBlurMask = 2u;
+
+		// PostProcess/MotionBlurTiles.comp, MotionBlurNeighbors.comp, MotionBlur.comp (push constants, slot 1: b0 is the frame's
+		// constants).
+		struct MotionBlurParameters
+		{
+			float ShutterFraction; // PostProcessComponent::MotionBlurShutterAngle / 360
+			float MaxLength;       // Pixels: MotionBlurMaxLength times the viewport's height
+			float MinLength;       // Pixels: the viewport's height / 1080
+			uint32_t TileSize;     // Pixels: max(8, ceil(MaxLength / 2))
+			uint32_t SampleCount;  // 8, 12 or 16 (RendererQualitySettings::MotionBlurQuality)
+			uint32_t SourceMask;   // 1: the source's alpha is the depth of field's mask, kept where the motion blur copies the color
+			uint32_t Padding0;
+			uint32_t Padding1;
+		};
+		static_assert(sizeof(MotionBlurParameters) == 32);
+		// The smallest tile: the tile targets are made for it, so a change of MotionBlurMaxLength never reallocates.
+		constexpr uint32_t c_MotionBlurMinTileSize = 8;
+
+		// PostProcess/DepthOfField*.comp (push constants, slot 1: b0 is the frame's constants).
+		struct DepthOfFieldParameters
+		{
+			float FocusDistance;  // Meters
+			float CoCScale;       // Full-resolution pixels: the circle of confusion's radius for a point infinitely far
+			float MaxCoC;         // Full-resolution pixels: the largest radius either way (c_DepthOfFieldMaxDiameter of the height, halved)
+			uint32_t TileSize;    // Half-resolution pixels: max(c_DepthOfFieldMinTileSize, ceil(MaxCoC / 2))
+			uint32_t SampleCount; // The gather's samples per field (c_DepthOfFieldSamples)
+			uint32_t Padding0;
+			uint32_t Padding1;
+			uint32_t Padding2;
+		};
+		static_assert(sizeof(DepthOfFieldParameters) == 32);
+		// The largest circle of confusion, as a fraction of the image height (its diameter), the gather's samples, and the
+		// smallest tile of the near field's maxima (half-resolution pixels; the tile targets are made for it).
+		constexpr float c_DepthOfFieldMaxDiameter = 0.02f;
+		constexpr uint32_t c_DepthOfFieldSamples = 48;
+		constexpr uint32_t c_DepthOfFieldMinTileSize = 8;
+		static_assert(offsetof(TonemapConstants, Operator) == 16 && offsetof(TonemapConstants, DitherLevels) == 32);
+		static_assert(offsetof(TonemapConstants, VignetteTangents) == 40 && offsetof(TonemapConstants, FilmicToeSlope) == 48);
+
+		// PostProcess/MorphologicalEdges.frag and MorphologicalBlend.frag (push constants): the edges' thresholds (a luma
+		// difference of the display-encoded image; a depth jump beyond the neighboring steps, relative to the depth) and the blend's
+		// dither.
+		struct MorphologicalParameters
+		{
+			float Threshold;
+			float DepthThreshold;
+			float DitherLevels; // 2^bits - 1 of the target the blend writes; 0: no dither
+			float FilmGrain;    // The blend's grain (Include/Grain.glsl); 0 = off
+			uint32_t GrainFrame;
+			float Padding0;
+			float Padding1;
+			float Padding2;
+		};
+		static_assert(sizeof(MorphologicalParameters) == 32);
+		constexpr float c_MorphologicalThreshold = 0.05f;
+		constexpr float c_MorphologicalDepthThreshold = 0.05f;
+		// The area table's texels each way (Renderer/MorphologicalAreaTable.inl, Tools/GenerateAreaTable.py): four crossings of
+		// 33 distances (0 to 32 pixels).
+		constexpr uint32_t c_MorphologicalAreaTableSize = 4 * 33;
+
+		// PostProcess/FXAA.frag (push constants).
+		struct FXAAParameters
+		{
+			float DitherLevels; // 2^bits - 1 of the target FXAA writes; 0: no dither
+			float FilmGrain;    // The grain FXAA adds after its blend (Include/Grain.glsl); 0 = off
+			uint32_t GrainFrame;
+			float Padding0;
+		};
+		static_assert(sizeof(FXAAParameters) == 16);
+
+		// Include/Exposure.glsl: the exposure buffer's floats (the adapted log2 luminance, the multiplier of luminance the tone
+		// mapping applies, the exposure key's stops) and the luminance histogram.
+		constexpr uint32_t c_ExposureLogLuminance = 0;
+		constexpr uint32_t c_ExposureMultiplier = 1;
+		constexpr uint32_t c_ExposureKeyStops = 2;
+		constexpr uint32_t c_ExposureValues = 4;
+		constexpr uint32_t c_HistogramBins = 256;
+		constexpr float c_HistogramMinLog2 = -12.0f;
+		constexpr float c_HistogramMaxLog2 = 16.0f;
+
+		// PostProcess/Histogram.comp and Exposure.comp (push constants).
+		struct ExposureParameters
+		{
+			float MinLog2;            // 0: the range the metered average is clamped to
+			float MaxLog2;
+			float AdaptLight;         //    the fraction of the way to a brighter target this frame (1: jump to it)
+			float AdaptDark;          //    and to a darker one
+			float Compensation;       // 16: 2^Exposure
+			float LowPercentile;      //     the metering window
+			float HighPercentile;
+			float InversePreExposure; //     1 / the pre-exposure the scene color carries: the histogram meters luminance
+			float KeyStrength;        // 32: the exposure key (PostProcessComponent::AutoExposureKey); 0 without a directional light
+			float KeyReferenceLog2;   //     log2 of the luminance of a gray card (albedo 0.18) facing the directional light
+			float KeyMinStops;        //     the key's range
+			float KeyMaxStops;
+			float MeteringAspect;     // 48: width / height of the metered image
+			uint32_t Metering;        //     ExposureMetering
+			float Padding0;
+			float Padding1;
+		};
+		static_assert(sizeof(ExposureParameters) == 64);
+		static_assert(offsetof(ExposureParameters, Compensation) == 16 && offsetof(ExposureParameters, KeyStrength) == 32);
+		static_assert(offsetof(ExposureParameters, MeteringAspect) == 48);
+		// The exposure key's range in stops: a scene metering below the sun's gray card shows at most this much darker. It never
+		// brightens: a scene above the card is lit by more than the directional light (an overcast or dusk sky, lamps after
+		// sunset, the night's own lights), which the card does not measure, and brightening it would show it lighter than a
+		// sunny day; a bright scene in the sun (snow) takes a positive Exposure, as a photographer compensates.
+		constexpr float c_ExposureKeyMinStops = -2.0f;
+		constexpr float c_ExposureKeyMaxStops = 0.0f;
+
+		// PostProcess/Bloom.comp's modes, and the most levels its chain allocates (every level down to 4 pixels: a frame uses
+		// as many as PostProcessComponent::BloomRadius asks for, so a change of the radius never reallocates).
+		constexpr uint32_t c_BloomPrefilter = 0;
+		constexpr uint32_t c_BloomDownsample = 1;
+		constexpr uint32_t c_BloomUpsample = 2;
+		constexpr uint32_t c_MaxBloomLevels = 8;
+
+		// PostProcess/Bloom.comp (push constants).
+		struct BloomParameters
+		{
+			float Threshold;
+			float Knee;
+			uint32_t Mode;
+			float InversePreExposure; // 1 / the pre-exposure the scene color carries
+			float UpsampleWeight;     // Upsamples: the weight of the smaller level added (the deepest level's share; else 1)
+			float Padding0;
+			float Padding1;
+			float Padding2;
+		};
+		static_assert(sizeof(BloomParameters) == 32);
+
+	}
+
+}

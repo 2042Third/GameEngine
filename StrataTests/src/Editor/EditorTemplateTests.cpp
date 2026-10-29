@@ -122,9 +122,33 @@ namespace
 		Entity postProcess = scene.FindEntityByName("Post Process");
 		REQUIRE(postProcess);
 		REQUIRE(postProcess.HasComponent<PostProcessComponent>());
-		CHECK(postProcess.GetComponent<PostProcessComponent>().Tonemapper == TonemapOperator::ACES);
-		CHECK(postProcess.GetComponent<PostProcessComponent>().AutoExposure);
-		CHECK(postProcess.GetComponent<PostProcessComponent>().Exposure == doctest::Approx(1.0f));
+		// Filmic shows a metered middle gray at display middle gray; the start scene's composition (a bright sky over dark stone)
+		// takes +0.25 EV by the samples' rule.
+		const PostProcessComponent& look = postProcess.GetComponent<PostProcessComponent>();
+		CHECK(look.Tonemapper == TonemapOperator::Filmic);
+		CHECK(look.AutoExposure);
+		CHECK(look.Exposure == 0.25f);
+		// The rest of how a metered gray shows is the component's defaults, which GPU.SceneRenderer.Camera's middle-gray test
+		// renders (sRGB 112-124): the metering, the key, the curve's shape, neutral color, the lens vignette, no motion blur.
+		const PostProcessComponent defaults;
+		CHECK(look.AutoExposureMetering == defaults.AutoExposureMetering);
+		CHECK(look.AutoExposureKey == defaults.AutoExposureKey);
+		CHECK(look.AutoExposureLowPercentile == defaults.AutoExposureLowPercentile);
+		CHECK(look.AutoExposureHighPercentile == defaults.AutoExposureHighPercentile);
+		CHECK(look.Toe == defaults.Toe);
+		CHECK(look.Shoulder == defaults.Shoulder);
+		CHECK(look.Contrast == defaults.Contrast);
+		CHECK(look.Saturation == defaults.Saturation);
+		CHECK(look.WhiteBalanceTemperature == defaults.WhiteBalanceTemperature);
+		CHECK(look.WhiteBalanceTint == defaults.WhiteBalanceTint);
+		CHECK(look.ColorSlope == defaults.ColorSlope);
+		CHECK(look.ColorOffset == defaults.ColorOffset);
+		CHECK(look.ColorPower == defaults.ColorPower);
+		CHECK(look.Vignette == defaults.Vignette);
+		CHECK(look.Bloom == defaults.Bloom);
+		CHECK(look.BloomIntensity == defaults.BloomIntensity);
+		// Motion blur stays off until the before/after sheet clears it (Docs/Manual/Camera.md, "Motion blur").
+		CHECK_FALSE(look.MotionBlur);
 		CHECK(postProcess.GetComponent<PostProcessComponent>().AntiAliasing);
 		CHECK(postProcess.GetComponent<PostProcessComponent>().AntiAliasingMethod == AntiAliasingMode::TAA);
 		CHECK(postProcess.GetComponent<PostProcessComponent>().TAAPreset == TemporalAntiAliasingPreset::Sharp);

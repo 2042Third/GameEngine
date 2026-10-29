@@ -404,6 +404,9 @@ TEST_SUITE("Scene.Serialization")
 		loaded = load({ { "AntiAliasing", true }, { "AntiAliasingMethod", "TAA" } }, warnings);
 		CHECK(warnings.empty());
 		CHECK(loaded.AntiAliasingMethod == AntiAliasingMode::TAA);
+		loaded = load({ { "AntiAliasing", true }, { "AntiAliasingMethod", "Morphological" } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.AntiAliasingMethod == AntiAliasingMode::Morphological);
 		loaded = load({ { "AntiAliasingMethod", "MSAA" } }, warnings);
 		CHECK(CountWarnings(warnings, "AntiAliasingMethod") == 1);
 		CHECK(loaded.AntiAliasingMethod == AntiAliasingMode::FXAA);
@@ -479,6 +482,156 @@ TEST_SUITE("Scene.Serialization")
 		loaded = load({ { "ScreenSpaceReflectionsIntensity", 3.0 }, { "ScreenSpaceReflectionsMaxRoughness", -1.0 } }, warnings);
 		CHECK(loaded.ScreenSpaceReflectionsIntensity == 1.0f);
 		CHECK(loaded.ScreenSpaceReflectionsMaxRoughness == 0.0f);
+
+		// The camera's tone and color (0.7.0): a file saved before them keeps its curve and loads the rest's defaults without a
+		// warning (the defaults change nothing); the values round-trip and are clamped to their ranges.
+		warnings.clear();
+		loaded = load({ { "Tonemapper", "ACES" }, { "Exposure", 1.0 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.Tonemapper == TonemapOperator::ACES);
+		CHECK(loaded.Toe == 0.5f);
+		CHECK(loaded.Shoulder == 0.5f);
+		CHECK(loaded.WhiteBalanceTemperature == 6500.0f);
+		CHECK(loaded.WhiteBalanceTint == 0.0f);
+		CHECK(loaded.ColorSlope == glm::vec3(1.0f));
+		CHECK(loaded.ColorOffset == glm::vec3(0.0f));
+		CHECK(loaded.ColorPower == glm::vec3(1.0f));
+		loaded = load({ { "Tonemapper", "Filmic" }, { "Toe", 0.25 }, { "Shoulder", 0.75 }, { "WhiteBalanceTemperature", 4500.0 }, { "WhiteBalanceTint", 0.25 },
+			{ "ColorSlope", { 1.5, 1.0, 0.5 } }, { "ColorOffset", { 0.01, 0.0, -0.01 } }, { "ColorPower", { 1.0, 2.0, 1.0 } } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.Tonemapper == TonemapOperator::Filmic);
+		CHECK(loaded.Toe == 0.25f);
+		CHECK(loaded.Shoulder == 0.75f);
+		CHECK(loaded.WhiteBalanceTemperature == 4500.0f);
+		CHECK(loaded.WhiteBalanceTint == 0.25f);
+		CHECK(loaded.ColorSlope == glm::vec3(1.5f, 1.0f, 0.5f));
+		CHECK(loaded.ColorOffset == glm::vec3(0.01f, 0.0f, -0.01f));
+		CHECK(loaded.ColorPower == glm::vec3(1.0f, 2.0f, 1.0f));
+		loaded = load({ { "Toe", 3.0 }, { "Shoulder", -1.0 }, { "WhiteBalanceTemperature", 100.0 }, { "WhiteBalanceTint", 4.0 },
+			{ "ColorSlope", { 9.0, 1.0, 1.0 } }, { "ColorOffset", { 1.0, 0.0, 0.0 } }, { "ColorPower", { 0.0, 1.0, 9.0 } } }, warnings);
+		CHECK(loaded.Toe == 1.0f);
+		CHECK(loaded.Shoulder == 0.0f);
+		CHECK(loaded.WhiteBalanceTemperature == 2000.0f);
+		CHECK(loaded.WhiteBalanceTint == 1.0f);
+		CHECK(loaded.ColorSlope == glm::vec3(4.0f, 1.0f, 1.0f));
+		CHECK(loaded.ColorOffset == glm::vec3(0.1f, 0.0f, 0.0f));
+		CHECK(loaded.ColorPower == glm::vec3(0.2f, 1.0f, 5.0f));
+
+		// Automatic exposure's metering, window, light adaptation and key: files without them get the new defaults (named in
+		// 0.7.0's release notes) without a warning; set, they round-trip and are clamped.
+		loaded = load({ { "AutoExposure", true }, { "AutoExposureSpeed", 1.5 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.AutoExposureMetering == ExposureMetering::CenterWeighted);
+		CHECK(loaded.AutoExposureLowPercentile == 0.1f);
+		CHECK(loaded.AutoExposureHighPercentile == 0.9f);
+		CHECK(loaded.AutoExposureLightSpeed == 3.0f);
+		CHECK(loaded.AutoExposureKey == 0.12f);
+		loaded = load({ { "AutoExposureMetering", "Average" }, { "AutoExposureLowPercentile", 0.25 }, { "AutoExposureHighPercentile", 0.75 },
+			{ "AutoExposureLightSpeed", 6.0 }, { "AutoExposureKey", 0.3 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.AutoExposureMetering == ExposureMetering::Average);
+		CHECK(loaded.AutoExposureLowPercentile == 0.25f);
+		CHECK(loaded.AutoExposureHighPercentile == 0.75f);
+		CHECK(loaded.AutoExposureLightSpeed == 6.0f);
+		CHECK(loaded.AutoExposureKey == 0.3f);
+		loaded = load({ { "AutoExposureLowPercentile", 0.9 }, { "AutoExposureHighPercentile", 0.1 }, { "AutoExposureLightSpeed", 50.0 }, { "AutoExposureKey", 2.0 } },
+			warnings);
+		CHECK(loaded.AutoExposureLowPercentile == 0.49f);
+		CHECK(loaded.AutoExposureHighPercentile == 0.51f);
+		CHECK(loaded.AutoExposureLightSpeed == 20.0f);
+		CHECK(loaded.AutoExposureKey == 0.5f);
+
+		// Bloom's radius: 64 / 1080 in older files; clamped. The vignette keeps its stored value under the lens's model.
+		loaded = load({ { "Bloom", true }, { "Vignette", 0.2 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.BloomRadius == 64.0f / 1080.0f);
+		CHECK(loaded.Vignette == 0.2f);
+		CHECK(PostProcessComponent().Vignette == 0.12f);
+		loaded = load({ { "BloomRadius", 1.0 } }, warnings);
+		CHECK(loaded.BloomRadius == 0.25f);
+
+		// The motion blur: off and at its defaults in older files; clamped.
+		loaded = load({ { "Bloom", true } }, warnings);
+		CHECK(warnings.empty());
+		CHECK_FALSE(loaded.MotionBlur);
+		CHECK(loaded.MotionBlurShutterAngle == 180.0f);
+		CHECK(loaded.MotionBlurMaxLength == 0.02f);
+		loaded = load({ { "MotionBlur", true }, { "MotionBlurShutterAngle", 720.0 }, { "MotionBlurMaxLength", 0.0 } }, warnings);
+		CHECK(loaded.MotionBlur);
+		CHECK(loaded.MotionBlurShutterAngle == 360.0f);
+		CHECK(loaded.MotionBlurMaxLength == 0.005f);
+
+		// Film grain and chromatic aberration: off in older files; set, they round-trip and are clamped.
+		loaded = load({ { "Vignette", 0.2 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.FilmGrain == 0.0f);
+		CHECK(loaded.ChromaticAberration == 0.0f);
+		loaded = load({ { "FilmGrain", 0.3 }, { "ChromaticAberration", 0.6 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.FilmGrain == 0.3f);
+		CHECK(loaded.ChromaticAberration == 0.6f);
+		loaded = load({ { "FilmGrain", 4.0 }, { "ChromaticAberration", -1.0 } }, warnings);
+		CHECK(loaded.FilmGrain == 1.0f);
+		CHECK(loaded.ChromaticAberration == 0.0f);
+
+		// The color lookup: none in older files (at full intensity once one is set); set, it round-trips, the intensity clamped.
+		loaded = load({ { "Vignette", 0.2 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK_FALSE(loaded.ColorLookup.IsValid());
+		CHECK(loaded.ColorLookupIntensity == 1.0f);
+		loaded = load({ { "ColorLookup", "00000000000C0105" }, { "ColorLookupIntensity", 0.4 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.ColorLookup == UUID(0xC0105ull));
+		CHECK(loaded.ColorLookupIntensity == 0.4f);
+		loaded = load({ { "ColorLookupIntensity", 3.0 } }, warnings);
+		CHECK(loaded.ColorLookupIntensity == 1.0f);
+
+		// Lens flares: off in older files; set, they round-trip and are clamped.
+		loaded = load({ { "Vignette", 0.2 } }, warnings);
+		CHECK(loaded.LensFlare == 0.0f);
+		loaded = load({ { "LensFlare", 0.35 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.LensFlare == 0.35f);
+		loaded = load({ { "LensFlare", -1.0 } }, warnings);
+		CHECK(loaded.LensFlare == 0.0f);
+	}
+
+	TEST_CASE("Cameras saved before depth of field load without it; their lens round-trips and is clamped")
+	{
+		const auto load = [](const nlohmann::json& camera, std::vector<std::string>& warnings)
+		{
+			const nlohmann::json document = {
+				{ "Strata", { { "Format", "Scene" }, { "Version", 1 } } },
+				{ "Scene", { { "Name", "Old" }, { "Entities", { { { "ID", "00000000000000AA" }, { "Components", {
+					{ "Name", { { "Name", "Camera" } } }, { "Camera", camera } } } }, { { "ID", "00000000000000BB" }, { "Components", {
+					{ "Name", { { "Name", "Subject" } } } } } } } } } }
+			};
+			Scene scene;
+			std::string error;
+			REQUIRE_MESSAGE(SceneSerializer::Deserialize(scene, document, &error, &warnings), error);
+			return scene.GetEntityByUUID(UUID(0xAA)).GetComponent<CameraComponent>();
+		};
+		// As 0.6.0 saved it: no lens, so no depth of field, and no warning.
+		std::vector<std::string> warnings;
+		CameraComponent loaded = load({ { "Primary", true }, { "PerspectiveFOV", 50 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK_FALSE(loaded.DepthOfField);
+		CHECK(loaded.FocusDistance == 10.0f);
+		CHECK_FALSE(loaded.FocusEntity.IsValid());
+		CHECK(loaded.Aperture == 2.8f);
+		CHECK(loaded.SensorHeight == 24.0f);
+		loaded = load({ { "DepthOfField", true }, { "FocusDistance", 3.5 }, { "FocusEntity", "00000000000000BB" }, { "Aperture", 1.4 }, { "SensorHeight", 36 } },
+			warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.DepthOfField);
+		CHECK(loaded.FocusDistance == 3.5f);
+		CHECK(loaded.FocusEntity == UUID(0xBB));
+		CHECK(loaded.Aperture == 1.4f);
+		CHECK(loaded.SensorHeight == 36.0f);
+		loaded = load({ { "FocusDistance", 0.0 }, { "Aperture", 64.0 }, { "SensorHeight", 1.0 } }, warnings);
+		CHECK(loaded.FocusDistance == 0.1f);
+		CHECK(loaded.Aperture == 32.0f);
+		CHECK(loaded.SensorHeight == 4.0f);
 	}
 
 	TEST_CASE("Directional lights saved before cascade blending load with the default blend; invalid blends are clamped or warn")

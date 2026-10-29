@@ -13,6 +13,9 @@
 							0.16,
 							1
 						],
+						"Aperture": 5.6,
+						"DepthOfField": true,
+						"FocusEntity": "F7E000000000001D",
 						"OrthographicFar": 1000,
 						"OrthographicNear": 0.1,
 						"OrthographicSize": 10,
@@ -20,7 +23,8 @@
 						"PerspectiveFar": 300,
 						"PerspectiveNear": 0.05,
 						"Primary": true,
-						"Projection": "Perspective"
+						"Projection": "Perspective",
+						"SensorHeight": 36
 					},
 					"Name": {
 						"Name": "Main Camera"
@@ -61,6 +65,7 @@
 							0.07,
 							1
 						],
+						"FocusDistance": 25,
 						"OrthographicFar": 60,
 						"OrthographicNear": -10,
 						"OrthographicSize": 24,
@@ -273,9 +278,33 @@
 						"AutoExposureSpeed": 2,
 						"Bloom": true,
 						"BloomIntensity": 0.08,
+						"BloomRadius": 0.08,
 						"BloomThreshold": 1,
+						"ChromaticAberration": 0.5,
+						"ColorLookup": "F7A0000000000011",
+						"ColorLookupIntensity": 0.5,
+						"LensFlare": 0.5,
+						"ColorOffset": [
+							0.0,
+							0.0,
+							0.002
+						],
+						"ColorPower": [
+							1.0,
+							1.0,
+							1.05
+						],
+						"ColorSlope": [
+							1.02,
+							1.0,
+							0.98
+						],
 						"Contrast": 1.05,
 						"Exposure": 0.25,
+						"FilmGrain": 0.2,
+						"MotionBlur": true,
+						"MotionBlurMaxLength": 0.03,
+						"MotionBlurShutterAngle": 150,
 						"Saturation": 1.1,
 						"ScreenSpaceReflections": true,
 						"ScreenSpaceReflectionsIntensity": 0.8,
@@ -292,7 +321,9 @@
 						"TAASharpening": 0.9,
 						"TAATransparentWeight": 0.9,
 						"Tonemapper": "AgX",
-						"Vignette": 0.1
+						"Vignette": 0.1,
+						"WhiteBalanceTemperature": 5600,
+						"WhiteBalanceTint": 0.1
 					},
 					"SkyLight": {
 						"AmbientColor": [
@@ -340,7 +371,12 @@
 						"AntiAliasing": false,
 						"AntiAliasingMethod": "FXAA",
 						"AutoExposure": true,
+						"AutoExposureHighPercentile": 0.95,
+						"AutoExposureKey": 0.2,
+						"AutoExposureLightSpeed": 4,
+						"AutoExposureLowPercentile": 0.05,
 						"AutoExposureMaxEV": 12,
+						"AutoExposureMetering": "Average",
 						"AutoExposureMinEV": -4,
 						"AutoExposureSpeed": 1.5,
 						"Bloom": false,
@@ -352,6 +388,7 @@
 						"ScreenSpaceReflections": false,
 						"ScreenSpaceReflectionsIntensity": 1,
 						"ScreenSpaceReflectionsMaxRoughness": 0.5,
+						"Shoulder": 0.4,
 						"TAAClipWidth": 1.25,
 						"TAADisocclusionRejection": false,
 						"TAADisocclusionThreshold": 0.05,
@@ -363,7 +400,8 @@
 						"TAAResampleWeight": 0.25,
 						"TAASharpening": 0.5,
 						"TAATransparentWeight": 0.5,
-						"Tonemapper": "KhronosNeutral",
+						"Toe": 0.6,
+						"Tonemapper": "Filmic",
 						"Vignette": 0.2
 					},
 					"SkyLight": {

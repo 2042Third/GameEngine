@@ -12,6 +12,7 @@
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/Process.h>
 #include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/PostProcessData.h>
 #include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/TextureStreamer.h>
@@ -22,6 +23,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,11 +42,19 @@ namespace
 	constexpr int c_WarmupFrames = 10;
 	constexpr int c_MeasuredFrames = 60;
 
-	// A view of the generated grid of `count` cubes from above, the whole grid in view.
-	SceneCamera GridView(size_t count)
+	// The view of GridView: its eye's height and distance in halves of the grid's extent.
+	constexpr float c_GridViewHeight = 1.6f;
+	constexpr float c_GridViewDistance = 1.3f;
+
+	// A view of the generated grid of `count` cubes from above, the whole grid in view; `yaw` turns it (radians) about the
+	// vertical through its eye.
+	SceneCamera GridView(size_t count, float yaw = 0.0f)
 	{
 		const float half = static_cast<float>(std::ceil(std::sqrt(static_cast<double>(count)))) * Perf::c_GridSpacing * 0.5f;
-		SceneCamera camera = LookAt(glm::vec3(0.0f, half * 1.6f, half * 1.3f), glm::vec3(0.0f), static_cast<float>(c_Width) / static_cast<float>(c_Height));
+		const glm::vec3 eye(0.0f, half * c_GridViewHeight, half * c_GridViewDistance);
+		const glm::vec3 toCenter = -eye;
+		const glm::vec3 turned(toCenter.x * std::cos(yaw) + toCenter.z * std::sin(yaw), toCenter.y, -toCenter.x * std::sin(yaw) + toCenter.z * std::cos(yaw));
+		SceneCamera camera = LookAt(eye, eye + turned, static_cast<float>(c_Width) / static_cast<float>(c_Height));
 		camera.Projection = Math::PerspectiveReverseZ(glm::radians(60.0f), static_cast<float>(c_Width) / static_cast<float>(c_Height), 0.1f, half * 10.0f);
 		camera.Far = half * 10.0f;
 		return camera;
@@ -92,6 +102,71 @@ namespace
 		}
 		MESSAGE(name, " GPU stages (median ms):", stages);
 		return measurement;
+	}
+
+	// Render100kCubes' scene at 3840x2160 under High with TAA Sharp and the post chain at its defaults (Filmic, automatic
+	// exposure metered center-weighted with the key, bloom at the default radius, the lens vignette, the dither) and a
+	// grading that runs (white balance 5600 K, a slope): the median of the GPU stage `stage` over the measured frames,
+	// recorded as `key` on devices that write timestamps. `motionBlur` turns the Post Process's motion blur on; the camera
+	// turns `turnPixels` pixels a frame at the image's center (0: still); with `lens`, the frames have depth of field; `method`
+	// is the anti-aliasing method (the others leave TAA).
+	void MeasurePostStage4K(const std::string& key, const char* stage, bool motionBlur, float turnPixels, std::optional<CameraLens> lens = std::nullopt,
+		AntiAliasingMode method = AntiAliasingMode::TAA)
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!Perf::MeasuresGPU())
+		{
+			MESSAGE(key, ": not measured, the device writes no timestamps");
+			return;
+		}
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		constexpr size_t c_Count = 100'000;
+		constexpr uint32_t c_Width4K = 3840;
+		constexpr uint32_t c_Height4K = 2160;
+		Scene scene("PostCubes4K");
+		Perf::AddCameraAndLight(scene);
+		Perf::CreateCubeGrid(scene, c_Count);
+		PostProcessComponent& postProcess = scene.CreateEntity("Post Process").AddComponent<PostProcessComponent>();
+		postProcess.AntiAliasingMethod = method;
+		postProcess.WhiteBalanceTemperature = 5600.0f;
+		postProcess.ColorSlope = glm::vec3(1.05f, 1.0f, 0.95f);
+		postProcess.MotionBlur = motionBlur;
+		SceneRendererSpecification specification = Perf::MeasuredRendererSpecification();
+		specification.Quality = RendererQuality::GetPreset(RendererQualityPreset::High);
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(c_Width4K, c_Height4K);
+		// A turn of `turnPixels` at the center: the view's 60 degrees span its height, and a turn about the vertical moves
+		// the center by the yaw times the cosine of the view's pitch.
+		const float pixelsPerRadian = 0.5f * static_cast<float>(c_Height4K) / std::tan(glm::radians(30.0f));
+		const float cosPitch = c_GridViewDistance / std::sqrt(c_GridViewHeight * c_GridViewHeight + c_GridViewDistance * c_GridViewDistance);
+		const float yawPerFrame = turnPixels / (pixelsPerRadian * cosPitch);
+		uint32_t frame = 0;
+		Perf::CheckBudgetsConfirmed({ key }, [&]
+		{
+			// Every attempt turns from the same view (the jump back is a warm-up frame).
+			frame = 0;
+			const Perf::FrameMeasurement measurement = Perf::MeasureFrames(gpu, c_WarmupFrames, c_MeasuredFrames, [&]
+			{
+				SceneRenderOptions options;
+				options.Lens = lens;
+				REQUIRE(renderer.Render(scene, GridView(c_Count, yawPerFrame * static_cast<float>(frame)), nullptr, options));
+				frame++;
+			});
+			const SceneRendererStats& stats = renderer.GetStats();
+			CHECK(stats.TemporalAntiAliasing == (method == AntiAliasingMode::TAA));
+			CHECK(stats.MorphologicalAntiAliasing == (method == AntiAliasingMode::Morphological));
+			CHECK(stats.Dithered);
+			CHECK(stats.MotionBlurred == motionBlur);
+			if (motionBlur)
+				CHECK(stats.MotionBlurSamples == 12u);
+			CHECK(stats.DepthOfField == lens.has_value());
+			const double stageMs = MedianGPUStageMs(stage);
+			MESSAGE(key, ": ", std::string(stage), " ", stageMs, " ms median, GPU ", measurement.GPU ? measurement.GPU->MedianMs : 0.0, " ms busy");
+			return Perf::MetricValues { { key, stageMs } };
+		});
+		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
 	// Render100kCubes' scene with the post-processing's defaults but TAA under `preset`: its jitter, motion vectors, motion
@@ -313,6 +388,42 @@ TEST_SUITE("PerfGPU.Renderer")
 		// half-resolution trace (GPU.Reflections) and the forward pass's lookups, against Render100kCubesTAA (provisional: the
 		// reference machine sets the budgets).
 		MeasureTemporalCubes(TemporalAntiAliasingPreset::Sharp, "PerfGPU.Renderer.SSR", true);
+	}
+
+	TEST_CASE("The post chain's cost at 3840x2160")
+	{
+		// GPU.Post with every post effect at its default and a grading, the camera still (provisional: the reference machine
+		// sets the budget).
+		MeasurePostStage4K("PerfGPU.Renderer.Post4K", "GPU.Post", false, 0.0f);
+	}
+
+	TEST_CASE("Motion blur's cost at 3840x2160")
+	{
+		// GPU.MotionBlur at High (12 samples) with the camera turning 16 pixels a frame, and still: the tile passes and the
+		// gather's copy of every pixel (provisional: the reference machine sets the budgets).
+		MeasurePostStage4K("PerfGPU.Renderer.MotionBlur4K", "GPU.MotionBlur", true, 16.0f);
+		MeasurePostStage4K("PerfGPU.Renderer.MotionBlur4KStill", "GPU.MotionBlur", true, 0.0f);
+	}
+
+	TEST_CASE("Morphological anti-aliasing's cost at 3840x2160")
+	{
+		// GPU.Post with morphological anti-aliasing instead of TAA: the tone mapping into the 10-bit image, the edges, the blend
+		// weights and the blend, beside Post4K's TAA (provisional: the reference machine sets the budget).
+		MeasurePostStage4K("PerfGPU.Renderer.Morphological4K", "GPU.Post", false, 0.0f, std::nullopt, AntiAliasingMode::Morphological);
+	}
+
+	TEST_CASE("Depth of field's cost at 3840x2160")
+	{
+		// GPU.DepthOfField at its worst: a 100 mm sensor's f/1.4 lens of the grid view focused 2 m away, so the whole grid, hundreds
+		// of meters off, blurs at the largest circle (2% of the height) and every pixel gathers (provisional: the reference
+		// machine sets the budget).
+		CameraLens lens;
+		lens.SensorHeight = 100.0f;
+		lens.FocalLength = 0.5f * lens.SensorHeight / std::tan(glm::radians(30.0f));
+		lens.FNumber = 1.4f;
+		lens.FocusDistance = 2.0f;
+		REQUIRE(lens.GetCircleOfConfusionScale(2160.0f) > RenderData::c_DepthOfFieldMaxDiameter * 2160.0f);
+		MeasurePostStage4K("PerfGPU.Renderer.DepthOfField4K", "GPU.DepthOfField", false, 0.0f, lens);
 	}
 
 	TEST_CASE("Render cost of 100,000 cubes in height fog")

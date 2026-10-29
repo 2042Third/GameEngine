@@ -2,7 +2,10 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "Include/Common.glsl"
+#include "Include/Dither.glsl"
 #include "Include/Exposure.glsl"
+#include "Include/Filmic.glsl"
+#include "Include/Grain.glsl"
 
 // Exposure, bloom, tone mapping and color grading from the HDR scene color into a display-referred, sRGB-encoded
 // target.
@@ -12,6 +15,7 @@
 #define ST_TONEMAP_ACES            2
 #define ST_TONEMAP_AGX             3
 #define ST_TONEMAP_KHRONOS_NEUTRAL 4
+#define ST_TONEMAP_FILMIC          5
 
 layout(set = 0, binding = ST_SRV(0)) uniform texture2D u_SceneColor;
 layout(set = 0, binding = ST_SAMPLER(0)) uniform sampler u_PointSampler;
@@ -22,21 +26,51 @@ layout(set = 0, binding = ST_SRV(2), std430) readonly buffer ExposureBuffer
 	float u_Exposure[];
 };
 
-layout(push_constant) uniform TonemapParameters
+// RenderData::TonemapConstants (Renderer/PostProcessData.h), written once per frame.
+layout(set = 0, binding = ST_CBV(0), std140) uniform TonemapConstants
 {
-	float BloomIntensity; // Fraction of the light scattered into the glow; 0 = off
-	float BloomScale;     // Normalizes the sum of the bloom levels
+	float BloomIntensity;     // Fraction of the light scattered into the glow; 0 = off
+	float BloomScale;         // Normalizes the sum of the bloom levels
 	float Saturation;
-	float Vignette;
 	float Contrast;
 	int Operator;
-	uint BloomAdditive;   // 1: the bloom holds only the light above a threshold and is added
+	uint BloomAdditive;       // 1: the bloom holds only the light above a threshold and is added
 	float InversePreExposure; // 1 / the pre-exposure the scene color carries (a power of two)
-	float Sharpening;     // Of the displayed image, on frames the TAA resolved; 0 = off
-	float Padding0;
-	float Padding1;
-	float Padding2;
+	float Sharpening;         // Of the displayed image, on frames the TAA resolved; 0 = off
+	float DitherLevels;       // 2^bits - 1 of the target this pass writes; 0: no dither
+	float Vignette;
+	vec2 VignetteTangents;    // Tangents of the half field of view per axis (a lens's vignette)
+	float FilmicToeSlope;     // The Filmic curve's look (PostProcessMath::FilmicCurve)
+	float FilmicWhiteStops;
+	float FilmicShoulderPower;
+	uint ColorFlags;          // ST_COLOR_GRADING: the grading below applies
+	vec4 ColorRows[3];        // White balance times slope, as rows
+	vec4 ColorOffset;         // xyz: added before the power (in units of light)
+	vec4 ColorPower;          // xyz: per-channel power around middle gray
+	float FilmGrain;          // The grain's strength; 0 = off, and when FXAA or the morphological blend follows (it adds the grain)
+	float ChromaticAberration; // k: red is read at 0.5 + (uv - 0.5) (1 + k), blue at (1 - k); 0 = off
+	uint GrainFrame;          // The frame's number: the grain changes every frame
+	float ColorLookupIntensity; // How much of the color lookup (set 1) shows; 0: none bound
+	float LensFlare;          // PostProcessComponent::LensFlare * RenderData::c_LensFlareScale; 0: none bound
+	float Starburst;          // The rays' brightness at the directional light's disk (scene units); 0: no disk in front
+	vec2 Sun;                 // The disk, in UV
 } u_Parameters;
+
+// The scene's color lookup (ColorLookup: an RGBA16F 3D table over the display-encoded colors), or a dummy while
+// ColorLookupIntensity is 0. The sampler interpolates linearly and clamps. (The slots follow set 0's: NVRHI wants a
+// pipeline's layouts to use different ones.)
+layout(set = 1, binding = ST_SRV(3)) uniform texture3D u_ColorLookup;
+layout(set = 1, binding = ST_SAMPLER(2)) uniform sampler u_ColorLookupSampler;
+// The lens flare at a quarter of the resolution (PostProcess/LensFlare.comp, exposed; alpha: the share of the directional
+// light's disk that sees the sky), or a dummy while LensFlare is 0.
+layout(set = 1, binding = ST_SRV(4)) uniform texture2D u_LensFlare;
+
+// The starburst: six rays (|cos 3 phi|^c_RayPower), fading over c_RayLength image heights.
+const float c_RayPower = 40.0;
+const float c_RayLength = 0.08;
+
+#define ST_COLOR_GRADING 1u
+#define ST_BLUR_MASK 2u
 
 // Largest exposed value passed to the tone curves: far beyond where every curve saturates, small enough that their
 // intermediate products stay finite in 32-bit floats.
@@ -61,7 +95,7 @@ vec3 ExposeSceneColor(vec3 color)
 // four neighbors, in compressed luminance (L / (1 + L)), by an amount falling steeply with the five taps' range, bounded to
 // that range widened by the amount times the range (so thin lines, glints and fine texture can still sharpen) and below 1.
 // Only the luminance changes, so edges get no color fringes, and a black pixel stays black.
-vec3 Sharpen(vec3 color)
+vec3 Sharpen(vec3 color, float sharpening)
 {
 	ivec2 pixel = ivec2(gl_FragCoord.xy); // The viewport starts at 0, 0: fragments line up with the scene color's texels
 	ivec2 last = textureSize(sampler2D(u_SceneColor, u_PointSampler), 0) - 1;
@@ -83,7 +117,7 @@ vec3 Sharpen(vec3 color)
 		mean += 0.25 * neighbor;
 	}
 	float range = high - low;
-	float amount = u_Parameters.Sharpening * pow(1.0 - range, c_SharpeningContrastExponent);
+	float amount = sharpening * pow(1.0 - range, c_SharpeningContrastExponent);
 	float sharpened = clamp(center + amount * (center - mean), max(low - amount * range, 0.0), min(high + amount * range, 0.5 * (1.0 + high)));
 	if (centerLuminance <= 0.0)
 		return color;
@@ -159,9 +193,23 @@ void main()
 {
 	// Inf or NaN (from a broken input or an extreme exposure) would make every tone curve return NaN.
 	// The exposure multiplies luminance; the scene color is pre-exposed, so its factor is divided out (exactly).
-	vec3 color = ExposeSceneColor(texture(sampler2D(u_SceneColor, u_PointSampler), v_UV).rgb);
-	if (u_Parameters.Sharpening > 0.0)
-		color = min(Sharpen(color), vec3(c_MaxExposedValue));
+	vec4 source = texture(sampler2D(u_SceneColor, u_PointSampler), v_UV);
+	// Lateral chromatic aberration, as a lens's: red magnified a little about the center, blue shrunk, green where it is
+	// (bilinear reads: the shift is a fraction of a pixel). The uniform branch leaves the source untouched when off.
+	if (u_Parameters.ChromaticAberration > 0.0)
+	{
+		vec2 offset = v_UV - 0.5;
+		source.r = texture(sampler2D(u_SceneColor, u_LinearSampler), 0.5 + offset * (1.0 + u_Parameters.ChromaticAberration)).r;
+		source.b = texture(sampler2D(u_SceneColor, u_LinearSampler), 0.5 + offset * (1.0 - u_Parameters.ChromaticAberration)).b;
+	}
+	vec3 color = ExposeSceneColor(source.rgb);
+	// The motion blur's and the depth of field's outputs hold 1 in alpha where they blurred: sharpening a blur would cut a motion
+	// blur's streaks into steps and give a defocused area a texture it does not have.
+	float sharpening = u_Parameters.Sharpening;
+	if ((u_Parameters.ColorFlags & ST_BLUR_MASK) != 0u)
+		sharpening *= 1.0 - clamp(source.a, 0.0, 1.0);
+	if (sharpening > 0.0)
+		color = min(Sharpen(color, sharpening), vec3(c_MaxExposedValue));
 	if (u_Parameters.BloomIntensity > 0.0)
 	{
 		// The bloom is already exposed. Without a threshold it holds all the light, and a small fraction of it
@@ -174,6 +222,45 @@ void main()
 			color = mix(color, bloom, u_Parameters.BloomIntensity);
 		color = min(color, vec3(c_MaxExposedValue));
 	}
+	// Lens flares, tent-filtered up from their quarter resolution (four bilinear taps half a texel apart: the 1-2-1 tent on
+	// their texels), added like the bloom.
+	if (u_Parameters.LensFlare > 0.0)
+	{
+		vec2 offset = 0.5 / vec2(textureSize(sampler2D(u_LensFlare, u_ColorLookupSampler), 0));
+		vec3 flare = texture(sampler2D(u_LensFlare, u_ColorLookupSampler), v_UV + vec2(-offset.x, -offset.y)).rgb
+			+ texture(sampler2D(u_LensFlare, u_ColorLookupSampler), v_UV + vec2(offset.x, -offset.y)).rgb
+			+ texture(sampler2D(u_LensFlare, u_ColorLookupSampler), v_UV + vec2(-offset.x, offset.y)).rgb
+			+ texture(sampler2D(u_LensFlare, u_ColorLookupSampler), v_UV + vec2(offset.x, offset.y)).rgb;
+		// The starburst at full resolution (its rays are thinner near the disk than the flare's texels), scaled by how much of
+		// the disk's surroundings see the sky; an absolute luminance, so the exposure applies and the pre-exposure does not.
+		if (u_Parameters.Starburst > 0.0)
+		{
+			vec2 size = vec2(textureSize(sampler2D(u_SceneColor, u_PointSampler), 0));
+			vec2 offset = (v_UV - u_Parameters.Sun) * vec2(size.x / size.y, 1.0);
+			float distanceToSun = length(offset);
+			// The rays meet at the disk's center, where their angle is undefined (atan(0, 0)).
+			float rays = distanceToSun > 1e-6 ? pow(abs(cos(3.0 * atan(offset.y, offset.x))), c_RayPower) * exp(-distanceToSun / c_RayLength) : 1.0;
+			float visibility = texture(sampler2D(u_LensFlare, u_ColorLookupSampler), u_Parameters.Sun).a;
+			flare += 4.0 * vec3(u_Parameters.Starburst * u_Exposure[ST_EXPOSURE_MULTIPLIER] * rays * visibility);
+		}
+		color = min(color + 0.25 * flare * u_Parameters.LensFlare, vec3(c_MaxExposedValue));
+	}
+	// A lens's natural fall-off toward the corners, on scene-linear light: cos^4 of the field angle (tan theta = |ndc *
+	// VignetteTangents|, the tangents of the half field of view per axis), mixed in by Vignette (1: a lens's full fall-off).
+	if (u_Parameters.Vignette > 0.0)
+	{
+		vec2 field = UVToNDC(v_UV) * u_Parameters.VignetteTangents;
+		float secantSquared = 1.0 + dot(field, field);
+		color *= mix(1.0, 1.0 / (secantSquared * secantSquared), u_Parameters.Vignette);
+	}
+	// White balance, slope, offset and power on scene-linear light, before the tone curve (PostProcessMath::ApplyColorGrading).
+	// The branch is uniform; without grading the color is untouched.
+	if ((u_Parameters.ColorFlags & ST_COLOR_GRADING) != 0u)
+	{
+		color = vec3(dot(u_Parameters.ColorRows[0].xyz, color), dot(u_Parameters.ColorRows[1].xyz, color), dot(u_Parameters.ColorRows[2].xyz, color));
+		color = max(color + u_Parameters.ColorOffset.xyz, vec3(0.0));
+		color = min(0.18 * pow(color / 0.18, u_Parameters.ColorPower.xyz), vec3(c_MaxExposedValue));
+	}
 	// Contrast around middle gray, in log space before the tone curve.
 	if (u_Parameters.Contrast != 1.0)
 		color = 0.18 * pow(color / 0.18, vec3(u_Parameters.Contrast));
@@ -184,14 +271,24 @@ void main()
 		case ST_TONEMAP_ACES:            color = TonemapACES(color); break;
 		case ST_TONEMAP_AGX:             color = TonemapAgX(color); break;
 		case ST_TONEMAP_KHRONOS_NEUTRAL: color = TonemapKhronosNeutral(color); break;
+		case ST_TONEMAP_FILMIC:          color = TonemapFilmic(color, u_Parameters.FilmicToeSlope, u_Parameters.FilmicWhiteStops, u_Parameters.FilmicShoulderPower); break;
 		default:                         color = clamp(color, 0.0, 1.0); break;
 	}
 
 	float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
 	color = max(mix(vec3(luminance), color, u_Parameters.Saturation), vec3(0.0));
 
-	vec2 centered = v_UV - 0.5;
-	color *= 1.0 - u_Parameters.Vignette * smoothstep(0.2, 0.8, length(centered) * 1.41421356);
-
-	o_Color = vec4(LinearToSRGB(clamp(color, 0.0, 1.0)), 1.0);
+	vec3 encoded = LinearToSRGB(clamp(color, 0.0, 1.0));
+	// A grade made in another tool: the color lookup maps the display-encoded color, its points at the texels' centers (a
+	// lattice of N points spans [0.5 / N, 1 - 0.5 / N] of the texture), mixed in by the intensity. The branch is uniform.
+	if (u_Parameters.ColorLookupIntensity > 0.0)
+	{
+		float size = float(textureSize(sampler3D(u_ColorLookup, u_ColorLookupSampler), 0).x);
+		vec3 graded = texture(sampler3D(u_ColorLookup, u_ColorLookupSampler), encoded * ((size - 1.0) / size) + 0.5 / size).rgb;
+		encoded = clamp(mix(encoded, graded, u_Parameters.ColorLookupIntensity), 0.0, 1.0);
+	}
+	// Film grain in the encoded domain, after the curve and before the dither, when this pass writes the display image.
+	encoded = AddFilmGrain(encoded, uvec2(gl_FragCoord.xy), u_Parameters.FilmGrain, u_Parameters.GrainFrame);
+	// The target's own quantization, dithered when this pass writes the display image (u_Parameters.DitherLevels).
+	o_Color = vec4(DitherToCodes(encoded, uvec2(gl_FragCoord.xy), u_Parameters.DitherLevels), 1.0);
 }

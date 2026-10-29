@@ -31,8 +31,11 @@ Guides for people making games in the editor:
   widgets, buttons and sliders in scripts, keyboard and gamepad navigation, testing UI with commands.
 - [Manual/Lighting.md](Manual/Lighting.md): lights and their units (lux, candela, nits) with reference values, exposure,
   the sky, height fog, shadows, reflection probes and screen-space reflections.
-- [Manual/AntiAliasing.md](Manual/AntiAliasing.md): FXAA and TAA, how many frames TAA keeps and when it trails, the
-  Sharp and Original presets and every tunable of Custom, and TAA's limits.
+- [Manual/Camera.md](Manual/Camera.md): the camera's image on the Post Process component: exposure (metering,
+  adaptation, the key), the tone curves, white balance and grading, bloom, the vignette and motion blur, what each costs,
+  and recipes for a sunny day, an interior and a night.
+- [Manual/AntiAliasing.md](Manual/AntiAliasing.md): FXAA and TAA, which suits which look, the players' choice, how many
+  frames TAA keeps and when it trails, the Sharp and Original presets and every tunable of Custom, and TAA's limits.
 - [Manual/Graphics.md](Manual/Graphics.md): graphics quality: the presets and what each costs, where quality is chosen
   (the project, the Scene view, pictures, a run), players' options in a game's menu, and why there is no render scale.
 - [Manual/Settings.md](Manual/Settings.md): the Project Settings panel (the start and loading scenes, the game's title,

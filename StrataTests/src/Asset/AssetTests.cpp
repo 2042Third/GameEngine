@@ -96,7 +96,7 @@ TEST_SUITE("Asset")
 	TEST_CASE("Asset types convert to names and back")
 	{
 		for (AssetType type : { AssetType::None, AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Mesh, AssetType::Material,
-			AssetType::Texture, AssetType::AudioClip, AssetType::Font })
+			AssetType::Texture, AssetType::AudioClip, AssetType::Font, AssetType::World, AssetType::ColorLookup })
 			CHECK(AssetTypeFromString(AssetTypeToString(type)) == type);
 		CHECK_FALSE(AssetTypeFromString("Shader").has_value());
 
@@ -138,6 +138,7 @@ TEST_SUITE("Asset")
 		CHECK(AssetImporterRegistry::FindByExtension(".wav") == nullptr);
 #endif
 		CHECK(AssetImporterRegistry::FindByExtension(".ttf")->GetType() == AssetType::Font);
+		CHECK(AssetImporterRegistry::FindByExtension(".CUBE")->GetType() == AssetType::ColorLookup);
 		CHECK(AssetImporterRegistry::FindByExtension(".unknown") == nullptr);
 		CHECK(AssetImporterRegistry::FindByExtension("") == nullptr);
 
@@ -153,7 +154,7 @@ TEST_SUITE("Asset")
 	{
 		// The loaders of a module's types come with the module.
 		for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Mesh, AssetType::Material, AssetType::Texture,
-			AssetType::Font })
+			AssetType::Font, AssetType::ColorLookup })
 		{
 			CAPTURE(AssetTypeToString(type));
 			CHECK(AssetLoaderRegistry::Find(type) != nullptr);

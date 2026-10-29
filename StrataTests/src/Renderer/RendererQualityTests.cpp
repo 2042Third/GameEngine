@@ -37,6 +37,8 @@ namespace
 	constexpr std::array<float, 4> c_MinProjectedPixels = { 1.0f, 0.5f, 0.5f, 0.25f };
 	constexpr std::array<uint32_t, 4> c_ShadowFilterQuality = { 8, 16, 24, 32 };
 	constexpr std::array<uint32_t, 4> c_ContactShadows = { 0, 0, 12, 16 };
+	constexpr std::array<MotionBlurSamples, 4> c_MotionBlurQuality = { MotionBlurSamples::Off, MotionBlurSamples::Samples8, MotionBlurSamples::Samples12,
+		MotionBlurSamples::Samples16 };
 
 	void CheckColumn(const RendererQualitySettings& settings, size_t column)
 	{
@@ -50,6 +52,13 @@ namespace
 		CHECK(settings.MinProjectedPixels == c_MinProjectedPixels[column]);
 		CHECK(settings.ShadowFilterQuality == c_ShadowFilterQuality[column]);
 		CHECK(settings.ContactShadows == c_ContactShadows[column]);
+		CHECK(settings.MotionBlurQuality == c_MotionBlurQuality[column]);
+		// The players' rows follow no preset.
+		CHECK(settings.AntiAliasing == AntiAliasingChoice::Scene);
+		CHECK(settings.MotionBlur == SceneEffectChoice::Scene);
+		CHECK(settings.DepthOfField == SceneEffectChoice::Scene);
+		CHECK(settings.FilmGrain == SceneEffectChoice::Scene);
+		CHECK(settings.ChromaticAberration == SceneEffectChoice::Scene);
 	}
 
 	constexpr RendererQualityPreset c_Presets[] = { RendererQualityPreset::Low, RendererQualityPreset::Medium, RendererQualityPreset::High,
@@ -197,7 +206,7 @@ TEST_SUITE("Renderer.Quality")
 		}
 	}
 
-	TEST_CASE("High is Medium below 1440 rows but for the sun shadows' filter and contact shadows")
+	TEST_CASE("High is Medium below 1440 rows but for the sun shadows' filter, contact shadows and the motion blur's samples")
 	{
 		const RendererQualitySettings high = RendererQuality::GetPreset(RendererQualityPreset::High);
 		const RendererQualitySettings medium = RendererQuality::GetPreset(RendererQualityPreset::Medium);
@@ -213,6 +222,9 @@ TEST_SUITE("Renderer.Quality")
 			CHECK(resolved.ContactShadows == 12);
 			CHECK(medium.ContactShadows == 0);
 			resolved.ContactShadows = medium.ContactShadows;
+			// High's motion blur takes 12 samples where Medium's takes 8: a cost only scenes with motion blur pay.
+			CHECK(resolved.MotionBlurQuality == MotionBlurSamples::Samples12);
+			resolved.MotionBlurQuality = medium.MotionBlurQuality;
 			CHECK(resolved.HasSameKnobs(medium));
 		}
 		CHECK(RendererQuality::ResolveShadowMapSize(high.ShadowResolution, 1440) != RendererQuality::ResolveShadowMapSize(medium.ShadowResolution, 1440));
@@ -284,6 +296,38 @@ TEST_SUITE("Renderer.Quality")
 		const RendererQualitySettings none = RendererQuality::FromSectionValue(nullptr);
 		CHECK(none.Preset == RendererQualityPreset::High);
 		CHECK(none.HasSameKnobs(RendererQuality::GetPreset(RendererQualityPreset::High)));
+	}
+
+	TEST_CASE("The players' rows are read under every preset")
+	{
+		for (const char* preset : { "Low", "Medium", "High", "Ultra", "Custom" })
+		{
+			const nlohmann::json value = { { "Preset", preset }, { "AntiAliasing", "FXAA" }, { "MotionBlur", "Off" }, { "DepthOfField", "Off" },
+				{ "FilmGrain", "Off" }, { "ChromaticAberration", "Off" }, { "MotionBlurQuality", "Samples16" } };
+			const RendererQualitySettings settings = RendererQuality::FromSectionValue(&value);
+			CAPTURE(preset);
+			CHECK(settings.AntiAliasing == AntiAliasingChoice::FXAA);
+			CHECK(settings.MotionBlur == SceneEffectChoice::Off);
+			CHECK(settings.DepthOfField == SceneEffectChoice::Off);
+			CHECK(settings.FilmGrain == SceneEffectChoice::Off);
+			CHECK(settings.ChromaticAberration == SceneEffectChoice::Off);
+			// The samples follow the preset: the value's only under Custom.
+			const RendererQualityPreset parsed = *RendererQuality::PresetFromString(preset);
+			CHECK(settings.MotionBlurQuality == (parsed == RendererQualityPreset::Custom ? MotionBlurSamples::Samples16
+				: RendererQuality::GetPreset(parsed).MotionBlurQuality));
+			const nlohmann::json written = RendererQuality::ToSectionValue(settings);
+			CHECK(written["AntiAliasing"] == "FXAA");
+			CHECK(written["MotionBlur"] == "Off");
+			CHECK(written["DepthOfField"] == "Off");
+			CHECK(written["FilmGrain"] == "Off");
+			CHECK(written["ChromaticAberration"] == "Off");
+		}
+		CHECK(RendererQuality::GetPreset(RendererQualityPreset::Ultra).DepthOfField == SceneEffectChoice::Scene);
+		CHECK(RendererQuality::GetMotionBlurSampleCount(MotionBlurSamples::Off) == 0);
+		CHECK(RendererQuality::GetMotionBlurSampleCount(MotionBlurSamples::Samples12) == 12);
+		CHECK(RendererQuality::AntiAliasingChoiceFromString("Blurry") == std::nullopt);
+		CHECK(RendererQuality::AntiAliasingChoiceFromString("Morphological") == AntiAliasingChoice::Morphological);
+		CHECK(std::string(RendererQuality::AntiAliasingChoiceToString(AntiAliasingChoice::Morphological)) == "Morphological");
 	}
 
 	TEST_CASE("A value without a field takes the field's default")
@@ -595,11 +639,25 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(MemoryMiB(ultra, { 3840, 2160 }, "LocalShadowAtlasSize") == 256);
 		CHECK(MemoryMiB(medium, { 1920, 1080 }, "ShadowResolution") == 64);
 		CHECK(MemoryMiB(medium, { 1920, 1080 }, "LocalShadowAtlasSize") == 64);
+		// The motion blur's targets, for a scene that blurs: RGBA16F and R32_UINT per pixel (12 bytes) and two RGBA16F tile
+		// targets of ceil(size / 8) texels; none without samples or with the players' Motion blur off.
+		const RendererQuality::RowTraits* motionBlur = nullptr;
+		for (const RendererQuality::RowTraits& row : RendererQuality::GetRowTraits())
+			motionBlur = row.Field == "MotionBlurQuality" ? &row : motionBlur;
+		REQUIRE(motionBlur);
+		REQUIRE(motionBlur->MemoryBytes);
+		CHECK(motionBlur->MemoryBytes(medium, { 1920, 1080 }) == 1920ull * 1080 * 12 + 2ull * 240 * 135 * 8);
+		CHECK(motionBlur->MemoryBytes(high, { 3840, 2160 }) == 3840ull * 2160 * 12 + 2ull * 480 * 270 * 8);
+		CHECK(motionBlur->MemoryBytes(high, { 1921, 1081 }) == 1921ull * 1081 * 12 + 2ull * 241 * 136 * 8);
+		CHECK(motionBlur->MemoryBytes(RendererQuality::GetPreset(RendererQualityPreset::Low), { 3840, 2160 }) == 0);
+		RendererQualitySettings playerOff = high;
+		playerOff.MotionBlur = SceneEffectChoice::Off;
+		CHECK(motionBlur->MemoryBytes(playerOff, { 3840, 2160 }) == 0);
 		// The rows that allocate nothing of their own have no estimate.
 		for (const RendererQuality::RowTraits& row : RendererQuality::GetRowTraits())
 		{
 			CAPTURE(std::string(row.Field));
-			CHECK((row.MemoryBytes != nullptr) == (row.Field == "ShadowResolution" || row.Field == "LocalShadowAtlasSize"));
+			CHECK((row.MemoryBytes != nullptr) == (row.Field == "ShadowResolution" || row.Field == "LocalShadowAtlasSize" || row.Field == "MotionBlurQuality"));
 		}
 	}
 }

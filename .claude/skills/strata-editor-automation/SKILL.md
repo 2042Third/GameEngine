@@ -330,7 +330,7 @@ section has Extract Sun for both). `lighting.bakeProbes` bakes reflection probes
 
 **Assets**: `asset.import {"file": "<absolute path>", "directory": "Models"}` copies a file into the project and
 imports it: models `.gltf`/`.glb` (also meshopt-compressed), textures `.png`/`.jpg`/`.tga`/`.bmp`/`.psd`/`.gif`/`.hdr`,
-audio `.wav`/`.mp3`/`.flac`/`.ogg`, fonts `.ttf`/`.otf`. It runs in the background (copy on an I/O thread, import like
+audio `.wav`/`.mp3`/`.flac`/`.ogg`, fonts `.ttf`/`.otf`, color lookups `.cube`. It runs in the background (copy on an I/O thread, import like
 re-imports) and answers when the imports are done; take several with `"files": [...]` and whole folders (their tree,
 `.meta` files and model files kept) with `"directories": [...]` rather than many calls (calls that overlap copy one after
 the other). A `.gltf` that names separate `.bin` and image files
@@ -498,7 +498,8 @@ time: presenting, and the wait for the display's image at the back buffer's firs
 2-3 frames late, `busy`, `stages` per GPU stage: `GPU.Uploads`, `GPU.Setup`, `GPU.Cull`, `GPU.Shadows`, `GPU.Prepass`,
 `GPU.ScreenShadows` (the sun's shadow mask, its blur, contact shadows and the cascades' fit to the view), `GPU.AO`,
 `GPU.Reflections` (reflection probes' conversions, screen-space reflections), `GPU.Opaque` (with the sky),
-`GPU.Transparent`, `GPU.TAA` (motion vectors' history, temporal anti-aliasing), `GPU.Post`, `GPU.Overlays`, `GPU.UI` (the
+`GPU.Transparent`, `GPU.TAA` (motion vectors' history, temporal anti-aliasing), `GPU.MotionBlur`, `GPU.DepthOfField`,
+`GPU.Post`, `GPU.Overlays`, `GPU.UI` (the
 game UI), `GPU.ImGui`) and `boundBy`: `"gpu"`
 (the GPU's median busy time takes at least 90% of the frame interval and exceeds the CPU's frame time: make the scene
 cheaper to draw), `"cpu"` (the CPU's frame time does: look at `stages`), `"capped"` (vsync or a frame-rate cap sets the
@@ -510,6 +511,13 @@ distance, `texelSize` in meters and `fitted`: its square follows the receivers r
 `shadowFit` (`fitted`: the cascades are laid out over the receivers the frame's depth showed; `squaresFitted`, `settled`:
 no readback is due that may change them; `near`, `far`: the range the slices divide), `localShadowTileSizes` (each
 shadowed point and spot light's tile),
+`exposure` (automatic exposure's metered `ev100`, its key's `keyStops` and the sun's gray card `cardEv100`; null with
+manual exposure), `motionBlur` (`samples`, `tileSize` on frames that blurred; editor views and captures never blur, only
+the Game view while the game plays), `depthOfField` (`focusDistance`, `focalLength`, `fNumber`, `infinityBlurPixels` of
+frames seen through a scene camera whose Camera has `DepthOfField` on: the Game view, a Scene view through the game's
+camera and captures with `camera: "scene"`; the editor camera never defocuses),
+`colorLookup` (the Post Process's color lookup was applied: false while its `.cube` asset loads), `lensFlare` (null
+unless lens flares ran; `sunInFront`: the sun's disk was in front of the camera for the starburst),
 `gpuDriven` (the GPU culled it
 and built its draws: its counts are the GPU's, of a frame 2-3 frames older in `editor.perf` and of the captured frame in
 captures, once `gpuCounts` is true), `feedbackRequests` (its asset requests came from the GPU's visibility feedback of a

@@ -257,7 +257,7 @@ namespace
 		Scene scene;
 		AddNeutralPostProcess(scene);
 		AddMesh(scene, BuiltinAssets::QuadMesh, material, glm::vec3(0.0f), "Quad");
-		SceneRenderer renderer;
+		SceneRenderer renderer(ExactSpecification());
 		renderer.SetViewportSize(size, size);
 		const ReadbackImage image = RenderToImage(renderer, scene, OrthographicLookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f), 1.0f));
 		CHECK(renderer.GetStats().PendingAssets == 0);

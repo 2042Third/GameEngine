@@ -306,7 +306,8 @@ and `SceneRenderer` extracts each frame's draws from it (`SceneRendererExtractio
 point and spot lights' shadow views, depth/normal/entity-ID prepass (with motion vectors and, for screen-space reflections, the
 surface target), GTAO, reflection probes' conversions and the screen-space reflections' trace, forward PBR, sky, a copy of the
 image so far for glass, transparents (glass first),
-the TAA resolve, exposure, bloom, tone mapping, FXAA, then overlays
+the TAA resolve, depth of field, motion blur, exposure, bloom, lens flares, tone mapping, FXAA or the morphological
+anti-aliasing, then overlays
 and text) into render targets of its viewport size. Temporal state belongs to the renderer, never to the scene or the
 camera: each renderer jitters only its frame's copy of the camera and keeps its own motion history (the previous frame's
 instance records and palettes), TAA history and pre-exposure (the histories start again after a camera cut, a resize,
@@ -898,7 +899,9 @@ The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStage
 | `GPU.ScreenShadows` | the sun's screen-space shadow mask, its blur, contact shadows and the reduction that fits the cascades to the view, between `GPU.Prepass` and `GPU.AO` (frames with a shadowed sun) |
 | `GPU.Reflections` | reflection probes' conversions and the screen-space reflections' trace, between `GPU.AO` and `GPU.Opaque` |
 | `GPU.TAA` | the motion history's copy (`Scene/MotionCopy.comp`) and the temporal anti-aliasing resolve |
-| `GPU.Post` | exposure, bloom, tone mapping and FXAA |
+| `GPU.MotionBlur` | the motion blur's tile maxima, their neighborhoods and its gather (`PostProcess/MotionBlur*.comp`) |
+| `GPU.DepthOfField` | depth of field's half-resolution circles of confusion, near-field tiles, gather and composite (`PostProcess/DepthOfField*.comp`; timed before the motion blur) |
+| `GPU.Post` | exposure, bloom, lens flares, tone mapping, and FXAA or the morphological anti-aliasing |
 | `GPU.Overlays` | grid, tints, outline, debug lines, text and the copy into a target |
 | `GPU.UI` | the game UI pass's draws, world-space and screen-space (`GameUIRenderer`, registered by `RegisterGameUIModule`), inside `GPU.Overlays`: the pass times them with the frame's timer (`SceneOverlayFrame::GPUTimer`) and hands it back |
 | `GPU.ImGui` | the editor's UI (registered by `ImGuiLayer` on first use, so games have no such column) |
@@ -1573,6 +1576,7 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   | Model | `.gltf .glb` (also `EXT_meshopt_compression`, decoded with meshoptimizer) | `GltfImporter` | entity template; Mesh (skinned ones with their skin), Material, Texture, Skeleton and AnimationClip sub-assets |
   | AudioClip | `.wav .mp3 .flac .ogg` | `AudioClipImporter` | `STAU` header + the encoded file |
   | Font | `.ttf .otf` | `FontImporter` | the source, validated on import |
+  | ColorLookup | `.cube` (3D tables) | `ColorLookupImporter` | cooked `STLU` lattice over [0, 1], resampled to its `Size` setting (see DeveloperGuide.md, "Post-processing") |
 
   A model's import `Scale` is baked into its content: mesh positions (before LODs and bounds are made from them, so
   simplification errors and recorded bounds are in final units), node translations below the root, the skeleton's rest

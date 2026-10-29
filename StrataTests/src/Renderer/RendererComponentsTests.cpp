@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
@@ -165,7 +166,7 @@ TEST_SUITE("Renderer.Components")
 		}
 	}
 
-	TEST_CASE("Post Process' sections are Tone and color, Exposure, Bloom, Ambient occlusion, Anti-aliasing, Reflections, Lens, in that order")
+	TEST_CASE("Post Process' sections are Tone and color, Exposure, Bloom, Ambient occlusion, Anti-aliasing, Reflections, Lens, Motion, in that order")
 	{
 		const auto sectionsOf = [](const char* component)
 		{
@@ -182,11 +183,34 @@ TEST_SUITE("Renderer.Components")
 			return sections;
 		};
 		CHECK(sectionsOf("PostProcess") == std::vector<std::string> { "Tone and color", "Exposure", "Bloom", "Ambient occlusion", "Anti-aliasing",
-			"Reflections", "Lens" });
+			"Reflections", "Lens", "Motion" });
 		CHECK(sectionsOf("DirectionalLight") == std::vector<std::string> { "Light", "Shadows" });
-		// Saturation and Contrast, registered last, join the tone curve's group.
+		// Properties registered after the groups' first ones (registration order never changes) join their groups.
 		const ComponentInfo* postProcess = ComponentRegistry::Find("PostProcess");
-		CHECK(FindProperty(postProcess->Properties, "Contrast")->Section == "Tone and color");
-		CHECK(FindProperty(postProcess->Properties, "TAASharpening")->Section == "Anti-aliasing");
+		const std::pair<const char*, const char*> c_Groups[] = { { "Contrast", "Tone and color" }, { "TAASharpening", "Anti-aliasing" },
+			{ "Toe", "Tone and color" }, { "WhiteBalanceTemperature", "Tone and color" }, { "ColorPower", "Tone and color" },
+			{ "AutoExposureMetering", "Exposure" }, { "AutoExposureKey", "Exposure" }, { "BloomRadius", "Bloom" }, { "MotionBlur", "Motion" },
+			{ "MotionBlurMaxLength", "Motion" }, { "FilmGrain", "Lens" }, { "ChromaticAberration", "Lens" }, { "ColorLookup", "Tone and color" },
+			{ "ColorLookupIntensity", "Tone and color" }, { "LensFlare", "Lens" } };
+		for (const auto& [property, section] : c_Groups)
+		{
+			CAPTURE(property);
+			const PropertyInfo* info = FindProperty(postProcess->Properties, property);
+			REQUIRE(info);
+			CHECK(info->Section == section);
+		}
+		// The camera's lens has a group of its own below the camera's other properties.
+		const ComponentInfo* camera = ComponentRegistry::Find("Camera");
+		REQUIRE(camera);
+		const PropertyInfo* clearColor = FindProperty(camera->Properties, "ClearColor");
+		REQUIRE(clearColor);
+		CHECK(clearColor->Section.empty());
+		for (const char* property : { "DepthOfField", "FocusDistance", "FocusEntity", "Aperture", "SensorHeight" })
+		{
+			CAPTURE(property);
+			const PropertyInfo* info = FindProperty(camera->Properties, property);
+			REQUIRE(info);
+			CHECK(info->Section == "Depth of field");
+		}
 	}
 }

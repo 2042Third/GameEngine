@@ -88,8 +88,8 @@ namespace
 		CHECK(GetKeys(gpu["busy"]) == c_TimeKeys);
 		CHECK(std::set<std::string> { "gpu", "cpu", "capped", "unknown" }.count(gpu["boundBy"].get<std::string>()) == 1);
 		// Every GPU stage the renderer registered.
-		for (const char* name : { "GPU.Uploads", "GPU.Setup", "GPU.Cull", "GPU.Shadows", "GPU.Prepass", "GPU.ScreenShadows", "GPU.AO", "GPU.Reflections", "GPU.Opaque", "GPU.Transparent", "GPU.TAA", "GPU.Post",
-			"GPU.Overlays" })
+		for (const char* name : { "GPU.Uploads", "GPU.Setup", "GPU.Cull", "GPU.Shadows", "GPU.Prepass", "GPU.ScreenShadows", "GPU.AO", "GPU.Reflections", "GPU.Opaque",
+			"GPU.Transparent", "GPU.TAA", "GPU.MotionBlur", "GPU.DepthOfField", "GPU.Post", "GPU.Overlays" })
 		{
 			CAPTURE(name);
 			REQUIRE(gpu["stages"].contains(name));

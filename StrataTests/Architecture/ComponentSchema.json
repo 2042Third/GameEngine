@@ -327,6 +327,71 @@
 					"Speed": 0.0,
 					"Tooltip": "",
 					"Type": "Color4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Depth Of Field",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "DepthOfField",
+					"Section": "Depth of field",
+					"Speed": 0.0,
+					"Tooltip": "Blurs what lies nearer or farther than the focus, as a camera's lens does (perspective cameras); players can turn it off",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Focus Distance",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10000.0,
+					"Min": 0.10000000149011612,
+					"Name": "FocusDistance",
+					"Section": "Depth of field",
+					"Speed": 0.05000000074505806,
+					"Tooltip": "Meters from the camera to the sharpest plane",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Focus Entity",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "FocusEntity",
+					"Section": "Depth of field",
+					"Speed": 0.0,
+					"Tooltip": "Keeps this entity in focus (its distance along the camera's view, at least the near plane); none: Focus Distance",
+					"Type": "Entity"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Aperture",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 32.0,
+					"Min": 1.0,
+					"Name": "Aperture",
+					"Section": "Depth of field",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "The lens's f-number: lower blurs more (f/1.4 a portrait lens wide open), higher keeps more in focus (f/16)",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Sensor Height",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 100.0,
+					"Min": 4.0,
+					"Name": "SensorHeight",
+					"Section": "Depth of field",
+					"Speed": 0.5,
+					"Tooltip": "Millimeters: with the field of view it sets the focal length; larger sensors blur more at the same view (24 full frame, 15.6 APS-C, 8.8 a 1-inch sensor)",
+					"Type": "Float"
 				}
 			]
 		},
@@ -1158,6 +1223,11 @@
 							"DisplayName": "Khronos Neutral",
 							"Name": "KhronosNeutral",
 							"Value": 4
+						},
+						{
+							"DisplayName": "",
+							"Name": "Filmic",
+							"Value": 5
 						}
 					],
 					"Flags": 0,
@@ -1166,7 +1236,7 @@
 					"Name": "Tonemapper",
 					"Section": "Tone and color",
 					"Speed": 0.0,
-					"Tooltip": "The curve that maps the scene's light to the display: ACES (filmic, contrasty), AgX (filmic, keeps bright colors' hue), Khronos Neutral (keeps colors close to the materials'), Reinhard (soft), None (clipped: for UI and tests)",
+					"Tooltip": "Filmic: the engine's camera-like curve, middle gray shown as middle gray, a soft shoulder that takes bright colors to white without changing their hue (Toe and Shoulder shape it); ACES: punchier, darker mid-tones (needs about +0.8 EV for the same brightness); AgX: flatter and less saturated; Khronos Neutral: keeps base colors up to the highlights; Reinhard; None: the exposed colors clipped",
 					"Type": "Enum"
 				},
 				{
@@ -1231,7 +1301,7 @@
 					"Name": "AutoExposureSpeed",
 					"Section": "Exposure",
 					"Speed": 0.05000000074505806,
-					"Tooltip": "Adaptation rate per second; 0 = instant",
+					"Tooltip": "How fast the exposure follows a darker scene (the image brightens), per second; 0 jumps at once",
 					"Type": "Float"
 				},
 				{
@@ -1338,6 +1408,11 @@
 							"DisplayName": "",
 							"Name": "TAA",
 							"Value": 1
+						},
+						{
+							"DisplayName": "",
+							"Name": "Morphological",
+							"Value": 2
 						}
 					],
 					"Flags": 0,
@@ -1346,7 +1421,7 @@
 					"Name": "AntiAliasingMethod",
 					"Section": "Anti-aliasing",
 					"Speed": 0.0,
-					"Tooltip": "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion. TAA Preset chooses how the TAA looks",
+					"Tooltip": "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion. TAA Preset chooses how the TAA looks. Morphological: non-temporal, finds edges and blends along them, keeping texture detail",
 					"Type": "Enum"
 				},
 				{
@@ -1568,7 +1643,7 @@
 					"Name": "Vignette",
 					"Section": "Lens",
 					"Speed": 0.0,
-					"Tooltip": "Darkens the image toward its corners, as a lens does: 0 off, 1 strongest",
+					"Tooltip": "Natural darkening toward the image's corners, as a lens's (cos^4 of the field angle): 0 none, 1 a lens's full fall-off; 0.12 darkens the corners of a 60 degree view by about 10%",
 					"Type": "Float"
 				},
 				{
@@ -1595,6 +1670,290 @@
 					"Section": "Tone and color",
 					"Speed": 0.0,
 					"Tooltip": "Around middle gray; 1 = unchanged",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Toe",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "Toe",
+					"Section": "Tone and color",
+					"Speed": 0.0,
+					"Tooltip": "How deep the shadows go: higher crushes the darkest tones toward black, lower keeps more detail in them (Filmic only)",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Shoulder",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "Shoulder",
+					"Section": "Tone and color",
+					"Speed": 0.0,
+					"Tooltip": "How softly highlights roll off to white: higher reaches white more stops above middle gray (5 at 0, 6.5 at 0.5, 8 at 1), keeping more highlight detail (Filmic only)",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "White Balance Temperature",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 15000.0,
+					"Min": 2000.0,
+					"Name": "WhiteBalanceTemperature",
+					"Section": "Tone and color",
+					"Speed": 50.0,
+					"Tooltip": "Temperature in kelvin of the light that shows as white: lower values cool the image (3200 for tungsten light), higher warm it; 6500 is neutral",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "White Balance Tint",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": -1.0,
+					"Name": "WhiteBalanceTint",
+					"Section": "Tone and color",
+					"Speed": 0.0,
+					"Tooltip": "Tint: positive adds magenta, negative green",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color Slope",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 4.0,
+					"Min": 0.0,
+					"Name": "ColorSlope",
+					"Section": "Tone and color",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Slope: per-channel gain before the tone curve",
+					"Type": "Vec3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color Offset",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.10000000149011612,
+					"Min": -0.10000000149011612,
+					"Name": "ColorOffset",
+					"Section": "Tone and color",
+					"Speed": 0.0010000000474974513,
+					"Tooltip": "Offset: light added per channel, in fractions of middle gray (tints the shadows most)",
+					"Type": "Vec3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color Power",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 5.0,
+					"Min": 0.20000000298023224,
+					"Name": "ColorPower",
+					"Section": "Tone and color",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Power: per-channel contrast around middle gray",
+					"Type": "Vec3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Auto Exposure Metering",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "Average",
+							"Value": 0
+						},
+						{
+							"DisplayName": "Center Weighted",
+							"Name": "CenterWeighted",
+							"Value": 1
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "AutoExposureMetering",
+					"Section": "Exposure",
+					"Speed": 0.0,
+					"Tooltip": "How the image is metered: Average weighs every pixel alike; CenterWeighted counts the middle of the image most and its edges a quarter, as a camera's center-weighted meter",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Auto Exposure Low Percentile",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.49000000953674316,
+					"Min": 0.0,
+					"Name": "AutoExposureLowPercentile",
+					"Section": "Exposure",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "The darkest share of the metered pixels that is ignored, so deep shadows do not move the exposure",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Auto Exposure High Percentile",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1.0,
+					"Min": 0.5099999904632568,
+					"Name": "AutoExposureHighPercentile",
+					"Section": "Exposure",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "The brightest share of the metered pixels below this is kept: the pixels above it (light sources) do not move the exposure",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Auto Exposure Light Speed",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 20.0,
+					"Min": 0.0,
+					"Name": "AutoExposureLightSpeed",
+					"Section": "Exposure",
+					"Speed": 0.05000000074505806,
+					"Tooltip": "How fast it follows a brighter scene (the image darkens), per second, as eyes leaving a tunnel; 0 jumps at once",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Auto Exposure Key",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.5,
+					"Min": 0.0,
+					"Name": "AutoExposureKey",
+					"Section": "Exposure",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "How much a scene's brightness against a gray card in the sun shows: 0 meters every scene to middle gray; 0.12 shows an interior 5 stops below the sun's card 0.6 stops darker (at most 2); scenes above the card are not brightened. Needs a directional light",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Bloom Radius",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.25,
+					"Min": 0.009999999776482582,
+					"Name": "BloomRadius",
+					"Section": "Bloom",
+					"Speed": 0.0010000000474974513,
+					"Tooltip": "How far the glow reaches, as a fraction of the image height: the same share of the image at every resolution",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Motion Blur",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "MotionBlur",
+					"Section": "Motion",
+					"Speed": 0.0,
+					"Tooltip": "Blurs what moves on screen over the shutter's share of each frame, as a film camera does; editor views never blur, and players can turn it off",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Motion Blur Shutter Angle",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 360.0,
+					"Min": 0.0,
+					"Name": "MotionBlurShutterAngle",
+					"Section": "Motion",
+					"Speed": 1.0,
+					"Tooltip": "How long the shutter stays open, in degrees of the frame: 180 blurs over half a frame's motion, as film cameras do; 0 none",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Motion Blur Max Length",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.05000000074505806,
+					"Min": 0.004999999888241291,
+					"Name": "MotionBlurMaxLength",
+					"Section": "Motion",
+					"Speed": 0.0010000000474974513,
+					"Tooltip": "The longest blur, as a fraction of the image height: 0.02 is 43 pixels at 2160 rows",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Film Grain",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "FilmGrain",
+					"Section": "Lens",
+					"Speed": 0.0,
+					"Tooltip": "Film's grain, new every frame, most visible in the mid-tones; 1 spreads them by about 10 codes. Players can turn it off",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Chromatic Aberration",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "ChromaticAberration",
+					"Section": "Lens",
+					"Speed": 0.0,
+					"Tooltip": "A lens's lateral color fringes, red and blue drawn apart toward the corners; 1 shifts each half a pixel at a 3840x2160 image's corners. Players can turn it off",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 13,
+					"DisplayName": "Color Lookup",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ColorLookup",
+					"Section": "Tone and color",
+					"Speed": 0.0,
+					"Tooltip": "A grade made in another tool (a .cube file's 3D lookup table), applied to the finished image after the tone curve and the saturation. Nothing applies while it loads",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color Lookup Intensity",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "ColorLookupIntensity",
+					"Section": "Tone and color",
+					"Speed": 0.0,
+					"Tooltip": "How much of the color lookup's grade shows: 1 all of it, 0.5 halfway between the image and the graded image",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Lens Flare",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "LensFlare",
+					"Section": "Lens",
+					"Speed": 0.0,
+					"Tooltip": "A lens's flares around very bright light, with restraint: faint tinted ghosts mirrored through the image's center, a halo, and six rays around the sun's disk while it is in view and not covered. 0 none",
 					"Type": "Float"
 				}
 			]

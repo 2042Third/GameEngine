@@ -41,6 +41,33 @@ namespace Strata
 		Size8192
 	};
 
+	// The motion blur's gather samples (RendererQualitySettings::MotionBlurQuality); Off turns the passes off. File and script
+	// values by name.
+	enum class MotionBlurSamples : uint8_t
+	{
+		Off = 0,
+		Samples8,
+		Samples12,
+		Samples16
+	};
+
+	// The players' anti-aliasing (RendererQualitySettings::AntiAliasing): the scene's method, or one they prefer.
+	enum class AntiAliasingChoice : uint8_t
+	{
+		Scene = 0, // The Post Process's
+		Off,
+		FXAA,
+		TAA,
+		Morphological
+	};
+
+	// A players' comfort row: the scene's effect, or off (players may turn off, never on, what a scene uses).
+	enum class SceneEffectChoice : uint8_t
+	{
+		Scene = 0,
+		Off
+	};
+
 	// The costly knobs of a renderer: what a person, project or player chooses for a machine, never a scene's look (that
 	// stays on lights, Post Process and the sky). The defaults are Medium, 0.6.0's costs. Docs/DeveloperGuide.md,
 	// "Quality settings": a row of the presets per knob, and what adding one involves.
@@ -71,6 +98,16 @@ namespace Strata
 		uint32_t ShadowFilterQuality = 16;
 		// Steps of the sun's screen-space contact shadows (0 off; else 4 to 32), which ground objects below the cascades' detail.
 		uint32_t ContactShadows = 0;
+		// The motion blur's gather samples, for scenes whose Post Process turns it on (8 at Medium; Off at Low turns it off).
+		MotionBlurSamples MotionBlurQuality = MotionBlurSamples::Samples8;
+		// The players' rows, the same under every preset (comfort and preference, not cost): the anti-aliasing method (the
+		// scene's, or off, FXAA, TAA or the morphological anti-aliasing) and whether the scene's motion blur, its cameras' depth
+		// of field, its film grain and its chromatic aberration show.
+		AntiAliasingChoice AntiAliasing = AntiAliasingChoice::Scene;
+		SceneEffectChoice MotionBlur = SceneEffectChoice::Scene;
+		SceneEffectChoice DepthOfField = SceneEffectChoice::Scene;
+		SceneEffectChoice FilmGrain = SceneEffectChoice::Scene;
+		SceneEffectChoice ChromaticAberration = SceneEffectChoice::Scene;
 
 		// Every member equal, Preset included.
 		bool operator==(const RendererQualitySettings& other) const = default;
@@ -82,7 +119,7 @@ namespace Strata
 	namespace RendererQuality
 	{
 		constexpr std::string_view c_SectionId = "Renderer.Quality";
-		constexpr uint32_t c_SectionVersion = 2; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
+		constexpr uint32_t c_SectionVersion = 3; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
 		constexpr uint32_t c_HighResolutionRows = 1440;
 		constexpr uint32_t c_MaxShadowMapSize = 8192; // The most texels each way of a cascade (SceneRenderer applies it)
 
@@ -98,6 +135,14 @@ namespace Strata
 		std::optional<RendererQualityPreset> PresetFromString(std::string_view name, bool ignoreCase = false);
 		const char* ShadowResolutionToString(ShadowMapResolution resolution); // "Auto", "AutoFine", "1024" ...
 		std::optional<ShadowMapResolution> ShadowResolutionFromString(std::string_view name);
+		const char* MotionBlurSamplesToString(MotionBlurSamples samples); // "Off", "Samples8" ...
+		std::optional<MotionBlurSamples> MotionBlurSamplesFromString(std::string_view name);
+		// The gather's samples of a row value (0 for Off).
+		uint32_t GetMotionBlurSampleCount(MotionBlurSamples samples);
+		const char* AntiAliasingChoiceToString(AntiAliasingChoice choice); // "Scene", "Off", "FXAA", "TAA", "Morphological"
+		std::optional<AntiAliasingChoice> AntiAliasingChoiceFromString(std::string_view name);
+		const char* SceneEffectChoiceToString(SceneEffectChoice choice); // "Scene", "Off"
+		std::optional<SceneEffectChoice> SceneEffectChoiceFromString(std::string_view name);
 
 		// The Renderer.Quality section (simple; registered by RegisterRendererModule).
 		SettingsSection MakeSection();

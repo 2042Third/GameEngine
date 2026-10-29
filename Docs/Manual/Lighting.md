@@ -51,17 +51,14 @@ a few frames to find its value after a scene loads; viewport captures and the pr
 
 ## Exposure
 
-Exposure decides how bright the scene looks, like a camera's. It lives on the **Post Process** component:
+Exposure decides how bright the scene looks, like a camera's. It lives on the **Post Process** component, and
+[Camera.md](Camera.md) explains it with the rest of the camera's image (metering, adaptation, the exposure key, the tone
+curve, color). In the units of this page:
 
 - **Exposure** (in EV, stops): with **Auto Exposure** off, each step of 1 doubles the brightness on screen. A camera
   setting of EV100 corresponds to an **Exposure** of about 0.5 - EV100 (a sunny day, EV100 15, is about -14.5).
-- **Auto Exposure** measures the scene's average brightness each frame and brings it to middle gray, like a camera's
-  automatic mode; **Exposure** then brightens or darkens that result. **Auto Exposure Min EV** and **Max EV** bound the
-  average brightness it adapts to, in stops of nits (EV100 minus 3): a night scene stays dark when its Min EV is above
-  its brightness, and **Auto Exposure Speed** sets how fast it adapts (0 at once).
-
-A night scene lit by a full moon, for example, uses manual exposure around +4, or automatic exposure with Min EV high
-enough that the night does not look like day.
+- **Auto Exposure Min EV** and **Max EV** bound the average brightness automatic exposure adapts to, in stops of nits
+  (EV100 minus 3): a night scene stays dark when its Min EV is above its brightness. Real sunlight needs **Max EV** 16.
 
 ## The sky
 

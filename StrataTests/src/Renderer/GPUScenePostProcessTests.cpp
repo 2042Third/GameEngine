@@ -63,6 +63,64 @@ namespace
 		return values;
 	}
 
+	// The exposure key's stops of the latest frame (Include/Exposure.glsl's third float).
+	float ReadExposureKey(GPUContext& gpu, SceneRenderer& renderer)
+	{
+		const std::vector<uint8_t> bytes = ReadBufferRange(gpu, renderer.GetExposureBuffer(), RenderData::c_ExposureKeyStops * sizeof(float), sizeof(float));
+		REQUIRE(bytes.size() == sizeof(float));
+		float value = 0.0f;
+		std::memcpy(&value, bytes.data(), sizeof(value));
+		return value;
+	}
+
+	// PostProcess/Histogram.comp and Exposure.comp's metering of an HDR image (pre-exposure 1) on the CPU: the same bins, pixel
+	// weights and percentile window; the metered log2 luminance.
+	float MeterOnCPU(const ReadbackImage& hdr, bool centerWeighted, float low, float high)
+	{
+		constexpr uint32_t c_Bins = RenderData::c_HistogramBins;
+		const float range = RenderData::c_HistogramMaxLog2 - RenderData::c_HistogramMinLog2;
+		std::vector<double> bins(c_Bins, 0.0);
+		for (uint32_t y = 0; y < hdr.Height; y++)
+		{
+			for (uint32_t x = 0; x < hdr.Width; x++)
+			{
+				const glm::vec4 texel = ReadHalfTexel(hdr, x, y);
+				const float luminance = glm::dot(glm::vec3(texel), glm::vec3(0.2126f, 0.7152f, 0.0722f));
+				uint32_t bin = 0;
+				if (luminance > std::exp2(RenderData::c_HistogramMinLog2))
+				{
+					const float t = std::clamp((std::log2(luminance) - RenderData::c_HistogramMinLog2) / range, 0.0f, 1.0f);
+					bin = 1 + static_cast<uint32_t>(t * static_cast<float>(c_Bins - 2));
+				}
+				double weight = 1.0;
+				if (centerWeighted)
+				{
+					const glm::vec2 uv = (glm::vec2(static_cast<float>(x), static_cast<float>(y)) + 0.5f) / glm::vec2(static_cast<float>(hdr.Width), static_cast<float>(hdr.Height));
+					const glm::vec2 offset = (uv - 0.5f) * glm::vec2(static_cast<float>(hdr.Width) / static_cast<float>(hdr.Height), 1.0f);
+					weight = std::round(16.0 * (0.25 + 0.75 * std::exp(-glm::dot(offset, offset) / (2.0 * 0.25 * 0.25))));
+				}
+				bins[bin] += weight;
+			}
+		}
+		double total = 0.0;
+		for (uint32_t bin = 1; bin < c_Bins; bin++)
+			total += bins[bin];
+		const double lowCount = total * low;
+		const double highCount = total * high;
+		double accumulated = 0.0;
+		double sum = 0.0;
+		double weight = 0.0;
+		for (uint32_t bin = 1; bin < c_Bins; bin++)
+		{
+			const double inside = std::max(std::min(accumulated + bins[bin], highCount) - std::max(accumulated, lowCount), 0.0);
+			const double log2 = RenderData::c_HistogramMinLog2 + (static_cast<double>(bin - 1) + 0.5) / static_cast<double>(c_Bins - 2) * range;
+			sum += inside * log2;
+			weight += inside;
+			accumulated += bins[bin];
+		}
+		return weight > 0.0 ? static_cast<float>(sum / weight) : 0.0f;
+	}
+
 	// Pixels of an HDR image with a channel at SanitizeHDR's clamp.
 	uint32_t CountClampedPixels(const ReadbackImage& hdr)
 	{
@@ -192,6 +250,8 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 		SceneTestAssets assets;
 		Scene scene;
 		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		// 0.6.0's four levels at this size (the default radius reaches two): the glow is checked 6 pixels out.
+		postProcess.BloomRadius = 0.25f;
 		Entity light = AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(Emitting(200.0f)), glm::vec3(0.0f), "Light");
 		light.GetComponent<TransformComponent>().Scale = glm::vec3(0.1f);
 
@@ -226,6 +286,7 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 		SceneTestAssets assets;
 		Scene scene;
 		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.BloomRadius = 0.25f; // 0.6.0's four levels at this size
 		AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(Emitting(0.18f)), glm::vec3(0.0f, 0.0f, -0.1f), "Wall")
 			.GetComponent<TransformComponent>().Scale = glm::vec3(20.0f);
 		Entity light = AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(Emitting(0.5f)), glm::vec3(0.0f), "Light");
@@ -368,6 +429,7 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 		SceneTestAssets assets;
 		CreaseScene crease;
 		crease.PostProcess->BloomIntensity = 0.1f;
+		crease.PostProcess->BloomRadius = 0.25f; // The chain of 0.6.0 at these small sizes
 		const glm::vec3 lampPosition(-1.0f, 0.4f, 1.2f);
 		AddMesh(crease.SceneData, BuiltinAssets::SphereMesh, assets.AddMaterial(Emitting(100.0f)), lampPosition, "Lamp")
 			.GetComponent<TransformComponent>().Scale = glm::vec3(0.2f);
@@ -728,6 +790,278 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 			const ReadbackImage actual = RenderPreExposed(stepping, scene, camera, frame < 6 ? 1.0f : 1.0f / 16.0f);
 			REQUIRE(stepping.GetStats().TemporalFrames == frame + 1);
 			CHECK(MaxDifference(expected, actual) == 0);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Automatic exposure adapts to brighter scenes faster than to darker ones")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle dim = assets.AddMaterial(Emitting(0.25f));
+		const AssetHandle bright = assets.AddMaterial(Emitting(16.0f));
+		Scene scene;
+		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.AutoExposure = true;
+		postProcess.AutoExposureSpeed = 1.5f;      // Toward darker scenes
+		postProcess.AutoExposureLightSpeed = 3.0f; // Toward brighter ones
+		Entity wall = AddMesh(scene, BuiltinAssets::QuadMesh, dim, glm::vec3(0.0f), "Wall");
+		wall.GetComponent<TransformComponent>().Scale = glm::vec3(20.0f);
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f));
+		SceneRenderOptions options;
+		options.AdaptationSeconds = 0.1f;
+		options.PreExposure = 1.0f;
+		auto adapted = [&](AssetHandle material, bool reset)
+		{
+			wall.GetComponent<MeshRendererComponent>().Material = material;
+			wall.MarkModified<MeshRendererComponent>();
+			if (reset)
+				renderer.ResetExposureAdaptation();
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			return ReadExposure(gpu, renderer).x;
+		};
+		const float dimTarget = adapted(dim, true);
+		const float brightTarget = adapted(bright, true);
+		REQUIRE(brightTarget - dimTarget > 5.0f);
+
+		// One frame of 0.1 s moves 1 - exp(-0.1 * speed) of the way: 0.259 toward the bright scene, 0.139 toward the dim one.
+		adapted(dim, true);
+		const float towardBright = (adapted(bright, false) - dimTarget) / (brightTarget - dimTarget);
+		CHECK(std::abs(towardBright - (1.0f - std::exp(-0.3f))) < 0.01f);
+		adapted(bright, true);
+		const float towardDark = (brightTarget - adapted(dim, false)) / (brightTarget - dimTarget);
+		CHECK(std::abs(towardDark - (1.0f - std::exp(-0.15f))) < 0.01f);
+		// Speed 0 jumps at once either way.
+		postProcess.AutoExposureLightSpeed = 0.0f;
+		adapted(dim, true);
+		CHECK(adapted(bright, false) == doctest::Approx(brightTarget));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Center-weighted metering favors the middle of the image")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.AutoExposure = true;
+		// A surround of 0.1 nits and a patch 8 stops brighter over the central ninth of the view.
+		AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(Emitting(0.1f)), glm::vec3(0.0f, 0.0f, -1.0f), "Surround")
+			.GetComponent<TransformComponent>().Scale = glm::vec3(40.0f);
+		const float halfHeight = 2.0f * std::tan(glm::radians(30.0f));
+		AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(Emitting(0.1f * 256.0f)), glm::vec3(0.0f), "Patch")
+			.GetComponent<TransformComponent>().Scale = glm::vec3(2.0f * halfHeight / 3.0f);
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f));
+		SceneRenderOptions options;
+		options.PreExposure = 1.0f;
+
+		auto meter = [&](ExposureMetering metering, float low, float high)
+		{
+			postProcess.AutoExposureMetering = metering;
+			postProcess.AutoExposureLowPercentile = low;
+			postProcess.AutoExposureHighPercentile = high;
+			renderer.ResetExposureAdaptation();
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			return ReadExposure(gpu, renderer).x;
+		};
+		const float average = meter(ExposureMetering::Average, 0.1f, 0.9f);
+		const ReadbackImage hdr = ReadHDRImage(renderer);
+		const float centerWeighted = meter(ExposureMetering::CenterWeighted, 0.1f, 0.9f);
+		// The CPU's metering of the same image: the same bins, weights and window.
+		CHECK(std::abs(average - MeterOnCPU(hdr, false, 0.1f, 0.9f)) < 0.06f);
+		CHECK(std::abs(centerWeighted - MeterOnCPU(hdr, true, 0.1f, 0.9f)) < 0.06f);
+		CHECK(centerWeighted - average >= 0.5f);
+		// The window is a property: from 0.5 on, the brighter half is metered.
+		const float upperHalf = meter(ExposureMetering::Average, 0.5f, 0.9f);
+		CHECK(std::abs(upperHalf - MeterOnCPU(hdr, false, 0.5f, 0.9f)) < 0.06f);
+		CHECK(upperHalf > average);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The exposure key darkens what meters below the sun's gray card")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		MaterialProperties gray;
+		gray.BaseColor = glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
+		gray.Roughness = 1.0f;
+		gray.Metallic = 0.0f;
+		Scene scene;
+		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.AutoExposure = true;
+		postProcess.AutoExposureKey = 0.12f;
+		postProcess.AutoExposureMinEV = -12.0f;
+		postProcess.AutoExposureMaxEV = 16.0f;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(gray), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(100.0f);
+		// No sky light: a sky light without a map or ambient (else the default ambient would light the floor at every sun).
+		SkyLightComponent& sky = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+		sky.AmbientColor = glm::vec3(0.0f);
+		// The sun 60 degrees high: the floor receives sin(60) of a card facing it.
+		Entity sun = AddSun(scene, glm::normalize(glm::vec3(0.0f, -std::sin(glm::radians(60.0f)), -std::cos(glm::radians(60.0f)))), 1.0f, false);
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		// Looking down at the floor: nothing else in view.
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 3.0f, 0.01f), glm::vec3(0.0f));
+		SceneRenderOptions options;
+		options.PreExposure = 1.0f;
+		auto keyStops = [&](float lux)
+		{
+			sun.GetComponent<DirectionalLightComponent>().Intensity = lux;
+			sun.MarkModified<DirectionalLightComponent>();
+			renderer.ResetExposureAdaptation();
+			options.PreExposure = std::exp2(std::round(std::log2(1.0f / lux)));
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			const std::vector<uint8_t> bytes = ReadBufferRange(gpu, renderer.GetExposureBuffer(), 0, 3 * sizeof(float));
+			REQUIRE(bytes.size() == 3 * sizeof(float));
+			float values[3] = {};
+			std::memcpy(values, bytes.data(), sizeof(values));
+			const float cardLog2 = std::log2(lux * 0.18f / glm::pi<float>());
+			// The key the CPU computes from what the GPU metered.
+			CHECK(std::abs(values[2] - std::clamp(postProcess.AutoExposureKey * (values[0] - cardLog2), RenderData::c_ExposureKeyMinStops,
+				RenderData::c_ExposureKeyMaxStops)) < 0.01f);
+			return values[2];
+		};
+		// A sunlit exterior meters near the card: the floor's diffuse light is sin(60) of the card's (0.2 stops below it).
+		const float sunlit = keyStops(1.0f);
+		CHECK(sunlit <= 0.0f);
+		CHECK(sunlit >= -0.05f);
+		// Scale-invariant: a 16,384 lux sun (14 stops brighter: 127 of the histogram's bins, so the bins line up) gives the same.
+		CHECK(std::abs(keyStops(16384.0f) - sunlit) < 0.01f);
+
+		// The same floor in the shade (the sun below it), lit by a sky whose light makes it 1/32 of the card's luminance (its
+		// diffuse part: 0.18 times the sky's luminance), as an interior five stops below the sun: 0.6 stops darker.
+		sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::normalize(glm::vec3(0.0f, std::sin(glm::radians(60.0f)), -std::cos(glm::radians(60.0f)))));
+		sun.MarkModified<TransformComponent>();
+		sky.AmbientColor = glm::vec3(1.0f / (32.0f * glm::pi<float>()));
+		const float shaded = keyStops(1.0f);
+		CHECK(std::abs(shaded + 0.6f) < 0.06f); // The floor's specular adds a little to its diffuse light
+
+		// With the key 0: none.
+		postProcess.AutoExposureKey = 0.0f;
+		CHECK(keyStops(1.0f) == 0.0f);
+		// Without a directional light: none.
+		postProcess.AutoExposureKey = 0.12f;
+		scene.DestroyEntity(sun);
+		renderer.ResetExposureAdaptation();
+		REQUIRE(renderer.Render(scene, camera, nullptr, options));
+		CHECK(ReadExposureKey(gpu, renderer) == 0.0f);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The stats report the newest metering and key of automatic exposure, the sun's card, and forget them with a new stretch")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		MaterialProperties gray;
+		gray.BaseColor = glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
+		gray.Roughness = 1.0f;
+		gray.Metallic = 0.0f;
+		Scene scene;
+		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.AutoExposure = true;
+		postProcess.AutoExposureKey = 0.12f;
+		postProcess.AutoExposureMinEV = -12.0f;
+		postProcess.AutoExposureMaxEV = 16.0f;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(gray), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(100.0f);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.0f);
+		// A 64 lux sun 60 degrees high: the floor meters a little below its gray card.
+		Entity sun = AddSun(scene, glm::normalize(glm::vec3(0.0f, -std::sin(glm::radians(60.0f)), -std::cos(glm::radians(60.0f)))), 64.0f, false);
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 3.0f, 0.01f), glm::vec3(0.0f));
+		REQUIRE(RenderUntilPreExposureSettled(renderer, scene, camera, 30) <= 30);
+		// The metering arrives frames late; the scene is still, so the newest readback holds what the buffer holds now.
+		for (int frame = 0; frame < 4; frame++)
+			RenderToImage(renderer, scene, camera);
+		const SceneRendererStats& stats = renderer.GetStats();
+		REQUIRE(stats.ExposureLog2Luminance.has_value());
+		CHECK(*stats.ExposureLog2Luminance == doctest::Approx(ReadExposure(gpu, renderer).x).epsilon(1e-4));
+		CHECK(stats.ExposureKeyStops == doctest::Approx(ReadExposureKey(gpu, renderer)).epsilon(1e-4));
+		CHECK(stats.ExposureKeyStops <= 0.0f);
+		REQUIRE(stats.ExposureKeyReferenceLog2.has_value());
+		CHECK(*stats.ExposureKeyReferenceLog2 == doctest::Approx(std::log2(64.0f * 0.18f / glm::pi<float>())));
+		const float metered = *stats.ExposureLog2Luminance;
+
+		// Manual exposure meters nothing.
+		postProcess.AutoExposure = false;
+		RenderToImage(renderer, scene, camera);
+		CHECK_FALSE(renderer.GetStats().ExposureLog2Luminance.has_value());
+		CHECK_FALSE(renderer.GetStats().ExposureKeyReferenceLog2.has_value());
+		// Back on, under a sun 8 stops brighter: until a readback of the new stretch arrives there is no metering to report, not
+		// the earlier stretch's.
+		sun.GetComponent<DirectionalLightComponent>().Intensity = 64.0f * 256.0f;
+		sun.MarkModified<DirectionalLightComponent>();
+		postProcess.AutoExposure = true;
+		RenderToImage(renderer, scene, camera);
+		CHECK_FALSE(renderer.GetStats().ExposureLog2Luminance.has_value());
+		CHECK(renderer.GetStats().ExposureKeyStops == 0.0f);
+		REQUIRE(RenderUntilPreExposureSettled(renderer, scene, camera, 30) <= 30);
+		REQUIRE(renderer.GetStats().ExposureLog2Luminance.has_value());
+		CHECK(*renderer.GetStats().ExposureLog2Luminance > metered + 6.0f);
+
+		// Without a directional light there is no card.
+		scene.DestroyEntity(sun);
+		RenderToImage(renderer, scene, camera);
+		CHECK_FALSE(renderer.GetStats().ExposureKeyReferenceLog2.has_value());
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The exposure key never brightens: a dim sun under a bright sky, and a sun fading out over a lit scene")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		MaterialProperties gray;
+		gray.BaseColor = glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
+		gray.Roughness = 1.0f;
+		gray.Metallic = 0.0f;
+		Scene scene;
+		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.AutoExposure = true;
+		postProcess.AutoExposureKey = 0.12f;
+		postProcess.AutoExposureMinEV = -12.0f;
+		postProcess.AutoExposureMaxEV = 16.0f;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(gray), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(100.0f);
+		// An overcast sky: its light makes the floor four times as bright as the gray card the 1 lux sun lights (the sun's own
+		// share of the floor is sin(60) of the card's), so the floor meters two stops above the card.
+		SkyLightComponent& sky = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+		sky.AmbientColor = glm::vec3((4.0f - std::sin(glm::radians(60.0f))) / glm::pi<float>());
+		Entity sun = AddSun(scene, glm::normalize(glm::vec3(0.0f, -std::sin(glm::radians(60.0f)), -std::cos(glm::radians(60.0f)))), 1.0f, false);
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 3.0f, 0.01f), glm::vec3(0.0f));
+		SceneRenderOptions options;
+		options.PreExposure = 1.0f;
+		auto meter = [&](float lux)
+		{
+			sun.GetComponent<DirectionalLightComponent>().Intensity = lux;
+			sun.MarkModified<DirectionalLightComponent>();
+			renderer.ResetExposureAdaptation();
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			const std::vector<uint8_t> bytes = ReadBufferRange(gpu, renderer.GetExposureBuffer(), 0, 3 * sizeof(float));
+			REQUIRE(bytes.size() == 3 * sizeof(float));
+			float values[3] = {};
+			std::memcpy(values, bytes.data(), sizeof(values));
+			return glm::vec2(values[0], values[2]);
+		};
+		// Overcast: the floor meters above the sun's card, and shows as bright as a sunny exterior that meters at it.
+		const glm::vec2 overcast = meter(1.0f);
+		CHECK(overcast.x > std::log2(0.18f / glm::pi<float>()) + 1.8f);
+		CHECK(overcast.y == 0.0f);
+		// The sun sets over the sky-lit floor: its card falls toward nothing while the floor keeps the sky's light. The key stays
+		// 0 all the way, and at 0 lux (no card at all) too: nothing brightens or jumps as the light fades out.
+		for (const float lux : { 0.25f, 1.0f / 64.0f, 1.0f / 4096.0f, 1.0e-6f, 0.0f })
+		{
+			CAPTURE(lux);
+			CHECK(meter(lux).y == 0.0f);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

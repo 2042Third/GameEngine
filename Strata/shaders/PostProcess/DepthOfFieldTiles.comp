@@ -1,0 +1,45 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/DepthOfField.glsl"
+
+// Depth of field's tile maxima: one group per tile of TileSize half-resolution texels; x the largest near-field circle of
+// confusion (half-resolution pixels, as a positive radius), y the largest far one.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(0)) uniform texture2D u_Half;
+layout(set = 0, binding = ST_UAV(0), rgba16f) uniform writeonly image2D o_TileMax;
+
+shared vec2 s_Largest[64];
+
+void main()
+{
+	ivec2 size = textureSize(u_Half, 0);
+	ivec2 tile = ivec2(gl_WorkGroupID.xy);
+	int tileSize = int(u_DepthOfField.TileSize);
+	ivec2 origin = tile * tileSize;
+	vec2 largest = vec2(0.0);
+	for (int y = int(gl_LocalInvocationID.y); y < tileSize; y += 8)
+	{
+		for (int x = int(gl_LocalInvocationID.x); x < tileSize; x += 8)
+		{
+			ivec2 texel = origin + ivec2(x, y);
+			if (any(greaterThanEqual(texel, size)))
+				continue;
+			float coc = texelFetch(u_Half, texel, 0).a;
+			largest = max(largest, vec2(-coc, coc));
+		}
+	}
+	s_Largest[gl_LocalInvocationIndex] = largest;
+	barrier();
+	for (uint stride = 32u; stride > 0u; stride >>= 1u)
+	{
+		if (gl_LocalInvocationIndex < stride)
+			s_Largest[gl_LocalInvocationIndex] = max(s_Largest[gl_LocalInvocationIndex], s_Largest[gl_LocalInvocationIndex + stride]);
+		barrier();
+	}
+	if (gl_LocalInvocationIndex == 0u)
+		imageStore(o_TileMax, tile, vec4(s_Largest[0], 0.0, 0.0));
+}

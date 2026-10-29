@@ -142,18 +142,30 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		CreateProject(editor, "GraphicsQualityPage");
 		OpenGraphicsQuality(editor);
 
-		// Not the generic page's fields: the page's own table, a row per knob, a cell per preset and Custom's widget.
+		// Not the generic page's fields: the page's own table, a row per knob, a cell per preset and Custom's widget; the rows
+		// the presets leave alone under Players' choices instead.
 		CHECK_FALSE(IsDrawn(PageKey("ShadowCascades")));
+		size_t choices = 0;
 		for (const RendererQuality::RowTraits& row : RendererQuality::GetRowTraits())
 		{
 			const std::string field(row.Field);
 			CAPTURE(field);
+			if (!row.FollowsPreset)
+			{
+				choices++;
+				CHECK(IsDrawn(PageKey("Choice." + field)));
+				CHECK_FALSE(IsDrawn(PageKey("Row." + field)));
+				continue;
+			}
 			CHECK(IsDrawn(PageKey("Row." + field)));
 			for (const char* preset : { "Low", "Medium", "High", "Ultra" })
 				CHECK(IsDrawn(PageKey("Cell." + field + "." + preset)));
 			CHECK(IsDrawn(PageKey("Custom." + field)));
 		}
-		CHECK(RendererQuality::GetRowTraits().size() == 9); // Shadows and detail (7), the sun's filter taps and contact shadows
+		// Shadows and detail (7), the sun's filter taps and contact shadows, the motion blur's samples; the players' anti-aliasing,
+		// motion blur, depth of field, film grain and chromatic aberration.
+		CHECK(RendererQuality::GetRowTraits().size() == 15);
+		CHECK(choices == 5);
 		// The project's preset, High (the default), is chosen: its header and cells on the accent's highlight.
 		for (const char* preset : { "Low", "Medium", "High", "Ultra", "Custom" })
 			CHECK(IsDrawn(PageKey(std::string("Preset.") + preset)));
@@ -175,14 +187,15 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		editor.Frames(1);
 		CreateProject(editor, "GraphicsQualityMemory");
 		OpenGraphicsQuality(editor);
-		// Cascades plus the local lights' atlas of one view (RowTraits::MemoryBytes).
+		// Cascades plus the local lights' atlas of one view, and the motion blur's targets but at Low, whose motion blur is off
+		// (RowTraits::MemoryBytes; the motion blur's: 24.2 MiB at 1920 x 1080, 96.9 MiB at 3840 x 2160).
 		CHECK(TextOf(PageKey("Memory1080.Low")) == "28 MiB");
-		CHECK(TextOf(PageKey("Memory1080.Medium")) == "128 MiB");
-		CHECK(TextOf(PageKey("Memory1080.High")) == "128 MiB");
-		CHECK(TextOf(PageKey("Memory2160.High")) == "320 MiB");
-		CHECK(TextOf(PageKey("Memory2160.Ultra")) == "1.25 GiB");
+		CHECK(TextOf(PageKey("Memory1080.Medium")) == "152 MiB");
+		CHECK(TextOf(PageKey("Memory1080.High")) == "152 MiB");
+		CHECK(TextOf(PageKey("Memory2160.High")) == "416 MiB");
+		CHECK(TextOf(PageKey("Memory2160.Ultra")) == "1.34 GiB");
 		// Custom's column under High shows where a switch to Custom starts: High's values.
-		CHECK(TextOf(PageKey("Memory2160.Custom")) == "320 MiB");
+		CHECK(TextOf(PageKey("Memory2160.Custom")) == "416 MiB");
 		CHECK(ColorOf(PageKey("Memory2160.High")) == AccentMuted());
 		// The harness renders nothing on a GPU.
 		CHECK(TextOf(PageKey("GPU")) == "GPU times appear while the Scene view renders");
@@ -206,9 +219,9 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		CHECK(editor.Context().GetUndoStack().GetCount() == steps + 1);
 		CHECK_FALSE(editor.Context().IsSceneModified());
 		CHECK(ColorOf(PageKey("Header.Ultra")) == AccentMuted());
-		// Custom's column keeps showing the stored tuning (two cascades of High's), which comes back when Custom is chosen, and
-		// an edit there starts from it, as its tooltip says.
-		CHECK(TextOf(PageKey("Memory2160.Custom")) == "192 MiB");
+		// Custom's column keeps showing the stored tuning (two cascades of High's, 128 MiB, with the atlas and the motion blur's
+		// targets), which comes back when Custom is chosen, and an edit there starts from it, as its tooltip says.
+		CHECK(TextOf(PageKey("Memory2160.Custom")) == "288 MiB");
 		CHECK(HoverCustomTooltip(editor, "ShadowCascades") == "Editing a value switches to Custom, starting from the Custom values chosen earlier, "
 			"which this column shows");
 
@@ -268,7 +281,7 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 
 	TEST_CASE("Rows the presets leave alone appear under Players' choices")
 	{
-		// A section of the test's own with a row that does not follow the preset (the engine's rows all follow it so far).
+		// A section of the test's own with a row that does not follow the preset (a Bool, which the engine's rows are not).
 		const QualityTestModel test;
 		SettingsRegistry registry;
 		EditorPreferences::RegisterSections(registry);

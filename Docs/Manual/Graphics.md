@@ -21,8 +21,9 @@ what each one costs:
 | Smallest drawn size (pixels) | 1 | 0.5 | 0.5 | 0.25 |
 | Sun shadow filter taps (wide soft edges) | 8 | 16 | 24 | 32 |
 | Contact shadow steps | Off | Off | 12 | 16 |
-| Shadow maps and atlas of one view, 1920 x 1080 | 28 MiB | 128 MiB | 128 MiB | 512 MiB |
-| Shadow maps and atlas of one view, 3840 x 2160 | 28 MiB | 128 MiB | 320 MiB | 1.25 GiB |
+| Motion blur samples (scenes with motion blur) | Off | 8 | 12 | 16 |
+| Shadow maps, atlas and motion blur targets of one view, 1920 x 1080 | 28 MiB | 152 MiB | 152 MiB | 536 MiB |
+| Shadow maps, atlas and motion blur targets of one view, 3840 x 2160 | 28 MiB | 224 MiB | 416 MiB | 1.34 GiB |
 
 - **Medium** keeps Strata 0.6.0's shadow map sizes and sample counts, without contact shadows. **High**, the default,
   adds smoother wide sun penumbrae and contact shadows at every size, and sharper sun shadows from 1440 rows on.
@@ -31,11 +32,21 @@ what each one costs:
   **contact shadows** ground small objects the shadow maps are too coarse for (each sun's Contact Shadow Length sets
   how far they reach: [Lighting.md](Lighting.md#shadows)). Neither takes memory of its own; both cost GPU time in the
   `GPU.ScreenShadows` stage.
+- **Motion blur samples** apply only to scenes whose Post Process turns motion blur on (it is off by default, and in the
+  template and the samples): more samples show less streak noise where things move fast, for GPU time in the
+  `GPU.MotionBlur` stage. Its targets take 12 bytes a pixel (24 MiB at 1920 x 1080, 97 MiB at 3840 x 2160), which the
+  memory rows count; Low turns motion blur off. [Camera.md](Camera.md) says what motion blur does.
+- **Players' choices**, below the table, are the same under every preset: comfort and taste rather than cost.
+  **Anti-aliasing** chooses the method whatever the scene uses (Scene: the Post Process's; or Off, FXAA, TAA or
+  Morphological: [AntiAliasing.md](AntiAliasing.md)). **Motion blur**, **Depth of field** (as the camera's lens says),
+  **Film grain** and **Chromatic aberration** are Scene or Off: players may turn off what the scene uses, never turn on
+  what it does not.
 - **Custom** sets each value yourself: the table's Custom column is editable. Choosing a preset keeps your Custom values
   for later, and the column keeps showing them. Editing it while a preset is chosen switches to Custom, starting from
   the values the column shows: your earlier Custom values, or that preset's when you have none (its tooltip says which).
 - The memory is that of one view: each renderer holds its own (the editor's Scene and Game views and its captures, the
-  exported game one), and shadow maps exist only while a light casts shadows.
+  exported game one); shadow maps exist only while a light casts shadows, motion blur targets only while a scene uses
+  motion blur.
 - The page also shows how long the Scene view's shadows and meshes take on the GPU now, so you can see a change's cost.
 
 ## Where quality is chosen

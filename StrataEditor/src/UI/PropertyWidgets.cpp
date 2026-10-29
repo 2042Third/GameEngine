@@ -1155,6 +1155,7 @@ namespace Strata
 				case AssetType::AnimationClip: return Icons::Film;
 				case AssetType::AnimationController: return Icons::Network;
 				case AssetType::World:     return Icons::Earth;
+				case AssetType::ColorLookup: return Icons::Blend;
 				case AssetType::None:      break;
 			}
 			return Icons::File;
@@ -1176,6 +1177,7 @@ namespace Strata
 				case AssetType::AnimationClip: return "Animation Clip";
 				case AssetType::AnimationController: return "Animation Controller";
 				case AssetType::World:     return "World";
+				case AssetType::ColorLookup: return "Color Lookup";
 				case AssetType::None:      break;
 			}
 			return "Asset";

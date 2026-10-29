@@ -49,6 +49,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
@@ -1437,6 +1438,72 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture's renderStats report what automatic exposure metered, its key and the sun's gray card, and the camera effects")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		const std::string postProcess = harness.Run("entity.create", { { "name", "PostProcess" }, { "components", { { "PostProcess", { { "AutoExposure", true },
+			{ "AutoExposureMaxEV", 16.0 }, { "Bloom", false }, { "AmbientOcclusion", false }, { "AntiAliasing", false } } } } } })["id"].get<std::string>();
+		Scene& scene = *harness.Context.GetActiveScene();
+		Entity floor = scene.CreateEntity("Floor");
+		floor.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		floor.GetComponent<TransformComponent>().Scale = glm::vec3(60.0f, 1.0f, 60.0f);
+		floor.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		Entity sun = scene.CreateEntity("Sun");
+		sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::normalize(glm::vec3(0.3f, -1.0f, 0.2f)));
+		sun.AddComponent<DirectionalLightComponent>().Intensity = 1000.0f;
+		harness.Run("camera.set", { { "position", { 0, 6, 8 } }, { "target", { 0, 0, 0 } } });
+		auto capture = [&]()
+		{
+			nlohmann::json result;
+			harness.CaptureLoaded({ { "width", 128 }, { "height", 128 }, { "overlays", false } }, &result);
+			CHECK(result["preExposureSettled"] == true);
+			ViewportRenderer* renderer = harness.Context.GetViewport().GetCaptureRenderer();
+			REQUIRE(renderer);
+			return std::make_pair(result["renderStats"], renderer->GetSceneRenderer().GetStats());
+		};
+
+		auto [stats, rendered] = capture();
+		REQUIRE(rendered.ExposureLog2Luminance.has_value());
+		REQUIRE(stats["exposure"].is_object());
+		// EV100 is log2 of the metered luminance plus 3; the key and the card are the renderer's.
+		CHECK(stats["exposure"]["ev100"].get<double>() == doctest::Approx(*rendered.ExposureLog2Luminance + 3.0f));
+		CHECK(stats["exposure"]["keyStops"].get<double>() == doctest::Approx(rendered.ExposureKeyStops));
+		CHECK(rendered.ExposureKeyStops <= 0.0f);
+		// The card: 0.18 of the sun's illuminance over pi, as nits (a white light, no atmosphere).
+		CHECK(stats["exposure"]["cardEv100"].get<double>() == doctest::Approx(std::log2(1000.0 * 0.18 / glm::pi<double>()) + 3.0).epsilon(0.001));
+		// The floor (the default material, lighter than the card's 0.18) in the sun meters above its card: the key leaves it be.
+		CHECK(stats["exposure"]["ev100"].get<double>() > stats["exposure"]["cardEv100"].get<double>());
+		CHECK(stats["exposure"]["keyStops"] == 0.0);
+		// Off by default: no motion blur, depth of field, color lookup or lens flare.
+		CHECK(stats["motionBlur"].is_null());
+		CHECK(stats["depthOfField"].is_null());
+		CHECK(stats["colorLookup"] == false);
+		CHECK(stats["lensFlare"].is_null());
+
+		// Lens flares on, the sun behind the camera: they run, without the starburst.
+		harness.Run("component.set", { { "entity", postProcess }, { "component", "PostProcess" }, { "values", { { "LensFlare", 0.5 } } } });
+		stats = capture().first;
+		REQUIRE(stats["lensFlare"].is_object());
+		CHECK(stats["lensFlare"]["sunInFront"] == false);
+
+		// Without the directional light (and without the editor's preview sun, which would stand in): still metered, no card (this
+		// frame's light; the metering comes frames late).
+		harness.Run("viewport.setSettings", { { "previewLighting", false } });
+		scene.DestroyEntity(sun);
+		stats = capture().first;
+		REQUIRE(stats["exposure"].is_object());
+		CHECK(stats["exposure"]["cardEv100"].is_null());
+
+		// Manual exposure meters nothing.
+		harness.Run("component.set", { { "entity", postProcess }, { "component", "PostProcess" }, { "values", { { "AutoExposure", false } } } });
+		stats = capture().first;
+		CHECK(stats["exposure"].is_null());
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A capture of a scene with sixteen shadowed point lights shows every light's shadow in its first complete frame")
 	{
 		Tests::GPUContext gpu;
@@ -2226,6 +2293,89 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(sceneView->Render(context, glm::uvec2(64, 64), *editorView, viewport.GetSettings(), true, ResolveViewportQuality(viewport.GetSettings().Quality)));
 		CHECK(sceneView->GetSceneRenderer().GetQuality() == RendererQuality::GetPreset(RendererQualityPreset::Low));
 		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Editor views never blur; the Game view blurs while playing; captures never blur")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", { { "Primary", true } } },
+			{ "Transform", { { "Translation", { 0, 0, 5 } } } } } } });
+		EditorContext& context = harness.Context;
+		// Every Post Process of the scene blurs (the scene the harness adds has one; the first active one applies).
+		harness.Run("entity.create", { { "name", "Post" }, { "components", { { "PostProcess", { { "MotionBlur", true } } } } } });
+		for (auto [entity, postProcess] : context.GetActiveScene()->GetRegistry().view<PostProcessComponent>().each())
+			postProcess.MotionBlur = true;
+		EditorViewport& viewport = context.GetViewport();
+		harness.Run("viewport.setSettings", { { "gameView", { { "mode", "1280x720" } } } });
+		const glm::uvec2 size(1280, 720);
+		auto renderTwice = [&](ViewportRenderer& renderer, ViewportCameraSource source)
+		{
+			for (int frame = 0; frame < 2; frame++)
+			{
+				const std::optional<ViewportView> view = ResolveViewportView(context, source, 1280.0f / 720.0f);
+				REQUIRE(view);
+				REQUIRE(renderer.Render(context, size, *view, viewport.GetSettings(), false, RendererQuality::GetProjectQuality()));
+			}
+			return renderer.GetStats().MotionBlurred;
+		};
+		REQUIRE(viewport.GetGameRenderer());
+		// In edit mode nothing blurs: the scene is still, and moves made by editing are not the game's.
+		CHECK_FALSE(renderTwice(*viewport.GetGameRenderer(), ViewportCameraSource::Scene));
+		CHECK_FALSE(renderTwice(*viewport.GetRenderer(), ViewportCameraSource::Editor));
+		harness.Run("play.start", { { "build", false } });
+		// Playing, the game's camera blurs (its passes run on every frame with a motion history); the editor camera never does.
+		CHECK(renderTwice(*viewport.GetGameRenderer(), ViewportCameraSource::Scene));
+		CHECK_FALSE(renderTwice(*viewport.GetRenderer(), ViewportCameraSource::Editor));
+		// Captures are single pictures: the capture renderer renders its view again for its settle frames, and never blurs.
+		harness.Capture({ { "camera", "scene" }, { "waitForAssets", false } });
+		REQUIRE(viewport.GetCaptureRenderer());
+		CHECK_FALSE(viewport.GetCaptureRenderer()->GetStats().MotionBlurred);
+		harness.Run("play.stop");
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Views and captures through a scene camera with depth of field defocus; the editor camera never does")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		const std::string camera = harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", { { "Primary", true },
+			{ "DepthOfField", true }, { "FocusDistance", 3.0 }, { "Aperture", 1.4 } } }, { "Transform", { { "Translation", { 0, 0, 5 } } } } } } })["id"].get<std::string>();
+		EditorContext& context = harness.Context;
+		EditorViewport& viewport = context.GetViewport();
+		harness.Run("viewport.setSettings", { { "gameView", { { "mode", "1280x720" } } } });
+		const glm::uvec2 size(1280, 720);
+		auto render = [&](ViewportRenderer& renderer, ViewportCameraSource source)
+		{
+			const std::optional<ViewportView> view = ResolveViewportView(context, source, 1280.0f / 720.0f);
+			REQUIRE(view);
+			if (!view->FromScene)
+				CHECK_FALSE(view->Lens.has_value()); // The editor camera never has a lens
+			REQUIRE(renderer.Render(context, size, *view, viewport.GetSettings(), false, RendererQuality::GetProjectQuality()));
+			return renderer.GetStats();
+		};
+		REQUIRE(viewport.GetGameRenderer());
+		// A lens is not a moment: the game's camera defocuses in edit mode too.
+		const SceneRendererStats game = render(*viewport.GetGameRenderer(), ViewportCameraSource::Scene);
+		CHECK(game.DepthOfField);
+		CHECK(game.DepthOfFieldLens.FocusDistance == doctest::Approx(3.0f));
+		CHECK(game.DepthOfFieldLens.FNumber == doctest::Approx(1.4f));
+		CHECK_FALSE(render(*viewport.GetRenderer(), ViewportCameraSource::Editor).DepthOfField);
+		nlohmann::json capture;
+		harness.Capture({ { "camera", "scene" }, { "waitForAssets", false } }, &capture);
+		REQUIRE(viewport.GetCaptureRenderer());
+		CHECK(viewport.GetCaptureRenderer()->GetStats().DepthOfField);
+		CHECK(capture["renderStats"]["depthOfField"]["fNumber"].get<double>() == doctest::Approx(1.4));
+		harness.Capture({ { "camera", "editor" }, { "waitForAssets", false } });
+		CHECK_FALSE(viewport.GetCaptureRenderer()->GetStats().DepthOfField);
+		// Off on the camera: no lens.
+		harness.Run("component.set", { { "entity", camera }, { "component", "Camera" }, { "values", { { "DepthOfField", false } } } });
+		CHECK_FALSE(render(*viewport.GetGameRenderer(), ViewportCameraSource::Scene).DepthOfField);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

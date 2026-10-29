@@ -157,13 +157,25 @@ namespace Strata
 		static constexpr float c_MinExtent = 0.01f; // Meters: a box of no size would reflect nothing
 	};
 
+	// The tone curve of PostProcessComponent. The values are script and file API: they never change; new curves are appended.
 	enum class TonemapOperator : uint8_t
 	{
 		None = 0,
 		Reinhard,
 		ACES,
 		AgX,
-		KhronosNeutral
+		KhronosNeutral,
+		// The engine's camera-like curve (Include/Filmic.glsl, Tools/FitFilmic.py): middle gray shown as middle gray, a soft
+		// shoulder that takes bright colors to white without changing their hue; shaped by PostProcessComponent::Toe, Shoulder
+		Filmic
+	};
+
+	// How automatic exposure weighs the image's pixels (PostProcessComponent::AutoExposureMetering). The values are script and
+	// file API: they never change.
+	enum class ExposureMetering : uint8_t
+	{
+		Average = 0,       // Every pixel alike
+		CenterWeighted = 1 // The middle of the image counts most and its edges a quarter, as a camera's center-weighted meter
 	};
 
 	// How PostProcessComponent::AntiAliasing smooths edges.
@@ -172,7 +184,10 @@ namespace Strata
 		FXAA = 0, // Fast approximate anti-aliasing of the finished image
 		// Temporal anti-aliasing: each frame samples its pixels at another sub-pixel offset and is blended with the renderer's
 		// history of earlier frames, reprojected along the motion vectors (SceneRendererSpecification::TemporalAntiAliasing)
-		TAA
+		TAA,
+		// Morphological anti-aliasing of each frame on its own: finds edges, reconstructs the lines their staircases stand for
+		// and blends across them by the areas the lines cover (nothing temporal)
+		Morphological
 	};
 
 	// How the TAA looks (PostProcessComponent::TAAPreset). The values are script and file API: they never change.
@@ -233,11 +248,14 @@ namespace Strata
 	// without one use the defaults.
 	struct PostProcessComponent
 	{
-		TonemapOperator Tonemapper = TonemapOperator::ACES;
+		// Filmic for new components and scenes without one (ACES until 0.7.0: files store the curve, so their scenes keep it).
+		TonemapOperator Tonemapper = TonemapOperator::Filmic;
 		float Exposure = 0.0f; // Exposure compensation in EV (stops); the only exposure without AutoExposure
-		// Automatic exposure maps the average luminance of the image's non-black pixels to middle gray. The average is
-		// clamped to [2^MinEV, 2^MaxEV] and approached at AutoExposureSpeed per second (0 = instantly). MaxEV reaches what
-		// a scene lit by a real sun meters (around 15); scenes saved with another value keep it.
+		// Automatic exposure maps the average luminance of the image's non-black pixels (between the metering window's
+		// percentiles, weighed by AutoExposureMetering) to middle gray, offset by the exposure key. The average is clamped to
+		// [2^MinEV, 2^MaxEV] and approached at AutoExposureSpeed per second toward darker scenes and AutoExposureLightSpeed
+		// toward brighter ones (0 = instantly). MaxEV reaches what a scene lit by a real sun meters (around 15); scenes saved
+		// with another value keep it.
 		bool AutoExposure = true;
 		float AutoExposureMinEV = -4.0f;
 		float AutoExposureMaxEV = 16.0f;
@@ -245,6 +263,15 @@ namespace Strata
 		bool Bloom = true;
 		float BloomIntensity = 0.04f; // Fraction of the light scattered into the glow
 		float BloomThreshold = 0.0f;  // Only light brighter than this (after exposure) blooms; 0 = all light
+		// How far the glow reaches, as a fraction of the image's height (its deepest level's texel): the same share of the image
+		// at every resolution. 64 / 1080 by default: 1080 rows use 0.6.0's six levels exactly, 2160 rows seven.
+		float BloomRadius = 64.0f / 1080.0f;
+		// Motion blur (off by default): what moves on screen blurs over the shutter's share of each frame (MotionBlurShutterAngle
+		// degrees of 360: 180 blurs over half a frame's motion), clamped to MotionBlurMaxLength of the image's height. Editor views
+		// never blur, and players can turn it off (RendererQualitySettings::MotionBlur).
+		bool MotionBlur = false;
+		float MotionBlurShutterAngle = 180.0f;
+		float MotionBlurMaxLength = 0.02f;
 		bool AmbientOcclusion = true;
 		float AmbientOcclusionRadius = 0.6f; // World units
 		float AmbientOcclusionIntensity = 1.0f;
@@ -269,9 +296,48 @@ namespace Strata
 		bool ScreenSpaceReflections = false;
 		float ScreenSpaceReflectionsIntensity = 1.0f;    // How much they replace the probes' and the sky's reflection, 0 to 1
 		float ScreenSpaceReflectionsMaxRoughness = 0.5f; // Rougher surfaces reflect nothing; the last quarter below it fades
-		float Vignette = 0.2f;
+		// A lens's natural darkening toward the corners, applied before the tone curve: the share of cos^4 of the field angle
+		// (1: a lens's full fall-off). 0.12 darkens a 60 degree view's corners by about 10% (0.2 until 0.7.0, a ring after the
+		// curve: files keep their value under the lens's model).
+		float Vignette = 0.12f;
+		// A lens's and film's flaws, with restraint (off by default; players can turn each off): grain in the mid-tones that
+		// changes every frame (FilmGrain 1: about 10 codes of spread), and lateral chromatic aberration, red and blue fringes
+		// toward the corners (ChromaticAberration 1: half a pixel at a 3840x2160 image's corners).
+		float FilmGrain = 0.0f;
+		float ChromaticAberration = 0.0f;
+		// A grade made in another tool (a ColorLookup asset, imported from a .cube file), applied after the tone curve and the
+		// saturation to the display-encoded image, mixed in by ColorLookupIntensity. Nothing applies while it loads.
+		AssetHandle ColorLookup = UUID::Null();
+		float ColorLookupIntensity = 1.0f;
+		// A lens's flares around very bright light (0: none): ghosts mirrored through the image's center, a halo and the
+		// directional light's starburst when its disk is in view. The bloom chain feeds them (it runs for them with Bloom off).
+		float LensFlare = 0.0f;
 		float Saturation = 1.0f;
 		float Contrast = 1.0f; // Around middle gray; 1 = unchanged
+		// The Filmic curve's look, each in [0, 1]: how deep the shadows go (higher crushes the darkest tones) and how softly the
+		// highlights roll off to white (higher reaches white more stops above middle gray: 5 at 0, 6.5 at 0.5, 8 at 1).
+		float Toe = 0.5f;
+		float Shoulder = 0.5f;
+		// Color, on scene-linear light before the tone curve (Saturation is after it): the white balance names the light that
+		// shows as white, by its temperature in kelvin (2,000 to 15,000; 6500 is neutral) and a tint along green-magenta (-1 to
+		// 1, positive adds magenta); then a per-channel slope (gain), offset (light added, in fractions of middle gray) and
+		// power around middle gray. The defaults change nothing.
+		float WhiteBalanceTemperature = 6500.0f;
+		float WhiteBalanceTint = 0.0f;
+		glm::vec3 ColorSlope = glm::vec3(1.0f);
+		glm::vec3 ColorOffset = glm::vec3(0.0f);
+		glm::vec3 ColorPower = glm::vec3(1.0f);
+		// Automatic exposure's metering: the pixels' weights, and the darkest and brightest shares of them ignored (so deep
+		// shadows and light sources do not move the exposure; HighPercentile - LowPercentile is at least 0.02).
+		ExposureMetering AutoExposureMetering = ExposureMetering::CenterWeighted;
+		float AutoExposureLowPercentile = 0.1f;
+		float AutoExposureHighPercentile = 0.9f;
+		float AutoExposureLightSpeed = 3.0f; // Per second, toward brighter scenes (eyes leaving a tunnel); 0 = instantly
+		// The exposure key: the metered average's stops below the luminance of a gray card facing the scene's directional light,
+		// times this, darken the image by up to 2 stops, so interiors read darker than sunlight as far as their light is darker;
+		// a scene above the card is not brightened (RenderData::c_ExposureKeyMaxStops). 0 meters every scene to middle gray;
+		// without a directional light there is no key.
+		float AutoExposureKey = 0.12f;
 	};
 
 	// The settings the TAA resolves with: the preset's table, or the component's tunables under Custom, clamped to their

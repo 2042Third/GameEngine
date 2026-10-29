@@ -215,14 +215,29 @@ namespace Strata::Tests
 		return result;
 	}
 
+	// The specification of renderers whose pixels tests compare with exact values: textures resident at full resolution
+	// (no streaming) and an undithered output (SceneRendererSpecification::DitherOutput). Comparisons of two renderers of one
+	// specification need neither (the dither is the same every frame).
+	inline SceneRendererSpecification ExactSpecification()
+	{
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		specification.DitherOutput = false;
+		return specification;
+	}
+
 	// Plain output: no tone curve, no vignette, no bloom, ambient occlusion or anti-aliasing, so unlit colors come out
-	// unchanged.
+	// unchanged (up to the output's dither: renderers of exact colors also take ExactSpecification).
 	inline PostProcessComponent& AddNeutralPostProcess(Scene& scene)
 	{
 		PostProcessComponent& postProcess = scene.CreateEntity("PostProcess").AddComponent<PostProcessComponent>();
 		postProcess.Tonemapper = TonemapOperator::None;
 		postProcess.AutoExposure = false;
 		postProcess.Exposure = 0.0f;
+		// Tests that turn automatic exposure on meter as 0.6.0 did: every pixel alike, one speed both ways, no key.
+		postProcess.AutoExposureMetering = ExposureMetering::Average;
+		postProcess.AutoExposureLightSpeed = postProcess.AutoExposureSpeed;
+		postProcess.AutoExposureKey = 0.0f;
 		postProcess.Vignette = 0.0f;
 		postProcess.Bloom = false;
 		postProcess.AmbientOcclusion = false;

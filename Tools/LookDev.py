@@ -47,6 +47,7 @@ AA_MODES = {
     "taa": {"AntiAliasing": True, "AntiAliasingMethod": "TAA"},
     "fxaa": {"AntiAliasing": True, "AntiAliasingMethod": "FXAA"},
     "off": {"AntiAliasing": False},
+    "morph": {"AntiAliasing": True, "AntiAliasingMethod": "Morphological"},
 }
 QUALITIES = ("project", "low", "medium", "high", "ultra")
 # viewport.capture's debug views: the stills of a run show one of them, and its result's debugView (with the shadows view's
@@ -485,7 +486,8 @@ def camera_parameters(shot):
 
 
 def resolve_setup(editor, step):
-    """A setup step's parameters, its "entityName" replaced by the first entity of that name."""
+    """A setup step's parameters, its "entityName" replaced by the first entity of that name and its "repoFile" (a path in
+    the repository, for asset.import) by that file's absolute path as "file"."""
     params = json.loads(json.dumps(step.get("Parameters", {})))
     name = params.pop("entityName", None)
     if name is not None:
@@ -493,6 +495,12 @@ def resolve_setup(editor, step):
         if not found:
             raise ToolError(f"setup: no entity named {name}")
         params["entity"] = found[0]
+    repo_file = params.pop("repoFile", None)
+    if repo_file is not None:
+        path = (ROOT / repo_file).resolve()
+        if not path.is_file():
+            raise ToolError(f"setup: no file {repo_file} in the repository")
+        params["file"] = str(path)
     return params
 
 
@@ -660,7 +668,7 @@ def capture_command(args):
     modes = [mode.strip() for mode in args.aa.split(",") if mode.strip()]
     for mode in modes:
         if mode not in AA_MODES:
-            raise ToolError(f"--aa: unknown mode {mode} (taa, fxaa, off)")
+            raise ToolError(f"--aa: unknown mode {mode} (taa, fxaa, off, morph)")
     if args.quality not in QUALITIES:
         raise ToolError(f"--quality: one of {', '.join(QUALITIES)}")
     if args.repeat < 1:

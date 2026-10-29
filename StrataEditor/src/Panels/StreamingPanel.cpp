@@ -259,6 +259,8 @@ namespace Strata
 			return "Animation";
 		if (type == AssetType::AnimationController)
 			return "Controller";
+		if (type == AssetType::ColorLookup)
+			return "Lookup";
 		return AssetTypeToString(type);
 	}
 

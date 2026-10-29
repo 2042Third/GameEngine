@@ -102,19 +102,22 @@ TEST_SUITE("Reflection")
 		CHECK_FALSE(projection->SetValue(&camera, int32_t(7)));
 		CHECK(camera.Projection == ProjectionType::Orthographic);
 
-		// Post-processing's anti-aliasing method: FXAA by default, its two choices only.
+		// Post-processing's anti-aliasing method: FXAA by default, its three choices only.
 		const PropertyInfo* method = ComponentRegistry::Find<PostProcessComponent>()->FindProperty("AntiAliasingMethod");
 		REQUIRE(method);
 		CHECK(method->Type == PropertyType::Enum);
-		REQUIRE(method->EnumValues.size() == 2);
+		REQUIRE(method->EnumValues.size() == 3);
 		CHECK(method->EnumValues[0].Name == "FXAA");
 		CHECK(method->EnumValues[1].Name == "TAA");
+		CHECK(method->EnumValues[2].Name == "Morphological");
 		PostProcessComponent postProcess;
 		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::FXAA);
 		CHECK(method->SetValue(&postProcess, int32_t(1)));
 		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::TAA);
-		CHECK_FALSE(method->SetValue(&postProcess, int32_t(2)));
-		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::TAA);
+		CHECK(method->SetValue(&postProcess, int32_t(2)));
+		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::Morphological);
+		CHECK_FALSE(method->SetValue(&postProcess, int32_t(3)));
+		CHECK(postProcess.AntiAliasingMethod == AntiAliasingMode::Morphological);
 
 		// The TAA's preset and tunables, right after the method: the enums' names and values (file and script API), the
 		// tunables' ranges and tooltips, and their defaults, Sharp's table.
@@ -551,6 +554,15 @@ TEST_SUITE("Scene.InactiveProperties")
 		CHECK(reason("PostProcess", "BloomThreshold") == "Bloom is off");
 		CHECK(reason("PostProcess", "AmbientOcclusionRadius") == "Ambient Occlusion is off");
 		CHECK(reason("PostProcess", "Exposure").empty());
+		// The Filmic curve's look only with Filmic.
+		CHECK(reason("PostProcess", "Toe").empty());
+		CHECK(reason("PostProcess", "Shoulder").empty());
+		post.Tonemapper = TonemapOperator::ACES;
+		CHECK(reason("PostProcess", "Toe") == "Only the Filmic curve has a toe (Tonemapper is ACES)");
+		CHECK(reason("PostProcess", "Shoulder") == "Only the Filmic curve has a shoulder (Tonemapper is ACES)");
+		post.Tonemapper = TonemapOperator::KhronosNeutral;
+		CHECK(reason("PostProcess", "Toe") == "Only the Filmic curve has a toe (Tonemapper is Khronos Neutral)");
+		post.Tonemapper = TonemapOperator::Filmic;
 		post.AutoExposure = true;
 		post.Bloom = true;
 		post.AmbientOcclusion = true;
@@ -558,6 +570,31 @@ TEST_SUITE("Scene.InactiveProperties")
 		for (const char* property : { "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed", "BloomIntensity", "BloomThreshold",
 			"AmbientOcclusionRadius", "AmbientOcclusionIntensity", "AntiAliasingMethod" })
 			CHECK_MESSAGE(reason("PostProcess", property).empty(), property);
+		// The bloom's radius only with bloom.
+		CHECK(reason("PostProcess", "BloomRadius").empty());
+		post.Bloom = false;
+		CHECK(reason("PostProcess", "BloomRadius") == "Bloom is off");
+		post.Bloom = true;
+		// The motion blur's shutter and length only with motion blur.
+		CHECK(reason("PostProcess", "MotionBlurShutterAngle") == "Motion Blur is off");
+		CHECK(reason("PostProcess", "MotionBlurMaxLength") == "Motion Blur is off");
+		post.MotionBlur = true;
+		CHECK(reason("PostProcess", "MotionBlurShutterAngle").empty());
+		post.MotionBlur = false;
+		// The color lookup's intensity only with a lookup.
+		CHECK(reason("PostProcess", "ColorLookupIntensity") == "No Color Lookup is set");
+		CHECK(reason("PostProcess", "ColorLookup").empty());
+		post.ColorLookup = UUID(0xC0105ull);
+		CHECK(reason("PostProcess", "ColorLookupIntensity").empty());
+		post.ColorLookup = UUID::Null();
+		// The metering, its window, the light adaptation and the key: automatic exposure's.
+		for (const char* property : { "AutoExposureMetering", "AutoExposureLowPercentile", "AutoExposureHighPercentile", "AutoExposureLightSpeed", "AutoExposureKey" })
+		{
+			CHECK_MESSAGE(reason("PostProcess", property).empty(), property);
+			post.AutoExposure = false;
+			CHECK_MESSAGE(reason("PostProcess", property) == "Auto Exposure is off", property);
+			post.AutoExposure = true;
+		}
 
 		// The TAA's preset and tunables: inactive without anti-aliasing, with FXAA, and (the tunables) unless Custom, quoting the
 		// preset's value or why it reads none; under Custom, the clip width only for tight clipping and the threshold only with
@@ -570,6 +607,8 @@ TEST_SUITE("Scene.InactiveProperties")
 		post.AntiAliasing = true;
 		for (const char* property : temporal)
 			CHECK_MESSAGE(reason("PostProcess", property) == "Only TAA uses it (Anti Aliasing Method is FXAA)", property);
+		post.AntiAliasingMethod = AntiAliasingMode::Morphological;
+		CHECK(reason("PostProcess", "TAAPreset") == "Only TAA uses it (Anti Aliasing Method is Morphological)");
 		post.AntiAliasingMethod = AntiAliasingMode::TAA;
 		CHECK(reason("PostProcess", "TAAPreset").empty());
 		post.TAAPreset = TemporalAntiAliasingPreset::Sharp;
@@ -618,9 +657,22 @@ TEST_SUITE("Scene.InactiveProperties")
 		CameraComponent& camera = entity.AddComponent<CameraComponent>();
 		CHECK(reason("Camera", "PerspectiveFOV").empty());
 		CHECK_FALSE(reason("Camera", "OrthographicSize").empty());
+		// The lens: only with depth of field on a perspective camera; a focus entity sets the distance.
+		for (const char* property : { "FocusDistance", "FocusEntity", "Aperture", "SensorHeight" })
+			CHECK_MESSAGE(reason("Camera", property) == "Depth Of Field is off", property);
+		CHECK(reason("Camera", "DepthOfField").empty());
+		camera.DepthOfField = true;
+		for (const char* property : { "FocusDistance", "FocusEntity", "Aperture", "SensorHeight" })
+			CHECK_MESSAGE(reason("Camera", property).empty(), property);
+		camera.FocusEntity = UUID(0xF0C5);
+		CHECK(reason("Camera", "FocusDistance") == "A Focus Entity sets the distance");
+		CHECK(reason("Camera", "Aperture").empty());
 		camera.Projection = ProjectionType::Orthographic;
 		CHECK_FALSE(reason("Camera", "PerspectiveNear").empty());
 		CHECK(reason("Camera", "OrthographicFar").empty());
+		CHECK(reason("Camera", "Aperture") == "Orthographic cameras have no depth of field");
+		CHECK(reason("Camera", "FocusDistance") == "Orthographic cameras have no depth of field");
+		CHECK_FALSE(reason("Camera", "DepthOfField").empty());
 #if ST_WITH_ANIMATION
 		AnimatorComponent& animator = entity.AddComponent<AnimatorComponent>();
 		CHECK(reason("Animator", "Clip").empty());

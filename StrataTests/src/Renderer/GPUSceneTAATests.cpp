@@ -567,4 +567,58 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("The players' anti-aliasing row overrides the scene's method")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		PostProcessComponent& postProcess = AddNeutralPostProcess(scene);
+		postProcess.AntiAliasing = true;
+		postProcess.AntiAliasingMethod = AntiAliasingMode::FXAA;
+		Entity quad = AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(UnlitColor({ 1.0f, 1.0f, 1.0f, 1.0f })), glm::vec3(0.0f), "Quad");
+		quad.GetComponent<TransformComponent>().Rotation = glm::angleAxis(glm::radians(20.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f));
+		// FXAA and TAA leave partly covered pixels along the rotated quad's edges; without anti-aliasing every pixel is black or white.
+		auto partial = [](const ReadbackImage& image)
+		{
+			uint32_t count = 0;
+			for (uint32_t y = 0; y < image.Height; y++)
+			{
+				for (uint32_t x = 0; x < image.Width; x++)
+				{
+					const int value = Red(image, x, y);
+					count += value > 20 && value < 235 ? 1u : 0u;
+				}
+			}
+			return count;
+		};
+		struct Case
+		{
+			AntiAliasingChoice Choice;
+			bool SceneAntiAliasing;
+			bool Smooth;
+			bool Temporal;
+			bool Morphological = false;
+		};
+		for (const Case& testCase : { Case { AntiAliasingChoice::Scene, true, true, false }, Case { AntiAliasingChoice::Off, true, false, false },
+				 Case { AntiAliasingChoice::FXAA, false, true, false }, Case { AntiAliasingChoice::TAA, false, true, true },
+				 Case { AntiAliasingChoice::Morphological, false, true, false, true } })
+		{
+			SceneRendererSpecification specification = ExactSpecification();
+			specification.Quality.AntiAliasing = testCase.Choice;
+			postProcess.AntiAliasing = testCase.SceneAntiAliasing;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_SceneTestSize, c_SceneTestSize);
+			ReadbackImage image;
+			for (int frame = 0; frame < 4; frame++)
+				image = RenderToImage(renderer, scene, camera);
+			CAPTURE(static_cast<int>(testCase.Choice));
+			CHECK((partial(image) > 20) == testCase.Smooth);
+			CHECK(renderer.GetStats().TemporalAntiAliasing == testCase.Temporal);
+			CHECK(renderer.GetStats().MorphologicalAntiAliasing == testCase.Morphological);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

@@ -5,6 +5,7 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/ProjectSettings.h"
 #include "Strata/Core/SettingsRegistry.h"
+#include "Strata/Renderer/PostProcessData.h"
 
 #include <nlohmann/json.hpp>
 
@@ -40,6 +41,7 @@ namespace Strata
 		constexpr PresetRow<float> c_MinProjectedPixelsRow = { 1.0f, 0.5f, 0.5f, 0.25f };
 		constexpr PresetRow<uint32_t> c_ShadowFilterQualityRow = { 8, 16, 24, 32 };
 		constexpr PresetRow<uint32_t> c_ContactShadowsRow = { 0, 0, 12, 16 };
+		constexpr PresetRow<MotionBlurSamples> c_MotionBlurQualityRow = { MotionBlurSamples::Off, MotionBlurSamples::Samples8, MotionBlurSamples::Samples12, MotionBlurSamples::Samples16 };
 
 		// GPU memory of the rows that allocate (RowTraits::MemoryBytes), as the renderer makes the resources.
 		uint64_t CascadeBytes(const RendererQualitySettings& settings, glm::uvec2 output)
@@ -56,6 +58,18 @@ namespace Strata
 			return size * size * 4;
 		}
 
+		uint64_t MotionBlurBytes(const RendererQualitySettings& settings, glm::uvec2 output)
+		{
+			// For a scene that blurs (SceneRenderer::EnsureMotionBlurResources): the RGBA16F output and the R32_UINT pixel target,
+			// viewport-sized, and the two RGBA16F tile targets. With no samples, or the players' Motion blur Off, none.
+			if (settings.MotionBlurQuality == MotionBlurSamples::Off || settings.MotionBlur == SceneEffectChoice::Off)
+				return 0;
+			const uint64_t pixels = static_cast<uint64_t>(output.x) * output.y;
+			const uint64_t tiles = static_cast<uint64_t>((output.x + RenderData::c_MotionBlurMinTileSize - 1) / RenderData::c_MotionBlurMinTileSize)
+				* ((output.y + RenderData::c_MotionBlurMinTileSize - 1) / RenderData::c_MotionBlurMinTileSize);
+			return pixels * (8 + 4) + 2 * tiles * 8;
+		}
+
 		// What graphics options know of each field but Preset, in field order: one line per row, beside its PresetRow line.
 		constexpr RendererQuality::RowTraits c_RowTraits[] = {
 			{ "ShadowResolution", true, "GPU.Shadows", &CascadeBytes },
@@ -67,6 +81,13 @@ namespace Strata
 			{ "MinProjectedPixels", true, "GPU.Opaque", nullptr },
 			{ "ShadowFilterQuality", true, "GPU.ScreenShadows", nullptr }, // The filter runs in the mask's pass; taps allocate nothing
 			{ "ContactShadows", true, "GPU.ScreenShadows", nullptr },      // Marches through the mask's own two targets
+			{ "MotionBlurQuality", true, "GPU.MotionBlur", &MotionBlurBytes },
+			// The players' rows: comfort and preference, not cost.
+			{ "AntiAliasing", false, "", nullptr },                 // Its cost is the chosen method's (GPU.TAA or GPU.Post)
+			{ "MotionBlur", false, "GPU.MotionBlur", nullptr },     // Counted with MotionBlurQuality
+			{ "DepthOfField", false, "GPU.DepthOfField", nullptr }, // The scene's lens sizes its targets, not the quality
+			{ "FilmGrain", false, "GPU.Post", nullptr },            // Added by the pass that writes the display image
+			{ "ChromaticAberration", false, "GPU.Post", nullptr },  // Applied by the tone mapping
 		};
 
 		constexpr uint32_t c_MinLocalShadowAtlasSize = 512;
@@ -99,6 +120,36 @@ namespace Strata
 		constexpr ResolutionName c_ResolutionNames[] = { { ShadowMapResolution::Auto, "Auto" }, { ShadowMapResolution::AutoFine, "AutoFine" },
 			{ ShadowMapResolution::Size1024, "1024" }, { ShadowMapResolution::Size2048, "2048" }, { ShadowMapResolution::Size4096, "4096" },
 			{ ShadowMapResolution::Size8192, "8192" } };
+
+		// The names of an enum row's values, in value order (the files and scripts store the names).
+		constexpr const char* c_MotionBlurSamplesNames[] = { "Off", "Samples8", "Samples12", "Samples16" };
+		constexpr uint32_t c_MotionBlurSampleCounts[] = { 0, 8, 12, 16 };
+		constexpr const char* c_AntiAliasingChoiceNames[] = { "Scene", "Off", "FXAA", "TAA", "Morphological" };
+		constexpr const char* c_SceneEffectChoiceNames[] = { "Scene", "Off" };
+
+		template<typename T, size_t N>
+		const char* EnumToString(T value, const char* const (&names)[N])
+		{
+			const size_t index = static_cast<size_t>(value);
+			return index < N ? names[index] : names[0];
+		}
+
+		template<typename T, size_t N>
+		std::optional<T> EnumFromString(std::string_view name, const char* const (&names)[N])
+		{
+			for (size_t index = 0; index < N; index++)
+			{
+				if (name == names[index])
+					return static_cast<T>(index);
+			}
+			return std::nullopt;
+		}
+
+		template<size_t N>
+		std::vector<std::string> EnumOptions(const char* const (&names)[N])
+		{
+			return std::vector<std::string>(std::begin(names), std::end(names));
+		}
 
 		uint32_t FloorPowerOfTwo(uint32_t value)
 		{
@@ -157,6 +208,18 @@ namespace Strata
 			const nlohmann::json* member = JsonUtils::Find(value, name);
 			if (member && member->is_number())
 				knob = member->get<float>();
+		}
+
+		// An enum row stored as its value's name.
+		template<typename T, size_t N>
+		void ReadEnumField(const nlohmann::json& value, std::string_view name, const char* const (&names)[N], T& knob)
+		{
+			const nlohmann::json* member = JsonUtils::Find(value, name);
+			if (member && member->is_string())
+			{
+				if (std::optional<T> parsed = EnumFromString<T>(member->get_ref<const std::string&>(), names))
+					knob = *parsed;
+			}
 		}
 
 		SettingsField EnumField(const char* name, const char* title, std::string description, std::vector<std::string> options, std::string defaultValue)
@@ -267,6 +330,7 @@ namespace Strata
 					settings.MinProjectedPixels = c_MinProjectedPixelsRow[index];
 					settings.ShadowFilterQuality = c_ShadowFilterQualityRow[index];
 					settings.ContactShadows = c_ContactShadowsRow[index];
+					settings.MotionBlurQuality = c_MotionBlurQualityRow[index];
 				}
 				return presets;
 			}();
@@ -298,6 +362,18 @@ namespace Strata
 			clamped.ShadowFilterQuality = taps != std::end(c_ShadowFilterTapOptions) ? *taps : c_ShadowFilterTapOptions[std::size(c_ShadowFilterTapOptions) - 1];
 			clamped.ContactShadows = clamped.ContactShadows == 0 ? 0u
 				: std::clamp(clamped.ContactShadows, c_MinContactShadowSteps, c_MaxContactShadowSteps);
+			if (static_cast<size_t>(clamped.MotionBlurQuality) >= std::size(c_MotionBlurSamplesNames))
+				clamped.MotionBlurQuality = medium.MotionBlurQuality;
+			if (static_cast<size_t>(clamped.AntiAliasing) >= std::size(c_AntiAliasingChoiceNames))
+				clamped.AntiAliasing = AntiAliasingChoice::Scene;
+			if (static_cast<size_t>(clamped.MotionBlur) >= std::size(c_SceneEffectChoiceNames))
+				clamped.MotionBlur = SceneEffectChoice::Scene;
+			if (static_cast<size_t>(clamped.DepthOfField) >= std::size(c_SceneEffectChoiceNames))
+				clamped.DepthOfField = SceneEffectChoice::Scene;
+			if (static_cast<size_t>(clamped.FilmGrain) >= std::size(c_SceneEffectChoiceNames))
+				clamped.FilmGrain = SceneEffectChoice::Scene;
+			if (static_cast<size_t>(clamped.ChromaticAberration) >= std::size(c_SceneEffectChoiceNames))
+				clamped.ChromaticAberration = SceneEffectChoice::Scene;
 			if (static_cast<uint8_t>(clamped.Preset) > static_cast<uint8_t>(RendererQualityPreset::Custom))
 				clamped.Preset = RendererQualityPreset::Custom;
 			return clamped;
@@ -358,6 +434,41 @@ namespace Strata
 			return std::nullopt;
 		}
 
+		const char* MotionBlurSamplesToString(MotionBlurSamples samples)
+		{
+			return EnumToString(samples, c_MotionBlurSamplesNames);
+		}
+
+		std::optional<MotionBlurSamples> MotionBlurSamplesFromString(std::string_view name)
+		{
+			return EnumFromString<MotionBlurSamples>(name, c_MotionBlurSamplesNames);
+		}
+
+		uint32_t GetMotionBlurSampleCount(MotionBlurSamples samples)
+		{
+			const size_t index = static_cast<size_t>(samples);
+			return index < std::size(c_MotionBlurSampleCounts) ? c_MotionBlurSampleCounts[index] : 0;
+		}
+
+		const char* AntiAliasingChoiceToString(AntiAliasingChoice choice)
+		{
+			return EnumToString(choice, c_AntiAliasingChoiceNames);
+		}
+
+		std::optional<AntiAliasingChoice> AntiAliasingChoiceFromString(std::string_view name)
+		{
+			return EnumFromString<AntiAliasingChoice>(name, c_AntiAliasingChoiceNames);
+		}
+
+		const char* SceneEffectChoiceToString(SceneEffectChoice choice)
+		{
+			return EnumToString(choice, c_SceneEffectChoiceNames);
+		}
+
+		std::optional<SceneEffectChoice> SceneEffectChoiceFromString(std::string_view name)
+		{
+			return EnumFromString<SceneEffectChoice>(name, c_SceneEffectChoiceNames);
+		}
 
 		SettingsSection MakeSection()
 		{
@@ -412,6 +523,23 @@ namespace Strata
 			section.Fields.push_back(NumberField("ContactShadows", "Contact shadows", "Steps of the sun's contact shadows, which ground small objects "
 				"below the shadow map's detail: more steps find thinner contacts for more GPU time (0: off; 1 to 3 count as 4).",
 				SettingsFieldType::Int, 0, c_MaxContactShadowSteps, high.ContactShadows));
+			section.Fields.push_back(EnumField("MotionBlurQuality", "Motion blur samples", "Samples per pixel of the motion blur, in scenes that "
+				"use it: more samples show less streak noise where things move fast, for more GPU time (Off: no motion blur).",
+				EnumOptions(c_MotionBlurSamplesNames), MotionBlurSamplesToString(high.MotionBlurQuality)));
+			// The players' rows: read under every preset.
+			section.Fields.push_back(EnumField("AntiAliasing", "Anti-aliasing", "How jagged edges are smoothed: Scene uses the game's own method; "
+				"Off is the sharpest and costs nothing; FXAA and Morphological smooth each frame on its own (Morphological keeps more texture "
+				"detail); TAA also calms shimmer by blending earlier frames. Each costs a little GPU time.", EnumOptions(c_AntiAliasingChoiceNames),
+				AntiAliasingChoiceToString(high.AntiAliasing)));
+			section.Fields.push_back(EnumField("MotionBlur", "Motion blur", "Scene shows the game's motion blur where it uses it; Off never blurs "
+				"what moves and saves its GPU time.", EnumOptions(c_SceneEffectChoiceNames), SceneEffectChoiceToString(high.MotionBlur)));
+			section.Fields.push_back(EnumField("DepthOfField", "Depth of field", "Scene shows the depth of field of the game's cameras that use it; "
+				"Off keeps every distance in focus and saves its GPU time.", EnumOptions(c_SceneEffectChoiceNames),
+				SceneEffectChoiceToString(high.DepthOfField)));
+			section.Fields.push_back(EnumField("FilmGrain", "Film grain", "Scene shows the game's film grain where it uses it; Off never adds "
+				"grain.", EnumOptions(c_SceneEffectChoiceNames), SceneEffectChoiceToString(high.FilmGrain)));
+			section.Fields.push_back(EnumField("ChromaticAberration", "Chromatic aberration", "Scene shows the color fringes toward the image's "
+				"corners where the game uses them; Off never.", EnumOptions(c_SceneEffectChoiceNames), SceneEffectChoiceToString(high.ChromaticAberration)));
 			return section;
 		}
 
@@ -439,8 +567,17 @@ namespace Strata
 				ReadField(*value, "MinProjectedPixels", settings.MinProjectedPixels);
 				ReadField(*value, "ShadowFilterQuality", settings.ShadowFilterQuality);
 				ReadField(*value, "ContactShadows", settings.ContactShadows);
+				ReadEnumField(*value, "MotionBlurQuality", c_MotionBlurSamplesNames, settings.MotionBlurQuality);
 			}
 			// Knobs read under every preset (players' comfort rows) follow here, one line each.
+			if (value)
+			{
+				ReadEnumField(*value, "AntiAliasing", c_AntiAliasingChoiceNames, settings.AntiAliasing);
+				ReadEnumField(*value, "MotionBlur", c_SceneEffectChoiceNames, settings.MotionBlur);
+				ReadEnumField(*value, "DepthOfField", c_SceneEffectChoiceNames, settings.DepthOfField);
+				ReadEnumField(*value, "FilmGrain", c_SceneEffectChoiceNames, settings.FilmGrain);
+				ReadEnumField(*value, "ChromaticAberration", c_SceneEffectChoiceNames, settings.ChromaticAberration);
+			}
 			return Clamp(settings);
 		}
 
@@ -456,7 +593,13 @@ namespace Strata
 				{ "LODErrorPixels", settings.LODErrorPixels },
 				{ "MinProjectedPixels", settings.MinProjectedPixels },
 				{ "ShadowFilterQuality", std::to_string(settings.ShadowFilterQuality) },
-				{ "ContactShadows", settings.ContactShadows }
+				{ "ContactShadows", settings.ContactShadows },
+				{ "MotionBlurQuality", MotionBlurSamplesToString(settings.MotionBlurQuality) },
+				{ "AntiAliasing", AntiAliasingChoiceToString(settings.AntiAliasing) },
+				{ "MotionBlur", SceneEffectChoiceToString(settings.MotionBlur) },
+				{ "DepthOfField", SceneEffectChoiceToString(settings.DepthOfField) },
+				{ "FilmGrain", SceneEffectChoiceToString(settings.FilmGrain) },
+				{ "ChromaticAberration", SceneEffectChoiceToString(settings.ChromaticAberration) }
 			};
 		}
 

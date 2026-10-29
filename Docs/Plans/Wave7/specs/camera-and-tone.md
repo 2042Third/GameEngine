@@ -1370,3 +1370,97 @@ recomputed), the vignette's numbers (9.9% and 16.5% at 60 degrees, recomputed), 
 parameter layout (64 bytes) and the tone-mapping buffer's std140 offsets, the file:line references of 2.1-2.3
 (spot-checked against bc6ee123), the ABI (no host function), both draw paths (post-processing reads what both write),
 the shadow caches (the lens stays out of their key), the cut line, and open questions 2, 3, 5, 7 and 8.
+
+## 15. As built
+
+What the branch built differently from the sections above, the names it found or chose, and what the integration adds.
+Each item is also in the commit that made it.
+
+### 15.1 What the integrator adds after graphics-options
+
+graphics-options had not landed on this branch's base (cc9524a1): there is no `PropertyBuilderBase::Section`, no
+`RendererQuality::RowTraits` and no description test, so this stream added none of them. At the merge:
+
+- `RowTraits` lines for the rows this stream added to `RendererQualitySettings`: `MotionBlurQuality` (FollowsPreset
+  true, GPU stage `GPU.MotionBlur`, memory `W * H * 12` bytes plus the tile targets: the RGBA16F output and the R32_UINT
+  pixel target), and the players' rows `AntiAliasing`, `MotionBlur`, `DepthOfField` (GPU stage `GPU.DepthOfField`),
+  `FilmGrain` and `ChromaticAberration` (FollowsPreset false: comfort, not cost).
+- The `.Section` calls of the Post Process and Camera properties this stream appended, in the sections of table 4.1.
+- The Third-Person settings menu's "Motion Blur: On / Off" row (4.2), absent here.
+- `Renderer.Quality`'s `c_SectionVersion` is 2 here: renumber it if another stream took 2.
+- `ThumbnailCache::c_Version` went to 5, 6, 7 (dither, Filmic for scenes without a Post Process, the lens vignette) and
+  8 (Filmic's shadows, 15.3): renumber if another stream bumped it.
+
+### 15.2 Names
+
+- `RendererQualitySettings::MotionBlurQuality`'s enum is `MotionBlurSamples` (`Off`, `Samples8`, `Samples12`,
+  `Samples16`): a member named like its type trips GCC's `-Wchanges-meaning`. `AntiAliasingChoice` is `{Scene, Off,
+  FXAA, TAA, Morphological}`, `SceneEffectChoice` `{Scene, Off}`.
+- Post sources are `SceneRenderer::PostSource` `{HDR, History, DepthOfField, MotionBlur}` with `SelectPostSet`;
+  `RenderPostHDR` and `RenderPostDisplay` take one instead of the spec's flags, and the frame's `degraded`.
+- The tone mapping's blur mask is `RenderData::c_TonemapBlurMask` (`ST_BLUR_MASK`; the spec's
+  `c_TonemapMotionBlurMask`), set for the depth of field's and the motion blur's outputs;
+  `MotionBlurParameters::Padding0` became `SourceMask`. `TonemapConstants` is 176 bytes.
+- `Renderer/FilmicConstants.h` names its constants `c_Inset`, `c_Outset`, `c_Contrast`, `c_ToeWidth`, `c_MiddleGray`
+  (AGENTS.md's naming table; the spec's 5.2 named them without the prefix).
+- New public statics: `SceneRenderer::GetBloomSpan`, `GetVignetteTangents`, `ApplyQualityOverrides`;
+  `PostProcessMath::GetMotionBlurProfile` (the motion blur's CPU model); `Tests::ExactSpecification()`.
+- `GPU.DepthOfField` is registered after `GPU.MotionBlur` (step 0's table) and timed before it.
+
+### 15.3 Deviations and relaxed targets
+
+- **FXAA's subpixel blend is 0.25** (5.1's fallback): 0.375 kept 0.85 of the texture detail, under the 0.88 target; 0.25
+  keeps 0.87.
+- **The dither costs 0.021 ms at 3840x2160** (5.1's target: below 0.01): `GPU.Post` of `Post4K`'s TAA frame, 0.2446 ms
+  with it and 0.2235 ms without (three interleaved runs each). Six `PixelRandom` values a pixel; a cheaper hash of the
+  same statistics would have to replace its CPU twin and `Renderer.PostProcessMath`'s statistics with it.
+- **Filmic's toe works on the color as a whole** (5.2 specified the curve per channel everywhere). Per channel, the
+  toe's log-log slope (about 1.5) raised the channels' ratios to its power, and the outset's negative lobes pushed the
+  weak channel to 0: the sky test color showed 1.71 to 1.88 times its chroma from -1 to -4 stops (ACES at the samples'
+  old +1 EV: 1.25 to 1.50), a dark sky (0.02, 0.06, 0.15) at sRGB (0, 39, 95), and the look-dev skies and blue flowers
+  turned ultramarine. T7 checked saturation only at 0 stops, and no refit of the per-channel form brought the sky under
+  1.35 below middle gray (1.53 at best, with T5 failing). Now the operator scales the inset color by the curve of its
+  largest channel over that channel below middle gray and blends to the per-channel curve over 0 to 4 stops of that
+  channel (`c_FilmicChannelStart`, `c_FilmicChannelEnd`, the form's constants, written by the generator); T9 (new)
+  bounds every test color's saturation ratio below middle gray at 1.30. Refitted (C0 1.398, tau 3): sky 1.16, skin 1.05,
+  foliage 0.98, blue 1.29 below middle gray; the dark sky at (11, 60, 99). The hue limits of T5 went to 12.5 and 7.5
+  degrees for the per-channel form (it reached 12.28 on blue and 7.13 on sky); this form meets 5.2's 10 and 6 (7.95 and
+  4.77), so they are back.
+- **The exposure key never brightens** (5.4 gave it [-2, +1] and "a snow field above the card brightens slightly"): a
+  scene above the directional light's card is in practice lit by more than the sun (an overcast sky, dusk, lamps), so
+  the positive side brightened overcast days and sunsets (up to +1 stop) and jumped at 0 lux; the range is [-2, 0].
+- Test tolerances: the 10-bit dither test allows 1.5 codes with 8-pixel bands; the bloom snap test checks 0.0592593
+  within 1e-6; the key tests use a dark SkyLight (ambient 0) and a 16,384 lux sun (bins line up).
+- **Motion blur ships off** in the template and the samples (the decisions' "when in doubt, off"): the release note
+  takes the fallback wording. Its colors-only uniform path is new (a neighborhood that moves as one surface reads only
+  colors, with the depth-aware path's one-surface weights); occluding edges over slower backgrounds blur at 0.56 of the
+  one-surface model (the spec's depth weights, the restrained side).
+- OpenWorld's Exposure is +0.25 EV by 5.7's median rule (0.147 at 0, 0.188 after). The Basic 3D template's start scene
+  follows the same rule (5.2 set it at Exposure 0): its bright sky over the dark stone ground meters the ground below
+  middle gray, a median of 0.136 at 0, so it takes +0.25 (0.174 after). light-and-materials replaces its sky and
+  sun; measure it again after that lands.
+- **Depth of field (5.8):** no 3x3 median pass (the static 48-sample rotation and the bilinear upsampling leave no
+  outliers); the near field uses an area-share weight clamped at 16. Under TAA the composite fades the blur in over two
+  pixels from in-focus depth (the depth is jittered, the color is not: a hard decision flickered at in-focus
+  silhouettes).
+- **Grain (5.9)** is seeded for single images (captures, thumbnails) and added by the pass that writes the display image
+  (FXAA or the morphological blend when one follows the tone mapping), not by the tone mapping before them.
+- **Morphological anti-aliasing (5.10)** keeps 0.88 of the texture detail, short of 0.95: U-shaped runs blend nothing
+  (with them 0.81), and depth edges need a jump above 5% and twice the neighboring steps.
+- Post failures (the morphological targets, the lens flare, the tone mapping's second set) mark the frame degraded, and
+  a tone mapping that cannot run fails the frame.
+
+### 15.4 5.11 and 5.12
+
+1. **The color lookup's cooked form holds no domain (5.11).** `ColorLookupImporter` folds `DOMAIN_MIN`/`DOMAIN_MAX` (and
+   Resolve's `LUT_3D_INPUT_RANGE`) into its resampling, so every cooked lattice spans [0, 1] and the shader needs no
+   domain constants; `STLU` version 1 is a 16-byte header (magic, version, size, zero) and the RGBA16F points. The `Size`
+   setting is a choice of "17", "33" (default), "65" or "File" (the file's own size). The upload queue gained 3D regions
+   (`GPUTextureRegion::Depth`). The tone mapping reads the lookup through a second binding set (set 1, slots t3 and s2:
+   NVRHI wants a pipeline's layouts to use different slots), so the five tone-mapping sets of the post sources stay as
+   they are.
+2. **Lens flares read level 1 before the bloom's upsamples (5.12).** After the upsamples, the deeper levels' tent filters
+   leave diamond-shaped contours that the flare's threshold cut out as diamond ghosts (look-dev `13-flare`); the flare
+   runs between `RenderBloomDownsamples` and `RenderBloomUpsamples` and reads through a cubic B-spline. The bright part's
+   excess over 4 is compressed toward 16 so the sun's ghosts stay faint. The starburst is drawn by the tone mapping, as
+   specified, but its 16 depth taps run in the flare pass, which hands their share over in its target's alpha.

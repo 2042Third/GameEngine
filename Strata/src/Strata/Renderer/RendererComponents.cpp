@@ -98,6 +98,42 @@ namespace Strata
 			return post.AutoExposure ? std::string() : "Auto Exposure is off";
 		}
 
+		const char* GetTonemapperName(TonemapOperator tonemapper)
+		{
+			switch (tonemapper)
+			{
+				case TonemapOperator::None: return "None";
+				case TonemapOperator::Reinhard: return "Reinhard";
+				case TonemapOperator::ACES: return "ACES";
+				case TonemapOperator::AgX: return "AgX";
+				case TonemapOperator::KhronosNeutral: return "Khronos Neutral";
+				case TonemapOperator::Filmic: return "Filmic";
+			}
+			return "unknown";
+		}
+
+		std::string WithFilmicToe(const PostProcessComponent& post)
+		{
+			return post.Tonemapper == TonemapOperator::Filmic ? std::string()
+				: fmt::format("Only the Filmic curve has a toe (Tonemapper is {})", GetTonemapperName(post.Tonemapper));
+		}
+
+		std::string WithFilmicShoulder(const PostProcessComponent& post)
+		{
+			return post.Tonemapper == TonemapOperator::Filmic ? std::string()
+				: fmt::format("Only the Filmic curve has a shoulder (Tonemapper is {})", GetTonemapperName(post.Tonemapper));
+		}
+
+		std::string WithMotionBlur(const PostProcessComponent& post)
+		{
+			return post.MotionBlur ? std::string() : "Motion Blur is off";
+		}
+
+		std::string WithColorLookup(const PostProcessComponent& post)
+		{
+			return post.ColorLookup.IsValid() ? std::string() : "No Color Lookup is set";
+		}
+
 		std::string WithBloom(const PostProcessComponent& post)
 		{
 			return post.Bloom ? std::string() : "Bloom is off";
@@ -113,12 +149,19 @@ namespace Strata
 			return post.AntiAliasing ? std::string() : "Anti Aliasing is off";
 		}
 
-		// The TAA's look: inactive without anti-aliasing or with FXAA.
+		// The name of a method that is not TAA, for the reasons below.
+		const char* NonTemporalMethodName(AntiAliasingMode method)
+		{
+			return method == AntiAliasingMode::Morphological ? "Morphological" : "FXAA";
+		}
+
+		// The TAA's look: inactive without anti-aliasing or with another method.
 		std::string WithTemporalAntiAliasing(const PostProcessComponent& post)
 		{
 			if (!post.AntiAliasing)
 				return "Anti Aliasing is off";
-			return post.AntiAliasingMethod == AntiAliasingMode::TAA ? std::string() : "Only TAA uses it (Anti Aliasing Method is FXAA)";
+			return post.AntiAliasingMethod == AntiAliasingMode::TAA ? std::string()
+				: fmt::format("Only TAA uses it (Anti Aliasing Method is {})", NonTemporalMethodName(post.AntiAliasingMethod));
 		}
 
 		// Screen-space reflections read the TAA's history: inactive without it.
@@ -126,7 +169,8 @@ namespace Strata
 		{
 			if (!post.AntiAliasing)
 				return "Needs TAA (Anti Aliasing is off)";
-			return post.AntiAliasingMethod == AntiAliasingMode::TAA ? std::string() : "Needs TAA (Anti Aliasing Method is FXAA)";
+			return post.AntiAliasingMethod == AntiAliasingMode::TAA ? std::string()
+				: fmt::format("Needs TAA (Anti Aliasing Method is {})", NonTemporalMethodName(post.AntiAliasingMethod));
 		}
 
 		std::string WithScreenSpaceReflections(const PostProcessComponent& post)
@@ -380,9 +424,11 @@ namespace Strata
 			.Description("Tonemapping, exposure, bloom, ambient occlusion, anti-aliasing and screen-space reflection settings")
 			.Section("Tone and color")
 			.EnumProperty("Tonemapper", &PostProcessComponent::Tonemapper, { { "None", 0 }, { "Reinhard", 1 }, { "ACES", 2 }, { "AgX", 3 },
-				{ "KhronosNeutral", 4, "Khronos Neutral" } }, { .Tooltip = "The curve that maps the scene's light to the display: ACES (filmic, "
-					"contrasty), AgX (filmic, keeps bright colors' hue), Khronos Neutral (keeps colors close to the materials'), Reinhard (soft), None "
-					"(clipped: for UI and tests)" })
+				{ "KhronosNeutral", 4, "Khronos Neutral" }, { "Filmic", 5 } },
+				{ .Tooltip = "Filmic: the engine's camera-like curve, middle gray shown as middle gray, a soft shoulder that takes bright colors "
+					"to white without changing their hue (Toe and Shoulder shape it); ACES: punchier, darker mid-tones (needs about +0.8 EV for "
+					"the same brightness); AgX: flatter and less saturated; Khronos Neutral: keeps base colors up to the highlights; Reinhard; "
+					"None: the exposed colors clipped" })
 			.Section("Exposure")
 			.Property("Exposure", &PostProcessComponent::Exposure, WithTooltip(Range(-16.0f, 16.0f, 0.05f), "Exposure compensation in EV"))
 			.Property("AutoExposure", &PostProcessComponent::AutoExposure, WithTooltip({}, "Adapts the exposure to the scene's brightness over time, as "
@@ -391,7 +437,8 @@ namespace Strata
 				WithTooltip(Range(-12.0f, 16.0f, 0.1f), "Darkest average scene luminance (log2) automatic exposure brightens up to"))
 			.Property("AutoExposureMaxEV", &PostProcessComponent::AutoExposureMaxEV,
 				WithTooltip(Range(-12.0f, 16.0f, 0.1f), "Brightest average scene luminance (log2) automatic exposure darkens down to"))
-			.Property("AutoExposureSpeed", &PostProcessComponent::AutoExposureSpeed, WithTooltip(Range(0.0f, 20.0f, 0.05f), "Adaptation rate per second; 0 = instant"))
+			.Property("AutoExposureSpeed", &PostProcessComponent::AutoExposureSpeed,
+				WithTooltip(Range(0.0f, 20.0f, 0.05f), "How fast the exposure follows a darker scene (the image brightens), per second; 0 jumps at once"))
 			.Section("Bloom")
 			.Property("Bloom", &PostProcessComponent::Bloom, WithTooltip({}, "A soft glow around bright light: the light a camera's lens scatters"))
 			.Property("BloomIntensity", &PostProcessComponent::BloomIntensity, WithTooltip(Slider(0.0f, 1.0f), "Fraction of the light scattered into the glow"))
@@ -405,10 +452,11 @@ namespace Strata
 				"occlusion darkens ambient light: 1 as measured, 0 none, above 1 stronger"))
 			.Section("Anti-aliasing")
 			.Property("AntiAliasing", &PostProcessComponent::AntiAliasing, WithTooltip({}, "Smooths jagged edges, by the method below"))
-			.EnumProperty("AntiAliasingMethod", &PostProcessComponent::AntiAliasingMethod, { { "FXAA", 0 }, { "TAA", 1 } },
+			.EnumProperty("AntiAliasingMethod", &PostProcessComponent::AntiAliasingMethod, { { "FXAA", 0 }, { "TAA", 1 }, { "Morphological", 2 } },
 				{ .Tooltip = "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another "
 					"sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion. "
-					"TAA Preset chooses how the TAA looks" })
+					"TAA Preset chooses how the TAA looks. Morphological: non-temporal, finds edges and blends along them, keeping texture "
+					"detail" })
 			.EnumProperty("TAAPreset", &PostProcessComponent::TAAPreset, { { "Sharp", 0 }, { "Original", 1 }, { "Custom", 2 } },
 				{ .Tooltip = "How the TAA looks. Sharp: tighter history clipping, slow pans resampled less, uncovered surfaces drop their "
 					"history, transparent surfaces take mostly the current frame, a faster response to motion and a light sharpening of the "
@@ -461,15 +509,80 @@ namespace Strata
 				WithTooltip(Slider(0.0f, 1.0f), "Surfaces rougher than this get none, and they fade out over the last quarter below it: rough "
 					"surfaces blur what they reflect, which screen-space reflections do not"))
 			.Section("Lens")
-			.Property("Vignette", &PostProcessComponent::Vignette, WithTooltip(Slider(0.0f, 1.0f), "Darkens the image toward its corners, as a lens "
-				"does: 0 off, 1 strongest"))
+			.Property("Vignette", &PostProcessComponent::Vignette,
+				WithTooltip(Slider(0.0f, 1.0f), "Natural darkening toward the image's corners, as a lens's (cos^4 of the field angle): 0 none, 1 a "
+					"lens's full fall-off; 0.12 darkens the corners of a 60 degree view by about 10%"))
 			.Section("Tone and color")
 			.Property("Saturation", &PostProcessComponent::Saturation, WithTooltip(Slider(0.0f, 2.0f), "Color saturation after the tone curve: 1 "
 				"unchanged, 0 gray, 2 twice as vivid"))
-			.Property("Contrast", &PostProcessComponent::Contrast, WithTooltip(Slider(0.5f, 2.0f), "Around middle gray; 1 = unchanged"));
+			.Property("Contrast", &PostProcessComponent::Contrast, WithTooltip(Slider(0.5f, 2.0f), "Around middle gray; 1 = unchanged"))
+			.Property("Toe", &PostProcessComponent::Toe, WithTooltip(Slider(0.0f, 1.0f), "How deep the shadows go: higher crushes the darkest tones toward "
+				"black, lower keeps more detail in them (Filmic only)"))
+			.Property("Shoulder", &PostProcessComponent::Shoulder, WithTooltip(Slider(0.0f, 1.0f), "How softly highlights roll off to white: higher "
+				"reaches white more stops above middle gray (5 at 0, 6.5 at 0.5, 8 at 1), keeping more highlight detail (Filmic only)"))
+			.Property("WhiteBalanceTemperature", &PostProcessComponent::WhiteBalanceTemperature,
+				WithTooltip(Range(2000.0f, 15000.0f, 50.0f), "Temperature in kelvin of the light that shows as white: lower values cool the image "
+					"(3200 for tungsten light), higher warm it; 6500 is neutral"))
+			.Property("WhiteBalanceTint", &PostProcessComponent::WhiteBalanceTint, WithTooltip(Slider(-1.0f, 1.0f), "Tint: positive adds magenta, negative green"))
+			.Property("ColorSlope", &PostProcessComponent::ColorSlope, WithTooltip(Range(0.0f, 4.0f, 0.01f), "Slope: per-channel gain before the tone curve"))
+			.Property("ColorOffset", &PostProcessComponent::ColorOffset,
+				WithTooltip(Range(-0.1f, 0.1f, 0.001f), "Offset: light added per channel, in fractions of middle gray (tints the shadows most)"))
+			.Property("ColorPower", &PostProcessComponent::ColorPower, WithTooltip(Range(0.2f, 5.0f, 0.01f), "Power: per-channel contrast around middle gray"))
+			.Section("Exposure")
+			.EnumProperty("AutoExposureMetering", &PostProcessComponent::AutoExposureMetering, { { "Average", 0 }, { "CenterWeighted", 1, "Center Weighted" } },
+				{ .Tooltip = "How the image is metered: Average weighs every pixel alike; CenterWeighted counts the middle of the image most and its "
+					"edges a quarter, as a camera's center-weighted meter" })
+			.Property("AutoExposureLowPercentile", &PostProcessComponent::AutoExposureLowPercentile,
+				WithTooltip(Range(0.0f, 0.49f, 0.01f), "The darkest share of the metered pixels that is ignored, so deep shadows do not move the exposure"))
+			.Property("AutoExposureHighPercentile", &PostProcessComponent::AutoExposureHighPercentile,
+				WithTooltip(Range(0.51f, 1.0f, 0.01f), "The brightest share of the metered pixels below this is kept: the pixels above it (light "
+					"sources) do not move the exposure"))
+			.Property("AutoExposureLightSpeed", &PostProcessComponent::AutoExposureLightSpeed,
+				WithTooltip(Range(0.0f, 20.0f, 0.05f), "How fast it follows a brighter scene (the image darkens), per second, as eyes leaving a "
+					"tunnel; 0 jumps at once"))
+			.Property("AutoExposureKey", &PostProcessComponent::AutoExposureKey,
+				WithTooltip(Range(0.0f, 0.5f, 0.01f), "How much a scene's brightness against a gray card in the sun shows: 0 meters every scene to "
+					"middle gray; 0.12 shows an interior 5 stops below the sun's card 0.6 stops darker (at most 2); scenes above the card are not "
+					"brightened. Needs a directional light"))
+			.Section("Bloom")
+			.Property("BloomRadius", &PostProcessComponent::BloomRadius,
+				WithTooltip(Range(0.01f, 0.25f, 0.001f), "How far the glow reaches, as a fraction of the image height: the same share of the image "
+					"at every resolution"))
+			.Section("Motion")
+			.Property("MotionBlur", &PostProcessComponent::MotionBlur,
+				WithTooltip({}, "Blurs what moves on screen over the shutter's share of each frame, as a film camera does; editor views never "
+					"blur, and players can turn it off"))
+			.Property("MotionBlurShutterAngle", &PostProcessComponent::MotionBlurShutterAngle,
+				WithTooltip(Range(0.0f, 360.0f, 1.0f), "How long the shutter stays open, in degrees of the frame: 180 blurs over half a frame's "
+					"motion, as film cameras do; 0 none"))
+			.Property("MotionBlurMaxLength", &PostProcessComponent::MotionBlurMaxLength,
+				WithTooltip(Range(0.005f, 0.05f, 0.001f), "The longest blur, as a fraction of the image height: 0.02 is 43 pixels at 2160 rows"))
+			.Section("Lens")
+			.Property("FilmGrain", &PostProcessComponent::FilmGrain,
+				WithTooltip(Slider(0.0f, 1.0f), "Film's grain, new every frame, most visible in the mid-tones; 1 spreads them by about 10 codes. "
+					"Players can turn it off"))
+			.Property("ChromaticAberration", &PostProcessComponent::ChromaticAberration,
+				WithTooltip(Slider(0.0f, 1.0f), "A lens's lateral color fringes, red and blue drawn apart toward the corners; 1 shifts each half a "
+					"pixel at a 3840x2160 image's corners. Players can turn it off"))
+			.Section("Tone and color")
+			.AssetProperty("ColorLookup", &PostProcessComponent::ColorLookup, AssetType::ColorLookup,
+				{ .Tooltip = "A grade made in another tool (a .cube file's 3D lookup table), applied to the finished image after the tone curve "
+					"and the saturation. Nothing applies while it loads" })
+			.Property("ColorLookupIntensity", &PostProcessComponent::ColorLookupIntensity,
+				WithTooltip(Slider(0.0f, 1.0f), "How much of the color lookup's grade shows: 1 all of it, 0.5 halfway between the image and the "
+					"graded image"))
+			.Section("Lens")
+			.Property("LensFlare", &PostProcessComponent::LensFlare,
+				WithTooltip(Slider(0.0f, 1.0f), "A lens's flares around very bright light, with restraint: faint tinted ghosts mirrored through the "
+					"image's center, a halo, and six rays around the sun's disk while it is in view and not covered. 0 none"));
 		// Exposure is the compensation SceneRenderer applies with automatic exposure too: always active.
-		SetInactiveReasons<PostProcessComponent>({ "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed" }, &WithAutoExposure);
-		SetInactiveReasons<PostProcessComponent>({ "BloomIntensity", "BloomThreshold" }, &WithBloom);
+		SetInactiveReasons<PostProcessComponent>({ "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed", "AutoExposureMetering",
+			"AutoExposureLowPercentile", "AutoExposureHighPercentile", "AutoExposureLightSpeed", "AutoExposureKey" }, &WithAutoExposure);
+		SetInactiveReasons<PostProcessComponent>({ "BloomIntensity", "BloomThreshold", "BloomRadius" }, &WithBloom);
+		SetInactiveReasons<PostProcessComponent>({ "MotionBlurShutterAngle", "MotionBlurMaxLength" }, &WithMotionBlur);
+		SetInactiveReasons<PostProcessComponent>({ "ColorLookupIntensity" }, &WithColorLookup);
+		SetInactiveReasons<PostProcessComponent>({ "Toe" }, &WithFilmicToe);
+		SetInactiveReasons<PostProcessComponent>({ "Shoulder" }, &WithFilmicShoulder);
 		SetInactiveReasons<PostProcessComponent>({ "AmbientOcclusionRadius", "AmbientOcclusionIntensity" }, &WithAmbientOcclusion);
 		SetInactiveReasons<PostProcessComponent>({ "AntiAliasingMethod" }, &WithAntiAliasing);
 		SetInactiveReasons<PostProcessComponent>({ "TAAPreset" }, &WithTemporalAntiAliasing);

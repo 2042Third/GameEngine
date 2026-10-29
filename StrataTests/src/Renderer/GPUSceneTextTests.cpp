@@ -153,7 +153,7 @@ TEST_SUITE("GPU.SceneRenderer.Text")
 		text.Color = glm::vec4(1.0f, 0.0f, 0.0f, 0.5f);
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f), static_cast<float>(c_Width) / static_cast<float>(c_Height));
 
-		SceneRenderer renderer;
+		SceneRenderer renderer(ExactSpecification()); // The blend's channels compared exactly
 		renderer.SetViewportSize(c_Width, c_Height);
 		const ReadbackImage image = Render(renderer, scene, camera);
 		const glm::u8vec4 background = GetPixelRGBA8(image, 2, 2);

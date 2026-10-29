@@ -11,6 +11,7 @@
 #include "Strata/Renderer/GeometryPool.h"
 #include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/GPUSceneData.h"
+#include "Strata/Renderer/PostProcessMath.h"
 #include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/SceneOverlay.h"
 #include "Strata/Renderer/SceneRenderData.h"
@@ -74,6 +75,27 @@ namespace Strata
 
 		// Camera of a scene entity with a CameraComponent (view from its world transform).
 		static SceneCamera FromEntity(const Scene& scene, Entity entity, float aspectRatio);
+	};
+
+	// A camera's lens, for depth of field (SceneRenderOptions::Lens). It stays out of SceneCamera, whose whole value is the
+	// shadow cascades' cache key, so focusing never redraws shadows.
+	struct CameraLens
+	{
+		float FocusDistance = 10.0f; // Meters from the camera to the sharpest plane
+		float FocalLength = 20.78f;  // Millimeters
+		float FNumber = 2.8f;
+		float SensorHeight = 24.0f;  // Millimeters
+
+		// The lens of a scene entity's CameraComponent with DepthOfField on and a perspective projection (none otherwise): the
+		// focal length follows from the field of view (0.5 * SensorHeight / tan(fov / 2)); a FocusEntity of the scene sets the
+		// focus distance (along the camera's forward axis to its world position, at least the near plane).
+		static std::optional<CameraLens> FromEntity(const Scene& scene, Entity entity);
+
+		// The signed circle of confusion of a point `distance` meters from the camera, in pixels of an image `height` pixels
+		// tall: f^2 / (N (zf - f)) * (z - zf) / z on the sensor, negative in front of the focus. GetCircleOfConfusionScale is
+		// its value for a point infinitely far, which the passes multiply by 1 - zf / z.
+		float GetCircleOfConfusion(float distance, float height) const;
+		float GetCircleOfConfusionScale(float height) const;
 	};
 
 	// How a renderer issues its draws (SceneRendererSpecification::IndirectMode).
@@ -222,6 +244,12 @@ namespace Strata
 		// did not render, and after ResetHistory. Off: such scenes are drawn with FXAA (renderers of single images that do not
 		// render a view several times, such as thumbnails).
 		bool TemporalAntiAliasing = true;
+		// The 8-bit (or 10-bit) output is dithered: triangular noise of one code per channel in the encoded domain
+		// (Include/Dither.glsl), the same every frame, so gradients show no bands, black and white stay exact and every value
+		// keeps its mean. The last pass that writes the display image dithers it (the tone mapping, or FXAA after it); the
+		// overlays and the copy into a target are exact display colors. Tests that compare exact pixels turn it off
+		// (Tests::ExactSpecification).
+		bool DitherOutput = true;
 
 		// A shadow view (a light's tile) is drawn again only when what it shows changed: the light (its position, direction,
 		// range, cone, tile or filter), a shadow caster whose bounds before or after its change reach the light's range and
@@ -325,6 +353,19 @@ namespace Strata
 		// and no target (Render fails with one). Tools that read the scene's light back (the reflection probe bake) set it with
 		// a forced PreExposure, which they divide out.
 		bool HDROutput = false;
+		// The time the automatic exposure adapts over since this renderer's previous frame; unset, the wall clock between its
+		// frames (at most 0.25 s, so pauses do not turn into one huge step). Tests and tools that step time set it.
+		std::optional<float> AdaptationSeconds;
+		// The scene's motion blur applies (PostProcessComponent::MotionBlur, unless the quality turns it off). Editor views and
+		// renderers of single images (captures, thumbnails) turn it off: they never blur.
+		bool MotionBlur = true;
+		// Depth of field through this lens (unless the quality's DepthOfField row turns it off): programs set it when they view
+		// through a scene camera with DepthOfField on (CameraLens::FromEntity); unset, nothing is defocused.
+		std::optional<CameraLens> Lens;
+		// The film grain's pattern (PostProcessComponent::FilmGrain): unset, the renderer's frame count, so the grain changes
+		// every frame as film's; set, that seed. Renderers of single images (captures, thumbnails) set it so a picture taken
+		// again is the same.
+		std::optional<uint32_t> GrainSeed;
 
 		// The overlays below are drawn over the finished image (after tone mapping and anti-aliasing) with exact display
 		// colors; all of them are off by default.
@@ -549,6 +590,35 @@ namespace Strata
 		float ShadowFitNear = 0.0f;
 		float ShadowFitFar = 0.0f;
 		uint64_t ShadowFitChanges = 0;
+		// Automatic exposure, from the newest readback of the renderer's metering (frames late, as the pre-exposure's): the
+		// adapted log2 average luminance, the exposure key's stops and the log2 luminance of the sun's gray card the key compares
+		// with (unset without a directional light). Unset with manual exposure and until a readback arrived.
+		std::optional<float> ExposureLog2Luminance;
+		float ExposureKeyStops = 0.0f;
+		std::optional<float> ExposureKeyReferenceLog2;
+		// Motion blur (PostProcessComponent::MotionBlur): whether the frame's passes ran (not without a motion history or on a
+		// camera cut), their samples per pixel and their tile size in pixels.
+		bool MotionBlurred = false;
+		uint32_t MotionBlurSamples = 0;
+		uint32_t MotionBlurTileSize = 0;
+		// Depth of field (SceneRenderOptions::Lens): whether the frame's passes ran, with the lens they used and the circle of
+		// confusion (diameter, pixels) of a point infinitely far through it.
+		bool DepthOfField = false;
+		CameraLens DepthOfFieldLens;
+		float DepthOfFieldInfinityCoC = 0.0f;
+		// The bloom levels the frame used (PostProcessComponent::BloomRadius; 0 without bloom).
+		uint32_t BloomLevels = 0;
+		// The frame's last pass that wrote the display image dithered it (SceneRendererSpecification::DitherOutput, and an 8-bit
+		// or 10-bit UNORM target).
+		bool Dithered = false;
+		// The frame was anti-aliased morphologically (AntiAliasingMode::Morphological).
+		bool MorphologicalAntiAliasing = false;
+		// The Post Process's color lookup was applied (PostProcessComponent::ColorLookup at an intensity above 0, loaded).
+		bool ColorLookup = false;
+		// The lens flare pass ran (PostProcessComponent::LensFlare above 0), and whether the directional light's disk was in
+		// front of the camera for its starburst.
+		bool LensFlare = false;
+		bool LensFlareSun = false;
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -678,6 +748,25 @@ namespace Strata
 		nvrhi::ITexture* GetBRDFLut() const { return m_BRDFLut; }
 
 		nvrhi::ITexture* GetBloomTexture() const { return m_BloomTexture; } // Level 0 of the bloom chain (half resolution)
+		// The bloom chain's span for a radius (PostProcessComponent::BloomRadius, a fraction of the height): log2(radius * height)
+		// levels, within [1, `levels`], snapped to a whole number within 1e-4; a frame uses ceil(span) levels.
+		static float GetBloomSpan(float radius, uint32_t height, uint32_t levels);
+		// The tangents of a camera's half field of view per axis, the lens vignette's (orthographic views: a 60 degree view's).
+		static glm::vec2 GetVignetteTangents(const SceneCamera& camera, glm::uvec2 viewportSize);
+		// The tone-mapped image FXAA reads (c_LDRFormat, sRGB-encoded, not dithered): null until the render targets exist.
+		nvrhi::ITexture* GetLDRTexture() const { return m_LDRTexture; }
+		// The motion blur's output (RGBA16F, pre-exposed, alpha 1 where it blurred): null until a frame blurred, and again once
+		// the render targets are released.
+		nvrhi::ITexture* GetMotionBlurTexture() const { return m_MotionBlurTexture; }
+		// The depth of field's output (RGBA16F, pre-exposed, alpha 1 where it changed the image): null until a frame had a lens,
+		// and again once the render targets are released.
+		nvrhi::ITexture* GetDepthOfFieldTexture() const { return m_DepthOfFieldTexture; }
+		// Morphological anti-aliasing's blend weights (RGBA8: the top edge's in rg, the left edge's in ba): null until a frame used
+		// it, and again once the render targets are released.
+		nvrhi::ITexture* GetMorphologicalWeightsTexture() const { return m_MorphologicalWeights; }
+		// The lens flare at a quarter of the resolution (RGBA16F, exposed): null until a frame flared, and again once the render
+		// targets are released.
+		nvrhi::ITexture* GetLensFlareTexture() const { return m_LensFlareTexture; }
 		// The exposure of the latest frame (Include/Exposure.glsl): the adapted log2 average luminance and the multiplier of
 		// luminance the tone mapping applies.
 		nvrhi::IBuffer* GetExposureBuffer() const { return m_ExposureBuffer; }
@@ -1263,9 +1352,12 @@ namespace Strata
 			float previousDepthOffset);
 		// Meters the HDR image (automatic exposure) through `bindingSet` (the HDR target's or the resolved image's) or writes the
 		// manual exposure into the exposure buffer.
-		void UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* bindingSet);
+		void UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, const SceneRenderOptions& options, nvrhi::IBindingSet* bindingSet,
+			std::optional<float> keyReferenceLog2);
 		// The frame's pre-exposure (m_PreExposure) from the options, the settings and the readbacks of earlier frames' metering.
 		void ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options);
+		// A new stretch of the pre-exposure (a reset, or automatic exposure turned off): its readbacks and metering start empty.
+		void StartPreExposureEpoch();
 		// After the executed command list of a frame that recorded the exposure's copy: the copy is pending.
 		void SubmitExposureReadback();
 		// Ends the holds of captures no gather of this frame or the previous one waited for.
@@ -1293,16 +1385,71 @@ namespace Strata
 		// The LDR target and the post passes' bindings and bloom chain for the viewport; false with what failed.
 		bool CreatePostTargets(uint32_t width, uint32_t height, std::string& outFailure);
 		void ReleasePostTargets(std::vector<nvrhi::ResourceHandle>& released);
-		// The exposure and the bloom of the HDR image (the resolved one when `resolved`); returns whether bloom ran.
-		bool RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, bool resolved);
-		// Tone mapping into `output`, or into the LDR target and FXAA from it into `output`.
-		void RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
-			bool resolved, bool bloom, nvrhi::IFramebuffer* output);
-		// The bloom chain of the image `prefilterSet` reads (the first downsample: the HDR target's or the resolved image's).
-		void RenderBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet);
-		// A fullscreen triangle with `pipeline` into `framebuffer` (post passes, the overlays' copy).
+		// What post-processing reads after the TAA resolve: the HDR target, the TAA's newest history texture, or the output of the
+		// depth of field or of the motion blur. Each pass that reads it has a binding set per source.
+		enum class PostSource : uint8_t
+		{
+			HDR,
+			History,
+			DepthOfField,
+			MotionBlur
+		};
+		// The set of `source` among a pass's sets per source (the history's: the newest texture's).
+		nvrhi::IBindingSet* SelectPostSet(PostSource source, nvrhi::IBindingSet* hdr, const std::array<nvrhi::BindingSetHandle, 2>& history,
+			nvrhi::IBindingSet* depthOfField, nvrhi::IBindingSet* motionBlur) const;
+		// The exposure and the bloom of the post source; returns whether bloom ran. `keyReferenceLog2`: log2 of the luminance of a
+		// gray card facing the frame's directional light (unset without one).
+		// `sunUV`: where the directional light's disk is, when it is in front of the camera (the lens flare's starburst). Sets
+		// `degraded` when a step failed (reported) and the frame goes on without it (the lens flare).
+		bool RenderPostHDR(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const SceneRenderOptions& options, PostSource source,
+			std::optional<float> keyReferenceLog2, std::optional<glm::vec2> sunUV, bool& degraded);
+		// The lens flare of the bloom chain's level 1 (as its downsample left it) into m_LensFlareTexture, with the share of the disk at `sunUV` that sees the
+		// sky in alpha, and the starburst the tone mapping draws there (m_Starburst: c_LensFlareRayGain times a white card's
+		// luminance in its light, 2^keyReferenceLog2 / 0.18). False (reported) when its resources cannot be made.
+		bool RenderLensFlare(nvrhi::ICommandList* commandList, std::optional<float> keyReferenceLog2, std::optional<glm::vec2> sunUV);
+		bool EnsureLensFlareResources();
+		// Depth of field of the post source (HDR or History) through `lens` into m_DepthOfFieldTexture: the half-resolution image
+		// and circles of confusion, the near field's tile maxima and their neighborhoods', the gather of both fields and the
+		// full-resolution composite. False (reported) when its resources cannot be made: the frame shows the image in focus.
+		bool RenderDepthOfField(nvrhi::ICommandList* commandList, const CameraLens& lens, PostSource source);
+		bool EnsureDepthOfFieldResources();
+		// Morphological anti-aliasing's targets, sets and area table (written by `commandList` the first time); false (reported)
+		// when they cannot be made: the frame takes FXAA instead.
+		bool EnsureMorphologicalResources(nvrhi::ICommandList* commandList);
+		// Motion blur of the post source (HDR, History or DepthOfField) into m_MotionBlurTexture: the tile maxima, their
+		// neighborhoods' and the gather. False (reported) when its resources cannot be made: the frame shows the image unblurred.
+		bool RenderMotionBlur(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, PostSource source);
+		bool EnsureMotionBlurResources();
+		// The players' quality rows applied to the scene's settings: the anti-aliasing method they chose and their motion blur.
+		static void ApplyQualityOverrides(PostProcessComponent& settings, const RendererQualitySettings& quality);
+		// Tone mapping of the post source into `output`, or into the LDR target and FXAA from it into `output` (FXAA unless the frame
+		// was `resolved` temporally). `colorLookup`: the texture of the Post Process's color lookup (ResolveColorLookup), or null.
+		// Sets `degraded` when a step failed (reported) and the image was drawn without it (the morphological anti-aliasing, drawn
+		// as FXAA; the color lookup or the lens flare); false (reported) when the tone mapping could not run: nothing was written
+		// into `output`.
+		bool RenderPostDisplay(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, const TemporalAntiAliasingSettings& temporalSettings,
+			bool resolved, PostSource source, bool bloom, const glm::vec2& vignetteTangents, uint32_t grainSeed, nvrhi::ITexture* colorLookup,
+			nvrhi::IFramebuffer* output, bool& degraded);
+		// The texture of the Post Process's color lookup, requested every frame it is used (through the frame's asset resolve
+		// cache, which holds it until the frame ends); null without one, at intensity 0, and while it loads.
+		nvrhi::ITexture* ResolveColorLookup(const PostProcessComponent& postProcess);
+		// The tone mapping's second set (set 1, slots t3, t4 and s2): the color lookup's texture and the lens flare's, each
+		// replaced by a dummy when null (the dummies made by the first frame, written by `commandList`); kept while frames use
+		// the same pair. Null (reported) when they cannot be made.
+		nvrhi::IBindingSet* GetTonemapInputSet(nvrhi::ICommandList* commandList, nvrhi::ITexture* lookup, nvrhi::ITexture* flare);
+		// The Post Process's grading (white balance, slope, offset, power), the white balance's part cached per temperature and tint.
+		PostProcessMath::ColorGrading GetColorGrading(const PostProcessComponent& postProcess);
+		// The bloom chain of the image `prefilterSet` reads (the first downsample: the HDR target's or the resolved image's): its
+		// downsamples, as deep as BloomRadius asks (only levels 0 and 1, the lens flare's, without `bloom`), which return the
+		// levels written, then its upsamples back to level 0, which the tone mapping reads.
+		uint32_t RenderBloomDownsamples(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* prefilterSet, bool bloom);
+		void RenderBloomUpsamples(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, uint32_t levels);
+		void DispatchBloom(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, nvrhi::IBindingSet* bindingSet, uint32_t mode, uint32_t level,
+			float upsampleWeight);
+		// A fullscreen triangle with `pipeline` into `framebuffer` (post passes, the overlays' copy); `secondSet` is bound at set 1
+		// for pipelines of two layouts.
 		void DrawFullscreen(nvrhi::ICommandList* commandList, nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* bindingSet,
-			const void* pushConstants, size_t pushConstantSize);
+			const void* pushConstants, size_t pushConstantSize, nvrhi::IBindingSet* secondSet = nullptr);
 		// A compute pipeline of the shader library's `shader` with one binding layout (verified: the shader exists).
 		nvrhi::ComputePipelineHandle CreateComputePipeline(const char* shader, nvrhi::IBindingLayout* layout);
 		// A render target of the viewport's kind (depth or color, in its render state).
@@ -1310,12 +1457,24 @@ namespace Strata
 		// The formats of the HDR image (and of the bloom chain and the temporal history) and of the display images.
 		static constexpr nvrhi::Format c_HDRFormat = nvrhi::Format::RGBA16_FLOAT;
 		static constexpr nvrhi::Format c_OutputFormat = nvrhi::Format::RGBA8_UNORM;
+		// The tone mapping's image before FXAA: 10 bits per channel in the 4 bytes RGBA8 takes, so the bands an undithered
+		// 8-bit intermediate would bake in stay out (FXAA dithers its 8-bit output once).
+		static constexpr nvrhi::Format c_LDRFormat = nvrhi::Format::R10G10B10A2_UNORM;
+		// Versions of the volatile FrameConstants buffer, and the most a frame writes: the frame's constants and, under TAA,
+		// the overlays' unjittered copy. ReserveFrameConstantVersions waits only when a caller outruns the GPU by more. The
+		// tone mapping's constant buffer (written once by every frame that writes these) has as many versions.
+		static constexpr uint32_t c_FrameConstantVersions = 16;
+		static constexpr uint32_t c_MaxFrameConstantWrites = 2;
+		static_assert(c_MaxFrameConstantWrites <= c_FrameConstantVersions);
 		// The scene's first active post-processing settings, or the defaults.
 		static PostProcessComponent GetPostProcessSettings(Scene& scene);
 		nvrhi::IGraphicsPipeline* GetScenePipeline(const PipelineKey& key);
 		// Fullscreen-triangle pipeline for a pixel shader and target format, cached per format.
 		nvrhi::IGraphicsPipeline* GetFullscreenPipeline(std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>>& cache, nvrhi::IShader* pixelShader,
 			nvrhi::IBindingLayout* layout, const nvrhi::FramebufferInfo& framebufferInfo);
+		// The same with several binding layouts, set 0 first.
+		nvrhi::IGraphicsPipeline* GetFullscreenPipeline(std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>>& cache, nvrhi::IShader* pixelShader,
+			const nvrhi::BindingLayoutVector& layouts, const nvrhi::FramebufferInfo& framebufferInfo);
 		// Grows a structured (or vertex) buffer to hold elementCount elements (the replaced buffer is released once the GPU
 		// is done with it); false when the allocation failed.
 		enum class BufferKind : uint8_t
@@ -1877,7 +2036,29 @@ namespace Strata
 		// Post-processing (SceneRendererPost.cpp; the temporal history's own post sets below belong to the TAA's resources)
 		nvrhi::BindingLayoutHandle m_TonemapBindingLayout;
 		nvrhi::BindingSetHandle m_TonemapBindingSet;
+		nvrhi::BufferHandle m_TonemapConstantBuffer; // RenderData::TonemapConstants, written once per frame (volatile)
+		bool m_TonemapConstantsWritten = false;      // By the frame being recorded (ReserveFrameConstantVersions starts a frame)
+		std::optional<PostProcessMath::ColorGrading> m_Grading; // The white balance of m_GradingKey (temperature, tint)
+		glm::vec2 m_GradingKey = glm::vec2(0.0f);
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_TonemapPipelines;
+		// The tone mapping's second set (set 1): its layout, the dummies of frames without a color lookup (1x1x1) and without a
+		// lens flare (1x1), and the latest set with the two textures it binds (it holds them, so neither address is reused while
+		// it is kept).
+		nvrhi::BindingLayoutHandle m_TonemapInputLayout;
+		nvrhi::TextureHandle m_ColorLookupDummy;
+		nvrhi::TextureHandle m_LensFlareDummy;
+		nvrhi::BindingSetHandle m_TonemapInputSet;
+		nvrhi::ITexture* m_TonemapInputLookup = nullptr;
+		nvrhi::ITexture* m_TonemapInputFlare = nullptr;
+		// The lens flare (SceneRendererPost.cpp): its layout and pipeline, and its quarter-resolution target and set (made by the
+		// first frame that flares, released with the render targets).
+		nvrhi::BindingLayoutHandle m_LensFlareLayout;
+		nvrhi::ComputePipelineHandle m_LensFlarePipeline;
+		nvrhi::TextureHandle m_LensFlareTexture;
+		nvrhi::BindingSetHandle m_LensFlareSet;
+		// The frame's starburst for the tone mapping (RenderLensFlare): the disk in UV and the rays' brightness, 0 without one.
+		glm::vec2 m_StarburstSun = glm::vec2(0.0f);
+		float m_Starburst = 0.0f;
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_FXAAPipelines;
 		nvrhi::BindingLayoutHandle m_ExposureBindingLayout;
 		nvrhi::BindingSetHandle m_ExposureBindingSet;
@@ -1888,13 +2069,75 @@ namespace Strata
 		nvrhi::BindingLayoutHandle m_BloomBindingLayout;
 		nvrhi::ComputePipelineHandle m_BloomPipeline;
 		nvrhi::TextureHandle m_BloomTexture;
-		uint32_t m_BloomLevels = 0;
+		uint32_t m_BloomLevels = 0; // Allocated (every level down to 4 pixels, at most RenderData::c_MaxBloomLevels)
+		float m_BloomSpan = 1.0f;   // The latest frame's (GetBloomSpan): the tone mapping normalizes the levels by it
 		std::vector<nvrhi::BindingSetHandle> m_BloomDownsampleSets; // [0]: scene color -> level 0, [n]: level n-1 -> n
 		std::vector<nvrhi::BindingSetHandle> m_BloomUpsampleSets;   // [n]: level n+1 -> n
 		nvrhi::ShaderHandle m_FXAAPixelShader;
 		nvrhi::BindingLayoutHandle m_FXAABindingLayout;
+		nvrhi::BindingLayoutHandle m_CopyBindingLayout; // The overlays' copy of the output texture into a target
 		nvrhi::BindingSetHandle m_FXAABindingSet;
-		nvrhi::TextureHandle m_LDRTexture; // Tone-mapped image before anti-aliasing
+		nvrhi::TextureHandle m_LDRTexture; // Tone-mapped image before anti-aliasing (c_LDRFormat)
+		// Morphological anti-aliasing (SceneRendererPost.cpp): its three passes' shaders, layouts and pipelines, its targets (the
+		// edges, RG8, and the blend weights, RGBA8: made by the first frame that uses it, released with the render targets) with
+		// their framebuffers and sets, and the area table (made with them the first time, kept).
+		nvrhi::ShaderHandle m_MorphologicalEdgesShader;
+		nvrhi::ShaderHandle m_MorphologicalWeightsShader;
+		nvrhi::ShaderHandle m_MorphologicalBlendShader;
+		nvrhi::BindingLayoutHandle m_MorphologicalEdgesLayout;
+		nvrhi::BindingLayoutHandle m_MorphologicalWeightsLayout;
+		nvrhi::BindingLayoutHandle m_MorphologicalBlendLayout;
+		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_MorphologicalEdgesPipelines;
+		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_MorphologicalWeightsPipelines;
+		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_MorphologicalBlendPipelines;
+		nvrhi::TextureHandle m_MorphologicalAreaTable;
+		nvrhi::TextureHandle m_MorphologicalEdges;
+		nvrhi::TextureHandle m_MorphologicalWeights;
+		nvrhi::FramebufferHandle m_MorphologicalEdgesFramebuffer;
+		nvrhi::FramebufferHandle m_MorphologicalWeightsFramebuffer;
+		nvrhi::BindingSetHandle m_MorphologicalEdgesSet;
+		nvrhi::BindingSetHandle m_MorphologicalWeightsSet;
+		nvrhi::BindingSetHandle m_MorphologicalBlendSet;
+		// Motion blur (SceneRendererPost.cpp): one layout for its three passes, their targets (made by the first frame that blurs,
+		// released with the render targets), their sets (the gather's per source: HDR, History 0 and 1) and the post sets of its
+		// output (exposure, bloom's prefilter, tone mapping).
+		nvrhi::BindingLayoutHandle m_MotionBlurLayout;
+		nvrhi::ComputePipelineHandle m_MotionBlurTilesPipeline;
+		nvrhi::ComputePipelineHandle m_MotionBlurNeighborsPipeline;
+		nvrhi::ComputePipelineHandle m_MotionBlurPipeline;
+		nvrhi::TextureHandle m_MotionBlurTexture;     // RGBA16F, viewport-sized: the blurred image, alpha 1 where it blurred
+		nvrhi::TextureHandle m_MotionBlurTileMax;     // RGBA16F, ceil(size / 8): each tile's largest blur (xy, pixels), its spread (z)
+		nvrhi::TextureHandle m_MotionBlurNeighborMax; // The largest of each tile's neighborhood (xy), its spread about it (z)
+		nvrhi::TextureHandle m_MotionBlurPixels;      // R32_UINT, viewport-sized: each pixel's blur radius and view distance
+		nvrhi::BindingSetHandle m_MotionBlurTilesSet;
+		nvrhi::BindingSetHandle m_MotionBlurNeighborsSet;
+		std::array<nvrhi::BindingSetHandle, 4> m_MotionBlurGatherSets; // HDR, History 0, History 1, the depth of field's output
+		nvrhi::BindingSetHandle m_MotionBlurExposureSet;
+		nvrhi::BindingSetHandle m_MotionBlurBloomSet;
+		nvrhi::BindingSetHandle m_MotionBlurTonemapSet;
+		// Depth of field (SceneRendererPost.cpp): one layout for its five passes, their targets (made by the first frame with a lens,
+		// released with the render targets), their sets (the half-resolution image's and the composite's per source: HDR, History
+		// 0 and 1) and the post sets of its output (exposure, bloom's prefilter, tone mapping).
+		nvrhi::BindingLayoutHandle m_DepthOfFieldLayout;
+		nvrhi::ComputePipelineHandle m_DepthOfFieldPreparePipeline;
+		nvrhi::ComputePipelineHandle m_DepthOfFieldTilesPipeline;
+		nvrhi::ComputePipelineHandle m_DepthOfFieldDilatePipeline;
+		nvrhi::ComputePipelineHandle m_DepthOfFieldGatherPipeline;
+		nvrhi::ComputePipelineHandle m_DepthOfFieldCompositePipeline;
+		nvrhi::TextureHandle m_DepthOfFieldTexture; // RGBA16F, viewport-sized: the composite, alpha 1 where it changed the image
+		nvrhi::TextureHandle m_DepthOfFieldHalf;    // RGBA16F, half size: the 2x2 means and signed circles of confusion
+		nvrhi::TextureHandle m_DepthOfFieldNear;    // RGBA16F, half size: the near field, premultiplied by its coverage
+		nvrhi::TextureHandle m_DepthOfFieldOwn;     // RGBA16F, half size: each texel's own blur (or what lies behind a near one)
+		nvrhi::TextureHandle m_DepthOfFieldTileMax; // RGBA16F, ceil(half size / 8): the largest near (x) and far (y) radius per tile
+		nvrhi::TextureHandle m_DepthOfFieldDilated; // Their 3x3 neighborhoods' largest
+		std::array<nvrhi::BindingSetHandle, 3> m_DepthOfFieldPrepareSets;   // HDR, History 0, History 1
+		std::array<nvrhi::BindingSetHandle, 3> m_DepthOfFieldCompositeSets; // HDR, History 0, History 1
+		nvrhi::BindingSetHandle m_DepthOfFieldTilesSet;
+		nvrhi::BindingSetHandle m_DepthOfFieldDilateSet;
+		nvrhi::BindingSetHandle m_DepthOfFieldGatherSet;
+		nvrhi::BindingSetHandle m_DepthOfFieldExposureSet;
+		nvrhi::BindingSetHandle m_DepthOfFieldBloomSet;
+		nvrhi::BindingSetHandle m_DepthOfFieldTonemapSet;
 		nvrhi::FramebufferHandle m_LDRFramebuffer;
 		bool m_ResetExposure = true;
 		// The pre-exposure (SceneRendererStats::PreExposure): the value frames are drawn with; whether it settled; a reset asked
@@ -1917,6 +2160,9 @@ namespace Strata
 		uint32_t m_ExposureReadbackIndex = 0;
 		bool m_ExposureReadbackRecorded = false; // The frame being recorded copies the exposure (SubmitExposureReadback)
 		uint64_t m_ExposureReadbackSeen = 0;
+		// The newest readback's metering (SceneRendererStats::ExposureLog2Luminance, ExposureKeyStops), of the current epoch only.
+		std::optional<float> m_MeteredLog2Luminance;
+		float m_MeteredKeyStops = 0.0f;
 		float m_HistoryPreExposure = 1.0f; // The pre-exposure of the temporal history's newest image
 		// Temporal anti-aliasing (SceneRendererSpecification::TemporalAntiAliasing): the frame being rendered uses it; the frames
 		// the history holds (0: none); the frame that resolved it last (RenderCount + 1; 0: none, or not since a frame failed),

@@ -44,11 +44,6 @@ namespace Strata
 		constexpr nvrhi::Format c_VelocityFormat = nvrhi::Format::RG16_FLOAT;
 		constexpr nvrhi::Format c_EnvironmentFormat = nvrhi::Format::RGBA16_FLOAT;
 
-		// Versions of the volatile FrameConstants buffer, and the most a frame writes: the frame's constants and, under TAA,
-		// the overlays' unjittered copy. ReserveFrameConstantVersions waits only when a caller outruns the GPU by more.
-		constexpr uint32_t c_FrameConstantVersions = 16;
-		constexpr uint32_t c_MaxFrameConstantWrites = 2;
-		static_assert(c_MaxFrameConstantWrites <= c_FrameConstantVersions);
 		constexpr uint32_t c_EnvironmentCubeSize = 512;
 		constexpr uint32_t c_IrradianceSize = 32;
 		constexpr uint32_t c_PrefilteredSize = 256;
@@ -276,12 +271,16 @@ namespace Strata
 		m_ShadowVertexShader = shaders.Get("Scene/ShadowMesh.vert");
 		m_ShadowMaskPixelShader = shaders.Get("Scene/ShadowMask.frag");
 		m_FXAAPixelShader = shaders.Get("PostProcess/FXAA.frag");
+		m_MorphologicalEdgesShader = shaders.Get("PostProcess/MorphologicalEdges.frag");
+		m_MorphologicalWeightsShader = shaders.Get("PostProcess/MorphologicalWeights.frag");
+		m_MorphologicalBlendShader = shaders.Get("PostProcess/MorphologicalBlend.frag");
 		m_SelectionMaskPixelShader = shaders.Get("Scene/SelectionMask.frag");
 		m_LocalShadowVertexShader = shaders.Get("Scene/LocalShadowMesh.vert");
 		m_SkinnedLocalShadowVertexShader = shaders.Get("Scene/LocalShadowMeshSkinned.vert");
 		ST_CORE_VERIFY(m_MeshVertexShader && m_PrepassPixelShader && m_ForwardPixelShader && m_ForwardTransparentPixelShader && m_GlassPixelShader && m_FullscreenVertexShader
 			&& m_TonemapPixelShader && m_SkyboxPixelShader && m_AtmosphereSkyboxPixelShader && m_ShadowVertexShader && m_ShadowMaskPixelShader && m_FXAAPixelShader && m_SkinnedMeshVertexShader
-			&& m_SkinnedShadowVertexShader && m_SelectionMaskPixelShader && m_LocalShadowVertexShader && m_SkinnedLocalShadowVertexShader,
+			&& m_SkinnedShadowVertexShader && m_SelectionMaskPixelShader && m_LocalShadowVertexShader && m_SkinnedLocalShadowVertexShader && m_MorphologicalEdgesShader
+			&& m_MorphologicalWeightsShader && m_MorphologicalBlendShader,
 			"SceneRenderer shaders are missing");
 
 		// The knobs within their ranges: cascades 1 to 4, the local shadows' atlas a power of two from 512 to 8192, at most
@@ -1345,6 +1344,7 @@ namespace Strata
 			ReleaseOldestFrameConstants();
 		}
 		m_FrameConstantWrites = 0;
+		m_TonemapConstantsWritten = false;
 	}
 
 	void SceneRenderer::WriteFrameConstants(nvrhi::ICommandList* commandList, const RenderData::FrameConstants& frame)
@@ -1392,6 +1392,15 @@ namespace Strata
 		return std::ldexp(1.0f, static_cast<int>(rounded));
 	}
 
+	void SceneRenderer::StartPreExposureEpoch()
+	{
+		m_PreExposureEpoch++;
+		// The stats report what this stretch metered: nothing until its first readback arrives, not the previous stretch's (a
+		// scene metered before a reset or a stretch of manual exposure).
+		m_MeteredLog2Luminance.reset();
+		m_MeteredKeyStops = 0.0f;
+	}
+
 	void SceneRenderer::ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options)
 	{
 		if (m_ResetPreExposure)
@@ -1399,14 +1408,14 @@ namespace Strata
 			m_ResetPreExposure = false;
 			m_PreExposure = 1.0f;
 			m_PreExposureSettled = false;
-			m_PreExposureEpoch++;
+			StartPreExposureEpoch();
 		}
 		const bool automatic = !options.PreExposure && settings.AutoExposure;
 		if (!automatic)
 		{
 			// Readbacks of the automatic exposure before this stretch say nothing about the frames after it.
 			if (m_PreExposureAutomatic)
-				m_PreExposureEpoch++;
+				StartPreExposureEpoch();
 			m_PreExposureAutomatic = false;
 			if (options.PreExposure)
 				m_PreExposure = *options.PreExposure > 0.0f ? GetPreExposureFor(std::log2(*options.PreExposure)) : 1.0f;
@@ -1432,9 +1441,11 @@ namespace Strata
 		if (!newest)
 			return;
 		m_ExposureReadbackSeen = newest->Render;
-		float values[2] = {};
+		float values[3] = {};
 		if (!newest->Readback->Read(values, sizeof(values)))
 			return;
+		m_MeteredLog2Luminance = values[RenderData::c_ExposureLogLuminance];
+		m_MeteredKeyStops = values[RenderData::c_ExposureKeyStops];
 		const float multiplier = values[RenderData::c_ExposureMultiplier];
 		if (!(multiplier > 0.0f) || !std::isfinite(multiplier))
 			return; // Nothing to follow (an image that metered nothing keeps its exposure)
@@ -1517,7 +1528,7 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(1, m_BloomTexture, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
 				nvrhi::BindingSetItem::Sampler(1, m_LinearClampSampler),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_ExposureBuffer),
-				nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::TonemapParameters))
+				nvrhi::BindingSetItem::ConstantBuffer(0, m_TonemapConstantBuffer)
 			};
 			tonemapSets[index] = m_Device->createBindingSet(tonemap, m_TonemapBindingLayout);
 			created = resolveSets[index] && exposureSets[index] && bloomSets[index] && tonemapSets[index];
@@ -2199,7 +2210,7 @@ namespace Strata
 		{
 			nvrhi::BindingSetDesc copySet;
 			copySet.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, output), nvrhi::BindingSetItem::Sampler(0, m_PointClampSampler) };
-			copyBindingSet = m_Device->createBindingSet(copySet, m_FXAABindingLayout);
+			copyBindingSet = m_Device->createBindingSet(copySet, m_CopyBindingLayout);
 		}
 		if (!output || !outputFramebuffer || !overlayFramebuffer || !copyBindingSet)
 		{
@@ -2317,6 +2328,12 @@ namespace Strata
 	nvrhi::IGraphicsPipeline* SceneRenderer::GetFullscreenPipeline(std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>>& cache,
 		nvrhi::IShader* pixelShader, nvrhi::IBindingLayout* layout, const nvrhi::FramebufferInfo& framebufferInfo)
 	{
+		return GetFullscreenPipeline(cache, pixelShader, nvrhi::BindingLayoutVector { layout }, framebufferInfo);
+	}
+
+	nvrhi::IGraphicsPipeline* SceneRenderer::GetFullscreenPipeline(std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>>& cache,
+		nvrhi::IShader* pixelShader, const nvrhi::BindingLayoutVector& layouts, const nvrhi::FramebufferInfo& framebufferInfo)
+	{
 		for (const auto& [info, pipeline] : cache)
 		{
 			if (info == framebufferInfo)
@@ -2327,7 +2344,7 @@ namespace Strata
 		desc.primType = nvrhi::PrimitiveType::TriangleList;
 		desc.VS = m_FullscreenVertexShader;
 		desc.PS = pixelShader;
-		desc.bindingLayouts = { layout };
+		desc.bindingLayouts = layouts;
 		desc.renderState.rasterState.setCullNone();
 		desc.renderState.depthStencilState.setDepthTestEnable(false).setDepthWriteEnable(false);
 		nvrhi::GraphicsPipelineHandle pipeline = m_Device->createGraphicsPipeline(desc, framebufferInfo);
@@ -2734,16 +2751,26 @@ namespace Strata
 		m_Stats.DeferredProxies = m_SceneGPU->GetDeferredProxies();
 
 		// Temporal anti-aliasing (below) blends along the motion vectors.
-		const PostProcessComponent postProcess = GetPostProcessSettings(scene);
+		// The players' quality rows apply to the copy every pass reads.
+		PostProcessComponent postProcess = GetPostProcessSettings(scene);
+		ApplyQualityOverrides(postProcess, m_Specification.Quality);
 		ChoosePreExposure(postProcess, options);
 		m_Stats.PreExposure = m_PreExposure;
 		m_Stats.PreExposureSettled = m_PreExposureSettled;
+		// What the automatic exposure metered (frames late) and the gray card its key compared with (this frame's light).
+		if (postProcess.AutoExposure && m_PreExposureAutomatic && m_MeteredLog2Luminance)
+		{
+			m_Stats.ExposureLog2Luminance = m_MeteredLog2Luminance;
+			m_Stats.ExposureKeyStops = m_MeteredKeyStops;
+		}
 		const bool temporalWanted = m_Specification.TemporalAntiAliasing && postProcess.AntiAliasing && postProcess.AntiAliasingMethod == AntiAliasingMode::TAA;
 		const TemporalAntiAliasingSettings temporalSettings = GetTemporalAntiAliasingSettings(postProcess);
 
 		// Motion: the history holds the renderer's previous frame when that frame copied it (its latest frame asked for motion
 		// too) and drew this render scene or the one it is a clone of (the same slots).
-		m_MotionFrame = options.MotionVectors || options.ShowMotionVectors || temporalWanted;
+		// Motion blur asks for motion vectors on every frame it is wanted, so the motion history goes on.
+		const bool motionBlurWanted = options.MotionBlur && !options.HDROutput && postProcess.MotionBlur && postProcess.MotionBlurShutterAngle > 0.0f;
+		m_MotionFrame = options.MotionVectors || options.ShowMotionVectors || temporalWanted || motionBlurWanted;
 		const bool motionHistory = m_MotionFrame && m_MotionRender != 0 && m_MotionRender == m_RenderCount
 			&& (m_MotionSceneId == renderScene.GetId() || renderScene.GetCloneSource() == m_MotionSceneId);
 		bool motionFailed = false;
@@ -3239,10 +3266,54 @@ namespace Strata
 				m_Errors.Clear();
 			return true;
 		}
-		// Post-processing reads the resolved image with temporal anti-aliasing (the history's newest texture).
+		// Post-processing reads the resolved image with temporal anti-aliasing (the history's newest texture), the depth of field's
+		// output on frames seen through a lens (perspective views, unless the players turned it off), and the motion blur's on
+		// frames that blur: not without a motion history (the first frame, a resize, another render scene) or on a camera cut,
+		// whose motion spans the cut.
 		const bool resolved = m_TemporalResolved;
+		PostSource postSource = resolved ? PostSource::History : PostSource::HDR;
+		if (options.Lens && !camera.Orthographic && m_Specification.Quality.DepthOfField != SceneEffectChoice::Off)
+		{
+			gpuTimer.Next(gpuStages.DepthOfField);
+			commandList->beginMarker("DepthOfField");
+			if (RenderDepthOfField(commandList, *options.Lens, postSource))
+				postSource = PostSource::DepthOfField;
+			else
+				degraded = true;
+			commandList->endMarker();
+		}
+		if (motionBlurWanted && m_Stats.MotionHistory && !cameraCut)
+		{
+			gpuTimer.Next(gpuStages.MotionBlur);
+			commandList->beginMarker("MotionBlur");
+			if (RenderMotionBlur(commandList, postProcess, postSource))
+				postSource = PostSource::MotionBlur;
+			else
+				degraded = true;
+			commandList->endMarker();
+		}
 		gpuTimer.Next(gpuStages.Post);
-		const bool bloom = RenderPostHDR(commandList, postProcess, resolved);
+		// The exposure key's reference: the luminance of a gray card (albedo 0.18) facing the directional light, as Forward.frag
+		// lights it (the atmosphere's transmittance included); none without a light.
+		std::optional<float> keyReferenceLog2;
+		const float sunLuminance = glm::dot(glm::vec3(frame.DirectionalLightColor), glm::vec3(0.2126f, 0.7152f, 0.0722f)) * 0.18f / glm::pi<float>();
+		if (frame.DirectionalLightDirection.w > 0.0f && sunLuminance > 0.0f && std::isfinite(sunLuminance))
+			keyReferenceLog2 = std::log2(sunLuminance);
+		if (postProcess.AutoExposure)
+			m_Stats.ExposureKeyReferenceLog2 = keyReferenceLog2;
+		// Where the directional light's disk is on screen (unjittered), for the lens flare's starburst: in front of a perspective
+		// camera only (an orthographic one sees directions at infinity edge-on).
+		std::optional<glm::vec2> sunUV;
+		if (postProcess.LensFlare > 0.0f && frame.DirectionalLightDirection.w > 0.0f)
+		{
+			const glm::vec4 clip = camera.Projection * camera.View * glm::vec4(-glm::vec3(frame.DirectionalLightDirection), 0.0f);
+			if (clip.w > 1e-6f && std::isfinite(clip.x) && std::isfinite(clip.y))
+			{
+				const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+				sunUV = glm::vec2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
+			}
+		}
+		const bool bloom = RenderPostHDR(commandList, postProcess, options, postSource, keyReferenceLog2, sunUV, degraded);
 
 		TextRenderStats textStats;
 		m_FontAtlases->BeginFrame(TextRenderer::c_FrameRasterBudget);
@@ -3254,6 +3325,8 @@ namespace Strata
 		m_Stats.PendingTextGlyphs = textStats.PendingGlyphs;
 		m_Stats.RasterizedTextGlyphs = textStats.RasterizedGlyphs;
 		const bool overlayPasses = PrepareOverlayPasses(scene, camera, options, commandList, gpuTimer);
+		// Requested before the statistics count what is pending: a color lookup that loads leaves the frame incomplete.
+		nvrhi::ITexture* colorLookup = ResolveColorLookup(postProcess);
 		const AssetResolveStats& assetStats = m_Assets.GetStats();
 		m_Stats.PendingAssets = assetStats.Pending + textStats.PendingFonts + m_Stats.Overlays.PendingAssets;
 		m_Stats.RequestsByVisibility = assetStats.Requested;
@@ -3279,7 +3352,20 @@ namespace Strata
 			return false;
 		}
 		nvrhi::IFramebuffer* output = target && !overlays ? target : m_OutputFramebuffer.Get();
-		RenderPostDisplay(commandList, postProcess, temporalSettings, resolved, bloom, output);
+		if (!RenderPostDisplay(commandList, postProcess, temporalSettings, resolved, postSource, bloom, GetVignetteTangents(camera, m_ViewportSize),
+				options.GrainSeed.value_or(static_cast<uint32_t>(m_RenderCount)), colorLookup, output, degraded))
+		{
+			// Nothing reached the output (the tone mapping's inputs could not be bound; reported): no image rather than a stale one.
+			gpuTimer.End();
+			commandList->endMarker();
+			commandList->close();
+			ExecuteFrame(commandList); // Keeps the uploads that were recorded
+			if (m_GPUDrivenFrame)
+				SubmitCullReadback();
+			SubmitExposureReadback();
+			m_Stats = {};
+			return false;
+		}
 
 		if (overlays)
 		{
@@ -3303,7 +3389,7 @@ namespace Strata
 			if (target)
 			{
 				commandList->beginMarker("Copy");
-				DrawFullscreen(commandList, GetFullscreenPipeline(m_CopyPipelines, m_CopyPixelShader, m_FXAABindingLayout, target->getFramebufferInfo()), target,
+				DrawFullscreen(commandList, GetFullscreenPipeline(m_CopyPipelines, m_CopyPixelShader, m_CopyBindingLayout, target->getFramebufferInfo()), target,
 					m_CopyBindingSet, nullptr, 0);
 				commandList->endMarker();
 			}

@@ -859,6 +859,8 @@ namespace Strata
 		SceneRenderOptions options;
 		options.PreviewEnvironment = true;
 		options.DrawScreenSpaceText = false;
+		options.MotionBlur = false; // A single image: no motion resources for a model or scene with motion blur on
+		options.GrainSeed = 0;      // and one film grain pattern, so a thumbnail made again is the same
 		if (!m_Renderer->Render(*job.World, camera.GetSceneCamera(1.0f), nullptr, options))
 		{
 			FinishScene(false, nullptr);

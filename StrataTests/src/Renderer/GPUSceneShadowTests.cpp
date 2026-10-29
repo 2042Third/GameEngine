@@ -96,7 +96,7 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		Scene& scene = shadowScene.SceneData;
 
 		constexpr uint32_t size = 128;
-		SceneRenderer renderer;
+		SceneRenderer renderer(ExactSpecification()); // Pixels of two places compared exactly
 		renderer.SetViewportSize(size, size);
 		SceneCamera camera = LookAt(glm::vec3(0.0f, 6.0f, 6.0f), glm::vec3(0.0f));
 		const glm::uvec2 underCube = ProjectToPixel(camera, glm::vec3(0.0f, 0.0f, 0.3f), size);

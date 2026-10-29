@@ -18,13 +18,6 @@ namespace
 
 	constexpr uint32_t c_Size = c_SceneTestSize;
 
-	SceneRendererSpecification ExactSpecification()
-	{
-		SceneRendererSpecification specification;
-		specification.TextureStreaming = false;
-		return specification;
-	}
-
 	// A view ray through a pixel's center: where it starts (on the near plane) and its direction, in world space.
 	struct PixelRay
 	{

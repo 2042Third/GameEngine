@@ -1,0 +1,30 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/DepthOfField.glsl"
+
+// Depth of field's dilated tile maxima: per tile, the largest of its 3x3 neighborhood's (x near, y far), so the near field's
+// gather reaches every near pixel whose blur spreads over the tile (a tile is at least as wide as the largest blur's radius).
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(2)) uniform texture2D u_TileMax;
+layout(set = 0, binding = ST_UAV(0), rgba16f) uniform writeonly image2D o_Dilated;
+
+void main()
+{
+	ivec2 tile = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 halfSize = (ivec2(u_Frame.ViewportSize.xy) + 1) / 2;
+	int tileSize = int(u_DepthOfField.TileSize);
+	ivec2 tiles = (halfSize + tileSize - 1) / tileSize;
+	if (any(greaterThanEqual(tile, tiles)))
+		return;
+	vec2 largest = vec2(0.0);
+	for (int y = -1; y <= 1; y++)
+	{
+		for (int x = -1; x <= 1; x++)
+			largest = max(largest, texelFetch(u_TileMax, clamp(tile + ivec2(x, y), ivec2(0), tiles - 1), 0).xy);
+	}
+	imageStore(o_Dilated, tile, vec4(largest, 0.0, 0.0));
+}

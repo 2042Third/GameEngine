@@ -591,7 +591,7 @@ TEST_SUITE("GPU.SceneRenderer.Overlays")
 		AddNeutralPostProcess(scene);
 		AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(UnlitColor({ 0.5f, 0.5f, 0.5f, 1.0f })), glm::vec3(0.0f), "Wall").GetComponent<TransformComponent>().Scale = glm::vec3(3.0f);
 
-		SceneRenderer renderer;
+		SceneRenderer renderer(ExactSpecification());
 		renderer.SetViewportSize(c_Size, c_Size);
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 4.0f), glm::vec3(0.0f));
 		const ReadbackImage plain = RenderToImage(renderer, scene, camera);

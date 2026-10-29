@@ -817,6 +817,93 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Context.GetUndoStack().GetHistory().size() == history + 1);
 	}
 
+	TEST_CASE("The camera's tone and color properties are set, undone and refused out of range")
+	{
+		CommandHarness harness;
+		const std::string entity = harness.Run("entity.create", { { "name", "Camera Look" } })["id"].get<std::string>();
+		harness.Run("component.add", { { "entity", entity }, { "component", "PostProcess" } });
+		const auto values = [&]() { return harness.Run("component.get", { { "entity", entity }, { "component", "PostProcess" } })["values"]; };
+		const nlohmann::json defaults = values();
+		CHECK(defaults["Tonemapper"] == "Filmic");
+		CHECK(defaults["Toe"] == 0.5);
+		CHECK(defaults["WhiteBalanceTemperature"] == 6500.0);
+		CHECK(defaults["ColorSlope"] == nlohmann::json::array({ 1.0, 1.0, 1.0 }));
+		const size_t undoDepth = harness.Context.GetUndoStack().GetPosition();
+		harness.Run("component.set", { { "entity", entity }, { "component", "PostProcess" }, { "values", { { "Toe", 0.25 }, { "Shoulder", 0.75 },
+			{ "WhiteBalanceTemperature", 3200.0 }, { "WhiteBalanceTint", -0.5 }, { "ColorSlope", { 1.5, 1.0, 0.5 } }, { "ColorOffset", { 0.01, 0.0, -0.01 } },
+			{ "ColorPower", { 1.0, 2.0, 1.0 } }, { "AutoExposureMetering", "Average" }, { "AutoExposureLowPercentile", 0.2 }, { "AutoExposureHighPercentile", 0.8 },
+			{ "AutoExposureLightSpeed", 5.0 }, { "AutoExposureKey", 0.25 }, { "MotionBlur", true }, { "MotionBlurShutterAngle", 90.0 },
+			{ "MotionBlurMaxLength", 0.03 }, { "FilmGrain", 0.25 }, { "ChromaticAberration", 0.5 }, { "ColorLookupIntensity", 0.75 },
+			{ "LensFlare", 0.3 } } } });
+		CHECK(harness.Context.GetUndoStack().GetPosition() == undoDepth + 1);
+		const nlohmann::json changed = values();
+		CHECK(changed["Toe"] == 0.25);
+		CHECK(changed["Shoulder"] == 0.75);
+		CHECK(changed["WhiteBalanceTemperature"] == 3200.0);
+		CHECK(changed["WhiteBalanceTint"] == -0.5);
+		CHECK(changed["ColorSlope"] == nlohmann::json::array({ 1.5, 1.0, 0.5 }));
+		CHECK(changed["AutoExposureMetering"] == "Average");
+		CHECK(changed["AutoExposureKey"] == 0.25);
+		CHECK(changed["MotionBlur"] == true);
+		CHECK(changed["MotionBlurShutterAngle"] == 90.0);
+		CHECK(changed["FilmGrain"] == 0.25);
+		CHECK(changed["ChromaticAberration"] == 0.5);
+		CHECK(changed["ColorLookupIntensity"] == 0.75);
+		CHECK(changed["LensFlare"] == 0.3);
+		for (const auto& [property, value] : { std::pair<const char*, nlohmann::json> { "Toe", 1.5 }, { "Shoulder", -0.5 }, { "WhiteBalanceTemperature", 1000.0 },
+				 { "WhiteBalanceTint", 2.0 }, { "ColorSlope", { 5.0, 1.0, 1.0 } }, { "ColorOffset", { 0.0, 0.5, 0.0 } }, { "ColorPower", { 0.1, 1.0, 1.0 } },
+				 { "Tonemapper", "Cinematic" }, { "AutoExposureMetering", "Spot" }, { "AutoExposureLowPercentile", 0.6 }, { "AutoExposureKey", 0.8 },
+				 { "MotionBlurShutterAngle", 400.0 }, { "MotionBlurMaxLength", 0.1 }, { "FilmGrain", 2.0 }, { "ChromaticAberration", -0.5 },
+				 { "ColorLookupIntensity", 1.5 }, { "ColorLookup", UUIDToJson(BuiltinAssets::CubeMesh) }, { "LensFlare", 2.0 } })
+		{
+			CAPTURE(property);
+			CHECK_FALSE(harness.Error("component.set", { { "entity", entity }, { "component", "PostProcess" }, { "values", { { property, value } } } }).empty());
+			CHECK(values() == changed);
+		}
+		harness.Run("edit.undo");
+		CHECK(values() == defaults);
+		// Toe and Shoulder shape only the Filmic curve.
+		harness.Run("component.set", { { "entity", entity }, { "component", "PostProcess" }, { "values", { { "Tonemapper", "AgX" } } } });
+		const nlohmann::json inactive = harness.Run("component.get", { { "entity", entity }, { "component", "PostProcess" } })["inactive"];
+		CHECK(inactive["Toe"] == "Only the Filmic curve has a toe (Tonemapper is AgX)");
+		CHECK(inactive["Shoulder"] == "Only the Filmic curve has a shoulder (Tonemapper is AgX)");
+	}
+
+	TEST_CASE("A camera's lens is set, undone and refused out of range")
+	{
+		CommandHarness harness;
+		const std::string entity = harness.Run("entity.create", { { "name", "Camera" } })["id"].get<std::string>();
+		const std::string subject = harness.Run("entity.create", { { "name", "Subject" } })["id"].get<std::string>();
+		harness.Run("component.add", { { "entity", entity }, { "component", "Camera" } });
+		const auto values = [&]() { return harness.Run("component.get", { { "entity", entity }, { "component", "Camera" } })["values"]; };
+		const nlohmann::json defaults = values();
+		CHECK(defaults["DepthOfField"] == false);
+		CHECK(defaults["FocusDistance"] == 10.0);
+		CHECK(defaults["Aperture"].get<double>() == doctest::Approx(2.8));
+		CHECK(defaults["SensorHeight"] == 24.0);
+		const size_t undoDepth = harness.Context.GetUndoStack().GetPosition();
+		harness.Run("component.set", { { "entity", entity }, { "component", "Camera" }, { "values", { { "DepthOfField", true }, { "FocusDistance", 4.5 },
+			{ "FocusEntity", subject }, { "Aperture", 1.4 }, { "SensorHeight", 36.0 } } } });
+		CHECK(harness.Context.GetUndoStack().GetPosition() == undoDepth + 1);
+		const nlohmann::json changed = values();
+		CHECK(changed["DepthOfField"] == true);
+		CHECK(changed["FocusDistance"] == 4.5);
+		CHECK(changed["FocusEntity"] == subject);
+		CHECK(changed["Aperture"].get<double>() == doctest::Approx(1.4));
+		CHECK(changed["SensorHeight"] == 36.0);
+		const nlohmann::json inactive = harness.Run("component.get", { { "entity", entity }, { "component", "Camera" } })["inactive"];
+		CHECK(inactive["FocusDistance"] == "A Focus Entity sets the distance");
+		for (const auto& [property, value] : { std::pair<const char*, nlohmann::json> { "FocusDistance", 0.0 }, { "Aperture", 0.5 }, { "SensorHeight", 200.0 },
+				 { "FocusEntity", "not an entity" } })
+		{
+			CAPTURE(property);
+			CHECK_FALSE(harness.Error("component.set", { { "entity", entity }, { "component", "Camera" }, { "values", { { property, value } } } }).empty());
+			CHECK(values() == changed);
+		}
+		harness.Run("edit.undo");
+		CHECK(values() == defaults);
+	}
+
 	TEST_CASE("Hierarchy, duplication, components and selection")
 	{
 		CommandHarness harness;
@@ -842,7 +929,9 @@ TEST_SUITE("Editor.Commands")
 		CHECK_FALSE(harness.Run("component.get", { { "entity", c }, { "component", "SpotLight" } }).contains("inactive"));
 		harness.Run("component.add", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "Bloom", false } } } });
 		const nlohmann::json post = harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } });
-		CHECK(post["inactive"] == WithTemporalRows({ { "BloomIntensity", "Bloom is off" }, { "BloomThreshold", "Bloom is off" } }, c_OnlyTAA, c_ReflectionsNeedTAA));
+		CHECK(post["inactive"] == WithTemporalRows({ { "BloomIntensity", "Bloom is off" }, { "BloomThreshold", "Bloom is off" }, { "BloomRadius", "Bloom is off" },
+			{ "MotionBlurShutterAngle", "Motion Blur is off" }, { "MotionBlurMaxLength", "Motion Blur is off" },
+			{ "ColorLookupIntensity", "No Color Lookup is set" } }, c_OnlyTAA, c_ReflectionsNeedTAA));
 		CHECK(harness.Run("entity.get", { { "entity", c } })["inactive"] == nlohmann::json { { "PostProcess", post["inactive"] } });
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 		CHECK_FALSE(harness.Run("entity.get", { { "entity", c } }).contains("inactive"));
@@ -859,7 +948,9 @@ TEST_SUITE("Editor.Commands")
 		CHECK(method() == "TAA");
 		harness.Run("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "AntiAliasing", false } } } });
 		CHECK(harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } })["inactive"]
-			== WithTemporalRows({ { "AntiAliasingMethod", "Anti Aliasing is off" } }, "Anti Aliasing is off", "Needs TAA (Anti Aliasing is off)"));
+			== WithTemporalRows({ { "AntiAliasingMethod", "Anti Aliasing is off" }, { "MotionBlurShutterAngle", "Motion Blur is off" },
+				{ "MotionBlurMaxLength", "Motion Blur is off" }, { "ColorLookupIntensity", "No Color Lookup is set" } }, "Anti Aliasing is off",
+				"Needs TAA (Anti Aliasing is off)"));
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 
 		// The TAA's preset and tunables: Custom with tunables in one step, undone in one; out-of-range values refused without
@@ -883,7 +974,8 @@ TEST_SUITE("Editor.Commands")
 		CHECK(values["TAASharpening"] == 0.25);
 		CHECK(postInactive() == nlohmann::json { { "TAAClipWidth", "Only Tight clipping uses it (TAA History Clamp is Range)" },
 			{ "TAADisocclusionThreshold", "TAA Disocclusion Rejection is off" }, { "ScreenSpaceReflectionsIntensity", "Screen Space Reflections is off" },
-			{ "ScreenSpaceReflectionsMaxRoughness", "Screen Space Reflections is off" } });
+			{ "ScreenSpaceReflectionsMaxRoughness", "Screen Space Reflections is off" }, { "MotionBlurShutterAngle", "Motion Blur is off" },
+			{ "MotionBlurMaxLength", "Motion Blur is off" }, { "ColorLookupIntensity", "No Color Lookup is set" } });
 		for (const auto& [property, value] : { std::pair<const char*, nlohmann::json> { "TAAHistoryFrames", 40 }, { "TAAHistoryFrames", 1 },
 				 { "TAAMotionResponse", 0.5 }, { "TAAClipWidth", 0.25 }, { "TAADisocclusionThreshold", 0.6 }, { "TAASharpening", 1.5 }, { "TAAHistoryClamp", "Box" },
 				 { "TAAPreset", "Blurry" }, { "ScreenSpaceReflectionsIntensity", 1.5 }, { "ScreenSpaceReflectionsMaxRoughness", -0.1 } })

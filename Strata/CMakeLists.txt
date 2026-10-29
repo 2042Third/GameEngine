@@ -114,11 +114,23 @@ strata_add_shaders(Strata_Renderer
 		Effects/ScreenShadowsBlur.frag
 		PostProcess/Fullscreen.vert
 		PostProcess/Tonemap.frag
+		PostProcess/MotionBlurTiles.comp
+		PostProcess/MotionBlurNeighbors.comp
+		PostProcess/MotionBlur.comp
+		PostProcess/DepthOfFieldPrepare.comp
+		PostProcess/DepthOfFieldTiles.comp
+		PostProcess/DepthOfFieldDilate.comp
+		PostProcess/DepthOfFieldGather.comp
+		PostProcess/DepthOfFieldComposite.comp
 		PostProcess/Histogram.comp
 		PostProcess/Exposure.comp
 		PostProcess/Bloom.comp
+		PostProcess/LensFlare.comp
 		PostProcess/TAA.comp
 		PostProcess/FXAA.frag
+		PostProcess/MorphologicalEdges.frag
+		PostProcess/MorphologicalWeights.frag
+		PostProcess/MorphologicalBlend.frag
 		PostProcess/Copy.frag
 		IBL/AtmosphereTransmittance.comp
 		IBL/AtmosphereMultipleScattering.comp

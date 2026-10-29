@@ -58,7 +58,8 @@ namespace Strata
 		// Adds the template's entities to a scene. "basic3d": a primary "Main Camera" (with an audio listener) at (0, 2, 6)
 		// looking at the origin, a "Sun" directional light (intensity 3, shadows) shining from GetBasic3DSunDirection, a "Sky"
 		// with a procedural sky light, a 20 x 20 "Ground" plane with the assets' ground material, and a "Post Process"
-		// entity (ACES, automatic exposure with +1 EV of compensation). "empty" adds nothing. False for an unknown id.
+		// entity (Filmic, automatic exposure at Exposure 0, TAA; the rest of the look the component's defaults). "empty" adds
+		// nothing. False for an unknown id.
 		bool Populate(std::string_view id, Scene& scene, const TemplateAssets& assets = {});
 		// Whether the template's scene uses TemplateAssets::GroundMaterial.
 		bool UsesGroundMaterial(std::string_view id);

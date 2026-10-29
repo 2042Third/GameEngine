@@ -88,12 +88,17 @@ namespace
 		return RendererQuality::GetPresetValues()[static_cast<size_t>(preset)];
 	}
 
+	// Every field's source: `expected` for the preset and the rows that follow it; the project's for the players' rows the
+	// presets leave alone (anti-aliasing, motion blur...), which no case that checks sources this way chooses.
 	void CheckSources(GameGraphicsService& service, const SettingsSection& section, GameGraphicsSource expected)
 	{
 		for (const SettingsField& field : section.Fields)
 		{
 			CAPTURE(field.Name);
-			CHECK(service.GetSource(field.Name) == expected);
+			bool followsPreset = true;
+			for (const RendererQuality::RowTraits& row : RendererQuality::GetRowTraits())
+				followsPreset = row.Field == field.Name ? row.FollowsPreset : followsPreset;
+			CHECK(service.GetSource(field.Name) == (followsPreset ? expected : GameGraphicsSource::Project));
 		}
 	}
 
@@ -193,6 +198,30 @@ TEST_SUITE("Runtime.GameGraphics")
 		REQUIRE(service.SetOption("LODErrorPixels", 0.75));
 		CHECK(service.GetEffectiveValue()["ShadowCascades"] == 2);
 		CHECK(service.GetEffectiveValue()["LODErrorPixels"] == 0.75);
+	}
+
+	TEST_CASE("The renderer's players' rows are chosen apart from the preset, also under the command line's")
+	{
+		GraphicsProject project("GameGraphicsPlayersRows");
+		GameGraphicsService service(&project.Values, &project.Saves, &project.Registry);
+		REQUIRE(service.SetOption("MotionBlur", "Off"));
+		REQUIRE(service.SetOption("antialiasing", "fxaa"));
+		CHECK(service.GetPlayerOptions() == nlohmann::json { { "AntiAliasing", "FXAA" }, { "MotionBlur", "Off" } });
+		CHECK(service.GetEffectiveValue()["Preset"] == "High");
+		CHECK(service.GetSource("MotionBlur") == GameGraphicsSource::Player);
+		CHECK(service.GetSource("DepthOfField") == GameGraphicsSource::Project);
+		CHECK(service.GetSource("MotionBlurQuality") == GameGraphicsSource::Project);
+		CHECK(service.GetQuality().MotionBlur == SceneEffectChoice::Off);
+		CHECK(service.GetQuality().AntiAliasing == AntiAliasingChoice::FXAA);
+		// A preset choice keeps them, and so does the command line's preset, which decides the rows that follow it.
+		REQUIRE(service.SetOption("Preset", "Low"));
+		CHECK(service.GetPlayerOptions() == nlohmann::json { { "Preset", "Low" }, { "AntiAliasing", "FXAA" }, { "MotionBlur", "Off" } });
+		service.SetCommandLinePreset(RendererQualityPreset::Ultra);
+		CHECK(service.GetQuality().MotionBlurQuality == MotionBlurSamples::Samples16);
+		CHECK(service.GetQuality().MotionBlur == SceneEffectChoice::Off);
+		CHECK(service.GetSource("MotionBlurQuality") == GameGraphicsSource::CommandLine);
+		CHECK(service.GetSource("MotionBlur") == GameGraphicsSource::Player);
+		CHECK(service.GetSource("FilmGrain") == GameGraphicsSource::Project);
 	}
 
 	TEST_CASE("A value the section refuses changes nothing and names the field")
@@ -462,13 +491,17 @@ TEST_SUITE("Runtime.GameGraphics")
 		{
 			GameGraphicsService service(&project.Values, &project.Saves, &project.Registry);
 			REQUIRE(service.SetOption("ShadowCascades", 2));
-			// The player's Custom, from the project's tuning, holds every row.
+			// The player's Custom, from the project's tuning, holds every row that follows the preset; the players' rows the
+			// presets leave alone stay the project's until the player chooses them.
 			const nlohmann::json& player = service.GetPlayerOptions();
 			CHECK(player.value("Preset", std::string()) == "Custom");
 			CHECK(player.value("ShadowResolution", std::string()) == "1024");
 			CHECK(player.value("ShadowCascades", 0) == 2);
 			for (const RendererQuality::RowTraits& row : RendererQuality::GetRowTraits())
-				CHECK(player.contains(std::string(row.Field)));
+			{
+				CAPTURE(std::string(row.Field));
+				CHECK(player.contains(std::string(row.Field)) == row.FollowsPreset);
+			}
 			REQUIRE(service.SaveOptions());
 
 			// The project's preset changes: the player's tuning stays in effect, and is reported as theirs.

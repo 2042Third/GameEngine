@@ -127,7 +127,7 @@ modules:
 | `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU at 60 frames per second (servers, CI); `--frames N` stops after N frames (a count that is not a positive whole number exits 3, so a mistyped check cannot run forever); `--seconds S` stops at the frame by which the game played S seconds of game time (`GameRuntime::GetPlayedSeconds`: the fixed steps of its scenes from its start on, not the loading scene's; refused like `--frames`; with both, the first reached ends the run), the length of a check whose outcome depends on how far the game got (a picture, a tour), which a count of frames is not: the frame rate differs by machine and configuration; both keep every fixed step (no time dilation, and a frame longer than the scene's `MaxFixedStepsPerFrame` steps plays only the time they simulate, `GameRuntimeOptions::KeepEveryFixedStep`, so the scene's clock and its scripts' frame time agree with the steps counted); `--screenshot out.png` with `--frames N` or `--seconds S` saves the last frame (and fails the run when it shows the missing-camera message, or a black frame because the start scene still loads: scenes load in the background, the manifest's optional `LoadingScene` plays meanwhile); `--asset-budget-mb <n>` sets the GPU texture budget of the game's assets; `--resolution <width>x<height>` renders in a window of exactly that many pixels whatever the display's scale (instead of the manifest's window, which scales with the display; implies `--windowed`); `--quality <low|medium|high|ultra>` draws the run at a Graphics Quality preset and saves nothing (Custom, unknown names and `--headless` exit 3; "Quality settings"); `--perf-log <csv>` writes a row per frame (frame time, frame profiler stages, job threads, asset streaming and mip streaming, the upload queue, the device's memory and its staging, the process's private memory and its peak, the GPU's stages and busy time of the same frame, then a world's streaming and physics columns and what the renderer
 drew: draw calls, instances, triangles, visible and occluded proxies, instance uploads), also headless; `--save-directory <dir>` keeps the game's save files there instead of the player's data directory (tests); `--help` prints the options (`c_Arguments`), and an argument it does not understand or a bad value ends the run with the problem and the usage on stderr and exit code 3, as in the editor (`Core/CommandLineOptions`: `FindUnknownArgument`, `FormatUsage`, `c_UsageExitCode`). Patch packs the manifest lists (`PatchPacks`) are mounted over the game's pack. |
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `ThirdPerson`, `OpenWorld`, `PhysicsPlayground` and `Tetris` (played and exported by the CTests `StrataEditor.ThirdPerson`, `StrataEditor.OpenWorld`, `StrataEditor.PhysicsPlayground` and `StrataEditor.Tetris`), each with `README.md`, `CREDITS.md` and `Picture.png` ([Samples](#samples): how they are made, credited and kept within budgets). `Samples.json` lists them; the build copies them next to the executables (`StrataSamples`), where the launcher's Open Sample and `project.openSample` offer them as copies. Open one in place only to change the sample: `StrataEditor --project Samples/<Game>`. |
-| `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables; `GenerateIslandTerrain.py` makes the Open World sample's island: its terrain tiles and palette, and the command script that scatters its vegetation; `GenerateBlueNoise.py` writes the sun shadows' 64x64 blue-noise tile, `Strata/src/Strata/Renderer/BlueNoise.h`, and `--check` verifies the committed one), `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)), `PerfLock.py` (runs a command under a lock in the user's temporary directory, so that the measurements of agents run by one user never overlap) `CompatLint.py` (compiles changed files with GCC 14 and LLVM 16, the compilers closest to CI's, without precompiled headers, before a push: AGENTS.md, "CI before main") and `CIStatus.py` (the state of a commit's CI runs and the failure annotations its jobs left, readable without a job log) and `LookDev.py` (pictures of fixed shots through headless editors and their comparison between builds, see [Look-dev harness](#look-dev-harness)). |
+| `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables; `GenerateIslandTerrain.py` makes the Open World sample's island: its terrain tiles and palette, and the command script that scatters its vegetation; `GenerateBlueNoise.py` writes the sun shadows' 64x64 blue-noise tile, `Strata/src/Strata/Renderer/BlueNoise.h`, and `--check` verifies the committed one; `FitFilmic.py` fits the Filmic tone curve into `FilmicConstants.glsl` and `FilmicConstants.h`, `GenerateWhiteBalance.py` writes the white balance's locus, `Renderer/WhiteBalanceLocus.inl`, and `GenerateAreaTable.py` the morphological anti-aliasing's area table, `Renderer/MorphologicalAreaTable.inl`: see [Post-processing](#post-processing)), `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)), `PerfLock.py` (runs a command under a lock in the user's temporary directory, so that the measurements of agents run by one user never overlap) `CompatLint.py` (compiles changed files with GCC 14 and LLVM 16, the compilers closest to CI's, without precompiled headers, before a push: AGENTS.md, "CI before main") and `CIStatus.py` (the state of a commit's CI runs and the failure annotations its jobs left, readable without a job log) and `LookDev.py` (pictures of fixed shots through headless editors and their comparison between builds, see [Look-dev harness](#look-dev-harness)). |
 | `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, render scene, animation, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands), `Manual/` (guides for people making games in the editor: `Scripting.md`), `Releases/` (the notes of each release, `<version>.md`, and the README of the release archives, `PackageReadme.md`). |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
 
@@ -638,6 +638,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     mean channel difference and a difference image (eight times the difference), the crops side by side, and per picture
     the ratio of the GPU times; `compare.json` and `index.html`. It reports differences without failing; exit code 1 only
     when one side has a picture the other lacks.
+  - A shot's `Setup` runs editor commands on its scene before the captures; a step's `entityName` names the entity, and
+    `repoFile` (a path in the repository) gives `asset.import` the file to copy in (`tp.lut` imports the feature project's
+    `Warm.cube`).
   - Shots and look-dev content are appended, never changed, so that captures of every build keep comparing. GPU times
     are kept only from runs alone on the machine, under `python Tools/PerfLock.py --label lookdev-<label> --limit 90 -- ...`
     (a full run takes longer than the lock's default limit); the pictures are read and cropped on every core after the
@@ -697,8 +700,9 @@ exercised by it.
   with committed `.meta` files). Its scene `Scenes/Feature.stscene` contains every registered component, its project
   file sets every registered project settings section to a value other than the default (the collision layers the
   scene and scripts use come from there: `FeatureProject` provides the project's settings as `IProjectSettings`, as a
-  program that runs a project does, and the scene stores none; its `Renderer.Quality` is a Custom value with every field
-  off its default, which `GPU.FeatureTest` renders the feature scene with), it gives the game an identity (title,
+  program that runs a project does, and the scene stores none; its `Renderer.Quality` is a Custom value with every cost
+  knob off its default and the players' rows of the effects the scene uses at Scene, so those effects run, which
+  `GPU.FeatureTest` renders the feature scene with), it gives the game an identity (title,
   version, company,
   copyright and `Textures/Checker.png` as its icon, which `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` find in
   the export, its log and `FeatureTest.png`), the project has assets of every type (the tiny binary ones come from `Tools/GenerateAssets.py`, whose outputs are committed), and
@@ -3140,8 +3144,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   texture is created by the first frame that needs it (no target, or overlays or text to compose), so renderers that
   draw into targets without overlays (games without text) never hold one.
 - `SceneRenderer.cpp` holds the frame (`RenderFrame`) and what its passes share; features live in files of their own:
-  `SceneRendererPost.cpp` the post-processing from the HDR image to the display (`RenderPostHDR`: exposure and bloom;
-  `RenderPostDisplay`: tone mapping and FXAA; their resources, targets and passes), `SceneRendererAmbientOcclusion.cpp`
+  `SceneRendererPost.cpp` the post-processing from the HDR image to the display (depth of field and motion blur;
+  `RenderPostHDR`: exposure, bloom and lens flares; `RenderPostDisplay`: tone mapping, then FXAA or the morphological
+  anti-aliasing; their resources, targets and passes), `SceneRendererAmbientOcclusion.cpp`
   the ambient occlusion (GTAO and its blur, their resources and targets), `SceneRendererGlass.cpp`,
   `SceneRendererScreenReflections.cpp`, `SceneRendererReflectionProbes.cpp`, `SceneRendererAtmosphere.cpp`,
   `SceneRendererLocalShadows.cpp`, `SceneRendererExtraction.cpp` and `SceneRendererGPUDriven.cpp`. Their members stay
@@ -3179,12 +3184,16 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `LODErrorPixels` / `MinProjectedPixels` | 2 / 1 | 1 / 0.5 | 1 / 0.5 | 0.5 / 0.25 |
 | `ShadowFilterQuality` (taps of the sun's wide penumbrae) | 8 | 16 | 24 | 32 |
 | `ContactShadows` (steps of the sun's contact shadows; 0 off) | 0 | 0 | 12 | 16 |
+| `MotionBlurQuality` (samples, for scenes with motion blur) | Off | 8 | 12 | 16 |
+| `AntiAliasing`, `MotionBlur`, `DepthOfField`, `FilmGrain`, `ChromaticAberration` (players' rows, under every preset: they only turn off what a scene uses) | Scene | Scene | Scene | Scene |
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
+| Motion blur's targets per view (scenes with motion blur) | none | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost per pixel
-  (`ShadowFilterQuality`, `ContactShadows`; `Renderer.Quality` checks it).
+  (`ShadowFilterQuality`, `ContactShadows`, and `MotionBlurQuality` for scenes with motion blur; `Renderer.Quality` checks
+  it).
   Custom is the section's fields (High's values by default). `RendererQuality::Clamp` keeps every knob in its range.
 - **Auto by rows:** `RendererQuality::ResolveShadowMapSize` resolves Auto and AutoFine for the renderer's viewport rows
   (its output: the Scene and Game views' panel pixels, the window's back buffer, a capture's image), limited to
@@ -3227,12 +3236,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `RendererQuality.cpp`, a line in `GetPreset`, `FromSectionValue` and `ToSectionValue`, a field of the section (its
   default High's value) whose title and description say what it changes and costs to agents, people and players alike
   (games' options menus show them through `Graphics::Options`: no "Custom only", engine versions or the editor's layout,
-  which `Renderer.Quality` checks), `Clamp`'s line, its use in the renderer (both draw paths, and every
-  cache that must notice it), a check of its column in `Renderer.Quality`'s first case, a non-default Custom value in
-  `FeatureTest.stproj`, a line in the traits table (below), and its cost in the table above. `HasSameKnobs` and
-  `renderStats.quality` need no line. Each landing that adds rows raises `RendererQuality::c_SectionVersion` by one (an
-  integrator renumbers when two streams chose the same); values stored at an older version read the new fields'
-  defaults.
+  which `Renderer.Quality` checks), `Clamp`'s line, its use in the renderer (both draw paths, and every cache that must
+  notice it), a check of its column in `Renderer.Quality`'s first case, a Custom value in `FeatureTest.stproj` (a cost
+  knob's off its default; a players' row that turns off an effect the feature scene uses stays at Scene, so the effect
+  runs: the feature test checks the section's value as a whole against its default), a line in the traits table
+  (below), and its cost in the table above. `HasSameKnobs` and `renderStats.quality` need no line. Each landing that
+  adds rows raises `RendererQuality::c_SectionVersion` by one (an integrator renumbers when two streams chose the same);
+  values stored at an older version read the new fields' defaults.
 - **Row traits:** what graphics options (the Graphics Quality page, the players' options) know of each field but
   `Preset` is a line of `c_RowTraits` in `RendererQuality.cpp`, in field order beside the knob's preset row
   (`RendererQuality::GetRowTraits`; `Renderer.Quality` fails for a field without one): `FollowsPreset` (true: the row
@@ -3241,8 +3251,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   "Players' choices"), `GPUStage` (the GPU stage whose time the row changes, which the page shows) and `MemoryBytes`
   (the bytes the row's resources take in one renderer for some settings at an output size, Auto resolved by its rows;
   null when the row allocates nothing of its own or another row counts it: `ShadowCascades` is counted with
-  `ShadowResolution`). The option logic works over a `RendererQuality::OptionModel` (a simple quality section, its rows'
-  traits and its four presets' values, `GetPresetValues`: `ToSectionValue(GetPreset(p))`), the engine's
+  `ShadowResolution`, the players' `MotionBlur` with `MotionBlurQuality`, whose targets the page counts as a scene with
+  motion blur would make them). The players' rows `AntiAliasing`, `MotionBlur`, `DepthOfField`, `FilmGrain` and
+  `ChromaticAberration` do not follow the preset. The option logic works over a `RendererQuality::OptionModel` (a
+  simple quality section, its rows' traits and its four presets' values, `GetPresetValues`: `ToSectionValue(GetPreset(p))`), the engine's
   `GetOptionModel(section)` or a test's own: `FindRow` (ignoring case), `Normalize` (every field present and, under a
   named preset, the rows that follow it set to the preset's values: what is in effect, spelled out; idempotent) and
   `MakeCustomStart` (the Custom value a switch to Custom starts from: the stored rows that follow the preset are kept
@@ -3455,7 +3467,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Motion vectors and TAA
 
-- A frame with `SceneRenderOptions::MotionVectors` (or `ShowMotionVectors`, the motion debug view) writes each opaque and
+- A frame with `SceneRenderOptions::MotionVectors` (or `ShowMotionVectors`, the motion debug view, or TAA, or the motion blur:
+  "Post-processing") writes each opaque and
   alpha-masked surface's motion since the renderer's previous frame into an RG16F velocity target
   (`SceneRenderer::GetVelocityTexture`): its unjittered position in this frame's UV space minus its position in the
   previous one's (`FrameConstants::UnjitteredViewProjection`, `PreviousViewProjection`, built in double relative to the
@@ -3885,10 +3898,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
 - Exposure: the tonemapper sees `L * M`, L the scene's luminance in nits and M the multiplier of the exposure buffer
   (`SceneRenderer::UpdateExposure`; the HDR target holds `L * P`, see the pre-exposure below, and the tone mapping applies
   `M / P`). Manual exposure: `M = 2^Exposure` (registered within [-16, 16]). Automatic
-  exposure: `M = 2^Exposure * 0.18 / 2^a`, where `a` is the log2 average luminance metered by `Exposure.comp`'s
-  histogram (`Include/Exposure.glsl`: [-12, 16] in 254 bins of 0.11 EV, the darkest and brightest tenth of the pixels
-  left out), adapted at `AutoExposureSpeed` and clamped to [`AutoExposureMinEV`, `AutoExposureMaxEV`]: the average lands
-  on middle gray, and `Exposure` compensates.
+  exposure: `M = 2^Exposure * 0.18 / 2^a * 2^k`, where `a` is the log2 average luminance metered by `Exposure.comp`'s
+  histogram (`Include/Exposure.glsl`: [-12, 16] in 254 bins of 0.11 EV, the pixels outside the
+  `AutoExposureLowPercentile`-`HighPercentile` window left out, weighed by `AutoExposureMetering`), adapted and clamped to
+  [`AutoExposureMinEV`, `AutoExposureMaxEV`], and `k` the exposure key ("Post-processing"): the average lands on middle
+  gray, and `Exposure` compensates. Where the tone curve shows that middle gray on the display depends on the curve:
+  Filmic (the default since 0.7.0) shows 0.18 as 0.18 (sRGB 118) and needs no compensation; ACES shows it at 0.106 (sRGB
+  91, about 0.8 EV darker), Khronos Neutral at 0.14 (sRGB 105) and AgX at 0.215 (sRGB 128).
 - A camera: a reflected-light meter calibrated with K = 12.5 reads EV100 = log2(L * 100 / 12.5) = log2(L) + 3 for an
   average luminance L, and the manual exposure that puts L at middle gray is log2(0.18 / L) = 0.53 - EV100. So
   `Exposure` is about 0.5 - EV100 (a "sunny 16" scene, EV100 15, is about -14.5), and `AutoExposureMinEV` and `MaxEV`
@@ -3928,6 +3944,371 @@ lights, Post Process and the sky), and never a resolution below the output's.
     files that store 12, as 0.5.0 saved the default, keep it; `component.add` and the Basic 3D template give 16, which
     changes a scene without a `Post Process` only where its metered average exceeds 2^12 nits). P is then about 2^-19,
     two stops below the metered multiplier (about 2^-17.5).
+
+### Post-processing
+
+The passes from the TAA resolve to the display image live in `Renderer/SceneRendererPost.cpp`: depth of field
+(`GPU.DepthOfField`) and motion blur (`GPU.MotionBlur`), then `RenderPostHDR` (the exposure, the bloom and the lens
+flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphological anti-aliasing), recorded in the
+`GPU.Post` stage. Their GPU data is in `Renderer/PostProcessData.h`, the CPU twins of their shaders' math (for tests) in
+`Renderer/PostProcessMath.h`. People's guides: `Docs/Manual/Camera.md` (the camera's image) and
+`Docs/Manual/AntiAliasing.md`.
+
+- **A new effect** runs in `SceneRendererPost.cpp` between the TAA resolve and the tone mapping (its passes go into the
+  GPU stage they belong to: `GPU.Post` for a pass of the exposure, bloom and tone mapping's chain, as the lens flare's
+  between the bloom's downsamples and upsamples; a stage of its own for an effect of its own, as `GPU.MotionBlur` and
+  `GPU.DepthOfField`, registered as "GPU timing" says), reads the frame's post source (the HDR
+  image, the TAA's history or the motion blur's output: `PostSource`, one binding set per source) rather than a texture
+  of its choosing, is turned off by `Tests::AddNeutralPostProcess` (so exact-pixel tests keep their meaning) and keeps the
+  default image bit-identical when its property is at its neutral value. Exact-pixel tests also render with
+  `Tests::ExactSpecification()` (no dither). Generated constants (`FilmicConstants`, `WhiteBalanceLocus.inl`) change
+  only through their generators (`Tools/FitFilmic.py`, `Tools/GenerateWhiteBalance.py`), never by hand.
+- **Parameters:** post passes take theirs by push constants or by buffers of their own, never by new `FrameConstants`
+  fields (reading them is fine). The tone mapping reads `RenderData::TonemapConstants`, a volatile constant buffer
+  (`m_TonemapConstantBuffer`, `ST_CBV(0)`, std140) written once per frame right before its draw: its parameters outgrew
+  the 128 bytes NVRHI allows push constants, and it grows only by appending vec4-aligned blocks, whose offsets its
+  `static_assert`s check. Its versions need no reservation of their own: every frame that tone-maps writes
+  `FrameConstants` first, and `ReserveFrameConstantVersions` starts a frame only while the frames in flight leave room for
+  `c_MaxFrameConstantWrites` more of those, so at most `c_FrameConstantVersions - c_MaxFrameConstantWrites + 1` frames
+  hold a version of it, within its `c_FrameConstantVersions`. FXAA takes `RenderData::FXAAParameters` by push constants;
+  the overlays' copy into a target has a layout of its own (`m_CopyBindingLayout`).
+- **Output and dither:** the last pass that writes the 8-bit (or 10-bit) display image dithers it, so gradients (skies,
+  fog, dark falloffs, the vignette) show no bands. `Include/Dither.glsl`'s `DitherToCodes` turns an encoded value v, in
+  codes of the target (`levels` = 2^bits - 1, v clamped to [0, levels]), into `q = floor(v + n + 0.5)` with triangular
+  noise `n = u0 + u1 - 1` of one code where that cannot leave [0, levels] (its noise power does not depend on v, so there
+  is no noise modulation), and into `q = floor(v + u0)` within half a code of black or white: the mean of q is exactly v
+  everywhere, and black and white stay exact. The noise is a static hash of the pixel (`MixBits`, `PixelRandom`, two
+  streams per channel, so channels and neighbors are uncorrelated), the same every frame: invisible as a pattern at one
+  code, nothing for TAA to accumulate, and still frames, captures and the two draw paths' comparisons stay
+  deterministic. The shader quantizes itself: `q / levels` lies within half an ulp of code q, which UNORM targets store as
+  q on every device that rounds to nearest (the GPU suites' twin test checks it).
+  - Which pass: without FXAA the tone mapping dithers into the output; with FXAA it writes the `R10G10B10A2_UNORM`
+    intermediate (`SceneRenderer::c_LDRFormat`, `GetLDRTexture`: the 4 bytes a pixel RGBA8 took, and a mandatory
+    color-attachment format) undithered, and FXAA (or the morphological blend) dithers its output, so the noise is added
+    once and the intermediate bakes no bands in. FXAA's thresholds (`c_EdgeThresholdMin`, about 8 codes) never take the
+    dither's noise for edges. The film grain goes into the same last pass, before its dither, for the same reason
+    (below). The overlays and the copy into a target (`Copy.frag`) are exact display colors over the dithered image.
+  - Levels per target format (`GetDitherLevels`): 255 for the 8-bit UNORM formats (RGBA8, BGRA8, the swapchain's), 1023
+    for `R10G10B10A2_UNORM`, none for the other formats `ValidateTarget` accepts (16-bit UNORM, the packed 5-6-5,
+    5-5-5-1 and 4-4-4-4 formats). With overlays the tone mapping writes the RGBA8 output texture and the copy carries it.
+  - `SceneRendererSpecification::DitherOutput` (on) turns it off; `SceneRendererStats::Dithered` says whether the frame's
+    last pass dithered. Tests that compare exact codes, or that compare with values computed on the CPU within less than
+    2/255, render with `Tests::ExactSpecification()` (no texture streaming, no dither); comparisons of two renderers of one
+    specification need nothing, the noise being static. `PostProcessMath::DitherToCodes`, `PixelRandom` and
+    `TriangularNoise` are the shader's twins in the same integer arithmetic (`Renderer.PostProcessMath`,
+    `GPU.SceneRenderer.Camera`).
+  - Thumbnails changed with the dither (`ThumbnailCache::c_Version` 5).
+  - Cost: `GPU.Post` of `PerfGPU.Renderer.Post4K`'s frame (3840x2160, TAA, the tone mapping dithers) took 0.2446 ms with
+    the dither and 0.2235 ms without it (medians of three interleaved runs each under `PerfLock.py`, RTX 5090 on the
+    slower memory of 2026-10-27): 0.021 ms, twice the spec's 0.01 ms target. Six `PixelRandom` values a pixel (two hashes
+    each) are what it costs; the noise stays as it is until a cheaper hash of the same statistics replaces it, with its
+    CPU twin and `Renderer.PostProcessMath`'s statistics.
+- **Tone curves** (`TonemapOperator`): Filmic (`Include/Filmic.glsl`, `PostProcessMath::ApplyFilmic`) is the default of
+  new Post Process components, of scenes without one and of the Basic 3D template; ACES, AgX, Khronos Neutral and
+  Reinhard are unchanged, so scenes that stored them look as before. Filmic works on an inset color, per channel in the
+  highlights after AgX's principle (a per-channel curve on a gamut drawn in toward white takes bright saturated colors
+  to white instead of skewing their hue; the outset gives back the saturation the inset took), and on the color as a
+  whole below middle gray: there it scales the inset color by the curve of its largest channel over that channel, and
+  the two blend by a smoothstep over 0 to 4 stops of that channel (`c_FilmicChannelStart`, `c_FilmicChannelEnd`; the
+  largest channel is on the curve either way, gray exactly). A per-channel toe raises the channels' ratios to its slope
+  (about 1.5) and the outset's negative lobes push the weak channel to 0: dark skies, shaded foliage and blue flowers
+  turned into deep primaries (a sky color at 1.7 to 1.9 times its chroma from -1 to -4 stops, its red clipped; ACES at
+  the samples' old +1 EV 1.25 to 1.5). The curve, for t = log2(x / 0.18): below middle gray `y = 0.18 * 2^(Ct t + (C0 -
+  Ct) tau (exp(t / tau) - 1))`, above it `y = 0.18 + 0.82 (1 - (1 - t / Tw)^q)` up to white at Tw stops, `q = C0 0.18
+  ln2 Tw / 0.82` so the log-log slope is C0 at middle gray. `Toe` sets the toe's slope `Ct = C0 (0.85 + 0.5 Toe)`,
+  `Shoulder` the white point `Tw = 6.5 + 3 (Shoulder - 0.5)` stops (5 to 8); both reach the shader through
+  `TonemapConstants`' Filmic block (`PostProcessMath::MakeFilmicCurve`). The inset and outset matrices, C0 and tau are
+  fitted by `Tools/FitFilmic.py` against targets stated in its header (middle gray, contrast, white, toe, hue in ICtCp
+  within 10 and 6 degrees, the path to white, saturation at middle gray, a monotonic shape, and the shadows' saturation:
+  at most 1.30 times the scene's chroma below middle gray) and written to `Include/FilmicConstants.glsl` and
+  `Renderer/FilmicConstants.h`: never edit them by hand (`FitFilmic.py --check` checks the committed ones);
+  `Renderer.PostProcessMath` checks the targets again on the C++ reference and `GPU.SceneRenderer.Camera` the shader
+  against it. As fitted (C0 1.398): the sky color keeps 1.15 of its chroma from -6 stops to middle gray, skin 1.05,
+  foliage 0.98 (ACES at +1 EV: 1.5, 1.4, 1.26), hue within 8 degrees on the saturated colors and 5 on skin, foliage and
+  sky; a dark sky (0.02, 0.06, 0.15) shows at sRGB (11, 60, 99), where the per-channel toe showed (0, 39, 95).
+  Thumbnails changed with the default curve (`ThumbnailCache::c_Version` 6) and its shadows (8).
+- **Color** (`PostProcessMath::MakeColorGrading`, `TonemapConstants`' color block): on scene-linear light after the bloom
+  and before `Contrast` and the curve, `c1 = M c` with `M = diag(ColorSlope) * W`, `c2 = max(c1 + ColorOffset * 0.18, 0)`,
+  `c3 = 0.18 (c2 / 0.18)^ColorPower`; `Saturation` stays after the curve. The white balance `W`
+  (`PostProcessMath::GetWhiteBalanceMatrix`, double precision, cached by the renderer per temperature and tint) shows the
+  light it names as white: the white locus at `WhiteBalanceTemperature`, moved along the locus's normal by `0.02 *
+  WhiteBalanceTint` in CIE 1960 (u, v) (positive assumes a greener light: the image turns magenta), scaled to sRGB's D65 in
+  the cone space of CIE 159:2004's CAT02 (von Kries). The locus (`Renderer/WhiteBalanceLocus.inl`, written by
+  `Tools/GenerateWhiteBalance.py`: never edit it by hand) is the CIE daylight locus from 5000 K (shifted by 5e-5 so that
+  6500 K is D65 exactly), Planck's law against the CIE 1931 observer to 4000 K, blended between, every 5 mireds. 6500 K and
+  tint 0 return the identity without arithmetic, and a grading that changes nothing leaves `ColorFlags` 0, so the shader
+  skips it (a uniform branch): the defaults render bit-identically to no grading.
+- **Exposure** (`UpdateExposure`, `Histogram.comp`, `Exposure.comp`, `RenderData::ExposureParameters`, 64 bytes):
+  - Adaptation: toward a brighter target at `AutoExposureLightSpeed` (3 per second: light adaptation, eyes leaving a
+    tunnel), toward a darker one at `AutoExposureSpeed` (1.5: dark adaptation), each `1 - exp(-dt * speed)` of the way per
+    frame (1 on a reset or at speed 0). `dt` is the wall clock between the renderer's frames, at most 0.25 s, or
+    `SceneRenderOptions::AdaptationSeconds` (tests and tools that step time).
+  - Metering: `Average` weighs every pixel 1 (0.6.0's histogram); `CenterWeighted` (the default) weighs a pixel
+    `round(16 (0.25 + 0.75 exp(-r^2 / (2 * 0.25^2))))` (4 to 16), r its distance from the image's center in image heights:
+    the middle third decides, the edges count a quarter. The window's percentiles are properties (high - low at least
+    0.02).
+  - The key (`AutoExposureKey`, 0.12): `k = clamp(key * (a - log2(L_ref)), -2, 0)` stops (`c_ExposureKeyMinStops`,
+    `c_ExposureKeyMaxStops`), `L_ref = Luminance(sun) * 0.18 / pi` the luminance of a gray card facing the frame's
+    directional light as `Forward.frag` lights it (the atmosphere's transmittance and the editor's preview sun
+    included); none without a directional light. A sunlit exterior meters near the card (k near 0); an interior five
+    stops below it shows 0.6 stops darker; a night lit by the moon is not darkened by it (`Exposure` does that). It is
+    scene-relative, so it works in dim units and in real ones; interiors darken only as far as their light is darker
+    (sky light reaches into closed rooms until it is occluded).
+  - The key never brightens. The card measures the directional light alone, so a scene metering above it is lit by more
+    than the sun: an overcast sky (a 1,500 lux sun under 7,700 lux of sky meters 2.6 stops above its card), the sky and
+    the lamps of a dusk whose sun fades out (the card falls toward nothing while the scene keeps its light), a night's
+    own lights. Brightening those would show an overcast day lighter than a sunny one and dusk lighter than the
+    afternoon, and jump when the light reached 0 (no card, no key); with the range ending at 0 the key stays 0 through
+    all of it. A scene that is bright in the sun (snow) takes a positive `Exposure`, as a photographer compensates.
+  - The exposure buffer holds the metered log2 luminance, the multiplier and the key's stops (`c_ExposureKeyStops`); the
+    readback copies all three: `SceneRendererStats::ExposureLog2Luminance`, `ExposureKeyStops` (frames late, unset with
+    manual exposure, and unset after a reset or a stretch of manual exposure until a readback of the new stretch
+    arrives: `StartPreExposureEpoch`) and `ExposureKeyReferenceLog2` (the frame's card), reported by
+    `renderStats.exposure` (`ev100`, `keyStops`, `cardEv100`).
+  - `AddNeutralPostProcess` meters as 0.6.0 did (`Average`, key 0, one speed both ways), so tests that turn automatic
+    exposure on keep their meaning.
+  - Measured on the look-dev shots (run `camera-and-tone/7-final`, 3840x2160 TAA, before the key stopped brightening):
+    `lookdev.room` meters at EV100 14.040 against its card's 15.191 and shows a key of -0.1381, the formula's
+    `0.12 * (14.040 - 15.191)` to the fourth digit; `lookdev.overview` meters at 15.588 (+0.048 then, 0 now). The room's
+    and the exterior's displayed means (display-linear luminance over every fourth pixel) are 0.149 and 0.164; 0.6.0's
+    by the same measure 0.110 and 0.096. In 0.6.0's sky light the room meters only 1.15 stops below the card: the key
+    darkens it by 0.14 stops, as far as its light is darker.
+- **Bloom** (`RenderBloomDownsamples`, `RenderBloomUpsamples`, `DispatchBloom`, `Bloom.comp`): the half-resolution chain
+  is allocated with every level down to 4 pixels, at most `RenderData::c_MaxBloomLevels` (8), so a change of
+  `BloomRadius` never reallocates. A frame uses `span = log2(BloomRadius * height)` levels
+  (`SceneRenderer::GetBloomSpan`: within [1, the levels allocated], snapped to a whole number within 1e-4): `ceil(span)`
+  levels, the deepest added with the weight of its share (`BloomParameters::UpsampleWeight`), and the tone mapping
+  normalizes the sum by `1 / span`. The deepest level's texel spans `BloomRadius * height` pixels, so the halo covers
+  the same share of the image at every resolution. The default, 64 / 1080, gives 1080 rows 0.6.0's six levels bit for
+  bit and 2160 rows seven (one more, finer octave: a seventh of the energy). Small views get a small halo: tests of 64
+  pixels that check a glow a few pixels out set `BloomRadius` 0.25 (0.6.0's four levels there).
+  `SceneRendererStats::BloomLevels` reports the levels used.
+- **Vignette:** a lens's natural fall-off on scene-linear light after the bloom and before the grading and the curve:
+  `color *= mix(1, cos^4(theta), Vignette)`, `tan(theta) = |ndc * VignetteTangents|`, the tangents of the camera's half
+  field of view per axis (`SceneRenderer::GetVignetteTangents`: `1 / P[0][0]`, `1 / P[1][1]` of its unjittered
+  projection; orthographic views as a 60 degree view of their aspect). 1 is a lens's full fall-off; the default 0.12
+  darkens a 60 degree 16:9 view's corners by 9.9%, the side edges' centers much less. Stored values keep their number under
+  this model (a stored 0.2 darkens those corners 16.5%, where 0.6.0's ring after the curve darkened them 20%). Thumbnails
+  changed with both (`ThumbnailCache::c_Version` 7).
+- **Motion blur** (`RenderMotionBlur`, `PostProcess/MotionBlurTiles.comp`, `MotionBlurNeighbors.comp`, `MotionBlur.comp`,
+  `Include/MotionBlur.glsl`; stage `GPU.MotionBlur` between `GPU.TAA` and `GPU.Post`):
+  - When: `SceneRenderOptions::MotionBlur` (on; the editor turns it on only in the live views' scene camera while the
+    game plays, never in its editor camera or captures; thumbnails turn it off), not `HDROutput`, the Post Process's
+    `MotionBlur` (off by default) with a shutter above 0, after the quality's overrides (`ApplyQualityOverrides`: the
+    `MotionBlurQuality` row Off or the players' `MotionBlur` row Off turn it off). Frames that want it ask for motion
+    vectors, so the motion history goes on; the passes run when the frame has a motion history and no camera cut (a
+    cut's motion spans the cut). Frames that do not blur show the image as without it.
+  - The blur of a pixel (`GetBlurVelocity`, the same in the three passes): its motion (the camera's where nothing was
+    drawn) in pixels times `MotionBlurShutterAngle / 360`, clamped to `MotionBlurMaxLength` of the height (direction
+    kept), dropped below `height / 1080` pixels and faded in up to twice that: a sample-and-hold display already smears
+    eye-tracked motion, so a blur of a pixel or two would only soften texture in slow pans.
+  - Passes: the tile maxima (tiles of `max(8, ceil(MaxLength / 2))` pixels; RGBA16F targets made for 8-pixel tiles, so
+    the length never reallocates: xy the tile's largest blur, z the diagonal of the box holding all of its blurs), which
+    also writes every pixel's blur radius and view distance as two half floats (`m_MotionBlurPixels`, R32_UINT: the
+    gather's samples read one texel instead of velocity and depth and their math), each tile's 3x3 neighborhood's
+    maximum (diagonal neighbors only when their blur runs toward the center tile; z bounds how far any blur of the
+    neighborhood lies from it), and the gather (8, 12 or 16 samples, the quality's `MotionBlurQuality`): where the
+    neighborhood's blur is under half a pixel the pixel keeps its color exactly; otherwise samples stratified over the
+    neighborhood's span with one static per-pixel offset (`PixelRandom(pixel, 6)`: no ghost copies, nothing temporal),
+    weighed by depth so a moving foreground spreads over the background, a farther sample counts where the center's own
+    blur reaches it, one surface blurs together, and a still foreground over a moving background stays sharp. A
+    neighborhood whose blurs all lie within `GetUniformTolerance` (half a pixel, or 5% of the longest) of its largest moves
+    as one surface (a turning camera moves near and far points alike): its samples read only colors and take the weights
+    of one surface, which the depth-aware path gives them too. The output
+    (`m_MotionBlurTexture`, RGBA16F, 66 MB at 3840x2160, with the pixel target 100 MB in all, made by the first frame
+    that blurs, released with the targets)
+    holds 1 in alpha where it blurred and becomes the post source of the exposure, the bloom and the tone mapping
+    (`PostSource` sets per source: HDR, the TAA's history, the motion blur), whose TAA sharpening is masked off there
+    (`TonemapConstants::ColorFlags`' `RenderData::c_TonemapBlurMask`, `ST_BLUR_MASK` in `Tonemap.frag`): sharpening a
+    blur would cut its streaks into steps.
+  - The gather's static offsets quantize an edge crossing the span to steps of 1/N of its contrast: fine streak noise
+    where things move, nothing that averages away. `PostProcessMath::GetMotionBlurProfile` is its CPU model (the profile
+    and spread of an ideal edge), which the GPU tests and the look-dev criteria compare with.
+  - Limits: blended transparent surfaces write no velocity and blur with what lies behind them; overlays, text and the
+    game UI are drawn after the post and never blur. Stats: `MotionBlurred`, `MotionBlurSamples`, `MotionBlurTileSize`
+    (`renderStats.motionBlur`).
+  - Judging it: the look-dev harness's live shots `tp.live.slow`, `.turn` and `.fast` turn the Third-Person camera at 6,
+    30 and 120 degrees per second (Look values 0.0375, 0.1875 and 0.75 of its 160 degrees per second), each without
+    blur and with shutters of 180 (`.mb180`) and 90 degrees (`.mb90`) under TAA, the gameplay turn also under FXAA and
+    without anti-aliasing (`tp.live.turn.fxaa`, `.off`, each with `.mb180`), and the slow and fast ones without
+    anti-aliasing (`tp.live.slow.off`, `tp.live.fast.off`, each with `.mb180`); capture them with `--live-only --sizes
+    3840x2160 --shots "tp.live.*"`. They adapt the exposure at once (both speeds 0: adaptation follows the wall clock,
+    which differs between runs). Only shots without anti-aliasing compare pixel for pixel across runs: TAA's jitter
+    follows the frames the editor drew between steps. The slow and fast shots capture from step 120, the gameplay turn
+    from step 30 (15 degrees into the turn: the robot, the signpost and the right fence in view). The camera orbits the
+    player, so image motion depends on depth: what lies near the pivot (the robot, the signpost, the near fence) moves
+    about 5 pixels a frame in the gameplay turn, under the threshold, and stays exact, while the far course moves 16. In
+    the slow pan no pixel of the center crop differs from its blur-off twin by more than a code (0.26% differ: near
+    ground, whose parallax moves it past the threshold), and 6 pixels of the rest of the frame by more than 3. Measured
+    against `GetMotionBlurProfile` fed each edge's motion between consecutive blur-off frames (rows aligned on the edge,
+    in linear light): an edge of the far course in the gameplay turn (8 pixels of blur) has a 10-90% width of 7.0 pixels
+    against the model's 7.1, a fence post in the fast turn (17.5 pixels) 12.9 against 12.1, both profiles monotonic, the
+    post's streak noise (0.044 RMS of its rows about their mean, beyond its own texture's) within 1.5 times the model's
+    largest spread (0.034), as the GPU test judges it; the robot keeps 1.00 (gameplay turn) and 0.99 (fast turn) of its
+    texture detail. A near object over a slower background (the signpost over the grass in the fast turn) blurs about
+    half as wide as one surface would: the depth weights leave the slower background mostly unsmeared. The template and
+    the samples keep `MotionBlur` off until the owner's before/after sheet of these shots clears it (the owner rejects
+    smear: when in doubt, off).
+  - Perf (provisional, measured by the reference machine's campaign): `PerfGPU.Renderer.MotionBlur4K` (`GPU.MotionBlur`
+    at High, 3840x2160, the camera turning 16 pixels a frame: about 0.18 ms on an RTX 5090, 0.24 ms where every
+    neighborhood takes the depth-aware path) and `MotionBlur4KStill` (still: about 0.11 ms), beside `Post4K` (`GPU.Post`
+    with every post effect at its default and a grading).
+- **Depth of field** (`RenderDepthOfField`, `PostProcess/DepthOfField*.comp`, `Include/DepthOfField.glsl`; stage
+  `GPU.DepthOfField`, registered after `GPU.MotionBlur` and timed before it, between `GPU.TAA` and `GPU.MotionBlur`):
+  - The lens lives on `CameraComponent` (`DepthOfField`, off; `FocusDistance` 10 m; `FocusEntity`, whose distance along
+    the camera's view, at least the near plane, replaces it; `Aperture`, the f-number, 2.8; `SensorHeight` 24 mm), with
+    the focal length from the field of view (`0.5 * SensorHeight / tan(fov / 2)`). It stays out of `SceneCamera`, whose
+    value is the cascades' cache key: programs pass `SceneRenderOptions::Lens` (`CameraLens::FromEntity`, none for
+    orthographic cameras or without `DepthOfField`): `GameRenderer` for the primary camera, `ViewportRenderer` for views
+    through the scene's camera (captures included: a lens is not a moment, unlike the motion blur); the editor camera
+    never has one. The players' row `DepthOfField` (Scene, Off) turns it off; so do orthographic views and `HDROutput`.
+  - The circle of confusion (`CameraLens::GetCircleOfConfusion`): `f^2 / (N (zf - f)) * (z - zf) / z` on the sensor (the
+    focus held at least 1.1 focal lengths away), in pixels `/ SensorHeight * height`, negative in front of the focus; the
+    passes work with radii, clamped to `c_DepthOfFieldMaxDiameter` (2%) of the height across.
+  - Passes: a half-resolution image (`m_DepthOfFieldHalf`: 2x2 means, and the signed radius of the nearest pixel when one
+    is in the near field, else of the farthest), the near field's tile maxima (tiles of `max(8, ceil(max radius))`
+    half-resolution pixels) and their 3x3 neighborhoods', the gather (48 samples on a golden-angle disk turned by a
+    static per-pixel angle, `PixelRandom(texel, 7)`) and the full-resolution composite (`m_DepthOfFieldTexture`, alpha 1
+    where it changed the image, the post source of what follows; the motion blur keeps that mark where it copies the
+    color, `MotionBlurParameters::SourceMask`, and the tone mapping does not sharpen there).
+  - The gather's two fields: a texel's own (a blurred texel takes the samples within its circle whose own circle covers
+    it, so a sharp foreground never bleeds into a blurred background; a near texel keeps what lies behind it, which
+    shows where the near field's coverage is partial) and the near field, premultiplied by its coverage (the samples of
+    the near field, at least as near as the texel, whose circle covers it, each weighed by the share of its light that
+    falls there: the disk's area over its circle's, at most 16), so a blurred foreground spreads half over the edge of
+    what lies behind it and fully over its own inside. The composite keeps a pixel whose circle is under a pixel across
+    exactly, fades its own field in over the next pixel of diameter and puts the near field over everything. No median
+    filters the fields: the static rotation of 48 samples and the bilinear upsampling leave no isolated outliers.
+  - Under TAA the color is the resolved image, without jitter, while the depth is the frame's, jittered by up to half a
+    pixel: a pixel at an in-focus silhouette over a far background would find the subject in some frames' depth and the
+    background in others, and switch between the resolved edge and the blurred background every frame. So the composite
+    fades the blur in with the distance (the larger of x and y) from the nearest in-focus depth within two pixels
+    (`c_FocusReach`, read through a group-shared tile): none within one pixel (an edge pixel finds the subject in its
+    neighborhood in every jitter phase), half at two, all from three. What still follows the jitter is a pixel two or
+    three away switching between two images of the background, half as far. Prepare's half-resolution classification
+    reads the same depth: a block at the silhouette changes between in focus and blurred with the jitter, which moves a
+    sample's weight in its neighbors' gathers (one of 48, a few codes at most). A black card in focus over a white wall
+    at f/1, 3 degrees off the pixel grid: 37 codes between consecutive frames, as without the lens (TAA's own edge
+    motion), where the composite before took 187.
+  - Off costs nothing: no lens, no pass and no target. On, the targets are the full-resolution output (66 MB at
+    3840x2160), three half-resolution ones (17 MB each) and two tile targets, made by the first frame with a lens and
+    released with the render targets. Stats: `DepthOfField`, `DepthOfFieldLens`, `DepthOfFieldInfinityCoC`
+    (`renderStats.depthOfField`).
+  - Tests: `GPU.SceneRenderer.DepthOfField` (the focus plane exact, an edge's blur a disk of its circle's diameter, a
+    near card's blur over the wall in focus, an in-focus silhouette under TAA no less steady than without the lens, both
+    paths, off, the sharpening mask), `Renderer.CameraLens`; perf
+    (provisional) `PerfGPU.Renderer.DepthOfField4K`, the worst case: every pixel far behind the focus at the largest
+    circle (about 0.20 ms on an RTX 5090). The look-dev shot `tp.dof` focuses the Third-Person camera on the robot at f/2.
+- **Film grain and chromatic aberration** (`PostProcessComponent::FilmGrain`, `ChromaticAberration`, 0 to 1, off by
+  default; the aberration in `Tonemap.frag`, the grain in `Include/Grain.glsl`; `TonemapConstants` 144-159):
+  - The aberration is read first: red at `0.5 + (uv - 0.5) * (1 + k)`, blue at `(1 - k)`, green unmoved, bilinear, with
+    `k = ChromaticAberration * c_ChromaticAberrationScale` (`0.5 / 1920`), so 1 draws red and blue half a pixel apart from
+    green at a 3840x2160 image's corners and nothing at its center (the same share of the image at every resolution).
+  - The grain comes after the curve and the saturation, in the encoded domain, in the pass that writes the display
+    image, before its dither (`AddFilmGrain`): the tone mapping, or FXAA or the morphological blend when one follows it
+    (`FXAAParameters`, `MorphologicalParameters`: `FilmGrain`, `GrainFrame`; the tone mapping's `FilmGrain` is 0 then).
+    Added before them, their edge thresholds (FXAA's 0.0312, the morphological 0.05) would take the grain's differences
+    between neighbors for edges and blend most of the image: at 1 it kept 0.82 of its spread under FXAA and 0.84 under
+    the morphological anti-aliasing, and neighbors correlated by 0.09 and 0.11. `encoded += FilmGrain *
+    c_FilmGrainAmplitude (0.04) * sqrt(4 Y (1 - Y)) * g`, `Y` the encoded luminance (film's grain shows most in the
+    mid-tones), `g` near-Gaussian (four `PixelRandom` streams from 8, salted with `TonemapConstants::GrainFrame`, the
+    renderer's render count: new every frame), the same on every channel. It is zero-mean: 1 spreads a mid-gray by about
+    10 codes and moves its mean by under 0.1 code, under every anti-aliasing method. Renderers of single images set
+    `SceneRenderOptions::GrainSeed` (the capture renderer and thumbnails: 0), so a picture taken again is the same; live
+    views and games leave it unset.
+  - Tests: `GPU.SceneRenderer.GrainAndAberration` (the grain's spread and independence of neighbors the same under FXAA
+    and the morphological anti-aliasing as without, the players' rows of both).
+- **Color lookup** (`PostProcessComponent::ColorLookup`, a `ColorLookup` asset, and `ColorLookupIntensity`, 0 to 1,
+  default 1; `Renderer/ColorLookup.h`): a grade made in another tool, after the curve and the saturation, in the encoded
+  domain, before the grain and the dither: `encoded = mix(encoded, lookup(encoded * (N - 1) / N + 0.5 / N), intensity)`,
+  trilinear (the linear clamping sampler), N its points each way.
+  - The asset (`AssetType::ColorLookup`, appended) is a lattice over [0, 1] on every axis, red fastest; its cooked form is
+    `STLU` version 1 (a 16-byte header: magic, version, size, zero; then size^3 RGBA16F points), validated whole by
+    `ColorLookup::Deserialize` (sizes 2 to 65, exact length, finite points). On the GPU it is a 3D RGBA16F texture uploaded
+    in one step of the upload queue (`GPUTextureRegion::Depth`: the slices of a 3D level; 65^3 is 2.2 MB, under
+    `c_AssetUploadStepBytes`), its memory moving from the CPU pool to the GPU textures'. `ColorLookup::Sample` is the
+    trilinear lookup the shader does and the importer resamples with.
+  - Import (`Asset/ColorLookupImporter`, AssetPipeline layer, version 1): `.cube` files (`ParseCubeFile`: `TITLE`,
+    `LUT_3D_SIZE`, `DOMAIN_MIN`/`DOMAIN_MAX` or `LUT_3D_INPUT_RANGE`, `#` comments, CRLF and a byte order mark; numbers
+    read without the C locale; `LUT_1D_SIZE`, a missing or repeated size, bad numbers, keywords among the values, too few
+    or too many values and an empty domain fail with the line, quoting the file through `MakeValidUTF8`; unknown keywords
+    are ignored with a warning; cancellation checked every 4096 lines and per resampled slice). Setting `Size`: "17",
+    "33" (default) or "65", or "File" for the file's own; `ResampleCubeTable` maps each point's input into the file's
+    domain (clamping outside it), so the cooked lattice always spans [0, 1] and holds no domain; a table of its own size
+    over [0, 1] is copied, and sizes of (n - 1) k + 1 refine one of n points exactly.
+  - Rendering: `RenderFrame` resolves it through the frame's `AssetResolveCache` (`ResolveColorLookup`, high priority,
+    before the frame's pending assets are counted) only when its intensity is above 0; while it loads nothing applies. The
+    tone mapping's pipeline has a second layout (`m_ColorLookupLayout`, set 1: the texture and the sampler), whose set is
+    the lookup's (`GetColorLookupSet`, made when the lookup's texture changes and kept while frames use it) or a 1x1x1
+    dummy (written once), so the five tone-mapping sets of the post sources stay as they are. `TonemapConstants`'
+    `ColorLookupIntensity` (offset 156) is 0 without a lookup: the uniform branch skips the fetch. Stats: `ColorLookup`
+    (`renderStats.colorLookup`).
+  - Tests: `Renderer.ColorLookup` (the cooked form, its corruption, the lookup), `Asset.ColorLookupImporter`,
+    `GPU.SceneRenderer.ColorLookup` (a 9^3 grade within one code of the CPU's lookup at intensities 1 and 0.5, the identity
+    within one code of none, nothing while it is not loaded). The feature project's `Lighting/Feature/Warm.cube` (17^3,
+    written by its `GenerateAssets.py`) is on the active Post Process at 0.5.
+- **Lens flares** (`PostProcessComponent::LensFlare`, 0 to 1, off by default; `RenderLensFlare`, `PostProcess/LensFlare.comp`,
+  `RenderData::LensFlareParameters`; in `GPU.Post`):
+  - One compute pass at a quarter of the resolution (`m_LensFlareTexture`, RGBA16F, made by the first frame that flares
+    and released with the render targets) reads the bloom chain's level 1 (exposed) between the chain's downsamples and
+    upsamples (`RenderBloomDownsamples`, `RenderBloomUpsamples`): the upsamples add the deeper levels' glow, whose tent
+    filters leave diamond-shaped contours the flare's threshold would cut out. It reads through a cubic B-spline (four
+    bilinear taps), for soft, round ghosts. With bloom off the chain writes only levels 0 and 1 for it (the tone mapping
+    adds no bloom, and `SceneRendererStats::BloomLevels` stays 0); the flare runs only when the frame wrote level 1.
+  - Ghosts: four images of the bright part at `0.5 + (0.5 - uv) k`, k in {-1.6, -0.7, 0.45, 1.2} (gathered from
+    `0.5 + (0.5 - uv) / k`, nothing from outside the image), each with a fixed tint, fading toward the corners. The
+    bright part is the exposed light above 4, its excess compressed toward 16 (`excess / (1 + excess / 16)`): the sun's
+    thousands leave ghosts as faint as a lamp's. A halo gathers from the point 0.45 image heights toward the center,
+    weighted by that point's nearness to the center.
+  - Starburst: `RenderFrame` projects the directional light's disk (`-DirectionalLightDirection`, the unjittered camera;
+    only in front of a perspective camera); the flare pass counts the sky (reversed-Z 0) with 16 depth taps on two rings
+    around it (`c_LensFlareSunTapRadius`, 0.01 image heights) and writes that share into its target's alpha (every
+    texel alike). The tone mapping draws the six rays at full resolution (near the disk they are thinner than the flare's
+    texels, which would alias them away): `|cos 3 phi|^40`, fading over 0.08 heights, of `c_LensFlareRayGain` (16) times a
+    white card's luminance in the light (`2^keyReferenceLog2 / 0.18`, the exposure applied), scaled by the share.
+  - The tone mapping adds the flare after the bloom, tent-filtered up (four bilinear taps half a texel apart), at
+    `LensFlare * c_LensFlareScale` (0.02; `TonemapConstants`' last block at 160: `LensFlare`, `Starburst`, `Sun`, 176
+    bytes): it reads it through its second set beside the color lookup (`GetTonemapInputSet`, slots t3, t4 and s2, a 1x1
+    dummy without a flare).
+  - Stats: `LensFlare`, `LensFlareSun` (`renderStats.lensFlare`). Tests: `GPU.SceneRenderer.LensFlare` (off changes
+    nothing and makes no target; ghosts land where the mirror puts them, faint, and a source at the mirrored place flares as
+    the mirror image within 2 codes; the starburst along a ray and not between rays, and none behind a wall). The feature
+    scene's Environment has 0.5.
+- **Morphological anti-aliasing** (`AntiAliasingMode::Morphological`, appended: file and script name "Morphological"; the
+  plan's "SMAA", named for what it is: designed here, it shares no pattern, corner or search table with the published
+  SMAA). Three fullscreen passes in `GPU.Post` after the tone mapping, which writes the 10-bit intermediate as for FXAA:
+  - Edges (`MorphologicalEdges.frag`, RG8 `m_MorphologicalEdges`: each pixel's left and top edge): a display-encoded
+    luma difference of `c_MorphologicalThreshold` (0.05) or more, kept where it is at least half the largest of the
+    pixel's other neighbors' (local contrast adaptation), or-ed with depth jumps (more than
+    `c_MorphologicalDepthThreshold` of the depth and twice the neighboring steps: the depth is linear in screen space on
+    planes, so slopes are no edges).
+  - Blend weights (`MorphologicalWeights.frag`, RGBA8 `m_MorphologicalWeights`, rg for the top edge, ba for the left): the
+    edge's run is searched both ways (at most 32 pixels each), the crossing edges at its ends say how the staircase turns
+    (across the edge, on the pixel's side, both, none), and the area table gives the shares: the reconstructed line runs
+    from each end's half step (+0.5, -0.5, or 0 when both or none) to the run's middle (Z and L shapes), and a run between
+    two steps the same way (a U: a dot or a dash of texture) blends nothing, which keeps fine texture (blending them, the
+    tiled floor below kept 0.81 of its detail). The table (`Renderer/MorphologicalAreaTable.inl`, 132 x 132 RG8, uploaded
+    by the first frame that uses it) is written only by `Tools/GenerateAreaTable.py`, which integrates the line exactly.
+  - Blend (`MorphologicalBlend.frag`, into the output with the dither): each pixel mixes in linear light with the
+    neighbors across its edges by those shares (scaled to one where they sum above it); a pixel without weights keeps the
+    intermediate's value exactly, as FXAA leaves flat areas.
+  - The reconstruction crosses each run at its middle, where the true line crosses within half a pixel of it: the error
+    grows with the slope (a 1:7 edge's pixels within 0.08 of their coverage on average, 1:3 within 0.15, without
+    anti-aliasing 0.25 and 0.28). Targets: 50 MB at 3840x2160, made by the first frame that uses it; other methods make
+    none. Stats: `MorphologicalAntiAliasing`. Tests: `GPU.SceneRenderer.Morphological`; perf (provisional)
+    `PerfGPU.Renderer.Morphological4K` (`GPU.Post` with it: about 0.31 ms, Post4K's TAA frame 0.24 ms). On
+    PhysicsPlayground's tiled floor at 3840x2160 (look-dev `--aa morph`; clarity's detail measure, region 1750,1150
+    360x360) it keeps 0.88 of the texture detail of the image without anti-aliasing (FXAA 0.86, TAA Sharp 0.93):
+    short of the spec's 0.95, as every spatial method that smooths the steps of a texture's fine pattern is.
+- **The players' rows** (`RendererQualitySettings::AntiAliasing`, `MotionBlur`, `DepthOfField`, `FilmGrain` and
+  `ChromaticAberration`, the same under every preset): Scene, or Off, FXAA, TAA or Morphological for the method; Scene or
+  Off for the others (players may turn off, never on, what a scene uses). `ApplyQualityOverrides` applies all but the depth
+  of field to the copy of the Post Process every pass reads, once per frame, on both paths (screen-space reflections
+  follow the effective method); `RenderFrame` reads the depth of field's beside the lens.
+- **FXAA's subpixel blend** is 0.25 (`FXAA.frag`'s `c_Subpixel`; 0.75 until 0.7.0, which cost 19-22% of the texture
+  detail of an image without anti-aliasing; on PhysicsPlayground's tiled floor at 3840x2160, 0.375 keeps 0.85 of it and 0.25
+  0.87, the rest being the edges FXAA is there to smooth). Lower values would leave single-pixel aliasing alone.
+
 
 ### Fog and atmosphere
 
@@ -4254,20 +4635,23 @@ lights, Post Process and the sky), and never a resolution below the output's.
   It draws at the project's Graphics Quality, followed every frame by its version, unless `SetQualityOverride` sets one
   (`StrataRuntime --quality`), and logs each change of the preset or its source ("Quality settings").
 - GPU tests of the scene renderer share `StrataTests/src/Renderer/SceneRendererTestUtils.h`. Verify that a
-  new regression test fails without its fix before relying on it.
+  new regression test fails without its fix before relying on it. Renderers whose pixels are compared with exact values
+  take `Tests::ExactSpecification()` (texture streaming and the output's dither off, "Post-processing"), and their scenes
+  `AddNeutralPostProcess` (no tone curve, exposure, vignette, bloom, ambient occlusion or anti-aliasing).
 
 ### GPU timing
 
 - Every GPU pass is timed in a GPU stage (`FrameStageKind::GPU`, Docs/Architecture.md, "Frame profiler"): a command list's
   passes with one `GPUPassTimer` (constructed where the first pass begins, `Next(stage)` where each next one begins, `End()`
   before the command list closes, on every path that closes it). A new pass goes into the stage it belongs to, or a new stage.
-- A new GPU stage is registered where its pass runs in the frame (`RendererGPUStages::Get` registers in frame order, near
-  the stage its pass follows), and added at the same position to the five lists that name the stages: `editor.perf`'s
-  description (`EditorStateCommands.cpp`), `EditorProfilerTests.cpp`, `FramePerfLogTests.cpp`, Architecture.md's stage
-  table and the editor-automation skill. Registration order sets the stages' ids and perf-log columns, so inserting one
-  moves the later ones; nothing depends on that, since ids are compared only within a build and perf-log readers find
-  columns by name. A new resource of the scene layout takes the next free slot that `Include/Scene.glsl`'s comment
-  lists (assigned slots included), and a pass that does not run binds a dummy there.
+- A new GPU stage is registered where its pass runs in the frame (`RendererGPUStages::Get` registers in frame order,
+  near the stage its pass follows; one exception: `GPU.DepthOfField` was registered after `GPU.MotionBlur`, where wave
+  7's plan placed it, and is timed before it), and added at the same position to the five lists that name the stages:
+  `editor.perf`'s description (`EditorStateCommands.cpp`), `EditorProfilerTests.cpp`, `FramePerfLogTests.cpp`,
+  Architecture.md's stage table and the editor-automation skill. Registration order sets the stages' ids and perf-log
+  columns, so inserting one moves the later ones; nothing depends on that, since ids are compared only within a build
+  and perf-log readers find columns by name. A new resource of the scene layout takes the next free slot that
+  `Include/Scene.glsl`'s comment lists (assigned slots included), and a pass that does not run binds a dummy there.
 - Register a module's GPU stages when the module registers (`RegisterRendererModule` registers `RendererGPUStages`), so they
   exist before a perf log writes its header (`GPU.UI` by `RegisterGameUIModule`), and so are the CPU stages its passes
   time (`Render.UI`): a stage `ST_PROFILE_STAGE` first registers in a frame after the header gets no column; a stage of a

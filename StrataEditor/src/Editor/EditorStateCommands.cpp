@@ -270,6 +270,24 @@ namespace Strata
 				{ "geometryPool", DescribeGeometryPool() },
 				// The scenes' GPU copies (a playing scene's clone doubles its scene's while it plays).
 				{ "sceneMirrorMB", Renderer::IsInitialized() ? static_cast<double>(Renderer::GetRenderSceneGPUs().GetBufferBytes()) / (1024.0 * 1024.0) : 0.0 },
+				// What automatic exposure metered (EV100 = log2 L + 3, frames late), its key's stops and the sun's gray card it
+				// compared with (null without a directional light); null with manual exposure.
+				{ "exposure", stats.ExposureLog2Luminance ? nlohmann::json { { "ev100", *stats.ExposureLog2Luminance + 3.0f },
+					{ "keyStops", stats.ExposureKeyStops },
+					{ "cardEv100", stats.ExposureKeyReferenceLog2 ? nlohmann::json(*stats.ExposureKeyReferenceLog2 + 3.0f) : nlohmann::json(nullptr) } }
+					: nlohmann::json(nullptr) },
+				// The motion blur's samples and tile size (pixels) on frames that blurred.
+				{ "motionBlur", stats.MotionBlurred ? nlohmann::json { { "samples", stats.MotionBlurSamples }, { "tileSize", stats.MotionBlurTileSize } }
+					: nlohmann::json(nullptr) },
+				// The lens of frames with depth of field (a scene camera's with DepthOfField on): focus distance (meters), focal length
+				// (millimeters), f-number and the blur's diameter (pixels) of a point infinitely far.
+				{ "depthOfField", stats.DepthOfField ? nlohmann::json { { "focusDistance", stats.DepthOfFieldLens.FocusDistance },
+					{ "focalLength", stats.DepthOfFieldLens.FocalLength }, { "fNumber", stats.DepthOfFieldLens.FNumber },
+					{ "infinityBlurPixels", stats.DepthOfFieldInfinityCoC } } : nlohmann::json(nullptr) },
+				// Whether the Post Process's color lookup was applied (false while it loads).
+				{ "colorLookup", stats.ColorLookup },
+				// Whether lens flares ran, and whether the directional light's disk was in front of the camera for their starburst.
+				{ "lensFlare", stats.LensFlare ? nlohmann::json { { "sunInFront", stats.LensFlareSun } } : nlohmann::json(nullptr) },
 				{ "gpuMs", std::move(gpuMs) },
 				{ "gpuStatsFrame", gpu.HasTimes ? nlohmann::json(gpu.Frame) : nlohmann::json(nullptr) } };
 		}
@@ -902,7 +920,7 @@ namespace Strata
 			"I/O and background threads (imports, exports), how busy they were in percent, running and queued jobs now). gpu is the GPU's side of "
 			"the same frames, known 2-3 frames late: frames (with GPU times), latencyFrames, busy (the GPU stages added up per frame), stages (per GPU "
 			"stage: GPU.Uploads, GPU.Setup, GPU.Cull, GPU.Shadows, GPU.Prepass, GPU.ScreenShadows (the sun's shadow mask), GPU.AO, GPU.Reflections (reflection probes' conversions, screen-space reflections), "
-			"GPU.Opaque (with the sky), GPU.Transparent, GPU.TAA (motion vectors' history and temporal anti-aliasing), GPU.Post, "
+			"GPU.Opaque (with the sky), GPU.Transparent, GPU.TAA (motion vectors' history and temporal anti-aliasing), GPU.MotionBlur, GPU.DepthOfField, GPU.Post, "
 			"GPU.Overlays, GPU.UI (the game UI), GPU.ImGui) and boundBy: gpu when the GPU's median busy time takes at least 90% of the median frame interval and exceeds "
 			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
 			"times. renderStats is the viewport's latest frame (null while it renders none): quality (the Graphics Quality it drew with, as "
@@ -924,7 +942,13 @@ namespace Strata
 			"materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes (new mesh renderers waiting for "
 			"their upload to the GPU), geometryPool "
 			"(the meshes' GPU geometry: usedMB, capacityMB, allocations, fragmentation, moves, growths), sceneMirrorMB (the GPU memory of the scenes' "
-			"GPU copies: a playing scene's doubles its scene's), gpuMs "
+			"GPU copies: a playing scene's doubles its scene's), exposure (what automatic exposure metered, frames late: ev100, EV100 = log2 of the "
+			"metered luminance in nits + 3; keyStops, the exposure key's darkening, 0 or below; cardEv100, the EV100 of a gray card in the "
+			"directional light's light, null without one; exposure is null with manual exposure), motionBlur (samples, tileSize in pixels; null on "
+			"frames that did not blur), depthOfField (focusDistance in meters, focalLength in millimeters, fNumber, infinityBlurPixels: the blur's "
+			"diameter of a point infinitely far; null without a lens), colorLookup (whether the Post Process's color lookup was applied; false "
+			"while it loads), lensFlare (sunInFront: whether the directional light's disk was in front of the camera for the starburst; null when "
+			"lens flares did not run), gpuMs "
 			"(per GPU stage of the frame gpuStatsFrame names). gameRenderStats is the same for the Game view's latest frame (null while it is "
 			"hidden or closed); both views' GPU work adds up in gpu's stages. Times are milliseconds as avgMs, p50Ms and p95Ms (nearest rank) and maxMs.",
 			ObjectSchema({ { "frames", IntegerSchema("How many of the latest frames to summarize (default 120)", 1, FrameProfiler::c_DefaultCapacity) } }),

@@ -122,7 +122,10 @@ namespace Strata
 				m_Renderer->ResetHistory();
 				m_ShowingMessage = false;
 			}
-			return m_Renderer->Render(*scene, SceneCamera::FromEntity(*scene, camera, aspectRatio), target);
+			// The camera's lens defocuses the game's view when its Depth Of Field is on.
+			SceneRenderOptions options;
+			options.Lens = CameraLens::FromEntity(*scene, camera);
+			return m_Renderer->Render(*scene, SceneCamera::FromEntity(*scene, camera, aspectRatio), target, options);
 		}
 
 		// A scene without a camera that has screen-space UI (a main menu needs no camera): its UI over an empty frame.
