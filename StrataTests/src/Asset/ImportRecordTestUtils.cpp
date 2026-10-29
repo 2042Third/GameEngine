@@ -45,6 +45,10 @@ namespace Strata::Tests
 			store.SetRecord(handle, nlohmann::json { { "Format", "ImportRecord" }, { "Cache", name }, { "Index", index } });
 			if (index == first)
 			{
+				// SetRecord only queues the line for the store's I/O job: "ready" promises the first record is in the file, so
+				// that a kill soon after (on a slow machine, before the job ran) still leaves one to read.
+				if (!store.Flush())
+					return 1;
 				std::printf("ready\n");
 				std::fflush(stdout);
 			}
