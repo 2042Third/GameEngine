@@ -275,4 +275,7 @@ the integrated Release build: the template 0.188 at +0.25 (0.148 at 0), the Thir
   box3d's own step 4 to 7 times slower (box3d's cost, an upstream request).
 - Opening a scene of a million entities still has frames of 1.2-6.5 ms in about half the opens on the integration
   machine (`PerfGPU.Editor.SceneOpenOver1MMaxFrame`, median 1.23 ms against its 1.143 ms budget).
+- `lookdev.mirror` at High is not always repeatable: on the integration machine (RTX 5090, driver 617.42) the spatial
+  reflections' trace gives one of two images by the frame from byte-identical inputs (at 3840 x 2160 with FXAA, 33
+  pixels at most 7 codes apart); the roadmap's open items hold the evidence.
 - Wave 7 was built and tested on Windows with an NVIDIA GPU; its GPU suites have not run on the Mac (MoltenVK) yet.

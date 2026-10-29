@@ -884,6 +884,18 @@ Open items and deferrals later waves own:
   for transparent surfaces; volumetric fog and light shafts, the atmosphere from altitude (wave 7 added aerial
   perspective); thickness maps, sheen, specular, iridescence and anisotropy, EXR import and area lights; shadows of a
   second directional light (the moon).
+- Spatial screen-space reflections (wave 7's `light-and-materials`, High and Ultra) are not always repeatable on the
+  integration machine (RTX 5090, driver 617.42). `Tools/LookDev.py`'s `lookdev.mirror` at 3840x2160, captured again
+  and again in one editor after the look-dev scene's debug views, comes out as one of two images (12-60% of the
+  repeats the second): with FXAA and a manual exposure 33 pixels of the floors' reflections differ by 1-7 codes, with
+  automatic exposure about 800 pixels by a code through the histogram. Never without the reflections, nor with the
+  mirror scene shot alone. The trace's output differs at about 300 isolated texels (the same confidence, the color
+  0.1-4% apart), yet everything the engine gives it is the same: byte-identical frame and push constants in every
+  picture; in one frame, a second trace of saved copies of the first picture's inputs (unchanged, checked by their
+  hashes) through another pipeline of the same shader with a plain constant buffer always gives the frame's own image
+  of the two; Vulkan's core and synchronization validation report nothing. The same shader on the same data gives one
+  of two results by the frame, below the API. More frames in the capture's wait cannot help (each picture traces once
+  from identical inputs). Next: other GPUs and drivers, and a reduced compute test outside the renderer.
 - Project settings and input actions (wave 6's `project-settings`), left for later: game-shell's macOS app bundle (the
   Finder's icon, the version and copyright in `Info.plist`), installing desktop entries, signing exports (quality
   presets came with wave 7's `Renderer.Quality`) and input only while the game's window has the focus (gamepads are
