@@ -592,7 +592,8 @@ namespace Strata
 		SetInactiveReasons<PostProcessComponent>({ "ColorLookupIntensity" }, &WithColorLookup);
 		SetInactiveReasons<PostProcessComponent>({ "Toe" }, &WithFilmicToe);
 		SetInactiveReasons<PostProcessComponent>({ "Shoulder" }, &WithFilmicShoulder);
-		SetInactiveReasons<PostProcessComponent>({ "AmbientOcclusionRadius", "AmbientOcclusionIntensity" }, &WithAmbientOcclusion);
+		SetInactiveReasons<PostProcessComponent>({ "AmbientOcclusionRadius", "AmbientOcclusionIntensity", "AmbientOcclusionMultiBounce" },
+			&WithAmbientOcclusion);
 		SetInactiveReasons<PostProcessComponent>({ "AntiAliasingMethod" }, &WithAntiAliasing);
 		SetInactiveReasons<PostProcessComponent>({ "TAAPreset" }, &WithTemporalAntiAliasing);
 		SetInactiveReasons<PostProcessComponent>({ "TAAHistoryFrames" }, &WithCustomTunable<uint32_t, &TemporalAntiAliasingSettings::HistoryFrames>);
