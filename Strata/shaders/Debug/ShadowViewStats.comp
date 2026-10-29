@@ -1,6 +1,7 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_samplerless_texture_functions : require
+#extension GL_EXT_texture_shadow_lod : require
 
 #include "Include/ShadowView.glsl"
 
