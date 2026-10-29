@@ -4086,7 +4086,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
   distance `d`) behind the face the depth buffer holds under it (that face's own plane again: exact for planes at any
   angle, so a ray rising off a floor at a grazing sun never reads the floor as an occluder); steps more than two pixels'
   footprint in front of that surface along the view end without the plane (which gives up contact shadows from surfaces
-  seen nearly edge-on). Steps are interpolated in clip space and read the depth four at a time, so the reads overlap.
+  seen nearly edge-on). Steps are interpolated in clip space and judged one at a time (reading four steps' depths together
+  cost 10-20% more in registers than the overlap saved), the start's own neighborhood without a read.
   They are offset by the fixed blue-noise tile (shifted apart from the disk's turn), not by the frame; the dither this
   leaves where a hit depends on whether a step lands within the thickness (a contact shadow's far edge, rays passing
   behind an object seen from the camera) is taken by the mask's blur, whose radius becomes half the step's length on
