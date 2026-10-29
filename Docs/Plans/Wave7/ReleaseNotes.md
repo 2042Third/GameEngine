@@ -140,7 +140,7 @@ integrator writes the release notes from them when the wave lands (and removes t
 - New Post Process components and scenes without one use Filmic at Exposure 0, the Basic 3D template's start scene
   Filmic at +0.25 (its bright sky over dark stone); scenes that stored a curve keep it. Filmic shows middle gray as
   middle gray, so ACES needs about +0.8 EV for the same brightness; the samples moved from ACES at +1 EV to Filmic at 0
-  (Open World +0.25).
+  (the Physics Playground -0.25 under the Clear preset's sun).
 - The vignette is a lens's fall-off applied before the tone curve (default 0.12, which darkens a 60 degree 16:9 view's
   corners by 9.9%); stored values keep their number, now as a share of a lens's full fall-off (0.2 darkens those corners
   by 16.5% where it darkened them 20%).
