@@ -245,3 +245,37 @@ integrator writes the release notes from them when the wave lands (and removes t
 
 - Creating and loading many bodies still costs what box3d's one-at-a-time insertion costs (10,000 bodies about 19 ms, 10
   of them box3d's); recorded, not changed in this release.
+
+## editor-perf
+
+**What's new**
+
+- The editor's Performance panel costs a frame less than half what it did in 0.6.0 (and less than in 0.5.0): its
+  statistics, table text and timeline no longer grow with every registered GPU or module stage.
+- The Content Browser's first thumbnails no longer hitch the editor (the longest frame while rendering them went from
+  about 2.4 ms to about 1 ms on the reference machine). Small scenes hand their GPU buffers to the next one, and
+  thumbnails and Asset previews draw through the CPU path, with the same pictures.
+- Every frame saves a queue submission: the GPU profiler resets a frame's timestamps on the host when it opens the
+  frame's slot.
+- Editing and playing scenes without mesh renderers (empty entities, lights, cameras) costs about a sixth less CPU per
+  editor frame than in 0.6.0 (100,000 nested entities: 0.24 ms against 0.29 ms): the GPU-driven renderer no longer
+  records culling, occlusion or feedback passes for a scene that has nothing to draw.
+- Opening a large scene in the editor rarely freezes frames for 4-11 ms any more: the parallel read of a scene's file
+  runs below the editor's frame, so the graphics driver gets a processor, and the scene's GPU copy is made a frame
+  before it is shown (the longest frame while opening 100,000 entities over a million went from about 4.2 ms to about
+  1.2 ms on the reference machine, median of opens). Opening takes as long as before.
+
+**Upgrading**
+
+- `renderStats.gpuDriven` (`editor.perf`, `gameRenderStats`, `viewport.capture`) means the frame took the GPU-driven
+  path; the new `gpuCulled` says the GPU culled the scene's mesh renderers (false in a scene without any, whose frames
+  take their asset requests from the CPU, `feedbackRequests` false).
+- Engine code: `SceneRendererSpecification::ForThumbnails()` sets `GPUDriven` Off; `SceneRendererStats::GPUCulled`;
+  `JobSystem::SubmitBackgroundPart` queues parts of background work in progress ahead of work not started; a scene
+  asset's load reads at `SceneReadOptions::Priority` `JobPriority::Background`; `RenderSceneGPUCache` hands the buffers
+  of a released mirror of at most `c_RecycleBytes` (1 MiB) to the next mirror, under their buffer version (binding sets
+  compare buffer versions, never mirrors or scene ids).
+
+**Smaller changes and fixes**
+
+- A released scene's GPU copy releases its light records' buffer with its other buffers, after the frames that read it.

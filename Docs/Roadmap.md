@@ -911,7 +911,29 @@ Open items and deferrals later waves own:
     `PerfGPU.Editor.EditFrameNested100k`, within its budget alone on bc6ee123 (0.2769 ms against 0.2808) but 1.26 times
     wave 3's build in the same pairs (0.2708 against 0.2153 ms) and over budget in every attempt of step 0's `-L perf`
     run (0.287-0.299 ms). Each is fixed before the release, not budgeted; `PlayFrameNested100k` (1.43 times wave 3's,
-    within its budget) goes with the last.
+    within its budget) goes with the last. Wave 7's `editor-perf` took them on in today's code, no feature removed
+    (its verifier's interleaved A/Bs against step 0's tip cc9524a1 on the quiet machine, under the temporary 2133 MT/s
+    memory, so not comparable with `Budgets.json`):
+    - Fixed: `Performance600FramesP95` 0.0566 against 0.1055 ms (5 pairs, every attempt within budget): the panel's
+      statistics, table text and timeline no longer grow with every registered stage. `EditFrameNested100k` 0.240
+      against 0.287 ms and `PlayFrameNested100k` 0.244 against 0.295 (23 pairs, every attempt within budget): frames of
+      a render scene without proxies record no GPU culling, occlusion or feedback.
+    - Fixed, closed only after the campaign on the reference memory: `ThumbnailsMaxFrame` median 1.011 against 2.384 ms
+      (15 pairs; 13 of 15 first attempts within budget, every run passed): released small scenes hand their GPU buffers
+      to the next one, thumbnails draw through the CPU path and timestamp slots reset on the host.
+    - Still open: `SceneOpenOver1MMaxFrame` median 1.231 against 4.177 ms (ratio 0.295, 23 pairs; 8 of 23 first
+      attempts within budget, 4 runs over it in all three). Its 4-11 ms frames were wave 4's parallel read taking every
+      processor at the frame's priority, so the driver's threads waited scheduling quanta (the read now runs on the
+      background threads); the loaded scene's GPU copy is now made a frame before the swap. Frames of 1.2-6.5 ms remain
+      in about half the opens, inside `Render.Submit`, while the background parse or the million entities' destruction
+      runs. Re-measure on the reference memory first; then, in this order: contention between the parse's
+      allocation-heavy jobs (a JSON DOM per entity on 20 threads) or the destruction's frees and the driver's
+      allocations in `vkQueueSubmit` (timers around the submissions, a time-critical sampler; fewer allocations in
+      `PrepareChunk`); the driver's thread on an efficiency core or a busy hyperthread sibling (an efficiency-QoS
+      background pool, which changes import speed: the owner's call); play.stop's first frame (0.7-1.08 ms), whose
+      scene binding sets a second cache entry keyed on every bound input would keep (about 0.1 ms); and a time-based
+      window for `RenderSceneGPUCache`'s recycled buffers (300 frames are 0.3 s at the editor's rates, so an open's
+      mirror usually gets fresh buffers, 0.4-1.2 ms).
   - Re-baselined by the owner's ruling, not a blocker: `Perf.Physics.Create10kBodies`, 16.50 ms against wave 3's 9.07 in
     the same pairs (budget 11.99, set on Jolt). Wave 5's box3d inserts every shape into its trees one at a time on the
     main thread, where Jolt built them in bulk; timed around its calls on this machine, box3d's own creation
@@ -1205,7 +1227,8 @@ presets that every renderer follows and changes while it runs (`viewport.setSett
 (`Tools/LookDev.py`) with the 0.6.0 baseline; and the perf budgets measured again after the CPU replacement. The four
 rendering streams branch from step 0's tip and merge in the order listed, each with a cut line below which its steps
 move to "Later" if they did not land; a fifth, `physics-runtime`, added on 2026-10-27 after the owner's words on
-physics, touches no renderer file and lands when it is ready. What every rendering stream keeps: native resolution only,
+physics, touches no renderer file and lands when it is ready, and a sixth, `editor-perf`, fixes the four editor
+regressions of waves 4-6 that step 0 measured. What every rendering stream keeps: native resolution only,
 nothing that needs TAA to look right (every screen-space effect has a spatial filter and is judged with FXAA and without
 anti-aliasing too), nothing that costs anything when off, the CPU and GPU-driven paths and the shadow caches in
 agreement, and Medium at 0.6.0's costs. The wave is accepted on the reference machine against the harness's baseline:
@@ -1289,6 +1312,18 @@ within 1.15 times step 0's.
     slices); the scene's world matrices from physics, a per-scene override of the section and requests to box3d upstream
     were not started and stay in the open items ("Physics at runtime"); rolling resistance was not needed (the piles
     sleep with the 0.08 m/s threshold).
+- **`editor-perf`: the editor regressions of waves 4-6.** Added on 2026-10-27 from step 0's measurements: four editor
+  metrics over budget against wave 3's build (the open items' "Blockers of 0.7.0"), each taken on without removing a
+  feature, with its numbers there.
+  - The Performance panel's statistics, table text and timeline no longer grow with every registered stage (landed).
+  - Thumbnails: a released small scene's GPU buffers go to the next scene, thumbnails draw through the CPU path with the
+    same pixels, and GPU timestamp slots reset on the host instead of in a submission per frame (landed; the metric is
+    closed after the campaign on the reference memory).
+  - A render scene without proxies records no GPU culling, occlusion or feedback (the editor's frames of 100,000 nested
+    entities, landed; `renderStats.gpuCulled`).
+  - A scene asset's parallel read runs on the background threads, and a loaded scene's GPU copy is made a frame before
+    it is shown (landed). `SceneOpenOver1MMaxFrame` fell to 0.295 of step 0's but stays over its budget in about half
+    the opens: open, with the next hypotheses in the open items.
 
 ### Later (wave 8 and beyond)
 
