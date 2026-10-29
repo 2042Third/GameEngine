@@ -301,9 +301,14 @@ namespace Strata
 		// frame that completed the proxies with its loading time spent leaves it to the next one.
 		if (!preparedBefore && !budget.HasTime())
 			return false;
-		RenderSceneGPU& mirror = Renderer::GetRenderSceneGPUs().Get(renderScene);
+		RenderSceneGPUCache& mirrors = Renderer::GetRenderSceneGPUs();
+		const bool made = mirrors.Find(renderScene.GetId()) == nullptr;
+		RenderSceneGPU& mirror = mirrors.Get(renderScene);
 		mirror.Update(renderScene, assets, c_PrepareUploadBytes);
-		return mirror.GetDeferredProxies() == 0;
+		// The frame that made the copy (its buffers, their first upload and its submission) is not the one that shows the scene:
+		// that frame builds the renderers' binding sets for the copy, and the two together were the longest frame of an
+		// editor's open (0.4-0.7 ms for the copy of 100,000 empty entities alone, on a loaded machine).
+		return !made && mirror.GetDeferredProxies() == 0;
 	}
 
 	uint32_t RenderScene::Sync(const Ref<AssetManagerBase>& assets, uint32_t maxPending)

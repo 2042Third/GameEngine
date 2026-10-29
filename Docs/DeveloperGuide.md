@@ -833,10 +833,15 @@ short. Their full wording:
 
 - **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background work goes through
   `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O, `JobPriority::Background` for long work no frame
-  waits for, such as an import's texture compression or an export's pack compression: it runs on background threads
+  waits for, such as an import's texture compression, an export's pack compression or the parallel read of a scene
+  asset's document (jobs that fill the workers take the processors at the frame's priority, and the frame's submissions
+  then wait scheduling quanta for the graphics driver's threads): it runs on background threads
   below the normal thread priority, which leave four hardware threads to the main thread, the driver and the frame's
   helpers but keep at least half of them (`JobSystem::GetDefaultBackgroundThreadCount`), so it never takes the
-  processors from the frame, whose own work runs on the normal-priority workers). A thread that waits for a job runs
+  processors from the frame, whose own work runs on the normal-priority workers). Pieces of background work in progress
+  that a thread hands out and waits for (the read's chunks) go through `SubmitBackgroundPart`, ahead of background work
+  that has not started, as `ParallelFor`'s background helpers do: queued behind the imports a scan started, they would
+  run one by one on the waiting thread while the imports compress. A thread that waits for a job runs
   that job itself if it has not started, and never other jobs. What a job captures is released on the thread that runs
   it (`Submit` keeps no copy of the function: libc++ copies a small one when it moves it), so a job may hold the last
   reference to what it destroys off the frame (`Scene::ReleaseInBackground`). Results return to the main thread through
@@ -2748,7 +2753,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `Scene::ReleaseInBackground` (stopped on the main thread, destroyed by a background job). Owners that render the scenes
   they load build their render proxies over frames before the swap (`SceneLoadOptions::Prepare` with
   `RenderScene::PrepareLoadedScene`, state `Preparing`: the editor with a GPU, `GameRuntimeOptions::PrepareRenderScenes`
-  for StrataRuntime with a window), so the frame that shows a scene builds none.
+  for StrataRuntime with a window), so the frame that shows a scene builds none. The GPU copy is made a frame before the
+  swap too (the call that makes it returns false): work added to the swap frame of a scene's first show belongs in
+  the preparation instead, where it is spread over frames.
 
 ### Opening scenes
 
@@ -3565,7 +3572,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   camera", the canvas mode: `GetSceneViewQuality`; the chip then names the game's preset and shows the view's own
   muted), captures at the quality of the view they show unless `viewport.capture {quality}` asks for one. Thumbnails
   and the probe bake draw with `SceneRendererSpecification::ForThumbnails()` and `ForBake()`, 0.6.0's values, whatever
-  anyone chose: a bake never depends on a person's settings.
+  anyone chose: a bake never depends on a person's settings. Thumbnails draw through the CPU path (`GPUDriven` Off,
+  the same pixels): a thumbnail's few objects gain nothing from the GPU's culling, whose fixed costs per frame and per
+  new scene doubled their longest frame (`PerfGPU.Editor.ThumbnailsMaxFrame`).
 - **Stats:** `SceneRendererStats::Quality`, `ShadowMapSize` (after the limits and a fallback) and
   `LocalShadowTileSizes`; `renderStats.quality` (the section's fields and values, which `project.setSettings` takes),
   `renderStats.shadowMapSize` and `renderStats.localShadowTileSizes` in `editor.perf` and every capture.
@@ -3666,7 +3675,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   device frame and wait undrawn meanwhile (`SceneRendererStats::DeferredInstanceBytes`, `DeferredProxies`: code that
   renders a single picture renders again until none waits, as captures and thumbnails do); changes of resident ones upload
   at once. A reader of the proxy log that takes `GetProxyVersion` reads every change after it. Mirrors go with their
-  render scenes (at the next `Renderer::BeginFrame`) or after 300 frames unused.
+  render scenes (at the next `Renderer::BeginFrame`) or after 300 frames unused; the next mirror made takes over the
+  buffers of a released small one (at most `RenderSceneGPUCache::c_RecycleBytes`) and their buffer version, so binding
+  sets made for them stay valid: compare buffer versions, never mirrors or scene ids, to know when to make them again.
 - The copy knows only what the logs say: code that changes instances or proxies records each change
   (`RenderScene::RecordInstanceChanges`, `RecordProxyChange`; palettes log as they are recomputed), or the GPU path draws
   stale data that the CPU path does not. Data a feature adds per instance goes into a buffer of its own, parallel to the
@@ -3746,6 +3757,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `AddGPUCounts` adds them to a frame's `SceneRendererStats` for display (`renderStats`, the viewport's statistics).
   `SceneRendererStats` of a GPU-driven frame (`GPUDriven`) counts only what the CPU drew (transparent surfaces), and
   `GetOpaqueBatches`, `GetShadowBatches` and the shadow draw list are empty.
+- A render scene that never had a proxy (empty entities and lights only: an editor's scene of nested entities) has nothing
+  to cull, so its GPU-driven frames record none of the culling's passes, no occlusion phase and no feedback
+  (`SceneRendererStats::GPUCulled` and `renderStats.gpuCulled` are false; `RunGPUCulling` clears only what the frame still
+  reads: the counters the lights' culling writes, which keep coming every frame, and the casters' depths the cascades' fit
+  reads). Their requests come from the CPU's marks (`feedbackRequests` is false in every such frame). Work added to the
+  culling that matters without proxies (a new counter, a buffer another pass reads) is cleared or run in that branch too;
+  `GPU.SceneRenderer.GPUDriven` renders such a scene, counts its lights and draws its first mesh renderer.
 - Requests on the GPU path follow the GPU's visibility feedback, 2-3 frames late (`SceneRendererSpecification::
   VisibilityFeedback`, `SceneRendererStats::FeedbackRequests`, `renderStats.feedbackRequests`; Docs/Architecture.md,
   "Render scene"). Feedback marks exactly what the CPU's walk of the view marks (`GPU.SceneRenderer.Feedback` compares the
@@ -5173,8 +5191,10 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   program that only some programs have (`GPU.ImGui`) registers where it is first used.
 - An overlay pass (`ISceneOverlayPass`) times its draws with the renderer's timer, `SceneOverlayFrame::GPUTimer`:
   `Next(its stage)` before them and `Next` back to the stage the timer had after them, as `GameUIRenderer` does.
-- Timed command lists are executed in the frame they were recorded in: the profiler resolves a frame's timestamps once the
-  GPU completed what was submitted in it, and drops a frame whose timestamps were never written.
+- Timed command lists are executed in the frame they were recorded in, in any order: the profiler resets a frame's slot
+  when it opens it (on the host, `GPUTimestampPool::ResetCompleted`, never in a frame's command list, where a list executed
+  earlier could write the slot before the reset ran), resolves the frame's timestamps once the GPU completed what was
+  submitted in it, and drops a frame whose timestamps were never written.
 - Never wait for timestamps in a frame: `SceneRenderer::GetGPUStats` and the frame profiler's GPU times arrive 2-3 frames
   late. Tests and tools that need the last frame's call `SceneRenderer::ResolveGPUStats(true)`.
 - A timestamp recorded inside a render pass instance may be written when the pass ends on tile-based drivers (MoltenVK):

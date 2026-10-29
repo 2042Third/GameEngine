@@ -2,6 +2,7 @@
 
 #include "Animation/SkinnedMeshTestUtils.h"
 #include "Animation/TestSkinningPoses.h"
+#include "Strata/Core/JobSystem.h"
 #include "Strata/Renderer/LODSelection.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
@@ -11,13 +12,16 @@
 #include "Strata/Renderer/TextureStreamer.h"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <functional>
 #include <random>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 // The GPU-driven path (SceneRendererSpecification::GPUDriven) against the CPU path, the reference: the same pixels (within
@@ -681,6 +685,150 @@ TEST_SUITE("GPU.SceneRenderer.GPUDriven")
 		const PathFrame allFrame = Comparison::Capture(all, scene, camera);
 		CHECK(allFrame.Counts.Instances == culled.Counts.Instances + sizeCulled);
 		CHECK(all.GetGPUStats().SizeCulledProxies == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A scene without mesh renderers records no culling, its lights still counted; its first mesh renderer is drawn in its first frame")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::DefaultMaterial));
+		const AssetHandle material = LitMaterial(assets, glm::vec4(0.6f, 0.4f, 0.3f, 1.0f));
+		const SceneCamera camera = View(glm::vec3(0.0f, 6.0f, 9.0f), glm::vec3(0.0f));
+		// A sun with shadows and three shadowed point lights in view: the GPU culls the point lights (its counters say what it
+		// found), and their 18 shadow views are more than one batch culls (c_CullMaxLocalShadowViews).
+		constexpr uint32_t c_Lamps = 3;
+		static_assert(c_Lamps * RenderData::c_LocalShadowFaces > RenderData::c_CullMaxLocalShadowViews);
+		const auto addLights = [](Scene& scene)
+		{
+			AddNeutralPostProcess(scene);
+			AddSun(scene, glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f)), 3.0f);
+			for (uint32_t index = 0; index < c_Lamps; index++)
+			{
+				Entity lamp = AddPointLight(scene, glm::vec3(static_cast<float>(index) * 2.0f - 2.0f, 1.5f, 1.0f), glm::vec3(1.0f, 0.8f, 0.6f), 5.0f, 10.0f);
+				lamp.GetComponent<PointLightComponent>().CastShadows = true;
+			}
+		};
+		Scene meshes;
+		addLights(meshes);
+		for (uint32_t index = 0; index < 6; index++)
+			AddMesh(meshes, BuiltinAssets::CubeMesh, material, glm::vec3(static_cast<float>(index) * 1.5f - 3.75f, 0.0f, 0.0f), "Cube");
+		// Lights and entities without mesh renderers, as the editor's scenes of nested entities.
+		Scene empty;
+		addLights(empty);
+		for (uint32_t index = 0; index < 100; index++)
+			empty.CreateEntity("Empty");
+
+		// Every shadow view of every lamp drawn every frame.
+		Comparison comparison(IndirectDrawMode::Auto, 1.0f, 0, true);
+		const PathFrame first = comparison.Check(meshes, camera);
+		CHECK(comparison.GPU.GetStats().GPUCulled);
+		CHECK(first.Counts.Instances > 0);
+		CHECK(first.Counts.ShadowCasters > 0);
+		CHECK(first.Counts.LocalShadowCasters > 0);
+
+		// More frames than the visibility feedback takes to come back: the scene has no proxy, so none culls (and none gives
+		// feedback), yet every frame's counters arrive, of that frame (none of the meshes drawn before, and the point lights
+		// counted once each, as the CPU path counts them), and the lamps' shadow views are drawn (empty) as the CPU path's.
+		for (uint32_t frame = 0; frame < 6; frame++)
+		{
+			CAPTURE(frame);
+			const PathFrame lights = comparison.Check(empty, camera);
+			CHECK(comparison.GPU.GetStats().GPUDriven);
+			CHECK_FALSE(comparison.GPU.GetStats().GPUCulled);
+			CHECK_FALSE(comparison.GPU.GetStats().FeedbackRequests);
+			CHECK(comparison.GPU.GetStats().LocalShadowViewsDrawn == c_Lamps * RenderData::c_LocalShadowFaces);
+			CHECK(lights.Counts.Instances == 0);
+			CHECK(lights.Counts.ShadowCasters == 0);
+			CHECK(lights.Counts.LocalShadowCasters == 0);
+			const LightCounts gpuLights = GetLightCounts(comparison.GPU);
+			const LightCounts cpuLights = GetLightCounts(comparison.CPU);
+			CHECK(gpuLights.Lights == 1 + c_Lamps);
+			CHECK(gpuLights.Lights == cpuLights.Lights);
+			CHECK(gpuLights.CulledLights == cpuLights.CulledLights);
+		}
+
+		// The scene's first mesh renderer: culled, and drawn (and casting) in its first frame, as the CPU path draws it.
+		AddMesh(empty, BuiltinAssets::CubeMesh, material, glm::vec3(0.0f), "First");
+		const PathFrame drawn = comparison.Check(empty, camera);
+		CHECK(comparison.GPU.GetStats().GPUCulled);
+		CHECK(drawn.Counts.Instances == 1);
+		CHECK(drawn.Counts.ShadowCasters > 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A frame of a scene without mesh renderers starts no job to find the sun's shadow casters")
+	{
+		// Such frames walk the view on the CPU, whose search for the cascades' casters queried the empty spatial index in a
+		// job per cascade: in the editor's scenes of nested entities that was more than half of Render.Extract.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		REQUIRE_FALSE(JobSystem::IsInitialized());
+		Scene empty;
+		AddNeutralPostProcess(empty);
+		AddSun(empty, glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f)), 3.0f);
+		for (uint32_t index = 0; index < 100; index++)
+			empty.CreateEntity("Empty");
+		const SceneCamera camera = View(glm::vec3(0.0f, 6.0f, 9.0f), glm::vec3(0.0f));
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(static_cast<int>(mode));
+			SceneRendererSpecification specification;
+			specification.GPUDriven = mode;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Size, c_Size);
+			// The first frames make what the renderer keeps, before jobs are counted.
+			for (int frame = 0; frame < 4; frame++)
+			{
+				REQUIRE(renderer.Render(empty, camera));
+				gpu.GetDevice().WaitForIdle();
+			}
+
+			// One worker, held busy until the frames are rendered: a job they submit stays queued, where the pool counts it.
+			std::atomic<bool> release = false;
+			std::atomic<bool> holding = false;
+			struct JobSystemScope
+			{
+				std::atomic<bool>& Release;
+				explicit JobSystemScope(std::atomic<bool>& release)
+					: Release(release)
+				{
+					JobSystemSpecification jobs;
+					jobs.WorkerThreadCount = 1;
+					jobs.IOThreadCount = 1;
+					jobs.BackgroundThreadCount = 1;
+					JobSystem::Init(jobs);
+				}
+				~JobSystemScope()
+				{
+					Release = true;
+					JobSystem::Shutdown();
+				}
+			} jobSystem(release);
+			JobSystem::Submit([&release, &holding]()
+			{
+				holding = true;
+				while (!release)
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			});
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+			while (!holding && std::chrono::steady_clock::now() < deadline)
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			REQUIRE(holding);
+			const uint64_t queued = JobSystem::GetStats().Workers.QueuedJobs;
+			for (int frame = 0; frame < 3; frame++)
+			{
+				REQUIRE(renderer.Render(empty, camera));
+				CHECK_FALSE(renderer.GetStats().GPUCulled);
+			}
+			CHECK(JobSystem::GetStats().Workers.QueuedJobs == queued);
+			release = true;
+		}
+		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

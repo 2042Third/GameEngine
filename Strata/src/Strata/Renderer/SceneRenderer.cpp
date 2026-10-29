@@ -212,6 +212,10 @@ namespace Strata
 		specification.SpreadLightingUpdates = false;
 		// A single frame has no readback to fit its cascades to: Strata 0.6.0's layout, the same for every thumbnail.
 		specification.FitShadowsToView = false;
+		// A thumbnail's few objects are culled and drawn by the CPU, which draws the same pixels: the GPU-driven path's fixed
+		// costs per frame (its culling dispatches, the occlusion pyramid, the counters' readbacks) and per scene (its culling
+		// binding set) buy nothing for a scene this small, and every thumbnail is a new scene.
+		specification.GPUDriven = GPUDrivenMode::Off;
 		RendererQualitySettings& quality = specification.Quality;
 		quality = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		quality.Preset = RendererQualityPreset::Custom;
@@ -3030,6 +3034,9 @@ namespace Strata
 		// CPU still resolves the frame's assets and fits the cascades, and draws transparent surfaces.
 		m_GPUDrivenFrame = IsGPUDriven();
 		m_Stats.GPUDriven = m_GPUDrivenFrame;
+		// A render scene without proxies gives the GPU nothing to cull or draw (scenes of empty entities, an editor's new scene).
+		m_GPUCullFrame = m_GPUDrivenFrame && renderScene.GetProxyCapacity() > 0;
+		m_Stats.GPUCulled = m_GPUCullFrame;
 		CollectLights(scene, renderScene, camera, preview, frame);
 		const auto extractionStart = std::chrono::steady_clock::now();
 		// The CPU's culling works in world space (the spatial index holds world bounds).

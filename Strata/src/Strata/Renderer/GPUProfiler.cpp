@@ -141,6 +141,11 @@ namespace Strata
 			m_Device.GetDevice()->setEventQuery(slot.Done, nvrhi::CommandQueue::Graphics);
 			slot.DoneSet = true;
 		}
+		else
+		{
+			// Nothing will show when the GPU completed the frame's writes: the slot's next reset goes through the queue.
+			slot.Unfenced = true;
+		}
 		slot.State = SlotState::Pending;
 	}
 
@@ -159,7 +164,14 @@ namespace Strata
 			m_Stats.DroppedFrames++;
 			FreeSlot(slot);
 		}
-		m_Pool->Reset(GetBase(m_NextSlot), c_MaxTimestampsPerFrame);
+		// The slot's earlier frame was read or dropped once its event query showed the GPU completed it, or it wrote nothing:
+		// its timestamps are reset at once, on the host where the device can (a submission of its own every frame costs more),
+		// before any command list of this frame writes them, so the frame's timed lists may execute in any order.
+		if (slot.Unfenced)
+			m_Pool->Reset(GetBase(m_NextSlot), c_MaxTimestampsPerFrame);
+		else
+			m_Pool->ResetCompleted(GetBase(m_NextSlot), c_MaxTimestampsPerFrame);
+		slot.Unfenced = false;
 		slot.State = SlotState::Open;
 		slot.Serial = m_NextSerial++;
 		slot.ProfilerFrame = m_Profiler.GetTotalFrameCount();

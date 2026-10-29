@@ -473,6 +473,19 @@ namespace Strata
 		return JobHandle(std::move(state));
 	}
 
+	JobHandle JobSystem::SubmitBackgroundPart(std::function<void()> job)
+	{
+		JobSystemData* data = s_Data.load();
+		if (!data)
+			return RunInline(job);
+
+		JobRef state = MakeJob(std::move(job), true);
+		ReleaseMovedFunction(job);
+		// The background pool's first queue: ParallelFor's background helpers, the other parts of work in progress.
+		data->Background.Push(state, JobPriority::High);
+		return JobHandle(std::move(state));
+	}
+
 	JobHandle JobSystem::SubmitIO(std::function<void()> job, JobPriority priority)
 	{
 		JobSystemData* data = s_Data.load();

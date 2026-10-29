@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <initializer_list>
 #include <numeric>
 #include <random>
 #include <string>
@@ -375,6 +376,127 @@ TEST_SUITE("Core.FrameProfiler")
 		CHECK(stage.Time.Max == 100.0f);
 		CHECK(stage.Time.Average == doctest::Approx(50.5f));
 		CHECK(summary.Work.P95 == doctest::Approx(96.0f));
+	}
+
+	TEST_CASE("Statistics computed in place equal a sorted copy's nearest ranks, also for repeated and equal samples")
+	{
+		// The definition the statistics document: the samples sorted, the one at rank ceil(p * n).
+		const auto atRank = [](std::vector<float> sorted, size_t percent)
+		{
+			std::sort(sorted.begin(), sorted.end());
+			return sorted[std::max<size_t>((sorted.size() * percent + 99) / 100, 1) - 1];
+		};
+		std::mt19937 random(11);
+		for (const size_t count : std::initializer_list<size_t> { 1, 2, 3, 19, 20, 21, 100, 600 })
+		{
+			// From every sample alike (a stage that never ran) to every sample different.
+			for (const int distinct : { 1, 2, 5, 1000 })
+			{
+				CAPTURE(count);
+				CAPTURE(distinct);
+				std::uniform_int_distribution<int> pick(0, distinct - 1);
+				std::vector<float> samples(count);
+				for (float& sample : samples)
+					sample = static_cast<float>(pick(random)) * 0.25f;
+				std::vector<float> reordered = samples;
+				const FrameTimeStats stats = FrameProfiler::ComputeStatsInPlace(reordered);
+				CHECK(stats.P50 == atRank(samples, 50));
+				CHECK(stats.P95 == atRank(samples, 95));
+				CHECK(stats.Max == *std::max_element(samples.begin(), samples.end()));
+				CHECK(stats.Average == doctest::Approx(std::accumulate(samples.begin(), samples.end(), 0.0) / static_cast<double>(count)));
+				// The copying form agrees, and leaves its samples as they were.
+				const std::vector<float> before = samples;
+				const FrameTimeStats copied = FrameProfiler::ComputeStats(samples);
+				CHECK(samples == before);
+				CHECK(copied.P50 == stats.P50);
+				CHECK(copied.P95 == stats.P95);
+				CHECK(copied.Max == stats.Max);
+				CHECK(copied.Average == stats.Average);
+				// In place, the samples were only reordered.
+				std::sort(reordered.begin(), reordered.end());
+				std::sort(samples.begin(), samples.end());
+				CHECK(reordered == samples);
+			}
+		}
+		const FrameTimeStats empty = FrameProfiler::ComputeStatsInPlace({});
+		CHECK(empty.Average == 0.0f);
+		CHECK(empty.P50 == 0.0f);
+		CHECK(empty.P95 == 0.0f);
+		CHECK(empty.Max == 0.0f);
+	}
+
+	TEST_CASE("A summary keeps each stage's samples apart when CPU and GPU stages are registered in turn")
+	{
+		ManualProfiler manual;
+		FrameProfiler& profiler = manual.Profiler;
+		// Modules register their stages in any order: the kinds interleave.
+		const FrameStageID gpuFirst = profiler.RegisterStage("GPU.First", false, FrameStageKind::GPU);
+		const FrameStageID work = profiler.RegisterStage("Module.Work");
+		const FrameStageID gpuSecond = profiler.RegisterStage("GPU.Second", false, FrameStageKind::GPU);
+		const FrameStageID idle = profiler.RegisterStage("Module.Idle");
+		const FrameStageID outside = profiler.RegisterStage("Module.Outside", false);
+		const FrameStageID input = Builtin(profiler, "Input");
+		constexpr int c_Frames = 10;
+		for (int frame = 0; frame < c_Frames; frame++)
+		{
+			profiler.BeginFrame();
+			{
+				const FrameStageScope scope(profiler, work);
+				manual.AdvanceMs(1.0 + frame); // 1 to 10 ms
+			}
+			{
+				const FrameStageScope scope(profiler, input);
+				manual.AdvanceMs(0.5);
+			}
+			{
+				const FrameStageScope scope(profiler, outside);
+				manual.AdvanceMs(3.0);
+			}
+			profiler.EndFrame((2.0 + frame) / 1000.0);
+		}
+		// GPU times for the odd frames only: 11, 13, 15, 17 and 19 ms of the first GPU stage, 20 ms of the second.
+		for (int frame = 1; frame < c_Frames; frame += 2)
+			REQUIRE(profiler.RecordGPUFrame(static_cast<uint64_t>(frame), std::vector<GPUStageTime> { { gpuFirst, 10.0f + frame }, { gpuSecond, 20.0f } }));
+
+		const FrameProfileSummary summary = profiler.Summarize(c_Frames);
+		REQUIRE(summary.Stages.size() == profiler.GetStageCount());
+		CHECK(summary.Frames == c_Frames);
+		CHECK(summary.Stages[work].Time.P50 == doctest::Approx(5.0f));
+		CHECK(summary.Stages[work].Time.P95 == doctest::Approx(10.0f));
+		CHECK(summary.Stages[work].Time.Max == doctest::Approx(10.0f));
+		CHECK(summary.Stages[work].Time.Average == doctest::Approx(5.5f));
+		CHECK(summary.Stages[input].Time.P50 == doctest::Approx(0.5f));
+		CHECK(summary.Stages[input].Time.P95 == doctest::Approx(0.5f));
+		CHECK(summary.Stages[outside].Time.Max == doctest::Approx(3.0f));
+		CHECK_FALSE(summary.Stages[outside].InWorkTime);
+		CHECK(summary.Stages[idle].Time.Max == 0.0f);
+		CHECK(summary.Stages[idle].Time.P95 == 0.0f);
+		CHECK(summary.Stages[idle].Kind == FrameStageKind::CPU);
+		// The GPU stages over the five frames with GPU times.
+		CHECK(summary.GPU.Frames == 5);
+		CHECK(summary.Stages[gpuFirst].Kind == FrameStageKind::GPU);
+		CHECK(summary.Stages[gpuFirst].Time.P50 == doctest::Approx(15.0f));
+		CHECK(summary.Stages[gpuFirst].Time.Max == doctest::Approx(19.0f));
+		CHECK(summary.Stages[gpuFirst].Time.Average == doctest::Approx(15.0f));
+		CHECK(summary.Stages[gpuSecond].Time.P95 == doctest::Approx(20.0f));
+		CHECK(summary.Stages[gpuSecond].Time.Average == doctest::Approx(20.0f));
+		CHECK(summary.GPU.Busy.P50 == doctest::Approx(35.0f));
+		CHECK(summary.GPU.Busy.Max == doctest::Approx(39.0f));
+		// The stages inside the work time add up per frame (1.5 to 10.5 ms), the stage outside it and the GPU's do not.
+		CHECK(summary.StageSum.P50 == doctest::Approx(5.5f));
+		CHECK(summary.StageSum.Max == doctest::Approx(10.5f));
+		CHECK(summary.Work.Max == doctest::Approx(11.0f));
+		CHECK(summary.Untimed.Max == doctest::Approx(0.5f));
+		// Nine frames have a previous one, as long ago as that frame lasted: 4.5 to 12.5 ms.
+		CHECK(summary.Interval.P50 == doctest::Approx(4.5f + 4.0f));
+		CHECK(summary.Interval.Max == doctest::Approx(12.5f));
+
+		// A summary of fewer frames than the ring holds takes the latest ones.
+		const FrameProfileSummary latest = profiler.Summarize(2);
+		CHECK(latest.Frames == 2);
+		CHECK(latest.Stages[work].Time.P50 == doctest::Approx(9.0f));
+		CHECK(latest.GPU.Frames == 1);
+		CHECK(latest.Stages[gpuFirst].Time.Max == doctest::Approx(19.0f));
 	}
 
 	TEST_CASE("Listeners receive every recorded frame")

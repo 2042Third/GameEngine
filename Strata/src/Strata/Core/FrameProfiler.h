@@ -222,6 +222,8 @@ namespace Strata
 		FrameProfileSummary Summarize(uint32_t frames) const;
 		// Statistics of samples in milliseconds, in any order (exact: the percentiles are samples).
 		static FrameTimeStats ComputeStats(std::span<const float> samples);
+		// ComputeStats of samples it may reorder, without copying them.
+		static FrameTimeStats ComputeStatsInPlace(std::span<float> samples);
 		// What paces frames of these median work, GPU busy and interval times (FrameBound); Unknown without an interval.
 		static FrameBound ClassifyFrameBound(float workMs, float gpuBusyMs, float intervalMs);
 		// The share of the frame interval a bound takes (FrameBound).

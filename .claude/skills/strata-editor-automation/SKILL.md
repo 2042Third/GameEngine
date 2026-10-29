@@ -534,10 +534,11 @@ frames seen through a scene camera whose Camera has `DepthOfField` on: the Game 
 camera and captures with `camera: "scene"`; the editor camera never defocuses),
 `colorLookup` (the Post Process's color lookup was applied: false while its `.cube` asset loads), `lensFlare` (null
 unless lens flares ran; `sunInFront`: the sun's disk was in front of the camera for the starburst),
-`gpuDriven` (the GPU culled it
-and built its draws: its counts are the GPU's, of a frame 2-3 frames older in `editor.perf` and of the captured frame in
-captures, once `gpuCounts` is true), `feedbackRequests` (its asset requests came from the GPU's visibility feedback of a
-frame 2-3 frames older: the CPU walks the view itself only on first frames, camera cuts and frames after assets loaded),
+`gpuDriven` (the frame took the GPU-driven path: its counts are the GPU's, of a frame 2-3 frames older in `editor.perf`
+and of the captured frame in captures, once `gpuCounts` is true), `gpuCulled` (the GPU culled the scene's mesh renderers
+and built their draws; false in a scene without mesh renderers, which has nothing to cull), `feedbackRequests` (its asset
+requests came from the GPU's visibility feedback of a frame 2-3 frames older: the CPU walks the view itself on first
+frames, camera cuts, frames after assets loaded and every frame of a scene without mesh renderers, `gpuCulled` false),
 `drawCommands` (draw calls the CPU recorded: a few per pass however large the scene
 on the GPU-driven path), `draws` (instanced draws of the view), `opaqueDraws`, `shadowDraws`, `instances` (an instance
 whose level of detail is cross-fading is drawn twice for 16 frames, at both levels),

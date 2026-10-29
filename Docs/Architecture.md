@@ -875,7 +875,9 @@ nest in it). Each frame
 also records how busy the job system's worker, I/O and background threads were since the previous frame
 (`JobSystem::GetStats`: per-thread busy time and completed jobs, written by each pool thread under a sequence lock and
 read without stopping it).
-`Summarize` gives mean, nearest-rank 50th and 95th percentiles and maximum per stage; frame listeners
+`Summarize` gives mean, nearest-rank 50th and 95th percentiles and maximum per stage (every series in one allocation, each
+reordered in place by `ComputeStatsInPlace`; a series of equal samples, such as a stage that did not run, needs no
+search); frame listeners
 (`AddFrameListener`) receive every recorded frame. The editor reports it through `editor.perf`, the Performance panel and
 the status bar's frame pill (see [Editor](#editor));
 `StrataRuntime --perf-log` writes it as CSV (`Runtime/FramePerfLog`, see
@@ -896,10 +898,14 @@ The renderer measures them (`Renderer/GPUProfiler`, `Renderer::GetGPUProfiler`) 
 (`GraphicsDevice::CreateTimestampPool`, read with their availability and never waited for; NVRHI's timer queries read 32-bit
 values and end render passes). A ring of `MaxFramesInFlight + 2` frame slots of 256 timestamps: `Renderer::BeginFrame` closes
 the frame's slot (an event query marks the end of its submissions), hands the oldest slots the GPU completed to the frame
-profiler (every renderer's intervals added up per stage, like CPU stages) and opens the next one, whose timestamps are reset
-by a command list executed at once (query commands of a queue run in submission order). A slot still in use when its turn
-comes is dropped (`GPUProfilerStats::DroppedFrames`), as is a frame whose timestamps are still not readable a frame after the
-GPU completed its work (recorded into a command list that was never executed; MoltenVK makes timestamps readable a little
+profiler (every renderer's intervals added up per stage, like CPU stages) and opens the next one, resetting its timestamps
+on the host (`GPUTimestampPool::ResetCompleted`, `vkResetQueryPool`: the slot's earlier frame was read or dropped once its
+event query showed the GPU completed it, and the validation layer learned that completion when the query was polled). No
+submission of its own is needed, and the frame's timed command lists may execute in any order (the upload batch's list,
+opened by the frame's first upload, runs after lists the geometry pool's growth executes meanwhile); a device without host
+query resets resets the slot in a command list executed at once. A slot still in use when its turn comes is dropped
+(`GPUProfilerStats::DroppedFrames`), as is a frame whose timestamps are still not readable a frame after the GPU completed
+its work (recorded into a command list that was never executed; MoltenVK makes timestamps readable a little
 after the completion is signaled, so a completed slot waits that one frame); nothing waits for the GPU. `GPUPassTimer` times
 consecutive passes of a command list with one timestamp per boundary, so stages tile it without gaps; a `GPUTimerRecord`
 keeps a user's own intervals (`SceneRenderer::GetGPUStats`).
@@ -1303,8 +1309,15 @@ of whole scenes never become one:
   skeleton) are checked to parse alone (in parallel, before the sink hears of anything: a document they do not split is
   read as a stream), the skeleton goes through the stream handler, and then jobs parse chunks of
   `ParallelChunkEntities` (2,048) into `EntityColumns` while the reading thread hands the finished chunks to the sink in
-  order, at most twice the worker count of chunks in memory. The scene and its reports do not depend on the path. A
-  cancel is noticed after every chunk; an over-limit document is refused before any check.
+  order, at most twice as many chunks in memory as there are threads to prepare them. The scene and its reports do not
+  depend on the path. A cancel is noticed after every chunk; an over-limit document is refused before any check. The
+  jobs run at `SceneReadOptions::Priority`: a scene asset's load (`SceneAsset::Deserialize`) puts them on the background
+  threads, since no frame waits for it and on the workers they took every processor at the frame's priority while the
+  editor opened a scene (the frame's queue submissions then waited for the graphics driver's threads for scheduling
+  quanta, frames of 4-11 ms); tools that wait for a read keep the workers. On the background threads the chunks are
+  parts of a read in progress (`JobSystem::SubmitBackgroundPart`), queued ahead of the imports that wait to start, with
+  the helpers of the imports' compression: behind the imports, they ran one by one on the reading thread while textures
+  compressed (a million entities in 7 s instead of 1.3 s).
 - **Cooked scenes** (`Scene/CookedScene`): the binary form exports put into packs (`AssetPackCook`'s `CookForPack`, called
   by `EditorAssetManager::WriteAssetPack` with `AssetPackWriteOptions::CookDocuments`; `GameExportOptions::CookDocuments`,
   `project.export`'s `cookDocuments`, defaults to true). "STSC" version 1: a 64-byte header with its own CRC-32C and a
@@ -2332,9 +2345,17 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   within `c_PrepareUploadBytes` a frame, so the frame that shows the scene uploads no proxy; both draw from the frame's
   `SceneWorkBudget` (the proxies get the time left, at least a chunk; the call that completes them fills the mirror only
   while the budget still has time, else the next call fills it whatever its time, so a sync that alone outlasts the budget,
-  as Debug builds' validation of a large scene does, never holds the copy back). A render scene's
+  as Debug builds' validation of a large scene does, never holds the copy back). The call that makes the mirror (its
+  buffers, their first upload and a submission) never completes the preparation: the scene is swapped in a frame later,
+  so that frame, which builds the renderers' binding sets for the new mirror, does not also pay for making it (together
+  they were the longest frame of opening 100,000 empty entities in the editor). A render scene's
   destructor posts its id (any thread) and `Renderer::BeginFrame` releases its mirror; mirrors no renderer updated for
-  `RenderSceneGPUCache::c_UnusedFrames` (300) frames go too, and a later frame of their scene uploads it again.
+  `RenderSceneGPUCache::c_UnusedFrames` (300) frames go too, and a later frame of their scene uploads it again. The
+  buffers of the latest mirror released with at most `c_RecycleBytes` (1 MiB) wait, for 300 frames at most, for the next
+  mirror made, which takes them over under their buffer version (`RenderSceneGPU::AdoptBuffers`; its first update
+  clears those that start cleared): a renderer that draws one small scene after another, as thumbnails and previews do,
+  then creates no buffers and keeps its binding sets, which a new mirror's buffers would make again. Frames in flight
+  that still read them read before the next update's copies, as with any update.
   The mirror also holds the scene's asset tables, by slot: the mesh table (per mesh slot the `GeometryHandle` of the
   loaded mesh, with its arena; 0 while it is not loaded or not in the geometry pool), and per material slot its GPU data
   (`RenderData::MaterialData`, `MaterialGPU::Build`) and flags (available, double-sided, alpha-masked, transparent, and
@@ -2418,7 +2439,12 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   2-3 frames late through a readback (`BufferReadback`, `SceneRendererGPUStats`, `AddGPUCounts`). The opaque pixels do not
   depend on the order of a record's instances; shadows' receiver plane bias follows the receiver's normal, not
   screen-space derivatives, which on some GPUs depend on how draws group pixels into quads (`Include/Shadows.glsl`), so
-  both paths agree to the pixel (`GPU.SceneRenderer.GPUDriven`, `IndirectFallback`).
+  both paths agree to the pixel (`GPU.SceneRenderer.GPUDriven`, `IndirectFallback`). A render scene that never had a
+  proxy records none of this (`SceneRendererStats::GPUCulled`): no culling pass, depth pyramid, second phase or feedback,
+  only the clears of the counters (which the point and spot lights' culling still fills, and the readback still copies)
+  and of the casters' depths, whose absence the cascades' fit reads. Recording the empty passes took about a seventh of
+  the CPU time of an editor frame of 100,000 empty entities. Such frames walk the view on the CPU (no feedback comes), and
+  that walk starts no job for an empty spatial index.
 - **Visibility feedback** (`SceneRendererSpecification::VisibilityFeedback`, on by default; `Cull.comp`'s counting
   passes, `Scene/CullFeedback.comp`, `SceneRenderer::ApplyFeedback`). What a GPU-driven frame requests comes from the GPU's
   culling of an earlier frame instead of the CPU walking the view's proxies. For every proxy within the prefetch distance,
@@ -3256,8 +3282,9 @@ is the `strata-scripting` skill. The layers:
   stage self times of the last 600 frames (newest at the right, untimed work on top, reference lines at 16.7 and 33.3
   ms), scaled to the 95th percentile frame (taller frames are cut at the top), marks spikes (frames over twice the
   median and a 60 FPS frame), explains the frame under the mouse, lists per-stage statistics under the frame's totals
-  (frozen under the header) and copies `editor.perf`'s JSON (Copy as JSON); its statistics are computed four times a
-  second. While GPU times arrive (or are expected) a GPU strip under the timeline stacks the GPU stages of the same frames
+  (frozen under the header) and copies `editor.perf`'s JSON (Copy as JSON); its statistics, and the table's text with
+  them, are made four times a second, and each strip sorts out the stages it stacks once per frame drawn, not per column
+  (the other strip's stages cost its 600 columns nothing). While GPU times arrive (or are expected) a GPU strip under the timeline stacks the GPU stages of the same frames
   at the same scale (frames without GPU times stay blank), and the table ends with a GPU section: what bounds the frames
   (`PerformancePanel::DescribeBound`: GPU-bound, CPU-bound, capped or unknown, by `FrameBound`), the GPU's busy time and
   each GPU stage. The status bar's frame pill keeps its text; its tooltip adds the same bound line (a summary of the last

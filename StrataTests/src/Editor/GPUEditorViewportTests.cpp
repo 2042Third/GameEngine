@@ -328,14 +328,16 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(result.contains("renderStats"));
 		const nlohmann::json& stats = result["renderStats"];
 		INFO(stats.dump(1));
-		for (const char* key : { "gpuDriven", "drawCommands", "draws", "opaqueDraws", "shadowDraws", "instances", "shadowCasters", "triangles", "visibleProxies",
+		for (const char* key : { "gpuDriven", "gpuCulled", "drawCommands", "draws", "opaqueDraws", "shadowDraws", "instances", "shadowCasters", "triangles", "visibleProxies",
 			"occludedProxies", "occludedCasters", "cachedCascades", "culledProxies", "instancesPerLod", "lights", "droppedLights", "materials", "pendingAssets", "extractMs", "sortMs", "proxyUpdates",
 			"instanceBytesUploaded", "deferredInstanceBytes", "geometryPool", "gpuMs", "gpuStatsFrame" })
 		{
 			CAPTURE(key);
 			CHECK(stats.contains(key));
 		}
-		// The cube, drawn in the prepass and the forward pass, and into the sun's shadow cascades.
+		// The cube, drawn in the prepass and the forward pass, and into the sun's shadow cascades: on the GPU-driven path, the
+		// GPU culled it.
+		CHECK(stats["gpuCulled"] == stats["gpuDriven"]);
 		CHECK(stats["instances"] == 1);
 		CHECK(stats["opaqueDraws"] == 1);
 		CHECK(stats["drawCommands"].get<uint32_t>() >= 2);
@@ -371,6 +373,31 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(perf["renderStats"].is_object());
 		CHECK(perf["renderStats"]["instances"] == 1);
 		CHECK(perf.contains("gpu"));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture of a scene without mesh renderers reports frames the GPU culled nothing in")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.Run("entity.create", { { "name", "Sun" }, { "components", { { "DirectionalLight", { { "Intensity", 3.0 } } } } } });
+		harness.Run("entity.create", { { "name", "Empty" } });
+		harness.Run("camera.set", { { "position", { 0, 0, 4 } }, { "target", { 0, 0, 0 } } });
+
+		// Nothing to cull: whichever path the frame took, the GPU culled nothing and the CPU walked the view for its requests.
+		for (int capture = 0; capture < 3; capture++)
+		{
+			CAPTURE(capture);
+			nlohmann::json result;
+			harness.CaptureLoaded({ { "width", 64 }, { "height", 48 } }, &result);
+			const nlohmann::json& stats = result["renderStats"];
+			INFO(stats.dump(1));
+			CHECK_FALSE(stats["gpuCulled"].get<bool>());
+			CHECK_FALSE(stats["feedbackRequests"].get<bool>());
+			CHECK(stats["instances"] == 0);
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

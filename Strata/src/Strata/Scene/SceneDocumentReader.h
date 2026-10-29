@@ -35,7 +35,8 @@ namespace Strata
 		bool Parallel = true;
 		uint32_t ParallelChunkEntities = 2048;
 		uint32_t ParallelMinEntities = 16384;
-		// Of the jobs that parse chunks (from background work they are background jobs).
+		// Of the jobs that parse chunks (from background work they are background jobs). JobPriority::Background queues them as
+		// parts of background work in progress (JobSystem::SubmitBackgroundPart), ahead of background work that has not started.
 		JobPriority Priority = JobPriority::Normal;
 	};
 

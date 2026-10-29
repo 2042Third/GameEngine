@@ -858,9 +858,11 @@ namespace Strata
 				}
 				const size_t total = spans->Entities.size();
 				const size_t chunks = (total + chunkEntities - 1) / chunkEntities;
-				// Enough chunks under way to keep the threads busy while the reading thread hands them over, and no more: what is
-				// prepared waits in memory.
-				const size_t window = std::min(chunks, 2 * (static_cast<size_t>(JobSystem::GetWorkerThreadCount()) + 1));
+				// Enough chunks under way to keep the threads that prepare them busy while the reading thread hands them over, and
+				// no more: what is prepared waits in memory.
+				const bool background = options.Priority == JobPriority::Background;
+				const uint32_t threads = background ? JobSystem::GetBackgroundThreadCount() : JobSystem::GetWorkerThreadCount();
+				const size_t window = std::min(chunks, 2 * (static_cast<size_t>(threads) + 1));
 				std::vector<ChunkSlot> slots(window);
 				std::atomic<bool> stop = false;
 				auto submit = [&](size_t chunk)
@@ -871,7 +873,10 @@ namespace Strata
 					slot.Failed = false;
 					slot.Complete = false;
 					slot.Error.clear();
-					slot.Job = JobSystem::Submit([&spans, &slot, &stop, first, count]() { PrepareChunk(*spans, first, count, slot, stop); }, options.Priority);
+					auto prepare = [&spans, &slot, &stop, first, count]() { PrepareChunk(*spans, first, count, slot, stop); };
+					// On the background threads, the chunks are parts of a read in progress: queued behind the imports that wait to
+					// start, they would run only on the reading thread while imports compress.
+					slot.Job = background ? JobSystem::SubmitBackgroundPart(std::move(prepare)) : JobSystem::Submit(std::move(prepare), options.Priority);
 				};
 				// Ends the jobs under way (they stop at their next entity) before the spans and slots they use go.
 				auto abandon = [&](std::string error)

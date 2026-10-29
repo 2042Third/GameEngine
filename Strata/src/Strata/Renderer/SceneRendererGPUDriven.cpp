@@ -729,7 +729,9 @@ namespace Strata
 		constants.BucketCount = static_cast<uint32_t>(m_CullBuckets.size());
 		constants.ViewBucketCount = viewBuckets;
 		constants.DrawsBounded = GetGPUIndirectPath(constants.ArgumentsPerBucket) != GPUIndirectPath::Count ? 1u : 0u;
-		constants.Feedback = m_Specification.VisibilityFeedback ? 1u : 0u;
+		// A frame without proxies culls nothing, so it has no feedback to give (its requests come from the CPU's marks once the
+		// latest feedback is too old).
+		constants.Feedback = m_Specification.VisibilityFeedback && m_GPUCullFrame ? 1u : 0u;
 		constants.FirstPhaseViewBuckets = firstPhaseViewBuckets;
 		constants.VisibilityParity = m_VisibilityParity;
 		constants.LODErrorThreshold = m_LODCriteria.ErrorThreshold;
@@ -789,7 +791,8 @@ namespace Strata
 
 	bool SceneRenderer::IsOcclusionCulled() const
 	{
-		return m_GPUDrivenFrame && m_Specification.OcclusionCulling && m_DepthPyramid != nullptr;
+		// Without proxies nothing is culled: no depth pyramid is built and no second phase runs.
+		return m_GPUCullFrame && m_Specification.OcclusionCulling && m_DepthPyramid != nullptr;
 	}
 
 	bool SceneRenderer::CreateDepthPyramid()
@@ -875,6 +878,11 @@ namespace Strata
 	bool SceneRenderer::UploadCullTables(nvrhi::ICommandList* commandList)
 	{
 		ST_PROFILE_FUNCTION();
+		// A frame without proxies records no culling pass (RunGPUCulling): the tables, the binding set (another scene's mirror,
+		// on the frame an opened scene takes over) and the geometry pool's uploads, which only the culling reads, wait for a
+		// frame that culls.
+		if (!m_GPUCullFrame)
+			return true;
 		GeometryPool& pool = *Renderer::GetGeometryPool();
 		if (!pool.RecordTableUploads(commandList))
 			return false; // Logged by the pool
@@ -904,6 +912,20 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 		const RenderData::CullConstants& constants = m_CullConstants;
+		if (!m_GPUCullFrame)
+		{
+			// No proxy to cull: every pass would dispatch nothing over the proxies and build no bucket, yet recording them (their
+			// clears, states and barriers) and the occlusion phase's depth pyramid costs the CPU tens of microseconds a frame.
+			// Cleared instead is what the frame still reads: the counters (the lights' culling counts into them, the statistics
+			// copy them) and, with shadows, the casters' depths (none; the cascades' fit reads them).
+			commandList->clearBufferUInt(m_CullCounterBuffer, 0);
+			if (shadows)
+				commandList->clearBufferUInt(m_CasterDepthBuffer, 0);
+			m_ShadowOcclusionMeasured = false;
+			// The visibility history is of the frame that culled last: the next one that culls starts without it.
+			m_ResetVisibility = true;
+			return;
+		}
 		commandList->clearBufferUInt(m_CullCountBuffer, 0);
 		commandList->clearBufferUInt(m_CullBucketCountBuffer, 0);
 		commandList->clearBufferUInt(m_CullCounterBuffer, 0);
@@ -1478,7 +1500,7 @@ namespace Strata
 		for (uint32_t first = 0; first < views; first += RenderData::c_CullMaxLocalShadowViews)
 		{
 			const uint32_t batchViews = std::min(views - first, RenderData::c_CullMaxLocalShadowViews);
-			if (first > 0)
+			if (first > 0 && m_GPUCullFrame) // Without proxies the views' tiles are only cleared
 				RunLocalShadowCulling(commandList, first, batchViews, first + batchViews == views);
 			for (uint32_t place = 0; place < batchViews; place++)
 			{
