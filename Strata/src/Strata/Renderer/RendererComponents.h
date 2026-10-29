@@ -97,9 +97,11 @@ namespace Strata
 		// Procedural sky: linear luminance in nits straight up, at the horizon and below it. The sun's disk sits where the
 		// scene's directional light comes from (45 degrees above the horizon without one), SunSize degrees across, with the
 		// light's color times SunIntensity as its luminance.
-		glm::vec3 ZenithColor = { 0.18f, 0.32f, 0.62f };
-		glm::vec3 HorizonColor = { 0.66f, 0.74f, 0.84f };
-		glm::vec3 GroundColor = { 0.22f, 0.20f, 0.18f };
+		// The defaults give a clear day's sun to sky ratio on flat ground (about 8 with the default 3 lux sun 45 degrees up, as the
+		// atmosphere's): Strata 0.6.0's colors times 0.25.
+		glm::vec3 ZenithColor = { 0.045f, 0.08f, 0.155f };
+		glm::vec3 HorizonColor = { 0.165f, 0.185f, 0.21f };
+		glm::vec3 GroundColor = { 0.055f, 0.05f, 0.045f };
 		float SunSize = 0.53f; // Degrees across (the procedural sky's and the atmosphere's disk)
 		float SunIntensity = 20.0f;
 		// Atmosphere: the directional light is the sun above the atmosphere (its Intensity the illuminance there, about
@@ -110,6 +112,12 @@ namespace Strata
 		float AtmosphereDensity = 1.0f;
 		float AtmosphereHaze = 1.0f;
 		float GroundAlbedo = 0.3f;
+		// Atmosphere: the air between the camera and every surface dims it and adds the light it scatters toward the camera, as
+		// the sky does over its whole depth (aerial perspective), distances multiplied by AerialPerspectiveScale: worlds smaller
+		// than real ones (an island of 1 km) show the haze of larger ones above 1.
+		bool AerialPerspective = true;
+		float AerialPerspectiveScale = 1.0f; // 0 to c_MaxAerialPerspectiveScale
+		static constexpr float c_MaxAerialPerspectiveScale = 64.0f;
 	};
 
 	// Exponential height fog over the scene's surfaces and its sky. The first active entity with this component in a scene
@@ -273,8 +281,11 @@ namespace Strata
 		float MotionBlurShutterAngle = 180.0f;
 		float MotionBlurMaxLength = 0.02f;
 		bool AmbientOcclusion = true;
-		float AmbientOcclusionRadius = 0.6f; // World units
+		float AmbientOcclusionRadius = 1.0f; // Meters; on screen kept between 0.3% and 12% of the view's height
 		float AmbientOcclusionIntensity = 1.0f;
+		// Occluded corners of bright surfaces keep the light their walls reflect into them (the forward pass's AOMultiBounce): also
+		// for materials' occlusion maps, with or without AmbientOcclusion.
+		bool AmbientOcclusionMultiBounce = true;
 		bool AntiAliasing = true;
 		AntiAliasingMode AntiAliasingMethod = AntiAliasingMode::FXAA;
 		// The TAA's look: a preset, or the tunables below under Custom. The preset and the tunables are independent: choosing

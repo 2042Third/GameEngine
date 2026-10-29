@@ -10,6 +10,8 @@
 #include "Include/LocalShadows.glsl"
 #include "Include/Clusters.glsl"
 #include "Include/Fog.glsl"
+#include "Include/AerialPerspective.glsl"
+#include "Include/AmbientOcclusionFit.glsl"
 #define ST_REFLECTION_PROBE_SAMPLING
 #include "Include/ReflectionProbes.glsl"
 
@@ -67,6 +69,18 @@ layout(set = 0, binding = ST_SRV(18)) uniform texture2D u_ScreenReflections;
 layout(set = 0, binding = ST_SRV(28)) uniform texture2D u_ScreenShadows;
 #endif
 
+// The frame's lighting debug view (ST_LIGHTING_VIEW_*, SceneRenderOptions::LightingView): the same for every pixel.
+uint GetLightingView()
+{
+	return uint(u_Frame.MaterialParams.y + 0.5);
+}
+
+// The views whose values are not light (occlusion, albedo): written unexposed, without fog or what glass transmits.
+bool IsLightingValueView(uint view)
+{
+	return view == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION || view == ST_LIGHTING_VIEW_ALBEDO;
+}
+
 // The share of its diffuse light a surface scatters: transmissive surfaces pass the rest through (the glass variant). The other
 // variants scatter all of it, with the arithmetic they had before transmission existed.
 vec3 ScatterDiffuse(vec3 diffuse, float diffuseWeight)
@@ -112,10 +126,12 @@ vec3 SampleSpecularLight(vec3 relativePosition, vec3 normal, vec3 reflected, flo
 
 // The lit surface's color: the sun with its shadow, the punctual lights of the pixel's cluster (those with shadows through
 // their views, Include/LocalShadows.glsl), the reflection probes' and the sky's image-based light (or the constant ambient)
-// and the emission, under the clear coat where the material has one. `diffuseWeight` is the share of the diffuse light the
-// surface scatters (1 - its transmission in the glass variant; 1 elsewhere).
-vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicRoughness, vec3 shadingNormal, float occlusion, MaterialData material,
-	ClearcoatData coat, float diffuseWeight)
+// and the emission, under the clear coat where the material has one. `roughness` is the perceptual roughness widened by
+// specular anti-aliasing (main); `diffuseWeight` is the share of the diffuse light the surface scatters (1 - its transmission
+// in the glass variant; 1 elsewhere). The lighting debug views Indirect and AmbientOcclusion return only the indirect light and
+// the occlusion that darkens it.
+vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicRoughness, float roughness, vec3 shadingNormal, float occlusion,
+	MaterialData material, ClearcoatData coat, float diffuseWeight)
 {
 	SurfaceData surface;
 	surface.Position = v_RelativePosition;
@@ -124,9 +140,23 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 	surface.Albedo = albedo;
 	surface.Alpha = baseAlpha;
 	surface.Metallic = clamp(material.Metallic * metallicRoughness.b, 0.0, 1.0);
-	surface.Roughness = clamp(material.Roughness * metallicRoughness.g, 0.0, 1.0);
+	surface.Roughness = roughness;
 	surface.Occlusion = occlusion;
 	surface.Emissive = emissive;
+	// The split sum's BRDF table at the surface: its specular reflectance of image light and the compensation of its lobe for
+	// multiple scattering, which direct light takes too.
+	float NoV = max(dot(surface.Normal, surface.View), 1e-4);
+	vec3 f0 = mix(vec3(0.04), surface.Albedo, surface.Metallic);
+	vec2 dfg = textureLod(sampler2D(u_BRDFLut, u_LinearClampSampler), vec2(NoV, surface.Roughness), 0.0).rg;
+	surface.SpecularEnergy = GetSpecularEnergy(f0, dfg);
+	float coatNoV = 1.0;
+	vec2 coatDFG = vec2(1.0, 0.0);
+	if (coat.Strength > 0.0)
+	{
+		coatNoV = max(dot(coat.Normal, surface.View), 1e-4);
+		coatDFG = textureLod(sampler2D(u_BRDFLut, u_LinearClampSampler), vec2(coatNoV, coat.Roughness), 0.0).rg;
+		coat.SpecularEnergy = GetSpecularEnergy(vec3(c_ClearcoatF0), coatDFG).x;
+	}
 
 	float viewDepth = -(u_Frame.View * vec4(v_RelativePosition, 1.0)).z;
 	vec3 color = vec3(0.0);
@@ -176,6 +206,9 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 			color += LightSurface(surface, coat, diffuseWeight, normalize(toLight), light.Color.rgb * attenuation);
 		}
 	}
+	uint lightingView = GetLightingView();
+	if (lightingView == ST_LIGHTING_VIEW_INDIRECT)
+		color = vec3(0.0);
 
 	// Screen-space occlusion darkens indirect light only (direct light has shadows).
 #ifdef ST_FORWARD_TRANSPARENT
@@ -184,7 +217,14 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 	float screenOcclusion = u_Frame.AOParams.x > 0.0 ? texelFetch(u_AmbientOcclusion, ivec2(gl_FragCoord.xy), 0).r : 1.0;
 #endif
 	float diffuseOcclusion = surface.Occlusion * screenOcclusion;
+	if (lightingView == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION)
+		return vec3(diffuseOcclusion);
+	// Multi-bounce (AOParams.y): occluded corners keep the light their walls, of the surface's diffuse albedo, reflect into
+	// them (Include/AmbientOcclusionFit.glsl). Diffuse light only; specular occlusion keeps the visibility.
+	vec3 diffuseOcclusionColor = u_Frame.AOParams.y > 0.0 ? AOMultiBounce(diffuseOcclusion, surface.Albedo * (1.0 - surface.Metallic))
+		: vec3(diffuseOcclusion);
 	vec3 reflected = reflect(-surface.View, surface.Normal);
+	vec3 surfaceGeometricNormal = normalize(v_Normal) * (gl_FrontFacing ? 1.0 : -1.0);
 	// Reflection probes whose boxes hold the surface light it first (Include/ReflectionProbes.glsl); the sky, or the constant
 	// ambient without an environment, fills in what they leave.
 	ProbeLight probes;
@@ -208,11 +248,9 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 	vec3 indirect;
 	if (environment || probes.Weight > 0.0 || screenReflection.a > 0.0)
 	{
-		// Image-based lighting: diffuse irradiance plus split-sum specular (prefiltered radiance x environment BRDF).
-		float NoV = max(dot(surface.Normal, surface.View), 1e-4);
-		vec3 f0 = mix(vec3(0.04), surface.Albedo, surface.Metallic);
-		vec2 dfg = textureLod(sampler2D(u_BRDFLut, u_LinearClampSampler), vec2(NoV, surface.Roughness), 0.0).rg;
-		vec3 specularColor = f0 * dfg.x + dfg.y;
+		// Image-based lighting: diffuse irradiance plus split-sum specular (prefiltered radiance x environment BRDF, compensated
+		// for multiple scattering); diffuse gets what specular leaves.
+		vec3 specularColor = (f0 * dfg.x + dfg.y) * surface.SpecularEnergy;
 		vec3 irradiance = vec3(0.0);
 		vec3 radiance = vec3(0.0);
 		if (environment)
@@ -221,8 +259,10 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 			radiance = textureLod(samplerCube(u_PrefilteredMap, u_LinearClampSampler), RotateEnvironmentDirection(reflected),
 				surface.Roughness * u_Frame.EnvironmentParams.z).rgb;
 		}
-		// Specular occlusion from ambient occlusion (Lagarde): tighter for smooth surfaces and grazing views.
-		float specularOcclusion = clamp(pow(NoV + diffuseOcclusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0);
+		// Specular occlusion from ambient occlusion (Lagarde): tighter for smooth surfaces and grazing views; reflections a normal
+		// map turns into the surface fade out (GetHorizonFade).
+		float specularOcclusion = clamp(pow(NoV + diffuseOcclusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0)
+			* GetHorizonFade(reflected, surfaceGeometricNormal);
 		if (probes.Weight > 0.0)
 		{
 			// The probes' captures hold the scene's luminance (their intensities applied); the sky's share is scaled here.
@@ -236,7 +276,7 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 			// that a probe fading out meets it without a step at its box's faces.
 			if (!environment)
 				diffuse += u_Frame.AmbientColor.rgb * sky * surface.Albedo * (1.0 - surface.Metallic);
-			indirect = ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusion + radiance * specularColor * specularOcclusion;
+			indirect = ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusionColor + radiance * specularColor * specularOcclusion;
 		}
 		else if (screenReflection.a > 0.0)
 		{
@@ -244,31 +284,30 @@ vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicR
 			vec3 diffuse = environment ? irradiance * surface.Albedo * (1.0 - surface.Metallic) * (1.0 - specularColor) * u_Frame.EnvironmentParams.x
 				: u_Frame.AmbientColor.rgb * surface.Albedo * (1.0 - surface.Metallic);
 			vec3 specular = radiance * (environment ? u_Frame.EnvironmentParams.x : 0.0) * (1.0 - screenReflection.a) + screenReflection.rgb;
-			indirect = ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusion + specular * specularColor * specularOcclusion;
+			indirect = ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusionColor + specular * specularColor * specularOcclusion;
 		}
 		else
 		{
 			vec3 diffuse = irradiance * surface.Albedo * (1.0 - surface.Metallic) * (1.0 - specularColor);
-			indirect = (ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusion + radiance * specularColor * specularOcclusion) * u_Frame.EnvironmentParams.x;
+			indirect = (ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusionColor + radiance * specularColor * specularOcclusion) * u_Frame.EnvironmentParams.x;
 		}
 	}
 	else
 	{
 		// Constant ambient without an environment map: diffuse only, modulated by material occlusion.
-		indirect = ScatterDiffuse(u_Frame.AmbientColor.rgb * surface.Albedo * (1.0 - surface.Metallic), diffuseWeight) * diffuseOcclusion;
+		indirect = ScatterDiffuse(u_Frame.AmbientColor.rgb * surface.Albedo * (1.0 - surface.Metallic), diffuseWeight) * diffuseOcclusionColor;
 	}
 
-	vec3 emitted = surface.Emissive;
+	vec3 emitted = lightingView == ST_LIGHTING_VIEW_INDIRECT ? vec3(0.0) : surface.Emissive;
 	if (coat.Strength > 0.0)
 	{
 		// The coat reflects the probes', the sky's or the ambient light by its prefiltered Fresnel (split sum, as the base), and
 		// the light under it, the base's and the emission, loses what it reflects.
-		float coatNoV = max(dot(coat.Normal, surface.View), 1e-4);
-		vec2 coatDFG = textureLod(sampler2D(u_BRDFLut, u_LinearClampSampler), vec2(coatNoV, coat.Roughness), 0.0).rg;
-		float coatReflectance = coat.Strength * (c_ClearcoatF0 * coatDFG.x + coatDFG.y);
+		float coatReflectance = coat.Strength * (c_ClearcoatF0 * coatDFG.x + coatDFG.y) * coat.SpecularEnergy;
 		vec3 coatReflected = reflect(-surface.View, coat.Normal);
 		vec3 coatRadiance = SampleSpecularLight(surface.Position, coat.Normal, coatReflected, coat.Roughness, environment);
-		float coatOcclusion = clamp(pow(coatNoV + diffuseOcclusion, exp2(-16.0 * coat.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0);
+		float coatOcclusion = clamp(pow(coatNoV + diffuseOcclusion, exp2(-16.0 * coat.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0)
+			* GetHorizonFade(coatReflected, surfaceGeometricNormal);
 		indirect = indirect * (1.0 - coatReflectance) + coatRadiance * coatReflectance * coatOcclusion;
 		emitted *= 1.0 - ClearcoatFresnel(coat, coatNoV);
 	}
@@ -302,7 +341,9 @@ vec3 TransmitLight(InstanceData instance, MaterialData material, vec3 normal, ve
 
 	float NoV = max(dot(normal, view), 1e-4);
 	vec2 dfg = textureLod(sampler2D(u_BRDFLut, u_LinearClampSampler), vec2(NoV, roughness), 0.0).rg;
-	vec3 reflectance = mix(vec3(0.04), albedo, metallic) * dfg.x + dfg.y;
+	// What the surface reflects, compensated as its specular light is (ShadeLitSurface): the rest passes through.
+	vec3 f0 = mix(vec3(0.04), albedo, metallic);
+	vec3 reflectance = (f0 * dfg.x + dfg.y) * GetSpecularEnergy(f0, dfg);
 	vec3 absorbed = exp(-material.Absorption.rgb * thickness);
 	return behind * absorbed * albedo * (1.0 - metallic) * (1.0 - reflectance) * transmission;
 }
@@ -319,6 +360,11 @@ void main()
 	vec4 baseColor = material.BaseColor * SampleMaterialTexture(material.BaseColorMap, uv);
 	vec3 emissive = material.Emissive.rgb * SampleMaterialTexture(material.EmissiveMap, uv).rgb;
 	vec3 color = baseColor.rgb + emissive;
+	// The lighting debug view: Lighting shades every lit surface white without its emission (unlit ones draw as they are).
+	uint lightingView = GetLightingView();
+	bool valueView = IsLightingValueView(lightingView);
+	vec3 albedo = lightingView == ST_LIGHTING_VIEW_LIGHTING ? vec3(1.0) : baseColor.rgb;
+	vec3 surfaceEmissive = lightingView == ST_LIGHTING_VIEW_LIGHTING ? vec3(0.0) : emissive;
 #ifdef ST_FORWARD_GLASS
 	vec3 transmitted = vec3(0.0);
 #endif
@@ -326,35 +372,57 @@ void main()
 	{
 		vec4 metallicRoughness = SampleMaterialTexture(material.MetallicRoughnessMap, uv);
 		vec3 shadingNormal = GetShadingNormal(material, uv, v_Normal, v_Tangent, gl_FrontFacing);
+		// Specular anti-aliasing (MaterialParams.z): the lobe widened by the shading normal's change across the pixel. Derivatives
+		// only of the primitive's interpolants and textures, in a branch on its material (the same for a whole quad), before any
+		// discard: both draw paths shade alike.
+		float roughness = WidenRoughness(clamp(material.Roughness * metallicRoughness.g, 0.0, 1.0), dFdx(shadingNormal), dFdy(shadingNormal),
+			u_Frame.MaterialParams.z);
 		float occlusion = mix(1.0, SampleMaterialTexture(material.OcclusionMap, uv).r, material.OcclusionStrength);
 		ClearcoatData coat;
 		coat.Strength = 0.0;
 		coat.Roughness = 0.0;
 		coat.Normal = shadingNormal;
+		coat.SpecularEnergy = 1.0;
 		if ((material.Flags & ST_MATERIAL_CLEARCOAT) != 0u)
 		{
 			coat.Strength = clamp(material.Clearcoat * SampleMaterialTexture(material.ClearcoatMap, uv).r, 0.0, 1.0);
 			coat.Roughness = clamp(material.ClearcoatRoughness * SampleMaterialTexture(material.ClearcoatRoughnessMap, uv).g, 0.0, 1.0);
 			coat.Normal = GetMappedNormal(material.ClearcoatNormalMap, 1.0, uv, v_Normal, v_Tangent, gl_FrontFacing);
+			coat.Roughness = WidenRoughness(coat.Roughness, dFdx(coat.Normal), dFdy(coat.Normal), u_Frame.MaterialParams.z);
 		}
 		float diffuseWeight = 1.0;
 #ifdef ST_FORWARD_GLASS
 		float transmission = clamp(material.Transmission * SampleMaterialTexture(material.TransmissionMap, uv).r, 0.0, 1.0);
 		diffuseWeight = 1.0 - transmission;
 		float metallic = clamp(material.Metallic * metallicRoughness.b, 0.0, 1.0);
-		float roughness = clamp(material.Roughness * metallicRoughness.g, 0.0, 1.0);
-		transmitted = TransmitLight(instance, material, shadingNormal, GetViewVector(v_RelativePosition), baseColor.rgb, metallic, roughness, transmission);
+		transmitted = TransmitLight(instance, material, shadingNormal, GetViewVector(v_RelativePosition), albedo, metallic, roughness, transmission);
 		if (coat.Strength > 0.0)
 			transmitted *= 1.0 - ClearcoatFresnel(coat, dot(coat.Normal, GetViewVector(v_RelativePosition)));
 #endif
-		color = ShadeLitSurface(baseColor.rgb, baseColor.a, emissive, metallicRoughness, shadingNormal, occlusion, material, coat, diffuseWeight);
+		color = ShadeLitSurface(albedo, baseColor.a, surfaceEmissive, metallicRoughness, roughness, shadingNormal, occlusion, material, coat,
+			diffuseWeight);
 	}
+	else if (lightingView == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION)
+	{
+		color = vec3(1.0); // Nothing occludes the light of an unlit surface
+	}
+	else if (lightingView == ST_LIGHTING_VIEW_INDIRECT)
+	{
+		color = vec3(0.0); // Its emission is not indirect light
+	}
+	if (lightingView == ST_LIGHTING_VIEW_ALBEDO)
+		color = baseColor.rgb;
 
-	// Every variant fogs alike, so a transparent surface looks like an opaque one at its depth.
-	if (u_Frame.FogParams.x > 0.0)
+	// Every variant hazes and fogs alike, so a transparent surface looks like an opaque one at its depth: the air's haze
+	// first (aerial perspective), then the height fog, nearer the camera, over it. The value views show the surface's own
+	// values.
+	if (u_Frame.FogParams.z > 0.0 && !valueView)
+		color = ApplyAerialPerspective(color, v_RelativePosition, gl_FragCoord.xy);
+	if (u_Frame.FogParams.x > 0.0 && !valueView)
 		color = ApplyHeightFog(color, v_RelativePosition);
 #ifdef ST_FORWARD_GLASS
-	color += transmitted;
+	if (!valueView)
+		color += transmitted;
 #endif
 
 	// The prepass's mask: of a fading level, only the pixels whose depth it wrote.
@@ -369,8 +437,9 @@ void main()
 #else
 	const float alpha = 1.0;
 #endif
-	// Pre-exposed (TemporalParams.y, a power of two: exact unless a value overflows or becomes subnormal).
-	o_Color = vec4(SanitizeHDR(color * u_Frame.TemporalParams.y), alpha);
+	// Pre-exposed (TemporalParams.y, a power of two: exact unless a value overflows or becomes subnormal), but for the value
+	// views: a sunlit scene's pre-exposure (2^-19) would make an albedo of 0.03 subnormal in half floats.
+	o_Color = vec4(SanitizeHDR(valueView ? color : color * u_Frame.TemporalParams.y), alpha);
 #ifdef ST_FORWARD_GLASS
 #ifndef ST_NO_ENTITY_IDS
 	o_EntityID = instance.EntityID;

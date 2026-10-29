@@ -49,25 +49,31 @@ to find a page or a field), the selected page on the right:
   the project's in every play session after: those actions are marked **In play**, and **Reset Player Bindings** deletes
   the saved bindings so that your edits apply again.
 - **Graphics Quality** (under Rendering, [Graphics.md](Graphics.md)): how much the game's and the editor's views spend on
-  shadows and detail. The page shows the presets side by side in one table, a row per setting with what it costs in
-  memory at 1920 x 1080 and 3840 x 2160 and the time its part of the frame takes now in the Scene view; the chosen
+  shadows, light and detail. The page shows the presets side by side in one table, a row per setting with what it costs
+  in memory at 1920 x 1080 and 3840 x 2160 and the time its part of the frame takes now in the Scene view; the chosen
   column is highlighted. Pick a **Preset** with the chips above it: **Low** (smaller shadow maps, three sun shadow
-  cascades, four point and spot lights with shadows, coarser levels of detail, no motion blur: for older or integrated
-  GPUs), **Medium** (Strata 0.6.0's shadow map sizes and sample counts, no contact shadows), **High** (the default:
-  smoother wide sun penumbrae and contact shadows at every size, and sharper sun shadows on displays of 1440 rows and
-  more, 256 MiB of shadow maps per view instead of 64) or **Ultra** (sharper shadows everywhere, larger point and spot
-  light shadows, finer levels of detail: for large GPUs), or **Custom** to set each value yourself in the table's Custom
-  column (the shadow resolution, the number of cascades, the point and spot lights' shadow atlas and largest tile, how
-  many of those lights cast shadows, the level-of-detail error, the smallest size drawn, the shadow filter quality: taps
-  of the sun's wide penumbrae, the contact shadows' steps, and the motion blur's samples: Low has none, Medium 8, High 12,
-  Ultra 16, for scenes whose Post Process turns motion blur on): choosing a preset keeps your Custom values for when you
-  come back, and editing the column under a preset switches to Custom from the values it shows (your earlier Custom
-  values, or that preset's when you have none). Five rows are the same under every preset, for players' comfort and
-  preference, listed under **Players' choices**: **Anti-aliasing** (Scene: the Post Process's method; or Off, FXAA, TAA,
-  Morphological), **Motion blur** (Scene: as the Post Process says; Off: never), **Depth of field** (Scene: as the
-  camera's lens says; Off: everything in focus), **Film grain** and **Chromatic aberration** (Scene: as the Post Process
-  says; Off: never).
-  No setting draws below the screen's resolution, and a scene's look (its lights, Post Process and sky) stays the same.
+  cascades, four point and spot lights with shadows, coarser levels of detail, lighter ambient occlusion, no
+  screen-space reflections and no motion blur: for older or integrated GPUs), **Medium** (Strata 0.6.0's shadow map
+  sizes and sample counts, no contact shadows, screen-space reflections at half resolution, only with TAA), **High**
+  (the default: smoother wide sun penumbrae and contact shadows at every size, sharper sun shadows on displays of 1440
+  rows and more, 256 MiB of shadow maps per view instead of 64, denser ambient occlusion, sharper reflections of the
+  sky, 512 texels per face instead of 256, and screen-space reflections traced on every pixel with any anti-aliasing,
+  about 232 MiB of video memory per view at 3840 x 2160 instead of 79) or **Ultra** (sharper shadows everywhere, larger
+  point and spot light shadows, finer levels of detail, the densest ambient occlusion and longer screen-space reflection
+  rays: for large GPUs), or **Custom** to set each value yourself in the table's Custom column (the shadow resolution,
+  the number of cascades, the point and spot lights' shadow atlas and largest tile, how many of those lights cast
+  shadows, the level-of-detail error, the smallest size drawn, the shadow filter quality: taps of the sun's wide
+  penumbrae, the contact shadows' steps, the ambient occlusion's quality, the sky reflections' resolution, the
+  screen-space reflections, and the motion blur's samples: Low has none, Medium 8, High 12, Ultra 16, for scenes whose
+  Post Process turns motion blur on): choosing a preset keeps your Custom values for when you come back, and editing
+  the column under a preset switches to Custom from the values it shows (your earlier Custom values, or that preset's
+  when you have none). Five rows are the same under every preset, for players' comfort and preference, listed under
+  **Players' choices**: **Anti-aliasing** (Scene: the Post Process's method; or Off, FXAA, TAA, Morphological),
+  **Motion blur** (Scene: as the Post Process says; Off: never), **Depth of field** (Scene: as the camera's lens says;
+  Off: everything in focus), **Film grain** and **Chromatic aberration** (Scene: as the Post Process says; Off: never).
+  No setting draws below the screen's resolution, and a scene's own settings (its lights, Post Process and sky) are never
+  changed: a preset only decides how finely they are drawn, and what costs too much at Low (screen-space reflections,
+  motion blur) is left out.
   Exported games use it, and `<Game> --quality low` (or `medium`, `high`, `ultra`) plays one run at a preset without
   saving anything. Players can choose a preset in your game's options menu (`Graphics::SetPreset`, kept with
   `Graphics::Save`): when such a choice was saved while you played, a banner says what it sets, the rows it sets are

@@ -773,6 +773,8 @@ namespace Strata
 				DrawReflectionProbeBake(panelContext, entities);
 			if (info.TypeId == entt::type_id<DirectionalLightComponent>().hash())
 				DrawSunShadowQuality(panelContext, entities);
+			if (info.TypeId == entt::type_id<PostProcessComponent>().hash())
+				DrawReflectionsQuality(panelContext, entities);
 			ImGui::Spacing();
 		}
 		ImGui::PopID();
@@ -1466,6 +1468,63 @@ namespace Strata
 		}
 	}
 
+	void InspectorPanel::DrawReflectionsQuality(EditorPanelContext& panelContext, std::span<const Entity> entities)
+	{
+		// What the Scene view's latest frame drew with (the editor camera's quality or the game's, as for the sun's line), else
+		// the project's quality.
+		EditorContext& context = panelContext.Context;
+		const RendererQualitySettings& project = RendererQuality::GetProjectQuality();
+		const ViewportRenderer* renderer = context.GetViewport().FindRenderer();
+		const SceneRendererStats* stats = renderer && renderer->GetStats().Rendered ? &renderer->GetStats() : nullptr;
+		const RendererQualitySettings& drawn = stats ? stats->Quality : project;
+		ReflectionsLine line;
+		line.Asks = std::any_of(entities.begin(), entities.end(), [](Entity entity)
+			{ return entity.HasComponent<PostProcessComponent>() && entity.GetComponent<PostProcessComponent>().ScreenSpaceReflections; });
+		line.Mode = static_cast<int32_t>(drawn.Reflections);
+		line.DrawnPreset = stats ? static_cast<int32_t>(stats->Quality.Preset) : -1;
+		line.ProjectPreset = static_cast<int32_t>(project.Preset);
+		if (!line.Matches(m_ReflectionsLine) || m_ReflectionsLine.Text.empty())
+		{
+			const char* projectName = RendererQuality::PresetToString(project.Preset);
+			// Where the quality comes from: the project's, or the Scene view's own preset (or the game's) when it differs.
+			const std::string source = stats && stats->Quality.Preset != project.Preset
+				? fmt::format("the Scene view: {}; the project: {}", RendererQuality::PresetToString(stats->Quality.Preset), projectName)
+				: fmt::format("Graphics Quality: {}", projectName);
+			if (!line.Asks)
+			{
+				line.Text = "No screen-space reflections: Screen Space Reflections is off";
+			}
+			else
+			{
+				switch (drawn.Reflections)
+				{
+					case ReflectionsQuality::Off:
+						line.Text = fmt::format("Screen-space reflections: none ({}, Reflections Off)", source);
+						break;
+					case ReflectionsQuality::Checkerboard:
+						line.Text = fmt::format("Screen-space reflections: half resolution, only with TAA ({})", source);
+						break;
+					case ReflectionsQuality::Spatial:
+						line.Text = fmt::format("Screen-space reflections: every pixel, with any anti-aliasing ({})", source);
+						break;
+					case ReflectionsQuality::SpatialHigh:
+						line.Text = fmt::format("Screen-space reflections: every pixel, longer rays, with any anti-aliasing ({})", source);
+						break;
+				}
+			}
+			m_ReflectionsLine = std::move(line);
+		}
+		ImGui::PushTextWrapPos(0.0f);
+		ImGui::TextUnformatted(m_ReflectionsLine.Text.c_str());
+		ImGui::PopTextWrapPos();
+		UI::ItemProbe::Record("Inspector.PostProcess.ReflectionsQuality", true, 0, m_ReflectionsLine.Text);
+		if (UI::LinkButton("Inspector.PostProcess.ReflectionsQuality.Open", "Graphics Quality", Icons::ExternalLink, "How screen-space "
+			"reflections are traced is the project's Reflections row: choose it in Project Settings") && panelContext.Shell)
+		{
+			panelContext.Shell->ShowProjectSettings(std::string(RendererQuality::c_SectionId));
+		}
+	}
+
 	void InspectorPanel::DrawGraphicsQualityLink(EditorPanelContext& panelContext)
 	{
 		const char* preset = RendererQuality::PresetToString(RendererQuality::GetProjectQuality().Preset);
@@ -1565,6 +1624,38 @@ namespace Strata
 						}, CommandOrigin { CommandSource::UI });
 				}
 				ImGui::EndDisabled();
+			}
+		}
+		// The sun and sky presets (lighting.applySkyPreset: the sky light and the sun with real values, one undo step; it makes
+		// the sky and the sun the scene lacks). While playing they change the running copy, as every component edit does.
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextColored(colors.TextSecondary, "Presets");
+		struct PresetButton
+		{
+			const char* Id;
+			const char* Icon;
+			const char* Label;
+			const char* Preset;
+			const char* Tooltip;
+		};
+		constexpr PresetButton c_PresetButtons[] = {
+			{ "Inspector.SkyPreset.Clear", Icons::Sun, "Clear", "Clear", "The physical atmosphere and a 120,000 lux sun 40 degrees up: sunny, deep blue shadows" },
+			{ "Inspector.SkyPreset.Hazy", Icons::Haze, "Hazy", "Hazy", "Thicker air and the sun 35 degrees up: a paler sky and softer contrast" },
+			{ "Inspector.SkyPreset.Overcast", Icons::Cloud, "Overcast", "Overcast", "An even gray sky of about 7,700 lux and a faint, very soft sun" },
+			{ "Inspector.SkyPreset.GoldenHour", Icons::Sunset, "Golden Hour", "GoldenHour", "The sun 6 degrees up: warm light and long shadows" }
+		};
+		for (const PresetButton& button : c_PresetButtons)
+		{
+			// The row wraps where the Inspector is too narrow for it: a button past its right edge could not be clicked.
+			ImGui::SameLine();
+			if (ImGui::GetContentRegionAvail().x < UI::GetToolbarButtonWidth(button.Icon, button.Label))
+				ImGui::NewLine();
+			if (UI::ToolbarButton(button.Id, button.Icon, button.Label, button.Tooltip))
+			{
+				nlohmann::json parameters = { { "preset", button.Preset } };
+				if (sky)
+					parameters["sky"] = UUIDToJson(sky.GetUUID());
+				RunEditorCommand(context, commands, "lighting.applySkyPreset", parameters);
 			}
 		}
 		// The fog the sky lights, offered here while the scene has none; the entity that holds it edits it.

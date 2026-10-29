@@ -246,6 +246,8 @@ namespace Strata
 		options.ShowMotionVectors = settings.DebugView == ViewportDebugView::Motion;
 		options.ShowShadowView = settings.DebugView == ViewportDebugView::Shadows;
 		options.ShadowViewColors = settings.DebugColors.ShadowRatio;
+		options.LightingView = GetLightingView(settings.DebugView);
+		options.LightingColors = settings.DebugColors.Lighting;
 		if (!m_DebugDraw.IsEmpty())
 			options.DebugShapes = &m_DebugDraw;
 

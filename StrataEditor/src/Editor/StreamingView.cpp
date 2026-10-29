@@ -15,6 +15,7 @@
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
+#include <cmath>
 
 namespace Strata
 {
@@ -39,6 +40,11 @@ namespace Strata
 			case ViewportDebugView::Mip:       return "mip";
 			case ViewportDebugView::Motion:    return "motion";
 			case ViewportDebugView::Shadows:   return "shadows";
+			case ViewportDebugView::Lighting:  return "lighting";
+			case ViewportDebugView::AmbientOcclusion: return "ao";
+			case ViewportDebugView::Indirect:  return "indirect";
+			case ViewportDebugView::Luminance: return "luminance";
+			case ViewportDebugView::Albedo:    return "albedo";
 			case ViewportDebugView::None:      break;
 		}
 		return "none";
@@ -47,12 +53,32 @@ namespace Strata
 	std::optional<ViewportDebugView> ViewportDebugViewFromString(std::string_view name)
 	{
 		for (ViewportDebugView view : { ViewportDebugView::None, ViewportDebugView::Streaming, ViewportDebugView::LOD, ViewportDebugView::Mip,
-			ViewportDebugView::Motion, ViewportDebugView::Shadows })
+			ViewportDebugView::Motion, ViewportDebugView::Shadows, ViewportDebugView::Lighting, ViewportDebugView::AmbientOcclusion,
+			ViewportDebugView::Indirect, ViewportDebugView::Luminance, ViewportDebugView::Albedo })
 		{
 			if (name == ViewportDebugViewToString(view))
 				return view;
 		}
 		return std::nullopt;
+	}
+
+	SceneLightingView GetLightingView(ViewportDebugView view)
+	{
+		switch (view)
+		{
+			case ViewportDebugView::Lighting:         return SceneLightingView::Lighting;
+			case ViewportDebugView::AmbientOcclusion: return SceneLightingView::AmbientOcclusion;
+			case ViewportDebugView::Indirect:         return SceneLightingView::Indirect;
+			case ViewportDebugView::Luminance:        return SceneLightingView::Luminance;
+			case ViewportDebugView::Albedo:           return SceneLightingView::Albedo;
+			case ViewportDebugView::None:
+			case ViewportDebugView::Streaming:
+			case ViewportDebugView::LOD:
+			case ViewportDebugView::Mip:
+			case ViewportDebugView::Motion:
+			case ViewportDebugView::Shadows:          break;
+		}
+		return SceneLightingView::None;
 	}
 
 	std::string GetLODLegendName(size_t level, bool last, float errorPixels)
@@ -62,12 +88,36 @@ namespace Strata
 		return fmt::format("LOD {}{}", level, last ? "+" : "");
 	}
 
+	std::string GetLuminanceLegendName(size_t band, size_t bands, float firstEV100)
+	{
+		const int first = (std::isfinite(firstEV100) ? static_cast<int>(std::floor(firstEV100)) : 0) + static_cast<int>(band);
+		if (band + 1 == bands)
+			return fmt::format("EV {}+", first);
+		if (band == 0)
+			return fmt::format("EV <{}", first + 1);
+		return fmt::format("EV {}", first);
+	}
+
+	std::string GetLightingLegendNote(ViewportDebugView view, const std::optional<LightingViewStats>& stats)
+	{
+		if (!stats)
+			return "Measuring...";
+		std::string note = stats->SunToSkyRatio > 0.0f ? fmt::format("Sun : sky {:.1f} on flat ground", stats->SunToSkyRatio) : std::string("Sun : sky -");
+		if (view == ViewportDebugView::AmbientOcclusion && std::isfinite(stats->ValueMedian))
+			note += fmt::format(", AO median {:.2f}", stats->ValueMedian);
+		else if (view != ViewportDebugView::AmbientOcclusion && view != ViewportDebugView::Albedo && std::isfinite(stats->SurfaceEV100.y))
+			note += fmt::format(", EV100 median {:.1f}", stats->SurfaceEV100.y);
+		return note;
+	}
+
 	void StreamingView::Build(Scene& scene, ViewportDebugView view, const SceneCamera& camera, const LODCriteria& lod, const ViewportDebugColors& colors,
 		DebugDraw& placeholders)
 	{
 		m_Tints.clear();
 		m_Stats = {};
-		if (view == ViewportDebugView::None || view == ViewportDebugView::Motion || view == ViewportDebugView::Shadows || !AssetManager::HasActive())
+		// Only the streaming, LOD and mip views tint entities.
+		const bool tintView = view == ViewportDebugView::Streaming || view == ViewportDebugView::LOD || view == ViewportDebugView::Mip;
+		if (!tintView || !AssetManager::HasActive())
 			return;
 
 		// The proxies as the renderer will draw them this frame (its own Sync then finds nothing new), from the cached world

@@ -56,19 +56,20 @@ namespace Strata
 		// Whether the template comes with a start scene (everything but "empty").
 		bool HasStartScene(std::string_view id);
 		// Adds the template's entities to a scene. "basic3d": a primary "Main Camera" (with an audio listener) at (0, 2, 6)
-		// looking at the origin, a "Sun" directional light (intensity 3, shadows) shining from GetBasic3DSunDirection, a "Sky"
-		// with a procedural sky light, a 20 x 20 "Ground" plane with the assets' ground material, and a "Post Process"
-		// entity (Filmic, automatic exposure at Exposure 0, TAA; the rest of the look the component's defaults). "empty" adds
-		// nothing. False for an unknown id.
+		// looking at the origin, a "Sun" directional light (the Clear sky preset's: 120,000 lux above the air, shadows of a
+		// 0.53 degree sun) shining from GetBasic3DSunDirection, a "Sky" with the physical atmosphere (the Clear preset's), a
+		// 20 x 20 "Ground" plane with the assets' ground material, and a "Post Process" entity (Filmic, automatic exposure with
+		// the start scene's compensation, TAA; the rest of the look the component's defaults). "empty" adds nothing. False for
+		// an unknown id.
 		bool Populate(std::string_view id, Scene& scene, const TemplateAssets& assets = {});
 		// Whether the template's scene uses TemplateAssets::GroundMaterial.
 		bool UsesGroundMaterial(std::string_view id);
 		// The ground material (.stmat document): a dark, rough stone, so that what is made with the default (white)
 		// material stands out against the ground, its top faces too.
 		std::string GetGroundMaterialDocument();
-		// Unit direction toward basic3d's sun: the preview sun's (SceneRenderer::GetPreviewSunDirection), 55 degrees up from
-		// the +X+Z side, so the top, the side and the front of a box get clearly different light, from the template's camera
-		// (top and front) as from the editor camera's default direction.
+		// Unit direction toward basic3d's sun: the Clear preset's 40 degrees up, at the azimuth 20 degrees from +X toward +Z
+		// (GetSkyPresetSunDirection), so the top, the side and the front of a box get clearly different light, from the
+		// template's camera (top and front) as from the editor camera's default direction.
 		glm::vec3 GetBasic3DSunDirection();
 		// Where the editor camera looks at a new scene of the template from (nullopt: the template has no such view).
 		std::optional<TemplateView> GetEditorView(std::string_view id);

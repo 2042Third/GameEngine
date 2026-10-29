@@ -41,6 +41,9 @@ namespace Strata
 		constexpr PresetRow<float> c_MinProjectedPixelsRow = { 1.0f, 0.5f, 0.5f, 0.25f };
 		constexpr PresetRow<uint32_t> c_ShadowFilterQualityRow = { 8, 16, 24, 32 };
 		constexpr PresetRow<uint32_t> c_ContactShadowsRow = { 0, 0, 12, 16 };
+		constexpr PresetRow<AmbientOcclusionLevel> c_AmbientOcclusionQualityRow = { AmbientOcclusionLevel::Low, AmbientOcclusionLevel::Medium, AmbientOcclusionLevel::High, AmbientOcclusionLevel::Ultra };
+		constexpr PresetRow<uint32_t> c_EnvironmentResolutionRow = { 256, 256, 512, 512 };
+		constexpr PresetRow<ReflectionsQuality> c_ReflectionsRow = { ReflectionsQuality::Off, ReflectionsQuality::Checkerboard, ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh };
 		constexpr PresetRow<MotionBlurSamples> c_MotionBlurQualityRow = { MotionBlurSamples::Off, MotionBlurSamples::Samples8, MotionBlurSamples::Samples12, MotionBlurSamples::Samples16 };
 
 		// GPU memory of the rows that allocate (RowTraits::MemoryBytes), as the renderer makes the resources.
@@ -56,6 +59,50 @@ namespace Strata
 			// The point and spot lights' D32 atlas (SceneRendererLocalShadows.cpp).
 			const uint64_t size = settings.LocalShadowAtlasSize;
 			return size * size * 4;
+		}
+
+		uint64_t EnvironmentBytes(const RendererQualitySettings& settings, glm::uvec2)
+		{
+			// The sky's prefiltered cube (SceneRenderer::CreateEnvironmentMaps): six RGBA16F faces of the row's size with their
+			// six levels (roughness 0 to 1). One set of maps; a scene under the atmosphere keeps a second while the sun moves.
+			const RendererQualitySettings clamped = RendererQuality::Clamp(settings);
+			uint64_t texels = 0;
+			for (uint32_t level = 0; level < 6; level++)
+			{
+				const uint64_t size = std::max(1u, clamped.EnvironmentResolution >> level);
+				texels += size * size;
+			}
+			return texels * 6 * 8;
+		}
+
+		uint64_t ReflectionsBytes(const RendererQualitySettings& settings, glm::uvec2 output)
+		{
+			// For a scene whose Post Process asks for screen-space reflections (SceneRendererScreenReflections.cpp): Checkerboard's
+			// (with TAA) RGBA16F surface target and half-resolution reflections; the spatial modes' RGBA16F surface target, traced and
+			// resolved reflections, viewport-sized, and the previous frame's color they read: a full-resolution copy beside the
+			// half-resolution one glass also reads, with its blurred levels (SceneRendererGlass.cpp), both R11G11B10F where the
+			// device stores it.
+			const uint64_t pixels = static_cast<uint64_t>(output.x) * output.y;
+			switch (settings.Reflections)
+			{
+				case ReflectionsQuality::Checkerboard:
+				{
+					const uint64_t halfPixels = static_cast<uint64_t>(std::max(1u, (output.x + 1) / 2)) * std::max(1u, (output.y + 1) / 2);
+					return pixels * 8 + halfPixels * 8;
+				}
+				case ReflectionsQuality::Spatial:
+				case ReflectionsQuality::SpatialHigh:
+				{
+					const uint32_t halfWidth = std::max(1u, (output.x + 1) / 2);
+					const uint32_t halfHeight = std::max(1u, (output.y + 1) / 2);
+					uint64_t copyTexels = 0;
+					for (uint32_t level = 0; level < 6 && (level == 0 || std::min(halfWidth, halfHeight) >> level > 0); level++)
+						copyTexels += static_cast<uint64_t>(std::max(1u, halfWidth >> level)) * std::max(1u, halfHeight >> level);
+					return pixels * (8 * 3 + 4) + copyTexels * 4;
+				}
+				default:
+					return 0;
+			}
 		}
 
 		uint64_t MotionBlurBytes(const RendererQualitySettings& settings, glm::uvec2 output)
@@ -81,6 +128,9 @@ namespace Strata
 			{ "MinProjectedPixels", true, "GPU.Opaque", nullptr },
 			{ "ShadowFilterQuality", true, "GPU.ScreenShadows", nullptr }, // The filter runs in the mask's pass; taps allocate nothing
 			{ "ContactShadows", true, "GPU.ScreenShadows", nullptr },      // Marches through the mask's own two targets
+			{ "AmbientOcclusionQuality", true, "GPU.AO", nullptr },        // More samples into the same targets
+			{ "EnvironmentResolution", true, "", &EnvironmentBytes },      // Filtered only when the sky changes: no stage of its own
+			{ "Reflections", true, "GPU.Reflections", &ReflectionsBytes },
 			{ "MotionBlurQuality", true, "GPU.MotionBlur", &MotionBlurBytes },
 			// The players' rows: comfort and preference, not cost.
 			{ "AntiAliasing", false, "", nullptr },                 // Its cost is the chosen method's (GPU.TAA or GPU.Post)
@@ -117,6 +167,25 @@ namespace Strata
 			ShadowMapResolution Resolution;
 			const char* Name;
 		};
+		struct AmbientOcclusionName
+		{
+			AmbientOcclusionLevel Level;
+			const char* Name;
+			AmbientOcclusionSamples Samples;
+		};
+		constexpr AmbientOcclusionName c_AmbientOcclusionNames[] = { { AmbientOcclusionLevel::Low, "Low", { 1, 4 } },
+			{ AmbientOcclusionLevel::Medium, "Medium", { 2, 6 } }, { AmbientOcclusionLevel::High, "High", { 3, 8 } },
+			{ AmbientOcclusionLevel::Ultra, "Ultra", { 4, 12 } } };
+		struct ReflectionsName
+		{
+			ReflectionsQuality Quality;
+			const char* Name;
+			ScreenReflectionSteps Steps;
+		};
+		constexpr ReflectionsName c_ReflectionsNames[] = { { ReflectionsQuality::Off, "Off", { 24, 6 } },
+			{ ReflectionsQuality::Checkerboard, "Checkerboard", { 24, 6 } }, { ReflectionsQuality::Spatial, "Spatial", { 32, 6 } },
+			{ ReflectionsQuality::SpatialHigh, "SpatialHigh", { 48, 8 } } };
+
 		constexpr ResolutionName c_ResolutionNames[] = { { ShadowMapResolution::Auto, "Auto" }, { ShadowMapResolution::AutoFine, "AutoFine" },
 			{ ShadowMapResolution::Size1024, "1024" }, { ShadowMapResolution::Size2048, "2048" }, { ShadowMapResolution::Size4096, "4096" },
 			{ ShadowMapResolution::Size8192, "8192" } };
@@ -180,6 +249,26 @@ namespace Strata
 			{
 				if (std::optional<ShadowMapResolution> resolution = RendererQuality::ShadowResolutionFromString(member->get_ref<const std::string&>()))
 					knob = *resolution;
+			}
+		}
+
+		void ReadField(const nlohmann::json& value, std::string_view name, AmbientOcclusionLevel& knob)
+		{
+			const nlohmann::json* member = JsonUtils::Find(value, name);
+			if (member && member->is_string())
+			{
+				if (std::optional<AmbientOcclusionLevel> level = RendererQuality::AmbientOcclusionLevelFromString(member->get_ref<const std::string&>()))
+					knob = *level;
+			}
+		}
+
+		void ReadField(const nlohmann::json& value, std::string_view name, ReflectionsQuality& knob)
+		{
+			const nlohmann::json* member = JsonUtils::Find(value, name);
+			if (member && member->is_string())
+			{
+				if (std::optional<ReflectionsQuality> quality = RendererQuality::ReflectionsQualityFromString(member->get_ref<const std::string&>()))
+					knob = *quality;
 			}
 		}
 
@@ -330,6 +419,9 @@ namespace Strata
 					settings.MinProjectedPixels = c_MinProjectedPixelsRow[index];
 					settings.ShadowFilterQuality = c_ShadowFilterQualityRow[index];
 					settings.ContactShadows = c_ContactShadowsRow[index];
+					settings.AmbientOcclusionQuality = c_AmbientOcclusionQualityRow[index];
+					settings.EnvironmentResolution = c_EnvironmentResolutionRow[index];
+					settings.Reflections = c_ReflectionsRow[index];
 					settings.MotionBlurQuality = c_MotionBlurQualityRow[index];
 				}
 				return presets;
@@ -362,6 +454,11 @@ namespace Strata
 			clamped.ShadowFilterQuality = taps != std::end(c_ShadowFilterTapOptions) ? *taps : c_ShadowFilterTapOptions[std::size(c_ShadowFilterTapOptions) - 1];
 			clamped.ContactShadows = clamped.ContactShadows == 0 ? 0u
 				: std::clamp(clamped.ContactShadows, c_MinContactShadowSteps, c_MaxContactShadowSteps);
+			if (static_cast<uint8_t>(clamped.AmbientOcclusionQuality) > static_cast<uint8_t>(AmbientOcclusionLevel::Ultra))
+				clamped.AmbientOcclusionQuality = medium.AmbientOcclusionQuality;
+			clamped.EnvironmentResolution = clamped.EnvironmentResolution == 512 ? 512 : 256;
+			if (static_cast<uint8_t>(clamped.Reflections) > static_cast<uint8_t>(ReflectionsQuality::SpatialHigh))
+				clamped.Reflections = medium.Reflections;
 			if (static_cast<size_t>(clamped.MotionBlurQuality) >= std::size(c_MotionBlurSamplesNames))
 				clamped.MotionBlurQuality = medium.MotionBlurQuality;
 			if (static_cast<size_t>(clamped.AntiAliasing) >= std::size(c_AntiAliasingChoiceNames))
@@ -470,6 +567,81 @@ namespace Strata
 			return EnumFromString<SceneEffectChoice>(name, c_SceneEffectChoiceNames);
 		}
 
+		const char* AmbientOcclusionLevelToString(AmbientOcclusionLevel level)
+		{
+			for (const AmbientOcclusionName& entry : c_AmbientOcclusionNames)
+			{
+				if (entry.Level == level)
+					return entry.Name;
+			}
+			return "Medium";
+		}
+
+		std::optional<AmbientOcclusionLevel> AmbientOcclusionLevelFromString(std::string_view name)
+		{
+			for (const AmbientOcclusionName& entry : c_AmbientOcclusionNames)
+			{
+				if (name == entry.Name)
+					return entry.Level;
+			}
+			return std::nullopt;
+		}
+
+		AmbientOcclusionSamples GetAmbientOcclusionSamples(AmbientOcclusionLevel level)
+		{
+			for (const AmbientOcclusionName& entry : c_AmbientOcclusionNames)
+			{
+				if (entry.Level == level)
+					return entry.Samples;
+			}
+			return AmbientOcclusionSamples {};
+		}
+
+		const char* ReflectionsQualityToString(ReflectionsQuality quality)
+		{
+			for (const ReflectionsName& entry : c_ReflectionsNames)
+			{
+				if (entry.Quality == quality)
+					return entry.Name;
+			}
+			return "Checkerboard";
+		}
+
+		std::optional<ReflectionsQuality> ReflectionsQualityFromString(std::string_view name)
+		{
+			for (const ReflectionsName& entry : c_ReflectionsNames)
+			{
+				if (name == entry.Name)
+					return entry.Quality;
+			}
+			return std::nullopt;
+		}
+
+		ScreenReflectionSteps GetScreenReflectionSteps(ReflectionsQuality quality)
+		{
+			for (const ReflectionsName& entry : c_ReflectionsNames)
+			{
+				if (entry.Quality == quality)
+					return entry.Steps;
+			}
+			return ScreenReflectionSteps {};
+		}
+
+		bool IsSpatialReflections(ReflectionsQuality quality)
+		{
+			return quality == ReflectionsQuality::Spatial || quality == ReflectionsQuality::SpatialHigh;
+		}
+
+		uint32_t GetPrefilterSamples(uint32_t size, uint32_t mip)
+		{
+			// At 512 the narrow lobes of levels 1 and 2 (roughness 0.2 and 0.4) need fewer samples: the filtered importance
+			// sampling reads source levels as fine as their lobes, and 128 keeps level 1 at 0.6.0's level 1 cost (256^2 x 6 x
+			// 128 = 128^2 x 6 x 512), so a refresh step of the atmosphere never takes longer than before.
+			constexpr uint32_t c_Samples = 512;
+			constexpr uint32_t c_NarrowLobeSamples = 128;
+			return size > 256 && (mip == 1 || mip == 2) ? c_NarrowLobeSamples : c_Samples;
+		}
+
 		SettingsSection MakeSection()
 		{
 			const RendererQualitySettings high = GetPreset(RendererQualityPreset::High);
@@ -479,8 +651,8 @@ namespace Strata
 			section.Category = "Rendering";
 			section.Description = "The rendering quality of the project's games and of the editor's views and captures: the costly knobs every "
 				"renderer draws with, as a preset or as Custom values. Medium keeps Strata 0.6.0's costs (its sample counts and resolutions); "
-				"High, the default, adds more sun shadow filter taps and contact shadows at every size and draws 4096-texel sun shadow "
-				"cascades from 1440 output rows. Scenes keep their look on lights, Post Process and the sky; "
+				"High, the default, adds more sun shadow filter taps, contact shadows, finer ambient occlusion, sharper sky reflections and "
+				"full-resolution screen-space reflections at every size and draws 4096-texel sun shadow cascades from 1440 output rows. Scenes keep their look on lights, Post Process and the sky; "
 				"no setting renders below the output's resolution. Set it with project.setSettings; players may change it in games that offer "
 				"graphics options, and StrataRuntime --quality for one run.";
 			section.Scope = SettingsScope::Project;
@@ -523,6 +695,23 @@ namespace Strata
 			section.Fields.push_back(NumberField("ContactShadows", "Contact shadows", "Steps of the sun's contact shadows, which ground small objects "
 				"below the shadow map's detail: more steps find thinner contacts for more GPU time (0: off; 1 to 3 count as 4).",
 				SettingsFieldType::Int, 0, c_MaxContactShadowSteps, high.ContactShadows));
+			std::vector<std::string> occlusionLevels;
+			for (const AmbientOcclusionName& entry : c_AmbientOcclusionNames)
+				occlusionLevels.emplace_back(entry.Name);
+			section.Fields.push_back(EnumField("AmbientOcclusionQuality", "Ambient occlusion quality", "Samples of the ambient occlusion that "
+				"darkens creases and contacts, in scenes that use it: Low 1x4, Medium 2x6, High 3x8, Ultra 4x12 (slices x steps each side); more "
+				"samples give smoother, truer occlusion for GPU time that grows about with their product.", std::move(occlusionLevels),
+				AmbientOcclusionLevelToString(high.AmbientOcclusionQuality)));
+			section.Fields.push_back(EnumField("EnvironmentResolution", "Sky reflection resolution", "Texels each way of each face of the sky's "
+				"reflection map: 512 keeps mirror-like reflections of the sky sharp at high resolutions, for 12 MiB more GPU memory per view than "
+				"256 (24 MiB under the physical atmosphere).", { "256", "512" }, std::to_string(high.EnvironmentResolution)));
+			std::vector<std::string> reflectionModes;
+			for (const ReflectionsName& entry : c_ReflectionsNames)
+				reflectionModes.emplace_back(entry.Name);
+			section.Fields.push_back(EnumField("Reflections", "Screen-space reflections", "How the screen-space reflections of scenes that use "
+				"them are traced: Off draws none; Checkerboard traces at half resolution and needs TAA; Spatial and SpatialHigh trace every pixel "
+				"at full resolution with or without TAA (32 and 48 steps), for more GPU time and about 150 MiB more GPU memory per view at "
+				"3840x2160.", std::move(reflectionModes), ReflectionsQualityToString(high.Reflections)));
 			section.Fields.push_back(EnumField("MotionBlurQuality", "Motion blur samples", "Samples per pixel of the motion blur, in scenes that "
 				"use it: more samples show less streak noise where things move fast, for more GPU time (Off: no motion blur).",
 				EnumOptions(c_MotionBlurSamplesNames), MotionBlurSamplesToString(high.MotionBlurQuality)));
@@ -567,6 +756,9 @@ namespace Strata
 				ReadField(*value, "MinProjectedPixels", settings.MinProjectedPixels);
 				ReadField(*value, "ShadowFilterQuality", settings.ShadowFilterQuality);
 				ReadField(*value, "ContactShadows", settings.ContactShadows);
+				ReadField(*value, "AmbientOcclusionQuality", settings.AmbientOcclusionQuality);
+				ReadField(*value, "EnvironmentResolution", settings.EnvironmentResolution);
+				ReadField(*value, "Reflections", settings.Reflections);
 				ReadEnumField(*value, "MotionBlurQuality", c_MotionBlurSamplesNames, settings.MotionBlurQuality);
 			}
 			// Knobs read under every preset (players' comfort rows) follow here, one line each.
@@ -594,6 +786,9 @@ namespace Strata
 				{ "MinProjectedPixels", settings.MinProjectedPixels },
 				{ "ShadowFilterQuality", std::to_string(settings.ShadowFilterQuality) },
 				{ "ContactShadows", settings.ContactShadows },
+				{ "AmbientOcclusionQuality", AmbientOcclusionLevelToString(settings.AmbientOcclusionQuality) },
+				{ "EnvironmentResolution", std::to_string(settings.EnvironmentResolution) },
+				{ "Reflections", ReflectionsQualityToString(settings.Reflections) },
 				{ "MotionBlurQuality", MotionBlurSamplesToString(settings.MotionBlurQuality) },
 				{ "AntiAliasing", AntiAliasingChoiceToString(settings.AntiAliasing) },
 				{ "MotionBlur", SceneEffectChoiceToString(settings.MotionBlur) },

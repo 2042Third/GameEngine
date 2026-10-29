@@ -94,6 +94,25 @@ namespace Strata::Tests
 				AppendPixel(pixels, color.r, color.g, color.b, color.a);
 			return AddTexture(2, 2, pixels, format);
 		}
+
+		// A tangent-space normal map of `size` x `size` texels with bumps two texels wide: each 2 x 2 block tilts its normal 30
+		// degrees toward +X, -X, +Y or -Y in turn along a row, shifted by two blocks on the next, so neighbors always differ.
+		// Filtered linearly, one level: what sparkles when the bumps are smaller than the pixels.
+		AssetHandle AddBumpyNormalMap(uint32_t size)
+		{
+			constexpr uint8_t c_Tilts[4][2] = { { 191, 128 }, { 64, 128 }, { 128, 191 }, { 128, 64 } };
+			std::vector<uint8_t> pixels;
+			pixels.reserve(static_cast<size_t>(size) * size * 4);
+			for (uint32_t y = 0; y < size; y++)
+			{
+				for (uint32_t x = 0; x < size; x++)
+				{
+					const uint32_t tilt = (x / 2 + 2 * (y / 2)) % 4;
+					AppendPixel(pixels, c_Tilts[tilt][0], c_Tilts[tilt][1], 238, 255);
+				}
+			}
+			return AddTexture(size, size, pixels, TextureFormat::RGBA8, TextureFilter::Linear);
+		}
 	};
 
 	inline SceneCamera LookAt(const glm::vec3& position, const glm::vec3& target, float aspectRatio = 1.0f)
@@ -226,8 +245,9 @@ namespace Strata::Tests
 		return specification;
 	}
 
-	// Plain output: no tone curve, no vignette, no bloom, ambient occlusion or anti-aliasing, so unlit colors come out
-	// unchanged (up to the output's dither: renderers of exact colors also take ExactSpecification).
+	// Plain output: no tone curve, no vignette, no bloom, ambient occlusion (nor its multi-bounce, which applies to materials'
+	// occlusion too) or anti-aliasing, so unlit colors come out unchanged (up to the output's dither: renderers of exact
+	// colors also take ExactSpecification).
 	inline PostProcessComponent& AddNeutralPostProcess(Scene& scene)
 	{
 		PostProcessComponent& postProcess = scene.CreateEntity("PostProcess").AddComponent<PostProcessComponent>();
@@ -241,6 +261,7 @@ namespace Strata::Tests
 		postProcess.Vignette = 0.0f;
 		postProcess.Bloom = false;
 		postProcess.AmbientOcclusion = false;
+		postProcess.AmbientOcclusionMultiBounce = false;
 		postProcess.AntiAliasing = false;
 		return postProcess;
 	}

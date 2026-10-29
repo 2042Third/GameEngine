@@ -69,11 +69,16 @@ namespace Strata
 			// x: depth bias (texels), y: normal offset (texels), z: the wide penumbrae's taps (RendererQualitySettings::
 			// ShadowFilterQuality), w: unused (0)
 			glm::vec4 ShadowBias;
-			glm::vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
-			glm::vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
+			// x: 1 when screen-space ambient occlusion is available; y: 1 when occlusion's multi-bounce applies
+			// (PostProcessComponent::AmbientOcclusionMultiBounce)
+			glm::vec4 AOParams;
+			// x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels); y: the lighting debug view
+			// (SceneLightingView as a float, 0: none); z: specular anti-aliasing's strength (1 with
+			// SceneRendererSpecification::SpecularAntiAliasing, else 0)
+			glm::vec4 MaterialParams;
 			// x: 1 when the motion history holds the renderer's previous frame; y: the pre-exposure, the power of two every writer of
 			// the HDR target multiplies its luminance by (SceneRendererStats::PreExposure); z: the frame's rotation of per-pixel noise
-			// (local shadows' PCF, ambient occlusion) in turns, 0 without temporal anti-aliasing
+			// (local shadows' PCF, the checkerboard screen-space reflections) in turns, 0 without temporal anti-aliasing
 			glm::vec4 TemporalParams;
 			// Temporal anti-aliasing's offset of the frame's samples in clip units (added to Projection, ViewProjection and their
 			// inverses; 0 without it): xy this frame's, zw the renderer's previous frame's
@@ -85,7 +90,10 @@ namespace Strata
 			// ambient color without an environment, 1 when ColorFromSky is off), w: 1 when an environment map's irradiance from
 			// above lights it instead, 2 when the atmosphere's sky at the horizon does (toward the ray's azimuth)
 			glm::vec4 FogLight;
-			glm::vec4 FogParams;   // x: 1 when the scene has fog, y: the asymmetry of its scattering of the directional light
+			// x: 1 when the scene has fog, y: the asymmetry of its scattering of the directional light (SetHeightFog); z: aerial
+			// perspective's far distance in meters (0: none), w: its distance scale (SetAerialPerspective; light-and-materials
+			// claims z and w)
+			glm::vec4 FogParams;
 			// The atmosphere's sun disk (SkyLightSource::Atmosphere; Scene/Skybox.frag's atmosphere variant): xyz toward the sun,
 			// w its angular radius (0: no disk); rgb its illuminance at the ground in lux, through the atmosphere.
 			glm::vec4 SunDiskDirection;
@@ -365,13 +373,41 @@ namespace Strata
 		};
 		static_assert(sizeof(AtmospherePassParameters) == 16);
 
+		// Aerial perspective's volume (IBL/AtmosphereAerial.comp): columns across the screen each way, and depth slices (the
+		// texture holds two slabs of them: the in-scattered light, then the transmittance).
+		constexpr uint32_t c_AerialSize = 32;
+		constexpr uint32_t c_AerialSlices = 32;
+		constexpr float c_AerialMaxDistance = 32000.0f; // Meters: the volume reaches at most this far (or the camera's far plane)
+		// IBL/AtmosphereAerial.comp's push constants: the view rays through the screen's corners, unjittered, in camera-relative
+		// world space (not normalized: they interpolate linearly across the screen), and what the march needs.
+		struct AerialPerspectiveParameters
+		{
+			glm::vec4 RayTopLeft;     // w: the volume's far distance D (meters)
+			glm::vec4 RayTopRight;    // w: the distance scale
+			glm::vec4 RayBottomLeft;  // w: the viewer's distance from the planet's center (km): bottom radius + clamp(camera y, 0, 20 km)
+			glm::vec4 RayBottomRight; // w: unused
+		};
+		static_assert(sizeof(AerialPerspectiveParameters) == 64);
+
+		// Effects/GTAO.comp's and Effects/AODenoise.comp's push constants.
 		struct AOParameters
 		{
-			float Radius;
-			float Intensity;
-			uint32_t SliceCount;
+			float Radius;            // Meters (PostProcessComponent::AmbientOcclusionRadius, clamped to [0.01, 10])
+			float Intensity;         // Exponent of the visibility ([0, 8])
+			uint32_t SliceCount;     // The quality's (RendererQuality::GetAmbientOcclusionSamples)
 			uint32_t StepsPerSide;
+			float MinRadiusPixels;   // max(c_AOMinRadiusFraction * viewport height, 1.5): the radius on screen at least...
+			float MaxRadiusPixels;   // ...and at most c_AOMaxRadiusFraction * viewport height
+			float ThinOccluderDecay; // 1 - 0.9^(6 / StepsPerSide): how far a horizon relaxes toward a lower sample per step
+			uint32_t Padding;
 		};
+		static_assert(sizeof(AOParameters) == 32);
+		// Ambient occlusion's radius on screen, as fractions of the viewport's height: a far surface keeps at least 0.3% (6.5
+		// pixels at 2160 rows: distant creases keep a line), a near one at most 12% (259 pixels at 2160 rows; 0.6.0 capped it at
+		// 256 pixels at every size), so its cost and look do not depend on the resolution.
+		constexpr float c_AOMinRadiusFraction = 0.003f;
+		constexpr float c_AOMaxRadiusFraction = 0.12f;
+		constexpr float c_AOMinRadiusPixels = 1.5f;
 
 		// Effects/ScreenSpaceReflections.comp: the trace of a frame's screen-space reflections.
 		struct ScreenReflectionParameters
@@ -382,6 +418,19 @@ namespace Strata
 			uint32_t Frame;     // The TAA history's frame count: which pixel of each 2x2 block traces, and the steps' offset
 		};
 		static_assert(sizeof(ScreenReflectionParameters) == 16);
+
+		// Effects/ScreenSpaceReflectionsSpatial.comp's push constants (RendererQualitySettings::Reflections Spatial, SpatialHigh).
+		struct SpatialReflectionParameters
+		{
+			float Intensity;        // As ScreenReflectionParameters'
+			float MaxRoughness;
+			float HistoryScale;     // The frame's pre-exposure over the previous frame's color copy's
+			uint32_t Steps;         // Steps of the march along the ray (RendererQuality::GetScreenReflectionSteps)
+			uint32_t RefineSteps;   // Bisections of a hit
+			uint32_t ColorLevels;   // Levels of the half-resolution color copy
+			uint32_t Padding[2] = {};
+		};
+		static_assert(sizeof(SpatialReflectionParameters) == 32);
 
 		// Overlay/Grid.frag
 		struct GridParameters
@@ -568,6 +617,48 @@ namespace Strata
 			uint32_t Reserved[2];
 		};
 		static_assert(sizeof(ShadowFitParameters) == 16);
+		// The lighting debug views' statistics (Effects/LightingViewStats.comp; SceneRenderer::GetLightingViewStats): histograms of
+		// a frame's EV100 (log2 of its luminance in nits, plus 3) in quarter-EV bins from c_LightingViewMinEV100 on, and of the
+		// value views' values (occlusion, the albedo's luminance) in bins of 1/64 over [0, 1].
+		constexpr uint32_t c_LightingViewEVBins = 128;
+		constexpr float c_LightingViewMinEV100 = -8.0f;
+		constexpr float c_LightingViewBinsPerEV = 4.0f;
+		constexpr uint32_t c_LightingViewValueBins = 64;
+		// The albedo view marks base colors whose luminance lies outside [c_AlbedoLow, c_AlbedoHigh]: darker than charcoal or
+		// brighter than fresh snow, which no measured material is.
+		constexpr float c_AlbedoLow = 0.03f;
+		constexpr float c_AlbedoHigh = 0.85f;
+		// Effects/LightingViewStats.comp's output, cleared before each dispatch (one 32-bit word per entry; Include/LightingView.glsl
+		// names the offsets).
+		struct LightingViewStatsData
+		{
+			uint32_t SurfaceEV[c_LightingViewEVBins];    // Pixels with a surface (a depth was drawn)
+			uint32_t BackgroundEV[c_LightingViewEVBins]; // The others (the sky or the clear color)
+			uint32_t Value[c_LightingViewValueBins];     // Surface pixels of the value views
+			uint32_t SurfacePixels;
+			uint32_t BackgroundPixels;
+			uint32_t BelowRange; // Albedo: surface pixels below c_AlbedoLow
+			uint32_t AboveRange; // Albedo: surface pixels above c_AlbedoHigh
+			// rgb: the sky's light on a horizontal surface over pi: the irradiance map at +Y times EnvironmentParams.x, or the
+			// constant ambient without an environment
+			glm::vec4 SkyIrradiance;
+		};
+		static_assert(sizeof(LightingViewStatsData) == (2 * c_LightingViewEVBins + c_LightingViewValueBins + 4) * 4 + 16);
+		constexpr uint32_t c_LightingViewLuminanceColors = 12;
+		// Push constants (b1) of Overlay/LightingView.frag and Effects/LightingViewStats.comp.
+		struct LightingViewParameters
+		{
+			uint32_t View;             // SceneLightingView
+			float InversePreExposure;  // 1 / the frame's pre-exposure (TemporalParams.y): the HDR target holds luminance times it
+			float LuminanceFirstEV100; // The luminance view's first band's lower edge
+			uint32_t Padding0;
+			uint32_t LuminanceColors[c_LightingViewLuminanceColors]; // RGBA8, sRGB, packed (red in the low byte)
+			uint32_t AlbedoLow;
+			uint32_t AlbedoHigh;
+			uint32_t Background;
+			uint32_t Padding1;
+		};
+		static_assert(sizeof(LightingViewParameters) == 80);
 
 	}
 

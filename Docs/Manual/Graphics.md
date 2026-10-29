@@ -1,9 +1,10 @@
 # Graphics quality
 
 Graphics quality is how much the renderer spends on drawing what a scene asks for: how fine the sun's and the lamps'
-shadows are, how many lights cast them, how far meshes keep their detail. It never changes the look a scene asks for
-(its lights, its Post Process and its sky stay as they are), and no setting renders below the screen's resolution: the
-picture is always drawn at the size it is shown.
+shadows are, how many lights cast them, how far meshes keep their detail, how finely ambient occlusion and reflections are
+traced. It never changes the settings a scene stores (its lights, its Post Process and its sky stay as they are): a
+preset only decides how finely they are drawn, and leaves out what costs too much (Low draws no screen-space
+reflections). No setting renders below the screen's resolution: the picture is always drawn at the size it is shown.
 
 ## The presets
 
@@ -21,9 +22,12 @@ what each one costs:
 | Smallest drawn size (pixels) | 1 | 0.5 | 0.5 | 0.25 |
 | Sun shadow filter taps (wide soft edges) | 8 | 16 | 24 | 32 |
 | Contact shadow steps | Off | Off | 12 | 16 |
+| Ambient occlusion samples (slices x steps each side) | 1 x 4 | 2 x 6 | 3 x 8 | 4 x 12 |
+| Sky reflection resolution (per face) | 256 | 256 | 512 | 512 |
+| Screen-space reflections (scenes that use them) | Off | Half resolution, TAA only | Every pixel | Every pixel, longer rays |
 | Motion blur samples (scenes with motion blur) | Off | 8 | 12 | 16 |
-| Shadow maps, atlas and motion blur targets of one view, 1920 x 1080 | 28 MiB | 152 MiB | 152 MiB | 536 MiB |
-| Shadow maps, atlas and motion blur targets of one view, 3840 x 2160 | 28 MiB | 224 MiB | 416 MiB | 1.34 GiB |
+| Memory of one view, 1920 x 1080 (see below) | 31 MiB | 175 MiB | 226 MiB | 610 MiB |
+| Memory of one view, 3840 x 2160 | 31 MiB | 308 MiB | 664 MiB | 1.59 GiB |
 
 - **Medium** keeps Strata 0.6.0's shadow map sizes and sample counts, without contact shadows. **High**, the default,
   adds smoother wide sun penumbrae and contact shadows at every size, and sharper sun shadows from 1440 rows on.
@@ -32,6 +36,17 @@ what each one costs:
   **contact shadows** ground small objects the shadow maps are too coarse for (each sun's Contact Shadow Length sets
   how far they reach: [Lighting.md](Lighting.md#shadows)). Neither takes memory of its own; both cost GPU time in the
   `GPU.ScreenShadows` stage.
+- **Ambient occlusion samples** set how finely the ambient occlusion that darkens creases and contacts is traced, in
+  scenes whose Post Process turns it on: more samples give smoother, truer occlusion for GPU time in the `GPU.AO` stage
+  (Medium's 2 x 6 is Strata 0.6.0's), into the same targets at every preset.
+- **Sky reflection resolution** is the size of the sky's reflection map: 512 keeps mirror-like reflections of the sky
+  sharp at 4K, for 12 MiB more memory (4 MiB at 256, 16 MiB at 512; the physical atmosphere keeps two maps while the sun
+  moves). It is filtered only when the sky changes.
+- **Screen-space reflections** apply only to scenes whose Post Process turns them on. Medium keeps 0.6.0's half-resolution
+  trace, which needs TAA; High and Ultra trace every pixel at full resolution with any anti-aliasing (Ultra's rays take more
+  steps), for GPU time in the `GPU.Reflections` stage and memory: 20 MiB at 1920 x 1080 and 79 MiB at 3840 x 2160 at
+  Medium, 58 MiB and 232 MiB at High and Ultra. Low turns them off. With them, a scene's look changes with the preset:
+  the reflections it asks for show at full resolution from High on, and not at all at Low.
 - **Motion blur samples** apply only to scenes whose Post Process turns motion blur on (it is off by default, and in the
   template and the samples): more samples show less streak noise where things move fast, for GPU time in the
   `GPU.MotionBlur` stage. Its targets take 12 bytes a pixel (24 MiB at 1920 x 1080, 97 MiB at 3840 x 2160), which the
@@ -44,9 +59,10 @@ what each one costs:
 - **Custom** sets each value yourself: the table's Custom column is editable. Choosing a preset keeps your Custom values
   for later, and the column keeps showing them. Editing it while a preset is chosen switches to Custom, starting from
   the values the column shows: your earlier Custom values, or that preset's when you have none (its tooltip says which).
-- The memory is that of one view: each renderer holds its own (the editor's Scene and Game views and its captures, the
-  exported game one); shadow maps exist only while a light casts shadows, motion blur targets only while a scene uses
-  motion blur.
+- The memory is that of one view, the shadow maps and atlas, the sky's reflection map and the screen-space reflections'
+  and motion blur's targets: each renderer holds its own (the editor's Scene and Game views and its captures, the
+  exported game one); shadow maps exist only while a light casts shadows, the sky's map only with a sky, the reflections'
+  and motion blur's targets only while a scene uses them.
 - The page also shows how long the Scene view's shadows and meshes take on the GPU now, so you can see a change's cost.
 
 ## Where quality is chosen

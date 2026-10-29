@@ -113,6 +113,10 @@ namespace Strata
 		// from (the project's Graphics Quality, the view's own preset, or through the scene's camera the game's: the player's
 		// choice while playing), none while no inspected light casts shadows; with a link to the page.
 		void DrawSunShadowQuality(EditorPanelContext& panelContext, std::span<const Entity> entities);
+		// Under the Post Process's properties: how the screen-space reflections it asks for are traced, which the renderer's
+		// quality decides, not the component (RendererQualitySettings::Reflections): the Scene view's latest frame's, else the
+		// project's Graphics Quality; with a link to the page.
+		void DrawReflectionsQuality(EditorPanelContext& panelContext, std::span<const Entity> entities);
 		// With nothing selected: the project's Graphics Quality and a link to its page.
 		void DrawGraphicsQualityLink(EditorPanelContext& panelContext);
 		// An edit of a rotation shared by several entities: continues the edit in progress, or begins one from the angles the
@@ -189,6 +193,21 @@ namespace Strata
 			}
 		};
 		SunShadowLine m_SunShadowLine;
+		// The Post Process's reflections line, made again when what it says changes.
+		struct ReflectionsLine
+		{
+			bool Asks = false;              // An inspected Post Process turns screen-space reflections on
+			int32_t Mode = -1;              // ReflectionsQuality of the quality drawn
+			int32_t DrawnPreset = -1;       // The Scene view's latest frame's preset (-1: no frame)
+			int32_t ProjectPreset = -1;
+			std::string Text;
+
+			bool Matches(const ReflectionsLine& other) const
+			{
+				return Asks == other.Asks && Mode == other.Mode && DrawnPreset == other.DrawnPreset && ProjectPreset == other.ProjectPreset;
+			}
+		};
+		ReflectionsLine m_ReflectionsLine;
 		MaterialEditor m_MaterialEditor;
 		// The rotation of several entities being edited, until the widget reports the edit finished.
 		std::optional<RotationAnglesEdit> m_RotationEdit;

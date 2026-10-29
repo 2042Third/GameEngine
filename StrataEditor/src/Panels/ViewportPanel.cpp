@@ -632,10 +632,21 @@ namespace Strata
 			label = "Motion";
 		else if (settings.DebugView == ViewportDebugView::Shadows)
 			label = "Shadows";
+		else if (settings.DebugView == ViewportDebugView::Lighting)
+			label = "Lighting";
+		else if (settings.DebugView == ViewportDebugView::AmbientOcclusion)
+			label = "AO";
+		else if (settings.DebugView == ViewportDebugView::Indirect)
+			label = "Indirect";
+		else if (settings.DebugView == ViewportDebugView::Luminance)
+			label = "Luminance";
+		else if (settings.DebugView == ViewportDebugView::Albedo)
+			label = "Albedo";
 		if (UI::ToggleChip("Viewport.DebugView", Icons::Layers, label, &clicked,
 			"Debug views: color the scene by streaming state (meshes, materials and textures still loading or failed), by the level of detail "
 			"meshes are drawn at, by the mip levels textures lack against what the view needs, by how each pixel moved since the previous frame, "
-			"or by how many screen pixels a texel of the sun's shadow cascades spans"))
+			"or by how many screen pixels a texel of the sun's shadow cascades spans; or show its light: surfaces shaded white, ambient "
+			"occlusion, indirect light alone, luminance in EV100 bands, or albedo"))
 		{
 			ImGui::OpenPopup("DebugView");
 		}
@@ -647,7 +658,12 @@ namespace Strata
 			{ ViewportDebugView::LOD, "LOD: level of detail drawn" },
 			{ ViewportDebugView::Mip, "Mip: texture levels resident against needed" },
 			{ ViewportDebugView::Motion, "Motion: movement since the previous frame" },
-			{ ViewportDebugView::Shadows, "Shadows: cascades and pixels per texel" }
+			{ ViewportDebugView::Shadows, "Shadows: cascades and pixels per texel" },
+			{ ViewportDebugView::Lighting, "Lighting: every surface white, lit as the scene lights it" },
+			{ ViewportDebugView::AmbientOcclusion, "AO: the occlusion that darkens indirect light" },
+			{ ViewportDebugView::Indirect, "Indirect: sky, probe and reflected light only" },
+			{ ViewportDebugView::Luminance, "Luminance: EV100 bands of the scene's light" },
+			{ ViewportDebugView::Albedo, "Albedo: base colors, out of 0.03-0.85 marked" }
 		};
 		for (const auto& [view, name] : views)
 		{
@@ -749,6 +765,23 @@ namespace Strata
 		}
 		else if (settings.DebugView == ViewportDebugView::Shadows)
 			AddShadowViewLegend(renderer->GetShadowViewStats(), settings.DebugColors.ShadowRatio, lines);
+		const std::optional<LightingViewStats>& lighting = renderer->GetLightingViewStats();
+		const LightingViewColors& lightingColors = settings.DebugColors.Lighting;
+		const auto formatShare = [](float share) { return fmt::format("{:.1f}%", share * 100.0f); };
+		if (settings.DebugView == ViewportDebugView::Luminance)
+		{
+			// The bands from the brightest down, each one EV wide (the last and the first take what lies beyond).
+			for (size_t band = lightingColors.Luminance.size(); band-- > 0;)
+			{
+				lines.push_back({ toColor(lightingColors.Luminance[band]), GetLuminanceLegendName(band, lightingColors.Luminance.size(),
+					lightingColors.LuminanceFirstEV100), std::string() });
+			}
+		}
+		else if (settings.DebugView == ViewportDebugView::Albedo)
+		{
+			lines.push_back({ toColor(lightingColors.AlbedoHigh), "Above 0.85", lighting ? formatShare(lighting->AboveRangeShare) : std::string("-") });
+			lines.push_back({ toColor(lightingColors.AlbedoLow), "Below 0.03", lighting ? formatShare(lighting->BelowRangeShare) : std::string("-") });
+		}
 		std::string note;
 		if (settings.DebugView == ViewportDebugView::Streaming && stats.PlaceholderBoxes > 0)
 			note = fmt::format("{} boxes: meshes not there yet", stats.PlaceholderBoxes);
@@ -756,6 +789,8 @@ namespace Strata
 			note = "Hue: direction, strength: speed (full at 16 px)";
 		else if (settings.DebugView == ViewportDebugView::Shadows)
 			note = renderer->GetShadowViewStats().CascadeCount > 0 ? "White: cascade edges. Hatched: blend bands." : "No shadowed directional light";
+		else if (GetLightingView(settings.DebugView) != SceneLightingView::None)
+			note = GetLightingLegendNote(settings.DebugView, lighting); // The sun to sky ratio on flat ground (a clear day's is 6 to 10)
 
 		// At the image's bottom left.
 		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);

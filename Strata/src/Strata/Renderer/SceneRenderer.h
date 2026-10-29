@@ -198,6 +198,10 @@ namespace Strata
 		// single images that wait for the levels they need (the editor's captures, thumbnails) turn it off: they show the
 		// finest resident levels at once.
 		bool FadeTextureLevels = true;
+		// Geometric specular anti-aliasing (MaterialParams.z): the forward pass widens each surface's specular lobe by how much
+		// its shading normal changes across the pixel, so highlights narrower than a pixel spread over it with their energy
+		// instead of sparkling (Include/PBR.glsl, WidenRoughness). Off only to compare with and without it (tests).
+		bool SpecularAntiAliasing = true;
 		// The render scene's GPU copy (RenderSceneGPU, shared by the scene's renderers) uploads new proxies' records and
 		// instances within this many bytes per frame, at least one proxy per frame; the others wait, undrawn
 		// (SceneRendererStats::DeferredInstanceBytes). Changes of proxies already on the GPU always upload at once.
@@ -313,6 +317,68 @@ namespace Strata
 		glm::vec4 Color = glm::vec4(0.0f); // Display color (sRGB-encoded); alpha is the tint's opacity
 	};
 
+	// What a lighting debug view shows instead of the lit image (SceneRenderOptions::LightingView). The values follow the order
+	// of the editor's debug view names and Include/Scene.glsl's ST_LIGHTING_VIEW_* constants; nothing stores them.
+	enum class SceneLightingView : uint8_t
+	{
+		None = 0,
+		Lighting,         // Every lit surface shaded white (albedo 1, metallic and roughness kept, no emission), through the scene's exposure
+		AmbientOcclusion, // The occlusion the forward pass applies to indirect light (material x screen), as gray
+		Indirect,         // Only the indirect light (sky, probes, screen-space reflections), through the scene's exposure
+		Luminance,        // The scene's luminance as EV100 bands (log2 nits + 3)
+		Albedo            // The base color, with values outside [RenderData::c_AlbedoLow, c_AlbedoHigh] marked
+	};
+
+	// Display colors of the lighting views that show values (sRGB; alpha unused). Not saved: the editor sets them from its theme.
+	struct LightingViewColors
+	{
+		// EV100 bands from LuminanceFirstEV100 on, one EV wide: below the first band its color, above the last the last's. An
+		// even ramp from dark blue through green and yellow to white.
+		std::array<glm::vec4, RenderData::c_LightingViewLuminanceColors> Luminance = { {
+			{ 0.06f, 0.06f, 0.30f, 1.0f },
+			{ 0.08f, 0.16f, 0.55f, 1.0f },
+			{ 0.10f, 0.30f, 0.78f, 1.0f },
+			{ 0.10f, 0.48f, 0.82f, 1.0f },
+			{ 0.10f, 0.62f, 0.62f, 1.0f },
+			{ 0.16f, 0.70f, 0.38f, 1.0f },
+			{ 0.40f, 0.78f, 0.22f, 1.0f },
+			{ 0.68f, 0.84f, 0.18f, 1.0f },
+			{ 0.92f, 0.86f, 0.20f, 1.0f },
+			{ 0.98f, 0.70f, 0.24f, 1.0f },
+			{ 1.00f, 0.86f, 0.62f, 1.0f },
+			{ 1.00f, 1.00f, 1.00f, 1.0f } } };
+		// The first band's lower edge: from 5 (4 nits, a dim interior) the bands reach 17 (16,000 nits, sunlit snow).
+		float LuminanceFirstEV100 = 5.0f;
+		glm::vec4 AlbedoLow = { 0.20f, 0.40f, 0.95f, 1.0f };  // Over albedo below RenderData::c_AlbedoLow (blended at 0.7)
+		glm::vec4 AlbedoHigh = { 0.95f, 0.20f, 0.18f, 1.0f }; // Over albedo above RenderData::c_AlbedoHigh (diagonal stripes, 0.7)
+		glm::vec4 Background = { 0.5f, 0.5f, 0.5f, 1.0f };    // Pixels without a surface in the occlusion and albedo views
+	};
+
+	// What a lighting view measured in one frame, read back frames later (a readback, never waited for:
+	// SceneRenderer::GetLightingViewStats).
+	struct LightingViewStats
+	{
+		SceneLightingView View = SceneLightingView::None;
+		uint64_t Render = 0;       // The renderer's frame the statistics belong to (its GetRenderCount once that frame was rendered)
+		float SurfaceShare = 0.0f; // Share of the image's pixels that show a surface (a depth was drawn)
+		// Lighting, Indirect, Luminance: EV100 of the surfaces' pixels at the 5th, 50th and 95th percentile, and the median of the
+		// background's (the sky or the clear color); NaN where there are no such pixels or the view does not measure them.
+		glm::vec3 SurfaceEV100 = glm::vec3(std::numeric_limits<float>::quiet_NaN());
+		float BackgroundEV100 = std::numeric_limits<float>::quiet_NaN();
+		// AmbientOcclusion and Albedo (the albedo's luminance): the surfaces' median and 5th percentile; Albedo: the shares of the
+		// surface pixels below RenderData::c_AlbedoLow and above c_AlbedoHigh.
+		float ValueMedian = std::numeric_limits<float>::quiet_NaN();
+		float ValueP05 = std::numeric_limits<float>::quiet_NaN();
+		float BelowRangeShare = 0.0f;
+		float AboveRangeShare = 0.0f;
+		// Every view: illuminance in lux on a horizontal surface from the directional light at the ground (after the atmosphere,
+		// before shadows) and from the sky (pi times the irradiance map at +Y times the sky's intensity, or pi times the constant
+		// ambient without an environment), and their ratio (0 without either).
+		float SunIlluminance = 0.0f;
+		float SkyIlluminance = 0.0f;
+		float SunToSkyRatio = 0.0f;
+	};
+
 	// How a scene is shown, beyond its own data: mainly editor views. With the defaults a scene renders exactly as a game
 	// shows it.
 	struct SceneRenderOptions
@@ -413,6 +479,16 @@ namespace Strata
 		bool ShowShadowView = false;
 		// Display colors (sRGB; alpha unused) of the ramp: green, yellow and red by default (the editor passes its theme's).
 		std::array<glm::vec4, 3> ShadowViewColors = { { { 0.24f, 0.75f, 0.55f, 1.0f }, { 0.91f, 0.76f, 0.30f, 1.0f }, { 0.90f, 0.33f, 0.29f, 1.0f } } };
+
+		// A lighting debug view (SceneLightingView). Lighting and Indirect change what the forward pass shades and are exposed and
+		// tone mapped as the image is; AmbientOcclusion and Albedo write their values (unexposed) and Luminance keeps the lit
+		// image, and the three replace the finished image with their values in LightingColors (Overlay/LightingView.frag,
+		// first among the overlays; the motion view is left out with one). Every view measures its frame
+		// (SceneRenderer::GetLightingViewStats). A change of the view starts the temporal history again, and while
+		// AmbientOcclusion or Albedo shows, whose values are not light, the automatic pre-exposure holds its value. Frames with
+		// HDROutput shade with the view but measure and replace nothing.
+		SceneLightingView LightingView = SceneLightingView::None;
+		LightingViewColors LightingColors;
 	};
 
 	struct SceneRendererStats
@@ -480,8 +556,9 @@ namespace Strata
 		uint32_t MeshesWithoutBounds = 0;
 		bool EnvironmentLighting = false; // A sky light's environment (map or procedural sky) lights the scene
 		// Environment cubes computed this frame (with their irradiance and prefiltered maps): 1 when the environment map
-		// or the procedural sky's parameters (colors, sun size and intensity, the sun's direction and color) changed. An
-		// environment map's environment that another renderer computed is taken over, not computed (0).
+		// or the procedural sky's parameters (colors, sun size and intensity, the sun's direction and color) changed, also when a
+		// new EnvironmentResolution filtered only the prefiltered map again. An environment map's environment that another
+		// renderer computed is taken over, not computed (0).
 		uint32_t EnvironmentUpdates = 0;
 		// The atmosphere (SkyLightSource::Atmosphere): whether the frame's sky is it; its tables computed this frame (1 when
 		// its settings or the sun's color changed: transmittance and multiple scattering) and its sky-view tables (when the
@@ -491,6 +568,8 @@ namespace Strata
 		// is still under way. The directional light's color is multiplied by SunTransmittance, the share of its light that
 		// reaches the ground through the atmosphere (1 without one).
 		bool Atmosphere = false;
+		// The frame drew aerial perspective (SkyLightComponent::AerialPerspective under the atmosphere, a perspective camera).
+		bool AerialPerspective = false;
 		uint32_t AtmosphereTableUpdates = 0;
 		uint32_t AtmosphereSkyViewUpdates = 0;
 		uint32_t EnvironmentRefreshSteps = 0;
@@ -534,6 +613,9 @@ namespace Strata
 		uint32_t TemporalFrames = 0;
 		uint32_t HistoryResets = 0;
 		glm::vec2 Jitter = glm::vec2(0.0f);
+		// Ambient occlusion's samples per pixel (slices x steps per side x 2, RendererQualitySettings::AmbientOcclusionQuality);
+		// 0 in frames without it.
+		uint32_t AmbientOcclusionSamples = 0;
 		// Local light shadows (RendererQualitySettings::LocalShadowAtlasSize): the point and spot lights with atlas tiles,
 		// the shadow views (tiles) drawn this frame, and those of these lights still waiting to be drawn (their lights cast no
 		// shadow until all of theirs are drawn, or keep the shadows drawn before they changed).
@@ -554,10 +636,15 @@ namespace Strata
 		uint32_t ReflectionProbes = 0;
 		uint32_t ReflectionProbeConversions = 0;
 		uint32_t ReflectionProbesPending = 0;
-		// Whether the frame traced screen-space reflections (PostProcessComponent::ScreenSpaceReflections): only with temporal
-		// anti-aliasing, from the second frame of its history on (they read the previous frame's resolved image).
+		// Whether the frame traced screen-space reflections (PostProcessComponent::ScreenSpaceReflections, scaled by
+		// RendererQualitySettings::Reflections): Checkerboard only with temporal anti-aliasing, from the second frame of its
+		// history on (they read the previous frame's resolved image); Spatial and SpatialHigh with or without it, from the
+		// second frame on (they read the previous frame's color copy). ScreenSpaceReflectionsPending: a Spatial frame that
+		// asked for them had no previous copy to read (the first frame, a camera cut, a reset); it made one for the next.
 		bool ScreenSpaceReflections = false;
-		// Copies of the scene's color the frame made for transmissive surfaces (CopySceneColor: 1 when it draws one, else 0).
+		bool ScreenSpaceReflectionsPending = false;
+		// Copies of the scene's color the frame made for transmissive surfaces and spatial reflections (CopySceneColor: 1 when
+		// it made one, else 0).
 		uint32_t SceneColorCopies = 0;
 		// Instances drawn into shadow views (summed over views) and their draw calls (the GPU-driven path's are counted on the
 		// GPU: SceneRendererGPUStats::LocalShadowInstances, LocalShadowDraws, AddGPUCounts).
@@ -619,6 +706,9 @@ namespace Strata
 		// front of the camera for its starburst.
 		bool LensFlare = false;
 		bool LensFlareSun = false;
+		// A lighting view is on (SceneRenderOptions::LightingView) and no statistics of a frame drawn with it since it was chosen
+		// arrived yet (SceneRenderer::GetLightingViewStats).
+		bool LightingViewPending = false;
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -736,6 +826,9 @@ namespace Strata
 		// the atmosphere.
 		nvrhi::ITexture* GetAtmosphereTransmittanceTable() const { return m_Atmosphere ? m_Atmosphere->Transmittance.Get() : nullptr; }
 		nvrhi::ITexture* GetAtmosphereSkyViewTable() const { return m_Atmosphere ? m_Atmosphere->SkyView.Get() : nullptr; }
+		// Aerial perspective's volume (RGBA16F, 32 x 32 x 64: in-scattered light per lux of sun, then transmittance), null until a
+		// frame drew it.
+		nvrhi::ITexture* GetAerialVolume() const { return m_Atmosphere ? m_Atmosphere->AerialVolume.Get() : nullptr; }
 		// The atmosphere's environment is computed again once the sun moved more than this many degrees, in this many steps.
 		static constexpr float c_AtmosphereRefreshAngle = 0.5f;
 		static constexpr uint32_t c_AtmosphereRefreshSteps = 6 + 2 + 6; // Faces, the cube's levels and irradiance, prefiltered levels
@@ -896,6 +989,10 @@ namespace Strata
 		// Resolves the GPU stats of the frames rendered so far; with `wait`, waits for the GPU first so the last frame's are
 		// known (tests and tools).
 		void ResolveGPUStats(bool wait);
+		// The newest statistics of the current lighting view (SceneRenderOptions::LightingView) measured since it was chosen:
+		// empty without a view and until the first readback of a frame drawn with it arrived (SceneRendererStats::
+		// LightingViewPending). Render polls the readbacks without waiting; ResolveGPUStats(true) waits for them.
+		const std::optional<LightingViewStats>& GetLightingViewStats() const { return m_LightingViewStats; }
 		// Frames rendered (Render calls that returned true) since the renderer was created.
 		uint64_t GetRenderCount() const { return m_RenderCount; }
 		// What the shadows debug view (SceneRenderOptions::ShowShadowView) counted in the newest frame that showed it whose counts
@@ -1175,6 +1272,7 @@ namespace Strata
 			nvrhi::TextureHandle Cube;        // Radiance cubemap with mips (background, irradiance source)
 			nvrhi::TextureHandle Irradiance;  // Diffuse irradiance
 			nvrhi::TextureHandle Prefiltered; // Specular radiance, one mip per roughness level
+			uint32_t PrefilteredSize = 256;   // Texels each way of Prefiltered's first level (RendererQualitySettings::EnvironmentResolution)
 		};
 		// The atmosphere (SceneRendererAtmosphere.cpp): made with the first frame whose sky uses it, released with the first that
 		// does not. Its tables (Include/Atmosphere.glsl) are computed when what they depend on changes; its environment is
@@ -1197,6 +1295,11 @@ namespace Strata
 			nvrhi::BindingSetHandle TransmittanceSet;
 			nvrhi::BindingSetHandle MultipleScatteringSet;
 			nvrhi::BindingSetHandle SkyViewSet;
+			// Aerial perspective (IBL/AtmosphereAerial.comp, RenderAerialPerspective): made by its first frame.
+			nvrhi::BindingLayoutHandle AerialLayout;
+			nvrhi::ComputePipelineHandle AerialPipeline;
+			nvrhi::TextureHandle AerialVolume;
+			nvrhi::BindingSetHandle AerialSet;
 			std::optional<AtmosphereSettings> TableSettings; // What the transmittance and multiple-scattering tables hold
 			glm::vec3 SkyViewSun = glm::vec3(0.0f);          // What the sky-view table holds, with TableSettings
 			int32_t SkyViewBand = -1;
@@ -1252,8 +1355,9 @@ namespace Strata
 		bool EnsureOutputTarget();
 		bool ValidateTarget(nvrhi::IFramebuffer* target);
 		// Finds the scene's sky light (or the preview sky); (re)computes the environment maps when its environment texture
-		// or its procedural sky's parameters changed.
-		void UpdateEnvironment(Scene& scene, bool preview, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList);
+		// or its procedural sky's parameters changed. False when the atmosphere's resources could not be made (reported; the
+		// scene then has no environment).
+		bool UpdateEnvironment(Scene& scene, bool preview, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList);
 		// The frame's fog constants from the scene's height fog (FindHeightFog), after the lights and the environment, whose
 		// light it scatters.
 		void SetHeightFog(Scene& scene, const SceneCamera& camera, RenderData::FrameConstants& frame);
@@ -1264,6 +1368,16 @@ namespace Strata
 		void ReportTextureUse(const SceneCamera& camera);
 		// New environment textures (radiance cube with mips, irradiance, prefiltered).
 		EnvironmentMaps CreateEnvironmentMaps(nvrhi::ICommandList* commandList);
+		// A new environment cube texture of `size` texels each way and `mips` levels, out of its undefined layout whole (written
+		// level by level by the passes).
+		nvrhi::TextureHandle CreateEnvironmentTexture(nvrhi::ICommandList* commandList, uint32_t size, uint32_t mips, const char* name);
+		// Gives `maps` a new prefiltered cube of the quality's EnvironmentResolution (the old one goes to `released`): the radiance
+		// cube and the irradiance do not depend on it.
+		void ReplacePrefilteredMap(nvrhi::ICommandList* commandList, EnvironmentMaps& maps, std::vector<nvrhi::ResourceHandle>& released);
+		// A new EnvironmentResolution: the current environment's prefiltered cube made at the new size and filtered from its
+		// radiance cube within the frame, so the environment keeps lighting the scene (an environment map's, which nothing reads
+		// any more once computed, could not be computed again before its levels streamed back in). Shared as a map's is.
+		void ResizePrefilteredMap(nvrhi::ICommandList* commandList);
 		// The environment maps of an equirectangular texture (new textures, so maps of the previous source are never
 		// overwritten while it may still be in use), shared with the renderers that start lighting with the same texture.
 		void ProcessEnvironment(nvrhi::ICommandList* commandList, const Ref<Texture>& source);
@@ -1271,7 +1385,7 @@ namespace Strata
 		// that starts drawing a scene lit by a map (a capture renderer, a second view) neither waits for the map's levels,
 		// which drop to its tail once the environment is computed, nor computes it again. Maps written in place (procedural
 		// skies) are never shared.
-		static Ref<const EnvironmentMaps> FindSharedEnvironment(const Texture& source);
+		static Ref<const EnvironmentMaps> FindSharedEnvironment(const Texture& source, uint32_t prefilteredSize);
 		static void ShareEnvironment(const Ref<const EnvironmentMaps>& environment);
 		static SharedEnvironments& GetSharedEnvironments();
 		// The environment maps of a procedural sky, computed into the current procedural sky's textures when there are
@@ -1296,6 +1410,16 @@ namespace Strata
 		bool CreateSceneBindingSets();
 		// What the scene binding sets bind as the sky-view table: the atmosphere's in its frames, else a black texture.
 		nvrhi::ITexture* GetBoundSkyView() const;
+		// What they bind as aerial perspective's volume (SRV 29): the atmosphere's in frames that draw it, else a black 3D texture.
+		nvrhi::ITexture* GetBoundAerialVolume() const;
+		// Whether the frame draws aerial perspective (m_AerialScale under the atmosphere, a perspective camera, its resources
+		// made), and FogParams.z and w for it (0 without): after SetHeightFog, which writes FogParams.x and y. False when its
+		// resources could not be made (reported; the frame draws without the haze and counts as degraded, so the report is not
+		// logged again every frame).
+		bool SetAerialPerspective(const SceneCamera& camera, RenderData::FrameConstants& frame);
+		bool EnsureAerialResources();
+		// Computes the frame's aerial perspective volume for the unjittered camera (SceneRendererAtmosphere.cpp).
+		void RenderAerialPerspective(nvrhi::ICommandList* commandList, const SceneCamera& camera);
 		// What the scene binding sets bind as the reflection probes' cube array: a one-slot black array without probes.
 		nvrhi::ITexture* GetBoundReflectionProbes() const;
 		// The frame's reflection probes (SceneRendererReflectionProbes.cpp), on the CPU after the lights: the strongest in view,
@@ -1318,17 +1442,29 @@ namespace Strata
 			return m_ReflectionFrame ? m_SurfacePrepassFramebuffer.Get() : m_MotionFrame ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get();
 		}
 		// Screen-space reflections' targets, their prepass framebuffer, the trace's layout, pipeline and binding sets (per history
-		// texture), made by the first frame that traces them; false (reported) when they cannot be created.
+		// texture), made by the first frame that traces them; false (reported) when they cannot be created. Checkerboard
+		// (RendererQualitySettings::Reflections): a half-resolution target the trace writes.
 		bool EnsureScreenReflectionResources();
 		// Traces the frame's screen-space reflections into their target (Effects/ScreenSpaceReflections.comp, GPU.Reflections).
 		void TraceScreenReflections(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
+		// Spatial and SpatialHigh: the surface target and its prepass framebuffer, the full-resolution trace and resolve targets,
+		// the full-resolution color copy beside the scene-color copy (EnsureSceneColorResources), and the pipelines and binding
+		// sets of the trace and the resolve; false (reported) when they cannot be created.
+		bool EnsureSpatialReflectionResources();
+		// Traces every pixel against the depth with the previous frame's color copy (Effects/ScreenSpaceReflectionsSpatial.comp)
+		// and resolves the result into the target the forward pass reads (Effects/ReflectionResolve.comp), in GPU.Reflections.
+		void TraceSpatialReflections(nvrhi::ICommandList* commandList, const PostProcessComponent& settings);
+		// Hands every screen-space reflection resource of the viewport's size (both modes', with the color copy's history) to
+		// `released`: with the render targets, and when the quality's Reflections mode changes.
+		void ReleaseScreenReflections(std::vector<nvrhi::ResourceHandle>& released);
 		// What the scene binding sets bind at SRV 18: the reflections' target once made, else a black texture.
 		nvrhi::ITexture* GetBoundScreenReflections() const;
 		// The scene-color copy, its layout, pipeline and binding sets (one per level), made by the first frame that draws a
 		// transmissive surface; false (reported) when they cannot be created.
 		bool EnsureSceneColorResources();
 		// Copies the HDR image (the opaque surfaces and the sky) into the scene-color copy's levels (Effects/SceneColorCopy.comp,
-		// in GPU.Transparent), before the glass that reads it.
+		// in GPU.Transparent), before the glass that reads it; in frames that copy for spatial reflections
+		// (m_ReflectionCopyFrame), also into their full-resolution copy.
 		void CopySceneColor(nvrhi::ICommandList* commandList);
 		// What the scene binding sets bind at SRV 19: the scene-color copy once made, else a black texture.
 		nvrhi::ITexture* GetBoundSceneColor() const;
@@ -1355,8 +1491,10 @@ namespace Strata
 		void UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, const SceneRenderOptions& options, nvrhi::IBindingSet* bindingSet,
 			std::optional<float> keyReferenceLog2);
 		// The frame's pre-exposure (m_PreExposure) from the options, the settings and the readbacks of earlier frames' metering.
-		void ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options);
-		// A new stretch of the pre-exposure (a reset, or automatic exposure turned off): its readbacks and metering start empty.
+		// `hold` (frames of a lighting view whose values are not light): automatic exposure keeps the value it has, settled.
+		void ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options, bool hold);
+		// A new stretch of the pre-exposure (a reset, automatic exposure turned off, a lighting view of values shown or left): its
+		// readbacks and metering start empty.
 		void StartPreExposureEpoch();
 		// After the executed command list of a frame that recorded the exposure's copy: the copy is pending.
 		void SubmitExposureReadback();
@@ -1593,6 +1731,10 @@ namespace Strata
 		// Releases the cascades' depth array with what references it (framebuffers, depth pyramids and their sets, the cached
 		// cascades), through Renderer::ReleaseDeferred; the next frame that draws a shadowed sun makes them again.
 		void ReleaseShadowMap();
+		// Drops the atmosphere's environment maps and its spare and refreshing ones through Renderer::ReleaseDeferred, so its
+		// next frame computes its environment at once at the quality's EnvironmentResolution. (An environment map's or a
+		// procedural sky's environment is kept: UpdateEnvironment resizes only its prefiltered cube.)
+		void ReleaseAtmosphereEnvironment();
 		// The cascade cache holds nothing: every cascade is drawn again.
 		void InvalidateShadowCache();
 		// The cascades' size for a quality at the current viewport: its resolution resolved for the rows, limited by the
@@ -1760,6 +1902,26 @@ namespace Strata
 		nvrhi::ITexture* GetBoundScreenShadows() const;
 		// The tints of SceneRenderOptions::EntityTints (StatusTint.frag); false when GPU resources failed.
 		bool DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport);
+
+		// Lighting debug views (SceneRenderOptions::LightingView; SceneRendererLightingView.cpp).
+		// Whether a view's values are not light (AmbientOcclusion, Albedo): written unexposed, the pre-exposure held.
+		static bool IsLightingValueView(SceneLightingView view);
+		// Follows a change of the view between frames, before the frame's pre-exposure is chosen: the temporal history starts
+		// again and the statistics of the earlier view are dropped; entering or leaving a value view starts a new epoch of the
+		// exposure's readbacks (none recorded around the switch is followed), and leaving one jumps the exposure's adaptation.
+		void BeginLightingViewFrame(SceneLightingView view);
+		// The view's statistics pass (Effects/LightingViewStats.comp) into the next readback, and for the views of values and
+		// luminance the overlay over the output (Overlay/LightingView.frag); false when GPU resources failed (reported).
+		bool RecordLightingView(nvrhi::ICommandList* commandList, const SceneRenderOptions& options, const RenderData::FrameConstants& frame,
+			const nvrhi::Viewport& viewport);
+		// After the executed command list of a frame that recorded the statistics' copy: the copy is pending.
+		void SubmitLightingViewReadback();
+		// Turns the newest completed readback of the current view into m_LightingViewStats (with `wait`, waits for the pending
+		// ones first).
+		void ResolveLightingViewStats(bool wait);
+		// The statistics buffer, its readbacks and the binding sets naming the targets (the pipelines stay), released with the
+		// targets.
+		void ReleaseLightingViewResources(std::vector<nvrhi::ResourceHandle>& released);
 	private:
 		SceneRendererSpecification m_Specification;
 		nvrhi::IDevice* m_Device = nullptr;
@@ -1816,6 +1978,10 @@ namespace Strata
 		bool m_AtmosphereFrame = false;      // The frame's sky is the atmosphere
 		float m_AtmosphereSunIlluminance = 0.0f; // Its sun's illuminance above it: the largest component of the light's color times intensity
 		nvrhi::ITexture* m_BoundSkyView = nullptr; // The sky-view table (or a black texture) referenced by m_SceneBindingSet
+		float m_AerialScale = 0.0f;    // The sky's AerialPerspectiveScale in atmosphere frames (UpdateEnvironment), 0 when off
+		bool m_AerialFrame = false;    // The frame draws aerial perspective (SetAerialPerspective)
+		float m_AerialDistance = 0.0f; // Its volume's far distance in meters
+		nvrhi::ITexture* m_BoundAerialVolume = nullptr; // Aerial perspective's volume (or the black one) referenced by m_SceneBindingSet
 		nvrhi::ITexture* m_BoundReflectionProbes = nullptr; // The probes' cube array (or the black one) referenced by m_SceneBindingSet
 		nvrhi::BindingLayoutHandle m_IBLBindingLayout;
 		nvrhi::ComputePipelineHandle m_EquirectToCubePipeline;
@@ -2024,14 +2190,14 @@ namespace Strata
 		nvrhi::FramebufferHandle m_OutputFramebuffer;
 
 		// Ambient occlusion (SceneRendererAmbientOcclusion.cpp)
-		nvrhi::TextureHandle m_AORawTexture; // Noisy GTAO output
-		nvrhi::TextureHandle m_AOTexture;    // Blurred
+		nvrhi::TextureHandle m_AORawTexture; // GTAO's output: a 4x4 pattern of slice rotations
+		nvrhi::TextureHandle m_AOTexture;    // Denoised (the pattern resolved, then blurred within edges)
 		nvrhi::Format m_AOFormat = nvrhi::Format::R32_FLOAT; // Of both: R16_FLOAT where the device stores it (CreateAmbientOcclusionResources)
 		nvrhi::BindingLayoutHandle m_AOBindingLayout;
 		nvrhi::BindingSetHandle m_GTAOBindingSet;
-		nvrhi::BindingSetHandle m_AOBlurBindingSet;
+		nvrhi::BindingSetHandle m_AODenoiseBindingSet;
 		nvrhi::ComputePipelineHandle m_GTAOPipeline;
-		nvrhi::ComputePipelineHandle m_AOBlurPipeline;
+		nvrhi::ComputePipelineHandle m_AODenoisePipeline;
 
 		// Post-processing (SceneRendererPost.cpp; the temporal history's own post sets below belong to the TAA's resources)
 		nvrhi::BindingLayoutHandle m_TonemapBindingLayout;
@@ -2496,6 +2662,24 @@ namespace Strata
 		nvrhi::ComputePipelineHandle m_ScreenReflectionPipeline;
 		std::array<nvrhi::BindingSetHandle, 2> m_ScreenReflectionSets;
 		nvrhi::ITexture* m_BoundScreenReflections = nullptr;
+		// Spatial reflections (Reflections Spatial and SpatialHigh): whether the reflection resources made are theirs (the target
+		// at SRV 18 is then full resolution, written by the resolve), the frame copies its color for the next frame's trace, the
+		// trace's raw target, the full-resolution color copy and its copy set, the pipelines and binding sets of the trace and the
+		// resolve, and the copy the next frame reads: the frame that made it (RenderCount + 1), its scene and its pre-exposure.
+		bool m_SpatialReflectionResources = false;
+		bool m_ReflectionCopyFrame = false;
+		nvrhi::TextureHandle m_TracedReflectionTexture;
+		nvrhi::TextureHandle m_ReflectionColorTexture;
+		nvrhi::BindingSetHandle m_ReflectionColorCopySet;
+		nvrhi::BindingLayoutHandle m_SpatialReflectionLayout;
+		nvrhi::ComputePipelineHandle m_SpatialReflectionPipeline;
+		nvrhi::BindingSetHandle m_SpatialReflectionSet;
+		nvrhi::BindingLayoutHandle m_ReflectionResolveLayout;
+		nvrhi::ComputePipelineHandle m_ReflectionResolvePipeline;
+		nvrhi::BindingSetHandle m_ReflectionResolveSet;
+		uint64_t m_ReflectionColorRender = 0;
+		uint64_t m_ReflectionColorSceneId = 0;
+		float m_ReflectionColorPreExposure = 1.0f;
 		// The scene-color copy transmissive surfaces read (SRV 19): its format (B10G11R11, or RGBA16F without the extended
 		// storage formats), the copy's pipeline and its binding sets, one per level, and the texture the scene binding sets name.
 		nvrhi::TextureHandle m_SceneColorTexture;
@@ -2533,6 +2717,33 @@ namespace Strata
 		uint32_t m_ShadowViewReadbackIndex = 0;
 		bool m_ShadowViewReadbackRecorded = false; // The frame being recorded copies the counts (SubmitShadowViewReadback)
 		ShadowViewStats m_ShadowViewStats;
+		// Lighting debug views (RecordLightingView): the latest frame's view and the frame it was chosen in (RenderCount + 1); the
+		// overlay's and the statistics' layouts and pipelines (made by the first frame of a view, kept for the renderer's life:
+		// the capture renderer releases its targets after every picture); their binding sets (with the targets; the statistics'
+		// names the irradiance map it was made with); the statistics buffer and a ring of readbacks, each with the frame, view and
+		// sun illuminance it measured; the newest statistics.
+		SceneLightingView m_LightingView = SceneLightingView::None;
+		uint64_t m_LightingViewChosen = 0;
+		nvrhi::BindingLayoutHandle m_LightingOverlayLayout;
+		nvrhi::GraphicsPipelineHandle m_LightingOverlayPipeline;
+		nvrhi::BindingSetHandle m_LightingOverlayBindingSet;
+		nvrhi::BindingLayoutHandle m_LightingStatsLayout;
+		nvrhi::ComputePipelineHandle m_LightingStatsPipeline;
+		nvrhi::BindingSetHandle m_LightingStatsBindingSet;
+		nvrhi::ITexture* m_LightingStatsIrradiance = nullptr;
+		nvrhi::BufferHandle m_LightingStatsBuffer;
+		struct LightingViewReadback
+		{
+			Scope<BufferReadback> Readback;
+			uint64_t Render = 0;
+			SceneLightingView View = SceneLightingView::None;
+			float SunIlluminance = 0.0f;
+		};
+		static constexpr uint32_t c_LightingViewReadbacks = 3;
+		std::array<LightingViewReadback, c_LightingViewReadbacks> m_LightingViewReadbacks;
+		uint32_t m_LightingViewReadbackIndex = 0;
+		bool m_LightingViewReadbackRecorded = false; // The frame being recorded copies the statistics (SubmitLightingViewReadback)
+		std::optional<LightingViewStats> m_LightingViewStats;
 		nvrhi::BindingLayoutHandle m_MotionCopyLayout;
 		nvrhi::ComputePipelineHandle m_MotionCopyPipeline;
 		nvrhi::BufferHandle m_MotionCopyListBuffer; // The elements a frame copies: the instances', then the joints'

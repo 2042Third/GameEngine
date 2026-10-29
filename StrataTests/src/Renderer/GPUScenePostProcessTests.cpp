@@ -1,3 +1,4 @@
+#include "Renderer/AmbientOcclusionTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Renderer/RendererComponents.h"
 
@@ -12,27 +13,6 @@ namespace
 
 	constexpr uint32_t c_Size = c_SceneTestSize;
 	constexpr int c_MiddleGray = 118; // 0.18 encoded as sRGB
-
-	// A box resting on a floor, lit by ambient light only, so ambient occlusion is all that differs between pixels.
-	struct CreaseScene
-	{
-		Scene SceneData;
-		PostProcessComponent* PostProcess = nullptr;
-		SceneCamera Camera;
-
-		CreaseScene()
-		{
-			PostProcess = &AddNeutralPostProcess(SceneData);
-			PostProcess->AmbientOcclusion = true;
-			AddMesh(SceneData, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(20.0f);
-			AddMesh(SceneData, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f, 0.5f, 0.0f), "Box");
-			SceneData.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.5f);
-			Camera = LookAt(glm::vec3(0.0f, 2.5f, 3.0f), glm::vec3(0.0f, 0.3f, 0.0f));
-		}
-
-		glm::vec3 CreasePoint() const { return glm::vec3(0.0f, 0.0f, 0.56f); } // Floor at the box's front face
-		glm::vec3 OpenFloorPoint() const { return glm::vec3(1.3f, 0.0f, 1.2f); } // More than the occlusion radius from the box
-	};
 
 	// Renders a frame with the pre-exposure forced (or chosen by the renderer) and reads the output back.
 	ReadbackImage RenderPreExposed(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, std::optional<float> preExposure)
@@ -532,8 +512,10 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 			light.AmbientColor = glm::vec3(0.2f); // Keeps the shadows far from subnormal values at 2^-8
 			if (sky)
 			{
+				// The procedural sky's default colors are a quarter of Strata 0.6.0's (a real sun to sky ratio): at 2 it lights the
+				// shadows as 0.6.0's did at 0.5, far from subnormal values at 2^-8.
 				light.Source = SkyLightSource::Procedural;
-				light.Intensity = 0.5f;
+				light.Intensity = 2.0f;
 			}
 		};
 		// The floor covers the lower part of the view, the sky or the clear color the upper part.

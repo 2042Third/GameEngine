@@ -21,6 +21,7 @@ namespace Strata
 	{
 		FrameStageID Uploads = c_InvalidFrameStage;     // The upload queue's graphics batches (GPUUploadQueue::SubmitBatch)
 		FrameStageID Setup = c_InvalidFrameStage;       // Scene data uploads, environment maps, light clusters
+		FrameStageID Aerial = c_InvalidFrameStage;      // The atmosphere's aerial perspective volume (IBL/AtmosphereAerial.comp)
 		FrameStageID Cull = c_InvalidFrameStage;        // Culling dispatches and depth pyramids
 		FrameStageID Shadows = c_InvalidFrameStage;
 		FrameStageID Prepass = c_InvalidFrameStage;

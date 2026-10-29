@@ -20,11 +20,12 @@ using namespace Strata::Tests::TAA;
 namespace
 {
 
-	// The local lights' shadow filter and the ambient occlusion turn their noise every frame with TAA, and the history smooths
-	// it: the converged penumbra's roughness stays below `bound` times one frame's under `preset`; `custom` (when set) is the
-	// look, under Custom. The penumbra is a shadowed spot light's (Include/LocalShadows.glsl turns its taps by
-	// TemporalParams.z): the sun's shadow has no noise left to turn (Include/Shadows.glsl, GPU.SceneRenderer.ShadowFilter and
-	// .ScreenShadows: the same in every frame, its disk's grain blurred in the frame), so it would measure nothing.
+	// The local lights' shadow filter turns its noise every frame with TAA, and the history smooths it: the converged penumbra's
+	// roughness stays below `bound` times one frame's under `preset`; `custom` (when set) is the look, under Custom. The penumbra is
+	// a shadowed spot light's (Include/LocalShadows.glsl turns its taps by TemporalParams.z): the sun's shadow has no noise left to
+	// turn (Include/Shadows.glsl, GPU.SceneRenderer.ShadowFilter and .ScreenShadows: the same in every frame, its disk's grain
+	// blurred in the frame), so it would measure nothing. The ambient occlusion never turns: it resolves its pattern within the
+	// frame, the same in every frame of a still view.
 	void CheckNoiseSmoothed(TemporalAntiAliasingPreset preset, const TemporalAntiAliasingSettings* custom, double bound)
 	{
 		GPUContext gpu;
@@ -141,7 +142,7 @@ namespace
 		}
 		REQUIRE(groundPixels > c_Size * c_Size / 2);
 		CHECK(changed > c_Size);
-		CHECK(firstOcclusion != ninthOcclusion);
+		CHECK(firstOcclusion == ninthOcclusion);
 
 		const std::vector<float> converged = groundLuminance(ReadHDR(renderer.GetResolvedHDRTexture()));
 		// The penumbra: the ground between its shadowed and its lit brightness.
@@ -521,12 +522,12 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("With TAA the local lights' shadows' and the ambient occlusion's noise turns every frame, and the history smooths it")
+	TEST_CASE("With TAA the local lights' shadows' noise turns every frame, and the history smooths it; the ambient occlusion holds still")
 	{
 		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Original, nullptr, 0.5);
 	}
 
-	TEST_CASE("Variance clipping keeps the history smoothing the local lights' shadows' and the ambient occlusion's noise")
+	TEST_CASE("Variance clipping keeps the history smoothing the local lights' shadows' noise")
 	{
 		TemporalAntiAliasingSettings settings = c_TAAOriginalSettings;
 		settings.HistoryClamp = TemporalHistoryClamp::Variance;
@@ -534,7 +535,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Custom, &settings, 0.6);
 	}
 
-	TEST_CASE("Sharp keeps the history smoothing the local lights' shadows' and the ambient occlusion's noise")
+	TEST_CASE("Sharp keeps the history smoothing the local lights' shadows' noise")
 	{
 		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Sharp, nullptr, 0.6);
 	}

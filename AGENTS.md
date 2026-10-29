@@ -405,6 +405,11 @@ reaches the application only through `EditorHost`. Every command family, panel a
   frame's post source, are off in `AddNeutralPostProcess`, and exact-pixel tests also turn `DitherOutput` off; Filmic's
   and white balance's constants come only from their `Tools/` generators
   ([Post-processing](Docs/DeveloperGuide.md#post-processing)).
+- Light keeps its energy and needs no history: specular is compensated for multiple scattering from the BRDF table
+  (`GetSpecularEnergy`) and diffuse gets what specular leaves; ambient occlusion and other screen-space lighting denoise
+  within the frame; specular anti-aliasing takes derivatives only of the primitive's own interpolants and textures. Check
+  lighting changes with the `lighting`, `ao`, `indirect`, `luminance` and `albedo` debug views and the white-furnace
+  test ([Lighting](Docs/DeveloperGuide.md#lighting)).
 - Temporal effects jitter only the frame's camera copy and keep history per renderer; single images settle or turn TAA
   off.
 - Font files are untrusted input: extend `Renderer/FontValidation.h`, with crafted-font tests, before calling another
@@ -425,8 +430,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Shadow views are kept while nothing reaching them changed (`PrepareShadowCache`, `FindLocalShadowCasters`): a new
   input of how casters are drawn changes a version they compare. What is drawn and requested is decided twice, by the
   CPU path (`SceneRendererExtraction.cpp`) and the GPU's culling and visibility feedback (`Cull.comp`): change both, keep
-  shading independent of draw order (no screen-space derivatives), and keep `GPU.SceneRenderer.GPUDriven` and
-  `.Feedback` passing ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
+  shading independent of draw order (screen-space derivatives only of the primitive's own interpolants and textures), and
+  keep `GPU.SceneRenderer.GPUDriven` and `.Feedback` passing ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
 
 ## Automation (editor RPC + MCP)
 

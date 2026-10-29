@@ -106,12 +106,15 @@ strata_add_shaders(Strata_Renderer
 		IBL/ProbeIrradiance.comp
 		IBL/BRDFLut.comp
 		Effects/GTAO.comp
-		Effects/AOBlur.comp
+		Effects/AODenoise.comp
 		Effects/ScreenSpaceReflections.comp
+		Effects/ScreenSpaceReflectionsSpatial.comp
+		Effects/ReflectionResolve.comp
 		Effects/SceneColorCopy.comp
 		Effects/ScreenShadows.frag
 		Effects/ContactShadows.frag
 		Effects/ScreenShadowsBlur.frag
+		Effects/LightingViewStats.comp
 		PostProcess/Fullscreen.vert
 		PostProcess/Tonemap.frag
 		PostProcess/MotionBlurTiles.comp
@@ -135,12 +138,14 @@ strata_add_shaders(Strata_Renderer
 		IBL/AtmosphereTransmittance.comp
 		IBL/AtmosphereMultipleScattering.comp
 		IBL/AtmosphereSkyView.comp
+		IBL/AtmosphereAerial.comp
 		IBL/AtmosphereCube.comp
 		Overlay/Grid.frag
 		Overlay/Outline.frag
 		Overlay/StatusTint.frag
 		Overlay/MotionView.frag
 		Overlay/ShadowView.frag
+		Overlay/LightingView.frag
 		Overlay/DebugLine.vert
 		Overlay/DebugLine.frag
 		Overlay/Text.vert
@@ -171,7 +176,7 @@ strata_add_shaders(Strata_Renderer
 		"Scene/ShadowRanges.comp|Scene/ShadowRangesDownsample.comp|ST_SHADOW_RANGES_DOWNSAMPLE"
 		"Effects/GTAO.comp|Effects/GTAOHalf.comp|ST_AO_HALF"
 		"Scene/Skybox.frag|Scene/SkyboxAtmosphere.frag|ST_ATMOSPHERE"
-		"Effects/AOBlur.comp|Effects/AOBlurHalf.comp|ST_AO_HALF"
+		"Effects/AODenoise.comp|Effects/AODenoiseHalf.comp|ST_AO_HALF"
 		"Effects/SceneColorCopy.comp|Effects/SceneColorCopyFallback.comp|ST_SCENE_COLOR_FALLBACK")
 
 # The default font of text rendering (Roboto Medium, Apache License 2.0; see ThirdPartyNotices.md).

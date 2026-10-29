@@ -594,6 +594,26 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(loaded.LensFlare == 0.35f);
 		loaded = load({ { "LensFlare", -1.0 } }, warnings);
 		CHECK(loaded.LensFlare == 0.0f);
+
+		// Ambient occlusion's multi-bounce: on in every file saved before it (0.6.0's), without a warning; off round-trips.
+		warnings.clear();
+		loaded = load({ { "AmbientOcclusion", true }, { "AmbientOcclusionRadius", 0.5 }, { "AmbientOcclusionIntensity", 1.0 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.AmbientOcclusionMultiBounce);
+		CHECK(PostProcessComponent().AmbientOcclusionMultiBounce);
+		loaded = load({ { "AmbientOcclusion", true }, { "AmbientOcclusionMultiBounce", false } }, warnings);
+		CHECK(warnings.empty());
+		CHECK_FALSE(loaded.AmbientOcclusionMultiBounce);
+		Scene saved;
+		Entity post = saved.CreateEntity("Post");
+		post.AddComponent<PostProcessComponent>().AmbientOcclusionMultiBounce = false;
+		const nlohmann::json document = SceneSerializer::Serialize(saved);
+		Scene reloaded;
+		std::string error;
+		REQUIRE_MESSAGE(SceneSerializer::Deserialize(reloaded, document, &error), error);
+		Entity copy = reloaded.GetEntityByUUID(post.GetUUID());
+		REQUIRE(copy);
+		CHECK_FALSE(copy.GetComponent<PostProcessComponent>().AmbientOcclusionMultiBounce);
 	}
 
 	TEST_CASE("Cameras saved before depth of field load without it; their lens round-trips and is clamped")
@@ -745,6 +765,9 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(loaded.AtmosphereDensity == 1.0f);
 		CHECK(loaded.AtmosphereHaze == 1.0f);
 		CHECK(loaded.GroundAlbedo == doctest::Approx(0.3f));
+		// Without aerial perspective's keys (every 0.6.0 scene): on, at Earth's scale.
+		CHECK(loaded.AerialPerspective);
+		CHECK(loaded.AerialPerspectiveScale == 1.0f);
 		// The atmosphere with its settings; out of range clamped; not a number: a warning, and the default.
 		loaded = load({ { "Source", "Atmosphere" }, { "AtmosphereDensity", 1.5 }, { "AtmosphereHaze", 3 }, { "GroundAlbedo", 0.1 } }, warnings);
 		CHECK(warnings.empty());
@@ -757,6 +780,13 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(loaded.Source == SkyLightSource::Atmosphere);
 		CHECK(loaded.AtmosphereDensity == 0.0f);
 		CHECK(loaded.GroundAlbedo == 1.0f);
+		loaded = load({ { "Source", "Atmosphere" }, { "AerialPerspective", false }, { "AerialPerspectiveScale", 6 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK_FALSE(loaded.AerialPerspective);
+		CHECK(loaded.AerialPerspectiveScale == 6.0f);
+		loaded = load({ { "AerialPerspectiveScale", 100 } }, warnings);
+		CHECK(warnings.empty());
+		CHECK(loaded.AerialPerspectiveScale == SkyLightComponent::c_MaxAerialPerspectiveScale);
 		loaded = load({ { "AtmosphereHaze", "thick" } }, warnings);
 		CHECK(CountWarnings(warnings, "AtmosphereHaze") == 1);
 		CHECK(loaded.AtmosphereHaze == 1.0f);

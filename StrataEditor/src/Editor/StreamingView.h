@@ -22,8 +22,8 @@ namespace Strata
 	class RenderScene;
 	class Scene;
 
-	// What the viewport shows: the scene as rendered, colored by what the streaming pillars do to it, its motion or its sun's
-	// shadow cascades.
+	// What the viewport shows: the scene as rendered, colored by what the streaming pillars do to it, its motion, its sun's
+	// shadow cascades, or a lighting view (SceneRenderOptions::LightingView, in SceneLightingView's order).
 	enum class ViewportDebugView : uint8_t
 	{
 		None = 0,
@@ -31,10 +31,21 @@ namespace Strata
 		LOD,       // Entities by the level of detail their mesh is drawn at
 		Mip,       // Entities by how far their textures' resident mip levels are from those their view needs
 		Motion,    // Every pixel's motion since the view's previous frame (SceneRenderOptions::ShowMotionVectors), not a tint
-		Shadows    // Every receiver pixel by screen pixels per shadow texel, with the cascades (SceneRenderOptions::ShowShadowView)
+		Shadows,   // Every receiver pixel by screen pixels per shadow texel, with the cascades (SceneRenderOptions::ShowShadowView)
+		// The lighting views (SceneLightingView), not tints either: lit surfaces shaded white, the ambient occlusion, the indirect
+		// light alone, the luminance as EV100 bands and the albedo with values outside 0.03-0.85 marked.
+		Lighting,
+		AmbientOcclusion,
+		Indirect,
+		Luminance,
+		Albedo
 	};
 
-	// "none", "streaming", "lod", "mip", "motion", "shadows" (the names commands and the saved viewport state use).
+	// The lighting view a debug view shows (SceneLightingView::None for the others).
+	SceneLightingView GetLightingView(ViewportDebugView view);
+
+	// "none", "streaming", "lod", "mip", "motion", "shadows", "lighting", "ao", "indirect", "luminance", "albedo" (the names commands
+	// and the saved viewport state use).
 	const char* ViewportDebugViewToString(ViewportDebugView view);
 	std::optional<ViewportDebugView> ViewportDebugViewFromString(std::string_view name);
 
@@ -66,6 +77,8 @@ namespace Strata
 			{ 0.24f, 0.75f, 0.55f, 1.0f },
 			{ 0.91f, 0.76f, 0.30f, 1.0f },
 			{ 0.90f, 0.33f, 0.29f, 1.0f } } };
+		// The lighting views' luminance bands, albedo marks and background (SceneRenderOptions::LightingColors).
+		LightingViewColors Lighting;
 	};
 
 	// What a debug view found in the last Build, among the entities in the camera's view.
@@ -89,6 +102,14 @@ namespace Strata
 	// The LOD view's legend name of a level (`last`: the entry that counts it and the higher ones): "LOD 1", "LOD 3+", with the
 	// largest error drawn at it in pixels where it has one (StreamingViewStats::MaxErrorPixelsPerLOD): "LOD 2 (0.84 px)".
 	std::string GetLODLegendName(size_t level, bool last, float errorPixels);
+
+	// The luminance view's legend name of band `band` of `bands`, each one EV100 wide from the floor of `firstEV100`
+	// (LightingViewColors): "EV 9"; the first takes what lies below ("EV <6"), the last what lies above ("EV 16+").
+	std::string GetLuminanceLegendName(size_t band, size_t bands, float firstEV100);
+
+	// The note under a lighting view's legend: the sun to sky ratio on flat ground and, for the occlusion view, the occlusion's
+	// median or, for the light views (not the albedo), the surfaces' EV100 median; "Measuring..." until statistics arrived.
+	std::string GetLightingLegendNote(ViewportDebugView view, const std::optional<LightingViewStats>& stats);
 
 	// Builds what a debug view draws over the viewport image for one frame: SceneRenderOptions::EntityTints (the drawn
 	// entities' colors) and, in the streaming view, placeholder boxes for entities whose mesh is not there to draw. Works on

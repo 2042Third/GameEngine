@@ -4,7 +4,8 @@
 // Resources shared by the scene passes. Layouts mirror the structs in Strata/Renderer/SceneRenderData.h; keep them
 // in sync (std140 for the constant buffer, std430 for storage buffers, 16-byte aligned members).
 
-// The scene layout's slots (SceneRenderer::CreateResources): SRV 0-21, 27, 28, 32 and 33, samplers 0-5 (materials), 8, 9 and 10, CBV 0.
+// The scene layout's slots (SceneRenderer::CreateResources): SRV 0-21, 27, 28, 29 (the aerial perspective volume), 32 and 33,
+// samplers 0-5 (materials), 8, 9 and 10, CBV 0.
 // SRV 22-26 belong to the compute layouts of temporal anti-aliasing and screen-space reflections, never to this one.
 // Assigned for wave 7: SRV 28 the sun's screen-space shadow mask, 32 the cascades' depth ranges and 33 the shadows'
 // blue-noise tile (sun-shadows); 29 the aerial perspective volume, 30 and 31 the irradiance volume, 34 volumetric fog
@@ -26,6 +27,14 @@
 
 #define ST_LIGHT_POINT 0u
 #define ST_LIGHT_SPOT  1u
+
+// The lighting debug views (SceneLightingView, MaterialParams.y): what the forward pass writes instead of the lit color.
+#define ST_LIGHTING_VIEW_NONE              0u
+#define ST_LIGHTING_VIEW_LIGHTING          1u // White albedo, no emission
+#define ST_LIGHTING_VIEW_AMBIENT_OCCLUSION 2u // The occlusion of indirect light (material x screen), unexposed
+#define ST_LIGHTING_VIEW_INDIRECT          3u // Indirect light only
+#define ST_LIGHTING_VIEW_LUMINANCE         4u // The lit image (the overlay bands it)
+#define ST_LIGHTING_VIEW_ALBEDO            5u // The base color, unexposed
 
 #define ST_SAMPLER_COUNT 6
 
@@ -68,12 +77,16 @@ struct FrameConstants
 	// x: depth bias (texels), y: normal offset (texels), z: the wide penumbrae's taps (RendererQualitySettings::
 	// ShadowFilterQuality), w: unused (0)
 	vec4 ShadowBias;
-	vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
-	vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
+	// x: 1 when screen-space ambient occlusion is available; y: 1 when occlusion's multi-bounce applies (AOMultiBounce)
+	vec4 AOParams;
+	// x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels); y: the lighting debug view
+	// (ST_LIGHTING_VIEW_*, 0: none); z: specular anti-aliasing's strength (WidenRoughness; 1 with
+	// SceneRendererSpecification::SpecularAntiAliasing, else 0)
+	vec4 MaterialParams;
 	// x: 1 when u_PreviousInstances and u_PreviousJoints hold the renderer's previous frame; y: the pre-exposure, a power of two
 	// every writer of the HDR target multiplies its luminance by (SceneRenderer: values near 100,000 lux stay within half
-	// floats); z: the frame's rotation of per-pixel noise (local shadows' PCF, ambient occlusion) in turns, 0 without temporal
-	// anti-aliasing
+	// floats); z: the frame's rotation of per-pixel noise (local shadows' PCF, the checkerboard screen-space reflections) in
+	// turns, 0 without temporal anti-aliasing
 	vec4 TemporalParams;
 	// Temporal anti-aliasing's offset of the frame's samples in clip units (in Projection, ViewProjection and their inverses; 0
 	// without it): xy this frame's, zw the renderer's previous frame's
@@ -85,7 +98,9 @@ struct FrameConstants
 	// is off), w: 1 when an environment map's irradiance from above lights it instead, 2 when the atmosphere's sky at the
 	// horizon does (toward the ray's azimuth)
 	vec4 FogLight;
-	vec4 FogParams;  // x: 1 when the scene has fog, y: the asymmetry of its scattering of the directional light
+	// x: 1 when the scene has fog, y: the asymmetry of its scattering of the directional light; z: aerial perspective's far
+	// distance in meters (0: none; Include/AerialPerspective.glsl), w: its distance scale (light-and-materials claims z and w)
+	vec4 FogParams;
 	// The atmosphere's sun disk: xyz toward the sun, w its angular radius (0: none); rgb its illuminance at the ground (lux)
 	vec4 SunDiskDirection;
 	vec4 SunDiskColor;

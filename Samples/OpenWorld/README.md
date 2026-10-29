@@ -13,6 +13,7 @@ only what is near is loaded. An AI agent made it through the editor alone, the w
 | --- | --- |
 | World streaming: a World asset with three layers in 64 m cells (Vegetation 192 m, Wildlife 128 m, Landmarks 320 m), a streaming source on the player, cooked cells in the export ([Worlds](https://github.com/2042Third/GameEngine/blob/main/Docs/Manual/Worlds.md)) | `Worlds/Island.stworld`, `Worlds/Island/` |
 | GPU-driven rendering at scale: 20,000 instances of 26 one-entity prefabs culled and drawn by the GPU in a few indirect draws, with cascaded shadows | `Prefabs/Nature/` |
+| An import setting for an exporter's habit: Kenney's models write sRGB-encoded colors into their glTF base color factors, which glTF defines as linear, so every model of `Models/Nature/` imports with Base Color Factors Are sRGB and the leaves keep the green their artist chose instead of a pale teal | `Models/Nature/*.glb.meta` |
 | Prefetching before a teleport (`World::RequestCellsAround`, `World::IsLoadedAround`) and a raycast that waits for the ground | `Scripts/Explorer.cpp` |
 | A character controller on terrain: 97 terrain tiles with static, non-convex mesh colliders on the Terrain collision layer | the persistent scene's `Tile_*` entities |
 | Skinned animation in streamed cells: foxes with an animation controller (Survey, Walk, Run) | `Prefabs/Fox.stprefab`, `Scripts/Wander.cpp` |

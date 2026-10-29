@@ -35,8 +35,10 @@ Some real values, with the exposure that suits a scene lit by them (see below):
 | Household lamp (800 lumens) | 64 cd | |
 | Candle | 1 cd | |
 
-New lights, new scenes and the samples use small values instead (a 3 lux sun, a sky under 1 nit, 10 cd for a new point
-light), which look right at a manual exposure of 0; new scenes and most samples turn on automatic exposure (see below).
+New projects use real values: the Basic 3D template opens under the physical atmosphere with a 120,000 lux sun (the Clear
+preset below). New lights and scenes made from nothing still use small values (a 3 lux sun, a procedural sky of a fraction
+of a nit, 10 cd for a new point light), which look right at a manual exposure of 0; new scenes and most samples turn on
+automatic exposure (see below).
 Both work: what matters is that the lights of a scene agree with each other, and that the exposure matches them. A
 scene twice as bright at one stop less exposure looks exactly the same.
 
@@ -85,6 +87,11 @@ scene, or offers **Add Procedural Sky** when there is none (the scene is then li
   Use real values with it: a 120,000 lux sun and automatic exposure (**Max EV** 16). A sun that moves keeps the sky and
   its own light up to date at once; the light the sky casts on the scene follows every half degree, computed over a few
   frames and then switched to.
+  - **Aerial Perspective** (on by default): the air between the camera and distant surfaces dims them and adds its own
+    light, so mountains and far trees fade into the sky's blue, as they do outdoors (and toward orange at sunset).
+    **Aerial Perspective Scale** multiplies the distances the air is measured over: 1 is Earth's air, in which a few
+    hundred meters barely haze; worlds smaller than real ones show the depth of larger ones with a higher scale (4 makes a
+    1 km view look like 4 km; the Open World sample uses 6). Turn it off to keep the look of scenes made before 0.7.0.
 
 **Show Background** draws the sky behind the scene (otherwise the background is the clear color) and **Background
 Blur** softens it (the atmosphere's background is always sharp).
@@ -192,10 +199,13 @@ a probe shows the scene as it was baked (a day-night cycle or a moving door is n
 
 ## Screen-space reflections
 
-Probes and the sky reflect a fixed picture. **Screen Space Reflections** (in the **Post Process**, with TAA) adds what
-the screen shows: a polished floor, a pond or a metal plate reflects the characters and things standing on or beside it,
-and the reflections move with them. Each frame the renderer follows the reflected rays across the image (at half
-resolution) and takes the color the previous frame showed where a ray meets a surface; TAA smooths the result.
+Probes and the sky reflect a fixed picture. **Screen Space Reflections** (in the **Post Process**) adds what the screen
+shows: a polished floor, a pond or a metal plate reflects the characters and things standing on or beside it, and the
+reflections move with them. Each frame the renderer follows the reflected rays across the image and takes the color the
+previous frame showed where a ray meets a surface. How depends on the project's Graphics Quality (its **Reflections**
+row): at **High** and **Ultra** every pixel traces at full resolution and neighboring pixels share what they found, with or
+without TAA, so reflections are sharp and need no history; at **Medium** (Strata 0.6.0's) they trace at half resolution
+and need TAA to smooth them; at **Low** there are none.
 
 - Only what is on screen can be reflected. Things behind the camera, beside the view or hidden behind others are not:
   there the probes and the sky reflect as before. Reflections fade toward the screen's edges.
@@ -204,5 +214,84 @@ resolution) and takes the color the previous frame showed where a ray meets a su
   show none at all.
 - **Screen Space Reflections Intensity** (1): how much they replace the probes' and the sky's reflection.
 - Transparent surfaces do not get them.
-- They need TAA (Anti Aliasing Method TAA); with FXAA the settings are greyed out. Cost: about half a millisecond of GPU
-  time at 1920x1080 on an Apple M2 Max with every surface reflecting, and about 20 MB of video memory per view.
+- At Medium they need TAA (Anti Aliasing Method TAA): with FXAA or without anti-aliasing they are not drawn. Cost there:
+  about half a millisecond of GPU time at 1920x1080 on an Apple M2 Max with every surface reflecting, and about 20 MB of
+  video memory per view. At High and Ultra they work with any anti-aliasing and take about 230 MB of video memory per
+  view at 3840x2160 (about 60 MB at 1920x1080).
+- The first frame of a view has nothing to reflect from yet: reflections appear from the second frame on (captures wait
+  for it).
+
+## Materials that keep their energy
+
+A rough metal scatters the light it receives between the tiny facets of its surface before it leaves; Strata counts that
+light, so a white metal reflects all the light around it however rough it is, and rough metals look as bright as their
+color says (since 0.7.0; before, a metal of roughness 1 lost about two thirds of its light and looked dull gray). Colored
+metals such as copper or gold keep less at high roughness, as real ones do: each bounce between the facets takes some of
+the light. Materials made darker to look right before may now be set to their measured colors.
+
+Highlights hold at 4K without sparkling: where a surface's normal map or curvature changes faster than the pixels can
+show, its highlight spreads over the pixels it covers instead of flickering between single bright pixels (specular
+anti-aliasing, since 0.7.0). Distant normal-mapped and curved surfaces therefore look slightly rougher than their
+material says; flat surfaces are unchanged. Reflections that a normal map would turn into the surface itself fade out
+instead of showing what lies below the surface. At the High and Ultra graphics quality the sky's reflections are filtered
+at 512 texels per face (256 at Low and Medium), so mirror-like surfaces reflect a sharp sky at 4K.
+
+## Sun and sky presets
+
+The Sky section of the Inspector has four presets, each a sky and a sun of real values in one undo step (agents run
+`lighting.applySkyPreset`): **Clear** (the physical atmosphere and a 120,000 lux sun 40 degrees up: sunny, deep blue
+shadows), **Hazy** (thicker air: a paler sky and softer contrast), **Overcast** (an even gray sky of about 7,700 lux and a
+faint, very soft sun) and **Golden Hour** (the sun 6 degrees up: warm light and long shadows). They keep the sun's direction
+around the horizon and make the sky and the sun a scene lacks. A real sun would turn the image white under a manual
+exposure (an **Exposure** of 0 suits a 3 lux sun), so a preset turns the Post Process's **Auto Exposure** on (its
+**Exposure** compensation back to 0) and raises its **Auto Exposure Max EV** to 16 when lower; undo brings the old
+exposure back.
+
+How sunny a scene looks depends most on its **sun to sky ratio**: the light flat ground gets from the sun over what it gets
+from the sky (the lighting debug views' legend names it).
+
+| Light | Sun : sky on flat ground |
+| --- | --- |
+| Clear noon | 6 to 10 |
+| Hazy day | 3 to 5 |
+| Golden hour | about 1 to 2 |
+| Overcast | below 0.3 |
+
+Below 3 a sunny scene looks flat and gray; far above 10 its shadows turn black. New procedural skies are balanced for the
+default 3 lux sun (about 8).
+
+Models from kits whose exporter writes sRGB colors into glTF's linear base color factors (Kenney's, for one) look washed
+out: lighter and paler than their artist chose. Turn on **Base Color Factors Are sRGB** in their import settings.
+
+## Ambient occlusion
+
+The **Post Process**'s **Ambient Occlusion** darkens the light from the sky and the surroundings in creases and corners and
+under objects, where less of the sky is seen, so things sit on the ground. It is computed from the image each frame, clean
+without TAA.
+
+- **Ambient Occlusion Radius** (1 m): how far around a surface occluders darken it. On screen it stays between 0.3% and 12%
+  of the view's height: far away objects keep a thin contact line, close-ups do not turn into dark halos.
+- **Ambient Occlusion Intensity** (1): how strongly; above 1 darker.
+- **Ambient Occlusion Multi Bounce** (on): bright surfaces reflect light into their own creases, so white plaster stays
+  light in its corners while dark soil darkens fully. It also applies to materials' occlusion maps.
+- Its cost follows the **Graphics Quality**'s ambient occlusion quality (Low, Medium, High, Ultra: more samples per pixel).
+  The occlusion only sees what is on screen: things behind others or outside the view do not occlude.
+
+## Debug views
+
+The **debug view** chip on the viewport's toolbar has five views that show the scene's light instead of its image, each
+with a legend:
+
+- **Lighting**: every surface white, lit as the scene lights it. Shadows, the sky's color and how bright the sun is
+  against the sky show without the materials' colors in the way.
+- **AO**: the ambient occlusion that darkens the indirect light, white where nothing occludes.
+- **Indirect**: only the light from the sky, reflection probes and reflections, without the sun and the other lights.
+- **Luminance**: how bright each part of the image really is, in bands one exposure value (EV100) wide: each band twice
+  as bright as the one below it. An interior lit by a window is about EV 7 to 9, a sunlit street about 14 to 15, the
+  sunlit sky above 13.
+- **Albedo**: the materials' base colors. Real materials lie between about 0.03 (charcoal, fresh asphalt) and 0.85 (fresh
+  snow): darker ones are marked blue, brighter ones striped red, with their share of the image in the legend. Colors
+  outside that range make lighting look wrong however it is set up.
+
+Every view's legend names the **sun to sky ratio** on flat ground: how much more light a horizontal surface in the sun gets
+than one in the shade. A clear day gives 6 to 10, a hazy one 3 to 5, golden hour about 1 to 2, an overcast day below 0.3.

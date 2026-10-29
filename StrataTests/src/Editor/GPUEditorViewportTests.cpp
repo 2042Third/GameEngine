@@ -1504,6 +1504,46 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture with spatial screen-space reflections renders until they read a previous frame's color")
+	{
+		// At High (Reflections Spatial) the reflections read the previous frame's color, which the capture renderer's first frame
+		// of a view lacks (its targets go after every picture): the capture renders once more, without anti-aliasing too.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.Run("entity.create", { { "name", "PostProcess" }, { "components", { { "PostProcess", { { "Tonemapper", "None" }, { "AutoExposure", false },
+			{ "Vignette", 0.0 }, { "Bloom", false }, { "AntiAliasing", false }, { "ScreenSpaceReflections", true },
+			{ "ScreenSpaceReflectionsMaxRoughness", 1.0 } } } } } });
+		Scene& scene = *harness.Context.GetActiveScene();
+		Entity floor = scene.CreateEntity("Floor");
+		floor.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		floor.GetComponent<TransformComponent>().Scale = glm::vec3(20.0f, 1.0f, 20.0f);
+		floor.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		Entity box = scene.CreateEntity("Box");
+		box.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.5f, 0.0f);
+		box.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		scene.CreateEntity("Sun").AddComponent<DirectionalLightComponent>();
+		harness.Run("camera.set", { { "position", { 0, 2, 6 } }, { "target", { 0, 0, 0 } } });
+
+		for (const char* quality : { "high", "medium" })
+		{
+			CAPTURE(quality);
+			nlohmann::json result;
+			harness.CaptureLoaded({ { "width", 128 }, { "height", 128 }, { "overlays", false }, { "quality", quality } }, &result);
+			ViewportRenderer* capture = harness.Context.GetViewport().GetCaptureRenderer();
+			REQUIRE(capture);
+			const SceneRendererStats& stats = capture->GetSceneRenderer().GetStats();
+			const bool spatial = std::string(quality) == "high";
+			// Medium's Checkerboard reflections need TAA: without it they trace nothing and nothing is waited for.
+			CHECK(stats.ScreenSpaceReflections == spatial);
+			CHECK_FALSE(stats.ScreenSpaceReflectionsPending);
+			if (spatial)
+				CHECK(result["waitedFrames"] >= 1);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A capture of a scene with sixteen shadowed point lights shows every light's shadow in its first complete frame")
 	{
 		Tests::GPUContext gpu;
@@ -1889,6 +1929,117 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(second["waitedFrames"].get<int>() >= 1);
 		CHECK(second["waitedFrames"].get<int>() <= 12); // EditorViewportCommands.cpp's c_MaxCaptureShadowFitFrames
 		CHECK(second["Image"]["Data"] == first["Image"]["Data"]);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("viewport.capture shows the lighting views with their statistics")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.AddScene();
+		Scene& scene = *harness.Context.GetActiveScene();
+		Entity sun = scene.CreateEntity("Sun");
+		sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::normalize(glm::vec3(0.3f, -1.0f, 0.2f)));
+		sun.AddComponent<DirectionalLightComponent>().Intensity = 3.0f;
+		const nlohmann::json size = { { "width", 64 }, { "height", 64 }, { "overlays", false } };
+		auto withView = [&size](const char* view)
+		{
+			nlohmann::json parameters = size;
+			parameters["debugView"] = view;
+			return parameters;
+		};
+
+		// Each view measures its frame: the capture waits for the statistics, which come back with its picture.
+		nlohmann::json result;
+		harness.Capture(withView("luminance"), &result);
+		const nlohmann::json& debugView = result["debugView"];
+		CHECK(debugView["view"] == "luminance");
+		CHECK(debugView["lightingPending"] == false);
+		CHECK(result["waitedFrames"].get<int>() <= 8);
+		const nlohmann::json& lighting = debugView["lighting"];
+		REQUIRE(lighting.is_object());
+		CHECK(lighting["view"] == "luminance");
+		CHECK(lighting["surfaceShare"].get<float>() > 0.0f);
+		CHECK(lighting["surfaceEv100"]["p05"].is_number());
+		CHECK(lighting["surfaceEv100"]["p50"].is_number());
+		CHECK(lighting["surfaceEv100"]["p95"].is_number());
+		CHECK(lighting["backgroundEv100"].is_number());
+		CHECK(lighting["value"]["median"].is_null());
+		CHECK(lighting["value"]["p05"].is_null());
+		CHECK(lighting["belowRangeShare"].is_null());
+		CHECK(lighting["aboveRangeShare"].is_null());
+		CHECK(lighting["sunIlluminance"].get<float>() > 0.0f);
+		CHECK(lighting["skyIlluminance"].is_number());
+		CHECK(lighting["sunToSkyRatio"].is_number());
+
+		// The value views measure values, the other views EV100.
+		harness.Capture(withView("albedo"), &result);
+		CHECK(result["debugView"]["lighting"]["view"] == "albedo");
+		CHECK(result["debugView"]["lighting"]["value"]["median"].is_number());
+		CHECK(result["debugView"]["lighting"]["aboveRangeShare"].is_number());
+		CHECK(result["debugView"]["lighting"]["surfaceEv100"]["p50"].is_null());
+		for (const char* view : { "lighting", "ao", "indirect" })
+		{
+			CAPTURE(view);
+			harness.Capture(withView(view), &result);
+			CHECK(result["debugView"]["view"] == view);
+			CHECK(result["debugView"]["lighting"].is_object());
+		}
+		// The tint views carry no lighting statistics.
+		harness.Capture(withView("lod"), &result);
+		CHECK_FALSE(result["debugView"].contains("lighting"));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("viewport.capture's lighting statistics are those of the frame it captured")
+	{
+		// The statistics come back from the GPU frames after the frame they measured. The capture reports those of its picture's
+		// frame, never of a frame it drew before (while assets loaded or the exposure settled): here the sun's intensity changes
+		// before every frame of the capture renderer and names it, and the reported sun illuminance tells which frame was measured.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		Scene& scene = *harness.Context.GetActiveScene();
+		Entity sun = scene.FindEntityByName("Sun");
+		REQUIRE(sun);
+		const glm::vec3 direction = glm::normalize(glm::vec3(0.3f, -1.0f, 0.2f));
+		sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(direction);
+		sun.MarkModified<TransformComponent>();
+		ViewportRenderer* renderer = harness.Context.GetViewport().GetCaptureRenderer();
+		REQUIRE(renderer);
+
+		for (const char* view : { "luminance", "albedo" })
+		{
+			CAPTURE(view);
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			harness.Runner.Run(harness.Context, harness.Commands, "viewport.capture",
+				{ { "width", 64 }, { "height", 64 }, { "overlays", false }, { "debugView", view } },
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			for (int frame = 0; !*completed && frame < 2000; frame++)
+			{
+				sun.GetComponent<DirectionalLightComponent>().Intensity = static_cast<float>(renderer->GetSceneRenderer().GetRenderCount() + 1);
+				sun.MarkModified<DirectionalLightComponent>();
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				harness.Context.Update(Timestep(1.0f / 60.0f));
+				harness.Runner.Update(harness.Context);
+				gpu.GetDevice().EndFrame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			REQUIRE(*completed);
+			const EditorCommandResult& result = **completed;
+			INFO(result.Error);
+			REQUIRE(result.Success);
+			// The capture's picture is the capture renderer's latest frame.
+			const float captured = static_cast<float>(renderer->GetSceneRenderer().GetRenderCount());
+			const nlohmann::json& lighting = result.Value["debugView"]["lighting"];
+			REQUIRE(lighting.is_object());
+			CHECK(result.Value["debugView"]["lightingPending"] == false);
+			CHECK(lighting["sunIlluminance"].get<float>() == doctest::Approx(captured * -direction.y).epsilon(0.001));
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

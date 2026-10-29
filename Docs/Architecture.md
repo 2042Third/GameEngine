@@ -302,12 +302,15 @@ texture costs the driver about 0.1 ms, so every frame destroys what completed wi
 the oldest first, at least one) and every release as many as it hands over, which keeps the queue bounded without
 frames) and the blocking `ReadTexture`. `RenderScene` keeps a scene's render proxies in a `SpatialIndex`,
 and `SceneRenderer` extracts each frame's draws from it (`SceneRendererExtraction.cpp`, resolving assets through its
-`AssetResolveCache`; see [Render scene](#render-scene)). `SceneRenderer` draws a scene (light clustering, shadow cascades and
+`AssetResolveCache`; see [Render scene](#render-scene)). `SceneRenderer` draws a scene (light clustering, the atmosphere's
+aerial perspective volume, shadow cascades and
 point and spot lights' shadow views, depth/normal/entity-ID prepass (with motion vectors and, for screen-space reflections, the
-surface target), GTAO, reflection probes' conversions and the screen-space reflections' trace, forward PBR, sky, a copy of the
-image so far for glass, transparents (glass first),
+surface target), GTAO and its denoiser, reflection probes' conversions and the screen-space reflections (the Checkerboard
+trace, or the Spatial modes' full-resolution trace and resolve), forward PBR (hazed by aerial perspective, then
+fogged), sky, a copy of the image so far for glass (and a full-resolution one for the next frame's Spatial reflections),
+transparents (glass first, hazed and fogged as well),
 the TAA resolve, depth of field, motion blur, exposure, bloom, lens flares, tone mapping, FXAA or the morphological
-anti-aliasing, then overlays
+anti-aliasing, then overlays (a lighting debug view and its statistics first)
 and text) into render targets of its viewport size. Temporal state belongs to the renderer, never to the scene or the
 camera: each renderer jitters only its frame's copy of the camera and keeps its own motion history (the previous frame's
 instance records and palettes), TAA history and pre-exposure (the histories start again after a camera cut, a resize,
@@ -894,10 +897,11 @@ The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStage
 | --- | --- |
 | `GPU.Uploads` | the upload queue's graphics batches (`GPUUploadQueue::SubmitBatch`) |
 | `GPU.Setup` | a scene renderer's environment maps, scene data uploads and light clusters |
+| `GPU.Aerial` | the atmosphere's aerial perspective volume, recorded after the light clusters (frames with an atmosphere sky only) |
 | `GPU.Cull` | culling dispatches and depth pyramids |
 | `GPU.Shadows`, `GPU.Prepass`, `GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent` | the scene passes |
 | `GPU.ScreenShadows` | the sun's screen-space shadow mask, its blur, contact shadows and the reduction that fits the cascades to the view, between `GPU.Prepass` and `GPU.AO` (frames with a shadowed sun) |
-| `GPU.Reflections` | reflection probes' conversions and the screen-space reflections' trace, between `GPU.AO` and `GPU.Opaque` |
+| `GPU.Reflections` | reflection probes' conversions and the screen-space reflections' trace (at Spatial and SpatialHigh with their resolve; their color copy for the next frame is in `GPU.Transparent`), between `GPU.AO` and `GPU.Opaque` |
 | `GPU.TAA` | the motion history's copy (`Scene/MotionCopy.comp`) and the temporal anti-aliasing resolve |
 | `GPU.MotionBlur` | the motion blur's tile maxima, their neighborhoods and its gather (`PostProcess/MotionBlur*.comp`) |
 | `GPU.DepthOfField` | depth of field's half-resolution circles of confusion, near-field tiles, gather and composite (`PostProcess/DepthOfField*.comp`; timed before the motion blur) |

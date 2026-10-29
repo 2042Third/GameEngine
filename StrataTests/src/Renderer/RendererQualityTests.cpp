@@ -10,6 +10,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -37,6 +38,9 @@ namespace
 	constexpr std::array<float, 4> c_MinProjectedPixels = { 1.0f, 0.5f, 0.5f, 0.25f };
 	constexpr std::array<uint32_t, 4> c_ShadowFilterQuality = { 8, 16, 24, 32 };
 	constexpr std::array<uint32_t, 4> c_ContactShadows = { 0, 0, 12, 16 };
+	constexpr std::array<AmbientOcclusionLevel, 4> c_AmbientOcclusionQuality = { AmbientOcclusionLevel::Low, AmbientOcclusionLevel::Medium, AmbientOcclusionLevel::High, AmbientOcclusionLevel::Ultra };
+	constexpr std::array<uint32_t, 4> c_EnvironmentResolution = { 256, 256, 512, 512 };
+	constexpr std::array<ReflectionsQuality, 4> c_Reflections = { ReflectionsQuality::Off, ReflectionsQuality::Checkerboard, ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh };
 	constexpr std::array<MotionBlurSamples, 4> c_MotionBlurQuality = { MotionBlurSamples::Off, MotionBlurSamples::Samples8, MotionBlurSamples::Samples12,
 		MotionBlurSamples::Samples16 };
 
@@ -52,6 +56,9 @@ namespace
 		CHECK(settings.MinProjectedPixels == c_MinProjectedPixels[column]);
 		CHECK(settings.ShadowFilterQuality == c_ShadowFilterQuality[column]);
 		CHECK(settings.ContactShadows == c_ContactShadows[column]);
+		CHECK(settings.AmbientOcclusionQuality == c_AmbientOcclusionQuality[column]);
+		CHECK(settings.EnvironmentResolution == c_EnvironmentResolution[column]);
+		CHECK(settings.Reflections == c_Reflections[column]);
 		CHECK(settings.MotionBlurQuality == c_MotionBlurQuality[column]);
 		// The players' rows follow no preset.
 		CHECK(settings.AntiAliasing == AntiAliasingChoice::Scene);
@@ -117,19 +124,25 @@ namespace
 		return std::move(*valid);
 	}
 
-	// Mebibytes of the rows' memory for a preset's settings at an output size.
-	uint64_t MemoryMiB(const RendererQualitySettings& settings, glm::uvec2 output, std::string_view field)
+	// Bytes of a row's memory for a preset's settings at an output size.
+	uint64_t MemoryBytes(const RendererQualitySettings& settings, glm::uvec2 output, std::string_view field)
 	{
 		for (const RendererQuality::RowTraits& row : RendererQuality::GetRowTraits())
 		{
 			if (row.Field == field)
 			{
 				REQUIRE(row.MemoryBytes != nullptr);
-				return row.MemoryBytes(settings, output) >> 20;
+				return row.MemoryBytes(settings, output);
 			}
 		}
 		FAIL("No row " << std::string(field));
 		return 0;
+	}
+
+	// The same in whole mebibytes (rounded down).
+	uint64_t MemoryMiB(const RendererQualitySettings& settings, glm::uvec2 output, std::string_view field)
+	{
+		return MemoryBytes(settings, output, field) >> 20;
 	}
 
 }
@@ -206,8 +219,11 @@ TEST_SUITE("Renderer.Quality")
 		}
 	}
 
-	TEST_CASE("High is Medium below 1440 rows but for the sun shadows' filter, contact shadows and the motion blur's samples")
+	TEST_CASE("High is Medium below 1440 rows but for the rows that differ at every size")
 	{
+		// High's sun shadow filter taps, contact shadows, ambient occlusion (3 x 8 samples), prefiltered sky (512 per face),
+		// screen-space reflections (Spatial) and motion blur samples differ from Medium's (Strata 0.6.0's costs) at every size; the
+		// other knobs equal Medium's below 1440 rows.
 		const RendererQualitySettings high = RendererQuality::GetPreset(RendererQualityPreset::High);
 		const RendererQualitySettings medium = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		for (const uint32_t rows : { 720u, 1080u, 1439u })
@@ -222,6 +238,13 @@ TEST_SUITE("Renderer.Quality")
 			CHECK(resolved.ContactShadows == 12);
 			CHECK(medium.ContactShadows == 0);
 			resolved.ContactShadows = medium.ContactShadows;
+			// High's ambient occlusion (3 x 8 samples), prefiltered sky (512 per face) and screen-space reflections (Spatial).
+			CHECK(resolved.AmbientOcclusionQuality != medium.AmbientOcclusionQuality);
+			resolved.AmbientOcclusionQuality = medium.AmbientOcclusionQuality;
+			CHECK(resolved.EnvironmentResolution != medium.EnvironmentResolution);
+			resolved.EnvironmentResolution = medium.EnvironmentResolution;
+			CHECK(resolved.Reflections != medium.Reflections);
+			resolved.Reflections = medium.Reflections;
 			// High's motion blur takes 12 samples where Medium's takes 8: a cost only scenes with motion blur pay.
 			CHECK(resolved.MotionBlurQuality == MotionBlurSamples::Samples12);
 			resolved.MotionBlurQuality = medium.MotionBlurQuality;
@@ -267,9 +290,14 @@ TEST_SUITE("Renderer.Quality")
 		refused({ { "ContactShadows", -1 } });
 		refused({ { "ContactShadows", "12" } });
 		refused({ { "Unknown", 1 } });
+		refused({ { "AmbientOcclusionQuality", "Extreme" } });
+		refused({ { "EnvironmentResolution", "1024" } });
+		refused({ { "EnvironmentResolution", 512 } });
+		refused({ { "Reflections", "Mirror" } });
 
 		const nlohmann::json custom = { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LocalShadowAtlasSize", "2048" },
-			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 } };
+			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 },
+			{ "AmbientOcclusionQuality", "Low" }, { "EnvironmentResolution", "256" }, { "Reflections", "Off" } };
 		std::string error;
 		CHECK_MESSAGE(section.Validate(custom, RendererQuality::c_SectionVersion, &error).has_value(), error);
 	}
@@ -282,7 +310,8 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(lowSettings.HasSameKnobs(RendererQuality::GetPreset(RendererQualityPreset::Low)));
 
 		const nlohmann::json custom = { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LocalShadowAtlasSize", "2048" },
-			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 } };
+			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 },
+			{ "AmbientOcclusionQuality", "Low" }, { "EnvironmentResolution", "256" }, { "Reflections", "Off" } };
 		const RendererQualitySettings customSettings = RendererQuality::FromSectionValue(&custom);
 		CHECK(customSettings.Preset == RendererQualityPreset::Custom);
 		CHECK(customSettings.ShadowResolution == ShadowMapResolution::Size4096);
@@ -292,6 +321,9 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(customSettings.MaxShadowedLocalLights == 8);
 		CHECK(customSettings.LODErrorPixels == 1.5f);
 		CHECK(customSettings.MinProjectedPixels == 0.75f);
+		CHECK(customSettings.AmbientOcclusionQuality == AmbientOcclusionLevel::Low);
+		CHECK(customSettings.EnvironmentResolution == 256);
+		CHECK(customSettings.Reflections == ReflectionsQuality::Off);
 
 		const RendererQualitySettings none = RendererQuality::FromSectionValue(nullptr);
 		CHECK(none.Preset == RendererQualityPreset::High);
@@ -328,6 +360,55 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(RendererQuality::AntiAliasingChoiceFromString("Blurry") == std::nullopt);
 		CHECK(RendererQuality::AntiAliasingChoiceFromString("Morphological") == AntiAliasingChoice::Morphological);
 		CHECK(std::string(RendererQuality::AntiAliasingChoiceToString(AntiAliasingChoice::Morphological)) == "Morphological");
+	}
+
+	TEST_CASE("Screen-space reflections' modes: their names, marches and whether they are spatial")
+	{
+		// Checkerboard is Strata 0.6.0's trace (24 + 6 steps); the spatial modes march farther per ray on the depth pyramid.
+		const ReflectionsQuality modes[] = { ReflectionsQuality::Off, ReflectionsQuality::Checkerboard, ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh };
+		const char* const names[] = { "Off", "Checkerboard", "Spatial", "SpatialHigh" };
+		for (size_t index = 0; index < 4; index++)
+		{
+			CAPTURE(names[index]);
+			CHECK(std::string(RendererQuality::ReflectionsQualityToString(modes[index])) == names[index]);
+			CHECK(RendererQuality::ReflectionsQualityFromString(names[index]) == modes[index]);
+			CHECK(RendererQuality::IsSpatialReflections(modes[index]) == (index >= 2));
+		}
+		CHECK_FALSE(RendererQuality::ReflectionsQualityFromString("spatial").has_value());
+		const ScreenReflectionSteps checkerboard = RendererQuality::GetScreenReflectionSteps(ReflectionsQuality::Checkerboard);
+		CHECK((checkerboard.Steps == 24u && checkerboard.RefineSteps == 6u));
+		const ScreenReflectionSteps spatial = RendererQuality::GetScreenReflectionSteps(ReflectionsQuality::Spatial);
+		CHECK((spatial.Steps == 32u && spatial.RefineSteps == 6u));
+		const ScreenReflectionSteps spatialHigh = RendererQuality::GetScreenReflectionSteps(ReflectionsQuality::SpatialHigh);
+		CHECK((spatialHigh.Steps == 48u && spatialHigh.RefineSteps == 8u));
+		// An unknown value clamps to Medium's.
+		RendererQualitySettings settings;
+		settings.Reflections = static_cast<ReflectionsQuality>(7);
+		CHECK(RendererQuality::Clamp(settings).Reflections == ReflectionsQuality::Checkerboard);
+	}
+
+	TEST_CASE("At 512 no level of the prefiltered sky costs more samples than 256's largest")
+	{
+		// The atmosphere filters its environment a level per frame (SceneRenderer::c_AtmosphereRefreshSteps): at 512 per face no
+		// step may take longer than 0.6.0's largest. Level 0 (roughness 0) copies the cube and takes no samples.
+		const auto cost = [](uint32_t size, uint32_t mip)
+		{
+			const uint64_t texels = std::max(1u, size >> mip);
+			return texels * texels * RendererQuality::GetPrefilterSamples(size, mip);
+		};
+		uint64_t largest = 0;
+		for (uint32_t mip = 0; mip < 6; mip++)
+		{
+			CHECK(RendererQuality::GetPrefilterSamples(256, mip) == 512); // Medium: Strata 0.6.0's
+			if (mip > 0)
+				largest = std::max(largest, cost(256, mip));
+		}
+		for (uint32_t mip = 1; mip < 6; mip++)
+		{
+			CAPTURE(mip);
+			CHECK(cost(512, mip) <= largest);
+		}
+		CHECK(SceneRenderer::c_AtmosphereRefreshSteps == 14);
 	}
 
 	TEST_CASE("A value without a field takes the field's default")
@@ -653,11 +734,40 @@ TEST_SUITE("Renderer.Quality")
 		RendererQualitySettings playerOff = high;
 		playerOff.MotionBlur = SceneEffectChoice::Off;
 		CHECK(motionBlur->MemoryBytes(playerOff, { 3840, 2160 }) == 0);
+		// The sky's prefiltered cube: six RGBA16F faces with six levels, 4 MiB at 256 per face and 16 MiB at 512, whatever the
+		// output's size (Clamp's 256 for any other value).
+		const auto texelsOfLevels = [](uint64_t size)
+		{
+			uint64_t texels = 0;
+			for (uint32_t level = 0; level < 6; level++)
+				texels += std::max<uint64_t>(1, size >> level) * std::max<uint64_t>(1, size >> level);
+			return texels;
+		};
+		CHECK(MemoryBytes(medium, { 3840, 2160 }, "EnvironmentResolution") == texelsOfLevels(256) * 6 * 8);
+		CHECK(MemoryBytes(high, { 1920, 1080 }, "EnvironmentResolution") == texelsOfLevels(512) * 6 * 8);
+		CHECK(texelsOfLevels(256) * 6 * 8 == 4193280); // Just under 4 MiB: the last level is 8 texels each way
+		CHECK(MemoryBytes(ultra, { 3840, 2160 }, "EnvironmentResolution") == 16773120);
+		RendererQualitySettings oddSky = high;
+		oddSky.EnvironmentResolution = 300;
+		CHECK(MemoryBytes(oddSky, { 3840, 2160 }, "EnvironmentResolution") == texelsOfLevels(256) * 6 * 8);
+		// Screen-space reflections, for a scene that asks for them: Checkerboard's RGBA16F surface target and half-resolution
+		// reflections; the spatial modes' RGBA16F surface target, traced and resolved reflections, their R11G11B10F full-resolution
+		// color copy, and the half-resolution copy's six levels (1920 x 1080 down to 60 x 33 at 3840 x 2160); none when off.
+		CHECK(MemoryBytes(medium, { 3840, 2160 }, "Reflections") == 3840ull * 2160 * 8 + 1920ull * 1080 * 8);
+		CHECK(MemoryMiB(medium, { 3840, 2160 }, "Reflections") == 79);
+		CHECK(MemoryBytes(medium, { 1921, 1081 }, "Reflections") == 1921ull * 1081 * 8 + 961ull * 541 * 8);
+		const uint64_t halfCopy4K = 1920ull * 1080 + 960 * 540 + 480 * 270 + 240 * 135 + 120 * 67 + 60 * 33;
+		CHECK(MemoryBytes(high, { 3840, 2160 }, "Reflections") == 3840ull * 2160 * 28 + halfCopy4K * 4);
+		CHECK(MemoryMiB(high, { 3840, 2160 }, "Reflections") == 232);
+		const uint64_t halfCopy1080 = 960ull * 540 + 480 * 270 + 240 * 135 + 120 * 67 + 60 * 33 + 30 * 16;
+		CHECK(MemoryBytes(ultra, { 1920, 1080 }, "Reflections") == 1920ull * 1080 * 28 + halfCopy1080 * 4);
+		CHECK(MemoryBytes(RendererQuality::GetPreset(RendererQualityPreset::Low), { 3840, 2160 }, "Reflections") == 0);
 		// The rows that allocate nothing of their own have no estimate.
 		for (const RendererQuality::RowTraits& row : RendererQuality::GetRowTraits())
 		{
 			CAPTURE(std::string(row.Field));
-			CHECK((row.MemoryBytes != nullptr) == (row.Field == "ShadowResolution" || row.Field == "LocalShadowAtlasSize" || row.Field == "MotionBlurQuality"));
+			CHECK((row.MemoryBytes != nullptr) == (row.Field == "ShadowResolution" || row.Field == "LocalShadowAtlasSize" || row.Field == "EnvironmentResolution"
+				|| row.Field == "Reflections" || row.Field == "MotionBlurQuality"));
 		}
 	}
 }

@@ -7,6 +7,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/SceneBounds.h"
+#include "Editor/StreamingView.h"
 #include "TestHelpers.h"
 
 #include <Strata/Animation/AnimationPreview.h>
@@ -23,6 +24,7 @@
 
 #include <cmath>
 #include <limits>
+#include <optional>
 
 using namespace Strata;
 
@@ -693,6 +695,19 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(harness.Run("viewport.getSettings")["debugView"] == "shadows");
 			CHECK(harness.Context.GetViewport().GetSettings().DebugView == ViewportDebugView::Shadows);
 			CHECK(harness.Error("viewport.setSettings", { { "debugView", "shadow" } }).find("\"shadows\"") != std::string::npos);
+			// The lighting views, saved under their names.
+			const std::pair<const char*, ViewportDebugView> lightingViews[] = { { "lighting", ViewportDebugView::Lighting },
+				{ "ao", ViewportDebugView::AmbientOcclusion }, { "indirect", ViewportDebugView::Indirect }, { "luminance", ViewportDebugView::Luminance },
+				{ "albedo", ViewportDebugView::Albedo } };
+			for (const auto& [name, view] : lightingViews)
+			{
+				CAPTURE(name);
+				CHECK(harness.Run("viewport.setSettings", { { "debugView", name } })["debugView"] == name);
+				CHECK(harness.Context.GetViewport().GetSettings().DebugView == view);
+				CHECK(GetLightingView(view) != SceneLightingView::None);
+				CHECK(harness.Context.GetViewport().GetSettings().ToJson()["DebugView"] == name);
+			}
+			CHECK(harness.Error("viewport.setSettings", { { "debugView", "lit" } }).find("'debugView'") != std::string::npos);
 			settings = harness.Run("viewport.setSettings", { { "debugView", "streaming" } });
 			CHECK(harness.Run("viewport.getSettings") == settings);
 
@@ -752,6 +767,33 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(harness.Context.GetViewport().GetSettings().GameView.Width == 800);
 		CHECK(harness.Context.GetViewport().GetSettings().EditPose == AnimationEditPose::ClipStart);
 		CHECK(harness.Context.GetViewport().GetSettings().Quality == ViewportQuality::Low);
+	}
+
+	TEST_CASE("The lighting views' legend names the luminance bands and what the view measured")
+	{
+		// Twelve bands one EV wide from EV 5: the first takes what lies below EV 6, the last what lies above EV 16.
+		constexpr size_t c_Bands = RenderData::c_LightingViewLuminanceColors;
+		CHECK(GetLuminanceLegendName(0, c_Bands, 5.0f) == "EV <6");
+		CHECK(GetLuminanceLegendName(1, c_Bands, 5.0f) == "EV 6");
+		CHECK(GetLuminanceLegendName(c_Bands - 2, c_Bands, 5.0f) == "EV 15");
+		CHECK(GetLuminanceLegendName(c_Bands - 1, c_Bands, 5.0f) == "EV 16+");
+		// A first band between whole EVs starts at its floor, as the overlay's bands do; a non-finite one at 0.
+		CHECK(GetLuminanceLegendName(1, c_Bands, 7.6f) == "EV 8");
+		CHECK(GetLuminanceLegendName(1, c_Bands, std::numeric_limits<float>::quiet_NaN()) == "EV 1");
+
+		CHECK(GetLightingLegendNote(ViewportDebugView::Luminance, std::nullopt) == "Measuring...");
+		LightingViewStats stats;
+		stats.SunToSkyRatio = 8.04f;
+		stats.SurfaceEV100 = glm::vec3(11.0f, 13.26f, 15.0f);
+		stats.ValueMedian = 0.734f;
+		CHECK(GetLightingLegendNote(ViewportDebugView::Luminance, stats) == "Sun : sky 8.0 on flat ground, EV100 median 13.3");
+		CHECK(GetLightingLegendNote(ViewportDebugView::Lighting, stats) == "Sun : sky 8.0 on flat ground, EV100 median 13.3");
+		CHECK(GetLightingLegendNote(ViewportDebugView::AmbientOcclusion, stats) == "Sun : sky 8.0 on flat ground, AO median 0.73");
+		CHECK(GetLightingLegendNote(ViewportDebugView::Albedo, stats) == "Sun : sky 8.0 on flat ground");
+		// Without a sun or a sky the ratio is unknown; a view that measured no surface names no median.
+		stats.SunToSkyRatio = 0.0f;
+		stats.SurfaceEV100 = glm::vec3(std::numeric_limits<float>::quiet_NaN());
+		CHECK(GetLightingLegendNote(ViewportDebugView::Indirect, stats) == "Sun : sky -");
 	}
 
 	TEST_CASE("The Game view's image: the panel, the largest rectangle of an aspect ratio, or a fixed size scaled to fit")

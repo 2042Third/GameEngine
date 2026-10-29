@@ -3,6 +3,7 @@
 
 #include "Include/Scene.glsl"
 #include "Include/MaterialTextures.glsl"
+#include "Include/PBR.glsl"
 
 // Depth prepass: writes depth, view-space normals (screen-space effects) and entity ids (picking). Alpha-masked
 // materials are tested here; the forward pass then shades only the visible surface. With ST_NO_ENTITY_IDS (registered as
@@ -63,8 +64,11 @@ void main()
 		vec2 uv = TransformUV(material, v_TexCoord);
 		vec4 metallicRoughness = SampleMaterialTexture(material.MetallicRoughnessMap, uv);
 		vec3 shadingNormal = GetShadingNormal(material, uv, v_Normal, v_Tangent, gl_FrontFacing);
-		surface = vec4(OctahedralEncode(normalize(mat3(u_Frame.View) * shadingNormal)), clamp(material.Roughness * metallicRoughness.g, 0.0, 1.0),
-			clamp(material.Metallic * metallicRoughness.b, 0.0, 1.0));
+		// The roughness the forward pass shades (its specular anti-aliasing, the same derivatives of the same normal), so
+		// screen-space reflections trace the lobe the surface shows.
+		float roughness = WidenRoughness(clamp(material.Roughness * metallicRoughness.g, 0.0, 1.0), dFdx(shadingNormal), dFdy(shadingNormal),
+			u_Frame.MaterialParams.z);
+		surface = vec4(OctahedralEncode(normalize(mat3(u_Frame.View) * shadingNormal)), roughness, clamp(material.Metallic * metallicRoughness.b, 0.0, 1.0));
 	}
 #endif
 	if (!IsLODFadeDrawn(v_LODFade, gl_FragCoord.xy))

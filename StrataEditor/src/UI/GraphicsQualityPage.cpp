@@ -53,9 +53,10 @@ namespace Strata
 		constexpr const char* c_Caption = "Every renderer of the project follows this: the editor's views (unless a view chooses its own quality), "
 			"captures and the exported game. Players can change it in the game's options (Graphics). Medium has Strata 0.6.0's costs; High is "
 			"the default. Nothing here lowers the rendering resolution.";
-		constexpr const char* c_MemoryCaption = "Shadow maps, atlas and motion blur targets of one view. Each renderer holds its own: the editor's Scene "
-			"and Game views and its captures, the exported game one. Shadow maps exist only while a light casts shadows, motion blur targets "
-			"only while a scene uses motion blur.";
+		constexpr const char* c_MemoryCaption = "Shadow maps, atlas, the sky's reflection map and the screen-space reflections' and motion blur's "
+			"targets of one view. Each renderer holds its own: the editor's Scene and Game views and its captures, the exported game one. Shadow "
+			"maps exist only while a light casts shadows, the sky's map only with a sky (two under the atmosphere), the reflections' and motion "
+			"blur's targets only while a scene uses them.";
 		constexpr const char* c_ChoicesCaption = "The presets leave these alone: the game's look keeps them, and players may turn them off.";
 
 		void Caption(std::string_view text, const ImVec4& color, float width)

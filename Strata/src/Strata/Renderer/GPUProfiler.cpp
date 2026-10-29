@@ -49,6 +49,7 @@ namespace Strata
 			RendererGPUStages stages;
 			stages.Uploads = RegisterGPUStage("GPU.Uploads");
 			stages.Setup = RegisterGPUStage("GPU.Setup");
+			stages.Aerial = RegisterGPUStage("GPU.Aerial");
 			stages.Cull = RegisterGPUStage("GPU.Cull");
 			stages.Shadows = RegisterGPUStage("GPU.Shadows");
 			stages.Prepass = RegisterGPUStage("GPU.Prepass");

@@ -5,8 +5,10 @@
 #include "Include/Scene.glsl"
 
 // Ground-truth ambient occlusion (horizon-based, cosine-weighted visibility per screen-space slice) from the
-// prepass depth and normals. Each pixel integrates a few rotated slices; the noise is removed by AOBlur.comp. With
-// ST_AO_HALF (registered as Effects/GTAOHalf.comp) it writes a half-precision target.
+// prepass depth and normals. Each pixel integrates a few slices turned by a fixed 4x4 pattern (never by the frame: nothing
+// needs a history), which AODenoise.comp resolves. A thin occluder's raised horizon relaxes back toward the samples behind
+// it, so poles and plates do not draw dark halos on the walls behind them. With ST_AO_HALF (registered as
+// Effects/GTAOHalf.comp) it writes a half-precision target.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -20,11 +22,18 @@ layout(set = 0, binding = ST_UAV(0), r32f) uniform writeonly image2D o_AmbientOc
 
 layout(push_constant) uniform AOParameters
 {
-	float Radius;       // World units
-	float Intensity;    // Exponent applied to the visibility
+	float Radius;            // Meters
+	float Intensity;         // Exponent applied to the visibility
 	uint SliceCount;
 	uint StepsPerSide;
+	float MinRadiusPixels;   // The radius on screen at least...
+	float MaxRadiusPixels;   // ...and at most this many pixels
+	float ThinOccluderDecay; // How far a horizon relaxes toward a lower sample per step
+	uint Padding;
 } u_AO;
+
+// The 4x4 ordered-dither order (as IsLODFadeDrawn's): every 4x4 block of pixels holds each of the 16 values once.
+const uint c_PatternOrder[16] = uint[16](0u, 8u, 2u, 10u, 12u, 4u, 14u, 6u, 3u, 11u, 1u, 9u, 15u, 7u, 13u, 5u);
 
 vec3 ViewPositionFromDepth(vec2 uv, float depth)
 {
@@ -56,17 +65,16 @@ void main()
 	float pixelsPerUnit = u_Frame.Projection[1][1] * 0.5 * u_Frame.ViewportSize.y;
 	if (u_Frame.CameraForward.w < 0.5)
 		pixelsPerUnit /= max(-position.z, 1e-4);
-	float radiusPixels = min(u_AO.Radius * pixelsPerUnit, 256.0);
-	if (radiusPixels < 1.0)
-	{
-		imageStore(o_AmbientOcclusion, pixel, vec4(1.0));
-		return;
-	}
+	// The radius on screen within its fractions of the view's height (cost and look independent of the resolution: distant
+	// creases keep a line, near surfaces do not reach across the screen); the world radius follows it.
+	float radiusPixels = clamp(u_AO.Radius * pixelsPerUnit, u_AO.MinRadiusPixels, u_AO.MaxRadiusPixels);
+	float radius = radiusPixels / pixelsPerUnit;
 
-	// With temporal anti-aliasing every frame turns the slices further (TemporalParams.z), so the history averages the noise away.
-	float noise = fract(InterleavedGradientNoise(vec2(pixel)) + u_Frame.TemporalParams.z);
-	float jitter = fract(noise * 7.13 + 0.5);
-	float falloffStart = u_AO.Radius * 0.6;
+	// The slices' rotation and the steps' offset from the 4x4 pattern (two orders of it, so they do not follow each other).
+	uvec2 cell = uvec2(pixel) & 3u;
+	float noise = (float(c_PatternOrder[cell.y * 4u + cell.x]) + 0.5) / 16.0;
+	float jitter = (float(c_PatternOrder[cell.x * 4u + cell.y]) + 0.5) / 16.0;
+	float falloffStart = radius * 0.6;
 	// Samples closer than this many pixels would read the pixel itself.
 	float minStep = 1.3 / radiusPixels;
 	float visibility = 0.0;
@@ -113,9 +121,12 @@ void main()
 				if (distance < 1e-5)
 					continue;
 				// Occluders fade out toward the radius so distant geometry does not darken.
-				float weight = clamp((u_AO.Radius - distance) / max(u_AO.Radius - falloffStart, 1e-4), 0.0, 1.0);
+				float weight = clamp((radius - distance) / max(radius - falloffStart, 1e-4), 0.0, 1.0);
 				float sampleCos = mix(lowHorizonCos[side], dot(delta / distance, view), weight);
-				horizonCos[side] = max(horizonCos[side], sampleCos);
+				// A sample above the horizon raises it; one below relaxes it toward itself (a thin occluder is seen by few
+				// samples, after which they fall back; a thick one's stay high and keep its occlusion).
+				horizonCos[side] = sampleCos > horizonCos[side] ? sampleCos
+					: max(mix(horizonCos[side], sampleCos, u_AO.ThinOccluderDecay), lowHorizonCos[side]);
 			}
 		}
 

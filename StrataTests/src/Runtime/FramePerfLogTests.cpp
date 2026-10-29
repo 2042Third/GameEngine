@@ -280,9 +280,9 @@ TEST_SUITE("Runtime.FramePerfLog")
 		REQUIRE_MESSAGE(log, error);
 		const std::vector<std::string>& columns = log->GetColumns();
 		const auto has = [&columns](const char* name) { return std::find(columns.begin(), columns.end(), name) != columns.end(); };
-		for (const char* column : { "Scene.Scripts", "Scene.Physics", "Scene.Animation", "Scene.Audio", "GPU.Uploads", "GPU.Setup", "GPU.Shadows", "GPU.Prepass",
-			"GPU.ScreenShadows", "GPU.AO", "GPU.Reflections", "GPU.Opaque", "GPU.Transparent", "GPU.TAA", "GPU.MotionBlur", "GPU.DepthOfField", "GPU.Post",
-			"GPU.Overlays", "GPUFrame", "GPUBusyMs" })
+		for (const char* column : { "Scene.Scripts", "Scene.Physics", "Scene.Animation", "Scene.Audio", "GPU.Uploads", "GPU.Setup", "GPU.Aerial", "GPU.Shadows",
+			"GPU.Prepass", "GPU.ScreenShadows", "GPU.AO", "GPU.Reflections", "GPU.Opaque", "GPU.Transparent", "GPU.TAA", "GPU.MotionBlur", "GPU.DepthOfField",
+			"GPU.Post", "GPU.Overlays", "GPUFrame", "GPUBusyMs" })
 		{
 			CAPTURE(column);
 			CHECK(has(column));

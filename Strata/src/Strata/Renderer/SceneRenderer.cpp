@@ -27,9 +27,10 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
-#include <unordered_map>
+#include <utility>
 
 namespace Strata
 {
@@ -46,13 +47,12 @@ namespace Strata
 
 		constexpr uint32_t c_EnvironmentCubeSize = 512;
 		constexpr uint32_t c_IrradianceSize = 32;
-		constexpr uint32_t c_PrefilteredSize = 256;
+		// The prefiltered sky's size per face is the quality's (RendererQualitySettings::EnvironmentResolution).
 		constexpr uint32_t c_PrefilteredMipCount = 6; // Roughness 0, 0.2, ... 1.0
 		// FilterEnvironmentStep: the cube's levels, the irradiance, then each prefiltered level.
 		constexpr uint32_t c_EnvironmentFilterSteps = 2 + c_PrefilteredMipCount;
 		static_assert(SceneRenderer::c_AtmosphereRefreshSteps == 6 + c_EnvironmentFilterSteps);
 		constexpr uint32_t c_IrradianceSamples = 256;
-		constexpr uint32_t c_PrefilterSamples = 512;
 		constexpr uint32_t c_BRDFLutSize = 128;
 		constexpr uint32_t c_BRDFLutSamples = 512;
 
@@ -353,6 +353,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(21),
 			nvrhi::BindingLayoutItem::Texture_SRV(27),          // The atmosphere's sky-view table (Include/Atmosphere.glsl)
 			nvrhi::BindingLayoutItem::Texture_SRV(28),          // The sun's screen-space shadow mask (Scene/Forward.frag)
+			nvrhi::BindingLayoutItem::Texture_SRV(29),          // Aerial perspective's volume (Include/AerialPerspective.glsl)
 			nvrhi::BindingLayoutItem::Texture_SRV(32),          // The sun shadow cascades' depth ranges (Include/Shadows.glsl)
 			nvrhi::BindingLayoutItem::Texture_SRV(33),          // The blue-noise tile (Include/Shadows.glsl)
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
@@ -643,40 +644,69 @@ namespace Strata
 		commandList->dispatch(DispatchGroups(parameters.OutputSize), DispatchGroups(parameters.OutputSize), layers);
 	}
 
-	SceneRenderer::EnvironmentMaps SceneRenderer::CreateEnvironmentMaps(nvrhi::ICommandList* commandList)
+	nvrhi::TextureHandle SceneRenderer::CreateEnvironmentTexture(nvrhi::ICommandList* commandList, uint32_t size, uint32_t mips, const char* name)
 	{
-		auto createCube = [&](uint32_t size, uint32_t mips, const char* name)
-		{
-			nvrhi::TextureDesc desc;
-			desc.width = size;
-			desc.height = size;
-			desc.arraySize = 6;
-			desc.mipLevels = mips;
-			desc.dimension = nvrhi::TextureDimension::TextureCube;
-			desc.format = c_EnvironmentFormat;
-			desc.isUAV = true;
-			desc.debugName = m_Specification.DebugName + "." + name;
-			desc.initialState = nvrhi::ResourceStates::ShaderResource;
-			desc.keepInitialState = true;
-			nvrhi::TextureHandle texture = m_Device->createTexture(desc);
-			ST_CORE_VERIFY(texture, "SceneRenderer: failed to create the {} cubemap", name);
-			return texture;
-		};
-
-		EnvironmentMaps maps;
-		maps.Cube = createCube(c_EnvironmentCubeSize, MipCountFor(c_EnvironmentCubeSize), "EnvironmentCube");
-		maps.Irradiance = createCube(c_IrradianceSize, 1, "Irradiance");
-		maps.Prefiltered = createCube(c_PrefilteredSize, c_PrefilteredMipCount, "Prefiltered");
-		// The new maps leave their undefined layout whole, before any level is written. Left to the passes, each level would
+		nvrhi::TextureDesc desc;
+		desc.width = size;
+		desc.height = size;
+		desc.arraySize = 6;
+		desc.mipLevels = mips;
+		desc.dimension = nvrhi::TextureDimension::TextureCube;
+		desc.format = c_EnvironmentFormat;
+		desc.isUAV = true;
+		desc.debugName = m_Specification.DebugName + "." + name;
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		nvrhi::TextureHandle texture = m_Device->createTexture(desc);
+		ST_CORE_VERIFY(texture, "SceneRenderer: failed to create the {} cubemap", name);
+		// The new texture leaves its undefined layout whole, before any level is written. Left to the passes, each level would
 		// leave it in a barrier of its own that waits for nothing (there is nothing to wait for in a new texture), recorded
 		// between the writes of the other levels; on the RTX 5090 (driver 617.42) such a barrier could land after levels
 		// already written and lose them: the atmosphere's first environment kept a black prefiltered map (its levels 0 to 3)
 		// whenever the long multiple-scattering pass ran before it in the frame, so mirrors and rough metals reflected
 		// nothing until the sun moved.
-		for (nvrhi::ITexture* texture : { maps.Cube.Get(), maps.Irradiance.Get(), maps.Prefiltered.Get() })
-			commandList->setTextureState(texture, nvrhi::AllSubresources, nvrhi::ResourceStates::UnorderedAccess);
+		commandList->setTextureState(texture, nvrhi::AllSubresources, nvrhi::ResourceStates::UnorderedAccess);
+		return texture;
+	}
+
+	SceneRenderer::EnvironmentMaps SceneRenderer::CreateEnvironmentMaps(nvrhi::ICommandList* commandList)
+	{
+		EnvironmentMaps maps;
+		maps.Cube = CreateEnvironmentTexture(commandList, c_EnvironmentCubeSize, MipCountFor(c_EnvironmentCubeSize), "EnvironmentCube");
+		maps.Irradiance = CreateEnvironmentTexture(commandList, c_IrradianceSize, 1, "Irradiance");
+		maps.PrefilteredSize = m_Specification.Quality.EnvironmentResolution;
+		maps.Prefiltered = CreateEnvironmentTexture(commandList, maps.PrefilteredSize, c_PrefilteredMipCount, "Prefiltered");
 		commandList->commitBarriers();
 		return maps;
+	}
+
+	void SceneRenderer::ReplacePrefilteredMap(nvrhi::ICommandList* commandList, EnvironmentMaps& maps, std::vector<nvrhi::ResourceHandle>& released)
+	{
+		if (maps.Prefiltered)
+			released.emplace_back(maps.Prefiltered.Get());
+		maps.PrefilteredSize = m_Specification.Quality.EnvironmentResolution;
+		maps.Prefiltered = CreateEnvironmentTexture(commandList, maps.PrefilteredSize, c_PrefilteredMipCount, "Prefiltered");
+		commandList->commitBarriers();
+	}
+
+	void SceneRenderer::ResizePrefilteredMap(nvrhi::ICommandList* commandList)
+	{
+		ST_PROFILE_FUNCTION();
+		ST_CORE_ASSERT(m_Environment && !m_Environment->Atmosphere, "SceneRenderer: only a map's or a procedural sky's environment is resized in place");
+		// The maps are copied: an environment map's are shared with renderers of the old size, which keep theirs (the radiance
+		// cube and the irradiance are shared with them, read only).
+		EnvironmentMaps maps = *m_Environment;
+		std::vector<nvrhi::ResourceHandle> released;
+		ReplacePrefilteredMap(commandList, maps, released);
+		commandList->beginMarker("EnvironmentResolution");
+		for (uint32_t mip = 0; mip < c_PrefilteredMipCount; mip++)
+			FilterEnvironmentStep(commandList, maps, c_EnvironmentFilterSteps - c_PrefilteredMipCount + mip);
+		commandList->endMarker();
+		m_Environment = CreateRef<const EnvironmentMaps>(std::move(maps));
+		if (m_Environment->Source)
+			ShareEnvironment(m_Environment);
+		Renderer::ReleaseDeferred(std::move(released));
+		m_Stats.EnvironmentUpdates++;
 	}
 
 	void SceneRenderer::ProcessEnvironment(nvrhi::ICommandList* commandList, const Ref<Texture>& source)
@@ -702,8 +732,9 @@ namespace Strata
 	{
 		std::mutex Mutex; // Renderers draw on the main thread; the lock keeps the registry safe for any other
 		// The entries do not keep the maps: they live as long as a renderer lights with them. A live entry's maps hold their
-		// source texture, so its address names nothing else meanwhile.
-		std::unordered_map<const Texture*, std::weak_ptr<const EnvironmentMaps>> Maps;
+		// source texture, so its address names nothing else meanwhile. Keyed by the texture and the prefiltered size: renderers of
+		// different EnvironmentResolution compute their own.
+		std::map<std::pair<const Texture*, uint32_t>, std::weak_ptr<const EnvironmentMaps>> Maps;
 	};
 
 	SceneRenderer::SharedEnvironments& SceneRenderer::GetSharedEnvironments()
@@ -712,11 +743,11 @@ namespace Strata
 		return s_SharedEnvironments;
 	}
 
-	Ref<const SceneRenderer::EnvironmentMaps> SceneRenderer::FindSharedEnvironment(const Texture& source)
+	Ref<const SceneRenderer::EnvironmentMaps> SceneRenderer::FindSharedEnvironment(const Texture& source, uint32_t prefilteredSize)
 	{
 		SharedEnvironments& shared = GetSharedEnvironments();
 		std::scoped_lock<std::mutex> lock(shared.Mutex);
-		auto it = shared.Maps.find(&source);
+		auto it = shared.Maps.find({ &source, prefilteredSize });
 		if (it == shared.Maps.end())
 			return nullptr;
 		Ref<const EnvironmentMaps> maps = it->second.lock();
@@ -735,7 +766,7 @@ namespace Strata
 		std::scoped_lock<std::mutex> lock(shared.Mutex);
 		// Entries of maps no renderer holds any more go first, so the registry holds as many entries as maps in use.
 		std::erase_if(shared.Maps, [](const auto& entry) { return entry.second.expired(); });
-		shared.Maps[environment->Source.get()] = environment;
+		shared.Maps[{ environment->Source.get(), environment->PrefilteredSize }] = environment;
 	}
 
 	void SceneRenderer::GenerateProceduralSky(nvrhi::ICommandList* commandList, const RenderData::ProceduralSkyParameters& parameters)
@@ -747,6 +778,11 @@ namespace Strata
 		EnvironmentMaps maps = m_Environment && m_Environment->Procedural ? *m_Environment : CreateEnvironmentMaps(commandList);
 		maps.Source = nullptr;
 		maps.Procedural = parameters;
+		// A new EnvironmentResolution at the same time: only the prefiltered cube depends on it.
+		std::vector<nvrhi::ResourceHandle> released;
+		if (maps.PrefilteredSize != m_Specification.Quality.EnvironmentResolution)
+			ReplacePrefilteredMap(commandList, maps, released);
+		Renderer::ReleaseDeferred(std::move(released));
 
 		nvrhi::BindingSetDesc setDesc;
 		setDesc.bindings = {
@@ -798,10 +834,11 @@ namespace Strata
 		}
 		const uint32_t mip = step - 2;
 		ST_CORE_ASSERT(mip < c_PrefilteredMipCount, "Environment filter step {} out of range", step);
-		const uint32_t size = std::max(1u, c_PrefilteredSize >> mip);
+		const uint32_t size = std::max(1u, maps.PrefilteredSize >> mip);
 		const float roughness = static_cast<float>(mip) / static_cast<float>(c_PrefilteredMipCount - 1);
+		const uint32_t samples = RendererQuality::GetPrefilterSamples(maps.PrefilteredSize, mip);
 		DispatchIBL(commandList, m_PrefilterPipeline, maps.Cube, wholeCube, nvrhi::TextureDimension::TextureCube, maps.Prefiltered, mip,
-			nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { size, c_EnvironmentCubeSize, roughness, c_PrefilterSamples }, 6);
+			nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { size, c_EnvironmentCubeSize, roughness, samples }, 6);
 	}
 
 	RenderData::ProceduralSkyParameters SceneRenderer::GetProceduralSkyParameters(const SkyLightComponent& sky, const RenderData::FrameConstants& frame) const
@@ -822,7 +859,7 @@ namespace Strata
 		return parameters;
 	}
 
-	void SceneRenderer::UpdateEnvironment(Scene& scene, bool preview, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList)
+	bool SceneRenderer::UpdateEnvironment(Scene& scene, bool preview, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList)
 	{
 		frame.EnvironmentParams = glm::vec4(0.0f);
 		frame.SkyParams = glm::vec4(0.0f);
@@ -830,6 +867,7 @@ namespace Strata
 		frame.SunDiskColor = glm::vec4(0.0f);
 		m_SkyHorizon.reset();
 		m_AtmosphereFrame = false;
+		m_AerialScale = 0.0f;
 
 		const SkyLightComponent* skyLight = nullptr;
 		for (auto [entity, sky, world] : scene.GetRegistry().view<SkyLightComponent, WorldTransformComponent>().each())
@@ -856,7 +894,7 @@ namespace Strata
 		{
 			m_Environment = nullptr; // Release the maps of a removed environment
 			m_EnvironmentHold = nullptr;
-			return;
+			return true;
 		}
 
 		float rotation = 0.0f; // The procedural sky and the atmosphere are computed in world space: their sun follows the light
@@ -868,9 +906,13 @@ namespace Strata
 			{
 				m_Environment = nullptr;
 				m_Atmosphere.reset();
-				return;
+				return false;
 			}
 			m_AtmosphereFrame = true;
+			// Aerial perspective's distance scale (SetAerialPerspective decides the frame's with the camera): 0 when off,
+			// non-finite values as 0, as SetHeightFog sanitizes its inputs.
+			const float scale = skyLight->AerialPerspectiveScale;
+			m_AerialScale = skyLight->AerialPerspective && std::isfinite(scale) ? std::clamp(scale, 0.0f, SkyLightComponent::c_MaxAerialPerspectiveScale) : 0.0f;
 			// The tables and the environment hold the sky per lux of sun: times the light's illuminance above the atmosphere.
 			intensity *= m_AtmosphereSunIlluminance;
 		}
@@ -880,6 +922,8 @@ namespace Strata
 			const RenderData::ProceduralSkyParameters parameters = GetProceduralSkyParameters(*skyLight, frame);
 			if (!m_Environment || !m_Environment->Procedural || *m_Environment->Procedural != parameters)
 				GenerateProceduralSky(commandList, parameters);
+			else if (m_Environment->PrefilteredSize != m_Specification.Quality.EnvironmentResolution)
+				ResizePrefilteredMap(commandList);
 		}
 		else
 		{
@@ -889,14 +933,25 @@ namespace Strata
 				// Constant ambient until the environment arrives (counted as pending by the resolve cache); the map is raised
 				// whole as soon as it is loaded.
 				HoldEnvironmentMap(skyLight->EnvironmentMap);
-				return;
+				return true;
 			}
 			// The environment is computed from the whole map: this renderer holds it whole in its streamer until then. Once
 			// computed, the cube is all renderers sample, so nothing asks for the map's levels any more and they drop to its
 			// tail; a renderer that starts lighting with the map afterwards takes over the environment another one computed.
-			if (!m_Environment || texture != m_Environment->Source)
+			const uint32_t prefilteredSize = m_Specification.Quality.EnvironmentResolution;
+			if (m_Environment && texture == m_Environment->Source && m_Environment->PrefilteredSize != prefilteredSize)
 			{
-				if (Ref<const EnvironmentMaps> shared = FindSharedEnvironment(*texture))
+				// A new EnvironmentResolution: the maps of a renderer of that size, or the current ones with their prefiltered cube
+				// filtered again at it from their radiance cube. Never computed again from the map, whose levels dropped to its
+				// tail: the scene would lose its sky and image light until they streamed back in.
+				if (Ref<const EnvironmentMaps> shared = FindSharedEnvironment(*texture, prefilteredSize))
+					m_Environment = std::move(shared);
+				else
+					ResizePrefilteredMap(commandList);
+			}
+			else if (!m_Environment || texture != m_Environment->Source)
+			{
+				if (Ref<const EnvironmentMaps> shared = FindSharedEnvironment(*texture, prefilteredSize))
 				{
 					m_Environment = std::move(shared);
 				}
@@ -904,7 +959,7 @@ namespace Strata
 				{
 					HoldEnvironmentMap(skyLight->EnvironmentMap);
 					m_Assets.CountPending(skyLight->EnvironmentMap);
-					return;
+					return true;
 				}
 				else
 				{
@@ -923,6 +978,7 @@ namespace Strata
 		const float blur = atmosphere ? 0.0f : std::clamp(skyLight->BackgroundBlur, 0.0f, 1.0f);
 		frame.SkyParams = glm::vec4(blur * backgroundMips, skyLight->ShowBackground ? 1.0f : 0.0f, 0.0f, 0.0f);
 		m_Stats.EnvironmentLighting = true;
+		return true;
 	}
 
 	void SceneRenderer::HoldEnvironmentMap(AssetHandle map)
@@ -955,6 +1011,7 @@ namespace Strata
 		nvrhi::IBuffer* previousInstances = m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer();
 		nvrhi::IBuffer* previousPalette = m_PreviousPalette ? m_PreviousPalette.Get() : m_SceneGPU->GetPaletteBuffer();
 		nvrhi::ITexture* skyView = GetBoundSkyView();
+		nvrhi::ITexture* aerialVolume = GetBoundAerialVolume();
 		nvrhi::ITexture* probeArray = GetBoundReflectionProbes();
 		nvrhi::ITexture* screenReflections = GetBoundScreenReflections();
 		nvrhi::ITexture* sceneColor = GetBoundSceneColor();
@@ -978,6 +1035,7 @@ namespace Strata
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(21, previousPalette),
 				nvrhi::BindingSetItem::Texture_SRV(27, skyView),
 				nvrhi::BindingSetItem::Texture_SRV(28, boundMask),
+				nvrhi::BindingSetItem::Texture_SRV(29, aerialVolume, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
 				nvrhi::BindingSetItem::Texture_SRV(32, boundRanges),
 				nvrhi::BindingSetItem::Texture_SRV(33, Renderer::GetBlueNoiseTexture()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
@@ -1030,6 +1088,7 @@ namespace Strata
 		m_BoundPreviousInstances = previousInstances;
 		m_BoundPreviousPalette = previousPalette;
 		m_BoundSkyView = skyView;
+		m_BoundAerialVolume = aerialVolume;
 		m_BoundReflectionProbes = probeArray;
 		m_BoundScreenReflections = screenReflections;
 		m_BoundSceneColor = sceneColor;
@@ -1283,7 +1342,9 @@ namespace Strata
 		frame.FogDensity = glm::vec4(0.0f);
 		frame.FogColor = glm::vec4(0.0f);
 		frame.FogLight = glm::vec4(0.0f);
-		frame.FogParams = glm::vec4(0.0f);
+		// FogParams.z and w are aerial perspective's (SetAerialPerspective, after this).
+		frame.FogParams.x = 0.0f;
+		frame.FogParams.y = 0.0f;
 		const HeightFogComponent* fog = FindHeightFog(scene);
 		if (!fog)
 			return;
@@ -1313,7 +1374,8 @@ namespace Strata
 		else
 			frame.FogLight = SanitizeRadiance(glm::vec3(frame.AmbientColor));
 		const float sunScattering = std::clamp(finiteOr(fog->SunScattering, 0.0f), 0.0f, 1.0f);
-		frame.FogParams = glm::vec4(1.0f, sunScattering * HeightFogComponent::c_MaxSunAsymmetry, 0.0f, 0.0f);
+		frame.FogParams.x = 1.0f;
+		frame.FogParams.y = sunScattering * HeightFogComponent::c_MaxSunAsymmetry;
 		m_Stats.HeightFog = true;
 	}
 
@@ -1401,7 +1463,7 @@ namespace Strata
 		m_MeteredKeyStops = 0.0f;
 	}
 
-	void SceneRenderer::ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options)
+	void SceneRenderer::ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options, bool hold)
 	{
 		if (m_ResetPreExposure)
 		{
@@ -1421,6 +1483,13 @@ namespace Strata
 				m_PreExposure = *options.PreExposure > 0.0f ? GetPreExposureFor(std::log2(*options.PreExposure)) : 1.0f;
 			else
 				m_PreExposure = GetPreExposureFor(std::clamp(settings.Exposure, -20.0f, 20.0f)); // The power of two nearest 2^Exposure
+			m_PreExposureSettled = true;
+			return;
+		}
+		// A lighting view of values (not light) meters nothing worth following: the pre-exposure keeps its value until the view
+		// ends (BeginLightingViewFrame starts a new epoch then), settled, since the values it writes are unexposed.
+		if (hold)
+		{
 			m_PreExposureSettled = true;
 			return;
 		}
@@ -1801,6 +1870,18 @@ namespace Strata
 			ReleaseLocalShadowAtlas(quality.LocalShadowAtlasSize);
 		else if (quality.LocalShadowMaxTile != current.LocalShadowMaxTile)
 			ResetLocalShadows();
+		// The environment: its prefiltered cube is made at the new size by the next frame with a sky (UpdateEnvironment), filtered
+		// from the radiance cube in hand (or taken from a renderer of that size), so it keeps lighting the scene meanwhile. The
+		// atmosphere's sets of maps are released instead: its next frame computes its environment at once, at the new size.
+		const bool environment = quality.EnvironmentResolution != current.EnvironmentResolution;
+		// Screen-space reflections: the next frame that traces them makes the new mode's targets (none at Off).
+		const bool reflections = quality.Reflections != current.Reflections;
+		if (reflections)
+		{
+			std::vector<nvrhi::ResourceHandle> released;
+			ReleaseScreenReflections(released);
+			Renderer::ReleaseDeferred(std::move(released));
+		}
 
 		current = quality;
 		if (cascades)
@@ -1808,10 +1889,42 @@ namespace Strata
 			m_RequestedShadowMapSize = size;
 			m_ShadowMapSize = size;
 		}
-		if (!cascades && !atlas)
+		if (environment && m_Atmosphere)
+			ReleaseAtmosphereEnvironment();
+		if (!cascades && !atlas && !environment && !reflections)
 			return false;
 		ResetHistory();
 		return true;
+	}
+
+	void SceneRenderer::ReleaseAtmosphereEnvironment()
+	{
+		std::vector<nvrhi::ResourceHandle> released;
+		auto release = [&released](const EnvironmentMaps& maps)
+		{
+			for (const nvrhi::TextureHandle& texture : { maps.Cube, maps.Irradiance, maps.Prefiltered })
+			{
+				if (texture)
+					released.emplace_back(texture.Get());
+			}
+		};
+		if (m_Environment && m_Environment->Atmosphere)
+		{
+			release(*m_Environment);
+			m_Environment = nullptr;
+		}
+		// The spare and refreshing maps are of the old size too: without them the next frame computes the first environment at
+		// once, at the new size.
+		if (m_Atmosphere)
+		{
+			for (std::optional<EnvironmentMaps>* maps : { &m_Atmosphere->Refresh, &m_Atmosphere->Spare })
+			{
+				if (*maps)
+					release(**maps);
+				maps->reset();
+			}
+		}
+		Renderer::ReleaseDeferred(std::move(released));
 	}
 
 	void SceneRenderer::InvalidateShadowCache()
@@ -2037,6 +2150,9 @@ namespace Strata
 			ReleaseRenderTargets();
 			ReleaseReflectionProbes();
 			ReleaseShadowMap();
+			std::vector<nvrhi::ResourceHandle> released;
+			ReleaseLightingViewResources(released);
+			Renderer::ReleaseDeferred(std::move(released));
 			return;
 		}
 
@@ -2101,12 +2217,12 @@ namespace Strata
 		release(m_ShadowViewCountBindingSet);
 		// So does the cascades' fit's (its buffer and readbacks stay with the renderer, like its layout).
 		release(m_ShadowFitSet);
+		// The lighting views' bindings name the HDR target and the depth.
+		release(m_LightingOverlayBindingSet);
+		release(m_LightingStatsBindingSet);
+		m_LightingStatsIrradiance = nullptr;
 		// Screen-space reflections' targets (made again by the next frame that traces them).
-		release(m_SurfaceTexture);
-		release(m_ScreenReflectionTexture);
-		release(m_SurfacePrepassFramebuffer);
-		for (nvrhi::BindingSetHandle& set : m_ScreenReflectionSets)
-			release(set);
+		ReleaseScreenReflections(released);
 		// The scene-color copy (made again by the next frame that draws glass).
 		release(m_SceneColorTexture);
 		for (nvrhi::BindingSetHandle& set : m_SceneColorSets)
@@ -2664,6 +2780,7 @@ namespace Strata
 		if (!Renderer::IsInitialized())
 			return;
 		ResolveCullCounters(wait);
+		ResolveLightingViewStats(wait);
 		GPUProfiler& profiler = Renderer::GetGPUProfiler();
 		if (!profiler.IsEnabled())
 			return;
@@ -2754,9 +2871,13 @@ namespace Strata
 		// The players' quality rows apply to the copy every pass reads.
 		PostProcessComponent postProcess = GetPostProcessSettings(scene);
 		ApplyQualityOverrides(postProcess, m_Specification.Quality);
-		ChoosePreExposure(postProcess, options);
+		// A lighting view changed since the previous frame resets the history and, around its value views, the exposure's
+		// readbacks; those views' frames hold the pre-exposure.
+		BeginLightingViewFrame(options.LightingView);
+		ChoosePreExposure(postProcess, options, IsLightingValueView(options.LightingView));
 		m_Stats.PreExposure = m_PreExposure;
 		m_Stats.PreExposureSettled = m_PreExposureSettled;
+		m_Stats.LightingViewPending = options.LightingView != SceneLightingView::None && !m_LightingViewStats;
 		// What the automatic exposure metered (frames late) and the gray card its key compared with (this frame's light).
 		if (postProcess.AutoExposure && m_PreExposureAutomatic && m_MeteredLog2Luminance)
 		{
@@ -2766,11 +2887,17 @@ namespace Strata
 		const bool temporalWanted = m_Specification.TemporalAntiAliasing && postProcess.AntiAliasing && postProcess.AntiAliasingMethod == AntiAliasingMode::TAA;
 		const TemporalAntiAliasingSettings temporalSettings = GetTemporalAntiAliasingSettings(postProcess);
 
+		// Screen-space reflections, as the quality scales what the scene asks for (RendererQualitySettings::Reflections): the
+		// Spatial modes trace every frame from the previous frame's color copy, along the motion vectors they ask for.
+		const ReflectionsQuality reflectionsQuality = m_Specification.Quality.Reflections;
+		const bool reflectionsAsked = postProcess.ScreenSpaceReflections && reflectionsQuality != ReflectionsQuality::Off;
+		const bool spatialReflectionsWanted = reflectionsAsked && RendererQuality::IsSpatialReflections(reflectionsQuality);
+
 		// Motion: the history holds the renderer's previous frame when that frame copied it (its latest frame asked for motion
 		// too) and drew this render scene or the one it is a clone of (the same slots).
 		// Motion blur asks for motion vectors on every frame it is wanted, so the motion history goes on.
 		const bool motionBlurWanted = options.MotionBlur && !options.HDROutput && postProcess.MotionBlur && postProcess.MotionBlurShutterAngle > 0.0f;
-		m_MotionFrame = options.MotionVectors || options.ShowMotionVectors || temporalWanted || motionBlurWanted;
+		m_MotionFrame = options.MotionVectors || options.ShowMotionVectors || temporalWanted || spatialReflectionsWanted || motionBlurWanted;
 		const bool motionHistory = m_MotionFrame && m_MotionRender != 0 && m_MotionRender == m_RenderCount
 			&& (m_MotionSceneId == renderScene.GetId() || renderScene.GetCloneSource() == m_MotionSceneId);
 		bool motionFailed = false;
@@ -2791,6 +2918,7 @@ namespace Strata
 		// camera cut or a reset asked for (a resize released it). Counted in frames, never in time, so slow frames keep it.
 		// Without its resources (or the motion vectors') the frame is drawn with FXAA.
 		const bool cameraCut = IsCameraCut(camera);
+		const bool historyReset = m_ResetHistory; // The TAA's branch clears it; spatial reflections start again on it too
 		m_TemporalFrame = temporalWanted && m_MotionFrame && EnsureTemporalResources();
 		const bool temporalFailed = temporalWanted && !m_TemporalFrame;
 		m_TemporalResolved = false;
@@ -2826,10 +2954,27 @@ namespace Strata
 		m_Stats.TemporalAntiAliasing = m_TemporalFrame;
 		m_Stats.TemporalFrames = m_TemporalFrame ? m_TemporalFrames : 0u;
 		m_Stats.HistoryResets = m_HistoryResets;
-		// Screen-space reflections fetch the previous frame's resolved image: with TAA, once its history holds that frame.
-		const bool reflectionsWanted = m_TemporalFrame && m_TemporalFrames > 1 && postProcess.ScreenSpaceReflections;
-		m_ReflectionFrame = reflectionsWanted && EnsureScreenReflectionResources();
+		// Screen-space reflections. Checkerboard fetches the previous frame's resolved image: with TAA, once its history holds
+		// that frame. Spatial reads the color copy the renderer's previous frame made of this render scene (or the one it is a
+		// clone of), without a camera cut or a reset since; every frame makes the copy for the next.
+		bool reflectionsWanted = false;
+		m_ReflectionCopyFrame = false;
+		if (spatialReflectionsWanted)
+		{
+			reflectionsWanted = true;
+			m_ReflectionCopyFrame = m_MotionFrame && EnsureSpatialReflectionResources();
+			m_ReflectionFrame = m_ReflectionCopyFrame && m_ReflectionColorRender != 0 && m_ReflectionColorRender == m_RenderCount && !cameraCut
+				&& !historyReset && (m_ReflectionColorSceneId == renderScene.GetId() || renderScene.GetCloneSource() == m_ReflectionColorSceneId);
+			if (!m_TemporalFrame)
+				m_ResetHistory = false;
+		}
+		else
+		{
+			reflectionsWanted = m_TemporalFrame && m_TemporalFrames > 1 && reflectionsAsked && reflectionsQuality == ReflectionsQuality::Checkerboard;
+			m_ReflectionFrame = reflectionsWanted && EnsureScreenReflectionResources();
+		}
 		m_Stats.ScreenSpaceReflections = m_ReflectionFrame;
+		m_Stats.ScreenSpaceReflectionsPending = m_ReflectionCopyFrame && !m_ReflectionFrame;
 
 		// Scene shaders work camera-relative (Include/Scene.glsl): the view's translation is left out of its matrices. The jitter
 		// is only in the frame's copy of the projection: what the CPU culls, chooses levels of detail and fits the cascades with
@@ -2917,7 +3062,7 @@ namespace Strata
 		// The local shadow views' casters: the CPU's on frames that walk the view (both paths), else bounds for the GPU's culling.
 		FindLocalShadowCasters(renderScene, camera, frustum, !m_FeedbackFrame, !m_FeedbackFrame);
 		// Rendered with a reported limitation: keep the error so it is not logged every frame.
-		bool degraded = motionFailed || temporalFailed || (reflectionsWanted && !m_ReflectionFrame);
+		bool degraded = motionFailed || temporalFailed || (reflectionsWanted && !m_ReflectionFrame && !m_ReflectionCopyFrame);
 		if (!m_LocalShadowLights.empty() && !EnsureLocalShadowAtlas())
 		{
 			ResetLocalShadows(); // Reported; no light casts a local shadow this frame
@@ -2975,8 +3120,9 @@ namespace Strata
 			PrepareGPUCulling(renderScene, camera);
 		ReportVisibleAnimators(scene);
 		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
-		frame.AOParams = glm::vec4(postProcess.AmbientOcclusion ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
-		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+		frame.AOParams = glm::vec4(postProcess.AmbientOcclusion ? 1.0f : 0.0f, postProcess.AmbientOcclusionMultiBounce ? 1.0f : 0.0f, 0.0f, 0.0f);
+		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, static_cast<float>(options.LightingView),
+			m_Specification.SpecularAntiAliasing ? 1.0f : 0.0f, 0.0f);
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
 			|| m_BoundShadowRanges != (m_ShadowRanges ? m_ShadowRanges.Get() : m_DummyShadowRanges.Get()) || m_BoundScreenShadows != GetBoundScreenShadows()
@@ -3024,14 +3170,17 @@ namespace Strata
 		GPUPassTimer gpuTimer(commandList, gpuStages.Setup, &BeginGPURecord());
 		if (m_GrownPreviousInstances || m_GrownPreviousPalette)
 			RecordMotionGrowth(commandList);
-		UpdateEnvironment(scene, preview, frame, commandList);
+		if (!UpdateEnvironment(scene, preview, frame, commandList))
+			degraded = true; // The atmosphere's tables could not be made (reported); the scene has no environment
 		SetHeightFog(scene, camera, frame);
+		if (!SetAerialPerspective(camera, frame))
+			degraded = true; // Reported; the frame is drawn without the haze
 		// The texture table's changed entries (textures that streamed levels moved to other bindless slots) before anything
 		// samples them; a table that grew has a new buffer, which the binding sets follow.
 		TextureTable& textureTable = Renderer::GetTextureTable();
 		const bool tableUploaded = textureTable.RecordUploads(commandList);
 		const bool rebind = buffersRecreated || m_BoundEnvironmentCube != GetEnvironmentCube() || m_BoundIrradiance != GetIrradianceMap()
-			|| m_BoundPrefiltered != GetPrefilteredMap() || m_BoundSkyView != GetBoundSkyView()
+			|| m_BoundPrefiltered != GetPrefilteredMap() || m_BoundSkyView != GetBoundSkyView() || m_BoundAerialVolume != GetBoundAerialVolume()
 			|| m_BoundReflectionProbes != GetBoundReflectionProbes() || m_BoundScreenReflections != GetBoundScreenReflections() || m_BoundSceneColor != GetBoundSceneColor()
 			|| m_BoundTextureTableVersion != textureTable.GetBufferVersion();
 		if (!tableUploaded || (rebind && !CreateSceneBindingSets()))
@@ -3090,6 +3239,14 @@ namespace Strata
 		{
 			commandList->beginMarker("LightClusters");
 			BuildLightClusters(commandList);
+			commandList->endMarker();
+		}
+		// After the frame's constants and the atmosphere's tables; the next stage's start ends its interval.
+		if (m_AerialFrame)
+		{
+			gpuTimer.Next(gpuStages.Aerial);
+			commandList->beginMarker("Aerial");
+			RenderAerialPerspective(commandList, camera);
 			commandList->endMarker();
 		}
 
@@ -3174,7 +3331,9 @@ namespace Strata
 			gpuTimer.Next(gpuStages.Reflections);
 			commandList->beginMarker("Reflections");
 			ConvertReflectionProbes(commandList);
-			if (m_ReflectionFrame)
+			if (m_ReflectionFrame && m_SpatialReflectionResources)
+				TraceSpatialReflections(commandList, postProcess);
+			else if (m_ReflectionFrame)
 				TraceScreenReflections(commandList, postProcess);
 			commandList->endMarker();
 		}
@@ -3214,12 +3373,18 @@ namespace Strata
 			commandList->endMarker();
 		}
 		gpuTimer.Next(gpuStages.Transparent);
-		if (m_GlassBatchCount > 0 && m_SceneColorTexture)
+		if ((m_GlassBatchCount > 0 && m_SceneColorTexture) || m_ReflectionCopyFrame)
 		{
 			commandList->beginMarker("SceneColorCopy");
 			CopySceneColor(commandList);
 			commandList->endMarker();
 			m_Stats.SceneColorCopies = 1;
+			if (m_ReflectionCopyFrame)
+			{
+				m_ReflectionColorRender = m_RenderCount + 1;
+				m_ReflectionColorSceneId = renderScene.GetId();
+				m_ReflectionColorPreExposure = m_PreExposure;
+			}
 		}
 		commandList->beginMarker("Transparent");
 		DrawBatches(commandList, Pass::Transparent, true);
@@ -3381,6 +3546,14 @@ namespace Strata
 				overlayFrame.InverseViewProjection = glm::inverse(overlayFrame.ViewProjection);
 				WriteFrameConstants(commandList, overlayFrame);
 			}
+			if (options.LightingView != SceneLightingView::None)
+			{
+				// First among the overlays: the views of values replace the image the others are drawn over.
+				commandList->beginMarker("LightingView");
+				if (!RecordLightingView(commandList, options, frame, nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y))))
+					degraded = true; // Reported; the image is the lit one
+				commandList->endMarker();
+			}
 			commandList->beginMarker("Overlays");
 			const bool overlaysDrawn = RenderOverlays(commandList, scene, camera, options, text, overlayPasses);
 			commandList->endMarker();
@@ -3404,6 +3577,7 @@ namespace Strata
 		SubmitExposureReadback();
 		SubmitShadowViewReadback();
 		SubmitShadowFitReadback();
+		SubmitLightingViewReadback();
 		CommitShadowCache();
 		CommitLocalShadows();
 
@@ -3482,7 +3656,7 @@ namespace Strata
 	bool SceneRenderer::HasOverlays(const SceneRenderOptions& options)
 	{
 		return options.ShowGrid || !options.SelectedEntities.empty() || (options.DebugShapes && !options.DebugShapes->IsEmpty()) || !options.EntityTints.empty()
-			|| options.ShowMotionVectors || options.ShowShadowView;
+			|| options.ShowMotionVectors || options.ShowShadowView || options.LightingView != SceneLightingView::None;
 	}
 
 	bool SceneRenderer::DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport)
@@ -3730,10 +3904,11 @@ namespace Strata
 		}
 
 		// The shadows and motion views and the tints color the scene itself: the other overlays go over them. Without motion
-		// vectors (they could not be made: reported) there is no motion view.
+		// vectors (they could not be made: reported) there is no motion view, nor with a lighting view, drawn in its place
+		// (RecordLightingView).
 		if (options.ShowShadowView && !DrawShadowView(commandList, options, viewport))
 			return false;
-		if (options.ShowMotionVectors && m_MotionFrame && !DrawMotionView(commandList, viewport))
+		if (options.ShowMotionVectors && m_MotionFrame && options.LightingView == SceneLightingView::None && !DrawMotionView(commandList, viewport))
 			return false;
 		if (entityIDs && !options.EntityTints.empty() && !DrawEntityTints(commandList, scene, options.EntityTints, viewport))
 			return false;

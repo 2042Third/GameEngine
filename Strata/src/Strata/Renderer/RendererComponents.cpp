@@ -59,6 +59,14 @@ namespace Strata
 			return sky.Source != SkyLightSource::EnvironmentMap ? std::string() : "Only the procedural sky and the atmosphere draw a sun (Source is Environment Map)";
 		}
 
+		// The scale of aerial perspective's distances, while it is on.
+		std::string WithAerialPerspective(const SkyLightComponent& sky)
+		{
+			if (sky.Source != SkyLightSource::Atmosphere)
+				return AtmosphereOnly(sky);
+			return sky.AerialPerspective ? std::string() : "Aerial Perspective is off";
+		}
+
 		// The atmosphere's background is drawn from its sky-view table, never blurred.
 		std::string WithoutAtmosphere(const SkyLightComponent& sky)
 		{
@@ -164,21 +172,11 @@ namespace Strata
 				: fmt::format("Only TAA uses it (Anti Aliasing Method is {})", NonTemporalMethodName(post.AntiAliasingMethod));
 		}
 
-		// Screen-space reflections read the TAA's history: inactive without it.
-		std::string WithTemporalHistory(const PostProcessComponent& post)
-		{
-			if (!post.AntiAliasing)
-				return "Needs TAA (Anti Aliasing is off)";
-			return post.AntiAliasingMethod == AntiAliasingMode::TAA ? std::string()
-				: fmt::format("Needs TAA (Anti Aliasing Method is {})", NonTemporalMethodName(post.AntiAliasingMethod));
-		}
-
+		// The screen-space reflections' settings while they are off. Whether they need TAA depends on the renderer's quality
+		// (RendererQualitySettings::Reflections: Checkerboard does, Spatial does not), which a component cannot know.
 		std::string WithScreenSpaceReflections(const PostProcessComponent& post)
 		{
-			std::string reason = WithTemporalHistory(post);
-			if (reason.empty() && !post.ScreenSpaceReflections)
-				reason = "Screen Space Reflections is off";
-			return reason;
+			return post.ScreenSpaceReflections ? std::string() : "Screen Space Reflections is off";
 		}
 
 		const char* GetPresetName(TemporalAntiAliasingPreset preset)
@@ -368,11 +366,17 @@ namespace Strata
 			.Property("AtmosphereHaze", &SkyLightComponent::AtmosphereHaze,
 				WithTooltip(Range(0.0f, 10.0f, 0.01f), "Atmosphere: amount of aerosols (1: a clear day), the whitish haze and glow around the sun"))
 			.Property("GroundAlbedo", &SkyLightComponent::GroundAlbedo,
-				WithTooltip(Range(0.0f, 1.0f, 0.01f), "Atmosphere: diffuse reflectance of the planet's ground, which lights the sky from below"));
+				WithTooltip(Range(0.0f, 1.0f, 0.01f), "Atmosphere: diffuse reflectance of the planet's ground, which lights the sky from below"))
+			.Property("AerialPerspective", &SkyLightComponent::AerialPerspective,
+				WithTooltip({}, "Atmosphere: distant surfaces fade into the air's haze, as the sky does (aerial perspective)"))
+			.Property("AerialPerspectiveScale", &SkyLightComponent::AerialPerspectiveScale,
+				WithTooltip(Range(0.0f, SkyLightComponent::c_MaxAerialPerspectiveScale, 0.1f), "Atmosphere: distances multiplied by this for the "
+					"haze: 1 is Earth's air, 4 makes a 1 km view look like 4 km"));
 		SetInactiveReasons<SkyLightComponent>({ "EnvironmentMap", "Rotation" }, &EnvironmentMapOnly);
 		SetInactiveReasons<SkyLightComponent>({ "ZenithColor", "HorizonColor", "GroundColor", "SunIntensity" }, &ProceduralSkyOnly);
 		SetInactiveReasons<SkyLightComponent>({ "SunSize" }, &WithSunDisk);
-		SetInactiveReasons<SkyLightComponent>({ "AtmosphereDensity", "AtmosphereHaze", "GroundAlbedo" }, &AtmosphereOnly);
+		SetInactiveReasons<SkyLightComponent>({ "AtmosphereDensity", "AtmosphereHaze", "GroundAlbedo", "AerialPerspective" }, &AtmosphereOnly);
+		SetInactiveReasons<SkyLightComponent>({ "AerialPerspectiveScale" }, &WithAerialPerspective);
 		SetInactiveReasons<SkyLightComponent>({ "BackgroundBlur" }, &WithoutAtmosphere);
 		SetInactiveReasons<SkyLightComponent>({ "AmbientColor" }, &WithoutEnvironmentOnly);
 
@@ -447,14 +451,18 @@ namespace Strata
 			.Section("Ambient occlusion")
 			.Property("AmbientOcclusion", &PostProcessComponent::AmbientOcclusion, WithTooltip({}, "Darkens creases, corners and contacts that ambient "
 				"light reaches less (screen-space ambient occlusion)"))
-			.Property("AmbientOcclusionRadius", &PostProcessComponent::AmbientOcclusionRadius, WithTooltip(Range(0.01f, 10.0f, 0.01f), "World units"))
+			.Property("AmbientOcclusionRadius", &PostProcessComponent::AmbientOcclusionRadius, WithTooltip(Range(0.01f, 10.0f, 0.01f),
+				"Meters: how far around a surface occluders darken it; on screen kept between 0.3% and 12% of the view's height"))
 			.Property("AmbientOcclusionIntensity", &PostProcessComponent::AmbientOcclusionIntensity, WithTooltip(Slider(0.0f, 4.0f), "How strongly the "
 				"occlusion darkens ambient light: 1 as measured, 0 none, above 1 stronger"))
+			.Property("AmbientOcclusionMultiBounce", &PostProcessComponent::AmbientOcclusionMultiBounce, WithTooltip({},
+				"Occluded corners of bright surfaces keep the light their walls reflect into them: white plaster stays light in its creases, "
+				"dark soil darkens fully"))
 			.Section("Anti-aliasing")
 			.Property("AntiAliasing", &PostProcessComponent::AntiAliasing, WithTooltip({}, "Smooths jagged edges, by the method below"))
 			.EnumProperty("AntiAliasingMethod", &PostProcessComponent::AntiAliasingMethod, { { "FXAA", 0 }, { "TAA", 1 }, { "Morphological", 2 } },
 				{ .Tooltip = "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another "
-					"sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion. "
+					"sub-pixel offset and blended with the earlier ones along their motion: smoother edges and soft shadows. "
 					"TAA Preset chooses how the TAA looks. Morphological: non-temporal, finds edges and blends along them, keeping texture "
 					"detail" })
 			.EnumProperty("TAAPreset", &PostProcessComponent::TAAPreset, { { "Sharp", 0 }, { "Original", 1 }, { "Custom", 2 } },
@@ -501,7 +509,8 @@ namespace Strata
 			.Section("Reflections")
 			.Property("ScreenSpaceReflections", &PostProcessComponent::ScreenSpaceReflections,
 				WithTooltip({}, "Reflections of what the screen shows, found each frame: smooth floors, water and metal reflect what stands near "
-					"them. Needs TAA. Where they find nothing (off screen, hidden, the sky) the reflection probes and the sky reflect as before"))
+					"them. At Graphics Quality Medium (Reflections Checkerboard) only with TAA; High and Ultra trace every pixel with or without it. "
+					"Where they find nothing (off screen, hidden, the sky) the reflection probes and the sky reflect as before"))
 			.Property("ScreenSpaceReflectionsIntensity", &PostProcessComponent::ScreenSpaceReflectionsIntensity,
 				WithTooltip(Slider(0.0f, 1.0f), "How much the screen-space reflections replace the probes' and the sky's reflection where they "
 					"find something; 1: fully"))
@@ -596,7 +605,6 @@ namespace Strata
 		SetInactiveReasons<PostProcessComponent>({ "TAADisocclusionRejection" }, &WithCustomBool);
 		SetInactiveReasons<PostProcessComponent>({ "TAADisocclusionThreshold" }, &WithDisocclusionRejection);
 		SetInactiveReasons<PostProcessComponent>({ "TAASharpening" }, &WithCustomTunable<float, &TemporalAntiAliasingSettings::Sharpening>);
-		SetInactiveReasons<PostProcessComponent>({ "ScreenSpaceReflections" }, &WithTemporalHistory);
 		SetInactiveReasons<PostProcessComponent>({ "ScreenSpaceReflectionsIntensity", "ScreenSpaceReflectionsMaxRoughness" }, &WithScreenSpaceReflections);
 
 		ComponentRegistry::Register<TextComponent>("Text")

@@ -614,7 +614,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   - `capture --build <bin dir>` copies the three 3D samples (never opening them in place) and makes two projects in a
     work directory: `Basic3D`, a new project of the `basic3d` template, and `LookDev`, built by the command script
     `Tools/LookDev/LookDevScene.json` from the `empty` template (a room with a window and a shadowed lamp, a white-furnace
-    row of spheres over roughness and metalness in `Scenes/Furnace.stscene`, poles, a fence and a 5 cm plate as thin
+    row of spheres over roughness and metalness in `Scenes/Furnace.stscene`, a dark floor of roughness 0.02, 0.1 and 0.3
+    under screen-space reflections in `Scenes/Mirror.stscene` (`lookdev.mirror`), poles, a fence and a 5 cm plate as thin
     casters, an alpha-masked leaf card whose texture the tool draws, the physical sky; every look property at its
     component's default, so each build shows what new content gets). A headless editor per project
     (`StrataCLI launch`, a private `STRATA_SESSION_DIR` of the work directory) captures every shot of
@@ -641,6 +642,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   - A shot's `Setup` runs editor commands on its scene before the captures; a step's `entityName` names the entity, and
     `repoFile` (a path in the repository) gives `asset.import` the file to copy in (`tp.lut` imports the feature project's
     `Warm.cube`).
+  - A shot with `DebugView` captures that debug view of `viewport.capture` (the lighting views' statistics land in its
+    `stats/`); builds without it refuse the shot.
   - Shots and look-dev content are appended, never changed, so that captures of every build keep comparing. GPU times
     are kept only from runs alone on the machine, under `python Tools/PerfLock.py --label lookdev-<label> --limit 90 -- ...`
     (a full run takes longer than the lock's default limit); the pictures are read and cropped on every core after the
@@ -1352,6 +1355,8 @@ registration (and the tests'), and any a module registers. They hold for every p
 
 ### Importers
 
+- glTF models: `BaseColorFactorsAreSRGB` (off by default, inactive without Import Materials) decodes base color factors an
+  exporter wrote as sRGB bytes (Kenney's kits) to the linear values glTF expects; the alpha stays. Importer version 11.
 - Importers (`Asset/AssetImporter.h`, built-ins in `Asset/AssetImporters.cpp`) turn source files into
   the stored form, cached per handle in `<project>/.strata/Cache` (derived data, never committed). A
   cached import is redone when the source content, the import settings, the importer's `GetVersion()`
@@ -2650,7 +2655,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   part and border, a text's outline color, a selectable's transition states and explicit navigation, a layout's grid;
   each following the code that reads the property); `component.get` and `entity.get` list them as `inactive`. The TAA's
   tunables say which preset sets them and to what ("The Sharp preset sets it (0.0625): choose Custom to tune it"), and
-  the screen-space reflections' settings that they need TAA ("Needs TAA (Anti Aliasing Method is FXAA)"). A
+  the screen-space reflections' intensity and maximum roughness that the reflections are off (whether they need TAA is the
+  renderer's `Reflections` quality, which a component cannot know: "Reflections"). A
   property whose edit means more than setting it draws its value through `UI::PropertyDrawers` (by component type and
   property name; `InspectorPanel::DrawProperties` calls it in place of the generic widget, after the same label, override
   mark and menu): `TAAPreset`'s drawer runs one `component.set` per choice, Sharp and Original setting the preset alone
@@ -2914,7 +2920,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - **View commands** change no scene data and record no undo: `camera.get`, `camera.set {position, target, yaw, pitch,
   distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
   (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?,
-  fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion" | "shadows", quality?: "project" | "low" | "medium" |
+  fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion" | "shadows" | "lighting" | "ao" | "indirect" |
+  "luminance" | "albedo", quality?: "project" | "low" | "medium" |
   "high" | "ultra", waitForAssets?, path?, overwrite?}` renders on the
   next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still
   being rasterized, so text is never half drawn, up to `c_MaxCaptureExposureFrames` until its pre-exposure settled (the
@@ -2939,15 +2946,19 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   "screenSpaceTexts", "hiddenScreenSpaceTexts", "ui": {"canvases",
   "hiddenCanvases", "elements", "drawCalls", "pendingGlyphs"}, "debugView":
   {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD",
-  "entitiesPerMipShortfall", "shadows"?}, "notice"?, "path"?}` (the mip view counts entities with textures by the mip levels
-  their worst texture lacks: none, 1, 2, 3 or more or still loading; the motion view colors pixels by their motion since the
-  capture renderer's previous frame, so it renders a second frame, and a still scene shows none; the shadows view colors
-  every receiver by screen pixels per shadow texel and adds `shadows: {complete, shadowMapSize, surfaceShare, skyShare,
-  uncoveredShare, medianPixelsPerTexel, p10PixelsPerTexel, p90PixelsPerTexel, aboveFourShare, cascades: [{index, near, far,
-  texelSize, screenShare, medianPixelsPerTexel, p10PixelsPerTexel, p90PixelsPerTexel, aboveFourShare}], note?}`: shares of
-  the image's pixels, ratios over the covered receivers (the metric: "Sun shadows"), read back from the captured frame,
-  which the capture waits for as for its GPU times, `complete` false when they did not come within
-  `c_MaxCaptureGPUStatsPolls`); it defaults to the
+  "entitiesPerMipShortfall", "shadows"?, "lighting"?, "lightingPending"?}, "notice"?, "path"?}` (the mip view counts entities
+  with textures by the mip levels their worst texture lacks: none, 1, 2, 3 or more or still loading; the motion view colors
+  pixels by their motion since the capture renderer's previous frame, so it renders a second frame, and a still scene shows
+  none; the shadows view colors every receiver by screen pixels per shadow texel and adds `shadows: {complete, shadowMapSize,
+  surfaceShare, skyShare, uncoveredShare, medianPixelsPerTexel, p10PixelsPerTexel, p90PixelsPerTexel, aboveFourShare,
+  cascades: [{index, near, far, texelSize, screenShare, medianPixelsPerTexel, p10PixelsPerTexel, p90PixelsPerTexel,
+  aboveFourShare}], note?}`: shares of the image's pixels, ratios over the covered receivers (the metric: "Sun shadows"),
+  read back from the captured frame, which the capture waits for as for its GPU times, `complete` false when they did not
+  come within `c_MaxCaptureGPUStatsPolls`; the lighting views ("Lighting" under Rendering) add `lighting: {view,
+  surfaceShare, surfaceEv100: {p05, p50, p95}, backgroundEv100, value: {median, p05}, belowRangeShare, aboveRangeShare,
+  sunIlluminance, skyIlluminance, sunToSkyRatio}`, null where the view measures nothing (NaN), measured on the captured
+  frame itself: the capture renderer keeps its targets, whose readbacks bring the statistics back with the image, until
+  they arrived (`lighting` null and `lightingPending` true if they did not within the same polls); it defaults to the
   viewport's size, camera, overlays and debug view and fails without a GPU. `position`, `target` and `fov` render through a camera of the capture's own (a copy
   of the editor camera with those changes; `camera.get` is unchanged, the result's camera is `"custom"`), so agents look
   around without moving the person's view. **Live captures** (`viewport.capture {live: true, camera, atFixedStep?,
@@ -3129,15 +3140,17 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 ### Scene renderer and lighting
 
 - `SceneRenderer` draws a `Scene` from a `SceneCamera` into its output texture or a given framebuffer:
-  light clustering, directional shadow cascades and point and spot lights' shadow views ("Local light shadows"),
+  light clustering, the atmosphere's aerial perspective volume (atmosphere skies only: "Fog and atmosphere"),
+  directional shadow cascades and point and spot lights' shadow views ("Local light shadows"),
   depth/normal/entity-ID prepass (with motion vectors when asked or for
-  TAA: "Motion vectors and TAA"), ground-truth ambient
-  occlusion, the reflection probes' conversions and the screen-space reflections' trace ("Reflections"), forward PBR
+  TAA: "Motion vectors and TAA"), ground-truth ambient occlusion and its denoiser, the reflection probes' conversions
+  and the screen-space reflections ("Reflections": the Checkerboard trace, or for the Spatial modes the full-resolution
+  trace and its resolve, which read the previous frame's color copy), forward PBR
   (opaque surfaces with an EQUAL depth test
-  and forced early depth testing), sky,
-  transparent surfaces: glass first after a copy of the image so far, then the blended ones back to front ("Clear coat
-  and glass"), each fogged by the scene's height fog ("Fog and atmosphere"), the temporal
-  anti-aliasing resolve when the scene chooses it, then
+  and forced early depth testing), sky, a copy of the image so far (for glass, and with a full-resolution one beside it
+  for the Spatial reflections of the next frame), transparent surfaces: glass first, then the blended ones back to front
+  ("Clear coat and glass"), every surface hazed by aerial perspective and then fogged by the scene's height fog ("Fog and
+  atmosphere"), the temporal anti-aliasing resolve when the scene chooses it, then
   post-processing from the scene's `PostProcessComponent` (exposure, bloom, tone mapping and grading, FXAA without
   TAA). A target framebuffer must match the viewport size and have a non-sRGB UNORM color format; `Render` returns false
   (and logs once) instead of rescaling. The output
@@ -3147,7 +3160,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `SceneRendererPost.cpp` the post-processing from the HDR image to the display (depth of field and motion blur;
   `RenderPostHDR`: exposure, bloom and lens flares; `RenderPostDisplay`: tone mapping, then FXAA or the morphological
   anti-aliasing; their resources, targets and passes), `SceneRendererAmbientOcclusion.cpp`
-  the ambient occlusion (GTAO and its blur, their resources and targets), `SceneRendererGlass.cpp`,
+  the ambient occlusion (GTAO and its denoiser, their resources and targets), `SceneRendererLightingView.cpp` the lighting
+  debug views, `SceneRendererGlass.cpp`,
   `SceneRendererScreenReflections.cpp`, `SceneRendererReflectionProbes.cpp`, `SceneRendererAtmosphere.cpp`,
   `SceneRendererLocalShadows.cpp`, `SceneRendererExtraction.cpp` and `SceneRendererGPUDriven.cpp`. Their members stay
   declared in `SceneRenderer.h`, grouped under a comment naming their file. A feature's new pass goes into its file
@@ -3158,7 +3172,14 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   writes mip 0 of the environment cube; the mips, irradiance and prefiltered maps are computed by the same chain
   (`SceneRenderer::FilterEnvironment`). A procedural cube is computed again only when its parameters
   (`RenderData::ProceduralSkyParameters`, compared exactly) change, into the same textures, and
-  `SceneRendererStats::EnvironmentUpdates` counts it; `Rotation` applies to maps only.
+  `SceneRendererStats::EnvironmentUpdates` counts it; `Rotation` applies to maps only. The environment cube is 512 per face
+  and the irradiance cube 32; the prefiltered cube's size per face is the quality's `EnvironmentResolution` (256 at Low
+  and Medium, 512 at High and Ultra: mirror-like reflections of the sky stay sharp at 4K), six levels (roughness 0, 0.2
+  ... 1) at both sizes, so `EnvironmentParams.z` stays 5. Level 0 copies the cube; the others take
+  `RendererQuality::GetPrefilterSamples` samples per texel: 512 at 256 (0.6.0's), and at 512 128 for levels 1 and 2 (their
+  narrow lobes read finer source levels through the filtered importance sampling), so no level, which the atmosphere
+  computes one per frame, costs more than 0.6.0's largest. Maps of environment map textures are shared between renderers
+  by texture and size (`FindSharedEnvironment`): renderers of different resolutions compute their own.
 - `SceneRenderOptions` also shapes editor views: `PreviewEnvironment` lights a scene without any active light
   (`SceneRenderer::NeedsPreviewLighting`: no directional, point, spot or sky light, so a night scene lit by a torch
   stays dark) with a preview sun (`SceneRenderer::GetPreviewSunDirection`) and the default procedural sky
@@ -3184,16 +3205,21 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `LODErrorPixels` / `MinProjectedPixels` | 2 / 1 | 1 / 0.5 | 1 / 0.5 | 0.5 / 0.25 |
 | `ShadowFilterQuality` (taps of the sun's wide penumbrae) | 8 | 16 | 24 | 32 |
 | `ContactShadows` (steps of the sun's contact shadows; 0 off) | 0 | 0 | 12 | 16 |
+| `AmbientOcclusionQuality` (slices x steps per side) | Low 1 x 4 | Medium 2 x 6 | High 3 x 8 | Ultra 4 x 12 |
+| `EnvironmentResolution` (prefiltered sky per face) | 256 | 256 | 512 | 512 |
+| `Reflections` (screen-space reflections a scene asks for) | Off | Checkerboard (TAA only) | Spatial | SpatialHigh |
 | `MotionBlurQuality` (samples, for scenes with motion blur) | Off | 8 | 12 | 16 |
 | `AntiAliasing`, `MotionBlur`, `DepthOfField`, `FilmGrain`, `ChromaticAberration` (players' rows, under every preset: they only turn off what a scene uses) | Scene | Scene | Scene | Scene |
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
+| Prefiltered sky per set of maps (RGBA16F, six levels; the atmosphere keeps two sets) | 4 MiB | 4 MiB | 16 MiB | 16 MiB |
+| Screen-space reflections' targets per view (scenes that ask for them; "Reflections") | none | 20 MiB, 79 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows |
 | Motion blur's targets per view (scenes with motion blur) | none | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
-  High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost per pixel
-  (`ShadowFilterQuality`, `ContactShadows`, and `MotionBlurQuality` for scenes with motion blur; `Renderer.Quality` checks
-  it).
+  High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost at every
+  size (`ShadowFilterQuality`, `ContactShadows`, `AmbientOcclusionQuality`, `EnvironmentResolution`, `Reflections`, and
+  `MotionBlurQuality` for scenes with motion blur; `Renderer.Quality` checks it).
   Custom is the section's fields (High's values by default). `RendererQuality::Clamp` keeps every knob in its range.
 - **Auto by rows:** `RendererQuality::ResolveShadowMapSize` resolves Auto and AutoFine for the renderer's viewport rows
   (its output: the Scene and Game views' panel pixels, the window's back buffer, a capture's image), limited to
@@ -3207,9 +3233,15 @@ lights, Post Process and the sky), and never a resolution below the output's.
   size knobs apply from the next frame on both paths, through what already compares them (the cascade cache's key
   holds the LOD criteria, the local shadows' `LocalShadowContent` holds `LODErrorPixels`: a new error draws every
   light's views again in their tiles, as a caster's change does). A knob that changes what a cached shadow view shows
-  goes into one of them. It returns whether the cascades or the atlas were released, and then restarts the temporal
-  history. Callers apply the quality right after `SetViewportSize` in a frame, so Auto resolves for its rows; equal
-  knobs cost one comparison. An allocation that fails halves the cascades (down to 1024) or the atlas (down to 2048),
+  goes into one of them. A new `EnvironmentResolution` keeps the environment lighting: only its prefiltered cube depends
+  on the size, so the next frame with a sky takes over a shared set of the new size or makes a new prefiltered cube and
+  filters it from the radiance cube in hand (`ResizePrefilteredMap`), never from the environment map again, whose levels
+  dropped to its tail once the environment was computed. The atmosphere's maps and its spare and refreshing sets are
+  released instead (`ReleaseAtmosphereEnvironment`): its next frame computes its environment at once at the new size. A
+  new `Reflections` mode releases the screen-space reflections' resources (`ReleaseScreenReflections`); the next frame
+  that traces makes the new mode's. It returns whether the cascades, the atlas, the environment or the reflections
+  changed, and then restarts the temporal history. Callers apply the quality right after `SetViewportSize` in a frame,
+  so Auto resolves for its rows; equal knobs cost one comparison. An allocation that fails halves the cascades (down to 1024) or the atlas (down to 2048),
   reports it once, and is tried at the requested size again by the next resize or change of that knob.
 - **Single images release their cascades:** a zero viewport (a capture renderer between pictures, the editor's hidden
   Game view) releases them with the render targets; thumbnails keep one 1024-texel layer. A minimized window keeps
@@ -3399,8 +3431,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `MinProjectedPixels`, cascades and sub-texel casters, materials, levels of detail through `LODSelection`) and in
   `Cull.comp` (`Include/LODSelection.glsl`, `Include/Culling.glsl`). Change both together; `GPU.SceneRenderer.GPUDriven`
   and `IndirectFallback` compare the paths' pixels (within 1/255), entity IDs and counts scene by scene. Shading must not
-  depend on the order of draws or of a draw's instances: no screen-space derivatives in what both paths must agree on
-  (some GPUs group pixels of adjacent triangles into quads by draw), and opaque results never on draw order.
+  depend on the order of draws or of a draw's instances: screen-space derivatives only as the derivative rule allows
+  ("Lighting": of the primitive's own interpolants and textures, in control flow uniform over a quad, before any
+  `discard`; a quad belongs to one primitive, so both paths get the same ones), never of what other draws wrote, and
+  opaque results never on draw order.
 - The GPU's counts (instances, draws, triangles, levels, shadow casters, visible and size-culled proxies, overflow) come
   back 2-3 frames late (`SceneRendererGPUStats`, `HasCounters`, `CountersRender`; `ResolveGPUStats(true)` waits);
   `AddGPUCounts` adds them to a frame's `SceneRendererStats` for display (`renderStats`, the viewport's statistics).
@@ -3523,10 +3557,11 @@ lights, Post Process and the sky), and never a resolution below the output's.
   where it calls `ResetExposureAdaptation`). It is counted in frames, never in time: slow frames never reset it. Tests
   may render many frames back to back without device frames: the renderer waits for its own oldest frames before its
   frame constants' versions run out (`SceneRenderer::ReserveFrameConstantVersions`; Architecture rules, NVRHI pitfalls).
-- With TAA, the local lights' shadow filter, GTAO and the screen-space reflections turn their per-pixel noise by the golden
-  ratio's fraction of a turn per frame of the history (`TemporalParams.z`, counted from the reset so captures are
+- With TAA, the local lights' shadow filter and the Checkerboard screen-space reflections turn their per-pixel noise by the
+  golden ratio's fraction of a turn per frame of the history (`TemporalParams.z`, counted from the reset so captures are
   deterministic), and the history averages it; without TAA the turn is 0 and the images are unchanged. The sun's shadow
   filter turns nothing: a fixed blue-noise tile, whose grain the shadow mask's blur takes in the frame ("Sun shadows").
+  Ambient occlusion never turns either: it resolves its pattern within the frame ("Ambient occlusion").
 - Renderers of single images settle or turn TAA off: `viewport.capture` and the project's picture render their still view
   again until the history holds `c_TemporalSettleFrames` (8) complete frames (a frame still incomplete for another reason
   starts it again while its own bounded wait lasts, so a view that stays incomplete still settles once that wait ended),
@@ -3647,7 +3682,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   black after tone mapping). Instances with a mirroring transform (negative determinant) use
   pipelines with clockwise front faces and flip their tangent handedness (`c_InstanceMirrored`). The ambient occlusion
   targets are R16F where the device stores the extended storage image formats
-  (`GraphicsDeviceInfo::SupportsExtendedStorageFormats`, the `*Half.comp` variants of `GTAO` and `AOBlur`), else R32F.
+  (`GraphicsDeviceInfo::SupportsExtendedStorageFormats`, the `*Half.comp` variants of `GTAO` and `AODenoise`), else R32F.
 - Fragment shaders take every derivative (`fwidth`, `dFdx`, `texture` without an explicit level, helpers such as
   `SDFCoverage`) before their first `discard`: a discard that differs per pixel ends its invocation, which leaves the
   derivatives of the rest of its 2x2 quad undefined (Mesa drops the lane; MoltenVK keeps it, so the Mac shows nothing).
@@ -3876,8 +3911,132 @@ lights, Post Process and the sky), and never a resolution below the output's.
 - Cost: the views drawn (none in a still scene), their casters' culling (a sphere query per drawn light on the CPU, or the
   GPU's tests per view), and 16 comparison taps per pixel for each shadowed light reaching it.
 
+### Lighting
+
+- **Energy compensation** (`PBR.glsl`'s `GetSpecularEnergy`): GGX's single-scattering lobe reflects only its directional
+  albedo `E = x + y` of the light (the BRDF table's scale and bias of F0 summed: the lobe's albedo for F0 = 1); the rest
+  scatters again between the microfacets. The specular light is multiplied by `1 + F0 (1 / E - 1)`, exact for F0 = 1 (the
+  lobe then reflects everything) and less for colored metals, whose further bounces absorb `1 - F0` each. The factor
+  (`SurfaceData::SpecularEnergy`, `ClearcoatData::SpecularEnergy` for the coat's lobe of F0 0.04) is computed once per pixel
+  from the table fetch the surface setup of `ShadeLitSurface` makes, and multiplies direct light's specular term
+  (`EvaluateLightWeighted`, `EvaluateClearcoat`), image light's split sum (`specularColor`), the coat's reflectance, and what
+  glass reflects in `TransmitLight` (what passes through is what it does not reflect). Image light's diffuse keeps
+  `1 - specularColor` (diffuse gets what specular leaves); direct light's keeps `1 - F`, as the compensation adds under 0.5%
+  to a dielectric's reflection. A white metal in a white furnace reflects the whole sky at every roughness (0.31 of it at
+  roughness 1 before; `GPU.SceneRenderer.Lighting`'s furnace cases): check every shading change with them, and with the
+  look-dev furnace (`lookdev.furnace`, Tonemapper None, so the PNG's decoded values at the sphere centers are linear).
+- **Specular anti-aliasing** (`PBR.glsl`'s `WidenRoughness`, `SceneRendererSpecification::SpecularAntiAliasing`, on by
+  default, `MaterialParams.z`): a highlight narrower than a pixel lands on some pixels and misses their neighbors, so
+  normal-mapped and curved surfaces sparkle at 4K and as they move. The shading normal's change across the pixel is a spread
+  of normals within its footprint, so the lobe is widened by its variance: `alpha^2 += min(2 x 0.25 (|dN/dx|^2 +
+  |dN/dy|^2), 0.18)` (`c_SpecularAAVariance`, `c_SpecularAAMaxKernel`, the cap keeping silhouettes and seams from turning
+  matte). GGX stays normalized, so the highlight keeps its light and spreads it over the pixels it covers. `main()` widens
+  the base's roughness and the coat's (with its own normal) before shading; the glass variant's transmission blur takes the
+  widened one; the prepass writes the same widened roughness into the surface target (`ST_PREPASS_SURFACE`), so
+  screen-space reflections trace the lobe the forward pass shades. **The derivative rule:** derivatives are taken only of
+  values computed from the primitive's own interpolants and its material's textures, in control flow uniform over a quad
+  (branches on the material's flags only), before any `discard`: a quad belongs to one primitive, which both draw paths
+  draw with the same vertex module, so they stay pixel-equal (`GPU.SceneRenderer.GPUDriven`'s "Lit materials"). A flat
+  surface without a normal map has zero derivatives and keeps its roughness exactly. `GPU.SceneRenderer.Materials` checks
+  that a bumpy sphere's highlight variance halves and its light stays within 15%.
+- **The horizon fade** (`GetHorizonFade`): a normal map can turn the reflected vector into the surface, where image light
+  would show the surface's own underside. Image light (probes, sky, screen-space reflections, through the specular
+  occlusion) is multiplied by `clamp(1 + R . Ng / 0.25, 0, 1)^2` with Ng the geometric normal (facing the viewer), reaching
+  0 about 15 degrees below the surface; the coat takes its own. Direct light has its own `NoL`. Smooth surfaces without a
+  normal map reflect above their surface and are unchanged.
+- **Lighting debug views** (`SceneRenderOptions::LightingView`, `SceneLightingView`; `R/SceneRendererLightingView.cpp`) show
+  and measure the scene's light, so a lighting change is checked against numbers rather than by eye. The forward pass reads
+  the view from `MaterialParams.y` (a uniform branch, nothing when 0): **Lighting** shades every lit surface with albedo 1 and
+  no emission (unlit ones as they are), **Indirect** keeps only the image light (sky, probes, screen-space reflections) and
+  drops emission, **AmbientOcclusion** returns the occlusion that darkens indirect light (material times screen, before
+  multi-bounce), **Albedo** writes the base color; the last two are *value views*: written without the pre-exposure (a
+  sunlit scene's 2^-19 would make an albedo of 0.03 subnormal in half floats), without fog and what glass transmits.
+  **Luminance** keeps the lit image. Lighting and Indirect go through exposure and tone mapping as the image does; for the
+  value views and Luminance, `Overlay/LightingView.frag` replaces the finished image, first among the overlays (the motion
+  view is skipped with one), from the frame's own HDR target (never the temporal history, which would blend values of
+  earlier frames): occlusion as gray, albedo with luminances below `c_AlbedoLow` (0.03) mixed 0.7 toward the low mark and
+  above `c_AlbedoHigh` (0.85) toward the high mark in diagonal stripes, luminance as EV100 bands (`log2(nits) + 3`, one EV
+  wide from `LightingViewColors::LuminanceFirstEV100`, 12 colors), in `SceneRenderOptions::LightingColors` (the editor
+  sets them from theme tokens).
+- **Statistics** (`GetLightingViewStats`, `LightingViewStats`): every frame of a view `Effects/LightingViewStats.comp`
+  counts the HDR target into group-shared histograms added to a buffer (`LightingViewStatsData`: EV100 in quarter-EV bins
+  from -8 to 24 for surfaces and the background apart, the value views' values in 64 bins, the albedo's pixels outside the
+  range), copied into a ring of three `BufferReadback`s with the frame's render count, view and sun illuminance, and polled
+  by `ResolveGPUStats` (frames later, never waited for but with `wait`): percentiles walk the cumulative histogram
+  (linear within a bin), `SunIlluminance` is the directional light at the ground (its color is after the atmosphere)
+  times the cosine to the zenith, `SkyIlluminance` pi times the irradiance map at +Y times the sky's intensity (or the
+  constant ambient), and `SunToSkyRatio` their ratio on flat ground, before shadows. Statistics older than the view's
+  choice are never returned; `SceneRendererStats::LightingViewPending` says none arrived yet. `HDROutput` frames shade with
+  the view but measure and replace nothing.
+- **History and exposure:** a change of the view resets the temporal history; while a value view shows, automatic
+  exposure holds the pre-exposure it had (`ChoosePreExposure`'s `hold`: settled, readbacks not looked at), entering and
+  leaving one starts a new epoch of the exposure's readbacks (none metered around the switch is followed), and leaving one
+  jumps the adaptation, so the lit image returns at once.
+- **Cost:** nothing without a view (no pipeline, buffer or pass; `HasOverlays` asks for the output texture only with one);
+  with one, a 16x16-group pass over the image and a fullscreen draw in `GPU.Overlays`. The pipelines stay once made (the
+  capture renderer releases its targets after every picture), the statistics buffer and readbacks (about 4 KB) go with the
+  targets on `SetViewportSize(0, 0)`.
+
+### Ambient occlusion
+
+- **Passes** (`R/SceneRendererAmbientOcclusion.cpp`, stage `GPU.AO`, when the Post Process's `AmbientOcclusion` is on):
+  `Effects/GTAO.comp` integrates the cosine-weighted visibility over the quality row's slices and steps per side
+  (`RendererQualitySettings::AmbientOcclusionQuality`, `RendererQuality::GetAmbientOcclusionSamples`: Low 1 x 4, Medium 2 x 6
+  as 0.6.0, High 3 x 8, Ultra 4 x 12; `SceneRendererStats::AmbientOcclusionSamples` reports slices x steps x 2;
+  `SetQuality` changes only the push constants) into the raw target, then `Effects/AODenoise.comp` writes the target the
+  forward pass reads (scene SRV 11). Both targets are of the viewport's size, R16F where stored (else R32F): 2 x 16.6 MiB
+  at 3840x2160, made with the render targets.
+- **No history:** GTAO's slice rotation and step offset come from a fixed 4x4 pattern (the 4x4 ordered-dither order
+  `IsLODFadeDrawn` uses, two orders of it), never from the frame, so every 4x4 block of pixels holds the 16 rotations once.
+  `AODenoise` (16x16 groups over a 24x24 group-shared tile of occlusion, linear depth and normal) resolves the pattern with
+  a 5x5 bilateral average whose tent weights (0.5, 1, 1, 1, 0.5) weigh each phase exactly once (depth `exp(-50 dz / z)`,
+  normal `max(n.n, 0)^8`), then blurs the result over 5x5 within depth edges (0.6.0's blur). Both run separably (a row of 5,
+  then a column of 5, each tap weighed against the pixel it is gathered for): the 5x5 kernels' weights on a surface facing
+  the camera, within neighbors' depth differences elsewhere, at 28 taps per pixel instead of 64, so `GPU.AO` at Medium
+  costs what 0.6.0's did (1.01 to 1.02 of it on the Physics Playground at 3840x2160). Images are the same with TAA,
+  FXAA or none, and two frames of a still view are identical (`GPU.SceneRenderer.AmbientOcclusion`).
+- **Radius:** `PostProcessComponent::AmbientOcclusionRadius` (default 1 m) is kept on screen between
+  `c_AOMinRadiusFraction` (0.3%, at least 1.5 pixels) and `c_AOMaxRadiusFraction` (12%) of the viewport's height, and the
+  world radius follows the clamp: distant creases keep a line, near surfaces cost and look the same at every resolution.
+  At a 60-degree field of view the cap keeps the whole metre from about 7 m on; nearer, the radius shrinks with the view.
+- **Thin occluders:** a sample below a slice's horizon relaxes it toward itself by `ThinOccluderDecay` (`1 - 0.9^(6 /
+  steps)`: the same relaxation per metre at every quality), so poles, fences and plates do not draw dark halos on the walls
+  behind them, while occluders wide on screen keep their samples high.
+- **Multi-bounce** (`PostProcessComponent::AmbientOcclusionMultiBounce`, default on, `AOParams.y`; also for materials'
+  occlusion maps, with or without screen AO): the forward pass multiplies diffuse image light by
+  `AOMultiBounce(visibility, albedo (1 - metallic))` (`Include/AmbientOcclusionFit.glsl`, `R/AmbientOcclusionFit.h`), the
+  light the occluders of the surface's albedo reflect into it; specular occlusion keeps the visibility. The model,
+  `x / (1 - rho (1 - x) h(x, rho))` with a fitted bilinear `h`, and its coefficients come from `Tools/FitAOMultiBounce.py`
+  (2D radiosity in grooves and trenches, fitted to the reference's conditional means for visibilities from 0.25; its
+  docstring says why not the polynomial first planned); `Renderer.AmbientOcclusion` checks the fit against reference
+  samples the script writes (`StrataTests/src/Renderer/AmbientOcclusionFitReference.h`). Change the fit only by running
+  the script with `--write`.
+
 ### Light units and exposure
 
+- **Balanced light by default:** the `basic3d` template lights its scene with the Clear sky preset (`R/SkyPresets.h`): the
+  physical atmosphere with the component's default air and a 120,000 lux sun above it, 40 degrees up at the azimuth 20
+  (`ProjectTemplates::GetBasic3DSunDirection`), shadows of a 0.53 degree sun: flat ground in the sun gets at least five
+  times the light of flat ground in shade (`GPU.Editor.Lighting`; 0.6.0's template gave 2.4). New procedural skies have
+  0.6.0's colors times 0.25 (zenith 0.045, 0.08, 0.155; horizon 0.165, 0.185, 0.21; ground 0.055, 0.05, 0.045 nits), a
+  ratio of about 8.4 with the default 3 lux sun 45 degrees up, as the atmosphere's (`GPU.ProceduralSky`); stored skies keep
+  their colors. The editor's preview sky for scenes without light uses the new defaults.
+- **Sun and sky presets** (`SkyPreset`, `GetSkyPresetValues`, `GetSkyPresetSunDirection`; the values are command API):
+  | Preset | Sky | Sun |
+  | --- | --- | --- |
+  | Clear | Atmosphere: density 1, haze 1, ground albedo 0.3 | 40 degrees, 120,000 lux, 0.53 degrees soft |
+  | Hazy | Atmosphere: density 1.2, haze 4, ground albedo 0.3 | 35 degrees, 120,000 lux, 0.53 |
+  | Overcast | Procedural: zenith (2600, 2650, 2750), horizon (2200, 2250, 2300), ground (400, 380, 360) nits, no disk | 60 degrees, 1,500 lux, 10 (the softest) |
+  | GoldenHour | Atmosphere: density 1, haze 1.5, ground albedo 0.3 | 6 degrees, 120,000 lux, 0.53 |
+
+  `lighting.applySkyPreset {preset, sky?, light?, sunElevation?, sunAzimuth?}` writes them in one undo step (the running
+  copy while playing): the sky light's source and settings, the directional light's rotation (keeping its azimuth, measured
+  on the direction toward the sun, unless `sunAzimuth` is given; 20 for a new light; a light already within
+  `c_PresetDirectionTolerance` of the preset's direction keeps its rotation, so a preset applied again records nothing),
+  intensity, color and softness. The active Post Process's exposure must not clip a real sun: a manual one turns automatic
+  with no compensation (`autoExposureTurnedOn`), and `AutoExposureMaxEV` below 15 rises to 16. It creates "Sky" and "Sun"
+  when the scene has none and returns `groundIlluminance` (the atmosphere's transmittance applied,
+  `Atmosphere::ComputeSunTransmittance`). The Inspector's Sky section has a button per preset.
 - The shading computes photometric quantities without a factor between them, so every intensity has a unit (the
   descriptions and the Inspector's tooltips name it; `Renderer.LightUnits` checks them):
   - `DirectionalLightComponent::Intensity` is illuminance in lux on a surface facing the light, times `Color`
@@ -4366,9 +4525,27 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
     `EnvironmentUpdates`); a change meanwhile waits for the next refresh, which follows at once, so settings that change
     every frame still update the environment every 14 frames. An intensity change recomputes nothing, also from and to 0.
     The scene's binding sets follow each of the three maps (cube, irradiance, prefiltered). Memory: the tables about
-    0.3 MiB, each set of maps about 21 MiB, so a renderer with the atmosphere holds two (42 MiB); nothing exists without
-    the atmosphere. `GPU.Atmosphere` switches the sky's source and the sun back and forth and compares the reflections
-    with a fresh renderer's.
+    0.3 MiB, each set of maps about 21 MiB (33 MiB with a 512 prefiltered sky), so a renderer with the atmosphere holds
+    two (42 MiB, 66 MiB at High and Ultra); nothing exists without the atmosphere. `GPU.Atmosphere` switches the sky's
+    source and the sun back and forth and compares the reflections with a fresh renderer's.
+  - **Aerial perspective** (`SkyLightComponent::AerialPerspective`, on by default, and `AerialPerspectiveScale`, 0 to 64):
+    the air between the camera and a surface dims it and adds the light it scatters toward the camera, as the sky-view
+    table integrates over the whole sky. Each frame with it (the atmosphere, a scale above 0, a perspective camera:
+    `SetAerialPerspective`, `SceneRendererStats::AerialPerspective`) `IBL/AtmosphereAerial.comp` fills a volume of 32 x 32
+    columns across the screen and 32 depth slices (`RenderData::c_AerialSize`, `c_AerialSlices`; RGBA16F 32 x 32 x 64: the
+    in-scattered light per lux of sun of the sun's color in slices 0-31, the transmittance in 32-63, 512 KiB, made with the
+    atmosphere's resources). The columns are the view rays through the unjittered camera's corners interpolated across the
+    screen; slice k's center lies at `D ((k + 0.5) / 32)^2` meters (D the camera's far plane, at most
+    `c_AerialMaxDistance`, 32 km), crowding near the camera, and each slice integrates its stretch in two midpoint steps of
+    `AccumulateAtmosphereSegment` (`Include/AtmospherePass.glsl`), the integrand the sky-view table's loop calls too, with
+    distances multiplied by the scale (small worlds show the haze of large ones: the Open World uses 6). `Scene/Forward.frag`
+    applies it per pixel (`Include/AerialPerspective.glsl`, SRV 29, two trilinear fetches) to opaque, masked, transparent
+    and glass surfaces alike, before the height fog (fog lies nearer the camera; under the atmosphere its sky light, the
+    sky-view table at the horizon, already holds the air's haze, so the two meet there); the sky is not hazed again, and
+    the value debug views skip it. `FogParams.z` holds D and `.w` the scale (0 without: the uniform branch costs nothing
+    else, and a black 3D texture is bound): `SetHeightFog` writes only `.x` and `.y`, and `SetAerialPerspective` runs after
+    it. The pass is recorded after the light clusters in `GPU.Aerial` (1,024 threads of 64 segments). Probe bakes apply it
+    too: it is light the probe sees.
 
 ### Reflections
 
@@ -4428,9 +4605,11 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   after it the imported files go to the trash.
   A probe bakes what is drawn at its position, other probes' current captures included: baking twice adds a bounce.
 - **Screen-space reflections** (`PostProcessComponent::ScreenSpaceReflections`, `SceneRendererScreenReflections.cpp`)
-  need TAA (the setting is inactive without it): the trace fetches the previous frame's resolved image, the TAA's
-  history, and leaves its noise to the TAA. From the history's second frame on (`SceneRendererStats::
-  ScreenSpaceReflections`), the prepass's surface variant (`ST_PREPASS_SURFACE`, `Scene/DepthPrepassSurface.frag`,
+  trace in the mode of the `Reflections` quality row (`ReflectionsQuality`, "Quality settings"): none at Low (Off),
+  Checkerboard at Medium (Strata 0.6.0's, with TAA only), Spatial at High and SpatialHigh at Ultra (with or without TAA).
+  The scene asks for them and the row scales or turns off what it asks, so the setting has no inactive reason for TAA.
+  **Checkerboard** fetches the previous frame's resolved image, the TAA's history, and leaves its noise to the TAA. From
+  the history's second frame on (`SceneRendererStats::ScreenSpaceReflections`), the prepass's surface variant (`ST_PREPASS_SURFACE`, `Scene/DepthPrepassSurface.frag`,
   pipelines with `PipelineKey::Surface`, after the velocity target) also writes the surface target: RGBA16F at full
   resolution, the normal-mapped view-space normal (octahedral; `GetShadingNormal` of `Include/MaterialTextures.glsl`, as
   the forward pass shades it), the roughness and the metallic factor, the maps sampled before any discard; unlit surfaces
@@ -4451,13 +4630,43 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   `FrameConstants::ReflectionParams.x` is 1) and mixes it over the probes' and the sky's specular radiance before the
   split-sum BRDF, as `radiance * (1 - a) + rgb`: premultiplied, a texel that found nothing adds no black to the pixels
   beside a reflection (`GPU.SceneRenderer.SSR`'s edge case); without a sky the constant ambient still lights the diffuse
-  part. Transparent surfaces get none, and the trace reads no nearest-depth pyramid
-  (both deferred). Memory: the surface target's 8 and the result's 2 bytes per pixel (about 20 MiB at 1920x1080), made by
+  part. Transparent surfaces get none (deferred). Memory: the surface target's 8 and the result's 2 bytes per pixel (about 20 MiB at 1920x1080), made by
   the first frame that traces, released with the targets. Pixels that find nothing render bit for bit as without
   reflections (`GPU.SceneRenderer.SSR`: a rough floor and a cube above the view; its other cases are the mirror floor
   against the CPU's prediction on both paths, a moving cube's reflection that keeps up only when fetched along the hit's
-  motion, and that nothing traces without TAA). `PerfGPU.Renderer.SSR` and `...GPU` (provisional) measure
+  motion, and that Checkerboard traces nothing without TAA). `PerfGPU.Renderer.SSR` and `...GPU` (provisional) measure
   `Render100kCubesTAA`'s scene with them traced from every surface (maximum roughness 1), and report the stage's median.
+  **Spatial and SpatialHigh** need no history. From the renderer's second frame of a view on (the first, a camera cut, a
+  reset or another render scene set `SceneRendererStats::ScreenSpaceReflectionsPending`, and captures render one more
+  frame for it, `c_MaxCaptureReflectionFrames`), the prepass writes the same surface target and
+  `Effects/ScreenSpaceReflectionsSpatial.comp` traces every pixel at full resolution: the same reflected ray
+  (`Include/ScreenReflections.glsl`, shared with Checkerboard's trace), marched against the full-resolution depth over its
+  whole length in 32 steps closer together near its start, a hit where it passed behind a surface by less than the same
+  thickness, refined in 6 bisections (SpatialHigh 48 and 8, `RendererQuality::GetScreenReflectionSteps`), its steps offset
+  by ambient occlusion's fixed 4x4 order, never by the frame. (A hierarchical march over a nearest-depth pyramid ran out of
+  iterations on rays grazing a floor, whose nearer pixels below the ray fill every coarse cell: at 3840x2160 a polished
+  floor reflected a wall as broken stripes, which `GPU.SceneRenderer.SSR`'s wall case and the look-dev shot
+  `lookdev.mirror` show.) What a ray sees is the previous frame's color before its transparent surfaces: in these modes every frame copies
+  its HDR image after the sky into the scene-color copy glass reads (half resolution, blurred levels) and, beside it, into
+  a full-resolution copy (`Effects/SceneColorCopy.comp` with a destination of the source's size, in `GPU.Transparent`),
+  and the next frame fetches where the hit surface was along its motion vector (these modes draw motion vectors), scaled
+  to its own pre-exposure: the full-resolution copy up to roughness 0.05, the blurred levels at roughness x (levels - 1)
+  from 0.15, blended between. That is last frame's light moved to where it is now, not an accumulation: each frame's
+  reflections are complete in themselves, and a still view gives the same image frame after frame once the reflections
+  of reflections settled (a bounce a frame). `Effects/ReflectionResolve.comp` then resolves each pixel from its 3x3
+  neighborhood as a ratio estimator: a neighbor's result weighs the center's GGX lobe toward the neighbor's mirror
+  direction over the density the neighbor's ray stands for (its own lobe's peak, 1 / (pi alpha^2)), at most the center's
+  own weight, times ambient occlusion's depth and normal weights; smooth surfaces keep their own sharp reflections, rough
+  ones borrow their neighbors' rays, which hides the march's fixed offsets. It writes the full-resolution target the
+  forward pass reads at SRV 18 (the same premultiplied lookup). Memory at 3840x2160: the surface target 63 MiB (as
+  Checkerboard's), the trace and the resolve 63 MiB each (RGBA16F), the full-resolution copy 32 MiB (B10G11R11; 63 MiB in
+  the RGBA16F fallback), beside the scene-color copy (11 MiB): about 150 MiB more than Checkerboard,
+  made by the first frame that asks, released with the targets and when the row's mode changes. `GPU.SceneRenderer.SSR`
+  runs the mirror floor's edge, rough-floor, off-screen and moving-cube cases in both modes (Spatial with FXAA), checks
+  that Spatial traces without TAA where the CPU predicts, alike on both paths, with the same image in every later frame,
+  and that a changed mode releases one mode's targets for the other's (Off makes none).
+  `PerfGPU.Renderer.SSRSpatial4K` (+ `GPU`, `StageGPU`: `GPU.Reflections`, target 1.2 ms; provisional) measures Spatial
+  on the 100,000-cube grid at 3840x2160 with FXAA.
 - Bindings: scene-set SRV 9 is the cube array (a one-slot black cube array, `Renderer::GetBlackCubeArrayTexture`, without
   probes in view; the device's `imageCubeArray` is required, "Building") and SRV 10 the probe buffer
   (`RenderData::ReflectionProbeBuffer`, 3.6 KB made with the renderer: the slots' coefficients, written on the GPU, then

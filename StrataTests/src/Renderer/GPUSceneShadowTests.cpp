@@ -118,16 +118,17 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), image));
 		CHECK(Red(image, ProjectToPixel(camera, glm::vec3(0.0f, 1.5f, 0.0f), size)) > 150);
 
-		// Meshes that do not cast shadows, and lights without shadows, leave the floor lit.
+		// Meshes that do not cast shadows, and lights without shadows, leave the floor lit. The two points see the floor at other
+		// angles: its specular highlight (compensated for multiple scattering) may differ by a code value.
 		shadowScene.Cube.GetComponent<MeshRendererComponent>().CastShadows = false;
 		shadowScene.Cube.MarkModified<MeshRendererComponent>();
 		const auto [noCaster, litNoCaster] = render();
-		CHECK(noCaster == litNoCaster);
+		CHECK(std::abs(noCaster - litNoCaster) <= 1);
 		shadowScene.Cube.GetComponent<MeshRendererComponent>().CastShadows = true;
 		shadowScene.Cube.MarkModified<MeshRendererComponent>();
 		shadowScene.Sun.GetComponent<DirectionalLightComponent>().CastShadows = false;
 		const auto [noShadows, litNoShadows] = render();
-		CHECK(noShadows == litNoShadows);
+		CHECK(std::abs(noShadows - litNoShadows) <= 1);
 		CHECK(GetDrawnCounts(renderer).ShadowCasters == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

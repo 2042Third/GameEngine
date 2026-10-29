@@ -1264,6 +1264,30 @@ TEST_SUITE("Editor.UI")
 		CHECK(UI::ItemProbe::Find("Viewport.DebugView")->Text == "Mip");
 		CHECK(ImGuiHarness::CountFallbackGlyphs(editor.FindPanelWindow(EditorPanels::c_Viewport)) == 0);
 
+		// The lighting views, named as in the menu; their marks are a note (Azurite: too dark) and an error (Cinnabar: too
+		// bright), the luminance bands ramp from the chrome's dark to the text's light, and empty pixels are the disabled text's.
+		const std::pair<const char*, const char*> lightingViews[] = { { "lighting", "Lighting" }, { "ao", "AO" }, { "indirect", "Indirect" },
+			{ "luminance", "Luminance" }, { "albedo", "Albedo" } };
+		for (const auto& [view, label] : lightingViews)
+		{
+			CAPTURE(view);
+			editor.Run("viewport.setSettings", { { "debugView", view } });
+			editor.Frames(1);
+			CHECK(UI::ItemProbe::Find("Viewport.DebugView")->Text == label);
+			CHECK(UI::ItemProbe::Find("Viewport.DebugView")->Color == ToColor(colors.Accent));
+		}
+		const LightingViewColors& lighting = debugColors.Lighting;
+		const auto opaque = [](const glm::vec4& color) { return ToColor(ImVec4(color.r, color.g, color.b, 1.0f)); };
+		const auto token = [](const ImVec4& color) { return ToColor(ImVec4(color.x, color.y, color.z, 1.0f)); };
+		CHECK(opaque(lighting.AlbedoLow) == token(colors.Info));
+		CHECK(opaque(lighting.AlbedoHigh) == token(colors.Error));
+		CHECK(opaque(lighting.Background) == token(colors.TextDisabled));
+		CHECK(opaque(lighting.Luminance.front()) == token(colors.Chrome));
+		CHECK(opaque(lighting.Luminance.back()) == token(colors.Text));
+		CHECK(ImGuiHarness::CountFallbackGlyphs(editor.FindPanelWindow(EditorPanels::c_Viewport)) == 0);
+		editor.Run("viewport.setSettings", { { "debugView", "mip" } });
+		editor.Frames(1);
+
 		// Clicking the chip offers the views instead of toggling.
 		REQUIRE(editor.Click("Viewport.DebugView"));
 		CHECK(editor.Context().GetViewport().GetSettings().DebugView == ViewportDebugView::Mip);

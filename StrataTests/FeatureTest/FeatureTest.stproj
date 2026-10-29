@@ -139,9 +139,11 @@
 		},
 		"Renderer.Quality": {
 			"Value": {
+				"AmbientOcclusionQuality": "Low",
 				"AntiAliasing": "TAA",
 				"ChromaticAberration": "Scene",
 				"DepthOfField": "Scene",
+				"EnvironmentResolution": "256",
 				"FilmGrain": "Scene",
 				"LODErrorPixels": 1.5,
 				"LocalShadowAtlasSize": "2048",
@@ -152,11 +154,12 @@
 				"MotionBlurQuality": "Samples16",
 				"Preset": "Custom",
 				"ContactShadows": 16,
+				"Reflections": "SpatialHigh",
 				"ShadowCascades": 3,
 				"ShadowFilterQuality": "32",
 				"ShadowResolution": "1024"
 			},
-			"Version": 3
+			"Version": 4
 		},
 		"Scene.CollisionLayers": {
 			"Value": {

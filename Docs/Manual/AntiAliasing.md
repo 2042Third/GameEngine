@@ -12,19 +12,22 @@ Method** chooses how.
 
 - **FXAA** smooths each frame on its own, by blurring along the edges it finds in the image. It costs little and never
   trails, but edges still crawl a little as things move, thin details (grass, rails, distant branches) flicker, and the
-  noise of soft shadows and ambient occlusion stays. It is the component's default, and the right choice for 2D games
-  and pixel art, whose crisp pixels TAA would soften. Since 0.7.0 it smooths single-pixel details a third as much as
-  before (its subpixel blend went from 0.75 to 0.25): at 0.75 it took a fifth of the texture detail of an image without
+  grain of soft shadows' edges stays. It is the component's default, and the right choice for 2D games and pixel art,
+  whose crisp pixels TAA would soften. Since 0.7.0 it smooths single-pixel details a third as much as before (its
+  subpixel blend went from 0.75 to 0.25): at 0.75 it took a fifth of the texture detail of an image without
   anti-aliasing.
 - **TAA** (temporal anti-aliasing) moves every frame's samples by a different fraction of a pixel (eight positions in
   turn) and blends each frame with the image of the frames before it, fetched where each surface was in the previous
-  frame. Edges come out smooth and steady, thin details stop flickering, and the noise of soft shadows and ambient
-  occlusion averages away. New projects made from the Basic 3D template and the 3D samples use it.
+  frame. Edges come out smooth and steady, thin details stop flickering, and the grain of soft shadows' edges averages
+  away. New projects made from the Basic 3D template and the 3D samples use it.
 - **Morphological** smooths each frame on its own too, but instead of blurring along edges it finds each edge's
   staircase, reconstructs the straight line the staircase stands for, and gives each pixel along it the share of the
   colors the line leaves it. Shallow edges come out close to their true coverage (within a tenth of a pixel's at 1:7),
   pixels away from edges stay exactly as drawn, and nothing is temporal: it never trails or ghosts. Like FXAA it cannot
   steady edges that crawl in motion or thin details thinner than a pixel.
+
+Ambient occlusion looks the same with any method, and without anti-aliasing: it smooths its own pattern within each
+frame, so it needs no earlier frames.
 
 Whatever the method, and without anti-aliasing, the image is dithered: a noise of one step of the display's 256 per
 color channel, the same every frame, so skies, fog and dark gradients show no bands. It is far below what the eye picks
@@ -32,10 +35,10 @@ out as a pattern, and black and white stay exact.
 
 ## Which method suits which look
 
-- **TAA with the Sharp preset** is the 3D default: the steadiest image, with the noise of soft shadows, ambient
-  occlusion and reflections averaged away, and Sharp's sharpening giving back most of the texture detail slow pans would
-  soften. Choose it for realistic 3D scenes; screen-space reflections need it. Where motion blur blurs the image, TAA
-  does not sharpen it.
+- **TAA with the Sharp preset** is the 3D default: the steadiest image, with the grain of soft shadows' edges averaged
+  away, and Sharp's sharpening giving back most of the texture detail slow pans would soften. Choose it for realistic 3D
+  scenes; screen-space reflections need it at Graphics Quality Medium (High and Ultra trace them with any method).
+  Where motion blur blurs the image, TAA does not sharpen it.
 - **FXAA** suits games that must never trail and stylized 3D: it smooths each frame's edges and, with its lower subpixel
   blend, keeps most of the texture detail (0.87 of an image without anti-aliasing on a tiled floor at 3840x2160), but
   edges crawl a little in motion and thin details flicker.
@@ -51,7 +54,7 @@ out as a pattern, and black and white stay exact.
 Players can choose the method whatever the scene uses: the **Anti-aliasing** row of the Graphics Quality settings
 (`Renderer.Quality`'s `AntiAliasing`: Scene, the Post Process's method; or Off, FXAA, TAA or Morphological;
 [Graphics.md](Graphics.md)) is the same under every preset. With Off, FXAA or Morphological, screen-space reflections
-turn off (they need TAA).
+turn off at Medium, whose Reflections row (Checkerboard) needs TAA; High and Ultra keep them.
 
 ## How many frames TAA keeps
 

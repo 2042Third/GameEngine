@@ -996,6 +996,30 @@
 					"Speed": 0.009999999776482582,
 					"Tooltip": "Atmosphere: diffuse reflectance of the planet's ground, which lights the sky from below",
 					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Aerial Perspective",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "AerialPerspective",
+					"Speed": 0.0,
+					"Tooltip": "Atmosphere: distant surfaces fade into the air's haze, as the sky does (aerial perspective)",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Aerial Perspective Scale",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 64.0,
+					"Min": 0.0,
+					"Name": "AerialPerspectiveScale",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "Atmosphere: distances multiplied by this for the haze: 1 is Earth's air, 4 makes a 1 km view look like 4 km",
+					"Type": "Float"
 				}
 			]
 		},
@@ -1366,7 +1390,7 @@
 					"Name": "AmbientOcclusionRadius",
 					"Section": "Ambient occlusion",
 					"Speed": 0.009999999776482582,
-					"Tooltip": "World units",
+					"Tooltip": "Meters: how far around a surface occluders darken it; on screen kept between 0.3% and 12% of the view's height",
 					"Type": "Float"
 				},
 				{
@@ -1381,6 +1405,19 @@
 					"Speed": 0.0,
 					"Tooltip": "How strongly the occlusion darkens ambient light: 1 as measured, 0 none, above 1 stronger",
 					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Ambient Occlusion Multi Bounce",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "AmbientOcclusionMultiBounce",
+					"Section": "Ambient occlusion",
+					"Speed": 0.0,
+					"Tooltip": "Occluded corners of bright surfaces keep the light their walls reflect into them: white plaster stays light in its creases, dark soil darkens fully",
+					"Type": "Bool"
 				},
 				{
 					"AssetFilter": 0,
@@ -1421,7 +1458,7 @@
 					"Name": "AntiAliasingMethod",
 					"Section": "Anti-aliasing",
 					"Speed": 0.0,
-					"Tooltip": "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another sub-pixel offset and blended with the earlier ones along their motion: smoother edges, shadows and ambient occlusion. TAA Preset chooses how the TAA looks. Morphological: non-temporal, finds edges and blends along them, keeping texture detail",
+					"Tooltip": "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another sub-pixel offset and blended with the earlier ones along their motion: smoother edges and soft shadows. TAA Preset chooses how the TAA looks. Morphological: non-temporal, finds edges and blends along them, keeping texture detail",
 					"Type": "Enum"
 				},
 				{
@@ -1604,7 +1641,7 @@
 					"Name": "ScreenSpaceReflections",
 					"Section": "Reflections",
 					"Speed": 0.0,
-					"Tooltip": "Reflections of what the screen shows, found each frame: smooth floors, water and metal reflect what stands near them. Needs TAA. Where they find nothing (off screen, hidden, the sky) the reflection probes and the sky reflect as before",
+					"Tooltip": "Reflections of what the screen shows, found each frame: smooth floors, water and metal reflect what stands near them. At Graphics Quality Medium (Reflections Checkerboard) only with TAA; High and Ultra trace every pixel with or without it. Where they find nothing (off screen, hidden, the sky) the reflection probes and the sky reflect as before",
 					"Type": "Bool"
 				},
 				{

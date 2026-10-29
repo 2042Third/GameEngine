@@ -305,6 +305,8 @@ def load_shots():
         for mode in shot.get("AntiAliasing", []):
             if mode not in AA_MODES:
                 raise ToolError(f"shot {shot['Name']} names an unknown anti-aliasing mode {mode}")
+        if "DebugView" in shot and not isinstance(shot["DebugView"], str):
+            raise ToolError(f"shot {shot['Name']}: DebugView must be a viewport.capture debugView name")
     return shots
 
 
@@ -521,6 +523,8 @@ def capture_still(editor, shot, size, mode, repeat, quality, output, work, debug
         path = output / "shots" / f"{name}.png" if index == 0 else Path(work) / "repeats" / f"{name}-{index}.png"
         params = dict(camera_parameters(shot))
         params.update({"width": size[0], "height": size[1], "overlays": False, "path": str(path), "overwrite": True})
+        if "DebugView" in shot:
+            params["debugView"] = shot["DebugView"]
         if quality != "project":
             params["quality"] = quality
         if debug_view != "none":

@@ -639,7 +639,12 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		Tests::AddNeutralPostProcess(scene);
 		Tests::AddSun(scene, glm::vec3(-0.3f, -1.0f, -0.4f), 3.0f, false);
 		Entity group = scene.CreateEntity("Group");
-		std::vector<Entity> members = { Tests::AddMesh(scene, BuiltinAssets::CubeMesh, *red, glm::vec3(0.0f), "Red"),
+		// The group carries the neutral Post Process, so the prefab's thumbnail shows the unlit cube's red as it is: without
+		// one, the thumbnail's automatic exposure brightens the unlit cube under the preview's dim sky until Filmic's shoulder
+		// takes its red toward white.
+		Entity look = scene.FindEntityByName("PostProcess");
+		REQUIRE(look);
+		std::vector<Entity> members = { look, Tests::AddMesh(scene, BuiltinAssets::CubeMesh, *red, glm::vec3(0.0f), "Red"),
 			Tests::AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(2.0f, 0.0f, 0.0f), "Right") };
 		const std::vector<Entity> backlog = Tests::AddUploadBacklog(scene, parts, c_Parts, glm::vec3(-2.0f, 0.0f, 0.0f), 1.0e-3f);
 		members.insert(members.end(), backlog.begin(), backlog.end());

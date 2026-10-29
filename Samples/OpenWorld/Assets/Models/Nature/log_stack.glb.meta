@@ -1,6 +1,7 @@
 {
 	"Handle": "76178540C8B99505",
 	"ImportSettings": {
+		"BaseColorFactorsAreSRGB": true,
 		"GenerateLODs": true,
 		"ImportCameras": true,
 		"ImportLights": true,

@@ -1,6 +1,7 @@
 {
 	"Handle": "DA4D20A7938BD504",
 	"ImportSettings": {
+		"BaseColorFactorsAreSRGB": true,
 		"GenerateLODs": true,
 		"ImportCameras": true,
 		"ImportLights": true,

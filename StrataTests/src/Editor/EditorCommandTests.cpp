@@ -71,20 +71,20 @@ namespace
 		}
 	};
 
-	// The TAA's preset and tunables, all inactive for `reason`, and the screen-space reflections' settings, which need TAA, for
-	// `reflectionsReason` (without anti-aliasing, or with FXAA), added to `rows`.
-	nlohmann::json WithTemporalRows(nlohmann::json rows, const char* reason, const char* reflectionsReason)
+	// The TAA's preset and tunables, all inactive for `reason` (without anti-aliasing, or with FXAA), and the settings of the
+	// screen-space reflections a new Post Process leaves off, added to `rows`. Whether those need TAA is the renderer's quality's
+	// to say (RendererQualitySettings::Reflections), not the component's.
+	nlohmann::json WithTemporalRows(nlohmann::json rows, const char* reason)
 	{
 		for (const char* property : { "TAAPreset", "TAAHistoryFrames", "TAAMotionResponse", "TAAMaxMotionWeight", "TAAResampleWeight", "TAAHistoryClamp",
 				 "TAAClipWidth", "TAATransparentWeight", "TAADisocclusionRejection", "TAADisocclusionThreshold", "TAASharpening" })
 			rows[property] = reason;
-		for (const char* property : { "ScreenSpaceReflections", "ScreenSpaceReflectionsIntensity", "ScreenSpaceReflectionsMaxRoughness" })
-			rows[property] = reflectionsReason;
+		for (const char* property : { "ScreenSpaceReflectionsIntensity", "ScreenSpaceReflectionsMaxRoughness" })
+			rows[property] = "Screen Space Reflections is off";
 		return rows;
 	}
 
 	constexpr const char* c_OnlyTAA = "Only TAA uses it (Anti Aliasing Method is FXAA)";
-	constexpr const char* c_ReflectionsNeedTAA = "Needs TAA (Anti Aliasing Method is FXAA)";
 
 }
 
@@ -931,7 +931,7 @@ TEST_SUITE("Editor.Commands")
 		const nlohmann::json post = harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } });
 		CHECK(post["inactive"] == WithTemporalRows({ { "BloomIntensity", "Bloom is off" }, { "BloomThreshold", "Bloom is off" }, { "BloomRadius", "Bloom is off" },
 			{ "MotionBlurShutterAngle", "Motion Blur is off" }, { "MotionBlurMaxLength", "Motion Blur is off" },
-			{ "ColorLookupIntensity", "No Color Lookup is set" } }, c_OnlyTAA, c_ReflectionsNeedTAA));
+			{ "ColorLookupIntensity", "No Color Lookup is set" } }, c_OnlyTAA));
 		CHECK(harness.Run("entity.get", { { "entity", c } })["inactive"] == nlohmann::json { { "PostProcess", post["inactive"] } });
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 		CHECK_FALSE(harness.Run("entity.get", { { "entity", c } }).contains("inactive"));
@@ -949,8 +949,7 @@ TEST_SUITE("Editor.Commands")
 		harness.Run("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "AntiAliasing", false } } } });
 		CHECK(harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } })["inactive"]
 			== WithTemporalRows({ { "AntiAliasingMethod", "Anti Aliasing is off" }, { "MotionBlurShutterAngle", "Motion Blur is off" },
-				{ "MotionBlurMaxLength", "Motion Blur is off" }, { "ColorLookupIntensity", "No Color Lookup is set" } }, "Anti Aliasing is off",
-				"Needs TAA (Anti Aliasing is off)"));
+				{ "MotionBlurMaxLength", "Motion Blur is off" }, { "ColorLookupIntensity", "No Color Lookup is set" } }, "Anti Aliasing is off"));
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 
 		// The TAA's preset and tunables: Custom with tunables in one step, undone in one; out-of-range values refused without
@@ -1412,9 +1411,42 @@ TEST_SUITE("Editor.Commands")
 			CAPTURE(property);
 			CHECK_FALSE(harness.Error("component.set", { { "entity", entity }, { "component", "SkyLight" }, { "values", { { property, value } } } }).empty());
 		}
+		// Aerial perspective: on by default, its scale within [0, 64] and inactive while it is off.
+		CHECK(sky()["values"]["AerialPerspective"] == true);
+		CHECK(sky()["values"]["AerialPerspectiveScale"].get<double>() == doctest::Approx(1.0));
+		CHECK_FALSE(sky()["inactive"].contains("AerialPerspectiveScale"));
+		harness.Run("component.set", { { "entity", entity }, { "component", "SkyLight" }, { "values", { { "AerialPerspectiveScale", 6.0 } } } });
+		CHECK(sky()["values"]["AerialPerspectiveScale"].get<double>() == doctest::Approx(6.0));
+		CHECK_FALSE(harness.Error("component.set", { { "entity", entity }, { "component", "SkyLight" }, { "values", { { "AerialPerspectiveScale", 65.0 } } } }).empty());
+		harness.Run("component.set", { { "entity", entity }, { "component", "SkyLight" }, { "values", { { "AerialPerspective", false } } } });
+		CHECK(sky()["inactive"]["AerialPerspectiveScale"] == "Aerial Perspective is off");
+		harness.Run("edit.undo");
+		CHECK(sky()["values"]["AerialPerspective"] == true);
 		// Back to the procedural sky: the atmosphere's settings are inactive.
 		harness.Run("component.set", { { "entity", entity }, { "component", "SkyLight" }, { "values", { { "Source", "Procedural" } } } });
 		CHECK(sky()["inactive"].contains("AtmosphereHaze"));
+		CHECK(sky()["inactive"].contains("AerialPerspective"));
+		CHECK(sky()["inactive"].contains("AerialPerspectiveScale"));
+	}
+
+	TEST_CASE("Ambient occlusion's multi-bounce is set when added and changed with an undo step")
+	{
+		CommandHarness harness;
+		const std::string entity = harness.Run("entity.create", { { "name", "Post" } })["id"].get<std::string>();
+		const auto postProcess = [&]() { return harness.Run("component.get", { { "entity", entity }, { "component", "PostProcess" } }); };
+		harness.Run("component.add", { { "entity", entity }, { "component", "PostProcess" }, { "values", { { "AmbientOcclusionMultiBounce", false } } } });
+		CHECK(postProcess()["values"]["AmbientOcclusionMultiBounce"] == false);
+		harness.Run("edit.undo");
+		harness.Run("component.add", { { "entity", entity }, { "component", "PostProcess" } });
+		CHECK(postProcess()["values"]["AmbientOcclusionMultiBounce"] == true);
+		harness.Run("component.set", { { "entity", entity }, { "component", "PostProcess" }, { "values", { { "AmbientOcclusionMultiBounce", false } } } });
+		CHECK(postProcess()["values"]["AmbientOcclusionMultiBounce"] == false);
+		harness.Run("edit.undo");
+		CHECK(postProcess()["values"]["AmbientOcclusionMultiBounce"] == true);
+		harness.Run("edit.redo");
+		CHECK(postProcess()["values"]["AmbientOcclusionMultiBounce"] == false);
+		CHECK_FALSE(harness.Error("component.set", { { "entity", entity }, { "component", "PostProcess" }, { "values", { { "AmbientOcclusionMultiBounce", "yes" } } } }).empty());
+		CHECK(postProcess()["values"]["AmbientOcclusionMultiBounce"] == false);
 	}
 
 	TEST_CASE("Scene settings changes are undoable")

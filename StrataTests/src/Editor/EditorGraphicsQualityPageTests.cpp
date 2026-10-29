@@ -162,9 +162,10 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 				CHECK(IsDrawn(PageKey("Cell." + field + "." + preset)));
 			CHECK(IsDrawn(PageKey("Custom." + field)));
 		}
-		// Shadows and detail (7), the sun's filter taps and contact shadows, the motion blur's samples; the players' anti-aliasing,
-		// motion blur, depth of field, film grain and chromatic aberration.
-		CHECK(RendererQuality::GetRowTraits().size() == 15);
+		// Shadows and detail (7), the sun's filter taps and contact shadows, the ambient occlusion's samples, the sky's reflection
+		// map, the screen-space reflections, the motion blur's samples; the players' anti-aliasing, motion blur, depth of field,
+		// film grain and chromatic aberration.
+		CHECK(RendererQuality::GetRowTraits().size() == 18);
 		CHECK(choices == 5);
 		// The project's preset, High (the default), is chosen: its header and cells on the accent's highlight.
 		for (const char* preset : { "Low", "Medium", "High", "Ultra", "Custom" })
@@ -187,15 +188,17 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		editor.Frames(1);
 		CreateProject(editor, "GraphicsQualityMemory");
 		OpenGraphicsQuality(editor);
-		// Cascades plus the local lights' atlas of one view, and the motion blur's targets but at Low, whose motion blur is off
-		// (RowTraits::MemoryBytes; the motion blur's: 24.2 MiB at 1920 x 1080, 96.9 MiB at 3840 x 2160).
-		CHECK(TextOf(PageKey("Memory1080.Low")) == "28 MiB");
-		CHECK(TextOf(PageKey("Memory1080.Medium")) == "152 MiB");
-		CHECK(TextOf(PageKey("Memory1080.High")) == "152 MiB");
-		CHECK(TextOf(PageKey("Memory2160.High")) == "416 MiB");
-		CHECK(TextOf(PageKey("Memory2160.Ultra")) == "1.34 GiB");
+		// Cascades plus the local lights' atlas of one view, the sky's prefiltered cube (4 MiB at 256 per face, 16 at 512), and the
+		// screen-space reflections' and the motion blur's targets but at Low, which turns both off (RowTraits::MemoryBytes; the
+		// reflections': Checkerboard 19.8 MiB at 1920 x 1080 and 79.1 MiB at 3840 x 2160, Spatial 58.0 and 232.0 MiB; the motion
+		// blur's: 24.2 and 96.9 MiB). Whole MiB, rounded down.
+		CHECK(TextOf(PageKey("Memory1080.Low")) == "31 MiB");
+		CHECK(TextOf(PageKey("Memory1080.Medium")) == "175 MiB");
+		CHECK(TextOf(PageKey("Memory1080.High")) == "226 MiB");
+		CHECK(TextOf(PageKey("Memory2160.High")) == "664 MiB");
+		CHECK(TextOf(PageKey("Memory2160.Ultra")) == "1.59 GiB");
 		// Custom's column under High shows where a switch to Custom starts: High's values.
-		CHECK(TextOf(PageKey("Memory2160.Custom")) == "416 MiB");
+		CHECK(TextOf(PageKey("Memory2160.Custom")) == "664 MiB");
 		CHECK(ColorOf(PageKey("Memory2160.High")) == AccentMuted());
 		// The harness renders nothing on a GPU.
 		CHECK(TextOf(PageKey("GPU")) == "GPU times appear while the Scene view renders");
@@ -219,9 +222,10 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		CHECK(editor.Context().GetUndoStack().GetCount() == steps + 1);
 		CHECK_FALSE(editor.Context().IsSceneModified());
 		CHECK(ColorOf(PageKey("Header.Ultra")) == AccentMuted());
-		// Custom's column keeps showing the stored tuning (two cascades of High's, 128 MiB, with the atlas and the motion blur's
-		// targets), which comes back when Custom is chosen, and an edit there starts from it, as its tooltip says.
-		CHECK(TextOf(PageKey("Memory2160.Custom")) == "288 MiB");
+		// Custom's column keeps showing the stored tuning (two cascades of High's, 128 MiB, with the atlas, the sky's map and the
+		// reflections' and motion blur's targets), which comes back when Custom is chosen, and an edit there starts from it, as
+		// its tooltip says.
+		CHECK(TextOf(PageKey("Memory2160.Custom")) == "536 MiB");
 		CHECK(HoverCustomTooltip(editor, "ShadowCascades") == "Editing a value switches to Custom, starting from the Custom values chosen earlier, "
 			"which this column shows");
 
@@ -422,6 +426,44 @@ TEST_SUITE("Editor.UI.Inspector")
 		REQUIRE(exposure.has_value());
 		CHECK(exposure->Min.y > UI::ItemProbe::Find("Inspector.PostProcess.Section.Exposure")->Min.y);
 		CHECK(exposure->Min.y < bloomHeading->Min.y);
+	}
+
+	TEST_CASE("The Post Process says how its screen-space reflections are traced and links to Graphics Quality")
+	{
+		HarnessEditor editor;
+		editor.Frames(1);
+		CreateProject(editor, "InspectorReflections");
+		const std::string post = editor.Run("entity.create", { { "name", "Post" }, { "components", { { "PostProcess",
+			{ { "ScreenSpaceReflections", true } } } } } })["id"].get<std::string>();
+		editor.Run("selection.set", { { "entities", { post } } });
+		REQUIRE(editor.FramesUntil([]() { return IsDrawn("Inspector.PostProcess.ReflectionsQuality"); }));
+		// Without a GPU the Scene view draws no frame: the project's quality, High (Reflections Spatial) by default.
+		CHECK(TextOf("Inspector.PostProcess.ReflectionsQuality") == "Screen-space reflections: every pixel, with any anti-aliasing (Graphics Quality: High)");
+		const auto preset = [&editor](const char* name)
+		{
+			editor.Run("project.setSettings", { { "section", RendererQuality::c_SectionId }, { "value", { { "Preset", name } } } });
+			editor.Frames(2);
+		};
+		preset("Medium");
+		CHECK(TextOf("Inspector.PostProcess.ReflectionsQuality") == "Screen-space reflections: half resolution, only with TAA (Graphics Quality: Medium)");
+		preset("Ultra");
+		CHECK(TextOf("Inspector.PostProcess.ReflectionsQuality")
+			== "Screen-space reflections: every pixel, longer rays, with any anti-aliasing (Graphics Quality: Ultra)");
+		preset("Low");
+		CHECK(TextOf("Inspector.PostProcess.ReflectionsQuality") == "Screen-space reflections: none (Graphics Quality: Low, Reflections Off)");
+		// A Post Process that does not ask for them.
+		editor.Run("component.set", { { "entity", post }, { "component", "PostProcess" }, { "values", { { "ScreenSpaceReflections", false } } } });
+		editor.Frames(2);
+		CHECK(TextOf("Inspector.PostProcess.ReflectionsQuality") == "No screen-space reflections: Screen Space Reflections is off");
+		// The line sits under the Post Process's many properties, below the Inspector's bottom: scroll it to its end first.
+		const std::optional<UI::ItemProbe::Item> heading = UI::ItemProbe::Find("Inspector.PostProcess.Section.Exposure");
+		REQUIRE(heading.has_value());
+		editor.Harness.MoveMouse(heading->GetCenter());
+		editor.Frames(1);
+		editor.Harness.ScrollMouse(-200.0f); // Far past the end: the Inspector's scroll stops there
+		editor.Frames(2);
+		REQUIRE(editor.Click("Inspector.PostProcess.ReflectionsQuality.Open"));
+		CHECK(editor.FramesUntil([]() { return IsDrawn(PageKey("Row.ShadowResolution")); }));
 	}
 
 	TEST_CASE("The sun shows its shadow maps and links to Graphics Quality")

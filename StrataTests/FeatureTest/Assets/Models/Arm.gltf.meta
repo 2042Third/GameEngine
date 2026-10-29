@@ -1,6 +1,7 @@
 {
 	"Handle": "F7A000000000000B",
 	"ImportSettings": {
+		"BaseColorFactorsAreSRGB": false,
 		"GenerateLODs": true,
 		"ImportCameras": true,
 		"ImportLights": true,

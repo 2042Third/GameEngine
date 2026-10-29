@@ -103,8 +103,9 @@ namespace Strata
 		// blending (shadows fade out over the last tenth of the shadow distance, which large models reach); 5: the sun's physical
 		// shadow filter and the preview sun's 0.53 degrees (half as wide penumbrae, no rotated noise); 5 to 8 on a branch without
 		// it: dithered output, Filmic for scenes without a Post Process, the lens vignette and bloom by screen fraction, Filmic's
-		// shadows at the scene's chroma; 9: both, so caches either branch's build wrote are made again.
-		static constexpr uint32_t c_Version = 9;
+		// shadows at the scene's chroma; 9: both, so caches either branch's build wrote are made again; 5 on a third branch: wave
+		// 7's light (rough metals keep their energy, ambient occlusion and the preview sky changed); 10: all three.
+		static constexpr uint32_t c_Version = 10;
 
 		ThumbnailCache(const Ref<EditorAssetManager>& assets, ThumbnailCacheSpecification specification);
 		~ThumbnailCache();

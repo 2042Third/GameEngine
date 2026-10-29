@@ -19,6 +19,7 @@
 #include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Renderer/SceneRenderer.h>
+#include <Strata/Renderer/SkyPresets.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 
@@ -91,18 +92,27 @@ namespace
 		Entity sun = scene.FindEntityByName("Sun");
 		REQUIRE(sun);
 		REQUIRE(sun.HasComponent<DirectionalLightComponent>());
-		CHECK(sun.GetComponent<DirectionalLightComponent>().Intensity == doctest::Approx(3.0f));
+		// The Clear sky preset's sun: 120,000 lux above the air, the sun's 0.53 degrees for its shadows.
+		CHECK(sun.GetComponent<DirectionalLightComponent>().Intensity == doctest::Approx(120000.0f));
+		CHECK(sun.GetComponent<DirectionalLightComponent>().ShadowSoftness == doctest::Approx(0.53f));
+		CHECK(sun.GetComponent<DirectionalLightComponent>().Color == glm::vec3(1.0f));
 		CHECK(sun.GetComponent<DirectionalLightComponent>().CastShadows);
-		// It shines from the preview sun's direction, 55 degrees up from the +X+Z side.
+		// It shines from 40 degrees up at the azimuth 20 degrees (from +X toward +Z), no longer the preview sun's direction.
 		const glm::vec3 shining = sun.GetComponent<TransformComponent>().Rotation * glm::vec3(0.0f, 0.0f, -1.0f);
 		CHECK(Math::IsNearlyEqual(shining, -ProjectTemplates::GetBasic3DSunDirection(), 1e-4f));
-		CHECK(Math::IsNearlyEqual(ProjectTemplates::GetBasic3DSunDirection(), SceneRenderer::GetPreviewSunDirection(), 1e-6f));
-		CHECK(std::asin(ProjectTemplates::GetBasic3DSunDirection().y) == doctest::Approx(glm::radians(55.0f)));
+		CHECK(Math::IsNearlyEqual(ProjectTemplates::GetBasic3DSunDirection(), GetSkyPresetSunDirection(40.0f, 20.0f), 1e-6f));
+		CHECK_FALSE(Math::IsNearlyEqual(ProjectTemplates::GetBasic3DSunDirection(), SceneRenderer::GetPreviewSunDirection(), 1e-3f));
+		CHECK(std::asin(ProjectTemplates::GetBasic3DSunDirection().y) == doctest::Approx(glm::radians(40.0f)));
 
+		// The physical atmosphere with the Clear preset's (the component's default) air.
 		Entity sky = scene.FindEntityByName("Sky");
 		REQUIRE(sky);
 		REQUIRE(sky.HasComponent<SkyLightComponent>());
-		CHECK(sky.GetComponent<SkyLightComponent>().Source == SkyLightSource::Procedural);
+		const SkyLightComponent& skyLight = sky.GetComponent<SkyLightComponent>();
+		CHECK(skyLight.Source == SkyLightSource::Atmosphere);
+		CHECK(skyLight.AtmosphereDensity == 1.0f);
+		CHECK(skyLight.AtmosphereHaze == 1.0f);
+		CHECK(skyLight.GroundAlbedo == doctest::Approx(0.3f));
 
 		Entity ground = scene.FindEntityByName("Ground");
 		REQUIRE(ground);

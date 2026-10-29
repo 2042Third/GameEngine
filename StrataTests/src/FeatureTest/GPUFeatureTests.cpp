@@ -57,6 +57,8 @@ TEST_SUITE("GPU.FeatureTest")
 		CHECK(quality.MaxShadowedLocalLights == 8);
 		CHECK(quality.LODErrorPixels == 1.5f);
 		CHECK(quality.MinProjectedPixels == 0.75f);
+		CHECK(quality.AmbientOcclusionQuality == AmbientOcclusionLevel::Low);
+		CHECK(quality.EnvironmentResolution == 256);
 
 		SceneRenderer renderer;
 		renderer.SetViewportSize(c_Width, c_Height);

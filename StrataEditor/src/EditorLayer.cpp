@@ -434,6 +434,21 @@ namespace Strata
 		viewportSettings.DebugColors.CellLoading = ToVec4(themeColors.Warning);
 		viewportSettings.DebugColors.CellLoaded = ToVec4(themeColors.Accent);
 		viewportSettings.DebugColors.CellUnloading = ToVec4(themeColors.TextSecondary);
+		// The luminance bands ramp evenly from the chrome's dark through Azurite, Malachite and Sulfur to the text's light; the
+		// albedo marks are Azurite (too dark) and Cinnabar (too bright), over the disabled text's gray where nothing is drawn.
+		const ImVec4* rampColors[] = { &themeColors.Chrome, &themeColors.Info, &themeColors.Success, &themeColors.Warning, &themeColors.Text };
+		LightingViewColors& lightingColors = viewportSettings.DebugColors.Lighting;
+		const size_t bands = lightingColors.Luminance.size();
+		for (size_t band = 0; band < bands; band++)
+		{
+			const float position = static_cast<float>(band) / static_cast<float>(bands - 1) * static_cast<float>(std::size(rampColors) - 1);
+			const size_t segment = std::min(static_cast<size_t>(position), std::size(rampColors) - 2);
+			const float blend = position - static_cast<float>(segment);
+			lightingColors.Luminance[band] = glm::vec4(glm::mix(glm::vec3(ToVec4(*rampColors[segment])), glm::vec3(ToVec4(*rampColors[segment + 1])), blend), 1.0f);
+		}
+		lightingColors.AlbedoLow = ToVec4(themeColors.Info);
+		lightingColors.AlbedoHigh = ToVec4(themeColors.Error);
+		lightingColors.Background = ToVec4(themeColors.TextDisabled);
 		// Startup counts as activity: the layout settles at the full rate.
 		m_LastInputTime = m_Host->GetTime();
 

@@ -190,6 +190,20 @@ editor started with `--no-gpu` (use `--headless`):
   you need not read colors: e.g. capture with `"streaming"` until `pendingEntities` and `placeholderBoxes` are 0, or with
   `"mip"` until only the first entry of `entitiesPerMipShortfall` counts entities (every texture as sharp as the view
   needs).
+- **Lighting views** show and measure the scene's light: `"lighting"` shades every lit surface white (the light alone,
+  through the scene's exposure), `"ao"` the ambient occlusion that darkens indirect light (white: none), `"indirect"` only the
+  sky's, probes' and reflected light, `"luminance"` the scene's luminance as EV100 bands (log2 of nits plus 3: an overcast
+  day's ground about 12, a sunlit one about 15), `"albedo"` the base colors with values below 0.03 marked blue and above 0.85
+  striped red (no real material lies outside). `viewport.capture` measures the frame it captured (the statistics come back
+  with the image) and adds `debugView.lighting: {view, surfaceShare, surfaceEv100: {p05, p50, p95}, backgroundEv100, value:
+  {median, p05}, belowRangeShare, aboveRangeShare, sunIlluminance, skyIlluminance, sunToSkyRatio}` (null where the view
+  measures nothing):
+  check `sunToSkyRatio` (lux from the sun over lux from the sky on flat ground: a clear day 6 to 10, hazy 3 to 5, overcast
+  under 0.3) and `aboveRangeShare` (albedos too bright) instead of reading colors.
+- **Sun and sky presets:** `lighting.applySkyPreset {"preset": "Clear" | "Hazy" | "Overcast" | "GoldenHour", sky?, light?,
+  sunElevation?, sunAzimuth?}` lights the scene with a real sky and sun in one undo step (creating "Sky" and "Sun" when
+  missing, keeping the sun's azimuth unless given, turning a manual exposure automatic: `autoExposureTurnedOn`) and
+  returns `groundIlluminance`; start a scene's lighting from one.
 - **Texture memory** follows the screen: `asset.stats {"assets": true}` lists each streaming texture with `residentMip`
   (the finest mip level resident, 0 the full resolution), `wantedMip` (the finest its views need), `mipCount` and
   `residentBytes`, and its `mipStreaming` totals say what the streamer did (`levelsRaised`, `levelsDropped`,
@@ -495,12 +509,12 @@ time: presenting, and the wait for the display's image at the back buffer's firs
 `ioBusyPercent`, `backgroundBusyPercent` (imports, exports), `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage.
 
 **Render statistics and GPU time**: `editor.perf` also has `gpu` (`frames` with GPU times, `latencyFrames`: they arrive
-2-3 frames late, `busy`, `stages` per GPU stage: `GPU.Uploads`, `GPU.Setup`, `GPU.Cull`, `GPU.Shadows`, `GPU.Prepass`,
-`GPU.ScreenShadows` (the sun's shadow mask, its blur, contact shadows and the cascades' fit to the view), `GPU.AO`,
-`GPU.Reflections` (reflection probes' conversions, screen-space reflections), `GPU.Opaque` (with the sky),
-`GPU.Transparent`, `GPU.TAA` (motion vectors' history, temporal anti-aliasing), `GPU.MotionBlur`, `GPU.DepthOfField`,
-`GPU.Post`, `GPU.Overlays`, `GPU.UI` (the
-game UI), `GPU.ImGui`) and `boundBy`: `"gpu"`
+2-3 frames late, `busy`, `stages` per GPU stage: `GPU.Uploads`, `GPU.Setup`, `GPU.Aerial` (the atmosphere's aerial
+perspective), `GPU.Cull`, `GPU.Shadows`, `GPU.Prepass`, `GPU.ScreenShadows` (the sun's shadow mask, its blur, contact
+shadows and the cascades' fit to the view), `GPU.AO`, `GPU.Reflections` (reflection probes' conversions, screen-space
+reflections), `GPU.Opaque` (with the sky), `GPU.Transparent`, `GPU.TAA` (motion vectors' history, temporal
+anti-aliasing), `GPU.MotionBlur`, `GPU.DepthOfField`, `GPU.Post`, `GPU.Overlays`, `GPU.UI` (the game UI), `GPU.ImGui`)
+and `boundBy`: `"gpu"`
 (the GPU's median busy time takes at least 90% of the frame interval and exceeds the CPU's frame time: make the scene
 cheaper to draw), `"cpu"` (the CPU's frame time does: look at `stages`), `"capped"` (vsync or a frame-rate cap sets the
 pace: neither is the limit) or `"unknown"` (no GPU times: `--no-gpu`, or a driver without timestamps). Its `renderStats`

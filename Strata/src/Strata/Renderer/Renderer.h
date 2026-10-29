@@ -106,6 +106,8 @@ namespace Strata
 		// The 64x64 blue-noise tile (R8_UNORM, RenderData::c_BlueNoise): per-pixel values whose neighbors differ, which filters
 		// index by the screen pixel (the sun's shadows turn their disk by it).
 		static nvrhi::ITexture* GetBlueNoiseTexture();
+		// A 1x1x1 black 3D texture: what the scene passes bind as aerial perspective's volume in frames without it.
+		static nvrhi::ITexture* GetBlack3DTexture();
 
 		// Copies one subresource of a 2D, 2D-array or cube texture (a mip level of an array slice or cube face) to the
 		// CPU. Blocks until the GPU is done; meant for screenshots, picking fallbacks and tests, not per-frame use.

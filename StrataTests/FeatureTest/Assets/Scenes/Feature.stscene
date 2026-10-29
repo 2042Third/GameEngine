@@ -269,6 +269,7 @@
 					"PostProcess": {
 						"AmbientOcclusion": true,
 						"AmbientOcclusionIntensity": 1.5,
+						"AmbientOcclusionMultiBounce": false,
 						"AmbientOcclusionRadius": 0.8,
 						"AntiAliasing": true,
 						"AntiAliasingMethod": "TAA",
@@ -522,6 +523,7 @@
 						"Name": "Procedural Sky"
 					},
 					"SkyLight": {
+						"AerialPerspective": false,
 						"AmbientColor": [
 							0.03,
 							0.03,
@@ -579,6 +581,7 @@
 						"Name": "Atmosphere Sky"
 					},
 					"SkyLight": {
+						"AerialPerspectiveScale": 4,
 						"AmbientColor": [
 							0.03,
 							0.03,

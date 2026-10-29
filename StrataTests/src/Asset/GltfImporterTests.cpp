@@ -710,6 +710,30 @@ TEST_SUITE("Asset.Gltf")
 		CHECK(stripEntity.GetComponent<MeshRendererComponent>().Mesh == output.HandleOf("Mesh/1"));
 	}
 
+	TEST_CASE("BaseColorFactorsAreSRGB converts the base color factors from sRGB")
+	{
+		// Some exporters write sRGB-encoded bytes into the linear factors: the setting decodes them, the alpha unchanged.
+		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfSRGBFactors");
+		const auto baseColor = [&](bool srgb)
+		{
+			const ImportOutput output = RunImport(assets, "Sample.gltf", CreateGltf({}), { { "BaseColorFactorsAreSRGB", srgb } });
+			REQUIRE_MESSAGE(output.Success, output.Error);
+			const ImportedSubAsset* materialData = output.Find("Material/0");
+			REQUIRE(materialData);
+			Ref<Material> material = Material::Deserialize(materialData->Data);
+			REQUIRE(material);
+			return material->GetProperties().BaseColor;
+		};
+		const glm::vec4 converted = baseColor(true);
+		const auto decode = [](float encoded) { return encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f); };
+		CHECK(converted.r == doctest::Approx(decode(0.5f)).epsilon(1e-4));
+		CHECK(converted.g == doctest::Approx(decode(0.25f)).epsilon(1e-4));
+		CHECK(converted.b == doctest::Approx(1.0f));
+		CHECK(converted.a == doctest::Approx(0.75f));
+		CHECK(converted.r == doctest::Approx(0.2140f).epsilon(1e-3));
+		CHECK(baseColor(false) == glm::vec4(0.5f, 0.25f, 1.0f, 0.75f));
+	}
+
 	TEST_CASE("Binary glTF files import like text files and imports are deterministic")
 	{
 		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfBinary");

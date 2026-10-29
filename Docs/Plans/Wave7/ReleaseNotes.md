@@ -91,7 +91,7 @@ integrator writes the release notes from them when the wave lands (and removes t
 
 - Every scene's sun shadows change: penumbrae half as wide as before for the same Shadow Softness, narrow edges filtered
   by a fixed tent instead of rotated noise. Set Shadow Softness to 2 times its old value to keep a scene's old width.
-- Thumbnails are made again (their cache's version is 9, with camera-and-tone's changes).
+- Thumbnails are made again (their cache's version is 10, with camera-and-tone's and light-and-materials' changes).
 - The Third-Person Adventure's, Physics Playground's and Open World's suns have the real sun's Shadow Softness, 0.53
   degrees (Tetris keeps its 1.0).
 - Every directional light gets contact shadows at High and Ultra (Contact Shadow Length 0.3 m for scenes saved before it):
@@ -151,8 +151,8 @@ integrator writes the release notes from them when the wave lands (and removes t
   **Auto Exposure Metering** to Average, **Auto Exposure Key** to 0 and **Auto Exposure Light Speed** to the scene's
   **Auto Exposure Speed**. Strata's interiors darken with the key only as far as their light is darker: sky light still
   reaches into closed rooms.
-- Thumbnails are made again (their cache's version is 9: the sun's shadows, the dither, Filmic for scenes without a Post
-  Process, the lens vignette, Filmic's shadows).
+- Thumbnails are made again (their cache's version is 10: the sun's shadows, the dither, Filmic for scenes without a Post
+  Process, the lens vignette, Filmic's shadows, and light-and-materials' light).
 - Engine code: `RenderData::TonemapConstants` replaces the tone mapping's push constants (a constant buffer, 176 bytes);
   `RenderPostHDR` and `RenderPostDisplay` take the frame's post source (`SceneRenderer::PostSource`) and report degraded
   steps; `Renderer/PostProcessMath.h` holds the CPU twins of the post shaders' math.
@@ -162,3 +162,52 @@ integrator writes the release notes from them when the wave lands (and removes t
 - A frame whose morphological anti-aliasing, lens flare or color lookup could not get its resources is drawn without it
   and logs the failure once instead of every frame; a frame whose tone mapping cannot run renders nothing instead of a
   stale image.
+
+## light-and-materials
+
+**What's new**
+
+- Lighting debug views: `lighting` (every surface white, lit as the scene lights it), `ao`, `indirect`, `luminance`
+  (EV100 bands) and `albedo` (base colors, those below 0.03 and above 0.85 marked), in the viewport's debug menu,
+  `viewport.setSettings {debugView}` and `viewport.capture {debugView}`, whose `debugView.lighting` reports the captured
+  frame's EV100 percentiles, albedo shares and sun to sky ratio on flat ground.
+- Sun and sky presets: Clear, Hazy, Overcast and Golden Hour, buttons in the Sky Light's Inspector section and
+  `lighting.applySkyPreset`, each a sky and a sun of real values in one undo step.
+- Aerial perspective: under the atmosphere sky the air between the camera and distant surfaces dims them and adds its
+  light, as the sky does (Sky Light **Aerial Perspective**, on, and **Aerial Perspective Scale**, 1; GPU stage
+  `GPU.Aerial`, 512 KiB per view).
+- Ambient occlusion denoises its fixed pattern within the frame: the same image with TAA, FXAA or no anti-aliasing, and
+  still from frame to frame. **Ambient Occlusion Multi Bounce** (Post Process, on) keeps bright creases light. Graphics
+  Quality gains Ambient Occlusion Quality (Low 1x4, Medium 2x6 as 0.6.0, High 3x8, Ultra 4x12 slices x steps).
+- Highlights hold at 4K: specular anti-aliasing widens a highlight narrower than a pixel over the pixels it covers instead
+  of sparkling, and reflections a normal map turns into the surface fade out.
+- Graphics Quality gains Environment Resolution (the prefiltered sky: 256 per face at Low and Medium, 512 at High and
+  Ultra) and Reflections (screen-space reflections: none at Low; Medium's half-resolution trace, which needs TAA; at High
+  and Ultra every pixel traced at full resolution with a spatial resolve, with any anti-aliasing).
+- glTF import setting **Base Color Factors Are sRGB**, for exporters that write sRGB colors into glTF's linear factors
+  (Kenney's kits).
+
+**Upgrading**
+
+- Rough metals keep their light (multiple-scattering compensation): a metal of roughness 1 reflects up to three times
+  what it did in 0.6.0, and dielectrics' specular grows about 9%.
+- New projects (Basic 3D) open under the physical atmosphere with a 120,000 lux sun 40 degrees up and automatic exposure.
+  New procedural skies are four times darker than 0.6.0's (0.25 times its colors), for a real sun to sky ratio (about 8
+  with the default sun 45 degrees up); saved scenes keep their skies.
+- Ambient occlusion's default radius is 1 m (0.6 before) for new Post Process components and files without the key; every
+  Post Process gains multi-bounce (turn **Ambient Occlusion Multi Bounce** off to keep 0.6.0's darker creases).
+- Every scene with the atmosphere sky gains aerial perspective: turn **Aerial Perspective** off on its Sky Light to keep
+  0.6.0's look.
+- At High and Ultra (the default is High) the prefiltered sky is 512 per face, 12 MiB more video memory per view (24 MiB
+  with the atmosphere), and scenes whose Post Process turns on Screen Space Reflections trace them on every pixel: about
+  232 MiB per view at 3840x2160 instead of 79 MiB. At Low those reflections are not drawn. Choose Medium to keep 0.6.0's
+  costs.
+- `lighting.applySkyPreset` turns a manual exposure automatic (a real sun clips to white under a manual exposure of 0),
+  in its undo step.
+- Every glTF model re-imports once (importer version 11), and asset thumbnails are made again (their cache's version is
+  10).
+- The samples: the Physics Playground uses the Clear preset, the Open World's sun is white and its Kenney models' colors
+  are read as sRGB (teal-green leaves instead of a pale cyan wash), and every 3D sample's ambient occlusion radius is 1 m.
+- Engine code: `SceneRenderOptions` gains `LightingView` and `LightingColors`; `SceneRenderer::GetLightingViewStats`
+  returns a view's statistics. `RendererQualitySettings` gains `AmbientOcclusionQuality` (`AmbientOcclusionLevel`),
+  `EnvironmentResolution` and `Reflections`.

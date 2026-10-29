@@ -359,4 +359,116 @@ namespace Strata
 		return true;
 	}
 
+	nvrhi::ITexture* SceneRenderer::GetBoundAerialVolume() const
+	{
+		return m_AerialFrame && m_Atmosphere && m_Atmosphere->AerialVolume ? m_Atmosphere->AerialVolume.Get() : Renderer::GetBlack3DTexture();
+	}
+
+	bool SceneRenderer::SetAerialPerspective(const SceneCamera& camera, RenderData::FrameConstants& frame)
+	{
+		// Orthographic views keep no distance along their rays to haze by.
+		m_AerialFrame = m_AtmosphereFrame && m_Atmosphere && m_AerialScale > 0.0f && !camera.Orthographic;
+		bool made = true;
+		if (m_AerialFrame && !EnsureAerialResources())
+		{
+			m_Errors.Report("aerial perspective's volume could not be created; distant surfaces are drawn without the air's haze");
+			m_AerialFrame = false;
+			made = false;
+		}
+		const float farPlane = std::isfinite(camera.Far) && camera.Far > 0.0f ? camera.Far : RenderData::c_AerialMaxDistance;
+		m_AerialDistance = std::clamp(farPlane, 1.0f, RenderData::c_AerialMaxDistance);
+		frame.FogParams.z = m_AerialFrame ? m_AerialDistance : 0.0f;
+		frame.FogParams.w = m_AerialFrame ? m_AerialScale : 0.0f;
+		m_Stats.AerialPerspective = m_AerialFrame;
+		return made;
+	}
+
+	bool SceneRenderer::EnsureAerialResources()
+	{
+		AtmosphereState& atmosphere = *m_Atmosphere;
+		if (atmosphere.AerialSet)
+			return true;
+		nvrhi::BindingLayoutDesc layoutDesc;
+		layoutDesc.visibility = nvrhi::ShaderType::Compute;
+		layoutDesc.bindings = {
+			nvrhi::BindingLayoutItem::ConstantBuffer(0),
+			nvrhi::BindingLayoutItem::Texture_SRV(0),
+			nvrhi::BindingLayoutItem::Texture_SRV(1),
+			nvrhi::BindingLayoutItem::Texture_SRV(2),
+			nvrhi::BindingLayoutItem::Sampler(0),
+			nvrhi::BindingLayoutItem::Texture_UAV(0),
+			nvrhi::BindingLayoutItem::PushConstants(1, sizeof(RenderData::AerialPerspectiveParameters))
+		};
+		atmosphere.AerialLayout = m_Device->createBindingLayout(layoutDesc);
+		nvrhi::ShaderHandle shader = Renderer::GetShaderLibrary().Get("IBL/AtmosphereAerial.comp");
+		if (!atmosphere.AerialLayout || !shader)
+			return false;
+		nvrhi::ComputePipelineDesc pipelineDesc;
+		pipelineDesc.CS = shader;
+		pipelineDesc.bindingLayouts = { atmosphere.AerialLayout };
+		atmosphere.AerialPipeline = m_Device->createComputePipeline(pipelineDesc);
+
+		// Two slabs of slices: the in-scattered light, then the transmittance (512 KiB).
+		nvrhi::TextureDesc desc;
+		desc.width = RenderData::c_AerialSize;
+		desc.height = RenderData::c_AerialSize;
+		desc.depth = RenderData::c_AerialSlices * 2;
+		desc.dimension = nvrhi::TextureDimension::Texture3D;
+		desc.format = nvrhi::Format::RGBA16_FLOAT;
+		desc.isUAV = true;
+		desc.debugName = m_Specification.DebugName + ".AerialPerspective";
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		atmosphere.AerialVolume = m_Device->createTexture(desc);
+		if (!atmosphere.AerialPipeline || !atmosphere.AerialVolume)
+			return false;
+
+		nvrhi::BindingSetDesc setDesc;
+		setDesc.bindings = {
+			nvrhi::BindingSetItem::ConstantBuffer(0, atmosphere.Constants),
+			nvrhi::BindingSetItem::Texture_SRV(0, atmosphere.Transmittance),
+			nvrhi::BindingSetItem::Texture_SRV(1, atmosphere.MultipleScattering),
+			nvrhi::BindingSetItem::Texture_SRV(2, Renderer::GetBlackTexture()),
+			nvrhi::BindingSetItem::Sampler(0, atmosphere.Sampler),
+			nvrhi::BindingSetItem::Texture_UAV(0, atmosphere.AerialVolume, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+			nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::AerialPerspectiveParameters))
+		};
+		atmosphere.AerialSet = m_Device->createBindingSet(setDesc, atmosphere.AerialLayout);
+		return atmosphere.AerialSet != nullptr;
+	}
+
+	void SceneRenderer::RenderAerialPerspective(nvrhi::ICommandList* commandList, const SceneCamera& camera)
+	{
+		ST_PROFILE_FUNCTION();
+		AtmosphereState& atmosphere = *m_Atmosphere;
+		// The view rays through the screen's corners, of the camera as given (temporal anti-aliasing jitters only the frame's
+		// copy, so the jitter never moves the volume), in camera-relative world space: the projection and the view's rotation
+		// inverted in double, a point on each corner's ray at one depth (points of one depth interpolate linearly).
+		const glm::dmat4 rotation = glm::dmat4(glm::dmat3(glm::dmat4(camera.View)));
+		const glm::dmat4 inverse = glm::inverse(glm::dmat4(camera.Projection) * rotation);
+		const auto corner = [&inverse](double x, double y)
+		{
+			const glm::dvec4 point = inverse * glm::dvec4(x, y, 0.5, 1.0);
+			return glm::vec4(glm::vec3(glm::dvec3(point) / point.w), 0.0f);
+		};
+		RenderData::AerialPerspectiveParameters parameters;
+		parameters.RayTopLeft = corner(-1.0, 1.0);
+		parameters.RayTopRight = corner(1.0, 1.0);
+		parameters.RayBottomLeft = corner(-1.0, -1.0);
+		parameters.RayBottomRight = corner(1.0, -1.0);
+		parameters.RayTopLeft.w = m_AerialDistance;
+		parameters.RayTopRight.w = m_AerialScale;
+		// The viewer at its height above the ground (the world's y = 0), within the air's lowest 20 km.
+		const double height = std::clamp(static_cast<double>(camera.Position.y), 0.0, 20000.0) / 1000.0;
+		parameters.RayBottomLeft.w = static_cast<float>(Atmosphere::c_BottomRadius + height);
+
+		nvrhi::ComputeState state;
+		state.pipeline = atmosphere.AerialPipeline;
+		state.bindings = { atmosphere.AerialSet };
+		commandList->setComputeState(state);
+		commandList->setPushConstants(&parameters, sizeof(parameters));
+		const uint32_t groups = (RenderData::c_AerialSize + 7) / 8;
+		commandList->dispatch(groups, groups, 1);
+	}
+
 }
