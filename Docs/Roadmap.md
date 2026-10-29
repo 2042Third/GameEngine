@@ -571,7 +571,7 @@ same time on the Mac (Apple M2 Max), the Windows reference machine still away. `
   script ABI keeps version 1 and 155 host functions, and its `AGENTS.md` lines were shortened to fit. Release 0.6.0
   holds the wave.
 
-**Wave 7 in progress (step 0 landed, its six streams integrated).** The owner asked for the wave on 2026-10-26
+**Wave 7 landed (2026-10-29); release 0.7.0 holds it.** The owner asked for the wave on 2026-10-26
 ("### Wave 7" below, with what each stream landed and what was open at the integration on 2026-10-28); its plan,
 reviewed specs and release notes are in `Docs/Plans/Wave7/` until it lands. Step 0 ran on the Windows reference
 machine, back with a replaced CPU, and landed on main before the wave's streams branch from its tip:
