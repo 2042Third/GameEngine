@@ -34,3 +34,27 @@ integrator writes the release notes from them when the wave lands (and removes t
 - A renderer drawing fewer sun shadow cascades keeps fewer layers (thumbnails: 4 MiB instead of 16), and a capture
   renderer frees its cascades between pictures.
 - A validation layer the loader lists but cannot load no longer keeps a device from starting on Windows.
+
+## graphics-options
+
+**What's new**
+
+- Graphics Quality: Project Settings' Graphics Quality page shows the presets Low to Ultra and Custom in one table with
+  each row's memory and GPU cost, and the Scene view has a quality chip.
+- Players' graphics options: games offer a Graphics menu through `StrataScript/Graphics.h` (`Graphics::SetPreset`,
+  `Graphics::Set`, `Graphics::Save`); the choice is kept in `GraphicsOptions.json` beside the game's saves and loaded
+  when the game starts. `StrataRuntime --quality` overrides it for one run. The Third-Person Adventure's settings have a
+  Graphics row.
+- Scripts: seven host functions appended to ABI version 1 (`GraphicsGetOptionCount` to `GraphicsSaveOptions`); modules
+  that use them run on 0.6.0 engines without the options (the SDK's calls do nothing there).
+- Inspector: Post Process and Directional Light properties are grouped under headings, and every one of them has a
+  description with its unit; the sun shows its shadow maps' resolution and links to Graphics Quality.
+- Agents: `graphics.resetPlayerOptions`; `editor.status` reports the game's graphics options and their sources.
+- Samples: `Samples.json` entries may declare `"Budget": "Showcase"` (80 MB of source assets, counted apart) for wave
+  8's showcase.
+
+**Upgrading**
+
+- Nothing changes in images from this part. A project's Graphics Quality applies to games it exports; players' choices
+  are saved per game. In the editor the Scene view's "Game camera" view and captures of the scene's camera now draw at
+  the game's quality (the project's, with the players' options while playing).

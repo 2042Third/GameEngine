@@ -1175,7 +1175,8 @@ within 1.15 times step 0's.
     reach scripts without changing the ABI; `graphics.resetPlayerOptions` and `editor.status`'s `game.graphics`.
   - A Graphics row in the Third-Person Adventure's settings menu; Post Process grouped into sections in the Inspector,
     the sun's properties described with their units and linked to the page; `Docs/Manual/Graphics.md`.
-  - Below the cut: supersampled stills (`viewport.capture {supersample}`) and a showcase budget class for samples.
+  - Below the cut: a showcase budget class for samples (landed); supersampled stills (`viewport.capture {supersample}`)
+    were not started and moved to "Later".
 - **`sun-shadows`: shadows of a real sun.** At 3840x2160 the sun's shadows are as fine as the screen where receivers
   are, sharp at contact and softening by the sun's real size, the same in every frame without TAA, and grounded below
   the shadow map's resolution.
@@ -1246,10 +1247,12 @@ upscaling, and nothing may need temporal accumulation to look right (TAA stays o
   3840x2160 and image checks at its fixed shots. It needs wave 7's streams, the items below their cut lines that the
   shots use (depth of field, light shafts, the irradiance volume, alpha cutouts, distant shadows, supersampled stills),
   terrain material blending or detail normal maps, and one baked time of day for its probes or run-time probe capture.
-- **Rendering after wave 7:** what fell below wave 7's cut lines; MSAA; virtual shadow maps if the shadows debug view
-  shows cascades falling short; frame-level variants of the forward shader if `GPU.Opaque` shows the need; more shadowed
-  lights with occlusion culling of their views; run-time probe capture for moving suns; render scale above 1 for live
-  views; area lights; the rest of the open items' list.
+- **Rendering after wave 7:** what fell below wave 7's cut lines (supersampled stills, `viewport.capture
+  {supersample: 2}`: rendered at twice the size and filtered down with the output's dither, for the showcase's
+  screenshots); MSAA; virtual shadow maps if the shadows debug view shows cascades falling short; frame-level variants
+  of the forward shader if `GPU.Opaque` shows the need; more shadowed lights with occlusion culling of their views;
+  run-time probe capture for moving suns; render scale above 1 for live views; area lights; the rest of the open items'
+  list.
 - **`game-shell`:**
   - Crash reports in shipped games.
   - Exports per platform and configuration, with a macOS app bundle.
