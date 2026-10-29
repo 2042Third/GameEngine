@@ -710,8 +710,10 @@ extern "C"
 		 * Custom) first, then a row per costly setting, so options a later engine adds reach scripts without new
 		 * functions. The value in effect is the project's, the player's choices over it, and over both the preset the
 		 * program's command line fixes for the session (StrataRuntime --quality); renderers follow it from the next frame
-		 * (a change of shadow resolution rebuilds the shadow maps once). Setting a row other than Preset while Preset is
-		 * not Custom switches it to Custom, starting from the look in effect. The player's choices last for the session:
+		 * (a change of shadow resolution rebuilds the shadow maps once). Setting a row that follows the preset while Preset
+		 * is not Custom switches it to Custom, starting from the look in effect; the players' own rows, which every preset
+		 * leaves alone (AntiAliasing, MotionBlur, DepthOfField, FilmGrain, ChromaticAberration in 0.7.0; a later engine may
+		 * add others), keep the preset. The player's choices last for the session:
 		 * GraphicsSaveOptions writes them into the game's save directory (the engine's file, outside the save files), from
 		 * which the program running the game reads them when the game starts. Options are numbered 0 to
 		 * GraphicsGetOptionCount - 1 in a fixed order for the engine's run (not across engine versions: use names).

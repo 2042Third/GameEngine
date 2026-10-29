@@ -486,7 +486,9 @@ A settings menu offers the project's Graphics Quality (Project Settings > Graphi
 
 ```cpp
 Graphics::SetPreset(QualityPreset::Low);         // Low, Medium, High, Ultra; GetPreset() reads it (Custom: none of them)
-Graphics::Set<int32_t>("ShadowCascades", 2);    // A row: the preset becomes Custom, starting from the look in effect
+Graphics::Set<int32_t>("ShadowCascades", 2);    // A row of the presets: the preset becomes Custom, from the look in effect
+Graphics::Set("FilmGrain", "Off");              // A players' row (AntiAliasing, MotionBlur, DepthOfField, FilmGrain,
+                                                // ChromaticAberration): every preset leaves it alone, the preset stays
 Graphics::Set("ShadowResolution", "2048");      // A Choice row takes a choice's name (never its position)
 Graphics::Get<std::string>("ShadowResolution"); // The value in effect; Get<int32_t>, Get<float>, Get<bool> for the others
 Graphics::Reset();                              // A name, or none: every choice; the project's quality applies again

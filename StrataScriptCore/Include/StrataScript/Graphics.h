@@ -72,9 +72,11 @@ namespace Strata
 	// The players' graphics options (a game's options menu): the rows of Project Settings > Graphics Quality by name. The
 	// value in effect is the project's, the player's choices over it, and the command line's preset over both
 	// (StrataRuntime --quality); renderers follow it from the next frame (a change of shadow resolution rebuilds the shadow
-	// maps once). Setting a row other than "Preset" while the preset is not Custom switches it to Custom, starting from the
-	// look in effect. Choices last for the session; Save keeps them for the next run (the engine's file in the game's save
-	// directory). Engines without graphics options (before 0.7.0) return nothing and false.
+	// maps once). Setting a row that follows the preset (a cost, such as "ShadowCascades") while the preset is not Custom
+	// switches it to Custom, starting from the look in effect; the players' own rows ("AntiAliasing", "MotionBlur",
+	// "DepthOfField", "FilmGrain", "ChromaticAberration"), which every preset leaves alone, keep the preset. Choices last for
+	// the session; Save keeps them for the next run (the engine's file in the game's save directory). Engines without graphics
+	// options (before 0.7.0) return nothing and false.
 	class Graphics
 	{
 	public:
