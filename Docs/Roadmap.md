@@ -1270,17 +1270,25 @@ within 1.15 times step 0's.
   - Strata's part of a fixed step from 0.60, 0.97 and 0.74 of box3d's own step (10,000 boxes, 30,000 with tracked
     contacts, 70,000) to at most 0.45, 0.75 and 0.55; the busiest frame of 70,000 falling boxes from 16.05 to at most
     13.5 ms, 1,000 walking characters from 0.86 to at most 0.70 ms a step, and sleeping bodies at no measurable cost.
+    Landed: the ratios fell to 0.39, 0.66 and 0.47 in the verifier's A/B on the loaded machine (the integration campaign
+    confirms the milliseconds); the characters stayed at about 0.89 ms and 70,000 sleeping boxes still make box3d's own
+    step 4 to 7 times slower, both in the open items ("Physics at runtime").
   - Contact recycling at a distance chosen by measurement on piles, towers and the Physics Playground (each reading of
     the owner's "0.7" answered with numbers); the distance and the sleep threshold in a `Physics.Simulation` project
     section, changed while the game plays; character controllers' bodies and kinematic bodies never recycle contacts.
+    Landed with box3d's 5 cm kept (its ghost cost accepted at integration and bounded by `Physics.Settling`) and a sleep
+    threshold of 0.08 m/s.
   - No physics hitch while playing beyond creating bodies: of the frame that brings a world to 65,536 bodies, at most
-    4 ms grow its storage; Strata's part of a cell's unload at most 1.25 times box3d's own removal.
+    4 ms grow its storage; Strata's part of a cell's unload at most 1.25 times box3d's own removal. Landed: Strata's
+    part of the unload is at most 0.4 times box3d's, and with parked bodies the unload's frame fell from 7.8 to 3.4 ms
+    in the verifier's A/B; the growth measured 12 ms within a 30 ms spread, so it is not resolved from noise.
   - Sleeping bodies, islands, contacts, box3d's stage times and how piles settle in `physics.stats`, `editor.status`,
     the runtime's perf log, the Streaming panel and the perf lab.
   - Creating and loading bodies recorded with box3d's share, not optimized (the owner's ruling).
-  - Below the cut: the scene's world matrices from physics, rolling resistance, deferred removal of an unloading cell's
-    static bodies (landed: they are parked, then disabled in slices), a per-scene override of the section, and requests
-    to box3d upstream.
+  - Below the cut: deferred removal of an unloading cell's static bodies (landed: they are parked, then disabled in
+    slices); the scene's world matrices from physics, a per-scene override of the section and requests to box3d upstream
+    were not started and stay in the open items ("Physics at runtime"); rolling resistance was not needed (the piles
+    sleep with the 0.08 m/s threshold).
 
 ### Later (wave 8 and beyond)
 

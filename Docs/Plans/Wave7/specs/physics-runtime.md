@@ -1183,7 +1183,9 @@ Notes of the implementation where it differs from the text above (main at cc9524
   (the seams' worst excursion 5.0 mm above distance 0's, against 2 mm; the ledge's travel 1.7 cm more, against 1 cm) and
   removes a 47 mm bump on triangle meshes that every distance up to 2.5 cm keeps. The rule names no outcome for this case:
   the orchestrator rules on it. (The first sweep decided the same from one run of the pit per distance, which said 2.5 cm
-  never slept; that claim was the pit's chaos, and the medians replaced it.)
+  never slept; that claim was the pit's chaos, and the medians replaced it.) The integration ruling (2026-10-28):
+  box3d's 5 cm stays the default, recycling on for every body but characters (and kinematic bodies), and its ghost cost
+  (seams 5.0 mm above distance 0, ledges 1.7 cm) is accepted and measured by `Physics.Settling`'s bounds.
 - **Step 3: what follows from it.** `Physics.Settling`'s seam and ledge bounds are the cost measured at 5 cm times 1.25
   (6.3 mm, 2.2 cm), not "at most 2 mm above distance 0's", which 5 cm does not meet; the ball pit's bound is the slowest
   time seen over its layouts and over contact tuning a few bits off the defaults (27.0 s) times 1.25, 34 s, not 1.25 times
