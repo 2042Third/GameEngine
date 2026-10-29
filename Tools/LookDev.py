@@ -4,7 +4,8 @@ editors, and the comparison of two sets of them.
 
   python -I Tools/LookDev.py capture --build <bin dir> [--label <text>] [--output <dir>] [--projects a,b] [--shots <glob>]
          [--sizes 3840x2160,1920x1080] [--aa taa,fxaa,off] [--quality project|low|medium|high|ultra] [--repeat 5] [--live]
-         [--debug-view none|streaming|lod|mip|motion|shadows] [--keep-work] [--work <dir> [--fresh-work]]
+         [--debug-view none|streaming|lod|mip|motion|shadows|lighting|ao|indirect|luminance|albedo] [--keep-work]
+         [--work <dir> [--fresh-work]]
   python -I Tools/LookDev.py compare <before dir> <after dir> --output <dir>
   python -I Tools/LookDev.py selftest --build <bin dir> --output <dir>
 
@@ -50,9 +51,9 @@ AA_MODES = {
     "morph": {"AntiAliasing": True, "AntiAliasingMethod": "Morphological"},
 }
 QUALITIES = ("project", "low", "medium", "high", "ultra")
-# viewport.capture's debug views: the stills of a run show one of them, and its result's debugView (with the shadows view's
-# statistics) is kept with each repeat's stats.
-DEBUG_VIEWS = ("none", "streaming", "lod", "mip", "motion", "shadows")
+# viewport.capture's debug views: the stills of a run show one of them, and its result's debugView (with the shadows and
+# lighting views' statistics) is kept with each repeat's stats.
+DEBUG_VIEWS = ("none", "streaming", "lod", "mip", "motion", "shadows", "lighting", "ao", "indirect", "luminance", "albedo")
 CROP_SCALE = 4
 CALL_TIMEOUT_MS = 300000
 OPEN_TIMEOUT_MS = 900000

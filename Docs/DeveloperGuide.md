@@ -638,8 +638,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     (`--sizes`, default 3840x2160 and 1920x1080), anti-aliasing mode (`--aa`: TAA, FXAA and none, set on the scenes'
     Post Process components without saving) and repeat (`--repeat`, default 5), at the project's Graphics Quality or
     `--quality <preset>` (refused with a build whose `viewport.capture` has no `quality`), and with `--debug-view <view>`
-    the stills show that debug view (each repeat's stats keep the result's `debugView`, with the shadows view's
-    statistics). `--live` adds the live shots:
+    the stills show that debug view, any of `viewport.capture`'s (each repeat's stats keep the result's `debugView`, with
+    the shadows and lighting views' statistics). `--live` adds the live shots:
     windowed editors play the scene and read back what the Game view presented (`viewport.capture {live}`), to judge
     motion. `--work <dir>` keeps the copies and their imported assets for the next run (`--fresh-work` makes them
     again); `run.json` reports the time each project took to make and open apart from the captures.
