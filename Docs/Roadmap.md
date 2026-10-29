@@ -1189,8 +1189,8 @@ within 1.15 times step 0's.
   - Contact shadows in that pass (`ContactShadowLength`, on at High and Ultra).
   - Cascades fitted to what the camera sees (SDSM): to the depth range and the receivers' extent, with a per-light split
     distribution.
-  - Below the cut: sized point and spot lights with the same filter, up to 8 cascades, distant shadows for open worlds,
-    16-bit depth for far cascades, and cascades kept while the camera moves.
+  - Below the cut, not started and moved to "Later": sized point and spot lights with the same filter, up to 8
+    cascades, distant shadows for open worlds, 16-bit depth for far cascades, and cascades kept while the camera moves.
 - **`camera-and-tone`: the image of a camera.** What the renderer shows reads like a photograph from a good camera,
   restrained by default.
   - A dithered 8-bit output (no banding) and FXAA that keeps more texture.
@@ -1250,7 +1250,9 @@ upscaling, and nothing may need temporal accumulation to look right (TAA stays o
   terrain material blending or detail normal maps, and one baked time of day for its probes or run-time probe capture.
 - **Rendering after wave 7:** what fell below wave 7's cut lines (supersampled stills, `viewport.capture
   {supersample: 2}`: rendered at twice the size and filtered down with the output's dither, for the showcase's
-  screenshots); MSAA; virtual shadow maps if the shadows debug view shows cascades falling short; frame-level variants
+  screenshots; point and spot lights with a source radius and the sun's physical filter, up to 8 sun cascades, distant
+  shadows for open worlds, 16-bit depth for far cascades, per-cascade cache keys that keep cascades while the camera
+  moves); MSAA; virtual shadow maps if the shadows debug view shows cascades falling short; frame-level variants
   of the forward shader if `GPU.Opaque` shows the need; more shadowed lights with occlusion culling of their views;
   run-time probe capture for moving suns; render scale above 1 for live views; area lights; the rest of the open items'
   list.
