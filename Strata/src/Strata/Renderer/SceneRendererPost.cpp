@@ -414,36 +414,10 @@ namespace Strata
 		release(m_MorphologicalEdgesSet);
 		release(m_MorphologicalWeightsSet);
 		release(m_MorphologicalBlendSet);
-		// The motion blur's targets and sets (made again by the next frame that blurs; the gather's history sets reference the
-		// temporal history, which goes with the targets too).
-		release(m_MotionBlurTexture);
-		release(m_MotionBlurTileMax);
-		release(m_MotionBlurNeighborMax);
-		release(m_MotionBlurPixels);
-		release(m_MotionBlurTilesSet);
-		release(m_MotionBlurNeighborsSet);
-		for (nvrhi::BindingSetHandle& set : m_MotionBlurGatherSets)
-			release(set);
-		release(m_MotionBlurExposureSet);
-		release(m_MotionBlurBloomSet);
-		release(m_MotionBlurTonemapSet);
-		// The depth of field's, the same way (handles are released one by one: NVRHI's handles overload the address operator).
-		release(m_DepthOfFieldTexture);
-		release(m_DepthOfFieldHalf);
-		release(m_DepthOfFieldNear);
-		release(m_DepthOfFieldOwn);
-		release(m_DepthOfFieldTileMax);
-		release(m_DepthOfFieldDilated);
-		for (nvrhi::BindingSetHandle& set : m_DepthOfFieldPrepareSets)
-			release(set);
-		for (nvrhi::BindingSetHandle& set : m_DepthOfFieldCompositeSets)
-			release(set);
-		release(m_DepthOfFieldTilesSet);
-		release(m_DepthOfFieldDilateSet);
-		release(m_DepthOfFieldGatherSet);
-		release(m_DepthOfFieldExposureSet);
-		release(m_DepthOfFieldBloomSet);
-		release(m_DepthOfFieldTonemapSet);
+		// The motion blur's and the depth of field's (the gather's history sets reference the temporal history, which goes with
+		// the targets too).
+		ReleaseMotionBlurTargets(released);
+		ReleaseDepthOfFieldTargets(released);
 		// The lens flare's, and the tone mapping's second set, which may bind its target.
 		release(m_LensFlareTexture);
 		release(m_LensFlareSet);
@@ -497,6 +471,56 @@ namespace Strata
 			settings.FilmGrain = 0.0f;
 		if (quality.ChromaticAberration == SceneEffectChoice::Off)
 			settings.ChromaticAberration = 0.0f;
+	}
+
+	void SceneRenderer::ReleaseMotionBlurTargets(std::vector<nvrhi::ResourceHandle>& released)
+	{
+		// Handles are released one by one: NVRHI's handles overload the address operator.
+		auto release = [&released](auto& handle)
+		{
+			if (handle)
+				released.emplace_back(handle.Get());
+			handle = nullptr;
+		};
+		release(m_MotionBlurTexture);
+		release(m_MotionBlurTileMax);
+		release(m_MotionBlurNeighborMax);
+		release(m_MotionBlurPixels);
+		release(m_MotionBlurTilesSet);
+		release(m_MotionBlurNeighborsSet);
+		for (nvrhi::BindingSetHandle& set : m_MotionBlurGatherSets)
+			release(set);
+		release(m_MotionBlurExposureSet);
+		release(m_MotionBlurBloomSet);
+		release(m_MotionBlurTonemapSet);
+	}
+
+	void SceneRenderer::ReleaseDepthOfFieldTargets(std::vector<nvrhi::ResourceHandle>& released)
+	{
+		auto release = [&released](auto& handle)
+		{
+			if (handle)
+				released.emplace_back(handle.Get());
+			handle = nullptr;
+		};
+		release(m_DepthOfFieldTexture);
+		release(m_DepthOfFieldHalf);
+		release(m_DepthOfFieldNear);
+		release(m_DepthOfFieldOwn);
+		release(m_DepthOfFieldTileMax);
+		release(m_DepthOfFieldDilated);
+		for (nvrhi::BindingSetHandle& set : m_DepthOfFieldPrepareSets)
+			release(set);
+		for (nvrhi::BindingSetHandle& set : m_DepthOfFieldCompositeSets)
+			release(set);
+		release(m_DepthOfFieldTilesSet);
+		release(m_DepthOfFieldDilateSet);
+		release(m_DepthOfFieldGatherSet);
+		release(m_DepthOfFieldExposureSet);
+		release(m_DepthOfFieldBloomSet);
+		release(m_DepthOfFieldTonemapSet);
+		// The motion blur's gather of the depth of field's output binds it: made again with the next one.
+		release(m_MotionBlurGatherSets[3]);
 	}
 
 	bool SceneRenderer::EnsureMotionBlurResources()

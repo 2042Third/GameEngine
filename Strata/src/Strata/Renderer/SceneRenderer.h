@@ -1555,6 +1555,9 @@ namespace Strata
 		// full-resolution composite. False (reported) when its resources cannot be made: the frame shows the image in focus.
 		bool RenderDepthOfField(nvrhi::ICommandList* commandList, const CameraLens& lens, PostSource source);
 		bool EnsureDepthOfFieldResources();
+		// The depth of field's targets and sets, and the motion blur's gather of its output (made again by the next frame that
+		// focuses).
+		void ReleaseDepthOfFieldTargets(std::vector<nvrhi::ResourceHandle>& released);
 		// Morphological anti-aliasing's targets, sets and area table (written by `commandList` the first time); false (reported)
 		// when they cannot be made: the frame takes FXAA instead.
 		bool EnsureMorphologicalResources(nvrhi::ICommandList* commandList);
@@ -1562,6 +1565,8 @@ namespace Strata
 		// neighborhoods' and the gather. False (reported) when its resources cannot be made: the frame shows the image unblurred.
 		bool RenderMotionBlur(nvrhi::ICommandList* commandList, const PostProcessComponent& postProcess, PostSource source);
 		bool EnsureMotionBlurResources();
+		// The motion blur's targets and sets (made again by the next frame that blurs).
+		void ReleaseMotionBlurTargets(std::vector<nvrhi::ResourceHandle>& released);
 		// The players' quality rows applied to the scene's settings: the anti-aliasing method they chose and their motion blur.
 		static void ApplyQualityOverrides(PostProcessComponent& settings, const RendererQualitySettings& quality);
 		// Tone mapping of the post source into `output`, or into the LDR target and FXAA from it into `output` (FXAA unless the frame

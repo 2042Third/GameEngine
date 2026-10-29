@@ -3556,9 +3556,12 @@ lights, Post Process and the sky), and never a resolution below the output's.
   dropped to its tail once the environment was computed. The atmosphere's maps and its spare and refreshing sets are
   released instead (`ReleaseAtmosphereEnvironment`): its next frame computes its environment at once at the new size. A
   new `Reflections` mode releases the screen-space reflections' resources (`ReleaseScreenReflections`); the next frame
-  that traces makes the new mode's. It returns whether the cascades, the atlas, the environment or the reflections
-  changed, and then restarts the temporal history. Callers apply the quality right after `SetViewportSize` in a frame,
-  so Auto resolves for its rows; equal knobs cost one comparison. An allocation that fails halves the cascades (down to 1024) or the atlas (down to 2048),
+  that traces makes the new mode's. Rows that turn the motion blur off (`MotionBlurQuality` Off, the players'
+  `MotionBlur` Off) release its targets and sets (`ReleaseMotionBlurTargets`), and the players' `DepthOfField` Off the
+  depth of field's (`ReleaseDepthOfFieldTargets`, with the motion blur's gather of its output), so the memory the rows'
+  estimates no longer count is free at once; the next frame that blurs or focuses makes them again. It returns whether
+  the cascades, the atlas, the environment or the reflections changed, and then restarts the temporal history. Callers
+  apply the quality right after `SetViewportSize` in a frame, so Auto resolves for its rows; equal knobs cost one comparison. An allocation that fails halves the cascades (down to 1024) or the atlas (down to 2048),
   reports it once, and is tried at the requested size again by the next resize or change of that knob.
 - **Single images release their cascades:** a zero viewport (a capture renderer between pictures, the editor's hidden
   Game view) releases them with the render targets; thumbnails keep one 1024-texel layer. A minimized window keeps

@@ -433,4 +433,71 @@ TEST_SUITE("GPU.SceneRenderer.DepthOfField")
 		CHECK(lostMarks == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("Quality rows that turn the depth of field or the motion blur off release their targets at once")
+	{
+		// The Graphics Quality page counts no memory for a motion blur a row turned off: a player who turns it off in a game
+		// that blurs frees its targets then, not at the next resize. The depth of field's go the same way.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		EdgeWall wall(assets);
+		// A still camera with motion blur on: its gather reads the depth of field's output.
+		wall.PostProcess->MotionBlur = true;
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Width, c_Height);
+		const SceneRenderOptions options = WithLens(Lens(1.0f, 1.4f));
+		auto render = [&]()
+		{
+			ReadbackImage image;
+			for (int frame = 0; frame < 2; frame++)
+				image = RenderImage(renderer, wall.SceneData, EdgeWall::CameraAt(4.0f), options);
+			return image;
+		};
+		const ReadbackImage first = render();
+		REQUIRE(renderer.GetStats().DepthOfField);
+		REQUIRE(renderer.GetStats().MotionBlurred);
+		REQUIRE(renderer.GetDepthOfFieldTexture());
+		REQUIRE(renderer.GetMotionBlurTexture());
+		const RendererQualitySettings scene = renderer.GetQuality();
+
+		// The players' Depth of field Off: its targets go, the motion blur's stay and blur the image without it.
+		RendererQualitySettings quality = scene;
+		quality.DepthOfField = SceneEffectChoice::Off;
+		renderer.SetQuality(quality);
+		CHECK(renderer.GetDepthOfFieldTexture() == nullptr);
+		CHECK(renderer.GetMotionBlurTexture() != nullptr);
+		render();
+		CHECK_FALSE(renderer.GetStats().DepthOfField);
+		CHECK(renderer.GetStats().MotionBlurred);
+		CHECK(renderer.GetDepthOfFieldTexture() == nullptr);
+		// On again: the next frames make them again, and the motion blur's gather reads the new output.
+		renderer.SetQuality(scene);
+		CHECK(MaxDifference(first, render()) == 0);
+		CHECK(renderer.GetStats().DepthOfField);
+
+		// The players' Motion blur Off, and the quality's motion blur samples Off: the motion blur's go, the depth of field's stay.
+		quality = scene;
+		quality.MotionBlur = SceneEffectChoice::Off;
+		renderer.SetQuality(quality);
+		CHECK(renderer.GetMotionBlurTexture() == nullptr);
+		CHECK(renderer.GetDepthOfFieldTexture() != nullptr);
+		renderer.SetQuality(scene);
+		render();
+		REQUIRE(renderer.GetMotionBlurTexture());
+		quality = scene;
+		quality.MotionBlurQuality = MotionBlurSamples::Off;
+		renderer.SetQuality(quality);
+		CHECK(renderer.GetMotionBlurTexture() == nullptr);
+		CHECK(renderer.GetDepthOfFieldTexture() != nullptr);
+
+		// Turned on again, the next frames make them again: the same picture.
+		renderer.SetQuality(scene);
+		const ReadbackImage again = render();
+		CHECK(renderer.GetStats().DepthOfField);
+		CHECK(renderer.GetStats().MotionBlurred);
+		CHECK(MaxDifference(first, again) == 0);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

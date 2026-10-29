@@ -1880,12 +1880,17 @@ namespace Strata
 		const bool environment = quality.EnvironmentResolution != current.EnvironmentResolution;
 		// Screen-space reflections: the next frame that traces them makes the new mode's targets (none at Off).
 		const bool reflections = quality.Reflections != current.Reflections;
+		std::vector<nvrhi::ResourceHandle> released;
 		if (reflections)
-		{
-			std::vector<nvrhi::ResourceHandle> released;
 			ReleaseScreenReflections(released);
-			Renderer::ReleaseDeferred(std::move(released));
-		}
+		// The motion blur's and the depth of field's targets, when rows turn them off (the players' Motion blur or Depth of field,
+		// or no motion blur samples): their memory is free at once, as the rows' estimates say (RendererQuality::RowTraits),
+		// not at the next resize. A row that turns them on again has the next frame that blurs or focuses make them.
+		if (quality.MotionBlurQuality == MotionBlurSamples::Off || quality.MotionBlur == SceneEffectChoice::Off)
+			ReleaseMotionBlurTargets(released);
+		if (quality.DepthOfField == SceneEffectChoice::Off)
+			ReleaseDepthOfFieldTargets(released);
+		Renderer::ReleaseDeferred(std::move(released));
 
 		current = quality;
 		if (cascades)
