@@ -571,9 +571,10 @@ same time on the Mac (Apple M2 Max), the Windows reference machine still away. `
   script ABI keeps version 1 and 155 host functions, and its `AGENTS.md` lines were shortened to fit. Release 0.6.0
   holds the wave.
 
-**Wave 7 in progress (step 0 landed).** The owner asked for the wave on 2026-10-26 ("### Wave 7" below); its plan and
-reviewed specs are in `Docs/Plans/Wave7/` until it lands. Step 0 ran on the Windows reference machine, back with a
-replaced CPU, and landed on main before the wave's streams branch from its tip:
+**Wave 7 in progress (step 0 landed, its six streams integrated).** The owner asked for the wave on 2026-10-26
+("### Wave 7" below, with what each stream landed and what was open at the integration on 2026-10-28); its plan,
+reviewed specs and release notes are in `Docs/Plans/Wave7/` until it lands. Step 0 ran on the Windows reference
+machine, back with a replaced CPU, and landed on main before the wave's streams branch from its tip:
 
 - The GPU suites ran on NVIDIA under the validation layer for the first time since wave 3: the atmosphere's
   environment cube, irradiance and prefiltered maps lost their earlier levels when made in a frame whose multiple
@@ -877,24 +878,23 @@ Open items and deferrals later waves own:
   transparent surface; TAA keeps a few softer frames where a surface uncovers what it hid, cannot reject surfaces that
   recede fast, and Original stays soft in slow pans; probes are baked, so a moving sun does not relight them; at most 16
   shadowed point and spot lights per view. Left for later (also in "Later" below): MSAA (rendering below native
-  resolution and temporal upscaling are ruled out: the owner's direction of 2026-10-26, in "Later"); project-wide
-  quality presets (wave 7's `Renderer.Quality` section, in place of the `Renderer.Defaults` section planned with
-  `game-shell`); layered shadow rendering, occlusion culling of local shadow views, more than 16 shadowed lights, sized
-  local lights (PCSS) and contact shadows; run-time probe capture, cube texture assets and clustered probe lists; SSR on
-  a nearest-depth pyramid and for transparent surfaces; volumetric fog, light shafts and aerial perspective, the
-  atmosphere from altitude; thickness maps, sheen, specular, iridescence and anisotropy, EXR import and area lights;
-  shadows of a second directional light (the moon).
+  resolution and temporal upscaling are ruled out: the owner's direction of 2026-10-26, in "Later"); layered shadow
+  rendering, occlusion culling of local shadow views, more than 16 shadowed lights, sized local lights (PCSS) and their
+  contact shadows (wave 7 gave the sun both); run-time probe capture, cube texture assets and clustered probe lists; SSR
+  for transparent surfaces; volumetric fog and light shafts, the atmosphere from altitude (wave 7 added aerial
+  perspective); thickness maps, sheen, specular, iridescence and anisotropy, EXR import and area lights; shadows of a
+  second directional light (the moon).
 - Project settings and input actions (wave 6's `project-settings`), left for later: game-shell's macOS app bundle (the
-  Finder's icon, the version and copyright in `Info.plist`), installing desktop entries, signing exports, quality
-  presets (a project section registered in `SettingsRegistry`) and input only while the game's window has the focus
-  (gamepads are still read while a shipped game is in the background, as in 0.5.0); local multiplayer (devices assigned
-  to players, an action state per player) and per-world input contexts; input processors (invert, sensitivity, curves),
-  modifiers and chords, and mouse motion and scroll as action sources; binding names that follow the keyboard layout in
-  games (`Window::GetLayoutKey` is out of scripts' reach); scripts reading the game's title and version; moving the
-  Physics Playground, the Open World and Tetris onto actions, and a rebinding row in the Third-Person Adventure's
-  Settings menu; copying settings sections between projects, rebinding editor shortcuts and theme variants; the fixed
-  timestep and gravity as project settings (they change every scene's behaviour: the owner's choice). Opening a scene
-  clears the undo history, the project's steps with it (the project file was written at each step, so nothing is lost).
+  Finder's icon, the version and copyright in `Info.plist`), installing desktop entries, signing exports (quality
+  presets came with wave 7's `Renderer.Quality`) and input only while the game's window has the focus (gamepads are
+  still read while a shipped game is in the background, as in 0.5.0); local multiplayer (devices assigned to players, an
+  action state per player) and per-world input contexts; input processors (invert, sensitivity, curves), modifiers and
+  chords, and mouse motion and scroll as action sources; binding names that follow the keyboard layout in games
+  (`Window::GetLayoutKey` is out of scripts' reach); scripts reading the game's title and version; moving the Physics
+  Playground, the Open World and Tetris onto actions, and a rebinding row in the Third-Person Adventure's Settings menu;
+  copying settings sections between projects, rebinding editor shortcuts and theme variants; the fixed timestep and
+  gravity as project settings (they change every scene's behaviour: the owner's choice). Opening a scene clears the undo
+  history, the project's steps with it (the project file was written at each step, so nothing is lost).
   `Platform.DockIcon` needs a window server, so it runs on the Mac only (`StrataTests.DockIcon`, label `gpu`) and CI
   never runs it; no Linux desktop has listed an exported game's desktop entry yet (CI's Linux jobs check the file).
 - Waiting for the Windows reference machine (i7-13700K, RTX 5090), which came back on 2026-10-26 with its CPU replaced
@@ -1260,6 +1260,12 @@ within 1.15 times step 0's.
   - Contact shadows in that pass (`ContactShadowLength`, on at High and Ultra).
   - Cascades fitted to what the camera sees (SDSM): to the depth range and the receivers' extent, with a per-light split
     distribution.
+  - Landed: at 3840x2160 on High the samples' scene cameras and editor views have a median of 0.31-1.35 screen pixels
+    per shadow texel, none above 4 (0.6.0: 2.2 at splits, 5.5-8.7 at near ends); the same capture twice gives the same
+    pixels without TAA; the contact strip under the look-dev scene's 5 cm plate at 2.6 m gets at most half the sun on
+    92.5% of its points without anti-aliasing (a solid contact shadow); the penumbra's grain is 0.95% by the RMS of its
+    second difference (the integration's metric; the shadows audit's 9-pixel moving average reads 1.6% in every
+    anti-aliasing mode, the profile of a physically narrow penumbra). Its cost is the wave's open item below.
   - Below the cut, not started and moved to "Later": sized point and spot lights with the same filter, up to 8
     cascades, distant shadows for open worlds, 16-bit depth for far cascades, and cascades kept while the camera moves.
 - **`camera-and-tone`: the image of a camera.** What the renderer shows reads like a photograph from a good camera,
@@ -1272,6 +1278,14 @@ within 1.15 times step 0's.
   - Motion blur of the camera and of moving objects, with quality rows and players' comfort switches. It ships off in
     the template and the samples ("when in doubt, off"): the owner's before/after sheet, with the full criteria table
     of the live shots (failing edges included), decides before it is turned on anywhere.
+  - Landed: the widest run of one 8-bit code in the Physics Playground's sky is 4-5 pixels (step 0: 99-113); Filmic
+    shows a metered middle gray at sRGB 117.6 at Exposure 0 (ACES: 91) with hue drifts of at most 7.95 in ICtCp (ACES:
+    23-29); bloom keeps its size and energy within 10% from 1080 to 2160 rows. The template and the samples take their
+    exposure by the median rule (the integration ruling, in place of the plan's Exposure 0 for the template): measured
+    on the integrated Release build, the template 0.188 at +0.25 (0.148 at 0), the Third-Person course 0.178 and its
+    menu 0.171 at 0, the Physics Playground 0.187 at -0.25 and the Open World 0.161 at 0, all within [0.15, 0.22]. Not
+    met: FXAA keeps 0.87 of the texture detail without anti-aliasing (target 0.88, at the spec's fallback subpixel blend
+    0.25) and the dither costs 0.021 ms at 3840x2160 (target 0.01).
   - Below the cut (landed): depth of field with a physical lens, film grain and chromatic aberration, a morphological
     anti-aliasing of Strata's own, 3D LUTs and lens flares.
 - **`light-and-materials`: believable light.** A new project opens sunny with a real sun to sky ratio, rough metals keep
@@ -1283,6 +1297,12 @@ within 1.15 times step 0's.
   - The template under the physical atmosphere with a 120,000 lux sun, sun and sky presets (`lighting.applySkyPreset`),
     the samples' skies and suns balanced and the Open World's leaves corrected.
   - Specular anti-aliasing, a 512 prefiltered sky at High, and aerial perspective from the atmosphere.
+  - Landed: a 0.95 metal reflects 0.955-0.991 of its color in the white furnace from roughness 0 to 1 (0.6.0: 0.31 at
+    1); the template and the Physics Playground light flat ground with a sun to sky ratio of 8.1 (0.6.0: 1.6); ambient
+    occlusion shows no pattern with FXAA or without anti-aliasing, and at Medium costs 0.84-1.09 times step 0's; the
+    Open World's leaves have an albedo of 0.45; `GPU.Aerial` takes 0.01 ms. The Open World's opaque pass grows
+    0.053-0.058 ms at 3840x2160 on High with the always-on shading (+0.049 at Medium, against 0.05): re-measured in the
+    campaign.
   - Below the cut: screen-space reflections without TAA (landed: a full-resolution spatial trace and resolve at High and
     Ultra, the `Reflections` row); volumetric fog and light shafts, a baked irradiance volume for sky visibility and
     bounce light, bent normals with cone specular occlusion and "Fit to Room", and alpha cutouts that hold at distance
@@ -1324,6 +1344,50 @@ within 1.15 times step 0's.
   - A scene asset's parallel read runs on the background threads, and a loaded scene's GPU copy is made a frame before
     it is shown (landed). `SceneOpenOver1MMaxFrame` fell to 0.295 of step 0's but stays over its budget in about half
     the opens: open, with the next hypotheses in the open items.
+- **Open at the integration (2026-10-28),** with the integration's rulings (`Docs/Plans/Wave7/specs/decisions.md`):
+  - The wave's perf pass and campaign. `GPU.ScreenShadows` costs 0.11-0.16 ms at 1920x1080 Medium, taking the samples'
+    small scenes to 1.15-1.24 times step 0's GPU busy time, and 0.54-0.83 ms at 3840x2160 High (targets 0.35 without
+    and 0.45 with contact shadows). It landed for its image (Medium keeps 0.6.0's sample counts and resolutions); the
+    pass cuts it on the integrated tree, through per-pass timers inside the stage, fewer depth-range reads per pixel,
+    fewer contact shadow steps at High and the fit at a lower resolution, to the targets of one budget for the whole
+    wave: Medium at 1920x1080 at most 1.15 times step 0's GPU busy time on the three samples' scene cameras, and
+    `GPU.ScreenShadows` at most 0.45 ms at 3840x2160 High; what it does not reach stays here with its numbers. The
+    campaign (`PerfStability.py --runs 5`, on the reference memory) then measures the streams' provisional metrics, the
+    acceptance of plan section 1.1 (High at 3840x2160 measured 1.84-2.59 ms of GPU busy time after `sun-shadows`,
+    against 5 ms), the Open World's opaque pass at High, and the budgets that may go down
+    (`Performance600FramesP95`, `ThumbnailsMaxFrame`, `PerfGPU.Renderer.GPUTimerCost`).
+  - Penumbra noise is recorded with both metrics: 1.6% by the 9-pixel moving average, 0.95% by the RMS of the second
+    difference across the penumbra; the 1% target is met by the second, the grain metric.
+  - Motion blur ships off everywhere, pending the owner's judgment on the before/after sheet with the full criteria
+    table of the live shots: 3 of 8 measured edges within 15% of the model's width (0.991, 1.012, 1.073), the others at
+    0.525, 2.508, 1.464, 0.683 and 0.556 times it, and a fast fence post's noise 0.047 RMS against 0.028; the robot
+    keeps its detail (1.0003 and 0.993). `MotionBlur4K` is 0.178 ms (target 0.30). No Motion Blur row in the
+    Third-Person menu while it ships off.
+  - The editor: `SceneOpenOver1MMaxFrame` stays open (median 1.231 against 4.177 ms in step 0's build, budget 1.143;
+    the next hypotheses, in order, are in the open items' "Blockers of 0.7.0": allocation contention between the parse
+    or the destruction and the driver's `vkQueueSubmit`, the driver's thread on an efficiency core, play.stop's binding
+    sets, a time-based window for recycled buffers); `ThumbnailsMaxFrame` (median 1.011 against 2.384 ms) is closed
+    only after the campaign on the reference memory. Borderline and older than the wave:
+    `Perf.EditorPanels.Streaming10kAssetsRefreshFrame`, `Perf.Runtime.SceneSwitch100kMaxFrame`,
+    `Perf.Editor.HierarchyPanelFrame100kRoots`; a cooked scene's parallel decode still runs at the frame's priority.
+  - Physics: `Characters1000Step` measured 0.889 ms against its 0.70 target (the characters' prelude is 0.05 of the
+    step), and `Sleeping70k.StepRatio` 4.4-7.3 against 1.2 (box3d's own cost of sleeping proxies in its dynamic tree, an
+    upstream request); the millisecond targets of the step (`Boxes70k.StrataStepTime` 4.5 ms, projected 3.85;
+    `Boxes30kTracked.StrataStepTime` 2.3, projected 2.17; `Boxes70k.ActiveFrame` 13.5, projected 12.6) and
+    `CellUnloadMaxFrame`'s 4 ms are confirmed by the campaign, which also sets `BallPit2k.SettleCpuMs`'s target at 0.8
+    times its measurement. The recycle distance stays box3d's 5 cm by ruling: the sweep's rule had no valid outcome
+    (2.5 cm, the only distance through both gates, sleeps the 2,000-ball pit 8 s later and keeps a 47 mm bump on
+    triangle meshes that 5 cm removes), and 5 cm's ghost cost, seams 5.0 mm and ledges 1.7 cm over distance 0, is
+    accepted and bounded by `Physics.Settling` at 1.25 times the measured cost.
+  - Platforms: wave 7 was built and tested on Windows with NVIDIA only. Its GPU suites have not run on the Mac
+    (MoltenVK) yet: they run there before the release, or the release notes and these items say they did not. The
+    integrated branch's CI is the first build of the wave on Linux GCC, macOS Apple Clang with libc++ and the
+    configuration without physics (the local lint ran Clang against libstdc++).
+  - Smaller: morphological anti-aliasing keeps 0.88 of the texture detail (target 0.95); `Post4K` sits at its 0.25 ms
+    provisional target; contact shadows can leave 1-pixel fringes beside thin foliage; a face exactly parallel to the
+    sun gets a visibility of 0.5 (unseen: such faces get no direct sun); the Open World scene's captures with TAA differ
+    between repeats (also in 0.6.0's); the ambient occlusion debug view shows dashed streaks at High that the lit
+    image does not; the Graphics Quality page was checked by the UI harness, not yet by eye in an editor window.
 
 ### Later (wave 8 and beyond)
 
@@ -1343,15 +1407,22 @@ upscaling, and nothing may need temporal accumulation to look right (TAA stays o
   3840x2160 and image checks at its fixed shots. It needs wave 7's streams, the items below their cut lines that the
   shots use (depth of field, light shafts, the irradiance volume, alpha cutouts, distant shadows, supersampled stills),
   terrain material blending or detail normal maps, and one baked time of day for its probes or run-time probe capture.
-- **Rendering after wave 7:** what fell below wave 7's cut lines (supersampled stills, `viewport.capture
-  {supersample: 2}`: rendered at twice the size and filtered down with the output's dither, for the showcase's
-  screenshots; point and spot lights with a source radius and the sun's physical filter, up to 8 sun cascades, distant
-  shadows for open worlds, 16-bit depth for far cascades, per-cascade cache keys that keep cascades while the camera
-  moves; volumetric fog and light shafts, a baked irradiance volume for sky visibility and bounce light, bent normals
-  with cone specular occlusion and reflection probes' "Fit to Room", coverage-preserving alpha mips for cutouts); MSAA; virtual shadow maps if the shadows debug view shows cascades falling short; frame-level variants
-  of the forward shader if `GPU.Opaque` shows the need; more shadowed lights with occlusion culling of their views;
-  run-time probe capture for moving suns; render scale above 1 for live views; area lights; the rest of the open items'
-  list.
+- **Rendering after wave 7:** what fell below wave 7's cut lines (supersampled stills,
+  `viewport.capture {supersample: 2}`: rendered at twice the size and filtered down with the output's dither, for the
+  showcase's screenshots; point and spot lights with a source radius and the sun's physical filter, up to 8 sun
+  cascades, distant shadows for open worlds, 16-bit depth for far cascades, per-cascade cache keys that keep cascades
+  while the camera moves; volumetric fog and light shafts, a baked irradiance volume for sky visibility and bounce
+  light, bent normals with cone specular occlusion and reflection probes' "Fit to Room", coverage-preserving alpha mips
+  for cutouts; the Open World's real sun and moon values, its DayNight's 3 lux sun and 0.05 lux moon under automatic
+  exposure; motion blur in the template and the samples once the owner's sheet clears it); MSAA; virtual shadow maps if
+  the shadows debug view shows cascades falling short; frame-level variants of the forward shader if `GPU.Opaque` shows
+  the need; more shadowed lights with occlusion culling of their views; run-time probe capture for moving suns; render
+  scale above 1 for live views; area lights; the rest of the open items' list.
+- **Physics after wave 7:** what fell below `physics-runtime`'s cut line or did not land ("Physics at runtime" in the
+  open items has the measurements): the scene's world matrices written from physics (a Scene API whose cache contract
+  the Scene module decides), a per-scene override of `Physics.Simulation`, poses written back from box3d's move events
+  if a later measurement shows a gain, and requests to box3d upstream (a settable recycle angle, a run-time reserve,
+  bulk insertion and removal, sleeping proxies kept apart from moving ones).
 - **`game-shell`:**
   - Crash reports in shipped games.
   - Exports per platform and configuration, with a macOS app bundle.

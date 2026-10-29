@@ -100,3 +100,38 @@ avoided on characters"), and brings the runtime costs above down.
 - Q6: `Perf.World.CellUnloadMaxFrame` keeps its 4 ms target as an open item if box3d alone exceeds it; the stream cuts
   Strata's share to at most 1.25x box3d's own removal time.
 - The stream's AGENTS.md bullet is shortened to its first clause if room runs out.
+
+## Integration rulings (2026-10-28, after the six streams' verify reports)
+
+- **sun-shadows, cost.** The screen-shadow pass costs 0.11-0.16 ms at 1080 Medium (busy 1.15-1.24x step 0 on the
+  samples' small scenes, a fixed per-pixel overhead) and 0.54-0.83 ms at 4K High (targets 0.35/0.45). It lands: Medium
+  keeps 0.6.0's sample counts and resolutions (plan.md's meaning of the AGENTS.md rule), and the image change is the
+  wave's main point. The cost is then cut in a wave perf pass on the integrated tree (one budget for the whole wave, not
+  per stream): per-pass GPU timers inside GPU.ScreenShadows, fewer depth-range reads per pixel in the evaluation,
+  ContactShadows' step count at High, the fit at lower resolution. Targets for that pass: whole-wave Medium 1080 GPU
+  busy at most 1.15x step 0 on the three samples' scene cameras; GPU.ScreenShadows at most 0.45 ms at 4K High. What is
+  not reached is a named open item in the roadmap with its numbers.
+- **sun-shadows, noise metric.** The 9-pixel moving-average metric reads the profile of a physically narrow penumbra
+  (it gives 1.6% in every AA mode, so it is not grain). The grain metric is the RMS of the second difference across the
+  penumbra row (0.95% at High): the 1% target is met by that metric. Record both numbers.
+- **physics-runtime, recycle distance.** box3d's 5 cm stays the default (recycling on for every body but characters).
+  The rule's gates had no valid outcome; 2.5 cm sleeps the 2,000-ball pit 8 s later and keeps a 47 mm bump on triangle
+  meshes that 5 cm removes. Its ghost cost (seams +5.0 mm over distance 0, ledges +1.7 cm) is accepted and measured by
+  Physics.Settling's bounds (1.25x the measured cost). Sleep threshold 0.08 m/s (box3d 0.05) by the spec's rule. Projects
+  tune both in Physics.Simulation.
+- **camera-and-tone, template exposure.** The template follows the samples' median rule (median display luminance in
+  [0.15, 0.22]), not a fixed Exposure 0: re-measure it once light-and-materials' sun and sky are in, and set it then.
+- **camera-and-tone, OpenWorldWindowedImage.** The green margin 40 -> 30 codes is accepted as a recalibration for an
+  intended look change (Filmic keeps scene chroma); the check still fails a sky-only frame.
+- **camera-and-tone, motion blur.** Ships off everywhere. The owner's sheet shows the full criteria table, failing edges
+  included, before it is turned on anywhere. No Motion Blur row in the Third-Person menu while it ships off.
+- **editor-perf.** SceneOpenOver1MMaxFrame stays an open 0.7.0 item (4.18 -> 1.23 ms median, ratio 0.295): re-measure on
+  the reference memory; the stream's next hypotheses go into the roadmap. ThumbnailsMaxFrame is closed only after the
+  reference-memory campaign.
+- **History.** Commits on main build and pass on their own where it is cheap to make them so: the integrator reorders
+  or folds the named broken commits (light-and-materials: fd5fc3f1 before a27f44ae, the DepthPyramidNearest deletion
+  into df574d55, c38e5c53's GCC renames into the commits that introduced the members if the rebase stays mechanical;
+  camera-and-tone: the motion blur shaders into 0776e91c). Every rewritten branch's tip tree must equal the verified
+  tip's tree (`git diff <old> <new>` empty).
+- **graphics-options.** The players' file cache outside play stays as designed (same as the bindings). S8 goes to the
+  roadmap's Later.
