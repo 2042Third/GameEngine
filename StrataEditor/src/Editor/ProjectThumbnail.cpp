@@ -86,6 +86,7 @@ namespace Strata
 		m_TemporalFrames = 0;
 		m_ExposureFrames = 0;
 		m_ShadowFitFrames = 0;
+		m_ReflectionFrames = 0;
 		m_Rendered = false;
 		m_Readback.reset();
 	}
@@ -169,6 +170,14 @@ namespace Strata
 				renderer->GetSceneRenderer().ResetHistory();
 				return;
 			}
+			// Spatial screen-space reflections (Graphics Quality High and Ultra) read the previous frame's color, which the view's
+			// first frame and every frame after a reset lack: rendered again, keeping the history, for at most
+			// c_MaxReflectionFrames, as captures do. Without temporal anti-aliasing nothing else would render the view again.
+			if (stats.ScreenSpaceReflectionsPending && m_ReflectionFrames < c_MaxReflectionFrames)
+			{
+				m_ReflectionFrames++;
+				return;
+			}
 			const bool unsettled = stats.TemporalAntiAliasing && stats.TemporalFrames < c_TemporalSettleFrames;
 			if (unsettled && ++m_TemporalFrames < c_MaxTemporalFrames)
 				return;
@@ -194,6 +203,7 @@ namespace Strata
 		m_TemporalFrames = 0;
 		m_ExposureFrames = 0;
 		m_ShadowFitFrames = 0;
+		m_ReflectionFrames = 0;
 		m_Rendered = false;
 		m_Requested = m_RequestedAgain;
 		m_RequestedAgain = false;

@@ -17,8 +17,9 @@ namespace Strata
 	// editor camera without one), rendered by the viewport's capture renderer on the next frames at c_RenderScale times
 	// c_Width x c_Height, the size of a game's window, so that the game's screen-space text, sized in pixels, keeps its
 	// share of the picture (until nothing is loading, its textures have the levels the view wants, at most c_MaxFrames, and
-	// its pre-exposure settled, at most c_MaxExposureFrames, and then, with temporal anti-aliasing, until its history settled,
-	// at most c_MaxTemporalFrames more),
+	// its pre-exposure settled, at most c_MaxExposureFrames, then until spatial screen-space reflections read a previous
+	// frame's color, at most c_MaxReflectionFrames, and then, with temporal anti-aliasing, until its history settled, at most
+	// c_MaxTemporalFrames more),
 	// read back without stalling (TextureReadback), averaged down to c_Width x c_Height (Downscale) and written as PNG on an
 	// I/O job to <project>/.strata/Thumbnail.png (GetFile). Main thread; nothing happens without a GPU.
 	class ProjectThumbnail
@@ -37,6 +38,9 @@ namespace Strata
 		// Frames rendered while the sun's cascades' fit to the view settles (SceneRendererStats::ShadowFitSettled), as captures
 		// wait for it.
 		static constexpr uint32_t c_MaxShadowFitFrames = 12;
+		// Frames rendered again while spatial screen-space reflections wait for a previous frame's color
+		// (SceneRendererStats::ScreenSpaceReflectionsPending), as captures wait for them: the first makes it, the second reads it.
+		static constexpr uint32_t c_MaxReflectionFrames = 2;
 
 		// Where a project keeps its thumbnail (its intermediate directory).
 		static std::filesystem::path GetFile(const std::filesystem::path& projectDirectory);
@@ -68,6 +72,7 @@ namespace Strata
 		uint32_t m_TemporalFrames = 0; // Rendered while temporal anti-aliasing settled
 		uint32_t m_ExposureFrames = 0; // Rendered while the pre-exposure settled
 		uint32_t m_ShadowFitFrames = 0; // Rendered while the sun's cascades' fit settled
+		uint32_t m_ReflectionFrames = 0; // Rendered again while spatial screen-space reflections waited for a previous frame's color
 		bool m_Rendered = false;       // The picture's first frame was rendered (it started the exposure and the cascades' fit again)
 		Scope<TextureReadback> m_Readback;
 		std::filesystem::path m_File;

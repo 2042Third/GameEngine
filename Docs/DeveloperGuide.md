@@ -4968,8 +4968,9 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   motion, and that Checkerboard traces nothing without TAA). `PerfGPU.Renderer.SSR` and `...GPU` (provisional) measure
   `Render100kCubesTAA`'s scene with them traced from every surface (maximum roughness 1), and report the stage's median.
   **Spatial and SpatialHigh** need no history. From the renderer's second frame of a view on (the first, a camera cut, a
-  reset or another render scene set `SceneRendererStats::ScreenSpaceReflectionsPending`, and captures render one more
-  frame for it, `c_MaxCaptureReflectionFrames`), the prepass writes the same surface target and
+  reset or another render scene set `SceneRendererStats::ScreenSpaceReflectionsPending`, and captures and the project's
+  picture render one more frame for it, keeping the history: `c_MaxCaptureReflectionFrames`,
+  `ProjectThumbnail::c_MaxReflectionFrames`), the prepass writes the same surface target and
   `Effects/ScreenSpaceReflectionsSpatial.comp` traces every pixel at full resolution: the same reflected ray
   (`Include/ScreenReflections.glsl`, shared with Checkerboard's trace), marched against the full-resolution depth over its
   whole length in 32 steps closer together near its start, a hit where it passed behind a surface by less than the same

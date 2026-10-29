@@ -870,6 +870,64 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The project's picture of a scene with FXAA shows its spatial screen-space reflections")
+	{
+		// At the project's High quality the reflections are Spatial: they read the previous frame's color, which the picture's
+		// first frame and the frame after each wait (which starts the history again) lack. Without TAA nothing else renders the
+		// view again: the picture must wait for them, as captures do.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUThumbnailReflections") / "Game";
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		const auto run = [&](std::string_view name, const nlohmann::json& parameters)
+		{
+			return Tests::RunCommandToCompletion(context, commands, name, parameters);
+		};
+		const auto frameUntil = [&](const std::function<bool()>& condition)
+		{
+			for (int frame = 0; frame < 3000 && !condition(); frame++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				context.Update(Timestep(1.0f / 60.0f));
+				gpu.GetDevice().EndFrame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return condition();
+		};
+		run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+
+		Scene& scene = *context.GetActiveScene();
+		Entity postProcessEntity = scene.FindEntityByName("Post Process");
+		if (!postProcessEntity)
+		{
+			postProcessEntity = scene.CreateEntity("Post Process");
+			postProcessEntity.AddComponent<PostProcessComponent>();
+		}
+		PostProcessComponent& postProcess = postProcessEntity.GetComponent<PostProcessComponent>();
+		postProcess.AntiAliasing = true;
+		postProcess.AntiAliasingMethod = AntiAliasingMode::FXAA;
+		postProcess.ScreenSpaceReflections = true;
+		postProcess.ScreenSpaceReflectionsMaxRoughness = 1.0f;
+		Tests::AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Cube");
+		Tests::AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f, -0.5f, 0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(20.0f);
+		run("camera.set", { { "position", { 0.0, 1.0, 4.0 } }, { "target", { 0.0, 0.0, 0.0 } } });
+		run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+		REQUIRE(FileSystem::Exists(ProjectThumbnail::GetFile(directory)));
+		ViewportRenderer* captureRenderer = context.GetViewport().GetCaptureRenderer();
+		REQUIRE(captureRenderer);
+		const SceneRendererStats& stats = captureRenderer->GetStats();
+		REQUIRE(stats.Quality.Reflections == ReflectionsQuality::Spatial);
+		CHECK_FALSE(stats.TemporalAntiAliasing);
+		CHECK(stats.ScreenSpaceReflections);
+		CHECK_FALSE(stats.ScreenSpaceReflectionsPending);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A prefab's thumbnail draws every shadow view of its point and spot lights in the frame")
 	{
 		Tests::GPUContext gpu;
